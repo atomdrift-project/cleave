@@ -1,0 +1,154 @@
+# DLL Hijacking and Proxy Execution
+# Detects DLL hijacking, side-loading, and proxy execution techniques
+# ATT&CK: T1574.002 (DLL Side-Loading), T1574.006 (Dynamic Linker Hijacking), T1218 (Proxy Execution)
+# MBC: F0015 (DLL Side-Loading)
+
+traits:
+  # === Shared/Helper Traits ===
+  - id: proxy-execution-pattern
+    desc: System binary proxy execution reference
+    for: [python, javascript, typescript]
+    crit: notable
+    conf: 0.92
+    attack: "T1218"
+    if:
+      id: objectives/execution/lolbin/os::windows-lolbin
+
+composite_rules:
+  # === Injection Helpers ===
+  - id: js-dll-injection
+    desc: DLL injection via native APIs (JS)
+    for: [javascript, typescript]
+    crit: suspicious
+    conf: 0.95
+    attack: "T1055.001"
+    mbc: "F0003"
+    any:
+      - id: micro-behaviors/process/inject/dll::write-process-memory
+      - id: micro-behaviors/process/inject/dll::create-remote-thread
+      - id: micro-behaviors/process/inject/dll::load-library-a
+
+  - id: python-dll-injection
+    desc: DLL injection via process manipulation (Python)
+    for: [python]
+    crit: suspicious
+    conf: 0.95
+    attack: "T1055.001"
+    mbc: "F0003"
+    any:
+      - id: objectives/evasion/process/injection/dll::dll-injection
+      - id: objectives/evasion/process/injection/dll::obfuscated-injection
+
+  # === JavaScript Composites ===
+  - id: js-dll-side-loading
+    desc: DLL side-loading pattern (JS)
+    crit: hostile
+    conf: 0.95
+    attack: "T1574.002"
+    mbc: "F0015"
+    for: [javascript, typescript]
+    all:
+      - id: micro-behaviors/fs/path/extension::exe
+    any:
+      - id: micro-behaviors/fs/path/extension::dll
+      - id: micro-behaviors/fs/path/extension::so
+    downgrade:
+      any:
+        - id: metadata/quality::has-tests
+        - id: metadata/signed/platform
+
+  - id: js-ld-preload-hijacking
+    desc: LD_PRELOAD dynamic linker hijacking (JS)
+    crit: hostile
+    conf: 0.95
+    attack: "T1574.006"
+    for: [javascript, typescript]
+    all:
+      - id: objectives/anti-analysis/dynamic-linker-hijacking/preload::ld-preload-env
+    downgrade:
+      any:
+        - id: metadata/quality::has-tests
+
+  - id: js-phantom-dll
+    desc: Write DLL/SO then execute binary (JS)
+    crit: hostile
+    conf: 0.95
+    attack: "T1574.002"
+    for: [javascript, typescript]
+    all:
+      - id: micro-behaviors/fs/write/file::js-file-write
+      - id: micro-behaviors/fs/path/extension::library-extension
+      - id: micro-behaviors/process/create/shell/lang::child-process-exec
+    downgrade:
+      any:
+        - id: metadata/quality::has-tests
+        - id: metadata/signed/platform
+
+  - id: js-dll-hijacking
+    desc: Comprehensive DLL hijacking (JS)
+    crit: hostile
+    conf: 0.95
+    for: [javascript, typescript]
+    any:
+      - id: js-dll-side-loading
+      - id: js-ld-preload-hijacking
+      - id: proxy-execution-pattern
+      - id: js-dll-injection
+      - id: js-phantom-dll
+
+  # === Python Composites ===
+  - id: python-dll-side-loading
+    desc: DLL side-loading pattern (Python)
+    crit: hostile
+    conf: 0.95
+    attack: "T1574.002"
+    mbc: "F0015"
+    for: [python]
+    all:
+      - id: micro-behaviors/fs/path/extension::exe
+    any:
+      - id: micro-behaviors/fs/path/extension::dll
+      - id: micro-behaviors/fs/path/extension::so
+    downgrade:
+      any:
+        - id: metadata/quality::has-tests
+        - id: metadata/signed/platform
+
+  - id: python-ld-preload-hijacking
+    desc: LD_PRELOAD dynamic linker hijacking (Python)
+    crit: hostile
+    conf: 0.95
+    attack: "T1574.006"
+    for: [python]
+    all:
+      - id: objectives/anti-analysis/dynamic-linker-hijacking/preload::ld-preload-env
+    downgrade:
+      any:
+        - id: metadata/quality::has-tests
+
+  - id: python-phantom-dll
+    desc: Write DLL/SO then execute binary (Python)
+    crit: hostile
+    conf: 0.95
+    attack: "T1574.002"
+    for: [python]
+    all:
+      - id: micro-behaviors/fs/write/file::python-binary-write-pattern
+      - id: micro-behaviors/fs/path/extension::library-extension
+      - id: micro-behaviors/process/create/subprocess::process-execution
+    downgrade:
+      any:
+        - id: metadata/quality::has-tests
+        - id: metadata/signed/platform
+
+  - id: python-dll-hijacking
+    desc: Comprehensive DLL hijacking (Python)
+    crit: hostile
+    conf: 0.95
+    for: [python]
+    any:
+      - id: python-dll-side-loading
+      - id: python-ld-preload-hijacking
+      - id: proxy-execution-pattern
+      - id: python-dll-injection
+      - id: python-phantom-dll

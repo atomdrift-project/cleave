@@ -1,0 +1,21 @@
+# Generic Obfuscation and Packing Detection
+# Detects high entropy and structural indicators of packing without section name bias
+
+defaults:
+  for: [pe]
+  platforms: [windows]
+
+traits:
+  - id: high-entropy-generic
+    desc: High entropy executable section (possible packing)
+    crit: suspicious
+    conf: 0.8
+    if:
+      type: section
+      # Only match executable sections - high entropy in data/resource sections
+      # is normal (compressed resources, embedded archives, lookup tables)
+      regex: '(?i)^(\.|__)(text|code)'
+      entropy_min: 7.8
+    unless:
+      - id: objectives/execution/reflection/invoke::namespace-import
+      - id: file/archive/self-extracting # SFX stubs may have compressed code

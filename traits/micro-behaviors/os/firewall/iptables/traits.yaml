@@ -1,0 +1,26 @@
+# iptables - Linux Packet Filtering
+# Legacy netfilter firewall interface
+
+defaults:
+  for: [all]
+  crit: notable
+  conf: 0.9
+
+traits:
+  - id: iptables
+    desc: iptables command
+    if:
+      type: string
+      substr: iptables
+
+  - id: ip6tables
+    desc: ip6tables command
+    if:
+      type: string
+      substr: ip6tables
+
+  - id: iptables-save
+    desc: iptables-save command
+    if:
+      type: string
+      substr: iptables-save

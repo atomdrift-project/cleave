@@ -1,0 +1,14 @@
+# tcpdump - Packet Capture
+# Command-line packet analyzer
+
+defaults:
+  for: [all]
+  crit: notable
+  conf: 0.9
+
+traits:
+  - id: tcpdump
+    desc: tcpdump packet capture
+    if:
+      type: string
+      substr: tcpdump

@@ -1,0 +1,74 @@
+defaults:
+  crit: notable
+  attack: T1036.005
+  mbc: F0004
+  for: [all]
+traits:
+  - id: generic-email
+    desc: Generic email address
+    crit: notable
+    conf: 0.6
+    if:
+      type: string
+      regex: author_email.{0,50}@(gmail|outlook|yahoo|hotmail)\.com
+  - id: unknown-author-email
+    desc: PKG-INFO has UNKNOWN author email
+    crit: notable
+    conf: 0.75
+    if:
+      type: kv
+      path: author-email
+      exact: UNKNOWN
+  - id: pkginfo-no-author-email
+    desc: PKG-INFO missing Author-email field
+    crit: notable
+    conf: 0.7
+    if:
+      type: kv
+      path: metadata-version
+    unless:
+      - type: kv
+        path: author-email
+  - id: pkginfo-privacy-email-1
+    desc: PKG-INFO privacy email (proton/tutanota)
+    if:
+      type: kv
+      path: author-email
+      regex: '@(proton|tutanota)\.'
+      case_insensitive: true
+  - id: pkginfo-privacy-email-2
+    desc: PKG-INFO privacy email (mailinator/tempmail/throwaway)
+    if:
+      type: kv
+      path: author-email
+      regex: '@(mailinator|tempmail|throwaway)\.'
+      case_insensitive: true
+  - id: pyproject-privacy-email-1
+    desc: pyproject.toml privacy email (proton/tutanota/tutamail/guerrillamail)
+    if:
+      type: kv
+      path: project.authors
+      regex: '@(proton|tutanota|tutamail|guerrillamail)\.'
+      case_insensitive: true
+  - id: pyproject-privacy-email-2
+    desc: pyproject.toml privacy email (mailinator/yopmail/sharklasers)
+    if:
+      type: kv
+      path: project.authors
+      regex: '@(mailinator|yopmail|sharklasers)\.'
+      case_insensitive: true
+composite_rules:
+  - id: pkginfo-privacy-email
+    desc: PKG-INFO author uses privacy email provider
+    crit: notable
+    conf: 0.75
+    any:
+      - id: pkginfo-privacy-email-1
+      - id: pkginfo-privacy-email-2
+  - id: pyproject-privacy-email
+    desc: pyproject.toml author uses privacy email
+    crit: notable
+    conf: 0.75
+    any:
+      - id: pyproject-privacy-email-1
+      - id: pyproject-privacy-email-2

@@ -1,0 +1,81 @@
+# PowerShell Execution from Python
+# Detects malicious use of PowerShell for downloads or execution
+
+defaults:
+  for: [all]
+
+traits:
+  - id: python-download
+    desc: "Downloads file via PowerShell and"
+    crit: suspicious
+    conf: 0.9
+    for: [python]
+    if:
+      type: string
+      regex: "powershell.{0,50}curl\\.exe.{0,30}-o"
+
+  - id: python-start-process
+    desc: "Executes process via PowerShell Start-Process"
+    crit: suspicious
+    conf: 0.9
+    for: [python]
+    if:
+      type: string
+      regex: "powershell.{0,50}Start-Process"
+
+  # === System masquerade atomic indicators ===
+  - id: masq-realtek
+    desc: "Masquerades as Realtek audio process"
+    crit: notable
+    conf: 0.7
+    if:
+      type: string
+      substr: "RealtekHDAudio"
+
+  - id: masq-windowsupdate
+    desc: "Masquerades as Windows Update process"
+    crit: notable
+    conf: 0.7
+    if:
+      type: string
+      substr: "WindowsUpdate"
+
+  - id: masq-lsass
+    desc: "Masquerades as lsass process"
+    crit: notable
+    conf: 0.7
+    if:
+      type: string
+      substr: "lsass"
+
+  - id: masq-svchost
+    desc: "Masquerades as svchost process"
+    crit: notable
+    conf: 0.7
+    if:
+      type: string
+      substr: "svchost"
+
+composite_rules:
+  # System masquerade composite
+  - id: system-masquerade
+    desc: "Masquerades as system process"
+    crit: notable
+    conf: 0.8
+    any:
+      - id: masq-realtek
+      - id: masq-windowsupdate
+      - id: masq-lsass
+      - id: masq-svchost
+
+  - id: powershell-dropper
+    desc: "PowerShell-based dropper (Download + Execute)"
+    crit: suspicious
+    conf: 0.98
+    attack: "T1059.001"
+    mbc: "E1059"
+    for: [python]
+    all:
+      - id: python-download
+      - id: python-start-process
+      - id: system-masquerade

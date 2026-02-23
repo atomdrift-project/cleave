@@ -1,0 +1,232 @@
+# Impact - Remote Access / Reverse Shells
+# ATT&CK: T1059 (Command and Scripting Interpreter)
+# MBC: B0022 (Remote Access)
+# NOTE: Shell path traits (bin-sh, bin-bash) are defined in execution/command/shell/generic.yaml
+
+defaults:
+  for: [all]
+
+traits:
+  # === Atomic: Reverse Shell Indicators ===
+
+  # reverse-shell-ref removed - use micro-behaviors/data/text/malware/backdoor::generic-term-reverse-shell instead
+
+  - id: webshell-ref
+    desc: Web shell terminology reference
+    crit: suspicious
+    conf: 0.9
+    attack: "T1505.003"
+    platforms: [all]
+    if:
+      type: string
+      regex: "w[3e]b[_\\s]*sh[e3]ll"
+      case_insensitive: true
+
+  - id: traits-backdoor-ref
+    desc: Backdoor terminology reference
+    crit: suspicious
+    conf: 0.75
+    attack: "T1059"
+    platforms: [all]
+    if:
+      type: string
+      regex: "\\b[Bb]ackdoor\\b"
+
+  # === Atomic: Bash Reverse Shell ===
+  # Removed bash-dev-tcp duplicate - use objectives/command-and-control/reverse-shell/socket/sh::reverse-shell-bash
+
+  - id: stdin-redirect
+    desc: Stdin redirection (reverse shell indicator)
+    crit: suspicious
+    conf: 0.7
+    attack: "T1059"
+    platforms: [all]
+    if:
+      type: string
+      exact: "0>&1"
+
+  # === Atomic: Netcat ===
+
+  - id: nc-pipe
+    desc: Netcat with pipe
+    crit: suspicious
+    conf: 0.7
+    attack: "T1059"
+    platforms: [linux, macos, unix]
+    if:
+      type: string
+      regex: "\\|\\s*nc\\s"
+
+  # === Atomic: Socket + Shell (Generic) ===
+  # Generic "socket" moved to data/text/generic.yaml
+
+  - id: reverse-connect
+    desc: Reverse connect keyword
+    crit: notable
+    conf: 0.3
+    platforms: [all]
+    if:
+      type: string
+      regex: "(?i)reverse[-_]?(connect)"
+
+  - id: reverse-conn
+    desc: Reverse conn abbreviation
+    crit: notable
+    conf: 0.3
+    platforms: [all]
+    if:
+      type: string
+      regex: "(?i)reverse[-_]?(conn)"
+
+  - id: reverse-tcp
+    desc: Reverse TCP indicator
+    crit: notable
+    conf: 0.3
+    platforms: [all]
+    if:
+      type: string
+      regex: "(?i)reverse[-_]?(tcp)"
+
+  - id: reverse-shell
+    desc: Reverse shell keyword
+    crit: notable
+    conf: 0.3
+    platforms: [all]
+    if:
+      type: string
+      regex: "(?i)reverse[-_]?(shell)"
+
+  - id: reverse-backdoor
+    desc: Reverse backdoor reference
+    crit: notable
+    conf: 0.3
+    platforms: [all]
+    if:
+      type: string
+      regex: "(?i)reverse[-_]?(backdoor)"
+
+  - id: reverse-proxy
+    desc: Reverse proxy keyword
+    crit: notable
+    conf: 0.3
+    platforms: [all]
+    if:
+      type: string
+      regex: "(?i)reverse[-_]?(proxy)"
+
+  - id: reverse-tunnel
+    desc: Reverse tunnel keyword
+    crit: notable
+    conf: 0.3
+    platforms: [all]
+    if:
+      type: string
+      regex: "(?i)reverse[-_]?(tunnel)"
+
+
+  # === Atomic: Ruby Reverse Shell ===
+
+  - id: ruby-tcpsocket-spawn
+    desc: Ruby TCPSocket with spawn (reverse
+    crit: suspicious
+    conf: 0.9
+    attack: "T1059.006"
+    platforms: [all]
+    for: [ruby]
+    if:
+      type: string
+      regex: "spawn\\([\"']/bin/sh[\"'],.{0,64}TCPSocket"
+
+  - id: ruby-tcpsocket-popen
+    desc: Ruby TCPSocket with popen (reverse
+    crit: suspicious
+    conf: 0.9
+    attack: "T1059.006"
+    platforms: [all]
+    for: [ruby]
+    if:
+      type: string
+      regex: "TCPSocket.{0,64}\\.gets.{0,64}IO.popen"
+
+  # === Atomic: Go Reverse Shell Functions ===
+
+  - id: go-child-stdin
+    desc: Go exec.Cmd.childStdin
+    crit: suspicious
+    conf: 0.7
+    platforms: [all]
+    for: [elf, macho]
+    if:
+      type: string
+      substr: "os/exec.(*Cmd).childStdin"
+
+composite_rules:
+  # Perl socket-open reverse shell (migrated from YARA)
+  - id: perl-socket-open
+    desc: Perl socket with open (reverse
+    crit: suspicious
+    conf: 0.8
+    attack: "T1059.006"
+    mbc: "B0022"
+    platforms: [all]
+    for: [perl]
+    all:
+      - id: micro-behaviors/communications/socket/create::socket-call
+      - id: micro-behaviors/communications/socket/create::open-call
+      - id: micro-behaviors/communications/socket/create::fd-redirect
+      - id: micro-behaviors/process/create/shell::sh-interactive
+
+  - id: mkfifo-netcat-shell
+    desc: Reverse shell via mkfifo and
+    crit: suspicious
+    conf: 0.95
+    attack: "T1059.004"
+    mbc: "B0022"
+    platforms: [linux, macos, unix]
+    all:
+      - id: micro-behaviors/fs/pipe/fifo::mkfifo-cmd
+      - id: micro-behaviors/process/create/shell::sh-interactive
+      - id: nc-pipe
+
+  - id: go-reverse-shell
+    desc: Go reverse shell pattern
+    crit: suspicious
+    conf: 0.9
+    attack: "T1059"
+    mbc: "B0022"
+    platforms: [all]
+    for: [elf, macho]
+    any:
+      - id: micro-behaviors/process/create/shell::bin-bash
+      - id: micro-behaviors/process/create/shell::bin-sh
+    all:
+      - id: micro-behaviors/process/create/shell/lang::exec-cmd-run
+      - id: go-child-stdin
+      - id: micro-behaviors/communications/socket/connect::dial-tcp
+
+  - id: reverse-keyword
+    desc: Reverse keyword reference
+    crit: notable
+    conf: 0.3
+    platforms: [all]
+    any:
+      - id: reverse-connect
+      - id: reverse-conn
+      - id: reverse-tcp
+      - id: reverse-shell
+      - id: reverse-backdoor
+      - id: reverse-proxy
+      - id: reverse-tunnel
+
+  - id: generic-reverse-shell
+    desc: Generic reverse shell pattern (socket
+    crit: suspicious
+    conf: 0.8
+    attack: "T1059"
+    platforms: [all]
+    all:
+      - id: reverse-keyword
+      - id: micro-behaviors/communications/socket/listen::socket-sym
+    any:
+      - id: micro-behaviors/process/create/shell::bin-bash
+      - id: micro-behaviors/process/create/shell::bin-sh

@@ -1,0 +1,12 @@
+# Generic C2 Client Markers
+defaults:
+  for: [all]
+
+traits:
+  - id: marker
+    desc: "Explicit 'c2-client' string marker"
+    crit: suspicious
+    conf: 1.0
+    if:
+      type: string
+      regex: "c2-client"

@@ -1,0 +1,307 @@
+# Impact - Service Manipulation
+# ATT&CK: T1489 (Service Stop)
+
+defaults:
+  attack: "T1489"
+  # Service command strings can be embedded in any file type
+  for: ["*"]
+
+traits:
+  - id: systemctl-stop
+    desc: Systemd service stop
+    crit: suspicious
+    conf: 0.8
+    if:
+      type: string
+      regex: "systemctl\\s+stop"
+
+  - id: systemctl-disable
+    desc: Systemd service disable
+    crit: suspicious
+    conf: 0.8
+    if:
+      type: string
+      regex: "systemctl\\s+disable"
+
+  - id: service-stop
+    desc: SysV service stop
+    crit: suspicious
+    conf: 0.8
+    if:
+      type: string
+      regex: "service\\s+\\w+\\s+stop"
+    downgrade:
+      any:
+        - id: metadata/signed/platform::apple
+
+  - id: sc-stop
+    desc: Windows service control stop
+    crit: suspicious
+    conf: 0.8
+    if:
+      type: string
+      regex: "sc\\s+stop"
+
+  - id: net-stop
+    desc: Windows net stop command
+    crit: suspicious
+    conf: 0.8
+    if:
+      type: string
+      regex: "net\\s+stop"
+
+  - id: vmsvc-getallvms
+    desc: VMware VM enumeration
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: string
+      substr: "vmsvc/getallvms"
+
+  # === Database service termination (atomic) ===
+  - id: kill-mysql-kill
+    desc: MySQL kill command
+    crit: notable
+    conf: 0.5
+    if:
+      type: string
+      regex: "(?i)kill.{0,30}mysql"
+
+  - id: kill-mysql-stop
+    desc: MySQL stop command
+    crit: notable
+    conf: 0.5
+    if:
+      type: string
+      regex: "(?i)stop.{0,30}mysql"
+
+  - id: kill-postgres-kill
+    desc: PostgreSQL kill command
+    crit: notable
+    conf: 0.5
+    if:
+      type: string
+      regex: "(?i)kill.{0,30}postgres"
+
+  - id: kill-postgres-stop
+    desc: PostgreSQL stop command
+    crit: notable
+    conf: 0.5
+    if:
+      type: string
+      regex: "(?i)stop.{0,30}postgres"
+
+  - id: kill-oracle-kill
+    desc: Oracle kill command
+    crit: notable
+    conf: 0.5
+    if:
+      type: string
+      regex: "(?i)kill.{0,30}oracle"
+
+  - id: kill-oracle-stop
+    desc: Oracle stop command
+    crit: notable
+    conf: 0.5
+    if:
+      type: string
+      regex: "(?i)stop.{0,30}oracle"
+
+  - id: kill-mssql-kill
+    desc: MSSQL kill command
+    crit: notable
+    conf: 0.5
+    if:
+      type: string
+      regex: "(?i)kill.{0,30}mssql"
+
+  - id: kill-mssql-stop
+    desc: MSSQL stop command
+    crit: notable
+    conf: 0.5
+    if:
+      type: string
+      regex: "(?i)stop.{0,30}mssql"
+
+  - id: kill-mongodb-kill
+    desc: MongoDB kill command
+    crit: notable
+    conf: 0.5
+    if:
+      type: string
+      regex: "(?i)kill.{0,30}mongodb"
+
+  - id: kill-mongodb-stop
+    desc: MongoDB stop command
+    crit: notable
+    conf: 0.5
+    if:
+      type: string
+      regex: "(?i)stop.{0,30}mongodb"
+
+  # === ESXi ransomware atomic indicators ===
+  - id: onion-domain
+    desc: .onion domain reference
+    crit: notable
+    conf: 0.6
+    if:
+      type: string
+      substr: ".onion"
+
+  - id: word-encrypted
+    desc: Encrypted keyword
+    crit: notable
+    conf: 0.4
+    if:
+      type: string
+      substr: encrypted
+      case_insensitive: true
+
+  - id: word-ransom
+    desc: Ransom keyword
+    crit: notable
+    conf: 0.5
+    if:
+      type: string
+      word: ransom
+      case_insensitive: true
+
+  - id: tor-service-stop-systemctl
+    desc: Tor service stop systemctl command
+    crit: suspicious
+    conf: 0.7
+    if:
+      type: string
+      regex: "systemctl.{0,30}(stop|disable).{0,30}tor"
+
+  - id: tor-service-stop-service
+    desc: Tor service stop service command
+    crit: suspicious
+    conf: 0.7
+    if:
+      type: string
+      regex: "service.{0,30}(stop|disable).{0,30}tor"
+
+  - id: tor-service-stop-launchctl
+    desc: Tor service stop launchctl command
+    crit: suspicious
+    conf: 0.7
+    if:
+      type: string
+      regex: "launchctl.{0,30}(stop|disable).{0,30}tor"
+
+  - id: tor-service-stop-sc
+    desc: Tor service stop sc command
+    crit: suspicious
+    conf: 0.7
+    if:
+      type: string
+      regex: "\\bsc (stop|config).{0,20}\\btor\\b"
+
+  - id: tor-service-stop-suffix
+    desc: Tor service stop suffix
+    crit: suspicious
+    conf: 0.7
+    if:
+      type: string
+      regex: "\btor@?\\.service\b.{0,30}(stop|disable)"
+
+  - id: tor-process-kill
+    desc: Tor process termination
+    crit: suspicious
+    conf: 0.7
+    if:
+      type: string
+      regex: "(killall|pkill|taskkill).{0,50}[tT]or"
+
+  - id: tor-browser-kill
+    desc: Tor Browser termination
+    crit: suspicious
+    conf: 0.8
+    if:
+      type: string
+      regex: "tor[- ]?browser.{0,50}kill|kill.{0,50}tor[- ]?browser"
+
+  - id: word-bitcoin
+    desc: Bitcoin keyword
+    crit: notable
+    conf: 0.4
+    if:
+      type: string
+      substr: bitcoin
+      case_insensitive: true
+
+  - id: phrase-your-data
+    desc: Your data phrase
+    crit: notable
+    conf: 0.4
+    if:
+      type: string
+      substr: "your data"
+
+composite_rules:
+  # Individual database kill composites
+  - id: kill-mysql
+    desc: MySQL service termination
+    crit: notable
+    conf: 0.6
+    any:
+      - id: kill-mysql-kill
+      - id: kill-mysql-stop
+
+  - id: kill-postgres
+    desc: PostgreSQL service termination
+    crit: notable
+    conf: 0.6
+    any:
+      - id: kill-postgres-kill
+      - id: kill-postgres-stop
+
+  - id: kill-oracle
+    desc: Oracle service termination
+    crit: notable
+    conf: 0.6
+    any:
+      - id: kill-oracle-kill
+      - id: kill-oracle-stop
+
+  - id: kill-mssql
+    desc: MSSQL service termination
+    crit: notable
+    conf: 0.6
+    any:
+      - id: kill-mssql-kill
+      - id: kill-mssql-stop
+
+  - id: kill-mongodb
+    desc: MongoDB service termination
+    crit: notable
+    conf: 0.6
+    any:
+      - id: kill-mongodb-kill
+      - id: kill-mongodb-stop
+
+  - id: kill-database
+    desc: Database service termination
+    crit: notable
+    conf: 0.9
+    any:
+      - id: kill-mysql
+      - id: kill-postgres
+      - id: kill-oracle
+      - id: kill-mssql
+      - id: kill-mongodb
+
+  - id: esxi-ransomware
+    desc: VMware ESXi ransomware
+    crit: suspicious
+    conf: 0.99
+    attack: "T1486"
+    mbc: "B0040"
+    for: [elf]
+    all:
+      - id: micro-behaviors/vm/detect/vmware::esxcli-tool
+      - id: onion-domain
+    any:
+      - id: word-encrypted
+      - id: word-ransom

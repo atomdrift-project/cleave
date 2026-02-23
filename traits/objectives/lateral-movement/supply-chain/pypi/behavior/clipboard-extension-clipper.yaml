@@ -1,0 +1,19 @@
+# PyPI Clipboard Extension Clipper
+# Detects setup.py scripts that use obfuscation and COM automation to install
+# a malicious browser extension (clipboard hijacker) via shortcut modification.
+# ATT&CK: T1176 (Browser Extensions)
+
+defaults:
+  for: [python]
+  attack: "T1176"
+
+composite_rules:
+  - id: pypi-clipboard-extension-clipper
+    desc: PyPI setup.py installs clipboard hijacker extension
+    crit: hostile
+    conf: 0.98
+    mbc: "E1204"
+    all:
+      - id: objectives/lateral-movement/supply-chain/pypi/install-patterns::robust-setup-py
+      - id: objectives/anti-static/obfuscation/scripting::python-getattr-oct-hex-obfuscation
+      - id: micro-behaviors/communications/ipc/win32com::import-win32com

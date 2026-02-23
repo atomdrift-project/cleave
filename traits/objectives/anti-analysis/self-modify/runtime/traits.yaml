@@ -1,0 +1,272 @@
+# Self-Modification Patterns
+# These patterns indicate code that modifies itself at runtime
+# Can be legitimate (JIT, hot-patching) or malicious (polymorphic malware)
+
+defaults:
+  for: [binaries]
+
+traits:
+  # === Memory protection (atomic) ===
+  - id: prot-write
+    desc: PROT_WRITE memory protection constant
+    crit: notable
+    conf: 0.6
+    if:
+      type: string
+      word: "PROT_WRITE"
+
+  # === Self-overwriting (atomic) ===
+  - id: proc-self-mem
+    desc: /proc/self/mem access for self-modification
+    crit: suspicious
+    conf: 0.85
+    if:
+      type: string
+      substr: /proc/self/mem
+
+  - id: self-patch-ref
+    desc: Self-patch terminology
+    crit: suspicious
+    conf: 0.85
+    if:
+      type: string
+      substr: "self-patch"
+      case_insensitive: true
+
+  # === Code cave (atomic) ===
+  - id: codecave-ref
+    desc: Code cave terminology
+    crit: suspicious
+    conf: 0.8
+    if:
+      type: string
+      regex: '\bcodecave\b|code cave'
+      case_insensitive: true
+
+  - id: slack-space-ref
+    desc: Slack space terminology
+    crit: suspicious
+    conf: 0.75
+    if:
+      type: string
+      substr: "slack space"
+      case_insensitive: true
+
+  - id: nop-sled
+    desc: Long NOP sled byte sequence
+    crit: notable
+    conf: 0.7
+    if:
+      type: hex
+      pattern: "90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90"
+    unless:
+      - id: metadata/language/go
+
+  # === Hook installation (atomic) ===
+  - id: inline-hook-ref
+    desc: Inline hook terminology
+    crit: suspicious
+    conf: 0.8
+    if:
+      type: string
+      substr: "inline hook"
+      case_insensitive: true
+
+  - id: detour-ref
+    desc: Detour/hooking terminology
+    crit: notable
+    conf: 0.6
+    if:
+      type: string
+      substr: detour
+      case_insensitive: true
+
+  - id: trampoline-ref
+    desc: Trampoline hook terminology
+    crit: notable
+    conf: 0.3
+    if:
+      type: string
+      substr: trampoline
+      case_insensitive: true
+      count_min: 3
+    downgrade:
+      any:
+        - id: metadata/signed/platform::apple
+
+  # === IAT/GOT hooking (atomic) ===
+  - id: import-descriptor
+    desc: PE IMAGE_IMPORT_DESCRIPTOR structure
+    crit: notable
+    conf: 0.5
+    if:
+      type: string
+      substr: IMAGE_IMPORT_DESCRIPTOR
+
+  - id: import-address-table
+    desc: Import Address Table reference
+    crit: notable
+    conf: 0.5
+    if:
+      type: string
+      substr: ImportAddressTable
+
+  - id: iat-ref
+    desc: IAT abbreviation reference
+    crit: notable
+    conf: 0.4
+    if:
+      type: string
+      word: "IAT"
+
+  - id: got-ref
+    desc: GOT abbreviation reference
+    crit: notable
+    conf: 0.4
+    if:
+      type: string
+      word: "GOT"
+
+  # === Polymorphic/metamorphic (atomic) ===
+  - id: polymorphic-ref
+    desc: Polymorphic code terminology
+    crit: notable
+    conf: 0.5
+    for: [binaries, javascript, typescript]
+    if:
+      type: string
+      substr: polymorphic
+      case_insensitive: true
+
+  - id: metamorphic-ref
+    desc: Metamorphic code terminology
+    crit: suspicious
+    conf: 0.8
+    if:
+      type: string
+      substr: metamorphic
+      case_insensitive: true
+
+  - id: self-modifying-ref
+    desc: Self-modifying code terms
+    crit: suspicious
+    conf: 0.8
+    if:
+      type: string
+      substr: "self-modifying"
+      case_insensitive: true
+
+  - id: xor-loop-pattern
+    desc: XOR decryption loop byte pattern
+    crit: notable
+    conf: 0.4
+    if:
+      type: hex
+      pattern: "30 ?? 4? 83 ?? ?? 7?"
+
+composite_rules:
+  - id: page-rwx-literal
+    desc: PAGE_EXECUTE_READWRITE constant literal
+    crit: notable
+    conf: 0.8
+    any:
+      - id: micro-behaviors/mem/allocate/executable::page-execute-readwrite
+      - id: prot-write
+
+  # Memory protection changes
+  - id: mprotect
+    desc: Memory protection modification
+    crit: notable
+    conf: 0.85
+    any:
+      - id: micro-behaviors/mem/protect/modify::mprotect-symbol
+      - id: micro-behaviors/mem/protect/modify::virtual-protect
+      - id: micro-behaviors/mem/protect/modify::virtual-protect-ex
+      - id: prot-write
+      - id: micro-behaviors/mem/allocate/executable::prot-exec-const
+      - id: page-rwx-literal
+    downgrade:
+      any:
+        - id: micro-behaviors/dylib/load/x11-dga-marker
+        - id: micro-behaviors/dylib/library::graphics-lib-marker
+        - id: micro-behaviors/dylib/library::system-lib-marker
+
+  - id: self-overwrite
+    desc: Self-overwriting code patterns
+    crit: suspicious
+    conf: 0.8
+    any:
+      - id: proc-self-mem
+      - id: objectives/evasion/process/injection/runtime::write-process-memory
+      - id: self-patch-ref
+    downgrade:
+      any:
+        - id: metadata/vendor/valve/valve-corp-binary
+
+  - id: code-cave
+    desc: Code cave or slack space
+    crit: suspicious
+    conf: 0.75
+    needs: 2
+    any:
+      - id: codecave-ref
+      - id: slack-space-ref
+      - id: nop-sled
+    downgrade:
+      any:
+        - id: metadata/vendor/valve/valve-corp-binary
+
+  - id: hook-install
+    desc: Dynamic interposition hook patterns
+    crit: notable
+    conf: 0.7
+    any:
+      - id: micro-behaviors/mem/protect/modify::setwindowshook
+      - id: inline-hook-ref
+      - id: detour-ref
+    downgrade:
+      any:
+        - id: metadata/vendor/valve/valve-corp-binary
+
+  - id: iat-hook
+    desc: Import Address Table hooking
+    crit: notable
+    conf: 0.7
+    needs: 2
+    any:
+      - id: import-descriptor
+      - id: import-address-table
+      - id: iat-ref
+      - id: metadata/lang/security::got-plt-section
+      - id: got-ref
+
+  - id: polymorphic
+    desc: Polymorphic or metamorphic code indicators
+    crit: suspicious
+    conf: 0.75
+    needs: 2
+    any:
+      - id: polymorphic-ref
+      - id: metamorphic-ref
+      - id: self-modifying-ref
+      - id: xor-loop-pattern
+
+  - id: active
+    desc: Active self-modification behavior
+    crit: notable
+    conf: 0.9
+    all:
+      - id: mprotect
+    any:
+      - id: self-overwrite
+      - id: self-modifying-ref
+      - id: code-cave
+      - id: xor-loop-pattern
+
+  - id: setwindowshook
+    desc: Windows SetWindowsHookEx API reference
+    crit: notable
+    conf: 0.7
+    any:
+      - id: micro-behaviors/mem/protect/modify::setwindowshook
+      - id: inline-hook-ref

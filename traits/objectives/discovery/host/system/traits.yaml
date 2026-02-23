@@ -1,0 +1,116 @@
+# System Reconnaissance via Curl
+# Detects malware gathering system info and sending via curl
+# ATT&CK: T1082 (System Information Discovery), T1041 (Exfiltration)
+# MBC: B0012 (Operating System Discovery)
+
+defaults:
+  crit: suspicious
+  attack: "T1082"
+  mbc: "B0012"
+  for: [python, shell]
+
+traits:
+  # === System Info Collection ===
+  - id: curl-hostname-header
+    desc: curl with hostname header
+    crit: suspicious
+    conf: 0.85
+    if:
+      type: raw
+      regex: "curl.{0,50}Hostname.{0,50}\\$\\(hostname\\)"
+
+  - id: curl-whoami-header
+    desc: curl with whoami header
+    crit: suspicious
+    conf: 0.85
+    if:
+      type: raw
+      regex: "curl.{0,50}Whoami.{0,50}\\$\\(whoami\\)|curl.{0,50}whoami"
+
+  - id: curl-pwd-header
+    desc: curl with pwd header
+    crit: suspicious
+    conf: 0.85
+    if:
+      type: raw
+      regex: "curl.{0,50}Pwd.{0,50}\\$\\(pwd\\)|curl.{0,50}pwd"
+
+  - id: curl-directory-listing
+    desc: curl with directory listing
+    crit: suspicious
+    conf: 0.90
+    if:
+      type: raw
+      regex: "curl.{0,50}ls.{0,50}-la|curl.{0,50}dir.{0,50}data"
+
+  # === Dependency Tracking ===
+  - id: curl-dependency-header
+    desc: curl with dependency header
+    crit: suspicious
+    conf: 0.90
+    if:
+      type: raw
+      regex: "curl.{0,50}[Dd]ependency.{0,50}[Hh]eader|curl.{0,50}[Rr]epo.{0,50}[Hh]eader"
+
+  - id: curl-package-tracking
+    desc: curl tracking package install
+    crit: suspicious
+    conf: 0.90
+    if:
+      type: raw
+      regex: "curl.{0,50}business.{0,50}kpi|curl.{0,50}install.{0,50}track"
+
+  # === Pipedream Webhook ===
+  - id: hostname-cmd
+    desc: hostname command reference
+    crit: notable
+    conf: 0.5
+    if:
+      type: raw
+      word: "hostname"
+
+composite_rules:
+  - id: recon-command-ref
+    desc: Reconnaissance command reference
+    crit: notable
+    conf: 0.6
+    any:
+      - id: hostname-cmd
+      - id: micro-behaviors/process/user/query::whoami-cmd
+
+  - id: pipedream-recon-webhook
+    desc: Pipedream reconnaissance webhook
+    crit: suspicious
+    conf: 0.95
+    all:
+      - id: objectives/exfiltration/channel/callback::pipedream
+      - id: recon-command-ref
+
+  # === System Reconnaissance Exfiltration ===
+  - id: system-recon-exfiltration
+    desc: System recon via curl
+    crit: suspicious
+    conf: 0.92
+    attack: "T1082"
+    for: [python, shell]
+    needs: 3
+    any:
+      - id: curl-hostname-header
+      - id: curl-whoami-header
+      - id: curl-pwd-header
+      - id: curl-directory-listing
+
+  - id: supply-chain-recon
+    desc: Supply chain reconnaissance
+    crit: hostile
+    conf: 0.95
+    attack: "T1195.001"
+    mbc: "B0030"
+    platforms: [all]
+    needs: 2
+    any:
+      - id: curl-dependency-header
+      - id: curl-package-tracking
+      - id: pipedream-recon-webhook
+    all:
+      - id: system-recon-exfiltration

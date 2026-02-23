@@ -1,0 +1,21 @@
+# System Information Exfiltration - Python
+# Detects collection and exfiltration of system information
+# MBC: E1082 (System Information Discovery) + T1041 (Exfiltration Over C2 Channel)
+# ATT&CK: T1082, T1041
+
+defaults:
+  crit: suspicious
+  for: [python]
+  mbc: "E1082+T1041"
+  attack: "T1082+T1041"
+
+composite_rules:
+  - id: python-system-info-exfil
+    desc: "Exfiltration of system information (User, Host, OS)"
+    crit: hostile
+    conf: 0.95
+    all:
+      - id: objectives/discovery/host/system/hardware-fingerprint::python-username
+      - id: micro-behaviors/communications/socket/connect::socket-gethostname
+      - id: micro-behaviors/data/encode/base64::base64-encoding
+      - id: micro-behaviors/communications/http/request::request-python

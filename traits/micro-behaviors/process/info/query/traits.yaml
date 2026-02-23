@@ -1,0 +1,19 @@
+# Process Information
+# Generic process information system calls
+
+defaults:
+  for: [elf, macho, so, dylib, c]
+  platforms: [linux, unix, macos]
+
+traits:
+  # NOTE: getpid moved to micro-behaviors/process/identity/query::get-pid (canonical location - includes getppid)
+
+  - id: get-process-for-pid
+    desc: Lookup process by PID (Carbon)
+    crit: notable
+    conf: 0.8
+    platforms: [macos]
+    for: [macho, c]
+    if:
+      type: string
+      substr: "GetProcessForPID"

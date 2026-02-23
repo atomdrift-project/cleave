@@ -1,0 +1,10 @@
+composite_rules:
+  - id: shikata-ga-nai-dropper
+    desc: Dropper/Stager encoded with Shikata Ga Nai.
+    crit: hostile
+    conf: 1.0
+    all:
+      - id: objectives/anti-static/obfuscation/payload::shikata-ga-nai-stub
+    any:
+      - id: metadata/format::small-elf-binary
+      - id: metadata/format::no-functions

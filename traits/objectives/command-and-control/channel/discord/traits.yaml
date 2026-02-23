@@ -1,0 +1,47 @@
+defaults:
+  for:
+  - all
+traits:
+- id: discord-invite-string
+  desc: Discord invite link string
+  crit: notable
+  conf: 0.8
+  if:
+    type: string
+    regex: discord\.gg/
+- id: discord-fake-email
+  desc: Discord URL masquerading as email
+  crit: suspicious
+  conf: 0.9
+  if:
+    type: string
+    regex: (discord\.gg|discordapp\.com|discord\.com).{0,20}@
+- id: discord-string
+  desc: String "discord" (generic)
+  crit: notable
+  conf: 0.6
+  if:
+    type: string
+    regex: (?i)discord\.(gg|discordapp\.com|discord\.com)
+- id: discord-cdn-url
+  desc: Discord CDN attachment URL
+  crit: notable
+  conf: 0.9
+  if:
+    type: string
+    regex: https?://(cdn\.discordapp\.com|media\.discordapp\.net)/attachments/\d+/\d+/
+- id: discord-api-url
+  desc: Discord API URL
+  crit: notable
+  conf: 0.9
+  if:
+    type: string
+    regex: https?://(discord\.com|discordapp\.com)/api/webhooks/\d+/
+- id: discord-cdn-executable
+  desc: Discord CDN URL pointing to executable
+  crit: suspicious
+  conf: 1.0
+  if:
+    type: raw
+    regex: https?://cdn\.discordapp\.com/attachments/\d+/\d+/.{1,80}\.(exe|dll|sh)
+composite_rules: []

@@ -1,0 +1,80 @@
+# Phishing Kit - Composite Detection Rules
+# Complex patterns combining phishing indicators
+#
+# ========================================================================
+# WARNING: ALL COMPOSITE RULES IN THIS FILE ARE CURRENTLY DISABLED
+# ========================================================================
+#
+# These composite rules reference atomic traits that do not yet exist.
+# Before enabling these rules, you must create atomic trait files in:
+#
+# - anti-copy/traits.yaml (10+ traits for anti-copy patterns)
+# - brand-impersonation/traits.yaml (20+ traits for Microsoft/Google/etc)
+# - domains/traits.yaml (15+ traits for TLDs, typosquats)
+# - evasion/traits.yaml (10+ traits for bot detection)
+# - login-forms/traits.yaml (15+ traits for input fields, placeholders)
+# - lures/traits.yaml (15+ traits for document sharing, auth prompts)
+#
+# Each atomic trait should define specific patterns to detect, such as:
+# - HTML event handlers (oncopy="return false")
+# - Brand logos and text references
+# - Input field types and attributes
+# - Suspicious TLDs and domain patterns
+# - JavaScript bot detection code
+# - Social engineering phrases
+#
+# Total missing atomic traits: ~106
+#
+# Once atomic traits are created, uncomment the composite rules below
+# and update the trait IDs to use full namespace paths like:
+# { id: objectives/lateral-movement/phishing/kit/anti-copy::oncopy-false }
+#
+# ========================================================================
+
+composite_rules: []
+
+# DISABLED COMPOSITE RULES (missing atomic traits):
+#
+# - anti-copy: Anti-copy mechanism detection
+# - human-interaction-events: Human verification interaction
+# - disabled-manipulation: Disabled state manipulation
+# - human-verification: Requires human interaction
+# - microsoft-logo: Microsoft logo references
+# - microsoft-brand: Microsoft brand text
+# - signin-text: Sign in text patterns
+# - microsoft-logo-or-brand: Microsoft logo or brand
+# - microsoft-signin-or-email: Microsoft signin or email
+# - microsoft-impersonation: Microsoft brand impersonation
+# - google-logo: Google logo references
+# - google-brand: Google brand text
+# - google-logo-or-brand: Google logo or brand
+# - google-impersonation: Google brand impersonation
+# - login-text: Login/sign in text
+# - password-input: Password input fields
+# - email-input: Email input fields
+# - credential-placeholders: Credential placeholders
+# - credential-inputs: Password or email inputs
+# - login-form: Suspicious login form
+# - sharing-phrases: Document sharing phrases
+# - document-extensions: Document file extensions
+# - document-actions: Document action keywords
+# - document-indicators: Document extensions or actions
+# - document-lure: Fake document sharing lure
+# - location-redirect: Window location redirect
+# - submit-listener: Form submit listeners
+# - suspicious-tlds: Suspicious/abused TLDs
+# - form-submission-patterns: Form submission or redirect
+# - external-form-action: Form submits to suspicious external
+# - siemens-typosquats: Siemens brand typosquats
+# - microsoft-typosquats: Microsoft brand typosquats
+# - google-typosquats: Google brand typosquats
+# - login-subdomain-prefix: Login subdomain prefixes
+# - login-subdomain-with-suspicious-tld: Login subdomain + suspicious TLD
+# - typosquat-domain: Typosquatting domain pattern
+# - bot-detection: Bot/automation detection
+# - external-cdn: External CDN references
+# - logo-icon-keywords: Logo or icon keywords
+# - brand-cdn-icons: External CDN icons for brand
+# - readonly-email-value: Pre-filled email with readonly
+# - targeted-email: Pre-filled target email address
+# - auth-required-lure: Fake authentication required message

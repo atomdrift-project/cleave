@@ -1,0 +1,124 @@
+# Executable file extension and search patterns
+# Detects code checking for or searching for executable files by extension
+# ATT&CK: T1105 (Ingress Tool Transfer)
+
+traits:
+  # === Executable search by extension ===
+  - id: endswith-exe
+    desc: endsWith .exe check
+    crit: notable
+    conf: 0.6
+    attack: "T1105"
+    for: [javascript, typescript]
+    if:
+      type: string
+      regex: "endsWith\\(['\"]\\.(exe)['\"]\\)"
+
+  - id: endswith-bat
+    desc: endsWith .bat check
+    crit: notable
+    conf: 0.6
+    attack: "T1105"
+    for: [javascript, typescript]
+    if:
+      type: string
+      regex: "endsWith\\(['\"]\\.(bat)['\"]\\)"
+
+  - id: endswith-cmd
+    desc: endsWith .cmd check
+    crit: notable
+    conf: 0.6
+    attack: "T1105"
+    for: [javascript, typescript]
+    if:
+      type: string
+      regex: "endsWith\\(['\"]\\.(cmd)['\"]\\)"
+
+  - id: endswith-ps1
+    desc: endsWith .ps1 check
+    crit: notable
+    conf: 0.6
+    attack: "T1105"
+    for: [javascript, typescript]
+    if:
+      type: string
+      regex: "endsWith\\(['\"]\\.(ps1)['\"]\\)"
+
+  - id: endswith-sh
+    desc: endsWith .sh check
+    crit: notable
+    conf: 0.6
+    attack: "T1105"
+    for: [javascript, typescript]
+    if:
+      type: string
+      regex: "endsWith\\(['\"]\\.(sh)['\"]\\)"
+
+  - id: endswith-elf
+    desc: endsWith .elf check
+    crit: notable
+    conf: 0.6
+    attack: "T1105"
+    for: [javascript, typescript]
+    if:
+      type: string
+      regex: "endsWith\\(['\"]\\.(elf)['\"]\\)"
+
+  - id: endswith-bin
+    desc: endsWith .bin check
+    crit: notable
+    conf: 0.6
+    attack: "T1105"
+    for: [javascript, typescript]
+    if:
+      type: string
+      regex: "endsWith\\(['\"]\\.(bin)['\"]\\)"
+
+  # === Executable search by find() pattern ===
+  - id: find-exe-pattern
+    desc: find() with .exe pattern
+    crit: notable
+    conf: 0.6
+    attack: "T1105"
+    for: [javascript, typescript]
+    if:
+      type: string
+      regex: "find\\([^)]{0,120}\\.exe"
+
+  - id: find-bat-pattern
+    desc: find() with .bat pattern
+    crit: notable
+    conf: 0.6
+    attack: "T1105"
+    for: [javascript, typescript]
+    if:
+      type: string
+      regex: "find\\([^)]{0,120}\\.bat"
+
+  - id: find-cmd-pattern
+    desc: find() with .cmd pattern
+    crit: notable
+    conf: 0.6
+    attack: "T1105"
+    for: [javascript, typescript]
+    if:
+      type: string
+      regex: "find\\([^)]{0,120}\\.cmd"
+
+  - id: exepath-var
+    desc: exePath variable
+    crit: notable
+    conf: 0.5
+    for: [javascript, typescript]
+    if:
+      type: string
+      word: "exePath"
+
+  - id: exefile-var
+    desc: exeFile variable
+    crit: notable
+    conf: 0.5
+    for: [javascript, typescript]
+    if:
+      type: string
+      word: "exeFile"

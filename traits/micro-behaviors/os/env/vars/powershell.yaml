@@ -1,0 +1,36 @@
+traits:
+  - id: env-username
+    desc: Accesses username environment variable
+    crit: notable
+    conf: 0.8
+    for: [powershell]
+    if:
+      type: raw
+      regex: '(?i)\$env:USERNAME\b'
+
+  - id: env-computername
+    desc: Accesses computername environment variable
+    crit: notable
+    conf: 0.8
+    for: [powershell]
+    if:
+      type: raw
+      regex: '(?i)\$env:COMPUTERNAME\b'
+
+  - id: env-temp
+    desc: Accesses temp environment variable
+    crit: baseline
+    conf: 0.8
+    for: [powershell]
+    if:
+      type: raw
+      regex: '(?i)\$env:TEMP\b'
+
+  - id: env-appdata
+    desc: Accesses APPDATA environment variable
+    crit: baseline
+    conf: 0.8
+    for: [powershell]
+    if:
+      type: raw
+      regex: '(?i)\$env:(LOCAL)?APPDATA\b'

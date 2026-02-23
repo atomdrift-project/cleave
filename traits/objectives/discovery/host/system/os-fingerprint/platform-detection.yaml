@@ -1,0 +1,102 @@
+# Cross-Platform Detection
+# Detects malware that targets multiple operating systems
+# ATT&CK: T1082 (System Information Discovery)
+# MBC: B0012 (Operating System Discovery)
+
+defaults:
+  crit: notable
+  attack: "T1082"
+  mbc: "B0012"
+  for: [python, javascript, shell]
+
+traits:
+  # === OS String Checks ===
+  - id: os-check-windows
+    desc: Windows OS detection string
+    crit: notable
+    conf: 0.60
+    if:
+      type: string
+      substr: "Windows"
+
+  - id: os-check-linux
+    desc: Linux OS detection string
+    crit: notable
+    conf: 0.60
+    if:
+      type: string
+      substr: "Linux"
+
+  - id: os-check-darwin
+    desc: Darwin/macOS detection string
+    crit: notable
+    conf: 0.60
+    if:
+      type: string
+      substr: "Darwin"
+
+  # === Cross-Platform Branching ===
+  - id: os-conditional-exec
+    desc: OS conditional execution
+    crit: suspicious
+    conf: 0.75
+    if:
+      type: string
+      regex: "if.{0,10}osn.{0,5}==.{0,5}0|if.{0,10}check_os.{0,5}=="
+
+  - id: multi-os-commands
+    desc: Multi-OS command variants
+    crit: suspicious
+    conf: 0.75
+    if:
+      type: string
+      regex: "(ipconfig|ifconfig).{0,30}(tasklist|ps)"
+
+  # === OS-Specific Tool Detection ===
+  - id: windows-ipconfig
+    desc: Windows ipconfig command
+    crit: notable
+    conf: 0.50
+    if:
+      type: string
+      substr: "ipconfig"
+
+composite_rules:
+  # === Platform Detection Composites ===
+  - id: platform-profiling
+    desc: System platform profiling
+    crit: notable
+    conf: 0.80
+    attack: "T1082"
+    needs: 2
+    any:
+      - id: micro-behaviors/os/info/system::platform-system
+      - id: micro-behaviors/os/info/system::platform-node
+      - id: micro-behaviors/os/info/system::platform-full
+
+  - id: multi-os-targeting
+    desc: Multi-OS targeting behavior
+    crit: suspicious
+    conf: 0.85
+    attack: "T1082"
+    mbc: "B0012"
+    for: [python, javascript]
+    needs: 2
+    any:
+      - id: os-check-windows
+      - id: os-check-linux
+      - id: os-check-darwin
+    all:
+      - id: os-conditional-exec
+
+  - id: cross-platform-malware
+    desc: Cross-platform malware capability
+    crit: hostile
+    conf: 0.90
+    attack: "T1082"
+    mbc: "B0012"
+    platforms: [all]
+    all:
+      - id: platform-profiling
+      - id: multi-os-targeting
+      - id: multi-os-commands

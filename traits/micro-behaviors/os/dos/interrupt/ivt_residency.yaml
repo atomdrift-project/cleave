@@ -1,0 +1,31 @@
+defaults:
+  for: [all]
+
+traits:
+  - id: ivt-segment-val
+    desc: Loads interrupt vector table segment value (0024h)
+    crit: notable
+    if:
+      type: raw
+      regex: '(?i)mov\s+ax,24h'
+
+  - id: ivt-segment-reg
+    desc: Sets ES register to accumulator value (ASM)
+    crit: notable
+    if:
+      type: raw
+      regex: '(?i)mov\s+es,ax'
+
+  - id: int-b4-call
+    desc: Calls interrupt B4h (uncommon/reserved) (ASM)
+    crit: suspicious
+    if:
+      type: raw
+      regex: '(?i)int\s+0?B4h'
+
+  - id: ivt-self-check
+    desc: Checks for specific byte (60h/pusha) in IVT
+    crit: suspicious
+    if:
+      type: raw
+      regex: '(?i)cmp\s+byte\s+ptr\s+es:\[di\],60h'

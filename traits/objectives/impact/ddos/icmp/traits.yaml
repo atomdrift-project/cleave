@@ -1,0 +1,26 @@
+# ICMP-based DDoS Detection
+# MBC: B0042 (Denial of Service)
+# ATT&CK: T1499
+
+traits:
+  - id: icmp-flood
+    desc: ICMP flood attack
+    crit: suspicious
+    conf: 0.9
+    mbc: "B0042"
+    attack: "T1499"
+    for: [all]
+    if:
+      type: string
+      substr: "ICMPFLOOD"
+
+  - id: blacknurse
+    desc: BlackNurse ICMP attack
+    crit: suspicious
+    conf: 0.95
+    mbc: "B0042"
+    attack: "T1499"
+    for: [all]
+    if:
+      type: string
+      substr: "BLACKNURSE"

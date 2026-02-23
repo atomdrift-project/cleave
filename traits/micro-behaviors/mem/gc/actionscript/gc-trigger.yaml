@@ -1,0 +1,13 @@
+defaults:
+  for: [all]
+
+traits:
+  - id: localconnection-connect-gc
+    desc: "Use of LocalConnection().connect() to force garbage collection"
+    crit: suspicious
+    conf: 0.8
+    attack: T1027
+    mbc: E1027
+    if:
+      type: string
+      substr: "LocalConnection().connect"

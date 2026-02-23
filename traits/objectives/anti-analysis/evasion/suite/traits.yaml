@@ -1,0 +1,43 @@
+traits: []
+# Removed cpu-feature-check duplicate - use objectives/execution/native/runtime::processor-feature-check
+composite_rules:
+- id: evasion-aware-malware
+  desc: Malware with multiple anti-analysis awareness checks
+  crit: suspicious
+  conf: 0.85
+  attack: T1497
+  mbc: B0001
+  platforms:
+  - all
+  for:
+  - pe
+  - elf
+  - macho
+  all:
+  - id: objectives/anti-analysis/debugger/detect::win-comprehensive
+  any:
+  - id: micro-behaviors/time/timing/delay::query-performance-counter
+  - id: micro-behaviors/os/time/query::gettimeofday
+  - id: micro-behaviors/os/time/query::clock_gettime
+  - id: objectives/execution/native/runtime::processor-feature-check
+  - id: objectives/anti-analysis/emulator/detect::comprehensive
+  downgrade:
+    any:
+    - id: metadata/quality/versioned
+- id: anti-forensics-defensive
+  desc: Malware with both anti-analysis AND anti-forensics capabilities
+  crit: hostile
+  conf: 0.9
+  attack: T1562
+  mbc: B0005
+  platforms:
+  - all
+  for:
+  - pe
+  - elf
+  - macho
+  all:
+  - id: evasion-aware-malware
+  any:
+  - id: objectives/evasion/log-clear
+  - id: objectives/evasion/self-delete

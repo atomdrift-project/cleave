@@ -1,0 +1,30 @@
+# Fragmented IPLogger Domain Construction
+# Detects obfuscation of iplogger domains via string concatenation
+# ATT&CK: T1027 (Obfuscated Files or Information)
+
+defaults:
+  for: [ruby]
+  crit: suspicious
+
+traits:
+  - id: ruby-ast-fragmented-iplogger
+    desc: String concatenation involving 'iplogger'
+    conf: 0.95
+    if:
+      type: ast
+      query: |
+        (binary
+          (string (string_content) @str)
+          (#match? @str "iplogger")
+        )
+
+  - id: ruby-ast-fragmented-iplogger-alt
+    desc: String concatenation involving 'iplogger' (right side)
+    conf: 0.95
+    if:
+      type: ast
+      query: |
+        (binary
+          right: (string (string_content) @str)
+          (#match? @str "iplogger")
+        )

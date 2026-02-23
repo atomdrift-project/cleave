@@ -1,0 +1,8 @@
+# PHP Timestamp Manipulation Detection
+# Behavioral composites for timestamp manipulation in evasion context
+# MBC: F0006 (Indicator Removal)
+# ATT&CK: T1070.006 (Timestomp)
+#
+# Note: Atomic PHP function traits are in fs/file/timestamp/php.yaml
+# Use that directory reference directly in rules that need PHP timestamp detection.
+# No composite needed here - the directory reference provides the same functionality.

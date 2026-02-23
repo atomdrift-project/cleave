@@ -1,0 +1,154 @@
+# ELF Binary Anomaly Detection
+# Detects structural anomalies common in packed/obfuscated ELF binaries
+# ATT&CK: T1027.002 (Software Packing)
+
+traits:
+  - id: no-section-headers
+    desc: "No section headers"
+    crit: suspicious
+    conf: 0.8
+    mbc: "F0001"
+    attack: "T1027.002"
+    for: [elf]
+    if:
+      type: metrics
+      field: binary.section_count
+      max: 0
+
+  - id: high-entropy
+    desc: "High overall entropy"
+    crit: suspicious
+    conf: 0.75
+    mbc: "F0001"
+    attack: "T1027.002"
+    for: [elf]
+    if:
+      type: metrics
+      field: binary.overall_entropy
+      min: 7.0
+
+  - id: rwx-segment
+    desc: "ELF has writable+executable segment (W^X violation)"
+    crit: suspicious
+    conf: 0.7
+    attack: "T1055"
+    for: [elf]
+    if:
+      type: structure
+      feature: "binary/rwx-segments"
+
+  - id: exotic-arch-mips
+    desc: "MIPS architecture (common in IoT malware)"
+    crit: notable
+    conf: 0.6
+    for: [elf]
+    if:
+      type: structure
+      feature: "binary/arch/mips"
+
+  - id: exotic-arch-ppc
+    desc: "PowerPC architecture (common in IoT malware)"
+    crit: notable
+    conf: 0.6
+    for: [elf]
+    if:
+      type: structure
+      feature: "binary/arch/ppc"
+
+  - id: exotic-arch-superh
+    desc: "SuperH architecture (common in IoT malware)"
+    crit: notable
+    conf: 0.6
+    for: [elf]
+    if:
+      type: structure
+      feature: "binary/arch/sh"
+
+  - id: exotic-arch-sparc
+    desc: "SPARC architecture (uncommon, possibly IoT)"
+    crit: notable
+    conf: 0.5
+    for: [elf]
+    if:
+      type: structure
+      feature: "binary/arch/sparc"
+
+  - id: exotic-arch-arm32
+    desc: "32-bit ARM architecture (common in IoT malware)"
+    crit: notable
+    conf: 0.5
+    for: [elf]
+    if:
+      type: structure
+      feature: "binary/arch/arm"
+
+  - id: exotic-arch-riscv
+    desc: "RISC-V architecture (emerging IoT target)"
+    crit: notable
+    conf: 0.5
+    for: [elf]
+    if:
+      type: structure
+      feature: "binary/arch/riscv"
+
+  - id: big-endian
+    desc: "Big-endian byte order (MIPS, PPC, SPARC)"
+    crit: notable
+    conf: 0.4
+    for: [elf]
+    if:
+      type: structure
+      feature: "binary/big-endian"
+
+  - id: static-no-interp
+    desc: "Statically linked (no dynamic interpreter)"
+    crit: notable
+    conf: 0.5
+    for: [elf]
+    if:
+      type: structure
+      feature: "binary/static"
+
+composite_rules:
+  - id: stripped-packed
+    desc: "Packed ELF binary"
+    crit: suspicious
+    conf: 0.85
+    mbc: "F0001"
+    attack: "T1027.002"
+    for: [elf]
+    all:
+      - id: no-section-headers
+      - id: high-entropy
+
+  - id: mirai-like
+    desc: "Mirai-like IoT malware pattern: static + stripped + exotic arch + packed"
+    crit: hostile
+    conf: 0.9
+    mbc: "F0001"
+    attack: "T1027.002"
+    for: [elf]
+    all:
+      - id: static-no-interp
+      - id: no-section-headers
+    any:
+      - id: exotic-arch-mips
+      - id: exotic-arch-ppc
+      - id: exotic-arch-superh
+      - id: exotic-arch-arm32
+      - id: exotic-arch-riscv
+
+  - id: iot-target
+    desc: "IoT target architecture (exotic arch + static)"
+    crit: suspicious
+    conf: 0.7
+    attack: "T1583.005"
+    for: [elf]
+    all:
+      - id: static-no-interp
+    any:
+      - id: exotic-arch-mips
+      - id: exotic-arch-ppc
+      - id: exotic-arch-superh
+      - id: exotic-arch-arm32
+      - id: exotic-arch-riscv

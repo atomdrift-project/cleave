@@ -1,0 +1,22 @@
+# Collection of sensitive files into archives
+# ATT&CK: T1560 (Archive Collected Data)
+
+composite_rules:
+  - id: sensitive-credentials
+    desc: "Reference to sensitive credentials"
+    crit: notable
+    any:
+      - id: objectives/credential-access/ssh/key::id-rsa
+      - id: micro-behaviors/fs/path/sensitive/credentials::gcloud-credentials
+      - id: objectives/credential-access/cloud/token::gcp-default-credentials
+
+  - id: sensitive-archiving
+    desc: "Archiving of sensitive credentials or keys"
+    crit: suspicious
+    conf: 0.95
+    attack: "T1560"
+    all:
+      - id: micro-behaviors/data/archive/zip
+      - id: micro-behaviors/os/user
+      - id: micro-behaviors/fs/file
+      - id: sensitive-credentials

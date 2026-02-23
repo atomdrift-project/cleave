@@ -1,0 +1,59 @@
+# Reconstruction Table Detection
+# Detects the definition of a large number of variables in a short span.
+# Often used to reconstruct keys/nonces for encryption at runtime (as seen in ChaCha20/ARCStealer loaders).
+
+defaults:
+  for: [powershell]
+  attack: "T1027"
+  mbc: "B0032"
+
+traits:
+  - id: ps1-mass-int-assignment
+    desc: "Massive block of integer assignments"
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: string
+      regex: '(\$\w{10,}\s*=\s*\d+;?[\r\n\s]+){5,}'
+
+  - id: ps1-mass-array-assignment
+    desc: "Massive block of array assignments"
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: string
+      regex: '\$\w{5,}\s*\+?=\s*@\('
+      count_min: 3
+
+  - id: ps1-char-array-cast
+    desc: "Cast to char array (obfuscation)"
+    crit: notable
+    conf: 0.8
+    if:
+      type: ast
+      query: |
+        (cast_expression
+          type: (type_literal) @type
+          (#match? @type "(?i)\[char\[\]\]")
+        )
+
+  - id: ps1-from-base64
+    desc: "Base64 decoding"
+    crit: notable
+    conf: 0.8
+    if:
+      type: string
+      regex: 'FromBase64String'
+
+composite_rules:
+  - id: ps1-reconstruction-loader
+    desc: "PowerShell Payload Reconstruction Loader"
+    crit: notable
+    conf: 0.95
+    file_types: [powershell]
+    all:
+      - id: objectives/execution/interpreter/eval/invoke::iex
+      - id: ps1-from-base64
+    any:
+      - id: ps1-mass-int-assignment
+      - id: ps1-mass-array-assignment

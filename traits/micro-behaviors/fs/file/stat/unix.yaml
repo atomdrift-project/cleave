@@ -1,0 +1,40 @@
+# File Stat Operations
+# MBC: E1083 (File and Directory Discovery)
+# ATT&CK: T1083
+
+defaults:
+  for: [elf, macho, so, dylib, c]
+
+traits:
+  - id: stat-core
+    desc: Read file status and metadata (core)
+    crit: notable
+    conf: 0.8
+    if:
+      type: symbol
+      regex: "^_?(stat|lstat|fstat|fstatat)$"
+
+  - id: stat-legacy64
+    desc: Read file status and metadata (legacy 64-bit)
+    crit: notable
+    conf: 0.8
+    if:
+      type: symbol
+      regex: "^_?(stat64|lstat64|fstat64)$"
+
+  - id: stat-exists
+    desc: Check if file exists
+    crit: baseline
+    conf: 0.66
+    if:
+      type: symbol
+      regex: "^_?(access|faccessat)$"
+
+composite_rules:
+  - id: stat
+    desc: Read file status and metadata
+    crit: notable
+    conf: 0.8
+    any:
+      - id: stat-core
+      - id: stat-legacy64

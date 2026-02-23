@@ -1,0 +1,61 @@
+# Java Screenshot and Image Capture Detection
+# MBC: C0014 (Screen Capture)
+# ATT&CK: T1113 (Screen Capture)
+
+traits:
+  - id: java-awt-robot
+    desc: Java AWT Robot for screen capture
+    crit: notable
+    conf: 0.85
+    mbc: "C0014"
+    attack: "T1113"
+    for: [java, class]
+    if:
+      type: string
+      substr: java.awt.Robot
+
+  - id: java-screenshot-capture
+    desc: Java screen capture methods
+    crit: notable
+    conf: 0.8
+    mbc: "C0014"
+    attack: "T1113"
+    for: [java, class]
+    if:
+      type: string
+      substr: createScreenCapture
+
+  - id: java-png-creation
+    desc: Java PNG image creation
+    crit: notable
+    conf: 0.7
+    for: [java, class]
+    if:
+      type: string
+      substr: javax.imageio.ImageIO.write
+
+  - id: java-png-suspicious-paths
+    desc: PNG creation in suspicious temporary paths
+    crit: suspicious
+    conf: 0.8
+    mbc: "C0014"
+    attack: "T1113"
+    for: [java, class]
+    if:
+      type: string
+      regex: "\\.png.{0,50}temp|tmp.{0,50}\\.png|/var/.{0,50}\\.png|/tmp/.{0,50}\\.png"
+      count_min: 1
+
+composite_rules:
+  - id: java-screenshot-exfil
+    desc: Java screenshot capture with potential exfiltration
+    crit: hostile
+    conf: 0.9
+    mbc: "C0014"
+    attack: "T1113"
+    for: [java, class]
+    all:
+      - id: java-awt-robot
+    any:
+      - id: java-png-creation
+      - id: java-png-suspicious-paths

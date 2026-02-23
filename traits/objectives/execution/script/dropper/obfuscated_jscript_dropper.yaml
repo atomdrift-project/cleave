@@ -1,0 +1,28 @@
+# Obfuscated JScript Stream Downloader
+# Detects obfuscated JScript downloaders using a specific while/try-catch loop
+# waiting for readyState or network connectivity, combined with tiny fragments
+# of ADODB.Stream or XMLHTTP.
+
+defaults:
+  crit: hostile
+  conf: 1.0
+  for: [javascript]
+
+composite_rules:
+  # Helper: Match any of the suspicious fragments
+  - id: obfuscated-adodb-fragments
+    desc: Tiny obfuscated ADODB/XMLHTTP fragments
+    crit: suspicious
+    any:
+      - id: objectives/execution/interpreter/script/wsh/
+
+  # Main Rule: Combine loop + fragments + payload handling
+  - id: obfuscated-adodb-dropper
+    desc: Obfuscated ADODB/XMLHTTP dropper behavior
+    all:
+      # 1. Probabilistic loader loop
+      - id: objectives/execution/dropper/behavior::probabilistic-loader-loop
+      # 2. Any of the fragments
+      - id: objectives/execution/script/dropper::obfuscated-adodb-fragments
+      # 3. Payload handling (write/save)
+      - id: objectives/execution/interpreter/script/wsh::payload-handling-fragment-tiny-exact

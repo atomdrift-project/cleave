@@ -1,0 +1,79 @@
+# Stealer / Spyware - JavaScript
+# ATT&CK: T1005, T1056, T1113
+
+composite_rules:
+  # === Helpers ===
+  - id: js-defanged-c2
+    desc: Defanged C2 IP address
+    crit: suspicious
+    conf: 0.9
+    any:
+      - id: micro-behaviors/communications/ip/parse::ip-defanged-brackets
+      - id: micro-behaviors/communications/ip/parse::ip-defanged-parentheses
+
+  - id: js-browser-target
+    desc: Targets browser data paths
+    crit: notable
+    conf: 0.8
+    any:
+      - id: objectives/credential-access/browser/chromium
+
+  # === Hostile Rules ===
+
+  - id: js-spyware-bundle
+    desc: JavaScript spyware bundle (Keylogging + Screenshots + Network)
+    crit: hostile
+    conf: 0.95
+    attack: "T1056"
+    for: [javascript]
+    all:
+      - id: micro-behaviors/hardware/input/keyboard::global-keyboard-listener
+      - id: micro-behaviors/hardware/display/screen::import-node-screenshots
+      - id: micro-behaviors/communications/http/request::axios
+
+  - id: js-file-stealer-recursive
+    desc: Recursive file stealer targeting sensitive data
+    crit: hostile
+    conf: 0.90
+    attack: "T1005"
+    for: [javascript]
+    all:
+      - id: micro-behaviors/fs/enumerate/directory::fs-readdir
+      - id: micro-behaviors/fs/enumerate/directory::file-search-exclude-common
+      - id: micro-behaviors/communications/http/request::axios
+
+  - id: js-browser-stealer-c2
+    desc: Browser data stealer with defanged C2 IP
+    crit: hostile
+    conf: 0.95
+    attack: "T1555.003"
+    for: [javascript]
+    all:
+      - id: micro-behaviors/communications/http/request::axios
+      - id: js-defanged-c2
+      - id: js-browser-target
+
+  - id: obfuscated-browser-stealer
+    desc: Obfuscated browser/credential stealer
+    crit: hostile
+    conf: 0.95
+    attack: "T1555.003"
+    for: [javascript]
+    all:
+      - id: objectives/discovery/host/browser::browser-names
+      - id: objectives/anti-static/obfuscation/packing::packed-string-decryptor
+    any:
+      - id: objectives/credential-access/discord/token::appdata-ref
+      - id: objectives/credential-access/discord/token::ldb-extension
+      - id: micro-behaviors/fs/write/file::js-file-write
+
+  - id: npm-system-stealer-hostile
+    desc: Hostile NPM system stealer (Recon + Evasion + Exfil)
+    crit: hostile
+    conf: 1.0
+    all:
+      - id: objectives/lateral-movement/supply-chain/npm/behavior::dangerous-requires
+      - id: objectives/anti-analysis/evasion/detection::evasion-checks
+    any:
+      - id: objectives/lateral-movement/supply-chain/npm/behavior::npm-data-exfil
+      - id: objectives/command-and-control/dns/tunneling::js-dns-tunneling-exfil

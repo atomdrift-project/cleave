@@ -1,0 +1,91 @@
+defaults:
+  for:
+  - ruby
+  platforms:
+  - all
+traits:
+- id: ruby-platform-const
+  desc: Ruby platform constant access
+  crit: notable
+  conf: 0.75
+  attack: T1082
+  if:
+    type: string
+    regex: RUBY_PLATFORM|RbConfig::CONFIG
+- id: ruby-platform-linux
+  desc: Linux platform token
+  crit: notable
+  conf: 0.7
+  attack: T1082
+  if:
+    type: string
+    word: "linux"
+- id: ruby-platform-mswin
+  desc: mswin platform token
+  crit: notable
+  conf: 0.7
+  attack: T1082
+  if:
+    type: string
+    word: "mswin"
+- id: ruby-platform-darwin
+  desc: darwin platform token
+  crit: notable
+  conf: 0.7
+  attack: T1082
+  if:
+    type: string
+    word: "darwin"
+- id: windows-os-check-a
+  desc: Windows platform check branch
+  crit: notable
+  conf: 0.7
+  attack: T1497
+  if:
+    type: string
+    regex: "msys|mingw|cygwin|host_os.{0,50}match"
+- id: windows-os-check-b
+  desc: Windows platform check branch
+  crit: notable
+  conf: 0.7
+  attack: T1497
+  if:
+    type: string
+    word: "bccwin"
+- id: windows-os-check-c
+  desc: Windows platform check branch
+  crit: notable
+  conf: 0.7
+  attack: T1497
+  if:
+    type: string
+    word: "wince"
+- id: windows-os-check-d
+  desc: Windows platform check branch
+  crit: notable
+  conf: 0.7
+  attack: T1497
+  if:
+    type: string
+    word: "emc"
+composite_rules:
+- id: platform-fingerprint
+  desc: Platform fingerprinting check
+  crit: notable
+  conf: 0.75
+  attack: T1082
+  any:
+  - id: ruby-platform-const
+  - id: ruby-platform-linux
+  - id: ruby-platform-mswin
+  - id: ruby-platform-darwin
+- id: windows-os-check
+  desc: Windows OS platform check
+  crit: notable
+  conf: 0.7
+  attack: T1497
+  any:
+  - id: windows-os-check-a
+  - id: windows-os-check-b
+  - id: windows-os-check-c
+  - id: windows-os-check-d

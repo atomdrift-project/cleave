@@ -1,0 +1,13 @@
+# Path validation and checking - Windows
+defaults:
+  for: [pe, dll]
+  platforms: [windows]
+
+traits:
+  - id: path-is-directory
+    desc: Check if path is directory
+    crit: notable
+    conf: 0.85
+    if:
+      type: symbol
+      regex: "PathIsDirectory"

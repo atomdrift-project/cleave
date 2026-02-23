@@ -1,0 +1,15 @@
+# Hard Link Operations
+# MBC: E1222 (File Permission Modification)
+# ATT&CK: T1222
+
+defaults:
+  for: [elf, macho, so, dylib, c]
+
+traits:
+  - id: hardlink
+    desc: Create hard file links
+    crit: baseline
+    conf: 0.5
+    if:
+      type: symbol
+      regex: "^_?(link|linkat)$"

@@ -1,0 +1,51 @@
+defaults:
+  for:
+  - all
+traits:
+- id: tencent-infrastructure-misuse
+  desc: Tencent domain used on port 8080
+  crit: suspicious
+  conf: 0.9
+  mbc: C0002
+  attack: T1071.001
+  if:
+    type: string
+    regex: (?i)(crash\.browser\.qq\.com|qbwupacc\.imtt\.qq\.com):8080
+- id: malicious-5334-domain
+  desc: Known malicious 5334.com domain
+  crit: suspicious
+  conf: 1.0
+  mbc: C0002
+  attack: T1071.001
+  if:
+    type: string
+    substr: 5334.com
+- id: generic-vendor-port-8080
+  desc: Vendor subdomain on port 8080
+  crit: notable
+  conf: 0.7
+  mbc: C0002
+  attack: T1071.001
+  if:
+    type: string
+    regex: (?i)\b(update|crash|api)\.[\w-]+\.(qq|microsoft)\.com:8080\b
+
+- id: generic-vendor-port-8443
+  desc: Vendor subdomain on port 8443
+  crit: notable
+  conf: 0.7
+  mbc: C0002
+  attack: T1071.001
+  if:
+    type: string
+    regex: (?i)\b(update|crash|api)\.[\w-]+\.(qq|microsoft)\.com:8443\b
+composite_rules:
+  - id: generic-vendor-port-misuse
+    desc: Vendor subdomain on non-standard port
+    crit: notable
+    conf: 0.7
+    mbc: C0002
+    attack: T1071.001
+    any:
+      - id: generic-vendor-port-8080
+      - id: generic-vendor-port-8443

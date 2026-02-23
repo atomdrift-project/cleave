@@ -1,0 +1,362 @@
+# Linux Fileless Execution Techniques
+# ATT&CK: T1620 (Reflective Code Loading)
+
+defaults:
+  attack: "T1620"
+
+traits:
+  # === memfd_create indicators (atomic) ===
+  - id: memfd-create-fn
+    desc: memfd_create function call
+    crit: notable
+    conf: 0.6
+    for: [python, c, shell]
+    if:
+      type: string
+      substr: "memfd_create"
+
+  - id: sys-memfd-create
+    desc: SYS_memfd_create constant
+    crit: notable
+    conf: 0.6
+    for: [python, c, shell]
+    if:
+      type: string
+      substr: "SYS_memfd_create"
+
+  - id: syscall-319
+    desc: memfd_create syscall number 319
+    crit: notable
+    conf: 0.4
+    for: [python, c, shell]
+    if:
+      type: string
+      exact: "319"
+
+  - id: mfd-cloexec
+    desc: MFD_CLOEXEC flag
+    crit: notable
+    conf: 0.5
+    for: [python, c, shell]
+    if:
+      type: string
+      substr: "MFD_CLOEXEC"
+
+  - id: libc-syscall
+    desc: libc.syscall call
+    crit: notable
+    conf: 0.5
+    for: [python, c, shell]
+    if:
+      type: string
+      substr: "libc.syscall"
+
+  # syscall-paren removed - use micro-behaviors/os/syscall/invoke::syscall-fn instead
+
+  # === proc/self/fd indicators (atomic) ===
+  - id: proc-self-fd
+    desc: /proc/self/fd path
+    crit: notable
+    conf: 0.5
+    for: [python, c, shell, elf]
+    if:
+      type: string
+      substr: "/proc/self/fd"
+
+  - id: proc-self-fd-slash
+    desc: /proc/self/fd/ path
+    crit: notable
+    conf: 0.5
+    for: [python, c, shell]
+    if:
+      type: string
+      substr: "/proc/self/fd/"
+
+  # === exec indicators (atomic) ===
+  - id: execv-fn
+    desc: execv function call
+    crit: notable
+    conf: 0.4
+    for: [python, c, shell]
+    if:
+      type: string
+      substr: "execv"
+
+  - id: execve-fn
+    desc: execve function call
+    crit: notable
+    conf: 0.4
+    for: [python, c, shell]
+    if:
+      type: string
+      substr: "execve"
+
+  - id: execl-fn
+    desc: execl function call
+    crit: notable
+    conf: 0.4
+    for: [python, c, shell]
+    if:
+      type: string
+      substr: "execl"
+
+  - id: os-exec
+    desc: os.exec Python call
+    crit: notable
+    conf: 0.5
+    for: [python]
+    if:
+      type: string
+      substr: "os.exec"
+
+  - id: subprocess-mod
+    desc: subprocess module
+    crit: notable
+    conf: 0.3
+    for: [python]
+    if:
+      type: string
+      substr: "subprocess"
+
+  # === ctypes indicators (atomic) ===
+  - id: ctypes-mod
+    desc: ctypes module
+    crit: notable
+    conf: 0.4
+    for: [python]
+    if:
+      type: string
+      substr: "ctypes"
+
+  - id: ctypes-cdll
+    desc: CDLL ctypes class
+    crit: notable
+    conf: 0.5
+    for: [python]
+    if:
+      type: string
+      exact: "CDLL"
+
+  - id: dot-syscall
+    desc: .syscall( call
+    crit: notable
+    conf: 0.5
+    for: [python]
+    if:
+      type: string
+      substr: ".syscall("
+
+  # === download indicators (atomic) ===
+  - id: requests-get
+    desc: requests.get HTTP call
+    crit: notable
+    conf: 0.4
+    for: [python]
+    if:
+      type: string
+      regex: "requests\\.get\\s*\\("
+
+  - id: urllib-mod
+    desc: urllib2 module
+    crit: notable
+    conf: 0.3
+    for: [python]
+    if:
+      type: string
+      word: "urllib2"
+
+  - id: http-client
+    desc: http.client module
+    crit: notable
+    conf: 0.3
+    for: [python]
+    if:
+      type: string
+      substr: "http.client"
+
+  - id: dot-content
+    desc: .content response attribute
+    crit: notable
+    conf: 0.3
+    for: [python]
+    if:
+      type: string
+      substr: ".content"
+
+  # === write indicators (atomic) ===
+  - id: os-write
+    desc: os.write function
+    crit: notable
+    conf: 0.4
+    for: [python]
+    if:
+      type: string
+      substr: "os.write("
+
+  - id: write-fd
+    desc: write(fd call
+    crit: notable
+    conf: 0.4
+    for: [python, c]
+    if:
+      type: string
+      substr: "write(fd"
+
+  - id: os-lseek
+    desc: os.lseek function
+    crit: notable
+    conf: 0.4
+    for: [python]
+    if:
+      type: string
+      substr: "os.lseek("
+
+  - id: seek-set
+    desc: SEEK_SET constant
+    crit: notable
+    conf: 0.3
+    for: [python, c]
+    if:
+      type: string
+      substr: "SEEK_SET"
+
+  # === shared memory indicators (atomic) ===
+  - id: shm-open
+    desc: shm_open function
+    crit: notable
+    conf: 0.5
+    for: [python, c, shell]
+    if:
+      type: string
+      substr: "shm_open"
+
+  # Removed mmap-fn duplicate - use micro-behaviors/mem/allocate/executable::mmap-symbol (system calls should use symbol)
+
+  - id: dev-shm
+    desc: /dev/shm path
+    crit: notable
+    conf: 0.5
+    for: [python, c, shell]
+    if:
+      type: string
+      substr: "/dev/shm"
+
+composite_rules:
+  # Exec function composite
+  - id: exec-function
+    desc: Execution function calls
+    crit: notable
+    conf: 0.5
+    for: [python, c, shell]
+    any:
+      - id: execv-fn
+      - id: execve-fn
+      - id: execl-fn
+      - id: os-exec
+      - id: subprocess-mod
+
+  # Download indicators composite
+  - id: http-download-python
+    desc: Python HTTP download libraries for
+    crit: notable
+    conf: 0.8
+    attack: "T1105"
+    for: [python]
+    any:
+      - id: requests-get
+      - id: urllib-mod
+      - id: micro-behaviors/communications/http/lib/urllib::urllib-urlopen
+      - id: http-client
+      - id: dot-content
+
+  # Write to fd composite
+  - id: fd-write-raw
+    desc: Writes data to file descriptor
+    crit: notable
+    conf: 0.8
+    for: [python, c]
+    any:
+      - id: os-write
+      - id: write-fd
+
+  # memfd_create syscall
+  - id: memfd-create
+    desc: Creates anonymous memory-backed file (memfd_create
+    crit: suspicious
+    conf: 0.95
+    for: [python, c, shell]
+    any:
+      - id: memfd-create-fn
+      - id: sys-memfd-create
+
+  # proc/self/fd path
+  - id: proc-fd-path
+    desc: References /proc/self/fd path
+    crit: notable
+    conf: 0.5
+    for: [python, c, shell]
+    any:
+      - id: proc-self-fd
+      - id: proc-self-fd-slash
+
+  # Execution from /proc/self/fd
+  - id: proc-fd-exec
+    desc: Executes binary from /proc/self/fd (fileless
+    crit: notable
+    conf: 0.95
+    for: [python, c, shell]
+    all:
+      - id: proc-fd-path
+      - id: exec-function
+
+  # ctypes syscall invocation
+  - id: ctypes-syscall
+    desc: Direct syscall invocation via ctypes
+    crit: suspicious
+    conf: 0.9
+    attack: "T1106"
+    for: [python]
+    all:
+      - id: ctypes-mod
+      - id: dot-syscall
+      - id: ctypes-cdll
+
+  # Write to fd with seek
+  - id: fd-write
+    desc: Writes binary data to file
+    crit: notable
+    conf: 0.8
+    for: [python]
+    all:
+      - id: os-write
+    any:
+      - id: os-lseek
+      - id: seek-set
+
+  # Download and memfd execution chain
+  - id: download-memfd-exec
+    desc: Downloads binary and executes via
+    crit: suspicious
+    conf: 0.98
+    for: [python, c, shell]
+    all:
+      - id: http-download-python
+      - id: memfd-create
+    any:
+      - id: exec-function
+      - id: fd-write-raw
+
+  # shm_open for shared memory execution
+  - id: shm-exec
+    desc: Uses shared memory for fileless
+    crit: suspicious
+    conf: 0.9
+    for: [python, c, shell]
+    needs: 2
+    any:
+      - id: shm-open
+      - id: micro-behaviors/mem/allocate/executable::mmap-symbol
+      - id: dev-shm
+      - id: execv-fn
+
+  # Complete fileless dropper pattern

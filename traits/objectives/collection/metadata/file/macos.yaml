@@ -1,0 +1,93 @@
+# macOS Metadata and System Files Collection
+# Detects targeting of macOS-specific files and directories
+# ATT&CK: T1083 (File and Directory Discovery), T1005 (Data from Local System)
+
+defaults:
+  for: [all]
+  platforms: [macos]
+  attack: "T1083"
+  crit: notable
+
+traits:
+  # === macOS metadata files ===
+  - id: ds-store
+    desc: ".DS_Store metadata files"
+    crit: notable
+    conf: 0.8
+    attack: "T1083"
+    if:
+      type: string
+      substr: ".DS_Store"
+
+  - id: localized-folder
+    desc: ".localized folder marker"
+    crit: notable
+    conf: 0.5
+    if:
+      type: string
+      substr: ".localized"
+
+  # === macOS system directories ===
+  - id: applications-dir
+    desc: "/Applications directory reference"
+    crit: notable
+    conf: 0.7
+    attack: "T1083"
+    if:
+      type: string
+      substr: "/Applications"
+
+  - id: library-dir
+    desc: "~/Library directory reference"
+    crit: notable
+    conf: 0.5
+    if:
+      type: string
+      substr: "~/Library"
+
+  - id: downloads-dir
+    desc: "~/Downloads directory reference"
+    crit: notable
+    conf: 0.5
+    if:
+      type: string
+      regex: "/Downloads\\b|~/Downloads"
+
+  - id: documents-dir
+    desc: "~/Documents directory reference"
+    crit: notable
+    conf: 0.5
+    if:
+      type: string
+      regex: "/Documents\\b|~/Documents"
+
+  # NOTE: getenv removed - use micro-behaviors/os/env/vars/getenv instead
+  # NOTE: HOME env var - use micro-behaviors/os/env/vars/user-info::home-var instead
+  # getenv is a capability, not a collection objective
+
+composite_rules:
+  # macOS user directory enumeration
+  - id: user-directory-enum
+    desc: "Enumerates macOS user directories"
+    crit: notable
+    conf: 0.8
+    attack: "T1083"
+    needs: 2
+    any:
+      - id: applications-dir
+      - id: library-dir
+      - id: downloads-dir
+      - id: documents-dir
+      - id: micro-behaviors/os/env/vars/user-info::home-var
+
+  # Metadata filtering pattern
+  - id: metadata-collection
+    desc: "Filesystem traversal with macOS file filtering"
+    crit: suspicious
+    conf: 0.85
+    attack: "T1083"
+    all:
+      - id: ds-store
+    any:
+      - id: user-directory-enum
+      - id: micro-behaviors/fs/directory/traverse

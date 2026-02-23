@@ -1,0 +1,17 @@
+# Android Platform Detection
+# Detects binaries targeting the Android operating system
+# Based on multiple Android-specific filesystem paths
+
+defaults:
+  for: [elf, macho, scripts]
+  platforms: [android]
+  crit: notable
+  conf: 0.95
+
+traits:
+  - id: android-platform-paths
+    desc: Multiple Android platform paths
+    if:
+      type: string
+      regex: '^(/system/|/data/data/|/apex/)'
+      count_min: 3

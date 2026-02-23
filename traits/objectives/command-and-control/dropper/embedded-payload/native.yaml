@@ -1,0 +1,112 @@
+# Native Binary Dropper Detection
+# Detects compiled binaries that decode and execute embedded payloads
+# MBC: B0030 (Dropper), B0032 (Obfuscation)
+# ATT&CK: T1027.009 (Embedded Payloads), T1059 (Command Execution)
+
+defaults:
+  for: [macho, elf, pe]
+  mbc: "B0030"
+  attack: "T1027.009"
+
+traits:
+  # Large hex-encoded payload embedded in binary
+  # Pattern: long continuous hex string (20000+ chars = 10KB+ decoded)
+  # This is a dropper technique: encode payload as hex, decode at runtime
+  # Common in AMOS stealer, cryptominers, and other macOS malware
+  - id: large-hex-payload
+    desc: Large hex-encoded payload string (10KB+)
+    crit: suspicious
+    conf: 0.85
+    if:
+      type: string
+      regex: "^[0-9a-fA-F]{20000,}$"
+
+  # Custom encoding alphabet (64 chars with special characters)
+  # Malware often uses custom base64-like alphabets for obfuscation
+  # Pattern: exactly 64 chars containing letters, digits, AND special chars
+  # Examples: ">Ei*=%K6X#<ht!x4P8j(rHF3_pLJc9n1uWy5oqYI7gsbU+$@MSNA&k-)vVCGQZwR"
+  # Requires digits to exclude pure alphabetic strings (compressed dictionaries)
+  # All real custom base64 alphabets use 0-9, a-z, A-Z, and special chars
+  - id: custom-encoding-alphabet
+    desc: Custom encoding alphabet (cipher/obfuscation)
+    crit: suspicious
+    conf: 0.8
+    mbc: "B0032"
+    attack: "T1027"
+    if:
+      type: string
+      # Custom base64 alphabet: 64 mixed chars with special characters
+      # Real custom alphabets always contain special chars (+ / = * etc.)
+      # Require at least one true special char (not $ or _) to exclude
+      # Swift mangled symbols and other identifier strings
+      # Excludes < and > to avoid matching XML/plist content
+      regex: "[\\w!#%&()*+/=@-]*[!#%&()*+=@][\\w!#%&()*+/=@-]{63}"
+
+composite_rules:
+  # libcurl network dropper: downloads content via libcurl, writes to disk, executes via shell
+  # Pattern seen in kworker_pretenders malware family (2024):
+  # - Uses libcurl to download payloads
+  # - Writes to user home directory files for persistence
+  # - Executes downloaded content via system()
+  # - Reads /proc/self/exe for self-discovery
+  # Malware droppers are typically small (<500KB) - legitimate tools are much larger
+  # Complexity: all(4) + for(1) + size_max(1) = 6 >= 4 ✓ HOSTILE
+  - id: libcurl-network-dropper
+    desc: libcurl dropper (downloads and executes payload)
+    crit: hostile
+    conf: 0.95
+    mbc: "B0030"
+    attack: "T1105"
+    for: [elf]
+    size_max: 500000
+    all:
+      - id: micro-behaviors/communications/download/curl::libcurl-http
+      - id: micro-behaviors/process/create/shell::shell-execution
+      - id: micro-behaviors/fs/file/operations::binary-file-ops
+      - id: micro-behaviors/fs/proc/info::process-pid-exe
+
+  # Minimal libcurl dropper: stripped binary with curl + system + few imports
+  # This variant doesn't need /proc/self/exe but has minimal imports indicating malicious intent
+  # Complexity: all(3) + for(1) = 4 >= 4 ✓ HOSTILE
+  - id: libcurl-minimal-dropper
+    desc: Minimal libcurl dropper (stripped binary)
+    crit: hostile
+    conf: 0.92
+    mbc: "B0030"
+    attack: "T1105"
+    for: [elf]
+    all:
+      - id: micro-behaviors/communications/download/curl::libcurl-http
+      - id: micro-behaviors/process/create/shell::shell-execution
+      - id: objectives/anti-static/obfuscation/payload::minimal-imports
+
+  # Hex-encoded dropper: large hex blob + system() + minimal imports
+  # This is a classic dropper pattern: decode hex payload and execute via shell
+  # Complexity: all(3) + file_types(1) = 4 >= 4 ✓ HOSTILE
+  - id: hex-payload-dropper
+    desc: Hex-encoded payload dropper (decodes and executes)
+    crit: hostile
+    conf: 0.95
+    mbc: "B0030"
+    attack: "T1059"
+    for: [macho, elf]
+    all:
+      - id: large-hex-payload
+      - id: objectives/anti-static/obfuscation/payload::minimal-imports
+      - id: micro-behaviors/process/create/shell::shell-execution
+
+  # Obfuscated payload dropper: custom encoding + large payload + exec
+  # This pattern is common in macOS malware like FakeZoom/AMOS stealer
+  # Uses custom encoding alphabet to decode embedded payload, then executes
+  # Complexity: all(3) + file_types(1) = 4 >= 4 ✓ HOSTILE
+  - id: custom-encoded-dropper
+    desc: Custom-encoded payload dropper
+    crit: hostile
+    conf: 0.92
+    mbc: "B0030"
+    attack: "T1059"
+    for: [macho, elf]
+    all:
+      - id: large-hex-payload
+      - id: custom-encoding-alphabet
+      - id: micro-behaviors/process/create/shell::shell-execution

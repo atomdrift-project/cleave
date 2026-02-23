@@ -1,0 +1,74 @@
+traits:
+  - id: js-dynamic-property-function-concat-raw
+    desc: Property access using concatenated function calls (likely
+    crit: suspicious
+    conf: 0.95
+    mbc: "B0032"
+    attack: "T1027"
+    for: [javascript]
+    if:
+      type: raw
+      # Matches: [(function...)() + (function...)()]
+      regex: '\[\s*\(\s*function\s+[\w]*\(\)\s*\{'
+
+  - id: js-dynamic-property-function-concat-ast
+    desc: Property access using concatenated function calls (likely
+    crit: suspicious
+    conf: 0.95
+    mbc: "B0032"
+    attack: "T1027"
+    for: [javascript]
+    if:
+      type: ast
+      lang: javascript
+      # Matches property access where the property is constructed by adding results of function calls
+      query: |
+        (member_expression
+          property: (binary_expression
+            operator: "+"
+            left: (call_expression)
+            right: (call_expression)
+          )
+        )
+
+  - id: js-wscript-dynamic-property-raw
+    desc: Dynamic property access on WScript object (Raw)
+    crit: suspicious
+    conf: 0.9
+    mbc: "B0032"
+    attack: "T1027"
+    for: [javascript]
+    if:
+      type: raw
+      regex: 'WScript\s*\[\s*\(function'
+
+  - id: js-wscript-dynamic-property-ast
+    desc: Dynamic property access on WScript object (AST)
+    crit: suspicious
+    conf: 0.95
+    mbc: "B0032"
+    attack: "T1027"
+    for: [javascript]
+    if:
+      type: ast
+      lang: javascript
+      query: |
+        (member_expression
+          object: (identifier) @obj_name (#eq? @obj_name "WScript")
+          property: (computed_property_name)
+        )
+
+composite_rules:
+  - id: js-dynamic-property-function-concat
+    desc: Property access using concatenated function calls (likely obfuscation)
+    crit: suspicious
+    any:
+      - id: js-dynamic-property-function-concat-raw
+      - id: js-dynamic-property-function-concat-ast
+
+  - id: js-wscript-dynamic-property
+    desc: Dynamic property access on WScript object
+    crit: suspicious
+    any:
+      - id: js-wscript-dynamic-property-raw
+      - id: js-wscript-dynamic-property-ast

@@ -1,0 +1,16 @@
+# JScript Self-Deletion Patterns
+# Detects combinations of traits indicating script self-deletion
+
+defaults:
+  crit: hostile
+  conf: 0.95
+  for: [javascript]
+
+composite_rules:
+  - id: js-obfuscated-self-deletion
+    desc: "Obfuscated JScript Self-Deletion"
+    mbc: "B0006"
+    attack: "T1070.004"
+    all:
+      - id: objectives/anti-static/obfuscation/source/syntax::js-deletefile-obfuscated
+      - id: objectives/anti-static/obfuscation/source/syntax::js-scriptfullname-obfuscated

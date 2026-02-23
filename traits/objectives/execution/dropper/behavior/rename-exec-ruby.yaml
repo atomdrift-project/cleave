@@ -1,0 +1,23 @@
+# Ruby Rename and Execute Behavior
+# Detects renaming a file to an executable extension followed by execution
+# ATT&CK: T1059, T1036
+
+defaults:
+  for: [ruby]
+
+composite_rules:
+  - id: ruby-rename-to-exe-any
+    desc: Rename or move file to .exe
+    crit: suspicious
+    conf: 1.0
+    any:
+      - id: micro-behaviors/fs/file/rename::ruby-rename-to-exe
+      - id: micro-behaviors/fs/file/rename::ruby-fileutils-mv-to-exe
+
+  - id: rename-exec-ruby
+    desc: Renames a file to an executable extension and executes it
+    crit: hostile
+    conf: 1.0
+    all:
+      - id: ruby-rename-to-exe-any
+      - id: micro-behaviors/process/create/shell/lang

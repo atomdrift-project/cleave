@@ -1,0 +1,55 @@
+# Identity Function Proxy Obfuscation
+# Detects functions that simply return their argument, used for obfuscation.
+# Pattern: function x(y){return y;}
+
+defaults:
+  for: [all]
+  crit: notable
+  conf: 0.8
+
+traits:
+    - id: identity-function-proxy
+      desc: Function that returns its argument directly (obfuscation)
+      if:
+        type: ast
+        language: javascript
+        # Matches: function x(y){ return y; }
+        query: >
+          (function_declaration
+            (formal_parameters
+              (identifier) @param
+            )
+            (statement_block
+              .
+              (return_statement
+                (identifier) @ret
+              )
+              .
+            )
+            (#eq? @param @ret)
+          )
+  
+    - id: massive-identity-function-proxies
+      desc: Massive use of identity function proxies (obfuscation)
+      crit: suspicious
+      conf: 0.9
+      if:
+        type: ast
+        language: javascript
+        # Matches: function x(y){ return y; }
+        query: >
+          (function_declaration
+            (formal_parameters
+              (identifier) @param
+            )
+            (statement_block
+              .
+              (return_statement
+                (identifier) @ret
+              )
+              .
+            )
+            (#eq? @param @ret)
+          )
+        count_min: 20
+  

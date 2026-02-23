@@ -1,0 +1,14 @@
+# Credential Access - Solana Wallet
+# ATT&CK: T1555 (Credentials from Web Browsers/Wallets)
+
+defaults:
+  attack: "T1555"
+  crit: suspicious
+
+composite_rules:
+  - id: solana-wallet-collection
+    desc: Solana wallet data collection behavior
+    conf: 0.95
+    all:
+      - id: micro-behaviors/communications/http/url::solana-rpc-method
+      - id: micro-behaviors/communications/http/url::solana-rpc-url

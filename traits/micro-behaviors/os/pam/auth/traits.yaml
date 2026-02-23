@@ -1,0 +1,328 @@
+# PAM (Pluggable Authentication Modules) Library Detection
+# Useful for ML baseline - legitimate PAM usage patterns
+
+defaults:
+  for: [all]
+
+traits:
+  # PAM client API functions (symbols)
+  - id: pam-start-symbol
+    desc: pam_start function symbol
+    crit: baseline
+    conf: 0.6
+    if:
+      type: symbol
+      exact: "pam_start"
+
+  - id: pam-end-symbol
+    desc: pam_end function symbol
+    crit: baseline
+    conf: 0.6
+    if:
+      type: symbol
+      exact: "pam_end"
+
+  - id: pam-authenticate
+    desc: pam_authenticate function
+    crit: notable
+    conf: 0.7
+    if:
+      type: symbol
+      substr: "pam_authenticate"
+
+  - id: pam-acct-mgmt
+    desc: pam_acct_mgmt function
+    crit: notable
+    conf: 0.6
+    if:
+      type: symbol
+      substr: "pam_acct_mgmt"
+
+  - id: pam-setcred-symbol
+    desc: pam_setcred function symbol
+    crit: baseline
+    conf: 0.6
+    if:
+      type: symbol
+      exact: "pam_setcred"
+
+  # PAM libraries (strings)
+  - id: libpam-so-string
+    desc: libpam.so library string
+    crit: baseline
+    conf: 0.6
+    if:
+      type: string
+      substr: "libpam.so"
+
+  - id: libpam-string
+    desc: libpam library reference
+    crit: baseline
+    conf: 0.5
+    if:
+      type: string
+      substr: "libpam"
+
+  # PAM module API functions (symbols)
+  - id: pam-sm-authenticate-symbol
+    desc: pam_sm_authenticate module function
+    crit: baseline
+    conf: 0.7
+    if:
+      type: symbol
+      exact: "pam_sm_authenticate"
+
+  - id: pam-sm-setcred-symbol
+    desc: pam_sm_setcred module function
+    crit: baseline
+    conf: 0.6
+    if:
+      type: symbol
+      exact: "pam_sm_setcred"
+
+  - id: pam-sm-acct-mgmt-symbol
+    desc: pam_sm_acct_mgmt module function
+    crit: baseline
+    conf: 0.6
+    if:
+      type: symbol
+      exact: "pam_sm_acct_mgmt"
+
+  - id: pam-sm-open-session-symbol
+    desc: pam_sm_open_session module function
+    crit: baseline
+    conf: 0.6
+    if:
+      type: symbol
+      exact: "pam_sm_open_session"
+
+  - id: pam-sm-close-session-symbol
+    desc: pam_sm_close_session module function
+    crit: baseline
+    conf: 0.6
+    if:
+      type: symbol
+      exact: "pam_sm_close_session"
+
+  # PAM handle types (strings)
+  - id: pam-handle-t-string
+    desc: pam_handle_t type string
+    crit: baseline
+    conf: 0.5
+    if:
+      type: string
+      substr: "pam_handle_t"
+
+  - id: pam-get-item
+    desc: pam_get_item function
+    crit: notable
+    conf: 0.6
+    if:
+      type: symbol
+      substr: "pam_get_item"
+
+  # PAM configuration paths (strings)
+  - id: pam-d-path
+    desc: /etc/pam.d/ directory path
+    crit: baseline
+    conf: 0.6
+    if:
+      type: string
+      substr: "/etc/pam.d/"
+
+  - id: pam-conf-path
+    desc: /etc/pam.conf file path
+    crit: baseline
+    conf: 0.6
+    if:
+      type: string
+      substr: "/etc/pam.conf"
+
+  # PAM module names (strings)
+  - id: pam-unix-module
+    desc: pam_unix module reference
+    crit: baseline
+    conf: 0.5
+    if:
+      type: string
+      substr: "pam_unix"
+
+  - id: pam-permit-module
+    desc: pam_permit module reference
+    crit: baseline
+    conf: 0.5
+    if:
+      type: string
+      substr: "pam_permit"
+
+  - id: pam-deny-module
+    desc: pam_deny module reference
+    crit: baseline
+    conf: 0.5
+    if:
+      type: string
+      substr: "pam_deny"
+
+  # PAM control flags (strings)
+  # NOTE: Generic words like "required" and "sufficient" are too broad.
+  # Only match PAM config-like patterns with module context.
+  - id: pam-required-control
+    desc: PAM required control flag
+    crit: baseline
+    conf: 0.4
+    if:
+      type: string
+      # Match PAM config line format: "auth required pam_unix.so" etc.
+      regex: "(auth|account|password|session)\\s+required\\s+pam_"
+
+  - id: pam-sufficient-control
+    desc: PAM sufficient control flag
+    crit: baseline
+    conf: 0.4
+    if:
+      type: string
+      # Match PAM config line format: "auth sufficient pam_unix.so" etc.
+      regex: "(auth|account|password|session)\\s+sufficient\\s+pam_"
+
+# === Composite Rules ===
+composite_rules:
+  # PAM library references
+  - id: pam-libraries
+    desc: PAM library references
+    crit: baseline
+    conf: 0.6
+    any:
+      - id: libpam-so-string
+      - id: libpam-string
+
+  # PAM API functions
+  - id: pam-api-functions
+    desc: PAM API function usage
+    crit: baseline
+    conf: 0.7
+    needs: 3
+    any:
+      - id: pam-start-symbol
+      - id: pam-end-symbol
+      - id: pam-authenticate
+      - id: pam-acct-mgmt
+      - id: pam-setcred-symbol
+
+  # PAM client usage
+  - id: client
+    desc: PAM client library usage
+    crit: notable
+    conf: 0.9
+    any:
+      - id: pam-libraries
+      - id: pam-api-functions
+
+  # PAM module API functions
+  - id: pam-module-api
+    desc: PAM module API functions
+    crit: baseline
+    conf: 0.7
+    needs: 2
+    any:
+      - id: pam-sm-authenticate-symbol
+      - id: pam-sm-setcred-symbol
+      - id: pam-sm-acct-mgmt-symbol
+      - id: pam-sm-open-session-symbol
+      - id: pam-sm-close-session-symbol
+
+  # PAM handle access
+  - id: pam-handle-access
+    desc: PAM handle type and access
+    crit: baseline
+    conf: 0.6
+    any:
+      - id: pam-handle-t-string
+      - id: pam-get-item
+
+  # Any PAM module function
+  - id: any-pam-module-function
+    desc: Any PAM module API function
+    crit: baseline
+    conf: 0.6
+    any:
+      - id: pam-sm-authenticate-symbol
+      - id: pam-sm-setcred-symbol
+      - id: pam-sm-acct-mgmt-symbol
+      - id: pam-sm-open-session-symbol
+      - id: pam-sm-close-session-symbol
+
+  # PAM module with handle
+  - id: pam-module-with-handle
+    desc: PAM module with handle access
+    crit: baseline
+    conf: 0.7
+    all:
+      - id: any-pam-module-function
+      - id: pam-handle-access
+
+  # PAM module implementation
+  - id: module
+    desc: PAM module implementation
+    crit: notable
+    conf: 0.85
+    any:
+      - id: pam-module-api
+      - id: pam-module-with-handle
+
+  # PAM configuration paths
+  - id: pam-config-paths
+    desc: PAM configuration file paths
+    crit: baseline
+    conf: 0.6
+    any:
+      - id: pam-d-path
+      - id: pam-conf-path
+
+  # PAM modules
+  - id: pam-modules
+    desc: PAM module names
+    crit: baseline
+    conf: 0.5
+    needs: 2
+    any:
+      - id: pam-unix-module
+      - id: pam-permit-module
+      - id: pam-deny-module
+
+  # PAM control flags
+  - id: pam-controls
+    desc: PAM control flags
+    crit: baseline
+    conf: 0.4
+    any:
+      - id: pam-required-control
+      - id: pam-sufficient-control
+
+  # Any PAM module name
+  - id: any-pam-module-name
+    desc: Any PAM module name
+    crit: baseline
+    conf: 0.5
+    any:
+      - id: pam-unix-module
+      - id: pam-permit-module
+      - id: pam-deny-module
+
+  # PAM module with control
+  - id: pam-module-with-control
+    desc: PAM module with control flag
+    crit: baseline
+    conf: 0.6
+    all:
+      - id: any-pam-module-name
+      - id: pam-controls
+
+  # PAM configuration
+  - id: config
+    desc: PAM configuration patterns
+    crit: notable
+    conf: 0.9
+    any:
+      - id: pam-config-paths
+      - id: pam-modules
+      - id: pam-module-with-control

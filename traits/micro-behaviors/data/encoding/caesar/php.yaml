@@ -1,0 +1,49 @@
+# PHP Caesar Cipher Implementation
+# Detects simple character shift encryption/decryption loops
+
+traits:
+  - id: caesar-cipher-loop
+    desc: Caesar cipher loop (ord + key ->
+    crit: suspicious
+    conf: 0.8
+    for: [php]
+    if:
+      type: ast
+      language: php
+      query: |
+        (for_statement
+          (compound_statement
+            (expression_statement
+              (assignment_expression
+                (function_call_expression
+                  (name) @ord_func
+                  (arguments)
+                )
+              )
+            )
+            (expression_statement
+              (assignment_expression
+                (binary_expression) @math_op
+              )
+            )
+            (expression_statement
+               (augmented_assignment_expression
+                 (function_call_expression
+                   (name) @chr_func
+                   (arguments)
+                 )
+               )
+            )
+          )
+          (#eq? @ord_func "ord")
+          (#eq? @chr_func "chr")
+        )
+
+  - id: simple-shift-cipher
+    desc: Simple character shift logic (ord +/- key)
+    crit: notable
+    conf: 0.6
+    for: [php]
+    if:
+      type: string
+      regex: 'ord\(\$[^)]{1,120}\)\s*[+-]\s*\$[^;]{1,120};\s*.{0,220}chr\('

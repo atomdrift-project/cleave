@@ -1,0 +1,13 @@
+# Process Privilege Query (Python)
+
+defaults:
+  for: [python]
+  crit: baseline
+
+traits:
+  - id: os-getuid
+    desc: os.getuid attribute
+    conf: 0.6
+    if:
+      type: raw
+      substr: "os.getuid"

@@ -1,0 +1,29 @@
+# Windows Certificate Store APIs
+defaults:
+  for: ["pe", "dll"]
+  platforms: ["windows"]
+
+traits:
+  - id: cert-open-store
+    desc: Open certificate store
+    crit: notable
+    conf: 0.9
+    if:
+      type: symbol
+      exact: "CertOpenStore"
+
+  - id: cert-enum-certificates
+    desc: Enumerate certificates in store
+    crit: notable
+    conf: 0.9
+    if:
+      type: symbol
+      exact: "CertEnumCertificatesInStore"
+
+  - id: cert-close-store
+    desc: Close certificate store handle
+    crit: baseline
+    conf: 0.9
+    if:
+      type: symbol
+      exact: "CertCloseStore"

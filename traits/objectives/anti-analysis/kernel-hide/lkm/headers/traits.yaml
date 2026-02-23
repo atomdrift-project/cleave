@@ -1,0 +1,325 @@
+# Linux Kernel Rootkit Detection - Kernel Module Headers and Macros
+# MBC: Defense Evasion, Privilege Escalation  
+# ATT&CK: T1014 (Rootkit), T1068 (Exploitation for Privilege Escalation)
+
+traits:
+  # KERNEL MODULE HEADERS (string-based for reliable detection)
+  # ============================================================
+
+  - id: kprobes-include-str
+    desc: linux/kprobes.h include (kernel hooking)
+    crit: suspicious
+    conf: 0.95
+    attack: "T1014"
+    for: [c]
+    if:
+      type: string
+      regex: "linux/kprobes\\.h"
+
+  - id: dirent-include-str
+    desc: linux/dirent.h include (file hiding)
+    crit: suspicious
+    conf: 0.9
+    attack: "T1014"
+    for: [c]
+    if:
+      type: string
+      regex: "linux/dirent\\.h"
+
+  - id: linkage-include-str
+    desc: linux/linkage.h include (kernel ABI)
+    crit: suspicious
+    conf: 0.85
+    for: [c]
+    if:
+      type: string
+      regex: "linux/linkage\\.h"
+
+  - id: kallsyms-lookup-name-str
+    desc: kallsyms_lookup_name string (symbol resolution)
+    crit: suspicious
+    conf: 0.98
+    mbc: "F0004"
+    attack: "T1014"
+    for: [c]
+    if:
+      type: string
+      substr: "kallsyms_lookup_name"
+
+  - id: syscall-table-str
+    desc: __syscall_table reference
+    crit: suspicious
+    conf: 0.95
+    attack: "T1014"
+    for: [c]
+    if:
+      type: string
+      regex: "__syscall_table"
+
+  - id: linux-dirent-str
+    desc: linux_dirent structure
+    crit: suspicious
+    conf: 0.9
+    attack: "T1014"
+    for: [c]
+    if:
+      type: string
+      word: "linux_dirent"
+
+  - id: cr0-variable-str
+    desc: cr0 register variable
+    crit: suspicious
+    conf: 0.9
+    for: [c]
+    if:
+      type: string
+      word: "cr0"
+    downgrade:
+      none:
+        - id: kernel-module-header
+
+  - id: force-order-str
+    desc: __force_order variable (CR0 compiler barrier)
+    crit: suspicious
+    conf: 0.95
+    for: [c]
+    if:
+      type: string
+      regex: "__force_order"
+
+  - id: nr-getdents-str
+    desc: NR_getdents syscall number reference
+    crit: suspicious
+    conf: 0.9
+    attack: "T1014"
+    for: [c]
+    if:
+      type: string
+      regex: "NR_getdents"
+
+  # ============================================================
+  # KERNEL MODULE HEADERS (AST-based)
+
+  - id: kernel-module-header
+    desc: Linux kernel module header (loadable
+    crit: suspicious
+    conf: 0.98
+    for: [c]
+    if:
+      type: ast
+      kind: import
+      exact: "linux/module.h"
+
+  - id: kernel-header
+    desc: Linux kernel header
+    crit: suspicious
+    conf: 0.95
+    for: [c]
+    if:
+      type: ast
+      kind: import
+      exact: "linux/kernel.h"
+
+  - id: kernel-syscalls-header
+    desc: Linux syscall definitions (syscall hooking)
+    crit: suspicious
+    conf: 0.95
+    for: [c]
+    if:
+      type: ast
+      kind: import
+      exact: "linux/syscalls.h"
+
+  - id: kernel-dirent-header
+    desc: Linux directory entry header (file
+    crit: suspicious
+    conf: 0.9
+    for: [c]
+    if:
+      type: ast
+      kind: import
+      exact: "linux/dirent.h"
+
+  - id: kernel-cred-header
+    desc: Linux credentials header (privilege escalation)
+    crit: suspicious
+    conf: 0.95
+    for: [c]
+    if:
+      type: ast
+      kind: import
+      exact: "linux/cred.h"
+
+  - id: kernel-kallsyms-header
+    desc: Linux kallsyms header (kernel symbol
+    crit: suspicious
+    conf: 0.98
+    for: [c]
+    if:
+      type: ast
+      kind: import
+      exact: "linux/kallsyms.h"
+
+  - id: kernel-ftrace-header
+    desc: Linux ftrace header (function tracing/hooking)
+    crit: suspicious
+    conf: 0.95
+    for: [c]
+    if:
+      type: ast
+      kind: import
+      exact: "linux/ftrace.h"
+
+  - id: kernel-kprobes-header
+    desc: Linux kprobes header (kernel probing/hooking)
+    crit: suspicious
+    conf: 0.95
+    for: [c]
+    if:
+      type: ast
+      kind: import
+      exact: "linux/kprobes.h"
+
+  - id: kernel-procfs-header
+    desc: Linux procfs header (process hiding)
+    crit: suspicious
+    conf: 0.9
+    for: [c]
+    if:
+      type: ast
+      kind: import
+      exact: "linux/proc_fs.h"
+
+  - id: ftrace-helper-include
+    desc: Ftrace helper library (common rootkit
+    crit: suspicious
+    conf: 0.99
+    for: [c]
+    if:
+      type: ast
+      kind: import
+      exact: "ftrace_helper"
+
+  # ============================================================
+  # MODULE MACROS
+  # ============================================================
+
+  - id: module-license-macro
+    desc: Kernel module license declaration
+    crit: suspicious
+    conf: 0.95
+    for: [c]
+    if:
+      type: ast
+      kind: call
+      exact: "MODULE_LICENSE"
+
+  - id: module-init-macro
+    desc: Kernel module initialization function
+    crit: suspicious
+    conf: 0.98
+    for: [c]
+    if:
+      type: ast
+      kind: call
+      exact: "module_init"
+
+  - id: module-exit-macro
+    desc: Kernel module exit function
+    crit: suspicious
+    conf: 0.95
+    for: [c]
+    if:
+      type: ast
+      kind: call
+      exact: "module_exit"
+
+  - id: for-each-process-macro
+    desc: Kernel process enumeration macro
+    crit: suspicious
+    conf: 0.95
+    for: [c]
+    if:
+      type: ast
+      kind: call
+      exact: "for_each_process"
+
+  # ============================================================
+  # MODULE LIFECYCLE
+  # ============================================================
+
+  - id: init-attribute
+    desc: __init module initialization attribute
+    crit: suspicious
+    conf: 0.9
+    for: [c]
+    if:
+      type: ast
+      kind: function
+      exact: "__init"
+
+  - id: exit-attribute
+    desc: __exit module cleanup attribute
+    crit: suspicious
+    conf: 0.9
+    for: [c]
+    if:
+      type: ast
+      kind: function
+      exact: "__exit"
+
+  - id: module-author-macro
+    desc: MODULE_AUTHOR declaration (attacker attribution)
+    crit: suspicious
+    conf: 0.7
+    for: [c]
+    if:
+      type: ast
+      kind: call
+      exact: "MODULE_AUTHOR"
+
+  - id: module-description-macro
+    desc: MODULE_DESCRIPTION declaration
+    crit: suspicious
+    conf: 0.7
+    for: [c]
+    if:
+      type: ast
+      kind: call
+      exact: "MODULE_DESCRIPTION"
+
+  - id: dual-bsd-gpl-license
+    desc: Dual BSD/GPL license (common rootkit
+    crit: suspicious
+    conf: 0.6
+    for: [c]
+    if:
+      type: ast
+      kind: string
+      exact: "Dual BSD/GPL"
+
+  # ============================================================
+  # COMPILER/MEMORY ORDERING
+  # ============================================================
+
+  - id: force-order-variable
+    desc: __force_order variable (prevent CR0 write
+    crit: suspicious
+    conf: 0.95
+    for: [c]
+    if:
+      type: ast
+      node: declaration
+      exact: "__force_order"
+
+  - id: volatile-asm
+    desc: Volatile inline assembly (prevent optimization)
+    crit: suspicious
+    conf: 0.7
+    for: [c]
+    if:
+      type: ast
+      node: asm_statement
+      exact: "volatile"
+
+  # ============================================================

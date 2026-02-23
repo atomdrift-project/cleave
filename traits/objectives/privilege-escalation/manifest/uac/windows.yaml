@@ -1,0 +1,52 @@
+defaults:
+  attack: T1548.002
+  platforms:
+  - windows
+  for:
+  - pe
+  - dll
+traits:
+- id: highest-available
+  desc: Manifest requests highest available
+  crit: notable
+  conf: 0.8
+  if:
+    type: string
+    regex: requestedExecutionLevel.{0,50}highestAvailable|level=['"]highestAvailable
+- id: auto-elevate
+  desc: Auto-elevate manifest attribute
+  crit: suspicious
+  conf: 0.85
+  if:
+    type: string
+    regex: autoElevate.{0,20}true|<autoElevate>true
+    case_insensitive: true
+- id: ui-access
+  desc: UIAccess privilege request
+  crit: notable
+  conf: 0.8
+  if:
+    type: string
+    regex: uiAccess=['"]true
+- id: require-admin-level
+  desc: Manifest level requires administrator
+  crit: notable
+  conf: 0.9
+  if:
+    type: string
+    regex: level=['"]requireAdministrator
+- id: require-admin-execution-level
+  desc: requestedExecutionLevel requires administrator
+  crit: notable
+  conf: 0.9
+  if:
+    type: string
+    regex: requestedExecutionLevel.{0,50}requireAdministrator
+composite_rules:
+- id: require-admin
+  desc: Manifest requests admin privileges
+  crit: notable
+  conf: 0.9
+  any:
+  - id: require-admin-level
+  - id: require-admin-execution-level

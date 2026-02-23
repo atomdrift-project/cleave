@@ -1,0 +1,10 @@
+defaults:
+  for: [all]
+
+traits:
+  - id: powershell
+    desc: Strings indicative of PowerShell command execution.
+    crit: notable
+    conf: 0.8
+    if:
+      id: micro-behaviors/process/create/shell/lang::powershell-engine-markers

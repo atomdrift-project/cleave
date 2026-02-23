@@ -1,0 +1,46 @@
+# DNS Lookup - Go
+# GuardDog-inspired: DNS resolution capabilities
+# ATT&CK: T1071.004 (DNS)
+# MBC: C0011 (DNS Communication)
+
+defaults:
+  for: [go, elf, macho, pe]
+  attack: "T1071.004"
+  mbc: "C0011"
+  crit: notable
+
+traits:
+  # GuardDog: net.LookupHost - DNS lookup
+  - id: net-lookup-host
+    desc: net.LookupHost DNS lookup
+    conf: 0.85
+    if:
+      type: symbol
+      exact: "net.LookupHost"
+
+  # net.LookupIP - IP address lookup
+  - id: net-lookup-ip
+    desc: net.LookupIP DNS lookup
+    conf: 0.85
+    if:
+      type: symbol
+      exact: "net.LookupIP"
+
+  # net.LookupAddr - reverse DNS
+  - id: net-lookup-addr
+    desc: net.LookupAddr reverse DNS
+    conf: 0.85
+    if:
+      type: symbol
+      exact: "net.LookupAddr"
+
+composite_rules:
+  # DNS lookup capability
+  - id: dns-lookup
+    desc: Go DNS lookup capability
+    crit: notable
+    conf: 0.85
+    any:
+      - id: net-lookup-host
+      - id: net-lookup-ip
+      - id: net-lookup-addr

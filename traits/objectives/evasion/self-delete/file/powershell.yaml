@@ -1,0 +1,59 @@
+# Self-Deletion Detection - PowerShell
+# MBC: F0007 (Self Deletion)
+# ATT&CK: T1070.004
+
+defaults:
+  for: [powershell, batch, shell]
+  mbc: "F0007"
+  attack: "T1070.004"
+
+traits:
+  # Remove-Item cmdlet
+  - id: remove-item
+    desc: Remove-Item cmdlet
+    crit: notable
+    conf: 0.6
+    if:
+      type: string
+      regex: "Remove-Item|\\bdel\\b|\\bri\\b|\\brm\\b"
+      case_insensitive: true
+
+  # Delete file with .ps1 extension
+  - id: remove-ps1
+    desc: Remove PowerShell script
+    crit: suspicious
+    conf: 0.8
+    if:
+      type: string
+      regex: "Remove-Item.{0,50}\\.ps1"
+      case_insensitive: true
+
+  # Remove-Item with -Force
+  - id: remove-item-force
+    desc: Force file removal
+    crit: notable
+    conf: 0.7
+    if:
+      type: string
+      regex: "Remove-Item.{0,50}-Force"
+      case_insensitive: true
+
+  # Self-reference $PSScriptRoot or $PSCommandPath
+  - id: remove-self-ref
+    desc: Remove self-reference script
+    crit: suspicious
+    conf: 0.85
+    if:
+      type: string
+      regex: "Remove-Item.{0,50}\\$PS(ScriptRoot|CommandPath)"
+      case_insensitive: true
+
+composite_rules:
+  # Self-deleting PowerShell script
+  - id: self-delete-powershell
+    desc: Self-deleting PowerShell
+    crit: suspicious
+    conf: 0.75
+    any:
+      - id: remove-ps1
+      - id: remove-self-ref

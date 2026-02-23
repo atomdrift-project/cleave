@@ -1,0 +1,66 @@
+traits:
+  - id: marker-0x1111
+    desc: "Marker value 0x1111 (4369)"
+    crit: notable
+    conf: 0.9
+    attack: T1189
+    mbc: C0015
+    for: ["-c"]
+    if:
+      type: raw
+      regex: "\\b(4369|0x1111)\\b"
+  - id: marker-0x2222
+    desc: "Marker value 0x2222 (8738)"
+    crit: notable
+    conf: 0.9
+    attack: T1189
+    mbc: C0015
+    for: ["-c"]
+    if:
+      type: raw
+      regex: "\\b(8738|0x2222)\\b"
+  - id: marker-0x3333
+    desc: "Marker value 0x3333 (13107)"
+    crit: notable
+    conf: 0.9
+    attack: T1189
+    mbc: C0015
+    for: ["-c"]
+    if:
+      type: raw
+      regex: "\\b(13107|0x3333)\\b"
+  - id: marker-0x4444
+    desc: "Marker value 0x4444 (17476)"
+    crit: notable
+    conf: 0.9
+    attack: T1189
+    mbc: C0015
+    for: ["-c"]
+    if:
+      type: raw
+      regex: "\\b(17476|0x4444)\\b"
+composite_rules:
+  - id: heap-spray-markers-generic
+    desc: "ActionScript heap spray sequential markers (generic)"
+    crit: notable
+    conf: 0.8
+    attack: T1189
+    mbc: C0015
+    for: ["-c"]
+    any:
+      - id: marker-0x1111
+      - id: marker-0x2222
+      - id: marker-0x3333
+      - id: marker-0x4444
+
+  # Disabled due to trait_glob issues
+  # - id: sequential-heap-markers
+  #   desc: "Sequential heap markers (0x1111, 0x2222, 0x3333, 0x4444) indicative of precise memory control"
+  #   crit: suspicious
+  #   conf: 0.95
+  #   attack: T1189
+  #   mbc: C0015
+  #   if:
+  #     type: trait_glob
+  #     match: all
+  #     regex: "micro-behaviors/data/encoding/actionscript::marker-.*"

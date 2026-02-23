@@ -1,0 +1,40 @@
+# JXA (JavaScript for Automation) Execution Capabilities
+# Detects usage of JXA/AppleScript for native execution and automation
+# ATT&CK: T1059.002
+
+defaults:
+  for: [javascript]
+
+traits:
+  - id: objc-import
+    desc: "JXA ObjC import (bridge to native APIs)"
+    crit: notable
+    conf: 1.0
+    if:
+      type: symbol
+      exact: "ObjC"
+
+  - id: app-current-app
+    desc: "JXA Application.currentApplication()"
+    crit: notable
+    conf: 0.9
+    if:
+      type: symbol
+      exact: "Application.currentApplication"
+
+  - id: include-standard-additions
+    desc: "JXA includeStandardAdditions (enables shell scripts/dialogs)"
+    crit: notable
+    conf: 0.9
+    if:
+      type: symbol
+      exact: "includeStandardAdditions"
+
+  - id: do-shell-script
+    desc: "JXA doShellScript execution"
+    crit: suspicious
+    conf: 0.95
+    attack: "T1059.004"
+    if:
+      type: symbol
+      exact: "doShellScript"

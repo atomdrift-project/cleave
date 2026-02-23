@@ -1,0 +1,10 @@
+composite_rules:
+  - id: nemucod-adodb-file-drop
+    desc: Nemucod ADODB.Stream File Drop (JS)
+    crit: hostile
+    conf: 0.95
+    all:
+      - id: "micro-behaviors/fs/write/file::js-adodb-stream-create"
+      - id: "micro-behaviors/fs/write/file::js-adodb-stream-set-type"
+      - id: "micro-behaviors/fs/write/file::js-adodb-stream-write-responsebody"
+      - id: "micro-behaviors/fs/write/file::js-adodb-stream-savetofile-dynamic-path"

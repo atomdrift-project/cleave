@@ -1,0 +1,531 @@
+defaults:
+  attack: T1497.001
+traits:
+  - id: vendor-xen-upper
+    desc: XEN hypervisor (uppercase)
+    crit: suspicious
+    conf: 0.6
+    for:
+      - javascript
+      - typescript
+      - python
+      - shell
+    if:
+      type: string
+      exact: XEN
+  - id: vendor-xen-title
+    desc: Xen hypervisor (titlecase)
+    crit: suspicious
+    conf: 0.6
+    for:
+      - javascript
+      - typescript
+      - python
+      - shell
+    if:
+      type: string
+      exact: Xen
+  - id: vendor-kvm-upper
+    desc: KVM hypervisor (uppercase)
+    crit: suspicious
+    conf: 0.6
+    for:
+      - javascript
+      - typescript
+      - python
+      - shell
+    if:
+      type: string
+      exact: KVM
+  - id: vendor-kvm-repeat
+    desc: KVMKVMKVM hypervisor signature
+    crit: suspicious
+    conf: 0.7
+    for:
+      - javascript
+      - typescript
+      - python
+      - shell
+    if:
+      type: string
+      substr: KVMKVMKVM
+  - id: vendor-vmware
+    desc: VMware hypervisor vendor string
+    crit: suspicious
+    conf: 0.7
+    for:
+      - javascript
+      - typescript
+      - python
+      - shell
+    if:
+      type: string
+      substr: VMware
+      case_insensitive: true
+  - id: vendor-virtualbox
+    desc: VirtualBox hypervisor vendor string
+    crit: suspicious
+    conf: 0.6
+    for:
+      - javascript
+      - typescript
+      - python
+      - shell
+    if:
+      type: string
+      substr: VirtualBox
+      case_insensitive: true
+  - id: vendor-vbox-short
+    desc: VBOX hypervisor short string
+    crit: notable
+    conf: 0.6
+    for:
+      - javascript
+      - typescript
+      - python
+      - shell
+    if:
+      type: string
+      exact: VBOX
+  - id: vendor-hyperv-dash
+    desc: Hyper-V hypervisor vendor string
+    crit: suspicious
+    conf: 0.6
+    for:
+      - javascript
+      - typescript
+      - python
+      - shell
+    if:
+      type: string
+      substr: Hyper-V
+      case_insensitive: true
+  - id: vendor-microsoft-hv
+    desc: Microsoft Hv hypervisor string
+    crit: suspicious
+    conf: 0.6
+    for:
+      - javascript
+      - typescript
+      - python
+      - shell
+    if:
+      type: string
+      substr: Microsoft Hv
+      case_insensitive: true
+  - id: vendor-qemu
+    desc: QEMU hypervisor vendor string
+    crit: suspicious
+    conf: 0.7
+    for:
+      - javascript
+      - typescript
+      - python
+      - shell
+    if:
+      type: string
+      exact: QEMU
+  - id: vendor-parallels
+    desc: Parallels hypervisor vendor string
+    crit: suspicious
+    conf: 0.7
+    for:
+      - javascript
+      - typescript
+      - python
+      - shell
+    if:
+      type: string
+      substr: Parallels
+  - id: vendor-bhyve
+    desc: bhyve hypervisor vendor string
+    crit: suspicious
+    conf: 0.7
+    for:
+      - javascript
+      - typescript
+      - python
+      - shell
+    if:
+      type: string
+      substr: bhyve
+  - id: file-vbox-guest
+    desc: VirtualBox guest additions file
+    crit: suspicious
+    conf: 0.8
+    for:
+      - python
+      - shell
+      - javascript
+    if:
+      type: string
+      substr: VBoxGuest
+  - id: file-vbox-mouse
+    desc: VirtualBox mouse driver file
+    crit: suspicious
+    conf: 0.8
+    for:
+      - python
+      - shell
+      - javascript
+    if:
+      type: string
+      substr: VBoxMouse
+  - id: file-vbox-sf
+    desc: VirtualBox shared folders file
+    crit: suspicious
+    conf: 0.8
+    for:
+      - python
+      - shell
+      - javascript
+    if:
+      type: string
+      substr: VBoxSF
+  - id: file-vmware-tools
+    desc: VMware tools binary
+    crit: suspicious
+    conf: 0.8
+    for:
+      - python
+      - shell
+      - javascript
+    if:
+      type: string
+      substr: vmware-tools
+  - id: file-vmtoolsd
+    desc: VMware tools daemon
+    crit: suspicious
+    conf: 0.8
+    for:
+      - python
+      - shell
+      - javascript
+    if:
+      type: string
+      substr: vmtoolsd
+  - id: file-vmhgfs
+    desc: VMware host-guest filesystem
+    crit: suspicious
+    conf: 0.8
+    for:
+      - python
+      - shell
+      - javascript
+    if:
+      type: string
+      substr: /vmhgfs
+  - id: file-qemu-ga
+    desc: QEMU guest agent
+    crit: suspicious
+    conf: 0.8
+    for:
+      - python
+      - shell
+      - javascript
+    if:
+      type: string
+      substr: qemu-ga
+  - id: mac-vmware-1
+    desc: VMware MAC prefix 00:0c:29
+    crit: suspicious
+    conf: 0.8
+    for:
+      - javascript
+      - typescript
+      - python
+      - shell
+    if:
+      type: string
+      substr: 00:0c:29
+      case_insensitive: true
+  - id: mac-vmware-2
+    desc: VMware MAC prefix 00:50:56
+    crit: suspicious
+    conf: 0.8
+    for:
+      - javascript
+      - typescript
+      - python
+      - shell
+    if:
+      type: string
+      substr: 00:50:56
+  - id: mac-vmware-3
+    desc: VMware MAC prefix 00:05:69
+    crit: suspicious
+    conf: 0.8
+    for:
+      - javascript
+      - typescript
+      - python
+      - shell
+    if:
+      type: string
+      substr: 00:05:69
+  - id: mac-vbox
+    desc: VirtualBox MAC prefix 08:00:27
+    crit: suspicious
+    conf: 0.8
+    for:
+      - javascript
+      - typescript
+      - python
+      - shell
+    if:
+      type: string
+      substr: 08:00:27
+  - id: mac-xen
+    desc: Xen MAC prefix 00:16:3e
+    crit: suspicious
+    conf: 0.8
+    for:
+      - javascript
+      - typescript
+      - python
+      - shell
+    if:
+      type: string
+      substr: 00:16:3e
+      case_insensitive: true
+  - id: mac-hyperv
+    desc: Hyper-V MAC prefix 00:15:5d
+    crit: suspicious
+    conf: 0.8
+    for:
+      - javascript
+      - typescript
+      - python
+      - shell
+    if:
+      type: string
+      substr: 00:15:5d
+      case_insensitive: true
+  - id: mac-parallels
+    desc: Parallels MAC prefix 00:1c:42
+    crit: suspicious
+    conf: 0.8
+    for:
+      - javascript
+      - typescript
+      - python
+      - shell
+    if:
+      type: string
+      substr: 00:1c:42
+      case_insensitive: true
+  - id: mac-qemu
+    desc: QEMU/KVM MAC prefix 52:54:00
+    crit: suspicious
+    conf: 0.8
+    for:
+      - javascript
+      - typescript
+      - python
+      - shell
+    if:
+      type: string
+      substr: "52:54:00"
+  - id: cloud-metadata
+    desc: Cloud provider metadata access (VM
+    crit: suspicious
+    conf: 0.7
+    for:
+      - javascript
+      - typescript
+      - python
+      - shell
+    if:
+      type: string
+      regex: 169\.254\.169\.123
+  - id: cpuid-check-a
+    desc: CPUID with hypervisor vendors A
+    crit: suspicious
+    conf: 0.9
+    for:
+      - python
+      - shell
+    if:
+      type: string
+      case_insensitive: true
+      regex: cpuid.{0,80}(hypervisor|vmware|kvm)
+  - id: cpuid-check-b
+    desc: CPUID with hypervisor vendors B
+    crit: suspicious
+    conf: 0.9
+    for:
+      - python
+      - shell
+    if:
+      type: string
+      case_insensitive: true
+      regex: cpuid.{0,80}(xen|qemu)|hypervisor\s*flag
+  - id: hardware-model-cmd
+    desc: Checks hardware model command output
+    crit: suspicious
+    conf: 0.8
+    for:
+      - python
+      - shell
+    if:
+      type: string
+      regex: system_profiler.{0,30}Model|wmic.{0,30}computersystem.{0,30}model
+  - id: hardware-model-linux-path
+    desc: Checks Linux virtual devices path
+    crit: suspicious
+    conf: 0.8
+    for:
+      - python
+      - shell
+    if:
+      type: string
+      substr: /sys/devices/virtual
+composite_rules:
+  - id: hardware-model
+    desc: Checks hardware model for VM
+    crit: suspicious
+    conf: 0.8
+    for:
+      - python
+      - shell
+    any:
+      - id: cpuid-check
+      - id: hardware-model-cmd
+      - id: hardware-model-linux-path
+
+  - id: cpuid-check
+    desc: CPUID instruction for hypervisor detection
+    crit: suspicious
+    conf: 0.9
+    for:
+      - python
+      - shell
+    any:
+      - id: cpuid-check-a
+      - id: cpuid-check-b
+  - id: vendor-xen
+    desc: Xen hypervisor vendor string
+    crit: notable
+    conf: 0.7
+    for:
+      - javascript
+      - typescript
+      - python
+      - shell
+    any:
+      - id: vendor-xen-upper
+      - id: vendor-xen-title
+  - id: vendor-kvm
+    desc: KVM hypervisor vendor string
+    crit: notable
+    conf: 0.7
+    for:
+      - javascript
+      - typescript
+      - python
+      - shell
+    any:
+      - id: vendor-kvm-upper
+      - id: vendor-kvm-repeat
+  - id: vendor-vbox
+    desc: VirtualBox hypervisor vendor string
+    crit: notable
+    conf: 0.7
+    for:
+      - javascript
+      - typescript
+      - python
+      - shell
+    any:
+      - id: vendor-virtualbox
+      - id: vendor-vbox-short
+  - id: vendor-hyperv
+    desc: Hyper-V hypervisor vendor string
+    crit: notable
+    conf: 0.7
+    for:
+      - javascript
+      - typescript
+      - python
+      - shell
+    any:
+      - id: vendor-hyperv-dash
+      - id: vendor-microsoft-hv
+      - id: hypervisor-vendor
+  - id: dmi-check
+    desc: DMI/SMBIOS check for VM detection
+    crit: notable
+    conf: 0.85
+    any:
+      - id: hardware-model
+      - id: cpuid-check
+  - id: file-check
+    desc: Checks for VM-specific files
+    crit: suspicious
+    conf: 0.85
+    any:
+      - id: file-vbox-guest
+      - id: file-vbox-mouse
+      - id: file-vbox-sf
+      - id: file-vmware-tools
+      - id: file-vmtoolsd
+      - id: file-vmhgfs
+      - id: file-qemu-ga
+      - id: micro-behaviors/fs/path/device/storage::dev-vda
+  - id: mac-prefix
+    desc: Checks for VM MAC address
+    crit: suspicious
+    conf: 0.85
+    any:
+      - id: mac-vmware-1
+      - id: mac-vmware-2
+      - id: mac-vmware-3
+      - id: mac-vbox
+      - id: mac-xen
+      - id: mac-hyperv
+      - id: mac-parallels
+      - id: mac-qemu
+  - id: container-check
+    desc: Container environment detection
+    crit: notable
+    conf: 0.75
+    any:
+      - id: micro-behaviors/os/container/runtime
+  - id: comprehensive-evasion
+    desc: Multiple VM detection techniques (evasion)
+    crit: suspicious
+    conf: 0.95
+    needs: 3
+    any:
+      - id: vendor-vmware
+      - id: vendor-vbox
+      - id: vendor-qemu
+      - id: vendor-xen
+      - id: mac-vmware-1
+      - id: mac-vbox
+      - id: micro-behaviors/os/container/runtime::dockerenv
+      - id: file-vmtoolsd
+      - id: micro-behaviors/process/exit
+  - id: vm-profiling-exfil
+    desc: VM detection with system profiling and exfiltration
+    crit: hostile
+    conf: 0.95
+    attack: T1497.001
+    mbc: B0003
+    all:
+      - id: hypervisor-vendor
+      - id: micro-behaviors/communications/http/request::http-client-usage
+      - id: objectives/discovery/host/system/hardware-fingerprint::js-profiling
+  - id: hypervisor-vendor
+    desc: Checks for hypervisor vendor strings
+    crit: suspicious
+    conf: 0.85
+    any:
+      - id: vendor-xen
+      - id: vendor-kvm
+      - id: vendor-vmware
+      - id: vendor-vbox
+      - id: vendor-hyperv
+      - id: vendor-qemu
+      - id: vendor-parallels
+      - id: vendor-bhyve

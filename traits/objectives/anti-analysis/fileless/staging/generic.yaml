@@ -1,0 +1,18 @@
+# Fileless Execution / Memory-only Staging
+# Patterns for avoiding disk-based detection
+# ATT&CK: T1055, T1620
+# NOTE: memfd_create is defined in mem/anonymous/create/linux.yaml
+# NOTE: dev-shm is defined in micro-behaviors/fs/path/device/linux.yaml
+
+traits:
+  # Removed dev-shm duplicate - use micro-behaviors/fs/path/device/linux::dev-shm
+
+  - id: proc-self-fd
+    desc: "Access /proc/self/fd for file descriptor"
+    crit: notable
+    conf: 0.7
+    for: [elf]
+    platforms: [linux]
+    if:
+      type: string
+      regex: "/proc/self/fd/"

@@ -1,0 +1,12 @@
+# NodeJS 'ws' Library
+defaults:
+  for: [all]
+
+traits:
+  - id: ws
+    desc: "NodeJS binary using 'ws' (WebSockets)"
+    crit: notable
+    conf: 0.9
+    if:
+      type: string
+      regex: "node_modules.{0,30}ws/index.js"

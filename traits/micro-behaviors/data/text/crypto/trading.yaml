@@ -1,0 +1,108 @@
+# Crypto Trading Terminology
+# Common terms used in crypto trading bots and DeFi protocols
+
+defaults:
+  crit: notable
+  conf: 0.5
+  for: [all]
+
+traits:
+  - id: defi-protocol-dex
+    desc: DEX protocol references (Uniswap/Sushiswap/Pancakeswap)
+    if:
+      type: string
+      regex: "(?i)(uniswap|sushiswap|pancakeswap)"
+
+  - id: defi-protocol-aave
+    desc: DeFi lending protocol reference (Aave)
+    if:
+      type: string
+      word: "aave"
+      case_insensitive: true
+
+  - id: defi-protocol-compound
+    desc: DeFi lending protocol reference (Compound)
+    for: [python, javascript, typescript, ruby, shell]
+    if:
+      type: string
+      word: "compound"
+      case_insensitive: true
+      near_bytes: 500
+      near:
+        type: string
+        regex: "(?i)(defi|liquidity|lending|borrow|yield|token|swap)"
+
+  - id: defi-protocol-curve-finance
+    desc: DeFi Curve Finance protocol reference
+    if:
+      type: string
+      regex: "(?i)curve\\s*(finance|pool|swap)"
+
+  - id: defi-protocol-curve-defi
+    desc: DeFi Curve governance/LP reference
+    if:
+      type: string
+      regex: "(?i)curve\\s*(dao|gauge|lp)"
+
+  - id: swap-operations
+    desc: Token swap operation patterns
+    if:
+      type: string
+      regex: "(?i)(swapExact|swap_tokens|swapTokensFor)"
+
+  - id: contract-query
+    desc: Smart contract query methods (getReserves/getPair)
+    if:
+      type: string
+      regex: "(getReserves|calculatePrice|getPairContract|getTokenAndContract)"
+
+  - id: arbitrage-terms-arbitrage
+    desc: Arbitrage trading term (arbitrage)
+    if:
+      type: string
+      word: "arbitrage"
+      case_insensitive: true
+
+  - id: arbitrage-terms-arb-for
+    desc: Arbitrage trading term (arb_for)
+    if:
+      type: string
+      word: "arb_for"
+      case_insensitive: true
+
+  - id: arbitrage-terms-arb-against
+    desc: Arbitrage trading term (arb_against)
+    if:
+      type: string
+      word: "arb_against"
+      case_insensitive: true
+
+  - id: arbitrage-terms-price-diff
+    desc: Arbitrage trading term (price_difference)
+    if:
+      type: string
+      word: "price_difference"
+      case_insensitive: true
+
+  - id: arbitrage-terms-flash-loan
+    desc: Arbitrage trading term (flash_loan)
+    if:
+      type: string
+      word: "flash_loan"
+      case_insensitive: true
+
+composite_rules:
+  - id: defi-protocol-lending
+    desc: DeFi lending protocol references (Aave/Compound)
+    any:
+      - id: defi-protocol-aave
+      - id: defi-protocol-compound
+
+  - id: arbitrage-terms
+    desc: Arbitrage trading terms
+    any:
+      - id: arbitrage-terms-arbitrage
+      - id: arbitrage-terms-arb-for
+      - id: arbitrage-terms-arb-against
+      - id: arbitrage-terms-price-diff
+      - id: arbitrage-terms-flash-loan

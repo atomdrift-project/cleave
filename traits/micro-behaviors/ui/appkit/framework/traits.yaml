@@ -1,0 +1,16 @@
+# macOS UI Manifest Signals
+# Detects Info.plist keys that control UI visibility and behavior
+
+defaults:
+  platforms: [macos]
+  for: [plist]
+
+traits:
+  - id: lsuielement-true
+    desc: LSUIElement true (dockless agent app)
+    crit: notable
+    conf: 0.8
+    if:
+      type: kv
+      path: "LSUIElement"
+      exact: "true"

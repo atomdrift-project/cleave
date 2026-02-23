@@ -1,0 +1,209 @@
+# Sensitive File Extension Targeting Detection
+# Detects code targeting files containing credentials, crypto wallets, or sensitive data
+# ATT&CK: T1005 (Data from Local System), T1552 (Unsecured Credentials)
+
+defaults:
+  for: [all]
+  attack: "T1005"
+  mbc: "B0024"
+  crit: suspicious
+
+traits:
+  # === Credential file extensions ===
+  - id: ppk-extension
+    desc: PuTTY private key (.ppk) extension
+    crit: notable
+    conf: 0.75
+    attack: "T1552.004"
+    if:
+      type: string
+      regex: '\\.ppk\\b|"ppk"'
+
+  - id: pem-extension
+    desc: PEM certificate/key (.pem) extension
+    crit: notable
+    conf: 0.6
+    attack: "T1552.004"
+    if:
+      type: string
+      regex: '\\.pem\\b|"pem"'
+
+  - id: asc-extension
+    desc: ASCII-armored key (.asc) extension
+    crit: notable
+    conf: 0.7
+    attack: "T1552.004"
+    if:
+      type: string
+      regex: '\\.asc\\b|"asc"'
+
+  - id: rdp-extension
+    desc: "Remote Desktop Protocol extension"
+    crit: notable
+    conf: 0.75
+    attack: "T1552.004"
+    if:
+      type: string
+      regex: '\\.rdp\\b|"rdp"'
+
+  - id: ovpn-extension
+    desc: "OpenVPN config extension"
+    crit: notable
+    conf: 0.75
+    attack: "T1552.004"
+    if:
+      type: string
+      regex: '\\.ovpn\\b|"ovpn"'
+
+  - id: kdbx-extension
+    desc: "KeePass database extension"
+    crit: suspicious
+    conf: 0.85
+    attack: "T1555.005"
+    if:
+      type: string
+      regex: '\\.kdbx\\b|"kdbx"'
+
+  # === Crypto wallet extensions ===
+  - id: wallet-extension
+    desc: "Generic wallet extension"
+    crit: suspicious
+    conf: 0.85
+    attack: "T1555"
+    if:
+      type: string
+      regex: '\\.wallet\\b|"wallet"'
+
+  - id: key-extension
+    desc: "Generic key extension"
+    crit: notable
+    conf: 0.5
+    attack: "T1552.004"
+    if:
+      type: string
+      regex: '\\.key\\b|"key"'
+
+  - id: dat-extension
+    desc: "Generic data extension"
+    crit: notable
+    conf: 0.4
+    if:
+      type: string
+      regex: '\\.dat\\b|"dat"'
+
+  # === Database and config extensions ===
+  - id: sql-extension
+    desc: "SQL database extension"
+    crit: notable
+    conf: 0.5
+    attack: "T1005"
+    if:
+      type: string
+      regex: '\\.sql\\b|"sql"'
+
+  - id: conf-extension
+    desc: "Config file extension"
+    crit: notable
+    conf: 0.4
+    attack: "T1552.001"
+    if:
+      type: string
+      regex: '\\.conf\\b|"conf"'
+
+  - id: json-extension
+    desc: "JSON file extension"
+    crit: notable
+    conf: 0.3
+    if:
+      type: string
+      regex: '\\.json\\b|"json"'
+
+  - id: db-extension
+    desc: "Generic database extension"
+    crit: notable
+    conf: 0.55
+    attack: "T1005"
+    if:
+      type: string
+      regex: '\\.db\\b|"db"'
+
+  - id: sqlite-extension
+    desc: "SQLite extension"
+    crit: suspicious
+    conf: 0.75
+    attack: "T1005"
+    if:
+      type: string
+      regex: '\\.sqlite\\b|"sqlite"'
+
+composite_rules:
+  # Credential file targeting composite
+  - id: credential-files
+    desc: "Targets credential key files"
+    crit: suspicious
+    conf: 0.85
+    attack: "T1552.004"
+    needs: 2
+    any:
+      - id: ppk-extension
+      - id: pem-extension
+      - id: asc-extension
+      - id: rdp-extension
+      - id: ovpn-extension
+
+  # Wallet targeting composite
+  - id: wallet-files
+    desc: "Targets cryptocurrency wallet files"
+    crit: suspicious
+    conf: 0.9
+    attack: "T1555"
+    any:
+      - id: wallet-extension
+      - id: kdbx-extension
+
+  # Comprehensive stealer file extension list
+  - id: stealer-extension-list
+    desc: "Comprehensive extension targeting"
+    crit: hostile
+    conf: 0.95
+    attack: "T1005"
+    mbc: "B0024"
+    needs: 5
+    any:
+      - id: ppk-extension
+      - id: pem-extension
+      - id: asc-extension
+      - id: rdp-extension
+      - id: ovpn-extension
+      - id: kdbx-extension
+      - id: wallet-extension
+      - id: key-extension
+      - id: sql-extension
+      - id: conf-extension
+      - id: db-extension
+      - id: sqlite-extension
+
+  - id: dense-extension-list
+    desc: "Dense file extension targeting (stealer pattern)"
+    crit: suspicious
+    conf: 0.90
+    attack: "T1005"
+    size_max: 200000
+    needs: 8
+    any:
+      - id: ppk-extension
+      - id: pem-extension
+      - id: asc-extension
+      - id: rdp-extension
+      - id: ovpn-extension
+      - id: kdbx-extension
+      - id: wallet-extension
+      - id: key-extension
+      - id: sql-extension
+      - id: conf-extension
+      - id: json-extension
+      - id: dat-extension
+      - id: db-extension
+      - id: sqlite-extension
+      - id: json-extension
+      - id: dat-extension

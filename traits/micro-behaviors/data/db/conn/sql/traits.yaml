@@ -1,0 +1,88 @@
+# Database Connection - SQL
+# PostgreSQL and MySQL specific traits have been moved to their respective directories
+# to avoid duplicates
+
+defaults:
+  for: [all]
+
+traits:
+  # === SQL micro-behaviors ===
+  - id: sql-select
+    desc: SELECT SQL keyword in query
+    crit: notable
+    conf: 0.6
+    if:
+      type: string
+      regex: "(?i)\\bSELECT\\s+(\\*|[a-z0-9_]{1,40}(\\s*,\\s*[a-z0-9_]{1,40}){0,12})\\s+FROM\\b"
+
+  - id: sql-insert
+    desc: INSERT INTO SQL keyword
+    crit: notable
+    conf: 0.5
+    if:
+      type: string
+      regex: "(?i)\\bINSERT\\s+INTO\\b"
+
+  - id: sql-update
+    desc: UPDATE SQL keyword
+    crit: notable
+    conf: 0.5
+    if:
+      type: string
+      regex: "(?i)\\bUPDATE\\s+[a-z0-9_]+\\s+SET\\b"
+
+  - id: sql-delete
+    desc: DELETE FROM SQL keyword
+    crit: notable
+    conf: 0.5
+    if:
+      type: string
+      regex: "(?i)\\bDELETE\\s+FROM\\b"
+
+  - id: sql-create-table
+    desc: CREATE TABLE SQL keyword
+    crit: notable
+    conf: 0.5
+    if:
+      type: string
+      regex: "(?i)\\bCREATE\\s+TABLE\\b"
+
+  - id: database-sql-import
+    desc: database/sql Go import
+    crit: notable
+    conf: 0.9
+    if:
+      type: string
+      substr: "database/sql"
+
+  - id: sql-open
+    desc: sql.Open Go function
+    crit: notable
+    conf: 0.9
+    if:
+      type: string
+      substr: "sql.Open"
+
+composite_rules:
+  # SQL keywords helper
+  - id: sql-keywords
+    desc: SQL statement keywords
+    crit: notable
+    conf: 0.5
+    needs: 3
+    any:
+      - id: sql-select
+      - id: sql-insert
+      - id: sql-update
+      - id: sql-delete
+      - id: sql-create-table
+
+  # Generic SQL composite (migrated from YARA)
+  - id: sql-generic
+    desc: Generic SQL database patterns
+    crit: notable
+    conf: 0.8
+    any:
+      - id: sql-keywords
+      - id: database-sql-import
+      - id: sql-open

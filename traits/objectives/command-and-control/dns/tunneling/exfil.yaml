@@ -1,0 +1,10 @@
+composite_rules:
+  - id: js-dns-tunneling-exfil
+    desc: JavaScript DNS tunneling exfiltration of system metadata
+    crit: hostile
+    all:
+      - id: objectives/command-and-control/dns/tunneling::js-dns-tunneling-construction
+      - id: objectives/command-and-control/dns/exfil::dns-resolve
+    any:
+      - id: objectives/discovery/host/system/hardware-fingerprint::js-sysinfo-multi
+      - id: objectives/discovery/host/system/hardware-fingerprint::js-victim-id

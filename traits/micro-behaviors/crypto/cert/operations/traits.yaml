@@ -1,0 +1,72 @@
+# Cryptographic Capabilities - Certificate Operations
+
+defaults:
+  for: [all]
+
+traits:
+  # === Certificate handling atomic indicators ===
+  - id: x509-prefix
+    desc: X509_ function prefix
+    conf: 0.7
+    if:
+      type: string
+      regex: "X509_"
+
+  - id: x509-string
+    desc: x509 string reference
+    conf: 0.6
+    if:
+      type: string
+      word: "x509"
+      case_insensitive: true
+
+  - id: certificate-ref
+    desc: certificate string reference
+    conf: 0.5
+    if:
+      type: string
+      word: "certificate"
+      case_insensitive: true
+
+  - id: pem-begin
+    desc: PEM begin marker
+    conf: 0.7
+    if:
+      type: string
+      substr: "-----BEGIN"
+
+  - id: pem-end
+    desc: PEM end marker
+    conf: 0.7
+    if:
+      type: string
+      substr: "-----END"
+
+  - id: ssl-certs-path
+    desc: System SSL certs path
+    conf: 0.8
+    if:
+      type: string
+      substr: /etc/ssl/certs
+
+  - id: ca-certificates
+    desc: CA certificates reference
+    conf: 0.8
+    if:
+      type: string
+      substr: ca-certificates
+
+composite_rules:
+  # Certificate handling
+  - id: certificate-handling
+    desc: X.509 certificate handling (legitimate)
+    conf: 0.8
+    needs: 2
+    any:
+      - id: ssl-certs-path
+      - id: ca-certificates
+      - id: x509-prefix
+      - id: x509-string
+      - id: certificate-ref
+      - id: pem-begin
+      - id: pem-end

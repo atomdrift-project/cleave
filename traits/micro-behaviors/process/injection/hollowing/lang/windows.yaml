@@ -1,0 +1,35 @@
+# Process Hollowing Indicators
+# Detects common targets and namespaces used for process hollowing
+# MBC: B0007 (Process Injection)
+# ATT&CK: T1055.012 (Process Hollowing)
+
+defaults:
+  platforms: [windows]
+  mbc: "B0007"
+  attack: "T1055.012"
+  for: [pe, dll, powershell, csharp]
+
+traits:
+  - id: hollowing-target-common
+    desc: Reference to common process hollowing targets (common)
+    crit: notable
+    conf: 0.8
+    if:
+      type: raw
+      regex: '(?i)(Aspnet_compiler|cvtres|vbc)\.exe'
+
+  - id: hollowing-target-admin
+    desc: Reference to admin-related process hollowing targets
+    crit: notable
+    conf: 0.8
+    if:
+      type: raw
+      regex: '(?i)(csc|regasm|regsvcs)\.exe'
+
+  - id: hollowing-method-namespace
+    desc: Potential process hollowing namespace
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: raw
+      regex: '(?i)ProcessHollowing'

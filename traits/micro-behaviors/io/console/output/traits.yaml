@@ -1,0 +1,81 @@
+# Console I/O Operations
+# Console input/output and handle manipulation
+
+defaults:
+  for: ["pe", "dll"]
+  platforms: ["windows"]
+
+traits:
+  # === Standard Handle Management ===
+  - id: get-std-handle
+    desc: Get standard I/O handle
+    crit: baseline
+    conf: 0.90
+    if:
+      type: symbol
+      exact: "GetStdHandle"
+
+  - id: set-std-handle
+    desc: Set standard I/O handle
+    crit: baseline
+    conf: 0.90
+    if:
+      type: symbol
+      exact: "SetStdHandle"
+
+  - id: get-console-mode
+    desc: Get console input/output mode
+    crit: baseline
+    conf: 0.90
+    if:
+      type: symbol
+      exact: "GetConsoleMode"
+
+  - id: get-console-output-cp
+    desc: Get console output code page
+    crit: baseline
+    conf: 0.90
+    if:
+      type: symbol
+      exact: "GetConsoleOutputCP"
+
+  # === File I/O via Handles ===
+  - id: write-file
+    desc: Write data to file handle
+    crit: notable
+    conf: 0.90
+    if:
+      type: symbol
+      exact: "WriteFile"
+
+  - id: read-file
+    desc: Read data from file handle
+    crit: notable
+    conf: 0.90
+    if:
+      type: symbol
+      exact: "ReadFile"
+
+  - id: flush-file-buffers
+    desc: Flush file buffer to disk
+    crit: baseline
+    conf: 0.90
+    if:
+      type: symbol
+      exact: "FlushFileBuffers"
+
+  - id: set-file-pointer-ex
+    desc: Set file position extended
+    crit: baseline
+    conf: 0.90
+    if:
+      type: symbol
+      exact: "SetFilePointerEx"
+
+  - id: get-file-type
+    desc: Get file handle type
+    crit: baseline
+    conf: 0.90
+    if:
+      type: symbol
+      exact: "GetFileType"

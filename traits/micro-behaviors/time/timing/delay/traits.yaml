@@ -1,0 +1,58 @@
+# Timing Operations
+# System timing and delay functions
+
+defaults:
+  for: ["pe", "dll"]
+  platforms: ["windows"]
+
+traits:
+  # === Sleep/Delay ===
+  - id: sleep
+    desc: Delay execution
+    crit: baseline
+    conf: 0.70
+    if:
+      type: symbol
+      exact: "Sleep"
+
+  # === Timing Queries ===
+  - id: get-tick-count
+    desc: Query system uptime in milliseconds
+    crit: baseline
+    conf: 0.70
+    if:
+      type: symbol
+      exact: "GetTickCount"
+
+  - id: get-tick-count64
+    desc: Query system uptime 64-bit
+    crit: baseline
+    conf: 0.70
+    if:
+      type: symbol
+      exact: "GetTickCount64"
+
+  - id: query-performance-counter
+    desc: Query high-resolution performance counter
+    crit: notable
+    conf: 0.75
+    if:
+      type: symbol
+      exact: "QueryPerformanceCounter"
+
+  # === System Time ===
+  - id: get-system-time
+    desc: Get current system time
+    crit: baseline
+    conf: 0.70
+    if:
+      type: symbol
+      exact: "GetSystemTime"
+
+  - id: get-local-time
+    desc: Get current local time
+    crit: baseline
+    conf: 0.70
+    if:
+      type: symbol
+      exact: "GetLocalTime"

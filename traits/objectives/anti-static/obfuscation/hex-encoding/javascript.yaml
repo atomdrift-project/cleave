@@ -1,0 +1,160 @@
+# Hexadecimal Encoding Detection - JavaScript
+# Detects various hexadecimal encoding and obfuscation patterns
+# MBC: B0032 (Obfuscated Files or Information)
+# ATT&CK: T1027
+
+traits:
+  # Hexadecimal string literals with high frequency
+  - id: frequent-hex-literals
+    desc: Frequent hexadecimal string literals
+    crit: notable
+    conf: 0.75
+    mbc: "B0032"
+    attack: "T1027"
+    for: [javascript, typescript]
+    if:
+      type: string
+      regex: "0x[0-9a-fA-F]{4,}"
+      count_min: 5
+      per_kb_min: 0.2
+
+  # Hexadecimal array access patterns
+  - id: hex-array-access
+    desc: Hexadecimal array indexing
+    crit: suspicious
+    conf: 0.85
+    mbc: "B0032"
+    attack: "T1027"
+    for: [javascript, typescript]
+    if:
+      type: raw
+      regex: "\\w+\\[\\s*0x[0-9a-fA-F]{2,}\\s*\\]"
+      count_min: 5
+      per_kb_min: 0.3
+
+  # Hexadecimal arithmetic in string operations
+  - id: hex-string-arithmetic
+    desc: Hex arithmetic in string operations
+    crit: notable
+    conf: 0.78
+    mbc: "B0032"
+    attack: "T1027"
+    for: [javascript, typescript]
+    if:
+      type: raw
+      regex: "0x[0-9a-fA-F]+\\s*[\\+\\-\\*\\/]"
+      count_min: 3
+
+  # Hexadecimal character codes in fromCharCode
+  - id: fromcharcode-hex
+    desc: Hexadecimal codes in fromCharCode
+    crit: suspicious
+    conf: 0.9
+    mbc: "B0032"
+    attack: "T1027"
+    for: [javascript, typescript]
+    if:
+      type: raw
+      regex: "fromCharCode\\s*\\(\\s*0x[0-9a-fA-F]+"
+      count_min: 3
+      per_kb_min: 0.2
+
+  # Buffer hex encoding patterns
+  - id: buffer-hex-encoding
+    desc: Buffer-based hex encoding
+    crit: notable
+    conf: 0.8
+    mbc: "B0032"
+    attack: "T1027"
+    for: [javascript, typescript]
+    if:
+      type: raw
+      regex: "Buffer\\.from\\s*\\(\\s*['\"][0-9a-fA-F]+['\"]\\s*,\\s*['\"]hex['\"]"
+      count_min: 2
+
+  # Hexadecimal concatenation patterns
+  - id: hex-concatenation
+    desc: Hexadecimal string concatenation
+    crit: notable
+    conf: 0.77
+    mbc: "B0032"
+    attack: "T1027"
+    for: [javascript, typescript]
+    if:
+      type: raw
+      regex: "\\+\\s*0x[0-9a-fA-F]{4,}"
+      count_min: 3
+
+  # Mixed hex and decimal operations
+  - id: mixed-hex-decimal
+    desc: Mixed hexadecimal and decimal operations
+    crit: notable
+    conf: 0.72
+    mbc: "B0032"
+    attack: "T1027"
+    for: [javascript, typescript]
+    if:
+      type: raw
+      regex: "\\d+\\s*[\\+\\-\\*\\/]\\s*0x[0-9a-fA-F]+"
+      count_min: 2
+
+  # Hexadecimal in conditional statements
+  - id: hex-conditionals
+    desc: Hexadecimal values in conditionals
+    crit: suspicious
+    conf: 0.82
+    mbc: "B0032"
+    attack: "T1027"
+    for: [javascript, typescript]
+    if:
+      type: raw
+      regex: "if\\s*\\([^)]{0,120}0x[0-9a-fA-F]+[^)]{0,120}\\)"
+      count_min: 2
+
+composite_rules:
+  # Advanced hex obfuscation composite
+  - id: advanced-hex-obfuscation
+    desc: Advanced hexadecimal obfuscation pattern
+    crit: suspicious
+    conf: 0.92
+    mbc: "B0032"
+    attack: "T1027"
+    for: [javascript, typescript]
+    needs: 2
+    any:
+      - id: objectives/anti-static/obfuscation/strings/encoding::js-dense-hex-escapes
+      - id: frequent-hex-literals
+      - id: hex-array-access
+      - id: fromcharcode-hex
+    all:
+      - id: hex-concatenation
+
+  # Hex-based string decoding
+  - id: hex-string-decoding
+    desc: Hexadecimal string decoding routine
+    crit: hostile
+    conf: 0.95
+    mbc: "B0032"
+    attack: "T1027.002"
+    for: [javascript, typescript]
+    all:
+      - id: objectives/anti-static/obfuscation/strings/encoding::js-dense-hex-escapes
+      - id: fromcharcode-hex
+    any:
+      - id: hex-array-access
+      - id: buffer-hex-encoding
+
+  # Hexadecimal control flow obfuscation
+  - id: hex-control-flow-obfuscation
+    desc: Hexadecimal control flow obfuscation
+    crit: suspicious
+    conf: 0.87
+    mbc: "B0032"
+    attack: "T1027"
+    for: [javascript, typescript]
+    all:
+      - id: hex-conditionals
+    any:
+      - id: mixed-hex-decimal
+      - id: hex-string-arithmetic
+      - id: frequent-hex-literals

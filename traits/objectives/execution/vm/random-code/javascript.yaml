@@ -1,0 +1,78 @@
+defaults:
+  for: [javascript]
+traits:
+  - id: math-random-call
+    desc: Math.random invocation
+    crit: notable
+    conf: 1.0
+    if:
+      type: ast
+      language: javascript
+      query: |
+        (call_expression
+          function: (member_expression
+            object: (identifier) @math
+            property: (property_identifier) @random
+            (#eq? @math "Math")
+            (#eq? @random "random")
+          )
+        )
+
+  - id: dynamic-code-exec
+    desc: Dynamic code execution call
+    crit: suspicious
+    conf: 1.0
+    attack: T1027
+    mbc: B0032
+    if:
+      type: raw
+      regex: '\bnew Function\b'
+
+  - id: math-random-index
+    desc: Math.random used for indexing (probabilistic character selection)
+    crit: notable
+    conf: 1.0
+    if:
+      type: ast
+      language: javascript
+      query: |
+        (subscript_expression
+          index: (call_expression
+            function: (member_expression
+              object: (identifier) @math
+              property: (property_identifier) @floor
+              (#eq? @math "Math")
+              (#eq? @floor "floor")
+            )
+            arguments: (arguments
+              (binary_expression
+                left: (call_expression
+                  function: (member_expression
+                    object: (identifier) @math2
+                    property: (property_identifier) @random
+                    (#eq? @math2 "Math")
+                    (#eq? @random "random")
+                  )
+                )
+              )
+            )
+          )
+        )
+
+composite_rules:
+  - id: random-code-generation
+    desc: Detects random code generation via Math.random
+    crit: suspicious
+    conf: 1.0
+    attack: T1027
+    mbc: B0032
+    all:
+      - id: math-random-call
+      - id: dynamic-code-exec
+    downgrade:
+      any:
+        - id: metadata/library/jquery::domain
+        - id: metadata/library/jquery::version-string
+        - id: metadata/library/jquery::copyright
+        - id: metadata/library/jquery::fn-extend
+        - id: metadata/library/d3::d3-detection

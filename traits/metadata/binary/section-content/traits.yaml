@@ -1,0 +1,105 @@
+# Section-specific content analysis
+#
+# These traits detect suspicious patterns within specific binary sections.
+# Using section constraints allows precise detection of anomalies like:
+# - Suspicious strings in code sections
+# - Executable patterns in data sections
+# - Obfuscated content in specific locations
+
+traits:
+  # Suspicious patterns in data sections
+  - id: executable-pattern-in-data
+    desc: x86 function prologue in data section
+    crit: suspicious
+    conf: 0.7
+    for: [elf, pe]
+    if:
+      type: hex
+      pattern: "55 89 E5" # push ebp; mov ebp, esp
+      section: data
+      count_min: 3
+
+  - id: nop-sled-in-data
+    desc: NOP sled pattern in data section
+    crit: suspicious
+    conf: 0.85
+    for: [elf, pe]
+    size_max: 1000000
+    if:
+      type: hex
+      pattern: "90 90 90 90 90 90 90 90" # 8 NOPs
+      section: data
+
+  - id: shellcode-prologue-data
+    desc: Common shellcode start in data section
+    crit: suspicious
+    conf: 0.8
+    for: [elf, pe]
+    if:
+      type: hex
+      pattern: "31 C0 50 68" # xor eax,eax; push eax; push ...
+      section: data
+
+  # BSS section analysis
+  - id: large-bss-uninitialized
+    desc: Large uninitialized data section
+    crit: baseline
+    conf: 0.9
+    for: [elf, macho]
+    if:
+      type: section_ratio
+      section: ".bss"
+      min: 0.3
+
+  # Obfuscation in specific sections
+  - id: high-entropy-rodata
+    desc: High entropy content in rodata
+    crit: notable
+    conf: 0.75
+    for: [elf, macho, pe]
+    if:
+      type: section
+      exact: ".rodata"
+      entropy_min: 7.0
+
+  - id: base64-in-rodata
+    desc: Base64 data in rodata
+    crit: baseline
+    conf: 0.8
+    for: [elf, macho, pe]
+    if:
+      id: objectives/anti-static/obfuscation/encoding/base64::dense-base64-encoding
+      section: rodata
+      count_min: 10
+
+  # Init/fini sections (persistence/hooks)
+  - id: init-array-hooks
+    desc: Content in initialization array
+    crit: baseline
+    conf: 0.95
+    for: [elf]
+    if:
+      type: section_ratio
+      section: ".init_array"
+      min: 0.0001
+
+  - id: fini-array-hooks
+    desc: Content in finalization array
+    crit: notable
+    conf: 0.8
+    for: [elf]
+    if:
+      type: section_ratio
+      section: ".fini_array"
+      min: 0.0001
+
+  # Dynamic section analysis
+  - id: rpath-in-dynamic
+    desc: RPATH/RUNPATH in dynamic section
+    crit: baseline
+    conf: 0.9
+    for: [elf]
+    if:
+      type: string
+      regex: "(RPATH|RUNPATH)"
+      section: ".dynamic"

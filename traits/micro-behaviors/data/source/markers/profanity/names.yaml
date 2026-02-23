@@ -1,0 +1,15 @@
+# Suspicious Identifier Names
+# Identifiers that are highly unusual or indicative of malicious intent
+
+defaults:
+  platforms: [javascript]
+
+traits:
+  - id: func-fuckit
+    desc: Function named 'fuckit'
+    crit: notable
+    conf: 1.0
+    for: [javascript]
+    if:
+      type: raw
+      regex: 'function\s+fuckit\s*\('

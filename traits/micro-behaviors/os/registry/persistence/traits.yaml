@@ -1,0 +1,61 @@
+# Windows Registry Persistence Patterns
+# Detects common registry keys used for persistence
+
+defaults:
+  for: [all]
+  crit: notable
+  conf: 0.7
+  platforms: [windows]
+
+traits:
+  - id: run-key
+    desc: Registry Run key
+    if:
+      type: string
+      regex: '(?i)\\Run\b'
+
+  - id: run-once-key
+    desc: Registry RunOnce key
+    if:
+      type: string
+      regex: '(?i)\\RunOnce\b'
+
+  - id: run-service-key
+    desc: Registry RunServices key
+    if:
+      type: string
+      regex: '(?i)\\RunServices\b'
+
+  # === PowerShell registry atomic indicators ===
+  - id: set-itemproperty-run
+    desc: Set-ItemProperty Run
+    if:
+      type: string
+      regex: "Set-ItemProperty.{0,50}Run"
+
+  - id: new-itemproperty-run
+    desc: New-ItemProperty Run
+    if:
+      type: string
+      regex: "New-ItemProperty.{0,50}Run"
+
+  - id: reg-add-run
+    desc: reg add Run
+    if:
+      type: string
+      regex: "reg\\s+add.{0,50}Run"
+
+composite_rules:
+  - id: common-persistence-keys
+    desc: Common Windows registry persistence keys
+    any:
+      - id: run-key
+      - id: run-once-key
+      - id: run-service-key
+
+  - id: run-key-write-ps
+    desc: "Modifies Run key via PowerShell"
+    any:
+      - id: set-itemproperty-run
+      - id: new-itemproperty-run
+      - id: reg-add-run

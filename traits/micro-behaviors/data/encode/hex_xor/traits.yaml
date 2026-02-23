@@ -1,0 +1,25 @@
+defaults:
+  for: [all]
+
+traits:
+  - id: fragmented-hex-xor-decoder
+    desc: Fragmented hex XOR decoder pattern
+    crit: suspicious
+    conf: 0.8
+    if:
+      type: string
+      regex: '0x[0-9a-fA-F]{2}\s*\^'
+
+  - id: js-obfuscated-fragment-xor-decode
+    desc: Obfuscated fragment XOR decode in JS
+    crit: suspicious
+    conf: 0.8
+    if:
+      type: ast
+      language: javascript
+      query: |
+        (binary_expression
+          operator: "^"
+          right: (number) @hex
+        )
+        (#match? @hex "^0x")

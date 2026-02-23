@@ -1,0 +1,320 @@
+# Network Tunneling Tool Detection
+# Detects port forwarding and tunneling tools used in APT attacks
+# ATT&CK: T1572 (Protocol Tunneling)
+
+defaults:
+  for: [all]
+  attack: "T1572"
+
+traits:
+  # === Earthworm (EW) atomic indicators ===
+  - id: ew-ssocksd
+    desc: Earthworm ssocksd component
+    crit: notable
+    conf: 0.7
+    if:
+      type: string
+      substr: ssocksd
+
+  - id: ew-rcsocks
+    desc: Earthworm rcsocks component
+    crit: notable
+    conf: 0.7
+    if:
+      type: string
+      substr: rcsocks
+
+  - id: ew-rssocks
+    desc: Earthworm rssocks component
+    crit: notable
+    conf: 0.7
+    if:
+      type: string
+      substr: rssocks
+
+  - id: ew-lcx-listen
+    desc: Earthworm lcx_listen function
+    crit: notable
+    conf: 0.8
+    if:
+      type: string
+      substr: lcx_listen
+
+  - id: ew-lcx-tran
+    desc: Earthworm lcx_tran function
+    crit: notable
+    conf: 0.8
+    if:
+      type: string
+      substr: lcx_tran
+
+  - id: ew-lcx-slave
+    desc: Earthworm lcx_slave function
+    crit: notable
+    conf: 0.8
+    if:
+      type: string
+      substr: lcx_slave
+
+  - id: ew-rootkiter
+    desc: Earthworm author domain
+    crit: suspicious
+    conf: 0.95
+    if:
+      type: string
+      substr: rootkiter.com
+
+  # === LCX port forwarder atomic indicators ===
+  # NOTE: Individual flags like -tran, -slave, -listen are too generic.
+  # Many tools use these flags (flex uses -tran for transitions, etc.)
+  # Only match when combined with LCX-specific function names.
+  - id: lcx-tran-func
+    desc: LCX lcx_tran with -tran flag
+    crit: notable
+    conf: 0.7
+    if:
+      type: string
+      # Require function name context, not just the flag
+      regex: "(lcx_tran|-tran.{0,20}lcx|lcx.{0,20}-tran)"
+
+  - id: lcx-slave-func
+    desc: LCX lcx_slave with -slave flag
+    crit: notable
+    conf: 0.7
+    if:
+      type: string
+      regex: "(lcx_slave|-slave.{0,20}lcx|lcx.{0,20}-slave)"
+
+  - id: lcx-listen-func
+    desc: LCX lcx_listen with -listen flag
+    crit: notable
+    conf: 0.7
+    if:
+      type: string
+      regex: "(lcx_listen|-listen.{0,20}lcx|lcx.{0,20}-listen)"
+
+  - id: listen-port
+    desc: Port forwarding listenport config
+    crit: notable
+    conf: 0.5
+    if:
+      type: string
+      substr: listenport
+      case_insensitive: true
+
+  - id: conn-port
+    desc: Port forwarding connport config
+    crit: notable
+    conf: 0.5
+    if:
+      type: string
+      substr: connport
+      case_insensitive: true
+
+  - id: local-port
+    desc: Port forwarding localport config
+    crit: notable
+    conf: 0.5
+    if:
+      type: string
+      substr: localport
+      case_insensitive: true
+
+  - id: remote-host
+    desc: Port forwarding remotehost config
+    crit: notable
+    conf: 0.5
+    if:
+      type: string
+      substr: remotehost
+      case_insensitive: true
+
+  # === reGeorg/Tunna atomic indicators ===
+  - id: regeorg-name
+    desc: reGeorg tool name
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: string
+      substr: reGeorg
+      case_insensitive: true
+
+  - id: tunna-name
+    desc: Tunna tool name
+    crit: notable
+    conf: 0.8
+    if:
+      type: string
+      # Case-sensitive to avoid false positives - the tool is specifically "Tunna"
+      substr: Tunna
+
+  - id: neo-regeorg
+    desc: neo-reGeorg tool name
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: string
+      substr: neo-reGeorg
+
+  - id: xcmd-header
+    desc: Web tunnel X-CMD header
+    crit: suspicious
+    conf: 0.85
+    if:
+      type: string
+      substr: X-CMD
+
+  # === Chisel atomic indicators ===
+  # Removed chisel-import duplicate - use well-known/tools/dual-use/chisel::repo
+
+  - id: chisel-client
+    desc: Chisel client mode
+    crit: notable
+    conf: 0.7
+    if:
+      type: string
+      substr: "chisel client"
+
+  - id: chisel-server
+    desc: Chisel server mode
+    crit: notable
+    conf: 0.7
+    if:
+      type: string
+      substr: "chisel server"
+
+  # === Ngrok atomic indicators ===
+  - id: ngrok-name
+    desc: Ngrok tool name
+    crit: notable
+    conf: 0.6
+    if:
+      type: string
+      substr: ngrok
+      case_insensitive: true
+
+  - id: ngrok-io
+    desc: Ngrok tunnel domain (ngrok.io)
+    crit: suspicious
+    conf: 0.85
+    if:
+      type: string
+      substr: ngrok.io
+
+  - id: ngrok-com
+    desc: Ngrok service domain
+    crit: notable
+    conf: 0.7
+    if:
+      type: string
+      substr: ngrok.com
+
+  - id: socks-default-port
+    desc: SOCKS default port 1080
+    crit: notable
+    conf: 0.4
+    if:
+      type: string
+      substr: ":1080"
+
+  - id: socks-server-ref
+    desc: SOCKS server terminology
+    crit: notable
+    conf: 0.6
+    if:
+      type: string
+      substr: "socks server"
+      case_insensitive: true
+
+composite_rules:
+  # Earthworm (EW) tunneling tool (3 of ew* or rootkiter)
+  - id: earthworm
+    desc: Earthworm tunneling tool (APT lateral
+    crit: suspicious
+    conf: 0.95
+    any:
+      - id: ew-rootkiter
+      - id: ew-ssocksd
+      - id: ew-rcsocks
+      - id: ew-rssocks
+      - id: ew-lcx-listen
+      - id: ew-lcx-tran
+      - id: ew-lcx-slave
+
+    needs: 3
+  # LCX port forwarder
+  - id: lcx
+    desc: LCX-style port forwarding tool
+    crit: suspicious
+    conf: 0.85
+    needs: 2
+    any:
+      - id: ew-lcx-listen
+      - id: ew-lcx-tran
+      - id: ew-lcx-slave
+      - id: lcx-tran-func
+      - id: lcx-slave-func
+      - id: lcx-listen-func
+
+  # LCX via port config (listen/local + conn/remote)
+  # NOTE: Single terms like "remotehost" are too common in shell environments.
+  # Require at least 2 indicators to reduce false positives on legitimate programs.
+  - id: lcx-config
+    desc: LCX-style port forwarding configuration
+    crit: suspicious
+    conf: 0.8
+    any:
+      - id: listen-port
+      - id: local-port
+      - id: conn-port
+      - id: remote-host
+    needs: 2
+  # reGeorg/Tunna web tunnel
+  - id: regeorg
+    desc: reGeorg/Tunna web tunneling
+    crit: notable
+    conf: 0.9
+    any:
+      - id: regeorg-name
+      - id: tunna-name
+      - id: neo-regeorg
+      - id: xcmd-header
+
+  # Chisel tunneling
+  - id: chisel
+    desc: Chisel HTTP tunneling tool
+    crit: suspicious
+    conf: 0.9
+    any:
+      - id: well-known/tools/dual-use/chisel::repo
+      - id: chisel-client
+      - id: chisel-server
+
+  # Ngrok tunneling
+  - id: ngrok
+    desc: Ngrok tunneling service
+    crit: notable
+    conf: 0.85
+    any:
+      - id: ngrok-name
+      - id: ngrok-io
+      - id: ngrok-com
+
+  # Generic SOCKS proxy behavior (2 of them)
+  - id: socks-server
+    desc: SOCKS proxy server implementation
+    crit: suspicious
+    conf: 0.8
+    size_max: 500000
+    needs: 2
+    any:
+      - id: micro-behaviors/communications/proxy/socks::socks4-proto
+      - id: micro-behaviors/communications/proxy/socks::socks5-proto
+      - id: socks-default-port
+      - id: socks-server-ref
+    none:
+      - id: metadata/signed/platform::apple
+      # Exclude curl/libcurl which uses SOCKS as a CLIENT, not server
+      - id: micro-behaviors/communications/download/curl::curl-easy-init
+      # Exclude HTTP client libraries (urllib, requests, etc.) that support SOCKS proxying
+      - id: micro-behaviors/communications/http/request::http-client

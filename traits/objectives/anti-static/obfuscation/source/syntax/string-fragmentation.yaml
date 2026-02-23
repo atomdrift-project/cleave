@@ -1,0 +1,44 @@
+traits:
+- id: js-fragmented-prop-single
+  desc: Computed property access using concatenation (single quotes)
+  crit: notable
+  conf: 0.8
+  for:
+  - javascript
+  if:
+    type: raw
+    regex: '[\w$]+\s*\[\s*''[^'']{0,200}''\s*\+\s*''[^'']{0,200}''\s*\]'
+
+- id: js-fragmented-prop-double
+  desc: Computed property access using concatenation (double quotes)
+  crit: notable
+  conf: 0.8
+  for:
+  - javascript
+  if:
+    type: raw
+    regex: '[\w$]+\s*\[\s*"[^"]{0,200}"\s*\+\s*"[^"]{0,200}"\s*\]'
+
+- id: js-fragmented-prop-backtick
+  desc: Computed property access using concatenation (backticks)
+  crit: notable
+  conf: 0.8
+  for:
+  - javascript
+  if:
+    type: raw
+    regex: '[\w$]+\s*\[\s*`[^`]{0,200}`\s*\+\s*`[^`]{0,200}`\s*\]'
+
+composite_rules:
+- id: js-fragmented-property-access
+  desc: Computed property access using concatenation (obfuscation)
+  crit: suspicious
+  conf: 0.8
+  for:
+  - javascript
+  attack: T1027
+  mbc: B0032
+  any:
+  - id: js-fragmented-prop-single
+  - id: js-fragmented-prop-double
+  - id: js-fragmented-prop-backtick

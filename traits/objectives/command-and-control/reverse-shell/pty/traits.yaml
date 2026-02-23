@@ -1,0 +1,339 @@
+---
+# PTY-based Reverse Shell Patterns
+# ATT&CK: T1059 (Command and Scripting Interpreter)
+# Detects interactive shell spawning via PTY
+
+traits:
+  # === Python PTY micro-behaviors ===
+  - id: python-socket
+    desc: socket module reference
+    crit: notable
+    conf: 0.4
+    for: [python]
+    if:
+      type: string
+      substr: "socket"
+
+  # === Python subprocess micro-behaviors ===
+  - id: socket-connect
+    desc: .connect( socket method
+    crit: notable
+    conf: 0.6
+    for: [python]
+    if:
+      type: raw
+      regex: "\\.connect\\s*\\("
+
+  - id: py-stdin-pipe
+    desc: stdin= pipe argument (Python)
+    crit: notable
+    conf: 0.6
+    for: [python]
+    if:
+      type: raw
+      regex: "stdin\\s*="
+
+  - id: py-stdout-pipe
+    desc: stdout= pipe argument (Python)
+    crit: notable
+    conf: 0.4
+    for: [python]
+    if:
+      type: raw
+      regex: "stdout\\s*="
+
+  - id: py-stderr-pipe
+    desc: stderr= pipe argument (Python)
+    crit: notable
+    conf: 0.4
+    for: [python]
+    if:
+      type: raw
+      regex: "stderr\\s*="
+
+  # === Node.js PTY micro-behaviors ===
+  - id: pty-node-module-ref
+    desc: node-pty module reference
+    crit: notable
+    conf: 0.7
+    attack: "T1059.007"
+    for: [javascript, typescript]
+    if:
+      type: string
+      substr: "node-pty"
+
+  - id: pty-spawn-node
+    desc: pty.spawn call (Node.js)
+    crit: notable
+    conf: 0.7
+    attack: "T1059.007"
+    for: [javascript, typescript]
+    if:
+      type: string
+      substr: "pty.spawn"
+
+  - id: pty-js-require
+    desc: require('pty.js') call
+    crit: notable
+    conf: 0.7
+    attack: "T1059.007"
+    for: [javascript, typescript]
+    if:
+      type: string
+      substr: "require('pty.js')"
+
+  - id: net-socket-node
+    desc: net.Socket reference
+    crit: notable
+    conf: 0.4
+    for: [javascript, typescript]
+    if:
+      type: string
+      substr: "new net.Socket"
+
+  - id: socket-connect-node
+    desc: socket.connect call
+    crit: notable
+    conf: 0.6
+    for: [javascript, typescript]
+    if:
+      type: string
+      substr: "socket.connect"
+
+  # STDIO traits moved to micro-behaviors/process/fd/stdio/
+
+  - id: dot-pipe
+    desc: .pipe( method call
+    crit: notable
+    conf: 0.4
+    for: [python, javascript, typescript]
+    if:
+      type: string
+      substr: ".pipe("
+
+  - id: pipe-constant
+    desc: PIPE constant reference
+    crit: notable
+    conf: 0.4
+    for: [python]
+    if:
+      type: raw
+      regex: "\\.PIPE\\b"
+
+  # === Socat atomic indicators ===
+  - id: socat-exec-sh
+    desc: socat EXEC shell pattern
+    crit: notable
+    conf: 0.8
+    for: [shell, package.json]
+    if:
+      type: string
+      regex: 'socat\s+.{0,50}EXEC.{0,20}sh'
+
+  - id: socat-tcp-exec
+    desc: socat TCP EXEC pattern
+    crit: notable
+    conf: 0.8
+    for: [shell, package.json]
+    if:
+      type: string
+      regex: 'socat\s+.{0,50}TCP.{0,30}EXEC'
+
+  - id: socat-pty
+    desc: socat PTY pattern
+    crit: notable
+    conf: 0.8
+    for: [shell, package.json]
+    if:
+      type: string
+      regex: 'socat\s+.{0,50}PTY'
+
+  # === Telnet atomic indicators ===
+  - id: telnet-pipe
+    desc: telnet piped reverse shell pattern
+    crit: notable
+    conf: 0.8
+    for: [shell, package.json]
+    if:
+      type: string
+      regex: 'telnet\s+\S+\s+\d+\s*\|.{0,50}\|\s*telnet'
+
+  - id: mknod-telnet
+    desc: mknod telnet reverse shell pattern
+    crit: notable
+    conf: 0.8
+    for: [shell, package.json]
+    if:
+      type: string
+      regex: "mknod.{0,30}telnet"
+
+composite_rules:
+  # Python PTY composite
+  - id: python-pty-module
+    desc: Python pty module usage
+    crit: notable
+    conf: 0.7
+    for: [python]
+    any:
+      - id: objectives/execution/tty/pty::pty-spawn
+      - id: objectives/execution/tty/pty::import-pty
+
+  # Shell path composite
+  - id: py-shell-path
+    desc: Shell executable path (Python)
+    crit: notable
+    conf: 0.5
+    any:
+      - id: micro-behaviors/process/create/shell::bin-sh
+      - id: micro-behaviors/process/create/shell::bin-bash
+
+  # Python PTY shell (migrated from YARA)
+  - id: python-pty
+    desc: Python PTY spawn reverse shell
+    crit: suspicious
+    conf: 0.95
+    attack: "T1059.006"
+    for: [python]
+    all:
+      - id: python-pty-module
+    any:
+      - id: py-shell-path
+      - id: python-socket
+
+  # Python pipe composite
+  - id: python-pipe
+    desc: Python subprocess pipe arguments
+    crit: notable
+    conf: 0.6
+    for: [python]
+    any:
+      - id: py-stdin-pipe
+      - id: py-stdout-pipe
+      - id: py-stderr-pipe
+
+  # Python socket shell (migrated from YARA)
+  - id: python-socket-shell
+    desc: Python socket-based reverse shell
+    crit: suspicious
+    conf: 0.95
+    attack: "T1059.006"
+    for: [python]
+    all:
+      - id: micro-behaviors/communications/socket/connect::socket-socket-call
+      - id: socket-connect
+      - id: objectives/execution/fileless/memory::subprocess-mod
+      - id: python-pipe
+
+  # Node.js PTY composite
+  - id: node-pty-module
+    desc: Node.js PTY module usage
+    crit: notable
+    conf: 0.7
+    for: [javascript, typescript]
+    any:
+      - id: pty-node-module-ref
+      - id: pty-spawn-node
+      - id: pty-js-require
+
+  # Node.js socket composite
+  - id: node-socket
+    desc: Node.js socket connection
+    crit: notable
+    conf: 0.6
+    for: [javascript, typescript]
+    any:
+      - id: net-socket-node
+      - id: socket-connect-node
+      - id: micro-behaviors/communications/http/websocket::websocket-class
+
+  # Node.js PTY shell (migrated from YARA)
+  - id: node-pty
+    desc: Node.js PTY-based reverse shell
+    crit: suspicious
+    conf: 0.95
+    attack: "T1059.007"
+    for: [javascript, typescript]
+    all:
+      - id: node-pty-module
+      - id: node-socket
+
+  # Pipe methods composite
+  - id: pipe-methods
+    desc: Pipe methods
+    crit: notable
+    conf: 0.5
+    any:
+      - id: dot-pipe
+      - id: pipe-constant
+
+  # Socket connect composite
+  - id: socket-connection
+    desc: Socket connection pattern
+    crit: notable
+    conf: 0.6
+    any:
+      - id: python-socket
+      - id: socket-connect
+
+  # STDIO socket piping (migrated from YARA)
+  - id: stdio-socket
+    desc: Stdin/stdout piped to socket (reverse
+    crit: suspicious
+    conf: 0.9
+    attack: "T1059"
+    for: [python, javascript, typescript]
+    all:
+      - id: micro-behaviors/process/fd/stdio::stdio-refs
+      - id: pipe-methods
+      - id: socket-connection
+    downgrade:
+      any:
+        - id: metadata/quality/testing::unittest-module
+
+  # Interactive shell markers (migrated from YARA)
+  # NOTE: TTY manipulation alone is legitimate (e.g., reading user input)
+  # Only flag as suspicious when combined with network/socket operations
+  - id: interactive-markers
+    desc: Interactive shell session markers
+    crit: notable
+    conf: 0.7
+    attack: "T1059"
+    for: [python, javascript, shell]
+    needs: 2
+    any:
+      - id: micro-behaviors/process/terminal/tty/
+      - id: micro-behaviors/fs/path/device/terminal::dev-tty
+
+  # Socat composite
+  - id: socat
+    desc: Socat reverse shell pattern
+    crit: suspicious
+    conf: 0.95
+    attack: "T1059.004"
+    for: [shell, package.json]
+    any:
+      - id: socat-exec-sh
+      - id: socat-tcp-exec
+      - id: socat-pty
+
+  # Telnet composite
+  - id: telnet
+    desc: Telnet-based reverse shell
+    crit: suspicious
+    conf: 0.95
+    attack: "T1059.004"
+    for: [shell, package.json]
+    any:
+      - id: telnet-pipe
+      - id: mknod-telnet
+
+  # Python reverse shell with hardcoded C2
+  - id: python-reverse-shell-c2
+    desc: Python reverse shell with hardcoded C2 IP
+    crit: hostile
+    conf: 0.99
+    attack: "T1059.006"
+    for: [python]
+    all:
+      - id: python-socket-shell
+      - id: objectives/command-and-control/infrastructure/ip::hardcoded-ipv4-script

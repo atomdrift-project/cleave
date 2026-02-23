@@ -1,0 +1,63 @@
+# Windows os.startfile Detection
+# Detects malware using Windows os.startfile API for execution
+# ATT&CK: T1106 (Native API), T1059 (Command Execution)
+# MBC: E1059 (Command Execution)
+
+defaults:
+  crit: suspicious
+  attack: "T1106"
+  mbc: "E1059"
+  for: [python]
+
+traits:
+  # === os.startfile Patterns ===
+  - id: os-startfile-call
+    desc: os.startfile execution
+    crit: notable
+    conf: 0.85
+    if:
+      type: string
+      regex: "os\\.startfile|startfile\\("
+
+  - id: startfile-exe
+    desc: startfile with .exe
+    crit: suspicious
+    conf: 0.90
+    if:
+      type: string
+      regex: "startfile.{0,50}\\.exe|startfile.{0,50}main\\.exe"
+
+  - id: startfile-suspicious-path
+    desc: startfile suspicious path
+    crit: suspicious
+    conf: 0.85
+    if:
+      type: string
+      regex: "startfile.{0,50}AppData|startfile.{0,50}Roaming|startfile.{0,50}Startup"
+
+composite_rules:
+  # === os.startfile Malicious Usage ===
+  - id: windows-startfile-exec
+    desc: Windows startfile execution
+    crit: suspicious
+    conf: 0.90
+    attack: "T1106"
+    for: [python]
+    needs: 2
+    any:
+      - id: os-startfile-call
+      - id: startfile-exe
+      - id: startfile-suspicious-path
+
+  - id: startfile-payload-launch
+    desc: Payload launch via startfile
+    crit: suspicious
+    conf: 0.95
+    attack: "T1059"
+    mbc: "E1059"
+    platforms: [windows]
+    needs: 2
+    any:
+      - id: startfile-exe
+      - id: startfile-suspicious-path
+

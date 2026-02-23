@@ -1,0 +1,150 @@
+# HTTP download and execute patterns (Python)
+# MBC: B0024 (Dropper)
+# ATT&CK: T1105 (Ingress Tool Transfer)
+
+defaults:
+  for: [python]
+  mbc: "B0024"
+  attack: "T1105"
+  crit: suspicious
+
+traits:
+  # === Download and execute function patterns ===
+  # Removed py-download-and-execute-func duplicate - use objectives/execution/dropper/http::download-and-execute-func
+
+  - id: def-download
+    desc: Function named download_*
+    crit: notable
+    conf: 0.5
+    if:
+      type: string
+      regex: "def download_\\w+\\("
+
+  - id: def-fetch
+    desc: Function named fetch_*
+    crit: notable
+    conf: 0.5
+    if:
+      type: string
+      regex: "def fetch_\\w+\\("
+
+  - id: stage-keyword
+    desc: stage/phase keyword
+    crit: notable
+    conf: 0.5
+    if:
+      type: string
+      regex: "(?i)stage|phase"
+
+  - id: requests-method
+    desc: requests.get or requests.post
+    crit: notable
+    conf: 0.5
+    if:
+      type: string
+      regex: "requests\\.(get|post)\\("
+
+  - id: popen-call
+    desc: subprocess module call
+    crit: notable
+    conf: 0.5
+    if:
+      id: micro-behaviors/process/create/subprocess::methods
+
+composite_rules:
+  # HTTP library composite
+  - id: python-http-lib
+    desc: Python HTTP library usage
+    crit: notable
+    conf: 0.6
+    any:
+      - id: micro-behaviors/communications/http/request::request
+      - id: micro-behaviors/communications/http/request::request-python
+
+  # Temp directory composite
+  - id: python-tmp-dir
+    desc: Temporary directory access
+    crit: notable
+    conf: 0.5
+    any:
+      - id: micro-behaviors/fs/temp/directory::temp-directory
+      - id: micro-behaviors/fs/temp/directory::directory-python
+
+  # Code or process execution composite
+  - id: python-exec-any
+    desc: Code or process execution
+    crit: notable
+    conf: 0.5
+    any:
+      - id: micro-behaviors/process/create/subprocess
+      - id: micro-behaviors/process/create/shell::python-os-system
+      - id: objectives/execution/interpreter/eval/invoke::exec-call-python
+
+  # C2 endpoint path composite
+  - id: python-endpoint-path
+    desc: "Python HTTP endpoint path"
+    crit: notable
+    conf: 0.65
+    any:
+      - id: micro-behaviors/communications/http/url::payload-path
+      - id: micro-behaviors/communications/http/url::php-collector
+
+  # Original rule - tmp directory dropper
+  - id: tmp-dropper
+    desc: "HTTP download to temp and execute"
+    conf: 0.9
+    all:
+      - id: python-http-lib
+      - id: python-tmp-dir
+      - id: micro-behaviors/fs/chmod/commands::python-os-chmod
+      - id: micro-behaviors/process/create/subprocess
+
+  # Home directory dropper - downloads to hidden dir in home
+  - id: home-dropper
+    desc: "HTTP download to home directory"
+    conf: 0.95
+    crit: suspicious
+    all:
+      - id: python-http-lib
+      - id: micro-behaviors/os/user/lookup::go-home-dir
+      - id: micro-behaviors/fs/write/file::python-open-write-binary
+      - id: python-exec-any
+
+  # Generic download + write + execute (any location)
+  - id: generic-dropper
+    desc: "Download, write, and execute pattern"
+    conf: 0.9
+    all:
+      - id: python-http-lib
+      - id: micro-behaviors/fs/write/file::python-open-write-binary
+      - id: micro-behaviors/process/create/subprocess
+
+  # Multiple download functions composite
+  - id: multi-download-funcs
+    desc: Multiple download function definitions
+    crit: suspicious
+    conf: 0.85
+    all:
+      - id: def-download
+      - id: def-fetch
+
+  # Dropper keyword composite (payload or stage/phase)
+  - id: dropper-keyword
+    desc: Dropper keyword (payload/stage/phase)
+    crit: notable
+    conf: 0.5
+    any:
+      - id: micro-behaviors/data/text/keywords::payload
+      - id: stage-keyword
+
+  # Staged dropper - download function called multiple times
+  - id: staged-dropper
+    desc: "Staged payload dropper"
+    conf: 0.9
+    crit: suspicious
+    all:
+      - id: multi-download-funcs
+      - id: requests-method
+      - id: micro-behaviors/fs/file/write::py-write
+      - id: popen-call
+      - id: dropper-keyword

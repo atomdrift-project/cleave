@@ -1,0 +1,3 @@
+# Memory Protection - Windows
+# virtualprotect: use micro-behaviors/mem/protect/modify::virtual-protect (canonical)
+# ATT&CK: T1055 (Process Injection)

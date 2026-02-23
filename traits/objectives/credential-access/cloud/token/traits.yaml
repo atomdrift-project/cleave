@@ -1,0 +1,191 @@
+# Credential Access - Cloud Provider Credentials
+# ATT&CK: T1552.001 (Unsecured Credentials: Credentials In Files)
+
+defaults:
+  for: [all]
+  attack: "T1552.001"
+  crit: suspicious
+
+traits:
+  # === Atomic: AWS ===
+  - id: aws-config
+    desc: AWS configuration directory
+    crit: notable
+    conf: 0.75
+    # Restrict to scripts/interpreted languages where this path would be accessed programmatically
+    # Binary programs (like syntax highlighters) often contain these patterns for legitimate purposes
+    for: [shell, python, ruby, perl, javascript, typescript]
+    if:
+      type: string
+      exact: ".aws"
+
+  # Removed aws-credentials duplicate - use micro-behaviors/fs/path/sensitive/cloud::aws-credentials
+
+  - id: aws-access-key
+    desc: AWS access key ID pattern
+    conf: 0.85
+    if:
+      type: string
+      regex: "AKIA[0-9A-Z]{16}"
+
+  # === Atomic: GCP ===
+  # gcloud-config removed - use micro-behaviors/fs/path/sensitive/credentials::gcloud-credentials
+
+  - id: gcp-default-credentials
+    desc: GCP application default credentials
+    conf: 0.8
+    if:
+      type: string
+      substr: "application_default_credentials.json"
+
+  # === Atomic: Azure ===
+  - id: azure-config
+    desc: Azure CLI configuration directory
+    conf: 0.75
+    for: [shell, python, ruby, perl, javascript, typescript]
+    if:
+      type: string
+      substr: "/.azure"
+
+  # === Atomic: Environment Files ===
+  - id: dotenv-request
+    desc: HTTP request for .env file
+    conf: 0.85
+    if:
+      type: string
+      substr: "GET /.env"
+
+  # .env file is common in development - only suspicious when reading/fetching it
+  - id: dotenv-file
+    desc: .env file reference
+    crit: notable
+    conf: 0.3
+    for: [javascript, typescript, python, shell]
+    if:
+      type: string
+      regex: "\\/.env\\b|read.{0,30}\\.env|\\.env.{0,30}read"
+
+  # === AWS IMDS (atomic) ===
+  - id: aws-imds-ip
+    desc: AWS metadata service IP
+    crit: notable
+    conf: 0.7
+    attack: "T1552.005"
+    for: [javascript, typescript, python, shell, elf, go]
+    if:
+      type: string
+      substr: "169.254.169.254"
+
+  - id: aws-imds-path
+    desc: AWS instance metadata path
+    crit: notable
+    conf: 0.7
+    attack: "T1552.005"
+    for: [javascript, typescript, python, shell]
+    if:
+      type: string
+      substr: "instance-data/latest/meta-data"
+
+  - id: aws-iam-credential-access-path
+    desc: AWS IAM security credentials path
+    crit: notable
+    conf: 0.7
+    attack: "T1552.005"
+    for: [javascript, typescript, python, shell]
+    if:
+      type: string
+      substr: "iam/security-credentials"
+
+  # === GCP metadata (atomic) ===
+  - id: gcp-metadata-host
+    desc: GCP metadata internal hostname
+    crit: notable
+    conf: 0.7
+    attack: "T1552.005"
+    for: [javascript, typescript, python, shell]
+    if:
+      type: string
+      substr: "metadata.google.internal"
+
+  - id: gcp-compute-metadata
+    desc: GCP compute metadata path
+    crit: notable
+    conf: 0.7
+    attack: "T1552.005"
+    for: [javascript, typescript, python, shell]
+    if:
+      type: string
+      substr: "computeMetadata/v1"
+
+  # === Azure IMDS (atomic) ===
+  - id: azure-metadata-identity
+    desc: Azure metadata identity path
+    crit: notable
+    conf: 0.7
+    attack: "T1552.005"
+    for: [javascript, typescript, python, shell]
+    if:
+      type: string
+      regex: '169\.254\.169\.254.{0,50}metadata/identity'
+
+  - id: azure-metadata-header
+    desc: Azure Metadata header
+    crit: notable
+    conf: 0.7
+    attack: "T1552.005"
+    for: [javascript, typescript, python, shell]
+    if:
+      type: string
+      regex: 'Metadata:\s*true'
+
+composite_rules:
+  # AWS IMDS access
+  - id: aws-imds-access
+    desc: AWS metadata service access (credential
+    crit: suspicious
+    conf: 0.95
+    attack: "T1552.005"
+    for: [javascript, typescript, python, shell]
+    any:
+      - id: aws-imds-ip
+      - id: aws-imds-path
+      - id: aws-iam-credential-access-path
+
+  # GCP metadata access
+  - id: gcp-metadata-access
+    desc: GCP metadata service access (credential
+    crit: notable
+    conf: 0.95
+    attack: "T1552.005"
+    for: [javascript, typescript, python, shell]
+    any:
+      - id: gcp-metadata-host
+      - id: gcp-compute-metadata
+
+  # Azure IMDS access
+  - id: azure-imds-access
+    desc: Azure metadata service access (credential
+    crit: suspicious
+    conf: 0.95
+    attack: "T1552.005"
+    for: [javascript, typescript, python, shell]
+    any:
+      - id: azure-metadata-identity
+      - id: azure-metadata-header
+
+  - id: aws-credential-theft
+    desc: AWS credential theft
+    conf: 0.85
+    any:
+      - id: micro-behaviors/fs/path/sensitive/cloud::aws-credentials
+      - id: aws-access-key
+    all:
+      - id: aws-config
+
+  - id: gcp-credential-theft
+    desc: GCP credential theft
+    conf: 0.85
+    all:
+      - id: micro-behaviors/fs/path/sensitive/credentials::gcloud-credentials
+    any:
+      - id: gcp-default-credentials

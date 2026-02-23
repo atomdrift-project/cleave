@@ -1,0 +1,39 @@
+traits:
+  - id: js-immediate-array-indexing
+    desc: Immediate indexing of an array literal (common
+    crit: notable
+    conf: 0.8
+    for: [javascript]
+    if:
+      type: raw
+      regex: '\[\s*[^\]]{1,120}\s*\]\s*\[\s*\d+\s*\]'
+      count_min: 2
+
+  - id: js-array-global-object-access
+    desc: Accessing global object (this) via indexed array
+    crit: suspicious
+    conf: 0.9
+    for: [javascript]
+    if:
+      type: raw
+      regex: '\[[^\]]{0,120}\bthis\b[^\]]{0,120}\]\s*\[\s*\d+\s*\]'
+
+  - id: js-array-dynamic-execution
+    desc: Dynamic execution via indexed array literal (new
+    crit: suspicious
+    conf: 0.95
+    for: [javascript]
+    if:
+      type: ast
+      language: javascript
+      query: |
+        (subscript_expression
+          object: (array
+            (call_expression
+              function: (new_expression
+                constructor: (identifier) @func
+              )
+            )
+          )
+          (#eq? @func "Function")
+        )

@@ -1,0 +1,10 @@
+defaults:
+  for: [all]
+
+traits:
+  - id: fsf-copyright
+    desc: Free Software Foundation copyright
+    crit: notable
+    if:
+      type: raw
+      substr: "Free Software Foundation, Inc."

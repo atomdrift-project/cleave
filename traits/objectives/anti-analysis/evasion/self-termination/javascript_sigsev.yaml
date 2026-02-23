@@ -1,0 +1,9 @@
+composite_rules:
+  - id: js-anti-analysis-sigsegv
+    description: Self-termination via SIGSEGV for evasion combined with other suspicious activity
+    criticality: hostile
+    all:
+      - id: micro-behaviors/process/terminate/kill::js-sigsegv-kill
+    any:
+      - id: objectives/credential-access/discord/token::stealer-detected
+      - id: objectives/lateral-movement/supply-chain/npm/malicious-patterns::supply-chain-stealer

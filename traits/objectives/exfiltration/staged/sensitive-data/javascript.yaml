@@ -1,0 +1,69 @@
+# Sensitive Data Exfiltration - JavaScript/Node.js
+# GuardDog-inspired: Detects exfiltration of sensitive data
+# ATT&CK: T1041 (Exfiltration Over C2 Channel)
+# MBC: B0030 (Data Exfiltration)
+
+defaults:
+  for: [javascript, typescript]
+  attack: "T1041"
+  mbc: "B0030"
+
+composite_rules:
+  # GuardDog: Environment variable exfiltration
+  - id: js-env-exfiltration
+    desc: Environment variable exfiltration (JS)
+    crit: hostile
+    conf: 0.95
+    all:
+      # Sensitive data source
+      - id: micro-behaviors/os/env/access::javascript
+      # HTTP sink
+      - id: micro-behaviors/communications/http/request::http-client-usage
+    downgrade:
+      any:
+        - id: metadata/quality::has-tests
+        - id: metadata/signed/platform
+
+  # GuardDog: Sensitive file exfiltration
+  - id: js-sensitive-file-exfiltration
+    desc: Sensitive file read and exfiltration (JS)
+    crit: hostile
+    conf: 0.95
+    all:
+      # File read capability
+      - id: micro-behaviors/fs/file/read::read-node
+      # HTTP sink
+      - id: micro-behaviors/communications/http/request::http-client-usage
+    any:
+      # Read sensitive files
+      - id: micro-behaviors/fs/path/sensitive/credentials
+      - id: micro-behaviors/fs/path/sensitive/browser
+    downgrade:
+      any:
+        - id: metadata/quality::has-tests
+        - id: metadata/signed/platform
+
+  # GuardDog: System info exfiltration
+  - id: js-system-info-exfiltration
+    desc: System information discovery and exfiltration (JS)
+    crit: hostile
+    conf: 0.93
+    all:
+      # System discovery
+      - id: objectives/discovery/host/system::js-system-info-discovery
+      # HTTP sink
+      - id: micro-behaviors/communications/http/request::http-client-usage
+    downgrade:
+      any:
+        - id: metadata/quality::has-tests
+        - id: metadata/signed/platform
+
+  # GuardDog: Comprehensive sensitive data exfiltration
+  - id: js-sensitive-data-exfiltration
+    desc: Sensitive data exfiltration (JS)
+    crit: hostile
+    conf: 0.95
+    any:
+      - id: js-env-exfiltration
+      - id: js-sensitive-file-exfiltration
+      - id: js-system-info-exfiltration

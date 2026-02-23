@@ -1,0 +1,210 @@
+defaults:
+  attack: T1059.004
+traits:
+- id: reverse-shell-bash-complete
+  desc: Bash reverse shell via /dev/tcp
+  crit: suspicious
+  conf: 0.98
+  for:
+  - shell
+  - package.json
+  - javascript
+  if:
+    type: string
+    regex: bash\s+-i\s+>&\s*/dev/tcp/[0-9.]+/[0-9]+\s+0>&1
+- id: reverse-shell-bash
+  desc: Bash reverse shell via /dev/tcp
+  crit: suspicious
+  conf: 0.95
+  for:
+  - shell
+  - package.json
+  - javascript
+  if:
+    type: string
+    regex: bash\s+-i\s+>&\s*/dev/tcp/
+- id: bash-dev-tcp-fd
+  desc: Bash fd redirect to /dev/tcp
+  crit: suspicious
+  conf: 0.95
+  for:
+  - shell
+  if:
+    type: raw
+    regex: exec\s+[0-9]+<>"?/dev/tcp/
+- id: dev-tcp-http-get
+  desc: HTTP GET via /dev/tcp socket
+  crit: suspicious
+  conf: 0.95
+  for:
+  - shell
+  if:
+    type: string
+    regex: /dev/tcp/.{0,64}GET\s+/
+- id: dev-tcp-http-host
+  desc: HTTP Host header via /dev/tcp
+  crit: suspicious
+  conf: 0.9
+  for:
+  - shell
+  if:
+    type: string
+    regex: '/dev/tcp/.{0,50}Host:'
+- id: nc-pipe
+  desc: Netcat with pipe
+  crit: notable
+  conf: 0.5
+  for:
+  - shell
+  - package.json
+  if:
+    type: string
+    regex: '\| {0,2}nc '
+- id: reverse-shell-python
+  desc: Python reverse shell pattern
+  crit: suspicious
+  conf: 0.95
+  attack: T1059.006
+  for:
+  - shell
+  - package.json
+  - python
+  if:
+    type: string
+    regex: python[23]?\s+-c\s+['"]import socket.{0,50}subprocess.{0,50}connect
+- id: sh-reverse-shell-perl
+  desc: Perl socket reverse shell
+  crit: suspicious
+  conf: 0.95
+  attack: T1059
+  for:
+  - shell
+  - package.json
+  if:
+    type: string
+    regex: perl\s+-e\s+['"].{0,50}socket.{0,50}connect.{0,50}exec
+- id: nc-exec-sh
+  desc: nc -e /bin/sh pattern
+  crit: suspicious
+  conf: 0.9
+  for:
+  - shell
+  - package.json
+  if:
+    type: string
+    regex: nc\s+-e\s+/bin/(ba)?sh
+- id: ncat-exec-sh
+  desc: ncat -e /bin/sh pattern
+  crit: suspicious
+  conf: 0.9
+  for:
+  - shell
+  - package.json
+  if:
+    type: string
+    regex: ncat\s+-e\s+/bin/(ba)?sh
+- id: netcat-exec-sh
+  desc: netcat -e /bin/sh pattern
+  crit: suspicious
+  conf: 0.9
+  for:
+  - shell
+  - package.json
+  if:
+    type: string
+    regex: netcat\s+-e\s+/bin/(ba)?sh
+- id: reverse-shell-php
+  desc: PHP reverse shell pattern
+  crit: suspicious
+  conf: 0.95
+  attack: T1059
+  for:
+  - shell
+  - package.json
+  - php
+  if:
+    type: string
+    regex: php\s+-r\s+['"].{0,50}fsockopen.{0,50}shell_exec|\$sock\s*=\s*fsockopen
+- id: sh-reverse-shell-ruby-1
+  desc: Ruby socket reverse shell (cli execution)
+  crit: suspicious
+  conf: 0.95
+  attack: T1059
+  for:
+  - shell
+  - package.json
+  - ruby
+  if:
+    type: string
+    regex: ruby\s+-rsocket\s+-e.{0,80}(exec|spawn|system)
+- id: sh-reverse-shell-ruby-2
+  desc: Ruby socket reverse shell (cli path)
+  crit: suspicious
+  conf: 0.95
+  attack: T1059
+  for:
+  - shell
+  - package.json
+  - ruby
+  if:
+    type: string
+    regex: ruby\s+-rsocket\s+-e.{0,80}(/bin/sh|/bin/bash)
+- id: sh-reverse-shell-ruby-3
+  desc: Ruby socket reverse shell (TCPSocket)
+  crit: suspicious
+  conf: 0.95
+  attack: T1059
+  for:
+  - shell
+  - package.json
+  - ruby
+  if:
+    type: string
+    regex: TCPSocket\.open
+composite_rules:
+- id: sh-reverse-shell-ruby
+  desc: Ruby socket reverse shell
+  crit: suspicious
+  conf: 0.95
+  attack: T1059
+  for:
+  - shell
+  - package.json
+  - ruby
+  any:
+  - id: sh-reverse-shell-ruby-1
+  - id: sh-reverse-shell-ruby-2
+  - id: sh-reverse-shell-ruby-3
+- id: reverse-shell-mkfifo
+  desc: Reverse shell using mkfifo and
+  crit: hostile
+  conf: 0.95
+  for:
+  - shell
+  - package.json
+  all:
+  - id: micro-behaviors/fs/pipe/fifo::mkfifo-cmd
+  - id: micro-behaviors/process/create/shell::sh-interactive
+  - id: nc-pipe
+- id: reverse-shell-netcat
+  desc: Netcat reverse shell pattern
+  crit: suspicious
+  conf: 0.9
+  for:
+  - shell
+  - package.json
+  any:
+  - id: nc-exec-sh
+  - id: ncat-exec-sh
+  - id: netcat-exec-sh
+- id: bash-dev-tcp-http
+  desc: Bash /dev/tcp HTTP client
+  crit: hostile
+  conf: 0.95
+  for:
+  - shell
+  all:
+  - id: bash-dev-tcp-fd
+  any:
+  - id: dev-tcp-http-get
+  - id: dev-tcp-http-host

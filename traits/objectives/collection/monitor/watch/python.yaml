@@ -1,0 +1,84 @@
+# Data Collection Monitoring - Python
+# Detects clipboard or keyboard monitoring
+
+traits:
+  # === Clipboard access atomic indicators ===
+  - id: pyperclip-paste
+    desc: pyperclip.paste() call
+    crit: notable
+    conf: 0.7
+    for: [python]
+    if:
+      type: string
+      regex: 'pyperclip\.paste\('
+
+  - id: clipboard-get
+    desc: clipboard.get() call
+    crit: notable
+    conf: 0.7
+    for: [python]
+    if:
+      type: string
+      regex: 'clipboard\.get\('
+
+  # === Keyboard logger atomic indicators ===
+  - id: pynput-keyboard
+    desc: pynput.keyboard import
+    crit: notable
+    conf: 0.7
+    mbc: "F0002"
+    attack: "T1056.001"
+    for: [python]
+    if:
+      type: string
+      substr: "pynput.keyboard"
+
+  - id: keyboard-on-press
+    desc: keyboard.on_press hook
+    crit: notable
+    conf: 0.7
+    mbc: "F0002"
+    attack: "T1056.001"
+    for: [python]
+    if:
+      type: string
+      regex: "keyboard\\.on_press\\s*\\("
+
+composite_rules:
+  # Clipboard access composite
+  - id: clipboard-access
+    desc: Accesses system clipboard (potential stealer)
+    crit: suspicious
+    conf: 0.9
+    for: [python]
+    any:
+      - id: pyperclip-paste
+      - id: clipboard-get
+    downgrade:
+      any:
+        - id: metadata/quality/versioned
+
+  # Keyboard logger composite
+  - id: keyboard-logger
+    desc: Monitors keyboard input (potential keylogger)
+    crit: suspicious
+    conf: 0.9
+    mbc: "F0002"
+    attack: "T1056.001"
+    for: [python]
+    any:
+      - id: pynput-keyboard
+      - id: keyboard-on-press
+
+  # Screen capture composite
+  - id: screen-capture
+    desc: Captures screen display
+    crit: notable
+    conf: 0.9
+    mbc: "B0002"
+    attack: "T1113"
+    for: [python]
+    any:
+      - id: micro-behaviors/hardware/display/screen::mss-screenshot
+      - id: micro-behaviors/hardware/display/screen::pil-imagegrab
+      - id: micro-behaviors/hardware/display/screen::pyautogui-screenshot

@@ -1,0 +1,12 @@
+composite_rules:
+  - id: suspicious-interactsh-usage
+    desc: Usage of Interactsh domain combined with suspicious capabilities
+    crit: hostile
+    all:
+      - id: objectives/exfiltration/channel/callback::interact-sh
+    any:
+      - id: objectives/discovery/host/system/hardware-fingerprint::js-sysinfo-multi
+      - id: objectives/command-and-control/dns/tunneling::js-dns-tunneling-construction
+      - id: micro-behaviors/fs/enumerate/directory::fs-readdir
+      - id: micro-behaviors/fs/path/os::hardcoded-windows-root
+      - id: micro-behaviors/data/encode/hex::buffer-to-hex

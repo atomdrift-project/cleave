@@ -1,0 +1,223 @@
+# Application Enumeration (via Process List)
+# ATT&CK: T1057 (Process Discovery)
+# MBC: E1592
+
+defaults:
+  for: [javascript, python, ruby, shell, pe, elf, macho]
+  attack: "T1057"
+  mbc: "E1592"
+  crit: baseline # Too broad - matches user agents, docs, etc. Not process enum alone.
+
+traits:
+  - id: browser-apps-chrome-firefox
+    desc: Browser app chrome
+    conf: 0.5
+    if:
+      type: string
+      word: "chrome"
+      case_insensitive: true
+
+  - id: browser-apps-firefox
+    desc: Browser app firefox
+    conf: 0.5
+    if:
+      type: string
+      word: "firefox"
+      case_insensitive: true
+
+  - id: browser-apps-msedge-safari
+    desc: Browser app msedge
+    conf: 0.5
+    if:
+      type: string
+      word: "msedge"
+      case_insensitive: true
+
+  - id: browser-apps-safari
+    desc: Browser app safari
+    conf: 0.5
+    if:
+      type: string
+      word: "safari"
+      case_insensitive: true
+
+  - id: browser-apps-opera-brave
+    desc: Browser app opera
+    crit: notable
+    conf: 0.5
+    if:
+      type: string
+      word: "opera"
+      case_insensitive: true
+
+  - id: browser-apps-brave
+    desc: Browser app brave
+    crit: notable
+    conf: 0.5
+    if:
+      type: string
+      word: "brave"
+      case_insensitive: true
+
+  - id: browser-apps-iexplore
+    desc: Browser app iexplore
+    crit: notable
+    conf: 0.5
+    if:
+      type: string
+      regex: "(?i)\\biexplore\\b"
+
+  - id: office-apps-word-excel
+    desc: Office app winword
+    crit: notable
+    conf: 0.5
+    if:
+      type: string
+      word: "winword"
+      case_insensitive: true
+
+  - id: office-apps-excel
+    desc: Office app excel
+    crit: notable
+    conf: 0.5
+    if:
+      type: string
+      word: "excel"
+      case_insensitive: true
+
+  - id: office-apps-powerpoint-soffice
+    desc: Office app powerpnt
+    crit: notable
+    conf: 0.5
+    if:
+      type: string
+      word: "powerpnt"
+      case_insensitive: true
+
+  - id: office-apps-soffice
+    desc: Office app soffice
+    crit: notable
+    conf: 0.5
+    if:
+      type: string
+      word: "soffice"
+      case_insensitive: true
+
+  - id: office-apps-outlook-onenote
+    desc: Office app outlook
+    crit: notable
+    conf: 0.5
+    if:
+      type: string
+      word: "outlook"
+      case_insensitive: true
+
+  - id: office-apps-onenote
+    desc: Office app onenote
+    crit: notable
+    conf: 0.5
+    if:
+      type: string
+      word: "onenote"
+      case_insensitive: true
+
+  - id: dev-apps-vscode-sublime
+    desc: Dev app vscode
+    crit: notable
+    conf: 0.5
+    if:
+      type: string
+      word: "vscode"
+      case_insensitive: true
+
+  - id: dev-apps-sublime
+    desc: Dev app sublime_text
+    crit: notable
+    conf: 0.5
+    if:
+      type: string
+      word: "sublime_text"
+      case_insensitive: true
+
+  - id: dev-apps-notepad-vim
+    desc: Dev app notepad++
+    crit: notable
+    conf: 0.5
+    if:
+      type: string
+      word: "notepad++"
+      case_insensitive: true
+
+  - id: dev-apps-vim
+    desc: Dev app vim
+    crit: notable
+    conf: 0.5
+    if:
+      type: string
+      word: "vim"
+      case_insensitive: false
+
+  - id: dev-apps-emacs-pycharm
+    desc: Dev app emacs
+    crit: notable
+    conf: 0.5
+    if:
+      type: string
+      word: "emacs"
+      case_insensitive: true
+
+  - id: dev-apps-pycharm
+    desc: Dev app pycharm
+    crit: notable
+    conf: 0.5
+    if:
+      type: string
+      word: "pycharm"
+      case_insensitive: true
+
+  - id: dev-apps-intellij
+    desc: Dev app intellij
+    crit: notable
+    conf: 0.5
+    if:
+      type: string
+      regex: "(?i)\\bintellij\\b"
+
+composite_rules:
+  - id: browser-apps
+    desc: Web browser application names
+    crit: notable
+    conf: 0.5
+    any:
+      - id: browser-apps-chrome-firefox
+      - id: browser-apps-firefox
+      - id: browser-apps-msedge-safari
+      - id: browser-apps-safari
+      - id: browser-apps-opera-brave
+      - id: browser-apps-brave
+      - id: browser-apps-iexplore
+
+  - id: office-apps
+    desc: Office/Productivity application names
+    crit: notable
+    conf: 0.5
+    any:
+      - id: office-apps-word-excel
+      - id: office-apps-excel
+      - id: office-apps-powerpoint-soffice
+      - id: office-apps-soffice
+      - id: office-apps-outlook-onenote
+      - id: office-apps-onenote
+
+  - id: dev-apps
+    desc: Developer/Editor application names
+    crit: notable
+    conf: 0.5
+    any:
+      - id: dev-apps-vscode-sublime
+      - id: dev-apps-sublime
+      - id: dev-apps-notepad-vim
+      - id: dev-apps-vim
+      - id: dev-apps-emacs-pycharm
+      - id: dev-apps-pycharm
+      - id: dev-apps-intellij

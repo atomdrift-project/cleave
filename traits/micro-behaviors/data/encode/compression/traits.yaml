@@ -1,0 +1,47 @@
+# Data Compression/Encoding
+# Compression and encoding operations
+
+defaults:
+  for: ["elf", "macho", "pe", "dll", "so", "dylib"]
+  platforms: ["all"]
+
+traits:
+  # === LZMA Compression ===
+  - id: lzma-signature
+    desc: Embedded LZMA compressed data
+    crit: notable
+    conf: 0.95
+    attack: "T1140"
+    mbc: "C0032"
+    # Bootloaders use LZMA for firmware/kernel compression; not inherently suspicious
+    if:
+      type: raw
+      substr: "$lzma"
+
+  - id: lzma-magic
+    desc: LZMA magic bytes
+    crit: notable
+    conf: 0.95
+    attack: "T1140"
+    # Bootloaders legitimately use LZMA compression for firmware/kernel payloads
+    if:
+      type: hex
+      pattern: "5D 00 00 80"
+
+  # === Compression Libraries ===
+  - id: zlib-signature
+    desc: zlib compression library
+    crit: notable
+    conf: 0.80
+    for: ["elf", "macho", "pe", "dll", "so", "dylib", "javascript", "typescript"]
+    if:
+      type: string
+      exact: "zlib"
+
+  - id: brotli-signature
+    desc: Brotli compression library
+    crit: notable
+    conf: 0.80
+    if:
+      type: string
+      substr: "brotli"

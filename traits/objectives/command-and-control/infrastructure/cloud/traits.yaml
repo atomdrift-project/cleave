@@ -1,0 +1,121 @@
+defaults:
+  for:
+  - elf
+  - macho
+  - pe
+  mbc: B0030
+  attack: T1102.002
+traits:
+- id: aws-s3-url
+  desc: AWS S3 storage URL
+  crit: notable
+  conf: 0.85
+  if:
+    type: string
+    regex: https?://[a-z0-9-]+\.s3(\.[a-z0-9-]+)?\.amazonaws\.com/
+- id: azure-blob-url
+  desc: Azure Blob storage URL
+  crit: notable
+  conf: 0.85
+  if:
+    type: string
+    regex: https?://[a-z0-9-]+\.blob\.core\.windows\.net/
+- id: gcs-url
+  desc: Google Cloud Storage URL
+  crit: notable
+  conf: 0.85
+  if:
+    type: string
+    regex: https?://storage\.googleapis\.com/[a-z0-9-_]+/
+- id: do-spaces-url
+  desc: DigitalOcean Spaces URL
+  crit: notable
+  conf: 0.85
+  if:
+    type: string
+    regex: https?://[a-z0-9-]+\.[a-z0-9-]+\.digitaloceanspaces\.com/
+- id: cloudflare-r2-url
+  desc: Cloudflare R2 storage URL
+  crit: notable
+  conf: 0.85
+  if:
+    type: string
+    regex: https?://[a-z0-9-]+\.r2\.cloudflarestorage\.com/
+- id: backblaze-b2-url
+  desc: Backblaze B2 storage URL
+  crit: notable
+  conf: 0.85
+  if:
+    type: string
+    regex: https?://[a-z0-9-]+\.backblazeb2\.com/
+- id: rust-ureq-http-client
+  desc: Rust ureq HTTP client library
+  crit: notable
+  conf: 0.9
+  if:
+    type: string
+    regex: /ureq-[0-9.]+/src/
+- id: rust-rustls-tls
+  desc: Rust rustls TLS library
+  crit: notable
+  conf: 0.9
+  if:
+    type: string
+    regex: /rustls-[0-9.]+/src/
+- id: aws-s3-disguised-payload
+  desc: AWS S3 disguised payload
+  crit: suspicious
+  conf: 0.9
+  if:
+    type: string
+    regex: https?://.{1,80}\.s3.{0,40}\.amazonaws\.com/.{1,120}\.(png|jpe?g|gif|pdf)$
+composite_rules:
+- id: cloud-payload-dropper
+  desc: Cloud storage payload dropper
+  crit: hostile
+  conf: 0.95
+  mbc: B0030
+  attack: T1105
+  for:
+  - elf
+  - macho
+  - pe
+  all:
+  - id: aws-s3-disguised-payload
+  - id: micro-behaviors/fs/proc/info::process-pid-exe
+  - id: micro-behaviors/crypto/symmetric/stream::chacha-salsa-constant
+  any:
+  - id: rust-ureq-http-client
+  - id: rust-rustls-tls
+- id: rust-cloud-stager
+  desc: Rust cloud storage stager
+  crit: hostile
+  conf: 0.92
+  mbc: B0030
+  attack: T1105
+  for:
+  - elf
+  - macho
+  - pe
+  all:
+  - id: rust-ureq-http-client
+  - id: rust-rustls-tls
+  - id: micro-behaviors/fs/proc/info::process-pid-exe
+  - id: aws-s3-disguised-payload
+- id: cloud-crypto-implant
+  desc: Cloud-hosted crypto implant
+  crit: hostile
+  conf: 0.9
+  mbc: B0030
+  for:
+  - elf
+  - macho
+  - pe
+  all:
+  - id: micro-behaviors/crypto/symmetric/stream::chacha-salsa-constant
+  - id: micro-behaviors/fs/proc/info::process-pid-exe
+  any:
+  - id: aws-s3-disguised-payload
+  - id: azure-blob-url
+  - id: gcs-url
+  - id: do-spaces-url

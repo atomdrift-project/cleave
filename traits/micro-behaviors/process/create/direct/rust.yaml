@@ -1,0 +1,28 @@
+# Process Execution - Rust
+# MBC: E1059 (Command and Scripting Interpreter)
+# ATT&CK: T1059
+
+traits:
+  - id: rust-spawn
+    desc: Spawns a new process
+    crit: notable
+    conf: 0.9
+    mbc: "E1059"
+    attack: "T1059"
+    for: [rust]
+    if:
+      type: ast
+      kind: call
+      exact: ".spawn()"
+
+  - id: rust-async-process
+    desc: Executes process using async-process
+    crit: notable
+    conf: 0.9
+    mbc: "E1059"
+    attack: "T1059"
+    for: [rust]
+    if:
+      type: ast
+      kind: call
+      exact: "Command::new"

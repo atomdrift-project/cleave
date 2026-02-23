@@ -1,0 +1,52 @@
+# IP Logging and Tracking Services
+# Detects usage of services designed to log victim IP addresses or track execution
+# Often used for reconnaissance or to verify successful exploitation/installation
+# ATT&CK: T1592 (Gather Victim Host Information)
+
+defaults:
+  crit: suspicious
+  conf: 0.85
+  for: [all]
+
+traits:
+  - id: iplogger
+    desc: iplogger.org tracking service
+    if:
+      type: string
+      regex: 'iplogger\.(org|com|net)\b'
+
+  - id: grabify
+    desc: grabify.link tracking service
+    if:
+      type: string
+      regex: 'grabify\.(link|org)\b'
+
+  - id: blasze
+    desc: blasze.com tracking service
+    if:
+      type: string
+      regex: 'blasze\.(com|tk)\b'
+
+  - id: canarytokens
+    desc: canarytokens.com tracking service
+    if:
+      type: string
+      regex: '([a-z0-9-]+\.)?canarytokens\.(com|org)\b'
+
+  - id: 2no-co
+    desc: 2no.co tracking service
+    if:
+      type: string
+      regex: '2no\.co\b'
+
+  - id: yip-su
+    desc: yip.su tracking service
+    if:
+      type: string
+      regex: 'yip\.su\b'
+
+  - id: opentracker
+    desc: opentracker.org tracking service
+    if:
+      type: string
+      regex: 'opentracker\.org\b'

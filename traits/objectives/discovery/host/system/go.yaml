@@ -1,0 +1,57 @@
+# System Information Discovery - Go
+# GuardDog-inspired: Detects system information gathering
+# ATT&CK: T1082 (System Information Discovery)
+# MBC: B0012 (Operating System Discovery)
+
+defaults:
+  for: [go, elf, macho, pe]
+  attack: "T1082"
+  mbc: "B0012"
+  crit: notable
+
+traits:
+  # GuardDog: os.Hostname() - system hostname
+  - id: go-os-hostname
+    desc: os.Hostname() system hostname
+    conf: 0.85
+    if:
+      type: symbol
+      exact: "os.Hostname"
+
+  # os.Getwd() - current directory
+  - id: go-os-getwd
+    desc: os.Getwd() current directory
+    conf: 0.75
+    if:
+      type: symbol
+      exact: "os.Getwd"
+
+  # runtime.GOOS - operating system
+  - id: runtime-goos
+    desc: runtime.GOOS operating system
+    conf: 0.80
+    if:
+      type: symbol
+      exact: "runtime.GOOS"
+
+  # runtime.GOARCH - architecture
+  - id: runtime-goarch
+    desc: runtime.GOARCH architecture
+    conf: 0.80
+    if:
+      type: symbol
+      exact: "runtime.GOARCH"
+
+composite_rules:
+  # GuardDog: System information discovery
+  - id: go-system-info-discovery
+    desc: System information discovery (Go)
+    crit: notable
+    conf: 0.85
+    attack: "T1082"
+    mbc: "B0012"
+    any:
+      - id: go-os-hostname
+      - id: go-os-getwd
+      - id: runtime-goos
+      - id: runtime-goarch

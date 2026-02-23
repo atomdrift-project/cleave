@@ -1,0 +1,200 @@
+# Desktop Messaging Application Data Collection
+# Detects theft of messaging app local data
+# ATT&CK: T1005 (Data from Local System)
+
+defaults:
+  for: [all]
+  attack: "T1005"
+  crit: suspicious
+
+traits:
+  # === Telegram Desktop atomic indicators ===
+
+  - id: telegram-tdata-desktop
+    desc: Telegram Desktop tdata path
+    crit: notable
+    conf: 0.7
+    if:
+      type: string
+      substr: "Telegram Desktop/tdata"
+
+  - id: telegram-tdata-desktop-win
+    desc: Telegram Desktop tdata Windows path
+    crit: notable
+    conf: 0.7
+    if:
+      type: string
+      regex: "Telegram Desktop.{1,5}tdata"
+
+  - id: telegram-tdata-short
+    desc: Telegram tdata path
+    crit: notable
+    conf: 0.7
+    if:
+      type: string
+      substr: "Telegram/tdata"
+
+  - id: telegram-key-datas
+    desc: "Telegram Desktop key_datas file"
+    conf: 0.9
+    if:
+      type: string
+      substr: "key_datas"
+
+  - id: telegram-map-hash
+    desc: Telegram map file hash
+    crit: notable
+    conf: 0.7
+    if:
+      type: string
+      substr: "D877F783D5D3EF8C"
+
+  - id: telegram-map-numbered
+    desc: Telegram numbered map files
+    crit: notable
+    conf: 0.7
+    if:
+      type: string
+      regex: "/map[0-9]{1,2}"
+
+  # === LevelDB/IndexedDB indicators (app-agnostic) ===
+
+  # Removed: discord-ldb-ext was a pure alias to objectives/credential-access/discord/token::ldb-extension
+  # Removed: discord-log-ext was too generic (.log matches any log file)
+  # Discord-specific paths moved to objectives/credential-access/discord/token/
+
+  # === Signal Desktop atomic indicators ===
+
+  - id: signal-config-json
+    desc: Signal config.json path
+    crit: notable
+    conf: 0.7
+    if:
+      type: string
+      substr: "Signal/config.json"
+
+  - id: signal-sql-db
+    desc: Signal SQLite database path
+    crit: notable
+    conf: 0.7
+    if:
+      type: string
+      substr: "Signal/sql/db.sqlite"
+
+  # === Slack Desktop atomic indicators ===
+
+  - id: slack-storage-path
+    desc: Slack storage path
+    crit: notable
+    conf: 0.7
+    if:
+      type: string
+      substr: "Slack/storage"
+
+  - id: slack-indexeddb-path
+    desc: Slack IndexedDB path
+    crit: notable
+    conf: 0.7
+    if:
+      type: string
+      substr: "Slack/IndexedDB"
+
+  # === WhatsApp Desktop atomic indicators ===
+
+  - id: whatsapp-indexeddb-path
+    desc: WhatsApp IndexedDB path
+    crit: notable
+    conf: 0.7
+    if:
+      type: string
+      substr: "WhatsApp/IndexedDB"
+
+  - id: whatsapp-localstorage-path
+    desc: WhatsApp Local Storage path
+    crit: notable
+    conf: 0.7
+    if:
+      type: string
+      substr: "WhatsApp/Local Storage"
+
+composite_rules:
+  # Telegram tdata composite
+  - id: telegram-tdata
+    desc: Telegram Desktop tdata directory
+    crit: suspicious
+    conf: 0.9
+    any:
+      - id: telegram-tdata-desktop
+      - id: telegram-tdata-desktop-win
+      - id: telegram-tdata-short
+
+  # Telegram map composite
+  - id: telegram-map
+    desc: Telegram Desktop map files
+    crit: suspicious
+    conf: 0.85
+    all:
+      - id: telegram-tdata
+    any:
+      - id: telegram-map-hash
+      - id: telegram-map-numbered
+
+  # Discord leveldb composite (use credential-access/discord/)
+  # REMOVED - use objectives/credential-access/discord/token::localstorage-path instead
+
+  # Signal config composite
+  - id: signal-config
+    desc: Signal Desktop configuration
+    crit: suspicious
+    conf: 0.85
+    any:
+      - id: signal-config-json
+      - id: signal-sql-db
+
+  # Slack storage composite
+  - id: slack-storage
+    desc: Slack Desktop storage
+    crit: suspicious
+    conf: 0.85
+    any:
+      - id: slack-storage-path
+      - id: slack-indexeddb-path
+
+  # WhatsApp storage composite
+  - id: whatsapp-storage
+    desc: WhatsApp Desktop storage
+    crit: suspicious
+    conf: 0.85
+    any:
+      - id: whatsapp-indexeddb-path
+      - id: whatsapp-localstorage-path
+
+  # Multi-messenger theft
+  - id: multi-messenger
+    desc: "Multiple messaging apps targeted"
+    crit: suspicious
+    conf: 0.95
+    attack: "T1005"
+    for: [shell, python, applescript, macho, elf, pe]
+    needs: 2
+    any:
+      - id: telegram-tdata
+      - id: objectives/credential-access/discord/token::localstorage-path
+      - id: signal-config
+      - id: slack-storage
+      - id: whatsapp-storage
+
+  # Credential staging - username + temp dir + mkdir + messaging app path
+  # This pattern indicates staging stolen data for exfiltration
+  - id: messaging-data-staging
+    desc: "Staging stolen messaging app credentials"
+    crit: hostile
+    conf: 0.95
+    attack: "T1074.001"
+    mbc: "E1074"
+    for: [python]
+    all:
+      - id: telegram-tdata
+      - id: objectives/discovery/host/system/hardware-fingerprint::python-username
+      - id: micro-behaviors/fs/temp/directory::temp-directory
+      - id: micro-behaviors/fs/directory/mkdir::mkdir-python

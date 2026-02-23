@@ -1,0 +1,21 @@
+# Dynamic Library Loading
+# Composite rules for runtime function resolution
+
+composite_rules:
+  - id: dynamic-load-pattern
+    desc: Runtime library loading and function resolution
+    crit: notable
+    conf: 0.90
+    for: ["pe", "dll"]
+    all:
+      - id: micro-behaviors/dylib/load::load-library-a
+      - id: micro-behaviors/dylib/lookup::get-proc-address
+
+  - id: dynamic-load-extended
+    desc: Extended dynamic loading with alternate APIs
+    crit: notable
+    conf: 0.85
+    for: ["pe", "dll"]
+    any:
+      - id: micro-behaviors/dylib/load::load-library-ex
+      - id: micro-behaviors/dylib/load::load-library-a

@@ -1,0 +1,34 @@
+traits:
+  - id: js-interspersed-question-marks
+    desc: String with interspersed question marks (Nemucod)
+    crit: suspicious
+    conf: 0.95
+    for: [javascript]
+    mbc: "B0032"
+    attack: "T1027"
+    if:
+      type: raw
+      regex: '([a-zA-Z0-9]\?){10,}'
+
+  - id: js-interspersed-chars-generic
+    desc: String with interspersed characters (obfuscation)
+    crit: suspicious
+    conf: 0.8
+    for: [javascript]
+    mbc: "B0032"
+    attack: "T1027"
+    if:
+      type: raw
+      regex: '([a-zA-Z0-9][^a-zA-Z0-9]){20,}'
+
+  - id: js-interspersed-char-obfuscation
+    desc: Fixed interleaving character (Nemucod)
+    crit: suspicious
+    conf: 0.9
+    for: [javascript]
+    if:
+      type: raw
+      # Match a pattern like a?b?c?d?e?f? where ? is the same char
+      # Note: We can't use backreferences in standard Rust regex, so we use a more generic pattern
+      # that looks for repeated single-character gaps.
+      regex: '([a-zA-Z0-9][^a-zA-Z0-9]){30,}'

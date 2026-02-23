@@ -1,0 +1,11 @@
+defaults:
+  for: [all]
+
+traits:
+  - id: javassist
+    desc: Javassist library reference
+    crit: notable
+    conf: 0.8
+    if:
+      type: string
+      word: "javassist"

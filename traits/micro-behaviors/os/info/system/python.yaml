@@ -1,0 +1,50 @@
+# Python OS Information Gathering
+# Detects Python-specific system information access patterns
+# ATT&CK: T1082 (System Information Discovery)
+
+defaults:
+  for: [python]
+  attack: "T1082"
+
+traits:
+  # sys.platform check - platform-conditional execution
+  - id: sys-platform-check
+    desc: Python sys.platform conditional check
+    crit: baseline
+    conf: 0.8
+    if:
+      type: raw
+      substr: "sys.platform"
+
+  # sys.argv access - command-line argument inspection
+  - id: sys-argv-access
+    desc: Python sys.argv command-line access
+    crit: baseline
+    conf: 0.7
+    if:
+      type: raw
+      substr: "sys.argv"
+
+  - id: platform-system
+    desc: platform.system() call
+    crit: notable
+    conf: 0.70
+    if:
+      type: raw
+      substr: "platform.system()"
+
+  - id: platform-node
+    desc: platform.node() hostname call
+    crit: notable
+    conf: 0.70
+    if:
+      type: raw
+      substr: "platform.node()"
+
+  - id: platform-full
+    desc: platform.platform() full info
+    crit: notable
+    conf: 0.70
+    if:
+      type: raw
+      substr: "platform.platform()"

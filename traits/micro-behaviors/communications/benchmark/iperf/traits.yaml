@@ -1,0 +1,20 @@
+# iperf - Network Bandwidth Testing
+# Measures TCP/UDP throughput
+
+defaults:
+  for: [all]
+  crit: notable
+  conf: 0.9
+
+traits:
+  - id: iperf
+    desc: iperf bandwidth test
+    if:
+      type: string
+      substr: iperf
+
+  - id: iperf3
+    desc: iperf3 bandwidth test
+    if:
+      type: string
+      substr: iperf3

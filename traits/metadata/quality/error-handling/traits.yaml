@@ -1,0 +1,89 @@
+# Code Quality Indicators - Error Handling
+
+traits:
+  # === Atomic: Go Error Handling ===
+
+  - id: go-err-nil-check
+    desc: Go error nil check pattern
+    crit: baseline
+    conf: 0.6
+    for: [go]
+    if:
+      type: string
+      substr: "if err != nil"
+
+  - id: go-errors-new
+    desc: Go errors.New function
+    crit: baseline
+    conf: 0.6
+    for: [go]
+    if:
+      type: string
+      substr: "errors.New"
+
+  - id: go-fmt-errorf
+    desc: Go fmt.Errorf function
+    crit: baseline
+    conf: 0.6
+    for: [go]
+    if:
+      type: string
+      substr: "fmt.Errorf"
+
+  # === Atomic: Rust Error Handling ===
+
+  - id: rust-result-type
+    desc: Rust Result<T,E> type
+    crit: baseline
+    conf: 0.6
+    for: [rust]
+    if:
+      type: string
+      substr: "Result<"
+
+  - id: rust-unwrap-or
+    desc: Rust unwrap_or method
+    crit: baseline
+    conf: 0.6
+    for: [rust]
+    if:
+      type: string
+      substr: "unwrap_or"
+
+  # === Atomic: Generic Try/Catch ===
+
+  - id: try-block-open
+    desc: try block opening
+    crit: baseline
+    conf: 0.5
+    for: [javascript, python, java, csharp]
+    if:
+      type: string
+      substr: "try {"
+
+  - id: catch-keyword
+    desc: catch keyword
+    crit: baseline
+    conf: 0.5
+    for: [javascript, java, csharp, php]
+    if:
+      type: string
+      word: "catch"
+
+  - id: except-keyword
+    desc: except keyword (Python)
+    crit: baseline
+    conf: 0.5
+    for: [python]
+    if:
+      type: string
+      word: "except"
+
+  - id: finally-keyword
+    desc: finally keyword
+    crit: baseline
+    conf: 0.5
+    for: [javascript, python, java, csharp]
+    if:
+      type: string
+      word: "finally"

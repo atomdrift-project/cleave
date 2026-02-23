@@ -1,0 +1,11 @@
+traits:
+  - id: python-getattr-oct-hex-obfuscation
+    desc: Obfuscated 'chr' construction via getattr/oct/hex
+    mbc: E1014
+    attack: T1027
+    crit: suspicious
+    conf: 0.95
+    for: [python]
+    if:
+      type: raw
+      regex: 'getattr\s*\(\s*(__builtins__|builtins)\s*,\s*oct\.__str__\(\)'

@@ -1,0 +1,41 @@
+traits:
+  - id: function-returns-string-literal
+    desc: Function that returns a string literal (common
+    crit: notable
+    conf: 0.8
+    for: [javascript]
+    if:
+      type: ast
+      query: |
+        (function_declaration
+          (statement_block
+            (return_statement
+              (string)
+            )
+          )
+        )
+      count_min: 5
+
+  - id: function-returns-variable-string
+    desc: Function that assigns string to var and
+    crit: notable
+    conf: 0.8
+    for: [javascript]
+    if:
+      type: ast
+      query: |
+        (function_declaration
+          (statement_block
+            (variable_declaration
+              (variable_declarator
+                name: (identifier) @var
+                value: (string)
+              )
+            )
+            (return_statement
+              (identifier) @ret
+            )
+          )
+          (#eq? @var @ret)
+        )
+      count_min: 5

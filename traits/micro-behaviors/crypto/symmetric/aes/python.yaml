@@ -1,0 +1,98 @@
+# AES Encryption - Python
+# MBC: C0021.001 (AES)
+# ATT&CK: T1027 (Obfuscated Files or Information)
+
+defaults:
+  for: [python]
+  mbc: "C0021"
+  attack: "T1027"
+
+traits:
+  # === pyaes library (third-party AES) ===
+  - id: pyaes-import
+    desc: pyaes library import
+    crit: notable
+    conf: 0.85
+    if:
+      type: symbol
+      regex: "^pyaes$|^from\\s+pyaes"
+
+  - id: pyaes-gcm
+    desc: pyaes AES-GCM mode
+    crit: notable
+    conf: 0.9
+    if:
+      type: symbol
+      regex: "AESModeOfOperationGCM"
+
+  - id: pyaes-ctr
+    desc: pyaes AES-CTR mode
+    crit: notable
+    conf: 0.9
+    if:
+      type: symbol
+      regex: "AESModeOfOperationCTR"
+
+  - id: pyaes-cbc
+    desc: pyaes AES-CBC mode
+    crit: notable
+    conf: 0.9
+    if:
+      type: symbol
+      regex: "AESModeOfOperationCBC"
+
+  - id: pyaes-ofb
+    desc: pyaes AES-OFB mode
+    crit: notable
+    conf: 0.9
+    if:
+      type: symbol
+      regex: "AESModeOfOperationOFB"
+
+  # === PyCryptodome / PyCrypto ===
+  - id: pycrypto-aes-import
+    desc: PyCryptodome AES import
+    crit: notable
+    conf: 0.85
+    if:
+      type: raw
+      regex: "from\\s+Crypto\\.Cipher\\s+import\\s+AES"
+
+  - id: pycrypto-aes-new
+    desc: PyCryptodome AES.new constructor call
+    crit: notable
+    conf: 0.85
+    if:
+      type: symbol
+      regex: "AES\\.new"
+
+  # === cryptography library ===
+  - id: cryptography-aes
+    desc: cryptography library AES
+    crit: notable
+    conf: 0.85
+    if:
+      type: string
+      regex: "from\\s+cryptography\\.hazmat.{0,50}\\s+import.{0,50}AES|algorithms\\.AES"
+
+composite_rules:
+  # pyaes library usage
+  - id: pyaes-usage
+    desc: pyaes AES library usage
+    crit: notable
+    conf: 0.9
+    any:
+      - id: pyaes-gcm
+      - id: pyaes-ctr
+      - id: pyaes-cbc
+      - id: pyaes-ofb
+      - id: pyaes-import
+
+  # PyCryptodome usage
+  - id: pycrypto-usage
+    desc: PyCryptodome AES usage
+    crit: notable
+    conf: 0.9
+    any:
+      - id: pycrypto-aes-import
+      - id: pycrypto-aes-new

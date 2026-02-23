@@ -1,0 +1,8 @@
+# HTTP/FTP Upload Symbols - Deleted
+# This was a taxonomy violation - atomic symbol detection belongs in micro-behaviors/
+# The capabilities already exist at:
+# - micro-behaviors/communications/http/upload::http-upload-symbol
+# - micro-behaviors/communications/ftp/upload::ftp-upload-symbol
+#
+# For proper exfiltration objectives, combine upload capabilities with other
+# evidence of malicious intent (sensitive file paths, encoding, etc.)

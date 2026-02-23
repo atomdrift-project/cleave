@@ -1,0 +1,24 @@
+# IOKit Registry - macOS
+
+defaults:
+  for: [all]
+
+traits:
+  - id: access
+    desc: Access IOKit device driver registry
+    crit: notable
+    conf: 0.6
+    platforms: [macos]
+    if:
+      type: string
+      substr: "IORegistry"
+
+  - id: object-release
+    desc: Releases IOKit object reference
+    crit: baseline
+    conf: 0.5
+    platforms: [macos]
+    for: [macho]
+    if:
+      type: symbol
+      regex: "IOObjectRelease"

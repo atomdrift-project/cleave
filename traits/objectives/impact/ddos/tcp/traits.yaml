@@ -1,0 +1,86 @@
+# TCP-based DDoS Detection
+# MBC: B0042 (Denial of Service)
+# ATT&CK: T1499
+
+traits:
+  - id: syn-flood
+    desc: SYN flood attack reference
+    crit: suspicious
+    conf: 0.9
+    mbc: "B0042"
+    attack: "T1499"
+    for: [all]
+    if:
+      type: string
+      regex: "(?i)syn.?flood\\b"
+
+  - id: ack-flood
+    desc: ACK flood attack reference
+    crit: suspicious
+    conf: 0.9
+    mbc: "B0042"
+    attack: "T1499"
+    for: [all]
+    if:
+      type: string
+      regex: "(?i)ack.?flood"
+
+  - id: tcp-flood
+    desc: TCP flood attack function
+    crit: suspicious
+    conf: 0.9
+    mbc: "B0042"
+    attack: "T1499"
+    for: [all]
+    if:
+      type: string
+      substr: "tcp_flood"
+
+  - id: tcpraw-flood
+    desc: TCP raw flood attack function
+    crit: suspicious
+    conf: 0.9
+    mbc: "B0042"
+    attack: "T1499"
+    for: [all]
+    if:
+      type: string
+      substr: "tcpraw_flood"
+
+  - id: hydrasyn
+    desc: HYDRASYN DDoS attack
+    crit: suspicious
+    conf: 0.95
+    mbc: "B0042"
+    attack: "T1499"
+    for: [all]
+    if:
+      type: string
+      substr: "HYDRASYN"
+
+composite_rules:
+    - id: ddos-technique
+      desc: DDoS technique indicators
+      crit: notable
+      any:
+        - id: micro-behaviors/communications/socket/raw::raw-socket-creation-regex
+        - id: syn-flood
+        - id: ack-flood
+        - id: micro-behaviors/communications/ip/spoof::spoof
+  
+    - id: ddos-offensive-markers
+      desc: Offensive markers for DDoS
+      crit: notable
+      any:
+        - id: micro-behaviors/data/text/malware::cyber-warfare-marker
+        - id: micro-behaviors/data/text/malware/ddos::sending-packets-marker
+        - id: micro-behaviors/data/text/malware/ddos::got-root-marker
+        - id: micro-behaviors/data/text/malware/aggressive::unprofessional-error-marker
+  
+    - id: ddos-tool-offensive
+      desc: "DDoS tool with offensive or aggressive indicators"
+      crit: hostile
+      conf: 0.95
+      all:
+        - id: ddos-technique
+        - id: ddos-offensive-markers

@@ -1,0 +1,30 @@
+# Process Termination
+# Capabilities to stop or kill processes
+
+defaults:
+  for: ["pe", "dll"]
+  platforms: ["windows"]
+
+traits:
+  # === Process Termination ===
+  - id: terminate-process
+    desc: Process termination via TerminateProcess
+    crit: suspicious
+    conf: 0.95
+    attack: "T1562.001"
+    mbc: "B0033"
+    if:
+      type: symbol
+      exact: "TerminateProcess"
+    downgrade:
+      any:
+        - type: string
+          substr: "ApiSet Stub DLL"
+
+  - id: exit-process
+    desc: Exit current process
+    crit: notable
+    conf: 0.90
+    if:
+      type: symbol
+      exact: "ExitProcess"

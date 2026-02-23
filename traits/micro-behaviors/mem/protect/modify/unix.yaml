@@ -1,0 +1,26 @@
+# Memory Protection - Unix
+# ATT&CK: T1055 (Process Injection)
+
+traits:
+  - id: mprotect-symbol
+    desc: Change memory protection (mprotect)
+    crit: notable
+    conf: 1.0
+    attack: "T1055"
+    platforms: [linux, macos, unix]
+    for: [all]
+    if:
+      type: symbol
+      regex: "^_?mprotect$"
+
+  - id: rwx-prot-bytes
+    desc: RWX protection bytes (PROT_READ|WRITE|EXEC = 7)
+    crit: baseline
+    conf: 0.6
+    attack: "T1055"
+    platforms: [linux, macos, unix]
+    for: [elf, so, dylib]
+    if:
+      type: hex
+      pattern: "07 00 00 00"
+      section: text

@@ -1,0 +1,35 @@
+# PHP String Conversion Capabilities
+
+defaults:
+  for: [php]
+
+traits:
+  - id: chr-call
+    desc: Character code manipulation
+    crit: notable
+    conf: 0.65
+    mbc: "C0000"
+    if:
+      type: ast
+      kind: call
+      exact: "chr"
+
+  - id: ord-call
+    desc: Character code manipulation
+    crit: notable
+    conf: 0.65
+    mbc: "C0000"
+    if:
+      type: ast
+      kind: call
+      exact: "ord"
+
+composite_rules:
+  - id: chr-ord
+    desc: Character code manipulation
+    crit: notable
+    conf: 0.65
+    mbc: "C0000"
+    any:
+      - id: chr-call
+      - id: ord-call

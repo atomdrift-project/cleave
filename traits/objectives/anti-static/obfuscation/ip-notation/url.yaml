@@ -1,0 +1,11 @@
+defaults:
+  for: [all]
+
+traits:
+  - id: hex-octal-ip-in-url
+    desc: Obfuscated IP in URL (hex/octal notation)
+    crit: suspicious
+    conf: 0.8
+    if:
+      type: string
+      regex: 'https?://(0[0-7]+|0x[0-9a-fA-F]+)(\.|%2e)(0[0-7]+|0x[0-9a-fA-F]+)'

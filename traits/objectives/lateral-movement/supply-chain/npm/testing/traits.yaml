@@ -1,0 +1,89 @@
+# npm package.json Testing Patterns
+# Detects test-related artifacts and configuration
+
+defaults:
+  for: [package.json]
+
+traits:
+  - id: pkg-test-script-field
+    desc: '"test": script in package.json'
+    crit: notable
+    conf: 0.6
+    if:
+      type: string
+      substr: '"test":'
+
+  - id: has-jest
+    desc: Package uses Jest testing framework
+    crit: notable
+    conf: 0.9
+    if:
+      type: string
+      regex: '"jest"|jest\.config\.js'
+
+  - id: has-mocha
+    desc: Package uses Mocha testing framework
+    crit: notable
+    conf: 0.9
+    if:
+      type: string
+      regex: '"mocha"|\.mocharc'
+
+  - id: has-ava
+    desc: Package uses Ava testing framework
+    crit: notable
+    conf: 0.9
+    if:
+      type: string
+      regex: '"ava"|"ava":'
+
+  - id: has-cypress
+    desc: Package uses Cypress testing framework
+    crit: notable
+    conf: 0.9
+    if:
+      type: string
+      regex: '"cypress"|cypress\.config'
+
+  - id: has-playwright
+    desc: Package uses Playwright testing framework
+    crit: notable
+    conf: 0.9
+    if:
+      type: string
+      regex: '"playwright"|playwright\.config'
+
+  - id: has-karma
+    desc: Package uses Karma test runner
+    crit: notable
+    conf: 0.9
+    if:
+      type: string
+      regex: '"karma"|karma\.conf\.js'
+
+  - id: has-test-dir
+    desc: Package has a test directory
+    crit: notable
+    conf: 0.85
+    if:
+      type: string
+      regex: '"test"|"tests"|"__tests__"'
+
+  - id: has-assertions
+    desc: Code uses common assertion libraries
+    crit: notable
+    conf: 0.85
+    for: [javascript, typescript]
+    if:
+      type: string
+      regex: '"chai"|"expect"|"should"|"assert"'
+
+  - id: test-fixtures
+    desc: References to test fixture files
+    crit: notable
+    conf: 0.8
+    for: [javascript, typescript]
+    if:
+      type: string
+      regex: 'fixtures/|testdata/|__fixtures__/'
+

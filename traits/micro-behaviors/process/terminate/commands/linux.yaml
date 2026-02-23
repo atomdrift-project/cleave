@@ -1,0 +1,17 @@
+# Process Termination CLI Commands (Linux)
+# MBC: F0007 (Defense Evasion)
+# ATT&CK: T1070 (Indicator Removal)
+
+defaults:
+  crit: notable
+  conf: 0.7
+  for: [shell, elf]
+
+traits:
+  - id: pkill-force
+    desc: pkill force kill pattern (-9)
+    crit: suspicious
+    conf: 0.8
+    if:
+      type: string
+      regex: "pkill\\s+-9\\s+-f"

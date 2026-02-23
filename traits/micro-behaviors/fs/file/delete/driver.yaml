@@ -1,0 +1,18 @@
+traits:
+  - id: irp-file-delete
+    desc: Direct IRP file deletion (kernel driver)
+    crit: suspicious
+    conf: 0.9
+    for: [pe]
+    if:
+      type: string
+      regex: "Irp(FileDelete|FileCreate|SetFileAttributes)"
+
+  - id: force-delete-string
+    desc: "\"Force Delete\" string (kernel driver functionality)"
+    crit: suspicious
+    conf: 0.8
+    for: [pe]
+    if:
+      type: string
+      regex: "Force Delete"

@@ -1,0 +1,50 @@
+# Build System - NPM
+
+defaults:
+  for: [all]
+
+traits:
+  # === npm/yarn micro-behaviors ===
+  - id: package-json
+    desc: package.json file
+    crit: notable
+    conf: 0.85
+    if:
+      type: string
+      substr: "package.json"
+
+  - id: node-modules
+    desc: node_modules directory
+    crit: notable
+    conf: 0.85
+    if:
+      type: string
+      substr: "node_modules"
+
+  - id: package-lock-json
+    desc: package-lock.json file
+    crit: notable
+    conf: 0.85
+    if:
+      type: string
+      substr: "package-lock.json"
+
+  - id: yarn-lock
+    desc: yarn.lock file
+    crit: notable
+    conf: 0.85
+    if:
+      type: string
+      substr: "yarn.lock"
+
+composite_rules:
+  # npm/yarn composite (migrated from YARA)
+  - id: npm
+    desc: Built with npm/yarn (Node.js)
+    crit: notable
+    conf: 0.85
+    any:
+      - id: package-json
+      - id: node-modules
+      - id: package-lock-json
+      - id: yarn-lock

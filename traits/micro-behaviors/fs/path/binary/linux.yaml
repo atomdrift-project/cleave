@@ -1,0 +1,33 @@
+# Binary/Executable Paths
+# MBC: E1083 (File and Directory Discovery)
+# ATT&CK: T1083
+
+defaults:
+  for: [all]
+
+traits:
+  - id: binary-usr-sbin
+    desc: Reference to key /usr/sbin daemon binaries
+    crit: notable
+    conf: 0.66
+    if:
+      type: string
+      regex: "/usr/sbin/(httpd|dropbear)\\b"
+
+  - id: binary-usr-local
+    desc: Reference to /usr/local binaries
+    crit: baseline
+    conf: 0.66
+    if:
+      type: string
+      regex: "/usr/local/(bin|sbin)/[\\w\\-]+"
+
+  - id: binary-bin-su
+    desc: Reference to /bin/su
+    crit: suspicious
+    conf: 0.66
+    if:
+      type: string
+      regex: "/bin/su($|\\s)"
+    not:
+      - regex: suexec

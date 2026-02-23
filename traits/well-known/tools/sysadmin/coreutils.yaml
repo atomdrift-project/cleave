@@ -1,0 +1,46 @@
+# GNU Coreutils: stdbuf
+# stdbuf adjusts standard streams buffering using LD_PRELOAD/DYLD_INSERT_LIBRARIES
+
+defaults:
+  for: [c, elf, so, macho]
+
+traits:
+  - id: stdbuf-header
+    desc: stdbuf source header
+    crit: notable
+    conf: 1.0
+    if:
+      type: string
+      substr: "stdbuf -- setup the standard streams for a command"
+
+  - id: stdbuf-usage
+    desc: stdbuf usage strings
+    crit: notable
+    conf: 0.8
+    if:
+      type: string
+      substr: "modified buffering operations for its standard streams"
+
+  - id: libstdbuf-so
+    desc: libstdbuf shared library reference
+    crit: notable
+    conf: 0.8
+    if:
+      type: string
+      substr: "libstdbuf.so"
+
+composite_rules:
+  - id: stdbuf-tool
+    desc: GNU Coreutils stdbuf tool
+    crit: notable
+    conf: 1.0
+    any:
+      - id: stdbuf-header
+      - id: stdbuf-usage
+      - id: libstdbuf-so
+    downgrade:
+      # This downgrades the composite rule if matched (self-downgrade)
+      # But we want to use this ID to downgrade OTHERS.
+      # So this rule just needs to exist and be matched.
+      any:
+        - id: metadata/vendor/fsf::fsf-copyright

@@ -1,0 +1,25 @@
+# Hidden File CLI Traits
+# Detects CLI messages related to hiding files
+# ATT&CK: T1564.001 (Hide Artifacts: Hidden Files and Directories)
+
+defaults:
+  for: [all]
+
+traits:
+  - id: hide-file-msg
+    desc: '"Hiding file/dir" message'
+    crit: notable
+    conf: 0.8
+    mbc: "F0005"
+    attack: "T1564.001"
+    if:
+      type: string
+      regex: "Hiding file/dir"
+
+  - id: unhide-file-msg
+    desc: '"Unhiding file/dir" message'
+    crit: notable
+    conf: 0.8
+    if:
+      type: string
+      regex: "Unhiding file/dir"

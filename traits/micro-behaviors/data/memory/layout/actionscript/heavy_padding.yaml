@@ -1,0 +1,14 @@
+defaults:
+  for: [all]
+
+traits:
+  - id: actionscript-heavy-uint-padding
+    desc: "Class contains excessive uint fields, indicative of"
+    crit: suspicious
+    # Removed for: to ensure it runs
+
+    # Detects repeated uint definitions like 'var a0:uint;'
+    if:
+      type: raw
+      regex: "var\\s+a\\d+\\s*:\\s*uint"
+      count_min: 1

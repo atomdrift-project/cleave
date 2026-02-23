@@ -1,0 +1,14 @@
+# Anti-Analysis & Evasion - JavaScript
+# Composed objectives for JS anti-analysis
+
+composite_rules:
+  - id: js-self-sigsegv-termination
+    desc: Self-termination via SIGSEGV for evasion
+    crit: hostile
+    conf: 0.95
+    attack: T1497
+    mbc: B0006
+    for: [javascript, typescript]
+    all:
+      - id: micro-behaviors/process/terminate/kill::js-sigsegv-kill
+      - id: micro-behaviors/process/exit/terminate::process-exit

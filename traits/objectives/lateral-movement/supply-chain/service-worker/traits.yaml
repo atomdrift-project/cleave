@@ -1,0 +1,26 @@
+defaults:
+  for: [all]
+
+traits:
+  - id: protocol-downgrade
+    desc: Service Worker forces protocol synchronization (downgrade attack)
+    crit: suspicious
+    if:
+      type: raw
+      regex: '\.protocol\s*=\s*self\.location\.protocol'
+
+  - id: cache-busting
+    desc: Service Worker implements aggressive cache busting
+    crit: notable
+    if:
+      type: raw
+      regex: "cache-bust="
+
+composite_rules:
+  - id: intercept-all
+    desc: Service Worker intercepts requests and claims clients immediately
+    crit: notable
+    all:
+      - id: micro-behaviors/communications/http/service-worker::event-fetch
+      - id: micro-behaviors/communications/http/service-worker::control-claim
+      - id: micro-behaviors/communications/http/service-worker::api-respond-with

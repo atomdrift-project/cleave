@@ -1,0 +1,17 @@
+composite_rules:
+  - id: ps-downloader-indicators
+    desc: Helper for downloader indicators
+    crit: notable
+    any:
+      - id: micro-behaviors/os/env/vars::env-temp
+      - id: objectives/execution/dropper/script::outfile-param
+
+  - id: ps-downloader-execute
+    desc: "PowerShell script downloads and executes payload"
+    crit: hostile
+    conf: 0.95
+    for: [powershell]
+    all:
+      - id: micro-behaviors/communications/http/lib/invoke-webrequest::download
+      - id: objectives/execution/process/control::start-process
+      - id: objectives/command-and-control/dropper/script::ps-downloader-indicators

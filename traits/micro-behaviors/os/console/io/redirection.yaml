@@ -1,0 +1,74 @@
+# Console/Shell Redirection
+# Detects output redirection and piping
+
+defaults:
+  for: [all]
+
+traits:
+  # Output suppression
+  - id: redirect-dev-null
+    desc: Redirect to /dev/null
+    crit: baseline
+    conf: 0.5
+    if:
+      type: string
+      substr: ">/dev/null"
+
+  - id: stderr-redirect
+    desc: Stderr redirect 2>&1
+    crit: baseline
+    conf: 0.5
+    if:
+      type: string
+      exact: "2>&1"
+
+  # Shell pipes
+  - id: pipe-bash
+    desc: Pipe to bash
+    crit: baseline
+    conf: 0.6
+    if:
+      type: string
+      substr: "| bash"
+
+  - id: encoded-bash-pipe
+    desc: Base64 encoded bash pipe
+    crit: suspicious
+    conf: 0.9
+    mbc: B0032
+    attack: T1027
+    if:
+      type: string
+      regex: "base64 (-d|-D) \\| bash"
+
+  - id: pipe-sh
+    desc: Pipe to sh
+    crit: baseline
+    conf: 0.6
+    if:
+      type: string
+      exact: "| sh"
+
+  - id: pipe-bin-sh
+    desc: Pipe to /bin/sh
+    crit: baseline
+    conf: 0.6
+    if:
+      type: string
+      substr: "| /bin/sh"
+
+composite_rules:
+  # Helper: Output suppression
+  - id: output-suppression
+    desc: Output/error suppression
+    any:
+      - id: redirect-dev-null
+      - id: stderr-redirect
+
+  # Helper: Shell pipes
+  - id: shell-pipes
+    desc: Pipe to shell interpreters
+    any:
+      - id: pipe-bash
+      - id: pipe-sh
+      - id: pipe-bin-sh

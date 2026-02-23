@@ -1,0 +1,22 @@
+defaults:
+  for:
+  - python
+  attack: T1559.001
+  platforms:
+  - windows
+traits:
+- id: import-win32com
+  desc: Python win32com module import
+  crit: notable
+  conf: 0.85
+  if:
+    type: raw
+    substr: import win32com
+- id: dispatch-call
+  desc: COM Dispatch object creation
+  crit: notable
+  conf: 0.85
+  if:
+    type: raw
+    regex: \b(DispatchEx?|EnsureDispatch|CoCreateInstance)\b
+composite_rules: []

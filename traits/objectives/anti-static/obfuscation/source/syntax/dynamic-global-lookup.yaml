@@ -1,0 +1,15 @@
+# Dynamic Global Lookup
+# Detects obfuscated access to global properties (like ActiveXObject) via array operations
+
+defaults:
+  crit: suspicious
+  conf: 0.8
+  for: [javascript]
+
+traits:
+  - id: js-dynamic-global-access-array
+    desc: Accessing global property via array shift/pop
+    # Detects: this[array.shift()] or this[array.pop()]
+    if:
+      type: raw
+      regex: 'this\[\w+\.(shift|pop)\(\)\]'

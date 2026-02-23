@@ -1,0 +1,60 @@
+# PowerShell .NET Assembly Loading
+# Detects reflective loading and execution of .NET assemblies within PowerShell
+# MBC: B0024 (Execution), B0032 (Obfuscated Files or Information)
+# ATT&CK: T1620 (Reflective Code Loading), T1059.001 (PowerShell)
+
+defaults:
+  for: [powershell, batch, shell]
+  mbc: "B0024"
+  attack: "T1620"
+
+traits:
+  # [System.Reflection.Assembly]::Load(...)
+  - id: ps-assembly-load
+    desc: Reflective assembly load
+    crit: suspicious
+    conf: 0.95
+    if:
+      type: raw
+      regex: '(?i)\[System\.Reflection\.Assembly\]::Load\('
+
+  # [System.Reflection.Assembly]::LoadWithPartialName(...)
+  - id: ps-assembly-load-partial
+    desc: Reflective assembly load with partial name
+    crit: notable
+    conf: 0.85
+    if:
+      type: raw
+      regex: '(?i)\[System\.Reflection\.Assembly\]::LoadWithPartialName\('
+
+  # Assembly EntryPoint Invocation
+  - id: ps-assembly-invoke
+    desc: Reflective assembly entry point invocation
+    crit: suspicious
+    conf: 0.95
+    if:
+      type: raw
+      regex: '(?i)\.EntryPoint\.Invoke\('
+
+  # [System.Convert]::FromBase64String(...)
+  - id: ps-b64-decode
+    desc: PowerShell Base64 decode
+    crit: notable
+    conf: 0.9
+    if:
+      type: raw
+      regex: '(?i)\[System\.Convert\]::FromBase64String'
+
+composite_rules:
+  # Reflective .NET loading chain (B64 decode -> Load -> Invoke)
+  - id: reflective-dotnet-loader
+    desc: PowerShell Reflective .NET Loader
+    crit: hostile
+    conf: 0.95
+    attack: "T1620"
+    all:
+      - id: ps-assembly-load
+      - id: ps-b64-decode
+    any:
+      - id: ps-assembly-invoke
+      - id: micro-behaviors/process/create/shell/lang::invoke-prefix

@@ -1,0 +1,69 @@
+# Code Quality Indicators - Help
+
+defaults:
+  for: [all]
+
+traits:
+  # === Atomic: Help/Usage ===
+
+  - id: help-long-flag
+    desc: --help flag
+    crit: baseline
+    conf: 0.6
+    for: [all]
+    if:
+      type: string
+      substr: "--help"
+
+  - id: help-short-flag
+    desc: -h flag
+    crit: baseline
+    conf: 0.4
+    for: [all]
+    if:
+      type: string
+      exact: "-h"
+
+  - id: usage-lower
+    desc: "usage: label (lowercase)"
+    crit: baseline
+    conf: 0.5
+    for: [all]
+    if:
+      type: string
+      substr: "usage:"
+
+  - id: usage-title
+    desc: "Usage: label (title case)"
+    crit: baseline
+    conf: 0.5
+    for: [all]
+    if:
+      type: string
+      substr: "Usage:"
+
+  - id: options-title
+    desc: "Options: label"
+    crit: baseline
+    conf: 0.5
+    for: [all]
+    if:
+      type: string
+      substr: "Options:"
+
+  - id: usage-upper
+    desc: "USAGE: label (uppercase)"
+    crit: baseline
+    conf: 0.5
+    for: [all]
+    if:
+      type: string
+      substr: "USAGE:"
+
+  - id: libxslt-configure-js
+    desc: libxslt configure.js script
+    crit: baseline
+    conf: 1.0
+    if:
+      type: raw
+      regex: "Configure script for libxslt, specific for Windows"

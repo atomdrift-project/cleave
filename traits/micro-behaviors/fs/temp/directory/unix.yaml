@@ -1,0 +1,27 @@
+# Temporary Directory Operations - Unix
+# MBC: E1083 (File and Directory Discovery)
+# ATT&CK: T1083
+
+defaults:
+  for: [elf, macho, so, dylib, c]
+
+traits:
+  - id: directory-create
+    desc: Create temporary directory
+    crit: baseline
+    conf: 0.66
+    if:
+      type: symbol
+      regex: mkdtemp
+
+composite_rules:
+  - id: directory-env
+    desc: Read temp directory from TMPDIR
+    crit: baseline
+    conf: 0.66
+    for: [elf, macho, so, dylib, c]
+    mbc: E1083
+    attack: T1083
+    all:
+      - id: micro-behaviors/os/env/vars::tmpdir-var
+      - id: micro-behaviors/os/env/vars::getenv

@@ -1,0 +1,55 @@
+# HTTP Server Request Handling
+# Micro-behaviors for extracting data from HTTP requests and writing to files
+
+defaults:
+  for: [python]
+  crit: baseline
+  conf: 0.75
+
+traits:
+  - id: extract-from-request-json
+    desc: Extract data from JSON request body
+    conf: 0.8
+    if:
+      type: raw
+      regex: "request\\.json|request\\.get_json"
+
+  - id: extract-from-request-form
+    desc: Extract data from form request
+    conf: 0.8
+    if:
+      type: raw
+      regex: "request\\.form|request\\.args"
+
+  - id: extract-from-request-data
+    desc: Extract data from request data field
+    if:
+      type: raw
+      substr: "request.data"
+
+  - id: file-write-storage
+    desc: Write file to persistent storage
+    if:
+      type: raw
+      regex: "open\\(.{0,30}[\"'][wa]"
+
+  - id: file-store-variable
+    desc: Store data to file variable
+    conf: 0.5
+    if:
+      type: raw
+      regex: "file\\.write\\(|f\\.write\\("
+
+  - id: http-post-endpoint
+    desc: HTTP POST method handler
+    conf: 0.8
+    if:
+      type: raw
+      regex: "@app\\.post\\(|@route.{0,30}POST"
+
+  - id: http-root-endpoint
+    desc: HTTP endpoint at root path
+    conf: 0.7
+    if:
+      type: raw
+      regex: '@.{0,30}(route|post).{0,20}[''"]/?[''"]'

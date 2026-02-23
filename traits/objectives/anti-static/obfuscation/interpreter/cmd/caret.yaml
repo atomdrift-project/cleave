@@ -1,0 +1,40 @@
+# Command Line Caret Obfuscation
+# Detects usage of caret (^) escaping to break signatures
+# Common in batch scripts and cmd.exe arguments
+
+defaults:
+  crit: suspicious
+  conf: 0.8
+  for: [all]
+  platforms: [windows]
+  attack: "T1027.002"
+  mbc: "B0027"
+
+traits:
+  - id: cmd-caret-obfuscation
+    desc: Heavy caret obfuscation in string
+    crit: notable
+    if:
+      type: raw
+      # Detects patterns like P^o^w^e^r^s^h^e^l^l or c^m^d
+      # Look for at least 4 carets in close proximity (3 escaped segments)
+      regex: "\\^[a-zA-Z0-9]\\^[a-zA-Z0-9]\\^[a-zA-Z0-9]\\^"
+    
+  - id: cmd-caret-excessive-raw
+    desc: Excessive caret usage (raw match)
+    crit: notable
+    if:
+      type: raw
+      regex: "(\\^[a-zA-Z0-9]{0,2}){5,}"  # 5+ carets with alphanumeric chars between
+
+composite_rules:
+  - id: cmd-caret-excessive
+    desc: Excessive caret usage
+    crit: suspicious
+    conf: 0.8
+    mbc: B0027
+    attack: T1027.002
+    all:
+      - id: objectives/anti-static/obfuscation/interpreter/cmd::cmd-caret-excessive-raw
+    unless:
+      - id: metadata/lang/shebang::perl

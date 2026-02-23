@@ -1,0 +1,25 @@
+# Webhook-as-C2
+# Detects misuse of collaboration platform webhooks for command-and-control/Exfil
+# ATT&CK: T1567.002
+
+defaults:
+  for: [all]
+
+traits:
+  - id: discord-webhook-url
+    desc: Hardcoded Discord webhook URL
+    crit: suspicious
+    conf: 1.0
+    attack: T1567.002
+    if:
+      type: string
+      regex: '(?i)https://discord(app)?\.com/api/webhooks/\d+/[a-zA-Z0-9_-]+'
+
+  - id: telegram-bot-api-token
+    desc: Telegram Bot API usage with token
+    crit: suspicious
+    conf: 1.0
+    attack: T1567.002
+    if:
+      type: string
+      regex: '(?i)api\.telegram\.org/bot\d+:[a-zA-Z0-9_-]+/'

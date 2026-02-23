@@ -1,0 +1,32 @@
+# macOS Stealth Information Stealer Detection
+# Detects advanced stealers that impair defenses before harvesting
+# ATT&CK: T1562.001 (Impair Defenses), T1056.002 (Input Capture)
+
+defaults:
+  platforms: [macos]
+  for: [macho]
+  mbc: "B0028"
+
+composite_rules:
+  - id: macos-stealth-phishing-collector
+    desc: "macOS Stealth Phishing Collector (TCC Reset + Phish)"
+    crit: hostile
+    conf: 0.98
+    # High-confidence: Binaries that wipe TCC permissions AND phish for passwords
+    all:
+      - id: objectives/evasion/tcc-manipulation/bypass::tcc-bypass
+      - id: objectives/credential-access/phishing/lure::password-phishing
+
+  - id: adhoc-browser-data-stealer
+    desc: "Ad-hoc Browser Data Stealer (Unsigned Access)"
+    crit: hostile
+    conf: 0.95
+    # High-confidence: Ad-hoc signed binaries accessing browser secrets and networking
+    all:
+      - id: metadata/sign/apple::adhoc
+      - id: micro-behaviors/communications/download/curl::libcurl-http
+    needs: 1
+    any:
+      - id: objectives/credential-access/browser/chromium::cookies
+      - id: objectives/credential-access/browser/safari::cookie-theft
+      - id: objectives/collection/notes/app::notestore-db

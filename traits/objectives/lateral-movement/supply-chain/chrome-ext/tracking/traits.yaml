@@ -1,0 +1,66 @@
+defaults:
+  for: [javascript]
+
+# Tracking and Monetization Patterns
+# Affiliate domains and tracking parameters
+
+traits:
+  # === Affiliate/Tracking Domain Patterns ===
+  - id: profit-domain
+    desc: Profit/monetization tracking domain
+    crit: suspicious
+    conf: 0.85
+    for: [javascript]
+    if:
+      type: string
+      regex: "\\b\\d*x?profit\\.(io|com|net|org)\\b"
+      case_insensitive: true
+
+  - id: affiliate-domain-pattern-1
+    desc: Affiliate domain (affiliate/partner/track/click)
+    crit: suspicious
+    conf: 0.8
+    if:
+      type: string
+      regex: "(affiliate|partner|track|click)\\.[a-z]{2,6}\\b"
+      case_insensitive: true
+
+  - id: affiliate-domain-pattern-2
+    desc: Affiliate domain (redir/monetize/revenue/earn)
+    crit: suspicious
+    conf: 0.85
+    if:
+      type: string
+      regex: "(redir|monetize|revenue|earn)\\.[a-z]{2,6}\\b"
+      case_insensitive: true
+
+composite_rules:
+  - id: tracking-utm-params
+    desc: UTM tracking parameters
+    crit: notable
+    conf: 0.7
+    for: [javascript]
+    any:
+      - id: metadata/analytics::utm-source-medium-campaign
+      - id: metadata/analytics::utm-content-term
+
+  - id: affiliate-domain-pattern
+    desc: Affiliate tracking domain
+    crit: notable
+    conf: 0.75
+    for: [javascript]
+    any:
+      - id: affiliate-domain-pattern-1
+      - id: affiliate-domain-pattern-2
+
+  # Affiliate/adware extension pattern
+  - id: affiliate-adware
+    desc: Affiliate/adware extension
+    crit: suspicious
+    conf: 0.85
+    for: [javascript]
+    all:
+      - id: objectives/lateral-movement/supply-chain/chrome-ext/markers::chrome-extension-context
+    any:
+      - id: profit-domain
+      - id: affiliate-domain-pattern

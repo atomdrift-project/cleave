@@ -1,0 +1,19 @@
+defaults:
+  for: [all]
+
+composite_rules:
+- id: crypto-capability
+  desc: Helper for crypto/encoding capabilities
+  crit: notable
+  conf: 0.6
+  any:
+  - id: micro-behaviors/crypto/cipher/library
+  - id: micro-behaviors/data/encode
+
+- id: encrypted-exfiltration-to-paste-site
+  desc: Encrypted data exfiltration to a public paste service
+  crit: hostile
+  conf: 0.9
+  all:
+  - id: crypto-capability
+  - id: objectives/command-and-control/infrastructure/pastebin::dpaste

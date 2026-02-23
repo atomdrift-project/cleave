@@ -1,0 +1,41 @@
+# File Rename Operations
+# MBC: C0046 (Create File)
+# ATT&CK: T1105
+
+defaults:
+  for: [elf, macho, so, dylib, c]
+
+traits:
+  - id: rename-base
+    desc: Rename files
+    crit: baseline
+    conf: 0.66
+    if:
+      type: symbol
+      exact: "rename"
+
+  - id: renameat
+    desc: Rename files by fd/path
+    crit: baseline
+    conf: 0.66
+    if:
+      type: symbol
+      exact: "renameat"
+
+  - id: renameat2
+    desc: Rename files
+    crit: baseline
+    conf: 0.66
+    if:
+      type: symbol
+      exact: "renameat2"
+
+composite_rules:
+  - id: rename
+    desc: Rename files
+    crit: baseline
+    conf: 0.66
+    any:
+      - id: rename-base
+      - id: renameat
+      - id: renameat2

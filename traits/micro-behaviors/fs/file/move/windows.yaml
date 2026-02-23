@@ -1,0 +1,24 @@
+# File moving and renaming - Windows
+# Critical ransomware capability - files are renamed after encryption
+defaults:
+  for: [pe, dll]
+  platforms: [windows]
+
+traits:
+  - id: move-file
+    desc: Move or rename file
+    crit: notable
+    conf: 0.9
+    attack: "T1486"
+    if:
+      type: symbol
+      regex: "MoveFile[AW]?$"
+
+  - id: move-file-ex
+    desc: Move or rename file with options
+    crit: notable
+    conf: 0.9
+    attack: "T1486"
+    if:
+      type: symbol
+      regex: "MoveFileEx[AW]?$"

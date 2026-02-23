@@ -1,0 +1,95 @@
+traits:
+  - id: appended-zip-trailer
+    desc: ZIP central directory at file end
+    crit: suspicious
+    conf: 0.85
+    attack: "T1027.009"
+    for: [all]
+    if:
+      type: hex
+      pattern: "50 4B 05 06"
+      offset_range: [-1024, ~]
+
+  - id: appended-shell-script
+    desc: Shell shebang near file end
+    crit: suspicious
+    conf: 0.8
+    for: [elf, macho, pe]
+    if:
+      type: raw
+      regex: "#!/(bin/|usr/bin/)(sh|bash|zsh)"
+      offset_range: [-4096, ~]
+
+  - id: appended-python-script
+    desc: Python shebang near file end
+    crit: suspicious
+    conf: 0.8
+    for: [elf, macho, pe]
+    if:
+      type: raw
+      regex: "#!/(usr/bin/|bin/)(python|python3)"
+      offset_range: [-4096, ~]
+
+  # Removed appended-base64-blob duplicate - use micro-behaviors/data/encode/payload::large-base64-payload
+  # Note: Offset constraint for polyglot detection can be applied in composite rules if needed
+
+  - id: appended-hex-blob
+    desc: Hex-encoded data at file end
+    crit: notable
+    conf: 0.7
+    for: [shell, python, javascript]
+    if:
+      type: string
+      regex: "^[0-9A-Fa-f]{100,}$"
+      offset_range: [-4096, ~]
+
+  - id: appended-elf-binary
+    desc: ELF binary appended to file
+    crit: suspicious
+    conf: 0.9
+    for: [all]
+    size_max: 1000000
+    if:
+      type: hex
+      pattern: "7F 45 4C 46"
+      offset_range: [1, ~]
+
+  - id: appended-pe-binary
+    desc: PE binary appended to file
+    crit: suspicious
+    conf: 0.9
+    for: [elf, macho, shell, python, javascript]
+    if:
+      type: hex
+      pattern: "4D 5A ?? ?? 50 45 00 00"
+      offset_range: [-65536, ~]
+
+  - id: jar-polyglot-prefix
+    desc: Data before JAR/ZIP header
+    crit: notable
+    conf: 0.8
+    for: [all]
+    if:
+      type: hex
+      pattern: "50 4B 03 04"
+      offset_range: [64, ~]
+
+  - id: jpeg-trailing-data
+    desc: Data after JPEG end-of-image
+    crit: notable
+    conf: 0.75
+    for: [jpeg]
+    if:
+      type: hex
+      pattern: "FF D9"
+      offset_range: [0, -1024]
+
+  - id: png-trailing-data
+    desc: Data after PNG end chunk
+    crit: notable
+    conf: 0.75
+    for: [png]
+    if:
+      type: hex
+      pattern: "49 45 4E 44 AE 42 60 82"
+      offset_range: [0, -256]

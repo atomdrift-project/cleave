@@ -1,0 +1,11 @@
+defaults:
+  for: [all]
+
+traits:
+  - id: hta-extension
+    desc: HTA file extension reference.
+    crit: notable
+    conf: 0.8
+    if:
+      type: raw
+      regex: "(?i)\\\\.hta\\\\b"

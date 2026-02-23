@@ -1,0 +1,10 @@
+defaults:
+  for: [all]
+
+traits:
+  - id: hide-dock-icon-action
+    desc: "Action to hide application Dock icon"
+    crit: suspicious
+    if:
+      type: raw
+      substr: "HideAppIConDockAction"

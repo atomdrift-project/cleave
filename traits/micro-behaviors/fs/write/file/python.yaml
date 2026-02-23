@@ -1,0 +1,146 @@
+# Python file write operations
+# ATT&CK: T1105 (Ingress Tool Transfer), T1027 (Obfuscated Files)
+
+defaults:
+  for: [python]
+  crit: notable
+  mbc: "C0016"
+  attack: "T1105"
+
+traits:
+  # Binary file write - open with 'wb' mode
+  - id: python-open-write-binary
+    desc: "Write binary file (open with"
+    conf: 0.85
+    if:
+      type: string
+      # Matches: open(..., 'wb'), open(..., "wb"), with open(..., 'wb')
+      regex: "open\\(.{1,220}['\"]wb['\"]\\)"
+
+  # Binary append mode
+  - id: python-open-append-binary
+    desc: "Append to binary file (open"
+    conf: 0.8
+    if:
+      type: string
+      regex: "open\\(.{1,220}['\"]ab['\"]\\)"
+
+  # Write with pathlib
+  - id: python-pathlib-write-bytes
+    desc: "Write bytes via pathlib"
+    conf: 0.85
+    if:
+      type: string
+      regex: "\\.write_bytes\\("
+
+  # File content from HTTP response
+  - id: python-write-response-content
+    desc: "Write HTTP response content to"
+    conf: 0.9
+    if:
+      type: string
+      # Matches: f.write(response.content) or write(r.content)
+      regex: "\\.write\\(.{0,220}\\.content\\)"
+
+  # GuardDog: Write to .exe file
+  - id: write-exe
+    desc: "Write to .exe file"
+    conf: 0.90
+    crit: suspicious
+    attack: "T1105"
+    if:
+      type: raw
+      regex: 'open\([^)]{0,120}\.exe[''"][^)]{0,30}[''"]w'
+
+  # shutil.copyfileobj - streaming copy
+  - id: python-shutil-copy
+    desc: "Copy file object (shutil.copyfileobj)"
+    conf: 0.75
+    crit: baseline
+    if:
+      type: string
+      regex: "shutil\\.copyfileobj\\("
+
+  # Write to temp directory
+  - id: python-write-tmp
+    desc: "Write to /tmp directory"
+    conf: 0.85
+    if:
+      type: string
+      regex: "open\\(.{0,220}['\"]?/tmp/"
+
+  # === tempfile module atomic indicators ===
+  - id: python-tempfile-named
+    desc: "tempfile.NamedTemporaryFile usage"
+    conf: 0.6
+    crit: baseline
+    if:
+      type: string
+      substr: "tempfile.NamedTemporaryFile"
+
+  - id: python-tempfile-mkstemp
+    desc: "tempfile.mkstemp usage"
+    conf: 0.6
+    crit: baseline
+    if:
+      type: string
+      substr: "tempfile.mkstemp"
+
+  - id: python-tempfile-mkdtemp
+    desc: "tempfile.mkdtemp usage"
+    conf: 0.6
+    crit: baseline
+    if:
+      type: string
+      substr: "tempfile.mkdtemp"
+
+  # === HTTP request atomic indicators ===
+  # NOTE: requests.get/post moved to communications/http/lib/requests/python.yaml
+  # NOTE: urllib.request.urlopen moved to communications/http/lib/urllib/python.yaml
+  # NOTE: urllib.request.urlretrieve is download-specific, keeping here
+
+composite_rules:
+  - id: python-tempfile
+    desc: "Temporary file creation (tempfile module)"
+    conf: 0.7
+    crit: baseline
+    any:
+      - id: python-tempfile-named
+      - id: python-tempfile-mkstemp
+      - id: python-tempfile-mkdtemp
+
+  - id: python-http-request
+    desc: "HTTP request via requests or"
+    conf: 0.8
+    any:
+      - id: micro-behaviors/communications/http/lib/requests::requests-get
+      - id: micro-behaviors/communications/http/lib/requests::requests-post
+      - id: micro-behaviors/communications/http/lib/urllib::urllib-urlopen
+
+  - id: python-binary-write-pattern
+    desc: "Binary file write pattern"
+    conf: 0.85
+    any:
+      - id: python-open-write-binary
+      - id: python-pathlib-write-bytes
+
+  # Download and write pattern (dropper behavior)
+  - id: python-download-write
+    desc: "Download content and write to"
+    conf: 0.9
+    crit: suspicious
+    attack: "T1105"
+    mbc: "B0024"
+    all:
+      - id: python-http-request
+      - id: python-binary-write-pattern
+
+  # Write + make executable pattern
+  - id: python-write-chmod-exec
+    desc: "Write file and make executable"
+    conf: 0.95
+    crit: suspicious
+    attack: "T1222.002"
+    all:
+      - id: python-open-write-binary
+      - id: micro-behaviors/fs/chmod/executable

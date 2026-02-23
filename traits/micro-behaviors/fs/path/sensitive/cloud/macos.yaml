@@ -1,0 +1,13 @@
+defaults:
+  for: [all]
+
+traits:
+  - id: aws-credentials
+    desc: Reference to AWS credentials
+    crit: notable
+    conf: 0.8
+    mbc: T1552.005
+    attack: T1552.005
+    if:
+      type: string
+      substr: ".aws/credentials"

@@ -1,0 +1,356 @@
+# Python subprocess execution
+# ATT&CK: T1059.006 (Python)
+
+defaults:
+  for: [python]
+  attack: "T1059.006"
+
+traits:
+  # === Import patterns ===
+  - id: import
+    desc: subprocess module import
+    crit: notable
+    conf: 0.7
+    mbc: "E1059.006"
+    if:
+      type: string
+      regex: "import subprocess|from subprocess"
+
+  # === String-based method detection ===
+  # NOTE: popen removed - use popen-content (content type is broader)
+
+  - id: run-call
+    desc: subprocess.run call
+    crit: notable
+    conf: 0.75
+    mbc: "E1059.006"
+    if:
+      type: string
+      substr: "subprocess.run("
+
+  - id: call
+    desc: subprocess.call call
+    crit: notable
+    conf: 0.75
+    mbc: "E1059.006"
+    if:
+      type: string
+      substr: "subprocess.call("
+
+  - id: check-output
+    desc: subprocess.check_output call
+    crit: notable
+    conf: 0.75
+    mbc: "E1059.006"
+    if:
+      type: string
+      substr: "subprocess.check_output("
+
+  # NOTE: check-call removed - use check-call-content (content type is broader)
+
+  # === os.popen detection ===
+  - id: os-popen
+    desc: Executes command via os.popen
+    crit: notable
+    conf: 0.85
+    mbc: "E1059.006"
+    if:
+      type: string
+      substr: "os.popen("
+
+  - id: os-popen-raw
+    desc: Executes command via os.popen (raw)
+    crit: notable
+    conf: 0.8
+    if:
+      type: raw
+      substr: "os.popen"
+
+  - id: os-popen-ast
+    desc: Executes command via os.popen
+    crit: notable
+    conf: 0.9
+    mbc: "C0017"
+    if:
+      type: ast
+      query: |
+        ((call
+          function: (attribute
+            object: (identifier) @mod
+            attribute: (identifier) @meth))
+         (#eq? @mod "os")
+         (#eq? @meth "popen"))
+
+
+  # === AST-based detection (more precise) ===
+  - id: run-ast
+    desc: "Executes external system command"
+    crit: notable
+    conf: 0.85
+    mbc: "C0017"
+    if:
+      type: ast
+      query: |
+        ((call
+          function: (attribute
+            object: (identifier) @mod
+            attribute: (identifier) @meth)
+          arguments: (argument_list
+            (string) @cmd))
+         (#eq? @mod "subprocess")
+         (#match? @meth "^(Popen|run|call|check_output|check_call)$"))
+
+  # === Content-based fallback ===
+  # subprocess calls appear as code, not string literals, so string type misses them.
+  # Content type matches raw file bytes.
+  - id: popen-content
+    desc: subprocess.Popen call (content)
+    crit: notable
+    conf: 0.75
+    mbc: "E1059.006"
+    if:
+      type: raw
+      substr: "subprocess.Popen("
+
+  - id: check-call-content
+    desc: subprocess.check_call call (content)
+    crit: notable
+    conf: 0.75
+    mbc: "E1059.006"
+    if:
+      type: raw
+      substr: "subprocess.check_call("
+
+  # === GuardDog: os.exec* family ===
+  - id: os-execl
+    desc: os.execl - execute with path and args
+    crit: notable
+    conf: 0.85
+    mbc: "E1059.006"
+    if:
+      type: symbol
+      exact: "os.execl"
+
+  - id: os-execle
+    desc: os.execle - execute with environment
+    crit: notable
+    conf: 0.85
+    mbc: "E1059.006"
+    if:
+      type: symbol
+      exact: "os.execle"
+
+  - id: os-execlp
+    desc: os.execlp - execute with PATH search
+    crit: notable
+    conf: 0.85
+    mbc: "E1059.006"
+    if:
+      type: symbol
+      exact: "os.execlp"
+
+  - id: os-execlpe
+    desc: os.execlpe - execute with PATH and env
+    crit: notable
+    conf: 0.85
+    mbc: "E1059.006"
+    if:
+      type: symbol
+      exact: "os.execlpe"
+
+  - id: os-execv
+    desc: os.execv - execute with argv list
+    crit: notable
+    conf: 0.85
+    mbc: "E1059.006"
+    if:
+      type: symbol
+      exact: "os.execv"
+
+  - id: os-execve
+    desc: os.execve - execute with argv and env
+    crit: notable
+    conf: 0.85
+    mbc: "E1059.006"
+    if:
+      type: symbol
+      exact: "os.execve"
+
+  - id: os-execvp
+    desc: os.execvp - execute with PATH search
+    crit: notable
+    conf: 0.85
+    mbc: "E1059.006"
+    if:
+      type: symbol
+      exact: "os.execvp"
+
+  - id: os-execvpe
+    desc: os.execvpe - execute with PATH and env
+    crit: notable
+    conf: 0.85
+    mbc: "E1059.006"
+    if:
+      type: symbol
+      exact: "os.execvpe"
+
+  # === GuardDog: os.spawn* family ===
+  - id: os-spawnl
+    desc: os.spawnl - spawn with path and args
+    crit: notable
+    conf: 0.85
+    mbc: "E1059.006"
+    if:
+      type: symbol
+      exact: "os.spawnl"
+
+  - id: os-spawnle
+    desc: os.spawnle - spawn with environment
+    crit: notable
+    conf: 0.85
+    mbc: "E1059.006"
+    if:
+      type: symbol
+      exact: "os.spawnle"
+
+  - id: os-spawnlp
+    desc: os.spawnlp - spawn with PATH search
+    crit: notable
+    conf: 0.85
+    mbc: "E1059.006"
+    if:
+      type: symbol
+      exact: "os.spawnlp"
+
+  - id: os-spawnlpe
+    desc: os.spawnlpe - spawn with PATH and env
+    crit: notable
+    conf: 0.85
+    mbc: "E1059.006"
+    if:
+      type: symbol
+      exact: "os.spawnlpe"
+
+  - id: os-spawnv
+    desc: os.spawnv - spawn with argv list
+    crit: notable
+    conf: 0.85
+    mbc: "E1059.006"
+    if:
+      type: symbol
+      exact: "os.spawnv"
+
+  - id: os-spawnve
+    desc: os.spawnve - spawn with argv and env
+    crit: notable
+    conf: 0.85
+    mbc: "E1059.006"
+    if:
+      type: symbol
+      exact: "os.spawnve"
+
+  - id: os-spawnvp
+    desc: os.spawnvp - spawn with PATH search
+    crit: notable
+    conf: 0.85
+    mbc: "E1059.006"
+    if:
+      type: symbol
+      exact: "os.spawnvp"
+
+  - id: os-spawnvpe
+    desc: os.spawnvpe - spawn with PATH and env
+    crit: notable
+    conf: 0.85
+    mbc: "E1059.006"
+    if:
+      type: symbol
+      exact: "os.spawnvpe"
+
+  - id: os-posix-spawn
+    desc: os.posix_spawn - POSIX spawn
+    crit: notable
+    conf: 0.85
+    mbc: "E1059.006"
+    if:
+      type: symbol
+      exact: "os.posix_spawn"
+
+  - id: os-posix-spawnp
+    desc: os.posix_spawnp - POSIX spawn with PATH
+    crit: notable
+    conf: 0.85
+    mbc: "E1059.006"
+    if:
+      type: symbol
+      exact: "os.posix_spawnp"
+
+  # === GuardDog: distutils.spawn ===
+  - id: distutils-spawn
+    desc: distutils spawn function
+    crit: notable
+    conf: 0.85
+    mbc: "E1059.006"
+    if:
+      type: symbol
+      regex: '(distutils\.spawn\.spawn|spawn)\('
+
+composite_rules:
+  # All subprocess methods (string-based, AST-based, and content-based)
+  - id: methods
+    desc: subprocess module methods
+    crit: notable
+    conf: 0.75
+    any:
+      - id: popen-content
+      - id: run-call
+      - id: call
+      - id: check-output
+      - id: check-call-content
+      - id: run-ast
+
+  # GuardDog: os.exec* family composite
+  - id: os-exec-family
+    desc: os.exec* family functions
+    crit: notable
+    conf: 0.85
+    any:
+      - id: os-execl
+      - id: os-execle
+      - id: os-execlp
+      - id: os-execlpe
+      - id: os-execv
+      - id: os-execve
+      - id: os-execvp
+      - id: os-execvpe
+
+  # GuardDog: os.spawn* family composite
+  - id: os-spawn-family
+    desc: os.spawn* family functions
+    crit: notable
+    conf: 0.85
+    any:
+      - id: os-spawnl
+      - id: os-spawnle
+      - id: os-spawnlp
+      - id: os-spawnlpe
+      - id: os-spawnv
+      - id: os-spawnve
+      - id: os-spawnvp
+      - id: os-spawnvpe
+      - id: os-posix-spawn
+      - id: os-posix-spawnp
+
+  # GuardDog: All process execution capabilities
+  - id: process-execution
+    desc: Python process execution capabilities
+    crit: notable
+    conf: 0.80
+    any:
+      - id: methods
+      - id: os-popen
+      - id: os-popen-ast
+      - id: micro-behaviors/process/create/shell::python-os-system
+      - id: os-exec-family
+      - id: os-spawn-family
+      - id: distutils-spawn

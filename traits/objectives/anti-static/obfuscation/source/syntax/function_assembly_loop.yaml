@@ -1,0 +1,11 @@
+traits:
+- id: js-function-assembly-loop
+  desc: JScript function assembly loop with arithmetic generation
+  crit: suspicious
+  conf: 0.9
+  for:
+  - javascript
+  if:
+    type: raw
+    regex: for\s*\([^)]{1,120}\)\s*\{.{0,120}\w+\s*\+=\s*this\[
+composite_rules: []

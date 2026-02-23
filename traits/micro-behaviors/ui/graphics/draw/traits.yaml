@@ -1,0 +1,75 @@
+# Graphics Operations
+# GDI (Graphics Device Interface) operations
+
+defaults:
+  for: ["pe", "dll"]
+  platforms: ["windows"]
+
+traits:
+  # === Device Context ===
+  - id: get-device-caps
+    desc: Query device capabilities
+    crit: baseline
+    conf: 0.70
+    if:
+      type: symbol
+      exact: "GetDeviceCaps"
+
+  - id: set-bk-color
+    desc: Set background color
+    crit: baseline
+    conf: 0.70
+    if:
+      type: symbol
+      exact: "SetBkColor"
+
+  - id: set-bk-mode
+    desc: Set background mode (opaque/transparent)
+    crit: baseline
+    conf: 0.70
+    if:
+      type: symbol
+      exact: "SetBkMode"
+
+  - id: set-text-color
+    desc: Set text color
+    crit: baseline
+    conf: 0.70
+    if:
+      type: symbol
+      exact: "SetTextColor"
+
+  # === Object Selection ===
+  - id: select-object
+    desc: Select GDI object
+    crit: baseline
+    conf: 0.70
+    if:
+      type: symbol
+      exact: "SelectObject"
+
+  - id: delete-object
+    desc: Delete GDI object
+    crit: baseline
+    conf: 0.70
+    if:
+      type: symbol
+      exact: "DeleteObject"
+
+  # === Brush Creation ===
+  - id: create-brush-indirect
+    desc: Create brush object
+    crit: baseline
+    conf: 0.70
+    if:
+      type: symbol
+      exact: "CreateBrushIndirect"
+
+  # === Font Creation ===
+  - id: create-font-indirect
+    desc: Create font object
+    crit: baseline
+    conf: 0.70
+    if:
+      type: symbol
+      exact: "CreateFontIndirectW"

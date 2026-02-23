@@ -1,0 +1,98 @@
+---
+# Ruby Web Framework Backdoor Detection
+# Detects backdoors targeting Rails/Rack middleware
+# ATT&CK: T1059 (Command and Scripting Interpreter), T1190 (Exploit Public-Facing Application)
+
+defaults:
+  for: [ruby]
+  platforms: [all]
+
+traits:
+  # === Rack Middleware Hook ===
+  - id: rack-sendfile-hook
+    desc: Rack Sendfile hook
+    crit: suspicious
+    conf: 0.85
+    attack: "T1059"
+    if:
+      type: string
+      regex: "rack/sendfile|Rack::Sendfile"
+
+  # === Rails Production Check ===
+  - id: rails-production-env
+    desc: Rails production check
+    crit: notable
+    conf: 0.65
+    attack: "T1190"
+    if:
+      type: string
+      regex: 'Rails\.env\.production|env\.production\?'
+
+  # === Method Aliasing ===
+  - id: alias-method-call
+    desc: Method aliasing
+    crit: notable
+    conf: 0.70
+    attack: "T1059"
+    if:
+      type: string
+      regex: "alias_method"
+
+  # === HTTP Cookie Access ===
+  # HTTP_COOKIE: use objectives/command-and-control/webshell/script/ruby.yaml::http-cookie-extract (canonical)
+  - id: http-cookie-access
+    desc: HTTP cookie access (lowercase form)
+    crit: notable
+    conf: 0.75
+    attack: "T1190"
+    if:
+      type: string
+      substr: "http_cookie"
+
+  # === Cookie Pattern Extraction ===
+  - id: cookie-pattern-extract
+    desc: Cookie pattern extraction
+    crit: suspicious
+    conf: 0.80
+    attack: "T1190"
+    if:
+      type: string
+      regex: "__cfduid|cookie.{0,50}scan|scan.{0,50}cookie"
+
+  # === Exception Swallowing ===
+  - id: rescue-exception-nil
+    desc: Exception swallowing
+    crit: suspicious
+    conf: 0.75
+    attack: "T1070"
+    if:
+      type: string
+      regex: "rescue Exception"
+
+composite_rules:
+  # === Rack Middleware Backdoor ===
+  - id: rack-middleware-backdoor
+    desc: Rack middleware backdoor
+    crit: suspicious
+    conf: 0.95
+    attack: "T1059"
+    needs: 4
+    any:
+      - id: rack-sendfile-hook
+      - id: http-cookie-access
+      - id: micro-behaviors/data/encode/base64::base64-urlsafe-decode
+      - id: objectives/execution/interpreter/eval/dynamic::eval-call-ruby
+      - id: alias-method-call
+
+  # === Cookie-Based Code Injection ===
+  - id: cookie-code-injection
+    desc: Cookie-based code injection
+    crit: suspicious
+    conf: 0.93
+    attack: "T1059"
+    needs: 3
+    any:
+      - id: http-cookie-access
+      - id: cookie-pattern-extract
+      - id: micro-behaviors/data/encode/base64::base64-urlsafe-decode
+      - id: objectives/execution/interpreter/eval/dynamic::eval-call-ruby

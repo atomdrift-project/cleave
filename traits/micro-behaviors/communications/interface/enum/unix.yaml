@@ -1,0 +1,55 @@
+# Network Interface Operations
+# MBC: C0001 (Network Communication)
+
+defaults:
+  for: [elf, macho, so, dylib, c]
+
+traits:
+  - id: getifaddrs-symbol
+    desc: Enumerates interfaces with getifaddrs
+    crit: notable
+    conf: 0.75
+    if:
+      type: symbol
+      exact: getifaddrs
+
+  - id: if-nameindex-symbol
+    desc: Enumerates interfaces with if_nameindex
+    crit: notable
+    conf: 0.75
+    if:
+      type: symbol
+      exact: if_nameindex
+
+  - id: if-nametoindex-symbol
+    desc: Looks up index with if_nametoindex
+    crit: notable
+    conf: 0.70
+    if:
+      type: symbol
+      exact: if_nametoindex
+
+  - id: if-indextoname-symbol
+    desc: Looks up name with if_indextoname
+    crit: notable
+    conf: 0.70
+    if:
+      type: symbol
+      exact: if_indextoname
+
+composite_rules:
+  - id: enumerate
+    desc: Enumerate network interfaces
+    crit: notable
+    conf: 0.75
+    any:
+      - id: getifaddrs-symbol
+      - id: if-nameindex-symbol
+
+  - id: name-lookup
+    desc: Network interface name lookup
+    crit: notable
+    conf: 0.70
+    any:
+      - id: if-nametoindex-symbol
+      - id: if-indextoname-symbol

@@ -1,0 +1,33 @@
+# Cryptocurrency Wallet Stealer Traits
+# Detects targeting of crypto wallet configuration and key files
+
+defaults:
+  for: [all]
+  crit: notable
+  conf: 0.8
+  attack: "T1552.001"
+
+traits:
+  - id: solana-config-path
+    desc: Solana CLI config path
+    if:
+      type: string
+      regex: '/\.config/solana/id\.json'
+
+  - id: solana-config-b64
+    desc: Base64 encoded Solana config path
+    crit: suspicious
+    if:
+      type: string
+      substr: "Ly5jb25maWcvc29sYW5hL2lkLmpzb24"
+
+composite_rules:
+  - id: solana-stealer
+    desc: Solana wallet stealer
+    crit: hostile
+    conf: 0.95
+    all:
+      - id: solana-config-b64
+    any:
+      - id: objectives/lateral-movement/supply-chain/vscode::file-write-ops
+      - id: objectives/anti-static/obfuscation/source/syntax::js-comma-sequence-obfuscation-v2

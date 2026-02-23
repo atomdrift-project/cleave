@@ -1,0 +1,10 @@
+composite_rules:
+  - id: python-homoglyph-dropper
+    desc: "Python dropper using homoglyph obfuscation and complex number math"
+    crit: hostile
+    conf: 1.0
+    attack: "T1027"
+    for: [python]
+    all:
+      - id: objectives/anti-static/obfuscation/source/names::math-alphanum-identifiers
+      - id: objectives/anti-static/obfuscation/logic::complex-number-obfuscation

@@ -1,0 +1,49 @@
+traits:
+  - id: loop-variable-variable-step
+    desc: Loop variable incremented by a variable step
+    crit: notable
+    for: [javascript]
+    if:
+      type: ast
+      language: javascript
+      query: |
+        (while_statement
+          body: (statement_block
+            (expression_statement
+              (augmented_assignment_expression
+                operator: ["+=" "-="]
+                right: (identifier) @step
+              )
+            )
+          )
+        )
+        (#not-match? @step "^(approx|delta|epsilon|error|precision|diff|sum|total|chunk|byte|char|line|data|common|buffer|res)$")
+    unless:
+      - id: metadata/library::js-module-exports
+      - id: metadata/dev/testing::node-common-require
+
+  - id: loop-string-access-dynamic-method
+    desc: String character access inside a loop using
+    crit: notable
+    for: [javascript]
+    if:
+      type: ast
+      language: javascript
+      query: |
+        (while_statement
+          body: (statement_block
+            (expression_statement
+              (assignment_expression
+                right: (binary_expression
+                  right: (call_expression
+                    function: (subscript_expression
+                      object: (identifier) @str
+                      index: (identifier) @method
+                    )
+                    arguments: (arguments (identifier) @idx)
+                  )
+                )
+              )
+            )
+          )
+        )

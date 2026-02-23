@@ -1,0 +1,65 @@
+# Compiler/Build Tool Invocation
+# Detects direct invocation of C/C++ compilers and build tools in shell scripts
+# These are notable capabilities when executed dynamically in installers/scripts
+
+defaults:
+  crit: notable
+  attack: "T1027.004"  # Obfuscated Files or Information: Compile After Delivery
+  for: [shell]
+
+traits:
+  - id: gcc-invocation
+    desc: GCC compiler invocation
+    crit: notable
+    conf: 0.85
+    if:
+      type: raw
+      regex: '\bgcc\s+(-|[a-zA-Z0-9_./]+)'
+
+  - id: gpp-invocation
+    desc: G++ C++ compiler invocation
+    crit: notable
+    conf: 0.85
+    if:
+      type: raw
+      regex: '\bg\+\+\s+(-|[a-zA-Z0-9_./]+)'
+
+  - id: clang-invocation
+    desc: Clang compiler invocation
+    crit: notable
+    conf: 0.85
+    if:
+      type: raw
+      regex: '\bclang(\+\+)?\s+(-|[a-zA-Z0-9_./]+)'
+
+  - id: cc-invocation
+    desc: C compiler invocation
+    crit: notable
+    conf: 0.8
+    if:
+      type: raw
+      regex: '\bcc\s+(-|[a-zA-Z0-9_./]+)'
+
+  - id: make-invocation
+    desc: Make build tool invocation
+    crit: notable
+    conf: 0.8
+    if:
+      type: raw
+      regex: '\bmake\s+(all|clean|install)\b'
+
+  - id: make-invocation-build
+    desc: Make build invocation
+    crit: notable
+    conf: 0.8
+    if:
+      type: raw
+      regex: '\bmake\s+(build|check|test|dist)\b'
+
+  - id: make-invocation-flag
+    desc: Make invocation with flags
+    crit: notable
+    conf: 0.8
+    if:
+      type: raw
+      regex: '\bmake\s+-[a-zA-Z]\b'

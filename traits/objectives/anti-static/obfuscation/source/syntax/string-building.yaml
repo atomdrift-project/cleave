@@ -1,0 +1,28 @@
+# JavaScript String Building Obfuscation
+# Detects incremental string building patterns typical of JScript malware
+# ATT&CK: T1027 (Obfuscated Files or Information)
+
+traits:
+  # High density of small string-appending functions (JScript obfuscation)
+  - id: js-dense-string-building
+    desc: Dense incremental string building
+    crit: suspicious
+    conf: 0.95
+    mbc: "B0032"
+    attack: "T1027"
+    for: [javascript]
+    if:
+        type: raw
+        regex: 'function\s+\w+\(\)\s*\{\s*\w+\s*\+='
+
+  # Pattern: function name() { var += 'str'; };
+#  - id: js-incremental-string-func
+#    desc: Incremental string building function
+#    crit: notable
+#    conf: 0.6
+#    mbc: "B0032"
+#    attack: "T1027"
+#    for: [javascript]
+#    if:
+#        type: raw
+#        regex: 'function\s+\w+\(\)\s*\{\s*\w+\s*\+='

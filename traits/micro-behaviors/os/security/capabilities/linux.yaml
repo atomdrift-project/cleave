@@ -1,0 +1,22 @@
+# Linux Capabilities API
+# Basic libcap function detections (pure capability observation)
+
+defaults:
+  for: [elf]
+  platforms: [linux]
+  crit: baseline
+
+traits:
+  - id: cap-get-file
+    desc: cap_get_file function
+    conf: 0.6
+    if:
+      type: string
+      substr: "cap_get_file"
+
+  - id: cap-set-file
+    desc: cap_set_file function
+    conf: 0.6
+    if:
+      type: string
+      substr: "cap_set_file"

@@ -1,0 +1,49 @@
+defaults:
+  crit: notable
+  conf: 0.8
+  platforms:
+  - windows
+  for:
+  - javascript
+traits:
+- id: wsh-expand-env-strings
+  desc: Calls ExpandEnvironmentStrings
+  if:
+    type: string
+    regex: ExpandEnvironmentStrings
+    case_insensitive: true
+- id: wsh-response-body-literal
+  desc: Accesses responseBody (XMLHTTP)
+  if:
+    type: string
+    word: responseBody
+    case_insensitive: true
+- id: wsh-response-body-hex
+  desc: Accesses responseBody hex-escaped form
+  if:
+    type: string
+    substr: \\\\x72\\\\x65\\\\x73\\\\x70\\\\x6F\\\\x6E\\\\x73\\\\x65\\\\x42\\\\x6F\\\\x64\\\\x79
+    case_insensitive: true
+- id: wsh-save-to-file-literal
+  desc: Calls saveToFile (often ADODB.Stream)
+  if:
+    type: string
+    case_insensitive: true
+    word: saveToFile
+- id: wsh-save-to-file-hex
+  desc: Calls saveToFile hex-escaped form
+  if:
+    type: string
+    case_insensitive: true
+    regex: \\\\x73\\\\x61\\\\x76\\\\x65\\\\x54\\\\x6F\\\\x46\\\\x69\\\\x6C\\\\x65
+composite_rules:
+- id: wsh-response-body
+  desc: Accesses responseBody (XMLHTTP)
+  any:
+  - id: wsh-response-body-literal
+  - id: wsh-response-body-hex
+- id: wsh-save-to-file
+  desc: Calls saveToFile (often ADODB.Stream)
+  any:
+  - id: wsh-save-to-file-literal
+  - id: wsh-save-to-file-hex

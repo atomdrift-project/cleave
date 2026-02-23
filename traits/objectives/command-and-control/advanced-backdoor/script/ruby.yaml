@@ -1,0 +1,141 @@
+---
+# Advanced Ruby Backdoor Detection
+# Detects sophisticated backdoors with cryptographic signatures, remote code execution
+# ATT&CK: T1059 (Command and Scripting Interpreter), T1071 (Application Layer Protocol)
+
+defaults:
+  for: [ruby]
+  platforms: [all]
+
+traits:
+  # === RSA Public Key ===
+  - id: rsa-public-key
+    desc: RSA public key embedded
+    crit: notable
+    conf: 0.85
+    attack: "T1059"
+    if:
+      type: string
+      regex: "BEGIN PUBLIC KEY|RSA|PKey"
+
+  # === Cookie Session Pattern ===
+  - id: cookie-session-extract
+    desc: Cookie session extraction
+    crit: notable
+    conf: 0.80
+    attack: "T1190"
+    if:
+      type: string
+      regex: "__session|HTTP_COOKIE.{0,50}match"
+
+  # === JSON Parse ===
+  - id: json-parse
+    desc: JSON parsing
+    crit: notable
+    conf: 0.80
+    attack: "T1190"
+    if:
+      type: string
+      regex: 'JSON\.parse'
+
+  # === Timestamp Validation ===
+  - id: timestamp-validation
+    desc: Timestamp validation check
+    crit: notable
+    conf: 0.75
+    attack: "T1070"
+    if:
+      type: string
+      regex: 'Time\.now|timestamp|to_i'
+
+  # === Faraday HTTP Client ===
+  - id: faraday-http
+    desc: Faraday HTTP client
+    crit: notable
+    conf: 0.70
+    attack: "T1071"
+    if:
+      type: string
+      regex: 'Faraday\.(post|get|request)'
+
+  # === Thread Background Execution ===
+  - id: thread-background
+    desc: Background thread execution
+    crit: notable
+    conf: 0.80
+    attack: "T1059"
+    if:
+      type: string
+      regex: 'Thread\.new|Thread\.start'
+
+  # === Sleep Timer ===
+  # Note: Uses AST to match Ruby sleep calls specifically, not binary symbols
+  - id: sleep-timer
+    desc: Sleep/delay timer
+    crit: notable
+    conf: 0.65
+    attack: "T1029"
+    if:
+      type: ast
+      kind: call
+      regex: "^sleep$"
+
+  # === Remote Code Download ===
+  - id: remote-code-download
+    desc: Download code from remote URL
+    crit: notable
+    conf: 0.90
+    attack: "T1059"
+    if:
+      type: string
+      regex: 'open\(.{0,50}https?.{0,50}\)\.read|pastebin|raw\.github'
+
+  # === Rails Environment Check ===
+  - id: rails-env-check
+    desc: Rails environment check
+    crit: notable
+    conf: 0.70
+    attack: "T1190"
+    if:
+      type: string
+      regex: 'Rails\.env|Rails\.env\[0\]'
+
+  # === Exception Swallowing Function ===
+  - id: exception-swallow-func
+    desc: Exception swallowing function
+    crit: notable
+    conf: 0.75
+    attack: "T1070"
+    if:
+      type: string
+      regex: "def _!|rescue Exception.{0,50}nil|begin.{0,50}yield.{0,50}rescue"
+
+composite_rules:
+  # === Signed Cookie Backdoor ===
+  - id: signed-cookie-backdoor
+    desc: Signed cookie backdoor with RSA verification
+    crit: suspicious
+    conf: 0.95
+    attack: "T1059"
+    needs: 4
+    any:
+      - id: rsa-public-key
+      - id: cookie-session-extract
+      - id: micro-behaviors/crypto/verification/signature::signature-verify
+      - id: json-parse
+      - id: timestamp-validation
+      - id: objectives/command-and-control/web-framework/script::rack-sendfile-hook
+
+  # === Remote Code Execution Backdoor ===
+  - id: remote-code-execution
+    desc: Remote code execution via download
+    crit: suspicious
+    conf: 0.94
+    attack: "T1059"
+    needs: 4
+    any:
+      - id: thread-background
+      - id: sleep-timer
+      - id: remote-code-download
+      - id: rails-env-check
+      - id: objectives/execution/interpreter/eval/dynamic::eval-call-ruby

@@ -1,0 +1,89 @@
+# DLL Injection - Python
+# GuardDog-inspired: Detects DLL/SO injection techniques
+# ATT&CK: T1055 (Process Injection)
+# MBC: F0003 (Process Injection)
+
+defaults:
+  for: [python]
+  crit: suspicious
+  attack: "T1055.001"
+  mbc: "F0003"
+
+traits:
+  # GuardDog: Python ctypes CDLL
+  - id: ctypes-cdll
+    desc: ctypes.CDLL dynamic library loading
+    conf: 0.85
+    crit: notable
+    if:
+      type: symbol
+      regex: '(ctypes\.)?CDLL'
+
+  # GuardDog: getattr obfuscation
+  - id: getattr-write-process-memory
+    desc: getattr('WriteProcessMemory') obfuscation
+    conf: 0.97
+    if:
+      type: raw
+      regex: 'getattr\([^)]{0,120}[''"]WriteProcessMemory[''"]\s*\)'
+
+  - id: getattr-create-remote-thread
+    desc: getattr('CreateRemoteThread') obfuscation
+    conf: 0.97
+    if:
+      type: raw
+      regex: 'getattr\([^)]{0,120}[''"]CreateRemoteThread[''"]\s*\)'
+
+  - id: getattr-load-library
+    desc: getattr('LoadLibraryA') obfuscation
+    conf: 0.97
+    if:
+      type: raw
+      regex: 'getattr\([^)]{0,120}[''"]LoadLibraryA[''"]\s*\)'
+
+  - id: getattr-cdll
+    desc: getattr('CDLL') obfuscation
+    conf: 0.95
+    if:
+      type: raw
+      regex: 'getattr\([^)]{0,120}[''"]CDLL[''"]\s*\)'
+
+composite_rules:
+  # GuardDog: DLL injection combo
+  - id: dll-injection
+    desc: DLL injection pattern
+    crit: hostile
+    conf: 0.95
+    attack: "T1055.001"
+    mbc: "F0003"
+    any:
+      - id: micro-behaviors/process/inject/dll::write-process-memory
+      - id: micro-behaviors/process/inject/dll::create-remote-thread
+      - id: micro-behaviors/process/inject/dll::load-library-a
+      - id: getattr-write-process-memory
+      - id: getattr-create-remote-thread
+      - id: getattr-load-library
+
+  # GuardDog: Obfuscated DLL injection
+  - id: obfuscated-injection
+    desc: Obfuscated DLL injection
+    crit: hostile
+    conf: 0.97
+    attack: "T1055.001"
+    mbc: "F0003"
+    any:
+      - id: getattr-write-process-memory
+      - id: getattr-create-remote-thread
+      - id: getattr-load-library
+      - id: getattr-cdll
+
+  # GuardDog: Dynamic library loading
+  - id: dynamic-library-loading
+    desc: Dynamic library loading
+    crit: notable
+    conf: 0.85
+    attack: "T1129"
+    any:
+      - id: ctypes-cdll
+      - id: micro-behaviors/process/inject/dll::load-library-a
+      - id: getattr-cdll

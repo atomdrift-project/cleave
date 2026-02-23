@@ -1,0 +1,36 @@
+# HTTP Request Operations - Ruby
+# MBC: C0002 (HTTP Communication)
+# ATT&CK: T1071.001
+
+defaults:
+  for: [ruby]
+  attack: "T1071.001"
+  mbc: "C0002"
+
+traits:
+  - id: net-http-post
+    desc: Net::HTTP.post() method call
+    crit: notable
+    conf: 0.93
+    platforms: [all]
+    if:
+      type: string
+      regex: 'Net::HTTP\.post'
+
+  - id: net-http-get
+    desc: Net::HTTP.get() method call
+    crit: baseline
+    conf: 0.8
+    platforms: [all]
+    if:
+      type: string
+      regex: 'Net::HTTP\.get'
+
+  - id: net-http-new
+    desc: Net::HTTP.new() instantiation
+    crit: baseline
+    conf: 0.7
+    platforms: [all]
+    if:
+      type: string
+      regex: 'Net::HTTP\.new'

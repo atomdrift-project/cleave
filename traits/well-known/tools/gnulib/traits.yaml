@@ -1,0 +1,25 @@
+defaults:
+  for:
+  - all
+traits:
+- id: gnulib-locale-functions-set
+  desc: Gnulib setlocale support functions
+  crit: notable
+  conf: 0.95
+  if:
+    type: symbol
+    regex: setlocale_(null|mtsafe|single|unixlike)
+- id: gnulib-locale-functions-gl
+  desc: Gnulib gl_locale_name support functions
+  crit: notable
+  conf: 0.95
+  if:
+    type: symbol
+    regex: gl_locale_name_(default|environ)
+composite_rules:
+- id: gnulib-locale-functions
+  desc: Gnulib locale support functions
+  crit: notable
+  any:
+    - id: gnulib-locale-functions-set
+    - id: gnulib-locale-functions-gl

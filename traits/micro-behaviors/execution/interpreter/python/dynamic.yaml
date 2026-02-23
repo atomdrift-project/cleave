@@ -1,0 +1,15 @@
+# traits/micro-behaviors/execution/interpreter/python/dynamic.yaml
+defaults:
+  for: [python]
+
+traits:
+  - id: exec-builtin
+    desc: "Python exec() built-in function"
+    crit: suspicious
+    conf: 0.9
+    attack: "T1059.006"
+    mbc: "E1059"
+    if:
+      type: ast
+      query: |
+        (call function: (identifier) @name (#match? @name "exec"))

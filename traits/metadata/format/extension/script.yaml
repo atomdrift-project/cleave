@@ -1,0 +1,67 @@
+traits:
+  - id: js-a
+    desc: Javascript file extension family A
+    crit: baseline
+    conf: 1.0
+    for: [all]
+    if:
+      type: basename
+      regex: '(?i)\.(js|mjs|cjs|ts)$'
+  - id: js-b
+    desc: Javascript file extension family B
+    crit: baseline
+    conf: 1.0
+    for: [all]
+    if:
+      type: basename
+      regex: '(?i)\.(jsx|tsx)$'
+
+  - id: py
+    desc: Python file extension
+    crit: baseline
+    conf: 1.0
+    for: [all]
+    if:
+      type: basename
+      regex: '(?i)\.(py|pyw|pyc|pyd)$'
+
+  - id: shell-a
+    desc: Shell script extension family A
+    crit: baseline
+    conf: 1.0
+    for: [all]
+    if:
+      type: basename
+      regex: '(?i)\.(sh|bash|zsh|dash)$'
+  - id: shell-b
+    desc: Shell script extension family B
+    crit: baseline
+    conf: 1.0
+    for: [all]
+    if:
+      type: basename
+      regex: '(?i)\.ksh$'
+
+composite_rules:
+  - id: js
+    desc: Javascript file extension
+    conf: 1.0
+    crit: baseline
+    any:
+      - id: metadata/format/extension::js-a
+      - id: metadata/format/extension::js-b
+  - id: shell
+    desc: Shell script file extension
+    conf: 1.0
+    crit: baseline
+    any:
+      - id: metadata/format/extension::shell-a
+      - id: metadata/format/extension::shell-b
+  - id: script-file
+    desc: "Any script file"
+    conf: 1.0
+    crit: baseline
+    any:
+      - id: metadata/format/extension::js
+      - id: metadata/format/extension::py
+      - id: metadata/format/extension::shell

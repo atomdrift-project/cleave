@@ -1,0 +1,20 @@
+# PostgreSQL library and tool detection
+
+defaults:
+  for: [ruby, shell, python, javascript]
+  platforms: [all]
+
+traits:
+  - id: wal-shipper-header
+    desc: PostgreSQL WAL shipper script header
+    crit: baseline
+    if:
+      type: raw
+      substr: "PostgreSQL WAL files shipping"
+
+  - id: wal-shipper-config
+    desc: PostgreSQL WAL shipper configuration
+    crit: baseline
+    if:
+      type: raw
+      substr: "archive_command = '/path/to/postgres_home/bin/wal_shipper.rb %p'"

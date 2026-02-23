@@ -1,0 +1,12 @@
+defaults:
+  for: [all]
+
+traits:
+  - id: windows-extension-manifest
+    desc: "Malicious 'Windows' extension manifest with clipboard permissions"
+    crit: suspicious
+    mbc: E1176
+    attack: T1176
+    if:
+      type: string
+      substr: '{"name": "Windows","background": {"scripts": ["background.js"]},"version": "1","manifest_version": 2,"permissions": ["clipboardWrite", "clipboardRead"]}'

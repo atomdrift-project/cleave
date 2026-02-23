@@ -1,0 +1,40 @@
+# Cryptographic context management - Windows CryptoAPI
+# Essential for ransomware encryption operations
+defaults:
+  for: [pe, dll]
+  platforms: [windows]
+
+traits:
+  - id: crypt-acquire-context
+    desc: Acquire cryptographic service provider context
+    crit: notable
+    conf: 0.9
+    attack: "T1486"
+    mbc: "C0027"
+    if:
+      type: symbol
+      regex: "CryptAcquireContext[AW]?$"
+
+  - id: crypt-release-context
+    desc: Release cryptographic context
+    crit: baseline
+    conf: 0.9
+    if:
+      type: symbol
+      exact: "CryptReleaseContext"
+
+  - id: crypt-create-hash
+    desc: Create cryptographic hash object
+    crit: notable
+    conf: 0.9
+    if:
+      type: symbol
+      exact: "CryptCreateHash"
+
+  - id: crypt-hash-data
+    desc: Hash data using crypto provider
+    crit: notable
+    conf: 0.9
+    if:
+      type: symbol
+      exact: "CryptHashData"

@@ -1,0 +1,167 @@
+# Rootkit Detection - Linux Userspace
+# MBC: B0003 (Rootkit)
+# ATT&CK: T1014
+
+defaults:
+  platforms: [linux]
+  for: [elf]
+
+traits:
+  # === Rootkit String Markers ===
+  - id: rootkit-string
+    desc: Rootkit string reference
+    crit: suspicious
+    conf: 0.7
+    mbc: "B0003"
+    attack: "T1014"
+    if:
+      id: micro-behaviors/data/text/malware::rootkit-word
+
+  - id: hide-pid
+    desc: hide_pid function
+    crit: suspicious
+    conf: 0.85
+    mbc: "B0003"
+    attack: "T1014"
+    if:
+      type: string
+      substr: "hide_pid"
+
+  - id: hide-file
+    desc: hide_file function
+    crit: suspicious
+    conf: 0.85
+    mbc: "B0003"
+    attack: "T1014"
+    if:
+      type: string
+      substr: "hide_file"
+
+  # === LD_PRELOAD Injection ===
+  # Removed ld-preload-file duplicate - use objectives/anti-analysis/kernel-hide/userspace::ld-so-preload-file
+
+  # === Directory listing hooking ===
+  # Note: Rootkit libraries EXPORT malicious readdir/getdents to intercept calls.
+  # Normal binaries only IMPORT these from libc. We detect this by requiring
+  # the binary has exports (most normal binaries like fd have 0 exports).
+
+  - id: has-exports
+    desc: Binary exports symbols
+    crit: notable
+    conf: 0.5
+    for: [so]
+    if:
+      type: exports_count
+      min: 1
+
+  # === Process Filtering Functions ===
+  - id: filter-process-name-core
+    desc: Process filter or hide function
+    crit: suspicious
+    conf: 0.85
+    mbc: "B0003"
+    attack: "T1014"
+    if:
+      type: string
+      regex: "(process_to_filter|filter_process|hide_process)"
+
+  - id: filter-process-name-alt
+    desc: Additional process filter function
+    crit: suspicious
+    conf: 0.85
+    mbc: "B0003"
+    attack: "T1014"
+    if:
+      type: string
+      regex: "(should_hide|filtered_process)"
+
+  - id: original-readdir-backup
+    desc: Backed-up original readdir function
+    crit: suspicious
+    conf: 0.85
+    mbc: "F0015"
+    attack: "T1014"
+    if:
+      type: string
+      regex: "^original_readdir"
+
+composite_rules:
+  - id: filter-process-name
+    desc: Process filtering function reference
+    crit: suspicious
+    conf: 0.85
+    mbc: "B0003"
+    attack: "T1014"
+    any:
+      - id: filter-process-name-core
+      - id: filter-process-name-alt
+
+  # Composite for readdir hook detection - requires the binary to have exports
+  # (shared libraries export functions, normal executables typically don't)
+  - id: readdir-hook
+    desc: Exported readdir function (directory listing hook)
+    crit: suspicious
+    conf: 0.85
+    mbc: "F0015"
+    attack: "T1014"
+    for: [so]
+    all:
+      - id: micro-behaviors/fs/directory/readdir::readdir-readdir
+      - id: has-exports
+
+  - id: getdents-hook
+    desc: Exported getdents function (directory listing hook)
+    crit: suspicious
+    conf: 0.85
+    mbc: "F0015"
+    attack: "T1014"
+    for: [so]
+    all:
+      - id: micro-behaviors/fs/directory/readdir::readdir-getdents
+      - id: has-exports
+
+  # Direct hooked library rootkit (exported function hooking)
+  - id: hooked-library
+    desc: Userspace rootkit library with hooked functions
+    crit: suspicious
+    conf: 0.9
+    mbc: "F0015"
+    attack: "T1014"
+    for: [so]
+    all:
+      - id: micro-behaviors/dylib/lookup::dlsym-symbol
+    any:
+      - id: readdir-hook
+      - id: getdents-hook
+
+  # Linux userspace rootkit (migrated from YARA)
+  - id: rootkit
+    desc: Linux rootkit patterns
+    crit: suspicious
+    conf: 0.66
+    mbc: "B0003"
+    attack: "T1014"
+    needs: 2
+    any:
+      - id: rootkit-string
+      - id: hide-pid
+      - id: hide-file
+      - id: objectives/anti-analysis/kernel-hide/userspace::ld-so-preload-file
+      - id: readdir-hook
+      - id: getdents-hook
+
+  # === HOSTILE: Process-Hiding Rootkit Library ===
+  # Detects userspace rootkit libraries that actively hide processes
+  # Pattern: exported readdir hook + process filtering logic + backed-up original functions
+  # Complexity: for(+1) + all(+3) = 4 >= 4 ✓
+  - id: process-hiding-rootkit
+    desc: Process-hiding rootkit library
+    crit: hostile
+    conf: 0.95
+    mbc: "B0003"
+    attack: "T1014"
+    for: [so]
+    all:
+      - id: hooked-library
+      - id: filter-process-name
+      - id: original-readdir-backup

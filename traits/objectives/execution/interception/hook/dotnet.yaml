@@ -1,0 +1,69 @@
+# .NET Interception and Proxy Patterns
+# Common in ORM, AOP, and dependency injection frameworks
+
+defaults:
+  for: [all]
+
+traits:
+  # === Dynamic proxy atomic indicators ===
+  - id: proxy-generator
+    desc: ProxyGenerator class reference
+    crit: notable
+    conf: 0.7
+    if:
+      type: string
+      substr: "ProxyGenerator"
+
+  - id: dynamic-proxy-class
+    desc: DynamicProxy class reference
+    crit: notable
+    conf: 0.7
+    if:
+      type: string
+      substr: "DynamicProxy"
+
+  # === Interceptor atomic indicators ===
+  - id: iinterceptor-interface
+    desc: IInterceptor interface reference
+    crit: notable
+    conf: 0.65
+    if:
+      type: string
+      substr: "IInterceptor"
+
+  - id: interceptor-class
+    desc: Interceptor class reference
+    crit: notable
+    conf: 0.6
+    if:
+      type: string
+      substr: "Interceptor"
+
+  - id: iinvocation-interface
+    desc: IInvocation interface reference
+    crit: notable
+    conf: 0.65
+    if:
+      type: string
+      substr: "IInvocation"
+
+composite_rules:
+  # Dynamic proxy composite
+  - id: dynamic-proxy
+    desc: Dynamic proxy generation (Castle, etc.)
+    crit: notable
+    conf: 0.80
+    any:
+      - id: proxy-generator
+      - id: iinterceptor-interface
+      - id: dynamic-proxy-class
+
+  # Interceptor composite
+  - id: interceptor
+    desc: Method interception capability
+    crit: notable
+    conf: 0.75
+    any:
+      - id: iinterceptor-interface
+      - id: interceptor-class
+      - id: iinvocation-interface

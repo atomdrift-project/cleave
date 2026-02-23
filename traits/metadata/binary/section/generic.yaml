@@ -1,0 +1,12 @@
+defaults:
+  for: [all]
+
+traits:
+  - id: high-entropy-rdata
+    desc: High entropy .rdata section (likely encrypted)
+    crit: notable
+    conf: 0.8
+    if:
+      type: section
+      substr: ".rdata"
+      entropy_min: 7.9

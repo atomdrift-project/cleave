@@ -1,0 +1,78 @@
+# Audit System Blinding and Sanitization
+# Detects interception and removal of Linux audit records
+
+traits:
+  # === Audit System Functions ===
+  - id: audit-log-start
+    desc: audit_log_start kernel function
+    crit: notable
+    conf: 0.75
+    for: [c, elf]
+    if:
+      type: symbol
+      exact: "audit_log_start"
+
+  - id: netlink-unicast
+    desc: netlink_unicast kernel function
+    crit: notable
+    conf: 0.7
+    for: [c, elf]
+    if:
+      type: symbol
+      exact: "netlink_unicast"
+
+  - id: netlink-audit-constant
+    desc: NETLINK_AUDIT constant
+    crit: notable
+    conf: 0.75
+    for: [c, elf]
+    if:
+      type: string
+      substr: "NETLINK_AUDIT"
+
+  # === Audit Log Field Patterns ===
+  - id: pid-equals
+    desc: "pid= audit log field"
+    crit: notable
+    conf: 0.6
+    for: [c, elf]
+    if:
+      type: string
+      exact: "pid="
+
+  - id: ino-equals
+    desc: "ino= audit log field"
+    crit: notable
+    conf: 0.6
+    for: [c, elf]
+    if:
+      type: string
+      exact: "ino="
+
+composite_rules:
+  - id: audit-functions
+    desc: Audit system functions
+    for: [c, elf]
+    any:
+      - { id: audit-log-start }
+      - { id: netlink-unicast }
+      - { id: netlink-audit-constant }
+    crit: notable
+
+  - id: audit-fields
+    desc: Audit log field patterns
+    for: [c, elf]
+    any:
+      - { id: pid-equals }
+      - { id: ino-equals }
+    crit: notable
+
+  - id: audit-blinding
+    desc: Intercepts and drops Linux Auditing
+    crit: suspicious
+    conf: 0.95
+    attack: "T1562.001"
+    for: [c, elf]
+    all:
+      - { id: audit-functions }
+      - { id: audit-fields }

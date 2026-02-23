@@ -1,0 +1,25 @@
+defaults:
+  for: [all]
+
+traits:
+  - id: exec-r2
+    desc: "Executes Radare2/Rizin binary analysis tool"
+    crit: notable
+    conf: 0.8
+    for: [python]
+    if:
+      type: ast
+      language: python
+      query: |
+        (list
+          (string) @cmd
+          (#match? @cmd "^['\\\"](radare2|rizin|r2)['\\\"]$")
+        )
+
+  - id: exec-r2-cmd
+    desc: "Executes Radare2/Rizin command string"
+    crit: notable
+    conf: 0.6
+    if:
+      type: string
+      regex: '["''](radare2|rizin|r2) -[a-zA-Z]+ '

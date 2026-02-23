@@ -1,0 +1,25 @@
+# Interactive Shell Commands
+# Shell commands that invoke interactive shells
+
+defaults:
+  for: [all]
+  platforms: [linux, macos, unix]
+
+traits:
+  - id: sh-interactive
+    desc: Interactive shell invocation (sh -i)
+    crit: notable
+    conf: 0.5
+    attack: "T1059"
+    if:
+      type: string
+      substr: "sh -i"
+
+  - id: bin-sh-interactive
+    desc: Interactive shell invocation with full
+    crit: notable
+    conf: 0.6
+    attack: "T1059"
+    if:
+      type: string
+      substr: "/bin/sh -i"

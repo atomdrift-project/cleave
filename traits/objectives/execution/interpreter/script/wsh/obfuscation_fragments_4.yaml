@@ -1,0 +1,138 @@
+# More Tiny Obfuscated WSH Fragments
+# Specific for 2015-era JScript malware
+
+defaults:
+  crit: suspicious
+  conf: 1.0
+  for: [javascript]
+
+traits:
+  - id: wscript-shell-fragment-tiny-2a
+    desc: Tiny WScript.Shell fragment (variant 2a)
+    crit: notable
+    if:
+      type: raw
+      substr: 'WScri'
+    unless:
+      - id: metadata/builder/autotools::autotools
+      - id: metadata/builder/autotools::configure-ac
+      - id: metadata/builder/pip::setup-py
+      - id: metadata/quality/help::usage-title
+
+  - id: wscript-shell-fragment-tiny-2b
+    desc: Tiny WScript.Shell fragment (variant 2b)
+    crit: notable
+    if:
+      type: raw
+      substr: 'ipt.S'
+    unless:
+      - id: metadata/builder/autotools::autotools
+      - id: metadata/builder/autotools::configure-ac
+      - id: metadata/builder/pip::setup-py
+      - id: metadata/quality/help::usage-title
+
+  - id: adodb-fragment-tiny-2a
+    desc: Tiny ADODB.Stream fragment (variant 2a)
+    if:
+      type: string
+      substr: 'ODB.S'
+
+  - id: adodb-fragment-tiny-2b
+    desc: Tiny ADODB.Stream fragment (variant 2b)
+    if:
+      type: string
+      word: 'trea'
+
+  - id: xmlhttp-fragment-tiny-2
+    desc: Tiny XMLHTTP fragment (variant 2)
+    crit: notable
+    if:
+      type: string
+      regex: '.XMLH[^t]'
+    downgrade:
+      any:
+        - id: metadata/library/jquery::domain
+        - id: metadata/library/jquery::version-string
+        - id: metadata/library/jquery::copyright
+        - id: metadata/library/jquery::fn-extend
+        - id: metadata/library/prototype::copyright
+        - id: metadata/library/prototype::version-string
+        - id: metadata/library/prototype::header-x
+
+  - id: savetofile-fragment-tiny-2a
+    desc: Tiny SaveToFile fragment (variant 2a)
+    if:
+      type: string
+      substr: 'veToF'
+
+  - id: savetofile-fragment-tiny-2b
+    desc: Tiny SaveToFile fragment (variant 2b)
+    if:
+      type: string
+      word: 'ile'
+
+  - id: activex-fragment-tiny-2a
+    desc: Tiny ActiveXObject fragment (variant 2a)
+    conf: 0.9
+    if:
+      type: string
+      regex: 'Activ($|[^e])'
+    downgrade:
+      any:
+        - id: metadata/library/jquery::domain
+        - id: metadata/library/jquery::version-string
+        - id: metadata/library/jquery::copyright
+        - id: metadata/library/jquery::fn-extend
+    unless:
+      - id: micro-behaviors/host/interpreter/jscript::activex-object
+      - id: micro-behaviors/data/db/conn/redis::ioredis
+      - id: metadata/library/jquery::domain
+      - id: metadata/library/jquery::version-string
+      - id: metadata/library/jquery::copyright
+      - id: metadata/library/jquery::fn-extend
+
+  - id: activex-fragment-tiny-2b
+    desc: Tiny ActiveXObject fragment (variant 2b)
+    conf: 0.9
+    if:
+      type: string
+      substr: 'eXObj'
+    downgrade:
+      any:
+        - id: metadata/library/jquery::domain
+        - id: metadata/library/jquery::version-string
+        - id: metadata/library/jquery::copyright
+        - id: metadata/library/jquery::fn-extend
+    unless:
+      - id: micro-behaviors/host/interpreter/jscript::activex-object
+      - id: micro-behaviors/data/db/conn/redis::ioredis
+      - id: metadata/library/jquery::domain
+      - id: metadata/library/jquery::version-string
+      - id: metadata/library/jquery::copyright
+      - id: metadata/library/jquery::fn-extend
+
+composite_rules:
+  - id: wscript-shell-fragment-tiny-2
+    desc: Tiny WScript.Shell fragment (variant 2)
+    crit: notable
+    any:
+      - id: wscript-shell-fragment-tiny-2a
+      - id: wscript-shell-fragment-tiny-2b
+
+  - id: adodb-fragment-tiny-2
+    desc: Tiny ADODB.Stream fragment (variant 2)
+    any:
+      - id: adodb-fragment-tiny-2a
+      - id: adodb-fragment-tiny-2b
+
+  - id: savetofile-fragment-tiny-2
+    desc: Tiny SaveToFile fragment (variant 2)
+    any:
+      - id: savetofile-fragment-tiny-2a
+      - id: savetofile-fragment-tiny-2b
+
+  - id: activex-fragment-tiny-2
+    desc: Tiny ActiveXObject fragment (variant 2)
+    any:
+      - id: activex-fragment-tiny-2a
+      - id: activex-fragment-tiny-2b

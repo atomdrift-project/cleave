@@ -1,0 +1,33 @@
+# Duplicate Names for Code Inflation
+# Detects excessive name reuse patterns indicating dead code bombing
+
+traits:
+  - id: random-identifier-chains-a
+    desc: "Random identifiers with exec-like methods"
+    crit: notable
+    conf: 0.7
+    for: [javascript, typescript]
+    if:
+      type: symbol
+      regex: '^[a-zA-Z]{5,6}\.(replace|exec|run|shell)$'
+      count_min: 5
+
+  - id: random-identifier-chains-b
+    desc: "Random identifiers with file-like methods"
+    crit: notable
+    conf: 0.7
+    for: [javascript, typescript]
+    if:
+      type: symbol
+      regex: '^[a-zA-Z]{5,6}\.(copy|move|delete|execute)'
+      count_min: 5
+
+composite_rules:
+  - id: random-identifier-chains
+    desc: "Random identifiers with suspicious methods"
+    crit: notable
+    conf: 0.7
+    for: [javascript, typescript]
+    any:
+      - id: random-identifier-chains-a
+      - id: random-identifier-chains-b

@@ -1,0 +1,59 @@
+defaults:
+  for: [all]
+
+traits:
+  - id: builtins-string-builder
+    desc: "Python obfuscation using builtins to construct strings"
+    mbc: E1014
+    attack: T1027
+    crit: suspicious
+    conf: 0.95
+    if:
+      type: raw
+      regex: 'getattr\(__builtins__,\s*[a-z]{3,12}\.__str__'
+
+  # === GuardDog: API obfuscation patterns ===
+
+  - id: dict-subscript-access
+    desc: __dict__ subscript attribute access
+    mbc: E1014
+    attack: T1027
+    crit: suspicious
+    conf: 0.90
+    for: [python]
+    if:
+      type: ast
+      query: |
+        (subscript
+          value: (attribute
+            attribute: (identifier) @attr)
+          (#eq? @attr "__dict__"))
+
+  - id: getattribute-call
+    desc: __getattribute__ method call
+    mbc: E1014
+    attack: T1027
+    crit: suspicious
+    conf: 0.90
+    for: [python]
+    if:
+      type: ast
+      query: |
+        (call
+          function: (attribute
+            attribute: (identifier) @method)
+          (#eq? @method "__getattribute__"))
+
+  - id: dunder-import-call
+    desc: __import__ dynamic import
+    mbc: E1014
+    attack: T1027
+    crit: suspicious
+    conf: 0.85
+    for: [python]
+    if:
+      type: ast
+      query: |
+        (call
+          function: (identifier) @func
+          (#eq? @func "__import__"))

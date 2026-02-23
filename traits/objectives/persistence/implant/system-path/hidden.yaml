@@ -1,0 +1,131 @@
+# Hidden Binary in System Path
+# Detects execution from hidden directories in system binary paths
+# This is a classic backdoor persistence technique - hiding malware in trusted paths
+# ATT&CK: T1564.001 (Hide Artifacts: Hidden Files and Directories)
+# ATT&CK: T1547.001 (Boot or Logon Autostart Execution)
+
+defaults:
+  for: [all]
+  attack: "T1564.001"
+  mbc: "F0005"
+
+traits:
+  # Hidden directory in /usr/bin - classic backdoor staging
+  - id: usr-bin-hidden-dir
+    desc: Hidden directory in /usr/bin
+    crit: suspicious
+    conf: 0.95
+    if:
+      type: raw
+      regex: '/usr/bin/\.[A-Za-z0-9][A-Za-z0-9_-]*/'
+
+  # Hidden directory in /bin
+  - id: bin-hidden-dir
+    desc: Hidden directory in /bin
+    crit: suspicious
+    conf: 0.95
+    if:
+      type: raw
+      regex: '/bin/\.[A-Za-z0-9][A-Za-z0-9_-]*/'
+
+  # Hidden directory in /sbin
+  - id: sbin-hidden-dir
+    desc: Hidden directory in /sbin
+    crit: suspicious
+    conf: 0.95
+    if:
+      type: raw
+      regex: '/sbin/\.[A-Za-z0-9][A-Za-z0-9_-]*/'
+
+  # Hidden directory in /usr/sbin
+  - id: usr-sbin-hidden-dir
+    desc: Hidden directory in /usr/sbin
+    crit: suspicious
+    conf: 0.95
+    if:
+      type: raw
+      regex: '/usr/sbin/\.[A-Za-z0-9][A-Za-z0-9_-]*/'
+
+  # Hidden directory in /usr/local/bin
+  - id: usr-local-bin-hidden-dir
+    desc: Hidden directory in /usr/local/bin
+    crit: suspicious
+    conf: 0.95
+    if:
+      type: raw
+      regex: '/usr/local/bin/\.[A-Za-z0-9][A-Za-z0-9_-]*/'
+
+  # Hidden directory in /opt
+  - id: opt-hidden-dir
+    desc: Hidden directory in /opt
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: raw
+      regex: '/opt/\.[A-Za-z0-9][A-Za-z0-9_-]*/'
+
+  # Hidden directory in /lib or /usr/lib - library hijacking
+  - id: lib-hidden-dir
+    desc: Hidden directory in /lib
+    crit: suspicious
+    conf: 0.95
+    if:
+      type: raw
+      regex: '/(usr/)?lib(64)?/\.[A-Za-z0-9][A-Za-z0-9_-]*/'
+
+  # Hidden directory in user home - classic backdoor staging (e.g., /home/www/.Xl1/kde)
+  # ATT&CK: T1564.001 (Hide Artifacts: Hidden Files and Directories)
+  - id: home-hidden-dir-exec
+    desc: Hidden directory in /home
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: raw
+      regex: '/home/\w+/\.[A-Za-z0-9][A-Za-z0-9_-]*/'
+
+  # Hidden directory in web server paths - common webshell staging
+  - id: var-www-hidden-dir
+    desc: Hidden directory in /var/www
+    crit: suspicious
+    conf: 0.95
+    if:
+      type: raw
+      regex: '/var/www/\.[A-Za-z0-9][A-Za-z0-9_-]*/'
+
+  # Hidden directory in /tmp - temporary malware staging
+  - id: tmp-hidden-dir
+    desc: Hidden directory in /tmp
+    crit: suspicious
+    conf: 0.85
+    if:
+      type: raw
+      regex: '/tmp/\.[A-Za-z0-9][A-Za-z0-9_-]*/'
+
+composite_rules:
+  # Any hidden directory in system binary paths
+  - id: hidden-system-binary-path
+    desc: Hidden directory in system binary path (backdoor)
+    crit: suspicious
+    conf: 0.95
+    attack: "T1564.001"
+    mbc: "F0005"
+    any:
+      - id: usr-bin-hidden-dir
+      - id: bin-hidden-dir
+      - id: sbin-hidden-dir
+      - id: usr-sbin-hidden-dir
+      - id: usr-local-bin-hidden-dir
+      - id: opt-hidden-dir
+      - id: lib-hidden-dir
+
+  # Hidden directory in user-writable paths (home, www, tmp)
+  - id: hidden-user-path
+    desc: Hidden directory in user-writable path
+    crit: suspicious
+    conf: 0.9
+    attack: "T1564.001"
+    mbc: "F0005"
+    any:
+      - id: home-hidden-dir-exec
+      - id: var-www-hidden-dir
+      - id: tmp-hidden-dir

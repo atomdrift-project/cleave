@@ -1,0 +1,130 @@
+defaults:
+  crit: suspicious
+  attack: T1041
+  mbc: B0030
+  for:
+    - python
+    - shell
+    - javascript
+traits:
+  - id: slack-webhook-url
+    desc: Slack webhook URL
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: string
+      regex: hooks\.slack\.com/services
+  - id: slack-incoming-webhook
+    desc: Slack incoming webhook
+    crit: suspicious
+    conf: 0.85
+    if:
+      type: string
+      regex: slack\.com.{0,50}webhook|webhook.{0,50}slack
+  - id: discord-webhook-url
+    desc: Discord webhook URL
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: string
+      regex: discord(app)?\.com/api/webhooks
+  - id: discord-webhook-pattern
+    desc: Discord webhook pattern
+    crit: suspicious
+    conf: 0.85
+    if:
+      type: string
+      regex: discord.{0,50}webhook|webhook.{0,50}discord
+  - id: telegram-bot-api
+    desc: Telegram bot API URL
+    crit: suspicious
+    conf: 0.9
+    for:
+      - javascript
+      - typescript
+      - ruby
+      - python
+      - shell
+    if:
+      type: string
+      regex: api\.telegram\.org/bot
+  - id: generic-webhook-url
+    desc: Generic webhook URL pattern
+    crit: notable
+    conf: 0.7
+    if:
+      type: string
+      regex: /webhook|webhook/|/hooks/
+  - id: curl-post-webhook
+    desc: curl POST to webhook
+    crit: suspicious
+    conf: 0.85
+    if:
+      type: string
+      regex: curl.{0,50}-X POST.{0,50}webhook|webhook.{0,50}curl.{0,50}POST
+  - id: webhook-with-system-data-host-1
+    desc: Webhook with host identity data (hostname/whoami)
+    crit: suspicious
+    conf: 0.95
+    if:
+      type: raw
+      regex: webhook.{0,50}(hostname|whoami)
+  - id: webhook-with-system-data-host-2
+    desc: Webhook with host identity data (net info)
+    crit: suspicious
+    conf: 0.95
+    if:
+      type: raw
+      regex: webhook.{0,50}(ipconfig|ifconfig|systeminfo)
+  - id: webhook-with-system-data-curl
+    desc: curl webhook JSON exfil pattern
+    crit: suspicious
+    conf: 0.95
+    if:
+      type: raw
+      regex: curl.{0,50}webhook.{0,50}json
+composite_rules:
+  - id: slack-exfiltration
+    desc: Slack webhook exfiltration
+    crit: suspicious
+    conf: 0.95
+    attack: T1041
+    for:
+      - python
+      - shell
+    any:
+      - id: slack-webhook-url
+      - id: slack-incoming-webhook
+  - id: discord-exfiltration
+    desc: Discord webhook exfiltration
+    crit: suspicious
+    conf: 0.95
+    attack: T1041
+    for:
+      - python
+      - shell
+      - javascript
+    any:
+      - id: discord-webhook-url
+      - id: discord-webhook-pattern
+  - id: webhook-c2-channel
+    desc: Webhook C2 exfiltration channel
+    crit: suspicious
+    conf: 0.98
+    attack: T1567
+    mbc: B0030
+    platforms:
+      - all
+    needs: 2
+    any:
+      - id: slack-exfiltration
+      - id: discord-exfiltration
+      - id: webhook-with-system-data
+  - id: webhook-with-system-data
+    desc: Webhook with system data
+    crit: suspicious
+    conf: 0.95
+    any:
+      - id: webhook-with-system-data-host-1
+      - id: webhook-with-system-data-host-2
+      - id: webhook-with-system-data-curl

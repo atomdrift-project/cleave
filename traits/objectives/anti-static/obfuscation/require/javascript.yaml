@@ -1,0 +1,48 @@
+# Obfuscated JavaScript require patterns
+# Detects obfuscated module loading via hex-encoded strings
+
+defaults:
+  for: [javascript, typescript]
+
+traits:
+  - id: require-hex
+    desc: Obfuscated require call using hex-decoded string
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: ast
+      language: javascript
+      query: |
+        (call_expression
+          function: (identifier) @req
+          arguments: (arguments
+            (call_expression
+              function: (member_expression
+                object: (call_expression
+                  function: (member_expression
+                    object: (identifier) @buf
+                    property: (property_identifier) @from
+                  )
+                  arguments: (arguments
+                    (string)
+                    (string) @enc
+                  )
+                )
+                property: (property_identifier) @tostr
+              )
+            )
+          )
+          (#eq? @req "require")
+          (#eq? @buf "Buffer")
+          (#eq? @from "from")
+          (#match? @enc "hex")
+          (#eq? @tostr "toString")
+        )
+
+  - id: require-hex-simple
+    desc: Obfuscated require call using hex-decoded string (regex)
+    crit: suspicious
+    conf: 0.6
+    if:
+      type: raw
+      regex: "require\\(\\s*Buffer\\.from\\([^,]{1,120},\\s*['\"]hex['\"]\\)\\.toString\\(\\)\\s*\\)"

@@ -1,0 +1,76 @@
+# Faker.js detection
+# Used to downgrade false positives in localization/fake data files
+
+defaults:
+  for: [all]
+
+traits:
+  - id: faker-js-export-regex
+    desc: Faker.js export pattern (regex)
+    crit: baseline
+    conf: 1.0
+    if:
+      type: string
+      regex: 'module(\[[''exports'']\]|\.exports)\s*=\s*faker'
+
+  - id: faker-js-export-str1
+    desc: Faker.js export pattern (str1)
+    crit: baseline
+    conf: 1.0
+    if:
+      type: string
+      substr: "module['exports'] = faker"
+
+  - id: faker-js-export-str2
+    desc: Faker.js export pattern (str2)
+    crit: baseline
+    conf: 1.0
+    if:
+      type: string
+      substr: "module.exports = faker"
+
+  - id: faker-js-definition
+    desc: Faker.js definition pattern
+    crit: baseline
+    conf: 1.0
+    if:
+      type: string
+      regex: 'faker\.definitions\.(address|internet|name)'
+
+  - id: faker-js-locale-regex
+    desc: Faker.js locale pattern (regex)
+    crit: baseline
+    conf: 1.0
+    if:
+      type: string
+      regex: 'require\([''"]\./lib/locales[''"]\)'
+
+  - id: faker-js-locale-str
+    desc: Faker.js locale pattern (str)
+    crit: baseline
+    conf: 1.0
+    if:
+      type: string
+      substr: "require('./lib/locales')"
+
+  - id: faker-js-new
+    desc: Faker.js instantiation
+    crit: baseline
+    conf: 1.0
+    if:
+      type: string
+      substr: "var faker = new Faker"
+
+composite_rules:
+  - id: faker-library
+    desc: Faker.js library detected
+    crit: baseline
+    conf: 1.0
+    any:
+      - id: faker-js-export-regex
+      - id: faker-js-export-str1
+      - id: faker-js-export-str2
+      - id: faker-js-definition
+      - id: faker-js-locale-regex
+      - id: faker-js-locale-str
+      - id: faker-js-new

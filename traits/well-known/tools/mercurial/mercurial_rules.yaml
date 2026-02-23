@@ -1,0 +1,7 @@
+composite_rules:
+  - id: mercurial-js-comma-operator-abuse-downgrade-rule
+    desc: "Downgrade js-comma-operator-abuse for mercurial.js"
+    crit: baseline # The rule itself is baseline, it just performs a downgrade
+    all:
+      - id: objectives/anti-static/obfuscation/source/syntax::js-comma-operator-abuse
+      - id: mercurial-js-id

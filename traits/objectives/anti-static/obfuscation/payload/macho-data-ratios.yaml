@@ -1,0 +1,53 @@
+# Mach-O Data-to-Code Ratio Anomalies
+# Detects binaries where data significantly dominates logic (dropper pattern)
+# ATT&CK: T1027 (Obfuscated Files or Information)
+
+defaults:
+  platforms: [macos]
+  for: [macho]
+  mbc: "B0032"
+
+traits:
+  - id: low-code-to-data-ratio
+    desc: "Very low code-to-data ratio (large payload)"
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: metrics
+      field: binary.code_to_data_ratio
+      max: 0.1  # Code is less than 10% of data size
+    unless:
+      - id: metadata/signed/platform::apple
+
+  - id: high-data-dominance
+    desc: "Data section dominates file"
+    crit: notable
+    conf: 0.7
+    if:
+      type: metrics
+      field: binary.largest_section_ratio
+      min: 0.80
+
+composite_rules:
+  - id: macho-extreme-data-to-code-ratio
+    desc: "Mach-O extreme data-to-code ratio (possible encrypted payload)"
+    crit: suspicious
+    conf: 0.9
+    # High-confidence: Low code ratio PLUS other packing/obfuscation markers
+    all:
+      - id: low-code-to-data-ratio
+    any:
+      - id: high-data-dominance
+      - id: metadata/binary/structure::minimal-string-count
+      - id: objectives/anti-static/obfuscation/payload::high-entropy-const
+
+  - id: macho-high-entropy-data-dropper
+    desc: "Mach-O high-entropy data payload dropper"
+    crit: hostile
+    conf: 0.95
+    # Combines ratio anomaly with high entropy and execution capability
+    all:
+      - id: macho-extreme-data-to-code-ratio
+      - id: micro-behaviors/process/create/shell::system-fn
+    none:
+      - id: metadata/signed/platform::apple

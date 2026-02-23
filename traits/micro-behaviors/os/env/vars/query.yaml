@@ -1,0 +1,21 @@
+# Environment Variable Queries
+# ATT&CK: T1082 (System Information Discovery)
+
+defaults:
+  for: [all]
+  crit: notable
+  conf: 0.6
+  attack: "T1082"
+
+traits:
+  - id: printenv
+    desc: printenv command
+    if:
+      type: string
+      substr: "printenv"
+
+  - id: env-cmd
+    desc: env command
+    if:
+      type: string
+      word: "env"

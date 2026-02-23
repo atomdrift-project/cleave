@@ -1,0 +1,15 @@
+# Shell Script Dropper Patterns
+# Detects one-liner shell droppers
+# ATT&CK: T1105
+
+composite_rules:
+  - id: oneliner-dropper
+    desc: Shell one-liner dropper pattern
+    crit: hostile
+    conf: 0.95
+    for: [shell]
+    mbc: "B0024"
+    attack: "T1105"
+    all:
+      - id: objectives/execution/dropper/script::curl-download
+      - id: objectives/command-and-control/botnet/iot::pipe-to-shell

@@ -1,0 +1,76 @@
+traits:
+- id: path-prepend-tmp
+  desc: PATH variable prepended with /tmp
+  crit: suspicious
+  conf: 0.85
+  for:
+  - elf
+  - shell
+  if:
+    type: string
+    regex: (PATH=/tmp|export PATH=/tmp|export\s+PATH=/tmp)
+  attack: T1547.001
+- id: ld-library-path-manipulation
+  desc: LD_LIBRARY_PATH environment variable set
+  crit: suspicious
+  conf: 0.85
+  for:
+  - elf
+  - shell
+  if:
+    type: string
+    regex: (LD_LIBRARY_PATH=|export LD_LIBRARY_PATH|export\s+LD_LIBRARY_PATH)
+  attack: T1574.006
+- id: ld-audit-hook
+  desc: LD_AUDIT dynamic linker hook
+  crit: suspicious
+  conf: 0.9
+  for:
+  - elf
+  - shell
+  if:
+    type: string
+    regex: (LD_AUDIT=|export LD_AUDIT|export\s+LD_AUDIT)
+  attack: T1574.006
+- id: ld-preload-injection
+  desc: LD_PRELOAD library injection setup
+  crit: suspicious
+  conf: 0.9
+  for:
+  - elf
+  - shell
+  if:
+    type: string
+    regex: (LD_PRELOAD=|export LD_PRELOAD|export\s+LD_PRELOAD)
+  downgrade:
+    any:
+    - id: metadata/dev/testing/gnu-tests::gnu-coreutils-test
+  attack: T1574.006
+
+composite_rules:
+- id: dynamic-linker-manipulation
+  desc: Dynamic linker environment setup
+  crit: suspicious
+  conf: 0.88
+  for:
+  - elf
+  - shell
+  attack: T1574.006
+  needs: 2
+  any:
+  - id: ld-library-path-manipulation
+  - id: ld-audit-hook
+  - id: ld-preload-injection
+- id: env-variable-evasion-chain
+  desc: Multiple evasion environment variables
+  crit: hostile
+  conf: 0.92
+  for:
+  - elf
+  - shell
+  attack: T1562.003
+  mbc: E1014
+  all:
+  - id: objectives/evasion/history/clear::history-evasion-setup
+  - id: path-prepend-tmp
+  - id: dynamic-linker-manipulation

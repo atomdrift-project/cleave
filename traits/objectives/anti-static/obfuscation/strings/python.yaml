@@ -1,0 +1,17 @@
+# Python String Obfuscation Patterns
+# Detects obfuscated string patterns in Python
+# ATT&CK: T1027 (Obfuscated Files or Information)
+
+defaults:
+  for: [python]
+  crit: notable
+  attack: "T1027"
+
+traits:
+  - id: hex-encoding
+    desc: Hex-encoded string pattern
+    conf: 0.85
+    if:
+      type: string
+      regex: '\\x[0-9a-fA-F]{2}'
+      count_min: 5

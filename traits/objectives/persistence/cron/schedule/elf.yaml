@@ -1,0 +1,73 @@
+# Cron Persistence Detection for ELF Binaries
+# Detects native binaries that contain crontab manipulation strings
+# Indicates embedded persistence capability
+# ATT&CK: T1053.003 (Scheduled Task/Job: Cron)
+# MBC: B0030 (Persistence)
+
+defaults:
+  crit: suspicious
+  attack: "T1053.003"
+  mbc: "B0030"
+  for: [elf, macho]
+
+traits:
+  # === Crontab String Patterns ===
+  # Crontab add pattern: (crontab -l ; echo "...") | crontab -
+  - id: crontab-string
+    desc: Crontab manipulation string
+    crit: suspicious
+    conf: 0.95
+    if:
+      type: string
+      regex: '(\\bcrontab\\s*-[lr]\\b|[|]\\s*crontab\\s*-$)'
+
+  # Crontab format string with scheduling
+  - id: crontab-schedule-format
+    desc: Crontab schedule format string
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: string
+      # Pattern: %d %d * * * %s (minute hour wildcards path)
+      regex: '%d\\s+%d\\s+\\*\\s+\\*\\s+\\*\\s+%s'
+
+  # Crontab removal pattern
+  - id: crontab-grep-remove
+    desc: Crontab removal via grep
+    crit: suspicious
+    conf: 0.85
+    if:
+      type: string
+      regex: "crontab\\s+-l\\s*\\|\\s*grep\\s+-v.{0,50}\\|\\s*crontab"
+
+  # Crontab echo pipe pattern
+  - id: crontab-echo-pipe
+    desc: Crontab echo pipe pattern
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: string
+      regex: "echo.{0,80}\\|\\s*crontab|crontab.{0,40}echo"
+
+composite_rules:
+  # Binary with crontab add and remove (persistence + cleanup)
+  # Complexity: all(2) + for(1) = 3 -> suspicious maintained
+  - id: elf-cron-persistence-full
+    desc: ELF with cron persistence
+    crit: suspicious
+    conf: 0.95
+    for: [elf, macho]
+    all:
+      - id: crontab-string
+      - id: crontab-grep-remove
+
+  # Binary with scheduled crontab entry
+  # Complexity: all(2) + for(1) = 3 -> suspicious maintained
+  - id: elf-cron-scheduled
+    desc: ELF with cron scheduling
+    crit: suspicious
+    conf: 0.9
+    for: [elf, macho]
+    all:
+      - id: crontab-string
+      - id: crontab-schedule-format

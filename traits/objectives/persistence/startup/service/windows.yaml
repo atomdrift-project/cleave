@@ -1,0 +1,14 @@
+traits:
+- id: service-startup
+  desc: Windows Service Startup
+  crit: suspicious
+  conf: 0.8
+  platforms:
+  - windows
+  for:
+  - pe
+  if:
+    type: string
+    regex: (?i)(StartService|CreateServiceA|CreateServiceW)
+  attack: T1543.003
+  mbc: F0003

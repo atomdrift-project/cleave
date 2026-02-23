@@ -1,0 +1,104 @@
+# Remote Code Evaluation - Python
+# Detects eval/exec on data extracted from external sources
+# ATT&CK: T1059.006 (Python), T1195.002 (Supply Chain)
+# These patterns are strong indicators of supply-chain attacks
+
+defaults:
+  for: [python]
+  attack: "T1059.006"
+
+traits:
+  # eval() on chained .get() calls - extracts nested value then executes
+  # Pattern: eval(x.get(...).get(...).get(...))
+  - id: eval-chained-get
+    desc: eval on chained .get() calls
+    crit: suspicious
+    conf: 0.95
+    attack: "T1195.002"
+    mbc: "E1059"
+    if:
+      type: raw
+      regex: "eval\\s*\\(.{0,220}\\.get\\s*\\(.{0,160}\\)\\s*\\.get\\s*\\("
+
+  # eval() on single .get() with default - could be extracting from config
+  - id: eval-dict-get
+    desc: eval on dictionary .get()
+    crit: notable
+    conf: 0.8
+    mbc: "E1059"
+    if:
+      type: raw
+      regex: "eval\\s*\\(.{0,220}\\.get\\s*\\(.{0,180},.{0,120}\\)\\s*\\)"
+
+  # exec() on chained .get() calls
+  - id: exec-chained-get
+    desc: exec on chained .get() calls
+    crit: suspicious
+    conf: 0.95
+    attack: "T1195.002"
+    mbc: "E1059"
+    if:
+      type: raw
+      regex: "exec\\s*\\(.{0,220}\\.get\\s*\\(.{0,160}\\)\\s*\\.get\\s*\\("
+
+  # eval/exec on response/config object access
+  - id: eval-config-access-1
+    desc: eval on config/response/data field
+    crit: suspicious
+    conf: 0.9
+    attack: "T1195.002"
+    mbc: "E1059"
+    if:
+      type: raw
+      regex: "eval\\s*\\(\\s*(config|response|data)\\s*[\\[\\.]"
+
+  - id: eval-config-access-2
+    desc: eval on result/payload/body field
+    crit: suspicious
+    conf: 0.9
+    attack: "T1195.002"
+    mbc: "E1059"
+    if:
+      type: raw
+      regex: "eval\\s*\\(\\s*(result|payload|body)\\s*[\\[\\.]"
+
+  # Client config evaluation - ML/inference server pattern
+  - id: eval-client-config
+    desc: eval on client config value
+    crit: suspicious
+    conf: 0.9
+    attack: "T1195.002"
+    mbc: "E1059"
+    if:
+      type: raw
+      regex: "eval\\s*\\(.{0,220}client.{0,120}\\.get"
+
+  # Evaluate string_value field - common malicious config pattern
+  - id: eval-string-value
+    desc: eval on string_value field
+    crit: suspicious
+    conf: 0.95
+    attack: "T1195.002"
+    mbc: "E1059"
+    if:
+      type: raw
+      regex: "eval\\s*\\(.{0,220}string_value"
+
+  # eval/exec with bracket access on received data
+  - id: eval-bracket-access
+    desc: eval on bracket notation access
+    crit: notable
+    conf: 0.85
+    mbc: "E1059"
+    if:
+      type: raw
+      regex: "eval\\s*\\(.{0,220}\\[[\"'][^\"']{1,120}[\"']\\]"
+
+composite_rules:
+  - id: eval-config-access
+    desc: eval on config/response field
+    crit: suspicious
+    conf: 0.9
+    any:
+      - id: eval-config-access-1
+      - id: eval-config-access-2

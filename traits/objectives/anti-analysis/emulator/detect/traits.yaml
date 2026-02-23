@@ -1,0 +1,140 @@
+# VM/Emulator Detection
+# MBC: OB0001 (Anti-Behavioral Analysis) → B0009 (Virtual Machine Detection)
+# ATT&CK: T1497.001 (Virtualization/Sandbox Evasion: System Checks)
+
+defaults:
+  for: [all]
+
+traits:
+  # === VirtualBox atomic indicators ===
+  - id: virtualbox-word
+    desc: VirtualBox string detection
+    crit: notable
+    mbc: "B0009"
+    attack: "T1497.001"
+    conf: 0.5
+    if:
+      type: string
+      regex: "(?i)VirtualBox"
+
+  - id: vbox-string
+    desc: VBOX string detection
+    crit: notable
+    mbc: "B0032"
+    attack: "T1497.001"
+    conf: 0.5
+    if:
+      type: string
+      # Use word boundary to avoid matching "gruvbox" color schemes
+      regex: "(?i)\\bvbox\\b"
+
+  # === QEMU atomic indicators ===
+  # Removed qemu-upper duplicate - use objectives/anti-analysis/vm/detect::vendor-qemu
+
+  - id: qemu-lower
+    desc: qemu lowercase string
+    crit: notable
+    mbc: "B0009"
+    attack: "T1497.001"
+    conf: 0.5
+    if:
+      type: string
+      exact: "qemu"
+
+  # === VM hardware atomic indicators ===
+  - id: vmxh-string
+    desc: VMXH hardware string
+    crit: notable
+    mbc: "B0009"
+    attack: "T1497.001"
+    conf: 0.5
+    if:
+      type: string
+      exact: "VMXH"
+
+  - id: virtio-string
+    desc: virtio hardware string
+    crit: notable
+    mbc: "B0009"
+    attack: "T1497.001"
+    conf: 0.5
+    if:
+      type: string
+      regex: "(?i)virtio"
+
+  - id: vmmouse-string
+    desc: vmmouse hardware string
+    crit: notable
+    mbc: "B0009"
+    attack: "T1497.001"
+    conf: 0.5
+    if:
+      type: string
+      regex: "(?i)vmmouse"
+
+  # === CPU vendor atomic indicators ===
+  - id: genuineintel
+    desc: GenuineIntel CPU vendor string
+    crit: notable
+    mbc: "B0009"
+    conf: 0.4
+    if:
+      type: string
+      substr: "GenuineIntel"
+
+  - id: authenticamd
+    desc: AuthenticAMD CPU vendor string
+    crit: notable
+    mbc: "B0009"
+    conf: 0.4
+    if:
+      type: string
+      substr: "AuthenticAMD"
+
+composite_rules:
+  # VirtualBox string composite
+  - id: virtualbox-string
+    desc: VirtualBox vendor string detection
+    crit: notable
+    mbc: "B0009"
+    attack: "T1497.001"
+    conf: 0.6
+    any:
+      - id: virtualbox-word
+      - id: vbox-string
+
+  # QEMU string composite
+  # NOTE: Downgraded to baseline - QEMU strings are common in graphics libraries
+  # (Mesa, virtio-gpu, QXL drivers) and other legitimate software that supports
+  # VM environments. Actual VM detection requires multiple vendor checks (see combos.yaml).
+  - id: qemu-string
+    desc: QEMU vendor string detection
+    crit: notable
+    mbc: "B0009"
+    attack: "T1497.001"
+    conf: 0.5
+    any:
+      - id: objectives/anti-analysis/vm/detect::vendor-qemu
+      - id: qemu-lower
+
+  # VM hardware composite
+  - id: vm-hardware
+    desc: VM-specific hardware strings
+    crit: notable
+    mbc: "B0009"
+    attack: "T1497.001"
+    conf: 0.6
+    any:
+      - id: vmxh-string
+      - id: virtio-string
+      - id: vmmouse-string
+
+  # CPU vendor composite
+  - id: cpu-vendor
+    desc: CPU vendor string checks (Intel/AMD
+    crit: notable
+    mbc: "B0009"
+    conf: 0.5
+    any:
+      - id: genuineintel
+      - id: authenticamd

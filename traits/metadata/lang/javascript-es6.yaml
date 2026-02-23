@@ -1,0 +1,83 @@
+# Modern JavaScript (ES6+) Feature Detection
+# Used for context-aware analysis (e.g., ActiveXObject in modern code is suspicious)
+
+traits:
+  - id: arrow-function
+    desc: ES6 arrow function syntax
+    crit: baseline
+    conf: 0.9
+    for: [javascript, typescript]
+    if:
+      type: string
+      regex: "=>\\s*[{(]"
+
+  - id: async-await
+    desc: ES2017 async/await syntax
+    crit: baseline
+    conf: 0.9
+    for: [javascript, typescript]
+    if:
+      type: string
+      regex: "\\b(async\\s+function|await\\s+)"
+
+  - id: es6-class
+    desc: ES6 class declaration
+    crit: baseline
+    conf: 0.9
+    for: [javascript, typescript]
+    if:
+      type: string
+      regex: "\\bclass\\s+[A-Z][a-zA-Z0-9_]*\\s*(extends\\s+[A-Z][a-zA-Z0-9_]*\\s*)?\\{"
+
+  - id: template-literal
+    desc: ES6 template literal syntax
+    crit: baseline
+    conf: 0.9
+    for: [javascript, typescript]
+    if:
+      type: string
+      regex: "`[^`]{0,120}\\$\\{"
+
+  - id: const-let
+    desc: ES6 const/let declarations
+    crit: baseline
+    conf: 0.9
+    for: [javascript, typescript]
+    if:
+      type: string
+      regex: "\\b(const|let)\\s+[a-zA-Z_]"
+
+  - id: destructuring
+    desc: ES6 destructuring assignment
+    crit: baseline
+    conf: 0.9
+    for: [javascript, typescript]
+    if:
+      type: string
+      regex: "(const|let|var)\\s*\\{[^}]{1,120}\\}\\s*="
+
+  - id: spread-operator
+    desc: ES6 spread operator (in array/object context)
+    crit: baseline
+    conf: 0.9
+    for: [javascript, typescript]
+    if:
+      type: string
+      regex: "[\\[{,]\\s*\\.\\.\\.\\w+|function\\s*\\([^)]{0,100}\\.\\.\\.\\w+"
+
+composite_rules:
+  # Detect if code uses modern JavaScript
+  - id: modern-javascript
+    desc: "Code uses modern JavaScript (ES6+)"
+    crit: notable
+    conf: 0.9
+    for: [javascript, typescript]
+    needs: 2
+    any:
+      - { id: arrow-function }
+      - { id: async-await }
+      - { id: es6-class }
+      - { id: template-literal }
+      - { id: const-let }
+      - { id: destructuring }
+      - { id: spread-operator }

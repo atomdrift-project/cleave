@@ -1,0 +1,31 @@
+# Chromium Browser Credential Database Paths
+# Detects references to Chromium-based browser credential and data databases
+# MBC: OB0003 (Credential Access)
+# ATT&CK: T1555.003 (Credentials from Web Browsers)
+
+defaults:
+  for: [all]
+  crit: suspicious
+  conf: 0.8
+  mbc: "OB0003"
+  attack: "T1555.003"
+
+traits:
+  # Removed login-data duplicate - use micro-behaviors/fs/path/sensitive/browser::login-data
+
+  - id: cookies
+    desc: Chromium Cookies database path
+    if:
+      id: objectives/credential-access/browser/chromium::chromium-cookie-sql
+
+  - id: web-data
+    desc: Chromium Web Data database path
+    if:
+      type: string
+      substr: "Web Data"
+
+  - id: local-state
+    desc: Chromium Local State file path
+    if:
+      type: string
+      substr: "Local State"

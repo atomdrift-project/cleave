@@ -1,0 +1,113 @@
+traits:
+- id: sshd-config-path
+  desc: SSH daemon configuration file
+  crit: notable
+  conf: 0.6
+  for:
+  - elf
+  - shell
+  if:
+    type: string
+    substr: /etc/ssh/sshd_config
+- id: ssh-key-generation
+  desc: SSH key generation pattern
+  crit: notable
+  conf: 0.75
+  for:
+  - elf
+  - shell
+  if:
+    type: string
+    substr: ssh-keygen
+  attack: T1098.004
+- id: sshd-restart
+  desc: SSH daemon restart or reload
+  crit: suspicious
+  conf: 0.8
+  for:
+  - elf
+  - shell
+  if:
+    type: string
+    regex: (systemctl restart sshd|service sshd restart|sshd -t|sshd\s+-t)
+  attack: T1547.002
+- id: sshd-config-backup
+  desc: SSH config backup pattern
+  crit: notable
+  conf: 0.7
+  for:
+  - elf
+  - shell
+  if:
+    type: string
+    regex: (sshd_config\.bak|sshd_config\.backup|sshd_config\.bak\.[0-9])
+- id: ssh-permit-root
+  desc: PermitRootLogin configuration
+  crit: suspicious
+  conf: 0.8
+  for:
+  - elf
+  - shell
+  if:
+    type: string
+    regex: (PermitRootLogin|PermitRootLogin yes)
+  attack: T1021.004
+- id: ssh-password-auth
+  desc: SSH password authentication
+  crit: suspicious
+  conf: 0.75
+  for:
+  - elf
+  - shell
+  if:
+    type: string
+    regex: (PasswordAuthentication yes|PubkeyAuthentication no)
+  attack: T1021.004
+- id: ssh-port-config
+  desc: SSH port configuration
+  crit: notable
+  conf: 0.6
+  for:
+  - elf
+  - shell
+  if:
+    type: string
+    regex: Port\s+[0-9]+
+composite_rules:
+- id: ssh-config-modification
+  desc: SSH daemon configuration modification
+  crit: suspicious
+  conf: 0.85
+  for:
+  - elf
+  - shell
+  attack: T1021.004
+  needs: 2
+  any:
+  - id: sshd-config-path
+  - id: sshd-restart
+  - id: ssh-permit-root
+  - id: ssh-password-auth
+- id: ssh-backdoor-installation
+  desc: SSH backdoor installation
+  crit: hostile
+  conf: 0.9
+  for:
+  - elf
+  - shell
+  attack: T1098.004
+  mbc: C0027
+  all:
+  - id: ssh-config-modification
+  - id: objectives/credential-access/ssh/key::authorized-keys
+- id: ssh-key-theft
+  desc: SSH credential harvesting
+  crit: suspicious
+  conf: 0.85
+  for:
+  - elf
+  - shell
+  attack: T1555.003
+  all:
+  - id: objectives/credential-access/ssh/key::authorized-keys
+  - id: ssh-key-generation

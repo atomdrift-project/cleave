@@ -1,0 +1,100 @@
+# Download and Execute Pattern Detection
+# Detects malware that downloads payloads and executes them
+# ATT&CK: T1105 (Ingress Tool Transfer), T1059 (Command Execution)
+# MBC: E1105 (Tool Transfer)
+
+defaults:
+  crit: suspicious
+  attack: "T1105"
+  mbc: "E1105"
+  for: [python, shell]
+
+traits:
+  # === Download to Home Directory ===
+  - id: download-to-home
+    desc: Download to home directory
+    crit: notable
+    conf: 0.85
+    # Small files downloading to home are more suspicious
+    size_max: 5000
+    if:
+      type: raw
+      regex: "(curl|wget).{0,50}(HOME|~/|\\$HOME)"
+    not:
+      - regex: "(?i)netbsd\\.org"
+      - regex: "(?i)freebsd\\.org"
+      - regex: "(?i)openbsd\\.org"
+      - regex: "(?i)dragonflybsd\\.org"
+      - regex: "(?i)kernel\\.org"
+      - regex: "(?i)github\\.com"
+      - regex: "(?i)google\\.com"
+
+  - id: curl-silent-output
+    desc: Silent curl with output
+    crit: notable
+    conf: 0.75
+    if:
+      type: raw
+      regex: "curl.{0,50}--silent.{0,50}--output|curl.{0,50}-s.{0,50}-o"
+
+  # === Cookie-based Download Tracking ===
+  - id: curl-with-cookie
+    desc: curl with tracking cookie
+    crit: suspicious
+    conf: 0.80
+    if:
+      type: raw
+      regex: "curl.{0,50}--cookie.{0,50}[0-9]{10,}|curl.{0,50}-b.{0,50}[0-9]{10,}"
+
+  # === Download and Execute Chain ===
+  - id: download-chmod-execute
+    desc: Download chmod execute chain
+    crit: suspicious
+    conf: 0.95
+    if:
+      type: raw
+      regex: "(curl|wget).{0,50}chmod.{0,50}\\+x.{0,50}os\\.system"
+
+  - id: write-binary-execute
+    desc: Write binary and execute
+    crit: suspicious
+    conf: 0.90
+    if:
+      type: raw
+      regex: "write\\(fileData\\).{0,50}system.{0,50}&|write\\(.{0,50}\\).{0,50}chmod.{0,50}\\+x"
+
+  # === Background Execution ===
+  - id: background-execution-devnull
+    desc: Background exec with devnull
+    crit: suspicious
+    conf: 0.85
+    for: [python]
+    if:
+      type: raw
+      regex: "> /dev/null 2>&1 &|> /dev/null 2>&1$"
+
+  # === URL-based Decode ===
+  - id: urlsafe-b64decode
+    desc: URL-safe base64 decode
+    crit: notable
+    conf: 0.75
+    # Small binaries using URL-safe decoding are more suspicious
+    size_max: 5000
+    if:
+      type: raw
+      regex: "urlsafe_b64decode"
+
+composite_rules:
+  # === Download and Execute ===
+  - id: download-and-execute
+    desc: Download and execute payload
+    crit: suspicious
+    conf: 0.96
+    attack: "T1105"
+    for: [python, shell]
+    needs: 2
+    any:
+      - id: download-chmod-execute
+      - id: write-binary-execute
+      - id: background-execution-devnull
+

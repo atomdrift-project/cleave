@@ -1,0 +1,14 @@
+defaults:
+  for:
+  - all
+  crit: notable
+  conf: 0.8
+  platforms:
+  - windows
+traits:
+- id: webclient-downloadfile
+  desc: Obfuscated System.Net.WebClient.DownloadFile call
+  if:
+    type: raw
+    regex: (?i)WebClient.{0,40}DownloadFile
+composite_rules: []

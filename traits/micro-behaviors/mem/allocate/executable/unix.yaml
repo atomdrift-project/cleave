@@ -1,0 +1,36 @@
+# Executable Memory Allocation - Unix
+# ATT&CK: T1055 (Process Injection)
+
+traits:
+  - id: mmap-symbol
+    desc: mmap memory mapping function
+    crit: baseline
+    conf: 0.5
+    platforms: [linux, macos, unix]
+    for: [all]
+    if:
+      type: symbol
+      exact: "mmap"
+
+  - id: prot-exec-const
+    desc: PROT_EXEC memory protection constant
+    crit: baseline
+    conf: 0.6
+    platforms: [linux, macos, unix]
+    for: [elf, macho]
+    if:
+      type: string
+      substr: "PROT_EXEC"
+
+# === Composite Rules ===
+composite_rules:
+  - id: mmap-exec
+    desc: Memory mapping with execute permission
+    crit: suspicious
+    conf: 0.75
+    attack: "T1055"
+    platforms: [linux, macos, unix]
+    for: [elf, macho]
+    all:
+      - id: mmap-symbol
+      - id: prot-exec-const

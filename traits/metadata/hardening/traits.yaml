@@ -1,0 +1,202 @@
+# Meta - Security Hardening Behaviors
+# Identifies legitimate security-positive behaviors
+# These traits indicate the program is using security features, not evading them
+
+defaults:
+  crit: notable
+
+traits:
+  # === Sandbox Entry (macOS) ===
+
+  - id: sandbox-init
+    desc: macOS sandbox initialization
+    conf: 0.95
+    platforms: [macos]
+    for: [macho, dylib]
+    if:
+      type: symbol
+      regex: "sandbox_init"
+
+  - id: sandbox-init-params
+    desc: macOS sandbox initialization with parameters
+    conf: 0.95
+    platforms: [macos]
+    for: [macho, dylib]
+    if:
+      type: symbol
+      regex: "sandbox_init_with_parameters"
+
+  - id: sandbox-extension-consume
+    desc: macOS sandbox extension consumption
+    conf: 0.9
+    platforms: [macos]
+    for: [macho, dylib]
+    if:
+      type: symbol
+      regex: "sandbox_extension_consume"
+
+  - id: sandbox-extension-issue
+    desc: macOS sandbox extension issuance
+    conf: 0.9
+    platforms: [macos]
+    for: [macho, dylib]
+    if:
+      type: symbol
+      regex: "sandbox_extension_issue"
+
+  - id: sandbox-check
+    desc: macOS sandbox check function
+    conf: 0.9
+    platforms: [macos]
+    for: [macho, dylib]
+    if:
+      type: symbol
+      regex: "sandbox_check"
+
+  # === Sandbox Entry Messages ===
+
+  - id: sandbox-entering
+    desc: Sandbox entry log message
+    conf: 0.85
+    platforms: [macos]
+    for: [macho]
+    if:
+      type: string
+      regex: "entering sandbox"
+      case_insensitive: true
+
+  - id: sandbox-failed
+    desc: Sandbox entry failure message
+    conf: 0.85
+    platforms: [macos]
+    for: [macho]
+    if:
+      type: string
+      substr: "Failed to enter sandbox"
+
+  # === Hardened Runtime (macOS) ===
+
+  - id: hardened-runtime
+    desc: macOS Hardened Runtime enabled
+    conf: 0.9
+    platforms: [macos]
+    for: [macho]
+    if:
+      type: string
+      substr: "runtime"
+
+  # === seccomp (Linux) ===
+
+  - id: seccomp-init
+    desc: Linux seccomp sandbox initialization
+    conf: 0.95
+    platforms: [linux]
+    for: [elf]
+    if:
+      type: symbol
+      regex: "seccomp_init"
+
+  - id: seccomp-rule-add
+    desc: Linux seccomp rule addition
+    conf: 0.9
+    platforms: [linux]
+    for: [elf]
+    if:
+      type: symbol
+      regex: "seccomp_rule_add"
+
+  - id: seccomp-load
+    desc: Linux seccomp profile loading
+    conf: 0.95
+    platforms: [linux]
+    for: [elf]
+    if:
+      type: symbol
+      regex: "seccomp_load"
+
+  - id: prctl-seccomp
+    desc: Linux prctl seccomp mode
+    conf: 0.85
+    platforms: [linux]
+    for: [elf]
+    if:
+      type: string
+      substr: "PR_SET_SECCOMP"
+
+  - id: seccomp-mode-filter
+    desc: Linux seccomp filter mode constant
+    conf: 0.85
+    platforms: [linux]
+    for: [elf]
+    if:
+      type: string
+      substr: "SECCOMP_MODE_FILTER"
+
+  # === Pledge/Unveil (OpenBSD) ===
+
+  - id: pledge
+    desc: OpenBSD pledge syscall restriction
+    conf: 0.95
+    platforms: [openbsd]
+    for: [elf]
+    if:
+      type: symbol
+      exact: "pledge"
+
+  - id: unveil
+    desc: OpenBSD unveil filesystem restriction
+    conf: 0.95
+    platforms: [openbsd]
+    for: [elf]
+    if:
+      type: symbol
+      exact: "unveil"
+
+  # === Capsicum (FreeBSD) ===
+
+  - id: cap-enter
+    desc: FreeBSD Capsicum capability mode
+    conf: 0.95
+    platforms: [freebsd]
+    for: [elf]
+    if:
+      type: symbol
+      regex: "cap_enter"
+
+  - id: cap-rights-limit
+    desc: FreeBSD Capsicum rights limiting
+    conf: 0.9
+    platforms: [freebsd]
+    for: [elf]
+    if:
+      type: symbol
+      regex: "cap_rights_limit"
+
+composite_rules:
+  - id: macos-sandboxed
+    desc: macOS App Sandbox enabled
+    crit: notable
+    conf: 0.95
+    platforms: [macos]
+    for: [macho, dylib]
+    any:
+      - id: sandbox-init
+      - id: sandbox-init-params
+      - id: sandbox-extension-consume
+      - id: sandbox-extension-issue
+      - id: sandbox-entering
+      - id: sandbox-failed
+
+  - id: linux-seccomp
+    desc: Linux seccomp sandbox enabled
+    crit: notable
+    conf: 0.95
+    platforms: [linux]
+    for: [elf]
+    needs: 2
+    any:
+      - id: seccomp-init
+      - id: seccomp-load
+      - id: seccomp-rule-add
+      - id: prctl-seccomp
+      - id: seccomp-mode-filter

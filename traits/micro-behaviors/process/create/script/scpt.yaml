@@ -1,0 +1,270 @@
+# Compiled AppleScript (.scpt) Symbol-Based Detection
+# Uses symbols extracted by the scpt parser
+# ATT&CK: T1059.002 (AppleScript)
+
+defaults:
+  for: [applescript]
+  platforms: [macos]
+  attack: "T1059.002"
+
+traits:
+  # ============================================
+  # Shell Execution (syso.exec)
+  # ============================================
+  - id: shell
+    desc: "do shell script (Apple Event)"
+    crit: notable
+    conf: 0.95
+    attack: "T1059.004"
+    if:
+      type: string
+      regex: "^syso\\.exec$"
+
+  - id: shell-cmd
+    desc: "do shell script (command)"
+    crit: notable
+    conf: 0.95
+    attack: "T1059.004"
+    if:
+      type: string
+      substr: "do shell script"
+
+  # ============================================
+  # Timing (syso.dela)
+  # ============================================
+  - id: delay
+    desc: "delay command"
+    crit: baseline
+    conf: 0.95
+    if:
+      type: string
+      regex: "^syso\\.dela$"
+
+  # ============================================
+  # External Script Loading (syso.load)
+  # ============================================
+  - id: load-script
+    desc: "load script (Apple Event)"
+    crit: notable
+    conf: 0.9
+    if:
+      type: string
+      regex: "^syso\\.load$"
+
+  - id: load-script-cmd
+    desc: "load script (command)"
+    crit: notable
+    conf: 0.9
+    if:
+      type: string
+      substr: "load script"
+
+  # ============================================
+  # URL/Location Opening
+  # ============================================
+  - id: open-location
+    desc: "open location (Apple Event)"
+    crit: notable
+    conf: 0.9
+    attack: "T1204.001"
+    if:
+      type: string
+      regex: "^syso\\.open$"
+
+  - id: open-url
+    desc: "open URL (Apple Event)"
+    crit: notable
+    conf: 0.9
+    attack: "T1204.001"
+    if:
+      type: string
+      regex: "^syso\\.surl$"
+
+  - id: get-url
+    desc: "get URL (Apple Event)"
+    crit: notable
+    conf: 0.9
+    if:
+      type: string
+      regex: "^syso\\.GUrl$"
+
+  - id: open-location-cmd
+    desc: "open location (command)"
+    crit: notable
+    conf: 0.9
+    if:
+      type: string
+      substr: "open location"
+
+  - id: open-url-cmd
+    desc: "open URL (command)"
+    crit: notable
+    conf: 0.9
+    if:
+      type: string
+      substr: "open URL"
+
+  # ============================================
+  # Application Control
+  # ============================================
+  - id: run-app
+    desc: "run/open application (Apple Event)"
+    crit: notable
+    conf: 0.85
+    if:
+      type: string
+      regex: "^aevt\\.oapp$"
+
+  - id: quit-app
+    desc: "quit application (Apple Event)"
+    crit: notable
+    conf: 0.85
+    if:
+      type: string
+      regex: "^aevt\\.quit$"
+
+  - id: reopen-app
+    desc: "reopen application (Apple Event)"
+    crit: baseline
+    conf: 0.85
+    if:
+      type: string
+      regex: "^aevt\\.rapp$"
+
+  # ============================================
+  # UI Automation
+  # ============================================
+  - id: activate
+    desc: "activate application"
+    crit: baseline
+    conf: 0.9
+    if:
+      type: string
+      regex: "^misc\\.actv$"
+
+  - id: do-script
+    desc: "do script in application"
+    crit: notable
+    conf: 0.9
+    if:
+      type: string
+      regex: "^misc\\.dosc$"
+
+  - id: select
+    desc: "select UI element"
+    crit: baseline
+    conf: 0.85
+    if:
+      type: string
+      regex: "^misc\\.slct$"
+
+  # ============================================
+  # File Operations
+  # ============================================
+  - id: folder-ref
+    desc: "folder/file reference"
+    crit: baseline
+    conf: 0.9
+    if:
+      type: string
+      regex: "^ears\\.ffdr$"
+
+  - id: count
+    desc: "count items"
+    crit: baseline
+    conf: 0.9
+    if:
+      type: string
+      regex: "^core\\.cnte$"
+
+  - id: delete
+    desc: "delete items"
+    crit: notable
+    conf: 0.9
+    attack: "T1070.004"
+    if:
+      type: string
+      regex: "^core\\.dele$"
+
+  - id: move
+    desc: "move items"
+    crit: notable
+    conf: 0.85
+    if:
+      type: string
+      regex: "^core\\.move$"
+
+  - id: duplicate
+    desc: "duplicate items"
+    crit: baseline
+    conf: 0.85
+    if:
+      type: string
+      regex: "^core\\.clon$"
+
+composite_rules:
+  # ============================================
+  # Shell Execution (any method)
+  # ============================================
+  - id: shell-execution
+    desc: "Compiled AppleScript executes shell commands"
+    crit: notable
+    conf: 0.9
+    attack: "T1059.004"
+    for: [applescript]
+    any:
+      - { id: shell }
+      - { id: shell-cmd }
+
+  # ============================================
+  # Delayed Execution (evasion pattern)
+  # ============================================
+  - id: delayed-shell
+    desc: "Shell execution with delay (sandbox"
+    crit: suspicious
+    conf: 0.85
+    attack: "T1497"
+    for: [applescript]
+    all:
+      - { id: delay }
+      - { id: shell-execution }
+
+  # ============================================
+  # External Code Loading
+  # ============================================
+  - id: external-script
+    desc: "Loads external AppleScript code"
+    crit: suspicious
+    conf: 0.85
+    for: [applescript]
+    any:
+      - { id: load-script }
+      - { id: load-script-cmd }
+
+  # ============================================
+  # URL Opening (any method)
+  # ============================================
+  - id: opens-url
+    desc: "Opens URL or location"
+    crit: notable
+    conf: 0.85
+    attack: "T1204.001"
+    for: [applescript]
+    any:
+      - { id: open-location }
+      - { id: open-url }
+      - { id: get-url }
+      - { id: open-location-cmd }
+      - { id: open-url-cmd }
+
+  # ============================================
+  # Dropper Pattern
+  # ============================================
+  - id: dropper
+    desc: "Loads external script then executes"
+    crit: suspicious
+    conf: 0.9
+    for: [applescript]
+    all:
+      - { id: external-script }
+      - { id: shell-execution }

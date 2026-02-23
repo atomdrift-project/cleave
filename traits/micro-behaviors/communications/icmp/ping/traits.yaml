@@ -1,0 +1,26 @@
+# ICMP Ping - Host Reachability Testing
+# Tests if a host is reachable via ICMP echo
+
+defaults:
+  for: [all]
+  crit: notable
+  conf: 0.9
+
+traits:
+  - id: ping
+    desc: ping command
+    if:
+      type: string
+      regex: '\bping\s+(-|localhost|\d{1,3}\.)'
+
+  - id: ping6
+    desc: IPv6 ping command
+    if:
+      type: string
+      word: "ping6"
+
+  - id: fping
+    desc: fping fast ping
+    if:
+      type: string
+      substr: fping

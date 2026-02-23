@@ -1,0 +1,16 @@
+# Browser Credential Stealer Composite Rules
+# Aggregates individual browser data access traits into a high-confidence malware finding
+
+composite_rules:
+  - id: composite
+    desc: "Comprehensive Browser Data Stealer (Targeting"
+    crit: hostile
+    conf: 0.95
+    mbc: "E1005"
+    attack: "T1555.003"
+    for: [elf, macho, pe, python, go, javascript]
+    needs: 2
+    any:
+      - id: objectives/credential-access/browser/chromium
+      - id: objectives/credential-access/browser/firefox
+      - id: objectives/credential-access/browser/safari

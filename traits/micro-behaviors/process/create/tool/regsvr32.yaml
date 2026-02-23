@@ -1,0 +1,33 @@
+defaults:
+  for: [all]
+
+traits:
+  - id: regsvr32
+    desc: "Executes regsvr32.exe"
+    crit: notable
+    conf: 0.8
+    attack: "T1218.010"
+    mbc: "E1218.010"
+    if:
+      type: raw
+      regex: "regsvr32(\\.exe)?"
+      case_insensitive: true
+
+  - id: regsvr32-encoded
+    desc: "Executes regsvr32.exe (encoded)"
+    crit: notable
+    conf: 0.8
+    if:
+      type: encoded
+      encoding: [base64, hex]
+      regex: "regsvr32(\\.exe)?"
+      case_insensitive: true
+
+  - id: regsvr32-raw-hex
+    desc: "Executes regsvr32.exe (hex encoded)"
+    crit: notable
+    conf: 0.8
+    if:
+      type: raw
+      regex: "7265677376723332(2e657865)?"
+      case_insensitive: true

@@ -1,0 +1,18 @@
+traits:
+  - id: partial-protocol-tps
+    desc: Obfuscated HTTP protocol fragment 'tps:/'
+    crit: suspicious
+    conf: 0.95
+    for: [scripts]
+    if:
+      type: raw
+      regex: '(?i)["'']tps:[:/]["'']'
+
+  - id: partial-protocol-tp
+    desc: Obfuscated HTTP protocol fragment 'tp:/'
+    crit: suspicious
+    conf: 0.95
+    for: [scripts]
+    if:
+      type: raw
+      regex: '(?i)["'']tp:[:/]["'']'

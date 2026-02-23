@@ -1,0 +1,196 @@
+# Direct URL Dependencies - npm
+# GuardDog-inspired: Detects packages with direct URL/Git dependencies
+# These dependencies are not immutable and can be used to inject untrusted code
+# ATT&CK: T1195.002 (Compromise Software Supply Chain)
+# MBC: E1195 (Supply Chain Compromise)
+
+defaults:
+  for: [package.json]
+  crit: suspicious
+  conf: 0.85
+  attack: "T1195.002"
+  mbc: "E1195"
+
+traits:
+  # === GuardDog: HTTP(S) URL Dependencies ===
+
+  # Direct HTTP URL
+  - id: dep-http-url
+    desc: Dependency using HTTP URL
+    crit: suspicious
+    conf: 0.95
+    if:
+      type: kv
+      path: "dependencies.*"
+      regex: "^https?://"
+
+  - id: devdep-http-url
+    desc: DevDependency using HTTP URL
+    crit: suspicious
+    conf: 0.85
+    if:
+      type: kv
+      path: "devDependencies.*"
+      regex: "^https?://"
+
+  # === GuardDog: Git URL Dependencies ===
+
+  # git:// protocol
+  - id: dep-git-url
+    desc: Dependency using git:// URL
+    crit: suspicious
+    conf: 0.90
+    if:
+      type: kv
+      path: "dependencies.*"
+      regex: "^git://"
+
+  # git+ssh://
+  - id: dep-git-ssh-url
+    desc: Dependency using git+ssh:// URL
+    crit: suspicious
+    conf: 0.85
+    if:
+      type: kv
+      path: "dependencies.*"
+      regex: "^git\\+ssh://"
+
+  # git+http:// or git+https://
+  - id: dep-git-http-url
+    desc: Dependency using git+http(s):// URL
+    crit: suspicious
+    conf: 0.85
+    if:
+      type: kv
+      path: "dependencies.*"
+      regex: "^git\\+https?://"
+
+  # git+file://
+  - id: dep-git-file-url
+    desc: Dependency using git+file:// URL
+    crit: suspicious
+    conf: 0.90
+    if:
+      type: kv
+      path: "dependencies.*"
+      regex: "^git\\+file://"
+
+  # === GuardDog: GitHub Shorthand Dependencies ===
+
+  # GitHub shorthand: "user/repo" or "user/repo#branch"
+  - id: dep-github-shorthand
+    desc: Dependency using GitHub shorthand (user/repo)
+    crit: suspicious
+    conf: 0.80
+    if:
+      type: kv
+      path: "dependencies.*"
+      regex: "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+(#[A-Za-z0-9_.-]{1,64})?$"
+
+  - id: devdep-github-shorthand
+    desc: DevDependency using GitHub shorthand
+    crit: notable
+    conf: 0.75
+    if:
+      type: kv
+      path: "devDependencies.*"
+      regex: "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+(#[A-Za-z0-9_.-]{1,64})?$"
+
+  # === Tarball URLs ===
+
+  # Direct tarball URLs (http://example.com/package.tgz)
+  - id: dep-tarball-url
+    desc: Dependency using direct tarball URL
+    crit: suspicious
+    conf: 0.95
+    if:
+      type: kv
+      path: "dependencies.*"
+      regex: "^https?://.{1,220}\\.t(ar\\.)?gz$"
+
+  # === Local File Paths ===
+
+  # file:// protocol
+  - id: dep-file-protocol
+    desc: Dependency using file:// protocol
+    crit: notable
+    conf: 0.70
+    if:
+      type: kv
+      path: "dependencies.*"
+      regex: "^file://"
+
+  # Relative paths
+  - id: dep-relative-path
+    desc: Dependency using relative path
+    crit: notable
+    conf: 0.65
+    if:
+      type: kv
+      path: "dependencies.*"
+      regex: "^(\\.\\./|\\./)"
+
+composite_rules:
+  # === GuardDog: Any HTTP/HTTPS URL ===
+  - id: http-url-dependency
+    desc: Package depends on HTTP(S) URL
+    crit: hostile
+    conf: 0.95
+    attack: "T1195.002"
+    for: [package.json]
+    any:
+      - id: dep-http-url
+      - id: dep-tarball-url
+
+  # === GuardDog: Any Git URL ===
+  - id: git-url-dependency
+    desc: Package depends on Git URL
+    crit: suspicious
+    conf: 0.85
+    attack: "T1195.002"
+    for: [package.json]
+    any:
+      - id: dep-git-url
+      - id: dep-git-ssh-url
+      - id: dep-git-http-url
+      - id: dep-git-file-url
+
+  # === GuardDog: Direct URL Dependency (all types) ===
+  - id: direct-url-dependency
+    desc: Package has direct URL dependencies (not immutable)
+    crit: suspicious
+    conf: 0.85
+    attack: "T1195.002"
+    mbc: "E1195"
+    for: [package.json]
+    any:
+      - id: http-url-dependency
+      - id: git-url-dependency
+      - id: dep-github-shorthand
+
+  # === High-Risk: Multiple URL dependencies ===
+  - id: multiple-url-dependencies
+    desc: Package has multiple direct URL dependencies
+    crit: hostile
+    conf: 0.90
+    attack: "T1195.002"
+    for: [package.json]
+    needs: 2
+    any:
+      - id: dep-http-url
+      - id: dep-git-url
+      - id: dep-git-ssh-url
+      - id: dep-git-http-url
+      - id: dep-github-shorthand
+      - id: dep-tarball-url
+
+  # === Critical: URL dependency with install hooks ===
+  - id: url-dependency-with-hooks
+    desc: Direct URL dependency with install hooks
+    crit: hostile
+    conf: 0.98
+    attack: "T1195.002"
+    for: [package.json]
+    all:
+      - id: direct-url-dependency
+      - id: objectives/lateral-movement/supply-chain/npm/metadata::install-hooks

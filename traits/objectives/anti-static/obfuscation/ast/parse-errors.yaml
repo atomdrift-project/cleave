@@ -1,0 +1,55 @@
+# AST parse errors that may indicate hostile anti-static behavior
+#
+# Parse errors in tree-sitter can indicate:
+# - Intentionally malformed code designed to evade static analysis
+# - Code that crashes or confuses parsers
+# - Obfuscation techniques that produce invalid syntax
+# - Adversarial inputs targeting parser vulnerabilities
+#
+# High error rates (>10% of nodes) are particularly suspicious for malware.
+
+traits:
+  - id: parse-error-high-ratio
+    desc: "High ratio of AST parse"
+    crit: suspicious
+    conf: 0.85
+    attack: "T1027"  # Obfuscated Files or Information
+    for: [python, javascript, typescript, go, rust, ruby, php, c, csharp, java, lua, perl, powershell, shell]
+    if:
+      # This trait is triggered programmatically in analyzers
+      # when ErrorAnalysis.is_suspicious is true (>10% error nodes)
+      type: structure
+      feature: "ast/parse-error-high"
+
+  - id: parse-error-low-ratio
+    desc: "Some AST parse errors detected"
+    crit: notable
+    conf: 0.70
+    attack: "T1027"
+    for: [python, javascript, typescript, go, rust, ruby, php, c, csharp, java, lua, perl, powershell, shell]
+    if:
+      # Triggered when errors exist but below suspicious threshold
+      type: structure
+      feature: "ast/parse-error-low"
+
+  - id: parser-crash
+    desc: "Tree-sitter parser crashed (hostile anti-analysis)"
+    crit: suspicious
+    conf: 0.95
+    attack: "T1027"
+    for: [python, javascript, typescript, go, rust, ruby, php, c, csharp, java, lua, perl, powershell, shell]
+    if:
+      # Triggered when parser panics/crashes (JavaScript/TypeScript analyzers detect this)
+      type: structure
+      feature: "ast/parser-crash"
+
+  - id: ast-depth-bomb
+    desc: "Extremely deep AST nesting (anti-analysis)"
+    crit: suspicious
+    conf: 0.90
+    attack: "T1027"
+    for: [python, javascript, typescript, go, rust, ruby, php, c, csharp, java, lua, perl, powershell, shell]
+    if:
+      # Triggered when AST depth exceeds MAX_AST_DEPTH (10,000 levels)
+      type: structure
+      feature: "ast/depth-bomb"

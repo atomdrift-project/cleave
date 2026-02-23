@@ -1,0 +1,36 @@
+# macOS Application Launch Detection
+# ATT&CK: T1106 (Native API)
+
+defaults:
+  for: [python, shell]
+  platforms: [macos]
+
+traits:
+  # === macOS Open Command ===
+  - id: open-app
+    desc: macOS open application
+    crit: notable
+    conf: 0.70
+    attack: "T1106"
+    if:
+      type: string
+      regex: "\\bopen\\s+-a\\s+[^\\n]{1,120}\\.app\\b|\\['open'\\s*,\\s*['\"][^'\"\\n]{1,120}\\.app['\"]"
+
+  - id: open-command
+    desc: open command execution
+    crit: notable
+    conf: 0.75
+    attack: "T1106"
+    if:
+      type: string
+      regex: "\\['open'\\s*,|open\\s+-a"
+
+composite_rules:
+  - id: app-execution
+    desc: macOS application execution
+    crit: notable
+    conf: 0.85
+    attack: "T1106"
+    any:
+      - id: open-app
+      - id: open-command

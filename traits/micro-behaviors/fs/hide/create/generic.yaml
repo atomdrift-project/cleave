@@ -1,0 +1,18 @@
+# Hidden File Detection Traits
+# Detects creation of hidden dotfiles often used to hide malware
+# ATT&CK: T1564.001 (Hide Artifacts: Hidden Files and Directories)
+
+defaults:
+  for: [all]
+
+traits:
+  # === Hidden file write atomic indicators ===
+  - id: curl-o-hidden
+    desc: curl -O to hidden dotfile
+    crit: suspicious
+    conf: 0.7
+    mbc: "F0005"
+    attack: "T1564.001"
+    if:
+      type: raw
+      regex: "curl\\s+-o\\s+\\.[^\\s/]{1,120}"

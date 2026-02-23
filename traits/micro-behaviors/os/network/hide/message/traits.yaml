@@ -1,0 +1,24 @@
+# Network Hiding CLI Traits
+# Detects CLI messages related to hiding network ports
+# ATT&CK: T1564 (Hide Artifacts)
+
+defaults:
+  for: [all]
+
+traits:
+  - id: hide-port-msg
+    desc: '"Hiding network port" message'
+    crit: notable
+    conf: 0.8
+    attack: "T1564"
+    if:
+      type: string
+      regex: "Hiding (TCP|UDP)v[46] port"
+
+  - id: unhide-port-msg
+    desc: '"Unhiding network port" message'
+    crit: notable
+    conf: 0.8
+    if:
+      type: string
+      regex: "Unhiding (TCP|UDP)v[46] port"

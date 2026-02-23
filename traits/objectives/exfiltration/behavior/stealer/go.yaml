@@ -1,0 +1,16 @@
+# Go Stealer Patterns
+# ATT&CK: T1041 (Exfiltration Over C2 Channel)
+
+composite_rules:
+  - id: go-stealer-exfil
+    desc: "Go-based sensitive data exfiltration"
+    crit: suspicious
+    conf: 0.98
+    mbc: "C0001"
+    attack: "T1041"
+    for: [go]
+    all:
+      - id: objectives/collection/archive/data::sensitive-archiving
+    any:
+      - id: micro-behaviors/communications/http/post::http-post
+      - id: objectives/command-and-control/infrastructure/domain::c2-domain

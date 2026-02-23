@@ -1,0 +1,27 @@
+# DNS Resolution Tools
+# Command-line tools for DNS lookups
+
+defaults:
+  for: [all]
+  crit: notable
+  conf: 0.9
+
+traits:
+  - id: nslookup
+    desc: nslookup command
+    if:
+      type: string
+      word: "nslookup"
+
+  - id: dig
+    desc: dig DNS command
+    if:
+      type: string
+      regex: '\bdig\s+'
+
+  - id: host
+    desc: host DNS command
+    crit: baseline
+    if:
+      type: string
+      regex: '\bhost\s+'

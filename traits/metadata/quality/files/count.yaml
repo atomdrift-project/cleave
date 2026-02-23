@@ -1,0 +1,138 @@
+# Package Files Array - Count Analysis
+# Detects suspicious file inclusion patterns based on count
+# ATT&CK: T1195.002 (Compromise Software Supply Chain)
+#
+# REQUIRES: size_min/size_max KV feature (see KV_ENHANCEMENT_IMPLEMENTATION_PLAN.md)
+
+defaults:
+  crit: notable
+  conf: 0.60
+  attack: "T1195.002"
+
+traits:
+  # === npm package.json - files array ===
+
+  # Explicit files array with single entry (minimal package)
+  - id: npm-single-file-listed
+    desc: npm package explicitly lists single file
+    crit: notable
+    conf: 0.65
+    for: [package.json]
+    if:
+      type: kv
+      path: "files"
+      size_min: 1
+      size_max: 1
+
+  # Two files listed
+  - id: npm-two-files-listed
+    desc: npm package explicitly lists two files
+    crit: notable
+    conf: 0.55
+    for: [package.json]
+    if:
+      type: kv
+      path: "files"
+      size_min: 2
+      size_max: 2
+
+  # Few files (1-3)
+  - id: npm-few-files-listed
+    desc: npm package lists few files (1-3)
+    crit: notable
+    conf: 0.50
+    for: [package.json]
+    if:
+      type: kv
+      path: "files"
+      size_min: 1
+      size_max: 3
+
+  # Very large files array (potential bloat or hiding)
+  - id: npm-many-files-listed
+    desc: npm package lists many explicit files (100+)
+    crit: notable
+    conf: 0.55
+    for: [package.json]
+    if:
+      type: kv
+      path: "files"
+      size_min: 100
+
+  # Moderate files array (50+)
+  - id: npm-moderate-files-listed
+    desc: npm package lists 50+ files
+    crit: notable
+    conf: 0.45
+    for: [package.json]
+    if:
+      type: kv
+      path: "files"
+      size_min: 50
+
+  # === npm bin object ===
+
+  # Single binary
+  - id: npm-single-bin
+    desc: npm package defines single binary
+    crit: notable
+    conf: 0.50
+    for: [package.json]
+    if:
+      type: kv
+      path: "bin"
+      size_min: 1
+      size_max: 1
+
+  # Multiple binaries
+  - id: npm-multiple-bins
+    desc: npm package defines multiple binaries (5+)
+    crit: notable
+    conf: 0.55
+    for: [package.json]
+    if:
+      type: kv
+      path: "bin"
+      size_min: 5
+
+  # === npm engines object ===
+
+  - id: npm-no-engines
+    desc: npm package specifies no engine requirements
+    crit: notable
+    conf: 0.45
+    for: [package.json]
+    if:
+      type: kv
+      path: "engines"
+      size_max: 0
+
+composite_rules:
+  # === Suspicious: Single file + install hooks ===
+  - id: npm-single-file-with-hooks
+    desc: Single file listed with install hooks
+    crit: hostile
+    conf: 0.90
+    attack: "T1195.002"
+    for: [package.json]
+    all:
+      - id: npm-single-file-listed
+      - id: objectives/lateral-movement/supply-chain/npm/metadata::install-hooks
+
+  # NOTE: npm-minimal-package removed - depended on broken count-based trait
+  # (metadata/quality/dependencies::npm-single-dependency used size_min/size_max
+  # which measures file bytes, not dependency count)
+
+  # NOTE: npm-minimal-package-with-hooks removed - depended on broken
+  # npm-minimal-package which used non-functional count-based kv traits
+
+  # === Suspicious: Many files + install hooks (hiding payload) ===
+  - id: npm-many-files-with-hooks
+    desc: Many files with install hooks (potential payload hiding)
+    crit: suspicious
+    conf: 0.75
+    attack: "T1195.002"
+    for: [package.json]
+    all:
+      - id: npm-many-files-listed
+      - id: objectives/lateral-movement/supply-chain/npm/metadata::install-hooks

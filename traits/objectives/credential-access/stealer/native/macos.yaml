@@ -1,0 +1,20 @@
+composite_rules:
+  - id: macos-data-stealer
+    desc: Automated harvesting of sensitive user data (macOS)
+    crit: suspicious
+    conf: 0.9
+    mbc: E1083
+    attack: T1083
+    platforms: [macos]
+    all:
+      - id: micro-behaviors/process/create/shell::shell-execution
+      - id: micro-behaviors/data/control-flow/analysis::iteration-loop-pattern
+    any:
+      - id: micro-behaviors/fs/path/sensitive/browser::login-data
+      - id: micro-behaviors/fs/path/sensitive/browser::chrome-cookies
+      - id: micro-behaviors/fs/path/sensitive/cloud::aws-credentials
+      - id: micro-behaviors/fs/path/sensitive/crypto::crypto-wallets
+      - id: micro-behaviors/fs/path/sensitive/ssh::keys
+      - id: micro-behaviors/crypto/xor/simd::simd-xor
+      - id: objectives/credential-access/stealer/native/symbols::copy-directory-with-exclusions
+    needs: 2

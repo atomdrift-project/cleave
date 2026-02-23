@@ -1,0 +1,36 @@
+# BSD Kernel Security Level Checks
+# Detects attempts to check or modify BSD kernel security levels
+# KERN_SECURELEVEL restricts privileged operations on BSD systems
+
+defaults:
+  crit: notable
+  for: [elf, macho]
+  platforms: [unix]
+
+traits:
+  - id: kern-securelevel
+    desc: BSD kernel security level constant
+    crit: notable
+    conf: 0.8
+    if:
+      type: string
+      exact: "KERN_SECURELEVEL"
+
+  - id: kern-securelvl-sysctl
+    desc: BSD kernel securelevel sysctl
+    crit: notable
+    conf: 0.8
+    if:
+      type: string
+      regex: "kern\\.securelevel"
+
+composite_rules:
+  - id: kernel-security-check
+    desc: Kernel security level check
+    crit: suspicious
+    conf: 0.85
+    attack: "T1562.001"
+    mbc: "F0004"
+    any:
+      - id: kern-securelevel
+      - id: kern-securelvl-sysctl

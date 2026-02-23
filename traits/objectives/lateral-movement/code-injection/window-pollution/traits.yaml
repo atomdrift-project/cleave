@@ -1,0 +1,31 @@
+defaults:
+  for: [javascript, typescript]
+
+traits:
+  - id: window-expose-sensitive-1
+    desc: Exposing sensitive functions to window (getToken/login/auth)
+    crit: notable
+    conf: 0.7
+    if:
+      type: string
+      regex: 'window\.(getToken|login|auth)\s*='
+      case_insensitive: true
+
+  - id: window-expose-sensitive-2
+    desc: Exposing sensitive functions to window (key/secret/token)
+    crit: notable
+    conf: 0.75
+    if:
+      type: string
+      regex: 'window\.(key|secret|token)\s*='
+      case_insensitive: true
+
+composite_rules:
+  - id: window-expose-sensitive
+    desc: Exposing sensitive functions to window object
+    crit: suspicious
+    conf: 0.8
+    for: [javascript, typescript]
+    any:
+      - id: window-expose-sensitive-1
+      - id: window-expose-sensitive-2

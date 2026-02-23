@@ -1,0 +1,81 @@
+# Disk Wiper Detection - Generic
+# MBC: E1561 (Disk Wipe)
+# ATT&CK: T1561
+
+defaults:
+  for: [all]
+
+traits:
+  - id: wipe-disk
+    desc: wipe disk phrase
+    crit: notable
+    conf: 0.6
+    if:
+      type: string
+      regex: "(?i)wipe disk"
+
+  - id: wipe-drive
+    desc: wipe drive phrase
+    crit: notable
+    conf: 0.6
+    if:
+      type: string
+      regex: "(?i)wipe drive"
+
+  - id: disk-wipe
+    desc: disk wipe phrase
+    crit: notable
+    conf: 0.6
+    if:
+      type: string
+      regex: "(?i)disk wipe"
+
+  - id: secure-erase
+    desc: secure erase phrase
+    crit: notable
+    conf: 0.6
+    if:
+      type: string
+      regex: "(?i)secure erase"
+
+  - id: mbr-ref
+    desc: MBR reference
+    crit: notable
+    conf: 0.6
+    if:
+      type: string
+      word: "MBR"
+
+  - id: boot-sector
+    desc: boot sector reference
+    crit: notable
+    conf: 0.6
+    if:
+      type: string
+      regex: "(?i)boot sector"
+
+  - id: master-boot-record
+    desc: master boot record reference
+    crit: notable
+    conf: 0.6
+    if:
+      type: string
+      regex: "(?i)master boot record"
+
+composite_rules:
+  - id: disk-terms
+    desc: Disk wiper terminology
+    crit: notable
+    conf: 0.75
+    mbc: "E1561"
+    attack: "T1561"
+    needs: 2
+    any:
+      - id: wipe-disk
+      - id: wipe-drive
+      - id: disk-wipe
+      - id: secure-erase
+      - id: mbr-ref
+      - id: boot-sector
+      - id: master-boot-record
+      - id: micro-behaviors/fs/path/device/storage

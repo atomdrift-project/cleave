@@ -1,0 +1,76 @@
+# File Permission Modification - Make Executable
+# MBC: E1222 (File Permission Modification)
+# ATT&CK: T1222 (File and Directory Permissions Modification)
+
+defaults:
+  for: [all]
+  mbc: "E1222"
+  attack: "T1222"
+  crit: notable
+
+traits:
+  # chmod +x shell command
+  - id: shell-plus-x
+    desc: chmod +x (make executable)
+    conf: 0.75
+    if:
+      type: string
+      regex: 'chmod\s+(\-[a-zA-Z]{1,8}\s+){0,3}\+x\s+[/\.\$\w\{]'
+
+  # Python os.chmod with executable bit (0o7xx pattern)
+  - id: python-executable
+    desc: Python os.chmod making file executable
+    conf: 0.85
+    for: [python]
+    if:
+      type: raw
+      regex: "os\\.chmod\\([^\\n]{0,120}0o7[0-7][0-7]"
+
+  # Python chmod with 0o755 or similar
+  - id: python-0755
+    desc: Python chmod 755 (owner executable)
+    conf: 0.8
+    for: [python]
+    if:
+      type: string
+      regex: 'chmod\(.{0,220}0o?755\)'
+
+  # Ruby chmod with executable modes
+  - id: ruby-executable
+    desc: Ruby chmod with executable permissions
+    conf: 0.8
+    for: [ruby]
+    if:
+      type: string
+      regex: 'chmod\(.{0,220}0[ox]?7[0-7][0-7]\)'
+
+  # Shell chmod with 7xx modes
+  - id: shell-7xx
+    desc: Shell chmod 7xx (executable)
+    conf: 0.7
+    if:
+      type: string
+      regex: 'chmod\s+[\-\w]*\s*0?7[0-7][0-7]\s'
+
+  # GuardDog: Python stat.S_IEXEC
+  - id: python-stat-iexec
+    desc: Python os.chmod with stat.S_IEXEC
+    conf: 0.90
+    for: [python]
+    if:
+      type: raw
+      regex: 'os\.chmod\([^)]{0,120}stat\.S_IEXEC'
+
+composite_rules:
+  # Any executable chmod
+  - id: any
+    desc: Make file executable (any method)
+    crit: notable
+    conf: 0.75
+    any:
+      - id: shell-plus-x
+      - id: python-executable
+      - id: python-0755
+      - id: python-stat-iexec
+      - id: ruby-executable
+      - id: shell-7xx

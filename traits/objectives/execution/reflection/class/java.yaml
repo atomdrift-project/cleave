@@ -1,0 +1,30 @@
+# Java Dynamic Loading
+# MBC: B0024 (Execution)
+
+traits:
+  - id: java-urlclassloader
+    desc: Java URLClassLoader for remote loading
+    crit: notable
+    conf: 0.85
+    for: [java, class]
+    if:
+      type: string
+      substr: java.net.URLClassLoader
+
+  - id: java-bytecode-reflective-invoke
+    desc: Reflective method invocation in Java bytecode
+    crit: suspicious
+    conf: 0.9
+    for: [java, class]
+    if:
+      type: string
+      regex: "java/lang/reflect/Method.{0,50}invoke"
+
+composite_rules:
+  - id: java-classloader-dropper
+    desc: Java classloader dropper pattern
+    crit: suspicious
+    conf: 0.95
+    all:
+      - id: java-urlclassloader
+      - id: java-bytecode-reflective-invoke

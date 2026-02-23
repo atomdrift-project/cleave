@@ -1,0 +1,368 @@
+# Package Dependencies - Suspicious Patterns
+# Detects unusual or suspicious dependency patterns
+# ATT&CK: T1195.002 (Compromise Software Supply Chain)
+
+defaults:
+  crit: notable
+  conf: 0.75
+  attack: "T1195.002"
+
+traits:
+  # === npm package.json ===
+
+  # No dependencies at all (suspicious for complex packages)
+  - id: npm-no-dependencies
+    desc: npm package has no dependencies
+    crit: notable
+    conf: 0.60
+    for: [package.json]
+    if:
+      type: kv
+      path: "dependencies"
+      exists: false
+
+  # Wildcard version dependencies (unsafe)
+  - id: npm-wildcard-dependency
+    desc: npm package uses wildcard version dependency
+    crit: suspicious
+    conf: 0.85
+    for: [package.json]
+    if:
+      type: kv
+      path: "dependencies.*"
+      exact: "*"
+
+  - id: npm-wildcard-devdependency
+    desc: npm package uses wildcard version in devDependencies
+    crit: notable
+    conf: 0.70
+    for: [package.json]
+    if:
+      type: kv
+      path: "devDependencies.*"
+      exact: "*"
+
+  # Latest tag (unpinned, risky)
+  - id: npm-latest-tag-dependency
+    desc: npm package uses 'latest' tag for dependency
+    crit: suspicious
+    conf: 0.80
+    for: [package.json]
+    if:
+      type: kv
+      path: "dependencies.*"
+      exact: "latest"
+
+  # File protocol dependencies (local file paths)
+  - id: npm-file-dependency
+    desc: npm package depends on local file
+    crit: notable
+    conf: 0.70
+    for: [package.json]
+    if:
+      type: kv
+      path: "dependencies.*"
+      regex: "^file:"
+
+  # Self-dependency (package depends on itself)
+  - id: npm-self-dependency
+    desc: npm package depends on itself
+    crit: suspicious
+    conf: 0.90
+    for: [package.json]
+    if:
+      type: kv
+      path: "dependencies.*"
+      # This would need the package name to compare, tricky with KV
+      # Simplified: detect version that matches current version pattern
+      regex: "^\\."
+
+  # Workspace protocol (may indicate dev-only package)
+  - id: npm-workspace-dependency
+    desc: npm package uses workspace protocol
+    crit: notable
+    conf: 0.65
+    for: [package.json]
+    if:
+      type: kv
+      path: "dependencies.*"
+      regex: "^workspace:"
+
+  # link: protocol
+  - id: npm-link-dependency
+    desc: npm package uses link protocol
+    crit: notable
+    conf: 0.70
+    for: [package.json]
+    if:
+      type: kv
+      path: "dependencies.*"
+      regex: "^link:"
+
+  # Portal protocol
+  - id: npm-portal-dependency
+    desc: npm package uses portal protocol
+    crit: notable
+    conf: 0.70
+    for: [package.json]
+    if:
+      type: kv
+      path: "dependencies.*"
+      regex: "^portal:"
+
+  # === npm Scripts Patterns (beyond install hooks) ===
+
+  # Prepack/postpack hooks (runs during npm pack)
+  - id: npm-pack-hooks
+    desc: npm package has prepack or postpack hooks
+    crit: notable
+    conf: 0.70
+    for: [package.json]
+    if:
+      type: kv
+      path: "scripts"
+      regex: "^(prepack|postpack)$"
+
+  # Prepare hook (runs before pack and publish)
+  - id: npm-prepare-hook
+    desc: npm package has prepare hook
+    crit: notable
+    conf: 0.65
+    for: [package.json]
+    if:
+      type: kv
+      path: "scripts.prepare"
+      exists: true
+
+  # Prepublish/postpublish hooks
+  - id: npm-publish-hooks
+    desc: npm package has prepublish or postpublish hooks
+    crit: notable
+    conf: 0.70
+    for: [package.json]
+    if:
+      type: kv
+      path: "scripts"
+      regex: "^(prepublish|prepublishOnly|postpublish)$"
+
+  # Suspicious script names
+  - id: npm-script-download
+    desc: npm package has 'download' script
+    crit: suspicious
+    conf: 0.85
+    for: [package.json]
+    if:
+      type: kv
+      path: "scripts.download"
+      exists: true
+
+  - id: npm-script-exec
+    desc: npm package has 'exec' or 'execute' script
+    crit: suspicious
+    conf: 0.85
+    for: [package.json]
+    if:
+      type: kv
+      path: "scripts"
+      regex: "^(exec|execute)$"
+
+  - id: npm-script-backdoor
+    desc: npm package has 'backdoor' script
+    crit: suspicious
+    conf: 0.95
+    for: [package.json]
+    if:
+      type: kv
+      path: "scripts.backdoor"
+      exists: true
+
+  # === PyPI Dependencies ===
+
+  # No install_requires
+  - id: pypi-no-dependencies
+    desc: PyPI package has no install_requires
+    crit: notable
+    conf: 0.60
+    for: [python]
+    if:
+      type: string
+      regex: 'install_requires\s*=\s*\[\s*\]'
+
+  # Wildcard/unpinned dependencies
+  - id: pypi-unpinned-dependency
+    desc: PyPI package uses unpinned dependency
+    crit: notable
+    conf: 0.70
+    for: [python]
+    if:
+      type: string
+      regex: "install_requires.{0,100}['\"][a-zA-Z0-9_-]{1,100}['\"]"
+    not:
+      - regex: '[''"][a-zA-Z0-9_-]+[><=]'
+
+  # === RubyGems Dependencies ===
+
+  # No dependencies
+  - id: gem-no-dependencies
+    desc: RubyGem has no runtime dependencies
+    crit: notable
+    conf: 0.60
+    for: [ruby]
+    if:
+      type: string
+      regex: '\.add_runtime_dependency\s*\('
+      exists: false
+
+  # === Internal Helpers ===
+  - id: npm-no-deps-dependencies
+    desc: npm package has no dependencies field
+    for: [package.json]
+    if:
+      type: kv
+      path: "dependencies"
+      exists: false
+
+  - id: npm-no-deps-devdependencies
+    desc: npm package has no devDependencies field
+    for: [package.json]
+    if:
+      type: kv
+      path: "devDependencies"
+      exists: false
+
+composite_rules:
+  # === Helpers ===
+  - id: pypi-install-hooks-any
+    desc: Any PyPI install hook detected
+    crit: notable
+    conf: 0.6
+    for: [python]
+    any:
+      - id: objectives/execution/setup/hooks::setuptools-run-override
+      - id: objectives/execution/setup/hooks::setup-cmdclass-install
+      - id: objectives/lateral-movement/supply-chain/pypi/metadata::install-class-inherit
+
+  # === npm Helpers ===
+  - id: npm-no-deps-at-all
+    desc: npm package has no dependencies or devDependencies
+    crit: notable
+    conf: 0.65
+    for: [package.json]
+    all:
+      - id: npm-no-deps-dependencies
+      - id: npm-no-deps-devdependencies
+
+  # === npm Unsafe Dependency Versions ===
+  - id: npm-unsafe-dependency-versions
+    desc: npm package uses unsafe dependency versions
+    crit: suspicious
+    conf: 0.85
+    attack: "T1195.002"
+    for: [package.json]
+    any:
+      - id: npm-wildcard-dependency
+      - id: npm-latest-tag-dependency
+
+  # === npm Local/Development Dependencies ===
+  - id: npm-local-dependencies
+    desc: npm package uses local or development-only dependencies
+    crit: notable
+    conf: 0.70
+    attack: "T1195.002"
+    for: [package.json]
+    any:
+      - id: npm-file-dependency
+      - id: npm-workspace-dependency
+      - id: npm-link-dependency
+      - id: npm-portal-dependency
+
+  # === npm Suspicious Scripts ===
+  - id: npm-suspicious-script-names
+    desc: npm package has suspicious script names
+    crit: suspicious
+    conf: 0.85
+    attack: "T1195.002"
+    for: [package.json]
+    any:
+      - id: npm-script-download
+      - id: npm-script-exec
+      - id: npm-script-backdoor
+
+  # === High-Risk: No dependencies + Install hooks ===
+  - id: npm-no-deps-with-hooks
+    desc: No dependencies but has install hooks
+    crit: hostile
+    conf: 0.95
+    attack: "T1195.002"
+    for: [package.json]
+    all:
+      - id: npm-no-deps-at-all
+      - id: objectives/lateral-movement/supply-chain/npm/metadata::install-hooks
+
+  # === High-Risk: Unsafe versions + Install hooks ===
+  - id: npm-unsafe-deps-with-hooks
+    desc: Unsafe dependency versions with install hooks
+    crit: hostile
+    conf: 0.93
+    attack: "T1195.002"
+    for: [package.json]
+    all:
+      - id: npm-unsafe-dependency-versions
+      - id: objectives/lateral-movement/supply-chain/npm/metadata::install-hooks
+
+  # === High-Risk: Local deps + Install hooks ===
+  - id: npm-local-deps-with-hooks
+    desc: Local dependencies with install hooks
+    crit: hostile
+    conf: 0.92
+    attack: "T1195.002"
+    for: [package.json]
+    all:
+      - id: npm-local-dependencies
+      - id: objectives/lateral-movement/supply-chain/npm/metadata::install-hooks
+
+  # === High-Risk: Suspicious scripts + Quality issues ===
+  - id: npm-suspicious-scripts-low-quality
+    desc: Suspicious scripts with low quality metadata
+    crit: hostile
+    conf: 0.94
+    attack: "T1195.002"
+    for: [package.json]
+    all:
+      - id: npm-suspicious-script-names
+    any:
+      - id: metadata/quality/package-info::npm-empty-description-any
+      - id: metadata/quality/author::npm-generic-author-name
+      - id: metadata/quality/versioning::release-zero
+      - id: metadata/quality/author::npm-suspicious-email-domain
+    needs: 2
+
+  # === High-Risk: No dependencies + Multiple quality issues ===
+  # Requires name field to avoid FP on monorepo subpackage package.json files
+  - id: npm-no-deps-low-quality
+    desc: No dependencies with multiple quality issues
+    crit: suspicious
+    conf: 0.88
+    attack: "T1195.002"
+    for: [package.json]
+    all:
+      - id: npm-no-deps-at-all
+      - id: metadata/quality/package-info::npm-has-name
+    any:
+      - id: metadata/quality/package-info::npm-empty-description-any
+      - id: metadata/quality/author::npm-generic-author-name
+      - id: metadata/quality/versioning::release-zero
+      - id: metadata/quality/author::npm-free-email-provider
+      - id: metadata/quality/naming::npm-test-or-temp-name
+    needs: 3
+
+  # === PyPI High-Risk ===
+  - id: pypi-no-deps-with-hooks
+    desc: PyPI package with no dependencies but has install hooks
+    crit: hostile
+    conf: 0.95
+    attack: "T1195.002"
+    for: [python]
+    all:
+      - id: pypi-no-dependencies
+      - id: pypi-install-hooks-any

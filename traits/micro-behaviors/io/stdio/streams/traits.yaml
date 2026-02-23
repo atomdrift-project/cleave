@@ -1,0 +1,62 @@
+# Standard I/O Operations
+# C runtime stdio operations (fprintf, fwrite, etc.)
+
+defaults:
+  for: ["pe", "dll"]
+  platforms: ["windows"]
+
+traits:
+  # === Formatted Output ===
+  - id: fprintf
+    desc: Formatted file output
+    crit: baseline
+    conf: 0.90
+    if:
+      type: symbol
+      exact: "fprintf"
+
+  - id: vfprintf
+    desc: Variadic formatted output
+    crit: baseline
+    conf: 0.90
+    if:
+      type: symbol
+      exact: "vfprintf"
+
+  - id: printf
+    desc: Formatted console output
+    crit: baseline
+    conf: 0.90
+    if:
+      type: symbol
+      exact: "printf"
+
+  - id: vprintf
+    desc: Variadic formatted console output
+    crit: baseline
+    conf: 0.90
+    if:
+      type: symbol
+      exact: "vprintf"
+
+  # === Raw I/O ===
+  # NOTE: fwrite moved to fs/file/write/unix.yaml
+  # NOTE: fread moved to fs/file/read/unix.yaml
+  # NOTE: fopen moved to fs/file/open/unix.yaml (more canonical location)
+
+  - id: fclose
+    desc: Close stdio file
+    crit: baseline
+    conf: 0.90
+    if:
+      type: symbol
+      exact: "fclose"
+
+  # === Stream Operations ===
+  - id: iob-func
+    desc: Get stream buffer array
+    crit: baseline
+    conf: 0.85
+    if:
+      type: symbol
+      exact: "__iob_func"

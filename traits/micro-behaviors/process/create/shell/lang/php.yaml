@@ -1,0 +1,108 @@
+# PHP Command Execution Traits
+# MBC: E1059 (Command and Scripting Interpreter)
+# ATT&CK: T1059.004 (Unix Shell)
+
+defaults:
+  for: [php]
+  crit: suspicious
+  mbc: "E1059"
+  attack: "T1059.004"
+
+traits:
+  - id: exec
+    desc: Shell command execution via exec()
+    conf: 0.95
+    if:
+      type: ast
+      kind: call
+      exact: "exec"
+
+  - id: shell-exec
+    desc: Shell command execution via shell_exec()
+    conf: 0.95
+    if:
+      type: ast
+      kind: call
+      exact: "shell_exec"
+
+  - id: system
+    desc: Shell command execution via system()
+    conf: 0.95
+    if:
+      type: ast
+      kind: call
+      exact: "system"
+
+  - id: passthru
+    desc: Shell command execution via passthru()
+    conf: 0.95
+    if:
+      type: ast
+      kind: call
+      exact: "passthru"
+
+  - id: popen
+    desc: Process open via popen()
+    conf: 0.9
+    if:
+      type: ast
+      kind: call
+      exact: "popen"
+
+  - id: proc-open
+    desc: Process execution via proc_open()
+    conf: 0.9
+    if:
+      type: ast
+      kind: call
+      exact: "proc_open"
+
+  - id: pcntl-exec
+    desc: Direct process execution via pcntl_exec()
+    conf: 0.95
+    attack: "T1059"  # Override: generic T1059 instead of T1059.004
+    if:
+      type: ast
+      kind: call
+      exact: "pcntl_exec"
+
+  - id: backtick
+    desc: Shell command execution via backticks
+    conf: 0.9
+    if:
+      type: ast
+      node: shell_command_expression
+      regex: ".{1,120}"
+
+  - id: exec-user-input-func-core
+    desc: User input reaches core exec functions
+    conf: 0.9
+    if:
+      type: ast
+      kind: call
+      regex: "(exec|system|shell_exec)\\s*\\("
+
+  - id: exec-user-input-func-alt
+    desc: User input reaches alt exec functions
+    conf: 0.9
+    if:
+      type: ast
+      kind: call
+      regex: "(passthru|popen)\\s*\\("
+
+  - id: exec-user-input-superglobal
+    desc: User input from PHP request superglobals
+    conf: 0.85
+    if:
+      type: raw
+      regex: "\\$_(GET|POST|REQUEST)"
+
+composite_rules:
+  - id: exec-user-input
+    desc: Command execution with user input
+    conf: 0.9
+    all:
+      - id: exec-user-input-superglobal
+    any:
+      - id: exec-user-input-func-core
+      - id: exec-user-input-func-alt

@@ -1,0 +1,32 @@
+# Temporary Directory Operations - Python
+# MBC: E1083 (File and Directory Discovery)
+# ATT&CK: T1083
+
+defaults:
+  for: [all]
+
+traits:
+  - id: directory-python
+    desc: Temp directory string lookup
+    crit: baseline
+    conf: 0.66
+    if:
+      type: string
+      substr: gettempdir
+
+  - id: directory-python-symbol
+    desc: Gets temp directory path
+    crit: baseline
+    conf: 0.75
+    if:
+      type: symbol
+      exact: "tempfile.gettempdir"
+
+composite_rules:
+  - id: temp-directory
+    desc: Gets system temp directory
+    crit: baseline
+    conf: 0.75
+    any:
+      - id: directory-python
+      - id: directory-python-symbol

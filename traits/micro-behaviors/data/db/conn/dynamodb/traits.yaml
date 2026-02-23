@@ -1,0 +1,15 @@
+# Database Connection - DYNAMODB
+
+defaults:
+  for: [all]
+
+traits:
+  # === DynamoDB micro-behaviors ===
+  - id: dynamodb-string
+    desc: dynamodb string
+    crit: notable
+    conf: 0.9
+    if:
+      type: string
+      regex: "(?i)dynamodb"
+

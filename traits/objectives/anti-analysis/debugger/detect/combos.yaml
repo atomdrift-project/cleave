@@ -1,0 +1,48 @@
+# Composite Debugger Detection Capabilities
+
+composite_rules:
+  - id: win-basic
+    desc: Windows debugger detection (basic)
+    crit: suspicious
+    mbc: "B0001"
+    attack: "T1622"
+    conf: 0.85
+    platforms: [windows]
+    for: [pe, dll]
+    any:
+      - id: objectives/execution/native/runtime::debugger-detect-api
+      - id: micro-behaviors/os/error-handling/exceptions::unhandled-exception-filter
+    downgrade:
+      any:
+        - id: metadata/quality/versioned
+
+  - id: win-comprehensive
+    desc: Windows debugger/VM detection (multiple signals)
+    crit: suspicious
+    mbc: "B0001"
+    attack: "T1622"
+    conf: 0.9
+    platforms: [windows]
+    for: [pe, dll]
+    needs: 2
+    any:
+      - id: objectives/execution/native/runtime::debugger-detect-api
+      - id: micro-behaviors/os/error-handling/exceptions::unhandled-exception-filter
+      - id: micro-behaviors/time/timing/delay::query-performance-counter
+    downgrade:
+      any:
+        - id: metadata/quality/versioned
+
+  - id: linux-comprehensive
+    desc: Linux debugger detection across multiple
+    crit: suspicious
+    mbc: "B0001"
+    attack: "T1622"
+    conf: 0.95
+    platforms: [linux]
+    for: [elf]
+    needs: 2
+    any:
+      - id: micro-behaviors/os/linker/env::ld-debug
+      - id: tracerpid-string
+      - id: ptrace-traceme-or-deny

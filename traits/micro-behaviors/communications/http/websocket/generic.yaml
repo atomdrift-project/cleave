@@ -1,0 +1,53 @@
+# WebSocket Operations
+# MBC: C0002 (HTTP Communication)
+# ATT&CK: T1071.001
+
+defaults:
+  for: [all]
+  mbc: "C0002"
+  attack: "T1071.001"
+
+traits:
+  # === WebSocket atomic indicators ===
+  - id: websocket-class
+    desc: WebSocket class reference
+    crit: baseline
+    conf: 0.5
+    if:
+      type: string
+      substr: "WebSocket"
+
+  - id: websocket-lower
+    desc: websocket lowercase reference
+    crit: baseline
+    conf: 0.5
+    if:
+      type: string
+      substr: "websocket"
+
+  - id: ws-scheme
+    desc: ws:// URL scheme
+    crit: baseline
+    conf: 0.6
+    if:
+      type: string
+      substr: "ws://"
+
+  - id: wss-scheme
+    desc: wss:// URL scheme
+    crit: baseline
+    conf: 0.6
+    if:
+      type: string
+      substr: "wss://"
+
+composite_rules:
+  - id: websocket
+    desc: WebSocket communication
+    crit: notable
+    conf: 0.66
+    any:
+      - id: websocket-class
+      - id: websocket-lower
+      - id: ws-scheme
+      - id: wss-scheme

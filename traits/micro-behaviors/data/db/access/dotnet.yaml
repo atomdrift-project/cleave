@@ -1,0 +1,200 @@
+# .NET Database Access Patterns
+# Detected via string matching in compiled assemblies
+
+defaults:
+  for: [all]
+
+traits:
+  # === SQL connection atomic indicators ===
+  - id: sql-connection-class
+    desc: SqlConnection class
+    crit: baseline
+    conf: 0.7
+    if:
+      type: string
+      substr: "SqlConnection"
+
+  - id: db-connection-class
+    desc: DbConnection class
+    crit: baseline
+    conf: 0.7
+    if:
+      type: string
+      substr: "DbConnection"
+
+  - id: oledb-connection-class
+    desc: OleDbConnection class
+    crit: baseline
+    conf: 0.7
+    if:
+      type: string
+      substr: "OleDbConnection"
+
+  - id: odbc-connection-class
+    desc: OdbcConnection class
+    crit: baseline
+    conf: 0.7
+    if:
+      type: string
+      substr: "OdbcConnection"
+
+  # === SQL command atomic indicators ===
+  - id: execute-nonquery
+    desc: ExecuteNonQuery method
+    crit: baseline
+    conf: 0.7
+    if:
+      type: string
+      substr: "ExecuteNonQuery"
+
+  - id: execute-scalar
+    desc: ExecuteScalar method
+    crit: baseline
+    conf: 0.7
+    if:
+      type: string
+      substr: "ExecuteScalar"
+
+  - id: execute-reader
+    desc: ExecuteReader method
+    crit: baseline
+    conf: 0.7
+    if:
+      type: string
+      substr: "ExecuteReader"
+
+  - id: sql-command-class
+    desc: SqlCommand class
+    crit: baseline
+    conf: 0.7
+    if:
+      type: string
+      substr: "SqlCommand"
+
+  - id: db-command-class
+    desc: DbCommand class
+    crit: baseline
+    conf: 0.7
+    if:
+      type: string
+      substr: "DbCommand"
+
+  # === Connection string atomic indicators ===
+  - id: connection-string-singular
+    desc: ConnectionString property
+    crit: baseline
+    conf: 0.7
+    if:
+      type: string
+      substr: "ConnectionString"
+
+  - id: connection-strings-plural
+    desc: ConnectionStrings property
+    crit: baseline
+    conf: 0.7
+    if:
+      type: string
+      substr: "ConnectionStrings"
+
+  # === SQL parameter atomic indicators ===
+  - id: sql-parameter-class
+    desc: SqlParameter class
+    crit: baseline
+    conf: 0.6
+    if:
+      type: string
+      substr: "SqlParameter"
+
+  - id: db-parameter-class
+    desc: DbParameter class
+    crit: baseline
+    conf: 0.6
+    if:
+      type: string
+      substr: "DbParameter"
+
+  - id: add-with-value
+    desc: AddWithValue method
+    crit: baseline
+    conf: 0.6
+    if:
+      type: string
+      substr: "AddWithValue"
+
+  # === Data adapter atomic indicators ===
+  - id: sql-data-adapter-class
+    desc: SqlDataAdapter class
+    crit: baseline
+    conf: 0.6
+    if:
+      type: string
+      substr: "SqlDataAdapter"
+
+  - id: data-adapter-class
+    desc: DataAdapter class
+    crit: baseline
+    conf: 0.6
+    if:
+      type: string
+      substr: "DataAdapter"
+
+  - id: fill-method
+    desc: Fill method
+    crit: baseline
+    conf: 0.5
+    if:
+      type: string
+      regex: "Fill\\("
+
+composite_rules:
+  # SQL connection composite
+  - id: sql-connection
+    desc: SQL database connection capability
+    crit: notable
+    conf: 0.85
+    any:
+      - id: sql-connection-class
+      - id: db-connection-class
+      - id: oledb-connection-class
+      - id: odbc-connection-class
+
+  # SQL command composite
+  - id: sql-command
+    desc: SQL command execution
+    crit: notable
+    conf: 0.85
+    any:
+      - id: execute-nonquery
+      - id: execute-scalar
+      - id: execute-reader
+      - id: sql-command-class
+      - id: db-command-class
+
+  # Connection string composite
+  - id: connection-string
+    desc: Database connection string handling
+    crit: notable
+    conf: 0.80
+    any:
+      - id: connection-string-singular
+      - id: connection-strings-plural
+
+  # SQL parameter composite
+  - id: sql-parameter
+    desc: Parameterized SQL queries (good practice)
+    crit: notable
+    conf: 0.75
+    any:
+      - id: sql-parameter-class
+      - id: db-parameter-class
+      - id: add-with-value
+
+  # Data adapter composite
+  - id: data-adapter
+    desc: ADO.NET data adapter usage
+    crit: notable
+    conf: 0.75
+    any:
+      - id: sql-data-adapter-class
+      - id: data-adapter-class
+      - id: fill-method

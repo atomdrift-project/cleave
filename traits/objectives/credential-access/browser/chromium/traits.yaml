@@ -1,0 +1,248 @@
+defaults:
+  for:
+  - all
+traits:
+- id: chrome-path
+  desc: Chrome browser profile path (credential access context)
+  crit: suspicious
+  conf: 0.7
+  attack: T1555.003
+  if:
+    type: string
+    regex: (?i)Google/Chrome.{0,80}(Login Data|History)
+- id: brave-path
+  desc: Brave browser profile path
+  crit: suspicious
+  conf: 0.7
+  attack: T1555.003
+  if:
+    type: string
+    substr: BraveSoftware/Brave-Browser
+- id: edge-path
+  desc: Microsoft Edge browser profile path
+  crit: notable
+  conf: 0.7
+  attack: T1555.003
+  if:
+    type: string
+    substr: Microsoft Edge
+- id: opera-macos-path
+  desc: Opera macOS profile path
+  crit: notable
+  conf: 0.6
+  attack: T1555.003
+  if:
+    type: string
+    substr: com.operasoftware.Opera
+- id: opera-windows-path
+  desc: Opera Windows profile path
+  crit: notable
+  conf: 0.6
+  attack: T1555.003
+  if:
+    type: string
+    substr: Opera Software/Opera
+- id: operagx-path
+  desc: Opera GX browser profile path
+  crit: suspicious
+  conf: 0.7
+  attack: T1555.003
+  if:
+    type: string
+    substr: com.operasoftware.OperaGX
+- id: vivaldi-path
+  desc: Vivaldi browser profile path
+  crit: suspicious
+  conf: 0.7
+  attack: T1555.003
+  if:
+    type: string
+    substr: User Data/Vivaldi
+- id: arc-macos-path
+  desc: Arc macOS profile path
+  crit: notable
+  conf: 0.6
+  attack: T1555.003
+  if:
+    type: string
+    substr: /Arc/
+- id: arc-userdata-path
+  desc: Arc User Data path
+  crit: notable
+  conf: 0.6
+  attack: T1555.003
+  if:
+    type: string
+    substr: Arc/User Data
+- id: coccoc-path
+  desc: Coccoc browser profile path
+  crit: suspicious
+  conf: 0.7
+  attack: T1555.003
+  if:
+    type: string
+    substr: Coccoc
+- id: encrypted-key
+  desc: Chromium encrypted_key field
+  crit: suspicious
+  conf: 0.85
+  attack: T1555.003
+  if:
+    type: string
+    substr: encrypted_key
+- id: os-crypt
+  desc: Chromium os_crypt structure
+  crit: suspicious
+  conf: 0.85
+  attack: T1555.003
+  if:
+    type: string
+    substr: os_crypt
+- id: logins-table
+  desc: Chromium logins table reference
+  crit: notable
+  conf: 0.6
+  attack: T1555.003
+  if:
+    type: string
+    regex: (?i)\blogins\b
+- id: chromium-cookie-sql
+  desc: Chromium cookies table SQL query
+  crit: notable
+  conf: 0.8
+  attack: T1555.003
+  if:
+    type: string
+    regex: SELECT.{0,30}host_key.{0,30}encrypted_value.{0,30}FROM\s+cookies
+    case_insensitive: true
+- id: firefox-cookie-sql
+  desc: Firefox moz_cookies table SQL query
+  crit: notable
+  conf: 0.8
+  attack: T1555.003
+  if:
+    type: string
+    regex: SELECT.{0,30}host_key.{0,30}encrypted_value.{0,30}FROM\s+moz_cookies
+    case_insensitive: true
+- id: credit-card-sql
+  desc: Chromium credit card SQL query
+  crit: suspicious
+  conf: 0.95
+  attack: T1555.003
+  mbc: B0028
+  if:
+    type: string
+    regex: SELECT.{0,50}card_number.{0,30}FROM\s+credit_cards
+    case_insensitive: true
+- id: password-sql
+  desc: Chromium Login Data SQL query
+  crit: suspicious
+  conf: 0.95
+  attack: T1555.003
+  mbc: B0028
+  for:
+  - all
+  if:
+    type: string
+    regex: SELECT.{0,40}origin_url.{0,40}password_value.{0,40}FROM\s+logins
+    case_insensitive: true
+composite_rules:
+- id: opera-path
+  desc: Opera browser profile path
+  crit: suspicious
+  conf: 0.7
+  attack: T1555.003
+  any:
+  - id: opera-macos-path
+  - id: opera-windows-path
+- id: arc-path
+  desc: Arc browser profile path
+  crit: notable
+  conf: 0.7
+  attack: T1555.003
+  any:
+  - id: arc-macos-path
+  - id: arc-userdata-path
+- id: cookie-sql
+  desc: Browser cookie SQL query
+  crit: suspicious
+  conf: 0.9
+  attack: T1555.003
+  any:
+  - id: chromium-cookie-sql
+  - id: firefox-cookie-sql
+- id: cookie-theft
+  desc: Chrome cookie file access
+  crit: suspicious
+  conf: 0.85
+  attack: T1555.003
+  all:
+  - id: chrome-path
+  - id: objectives/credential-access/browser/chromium::cookies
+- id: shell-cookie-theft
+  desc: Chrome cookie theft via shell
+  crit: suspicious
+  conf: 0.9
+  attack: T1555.003
+  for:
+  - shell
+  all:
+  - id: chrome-path
+  - id: objectives/credential-access/browser/chromium::cookies
+  any:
+  - id: objectives/execution/dropper/payload::cp-execute
+  - id: objectives/execution/dropper/script::curl-cmd
+  - id: micro-behaviors/fs/attributes/xattr::xattr-remove
+- id: master-decrypt
+  desc: Chromium master password decryption
+  crit: suspicious
+  conf: 0.9
+  attack: T1555.003
+  mbc: E1003
+  all:
+  - id: objectives/credential-access/browser/chromium::local-state
+  - id: encrypted-key
+  - id: os-crypt
+- id: password-theft
+  desc: Chromium password theft detected
+  crit: notable
+  conf: 0.95
+- id: credit-card-theft
+  desc: Chromium credit card data theft
+  crit: hostile
+  conf: 0.9
+  attack: T1555.003
+  mbc: B0028
+  for:
+  - python
+  - javascript
+  - elf
+  - pe
+  - macho
+  all:
+  - id: chrome-path
+  - id: objectives/credential-access/browser/chromium::web-data
+  - id: micro-behaviors/fs/path/sensitive/browser::browser-credit-cards
+- id: multi-browser
+  desc: Multiple Chromium browsers targeted (stealer
+  crit: hostile
+  conf: 0.95
+  attack: T1555.003
+  mbc: B0028
+  for:
+  - python
+  - javascript
+  - applescript
+  - shell
+  - elf
+  - pe
+  - macho
+  needs: 3
+  any:
+  - id: chrome-path
+  - id: brave-path
+  - id: edge-path
+  - id: opera-path
+  - id: operagx-path
+  - id: vivaldi-path
+  - id: arc-path

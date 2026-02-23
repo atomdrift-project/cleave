@@ -1,0 +1,12 @@
+# NodeJS 'archiver' Library
+defaults:
+  for: [all]
+
+traits:
+  - id: archiver
+    desc: "NodeJS binary using 'archiver' library"
+    crit: notable
+    conf: 0.9
+    if:
+      type: string
+      regex: "node_modules.{0,30}archiver/index.js"

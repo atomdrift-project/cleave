@@ -1,0 +1,40 @@
+# Memory and Synchronization Operations
+# Interlocked operations and atomic memory access
+
+defaults:
+  for: ["pe", "dll"]
+  platforms: ["windows"]
+
+traits:
+  # === SList Operations ===
+  - id: initialize-slist-head
+    desc: Initialize thread-safe list header
+    crit: baseline
+    conf: 0.90
+    if:
+      type: symbol
+      exact: "InitializeSListHead"
+
+  - id: interlocked-flush-slist
+    desc: Atomically flush thread-safe list
+    crit: baseline
+    conf: 0.90
+    if:
+      type: symbol
+      exact: "InterlockedFlushSList"
+
+  - id: interlocked-push-entry-slist
+    desc: Atomically push entry to thread-safe list
+    crit: baseline
+    conf: 0.90
+    if:
+      type: symbol
+      exact: "InterlockedPushEntrySList"
+
+  - id: interlocked-pop-entry-slist
+    desc: Atomically pop entry from thread-safe list
+    crit: baseline
+    conf: 0.90
+    if:
+      type: symbol
+      exact: "InterlockedPopEntrySList"

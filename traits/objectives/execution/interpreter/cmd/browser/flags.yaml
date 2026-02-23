@@ -1,0 +1,11 @@
+defaults:
+  for: [all]
+
+traits:
+  - id: browser-load-extension-flag
+    desc: Browser executed with --load-extension flag
+    crit: suspicious
+    conf: 0.8
+    if:
+      type: raw
+      regex: '--load-extension='

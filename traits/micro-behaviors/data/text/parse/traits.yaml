@@ -1,0 +1,81 @@
+# Hash Text Parsing Capabilities
+
+defaults:
+  for: [python]
+
+traits:
+  - id: hash-algo-md5
+    desc: Contains MD5 string
+    crit: baseline
+    conf: 0.8
+    if:
+      type: string
+      substr: "MD5"
+
+  - id: hash-algo-sha1
+    desc: Contains SHA-1 string
+    crit: baseline
+    conf: 0.8
+    if:
+      type: string
+      substr: "SHA-1"
+
+  - id: hash-algo-sha256
+    desc: Contains SHA-256 string
+    crit: baseline
+    conf: 0.8
+    if:
+      type: string
+      substr: "SHA-256"
+
+  - id: hash-algo-sha512
+    desc: Contains SHA-512 string
+    crit: baseline
+    conf: 0.8
+    if:
+      type: string
+      substr: "SHA-512"
+
+  - id: hash-parsing-splitlines
+    desc: Logic to parse/split hash data
+    crit: baseline
+    conf: 0.6
+    if:
+      type: string
+      exact: "splitlines"
+
+  - id: hash-parsing-startswith
+    desc: Logic to parse/split hash data
+    crit: baseline
+    conf: 0.6
+    if:
+      type: string
+      exact: "startswith"
+
+  - id: hash-parsing-strip
+    desc: Logic to parse/split hash data
+    crit: baseline
+    conf: 0.6
+    if:
+      type: string
+      exact: "strip"
+
+composite_rules:
+  - id: hash-algo-strings
+    desc: Contains hash algorithm names
+    crit: baseline
+    conf: 0.8
+    any:
+      - id: hash-algo-md5
+      - id: hash-algo-sha1
+      - id: hash-algo-sha256
+      - id: hash-algo-sha512
+
+  - id: hash-parsing-logic
+    desc: Logic to parse/split hash data
+    crit: baseline
+    conf: 0.6
+    any:
+      - id: hash-parsing-splitlines
+      - id: hash-parsing-startswith
+      - id: hash-parsing-strip

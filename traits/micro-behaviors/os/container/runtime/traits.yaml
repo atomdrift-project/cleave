@@ -1,0 +1,8 @@
+# Container Detection - Generic
+# Generic container detection paths
+# NOTE: /proc/1/cgroup and /proc/self/cgroup moved to micro-behaviors/fs/proc/container/linux
+
+defaults:
+  for: [python, shell, javascript]
+
+traits:

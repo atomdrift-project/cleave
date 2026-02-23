@@ -1,0 +1,41 @@
+# RC4 Stream Cipher Detection
+# ATT&CK: T1573 (Encrypted Channel)
+
+defaults:
+  for: [all]
+  mbc: "C0027"
+  attack: "T1573"
+
+traits:
+  # NOTE: RC4 byte patterns can appear in:
+  # - Debuggers analyzing encrypted code or disassembling crypto implementations
+  # - Compiler/build tools with crypto libraries
+  # - Large binaries with unrelated byte sequences matching by chance
+  # Downgrade for known development tools
+  - id: rc4-bytecode
+    desc: "RC4 encryption byte patterns"
+    crit: suspicious
+    conf: 0.8
+    for: [elf, macho, pe, so, dylib, dll]
+    if:
+      type: yara
+      source: |
+        rule rc4_patterns {
+          strings:
+            $rc4_1 = { 8A ?? ?? 8A ?? ?? 02 ?? 88 ?? ?? 88 ?? ?? }
+            $rc4_2 = { 30 ?? 4? 83 ?? FF 75 }
+          condition:
+            any of them
+        }
+    downgrade:
+      any:
+        - id: micro-behaviors/dylib/library::debugger-tool-marker
+        - id: micro-behaviors/dylib/load/compiler-tool-marker
+
+  - id: rc4-strings
+    desc: "RC4 encryption strings"
+    crit: baseline
+    conf: 0.5
+    if:
+      type: string
+      regex: "(?i)rc4.{0,20}crypt"

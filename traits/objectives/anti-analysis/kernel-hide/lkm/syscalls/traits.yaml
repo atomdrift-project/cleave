@@ -1,0 +1,228 @@
+# Linux Kernel Rootkit Detection - Syscall Hooking Infrastructure
+# MBC: Defense Evasion, Privilege Escalation  
+# ATT&CK: T1014 (Rootkit), T1068 (Exploitation for Privilege Escalation)
+
+traits:
+  # SYSCALL HOOKING INFRASTRUCTURE
+  # ============================================================
+
+  - id: asmlinkage-decl
+    desc: Assembly linkage declaration (syscall calling
+    crit: suspicious
+    conf: 0.9
+    for: [c]
+    if:
+      type: ast
+      node: declaration
+      exact: "asmlinkage"
+
+  - id: t-syscall-typedef
+    desc: Syscall function pointer typedef
+    crit: suspicious
+    conf: 0.95
+    for: [c]
+    if:
+      type: ast
+      node: type_definition
+      regex: "t_syscall|sys_?call_(fn|ptr)"
+
+  - id: orig-syscall-pattern
+    desc: Original syscall saving pattern (hooking
+    crit: suspicious
+    conf: 0.95
+    attack: "T1014"
+    for: [c]
+    if:
+      type: ast
+      node: declaration
+      exact: "orig_"
+
+  - id: pt-regs-register-access
+    desc: Direct register access via pt_regs
+    crit: suspicious
+    conf: 0.9
+    for: [c]
+    if:
+      type: ast
+      kind: attribute
+      exact: "pt_regs->"
+
+  - id: pt-regs-di-access
+    desc: RDI register access (first syscall
+    crit: suspicious
+    conf: 0.95
+    for: [c]
+    if:
+      type: ast
+      kind: attribute
+      exact: "->di"
+
+  - id: pt-regs-si-access
+    desc: RSI register access (second syscall
+    crit: suspicious
+    conf: 0.95
+    for: [c]
+    if:
+      type: ast
+      kind: attribute
+      exact: "->si"
+
+  # ============================================================
+  # GETDENTS HOOKING SPECIFIC
+  # ============================================================
+
+  - id: getdents-hook-function
+    desc: getdents hook function (directory listing
+    crit: suspicious
+    conf: 0.99
+    attack: "T1014"
+    for: [c]
+    if:
+      type: ast
+      kind: function
+      exact: "getdents"
+      case_insensitive: true
+
+  - id: nr-getdents-ref
+    desc: __NR_getdents syscall number reference
+    crit: suspicious
+    conf: 0.98
+    for: [c]
+    if:
+      type: ast
+      node: subscript_expression
+      exact: "__NR_getdents"
+
+  - id: nr-kill-ref
+    desc: __NR_kill syscall number reference (signal
+    crit: suspicious
+    conf: 0.95
+    for: [c]
+    if:
+      type: ast
+      node: subscript_expression
+      exact: "__NR_kill"
+
+  # ============================================================
+  # USER/KERNEL BOUNDARY
+  # ============================================================
+
+  - id: user-annotation
+    desc: __user annotation (kernel/userspace boundary marker)
+    crit: suspicious
+    conf: 0.8
+    for: [c]
+    if:
+      type: ast
+      node: declaration
+      exact: "__user"
+
+  - id: gfp-kernel-alloc
+    desc: GFP_KERNEL allocation flag
+    crit: suspicious
+    conf: 0.7
+    for: [c]
+    if:
+      type: ast
+      kind: call
+      exact: "GFP_KERNEL"
+
+  # ============================================================
+  # KERNEL FUNCTION CALLS
+  # ============================================================
+
+  - id: kallsyms-lookup
+    desc: Kernel symbol lookup (rootkit indicator)
+    crit: suspicious
+    conf: 0.98
+    mbc: "F0004"
+    for: [c]
+    if:
+      type: ast
+      kind: call
+      exact: "kallsyms_lookup_name"
+
+  - id: prepare-credential-access-call
+    desc: Prepare kernel credentials (privilege escalation)
+    crit: suspicious
+    conf: 0.98
+    attack: "T1068"
+    for: [c]
+    if:
+      type: ast
+      kind: call
+      exact: "prepare_credential-access"
+
+  - id: commit-credential-access-call
+    desc: Commit kernel credentials (privilege escalation)
+    crit: suspicious
+    conf: 0.98
+    attack: "T1068"
+    for: [c]
+    if:
+      type: ast
+      kind: call
+      exact: "commit_credential-access"
+
+  - id: list-del-call
+    desc: Kernel list deletion (module hiding)
+    crit: suspicious
+    conf: 0.95
+    attack: "T1014"
+    for: [c]
+    if:
+      type: ast
+      kind: call
+      exact: "list_del"
+
+  - id: cr0-read-call
+    desc: Read CR0 register (memory protection
+    crit: suspicious
+    conf: 0.98
+    for: [c]
+    if:
+      type: ast
+      kind: call
+      exact: "read_cr0"
+
+  - id: cr0-write-call
+    desc: Write CR0 register (disable write
+    crit: suspicious
+    conf: 0.99
+    for: [c]
+    if:
+      type: ast
+      kind: call
+      exact: "write_cr0"
+
+  - id: kzalloc-call
+    desc: Kernel memory allocation
+    crit: suspicious
+    conf: 0.9
+    for: [c]
+    if:
+      type: ast
+      kind: call
+      exact: "kzalloc"
+
+  - id: copy-from-user-call
+    desc: Copy data from user space
+    crit: suspicious
+    conf: 0.9
+    for: [c]
+    if:
+      type: ast
+      kind: call
+      exact: "copy_from_user"
+
+  - id: copy-to-user-call
+    desc: Copy data from kernel to
+    crit: suspicious
+    conf: 0.9
+    for: [c]
+    if:
+      type: ast
+      kind: call
+      exact: "copy_to_user"
+
+  # ============================================================

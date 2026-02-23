@@ -1,0 +1,98 @@
+# Lateral Movement - Scanning Composite Rules
+# ATT&CK: T1046 (Network Service Discovery)
+
+composite_rules:
+  # === Network Scanner Detection ===
+  # NOTE: This rule is very broad - hostname resolve + socket connect + probe/port/target
+  # matches many legitimate tools (debuggers, SSH clients, curl, etc.)
+  # Downgrade for known legitimate tools to avoid false positives.
+
+  - id: generic-scanner
+    desc: Generic network scanning tool
+    crit: suspicious
+    conf: 0.85
+    attack: "T1046"
+    mbc: "E1046"
+    for: [all]
+    all:
+      - id: sym-hostname-resolve
+      - id: sym-socket-connect
+    needs: 2
+    any:
+      - id: ip-format
+      - id: port-ref
+      - id: probe-ref
+      - id: target-ref
+    # Exclude legitimate tools that do network operations
+    downgrade:
+      any:
+        - id: micro-behaviors/dylib/library::debugger-tool-marker
+        - id: micro-behaviors/dylib/library::system-lib-marker
+        - id: micro-behaviors/dylib/library::network-lib-marker
+        - id: micro-behaviors/communications/ssh/connect/connect
+        - id: metadata/quality/has-help
+        - id: metadata/signed/platform::apple
+        - id: micro-behaviors/communications/dns/tools::dig
+
+  - id: root-scanner
+    desc: Root exploitation scanner
+    crit: suspicious
+    conf: 0.9
+    attack: "T1046"
+    mbc: "E1046"
+    for: [all]
+    all:
+      - id: root-exploit-ref
+    any:
+      - id: target-ip-ref
+      - id: random-target
+
+  # === IoT Credential Brute Force ===
+  # NOTE: IoT credential attack detection is defined in lateral/brute-force/iot-credential-access/traits.yaml
+
+  # === Random IP Scanning ===
+
+  - id: random-ip-scanner
+    desc: Random IP address scanning
+    crit: suspicious
+    conf: 0.8
+    attack: "T1046"
+    for: [all]
+    all:
+      - id: random-target
+    any:
+      - id: sym-socket-connect
+      - id: ip-format
+
+  # === Nmap Automated Scanning ===
+  # Programmatic use of nmap with port scanning and network range targets
+  # Indicates automated network reconnaissance
+
+  - id: nmap-scan-automation
+    desc: Automated nmap network scanning
+    crit: suspicious
+    conf: 0.85
+    attack: "T1046"
+    mbc: "E1046"
+    for: [all]
+    all:
+      - id: well-known/tools/offensive::nmap-ref
+      - id: port-ref
+    any:
+      - id: cidr-range
+      - id: service-port
+
+  # === RPC Service Enumeration ===
+  # RPC portmapper enumeration is a highly suspicious network reconnaissance activity
+  # Direct use of pmap_getmaps/pmap_getport indicates active service discovery
+
+  - id: rpc-service-enum
+    desc: RPC service enumeration scanner
+    crit: suspicious
+    conf: 0.9
+    attack: "T1046"
+    mbc: "E1046"
+    for: [all]
+    all:
+      - id: rpc-enum-pmap
+      - id: sym-hostname-resolve

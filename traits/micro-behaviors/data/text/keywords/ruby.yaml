@@ -1,0 +1,16 @@
+# Ruby String Manipulation
+# Detects common string operations
+
+defaults:
+  for: [ruby]
+  platforms: [all]
+
+traits:
+  # === String Splitting ===
+  - id: split-string
+    desc: String split operation
+    crit: baseline
+    conf: 0.70
+    if:
+      type: string
+      regex: 'split.{0,50}\.|file_name.{0,50}split'

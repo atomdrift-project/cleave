@@ -1,0 +1,32 @@
+# Database Connection - INFLUXDB
+
+defaults:
+  for: [all]
+
+traits:
+  # === InfluxDB micro-behaviors ===
+  - id: influxdb-string
+    desc: influxdb string
+    crit: notable
+    conf: 0.9
+    if:
+      type: string
+      regex: "(?i)influxdb"
+
+  - id: influxdata
+    desc: influxdata string
+    crit: notable
+    conf: 0.9
+    if:
+      type: string
+      substr: "influxdata"
+
+composite_rules:
+  # InfluxDB composite (migrated from YARA)
+  - id: influxdb
+    desc: InfluxDB time series database
+    crit: notable
+    conf: 0.9
+    any:
+      - id: influxdb-string
+      - id: influxdata

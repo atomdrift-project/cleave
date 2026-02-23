@@ -1,0 +1,25 @@
+# Account Configuration Files
+# User account and credential files
+# ATT&CK: T1033 (System Owner/User Discovery), T1003.008 (Credential Dumping)
+
+defaults:
+  for: [all]
+  crit: baseline
+  conf: 0.8
+
+traits:
+  - id: etc-passwd
+    desc: /etc/passwd user database
+    attack: "T1033"
+    if:
+      type: string
+      substr: "/etc/passwd"
+
+composite_rules:
+  - id: account-files
+    desc: Account configuration file access
+    crit: notable
+    conf: 0.8
+    any:
+      - id: etc-passwd
+      - id: micro-behaviors/os/privilege/paths::etc-shadow

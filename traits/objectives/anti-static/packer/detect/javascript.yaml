@@ -1,0 +1,16 @@
+# Dean Edwards Packer Detection
+# Detects the classic 'eval(function(p,a,c,k,e,d)...' packing pattern
+# Often used for legitimate minification but also for obfuscating malicious scripts
+# ATT&CK: T1027 (Obfuscated Files or Information)
+
+defaults:
+  for: [all]
+
+traits:
+  - id: dean-edwards
+    desc: "Dean Edwards JavaScript Packer detected"
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: string
+      substr: "eval(function(p,a,c,k,e,d)"

@@ -1,0 +1,15 @@
+# Directory Listing - Go
+# MBC: E1083 (File and Directory Discovery)
+# ATT&CK: T1083
+
+defaults:
+  for: [all]
+
+traits:
+  - id: readdir-go
+    desc: List directory contents (Go)
+    crit: baseline
+    conf: 0.66
+    if:
+      type: string
+      regex: "\\.(Open|Read)Dir"

@@ -1,0 +1,76 @@
+---
+# Ruby system information gathering
+
+defaults:
+  for: [ruby]
+  platforms: [all]
+
+traits:
+  # Environment variables
+  - id: env-bracket-access
+    desc: ENV bracket access
+    crit: notable
+    conf: 0.6
+    if:
+      type: string
+      exact: "ENV["
+
+  - id: env-fetch
+    desc: ENV.fetch method
+    crit: notable
+    conf: 0.6
+    if:
+      type: symbol
+      regex: "ENV.{0,50}fetch"
+
+  # Process info
+  - id: process-pid
+    desc: Process.pid method
+    crit: notable
+    conf: 0.6
+    if:
+      type: symbol
+      regex: "Process.{0,50}pid"
+
+  - id: process-ppid
+    desc: Process.ppid method
+    crit: notable
+    conf: 0.6
+    if:
+      type: symbol
+      regex: "Process.{0,50}ppid"
+
+  - id: process-uid
+    desc: Process.uid method
+    crit: notable
+    conf: 0.6
+    if:
+      type: symbol
+      regex: "Process.{0,50}uid"
+
+  - id: process-gid
+    desc: Process.gid method
+    crit: notable
+    conf: 0.6
+    if:
+      type: symbol
+      regex: "Process.{0,50}gid"
+
+composite_rules:
+  - id: ruby-env-read
+    desc: Read environment variables
+    crit: notable
+    conf: 0.75
+    any:
+      - id: env-bracket-access
+      - id: env-fetch
+
+  - id: ruby-process-info
+    desc: Process information access
+    crit: notable
+    conf: 0.75
+    any:
+      - id: process-pid
+      - id: process-ppid
+      - id: process-uid
+      - id: process-gid

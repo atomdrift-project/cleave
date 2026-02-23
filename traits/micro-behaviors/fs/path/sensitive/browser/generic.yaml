@@ -1,0 +1,21 @@
+defaults:
+  for: [all]
+
+traits:
+  - id: leveldb-ref
+    desc: LevelDB storage reference
+    crit: notable
+    conf: 0.7
+    if:
+      type: string
+      substr: "leveldb"
+
+  - id: local-storage-ref
+    desc: Local Storage directory reference
+    crit: notable
+    conf: 0.7
+    if:
+      type: string
+      substr: "Local Storage"
+    not:
+      - "Thread Local Storage"

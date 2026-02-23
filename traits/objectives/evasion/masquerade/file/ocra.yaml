@@ -1,0 +1,8 @@
+composite_rules:
+  - id: ocra-masquerading-as-image
+    desc: OCRA (Ruby) executable masquerading as an image file
+    crit: hostile
+    conf: 1.0
+    all:
+      - id: objectives/anti-analysis/packing/ocra::ocra-packed-executable
+      - id: objectives/evasion/masquerade/file::basename-is-media

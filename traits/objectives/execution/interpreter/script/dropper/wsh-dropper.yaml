@@ -1,0 +1,75 @@
+# WSH-based Dropper Patterns
+# Detects Windows Script Host droppers with PowerShell execution
+
+composite_rules:
+  - id: wsh-powershell-dropper
+    desc: "WSH dropper executing PowerShell with bypass"
+    crit: hostile
+    conf: 0.95
+    attack: "T1059.007"
+    for: [javascript]
+    platforms: [windows]
+    all:
+      - id: micro-behaviors/os/com/object::wscript-shell-literal
+      - id: objectives/execution/activex/com::activex-filesystem
+      - id: objectives/execution/interpreter/script/wsh::execution-policy-bypass
+
+  - id: embedded-powershell-script
+    desc: "Embedded PowerShell code in non-PowerShell file"
+    crit: hostile
+    conf: 0.9
+    for: [javascript, typescript]
+    all:
+      - id: objectives/execution/interpreter/script/embedded::powershell-vars-in-javascript
+      - id: objectives/execution/interpreter/script/embedded::powershell-cmdlet-patterns
+
+  - id: obfuscated-wsh-dropper
+    desc: "Obfuscated WSH dropper with char expansion"
+    crit: hostile
+    conf: 0.95
+    for: [javascript]
+    platforms: [windows]
+    all:
+      - id: objectives/anti-static/obfuscation/source/string::char-expansion-obfuscation
+      - id: objectives/anti-static/obfuscation/source/string::base64-function-keyword
+    any:
+      - id: micro-behaviors/os/com/object::wscript-shell-literal
+      - id: objectives/execution/interpreter/script/embedded::powershell-cmdlet-patterns
+
+  - id: public-folder-dropper
+    desc: "File dropper using Public folder with random names"
+    crit: hostile
+    conf: 0.9
+    attack: "T1564.001"
+    for: [javascript, powershell]
+    platforms: [windows]
+    all:
+      - id: micro-behaviors/fs/operate/write::public-folder-short-random
+    any:
+      - id: objectives/execution/activex/com::activex-filesystem
+      - id: objectives/execution/interpreter/script/embedded::powershell-cmdlet-patterns
+
+  - id: base64-payload-dropper
+    desc: "Base64-encoded payload with WSH execution"
+    crit: hostile
+    conf: 0.9
+    for: [javascript, typescript]
+    all:
+      - id: objectives/anti-static/obfuscation/source/string::base64-function-keyword
+      - id: objectives/anti-static/obfuscation/source/string::char-expansion-obfuscation
+    any:
+      - id: micro-behaviors/os/com/object::wscript-shell-literal
+      - id: objectives/execution/interpreter/script/embedded::powershell-vars-in-javascript
+
+  - id: wsh-js-downloader
+    desc: "JScript/WSH Downloader with file write"
+    crit: hostile
+    conf: 0.95
+    for: [javascript]
+    platforms: [windows]
+    all:
+      - id: objectives/execution/interpreter/script/wsh::wsh-save-to-file
+      - id: objectives/execution/interpreter/script/wsh::wsh-response-body
+    any:
+      - id: objectives/execution/activex/com::activex-object-create
+      - id: objectives/execution/interpreter/script/wsh::wscript-createobject

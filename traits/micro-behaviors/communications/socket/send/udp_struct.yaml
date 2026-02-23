@@ -1,0 +1,10 @@
+defaults:
+  for: [all]
+
+traits:
+  - id: sendto-struct-usage
+    desc: sendto usage with struct sockaddr (common in
+    crit: notable
+    if:
+      type: raw
+      regex: 'sendto\s*\(.{0,220}sizeof\s*\(.{0,220}struct\s+sockaddr'

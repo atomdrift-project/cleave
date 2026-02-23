@@ -1,0 +1,32 @@
+# Security-related text data
+# Detects security signatures, logs, and configuration files
+
+defaults:
+  for: [all]
+
+traits:
+  - id: signatures-db
+    desc: Security signature database or threat intelligence feed
+    crit: notable
+    conf: 0.9
+    if:
+      type: yara
+      source: |
+        rule security_signatures {
+          strings:
+            $et = "http://doc.emergingthreats.net" ascii
+            $elastic = "securitySolution" ascii
+            $snort = "http://www.snort.org" ascii
+            $cve = /CVE-\d{4}-\d{4,}/
+            $exploit_db = "exploit-db.com" ascii
+          condition:
+            $et or ($elastic and #elastic > 5) or $snort or #cve > 5 or $exploit_db
+        }
+
+  - id: sanitized-url-regex
+    desc: Regex for matching sanitized URLs (hXXp://)
+    crit: notable
+    conf: 0.8
+    if:
+      type: raw
+      regex: 'h\.\.p\[s\]\*:\\/\\/'

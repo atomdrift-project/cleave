@@ -1,0 +1,60 @@
+# Socket Connect Operations
+# MBC: C0001 (Socket Communication)
+# ATT&CK: T1071
+
+defaults:
+  for: [elf, macho, so, dylib, c]
+
+traits:
+  - id: connect-symbol
+    desc: Uses connect socket call
+    crit: notable
+    conf: 0.66
+    mbc: "C0001"
+    attack: "T1071"
+    if:
+      type: symbol
+      exact: connect
+
+  - id: _connect-symbol
+    desc: Uses _connect socket call
+    crit: notable
+    conf: 0.66
+    mbc: "C0001"
+    attack: "T1071"
+    if:
+      type: symbol
+      exact: _connect
+
+  - id: connectx-symbol
+    desc: Uses connectx socket call
+    crit: notable
+    conf: 0.66
+    mbc: "C0001"
+    attack: "T1071"
+    if:
+      type: symbol
+      exact: connectx
+
+  - id: _connectx-symbol
+    desc: Uses _connectx socket call
+    crit: notable
+    conf: 0.66
+    mbc: "C0001"
+    attack: "T1071"
+    if:
+      type: symbol
+      exact: _connectx
+
+composite_rules:
+  - id: connect
+    desc: Connect socket to remote host
+    crit: notable
+    conf: 0.66
+    mbc: "C0001"
+    attack: "T1071"
+    any:
+      - id: connect-symbol
+      - id: _connect-symbol
+      - id: connectx-symbol
+      - id: _connectx-symbol

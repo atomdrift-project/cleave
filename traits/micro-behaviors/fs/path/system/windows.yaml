@@ -1,0 +1,93 @@
+# Windows Paths
+# MBC: E1083 (File and Directory Discovery)
+# ATT&CK: T1083
+
+defaults:
+  for: [all]
+
+traits:
+  - id: default-user-appdata
+    desc: Default User Application Data path
+    crit: notable
+    conf: 0.7
+    mbc: E1083
+    attack: T1083
+    if:
+      type: string
+      regex: "Default User.{0,32}Application Data"
+
+  - id: localservice-appdata
+    desc: LocalService Application Data path
+    crit: notable
+    conf: 0.7
+    mbc: E1083
+    attack: T1083
+    if:
+      type: string
+      regex: "LocalService.{0,32}Application Data"
+
+  - id: networkservice-appdata
+    desc: NetworkService Application Data path
+    crit: notable
+    conf: 0.7
+    mbc: E1083
+    attack: T1083
+    if:
+      type: string
+      regex: "NetworkService.{0,32}Application Data"
+
+  - id: windows-root
+    desc: C:\\Windows\\ directory path
+    crit: baseline
+    conf: 0.66
+    mbc: E1083
+    attack: T1083
+    if:
+      type: string
+      regex: '[Cc]:\\Windows\\[\w\\]+'
+
+  - id: system32-substr
+    desc: System32 substring reference
+    crit: baseline
+    conf: 0.6
+    if:
+      type: string
+      substr: System32
+
+  - id: windows-dir
+    desc: Windows directory path reference
+    crit: baseline
+    conf: 0.5
+    if:
+      type: string
+      regex: '[A-Za-z]:\\Windows(\\System32)?|\\Windows\\System32|/Windows/System32'
+
+  - id: windows-system32
+    desc: C:\\Windows\\System32\\ directory path
+    crit: notable
+    conf: 0.66
+    mbc: E1083
+    attack: T1083
+    if:
+      type: string
+      regex: '[Cc]:\\Windows\\System32\\'
+
+  - id: system32-bin
+    desc: References .bin file in System32
+    crit: suspicious
+    if:
+      type: string
+      regex: '\\SystemRoot\\System32\\[a-zA-Z0-9_]+\.bin'
+      case_insensitive: true
+
+composite_rules:
+  - id: windows-appdata
+    desc: Windows Application Data paths (user
+    crit: notable
+    conf: 0.66
+    mbc: E1083
+    attack: T1083
+    any:
+      - id: default-user-appdata
+      - id: localservice-appdata
+      - id: networkservice-appdata

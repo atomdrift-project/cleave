@@ -1,0 +1,316 @@
+# Suspicious Included Files
+# GuardDog-inspired: Detects inclusion of suspicious files in packages
+# ATT&CK: T1195.002 (Compromise Software Supply Chain)
+
+defaults:
+  crit: notable
+  conf: 0.80
+  attack: "T1195.002"
+
+traits:
+  # === npm package.json ===
+
+  # Executable files in 'files' array
+  - id: npm-includes-exe
+    desc: npm package includes .exe files
+    crit: suspicious
+    conf: 0.90
+    for: [package.json]
+    if:
+      type: kv
+      path: "files[*]"
+      regex: "\\.exe$"
+
+  - id: npm-includes-dll
+    desc: npm package includes .dll files
+    crit: suspicious
+    conf: 0.90
+    for: [package.json]
+    if:
+      type: kv
+      path: "files[*]"
+      regex: "\\.dll$"
+
+  - id: npm-includes-scr
+    desc: npm package includes .scr files (screensaver/executable)
+    crit: suspicious
+    conf: 0.95
+    for: [package.json]
+    if:
+      type: kv
+      path: "files[*]"
+      regex: "\\.scr$"
+
+  - id: npm-includes-com
+    desc: npm package includes .com files
+    crit: suspicious
+    conf: 0.85
+    for: [package.json]
+    if:
+      type: kv
+      path: "files[*]"
+      regex: "\\.com$"
+
+  - id: npm-includes-bat
+    desc: npm package includes .bat files
+    crit: notable
+    conf: 0.70
+    for: [package.json]
+    if:
+      type: kv
+      path: "files[*]"
+      regex: "\\.bat$"
+
+  - id: npm-includes-cmd
+    desc: npm package includes .cmd files
+    crit: notable
+    conf: 0.70
+    for: [package.json]
+    if:
+      type: kv
+      path: "files[*]"
+      regex: "\\.cmd$"
+
+  # Shared libraries
+  - id: npm-includes-so
+    desc: npm package includes .so files
+    crit: notable
+    conf: 0.75
+    for: [package.json]
+    if:
+      type: kv
+      path: "files[*]"
+      regex: "\\.so$"
+
+  - id: npm-includes-dylib
+    desc: npm package includes .dylib files
+    crit: notable
+    conf: 0.75
+    for: [package.json]
+    if:
+      type: kv
+      path: "files[*]"
+      regex: "\\.dylib$"
+
+  # Sensitive files
+  - id: npm-includes-pem
+    desc: npm package includes .pem certificates/keys
+    crit: suspicious
+    conf: 0.85
+    for: [package.json]
+    if:
+      type: kv
+      path: "files[*]"
+      regex: "\\.pem$"
+
+  - id: npm-includes-key
+    desc: npm package includes private keys
+    crit: suspicious
+    conf: 0.90
+    for: [package.json]
+    if:
+      type: kv
+      path: "files[*]"
+      regex: "\\.key$"
+
+  # Archive files
+  - id: npm-includes-zip
+    desc: npm package includes .zip files
+    crit: notable
+    conf: 0.65
+    for: [package.json]
+    if:
+      type: kv
+      path: "files[*]"
+      regex: "\\.zip$"
+
+  # Archive files
+  - id: npm-includes-tar
+    desc: npm package includes .tar files
+    crit: notable
+    conf: 0.65
+    for: [package.json]
+    if:
+      type: kv
+      path: "files[*]"
+      regex: "\\.tar(\\.(gz|bz2|xz))?$"
+
+  # === PyPI - Package Data ===
+
+  # Executable files in package_data
+  - id: pypi-includes-exe
+    desc: PyPI package includes .exe files
+    crit: suspicious
+    conf: 0.90
+    for: [python]
+    if:
+      type: string
+      regex: "package_data.{0,100}['\"][^'\"]{0,100}\\.exe['\"]"
+
+  # Executable files in package_data
+  - id: pypi-includes-dll
+    desc: PyPI package includes .dll files
+    crit: suspicious
+    conf: 0.90
+    for: [python]
+    if:
+      type: string
+      regex: "package_data.{0,100}['\"][^'\"]{0,100}\\.dll['\"]"
+
+  - id: pypi-includes-so
+    desc: PyPI package includes .so files
+    crit: notable
+    conf: 0.70
+    for: [python]
+    if:
+      type: string
+      regex: "package_data.{0,100}['\"][^'\"]{0,100}\\.so['\"]"
+
+  - id: pypi-includes-dylib
+    desc: PyPI package includes .dylib files
+    crit: notable
+    conf: 0.70
+    for: [python]
+    if:
+      type: string
+      regex: "package_data.{0,100}['\"][^'\"]{0,100}\\.dylib['\"]"
+
+  # Wildcard package_data
+  - id: pypi-includes-wildcard
+    desc: PyPI package uses wildcard package_data
+    crit: notable
+    conf: 0.65
+    for: [python]
+    if:
+      type: string
+      regex: "package_data.{0,100}[\"']\\*[\"']"
+
+  # === RubyGems - Files specification ===
+
+  - id: gem-includes-exe
+    desc: RubyGem includes .exe files
+    crit: suspicious
+    conf: 0.90
+    for: [ruby]
+    if:
+      type: string
+      regex: "\\.files.{0,100}['\"][^'\"]{0,100}\\.exe['\"]"
+
+  - id: gem-includes-dll
+    desc: RubyGem includes .dll files
+    crit: suspicious
+    conf: 0.90
+    for: [ruby]
+    if:
+      type: string
+      regex: "\\.files.{0,100}['\"][^'\"]{0,100}\\.dll['\"]"
+
+  - id: gem-includes-so
+    desc: RubyGem includes .so files
+    crit: notable
+    conf: 0.70
+    for: [ruby]
+    if:
+      type: string
+      regex: "\\.files.{0,100}['\"][^'\"]{0,100}\\.so['\"]"
+
+composite_rules:
+  # === npm Composites ===
+  - id: npm-windows-executables
+    desc: npm package includes Windows executable files
+    crit: suspicious
+    conf: 0.90
+    attack: "T1195.002"
+    for: [package.json]
+    any:
+      - id: npm-includes-exe
+      - id: npm-includes-dll
+      - id: npm-includes-scr
+      - id: npm-includes-com
+      - id: npm-includes-bat
+      - id: npm-includes-cmd
+
+  # === npm Native Binaries ===
+  - id: npm-native-binaries
+    desc: npm package includes native binary files
+    crit: notable
+    conf: 0.75
+    attack: "T1195.002"
+    for: [package.json]
+    any:
+      - id: npm-includes-so
+      - id: npm-includes-dylib
+
+  # === npm Sensitive Files ===
+  - id: npm-sensitive-includes
+    desc: npm package includes sensitive files (keys/certs)
+    crit: suspicious
+    conf: 0.85
+    attack: "T1552.004"
+    for: [package.json]
+    any:
+      - id: npm-includes-pem
+      - id: npm-includes-key
+
+  # === npm Archive Inclusion ===
+  - id: npm-archive-includes
+    desc: npm package includes archive files
+    crit: notable
+    conf: 0.65
+    attack: "T1195.002"
+    for: [package.json]
+    any:
+      - id: npm-includes-zip
+      - id: npm-includes-tar
+
+  # === PyPI Helper ===
+  - id: pypi-any-executable
+    desc: PyPI package includes executable files
+    for: [python]
+    any:
+      - id: pypi-includes-exe
+      - id: pypi-includes-dll
+
+  # === High-Risk: Windows Executable + Install Hooks ===
+  - id: npm-exe-with-hooks
+    desc: Windows executables with install hooks
+    crit: hostile
+    conf: 0.98
+    attack: "T1195.002"
+    for: [package.json]
+    all:
+      - id: objectives/lateral-movement/supply-chain/npm/metadata::install-hooks
+      - id: npm-windows-executables
+
+  # === High-Risk: Native Binary + Install Hooks ===
+  - id: npm-native-with-hooks
+    desc: Native binaries with install hooks
+    crit: hostile
+    conf: 0.95
+    attack: "T1195.002"
+    for: [package.json]
+    all:
+      - id: objectives/lateral-movement/supply-chain/npm/metadata::install-hooks
+      - id: npm-native-binaries
+
+  # === High-Risk: Archive + Install Hooks ===
+  - id: npm-archive-with-hooks
+    desc: Archives with install hooks
+    crit: hostile
+    conf: 0.93
+    attack: "T1195.002"
+    for: [package.json]
+    all:
+      - id: objectives/lateral-movement/supply-chain/npm/metadata::install-hooks
+      - id: npm-archive-includes
+
+  # === PyPI High-Risk ===
+  - id: pypi-exe-with-hooks
+    desc: PyPI package includes executables and install hooks
+    crit: hostile
+    conf: 0.98
+    attack: "T1195.002"
+    for: [python]
+    all:
+      - id: metadata/quality/dependencies::pypi-install-hooks-any
+      - id: pypi-includes-exe

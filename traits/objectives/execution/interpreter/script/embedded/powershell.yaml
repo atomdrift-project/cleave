@@ -1,0 +1,42 @@
+# PowerShell Variables in Non-PowerShell Files
+# Detects PowerShell variable syntax in JavaScript or other non-PS files
+
+traits:
+  - id: powershell-vars-in-javascript
+    desc: "PowerShell variables in JavaScript strings"
+    crit: suspicious
+    conf: 0.9
+    for: [javascript, typescript]
+    if:
+      type: raw
+      regex: '\$[a-zA-Z]{5}'
+      count_min: 5
+    not:
+      - "$xdOMA"
+      - "$GETkE"
+
+  - id: powershell-cmdlet-patterns-raw
+    desc: "PowerShell cmdlet naming pattern (raw)"
+    crit: notable
+    conf: 0.8
+    for: [javascript, typescript, python]
+    if:
+      type: string
+      regex: 'Out-File|Get-Content|Invoke-Expression'
+      count_min: 1
+
+composite_rules:
+  - id: powershell-cmdlet-patterns
+    desc: "PowerShell cmdlet naming pattern in non-PS code"
+    crit: suspicious
+    conf: 0.8
+    all:
+      - id: powershell-cmdlet-patterns-raw
+    unless:
+      - type: string
+        regex: 'SyntaxHighlighter'
+    downgrade:
+      any:
+        - id: metadata/library::botocore-lib
+        - id: metadata/import/python::boto3
+        - id: micro-behaviors/communications/ssh/connect::paramiko

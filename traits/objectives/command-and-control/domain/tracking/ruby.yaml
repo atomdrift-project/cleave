@@ -1,0 +1,21 @@
+defaults:
+  for: [ruby]
+  platforms: [all]
+
+traits:
+  - id: ruby-http-iplogger-context
+    desc: HTTP request with iplogger string in arguments
+    crit: suspicious
+    conf: 0.95
+    attack: "T1071.001"
+    if:
+      type: ast
+      query: |
+        ((call
+          receiver: (constant) @const
+          method: (identifier) @method
+          arguments: (argument_list
+            (_) @arg))
+         (#match? @const "^(HTTParty|Net::HTTP|URI)$")
+         (#match? @method "^(get|post|open|get_response)$")
+         (#match? @arg "iplogger|grabify|blasze|canarytokens|2no\.co|yip\.su"))

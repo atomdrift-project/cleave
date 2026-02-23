@@ -1,0 +1,97 @@
+# RubyGems Installation Hooks
+# GuardDog: Detects Gem installation hooks that execute code during install
+# ATT&CK: T1195.002 (Supply Chain Compromise)
+
+defaults:
+  for: [ruby]
+  crit: suspicious
+  conf: 0.95
+  attack: "T1195.002"
+
+traits:
+  # === Post-install Hooks ===
+
+  - id: gem-post-install
+    desc: Gem.post_install hook
+    if:
+      type: ast
+      query: |
+        (call
+          method: (identifier) @method
+          receiver: (constant) @const
+          (#eq? @const "Gem")
+          (#eq? @method "post_install"))
+
+  - id: gem-installer-post-install
+    desc: Gem::Installer.post_install hook
+    if:
+      type: symbol
+      regex: 'Gem::Installer\.post_install'
+
+  # === Pre-install Hooks ===
+
+  - id: gem-pre-install
+    desc: Gem.pre_install hook
+    if:
+      type: ast
+      query: |
+        (call
+          method: (identifier) @method
+          receiver: (constant) @const
+          (#eq? @const "Gem")
+          (#eq? @method "pre_install"))
+
+  - id: gem-installer-pre-install
+    desc: Gem::Installer.pre_install hook
+    if:
+      type: symbol
+      regex: 'Gem::Installer\.pre_install'
+
+  # === Uninstall Hooks ===
+
+  - id: gem-post-uninstall
+    desc: Gem.post_uninstall hook
+    if:
+      type: ast
+      query: |
+        (call
+          method: (identifier) @method
+          receiver: (constant) @const
+          (#eq? @const "Gem")
+          (#eq? @method "post_uninstall"))
+
+  - id: gem-pre-uninstall
+    desc: Gem.pre_uninstall hook
+    if:
+      type: ast
+      query: |
+        (call
+          method: (identifier) @method
+          receiver: (constant) @const
+          (#eq? @const "Gem")
+          (#eq? @method "pre_uninstall"))
+
+  # === Extension Building ===
+
+  - id: gem-extensions
+    desc: Gem specification extensions attribute
+    conf: 0.85
+    if:
+      type: symbol
+      regex: '\.extensions\s*='
+
+composite_rules:
+  # GuardDog: Any gem installation hook
+  - id: install-hook
+    desc: RubyGem installation hook detected
+    crit: suspicious
+    conf: 0.95
+    attack: "T1195.002"
+    any:
+      - id: gem-post-install
+      - id: gem-installer-post-install
+      - id: gem-pre-install
+      - id: gem-installer-pre-install
+      - id: gem-post-uninstall
+      - id: gem-pre-uninstall
+      - id: gem-extensions

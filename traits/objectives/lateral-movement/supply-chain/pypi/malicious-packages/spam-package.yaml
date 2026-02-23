@@ -1,0 +1,83 @@
+defaults:
+  for:
+  - python
+  attack: T1195.002
+traits:
+- id: clickbank-affiliate-url
+  desc: Clickbank affiliate link URL
+  crit: suspicious
+  conf: 0.95
+  if:
+    type: string
+    regex: hop\.clickbank\.net
+- id: tid-tracking-param
+  desc: tid= tracking parameter in URL
+  crit: notable
+  conf: 0.8
+  if:
+    type: string
+    regex: '[?&]tid='
+- id: free-download-in-name
+  desc: Free Download spam text
+  crit: suspicious
+  conf: 0.9
+  if:
+    type: string
+    regex: \bfree\s+download\b
+    case_insensitive: true
+- id: dynamic-install-requires
+  desc: Dynamic install_requires from file
+  crit: notable
+  conf: 0.85
+  if:
+    type: raw
+    regex: install_requires\s*=\s*\w+\.read\(|install_requires\s*=\s*read_requirements
+- id: affiliate-network-url-1
+  desc: Affiliate URL (clickbank/jvz)
+  crit: suspicious
+  conf: 0.9
+  if:
+    type: string
+    regex: \b(hop\.clickbank\.net|jvz\d*\.com)\b
+- id: affiliate-network-url-2
+  desc: Affiliate URL (warriorplus/digistore24/impact)
+  crit: suspicious
+  conf: 0.85
+  if:
+    type: string
+    regex: \b(warriorplus|digistore24|impact)\.com\b
+composite_rules:
+- id: affiliate-network-url
+  desc: Affiliate network redirect URL
+  crit: suspicious
+  conf: 0.9
+  any:
+    - id: affiliate-network-url-1
+    - id: affiliate-network-url-2
+- id: pypi-affiliate-spam
+  desc: PyPI package with affiliate spam URL
+  crit: suspicious
+  conf: 0.95
+  mbc: B0024
+  attack: T1195.002
+  all:
+  - id: objectives/lateral-movement/supply-chain/pypi/general::setup-py-file
+  - id: affiliate-network-url
+- id: pypi-clickbank-spam
+  desc: PyPI package with Clickbank affiliate link
+  crit: suspicious
+  conf: 0.95
+  mbc: B0024
+  attack: T1195.002
+  all:
+  - id: objectives/lateral-movement/supply-chain/pypi/general::setup-py-file
+  - id: clickbank-affiliate-url
+- id: pypi-seo-spam-package
+  desc: PyPI SEO spam package
+  crit: suspicious
+  conf: 0.92
+  mbc: B0024
+  attack: T1195.002
+  all:
+  - id: free-download-in-name
+  - id: affiliate-network-url

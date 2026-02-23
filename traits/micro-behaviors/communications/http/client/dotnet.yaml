@@ -1,0 +1,45 @@
+# .NET HTTP Client Detection
+# Detects usage of .NET-specific HTTP client classes like WebClient
+
+defaults:
+  crit: notable
+  conf: 0.8
+  for: [pe, dll, csharp]
+  platforms: [windows]
+
+traits:
+  - id: webclient
+    desc: "System.Net.WebClient class usage"
+    if:
+      type: string
+      substr: "WebClient"
+
+  - id: downloadstring
+    desc: "WebClient.DownloadString method"
+    if:
+      type: string
+      substr: "DownloadString"
+
+  - id: downloadfile
+    desc: "WebClient.DownloadFile method"
+    if:
+      type: string
+      substr: "DownloadFile"
+
+  - id: downloaddata
+    desc: "WebClient.DownloadData method"
+    if:
+      type: string
+      substr: "DownloadData"
+
+  - id: uploadstring
+    desc: "WebClient.UploadString method"
+    if:
+      type: string
+      substr: "UploadString"
+
+  - id: uploadvalues
+    desc: "WebClient.UploadValues method"
+    if:
+      type: string
+      substr: "UploadValues"

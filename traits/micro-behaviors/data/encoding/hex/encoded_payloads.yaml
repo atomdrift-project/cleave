@@ -1,0 +1,43 @@
+defaults:
+  for: [all]
+
+traits:
+  - id: hex-encoded-powershell
+    desc: Hex-encoded 'powershell' string
+    conf: 0.9
+    crit: suspicious
+    if:
+      type: string
+      regex: '706f7765727368656c6c' # powershell (lowercase)
+
+  - id: hex-encoded-http
+    desc: Hex-encoded 'http://' string
+    conf: 0.8
+    crit: notable
+    if:
+      type: string
+      regex: '687474703a2f2f' # http://
+
+  - id: hex-encoded-https
+    desc: Hex-encoded 'https://' string
+    conf: 0.8
+    crit: notable
+    if:
+      type: string
+      regex: '68747470733a2f2f' # https://
+
+  - id: hex-encoded-cmd-exe
+    desc: Hex-encoded 'cmd.exe' string
+    conf: 0.8
+    crit: suspicious
+    if:
+      type: string
+      regex: '636d642e657865' # cmd.exe
+
+  - id: hex-encoded-wscript-shell
+    desc: Hex-encoded 'WScript.Shell' string
+    conf: 0.8
+    crit: suspicious
+    if:
+      type: string
+      regex: '575363726970742e5368656c6c' # WScript.Shell

@@ -1,0 +1,11 @@
+defaults:
+  for: [rtf]
+
+traits:
+  - id: form-feed-injection
+    desc: Repeated RTF form feed hex escape injection.
+    crit: suspicious
+    conf: 0.8
+    if:
+      type: raw
+      regex: "(\\\\'0C[0-9a-fA-F]{2}){4,}"

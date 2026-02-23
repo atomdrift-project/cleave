@@ -1,0 +1,13 @@
+composite_rules:
+  - id: deceptive-kpot-infostealer
+    desc: Deceptive KPOT infostealer combining multiple indicators.
+    crit: hostile
+    all:
+      - type: trait
+        id: well-known/malware/trojan/loader-s047t5g::as-invoker-manifest
+      - type: trait
+        id: well-known/malware/kpot/fingerprint::jkhgfdssfd
+      - type: trait
+        id: well-known/malware/kpot/fingerprint::gui-guid
+      - type: trait
+        id: micro-behaviors/ui/winforms/component::excessive-vscrollbar

@@ -1,0 +1,39 @@
+defaults:
+  for: [all]
+
+traits:
+  - id: check-hostname-node
+    desc: Checks for specific analysis hostnames (box/instance)
+    crit: notable
+    if:
+      type: string
+      substr: "IMPOSSIBLE_MATCH_XYZZY_NODE_EVASION"
+
+  - id: check-path-node
+    desc: Checks for specific analysis paths (/root/node_modules)
+    crit: notable
+    if:
+      type: string
+      substr: "IMPOSSIBLE_MATCH_XYZZY_NODE_EVASION"
+
+  - id: check-path-unpacker
+    desc: "Checks for unpacker/analysis path pattern"
+    crit: notable
+    attack: "T1497"
+    if:
+      type: string
+      substr: "IMPOSSIBLE_MATCH_XYZZY_NODE_EVASION"
+
+  - id: hex-hostname-regex
+    desc: Hex-string regex pattern (often for evasion)
+    crit: notable
+    if:
+      type: string
+      substr: "IMPOSSIBLE_MATCH_XYZZY_NODE_EVASION"
+
+  - id: check-lastdir-node
+    desc: Checks for /home/node last directory
+    crit: notable
+    if:
+      type: string
+      substr: "IMPOSSIBLE_MATCH_XYZZY_NODE_EVASION"

@@ -1,0 +1,319 @@
+traits:
+  - id: curl-to-temp
+    desc: "Download to TEMP directory"
+    crit: suspicious
+    conf: 0.9
+    for: [shell, batch]
+    if:
+      type: raw
+      regex: "(?i)(curl|wget).{0,120}(\\\\Temp\\\\|%TMP%)"
+
+  - id: certutil-download
+    desc: "Certutil download abuse"
+    crit: suspicious
+    conf: 0.95
+    for: [shell, batch]
+    if:
+      type: raw
+      regex: "certutil\\s+.{0,50}-urlcache.{0,30}-split.{0,30}-f"
+
+  - id: bitsadmin-download
+    desc: "BitsAdmin download abuse"
+    crit: suspicious
+    conf: 0.95
+    for: [shell, batch]
+    if:
+      type: raw
+      regex: "bitsadmin\\s+.{0,50}\\/transfer"
+
+  - id: start-hidden
+    desc: "Start process hidden"
+    crit: suspicious
+    conf: 0.85
+    for: [batch]
+    if:
+      type: raw
+      regex: "start\\s+[\"']?[\"']?\\s*/[Bb]"
+
+  - id: run-from-temp
+    desc: "Execute binary from TEMP directory"
+    crit: suspicious
+    conf: 0.9
+    for: [batch]
+    if:
+      type: raw
+      regex: "(?i)start[^\\n]{0,220}(%TEMP%|%TMP%)[^\\n]{0,220}\\.exe"
+
+  - id: done-marker
+    desc: "Execution marker file"
+    crit: notable
+    conf: 0.75
+    for: [shell, batch]
+    if:
+      type: raw
+      regex: "if exist.{0,30}\\.done|echo\\.>.{0,30}\\.done|\\.installed|\\.complete"
+
+  - id: echo-off
+    desc: "Echo off"
+    crit: notable
+    conf: 0.6
+    for: [shell, batch]
+    if:
+      type: raw
+      regex: "(?i)@echo\\s+off"
+
+  - id: redirect-null
+    desc: "Redirect output to null"
+    crit: notable
+    conf: 0.7
+    for: [shell, batch]
+    if:
+      type: raw
+      regex: "(?i)>nul|2>nul"
+
+  - id: delayed-expansion
+    desc: "Delayed expansion enabled"
+    crit: notable
+    conf: 0.5
+    for: [shell, batch]
+    if:
+      type: raw
+      substr: "EnableDelayedExpansion"
+
+  - id: curl-cmd
+    desc: "curl command"
+    crit: notable
+    conf: 0.5
+    for: [batch]
+    if:
+      type: raw
+      regex: "(?i)\\bcurl\\b"
+
+  - id: download-file-ps
+    desc: "PowerShell DownloadFile"
+    crit: notable
+    conf: 0.5
+    for: [shell, batch]
+    if:
+      type: raw
+      regex: "(?i)DownloadFile"
+
+  - id: certutil-cmd
+    desc: "certutil command"
+    crit: notable
+    conf: 0.5
+    for: [shell, batch]
+    if:
+      type: raw
+      regex: "(?i)\\bcertutil\\b"
+
+  - id: certutil-urlcache
+    desc: "certutil urlcache"
+    crit: suspicious
+    conf: 0.95
+    for: [shell, batch]
+    if:
+      type: raw
+      regex: "(?i)certutil[^\\n]{0,220}-urlcache"
+
+  - id: certutil-urlcache-split-force
+    desc: "certutil urlcache with split force"
+    crit: suspicious
+    conf: 0.98
+    for: [shell, batch]
+    if:
+      type: raw
+      regex: "(?i)certutil(\\.exe)?\\s+[^\\n]{0,120}-urlcache[^\\n]{0,60}-split[^\\n]{0,60}-f"
+
+  - id: wmic-arch-check
+    desc: "Check OS architecture via WMIC"
+    crit: notable
+    conf: 0.8
+    for: [shell, batch]
+    if:
+      type: raw
+      regex: "(?i)wmic[^\\n]{0,220}osarchitecture"
+
+  - id: bitsadmin-cmd
+    desc: "bitsadmin command"
+    crit: notable
+    conf: 0.5
+    for: [shell, batch]
+    if:
+      type: raw
+      regex: "(?i)\\bbitsadmin\\b"
+
+  - id: output-flag
+    desc: "Output flag -o"
+    crit: notable
+    conf: 0.4
+    for: [batch]
+    if:
+      type: raw
+      regex: "(?i)\\bcurl\\b[^\\n]{0,120}\\s-o\\s"
+
+  - id: call-cmd
+    desc: "call command"
+    crit: notable
+    conf: 0.4
+    for: [shell, batch]
+    if:
+      type: raw
+      regex: "(?i)(^|[^-\\w])call($|[^-\\w])"
+
+  - id: powershell-exe
+    desc: "PowerShell.exe invocation"
+    crit: notable
+    conf: 0.7
+    for: [shell, batch]
+    if:
+      type: raw
+      regex: "(?i)powershell(\\.exe)?"
+
+  - id: powershell-command
+    desc: "PowerShell command flag"
+    crit: notable
+    conf: 0.7
+    for: [shell, batch]
+    if:
+      type: raw
+      regex: "(?i)powershell[^\\n]{0,220}-[Cc]\\s"
+
+  - id: outfile-param
+    desc: "OutFile parameter"
+    crit: notable
+    conf: 0.75
+    for: [shell, batch, powershell]
+    if:
+      type: raw
+      regex: "(?i)-OutFile"
+
+  - id: go-build-cmd
+    desc: "Go build command"
+    crit: notable
+    conf: 0.8
+    for: [shell, batch]
+    if:
+      type: string
+      regex: "(?i)\\bgo\\s+build\\b"
+
+  - id: go-ldflags-strip
+    desc: "Go strip flag"
+    crit: notable
+    conf: 0.85
+    for: [shell, batch]
+    size_max: 5000
+    if:
+      type: string
+      regex: "ldflags.{0,50}(-s\\s+-w|\\s-s\\s+|\\s-s\\b)"
+    unless:
+      - type: raw
+        substr: "mkall"
+
+  - id: go-ldflags-hide-gui
+    desc: "Go hide GUI window flag"
+    crit: suspicious
+    conf: 0.85
+    for: [shell, batch]
+    if:
+      type: string
+      regex: "(?i)-H=windowsgui"
+
+  - id: go-linkmode-external
+    desc: "Go external linkmode"
+    crit: notable
+    conf: 0.7
+    for: [shell, batch]
+    if:
+      type: string
+      regex: "(?i)linkmode=external"
+
+composite_rules:
+  - id: powershell-download
+    desc: "PowerShell download cradle in batch"
+    crit: notable
+    conf: 0.9
+    for: [shell, batch]
+    any:
+      - id: micro-behaviors/communications/http/lib/invoke-webrequest::invoke-webrequest
+      - id: micro-behaviors/communications/http/lib/invoke-webrequest::webclient-download
+
+  - id: download-tool
+    desc: "Download tool usage"
+    crit: notable
+    conf: 0.7
+    for: [shell, batch]
+    any:
+      - id: curl-cmd
+      - id: micro-behaviors/communications/download/curl::wget-path
+      - id: download-file-ps
+      - id: certutil-cmd
+      - id: bitsadmin-cmd
+
+  - id: exec-cmd
+    desc: "Execution command"
+    crit: notable
+    conf: 0.6
+    for: [shell, batch]
+    any:
+      - id: start-hidden
+      - id: run-from-temp
+      - id: call-cmd
+
+  - id: batch-download-execute
+    desc: "Download and execute pattern (batch)"
+    crit: suspicious
+    conf: 0.95
+    for: [batch]
+    all:
+      - id: echo-off
+      - id: download-tool
+      - id: exec-cmd
+      - id: output-flag
+
+  - id: powershell-launcher
+    desc: "PowerShell launcher in batch"
+    crit: notable
+    conf: 0.8
+    for: [shell, batch]
+    all:
+      - id: powershell-exe
+      - id: powershell-command
+
+  - id: powershell-download-cradle
+    desc: "PowerShell download cradle"
+    crit: notable
+    conf: 0.9
+    for: [shell, batch]
+    all:
+      - id: powershell-exe
+    any:
+      - id: outfile-param
+      - id: powershell-download
+
+  - id: go-build-stealth
+    desc: "Go build with stealth flags"
+    crit: suspicious
+    conf: 0.92
+    for: [shell, batch]
+    all:
+      - id: go-build-cmd
+    any:
+      - id: go-ldflags-strip
+      - id: go-ldflags-hide-gui
+
+  - id: batch-dropper-hostile
+    desc: "Hostile Batch Dropper"
+    crit: hostile
+    conf: 0.99
+    for: [batch]
+    all:
+      - id: micro-behaviors/fs/file/delete::batch-self-delete
+    any:
+      - id: powershell-download
+      - id: powershell-download-cradle
+      - id: certutil-download
+      - id: bitsadmin-download
+      - id: curl-to-temp
+      - id: batch-download-execute
+      - id: objectives/anti-static/obfuscation/source/string::rundll32-obfuscated-env-var

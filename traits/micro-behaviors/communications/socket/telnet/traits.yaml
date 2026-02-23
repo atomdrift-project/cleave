@@ -1,0 +1,14 @@
+# Telnet - Remote Terminal Protocol
+# Unencrypted remote connection tool
+
+defaults:
+  for: [all]
+  crit: notable
+  conf: 0.9
+
+traits:
+  - id: telnet
+    desc: telnet command
+    if:
+      type: string
+      regex: '\btelnet\s+'

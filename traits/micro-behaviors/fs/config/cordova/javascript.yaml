@@ -1,0 +1,34 @@
+defaults:
+  for:
+    - javascript
+traits:
+  - id: cordova-hook-element
+    desc: Cordova hook element creation
+    crit: notable
+    conf: 0.8
+    if:
+      type: string
+      regex: Element\(['"]hook['"]\)
+  - id: cordova-config-xml-string
+    desc: Cordova config.xml reference
+    crit: baseline
+    conf: 0.6
+    if:
+      type: string
+      substr: config.xml
+  - id: cordova-hook-types-list
+    desc: Cordova hook type list
+    crit: baseline
+    conf: 0.7
+    if:
+      type: string
+      regex: (after|before)_[a-z_]+|pre_package
+      count_min: 6
+composite_rules:
+  - id: cordova-hook-insertion
+    desc: Cordova config hook insertion
+    crit: notable
+    conf: 0.8
+    all:
+      - id: cordova-hook-element
+      - id: cordova-hook-types-list

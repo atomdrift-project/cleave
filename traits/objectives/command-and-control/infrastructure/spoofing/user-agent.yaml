@@ -1,0 +1,24 @@
+# HTTP User-Agent Spoofing
+# Detects malware user-agent spoofing patterns
+# ATT&CK: T1071.001 (Web Protocols)
+
+composite_rules:
+  - id: mirai-http-client-spoofing
+    desc: Mirai botnet HTTP client spoofing
+    crit: hostile
+    conf: 0.95
+    for: [c, elf]
+    mbc: "B0030"
+    attack: "T1071.001"
+    all:
+      - id: micro-behaviors/data/encode/spoofing::xor-user-agent-spoofing
+      - id: micro-behaviors/communications/http/client
+
+  - id: http-fingerprinting-campaign
+    desc: HTTP fingerprinting evasion campaign
+    crit: notable
+    conf: 0.90
+    for: [all]
+    attack: "T1071.001"
+    any:
+      - id: micro-behaviors/data/encode/spoofing

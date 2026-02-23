@@ -1,0 +1,19 @@
+# UDP Socket Creation
+
+defaults:
+  for: [elf, macho, so, dylib, c]
+  crit: notable
+  conf: 0.7
+
+traits:
+  - id: sock-dgram
+    desc: UDP socket type constant
+    if:
+      type: raw
+      regex: "SOCK_DGRAM"
+
+  - id: ipproto-udp
+    desc: IPPROTO_UDP constant
+    if:
+      type: raw
+      regex: "IPPROTO_UDP"

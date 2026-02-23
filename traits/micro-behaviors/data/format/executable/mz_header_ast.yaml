@@ -1,0 +1,44 @@
+traits:
+  - id: mz-header-hex-array-dec
+    desc: Checks MZ header via dec array
+    crit: notable
+    conf: 0.9
+    for:
+      - javascript
+      - typescript
+    if:
+      type: raw
+      regex: '\[0\]\s*==\s*77\s*&&\s*[\w$]+\[1\]\s*==\s*90'
+
+  - id: mz-header-hex-array-not-dec
+    desc: Validates MZ header via dec array inequality
+    crit: notable
+    conf: 0.9
+    for:
+      - javascript
+      - typescript
+    if:
+      type: raw
+      regex: '\[0\]\s*!=\s*77\s*\|\|\s*[\w$]+\[1\]\s*!=\s*90'
+
+  - id: mz-header-hex-array-hex
+    desc: Checks MZ header via hex array
+    crit: notable
+    conf: 0.9
+    for:
+      - javascript
+      - typescript
+    if:
+      type: raw
+      regex: '\[0\]\s*==\s*0x4[Dd]\s*&&\s*[\w$]+\[1\]\s*==\s*0x5[Aa]'
+
+  - id: mz-header-hex-array-not-hex
+    desc: Validates MZ header via hex array inequality
+    crit: notable
+    conf: 0.9
+    for:
+      - javascript
+      - typescript
+    if:
+      type: raw
+      regex: '\[0\]\s*!=\s*0x4[Dd]\s*\|\|\s*[\w$]+\[1\]\s*!=\s*0x5[Aa]'

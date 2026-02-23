@@ -1,0 +1,68 @@
+defaults:
+  for: [all]
+
+traits:
+  - id: http-client-any
+    criticality: notable
+    description: Any HTTP client usage
+    if:
+      type: string
+      regex: 'Microsoft\.XMLHTTP|Msxml2\.ServerXMLHTTP|MLHTTP'
+
+  - id: http-client-msxml2-fragment
+    criticality: notable
+    description: Obfuscated MSXML HTTP fragments
+    platforms: [windows]
+    for: [javascript]
+    if:
+      type: raw
+      exact: "MSXML2"
+
+  - id: http-client-mlhttp-fragment
+    criticality: notable
+    description: Obfuscated MSXML HTTP fragments
+    platforms: [windows]
+    for: [javascript]
+    if:
+      type: raw
+      exact: "MLHTTP"
+
+  - id: http-client-msxm-fragment
+    criticality: notable
+    description: Obfuscated MSXML HTTP fragments
+    platforms: [windows]
+    for: [javascript]
+    if:
+      type: raw
+      exact: "MSXM"
+
+  - id: http-client-xml2-fragment
+    criticality: notable
+    description: Obfuscated MSXML HTTP fragments
+    platforms: [windows]
+    for: [javascript]
+    if:
+      type: raw
+      exact: "XML2"
+
+composite_rules:
+  - id: http-client-any-obfuscated
+    crit: notable
+    conf: 0.9
+    desc: HTTP client via explicit or obfuscated MSXML
+    for: [javascript]
+    any:
+      - id: http-client-any
+      - id: http-client-msxml-fragment
+
+  - id: http-client-msxml-fragment
+    crit: notable
+    conf: 0.8
+    desc: Obfuscated MSXML HTTP fragments
+    platforms: [windows]
+    for: [javascript]
+    any:
+      - id: http-client-msxml2-fragment
+      - id: http-client-mlhttp-fragment
+      - id: http-client-msxm-fragment
+      - id: http-client-xml2-fragment

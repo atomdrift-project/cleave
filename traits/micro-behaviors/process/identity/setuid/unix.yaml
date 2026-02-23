@@ -1,0 +1,34 @@
+# Process Identity - Set User/Group ID (Unix)
+# These are capabilities for changing process identity.
+# Used legitimately by: setuid binaries, games (for high scores), mail programs,
+# daemons dropping privileges, and security tools.
+# MBC: C0042 (Modify Security Privileges)
+
+defaults:
+  for: [elf, macho, so, dylib, c]
+  platforms: [linux, macos, unix]
+
+traits:
+  - id: setuid
+    desc: Set user ID (capability)
+    crit: notable
+    conf: 0.6
+    if:
+      type: symbol
+      regex: "^(setuid|seteuid|setreuid|setresuid)$"
+
+  - id: setgid
+    desc: Set group ID (capability)
+    crit: notable
+    conf: 0.6
+    if:
+      type: symbol
+      regex: "^(setgid|setegid|setregid|setresgid)$"
+
+  - id: drop-privs
+    desc: Drop privileges (setuid after getuid)
+    crit: baseline
+    conf: 0.8
+    if:
+      type: symbol
+      regex: "^(setuid|setgid|seteuid|setegid)$"

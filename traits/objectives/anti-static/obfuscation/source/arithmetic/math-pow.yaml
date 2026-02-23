@@ -1,0 +1,11 @@
+defaults:
+  for: [all]
+
+traits:
+  - id: nested-math-pow
+    desc: Detects excessive Math.pow() calls (often used in
+    crit: notable
+    if:
+      type: raw
+      substr: 'Math.pow'
+      count_min: 1

@@ -1,0 +1,89 @@
+# NPM/Node.js Credential Environment Variable Access
+# Detects access to npm and Node.js specific tokens
+# ATT&CK: T1552.001 (Credentials In Files)
+
+traits:
+  - id: npm-token
+    desc: NPM_TOKEN environment variable access
+    crit: suspicious
+    conf: 0.95
+    attack: "T1552.001"
+    for: [javascript]
+    if:
+      type: string
+      substr: "NPM_TOKEN"
+
+  - id: node-auth-token
+    desc: NODE_AUTH_TOKEN environment variable access
+    crit: suspicious
+    conf: 0.95
+    attack: "T1552.001"
+    for: [javascript]
+    if:
+      type: string
+      substr: "NODE_AUTH_TOKEN"
+
+  # === npm config token atomic indicators ===
+  - id: npm-config-token-lower
+    desc: npm_config token (lowercase)
+    crit: notable
+    conf: 0.8
+    attack: "T1552.001"
+    for: [javascript]
+    if:
+      type: string
+      regex: "npm_config.{0,30}token"
+
+  - id: npm-config-token-upper
+    desc: NPM_CONFIG TOKEN (uppercase)
+    crit: notable
+    conf: 0.8
+    attack: "T1552.001"
+    for: [javascript]
+    if:
+      type: string
+      regex: "NPM_CONFIG.{0,30}TOKEN"
+
+  # === npmrc access atomic indicators ===
+  - id: dot-npmrc
+    desc: .npmrc file reference
+    crit: notable
+    conf: 0.8
+    attack: "T1552.001"
+    for: [javascript]
+    if:
+      type: string
+      substr: ".npmrc"
+
+  - id: npmrc-word
+    desc: npmrc word reference
+    crit: notable
+    conf: 0.8
+    attack: "T1552.001"
+    for: [javascript]
+    if:
+      type: string
+      substr: "npmrc"
+
+composite_rules:
+  # npm config token composite
+  - id: npm-config-token
+    desc: npm_config token access
+    crit: suspicious
+    conf: 0.9
+    attack: "T1552.001"
+    for: [javascript]
+    any:
+      - id: npm-config-token-lower
+      - id: npm-config-token-upper
+
+  # npmrc access composite
+  - id: npmrc-access
+    desc: .npmrc file access (contains tokens)
+    crit: suspicious
+    conf: 0.9
+    attack: "T1552.001"
+    for: [javascript]
+    any:
+      - id: dot-npmrc
+      - id: npmrc-word

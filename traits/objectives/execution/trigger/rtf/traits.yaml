@@ -1,0 +1,21 @@
+defaults:
+  for: [all]
+
+traits:
+  - id: objupdate
+    desc: RTF objupdate directive forcing object update/execution.
+    crit: suspicious
+    conf: 0.8
+    if:
+      type: raw
+      regex: 'objupdate'
+      description: "Match objupdate directive"
+
+  - id: objautlink
+    desc: RTF objautlink directive for automatic linking.
+    crit: notable
+    conf: 0.8
+    if:
+      type: raw
+      regex: 'objautlink'
+      description: "Match objautlink directive"

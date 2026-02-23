@@ -1,0 +1,50 @@
+# Process enumeration via snapshots - Windows
+# Used by malware to identify security products to terminate
+defaults:
+  for: [pe, dll]
+  platforms: [windows]
+
+traits:
+  - id: create-toolhelp32-snapshot
+    desc: Create process or module snapshot
+    crit: notable
+    conf: 0.9
+    attack: "T1057"
+    mbc: "E1057"
+    if:
+      type: symbol
+      exact: "CreateToolhelp32Snapshot"
+
+  - id: process32-first
+    desc: Get first process from snapshot
+    crit: notable
+    conf: 0.9
+    attack: "T1057"
+    if:
+      type: symbol
+      regex: "Process32First[AW]?$"
+
+  - id: process32-next
+    desc: Enumerate next process in snapshot
+    crit: notable
+    conf: 0.9
+    attack: "T1057"
+    if:
+      type: symbol
+      regex: "Process32Next[AW]?$"
+
+  - id: module32-first
+    desc: Get first module from snapshot
+    crit: notable
+    conf: 0.85
+    if:
+      type: symbol
+      regex: "Module32First[AW]?$"
+
+  - id: module32-next
+    desc: Enumerate next module in snapshot
+    crit: notable
+    conf: 0.85
+    if:
+      type: symbol
+      regex: "Module32Next[AW]?$"

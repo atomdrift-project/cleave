@@ -1,0 +1,125 @@
+# Python Clipboard Access Capabilities
+
+defaults:
+  for: [python]
+
+traits:
+  # === Tkinter Clipboard - Atomic patterns ===
+  - id: tkinter-clipboard-append-func
+    desc: clipboard_append function
+    crit: notable
+    conf: 0.9
+    if:
+      type: symbol
+      exact: "clipboard_append"
+
+  - id: tkinter-clipboard-append-method
+    desc: clipboard_append method call
+    crit: notable
+    conf: 0.9
+    if:
+      type: symbol
+      regex: '\.clipboard_append'
+
+  - id: tkinter-clipboard-clear-func
+    desc: clipboard_clear function
+    crit: notable
+    conf: 0.9
+    if:
+      type: symbol
+      exact: "clipboard_clear"
+
+  - id: tkinter-clipboard-clear-method
+    desc: clipboard_clear method call
+    crit: notable
+    conf: 0.9
+    if:
+      type: symbol
+      regex: '\.clipboard_clear'
+
+  - id: tkinter-clipboard-get-func
+    desc: clipboard_get function
+    crit: notable
+    conf: 0.9
+    if:
+      type: symbol
+      exact: "clipboard_get"
+
+  - id: tkinter-clipboard-get-method
+    desc: clipboard_get method call
+    crit: notable
+    conf: 0.9
+    if:
+      type: symbol
+      regex: '\.clipboard_get'
+
+  # === Pyperclip ===
+  - id: pyperclip-copy
+    desc: Copies text to clipboard (pyperclip)
+    crit: notable
+    conf: 0.9
+    if:
+      type: symbol
+      regex: 'pyperclip\.copy'
+
+  - id: pyperclip-paste
+    desc: Reads text from clipboard (pyperclip)
+    crit: notable
+    conf: 0.9
+    if:
+      type: symbol
+      regex: 'pyperclip\.paste'
+
+  # === GuardDog: pandas clipboard access ===
+
+  - id: pandas-read-clipboard
+    desc: pandas read_clipboard function
+    crit: notable
+    conf: 0.9
+    if:
+      type: ast
+      query: |
+        (call
+          function: (attribute
+            object: (identifier) @obj
+            attribute: (identifier) @method)
+          (#eq? @obj "pandas")
+          (#eq? @method "read_clipboard"))
+
+  - id: pandas-to-clipboard
+    desc: pandas DataFrame to_clipboard method
+    crit: notable
+    conf: 0.9
+    if:
+      type: ast
+      query: |
+        (call
+          function: (attribute
+            attribute: (identifier) @method)
+          (#eq? @method "to_clipboard"))
+
+composite_rules:
+  # Composite rules for Tkinter clipboard operations
+  - id: tkinter-clipboard-append
+    desc: Appends text to clipboard (Tkinter)
+    crit: notable
+    conf: 0.9
+    any:
+      - id: tkinter-clipboard-append-func
+      - id: tkinter-clipboard-append-method
+
+  - id: tkinter-clipboard-clear
+    desc: Clears clipboard content (Tkinter)
+    crit: notable
+    conf: 0.9
+    any:
+      - id: tkinter-clipboard-clear-func
+      - id: tkinter-clipboard-clear-method
+
+  - id: tkinter-clipboard-get
+    desc: Reads clipboard content (Tkinter)
+    crit: notable
+    conf: 0.9
+    any:
+      - id: tkinter-clipboard-get-func
+      - id: tkinter-clipboard-get-method

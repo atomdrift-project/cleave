@@ -1,0 +1,524 @@
+# Async Event Libraries Detection
+# These libraries are commonly used in botnets and malware for high-performance I/O
+# Can be benign or malicious depending on context
+
+defaults:
+  for: [elf, macho, so, dylib]
+
+traits:
+  # === libev micro-behaviors ===
+  - id: ev-loop
+    desc: ev_loop function
+    crit: baseline
+    conf: 0.4
+    if:
+      type: symbol
+      regex: "ev_loop"
+
+  - id: ev-io-start
+    desc: ev_io_start function
+    crit: baseline
+    conf: 0.4
+    if:
+      type: symbol
+      regex: "ev_io_start"
+
+  - id: ev-io-stop
+    desc: ev_io_stop function
+    crit: baseline
+    conf: 0.4
+    if:
+      type: symbol
+      regex: "ev_io_stop"
+
+  - id: ev-timer-start
+    desc: ev_timer_start function
+    crit: baseline
+    conf: 0.4
+    if:
+      type: symbol
+      regex: "ev_timer_start"
+
+  - id: ev-run
+    desc: ev_run function
+    crit: baseline
+    conf: 0.4
+    if:
+      type: symbol
+      regex: "ev_run"
+
+  - id: ev-break
+    desc: ev_break function
+    crit: baseline
+    conf: 0.4
+    if:
+      type: symbol
+      regex: "ev_break"
+
+  - id: ev-default-loop
+    desc: ev_default_loop function
+    crit: baseline
+    conf: 0.4
+    if:
+      type: symbol
+      regex: "ev_default_loop"
+
+  - id: libev-error
+    desc: libev error string
+    crit: notable
+    conf: 0.7
+    if:
+      type: string
+      substr: "libev: "
+
+  # === libuv micro-behaviors ===
+  - id: uv-loop-init
+    desc: uv_loop_init function
+    crit: baseline
+    conf: 0.4
+    if:
+      type: symbol
+      regex: "uv_loop_init"
+
+  - id: uv-run
+    desc: uv_run function
+    crit: baseline
+    conf: 0.4
+    if:
+      type: symbol
+      regex: "uv_run"
+
+  - id: uv-tcp-init
+    desc: uv_tcp_init function
+    crit: baseline
+    conf: 0.4
+    if:
+      type: symbol
+      regex: "uv_tcp_init"
+
+  - id: uv-tcp-connect
+    desc: uv_tcp_connect function
+    crit: baseline
+    conf: 0.4
+    if:
+      type: symbol
+      regex: "uv_tcp_connect"
+
+  - id: uv-write
+    desc: uv_write function
+    crit: baseline
+    conf: 0.4
+    if:
+      type: symbol
+      regex: "uv_write"
+
+  - id: uv-read-start
+    desc: uv_read_start function
+    crit: baseline
+    conf: 0.4
+    if:
+      type: symbol
+      regex: "uv_read_start"
+
+  - id: uv-spawn
+    desc: uv_spawn function
+    crit: notable
+    conf: 0.5
+    if:
+      type: symbol
+      regex: "uv_spawn"
+
+  - id: uv-default-loop
+    desc: uv_default_loop function
+    crit: baseline
+    conf: 0.4
+    if:
+      type: symbol
+      regex: "uv_default_loop"
+
+  # === c-ares micro-behaviors ===
+  - id: ares-init
+    desc: ares_init function
+    crit: baseline
+    conf: 0.4
+    if:
+      type: symbol
+      regex: "ares_init"
+
+  - id: ares-gethostbyname
+    desc: ares_gethostbyname function
+    crit: baseline
+    conf: 0.4
+    if:
+      type: symbol
+      regex: "ares_gethostbyname"
+
+  - id: ares-process
+    desc: ares_process function
+    crit: baseline
+    conf: 0.4
+    if:
+      type: symbol
+      regex: "ares_process"
+
+  - id: ares-destroy
+    desc: ares_destroy function
+    crit: baseline
+    conf: 0.4
+    if:
+      type: symbol
+      regex: "ares_destroy"
+
+  - id: ares-query
+    desc: ares_query function
+    crit: baseline
+    conf: 0.4
+    if:
+      type: symbol
+      regex: "ares_query"
+
+  - id: ares-success
+    desc: ARES_SUCCESS constant
+    crit: baseline
+    conf: 0.4
+    if:
+      type: string
+      substr: "ARES_SUCCESS"
+
+  # === libevent micro-behaviors ===
+  - id: event-base-new
+    desc: event_base_new function
+    crit: baseline
+    conf: 0.4
+    if:
+      type: symbol
+      regex: "event_base_new"
+
+  - id: event-base-dispatch
+    desc: event_base_dispatch function
+    crit: baseline
+    conf: 0.4
+    if:
+      type: symbol
+      regex: "event_base_dispatch"
+
+  - id: event-add
+    desc: event_add function
+    crit: baseline
+    conf: 0.4
+    if:
+      type: symbol
+      regex: "event_add"
+
+  - id: bufferevent-prefix
+    desc: bufferevent_ function prefix
+    crit: baseline
+    conf: 0.4
+    if:
+      type: string
+      regex: "\\bbufferevent_"
+
+  - id: evbuffer-prefix
+    desc: evbuffer_ function prefix
+    crit: baseline
+    conf: 0.4
+    if:
+      type: string
+      regex: "\\bevbuffer_"
+
+  - id: evdns-prefix
+    desc: evdns_ function prefix
+    crit: baseline
+    conf: 0.4
+    if:
+      type: string
+      regex: "\\bevdns_"
+
+  - id: evhttp-prefix
+    desc: evhttp_ function prefix
+    crit: baseline
+    conf: 0.4
+    if:
+      type: string
+      regex: "\\bevhttp_"
+
+  # === Boost.Asio micro-behaviors ===
+  - id: boost-asio-namespace
+    desc: "boost::asio namespace"
+    crit: notable
+    conf: 0.6
+    if:
+      type: string
+      substr: "boost::asio"
+
+  - id: io-service
+    desc: io_service class
+    crit: baseline
+    conf: 0.4
+    if:
+      type: string
+      substr: "io_service"
+
+  - id: io-context
+    desc: io_context class
+    crit: baseline
+    conf: 0.4
+    if:
+      type: string
+      substr: "io_context"
+
+  - id: async-read
+    desc: async_read function
+    crit: baseline
+    conf: 0.4
+    if:
+      type: string
+      substr: "async_read"
+
+  - id: async-write
+    desc: async_write function
+    crit: baseline
+    conf: 0.4
+    if:
+      type: string
+      substr: "async_write"
+
+  - id: async-connect
+    desc: async_connect function
+    crit: baseline
+    conf: 0.4
+    if:
+      type: string
+      substr: "async_connect"
+
+  - id: deadline-timer
+    desc: deadline_timer class
+    crit: baseline
+    conf: 0.4
+    if:
+      type: string
+      substr: "deadline_timer"
+
+  # === Tokio micro-behaviors ===
+  - id: tokio-namespace
+    desc: "tokio:: namespace"
+    crit: notable
+    conf: 0.5
+    for: [elf, macho, rust]
+    if:
+      type: string
+      substr: "tokio::"
+
+  - id: tokio-runtime
+    desc: tokio_runtime reference
+    crit: baseline
+    conf: 0.4
+    for: [elf, macho, rust]
+    if:
+      type: string
+      substr: "tokio_runtime"
+
+  - id: tokio-net
+    desc: "tokio::net module"
+    crit: baseline
+    conf: 0.4
+    for: [elf, macho, rust]
+    if:
+      type: string
+      substr: "tokio::net"
+
+  - id: tokio-spawn
+    desc: "tokio::spawn function"
+    crit: baseline
+    conf: 0.4
+    for: [elf, macho, rust]
+    if:
+      type: string
+      substr: "tokio::spawn"
+
+  - id: tokio-cargo
+    desc: tokio- cargo dependency
+    crit: baseline
+    conf: 0.4
+    for: [elf, macho, rust]
+    if:
+      type: string
+      substr: "tokio-"
+
+  # === epoll/kqueue micro-behaviors ===
+  - id: epoll-create
+    desc: epoll_create function
+    crit: baseline
+    conf: 0.4
+    if:
+      type: symbol
+      regex: "epoll_create"
+
+  - id: epoll-ctl
+    desc: epoll_ctl function
+    crit: baseline
+    conf: 0.4
+    if:
+      type: symbol
+      regex: "epoll_ctl"
+
+  - id: epoll-wait
+    desc: epoll_wait function
+    crit: baseline
+    conf: 0.4
+    if:
+      type: symbol
+      regex: "epoll_wait"
+
+  - id: kqueue-func
+    desc: kqueue function
+    crit: baseline
+    conf: 0.4
+    if:
+      type: symbol
+      regex: "kqueue"
+
+  - id: kevent-func
+    desc: kevent function
+    crit: baseline
+    conf: 0.4
+    if:
+      type: symbol
+      regex: "kevent"
+
+composite_rules:
+  # libev composite (migrated from YARA)
+  - id: libev
+    desc: libev event loop library usage
+    crit: notable
+    conf: 0.7
+    needs: 3
+    any:
+      - id: ev-loop
+      - id: ev-io-start
+      - id: ev-io-stop
+      - id: ev-timer-start
+      - id: ev-run
+      - id: ev-break
+      - id: ev-default-loop
+      - id: libev-error
+
+  # libuv composite (migrated from YARA)
+  - id: libuv
+    desc: libuv async I/O library usage
+    crit: notable
+    conf: 0.7
+    needs: 3
+    any:
+      - id: uv-loop-init
+      - id: uv-run
+      - id: uv-tcp-init
+      - id: uv-tcp-connect
+      - id: uv-write
+      - id: uv-read-start
+      - id: uv-spawn
+      - id: uv-default-loop
+
+  # c-ares composite (migrated from YARA)
+  - id: c-ares
+    desc: c-ares async DNS resolver library
+    crit: notable
+    conf: 0.7
+    needs: 2
+    any:
+      - id: ares-init
+      - id: ares-gethostbyname
+      - id: ares-process
+      - id: ares-destroy
+      - id: ares-query
+      - id: ares-success
+
+  # libevent composite (migrated from YARA)
+  - id: libevent
+    desc: libevent async I/O library usage
+    crit: notable
+    conf: 0.7
+    needs: 3
+    any:
+      - id: event-base-new
+      - id: event-base-dispatch
+      - id: event-add
+      - id: bufferevent-prefix
+      - id: evbuffer-prefix
+      - id: evdns-prefix
+      - id: evhttp-prefix
+
+  # Boost.Asio composite (migrated from YARA)
+  - id: boost-asio
+    desc: Boost.Asio async I/O library usage
+    crit: notable
+    conf: 0.7
+    needs: 3
+    any:
+      - id: boost-asio-namespace
+      - id: io-service
+      - id: io-context
+      - id: async-read
+      - id: async-write
+      - id: async-connect
+      - id: deadline-timer
+
+  # Tokio composite (migrated from YARA)
+  - id: tokio
+    desc: Tokio async runtime (Rust) usage
+    crit: notable
+    conf: 0.7
+    for: [elf, macho, rust]
+    any:
+      - id: tokio-namespace
+      - id: tokio-runtime
+      - id: tokio-net
+      - id: tokio-spawn
+      - id: tokio-cargo
+
+  # epoll composite
+  - id: epoll-usage
+    desc: Direct epoll usage for async
+    crit: notable
+    conf: 0.65
+    needs: 2
+    any:
+      - id: epoll-create
+      - id: epoll-ctl
+      - id: epoll-wait
+
+  # kqueue composite
+  - id: kqueue-usage
+    desc: Direct kqueue usage for async
+    crit: notable
+    conf: 0.65
+    all:
+      - id: kqueue-func
+      - id: kevent-func
+
+  # epoll/kqueue composite (migrated from YARA)
+  - id: epoll-kqueue
+    desc: Direct epoll/kqueue usage for async
+    crit: notable
+    conf: 0.65
+    any:
+      - id: epoll-usage
+      - id: kqueue-usage
+
+  # Async networking library detection
+  # NOTE: These libraries are commonly used in legitimate software (web servers,
+  # proxies, databases) and also in botnets. The libraries themselves are not
+  # suspicious - only their *use* in conjunction with other malicious patterns
+  # might be. Moved to 'notable' as library detection, not 'suspicious'.
+  - id: async-io-library
+    desc: Uses high-performance async I/O library
+    crit: notable
+    conf: 0.75
+    any:
+      - id: libev
+      - id: c-ares
+      - id: libevent
+    # Don't match when the file IS the async library itself (exports the APIs)
+    unless:
+      - id: libevent
+      - id: libev

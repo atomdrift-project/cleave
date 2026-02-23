@@ -1,0 +1,74 @@
+traits:
+  - id: console-check-api
+    desc: Console environment check
+    crit: notable
+    conf: 0.7
+    platforms:
+      - windows
+    for:
+      - pe
+    if:
+      type: symbol
+      exact: GetConsoleScreenBufferInfo
+    attack: T1497
+    mbc: B0001
+  - id: getenv-api
+    desc: Environment variable access
+    crit: notable
+    conf: 0.5
+    platforms:
+      - windows
+      - linux
+      - macos
+    for:
+      - pe
+      - elf
+      - macho
+    if:
+      type: symbol
+      regex: ^GetEnvironment(Strings(W|A)?|Variable)$|^FreeEnvironmentStringsW$
+composite_rules:
+  - id: console-environment-detection
+    desc: Console environment detection checks
+    crit: suspicious
+    conf: 0.75
+    platforms:
+      - windows
+    for:
+      - pe
+    attack: T1497.001
+    mbc: B0001
+    needs: 2
+    any:
+      - id: console-check-api
+      - id: micro-behaviors/hardware/display/screen::write-console-w
+  - id: environment-aware-malware
+    desc: Environment-aware malware adaptation
+    crit: suspicious
+    conf: 0.8
+    platforms:
+      - all
+    for:
+      - pe
+      - elf
+      - macho
+    attack: T1497
+    mbc: B0001
+    any:
+      - id: getenv-api
+      - id: console-environment-detection
+  - id: environment-adaptive-behavior
+    desc: Adaptive behavior based on environment
+    crit: suspicious
+    conf: 0.85
+    platforms:
+      - all
+    for:
+      - pe
+      - elf
+      - macho
+    attack: T1497
+    mbc: B0001
+    all:
+      - id: environment-aware-malware
+      - id: micro-behaviors/data/control-flow

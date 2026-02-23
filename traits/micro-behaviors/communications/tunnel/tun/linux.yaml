@@ -1,0 +1,43 @@
+# TUN/TAP Network Tunneling
+# MBC: C0001 (Socket Communication)
+# ATT&CK: T1090
+
+defaults:
+  for: [all]
+  attack: "T1090"
+
+traits:
+  # === TUN/TAP atomic indicators ===
+  - id: dev-tun
+    desc: /dev/tun device
+    crit: baseline
+    conf: 0.5
+    if:
+      type: string
+      substr: "/dev/tun"
+
+  - id: dev-tap
+    desc: /dev/tap device
+    crit: baseline
+    conf: 0.5
+    if:
+      type: string
+      substr: "/dev/tap"
+
+  - id: tunsetiff-ioctl
+    desc: TUNSETIFF ioctl
+    crit: baseline
+    conf: 0.6
+    if:
+      type: string
+      substr: "TUNSETIFF"
+
+composite_rules:
+  - id: tun
+    desc: TUN/TAP device usage
+    crit: notable
+    conf: 0.66
+    any:
+      - id: dev-tun
+      - id: dev-tap
+      - id: tunsetiff-ioctl

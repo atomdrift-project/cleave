@@ -1,0 +1,216 @@
+# Shady Domains and TLDs
+# GuardDog-inspired: Detects suspicious domains, TLDs, and services
+# ATT&CK: T1071 (Application Layer Protocol)
+
+defaults:
+  for: [python, javascript, typescript, go, ruby, java, php, shell]
+  crit: suspicious
+  attack: "T1071"
+
+traits:
+  # === Suspicious TLDs ===
+
+  - id: tld-xyz
+    desc: URL with .xyz TLD
+    conf: 0.75
+    if:
+      type: string
+      regex: 'https?://[^\s"''<>]{1,120}\.xyz\b'
+    not:
+      - regex: '^\s*#'
+      - regex: '^\s*//'
+
+  - id: tld-tk
+    desc: .tk domain (free)
+    conf: 0.80
+    if:
+      type: string
+      regex: 'https?://[^\s"''<>]{1,120}\.tk\b'
+    not:
+      - regex: '^\s*#'
+      - regex: '^\s*//'
+
+  - id: tld-ml
+    desc: .ml domain (free)
+    conf: 0.80
+    if:
+      type: string
+      regex: 'https?://[^\s"''<>]{1,120}\.ml\b'
+    not:
+      - regex: '^\s*#'
+
+  - id: tld-ga
+    desc: .ga domain (free)
+    conf: 0.80
+    if:
+      type: string
+      regex: 'https?://[^\s"''<>]{1,120}\.ga\b'
+    not:
+      - regex: '^\s*#'
+
+  - id: tld-cf
+    desc: .cf domain (free)
+    conf: 0.80
+    if:
+      type: string
+      regex: 'https?://[^\s"''<>]{1,120}\.cf\b'
+    not:
+      - regex: '^\s*#'
+
+  - id: tld-gq
+    desc: .gq domain (free)
+    conf: 0.80
+    if:
+      type: string
+      regex: 'https?://[^\s"''<>]{1,120}\.gq\b'
+    not:
+      - regex: '^\s*#'
+
+  - id: tld-top
+    desc: URL with .top TLD
+    conf: 0.70
+    if:
+      type: string
+      regex: 'https?://[^\s"''<>]{1,120}\.top\b'
+    not:
+      - regex: '^\s*#'
+
+  - id: tld-zip
+    desc: .zip domain (confusing)
+    conf: 0.85
+    if:
+      type: string
+      regex: 'https?://[^\s"''<>]{1,120}\.zip\b'
+    not:
+      - regex: '^\s*#'
+
+  # === File Sharing Services ===
+
+  - id: transfer-sh
+    desc: transfer.sh file sharing
+    conf: 0.85
+    attack: "T1567"
+    if:
+      type: string
+      regex: 'transfer\.sh'
+    not:
+      - regex: '^\s*#'
+
+  # === Discord (non-invite URLs) ===
+
+  - id: discord-api
+    desc: Discord API URL (non-invite)
+    conf: 0.75
+    attack: "T1567"
+    if:
+      type: string
+      regex: 'discord\.com'
+    not:
+      - regex: 'discord\.com/(invite|oauth2/authorize)'
+      - regex: '^\s*#'
+
+  # === IP Address URLs (non-local) ===
+
+  - id: ip-address-url
+    desc: Direct IP address in URL
+    conf: 0.75
+    if:
+      type: string
+      regex: 'https?://\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}'
+    not:
+      - regex: '192\.168\.'
+      - regex: '10\.\d{1,3}\.'
+      - regex: '172\.(1[6-9]|2\d|3[0-1])\.'
+      - regex: '127\.\d{1,3}\.'
+      - regex: '169\.254\.'
+      - regex: '1\.1\.1\.1'
+      - regex: '8\.8\.8\.8'
+      - regex: '^\s*#'
+
+composite_rules:
+  # Free TLDs (commonly abused)
+  - id: free-tld
+    desc: Free/abused top-level domain
+    crit: suspicious
+    conf: 0.80
+    attack: "T1071"
+    any:
+      - id: tld-tk
+      - id: tld-ml
+      - id: tld-ga
+      - id: tld-cf
+      - id: tld-gq
+
+  # Suspicious TLDs (broader set)
+  - id: suspicious-tld
+    desc: Suspicious top-level domain
+    crit: suspicious
+    conf: 0.75
+    attack: "T1071"
+    any:
+      - id: free-tld
+      - id: tld-xyz
+      - id: tld-top
+      - id: tld-zip
+
+  # Tunneling services
+  - id: tunnel-service
+    desc: Tunneling/proxy service URL
+    crit: suspicious
+    conf: 0.90
+    attack: "T1090"
+    any:
+      - id: objectives/command-and-control/infrastructure/tunnel/
+
+  # Paste/sharing services
+  - id: paste-service
+    desc: Paste or file sharing service
+    crit: suspicious
+    conf: 0.85
+    attack: "T1567"
+    any:
+      - id: objectives/command-and-control/infrastructure/pastebin/
+      - id: transfer-sh
+
+  # Callback/Interaction services
+  - id: oob-service
+    desc: Out-of-band interaction service
+    crit: suspicious
+    conf: 0.85
+    attack: "T1567"
+    any:
+      - id: objectives/exfiltration/channel/callback/
+
+  # URL Shortening Services
+  - id: url-shortener
+    desc: URL shortening service
+    crit: notable
+    conf: 0.80
+    attack: "T1027"
+    any:
+      - id: objectives/exfiltration/channel/oob/shortener/
+
+  # IP Trackers
+  - id: ip-tracker-service
+    desc: IP logging or tracking service
+    crit: suspicious
+    conf: 0.85
+    attack: "T1592"
+    any:
+      - id: objectives/discovery/network/ip-tracker/
+
+  # GuardDog: All shady URLs
+  - id: shady-url
+    desc: Suspicious URL detected
+    crit: suspicious
+    conf: 0.80
+    attack: "T1071"
+    any:
+      - id: suspicious-tld
+      - id: tunnel-service
+      - id: paste-service
+      - id: oob-service
+      - id: url-shortener
+      - id: ip-tracker-service
+      - id: discord-api
+      - id: ip-address-url

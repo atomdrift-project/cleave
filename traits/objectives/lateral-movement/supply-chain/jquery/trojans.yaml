@@ -1,0 +1,77 @@
+# Trojanized jQuery Library Detection
+# ATT&CK: T1195.002 (Compromise Software Supply Chain)
+# Detects jQuery libraries modified to include malicious capabilities
+
+defaults:
+  attack: "T1195.002"
+  mbc: "B0024"
+  for: [javascript]
+
+composite_rules:
+  # jQuery + ActiveXObject = HOSTILE (complexity >= 4)
+  - id: trojanized-activex
+    desc: "jQuery library with ActiveXObject (trojanized"
+    crit: hostile
+    conf: 0.98
+    all:
+      - { id: metadata/library/jquery::library }
+      - { id: metadata/library/jquery::version-string }
+      - { id: objectives/execution/activex/com::activex-object-create }
+
+  # jQuery + Reverse Shell = HOSTILE
+  - id: trojanized-reverse-shell
+    desc: "jQuery library with reverse shell"
+    crit: hostile
+    conf: 0.98
+    all:
+      - { id: metadata/library/jquery::library }
+      - { id: metadata/library/jquery::version-string }
+      - {
+          id: objectives/command-and-control/reverse-shell/socket::socket-with-exec,
+        }
+
+  # jQuery + Base64 Eval = HOSTILE (hidden payload)
+  - id: trojanized-base64-eval
+    desc: "jQuery library with base64+eval payload"
+    crit: hostile
+    conf: 0.95
+    all:
+      - { id: metadata/library/jquery::library }
+      - { id: metadata/library/jquery::version-string }
+      - { id: objectives/anti-static/obfuscation/payload::decode-exec-js }
+
+  # jQuery + Credential Access = HOSTILE
+  - id: trojanized-credential-access
+    desc: "jQuery library with credential access"
+    crit: hostile
+    conf: 0.98
+    all:
+      - { id: metadata/library/jquery::library }
+      - { id: metadata/library/jquery::version-string }
+    any:
+      - { id: micro-behaviors/fs/path/sensitive/browser::login-data }
+      - { id: objectives/credential-access/browser/firefox::cookies }
+
+  # jQuery + Command Execution = HOSTILE
+  - id: trojanized-exec
+    desc: "jQuery library with command execution"
+    crit: hostile
+    conf: 0.98
+    all:
+      - { id: metadata/library/jquery::library }
+      - { id: metadata/library/jquery::version-string }
+    any:
+      - { id: micro-behaviors/process/create/shell }
+      - { id: micro-behaviors/process/create/shell/lang::child-process-exec }
+
+  # jQuery + Network Backdoor = HOSTILE
+  - id: trojanized-backdoor
+    desc: "jQuery library with network backdoor"
+    crit: hostile
+    conf: 0.95
+    all:
+      - { id: metadata/library/jquery::library }
+      - { id: metadata/library/jquery::version-string }
+      - {
+          id: objectives/command-and-control/infrastructure/domain::hardcoded-domain-suspicious-pattern,
+        }

@@ -1,0 +1,22 @@
+# Hidden Process Execution - JavaScript
+# GuardDog-inspired: Detects use of options to hide process execution
+# ATT&CK: T1564 (Hide Artifacts)
+
+defaults:
+  for: [javascript, typescript]
+
+composite_rules:
+  # GuardDog: Silent process execution
+  - id: hidden-process-execution
+    desc: Hidden process execution in Node.js
+    crit: suspicious
+    conf: 0.85
+    attack: "T1564"
+    any:
+      - id: micro-behaviors/process/create/flags::detached-process
+      - id: micro-behaviors/process/create/spawn::windowshide-option
+    downgrade:
+      # Legitimate use in background tasks
+      any:
+        - id: metadata/quality::has-tests
+        - id: metadata/signed/platform

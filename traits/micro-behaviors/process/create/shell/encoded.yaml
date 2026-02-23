@@ -1,0 +1,303 @@
+# Encoded Shell Command Detection
+# GAP #3: Detects shell commands hidden in XOR, base64, hex, or other encodings
+# Malware often encodes command strings to evade static analysis
+
+defaults:
+  for: [elf, macho, pe]
+  platforms: [linux, macos, windows, unix]
+
+traits:
+  # XOR-encoded shell command indicators
+  - id: xor-shell-command-bash
+    desc: "XOR-encoded bash token"
+    crit: suspicious
+    conf: 0.9
+    attack: "T1027"
+    if:
+      type: encoded
+      encoding: xor
+      regex: "\\bbash\\b"
+      case_insensitive: true
+
+  - id: xor-shell-command-sh-c
+    desc: "XOR-encoded sh -c token"
+    crit: suspicious
+    conf: 0.9
+    attack: "T1027"
+    if:
+      type: encoded
+      encoding: xor
+      regex: "\\bsh\\s-c\\b"
+      case_insensitive: true
+
+  - id: xor-shell-command-cmd-exe
+    desc: "XOR-encoded cmd.exe token"
+    crit: suspicious
+    conf: 0.9
+    attack: "T1027"
+    if:
+      type: encoded
+      encoding: xor
+      regex: "\\bcmd\\.exe\\b"
+      case_insensitive: true
+
+  - id: xor-shell-command-powershell
+    desc: "XOR-encoded powershell token"
+    crit: suspicious
+    conf: 0.9
+    attack: "T1027"
+    if:
+      type: encoded
+      encoding: xor
+      regex: "\\bpowershell\\b"
+      case_insensitive: true
+
+  - id: xor-shell-command-popen
+    desc: "XOR-encoded popen token"
+    crit: suspicious
+    conf: 0.9
+    attack: "T1027"
+    if:
+      type: encoded
+      encoding: xor
+      regex: "\\bpopen\\b"
+      case_insensitive: true
+
+  - id: xor-shell-command-system
+    desc: "XOR-encoded system token"
+    crit: suspicious
+    conf: 0.9
+    attack: "T1027"
+    if:
+      type: encoded
+      encoding: xor
+      regex: "\\bsystem\\b"
+      case_insensitive: true
+
+  - id: xor-shell-command-bin-sh
+    desc: "XOR-encoded /bin/sh token"
+    crit: suspicious
+    conf: 0.9
+    attack: "T1027"
+    if:
+      type: encoded
+      encoding: xor
+      regex: "/bin/sh"
+      case_insensitive: true
+
+  # Base64-encoded shell commands
+  - id: base64-shell-command-bash
+    desc: "Base64 shell command bash token"
+    crit: suspicious
+    conf: 0.85
+    attack: "T1027"
+    if:
+      type: encoded
+      encoding: base64
+      regex: "\\bbash\\b"
+      case_insensitive: true
+
+  - id: base64-shell-command-sh-c
+    desc: "Base64 shell command sh -c token"
+    crit: suspicious
+    conf: 0.85
+    attack: "T1027"
+    if:
+      type: encoded
+      encoding: base64
+      regex: "\\bsh\\s-c\\b"
+      case_insensitive: true
+
+  - id: base64-shell-command-cmd-exe
+    desc: "Base64 shell command cmd.exe token"
+    crit: suspicious
+    conf: 0.85
+    attack: "T1027"
+    if:
+      type: encoded
+      encoding: base64
+      regex: "\\bcmd\\.exe\\b"
+      case_insensitive: true
+
+  - id: base64-shell-command-powershell
+    desc: "Base64 shell command powershell token"
+    crit: suspicious
+    conf: 0.85
+    attack: "T1027"
+    if:
+      type: encoded
+      encoding: base64
+      regex: "\\bpowershell\\b"
+      case_insensitive: true
+
+  - id: base64-shell-command-wget
+    desc: "Base64 shell command wget token"
+    crit: suspicious
+    conf: 0.85
+    attack: "T1027"
+    if:
+      type: encoded
+      encoding: base64
+      regex: "\\bwget\\b"
+      case_insensitive: true
+
+  - id: base64-shell-command-curl
+    desc: "Base64 shell command curl token"
+    crit: suspicious
+    conf: 0.85
+    attack: "T1027"
+    if:
+      type: encoded
+      encoding: base64
+      regex: "\\bcurl\\b"
+      case_insensitive: true
+
+  - id: base64-shell-command-bin-sh
+    desc: "Base64 shell command /bin/sh token"
+    crit: suspicious
+    conf: 0.85
+    attack: "T1027"
+    if:
+      type: encoded
+      encoding: base64
+      regex: "/bin/sh"
+      case_insensitive: true
+
+  # Any encoding type with shell patterns
+  - id: encoded-shell-pattern
+    desc: "Encoded shell command pattern"
+    crit: suspicious
+    conf: 0.9
+    attack: "T1027"
+    if:
+      type: encoded
+      regex: "\\b(popen|/bin/sh|/bin/bash)\\b"
+      case_insensitive: true
+
+  # Multiple encoded shell strings = deliberate obfuscation
+  - id: multiple-encoded-shell-bash
+    desc: "Multiple encoded bash strings"
+    crit: suspicious
+    conf: 0.95
+    attack: "T1027"
+    if:
+      type: encoded
+      encoding: [xor, base64, hex]
+      regex: "\\bbash\\b"
+      count_min: 3
+      case_insensitive: true
+
+  - id: multiple-encoded-shell-cmd-exe
+    desc: "Multiple encoded cmd.exe strings"
+    crit: suspicious
+    conf: 0.95
+    attack: "T1027"
+    if:
+      type: encoded
+      encoding: [xor, base64, hex]
+      regex: "\\bcmd\\.exe\\b"
+      count_min: 3
+      case_insensitive: true
+
+  - id: multiple-encoded-shell-powershell
+    desc: "Multiple encoded powershell strings"
+    crit: suspicious
+    conf: 0.95
+    attack: "T1027"
+    if:
+      type: encoded
+      encoding: [xor, base64, hex]
+      regex: "\\bpowershell\\b"
+      count_min: 3
+      case_insensitive: true
+
+  - id: multiple-encoded-shell-bin-sh
+    desc: "Multiple encoded /bin/sh strings"
+    crit: suspicious
+    conf: 0.95
+    attack: "T1027"
+    if:
+      type: encoded
+      encoding: [xor, base64, hex]
+      regex: "/bin/sh"
+      count_min: 3
+      case_insensitive: true
+
+  - id: multiple-encoded-shell-bin-bash
+    desc: "Multiple encoded /bin/bash strings"
+    crit: suspicious
+    conf: 0.95
+    attack: "T1027"
+    if:
+      type: encoded
+      encoding: [xor, base64, hex]
+      regex: "/bin/bash"
+      count_min: 3
+      case_insensitive: true
+
+  # Encoded command with common malware paths
+  - id: encoded-tmp-exec
+    desc: "Encoded /tmp execution path"
+    crit: suspicious
+    conf: 0.9
+    attack: "T1027"
+    if:
+      type: encoded
+      regex: "/tmp/[a-zA-Z0-9]+"
+      count_min: 1
+
+composite_rules:
+  - id: xor-shell-command
+    desc: "XOR-encoded shell command string"
+    crit: suspicious
+    conf: 0.9
+    attack: "T1027"
+    any:
+      - id: xor-shell-command-bash
+      - id: xor-shell-command-sh-c
+      - id: xor-shell-command-cmd-exe
+      - id: xor-shell-command-powershell
+      - id: xor-shell-command-popen
+      - id: xor-shell-command-system
+      - id: xor-shell-command-bin-sh
+
+  - id: base64-shell-command
+    desc: "Base64-encoded shell command"
+    crit: suspicious
+    conf: 0.85
+    attack: "T1027"
+    any:
+      - id: base64-shell-command-bash
+      - id: base64-shell-command-sh-c
+      - id: base64-shell-command-cmd-exe
+      - id: base64-shell-command-powershell
+      - id: base64-shell-command-wget
+      - id: base64-shell-command-curl
+      - id: base64-shell-command-bin-sh
+
+  - id: multiple-encoded-shell
+    desc: "Multiple encoded shell strings"
+    crit: suspicious
+    conf: 0.95
+    attack: "T1027"
+    any:
+      - id: multiple-encoded-shell-bash
+      - id: multiple-encoded-shell-cmd-exe
+      - id: multiple-encoded-shell-powershell
+      - id: multiple-encoded-shell-bin-sh
+      - id: multiple-encoded-shell-bin-bash
+
+  # Encoded shell commands + actual shell execution = obfuscated malware
+  - id: obfuscated-shell-malware
+    desc: "Obfuscated shell command malware"
+    crit: suspicious
+    conf: 0.95
+    attack: "T1027"
+    all:
+      - id: micro-behaviors/process/create/shell::c-popen
+    any:
+      - id: xor-shell-command
+      - id: encoded-shell-pattern
+      - id: multiple-encoded-shell
+    none:
+      - id: metadata/signed/platform::apple

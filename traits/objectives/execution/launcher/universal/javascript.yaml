@@ -1,0 +1,16 @@
+# Launcher / Dropper - JavaScript
+# Detects multi-platform execution launching behavior
+# ATT&CK: T1059 (Command and Scripting Interpreter)
+
+composite_rules:
+  - id: js-multi-platform-launcher
+    desc: Multi-platform terminal launcher (suspicious installer)
+    crit: suspicious
+    conf: 0.95
+    attack: "T1059"
+    for: [javascript]
+    needs: 2
+    any:
+      - id: micro-behaviors/process/create/shell/lang::js-cmd-start
+      - id: micro-behaviors/process/create/shell/lang::js-terminal-launch
+      - id: micro-behaviors/process/create/script::ref-terminal

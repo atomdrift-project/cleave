@@ -1,0 +1,72 @@
+# Package Manager Paths - Linux
+# Legitimate package manager directories and files
+
+defaults:
+  for: [shell, elf]
+  crit: baseline
+  conf: 1.0
+
+traits:
+  # APT (Debian/Ubuntu)
+  - id: apt-lists
+    desc: APT package lists directory
+    if:
+      type: string
+      substr: "/var/lib/apt/lists"
+
+  - id: apt-cache
+    desc: APT package cache directory
+    if:
+      type: string
+      substr: "/var/cache/apt"
+
+  - id: dpkg-status
+    desc: DPKG package status file
+    if:
+      type: string
+      substr: "/var/lib/dpkg/status"
+
+  # YUM/DNF (RHEL/Fedora)
+  - id: yum-cache
+    desc: YUM package cache directory
+    if:
+      type: string
+      substr: "/var/cache/yum"
+
+  - id: dnf-cache
+    desc: DNF package cache directory
+    if:
+      type: string
+      substr: "/var/cache/dnf"
+
+  - id: rpm-db
+    desc: RPM package database directory
+    if:
+      type: string
+      substr: "/var/lib/rpm"
+
+  # Pacman (Arch)
+  - id: pacman-db
+    desc: Pacman package database directory
+    if:
+      type: string
+      substr: "/var/lib/pacman"
+
+  - id: pacman-cache
+    desc: Pacman package cache directory
+    if:
+      type: string
+      substr: "/var/cache/pacman"
+
+  # APK (Alpine)
+  - id: apk-cache
+    desc: APK package cache directory
+    if:
+      type: string
+      substr: "/var/cache/apk"
+
+  - id: apk-db
+    desc: APK package database directory
+    if:
+      type: string
+      substr: "/lib/apk/db"

@@ -1,0 +1,47 @@
+traits:
+  - id: md5
+    desc: MD5 hashing functions
+    crit: notable
+    conf: 0.95
+    for: [macho, elf, pe]
+    if:
+      type: symbol
+      regex: "(?i)md5"
+
+  - id: sha1
+    desc: SHA1 hashing functions
+    crit: notable
+    conf: 0.95
+    for: [macho, elf, pe]
+    if:
+      type: symbol
+      regex: "(?i)sha1"
+
+  - id: sha256
+    desc: SHA256 hashing functions
+    crit: notable
+    conf: 0.95
+    for: [macho, elf, pe]
+    if:
+      type: symbol
+      regex: "(?i)\\bsha256\\b"
+
+  - id: sha512
+    desc: SHA512 hashing functions
+    crit: notable
+    conf: 0.95
+    for: [macho, elf, pe]
+    if:
+      type: symbol
+      regex: "(?i)sha512"
+
+composite_rules:
+  - id: message-digest
+    desc: Message digest/hashing functions
+    crit: notable
+    conf: 0.9
+    any:
+      - id: micro-behaviors/crypto/hash/digest::md5
+      - id: micro-behaviors/crypto/hash/digest::sha1
+      - id: micro-behaviors/crypto/hash/digest::sha256
+      - id: micro-behaviors/crypto/hash/digest::sha512

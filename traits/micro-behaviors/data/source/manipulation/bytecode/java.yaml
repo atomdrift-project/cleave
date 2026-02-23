@@ -1,0 +1,39 @@
+# Java Bytecode Manipulation
+# Traits for detecting manual manipulation of Java class file structures
+
+defaults:
+  for: [all]
+
+traits:
+  - id: constant-pool-tag-check-a
+    desc: Constant pool tag checks (7/9/10)
+    crit: notable
+    conf: 0.8
+    if:
+      type: raw
+      regex: 'tag\s*==\s*(7|9|10)\b'
+
+  - id: constant-pool-tag-check-b
+    desc: Constant pool tag checks (11/12/18)
+    crit: notable
+    conf: 0.8
+    if:
+      type: raw
+      regex: 'tag\s*==\s*(11|12|18)\b'
+
+  - id: manual-opcode-injection
+    desc: Manual injection of Java Opcodes (e.g. invokestatic=184)
+    crit: suspicious
+    conf: 0.8
+    if:
+      type: raw
+      regex: '(\(byte\)\s*184|\[\d+\]\s*=\s*\(byte\)\s*184)'
+
+composite_rules:
+  - id: constant-pool-tag-check
+    desc: Manual parsing of Java Class Constant Pool
+    crit: notable
+    conf: 0.8
+    any:
+      - id: constant-pool-tag-check-a
+      - id: constant-pool-tag-check-b

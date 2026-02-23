@@ -1,0 +1,246 @@
+# Credential Access - Browser Crypto Wallet Extension Theft
+# Detects targeting of cryptocurrency wallet browser extensions by their extension IDs
+# ATT&CK: T1555.003 (Credentials from Password Stores: Web Browsers)
+# MBC: B0028 (Credential Theft)
+
+defaults:
+  for: [all]
+
+traits:
+  # === Popular Wallet Extensions (by Chrome Extension ID) ===
+
+  - id: metamask
+    desc: MetaMask wallet extension ID
+    crit: suspicious
+    conf: 0.9
+    attack: "T1555.003"
+    mbc: "B0028"
+    if:
+      type: string
+      # MetaMask Chrome extension ID
+      substr: "nkbihfbeogaeaoehlefnkodbefgpgknn"
+
+  - id: phantom
+    desc: Phantom wallet extension ID (Solana)
+    crit: suspicious
+    conf: 0.9
+    attack: "T1555.003"
+    mbc: "B0028"
+    if:
+      type: string
+      substr: "bfnaelmomeimhlpmgjnjophhpkkoljpa"
+
+  - id: trust-wallet
+    desc: Trust Wallet extension ID
+    crit: suspicious
+    conf: 0.9
+    attack: "T1555.003"
+    mbc: "B0028"
+    if:
+      type: string
+      substr: "egjidjbpglichdcondbcbdnbeeppgdph"
+
+  - id: binance
+    desc: Binance Wallet extension ID
+    crit: suspicious
+    conf: 0.9
+    attack: "T1555.003"
+    mbc: "B0028"
+    if:
+      type: string
+      substr: "fhbohimaelbohpjbbldcngcnapndodjp"
+
+  - id: coinbase
+    desc: Coinbase Wallet extension ID
+    crit: suspicious
+    conf: 0.9
+    attack: "T1555.003"
+    mbc: "B0028"
+    if:
+      type: string
+      substr: "hnfanknocfeofbddgcijnmhnfnkdnaad"
+
+  - id: tronlink
+    desc: TronLink wallet extension ID
+    crit: suspicious
+    conf: 0.9
+    attack: "T1555.003"
+    mbc: "B0028"
+    if:
+      type: string
+      substr: "ibnejdfjmmkpcnlpebklmnkoeoihofec"
+
+  - id: nami
+    desc: Nami wallet extension ID (Cardano)
+    crit: suspicious
+    conf: 0.9
+    attack: "T1555.003"
+    mbc: "B0028"
+    if:
+      type: string
+      substr: "lpfcbjknijpeeillifnkikgncikgfhdo"
+
+  - id: temple
+    desc: Temple wallet extension ID (Tezos)
+    crit: suspicious
+    conf: 0.9
+    attack: "T1555.003"
+    mbc: "B0028"
+    if:
+      type: string
+      substr: "ookjlbkiijinhpmnjffcofjonbfbgaoc"
+
+  - id: petra
+    desc: Petra wallet extension ID (Aptos)
+    crit: suspicious
+    conf: 0.9
+    attack: "T1555.003"
+    mbc: "B0028"
+    if:
+      type: string
+      substr: "ejjladinnckdgjemekebdpeokbikhfci"
+
+  - id: martian
+    desc: Martian wallet extension ID (Aptos)
+    crit: suspicious
+    conf: 0.9
+    attack: "T1555.003"
+    mbc: "B0028"
+    if:
+      type: string
+      substr: "efbglgofoippbgcjepnhiblaibcnclgk"
+
+  - id: pontem
+    desc: Pontem wallet extension ID (Aptos)
+    crit: suspicious
+    conf: 0.9
+    attack: "T1555.003"
+    mbc: "B0028"
+    if:
+      type: string
+      substr: "phkbamefinggmakgklpkljjmgibohnba"
+
+  - id: exodus
+    desc: Exodus wallet extension ID
+    crit: suspicious
+    conf: 0.9
+    attack: "T1555.003"
+    mbc: "B0028"
+    if:
+      type: string
+      substr: "aholpfdialjgjfhomihkjbmgjidlcdno"
+
+  - id: keplr
+    desc: Keplr wallet extension ID (Cosmos)
+    crit: suspicious
+    conf: 0.9
+    attack: "T1555.003"
+    mbc: "B0028"
+    if:
+      type: string
+      substr: "dmkamcknogkgcdfhhbddcghachkejeap"
+
+  - id: rabby
+    desc: Rabby wallet extension ID
+    crit: suspicious
+    conf: 0.9
+    attack: "T1555.003"
+    mbc: "B0028"
+    if:
+      type: string
+      substr: "acmacodkjbdgmoleebolmdjonilkdbch"
+
+  - id: brave
+    desc: Brave Wallet extension ID
+    crit: suspicious
+    conf: 0.9
+    attack: "T1555.003"
+    mbc: "B0028"
+    if:
+      type: string
+      substr: "odbfpeeihdkbihmopkbjmoonfanlbfcl"
+
+  # === Desktop/Universal Wallets (referenced in strings) ===
+
+  - id: coinomi
+    desc: Coinomi wallet path/reference
+    crit: suspicious
+    conf: 0.8
+    attack: "T1555.005"
+    if:
+      type: string
+      regex: "(?i)Coinomi/wallets"
+
+  - id: atomic
+    desc: Atomic Wallet path/reference
+    crit: suspicious
+    conf: 0.8
+    attack: "T1555.005"
+    if:
+      type: string
+      regex: "(?i)atomic/Local Storage"
+
+  - id: electrum
+    desc: Electrum wallet path/reference
+    crit: suspicious
+    conf: 0.8
+    attack: "T1555.005"
+    if:
+      type: string
+      regex: "(?i)\\.electrum/wallets"
+
+composite_rules:
+  # === Helper composites ===
+  - id: browser-wallet-extensions
+    desc: Browser-based crypto wallet extension IDs
+    any:
+      - id: metamask
+      - id: phantom
+      - id: trust-wallet
+      - id: binance
+      - id: coinbase
+      - id: tronlink
+      - id: nami
+      - id: temple
+      - id: petra
+      - id: martian
+      - id: pontem
+      - id: exodus
+      - id: keplr
+      - id: rabby
+      - id: brave
+    crit: notable
+
+  - id: desktop-wallets
+    desc: Desktop wallet path references
+    any:
+      - id: coinomi
+      - id: atomic
+      - id: electrum
+    crit: notable
+
+  # Migrated from YARA - Detects multiple wallet extension IDs (strong indicator of wallet stealer)
+  - id: multi-wallet-targeting
+    desc: Multiple crypto wallet extensions targeted
+    crit: suspicious
+    conf: 0.95
+    attack: "T1555.003"
+    mbc: "B0028"
+    for: [python, javascript, elf, pe, macho]
+    needs: 3
+    any:
+      - id: metamask
+      - id: phantom
+      - id: trust-wallet
+      - id: binance
+      - id: coinbase
+      - id: tronlink
+      - id: exodus
+      - id: keplr
+      - id: petra
+      - id: martian
+      - id: pontem
+      - id: nami
+      - id: temple
+      - id: rabby
+      - id: brave

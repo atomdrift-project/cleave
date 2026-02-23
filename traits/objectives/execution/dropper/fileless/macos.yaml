@@ -1,0 +1,24 @@
+defaults:
+  for: [shell]
+  platforms: [macos]
+  attack: "T1059.002"
+
+traits:
+  - id: curl-osascript
+    desc: "Piping curl to osascript"
+    crit: suspicious
+    conf: 0.95
+    attack: "T1059.002"
+    if:
+      type: raw
+      regex: 'curl\s+.{0,300}\|\s*osascript'
+
+composite_rules:
+  - id: fileless-dropper
+    desc: "macOS fileless dropper (curl | osascript -)"
+    crit: hostile
+    conf: 1.0
+    attack: "T1059.002"
+    all:
+      - { id: curl-osascript }
+      - { id: micro-behaviors/process/create/script::osascript-stdin }

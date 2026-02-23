@@ -1,0 +1,18 @@
+traits:
+  - id: process-binding-evals
+    desc: Access to process.binding('evals') (legacy VM usage)
+    crit: suspicious
+    conf: 0.95
+    for: [javascript, typescript]
+    if:
+      type: raw
+      regex: "process\\.binding\\s*\\(\\s*['\"]evals['\"]\\s*\\)"
+
+  - id: process-binding-natives
+    desc: Access to process.binding('natives') (legacy internal access)
+    crit: suspicious
+    conf: 0.95
+    for: [javascript, typescript]
+    if:
+      type: raw
+      regex: "process\\.binding\\s*\\(\\s*['\"]natives['\"]\\s*\\)"

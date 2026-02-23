@@ -1,0 +1,33 @@
+# System Library Path References (Linux)
+# Standard library directory paths
+# MBC: E1083 (File and Directory Discovery)
+# ATT&CK: T1083 (File and Directory Discovery)
+
+defaults:
+  for: [c, elf, shell]
+  platforms: [linux]
+  crit: baseline
+  mbc: "E1083"
+  attack: "T1083"
+
+traits:
+  - id: lib-path
+    desc: Reference to /lib/ directory
+    conf: 0.4
+    if:
+      type: string
+      regex: "^/lib(32|64)?/$"
+
+  - id: usr-lib-path
+    desc: Reference to /usr/lib directory
+    conf: 0.4
+    if:
+      type: string
+      regex: "^/usr/lib(32|64)?/$"
+
+  - id: usr-local-lib-path
+    desc: Reference to /usr/local/lib
+    conf: 0.4
+    if:
+      type: string
+      exact: "/usr/local/lib/"

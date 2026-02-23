@@ -1,0 +1,50 @@
+# Build System - CMAKE
+
+defaults:
+  for: [all]
+
+traits:
+  # === CMake micro-behaviors ===
+  - id: cmakefiles
+    desc: CMakeFiles directory
+    crit: notable
+    conf: 0.85
+    if:
+      type: string
+      substr: "CMakeFiles"
+
+  - id: cmake-min-required
+    desc: cmake_minimum_required directive
+    crit: notable
+    conf: 0.85
+    if:
+      type: string
+      substr: "cmake_minimum_required"
+
+  - id: cmake-prefix
+    desc: CMAKE_ variable prefix
+    crit: notable
+    conf: 0.85
+    if:
+      type: string
+      regex: "CMAKE_"
+
+  - id: cmakelists
+    desc: CMakeLists.txt file
+    crit: notable
+    conf: 0.85
+    if:
+      type: string
+      substr: "CMakeLists.txt"
+
+composite_rules:
+  # CMake composite (migrated from YARA)
+  - id: cmake
+    desc: Built with CMake
+    crit: notable
+    conf: 0.85
+    any:
+      - id: cmakefiles
+      - id: cmake-min-required
+      - id: cmake-prefix
+      - id: cmakelists

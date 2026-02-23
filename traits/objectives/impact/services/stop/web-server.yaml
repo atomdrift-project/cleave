@@ -1,0 +1,61 @@
+# Impact - Web Service Termination
+# ATT&CK: T1489 (Service Stop)
+
+defaults:
+  for: [all]
+  attack: "T1489"
+  mbc: "E1489"
+
+traits:
+  # Atomic regexes for high precision using raw content matching
+  - id: kill-httpd
+    desc: Kills httpd service
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: raw
+      regex: 'killall.{0,50}httpd'
+
+  - id: kill-apache
+    desc: Kills apache service
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: raw
+      regex: 'killall.{0,50}apache2?'
+
+  - id: kill-nginx
+    desc: Kills nginx service
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: raw
+      regex: 'killall.{0,50}nginx'
+
+composite_rules:
+  - id: kill-web-server-cmd
+    desc: Command to kill web server
+    crit: notable
+    conf: 0.8
+    any:
+      - id: kill-httpd
+      - id: kill-apache
+      - id: kill-nginx
+
+  - id: suspicious-context
+    desc: Suspicious binary characteristics
+    crit: notable
+    conf: 0.1
+    any:
+      - id: metadata/format::tiny-elf
+      - id: metadata/hardening::stripped-binary
+      - id: micro-behaviors/process/create/shell::system-fn
+      - id: micro-behaviors/process/terminate/tool::killall
+
+  - id: web-server-killer
+    desc: Tool explicitly designed to kill web servers
+    crit: hostile
+    conf: 0.95
+    all:
+      - id: kill-web-server-cmd
+      - id: suspicious-context

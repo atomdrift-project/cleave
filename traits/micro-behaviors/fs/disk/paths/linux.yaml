@@ -1,0 +1,28 @@
+# Disk and Block Device Paths (Linux)
+# Standard disk/block device paths and commands
+# MBC: E1082 (System Information Discovery)
+# ATT&CK: T1082 (System Information Discovery)
+
+defaults:
+  for: [c, elf, shell]
+  platforms: [linux]
+  crit: baseline
+  mbc: "E1082"
+  attack: "T1082"
+
+traits:
+  - id: sys-block
+    desc: /sys/block/ path
+    conf: 0.5
+    if:
+      type: string
+      substr: "/sys/block/"
+
+  - id: lsblk-cmd
+    desc: lsblk command
+    conf: 0.5
+    if:
+      type: string
+      substr: "lsblk"
+
+  # Removed blkid-cmd duplicate - use micro-behaviors/fs/device/blkid::blkid (symbol works for all file types)

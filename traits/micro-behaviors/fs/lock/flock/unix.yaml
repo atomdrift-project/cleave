@@ -1,0 +1,32 @@
+# File Locking - Unix
+# MBC: C0046 (Create File)
+# ATT&CK: T1083
+
+defaults:
+  for: [elf, macho, so, dylib, c]
+
+traits:
+  - id: flock-fn
+    desc: Apply or remove advisory lock
+    crit: baseline
+    conf: 0.66
+    if:
+      type: symbol
+      exact: "flock"
+
+  - id: lockf-fn
+    desc: Apply or remove advisory lock
+    crit: baseline
+    conf: 0.66
+    if:
+      type: symbol
+      exact: "lockf"
+
+composite_rules:
+  - id: flock
+    desc: Apply or remove advisory lock
+    crit: baseline
+    conf: 0.66
+    any:
+      - id: flock-fn
+      - id: lockf-fn

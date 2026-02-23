@@ -1,0 +1,63 @@
+# macOS-specific VM and Hardware Profiling
+# Detects checks for hardware properties commonly used for VM evasion on macOS
+# ATT&CK: T1497.001 (Virtualization/Sandbox Evasion: System Checks)
+
+defaults:
+  platforms: [macos]
+  for: [macho]
+  attack: "T1497.001"
+
+traits:
+  - id: sysctl-hw-model
+    desc: Checks hardware model via sysctl (hw.model)
+    crit: notable
+    conf: 0.8
+    if:
+      type: string
+      substr: "hw.model"
+
+  - id: sysctl-cpu-brand
+    desc: Checks CPU brand via sysctl (machdep.cpu.brand_string)
+    crit: notable
+    conf: 0.8
+    if:
+      type: string
+      substr: "machdep.cpu.brand_string"
+
+  - id: sysctl-boot-args
+    desc: Checks boot arguments (kern.bootargs)
+    crit: notable
+    conf: 0.8
+    if:
+      type: string
+      substr: "kern.bootargs"
+
+composite_rules:
+  - id: macos-vm-hardware-check
+    desc: "macOS hardware profiling (potential VM detection)"
+    crit: suspicious
+    conf: 0.85
+    downgrade:
+      any:
+        - id: metadata/signed/platform::apple
+    all:
+      - id: micro-behaviors/os/sysinfo/sysctl::sysctlbyname
+    any:
+      - id: sysctl-hw-model
+      - id: sysctl-cpu-brand
+      - id: sysctl-boot-args
+
+  - id: macos-evasive-hardware-fingerprint
+    desc: "Evasive macOS hardware fingerprinting (CPUID + RDTSC + sysctl)"
+    crit: suspicious
+    conf: 0.95
+    downgrade:
+      any:
+        - id: metadata/signed/platform::apple
+    all:
+      - id: macos-vm-hardware-check
+    needs: 1
+    any:
+      - id: metadata/format/x86::cpuid-instr
+      - id: objectives/anti-analysis/timing/evasion::rdtsc
+      - id: metadata/format/x86::xgetbv-instr

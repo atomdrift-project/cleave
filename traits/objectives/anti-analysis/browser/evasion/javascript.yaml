@@ -1,0 +1,32 @@
+# Browser Anti-Analysis - JavaScript
+# Detects anti-debugging and anti-inspection techniques in browser scripts
+# ATT&CK: T1497 (Virtualization/Sandbox Evasion)
+
+defaults:
+  for: [all]
+
+traits:
+  - id: js-devtools-detect
+    desc: Detects DevTools opening
+    crit: suspicious
+    conf: 0.85
+    if:
+      type: string
+      regex: 'window\.devtools|devtools\.open'
+
+  - id: js-disable-inspect
+    desc: Disables inspection hotkeys (F12, Ctrl+U)
+    crit: suspicious
+    conf: 0.85
+    if:
+      type: string
+      regex: 'e\.key\s*===?\s*["'']F12["'']|e\.ctrlKey\s*&&\s*e\.key\s*===?\s*["'']u["'']'
+
+composite_rules:
+  - id: js-browser-locking
+    desc: Browser anti-analysis locking (disable inspect + devtools)
+    crit: suspicious
+    conf: 0.9
+    all:
+      - id: js-devtools-detect
+      - id: js-disable-inspect

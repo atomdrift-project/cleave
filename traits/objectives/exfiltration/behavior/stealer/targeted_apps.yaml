@@ -1,0 +1,18 @@
+# Targeted Application Reconnaissance and Exfiltration
+# Detects reconnaissance explicitly targeting sensitive applications combined with exfiltration
+
+defaults:
+  for: [javascript, python, ruby, shell, pe, elf, macho]
+  crit: hostile
+
+composite_rules:
+  - id: targeted-app-recon-exfil
+    desc: "Reconnaissance targeting specific browsers/office apps combined with exfiltration"
+    conf: 1.0
+    all:
+      - id: micro-behaviors/process/enumerate/apps::browser-apps
+      - id: micro-behaviors/process/enumerate/apps::office-apps
+    any:
+      - id: micro-behaviors/communications/socket/connect::connect
+      - id: objectives/command-and-control/infrastructure/ip::hardcoded-ipv4-script
+      - id: objectives/command-and-control/network/beacon::direct-http-c2

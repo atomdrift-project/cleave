@@ -1,0 +1,54 @@
+# Stream cipher capability traits
+# Detects stream cipher implementations (ChaCha20, Salsa20, etc.)
+
+defaults:
+  for: [all]
+
+traits:
+  # ChaCha20/Salsa20 magic constant
+  - id: chacha-salsa-constant
+    desc: ChaCha20/Salsa20 cipher constant
+    crit: notable
+    conf: 0.95
+    if:
+      type: string
+      substr: "expand 32-byte k"
+
+  # Rust stream cipher block assertions
+  - id: rust-cipher-partial-block
+    desc: Rust stream cipher partial block
+    crit: notable
+    conf: 0.9
+    if:
+      type: string
+      substr: "self.partial_block.is_none()"
+
+  - id: rust-cipher-cached-blocks
+    desc: Rust stream cipher cached blocks
+    crit: notable
+    conf: 0.9
+    if:
+      type: string
+      regex: 'self\.num_cached_blocks\s*<\s*\d+'
+
+  - id: stream-cipher-error
+    desc: Stream cipher error type
+    crit: notable
+    conf: 0.85
+    if:
+      type: string
+      substr: "StreamCipherError"
+
+composite_rules:
+  # Rust stream cipher implementation - core constant is required
+  - id: rust-stream-cipher
+    desc: Rust stream cipher implementation
+    crit: notable
+    conf: 0.9
+    for: [elf, pe, macho]
+    all:
+      - id: chacha-salsa-constant
+    any:
+      - id: rust-cipher-partial-block
+      - id: rust-cipher-cached-blocks
+      - id: stream-cipher-error

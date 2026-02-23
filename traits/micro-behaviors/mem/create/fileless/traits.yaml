@@ -1,0 +1,41 @@
+traits:
+  - id: syscall-memfd-create
+    desc: Calls memfd_create syscall
+    crit: notable
+    conf: 0.8
+    platforms: [linux]
+    for: [elf]
+    if:
+      type: syscall
+      name: ["memfd_create"]
+
+  - id: nscreate-objectfile-memory
+    desc: NSCreateObjectFileImageFromMemory symbol
+    crit: suspicious
+    conf: 0.9
+    platforms: [macos]
+    for: [macho]
+    if:
+      type: symbol
+      exact: "NSCreateObjectFileImageFromMemory"
+
+composite_rules:
+  - id: fileless
+    desc: Fileless execution - memfd_create + execve
+    conf: 0.95
+    crit: suspicious
+    platforms: [linux]
+    for: [elf]
+    all:
+      - id: syscall-memfd-create
+      - id: micro-behaviors/process/create/shell::syscall-execve-linux
+
+  - id: fileless-macos-hostile
+    desc: Fileless execution with hidden tmp file on macOS
+    conf: 0.95
+    crit: suspicious
+    platforms: [macos]
+    for: [macho]
+    all:
+      - id: nscreate-objectfile-memory
+      - id: micro-behaviors/fs/path/temp::tmp-hidden-file

@@ -1,0 +1,38 @@
+# Threading and Concurrency Detection
+# Generic traits for detecting threading/concurrency primitives
+# NOTE: These are VERY common in any C/C++/Go binary. Only use in composites
+# with additional context that indicates malicious threading patterns.
+
+defaults:
+  for: [all]
+
+traits:
+  # POSIX threading - use symbol matching for higher confidence
+  - id: pthread
+    desc: pthread threading library
+    crit: baseline
+    conf: 0.5
+    if:
+      type: symbol
+      # Match pthread_create which is more specific than generic "pthread" string
+      regex: "pthread_create"
+
+  # Go concurrency - only meaningful in non-Go binaries (Go runtime always has this)
+  - id: goroutine
+    desc: Go goroutine concurrency
+    crit: baseline
+    conf: 0.5
+    for: [elf, macho, pe]
+    if:
+      type: string
+      # Match goroutine stack traces or runtime patterns
+      regex: "goroutine\\s+\\d+|runtime\\.goroutine"
+
+composite_rules:
+  # Helper: Threading/concurrency indicators
+  - id: concurrent
+    desc: Threading/concurrency indicators
+    crit: baseline
+    any:
+      - id: pthread
+      - id: goroutine

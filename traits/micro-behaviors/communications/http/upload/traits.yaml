@@ -1,0 +1,84 @@
+# HTTP Upload Patterns
+
+defaults:
+  for: [elf, macho, so, dylib, pe, dll, c]
+
+traits:
+  # === HTTP Upload Symbols ===
+  - id: http-upload-symbol-a
+    desc: HTTP file upload symbol family A
+    crit: notable
+    conf: 0.6
+    if:
+      type: symbol
+      # Match HTTP upload functions, not substrings. Require underscore context or exact match.
+      regex: "(^|_)http[_-]?upload|curl_easy_upload"
+  - id: http-upload-symbol-b
+    desc: HTTP file upload symbol family B
+    crit: notable
+    conf: 0.6
+    if:
+      type: symbol
+      regex: "http_put($|_)"
+
+  # === HTTP Upload String Patterns ===
+  # === ZIP upload atomic ===
+  - id: curl-zip
+    desc: curl with .zip
+    crit: notable
+    conf: 0.6
+    if:
+      type: string
+      regex: 'curl.{0,50}\.zip'
+
+  - id: post-zip
+    desc: POST with .zip
+    crit: notable
+    conf: 0.6
+    if:
+      type: string
+      regex: 'POST.{0,50}\.zip'
+
+  - id: upload-zip
+    desc: upload .zip
+    crit: notable
+    conf: 0.6
+    if:
+      type: string
+      regex: 'upload.{0,50}\.zip'
+
+  - id: send-zip
+    desc: send .zip
+    crit: notable
+    conf: 0.6
+    if:
+      type: string
+      regex: 'send.{0,50}\.zip'
+
+  - id: curl-upload-file
+    desc: curl --upload-file flag
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: raw
+      regex: "curl\\s+.{0,100}--upload-file\\b"
+
+composite_rules:
+  - id: http-upload-symbol
+    desc: HTTP file upload symbol
+    crit: notable
+    conf: 0.6
+    any:
+      - id: http-upload-symbol-a
+      - id: http-upload-symbol-b
+  # ZIP upload
+  - id: zip-upload
+    desc: ZIP archive upload
+    crit: notable
+    conf: 0.75
+    any:
+      - id: curl-zip
+      - id: post-zip
+      - id: upload-zip
+      - id: send-zip
+      - id: curl-upload-file

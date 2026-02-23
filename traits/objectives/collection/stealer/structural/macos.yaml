@@ -1,0 +1,32 @@
+# Mach-O Stealer Structural Detection
+# Detects Mach-O stealers via structural anomalies and behavior
+# This rule is designed to catch stealers even when string obfuscation hides specific paths
+
+defaults:
+  platforms: [macos]
+  for: [macho]
+  mbc: "B0028" # Collection::Information Stealer
+
+composite_rules:
+  - id: macho-stealer-structural
+    desc: "Mach-O information stealer (Structural + Behavioral)"
+    crit: suspicious
+    conf: 0.8
+    # Requires a dominant section (common in packed stealers)
+    # plus several indicators of targeted theft behavior.
+    all:
+      - id: objectives/anti-static/obfuscation/binary-metrics::dominant-section
+    needs: 3
+    any:
+      # Obfuscation indicators
+      - id: metadata/binary/structure::minimal-string-count
+      - id: objectives/anti-static/obfuscation/binary-metrics::high-overall-entropy
+
+      # Targeted behaviors (Atomic or composite)
+      - id: objectives/credential-access/phishing/lure::display-dialog-password
+      - id: objectives/credential-access/validation/check::csidentity-password-auth
+      - id: objectives/discovery/host/fingerprint::macos-hardware-uuid
+      - id: micro-behaviors/fs/file/binary::fcopyfile-macos
+      - id: micro-behaviors/communications/download/curl::libcurl-http
+      - id: objectives/collection/notes/app::notestore-db
+      - id: micro-behaviors/data/browser/access::telegram-keepcoder-path

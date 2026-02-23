@@ -1,0 +1,25 @@
+# Exception Handler Registration
+# Register custom exception handling
+
+defaults:
+  for: ["pe", "dll"]
+  platforms: ["windows"]
+
+traits:
+  # === Function Table Registration ===
+  - id: rtl-add-function-table
+    desc: Register exception handling function table
+    crit: notable
+    conf: 0.95
+    attack: "T1006"
+    if:
+      type: symbol
+      exact: "RtlAddFunctionTable"
+
+  - id: rtl-delete-function-table
+    desc: Unregister exception function table
+    crit: notable
+    conf: 0.95
+    if:
+      type: symbol
+      exact: "RtlDeleteFunctionTable"

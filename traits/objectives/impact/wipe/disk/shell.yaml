@@ -1,0 +1,234 @@
+# Disk Wiper Detection - Shell Scripts
+# MBC: E1561 (Disk Wipe)
+# ATT&CK: T1561.002 (Disk Structure Wipe)
+#
+# Detects shell-based disk wipers like the Viasat attack (2022) pattern:
+# - Enumerate mounted devices via /proc/mounts
+# - Write zeros to devices with dd
+# - Often uses parallel execution (xargs -P) for speed
+
+traits:
+  # Root/privilege checks using AST-extracted strings
+  - id: uid-var
+    desc: Shell UID variable reference
+    crit: notable
+    conf: 0.7
+    for: [shell]
+    if:
+      type: string
+      regex: '^\$\{?[EU]?UID\}?$'
+
+  # Device path patterns from grep
+  - id: dev-grep-pattern
+    desc: Device grep pattern (^/dev)
+    crit: notable
+    conf: 0.7
+    for: [shell]
+    if:
+      type: string
+      substr: "^/dev"
+
+  # xargs symbol - used for parallel execution
+  - id: xargs-cmd
+    desc: xargs command usage
+    crit: notable
+    conf: 0.6
+    for: [shell]
+    if:
+      type: symbol
+      exact: "xargs"
+
+
+  # Content-based patterns (raw file search)
+  - id: uid-check-content
+    desc: Shell UID check pattern
+    crit: notable
+    conf: 0.8
+    for: [shell]
+    if:
+      type: raw
+      regex: '"\$\{UID\}"\s*==\s*0'
+
+  # Removed proc-mounts-content duplicate - use micro-behaviors/fs/proc/mounts/linux::mounts (string type works for file paths)
+
+  # YARA-based patterns for content that isn't extracted by AST
+  - id: dd-dev-zero
+    desc: dd with /dev/zero source
+    crit: suspicious
+    conf: 0.85
+    attack: "T1561.002"
+    for: [shell]
+    if:
+      type: yara
+      source: |
+        rule dd_dev_zero {
+          strings:
+            $dd_zero = /dd\s+[^\n]*if=\/dev\/zero[^\n]*of=\/dev\// ascii
+            $dd_urandom = /dd\s+[^\n]*if=\/dev\/u?random[^\n]*of=\/dev\// ascii
+          condition:
+            any of them
+        }
+
+  - id: dd-of-dev
+    desc: dd writing to block device
+    crit: suspicious
+    conf: 0.85
+    attack: "T1561.002"
+    for: [shell]
+    if:
+      type: yara
+      source: |
+        rule dd_to_device {
+          strings:
+            $dd_sd = /dd\s+[^\n]*of=\/dev\/[shv]d[a-z]/ ascii
+            $dd_xvd = /dd\s+[^\n]*of=\/dev\/xvd[a-z]/ ascii
+            $dd_mmc = /dd\s+[^\n]*of=\/dev\/mmcblk[0-9]/ ascii
+            $dd_nvme = /dd\s+[^\n]*of=\/dev\/nvme[0-9]/ ascii
+            $dd_mapper = /dd\s+[^\n]*of=\/dev\/mapper\// ascii
+            $dd_disk = /dd\s+[^\n]*of=\/dev\/disk\// ascii
+            $dd_dm = /dd\s+[^\n]*of=\/dev\/dm-[0-9]/ ascii
+            $dd_mtd = /dd\s+[^\n]*of=\/dev\/mtd[0-9]/ ascii
+            $dd_mem = /dd\s+[^\n]*of=\/dev\/(k?mem|port)/ ascii
+          condition:
+            any of them
+        }
+
+  - id: proc-mounts-read
+    desc: Read /proc/mounts
+    crit: notable
+    conf: 0.7
+    for: [shell]
+    if:
+      type: yara
+      source: |
+        rule proc_mounts {
+          strings:
+            $mounts = "/proc/mounts" ascii
+            $mountinfo = "/proc/self/mountinfo" ascii
+          condition:
+            any of them
+        }
+
+  - id: xargs-parallel-flag
+    desc: xargs with parallel flag
+    crit: notable
+    conf: 0.7
+    for: [shell]
+    if:
+      type: yara
+      source: |
+        rule xargs_parallel {
+          strings:
+            $xargs_p = /xargs\s+[^\n]*-P\s*\d*/ ascii
+          condition:
+            $xargs_p
+        }
+
+  - id: uid-check-pattern
+    desc: Shell root privilege check
+    crit: notable
+    conf: 0.8
+    for: [shell]
+    if:
+      type: yara
+      source: |
+        rule uid_check {
+          strings:
+            $uid1 = /\$\{?UID\}?\s*(==|!=|-eq|-ne)\s*0/ ascii
+            $uid2 = /\$\{?EUID\}?\s*(==|!=|-eq|-ne)\s*0/ ascii
+            $uid3 = /\$\(id\s+-u\)\s*(==|!=|-eq|-ne)\s*0/ ascii
+          condition:
+            any of them
+        }
+
+  - id: xargs-dd-pipeline
+    desc: xargs piping to dd (wiper)
+    crit: suspicious
+    conf: 0.9
+    attack: "T1561.002"
+    for: [shell]
+    if:
+      type: yara
+      source: |
+        rule xargs_dd_wipe {
+          strings:
+            $pipeline = /xargs\s+[^\n]*dd\s+[^\n]*\/dev\/zero/ ascii
+          condition:
+            $pipeline
+        }
+
+composite_rules:
+  # Root privilege check composite
+  - id: root-check
+    desc: Shell root privilege check
+    crit: notable
+    conf: 0.75
+    for: [shell]
+    any:
+      - id: uid-var
+      - id: uid-check-pattern
+
+  # Device enumeration composite
+  - id: device-enum
+    desc: Block device enumeration
+    crit: notable
+    conf: 0.7
+    for: [shell]
+    any:
+      - id: dev-grep-pattern
+      - id: proc-mounts-read
+      - id: micro-behaviors/fs/proc/mounts::mounts
+
+  # Destructive dd composite
+  - id: dd-destructive
+    desc: Destructive dd patterns
+    crit: suspicious
+    conf: 0.85
+    mbc: "E1561"
+    attack: "T1561.002"
+    for: [shell]
+    any:
+      - id: dd-dev-zero
+      - id: dd-of-dev
+      - id: xargs-dd-pipeline
+      - id: objectives/impact/wipe/disk::dd-zero
+      - id: objectives/impact/wipe/disk::dd-random
+
+  # Parallel execution
+  - id: parallel-exec
+    desc: Parallel execution pattern
+    crit: notable
+    conf: 0.7
+    for: [shell]
+    any:
+      - id: xargs-cmd
+      - id: xargs-parallel-flag
+
+  # HOSTILE: Full wiper pattern with parallel execution
+  # Complexity: all(4) = 4 >= 4 required
+  - id: wiper-full
+    desc: Disk wiper with parallel exec
+    crit: hostile
+    conf: 0.95
+    mbc: "E1561"
+    attack: "T1561.002"
+    for: [shell]
+    all:
+      - id: root-check
+      - id: device-enum
+      - id: dd-destructive
+      - id: parallel-exec
+
+  # HOSTILE: Wiper without parallel (still dangerous)
+  # Complexity: all(3) + file_types(1) = 4 >= 4 required
+  - id: wiper
+    desc: Disk wiper detected
+    crit: hostile
+    conf: 0.90
+    mbc: "E1561"
+    attack: "T1561.002"
+    for: [shell]
+    all:
+      - id: root-check
+      - id: device-enum
+      - id: dd-destructive

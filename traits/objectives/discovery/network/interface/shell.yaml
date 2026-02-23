@@ -1,0 +1,45 @@
+# Shell Command Network Discovery
+# ATT&CK: T1016 (Network Configuration Discovery)
+
+traits:
+  - id: exec-ifconfig
+    desc: execSync ifconfig command
+    crit: notable
+    conf: 0.7
+    attack: "T1016"
+    for: [javascript, typescript]
+    if:
+      type: string
+      regex: "exec(Sync)?\\(['\"]ifconfig['\"]"
+
+  - id: exec-ip-addr
+    desc: execSync ip addr command
+    crit: notable
+    conf: 0.7
+    attack: "T1016"
+    for: [javascript, typescript]
+    if:
+      type: string
+      regex: "exec(Sync)?\\(['\"]ip addr['\"]"
+
+  - id: exec-ip-a
+    desc: execSync ip a command
+    crit: notable
+    conf: 0.7
+    attack: "T1016"
+    for: [javascript, typescript]
+    if:
+      type: string
+      regex: "exec(Sync)?\\(['\"]ip a['\"]"
+
+composite_rules:
+  - id: ifconfig
+    desc: ifconfig network configuration discovery
+    crit: suspicious
+    conf: 0.85
+    attack: "T1016"
+    for: [javascript, typescript]
+    any:
+      - id: exec-ifconfig
+      - id: exec-ip-addr
+      - id: exec-ip-a

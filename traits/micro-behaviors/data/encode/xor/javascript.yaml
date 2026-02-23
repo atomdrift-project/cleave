@@ -1,0 +1,45 @@
+# JavaScript XOR Obfuscation
+# Detects specific XOR patterns used in JScript malware (e.g., Nemucod)
+
+traits:
+  - id: js-xor-cyclic-pattern
+    desc: JavaScript cyclic XOR pattern (e.g. key[i %
+    crit: suspicious
+    conf: 0.85
+    for: [javascript]
+    if:
+      type: ast
+      language: javascript
+      query: |
+        (binary_expression
+          operator: "^"
+          right: (call_expression
+            function: (identifier) @fn
+            arguments: (arguments
+              (string)
+              (binary_expression
+                operator: "%"
+              )
+            )
+          )
+        )
+
+  - id: js-xor-dynamic-char-at
+    desc: JavaScript dynamic charCodeAt access (often for XOR
+    crit: notable
+    for: [javascript]
+    if:
+      type: ast
+      language: javascript
+      query: |
+        (call_expression
+          function: (member_expression
+            property: (property_identifier) @prop
+            (#match? @prop "^(charCodeAt|charAt)$")
+          )
+          arguments: (arguments
+            (binary_expression
+              operator: "%"
+            )
+          )
+        )

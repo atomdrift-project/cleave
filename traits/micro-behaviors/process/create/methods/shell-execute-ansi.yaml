@@ -1,0 +1,14 @@
+# ShellExecute ANSI variant - often seen in malware to reduce strings
+defaults:
+  for: ["pe", "dll"]
+  platforms: ["windows"]
+
+traits:
+  - id: shell-execute-a
+    desc: Execute shell command (ShellExecuteA)
+    crit: notable
+    conf: 0.75
+    attack: "T1059.001"
+    if:
+      type: symbol
+      exact: "ShellExecuteA"

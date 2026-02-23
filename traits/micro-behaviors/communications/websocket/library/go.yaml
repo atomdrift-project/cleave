@@ -1,0 +1,43 @@
+# Go WebSocket Libraries
+# ATT&CK: T1071.001 (Application Layer Protocol: Web Protocols)
+
+defaults:
+  platforms: [all]
+  for: [elf, macho]
+  attack: "T1071.001"
+  mbc: "C0002"
+
+traits:
+  - id: gorilla-websocket
+    desc: Gorilla WebSocket library (Go)
+    crit: notable
+    conf: 0.75
+    if:
+      type: string
+      regex: "github\\.com/gorilla/websocket"
+
+  - id: nhooyr-websocket
+    desc: nhooyr.io WebSocket library (Go)
+    crit: notable
+    conf: 0.75
+    if:
+      type: string
+      regex: "nhooyr\\.io/websocket"
+
+  - id: golang-websocket
+    desc: golang.org/x/net/websocket (Go)
+    crit: notable
+    conf: 0.75
+    if:
+      type: string
+      regex: "golang\\.org/x/net/websocket"
+
+composite_rules:
+  - id: go-websocket-library
+    desc: Go WebSocket library usage
+    crit: notable
+    conf: 0.8
+    any:
+      - id: gorilla-websocket
+      - id: nhooyr-websocket
+      - id: golang-websocket

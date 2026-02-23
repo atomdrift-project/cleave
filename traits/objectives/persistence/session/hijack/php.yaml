@@ -1,0 +1,90 @@
+# PHP Session Persistence Traits
+# MBC: B0028 (Persistence)
+# ATT&CK: T1071
+
+defaults:
+  for: [all]
+
+traits:
+  - id: start
+    desc: PHP session initialization for state
+    crit: notable
+    conf: 0.7
+    mbc: "B0028"
+    for: [php]
+    if:
+      type: string
+      substr: session_start
+
+  - id: destroy
+    desc: PHP session destruction
+    crit: notable
+    conf: 0.7
+    for: [php]
+    if:
+      type: string
+      substr: session_destroy
+
+  - id: regenerate
+    desc: PHP session ID regeneration
+    crit: notable
+    conf: 0.75
+    for: [php]
+    if:
+      type: string
+      substr: session_regenerate_id
+
+  - id: id-access
+    desc: Direct session ID manipulation
+    crit: suspicious
+    conf: 0.8
+    mbc: "B0028"
+    for: [php]
+    if:
+      type: string
+      regex: "session_id\\s*\\("
+
+  - id: no-time-limit
+    desc: Disables PHP script time limit
+    crit: notable
+    conf: 0.85
+    if:
+      type: ast
+      kind: call
+      exact: "set_time_limit"
+
+  - id: ignore-abort
+    desc: Ignores client abort (webshell indicator)
+    crit: notable
+    conf: 0.85
+    if:
+      type: ast
+      kind: call
+      exact: "ignore_user_abort"
+
+  - id: output-buffering
+    desc: Uses output buffering (potential evasion)
+    crit: notable
+    conf: 0.7
+    if:
+      type: ast
+      kind: call
+      exact: "ob_start"
+
+  - id: error-reporting-off
+    desc: Disables error reporting (stealth)
+    crit: notable
+    conf: 0.8
+    if:
+      type: ast
+      kind: call
+      exact: "error_reporting"
+
+  - id: display-errors-off
+    desc: Disables error display (stealth)
+    crit: notable
+    conf: 0.8
+    if:
+      type: ast
+      node: member_call_expression
+      exact: "ini_set"

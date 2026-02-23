@@ -1,0 +1,166 @@
+# Shebang line detection - always at file offset 0
+#
+# These traits detect interpreter directives at the start of script files.
+# Using
+# not embedded strings or comments mentioning interpreter paths.
+
+traits:
+  # Shell interpreters
+  - id: sh
+    desc: POSIX shell shebang line
+    crit: baseline
+    conf: 1.0
+    for: [shell, all]
+    if:
+      type: raw
+      regex: "^#!\\s*/bin/sh"
+
+  - id: bash
+    desc: Bash shell shebang line
+    crit: baseline
+    conf: 1.0
+    for: [shell, all]
+    if:
+      type: raw
+      regex: "^#!\\s*(/usr)?/bin/bash"
+
+  - id: zsh
+    desc: Zsh shell shebang line
+    crit: baseline
+    conf: 1.0
+    for: [shell, all]
+    if:
+      type: raw
+      regex: "^#!\\s*(/usr)?/bin/zsh"
+
+  - id: dash
+    desc: Dash shell shebang line
+    crit: baseline
+    conf: 1.0
+    for: [shell, all]
+    if:
+      type: raw
+      regex: "^#!\\s*/bin/dash"
+
+  # Python interpreters
+  - id: python
+    desc: Python shebang line (unversioned)
+    crit: baseline
+    conf: 1.0
+    for: [python, all]
+    if:
+      type: raw
+      regex: "^#!\\s*(/usr)?/bin/(env\\s+)?python\\s*$"
+
+  - id: python2
+    desc: Python 2 shebang line
+    crit: baseline
+    conf: 1.0
+    for: [python, all]
+    if:
+      type: raw
+      regex: "^#!\\s*(/usr)?/bin/(env\\s+)?python2"
+
+  - id: python3
+    desc: Python 3 shebang line
+    crit: baseline
+    conf: 1.0
+    for: [python, all]
+    if:
+      type: raw
+      regex: "^#!\\s*(/usr)?/bin/(env\\s+)?python3"
+
+  # Other scripting languages
+  - id: perl
+    desc: Perl shebang line
+    crit: baseline
+    conf: 1.0
+    for: [perl, all]
+    if:
+      type: raw
+      regex: "^#!\\s*((/usr)?/bin/(env\\s+)?|\\./)perl"
+
+  - id: ruby
+    desc: Ruby shebang line
+    crit: baseline
+    conf: 1.0
+    for: [ruby, all]
+    if:
+      type: raw
+      regex: "^#!\\s*(/usr)?/bin/(env\\s+)?ruby"
+
+  - id: php
+    desc: PHP shebang line
+    crit: baseline
+    conf: 1.0
+    for: [php, all]
+    if:
+      type: raw
+      regex: "^#!\\s*(/usr)?/bin/(env\\s+)?php"
+
+  - id: node
+    desc: Node.js shebang line
+    crit: baseline
+    conf: 1.0
+    for: [javascript, all]
+    if:
+      type: raw
+      regex: "^#!\\s*(/usr)?/bin/(env\\s+)?node"
+
+  - id: lua
+    desc: Lua shebang line
+    crit: baseline
+    conf: 1.0
+    for: [all]
+    if:
+      type: raw
+      regex: "^#!\\s*(/usr)?/bin/(env\\s+)?lua"
+
+  - id: awk
+    desc: AWK shebang line
+    crit: baseline
+    conf: 1.0
+    for: [shell, all]
+    if:
+      type: raw
+      regex: "^#!\\s*(/usr)?/bin/(env\\s+)?(g|m|n)?awk"
+
+  - id: osascript
+    desc: AppleScript/JXA shebang line
+    crit: baseline
+    conf: 1.0
+    platforms: [macos]
+    for: [all]
+    if:
+      type: raw
+      regex: "^#!\\s*(/usr)?/bin/(env\\s+)?osascript"
+
+  # Generic env-based shebang
+  - id: env-interpreter
+    desc: Generic env-based shebang line
+    crit: baseline
+    conf: 0.9
+    for: [all]
+    if:
+      type: raw
+      regex: "^#!\\s*/usr/bin/env\\s+\\w+"
+
+  # Suspicious shebangs
+  - id: hidden-interpreter
+    desc: Shebang with path traversal or unusual location
+    crit: suspicious
+    conf: 0.85
+    for: [all]
+    if:
+      type: raw
+      regex: "^#!\\s*(/tmp|/var/tmp|/dev/shm|\\.\\./)"
+
+  - id: base64-encoded-shebang
+    desc: Base64-encoded script with shebang after decode
+    crit: suspicious
+    conf: 0.8
+    for: [all]
+    if:
+      type: encoded
+      encoding: base64
+      regex: "^#!\\s*/[a-z]"

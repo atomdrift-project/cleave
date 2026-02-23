@@ -1,0 +1,33 @@
+# macOS JXA Phishing UI Traits
+# Detects UI elements used for credential theft (fake password prompts)
+# ATT&CK: T1056.002 (GUI Input Capture)
+
+defaults:
+  platforms: [macos]
+  for: [javascript, applescript, shell, python, ruby, macho]
+
+traits:
+  - id: jxa-password-prompt
+    desc: "JXA dialog requesting hidden input (password)"
+    crit: suspicious
+    conf: 0.9
+    mbc: "B0032" # Obfuscation/UI
+    if:
+      type: raw
+      substr: "hiddenAnswer"
+
+  - id: jxa-dialog-icon
+    desc: "JXA dialog with custom icon (spoofing)"
+    crit: notable
+    conf: 0.7
+    if:
+      type: raw
+      substr: "withIcon"
+
+  - id: jxa-display-dialog
+    desc: "JXA displayDialog (UI creation)"
+    crit: notable
+    conf: 0.7
+    if:
+      type: raw
+      substr: "displayDialog"

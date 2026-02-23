@@ -1,0 +1,11 @@
+defaults:
+  for: [pe]
+
+composite_rules:
+  - id: ocra-ipv4-port-stub
+    desc: OCRA stub with IPv4 endpoint
+    crit: suspicious
+    conf: 0.95
+    all:
+      - id: objectives/anti-analysis/packing/ocra::ocra-packed-executable
+      - id: objectives/command-and-control/infrastructure/network::ipv4-port-string

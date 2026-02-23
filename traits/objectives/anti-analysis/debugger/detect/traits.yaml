@@ -1,0 +1,110 @@
+# Debugger Detection
+# MBC: OB0001 (Anti-Behavioral Analysis) → B0001 (Debugger Detection)
+# ATT&CK: T1622 (Debugger Evasion)
+# NOTE: /proc/self/status is defined in fs/proc/info/linux.yaml (process-self-status)
+
+defaults:
+  for: [all]
+
+traits:
+  # === ptrace constant atomic indicators ===
+  - id: ptrace-traceme
+    desc: PTRACE_TRACEME constant
+    crit: suspicious
+    mbc: "B0001.m01"
+    attack: "T1622"
+    conf: 0.7
+    if:
+      type: string
+      substr: "PTRACE_TRACEME"
+    platforms: [linux, unix]
+
+  - id: pt-deny-attach
+    desc: PT_DENY_ATTACH constant
+    crit: suspicious
+    mbc: "B0001.m01"
+    attack: "T1622"
+    conf: 0.7
+    if:
+      type: string
+      substr: "PT_DENY_ATTACH"
+    platforms: [macos]
+
+  # === Process inspection micro-behaviors ===
+  - id: tracerpid-string
+    desc: TracerPid string (debugger detection)
+    crit: suspicious
+    conf: 0.7
+    attack: "T1622"
+    if:
+      type: string
+      substr: "TracerPid"
+    platforms: [linux]
+
+  # Removed ld-debug duplicate - use micro-behaviors/os/linker/env::ld-debug
+
+  # Windows - individual API presence is notable (standard MSVC CRT imports);
+  # combinations in composite rules elevate to suspicious
+  # Removed win-isdebuggerpresent duplicate - use objectives/execution/native/runtime::debugger-detect-api
+
+  # Removed: duplicate of micro-behaviors/os/sysinfo/sysctl::sysctlbyname
+  # Just checking for sysctlbyname symbol doesn't prove debugger detection
+  # Real debugger detection would need P_TRACED string or kern.proc checks
+
+composite_rules:
+  # Process inspection composite (migrated from YARA)
+  - id: process-inspection
+    desc: Process inspection pattern (potential anti-debug)
+    crit: notable
+    conf: 0.75
+    mbc: "B0001"
+    attack: "T1622"
+    platforms: [linux]
+    any:
+      - id: micro-behaviors/os/syscall/invoke::ptrace
+      - id: micro-behaviors/fs/proc/info::process-self-status
+      - id: micro-behaviors/fs/proc/info::process-self-maps
+      - id: tracerpid-string
+
+  # ptrace constant composite
+  - id: ptrace-traceme-or-deny
+    desc: PTRACE_TRACEME or PT_DENY_ATTACH anti-debugging constants
+    crit: suspicious
+    mbc: "B0001.m01"
+    attack: "T1622"
+    conf: 0.8
+    any:
+      - id: ptrace-traceme
+      - id: pt-deny-attach
+    none:
+      - id: metadata/signed/platform::apple
+
+  # Windows debugger detection composite
+  - id: win-debugger-detect
+    desc: Windows debugger detection API usage
+    crit: suspicious
+    mbc: "B0001"
+    attack: "T1622"
+    conf: 0.9
+    platforms: [windows]
+    any:
+      - id: objectives/execution/native/runtime::debugger-detect-api
+      - id: objectives/anti-analysis/debugger/detect::check-remote-debugger
+      - id: objectives/anti-analysis/debugger/detect::nt-query-information-process
+    downgrade:
+      any:
+        - id: metadata/quality/versioned
+
+  # Full anti-debug composite
+  - id: anti-debug-full
+    desc: Multiple anti-debugging techniques
+    crit: suspicious
+    mbc: "B0001"
+    attack: "T1622"
+    conf: 0.85
+    needs: 2
+    any:
+      - id: ptrace-traceme-or-deny
+      - id: process-inspection
+      - id: win-debugger-detect
+      - id: micro-behaviors/os/linker/env::ld-debug

@@ -1,0 +1,101 @@
+# SOCKS Proxy
+# MBC: C0001 (Socket Communication)
+# ATT&CK: T1090
+
+defaults:
+  for: [all]
+  mbc: "C0001"
+  attack: "T1090"
+
+traits:
+  - id: socks4-proto
+    desc: SOCKS4 protocol reference
+    crit: baseline
+    conf: 0.6
+    if:
+      type: string
+      substr: SOCKS4
+
+  - id: socks5-proto
+    desc: SOCKS5 protocol reference
+    crit: baseline
+    conf: 0.6
+    if:
+      type: string
+      substr: SOCKS5
+
+  - id: socks5-string
+    desc: socks5 string
+    crit: baseline
+    conf: 0.5
+    if:
+      type: string
+      word: "socks5"
+
+  - id: socks4-string
+    desc: socks4 string
+    crit: baseline
+    conf: 0.5
+    if:
+      type: string
+      word: "socks4"
+
+  - id: socks-url
+    desc: SOCKS URL scheme
+    crit: notable
+    conf: 0.7
+    if:
+      type: string
+      substr: "socks://"
+
+  # NOTE: Removed standalone "1080" pattern - too many false positives.
+  # "1080" appears in 1080p resolution, font metrics, timestamps, etc.
+  # SOCKS port is only meaningful in network/proxy context.
+  - id: socks-port-context
+    desc: SOCKS/proxy context with port 1080
+    crit: baseline
+    conf: 0.5
+    if:
+      type: string
+      regex: "(socks|proxy)[:/].{0,30}1080"
+      case_insensitive: true
+
+  - id: socks-port-literal
+    desc: Literal :1080 port token
+    crit: baseline
+    conf: 0.5
+    if:
+      type: string
+      regex: ":1080(\\b|$)"
+      case_insensitive: true
+
+  - id: socks-port-keyvalue
+    desc: Key/value port assignment to 1080
+    crit: baseline
+    conf: 0.5
+    if:
+      type: string
+      regex: "port[=:\\s]+1080"
+      case_insensitive: true
+
+composite_rules:
+  - id: socks
+    desc: SOCKS proxy usage
+    crit: notable
+    conf: 0.66
+    any:
+      - id: socks4-proto
+      - id: socks5-proto
+      - id: socks5-string
+      - id: socks4-string
+      - id: socks-url
+      - id: socks-port
+
+  - id: socks-port
+    desc: SOCKS port 1080 reference
+    crit: baseline
+    conf: 0.5
+    any:
+      - id: socks-port-context
+      - id: socks-port-literal
+      - id: socks-port-keyvalue

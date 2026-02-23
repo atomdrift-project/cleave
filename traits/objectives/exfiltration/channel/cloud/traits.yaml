@@ -1,0 +1,104 @@
+# Cloud Storage Exfiltration
+# MBC: OB0010 (Exfiltration) → E1567 (Exfiltration Over Web Service)
+# ATT&CK: T1567 (Exfiltration Over Web Service)
+
+defaults:
+  for: [all]
+
+traits:
+  # === S3 upload atomic indicators ===
+  - id: s3-amazonaws-domain
+    desc: S3 amazonaws.com domain
+    crit: notable
+    mbc: "E1567.002"
+    attack: "T1567.002"
+    conf: 0.8
+    if:
+      type: string
+      substr: "s3.amazonaws.com"
+
+  - id: s3-upload-method
+    desc: S3 upload method call
+    crit: notable
+    mbc: "E1567.002"
+    attack: "T1567.002"
+    conf: 0.8
+    if:
+      type: string
+      regex: "s3.{0,50}\\.upload"
+
+  # === Dropbox atomic indicators ===
+  - id: dropbox-api-domain
+    desc: Dropbox API domain
+    crit: notable
+    mbc: "E1567"
+    attack: "T1567"
+    conf: 0.8
+    if:
+      type: string
+      substr: "api.dropbox.com"
+
+  - id: dropbox-upload-method
+    desc: Dropbox upload method
+    crit: notable
+    mbc: "E1567"
+    attack: "T1567"
+    conf: 0.8
+    if:
+      type: string
+      regex: "dropbox.{0,50}upload"
+
+  # === Google Drive atomic indicators ===
+  - id: gdrive-domain
+    desc: Google Drive domain
+    crit: notable
+    mbc: "E1567"
+    attack: "T1567"
+    conf: 0.8
+    if:
+      type: string
+      substr: "drive.google.com"
+
+  - id: googleapis-drive
+    desc: Google APIs drive reference
+    crit: notable
+    mbc: "E1567"
+    attack: "T1567"
+    conf: 0.8
+    if:
+      type: string
+      regex: "googleapis.{0,50}drive"
+
+composite_rules:
+  # S3 upload composite
+  - id: s3-upload
+    desc: AWS S3 upload
+    crit: notable
+    mbc: "E1567.002"
+    attack: "T1567.002"
+    conf: 0.9
+    any:
+      - id: s3-amazonaws-domain
+      - id: s3-upload-method
+
+  # Dropbox API composite
+  - id: dropbox-api
+    desc: Dropbox API access
+    crit: notable
+    mbc: "E1567"
+    attack: "T1567"
+    conf: 0.9
+    any:
+      - id: dropbox-api-domain
+      - id: dropbox-upload-method
+
+  # Google Drive API composite
+  - id: gdrive-api
+    desc: Google Drive API access
+    crit: notable
+    mbc: "E1567"
+    attack: "T1567"
+    conf: 0.9
+    any:
+      - id: gdrive-domain
+      - id: googleapis-drive

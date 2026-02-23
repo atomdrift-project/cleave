@@ -1,0 +1,62 @@
+defaults:
+  for:
+  - all
+traits:
+- id: batch-script-execution
+  desc: Executes a batch script file (.bat)
+  crit: notable
+  conf: 0.7
+  attack: T1059.003
+  if:
+    type: string
+    regex: \.bat$
+- id: powershell-script-execution
+  desc: Executes a PowerShell script file (.ps1)
+  crit: notable
+  conf: 0.7
+  attack: T1059.001
+  if:
+    type: string
+    regex: \.ps1$
+- id: shell-script-execution
+  desc: Executes a shell script file (.sh)
+  crit: notable
+  conf: 0.7
+  attack: T1059.004
+  if:
+    type: raw
+    regex: (^|[ ;&|])(sh|bash|zsh)\s+[^\s]{1,80}\.sh
+- id: shell-script-execution-alt
+  desc: Executes shell script via alt interpreters
+  crit: notable
+  conf: 0.7
+  attack: T1059.004
+  if:
+    type: raw
+    regex: (^|[ ;&|])(dash|ash|source)\s+[^\s]{1,80}\.sh
+- id: shell-script-execution-dot
+  desc: Executes a shell script file via dot
+  crit: notable
+  conf: 0.7
+  attack: T1059.004
+  if:
+    type: raw
+    regex: (^|[ ;&|])\.\s+[^\s]{1,80}\.sh
+- id: shell-script-relative-execution
+  desc: Executes a relative shell script path (.sh)
+  crit: notable
+  conf: 0.7
+  attack: T1059.004
+  if:
+    type: raw
+    regex: (^|[ ;&|])\./[A-Za-z0-9_./-]{1,80}\.sh
+composite_rules:
+- id: shell-script-execution-any
+  desc: Executes a shell script file (.sh)
+  crit: notable
+  conf: 0.7
+  attack: T1059.004
+  any:
+  - id: shell-script-execution
+  - id: shell-script-execution-alt
+  - id: shell-script-execution-dot

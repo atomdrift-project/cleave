@@ -1,0 +1,17 @@
+# Package Dependencies - Count Analysis
+# Detects suspicious dependency patterns based on count
+# ATT&CK: T1195.002 (Compromise Software Supply Chain)
+#
+# NOTE: All count-based traits have been removed. size_min/size_max on kv type
+# measures FILE SIZE in bytes, NOT object key count. These traits were producing
+# false positives (e.g., matching 3 devDependencies as "100+ excessive").
+# Use exists:true/false checks in suspicious-patterns.yaml instead.
+
+defaults:
+  crit: notable
+  conf: 0.60
+  attack: "T1195.002"
+
+traits: []
+
+composite_rules: []

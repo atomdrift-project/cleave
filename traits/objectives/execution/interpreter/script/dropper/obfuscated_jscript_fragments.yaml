@@ -1,0 +1,36 @@
+# Obfuscated JScript Dropper (Fragmented)
+# Detects JScript malware using tiny fragments and dynamic execution
+
+defaults:
+  crit: hostile
+  conf: 0.9
+  for: [javascript]
+
+composite_rules:
+  - id: obfuscated-downloader-tiny-fragments-2
+    desc: Obfuscated WSH downloader (Tiny Fragments Variant 2)
+    all:
+      - id: objectives/execution/interpreter/script/wsh::wscript-shell-fragment-tiny-2
+      - id: objectives/execution/interpreter/script/wsh::xmlhttp-fragment-tiny-2
+    any:
+      - id: objectives/execution/interpreter/script/wsh::savetofile-fragment-tiny-2
+      - id: objectives/execution/interpreter/script/wsh::adodb-fragment-tiny-2
+      - id: objectives/execution/interpreter/script/wsh::activex-fragment-tiny-2
+
+  - id: obfuscated-jscript-dynamic-execution
+    desc: Obfuscated JScript dynamic execution (this[...])
+    all:
+      - id: objectives/execution/interpreter/script/wsh::dynamic-this-execution-computed
+    any:
+      - id: objectives/anti-static/obfuscation/code-metrics/functions::high-function-density
+      - id: objectives/anti-static/obfuscation/code-metrics/functions::many-one-liner-functions
+      - id: objectives/anti-static/obfuscation/code-metrics/structure::no-comments
+    unless:
+      - id: metadata/library/jquery::domain
+      - id: metadata/library/jquery::version-string
+      - id: metadata/library/jquery::copyright
+      - id: metadata/library/jquery::fn-extend
+      - id: metadata/library/d3::d3-detection
+      - id: metadata/library/prototype::copyright
+      - id: metadata/library/prototype::version-string
+      - id: metadata/library/prototype::header-x

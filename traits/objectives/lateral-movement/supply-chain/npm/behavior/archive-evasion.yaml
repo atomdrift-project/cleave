@@ -1,0 +1,19 @@
+# Archive Evasion - Nested Archives in npm Packages
+# ATT&CK: T1027 (Obfuscation)
+# Detects suspicious nested archives within npm packages, which are often used
+# to evade detection and analysis tools.
+
+traits:
+  # === Nested archive detection ===
+  # Note: Simple ".tgz" string is too broad - appears in help text, file listings,
+  # and documentation. Require actual tgz archive magic or path patterns.
+  - id: nested-archive-tgz
+    desc: Nested .tgz archive in package
+    crit: suspicious
+    conf: 0.85
+    # Only check in npm packages and archives where nested archives are suspicious
+    for: [javascript]
+    if:
+      type: string
+      # Require a path-like pattern indicating an actual nested archive
+      regex: '(^|/)node_modules/[^/]{1,120}/[^/]{1,120}\.tgz$|package/[^/]{1,120}\.tgz'

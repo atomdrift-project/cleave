@@ -1,0 +1,247 @@
+# Stowaway Multi-hop Proxy Tool Detection
+# Stowaway is a Go-based penetration testing proxy tool that supports:
+# - Multi-hop SOCKS5 proxy tunneling
+# - SSH tunneling with port forwarding
+# - Reverse/bind shell capabilities
+# - File upload/download
+# - Port scanning and lateral movement
+# Often abused by threat actors for C2 infrastructure
+# GitHub: ph4ntonn/Stowaway
+# MBC: B0030 (C2 Communication), B0024 (Remote Access)
+# ATT&CK: T1090.001 (Internal Proxy), T1572 (Protocol Tunneling)
+
+defaults:
+  for: [elf, macho, pe]
+  mbc: "B0030"
+
+traits:
+  # Stowaway module path - definitive identifier
+  - id: stowaway-module-path-cmd
+    desc: Stowaway Go module path (cmd)
+    if:
+      type: string
+      regex: "Stowaway/cmd/(agent|admin|share|protocol)"
+
+  - id: stowaway-module-path-pkg
+    desc: Stowaway Go module path (pkg)
+    if:
+      type: string
+      regex: "Stowaway/pkg/(agent|admin|share|protocol)"
+
+  # Stowaway agent startup strings
+  - id: stowaway-agent-startup
+    desc: Stowaway agent startup message
+    crit: suspicious
+    conf: 0.98
+    attack: "T1090"
+    if:
+      type: string
+      regex: '\[\*\] Starting agent node (actively|passively)\.'
+
+  # Stowaway passive reuse patterns (iptables/SO_REUSEPORT)
+  - id: stowaway-port-reuse
+    desc: Stowaway port reuse technique
+    crit: suspicious
+    conf: 0.95
+    attack: "T1090"
+    if:
+      type: string
+      regex: 'reusing (host|port).{0,50}\((SO_REUSEPORT|IPTABLES)\)'
+
+  # Stowaway protocol message types
+  - id: stowaway-proto-messages-1a
+    desc: Stowaway protocol types (Backward/Forward - Control)
+    if:
+      type: string
+      regex: 'proto\.(Backward|Forward)(Seq|Start|Stop)'
+
+  - id: stowaway-proto-messages-1b
+    desc: Stowaway protocol types (Backward/Forward - Data)
+    if:
+      type: string
+      regex: 'proto\.(Backward|Forward)(Data|Fin)'
+
+  - id: stowaway-proto-messages-1c
+    desc: Stowaway protocol types (Backward/Forward - Misc)
+    if:
+      type: string
+      regex: 'proto\.(Backward|Forward)(Test|Ready)'
+
+  - id: stowaway-proto-messages-2a
+    desc: Stowaway protocol types (Socks - Control)
+    if:
+      type: string
+      regex: 'proto\.Socks(Seq|Start|Stop)'
+
+  - id: stowaway-proto-messages-2b
+    desc: Stowaway protocol types (SSH/UDPAss - Control)
+    if:
+      type: string
+      regex: 'proto\.(SSH|UDPAss)(Seq|Start|Stop)'
+
+  - id: stowaway-proto-messages-3a
+    desc: Stowaway protocol types (Socks - Data/Misc)
+    if:
+      type: string
+      regex: 'proto\.Socks(Data|Fin|Test|Ready)'
+
+  - id: stowaway-proto-messages-3b
+    desc: Stowaway protocol types (SSH/UDPAss - Data)
+    if:
+      type: string
+      regex: 'proto\.(SSH|UDPAss)(Data|Fin)'
+
+  - id: stowaway-proto-messages-3c
+    desc: Stowaway protocol types (SSH/UDPAss - Misc)
+    if:
+      type: string
+      regex: 'proto\.(SSH|UDPAss)(Test|Ready)'
+
+  # Stowaway handler functions
+  - id: stowaway-handlers-1
+    desc: Stowaway handler functions (Backward/Forward/SSHTunnel)
+    if:
+      type: string
+      regex: 'handler\.\*(Backward|Forward|SSHTunnel)'
+
+  - id: stowaway-handlers-2
+    desc: Stowaway handler functions (Socks/Connect/ForceClose)
+    if:
+      type: string
+      regex: 'handler\.\*(Socks|Connect|ForceClose)'
+
+  # Stowaway manager patterns
+  - id: stowaway-managers-1
+    desc: Stowaway manager components (Backward/Forward/SSHTunnel)
+    if:
+      type: string
+      regex: "(Backward|Forward|SSHTunnel)Manager"
+
+  - id: stowaway-managers-2
+    desc: Stowaway manager components (Socks/ForceClose)
+    if:
+      type: string
+      regex: "(Socks|ForceClose)Manager"
+
+  # Stowaway crypto functions
+  - id: stowaway-crypto
+    desc: Stowaway crypto functions
+    crit: notable
+    conf: 0.9
+    if:
+      type: string
+      regex: 'agent_crpyt\.|PassivePreAuth|achieveUUID'
+
+  # Stowaway iptables manipulation
+  - id: stowaway-iptables
+    desc: Stowaway iptables manipulation
+    crit: suspicious
+    conf: 0.95
+    attack: "T1562.004"
+    if:
+      type: string
+      regex: "iptables -t nat -[ADNXF] (PREROUTING|%s)"
+
+  # Stowaway reconnect pattern
+  - id: stowaway-reconnect
+    desc: Stowaway reconnection pattern
+    crit: suspicious
+    conf: 0.9
+    attack: "T1090"
+    if:
+      type: string
+      substr: "Reconnecting every %d seconds"
+
+composite_rules:
+  - id: stowaway-module-path
+    desc: Stowaway Go module path
+    crit: suspicious
+    conf: 0.99
+    attack: "T1090"
+    any:
+      - id: stowaway-module-path-cmd
+      - id: stowaway-module-path-pkg
+
+  - id: stowaway-proto-messages
+    desc: Stowaway protocol message types
+    crit: suspicious
+    conf: 0.95
+    attack: "T1090"
+    any:
+      - id: stowaway-proto-messages-1a
+      - id: stowaway-proto-messages-1b
+      - id: stowaway-proto-messages-1c
+      - id: stowaway-proto-messages-2a
+      - id: stowaway-proto-messages-2b
+      - id: stowaway-proto-messages-3a
+      - id: stowaway-proto-messages-3b
+      - id: stowaway-proto-messages-3c
+
+  - id: stowaway-handlers
+    desc: Stowaway handler functions
+    crit: suspicious
+    conf: 0.95
+    attack: "T1090"
+    any:
+      - id: stowaway-handlers-1
+      - id: stowaway-handlers-2
+
+  - id: stowaway-managers
+    desc: Stowaway manager components
+    crit: suspicious
+    conf: 0.9
+    attack: "T1090"
+    any:
+      - id: stowaway-managers-1
+      - id: stowaway-managers-2
+
+  # Definitive Stowaway detection via module path
+  - id: stowaway-detected
+    desc: Stowaway multi-hop proxy tool detected
+    crit: hostile
+    conf: 0.99
+    mbc: "B0030"
+    attack: "T1090.001"
+    for: [elf, macho, pe]
+    all:
+      - id: stowaway-module-path
+      - id: micro-behaviors/process/create/shell::go-shell-strings
+
+  # Stowaway with SSH tunneling
+  - id: stowaway-ssh-tunnel
+    desc: Stowaway with SSH tunneling
+    crit: hostile
+    conf: 0.98
+    mbc: "B0030"
+    attack: "T1572"
+    for: [elf, macho, pe]
+    all:
+      - id: stowaway-handlers
+      - id: stowaway-managers
+      - id: micro-behaviors/process/create/shell::go-shell-strings
+
+  # Stowaway with SOCKS proxy and agent startup
+  - id: stowaway-agent
+    desc: Stowaway agent with C2 capabilities
+    crit: hostile
+    conf: 0.98
+    mbc: "B0024"
+    attack: "T1090.001"
+    for: [elf, macho, pe]
+    all:
+      - id: stowaway-agent-startup
+      - id: stowaway-proto-messages
+      - id: micro-behaviors/process/create/shell::go-shell-strings
+
+  # Stowaway with iptables manipulation (advanced evasion)
+  - id: stowaway-iptables-evasion
+    desc: Stowaway with iptables evasion
+    crit: hostile
+    conf: 0.98
+    mbc: "B0030"
+    attack: "T1562.004"
+    for: [elf, macho, pe]
+    all:
+      - id: stowaway-iptables
+      - id: stowaway-port-reuse
+      - id: micro-behaviors/process/create/shell::go-shell-strings

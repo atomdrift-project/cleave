@@ -1,0 +1,41 @@
+# Go Command Execution
+traits:
+  - id: exec-command
+    desc: "Executes shell commands"
+    crit: notable
+    conf: 0.95
+    attack: "T1059.003"
+    for: [go]
+    if:
+      type: symbol
+      exact: "exec.Command"
+
+  - id: syscall-exec
+    desc: "Direct execution via syscall.Exec"
+    crit: notable
+    conf: 0.98
+    attack: "T1106"
+    for: [go]
+    if:
+      type: symbol
+      exact: "syscall.Exec"
+
+  - id: syscall-forkexec
+    desc: "Direct execution via syscall.ForkExec"
+    crit: notable
+    conf: 0.98
+    attack: "T1106"
+    for: [go]
+    if:
+      type: symbol
+      exact: "syscall.ForkExec"
+
+  - id: start-process
+    desc: "Direct execution via os.StartProcess"
+    crit: notable
+    conf: 0.95
+    attack: "T1106"
+    for: [go]
+    if:
+      type: symbol
+      exact: "os.StartProcess"

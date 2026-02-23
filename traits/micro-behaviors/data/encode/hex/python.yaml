@@ -1,0 +1,19 @@
+traits:
+  - id: hex-decode-int-16
+    desc: "Hex decoding via int(x, 16)"
+    crit: baseline
+    conf: 0.7
+    for: [python]
+    if:
+      type: ast
+      language: python
+      query: |
+        (call
+          function: (identifier) @func
+          arguments: (argument_list
+            (_)
+            (integer) @base
+          )
+          (#eq? @func "int")
+          (#eq? @base "16")
+        )

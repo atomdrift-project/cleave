@@ -1,0 +1,11 @@
+defaults:
+  for: [all]
+
+traits:
+  - id: actionscript-extends-bytearray
+    desc: ActionScript class extending ByteArray (often used for
+    crit: suspicious
+    conf: 0.8
+    if:
+      type: raw
+      regex: "extends\\s+(flash\\.utils\\.)?ByteArray"

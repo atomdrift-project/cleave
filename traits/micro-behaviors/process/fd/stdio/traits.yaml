@@ -1,0 +1,41 @@
+# Standard I/O stream references
+# Atomic capability: code references stdin/stdout/stderr
+
+traits:
+  - id: stdin-string
+    desc: stdin string reference
+    crit: baseline
+    conf: 0.3
+    for: [python, javascript, typescript]
+    if:
+      type: string
+      substr: "stdin"
+
+  - id: stdout-string
+    desc: stdout string reference
+    crit: baseline
+    conf: 0.3
+    for: [python, javascript, typescript]
+    if:
+      type: string
+      substr: "stdout"
+
+  - id: stderr-string
+    desc: stderr string reference
+    crit: baseline
+    conf: 0.3
+    for: [python, javascript, typescript]
+    if:
+      type: string
+      substr: "stderr"
+
+composite_rules:
+  - id: stdio-refs
+    desc: Multiple standard I/O references
+    crit: notable
+    conf: 0.4
+    needs: 2
+    any:
+      - id: stdin-string
+      - id: stdout-string
+      - id: stderr-string

@@ -1,0 +1,106 @@
+# Direct Syscall Invocation Patterns
+# Used by both rootkit detectors and evasive malware to bypass libc hooks
+# ATT&CK: T1106 (Native API)
+
+defaults:
+  attack: "T1106"
+
+traits:
+  # === Direct Syscall via __NR_ Constants ===
+  - id: nr-getdents
+    desc: Direct __NR_getdents syscall reference
+    crit: suspicious
+    conf: 0.9
+    for: [c, elf]
+    if:
+      type: raw
+      substr: "__NR_getdents"
+
+  - id: nr-getdents64
+    desc: Direct __NR_getdents64 syscall reference
+    crit: suspicious
+    conf: 0.9
+    for: [c, elf]
+    if:
+      type: raw
+      substr: "__NR_getdents64"
+
+  - id: nr-openat
+    desc: Direct __NR_openat syscall reference
+    crit: notable
+    conf: 0.8
+    for: [c, elf]
+    if:
+      type: raw
+      substr: "__NR_openat"
+
+  - id: nr-close
+    desc: Direct __NR_close syscall reference
+    crit: baseline
+    conf: 0.5
+    for: [c, elf]
+    if:
+      type: raw
+      substr: "__NR_close"
+
+  # === syscall() function call ===
+  - id: syscall-fn
+    desc: Direct syscall() function invocation
+    crit: notable
+    conf: 0.85
+    for: [c]
+    if:
+      type: raw
+      regex: "\\bsyscall\\s*\\("
+
+  # === dirent64 structure manipulation ===
+  - id: dirent64-struct
+    desc: struct dirent64 usage
+    crit: notable
+    conf: 0.8
+    for: [c, elf]
+    if:
+      type: raw
+      substr: "dirent64"
+
+  - id: d-reclen-field
+    desc: d_reclen field access
+    crit: notable
+    conf: 0.85
+    for: [c, elf]
+    if:
+      type: raw
+      substr: "d_reclen"
+
+  - id: d-name-field
+    desc: d_name field access
+    crit: baseline
+    conf: 0.5
+    for: [c, elf]
+    if:
+      type: string
+      word: "d_name"
+
+composite_rules:
+  # Direct getdents syscall (bypass libc hooks)
+  - id: direct-getdents
+    desc: Direct getdents syscall bypassing libc
+    crit: suspicious
+    conf: 0.95
+    attack: "T1106"
+    for: [c, elf]
+    all:
+      - id: syscall-fn
+    any:
+      - id: nr-getdents
+      - id: nr-getdents64
+
+  # Dirent structure manipulation (file hiding/detection)
+  - id: dirent-manipulation
+    desc: Dirent structure manipulation
+    crit: suspicious
+    conf: 0.9
+    for: [c, elf]
+    all:
+      - id: dirent64-struct
+      - id: d-reclen-field

@@ -1,0 +1,26 @@
+# HTTP Server-based Data Collection/Stealer
+# Detects exfiltration data collection via HTTP endpoints
+# MBC: OB0003 (Stealer)
+# ATT&CK: T1041 (Exfiltration Over C2 Channel)
+
+defaults:
+  attack: "T1041"
+  mbc: "OB0003"
+  for: [python]
+
+composite_rules:
+  # Data collection with HTTP server storage
+  - id: data-collection-with-storage
+    desc: Collects and stores exfiltrated data on HTTP server
+    crit: suspicious
+    conf: 0.9
+    for: [python]
+    attack: "T1041"
+    mbc: "OB0003"
+    all:
+      - id: micro-behaviors/communications/http/server::http-post-endpoint
+      - id: micro-behaviors/communications/http/server::file-write-storage
+    any:
+      - id: micro-behaviors/communications/http/server::extract-from-request-json
+      - id: micro-behaviors/communications/http/server::extract-from-request-form
+      - id: micro-behaviors/communications/http/server::extract-from-request-data

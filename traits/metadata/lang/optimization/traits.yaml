@@ -1,0 +1,50 @@
+# Compiler Optimization and Link-Time Optimization
+
+defaults:
+  for: [all]
+
+traits:
+  # === LTO micro-behaviors ===
+  - id: llvmbc-section
+    desc: .llvmbc section
+    crit: notable
+    conf: 0.8
+    if:
+      type: string
+      substr: ".llvmbc"
+
+  - id: llvmlto-section
+    desc: .llvmlto section
+    crit: notable
+    conf: 0.8
+    if:
+      type: string
+      substr: ".llvmlto"
+
+  - id: lto-string
+    desc: LTO string
+    crit: notable
+    conf: 0.7
+    if:
+      type: string
+      exact: "LTO"
+
+  - id: flto-flag
+    desc: -flto flag
+    crit: notable
+    conf: 0.8
+    if:
+      type: string
+      substr: "-flto"
+
+composite_rules:
+  # LTO composite
+  - id: lto
+    desc: Link Time Optimization enabled
+    crit: notable
+    conf: 0.8
+    any:
+      - id: llvmbc-section
+      - id: llvmlto-section
+      - id: lto-string
+      - id: flto-flag

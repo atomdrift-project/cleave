@@ -1,0 +1,134 @@
+# Generalized Go Reverse Shell & SOCKS Proxy
+# Detects the combination of PTY shell, SOCKS proxying, and reverse connection capabilities common in Go backdoors.
+# ATT&CK: T1059 (Command and Scripting Interpreter), T1090 (Proxy)
+#
+# NOTE: This file contains composite rules that reference generic traits from proper taxonomy locations.
+# Only Go-specific SOCKS patterns that can't be expressed as composites remain as YARA.
+
+traits:
+  # === Go SOCKS5 patterns (Go-specific, must stay here) ===
+  - id: go-socks-auth
+    desc: Go socksUsernamePassword string
+    crit: notable
+    conf: 0.7
+    for: [go, elf, macho, pe]
+    if:
+      type: string
+      substr: "socksUsernamePassword"
+
+  - id: go-socks-dialer
+    desc: Go socksNewDialer string
+    crit: notable
+    conf: 0.7
+    for: [go, elf, macho, pe]
+    if:
+      type: string
+      substr: "socksNewDialer"
+
+  - id: go-socks-cmd
+    desc: Go socksCommand string
+    crit: notable
+    conf: 0.7
+    for: [go, elf, macho, pe]
+    if:
+      type: string
+      substr: "socksCommand"
+
+  - id: go-socks-addr
+    desc: Go socksAddr string
+    crit: notable
+    conf: 0.7
+    for: [go, elf, macho, pe]
+    if:
+      type: string
+      substr: "socksAddr"
+
+  # === Go PTY patterns (Go-specific) ===
+  - id: go-pty-startwithsize
+    desc: Go PTY StartWithSize function
+    crit: notable
+    conf: 0.75
+    for: [go, elf, macho, pe]
+    if:
+      type: string
+      substr: "StartWithSize"
+
+  - id: go-pty-setsize
+    desc: Go PTY Setsize function
+    crit: notable
+    conf: 0.7
+    for: [go, elf, macho, pe]
+    if:
+      type: string
+      substr: "Setsize"
+
+  - id: go-ptmx
+    desc: Go ptmx device reference
+    crit: notable
+    conf: 0.7
+    for: [go, elf, macho, pe]
+    if:
+      type: string
+      exact: "ptmx"
+
+  # NOTE: Cannot migrate - requires SOCKS5 handshake hex pattern { 05 01 00 }
+  - id: go-socks-proxy
+    desc: Go SOCKS5 proxy implementation
+    crit: suspicious
+    conf: 0.8
+    for: [go]
+    if:
+      type: yara
+      source: |
+        rule go_socks {
+          strings:
+            $socks_ver = { 05 01 00 } // SOCKS5 handshake
+            $socks_auth = "socksUsernamePassword" ascii
+            $socks_dial = "socksNewDialer" ascii
+            $socks_cmd = "socksCommand" ascii
+            $socks_addr = "socksAddr" ascii
+          condition:
+            ($socks_ver and any of ($socks_*)) or 2 of ($socks_*)
+        }
+
+composite_rules:
+  # === Helper composites ===
+  - id: go-socks-strings
+    desc: Go SOCKS library strings
+    any:
+      - id: go-socks-auth
+      - id: go-socks-dialer
+      - id: go-socks-cmd
+      - id: go-socks-addr
+    crit: notable
+
+  - id: go-pty-strings
+    desc: Go PTY library strings
+    any:
+      - id: go-pty-startwithsize
+      - id: go-pty-setsize
+      - id: go-ptmx
+    crit: notable
+
+  # === Detection composites referencing generic traits ===
+  - id: go-pty-with-shell
+    desc: Go PTY with shell execution
+    crit: suspicious
+    conf: 0.8
+    for: [elf, macho, go]
+    all:
+      - id: go-pty-strings
+      - id: micro-behaviors/process/create/shell::bin-sh
+
+  # Main detection: Go reverse shell with SOCKS proxy
+  - id: go-reverse-socks
+    desc: Go-based Reverse Shell with SOCKS
+    crit: hostile
+    conf: 0.9
+    attack: "T1090"
+    mbc: "B0022"
+    for: [elf, macho]
+    all:
+      - id: go-pty-with-shell
+      - id: go-socks-proxy
+      - id: micro-behaviors/communications/socket/connect::dial

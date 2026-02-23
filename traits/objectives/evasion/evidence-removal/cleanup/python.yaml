@@ -1,0 +1,17 @@
+# Python Evidence Removal
+# Detects Python scripts that delete files, especially after exfiltration
+# ATT&CK: T1070.004 (Indicator Removal on Host: File Deletion)
+
+composite_rules:
+  - id: upload-cleanup
+    desc: "Python script uploads data and deletes files (cleanup)"
+    crit: suspicious
+    conf: 0.9
+    attack: "T1070.004"
+    for: [python]
+    all:
+      - id: metadata/import/python/requests
+      - id: micro-behaviors/communications/http/request::py-post-generic
+    any:
+      - id: micro-behaviors/fs/file/delete::py-rmtree
+      - id: micro-behaviors/fs/file/delete::py-remove

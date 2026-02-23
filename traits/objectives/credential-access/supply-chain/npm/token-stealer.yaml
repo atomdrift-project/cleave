@@ -1,0 +1,29 @@
+defaults:
+  attack: T1552.001
+  mbc: E1059
+  for: [javascript, typescript]
+
+composite_rules:
+  - id: npm-token-stealer
+    desc: NPM authentication token stealer
+    crit: hostile
+    conf: 1.0
+    all:
+      - id: micro-behaviors/data/text/secrets::npm-auth-token-extraction
+    any:
+      - id: micro-behaviors/communications/http/services::suspicious-analytics-usage
+      - id: micro-behaviors/communications/http/headers::referer-dynamic-concatenation
+      - id: micro-behaviors/communications/http/headers::referer-dummy-url-pattern
+      - id: objectives/command-and-control/uri/fragment::uri-fragment-counter-path-unte
+
+  - id: npm-token-stealer-fallback
+    desc: NPM token key string with suspicious exfiltration indicators
+    crit: hostile
+    conf: 0.9
+    all:
+      - id: micro-behaviors/data/text/secrets::npm-auth-token-key-raw
+    any:
+      - id: micro-behaviors/communications/http/services::suspicious-analytics-usage
+      - id: micro-behaviors/communications/http/headers::referer-dynamic-concatenation
+      - id: micro-behaviors/communications/http/headers::referer-dummy-url-pattern
+      - id: objectives/command-and-control/uri/fragment::uri-fragment-counter-path-unte

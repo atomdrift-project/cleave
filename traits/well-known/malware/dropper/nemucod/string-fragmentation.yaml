@@ -1,0 +1,22 @@
+defaults:
+  for: [all]
+
+traits:
+  - id: nemucod-try-again
+    desc: Detects the fragmented "Please, try again" message
+    crit: suspicious
+    mbc: "B0032"
+    attack: "T1497"
+    if:
+      type: yara
+      source: |
+        rule try_again {
+          strings:
+            $s1 = "Plea" ascii
+            $s2 = "se, " ascii
+            $s3 = "try" ascii
+            $s4 = " agai" ascii
+            $s5 = "n!" ascii
+          condition:
+            all of them
+        }

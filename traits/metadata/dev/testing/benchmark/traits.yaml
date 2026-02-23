@@ -1,0 +1,72 @@
+# Testing Framework - BENCHMARK
+
+traits:
+  # === Atomic: Benchmark ===
+
+  - id: benchmark-lower
+    desc: benchmark reference (lowercase)
+    crit: baseline
+    conf: 0.5
+    for: [all]
+    if:
+      type: string
+      word: "benchmark"
+
+  - id: benchmark-title
+    desc: Benchmark reference (title case)
+    crit: baseline
+    conf: 0.5
+    for: [all]
+    if:
+      type: string
+      word: "Benchmark"
+
+  - id: google-benchmark
+    desc: google/benchmark library
+    crit: baseline
+    conf: 0.9
+    for: [c]
+    if:
+      type: string
+      substr: "google/benchmark"
+
+  - id: go-benchmark-type
+    desc: Go testing.B benchmark type
+    crit: baseline
+    conf: 0.8
+    for: [go]
+    if:
+      type: string
+      substr: "func Benchmark"
+
+  - id: criterion-bench
+    desc: Criterion benchmark library
+    crit: baseline
+    conf: 0.9
+    for: [rust]
+    if:
+      type: string
+      word: "criterion"
+
+  - id: benchmarkdotnet
+    desc: BenchmarkDotNet library
+    crit: baseline
+    conf: 0.9
+    for: [csharp]
+    if:
+      type: string
+      word: "BenchmarkDotNet"
+
+composite_rules:
+  # Benchmark frameworks
+  - id: benchmark
+    desc: Benchmark test framework
+    crit: notable
+    conf: 0.9
+    any:
+      - { id: benchmark-lower }
+      - { id: benchmark-title }
+      - { id: google-benchmark }
+      - { id: go-benchmark-type }
+      - { id: criterion-bench }
+      - { id: benchmarkdotnet }

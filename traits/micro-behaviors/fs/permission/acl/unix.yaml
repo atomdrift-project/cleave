@@ -1,0 +1,97 @@
+# ACL Inspection and Enumeration
+# Detects reading and querying access control lists
+# MBC: E1083 (File and Directory Discovery)
+# ATT&CK: T1083
+
+defaults:
+  for: [elf, macho, so, dylib, c]
+  mbc: E1083
+  attack: T1083
+
+traits:
+  - id: get-link
+    desc: Get ACL on symbolic link
+    crit: notable
+    conf: 0.8
+    if:
+      type: symbol
+      exact: "acl_get_link_np"
+
+  - id: get-entry
+    desc: Enumerate ACL entries
+    crit: notable
+    conf: 0.8
+    if:
+      type: symbol
+      exact: "acl_get_entry"
+
+  - id: get-tag-type
+    desc: Read ACL entry tag type
+    crit: notable
+    conf: 0.75
+    if:
+      type: symbol
+      exact: "acl_get_tag_type"
+
+  - id: get-permset
+    desc: Read ACL entry permission set
+    crit: notable
+    conf: 0.75
+    if:
+      type: symbol
+      exact: "acl_get_permset"
+
+  - id: get-perm
+    desc: Check ACL entry permission bit
+    crit: baseline
+    conf: 0.7
+    if:
+      type: symbol
+      exact: "acl_get_perm_np"
+
+  - id: get-qualifier
+    desc: Read ACL entry qualifier
+    crit: notable
+    conf: 0.75
+    if:
+      type: symbol
+      exact: "acl_get_qualifier"
+
+  - id: get-flagset
+    desc: Read ACL entry flags
+    crit: notable
+    conf: 0.75
+    if:
+      type: symbol
+      exact: "acl_get_flagset_np"
+
+  - id: get-flag
+    desc: Check ACL entry flag bit
+    crit: baseline
+    conf: 0.7
+    if:
+      type: symbol
+      exact: "acl_get_flag_np"
+
+  - id: free
+    desc: Cleanup ACL structure
+    crit: baseline
+    conf: 0.6
+    if:
+      type: symbol
+      exact: "acl_free"
+
+composite_rules:
+  - id: acl-inspection
+    desc: Inspect and enumerate ACLs
+    crit: notable
+    conf: 0.85
+    mbc: E1083
+    attack: T1083
+    needs: 2
+    any:
+      - id: get-entry
+      - id: get-tag-type
+      - id: get-permset
+      - id: get-qualifier
+      - id: get-link

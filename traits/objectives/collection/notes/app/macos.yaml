@@ -1,0 +1,73 @@
+# Apple Notes Database Collection (macOS)
+# Detects theft of Apple Notes data which may contain sensitive information
+# ATT&CK: T1005 (Data from Local System)
+
+defaults:
+  for: [all]
+  attack: "T1005"
+  platforms: [macos]
+  crit: suspicious
+
+traits:
+  # NoteStore.sqlite - main Notes database
+  - id: notestore-db
+    desc: "Apple Notes SQLite database file"
+    conf: 0.9
+    if:
+      type: string
+      substr: "NoteStore.sqlite"
+
+  # NoteStore write-ahead log
+  - id: notestore-wal
+    desc: "Apple Notes write-ahead log"
+    conf: 0.85
+    if:
+      type: string
+      substr: "NoteStore.sqlite-wal"
+
+  # NoteStore shared memory
+  - id: notestore-shm
+    desc: "Apple Notes shared memory file"
+    conf: 0.85
+    if:
+      type: string
+      substr: "NoteStore.sqlite-shm"
+
+  # Notes group container path
+  - id: notes-container
+    desc: "Apple Notes group container path"
+    conf: 0.9
+    if:
+      type: string
+      substr: "group.com.apple.notes"
+
+  # Notes Accounts directory
+  - id: notes-accounts
+    desc: "Apple Notes Accounts directory"
+    conf: 0.85
+    if:
+      type: string
+      regex: "group\\.com\\.apple\\.notes/Accounts"
+
+  # Notes Media directory (attachments)
+  - id: notes-media
+    desc: "Apple Notes Media/attachments directory"
+    conf: 0.85
+    if:
+      type: string
+      regex: "group\\.com\\.apple\\.notes.{0,50}Media"
+
+composite_rules:
+  # Access to Notes database files
+  - id: notes-theft
+    desc: "Apple Notes data collection"
+    crit: suspicious
+    conf: 0.9
+    attack: "T1005"
+    for: [shell, python, applescript, macho]
+    all:
+      - { id: notestore-db }
+    any:
+      - { id: notestore-wal }
+      - { id: notestore-shm }
+      - { id: notes-container }

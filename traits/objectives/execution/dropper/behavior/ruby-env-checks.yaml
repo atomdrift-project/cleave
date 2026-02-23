@@ -1,0 +1,15 @@
+# Ruby OS Environment Checks
+# Detects checks for operating system environment
+# ATT&CK: T1497
+
+defaults:
+  crit: notable
+  conf: 0.8
+  for: [ruby]
+
+composite_rules:
+  - id: ruby-os-check
+    desc: Ruby OS check detected
+    any:
+      - id: objectives/execution/dropper/script::ruby-ast-check-windows-regex
+      - id: objectives/execution/dropper/script::ruby-ast-host-os-access

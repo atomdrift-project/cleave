@@ -1,0 +1,144 @@
+# SSH Client Library Detection
+# Detects presence of SSH client libraries and protocol implementation
+# This is a capability (what code CAN do), not an objective (attack intent)
+# ATT&CK: T1021.004 (Remote Services: SSH)
+
+defaults:
+  for: [all]
+  attack: "T1021.004"
+
+traits:
+  # SSH protocol strings - these indicate SSH client/library presence
+  - id: ssh-userauth
+    desc: SSH user authentication protocol string
+    crit: baseline
+    conf: 0.6
+    if:
+      type: string
+      substr: "ssh-userauth"
+
+  - id: libssh
+    desc: libssh library reference
+    crit: baseline
+    conf: 0.6
+    if:
+      type: string
+      substr: "libssh"
+
+  - id: ssh-version
+    desc: SSH protocol version 2.0 string
+    crit: baseline
+    conf: 0.6
+    if:
+      type: string
+      substr: "SSH-2.0"
+
+  # Authentication method strings - normal SSH library indicators
+  - id: keyboard-interactive
+    desc: SSH keyboard-interactive auth method
+    crit: baseline
+    conf: 0.6
+    if:
+      type: string
+      substr: "keyboard-interactive"
+
+  - id: publickey-auth
+    desc: SSH publickey auth method
+    crit: baseline
+    conf: 0.6
+    if:
+      type: string
+      substr: "publickey"
+
+  # SSH error messages - normal in any SSH client
+  - id: auth-failed
+    desc: SSH authentication failed message
+    crit: baseline
+    conf: 0.5
+    if:
+      type: string
+      substr: "Authentication failed"
+
+  # Removed permission-denied-ssh duplicate - use micro-behaviors/os/message/error::permission-denied
+
+  # JavaScript/Node.js SSH libraries
+  - id: ssh2-js
+    desc: ssh2 Node.js library
+    crit: notable
+    conf: 0.8
+    for: [javascript, typescript]
+    if:
+      type: ast
+      kind: import
+      regex: "ssh2"
+
+  - id: node-ssh
+    desc: node-ssh library
+    crit: notable
+    conf: 0.8
+    for: [javascript, typescript]
+    if:
+      type: ast
+      kind: import
+      regex: "node-ssh"
+
+  # Python SSH libraries
+  - id: paramiko
+    desc: Paramiko Python SSH library
+    crit: notable
+    conf: 0.8
+    for: [python]
+    if:
+      type: ast
+      kind: import
+      exact: "paramiko"
+
+  - id: fabric
+    desc: Fabric Python SSH library
+    crit: notable
+    conf: 0.8
+    for: [python]
+    if:
+      type: ast
+      kind: import
+      exact: "fabric"
+
+composite_rules:
+  # SSH client library presence - capability detection
+  - id: library
+    desc: SSH client library
+    crit: notable
+    conf: 0.75
+    needs: 2
+    any:
+      - id: ssh-userauth
+      - id: libssh
+      - id: ssh-version
+      - id: keyboard-interactive
+      - id: publickey-auth
+      - id: ssh2-js
+      - id: node-ssh
+      - id: paramiko
+      - id: fabric
+
+  # Full SSH client implementation (protocol + auth + errors)
+  - id: full-implementation
+    desc: Full SSH client implementation
+    crit: notable
+    conf: 0.85
+    all:
+      - id: library
+    any:
+      - id: micro-behaviors/os/message/error::permission-denied
+      - id: auth-failed
+
+  # SSH protocol indicators helper
+  - id: protocol
+    desc: SSH protocol indicators
+    crit: baseline
+    any:
+      - id: ssh-version
+      - id: ssh-userauth
+      - id: libssh
+      - id: keyboard-interactive
+      - id: publickey-auth

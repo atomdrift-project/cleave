@@ -1,0 +1,50 @@
+traits:
+  - id: ajax-observable
+    desc: RxJS AjaxObservable
+    crit: baseline
+    conf: 1.0
+    for:
+      - javascript
+      - typescript
+    if:
+      type: string
+      substr: AjaxObservable
+  - id: generic
+    desc: RxJS library
+    crit: baseline
+    conf: 1.0
+    for:
+      - javascript
+      - typescript
+    if:
+      type: string
+      substr: "RxJS: Back to a better error behavior"
+  - id: rxjs-websocket-constructor-error
+    desc: RxJS WebSocket constructor error marker
+    crit: baseline
+    conf: 1.0
+    for:
+      - javascript
+      - typescript
+    if:
+      type: string
+      substr: no WebSocket constructor can be found
+  - id: rxjs-cold-observable-offset-error
+    desc: RxJS cold observable offset error marker
+    crit: baseline
+    conf: 1.0
+    for:
+      - javascript
+      - typescript
+    if:
+      type: string
+      substr: cold observable cannot have subscription offset
+composite_rules:
+  - id: generic-rxjs
+    desc: RxJS library
+    crit: baseline
+    conf: 1.0
+    any:
+      - id: generic
+      - id: rxjs-websocket-constructor-error
+      - id: rxjs-cold-observable-offset-error

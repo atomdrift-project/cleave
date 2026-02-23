@@ -1,0 +1,47 @@
+# User Information Query Functions (POSIX)
+# Basic POSIX functions for querying current user information
+# MBC: E1033 (System Owner/User Discovery)
+# ATT&CK: T1033 (System Owner/User Discovery)
+
+defaults:
+  for: [all]
+  platforms: [unix, linux, macos]
+  crit: baseline
+  mbc: "E1033"
+  attack: "T1033"
+
+traits:
+  - id: getlogin
+    desc: Get login name
+    conf: 0.5
+    if:
+      type: symbol
+      regex: "getlogin"
+
+  - id: getpwuid
+    desc: Get password file entry by UID
+    conf: 0.5
+    if:
+      type: symbol
+      regex: "getpwuid"
+
+  - id: whoami-cmd
+    desc: whoami command
+    conf: 0.5
+    if:
+      type: string
+      substr: "whoami"
+
+  - id: id-u-cmd
+    desc: id -u command
+    conf: 0.5
+    if:
+      type: string
+      substr: "id -u"
+
+  - id: id-cmd
+    desc: id command (with path)
+    conf: 0.5
+    if:
+      type: string
+      substr: "/bin/id"

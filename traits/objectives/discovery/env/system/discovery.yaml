@@ -1,0 +1,16 @@
+# System Discovery via Environment Variables
+# ATT&CK: T1082 (System Information Discovery)
+# Detects enumeration of system information through environment variables
+
+defaults:
+  crit: notable
+  conf: 0.8
+  attack: "T1082"
+  mbc: "E1082"
+
+composite_rules:
+  - id: system-info-multiple
+    desc: Discovers system information via environment variables
+    # Matches any system-related env var (HOSTNAME, SHELL, TERM, etc.)
+    any:
+      - id: micro-behaviors/os/env/vars/system-info

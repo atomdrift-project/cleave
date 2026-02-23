@@ -1,0 +1,16 @@
+# TFTP Download Operations
+# ATT&CK: T1105 (Ingress Tool Transfer)
+
+defaults:
+  for: [all]
+  attack: "T1105"
+
+traits:
+  - id: command
+    desc: "tftp command invocation"
+    crit: notable
+    conf: 0.5
+    if:
+      type: string
+      # Require tftp to look like a command invocation (space after, or path prefix)
+      regex: '(/usr)?(/s?bin/)?tftp\s|\btftp\s+-'

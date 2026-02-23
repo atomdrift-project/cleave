@@ -1,0 +1,24 @@
+# Process Forking
+# MBC: C0017 (Create Process)
+# ATT&CK: T1106
+
+defaults:
+  for: [elf, macho, so, dylib, c]
+
+traits:
+  - id: fork
+    desc: Process forking
+    crit: baseline
+    conf: 0.66
+    if:
+      type: symbol
+      regex: "^(fork|vfork|clone[0-9]?)$"
+
+  - id: daemon
+    desc: Daemonize process
+    crit: notable
+    conf: 0.66
+    if:
+      type: symbol
+      # setsid: use micro-behaviors/process/create/setsid/traits.yaml::c (canonical)
+      exact: "daemon"

@@ -1,0 +1,46 @@
+defaults:
+  for: [all]
+
+traits:
+  - id: hex-subdomain-concat
+    desc: Appends hex-encoded data to domain string
+    crit: notable
+    if:
+      type: string
+      substr: "IMPOSSIBLE_MATCH_XYZZY_DNS_CONCAT"
+
+  - id: hex-subdomain-plus
+    desc: Concatenates hex strings with dots
+    crit: notable
+    if:
+      type: string
+      substr: "IMPOSSIBLE_MATCH_XYZZY_DNS_PLUS"
+composite_rules:
+  - id: js-dns-tunneling-construction
+    desc: JavaScript DNS tunneling payload construction (hex-encoded subdomains)
+    crit: suspicious
+    conf: 0.85
+    attack: "T1071.004"
+    for: [javascript]
+    unless:
+      - id: metadata/dev/testing::node-common-require
+      - id: metadata/library::ioredis-auto-pipeline
+      - id: micro-behaviors/data/db/conn/redis::ioredis
+      - id: metadata/library::ioredis-utils
+      - id: metadata/library::cmd-proto-command
+      - id: metadata/library::cmd-proto-option
+      - id: metadata/library::cmd-proto-parse
+      - id: objectives/lateral-movement/supply-chain/npm/testing::has-assertions
+      - id: metadata/library/nodeunit::nodeunit
+      - id: metadata/library/nodeunit::nodeunit-require
+      - id: metadata/library::moment-locale
+    downgrade:
+      any:
+        - id: metadata/library/nodeunit::nodeunit
+        - id: metadata/library/nodeunit::nodeunit-require
+    any:
+      - id: objectives/command-and-control/dns/tunneling::hex-chunk-concat-loop
+      - id: objectives/command-and-control/dns/tunneling::hex-path-chunk-split
+      - id: objectives/command-and-control/dns/tunneling::hex-path-p-wrapping
+      - id: objectives/command-and-control/dns/tunneling::hex-subdomain-concat
+      - id: objectives/command-and-control/dns/tunneling::hex-subdomain-plus

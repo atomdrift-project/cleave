@@ -1,0 +1,67 @@
+# Device Paths - General
+# MBC: E1083 (File and Directory Discovery)
+# ATT&CK: T1083
+#
+# Note:
+#   - Storage devices (sda, nvme, etc.) are in storage/traits.yaml
+#   - Terminal devices (tty, pts, etc.) are in terminal/traits.yaml
+
+defaults:
+  for: [all]
+
+traits:
+  - id: dev-path-pattern
+    desc: Sensitive /dev/ device path pattern
+    crit: baseline
+    conf: 0.7
+    mbc: E1083
+    attack: T1083
+    if:
+      type: string
+      regex: "/dev/(kmem|dri/card[0-9]+|dri/renderD[0-9]+|input/event[0-9]+)"
+
+  - id: dev-null
+    desc: /dev/null (legitimate discard device)
+    crit: baseline
+    conf: 1.0
+    if:
+      type: string
+      substr: "/dev/null"
+
+  - id: dev-shm
+    desc: /dev/shm/ (shared memory, legitimate)
+    crit: baseline
+    conf: 1.0
+    if:
+      type: string
+      substr: "/dev/shm/"
+
+  - id: dev-zero
+    desc: /dev/zero (legitimate zero source)
+    crit: baseline
+    conf: 1.0
+    if:
+      type: string
+      substr: "/dev/zero"
+
+composite_rules:
+  - id: device-dev
+    desc: Reference to /dev devices (excludes common legitimate)
+    crit: notable
+    conf: 0.66
+    mbc: E1083
+    attack: T1083
+    all:
+      - id: dev-path-pattern
+    none:
+      - id: dev-null
+      - id: dev-shm
+      - id: dev-zero
+      - id: micro-behaviors/crypto/random/operations::dev-random
+      - id: micro-behaviors/fs/path/device/terminal
+    # Graphics libraries legitimately access /dev/mem, /dev/fb*, /dev/dri/*
+    downgrade:
+      any:
+        - id: micro-behaviors/dylib/load/x11-dga-marker
+        - id: micro-behaviors/dylib/library::graphics-lib-marker
+        - id: micro-behaviors/dylib/load/drm-driver-ref

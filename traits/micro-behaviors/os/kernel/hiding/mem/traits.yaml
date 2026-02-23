@@ -1,0 +1,24 @@
+defaults:
+  for: [all]
+
+traits:
+  - id: mem-protect-enc
+    desc: Hidden (encoded) memory protection API
+    crit: suspicious
+    if:
+      type: encoded
+      exact: NtProtectVirtualMemory
+
+  - id: pe-header-enc
+    desc: Hidden (encoded) PE header parsing API
+    crit: suspicious
+    if:
+      type: encoded
+      exact: RtlImageNtHeader
+
+  - id: pe-data-enc
+    desc: Hidden (encoded) PE directory parsing API
+    crit: suspicious
+    if:
+      type: encoded
+      exact: RtlImageDirectoryEntryToData

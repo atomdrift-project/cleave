@@ -1,0 +1,31 @@
+# Process Termination Commands
+# Capabilities to stop or kill processes via command-line tools
+
+defaults:
+  for: [elf, macho, sh, python, ruby, perl, php]
+
+traits:
+  - id: kill
+    desc: kill command
+    crit: notable
+    conf: 0.6
+    if:
+      type: string
+      regex: '(^|/)kill\s+-[0-9A-Z]+\b|/bin/kill\b'
+    # Basic "kill" is too common, so require flags or full path or context in regex
+
+  - id: killall
+    desc: killall command
+    crit: notable
+    conf: 0.8
+    if:
+      type: string
+      word: killall
+
+  - id: pkill
+    desc: pkill command
+    crit: notable
+    conf: 0.8
+    if:
+      type: string
+      word: pkill

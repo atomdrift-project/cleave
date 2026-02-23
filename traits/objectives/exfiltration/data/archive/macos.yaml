@@ -1,0 +1,135 @@
+# macOS Archive Utilities for Exfiltration
+# Detects use of macOS-specific compression for data staging
+# ATT&CK: T1560.001 (Archive Collected Data: Archive via Utility)
+
+defaults:
+  for: [all]
+  attack: "T1560.001"
+  platforms: [macos]
+  crit: notable
+
+traits:
+  # === ditto compress atomic indicators ===
+  - id: ditto-keepparent
+    desc: ditto --keepParent compression
+    crit: notable
+    conf: 0.75
+    if:
+      type: string
+      regex: "ditto.{0,30}--keepParent.{0,30}-c"
+
+  # === ditto sequester atomic indicators ===
+  - id: ditto-rsrc-flag
+    desc: ditto -rsrc flag
+    crit: notable
+    conf: 0.8
+    if:
+      type: string
+      regex: "ditto.{0,30}-rsrc"
+
+  # === zip create atomic indicators ===
+  - id: zip-recursive-quiet
+    desc: zip -r or -q flag
+    crit: notable
+    conf: 0.6
+    if:
+      type: string
+      regex: "\\bzip\\s+-[rq]"
+
+  - id: zip-output-file
+    desc: zip with .zip output
+    crit: notable
+    conf: 0.6
+    if:
+      type: string
+      regex: "\\bzip\\s+.{0,50}\\.zip"
+
+  # === tmp archive atomic indicators ===
+  - id: tmp-zip-path
+    desc: zip file in /tmp
+    crit: notable
+    conf: 0.6
+    if:
+      type: string
+      regex: "/tmp/.{0,50}\\.zip"
+
+  - id: tmp-out-zip
+    desc: /tmp/out.zip file
+    crit: notable
+    conf: 0.6
+    if:
+      type: string
+      substr: "/tmp/out.zip"
+
+  - id: var-tmp-zip
+    desc: zip file in /var/tmp
+    crit: notable
+    conf: 0.6
+    if:
+      type: string
+      regex: "/var/tmp/.{0,50}\\.zip"
+
+composite_rules:
+  # ditto compress composite
+  - id: ditto-compress
+    desc: ditto archive creation with compression
+    crit: notable
+    conf: 0.85
+    any:
+      - id: objectives/collection/archive/data::ditto-ck-flags
+      - id: ditto-keepparent
+
+  # ditto sequester composite
+  - id: ditto-sequester
+    desc: ditto with resource fork handling
+    crit: notable
+    conf: 0.9
+    any:
+      - id: objectives/collection/archive/data::ditto-sequester
+      - id: ditto-rsrc-flag
+
+  # zip create composite
+  - id: zip-create
+    desc: zip archive creation
+    crit: notable
+    conf: 0.7
+    any:
+      - id: zip-recursive-quiet
+      - id: zip-output-file
+
+  # tmp archive composite
+  - id: tmp-archive
+    desc: "Archive creation in /tmp"
+    crit: suspicious
+    conf: 0.8
+    any:
+      - id: tmp-zip-path
+      - id: tmp-out-zip
+      - id: var-tmp-zip
+
+  # ditto staging for exfil
+  - id: ditto-staging
+    desc: "macOS data staging via ditto"
+    crit: suspicious
+    conf: 0.9
+    attack: "T1560.001"
+    for: [shell, applescript, python]
+    any:
+      - id: ditto-compress
+      - id: ditto-sequester
+    all:
+      - id: tmp-archive
+
+  # Archive with curl exfil
+  - id: archive-exfil
+    desc: "Archive collection with network exfiltration"
+    crit: suspicious
+    conf: 0.9
+    attack: "T1560.001"
+    for: [shell, applescript, python]
+    all:
+      - id: tmp-archive
+    any:
+      - id: ditto-compress
+      - id: ditto-sequester
+      - id: zip-create

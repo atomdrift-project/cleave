@@ -1,0 +1,191 @@
+# System Information Discovery - Python
+# Detects Python code that fingerprints the host system
+# ATT&CK: T1082 (System Information Discovery)
+
+defaults:
+  for: [python]
+  mbc: "E1082"
+  attack: "T1082"
+  crit: notable
+
+traits:
+  # Platform module - OS detection (Alias-resistant AST)
+  - id: python-platform-system
+    desc: Profiles the host operating system
+    conf: 0.8
+    if:
+      type: ast
+      kind: call
+      exact: ".system()"
+
+  - id: python-platform-machine
+    desc: Identifies the host CPU architecture
+    conf: 0.75
+    if:
+      type: ast
+      kind: call
+      exact: ".machine()"
+
+  - id: python-platform-node
+    desc: Retrieves the system hostname
+    conf: 0.7
+    if:
+      type: ast
+      kind: call
+      exact: ".node()"
+
+  - id: python-platform-full
+    desc: Retrieves the full system platform string
+    conf: 0.8
+    if:
+      type: ast
+      kind: call
+      exact: ".platform()"
+
+  - id: python-platform-uname
+    desc: Collects comprehensive system hardware and
+    conf: 0.8
+    if:
+      type: ast
+      kind: call
+      exact: ".uname()"
+
+  # User lookup (Alias-resistant)
+  - id: python-getpass-user
+    desc: Identifies the current logged-in user
+    conf: 0.85
+    if:
+      type: ast
+      kind: call
+      exact: ".getuser()"
+
+  - id: python-getpass-user-symbol
+    desc: Gets current username via getpass
+    conf: 0.85
+    if:
+      type: symbol
+      exact: "getpass.getuser"
+
+  - id: getuser-call
+    desc: getuser() function call
+    crit: notable
+    conf: 0.85
+    if:
+      type: string
+      regex: "getuser\\s*\\("
+
+  - id: getuser-string
+    desc: getuser string reference
+    crit: notable
+    conf: 0.7
+    if:
+      type: string
+      substr: "getuser"
+
+  - id: gethostname-call
+    desc: gethostname() function call
+    crit: notable
+    conf: 0.85
+    if:
+      type: string
+      regex: "gethostname\\s*\\("
+
+  - id: gethostname-string
+    desc: gethostname string reference
+    crit: notable
+    conf: 0.7
+    if:
+      type: string
+      substr: "gethostname"
+
+  # === Local IP discovery via socket connect ===
+  - id: getsockname-local-ip
+    desc: Local IP extraction via socket getsockname
+    crit: notable
+    conf: 0.85
+    if:
+      type: raw
+      substr: "getsockname"
+
+  # === MAC address discovery (atomic) ===
+  - id: getmac-module
+    desc: getmac module for MAC address
+    crit: notable
+    conf: 0.6
+    if:
+      type: string
+      substr: "getmac"
+
+  - id: uuid-getnode
+    desc: uuid.getnode() for MAC address
+    crit: notable
+    conf: 0.6
+    if:
+      type: string
+      substr: "uuid.getnode()"
+
+  # os.uname() call - content-based for cases where AST extraction
+  # doesn't capture it (e.g. os.uname()[1] subscript access)
+  - id: os-uname-content
+    desc: os.uname() system info call
+    crit: notable
+    conf: 0.8
+    if:
+      type: raw
+      regex: "os\\.uname\\s*\\("
+
+composite_rules:
+  # Username discovery composite
+  - id: python-username
+    desc: Gets current system username
+    crit: notable
+    conf: 0.85
+    any:
+      - id: python-getpass-user
+      - id: python-getpass-user-symbol
+
+  # MAC address discovery
+  - id: python-mac-discovery
+    desc: Collects hardware MAC addresses for
+    crit: notable
+    conf: 0.8
+    any:
+      - id: getmac-module
+      - id: micro-behaviors/os/network/interface::ifconfig
+      - id: uuid-getnode
+
+  # Multiple system information collection
+  - id: python-sysinfo-multi
+    desc: Collects multiple system information items
+    crit: notable
+    conf: 0.9
+    needs: 2
+    any:
+      - id: python-platform-system
+      - id: python-platform-machine
+      - id: python-platform-node
+      - id: python-platform-full
+      - id: python-platform-uname
+      - id: os-uname-content
+      - id: python-getpass-user
+      - id: python-getpass-user-symbol
+      - id: gethostname-call
+      - id: gethostname-string
+      - id: getuser-call
+      - id: getuser-string
+      - id: getsockname-local-ip
+      - id: micro-behaviors/os/admin/check::os-getuid-admin
+      - id: micro-behaviors/os/admin/check::ctypes-is-admin
+
+  # Composite: Intensive system enumeration (Alias-resistant)
+  - id: python-enumeration
+    desc: Performs intensive system enumeration (multiple
+    crit: notable
+    conf: 0.95
+    near_lines: 80
+    needs: 3
+    any:
+      - id: python-platform-system
+      - id: python-mac-discovery
+      - id: python-username
+      - id: micro-behaviors/communications/http/request

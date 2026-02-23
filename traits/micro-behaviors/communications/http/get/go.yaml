@@ -1,0 +1,17 @@
+# HTTP GET - Go
+# MBC: C0002 (HTTP Communication)
+# ATT&CK: T1071.001
+
+defaults:
+  for: [go, elf, macho, pe]
+  mbc: "C0002"
+  attack: "T1071.001"
+
+traits:
+  - id: http-get
+    desc: Go http.Get call
+    crit: notable
+    conf: 0.85
+    if:
+      type: symbol
+      exact: "http.Get"

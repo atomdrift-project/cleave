@@ -1,0 +1,12 @@
+defaults:
+  crit: notable
+  conf: 0.7
+  for: [all]
+
+traits:
+  - id: put
+    desc: HTTP PUT method
+    if:
+      type: string
+      word: PUT
+      case_insensitive: false

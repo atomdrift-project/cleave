@@ -1,0 +1,15 @@
+# HTTP Request Operations - Python aiohttp library
+# MBC: C0002 (HTTP Communication)
+# ATT&CK: T1071.001
+
+defaults:
+  for: [python]
+
+traits:
+  - id: aiohttp-session
+    desc: aiohttp.ClientSession usage
+    crit: baseline
+    conf: 0.7
+    if:
+      type: string
+      substr: "aiohttp.ClientSession"

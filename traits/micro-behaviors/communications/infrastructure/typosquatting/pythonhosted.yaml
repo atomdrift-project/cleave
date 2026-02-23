@@ -1,0 +1,13 @@
+# Detects typosquatted domains of Python Package Index infrastructure
+
+defaults:
+  crit: suspicious
+  for: ["*"]
+
+traits:
+  - id: pypihosted-domain
+    desc: "Detects the typosquatted domain files.pypihosted.org (mimics files.pythonhosted.org)"
+    conf: 1.0
+    if:
+      type: string
+      regex: '(?i)[a-z0-9.-]*pypihosted\.org'

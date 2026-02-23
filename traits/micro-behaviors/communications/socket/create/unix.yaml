@@ -1,0 +1,87 @@
+# Socket Creation
+# MBC: C0001 (Socket Communication)
+
+defaults:
+  for: [elf, macho, so, dylib, c]
+
+traits:
+  # socket: use micro-behaviors/communications/socket/listen/unix.yaml::socket-sym (canonical)
+  # socketpair: use micro-behaviors/communications/socket/pair/unix.yaml::pair (canonical)
+  - id: socketcall-sym
+    desc: socketcall multiplexed socket syscall (Linux)
+    crit: notable
+    conf: 0.75
+    platforms: [linux]
+    for: [elf]
+    if:
+      type: symbol
+      exact: "socketcall"
+
+  - id: socket-create
+    desc: Creates network socket (Linux)
+    conf: 0.9
+    crit: notable
+    platforms: [linux]
+    for: [elf]
+    if:
+      type: syscall
+      name: ["socket", "socketpair", "socketcall"]
+
+  - id: socket-socket-macos
+    desc: macOS socket syscall
+    conf: 0.9
+    crit: notable
+    platforms: [macos]
+    for: [macho]
+    if:
+      type: syscall
+      name: ["socket"]
+
+  - id: socket-connect
+    desc: Connects socket to remote host (Linux)
+    conf: 0.9
+    crit: notable
+    platforms: [linux]
+    for: [elf]
+    if:
+      type: syscall
+      name: ["connect"]
+
+  - id: socket-connect-macos
+    desc: macOS connect syscall
+    conf: 0.9
+    crit: notable
+    platforms: [macos]
+    for: [macho]
+    if:
+      type: syscall
+      name: ["connect"]
+
+composite_rules:
+  # create: composite referencing canonical socket creation traits plus socketcall
+  - id: create
+    desc: Create network socket
+    crit: notable
+    conf: 0.75
+    any:
+      - id: micro-behaviors/communications/socket/listen::socket-sym
+      - id: micro-behaviors/communications/socket/pair::pair
+      - id: socketcall-sym
+
+  - id: client
+    desc: Network client - connects to remote host
+    conf: 0.85
+    crit: notable
+    platforms: [linux]
+    all:
+      - id: socket-create
+      - id: socket-connect
+
+  - id: client-macos
+    desc: macOS network client
+    conf: 0.85
+    crit: notable
+    platforms: [macos]
+    all:
+      - id: socket-socket-macos
+      - id: socket-connect-macos

@@ -1,0 +1,133 @@
+# Binary Structural Metrics
+# Observational traits for binary organization and characteristics
+
+defaults:
+  for: [all]
+
+traits:
+  # === Binary Size Metrics ===
+
+  - id: small-elf-binary
+    desc: "Small ELF binary (< 50KB)"
+    crit: notable
+    conf: 0.6
+    for: [elf]
+    size_max: 51200
+
+  - id: large-executable
+    desc: "Large executable binary (> 1MB)"
+    crit: notable
+    conf: 0.7
+    for: [pe, elf, macho]
+    size_min: 1048576
+
+  # === Function Size Metrics ===
+
+  - id: large-functions
+    desc: "Binary contains unusually large functions"
+    crit: notable
+    conf: 0.65
+    if:
+      type: metrics
+      field: binary.huge_functions
+      min: 2
+
+  # === Linear Code Patterns ===
+
+  # NOTE: Go and Rust binaries have many linear functions due to compilation
+  # patterns (inlining, code generation). Raised threshold significantly -
+  # a typical Go binary has 500+ linear functions from runtime alone.
+  - id: linear-code-ratio
+    desc: "High ratio of linear functions"
+    crit: baseline
+    conf: 0.4
+    if:
+      type: metrics
+      field: binary.linear_functions
+      min: 1000
+
+  # === Complexity Metrics ===
+
+  - id: low-average-complexity
+    desc: "Low average code complexity (simple"
+    crit: baseline
+    conf: 0.75
+    if:
+      type: metrics
+      field: binary.avg_complexity
+      max: 3
+
+  # === Sparsity Metrics (Neutral) ===
+
+  - id: few-sections
+    desc: "Very few sections (merged/stripped)"
+    crit: baseline
+    conf: 0.6
+    if:
+      type: metrics
+      field: binary.section_count
+      max: 3
+
+  - id: no-functions
+    desc: "No detected functions (packed/obfuscated)"
+    crit: baseline
+    conf: 0.5
+    if:
+      type: metrics
+      field: binary.function_count
+      max: 3
+
+  - id: few-functions
+    desc: "Very few functions detected"
+    crit: baseline
+    conf: 0.4
+    if:
+      type: metrics
+      field: binary.function_count
+      max: 10
+
+  - id: few-basic-blocks
+    desc: "Very few basic blocks (obfuscated"
+    crit: baseline
+    conf: 0.4
+    if:
+      type: metrics
+      field: binary.total_basic_blocks
+      min: 1
+      max: 10
+
+  - id: few-leaf-functions
+    desc: "Very few leaf functions (deep"
+    crit: baseline
+    conf: 0.4
+    if:
+      type: metrics
+      field: binary.leaf_functions
+      min: 1
+      max: 5
+
+  - id: no-imports
+    desc: "No imported symbols"
+    crit: baseline
+    conf: 0.7
+    if:
+      type: metrics
+      field: binary.import_density
+      max: 0.01
+
+  - id: many-imports
+    desc: "High number of imported symbols (>100)"
+    crit: baseline
+    conf: 0.8
+    if:
+      type: metrics
+      field: binary.import_count
+      min: 100
+
+  - id: elf-no-sections
+    desc: "ELF with no section headers"
+    crit: baseline
+    conf: 0.75
+    if:
+      type: structure
+      feature: "no_sections"

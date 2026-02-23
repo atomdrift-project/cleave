@@ -1,0 +1,75 @@
+defaults:
+  for: [all]
+
+traits:
+  - id: setuid-syscall
+    desc: Sets user ID via setuid/seteuid
+    crit: notable
+    if:
+      type: syscall
+      name: ["setuid", "setuid32", "seteuid"]
+
+  - id: setreuid-syscall
+    desc: Sets real and effective user
+    crit: notable
+    if:
+      type: syscall
+      name: ["setreuid", "setreuid32"]
+
+  - id: setresuid-syscall
+    desc: Sets real, effective, and saved
+    crit: notable
+    if:
+      type: syscall
+      name: ["setresuid", "setresuid32"]
+
+  - id: setgid-syscall
+    desc: Sets group ID via setgid/setegid
+    crit: notable
+    if:
+      type: syscall
+      name: ["setgid", "setgid32", "setegid"]
+
+  - id: setregid-syscall
+    desc: Sets real and effective group
+    crit: notable
+    if:
+      type: syscall
+      name: ["setregid", "setregid32"]
+
+  - id: setresgid-syscall
+    desc: Sets real, effective, and saved
+    crit: notable
+    if:
+      type: syscall
+      name: ["setresgid", "setresgid32"]
+
+  - id: capset-syscall
+    desc: Sets process capabilities
+    crit: suspicious
+    if:
+      type: syscall
+      name: ["capset"]
+
+composite_rules:
+  - id: setuid
+    desc: Changes user identity
+    conf: 0.9
+    crit: notable
+    platforms: [linux]
+    for: [elf]
+    any:
+      - id: setuid-syscall
+      - id: setreuid-syscall
+      - id: setresuid-syscall
+
+  - id: setgid
+    desc: Changes group identity
+    conf: 0.9
+    crit: notable
+    platforms: [linux]
+    for: [elf]
+    any:
+      - id: setgid-syscall
+      - id: setregid-syscall
+      - id: setresgid-syscall

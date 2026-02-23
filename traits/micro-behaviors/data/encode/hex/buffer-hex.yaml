@@ -1,0 +1,30 @@
+defaults:
+  for: [all]
+
+traits:
+  - id: buffer-hex
+    desc: Converts buffer to hex string
+    crit: notable
+    if:
+      type: ast
+      language: javascript
+      query: |
+        (call_expression
+          function: (member_expression
+            object: (call_expression
+              function: (member_expression
+                object: (identifier) @buf
+                property: (property_identifier) @from
+              )
+              arguments: (arguments)
+            )
+            property: (property_identifier) @tostring
+          )
+          arguments: (arguments
+            (string (string_fragment) @enc)
+          )
+          (#eq? @buf "Buffer")
+          (#eq? @from "from")
+          (#eq? @tostring "toString")
+          (#eq? @enc "hex")
+        )

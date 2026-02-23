@@ -1,0 +1,139 @@
+defaults:
+  crit: suspicious
+  attack: T1036.005
+  mbc: F0004
+  for:
+  - python
+  - shell
+traits:
+- id: os-rename-call
+  desc: os.rename file movement
+  crit: notable
+  conf: 0.7
+  if:
+    id: micro-behaviors/fs/file/rename/unix::rename
+- id: shutil-move-call
+  desc: shutil.move file movement
+  crit: notable
+  conf: 0.7
+  if:
+    type: string
+    regex: shutil\.move|move\(
+- id: file-masquerade-move
+  desc: File masquerade movement
+  crit: suspicious
+  conf: 0.85
+  if:
+    type: string
+    regex: rename.{0,50}Startup|move.{0,50}Startup|rename.{0,50}AppData
+- id: suspicious-folder-name-a
+  desc: Suspicious folder combo grabber/logger
+  crit: suspicious
+  conf: 0.75
+  for:
+  - python
+  if:
+    type: string
+    regex: \b(grabber|logger)\b.{0,50}\b(test|tmp)\b
+- id: suspicious-folder-name-b
+  desc: Suspicious folder combo grabber/logger alt
+  crit: suspicious
+  conf: 0.75
+  for:
+  - python
+  if:
+    type: string
+    regex: \b(grabber|logger)\b.{0,50}\b(temp|boot|lmao)\b
+- id: suspicious-folder-name-c
+  desc: Suspicious folder combo stealer/bot
+  crit: suspicious
+  conf: 0.75
+  for:
+  - python
+  if:
+    type: string
+    regex: \b(stealer|bot)\b.{0,50}\b(test|tmp)\b
+- id: suspicious-folder-name-d
+  desc: Suspicious folder combo stealer/bot alt
+  crit: suspicious
+  conf: 0.75
+  for:
+  - python
+  if:
+    type: string
+    regex: \b(stealer|bot)\b.{0,50}\b(temp|boot|lmao)\b
+- id: appdata-path-manipulation
+  desc: AppData path reference
+  crit: notable
+  conf: 0.8
+  if:
+    type: string
+    regex: AppData.{0,50}Roaming.{0,50}Microsoft.{0,50}Windows.{0,50}CurrentVersion
+- id: startup-folder-access
+  desc: Startup folder path access
+  crit: suspicious
+  conf: 0.85
+  if:
+    type: string
+    regex: Start Menu.{0,50}Programs.{0,50}Startup.{0,50}boot
+- id: directory-masquerade-a
+  desc: Office name with grabber
+  crit: suspicious
+  conf: 0.8
+  if:
+    type: string
+    regex: (Powerpoint|Excel|Word|Outlook).{0,50}grabber
+- id: directory-masquerade-b
+  desc: Office name with steal/bot naming
+  crit: suspicious
+  conf: 0.8
+  if:
+    type: string
+    regex: (Powerpoint|Excel|Word|Outlook).{0,50}[sb][a-z]{2,7}
+composite_rules:
+- id: suspicious-folder-name
+  desc: Suspicious folder name
+  crit: suspicious
+  conf: 0.75
+  for:
+  - python
+  any:
+  - id: suspicious-folder-name-a
+  - id: suspicious-folder-name-b
+  - id: suspicious-folder-name-c
+  - id: suspicious-folder-name-d
+- id: directory-masquerade
+  desc: Directory masquerading
+  crit: suspicious
+  conf: 0.8
+  any:
+  - id: directory-masquerade-a
+  - id: directory-masquerade-b
+- id: file-masquerade-execution
+  desc: File masquerade for execution
+  crit: suspicious
+  conf: 0.9
+  attack: T1036.005
+  for:
+  - python
+  needs: 2
+  any:
+  - id: file-masquerade-move
+  - id: directory-masquerade
+  - id: startup-folder-access
+  all:
+  - id: os-rename-call
+- id: advanced-masquerade
+  desc: Advanced file masquerading
+  crit: hostile
+  conf: 0.95
+  attack: T1036.005
+  mbc: F0004
+  platforms:
+  - windows
+  needs: 3
+  any:
+  - id: directory-masquerade
+  - id: suspicious-folder-name
+  - id: appdata-path-manipulation
+  - id: startup-folder-access

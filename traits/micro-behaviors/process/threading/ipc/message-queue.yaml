@@ -1,0 +1,48 @@
+# Message Queue Threading Pattern
+# Detects server-based malware using message queues
+# Generic indicator for RATs, command servers
+
+traits:
+  # Removed peek-message-api, post-thread-message-a, get-message-a duplicates
+  # Use canonical: micro-behaviors/os/message/queue::peek-message-a, ::post-thread-message-a, ::get-message-a
+
+composite_rules:
+  - id: message-queue-threading
+    desc: Message queue-based thread communication
+    crit: notable
+    conf: 0.8
+    platforms: [windows]
+    for: [pe]
+    attack: "T1129"
+    mbc: "C0019"
+    all:
+      - id: micro-behaviors/process/create
+      - id: micro-behaviors/process/threading
+    any:
+      - id: micro-behaviors/os/message/queue::peek-message-a
+      - id: micro-behaviors/os/message/queue::get-message-a # not-dupe (threading IPC context)
+    needs: 1
+
+  - id: message-based-command-server
+    desc: Message queue command server pattern
+    crit: notable
+    conf: 0.85
+    platforms: [windows]
+    for: [pe]
+    attack: "T1129"
+    mbc: "C0019"
+    all:
+      - id: message-queue-threading
+      - id: micro-behaviors/os/message/queue::post-thread-message-a # not-dupe (threading IPC context)
+
+  - id: message-dispatch-framework
+    desc: Sophisticated message dispatch framework
+    crit: suspicious
+    conf: 0.9
+    platforms: [windows]
+    for: [pe]
+    attack: "T1129"
+    mbc: "C0019"
+    all:
+      - id: message-based-command-server
+      - id: micro-behaviors/process/create/

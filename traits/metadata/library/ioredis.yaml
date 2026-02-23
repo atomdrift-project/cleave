@@ -1,0 +1,53 @@
+defaults:
+  for:
+    - all
+traits:
+  - id: ioredis-auto-pipeline
+    desc: ioredis auto-pipelining commands list
+    crit: baseline
+    if:
+      type: raw
+      substr: notAllowedAutoPipelineCommands
+  - id: ioredis-command
+    desc: ioredis Command class
+    crit: baseline
+    if:
+      type: raw
+      regex: Command\.FLAGS\s*=\s*\{|VALID_IN_SUBSCRIBER_MODE
+  - id: ioredis-utils
+    desc: ioredis utility functions
+    crit: baseline
+    if:
+      type: raw
+      regex: exports\.convert\w+
+  - id: ioredis-utils-buffer-equal
+    desc: ioredis bufferEqual utility
+    crit: baseline
+    if:
+      type: raw
+      exact: exports.bufferEqual
+  - id: ioredis-utils-wrap-multi-result
+    desc: ioredis wrapMultiResult utility
+    crit: baseline
+    if:
+      type: raw
+      exact: exports.wrapMultiResult
+  - id: ioredis-utils-pack-object
+    desc: ioredis packObject utility
+    crit: baseline
+    if:
+      type: raw
+      exact: exports.packObject
+  - id: ioredis-utils-parse-url
+    desc: ioredis parseURL utility
+    crit: baseline
+    if:
+      type: raw
+      exact: exports.parseURL
+  - id: ioredis-utils-zip-map
+    desc: ioredis zipMap utility
+    crit: baseline
+    if:
+      type: raw
+      exact: exports.zipMap
+composite_rules: []

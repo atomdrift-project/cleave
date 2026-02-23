@@ -1,0 +1,55 @@
+# Credential Access - macOS Chromium Browser Data Theft
+# ATT&CK: T1555.003 (Credentials from Password Stores: Credentials from Web Browsers)
+
+defaults:
+  for: [all]
+  platforms: [macos]
+  attack: "T1555.003"
+
+traits:
+  - id: chrome-keychain-query
+    desc: Queries Keychain for Chrome Safe Storage key
+    crit: suspicious
+    conf: 0.95
+    if:
+      type: raw
+      regex: "security\\s+find-generic-password\\s+-wa.{0,50}'?Chrome'?"
+
+  - id: chrome-safe-storage-key-string
+    desc: Chrome Safe Storage key string reference
+    crit: notable
+    conf: 0.8
+    if:
+      type: string
+      substr: "Chrome Safe Storage"
+
+  - id: chrome-decryption-salt
+    desc: Chrome decryption salt (saltysalt)
+    crit: notable
+    conf: 0.9
+    for: [python, javascript, c, go, rust]
+    if:
+      type: string
+      substr: "saltysalt"
+
+  - id: openssl-aes-decryption-cmd
+    desc: OpenSSL AES decryption for Chrome
+    crit: suspicious
+    conf: 0.8
+    if:
+      type: raw
+      regex: "openssl\\s+enc\\s+.{0,100}-aes-128-cbc\\s+-iv\\s+.{0,100}-K\\s+"
+
+composite_rules:
+  - id: chrome-password-theft-macos
+    desc: macOS Chrome password theft detection
+    crit: hostile
+    conf: 0.95
+    mbc: "B0028"
+    all:
+      - id: chrome-decryption-salt
+    any:
+      - id: chrome-keychain-query
+      - id: openssl-aes-decryption-cmd
+      - id: micro-behaviors/fs/path/sensitive/browser::login-data
+      - id: objectives/credential-access/browser/chromium::web-data

@@ -1,0 +1,97 @@
+# Encoded Data Section Analysis
+# GAP #4: Detects large encoded data sections likely containing C2 config or payloads
+# Malware often stores encrypted/encoded configuration in data sections
+
+defaults:
+  for: [elf, macho, pe]
+  attack: "T1027"
+  mbc: "B0032"
+
+traits:
+  # Medium-high entropy in data section = likely encoded/encrypted
+  - id: high-entropy-data-section
+    desc: "High entropy in data section"
+    crit: suspicious
+    conf: 0.8
+    if:
+      type: section
+      exact: "data"
+      entropy_min: 6.0
+      entropy_max: 7.8
+  # Very high entropy = likely encrypted
+  - id: encrypted-data-section
+    desc: "Encrypted data section (very high)"
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: section
+      exact: "data"
+      entropy_min: 7.5
+      entropy_max: 8.0
+  # Large data section relative to text section
+  - id: oversized-data-section
+    desc: "Oversized data section vs code"
+    crit: notable
+    conf: 0.7
+    if:
+      type: section_ratio
+      section: data
+      compare_to: text
+      min: 0.5
+
+  # Data section dominates the binary
+  - id: data-section-dominant
+    desc: "Data section larger than code"
+    crit: suspicious
+    conf: 0.8
+    if:
+      type: section_ratio
+      section: data
+      compare_to: text
+      min: 1.0
+
+  # Large rodata section with medium entropy = encoded strings
+  - id: encoded-rodata-section
+    desc: "Encoded read-only data section"
+    crit: notable
+    conf: 0.7
+    for: [elf, macho]
+    if:
+      type: section
+      exact: "rodata"
+      entropy_min: 5.5
+      entropy_max: 7.5
+composite_rules:
+  # GAP #4: Large encoded data section = configuration/payload storage
+  - id: large-encoded-config-section
+    desc: "Large encoded configuration data section"
+    crit: suspicious
+    conf: 0.85
+    attack: "T1027"
+    size_min: 16384  # 16KB minimum
+    all:
+      - id: high-entropy-data-section
+      - id: oversized-data-section
+
+  # Very suspicious: large + encrypted + tiny strings
+  - id: encrypted-payload-section
+    desc: "Encrypted payload in data section"
+    crit: suspicious
+    conf: 0.9
+    attack: "T1027"
+    size_min: 8192  # 8KB minimum
+    all:
+      - id: encrypted-data-section
+      - id: objectives/anti-static/obfuscation/payload::tiny-cstring
+
+  # Data section larger than code + shell exec = dropper
+  - id: data-heavy-dropper-pattern
+    desc: "Data-heavy binary with shell execution"
+    crit: suspicious
+    conf: 0.9
+    attack: "T1027"
+    all:
+      - id: data-section-dominant
+      - id: micro-behaviors/process/create/shell::shell-execution
+    none:
+      - id: metadata/signed/platform::apple

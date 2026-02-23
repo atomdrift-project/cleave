@@ -1,0 +1,62 @@
+# Windows Privilege Operations
+# Token and privilege escalation related APIs
+
+defaults:
+  for: ["pe", "dll"]
+  platforms: ["windows"]
+
+traits:
+  # === Token Access ===
+  - id: open-process-token
+    desc: Open process access token
+    crit: notable # Downgraded from suspicious - common in installers
+    conf: 0.75
+    if:
+      type: symbol
+      exact: "OpenProcessToken"
+    downgrade:
+      any:
+        - type: string
+          substr: "ApiSet Stub DLL"
+
+  # === Privilege Operations ===
+  - id: lookup-privilege-value
+    desc: Lookup privilege name to LUID
+    crit: notable # Downgraded from suspicious - common in installers
+    conf: 0.75
+    if:
+      type: symbol
+      exact: "LookupPrivilegeValueW"
+    downgrade:
+      any:
+        - type: string
+          substr: "ApiSet Stub DLL"
+
+  - id: adjust-token-privileges
+    desc: Enable/disable privileges in access token
+    crit: notable # Downgraded from suspicious - common in installers
+    conf: 0.80
+    if:
+      type: symbol
+      exact: "AdjustTokenPrivileges"
+    downgrade:
+      any:
+        - type: string
+          substr: "ApiSet Stub DLL"
+
+  # === Token Query ===
+  - id: get-token-information
+    desc: Query token information
+    crit: baseline
+    conf: 0.65
+    if:
+      type: symbol
+      exact: "GetTokenInformation"
+
+  - id: duplicate-token
+    desc: Create duplicate of access token
+    crit: suspicious
+    conf: 0.80
+    if:
+      type: symbol
+      exact: "DuplicateTokenEx"

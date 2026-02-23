@@ -1,0 +1,15 @@
+defaults:
+  for: [javascript, typescript]
+
+composite_rules:
+  - id: node-ppid-check
+    desc: Verifies parent process ID against argument (anti-analysis/sandbox evasion)
+    conf: 0.95
+    crit: hostile
+    attack: T1497
+    mbc: B0003
+    all:
+      - id: micro-behaviors/os/process/info::check-ppid
+      - id: micro-behaviors/os/process/info::check-argv
+      - id: objectives/execution/interpreter/eval/dynamic::eval-call-js
+      - id: micro-behaviors/data/encode/hex::buffer-from-hex

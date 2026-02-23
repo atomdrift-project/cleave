@@ -1,0 +1,298 @@
+# Dynamic Loading Patterns
+# These patterns can be legitimate but are also used by malware
+# Useful for ML classification and behavioral analysis
+
+defaults:
+  for: [all]
+
+traits:
+  # dlopen/dlsym (Linux/macOS)
+  - id: dlopen
+    desc: Runtime library loading via dlopen
+    crit: notable
+    conf: 0.9
+    platforms: [linux, macos, unix]
+    for: [elf, macho, so, dylib]
+    if:
+      type: yara
+      source: |
+        rule dlopen_load {
+          strings:
+            $dlopen = "dlopen" ascii
+            $dlsym = "dlsym" ascii
+            $dlclose = "dlclose" ascii
+            $dlerror = "dlerror" ascii
+          condition:
+            $dlopen or ($dlsym and any of ($dlclose, $dlerror))
+        }
+
+  # LoadLibrary (Windows)
+  - id: loadlibrary
+    desc: Runtime library loading via LoadLibrary
+    crit: notable
+    conf: 0.9
+    platforms: [windows]
+    for: [pe, dll]
+    if:
+      type: yara
+      source: |
+        rule loadlibrary_load {
+          strings:
+            $ll1 = "LoadLibrary" ascii wide
+            $ll2 = "LoadLibraryA" ascii
+            $ll3 = "LoadLibraryW" ascii
+            $ll4 = "LoadLibraryEx" ascii wide
+            $gpa = "GetProcAddress" ascii wide
+          condition:
+            any of ($ll*) or $gpa
+        }
+
+  # Python dynamic import
+  - id: python-import
+    desc: Python dynamic import patterns
+    crit: notable
+    conf: 0.85
+    for: [python]
+    if:
+      type: yara
+      source: |
+        rule python_dynamic_import {
+          strings:
+            $imp1 = "__import__" ascii
+            $imp2 = "importlib.import_module" ascii
+            $imp3 = "exec(compile" ascii
+            $imp4 = "importlib.util" ascii
+          condition:
+            any of them
+        }
+
+  # Python chained import (often used for obfuscation)
+  - id: python-import-chain
+    desc: Chained __import__ calls
+    crit: notable
+    conf: 0.9
+    for: [python]
+    if:
+      type: raw
+      regex: "__import__\\(.{0,50}__import__"
+
+  # Python zipimporter - loads modules from ZIP files
+  - id: python-zipimporter
+    desc: Python zipimporter module loading
+    crit: notable
+    conf: 0.9
+    for: [python]
+    if:
+      type: symbol
+      exact: "zipimporter"
+
+  # Python zipimporter load_module - executes code from ZIP
+  - id: python-zipimporter-load
+    desc: Loads module from ZIP archive
+    crit: notable
+    conf: 0.95
+    for: [python]
+    # Small files with zipimporter logic are more suspicious
+    size_max: 1000000
+    if:
+      type: symbol
+      regex: "\\.load_module"
+
+  # Java reflection loading
+  - id: java-reflection
+    desc: Java reflection class loading
+    crit: notable
+    conf: 0.85
+    for: [class, java]
+    if:
+      type: yara
+      source: |
+        rule java_reflection_load {
+          strings:
+            $ref1 = "Class.forName" ascii
+            $ref2 = "ClassLoader" ascii
+            $ref3 = "defineClass" ascii
+            $ref4 = "loadClass" ascii
+            $ref5 = "newInstance" ascii
+          condition:
+            2 of them
+        }
+
+  # Java defineClass - loading bytecode dynamically
+  - id: java-defineclass
+    desc: Dynamic class definition from bytecode
+    crit: suspicious
+    conf: 0.95
+    if:
+      type: yara
+      source: |
+        rule java_defineclass {
+          strings:
+            $dc = "defineClass" ascii
+            $lc = "loadClass" ascii
+            $fc = "findClass" ascii
+          condition:
+            $dc and ($lc or $fc)
+        }
+
+  # Java resource-backed class loader (loads bytecode from embedded resource)
+  - id: java-resource-classloader
+    desc: Defines class from resource stream
+    crit: suspicious
+    conf: 0.92
+    for: [class]
+    if:
+      type: yara
+      source: |
+        rule java_resource_classloader {
+          strings:
+            $res = "getResourceAsStream" ascii
+            $dc = "defineClass" ascii
+            $lc = "loadClass" ascii
+            $fc = "findClass" ascii
+            $pd = "ProtectionDomain" ascii
+            $gpd = "getProtectionDomain" ascii
+          condition:
+            $res and $dc and ($lc or $fc) and ($pd or $gpd)
+        }
+
+  # Java reflective method invocation in bytecode
+  - id: java-reflective-invoke
+    desc: Reflective method invocation in bytecode
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: yara
+      source: |
+        rule java_reflective_invoke {
+          strings:
+            $method = "java/lang/reflect/Method" ascii
+            $invoke = "invoke" ascii
+            $getmethod = "getMethod" ascii
+          condition:
+            $method and ($invoke or $getmethod)
+        }
+
+  # Java string deobfuscation via StringBuilder.reverse
+  - id: java-string-reversal
+    desc: String reversal deobfuscation technique
+    crit: notable
+    conf: 0.85
+    if:
+      type: yara
+      source: |
+        rule java_string_reversal {
+          strings:
+            $sb = "java/lang/StringBuilder" ascii
+            $rev = "reverse" ascii
+            $tostr = "toString" ascii
+          condition:
+            $sb and $rev and $tostr
+        }
+
+  # .NET reflection loading
+  - id: dotnet-reflection
+    desc: .NET reflection assembly loading
+    crit: notable
+    conf: 0.85
+    platforms: [windows]
+    for: [pe, dll, csharp]
+    if:
+      type: yara
+      source: |
+        rule dotnet_reflection_load {
+          strings:
+            $ref1 = "Assembly.Load" ascii wide
+            $ref2 = "Assembly.LoadFrom" ascii wide
+            $ref3 = "Activator.CreateInstance" ascii wide
+            $ref4 = "Type.GetType" ascii wide
+            $ref5 = "MethodInfo.Invoke" ascii wide
+          condition:
+            any of them
+        }
+
+  # Go plugin loading
+  - id: go-plugin
+    desc: Go plugin dynamic loading
+    crit: notable
+    conf: 0.9
+    for: [elf, macho, pe, go]
+    if:
+      type: yara
+      source: |
+        rule go_plugin_load {
+          strings:
+            $plug1 = "plugin.Open" ascii
+            $plug2 = "plugin.Lookup" ascii
+            $plug3 = "plugin.Symbol" ascii
+          condition:
+            any of them
+        }
+
+  # Executable memory allocation
+  - id: executable-memory
+    desc: Allocates or modifies executable memory
+    crit: notable
+    conf: 0.8
+    for: [pe, elf, macho, dll, so, dylib]
+    if:
+      type: yara
+      source: |
+        rule executable_memory_ops {
+          strings:
+            $mprot = "mprotect" ascii
+            $vprot = "VirtualProtect" ascii wide
+            $p_exec = "PROT_EXEC" ascii
+            $pg_exec = "PAGE_EXECUTE" ascii wide
+            $mmap = "mmap" ascii
+            $rwx = "MAP_ANONYMOUS" ascii
+          condition:
+            ($mmap and $rwx and ($mprot or $p_exec or $pg_exec)) or
+            ($vprot and $pg_exec)
+        }
+
+  # JIT runtime references
+  - id: jit-runtime-ref-1
+    desc: JIT compilation runtime reference (jit_compile/jit_runtime)
+    crit: notable
+    conf: 0.85
+    if:
+      type: string
+      regex: "(?i)jit_compile|jit_runtime"
+
+  - id: jit-runtime-ref-2
+    desc: JIT compilation runtime reference (libjit/LuaJIT/V8 JIT)
+    crit: notable
+    conf: 0.85
+    if:
+      type: string
+      regex: "(?i)libjit|LuaJIT|V8 JIT"
+
+composite_rules:
+  - id: jit-runtime-ref
+    desc: JIT compilation runtime reference
+    crit: notable
+    conf: 0.85
+    any:
+      - id: jit-runtime-ref-1
+      - id: jit-runtime-ref-2
+
+  # JIT compilation indicators
+  - id: jit
+    desc: JIT compilation patterns
+    crit: notable
+    conf: 0.85
+    all:
+      - id: executable-memory
+      - id: jit-runtime-ref
+
+  # Suspicious dynamic loading with memory execution
+  - id: memory-exec
+    desc: Dynamic loading with executable memory
+    crit: suspicious
+    conf: 0.85
+    all:
+      - id: executable-memory
+    any:
+      - id: dlopen
+      - id: loadlibrary

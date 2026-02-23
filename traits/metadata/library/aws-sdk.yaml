@@ -1,0 +1,34 @@
+traits:
+  - id: aws-sdk-ruby-class
+    desc: AWS SDK for Ruby class definition
+    crit: baseline
+    for: [ruby]
+    if:
+      type: ast
+      kind: class
+      exact: "InstanceProfileCredentials"
+
+  - id: aws-sdk-ruby-module
+    desc: AWS SDK for Ruby module definition
+    crit: baseline
+    for: [ruby]
+    if:
+      type: ast
+      kind: module
+      exact: "Aws"
+
+  - id: aws-sdk-ruby-constants
+    desc: AWS SDK for Ruby constants
+    crit: baseline
+    for: [ruby]
+    if:
+      type: string
+      substr: "AWS_EC2_METADATA_DISABLED"
+
+composite_rules:
+  - id: aws-sdk-ruby
+    desc: AWS SDK for Ruby detected
+    crit: notable
+    any:
+      - id: aws-sdk-ruby-class
+      - id: aws-sdk-ruby-constants

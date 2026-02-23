@@ -1,0 +1,20 @@
+# Generic Stealth Backdoor Patterns
+# Detects combinations of anti-analysis and evasive behaviors
+# NOTE: Requires debugger detection + obfuscation + self-modify to avoid false positives
+# from legitimate software (Node.js, etc.) that use timing functions or mprotect normally
+
+composite_rules:
+  - id: stealth-behavior
+    desc: "Stealth backdoor behavior (Anti-analysis +"
+    crit: hostile
+    conf: 0.85
+    attack: "T1027"
+    mbc: "B0001"
+    for: [elf, macho, so, dylib]
+    all:
+      # Require explicit anti-analysis: debugger/VM detection
+      - id: objectives/anti-analysis/debugger/detect::process-inspection
+      # Plus string obfuscation (indicates intent to hide)
+      - id: objectives/anti-static/obfuscation/strings/
+      # Plus memory protection manipulation (indicates self-modification)
+      - id: micro-behaviors/mem/protect/modify::mprotect-symbol

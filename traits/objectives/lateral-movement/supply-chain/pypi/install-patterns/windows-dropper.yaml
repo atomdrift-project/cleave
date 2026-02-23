@@ -1,0 +1,44 @@
+defaults:
+  crit: hostile
+  attack: T1195.002
+  mbc: E1195
+  for: [python]
+
+composite_rules:
+  # Helper: Any start process method
+  - id: win32-start-process-combo
+    desc: Windows start process method
+    crit: notable
+    conf: 0.8
+    any:
+      - id: micro-behaviors/process/create/launch::python-start-process
+      - id: micro-behaviors/process/create/launch::os-startfile-call
+
+  # Helper: Any network activity
+  - id: python-network-combo
+    desc: Python network activity
+    crit: notable
+    conf: 0.8
+    any:
+      - id: micro-behaviors/communications/http/request::request-python
+      - id: micro-behaviors/communications/http/lib/requests::requests-python
+      - id: micro-behaviors/communications/socket/connect::socket-data-transfer
+
+  # Helper: Install context
+  - id: pypi-install-context-combo
+    desc: PyPI install context
+    crit: notable
+    conf: 1.0
+    any:
+      - id: objectives/lateral-movement/supply-chain/pypi/install-patterns::setup-py-file
+      - id: metadata/format/extension::py
+
+  # Main Rule
+  - id: windows-target-dropper
+    desc: PyPI setup/init script targeting Windows with payload delivery
+    conf: 0.95
+    all:
+      - id: micro-behaviors/os/sysinfo/platform::python-win32-check
+      - id: win32-start-process-combo
+      - id: python-network-combo
+      - id: pypi-install-context-combo

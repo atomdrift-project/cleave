@@ -1,0 +1,52 @@
+defaults:
+  for: [all]
+  platforms: [macos]
+  attack: "T1105"
+
+traits:
+  - id: download-config-url
+    desc: Configures application download URL in Info.plist
+    crit: notable
+    if:
+      type: kv
+      path: "DownloadApplicationPackageURL"
+      regex: "http"
+
+  - id: download-config-spare
+    desc: Configures spare application download URL in Info.plist
+    crit: notable
+    conf: 1.0
+    if:
+      type: kv
+      path: "SpareDownloadPackageURL"
+      regex: "http"
+
+  - id: auto-download-launch
+    desc: Configures automatic download on launch in Info.plist
+    crit: notable
+    conf: 1.0
+    if:
+      type: kv
+      path: "AllowedDownloadImmediatelyWhenApplicationLaunch"
+      regex: "^(1|true)$"
+
+  - id: installer-redirect-banner
+    desc: Configures installer banner URL
+    crit: baseline
+    if:
+      type: kv
+      path: "BannerJumpURL"
+
+  - id: installer-redirect-code
+    desc: Configures installer jump code
+    crit: baseline
+    if:
+      type: kv
+      path: "InstallJumpCode"
+
+  - id: bugsplat-reporting
+    desc: Configures BugSplat crash reporting
+    crit: baseline
+    if:
+      type: kv
+      path: "BugsplatServerURL"

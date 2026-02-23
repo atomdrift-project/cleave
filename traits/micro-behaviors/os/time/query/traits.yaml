@@ -1,0 +1,169 @@
+# Time and Date Operation Traits
+# MBC: OB0009 (Operating System) → Various time-related operations
+# ATT&CK: T1124 (System Time Discovery), T1070.006 (Timestomp)
+
+defaults:
+  for: [elf, macho, so, dylib, c]
+
+traits:
+  # Time retrieval
+  - id: time
+    desc: Get current calendar time (seconds)
+    crit: baseline
+    mbc: "T1124"
+    attack: "T1124"
+    conf: 0.3
+    if:
+      type: symbol
+      exact: "time"
+    platforms: [unix, linux, macos, windows]
+
+  - id: gettimeofday
+    desc: Get current time with microsecond precision
+    crit: baseline
+    mbc: "T1124"
+    attack: "T1124"
+    conf: 0.3
+    if:
+      type: symbol
+      exact: "gettimeofday"
+    platforms: [unix, linux, macos]
+
+  - id: clock_gettime
+    desc: Get time from specified clock
+    crit: baseline
+    mbc: "T1124"
+    attack: "T1124"
+    conf: 0.3
+    if:
+      type: symbol
+      exact: "clock_gettime"
+    platforms: [unix, linux, macos]
+
+  # Time formatting and conversion
+  - id: localtime-symbol
+    desc: localtime function (symbol)
+    crit: baseline
+    conf: 0.2
+    if:
+      type: symbol
+      regex: localtime
+
+  - id: localtime-string
+    desc: localtime function (string)
+    crit: baseline
+    conf: 0.2
+    if:
+      type: string
+      regex: ocaltime
+
+  - id: gmtime
+    desc: Convert time to UTC time
+    crit: baseline
+    conf: 0.2
+    if:
+      type: symbol
+      regex: gmtime
+    platforms: [unix, linux, macos, windows]
+
+  - id: strftime
+    desc: Format time as string
+    crit: baseline
+    conf: 0.2
+    if:
+      type: symbol
+      regex: strftime
+    platforms: [unix, linux, macos, windows]
+
+  - id: strptime
+    desc: Parse time string into time
+    crit: baseline
+    conf: 0.2
+    if:
+      type: symbol
+      regex: strptime
+    platforms: [unix, linux, macos]
+
+  # Time manipulation (suspicious for timestomping)
+  - id: settimeofday
+    desc: Set system time (requires privileges)
+    crit: notable
+    mbc: "F0005"
+    attack: "T1070.006"
+    conf: 0.9
+    if:
+      type: symbol
+      regex: settimeofday
+    platforms: [unix, linux, macos]
+
+  - id: clock_settime
+    desc: Set time for specified clock
+    crit: notable
+    mbc: "F0005"
+    attack: "T1070.006"
+    conf: 0.9
+    if:
+      type: symbol
+      regex: clock_settime
+    platforms: [unix, linux, macos]
+
+  # utimes/utimensat/futimens: use micro-behaviors/fs/file/timestamp::utimes-syscall etc. (canonical)
+
+  - id: sleep-func
+    desc: Sleep for specified duration
+    crit: baseline
+    conf: 0.3
+    if:
+      type: symbol
+      exact: "sleep"
+    platforms: [unix, linux, macos, windows]
+
+  - id: usleep-func
+    desc: Sleep for microsecond duration
+    crit: baseline
+    conf: 0.3
+    if:
+      type: symbol
+      exact: "usleep"
+    platforms: [unix, linux, macos]
+
+  - id: nanosleep-func
+    desc: Sleep for nanosecond duration
+    crit: baseline
+    conf: 0.3
+    if:
+      type: symbol
+      exact: "nanosleep"
+    platforms: [unix, linux, macos]
+
+composite_rules:
+  - id: localtime
+    desc: Convert time to local time
+    crit: baseline
+    conf: 0.2
+    any:
+      - id: micro-behaviors/os/time/query::localtime-symbol
+      - id: micro-behaviors/os/time/query::localtime-string
+    platforms: [unix, linux, macos, windows]
+
+  - id: utimes
+    desc: Change file access and modification times
+    crit: notable
+    mbc: "F0005"
+    attack: "T1070.006"
+    conf: 0.7
+    platforms: [unix, linux, macos]
+    any:
+      - id: micro-behaviors/fs/file/timestamp::utimes-syscall
+      - id: micro-behaviors/fs/file/timestamp::utimensat-syscall
+      - id: micro-behaviors/fs/file/timestamp::futimens-syscall
+
+  - id: sleep
+    desc: Suspend execution for interval
+    crit: baseline
+    conf: 0.4
+    platforms: [unix, linux, macos]
+    any:
+      - id: micro-behaviors/os/time/query::sleep-func
+      - id: micro-behaviors/os/time/query::usleep-func
+      - id: micro-behaviors/os/time/query::nanosleep-func

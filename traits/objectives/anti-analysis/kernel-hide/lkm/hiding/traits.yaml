@@ -1,0 +1,388 @@
+traits:
+  - id: d-reclen-manipulation
+    desc: Directory entry record length manipulation
+    crit: suspicious
+    conf: 0.98
+    attack: T1014
+    for:
+      - c
+    if:
+      type: ast
+      kind: attribute
+      exact: d_reclen
+  - id: d-name-access
+    desc: Directory entry name field access
+    crit: suspicious
+    conf: 0.8
+    for:
+      - c
+    if:
+      type: ast
+      kind: attribute
+      exact: d_name
+  - id: simple-strtoul-call
+    desc: String to unsigned long conversion
+    crit: suspicious
+    conf: 0.85
+    for:
+      - c
+    if:
+      type: ast
+      kind: call
+      exact: simple_strtoul
+  - id: memmove-call
+    desc: Memory move operation (often used
+    crit: suspicious
+    conf: 0.7
+    for:
+      - c
+    if:
+      type: ast
+      kind: call
+      exact: memmove
+  - id: memcmp-dirent-context
+    desc: Memory comparison (file prefix matching
+    crit: suspicious
+    conf: 0.7
+    for:
+      - c
+    if:
+      type: ast
+      kind: call
+      exact: memcmp
+  - id: sect-attrs-removal
+    desc: Module section attributes removal (hide
+    crit: suspicious
+    conf: 0.99
+    attack: T1014
+    for:
+      - c
+    if:
+      type: ast
+      kind: attribute
+      exact: sect_attrs
+  - id: list-add-call
+    desc: Kernel list addition (module unhiding
+    crit: suspicious
+    conf: 0.9
+    for:
+      - c
+    if:
+      type: ast
+      kind: call
+      exact: list_add
+  - id: kfree-call
+    desc: Kernel memory free (often used
+    crit: suspicious
+    conf: 0.7
+    for:
+      - c
+    if:
+      type: ast
+      kind: call
+      exact: kfree
+  - id: corruption-mention-comment
+    desc: Code mentions corruption/corrupting
+    crit: suspicious
+    conf: 0.95
+    for:
+      - c
+    if:
+      type: ast
+      kind: comment
+      exact: corrupt
+      case_insensitive: true
+  - id: stealthy-mention-comment
+    desc: Code mentions stealth/stealthy
+    crit: suspicious
+    conf: 0.95
+    for:
+      - c
+    if:
+      type: ast
+      kind: comment
+      exact: stealth
+      case_insensitive: true
+  - id: unauthorized-mention-comment
+    desc: Code mentions unauthorized access
+    crit: suspicious
+    conf: 0.95
+    for:
+      - c
+    if:
+      type: ast
+      kind: comment
+      regex: unauthori[sz]ed
+      case_insensitive: true
+  - id: defeating-mention-comment
+    desc: Code mentions defeating protections
+    crit: suspicious
+    conf: 0.95
+    for:
+      - c
+    if:
+      type: ast
+      kind: comment
+      exact: defeat
+      case_insensitive: true
+  - id: persistence-mention-comment
+    desc: Code mentions persistence
+    crit: suspicious
+    conf: 0.85
+    for:
+      - c
+    if:
+      type: ast
+      kind: comment
+      exact: persist
+      case_insensitive: true
+  - id: polymorphic-mention-comment
+    desc: Code mentions polymorphic techniques
+    crit: suspicious
+    conf: 0.95
+    for:
+      - c
+    if:
+      type: ast
+      kind: comment
+      exact: polymorphic
+      case_insensitive: true
+  - id: covert-channel-mention-comment
+    desc: Code mentions covert channels/communication
+    crit: suspicious
+    conf: 0.95
+    for:
+      - c
+    if:
+      type: ast
+      kind: comment
+      exact: covert
+      case_insensitive: true
+  - id: rootkit-mention-comment
+    desc: Code explicitly mentions rootkit
+    crit: suspicious
+    conf: 1.0
+    for:
+      - c
+    if:
+      type: ast
+      kind: comment
+      exact: rootkit
+      case_insensitive: true
+  - id: malware-mention-comment-malware
+    desc: Code explicitly mentions malware/backdoor
+    crit: suspicious
+    conf: 1.0
+    for:
+      - c
+    if:
+      type: ast
+      kind: comment
+      exact: malware
+      case_insensitive: true
+
+  - id: malware-mention-comment-backdoor
+    desc: Code explicitly mentions malware/backdoor
+    crit: suspicious
+    conf: 1.0
+    for:
+      - c
+    if:
+      type: ast
+      kind: comment
+      exact: backdoor
+      case_insensitive: true
+  - id: privilege-escalation-mention-comment
+    desc: Code explicitly mentions privilege escalation
+    crit: suspicious
+    conf: 0.95
+    for:
+      - c
+    if:
+      type: ast
+      kind: comment
+      regex: privilege.?escalation|privilege-escalation
+      case_insensitive: true
+  - id: evasion-mention-comment-evasion
+    desc: Code mentions evasion techniques
+    crit: suspicious
+    conf: 0.9
+    for:
+      - c
+    if:
+      type: ast
+      kind: comment
+      exact: evasion
+      case_insensitive: true
+
+  - id: evasion-mention-comment-evade
+    desc: Code mentions evasion techniques
+    crit: suspicious
+    conf: 0.9
+    for:
+      - c
+    if:
+      type: ast
+      kind: comment
+      exact: evade
+      case_insensitive: true
+  - id: syscall-hook-mention-comment
+    desc: Code mentions syscall hooking
+    crit: suspicious
+    conf: 0.95
+    for:
+      - c
+    if:
+      type: ast
+      kind: comment
+      regex: syscall.{0,20}(hook|intercept)
+      case_insensitive: true
+  - id: hide-function-name-hide
+    desc: Function name suggests hiding capability
+    crit: suspicious
+    conf: 0.85
+    for:
+      - c
+    if:
+      type: ast
+      kind: identifier
+      exact: hide
+      case_insensitive: true
+
+  - id: hide-function-name-invisible
+    desc: Function name suggests hiding capability
+    crit: suspicious
+    conf: 0.85
+    for:
+      - c
+    if:
+      type: ast
+      kind: identifier
+      exact: invisible
+      case_insensitive: true
+
+  - id: hide-function-name-stealth
+    desc: Function name suggests hiding capability
+    crit: suspicious
+    conf: 0.85
+    for:
+      - c
+    if:
+      type: ast
+      kind: identifier
+      exact: stealth
+      case_insensitive: true
+  - id: hook-syscall-function-name
+    desc: Function name suggests syscall hooking
+    crit: suspicious
+    conf: 0.9
+    for:
+      - c
+    if:
+      type: ast
+      kind: function
+      regex: hook.{0,20}(sys|syscall)
+      case_insensitive: true
+  - id: random-prefix-function
+    desc: Function with random-looking prefix (obfuscation)
+    crit: suspicious
+    conf: 0.7
+    for:
+      - c
+    if:
+      type: ast
+      kind: function
+      regex: ^([a-f0-9]{8,}|x[a-f0-9]{8,})_
+    not:
+      - regex: ^(CRYPTO|OpenSSL|ssize|ares_)
+  - id: underscore-heavy-naming
+    desc: Heavy underscore usage in names
+    crit: suspicious
+    conf: 0.6
+    for:
+      - c
+    if:
+      type: ast
+      node: declaration
+      regex: ^__[a-z]{1,40}(_[a-z0-9]{1,40}){1,8}
+    not:
+      - regex: ^__declspec\b
+composite_rules:
+  - id: malware-mention-comment
+    desc: Code explicitly mentions malware/backdoor
+    crit: suspicious
+    conf: 1.0
+    for:
+      - c
+    any:
+      - id: malware-mention-comment-malware
+      - id: malware-mention-comment-backdoor
+
+  - id: evasion-mention-comment
+    desc: Code mentions evasion techniques
+    crit: suspicious
+    conf: 0.9
+    for:
+      - c
+    any:
+      - id: evasion-mention-comment-evasion
+      - id: evasion-mention-comment-evade
+
+  - id: hide-function-name
+    desc: Function name suggests hiding capability
+    crit: suspicious
+    conf: 0.85
+    for:
+      - c
+    any:
+      - id: hide-function-name-hide
+      - id: hide-function-name-invisible
+      - id: hide-function-name-stealth
+
+  - id: hiding-mention-comment
+    desc: Code mentions hiding/hidden
+    crit: suspicious
+    conf: 0.9
+    for:
+      - c
+    not:
+      - substr: ssid
+      - substr: hidden flag
+      - substr: want_hidden
+    any:
+      - id: objectives/anti-analysis/kernel-hide/lkm/hiding::inline__hiding-mention-comment__any_1
+      - id: objectives/anti-analysis/kernel-hide/lkm/hiding::inline__hiding-mention-comment__any_2
+      - id: objectives/anti-analysis/kernel-hide/lkm/hiding::inline__hiding-mention-comment__any_3
+      - id: objectives/anti-analysis/kernel-hide/lkm/hiding::inline__hiding-mention-comment__any_4
+      - id: objectives/anti-analysis/kernel-hide/lkm/hiding::inline__hiding-mention-comment__any_5
+      - id: objectives/anti-analysis/kernel-hide/lkm/hiding::inline__hiding-mention-comment__any_6
+      - id: objectives/anti-analysis/kernel-hide/lkm/hiding::inline__hiding-mention-comment__any_7
+      - id: objectives/anti-analysis/kernel-hide/lkm/hiding::inline__hiding-mention-comment__any_8
+      - id: objectives/anti-analysis/kernel-hide/lkm/hiding::inline__hiding-mention-comment__any_9
+      - id: objectives/anti-analysis/kernel-hide/lkm/hiding::inline__hiding-mention-comment__any_10
+      - id: objectives/anti-analysis/kernel-hide/lkm/hiding::inline__hiding-mention-comment__any_11
+      - id: objectives/anti-analysis/kernel-hide/lkm/hiding::inline__hiding-mention-comment__any_12
+      - id: objectives/anti-analysis/kernel-hide/lkm/hiding::inline__hiding-mention-comment__any_13
+      - id: objectives/anti-analysis/kernel-hide/lkm/hiding::inline__hiding-mention-comment__any_14
+      - id: objectives/anti-analysis/kernel-hide/lkm/hiding::inline__hiding-mention-comment__any_15
+      - id: objectives/anti-analysis/kernel-hide/lkm/hiding::inline__hiding-mention-comment__any_16
+      - id: objectives/anti-analysis/kernel-hide/lkm/hiding::inline__hiding-mention-comment__any_17
+      - id: objectives/anti-analysis/kernel-hide/lkm/hiding::inline__hiding-mention-comment__any_18
+      - id: objectives/anti-analysis/kernel-hide/lkm/hiding::inline__hiding-mention-comment__any_19
+      - id: objectives/anti-analysis/kernel-hide/lkm/hiding::inline__hiding-mention-comment__any_20
+      - id: objectives/anti-analysis/kernel-hide/lkm/hiding::inline__hiding-mention-comment__any_21
+      - id: objectives/anti-analysis/kernel-hide/lkm/hiding::inline__hiding-mention-comment__any_22
+      - id: objectives/anti-analysis/kernel-hide/lkm/hiding::inline__hiding-mention-comment__any_23
+      - id: objectives/anti-analysis/kernel-hide/lkm/hiding::inline__hiding-mention-comment__any_24
+      - id: objectives/anti-analysis/kernel-hide/lkm/hiding::inline__hiding-mention-comment__any_25
+      - id: objectives/anti-analysis/kernel-hide/lkm/hiding::inline__hiding-mention-comment__any_26
+      - id: objectives/anti-analysis/kernel-hide/lkm/hiding::inline__hiding-mention-comment__any_27
+      - id: objectives/anti-analysis/kernel-hide/lkm/hiding::inline__hiding-mention-comment__any_28
+      - id: objectives/anti-analysis/kernel-hide/lkm/hiding::inline__hiding-mention-comment__any_29
+      - id: objectives/anti-analysis/kernel-hide/lkm/hiding::inline__hiding-mention-comment__any_30
+      - id: objectives/anti-analysis/kernel-hide/lkm/hiding::inline__hiding-mention-comment__any_31
+      - id: objectives/anti-analysis/kernel-hide/lkm/hiding::inline__hiding-mention-comment__any_32
+      - id: objectives/anti-analysis/kernel-hide/lkm/hiding::inline__hiding-mention-comment__any_33
+      - id: objectives/anti-analysis/kernel-hide/lkm/hiding::inline__hiding-mention-comment__any_34
+      - id: objectives/anti-analysis/kernel-hide/lkm/hiding::inline__hiding-mention-comment__any_35
+      - id: objectives/anti-analysis/kernel-hide/lkm/hiding::inline__hiding-mention-comment__any_36

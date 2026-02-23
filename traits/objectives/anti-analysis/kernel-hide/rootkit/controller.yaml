@@ -1,0 +1,39 @@
+# Rootkit Controller Detection
+# Detects CLI tools designed to control kernel-mode rootkits
+# ATT&CK: T1014 (Rootkit), T1068 (Privilege Escalation)
+
+composite_rules:
+  - id: cli-controller
+    desc: Rootkit control interface with privilege escalation
+    crit: hostile
+    conf: 0.95
+    attack: "T1014"
+    all:
+      - id: micro-behaviors/fs/device/ioctl::ioctl
+      - id: rootkit-hiding-ops
+      - id: privilege-ops
+
+  - id: rootkit-hiding-ops
+    desc: Rootkit hiding operations
+    crit: notable
+    conf: 0.8
+    any:
+      - id: micro-behaviors/os/process/hide/message::hide-pid-msg
+      - id: micro-behaviors/os/network/hide/message::hide-port-msg
+      - id: micro-behaviors/fs/hide/message::hide-file-msg
+
+  - id: privilege-ops
+    desc: Rootkit privilege operations
+    crit: notable
+    conf: 0.8
+    any:
+      - id: micro-behaviors/os/privilege/escalation::root-shell-msg
+      - id: micro-behaviors/os/privilege/escalation::root-privileges-msg
+
+  - id: generic-hider
+    desc: Generic hiding tool (potential rootkit)
+    crit: suspicious
+    conf: 0.8
+    all:
+      - id: micro-behaviors/fs/device/ioctl::ioctl
+      - id: rootkit-hiding-ops

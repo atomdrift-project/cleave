@@ -1,0 +1,15 @@
+traits:
+  # Detects loops that rebuild strings via dictionary/array lookup with concatenation
+  # Malware pattern: for(i=0;i<keys.length;i++){result += dict[keys[i]]}
+  - id: js-dict-lookup-loop
+    desc: Loop rebuilds string from token lookup
+    crit: suspicious
+    conf: 0.85
+    for:
+      - javascript
+      - typescript
+    if:
+      type: raw
+      regex: 'for\s*\([^)]{0,120}\)\s*\{.{0,250}\w+\s*\+=\s*\w+\s*\[\s*\w+\s*\]'
+
+composite_rules: []

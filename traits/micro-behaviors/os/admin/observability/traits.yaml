@@ -1,0 +1,133 @@
+# Observability and Monitoring Tools
+# Benign baseline for ML differentiation
+
+defaults:
+  for: [all]
+
+traits:
+  # Prometheus ecosystem
+  - id: prometheus
+    desc: Prometheus monitoring stack
+    crit: notable
+    conf: 0.9
+    if:
+      type: yara
+      source: |
+        rule prometheus_stack {
+          strings:
+            // Prometheus
+            $prom1 = "prometheus" ascii
+            $prom2 = "promhttp" ascii
+            $prom3 = "/metrics" ascii
+            // Exporters
+            $exp1 = "node_exporter" ascii
+            $exp2 = "blackbox_exporter" ascii
+            $exp3 = "process_exporter" ascii
+            // Query language
+            $pql1 = "promql" ascii
+            $pql2 = "rate(" ascii
+            $pql3 = "sum(" ascii
+          condition:
+            any of ($prom*) or any of ($exp*) or 2 of ($pql*)
+        }
+
+  # Grafana
+  - id: grafana
+    desc: Grafana visualization
+    crit: notable
+    conf: 0.9
+    if:
+      type: yara
+      source: |
+        rule grafana {
+          strings:
+            $graf1 = "grafana" ascii
+            $graf2 = "Grafana" ascii
+            $graf3 = "grafana-server" ascii
+            $graf4 = "grafana.ini" ascii
+            $graf5 = "grafana-cli" ascii
+          condition:
+            any of them
+        }
+
+  # OpenTelemetry
+  - id: opentelemetry
+    desc: OpenTelemetry instrumentation
+    crit: notable
+    conf: 0.9
+    if:
+      type: yara
+      source: |
+        rule opentelemetry {
+          strings:
+            $otel1 = "opentelemetry" ascii
+            $otel2 = "otel" ascii
+            $otel3 = "OTEL_" ascii
+            $otel4 = "TracerProvider" ascii
+            $otel5 = "MeterProvider" ascii
+            $otel6 = "go.opentelemetry.io" ascii
+          condition:
+            any of them
+        }
+
+  # Elastic/ELK stack
+  - id: elastic
+    desc: Elastic/ELK monitoring stack
+    crit: notable
+    conf: 0.9
+    if:
+      type: yara
+      source: |
+        rule elastic_stack {
+          strings:
+            // Elasticsearch
+            $es1 = "elasticsearch" ascii
+            $es2 = "elastic.co" ascii
+            // Logstash
+            $ls1 = "logstash" ascii
+            // Kibana
+            $kb1 = "kibana" ascii
+            // Beats
+            $beat1 = "filebeat" ascii
+            $beat2 = "metricbeat" ascii
+            $beat3 = "auditbeat" ascii
+          condition:
+            any of them
+        }
+
+  # Datadog
+  - id: datadog
+    desc: Datadog monitoring agent
+    crit: notable
+    conf: 0.9
+    if:
+      type: yara
+      source: |
+        rule datadog {
+          strings:
+            $dd1 = "datadog" ascii nocase
+            $dd3 = "datadoghq.com" ascii
+            $dd4 = "dd-agent" ascii
+            $dd5 = "dogstatsd" ascii
+          condition:
+            any of them
+        }
+
+  # Fluentd/Fluent Bit
+  - id: fluentd
+    desc: Fluentd/Fluent Bit log collector
+    crit: notable
+    conf: 0.9
+    if:
+      type: yara
+      source: |
+        rule fluentd {
+          strings:
+            $flu1 = "fluentd" ascii
+            $flu2 = "fluent-bit" ascii
+            $flu3 = "fluentbit" ascii
+            $flu4 = "td-agent" ascii
+            $flu5 = "fluent.conf" ascii
+          condition:
+            any of them
+        }

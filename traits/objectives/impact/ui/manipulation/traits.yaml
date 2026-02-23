@@ -1,0 +1,158 @@
+# Impact - UI Manipulation
+# ATT&CK: T1491 (Defacement)
+
+traits:
+  - id: dock-hide
+    desc: macOS dock hiding
+    crit: suspicious
+    conf: 0.9
+    attack: "T1564.003"
+    for: [macho]
+    if:
+      type: string
+      regex: "(?i)(hideDock|setActivationPolicy.{0,20}(accessory|prohibited))"
+
+  - id: screencapture
+    desc: macOS screencapture command
+    crit: suspicious
+    conf: 0.85
+    attack: "T1113"
+    for: [macho, shell]
+    if:
+      type: string
+      substr: "screencapture"
+    # Downgrade for legitimate system components like ReplayKit that implement screen capture
+    downgrade:
+      any:
+        # Check for Apple bundle identifier (indicates system component)
+        - id: metadata/apple/system-component
+        # Check for Apple project marker (indicates system framework)
+        - type: string
+          regex: "@\\(#\\)PROGRAM:[a-z]+\\s+PROJECT:[A-Za-z]+-[0-9]+"
+
+  - id: cg-window-capture
+    desc: macOS CGWindow capture
+    crit: suspicious
+    conf: 0.85
+    attack: "T1113"
+    for: [macho]
+    if:
+      type: string
+      substr: "CGWindowListCreateImageFromArray"
+
+  - id: screensaver-engine
+    desc: macOS ScreenSaver control
+    crit: suspicious
+    conf: 0.8
+    attack: "T1491"
+    for: [macho, shell]
+    if:
+      type: string
+      substr: "ScreenSaverEngine"
+
+  - id: system-events
+    desc: macOS System Events control
+    crit: suspicious
+    conf: 0.8
+    attack: "T1059.002"
+    for: [macho, shell]
+    if:
+      type: string
+      substr: 'tell application "System Events"'
+
+  - id: window-watcher
+    desc: macOS window/application monitoring
+    crit: suspicious
+    conf: 0.9
+    attack: "T1010"
+    for: [macho]
+    if:
+      type: string
+      substr: "frontmostApplication"
+    # Downgrade for legitimate system components like ReplayKit that need to identify
+    # which application is being recorded for screen capture
+    downgrade:
+      any:
+        # Check for Apple bundle identifier (indicates system component)
+        - id: metadata/apple/system-component
+        # Check for Apple project marker (indicates system framework)
+        - type: string
+          regex: "@\\(#\\)PROGRAM:[a-z]+\\s+PROJECT:[A-Za-z]+-[0-9]+"
+
+  # Removed screen-locked duplicate - use objectives/discovery/system/hardware::ioreg-screen-lock
+
+  # NOTE: MIT-MAGIC-COOKIE-1 is the standard X11 authentication mechanism, not UI manipulation.
+  # It's used by all X11 libraries (libX11, libICE, libSM, etc.) for normal authentication.
+  # The x11-auth-protocol trait is defined in micro-behaviors/dylib/load/traits.yaml as baseline.
+
+  - id: xsession
+    desc: Xsession reference
+    crit: notable
+    conf: 0.6
+    attack: "T1056"
+    for: [elf, shell]
+    if:
+      type: string
+      substr: "Xsession"
+
+  - id: hid-idle-time
+    desc: macOS HID idle time detection
+    crit: suspicious
+    conf: 0.8
+    attack: "T1010"
+    for: [macho]
+    if:
+      type: string
+      substr: "HIDIdleTime"
+
+  - id: process-identifier
+    desc: macOS process identifier access
+    crit: notable
+    conf: 0.7
+    attack: "T1010"
+    for: [macho]
+    if:
+      type: string
+      substr: "processIdentifier"
+    # Downgrade for legitimate system components like ReplayKit that need process
+    # identifiers for recording metadata and application tracking
+    downgrade:
+      any:
+        # Check for Apple bundle identifier (indicates system component)
+        - id: metadata/apple/system-component
+        # Check for Apple project marker (indicates system framework)
+        - type: string
+          regex: "@\\(#\\)PROGRAM:[a-z]+\\s+PROJECT:[A-Za-z]+-[0-9]+"
+
+composite_rules:
+  - id: macos-spy-detected
+    desc: macOS UI spying
+    crit: suspicious
+    conf: 0.95
+    attack: "T1010"
+    mbc: "B0042"
+    for: [macho]
+    needs: 2
+    any:
+      - id: objectives/discovery/system/hardware::ioreg-screen-lock
+      - id: hid-idle-time
+      - id: window-watcher
+      - id: process-identifier
+    # Downgrade for legitimate system components like ReplayKit that need to monitor
+    # UI state for screen recording (e.g., which app is being recorded, if screen is locked)
+    downgrade:
+      any:
+        - id: metadata/apple/system-component
+
+  # Forced browser opening adware: system() + open -a + chmod 777
+  # Complexity: all(3) + for(1) = 4 (meets hostile threshold)
+  - id: forced-browser-adware
+    desc: Daemon forces browser to open URLs
+    crit: hostile
+    conf: 0.9
+    attack: "T1204.001"
+    for: [macho, objective-c]
+    all:
+      - id: micro-behaviors/process/create/shell::open-a-app
+      - id: micro-behaviors/process/create/shell::shell-symbols
+      - id: micro-behaviors/fs/chmod/executable/dangerous::shell-777

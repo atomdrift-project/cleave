@@ -1,0 +1,187 @@
+traits:
+  - id: bpf-object-open
+    desc: Load BPF object from file
+    crit: notable
+    conf: 0.8
+    for:
+      - c
+      - elf
+    if:
+      type: symbol
+      regex: bpf_object__open(_file)?
+  - id: bpf-object-load
+    desc: Load BPF object into kernel
+    crit: notable
+    conf: 0.8
+    for:
+      - c
+      - elf
+    if:
+      type: symbol
+      regex: bpf_object__load
+  - id: bpf-program-find
+    desc: Find BPF program in object by name
+    crit: notable
+    conf: 0.8
+    for:
+      - c
+      - elf
+    if:
+      type: symbol
+      regex: bpf_object__find_program_by_name
+  - id: bpf-skeleton
+    desc: BPF skeleton pattern
+    crit: baseline
+    conf: 0.6
+    for:
+      - c
+      - elf
+    if:
+      type: string
+      regex: \w+_bpf__(open|load|attach|destroy)
+  - id: bpf-ring-buffer
+    desc: BPF ring buffer usage
+    crit: baseline
+    conf: 0.5
+    for:
+      - c
+      - elf
+    if:
+      type: string
+      regex: ring_buffer__(new|poll|free)
+  - id: bpf-ringbuf
+    desc: eBPF ringbuf helpers
+    crit: notable
+    conf: 0.7
+    for:
+      - c
+      - elf
+    if:
+      type: symbol
+      regex: bpf_ringbuf_(reserve|submit|discard|output)
+  - id: vmlinux-h
+    desc: vmlinux.h CO-RE eBPF header
+    crit: notable
+    conf: 0.8
+    for:
+      - c
+    if:
+      type: string
+      substr: vmlinux.h
+  - id: bpf-helpers-h
+    desc: bpf/bpf_helpers.h include
+    crit: notable
+    conf: 0.85
+    for:
+      - c
+    if:
+      type: raw
+      substr: bpf/bpf_helpers.h
+  - id: sec-license
+    desc: eBPF license section declaration
+    crit: notable
+    conf: 0.8
+    for:
+      - c
+    if:
+      type: raw
+      regex: SEC\s*\(\s*"license
+  - id: sec-xdp
+    desc: SEC("xdp") section marker
+    crit: notable
+    conf: 0.8
+    for:
+      - c
+      - elf
+    if:
+      type: raw
+      substr: SEC("xdp
+  - id: ebpf-kernel-types
+    desc: eBPF kernel type aliases
+    crit: baseline
+    conf: 0.6
+    for:
+      - c
+      - elf
+    if:
+      type: raw
+      regex: \b__u(8|16|32|64)\b
+  - id: data-event-struct
+    desc: eBPF data event structure
+    crit: notable
+    conf: 0.75
+    for:
+      - c
+      - elf
+    if:
+      type: raw
+      word: data_event
+  - id: kernel-userspace-transfer
+    desc: Kernel to userspace data transfer
+    crit: notable
+    conf: 0.8
+    for:
+      - c
+      - elf
+    if:
+      type: raw
+      regex: (?i)kernel\s+to\s+user\s*space|user\s*space.{0,30}kernel
+  - id: bpf-rlimit-memlock
+    desc: High RLIMIT_MEMLOCK for BPF
+    crit: notable
+    conf: 0.8
+    for:
+      - c
+      - elf
+    if:
+      type: raw
+      regex: (?s)RLIMIT_MEMLOCK.{0,200}(\d+UL\s*<<\s*20|1\s*<<\s*30)
+  - id: bpf-rlimit-memlock-reversed
+    desc: RLIMIT_MEMLOCK near high limits (reversed order)
+    crit: notable
+    conf: 0.8
+    for:
+      - c
+      - elf
+    if:
+      type: raw
+      regex: (?s)(\d+UL\s*<<\s*20|1\s*<<\s*30).{0,200}RLIMIT_MEMLOCK
+composite_rules:
+  - id: ebpf-core-header
+    desc: eBPF CO-RE development header
+    crit: notable
+    conf: 0.85
+    for:
+      - c
+    all:
+      - id: vmlinux-h
+      - id: bpf-helpers-h
+  - id: ebpf-program-header
+    desc: eBPF program with license section
+    crit: notable
+    conf: 0.8
+    for:
+      - c
+    needs: 2
+    any:
+      - id: vmlinux-h
+      - id: bpf-helpers-h
+      - id: sec-license
+  - id: packet-manip-helpers
+    desc: eBPF packet manipulation helpers
+    crit: notable
+    conf: 0.8
+    for:
+      - c
+    any:
+      - id: micro-behaviors/os/bpf/network-manip
+  - id: xdp-helper-header
+    desc: eBPF XDP/TC packet helper header
+    crit: suspicious
+    conf: 0.9
+    attack: T1205.001
+    for:
+      - c
+    all:
+      - id: ebpf-program-header
+      - id: packet-manip-helpers

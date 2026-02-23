@@ -1,0 +1,159 @@
+# Log Clearing Detection - Linux
+# MBC: F0005 (Indicator Blocking)
+# ATT&CK: T1070.001
+
+defaults:
+  for: [all]
+
+traits:
+  # === System Log Paths ===
+  - id: var-log-lastlog
+    desc: /var/log/lastlog last login
+    crit: notable
+    conf: 0.7
+    if:
+      type: raw
+      substr: "/var/log/lastlog"
+
+  - id: var-log-auth
+    desc: /var/log/auth authentication log
+    crit: notable
+    conf: 0.7
+    if:
+      type: raw
+      substr: "/var/log/auth"
+
+  - id: var-log-cron
+    desc: /var/log/cron cron log
+    crit: notable
+    conf: 0.7
+    if:
+      type: raw
+      substr: "/var/log/cron"
+
+  - id: var-spool-mail
+    desc: /var/spool/mail user mail
+    crit: notable
+    conf: 0.7
+    if:
+      type: raw
+      substr: "/var/spool/mail"
+
+  # === Log Clearing Commands ===
+  - id: echo-redirect-var-log
+    desc: echo overwrite to /var/log
+    crit: suspicious
+    conf: 0.9
+    mbc: "F0005"
+    attack: "T1070.001"
+    for: [shell]
+    if:
+      type: raw
+      regex: 'echo\s+\S+\s*>\s*/var/log/'
+
+  - id: echo-redirect-var-spool
+    desc: echo overwrite to /var/spool
+    crit: suspicious
+    conf: 0.9
+    mbc: "F0005"
+    attack: "T1070.001"
+    for: [shell]
+    if:
+      type: raw
+      regex: 'echo\s+\S+\s*>\s*/var/spool/'
+
+  - id: redirect-var-log
+    desc: ">/var/log/ redirect to log file"
+    crit: suspicious
+    conf: 0.85
+    mbc: "F0005"
+    attack: "T1070.001"
+    if:
+      type: raw
+      regex: '>\s*/var/log/'
+
+  - id: history-c
+    desc: history -c clear history command
+    crit: suspicious
+    conf: 0.85
+    mbc: "F0005"
+    attack: "T1070.003"
+    if:
+      type: string
+      substr: "history -c"
+
+  - id: history-r
+    desc: history -r reload history command
+    crit: notable
+    conf: 0.7
+    mbc: "F0005"
+    if:
+      type: string
+      substr: "history -r"
+
+  - id: unset-histfile
+    desc: unset HISTFILE command
+    crit: suspicious
+    conf: 0.85
+    mbc: "F0005"
+    attack: "T1070.003"
+    if:
+      type: string
+      substr: "unset HISTFILE"
+
+  - id: truncate-var-log
+    desc: truncate /var/log command
+    crit: suspicious
+    conf: 0.9
+    mbc: "F0005"
+    attack: "T1070.001"
+    if:
+      type: raw
+      regex: 'truncate\s+(-s\s*0\s+)?/var/log'
+
+composite_rules:
+  # System log paths (migrated from YARA)
+  - id: system-log
+    desc: Reference to system log file
+    crit: notable
+    conf: 0.66
+    any:
+      - id: micro-behaviors/fs/path/log::multiple-log-files
+      - id: var-log-lastlog
+      - id: var-log-auth
+      - id: micro-behaviors/fs/path/log::log-var
+      - id: var-log-cron
+      - id: var-spool-mail
+
+  # Log clearing (migrated from YARA)
+  - id: log-clear
+    desc: System log clearing
+    crit: notable
+    conf: 0.65
+    any:
+      - id: redirect-var-log
+      - id: echo-redirect-var-log
+      - id: echo-redirect-var-spool
+      - id: history-c
+      - id: history-r
+      - id: unset-histfile
+      - id: truncate-var-log
+
+  # Multiple log files being wiped indicates anti-forensics
+  - id: multi-log-wipe
+    desc: Overwrites multiple log files
+    crit: suspicious
+    conf: 0.95
+    mbc: "F0005"
+    attack: "T1070.001"
+    for: [shell]
+    all:
+      - id: log-clear
+    needs: 2
+    any:
+      - id: micro-behaviors/fs/path/log::multiple-log-files
+      - id: var-log-lastlog
+      - id: var-log-auth
+      - id: micro-behaviors/fs/path/log::log-var
+      - id: var-log-cron
+      - id: var-spool-mail

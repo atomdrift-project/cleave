@@ -1,0 +1,27 @@
+# Process Injection Detection - Windows
+# MBC: B0033 (Process Injection)
+# ATT&CK: T1055
+
+defaults:
+  for: [pe, dll]
+  platforms: [windows]
+
+traits:
+  # nt-write-virtual-memory removed - use micro-behaviors/os/syscall/invoke::ntdll-direct-memory-op-a instead
+
+composite_rules:
+  # process-inject-api: composite referencing canonical injection/memory traits
+  # CreateRemoteThread: objectives/evasion/process/injection/runtime::create-remote-thread (canonical)
+  # WriteProcessMemory: objectives/evasion/process/injection/runtime::write-process-memory (canonical)
+  # VirtualAllocEx: micro-behaviors/mem/protect/modify::virtual-alloc-ex (canonical)
+  - id: process-inject-api
+    desc: Process injection via Windows API
+    crit: suspicious
+    conf: 0.66
+    mbc: "B0033"
+    attack: "T1055"
+    any:
+      - id: objectives/evasion/process/injection/runtime::create-remote-thread
+      - id: objectives/evasion/process/injection/runtime::write-process-memory
+      - id: micro-behaviors/mem/protect/modify::virtual-alloc-ex
+      - id: micro-behaviors/os/syscall/invoke::ntdll-direct-memory-op-a

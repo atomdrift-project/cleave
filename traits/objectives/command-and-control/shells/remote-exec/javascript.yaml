@@ -1,0 +1,28 @@
+# Remote Execution - JavaScript/Node.js
+# ATT&CK: T1059.003 (Command and Scripting Interpreter: Windows Command Shell)
+
+# Generic terms (output, command) moved to data/text/generic.yaml
+
+defaults:
+  for: [javascript, typescript]
+
+composite_rules:
+  # Output/command variable composite - references generic terms
+  - id: js-output-command-var
+    desc: Variable names suggesting command output
+    crit: notable
+    conf: 0.3
+    any:
+      - id: micro-behaviors/data/text/keywords::output
+      - id: micro-behaviors/data/text/keywords::command
+
+  - id: js-http-backdoor
+    desc: Remote shell backdoor (Poll C2
+    crit: suspicious
+    conf: 0.98
+    attack: "T1059.003"
+    all:
+      - id: micro-behaviors/communications/http/lib/axios::js-axios-get
+      - id: micro-behaviors/process/create/shell/lang::js-execsync
+      - id: micro-behaviors/communications/http/lib/axios::js-axios-post
+      - id: js-output-command-var

@@ -1,0 +1,40 @@
+# Complete Backdoor Installation Chains
+# Detects multi-step attack sequences combining account creation with persistent access
+# Generic indicator for comprehensive system compromise
+
+composite_rules:
+  - id: account-ssh-key-injection
+    desc: Account creation with SSH key injection
+    crit: hostile
+    conf: 0.92
+    for: [elf, shell]
+    attack: "T1098.004"
+    mbc: "E1015"
+    all:
+      - id: objectives/persistence/account/create::useradd-command
+      - id: objectives/persistence/account/create::user-bash-shell
+      - id: objectives/credential-access/ssh/key::authorized-keys
+
+  - id: password-set-privilege-escalation
+    desc: Password setting with privilege escalation
+    crit: hostile
+    conf: 0.90
+    for: [elf, shell]
+    attack: "T1136.001"
+    mbc: "E1015"
+    all:
+      - id: objectives/persistence/account/create::chpasswd-command
+      - id: objectives/persistence/account/create::privilege-escalation-setup
+
+  - id: complete-backdoor-installation
+    desc: Complete backdoor account and SSH setup
+    crit: hostile
+    conf: 0.95
+    for: [elf, shell]
+    attack: "T1098.004"
+    mbc: "E1015"
+    all:
+      - id: objectives/persistence/account/create::account-creation
+      - id: objectives/persistence/account/create::privilege-escalation-setup
+      - id: objectives/credential-access/ssh/key::authorized-keys
+      - id: objectives/lateral-movement/ssh-backdoor-installation/deploy::sshd-restart

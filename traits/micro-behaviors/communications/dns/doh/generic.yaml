@@ -1,0 +1,70 @@
+# DNS over HTTPS (DoH)
+# MBC: C0011 (DNS Communication)
+# ATT&CK: T1071.004
+
+defaults:
+  for: [all]
+  mbc: "C0011"
+  attack: "T1071.004"
+
+traits:
+  - id: doh-provider
+    desc: DoH provider class reference
+    crit: baseline
+    conf: 0.6
+    if:
+      type: string
+      substr: "doh.Provider"
+
+  - id: doh-class
+    desc: DnsOverHttps class reference
+    crit: baseline
+    conf: 0.6
+    if:
+      type: string
+      substr: DnsOverHttps
+
+  - id: doh-content-type
+    desc: DoH content type header
+    crit: baseline
+    conf: 0.5
+    if:
+      type: string
+      substr: application/dns-message
+
+  - id: doh-query-path
+    desc: DoH dns-query path
+    crit: baseline
+    conf: 0.5
+    if:
+      type: string
+      substr: dns-query
+
+  - id: doh-cloudflare-ip
+    desc: Cloudflare DoH IP endpoint
+    crit: notable
+    conf: 0.7
+    if:
+      type: string
+      substr: 9.9.9.9/dns-query
+
+  - id: doh-google-ip
+    desc: Google DoH IP endpoint
+    crit: notable
+    conf: 0.7
+    if:
+      type: string
+      substr: 8.8.8.8/dns-query
+
+composite_rules:
+  - id: doh
+    desc: DNS over HTTPS support
+    crit: notable
+    conf: 0.66
+    any:
+      - id: doh-provider
+      - id: doh-class
+      - id: doh-content-type
+      - id: doh-query-path
+      - id: doh-cloudflare-ip
+      - id: doh-google-ip

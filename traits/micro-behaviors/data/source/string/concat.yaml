@@ -1,0 +1,25 @@
+defaults:
+  for:
+    - javascript
+    - typescript
+  crit: notable
+
+traits:
+  - id: js-bracket-string-concat
+    desc: Accesses object property using concatenated strings
+    if:
+      type: raw
+      regex: '\[\s*(["''][a-zA-Z]+["'']\s*\+\s*){2,}["''][a-zA-Z]+["'']\s*\]'
+
+  - id: js-string-fromcharcode-concat
+    desc: Reconstructs fromCharCode using string concatenation
+    crit: suspicious
+    if:
+      type: raw
+      regex: '["'']f["'']\s*\+\s*["'']r["'']\s*\+\s*["'']o["'']\s*\+\s*["'']m["'']'
+
+  - id: js-math-pow-constant
+    desc: Obfuscates numeric constants using Math.pow
+    if:
+      type: raw
+      regex: 'Math\.pow\s*\(\s*2\s*,\s*\d{2}\s*\)'

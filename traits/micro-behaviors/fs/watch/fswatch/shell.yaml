@@ -1,0 +1,25 @@
+# Filesystem Watcher Utilities
+# MBC: E1083 (File and Directory Discovery)
+# ATT&CK: T1083
+
+defaults:
+  for: [all]
+
+traits:
+  - id: fswatch
+    desc: Filesystem watcher utilities
+    crit: baseline
+    conf: 0.66
+    if:
+      type: string
+      regex: "fswatch(er)?"
+
+  - id: fseventstream
+    desc: macOS FSEventStream filesystem monitoring
+    crit: baseline
+    conf: 0.7
+    platforms: [macos]
+    for: [macho, dylib]
+    if:
+      type: string
+      regex: "FSEventStream(Create|Start|Schedule)"

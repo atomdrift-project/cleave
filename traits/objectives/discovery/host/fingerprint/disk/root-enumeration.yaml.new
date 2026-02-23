@@ -1,0 +1,17 @@
+composite_rules:
+  - id: root-dir-enum-methods
+    desc: Root directory enumeration methods
+    crit: notable
+    any:
+      - id: micro-behaviors/fs/enumerate/directory/javascript::fs-readdir
+      - id: objectives/impact/ransomware/behavior/patterns::readdir-sync
+      - id: objectives/impact/ransomware/behavior/patterns::readdir-fn
+
+  - id: root-dir-enumeration
+    desc: Iterates over root directories (C:, D:, /, /home) to list files
+    crit: hostile
+    conf: 1.0
+    attack: "T1083"
+    all:
+      - id: micro-behaviors/fs/enumerate/directory/root-paths::root-paths-array
+      - id: root-dir-enum-methods

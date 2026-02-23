@@ -1,0 +1,27 @@
+traits:
+  - id: js-fragmented-url-construction
+    desc: URL construction from many small fragments (likely
+    crit: suspicious
+    conf: 0.95
+    mbc: B0032
+    attack: T1027
+    for:
+      - javascript
+    if:
+      type: ast
+      lang: javascript
+      query:
+        "(binary_expression\n  operator: \"+\"\n  left: (binary_expression\n  \
+        \  operator: \"+\"\n    left: (string) @s1 (#match? @s1 \"^\"https?\"$\")\n\
+        \  )\n)\n"
+  - id: js-fragmented-url-regex
+    desc: URL construction from many concatenated fragments (Regex)
+    crit: suspicious
+    conf: 0.9
+    for:
+      - javascript
+    if:
+      type: raw
+      regex: (\([\w\s]*\)|\w+)(\s*\+\s*(\([\w\s]*\)|\w+)){3}
+      count_min: 2
+composite_rules: []

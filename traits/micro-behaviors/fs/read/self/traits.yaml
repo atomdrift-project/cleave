@@ -1,0 +1,10 @@
+traits:
+  - id: self-file-reference
+    desc: Self-reference via __FILE__
+    crit: notable
+    conf: 0.80
+    attack: "T1059"
+    for: [ruby, php]
+    if:
+      type: raw
+      regex: '__FILE__'

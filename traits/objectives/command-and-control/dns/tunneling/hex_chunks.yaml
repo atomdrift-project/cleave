@@ -1,0 +1,28 @@
+defaults:
+  for: [all]
+
+traits:
+  - id: hex-chunk-concat-loop
+    desc: Hex chunk concatenation loop
+    crit: suspicious
+    if:
+      type: ast
+      language: javascript
+      query: |
+        (assignment_expression
+          left: (identifier) @str
+          right: (binary_expression
+            left: (binary_expression
+              left: (identifier) @str2
+              operator: "+"
+              right: (call_expression
+                function: (identifier) @func
+              )
+            )
+            operator: "+"
+            right: (string (string_fragment) @dot)
+          )
+        )
+        (#eq? @dot ".")
+        (#match? @func "(?i)hex")
+        (#eq? @str @str2)

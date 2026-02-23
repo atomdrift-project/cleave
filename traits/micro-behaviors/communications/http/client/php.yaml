@@ -1,0 +1,44 @@
+# PHP HTTP Client Traits
+
+defaults:
+  for: [all]
+
+traits:
+  - id: file-get-contents-url
+    desc: HTTP request via file_get_contents
+    crit: notable
+    conf: 0.8
+    if:
+      type: ast
+      language: php
+      query: |
+        (function_call_expression
+          function: (_) @func
+          arguments: (arguments
+            .
+            (_) @url
+          )
+          (#eq? @func "file_get_contents")
+          (#match? @url "https?://")
+        )
+
+  - id: file-get-contents-url-interpolation
+    desc: HTTP request via file_get_contents with variable interpolation
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: ast
+      language: php
+      query: |
+        (function_call_expression
+          function: (_) @func
+          arguments: (arguments
+            (_
+              (encapsed_string
+                 (variable_name) @var
+              ) @url
+            )
+          )
+          (#eq? @func "file_get_contents")
+          (#match? @url "https?://")
+        )

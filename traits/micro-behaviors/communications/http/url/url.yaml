@@ -1,0 +1,109 @@
+defaults:
+  for:
+  - all
+  crit: notable
+  conf: 0.8
+traits:
+- id: php-collect
+  desc: PHP collection endpoint
+  attack: T1041
+  if:
+    type: string
+    regex: \.php\?.{0,200}(collect|data|info)
+- id: php-log
+  desc: PHP logging endpoint
+  attack: T1041
+  if:
+    type: string
+    regex: \.php\?.{0,200}log
+- id: php-report
+  desc: PHP reporting endpoint
+  attack: T1041
+  if:
+    type: string
+    regex: \.php\?.{0,200}report
+- id: php-beacon
+  desc: PHP beacon endpoint
+  attack: T1041
+  if:
+    type: string
+    regex: \.php\?.{0,200}beacon
+- id: payload-path-a-get
+  desc: URL payload path GET family A
+  crit: suspicious
+  attack: T1105
+  if:
+    type: string
+    regex: \bGET\s+/\S+\.(bin|exe|sh|elf)\b
+- id: payload-path-a-post
+  desc: URL payload path POST family A
+  crit: suspicious
+  attack: T1105
+  if:
+    type: string
+    regex: \bPOST\s+/\S+\.(bin|exe|sh|elf)\b
+- id: payload-path-a-put
+  desc: URL payload path PUT family A
+  crit: suspicious
+  attack: T1105
+  if:
+    type: string
+    regex: \bPUT\s+/\S+\.(bin|exe|sh|elf)\b
+- id: payload-path-b-get
+  desc: URL payload path GET family B
+  crit: suspicious
+  attack: T1105
+  if:
+    type: string
+    regex: \bGET\s+/\S+\.(dll|so|dat|payload)\b
+- id: payload-path-b-post
+  desc: URL payload path POST family B
+  crit: suspicious
+  attack: T1105
+  if:
+    type: string
+    regex: \bPOST\s+/\S+\.(dll|so|dat|payload)\b
+- id: payload-path-b-put
+  desc: URL payload path PUT family B
+  crit: suspicious
+  attack: T1105
+  if:
+    type: string
+    regex: \bPUT\s+/\S+\.(dll|so|dat|payload)\b
+composite_rules:
+- id: php-collector
+  desc: Contacts PHP data collection endpoint
+  crit: notable
+  conf: 0.85
+  attack: T1041
+  any:
+  - id: php-collect
+  - id: php-log
+  - id: php-report
+  - id: php-beacon
+- id: payload-path-a
+  desc: URL payload path family A
+  crit: suspicious
+  conf: 0.8
+  attack: T1105
+  any:
+  - id: payload-path-a-get
+  - id: payload-path-a-post
+  - id: payload-path-a-put
+- id: payload-path-b
+  desc: URL payload path family B
+  crit: suspicious
+  conf: 0.8
+  attack: T1105
+  any:
+  - id: payload-path-b-get
+  - id: payload-path-b-post
+  - id: payload-path-b-put
+- id: payload-path
+  desc: URL path suggesting payload download
+  crit: suspicious
+  conf: 0.8
+  attack: T1105
+  any:
+  - id: payload-path-a
+  - id: payload-path-b

@@ -1,0 +1,138 @@
+defaults:
+  for:
+  - python
+  attack: T1195.001
+  mbc: E1014
+traits:
+- id: platform-name-check
+  desc: Platform detection via os.name
+  crit: notable
+  conf: 0.7
+  if:
+    type: raw
+    regex: from\s+os\s+import\s+name|import\s+os.{0,50}\bos\.name
+- id: b64decode-exec-pattern
+  desc: Base64 decode with exec execution
+  crit: suspicious
+  conf: 0.9
+  if:
+    type: raw
+    regex: exec\s*\(\s*b64decode\s*\(|exec\(\s*\w*.{0,20}decode\(
+- id: large-b64-string-binary
+  desc: Large base64 string with binary MZ header
+  crit: suspicious
+  conf: 0.95
+  if:
+    type: raw
+    regex: \bCmltcG9ydCBvcw|CmltcG9ydCBzeXM|CmltcG9ydCB0ZW1wZmlsZQ
+- id: you-got-me-comment
+  desc: You got me comment (obfuscation marker)
+  crit: notable
+  conf: 0.75
+  if:
+    type: string
+    regex: You\s+got\s+me|gotcha
+    case_insensitive: true
+- id: setup-call-after-code
+  desc: setup() call followed by other code
+  crit: notable
+  conf: 0.75
+  if:
+    type: raw
+    regex: setup\([^)]{0,120}\)\s*\n.{20,500}(exec|eval|__import__|compile)
+- id: conditional-exec-context
+  desc: Conditional execution context (argv, os.name)
+  crit: suspicious
+  conf: 0.85
+  if:
+    type: raw
+    regex: sdist.{0,40}argv|(os\.name|name)\s*==\s*['\"]nt['\"]
+- id: conditional-exec-eval
+  desc: eval execution primitive
+  crit: notable
+  conf: 0.85
+  if:
+    type: ast
+    kind: call
+    exact: eval
+- id: conditional-exec-compile
+  desc: compile execution primitive
+  crit: notable
+  conf: 0.85
+  if:
+    type: ast
+    kind: call
+    exact: compile
+- id: conditional-exec-import
+  desc: __import__ execution primitive
+  crit: notable
+  conf: 0.85
+  if:
+    type: ast
+    kind: call
+    exact: __import__
+- id: post-setup-import-os-sys
+  desc: setup() followed by os/sys import context
+  crit: suspicious
+  conf: 0.8
+  if:
+    type: raw
+    regex: setup\s*\([^\)]{0,120}\).{0,250}(from|import)\s+(os|sys)
+- id: post-setup-import-base64-subprocess
+  desc: setup() followed by base64/subprocess import context
+  crit: suspicious
+  conf: 0.8
+  if:
+    type: raw
+    regex: setup\s*\([^\)]{0,120}\).{0,250}(from|import)\s+(base64|subprocess)
+- id: tempfile-write-exec
+  desc: Write to tempfile then execute
+  crit: suspicious
+  conf: 0.85
+  if:
+    type: raw
+    regex: tempfile\.(NamedTemporaryFile|mkstemp).{0,80}write.{0,80}(exec|exe)
+composite_rules:
+- id: conditional-exec-check
+  desc: Conditional execution check (argv, environ)
+  crit: suspicious
+  conf: 0.85
+  all:
+  - id: conditional-exec-context
+  - id: conditional-exec-primitive
+- id: post-setup-execution
+  desc: Code execution after setup() call
+  crit: suspicious
+  conf: 0.8
+  all:
+  - id: post-setup-import-context
+  - id: conditional-exec-primitive
+- id: conditional-exec-primitive
+  desc: Dynamic execution primitive
+  crit: suspicious
+  conf: 0.85
+  any:
+  - id: micro-behaviors/process/create/shell/lang::exec-call
+  - id: conditional-exec-eval
+  - id: conditional-exec-compile
+  - id: conditional-exec-import
+  - id: micro-behaviors/process/create/shell::python-os-system
+- id: post-setup-import-context
+  desc: setup() followed by import context
+  crit: suspicious
+  conf: 0.8
+  any:
+  - id: post-setup-import-os-sys
+  - id: post-setup-import-base64-subprocess
+- id: setup-py-post-install-trojan
+  desc: Setup.py with post-install code execution
+  crit: suspicious
+  conf: 0.92
+  attack: T1195.001
+  mbc: E1014
+  for:
+  - python
+  all:
+  - id: b64decode-exec-pattern
+  - id: platform-name-check
+  - id: conditional-exec-check

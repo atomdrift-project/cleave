@@ -1,0 +1,46 @@
+# File Enumeration Pattern
+# Detects malware searching files for encryption/infection
+# Generic indicator for ransomware, worms, data exfiltration
+
+traits:
+  - id: file-find-api
+    desc: File enumeration API (FindFirstFileExW)
+    crit: notable
+    conf: 0.75
+    platforms: [windows]
+    for: [pe]
+    if:
+      type: symbol
+      exact: "FindFirstFileExW"
+    attack: "T1083"
+    mbc: "C0000"
+
+  # Removed duplicates - use micro-behaviors/fs/enumerate/directory::find-next-file and ::find-close
+
+composite_rules:
+  - id: file-enumeration-targeting
+    desc: File system enumeration pattern
+    crit: suspicious
+    conf: 0.85
+    platforms: [windows]
+    for: [pe]
+    attack: "T1083"
+    mbc: "C0000"
+    all:
+      - id: file-find-api
+      - id: micro-behaviors/fs/enumerate/directory::find-next-file
+    downgrade:
+      any:
+        - id: metadata/quality/versioned
+
+  - id: file-enumeration-with-access
+    desc: File enumeration + access combination
+    crit: suspicious
+    conf: 0.9
+    platforms: [windows]
+    for: [pe]
+    attack: "T1083"
+    mbc: "C0000"
+    all:
+      - id: file-enumeration-targeting
+      - id: micro-behaviors/fs/file/open

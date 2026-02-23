@@ -1,0 +1,25 @@
+# JavaScript/Node.js Obfuscation Patterns
+# Detects runtime code generation and obfuscated execution
+
+traits:
+  - id: buffer-from-hex-exec
+    desc: Executes code decoded from hex buffer
+    crit: suspicious
+    conf: 0.95
+    attack: "T1027"
+    mbc: "B0032" # Obfuscated Files or Information
+    for: [javascript, typescript]
+    if:
+      type: raw
+      regex: 'exec\s*\(\s*Buffer\.from\s*\([^)]{0,120}[''"]hex[''"]\s*\)\.toString'
+
+  - id: buffer-from-base64-exec
+    desc: Executes code decoded from base64 buffer
+    crit: suspicious
+    conf: 0.95
+    attack: "T1027"
+    mbc: "B0032"
+    for: [javascript, typescript]
+    if:
+      type: raw
+      regex: 'exec\s*\(\s*Buffer\.from\s*\([^)]{0,120}[''"]base64[''"]\s*\)\.toString'

@@ -1,0 +1,140 @@
+# Code Cave Detection
+# Detects large runs of null bytes or padding in executable sections
+# Code caves can indicate:
+# - Space reserved for runtime code injection
+# - Poorly packed binaries with injection points
+# - Section padding abuse for hiding payloads
+# ATT&CK: T1055 (Process Injection)
+
+defaults:
+  attack: "T1055"
+  for: [pe, elf, macho]
+
+traits:
+  # === Null Byte Runs in Executable Sections ===
+
+  # Large run of null bytes in .text section (64+ bytes)
+  # Mach-O universals commonly have alignment padding
+  - id: large-null-run-text
+    desc: Large null run in executable (64+ bytes)
+    crit: suspicious
+    conf: 0.85
+    for: [pe, elf]
+    if:
+      type: hex
+      section: text
+      pattern: "00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00"
+
+  # Very large null run (256+ bytes) - suspicious in PE/ELF
+  # Mach-O universals commonly have alignment padding with null runs
+  - id: huge-null-run-text
+    desc: Huge null run in executable (256+ bytes)
+    crit: suspicious
+    conf: 0.95
+    for: [pe, elf]
+    if:
+      type: hex
+      section: text
+      pattern: "00 [256-512]"  # 256-512 byte gap of nulls
+
+  # Repeated INT3 instructions (0xCC) - debugger breakpoint padding
+  - id: int3-padding-text
+    desc: Dense INT3 breakpoint instructions
+    crit: suspicious
+    conf: 0.8
+    if:
+      type: hex
+      section: text
+      pattern: "CC CC CC CC CC CC CC CC CC CC CC CC CC CC CC CC"
+
+  # === Mixed Padding Patterns ===
+
+  # Alternating null and NOP pattern (obfuscated cave)
+  - id: null-nop-pattern
+    desc: Alternating null and NOP pattern
+    crit: suspicious
+    conf: 0.85
+    if:
+      type: hex
+      section: text
+      pattern: "00 90 00 90 00 90 00 90 00 90 00 90 00 90 00 90"
+
+  # High density of NOP instructions (cave or alignment abuse)
+  - id: dense-nops-executable
+    desc: Dense NOP instructions in executable section
+    crit: notable
+    conf: 0.75
+    if:
+      type: hex
+      section: text
+      pattern: "90"
+      per_kb_min: 100.0  # 100+ NOPs per KB is unusual
+    unless:
+      - id: metadata/language/go  # Go uses NOPs for alignment
+
+  # === Low Entropy in Executable Sections ===
+
+  # Executable section with very low entropy (mostly zeros/padding)
+  # Mach-O __TEXT segment includes __const data sections with rx permissions,
+  # so require larger size to avoid matching normal const data tables
+  - id: low-entropy-executable
+    desc: Executable section with very low entropy
+    crit: suspicious
+    conf: 0.8
+    if:
+      type: section
+      executable: true
+      entropy_max: 2.0  # Extremely low entropy
+      length_min: 32768  # At least 32KB to filter out normal const sections
+
+  # === Section Slack Space ===
+
+  # Large executable section (potential cave space)
+  - id: oversized-text-section
+    desc: Unusually large executable section
+    crit: notable
+    conf: 0.7
+    if:
+      type: section
+      executable: true
+      length_min: 1048576  # 1MB+ executable section
+    unless:
+      - id: metadata/language/go  # Go binaries are large
+
+composite_rules:
+  # Code cave with null padding
+  - id: code-cave-null-padding
+    desc: Code cave with null byte padding
+    crit: suspicious
+    conf: 0.9
+    attack: "T1055"
+    needs: 2
+    any:
+      - id: large-null-run-text
+      - id: huge-null-run-text
+      - id: int3-padding-text
+      - id: null-nop-pattern
+      - id: low-entropy-executable
+
+  # Injection-ready code cave
+  - id: injection-ready-cave
+    desc: Code cave suitable for code injection
+    crit: hostile
+    conf: 0.95
+    all:
+      - id: huge-null-run-text
+    any:
+      - id: objectives/anti-static/obfuscation/payload::extreme-minimal-imports
+      - id: objectives/anti-static/hardening/memory::wx-section
+
+  # Suspicious padding pattern
+  - id: suspicious-padding
+    desc: Suspicious executable section padding
+    crit: suspicious
+    conf: 0.85
+    needs: 2
+    any:
+      - id: large-null-run-text
+      - id: int3-padding-text
+      - id: null-nop-pattern
+      - id: dense-nops-executable

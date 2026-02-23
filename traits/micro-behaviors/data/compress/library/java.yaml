@@ -1,0 +1,21 @@
+# Java Compression Operations
+# MBC: C0024 (Data Transformation)
+
+defaults:
+  for: [all]
+
+traits:
+  - id: gzip-decompress
+    desc: Java GZIP in-memory decompression
+    crit: notable
+    conf: 0.85
+    if:
+      type: yara
+      source: |
+        rule java_gzip_decompress {
+          strings:
+            $gzip = "java/util/zip/GZIPInputStream" ascii
+            $bais = "java/io/ByteArrayInputStream" ascii
+          condition:
+            $gzip and $bais
+        }

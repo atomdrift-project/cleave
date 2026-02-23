@@ -1,0 +1,48 @@
+# Storage Device Paths
+# Direct access to block storage devices - relevant for disk wipers
+# MBC: E1561 (Disk Wipe)
+# ATT&CK: T1561
+
+defaults:
+  for: [all]
+  crit: notable
+  conf: 0.6
+  mbc: "E1561"
+  attack: "T1561"
+
+traits:
+  - id: dev-sda
+    desc: /dev/sda SATA/SCSI disk
+    if:
+      type: string
+      substr: "/dev/sda"
+
+  - id: dev-hda
+    desc: /dev/hda IDE disk (legacy)
+    if:
+      type: string
+      substr: "/dev/hda"
+
+  - id: dev-nvme
+    desc: /dev/nvme NVMe storage
+    if:
+      type: string
+      substr: "/dev/nvme"
+
+  - id: dev-vda
+    desc: /dev/vda virtio disk (VM)
+    if:
+      type: string
+      substr: "/dev/vda"
+
+  - id: dev-xvda
+    desc: /dev/xvda Xen virtual disk
+    if:
+      type: string
+      substr: "/dev/xvda"
+
+  - id: dev-mmcblk
+    desc: /dev/mmcblk eMMC/SD storage
+    if:
+      type: string
+      substr: "/dev/mmcblk"

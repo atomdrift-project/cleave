@@ -1,0 +1,56 @@
+# File Delete Operations - JavaScript/Node.js
+# MBC: C0047 (Delete File)
+# ATT&CK: T1070.004
+#
+# NOTE: Individual file deletion is a normal operation (baseline).
+# Only suspicious in context (mass deletion, targeting system files, etc.)
+
+defaults:
+  for: [javascript]
+  crit: baseline
+  conf: 0.9
+  mbc: "C0047"
+  attack: "T1070.004"
+
+traits:
+  - id: fs-unlink
+    desc: Delete file (fs.unlink)
+    if:
+      type: ast
+      kind: call
+      exact: "fs.unlink"
+
+  - id: fs-unlinkSync
+    desc: Delete file synchronously (fs.unlinkSync)
+    if:
+      type: ast
+      kind: call
+      exact: "fs.unlinkSync"
+
+  - id: fs-rm
+    desc: Delete file or directory (fs.rm)
+    if:
+      type: ast
+      kind: call
+      exact: "fs.rm"
+
+  - id: fs-rmSync
+    desc: Delete file or directory sync
+    if:
+      type: ast
+      kind: call
+      exact: "fs.rmSync"
+
+  - id: fs-rmdir
+    desc: Delete empty directory (fs.rmdir)
+    if:
+      type: ast
+      kind: call
+      exact: "fs.rmdir"
+
+  - id: promises-unlink
+    desc: Delete file (promises API)
+    if:
+      type: ast
+      kind: call
+      exact: "promises.unlink"

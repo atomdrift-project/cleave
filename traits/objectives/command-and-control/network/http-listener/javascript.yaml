@@ -1,0 +1,53 @@
+# HTTP Listener / C2 Receiver - JavaScript/Node.js
+# Detects HTTP server creation that could receive commands
+# ATT&CK: T1071.001 (Application Layer Protocol: Web Protocols)
+
+traits:
+  - id: express-router
+    desc: Express Router creation (potential C2
+    crit: suspicious
+    conf: 0.75
+    attack: "T1071.001"
+    for: [javascript]
+    if:
+      type: string
+      regex: "express\\.Router|express\\(\\)"
+
+  - id: express-post-endpoint
+    desc: Express POST endpoint (potential command
+    crit: suspicious
+    conf: 0.8
+    attack: "T1071.001"
+    for: [javascript]
+    if:
+      type: string
+      regex: "(app|router)\\.post\\s*\\("
+
+  - id: express-get-endpoint
+    desc: Express GET endpoint
+    crit: notable
+    conf: 0.7
+    attack: "T1071.001"
+    for: [javascript]
+    if:
+      type: string
+      regex: "\\.get\\s*\\(|app\\.get"
+
+  - id: http-createServer
+    desc: Node.js HTTP server creation
+    crit: notable
+    conf: 0.7
+    attack: "T1071.001"
+    for: [javascript]
+    if:
+      id: micro-behaviors/communications/http/server
+
+  - id: socket-io
+    desc: Socket.io server (real-time C2 potential)
+    crit: suspicious
+    conf: 0.8
+    attack: "T1071.001"
+    for: [javascript]
+    if:
+      type: string
+      regex: "socket\\.io|socketio"

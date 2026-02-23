@@ -1,0 +1,30 @@
+# PHP Socket Operations
+# MBC: C0001 (Socket Communication)
+
+traits:
+  - id: php-socket-create
+    desc: PHP socket_create function
+    crit: notable
+    conf: 0.85
+    for: [php]
+    if:
+      type: string
+      substr: socket_create
+
+  - id: php-socket-connect
+    desc: PHP socket_connect function
+    crit: notable
+    conf: 0.85
+    for: [php]
+    if:
+      type: string
+      substr: socket_connect
+
+composite_rules:
+  - id: php-reverse-shell
+    desc: PHP reverse shell pattern
+    crit: suspicious
+    conf: 0.95
+    all:
+      - id: php-socket-create
+      - id: php-socket-connect

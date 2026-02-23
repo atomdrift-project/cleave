@@ -1,0 +1,292 @@
+# HTTP Server Operations - Python
+# MBC: C0002 (HTTP Communication)
+# ATT&CK: T1071.001
+
+defaults:
+  attack: "T1071.001"
+  mbc: "C0002"
+
+traits:
+  # === Built-in HTTP server modules ===
+  - id: http-server-module
+    desc: http.server module
+    crit: baseline
+    conf: 0.7
+    for: [python]
+    if:
+      type: string
+      substr: "http.server"
+
+  - id: simplehttpserver-module
+    desc: SimpleHTTPServer module (Python 2)
+    crit: baseline
+    conf: 0.7
+    for: [python]
+    if:
+      type: string
+      substr: "SimpleHTTPServer"
+
+  - id: basehttpserver-module
+    desc: BaseHTTPServer module (Python 2)
+    crit: baseline
+    conf: 0.7
+    for: [python]
+    if:
+      type: string
+      substr: "BaseHTTPServer"
+
+  - id: http-server-import
+    desc: from http.server import
+    crit: baseline
+    conf: 0.75
+    for: [python]
+    if:
+      type: string
+      regex: "from\\s+http\\.server\\s+import"
+
+  - id: simplehttpserver-import
+    desc: import SimpleHTTPServer
+    crit: baseline
+    conf: 0.75
+    for: [python]
+    if:
+      type: string
+      regex: "import\\s+SimpleHTTPServer"
+
+  - id: httpserver-class
+    desc: HTTPServer class instantiation
+    crit: baseline
+    conf: 0.75
+    for: [python]
+    if:
+      type: string
+      regex: "HTTPServer\\s*\\("
+
+  - id: simplehttprequesthandler
+    desc: SimpleHTTPRequestHandler class
+    crit: baseline
+    conf: 0.75
+    for: [python]
+    if:
+      type: string
+      substr: "SimpleHTTPRequestHandler"
+
+  # === Flask framework ===
+  - id: flask-import
+    desc: Flask framework import
+    crit: baseline
+    conf: 0.7
+    for: [python]
+    if:
+      type: string
+      regex: "from\\s+flask\\s+import\\s+Flask"
+
+  - id: flask-instantiation
+    desc: Flask app instantiation
+    crit: baseline
+    conf: 0.8
+    for: [python]
+    if:
+      type: string
+      regex: "Flask\\s*\\(\\s*__name__\\s*\\)"
+
+  - id: flask-run-call
+    desc: Flask app.run() call
+    crit: baseline
+    conf: 0.8
+    for: [python]
+    if:
+      type: string
+      regex: "\\.run\\s*\\("
+
+  - id: flask-route-decorator
+    desc: Flask @app.route decorator
+    crit: baseline
+    conf: 0.75
+    for: [python]
+    if:
+      type: string
+      regex: "@app\\.route\\s*\\("
+
+  # === Django framework ===
+  - id: django-import
+    desc: Django framework import
+    crit: baseline
+    conf: 0.7
+    for: [python]
+    if:
+      type: string
+      regex: "from\\s+django"
+
+  - id: django-wsgi
+    desc: Django WSGI application
+    crit: baseline
+    conf: 0.75
+    for: [python]
+    if:
+      type: string
+      substr: "django.core.wsgi"
+
+  - id: django-runserver
+    desc: Django runserver command
+    crit: baseline
+    conf: 0.75
+    for: [python]
+    if:
+      type: string
+      substr: "runserver"
+
+  # === FastAPI framework ===
+  - id: fastapi-import
+    desc: FastAPI framework import
+    crit: baseline
+    conf: 0.7
+    for: [python]
+    if:
+      type: string
+      regex: "from\\s+fastapi\\s+import"
+
+  - id: fastapi-instantiation
+    desc: FastAPI app instantiation
+    crit: baseline
+    conf: 0.75
+    for: [python]
+    if:
+      type: string
+      regex: "FastAPI\\s*\\("
+
+  # === Tornado framework ===
+  - id: tornado-import
+    desc: Tornado framework import
+    crit: baseline
+    conf: 0.7
+    for: [python]
+    if:
+      type: string
+      regex: "import\\s+tornado"
+
+  - id: tornado-application
+    desc: Tornado Application class
+    crit: baseline
+    conf: 0.75
+    for: [python]
+    if:
+      type: string
+      regex: "tornado\\.web\\.Application"
+
+  # === Bottle framework ===
+  - id: bottle-import
+    desc: Bottle framework import
+    crit: baseline
+    conf: 0.7
+    for: [python]
+    if:
+      type: string
+      regex: "from\\s+bottle\\s+import"
+
+  - id: bottle-route-decorator
+    desc: Bottle @route decorator
+    crit: baseline
+    conf: 0.75
+    for: [python]
+    if:
+      type: string
+      regex: "@route\\s*\\("
+
+  # === WSGI/ASGI servers ===
+  - id: gunicorn-import
+    desc: Gunicorn WSGI server import
+    crit: baseline
+    conf: 0.7
+    for: [python]
+    if:
+      type: string
+      substr: "gunicorn"
+
+  - id: uvicorn-import
+    desc: Uvicorn ASGI server import
+    crit: baseline
+    conf: 0.7
+    for: [python]
+    if:
+      type: string
+      substr: "uvicorn"
+
+  - id: wsgiref-module
+    desc: wsgiref module (built-in WSGI)
+    crit: baseline
+    conf: 0.7
+    for: [python]
+    if:
+      type: string
+      substr: "wsgiref"
+
+composite_rules:
+  # Helper composites
+  - id: builtin-http-server
+    desc: Built-in Python HTTP server modules
+    for: [python]
+    any:
+      - { id: http-server-module }
+      - { id: simplehttpserver-module }
+      - { id: basehttpserver-module }
+      - { id: http-server-import }
+      - { id: simplehttpserver-import }
+      - { id: httpserver-class }
+      - { id: simplehttprequesthandler }
+
+  - id: flask-framework
+    desc: Flask web framework usage
+    for: [python]
+    needs: 2
+    any:
+      - { id: flask-import }
+      - { id: flask-instantiation }
+      - { id: flask-run-call }
+      - { id: flask-route-decorator }
+
+  - id: django-framework
+    desc: Django web framework usage
+    for: [python]
+    any:
+      - { id: django-import }
+      - { id: django-wsgi }
+      - { id: django-runserver }
+
+  - id: fastapi-framework
+    desc: FastAPI framework usage
+    for: [python]
+    any:
+      - { id: fastapi-import }
+      - { id: fastapi-instantiation }
+
+  - id: other-frameworks
+    desc: Other Python web frameworks
+    for: [python]
+    any:
+      - { id: tornado-import }
+      - { id: tornado-application }
+      - { id: bottle-import }
+      - { id: bottle-route-decorator }
+
+  - id: wsgi-asgi-servers
+    desc: WSGI/ASGI server usage
+    for: [python]
+    any:
+      - { id: gunicorn-import }
+      - { id: uvicorn-import }
+      - { id: wsgiref-module }
+
+  # Main composite (matches original YARA behavior)
+  - id: server-python
+    desc: Python HTTP server
+    crit: notable
+    conf: 0.75
+    for: [python]
+    any:
+      - { id: builtin-http-server }
+      - { id: flask-framework }
+      - { id: django-framework }
+      - { id: fastapi-framework }
+      - { id: other-frameworks }
+      - { id: wsgi-asgi-servers }

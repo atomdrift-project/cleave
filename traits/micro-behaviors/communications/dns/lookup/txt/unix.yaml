@@ -1,0 +1,60 @@
+# DNS TXT Record Lookup (Unix/C)
+# MBC: C0011 (DNS Communication)
+# ATT&CK: T1071.004
+
+defaults:
+  for: [elf, macho, so, dylib, c]
+  mbc: "C0011"
+  attack: "T1071.004"
+  crit: notable
+  conf: 0.6
+
+traits:
+  - id: txt-record-string
+    desc: TXT record string reference
+    crit: baseline
+    conf: 0.5
+    if:
+      type: string
+      regex: "(?i)TXT record"
+
+  - id: query-txt-string
+    desc: query TXT string reference
+    crit: baseline
+    conf: 0.5
+    if:
+      type: string
+      regex: "(?i)query TXT"
+
+  - id: dns-type-txt
+    desc: DNS_TYPE_TXT constant
+    conf: 0.6
+    if:
+      type: string
+      substr: "DNS_TYPE_TXT"
+
+  - id: t-txt-constant
+    desc: T_TXT constant
+    conf: 0.6
+    if:
+      type: string
+      substr: "T_TXT"
+
+  - id: ns-t-txt-constant
+    desc: ns_t_txt constant
+    conf: 0.6
+    if:
+      type: string
+      substr: "ns_t_txt"
+
+composite_rules:
+  - id: unix-txt-lookup
+    desc: Unix DNS TXT record query
+    crit: notable
+    conf: 0.66
+    any:
+      - id: txt-record-string
+      - id: query-txt-string
+      - id: dns-type-txt
+      - id: t-txt-constant
+      - id: ns-t-txt-constant

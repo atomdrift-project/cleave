@@ -1,0 +1,21 @@
+# Windows Script Host Dropper Composites
+# Detects WSH-based dropper patterns including UTF-16 encoded variants
+
+defaults:
+  platforms: [windows]
+  for: [javascript]
+
+composite_rules:
+  - id: wsh-activex-dropper
+    desc: WSH dropper via COM and ShellExecute
+    crit: hostile
+    conf: 0.9
+    attack: "T1059.007"
+    mbc: "E1243"
+    all:
+      - id: objectives/execution/activex/com::utf16-wsh-com-objects
+      - id: objectives/execution/activex/com::shell-execute-utf16
+    any:
+      - id: objectives/execution/activex/com::frombase64-utf16
+      - id: objectives/execution/activex/com::copyfile-utf16
+      - id: micro-behaviors/fs/file/write/staging::users-public-path-utf16

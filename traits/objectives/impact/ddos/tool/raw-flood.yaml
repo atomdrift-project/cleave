@@ -1,0 +1,13 @@
+composite_rules:
+  - id: raw-flood-tool
+    desc: Raw socket flooding tool detected
+    crit: hostile
+    conf: 0.9
+    mbc: T1498
+    attack: T1498
+    all:
+      - id: micro-behaviors/communications/socket/options::ip-hdrincl-option
+      # - id: micro-behaviors/communications/socket/send::send-loop-infinite
+    any:
+      - id: micro-behaviors/communications/socket/raw::raw
+      - id: micro-behaviors/communications/socket/raw::raw-socket-creation-regex

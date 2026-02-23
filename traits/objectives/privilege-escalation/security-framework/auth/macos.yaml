@@ -1,0 +1,36 @@
+# macOS Security Framework Privilege Escalation
+# Detects privilege escalation attempts using Apple's Security Framework APIs
+# ATT&CK: T1548.004 (Abuse Elevation Control Mechanism)
+
+defaults:
+  for: [macho, dylib, c]
+  platforms: [macos]
+  attack: "T1548.004"
+
+composite_rules:
+  # Removed: micro-behaviors/process/identity just checks getuid/getpid which is NOT privilege escalation
+  # Real privilege-escalation would need AuthorizationCreate, AuthorizationExecuteWithPrivileges, etc.
+  #- id: auth-privilege-escalation-api-combo
+  #  desc: "Authorization APIs for privilege escalation"
+  #  crit: notable
+  #  conf: 0.9
+  #  for: [macho, dylib, c]
+  #  platforms: [macos]
+  #  any:
+  #    - id: micro-behaviors/process/identity
+
+  # Stealthy privileged script executor - DISABLED
+  # auth-privilege-escalation-api-combo was removed because it just checked getuid/getpid
+  # which is not privilege escalation. Need real AuthorizationCreate APIs.
+  #- id: stealth-privilege-escalation-executor
+  #  desc: "Stealthy privileged process executor"
+  #  crit: hostile
+  #  conf: 0.95
+  #  attack: "T1548.004"
+  #  mbc: "B0030"
+  #  for: [macho]
+  #  platforms: [macos]
+  #  all:
+  #    - id: objectives/impact/ui/manipulation::dock-hide
+  #    - id: auth-privilege-escalation-api-combo
+  #    - id: objectives/command-and-control/network/beacon/periodic::nstask-launch

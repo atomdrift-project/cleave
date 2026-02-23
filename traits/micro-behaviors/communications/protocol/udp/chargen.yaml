@@ -1,0 +1,13 @@
+defaults:
+  for: [all]
+
+traits:
+  - id: chargen-port
+    desc: Detects UDP port 19 (CHARGEN) usage
+    crit: notable
+    conf: 0.8
+    mbc: T1498.001
+    attack: T1498.001
+    if:
+      type: raw
+      regex: 'htons\s*\(\s*(19|0x13)\s*\)'

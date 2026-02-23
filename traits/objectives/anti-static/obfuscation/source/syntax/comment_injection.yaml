@@ -1,0 +1,8 @@
+traits:
+  - id: js-comment-injection
+    desc: Detects comments injected inside member expressions or
+    crit: suspicious
+    for: [javascript, typescript]
+    if:
+      type: raw
+      regex: '(\.\s*/\*.*?\*/\s*\w+)|(\w+\s*/\*.*?\*/\s*\()|(\[\s*/\*.*?\*/\s*)'

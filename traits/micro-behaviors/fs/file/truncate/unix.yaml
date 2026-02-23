@@ -1,0 +1,15 @@
+# File Truncate Operations
+# MBC: C0052 (Write File)
+# ATT&CK: T1565
+
+defaults:
+  for: [elf, macho, so, dylib, c]
+
+traits:
+  - id: truncate
+    desc: Truncate file
+    crit: baseline
+    conf: 0.5
+    if:
+      type: symbol
+      regex: "^_?(truncate|ftruncate)$"

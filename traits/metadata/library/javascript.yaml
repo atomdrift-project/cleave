@@ -1,0 +1,8 @@
+traits:
+  - id: js-module-exports
+    desc: "JavaScript module exports"
+    crit: baseline
+    for: [javascript, typescript]
+    if:
+      type: raw
+      regex: 'module\.exports\s*=\s*(function|class|\{)'

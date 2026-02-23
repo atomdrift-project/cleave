@@ -1,0 +1,30 @@
+defaults:
+  for: [all]
+
+traits:
+  - id: macos-stealer-simd-xor-key-a
+    desc: macOS Stealer SIMD XOR Key A
+    crit: suspicious
+    conf: 1.0
+    mbc: B0032
+    if:
+      type: hex
+      pattern: "58 C4 2A AC FF F6 3F 68 92 E1 B9 5D D6 DF BA 08"
+
+  - id: macos-stealer-simd-xor-key-b
+    desc: macOS Stealer SIMD XOR Key B
+    crit: suspicious
+    conf: 1.0
+    mbc: B0032
+    if:
+      type: hex
+      pattern: "DF 9C 05 4F 1E FD 2F 46 B3 97 8B CE 59 52 53 FD"
+
+composite_rules:
+  - id: r2-string-decryptor
+    desc: "Radare2-based string decryptor script"
+    crit: hostile
+    conf: 0.9
+    all:
+      - id: micro-behaviors/process/create/tool::exec-r2
+      - id: micro-behaviors/data/encode/xor::xor-decoding-loop

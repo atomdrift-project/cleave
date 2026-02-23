@@ -1,0 +1,16 @@
+# Process Name Manipulation
+# MBC: B0001 (Defense Evasion)
+# ATT&CK: T1036.004 (Masquerading: Process Name)
+
+defaults:
+  for: [all]
+
+traits:
+  - id: nodejs-title
+    desc: "Modify process title in NodeJS"
+    crit: notable
+    conf: 0.9
+    if:
+      type: string
+      regex: |
+        process\.title\s*=

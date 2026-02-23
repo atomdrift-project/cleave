@@ -1,0 +1,104 @@
+# Filesystem Hierarchy Traversal
+# MBC: E1083 (File and Directory Discovery)
+# ATT&CK: T1083
+
+defaults:
+  for: [elf, macho, so, dylib, c]
+
+traits:
+  # fts API functions
+  - id: fts-open
+    desc: Open filesystem hierarchy via fts
+    crit: notable
+    conf: 0.8
+    mbc: E1083
+    attack: T1083
+    if:
+      type: symbol
+      regex: "_?fts_open"
+
+  - id: fts-read
+    desc: Read directory entries via fts
+    crit: notable
+    conf: 0.8
+    mbc: E1083
+    attack: T1083
+    if:
+      type: symbol
+      regex: "_?fts_read"
+
+  - id: fts-children
+    desc: Get child entries from filesystem hierarchy
+    crit: notable
+    conf: 0.8
+    mbc: E1083
+    attack: T1083
+    if:
+      type: symbol
+      regex: "_?fts_children"
+
+  - id: fts-set
+    desc: Modify filesystem traversal options
+    crit: baseline
+    conf: 0.7
+    mbc: E1083
+    attack: T1083
+    if:
+      type: symbol
+      regex: "_?fts_set"
+
+  - id: fts-close
+    desc: Close filesystem hierarchy traversal
+    crit: baseline
+    conf: 0.7
+    mbc: E1083
+    attack: T1083
+    if:
+      type: symbol
+      regex: "_?fts_close"
+
+  # nftw/ftw API
+  - id: nftw
+    desc: Traverse filesystem hierarchy via nftw/ftw
+    crit: baseline
+    conf: 0.66
+    mbc: E1083
+    attack: T1083
+    if:
+      type: symbol
+      exact: "nftw"
+
+  - id: ftw
+    desc: Traverse filesystem hierarchy via nftw/ftw
+    crit: baseline
+    conf: 0.66
+    mbc: E1083
+    attack: T1083
+    if:
+      type: symbol
+      exact: "ftw"
+
+composite_rules:
+  - id: traverse-fts
+    desc: Traverse filesystem hierarchy via fts
+    crit: baseline
+    conf: 0.66
+    mbc: E1083
+    attack: T1083
+    needs: 2
+    any:
+      - id: fts-open
+      - id: fts-read
+      - id: fts-children
+      - id: fts-set
+      - id: fts-close
+
+  - id: traverse-nftw
+    desc: Traverse filesystem hierarchy via nftw/ftw
+    crit: baseline
+    conf: 0.66
+    mbc: E1083
+    attack: T1083
+    any:
+      - id: nftw
+      - id: ftw

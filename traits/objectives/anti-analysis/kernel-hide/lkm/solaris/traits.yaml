@@ -1,0 +1,171 @@
+# Linux Kernel Rootkit Detection - Solaris/SunOS Kernel Rootkit Patterns
+# MBC: Defense Evasion, Privilege Escalation  
+# ATT&CK: T1014 (Rootkit), T1068 (Exploitation for Privilege Escalation)
+
+traits:
+  # SOLARIS/SUNOS KERNEL ROOTKIT (SInAR)
+  # ============================================================
+
+  - id: solaris-ddi-header
+    desc: Solaris DDI kernel header (driver kit)
+    crit: suspicious
+    conf: 0.95
+    attack: "T1014"
+    for: [c]
+    if:
+      type: ast
+      kind: import
+      exact: "sys/ddi.h"
+
+  - id: solaris-sunddi-header
+    desc: Solaris DKI kernel header (driver interface)
+    crit: suspicious
+    conf: 0.95
+    attack: "T1014"
+    for: [c]
+    if:
+      type: ast
+      kind: import
+      exact: "sys/sunddi.h"
+
+  - id: solaris-modctl-header
+    desc: Solaris module control header
+    crit: suspicious
+    conf: 0.95
+    attack: "T1014"
+    for: [c]
+    if:
+      type: ast
+      kind: import
+      exact: "sys/modctl.h"
+
+  - id: solaris-syscall-header
+    desc: Solaris syscall definitions header
+    crit: suspicious
+    conf: 0.9
+    attack: "T1014"
+    for: [c]
+    if:
+      type: ast
+      kind: import
+      exact: "sys/syscall.h"
+
+  - id: solaris-cred-header
+    desc: Solaris credentials header (privilege escalation)
+    crit: suspicious
+    conf: 0.95
+    attack: "T1068"
+    for: [c]
+    if:
+      type: ast
+      kind: import
+      exact: "sys/cred.h"
+
+  - id: hot-patch-kernel-text-call
+    desc: hot_patch_kernel_text function (direct kernel patching)
+    crit: suspicious
+    conf: 0.99
+    attack: "T1014"
+    for: [c]
+    if:
+      type: ast
+      kind: call
+      exact: "hot_patch_kernel_text"
+
+  - id: dtrace-interrupt-disable-call
+    desc: dtrace_interrupt_disable function (disable tracing)
+    crit: suspicious
+    conf: 0.95
+    attack: "T1014"
+    for: [c]
+    if:
+      type: ast
+      kind: call
+      exact: "dtrace_interrupt_disable"
+
+  - id: dtrace-interrupt-enable-call
+    desc: dtrace_interrupt_enable function
+    crit: suspicious
+    conf: 0.9
+    attack: "T1014"
+    for: [c]
+    if:
+      type: ast
+      kind: call
+      exact: "dtrace_interrupt_enable"
+
+  - id: ddi-crit-lock-call
+    desc: ddi_enter_critical function (atomic kernel operations)
+    crit: suspicious
+    conf: 0.95
+    attack: "T1014"
+    for: [c]
+    if:
+      type: ast
+      kind: call
+      exact: "ddi_enter_critical"
+
+  - id: ddi-crit-unlock-call
+    desc: ddi_exit_critical function
+    crit: suspicious
+    conf: 0.95
+    attack: "T1014"
+    for: [c]
+    if:
+      type: ast
+      kind: call
+      exact: "ddi_exit_critical"
+
+  - id: crdup-call
+    desc: crdup function (credential duplication for privilege escalation)
+    crit: suspicious
+    conf: 0.98
+    attack: "T1068"
+    for: [c]
+    if:
+      type: ast
+      kind: call
+      exact: "crdup"
+
+  - id: kcred-kernel-cred
+    desc: kcred kernel credential reference
+    crit: suspicious
+    conf: 0.99
+    attack: "T1068"
+    for: [c]
+    if:
+      type: string
+      substr: "kcred"
+
+  - id: sysent-reference
+    desc: sysent syscall entry table reference
+    crit: suspicious
+    conf: 0.98
+    attack: "T1014"
+    for: [c]
+    if:
+      type: string
+      regex: "sysent\\["
+
+  - id: sethi-opcode-struct
+    desc: SPARC sethi opcode structure (kernel instruction patching)
+    crit: suspicious
+    conf: 0.98
+    attack: "T1014"
+    for: [c]
+    if:
+      type: ast
+      kind: identifier
+      exact: "sethi_opcode"
+
+  - id: jmp-opcode-struct
+    desc: SPARC jmp/jmpl opcode structure (kernel jump patching)
+    crit: suspicious
+    conf: 0.98
+    attack: "T1014"
+    for: [c]
+    if:
+      type: ast
+      kind: identifier
+      regex: "jmpl?_opcode"
+

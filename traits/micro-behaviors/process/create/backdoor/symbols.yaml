@@ -1,0 +1,84 @@
+# Backdoor Command Execution Symbols
+# Generic C++ mangled symbols for remote command execution
+
+defaults:
+  for: [elf, macho]
+  crit: suspicious
+
+traits:
+  - id: run-command-symbol
+    desc: RunCommand C++ symbol
+    conf: 0.8
+    if:
+      type: symbol
+      regex: "__Z10RunCommand"
+
+  - id: process-request-symbol
+    desc: ProcessRequest C++ symbol
+    conf: 0.8
+    if:
+      type: symbol
+      regex: "__Z14ProcessRequest"
+
+  - id: save-and-execute-symbol
+    desc: SaveAndExecute C++ symbol
+    conf: 0.85
+    if:
+      type: symbol
+      regex: "__Z14SaveAndExecute"
+
+  - id: execute-symbol
+    desc: Execute C++ symbol
+    conf: 0.7
+    if:
+      type: symbol
+      regex: "__Z7Execute"
+
+  - id: get-response-symbol
+    desc: GetResponse C++ symbol for C2
+    conf: 0.75
+    if:
+      type: symbol
+      regex: "__Z11GetResponse"
+
+  - id: write-callback-symbol
+    desc: WriteCallback C++ symbol for data handling
+    conf: 0.7
+    if:
+      type: symbol
+      regex: "__Z13WriteCallback"
+
+  - id: generate-uid-symbol
+    desc: GenerateUID C++ symbol for bot identification
+    conf: 0.75
+    if:
+      type: symbol
+      regex: "__Z11GenerateUID"
+
+  - id: make-status-string-symbol
+    desc: MakeStatusString C++ symbol
+    conf: 0.7
+    if:
+      type: symbol
+      regex: "__Z16MakeStatusString"
+
+  - id: get-exe-path-symbol
+    desc: GetCurrentExecutablePath C++ symbol
+    conf: 0.7
+    if:
+      type: symbol
+      regex: "__Z24GetCurrentExecutablePath"
+
+composite_rules:
+  - id: cpp-backdoor-symbols
+    desc: C++ backdoor with command execution symbols
+    crit: suspicious
+    conf: 0.95
+    needs: 4
+    any:
+      - id: run-command-symbol
+      - id: process-request-symbol
+      - id: save-and-execute-symbol
+      - id: execute-symbol
+      - id: get-response-symbol
+      - id: generate-uid-symbol

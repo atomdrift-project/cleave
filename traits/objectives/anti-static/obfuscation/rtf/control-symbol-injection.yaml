@@ -1,0 +1,12 @@
+defaults:
+  for: [rtf]
+
+traits:
+  - id: control-symbol-injection
+    desc: RTF control symbol injection within hex.
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: raw
+      regex: "((\\\\\\+){1,2}[0-9a-fA-F]\\s*){4,}"
+      description: "Detects control symbol injection like \\+3\\++1"

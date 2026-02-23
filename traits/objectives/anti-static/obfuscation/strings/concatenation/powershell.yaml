@@ -1,0 +1,196 @@
+# String Obfuscation Detection - PowerShell
+# MBC: B0032 (Obfuscated Files or Information)
+# ATT&CK: T1027, T1059.001
+
+defaults:
+  for: [powershell, batch, shell]
+  mbc: "B0032"
+  attack: "T1027"
+
+traits:
+  # Character array obfuscation - [char[]]@(...) or -join [char[]]@(...)
+  - id: ps-chararray
+    desc: PowerShell char array obfuscation
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: raw
+      regex: "\\[char\\[\\]\\]@\\("
+
+  # Alternative: -join(... charcode patterns
+  - id: ps-join-char
+    desc: PowerShell join with char conversion
+    crit: suspicious
+    conf: 0.85
+    if:
+      type: raw
+      regex: "-join\\s*\\[char\\[\\]\\]"
+
+  # Numeric character codes pattern (many numbers in array)
+  - id: ps-numeric-chararray
+    desc: Numeric character array payload
+    crit: suspicious
+    conf: 0.85
+    if:
+      type: raw
+      regex: "@\\(\\d{1,3}(,\\d{1,3}){10,}\\)"
+
+  # [char]N pattern for individual characters
+  - id: ps-individual-char
+    desc: Individual char casting
+    crit: notable
+    conf: 0.7
+    if:
+      type: raw
+      regex: "\\[char\\]\\d{2,3}"
+
+  # ToCharArray with pipeline for ROT cipher
+  - id: ps-rot-cipher
+    desc: ROT cipher pattern
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: raw
+      regex: "(?i)\\.ToCharArray\\(\\)\\s*\\|\\s*%\\s*\\{.{0,200}if\\(\\$c-ge65-and\\$c-le90\\)"
+
+  # Execution policy bypass
+  - id: ps-ep-bypass
+    desc: Execution policy bypass
+    crit: notable
+    conf: 0.9
+    for: [powershell, batch, shell]
+    attack: "T1059.001"
+    if:
+      type: raw
+      regex: "(?i)-e[px]\\s+[Bb]ypass|-ExecutionPolicy\\s+[Bb]ypass"
+
+  # Hidden window style
+  - id: ps-hidden-window
+    desc: Hidden window execution
+    crit: notable
+    conf: 0.85
+    for: [powershell, batch, shell]
+    attack: "T1564.003"
+    if:
+      type: raw
+      regex: "(?i)-[Ww](indow)?[Ss](tyle)?\\s+[Hh]idden"
+
+  # NoProfile flag (avoid loading user profile)
+  - id: ps-noprofile
+    desc: NoProfile flag
+    crit: notable
+    conf: 0.7
+    for: [powershell, batch, shell]
+    if:
+      type: raw
+      regex: "(?i)-[Nn]o[Pp]rofile|-[Nn]op\\b"
+
+  # Encoded command
+  - id: ps-encoded-command
+    desc: Base64 encoded command
+    crit: suspicious
+    conf: 0.9
+    for: [powershell, batch, shell]
+    attack: "T1027"
+    if:
+      type: raw
+      regex: "(?i)-[Ee]ncoded[Cc]ommand|-[Ee][Cc]\\s"
+
+  # === Density-Based Obfuscation Detection ===
+  # Legitimate PowerShell rarely uses many char casts.
+  # Obfuscated code builds strings via [char]65+[char]66...
+
+  - id: dense-char-casts
+    desc: Dense [char]N casts (string obfuscation)
+    crit: suspicious
+    conf: 0.92
+    mbc: "B0032"
+    attack: "T1027"
+    for: [powershell]
+    if:
+      type: raw
+      regex: "\\[char\\]\\d{2,3}"
+      count_min: 8
+      per_kb_min: 2.0
+
+  # Backtick escaping is used to break up keywords
+  # e.g., `I`n`v`o`k`e`-`E`x`p`r`e`s`s`i`o`n
+  - id: dense-backtick-escapes
+    desc: Dense backtick escapes (keyword breaking)
+    crit: suspicious
+    conf: 0.88
+    mbc: "B0032"
+    attack: "T1027"
+    for: [powershell]
+    if:
+      type: raw
+      regex: "`[a-zA-Z]"
+      count_min: 10
+      per_kb_min: 3.0
+
+  # Format string obfuscation: "{0}{1}" -f 'In','voke'
+  - id: dense-format-strings
+    desc: Dense format string obfuscation
+    crit: suspicious
+    conf: 0.85
+    mbc: "B0032"
+    attack: "T1027"
+    for: [powershell]
+    if:
+      type: raw
+      regex: '"\{\\d+\}"\\s*-f'
+      count_min: 4
+      per_kb_min: 1.0
+
+  # String concatenation used to hide commands
+  - id: dense-string-concat
+    desc: Dense string concatenation
+    crit: suspicious
+    conf: 0.82
+    mbc: "B0032"
+    attack: "T1027"
+    for: [powershell]
+    if:
+      type: raw
+      regex: "'[^']{1,10}'\\s*\\+\\s*'[^']{1,10}'"
+      count_min: 6
+      per_kb_min: 1.5
+
+composite_rules:
+  # Character array obfuscation pattern
+  - id: ps-chararray-obfuscation
+    desc: PowerShell char array obfuscation
+    crit: suspicious
+    conf: 0.9
+    for: [powershell, batch, shell]
+    any:
+      - id: ps-chararray
+      - id: ps-join-char
+      - id: ps-numeric-chararray
+
+  # Obfuscated eval - char array + iex
+  - id: ps-obfuscated-eval
+    desc: Obfuscated PowerShell eval
+    crit: hostile
+    conf: 0.95
+    attack: "T1027"
+    for: [powershell, batch, shell]
+    all:
+      - id: objectives/execution/interpreter/eval/invoke::iex
+    any:
+      - id: ps-chararray
+      - id: ps-join-char
+      - id: ps-numeric-chararray
+      - id: ps-rot-cipher
+
+  # Evasive execution flags
+  - id: ps-evasive-flags
+    desc: Evasive PowerShell execution
+    crit: suspicious
+    conf: 0.85
+    for: [powershell, batch, shell]
+    needs: 2
+    any:
+      - id: ps-ep-bypass
+      - id: ps-hidden-window
+      - id: ps-encoded-command

@@ -1,0 +1,27 @@
+defaults:
+  for: ["*"]
+
+traits:
+  - id: set-current-directory-interrupt
+    desc: Set Current Directory via DOS interrupt
+    crit: suspicious
+    conf: 0.7
+    if:
+      type: raw
+      regex: '_AH\s*=\s*0x3b'
+
+  - id: findfirst
+    desc: Find first file (DOS/Windows)
+    crit: notable
+    conf: 0.8
+    if:
+      type: symbol
+      regex: '^_?findfirst$'
+
+  - id: findnext
+    desc: Find next file (DOS/Windows)
+    crit: notable
+    conf: 0.8
+    if:
+      type: symbol
+      regex: '^_?findnext$'

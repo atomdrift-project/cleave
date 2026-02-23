@@ -1,0 +1,245 @@
+# Package Manager Abuse Patterns
+# Detects malware using apt/yum/dnf for dynamic tool installation
+# Indicators of multi-distro compatibility and privilege escalation preparation
+
+traits:
+  - id: apt-get-install-cmd
+    desc: apt-get install command
+    crit: notable
+    conf: 0.75
+    for: [elf, shell]
+    if:
+      type: string
+      substr: "apt-get install"
+    attack: "T1190"
+
+  - id: apt-install-cmd
+    desc: apt install command
+    crit: notable
+    conf: 0.75
+    for: [elf, shell]
+    if:
+      type: string
+      substr: "apt install"
+    attack: "T1190"
+
+  - id: apt-get-noninteractive-y
+    desc: apt-get install -y (non-interactive)
+    crit: suspicious
+    conf: 0.85
+    for: [elf, shell]
+    if:
+      type: string
+      substr: "apt-get install -y"
+    attack: "T1190"
+
+  - id: apt-install-noninteractive-y
+    desc: apt install -y (non-interactive)
+    crit: suspicious
+    conf: 0.85
+    for: [elf, shell]
+    if:
+      type: string
+      substr: "apt install -y"
+    attack: "T1190"
+
+  - id: debian-frontend-noninteractive
+    desc: DEBIAN_FRONTEND=noninteractive
+    crit: suspicious
+    conf: 0.85
+    for: [elf, shell]
+    if:
+      type: string
+      substr: "DEBIAN_FRONTEND=noninteractive"
+    attack: "T1190"
+
+  - id: yum-install-cmd
+    desc: yum install command
+    crit: notable
+    conf: 0.75
+    for: [elf, shell]
+    if:
+      type: string
+      substr: "yum install"
+    attack: "T1190"
+
+  - id: yum-install-y-cmd
+    desc: yum -y install command
+    crit: notable
+    conf: 0.75
+    for: [elf, shell]
+    if:
+      type: string
+      substr: "yum -y install"
+    attack: "T1190"
+
+  - id: yum-noninteractive
+    desc: automated yum install without interaction
+    crit: suspicious
+    conf: 0.85
+    for: [elf, shell]
+    if:
+      type: string
+      substr: "yum install -y"
+    attack: "T1190"
+
+  - id: dnf-install-cmd
+    desc: dnf install command
+    crit: notable
+    conf: 0.75
+    for: [elf, shell]
+    if:
+      type: string
+      substr: "dnf install"
+    attack: "T1190"
+
+  - id: dnf-install-y-cmd
+    desc: dnf -y install command
+    crit: notable
+    conf: 0.75
+    for: [elf, shell]
+    if:
+      type: string
+      substr: "dnf -y install"
+    attack: "T1190"
+
+  - id: dnf-noninteractive
+    desc: automated dnf install without interaction
+    crit: suspicious
+    conf: 0.85
+    for: [elf, shell]
+    if:
+      type: string
+      substr: "dnf install -y"
+    attack: "T1190"
+
+  - id: which-apt-get
+    desc: checking for apt-get availability
+    crit: baseline
+    conf: 0.6
+    for: [elf, shell]
+    if:
+      type: string
+      substr: "which apt-get"
+
+  - id: which-yum
+    desc: checking for yum availability
+    crit: baseline
+    conf: 0.6
+    for: [elf, shell]
+    if:
+      type: string
+      substr: "which yum"
+
+  - id: which-dnf
+    desc: checking for dnf availability
+    crit: baseline
+    conf: 0.6
+    for: [elf, shell]
+    if:
+      type: string
+      substr: "which dnf"
+
+  - id: package-manager-which-conditional
+    desc: which package manager conditional
+    crit: notable
+    conf: 0.7
+    for: [elf, shell]
+    if:
+      type: string
+      regex: "which\\s+(apt-get|yum|dnf).{0,50}&&"
+
+  - id: package-manager-if-conditional
+    desc: if which package manager conditional
+    crit: notable
+    conf: 0.7
+    for: [elf, shell]
+    if:
+      type: string
+      regex: "if.{0,50}which\\s+(apt-get|yum|dnf)"
+
+composite_rules:
+  - id: apt-get-install
+    desc: apt-get package installation command
+    crit: notable
+    conf: 0.75
+    for: [elf, shell]
+    attack: "T1190"
+    any:
+      - id: apt-get-install-cmd
+      - id: apt-install-cmd
+
+  - id: apt-get-noninteractive
+    desc: automated apt-get install without interaction
+    crit: suspicious
+    conf: 0.85
+    for: [elf, shell]
+    attack: "T1190"
+    any:
+      - id: apt-get-noninteractive-y
+      - id: apt-install-noninteractive-y
+      - id: debian-frontend-noninteractive
+
+  - id: yum-install
+    desc: yum package installation command
+    crit: notable
+    conf: 0.75
+    for: [elf, shell]
+    attack: "T1190"
+    any:
+      - id: yum-install-cmd
+      - id: yum-install-y-cmd
+
+  - id: dnf-install
+    desc: dnf package installation command
+    crit: notable
+    conf: 0.75
+    for: [elf, shell]
+    attack: "T1190"
+    any:
+      - id: dnf-install-cmd
+      - id: dnf-install-y-cmd
+
+  - id: which-package-check
+    desc: checking for package manager availability
+    crit: baseline
+    conf: 0.6
+    for: [elf, shell]
+    any:
+      - id: which-apt-get
+      - id: which-yum
+      - id: which-dnf
+
+  - id: package-manager-conditional
+    desc: conditional package manager execution multi-distro
+    crit: notable
+    conf: 0.7
+    for: [elf, shell]
+    any:
+      - id: package-manager-which-conditional
+      - id: package-manager-if-conditional
+
+  - id: package-manager-abuse
+    desc: Malicious package manager usage
+    crit: suspicious
+    conf: 0.85
+    for: [elf, shell]
+    attack: "T1190"
+    needs: 2
+    any:
+      - id: apt-get-noninteractive
+      - id: yum-noninteractive
+      - id: dnf-noninteractive
+      - id: package-manager-conditional
+
+  - id: multi-distro-package-targeting
+    desc: Multi-distro package manager targeting
+    crit: suspicious
+    conf: 0.9
+    for: [elf, shell]
+    attack: "T1190"
+    needs: 2
+    any:
+      - id: apt-get-noninteractive
+      - id: yum-noninteractive
+      - id: dnf-noninteractive

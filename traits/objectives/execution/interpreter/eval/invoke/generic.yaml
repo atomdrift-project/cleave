@@ -1,0 +1,85 @@
+# Shell/Code Execution - Generic
+# MBC: E1059 (Command and Scripting Interpreter)
+# ATT&CK: T1059
+
+traits:
+  # === Shell eval atomic indicators ===
+  - id: eval-call-shell
+    desc: eval() call (shell/js)
+    crit: notable
+    conf: 0.5
+    mbc: "E1059"
+    attack: "T1059"
+    for: [shell, javascript]
+    if:
+      type: string
+      regex: "eval\\("
+
+  - id: exec-call-shell
+    desc: exec() call (shell/js)
+    crit: notable
+    conf: 0.5
+    mbc: "E1059"
+    attack: "T1059"
+    for: [shell, javascript, typescript]
+    if:
+      type: string
+      regex: "exec\\("
+
+  # === Python eval atomic indicators ===
+  - id: eval-call-python
+    desc: eval() call (Python)
+    crit: notable
+    conf: 0.4
+    mbc: "E1059"
+    attack: "T1059"
+    for: [python]
+    if:
+      type: string
+      regex: "eval\\("
+
+  - id: exec-call-python
+    desc: exec() call (Python)
+    crit: notable
+    conf: 0.4
+    mbc: "E1059"
+    attack: "T1059"
+    for: [python]
+    if:
+      type: string
+      regex: "exec\\("
+
+  - id: compile-call-python
+    desc: compile() call (Python)
+    crit: notable
+    conf: 0.4
+    mbc: "E1059"
+    attack: "T1059"
+    for: [python]
+    if:
+      type: string
+      regex: "compile\\("
+
+composite_rules:
+  - id: shell-eval
+    desc: Dynamic code evaluation
+    crit: notable
+    conf: 0.66
+    mbc: "E1059"
+    attack: "T1059"
+    for: [shell, javascript]
+    any:
+      - id: eval-call-shell
+      - id: exec-call-shell
+
+  - id: python-eval
+    desc: Python dynamic code evaluation
+    crit: notable
+    conf: 0.5
+    mbc: "E1059"
+    attack: "T1059"
+    for: [python]
+    any:
+      - id: eval-call-python
+      - id: exec-call-python
+      - id: compile-call-python

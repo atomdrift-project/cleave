@@ -1,0 +1,32 @@
+traits:
+  - id: js-junk-loop-assignments
+    desc: Multiple assignments to the same junk variable
+    crit: notable
+    for: [javascript]
+    if:
+      type: ast
+      language: javascript
+      query: |
+        (while_statement
+          body: (statement_block
+            (expression_statement
+              (assignment_expression
+                left: (identifier) @var
+                right: (number)
+              )
+            )
+            (expression_statement
+              (assignment_expression
+                left: (identifier)
+                right: (_)
+              )
+            )
+            (expression_statement
+              (assignment_expression
+                left: (identifier) @var2
+                right: (number)
+              )
+            )
+            (#eq? @var @var2)
+          )
+        )

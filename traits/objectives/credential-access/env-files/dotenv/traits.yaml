@@ -1,0 +1,90 @@
+# Dotenv Credential Theft Detection
+# Detects malware stealing credentials from .env files
+# ATT&CK: T1552.001 (Credentials In Files)
+# MBC: B0014 (Credentials)
+
+defaults:
+  crit: suspicious
+  attack: "T1552.001"
+  mbc: "B0014"
+  for: [python, shell]
+
+traits:
+  # === Dotenv File Access ===
+  - id: dotenv-file-access
+    desc: Dotenv file access
+    crit: notable
+    conf: 0.75
+    if:
+      type: raw
+      regex: "open\\(.{0,50}\\.env[^a-zA-Z].{0,50}\\)|with open\\(.{0,50}\\.env[^a-zA-Z]"
+
+  - id: dotenv-read-secrets
+    desc: Dotenv secrets reading
+    crit: suspicious
+    conf: 0.85
+    if:
+      type: raw
+      regex: "\\.env[^a-zA-Z].{0,50}read\\(\\)|dotenv.{0,50}read"
+
+  # === Environment Variable Theft ===
+  - id: environ-iteration
+    desc: Environment variable iteration
+    crit: notable
+    conf: 0.80
+    if:
+      type: raw
+      regex: "for.{0,50}os\\.environ\\.items\\(\\)|os\\.environ\\.items\\(\\)"
+
+  - id: environ-dict-access
+    desc: Environment variables as dict/string
+    crit: notable
+    conf: 0.75
+    # Small binaries with environment dumps are more suspicious
+    size_max: 50000
+    if:
+      type: raw
+      regex: "dict\\(os\\.environ\\)|str\\(os\\.environ\\)"
+
+  # === Powershell Enumeration ===
+  - id: powershell-drive-enum
+    desc: Powershell drive enumeration
+    crit: suspicious
+    conf: 0.85
+    if:
+      type: raw
+      regex: "powershell.{0,50}Get-ChildItem|Get-ChildItem.{0,50}-Recurse"
+
+  - id: available-drives-enum
+    desc: Available drives enumeration
+    crit: suspicious
+    conf: 0.80
+    if:
+      type: raw
+      regex: "ascii_uppercase.{0,50}exists|available_drives"
+
+composite_rules:
+  # === Dotenv Credential Theft ===
+  - id: dotenv-credentials-theft
+    desc: Dotenv credentials theft
+    crit: suspicious
+    conf: 0.90
+    attack: "T1552.001"
+    for: [python]
+    needs: 2
+    any:
+      - id: dotenv-file-access
+      - id: dotenv-read-secrets
+      - id: environ-iteration
+
+  - id: env-exfiltration
+    desc: Environment variable exfiltration
+    crit: suspicious
+    conf: 0.95
+    attack: "T1552.001"
+    mbc: "B0014"
+    platforms: [all]
+    needs: 2
+    any:
+      - id: dotenv-credentials-theft
+      - id: environ-dict-access

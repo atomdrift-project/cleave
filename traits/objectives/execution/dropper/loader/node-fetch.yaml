@@ -1,0 +1,178 @@
+# Node.js Fetch-Write-Execute Dropper Patterns
+# Detects malware that fetches code, writes to temp file, executes, and cleans up
+# ATT&CK: T1105 (Ingress Tool Transfer), T1059.007 (JavaScript)
+# MBC: B0024 (Dropper)
+
+defaults:
+  for: [javascript, typescript]
+  attack: "T1059.007"
+  mbc: "B0024"
+
+traits:
+  # === Fetch API patterns ===
+  # NOTE: fetch-call removed - use micro-behaviors/communications/http/request::fetch-string instead
+
+  - id: fetch-then-json
+    desc: fetch().then JSON parse
+    crit: notable
+    conf: 0.7
+    if:
+      type: raw
+      regex: "fetch\\(.{0,50}\\.then\\(.{0,50}\\.json\\("
+
+  # === Spawn/exec patterns ===
+  - id: spawnSync-call
+    desc: spawnSync function call
+    crit: notable
+    conf: 0.6
+    if:
+      type: raw
+      regex: "\\.spawnSync\\s*\\("
+
+  - id: spawn-call
+    desc: spawn function call
+    crit: notable
+    conf: 0.6
+    if:
+      type: raw
+      regex: "\\.spawn\\s*\\("
+
+  - id: spawn-node
+    desc: spawn node interpreter
+    crit: notable
+    conf: 0.7
+    if:
+      type: raw
+      regex: "spawn(Sync)?\\s*\\(['\"]node['\"]"
+
+  # === Cleanup patterns ===
+  - id: unlinkSync-call
+    desc: fs.unlinkSync call
+    crit: notable
+    conf: 0.6
+    if:
+      type: raw
+      regex: "\\.unlinkSync\\s*\\("
+
+  - id: unlink-call
+    desc: fs.unlink call
+    crit: notable
+    conf: 0.6
+    if:
+      type: raw
+      regex: "\\.unlink\\s*\\("
+
+  # === Temp file patterns ===
+  - id: temp-js-file
+    desc: Temporary .js file path
+    crit: notable
+    conf: 0.75
+    if:
+      type: string
+      regex: "\\./tmp[^/]{0,120}\\.js|/tmp/[^/]{0,120}\\.js"
+
+  - id: random-temp-filename
+    desc: Random/unusual temp filename
+    crit: notable
+    conf: 0.8
+    if:
+      type: string
+      regex: "tmppppp|temp[0-9a-f]{8}|rand[0-9]+\\.js"
+
+  # === IIFE patterns ===
+  - id: iife-start
+    desc: IIFE pattern start
+    crit: notable
+    conf: 0.5
+    if:
+      type: string
+      regex: "^\\(function\\s*\\(|^\\(async\\s+function"
+
+  - id: iife-arrow
+    desc: IIFE with arrow function
+    crit: notable
+    conf: 0.5
+    if:
+      type: string
+      regex: "^\\(\\(\\)\\s*=>|^\\(async\\s*\\(\\)\\s*=>"
+
+composite_rules:
+  # File write composite
+  - id: file-write
+    desc: File write operation
+    crit: notable
+    conf: 0.7
+    any:
+      - id: micro-behaviors/fs/write/file::write-file-sync
+      - id: micro-behaviors/fs/write/file::write-file-async
+
+  # File delete composite
+  - id: file-delete
+    desc: File delete operation
+    crit: notable
+    conf: 0.7
+    any:
+      - id: unlinkSync-call
+      - id: unlink-call
+
+  # Process execution composite
+  - id: process-exec
+    desc: Process execution (spawn/spawnSync)
+    crit: notable
+    conf: 0.7
+    any:
+      - id: spawnSync-call
+      - id: spawn-call
+      - id: spawn-node
+
+  # Detached process composite
+  - id: detached-process
+    desc: Detached process spawn
+    crit: notable
+    conf: 0.8
+    any:
+      - id: micro-behaviors/process/create/spawn::detached-true
+      - id: micro-behaviors/process/create/flags::detached-process
+
+  # Temp JS file composite
+  - id: temp-js
+    desc: Temporary JavaScript file
+    crit: notable
+    conf: 0.8
+    any:
+      - id: temp-js-file
+      - id: random-temp-filename
+
+  # IIFE composite
+  - id: iife-pattern
+    desc: Immediately invoked function
+    crit: notable
+    conf: 0.6
+    any:
+      - id: iife-start
+      - id: iife-arrow
+
+  # Fetch + write + execute pattern (suspicious)
+  - id: fetch-write-exec
+    desc: Fetch and write then execute
+    crit: suspicious
+    conf: 0.9
+    all:
+      - id: micro-behaviors/communications/http/request::fetch-string
+      - id: file-write
+      - id: process-exec
+
+  # Write + execute + delete pattern (suspicious)
+  - id: write-exec-delete
+    desc: Write file, execute, delete
+    crit: suspicious
+    conf: 0.92
+    all:
+      - id: file-write
+      - id: process-exec
+      - id: file-delete
+    unless:
+      - id: metadata/dev/testing::node-common-require
+
+  # Full dropper chain: fetch + write + execute + delete (hostile)
+  # complexity = file_types(1) + all(4) = 5

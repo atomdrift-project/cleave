@@ -1,0 +1,99 @@
+# Linux File Attributes (chattr)
+# MBC: F0004 (Defense Evasion)
+# ATT&CK: T1222
+
+defaults:
+  for: [all]
+
+traits:
+  - id: chattr-command
+    desc: chattr command to modify file
+    crit: notable
+    conf: 0.66
+    mbc: F0004
+    attack: T1222
+    if:
+      type: string
+      regex: 'chattr [-\+][\w\- ]{0,32} [\w\.\/]{0,64}'
+
+  - id: chattr-immutable-flag
+    desc: chattr with immutable flag (+i
+    crit: notable
+    conf: 0.7
+    mbc: F0004
+    attack: T1222
+    if:
+      type: string
+      regex: 'chattr [-\+]i [\-\w\.\/]{0,64}'
+
+  - id: chattr-immutable-sys
+    desc: chattr -i /sys (legitimate system
+    crit: baseline
+    conf: 1.0
+    if:
+      type: string
+      substr: "chattr -i /sys"
+
+  - id: chattr-recursive-immutable-1
+    desc: chattr -R -i (recursive remove
+    crit: notable
+    conf: 0.7
+    mbc: F0004
+    attack: T1222
+    if:
+      type: string
+      regex: 'chattr -R -i [\-\w\.\/]{0,64}'
+
+  - id: chattr-recursive-immutable-2
+    desc: chattr -Ri (recursive remove immutable,
+    crit: notable
+    conf: 0.7
+    mbc: F0004
+    attack: T1222
+    if:
+      type: string
+      regex: 'chattr -Ri [\-\w\.\/]{0,64}'
+
+  - id: chattr-recursive-immutable-3
+    desc: chattr -iR (recursive remove immutable,
+    crit: notable
+    conf: 0.7
+    mbc: F0004
+    attack: T1222
+    if:
+      type: string
+      regex: 'chattr -iR [\-\w\.\/]{0,64}'
+
+  - id: chattr-recursive-immutable-4
+    desc: chattr -i -R (recursive remove
+    crit: notable
+    conf: 0.7
+    mbc: F0004
+    attack: T1222
+    if:
+      type: string
+      regex: 'chattr -i -R [\-\w\.\/]{0,64}'
+
+composite_rules:
+  - id: chattr-immutable
+    desc: Modify immutability of a file
+    crit: suspicious
+    conf: 0.66
+    mbc: F0004
+    attack: T1222
+    all:
+      - id: chattr-immutable-flag
+    none:
+      - id: chattr-immutable-sys
+
+  - id: chattr-immutable-recursive
+    desc: Recursively remove immutability of a
+    crit: suspicious
+    conf: 0.66
+    mbc: F0004
+    attack: T1222
+    any:
+      - id: chattr-recursive-immutable-1
+      - id: chattr-recursive-immutable-2
+      - id: chattr-recursive-immutable-3
+      - id: chattr-recursive-immutable-4

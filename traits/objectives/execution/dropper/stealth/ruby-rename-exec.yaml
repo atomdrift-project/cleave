@@ -1,0 +1,18 @@
+# Ruby Dropper Behavior: Rename and Execute
+# ATT&CK: T1105, T1059
+
+defaults:
+  crit: hostile
+  conf: 0.95
+
+composite_rules:
+  - id: ruby-dropper-rename-exec
+    desc: Ruby script renames file to executable and executes it
+    all:
+      - id: objectives/execution/dropper/script::ruby-ast-rename-img-to-exe
+      - id: micro-behaviors/process/create/shell/lang::ruby-exec
+    any:
+      - id: objectives/execution/dropper/script::ruby-ast-check-windows-regex
+      - id: objectives/execution/dropper/script::ruby-ast-host-os-access
+      - id: micro-behaviors/os/sysinfo/platform::windows-os-check
+    needs: 1

@@ -1,0 +1,72 @@
+# Apple Bundle Identifiers
+# Detects references to common Apple application and system bundle IDs
+
+defaults:
+  for: [macho, dylib, javascript, typescript]
+  crit: notable
+  conf: 0.7
+
+traits:
+  - id: generic-apple
+    desc: Apple bundle identifier (com.apple.*)
+    if:
+      type: string
+      regex: 'com\.apple\.[a-zA-Z][a-zA-Z0-9.-]{3,}'
+    not:
+      - "com.apple.mail"
+      - "com.apple.iChat"
+      - "com.apple.Messages"
+      - "com.apple.dt.runtime"
+      - "com.apple.quarantine"
+      - "com.apple.os.config"
+      - "com.apple.notes"
+
+  - id: mail
+    desc: Apple Mail bundle identifier
+    if:
+      type: string
+      substr: "com.apple.mail"
+
+  - id: ichat
+    desc: Apple iChat bundle identifier
+    if:
+      type: string
+      substr: "com.apple.iChat"
+
+  - id: messages
+    desc: Apple Messages bundle identifier
+    if:
+      type: string
+      substr: "com.apple.Messages"
+
+  - id: dt-runtime
+    desc: Apple DevTools runtime bundle identifier
+    if:
+      type: string
+      substr: "com.apple.dt.runtime"
+
+  - id: quarantine
+    desc: Apple Quarantine bundle identifier
+    if:
+      type: string
+      substr: "com.apple.quarantine"
+
+  - id: os-config
+    desc: Apple OS config bundle identifier
+    if:
+      type: string
+      substr: "com.apple.os.config"
+
+  - id: notes
+    desc: Apple Notes bundle identifier
+    if:
+      type: string
+      substr: "com.apple.notes"
+
+composite_rules:
+  - id: messaging-app
+    desc: Apple messaging application bundle identifier
+    any:
+      - id: mail
+      - id: ichat
+      - id: messages

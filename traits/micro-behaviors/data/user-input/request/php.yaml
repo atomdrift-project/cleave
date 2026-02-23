@@ -1,0 +1,271 @@
+traits:
+  - id: get
+    desc: HTTP GET parameter access ($_GET)
+    crit: notable
+    conf: 0.85
+    attack: T1059
+    for:
+      - php
+    if:
+      type: ast
+      node: variable_name
+      regex: \$_GET
+  - id: post
+    desc: HTTP POST parameter access ($_POST)
+    crit: notable
+    conf: 0.85
+    attack: T1059
+    for:
+      - php
+    if:
+      type: ast
+      node: variable_name
+      regex: \$_POST
+  - id: request
+    desc: HTTP REQUEST parameter access ($_REQUEST)
+    crit: notable
+    conf: 0.85
+    attack: T1059
+    for:
+      - php
+    if:
+      type: ast
+      node: variable_name
+      regex: \$_REQUEST
+  - id: cookie
+    desc: HTTP Cookie access ($_COOKIE)
+    crit: notable
+    conf: 0.8
+    for:
+      - php
+    if:
+      type: ast
+      node: variable_name
+      regex: \$_COOKIE
+  - id: server
+    desc: Server variable access ($_SERVER)
+    crit: notable
+    conf: 0.75
+    for:
+      - php
+    if:
+      type: ast
+      node: variable_name
+      regex: \$_SERVER
+  - id: files
+    desc: File upload access ($_FILES)
+    crit: notable
+    conf: 0.85
+    attack: T1105
+    for:
+      - php
+    if:
+      type: ast
+      node: variable_name
+      regex: \$_FILES
+  - id: session
+    desc: Session variable access ($_SESSION)
+    crit: notable
+    conf: 0.75
+    for:
+      - php
+    if:
+      type: ast
+      node: variable_name
+      regex: \$_SESSION
+  - id: extract-get
+    desc: extract from $_GET
+    crit: baseline
+    conf: 0.7
+    for:
+      - php
+    if:
+      type: string
+      regex: extract\s*\(\s*\$_GET
+  - id: extract-post
+    desc: extract from $_POST
+    crit: baseline
+    conf: 0.7
+    for:
+      - php
+    if:
+      type: string
+      regex: extract\s*\(\s*\$_POST
+  - id: extract-request
+    desc: extract from $_REQUEST
+    crit: baseline
+    conf: 0.7
+    for:
+      - php
+    if:
+      type: string
+      regex: extract\s*\(\s*\$_REQUEST
+  - id: extract-cookie
+    desc: extract from $_COOKIE
+    crit: baseline
+    conf: 0.7
+    for:
+      - php
+    if:
+      type: string
+      regex: extract\s*\(\s*\$_COOKIE
+  - id: extract-server
+    desc: extract from $_SERVER
+    crit: baseline
+    conf: 0.7
+    for:
+      - php
+    if:
+      type: string
+      regex: extract\s*\(\s*\$_SERVER
+  - id: parse-str-get
+    desc: parse_str from $_GET
+    crit: baseline
+    conf: 0.7
+    for:
+      - php
+    if:
+      type: string
+      regex: parse_str\s*\(\s*\$_GET
+  - id: parse-str-post
+    desc: parse_str from $_POST
+    crit: baseline
+    conf: 0.7
+    for:
+      - php
+    if:
+      type: string
+      regex: parse_str\s*\(\s*\$_POST
+  - id: parse-str-request
+    desc: parse_str from $_REQUEST
+    crit: baseline
+    conf: 0.7
+    for:
+      - php
+    if:
+      type: string
+      regex: parse_str\s*\(\s*\$_REQUEST
+  - id: parse-str-cookie
+    desc: parse_str from $_COOKIE
+    crit: baseline
+    conf: 0.7
+    for:
+      - php
+    if:
+      type: string
+      regex: parse_str\s*\(\s*\$_COOKIE
+  - id: parse-str-server
+    desc: parse_str from $_SERVER
+    crit: baseline
+    conf: 0.7
+    for:
+      - php
+    if:
+      type: string
+      regex: parse_str\s*\(\s*\$_SERVER
+  - id: script-filename-superglobal
+    desc: Access to script filename (self-reference)
+    crit: notable
+    conf: 0.85
+    for:
+      - php
+    if:
+      type: string
+      regex: (\$_SERVER|\$HTTP_SERVER_VARS)\[['"]SCRIPT_FILENAME['"]\]
+  - id: script-filename-getenv
+    desc: Access to script filename via getenv
+    crit: notable
+    conf: 0.85
+    for:
+      - php
+    if:
+      type: string
+      regex: getenv\(['"]SCRIPT_FILENAME['"]\)
+  - id: http-user-agent-superglobal
+    desc: Access to HTTP User-Agent header
+    crit: notable
+    conf: 0.7
+    for:
+      - php
+    if:
+      type: string
+      regex: (\$_SERVER|\$HTTP_SERVER_VARS)\[['"]HTTP_USER_AGENT['"]\]
+  - id: http-user-agent-getenv
+    desc: Access to HTTP User-Agent via getenv
+    crit: notable
+    conf: 0.7
+    for:
+      - php
+    if:
+      type: string
+      regex: getenv\(['"]HTTP_USER_AGENT['"]\)
+  - id: http-referer-superglobal
+    desc: Access to HTTP Referer header
+    crit: notable
+    conf: 0.7
+    for:
+      - php
+    if:
+      type: string
+      regex: (\$_SERVER|\$HTTP_SERVER_VARS)\[['"]HTTP_REFERER['"]\]
+  - id: http-referer-getenv
+    desc: Access to HTTP Referer via getenv
+    crit: notable
+    conf: 0.7
+    for:
+      - php
+    if:
+      type: string
+      regex: getenv\(['"]HTTP_REFERER['"]\)
+composite_rules:
+  - id: extract-input
+    desc: Extracts variables from user input
+    crit: notable
+    conf: 0.9
+    for:
+      - php
+    any:
+      - id: extract-get
+      - id: extract-post
+      - id: extract-request
+      - id: extract-cookie
+      - id: extract-server
+  - id: parse-str-input
+    desc: Parses user input into variables
+    crit: notable
+    conf: 0.9
+    for:
+      - php
+    any:
+      - id: parse-str-get
+      - id: parse-str-post
+      - id: parse-str-request
+      - id: parse-str-cookie
+      - id: parse-str-server
+  - id: script-filename
+    desc: Access to script filename (self-reference)
+    crit: notable
+    conf: 0.85
+    for:
+      - php
+    any:
+      - id: script-filename-superglobal
+      - id: script-filename-getenv
+  - id: http-user-agent
+    desc: Access to HTTP User-Agent header
+    crit: notable
+    conf: 0.7
+    for:
+      - php
+    any:
+      - id: http-user-agent-superglobal
+      - id: http-user-agent-getenv
+  - id: http-referer
+    desc: Access to HTTP Referer header
+    crit: notable
+    conf: 0.7
+    for:
+      - php
+    any:
+      - id: http-referer-superglobal
+      - id: http-referer-getenv

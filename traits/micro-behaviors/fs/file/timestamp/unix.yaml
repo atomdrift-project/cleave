@@ -1,0 +1,53 @@
+# File Timestamp Modification - Unix Syscalls
+# Generic file timestamp operations (not attack-specific)
+
+defaults:
+  for: [elf, macho, so, dylib, c]
+  crit: baseline
+
+traits:
+  - id: utime-syscall
+    desc: utime() file timestamp modification
+    conf: 0.6
+    if:
+      type: symbol
+      exact: utime
+
+  - id: utimes-syscall
+    desc: utimes() file timestamp modification
+    conf: 0.6
+    if:
+      type: symbol
+      exact: utimes
+
+  - id: utimensat-syscall
+    desc: utimensat() file timestamp modification
+    conf: 0.6
+    if:
+      type: symbol
+      exact: utimensat
+
+  - id: futimens-syscall
+    desc: futimens() file descriptor timestamp modification
+    conf: 0.6
+    if:
+      type: symbol
+      exact: futimens
+
+  - id: lutimes-syscall
+    desc: lutimes() symlink timestamp modification
+    conf: 0.6
+    if:
+      type: symbol
+      exact: lutimes
+
+composite_rules:
+  - id: unix-timestamp-modification
+    desc: File timestamp modification syscall (Unix)
+    conf: 0.6
+    any:
+      - id: utime-syscall
+      - id: utimes-syscall
+      - id: utimensat-syscall
+      - id: futimens-syscall
+      - id: lutimes-syscall

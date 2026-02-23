@@ -1,0 +1,14 @@
+# Ruby Syscall Detection
+# Direct usage of kernel syscalls in Ruby
+
+defaults:
+  for: [ruby]
+
+traits:
+  - id: ruby-syscall
+    desc: Calls raw kernel syscalls
+    crit: notable
+    if:
+      type: symbol
+      source: ast
+      exact: syscall

@@ -1,0 +1,41 @@
+# Build System - CIRCLECI
+
+defaults:
+  for: [all]
+
+traits:
+  # === CircleCI micro-behaviors ===
+  - id: circleci-env
+    desc: CIRCLECI variable
+    crit: notable
+    conf: 0.9
+    if:
+      type: string
+      substr: "CIRCLECI"
+
+  - id: circle-build-num
+    desc: CIRCLE_BUILD_NUM variable
+    crit: notable
+    conf: 0.9
+    if:
+      type: string
+      substr: "CIRCLE_BUILD_NUM"
+
+  - id: circleci-config
+    desc: .circleci/config file
+    crit: notable
+    conf: 0.9
+    if:
+      type: string
+      substr: ".circleci/config"
+
+composite_rules:
+  # CircleCI composite (migrated from YARA)
+  - id: circleci
+    desc: CircleCI artifacts
+    crit: notable
+    conf: 0.9
+    any:
+      - id: circleci-env
+      - id: circle-build-num
+      - id: circleci-config

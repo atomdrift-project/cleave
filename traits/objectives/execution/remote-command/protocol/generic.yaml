@@ -1,0 +1,12 @@
+# Remote Command Execution
+defaults:
+  for: [all]
+
+traits:
+  - id: generic
+    desc: "Function to execute remote commands"
+    crit: suspicious
+    conf: 0.8
+    if:
+      type: string
+      regex: "(?i)\\bexecuteCommand\\b"

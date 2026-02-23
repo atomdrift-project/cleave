@@ -1,0 +1,112 @@
+# Reverse Shell Detection - Generic
+# MBC: B0033 (Adversary-in-the-Middle)
+# ATT&CK: T1059
+
+defaults:
+  for: [all]
+
+traits:
+  # === Reverse shell string patterns ===
+  # Removed: reverse-shell-string was a pure alias to micro-behaviors/data/text/malware::generic-term-reverse-shell
+
+  - id: revshell-string
+    desc: revshell string
+    crit: suspicious
+    conf: 0.7
+    attack: "T1059"
+    if:
+      type: string
+      substr: "revshell"
+
+  # === Exclusion patterns ===
+  - id: elastic-license
+    desc: Elastic License v2 (detection rule
+    crit: notable
+    conf: 0.3
+    if:
+      type: string
+      substr: '"license": "Elastic License v2"'
+
+composite_rules:
+  # Reverse shell string match
+  - id: reverse-shell-match
+    desc: Matches reverse shell string patterns
+    crit: notable
+    conf: 0.7
+    attack: "T1059"
+    any:
+      - id: micro-behaviors/data/text/malware::generic-term-reverse-shell
+      - id: revshell-string
+
+  # Reverse shell composite (migrated from YARA)
+  - id: reverse-shell
+    desc: References a reverse shell
+    crit: suspicious
+    conf: 0.66
+    attack: "T1059"
+    all:
+      - id: reverse-shell-match
+    none:
+      - id: elastic-license
+
+  # === Reverse Shell Capability Patterns ===
+
+  - id: combo-reverse-shell
+    desc: Classic reverse shell pattern (socket
+    crit: hostile
+    mbc: "B0030.002"
+    attack: "T1059"
+    conf: 0.95
+    platforms: [linux, macos, unix]
+    all:
+      - id: micro-behaviors/communications/socket/connect::connect
+      - id: objectives/command-and-control/reverse-shell/socket::python-dup2
+    any:
+      - id: micro-behaviors/process/create/shell::bin-sh
+      - id: micro-behaviors/process/create/shell::bin-bash
+    # Downgrade for legitimate system libraries and shell interpreters
+    downgrade:
+      any:
+        - id: micro-behaviors/dylib/library::system-lib-marker
+        - id: micro-behaviors/dylib/library::shell-interpreter
+        - id: micro-behaviors/dylib/library::debugger-tool-marker
+
+  - id: bind-shell
+    desc: Bind shell pattern (socket +
+    crit: hostile
+    mbc: "B0030.003"
+    attack: "T1059"
+    conf: 0.95
+    all:
+      - id: micro-behaviors/communications/socket/bind::bind
+      - id: micro-behaviors/communications/socket/listen::listen
+    any:
+      - id: micro-behaviors/process/create/shell::bin-sh
+      - id: micro-behaviors/process/create/shell::bin-bash
+    none:
+      - id: metadata/signed/platform::apple
+    # Downgrade for legitimate network servers/debuggers/system libraries
+    downgrade:
+      any:
+        - id: micro-behaviors/dylib/library::debugger-tool-marker
+        - id: micro-behaviors/dylib/library::system-lib-marker
+        - id: micro-behaviors/dylib/library::shell-interpreter
+
+  - id: python-redirection
+    desc: "Python shell redirection (pty/dup2)"
+    crit: suspicious
+    any:
+      - id: objectives/command-and-control/reverse-shell/socket::python-pty-spawn
+      - id: objectives/command-and-control/reverse-shell/socket::python-dup2
+
+  - id: python-reverse-shell
+    desc: "Python reverse shell detected (socket"
+    crit: hostile
+    mbc: "B0022"
+    attack: "T1059"
+    conf: 0.98
+    for: [python]
+    near_lines: 20
+    all:
+      - id: objectives/command-and-control/reverse-shell/socket::python-socket-connect
+      - id: python-redirection

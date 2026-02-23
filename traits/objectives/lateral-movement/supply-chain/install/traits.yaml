@@ -1,0 +1,124 @@
+# Supply Chain - Install-time Code Execution (Shell/Package Scripts)
+# Detects malicious code in package manager scripts (postinst, preinst, etc.)
+# ATT&CK: T1195.002 (Supply Chain Compromise: Compromise Software Supply Chain)
+
+defaults:
+  for: [shell]
+  mbc: "B0030"
+  attack: "T1195.002"
+
+traits:
+  # Base64-encoded binary embedding in shell
+  - id: base64-binary-embed
+    desc: Base64-encoded binary embedded in shell
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: yara
+      source: |
+        rule base64_binary_embed {
+          strings:
+            // Base64 decode piped to file
+            $decode1 = /base64\s+(-d|--decode)\s*>\s*\$?[A-Za-z_]/ ascii
+            $decode2 = /base64\s+(-d|--decode)\s*2>\/dev\/null\s*>\s*/ ascii
+            // Here-doc patterns for embedded binaries
+            $heredoc1 = "<<BOTFILEHERE" ascii nocase
+            $heredoc2 = "<<EOF_BIN" ascii nocase
+            $heredoc3 = "<<'BIN'" ascii nocase
+            $heredoc4 = "<<PAYLOAD" ascii nocase
+            // ELF magic in base64 (f0VMRg)
+            $elf_b64 = "f0VMRg" ascii
+          condition:
+            (any of ($decode*) and any of ($heredoc*, $elf_b64)) or
+            ($elf_b64 and filesize < 100KB)
+        }
+
+  # Bot directory selection pattern (multiple fallback paths)
+  - id: botdir-selection
+    desc: Bot directory selection with multiple
+    crit: suspicious
+    conf: 0.85
+    if:
+      type: yara
+      source: |
+        rule botdir_selection {
+          strings:
+            // Function-like directory selection
+            $botdir = "botdir" ascii nocase
+            $installdir = "installdir" ascii nocase
+            $workdir = "workdir" ascii nocase
+            // Unusual installation directories
+            $lost_found = "/lost+found" ascii
+            $etc_openal = "/etc/openal" ascii
+            $etc_thermald = "/etc/thermald" ascii
+            $lib64 = "/lib64" ascii
+            // Hidden in system paths
+            $dev_shm = "/dev/shm" ascii
+            $run = "/run" ascii
+          condition:
+            (any of ($botdir, $installdir, $workdir) and 2 of ($lost_found, $etc_openal, $etc_thermald, $lib64)) or
+            (3 of ($lost_found, $etc_openal, $etc_thermald, $dev_shm, $run) and filesize < 200KB)
+        }
+
+  # Cron persistence via echo redirect
+  - id: echo-cron
+    desc: Cron persistence via echo redirect
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: yara
+      source: |
+        rule echo_cron_persist {
+          strings:
+            // Echo cron pattern
+            $echo_cron = /echo\s+['"][*\/0-9]+\s+[*\/0-9]+\s+[*\/0-9]+\s+[*\/0-9]+\s+[*\/0-9]+\s+/ ascii
+            // Cron paths
+            $cron_d = "/etc/cron.d/" ascii
+            $crontab = "/etc/crontab" ascii
+            $spool_cron = "/var/spool/cron" ascii
+          condition:
+            $echo_cron or (any of ($cron_d, $crontab, $spool_cron) and filesize < 200KB)
+        }
+
+  # Writability test before deployment
+  - id: writability-test
+    desc: Tests directory writability before malware
+    crit: suspicious
+    conf: 0.8
+    if:
+      type: yara
+      source: |
+        rule writability_test {
+          strings:
+            $test_w = "test -w" ascii
+            $test_d = "test -d" ascii
+            $chmod_x = "chmod +x" ascii
+            $chmod_0755 = "chmod 0755" ascii
+            $rm_f = "rm -f" ascii
+          condition:
+            ($test_w and $test_d) and (any of ($chmod*)) and $rm_f
+        }
+
+  # Mtime preservation pattern (for timestomping)
+  - id: mtime-preservation
+    desc: Preserves directory timestamps to hide
+    crit: suspicious
+    conf: 0.85
+    if:
+      type: yara
+      source: |
+        rule mtime_preservation {
+          strings:
+            // Stat to get modification time
+            $stat_modify = /stat\s+["'][^"']+["']\s*\|.{0,30}Modify/ ascii
+            $stat_mtime = "mtime" ascii
+            // Touch to restore
+            $touch_t = "touch -t" ascii
+            $touch_r = "touch -r" ascii
+          condition:
+            (any of ($stat*) and any of ($touch*)) or
+            ($touch_t and $stat_mtime)
+        }
+
+composite_rules:
+  # Full supply chain dropper in shell

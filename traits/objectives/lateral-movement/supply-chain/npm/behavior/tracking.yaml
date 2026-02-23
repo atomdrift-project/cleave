@@ -1,0 +1,31 @@
+composite_rules:
+  - id: npm-install-analytics
+    desc: Uses Google Analytics in npm install script
+    crit: suspicious
+    conf: 0.9
+    attack: T1592
+    mbc: B0045
+    for: [javascript, typescript]
+    all:
+      - id: micro-behaviors/data/browser/analytics::google-analytics-id
+      - id: micro-behaviors/os/env/vars::npm-lifecycle
+
+  - id: npm-install-git-check
+    desc: Checks for .git during npm install script
+    crit: suspicious
+    conf: 0.8
+    attack: T1497.001
+    mbc: B0009
+    for: [javascript, typescript]
+    all:
+      - id: micro-behaviors/fs/path/check::check-git-dir
+      - id: micro-behaviors/os/env/vars::npm-lifecycle
+
+  - id: npm-package-telemetry
+    desc: Collects npm package metadata for telemetry
+    crit: suspicious
+    conf: 0.7
+    for: [javascript, typescript]
+    all:
+      - id: micro-behaviors/os/env/vars::npm-package-info
+      - id: micro-behaviors/communications/http/post/

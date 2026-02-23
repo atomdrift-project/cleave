@@ -1,0 +1,34 @@
+# Stealer behavior - Browser and Wallet File Access
+# Detects accessing sensitive browser credential and cryptocurrency wallet files
+# MBC: OB0009 (Collection)
+# ATT&CK: T1555.003 (Credentials from Web Browsers), T1005 (Data from Local System)
+
+composite_rules:
+  # Helper: Any sensitive file path
+  - id: sensitive-paths
+    desc: Browser or wallet file paths
+    crit: notable
+    conf: 0.8
+    mbc: "OB0009"
+    attack: "T1555.003"
+    any:
+      - id: micro-behaviors/fs/path/sensitive/browser::login-data
+      - id: objectives/credential-access/browser/chromium::cookies
+      - id: objectives/credential-access/browser/firefox::cookies
+      - id: objectives/credential-access/browser/safari::cookies-path
+      - id: objectives/credential-access/wallet/desktop
+
+  - id: sensitive-file-access
+    desc: Python stealer accessing sensitive browser or wallet files
+    crit: suspicious
+    conf: 0.95
+    for: [python]
+    mbc: "OB0009"
+    attack: "T1555.003"
+    # Stealth stealers are typically small
+    size_max: 5000
+    all:
+      - id: micro-behaviors/fs/file/open::generic
+      - id: sensitive-paths
+    none:
+      - id: micro-behaviors/fs/file/open::cookiejar-exclusion

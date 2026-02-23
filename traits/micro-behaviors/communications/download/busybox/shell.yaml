@@ -1,0 +1,32 @@
+# BusyBox Download Operations
+# ATT&CK: T1105 (Ingress Tool Transfer)
+
+defaults:
+  for: [all]
+  platforms: [linux]
+  attack: "T1105"
+
+traits:
+  - id: wget
+    desc: "BusyBox wget payload download"
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: string
+      regex: "busybox wget"
+
+  - id: tftp
+    desc: "BusyBox tftp payload download"
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: string
+      regex: "busybox tftp"
+
+  - id: ftpget
+    desc: "BusyBox ftpget payload download"
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: string
+      regex: "busybox ftpget"

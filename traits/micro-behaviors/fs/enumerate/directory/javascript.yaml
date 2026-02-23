@@ -1,0 +1,21 @@
+# File System Enumeration - JavaScript
+# Capabilities related to traversing directories
+
+traits:
+  - id: fs-readdir
+    desc: Recursive directory reading (readdir/stat loop)
+    crit: notable
+    conf: 0.6
+    for: [javascript]
+    if:
+      type: raw
+      regex: 'fs\.readdir'
+
+  - id: file-search-exclude-common
+    desc: References common system/dev directory names
+    crit: baseline
+    conf: 0.8
+    for: [javascript]
+    if:
+      type: raw
+      regex: '["'']node_modules["'']|["'']Program Files["'']|["'']AppData["'']'

@@ -1,0 +1,62 @@
+# Shell Configuration - JavaScript/Node.js
+# ATT&CK: T1546.004 (Event Triggered Execution: Unix Shell Configuration Modification)
+
+traits:
+  # === Shell profile source atomic indicators ===
+  - id: source-bashrc
+    desc: source .bashrc
+    crit: notable
+    conf: 0.7
+    for: [javascript]
+    if:
+      type: string
+      regex: 'source\s+\.bashrc'
+
+  - id: source-bash-profile
+    desc: source .bash_profile
+    crit: notable
+    conf: 0.7
+    for: [javascript]
+    if:
+      type: string
+      regex: 'source\s+\.bash_profile'
+
+  - id: source-profile
+    desc: source .profile
+    crit: notable
+    conf: 0.7
+    for: [javascript]
+    if:
+      type: string
+      regex: 'source\s+\.profile'
+
+  - id: source-zshrc
+    desc: source .zshrc
+    crit: notable
+    conf: 0.7
+    for: [javascript]
+    if:
+      type: string
+      regex: 'source\s+\.zshrc'
+
+  - id: js-path-manipulation
+    desc: Manually manipulates PATH environment variable
+    crit: notable
+    conf: 0.8
+    for: [javascript]
+    if:
+      type: string
+      regex: 'process\.env\.PATH\s*='
+
+composite_rules:
+  - id: js-source-profile
+    desc: Sources shell profile files to
+    crit: suspicious
+    conf: 0.85
+    attack: "T1546.004"
+    for: [javascript]
+    any:
+      - id: source-bashrc
+      - id: source-bash-profile
+      - id: source-profile
+      - id: source-zshrc

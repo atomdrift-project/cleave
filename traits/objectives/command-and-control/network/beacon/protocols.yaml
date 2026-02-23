@@ -1,0 +1,152 @@
+# C2 Command Protocol Detection
+# Detects malware using structured command/response protocols
+# ATT&CK: T1071.001 (Web Protocols), T1059 (Command Execution)
+# MBC: B0030 (C2 Communication)
+
+defaults:
+  crit: suspicious
+  attack: "T1071.001"
+  mbc: "B0030"
+  for: [python, javascript, shell]
+
+traits:
+  # === Command Type Patterns ===
+  - id: c2-cmd-type-check
+    desc: C2 command type numeric check
+    crit: suspicious
+    conf: 0.85
+    if:
+      type: string
+      regex: 'cmd[_-]?type.{0,50}==.{0,50}["'']?[0-9]{3}["'']?'
+
+  - id: c2-response-code-extract
+    desc: C2 response code extraction
+    crit: suspicious
+    conf: 0.85
+    if:
+      type: string
+      regex: "res\\[.{0,50}:.{0,50}\\+[0-9]{3,}"
+
+  - id: c2-response-substring
+    desc: C2 response substring parsing
+    crit: suspicious
+    conf: 0.80
+    if:
+      type: string
+      regex: "\\[10:13\\]|\\[13:\\]"
+
+  # === Protocol Markers ===
+  - id: c2-request-prefix
+    desc: C2 request prefix pattern
+    crit: suspicious
+    conf: 0.80
+    if:
+      type: string
+      regex: "^[A-Z]+_REQ[0-9]"
+
+  - id: c2-response-prefix
+    desc: C2 response prefix pattern
+    crit: suspicious
+    conf: 0.80
+    if:
+      type: string
+      regex: "^[A-Z]+_RES[0-9]"
+
+  - id: c2-uid-pattern
+    desc: C2 UID in protocol
+    crit: suspicious
+    conf: 0.75
+    if:
+      type: string
+      regex: "str\\(uid\\)|str\\(uid\\)\\+.{0,50}01"
+
+  # === Command Codes ===
+  - id: c2-cmd-info-collection
+    desc: C2 info collection command (501)
+    crit: notable
+    conf: 0.5
+    for: [elf, macho, pe]
+    if:
+      type: string
+      regex: "(cmd|command|code|type)[\\s=:]*501"
+  - id: c2-cmd-exec
+    desc: C2 command execution (502)
+    crit: notable
+    conf: 0.5
+    for: [elf, macho, pe]
+    if:
+      type: string
+      regex: "(cmd|command|code|type)[\\s=:]*502"
+  - id: c2-cmd-download
+    desc: C2 download command (503)
+    crit: notable
+    conf: 0.5
+    for: [elf, macho, pe]
+    if:
+      type: string
+      regex: "(cmd|command|code|type)[\\s=:]*503"
+  - id: c2-cmd-kill
+    desc: C2 self-terminate command (504)
+    crit: notable
+    conf: 0.5
+    for: [elf, macho, pe]
+    if:
+      type: string
+      regex: "(cmd|command|code|type)[\\s=:]*504"
+  # === Protocol Structure ===
+  - id: c2-protocol-builder
+    desc: C2 protocol string builder
+    crit: suspicious
+    conf: 0.80
+    if:
+      type: string
+      regex: "[A-Z]+_REQ.{0,50}\\+.{0,50}01.{0,50}\\+.{0,50}00.{0,50}\\+"
+
+  - id: c2-base64-response
+    desc: C2 base64 encoded response
+    crit: suspicious
+    conf: 0.75
+    if:
+      type: string
+      regex: "b64decode.{0,50}res\\[13:"
+
+composite_rules:
+  # === Protocol Detection ===
+  - id: c2-structured-protocol
+    desc: C2 structured command protocol
+    crit: suspicious
+    conf: 0.90
+    attack: "T1071.001"
+    needs: 2
+    any:
+      - id: c2-cmd-type-check
+      - id: c2-response-code-extract
+      - id: c2-response-substring
+      - id: c2-request-prefix
+      - id: c2-response-prefix
+      - id: c2-protocol-builder
+
+  - id: c2-command-suite
+    desc: C2 multi-command protocol suite
+    crit: hostile
+    conf: 0.95
+    attack: "T1071.001"
+    mbc: "B0030"
+    for: [python, javascript]
+    needs: 3
+    any:
+      - id: c2-cmd-info-collection
+      - id: c2-cmd-exec
+      - id: c2-cmd-download
+      - id: c2-cmd-kill
+
+  - id: c2-full-protocol
+    desc: C2 command and control protocol
+    crit: hostile
+    conf: 0.98
+    attack: "T1071.001"
+    mbc: "B0030"
+    platforms: [all]
+    all:
+      - id: c2-structured-protocol
+      - id: c2-command-suite

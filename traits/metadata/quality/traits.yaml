@@ -1,0 +1,169 @@
+# Code Quality - Composite Rules
+
+composite_rules:
+  # Go error handling helper
+  - id: go-error-handling
+    desc: Go error handling patterns
+    crit: baseline
+    conf: 0.7
+    for: [go]
+    needs: 2
+    any:
+      - { id: metadata/quality/error-handling::go-err-nil-check }
+      - { id: metadata/quality/error-handling::go-errors-new }
+      - { id: metadata/quality/error-handling::go-fmt-errorf }
+
+  # Rust error handling helper
+  - id: rust-error-handling
+    desc: Rust error handling patterns
+    crit: baseline
+    conf: 0.7
+    for: [rust]
+    needs: 2
+    any:
+      - { id: metadata/quality/error-handling::rust-result-type }
+      - { id: metadata/quality/error-handling::rust-unwrap-or }
+      - { id: metadata/quality/testing::jest-expect-call }
+
+  # Generic try/catch helper
+  - id: try-catch-handling
+    desc: Try/catch error handling patterns
+    crit: baseline
+    conf: 0.7
+    for: [javascript, python, java, csharp]
+    needs: 2
+    any:
+      - { id: metadata/quality/error-handling::try-block-open }
+      - { id: metadata/quality/error-handling::catch-keyword }
+      - { id: metadata/quality/error-handling::except-keyword }
+      - { id: metadata/quality/error-handling::finally-keyword }
+
+  # Error handling patterns (combines all)
+  - id: error-handling
+    desc: Proper error handling patterns
+    crit: notable
+    conf: 0.8
+    any:
+      - { id: go-error-handling }
+      - { id: rust-error-handling }
+      - { id: try-catch-handling }
+
+  # Logging presence
+  - id: has-logging
+    desc: Application has logging infrastructure
+    crit: notable
+    conf: 0.85
+    needs: 2
+    any:
+      - { id: metadata/quality/logging::log-print }
+      - { id: metadata/quality/logging::logger-lower }
+      - { id: metadata/quality/logging::logger-title }
+      - { id: metadata/quality/logging::logging-word }
+      - { id: metadata/quality/logging::syslog-word }
+      - { id: metadata/quality/logging::log-info-lower }
+      - { id: metadata/quality/logging::log-info-title }
+      - { id: metadata/quality/logging::log-debug-lower }
+      - { id: metadata/quality/logging::log-debug-title }
+      - { id: metadata/quality/logging::log-error-lower }
+      - { id: metadata/quality/logging::log-error-title }
+
+  # Configuration management
+  - id: config-management
+    desc: External configuration management
+    crit: notable
+    conf: 0.85
+    any:
+      - { id: metadata/quality/config::config-yaml-file }
+      - { id: metadata/quality/config::config-json-file }
+      - { id: metadata/quality/config::config-toml-file }
+      - { id: metadata/quality/config::dotenv-file }
+      - { id: metadata/quality/config::viper-config-lib }
+      - { id: metadata/quality/config::configparser-module }
+      - { id: metadata/quality/config::dotenv-module }
+
+  # Version information
+  - id: versioned
+    desc: Contains version information
+    crit: baseline
+    conf: 0.85
+    any:
+      - { id: metadata/quality/versioning::version-word-lower }
+      - { id: metadata/quality/versioning::version-word-title }
+      - { id: metadata/quality/versioning::version-colon }
+      - { id: metadata/quality/versioning::version-v1 }
+      - { id: metadata/quality/versioning::version-v2 }
+      - { id: metadata/quality/versioning::version-upper }
+      - { id: metadata/quality/versioning::semver-pattern }
+
+  # Help/usage information
+  - id: has-help
+    desc: Contains help or usage information
+    crit: notable
+    conf: 0.85
+    needs: 2
+    any:
+      - { id: metadata/quality/help::help-long-flag }
+      - { id: metadata/quality/help::help-short-flag }
+      - { id: metadata/quality/help::usage-lower }
+      - { id: metadata/quality/help::usage-title }
+      - { id: metadata/quality/help::options-title }
+      - { id: metadata/quality/help::usage-upper }
+
+  # License information
+  - id: licensed
+    desc: Contains license information
+    crit: notable
+    conf: 0.9
+    any:
+      - { id: metadata/quality/license::mit-license-text }
+      - { id: metadata/quality/license::apache-license-text }
+      - { id: metadata/quality/license::gpl-word }
+      - { id: metadata/quality/license::bsd-word }
+      - { id: metadata/quality/license::license-upper }
+      - { id: metadata/quality/license::copyright-word }
+      - { id: metadata/quality/license::spdx-identifier }
+
+  # Documentation strings
+  - id: documented
+    desc: Contains documentation strings
+    crit: notable
+    conf: 0.8
+    any:
+      - { id: metadata/quality/documentation::python-docstring-triple-double }
+      - { id: metadata/quality/documentation::python-docstring-triple-single }
+      - { id: metadata/quality/documentation::rust-doc-comment }
+      - { id: metadata/quality/documentation::javadoc-comment }
+      - { id: metadata/quality/documentation::rust-doc-comment-space }
+      - { id: metadata/quality/documentation::param-annotation }
+      - { id: metadata/quality/documentation::return-annotation }
+      - { id: metadata/quality/documentation::sphinx-param }
+      - { id: metadata/quality/documentation::sphinx-returns }
+
+  # Unit test presence (in production binary)
+  - id: has-tests
+    desc: Binary includes test code (unusual in production)
+    crit: baseline
+    conf: 0.5
+    needs: 2
+    any:
+      - { id: metadata/quality/testing::go-test-main }
+      - { id: metadata/quality/testing::go-test-file }
+      - { id: metadata/quality/testing::python-test-file }
+      - { id: metadata/quality/testing::unittest-module }
+      - { id: metadata/quality/testing::pytest-module }
+      - { id: metadata/dev/testing::rust-test-attr }
+      - { id: metadata/dev/testing::go-testing-t }
+
+  # Metrics/telemetry
+  - id: has-metrics
+    desc: Application has metrics/telemetry
+    crit: notable
+    conf: 0.85
+    any:
+      - { id: metadata/quality/metrics::prometheus-word }
+      - { id: metadata/quality/metrics::metrics-word-lower }
+      - { id: metadata/quality/metrics::metrics-word-title }
+      - { id: metadata/quality/metrics::statsd-word }
+      - { id: metadata/quality/metrics::datadog-word }
+      - { id: metadata/quality/metrics::opentelemetry-word }
+      - { id: metadata/quality/metrics::newrelic-word }

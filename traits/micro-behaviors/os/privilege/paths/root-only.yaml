@@ -1,0 +1,64 @@
+# Root-Only File Paths
+# Paths that typically require root/administrator privileges to access
+
+defaults:
+  for: [all]
+  platforms: [linux, unix, macos]
+  crit: notable
+  conf: 0.9
+
+traits:
+  - id: etc-shadow
+    desc: /etc/shadow password file access
+    if:
+      type: string
+      exact: "/etc/shadow"
+
+  - id: proc-mem
+    desc: /proc/*/mem memory access
+    if:
+      type: string
+      regex: '/proc/[^/]{1,20}/mem'
+
+  - id: dev-kmem
+    desc: /dev/kmem kernel memory access
+    if:
+      type: string
+      exact: "/dev/kmem"
+
+  - id: boot-vmlinuz
+    desc: /boot/vmlinuz kernel image
+    if:
+      type: string
+      substr: "/boot/vmlinuz"
+
+  - id: boot-initrd
+    desc: /boot/initrd initial ramdisk
+    if:
+      type: string
+      substr: "/boot/initrd"
+
+  - id: sys-kernel-debug
+    desc: /sys/kernel/debug/ debugfs access
+    if:
+      type: string
+      substr: "/sys/kernel/debug/"
+
+  - id: sys-kernel-security
+    desc: /sys/kernel/security/ LSM access
+    if:
+      type: string
+      substr: "/sys/kernel/security/"
+
+composite_rules:
+  - id: root-access
+    desc: Accesses paths that typically require root privileges
+    conf: 1.0
+    any:
+      - id: etc-shadow
+      - id: proc-mem
+      - id: dev-kmem
+      - id: boot-vmlinuz
+      - id: boot-initrd
+      - id: sys-kernel-debug
+      - id: sys-kernel-security

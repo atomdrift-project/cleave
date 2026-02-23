@@ -1,0 +1,26 @@
+# eBPF Tracing Functions
+# Legitimate eBPF tracing and probing functions
+
+defaults:
+  for: [all]
+  crit: notable
+  conf: 0.8
+
+traits:
+  - id: bpf-probe-read
+    desc: bpf_probe_read function
+    if:
+      type: symbol
+      regex: "bpf_probe_read"
+
+  - id: bpf-kprobe
+    desc: bpf_kprobe function
+    if:
+      type: string
+      substr: "bpf_kprobe"
+
+  - id: bpf-tracepoint
+    desc: bpf_tracepoint function
+    if:
+      type: string
+      substr: "bpf_tracepoint"

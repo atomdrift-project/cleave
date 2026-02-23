@@ -1,0 +1,30 @@
+# Display Environment Variables
+# X11 and Wayland display environment variables
+
+defaults:
+  for: [all]
+  crit: baseline
+  conf: 0.7
+  platforms: [linux, unix, macos]
+
+traits:
+  - id: display-var
+    desc: DISPLAY environment variable (X11)
+    if:
+      type: string
+      exact: "DISPLAY"
+
+  - id: wayland-display-var
+    desc: WAYLAND_DISPLAY environment variable
+    if:
+      type: string
+      exact: "WAYLAND_DISPLAY"
+
+composite_rules:
+  - id: display-access
+    desc: Accesses display environment variable
+    crit: baseline
+    conf: 0.9
+    any:
+      - id: display-var
+      - id: wayland-display-var

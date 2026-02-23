@@ -1,0 +1,49 @@
+# Environment and Localization Operations
+# Locale, timezone, and environment variable access
+
+defaults:
+  for: ["pe", "dll"]
+  platforms: ["windows"]
+
+traits:
+  # === Localization Functions ===
+  - id: locale-name-to-lcid
+    desc: Locale name to code conversion
+    crit: baseline
+    conf: 0.85
+    if:
+      type: symbol
+      exact: "LocaleNameToLCID"
+
+  - id: lcmap-string-ex
+    desc: Locale-aware string mapping
+    crit: baseline
+    conf: 0.85
+    if:
+      type: symbol
+      exact: "LCMapStringEx"
+
+  - id: lcmap-string-w
+    desc: Unicode string locale mapping
+    crit: baseline
+    conf: 0.85
+    if:
+      type: symbol
+      exact: "LCMapStringW"
+
+  - id: get-string-type-w
+    desc: Get Unicode character type
+    crit: baseline
+    conf: 0.85
+    if:
+      type: symbol
+      exact: "GetStringTypeW"
+
+  # === System Information ===
+  - id: are-file-apis-ansi
+    desc: File API ANSI check
+    crit: baseline
+    conf: 0.85
+    if:
+      type: symbol
+      exact: "AreFileApisANSI"

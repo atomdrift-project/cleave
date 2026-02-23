@@ -1,0 +1,96 @@
+# Java Impact Traits
+# Detects destructive/impact patterns in Java bytecode
+# MBC: Impact
+# ATT&CK: T1529 (System Shutdown/Reboot)
+
+traits:
+  # System control
+  - id: reboot-string
+    desc: System reboot command
+    crit: suspicious
+    conf: 0.85
+    mbc: "B0029"
+    attack: "T1529"
+    for: [class]
+    if:
+      type: string
+      substr: "reboot "
+
+  - id: shutdown-string
+    desc: System shutdown command
+    crit: suspicious
+    conf: 0.85
+    mbc: "B0029"
+    attack: "T1529"
+    for: [class]
+    if:
+      type: string
+      substr: "shutdown"
+
+  - id: uninstall-string
+    desc: Self-uninstall command
+    crit: suspicious
+    conf: 0.9
+    mbc: "F0007"
+    attack: "T1070.004"
+    for: [class]
+    if:
+      type: string
+      substr: "uninstall"
+
+  - id: disconnect-string
+    desc: Disconnect from C2 command
+    crit: notable
+    conf: 0.8
+    mbc: "B0030"
+    for: [class]
+    if:
+      type: string
+      substr: "disconnect"
+
+  # Process management
+  - id: processes-string
+    desc: Process listing command
+    crit: notable
+    conf: 0.8
+    mbc: "E1057"
+    attack: "T1057"
+    for: [class]
+    if:
+      type: string
+      substr: "processes"
+
+  # Persistence
+  - id: startup-list-string
+    desc: Startup persistence command
+    crit: suspicious
+    conf: 0.9
+    mbc: "F0004"
+    attack: "T1547"
+    for: [class]
+    if:
+      type: string
+      substr: "startup-list"
+
+  # Privilege escalation
+  - id: chk-priv-string
+    desc: Check privileges command
+    crit: suspicious
+    conf: 0.85
+    mbc: "B0014"
+    attack: "T1134"
+    for: [class]
+    if:
+      type: string
+      substr: "chk-priv"
+
+  - id: req-priv-string
+    desc: Request elevated privileges command
+    crit: suspicious
+    conf: 0.9
+    mbc: "B0014"
+    attack: "T1134"
+    for: [class]
+    if:
+      type: string
+      substr: "req-priv"

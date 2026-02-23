@@ -1,0 +1,72 @@
+# Socket Listen Operations
+# MBC: C0001 (Socket Communication)
+# ATT&CK: T1071
+
+defaults:
+  for: [elf, macho, so, dylib]
+
+traits:
+  # === Socket listen micro-behaviors ===
+  - id: socket-sym
+    desc: socket function symbol
+    crit: notable
+    conf: 0.4
+    mbc: "C0001"
+    if:
+      type: symbol
+      regex: "socket"
+
+  - id: listen-sym
+    desc: listen function symbol
+    crit: notable
+    conf: 0.6
+    mbc: "C0001"
+    attack: "T1071"
+    if:
+      type: symbol
+      regex: "listen"
+
+  - id: accept-sym
+    desc: accept function symbol
+    crit: notable
+    conf: 0.6
+    mbc: "C0001"
+    attack: "T1071"
+    if:
+      type: symbol
+      regex: "accept"
+
+  - id: accept64-sym
+    desc: accept64 function symbol
+    crit: notable
+    conf: 0.6
+    mbc: "C0001"
+    attack: "T1071"
+    if:
+      type: symbol
+      regex: "accept64"
+
+composite_rules:
+  # Accept function composite
+  - id: accept-func
+    desc: Accept connection function
+    crit: notable
+    conf: 0.6
+    mbc: "C0001"
+    attack: "T1071"
+    any:
+      - id: accept-sym
+      - id: accept64-sym
+
+  # Socket listen (migrated from YARA)
+  - id: listen
+    desc: Listen on a socket
+    crit: notable
+    conf: 0.66
+    mbc: "C0001"
+    attack: "T1071"
+    needs: 2
+    any:
+      - id: socket-sym
+      - id: listen-sym
+      - id: accept-func

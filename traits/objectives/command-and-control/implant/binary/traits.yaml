@@ -1,0 +1,320 @@
+# Implant Detection
+# MBC: B0033 (Adversary-in-the-Middle)
+# ATT&CK: T1543
+
+defaults:
+  for: [all]
+  attack: "T1543"
+
+traits:
+  # === Implant-related terminology ===
+  - id: malware-implant
+    desc: Malware implant keyword
+    crit: notable
+    conf: 0.5
+    if:
+      type: string
+      regex: '\bmalware[_\s]?implant\b'
+      case_insensitive: true
+
+  - id: c2-implant
+    desc: C2 implant keyword
+    crit: notable
+    conf: 0.5
+    if:
+      type: string
+      regex: '\bc2[_\s]?implant\b'
+      case_insensitive: true
+
+  - id: rat-implant
+    desc: RAT implant keyword
+    crit: notable
+    conf: 0.5
+    if:
+      type: string
+      regex: '\brat[_\s]?implant\b'
+      case_insensitive: true
+
+  - id: backdoor-implant
+    desc: Backdoor implant keyword
+    crit: notable
+    conf: 0.5
+    if:
+      type: string
+      regex: '\bbackdoor[_\s]?implant\b'
+      case_insensitive: true
+
+  # === Dropper terminology ===
+  - id: malware-dropper
+    desc: Malware dropper keyword
+    crit: notable
+    conf: 0.5
+    if:
+      type: string
+      regex: '\bmalware[_\s]?dropper\b'
+      case_insensitive: true
+
+  - id: c2-dropper
+    desc: C2 dropper keyword
+    crit: notable
+    conf: 0.5
+    if:
+      type: string
+      regex: '\bc2[_\s]?dropper\b'
+      case_insensitive: true
+
+  - id: rat-dropper
+    desc: RAT dropper keyword
+    crit: notable
+    conf: 0.5
+    if:
+      type: string
+      regex: '\brat[_\s]?dropper\b'
+      case_insensitive: true
+
+  - id: backdoor-dropper
+    desc: Backdoor dropper keyword
+    crit: notable
+    conf: 0.5
+    if:
+      type: string
+      regex: '\bbackdoor[_\s]?dropper\b'
+      case_insensitive: true
+
+  # === Stager terminology ===
+  - id: malware-stager
+    desc: Malware stager keyword
+    crit: notable
+    conf: 0.5
+    if:
+      type: string
+      regex: '\bmalware[_\s]?stager\b'
+      case_insensitive: true
+
+  - id: c2-stager
+    desc: C2 stager keyword
+    crit: notable
+    conf: 0.5
+    if:
+      type: string
+      regex: '\bc2[_\s]?stager\b'
+      case_insensitive: true
+
+  - id: rat-stager
+    desc: RAT stager keyword
+    crit: notable
+    conf: 0.5
+    if:
+      type: string
+      regex: '\brat[_\s]?stager\b'
+      case_insensitive: true
+
+  - id: backdoor-stager
+    desc: Backdoor stager keyword
+    crit: notable
+    conf: 0.5
+    if:
+      type: string
+      regex: '\bbackdoor[_\s]?stager\b'
+      case_insensitive: true
+
+  # === Payload terminology ===
+  - id: implant-payload
+    desc: Implant payload keyword
+    crit: notable
+    conf: 0.5
+    if:
+      type: string
+      regex: '\bimplant[_\s]?payload\b'
+      case_insensitive: true
+
+  - id: dropper-payload
+    desc: Dropper payload keyword
+    crit: notable
+    conf: 0.5
+    if:
+      type: string
+      regex: '\bdropper[_\s]?payload\b'
+      case_insensitive: true
+
+  - id: stager-payload
+    desc: Stager payload keyword
+    crit: notable
+    conf: 0.5
+    if:
+      type: string
+      regex: '\bstager[_\s]?payload\b'
+      case_insensitive: true
+
+  - id: beacon-payload
+    desc: Beacon payload keyword
+    crit: notable
+    conf: 0.5
+    if:
+      type: string
+      regex: '\bbeacon[_\s]?payload\b'
+      case_insensitive: true
+
+  - id: malware-payload
+    desc: Malware payload keyword
+    crit: notable
+    conf: 0.5
+    if:
+      type: string
+      regex: '\bmalware[_\s]?payload\b'
+      case_insensitive: true
+
+  - id: shell-payload
+    desc: Shell payload keyword
+    crit: notable
+    conf: 0.5
+    if:
+      type: string
+      regex: '\bshell[_\s]?payload\b'
+      case_insensitive: true
+
+  # === Config terminology ===
+  - id: implant-config
+    desc: Implant config keyword
+    crit: notable
+    conf: 0.5
+    if:
+      type: string
+      regex: '\bimplant[_\s]?config\b'
+      case_insensitive: true
+
+  - id: dropper-config
+    desc: Dropper config keyword
+    crit: notable
+    conf: 0.5
+    if:
+      type: string
+      regex: '\bdropper[_\s]?config\b'
+      case_insensitive: true
+
+  - id: stager-config
+    desc: Stager config keyword
+    crit: notable
+    conf: 0.5
+    if:
+      type: string
+      regex: '\bstager[_\s]?config\b'
+      case_insensitive: true
+
+  # === Beacon terminology ===
+  - id: implant-beacon
+    desc: Implant beacon keyword
+    crit: notable
+    conf: 0.5
+    if:
+      type: string
+      regex: '\bimplant[_\s]?beacon\b'
+      case_insensitive: true
+
+  - id: dropper-beacon
+    desc: Dropper beacon keyword
+    crit: notable
+    conf: 0.5
+    if:
+      type: string
+      regex: '\bdropper[_\s]?beacon\b'
+      case_insensitive: true
+
+  - id: stager-beacon
+    desc: Stager beacon keyword
+    crit: notable
+    conf: 0.5
+    if:
+      type: string
+      regex: '\bstager[_\s]?beacon\b'
+      case_insensitive: true
+
+  # === Trojan terminology ===
+  - id: trojan-horse
+    desc: Trojan horse keyword
+    crit: notable
+    conf: 0.5
+    if:
+      type: string
+      regex: '\btrojan[_\s]?horse\b'
+      case_insensitive: true
+
+  - id: trojan-malware
+    desc: Trojan malware keyword
+    crit: notable
+    conf: 0.5
+    if:
+      type: string
+      regex: '\btrojan[_\s]?malware\b'
+      case_insensitive: true
+
+  - id: trojan-payload
+    desc: Trojan payload keyword
+    crit: notable
+    conf: 0.5
+    if:
+      type: string
+      regex: '\btrojan[_\s]?payload\b'
+      case_insensitive: true
+
+  - id: trojan-downloader
+    desc: Trojan downloader keyword
+    crit: notable
+    conf: 0.5
+    if:
+      type: string
+      regex: '\btrojan[_\s]?downloader\b'
+      case_insensitive: true
+
+  - id: trojan-surrounded
+    desc: Trojan in context
+    crit: notable
+    conf: 0.5
+    if:
+      type: string
+      regex: '[_\s]trojan[_\s]'
+      case_insensitive: true
+
+composite_rules:
+  - id: implant
+    desc: References an implant
+    crit: notable
+    conf: 0.7
+    needs: 2
+    any:
+      - id: malware-implant
+      - id: c2-implant
+      - id: rat-implant
+      - id: backdoor-implant
+      - id: malware-dropper
+      - id: c2-dropper
+      - id: rat-dropper
+      - id: backdoor-dropper
+      - id: malware-stager
+      - id: c2-stager
+      - id: rat-stager
+      - id: backdoor-stager
+      - id: implant-payload
+      - id: dropper-payload
+      - id: stager-payload
+      - id: beacon-payload
+      - id: malware-payload
+      - id: shell-payload
+      - id: implant-config
+      - id: dropper-config
+      - id: stager-config
+      - id: implant-beacon
+      - id: dropper-beacon
+      - id: stager-beacon
+
+  - id: trojan
+    desc: References a trojan
+    crit: notable
+    conf: 0.66
+    needs: 2
+    any:
+      - id: trojan-horse
+      - id: trojan-malware
+      - id: trojan-payload
+      - id: trojan-downloader
+      - id: trojan-surrounded

@@ -1,0 +1,18 @@
+defaults:
+  for: [all]
+
+traits:
+  - id: jframe-import
+    desc: "Java Swing JFrame Import"
+    crit: notable
+    conf: 0.8
+    if:
+      type: raw
+      exact: "javax.swing.JFrame"
+  - id: jframe-new
+    desc: "Java Swing JFrame Creation"
+    crit: notable
+    conf: 0.8
+    if:
+      type: raw
+      exact: "new JFrame"

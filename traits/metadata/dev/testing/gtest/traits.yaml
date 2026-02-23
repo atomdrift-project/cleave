@@ -1,0 +1,74 @@
+# Testing Framework - GTEST
+
+traits:
+  # === Atomic: Google Test (C++) ===
+
+  - id: gtest-testing-test
+    desc: "testing::Test class"
+    crit: baseline
+    conf: 0.7
+    for: [c]
+    if:
+      type: string
+      substr: "testing::Test"
+
+  - id: gtest-macro-prefix
+    desc: GTEST_ macro prefix
+    crit: baseline
+    conf: 0.7
+    for: [c]
+    if:
+      type: string
+      substr: "GTEST_"
+
+  - id: gtest-test-f
+    desc: TEST_F macro
+    crit: baseline
+    conf: 0.8
+    for: [c]
+    if:
+      type: string
+      substr: "TEST_F("
+
+  - id: gtest-expect-prefix
+    desc: EXPECT_ macro prefix
+    crit: baseline
+    conf: 0.7
+    for: [c]
+    if:
+      type: string
+      substr: "EXPECT_"
+
+  - id: gtest-assert-prefix
+    desc: ASSERT_ macro prefix
+    crit: baseline
+    conf: 0.7
+    for: [c]
+    if:
+      type: string
+      substr: "ASSERT_"
+
+  - id: gtest-word
+    desc: gtest reference
+    crit: baseline
+    conf: 0.6
+    for: [c]
+    if:
+      type: string
+      word: "gtest"
+
+composite_rules:
+  # Google Test (C++)
+  - id: gtest
+    desc: Google Test framework
+    crit: notable
+    conf: 0.95
+    for: [c]
+    needs: 2
+    any:
+      - { id: gtest-testing-test }
+      - { id: gtest-macro-prefix }
+      - { id: gtest-test-f }
+      - { id: gtest-expect-prefix }
+      - { id: gtest-assert-prefix }
+      - { id: gtest-word }

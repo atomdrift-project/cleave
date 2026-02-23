@@ -1,0 +1,289 @@
+defaults:
+  attack: T1562.001
+  platforms:
+    - windows
+traits:
+  - id: defender-add-exclusion
+    desc: Add Windows Defender exclusion
+    crit: suspicious
+    conf: 0.95
+    for:
+      - shell
+      - batch
+      - powershell
+    if:
+      type: raw
+      regex: Add-MpPreference\s+.{0,50}-Exclusion
+      case_insensitive: true
+  - id: defender-exclusion-path
+    desc: Windows Defender path exclusion
+    crit: suspicious
+    conf: 0.95
+    for:
+      - shell
+      - batch
+      - powershell
+    if:
+      type: raw
+      regex: -ExclusionPath
+      case_insensitive: true
+  - id: defender-exclusion-extension
+    desc: Windows Defender extension exclusion
+    crit: suspicious
+    conf: 0.9
+    for:
+      - shell
+      - batch
+      - powershell
+    if:
+      type: raw
+      regex: -ExclusionExtension
+      case_insensitive: true
+  - id: defender-exclusion-process
+    desc: Windows Defender process exclusion
+    crit: suspicious
+    conf: 0.9
+    for:
+      - shell
+      - batch
+      - powershell
+    if:
+      type: raw
+      regex: -ExclusionProcess
+      case_insensitive: true
+  - id: defender-disable-realtime
+    desc: Disable Windows Defender realtime
+    crit: suspicious
+    conf: 0.95
+    for:
+      - shell
+      - batch
+      - powershell
+    if:
+      type: raw
+      regex: Set-MpPreference\s+.{0,50}-DisableRealtimeMonitoring\s+\$?true
+      case_insensitive: true
+  - id: defender-disable-behavior
+    desc: Disable behavior monitoring
+    crit: suspicious
+    conf: 0.95
+    for:
+      - shell
+      - batch
+      - powershell
+    if:
+      type: raw
+      regex: Set-MpPreference\s+.{0,50}-DisableBehaviorMonitoring\s+\$?true
+      case_insensitive: true
+  - id: defender-disable-ioav
+    desc: Disable IOAV protection
+    crit: suspicious
+    conf: 0.9
+    for:
+      - shell
+      - batch
+      - powershell
+    if:
+      type: raw
+      regex: Set-MpPreference\s+.{0,50}-DisableIOAVProtection\s+\$?true
+      case_insensitive: true
+  - id: defender-drive-exclusion
+    desc: Exclude entire drive from Defender
+    crit: suspicious
+    conf: 0.95
+    for:
+      - shell
+      - batch
+      - powershell
+    if:
+      type: raw
+      regex: -ExclusionPath\s+["']?[A-Za-z]:\\?["']?
+      case_insensitive: true
+  - id: amsi-bypass-init-flag
+    desc: AMSI initialization bypass
+    crit: suspicious
+    conf: 0.9
+    for:
+      - powershell
+      - shell
+      - batch
+    if:
+      type: raw
+      exact: amsiInitFailed
+      case_insensitive: true
+  - id: amsi-bypass-init-scan-buffer
+    desc: AMSI initialization bypass
+    crit: suspicious
+    conf: 0.9
+    for:
+      - powershell
+      - shell
+      - batch
+    if:
+      type: raw
+      exact: AmsiScanBuffer
+      case_insensitive: true
+  - id: amsi-bypass-reflection
+    desc: AMSI bypass via reflection
+    crit: suspicious
+    conf: 0.9
+    for:
+      - powershell
+    if:
+      type: raw
+      regex: \[Ref\]\.Assembly\.GetType.{0,50}amsi
+      case_insensitive: true
+  - id: start-process-runas
+    desc: UAC bypass via Start-Process RunAs
+    crit: suspicious
+    conf: 0.9
+    for:
+      - shell
+      - batch
+      - powershell
+    if:
+      type: raw
+      regex: Start-Process\s+.{0,50}-Verb\s+RunAs
+      case_insensitive: true
+  - id: malwarebytes-stop-service
+    desc: Malwarebytes stopservice flag
+    crit: suspicious
+    conf: 0.95
+    for:
+      - shell
+      - batch
+      - powershell
+    if:
+      type: raw
+      regex: malwarebytes.{0,50}--stopservice|--stopservice.{0,50}malwarebytes
+      case_insensitive: true
+  - id: malwarebytes-assistant
+    desc: Malwarebytes assistant executable
+    crit: notable
+    conf: 0.6
+    for:
+      - shell
+      - batch
+      - powershell
+    if:
+      type: string
+      regex: malwarebytes_assistant
+      case_insensitive: true
+  - id: disable-windows-defender-service
+    desc: Stop Windows Defender service
+    crit: suspicious
+    conf: 0.9
+    for:
+      - shell
+      - batch
+      - powershell
+    if:
+      type: raw
+      regex: (sc|net)\s+\w+.{0,50}(WinDefend|WdNisSvc|SecurityHealthService)
+      case_insensitive: true
+  - id: tasklist-av-check-a
+    desc: Tasklist checks common AV set A
+    crit: notable
+    conf: 0.8
+    for:
+      - shell
+      - batch
+    if:
+      type: raw
+      regex: tasklist.{0,50}(Malwarebytes|avast|avg|norton)
+      case_insensitive: true
+  - id: tasklist-av-check-b
+    desc: Tasklist checks common AV set B
+    crit: notable
+    conf: 0.8
+    for:
+      - shell
+      - batch
+    if:
+      type: raw
+      regex: tasklist.{0,50}(mcafee|kaspersky|defender)
+      case_insensitive: true
+composite_rules:
+  - id: defender-exclusion
+    desc: Windows Defender exclusion bypass
+    crit: suspicious
+    conf: 0.95
+    for:
+      - shell
+      - batch
+      - powershell
+    any:
+      - id: defender-add-exclusion
+      - id: defender-exclusion-path
+      - id: defender-exclusion-extension
+      - id: defender-exclusion-process
+      - id: defender-drive-exclusion
+  - id: defender-disable
+    desc: Windows Defender disabled
+    crit: suspicious
+    conf: 0.95
+    for:
+      - shell
+      - batch
+      - powershell
+    any:
+      - id: defender-disable-realtime
+      - id: defender-disable-behavior
+      - id: defender-disable-ioav
+      - id: disable-windows-defender-service
+  - id: amsi-bypass
+    desc: AMSI bypass detected
+    crit: suspicious
+    conf: 0.9
+    for:
+      - shell
+      - batch
+      - powershell
+    any:
+      - id: amsi-bypass-init
+      - id: amsi-bypass-reflection
+  - id: uac-bypass
+    desc: Windows UAC bypass or elevation request
+    crit: suspicious
+    conf: 0.95
+    attack: T1548.002
+    any:
+      - id: start-process-runas
+      - id: micro-behaviors/os/env/vars::uac-bypass-compact-layer
+  - id: tasklist-av-check
+    desc: Tasklist checking for AV processes
+    crit: notable
+    conf: 0.8
+    for:
+      - shell
+      - batch
+    any:
+      - id: tasklist-av-check-a
+      - id: tasklist-av-check-b
+  - id: windows-bypass
+    desc: Windows security bypass detected
+    crit: suspicious
+    conf: 0.95
+    for:
+      - shell
+      - batch
+      - powershell
+    any:
+      - id: defender-exclusion
+      - id: defender-disable
+      - id: amsi-bypass
+      - id: malwarebytes-stop-service
+      - id: uac-bypass
+      - id: tasklist-av-check
+
+  - id: amsi-bypass-init
+    desc: AMSI initialization bypass
+    crit: suspicious
+    conf: 0.9
+    for:
+      - powershell
+      - shell
+      - batch
+    any:
+      - id: amsi-bypass-init-flag
+      - id: amsi-bypass-init-scan-buffer

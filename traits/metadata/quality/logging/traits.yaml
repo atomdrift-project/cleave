@@ -1,0 +1,103 @@
+# Code Quality Indicators - Logging
+
+traits:
+  # === Atomic: Logging ===
+
+  - id: log-print
+    desc: log.Print function
+    crit: baseline
+    conf: 0.5
+    for: [go]
+    if:
+      type: string
+      substr: "log.Print"
+
+  - id: logger-lower
+    desc: logger reference (lowercase)
+    crit: baseline
+    conf: 0.4
+    for: [all]
+    if:
+      type: string
+      word: "logger"
+
+  - id: logger-title
+    desc: Logger reference (title case)
+    crit: baseline
+    conf: 0.4
+    for: [all]
+    if:
+      type: string
+      word: "Logger"
+
+  - id: logging-word
+    desc: logging module reference
+    crit: baseline
+    conf: 0.5
+    for: [python, javascript]
+    if:
+      type: string
+      word: "logging"
+
+  - id: syslog-word
+    desc: syslog reference
+    crit: baseline
+    conf: 0.6
+    for: [c, go, python, shell]
+    if:
+      type: string
+      word: "syslog"
+
+  - id: log-info-lower
+    desc: log.info method (lowercase)
+    crit: baseline
+    conf: 0.5
+    for: [python, javascript, java]
+    if:
+      type: string
+      substr: "log.info"
+
+  - id: log-info-title
+    desc: log.Info method (title case)
+    crit: baseline
+    conf: 0.5
+    for: [go]
+    if:
+      type: string
+      substr: "log.Info"
+
+  - id: log-debug-lower
+    desc: log.debug method (lowercase)
+    crit: baseline
+    conf: 0.5
+    for: [python, javascript, java]
+    if:
+      type: string
+      substr: "log.debug"
+
+  - id: log-debug-title
+    desc: log.Debug method (title case)
+    crit: baseline
+    conf: 0.5
+    for: [go]
+    if:
+      type: string
+      substr: "log.Debug"
+
+  - id: log-error-lower
+    desc: log.error method (lowercase)
+    crit: baseline
+    conf: 0.5
+    for: [python, javascript, java]
+    if:
+      type: string
+      substr: "log.error"
+
+  - id: log-error-title
+    desc: log.Error method (title case)
+    crit: baseline
+    conf: 0.5
+    for: [go]
+    if:
+      type: string
+      substr: "log.Error"

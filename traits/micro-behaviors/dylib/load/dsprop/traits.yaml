@@ -1,0 +1,22 @@
+# Active Directory UI (dsprop.dll) Imports
+# Detects imports from dsprop.dll, often used in admin tools but suspicious in packed malware.
+
+defaults:
+  for: [pe]
+  crit: baseline
+  attack: "T1078.002"
+
+traits:
+  - id: dsprop-crackname
+    desc: "Imports CrackName (AD)"
+    conf: 0.8
+    if:
+      type: symbol
+      exact: "CrackName"
+
+  - id: dsprop-findsheet
+    desc: "Imports FindSheet (AD UI)"
+    conf: 0.8
+    if:
+      type: symbol
+      exact: "FindSheet"

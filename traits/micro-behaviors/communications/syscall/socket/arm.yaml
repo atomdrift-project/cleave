@@ -1,0 +1,22 @@
+# ARM Direct Network Syscalls
+# Detects hand-written ARM assembly making direct network syscalls
+# ATT&CK: T1059 (Command and Scripting Interpreter)
+
+defaults:
+  for: [elf]
+  crit: suspicious
+
+traits:
+  - id: svc-socket
+    desc: "ARM direct socket(2) syscall setup"
+    if:
+      type: hex
+      # mov r7, 0x100; add r7, r7, 0x19 (25) -> r7 = 281 (socket)
+      pattern: "01 7c a0 e3 19 70 87 e2"
+
+  - id: svc-connect
+    desc: "ARM direct connect(2) syscall setup"
+    if:
+      type: hex
+      # mov r7, 0x100; add r7, r7, 0x1b (27) -> r7 = 283 (connect)
+      pattern: "01 7c a0 e3 1b 70 87 e2"

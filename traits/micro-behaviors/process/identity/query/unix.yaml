@@ -1,0 +1,41 @@
+# Process Identity Operations
+# NOTE: Go runtime uses getuid/getpid legitimately for process management
+
+defaults:
+  for: [elf, macho, so, dylib, c]
+
+traits:
+  # NOTE: Go runtime uses getpid/getppid legitimately - downgraded to baseline
+  - id: getpid
+    desc: Get process ID
+    crit: baseline
+    conf: 0.3
+    if:
+      type: symbol
+      exact: "getpid"
+
+  - id: getppid
+    desc: Get process ID
+    crit: baseline
+    conf: 0.3
+    if:
+      type: symbol
+      exact: "getppid"
+
+  # get-uid: composite referencing canonical privilege query traits (see composite_rules below)
+
+composite_rules:
+  - id: get-pid
+    desc: Get process ID
+    crit: baseline
+    conf: 0.3
+    any:
+      - id: getpid
+      - id: getppid
+
+  - id: get-uid
+    desc: Get user or group ID
+    crit: baseline
+    conf: 0.3
+    any:
+      - id: micro-behaviors/process/privilege/query

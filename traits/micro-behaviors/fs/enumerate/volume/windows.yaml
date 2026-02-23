@@ -1,0 +1,41 @@
+# Volume enumeration - Windows
+# Used by ransomware to identify encryption targets
+defaults:
+  for: [pe, dll]
+  platforms: [windows]
+
+traits:
+  - id: get-volume-info
+    desc: Query volume information
+    crit: notable
+    conf: 0.9
+    attack: "T1082"
+    if:
+      type: symbol
+      regex: "GetVolumeInformation[AW]?$"
+
+  - id: find-first-volume
+    desc: Begin volume enumeration
+    crit: notable
+    conf: 0.9
+    attack: "T1083"
+    if:
+      type: symbol
+      regex: "FindFirstVolume[AW]?$"
+
+  - id: find-next-volume
+    desc: Continue volume enumeration
+    crit: notable
+    conf: 0.9
+    attack: "T1083"
+    if:
+      type: symbol
+      regex: "FindNextVolume[AW]?$"
+
+  - id: find-volume-close
+    desc: Close volume enumeration handle
+    crit: baseline
+    conf: 0.9
+    if:
+      type: symbol
+      exact: "FindVolumeClose"

@@ -1,0 +1,10 @@
+defaults:
+  for: [all]
+
+traits:
+  - id: js-replace-gibberish
+    desc: "Detects the specific string replacement pattern used"
+    crit: suspicious
+    if:
+      type: raw
+      regex: 'replace(/[a-zA-Z0-9]{10,}/g, "")'

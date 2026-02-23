@@ -1,0 +1,19 @@
+# Detects JScript dropping batch scripts with obfuscation (Nemucod variant)
+# MBC: B0032 (Obfuscated Files or Information)
+# ATT&CK: T1059.003 (Windows Command Shell)
+
+composite_rules:
+  - id: obfuscated-jscript-bat-dropper
+    desc: Obfuscated JScript dropping and executing a batch file
+    crit: hostile
+    conf: 0.95
+    attack: "T1059.003"
+    mbc: "B0032"
+    for: [javascript, typescript]
+    all:
+      - id: micro-behaviors/process/create/script::batch-script-execution
+      - id: micro-behaviors/host/interpreter/jscript::adodb-fragment-dodb
+    any:
+      - id: micro-behaviors/anti-static/obfuscate/string-conceal::js-split-reverse-join
+      - id: micro-behaviors/data/encode/charset::windows-1251-charset
+    needs: 1

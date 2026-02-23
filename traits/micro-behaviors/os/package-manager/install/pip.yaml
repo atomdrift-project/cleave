@@ -1,0 +1,51 @@
+# Python Package Manager (pip) installation patterns
+# Detects use of pip for dynamic tool installation
+
+defaults:
+  for: [python, shell]
+  mbc: "C0002"
+
+traits:
+  - id: pip-install
+    desc: pip install command
+    crit: notable
+    conf: 0.7
+    if:
+      type: string
+      regex: 'pip.{0,50}install'
+
+  - id: pip-install-y
+    desc: pip install -y (non-interactive)
+    crit: suspicious
+    conf: 0.8
+    if:
+      type: string
+      regex: 'pip.{0,20}install.{0,20}-y'
+
+  - id: pip-main-install
+    desc: Direct pip.main(['install', ...]) call
+    crit: notable
+    conf: 0.85
+    for: [python]
+    if:
+      type: string
+      regex: "pip\\.main\\(\\[.{0,50}install"
+
+  - id: ensurepip-bootstrap
+    desc: pip bootstrapping via ensurepip
+    crit: notable
+    conf: 0.8
+    for: [python]
+    if:
+      type: string
+      regex: "ensurepip"
+
+composite_rules:
+  - id: pip-installation
+    desc: Python package installation via pip
+    crit: notable
+    conf: 0.8
+    any:
+      - id: pip-install
+      - id: pip-main-install
+      - id: ensurepip-bootstrap

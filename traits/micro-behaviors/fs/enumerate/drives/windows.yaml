@@ -1,0 +1,25 @@
+# Drive enumeration - Windows
+# Critical for ransomware that encrypts multiple drives
+defaults:
+  for: [pe, dll]
+  platforms: [windows]
+
+traits:
+  - id: get-logical-drives
+    desc: Enumerate logical drive letters
+    crit: notable
+    conf: 0.9
+    attack: "T1083"
+    mbc: "E1083"
+    if:
+      type: symbol
+      exact: "GetLogicalDrives"
+
+  - id: get-drive-type
+    desc: Query drive type
+    crit: notable
+    conf: 0.9
+    attack: "T1083"
+    if:
+      type: symbol
+      regex: "GetDriveType[AW]?$"

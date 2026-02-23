@@ -1,0 +1,17 @@
+defaults:
+  for: [all]
+
+traits:
+  - id: scr-extension
+    desc: Detects .scr (Windows Screensaver Executable) extension
+    crit: suspicious
+    if:
+      type: string
+      regex: '\.scr$'
+    unless:
+      - id: metadata/format/magic::pe
+      - id: metadata/format/magic::elf
+      - id: metadata/format/magic::macho
+      - id: metadata/format/magic::zip
+      - id: metadata/format/magic::tar
+      - id: metadata/format/magic::gzip

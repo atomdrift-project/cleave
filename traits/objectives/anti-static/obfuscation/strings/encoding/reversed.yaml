@@ -1,0 +1,42 @@
+# Reversed String Detection - Encoded Data
+# Detects reversed strings in encoded data (base64, hex, xor, etc.)
+# Common in malware to evade signature-based detection
+# MBC: B0032 (Obfuscated Files or Information)
+# ATT&CK: T1027 (Obfuscated Files or Information)
+
+traits:
+  # Reversed HTTPS protocol string
+  - id: reversed-https-encoded
+    desc: Reversed HTTPS URL in encoded data
+    attack: "T1027"
+    mbc: "B0032"
+    crit: suspicious
+    conf: 0.92
+    for: [all]
+    if:
+      type: encoded
+      substr: "//:sptth"
+
+  # Reversed HTTP protocol string
+  - id: reversed-http-encoded
+    desc: Reversed HTTP URL in encoded data
+    attack: "T1027"
+    mbc: "B0032"
+    crit: suspicious
+    conf: 0.92
+    for: [all]
+    if:
+      type: encoded
+      substr: "//:ptth"
+
+composite_rules:
+  # Any reversed URL protocol in encoded data
+  - id: reversed-url-encoded
+    desc: Reversed URL protocol in encoded strings
+    crit: suspicious
+    conf: 0.92
+    attack: "T1027"
+    mbc: "B0032"
+    any:
+      - id: reversed-https-encoded
+      - id: reversed-http-encoded

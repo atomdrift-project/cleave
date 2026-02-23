@@ -1,0 +1,93 @@
+# iOS Code Injection Frameworks
+# Detects usage of Cydia Substrate, Cycript, and other runtime hooking/injection frameworks
+# ATT&CK: T1546 (Event Triggered Execution), T1574 (Hijack Execution Flow)
+
+defaults:
+  for: [ipa]
+
+traits:
+  # === Cydia Substrate ===
+  - id: cydia-substrate-dylib
+    desc: Cydia Substrate dylib
+    crit: suspicious
+    conf: 0.95
+    attack: "T1546"
+    for: [ipa]
+    if:
+      type: string
+      exact: "libsubstrate.dylib"
+
+  - id: substrate-function-hook
+    desc: MobileSubstrate framework
+    crit: suspicious
+    conf: 0.9
+    attack: "T1546"
+    for: [ipa]
+    if:
+      type: string
+      substr: "MobileSubstrate"
+
+  - id: substrate-hook-symbol
+    desc: MSHookFunction symbol
+    crit: suspicious
+    conf: 0.9
+    attack: "T1546"
+    for: [ipa]
+    if:
+      type: string
+      substr: "MSHookFunction"
+
+  # === Cycript ===
+  - id: cycript-dylib
+    desc: Cycript runtime dylib
+    crit: suspicious
+    conf: 0.95
+    attack: "T1546"
+    for: [ipa]
+    if:
+      type: string
+      exact: "libcycript.dylib"
+
+  # === RevealServer (Reverse Engineering Tool) ===
+  - id: reveal-server-framework
+    desc: RevealServer framework
+    crit: suspicious
+    conf: 0.85
+    attack: "T1564"
+    for: [ipa]
+    if:
+      type: string
+      substr: "RevealServer"
+
+  # === Generic Injection Framework ===
+  - id: cbinjection-framework
+    desc: CBInjection framework
+    crit: suspicious
+    conf: 0.8
+    attack: "T1546"
+    for: [ipa]
+    if:
+      type: string
+      substr: "CBInjection"
+
+composite_rules:
+  - id: cydia-substrate-detected
+    desc: Cydia Substrate detected
+    crit: suspicious
+    conf: 0.95
+    attack: "T1546"
+    for: [ipa]
+    any:
+      - id: cydia-substrate-dylib
+      - id: substrate-function-hook
+      - id: substrate-hook-symbol
+      - id: cycript-dylib
+
+  - id: runtime-code-injection
+    desc: "iOS runtime code injection"
+    crit: notable
+    conf: 0.7
+    any:
+      - id: cydia-substrate-detected
+      - id: reveal-server-framework
+      - id: cbinjection-framework

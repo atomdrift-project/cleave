@@ -1,0 +1,35 @@
+defaults:
+  for: [all]
+
+traits:
+  - id: old-create
+    desc: "Reference to old_create_module"
+    crit: notable
+    conf: 0.8
+    if:
+      type: raw
+      substr: "old_create_module"
+
+  - id: old-delete
+    desc: "Reference to old_delete_module"
+    crit: notable
+    conf: 0.8
+    if:
+      type: raw
+      substr: "old_delete_module"
+
+  - id: nr-create
+    desc: "Reference to __NR_create_module"
+    crit: notable
+    conf: 0.8
+    if:
+      type: raw
+      substr: "__NR_create_module"
+
+  - id: nr-delete
+    desc: "Reference to __NR_delete_module"
+    crit: notable
+    conf: 0.8
+    if:
+      type: raw
+      substr: "__NR_delete_module"

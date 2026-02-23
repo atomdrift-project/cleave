@@ -1,0 +1,30 @@
+# JavaScript Dynamic Code Execution
+# Detects obfuscated code execution patterns in JavaScript
+# ATT&CK: T1059.007 (JavaScript)
+
+composite_rules:
+  - id: obfuscated-function-constructor
+    desc: Obfuscated Function constructor usage
+    crit: hostile
+    conf: 0.95
+    for: [javascript]
+    mbc: "B0032"
+    attack: "T1059.007"
+    all:
+      - id: objectives/anti-static/obfuscation/require::function-constructor
+      - id: objectives/anti-static/obfuscation/code-metrics/source::high-entropy-strings
+
+  - id: dynamic-code-execution
+    desc: Dynamic code execution with obfuscation
+    crit: hostile
+    conf: 0.93
+    for: [javascript]
+    attack: "T1059.007"
+    all:
+      - id: objectives/execution/interpreter/eval/dynamic::eval-call-js
+    any:
+      - id: objectives/anti-static/obfuscation/code-metrics/source::high-entropy-identifiers
+      - id: objectives/anti-static/obfuscation/code-metrics/source::high-entropy-strings
+    downgrade:
+      any:
+        - id: objectives/execution/interpreter/eval/dynamic::eval-function-definition

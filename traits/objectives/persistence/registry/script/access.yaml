@@ -1,0 +1,105 @@
+traits:
+- id: script-regwrite
+  desc: Script registry write
+  crit: notable
+  conf: 0.75
+  platforms:
+  - windows
+  for:
+  - javascript
+  if:
+    type: string
+    regex: "RegWrite\\s*\\("
+  attack: T1547.001
+  mbc: F0006
+- id: script-regread
+  desc: Script registry read
+  crit: notable
+  conf: 0.7
+  platforms:
+  - windows
+  for:
+  - javascript
+  if:
+    type: string
+    regex: "RegRead\\s*\\("
+  attack: T1012
+  mbc: E1563
+- id: script-regdelete
+  desc: Script registry delete
+  crit: suspicious
+  conf: 0.85
+  platforms:
+  - windows
+  for:
+  - javascript
+  if:
+    type: string
+    regex: "RegDelete\\s*\\("
+  attack: T1562.004
+  mbc: E1006
+- id: hkey-local-machine
+  desc: HKEY_LOCAL_MACHINE
+  crit: notable
+  conf: 0.5
+  platforms:
+  - windows
+  for:
+  - javascript
+  if:
+    type: string
+    exact: HKEY_LOCAL_MACHINE
+  attack: T1012
+- id: hkey-current-user
+  desc: HKEY_CURRENT_USER
+  crit: notable
+  conf: 0.5
+  platforms:
+  - windows
+  for:
+  - javascript
+  if:
+    type: string
+    exact: HKEY_CURRENT_USER
+  attack: T1012
+- id: run-key-reference
+  desc: Registry Run key
+  crit: notable
+  conf: 0.8
+  platforms:
+  - windows
+  for:
+  - javascript
+  if:
+    id: micro-behaviors/os/registry/persistence::common-persistence-keys
+  attack: T1547.001
+  mbc: F0006
+composite_rules:
+- id: script-registry-operations
+  desc: Script registry manipulation
+  crit: suspicious
+  conf: 0.8
+  platforms:
+  - windows
+  for:
+  - javascript
+  attack: T1012
+  mbc: E1563
+  needs: 2
+  any:
+  - id: script-regwrite
+  - id: script-regread
+  - id: script-regdelete
+- id: script-registry-persistence
+  desc: Script registry persistence
+  crit: suspicious
+  conf: 0.85
+  platforms:
+  - windows
+  for:
+  - javascript
+  attack: T1547.001
+  mbc: F0006
+  all:
+  - id: script-regwrite
+  - id: run-key-reference

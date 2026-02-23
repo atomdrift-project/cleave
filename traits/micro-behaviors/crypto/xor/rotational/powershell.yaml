@@ -1,0 +1,25 @@
+# PowerShell Rotational XOR Detection
+# Detects custom rotational XOR logic often used in multi-stage loaders
+# MBC: B0032.002 (XOR)
+
+defaults:
+  for: [powershell]
+  platforms: [windows]
+  mbc: "B0032.002"
+
+traits:
+  - id: rotational-xor-logic
+    desc: Rotational XOR decryption logic
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: raw
+      regex: '(?i)\(\$.{1,20} \+ \$.{1,20}\) % \$.{1,20}\.Length'
+
+  - id: rotation-counter-update
+    desc: Rotation counter update based on key/data
+    crit: suspicious
+    conf: 0.85
+    if:
+      type: raw
+      regex: '(?i)\$.{1,20} = \(\$.{1,20} \+ \$.{1,20}\[\$.{1,20}\]\) % \d+'

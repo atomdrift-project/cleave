@@ -1,0 +1,23 @@
+traits:
+- id: pth-file-write
+  desc: Writing to a Python .pth file (persistence)
+  crit: suspicious
+  conf: 0.9
+  mbc: E1546
+  attack: T1546
+  for: [python, shell]
+  if:
+    type: string
+    regex: '/site-packages/[\w\.-]+\.pth|system\.pth'
+- id: pth-exec-pattern
+  desc: Malicious .pth file execution pattern (import; exec)
+  crit: suspicious
+  conf: 0.95
+  for: [python, shell]
+  if:
+    type: raw
+    regex: 'import\s+base64\s*;\s*exec\('
+    near:
+      type: string
+      regex: '\.pth'
+      near_lines: 5

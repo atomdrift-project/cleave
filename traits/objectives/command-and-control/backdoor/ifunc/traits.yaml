@@ -1,0 +1,53 @@
+# Indirect Function (IFUNC) Hijacking Detection
+# Detects patterns where IFUNC resolvers are used for suspicious purposes.
+# ATT&CK: T1195.002 (Supply Chain Compromise: Compromise Software Supply Chain)
+# MBC: B0025 (Compromise Software Supply Chain)
+
+defaults:
+  for: [elf]
+  attack: "T1195.002"
+  mbc: "B0025"
+
+composite_rules:
+  # === Unexpected Library Context ===
+  - id: ifunc-in-utility-lib
+    desc: IFUNC resolver in non-standard utility library
+    crit: suspicious
+    conf: 0.7
+    all:
+      - id: metadata/format/elf::ifunc
+    none:
+      - id: micro-behaviors/dylib/library::system-lib-marker  # Exclude glibc/libm
+      - id: metadata/lang::go-runtime-marker
+
+  # === Sensitive Target Functions ===
+  - id: ifunc-security-resolver
+    desc: IFUNC resolver for security-sensitive function
+    crit: suspicious
+    conf: 0.8
+    all:
+      - id: metadata/format/elf::ifunc
+    any:
+      - id: micro-behaviors/os/pam/auth::pam-authenticate
+      - id: micro-behaviors/crypto/asymmetric/rsa::rsa-public-decrypt
+
+  # === Resolver Side Effects ===
+  - id: ifunc-with-env-check
+    desc: IFUNC resolver combined with environment checks
+    crit: suspicious
+    conf: 0.85
+    all:
+      - id: metadata/format/elf::ifunc
+      - id: micro-behaviors/os/env/vars::env-access
+    none:
+      - id: micro-behaviors/dylib/library::system-lib-marker
+
+  - id: ifunc-with-process-discovery
+    desc: IFUNC resolver combined with process discovery
+    crit: suspicious
+    conf: 0.85
+    all:
+      - id: metadata/format/elf::ifunc
+      - id: micro-behaviors/process/identity/query::get-pid
+    none:
+      - id: micro-behaviors/dylib/library::system-lib-marker

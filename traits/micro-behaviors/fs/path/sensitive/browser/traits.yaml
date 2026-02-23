@@ -1,0 +1,63 @@
+# Browser Data File Paths
+# GuardDog-inspired: Detects access to browser cookies, logins, history
+
+defaults:
+  crit: suspicious
+  conf: 0.90
+  attack: "T1555.003"
+
+traits:
+  # === Browser Cookie Databases (SQLite) ===
+
+  - id: firefox-cookies
+    desc: Firefox cookies database
+    for: [all]
+    if:
+      type: string
+      regex: 'moz_cookies'
+
+  - id: chrome-cookies
+    desc: Chrome cookies database
+    for: [all]
+    if:
+      type: string
+      regex: 'Cookies'
+
+  # === Browser Login Databases ===
+
+  - id: firefox-logins
+    desc: Firefox logins database
+    for: [all]
+    if:
+      type: string
+      regex: 'moz_logins'
+
+  - id: firefox-formhistory
+    desc: Firefox form history database
+    for: [all]
+    if:
+      type: string
+      regex: 'moz_formhistory'
+
+  # === Browser Credit Card Data ===
+
+  - id: browser-credit-cards
+    desc: Browser credit card database
+    for: [all]
+    if:
+      type: string
+      regex: 'credit_cards'
+
+composite_rules:
+  # GuardDog: Browser data access
+  - id: browser-sensitive-data
+    desc: Browser cookies, logins, or credit cards
+    crit: suspicious
+    conf: 0.95
+    attack: "T1555.003"
+    any:
+      - id: firefox-cookies
+      - id: chrome-cookies
+      - id: firefox-logins
+      - id: firefox-formhistory
+      - id: browser-credit-cards

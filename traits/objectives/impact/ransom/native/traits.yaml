@@ -1,0 +1,256 @@
+defaults:
+  for:
+  - elf
+  - pe
+  - macho
+  attack: T1486
+  mbc: C0027
+traits:
+- id: network-penetrated
+  desc: Network penetration ransom message
+  crit: suspicious
+  conf: 0.9
+  if:
+    type: string
+    regex: network.{0,30}penetrated
+    case_insensitive: true
+- id: recover-files-msg
+  desc: Recover files ransom message
+  crit: notable
+  conf: 0.7
+  if:
+    type: string
+    regex: recover.{0,30}(your\s+)?files
+    case_insensitive: true
+- id: encryption-technology-msg
+  desc: Encryption technology claim
+  crit: notable
+  conf: 0.7
+  if:
+    type: string
+    regex: (encryption|encrypted).{0,30}technology
+    case_insensitive: true
+- id: dont-interrupt-msg
+  desc: Don't interrupt process warning
+  crit: notable
+  conf: 0.7
+  if:
+    type: string
+    regex: don.t.{0,30}interrupt.{0,30}process
+    case_insensitive: true
+- id: decrypt-free-sample
+  desc: Free decryption sample offer
+  crit: suspicious
+  conf: 0.85
+  if:
+    type: string
+    regex: decrypt.{0,50}(files?|sample).{0,30}free|free.{0,30}decrypt
+    case_insensitive: true
+- id: data-will-be-published
+  desc: Data leak extortion threat
+  crit: suspicious
+  conf: 0.85
+  if:
+    type: string
+    regex: data.{0,50}(published|sold|leaked|posted)
+    case_insensitive: true
+- id: protonmail-contact
+  desc: ProtonMail contact address
+  crit: notable
+  conf: 0.7
+  if:
+    type: string
+    regex: '[a-zA-Z0-9._-]+@protonmail\.(com|ch)'
+    case_insensitive: true
+- id: onionmail-contact
+  desc: OnionMail contact address
+  crit: suspicious
+  conf: 0.8
+  if:
+    type: string
+    regex: '[a-zA-Z0-9._-]+@onionmail\.org'
+    case_insensitive: true
+- id: tutanota-contact
+  desc: Tutanota contact address
+  crit: notable
+  conf: 0.7
+  if:
+    type: string
+    regex: '[a-zA-Z0-9._-]+@tutanota\.(com|de)'
+    case_insensitive: true
+- id: secure-email-warning
+  desc: Use secure email warning
+  crit: notable
+  conf: 0.65
+  if:
+    type: string
+    regex: (don.t\s+use\s+gmail|use.{0,30}protonmail|secure\s+mail\s+service)
+    case_insensitive: true
+- id: extension-target-list-office-word
+  desc: File extension targeting (Word)
+  crit: notable
+  conf: 0.7
+  if:
+    type: string
+    regex: \|\.(doc|docx)\|
+    case_insensitive: true
+- id: extension-target-list-office-excel
+  desc: File extension targeting (Excel)
+  crit: notable
+  conf: 0.7
+  if:
+    type: string
+    regex: \|\.(xls|xlsx)\|
+    case_insensitive: true
+- id: extension-target-list-office-ppt
+  desc: File extension targeting (PowerPoint)
+  crit: notable
+  conf: 0.7
+  if:
+    type: string
+    regex: \|\.(ppt|pptx)\|
+    case_insensitive: true
+- id: extension-target-list-data
+  desc: File extension targeting (Data/PDF)
+  crit: notable
+  conf: 0.7
+  if:
+    type: string
+    regex: \|\.(pdf|sql|db)\|
+    case_insensitive: true
+- id: extension-target-list-code
+  desc: File extension targeting (Code)
+  crit: notable
+  conf: 0.7
+  if:
+    type: string
+    regex: \|\.(java|cpp|py)\|
+    case_insensitive: true
+- id: multi-extension-pattern
+  desc: Multiple file extensions in pattern
+  crit: notable
+  conf: 0.7
+  if:
+    type: yara
+    source: "rule multi_extension_target {\n  strings:\n    $ext1 = \".pdf\" ascii\n\
+      \    $ext2 = \".doc\" ascii\n    $ext3 = \".docx\" ascii\n    $ext4 = \".xls\"\
+      \ ascii\n    $ext5 = \".xlsx\" ascii\n    $ext6 = \".sql\" ascii\n    $ext7\
+      \ = \".db\" ascii\n    $ext8 = \".sqlite\" ascii\n    $ext9 = \".java\" ascii\n\
+      \    $ext10 = \".cpp\" ascii\n    $ext11 = \".py\" ascii\n    $ext12 = \".vhd\"\
+      \ ascii\n    $ext13 = \".vmdk\" ascii\n    $ext14 = \".backup\" ascii\n  condition:\n\
+      \    8 of them\n}\n"
+- id: encrypt-decrypt-func
+  desc: Encrypt/decrypt function artifact
+  crit: notable
+  conf: 0.75
+  if:
+    type: string
+    regex: encrypt_decrypt_(file|data|buffer)
+    case_insensitive: true
+- id: mbedtls-aes-encrypt
+  desc: mbedtls AES encryption
+  crit: notable
+  conf: 0.7
+  if:
+    type: string
+    substr: mbedtls_aes_crypt
+- id: ransom-cmdline-flag
+  desc: Ransomware command line flag
+  crit: suspicious
+  conf: 0.85
+  if:
+    type: string
+    regex: --(disable-ransomfile|disable-filerenaming|threads-count|e-size)
+- id: custom-encrypted-ext
+  desc: Custom encrypted file extension
+  crit: notable
+  conf: 0.7
+  if:
+    type: string
+    # Require hash-like suffix (digits mixed with letters) after hyphen
+    regex: \b\.[a-z]{3,10}-[a-z]*[0-9][a-z0-9]{5,}\b
+    count_min: 2
+  not:
+  - substr: application-identifier
+  - substr: temporary-exception
+  - substr: com.apple
+  downgrade:
+    any:
+      - id: metadata/signed/platform::apple
+- id: readme-note-file
+  desc: Readme ransom note filename
+  crit: notable
+  conf: 0.7
+  if:
+    type: string
+    case_insensitive: true
+    regex: (readme(_to_|-)[a-zA-Z0-9_]+\.txt|HOW_TO_DECRYPT\.txt|READ_ME_NOW\.txt)
+composite_rules:
+- id: extension-target-list
+  desc: File extension targeting list
+  crit: suspicious
+  conf: 0.85
+  any:
+    - id: extension-target-list-office-word
+    - id: extension-target-list-office-excel
+    - id: extension-target-list-office-ppt
+    - id: extension-target-list-data
+    - id: extension-target-list-code
+- id: ransom-note-msg
+  desc: Ransom note message patterns
+  crit: suspicious
+  conf: 0.85
+  needs: 2
+  any:
+  - id: network-penetrated
+  - id: recover-files-msg
+  - id: encryption-technology-msg
+  - id: dont-interrupt-msg
+  - id: decrypt-free-sample
+  - id: data-will-be-published
+- id: ransom-contact
+  desc: Ransomware contact patterns
+  crit: notable
+  conf: 0.75
+  any:
+  - id: protonmail-contact
+  - id: onionmail-contact
+  - id: tutanota-contact
+  - id: secure-email-warning
+- id: file-targeting
+  desc: Ransomware file targeting
+  crit: notable
+  conf: 0.75
+  any:
+  - id: extension-target-list
+  - id: multi-extension-pattern
+- id: encryption-artifacts
+  desc: Encryption code artifacts
+  crit: notable
+  conf: 0.75
+  any:
+  - id: encrypt-decrypt-func
+  - id: mbedtls-aes-encrypt
+  - id: ransom-cmdline-flag
+- id: native-ransomware
+  desc: Native binary ransomware
+  crit: hostile
+  conf: 0.95
+  all:
+  - id: ransom-note-msg
+  - id: ransom-contact
+  any:
+  - id: file-targeting
+  - id: encryption-artifacts
+  - id: readme-note-file
+- id: file-encryptor
+  desc: File encryption with targeting
+  crit: suspicious
+  conf: 0.85
+  all:
+  - id: encryption-artifacts
+  - id: file-targeting
+  any:
+  - id: micro-behaviors/fs/directory/traverse::traverse-fts
+  - id: micro-behaviors/fs/directory/traverse::fts-open
+  - id: micro-behaviors/process/threading/operations::pthread

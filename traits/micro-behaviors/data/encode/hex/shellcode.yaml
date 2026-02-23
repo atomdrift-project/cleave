@@ -1,0 +1,13 @@
+defaults:
+  for: [all]
+
+traits:
+  - id: hex-xor-loop-stub
+    desc: "Detects hex-encoded x64 shellcode stub (xor rcx,"
+    crit: suspicious
+    conf: 0.9
+    mbc: C0043
+    attack: T1027
+    if:
+      type: string
+      regex: "4831c94881e9"

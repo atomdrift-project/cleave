@@ -1,0 +1,62 @@
+defaults:
+  for: [all]
+
+traits:
+  - id: nemucod-substitution-map
+    desc: "Nemucod-style variable substitution map (comma operator)"
+    crit: suspicious
+    conf: 0.95
+    if:
+      type: ast
+      language: javascript
+      count_min: 10
+      query: |
+        (sequence_expression
+          (string) @left
+          (string) @right
+        )
+
+  - id: nemucod-array-eval
+    desc: "Nemucod-style array reconstruction and eval"
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: raw
+      # Matches: vk["conca"+"t"](wv[tw0]); or similar variations
+      regex: '\[\s*["'']conca["'']\s*\+\s*["'']t["'']\s*\]'
+
+  - id: nemucod-wv-array
+    desc: "Nemucod-style character array (tuples)"
+    crit: suspicious
+    conf: 0.95
+    for: [javascript]
+    if:
+      type: raw
+      # Matches: var jo = [("x", ba),("x", ix), ... or var wv = [('x', ba)
+      regex: 'var\s+\w+\s*=\s*\[\s*\(\s*["''][^"'']{1,120}["'']\s*,\s*\w+\s*\)\s*,'
+
+  - id: nemucod-reconstruction-loop
+    desc: "Nemucod string reconstruction loop"
+    crit: suspicious
+    conf: 0.95
+    if:
+      type: raw
+      # Matches loop using concat property access
+      regex: '\w+\s*=\s*\w+\[\s*["'']conca["'']\s*\+\s*["'']t["'']\s*\]'
+
+  - id: nemucod-function-fragmentation
+    desc: "Nemucod function-based string fragmentation"
+    crit: suspicious
+    conf: 0.95
+    if:
+      type: ast
+      language: javascript
+      query: |
+        (function_declaration
+          body: (statement_block
+            (return_statement
+              (string)
+            )
+          )
+        ) @func_return_string
+      count_min: 20

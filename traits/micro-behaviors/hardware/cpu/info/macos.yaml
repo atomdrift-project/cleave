@@ -1,0 +1,16 @@
+# CPU Information - macOS
+# ATT&CK: T1082 (System Information Discovery)
+
+defaults:
+  for: [all]
+
+traits:
+  - id: macos-cpuinfo
+    desc: macOS CPU information query
+    crit: notable
+    conf: 0.7
+    attack: "T1082"
+    platforms: [macos]
+    if:
+      type: string
+      substr: "CpuInfoAndModel"

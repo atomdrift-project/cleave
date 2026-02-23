@@ -1,0 +1,26 @@
+# Linux Kernel Privilege Escalation Primitives
+# ATT&CK: T1068 (Exploitation for Privilege Escalation)
+# MBC: E1068 (Exploitation for Privilege Escalation)
+
+traits:
+  - id: commit-creds
+    desc: commit_creds usage (often used for LPE)
+    crit: notable
+    conf: 0.8
+    attack: "T1068"
+    mbc: "E1068"
+    for: [elf, c]
+    if:
+      type: raw
+      regex: "commit_creds"
+
+  - id: prepare-creds
+    desc: prepare_creds usage (often used for LPE)
+    crit: notable
+    conf: 0.8
+    attack: "T1068"
+    mbc: "E1068"
+    for: [elf, c]
+    if:
+      type: raw
+      regex: "prepare_creds"

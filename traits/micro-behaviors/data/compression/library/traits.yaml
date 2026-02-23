@@ -1,0 +1,261 @@
+# Compression Library Detection
+# Useful for ML baseline - legitimate compression usage patterns
+
+defaults:
+  for: [all]
+
+traits:
+  # === LZMA/XZ micro-behaviors ===
+  - id: liblzma
+    desc: liblzma library
+    crit: notable
+    conf: 0.9
+    if:
+      type: string
+      substr: "liblzma"
+
+  - id: lzma-prefix
+    desc: lzma_ function prefix
+    crit: notable
+    conf: 0.8
+    if:
+      type: string
+      regex: "\\blzma_"
+
+  - id: xz-prefix
+    desc: xz_ function prefix
+    crit: notable
+    conf: 0.8
+    if:
+      type: string
+      regex: "\\bxz_"
+
+  - id: lzmaenc
+    desc: LzmaEnc SDK function
+    crit: notable
+    conf: 0.9
+    if:
+      type: string
+      substr: "LzmaEnc"
+
+  - id: lzmadec
+    desc: LzmaDec SDK function
+    crit: notable
+    conf: 0.9
+    if:
+      type: string
+      substr: "LzmaDec"
+
+  - id: lzma-ok
+    desc: LZMA_OK status
+    crit: notable
+    conf: 0.9
+    if:
+      type: string
+      substr: "LZMA_OK"
+
+  # === Zlib micro-behaviors ===
+  - id: deflate
+    desc: deflate function
+    crit: notable
+    conf: 0.8
+    if:
+      type: symbol
+      regex: "deflate"
+
+  - id: inflate
+    desc: inflate function
+    crit: notable
+    conf: 0.8
+    if:
+      type: symbol
+      regex: "inflate"
+
+  - id: z-stream
+    desc: z_stream type
+    crit: notable
+    conf: 0.9
+    if:
+      type: string
+      substr: "z_stream"
+
+  - id: zlib-decompress-symbol
+    desc: zlib.decompress symbol
+    crit: notable
+    conf: 0.9
+    if:
+      type: symbol
+      exact: "zlib.decompress"
+
+  - id: zlib-decompress-dynamic
+    desc: zlib.decompress dynamic import
+    crit: notable
+    conf: 0.9
+    if:
+      type: symbol
+      exact: "import__('zlib').decompress"
+
+  # === Bzip2 micro-behaviors ===
+  - id: bz2-compress
+    desc: BZ2_bzCompress function
+    crit: notable
+    conf: 0.9
+    if:
+      type: symbol
+      regex: "BZ2_bzCompress"
+
+  - id: bz2-decompress
+    desc: BZ2_bzDecompress function
+    crit: notable
+    conf: 0.9
+    if:
+      type: symbol
+      regex: "BZ2_bzDecompress"
+
+  - id: libbz2
+    desc: libbz2 library
+    crit: notable
+    conf: 0.9
+    if:
+      type: string
+      substr: "libbz2"
+
+  - id: bzip2-string
+    desc: bzip2 string
+    crit: notable
+    conf: 0.8
+    if:
+      type: string
+      substr: "bzip2"
+
+  # === Zstd micro-behaviors ===
+  - id: zstd-compress
+    desc: ZSTD_compress function
+    crit: notable
+    conf: 0.9
+    if:
+      type: symbol
+      regex: "ZSTD_compress"
+
+  - id: zstd-decompress
+    desc: ZSTD_decompress function
+    crit: notable
+    conf: 0.9
+    if:
+      type: symbol
+      regex: "ZSTD_decompress"
+
+  - id: zstd-cctx
+    desc: ZSTD_CCtx type
+    crit: notable
+    conf: 0.9
+    if:
+      type: string
+      substr: "ZSTD_CCtx"
+
+  - id: libzstd
+    desc: libzstd library
+    crit: notable
+    conf: 0.9
+    if:
+      type: string
+      substr: "libzstd"
+
+  # === LZ4 micro-behaviors ===
+  - id: lz4-compress
+    desc: LZ4_compress function
+    crit: notable
+    conf: 0.9
+    if:
+      type: symbol
+      regex: "LZ4_compress"
+
+  - id: lz4-decompress
+    desc: LZ4_decompress function
+    crit: notable
+    conf: 0.9
+    if:
+      type: symbol
+      regex: "LZ4_decompress"
+
+  - id: liblz4
+    desc: liblz4 library
+    crit: notable
+    conf: 0.9
+    if:
+      type: string
+      substr: "liblz4"
+
+composite_rules:
+  # LZMA composite (migrated from YARA)
+  - id: lzma
+    desc: LZMA/XZ compression library
+    crit: notable
+    conf: 0.9
+    any:
+      - id: liblzma
+      - id: lzma-prefix
+      - id: xz-prefix
+      - id: lzmaenc
+      - id: lzmadec
+      - id: lzma-ok
+
+  # Zlib composite (migrated from YARA)
+  - id: zlib
+    desc: Zlib compression library
+    crit: notable
+    conf: 0.9
+    any:
+      - id: zlib-deflate-inflate
+      - id: z-stream
+      - id: micro-behaviors/data/encode/compression::zlib-signature
+
+  # Helper: deflate + inflate
+  - id: zlib-deflate-inflate
+    desc: Zlib deflate and inflate
+    crit: notable
+    conf: 0.9
+    all:
+      - id: deflate
+      - id: inflate
+
+  # Helper: zlib.decompress call
+  - id: zlib-decompress
+    desc: zlib.decompress call
+    crit: notable
+    conf: 0.9
+    any:
+      - id: zlib-decompress-symbol
+      - id: zlib-decompress-dynamic
+
+  # Bzip2 composite (migrated from YARA)
+  - id: bzip2
+    desc: Bzip2 compression library
+    crit: notable
+    conf: 0.9
+    any:
+      - id: bz2-compress
+      - id: bz2-decompress
+      - id: libbz2
+      - id: bzip2-string
+
+  # Zstd composite (migrated from YARA)
+  - id: zstd
+    desc: Zstandard compression library
+    crit: notable
+    conf: 0.9
+    any:
+      - id: zstd-compress
+      - id: zstd-decompress
+      - id: zstd-cctx
+      - id: libzstd
+
+  # LZ4 composite (migrated from YARA)
+  - id: lz4
+    desc: LZ4 compression library
+    crit: notable
+    conf: 0.9
+    any:
+      - id: lz4-compress
+      - id: lz4-decompress
+      - id: liblz4

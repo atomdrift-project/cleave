@@ -1,0 +1,36 @@
+# Simple POSIX Backdoor Logic
+# Detects minimal bind shells that use socket+bind+dup2+system/exec pattern
+
+defaults:
+  for: [elf, macho, c, cpp]
+  crit: hostile
+  conf: 0.8
+  attack: "T1059"
+  mbc: "B0001" # Reverse Shell
+  # T1071 Application Layer Protocol
+
+# composite_rules:
+#   # Basic pattern: UDP socket + bind + dup2 + system/exec
+#   # This is highly suspicious for a standalone executable
+#   - id: simple-udp-bind-shell
+#     desc: UDP Bind Shell (bind+dup2+system)
+#     crit: suspicious
+#     conf: 0.85
+#     all:
+#       - id: micro-behaviors/communications/socket/udp/unix::sock-dgram
+#       - id: micro-behaviors/communications/socket/bind::bind
+#       - id: micro-behaviors/process/fd/dup::dup2
+#       - any:
+#           - id: micro-behaviors/process/create/shell::system-fn
+#           - id: micro-behaviors/process/create/shell::shell-symbols
+#     # Suppress on known-good admin tools if needed, but for now strict matching is okay.
+#     # Netcat might trigger this, but netcat is dual-use.
+
+#   # Same logic but hostile if malware strings are present
+#   - id: hostile-udp-bind-shell
+#     desc: Hostile UDP Bind Shell (w/ Malware Strings)
+#     crit: hostile
+#     conf: 0.95
+#     all:
+#       - id: simple-udp-bind-shell
+#       - id: micro-behaviors/data/text/malware/backdoor::generic-terms

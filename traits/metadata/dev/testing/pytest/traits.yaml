@@ -1,0 +1,82 @@
+# Testing Framework - PYTEST
+
+traits:
+  # === Atomic: pytest (Python) ===
+
+  - id: pytest-word
+    desc: pytest reference
+    crit: baseline
+    conf: 0.7
+    for: [python]
+    if:
+      type: string
+      word: "pytest"
+
+  - id: pytest-test-func
+    desc: "def test_ function"
+    crit: baseline
+    conf: 0.8
+    for: [python]
+    if:
+      type: string
+      substr: "def test_"
+
+  - id: pytest-decorator
+    desc: "@pytest decorator"
+    crit: baseline
+    conf: 0.8
+    for: [python]
+    if:
+      type: string
+      substr: "@pytest"
+
+  - id: pytest-conftest
+    desc: conftest.py file
+    crit: baseline
+    conf: 0.9
+    for: [python]
+    if:
+      type: string
+      substr: "conftest.py"
+
+  - id: python-assert-statement
+    desc: "assert statement"
+    crit: baseline
+    conf: 0.4
+    for: [python]
+    if:
+      type: string
+      substr: "assert "
+
+composite_rules:
+  # pytest (Python) - helper for pytest markers
+  - id: pytest-markers
+    desc: pytest-specific markers
+    crit: baseline
+    conf: 0.8
+    for: [python]
+    any:
+      - { id: pytest-word }
+      - { id: pytest-test-func }
+      - { id: pytest-decorator }
+      - { id: pytest-conftest }
+
+  # pytest with assert helper
+  - id: pytest-with-assert
+    desc: pytest markers with assert statement
+    crit: baseline
+    conf: 0.8
+    for: [python]
+    all:
+      - { id: python-assert-statement }
+      - { id: pytest-markers }
+
+  # pytest (Python) - main composite
+  - id: pytest
+    desc: pytest test framework
+    crit: notable
+    conf: 0.95
+    for: [python]
+    any:
+      - { id: pytest-markers }
+      - { id: pytest-with-assert }

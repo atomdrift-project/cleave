@@ -1,0 +1,126 @@
+# File Permission Modification - Base chmod operations
+# MBC: E1222 (File Permission Modification)
+# ATT&CK: T1222 (File and Directory Permissions Modification)
+
+defaults:
+  mbc: "E1222"
+  attack: "T1222"
+
+traits:
+  # Unix syscall-level chmod
+  - id: syscall-chmod
+    desc: chmod syscall
+    crit: notable
+    conf: 0.66
+    for: [elf, macho, so, dylib, c]
+    if:
+      type: symbol
+      exact: "chmod"
+
+  - id: syscall-fchmod
+    desc: fchmod syscall
+    crit: notable
+    conf: 0.66
+    for: [elf, macho, so, dylib, c]
+    if:
+      type: symbol
+      exact: "fchmod"
+
+  - id: syscall-fchmodat
+    desc: fchmodat syscall
+    crit: notable
+    conf: 0.66
+    for: [elf, macho, so, dylib, c]
+    if:
+      type: symbol
+      exact: "fchmodat"
+
+  - id: syscall-lchmod
+    desc: lchmod syscall
+    crit: notable
+    conf: 0.66
+    for: [elf, macho, so, dylib, c]
+    if:
+      type: symbol
+      exact: "lchmod"
+
+  # Python os.chmod
+  - id: python-os-chmod
+    desc: Python os.chmod call
+    crit: notable
+    conf: 0.85
+    for: [python]
+    if:
+      type: raw
+      regex: "os\\.chmod\\("
+
+  # Ruby File.chmod
+  - id: ruby-file-chmod
+    desc: Ruby File.chmod call
+    crit: notable
+    conf: 0.75
+    for: [ruby]
+    if:
+      type: string
+      substr: "File.chmod"
+
+  # Ruby .chmod( method call
+  - id: ruby-chmod-method
+    desc: Ruby .chmod() method call
+    crit: notable
+    conf: 0.75
+    for: [ruby]
+    if:
+      type: string
+      substr: ".chmod("
+
+  # Ruby chmod symbol
+  - id: ruby-chmod-symbol
+    desc: Ruby chmod symbol reference
+    crit: baseline
+    conf: 0.75
+    for: [ruby]
+    if:
+      type: symbol
+      regex: "chmod"
+
+  # JavaScript/Node chmod
+  - id: node-chmod
+    desc: Node.js chmod call
+    crit: notable
+    conf: 0.7
+    for: [javascript]
+    if:
+      type: string
+      regex: "chmod(Sync)?\\s*\\("
+
+  # Go os.Chmod
+  - id: go-os-chmod
+    desc: Go os.Chmod call
+    crit: notable
+    conf: 0.8
+    for: [go]
+    if:
+      type: string
+      substr: "os.Chmod("
+
+composite_rules:
+  - id: syscall
+    desc: chmod syscall family
+    crit: notable
+    conf: 0.66
+    any:
+      - id: syscall-chmod
+      - id: syscall-fchmod
+      - id: syscall-fchmodat
+      - id: syscall-lchmod
+
+  # Ruby chmod (any variant)
+  - id: ruby
+    desc: Ruby file permission modification
+    crit: notable
+    conf: 0.8
+    any:
+      - id: ruby-file-chmod
+      - id: ruby-chmod-method
+      - id: ruby-chmod-symbol

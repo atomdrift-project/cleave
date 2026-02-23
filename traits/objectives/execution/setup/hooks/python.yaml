@@ -1,0 +1,119 @@
+# Python setup.py Execution Hooks
+# Capabilities related to customizing installation process
+# References: https://docs.python.org/3/distutils/apiref.html
+
+defaults:
+  for: [python]
+  crit: notable
+
+traits:
+  - id: setup-cmdclass-install
+    desc: setup() defines custom install command
+    conf: 0.9
+    if:
+      type: ast
+      query: |
+        (call
+          function: (identifier) @func (#eq? @func "setup")
+          arguments: (argument_list
+            (keyword_argument
+              name: (identifier) @arg_name (#eq? @arg_name "cmdclass")
+              value: (dictionary
+                (pair
+                  key: (string) @key (#match? @key "['"]install['"]")
+                )
+              )
+            )
+          )
+        )
+
+  - id: setup-cmdclass-develop
+    desc: setup() defines custom develop command
+    conf: 0.9
+    if:
+      type: ast
+      query: |
+        (call
+          function: (identifier) @func (#eq? @func "setup")
+          arguments: (argument_list
+            (keyword_argument
+              name: (identifier) @arg_name (#eq? @arg_name "cmdclass")
+              value: (dictionary
+                (pair
+                  key: (string) @key (#match? @key "['"]develop['"]")
+                )
+              )
+            )
+          )
+        )
+
+  - id: setup-cmdclass-egg-info
+    desc: setup() defines custom egg_info command
+    conf: 0.9
+    if:
+      type: ast
+      query: |
+        (call
+          function: (identifier) @func (#eq? @func "setup")
+          arguments: (argument_list
+            (keyword_argument
+              name: (identifier) @arg_name (#eq? @arg_name "cmdclass")
+              value: (dictionary
+                (pair
+                  key: (string) @key (#match? @key "['"]egg_info['"]")
+                )
+              )
+            )
+          )
+        )
+
+  - id: setuptools-install-class
+    desc: Class inherits from setuptools.command.install
+    conf: 0.9
+    if:
+      type: ast
+      query: |
+        (class_definition
+          superclasses: (argument_list
+            (identifier) @parent (#match? @parent "^install$|^setuptools.command.install.install$")
+          )
+        )
+
+  - id: setuptools-run-override
+    desc: Overrides run() method in install class
+    conf: 0.8
+    if:
+      type: ast
+      query: |
+        (class_definition
+          superclasses: (argument_list (identifier) @parent (#eq? @parent "install"))
+          body: (block
+            (function_definition
+              name: (identifier) @func (#eq? @func "run")
+            )
+          )
+        )
+
+composite_rules:
+  # GuardDog: Code execution in setup.py
+  - id: setup-code-execution
+    desc: Code execution during installation
+    crit: hostile
+    conf: 0.95
+    attack: "T1195.002"
+    mbc: "E1059.006"
+    for: [python]
+    any:
+      # Direct execution
+      - id: objectives/execution/interpreter/eval/invoke::exec-call-python
+      - id: objectives/execution/interpreter/eval/invoke::eval-call-python
+      - id: objectives/execution/interpreter/eval/invoke::compile-call-python
+      # Process creation
+      - id: micro-behaviors/process/create/subprocess::process-execution
+      # Obfuscated execution
+      - id: objectives/anti-static/obfuscation/scripting::builtins-obfuscation
+    downgrade:
+      # Legitimate setup.py may check versions with eval
+      any:
+        - id: metadata/quality::has-tests
+        - id: metadata/signed/platform

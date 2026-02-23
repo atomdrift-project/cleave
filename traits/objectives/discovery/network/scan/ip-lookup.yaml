@@ -1,0 +1,147 @@
+# IP Address and Geolocation Lookup
+# Detects usage of services that return the public IP or location of the host
+# Often used for reconnaissance or to decide whether to execute payload
+# ATT&CK: T1592 (Gather Victim Host Information)
+
+defaults:
+  crit: notable
+  conf: 0.85
+  for: [all]
+
+traits:
+  - id: ifconfig-me
+    desc: ifconfig.me IP lookup
+    if:
+      type: string
+      substr: "ifconfig.me"
+
+  - id: icanhazip
+    desc: icanhazip.com IP lookup
+    if:
+      type: string
+      substr: "icanhazip.com"
+
+  - id: ident-me
+    desc: ident.me IP lookup
+    if:
+      type: string
+      substr: "ident.me"
+
+  - id: ipecho-net
+    desc: ipecho.net IP lookup
+    if:
+      type: string
+      substr: "ipecho.net"
+
+  - id: checkip-amazonaws
+    desc: checkip.amazonaws.com IP lookup
+    if:
+      type: string
+      substr: "checkip.amazonaws.com"
+
+  - id: whatismyip-akamai
+    desc: whatismyip.akamai.com IP lookup
+    if:
+      type: string
+      substr: "whatismyip.akamai.com"
+
+  - id: ipify-org
+    desc: api.ipify.org IP lookup
+    if:
+      type: string
+      substr: "ipify.org"
+
+  - id: curlmyip-org
+    desc: curlmyip.org IP lookup
+    if:
+      type: string
+      substr: "curlmyip.org"
+
+  - id: wtfismyip-com
+    desc: wtfismyip.com IP lookup
+    if:
+      type: string
+      substr: "wtfismyip.com"
+
+  - id: ipinfo-io
+    desc: ipinfo.io geolocation lookup
+    if:
+      type: string
+      substr: "ipinfo.io"
+
+  - id: db-ip-com
+    desc: db-ip.com geolocation lookup
+    if:
+      type: string
+      substr: "db-ip.com"
+
+  - id: geoplugin-com
+    desc: geoplugin.com geolocation lookup
+    if:
+      type: string
+      substr: "geoplugin.com"
+
+  - id: ip-api-com
+    desc: ip-api.com geolocation lookup
+    if:
+      type: string
+      substr: "ip-api.com"
+
+  # === IP loggers / tracking (legacy / common) ===
+  - id: iplogger-keyword
+    desc: iplogger keyword reference
+    if:
+      type: string
+      substr: "iplogger"
+
+  - id: iplogger-b64
+    desc: iplogger.org (base64 encoded)
+    if:
+      type: yara
+      source: |
+        rule iplogger_b64 {
+          strings:
+            $iplogger_b64 = "aXBsb2dnZXIub3Jn" ascii // iplogger.org
+            $iplogger_x = "iplogger.org" xor(1-255)
+          condition:
+            $iplogger_b64 or $iplogger_x
+        }
+
+composite_rules:
+  - id: ip-lookup-service
+    desc: Any public IP lookup service
+    any:
+      - id: ifconfig-me
+      - id: icanhazip
+      - id: ident-me
+      - id: ipecho-net
+      - id: checkip-amazonaws
+      - id: whatismyip-akamai
+      - id: ipify-org
+      - id: curlmyip-org
+      - id: wtfismyip-com
+
+  - id: geo-lookup-service
+    desc: Any public geolocation lookup service
+    any:
+      - id: objectives/discovery/host/geo::ipapi-co
+      - id: ipinfo-io
+      - id: objectives/discovery/host/geo::freegeoip-app
+      - id: db-ip-com
+      - id: geoplugin-com
+      - id: ip-api-com
+
+  - id: tracking-service-lookup
+    desc: IP lookup via tracking/logging service
+    crit: suspicious
+    any:
+      - id: objectives/discovery/network/ip-tracker/
+      - id: iplogger-keyword
+      - id: iplogger-b64
+
+  - id: external-recon-service
+    desc: Contacts external service for IP/geo reconnaissance
+    any:
+      - id: ip-lookup-service
+      - id: geo-lookup-service
+      - id: tracking-service-lookup

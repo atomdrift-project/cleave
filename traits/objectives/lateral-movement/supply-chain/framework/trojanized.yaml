@@ -1,0 +1,297 @@
+# Trojanized Library Detection
+# ATT&CK: T1195.001 (Compromise Software Dependencies and Development Tools)
+# Detects patterns of legitimate libraries modified to include malicious code
+
+traits:
+  # Legitimate library with install hooks added
+  - id: popular-lib-with-hooks
+    desc: Popular library pattern with unusual
+    crit: suspicious
+    conf: 0.85
+    attack: "T1195.001"
+    for: [package.json]
+    if:
+      type: yara
+      source: |
+        rule popular_lib_with_hooks {
+          strings:
+            // Popular library patterns
+            $lib1 = "lodash" ascii nocase
+            $lib2 = "axios" ascii nocase
+            $lib3 = "express" ascii nocase
+            $lib4 = "react" ascii nocase
+            $lib5 = "discord" ascii nocase
+            $lib6 = "telegram" ascii nocase
+            $lib7 = "winston" ascii nocase
+            $lib8 = "pino" ascii nocase
+            // Install hooks
+            $hook1 = "\"preinstall\":" ascii
+            $hook2 = "\"postinstall\":" ascii
+            // Network activity
+            $net1 = "curl " ascii
+            $net2 = "wget " ascii
+          condition:
+            any of ($lib*) and any of ($hook*) and any of ($net*)
+        }
+
+  # Clone with additional requires
+  - id: additional-requires
+    desc: Library clone with suspicious additional
+    crit: suspicious
+    conf: 0.85
+    attack: "T1195.001"
+    for: [javascript]
+    if:
+      type: yara
+      source: |
+        rule additional_suspicious_requires {
+          strings:
+            // Legitimate requires
+            $legit1 = "require('express')" ascii
+            $legit2 = "require('lodash')" ascii
+            $legit3 = "require('axios')" ascii
+            // Suspicious additions
+            $sus1 = "require('child_process')" ascii
+            $sus2 = "require('os')" ascii
+            $sus3 = "require('https')" ascii
+            $sus4 = "require('fs')" ascii
+            // Network patterns
+            $net1 = "fetch(" ascii
+            $net2 = ".request(" ascii
+          condition:
+            any of ($legit*) and 2 of ($sus*) and any of ($net*)
+        }
+
+  # Discord library trojanization
+  - id: discord-library
+    desc: Trojanized Discord library patterns
+    crit: suspicious
+    conf: 0.9
+    attack: "T1195.001"
+    mbc: "B0024"
+    for: [javascript, typescript]
+    if:
+      type: yara
+      source: |
+        rule trojanized_discord {
+          strings:
+            // Discord library indicators
+            $discord1 = "discord.js" ascii
+            $discord2 = "discord.io" ascii
+            $discord3 = "Discord.Client" ascii
+            // Malicious additions
+            $token1 = "DISCORD_TOKEN" ascii
+            $token2 = ".token" ascii
+            $webhook = "webhook" ascii
+            $steal1 = "localStorage" ascii
+            $steal2 = "leveldb" ascii
+            $exfil = "POST" ascii
+          condition:
+            any of ($discord*) and any of ($token*) and ($webhook or any of ($steal*) or $exfil)
+        }
+
+  # Telegram library trojanization
+  - id: telegram-library
+    desc: Trojanized Telegram library patterns
+    crit: suspicious
+    conf: 0.9
+    attack: "T1195.001"
+    mbc: "B0024"
+    for: [javascript, typescript]
+    if:
+      type: yara
+      source: |
+        rule trojanized_telegram {
+          strings:
+            // Telegram library indicators
+            $tg1 = "telegram" ascii nocase
+            $tg2 = "telegraf" ascii
+            $tg3 = "node-telegram-bot" ascii
+            // Malicious additions
+            $mal1 = "child_process" ascii
+            $mal2 = "spawn(" ascii
+            $mal3 = "exec(" ascii
+            $oob1 = "oast" ascii
+            $oob2 = "webhook.site" ascii
+          condition:
+            any of ($tg*) and any of ($mal*) and any of ($oob*)
+        }
+
+  # Logging library trojanization
+  - id: logging-library
+    desc: Trojanized logging library patterns
+    crit: suspicious
+    conf: 0.85
+    attack: "T1195.001"
+    for: [javascript, typescript]
+    if:
+      type: yara
+      source: |
+        rule trojanized_logger {
+          strings:
+            // Logger library indicators
+            $log1 = "winston" ascii
+            $log2 = "pino" ascii
+            $log3 = "bunyan" ascii
+            $log4 = "log4js" ascii
+            // Suspicious additions (loggers shouldn't need these)
+            $sus1 = "child_process" ascii
+            $sus2 = "spawn" ascii
+            $sus3 = "exec" ascii
+            $sus4 = "/etc/passwd" ascii
+          condition:
+            any of ($log*) and 2 of ($sus*)
+        }
+
+  # SDK/API client trojanization
+  - id: sdk-client
+    desc: Trojanized SDK or API client
+    crit: suspicious
+    conf: 0.8
+    attack: "T1195.001"
+    for: [javascript, typescript, package.json]
+    if:
+      type: yara
+      source: |
+        rule trojanized_sdk {
+          strings:
+            // SDK patterns
+            $sdk1 = "-sdk" ascii
+            $sdk2 = "-client" ascii
+            $sdk3 = "-api" ascii
+            $sdk4 = "Client" ascii
+            // Install hook (SDKs rarely need these)
+            $hook1 = "\"preinstall\":" ascii
+            $hook2 = "\"postinstall\":" ascii
+            // Suspicious activity
+            $sus1 = "curl " ascii
+            $sus2 = "wget " ascii
+            $sus3 = "os.userInfo" ascii
+          condition:
+            any of ($sdk*) and any of ($hook*) and any of ($sus*)
+        }
+
+  # Crypto/blockchain library trojanization
+  - id: crypto-library
+    desc: Trojanized cryptocurrency library
+    crit: suspicious
+    conf: 0.9
+    attack: "T1195.001"
+    mbc: "B0024"
+    for: [javascript, typescript]
+    if:
+      type: yara
+      source: |
+        rule trojanized_crypto_lib {
+          strings:
+            // Crypto library patterns
+            $crypto1 = "ethers" ascii
+            $crypto2 = "web3" ascii
+            $crypto3 = "wallet" ascii
+            $crypto4 = "bitcoin" ascii
+            $crypto5 = "solana" ascii
+            // Key theft patterns
+            $steal1 = "privateKey" ascii
+            $steal2 = "mnemonic" ascii
+            $steal3 = "seedPhrase" ascii
+            $steal4 = "keystore" ascii
+            // Exfil
+            $exfil1 = "webhook" ascii
+            $exfil2 = "POST" ascii
+            $exfil3 = "oast" ascii
+          condition:
+            any of ($crypto*) and any of ($steal*) and any of ($exfil*)
+        }
+
+  # nanopb framework marker - legitimately used for protobuf
+  - id: nanopb-framework
+    desc: nanopb protobuf framework
+    crit: notable
+    conf: 0.9
+    for: [macho, dylib]
+    if:
+      type: string
+      substr: "nanopb"
+
+  # Binary framework marker - detect Protobuf framework
+  # GPB prefix alone is too short (3 chars) and matches in code signatures/random data
+  - id: framework-binary-marker
+    desc: Protobuf framework binary detected
+    crit: notable
+    conf: 0.95
+    for: [macho, dylib]
+    if:
+      type: string
+      substr: "GPBMessage"
+
+  # AFNetworking 3.x built with modern Xcode (likely trojanized)
+  - id: afnetworking-build-mismatch
+    desc: AFNetworking 3.x built with modern Xcode
+    crit: suspicious
+    conf: 0.95
+    attack: "T1195.001"
+    for: [all]
+    if:
+      type: yara
+      source: |
+        rule afnetworking_build_mismatch {
+          strings:
+            $id = "org.cocoapods.AFNetworking"
+            $ver_3 = "<string>3."
+            $dt_xcode_key = "<key>DTXcode</key>"
+            // DTXcode 1240 = Xcode 12.4 (2021).
+            $dt_xcode_val = /<string>1[2-9][0-9]{2}<\/string>/
+          condition:
+            $id and $ver_3 and $dt_xcode_key and $dt_xcode_val and
+            (@dt_xcode_val > @dt_xcode_key) and (@dt_xcode_val < @dt_xcode_key + 50)
+        }
+
+composite_rules:
+  # Trojanized framework pattern: legitimate library name + embedded payload + file deletion capability
+  - id: suspicious-trojanized-framework
+    desc: Likely trojanized framework with embedded payload and suspicious capabilities
+    crit: suspicious
+    conf: 0.9
+    attack: "T1195.001"
+    mbc: "B0024"
+    for: [macho, dylib, elf, so]
+    all:
+      - id: framework-binary-marker
+      - id: micro-behaviors/data/embedded/payload::lzma-magic
+      - id: micro-behaviors/fs/file/delete::delete
+
+  # Even more suspicious: trojanized framework with socket binding (network capability)
+  - id: trojanized-framework-networked
+    desc: Trojanized framework with network and payload capabilities
+    crit: suspicious
+    conf: 0.92
+    attack: "T1195.001"
+    mbc: "B0024"
+    for: [macho, dylib, elf, so]
+    all:
+      - id: suspicious-trojanized-framework
+      - id: micro-behaviors/communications/socket/bind::bind
+
+  # Most suspicious: trojanized framework with C2 communication
+  - id: trojanized-framework-with-c2
+    desc: Trojanized framework with command & control indicators
+    crit: hostile
+    conf: 0.95
+    attack: "T1195.001"
+    mbc: "B0024"
+    for: [macho, dylib, elf, so]
+    all:
+      - id: trojanized-framework-networked
+      - id: objectives/command-and-control/infrastructure/domain::http-url-binary
+
+  # nanopb in wallet app with iOS code injection framework
+  - id: nanopb-with-ios-injection
+    desc: Protobuf library with iOS code injection framework
+    crit: suspicious
+    conf: 0.85
+    attack: "T1195.001"
+    mbc: "B0024"
+    for: [macho, dylib, ipa]
+    all:
+      - id: nanopb-framework
+      - id: objectives/evasion/process/injection/runtime::cbinjection-framework

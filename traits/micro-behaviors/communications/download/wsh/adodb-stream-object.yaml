@@ -1,0 +1,12 @@
+traits:
+  - id: adodb-stream-object
+    desc: "Creates ADODB.Stream object via ActiveXObject"
+    crit: suspicious
+    conf: 0.9
+    for: [javascript]
+    if:
+      type: string
+      # Detects both literal ActiveXObject("ADODB.Stream") and deobfuscated versions.
+      # The sample uses deobfuscated strings for "ADODB.Stream".
+      regex: 'ActiveXObject\s*\(["'']?(ADODB\.Stream|\w+)["'']?\)'
+    attack: "T1106" # Native API

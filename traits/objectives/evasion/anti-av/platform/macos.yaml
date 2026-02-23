@@ -1,0 +1,60 @@
+defaults:
+  for:
+    - all
+  attack: T1553.001
+traits:
+  - id: xattr-clear-before-exec
+    desc: xattr -c followed by chmod/execute
+    crit: suspicious
+    conf: 0.9
+    for:
+      - shell
+    if:
+      type: raw
+      regex: xattr\s+-c\s+[^&\n]{1,120}&&[^&\n]{0,120}(chmod|\.\/)
+  - id: macos-add-trusted-cert
+    desc: Installs a trusted root certificate on macOS
+    crit: suspicious
+    conf: 0.95
+    attack: T1553.004
+    if:
+      type: string
+      regex: security\s+add-trusted-cert
+  - id: macos-set-web-proxy
+    desc: Configures a web proxy on macOS
+    crit: suspicious
+    conf: 0.9
+    attack: T1090
+    if:
+      type: string
+      regex: networksetup\s+-set(secure)?webproxy
+  - id: curl-xattr-chmod-chain
+    desc: curl+xattr+chmod execution chain
+    crit: suspicious
+    conf: 0.95
+    for:
+      - shell
+    if:
+      type: raw
+      regex: curl.{0,100}xattr.{0,100}chmod.{0,100}\./
+composite_rules:
+  - id: gatekeeper-bypass
+    desc: macOS Gatekeeper bypass via xattr
+    crit: suspicious
+    conf: 0.9
+    for:
+      - shell
+    all:
+      - id: micro-behaviors/fs/attributes/xattr::xattr-clear
+      - id: micro-behaviors/fs/chmod/executable::shell-plus-x
+  - id: dropper-gatekeeper-bypass
+    desc: Download and execute with Gatekeeper bypass
+    crit: hostile
+    conf: 0.95
+    for:
+      - shell
+    all:
+      - id: objectives/execution/dropper/script::curl-download
+      - id: micro-behaviors/fs/attributes/xattr::xattr-clear
+      - id: micro-behaviors/fs/chmod/executable::shell-plus-x
+      - id: objectives/execution/dropper/script::execute-dot-slash

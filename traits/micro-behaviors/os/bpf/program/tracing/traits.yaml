@@ -1,0 +1,42 @@
+# eBPF Programs - eBPF Tracing and Monitoring
+# Capabilities for BPF/eBPF program detection
+
+traits:
+  # eBPF user memory read - used for data exfiltration
+  - id: bpf-core-read-user
+    desc: eBPF read from user memory
+    crit: notable
+    conf: 0.8
+    for: [c, elf]
+    if:
+      type: symbol
+      regex: "bpf_(core_read_user|probe_read_user)"
+
+  # === Uprobe Attachment ===
+  - id: uprobe-attach
+    desc: eBPF uprobe attachment
+    crit: notable
+    conf: 0.8
+    for: [c, elf]
+    if:
+      type: string
+      regex: "(attach_uprobe|uprobe_opts|bpf_program__attach_uprobe)"
+
+  # eBPF SEC macro uprobe section declaration
+  - id: uprobe-sec
+    desc: eBPF uprobe SEC declaration
+    crit: notable
+    conf: 0.85
+    for: [c]
+    if:
+      type: string
+      regex: "uprobe/"
+
+  - id: uprobe-retprobe
+    desc: eBPF return probe
+    crit: notable
+    conf: 0.75
+    for: [c, elf]
+    if:
+      type: string
+      substr: "retprobe"

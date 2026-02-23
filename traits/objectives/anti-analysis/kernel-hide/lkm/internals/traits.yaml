@@ -1,0 +1,371 @@
+# Linux Kernel Rootkit Detection - Advanced Rootkit Techniques
+# MBC: Defense Evasion, Privilege Escalation
+# ATT&CK: T1014 (Rootkit), T1068 (Exploitation for Privilege Escalation)
+
+traits:
+  # INLINE ASSEMBLY
+  # ============================================================
+
+  - id: asm-cr0-manipulation
+    desc: Inline assembly manipulating CR0 register
+    crit: suspicious
+    conf: 0.98
+    for: [c]
+    if:
+      type: ast
+      node: asm_statement
+      exact: "cr0"
+      case_insensitive: true
+
+  - id: asm-syscall-invocation
+    desc: Inline assembly with direct syscall
+    crit: suspicious
+    conf: 0.85
+    for: [c]
+    if:
+      type: ast
+      node: asm_statement
+      regex: "int.{0,10}0x80|syscall|sysenter"
+
+  # ============================================================
+  # KERNEL STRUCTURE TRAVERSAL
+  # ============================================================
+
+  - id: current-files-access
+    desc: Current process file table access
+    crit: suspicious
+    conf: 0.85
+    for: [c]
+    if:
+      type: ast
+      kind: attribute
+      exact: "current->files"
+
+  - id: fdt-access
+    desc: File descriptor table access
+    crit: suspicious
+    conf: 0.8
+    for: [c]
+    if:
+      type: ast
+      kind: attribute
+      exact: "->fdt"
+
+  - id: f-path-dentry-access
+    desc: File path dentry access (inode
+    crit: suspicious
+    conf: 0.8
+    for: [c]
+    if:
+      type: ast
+      kind: attribute
+      exact: "f_path.dentry"
+
+  - id: d-inode-access
+    desc: Dentry inode access
+    crit: suspicious
+    conf: 0.8
+    for: [c]
+    if:
+      type: ast
+      kind: attribute
+      exact: "->d_inode"
+
+  - id: i-ino-access
+    desc: Inode number access (filesystem identification)
+    crit: suspicious
+    conf: 0.85
+    for: [c]
+    if:
+      type: ast
+      kind: attribute
+      exact: "i_ino"
+
+  - id: i-rdev-access
+    desc: Inode device number access
+    crit: suspicious
+    conf: 0.8
+    for: [c]
+    if:
+      type: ast
+      kind: attribute
+      exact: "i_rdev"
+
+  - id: major-macro-call
+    desc: MAJOR device number extraction
+    crit: suspicious
+    conf: 0.75
+    for: [c]
+    if:
+      type: ast
+      kind: call
+      exact: "MAJOR"
+
+  # ============================================================
+  # DECLARATIONS / STRUCTURES
+  # ============================================================
+
+  - id: syscall-table-decl
+    desc: Syscall table pointer (syscall hooking)
+    crit: suspicious
+    conf: 0.99
+    attack: "T1014"
+    for: [c]
+    if:
+      type: ast
+      node: declaration
+      exact: "sys_call_table"
+
+  - id: task-struct-decl
+    desc: Task structure access (process manipulation)
+    crit: suspicious
+    conf: 0.9
+    for: [c]
+    if:
+      type: ast
+      node: declaration
+      exact: "task_struct"
+
+  - id: cred-struct-decl
+    desc: Credential structure access (privilege escalation)
+    crit: suspicious
+    conf: 0.95
+    for: [c]
+    if:
+      type: ast
+      node: declaration
+      exact: "struct cred"
+
+  - id: linux-dirent-decl
+    desc: Directory entry structure (file/process hiding)
+    crit: suspicious
+    conf: 0.95
+    for: [c]
+    if:
+      type: ast
+      node: declaration
+      exact: "linux_dirent"
+
+  - id: pt-regs-decl
+    desc: Register state structure (syscall interception)
+    crit: suspicious
+    conf: 0.85
+    for: [c]
+    if:
+      type: ast
+      node: declaration
+      exact: "pt_regs"
+
+  # ============================================================
+  # EXPRESSION PATTERNS
+  # ============================================================
+
+  - id: syscall-number-ref
+    desc: Direct syscall number reference (syscall
+    crit: suspicious
+    conf: 0.9
+    for: [c]
+    if:
+      type: ast
+      kind: binary_op
+      exact: "__NR_"
+
+  - id: proc-root-ino-ref
+    desc: Proc filesystem root inode (process
+    crit: suspicious
+    conf: 0.95
+    for: [c]
+    if:
+      type: ast
+      kind: binary_op
+      exact: "PROC_ROOT_INO"
+
+  - id: cr0-wp-bit-manipulation
+    desc: CR0 write-protect bit manipulation
+    crit: suspicious
+    conf: 0.99
+    for: [c]
+    if:
+      type: ast
+      kind: binary_op
+      exact: "0x00010000"
+
+  - id: this-module-ref
+    desc: Kernel module self-reference (module hiding)
+    crit: suspicious
+    conf: 0.9
+    for: [c]
+    if:
+      type: ast
+      kind: attribute
+      exact: "THIS_MODULE"
+
+  # ============================================================
+  # RETURN VALUE MANIPULATION
+  # ============================================================
+
+  - id: esrch-return
+    desc: Return -ESRCH (no such process
+    crit: suspicious
+    conf: 0.8
+    for: [c]
+    if:
+      type: ast
+      node: return_statement
+      exact: "ESRCH"
+
+  - id: error-code-return
+    desc: Kernel error code return
+    crit: notable
+    conf: 0.6
+    for: [c]
+    if:
+      type: ast
+      node: return_statement
+      regex: "-E[A-Z]+"
+
+  # ============================================================
+  # KERNEL MODULE LOADING (FILELESS) - micro-behaviors
+  # ============================================================
+
+  # memfd-create-call: use micro-behaviors/mem/anonymous/create::memfd-create (canonical)
+
+  - id: sys-memfd-create-ref
+    desc: SYS_memfd_create syscall reference
+    crit: suspicious
+    conf: 0.95
+    for: [elf]
+    if:
+      type: string
+      substr: "SYS_memfd_create"
+
+  - id: finit-module-call
+    desc: finit_module function call
+    crit: suspicious
+    conf: 0.95
+    for: [elf, c]
+    if:
+      type: symbol
+      regex: "finit_module"
+
+  - id: sys-finit-module-ref
+    desc: SYS_finit_module syscall reference
+    crit: suspicious
+    conf: 0.95
+    for: [elf, c]
+    if:
+      type: string
+      substr: "SYS_finit_module"
+
+  # ============================================================
+  # MEMORY PROTECTION BYPASS (PTE) - micro-behaviors
+  # ============================================================
+
+  - id: lookup-address-call
+    desc: lookup_address kernel function call
+    crit: suspicious
+    conf: 0.9
+    for: [c]
+    if:
+      type: ast
+      kind: call
+      exact: "lookup_address"
+
+  - id: page-rw-flag
+    desc: _PAGE_RW memory protection flag
+    crit: suspicious
+    conf: 0.9
+    for: [c]
+    if:
+      type: string
+      substr: "_PAGE_RW"
+
+  - id: page-nx-flag
+    desc: _PAGE_NX memory protection flag
+    crit: suspicious
+    conf: 0.9
+    for: [c]
+    if:
+      type: string
+      substr: "_PAGE_NX"
+
+  # ============================================================
+  # ELF BINARY PATCHING - micro-behaviors
+  # ============================================================
+
+  - id: elf64-ehdr-decl
+    desc: Elf64_Ehdr structure declaration
+    crit: suspicious
+    conf: 0.85
+    for: [c]
+    if:
+      type: ast
+      node: declaration
+      exact: "Elf64_Ehdr"
+
+  - id: elf64-shdr-decl
+    desc: Elf64_Shdr structure declaration
+    crit: suspicious
+    conf: 0.85
+    for: [c]
+    if:
+      type: ast
+      node: declaration
+      exact: "Elf64_Shdr"
+
+  - id: elf64-phdr-decl
+    desc: Elf64_Phdr structure declaration
+    crit: suspicious
+    conf: 0.85
+    for: [c]
+    if:
+      type: ast
+      node: declaration
+      exact: "Elf64_Phdr"
+
+  - id: elf-entry-field
+    desc: e_entry ELF entry point field
+    crit: suspicious
+    conf: 0.9
+    for: [c]
+    if:
+      type: ast
+      kind: attribute
+      exact: "e_entry"
+
+  - id: patch-string-ref
+    desc: patch string reference
+    crit: notable
+    conf: 0.6
+    for: [c]
+    if:
+      type: string
+      word: "patch"
+
+  # ============================================================
+  # TASK/PROCESS MANIPULATION
+  # ============================================================
+
+  - id: task-flags-manipulation
+    desc: Task flags manipulation (process hiding
+    crit: suspicious
+    conf: 0.98
+    attack: "T1014"
+    for: [c]
+    if:
+      type: ast
+      kind: attribute
+      regex: "task->flags"
+
+  - id: pf-invisible-flag
+    desc: PF_INVISIBLE flag value (0x10000000)
+    crit: suspicious
+    conf: 0.99
+    attack: "T1014"
+    for: [c]
+    if:
+      type: ast
+      kind: binary_op
+      exact: "0x10000000"
+
+  # ============================

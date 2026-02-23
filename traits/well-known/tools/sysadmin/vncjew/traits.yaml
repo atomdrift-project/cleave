@@ -1,0 +1,26 @@
+# Malware Family - VNCJew Scanner
+# ATT&CK: T1046 (Network Service Scanning)
+
+traits:
+  - id: read-vncs
+    desc: VNCJew VNC reader function
+    crit: suspicious
+    conf: 0.95
+    attack: "T1046"
+    for: [elf]
+    if:
+      type: string
+      substr: "readVNCs"
+
+composite_rules:
+  - id: vncjew-detected
+    desc: VNCJew VNC scanner
+    crit: suspicious
+    conf: 0.95
+    attack: "T1046"
+    mbc: "B0046"
+    for: [elf]
+    all:
+      - id: read-vncs
+      - id: micro-behaviors/os/firewall/iptables::iptables
+      - id: well-known/tools/offensive::masscan-ref

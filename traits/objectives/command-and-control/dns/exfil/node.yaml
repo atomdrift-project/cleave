@@ -1,0 +1,55 @@
+# DNS-based C2 and Exfiltration Traits (Node.js) - Composites Only
+# Detects DNS tunneling and data exfiltration via DNS queries
+# MBC: C0002 (DNS Communication), E1591 (Data Exfiltration)
+# ATT&CK: T1071.004 (DNS), T1048 (Exfiltration Over Alternative Protocol)
+#
+# Note: Atomic traits moved to appropriate micro-trait directories:
+# - DNS traits: micro-behaviors/communications/dns/lookup/txt/ (by record type)
+# - Crypto traits: micro-behaviors/crypto/symmetric/aes/node/
+# This file contains only behavioral composites that indicate command-and-control/exfiltration usage
+
+defaults:
+  for: [javascript, typescript]
+  attack: "T1071.004"
+  mbc: "C0002"
+
+composite_rules:
+  - id: dns-resolve
+    desc: Node.js DNS resolve function (potential C2)
+    crit: notable
+    conf: 0.8
+    any:
+      - id: micro-behaviors/communications/dns/lookup
+      - id: micro-behaviors/communications/dns/lookup/txt
+
+  - id: dns-resolve-txt
+    desc: DNS TXT record resolution (common C2 channel)
+    crit: suspicious
+    conf: 0.9
+    mbc: "C0002"
+    attack: "T1071.004"
+    all:
+      - id: micro-behaviors/communications/dns/lookup/txt
+
+  # DNS with crypto (migrated from YARA)
+  - id: dns-with-crypto
+    desc: DNS combined with encryption (encrypted C2)
+    crit: suspicious
+    conf: 0.9
+    mbc: "C0002"
+    attack: "T1573"
+    all:
+      - id: dns-resolve-txt
+      - id: micro-behaviors/crypto/symmetric/aes
+
+  # DNS polling loop (migrated from YARA)
+  - id: dns-polling-loop
+    desc: DNS polling loop (C2 beacon pattern)
+    crit: suspicious
+    conf: 0.85
+    mbc: "C0002"
+    attack: "T1071.004"
+    all:
+      - id: dns-resolve-txt
+    any:
+      - id: micro-behaviors/time/schedule/interval

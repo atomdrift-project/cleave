@@ -1,0 +1,10 @@
+defaults:
+  for: [all]
+
+traits:
+  - id: activex-object
+    desc: ActiveXObject string presence
+    crit: baseline
+    if:
+      type: raw
+      substr: "ActiveXObject"

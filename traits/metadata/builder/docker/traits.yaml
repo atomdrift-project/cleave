@@ -1,0 +1,44 @@
+# Build System - DOCKER
+
+defaults:
+  for: [all]
+
+traits:
+  # === Docker micro-behaviors ===
+  - id: dockerfile
+    desc: Dockerfile
+    crit: notable
+    conf: 0.8
+    if:
+      type: string
+      substr: "Dockerfile"
+
+  - id: docker-env-prefix
+    desc: DOCKER_ environment prefix
+    crit: notable
+    conf: 0.8
+    if:
+      type: string
+      regex: "DOCKER_"
+
+  # Removed dockerenv duplicate - use micro-behaviors/os/container/runtime::dockerenv
+
+  - id: docker-entrypoint
+    desc: /docker-entrypoint path
+    crit: notable
+    conf: 0.8
+    if:
+      type: string
+      substr: "/docker-entrypoint"
+
+composite_rules:
+  # Docker composite (migrated from YARA)
+  - id: docker
+    desc: Built in Docker container
+    crit: notable
+    conf: 0.8
+    any:
+      - id: dockerfile
+      - id: docker-env-prefix
+      - id: micro-behaviors/os/container/runtime::dockerenv
+      - id: docker-entrypoint

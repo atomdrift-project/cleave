@@ -1,0 +1,15 @@
+# Temporary Directory Operations - macOS
+# MBC: E1083 (File and Directory Discovery)
+# ATT&CK: T1083
+
+defaults:
+  for: [all]
+
+traits:
+  - id: directory-cocoa
+    desc: Look up temp directory via
+    crit: baseline
+    conf: 0.66
+    if:
+      type: string
+      substr: NSTemporaryDirectory

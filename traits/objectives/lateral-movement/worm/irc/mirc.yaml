@@ -1,0 +1,9 @@
+composite_rules:
+  - id: mirc-worm
+    description: "Detects mIRC worm behavior modifying script.ini to spread via IRC"
+    crit: hostile
+    attack: T1571
+    all:
+      - id: micro-behaviors/fs/path/application::mirc-config-file
+      - id: micro-behaviors/communications/protocol/irc::mirc-script-cmd
+      - id: micro-behaviors/communications/protocol/irc::mirc-script-event

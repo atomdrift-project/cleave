@@ -1,0 +1,401 @@
+traits:
+- id: node-os-hostname
+  desc: Hostname collection via os module
+  crit: notable
+  conf: 0.8
+  attack: T1082
+  for:
+  - javascript
+  - typescript
+  if:
+    type: ast
+    kind: call
+    exact: os.hostname
+- id: node-os-platform
+  desc: Platform detection via os module
+  crit: notable
+  conf: 0.75
+  attack: T1082
+  for:
+  - javascript
+  - typescript
+  if:
+    type: ast
+    kind: call
+    exact: os.platform
+- id: os-arch
+  desc: Architecture detection via os module
+  crit: notable
+  conf: 0.75
+  attack: T1082
+  for:
+  - javascript
+  - typescript
+  if:
+    type: ast
+    kind: call
+    exact: os.arch
+- id: os-release-call
+  desc: OS release version collection
+  crit: notable
+  conf: 0.75
+  attack: T1082
+  for:
+  - javascript
+  - typescript
+  if:
+    type: ast
+    kind: call
+    exact: os.release
+- id: node-os-userInfo
+  desc: User information collection
+  crit: suspicious
+  conf: 0.85
+  attack: T1033
+  for:
+  - javascript
+  - typescript
+  if:
+    type: ast
+    kind: call
+    exact: os.userInfo
+- id: os-cpus
+  desc: CPU information collection
+  crit: notable
+  conf: 0.7
+  attack: T1082
+  for:
+  - javascript
+  - typescript
+  if:
+    type: ast
+    kind: call
+    exact: os.cpus
+- id: os-totalmem
+  desc: Total memory collection
+  crit: notable
+  conf: 0.7
+  attack: T1082
+  for:
+  - javascript
+  - typescript
+  if:
+    type: ast
+    kind: call
+    exact: os.totalmem
+- id: os-networkInterfaces
+  desc: Network interface enumeration
+  crit: suspicious
+  conf: 0.85
+  attack: T1016
+  for:
+  - javascript
+  - typescript
+  if:
+    type: ast
+    kind: call
+    exact: os.networkInterfaces
+- id: mac-keyword-lower
+  desc: mac keyword (lowercase)
+  crit: notable
+  conf: 0.6
+  for:
+  - javascript
+  - typescript
+  if:
+    type: string
+    word: mac
+- id: mac-keyword-upper
+  desc: MAC keyword (uppercase)
+  crit: notable
+  conf: 0.6
+  for:
+  - javascript
+  - typescript
+  if:
+    type: string
+    word: MAC
+- id: mac-address-regex
+  desc: MAC address regex pattern
+  crit: notable
+  conf: 0.7
+  for:
+  - javascript
+  - typescript
+  if:
+    type: string
+    regex: '[0-9a-fA-F]{2}(:[0-9a-fA-F]{2}){5}'
+- id: internal-filter-keyword
+  desc: internal network interface filter keyword
+  crit: notable
+  conf: 0.5
+  for:
+  - javascript
+  - typescript
+  if:
+    type: string
+    regex: 'internal.{0,30}(IPv[46]|family|address)|networkInterfaces.{0,200}internal'
+- id: createhash-call
+  desc: crypto.createHash call
+  crit: notable
+  conf: 0.6
+  for:
+  - javascript
+  - typescript
+  if:
+    type: string
+    substr: createHash
+- id: sha256-keyword
+  desc: sha256 hash algorithm
+  crit: notable
+  conf: 0.6
+  for:
+  - javascript
+  - typescript
+  if:
+    type: string
+    word: sha256
+- id: md5-keyword
+  desc: md5 hash algorithm
+  crit: notable
+  conf: 0.6
+  for:
+  - javascript
+  - typescript
+  if:
+    type: string
+    word: md5
+- id: userinfo-keyword
+  desc: userInfo keyword
+  crit: notable
+  conf: 0.5
+  for:
+  - javascript
+  - typescript
+  if:
+    type: string
+    word: userInfo
+- id: networkinterfaces-keyword
+  desc: networkInterfaces keyword
+  crit: notable
+  conf: 0.6
+  for:
+  - javascript
+  - typescript
+  if:
+    type: string
+    word: networkInterfaces
+- id: json-stringify-call
+  desc: JSON.stringify call
+  crit: notable
+  conf: 0.5
+  for:
+  - javascript
+  - typescript
+  if:
+    type: string
+    substr: JSON.stringify
+- id: object-keys-call
+  desc: Object.keys call
+  crit: notable
+  conf: 0.5
+  for:
+  - javascript
+  - typescript
+  if:
+    type: string
+    substr: Object.keys
+    count_min: 3
+- id: object-entries-call
+  desc: Object.entries call
+  crit: notable
+  conf: 0.5
+  for:
+  - javascript
+  - typescript
+  if:
+    type: string
+    substr: Object.entries
+- id: get-process-cmd
+  desc: PowerShell Get-Process
+  crit: notable
+  conf: 0.7
+  mbc: E1592
+  attack: T1057
+  for:
+  - javascript
+  - typescript
+  if:
+    type: string
+    substr: Get-Process
+  unless:
+  - id: metadata/library/syntaxhighlighter::syntaxhighlighter-brush
+- id: process-env-keys-entries
+  desc: process.env keys/entries enumeration
+  crit: notable
+  conf: 0.75
+  for:
+  - javascript
+  - typescript
+  if:
+    type: string
+    regex: Object\.(keys|entries)\s*\(\s*process\.env\s*\)
+- id: process-env-json-stringify
+  desc: process.env serialized as JSON
+  crit: notable
+  conf: 0.75
+  for:
+  - javascript
+  - typescript
+  if:
+    type: string
+    regex: JSON\.stringify\s*\(\s*process\.env\s*\)
+composite_rules:
+- id: process-env-serialization
+  desc: process.env serialization call
+  crit: notable
+  conf: 0.75
+  for:
+  - javascript
+  - typescript
+  any:
+  - id: process-env-keys-entries
+  - id: process-env-json-stringify
+- id: mac-keyword-variants
+  desc: MAC keyword variants
+  for:
+  - javascript
+  - typescript
+  any:
+  - id: mac-keyword-lower
+  - id: mac-keyword-upper
+  crit: notable
+- id: mac-patterns
+  desc: MAC address patterns
+  for:
+  - javascript
+  - typescript
+  any:
+  - id: mac-keyword-variants
+  - id: mac-address-regex
+  - id: internal-filter-keyword
+  crit: notable
+- id: hash-algorithms
+  desc: Hash algorithm keywords
+  for:
+  - javascript
+  - typescript
+  any:
+  - id: sha256-keyword
+  - id: md5-keyword
+  crit: notable
+- id: system-id-sources
+  desc: System identification sources
+  for:
+  - javascript
+  - typescript
+  any:
+  - id: objectives/discovery/host/system/hardware-fingerprint::os-hostname-call
+  - id: userinfo-keyword
+  - id: networkinterfaces-keyword
+  crit: notable
+- id: object-serialization
+  desc: Object serialization methods
+  for:
+  - javascript
+  - typescript
+  any:
+  - id: json-stringify-call
+  - id: object-keys-call
+  - id: object-entries-call
+  crit: notable
+- id: all-os-methods
+  desc: All os module methods
+  for:
+  - javascript
+  - typescript
+  any:
+  - id: node-os-hostname
+  - id: node-os-platform
+  - id: os-arch
+  - id: os-release-call
+  - id: node-os-userInfo
+  - id: os-cpus
+  - id: os-totalmem
+  - id: os-networkInterfaces
+  crit: notable
+- id: mac-address
+  desc: MAC address extraction pattern
+  crit: suspicious
+  conf: 0.9
+  mbc: E1592
+  attack: T1016
+  for:
+  - javascript
+  - typescript
+  all:
+  - id: os-networkInterfaces
+  - id: mac-patterns
+- id: machine-id-generation
+  desc: Machine unique identifier generation
+  crit: notable
+  conf: 0.85
+  mbc: E1592
+  attack: T1082
+  for:
+  - javascript
+  - typescript
+  all:
+  - id: createhash-call
+  - id: hash-algorithms
+  - id: system-id-sources
+    needs: 2
+- id: full-fingerprint
+  desc: Comprehensive system fingerprinting (multiple vectors)
+  crit: suspicious
+  conf: 0.9
+  mbc: E1592
+  attack: T1082
+  for:
+  - javascript
+  - typescript
+  needs: 4
+  any:
+  - id: node-os-hostname
+  - id: node-os-platform
+  - id: os-arch
+  - id: os-release-call
+  - id: node-os-userInfo
+  - id: os-cpus
+  - id: os-totalmem
+  - id: os-networkInterfaces
+  - id: objectives/discovery/system/hardware/display::display-resolution-discovery
+  - id: objectives/discovery/system/locale
+- id: process-env-dump
+  desc: Full environment variable dump
+  crit: suspicious
+  conf: 0.85
+  mbc: E1592
+  attack: T1082
+  for:
+  - javascript
+  - typescript
+  all:
+  - id: micro-behaviors/os/env/access::javascript
+  - id: process-env-serialization
+- id: process-list
+  desc: Running process enumeration
+  crit: suspicious
+  conf: 0.9
+  mbc: E1592
+  attack: T1057
+  for:
+  - javascript
+  - typescript
+  any:
+  - id: micro-behaviors/process/enumerate/shell::tasklist
+  - id: micro-behaviors/process/enumerate/shell::ps-aux
+  - id: micro-behaviors/process/enumerate/shell::ps-ef
+  - id: get-process-cmd
+  unless:
+  - id: metadata/library/syntaxhighlighter::syntaxhighlighter-brush

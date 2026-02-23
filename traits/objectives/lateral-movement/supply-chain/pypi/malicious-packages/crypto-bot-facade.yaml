@@ -1,0 +1,183 @@
+# Crypto Bot Facade Malware Detection
+# Detects fake crypto trading bots used to distribute malware
+# Common pattern: legitimate-looking trading code + malicious helper imports
+# ATT&CK: T1204 (User Execution), T1195.002 (Supply Chain Compromise)
+# MBC: B0024 (Dropper)
+
+defaults:
+  crit: suspicious
+  mbc: "B0024"
+  attack: "T1204"
+  for: [python]
+
+traits:
+  # === Wildcard Import Patterns ===
+  - id: wildcard-import-helpers
+    desc: Wildcard import from helpers
+    crit: suspicious
+    conf: 0.75
+    if:
+      type: raw
+      regex: "from\\s+helpers\\.[a-zA-Z_]+\\s+import\\s+\\*"
+
+  - id: wildcard-import-server
+    desc: Wildcard import from server module
+    crit: suspicious
+    conf: 0.75
+    if:
+      type: raw
+      regex: "from\\s+[a-zA-Z_.]+server\\s+import\\s+\\*"
+
+  - id: wildcard-import-utils
+    desc: Wildcard import from utils module
+    crit: notable
+    conf: 0.60
+    if:
+      type: raw
+      regex: "from\\s+([a-zA-Z_]{1,30}\\.){0,6}utils\\s+import\\s+\\*"
+
+  # === Crypto Trading Terminology ===
+  - id: defi-protocol-ref-1
+    desc: DeFi protocol (uniswap/sushiswap/pancakeswap)
+    if:
+      id: micro-behaviors/data/text/crypto/trading::defi-protocol-dex
+
+  - id: defi-protocol-ref-2
+    desc: DeFi protocol (curve/aave/compound)
+    if:
+      id: micro-behaviors/data/text/crypto/trading::defi-protocol-lending
+
+  - id: token-swap-pattern-1
+    desc: Token swap (getReserves/calculatePrice/getPair)
+    if:
+      id: micro-behaviors/data/text/crypto/trading::contract-query
+
+  - id: token-swap-pattern-2
+    desc: Token swap (swapExact/swap_tokens)
+    if:
+      id: micro-behaviors/data/text/crypto/trading::swap-operations
+
+  - id: arbitrage-terms-1
+    desc: Arbitrage (arbitrage/arb_for/arb_against)
+    if:
+      id: micro-behaviors/data/text/crypto/trading::arbitrage-terms
+
+  - id: arbitrage-terms-2
+    desc: Arbitrage (price_difference/flash_loan)
+    if:
+      id: micro-behaviors/data/text/crypto/trading::arbitrage-terms
+
+  - id: web3-provider
+    desc: Web3 provider usage
+    crit: notable
+    conf: 0.50
+    if:
+      type: string
+      regex: "(from\\s+web3\\s+import|Web3\\(|provider\\.eth)"
+
+  - id: meme-token-keywords-1
+    desc: Meme token (meme token/token hunter)
+    if:
+      type: string
+      regex: "(?i)(meme.?token|token.?hunter)"
+
+  - id: meme-token-keywords-2
+    desc: Meme token (sniper bot/trading bot)
+    if:
+      type: string
+      regex: "(?i)(sniper.?bot|trading.?bot)"
+
+  # === Suspicious Helper Patterns ===
+  - id: helper-subprocess-exec
+    desc: Helper with subprocess execution
+    crit: suspicious
+    conf: 0.80
+    if:
+      type: string
+      regex: "helper.{0,20}subprocess\\.(run|Popen|call)"
+
+  - id: helper-os-system
+    desc: Helper with os.system execution
+    crit: suspicious
+    conf: 0.80
+    if:
+      type: string
+      regex: "helper.{0,20}os\\.system"
+
+composite_rules:
+  # === Helper composites ===
+  - id: defi-protocol-ref
+    desc: DeFi protocol references
+    crit: notable
+    conf: 0.50
+    any:
+      - id: defi-protocol-ref-1
+      - id: defi-protocol-ref-2
+
+  - id: token-swap-pattern
+    desc: Token swap operation patterns
+    crit: notable
+    conf: 0.50
+    any:
+      - id: token-swap-pattern-1
+      - id: token-swap-pattern-2
+
+  - id: arbitrage-terms
+    desc: Arbitrage trading terms
+    crit: notable
+    conf: 0.50
+    any:
+      - id: arbitrage-terms-1
+      - id: arbitrage-terms-2
+
+  - id: meme-token-keywords
+    desc: Meme token related keywords
+    crit: notable
+    conf: 0.50
+    any:
+      - id: meme-token-keywords-1
+      - id: meme-token-keywords-2
+
+  - id: wildcard-imports
+    desc: Wildcard import patterns
+    any:
+      - id: wildcard-import-helpers
+      - id: wildcard-import-server
+      - id: wildcard-import-utils
+
+  - id: crypto-trading-facade
+    desc: Crypto trading code patterns
+    needs: 2
+    any:
+      - id: defi-protocol-ref
+      - id: token-swap-pattern
+      - id: arbitrage-terms
+      - id: web3-provider
+      - id: meme-token-keywords
+
+  # === Main Detection Rules ===
+  - id: crypto-facade-with-wildcard
+    desc: Crypto trading facade with wildcard
+    crit: suspicious
+    conf: 0.85
+    attack: "T1204"
+    all:
+      - id: wildcard-imports
+      - id: crypto-trading-facade
+
+  # === HOSTILE: Crypto Bot Facade with Execution ===
+  - id: crypto-bot-dropper-facade
+    desc: Crypto bot facade with dropper
+    crit: hostile
+    conf: 0.92
+    mbc: "B0024"
+    attack: "T1195.002"
+    for: [python]
+    all:
+      - id: wildcard-imports
+      - id: crypto-trading-facade
+    any:
+      - id: helper-subprocess-exec
+      - id: helper-os-system
+      - id: micro-behaviors/process/create/subprocess::run-ast
+      - id: micro-behaviors/process/create/shell::python-os-system

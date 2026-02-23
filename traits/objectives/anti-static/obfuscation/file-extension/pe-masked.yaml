@@ -1,0 +1,82 @@
+defaults:
+  for: [all]
+  crit: suspicious
+  conf: 1.0
+
+traits:
+  - id: image-dot-jpg
+    desc: Image extension marker .jpg.
+    crit: suspicious
+    if:
+      type: basename
+      substr: ".jpg."
+
+  - id: image-dot-jpeg
+    desc: Image extension marker .jpeg.
+    crit: suspicious
+    if:
+      type: basename
+      substr: ".jpeg."
+
+  - id: image-dot-png
+    desc: Image extension marker .png.
+    crit: suspicious
+    if:
+      type: basename
+      substr: ".png."
+
+  - id: image-dot-gif
+    desc: Image extension marker .gif.
+    crit: suspicious
+    if:
+      type: basename
+      substr: ".gif."
+
+  - id: image-dot-bmp
+    desc: Image extension marker .bmp.
+    crit: suspicious
+    if:
+      type: basename
+      substr: ".bmp."
+
+  - id: image-dot-ico
+    desc: Image extension marker .ico.
+    crit: suspicious
+    if:
+      type: basename
+      substr: ".ico."
+
+  - id: image-dot-svg
+    desc: Image extension marker .svg.
+    crit: suspicious
+    if:
+      type: basename
+      substr: ".svg."
+
+  - id: image-dot-webp
+    desc: Image extension marker .webp.
+    crit: suspicious
+    if:
+      type: basename
+      substr: ".webp."
+
+composite_rules:
+  - id: image-double-extension-prefix
+    desc: Filename contains image extension before final extension
+    crit: suspicious
+    any:
+      - id: image-dot-jpg
+      - id: image-dot-jpeg
+      - id: image-dot-png
+      - id: image-dot-gif
+      - id: image-dot-bmp
+      - id: image-dot-ico
+      - id: image-dot-svg
+      - id: image-dot-webp
+
+  - id: pe-masked-as-image
+    desc: PE file disguised with an image extension
+    all:
+      - id: metadata/format/magic::pe-dos-stub
+      - id: image-double-extension-prefix
+      - id: metadata/format/extension::windows-executable

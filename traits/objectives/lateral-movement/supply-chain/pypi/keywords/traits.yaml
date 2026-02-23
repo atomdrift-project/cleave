@@ -1,0 +1,54 @@
+defaults:
+  crit: notable
+  attack: T1036.005
+  mbc: F0004
+  for: [all]
+traits:
+- id: empty-keywords
+  desc: Empty keywords list
+  crit: notable
+  conf: 0.5
+  if:
+    type: string
+    regex: keywords.{0,50}=.{0,50}\[\]
+- id: typosquatting-keyword
+  desc: Keywords containing typosquatting
+  crit: suspicious
+  conf: 0.95
+  attack: T1036.005
+  mbc: F0004
+  if:
+    type: string
+    word: typosquatting
+- id: pkginfo-single-generic-keyword
+  desc: PKG-INFO with single generic keyword
+  crit: notable
+  conf: 0.7
+  for: [pkginfo, python, pyproject.toml]
+  if:
+    type: kv
+    path: keywords
+    regex: ^[a-zA-Z]{2,15}$
+- id: malware-keyword-in-keywords-1
+  desc: Malware term in keywords (trojan/backdoor/rootkit/exploit)
+  if:
+    type: kv
+    path: keywords
+    case_insensitive: true
+    regex: (trojan|backdoor|rootkit|exploit)
+- id: malware-keyword-in-keywords-2
+  desc: Malware term in keywords (payload/stealer/malware/keylog)
+  if:
+    type: kv
+    path: keywords
+    case_insensitive: true
+    regex: (payload|stealer|malware|keylog)
+composite_rules:
+- id: malware-keyword-in-keywords
+  desc: Malware-related term in Keywords field
+  crit: suspicious
+  conf: 0.9
+  attack: T1036.005
+  any:
+    - id: malware-keyword-in-keywords-1
+    - id: malware-keyword-in-keywords-2

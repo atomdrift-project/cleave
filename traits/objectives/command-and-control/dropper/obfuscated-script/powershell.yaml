@@ -1,0 +1,53 @@
+# PowerShell Dropper Objective
+# Combines PowerShell obfuscation techniques with dropper behavior
+# MBC: B0030 (Dropper), C0002 (Download)
+# ATT&CK: T1059.001, T1105
+
+composite_rules:
+  # Obfuscated PowerShell dropper (download + execute + obfuscation)
+  # Complexity: all(2) + any(1) + file_types(1) = 4
+  - id: obfuscated-dropper
+    desc: Obfuscated PowerShell dropper
+    crit: suspicious
+    conf: 0.95
+    mbc: "B0030"
+    attack: "T1059.001"
+    for: [batch, shell, powershell]
+    all:
+      - id: objectives/execution/interpreter/eval/invoke::iex
+      - id: objectives/execution/dropper/script::powershell-exe
+      - id: objectives/anti-static/obfuscation/strings/concatenation::ps-chararray-obfuscation
+
+  # Evasive PowerShell dropper (bypass + obfuscation)
+  # Complexity: all(3) + any(1) = 4
+  - id: evasive-dropper
+    desc: Evasive PowerShell dropper
+    crit: hostile
+    conf: 0.95
+    mbc: "B0030"
+    attack: "T1059.001"
+    for: [batch, shell, powershell]
+    all:
+      - id: objectives/anti-static/obfuscation/strings/concatenation::ps-ep-bypass
+      - id: objectives/execution/interpreter/eval/invoke::iex
+      - id: objectives/execution/dropper/script::powershell-exe
+    any:
+      - id: objectives/anti-static/obfuscation/strings/concatenation::ps-chararray-obfuscation
+      - id: objectives/execution/dropper/script::powershell-download-cradle
+
+  # PowerShell dropper with cleanup (download + execute + self-delete)
+  # Complexity: all(3) + any(1) = 4
+  - id: dropper-with-cleanup
+    desc: Dropper with anti-forensics
+    crit: hostile
+    conf: 0.95
+    mbc: "B0030"
+    attack: "T1070.004"
+    for: [batch, shell, powershell]
+    all:
+      - id: objectives/evasion/self-delete/file::remove-item
+      - id: objectives/execution/dropper/script::powershell-exe
+      - id: objectives/execution/interpreter/eval/invoke::iex
+    any:
+      - id: objectives/execution/dropper/script::powershell-download-cradle
+      - id: micro-behaviors/communications/http/lib/invoke-webrequest::download

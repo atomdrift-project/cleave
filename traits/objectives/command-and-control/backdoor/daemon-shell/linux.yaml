@@ -1,0 +1,63 @@
+# Daemon-based Shell Backdoor (Linux)
+# GAP #1: HOSTILE composite rule for daemon + shell execution + obfuscation
+# This pattern has NO legitimate use - it's always malware
+# ATT&CK: T1059 (Command and Scripting Interpreter), T1543 (Create or Modify System Process)
+
+defaults:
+  for: [elf]
+  platforms: [linux, unix]
+  attack: "T1059"
+  mbc: "B0009"
+
+composite_rules:
+  # GAP #1: Linux version of the critical missing rule
+  # Combines: daemon (fork+setsid) + shell exec (popen/system) + obfuscation
+  # Precision: all(3) + for(1) + any(2 min 1) = 5 (well above 4.0 threshold)
+  - id: linux-daemon-shell-backdoor
+    desc: "Daemon-based shell command backdoor"
+    crit: hostile
+    conf: 0.95
+    attack: "T1059,T1543"
+    mbc: "B0009,F0006"
+    all:
+      # Daemon persistence
+      - id: objectives/persistence/daemon/init::daemon-fork
+      - id: objectives/persistence/daemon/init::daemon-setsid
+      # Shell command execution
+      - id: micro-behaviors/process/create/shell
+    # Obfuscation or frequency indicators
+    any:
+      - id: objectives/anti-static/obfuscation/payload::tiny-cstring
+      - id: micro-behaviors/process/create/shell::excessive-popen
+      - id: objectives/anti-static/obfuscation/payload::high-entropy-data-section
+
+  # Includes XOR-encoded commands
+  - id: linux-obfuscated-daemon-backdoor
+    desc: "Obfuscated daemon backdoor with encoded"
+    crit: hostile
+    conf: 0.98
+    attack: "T1027,T1059,T1543"
+    all:
+      - id: objectives/persistence/daemon/init::daemon-fork
+      - id: objectives/persistence/daemon/init::daemon-setsid
+      - id: micro-behaviors/process/create/shell
+
+  # Extreme case: high-volume command execution
+  - id: linux-command-orchestration-backdoor
+    desc: "Command orchestration backdoor daemon"
+    crit: hostile
+    conf: 0.98
+    attack: "T1059,T1543"
+    all:
+      - id: linux-daemon-shell-backdoor
+      - id: micro-behaviors/process/create/shell::extreme-popen
+
+  # Data-heavy backdoor with encoded payload
+  - id: linux-payload-dropper-daemon
+    desc: "Payload dropper daemon backdoor"
+    crit: hostile
+    conf: 0.95
+    attack: "T1059,T1543,T1105"
+    all:
+      - id: linux-daemon-shell-backdoor
+      - id: objectives/anti-static/obfuscation/payload::encrypted-payload-section

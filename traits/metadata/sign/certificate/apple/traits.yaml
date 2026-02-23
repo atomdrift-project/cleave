@@ -1,0 +1,66 @@
+# Apple Certificate String Detection
+# Detects certificate-related strings in Mach-O binaries
+
+defaults:
+  platforms: [macos]
+  for: [macho]
+
+traits:
+  - id: apple-development
+    desc: Apple Development certificate
+    crit: baseline
+    conf: 0.7
+    if:
+      type: string
+      substr: "Apple Development"
+
+  - id: apple-distribution
+    desc: Apple Distribution certificate
+    crit: baseline
+    conf: 0.7
+    if:
+      type: string
+      substr: "Apple Distribution"
+
+  - id: developer-id
+    desc: Developer ID certificate
+    crit: baseline
+    conf: 0.7
+    if:
+      type: string
+      substr: "Developer ID"
+
+  # === Codesign requirement atomic indicators ===
+  - id: anchor-apple
+    desc: anchor apple requirement
+    crit: baseline
+    conf: 0.7
+    if:
+      type: string
+      substr: "anchor apple"
+
+  - id: certificate-leaf
+    desc: certificate leaf requirement
+    crit: baseline
+    conf: 0.7
+    if:
+      type: string
+      substr: "certificate leaf"
+
+composite_rules:
+  - id: signed
+    desc: Apple code signature markers
+    crit: baseline
+    conf: 0.85
+    any:
+      - id: apple-development
+      - id: apple-distribution
+      - id: developer-id
+
+  - id: codesign-requirement
+    desc: Code signature requirement blob
+    crit: baseline
+    conf: 0.9
+    any:
+      - id: anchor-apple
+      - id: certificate-leaf

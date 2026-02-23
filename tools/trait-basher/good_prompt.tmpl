@@ -1,0 +1,115 @@
+# Known-Good Sample: {{if .IsValidationSample}}Validation Audit{{else}}False Positive Reduction{{end}}
+
+{{if .IsArchive}}**Archive**: {{.ArchiveName}} ({{.Count}} files with concerning findings)
+{{range .Files}}- {{.Path}}{{if .Summary}} — {{.Summary}}{{end}}
+{{end}}{{else}}**File**: {{.Path}}
+{{end}}
+
+**Your Role**: Security engineer improving flayer detection accuracy.
+
+{{if .IsValidationSample}}**Goal**: This file passed normal thresholds (random validation audit). Verify there are no sneaky false positives, misleading findings (even baseline/component ones), or taxonomy violations hiding in the output.
+{{else}}**Goal**: Eliminate inaccurate or misleading detections on this known-benign file while preserving genuinely accurate findings.
+{{end}}
+
+---
+
+## Current Status
+
+{{if .IsValidationSample}}🔍 **Validation Sample** — This file passed normal review thresholds. Audit ALL findings for accuracy:
+- Are there any false positives hiding at lower criticality levels?
+- Are any findings misleading about what the file actually does?
+- Are traits placed in the correct directories per TAXONOMY.md?
+- Are any baseline/component findings inaccurate or mischaracterizing the file?
+{{else}}{{if .HasHostileFindings}}🔴 **Hostile findings present** — These MUST be eliminated. Hostile criticality means unquestionably malicious behavior.
+{{end}}{{if .HasSuspiciousFindings}}🟡 **Suspicious findings present** — Review each one. Some may be legitimate for this tool's purpose.
+{{end}}{{end}}
+
+{{if .HasRelatedBadReport}}**Context**: This file also appears in a bad collection. Review malware analysis at `{{.RelatedBadReportPath}}` to understand if the file has malicious variants or was misclassified.
+{{end}}
+
+## Your Task
+
+### Step 1: Understand the File
+
+Determine the file's legitimate purpose:
+```bash
+{{.flayerBin}} strings {{.Path}}
+{{.flayerBin}} --validate=true --format jsonl {{.Path}}
+```
+
+### Step 2: Evaluate {{if .IsValidationSample}}All Findings{{else}}Each Finding{{end}}
+
+{{if .IsValidationSample}}Audit every finding at ALL criticality levels (hostile, suspicious, notable, AND baseline/component):
+{{else}}For each hostile or suspicious finding:
+{{end}}
+
+**Is it technically accurate?**
+- Does the file actually exhibit this behavior?
+- Is the trait detecting what it claims?
+
+**Is it misleading in this context?**
+- Is this behavior expected for this tool type?
+- Example: Process manager killing processes is notable, not hostile
+{{if .IsValidationSample}}
+**Is it in the correct taxonomy location?**
+- Check trait paths against TAXONOMY.md
+- `micro-behaviors/` traits must NOT reference `objectives/` traits
+- Intent-based detections belong in `objectives/`, not `micro-behaviors/`
+{{end}}
+
+### Step 3: Fix Strategy
+
+Prefer improving poorly-written traits for better signal than deleting them.
+
+**A. Improve the trait** (preferred - improves precision):
+- Some traits are poorly written or incomplete - find ways to address the inaccuracy by improving how it matches programs
+- Consider adding constraits like `near`, `count_min`, `size_min`, `for` - see RULES.md for details!
+- Upgrade pattern type to a more specific matcher: raw → string → symbol → ast (symbol & AST are the most specific matchers)
+- Prefer multiple reusable atomic traits over complex regular expressions (prefer 3 traits over a|b|c regexes).
+- Perfect already but in a misleading subdirectory? Move the trait to more neutral directory in taxonomy within micro-behaviors/ or metadata/
+
+**B. Downgrade criticality** (if the finding is perfect, but contextually not suspicious):
+```yaml
+downgrade:
+  - id: path/to/trait::specific-trait-id
+    to: notable
+    reason: "legitimate use in system administration tools"
+```
+
+**C. Suppress with unless** (use sparingly - workaround):
+```yaml
+unless:
+  - id: some-exclusion-pattern
+```
+Use only when trait is completely inapplicable.
+
+DO NOT EDIT ANY RUST CODE - ONLY .yaml files
+Avoid deleting rules unless it's to move them to a better location - prefer fixing them unless they are hopelessly unhelpful.
+
+### Step 4: Validate & Verify
+
+Run `{{.flayerBin}} --validate=true --format jsonl {{.Path}}` and confirm:
+
+**Required:**
+- ✓ Zero hostile findings
+- ✓ Zero misleading or inaccurate findings (even baseline/component ones)
+- ✓ Suspicious findings ≤1 (acceptable for security/admin tools)
+- ✓ All traits appear to be in the proper subdirectory for what they query for. Relocate them if the subdirectory is misleading (even if you have to update composite rules that depend on it).
+
+**Quality checks:**
+- ✓ Output accurately describes file capabilities - no false positives.
+- ✓ No legitimate behaviors completely hidden (prefer downgrade over unless)
+- ✓ Context-appropriate criticality (`kill()` syscall: suspicious in game, notable in htop)
+- ✓ No trait duplicates (same evidence, same scenario)
+- ✓ Component traits are building blocks, shown only when their composite fires
+- ✓ Baseline/component traits should be accurate; those that describe a program's purpose should be upgraded to notable.
+
+{{if .IsValidationSample}}- ✓ Traits are in correct taxonomy directories per TAXONOMY.md
+{{end}}
+
+{{if .MayBeBad}}
+**⚠️ Misclassification Check**: If analysis reveals this file is actually malicious:
+```bash
+touch {{.BadMarkerPath}}
+```
+{{end}}

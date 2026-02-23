@@ -1,0 +1,9 @@
+# Ruby HTTP Communication
+# Traits for identifying HTTP communication in Ruby
+# NOTE: hardcoded-ip trait moved to micro-behaviors/communications/http/request/ruby.yaml (content type)
+
+defaults:
+  for: [ruby]
+  platforms: [all]
+
+traits: []

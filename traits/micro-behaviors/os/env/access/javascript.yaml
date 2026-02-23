@@ -1,0 +1,22 @@
+traits:
+  - id: javascript
+    desc: Access environment variables
+    crit: notable
+    conf: 0.8
+    for: [javascript, typescript]
+    if:
+      type: ast
+      language: javascript
+      query: |
+        (member_expression
+          object: (identifier) @process
+          property: (property_identifier) @env
+          (#eq? @process "process")
+          (#eq? @env "env")
+        )
+        (subscript_expression
+          object: (identifier) @process
+          index: (string) @env
+          (#eq? @process "process")
+          (#match? @env "env")
+        )

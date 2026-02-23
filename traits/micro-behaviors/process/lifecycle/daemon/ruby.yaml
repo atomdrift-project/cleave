@@ -1,0 +1,12 @@
+# Process Lifecycle - Ruby
+
+traits:
+  - id: ruby-daemon
+    desc: Daemonize process (background)
+    crit: notable
+    conf: 0.93
+    platforms: [all]
+    for: [ruby]
+    if:
+      type: symbol
+      regex: "Process\\.daemon"

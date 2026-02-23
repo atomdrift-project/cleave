@@ -1,0 +1,41 @@
+# Build System - MESON
+
+defaults:
+  for: [all]
+
+traits:
+  # === Meson micro-behaviors ===
+  - id: meson-build
+    desc: meson.build file
+    crit: notable
+    conf: 0.85
+    if:
+      type: string
+      substr: "meson.build"
+
+  - id: meson-options
+    desc: meson_options file
+    crit: notable
+    conf: 0.85
+    if:
+      type: string
+      substr: "meson_options"
+
+  - id: meson-private
+    desc: meson-private directory
+    crit: notable
+    conf: 0.85
+    if:
+      type: string
+      substr: "meson-private"
+
+composite_rules:
+  # Meson composite (migrated from YARA)
+  - id: meson
+    desc: Built with Meson
+    crit: notable
+    conf: 0.85
+    any:
+      - id: meson-build
+      - id: meson-options
+      - id: meson-private

@@ -1,0 +1,61 @@
+# Anti-Forensics Evidence Removal - Windows
+# Detects techniques for removing traces of malicious activity on Windows
+# ATT&CK: T1070 (Indicator Removal), T1562.001 (Impair Defenses)
+# MBC: B0047 (Defense Evasion)
+
+defaults:
+  for: [all]
+  platforms: [windows]
+  mbc: "B0047"
+  attack: "T1562.001"
+
+traits:
+  # MOTW (Mark of the Web) removal via Zone.Identifier stream
+  - id: motw-removal-stream
+    desc: Removes Mark of the Web (Zone.Identifier)
+    crit: suspicious
+    conf: 0.95
+    if:
+      type: raw
+      regex: '(?i)Set-Content.{0,100}Zone\.Identifier.{0,50}Value\s*[''"][''"]'
+
+  - id: unblock-file
+    desc: PowerShell Unblock-File cmdlet
+    crit: notable
+    conf: 0.9
+    for: [powershell, batch, shell]
+    if:
+      type: raw
+      regex: '(?i)Unblock-File'
+
+  # Clearing Event Logs
+  - id: wevtutil-clear
+    desc: Clear event logs via wevtutil
+    crit: suspicious
+    conf: 0.9
+    for: [batch, shell]
+    attack: "T1070.001"
+    if:
+      type: raw
+      regex: '(?i)wevtutil\s+cl\s+'
+
+  - id: powershell-clear-eventlog
+    desc: Clear event logs via PowerShell
+    crit: suspicious
+    conf: 0.9
+    for: [powershell, batch, shell]
+    attack: "T1070.001"
+    if:
+      type: raw
+      regex: '(?i)Clear-EventLog'
+
+composite_rules:
+  - id: windows-indicator-removal
+    desc: Windows indicator and defense removal
+    crit: suspicious
+    conf: 0.9
+    any:
+      - id: motw-removal-stream
+      - id: unblock-file
+      - id: wevtutil-clear
+      - id: powershell-clear-eventlog

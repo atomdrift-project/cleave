@@ -1,0 +1,114 @@
+# Out-of-Band Callback and Interaction Services
+# Detects usage of services designed to collect/log data posted to them
+# Often used for reconnaissance, data exfiltration, or OAST (Out-of-Band Testing)
+# ATT&CK: T1567 (Exfiltration Over Web Service), T1102 (Web Service)
+
+defaults:
+  crit: notable
+  conf: 0.85
+  for: [all]
+
+traits:
+  - id: burpcollaborator
+    desc: Burp Collaborator OOB service
+    if:
+      type: string
+      regex: '([a-z0-9]{8,32}\.)?burpcollaborator\.net\b'
+
+  - id: interact-sh-me-fun
+    desc: interact.sh OOB service (me/fun)
+    if:
+      type: string
+      regex: '([a-z0-9]{8,64}\.)?oast\.(me|fun)\b'
+
+  - id: interact-sh-pro-live
+    desc: interact.sh OOB service (pro/live)
+    if:
+      type: string
+      regex: '([a-z0-9]{8,64}\.)?oast\.(pro|live)\b'
+
+  - id: interact-sh-online-site
+    desc: interact.sh OOB service (online/site)
+    if:
+      type: string
+      regex: '([a-z0-9]{8,64}\.)?oast\.(online|site)\b'
+
+  - id: interactsh-com
+    desc: interactsh.com OOB service
+    if:
+      type: string
+      regex: '([a-z0-9]{8,64}\.)?interactsh\.com\b'
+
+  - id: pipedream
+    desc: Pipedream OOB service
+    if:
+      type: string
+      regex: '([a-z0-9]{8,32}\.)?(m\.)?pipedream\.(net|com)\b'
+
+  - id: dnslog-cn
+    desc: DNSLog.cn OOB service
+    if:
+      type: string
+      regex: '([a-z0-9-]+\.)?dnslog\.cn\b'
+
+  - id: ceye-io
+    desc: ceye.io OOB service
+    if:
+      type: string
+      regex: '([a-z0-9-]+\.)?ceye\.io\b'
+
+  - id: requestbin
+    desc: RequestBin OOB service
+    if:
+      type: string
+      regex: '([a-z0-9-]+\.)?requestbin\.(com|net)\b'
+
+  - id: hookbin
+    desc: HookBin OOB service
+    if:
+      type: string
+      regex: '([a-z0-9-]+\.)?hookbin\.com\b'
+
+  - id: webhook-site
+    desc: webhook.site OOB service
+    if:
+      type: string
+      regex: '([a-z0-9-]+\.)?webhook\.site\b'
+
+  - id: webhook-cool
+    desc: webhook.cool OOB service
+    if:
+      type: string
+      regex: '([a-z0-9-]+\.)?webhook\.cool\b'
+
+  - id: requestrepo
+    desc: RequestRepo OOB service
+    if:
+      type: string
+      regex: '([a-z0-9-]+\.)?requestrepo\.com\b'
+
+  - id: canarytokens
+    desc: CanaryTokens OOB service
+    if:
+      type: string
+      regex: '([a-z0-9-]+\.)?canarytokens\.org\b'
+
+  - id: beez-buzz
+    desc: Beez.buzz OOB service
+    if:
+      type: string
+      regex: '([a-z0-9-]+\.)?beez\.buzz\b'
+
+  - id: oastify
+    desc: Oastify OOB service
+    if:
+      type: string
+      regex: '([a-z0-9-]+\.)?oastify\.com\b'
+
+composite_rules:
+  - id: interact-sh
+    desc: interact.sh OOB service
+    any:
+      - id: interact-sh-me-fun
+      - id: interact-sh-pro-live
+      - id: interact-sh-online-site

@@ -1,0 +1,51 @@
+# Temporary File Creation - Unix
+# MBC: C0046 (Create File)
+# ATT&CK: T1074
+
+defaults:
+  for: [elf, macho, so, dylib, c]
+
+traits:
+  - id: mktemp-fn
+    desc: Create temporary files
+    crit: baseline
+    conf: 0.66
+    if:
+      type: symbol
+      exact: "mktemp"
+
+  - id: mkstemp-fn
+    desc: Create temporary file securely
+    crit: baseline
+    conf: 0.66
+    if:
+      type: symbol
+      exact: "mkstemp"
+
+  - id: mkstemps-fn
+    desc: Create temporary file with suffix
+    crit: baseline
+    conf: 0.66
+    if:
+      type: symbol
+      exact: "mkstemps"
+
+  - id: tmpfile-fn
+    desc: Create temporary files
+    crit: baseline
+    conf: 0.66
+    if:
+      type: symbol
+      # mkdtemp: use micro-behaviors/fs/temp/directory/unix.yaml::directory-create (canonical)
+      exact: "tmpfile"
+
+composite_rules:
+  - id: mktemp
+    desc: Create temporary files
+    crit: baseline
+    conf: 0.66
+    any:
+      - id: mktemp-fn
+      - id: mkstemp-fn
+      - id: mkstemps-fn
+      - id: tmpfile-fn

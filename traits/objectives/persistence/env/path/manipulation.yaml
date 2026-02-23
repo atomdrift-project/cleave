@@ -1,0 +1,18 @@
+# PATH Environment Variable Manipulation
+# ATT&CK: T1574.007 (Hijack Execution Flow: Path Interception)
+# Detects modification of PATH for persistence or hijacking
+
+defaults:
+  crit: hostile
+  conf: 0.9
+  attack: "T1574.007"
+
+composite_rules:
+  - id: path-modification
+    desc: Modifies PATH environment variable for persistence/hijacking
+    # Requires both PATH reference AND setenv/putenv
+    all:
+      - id: micro-behaviors/os/env/vars::path-var
+    any:
+      - id: micro-behaviors/os/env/vars::setenv
+      - id: micro-behaviors/os/env/vars::putenv

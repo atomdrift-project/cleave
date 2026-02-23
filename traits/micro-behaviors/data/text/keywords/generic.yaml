@@ -1,0 +1,199 @@
+# Generic Text Patterns - Building Blocks for Composites
+# These terms have no standalone malicious meaning - they only gain
+# significance when combined with contextual indicators in composite rules.
+# Marked as component so they're filtered from output unless a composite fires.
+
+defaults:
+  crit: component
+  conf: 0.2
+  for: ["*"]
+
+traits:
+  # === Memory/Buffer Terms ===
+  - id: overflow
+    desc: overflow keyword
+    crit: notable
+    conf: 0.5
+    if:
+      type: string
+      substr: "overflow"
+
+  - id: offset
+    desc: offset keyword
+    if:
+      type: string
+      substr: "offset"
+
+  - id: address
+    desc: address keyword
+    if:
+      type: string
+      substr: "address"
+
+  - id: padding
+    desc: padding keyword
+    if:
+      type: string
+      substr: "padding"
+
+  - id: buffer
+    desc: buffer keyword
+    if:
+      type: string
+      substr: "buffer"
+
+  # === Cryptocurrency Terms ===
+  - id: crypto-word
+    desc: crypto keyword (word match)
+    if:
+      type: string
+      word: "crypto"
+
+  - id: crypto-substr
+    desc: crypto keyword (substr, catches imports)
+    if:
+      type: string
+      substr: "crypto"
+
+  # === Credential Terms ===
+  - id: token
+    desc: token keyword
+    crit: notable
+    conf: 0.5
+    if:
+      type: string
+      word: "token"
+      case_insensitive: true
+
+  - id: password
+    desc: password keyword
+    crit: notable
+    conf: 0.5
+    if:
+      type: string
+      substr: "password"
+      case_insensitive: true
+
+  - id: password-weak
+    desc: weak password keyword (password12345678)
+    crit: notable
+    conf: 0.8
+    if:
+      type: string
+      substr: "password12345678"
+
+  - id: pwd
+    desc: pwd keyword
+    if:
+      type: string
+      exact: "pwd"
+
+  - id: credential
+    desc: credential keyword
+    crit: notable
+    conf: 0.5
+    if:
+      type: string
+      substr: "credential"
+      case_insensitive: true
+
+  - id: secret
+    desc: secret keyword
+    crit: notable
+    conf: 0.5
+    if:
+      type: string
+      substr: "secret"
+      case_insensitive: true
+
+  # === Command/Execution Terms ===
+  - id: command
+    desc: command keyword
+    if:
+      type: string
+      substr: "command"
+
+  - id: pipe
+    desc: pipe keyword
+    if:
+      type: string
+      exact: "pipe"
+
+  - id: output
+    desc: output keyword
+    if:
+      type: string
+      substr: "output"
+
+  - id: execute
+    desc: execute keyword
+    crit: notable
+    conf: 0.5
+    if:
+      type: string
+      word: "execute"
+
+  - id: payload
+    desc: payload keyword
+    crit: notable
+    conf: 0.6
+    if:
+      type: string
+      substr: "payload"
+
+  - id: isrc
+    desc: ISRC (International Standard Recording Code) keyword
+    if:
+      type: string
+      substr: "isrc"
+      case_insensitive: true
+
+  - id: exploit
+    desc: exploit keyword
+    crit: notable
+    conf: 0.6
+    if:
+      type: string
+      substr: "exploit"
+
+  # === Network Terms ===
+  # Removed socket duplicate - use objectives/command-and-control/reverse-shell/pty::python-socket or micro-behaviors/communications/socket patterns
+
+  # === Security/Evasion Terms ===
+  - id: bypass
+    desc: bypass keyword
+    crit: notable
+    conf: 0.6
+    if:
+      type: string
+      word: "bypass"
+      case_insensitive: true
+
+  - id: hide
+    desc: hide keyword
+    crit: notable
+    conf: 0.5
+    if:
+      type: string
+      word: "hide"
+      case_insensitive: true
+
+  # === Script Engine Terms ===
+  # Removed powershell duplicate - use micro-behaviors/process/create/shell/lang::powershell-keyword
+
+  # Removed cmd duplicate - use objectives/command-and-control/reverse-shell/socket/go::cmd-plain or specific patterns
+
+  # === Misc Generic Terms ===
+  # Removed runtime duplicate - use metadata/hardening::hardened-runtime or specific patterns
+
+  - id: tmp
+    desc: tmp keyword
+    if:
+      type: string
+      exact: "tmp"
+
+  - id: temp
+    desc: temp keyword
+    if:
+      type: string
+      exact: "temp"

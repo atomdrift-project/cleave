@@ -1,0 +1,43 @@
+# SSL/TLS Shared Library Names
+# References to specific shared library filenames
+# MBC: E1083 (File and Directory Discovery)
+# ATT&CK: T1083 (File and Directory Discovery)
+
+defaults:
+  for: [c, elf]
+  crit: baseline
+  mbc: "E1083"
+  attack: "T1083"
+
+traits:
+  - id: libssl-so
+    desc: libssl shared library reference
+    conf: 0.7
+    platforms: [linux, unix]
+    if:
+      type: string
+      regex: '\\blibssl\\.so'
+
+  - id: libcrypto-so
+    desc: libcrypto shared library reference
+    conf: 0.7
+    platforms: [linux, unix]
+    if:
+      type: string
+      regex: '\\blibcrypto\\.so'
+
+  - id: libgnutls-so
+    desc: libgnutls shared library reference
+    conf: 0.7
+    platforms: [linux, unix]
+    if:
+      type: string
+      regex: '\\blibgnutls\\.so'
+
+  - id: libnss-so
+    desc: libnss shared library reference
+    conf: 0.7
+    platforms: [linux, unix]
+    if:
+      type: string
+      regex: '\\blibnss(3|ssl3)?\\.so'

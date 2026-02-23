@@ -1,0 +1,175 @@
+traits:
+# ifconfig-command removed - use micro-behaviors/os/network/interface::ifconfig instead
+- id: ip-addr-show
+  desc: ip addr show interface enumeration
+  crit: notable
+  conf: 0.8
+  for:
+  - elf
+  - shell
+  if:
+    type: string
+    regex: (ip addr show|ip addr list|ip -4 addr)
+  attack: T1016
+- id: ip-route-show
+  desc: ip route network discovery
+  crit: notable
+  conf: 0.75
+  for:
+  - elf
+  - shell
+  if:
+    type: string
+    regex: (ip route show|ip route list|/sbin/ip route)
+  attack: T1016
+- id: arp-discovery
+  desc: arp ARP table enumeration
+  crit: suspicious
+  conf: 0.85
+  for:
+  - elf
+  - shell
+  if:
+    type: string
+    regex: (arp -a|arp -n|arp\s+(-[ane]|$))
+  attack: T1018
+- id: ip-neigh-show
+  desc: ip neigh show ARP discovery
+  crit: suspicious
+  conf: 0.85
+  for:
+  - elf
+  - shell
+  if:
+    type: string
+    regex: (ip neigh show|ip neigh list)
+  attack: T1018
+- id: netcat-port-scan
+  desc: netcat port scanning
+  crit: suspicious
+  conf: 0.85
+  for:
+  - elf
+  - shell
+  if:
+    type: string
+    regex: (nc -zv|nc -z|nc\s+.{0,80}-z)
+  attack: T1046
+- id: nmap-scanning
+  desc: nmap network scanning
+  crit: suspicious
+  conf: 0.9
+  for:
+  - elf
+  - shell
+  if:
+    type: string
+    regex: (nmap -p|nmap -sS|nmap -sT|nmap\s+.{0,80}-[psST])
+  attack: T1046
+- id: bash-port-scanner
+  desc: bash port scanning loop
+  crit: suspicious
+  conf: 0.8
+  for:
+  - elf
+  - shell
+  if:
+    type: string
+    regex: (for|while).{0,50}\{.{0,50}nc.{0,20}-z
+  attack: T1046
+- id: ssh-port-check-p22
+  desc: SSH port availability check (-p 22)
+  crit: suspicious
+  conf: 0.8
+  for:
+  - elf
+  - shell
+  if:
+    type: string
+    substr: "-p 22"
+  attack: T1046
+# ssh-port-check-nc removed - use micro-behaviors/communications/socket/netcat::nc + netcat-port-scan composite instead
+- id: ssh-port-check-nmap
+  desc: SSH port availability check (nmap)
+  crit: suspicious
+  conf: 0.8
+  for:
+  - elf
+  - shell
+  if:
+    type: string
+    substr: "nmap -p"
+  attack: T1046
+- id: ssh-key-reuse
+  desc: stolen SSH key usage detected
+  crit: suspicious
+  conf: 0.8
+  for:
+  - elf
+  - shell
+  if:
+    type: string
+    regex: (ssh -i|-i /root/\.ssh|ssh\s+.{0,50}-i\s+)
+  attack: T1021.004
+composite_rules:
+- id: ssh-port-check
+  desc: SSH port availability check
+  crit: suspicious
+  conf: 0.8
+  any:
+  - id: ssh-port-check-p22
+  - id: netcat-port-scan
+  - id: ssh-port-check-nmap
+- id: network-enumeration
+  desc: Local network enumeration
+  crit: suspicious
+  conf: 0.88
+  for:
+  - elf
+  - shell
+  attack: T1016
+  needs: 2
+  any:
+  - id: micro-behaviors/os/network/interface::ifconfig
+  - id: ip-addr-show
+  - id: ip-route-show
+  - id: arp-discovery
+  - id: ip-neigh-show
+- id: port-scanning
+  desc: Active port scanning
+  crit: suspicious
+  conf: 0.9
+  for:
+  - elf
+  - shell
+  attack: T1046
+  any:
+  - id: netcat-port-scan
+  - id: nmap-scanning
+  - id: bash-port-scanner
+- id: lateral-movement-preparation
+  desc: Network enumeration with port scanning
+  crit: hostile
+  conf: 0.92
+  for:
+  - elf
+  - shell
+  attack: T1046
+  mbc: E1103
+  all:
+  - id: network-enumeration
+  - id: port-scanning
+  - id: ssh-port-check
+- id: credential-plus-scanning
+  desc: Credential access with network scanning
+  crit: hostile
+  conf: 0.9
+  for:
+  - elf
+  - shell
+  attack: T1021.004
+  mbc: E1103
+  all:
+  - id: network-enumeration
+  - id: port-scanning
+  - id: ssh-key-reuse

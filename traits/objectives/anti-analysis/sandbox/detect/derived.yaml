@@ -1,0 +1,150 @@
+defaults:
+  crit: notable
+  conf: 1.0
+  for:
+  - all
+traits:
+- id: inline__username-sandbox__any_1
+  desc: Derived string condition
+  if:
+    type: string
+    case_insensitive: true
+    regex: \buser\s*[=:]\s*malware\b
+- id: inline__username-sandbox__any_2
+  desc: Derived string condition
+  if:
+    type: string
+    case_insensitive: true
+    regex: \buser\s*[=:]\s*sandbox\b
+- id: inline__username-sandbox__any_3
+  desc: Derived string condition
+  if:
+    type: string
+    case_insensitive: true
+    regex: \buser\s*[=:]\s*virus\b
+- id: inline__username-sandbox__any_4
+  desc: Derived string condition
+  if:
+    type: string
+    case_insensitive: true
+    regex: \buser\s*[=:]\s*sample\b
+- id: inline__username-sandbox__any_5
+  desc: Derived string condition
+  if:
+    type: string
+    case_insensitive: true
+    regex: \bUSER\s*[=:]\s*malware\b
+- id: inline__username-sandbox__any_6
+  desc: Derived string condition
+  if:
+    type: string
+    case_insensitive: true
+    regex: \bUSER\s*[=:]\s*sandbox\b
+- id: inline__username-sandbox__any_7
+  desc: Derived string condition
+  if:
+    type: string
+    case_insensitive: true
+    regex: \bUSER\s*[=:]\s*virus\b
+- id: inline__username-sandbox__any_8
+  desc: Derived string condition
+  if:
+    type: string
+    case_insensitive: true
+    regex: \bUSER\s*[=:]\s*sample\b
+- id: inline__username-sandbox__any_9
+  desc: Derived string condition
+  if:
+    type: string
+    case_insensitive: true
+    regex: \busername\s*[=:]\s*malware\b
+- id: inline__username-sandbox__any_10
+  desc: Derived string condition
+  if:
+    type: string
+    case_insensitive: true
+    regex: \busername\s*[=:]\s*sandbox\b
+- id: inline__username-sandbox__any_11
+  desc: Derived string condition
+  if:
+    type: string
+    case_insensitive: true
+    regex: \busername\s*[=:]\s*virus\b
+- id: inline__username-sandbox__any_12
+  desc: Derived string condition
+  if:
+    type: string
+    case_insensitive: true
+    regex: \busername\s*[=:]\s*sample\b
+- id: inline__username-sandbox__any_13
+  desc: Derived string condition
+  if:
+    type: string
+    case_insensitive: true
+    regex: \bUSERNAME\s*[=:]\s*malware\b
+- id: inline__username-sandbox__any_14
+  desc: Derived string condition
+  if:
+    type: string
+    case_insensitive: true
+    regex: \bUSERNAME\s*[=:]\s*sandbox\b
+- id: inline__username-sandbox__any_15
+  desc: Derived string condition
+  if:
+    type: string
+    case_insensitive: true
+    regex: \bUSERNAME\s*[=:]\s*virus\b
+- id: inline__username-sandbox__any_16
+  desc: Derived string condition
+  if:
+    type: string
+    case_insensitive: true
+    regex: \bUSERNAME\s*[=:]\s*sample\b
+- id: inline__username-sandbox__any_17
+  desc: Derived string condition
+  if:
+    type: string
+    case_insensitive: true
+    regex: \bUser\s*[=:]\s*malware\b
+- id: inline__username-sandbox__any_18
+  desc: Derived string condition
+  if:
+    type: string
+    case_insensitive: true
+    regex: \bUser\s*[=:]\s*sandbox\b
+- id: inline__username-sandbox__any_19
+  desc: Derived string condition
+  if:
+    type: string
+    case_insensitive: true
+    regex: \bUser\s*[=:]\s*virus\b
+- id: inline__username-sandbox__any_20
+  desc: Derived string condition
+  if:
+    type: string
+    case_insensitive: true
+    regex: \bUser\s*[=:]\s*sample\b
+- id: inline__username-sandbox__any_21
+  desc: Derived string condition
+  if:
+    type: string
+    case_insensitive: true
+    regex: \bUsername\s*[=:]\s*malware\b
+- id: inline__username-sandbox__any_22
+  desc: Derived string condition
+  if:
+    type: string
+    case_insensitive: true
+    regex: \bUsername\s*[=:]\s*sandbox\b
+- id: inline__username-sandbox__any_23
+  desc: Derived string condition
+  if:
+    type: string
+    case_insensitive: true
+    regex: \bUsername\s*[=:]\s*virus\b
+- id: inline__username-sandbox__any_24
+  desc: Derived string condition
+  if:
+    type: string
+    case_insensitive: true
+    regex: \bUsername\s*[=:]\s*sample\b

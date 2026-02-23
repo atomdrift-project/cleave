@@ -1,0 +1,12 @@
+# Process Termination - JavaScript
+# Capabilities related to killing processes in JavaScript
+
+traits:
+  - id: js-sigsegv-kill
+    desc: Terminate process with SIGSEGV (anti-analysis/evasion)
+    crit: suspicious
+    conf: 0.95
+    for: [javascript, typescript]
+    if:
+      type: raw
+      regex: 'process\.kill\(process\.pid,\s*[''"]SIGSEGV[''"]\)'

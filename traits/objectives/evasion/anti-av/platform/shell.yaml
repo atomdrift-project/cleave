@@ -1,0 +1,35 @@
+defaults:
+  crit: suspicious
+  attack: T1562.001
+  for:
+  - shell
+traits:
+- id: nmi-watchdog-disable
+  desc: NMI watchdog disable (crash detection)
+  conf: 0.85
+  if:
+    type: raw
+    regex: nmi_watchdog\s*=\s*0|echo\s+['"]?0['"]?[^>]{0,20}>[^\n]{0,50}nmi_watchdog
+- id: aliyun-agent-disable
+  desc: Aliyun security agent disable
+  conf: 0.95
+  if:
+    type: raw
+    regex: (pkill|kill).{0,20}aliyun|aegis.{0,20}uninstall|systemctl\s+stop\s+aliyun
+- id: cloud-agent-uninstall
+  desc: Cloud security agent uninstall
+  conf: 0.9
+  if:
+    type: raw
+    regex: (qcloud|aegis|YunJing).{0,30}uninstall|aegis\.aliyun\.com
+composite_rules:
+- id: multi-agent-disable
+  desc: Multiple monitoring agents disabled
+  crit: hostile
+  conf: 0.95
+  attack: T1562.001
+  needs: 2
+  any:
+  - id: aliyun-agent-disable
+  - id: cloud-agent-uninstall
+  - id: nmi-watchdog-disable

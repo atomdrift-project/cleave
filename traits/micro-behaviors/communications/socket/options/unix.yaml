@@ -1,0 +1,39 @@
+# Socket Options
+# MBC: C0001 (Socket Communication)
+# ATT&CK: T1071
+
+defaults:
+  for: [elf, macho, so, dylib, c]
+
+traits:
+  - id: options-get
+    desc: Get socket options
+    crit: baseline
+    conf: 0.66
+    if:
+      type: symbol
+      regex: getsockopt
+
+  - id: options-set
+    desc: Set socket options
+    crit: baseline
+    conf: 0.66
+    if:
+      type: symbol
+      regex: setsockopt
+
+  - id: options-reuseport
+    desc: Enable socket port reuse
+    crit: notable
+    conf: 0.66
+    if:
+      type: string
+      substr: SO_REUSEPORT
+
+  - id: options-filter
+    desc: Socket packet filtering
+    crit: notable
+    conf: 0.66
+    if:
+      type: string
+      substr: SO_ATTACH_FILTER

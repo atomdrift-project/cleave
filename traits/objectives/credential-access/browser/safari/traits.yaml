@@ -1,0 +1,72 @@
+# Credential Access - Safari Browser Data Theft
+# macOS Safari and system cookie theft
+# ATT&CK: T1555.003 (Credentials from Password Stores: Credentials from Web Browsers)
+
+defaults:
+  for: [all]
+
+traits:
+  # === Path/File References ===
+
+  - id: cookies-path
+    desc: macOS system cookies path
+    crit: suspicious
+    conf: 0.8
+    attack: "T1555.003"
+    platforms: [macos]
+    for: [python, javascript, shell]
+    if:
+      type: string
+      substr: "/Library/Cookies"
+
+  - id: binarycookies
+    desc: macOS binary cookies file
+    crit: suspicious
+    conf: 0.8
+    attack: "T1555.003"
+    platforms: [macos]
+    if:
+      type: string
+      substr: ".binarycookies"
+
+  - id: cookies-binarycookies
+    desc: Safari Cookies.binarycookies file
+    crit: suspicious
+    conf: 0.85
+    attack: "T1555.003"
+    platforms: [macos]
+    if:
+      type: string
+      substr: "Cookies.binarycookies"
+
+  - id: history-db
+    desc: Safari History.db file
+    crit: suspicious
+    conf: 0.8
+    attack: "T1555.003"
+    platforms: [macos]
+    if:
+      type: string
+      substr: "History.db"
+
+  - id: localstorage
+    desc: Safari LocalStorage path
+    crit: suspicious
+    conf: 0.75
+    attack: "T1555.003"
+    platforms: [macos]
+    if:
+      type: string
+      substr: "Safari/LocalStorage"
+
+composite_rules:
+  - id: cookie-theft
+    desc: Safari cookie theft
+    crit: suspicious
+    conf: 0.85
+    attack: "T1555.003"
+    platforms: [macos]
+    any:
+      - id: cookies-path
+      - id: binarycookies
+      - id: cookies-binarycookies

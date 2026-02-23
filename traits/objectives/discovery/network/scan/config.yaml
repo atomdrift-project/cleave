@@ -1,0 +1,6 @@
+# Network Configuration Discovery
+# ATT&CK: T1016 (System Network Configuration Discovery)
+#
+# Note: Use the directory references directly in rules:
+#   - micro-behaviors/fs/path/config/config-hosts for /etc/hosts
+#   - micro-behaviors/fs/path/config/config-resolv for /etc/resolv.conf

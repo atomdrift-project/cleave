@@ -1,0 +1,197 @@
+# Backdoor Detection
+# MBC: B0033 (Adversary-in-the-Middle)
+# ATT&CK: T1543
+
+defaults:
+  for: [all]
+  attack: "T1543"
+
+traits:
+  # === Backdoor base term ===
+  - id: backdoor-ref
+    desc: Backdoor keyword reference
+    crit: notable
+    conf: 0.5
+    if:
+      type: string
+      regex: '\b[bB]ackdoor\b'
+
+  # === Known false positive exclusions ===
+  - id: vcpu-backdoor
+    desc: VCPU backdoor (VMware legitimate)
+    crit: notable
+    conf: 0.9
+    if:
+      type: string
+      substr: VCPUInfoBackdoor
+
+  - id: guest-backdoor-ops
+    desc: Guest backdoor ops (VMware legitimate)
+    crit: notable
+    conf: 0.9
+    if:
+      type: string
+      substr: gGuestBackdoorOps
+
+  - id: backdoor-comment
+    desc: Backdoor comment (documentation)
+    crit: notable
+    conf: 0.9
+    if:
+      type: string
+      substr: "# backdoor:"
+
+  # === Backdoor shell variants ===
+  - id: backdoor-shell-ref
+    desc: Backdoor shell keyword
+    crit: notable
+    conf: 0.5
+    if:
+      type: string
+      regex: '\b[bB]ackdoor[_.\s-]?[sS]hell\b'
+
+  # === Leet speak variants ===
+  - id: backdoor-leet
+    desc: Backdoor leet speak (backd00r)
+    crit: notable
+    conf: 0.5
+    if:
+      type: string
+      regex: '\b[bB][a4]ckd00r\b'
+
+  # === Context-specific backdoor references ===
+  - id: hidden-backdoor
+    desc: Hidden backdoor keyword
+    crit: notable
+    conf: 0.5
+    if:
+      type: string
+      regex: '\bhidden[_ ]backdoor\b'
+      case_insensitive: true
+
+  - id: hide-backdoor
+    desc: Hide backdoor keyword
+    crit: notable
+    conf: 0.5
+    if:
+      type: string
+      regex: '\bhide[_ ]backdoor\b'
+      case_insensitive: true
+
+  - id: icmp-backdoor
+    desc: ICMP backdoor keyword
+    crit: notable
+    conf: 0.6
+    if:
+      type: string
+      regex: '\bicmp[_ ]backdoor\b'
+      case_insensitive: true
+
+  - id: pam-backdoor
+    desc: PAM backdoor keyword
+    crit: notable
+    conf: 0.6
+    if:
+      type: string
+      regex: '\bpam[_ ]backdoor\b'
+      case_insensitive: true
+
+  - id: ssh-backdoor
+    desc: SSH backdoor keyword
+    crit: notable
+    conf: 0.6
+    if:
+      type: string
+      regex: '\bssh[_ ]backdoor\b'
+      case_insensitive: true
+
+  - id: sshd-backdoor
+    desc: SSHD backdoor keyword
+    crit: notable
+    conf: 0.6
+    if:
+      type: string
+      regex: '\bsshd[_ ]backdoor\b'
+      case_insensitive: true
+
+  - id: backdoor-task
+    desc: Backdoor task keyword
+    crit: notable
+    conf: 0.5
+    if:
+      type: string
+      regex: '\bbackdoor[_ ]task\b'
+      case_insensitive: true
+
+  - id: backdoor-process
+    desc: Backdoor process keyword
+    crit: notable
+    conf: 0.5
+    if:
+      type: string
+      regex: '\bbackdoor[_ ]process\b'
+      case_insensitive: true
+
+  - id: backdoor-shell-ctx
+    desc: Backdoor shell context keyword
+    crit: notable
+    conf: 0.5
+    if:
+      type: string
+      regex: '\bbackdoor[_ ]shell\b'
+      case_insensitive: true
+
+  - id: backdoor-login
+    desc: Backdoor login keyword
+    crit: notable
+    conf: 0.6
+    if:
+      type: string
+      regex: '\bbackdoor[_ ]login\b'
+      case_insensitive: true
+
+  - id: backdoor-pass
+    desc: Backdoor password keyword
+    crit: notable
+    conf: 0.6
+    if:
+      type: string
+      regex: '\bbackdoor[_ ]pass\b'
+      case_insensitive: true
+
+composite_rules:
+  - id: backdoor
+    desc: References a backdoor
+    crit: suspicious
+    conf: 0.66
+    all:
+      - id: backdoor-ref
+    none:
+      - id: vcpu-backdoor
+      - id: guest-backdoor-ops
+      - id: backdoor-comment
+
+  - id: backdoor-shell
+    desc: References a backdoor shell
+    crit: suspicious
+    conf: 0.66
+    any:
+      - id: backdoor-shell-ref
+      - id: backdoor-leet
+
+  - id: backdoor-hidden
+    desc: Suspicious backdoor reference
+    crit: notable
+    conf: 0.66
+    any:
+      - id: hidden-backdoor
+      - id: hide-backdoor
+      - id: icmp-backdoor
+      - id: pam-backdoor
+      - id: ssh-backdoor
+      - id: sshd-backdoor
+      - id: backdoor-task
+      - id: backdoor-process
+      - id: backdoor-shell-ctx
+      - id: backdoor-login
+      - id: backdoor-pass

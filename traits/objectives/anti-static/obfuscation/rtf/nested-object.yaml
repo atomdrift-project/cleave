@@ -1,0 +1,13 @@
+defaults:
+  for: [all]
+
+traits:
+  - id: nested-object-in-data
+    desc: RTF object tag embedded within data stream.
+    crit: suspicious
+    conf: 0.8
+    mbc: "B0032.001"
+    if:
+      type: raw
+      regex: '[0-9a-fA-F]\{\\object\}[0-9a-fA-F]'
+      description: 'Detects {\object} tag embedded directly in hex data'

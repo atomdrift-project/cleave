@@ -1,0 +1,55 @@
+# Time-based Trigger Composite Rules
+# Logic bombs and time-triggered malware
+
+composite_rules:
+  # Self-termination: GetCurrentProcess + Kill
+  - id: self-termination
+    desc: "Self-destruct: terminates own process"
+    crit: suspicious
+    mbc: "E1562"
+    attack: "T1562"
+    conf: 0.95
+    for: [all]
+    all:
+      - id: micro-behaviors/process/create/spawn/
+      - id: micro-behaviors/process/terminate/
+
+  # Logic bomb with self-destruct
+  - id: logic-bomb-self-destruct
+    desc: "Logic bomb: time-triggered self-destruct with"
+    crit: suspicious
+    mbc: "B0003"
+    attack: "T1480.001"
+    conf: 0.95
+    for: [all]
+    all:
+      - id: hardcoded-datetime
+      - id: micro-behaviors/process/create/spawn/
+      - id: micro-behaviors/process/terminate/
+
+  # Logic bomb with probabilistic self-destruct
+  - id: logic-bomb-probabilistic-self-destruct
+    desc: "Logic bomb: time-triggered probabilistic self-destruct"
+    crit: suspicious
+    mbc: "B0003"
+    attack: "T1480.001"
+    conf: 0.95
+    for: [all]
+    all:
+      - id: hardcoded-datetime
+      - id: micro-behaviors/os/random/prng::random-instantiation
+      - id: micro-behaviors/process/create/spawn/
+      - id: micro-behaviors/process/terminate/
+
+  # Concentrated malicious code: all behaviors within 30 lines (tight proximity)
+  - id: concentrated-logic-bomb
+    desc: "Concentrated logic bomb: all malicious"
+    crit: suspicious
+    mbc: "B0003"
+    attack: "T1480.001"
+    conf: 0.98
+    for: [all]
+    near_lines: 30 # All patterns must be within 30 lines
+    all:
+      - id: hardcoded-datetime
+      - id: micro-behaviors/process/terminate/

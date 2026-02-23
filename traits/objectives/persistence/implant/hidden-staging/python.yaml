@@ -1,0 +1,15 @@
+# Hidden Staging Directory Creation
+# Detects creation of hidden staging directories for malware
+# ATT&CK: T1564.001 (Hidden Files and Directories)
+
+composite_rules:
+  - id: python-home-hidden-staging
+    desc: Creates hidden staging directory in user home
+    crit: suspicious
+    conf: 0.95
+    for: [python]
+    mbc: "E1564"
+    attack: "T1564.001"
+    all:
+      - id: objectives/persistence/implant/system-path::home-hidden-dir-exec
+      - id: objectives/execution/dropper/http::popen-call

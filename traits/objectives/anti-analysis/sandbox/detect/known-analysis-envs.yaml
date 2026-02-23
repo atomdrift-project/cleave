@@ -1,0 +1,29 @@
+# Anti-Analysis: Known Analysis Environments
+# Detects checks against specific usernames, hostnames, and paths used by malware analysis systems
+
+defaults:
+  for: [all]
+  crit: notable
+  conf: 0.8
+
+traits:
+  - id: check-analysis-username
+    desc: Checks for known analysis usernames
+    crit: suspicious
+    if:
+      type: string
+      regex: "(daasadmin)"
+
+  - id: check-analysis-hostname
+    desc: Checks for known analysis hostnames
+    crit: suspicious
+    if:
+      type: string
+      regex: "(DESKTOP-4E1IS0K|aws-7grara913oid5jsexgkq|lili-pc)"
+
+  - id: check-analysis-path
+    desc: Checks for known analysis paths
+    crit: suspicious
+    if:
+      type: string
+      regex: "(D:\\\\TRANSFER|/home/lili/vastest/|/root/extract)"

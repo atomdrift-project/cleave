@@ -1,0 +1,18 @@
+traits:
+  - id: node-keyboard-listener
+    desc: Node.js keyboard listener (keyboard.addListener)
+    crit: notable
+    conf: 0.8
+    for: [javascript]
+    if:
+      type: string
+      regex: 'keyboard\.addListener'
+
+  - id: global-keyboard-listener
+    desc: GlobalKeyboardListener library usage
+    crit: notable
+    conf: 0.8
+    for: [javascript]
+    if:
+      type: string
+      regex: 'GlobalKeyboardListener'

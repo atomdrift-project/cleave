@@ -1,0 +1,107 @@
+# File Permission Modification - Dangerous Permissions (777, world-writable)
+# MBC: E1222 (File Permission Modification)
+# ATT&CK: T1222 (File and Directory Permissions Modification)
+#
+# These permissions make files world-writable AND executable, which is almost
+# never legitimate and often indicates malware trying to drop/execute payloads.
+
+defaults:
+  for: [all]
+  mbc: "E1222"
+  attack: "T1222"
+  crit: suspicious
+
+traits:
+  # Generic shell chmod suspicious values
+  - id: generic-shell-chmod
+    desc: Dangerous chmod values (world-writable)
+    if:
+      type: string
+      regex: "chmod\\s+(0?777|0?666|0?775|0?888)"
+    downgrade:
+      any:
+        - id: metadata/signed/platform::apple
+
+  # Shell chmod 777
+  - id: shell-777
+    desc: chmod 777 (world-writable+executable)
+    conf: 0.8
+    if:
+      type: string
+      regex: 'chmod\s+[\-\w ]{0,4}0?777\s+[/\.\$\w]'
+
+  # Shell chmod 666 (world-writable, no exec)
+  - id: shell-666
+    desc: chmod 666 (world-writable)
+    crit: notable
+    conf: 0.7
+    if:
+      type: string
+      regex: 'chmod\s+[\-\w ]{0,4}0?666\s+[/\.\$\w]'
+
+  # Python chmod 777
+  - id: python-777
+    desc: Python chmod 777
+    conf: 0.85
+    for: [python]
+    if:
+      type: string
+      regex: 'chmod\([^)]{0,120}0?o?777\)'
+
+  # Ruby chmod(0777) variants
+  - id: ruby-0777-parens
+    desc: Ruby chmod(0777)
+    conf: 0.85
+    for: [ruby]
+    if:
+      type: string
+      substr: "chmod(0777)"
+
+  - id: ruby-0777-space
+    desc: Ruby chmod 0777
+    conf: 0.85
+    for: [ruby]
+    if:
+      type: string
+      substr: "chmod 0777"
+
+  - id: ruby-0o777
+    desc: Ruby chmod(0o777)
+    conf: 0.85
+    for: [ruby]
+    if:
+      type: string
+      substr: "chmod(0o777)"
+
+  # Legitimate exceptions (sticky bit for /tmp, /var/tmp)
+  - id: sticky-1777
+    desc: chmod 1777 sticky bit (legitimate)
+    crit: baseline
+    conf: 1.0
+    if:
+      type: string
+      regex: 'chmod\s+0?1777'
+
+  - id: var-tmp-777
+    desc: chmod 777 /var/tmp (legitimate temp dir)
+    crit: baseline
+    conf: 1.0
+    if:
+      type: string
+      regex: "\\bchmod 0777 /var/tmp\\b"
+
+composite_rules:
+  # chmod 777 (any language)
+  - id: chmod-777
+    desc: World-writable+executable permissions (777)
+    crit: suspicious
+    conf: 0.85
+    any:
+      - id: shell-777
+      - id: python-777
+      - id: ruby-0777-parens
+      - id: ruby-0777-space
+      - id: ruby-0o777
+    none:
+      - id: sticky-1777
+      - id: var-tmp-777

@@ -1,0 +1,16 @@
+defaults:
+  for: [javascript]
+
+traits:
+  - id: js-nested-array-table-mapping
+    desc: Nested array structure used for table mapping
+    crit: suspicious
+    conf: 0.8
+    if:
+      type: ast
+      language: javascript
+      query: |
+        (array
+          (array)
+          (array)
+        )

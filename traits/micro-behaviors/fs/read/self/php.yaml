@@ -1,0 +1,31 @@
+# PHP Self-Reading Traits
+# Detects scripts reading their own source code, a common viral technique.
+
+traits:
+  - id: read-script-name
+    desc: Accessing script filename via $_SERVER
+    crit: notable
+    conf: 0.8
+    for: [php]
+    if:
+      type: ast
+      language: php
+      query: |
+        (subscript_expression
+          (variable_name) @var
+          (string) @key
+          (#match? @var "\$_SERVER")
+          (#match? @key "SCRIPT_NAME|PHP_SELF")
+        )
+
+  - id: read-file-constant-ast
+    desc: Accessing script path via __FILE__ (AST)
+    crit: notable
+    conf: 0.8
+    for: [php]
+    if:
+      type: ast
+      language: php
+      query: |
+        (name) @const
+        (#eq? @const "__FILE__")

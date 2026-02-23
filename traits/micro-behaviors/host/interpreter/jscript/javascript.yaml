@@ -1,0 +1,40 @@
+# JScript / WSH Traits
+defaults:
+  crit: notable
+  conf: 0.8
+  for: [javascript, typescript]
+
+traits:
+  - id: is-jscript
+    desc: JScript file type (WScript host)
+    crit: notable
+    for: [javascript]
+    if:
+      type: raw
+      substr: "WScript"
+
+  - id: adodb-fragment-dodb
+    desc: ADODB.Stream string fragment (DODB)
+    if:
+      type: raw
+      substr: 'DODB'
+
+  - id: wscript-shell-fragment-dotshel
+    desc: WScript.Shell string fragment (.Shel)
+    if:
+      type: raw
+      substr: '.Shel'
+
+  - id: createobject-fragment-ateobject
+    desc: CreateObject string fragment (ateObject)
+    if:
+      type: raw
+      substr: 'ateObject'
+
+  - id: batch-launcher-content
+    desc: Batch file content with start and exit
+    crit: suspicious
+    if:
+      type: raw
+      # Matches "start payload.exe" followed by "\r\nexit" in a string
+      regex: 'start\s+.{0,100}\\r\\n\s*exit'

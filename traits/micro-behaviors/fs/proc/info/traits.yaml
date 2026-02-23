@@ -1,0 +1,11 @@
+defaults:
+  for: [all]
+
+traits:
+  - id: process-pid-exe
+    desc: Access executable via /proc
+    crit: notable
+    conf: 0.9
+    if:
+      type: string
+      regex: "/proc/(self|%d|all)/exe"

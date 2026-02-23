@@ -1,0 +1,111 @@
+# ESXi Ransomware Objectives
+# Composite rules for detecting ransomware targeting VMware ESXi
+
+composite_rules:
+  # ESXi ransomware pattern - complexity 4 (all:3 + any:1)
+  - id: esxi-ransomware
+    desc: ESXi ransomware pattern
+    crit: hostile
+    conf: 0.98
+    for: [elf]
+    all:
+      - id: micro-behaviors/vm/detect/vmware::esxcli-vm-kill
+      - id: micro-behaviors/vm/detect/vmware::vmware-extensions
+      - id: objectives/impact/ransom/encrypt::ransom-note-text
+    any:
+      - id: objectives/impact/ransom/encrypt::ransom-extension
+      - id: objectives/impact/ransom/encrypt::crypted-counter
+
+  # ESXi VM targeting without ransom note (still suspicious)
+  - id: esxi-vm-targeting
+    desc: ESXi VM targeting behavior
+    crit: suspicious
+    conf: 0.9
+    for: [elf]
+    all:
+      - id: micro-behaviors/vm/detect/vmware::esxcli-vm-kill
+      - id: micro-behaviors/vm/detect/vmware::vmware-extensions
+
+  # ESXi ransomware with locker patterns - complexity 5 (all:3 + any:2)
+  - id: esxi-ransomware-locker
+    desc: ESXi ransomware locker pattern
+    crit: hostile
+    conf: 0.97
+    for: [elf]
+    all:
+      - id: micro-behaviors/vm/detect/vmware::esxcli-vm-kill
+      - id: micro-behaviors/vm/detect/vmware::vmware-extensions
+      - id: micro-behaviors/vm/detect/vmware::vmfs-path
+    any:
+      - id: objectives/impact/ransom/encrypt::locker-namespace
+      - id: objectives/impact/ransom/encrypt::config-note-fields
+      - id: micro-behaviors/vm/detect/vmware::vimcmd-snapshot-remove
+      - id: micro-behaviors/vm/detect/vmware::killing-vms-msg
+
+  # ESXi ransomware with VM operations - complexity 5 (all:4 + any:1)
+  - id: esxi-vm-ransomware
+    desc: ESXi VM ransomware operations
+    crit: hostile
+    conf: 0.96
+    for: [elf]
+    all:
+      - id: micro-behaviors/vm/detect/vmware::esxcli-vm-kill
+      - id: micro-behaviors/vm/detect/vmware::vmware-extensions
+      - id: micro-behaviors/vm/detect/vmware::killing-vms-msg
+      - id: micro-behaviors/vm/detect/vmware::vmfs-path
+    any:
+      - id: micro-behaviors/vm/detect/vmware::vimcmd-snapshot-remove
+      - id: micro-behaviors/vm/detect/vmware::esxi-preparation
+      - id: objectives/impact/ransom/encrypt::config-cipher-fields
+
+  # ESXi ransomware shell launcher script - complexity 5 (for:1 + all:4)
+  # Detects shell scripts that orchestrate ESXi ransomware
+  - id: esxi-ransomware-shell-launcher
+    desc: ESXi ransomware shell launcher
+    crit: hostile
+    conf: 0.98
+    for: [shell]
+    all:
+      - id: micro-behaviors/vm/detect/vmware::esxcli-vm-kill
+      - id: micro-behaviors/vm/detect/vmware::vmware-extensions
+      - id: micro-behaviors/vm/detect/vmware::vmfs-path
+      - id: objectives/evasion/log-clear/commands::find-exec-rm-log
+
+  # ESXi ransomware shell with anti-forensics - complexity 6 (for:1 + all:5)
+  - id: esxi-ransomware-shell-antiforensics
+    desc: ESXi ransomware shell with cleanup
+    crit: hostile
+    conf: 0.99
+    for: [shell]
+    all:
+      - id: micro-behaviors/vm/detect/vmware::esxcli-vm-kill
+      - id: micro-behaviors/vm/detect/vmware::vmware-extensions
+      - id: micro-behaviors/vm/detect/vmware::vmfs-path
+      - id: objectives/evasion/self-delete/cleanup::rm-self-dollar-zero
+      - id: objectives/evasion/timestomp/modify::touch-reference-multiple
+
+  # ESXi ransomware with C++ VM killer - complexity 5 (for:1 + all:4)
+  # Detects C++ ransomware that dynamically builds esxcli commands
+  - id: esxi-ransomware-cpp
+    desc: C++ ESXi ransomware with VM killer
+    crit: hostile
+    conf: 0.98
+    for: [elf]
+    all:
+      - id: micro-behaviors/vm/detect/vmware::esxcli-tool
+      - id: micro-behaviors/vm/detect/vmware::esxi-world-id-param
+      - id: micro-behaviors/vm/detect/vmware::cpp-vm-killer-symbols
+      - id: objectives/impact/ransom/encrypt::ransom-note-text
+
+  # ESXi ransomware via CLI flags - complexity 5 (for:1 + all:4)
+  # Detects ransomware with vmkiller/prockiller CLI options
+  - id: esxi-ransomware-cli-flags
+    desc: ESXi ransomware with VM killer flags
+    crit: hostile
+    conf: 0.97
+    for: [elf]
+    all:
+      - id: micro-behaviors/vm/detect/vmware::esxcli-tool
+      - id: micro-behaviors/vm/detect/vmware::vm-killer-flags
+      - id: micro-behaviors/vm/detect/vmware::killing-vm-simple
+      - id: objectives/impact/ransom/encrypt::ransom-note-text

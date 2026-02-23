@@ -1,0 +1,29 @@
+defaults:
+  crit: notable
+  conf: 1.0
+  for:
+  - all
+traits:
+- id: obfuscated-elf-daemon-dropper__unless_1-findutils
+  desc: Derived string condition findutils
+  if:
+    type: string
+    exact: findutils
+- id: obfuscated-elf-daemon-dropper__unless_1-libtsan
+  desc: Derived string condition libtsan
+  if:
+    type: string
+    exact: libtsan
+- id: obfuscated-elf-daemon-dropper__unless_1-sanitizer
+  desc: Derived string condition sanitizer
+  if:
+    type: string
+    exact: sanitizer
+
+composite_rules:
+- id: obfuscated-elf-daemon-dropper__unless_1
+  desc: Derived string condition
+  any:
+  - id: obfuscated-elf-daemon-dropper__unless_1-findutils
+  - id: obfuscated-elf-daemon-dropper__unless_1-libtsan
+  - id: obfuscated-elf-daemon-dropper__unless_1-sanitizer

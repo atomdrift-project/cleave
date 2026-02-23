@@ -1,0 +1,45 @@
+# Shell-based Log Clearing Commands
+# Detects shell commands used to clear history or logs
+# ATT&CK: T1070.003 (Clear Command History), T1070.004 (File Deletion)
+
+defaults:
+  crit: notable
+  conf: 0.85
+  for: [shell, python, ruby, javascript]
+
+traits:
+  - id: history-clear
+    desc: Clears bash/shell history
+    crit: suspicious
+    conf: 0.90
+    attack: "T1070.003"
+    if:
+      type: raw
+      regex: '>\s*/root/\.bash_history|echo\s*>\s*[^\n]{0,30}\.bash_history'
+
+  - id: wtmp-redirect-clear
+    desc: Clears wtmp/utmp/btmp logs via redirect
+    crit: suspicious
+    conf: 0.95
+    attack: "T1070.004"
+    if:
+      type: raw
+      regex: '>\s*/var/log/(wtmp|utmp|btmp)'
+
+  - id: wtmp-echo-clear
+    desc: Clears wtmp/utmp/btmp logs via echo redirect
+    crit: suspicious
+    conf: 0.95
+    attack: "T1070.004"
+    if:
+      type: raw
+      regex: 'echo\s*>\s*/var/log/(wtmp|utmp|btmp)'
+
+  - id: find-exec-rm-log
+    desc: Find and remove log files
+    crit: notable
+    conf: 0.85
+    attack: "T1070.004"
+    if:
+      type: raw
+      regex: 'find\s+.{0,100}\s+-name\s+["'']\*\.log["'']\s+-exec\s+rm'

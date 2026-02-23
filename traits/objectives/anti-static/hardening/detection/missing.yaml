@@ -1,0 +1,45 @@
+# Missing Security Hardening Detection
+# Binaries without standard security features are suspicious
+# ATT&CK: T1027 (Obfuscated Files or Information)
+
+traits:
+  # NOTE: Stripped binaries are common for release builds, not suspicious alone
+  - id: stripped-binary-struct
+    desc: "Binary has symbol table stripped"
+    crit: notable
+    conf: 0.7
+    for: [elf, macho, pe]
+    if:
+      type: structure
+      feature: "binary/stripped"
+
+  - id: no-pie-struct
+    desc: "Binary not position-independent (no ASLR)"
+    crit: notable
+    conf: 0.6
+    for: [elf]
+    if:
+      type: structure
+      feature: "binary/no-pie"
+
+  - id: no-nx-struct
+    desc: "Binary lacks NX/DEP protection (executable"
+    crit: notable
+    conf: 0.7
+    attack: "T1027"
+    for: [elf, macho]
+    if:
+      type: structure
+      feature: "binary/no-nx"
+
+composite_rules:
+  - id: minimal
+    desc: "Binary lacks security hardening (stripped"
+    crit: suspicious
+    conf: 0.8
+    mbc: "F0001"
+    attack: "T1027"
+    for: [elf]
+    all:
+      - id: stripped-binary-struct
+      - id: metadata/hardening::static-linked

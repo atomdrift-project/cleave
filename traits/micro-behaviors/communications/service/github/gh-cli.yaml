@@ -1,0 +1,10 @@
+defaults:
+  for: [all]
+
+traits:
+  - id: gh-issue-mgmt
+    desc: GitHub issue management
+    crit: notable
+    if:
+      type: raw
+      regex: 'gh (issue|label|repo|pr)\b'

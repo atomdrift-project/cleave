@@ -1,0 +1,80 @@
+# Process Information Discovery - Python
+# Detects Python code that enumerates or introspects running processes
+
+defaults:
+  for: [python]
+
+traits:
+  - id: psutil-enum
+    desc: Enumerates running processes via psutil
+    crit: notable
+    conf: 0.9
+    if:
+      type: string
+      regex: 'psutil\.process_iter\('
+
+  - id: pgrep-cmd
+    desc: pgrep command for process grep
+    crit: notable
+    conf: 0.5
+    if:
+      type: string
+      substr: "pgrep"
+
+  # === Analysis tool process names (atomic) ===
+  - id: wireshark-proc
+    desc: Wireshark process name
+    crit: notable
+    conf: 0.5
+    if:
+      type: string
+      substr: "Wireshark"
+
+  - id: vbox-proc
+    desc: VirtualBox process name
+    crit: notable
+    conf: 0.5
+    if:
+      type: string
+      exact: "vbox"
+
+  - id: charles-proc
+    desc: Charles proxy process name
+    crit: notable
+    conf: 0.5
+    if:
+      type: string
+      substr: "charles"
+
+  # fiddler-proc: use objectives/anti-analysis/sandbox/detect::fiddler (canonical)
+
+composite_rules:
+  # Shell process enumeration
+  - id: tasklist-shell
+    desc: Enumerates processes via shell command
+    crit: notable
+    conf: 0.8
+    any:
+      - id: micro-behaviors/process/enumerate/shell::tasklist
+      - id: pgrep-cmd
+      - id: micro-behaviors/process/enumerate/shell::ps-ef
+
+  # Analysis tool detection
+  - id: analysis-tool-names
+    desc: References analysis/debugging tool process names
+    crit: notable
+    conf: 0.8
+    any:
+      - id: wireshark-proc
+      - id: vbox-proc
+      - id: objectives/anti-analysis/vm/detect::vendor-vmware
+      - id: charles-proc
+      - id: objectives/anti-analysis/sandbox/detect::fiddler
+
+  - id: anti-analysis-recon
+    desc: Process-based anti-analysis/recon (psutil + sensitive
+    crit: suspicious
+    conf: 0.9
+    all:
+      - id: psutil-enum
+      - id: analysis-tool-names

@@ -1,0 +1,80 @@
+# ELF Sections
+# ELF section name references (baseline markers)
+
+defaults:
+  for: [elf]
+
+traits:
+  # === Constructor/Destructor Sections ===
+  - id: init-array
+    desc: .init_array section reference
+    crit: baseline
+    conf: 0.4
+    if:
+      type: string
+      substr: ".init_array"
+
+  - id: fini-array
+    desc: .fini_array section reference
+    crit: baseline
+    conf: 0.4
+    if:
+      type: string
+      substr: ".fini_array"
+
+  - id: ctors
+    desc: .ctors section reference
+    crit: baseline
+    conf: 0.4
+    if:
+      type: string
+      substr: ".ctors"
+
+  - id: dtors
+    desc: .dtors section reference
+    crit: baseline
+    conf: 0.4
+    if:
+      type: string
+      substr: ".dtors"
+
+  - id: preinit-array
+    desc: .preinit_array section reference
+    crit: baseline
+    conf: 0.4
+    if:
+      type: string
+      substr: ".preinit_array"
+
+  # === Symbol Versioning ===
+  - id: gnu-version
+    desc: .gnu.version section reference
+    crit: baseline
+    conf: 0.4
+    if:
+      type: string
+      substr: ".gnu.version"
+
+  - id: gnu-hash
+    desc: .gnu.hash section reference
+    crit: baseline
+    conf: 0.3
+    if:
+      type: string
+      substr: ".gnu.hash"
+
+composite_rules:
+  # NOTE: Constructor/destructor sections are standard for virtually all shared
+  # libraries and executables - they're used for library initialization and cleanup.
+  # Marked as baseline since presence is not suspicious by itself.
+  - id: constructor-destructor
+    desc: ELF constructor/destructor functions
+    crit: baseline
+    conf: 0.5
+    needs: 2
+    any:
+      - id: init-array
+      - id: fini-array
+      - id: ctors
+      - id: dtors
+      - id: preinit-array

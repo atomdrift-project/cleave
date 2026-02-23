@@ -1,0 +1,138 @@
+# .NET PowerShell Host Detection
+# Detects .NET assemblies that host and execute PowerShell scripts
+# MBC: E1059.001 (PowerShell Execution)
+# ATT&CK: T1059.001 (PowerShell)
+
+defaults:
+  mbc: "E1059"
+  attack: "T1059.001"
+  for: [pe, dll, csharp]
+  platforms: [windows]
+
+traits:
+  # === System.Management.Automation namespace ===
+  - id: sma-namespace
+    desc: System.Management.Automation import
+    crit: notable
+    conf: 0.85
+    if:
+      type: string
+      substr: "System.Management.Automation"
+
+  - id: sma-host
+    desc: System.Management.Automation.Host import
+    crit: notable
+    conf: 0.85
+    if:
+      type: string
+      substr: "System.Management.Automation.Host"
+
+  - id: sma-runspaces
+    desc: Runspaces namespace import
+    crit: notable
+    conf: 0.85
+    if:
+      type: string
+      substr: "System.Management.Automation.Runspaces"
+
+  # === PowerShell Runspace ===
+  - id: runspace-factory
+    desc: RunspaceFactory class
+    crit: notable
+    conf: 0.85
+    if:
+      type: string
+      substr: "RunspaceFactory"
+
+  - id: create-runspace
+    desc: CreateRunspace method
+    crit: notable
+    conf: 0.85
+    if:
+      type: string
+      substr: "CreateRunspace"
+
+  - id: powershell-create
+    desc: PowerShell.Create method
+    crit: notable
+    conf: 0.85
+    if:
+      type: string
+      regex: "PowerShell\\.Create|System\\.Management\\.Automation\\.PowerShell"
+
+  # === Script Execution ===
+  - id: add-script
+    desc: AddScript method
+    crit: notable
+    conf: 0.8
+    if:
+      type: string
+      substr: "AddScript"
+
+  - id: add-command
+    desc: AddCommand method (PowerShell execution)
+    crit: notable
+    conf: 0.8
+    if:
+      type: string
+      substr: "AddCommand"
+
+  - id: add-parameter
+    desc: AddParameter method (PowerShell execution)
+    crit: notable
+    conf: 0.8
+    if:
+      type: string
+      substr: "AddParameter"
+
+  - id: add-argument
+    desc: AddArgument method (PowerShell execution)
+    crit: notable
+    conf: 0.8
+    if:
+      type: string
+      substr: "AddArgument"
+
+  - id: invoke-method
+    desc: Invoke method (execute pipeline)
+    crit: notable
+    conf: 0.6
+    if:
+      type: string
+      regex: "\\.Invoke\\("
+
+  # === Embedded PS1 reference ===
+  - id: embedded-ps1
+    desc: Embedded .ps1 script reference
+    crit: notable
+    conf: 0.8
+    if:
+      type: string
+      regex: "\\w+\\.ps1"
+
+composite_rules:
+  # .NET PowerShell host (imports + execution)
+  - id: dotnet-powershell-host
+    desc: .NET PowerShell execution host
+    crit: notable
+    conf: 0.9
+    attack: "T1059.001"
+    for: [pe, dll, csharp]
+    needs: 2
+    any:
+      - id: sma-namespace
+      - id: sma-host
+      - id: sma-runspaces
+      - id: runspace-factory
+      - id: powershell-create
+
+  # Full PowerShell execution chain
+  - id: dotnet-powershell-exec
+    desc: .NET PowerShell script executor
+    crit: suspicious
+    conf: 0.9
+    attack: "T1059.001"
+    for: [pe, dll, csharp]
+    all:
+      - id: dotnet-powershell-host
+      - id: add-script

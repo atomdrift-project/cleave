@@ -1,0 +1,60 @@
+# File Timestamp Modification - Python
+# Generic file timestamp operations (not attack-specific)
+
+defaults:
+  for: [python]
+  crit: notable
+
+traits:
+  - id: os-utime
+    desc: os.utime() timestamp modification
+    conf: 0.75
+    if:
+      type: string
+      substr: "os.utime("
+
+  - id: os-utime-ast
+    desc: os.utime() timestamp modification
+    conf: 0.85
+    if:
+      type: ast
+      query: |
+        ((call
+          function: (attribute
+            object: (identifier) @mod
+            attribute: (identifier) @meth))
+         (#eq? @mod "os")
+         (#eq? @meth "utime"))
+
+  - id: os-getatime
+    desc: os.path.getatime() access time query
+    crit: baseline
+    conf: 0.6
+    if:
+      type: string
+      substr: "os.path.getatime("
+
+  - id: os-getmtime
+    desc: os.path.getmtime() modification time query
+    crit: baseline
+    conf: 0.6
+    if:
+      type: string
+      substr: "os.path.getmtime("
+
+composite_rules:
+  - id: timestamp-modification
+    desc: Python timestamp modification
+    crit: notable
+    conf: 0.75
+    any:
+      - id: os-utime
+      - id: os-utime-ast
+
+  - id: timestamp-preserve
+    desc: Saves file timestamps for later restoration
+    crit: notable
+    conf: 0.7
+    all:
+      - id: os-getatime
+      - id: os-getmtime

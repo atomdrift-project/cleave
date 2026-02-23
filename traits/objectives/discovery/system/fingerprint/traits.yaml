@@ -1,0 +1,23 @@
+composite_rules:
+  - id: ps-env-fingerprint
+    desc: Helper for env var fingerprinting
+    crit: notable
+    any:
+      - id: micro-behaviors/os/env/vars::env-computername
+      - id: micro-behaviors/os/env/vars::env-username
+
+  - id: ps-os-fingerprint
+    desc: Helper for OS fingerprinting
+    crit: notable
+    any:
+      - id: micro-behaviors/os/wmi/query::query-os-info
+      - id: micro-behaviors/os/info/system::os-version
+
+  - id: system-fingerprint-bundle
+    desc: "Collects extensive system information (fingerprinting)"
+    crit: suspicious
+    conf: 0.9
+    all:
+      - id: objectives/discovery/system/fingerprint::ps-env-fingerprint
+      - id: objectives/discovery/system/fingerprint::ps-os-fingerprint
+      - id: micro-behaviors/os/wmi/query::query-antivirus

@@ -1,0 +1,191 @@
+# HTTP Request Operations - PowerShell
+# MBC: C0002 (HTTP Communication)
+# ATT&CK: T1071.001
+
+defaults:
+  for: [powershell]
+  mbc: "C0002"
+  attack: "T1071.001"
+
+traits:
+  # === PowerShell HTTP cmdlets ===
+  # NOTE: Use type: raw because string extractor only captures string literals,
+  # not cmdlet/identifier names from PowerShell AST
+  - id: iwr-name
+    desc: Invoke-WebRequest command name
+    if:
+      type: raw
+      substr: "Invoke-WebRequest"
+
+  - id: iwr-alias
+    desc: iwr alias for Invoke-WebRequest
+    if:
+      type: raw
+      word: "iwr"
+
+  - id: irm-name
+    desc: Invoke-RestMethod command name
+    if:
+      type: raw
+      substr: "Invoke-RestMethod"
+
+  - id: irm-alias
+    desc: irm alias for Invoke-RestMethod
+    if:
+      type: raw
+      word: "irm"
+
+  - id: wget-alias
+    desc: wget alias in PowerShell
+    if:
+      type: raw
+      word: "wget"
+      case_insensitive: true
+
+  - id: curl-alias
+    desc: curl alias in PowerShell
+    if:
+      type: raw
+      word: "curl"
+      case_insensitive: true
+
+  - id: webclient-download
+    desc: System.Net.WebClient DownloadString/DownloadFile
+    crit: suspicious
+    conf: 0.85
+    if:
+      type: raw
+      regex: "WebClient\\)?\\.Download|New-Object\\s+.{0,30}WebClient|\\(Net\\.WebClient\\)"
+      case_insensitive: true
+
+  - id: webclient-upload
+    desc: System.Net.WebClient UploadString/UploadFile
+    crit: suspicious
+    conf: 0.85
+    if:
+      type: raw
+      regex: "WebClient\\)?\\.Upload|UploadString|UploadFile|UploadData"
+      case_insensitive: true
+
+  - id: http-post-method
+    desc: HTTP POST method specification
+    crit: notable
+    conf: 0.75
+    if:
+      type: raw
+      regex: "-Method\\s+POST|-Method\\s+['\"]POST['\"]"
+      case_insensitive: true
+
+  - id: http-body-param
+    desc: HTTP request body parameter
+    crit: baseline
+    conf: 0.6
+    if:
+      type: raw
+      regex: "-Body\\s+[@$\\{\"']"
+      case_insensitive: true
+
+  - id: bitstransfer
+    desc: BITS transfer cmdlet (stealthy download)
+    crit: suspicious
+    conf: 0.85
+    attack: "T1197"
+    if:
+      type: raw
+      regex: "Start-BitsTransfer|Import-Module\\s+BitsTransfer"
+      case_insensitive: true
+
+  - id: httpwebrequest
+    desc: System.Net.HttpWebRequest usage
+    crit: notable
+    conf: 0.75
+    if:
+      type: raw
+      regex: "HttpWebRequest|\\[System\\.Net\\.HttpWebRequest\\]"
+      case_insensitive: true
+
+  - id: uri-literal
+    desc: HTTP/HTTPS URL literal
+    crit: notable
+    conf: 0.75
+    if:
+      type: string
+      regex: "https?://[a-zA-Z0-9][-a-zA-Z0-9]*\\.[a-zA-Z]{2,}"
+
+composite_rules:
+  # Main Invoke-WebRequest composite
+  - id: invoke-webrequest
+    desc: Invoke-WebRequest cmdlet (iwr/wget/curl alias)
+    crit: notable
+    conf: 0.8
+    any:
+      - id: iwr-name
+      - id: iwr-alias
+      - id: wget-alias
+      - id: curl-alias
+
+  # Invoke-RestMethod composite
+  - id: invoke-restmethod
+    desc: Invoke-RestMethod cmdlet (irm alias)
+    crit: notable
+    conf: 0.8
+    any:
+      - id: irm-name
+      - id: irm-alias
+
+  # HTTP request composite
+  - id: request-powershell
+    desc: "Performs HTTP request"
+    crit: notable
+    conf: 0.9
+    any:
+      - id: invoke-webrequest
+      - id: invoke-restmethod
+      - id: webclient-download
+      - id: httpwebrequest
+
+  # HTTP download composite
+  - id: download
+    desc: "Downloads content from URL"
+    crit: notable
+    conf: 0.9
+    any:
+      - id: invoke-webrequest
+      - id: invoke-restmethod
+      - id: webclient-download
+      - id: bitstransfer
+
+  # HTTP POST composite
+  - id: ps-post
+    desc: "Performs HTTP POST request (PowerShell)"
+    crit: suspicious
+    conf: 0.85
+    all:
+      - id: http-post-method
+    any:
+      - id: invoke-webrequest
+      - id: invoke-restmethod
+
+  # Suspicious download pattern
+  - id: download-execute
+    desc: "Downloads and potentially executes content"
+    crit: suspicious
+    conf: 0.9
+    attack: "T1105"
+    all:
+      - id: uri-literal
+    any:
+      - id: webclient-download
+      - id: bitstransfer
+
+  # Data exfiltration pattern
+  - id: exfil
+    desc: "Potential data exfiltration via HTTP"
+    crit: suspicious
+    conf: 0.85
+    attack: "T1041"
+    needs: 2
+    any:
+      - id: webclient-upload
+      - id: http-post-method
+      - id: http-body-param

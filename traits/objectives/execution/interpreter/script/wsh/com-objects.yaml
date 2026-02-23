@@ -1,0 +1,21 @@
+# Windows Script Host Traits
+# Detects WSH-specific patterns
+# Note: COM object detections are in objectives/execution/activex/com/ to avoid duplication
+
+traits:
+  - id: execution-policy-bypass
+    desc: "PowerShell execution policy bypass"
+    crit: suspicious
+    conf: 0.95
+    attack: "T1059.001"
+    for: [javascript, powershell]
+    platforms: [windows]
+    if:
+      type: string
+      regex: 'ExecutionPolicy\s+(Bypass|Unrestricted)'
+    downgrade:
+      any:
+        - type: raw
+          substr: "require('../common')"
+        - type: raw
+          regex: "Copyright.*Node contributors"

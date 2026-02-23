@@ -1,0 +1,63 @@
+# Hardware Information Paths and Fields (Linux)
+# Basic DMI/SMBIOS paths, CPU fields, and commands
+# MBC: E1082 (System Information Discovery)
+# ATT&CK: T1082 (System Information Discovery)
+
+defaults:
+  for: [elf, so, c, shell]
+  platforms: [linux]
+  crit: baseline
+  mbc: "E1082"
+  attack: "T1082"
+
+traits:
+  # === DMI/SMBIOS paths ===
+  - id: dmi-class-path
+    desc: /sys/class/dmi/id/ path
+    conf: 0.5
+    if:
+      type: string
+      substr: "/sys/class/dmi/id/"
+
+  - id: dmi-devices-path
+    desc: /sys/devices/virtual/dmi/id/ path
+    conf: 0.5
+    if:
+      type: string
+      substr: "/sys/devices/virtual/dmi/id/"
+
+  - id: bios-version
+    desc: bios_version DMI field
+    conf: 0.5
+    if:
+      type: string
+      substr: "bios_version"
+
+  # === CPU info fields ===
+  - id: cpu-model-name
+    desc: model name CPU field
+    conf: 0.4
+    if:
+      type: string
+      substr: "model name"
+
+  - id: cpu-family
+    desc: cpu family field
+    conf: 0.4
+    if:
+      type: string
+      substr: "cpu family"
+
+  - id: cpu-cores
+    desc: cpu cores field
+    conf: 0.4
+    if:
+      type: string
+      substr: "cpu cores"
+
+  - id: lscpu-cmd
+    desc: lscpu command
+    conf: 0.4
+    if:
+      type: string
+      substr: "lscpu"

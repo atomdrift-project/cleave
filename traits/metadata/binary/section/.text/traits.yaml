@@ -1,0 +1,13 @@
+# Binary .text Section Properties
+# Observational traits for code section characteristics
+
+traits:
+  - id: dominant
+    desc: Code section comprises most binary
+    crit: baseline
+    conf: 0.6
+    for: [elf]
+    if:
+      type: metrics
+      field: binary.largest_section_ratio
+      min: 0.75

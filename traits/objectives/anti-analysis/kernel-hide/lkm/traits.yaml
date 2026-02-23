@@ -1,0 +1,226 @@
+# Linux Kernel Rootkit - General Composite Detection Rules
+# Complex patterns combining rootkit indicators across categories
+# ATT&CK: T1014 (Rootkit)
+
+composite_rules:
+  # memfd_create composite
+  - id: memfd-create
+    desc: memfd_create usage (memory-backed file)
+    crit: suspicious
+    conf: 0.95
+    for: [elf, c]
+    any:
+      - id: micro-behaviors/mem/anonymous/create::memfd-create
+      - id: objectives/anti-analysis/kernel-hide/lkm/internals::sys-memfd-create-ref
+
+  # finit_module composite
+  - id: finit-module
+    desc: finit_module usage (module loading)
+    crit: suspicious
+    conf: 0.95
+    for: [elf, c]
+    any:
+      - id: objectives/anti-analysis/kernel-hide/lkm/internals::finit-module-call
+      - id: objectives/anti-analysis/kernel-hide/lkm/internals::sys-finit-module-ref
+
+  # Fileless LKM loading (migrated from YARA)
+  - id: fileless-lkm-loading
+    desc: Fileless kernel module loading (memfd_create
+    crit: suspicious
+    conf: 1.0
+    attack: "T1620"
+    for: [elf, c]
+    all:
+      - id: memfd-create
+      - id: finit-module
+
+  # Page protection flag composite
+  - id: page-protection-flag
+    desc: Memory page protection flags
+    crit: suspicious
+    conf: 0.9
+    for: [c]
+    any:
+      - id: objectives/anti-analysis/kernel-hide/lkm/internals::page-rw-flag
+      - id: objectives/anti-analysis/kernel-hide/lkm/internals::page-nx-flag
+
+  # PTE manipulation (migrated from YARA)
+  - id: pte-manipulation
+    desc: Direct PTE manipulation to bypass
+    crit: suspicious
+    conf: 0.95
+    attack: "T1014"
+    for: [c]
+    all:
+      - id: objectives/anti-analysis/kernel-hide/lkm/internals::lookup-address-call
+      - id: page-protection-flag
+
+  # ELF headers composite
+  - id: elf64-headers
+    desc: ELF64 structure headers
+    crit: suspicious
+    conf: 0.85
+    for: [c]
+    all:
+      - id: objectives/anti-analysis/kernel-hide/lkm/internals::elf64-ehdr-decl
+      - id: objectives/anti-analysis/kernel-hide/lkm/internals::elf64-shdr-decl
+      - id: objectives/anti-analysis/kernel-hide/lkm/internals::elf64-phdr-decl
+
+  # ELF patching (migrated from YARA)
+  - id: elf-patching
+    desc: ELF binary structural patching (Infection)
+    crit: suspicious
+    conf: 0.95
+    attack: "T1542.001"
+    for: [c]
+    all:
+      - id: elf64-headers
+    any:
+      - id: objectives/anti-analysis/kernel-hide/lkm/internals::elf-entry-field
+      - id: objectives/anti-analysis/kernel-hide/lkm/internals::patch-string-ref
+
+  # Advanced LKM Rootkit Flow
+  - id: advanced-lkm-rootkit
+    desc: "Advanced LKM rootkit detected"
+    crit: notable
+    conf: 0.95
+
+  # ============================================================
+  # ROOTKIT HEADER DETECTION (string-based composites)
+  # ============================================================
+
+  # Kernel hooking infrastructure (kprobes for symbol resolution)
+  - id: kprobes-kallsyms
+    desc: Kprobes with kallsyms (kernel 5.7+ symbol bypass)
+    crit: suspicious
+    conf: 0.95
+    attack: "T1014"
+    for: [c]
+    all:
+      - id: objectives/anti-analysis/kernel-hide/lkm/headers::kprobes-include-str
+      - id: objectives/anti-analysis/kernel-hide/lkm/headers::kallsyms-lookup-name-str
+
+  # Syscall hooking infrastructure
+  - id: syscall-hook-setup
+    desc: Syscall hooking setup (table+dirent)
+    crit: notable
+    conf: 0.7
+    attack: "T1014"
+    for: [c]
+    any:
+      - id: objectives/anti-analysis/kernel-hide/lkm/headers
+
+  # CR0 manipulation (memory write protection bypass)
+  - id: cr0-bypass
+    desc: CR0 write protection bypass
+    crit: suspicious
+    conf: 0.9
+    for: [c]
+    any:
+      - id: objectives/anti-analysis/kernel-hide/lkm/headers::cr0-variable-str
+      - id: objectives/anti-analysis/kernel-hide/lkm/headers::force-order-str
+    downgrade:
+      none:
+        - id: kernel-module-header
+
+  # Rootkit header pattern (kernel module with hooking)
+  - id: rootkit-header
+    desc: Rootkit header file pattern
+    crit: suspicious
+    conf: 0.95
+    attack: "T1014"
+    for: [c]
+    all:
+      - id: objectives/anti-analysis/kernel-hide/lkm/headers
+
+  # Full rootkit header detection
+  - id: lkm-rootkit-header
+    desc: LKM rootkit header detected
+    crit: hostile
+    conf: 0.98
+    attack: "T1014"
+    for: [c]
+    all:
+      - id: objectives/anti-analysis/kernel-hide/lkm/headers::linkage-include-str
+      - id: kprobes-kallsyms
+    any:
+      - id: syscall-hook-setup
+      - id: cr0-bypass
+
+  # Solaris DDI/DKI kernel rootkit (SInAR pattern)
+  - id: solaris-ddi-headers
+    desc: Solaris DDI/DKI kernel headers
+    crit: notable
+    conf: 0.6
+    attack: "T1014"
+    for: [c]
+    any:
+      - id: objectives/anti-analysis/kernel-hide/lkm/solaris
+
+  # Kernel patching infrastructure (Solaris)
+  - id: solaris-kernel-patch
+    desc: Solaris direct kernel text patching
+    crit: suspicious
+    conf: 0.98
+    attack: "T1014"
+    for: [c]
+    all:
+      - id: objectives/anti-analysis/kernel-hide/lkm/solaris::hot-patch-kernel-text-call
+    any:
+      - id: objectives/anti-analysis/kernel-hide/lkm/solaris::ddi-crit-lock-call
+      - id: objectives/anti-analysis/kernel-hide/lkm/solaris::sysent-reference
+
+  # Solaris privilege escalation (kcred elevation)
+  - id: solaris-privilege-escalation
+    desc: Solaris kernel credential elevation
+    crit: suspicious
+    conf: 0.99
+    attack: "T1068"
+    for: [c]
+    all:
+      - id: objectives/anti-analysis/kernel-hide/lkm/solaris::crdup-call
+      - id: objectives/anti-analysis/kernel-hide/lkm/solaris::kcred-kernel-cred
+
+  # Solaris DTrace evasion
+  - id: solaris-dtrace-bypass
+    desc: Solaris DTrace interrupt disabling (anti-analysis)
+    crit: suspicious
+    conf: 0.95
+    attack: "T1014"
+    for: [c]
+    any:
+      - id: objectives/anti-analysis/kernel-hide/lkm/solaris::dtrace-interrupt-disable-call
+      - id: objectives/anti-analysis/kernel-hide/lkm/solaris::dtrace-interrupt-enable-call
+
+  # Opcode structures are now covered by solaris-ddi-headers
+  # (removed duplicate - both referenced same directory)
+
+  # Full Solaris/SunOS kernel rootkit detection
+  - id: solaris-kernel-rootkit
+    desc: Solaris kernel rootkit (SInAR/DDI-based)
+    crit: hostile
+    conf: 0.99
+    attack: "T1014"
+    for: [c]
+    all:
+      - id: solaris-ddi-headers
+      - id: solaris-kernel-patch
+    any:
+      - id: solaris-privilege-escalation
+      - id: solaris-dtrace-bypass
+      - id: objectives/anti-analysis/kernel-hide/lkm/solaris
+
+  # Linux Kernel LKM Rootkit (General)
+  - id: lkm-rootkit-behavior
+    desc: Linux LKM rootkit (hooking + hiding + C2)
+    crit: hostile
+    conf: 0.98
+    attack: "T1014"
+    for: [c]
+    all:
+      - id: micro-behaviors/os/kernel/hook::syscall-table-write
+    any:
+      - id: micro-behaviors/os/kernel/hiding::list-del-this-module
+      - id: micro-behaviors/os/kernel/hiding::task-flags-10000000
+      - id: micro-behaviors/os/kernel/hook::kill-hook-sig-switch
+      - id: objectives/privilege-escalation/local/kernel::commit-creds-prepare-creds

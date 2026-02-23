@@ -1,0 +1,12 @@
+# Memory Advisory - Unix
+
+traits:
+  - id: madvise
+    desc: Memory advisory hints (madvise)
+    crit: baseline
+    conf: 1.0
+    platforms: [linux, macos, unix]
+    for: [elf, macho, so, dylib, c]
+    if:
+      type: symbol
+      regex: "^_?madvise$"

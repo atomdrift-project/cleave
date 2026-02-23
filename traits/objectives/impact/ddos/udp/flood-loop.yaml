@@ -1,0 +1,13 @@
+composite_rules:
+  - id: udp-flood-loop
+    desc: Infinite loop sending network data (DDoS)
+    crit: suspicious
+    conf: 0.8
+    mbc: "C0005"  # Flooding
+    attack: "T1498" # Network Denial of Service
+    size_max: 50000
+    all:
+      - id: micro-behaviors/data/control-flow/loop::infinite-loop-header
+      - id: micro-behaviors/communications/socket/send::send-call-raw
+    unless:
+      - id: micro-behaviors/communications/socket/family::af-alg-socket

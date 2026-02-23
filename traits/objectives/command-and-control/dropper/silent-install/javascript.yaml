@@ -1,0 +1,6 @@
+# JavaScript Silent Installer Detection
+# Detects silent installation patterns in JavaScript
+# ATT&CK: T1105 (Ingress Tool Transfer)
+
+# NOTE: Incomplete - traits don't exist yet
+composite_rules: []

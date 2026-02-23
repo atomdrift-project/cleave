@@ -1,0 +1,31 @@
+# Self-Deletion Detection - Unix
+# MBC: F0007 (Self Deletion)
+# ATT&CK: T1070.004
+
+defaults:
+  for: [all]
+
+traits:
+  - id: self-delete-unlink
+    desc: Self-deleting via unlink
+    crit: suspicious
+    conf: 0.66
+    mbc: "F0007"
+    attack: "T1070.004"
+    if:
+      type: string
+      substr: "unlink(argv[0])"
+
+composite_rules:
+  - id: mirai-style-self-delete
+    desc: Memory-only execution pattern
+    crit: suspicious
+    conf: 0.88
+    mbc: "F0007"
+    attack: "T1070.004"
+    all:
+      - id: micro-behaviors/fs/proc/info::process-self-exe  # Reads /proc/self/exe
+    any:
+      - id: self-delete-unlink  # Explicit unlink
+      - id: micro-behaviors/fs/path/temp::tmp-hidden-file  # Hidden temp file (lock/state)
+      - id: micro-behaviors/fs/path/device::dev-null  # Daemonization

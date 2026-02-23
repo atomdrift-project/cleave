@@ -1,0 +1,23 @@
+# HTTP Request - Axios (JavaScript)
+# MBC: C0002 (HTTP Communication)
+
+traits:
+  - id: js-axios-get
+    desc: Makes HTTP GET requests using
+    crit: baseline
+    conf: 1.0
+    for: [javascript]
+    if:
+      type: ast
+      kind: call
+      exact: "axios.get"
+
+  - id: js-axios-post
+    desc: Makes HTTP POST requests using
+    crit: baseline
+    conf: 1.0
+    for: [javascript]
+    if:
+      type: ast
+      kind: call
+      exact: "axios.post"

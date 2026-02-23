@@ -1,0 +1,40 @@
+# Go Process and Persistence Indicators
+traits:
+  - id: setuid
+    desc: "Change user/group ID"
+    crit: notable
+    conf: 0.95
+    attack: "T1548.001"
+    for: [go]
+    if:
+      type: string
+      regex: 'syscall\.Set(u|g)id'
+
+  - id: symlink
+    desc: "Create symbolic links"
+    crit: notable
+    conf: 0.8
+    attack: "T1574.006"
+    for: [go]
+    if:
+      type: string
+      substr: "os.Symlink"
+
+  - id: manipulate
+    desc: "Process manipulation"
+    crit: notable
+    conf: 0.85
+    attack: "T1055"
+    for: [go]
+    if:
+      type: string
+      regex: '(os\.FindProcess|syscall\.Kill)'
+
+  - id: lifecycle
+    desc: "Set finalizer hooks"
+    crit: notable
+    conf: 0.7
+    for: [go]
+    if:
+      type: string
+      substr: "runtime.SetFinalizer"

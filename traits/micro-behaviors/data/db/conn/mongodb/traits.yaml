@@ -1,0 +1,59 @@
+# Database Connection - MONGODB
+
+defaults:
+  for: [all]
+
+traits:
+  # === MongoDB micro-behaviors ===
+  - id: mongodb-url
+    desc: mongodb:// URL scheme
+    crit: notable
+    conf: 0.9
+    if:
+      type: string
+      substr: "mongodb://"
+
+  - id: mongodb-srv-url
+    desc: mongodb+srv:// URL scheme
+    crit: notable
+    conf: 0.9
+    if:
+      type: string
+      substr: "mongodb+srv://"
+
+  - id: go-mongodb
+    desc: go.mongodb.org driver
+    crit: notable
+    conf: 0.9
+    if:
+      type: string
+      substr: "go.mongodb.org"
+
+  - id: pymongo
+    desc: pymongo Python driver
+    crit: notable
+    conf: 0.9
+    if:
+      type: string
+      substr: "pymongo"
+
+  - id: mongoose
+    desc: mongoose ODM
+    crit: notable
+    conf: 0.9
+    if:
+      type: string
+      substr: "mongoose"
+
+composite_rules:
+  # MongoDB composite (migrated from YARA)
+  - id: mongodb
+    desc: MongoDB database connectivity
+    crit: notable
+    conf: 0.9
+    any:
+      - id: mongodb-url
+      - id: mongodb-srv-url
+      - id: go-mongodb
+      - id: pymongo
+      - id: mongoose

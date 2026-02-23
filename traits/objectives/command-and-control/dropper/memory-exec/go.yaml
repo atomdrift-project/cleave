@@ -1,0 +1,75 @@
+# Go Memory Dropper Detection
+# Detects Go binaries that decrypt and execute embedded payloads from memory
+# Common pattern in crypters like Ezuri, Limelighter, etc.
+# MBC: B0030 (Dropper), B0032 (Obfuscation)
+# ATT&CK: T1027.009 (Embedded Payloads), T1620 (Reflective Code Loading)
+
+defaults:
+  for: [elf, macho]
+  mbc: "B0030"
+  attack: "T1027.009"
+
+traits:
+  # AES NewCipher - crypto/aes.NewCipher in Go binaries
+  - id: aes-newcipher
+    desc: Go crypto/aes.NewCipher call
+    crit: notable
+    conf: 0.8
+    if:
+      type: string
+      substr: "crypto/aes.NewCipher"
+
+  # AES-CFB Decrypter - commonly used in Go crypters for payload decryption
+  - id: cfb-decrypter
+    desc: Go AES-CFB decrypter
+    crit: notable
+    conf: 0.8
+    if:
+      type: string
+      substr: "cipher.NewCFBDecrypter"
+
+  # Run from memory pattern - executes payload without writing to disk
+  - id: run-from-memory
+    desc: Run-from-memory execution pattern
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: string
+      substr: "runFromMemory"
+
+  # syscall.Exec - direct execution via syscall
+  - id: syscall-exec
+    desc: Go syscall.Exec for process execution
+    crit: notable
+    conf: 0.7
+    if:
+      type: string
+      substr: "syscall.Exec"
+
+  # memfd_create - use micro-behaviors/mem/anonymous/create::memfd-create (canonical ELF symbol detection)
+
+  # Custom AES decryption function pattern (main.aesDec etc)
+  - id: aes-decrypt-func
+    desc: AES decryption function
+    crit: notable
+    conf: 0.75
+    if:
+      type: string
+      regex: "\\.(aes|AES)[Dd]ec(rypt)?"
+
+composite_rules:
+  # Go memory dropper: AES decryption + memory execution
+  # This is the core Ezuri/crypter pattern
+  # Complexity: all(4) = 4 >= 4 HOSTILE
+  - id: memory-dropper
+    desc: Go memory dropper (decrypt+memexec)
+    crit: hostile
+    conf: 0.95
+    mbc: "B0030"
+    attack: "T1620"
+    for: [elf, macho]
+    all:
+      - id: cfb-decrypter
+      - id: run-from-memory
+      - id: syscall-exec
+      - id: aes-newcipher

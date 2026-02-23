@@ -1,0 +1,68 @@
+# Module Enumeration Capabilities
+# Runtime module and library enumeration
+
+defaults:
+  for: ["pe", "dll"]
+  platforms: ["windows"]
+
+traits:
+  # === Module Lookup ===
+  - id: get-module-handle-by-name
+    desc: Get module handle Unicode
+    crit: notable
+    conf: 0.70
+    if:
+      type: symbol
+      exact: "GetModuleHandleW"
+
+  - id: get-module-handle-ansi
+    desc: Get module handle ANSI
+    crit: notable
+    conf: 0.70
+    if:
+      type: symbol
+      exact: "GetModuleHandleA"
+
+  - id: get-module-filename
+    desc: Get module file path
+    crit: notable
+    conf: 0.70
+    if:
+      type: symbol
+      exact: "GetModuleFileNameW"
+
+  - id: get-module-filename-ansi
+    desc: Get module file path (ANSI)
+    crit: notable
+    conf: 0.70
+    if:
+      type: symbol
+      exact: "GetModuleFileNameA"
+
+  # === Dynamic Loading ===
+  # NOTE: LoadLibraryW and LoadLibraryExW moved to objectives/execution/native/runtime
+
+  - id: free-library
+    desc: Unload dynamic library
+    crit: notable
+    conf: 0.70
+    if:
+      type: symbol
+      exact: "FreeLibrary"
+
+  # === Process Information ===
+  - id: get-current-process
+    desc: Get current process handle
+    crit: notable
+    conf: 0.70
+    if:
+      type: symbol
+      exact: "GetCurrentProcess"
+
+  - id: get-current-process-id
+    desc: Get current process ID
+    crit: notable
+    conf: 0.70
+    if:
+      type: symbol
+      exact: "GetCurrentProcessId"

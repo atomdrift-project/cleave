@@ -1,0 +1,59 @@
+defaults:
+  for:
+  - all
+traits:
+- id: repo
+  desc: Chisel repository URL
+  crit: suspicious
+  conf: 1.0
+  attack: T1090
+  if:
+    type: string
+    substr: github.com/jpillora/chisel
+    case_insensitive: true
+- id: func
+  desc: Chisel function name
+  crit: suspicious
+  conf: 0.9
+  attack: T1090
+  if:
+    type: string
+    regex: Chisel(Client|Server)
+- id: keyword
+  desc: Chisel keyword
+  crit: notable
+  conf: 0.6
+  if:
+    type: string
+    word: chisel
+    case_insensitive: true
+- id: mode
+  desc: Chisel mode (reverse/socks5 with tunnel/proxy/forward)
+  if:
+    type: string
+    regex: (?i)(reverse|socks5)[_-]?(tunnel|proxy|forward)
+- id: mode-port-hint
+  desc: Chisel mode with port context
+  if:
+    type: string
+    regex: (?i)chisel.{0,20}port
+composite_rules:
+- id: keyword-with-mode
+  desc: Chisel keyword with tunneling mode
+  crit: suspicious
+  conf: 0.8
+  attack: T1090
+  all:
+  - id: keyword
+  any:
+  - id: mode
+  - id: mode-port-hint
+- id: chisel-detected
+  desc: Chisel tunneling tool detected
+  crit: notable
+  conf: 0.95
+  attack: T1090
+  any:
+  - id: repo
+  - id: func
+  - id: keyword-with-mode

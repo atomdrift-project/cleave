@@ -1,0 +1,41 @@
+# Python Registry Capabilities
+
+defaults:
+  for: ["python"]
+  platforms: ["windows"]
+
+traits:
+  - id: winreg-openkey
+    desc: Opens a Windows registry key
+    crit: baseline
+    conf: 0.8
+    if:
+      type: ast
+      query: |
+        (call
+          function: (attribute
+            object: (identifier) @mod
+            attribute: (identifier) @func)
+          arguments: (argument_list
+            (attribute
+              object: (identifier) @mod2
+              attribute: (identifier) @hkey))
+          (#eq? @mod "winreg")
+          (#match? @func "^OpenKey")
+          (#match? @hkey "^HKEY_")
+        )
+
+  - id: winreg-setvalue
+    desc: Sets a Windows registry value
+    crit: notable
+    conf: 0.8
+    if:
+      type: ast
+      query: |
+        (call
+          function: (attribute
+            object: (identifier) @mod
+            attribute: (identifier) @func)
+          (#eq? @mod "winreg")
+          (#match? @func "^SetValue")
+        )

@@ -1,0 +1,53 @@
+# Discord-based dropper behaviors
+# ATT&CK: T1105 (Ingress Tool Transfer), T1071.001 (Web Protocols)
+
+composite_rules:
+  # Intermediate rule for write operations
+  - id: python-write-capability
+    desc: Python file write capability
+    crit: notable
+    conf: 0.8
+    any:
+      - id: micro-behaviors/fs/write/file::python-open-write-binary
+      - id: micro-behaviors/fs/write/file::python-write-response-content
+      - id: objectives/lateral-movement/supply-chain/pypi/install-patterns::binary-file-drop
+
+  # Intermediate rule for execution operations
+  - id: python-exec-capability
+    desc: Python execution capability
+    crit: notable
+    conf: 0.8
+    any:
+      - id: micro-behaviors/process/create/shell::shell-execution
+      - id: micro-behaviors/process/create/shell::shell-execution-indicators
+      - id: objectives/execution/dropper/http::python-exec-any
+      - id: objectives/execution/condition/platform::has-execution-capability
+
+  # Main Hostile Rule: Discord Dropper (Loose Correlation)
+  # Uses loose correlation of traits because specific regex traits are sometimes suppressed/deduplicated.
+  # Logic: Has "Discord" string + Binary File Drop + Execution Capability
+  - id: discord-dropper-exec
+    desc: Discord CDN dropper behavior (downloads executable)
+    crit: hostile
+    conf: 0.95
+    attack: "T1105"
+    mbc: "B0024"
+    all:
+      - id: objectives/command-and-control/channel/discord::discord-string
+      - id: python-write-capability
+      - id: python-exec-capability
+    any:
+      - id: objectives/command-and-control/channel/discord::discord-cdn-executable
+      - id: objectives/command-and-control/infrastructure/domain::http-url-script
+
+  # Main Suspicious Rule: Discord Dropper (Generic)
+  - id: discord-dropper-generic
+    desc: Discord CDN dropper behavior (generic download + execute)
+    crit: suspicious
+    conf: 0.9
+    attack: "T1105"
+    all:
+      - id: objectives/command-and-control/channel/discord::discord-string
+      - id: micro-behaviors/communications/http/lib/requests::requests-python
+      - id: python-write-capability
+      - id: python-exec-capability

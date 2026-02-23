@@ -1,0 +1,21 @@
+defaults:
+  crit: notable
+  conf: 1.0
+  for:
+  - all
+traits:
+- id: inject-script-element__any_1
+  desc: Derived string condition
+  if:
+    type: string
+    regex: createElement\(['"]script['"]\)
+- id: inject-script-element__any_2
+  desc: Derived string condition
+  if:
+    type: string
+    regex: appendChild\([^)]{0,30}script
+- id: inject-script-element__any_3
+  desc: Derived string condition
+  if:
+    type: string
+    regex: insertBefore\([^)]{0,30}script

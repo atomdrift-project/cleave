@@ -1,0 +1,24 @@
+# Cryptographic random number generation - Windows
+# Used for encryption key generation
+defaults:
+  for: [pe, dll]
+  platforms: [windows]
+
+traits:
+  - id: crypt-gen-random
+    desc: Generate cryptographic random bytes
+    crit: notable
+    conf: 0.9
+    attack: "T1486"
+    mbc: "C0027"
+    if:
+      type: symbol
+      exact: "CryptGenRandom"
+
+  - id: rtl-gen-random
+    desc: Generate random bytes (RtlGenRandom)
+    crit: notable
+    conf: 0.9
+    if:
+      type: symbol
+      exact: "RtlGenRandom"

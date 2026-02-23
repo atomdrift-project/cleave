@@ -1,0 +1,64 @@
+defaults:
+  for: [all]
+
+traits:
+  - id: js-keyword-parseint
+    desc: parseInt keyword
+    if:
+      type: string
+      word: "parseInt"
+
+  - id: js-keyword-fromcharcode
+    desc: fromCharCode keyword
+    if:
+      type: string
+      word: "fromCharCode"
+
+  - id: js-keyword-xor
+    desc: XOR bitwise operator in expression
+    for: [javascript, typescript, python, ruby, php, shell]
+    if:
+      type: raw
+      regex: '\w+\s*\^\s*\w+'
+
+  - id: js-obfuscated-string-method
+    desc: Obfuscated String method call (String[...])
+    if:
+      type: raw
+      regex: 'String\s*\['
+
+  - id: js-keyword-eval
+    desc: eval function keyword
+    crit: baseline
+    conf: 0.7
+    for: [javascript]
+    if:
+      type: raw
+      regex: '\\beval\\b'
+
+  - id: js-keyword-function-constructor
+    desc: Function constructor keyword
+    crit: baseline
+    conf: 0.7
+    for: [javascript]
+    if:
+      type: raw
+      regex: '\\bFunction\\b'
+
+  - id: js-keyword-atob
+    desc: atob base64 decode function
+    crit: baseline
+    conf: 0.7
+    for: [javascript]
+    if:
+      type: raw
+      word: "atob"
+
+  - id: js-keyword-decodeuricomponent
+    desc: decodeURIComponent function
+    crit: baseline
+    conf: 0.7
+    for: [javascript]
+    if:
+      type: raw
+      regex: "decodeURIComponent"

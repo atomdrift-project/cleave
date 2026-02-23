@@ -1,0 +1,53 @@
+# Dynamic Library Symbol Lookup
+defaults:
+  for: [all]
+
+traits:
+  - id: dlsym-symbol
+    desc: dlsym function symbol
+    crit: baseline
+    conf: 0.9
+    if:
+      type: symbol
+      regex: "dlsym"
+
+  - id: dladdr
+    desc: Address to symbol lookup
+    crit: notable
+    conf: 0.85
+    attack: "T1574.006"
+    for: [elf, macho]
+    if:
+      type: string
+      substr: "dladdr"
+
+  - id: get-proc-address
+    desc: Windows GetProcAddress symbol
+    crit: notable
+    conf: 0.95
+    attack: "T1574.002"
+    platforms: [windows]
+    for: [pe]
+    if:
+      type: symbol
+      exact: "GetProcAddress"
+
+  - id: dlfcn-hook-symbol
+    desc: _dlfcn_hook internal linker symbol
+    crit: suspicious
+    conf: 0.95
+    attack: "T1574.006"
+    for: [elf]
+    if:
+      type: symbol
+      exact: "_dlfcn_hook"
+
+  - id: rtld-next
+    desc: RTLD_NEXT pseudo-handle
+    crit: notable
+    conf: 0.9
+    attack: "T1574.006"
+    for: [elf, macho]
+    if:
+      type: string
+      substr: "RTLD_NEXT"

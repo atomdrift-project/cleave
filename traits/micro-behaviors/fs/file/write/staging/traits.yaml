@@ -1,0 +1,26 @@
+# File Staging Path Detection
+# Detects use of common malware staging directories
+
+defaults:
+  crit: notable
+  conf: 0.8
+  platforms: [windows]
+
+traits:
+  - id: users-public-path
+    desc: Users\Public staging directory
+    attack: "T1074.001"
+    mbc: "E1074"
+    for: [javascript, shell, batch, powershell]
+    if:
+      type: raw
+      regex: "(?i)Users\\\\Public\\\\"
+
+  - id: users-public-path-utf16
+    desc: Users\Public staging path (UTF-16)
+    attack: "T1074.001"
+    mbc: "E1074"
+    for: [javascript]
+    if:
+      type: raw
+      regex: "U\\x00s\\x00e\\x00r\\x00s\\x00.\\x00.\\x00P\\x00u\\x00b\\x00l\\x00i\\x00c"

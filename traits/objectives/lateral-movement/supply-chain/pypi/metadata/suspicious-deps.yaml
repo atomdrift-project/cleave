@@ -1,0 +1,123 @@
+# Suspicious PyPI Dependencies Detection
+# Detects malware declaring suspicious dependencies in setup.py
+# ATT&CK: T1071.001 (Web Protocols), T1195.001 (Supply Chain)
+# MBC: B0030 (C2 Communication)
+
+defaults:
+  crit: notable
+  attack: "T1195.001"
+  mbc: "B0030"
+  for: [python]
+
+traits:
+  # === Suspicious Dependencies ===
+  - id: dependency-gitpython
+    desc: GitPython dependency
+    crit: notable
+    conf: 0.70
+    if:
+      type: string
+      regex: "install_requires.{0,50}gitpython|gitpython.{0,50}install"
+
+  - id: dependency-sockets
+    desc: sockets library dependency
+    crit: notable
+    conf: 0.65
+    if:
+      type: string
+      regex: "install_requires.{0,50}sockets|sockets.{0,50}install"
+
+  - id: dependency-discord-py
+    desc: discord.py dependency
+    crit: notable
+    conf: 0.60
+    if:
+      type: string
+      regex: "install_requires.{0,50}discord|discord.{0,50}install"
+      count_min: 1
+
+  - id: dependency-dhooks
+    desc: dhooks Discord webhook library
+    crit: suspicious
+    conf: 0.85
+    if:
+      type: string
+      regex: "'dhooks'|\"dhooks\"|install_requires.{0,50}dhooks"
+
+  - id: dependency-mss
+    desc: mss screenshot capture library
+    crit: notable
+    conf: 0.70
+    if:
+      type: string
+      regex: "'mss'|\"mss\"|install_requires.{0,50}mss"
+
+  - id: dependency-requests-sockets
+    desc: requests and sockets combo
+    crit: suspicious
+    conf: 0.75
+    if:
+      type: string
+      regex: "requests.{0,50}sockets|sockets.{0,50}requests"
+
+  # === Suspicious Combo ===
+  - id: suspicious-dep-combo-1
+    desc: Suspicious combo (git/socket/aio with discord/request)
+    if:
+      type: string
+      regex: "(sockets|aiohttp).{0,50}discord"
+
+  - id: suspicious-dep-combo-2
+    desc: Suspicious combo (discord/request with pynput)
+    if:
+      type: string
+      regex: "(discord|requests).{0,50}pynput"
+
+composite_rules:
+  - id: suspicious-dep-combo
+    desc: Suspicious dependency combination
+    crit: suspicious
+    conf: 0.80
+    all:
+      - id: suspicious-dep-combo-1
+      - id: suspicious-dep-combo-2
+
+  # === PyPI Dependency Analysis ===
+  - id: pypi-suspicious-deps
+    desc: Suspicious PyPI dependencies
+    crit: suspicious
+    conf: 0.85
+    attack: "T1195.001"
+    for: [python]
+    needs: 2
+    any:
+      - id: dependency-gitpython
+      - id: dependency-sockets
+      - id: dependency-discord-py
+      - id: dependency-requests-sockets
+
+  - id: stealer-dep-pattern
+    desc: Token stealer dependency pattern
+    crit: suspicious
+    conf: 0.90
+    attack: "T1195.001"
+    mbc: "B0030"
+    platforms: [all]
+    needs: 3
+    any:
+      - id: dependency-gitpython
+      - id: dependency-sockets
+      - id: dependency-discord-py
+      - id: suspicious-dep-combo
+
+  - id: discord-stealer-bot
+    desc: Discord stealer bot with webhook exfiltration
+    crit: hostile
+    conf: 0.95
+    attack: "T1195.001"
+    mbc: "B0030"
+    for: [python]
+    all:
+      - id: dependency-dhooks
+      - id: dependency-mss
+      - id: dependency-discord-py

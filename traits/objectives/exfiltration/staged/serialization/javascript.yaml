@@ -1,0 +1,25 @@
+# Data Serialization - JavaScript/Node.js
+# Detects serialization of sensitive data before exfiltration
+# ATT&CK: T1027 (Obfuscated Files or Information)
+
+defaults:
+  for: [javascript, typescript]
+
+traits:
+  - id: process-env-serialization
+    desc: Serializes process.env to JSON
+    crit: notable
+    conf: 0.8
+    if:
+      type: raw
+      regex: 'JSON\.stringify\s*\(\s*process\.env\s*\)|process\.env.{0,50}JSON\.stringify'
+
+composite_rules:
+  # GuardDog: JSON-serialized environment
+  - id: js-serialize-environment
+    desc: Environment variables serialized as JSON (JS)
+    crit: notable
+    conf: 0.90
+    all:
+      - id: micro-behaviors/os/env/access::javascript
+      - id: objectives/exfiltration/staged/serialization::process-env-serialization

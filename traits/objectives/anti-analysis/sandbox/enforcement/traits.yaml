@@ -1,0 +1,18 @@
+# Anti-Sandbox Enforcement
+# Detects active enforcement of execution environment (e.g. quitting if not in cmd.exe)
+
+defaults:
+  crit: hostile
+  conf: 0.9
+  for: [javascript]
+  platforms: [windows]
+
+composite_rules:
+  - id: js-comspec-enforcement
+    desc: Enforces execution environment via ComSpec check (Anti-Sandbox)
+    crit: hostile
+    attack: "T1497.001"
+    all:
+      - id: micro-behaviors/os/env/vars::comspec-env-var
+      - id: objectives/anti-analysis/sandbox/detect::js-check-cmd-path
+      - id: objectives/execution/interpreter/script/wsh::wscript-quit-obfuscated

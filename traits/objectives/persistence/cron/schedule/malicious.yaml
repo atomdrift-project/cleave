@@ -1,0 +1,197 @@
+# Malicious Crontab Persistence
+# ATT&CK: T1053.003 (Scheduled Task/Job: Cron)
+
+defaults:
+  for: [all]
+  attack: "T1053.003"
+
+traits:
+  # Cron paths
+  - id: crontab-dash
+    desc: crontab command with dash
+    crit: notable
+    conf: 0.6
+    if:
+      type: string
+      substr: "crontab -"
+
+  # Download cradles
+  - id: curl-s-flag
+    desc: curl silent flag (-s)
+    crit: notable
+    conf: 0.6
+    if:
+      type: raw
+      regex: "curl\\s+-[a-zA-Z]*s[a-zA-Z]*\\b"
+
+  - id: wget-q-flag
+    desc: wget quiet flag (-q)
+    crit: notable
+    conf: 0.6
+    if:
+      type: raw
+      regex: "wget\\s+-[a-zA-Z]*q[a-zA-Z]*\\b"
+
+  - id: wget-stdout-flag
+    desc: wget stdout output flag (-O -)
+    crit: notable
+    conf: 0.6
+    if:
+      type: raw
+      regex: "wget\\s+[^\\n]{0,40}-O\\s+-"
+
+  # Base64 decode
+  - id: base64-d-raw
+    desc: base64 -d decode
+    crit: notable
+    conf: 0.6
+    if:
+      type: string
+      substr: "base64 -d"
+
+  - id: base64-decode-flag
+    desc: base64 --decode long form
+    crit: notable
+    conf: 0.6
+    if:
+      type: string
+      substr: "base64 --decode"
+
+  # Hidden file paths
+  # Removed tmp-hidden duplicate - use micro-behaviors/fs/path/temp::tmp-hidden-file
+
+  - id: var-tmp-hidden
+    desc: Hidden file in /var/tmp
+    crit: notable
+    conf: 0.6
+    if:
+      type: string
+      substr: "/var/tmp/."
+
+  - id: dev-shm-hidden
+    desc: Hidden file in /dev/shm
+    crit: notable
+    conf: 0.6
+    if:
+      type: string
+      substr: "/dev/shm/."
+
+composite_rules:
+  # Helper: Cron paths
+  - id: cron-paths
+    desc: Cron file paths
+    any:
+      - id: objectives/persistence/cron/job::cron-d-path
+      - id: objectives/persistence/cron/job::var-spool-cron-path
+      - id: crontab-dash
+    crit: notable
+
+
+  # Helper: Download cradles
+  - id: download-cradles
+    desc: Silent/quiet download cradles
+    any:
+      - id: curl-silent
+      - id: wget-quiet
+      - id: wget-stdout
+    crit: notable
+
+  - id: curl-silent
+    desc: curl -s (silent mode)
+    crit: notable
+    conf: 0.6
+    all:
+      - id: micro-behaviors/communications/http/client::curl-cmd
+      - id: curl-s-flag
+
+  - id: wget-quiet
+    desc: wget -q (quiet mode)
+    crit: notable
+    conf: 0.6
+    all:
+      - id: micro-behaviors/communications/http/client::wget-cmd
+      - id: wget-q-flag
+
+  - id: wget-stdout
+    desc: wget -O - (output to stdout)
+    crit: notable
+    conf: 0.6
+    all:
+      - id: micro-behaviors/communications/http/client::wget-cmd
+      - id: wget-stdout-flag
+
+  # Helper: Base64 decoding
+  - id: base64-decode
+    desc: Base64 decode operations
+    any:
+      - id: base64-d-raw
+      - id: base64-decode-flag
+    crit: notable
+
+  # Helper: Hidden paths
+  - id: hidden-paths
+    desc: Hidden file paths in temp
+    any:
+      - id: micro-behaviors/fs/path/temp::tmp-hidden-file
+      - id: var-tmp-hidden
+      - id: dev-shm-hidden
+    crit: notable
+
+  # Helper: Cron keywords
+  - id: cron-keywords
+    desc: Cron-related keywords
+    any:
+      - id: micro-behaviors/os/schedule/cron/keywords::crontab-keyword
+      - id: objectives/persistence/cron/job::etc-cron-path
+    crit: notable
+
+
+  # Helper: Download cradle with shell pipe
+  - id: cradle-with-shell
+    desc: Download cradle piped to shell
+    all:
+      - id: download-cradles
+      - id: micro-behaviors/os/console/io::shell-pipes
+    crit: notable
+
+  # Helper: Download cradle with suppression
+  - id: cradle-with-suppression
+    desc: Download cradle with output suppression
+    all:
+      - id: download-cradles
+      - id: micro-behaviors/os/console/io::output-suppression
+    crit: notable
+
+  # Helper: Cron with base64
+  - id: cron-with-base64
+    desc: Cron with base64 decode
+    all:
+      - id: cron-keywords
+      - id: base64-decode
+    crit: notable
+
+  # Helper: Cron with hidden paths
+  - id: cron-with-hidden
+    desc: Cron with hidden file paths
+    all:
+      - id: cron-keywords
+      - id: hidden-paths
+    crit: notable
+
+  # Cron download cradle
+  - id: download-cradle
+    desc: Cron-based download and execute
+    crit: suspicious
+    conf: 0.85
+    any:
+      - id: cradle-with-shell
+      - id: cradle-with-suppression
+
+  # Hidden cron entries
+  - id: hidden
+    desc: Hidden or obfuscated cron entries
+    crit: suspicious
+    conf: 0.8
+    any:
+      - id: cron-with-base64
+      - id: cron-with-hidden

@@ -1,0 +1,155 @@
+# Lua Programming Language Traits
+# Detects common Lua patterns, capabilities, and obfuscation techniques
+
+defaults:
+  for: [lua]
+  crit: notable
+
+traits:
+  # === Environment and Context manipulation ===
+  - id: env-access-_env
+    desc: Lua environment access (_ENV)
+    crit: notable
+    conf: 0.9
+    if:
+      type: symbol
+      exact: "_ENV"
+
+  - id: env-access-getfenv
+    desc: Lua environment access (getfenv)
+    crit: notable
+    conf: 0.9
+    if:
+      type: symbol
+      exact: "getfenv"
+
+  - id: env-modify
+    desc: Modifies Lua environment (setfenv)
+    crit: notable
+    conf: 0.9
+    if:
+      type: symbol
+      regex: "setfenv"
+
+  # === Code Loading and Execution ===
+  - id: exec-dynamic-load-load
+    desc: Dynamic code loading (load)
+    crit: notable
+    conf: 0.9
+    if:
+      type: symbol
+      exact: "load"
+
+  - id: exec-dynamic-load-loadstring
+    desc: Dynamic code loading (loadstring)
+    crit: notable
+    conf: 0.9
+    if:
+      type: symbol
+      exact: "loadstring"
+
+  - id: exec-file-execution
+    desc: Executes Lua files (dofile)
+    crit: notable
+    conf: 0.9
+    if:
+      type: symbol
+      regex: "dofile"
+
+  - id: module-require
+    desc: Loads Lua modules (require)
+    crit: notable
+    conf: 0.8
+    if:
+      type: symbol
+      regex: "require"
+
+  # === System and OS Interaction ===
+  - id: os-system-execute
+    desc: Executes system commands (os.execute, io.popen)
+    crit: suspicious
+    conf: 0.95
+    if:
+      type: symbol
+      regex: 'os\.execute|io\.popen'
+
+  # NOTE: os-file-manipulation removed from metadata/
+  # File manipulation is a behavioral capability, not language metadata
+  # See: micro-behaviors/fs/file/operations/lua.yaml for behavioral detection
+  # os.remove(__file__) is self-deletion (objectives/evasion/self-delete/file/)
+
+  # === Metatable and Proxy patterns ===
+  - id: meta-setmetatable-access
+    desc: Uses metatables (setmetatable)
+    crit: notable
+    conf: 0.7
+    if:
+      type: symbol
+      exact: "setmetatable"
+
+  - id: meta-getmetatable-access
+    desc: Uses metatables (getmetatable)
+    crit: notable
+    conf: 0.7
+    if:
+      type: symbol
+      exact: "getmetatable"
+
+  - id: meta-proxy-usage
+    desc: Uses newproxy for object protection
+    crit: notable
+    conf: 0.9
+    if:
+      type: symbol
+      regex: "newproxy"
+
+  # === Debug and Reflection ===
+  - id: debug-access
+    desc: Uses Lua debug module
+    crit: notable
+    conf: 0.9
+    if:
+      type: symbol
+      regex: 'debug\.'
+
+  # === Obfuscation Patterns ===
+  - id: base64-decoder-custom
+    desc: Custom Base64 alphabet mapping
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: raw
+      regex: '\["\+"\]\s*=\s*\d+[,;]'
+
+  - id: bytecode-interpreter
+    desc: Lua bytecode interpreter loop
+    crit: suspicious
+    conf: 0.85
+    if:
+      type: raw
+      regex: 'while\s+g\s+do\s+if\s+g\s*<'
+
+composite_rules:
+  - id: env-access
+    desc: Lua environment access (_ENV)
+    crit: notable
+    conf: 0.9
+    any:
+      - id: env-access-_env
+      - id: env-access-getfenv
+
+  - id: exec-dynamic-load
+    desc: Dynamic code loading (load, loadstring)
+    crit: notable
+    conf: 0.9
+    any:
+      - id: exec-dynamic-load-load
+      - id: exec-dynamic-load-loadstring
+
+  - id: meta-metatable-access
+    desc: Uses metatables (setmetatable, getmetatable)
+    crit: notable
+    conf: 0.7
+    any:
+      - id: meta-setmetatable-access
+      - id: meta-getmetatable-access

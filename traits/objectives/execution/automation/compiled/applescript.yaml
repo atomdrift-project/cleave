@@ -1,0 +1,121 @@
+# Compiled AppleScript Application Automation Detection
+# Detects which applications are targeted by compiled AppleScript
+# ATT&CK: T1059.002 (AppleScript)
+
+defaults:
+  for: [applescript]
+  platforms: [macos]
+  attack: "T1059.002"
+
+traits:
+  # ============================================
+  # Common Applications (baseline)
+  # ============================================
+  - id: finder
+    desc: "Targets Finder"
+    crit: notable
+    conf: 0.95
+    if:
+      type: string
+      substr: "Finder"
+
+  # ============================================
+  # System Applications (notable)
+  # ============================================
+  # system-settings: use micro-behaviors/process/create/script::ref-system-settings (canonical)
+  # system-preferences: use micro-behaviors/process/create/script::ref-system-prefs (canonical)
+
+  - id: system-events
+    desc: "Targets System Events"
+    crit: notable
+    conf: 0.9
+    if:
+      type: string
+      substr: "System Events"
+
+  - id: safari
+    desc: "Targets Safari"
+    crit: notable
+    conf: 0.85
+    attack: "T1185"
+    if:
+      type: string
+      substr: "Safari"
+
+  # ============================================
+  # Sensitive Applications (suspicious)
+  # ============================================
+  - id: terminal
+    desc: "Targets Terminal"
+    crit: suspicious
+    conf: 0.9
+    attack: "T1059.004"
+    if:
+      type: string
+      substr: "Terminal"
+
+  - id: keychain-access
+    desc: "Targets Keychain Access"
+    crit: suspicious
+    conf: 0.95
+    attack: "T1555.001"
+    if:
+      type: string
+      substr: "Keychain Access"
+
+  - id: security-agent
+    desc: "Targets Security Agent"
+    crit: suspicious
+    conf: 0.95
+    attack: "T1548"
+    if:
+      type: string
+      substr: "SecurityAgent"
+
+composite_rules:
+  # ============================================
+  # System Settings Automation
+  # ============================================
+  - id: automates-settings
+    desc: "Automates System Settings/Preferences"
+    crit: notable
+    conf: 0.85
+    for: [applescript]
+    any:
+      - { id: micro-behaviors/process/create/script::ref-system-settings }
+      - { id: micro-behaviors/process/create/script::ref-system-prefs }
+
+  # Terminal automation commands group
+  - id: terminal-commands
+    desc: Terminal automation commands
+    crit: notable
+    conf: 0.8
+    for: [applescript]
+    any:
+      - id: micro-behaviors/process/create/script::do-script
+      - id: micro-behaviors/process/create/script::activate
+
+  # ============================================
+  # Terminal Automation
+  # ============================================
+  - id: automates-terminal
+    desc: "Automates Terminal application"
+    crit: suspicious
+    conf: 0.9
+    attack: "T1059.004"
+    for: [applescript]
+    all:
+      - id: terminal
+      - id: terminal-commands
+
+  # ============================================
+  # Shell + Settings (suspicious combo)
+  # ============================================
+  - id: shell-with-settings
+    desc: "Shell execution with System Settings"
+    crit: suspicious
+    conf: 0.85
+    for: [applescript]
+    all:
+      - { id: automates-settings }
+      - { id: micro-behaviors/process/create/shell::shell-execution }

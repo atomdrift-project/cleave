@@ -1,0 +1,68 @@
+# Mining pool connection detection
+# ATT&CK: T1496 (Resource Hijacking)
+
+defaults:
+  for: [all]
+
+traits:
+  - id: pool-port-3333
+    desc: "Mining pool port 3333"
+    crit: notable
+    conf: 0.7
+    attack: "T1496"
+    if:
+      type: string
+      regex: ":\\s*3333\\b"
+
+  - id: pool-port-14444
+    desc: "Mining pool port 14444 (XMR"
+    crit: suspicious
+    conf: 0.75
+    attack: "T1496"
+    if:
+      type: string
+      regex: ":\\s*14444\\b"
+
+  - id: domain-1
+    desc: "Mining pool domain pattern (pool/mining/mine)"
+    crit: suspicious
+    conf: 0.85
+    attack: "T1496"
+    if:
+      type: string
+      regex: "\\b(pool|mining|mine)\\.[a-z]{2,}.{0,50}:\\d+"
+    not:
+      - substr: ".rs:"
+      - substr: "/pool."
+      - substr: "pool.rs"
+
+  - id: domain-2
+    desc: "Mining pool domain pattern (xmr/monero)"
+    crit: suspicious
+    conf: 0.85
+    attack: "T1496"
+    if:
+      type: string
+      regex: "\\b(xmr|monero)\\.[a-z]{2,}.{0,50}:\\d+"
+    not:
+      - substr: ".rs:"
+      - substr: "/pool."
+      - substr: "pool.rs"
+
+composite_rules:
+  - id: domain
+    desc: "Mining pool domain pattern"
+    crit: suspicious
+    any:
+      - id: domain-1
+      - id: domain-2
+
+  # Stratum protocol composite
+  - id: pool-stratum
+    desc: "Stratum mining protocol"
+    crit: suspicious
+    conf: 0.85
+    attack: "T1496"
+    any:
+      - id: objectives/impact/cryptojacking/miner::stratum-tcp
+      - id: objectives/impact/cryptojacking/miner::stratum-ssl

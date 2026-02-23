@@ -1,0 +1,71 @@
+# Socket Receive Operations
+# MBC: C0001 (Socket Communication)
+# ATT&CK: T1071
+
+defaults:
+  for: [elf, macho, so, dylib, c]
+
+traits:
+  - id: recv-symbol
+    desc: Uses recv socket call
+    crit: baseline
+    conf: 0.66
+    mbc: "C0001"
+    attack: "T1071"
+    if:
+      type: symbol
+      exact: recv
+
+  - id: recvmsg-symbol
+    desc: Uses recvmsg socket call
+    crit: baseline
+    conf: 0.66
+    mbc: "C0001"
+    attack: "T1071"
+    if:
+      type: symbol
+      exact: recvmsg
+
+  - id: recvfrom-symbol
+    desc: Uses recvfrom socket call
+    crit: baseline
+    conf: 0.66
+    mbc: "C0001"
+    attack: "T1071"
+    if:
+      type: symbol
+      exact: recvfrom
+
+  - id: recvmmsg-symbol
+    desc: Uses recvmmsg socket call
+    crit: baseline
+    conf: 0.66
+    mbc: "C0001"
+    attack: "T1071"
+    if:
+      type: symbol
+      exact: recvmmsg
+
+  - id: _recv-symbol
+    desc: Uses _recv socket call
+    crit: baseline
+    conf: 0.66
+    mbc: "C0001"
+    attack: "T1071"
+    if:
+      type: symbol
+      exact: _recv
+
+composite_rules:
+  - id: receive
+    desc: Receive a message from a socket
+    crit: baseline
+    conf: 0.66
+    mbc: "C0001"
+    attack: "T1071"
+    any:
+      - id: recv-symbol
+      - id: recvmsg-symbol
+      - id: recvfrom-symbol
+      - id: recvmmsg-symbol
+      - id: _recv-symbol

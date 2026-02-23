@@ -1,0 +1,149 @@
+# Cryptocurrency Address Regex Detection - JavaScript
+# Detects code containing regex patterns for cryptocurrency addresses
+# This is a strong indicator of clipboard hijackers or form interceptors
+# ATT&CK: T1556 (Modify Authentication Process), T1557 (Adversary-in-the-Middle)
+
+defaults:
+  for: [javascript]
+  attack: "T1557"
+  crit: suspicious
+
+traits:
+  # === Ethereum regex atomic indicators ===
+  - id: ethereum-regex-40
+    desc: Ethereum 40-char hex regex
+    conf: 0.8
+    crit: notable
+    if:
+      type: string
+      regex: "0x\\[a-fA-F0-9\\]\\{40\\}"
+
+  - id: ethereum-regex-boundary
+    desc: Ethereum regex with word boundary
+    conf: 0.8
+    crit: notable
+    if:
+      type: string
+      regex: "\\\\b0x\\[a-fA-F0-9\\]"
+
+  # Bitcoin Legacy address regex (1xxx)
+  - id: bitcoin-legacy-regex
+    desc: "Bitcoin legacy address regex pattern"
+    conf: 0.9
+    crit: suspicious
+    if:
+      type: string
+      regex: "1\\[a-km-zA-HJ-NP-Z1-9\\]\\{25,34\\}"
+
+  # Bitcoin SegWit address regex (bc1xxx)
+  - id: bitcoin-segwit-regex
+    desc: "Bitcoin SegWit address regex pattern"
+    conf: 0.9
+    crit: suspicious
+    if:
+      type: string
+      regex: "bc1\\[qpzry9x8gf2tvdw0s3jn54khce6mua7l\\]"
+
+  # Bitcoin Cash address regex
+  - id: bitcoin-cash-regex
+    desc: "Bitcoin Cash address regex pattern"
+    conf: 0.9
+    crit: suspicious
+    if:
+      type: string
+      regex: "bitcoincash:\\[qp\\]\\[a-zA-Z0-9\\]"
+
+  # === Litecoin regex atomic indicators ===
+  - id: litecoin-segwit-regex
+    desc: Litecoin SegWit address regex (ltc1)
+    conf: 0.8
+    crit: notable
+    if:
+      type: string
+      regex: "ltc1\\[qpzry9x8gf2tvdw0s3jn54khce6mua7l\\]"
+
+  - id: litecoin-legacy-regex
+    desc: Litecoin legacy address regex (m/M/l/L)
+    conf: 0.8
+    crit: notable
+    if:
+      type: string
+      regex: "\\[mlML\\]\\[a-km-zA-HJ-NP-Z1-9\\]"
+
+  # TRON address regex (Txxx)
+  - id: tron-regex
+    desc: "TRON address regex pattern"
+    conf: 0.9
+    crit: suspicious
+    if:
+      type: string
+      regex: "\\[T\\]\\[1-9A-HJ-NP-Za-km-z\\]\\{33\\}"
+
+  # Solana address regex
+  - id: solana-regex
+    desc: "Solana address regex pattern"
+    conf: 0.85
+    crit: suspicious
+    if:
+      type: string
+      regex: "\\[1-9A-HJ-NP-Za-km-z\\]\\{32,44\\}"
+
+  # Ethereum address regex for composite (shorter pattern)
+  - id: ethereum-regex-short
+    desc: "Ethereum address regex pattern (0x"
+    conf: 0.9
+    crit: suspicious
+    if:
+      type: string
+      regex: "0x\\[a-fA-F0-9\\]"
+
+  # Bitcoin Legacy address regex for composite (shorter pattern)
+  - id: bitcoin-legacy-regex-short
+    desc: "Bitcoin legacy address regex pattern"
+    conf: 0.9
+    crit: suspicious
+    if:
+      type: string
+      regex: "1\\[a-km-zA-HJ-NP-Z1-9\\]"
+
+  # Bitcoin Cash prefix detection
+  - id: bitcoin-cash-prefix
+    desc: "Bitcoin Cash address prefix"
+    conf: 0.85
+    crit: suspicious
+    if:
+      type: string
+      regex: "bitcoincash:"
+
+composite_rules:
+  # Ethereum regex composite
+  - id: ethereum-regex
+    desc: Ethereum address regex pattern (0x...40
+    conf: 0.9
+    crit: suspicious
+    any:
+      - id: ethereum-regex-40
+      - id: ethereum-regex-boundary
+
+  # Litecoin regex composite
+  - id: litecoin-regex
+    desc: Litecoin address regex pattern
+    conf: 0.9
+    crit: suspicious
+    any:
+      - id: litecoin-segwit-regex
+      - id: litecoin-legacy-regex
+
+  # Multiple cryptocurrency address patterns = clipboard hijacker
+  - id: multi-crypto-regex
+    desc: "Multiple cryptocurrency wallet regex patterns"
+    crit: suspicious
+    conf: 0.95
+    needs: 2
+    any:
+      - id: ethereum-regex-short
+      - id: bitcoin-legacy-regex-short
+      - id: bitcoin-segwit-regex
+      - id: bitcoin-cash-prefix
+      - id: litecoin-regex
+      - id: tron-regex

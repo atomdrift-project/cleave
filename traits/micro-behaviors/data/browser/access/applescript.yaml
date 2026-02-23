@@ -1,0 +1,83 @@
+# AppleScript Browser Data Access Patterns
+# ATT&CK: T1555.003 (Credentials from Web Browsers)
+
+defaults:
+  platforms: [macos]
+  for: [applescript, macho]
+  attack: "T1555.003"
+
+traits:
+  - id: chrome-support-path
+    desc: Chrome user data directory reference
+    crit: baseline
+    conf: 0.6
+    if:
+      type: string
+      substr: "Support/Google/Chrome/"
+
+  - id: brave-support-path
+    desc: Brave browser user data directory
+    crit: baseline
+    conf: 0.6
+    if:
+      type: string
+      substr: "Support/BraveSoftware/Brave-Browser/"
+
+  - id: edge-support-path
+    desc: Microsoft Edge user data directory
+    crit: baseline
+    conf: 0.6
+    if:
+      type: string
+      substr: "Support/Microsoft Edge/"
+
+  - id: telegram-keepcoder-path
+    desc: Telegram application data path
+    crit: baseline
+    conf: 0.6
+    if:
+      type: string
+      substr: ".keepcoder.Telegram"
+
+  - id: extension-settings-path
+    desc: Browser extension settings path concatenation
+    crit: notable
+    conf: 0.75
+    if:
+      type: string
+      regex: "&\\s*\"/Local\\s+Extension\\s+Settings\""
+
+  - id: cookies-path-concat
+    desc: Browser cookies path concatenation
+    crit: notable
+    conf: 0.75
+    if:
+      type: string
+      regex: "&\\s*\"/Cookies\""
+
+  - id: login-data-path-concat
+    desc: Browser login data path concatenation
+    crit: notable
+    conf: 0.75
+    if:
+      type: string
+      regex: "&\\s*\"/Login\\s+Data\""
+
+  - id: cp-quoted-form
+    desc: Copy command with quoted form (AppleScript)
+    crit: notable
+    conf: 0.7
+    if:
+      type: string
+      regex: "cp\\s+-rf.{0,30}quoted\\s+form\\s+of"
+
+composite_rules:
+  - id: browser-data-theft
+    desc: Browser credential and extension theft via AppleScript
+    crit: suspicious
+    conf: 0.9
+    needs: 2
+    any:
+      - id: extension-settings-path
+      - id: cookies-path-concat
+      - id: login-data-path-concat

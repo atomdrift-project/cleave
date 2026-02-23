@@ -1,0 +1,41 @@
+# Windows Process Creation Flags
+# Neutral capabilities - intent determined in objectives/
+# GuardDog-inspired
+
+defaults:
+  for: [python]
+  crit: notable
+  conf: 0.90
+
+traits:
+  # === Windows Creation Flags (neutral capabilities) ===
+
+  - id: create-no-window
+    desc: CREATE_NO_WINDOW flag
+    if:
+      type: symbol
+      exact: "CREATE_NO_WINDOW"
+
+  - id: sw-hide
+    desc: SW_HIDE window flag
+    if:
+      type: symbol
+      exact: "SW_HIDE"
+
+  - id: detached-process
+    desc: DETACHED_PROCESS flag
+    if:
+      type: symbol
+      exact: "DETACHED_PROCESS"
+
+  - id: startupinfo
+    desc: STARTUPINFO structure
+    if:
+      type: symbol
+      regex: 'STARTUPINFO'
+
+  - id: create-suspended
+    desc: CREATE_SUSPENDED flag
+    if:
+      type: symbol
+      exact: "CREATE_SUSPENDED"

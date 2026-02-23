@@ -1,0 +1,353 @@
+defaults:
+  for:
+    - all
+traits:
+  - id: ld-library-path-env
+    desc: References LD_LIBRARY_PATH environment variable
+    crit: notable
+    conf: 0.6
+    if:
+      type: string
+      substr: micro-behaviors
+  - id: dlsym-rtld-next-pattern
+    desc: dlsym(RTLD_NEXT pattern
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: string
+      regex: dlsym\s*\(\s*RTLD_NEXT
+  - id: skullseclabs-string
+    desc: skullseclabs author string
+    crit: suspicious
+    conf: 0.95
+    for:
+      - elf
+    if:
+      type: string
+      substr: skullseclabs
+  - id: hooked-string
+    desc: Hooked function indicator
+    crit: notable
+    conf: 0.7
+    for:
+      - elf
+    if:
+      type: string
+      substr: Hooked
+  - id: static-string
+    desc: Static hook indicator
+    crit: notable
+    conf: 0.5
+    for:
+      - elf
+    if:
+      type: string
+      regex: Static:\s+\w+
+  - id: proc-pid-pattern
+    desc: /proc/[pid] path pattern
+    crit: notable
+    conf: 0.4
+    for:
+      - elf
+      - c
+    if:
+      type: string
+      regex: /proc/[0-9]+/(stat|status|cmdline|maps)
+  - id: hidden-proc-string
+    desc: hidden_proc string reference
+    crit: suspicious
+    conf: 0.9
+    for:
+      - elf
+      - c
+    if:
+      type: string
+      word: hidden_proc
+  - id: backup-ld-string
+    desc: backup_ld string reference
+    crit: suspicious
+    conf: 0.9
+    for:
+      - elf
+    if:
+      type: string
+      word: backup_ld
+  - id: orig-ld-string
+    desc: orig_ld string reference
+    crit: suspicious
+    conf: 0.9
+    for:
+      - elf
+    if:
+      type: string
+      word: orig_ld
+  - id: real-ld-string
+    desc: real_ld string reference
+    crit: suspicious
+    conf: 0.9
+    for:
+      - elf
+    if:
+      type: string
+      word: real_ld
+  - id: ld-so-bak-pattern
+    desc: ld.so backup file pattern
+    crit: suspicious
+    conf: 0.9
+    for:
+      - elf
+    if:
+      type: string
+      regex: ld[\-_\.]so[.\-_]?bak
+      case_insensitive: true
+  - id: backup-ld-so-file
+    desc: .backup_ld.so file reference
+    crit: suspicious
+    conf: 0.9
+    for:
+      - elf
+    if:
+      type: string
+      substr: .backup_ld.so
+  - id: ld-so-preload-file
+    desc: References /etc/ld.so.preload file
+    crit: suspicious
+    conf: 0.9
+    mbc: F0015
+    attack: T1574.006
+    for:
+      - elf
+      - shell
+    if:
+      type: string
+      substr: /etc/ld.so.preload
+  - id: ld-so-preload-chattr
+    desc: Removes file attributes from ld.so.preload
+    crit: suspicious
+    conf: 0.9
+    mbc: F0015
+    attack: T1574.006
+    for:
+      - shell
+    if:
+      type: string
+      regex: chattr\s+[-][ia]+\s+/etc/ld\.so\.preload
+  # libc-dlopen-mode removed - use micro-behaviors/dylib/library::libc-internal-functions-a instead
+  - id: original-prefix-a
+    desc: original_ prefix core hook set
+    crit: notable
+    conf: 0.7
+    for:
+      - elf
+    if:
+      type: string
+      regex: original_(open|read|write|execve)
+  - id: original-prefix-b
+    desc: original_ prefix network hook set
+    crit: notable
+    conf: 0.7
+    for:
+      - elf
+    if:
+      type: string
+      regex: \boriginal_(connect|socket|unlink)\b
+  - id: real-prefix-a
+    desc: real_ prefix core hook set
+    crit: notable
+    conf: 0.7
+    for:
+      - elf
+    if:
+      type: string
+      regex: real_(open|read|write|execve)
+  - id: real-prefix-b
+    desc: real_ prefix network hook set
+    crit: notable
+    conf: 0.7
+    for:
+      - elf
+    if:
+      type: string
+      regex: \breal_(connect|socket|unlink)\b
+  - id: ld-so-preload-clear
+    desc: Clears /etc/ld.so.preload content
+    crit: suspicious
+    conf: 0.9
+    mbc: F0015
+    attack: T1574.006
+    for:
+      - shell
+    if:
+      type: string
+      regex: (cat\s+/dev/null\s*>|echo\s*>|truncate\s+.{0,50}|>)\s*/etc/ld\.so\.preload
+composite_rules:
+  - id: ld-preload
+    desc: References LD_PRELOAD environment variable
+    crit: notable
+    conf: 0.8
+    any:
+      - id: micro-behaviors/os/linker/env::ld-preload
+      - id: ld-library-path-env
+  - id: hook-infrastructure
+    desc: Hooking infrastructure (dlsym + RTLD_NEXT)
+    crit: suspicious
+    conf: 0.9
+    any:
+      - id: dlsym-rtld-next-pattern
+    all:
+      - id: micro-behaviors/dylib/lookup::dlsym-symbol
+      - id: micro-behaviors/dylib/lookup::rtld-next
+  - id: dlsym-rtld-next
+    desc: Uses dlsym with RTLD_NEXT (function
+    crit: suspicious
+    conf: 0.9
+    mbc: F0015
+    attack: T1574.006
+    any:
+      - id: dlsym-rtld-next-pattern
+      - id: hook-infrastructure
+  - id: hook-indicator
+    desc: Hook implementation indicator
+    crit: notable
+    conf: 0.7
+    needs: 2
+    any:
+      - id: micro-behaviors/dylib/lookup::dlsym-symbol
+      - id: micro-behaviors/dylib/lookup::rtld-next
+      - id: micro-behaviors/os/linker/env::ld-preload
+      - id: dlsym-rtld-next-pattern
+    unless:
+      - id: micro-behaviors/dylib/library::system-lib-marker
+  - id: hook-prefixes
+    desc: Function hook prefixes (original_/real_)
+    crit: notable
+    conf: 0.7
+    for:
+      - elf
+    all:
+      - id: original-prefix
+      - id: real-prefix
+  - id: original-prefix
+    desc: original_ function prefix (hook backup)
+    crit: notable
+    conf: 0.7
+    for:
+      - elf
+    unless:
+      - id: micro-behaviors/dylib/load/gnu-coreutils-ref
+      - id: micro-behaviors/dylib/load/glibc-ref
+      - id: micro-behaviors/dylib/load/systemd-ref
+      - id: micro-behaviors/dylib/load/libc-characteristic-symbols
+      - id: micro-behaviors/dylib/library::llvm-project-ref
+      - id: metadata/lang/compiler::libllvm
+      - id: micro-behaviors/dylib/library::gcc-project-ref
+      - id: micro-behaviors/dylib/load/gdb-debugger-ref
+      - id: micro-behaviors/dylib/load/lldb-debugger-ref
+      - id: micro-behaviors/dylib/load/debugger-ptrace-marker
+    any:
+      - id: original-prefix-a
+      - id: original-prefix-b
+  - id: real-prefix
+    desc: real_ function prefix (hook backup)
+    crit: notable
+    conf: 0.7
+    for:
+      - elf
+    unless:
+      - id: micro-behaviors/dylib/load/gnu-coreutils-ref
+      - id: micro-behaviors/dylib/load/glibc-ref
+      - id: micro-behaviors/dylib/load/systemd-ref
+      - id: micro-behaviors/dylib/load/libc-characteristic-symbols
+      - id: micro-behaviors/dylib/library::llvm-project-ref
+      - id: metadata/lang/compiler::libllvm
+      - id: micro-behaviors/dylib/library::gcc-project-ref
+      - id: micro-behaviors/dylib/load/gdb-debugger-ref
+      - id: micro-behaviors/dylib/load/lldb-debugger-ref
+      - id: micro-behaviors/dylib/load/debugger-ptrace-marker
+    any:
+      - id: real-prefix-a
+      - id: real-prefix-b
+  - id: symbiote
+    desc: Symbiote rootkit indicators
+    crit: suspicious
+    conf: 0.95
+    mbc: F0015
+    attack: T1574.006
+    for:
+      - elf
+    any:
+      - id: skullseclabs-string
+      - id: objectives/command-and-control/dns-tunnel/exfil::dnscat-name
+      - id: hook-prefixes
+    all:
+      - id: hooked-string
+      - id: static-string
+  - id: proc-paths
+    desc: Multiple /proc path references
+    crit: notable
+    conf: 0.4
+    for:
+      - elf
+      - c
+    needs: 2
+    any:
+      - id: micro-behaviors/fs/proc/info::process-self-exe
+      - id: proc-pid-pattern
+      - id: micro-behaviors/fs/proc/info::proc-net-tcp
+  - id: proc-hiding
+    desc: Patterns for hiding processes via LD_PRELOAD
+    crit: suspicious
+    conf: 0.9
+    mbc: F0015
+    attack: T1574.006
+    for:
+      - elf
+      - c
+    any:
+      - id: objectives/anti-analysis/kernel-hide/userspace::hide-pid
+      - id: hidden-proc-string
+    none:
+      - id: well-known/malware/botnet/mirai::stripped-mirai-iot-botnet
+      - id: objectives/discovery/network/scan::scanner
+  - id: ld-backup-pattern
+    desc: Dynamic linker backup/restore pattern
+    crit: suspicious
+    conf: 0.9
+    mbc: F0015
+    attack: T1574.006
+    for:
+      - elf
+    any:
+      - id: backup-ld-string
+      - id: orig-ld-string
+      - id: real-ld-string
+      - id: ld-so-bak-pattern
+      - id: backup-ld-so-file
+  - id: ld-preload-rootkit
+    desc: LD_PRELOAD userspace rootkit (Symbiote-style)
+    crit: suspicious
+    conf: 0.95
+    mbc: F0015
+    attack: T1574.006
+    for:
+      - elf
+    all:
+      - id: dlsym-rtld-next
+    any:
+      - id: proc-hiding
+      - id: symbiote
+      - id: hook-prefixes
+  - id: ld-preload-installer
+    desc: LD_PRELOAD rootkit installer (modifies
+    crit: suspicious
+    conf: 0.95
+    mbc: F0015
+    attack: T1574.006
+    for:
+      - elf
+    all:
+      - id: ld-so-preload-file
+    any:
+      - id: ld-backup-pattern
+      - id: micro-behaviors/dylib/library::libc-internal-functions-a
+      - id: dlsym-rtld-next

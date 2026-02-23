@@ -1,0 +1,14 @@
+# Supply Chain: Dummy Makefile Detection
+# Detects pre-packaged Makefiles designed to bypass build failures
+# ATT&CK: T1195.002 (Compromise Software Supply Chain)
+
+defaults:
+  crit: suspicious
+  conf: 0.9
+
+composite_rules:
+  - id: dummy-makefile
+    desc: Detects a dummy Makefile with empty targets (install/all/clean), often used to mask dropper failures
+    all:
+      - id: metadata/format/text/makefile::makefile-basename
+      - id: micro-behaviors/build/tool/make::dummy-makefile-targets

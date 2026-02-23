@@ -1,0 +1,21 @@
+# Node.js Path Manipulation Capabilities
+
+defaults:
+  for: [javascript, typescript]
+
+traits:
+  - id: path-join-dirname
+    desc: path.join with __dirname
+    crit: baseline
+    conf: 0.5
+    if:
+      type: raw
+      regex: 'path\.join\s*\(\s*__dirname'
+
+  - id: local-script-path
+    desc: Local script path reference
+    crit: baseline
+    conf: 0.7
+    if:
+      type: raw
+      regex: '__dirname.{0,50}\.(js|mjs|cjs)[''"]'

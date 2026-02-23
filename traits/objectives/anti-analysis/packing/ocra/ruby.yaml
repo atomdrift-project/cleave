@@ -1,0 +1,25 @@
+defaults:
+  for: [all]
+
+traits:
+  - id: ocra-executable-const
+    desc: Detects artifacts of OCRA (One-Click Ruby Application)
+    crit: notable
+    if:
+      type: string
+      exact: "OCRA_EXECUTABLE"
+
+  - id: ocra-stub-marker
+    desc: Detects artifacts of OCRA (One-Click Ruby Application)
+    crit: notable
+    if:
+      type: string
+      exact: "ocrastub"
+
+composite_rules:
+  - id: ocra-packed-executable
+    desc: Detects artifacts of OCRA (One-Click Ruby Application)
+    crit: notable
+    any:
+      - id: ocra-executable-const
+      - id: ocra-stub-marker

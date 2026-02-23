@@ -1,0 +1,43 @@
+# JScript Conditional Compilation
+# References: https://learn.microsoft.com/en-us/previous-versions/windows/internet-explorer/ie-developer/scripting-articles/121hztk3(v=vs.84)
+
+defaults:
+  for: [all]
+
+traits:
+  - id: jscript-cc-on
+    desc: JScript conditional compilation activation
+    crit: notable
+    conf: 0.9
+    mbc: "B0032"
+    attack: "T1027"
+    for: [javascript, typescript]
+    if:
+      type: raw
+      substr: '/*@cc_on'
+
+  - id: jscript-cc-variable
+    desc: JScript conditional compilation variable
+    crit: notable
+    conf: 0.8
+    for: [javascript]
+    if:
+      type: raw
+      regex: '@_win32|@_win64|@_jscript_version'
+
+  - id: jscript-cc-if
+    desc: JScript conditional compilation logic
+    crit: notable
+    conf: 0.8
+    for: [javascript]
+    if:
+      type: raw
+      regex: '@if\s*\('
+
+  - id: jscript-cc-eval
+    desc: Eval within JScript conditional compilation
+    crit: suspicious
+    conf: 0.95
+    if:
+      type: raw
+      regex: 'eval\(\w+\);\s*@\*/'

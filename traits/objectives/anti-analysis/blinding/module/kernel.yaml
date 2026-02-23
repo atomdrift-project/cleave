@@ -1,0 +1,168 @@
+traits:
+- id: p-check-integrity
+  desc: p_check_integrity LKRG function
+  crit: suspicious
+  conf: 1.0
+  attack: T1562.001
+  for:
+  - c
+  if:
+    type: string
+    substr: p_check_integrity
+- id: p-dump-task-f
+  desc: p_dump_task_f LKRG function
+  crit: suspicious
+  conf: 1.0
+  attack: T1562.001
+  for:
+  - c
+  if:
+    type: string
+    substr: p_dump_task_f
+- id: p-cmp-credential-access
+  desc: p_cmp_credential-access LKRG function
+  crit: suspicious
+  conf: 1.0
+  attack: T1562.001
+  for:
+  - c
+  if:
+    type: string
+    substr: p_cmp_credential-access
+- id: p-cmp-tasks
+  desc: p_cmp_tasks LKRG function
+  crit: suspicious
+  conf: 1.0
+  attack: T1562.001
+  for:
+  - c
+  if:
+    type: string
+    substr: p_cmp_tasks
+- id: ed-task-add
+  desc: ed_task_add LKRG function
+  crit: suspicious
+  conf: 1.0
+  attack: T1562.001
+  for:
+  - c
+  if:
+    type: string
+    substr: ed_task_add
+- id: p-exploit-detection-init
+  desc: p_exploit_detection_init LKRG function
+  crit: suspicious
+  conf: 1.0
+  attack: T1562.001
+  for:
+  - c
+  if:
+    type: string
+    substr: p_exploit_detection_init
+- id: validate-sp
+  desc: validate_sp stack pointer check
+  crit: suspicious
+  conf: 0.85
+  attack: T1562.001
+  for:
+  - c
+  - elf
+  if:
+    type: string
+    regex: (?i)validate_sp
+- id: enforce-pcfi
+  desc: enforce_pcfi control flow integrity
+  crit: suspicious
+  conf: 0.9
+  attack: T1562.001
+  for:
+  - c
+  - elf
+  if:
+    type: string
+    regex: (?i)enforce_pcfi
+- id: exploit-detection
+  desc: exploit_detection function
+  crit: suspicious
+  conf: 0.9
+  attack: T1562.001
+  for:
+  - c
+  - elf
+  if:
+    type: string
+    regex: (?i)exploit_detection
+- id: bypass-selinux
+  desc: bypass_selinux function
+  crit: suspicious
+  conf: 0.95
+  attack: T1562.001
+  for:
+  - c
+  - elf
+  if:
+    type: string
+    regex: (?i)bypass_selinux
+- id: hook-security-logic
+  desc: Structural detection of hooking kernel
+  crit: suspicious
+  conf: 0.95
+  attack: T1562.001
+  for:
+  - c
+  if:
+    type: ast
+    kind: call
+    regex: HOOK(.{0,50}integrity|.{0,50}exploit|.{0,50}pcfi)
+- id: check-integrity
+  desc: kernel check_integrity function
+  crit: suspicious
+  conf: 0.85
+  attack: T1562.001
+  for:
+  - c
+  - elf
+  if:
+    type: string
+    regex: (p_)?check_integrity|lkrg.{0,30}check_integrity
+composite_rules:
+- id: lkrg
+  desc: Targets Linux Kernel Runtime Guard
+  crit: suspicious
+  conf: 1.0
+  attack: T1562.001
+  for:
+  - c
+  any:
+  - id: p-check-integrity
+  - id: p-dump-task-f
+  - id: p-cmp-credential-access
+  - id: p-cmp-tasks
+  - id: ed-task-add
+  - id: p-exploit-detection-init
+- id: kernel-integrity
+  desc: Targets kernel integrity or exploit
+  crit: suspicious
+  conf: 0.9
+  attack: T1562.001
+  for:
+  - c
+  - elf
+  any:
+  - id: check-integrity
+  - id: validate-sp
+  - id: enforce-pcfi
+  - id: exploit-detection
+  - id: bypass-selinux
+- id: security-software-blinding
+  desc: Security software blinding detected
+  crit: suspicious
+  conf: 0.95
+  attack: T1562.001
+  for:
+  - c
+  needs: 2
+  any:
+  - id: lkrg
+  - id: hook-security-logic
+  - id: kernel-integrity

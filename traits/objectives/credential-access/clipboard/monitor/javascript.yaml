@@ -1,0 +1,49 @@
+# Clipboard Monitoring - JavaScript/Node.js
+# MBC: B0014 (Clipboard Data)
+# ATT&CK: T1553 (Capture Clipboard)
+
+traits:
+  - id: js-pbpaste
+    desc: Accesses system clipboard via pbpaste
+    crit: suspicious
+    conf: 0.95
+    attack: "T1553"
+    for: [javascript]
+    if:
+      type: string
+      substr: "pbpaste"
+
+  - id: js-powershell-clipboard
+    desc: Accesses system clipboard via PowerShell
+    crit: suspicious
+    conf: 0.95
+    attack: "T1553"
+    for: [javascript]
+    if:
+      type: string
+      regex: "powershell.{0,50}Get-Clipboard"
+
+  - id: js-xclip
+    desc: Accesses system clipboard via xclip
+    crit: suspicious
+    conf: 0.95
+    attack: "T1553"
+    for: [javascript]
+    if:
+      type: string
+      substr: "xclip"
+
+composite_rules:
+  - id: js-clipboard-exfil
+    desc: "JavaScript clipboard capture exfiltration"
+    crit: hostile
+    conf: 0.95
+    attack: "T1553"
+    mbc: "B0014"
+    for: [javascript]
+    all:
+      - id: micro-behaviors/communications/http/request::http-client-usage
+    any:
+      - id: js-pbpaste
+      - id: js-powershell-clipboard
+      - id: js-xclip

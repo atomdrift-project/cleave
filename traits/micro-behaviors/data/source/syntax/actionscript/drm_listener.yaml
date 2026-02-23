@@ -1,0 +1,12 @@
+defaults:
+  for: [all]
+
+traits:
+  - id: actionscript-drm-listener
+    desc: "Implements DRMOperationCompleteListener interface"
+    crit: notable
+    # Removed for: to ensure it runs
+    # We use regex to be robust against spacing
+    if:
+      type: raw
+      regex: "implements\\s+DRMOperationCompleteListener"

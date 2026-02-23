@@ -1,0 +1,98 @@
+# Packer Detection
+# MBC: F0001 (Packing)
+# ATT&CK: T1027.002
+
+defaults:
+  for: [all]
+
+traits:
+  - id: upx-marker
+    desc: UPX packer marker string
+    crit: notable
+    conf: 0.8
+    if:
+      type: string
+      regex: "UPX[!01]"
+
+  - id: aspack-marker
+    desc: ASPack packer marker
+    crit: notable
+    conf: 0.8
+    if:
+      type: string
+      substr: aPack
+
+  - id: petite-marker
+    desc: Petite packer marker
+    crit: notable
+    conf: 0.8
+    if:
+      type: string
+      substr: petite
+
+  - id: themida-marker
+    desc: Themida packer marker
+    crit: notable
+    conf: 0.8
+    if:
+      type: string
+      substr: Themida
+
+  - id: vmprotect-marker
+    desc: VMProtect packer marker
+    crit: notable
+    conf: 0.8
+    if:
+      type: string
+      substr: VMProtect
+
+  # Section-based detection (migrated from YARA)
+  - id: upx-section
+    desc: UPX packed binary section name
+    crit: suspicious
+    conf: 0.95
+    mbc: "F0001.008"
+    for: [binaries]
+    if:
+      type: section
+      regex: "^(UPX\\d*|\\.UPX\\d*)$"
+
+  - id: vmprotect-section
+    desc: VMProtect packed binary section name
+    crit: suspicious
+    conf: 0.95
+    mbc: "F0001"
+    for: [binaries]
+    if:
+      type: section
+      regex: "^\\.vmp[0-9]+$"
+
+composite_rules:
+  - id: detect
+    desc: Packed/compressed executable
+    crit: notable
+    conf: 0.66
+    mbc: "F0001"
+    attack: "T1027.002"
+    any:
+      - id: upx-marker
+      - id: aspack-marker
+      - id: petite-marker
+      - id: themida-marker
+      - id: vmprotect-marker
+
+  # Packed binary that links a UI framework (e.g. WebKit) is suspicious:
+  # legitimate apps using WebKit are never UPX-packed. This pattern
+  # indicates a trojan displaying a decoy UI while hiding its payload.
+  # Complexity: all(+3) + for(+1) = 4 (SUSPICIOUS)
+  - id: packed-decoy-ui
+    desc: Packed binary with UI framework
+    crit: suspicious
+    conf: 0.90
+    mbc: "F0001"
+    attack: "T1204.001"
+    for: [macho]
+    all:
+      - id: upx-marker
+      - id: metadata/format::few-sections
+      - id: micro-behaviors/dylib/load::webkit-framework

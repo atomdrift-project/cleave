@@ -1,0 +1,165 @@
+# Lateral Movement - Network Scanning Tools
+# References to network scanning utilities (masscan, zgrab, pnscan)
+# ATT&CK: T1046 (Network Service Discovery)
+# ATT&CK: T1595.001 (Scanning IP Blocks)
+
+defaults:
+  for: [all]
+  attack: "T1046"
+  platforms: [linux, unix, macos]
+
+traits:
+  # === Atomic: Masscan ===
+
+  - id: masscan-cmd
+    desc: masscan network scanner command
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: string
+      regex: '\bmasscan\s+[0-9./]+'
+
+  - id: masscan-rate
+    desc: masscan with rate option
+    crit: suspicious
+    conf: 0.85
+    if:
+      type: string
+      regex: 'masscan\s+.{0,64}--?rate\s+[0-9]+'
+
+  - id: masscan-output
+    desc: masscan output file pattern
+    crit: suspicious
+    conf: 0.85
+    if:
+      type: string
+      regex: 'masscan\s+.{0,64}-oL\s+'
+
+  # === Atomic: zgrab ===
+
+  - id: zgrab-cmd
+    desc: zgrab banner grabber command
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: string
+      regex: '\bzgrab\s+'
+
+  - id: zgrab-senders
+    desc: zgrab with concurrent senders
+    crit: suspicious
+    conf: 0.85
+    if:
+      type: string
+      regex: 'zgrab\s+.{0,64}--senders\s+[0-9]+'
+
+  - id: zgrab-http
+    desc: zgrab HTTP probing
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: string
+      regex: 'zgrab\s+.{0,64}--http='
+
+  # === Atomic: pnscan ===
+
+  - id: pnscan-cmd
+    desc: pnscan parallel network scanner
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: string
+      regex: '\bpnscan\s+'
+
+  - id: pnscan-response
+    desc: pnscan response pattern match
+    crit: suspicious
+    conf: 0.85
+    if:
+      type: string
+      regex: 'pnscan\s+.{0,64}-R\s+[0-9a-fA-F ]+'
+
+  # === Atomic: Docker API targeting ===
+
+  - id: docker-api-port-scanner
+    desc: Docker API port (2375) with scanner keywords
+    crit: notable
+    conf: 0.8
+    if:
+      type: string
+      regex: '(scan|masscan|zgrab|nmap).{0,64}2375'
+
+  - id: docker-api-port-direct
+    desc: Docker API port (2375) with docker keyword
+    crit: notable
+    conf: 0.8
+    if:
+      type: string
+      regex: '2375.{0,32}docker|docker.{0,32}2375'
+
+  - id: docker-api-version-probe
+    desc: Docker API version endpoint probe
+    crit: suspicious
+    conf: 0.9
+    attack: "T1595.001"
+    if:
+      type: string
+      regex: '/v[0-9.]+/version'
+
+composite_rules:
+  - id: docker-api-port
+    desc: Docker API port reference
+    crit: suspicious
+    conf: 0.85
+    attack: "T1595.001"
+    any:
+      - id: docker-api-port-scanner
+      - id: docker-api-port-direct
+
+  # Masscan execution
+  - id: masscan
+    desc: masscan network scanner execution
+    crit: suspicious
+    conf: 0.9
+    attack: "T1046"
+    any:
+      - id: masscan-cmd
+      - id: masscan-rate
+      - id: masscan-output
+
+  # zgrab execution
+  - id: zgrab
+    desc: zgrab banner grabber execution
+    crit: suspicious
+    conf: 0.9
+    attack: "T1046"
+    any:
+      - id: zgrab-cmd
+      - id: zgrab-senders
+      - id: zgrab-http
+
+  # pnscan execution
+  - id: pnscan
+    desc: pnscan network scanner execution
+    crit: suspicious
+    conf: 0.9
+    attack: "T1046"
+    any:
+      - id: pnscan-cmd
+      - id: pnscan-response
+
+  # Docker API exploitation scanning
+  # Complexity: all(3) + any(1) = 4 -> hostile
+  - id: docker-api-scan
+    desc: Docker API exploitation scanning
+    crit: hostile
+    conf: 0.95
+    attack: "T1595.001"
+    all:
+      - id: docker-api-port
+      - id: docker-api-version-probe
+      - id: zgrab-senders
+    any:
+      - id: masscan-cmd
+      - id: zgrab-cmd
+      - id: pnscan-cmd

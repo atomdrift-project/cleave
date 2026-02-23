@@ -1,0 +1,11 @@
+traits:
+  - id: custom-pe-loader
+    desc: Manual PE header verification and parsing
+    crit: suspicious
+    conf: 0.9
+    mbc: "B0005" # Reflective Code Loading
+    for: [pe, dll]
+    if:
+      type: hex
+      # Patterns for MZ header check, e_lfanew offset (0x3c), and PE header check
+      pattern: "66 81 ?? 4d 5a 75 ?? ?? ?? ?? 3c ?? ?? ?? ?? ?? 50 45 00 00"

@@ -1,0 +1,10 @@
+defaults:
+  for: [python]
+
+traits:
+  - id: json-quote-replace
+    desc: Replaces quotes before JSON parsing
+    crit: notable
+    if:
+      type: raw
+      regex: \.replace\(['"]'['"],\s*['"]"['"]\)

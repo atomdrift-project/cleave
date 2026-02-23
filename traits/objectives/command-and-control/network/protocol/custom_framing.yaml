@@ -1,0 +1,16 @@
+# Custom C2 Framing Protocols
+# ATT&CK: T1071
+
+defaults:
+  for: [all]
+
+traits:
+  # Custom text-based C2 framing (migrated from YARA - uses regex to match any pattern)
+  - id: text_headers
+    desc: "Custom text-based C2 protocol framing"
+    crit: suspicious
+    conf: 0.8
+    attack: "T1071"
+    if:
+      type: string
+      regex: "Bytes == %d|iDataSize == %d"

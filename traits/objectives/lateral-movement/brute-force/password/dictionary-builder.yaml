@@ -1,0 +1,24 @@
+composite_rules:
+  - id: custom-wordlist-pdf-bigram
+    desc: Helper for custom wordlist generator (PDF + Bigram)
+    crit: notable
+    conf: 0.8
+    all:
+      - id: micro-behaviors/data/format/pdf::read
+      - id: micro-behaviors/data/text/parse::bigram-generation
+
+  - id: custom-wordlist-secondary
+    desc: Helper for custom wordlist generator (Dict override OR PDF+Bigram)
+    crit: notable
+    conf: 0.8
+    any:
+      - id: micro-behaviors/fs/path/system::suspicious-dict-override
+      - id: custom-wordlist-pdf-bigram
+
+  - id: custom-wordlist-generator
+    desc: Custom wordlist generator using document analysis
+    crit: suspicious
+    conf: 0.8
+    all:
+      - id: micro-behaviors/data/text/parse::nlp-tokenization
+      - id: custom-wordlist-secondary

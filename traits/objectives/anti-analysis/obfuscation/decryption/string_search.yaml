@@ -1,0 +1,28 @@
+# Generic Python String Decryptor
+# Detects Python scripts that combine XOR decryption with string extraction logic
+# ATT&CK: T1027 (Obfuscated Files or Information)
+
+composite_rules:
+  - id: python-xor-string-search
+    desc: Python script performing XOR decryption and string search
+    crit: suspicious
+    conf: 0.8
+    attack: T1027
+    all:
+      # Core mechanism: XOR decoding
+      - id: micro-behaviors/data/encode/xor::xor-decoding-loop
+
+      # File I/O: Reading binary data
+      - id: micro-behaviors/fs/file/operations::binary-file-ops
+
+      # Obfuscation logic: Sliding key or printable char check
+    any:
+      - id: objectives/anti-static/obfuscation/scripting::python-sliding-key-loop
+      - id: objectives/anti-static/obfuscation/scripting::python-printable-char-check
+
+    # Downgrade for likely benign scripts (e.g., educational or utility scripts that are explicitly named as decoders/tools but not malicious)
+    # However, this combination is rare in benign code unless it's a security tool.
+    downgrade:
+      any:
+        - type: basename
+          regex: "(?i)decode|decrypt|analyze|extract" # Common names for analysis tools

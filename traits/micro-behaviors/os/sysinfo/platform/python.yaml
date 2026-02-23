@@ -1,0 +1,13 @@
+defaults:
+  for: [python]
+  crit: notable
+
+traits:
+  - id: python-win32-check
+    desc: Checks for Windows platform
+    conf: 0.8
+    attack: T1082
+    mbc: E1082
+    if:
+      type: string
+      regex: "sys\\.platform.{0,20}win32|platform.{0,20}win32|['\"]win32['\"].{0,20}sys\\.platform"

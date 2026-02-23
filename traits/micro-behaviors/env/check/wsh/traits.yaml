@@ -1,0 +1,36 @@
+# Environment Checks - WSH vs Browser
+# Detects checks used to determine if running in Windows Script Host
+
+defaults:
+  crit: notable
+  conf: 0.8
+  platforms: [windows]
+  for: [javascript, typescript]
+  attack: "T1497.001"
+  mbc: "B0003"
+
+traits:
+  - id: env-check-no-document
+    desc: Checks for absence of document (WSH context)
+    if:
+      type: raw
+      regex: "(?i)typeof\\s+document\\s*(=|!)=+\\s*['\"]undefined['\"]"
+    
+  - id: env-check-no-window
+    desc: Checks for absence of window (WSH context)
+    if:
+      type: raw
+      regex: "(?i)typeof\\s+window\\s*(=|!)=+\\s*['\"]undefined['\"]"
+    
+  - id: env-check-wscript
+    desc: Checks for presence of WScript
+    if:
+      type: raw
+      regex: "(?i)typeof\\s+WScript\\s*(=|!)=+\\s*['\"]object['\"]"
+
+  - id: env-check-comspec-cmd
+    desc: Validates ComSpec path against cmd.exe
+    crit: suspicious
+    if:
+      type: raw
+      regex: '(?i)ComS(pec)?\b.{0,100}%SystemRoot%\\system32\\cmd\.exe'

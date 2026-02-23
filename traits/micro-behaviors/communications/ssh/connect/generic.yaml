@@ -1,0 +1,57 @@
+# SSH Operations
+# MBC: C0001 (Socket Communication)
+# ATT&CK: T1021.004
+
+defaults:
+  for: [all]
+
+traits:
+  # === SSH Indicators ===
+  - id: ssh-string
+    desc: ssh string
+    crit: baseline
+    conf: 0.4
+    attack: "T1021.004"
+    if:
+      type: string
+      word: "ssh"
+
+  - id: paramiko
+    desc: paramiko Python SSH library
+    crit: notable
+    conf: 0.75
+    attack: "T1021.004"
+    if:
+      type: string
+      substr: "paramiko"
+
+  - id: openssh
+    desc: OpenSSH string
+    crit: baseline
+    conf: 0.5
+    if:
+      type: string
+      substr: "OpenSSH"
+
+  - id: ssh-client
+    desc: SSHClient class
+    crit: notable
+    conf: 0.75
+    attack: "T1021.004"
+    if:
+      type: string
+      substr: "SSHClient"
+
+composite_rules:
+  # SSH connection (migrated from YARA)
+  - id: connect
+    desc: SSH connection
+    crit: notable
+    conf: 0.66
+    attack: "T1021.004"
+    any:
+      - id: ssh-string
+      - id: paramiko
+      - id: micro-behaviors/communications/ssh/client::libssh
+      - id: openssh
+      - id: ssh-client

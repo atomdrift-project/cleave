@@ -1,0 +1,174 @@
+# Windows LOLBins (Living-off-the-Land Binaries)
+# MBC: C0049 (Execution - LoLBins)
+# ATT&CK: T1218 (System Binary Proxy Execution)
+
+defaults:
+  platforms: [windows]
+  conf: 0.9
+
+traits:
+  - id: rundll32-execution
+    desc: Execution via rundll32.exe
+    crit: notable
+    for: [javascript, vbs, batch, powershell, python, pe]
+    if:
+      type: raw
+      regex: 'rundll32(\.exe)?'
+      case_insensitive: true
+
+  - id: rundll32-suspicious-export
+    desc: Rundll32 with suspicious export
+    crit: suspicious
+    conf: 0.85
+    for: [javascript, vbs, batch, powershell, python]
+    if:
+      type: raw
+      regex: 'rundll32.{0,20},.{0,20}(qwerty|Run|start)'
+      case_insensitive: true
+
+  - id: nemucod-export-fragments
+    desc: Fragments of Nemucod-style export call (qwerty 323)
+    crit: suspicious
+    for: [javascript, vbs]
+    if:
+      type: raw
+      regex: '",qwe".{0,50}"rty".{0,50}"323"'
+      case_insensitive: true
+
+  # GuardDog: MITRE ATT&CK T1218 System Binary Proxy Execution
+  - id: regsvr32-execution
+    desc: regsvr32.exe DLL registration
+    crit: suspicious
+    attack: "T1218.010"
+    for: [shell, batch, powershell, python]
+    if:
+      id: micro-behaviors/process/create/tool::regsvr32
+
+  - id: control-cpl-execution
+    desc: control.exe with CPL file
+    crit: suspicious
+    attack: "T1218.002"
+    for: [shell, batch, powershell, python]
+    if:
+      type: raw
+      regex: 'control(\.exe)?\s+\S+\.cpl'
+      case_insensitive: true
+
+  - id: cmstp-execution
+    desc: cmstp.exe execution
+    crit: suspicious
+    attack: "T1218.003"
+    for: [shell, batch, powershell, python]
+    if:
+      type: raw
+      regex: 'cmstp(\.exe)?'
+      case_insensitive: true
+
+  - id: installutil-execution
+    desc: InstallUtil.exe execution
+    crit: suspicious
+    attack: "T1218.004"
+    for: [shell, batch, powershell, python]
+    if:
+      type: raw
+      regex: 'InstallUtil(\.exe)?'
+      case_insensitive: true
+
+  - id: mshta-execution
+    desc: mshta.exe execution
+    crit: suspicious
+    attack: "T1218.005"
+    for: [shell, batch, powershell, python]
+    if:
+      type: raw
+      regex: 'mshta(\.exe)?'
+      case_insensitive: true
+
+  - id: msiexec-execution
+    desc: msiexec.exe execution
+    crit: suspicious
+    attack: "T1218.007"
+    for: [shell, batch, powershell, python]
+    if:
+      type: raw
+      regex: 'msiexec(\.exe)?'
+      case_insensitive: true
+
+  - id: odbcconf-regsvr
+    desc: odbcconf.exe with REGSVR
+    crit: suspicious
+    attack: "T1218.008"
+    for: [shell, batch, powershell, python]
+    if:
+      type: raw
+      regex: 'odbcconf(\.exe)?\s+.{0,120}\{\s*REGSVR\s+\S+\s*\}'
+      case_insensitive: true
+
+  - id: regsvcs-execution
+    desc: regsvcs.exe execution
+    crit: suspicious
+    attack: "T1218.009"
+    for: [shell, batch, powershell, python]
+    if:
+      type: raw
+      regex: 'regsvcs(\.exe)?'
+      case_insensitive: true
+
+  - id: regasm-execution
+    desc: regasm.exe execution
+    crit: suspicious
+    attack: "T1218.009"
+    for: [shell, batch, powershell, python]
+    if:
+      type: raw
+      regex: 'regasm(\.exe)?'
+      case_insensitive: true
+
+  - id: verclsid-execution
+    desc: verclsid.exe with CLSID
+    crit: suspicious
+    attack: "T1218.012"
+    for: [shell, batch, powershell, python]
+    if:
+      type: raw
+      regex: 'verclsid(\.exe)?\s+.{0,120}\{\s*\S+\s*\}'
+      case_insensitive: true
+
+  - id: mavinject-execution
+    desc: mavinject.exe DLL injection
+    crit: suspicious
+    attack: "T1218.013"
+    for: [shell, batch, powershell, python]
+    if:
+      type: raw
+      regex: 'mavinject(\.exe)?\s+\d+\s+/INJECTRUNNING'
+      case_insensitive: true
+
+  - id: mmc-embedding
+    desc: mmc.exe with -Embedding
+    crit: suspicious
+    attack: "T1218.014"
+    for: [shell, batch, powershell, python]
+    if:
+      type: raw
+      regex: 'mmc(\.exe)?\s+-Embedding'
+      case_insensitive: true
+
+composite_rules:
+  - id: windows-lolbin
+    desc: Any Windows LOLbin execution
+    crit: notable
+    any:
+      - id: rundll32-execution
+      - id: regsvr32-execution
+      - id: control-cpl-execution
+      - id: cmstp-execution
+      - id: installutil-execution
+      - id: mshta-execution
+      - id: msiexec-execution
+      - id: odbcconf-regsvr
+      - id: regsvcs-execution
+      - id: regasm-execution
+      - id: verclsid-execution
+      - id: mavinject-execution
+      - id: mmc-embedding

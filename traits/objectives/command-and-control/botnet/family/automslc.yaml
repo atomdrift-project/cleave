@@ -1,0 +1,18 @@
+composite_rules:
+  - id: automslc-indicators
+    desc: Detects automslc/DeezerBot malware via unique strings
+    crit: hostile
+    conf: 1.0
+    attack: "T1071.001,T1027"
+    mbc: "B0030"
+    any:
+      - id: well-known/malware/botnet/automslc
+
+  - id: automslc-c2-traffic
+    desc: Detects automslc/DeezerBot malware via C2 traffic
+    crit: hostile
+    conf: 0.95
+    attack: "T1071.001"
+    all:
+      - id: well-known/malware/botnet/automslc::automslc-token-source
+      - id: micro-behaviors/communications/http/request::request-python

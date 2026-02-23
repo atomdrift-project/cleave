@@ -1,0 +1,85 @@
+# Code Quality Indicators - Documentation
+
+traits:
+  # === Atomic: Documentation Strings ===
+
+  - id: python-docstring-triple-double
+    desc: Python docstring (triple double quote)
+    crit: baseline
+    conf: 0.6
+    for: [python]
+    if:
+      type: string
+      exact: '"""'
+
+  - id: python-docstring-triple-single
+    desc: Python docstring (triple single quote)
+    crit: baseline
+    conf: 0.6
+    for: [python]
+    if:
+      type: string
+      exact: "'''"
+
+  - id: rust-doc-comment
+    desc: Rust documentation comment
+    crit: baseline
+    conf: 0.6
+    for: [rust]
+    if:
+      type: string
+      exact: "///"
+
+  - id: javadoc-comment
+    desc: JavaDoc comment start
+    crit: baseline
+    conf: 0.6
+    for: [java, javascript, c, csharp]
+    if:
+      type: string
+      exact: "/**"
+
+  - id: rust-doc-comment-space
+    desc: Rust doc comment with space
+    crit: baseline
+    conf: 0.6
+    for: [rust]
+    if:
+      type: string
+      exact: "/// "
+
+  - id: param-annotation
+    desc: "@param annotation"
+    crit: baseline
+    conf: 0.6
+    for: [java, javascript, php]
+    if:
+      type: string
+      substr: "@param"
+
+  - id: return-annotation
+    desc: "@return annotation"
+    crit: baseline
+    conf: 0.6
+    for: [java, javascript, php]
+    if:
+      type: string
+      substr: "@return"
+
+  - id: sphinx-param
+    desc: "Sphinx :param: directive"
+    crit: baseline
+    conf: 0.6
+    for: [python]
+    if:
+      type: string
+      substr: ":param"
+
+  - id: sphinx-returns
+    desc: "Sphinx :returns: directive"
+    crit: baseline
+    conf: 0.6
+    for: [python]
+    if:
+      type: string
+      substr: ":returns:"

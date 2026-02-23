@@ -1,0 +1,25 @@
+# Linux Privilege Escalation Traits
+# Detects strings and behaviors related to privilege escalation on Linux
+# ATT&CK: T1068 (Exploitation for Privilege Escalation)
+
+defaults:
+  for: [all]
+
+traits:
+  - id: root-shell-msg
+    desc: '"Dropping to root shell" message'
+    crit: notable
+    conf: 0.8
+    mbc: "E1068"
+    attack: "T1068"
+    if:
+      type: string
+      substr: "Dropping to root shell"
+
+  - id: root-privileges-msg
+    desc: '"Give root privileges" message'
+    crit: notable
+    conf: 0.8
+    if:
+      type: string
+      regex: "(Give|Gain|Get) root privil[ae]ges"

@@ -1,0 +1,116 @@
+# Ransomware Detection
+# MBC: B0040 (Encryption for Impact)
+# ATT&CK: T1486
+
+defaults:
+  for: [all]
+
+traits:
+  - id: encrypt
+    desc: Ransomware encryption patterns
+    crit: suspicious
+    conf: 0.75
+    mbc: "B0040"
+    attack: "T1486"
+    if:
+      type: yara
+      source: |
+        rule ransomware {
+          strings:
+            // Ransom-specific terms (not generic crypto)
+            $ransom1 = "ransom" nocase fullword
+            $ransom2 = "your files have been encrypted" nocase
+            $ransom3 = "pay to decrypt" nocase
+            $ransom4 = "files will be deleted" nocase
+            // Payment indicators
+            $tor = "torproject.org"
+            $onion = /[a-z2-7]{16,56}\.onion/
+            $btc_addr = /[13][a-km-zA-HJ-NP-Z1-9]{25,34}/
+            $btc_pay = "bitcoin" nocase fullword
+            // File extension indicators
+            $ext_locked = ".locked" ascii
+            $ext_encrypted = ".encrypted" ascii
+            $ext_crypto = ".crypto" ascii
+            
+            // False Positive Reduction
+            $fp_et = "doc.emergingthreats.net" nocase
+            $fp_elastic = "securitySolution" nocase
+            $fp_signatures = "signatures" nocase fullword
+          condition:
+            filesize < 25MB and (
+              (any of ($ransom2, $ransom3) or
+              ($ransom4 and ($ransom1 or $tor or $onion or any of ($btc*) or $btc_pay)) or
+              ($ransom1 and ($tor or $onion or any of ($btc*) or any of ($ext_*))) or
+              ($tor and $btc_pay) or
+              (any of ($ext_*) and $btc_pay) or
+              ($onion and any of ($btc*)))
+            ) and not any of ($fp_*)
+        }
+
+  - id: encrypt-decryptor-msg-1
+    desc: References decryptor (your/run/download)
+    crit: notable
+    conf: 0.7
+    if:
+      type: string
+      regex: "\\b(your|run|download)\\s+decryptor"
+      case_insensitive: true
+
+  - id: encrypt-decryptor-msg-2
+    desc: References decryptor (get/free)
+    crit: notable
+    conf: 0.7
+    if:
+      type: string
+      regex: "\\b(get|free)\\s+decryptor"
+      case_insensitive: true
+
+  - id: encrypt-decryptor-file
+    desc: References decryptor file (exe/bin/bat)
+    crit: notable
+    conf: 0.75
+    if:
+      type: string
+      regex: "decryptor\\.(exe|bin|bat)"
+      case_insensitive: true
+
+  # Go file encryption patterns (ransomware)
+  - id: go-file-encrypt-yara
+    desc: Go file encryption patterns
+    crit: suspicious
+    conf: 0.8
+    if:
+      type: yara
+      source: |
+        rule go_file_encrypt {
+          strings:
+            $crypto1 = "crypto/aes" ascii
+            $crypto2 = "crypto/cipher" ascii
+            $crypto3 = "crypto/rsa" ascii
+            $walk1 = "filepath.Walk" ascii
+            $walk2 = "filepath.WalkDir" ascii
+            $write1 = "ioutil.WriteFile" ascii
+            $write2 = "os.WriteFile" ascii
+            $ext1 = ".encrypted" ascii
+            $ext2 = ".locked" ascii
+          condition:
+            any of ($crypto*) and any of ($walk*) and
+            (any of ($write*) or any of ($ext*))
+        }
+
+composite_rules:
+  - id: encrypt-decryptor
+    desc: References decryptor
+    crit: suspicious
+    conf: 0.66
+    any:
+      - id: encrypt-decryptor-msg-1
+      - id: encrypt-decryptor-msg-2
+      - id: encrypt-decryptor-file
+
+  - id: encrypt-note
+    desc: Ransom note patterns
+    crit: notable
+    conf: 0.66
+    any:
+      - id: micro-behaviors/data/text/malware/

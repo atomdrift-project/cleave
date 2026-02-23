@@ -1,0 +1,68 @@
+# Instruction Density-Based Evasion
+# Detects anti-analysis and VM evasion via instruction patterns
+# ATT&CK: T1497.001 (Virtualization/Sandbox Evasion: System Checks)
+
+defaults:
+  platforms: [linux, macos, windows]
+  for: [pe, macho, elf]
+  attack: "T1497.001"
+
+traits:
+  # CPUID occurrence check
+  - id: multiple-cpuid-instr
+    desc: Multiple CPUID instructions detected
+    crit: notable
+    conf: 0.7
+    if:
+      type: hex
+      pattern: "0F A2"
+      count_min: 3
+
+  # RDTSC occurrence check
+  - id: multiple-rdtsc-instr
+    desc: Multiple RDTSC instructions (timing primitives)
+    crit: notable
+    conf: 0.7
+    if:
+      type: hex
+      pattern: "0F 31"
+      count_min: 3
+
+  - id: sparse-logic-density
+    desc: "Extremely low logic density (function sparsity)"
+    crit: notable
+    conf: 0.8
+    if:
+      type: metrics
+      field: binary.complexity_per_kb
+      max: 0.001
+    unless:
+      - id: metadata/signed/platform::apple
+      - id: metadata/quality::versioned
+
+composite_rules:
+  - id: instruction-based-evasion
+    desc: Instruction-based anti-analysis/VM detection
+    crit: notable # Downgraded from suspicious - common in installers for system detection
+    conf: 0.8
+    any:
+      - id: multiple-cpuid-instr
+      - id: multiple-rdtsc-instr
+    downgrade:
+      any:
+        - id: objectives/execution/reflection/invoke::namespace-import
+        - id: objectives/execution/reflection/invoke::method-info
+        - id: objectives/execution/reflection/invoke::property-info
+        - id: metadata/signed/platform::apple
+        - id: file/archive/self-extracting
+
+  - id: sparse-execution-anomaly
+    desc: "Sparse execution structural anomaly (possible packer)"
+    crit: suspicious
+    conf: 0.9
+    all:
+      - id: sparse-logic-density
+      - id: metadata/format::no-imports
+    any:
+      - id: objectives/anti-static/obfuscation/binary-metrics::dominant-section
+      - id: metadata/binary/structure::minimal-string-count

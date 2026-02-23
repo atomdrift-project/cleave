@@ -1,0 +1,86 @@
+# Encoded Payload Detection
+# Detects large encoded/compressed payloads in binaries
+# Indicates obfuscated second-stage malware
+
+defaults:
+  for: [all]
+
+traits:
+  - id: large-base64-payload
+    desc: Large base64 encoded payload
+    crit: notable
+    conf: 0.8
+    platforms: [all]
+    for: [pe, elf, macho]
+    if:
+      type: string
+      regex: "^[A-Za-z0-9+/]{200,}={0,2}$"
+    attack: "T1140"
+    mbc: "C0043"
+
+  - id: large-hex-payload
+    desc: Large hexadecimal encoded payload
+    crit: notable
+    conf: 0.8
+    platforms: [all]
+    for: [pe, elf, macho]
+    if:
+      type: string
+      regex: "^[0-9A-Fa-f]{512,}$"
+    attack: "T1140"
+    mbc: "C0043"
+
+  - id: hex-byte-format
+    desc: Hex byte format string
+    crit: baseline
+    conf: 0.6
+    platforms: [all]
+    if:
+      type: string
+      substr: "0x%02x"
+
+  - id: c-array-format
+    desc: C array declaration format string
+    crit: notable
+    conf: 0.6
+    platforms: [all]
+    if:
+      type: string
+      regex: "char\\s+%s\\[\\]"
+
+  - id: payload-blob-metrics
+    desc: High entropy encrypted data
+    crit: notable
+    conf: 0.75
+    platforms: [windows]
+    for: [pe]
+    if:
+      type: section
+      regex: "^\\.rdata"
+      entropy_min: 6.5
+composite_rules:
+  - id: embedded-obfuscated-payload
+    desc: Embedded obfuscated payload
+    crit: suspicious
+    conf: 0.85
+    attack: "T1140"
+    mbc: "C0043"
+    platforms: [all]
+    for: [pe, elf, macho]
+    size_max: 1000000
+    any:
+      - id: large-base64-payload
+      - id: large-hex-payload
+      - id: payload-blob-metrics
+    none:
+      - id: metadata/signed/platform::apple
+
+  - id: binary-to-c-array
+    desc: Binary to C array converter
+    crit: notable
+    conf: 0.8
+    attack: "T1027.009"
+    platforms: [all]
+    all:
+      - id: hex-byte-format
+      - id: c-array-format

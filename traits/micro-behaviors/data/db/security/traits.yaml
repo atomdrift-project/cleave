@@ -1,0 +1,10 @@
+defaults:
+  for: [all]
+
+traits:
+  - id: commented-out-unique
+    desc: Commented out unique constraint (often disables security)
+    crit: notable
+    if:
+      type: raw
+      regex: '//\s*unique\s*:\s*true'

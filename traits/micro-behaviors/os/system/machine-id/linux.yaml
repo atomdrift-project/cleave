@@ -1,0 +1,100 @@
+defaults:
+  for:
+    - elf
+    - macho
+    - so
+    - dylib
+    - c
+  crit: baseline
+  mbc: E1082
+  attack: T1082
+traits:
+  - id: machine-id-string
+    desc: machine-id string
+    conf: 0.5
+    platforms:
+      - linux
+    if:
+      type: string
+      substr: machine-id
+  - id: machineid-camel
+    desc: MachineId string
+    conf: 0.5
+    platforms:
+      - windows
+      - linux
+      - macos
+    if:
+      type: string
+      substr: MachineId
+  - id: product-uuid-string
+    desc: product_uuid string
+    conf: 0.5
+    platforms:
+      - linux
+    if:
+      type: string
+      substr: product_uuid
+  - id: etc-hostname
+    desc: /etc/hostname path
+    conf: 0.5
+    platforms:
+      - linux
+      - unix
+    if:
+      type: string
+      substr: /etc/hostname
+  - id: fingerprint-prefix-a
+    desc: hardware/device fingerprint string
+    conf: 0.4
+    platforms:
+      - linux
+      - windows
+      - macos
+    if:
+      type: string
+      regex: (hardware|device|machine|system)[\s_-]?fingerprint
+      case_insensitive: true
+  - id: fingerprint-prefix-b
+    desc: host fingerprint string
+    conf: 0.4
+    platforms:
+      - linux
+      - windows
+      - macos
+    if:
+      type: string
+      regex: host[\s_-]?fingerprint
+      case_insensitive: true
+  - id: fingerprint-suffix
+    desc: fingerprint id/generation string
+    conf: 0.4
+    platforms:
+      - linux
+      - windows
+      - macos
+    if:
+      type: string
+      regex: fingerprint[\s_-]?(id|gen|collect)
+      case_insensitive: true
+composite_rules:
+  - id: fingerprint-string
+    desc: hardware/device fingerprint string
+    conf: 0.4
+    platforms:
+      - linux
+      - windows
+      - macos
+    any:
+      - id: fingerprint-prefix
+      - id: fingerprint-suffix
+  - id: fingerprint-prefix
+    desc: hardware/device fingerprint string
+    conf: 0.4
+    platforms:
+      - linux
+      - windows
+      - macos
+    any:
+      - id: fingerprint-prefix-a
+      - id: fingerprint-prefix-b

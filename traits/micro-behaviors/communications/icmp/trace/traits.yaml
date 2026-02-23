@@ -1,0 +1,32 @@
+# ICMP Trace - Network Route Tracing
+# Traces the path packets take to reach a destination
+
+defaults:
+  for: [all]
+  crit: notable
+  conf: 0.9
+
+traits:
+  - id: traceroute
+    desc: traceroute command
+    if:
+      type: string
+      word: "traceroute"
+
+  - id: tracepath
+    desc: tracepath command
+    if:
+      type: string
+      word: "tracepath"
+
+  - id: mtr
+    desc: mtr network diagnostic
+    if:
+      type: string
+      word: "mtr"
+
+  - id: hping
+    desc: hping packet tool
+    if:
+      type: string
+      substr: hping

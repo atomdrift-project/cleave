@@ -1,0 +1,33 @@
+# Socket Create - Perl
+# Perl-specific socket creation operations
+
+defaults:
+  for: [perl]
+  platforms: [all]
+
+traits:
+  - id: socket-call
+    desc: Perl socket() call
+    crit: notable
+    conf: 0.6
+    attack: "T1059.006"
+    if:
+      type: string
+      substr: "socket("
+
+  - id: open-call
+    desc: Perl open() call
+    crit: baseline
+    conf: 0.3
+    if:
+      type: string
+      substr: "open("
+
+  - id: fd-redirect
+    desc: Perl file descriptor redirect
+    crit: notable
+    conf: 0.7
+    attack: "T1059.006"
+    if:
+      type: string
+      regex: '["'']>&'

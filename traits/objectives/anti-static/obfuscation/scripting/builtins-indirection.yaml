@@ -1,0 +1,180 @@
+# Python Builtins Obfuscation - Indirection Patterns
+# GuardDog-inspired: Detects indirect access to exec/eval via builtins
+# ATT&CK: T1027 (Obfuscated Files or Information)
+# MBC: B0032 (Obfuscated Files or Information)
+
+defaults:
+  for: [python]
+  crit: suspicious
+  conf: 0.95
+  attack: "T1027"
+  mbc: "B0032"
+
+traits:
+  # GuardDog: __import__('builtins').exec()
+  - id: import-builtins-exec
+    desc: __import__('builtins').exec obfuscation
+    if:
+      type: raw
+      regex: "__import__\\(['\"]builtins['\"]\\)\\.exec\\("
+
+  - id: import-builtins-eval
+    desc: __import__('builtins').eval obfuscation
+    if:
+      type: raw
+      regex: "__import__\\(['\"]builtins['\"]\\)\\.eval\\("
+
+  # GuardDog: globals()['eval'] or globals()['\x65\x76\x61\x6c']
+  - id: globals-bracket-eval
+    desc: globals()['eval'] indirection
+    if:
+      type: raw
+      regex: "globals\\(\\)\\[['\"]eval['\"]\\]\\("
+
+  - id: globals-bracket-exec
+    desc: globals()['exec'] indirection
+    if:
+      type: raw
+      regex: "globals\\(\\)\\[['\"]exec['\"]\\]\\("
+
+  - id: globals-bracket-hex-eval
+    desc: globals() with hex-encoded 'eval'
+    if:
+      type: raw
+      regex: "globals\\(\\)\\[\\\\x65\\\\x76\\\\x61\\\\x6c\\]\\("
+
+  - id: globals-bracket-hex-exec
+    desc: globals() with hex-encoded 'exec'
+    if:
+      type: raw
+      regex: "globals\\(\\)\\[\\\\x65\\\\x78\\\\x65\\\\x63\\]\\("
+
+  # GuardDog: vars(__builtins__)['exec']
+  - id: vars-builtins-exec
+    desc: vars(__builtins__)['exec'] indirection
+    if:
+      type: raw
+      regex: "vars\\(__builtins__\\)\\[['\"]exec['\"]\\]\\("
+
+  - id: vars-builtins-eval
+    desc: vars(__builtins__)['eval'] indirection
+    if:
+      type: raw
+      regex: "vars\\(__builtins__\\)\\[['\"]eval['\"]\\]\\("
+
+  - id: vars-builtins-compile
+    desc: vars(__builtins__)['compile'] indirection
+    if:
+      type: raw
+      regex: "vars\\(__builtins__\\)\\[['\"]compile['\"]\\]\\("
+
+  # GuardDog: vars(__builtins__).get('exec')
+  - id: vars-builtins-get-exec
+    desc: vars(__builtins__).get('exec') indirection
+    if:
+      type: raw
+      regex: "vars\\(__builtins__\\)\\.get\\(['\"]exec['\"]\\)\\("
+
+  - id: vars-builtins-get-eval
+    desc: vars(__builtins__).get('eval') indirection
+    if:
+      type: raw
+      regex: "vars\\(__builtins__\\)\\.get\\(['\"]eval['\"]\\)\\("
+
+  - id: vars-builtins-get-compile
+    desc: vars(__builtins__).get('compile') indirection
+    if:
+      type: raw
+      regex: "vars\\(__builtins__\\)\\.get\\(['\"]compile['\"]\\)\\("
+
+  # GuardDog: vars(globals()['__builtins__'])['exec']
+  - id: vars-globals-builtins-exec
+    desc: vars(globals()['__builtins__'])['exec']
+    if:
+      type: raw
+      regex: "vars\\(globals\\(\\)\\[['\"]__builtins__['\"]\\]\\)\\[['\"]exec['\"]\\]\\("
+
+  - id: vars-globals-builtins-eval
+    desc: vars(globals()['__builtins__'])['eval']
+    if:
+      type: raw
+      regex: "vars\\(globals\\(\\)\\[['\"]__builtins__['\"]\\]\\)\\[['\"]eval['\"]\\]\\("
+
+  # GuardDog: vars(locals()['__builtins__'])['exec']
+  - id: vars-locals-builtins-exec
+    desc: vars(locals()['__builtins__'])['exec']
+    if:
+      type: raw
+      regex: "vars\\(locals\\(\\)\\[['\"]__builtins__['\"]\\]\\)\\[['\"]exec['\"]\\]\\("
+
+  - id: vars-locals-builtins-eval
+    desc: vars(locals()['__builtins__'])['eval']
+    if:
+      type: raw
+      regex: "vars\\(locals\\(\\)\\[['\"]__builtins__['\"]\\]\\)\\[['\"]eval['\"]\\]\\("
+
+composite_rules:
+  # GuardDog: Import-based obfuscation
+  - id: import-builtins-obfuscation
+    desc: __import__('builtins') obfuscation
+    crit: suspicious
+    conf: 0.95
+    attack: "T1027.002"
+    mbc: "B0032"
+    any:
+      - id: import-builtins-exec
+      - id: import-builtins-eval
+
+  # GuardDog: globals() indirection
+  - id: globals-indirection
+    desc: globals() dictionary indirection
+    crit: suspicious
+    conf: 0.95
+    attack: "T1027.002"
+    mbc: "B0032"
+    any:
+      - id: globals-bracket-eval
+      - id: globals-bracket-exec
+      - id: globals-bracket-hex-eval
+      - id: globals-bracket-hex-exec
+
+  # GuardDog: vars(__builtins__) indirection
+  - id: vars-builtins-indirection
+    desc: vars(__builtins__) indirection
+    crit: suspicious
+    conf: 0.95
+    attack: "T1027.002"
+    mbc: "B0032"
+    any:
+      - id: vars-builtins-exec
+      - id: vars-builtins-eval
+      - id: vars-builtins-compile
+      - id: vars-builtins-get-exec
+      - id: vars-builtins-get-eval
+      - id: vars-builtins-get-compile
+
+  # GuardDog: Complex vars/globals combinations
+  - id: vars-globals-complex
+    desc: Complex vars/globals obfuscation
+    crit: suspicious
+    conf: 0.97
+    attack: "T1027.002"
+    mbc: "B0032"
+    any:
+      - id: vars-globals-builtins-exec
+      - id: vars-globals-builtins-eval
+      - id: vars-locals-builtins-exec
+      - id: vars-locals-builtins-eval
+
+  # GuardDog: All builtins obfuscation techniques
+  - id: builtins-obfuscation
+    desc: Python builtins obfuscation
+    crit: suspicious
+    conf: 0.95
+    attack: "T1027.002"
+    mbc: "B0032"
+    any:
+      - id: import-builtins-obfuscation
+      - id: globals-indirection
+      - id: vars-builtins-indirection
+      - id: vars-globals-complex

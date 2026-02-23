@@ -1,0 +1,16 @@
+traits:
+  - id: file-execution
+    criticality: suspicious
+    description: Executes a file.
+    platforms: [windows]
+    for: [javascript]
+    if:
+      type: ast
+      language: javascript
+      query: |
+        ((call_expression
+          function: (member_expression
+            property: (property_identifier) @run
+          )
+        )
+        (#eq? @run "Run"))

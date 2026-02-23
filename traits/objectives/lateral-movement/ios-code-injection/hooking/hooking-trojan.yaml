@@ -1,0 +1,42 @@
+# iOS Code Injection Trojan
+# Detects iOS apps that embed Cydia Substrate or other code hooking frameworks
+# Indicates capability to inject code into other iOS applications
+# ATT&CK: T1546 (Event Triggered Execution), T1574 (Hijack Execution Flow)
+# MBC: C0041 (Code Injection)
+
+traits:
+
+composite_rules:
+  - id: ios-cydia-substrate-trojan
+    desc: Cydia Substrate trojan
+    crit: notable
+    conf: 0.95
+    attack: "T1546"
+    mbc: "C0041"
+    for: [ipa]
+    all:
+      - id: objectives/evasion/process/injection/runtime::cydia-substrate-detected
+      - id: objectives/discovery/ios-obfuscation/bundle::obfuscated-bundle-identity
+      - id: objectives/evasion/process/injection/runtime::runtime-code-injection
+
+  - id: ios-reverse-engineering-instrumented
+    desc: Reverse engineering tool
+    crit: notable
+    conf: 0.85
+    attack: "T1564"
+    for: [ipa]
+    any:
+      - id: objectives/evasion/process/injection/runtime::reveal-server-framework
+      - id: objectives/evasion/process/injection/runtime::cbinjection-framework
+
+  - id: ios-obfuscated-trojan
+    desc: Obfuscated injection
+    crit: notable
+    conf: 0.9
+    attack: "T1546"
+    mbc: "C0041"
+    for: [ipa]
+    all:
+      - id: objectives/discovery/ios-obfuscation/bundle::suspicious-bundle-masquerading
+      - id: objectives/evasion/process/injection/runtime::runtime-code-injection
+      - id: objectives/evasion/process/injection/runtime::cydia-substrate-detected

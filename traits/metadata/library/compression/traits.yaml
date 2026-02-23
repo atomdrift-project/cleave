@@ -1,0 +1,48 @@
+# Compression Library Detection
+# Detects markers indicating this binary is a compression library
+# Used for context in supply chain attack detection (e.g., XZ backdoor)
+
+defaults:
+  crit: notable
+  conf: 0.8
+  for: [elf, macho, pe]
+
+traits:
+  # === LZMA/XZ markers ===
+  - id: lzma-marker
+    desc: LZMA library marker
+    if:
+      type: string
+      regex: "\\blzma_(stream|code|end|easy_encoder)\\b"
+
+  - id: xz-marker
+    desc: XZ Utils marker
+    if:
+      type: string
+      regex: "\\bxz_(crc32|crc64)\\b"
+
+  # === zlib markers ===
+  # NOTE: Removed - compression function usage is a capability (micro-behavior), not metadata
+  # See: micro-behaviors/data/compression/library/traits.yaml
+
+  # === bzip2 markers ===
+  - id: bzip2-marker
+    desc: bzip2 library marker
+    if:
+      type: string
+      regex: "\\bBZ2_(bz|compress|decompress)\\b"
+
+  # === zstd markers ===
+  # NOTE: Removed - compression function usage is a capability (micro-behavior), not metadata
+  # See: micro-behaviors/data/compression/library/traits.yaml
+
+composite_rules:
+  - id: compression-lib
+    desc: "File is a compression library"
+    crit: notable
+    conf: 0.85
+    any:
+      - id: lzma-marker
+      - id: xz-marker
+      - id: bzip2-marker
+      # Note: zlib and zstd removed - use micro-behaviors/data/compression/library instead

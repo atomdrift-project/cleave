@@ -1,0 +1,45 @@
+# Stager Detection
+# Detects minimal stagers and shellcode wrappers
+# ATT&CK: T1105 (Ingress Tool Transfer)
+
+defaults:
+  for: [elf]
+  crit: hostile
+  mbc: "B0024" # Software Stager
+  attack: "T1105"
+
+composite_rules:
+  # Helper: Network syscalls
+  - id: arm-network-syscalls
+    desc: ARM direct network syscalls
+    crit: notable
+    any:
+      - id: micro-behaviors/communications/syscall/socket::svc-socket
+      - id: micro-behaviors/communications/syscall/socket::svc-connect
+
+  # Helper: Structural anomalies
+  # NOTE: Stripped binaries are normal for release builds. Require additional
+  # indicators beyond just being stripped to flag as suspicious.
+  - id: structural-anomalies
+    desc: Suspicious binary structure
+    crit: notable
+    all:
+      - id: metadata/format::text-section-ratio-dominant
+    any:
+      - id: metadata/hardening::minimal-hardening
+
+  - id: tiny-network-stager
+    desc: "Tiny network stager"
+    crit: hostile
+    all:
+      - id: metadata/format::tiny-elf
+      - id: arm-network-syscalls
+      - id: structural-anomalies
+
+  - id: arm-direct-network-shellcode
+    desc: "ARM direct network syscalls"
+    crit: suspicious
+    needs: 2
+    any:
+      - id: micro-behaviors/communications/syscall/socket::svc-socket
+      - id: micro-behaviors/communications/syscall/socket::svc-connect

@@ -1,0 +1,79 @@
+# Credential Access - Shell History Files
+# ATT&CK: T1552.003 (Unsecured Credentials: Bash History)
+
+defaults:
+  for: [all]
+  platforms: [linux, macos, unix]
+
+traits:
+  # === Atomic: Bash History ===
+  - id: bash-history
+    desc: Bash shell history file access
+    crit: suspicious
+    conf: 0.8
+    attack: "T1552.003"
+    if:
+      type: string
+      substr: ".bash_history"
+    downgrade:
+      any:
+        # Shell binaries legitimately reference their own history files
+        - type: basename
+          exact: "bash"
+        - type: basename
+          exact: "sh"
+        # Apple system components
+        - type: string
+          regex: "com\\.apple\\.[a-z][a-z0-9.-]+"
+
+  # === Atomic: Zsh History ===
+  - id: zsh-history
+    desc: Zsh shell history file access
+    crit: suspicious
+    conf: 0.8
+    attack: "T1552.003"
+    if:
+      type: string
+      substr: ".zsh_history"
+    downgrade:
+      any:
+        # Zsh binary legitimately references its own history file
+        - type: basename
+          exact: "zsh"
+        # Apple system components
+        - type: string
+          regex: "com\\.apple\\.[a-z][a-z0-9.-]+"
+
+  # === Atomic: Fish History ===
+  - id: fish-history
+    desc: Fish shell history file access
+    crit: suspicious
+    conf: 0.8
+    attack: "T1552.003"
+    if:
+      type: string
+      regex: "\\.local/share/fish/fish_history"
+    downgrade:
+      any:
+        # Fish shell legitimately references its own history file
+        - type: basename
+          exact: "fish"
+
+  # NOTE: Shell RC files (.bashrc, .zshrc, .profile) are defined in persist/shell/config/traits.yaml
+
+composite_rules:
+  - id: history-theft
+    desc: Shell history file theft
+    crit: suspicious
+    conf: 0.8
+    attack: "T1552.003"
+    mbc: "E1552"
+    any:
+      - id: bash-history
+      - id: zsh-history
+      - id: fish-history
+    # Downgrade for Apple system components (e.g., /bin/bash, /bin/zsh)
+    downgrade:
+      any:
+        - id: metadata/apple::system-component
+        - id: metadata/apple::project-marker

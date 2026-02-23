@@ -1,0 +1,24 @@
+# Local Privilege Escalation via Kernel LKM
+# ATT&CK: T1068
+
+composite_rules:
+  - id: commit-creds-prepare-creds
+    desc: Local privilege escalation via commit_creds(prepare_creds())
+    crit: suspicious
+    conf: 0.95
+    attack: "T1068"
+    for: [elf, c]
+    all:
+      - id: micro-behaviors/os/kernel/privilege-escalation::commit-creds
+      - id: micro-behaviors/os/kernel/privilege-escalation::prepare-creds
+
+  - id: lkm-privesc
+    desc: Kernel LPE via syscall table hook
+    crit: hostile
+    conf: 0.98
+    attack: "T1068"
+    for: [elf, c]
+    all:
+      - id: commit-creds-prepare-creds
+      - id: micro-behaviors/os/kernel/hook::syscall-table-ref
+      - id: micro-behaviors/os/kernel/hook::nr-syscall-ref

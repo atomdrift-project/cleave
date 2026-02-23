@@ -1,0 +1,17 @@
+defaults:
+  crit: suspicious
+  conf: 0.8
+  for:
+  - javascript
+traits:
+- id: js-deletefile-obfuscated
+  desc: Obfuscated DeleteFile reference
+  if:
+    type: encoded
+    regex: \{[^:]+:['"]D['"]\}\.[a-zA-Z0-9_$]+\+\{[^:]+:['"]e['"]\}
+- id: js-scriptfullname-obfuscated
+  desc: Obfuscated ScriptFullName reference
+  if:
+    type: encoded
+    regex: \{[^:]+:['"]S['"]\}\.[a-zA-Z0-9_$]+\+\{[^:]+:['"]c['"]\}
+composite_rules: []

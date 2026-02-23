@@ -1,0 +1,73 @@
+defaults:
+  for: [all]
+
+traits:
+  - id: cmd-proto-command
+    desc: Command.prototype.command symbol
+    if:
+      type: symbol
+      exact: "Command.prototype.command"
+  - id: cmd-proto-option
+    desc: Command.prototype.option symbol
+    if:
+      type: symbol
+      exact: "Command.prototype.option"
+  - id: cmd-proto-parse
+    desc: Command.prototype.parse symbol
+    if:
+      type: symbol
+      exact: "Command.prototype.parse"
+
+  - id: cmd-class-def-regex
+    desc: Command class definition
+    if:
+      type: raw
+      regex: 'class\s+Command\s+extends\s+EventEmitter'
+
+  - id: cmd-exports-regex
+    desc: exports.Command assignment
+    if:
+      type: raw
+      regex: 'exports\.Command\s*=\s*Command'
+
+  - id: commander-require
+    desc: Requires commander library
+    if:
+      type: ast
+      language: javascript
+      query: |
+        (call_expression
+          function: (identifier) @req
+          arguments: (arguments (string (string_fragment) @lib))
+          (#eq? @req "require")
+          (#eq? @lib "commander")
+        )
+
+composite_rules:
+  - id: commander-legacy
+    desc: Commander.js legacy prototype pattern
+    crit: notable
+    conf: 0.95
+    for: [javascript, typescript]
+    all:
+      - id: cmd-proto-command
+      - id: cmd-proto-option
+      - id: cmd-proto-parse
+
+  - id: commander-modern
+    desc: Commander.js class pattern
+    crit: notable
+    conf: 0.95
+    for: [javascript, typescript]
+    all:
+      - id: cmd-class-def-regex
+      - id: cmd-exports-regex
+
+  - id: commander
+    desc: Commander.js CLI framework
+    crit: notable
+    conf: 0.95
+    for: [javascript, typescript]
+    any:
+      - id: commander-legacy
+      - id: commander-modern

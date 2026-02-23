@@ -1,0 +1,11 @@
+composite_rules:
+  - id: batch-execution-proxy
+    desc: Writes and executes a batch file proxy to evade process tree monitoring
+    crit: suspicious
+    conf: 0.8
+    attack: "T1059.003"
+    all:
+      - id: micro-behaviors/host/interpreter/jscript::batch-launcher-content
+    any:
+      - id: micro-behaviors/process/create/script::batch-script-execution
+      - id: micro-behaviors/os/fs/write::ext-bat

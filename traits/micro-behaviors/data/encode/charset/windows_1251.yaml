@@ -1,0 +1,14 @@
+# Detects specific Cyrillic charset usage which is a common behavioral indicator in droppers
+# MBC: C0015 (Micro-behaviors)
+
+defaults:
+  for: [javascript, typescript, vbs, shell]
+  crit: notable
+  conf: 0.8
+
+traits:
+  - id: windows-1251-charset
+    desc: Uses windows-1251 charset (often ADODB.Stream)
+    if:
+      type: string
+      exact: 'windows-1251'

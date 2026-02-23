@@ -1,0 +1,13 @@
+composite_rules:
+  - id: dotnet-bitmap-aes-dropper
+    desc: "Steganography Dropper (Bitmap + AES + Download)"
+    crit: hostile
+    conf: 0.9
+    mbc: "B0027"
+    attack: "T1027.003"
+    all:
+      - id: micro-behaviors/data/image/pixel::pixel-access
+      - id: micro-behaviors/crypto/symmetric/aes::dotnet-rijndael
+      - id: objectives/command-and-control/dropper/embedded-payload::frombase64string
+    any:
+      - id: micro-behaviors/communications/http/client

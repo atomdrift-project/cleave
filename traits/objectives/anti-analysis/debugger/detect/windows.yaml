@@ -1,0 +1,42 @@
+# Debugger Detection - Windows
+# MBC: B0001 (Debugger Detection)
+# ATT&CK: T1622
+
+defaults:
+  for: [pe, dll]
+  platforms: [windows]
+
+traits:
+  # IsDebuggerPresent: use objectives/execution/native/runtime/traits.yaml::debugger-detect-api (canonical)
+  - id: check-remote-debugger
+    desc: CheckRemoteDebuggerPresent API
+    crit: notable
+    conf: 0.8
+    mbc: "B0001"
+    attack: "T1622"
+    if:
+      type: symbol
+      exact: "CheckRemoteDebuggerPresent"
+
+  - id: nt-query-information-process
+    desc: NtQueryInformationProcess (debugger detection via NT)
+    crit: notable
+    conf: 0.8
+    mbc: "B0001"
+    attack: "T1622"
+    if:
+      type: symbol
+      exact: "NtQueryInformationProcess"
+
+composite_rules:
+  # debugger-api: composite referencing canonical IsDebuggerPresent plus local variants
+  - id: debugger-api
+    desc: Debugger detection via Windows API
+    crit: notable
+    conf: 0.66
+    mbc: "B0001"
+    attack: "T1622"
+    any:
+      - id: objectives/execution/native/runtime::debugger-detect-api
+      - id: check-remote-debugger
+      - id: nt-query-information-process

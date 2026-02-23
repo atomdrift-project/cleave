@@ -1,0 +1,15 @@
+# File Permission Lookup
+# MBC: E1083 (File and Directory Discovery)
+# ATT&CK: T1083
+
+defaults:
+  for: [elf, macho, so, dylib, c]
+
+traits:
+  - id: get
+    desc: Look up file permissions
+    crit: baseline
+    conf: 0.66
+    if:
+      type: symbol
+      regex: "^_?(getmode|stat|lstat|fstat)$"

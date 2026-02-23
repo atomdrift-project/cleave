@@ -1,0 +1,551 @@
+# Desktop Cryptocurrency Wallet Theft Detection
+# Detects targeting of desktop wallet application data
+# ATT&CK: T1555 (Credentials from Password Stores)
+# MBC: B0028 (Credential Theft)
+
+defaults:
+  for: [all]
+  attack: "T1555"
+  mbc: "B0028"
+  crit: suspicious
+  platforms: [macos, windows, linux]
+
+traits:
+  # === Electrum atomic indicators ===
+  - id: electrum-wallets-dir
+    desc: .electrum/wallets directory
+    conf: 0.7
+    crit: notable
+    if:
+      type: string
+      regex: "\\.electrum/wallets?"
+
+  - id: electrum-wallet-file
+    desc: .electrum wallet file
+    conf: 0.7
+    crit: notable
+    if:
+      type: string
+      regex: "\\.electrum.{0,30}wallet"
+
+  - id: electrum-default
+    desc: electrum default_wallet
+    conf: 0.7
+    crit: notable
+    if:
+      type: string
+      substr: "default_wallet"
+
+  # === Coinomi atomic indicators ===
+  - id: coinomi-wallets-dir
+    desc: Coinomi/wallets directory
+    conf: 0.7
+    crit: notable
+    if:
+      type: string
+      regex: "Coinomi/wallets?"
+
+  - id: coinomi-wallet-dat
+    desc: Coinomi wallet.dat
+    conf: 0.7
+    crit: notable
+    if:
+      type: string
+      regex: "Coinomi.{0,30}wallet\\.dat"
+
+  - id: coinomi-bundle
+    desc: com.coinomi bundle
+    conf: 0.7
+    crit: notable
+    if:
+      type: string
+      substr: "com.coinomi"
+
+  # === Exodus atomic indicators ===
+  - id: exodus-wallet-dir
+    desc: Exodus/exodus.wallet
+    conf: 0.7
+    crit: notable
+    if:
+      type: string
+      substr: "Exodus/exodus.wallet"
+
+  - id: exodus-passphrase
+    desc: exodus passphrase
+    conf: 0.7
+    crit: notable
+    if:
+      type: string
+      regex: "exodus.{0,30}passphrase"
+
+  - id: exodus-bundle
+    desc: com.exodus bundle
+    conf: 0.7
+    crit: notable
+    if:
+      type: string
+      substr: "com.exodus"
+
+  # === Atomic Wallet atomic indicators ===
+  - id: atomic-local-storage
+    desc: atomic/Local Storage
+    conf: 0.7
+    crit: notable
+    if:
+      type: string
+      substr: "atomic/Local Storage"
+
+  - id: atomic-wallet-name
+    desc: Atomic Wallet name
+    conf: 0.7
+    crit: notable
+    if:
+      type: string
+      substr: "Atomic Wallet"
+
+  - id: atomic-bundle
+    desc: com.atomicwallet bundle
+    conf: 0.7
+    crit: notable
+    if:
+      type: string
+      substr: "com.atomicwallet"
+
+  # === Wasabi atomic indicators ===
+  - id: walletwasabi-lower
+    desc: .walletwasabi directory
+    conf: 0.7
+    crit: notable
+    if:
+      type: string
+      substr: ".walletwasabi"
+
+  - id: walletwasabi-upper
+    desc: .WalletWasabi directory
+    conf: 0.7
+    crit: notable
+    if:
+      type: string
+      substr: ".WalletWasabi"
+
+  - id: wasabiwallet-name
+    desc: WasabiWallet name
+    conf: 0.7
+    crit: notable
+    if:
+      type: string
+      substr: "WasabiWallet"
+
+  # === Binance atomic indicators ===
+  - id: binance-app-store
+    desc: Binance/app-store.json
+    conf: 0.7
+    crit: notable
+    if:
+      type: string
+      substr: "Binance/app-store.json"
+
+  - id: binance-aspect
+    desc: "@aspect-binance package"
+    conf: 0.7
+    crit: notable
+    if:
+      type: string
+      substr: "@aspect-binance"
+
+  - id: binance-bundle
+    desc: com.binance bundle
+    conf: 0.7
+    crit: notable
+    if:
+      type: string
+      substr: "com.binance"
+
+  # === TonKeeper atomic indicators ===
+  - id: tonkeeper-desktop
+    desc: "@tonkeeper/desktop package"
+    conf: 0.7
+    crit: notable
+    if:
+      type: string
+      substr: "@tonkeeper/desktop"
+
+  - id: tonkeeper-config
+    desc: tonkeeper config.json
+    conf: 0.7
+    crit: notable
+    if:
+      type: string
+      regex: "tonkeeper.{0,30}config\\.json"
+
+  - id: tonkeeper-bundle
+    desc: com.ton-keeper bundle
+    conf: 0.7
+    crit: notable
+    if:
+      type: string
+      substr: "com.ton-keeper"
+
+  # === Ledger atomic indicators ===
+  - id: ledger-live-dir
+    desc: Ledger Live/ directory
+    conf: 0.7
+    crit: notable
+    if:
+      type: string
+      substr: "Ledger Live/"
+
+  - id: ledgerhq-package
+    desc: "@ledgerhq package"
+    conf: 0.7
+    crit: notable
+    if:
+      type: string
+      substr: "@ledgerhq"
+
+  - id: ledger-accounts
+    desc: ledger accounts
+    conf: 0.7
+    crit: notable
+    if:
+      type: string
+      regex: "ledger.{0,30}accounts"
+
+  # === Trezor atomic indicators ===
+  - id: trezor-desktop
+    desc: "@trezor/suite-desktop package"
+    conf: 0.7
+    crit: notable
+    if:
+      type: string
+      substr: "@trezor/suite-desktop"
+
+  - id: trezor-suite
+    desc: trezor suite
+    conf: 0.7
+    crit: notable
+    if:
+      type: string
+      regex: "trezor.{0,30}suite"
+
+  # === Guarda atomic indicators ===
+  - id: guarda-local-storage
+    desc: Guarda/Local Storage
+    conf: 0.7
+    crit: notable
+    if:
+      type: string
+      substr: "Guarda/Local Storage"
+
+  - id: guarda-bundle
+    desc: com.guarda bundle
+    conf: 0.7
+    crit: notable
+    if:
+      type: string
+      substr: "com.guarda"
+
+  # === Bitcoin Core atomic indicators ===
+  - id: bitcoin-wallet-dat
+    desc: .bitcoin/wallet.dat
+    conf: 0.7
+    crit: notable
+    if:
+      type: string
+      substr: ".bitcoin/wallet.dat"
+
+  - id: bitcoin-wallets-dir
+    desc: .bitcoin/wallets directory
+    conf: 0.7
+    crit: notable
+    if:
+      type: string
+      substr: ".bitcoin/wallets"
+
+  - id: bitcoin-app-wallets
+    desc: Bitcoin/wallets directory
+    conf: 0.7
+    crit: notable
+    if:
+      type: string
+      substr: "Bitcoin/wallets"
+
+  # === Ethereum/Mist atomic indicators ===
+  - id: ethereum-keystore
+    desc: Ethereum/keystore
+    conf: 0.7
+    crit: notable
+    if:
+      type: string
+      substr: "Ethereum/keystore"
+
+  - id: mist-keystore
+    desc: Mist/keystore
+    conf: 0.7
+    crit: notable
+    if:
+      type: string
+      substr: "Mist/keystore"
+
+  - id: doteth-keystore
+    desc: .ethereum/keystore
+    conf: 0.7
+    crit: notable
+    if:
+      type: string
+      substr: ".ethereum/keystore"
+
+  # === Monero atomic indicators ===
+  - id: monero-wallets
+    desc: Monero/wallets
+    conf: 0.7
+    crit: notable
+    if:
+      type: string
+      substr: "Monero/wallets"
+
+  - id: bitmonero-wallets
+    desc: .bitmonero/wallets
+    conf: 0.7
+    crit: notable
+    if:
+      type: string
+      substr: ".bitmonero/wallets"
+
+  # === Litecoin atomic indicators ===
+  - id: litecoin-wallet-dat
+    desc: .litecoin/wallet.dat
+    conf: 0.7
+    crit: notable
+    if:
+      type: string
+      substr: ".litecoin/wallet.dat"
+
+  - id: litecoin-wallets
+    desc: Litecoin/wallets
+    conf: 0.7
+    crit: notable
+    if:
+      type: string
+      substr: "Litecoin/wallets"
+
+  # === Dash atomic indicators ===
+  - id: dashcore-wallets
+    desc: DashCore/wallets
+    conf: 0.7
+    crit: notable
+    if:
+      type: string
+      substr: "DashCore/wallets"
+
+  - id: dash-wallet-dat
+    desc: .dashcore/wallet.dat
+    conf: 0.7
+    crit: notable
+    if:
+      type: string
+      substr: ".dashcore/wallet.dat"
+
+  # Electrum-LTC
+  - id: electrum-ltc
+    desc: "Electrum-LTC wallet data path"
+    conf: 0.85
+    crit: suspicious
+    if:
+      type: string
+      substr: ".electrum-ltc/wallets"
+
+  # Electron Cash (BCH)
+  - id: electron-cash
+    desc: "Electron Cash wallet data path"
+    conf: 0.85
+    crit: suspicious
+    if:
+      type: string
+      substr: ".electron-cash/wallets"
+
+  # === Dogecoin atomic indicators ===
+  - id: dogecoin-wallets
+    desc: Dogecoin/wallets
+    conf: 0.7
+    crit: notable
+    if:
+      type: string
+      substr: "Dogecoin/wallets"
+
+  - id: dogecoin-wallet-dat
+    desc: .dogecoin/wallet.dat
+    conf: 0.7
+    crit: notable
+    if:
+      type: string
+      substr: ".dogecoin/wallet.dat"
+
+composite_rules:
+  # === Wallet composites ===
+  - id: electrum
+    desc: Electrum wallet targeting
+    crit: suspicious
+    conf: 0.85
+    any:
+      - id: electrum-wallets-dir
+      - id: electrum-wallet-file
+      - id: electrum-default
+
+  - id: coinomi
+    desc: Coinomi wallet targeting
+    crit: suspicious
+    conf: 0.85
+    any:
+      - id: coinomi-wallets-dir
+      - id: coinomi-wallet-dat
+      - id: coinomi-bundle
+
+  - id: exodus
+    desc: Exodus wallet targeting
+    crit: suspicious
+    conf: 0.85
+    any:
+      - id: exodus-wallet-dir
+      - id: exodus-passphrase
+      - id: exodus-bundle
+
+  - id: atomic
+    desc: Atomic Wallet targeting
+    crit: suspicious
+    conf: 0.85
+    any:
+      - id: atomic-local-storage
+      - id: atomic-wallet-name
+      - id: atomic-bundle
+
+  - id: wasabi
+    desc: Wasabi wallet targeting
+    crit: suspicious
+    conf: 0.85
+    any:
+      - id: walletwasabi-lower
+      - id: walletwasabi-upper
+      - id: wasabiwallet-name
+
+  - id: binance
+    desc: Binance wallet targeting
+    crit: suspicious
+    conf: 0.85
+    any:
+      - id: binance-app-store
+      - id: binance-aspect
+      - id: binance-bundle
+
+  - id: tonkeeper
+    desc: TonKeeper wallet targeting
+    crit: suspicious
+    conf: 0.85
+    any:
+      - id: tonkeeper-desktop
+      - id: tonkeeper-config
+      - id: tonkeeper-bundle
+
+  - id: ledger
+    desc: Ledger wallet targeting
+    crit: suspicious
+    conf: 0.85
+    any:
+      - id: ledger-live-dir
+      - id: ledgerhq-package
+      - id: ledger-accounts
+
+  - id: trezor
+    desc: Trezor wallet targeting
+    crit: suspicious
+    conf: 0.85
+    any:
+      - id: trezor-desktop
+      - id: trezor-suite
+
+  - id: guarda
+    desc: Guarda wallet targeting
+    crit: suspicious
+    conf: 0.85
+    any:
+      - id: guarda-local-storage
+      - id: guarda-bundle
+
+  - id: bitcoin-core
+    desc: Bitcoin Core wallet targeting
+    crit: suspicious
+    conf: 0.85
+    any:
+      - id: bitcoin-wallet-dat
+      - id: bitcoin-wallets-dir
+      - id: bitcoin-app-wallets
+
+  - id: ethereum
+    desc: Ethereum wallet targeting
+    crit: suspicious
+    conf: 0.85
+    any:
+      - id: ethereum-keystore
+      - id: mist-keystore
+      - id: doteth-keystore
+
+  - id: monero
+    desc: Monero wallet targeting
+    crit: suspicious
+    conf: 0.85
+    any:
+      - id: monero-wallets
+      - id: bitmonero-wallets
+
+  - id: litecoin-core
+    desc: Litecoin wallet targeting
+    crit: suspicious
+    conf: 0.85
+    any:
+      - id: litecoin-wallet-dat
+      - id: litecoin-wallets
+      - id: electrum-ltc
+
+  - id: dash-core
+    desc: Dash wallet targeting
+    crit: suspicious
+    conf: 0.85
+    any:
+      - id: dashcore-wallets
+      - id: dash-wallet-dat
+
+  - id: dogecoin-core
+    desc: Dogecoin wallet targeting
+    crit: suspicious
+    conf: 0.85
+    any:
+      - id: dogecoin-wallets
+      - id: dogecoin-wallet-dat
+
+  # Multiple desktop wallet targets = stealer
+  - id: stealer
+    desc: "Desktop cryptocurrency wallet stealer"
+    crit: hostile
+    conf: 0.95
+    attack: "T1555"
+    mbc: "B0028"
+    for: [python, javascript, elf, pe, macho, applescript, shell]
+    needs: 3
+    any:
+      - id: electrum
+      - id: coinomi
+      - id: exodus
+      - id: atomic
+      - id: wasabi
+      - id: binance
+      - id: tonkeeper
+      - id: ledger
+      - id: trezor
+      - id: guarda
+      - id: bitcoin-core
+      - id: ethereum
+      - id: monero
+      - id: litecoin-core
+      - id: dash-core
+      - id: dogecoin-core
+      - id: electron-cash

@@ -1,0 +1,93 @@
+# Cryptographic Hash Traits
+# MBC: C0029 (Cryptographic Hash)
+
+traits:
+  - id: md5-php
+    desc: MD5 hash computation
+    crit: baseline
+    conf: 0.7
+    mbc: "C0029"
+    for: [php]
+    if:
+      type: string
+      regex: "\\bmd5\\s*\\("
+
+  - id: sha1-php
+    desc: SHA1 hash computation
+    crit: baseline
+    conf: 0.7
+    mbc: "C0029"
+    for: [php]
+    if:
+      type: string
+      regex: "\\bsha1\\s*\\("
+
+  - id: sha256-php
+    desc: SHA256 hash computation
+    crit: baseline
+    conf: 0.7
+    mbc: "C0029"
+    for: [php]
+    if:
+      type: string
+      regex: "hash\\s*\\(['\"]sha256['\"]"
+
+  - id: hash-generic
+    desc: Generic hash function usage
+    crit: baseline
+    conf: 0.65
+    mbc: "C0029"
+    for: [php]
+    if:
+      type: string
+      regex: "\\bhash\\s*\\("
+
+  - id: password-hash
+    desc: Password hashing (bcrypt/argon2)
+    crit: baseline
+    conf: 0.6
+    for: [php]
+    if:
+      type: string
+      substr: password_hash
+
+  - id: password-verify
+    desc: Password verification
+    crit: notable
+    conf: 0.7
+    for: [php]
+    if:
+      type: string
+      substr: password_verify
+
+  # === C source MD5 password hashing ===
+  - id: md5-openssl-include
+    desc: OpenSSL MD5 header include
+    crit: notable
+    conf: 0.8
+    mbc: "C0029"
+    for: [c]
+    if:
+      type: raw
+      regex: "#include\\s*<openssl/md5"
+
+  - id: md5-init-update-final-c
+    desc: OpenSSL MD5 init/update/final sequence in C
+    crit: notable
+    conf: 0.8
+    mbc: "C0029"
+    for: [c]
+    if:
+      type: raw
+      regex: "MD5_(Init|Update|Final)"
+
+composite_rules:
+  - id: md5-password-hash-c
+    desc: OpenSSL MD5 API usage in C source
+    crit: notable
+    conf: 0.85
+    mbc: "C0029"
+    for: [c]
+    all:
+      - id: md5-openssl-include
+      - id: md5-init-update-final-c

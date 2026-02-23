@@ -1,0 +1,45 @@
+# Nemucod String Reassembly Fragments
+# Common fragments used by Nemucod to reassemble sensitive strings
+# These are building blocks that only make sense when combined in composites
+
+defaults:
+  crit: component
+  conf: 0.8
+  for: [javascript]
+
+traits:
+  - id: response-body-fragment-seB
+    desc: ResponseBody fragment (seB)
+    if:
+      type: raw
+      substr: "seB"
+
+  - id: response-body-fragment-pon
+    desc: ResponseBody fragment (pon)
+    if:
+      type: string
+      exact: "pon"
+
+  - id: save-to-file-fragment-oFil
+    desc: SaveToFile fragment (oFil)
+    if:
+      type: raw
+      substr: "oFil"
+
+  - id: stream-fragment-eam
+    desc: Stream fragment (eam)
+    if:
+      type: raw
+      substr: "eam"
+
+  - id: stream-fragment-dotstr
+    desc: .Stream fragment (.Str)
+    if:
+      type: raw
+      substr: ".Str"
+
+  - id: adodb-fragment-odb
+    desc: ADODB fragment (ODB)
+    if:
+      type: raw
+      substr: "ODB"

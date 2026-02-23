@@ -1,0 +1,13 @@
+# Proximity-based Reflection Detection
+# Detects dynamic module loading followed immediately by attribute access
+
+composite_rules:
+  - id: dynamic-import-access
+    desc: "Dynamic module import followed by"
+    crit: suspicious
+    conf: 0.95
+    for: [python]
+    near_lines: 5
+    all:
+      - id: objectives/execution/reflection/dynamic::dynamic-import
+      - id: objectives/execution/reflection/dynamic::getattr-module

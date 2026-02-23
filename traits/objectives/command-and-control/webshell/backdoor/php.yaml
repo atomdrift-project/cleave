@@ -1,0 +1,270 @@
+# PHP Webshell C2 Traits
+# MBC: B0030 (C2 Communication)
+# ATT&CK: T1505.003 (Web Shell)
+
+defaults:
+  for: [php]
+  mbc: "B0030"
+
+traits:
+  - id: password-form
+    desc: HTML password form in PHP
+    crit: suspicious
+    conf: 0.85
+    attack: "T1505.003"
+    if:
+      type: string
+      regex: '<input[^>]{0,120}type=[''"]password[''"]'
+
+  - id: ajax-handler
+    desc: AJAX request handler pattern
+    crit: notable
+    conf: 0.7
+    if:
+      type: ast
+      node: subscript_expression
+      regex: "\\$_(GET|POST)"
+
+  - id: json-response
+    desc: JSON API response pattern
+    crit: notable
+    conf: 0.7
+    if:
+      type: ast
+      kind: call
+      exact: "json_encode"
+
+  - id: hardcoded-hash-auth
+    desc: Hardcoded MD5 hash authentication (backdoor)
+    crit: suspicious
+    conf: 0.95
+    attack: "T1505.003"
+    if:
+      type: ast
+      kind: binary_op
+      exact: "md5"
+
+  - id: substr-hash-compare
+    desc: Partial hash comparison (weak authentication)
+    crit: suspicious
+    conf: 0.9
+    attack: "T1505.003"
+    if:
+      type: ast
+      kind: call
+      exact: "substr"
+
+  - id: error-suppress-prefix
+    desc: Error suppression operator usage (@)
+    crit: notable
+    conf: 0.7
+    mbc: "B0032"
+    if:
+      type: ast
+      node: error_suppression_expression
+      regex: ".{1,120}"
+
+  # === Proxy port atomic indicators ===
+  - id: port-30000
+    desc: Port 30000
+    crit: notable
+    conf: 0.6
+    if:
+      type: string
+      word: "30000"
+
+  - id: port-31337-php
+    desc: Port 31337 (leet)
+    crit: notable
+    conf: 0.7
+    if:
+      type: string
+      word: "31337"
+
+  - id: port-4444-php
+    desc: Port 4444 (Metasploit)
+    crit: notable
+    conf: 0.7
+    if:
+      type: string
+      word: "4444"
+
+  - id: port-5555
+    desc: Port 5555
+    crit: notable
+    conf: 0.6
+    if:
+      type: string
+      word: "5555"
+
+  - id: port-6666
+    desc: Port 6666
+    crit: notable
+    conf: 0.6
+    if:
+      type: string
+      word: "6666"
+
+  - id: port-8080-php
+    desc: Port 8080 (HTTP alt)
+    crit: notable
+    conf: 0.5
+    if:
+      type: string
+      word: "8080"
+
+  - id: port-9999
+    desc: Port 9999
+    crit: notable
+    conf: 0.6
+    if:
+      type: string
+      word: "9999"
+
+  - id: ssrf-pattern
+    desc: Server-Side Request Forgery pattern (URL
+    crit: suspicious
+    conf: 0.85
+    attack: "T1090"
+    if:
+      type: ast
+      kind: call
+      regex: "curl_init\\s*\\(.{0,50}\\$_(GET|POST|REQUEST)"
+
+  - id: google-search-scrape
+    desc: Google search results scraping
+    crit: suspicious
+    conf: 0.85
+    if:
+      type: string
+      regex: "google\\.[a-z.]+/search\\?.{0,50}site:"
+
+  - id: url-param-fetch
+    desc: URL parameter fetched and executed
+    crit: suspicious
+    conf: 0.8
+    if:
+      type: ast
+      kind: call
+      regex: "(curl_init|file_get_contents|fopen)\\s*\\(.{0,50}\\$_(GET|POST)"
+
+  - id: dynamic-user-input-call-1
+    desc: User input used as function (GET/POST/REQUEST)
+    crit: suspicious
+    conf: 0.98
+    attack: "T1505.003"
+    if:
+      type: ast
+      kind: call
+      regex: "\\$_(GET|POST|REQUEST)\\s*\\[[^]]+\\]\\s*\\("
+
+  - id: dynamic-user-input-call-2
+    desc: User input used as function (COOKIE/SERVER)
+    crit: suspicious
+    conf: 0.98
+    attack: "T1505.003"
+    if:
+      type: ast
+      kind: call
+      regex: "\\$_(COOKIE|SERVER)\\s*\\[[^]]+\\]\\s*\\("
+
+  # HOSTILE: eval of base64-decoded large payload
+  # This pattern is used exclusively by webshells/backdoors
+  - id: eval-base64-large-payload
+    desc: "Large base64 payload decode"
+    crit: suspicious
+    conf: 0.99
+    mbc: "B0030"
+    attack: "T1505.003"
+    if:
+      type: raw
+      regex: "base64_decode\\s*\\([\"'][A-Za-z0-9+/=]{500,}"
+
+  # WordPress CMS backdoor patterns
+  - id: wp-user-creation-1
+    desc: WordPress user creation API (wp_create_user)
+    crit: notable
+    conf: 0.7
+    attack: "T1136.001"
+    if:
+      type: raw
+      word: "wp_create_user"
+
+  - id: wp-user-creation-2
+    desc: WordPress user creation API (WP_User)
+    crit: notable
+    conf: 0.7
+    attack: "T1136.001"
+    if:
+      type: raw
+      word: "WP_User"
+
+  - id: wp-user-creation-3
+    desc: WordPress user creation API (username_exists)
+    crit: notable
+    conf: 0.7
+    attack: "T1136.001"
+    if:
+      type: raw
+      word: "username_exists"
+
+  - id: wp-role-assignment
+    desc: WordPress role assignment
+    crit: notable
+    conf: 0.7
+    attack: "T1098"
+    if:
+      type: raw
+      substr: "set_role"
+
+  - id: wp-plugin-path
+    desc: WordPress plugin directory reference
+    crit: notable
+    conf: 0.5
+    if:
+      type: raw
+      substr: "wp-content/plugins"
+
+  - id: wp-plugin-path-encoded
+    desc: Base64 encoded WordPress plugin path
+    crit: suspicious
+    conf: 0.85
+    mbc: "B0032"
+    attack: "T1027"
+    if:
+      type: raw
+      # d3AtY29udGVudC9wbHVnaW5z decodes to "wp-content/plugins"
+      substr: "d3AtY29udGVudC9wbHVnaW5z"
+
+composite_rules:
+  - id: dynamic-user-input-call
+    desc: User input used as function
+    crit: suspicious
+    conf: 0.98
+    attack: "T1505.003"
+    any:
+      - id: dynamic-user-input-call-1
+      - id: dynamic-user-input-call-2
+
+  - id: wp-user-creation
+    desc: WordPress user creation API
+    crit: notable
+    conf: 0.7
+    attack: "T1136.001"
+    any:
+      - id: wp-user-creation-1
+      - id: wp-user-creation-2
+      - id: wp-user-creation-3
+
+  - id: proxy-port
+    desc: High port number (proxy/backdoor indicator)
+    crit: suspicious
+    conf: 0.8
+    any:
+      - id: port-30000
+      - id: port-31337-php
+      - id: port-4444-php
+      - id: port-5555
+      - id: port-6666
+      - id: port-8080-php
+      - id: port-9999

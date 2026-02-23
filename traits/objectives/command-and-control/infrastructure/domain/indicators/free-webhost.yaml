@@ -1,0 +1,67 @@
+# Free Webhosting C2 Infrastructure Detection
+# Detects malware using free webhosting services for C2
+# ATT&CK: T1071.001 (Application Layer Protocol: Web Protocols)
+# MBC: B0030 (C2 Communication)
+
+defaults:
+  crit: suspicious
+  attack: "T1071.001"
+  mbc: "B0030"
+  for: [python, shell, javascript]
+
+traits:
+  # === 000webhost ===
+  - id: webhostapp-domain
+    desc: 000webhostapp domain
+    crit: suspicious
+    conf: 0.90
+    if:
+      type: string
+      regex: "000webhostapp\\.com"
+
+  - id: webhostapp-http
+    desc: 000webhost HTTP endpoint
+    crit: suspicious
+    conf: 0.85
+    if:
+      type: string
+      regex: "000webhostapp.{0,50}http|http.{0,50}000webhostapp"
+
+  # === Other Free Webhosts ===
+  - id: free-webhost-domain
+    desc: Free webhosting domain
+    crit: suspicious
+    conf: 0.80
+    if:
+      type: string
+      regex: "(freehostia|byethost|000webhost|infinityfree)\\."
+
+  - id: free-webhost-c2-url
+    desc: Free webhost C2 URL
+    crit: suspicious
+    conf: 0.85
+    if:
+      type: string
+      regex: "(freehost|byethost|000webhost).{0,50}:[0-9]+"
+
+  # === Cloudflare Pages ===
+  - id: cloudflare-pages
+    desc: Cloudflare Pages domain
+    crit: suspicious
+    conf: 0.80
+    if:
+      type: raw
+      regex: "\\.pages\\.dev"
+
+composite_rules:
+  - id: free-webhost-c2-channel
+    desc: Free webhosting C2 channel
+    crit: suspicious
+    conf: 0.90
+    attack: "T1071.001"
+    mbc: "B0030"
+    platforms: [all]
+    any:
+      - id: webhostapp-domain
+      - id: free-webhost-domain
+      - id: free-webhost-c2-url

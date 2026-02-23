@@ -1,0 +1,14 @@
+composite_rules:
+  - id: redxor-backdoor
+    desc: RedXor (Winnti) Linux backdoor.
+    crit: hostile
+    conf: 0.95
+    for: [elf]
+    all:
+      - id: well-known/malware/backdoor/redxor::redxor-po1kitd-masquerade
+    any:
+      - id: well-known/malware/backdoor/redxor::redxor-check-proc
+      - id: micro-behaviors/communications/http/request::user-agent-header
+    none:
+      - id: objectives/lateral-movement/brute-force/iot-creds::mirai-cred-admin
+      - id: objectives/lateral-movement/brute-force/iot-creds::mirai-cred-xc3511

@@ -1,0 +1,19 @@
+# Python Image Stego Stager Objective
+# Detects Python stagers that extract and stage script payloads from image pixel channels.
+
+defaults:
+  for: [python]
+  mbc: "B0024"
+  attack: "T1105"
+
+composite_rules:
+  - id: image-lsb-script-stager
+    desc: Image LSB script staging workflow
+    crit: suspicious
+    conf: 0.95
+    all:
+      - id: micro-behaviors/data/embedded/payload::png-lsb-script-extractor
+      - id: micro-behaviors/data/embedded/payload::ps1-written-from-decoded-bytes
+    any:
+      - id: micro-behaviors/process/create/script::powershell-script-execution
+      - id: micro-behaviors/data/embedded/payload::chr-stream-from-int-array

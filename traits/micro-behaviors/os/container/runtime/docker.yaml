@@ -1,0 +1,22 @@
+# Docker Container Detection
+# Docker-specific paths and files
+
+defaults:
+  for: [python, shell, javascript]
+
+traits:
+  - id: dockerenv
+    desc: Docker environment file
+    crit: baseline
+    conf: 0.7
+    if:
+      type: string
+      substr: /.dockerenv
+
+  - id: docker-sock
+    desc: Docker socket path
+    crit: baseline
+    conf: 0.7
+    if:
+      type: string
+      substr: /run/docker.sock

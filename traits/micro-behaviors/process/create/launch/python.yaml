@@ -1,0 +1,13 @@
+defaults:
+  for: [python]
+  crit: notable
+
+traits:
+  - id: python-start-process
+    desc: Launches process via start command (Windows)
+    conf: 0.8
+    attack: T1059.003
+    mbc: E1059.003
+    if:
+      type: string
+      regex: "os\\.system\\(['\"]start |subprocess\\.(call|Popen|run)\\(\\['start'"

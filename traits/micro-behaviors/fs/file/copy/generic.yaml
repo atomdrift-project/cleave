@@ -1,0 +1,52 @@
+# File Copy Operations
+# MBC: C0046 (Create File)
+# ATT&CK: T1105
+
+traits:
+  - id: copyfile
+    desc: Copy files
+    crit: notable
+    conf: 0.66
+    for: [elf, macho, pe, dll, so, dylib, c]
+    if:
+      type: symbol
+      exact: "copyfile"
+
+  - id: copyfile-win
+    desc: Copy files (Windows API)
+    crit: notable
+    conf: 0.66
+    for: [elf, macho, pe, dll, so, dylib, c]
+    if:
+      type: symbol
+      exact: "CopyFile"
+
+  - id: copyfile-a
+    desc: Copy files (Windows API ANSI)
+    crit: notable
+    conf: 0.66
+    for: [elf, macho, pe, dll, so, dylib, c]
+    if:
+      type: symbol
+      exact: "CopyFileA"
+
+  - id: copyfile-w
+    desc: Copy files
+    crit: notable
+    conf: 0.66
+    for: [elf, macho, pe, dll, so, dylib, c]
+    if:
+      type: symbol
+      # fcopyfile: use micro-behaviors/fs/file/binary/traits.yaml::fcopyfile-macos (canonical)
+      exact: "CopyFileW"
+
+composite_rules:
+  - id: copy
+    desc: Copy files
+    crit: notable
+    conf: 0.66
+    any:
+      - id: copyfile
+      - id: copyfile-win
+      - id: copyfile-a
+      - id: copyfile-w

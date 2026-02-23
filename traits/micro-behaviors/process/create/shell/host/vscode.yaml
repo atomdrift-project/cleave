@@ -1,0 +1,48 @@
+# Visual Studio Code Extension Patterns
+# Detects markers and API usage for VSCode extensions
+
+defaults:
+  for: [javascript, typescript]
+  crit: notable
+  conf: 0.7
+
+traits:
+  - id: require-vscode
+    desc: require('vscode') statement
+    if:
+      type: string
+      regex: 'require\([''"]vscode[''"]\)'
+
+  - id: import-vscode
+    desc: import from 'vscode' statement
+    if:
+      type: string
+      regex: 'from\s+[''"]vscode[''"]'
+
+  - id: namespace
+    desc: vscode namespace reference
+    crit: baseline
+    if:
+      type: string
+      regex: 'vscode\.\w+'
+
+  - id: activate-function
+    desc: extension activate function
+    if:
+      type: string
+      regex: '^function\s+activate\b|activate\s*[:=]\s*function'
+
+  - id: global-state
+    desc: vscode globalState access
+    if:
+      type: string
+      substr: "globalState"
+
+composite_rules:
+  - id: vscode-extension-marker
+    desc: VSCode extension identification markers
+    any:
+      - id: require-vscode
+      - id: import-vscode
+      - id: namespace
+      - id: activate-function

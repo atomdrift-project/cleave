@@ -1,0 +1,47 @@
+# HTTP User-Agent patterns
+# Detects common browser and tool User-Agent strings
+
+defaults:
+  for: [all]
+  crit: notable
+  conf: 0.7
+
+traits:
+  - id: user-agent-header
+    desc: HTTP User-Agent header
+    if:
+      type: string
+      regex: 'User-Agent:'
+
+  - id: browser-mozilla-5-0
+    desc: Mozilla/5.0 User-Agent prefix
+    if:
+      type: string
+      substr: "Mozilla/5.0 ("
+
+  - id: python-requests-ua
+    desc: Python requests User-Agent
+    if:
+      type: string
+      regex: 'python-requests/[0-9]'
+
+  - id: curl-ua
+    desc: curl User-Agent
+    if:
+      type: string
+      regex: 'curl/[0-9]'
+
+  - id: wget-ua
+    desc: wget User-Agent
+    if:
+      type: string
+      regex: 'Wget/[0-9]'
+
+composite_rules:
+  - id: common-user-agents
+    desc: Common HTTP User-Agent strings
+    any:
+      - id: browser-mozilla-5-0
+      - id: python-requests-ua
+      - id: curl-ua
+      - id: wget-ua

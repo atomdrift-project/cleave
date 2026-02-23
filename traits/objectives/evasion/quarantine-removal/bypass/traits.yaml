@@ -1,0 +1,22 @@
+# Quarantine attribute removal (Gatekeeper bypass)
+# Removes macOS quarantine xattr to bypass Gatekeeper security check
+# ATT&CK: T1562.001 (Impair Defenses), T1562.004 (Disable Cloud Logs)
+# MBC: B0047 (Defense Evasion)
+
+defaults:
+  for: [all]
+
+traits:
+  - id: xattr-quarantine-remove
+    desc: xattr removes quarantine attribute
+    crit: suspicious
+    conf: 0.90
+    mbc: "B0047"
+    attack: "T1562.001"
+    platforms: [macos]
+    if:
+      type: string
+      regex: '[fx]?xattr\s+.*?(-d|delete|--delete).*?com\.apple\.quarantine'
+
+# Note: The xattr-quarantine-remove trait above is the primary detection.
+# No composite needed - use the trait directly in other rules.

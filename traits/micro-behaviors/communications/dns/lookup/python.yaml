@@ -1,0 +1,113 @@
+# DNS Lookup Capabilities - Python
+# GuardDog-inspired: Detects DNS query capabilities
+# Note: DNS lookups are neutral capabilities; see objectives/exfiltration/dns/ for intent
+
+defaults:
+  for: [python]
+  crit: notable
+  conf: 0.85
+
+traits:
+  # === Built-in socket DNS queries ===
+
+  - id: gethostbyname
+    desc: socket.gethostbyname() DNS lookup
+    if:
+      type: ast
+      query: |
+        (call
+          function: (attribute
+            object: (identifier) @obj
+            attribute: (identifier) @method)
+          (#eq? @obj "socket")
+          (#eq? @method "gethostbyname"))
+
+  - id: getaddrinfo
+    desc: socket.getaddrinfo() DNS lookup
+    if:
+      type: ast
+      query: |
+        (call
+          function: (attribute
+            object: (identifier) @obj
+            attribute: (identifier) @method)
+          (#eq? @obj "socket")
+          (#eq? @method "getaddrinfo"))
+
+  - id: gethostbyname-ex
+    desc: socket.gethostbyname_ex() DNS lookup
+    if:
+      type: ast
+      query: |
+        (call
+          function: (attribute
+            object: (identifier) @obj
+            attribute: (identifier) @method)
+          (#eq? @obj "socket")
+          (#eq? @method "gethostbyname_ex"))
+
+  # === dnspython library ===
+
+  - id: dns-resolver-query
+    desc: dns.resolver.query() lookup
+    if:
+      type: symbol
+      regex: 'dns\.resolver\.query'
+
+  - id: dns-resolver-resolve
+    desc: dns.resolver.resolve() lookup
+    if:
+      type: symbol
+      regex: 'dns\.resolver\.resolve'
+
+  - id: dns-query-udp
+    desc: dns.query.udp() direct query
+    if:
+      type: symbol
+      regex: 'dns\.query\.udp'
+
+  - id: dns-query-tcp
+    desc: dns.query.tcp() direct query
+    if:
+      type: symbol
+      regex: 'dns\.query\.tcp'
+
+  # === aiodns library (async) ===
+
+  - id: aiodns-query
+    desc: aiodns DNSResolver query
+    if:
+      type: symbol
+      regex: 'aiodns\.DNSResolver'
+
+composite_rules:
+  # Built-in DNS lookups
+  - id: socket-dns-lookup
+    desc: Socket-based DNS lookup capability
+    crit: notable
+    conf: 0.80
+    any:
+      - id: gethostbyname
+      - id: getaddrinfo
+      - id: gethostbyname-ex
+
+  # dnspython usage
+  - id: dnspython-lookup
+    desc: dnspython DNS query capability
+    crit: notable
+    conf: 0.85
+    any:
+      - id: dns-resolver-query
+      - id: dns-resolver-resolve
+      - id: dns-query-udp
+      - id: dns-query-tcp
+
+  # Any DNS lookup capability
+  - id: dns-lookup-capability
+    desc: DNS lookup capability (any method)
+    crit: notable
+    conf: 0.80
+    any:
+      - id: socket-dns-lookup
+      - id: dnspython-lookup
+      - id: aiodns-query

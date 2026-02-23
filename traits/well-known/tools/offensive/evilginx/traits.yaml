@@ -1,0 +1,370 @@
+defaults:
+  for:
+  - elf
+  - macho
+  - pe
+  platforms:
+  - all
+  attack: T1557
+traits:
+- id: phishlet-proxy-hosts
+  desc: Phishlet proxy_hosts configuration
+  crit: suspicious
+  conf: 0.9
+  for:
+  - all
+  if:
+    type: raw
+    substr: 'proxy_hosts:'
+- id: phishlet-phish-sub
+  desc: Phishlet phish_sub directive
+  crit: suspicious
+  conf: 0.95
+  for:
+  - all
+  if:
+    type: raw
+    substr: 'phish_sub:'
+- id: phishlet-orig-sub
+  desc: Phishlet orig_sub directive
+  crit: suspicious
+  conf: 0.95
+  for:
+  - all
+  if:
+    type: raw
+    substr: 'orig_sub:'
+- id: phishlet-auth-tokens
+  desc: Phishlet auth_tokens section
+  crit: suspicious
+  conf: 0.95
+  for:
+  - all
+  if:
+    type: raw
+    substr: 'auth_tokens:'
+- id: phishlet-sub-filters
+  desc: Phishlet sub_filters section
+  crit: suspicious
+  conf: 0.9
+  for:
+  - all
+  if:
+    type: raw
+    substr: 'sub_filters:'
+- id: phishlet-js-inject
+  desc: Phishlet js_inject section
+  crit: suspicious
+  conf: 0.95
+  for:
+  - all
+  if:
+    type: raw
+    substr: 'js_inject:'
+- id: phishlet-is-landing
+  desc: Phishlet is_landing directive
+  crit: suspicious
+  conf: 0.9
+  for:
+  - all
+  if:
+    type: raw
+    substr: 'is_landing:'
+- id: phishlet-min-ver
+  desc: Phishlet min_ver version marker
+  crit: notable
+  conf: 0.8
+  for:
+  - all
+  if:
+    type: raw
+    regex: min_ver:\s*['"]?[0-9]+\.[0-9]+
+- id: phishlet-trigger-domains
+  desc: Phishlet trigger_domains directive
+  crit: suspicious
+  conf: 0.9
+  for:
+  - all
+  if:
+    type: raw
+    substr: 'trigger_domains:'
+- id: phishlet-force-post
+  desc: Phishlet force_post directive
+  crit: suspicious
+  conf: 0.9
+  for:
+  - all
+  if:
+    type: raw
+    substr: 'force_post:'
+- id: phishlet-auth-urls
+  desc: Phishlet auth_urls directive
+  crit: suspicious
+  conf: 0.9
+  for:
+  - all
+  if:
+    type: raw
+    substr: 'auth_urls:'
+- id: config-lures
+  desc: Evilginx lures configuration
+  crit: suspicious
+  conf: 0.9
+  for:
+  - all
+  if:
+    type: raw
+    regex: '\blures\s*:'
+- id: config-redirect-url
+  desc: Evilginx redirect_url config
+  crit: notable
+  conf: 0.8
+  for:
+  - all
+  if:
+    type: raw
+    substr: 'redirect_url:'
+- id: config-site-domains
+  desc: Evilginx site_domains config
+  crit: suspicious
+  conf: 0.85
+  for:
+  - all
+  if:
+    type: raw
+    substr: 'site_domains:'
+- id: config-verification-key
+  desc: Evilginx verification_key config
+  crit: notable
+  conf: 0.8
+  for:
+  - all
+  if:
+    type: raw
+    substr: 'verification_key:'
+- id: config-blacklist-mode
+  desc: Evilginx blacklist_mode config
+  crit: notable
+  conf: 0.8
+  for:
+  - all
+  if:
+    type: raw
+    substr: 'blacklist_mode:'
+- id: github-ref
+  desc: Evilginx2 GitHub path reference
+  crit: suspicious
+  conf: 0.98
+  if:
+    type: string
+    substr: github.com/kgretzky/evilginx2
+- id: core-package
+  desc: Evilginx2 core package reference
+  crit: suspicious
+  conf: 0.95
+  if:
+    type: string
+    regex: kgretzky/evilginx2/core
+- id: database-package
+  desc: Evilginx2 database package reference
+  crit: suspicious
+  conf: 0.95
+  if:
+    type: string
+    regex: kgretzky/evilginx2/database
+- id: log-package
+  desc: Evilginx2 log package reference
+  crit: suspicious
+  conf: 0.9
+  if:
+    type: string
+    regex: kgretzky/evilginx2/log
+- id: phishlet-string
+  desc: Phishlet configuration string
+  crit: suspicious
+  conf: 0.9
+  if:
+    type: string
+    word: phishlet
+- id: phishlet-hostname
+  desc: Phishlet hostname configuration
+  crit: suspicious
+  conf: 0.85
+  if:
+    type: string
+    substr: phishlet hostname
+- id: phishlet-version
+  desc: Phishlet version reference
+  crit: suspicious
+  conf: 0.85
+  if:
+    type: string
+    substr: PhishletVersion
+- id: lure-functions
+  desc: Lure management functions
+  crit: suspicious
+  conf: 0.9
+  if:
+    type: string
+    regex: (AddLure|GetLure|DeleteLure|GetLureUrl)
+- id: phish-url
+  desc: Phishing URL generation
+  crit: suspicious
+  conf: 0.85
+  if:
+    type: string
+    substr: createPhishUrl
+- id: phish-domain
+  desc: Phishing domain configuration
+  crit: suspicious
+  conf: 0.85
+  if:
+    type: string
+    substr: getPhishDomain
+- id: auth-token-capture
+  desc: Auth token capture patterns
+  crit: suspicious
+  conf: 0.85
+  if:
+    type: string
+    regex: (isAuthToken|AddAuthToken|authTokens)
+- id: evil-root-ca
+  desc: Evilginx root CA string
+  crit: suspicious
+  conf: 0.98
+  if:
+    type: string
+    substr: Evilginx Super-Evil Root CA
+- id: signature-trust
+  desc: Evilginx signature trust string
+  crit: suspicious
+  conf: 0.9
+  if:
+    type: string
+    substr: Evilginx Signature Trust Co
+- id: proxy-interception
+  desc: HTTP proxy interception
+  crit: notable
+  conf: 0.8
+  if:
+    type: string
+    substr: replaceHostWithPhished
+- id: force-post
+  desc: Force POST interception
+  crit: suspicious
+  conf: 0.85
+  if:
+    type: string
+    regex: force_post:.{0,50}(body|url matched)
+- id: educational-disclaimer
+  desc: Educational purposes disclaimer
+  crit: notable
+  conf: 0.7
+  if:
+    type: string
+    substr: built for educational purposes only
+- id: config-phishlet-ref-1
+  desc: Evilginx phishlet reference (google/outlook/facebook/linkedin)
+  if:
+    type: raw
+    regex: phishlet:\s*(google|outlook|facebook|linkedin)
+- id: config-phishlet-ref-2
+  desc: Evilginx phishlet reference (microsoft/office365/o365)
+  if:
+    type: raw
+    regex: phishlet:\s*(microsoft|office365|o365)
+- id: phishlet-credentials
+  desc: Phishlet credentials section
+  crit: suspicious
+  conf: 0.9
+  for:
+  - all
+  if:
+    type: raw
+    regex: 'credentials:\s*[\s\S]{0,30}(username|password):[\s\S]{0,30}(key|search):'
+composite_rules:
+- id: config-phishlet-ref
+  desc: Evilginx phishlet reference
+  crit: suspicious
+  any:
+    - id: config-phishlet-ref-1
+    - id: config-phishlet-ref-2
+- id: phishlet-config
+  desc: Evilginx phishlet configuration file
+  crit: hostile
+  conf: 0.95
+  attack: T1539
+  for:
+  - all
+  all:
+  - id: phishlet-proxy-hosts
+  - id: phishlet-phish-sub
+  - id: phishlet-auth-tokens
+  - id: phishlet-credentials
+- id: main-config
+  desc: Evilginx main configuration file
+  crit: hostile
+  conf: 0.9
+  attack: T1566
+  for:
+  - all
+  all:
+  - id: config-lures
+  - id: config-phishlet-ref
+  - id: config-site-domains
+  - id: config-redirect-url
+- id: phishlet-with-js-inject
+  desc: Phishlet with JS injection
+  crit: hostile
+  conf: 0.95
+  attack: T1185
+  for:
+  - all
+  all:
+  - id: phishlet-proxy-hosts
+  - id: phishlet-phish-sub
+  - id: phishlet-js-inject
+  - id: phishlet-trigger-domains
+- id: detected
+  desc: Evilginx2 phishing framework detected
+  crit: hostile
+  conf: 0.98
+  attack: T1557
+  for:
+  - elf
+  - macho
+  - pe
+  all:
+  - id: github-ref
+  - id: core-package
+  - id: phishlet-string
+  - id: lure-functions
+- id: detected-by-ca
+  desc: Evilginx2 detected by Root CA
+  crit: hostile
+  conf: 0.95
+  attack: T1557
+  for:
+  - elf
+  - macho
+  - pe
+  all:
+  - id: evil-root-ca
+  - id: phishlet-string
+  - id: lure-functions
+  - id: auth-token-capture
+- id: phishing-toolkit-behavior
+  desc: Phishing toolkit behavioral pattern
+  crit: hostile
+  conf: 0.9
+  attack: T1539
+  for:
+  - elf
+  - macho
+  - pe
+  all:
+  - id: phishlet-string
+  - id: lure-functions
+  - id: auth-token-capture
+  - id: proxy-interception
+  - id: phish-url

@@ -1,0 +1,229 @@
+# XOR Obfuscation Detection
+# Detects XOR-encoded strings and obfuscation markers
+# ATT&CK: T1027 (Obfuscated Files or Information)
+# MBC: B0041 (Execution)
+
+traits:
+  # === XOR Markers ===
+  - id: xor-infection-marker
+    desc: "XOR infection marker"
+    crit: suspicious
+    conf: 0.9
+    for: [elf, shell]
+    if:
+      type: string
+      substr: "@GOLJ]LM"
+    attack: "T1027"
+
+  - id: xor-marker-extended
+    desc: "Extended XOR marker"
+    crit: suspicious
+    conf: 0.85
+    for: [elf, shell]
+    if:
+      type: string
+      substr: "EFE)@GOLJ]LM)HNH@G"
+    attack: "T1027"
+
+  # === Obfuscation Patterns ===
+  - id: tab-terminated-strings
+    desc: "Tab-terminated strings"
+    crit: notable
+    conf: 0.7
+    for: [elf, shell]
+    if:
+      type: string
+      regex: "[a-zA-Z0-9]{4,}\\t$"
+    attack: "T1027"
+
+  # Note: Large Rust/Go binaries with regex/Unicode support contain lookup tables
+  # that appear as unusual character sequences. Size constraint reduces FPs.
+  # Compression tools (zstd, lzma, xz, etc.) contain Huffman/FSE lookup tables
+  # that legitimately contain unusual character sequences.
+  # Build tools (make, cmake, etc.) contain shell metacharacter definitions.
+  - id: unusual-character-combinations
+    desc: "Unusual character combinations"
+    crit: notable
+    conf: 0.65
+    for: [elf]
+    size_max: 2097152
+    if:
+      type: string
+      regex: "[^a-zA-Z0-9\\s\\.,\\-_/\\\\:@]{8,}"
+    not:
+      # Shell metacharacter definitions used by build tools, shells, interpreters
+      # Includes sequences like !\"#$%&'())**++
+      - regex: "^[#;\"'*?\\[\\]&|<>(){}$`^~!+]+$"
+      # Common padding or separator strings in legitimate binaries
+      - regex: "^!+$"
+      - regex: "^=+$"
+      - substr: "========"
+      # ASCII symbol ranges
+      - regex: "^!\"#\\$%&'\\(\\)\\*\\+$"
+      # ISO-8859-1 upper character range (often used in character sets/tables)
+      - regex: "^[\\xA0-\\xFF]{8,}$"
+      # Sequential byte patterns
+      - substr: "0123456789"
+      - substr: "abcdefghijklmnopqrstuvwxyz"
+      - substr: "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+    attack: "T1027"
+    unless:
+      - id: micro-behaviors/dylib/library::system-lib-marker
+      - id: micro-behaviors/interface/usage/usage-help
+      - id: micro-behaviors/data/encode/base64/alphabet-standard
+      # Exclude curl/libcurl which has special chars in help text
+      - id: micro-behaviors/communications/download/curl::curl-easy-init
+      # Exclude character set definitions
+      - id: micro-behaviors/data/text/encoding/iso-8859-1
+    downgrade:
+      any:
+        # Binutils and other development tools often have lookup tables for symbols
+        - type: string
+          substr: "binutils"
+        - type: string
+          substr: "GNU ar"
+        - type: string
+          substr: "GNU make"
+        - type: string
+          substr: "make"
+        # Compression libraries have Huffman/FSE lookup tables that trigger this
+        - type: string
+          substr: "ZSTD_CCtx"
+        - type: string
+          substr: "ZSTD_DCtx"
+        - type: string
+          substr: "libzstd"
+        - type: string
+          substr: "liblzma"
+        - type: string
+          substr: "LzmaEnc"
+        - type: string
+          substr: "LzmaDec"
+        - type: string
+          substr: "deflate"
+        - type: string
+          substr: "liblz4"
+        - type: string
+          substr: "LZ4_compress"
+        # Database clients have locale/collation tables that trigger this
+        - type: string
+          substr: "libpq"
+        - type: string
+          substr: "postgresql"
+        # Go binaries have large tables for Unicode support
+        - id: metadata/lang/go
+
+  # Dense unusual character patterns indicate active obfuscation rather than
+  # occasional lookup tables. Benign binaries have <0.5 matches/KB; obfuscated
+  # malware often has 2+ matches/KB concentrated in payload sections.
+  - id: dense-unusual-chars
+    desc: "Dense unusual character patterns (obfuscation)"
+    crit: suspicious
+    conf: 0.85
+    for: [elf]
+    size_max: 500000
+    attack: "T1027"
+    if:
+      type: string
+      regex: "[^a-zA-Z0-9\\s\\.,\\-_/\\\\:@]{8,}"
+      count_min: 5
+      per_kb_min: 1.0
+    not:
+      - regex: "^[#;\"'*?\\[\\]&|<>(){}$`^~!+]+$"
+      - regex: "^!+$"
+      - regex: "^=+$"
+      - regex: "^[\\xA0-\\xFF]{8,}$"
+    unless:
+      - id: micro-behaviors/dylib/library::system-lib-marker
+      - id: micro-behaviors/data/compression/zstd
+      - id: micro-behaviors/data/compression/lzma
+      - id: metadata/lang/go
+
+  # === Known XOR Key Indicators ===
+  - id: xor-key-null-pattern
+    desc: "Null XOR key pattern"
+    crit: notable
+    conf: 0.7
+    for: [elf, shell]
+    if:
+      type: string
+      substr: "\\x00\\x00"
+    attack: "T1027"
+
+  # === JavaScript XOR ===
+  - id: js-xor-decoder-loop
+    desc: JavaScript XOR decryption loop
+    crit: suspicious
+    conf: 0.9
+    mbc: "B0032"
+    attack: "T1027"
+    for: [javascript]
+    if:
+      type: string
+      regex: "String.fromCharCode.{0,100}\\^"
+
+  - id: js-xor-decoder-ast
+    desc: JavaScript XOR decryption (AST)
+    crit: suspicious
+    conf: 0.95
+    mbc: "B0032"
+    attack: "T1027"
+    for: [javascript]
+    if:
+      type: ast
+      query: |
+        ((call_expression
+          function: (member_expression property: (property_identifier) @p)
+          (#eq? @p "fromCharCode")
+          arguments: (arguments
+            (binary_expression operator: "^")
+          )
+        ))
+
+composite_rules:
+  - id: xor-encoded-strings
+    desc: "XOR-encoded strings"
+    crit: suspicious
+    conf: 0.85
+    for: [elf, shell]
+    attack: "T1027"
+    any:
+      - id: xor-infection-marker
+      - id: xor-marker-extended
+      - id: tab-terminated-strings
+
+  - id: xor-obfuscation-evidence
+    desc: "XOR obfuscation evidence"
+    crit: suspicious
+    conf: 0.8
+    for: [elf, shell]
+    attack: "T1027"
+    mbc: "B0041"
+    needs: 2
+    any:
+      - id: xor-encoded-strings
+      - id: unusual-character-combinations
+      - id: xor-key-null-pattern
+    unless:
+      - id: micro-behaviors/interface/usage/usage-help
+      - id: micro-behaviors/data/db/libpq
+    downgrade:
+      any:
+        - id: micro-behaviors/data/compression/zstd
+        - id: micro-behaviors/data/compression/lzma
+        - id: micro-behaviors/data/compression/zlib
+        - id: micro-behaviors/data/compression/lz4
+        - id: micro-behaviors/data/compression/bzip2
+
+  - id: mirai-xor-obfuscation
+    desc: "Mirai XOR obfuscation"
+    crit: suspicious
+    conf: 0.9
+    for: [elf, shell]
+    attack: "T1027"
+    mbc: "B0041"
+    all:
+      # Require actual Mirai detection (composite), not just any trait in the directory
+      # The /detected composite requires 6+ indicators plus size constraints
+      - id: well-known/malware/botnet/mirai::detected
+      - id: xor-obfuscation-evidence

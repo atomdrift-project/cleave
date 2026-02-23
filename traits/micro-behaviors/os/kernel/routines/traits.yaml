@@ -1,0 +1,10 @@
+defaults:
+  for: [all]
+
+traits:
+  - id: dynamic-resolution
+    desc: Dynamically resolves kernel routine addresses
+    crit: notable
+    if:
+      type: symbol
+      exact: MmGetSystemRoutineAddress

@@ -1,0 +1,45 @@
+# Tkinter Window Management Capabilities
+
+defaults:
+  for: [python]
+
+traits:
+  - id: tkinter-fullscreen
+    desc: Sets Tkinter window to fullscreen
+    crit: notable
+    conf: 0.8
+    if:
+      type: raw
+      regex: 'attributes\([''"]-fullscreen[''"]\s*,\s*True\)'
+
+  - id: tkinter-resize-disable
+    desc: Disables Tkinter window resizing
+    crit: notable
+    conf: 0.8
+    if:
+      type: raw
+      regex: 'resizable\(0,\s*0\)|resizable\(False,\s*False\)'
+
+  - id: tkinter-protocol-intercept
+    desc: Intercepts window close event
+    crit: notable
+    conf: 0.8
+    if:
+      type: raw
+      regex: 'protocol\([''"]WM_DELETE_WINDOW[''"]'
+
+  - id: tkinter-topmost
+    desc: Sets Tkinter window to always on top
+    crit: notable
+    conf: 0.8
+    if:
+      type: raw
+      regex: 'attributes\([''"]-topmost[''"]\s*,\s*True\)'
+
+  - id: tkinter-overrideredirect
+    desc: Removes window decorations (frameless)
+    crit: notable
+    conf: 0.8
+    if:
+      type: raw
+      regex: 'overrideredirect\(True\)'

@@ -1,0 +1,32 @@
+# Java File Write (Source Code)
+# Detects FileOutputStream and FileWriter usage in Java source
+# MBC: C0015 (Write File)
+# ATT&CK: T1105 (Ingress Tool Transfer)
+
+defaults:
+  for: [all]
+
+traits:
+  - id: java-fileoutputstream-source
+    desc: Java FileOutputStream usage
+    crit: notable
+    conf: 0.8
+    if:
+      type: string
+      substr: 'new FileOutputStream'
+
+  - id: java-fos-simple
+    desc: FileOutputStream usage (simple)
+    crit: notable
+    conf: 0.8
+    if:
+      type: string
+      substr: 'FileOutputStream'
+
+  - id: java-filewriter-source
+    desc: Java FileWriter usage
+    crit: notable
+    conf: 0.8
+    if:
+      type: string
+      substr: 'new FileWriter'

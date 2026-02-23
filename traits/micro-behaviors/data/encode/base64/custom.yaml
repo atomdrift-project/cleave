@@ -1,0 +1,68 @@
+defaults:
+  for:
+    - all
+  attack: T1027.010
+  mbc: B0032.001
+  crit: baseline
+traits:
+  - id: alphabet-standard
+    desc: Hardcoded standard base64 alphabet
+    crit: baseline
+    conf: 0.5
+    for:
+      - elf
+      - macho
+      - pe
+      - so
+      - dylib
+      - dll
+    if:
+      type: string
+      substr: ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/
+  - id: alphabet-script
+    desc: Hardcoded base64 alphabet in script
+    crit: notable
+    conf: 0.7
+    for:
+      - python
+      - javascript
+      - shell
+      - ruby
+      - php
+    if:
+      type: string
+      substr: ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/
+  - id: padding-char
+    desc: Base64 padding character reference
+    crit: baseline
+    conf: 0.5
+    if:
+      type: string
+      regex: \bpadding\s*=\s*['"]=['"]|\bpad_char\b
+  - id: decode-table
+    desc: Custom base64 decode lookup table
+    crit: baseline
+    conf: 0.5
+    for:
+      - elf
+      - macho
+      - pe
+      - so
+      - dylib
+      - dll
+    if:
+      type: string
+      regex: '[|\$}][a-zA-Z0-9+/]{10,20}[rstuvwxyz].{0,10}[\{\$]'
+composite_rules:
+  - id: custom-implementation
+    desc: Custom base64 implementation
+    crit: notable
+    conf: 0.9
+    attack: T1027.010
+    mbc: B0032.001
+    all:
+      - id: decode-table
+    downgrade:
+      any:
+        - type: basename
+          regex: ^lib(X11|xcb|ssl|crypto|c|z|png|jpeg|xml|curl|pcre|iconv)\b

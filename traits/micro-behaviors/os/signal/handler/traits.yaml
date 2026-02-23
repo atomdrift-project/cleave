@@ -1,0 +1,41 @@
+# Signal Handling
+# C runtime signal handlers (Windows and Unix)
+
+traits:
+  # === Signal Management ===
+  - id: signal
+    desc: Install signal handler
+    crit: baseline
+    conf: 0.90
+    for: ["pe", "dll", "elf", "macho"]
+    if:
+      type: symbol
+      exact: "signal"
+
+  - id: sigaction
+    desc: Install signal handler (POSIX sigaction)
+    crit: baseline
+    conf: 0.90
+    for: ["elf", "macho"]
+    platforms: ["unix", "linux", "macos"]
+    if:
+      type: symbol
+      exact: "sigaction"
+
+  - id: raise
+    desc: Send signal to self
+    crit: baseline
+    conf: 0.85
+    for: ["pe", "dll", "elf", "macho"]
+    if:
+      type: symbol
+      exact: "raise"
+
+  - id: abort
+    desc: Abort program execution
+    crit: baseline
+    conf: 0.90
+    for: ["pe", "dll", "elf", "macho"]
+    if:
+      type: symbol
+      exact: "abort"

@@ -1,0 +1,11 @@
+defaults:
+  for: [all]
+
+traits:
+  - id: af-alg-socket
+    desc: Uses Linux Kernel Crypto API (AF_ALG)
+    crit: notable
+    conf: 0.95
+    if:
+      type: raw
+      regex: 'AF_ALG|sockaddr_alg|linux/if_alg\.h'

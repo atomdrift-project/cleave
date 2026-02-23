@@ -1,0 +1,9 @@
+traits:
+  - id: client
+    desc: Socket.IO client library
+    crit: baseline
+    conf: 1.0
+    for: [javascript]
+    if:
+      type: raw
+      regex: 'Socket\.IO\s+v\d+\.\d+\.\d+'

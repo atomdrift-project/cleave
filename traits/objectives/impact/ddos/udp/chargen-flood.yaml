@@ -1,0 +1,13 @@
+# composite_rules:
+#   - id: chargen-flood
+#     desc: CHARGEN reflection flood detected
+#     crit: hostile
+#     conf: 0.95
+#     mbc: T1498
+#     attack: T1498
+#     all:
+#       - trait: micro-behaviors/communications/protocol/udp::chargen-port
+#       - trait: micro-behaviors/communications/socket/send::send-loop-infinite
+#       - any:
+#           - trait: micro-behaviors/communications/socket/raw::raw
+#           - trait: micro-behaviors/communications/socket/raw::raw-socket-creation-regex

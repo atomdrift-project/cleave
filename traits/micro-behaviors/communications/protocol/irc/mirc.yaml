@@ -1,0 +1,112 @@
+defaults:
+  for:
+    - all
+traits:
+  - id: mirc-script-event-join
+    description: Detects mIRC JOIN event
+    crit: suspicious
+    attack: T1546
+    if:
+      type: string
+      regex: "ON ([*]|1):JOIN:"
+      case_insensitive: true
+  - id: mirc-script-event-text
+    description: Detects mIRC TEXT event
+    crit: suspicious
+    attack: T1546
+    if:
+      type: string
+      regex: "ON ([*]|1):TEXT:"
+      case_insensitive: true
+  - id: mirc-script-event-part
+    description: Detects mIRC PART event
+    crit: suspicious
+    attack: T1546
+    if:
+      type: string
+      regex: "ON ([*]|1):PART:"
+      case_insensitive: true
+  - id: mirc-script-event-quit
+    description: Detects mIRC QUIT event
+    crit: suspicious
+    attack: T1546
+    if:
+      type: string
+      regex: "ON ([*]|1):QUIT:"
+      case_insensitive: true
+  - id: mirc-script-cmd-dcc-send
+    description: Detects mIRC dcc send command
+    crit: suspicious
+    attack: T1546
+    if:
+      type: string
+      case_insensitive: true
+      substr: "/dcc send"
+  - id: mirc-script-cmd-msg-chan
+    description: Detects mIRC channel message command
+    crit: suspicious
+    attack: T1546
+    if:
+      type: string
+      case_insensitive: true
+      substr: "/msg $chan"
+  - id: mirc-script-cmd-ignore-nick
+    description: Detects mIRC ignore nickname command
+    crit: suspicious
+    attack: T1546
+    if:
+      type: string
+      case_insensitive: true
+      substr: "/ignore $nick"
+  - id: mirc-script-cmd-writeini
+    description: Detects mIRC writeini command
+    crit: suspicious
+    attack: T1546
+    if:
+      type: string
+      case_insensitive: true
+      substr: "/writeini"
+  - id: mirc-script-cmd-me
+    description: Detects mIRC $me variable
+    crit: baseline
+    attack: T1546
+    if:
+      type: string
+      case_insensitive: true
+      regex: "\\$me\\b"
+  - id: mirc-script-cmd-nick
+    description: Detects mIRC $nick variable
+    crit: baseline
+    attack: T1546
+    if:
+      type: string
+      case_insensitive: true
+      regex: "\\$nick\\b"
+  - id: mirc-script-cmd-script
+    description: Detects [script] block marker
+    crit: suspicious
+    attack: T1546
+    if:
+      type: string
+      case_insensitive: true
+      regex: "\\[script\\]"
+composite_rules:
+  - id: mirc-script-event
+    description: Detects mIRC scripting events used by worms
+    crit: suspicious
+    attack: T1546
+    any:
+      - id: mirc-script-event-join
+      - id: mirc-script-event-text
+      - id: mirc-script-event-part
+      - id: mirc-script-event-quit
+  - id: mirc-script-cmd
+    description: Detects mIRC scripting commands used by worms
+    crit: suspicious
+    attack: T1546
+    any:
+      - id: mirc-script-cmd-dcc-send
+      - id: mirc-script-cmd-msg-chan
+      - id: mirc-script-cmd-ignore-nick
+      - id: mirc-script-cmd-writeini
+      - id: mirc-script-cmd-script

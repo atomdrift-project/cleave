@@ -1,0 +1,29 @@
+# Hidden Files in System Directories
+# ATT&CK: T1564.001 (Hide Artifacts: Hidden Files and Directories)
+# Detects dot-prefixed files in /var or /usr (excluding debug paths)
+
+defaults:
+  crit: suspicious
+  conf: 0.8
+  attack: "T1564.001"
+  platforms: [linux, unix, macos]
+
+traits:
+  - id: hidden-file-system-dir
+    desc: Hidden file in system directory
+    for: [all]
+    if:
+      type: string
+      # Match paths like /var/.../.hidden or /usr/.../.config
+      regex: '^/(var|usr)/.{0,200}\/\.[^/]{1,50}$'
+    unless:
+      # Exclude DWARF debug paths from compilation
+      - type: raw
+        substr: '/../'
+      - type: raw
+        substr: '/./'
+      # Exclude Rust cargo registry paths (embedded debug info)
+      - type: raw
+        substr: '/cargo/registry/'
+      - type: raw
+        substr: '/rustc-'

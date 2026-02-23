@@ -1,0 +1,30 @@
+# ROT13 Python Dropper
+# Detects obfuscated Python droppers using ROT13 strings and stealth execution
+
+defaults:
+  for: [python]
+  attack: "T1105"
+  mbc: "B0032"
+
+composite_rules:
+  - id: rot13-stealth-dropper
+    desc: "Obfuscated Python dropper using ROT13 and stealth execution"
+    conf: 0.95
+    crit: hostile
+    all:
+      - id: micro-behaviors/data/encode/rot13::rot13-windows
+      - id: micro-behaviors/data/encode/base64::b64decode-call
+      - id: micro-behaviors/os/info/system::platform-system
+    any:
+      - id: micro-behaviors/process/create/flags::detached-process
+      - id: micro-behaviors/process/create/setsid::preexec-fn
+
+  - id: rot13-exec-dropper
+    desc: "Obfuscated Python dropper using ROT13 and dynamic execution"
+    conf: 0.95
+    crit: hostile
+    all:
+      - id: micro-behaviors/data/encode/rot13::rot13-windows
+      - id: micro-behaviors/data/encode/base64::b64decode-call
+      - id: objectives/anti-static/obfuscation/payload::exec-function-call
+      - id: micro-behaviors/communications/http/lib/requests::requests-post

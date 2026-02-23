@@ -1,0 +1,164 @@
+defaults:
+  for:
+  - python
+  mbc: B0024
+  attack: T1195.002
+traits:
+- id: platform-system-call
+  desc: platform.system() OS detection
+  crit: notable
+  conf: 0.6
+  if:
+    type: ast
+    kind: call
+    regex: platform\.system\(\)
+- id: platform-machine-call
+  desc: platform.machine() architecture detection
+  crit: notable
+  conf: 0.6
+  if:
+    type: ast
+    kind: call
+    regex: platform\.machine\(\)
+- id: arch-string-check
+  desc: Architecture string checks
+  crit: notable
+  conf: 0.5
+  if:
+    type: raw
+    regex: '"(x86|AMD64|arm64|aarch64)" in platform'
+- id: import-safe-download
+  desc: safe_download function import
+  crit: notable
+  conf: 0.7
+  if:
+    type: raw
+    substr: import safe_download
+- id: download-with-delete
+  desc: Download with delete=True parameter
+  crit: notable
+  conf: 0.85
+  if:
+    type: raw
+    substr: delete=True
+  unless:
+  - type: raw
+    regex: def\s+[^\n]+\bdelete=True
+- id: safe-run-call
+  desc: Call to safe_run execution function
+  crit: suspicious
+  conf: 0.9
+  if:
+    type: raw
+    regex: safe_run\s*\(
+- id: os-system-call
+  desc: os.system() shell execution
+  crit: notable
+  conf: 0.7
+  if:
+    type: ast
+    kind: call
+    regex: os\.system\(
+- id: platform-os-system-combo
+  desc: Platform check with os.system
+  crit: suspicious
+  conf: 0.85
+  if:
+    type: raw
+    regex: platform\.system.{0,50}os\.system|os\.system.{0,50}platform\.system
+- id: inline-wget-exec
+  desc: Inline wget download and execute
+  crit: suspicious
+  conf: 0.9
+  if:
+    type: string
+    regex: wget\s+https?://.{10,300}&&.{0,50}(tar|chmod|\./)
+- id: nohup-background
+  desc: nohup background execution
+  crit: notable
+  conf: 0.75
+  if:
+    type: string
+    regex: nohup\s+\./[a-zA-Z_]
+- id: linux-in-platform
+  desc: Linux in platform.system() check
+  crit: notable
+  conf: 0.6
+  mbc: B0012
+  attack: T1082
+  if:
+    type: raw
+    substr: '"Linux" in platform.system()'
+- id: platform-system-check
+  desc: platform.system call present
+  crit: notable
+  conf: 0.75
+  if:
+    type: raw
+    substr: platform.system
+- id: platform-machine-check
+  desc: platform.machine call present
+  crit: notable
+  conf: 0.75
+  if:
+    type: raw
+    substr: platform.machine
+composite_rules:
+- id: platform-checks
+  desc: Combined platform.system and platform.machine
+  crit: notable
+  conf: 0.75
+  all:
+  - id: platform-system-check
+  - id: platform-machine-check
+- id: platform-targeted-download
+  desc: Platform-targeted binary download
+  crit: suspicious
+  conf: 0.9
+  attack: T1195.002
+  for:
+  - python
+  needs: 2
+  any:
+  - id: platform-checks
+  - id: objectives/discovery/host/system/os-fingerprint::os-check-linux
+  - id: objectives/discovery/host/system/os-fingerprint::os-check-darwin
+  - id: arch-string-check
+  all:
+  - id: objectives/execution/dropper/tmp-run::tmp-path
+- id: init-dropper
+  desc: Supply chain dropper in module init
+  crit: suspicious
+  conf: 0.95
+  attack: T1195.002
+  mbc: B0024
+  for:
+  - python
+  needs: 3
+  any:
+  - id: platform-checks
+  - id: objectives/discovery/host/system/os-fingerprint::os-check-linux
+  - id: objectives/discovery/host/system/os-fingerprint::os-check-darwin
+  - id: arch-string-check
+  - id: download-with-delete
+  - id: safe-run-call
+  - id: import-safe-download
+  - id: objectives/execution/dropper/tmp-run::tmp-path
+  - id: os-system-call
+  - id: platform-os-system-combo
+  - id: inline-wget-exec
+  - id: nohup-background
+  - id: linux-in-platform
+  none:
+  - id: metadata/quality::configure-script
+- id: os-system-wget-dropper
+  desc: os.system wget download and execute
+  crit: hostile
+  conf: 0.95
+  attack: T1195.002
+  mbc: B0024
+  for:
+  - python
+  all:
+  - id: os-system-call
+  - id: inline-wget-exec

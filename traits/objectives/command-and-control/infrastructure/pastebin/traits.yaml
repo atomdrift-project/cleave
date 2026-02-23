@@ -1,0 +1,69 @@
+# Codesharing and Paste Services
+# Detects references to common pastebins and codesharing sites
+# ATT&CK: T1102 (Command and Control: Web Service)
+
+defaults:
+  crit: notable
+  conf: 0.70
+  for: [all]
+
+traits:
+  - id: pastebin
+    desc: Pastebin.com reference
+    if:
+      type: string
+      regex: 'pastebin\.com'
+
+  - id: hastebin
+    desc: Hastebin reference
+    if:
+      type: string
+      regex: 'hastebin\.com'
+
+  - id: ghostbin
+    desc: Ghostbin reference
+    if:
+      type: string
+      regex: 'ghostbin\.(com|site|co)'
+
+  - id: paste-ee
+    desc: Paste.ee reference
+    if:
+      type: string
+      regex: 'paste\.ee'
+
+  - id: dpaste
+    desc: Dpaste reference
+    if:
+      type: string
+      regex: 'dpaste\.(com|org)'
+
+  - id: privatebin
+    desc: PrivateBin reference
+    if:
+      type: string
+      regex: 'privatebin\.net'
+
+  - id: rentry
+    desc: Rentry.co reference
+    if:
+      type: string
+      regex: 'rentry\.(co|org)'
+
+  - id: ctrlv
+    desc: CtrlV.it reference
+    if:
+      type: string
+      regex: 'ctrlv\.it'
+
+  - id: termbin
+    desc: Termbin reference (netcat-based)
+    if:
+      type: string
+      regex: 'termbin\.com'
+
+  - id: pastery
+    desc: Pastery reference
+    if:
+      type: string
+      regex: 'pastery\.net'

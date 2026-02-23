@@ -1,0 +1,96 @@
+# C# Reflection Traits
+# objective: exec, behavior: reflection
+
+traits:
+  - id: assembly-load
+    desc: Runtime assembly loading
+    crit: suspicious
+    mbc: "F0004.001"
+    attack: "T1620"
+    conf: 0.95
+    if:
+      type: ast
+      kind: call
+      exact: "Assembly.Load"
+    for: [csharp]
+
+  - id: assembly-load-file
+    desc: Assembly loaded from file
+    crit: suspicious
+    mbc: "F0004.001"
+    attack: "T1620"
+    conf: 0.95
+    if:
+      type: ast
+      kind: call
+      exact: "Assembly.LoadFile"
+    for: [csharp]
+
+  - id: activator-create
+    desc: Dynamic object creation via reflection
+    crit: suspicious
+    mbc: "F0004"
+    attack: "T1620"
+    conf: 0.9
+    if:
+      type: ast
+      kind: call
+      exact: "Activator.CreateInstance"
+    for: [csharp]
+
+  - id: method-invoke
+    desc: Reflective method invocation
+    crit: suspicious
+    mbc: "F0004"
+    attack: "T1620"
+    conf: 0.95
+    if:
+      type: ast
+      kind: call
+      exact: ".Invoke("
+    for: [csharp]
+
+  - id: get-method
+    desc: Reflection API to get method
+    crit: notable
+    mbc: "F0004"
+    conf: 0.75
+    if:
+      type: ast
+      kind: call
+      exact: "GetMethod"
+    for: [csharp]
+
+  - id: get-type
+    desc: Reflection API to get type
+    crit: notable
+    mbc: "F0004"
+    conf: 0.75
+    if:
+      type: ast
+      kind: call
+      exact: "GetType"
+    for: [csharp]
+
+  - id: marshal
+    desc: Marshal operations (memory/native interop)
+    crit: notable
+    mbc: "F0004"
+    conf: 0.8
+    if:
+      type: ast
+      kind: call
+      exact: "Marshal."
+    for: [csharp]
+
+  - id: dllimport
+    desc: P/Invoke native function import
+    crit: suspicious
+    mbc: "F0004"
+    attack: "T1106"
+    conf: 0.9
+    if:
+      type: ast
+      kind: attribute
+      exact: "DllImport"
+    for: [csharp]

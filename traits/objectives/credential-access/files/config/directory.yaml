@@ -1,0 +1,22 @@
+# Credential File Enumeration in Config Directories
+# ATT&CK: T1552 (Unsecured Credentials)
+# Detects systematic access to multiple credential files
+
+defaults:
+  crit: suspicious
+  conf: 0.95
+  attack: "T1552"
+  for: [all]
+
+traits:
+  - id: credential-files-config
+    desc: Multiple credential files in config directories
+    if:
+      type: string
+      # Match paths in Config or /etc/ containing credential-related keywords
+      regex: '/(Config|etc)/.{0,200}(account|passwd|password)'
+      case_insensitive: true
+      count_min: 2
+    # Detects patterns like:
+    # /etc/passwd, /etc/shadow
+    # ~/Library/Application Support/Config/accounts.db, ~/Library/Application Support/Config/passwords.txt

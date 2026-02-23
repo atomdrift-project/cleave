@@ -1,0 +1,11 @@
+traits:
+- id: eval-decrypt-result
+  desc: Evaluating result of a decryption function
+  crit: suspicious
+  conf: 0.8
+  for:
+  - php
+  if:
+    type: string
+    regex: (?i)eval\s*\(\s*[a-zA-Z0-9_]*Decrypt.{0,220}\(.{1,220}\)\s*\)
+composite_rules: []

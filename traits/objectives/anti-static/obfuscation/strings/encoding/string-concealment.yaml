@@ -1,0 +1,52 @@
+# String Concealment Detection
+# Detects binaries with suspiciously low string counts
+# Malware obfuscates strings at compile time to hide behavior
+# ATT&CK: T1027.010 (Obfuscated Files or Information: Command Obfuscation)
+
+defaults:
+  attack: "T1027.010"
+  mbc: "F0001.005"
+  for: [elf, macho, pe]
+
+traits:
+  # === Tiny cstring section ===
+  - id: tiny-cstring-section
+    desc: "Suspiciously small string section (<100"
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: section_ratio
+      section: "(__TEXT\\.__cstring|^\\.rodata\\.|^\\.rdata)"
+      compare_to: "total"
+      max: 0.002  # Less than 0.2% of binary is strings
+    unless:
+      - id: metadata/format/tiny-elf  # Don't flag tiny binaries
+
+  - id: minimal-strings
+    desc: "Binary has very few readable"
+    crit: suspicious
+    conf: 0.85
+    size_min: 8192
+    if:
+      type: string_count
+      max: 20
+      min_length: 4
+    unless:
+      - id: metadata/format::tiny-elf
+      - id: metadata/format::many-imports
+      - id: objectives/anti-static/hardening/detection::stripped-binary-struct
+      - id: metadata/signed/platform::apple
+
+composite_rules:
+  # String concealment pattern
+  - id: string-concealment
+    desc: "String obfuscation via runtime decryption"
+    crit: suspicious
+    conf: 0.9
+    attack: "T1027.010"
+    all:
+      - id: tiny-cstring-section
+    any:
+      - id: micro-behaviors/process/create/shell
+      - id: micro-behaviors/communications/socket/create
+      - id: micro-behaviors/fs/file/operations::binary-file-ops

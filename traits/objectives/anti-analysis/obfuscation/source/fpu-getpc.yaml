@@ -1,0 +1,13 @@
+defaults:
+  for: [all]
+
+traits:
+  - id: fpu-getpc
+    desc: FPU-based GetPC (Get Program Counter) shellcode pattern
+    crit: suspicious
+    conf: 0.9
+    attack: T1027.002
+    mbc: B0032.016
+    if:
+      type: hex
+      pattern: "DD C7 ?? 0F AE 03"

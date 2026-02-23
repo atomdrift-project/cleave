@@ -1,0 +1,14 @@
+defaults:
+  for: [all]
+
+traits:
+  - id: equation-editor
+    desc: "Contains Microsoft Equation Editor 3.0 object"
+    crit: suspicious
+    conf: 0.8
+    attack: "T1203"
+    mbc: "B0006.002"
+    if:
+      type: raw
+      substr: "Equation.3"
+      case_insensitive: true

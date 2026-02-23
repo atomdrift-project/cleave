@@ -1,0 +1,98 @@
+# libcurl HTTP Client Detection
+# Detects use of libcurl for network operations
+# ATT&CK: T1071.001 (Application Layer Protocol: Web Protocols)
+
+defaults:
+  attack: "T1071.001"
+  mbc: "B0030"
+  for: [elf, macho, pe]
+
+traits:
+  # === libcurl API atomic indicators ===
+  - id: curl-easy-init
+    desc: "Initializes libcurl easy interface (HTTP"
+    crit: notable
+    conf: 0.75
+    if:
+      type: symbol
+      regex: "curl_easy_init"
+
+  - id: curl-easy-setopt
+    desc: "Configures libcurl options (URL, headers,"
+    crit: notable
+    conf: 0.7
+    if:
+      type: symbol
+      regex: "curl_easy_setopt"
+
+  - id: curl-easy-perform
+    desc: "Executes HTTP request via libcurl"
+    crit: notable
+    conf: 0.75
+    if:
+      type: symbol
+      regex: "curl_easy_perform"
+
+  - id: curl-easy-cleanup
+    desc: "Cleans up libcurl session"
+    crit: baseline
+    conf: 0.6
+    if:
+      type: symbol
+      regex: "curl_easy_cleanup"
+
+  - id: curl-slist-append
+    desc: "Builds custom HTTP headers for"
+    crit: notable
+    conf: 0.7
+    if:
+      type: symbol
+      regex: "curl_slist_append"
+
+  - id: curl-slist-free
+    desc: "Frees libcurl header list"
+    crit: baseline
+    conf: 0.5
+    if:
+      type: symbol
+      regex: "curl_slist_free_all"
+
+composite_rules:
+  # Basic libcurl usage
+  - id: libcurl-http
+    desc: "Uses libcurl for HTTP communication"
+    crit: notable
+    conf: 0.8
+    attack: "T1071.001"
+    all:
+      - id: curl-easy-init
+      - id: curl-easy-perform
+
+  # libcurl with custom headers
+  # Note: Custom headers are standard practice for HTTP clients (User-Agent, Accept, etc.)
+  # Downgraded to notable for general use; compact binaries still suspicious
+  - id: libcurl-custom-headers
+    desc: "libcurl with custom HTTP headers"
+    crit: notable
+    conf: 0.85
+    attack: "T1071.001"
+    all:
+      - id: curl-easy-init
+      - id: curl-slist-append
+      - id: curl-easy-perform
+
+  # libcurl with custom headers in compact binary (more suspicious)
+  - id: libcurl-custom-headers-compact
+    desc: "Compact binary using libcurl with custom headers"
+    crit: suspicious
+    conf: 0.9
+    attack: "T1071.001"
+    size_max: 500000
+    all:
+      - id: curl-easy-init
+      - id: curl-slist-append
+      - id: curl-easy-perform
+    unless:
+      # Exclude curl CLI tool itself which has help text
+      - type: string
+        substr: "curl --help"

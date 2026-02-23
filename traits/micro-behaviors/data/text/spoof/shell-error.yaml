@@ -1,0 +1,10 @@
+defaults:
+  for: [all]
+
+traits:
+  - id: fake-bash-error
+    desc: Fake bash error message (spoofed)
+    criticality: suspicious
+    if:
+      type: string
+      regex: 'bash:\s+[^:]{1,120}:\s+No such file or directory'

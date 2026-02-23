@@ -1,0 +1,186 @@
+defaults:
+  for:
+  - all
+traits:
+- id: waterfox-path
+  desc: Waterfox browser profile path
+  crit: notable
+  conf: 0.6
+  attack: T1555.003
+  if:
+    type: string
+    regex: (?i)Waterfox[/\\]Profiles|/\.waterfox/
+- id: palemoon-path
+  desc: Pale Moon browser profile path
+  crit: notable
+  conf: 0.6
+  attack: T1555.003
+  if:
+    type: string
+    regex: (?i)Pale Moon[/\\]Profiles|Moonchild Productions[/\\]Pale Moon
+- id: firefox-profiles
+  desc: Firefox/Profiles path
+  crit: notable
+  conf: 0.6
+  attack: T1555.003
+  if:
+    type: string
+    substr: Firefox/Profiles
+- id: waterfox-profiles
+  desc: Waterfox/Profiles path
+  crit: notable
+  conf: 0.6
+  attack: T1555.003
+  if:
+    type: string
+    substr: Waterfox/Profiles
+- id: palemoon-profiles
+  desc: Pale Moon/Profiles path
+  crit: notable
+  conf: 0.6
+  attack: T1555.003
+  if:
+    type: string
+    substr: Pale Moon/Profiles
+- id: formhistory-sqlite
+  desc: Firefox formhistory.sqlite database
+  crit: suspicious
+  conf: 0.85
+  attack: T1555.003
+  if:
+    type: string
+    substr: formhistory.sqlite
+- id: key4-db
+  desc: Firefox key4.db (master password database)
+  crit: suspicious
+  conf: 0.9
+  attack: T1555.003
+  if:
+    type: string
+    regex: (?i)(Firefox|Waterfox|Pale Moon).{0,80}key4\.db
+- id: cert9-db
+  desc: Firefox cert9.db certificate store
+  crit: suspicious
+  conf: 0.8
+  attack: T1555.003
+  if:
+    type: string
+    substr: cert9.db
+- id: nss-private
+  desc: Firefox NSS private key database
+  crit: suspicious
+  conf: 0.8
+  attack: T1555.003
+  if:
+    type: string
+    substr: nssPrivate
+- id: nss3-word
+  desc: nss3 word reference
+  crit: notable
+  conf: 0.75
+  attack: T1555.003
+  if:
+    type: string
+    word: nss3
+- id: libnss3-ref
+  desc: libnss3 library reference
+  crit: notable
+  conf: 0.75
+  attack: T1555.003
+  if:
+    type: string
+    substr: libnss3
+- id: pk11-decrypt
+  desc: Firefox PK11SDR_Decrypt function
+  crit: suspicious
+  conf: 0.95
+  attack: T1555.003
+  mbc: B0028
+  if:
+    type: string
+    substr: PK11SDR_Decrypt
+- id: moz-cookies-sql
+  desc: Firefox moz_cookies SQL query
+  crit: suspicious
+  conf: 0.9
+  attack: T1555.003
+  if:
+    type: string
+    regex: SELECT.{0,50}FROM\s+moz_cookies
+    case_insensitive: true
+- id: moz-logins-sql
+  desc: Firefox moz_logins SQL query
+  crit: suspicious
+  conf: 0.95
+  attack: T1555.003
+  mbc: B0028
+  if:
+    type: string
+    regex: SELECT.{0,50}FROM\s+moz_logins
+    case_insensitive: true
+- id: path
+  desc: Firefox browser profile path
+  crit: notable
+  conf: 0.6
+  attack: T1555.003
+  if:
+    type: string
+    regex: Mozilla[/\\]Firefox[/\\]Profiles|/\.mozilla/firefox/
+    case_insensitive: true
+composite_rules:
+- id: profiles-path
+  desc: Firefox/Gecko Profiles directory
+  crit: notable
+  conf: 0.7
+  attack: T1555.003
+  any:
+  - id: firefox-profiles
+  - id: waterfox-profiles
+  - id: palemoon-profiles
+- id: cookie-theft
+  desc: Firefox cookie theft
+  crit: suspicious
+  conf: 0.85
+  attack: T1555.003
+  all:
+  - id: path
+  - id: objectives/credential-access/browser/firefox::cookies
+- id: password-theft
+  desc: Firefox password/form history theft
+  crit: suspicious
+  conf: 0.85
+  attack: T1555.003
+  all:
+  - id: path
+  any:
+  - id: formhistory-sqlite
+  - id: nss-private
+  - id: objectives/credential-access/browser/firefox::logins
+  - id: key4-db
+- id: nss3-lib
+  desc: Firefox NSS3 library reference
+  crit: notable
+  conf: 0.85
+  attack: T1555.003
+  any:
+  - id: nss3-word
+  - id: libnss3-ref
+- id: nss-decrypt
+  desc: Firefox NSS database decryption
+  crit: suspicious
+  conf: 0.95
+  attack: T1555.003
+  mbc: B0028
+  for:
+  - python
+  - javascript
+  - elf
+  - pe
+  - macho
+  - so
+  - dll
+  any:
+  - id: pk11-decrypt
+  - id: nss3-lib
+  all:
+  - id: path

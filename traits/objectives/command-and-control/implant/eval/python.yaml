@@ -1,0 +1,45 @@
+# Python Remote Code Execution via Eval
+# Detects patterns where remote config/data is executed via eval
+# ATT&CK: T1059.006 (Python)
+
+composite_rules:
+  - id: remote-config-eval
+    desc: Remote configuration executed via eval()
+    crit: hostile
+    conf: 0.95
+    for: [python]
+    mbc: "E1059"
+    attack: "T1059.006"
+    all:
+      - id: objectives/execution/interpreter/eval/invoke::python-eval
+      - id: micro-behaviors/communications/http/client
+    any:
+      - id: objectives/anti-static/obfuscation/payload::eval-function-call
+      - id: objectives/execution/interpreter/eval/remote::eval-config-access
+      - id: objectives/execution/interpreter/eval/remote::eval-dict-get
+
+  - id: client-config-execution
+    desc: HTTP client config execution pattern
+    crit: hostile
+    conf: 0.93
+    for: [python]
+    mbc: "E1059"
+    attack: "T1059.006"
+    all:
+      - id: objectives/execution/interpreter/eval/invoke::python-eval
+      - id: micro-behaviors/communications/http/lib/urllib::urllib-word
+    any:
+      - id: objectives/anti-static/obfuscation/payload::eval-function-call
+      - id: objectives/execution/interpreter/eval/remote::eval-config-access
+
+  - id: config-string-execution
+    desc: Configuration string execution
+    crit: hostile
+    conf: 0.90
+    for: [python]
+    attack: "T1059.006"
+    all:
+      - id: objectives/execution/interpreter/eval/invoke::python-eval
+    any:
+      - id: objectives/anti-static/obfuscation/payload::eval-function-call
+      - id: objectives/execution/interpreter/eval/remote::eval-client-config

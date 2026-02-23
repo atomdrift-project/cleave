@@ -1,0 +1,46 @@
+# XOR Encoding Detection
+# MBC: B0032 (Obfuscated Files or Information)
+# ATT&CK: T1027
+
+defaults:
+  for: [pe, elf, macho, python, javascript, shell]
+
+traits:
+  - id: xor-key
+    desc: XOR key variable reference
+    crit: notable
+    conf: 0.5
+    if:
+      type: string
+      substr: xor_key
+
+  - id: xor-encrypt
+    desc: XOR encrypt function reference
+    crit: notable
+    conf: 0.5
+    if:
+      type: string
+      substr: xor_encrypt
+
+  # Removed xor-decode duplicate - use objectives/anti-static/obfuscation/encoding::xor-decode-symbol
+
+  - id: xor-loop
+    desc: XOR operation with hex byte
+    crit: notable
+    conf: 0.7
+    if:
+      type: string
+      regex: '\^\s*0x[0-9a-fA-F]{2}'
+
+composite_rules:
+  - id: encode
+    desc: XOR encoding patterns
+    crit: notable
+    conf: 0.66
+    mbc: "B0032"
+    attack: "T1027"
+    any:
+      - id: xor-key
+      - id: xor-encrypt
+      - id: objectives/anti-static/obfuscation/encoding::xor-decode-symbol
+      - id: xor-loop

@@ -1,0 +1,31 @@
+# Base64 Payload Markers
+# Detects base64 strings that decode to known payload markers
+
+traits:
+  - id: base64-function-keyword
+    desc: "Base64-encoded 'function' keyword"
+    crit: suspicious
+    conf: 0.9
+    for: [javascript, typescript, python]
+    if:
+      type: string
+      substr: "ZnVuY3Rpb24"
+
+  - id: base64-powershell-prefix
+    desc: "Base64-encoded PowerShell command prefix"
+    crit: suspicious
+    conf: 0.8
+    for: [javascript, typescript]
+    if:
+      type: string
+      regex: 'JAB[A-Za-z0-9]{20,}'
+
+  - id: long-base64-in-strings
+    desc: "Extremely long base64 strings (likely encoded payloads)"
+    crit: notable
+    conf: 0.6
+    for: [javascript, typescript, python]
+    if:
+      type: string
+      regex: '[A-Za-z0-9+/]{300,}={0,2}'
+      count_min: 2

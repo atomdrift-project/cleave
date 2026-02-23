@@ -1,0 +1,18 @@
+# Timestomping Detection - Python
+# Behavioral composites for timestamp manipulation in evasion context
+# MBC: F0006 (Timestomp)
+# ATT&CK: T1070.006
+
+defaults:
+  for: [python]
+  mbc: "F0006"
+  attack: "T1070.006"
+
+composite_rules:
+  - id: timestomp
+    desc: File timestamp modification (evasion)
+    crit: suspicious
+    conf: 0.8
+    all:
+      - id: micro-behaviors/fs/file/timestamp::timestamp-preserve
+      - id: micro-behaviors/fs/file/timestamp::timestamp-modification

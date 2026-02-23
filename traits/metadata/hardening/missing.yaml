@@ -1,0 +1,30 @@
+# Missing Security Hardening Detection
+# Detects binaries lacking standard security features
+
+defaults:
+  for: [elf]
+  crit: notable
+
+traits:
+  - id: stripped-binary
+    desc: Stripped binary (no symbols)
+    conf: 0.8
+    if:
+      type: structure
+      feature: "binary/stripped"
+
+  - id: static-linked
+    desc: Statically linked binary
+    conf: 0.8
+    if:
+      type: structure
+      feature: "binary/static"
+
+composite_rules:
+  - id: minimal-hardening
+    desc: Binary lacks security hardening features
+    crit: notable
+    conf: 0.8
+    all:
+      - id: stripped-binary
+      - id: static-linked

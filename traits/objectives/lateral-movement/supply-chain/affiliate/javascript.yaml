@@ -1,0 +1,18 @@
+traits:
+  - id: amazon-link-discovery
+    desc: Searches for Amazon product links
+    crit: notable
+    conf: 0.8
+    for: [javascript, typescript]
+    if:
+      type: string
+      regex: 'a\[href\*="/dp/"\]|a\[href\*="/gp/product/"\]'
+
+composite_rules:
+  - id: affiliate-hijacking
+    desc: Intercepts and rewrites affiliate links
+    crit: hostile
+    conf: 0.95
+    all:
+      - id: amazon-link-discovery
+      - id: micro-behaviors/communications/http/url::parameter-manipulation

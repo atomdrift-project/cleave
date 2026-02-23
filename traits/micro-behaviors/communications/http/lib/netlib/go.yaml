@@ -1,0 +1,58 @@
+# HTTP Request Operations - Go
+# MBC: C0002 (HTTP Communication)
+# ATT&CK: T1071.001
+
+defaults:
+  mbc: "C0002"
+  attack: "T1071.001"
+
+traits:
+  # AST-based detection (Go source only)
+  - id: go-http-newrequest
+    desc: Creates a new HTTP request
+    crit: notable
+    conf: 0.9
+    for: [go]
+    if:
+      type: ast
+      kind: call
+      exact: "http.NewRequest"
+
+  - id: go-http-client-do
+    desc: Executes an HTTP request in
+    crit: notable
+    conf: 0.9
+    for: [go]
+    if:
+      type: ast
+      kind: call
+      exact: ".Do("
+
+  - id: go-http-header-auth
+    desc: Sets Authorization header in Go
+    crit: notable
+    conf: 0.95
+    for: [go]
+    if:
+      type: ast
+      kind: call
+      exact: 'Header.Set("Authorization"'
+
+  # String-based detection (compiled binaries)
+  - id: go-http-client-do-string
+    desc: net/http.(*Client).Do string in binary
+    crit: notable
+    conf: 0.7
+    for: [elf, macho, pe]
+    if:
+      type: string
+      substr: "net/http.(*Client).Do"
+
+  - id: go-http-header-set-string
+    desc: Header.Set string in binary
+    crit: notable
+    conf: 0.6
+    for: [elf, macho, pe]
+    if:
+      type: string
+      substr: "Header.Set"

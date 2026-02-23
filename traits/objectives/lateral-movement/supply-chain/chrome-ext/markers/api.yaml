@@ -1,0 +1,369 @@
+defaults:
+  for: [javascript, typescript]
+
+traits:
+- id: runtime-set-uninstall-url
+  desc: Sets uninstall tracking URL
+  crit: notable
+  conf: 0.9
+  for:
+  - javascript
+  - typescript
+  if:
+    type: ast
+    kind: call
+    regex: chrome\.runtime\.setUninstallURL|setUninstallURL\(
+- id: runtime-on-installed
+  desc: Listens for extension install event
+  crit: notable
+  conf: 0.95
+  for:
+  - javascript
+  - typescript
+  if:
+    type: ast
+    kind: call
+    regex: chrome\.runtime\.onInstalled|onInstalled\.addListener
+- id: runtime-get-url
+  desc: Gets extension resource URL
+  crit: notable
+  conf: 0.9
+  for:
+  - javascript
+  - typescript
+  if:
+    type: ast
+    kind: call
+    regex: chrome\.runtime\.getURL|runtime\.getURL\(
+- id: runtime-send-message
+  desc: Sends message between extension contexts
+  crit: notable
+  conf: 0.9
+  for:
+  - javascript
+  - typescript
+  if:
+    type: ast
+    kind: call
+    regex: chrome\.runtime\.sendMessage|runtime\.sendMessage\(
+- id: tabs-create
+  desc: Creates new browser tab
+  crit: notable
+  conf: 0.9
+  for:
+  - javascript
+  - typescript
+  if:
+    type: ast
+    kind: call
+    regex: chrome\.tabs\.create|tabs\.create\(
+- id: tabs-update
+  desc: Updates existing tab
+  crit: notable
+  conf: 0.9
+  for:
+  - javascript
+  - typescript
+  if:
+    type: ast
+    kind: call
+    regex: chrome\.tabs\.update|tabs\.update\(
+- id: tabs-query
+  desc: Queries browser tabs
+  crit: notable
+  conf: 0.9
+  for:
+  - javascript
+  - typescript
+  if:
+    type: ast
+    kind: call
+    regex: chrome\.tabs\.query|tabs\.query\(
+- id: storage-local
+  desc: Accesses local extension storage
+  crit: notable
+  conf: 0.9
+  for:
+  - javascript
+  - typescript
+  if:
+    type: ast
+    kind: call
+    regex: chrome\.storage\.local|storage\.local\.
+- id: storage-sync
+  desc: Accesses synced extension storage
+  crit: notable
+  conf: 0.9
+  for:
+  - javascript
+  - typescript
+  if:
+    type: ast
+    kind: call
+    regex: chrome\.storage\.sync|storage\.sync\.
+- id: webrequest-on-before-request
+  desc: Intercepts web requests before sending
+  crit: suspicious
+  conf: 0.95
+  for:
+  - javascript
+  - typescript
+  if:
+    type: ast
+    kind: call
+    regex: chrome\.webRequest\.onBeforeRequest|webRequest\.onBeforeRequest
+- id: webrequest-on-before-send-headers
+  desc: Modifies request headers
+  crit: suspicious
+  conf: 0.95
+  for:
+  - javascript
+  - typescript
+  if:
+    type: ast
+    kind: call
+    regex: chrome\.webRequest\.onBeforeSendHeaders|webRequest\.onBeforeSendHeaders
+- id: webrequest-on-headers-received
+  desc: Modifies response headers
+  crit: suspicious
+  conf: 0.95
+  for:
+  - javascript
+  - typescript
+  if:
+    type: ast
+    kind: call
+    regex: chrome\.webRequest\.onHeadersReceived|webRequest\.onHeadersReceived
+- id: cookies-get
+  desc: Reads browser cookies
+  crit: notable
+  conf: 0.9
+  for:
+  - javascript
+  - typescript
+  if:
+    type: ast
+    kind: call
+    regex: chrome\.cookies\.get|cookies\.get\(
+- id: cookies-get-all
+  desc: Reads all cookies matching filter
+  crit: suspicious
+  conf: 0.9
+  for:
+  - javascript
+  - typescript
+  if:
+    type: ast
+    kind: call
+    regex: chrome\.cookies\.getAll|cookies\.getAll\(
+- id: cookies-set
+  desc: Sets browser cookies
+  crit: suspicious
+  conf: 0.9
+  for:
+  - javascript
+  - typescript
+  if:
+    type: ast
+    kind: call
+    regex: chrome\.cookies\.set|cookies\.set\(
+- id: history-search
+  desc: Searches browser history
+  crit: suspicious
+  conf: 0.95
+  for:
+  - javascript
+  - typescript
+  if:
+    type: ast
+    kind: call
+    regex: chrome\.history\.search|history\.search\(
+- id: history-get-visits
+  desc: Gets visit history for URL
+  crit: suspicious
+  conf: 0.95
+  for:
+  - javascript
+  - typescript
+  if:
+    type: ast
+    kind: call
+    regex: chrome\.history\.getVisits|history\.getVisits\(
+- id: bookmarks-get-tree
+  desc: Gets entire bookmark tree
+  crit: notable
+  conf: 0.9
+  for:
+  - javascript
+  - typescript
+  if:
+    type: ast
+    kind: call
+    regex: chrome\.bookmarks\.getTree|bookmarks\.getTree\(
+- id: mutation-observer
+  desc: Observes DOM mutations
+  crit: notable
+  conf: 0.9
+  for:
+  - javascript
+  - typescript
+  if:
+    type: ast
+    kind: call
+    regex: new MutationObserver|MutationObserver\(
+- id: mutation-observer-body
+  desc: Observes mutations on document body
+  crit: notable
+  conf: 0.85
+  for:
+  - javascript
+  - typescript
+  if:
+    type: string
+    regex: observer\.observe\(document\.body|observe\(document\.body
+- id: browser-namespace-1
+  desc: Uses browser.* namespace (core APIs)
+  crit: notable
+  conf: 0.95
+  if:
+    type: string
+    regex: browser\.(runtime|tabs|storage|webRequest)
+- id: browser-namespace-2
+  desc: Uses browser.* namespace (data APIs)
+  crit: notable
+  conf: 0.95
+  if:
+    type: string
+    regex: browser\.(cookies|history|bookmarks)
+- id: external-url-io-domain
+  desc: URL to .io domain
+  crit: notable
+  conf: 0.8
+  for:
+  - javascript
+  - typescript
+  if:
+    type: string
+    regex: https?://[a-zA-Z0-9][-a-zA-Z0-9]*\.io/
+- id: chrome-namespace-extra
+  desc: Uses extended chrome.* namespace APIs
+  crit: notable
+  conf: 0.95
+  for:
+  - javascript
+  - typescript
+  if:
+    type: string
+    regex: chrome\.(alarms|notifications)
+- id: tabs-execute-script-tabs
+  desc: Executes script via tabs API
+  crit: suspicious
+  conf: 0.95
+  for:
+  - javascript
+  - typescript
+  if:
+    type: ast
+    kind: call
+    regex: chrome\.tabs\.executeScript|tabs\.executeScript\(
+- id: tabs-execute-script-scripting
+  desc: Executes script via scripting API
+  crit: suspicious
+  conf: 0.95
+  for:
+  - javascript
+  - typescript
+  if:
+    type: ast
+    kind: call
+    regex: chrome\.scripting\.executeScript
+composite_rules:
+- id: browser-namespace
+  desc: Uses browser.* namespace (Firefox/WebExtension)
+  crit: notable
+  conf: 0.95
+  for:
+  - javascript
+  - typescript
+  any:
+    - id: browser-namespace-1
+    - id: browser-namespace-2
+- id: chrome-namespace-core
+  desc: Uses core chrome.* namespace APIs
+  crit: notable
+  conf: 0.95
+  for:
+  - javascript
+  - typescript
+  any:
+    - id: objectives/lateral-movement/supply-chain/chrome-ext/markers::chrome-runtime
+    - id: objectives/lateral-movement/supply-chain/chrome-ext/markers::chrome-tabs
+    - id: objectives/lateral-movement/supply-chain/chrome-ext/markers::chrome-storage
+    - id: objectives/lateral-movement/supply-chain/chrome-ext/markers::chrome-webRequest
+    - id: objectives/lateral-movement/supply-chain/chrome-ext/permissions::chrome-cookies
+- id: chrome-namespace
+  desc: Uses chrome.* namespace
+  crit: notable
+  conf: 0.95
+  for:
+  - javascript
+  - typescript
+  any:
+  - id: chrome-namespace-core
+  - id: chrome-namespace-extra
+- id: tabs-execute-script
+  desc: Executes script in tab context
+  crit: suspicious
+  conf: 0.95
+  for:
+  - javascript
+  - typescript
+  any:
+  - id: tabs-execute-script-tabs
+  - id: tabs-execute-script-scripting
+- id: is-extension
+  desc: File is part of a browser extension
+  crit: notable
+  conf: 0.9
+  for:
+  - javascript
+  - typescript
+  any:
+  - id: chrome-namespace
+  - id: browser-namespace
+  - id: runtime-on-installed
+  - id: runtime-get-url
+- id: uninstall-tracking
+  desc: Extension tracks user uninstalls to external domain
+  crit: suspicious
+  conf: 0.9
+  for:
+  - javascript
+  - typescript
+  all:
+  - id: runtime-set-uninstall-url
+  - id: external-url-io-domain
+- id: data-collection
+  desc: Extension can collect sensitive browsing data
+  crit: suspicious
+  conf: 0.9
+  for:
+  - javascript
+  - typescript
+  needs: 2
+  any:
+  - id: cookies-get-all
+  - id: history-search
+  - id: history-get-visits
+  - id: bookmarks-get-tree
+- id: request-interception
+  desc: Extension intercepts/modifies web requests
+  crit: suspicious
+  conf: 0.9
+  for:
+  - javascript
+  - typescript
+  any:
+  - id: webrequest-on-before-request
+  - id: webrequest-on-before-send-headers
+  - id: webrequest-on-headers-received

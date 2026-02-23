@@ -1,0 +1,18 @@
+traits:
+  - id: ad-blocker-lure
+    desc: Ad-blocking logic used as functionality lure
+    crit: notable
+    conf: 0.7
+    for: [javascript, typescript]
+    if:
+      type: string
+      regex: "Sponsored|Sponsored ad|Sponsored\\nicon"
+
+composite_rules:
+  - id: utility-lure-hijacker
+    desc: Ad-blocker utility used as lure for affiliate hijacking
+    crit: hostile
+    conf: 0.98
+    all:
+      - id: ad-blocker-lure
+      - id: objectives/lateral-movement/supply-chain/affiliate::affiliate-hijacking

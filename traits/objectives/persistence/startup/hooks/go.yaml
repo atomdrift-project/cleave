@@ -1,0 +1,33 @@
+# Go Windows Startup Persistence with System Shutdown
+# Detects pattern where malware establishes startup persistence AND executes system shutdown
+# This is a highly suspicious combination indicating destructive malware with persistence hooks
+
+defaults:
+  for: [go]
+  attack: "T1547.001"
+
+composite_rules:
+  # Startup persistence + file write (establishes footprint for next boot)
+  - id: startup-with-payload
+    desc: "Establishes startup persistence with"
+    crit: suspicious
+    conf: 0.95
+    attack: "T1547.001"
+    mbc: "F0004"
+    for: [go]
+    all:
+      - id: objectives/persistence/startup/registry::windows-startup-folder
+      - id: micro-behaviors/fs/file/operations::os-create
+
+  # Startup persistence + system shutdown (complete destructive chain)
+  - id: startup-shutdown-chain
+    desc: "Startup persistence with immediate system"
+    crit: hostile
+    conf: 0.98
+    attack: "T1547.001"
+    mbc: "F0004"
+    for: [go]
+    all:
+      - id: objectives/persistence/startup/registry::windows-startup-folder
+      - id: micro-behaviors/fs/file/operations::os-create
+      - id: objectives/impact/system/shutdown::shutdown-immediate-reboot

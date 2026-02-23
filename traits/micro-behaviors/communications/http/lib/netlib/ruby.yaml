@@ -1,0 +1,87 @@
+# HTTP Request Operations - Ruby
+# MBC: C0002 (HTTP Communication)
+# ATT&CK: T1071.001
+
+defaults:
+  for: [ruby]
+  platforms: [all]
+  mbc: "C0002"
+  attack: "T1071.001"
+
+traits:
+  # === Ruby HTTP atomic indicators ===
+  - id: net-http
+    desc: Net::HTTP module
+    crit: notable
+    conf: 0.85
+    if:
+      type: raw
+      substr: "Net::HTTP"
+
+  - id: open-uri
+    desc: open-uri module
+    crit: notable
+    conf: 0.6
+    if:
+      type: string
+      substr: "open-uri"
+
+  - id: uri-method
+    desc: URI parsing method
+    crit: baseline
+    conf: 0.7
+    if:
+      type: raw
+      substr: "URI("
+
+  - id: ruby-httparty
+    desc: HTTParty library
+    crit: notable
+    conf: 0.90
+    if:
+      type: string
+      substr: "httparty"
+
+  - id: http-get-symbol
+    desc: HTTP get symbol call
+    if:
+      type: symbol
+      exact: "get"
+
+  # Hardcoded IP in URL
+  - id: hardcoded-ip-url
+    desc: Hardcoded IP address in URL
+    crit: notable
+    conf: 0.9
+    attack: "T1071"
+    # Small binaries with hardcoded IPs are more suspicious
+    size_max: 10000
+    if:
+      type: string
+      regex: 'https?://\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}[:/]'
+    not:
+      - substr: "127.0.0.1"
+      - substr: "localhost"
+      - substr: "192.168."
+      - substr: "10."
+      - regex: '172\.(1[6-9]|2[0-9]|3[0-1])\.'
+
+composite_rules:
+  - id: net-http-get
+    desc: Net::HTTP get request
+    crit: notable
+    conf: 0.85
+    all:
+      - id: net-http
+    any:
+      - id: http-get-symbol
+      - id: micro-behaviors/communications/http/get/
+
+  - id: request-ruby
+    desc: HTTP requests (Ruby)
+    crit: notable
+    conf: 0.85
+    any:
+      - id: net-http-get
+      - id: ruby-httparty
+      - id: open-uri

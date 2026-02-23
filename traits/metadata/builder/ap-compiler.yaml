@@ -1,0 +1,14 @@
+# Detects AP-Compiler artifacts
+# AP-Compiler is a tool to bundle PowerShell dependencies
+
+defaults:
+  for: [powershell]
+
+traits:
+  - id: ap-compiler-header
+    desc: "AP-Compiler header"
+    crit: baseline
+    if:
+      type: raw
+      substr: "AP-Compiler Version"
+      count_min: 1

@@ -1,0 +1,19 @@
+defaults:
+  for: [all]
+
+traits:
+  - id: gimli-crate
+    desc: "Rust gimli crate (DWARF parsing)"
+    crit: baseline
+    conf: 0.9
+    if:
+      type: string
+      substr: "gimli"
+
+  - id: object-crate
+    desc: "Rust object crate (binary format parsing)"
+    crit: baseline
+    conf: 0.9
+    if:
+      type: string
+      substr: "rust/deps/object-"

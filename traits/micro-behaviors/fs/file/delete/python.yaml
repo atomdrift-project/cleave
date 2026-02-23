@@ -1,0 +1,20 @@
+# File Delete Operations - Python
+
+defaults:
+  for: [python]
+  crit: baseline
+  conf: 0.8
+
+traits:
+  - id: py-remove
+    desc: "File deletion (os.remove/os.unlink)"
+    if:
+      type: raw
+      regex: 'os\.(remove|unlink)\('
+
+  - id: py-rmtree
+    desc: "Recursive directory deletion (rmtree)"
+    crit: notable
+    if:
+      type: string
+      regex: '\.rmtree\('

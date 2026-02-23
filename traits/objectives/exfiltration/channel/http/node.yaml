@@ -1,0 +1,28 @@
+# Node.js HTTP Exfiltration Patterns
+# ATT&CK: T1041 (Exfiltration Over C2 Channel), T1071 (Application Layer Protocol)
+#
+# NOTE: Atomic HTTP request capabilities moved to micro-behaviors/communications/http/request/javascript.yaml
+# This file contains only objective-level composites that infer exfiltration intent.
+
+composite_rules:
+  # Collect and exfil pattern - combines discovery with HTTP requests
+  - id: node-collect-exfil
+    desc: Collects system info and exfiltrates via HTTP
+    crit: suspicious
+    conf: 0.95
+    attack: "T1041"
+    for: [javascript, typescript]
+    all:
+      - id: objectives/discovery/host/system/
+      - id: micro-behaviors/communications/http/request::http-method-calls
+
+  # Stealthy exfil (silent errors) - suppresses network failures to hide activity
+  - id: node-stealthy-exfil
+    desc: Stealthy exfiltration with silent error handling
+    crit: suspicious
+    conf: 0.85
+    attack: "T1041"
+    for: [javascript, typescript]
+    all:
+      - id: micro-behaviors/communications/http/request::silent-error-handler
+      - id: micro-behaviors/communications/http/request::http-client-usage

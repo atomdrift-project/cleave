@@ -1,0 +1,80 @@
+# Systemd Persistence (Linux)
+# MBC: B0028 (Scheduled Task/Job)
+# ATT&CK: T1543.002
+
+defaults:
+  for: [all]
+
+traits:
+  - id: systemd-keyword
+    desc: systemd init system keyword
+    crit: notable
+    conf: 0.7
+    attack: T1543.002
+    if:
+      type: string
+      word: "systemd"
+
+  - id: systemctl-command
+    desc: systemctl command (control systemd services)
+    crit: notable
+    conf: 0.7
+    attack: T1543.002
+    if:
+      type: string
+      word: "systemctl"
+
+  - id: etc-systemd-path
+    desc: /etc/systemd directory path (system services)
+    crit: notable
+    conf: 0.7
+    mbc: B0028
+    attack: T1543.002
+    if:
+      type: string
+      substr: "/etc/systemd"
+
+  - id: lib-systemd-path
+    desc: /lib/systemd directory path (default services)
+    crit: notable
+    conf: 0.7
+    mbc: B0028
+    attack: T1543.002
+    if:
+      type: string
+      substr: "/lib/systemd"
+
+  - id: service-extension
+    desc: .service file extension (systemd unit
+    crit: notable
+    conf: 0.6
+    attack: T1543.002
+    if:
+      type: string
+      substr: "/.service"
+
+  - id: systemctl-enable
+    desc: systemctl enable command (persistent service)
+    crit: notable
+    conf: 0.8
+    mbc: B0028
+    attack: T1543.002
+    if:
+      type: string
+      substr: "systemctl enable"
+
+composite_rules:
+  - id: systemd
+    desc: Linux systemd persistence (2+ indicators)
+    crit: notable
+    conf: 0.66
+    mbc: B0028
+    attack: T1543.002
+    needs: 2
+    any:
+      - id: systemd-keyword
+      - id: systemctl-command
+      - id: etc-systemd-path
+      - id: lib-systemd-path
+      - id: service-extension
+      - id: systemctl-enable

@@ -1,0 +1,12 @@
+# Dynamic Library Iteration
+# NOTE: dl_iterate_phdr is used by exception handlers, backtraces,
+# and normal runtime introspection. Not suspicious on its own.
+traits:
+  - id: dl-iterate-phdr
+    desc: Iterate shared object list
+    crit: baseline
+    conf: 0.5
+    for: [elf]
+    if:
+      type: string
+      substr: "dl_iterate_phdr"

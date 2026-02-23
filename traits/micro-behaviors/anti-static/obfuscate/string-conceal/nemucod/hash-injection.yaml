@@ -1,0 +1,27 @@
+traits:
+  - id: nemucod-hash-injection-fragment
+    desc: Nemucod string with interspersed #### filler
+    crit: suspicious
+    conf: 0.95
+    for: [javascript]
+    if:
+      type: raw
+      regex: '([A-Za-z]####){5,}'
+
+  - id: nemucod-hash-deobfuscation-logic
+    desc: Nemucod deobfuscation logic split("####").join("")
+    crit: suspicious
+    conf: 0.95
+    for: [javascript]
+    if:
+      type: raw
+      regex: '\.split\("?####"?\)\.join\("?"?\)'
+
+  - id: nemucod-cc-on-obfuscated
+    desc: Obfuscated JScript conditional compilation marker
+    crit: suspicious
+    conf: 0.95
+    for: [javascript]
+    if:
+      type: raw
+      regex: '/####\*####@####c####c####_####o####n'

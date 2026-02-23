@@ -1,0 +1,41 @@
+traits:
+  # Quake 3: \xFF\xFF\xFF\xFFgetstatus
+  - id: quake3-getstatus-payload
+    desc: Quake 3 'getstatus' payload, used in amplification attacks
+    crit: suspicious
+    if:
+      type: raw
+      regex: '(\\x[fF]{2}){4}getstatus|chr\(255\)(\s*\.\s*chr\(255\)){3}\s*\.\s*"getstatus"'
+
+  # Valve Source: \xFF\xFF\xFF\xFFTSource Engine Query
+  - id: valve-source-payload
+    desc: Valve Source Engine query payload, used in amplification attacks
+    crit: suspicious
+    if:
+      type: raw
+      # Including both text representation and the \x55 (chr(85)) variant
+      regex: '(\\x[fF]{2}){4}(TSource\sEngine\sQuery|\x55)|chr\(255\)(\s*\.\s*chr\(255\)){3}\s*\.\s*("TSource Engine Query"|chr\(85\))'
+
+  # Half-Life: \xFF\xFF\xFF\xFFrules
+  - id: halflife-rules-payload
+    desc: Half-Life 'rules' payload, used in amplification attacks
+    crit: suspicious
+    if:
+      type: raw
+      regex: '(\\x[fF]{2}){4}rules|chr\(255\)(\s*\.\s*chr\(255\)){3}\s*\.\s*"rules"'
+    
+  # GameSpy: \status\
+  - id: gamespy-status-payload
+    desc: GameSpy 'status' payload, used in amplification attacks
+    crit: suspicious
+    if:
+      type: raw
+      regex: '(\\x5C|\\\\)status(\\x5C|\\\\)|chr\(92\)\s*\.\s*chr\(115\)\s*\.\s*chr\(116\)\s*\.\s*chr\(97\)\s*\.\s*chr\(116\)\s*\.\s*chr\(117\)\s*\.\s*chr\(115\)\s*\.\s*chr\(92\)'
+
+  # GameSpy 2: \xFE\xFD\x00CORY
+  - id: gamespy2-cory-payload
+    desc: GameSpy 2 'CORY' payload, used in amplification attacks
+    crit: suspicious
+    if:
+      type: raw
+      regex: '\\xFE\\xFD\\x00CORY|chr\(254\)\s*\.\s*chr\(253\)\s*\.\s*chr\(0\)\s*\.\s*chr\(67\)\s*\.\s*chr\(79\)\s*\.\s*chr\(82\)\s*\.\s*chr\(89\)'

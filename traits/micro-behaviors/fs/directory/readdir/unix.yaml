@@ -1,0 +1,106 @@
+defaults:
+  for:
+    - elf
+    - macho
+    - so
+    - dylib
+    - c
+traits:
+  - id: readdir-opendir
+    desc: Uses opendir
+    crit: baseline
+    conf: 0.66
+    if:
+      type: symbol
+      exact: opendir
+  - id: readdir-readdir
+    desc: Uses readdir
+    crit: baseline
+    conf: 0.66
+    if:
+      type: symbol
+      exact: readdir
+  - id: readdir-readdir64
+    desc: Uses readdir64
+    crit: baseline
+    conf: 0.66
+    if:
+      type: symbol
+      exact: readdir64
+  - id: readdir-fdopendir
+    desc: Uses fdopendir
+    crit: baseline
+    conf: 0.66
+    if:
+      type: symbol
+      exact: fdopendir
+  - id: readdir-closedir
+    desc: Uses closedir
+    crit: baseline
+    conf: 0.66
+    if:
+      type: symbol
+      exact: closedir
+  - id: readdir-rewinddir
+    desc: Uses rewinddir
+    crit: baseline
+    conf: 0.66
+    if:
+      type: symbol
+      exact: rewinddir
+  - id: readdir-seekdir
+    desc: Uses seekdir
+    crit: baseline
+    conf: 0.66
+    if:
+      type: symbol
+      exact: seekdir
+  - id: readdir-telldir
+    desc: Uses telldir
+    crit: baseline
+    conf: 0.66
+    if:
+      type: symbol
+      exact: telldir
+  - id: readdir-getdents
+    desc: Uses getdents
+    crit: baseline
+    conf: 0.66
+    if:
+      type: symbol
+      exact: getdents
+  - id: readdir-getdents64
+    desc: Uses getdents64
+    crit: baseline
+    conf: 0.66
+    if:
+      type: symbol
+      exact: getdents64
+composite_rules:
+  - id: readdir
+    desc: List directory contents
+    crit: baseline
+    conf: 0.66
+    any:
+      - id: readdir-core
+      - id: readdir-extended
+  - id: readdir-core
+    desc: Core directory iteration symbols
+    crit: baseline
+    conf: 0.66
+    any:
+      - id: readdir-opendir
+      - id: readdir-readdir
+      - id: readdir-readdir64
+      - id: readdir-fdopendir
+      - id: readdir-closedir
+  - id: readdir-extended
+    desc: Extended directory iteration symbols
+    crit: baseline
+    conf: 0.66
+    any:
+      - id: readdir-rewinddir
+      - id: readdir-seekdir
+      - id: readdir-telldir
+      - id: readdir-getdents
+      - id: readdir-getdents64

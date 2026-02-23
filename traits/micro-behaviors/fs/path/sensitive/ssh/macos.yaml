@@ -1,0 +1,13 @@
+defaults:
+  for: [all]
+
+traits:
+  - id: keys
+    desc: Reference to SSH keys directory
+    crit: notable
+    conf: 0.8
+    mbc: T1552.004
+    attack: T1552.004
+    if:
+      type: string
+      substr: ".ssh"

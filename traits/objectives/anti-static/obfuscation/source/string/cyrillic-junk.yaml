@@ -1,0 +1,29 @@
+# Cyrillic Junk Padding
+# Detects non-functional Cyrillic strings used as padding/obfuscation
+
+traits:
+  - id: cyrillic-junk-padding
+    desc: "Non-functional Cyrillic junk strings for obfuscation"
+    crit: suspicious
+    conf: 0.8
+    for: [javascript, typescript, python]
+    if:
+      type: string
+      regex: 'онвас|въйръ'
+      count_min: 10
+
+  - id: dense-cyrillic-literals
+    desc: "Dense Cyrillic character strings in non-Cyrillic context"
+    crit: notable
+    conf: 0.6
+    for: [javascript, typescript, python]
+    if:
+      type: string
+      regex: '[а-яА-Я]{4,}'
+      count_min: 20
+    downgrade:
+      any:
+        - type: basename
+          regex: "^[a-z]{2,3}(-[A-Z][a-z]{3})?(-[A-Z]{2})?\\.js$"
+        - type: string
+          regex: "moment\\.lang\\(['\"][a-z]{2}"

@@ -1,0 +1,26 @@
+# Discord Credential Exfiltration - JavaScript
+# Detects exfiltration of credentials to Discord webhooks
+# ATT&CK: T1552.001 (Credentials In Files), T1567 (Exfiltration Over Web Service)
+
+defaults:
+  for: [all]
+
+traits:
+  - id: js-sensitive-file-target
+    desc: Targets sensitive configuration files
+    crit: notable
+    conf: 0.8
+    if:
+      type: raw
+      regex: '["'']\.env["'']|["'']config\.json["'']|["'']ayarlar\.json["'']'
+
+composite_rules:
+  - id: js-discord-cred-exfil
+    desc: Exfiltration of sensitive files to Discord
+    crit: hostile
+    conf: 0.98
+    attack: "T1567"
+    all:
+      - id: objectives/exfiltration/channel/webhook::discord-webhook-url
+      - id: js-sensitive-file-target
+      - id: micro-behaviors/fs/file/read::read-node

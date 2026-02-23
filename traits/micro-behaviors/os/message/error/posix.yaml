@@ -1,0 +1,15 @@
+# POSIX Error Messages
+# Standard POSIX/Unix error messages
+# ATT&CK: T1082 (System Information Discovery - generic)
+
+defaults:
+  for: [all]
+
+traits:
+  - id: permission-denied
+    desc: POSIX "Permission denied" error message
+    crit: baseline
+    conf: 0.5
+    if:
+      type: string
+      substr: "Permission denied"

@@ -1,0 +1,49 @@
+defaults:
+  for:
+  - shell
+  - javascript
+  - python
+  - ruby
+  - go
+  - macho
+  - elf
+  - pe
+  attack: T1082
+  mbc: E1082
+traits:
+- id: wmic-video-controller
+  desc: Windows WMIC VideoController query
+  crit: notable
+  conf: 0.9
+  if:
+    type: string
+    regex: wmic\s+path\s+Win32_VideoController
+- id: xrandr-query
+  desc: Linux xrandr query
+  crit: notable
+  conf: 0.9
+  if:
+    type: string
+    regex: xrandr\s+--(current|verbose|prop)
+- id: macos-system-profiler-display
+  desc: macOS system_profiler display query
+  crit: notable
+  conf: 0.9
+  if:
+    type: string
+    regex: system_profiler\s+SPDisplaysDataType
+- id: display-resolution-discovery
+  desc: Discover screen or display resolution
+  crit: notable
+  conf: 0.8
+  if:
+    type: string
+    regex: xrandr\s+--current|CurrentVerticalResolution
+composite_rules:
+- id: display-resolution-discovery-any
+  desc: Discover screen or display resolution
+  crit: notable
+  conf: 0.8
+  any:
+  - id: wmic-video-controller
+  - id: display-resolution-discovery

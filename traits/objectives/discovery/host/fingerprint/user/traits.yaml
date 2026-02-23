@@ -1,0 +1,21 @@
+# User Information Fingerprinting
+# ATT&CK: T1033 (System Owner/User Discovery)
+# NOTE: All neutral user query functions moved to micro-behaviors/process/user/ and micro-behaviors/process/env/
+
+defaults:
+  attack: "T1033"
+
+traits:
+
+composite_rules:
+  # User info composite
+  - id: user-info
+    desc: User information fingerprinting
+    crit: notable
+    conf: 0.7
+    needs: 2
+    any:
+      - id: micro-behaviors/process/user/query/
+      - id: micro-behaviors/process/env/access::getenv-user
+      - id: micro-behaviors/process/env/access::getenv-home
+      - id: micro-behaviors/fs/path/config/accounts::etc-passwd

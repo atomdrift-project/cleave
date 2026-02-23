@@ -1,0 +1,9 @@
+composite_rules:
+  - id: objectives/impact/infect/script::blackhawk-virus
+    crit: hostile
+    desc: "Detects the Blackhawk virus, which infects shell scripts."
+    all:
+      - id: well-known/malware/virus/blackhawk::family-signature
+      - id: micro-behaviors/fs/chmod/executable/dangerous::generic-shell-chmod
+      - id: well-known/malware/virus/ghotdog::ghostdog-infection-marker
+      - id: micro-behaviors/process/create/shell::embedded-shebang-sh

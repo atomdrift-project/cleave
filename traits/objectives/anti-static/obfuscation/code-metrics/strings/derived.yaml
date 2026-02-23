@@ -1,0 +1,11 @@
+defaults:
+  crit: notable
+  conf: 1.0
+  for:
+  - all
+traits:
+- id: string-hiding__unless_1
+  desc: Derived raw condition
+  if:
+    type: raw
+    regex: \bsw(eave|ig)\b

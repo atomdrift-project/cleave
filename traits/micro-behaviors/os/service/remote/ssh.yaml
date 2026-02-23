@@ -1,0 +1,39 @@
+# SSH Service/Daemon
+# Generic SSH daemon and service references
+
+defaults:
+  for: [all]
+
+traits:
+  - id: sshd-ref
+    desc: sshd daemon reference
+    crit: baseline
+    conf: 0.4
+    for: [all]
+    if:
+      type: string
+      word: "sshd"
+
+  - id: sshd-path
+    desc: sshd daemon path
+    crit: notable
+    conf: 0.5
+    if:
+      type: string
+      substr: "/usr/sbin/sshd"
+
+  - id: ssh-service
+    desc: SSH service reference
+    crit: baseline
+    conf: 0.4
+    if:
+      type: string
+      substr: "ssh.service"
+
+  - id: dropbear-ref
+    desc: dropbear SSH daemon reference
+    crit: baseline
+    conf: 0.45
+    if:
+      type: string
+      word: "dropbear"

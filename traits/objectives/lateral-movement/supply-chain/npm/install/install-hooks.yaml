@@ -1,0 +1,288 @@
+# npm package.json Script Patterns
+# Detects suspicious patterns in npm package scripts
+# MBC: B0024 (Execution), C0002 (Download)
+# ATT&CK: T1059 (Command Interpreter), T1105 (Ingress Tool Transfer)
+
+defaults:
+  for: [package.json]
+
+traits:
+  # === Hook Existence Detection ===
+  # GuardDog: Detect the existence of install hooks
+
+  - id: has-preinstall
+    desc: Has preinstall script hook
+    crit: suspicious
+    conf: 0.85
+    attack: "T1195.002"
+    if:
+      type: kv
+      path: "scripts.preinstall"
+    not:
+      - exact: "npx patch-package"
+      - exact: "nuxt prepare"
+      - exact: "npx only-allow pnpm"
+      - exact: "prisma generate"
+      - exact: "ibmtelemetry --config=telemetry.yml"
+      - exact: "husky install"
+      - substr: "tsc || exit 0"
+      - exact: "patch-package"
+      - exact: "husky"
+
+  - id: has-postinstall
+    desc: Has postinstall script hook
+    crit: suspicious
+    conf: 0.85
+    attack: "T1195.002"
+    if:
+      type: kv
+      path: "scripts.postinstall"
+    not:
+      - exact: "npx patch-package"
+      - exact: "husky install"
+      - exact: "patch-package"
+      - exact: "husky"
+
+  - id: has-install
+    desc: Has install script hook
+    crit: suspicious
+    conf: 0.85
+    attack: "T1195.002"
+    if:
+      type: kv
+      path: "scripts.install"
+
+  # === Script Content Patterns ===
+  # Detect dangerous commands in install scripts
+
+  - id: script-curl
+    desc: Script uses curl
+    crit: notable
+    conf: 0.8
+    if:
+      type: kv
+      path: "scripts"
+      substr: "curl"
+
+  - id: script-wget
+    desc: Script uses wget
+    crit: notable
+    conf: 0.8
+    if:
+      type: kv
+      path: "scripts"
+      substr: "wget"
+
+  - id: script-pipe-sh
+    desc: Script pipes to sh
+    crit: suspicious
+    conf: 0.85
+    if:
+      type: kv
+      path: "scripts"
+      regex: "\\|\\s*sh([^a-zA-Z0-9_]|$)"
+
+  - id: script-pipe-bash
+    desc: Script pipes to bash
+    crit: suspicious
+    conf: 0.85
+    if:
+      type: kv
+      path: "scripts"
+      regex: "\\|\\s*bash([^a-zA-Z0-9_]|$)"
+
+  - id: script-pipe-node
+    desc: Script pipes to node
+    crit: suspicious
+    conf: 0.85
+    if:
+      type: kv
+      path: "scripts"
+      regex: "\\|\\s*node([^a-zA-Z0-9_]|$)"
+
+  - id: script-eval
+    desc: Script uses eval
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: kv
+      path: "scripts"
+      regex: "\\beval\\b"
+
+  - id: script-base64-word
+    desc: Script uses base64
+    crit: notable
+    conf: 0.8
+    if:
+      type: kv
+      path: "scripts"
+      substr: "base64"
+
+  - id: script-atob-word
+    desc: Script uses atob
+    crit: notable
+    conf: 0.8
+    if:
+      type: kv
+      path: "scripts"
+      substr: "atob"
+
+  - id: script-btoa-word
+    desc: Script uses btoa
+    crit: notable
+    conf: 0.8
+    if:
+      type: kv
+      path: "scripts"
+      substr: "btoa"
+
+  - id: script-hidden-file-1
+    desc: Script hidden file (base)
+    crit: notable
+    conf: 0.75
+    if:
+      type: kv
+      path: "scripts"
+      regex: "/\\.[ac-z]"
+
+  - id: script-hidden-file-2
+    desc: Script hidden file (bin/bi)
+    crit: notable
+    conf: 0.75
+    if:
+      type: kv
+      path: "scripts"
+      regex: "/\\.(b[^i]|bi[^n]|b$|bi$)"
+
+  - id: script-tmp-dir
+    desc: Script uses /tmp directory
+    crit: notable
+    conf: 0.7
+    if:
+      type: kv
+      path: "scripts"
+      substr: "/tmp/"
+
+  - id: script-http-url
+    desc: Script contains HTTP URL
+    crit: notable
+    conf: 0.75
+    if:
+      type: kv
+      path: "scripts"
+      regex: "https?://"
+
+  - id: script-sysinfo-cmd-1
+    desc: Script runs system info (uname/whoami/hostname)
+    crit: notable
+    conf: 0.8
+    if:
+      type: kv
+      path: "scripts"
+      regex: "\\b(uname|whoami|hostname)\\b"
+
+  - id: script-sysinfo-cmd-2
+    desc: Script runs system info (ifconfig/ip addr)
+    crit: notable
+    conf: 0.8
+    if:
+      type: kv
+      path: "scripts"
+      regex: "\\b(ifconfig|ip\\s+addr)\\b"
+
+  - id: script-network-exfil-vars
+    desc: Network request with command substitution (exfiltration)
+    crit: suspicious
+    conf: 0.95
+    attack: "T1041"
+    if:
+      type: kv
+      path: "scripts"
+      regex: "https?://[^\"'\\s]{0,120}\\$\\("
+
+# === Composite Rules ===
+composite_rules:
+  - id: script-base64
+    desc: Script uses base64
+    crit: notable
+    conf: 0.8
+    any:
+      - id: script-base64-word
+      - id: script-atob-word
+      - id: script-btoa-word
+
+  - id: script-hidden-file
+    desc: Script references hidden file
+    crit: notable
+    conf: 0.75
+    any:
+      - id: script-hidden-file-1
+      - id: script-hidden-file-2
+
+  - id: script-sysinfo-cmd
+    desc: Script runs system info command
+    crit: notable
+    conf: 0.8
+    attack: "T1082"
+    any:
+      - id: script-sysinfo-cmd-1
+      - id: script-sysinfo-cmd-2
+
+  - id: install-script-exfil
+    desc: Install script performs data exfiltration
+    crit: hostile
+    conf: 0.95
+    attack: "T1041"
+    all:
+      - id: script-network-exfil-vars
+      - id: download-tools
+
+  # Download tools
+  - id: download-tools
+    desc: Script uses download tools
+    crit: notable
+    conf: 0.6
+    any:
+      - id: script-curl
+      - id: script-wget
+
+  # Pipe to interpreter patterns
+  - id: pipe-to-interpreters
+    desc: Script pipes to interpreter
+    crit: suspicious
+    conf: 0.85
+    any:
+      - id: script-pipe-sh
+      - id: script-pipe-bash
+      - id: script-pipe-node
+
+  # Download and execute composite
+  - id: download-execute
+    desc: npm script downloads and executes
+    crit: suspicious
+    conf: 0.95
+    mbc: "B0024"
+    attack: "T1105"
+    all:
+      - id: download-tools
+      - id: pipe-to-interpreters
+
+  # Obfuscated script
+  - id: obfuscated-script
+    desc: Script uses obfuscation techniques
+    crit: suspicious
+    conf: 0.85
+    any:
+      - id: script-eval
+      - id: script-base64
+
+  # GuardDog: Install hook existence (supply chain risk)
+  - id: install-hook-exists
+    desc: Package has install-time script hooks
+    crit: suspicious
+    conf: 0.85
+    attack: "T1195.002"
+    any:
+      - id: has-preinstall
+      - id: has-postinstall
+      - id: has-install

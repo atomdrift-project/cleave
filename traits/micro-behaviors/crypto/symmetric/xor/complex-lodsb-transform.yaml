@@ -1,0 +1,12 @@
+defaults:
+  for:
+    - all
+traits:
+  - id: complex-lodsb-transform
+    conf: 0.9
+    crit: suspicious
+    desc: Complex byte-by-byte transformation using lodsb (often for
+    if:
+      type: raw
+      regex: lodsb.{0,80}byte ptr \[[^\]]{1,80}\],\s*al.{0,40}inc e([abcd]x|[sd]i)\s+lodsb
+composite_rules: []

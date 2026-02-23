@@ -1,0 +1,30 @@
+defaults:
+  for: [all]
+
+traits:
+  - id: syscall-table-ref
+    desc: "Reference to sys_call_table"
+    crit: notable
+    conf: 0.8
+    if:
+      type: raw
+      substr: "sys_call_table"
+
+  - id: nr-syscall-ref
+    desc: "Reference to __NR_ syscalls"
+    crit: notable
+    conf: 0.8
+    if:
+      type: raw
+      substr: "__NR_"
+
+composite_rules:
+  - id: syscall-table-write
+    desc: "Writes to sys_call_table (kernel hook)"
+    crit: suspicious
+    conf: 0.8
+    attack: T1014
+    mbc: F0004
+    all:
+      - id: syscall-table-ref
+      - id: nr-syscall-ref

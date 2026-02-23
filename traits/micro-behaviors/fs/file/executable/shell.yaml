@@ -1,0 +1,17 @@
+# Make File Executable
+# MBC: E1222 (File Permission Modification)
+# ATT&CK: T1222
+
+defaults:
+  for: [all]
+
+composite_rules:
+  - id: executable
+    desc: Make file executable with chmod
+    crit: notable
+    conf: 0.66
+    mbc: E1222
+    attack: T1222
+    any:
+      - id: micro-behaviors/fs/chmod/executable::shell-plus-x
+      - id: micro-behaviors/fs/chmod/executable::shell-7xx

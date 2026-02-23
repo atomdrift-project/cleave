@@ -1,0 +1,221 @@
+# macOS Data Collection and Archiving Detection
+# Detects data staging techniques on macOS
+# ATT&CK: T1560 (Archive Collected Data), T1074 (Data Staged)
+
+defaults:
+  for: [all]
+  attack: "T1560"
+  platforms: [macos]
+
+traits:
+  # === ditto compression atomic indicators ===
+  - id: ditto-ck-flags
+    desc: ditto -c -k compression flags
+    crit: notable
+    conf: 0.7
+    attack: "T1560.001"
+    if:
+      type: string
+      regex: "ditto\\s+-c\\s+-k"
+
+  - id: ditto-sequester
+    desc: ditto --sequesterRsrc flag
+    crit: notable
+    conf: 0.7
+    attack: "T1560.001"
+    if:
+      type: string
+      substr: "--sequesterRsrc"
+
+  - id: ditto-zip-output
+    desc: ditto with .zip output
+    crit: notable
+    conf: 0.7
+    attack: "T1560.001"
+    if:
+      type: string
+      regex: "ditto.{0,50}\\.zip"
+
+  # ditto for directory copy
+  - id: ditto-copy
+    desc: "macOS ditto directory copy"
+    crit: notable
+    conf: 0.7
+    if:
+      type: string
+      regex: "ditto\\s+[^-]"
+
+  # === hdiutil create atomic indicators ===
+  - id: hdiutil-create-cmd
+    desc: hdiutil create command
+    crit: notable
+    conf: 0.65
+    attack: "T1560.001"
+    if:
+      type: string
+      regex: "hdiutil\\s+create"
+
+  - id: hdiutil-format-flag
+    desc: hdiutil -format flag
+    crit: notable
+    conf: 0.65
+    attack: "T1560.001"
+    if:
+      type: string
+      regex: "hdiutil.{0,30}-format"
+
+  # === tar/gzip atomic indicators ===
+  - id: tar-create-flag
+    desc: tar create/compress flags
+    crit: notable
+    conf: 0.5
+    attack: "T1560.001"
+    if:
+      type: string
+      regex: "tar\\s+-[a-z]*[cz]"
+
+  - id: tar-create-long
+    desc: tar --create long option
+    crit: notable
+    conf: 0.5
+    attack: "T1560.001"
+    if:
+      type: string
+      substr: "tar --create"
+
+  - id: gzip-compress
+    desc: gzip compression
+    crit: notable
+    conf: 0.5
+    attack: "T1560.001"
+    if:
+      type: string
+      regex: "gzip\\s+-"
+
+  # === zip compress atomic indicators ===
+  - id: zip-flags
+    desc: zip with flags
+    crit: notable
+    conf: 0.55
+    attack: "T1560.001"
+    if:
+      type: string
+      regex: "\\bzip\\s+-[r0-9]"
+
+  - id: unzip-overwrite
+    desc: unzip -o overwrite flag
+    crit: notable
+    conf: 0.55
+    attack: "T1560.001"
+    if:
+      type: string
+      regex: "unzip\\s+-o"
+
+  # === /tmp staging atomic indicators ===
+  - id: tmp-tar-file
+    desc: .tar file in /tmp
+    crit: notable
+    conf: 0.6
+    attack: "T1074.001"
+    if:
+      type: string
+      regex: "/tmp/.{0,50}\\.tar"
+
+  - id: tmp-gz-file
+    desc: .gz file in /tmp
+    crit: notable
+    conf: 0.6
+    attack: "T1074.001"
+    if:
+      type: string
+      regex: "/tmp/.{0,50}\\.gz"
+
+  - id: tmp-dmg-file
+    desc: .dmg file in /tmp
+    crit: notable
+    conf: 0.6
+    attack: "T1074.001"
+    if:
+      type: string
+      regex: "/tmp/.{0,50}\\.dmg"
+
+  - id: tmp-out-file
+    desc: /tmp/out. output file
+    crit: notable
+    conf: 0.6
+    attack: "T1074.001"
+    if:
+      type: string
+      substr: "/tmp/out."
+
+  # Temp zip file staging
+  - id: tmp-zip-staging
+    desc: "Zip staged in /tmp"
+    crit: notable
+    conf: 0.7
+    attack: "T1074.001"
+    if:
+      type: string
+      regex: "/tmp/[^\\s]{1,50}\\.zip"
+
+composite_rules:
+  # hdiutil create composite
+  - id: hdiutil-create
+    desc: macOS disk image creation
+    crit: notable
+    conf: 0.75
+    attack: "T1560.001"
+    any:
+      - id: hdiutil-create-cmd
+      - id: hdiutil-format-flag
+
+  # zip compress composite
+  - id: zip-compress
+    desc: zip archive creation
+    crit: notable
+    conf: 0.65
+    attack: "T1560.001"
+    any:
+      - id: zip-flags
+      - id: unzip-overwrite
+
+  # ditto compression composite
+  - id: ditto-compress
+    desc: "macOS ditto archive compression"
+    crit: suspicious
+    conf: 0.85
+    attack: "T1560.001"
+    any:
+      - id: ditto-ck-flags
+      - id: ditto-sequester
+      - id: ditto-zip-output
+    downgrade:
+      any:
+        - id: metadata/sign/apple::platform
+
+  # tar/gzip compression composite
+  - id: tar-compress
+    desc: "tar archive creation"
+    crit: notable
+    conf: 0.6
+    attack: "T1560.001"
+    any:
+      - id: tar-create-flag
+      - id: tar-create-long
+      - id: gzip-compress
+
+  # /tmp staging composite
+  - id: tmp-directory
+    desc: "Staging in /tmp"
+    crit: notable
+    conf: 0.7
+    attack: "T1074.001"
+    any:
+      - id: tmp-zip-staging
+      - id: tmp-tar-file
+      - id: tmp-gz-file
+      - id: tmp-dmg-file
+      - id: tmp-out-file
+
+  # Note: Archive + exfiltration patterns removed - see exfiltration/archive/macos.yaml
+  # (composites: ditto-staging, archive-exfil provide equivalent coverage)

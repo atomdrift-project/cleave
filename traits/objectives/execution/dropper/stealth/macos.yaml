@@ -1,0 +1,36 @@
+# macOS Stealth Payload Orchestration
+# Detects evasive binaries that use direct syscalls and suspicious techniques
+# ATT&CK: T1027 (Obfuscated Files or Information), T1106 (Native API)
+
+defaults:
+  platforms: [macos]
+  for: [macho]
+  mbc: "B0032"
+
+composite_rules:
+  - id: macos-stealth-payload-orchestrator
+    desc: "macOS stealth payload orchestrator (Direct Syscalls + RWX)"
+    crit: hostile
+    conf: 0.98
+    # High-confidence: Direct syscalls PLUS suspicious memory/logic indicators
+    unless:
+      - id: metadata/signed/platform::apple
+    none:
+      - id: metadata/signed/platform::apple
+      - id: metadata/signed/id::com.apple.xpc.launchd
+    all:
+      - id: micro-behaviors/os/syscall/invoke::macos-arm64-direct-syscall
+    any:
+      - id: micro-behaviors/mem/protect/modify::rwx-prot-bytes
+      - id: objectives/anti-analysis/vm/detect::instruction-based-evasion
+      - id: objectives/anti-static/obfuscation/payload::macho-extreme-data-to-code-ratio
+
+  - id: macos-evasive-dropper-v2
+    desc: "macOS evasive dropper (Syscalls + Evasion + Dropper Pattern)"
+    crit: hostile
+    conf: 0.99
+    # Very high-confidence: Syscalls + VM detection + Dropper ratios
+    all:
+      - id: micro-behaviors/os/syscall/invoke::macos-arm64-direct-syscall
+      - id: objectives/anti-analysis/vm/detect::instruction-based-evasion
+      - id: objectives/anti-static/obfuscation/payload::macho-extreme-data-to-code-ratio

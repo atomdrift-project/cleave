@@ -1,0 +1,16 @@
+# OCRA (One-Click Ruby Application) Executable Disguised as Image
+# ATT&CK: T1036.003 (Rename System Utilities), T1027 (Obfuscated Files or Information)
+
+defaults:
+  for: [all]
+  crit: hostile
+  conf: 1.0
+
+traits: []
+
+composite_rules:
+  - id: ocra-masked-as-image
+    desc: OCRA packed executable disguised with an image extension
+    all:
+      - id: objectives/anti-analysis/packing/ocra::ocra-packed-executable
+      - id: micro-behaviors/fs/file/extension::image-extension

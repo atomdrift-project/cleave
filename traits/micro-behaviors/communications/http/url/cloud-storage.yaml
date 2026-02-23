@@ -1,0 +1,38 @@
+defaults:
+  crit: notable
+  conf: 0.9
+  for:
+  - all
+traits:
+- id: dropbox-download-url
+  desc: Dropbox direct download URL
+  if:
+    type: string
+    regex: (dl\.dropbox\.com|dl\.dropboxusercontent\.com)/s/[a-zA-Z0-9]{10,}
+- id: discord-cdn-download-url
+  desc: Discord CDN download URL
+  if:
+    type: string
+    regex: cdn\.discordapp\.com/attachments/[0-9]{15,}/[0-9]{15,}/[^\s/]{1,80}
+- id: discord-cdn-executable-url
+  desc: Discord CDN URL with executable extension
+  crit: suspicious
+  conf: 0.9
+  if:
+    type: string
+    regex: discordapp\.com/attachments/[0-9]{15,}/[0-9]{15,}/.{1,80}\.(exe|dll|bat|ps1)\b
+- id: discord-cdn-archive-url
+  desc: Discord CDN URL with archive extension
+  crit: notable
+  conf: 0.85
+  if:
+    type: string
+    regex: discordapp\.com/attachments/[0-9]{15,}/[0-9]{15,}/.{1,80}\.(zip|7z|rar)\b
+composite_rules:
+- id: discord-cdn-download-url-any
+  desc: Discord CDN download URL with suspicious extension
+  crit: suspicious
+  conf: 0.9
+  any:
+  - id: discord-cdn-executable-url
+  - id: discord-cdn-archive-url

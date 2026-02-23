@@ -1,0 +1,10 @@
+traits:
+  - id: massive-array-index-assignment
+    desc: Massive array index assignment (custom mapping)
+    crit: suspicious
+    conf: 0.9
+    for: [javascript]
+    if:
+      type: raw
+      # Matches standard or interleaved array index assignments (e.g. arr[123]=456; or a?r?r?[?1?2?3?]?=?4?5?6?)
+      regex: '([a-zA-Z0-9_$?]{1,20}\[.?(\d.)+\]?.?=.?(\d.)+;?.?){10,}'

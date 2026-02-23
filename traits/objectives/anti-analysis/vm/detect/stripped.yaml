@@ -1,0 +1,15 @@
+# Stripped Binary with VM Detection
+# Detects stripped binaries with anti-analysis instructions
+# Strong indicator of malware attempting to evade analysis
+
+composite_rules:
+  - id: stripped-binary-vm-detection
+    desc: Stripped binary with anti-analysis/VM detection instructions
+    crit: hostile
+    conf: 0.9
+    platforms: [linux, macos, windows]
+    mbc: "B0001"
+    attack: "T1497"
+    all:
+      - id: metadata/hardening::stripped-binary
+      - id: objectives/anti-analysis/vm/detect::instruction-based-evasion

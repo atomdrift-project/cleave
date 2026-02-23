@@ -1,0 +1,8 @@
+traits:
+  - id: file-write
+    criticality: notable
+    description: Writes to a file
+    for: [javascript]
+    if:
+      type: string
+      substr: "SaveToFile"

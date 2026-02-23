@@ -1,0 +1,155 @@
+traits:
+  - id: numeric-123456
+    desc: "Default credential: 123456"
+    crit: suspicious
+    conf: 0.8
+    attack: T1110.001
+    for:
+      - elf
+    if:
+      type: string
+      exact: "123456"
+  - id: literal-password
+    desc: "Default credential: password"
+    crit: notable
+    conf: 0.4
+    attack: T1110.001
+    for:
+      - elf
+    if:
+      type: string
+      regex: ([\x00-\x1f]password[\x00-\x1f]?)
+  - id: admin123
+    desc: "Default credential: admin123"
+    crit: suspicious
+    conf: 0.85
+    attack: T1110.001
+    for:
+      - elf
+    if:
+      type: string
+      substr: admin123
+  - id: literal-default
+    desc: "Default credential: default"
+    crit: notable
+    conf: 0.5
+    attack: T1110.001
+    for:
+      - elf
+    if:
+      type: string
+      regex: '[\x00-\x1f]default[\x00-\x1f]?'
+  - id: guest
+    desc: "Default credential: guest"
+    crit: notable
+    conf: 0.7
+    attack: T1110.001
+    for:
+      - elf
+    if:
+      type: string
+      regex: ([\x00-\x1f]guest[\x00-\x1f]?)
+  - id: iot-pte521
+    desc: "Default IoT credential: Pte521"
+    crit: suspicious
+    conf: 0.9
+    attack: T1110.001
+    for:
+      - elf
+    if:
+      type: string
+      substr: Pte521
+  - id: iot-pon521
+    desc: "Default IoT credential: Pon521"
+    crit: suspicious
+    conf: 0.9
+    attack: T1110.001
+    for:
+      - elf
+    if:
+      type: string
+      substr: Pon521
+  - id: iot-zxic521
+    desc: "Default IoT credential: Zxic521"
+    crit: suspicious
+    conf: 0.9
+    attack: T1110.001
+    for:
+      - elf
+    if:
+      type: string
+      substr: Zxic521
+  - id: credential-wordlist-1
+    desc: Dense credential wordlist (admin/root/password/default)
+    crit: notable
+    conf: 0.7
+    for:
+      - elf
+    if:
+      type: string
+      regex: '[\x00-\x1f](admin|root|password|default)[\x00-\x1f]?'
+      count_min: 8
+  - id: credential-wordlist-2
+    desc: Dense credential wordlist (guest/user/1234/qwerty)
+    crit: notable
+    conf: 0.7
+    for:
+      - elf
+    if:
+      type: string
+      regex: '[\x00-\x1f](guest|user|1234|qwerty)[\x00-\x1f]?'
+      count_min: 8
+composite_rules:
+  - id: credential-wordlist
+    desc: Dense credential wordlist (brute-force dictionary)
+    crit: suspicious
+    conf: 0.92
+    attack: T1110.001
+    for:
+      - elf
+    size_max: 200000
+    unless:
+      - id: micro-behaviors/interface/usage/usage-help
+    any:
+      - id: credential-wordlist-1
+      - id: credential-wordlist-2
+  - id: iot-zte
+    desc: "Default IoT credential: ZTE router"
+    crit: suspicious
+    conf: 0.95
+    attack: T1110.001
+    for:
+      - elf
+    any:
+      - id: objectives/lateral-movement/brute-force/iot-creds::router-cred-zte
+      - id: iot-pte521
+      - id: iot-pon521
+      - id: iot-zxic521
+  - id: dictionary
+    desc: Embedded credential brute-force dictionary
+    crit: suspicious
+    conf: 0.9
+    mbc: E1040
+    attack: T1110.001
+    for:
+      - elf
+    needs: 4
+    any:
+      - id: objectives/credential-access/username/admin::detected
+      - id: objectives/credential-access/username/root::detected
+      - id: guest
+      - id: numeric-123456
+      - id: literal-password
+      - id: admin123
+      - id: literal-default
+  - id: telnet-combo
+    desc: Telnet username:password combo format
+    crit: suspicious
+    conf: 0.8
+    attack: T1110.001
+    for:
+      - elf
+    size_max: 100000
+    unless:
+      - id: micro-behaviors/communications/download/curl::curl-easy-init
+      - id: credential-wordlist

@@ -1,0 +1,11 @@
+defaults:
+  for: [all]
+
+traits:
+  - id: win9x-kernel32-base
+    conf: 0.85
+    crit: suspicious
+    desc: Hardcoded Win9x kernel32.dll base address (0xBFF70000)
+    if:
+      type: raw
+      regex: '(0BFF70000[hH]|0xBFF70000)'

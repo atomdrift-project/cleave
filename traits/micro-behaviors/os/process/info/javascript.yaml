@@ -1,0 +1,31 @@
+defaults:
+  for: [javascript]
+
+traits:
+  - id: check-ppid
+    desc: Accesses process.ppid (Parent PID)
+    conf: 0.8
+    crit: notable
+    if:
+      type: ast
+      query: |
+        (member_expression
+          object: (identifier) @obj
+          property: (property_identifier) @prop
+          (#eq? @obj "process")
+          (#eq? @prop "ppid")
+        )
+
+  - id: check-argv
+    desc: Accesses process.argv (Command line arguments)
+    conf: 0.8
+    crit: notable
+    if:
+      type: ast
+      query: |
+        (member_expression
+          object: (identifier) @obj
+          property: (property_identifier) @prop
+          (#eq? @obj "process")
+          (#eq? @prop "argv")
+        )

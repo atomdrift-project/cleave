@@ -1,0 +1,221 @@
+# Embedded Data Detection
+# Detects compressed/encrypted data payloads embedded within binaries
+# MBC: F0001.006 (Embedded Payload), T1027.009 (Embedded Payloads)
+# ATT&CK: T1027.009
+
+defaults:
+  for: [elf, pe, macho]
+
+traits:
+  # === Embedded Compression Magic Bytes (YARA-based for reliable detection) ===
+  # These detect compression stream headers that may indicate embedded payloads
+
+  - id: zstd-magic
+    desc: Embedded ZSTD compressed data
+    crit: notable
+    conf: 0.7
+    mbc: "F0001.006"
+    attack: "T1027.009"
+    if:
+      type: yara
+      source: |
+        rule embedded_zstd {
+          strings:
+            $zstd = { 28 B5 2F FD }
+          condition:
+            $zstd
+        }
+
+  - id: lzma-magic
+    desc: Embedded LZMA compressed data
+    crit: notable
+    conf: 0.7
+    mbc: "F0001.006"
+    attack: "T1027.009"
+    # Bootloaders and firmware files legitimately embed LZMA-compressed payloads
+    # Only flag as suspicious if combined with other packing indicators
+    # Note: Full LZMA header is properties(1) + dict_size(4) + uncompressed_size(8)
+    # Common properties byte is 0x5D (lc=3,lp=0,pb=2). We require 13+ bytes
+    # (full header + first compressed byte) to avoid matching instruction bytes.
+    # The pattern 5D 00 00 appears frequently in x86-64 code (e.g., call offsets).
+    size_max: 52428800
+    if:
+      type: yara
+      source: |
+        rule embedded_lzma {
+          strings:
+            // Full LZMA header (13 bytes): props(1) + dict(4) + uncompressed_sized(8)
+            // props: 5D (common)
+            // dict: typically 0x00800000 (8MB) or smaller power of 2
+            // size: 8 bytes. We match if at least one byte is non-zero in a reasonable position.
+            $lzma_sized_nonzero = { 5D 00 00 (00|80) 00 (01|02|03|04|05|06|07|08|09|0A|0B|0C|0D|0E|0F|10|11|12|13|14|15|16|17|18|19|1A|1B|1C|1D|1E|1F|20) [7] ?? }
+            $lzma_sized_nonzero2 = { 5D 00 00 (00|80) 00 [1] (01|02|03|04|05|06|07|08|09|0A|0B|0C|0D|0E|0F|10|11|12|13|14|15|16|17|18|19|1A|1B|1C|1D|1E|1F|20) [6] ?? }
+            $lzma_sized_nonzero3 = { 5D 00 00 (00|80) 00 [2] (01|02|03|04|05|06|07|08|09|0A|0B|0C|0D|0E|0F|10|11|12|13|14|15|16|17|18|19|1A|1B|1C|1D|1E|1F|20) [5] ?? }
+            // LZMA with unknown size marker (-1 = 0xFFFFFFFFFFFFFFFF)
+            $lzma_unk = { 5D 00 00 (00|80) 00 FF FF FF FF FF FF FF FF 00 }
+          condition:
+            any of them
+        }
+
+  - id: xz-magic
+    desc: Embedded XZ compressed data
+    crit: notable
+    conf: 0.7
+    mbc: "F0001.006"
+    attack: "T1027.009"
+    if:
+      type: yara
+      source: |
+        rule embedded_xz {
+          strings:
+            $xz = { FD 37 7A 58 5A 00 }
+          condition:
+            $xz
+        }
+
+  - id: gzip-magic
+    desc: Embedded gzip compressed data
+    crit: baseline
+    conf: 0.5
+    if:
+      type: yara
+      source: |
+        rule embedded_gzip {
+          strings:
+            $gzip = { 1F 8B 08 }
+          condition:
+            $gzip
+        }
+
+  - id: bzip2-magic
+    desc: Embedded bzip2 compressed data
+    crit: baseline
+    conf: 0.5
+    if:
+      type: yara
+      source: |
+        rule embedded_bzip2 {
+          strings:
+            $bz2 = { 42 5A 68 }
+          condition:
+            $bz2
+        }
+
+  # === Embedded Binary Magic ===
+  # Note: ELF/PE/Mach-O embedded detection needs to skip the file header
+
+  - id: elf-magic-embedded
+    desc: Embedded ELF binary
+    crit: notable
+    conf: 0.8
+    mbc: "F0001.006"
+    attack: "T1027.009"
+    # Bootloaders and firmware files legitimately embed ELF firmware/kernel images
+    # This is especially common in EFI bootloaders which may contain firmware updates
+    if:
+      type: yara
+      source: |
+        rule embedded_elf {
+          strings:
+            $elf = { 7F 45 4C 46 }
+          condition:
+            // ELF magic not at file start indicates embedded binary
+            $elf and @elf[1] > 0x1000
+        }
+
+  - id: pe-magic-embedded
+    desc: Embedded PE/MZ binary
+    crit: notable
+    conf: 0.8
+    mbc: "F0001.006"
+    attack: "T1027.009"
+    if:
+      type: yara
+      source: |
+        rule embedded_pe {
+          strings:
+            $mz = { 4D 5A 90 00 }
+          condition:
+            // MZ magic not at file start indicates embedded binary
+            $mz and @mz[1] > 0x1000
+        }
+
+  # === Embedded Archive Formats ===
+
+  - id: zip-magic
+    desc: Embedded ZIP archive
+    crit: baseline
+    conf: 0.4
+    if:
+      type: yara
+      source: |
+        rule embedded_zip {
+          strings:
+            $zip = { 50 4B 03 04 }
+          condition:
+            $zip
+        }
+
+  - id: rar-magic
+    desc: Embedded RAR archive
+    crit: notable
+    conf: 0.6
+    if:
+      type: yara
+      source: |
+        rule embedded_rar {
+          strings:
+            $rar = { 52 61 72 21 1A 07 }
+          condition:
+            $rar
+        }
+
+  - id: 7z-magic
+    desc: Embedded 7-Zip archive
+    crit: notable
+    conf: 0.6
+    if:
+      type: yara
+      source: |
+        rule embedded_7z {
+          strings:
+            $7z = { 37 7A BC AF 27 1C }
+          condition:
+            $7z
+        }
+
+  # Detect .gnu_debugdata section (LZMA-compressed mini debug info in ELF binaries)
+  # This is a standard legitimate feature on Linux for minimal debugging symbols
+  - id: gnu-debugdata-section
+    desc: ELF .gnu_debugdata section (mini debug info)
+    crit: baseline
+    conf: 0.9
+    for: [elf]
+    if:
+      type: string
+      substr: ".gnu_debugdata"
+
+composite_rules:
+  # Multiple embedded compressed payloads is suspicious
+  # NOTE: Excludes gzip since it's ubiquitous in legitimate binaries (Node.js, curl, etc.)
+  # Requires 2+ of the more suspicious compression formats (LZMA/XZ/ZSTD/BZIP2)
+  # Size constraint: Large Rust/Go binaries have data that looks like compression
+  # magic (Unicode tables, regex DFAs). Real payload droppers are typically compact.
+  # Downgrade: ELF binaries with .gnu_debugdata section legitimately have LZMA/XZ data
+  - id: multiple-compressed-payloads
+    desc: Multiple embedded compressed payloads
+    crit: suspicious
+    conf: 0.75
+    mbc: "F0001.006"
+    attack: "T1027.009"
+    size_max: 2097152
+    needs: 2
+    any:
+      - id: zstd-magic
+      - id: lzma-magic
+      - id: xz-magic
+      - id: bzip2-magic
+    downgrade:
+      any:
+        - id: gnu-debugdata-section
+        - id: metadata/apple::system-component

@@ -1,0 +1,11 @@
+defaults:
+  for: [all]
+
+traits:
+  - id: definition
+    desc: Security rule definition file (Elastic/Sigma/YARA)
+    crit: baseline
+    conf: 0.9
+    if:
+      type: raw
+      regex: '"type"\s*:\s*"security-rule"'

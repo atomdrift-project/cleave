@@ -1,0 +1,42 @@
+# HTTP Cookies
+# MBC: C0002 (HTTP Communication)
+# ATT&CK: T1071.001
+
+defaults:
+  for: [all]
+
+traits:
+  # === Cookie atomic indicators ===
+  - id: cookie-header
+    desc: Cookie header
+    crit: baseline
+    conf: 0.5
+    if:
+      type: string
+      substr: "Cookie:"
+
+  - id: set-cookie-header
+    desc: Set-Cookie header
+    crit: baseline
+    conf: 0.5
+    if:
+      type: string
+      substr: "Set-Cookie:"
+
+  - id: http-cookiejar
+    desc: http.cookiejar module
+    crit: baseline
+    conf: 0.5
+    if:
+      type: string
+      substr: "http.cookiejar"
+
+composite_rules:
+  - id: cookies
+    desc: HTTP cookie handling
+    crit: baseline
+    conf: 0.66
+    any:
+      - id: cookie-header
+      - id: set-cookie-header
+      - id: http-cookiejar

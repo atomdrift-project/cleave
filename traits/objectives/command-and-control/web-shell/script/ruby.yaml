@@ -1,0 +1,70 @@
+---
+# Web Shell Client Detection - Ruby
+# Detects clients that connect to web shells for remote command execution
+# ATT&CK: T1059 (Command and Scripting Interpreter), T1071.001 (Web Protocols)
+
+defaults:
+  for: [ruby]
+  platforms: [all]
+
+traits:
+  # === Web Shell URL Pattern ===
+  - id: web-shell-cmd-param
+    desc: Web shell command parameter
+    crit: suspicious
+    conf: 0.90
+    attack: "T1059"
+    if:
+      type: string
+      regex: "cmd=|command=|exec=|run="
+
+  # === PHP Shell Function Pattern ===
+  - id: php-shell-function
+    desc: PHP exec function in URL
+    crit: notable
+    conf: 0.92
+    attack: "T1059"
+    if:
+      type: string
+      regex: "shell_exec|passthru|popen\\("
+    unless:
+      - id: objectives/execution/gtfobins/ruby-shell-exec
+
+  # === Shell Prompt Pattern ===
+  - id: shell-prompt-string
+    desc: Shell prompt marker
+    crit: notable
+    conf: 0.70
+    attack: "T1059"
+    if:
+      type: string
+      regex: "bash\\$|sh\\$|zsh\\$"
+
+composite_rules:
+  # === Web Shell Client ===
+  - id: web-shell-client
+    desc: Web shell client for remote command execution
+    crit: suspicious
+    conf: 0.92
+    attack: "T1059"
+    needs: 3
+    any:
+      - id: web-shell-cmd-param
+      - id: php-shell-function
+      - id: micro-behaviors/data/control-flow/analysis::ruby-while-true
+      - id: micro-behaviors/process/create/shell::ruby-system
+
+  # === Interactive Shell Client ===
+  - id: interactive-shell-client
+    desc: Interactive shell with user input
+    crit: suspicious
+    conf: 0.88
+    attack: "T1059"
+    needs: 4
+    any:
+      - id: micro-behaviors/os/console/io::stdin-gets
+      - id: shell-prompt-string
+      - id: micro-behaviors/os/console/io::exit-command-check
+      - id: micro-behaviors/data/control-flow/analysis::ruby-while-true
+      - id: micro-behaviors/communications/http/lib/netlib::open-uri
+      - id: micro-behaviors/process/create/shell::ruby-system

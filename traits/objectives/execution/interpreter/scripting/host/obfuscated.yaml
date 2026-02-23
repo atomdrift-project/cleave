@@ -1,0 +1,47 @@
+defaults:
+  crit: notable
+  conf: 0.8
+  platforms:
+  - windows
+  for:
+  - javascript
+  - typescript
+  attack: T1059.005
+  mbc: E1059
+traits:
+- id: wscript-shell-obfuscated
+  desc: Obfuscated WScript.Shell reference
+  if:
+    type: encoded
+    regex: (?i)WScript\.Shell|\{[^:]+:['"]W['"]\}\.[a-zA-Z0-9_$]+\+\{[^:]+:['"]S['"]\}
+- id: activex-object-obfuscated
+  desc: Obfuscated ActiveXObject creation
+  if:
+    type: encoded
+    regex: (?i)new\s+ActiveXObject|\{[^:]+:['"]A['"]\}\.[a-zA-Z0-9_$]+\+\{[^:]+:['"]c['"]\}
+- id: wscript-network-obfuscated
+  desc: Obfuscated WScript.Network reference
+  if:
+    type: encoded
+    regex: (?i)WScript\.Network
+- id: adodb-stream-obfuscated
+  desc: Obfuscated ADODB.Stream reference
+  if:
+    type: encoded
+    regex: (?i)ADODB\.Stream|\{[^:]+:['"]A['"]\}\.[a-zA-Z0-9_$]+\+\{[^:]+:['"]D['"]\}
+- id: xmlhttp-obfuscated-literal
+  desc: Obfuscated XMLHTTP literal reference
+  if:
+    type: encoded
+    regex: (?i)MSXML2\.ServerXMLHTTP
+- id: xmlhttp-obfuscated-fragment
+  desc: Obfuscated XMLHTTP fragment concat
+  if:
+    type: encoded
+    regex: (?i)\{[^:]+:['"]M['"]\}\.[a-zA-Z0-9_$]+\+\{[^:]+:['"]S['"]\}
+composite_rules:
+- id: xmlhttp-obfuscated
+  desc: Obfuscated XMLHTTP reference
+  any:
+  - id: xmlhttp-obfuscated-literal
+  - id: xmlhttp-obfuscated-fragment

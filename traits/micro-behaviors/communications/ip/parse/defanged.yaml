@@ -1,0 +1,23 @@
+# Defanged IP Address Detection
+# Detects obfuscated IP addresses often used to evade simple string matching
+# ATT&CK: T1027 (Obfuscated Files or Information)
+
+defaults:
+  for: [all]
+
+traits:
+  - id: ip-defanged-brackets
+    desc: Defanged IP address with brackets
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: raw
+      regex: '\d{1,3}\[\.\]\d{1,3}\[\.\]\d{1,3}\[\.\]\d{1,3}'
+
+  - id: ip-defanged-parentheses
+    desc: Defanged IP address with parentheses
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: raw
+      regex: '\d{1,3}\(\.\)\d{1,3}\(\.\)\d{1,3}\(\.\)\d{1,3}'

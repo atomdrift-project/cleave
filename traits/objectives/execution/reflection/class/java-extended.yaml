@@ -1,0 +1,63 @@
+# Java Dynamic Class Loading Detection - Extended
+# MBC: E1202 (Load Code), B0032 (Obfuscation)
+# ATT&CK: T1140 (Deobfuscate/Decode Files or Information), T1620 (Compile Code After Delivery)
+
+traits:
+  - id: java-classloader-defineclass
+    desc: Java dynamic class definition from bytecode
+    crit: suspicious
+    conf: 0.9
+    mbc: "E1202"
+    attack: "T1140"
+    for: [java, class]
+    if:
+      type: string
+      substr: defineClass
+
+  - id: java-classloader-loadclass
+    desc: Java dynamic class loading
+    crit: notable
+    conf: 0.8
+    mbc: "E1202"
+    attack: "T1140"
+    for: [java, class]
+    if:
+      type: string
+      substr: loadClass
+
+  - id: java-classloader-findclass
+    desc: Java class finding and loading
+    crit: notable
+    conf: 0.8
+    mbc: "E1202"
+    attack: "T1140"
+    for: [java, class]
+    if:
+      type: string
+      substr: findClass
+
+  - id: java-reflective-method
+    desc: Java reflective method invocation
+    crit: suspicious
+    conf: 0.85
+    mbc: "E1202"
+    attack: "T1140"
+    for: [java, class]
+    if:
+      type: string
+      substr: java.lang.reflect.Method
+
+composite_rules:
+  - id: java-dynamic-code-loading-extended
+    desc: Java dynamic code loading pattern extended
+    crit: suspicious
+    conf: 0.92
+    mbc: "E1202"
+    attack: "T1140"
+    for: [java, class]
+    all:
+      - id: java-classloader-defineclass
+    any:
+      - id: java-classloader-loadclass
+      - id: java-classloader-findclass
+      - id: java-reflective-method

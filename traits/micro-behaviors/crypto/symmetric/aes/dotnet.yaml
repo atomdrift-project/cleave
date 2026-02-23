@@ -1,0 +1,58 @@
+defaults:
+  for:
+  - all
+traits:
+- id: dotnet-rijndael
+  desc: Uses RijndaelManaged/AES in .NET
+  crit: notable
+  conf: 0.9
+  if:
+    type: string
+    substr: RijndaelManaged
+- id: dotnet-aes-managed
+  desc: Uses AesManaged in .NET
+  crit: notable
+  conf: 0.9
+  if:
+    type: string
+    substr: AesManaged
+- id: dotnet-aes-csp
+  desc: Uses AesCryptoServiceProvider in .NET
+  crit: notable
+  conf: 0.9
+  if:
+    type: string
+    substr: AesCryptoServiceProvider
+- id: dotnet-crypto-namespace
+  desc: Uses .NET crypto AES/Rijndael namespace
+  crit: notable
+  conf: 0.9
+  if:
+    type: string
+    regex: System\.Security\.Cryptography\.(Aes|Rijndael)
+- id: dotnet-create-decryptor
+  desc: Uses CreateDecryptor in .NET
+  crit: notable
+  conf: 0.9
+  if:
+    type: string
+    substr: CreateDecryptor
+- id: dotnet-icryptotransform
+  desc: Uses ICryptoTransform in .NET
+  crit: notable
+  conf: 0.9
+  if:
+    type: string
+    substr: ICryptoTransform
+composite_rules:
+- id: dotnet-rijndael-any
+  desc: Uses RijndaelManaged/AES in .NET
+  crit: notable
+  conf: 0.9
+  any:
+  - id: dotnet-rijndael
+  - id: dotnet-aes-managed
+  - id: dotnet-aes-csp
+  - id: dotnet-crypto-namespace
+  - id: dotnet-create-decryptor
+  - id: dotnet-icryptotransform

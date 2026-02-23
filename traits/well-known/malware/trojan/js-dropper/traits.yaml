@@ -1,0 +1,20 @@
+composite_rules:
+  - id: js-substitution-dropper
+    desc: Javascript dropper using a substitution map.
+    crit: hostile
+    conf: 0.95
+    for: [javascript]
+    all:
+      - id: objectives/anti-static/obfuscation/source/syntax::js-substitution-map-deobfuscation
+      - id: objectives/execution/interpreter/eval/dynamic::eval-call-js
+
+  - id: js-comma-dropper
+    desc: Javascript dropper using useless comma operator obfuscation.
+    crit: hostile
+    conf: 0.95
+    for: [javascript]
+    all:
+      - id: objectives/anti-static/obfuscation/source/syntax::js-comma-sequence-obfuscation-v2
+      - id: objectives/execution/interpreter/eval/dynamic::eval-call-js
+      - id: objectives/anti-static/obfuscation/string_reconstruction::js-string-dict-map
+      - id: objectives/anti-static/obfuscation/source/syntax::js-split-string-property

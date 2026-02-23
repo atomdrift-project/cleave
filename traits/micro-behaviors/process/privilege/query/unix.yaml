@@ -1,0 +1,37 @@
+# Process Privilege Query Functions
+# Basic POSIX functions for querying process user/group IDs
+# These are extremely common functions with no malicious inference
+
+defaults:
+  for: [elf, macho, so, dylib, c]
+  crit: baseline
+  platforms: [unix, linux, macos]
+
+traits:
+  - id: getgid
+    desc: Get group ID
+    conf: 0.5
+    if:
+      type: symbol
+      exact: "getgid"
+
+  - id: getegid
+    desc: Get effective group ID
+    conf: 0.5
+    if:
+      type: symbol
+      exact: "getegid"
+
+  - id: geteuid
+    desc: Get effective user ID
+    conf: 0.5
+    if:
+      type: symbol
+      exact: "geteuid"
+
+  - id: getuid
+    desc: Get user ID
+    conf: 0.5
+    if:
+      type: symbol
+      exact: "getuid"

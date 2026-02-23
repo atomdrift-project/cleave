@@ -1,0 +1,267 @@
+# Repository and Homepage URLs - Suspicious Patterns
+# GuardDog-inspired: Detects deceptive or suspicious repository and homepage URLs
+# ATT&CK: T1195.002 (Compromise Software Supply Chain)
+
+defaults:
+  crit: notable
+  conf: 0.75
+  attack: "T1195.002"
+
+traits:
+  # === npm package.json - Repository URLs ===
+
+  # Fake GitHub domains (phishing/deception)
+  - id: npm-repo-fake-github-a
+    desc: npm repository uses fake GitHub domain
+    crit: suspicious
+    conf: 0.90
+    for: [package.json]
+    if:
+      type: kv
+      path: "repository.url"
+      regex: "github\\.(online|site|website)\\b"
+
+  - id: npm-repo-fake-github-b
+    desc: npm repository uses fake GitHub domain
+    crit: suspicious
+    conf: 0.90
+    for: [package.json]
+    if:
+      type: kv
+      path: "repository.url"
+      regex: "github\\.(app|space|store|xyz)\\b"
+
+  # HTTP instead of HTTPS for repository
+  - id: npm-repo-http-not-https
+    desc: npm repository uses insecure HTTP URL
+    crit: notable
+    conf: 0.70
+    for: [package.json]
+    if:
+      type: kv
+      path: "repository.url"
+      regex: "^http://"
+    not:
+      - substr: "http://localhost"
+
+  # IP address instead of domain
+  - id: npm-repo-ip-address
+    desc: npm repository URL contains IP address
+    crit: suspicious
+    conf: 0.90
+    for: [package.json]
+    if:
+      type: kv
+      path: "repository.url"
+      regex: "https?://[0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3}"
+
+  # Suspicious TLDs
+  - id: npm-repo-suspicious-tld-a
+    desc: npm repository uses suspicious TLD
+    crit: suspicious
+    conf: 0.85
+    for: [package.json]
+    if:
+      type: kv
+      path: "repository.url"
+      regex: "\\.(xyz|tk|ml)$"
+
+  - id: npm-repo-suspicious-tld-b
+    desc: npm repository uses suspicious TLD
+    crit: suspicious
+    conf: 0.85
+    for: [package.json]
+    if:
+      type: kv
+      path: "repository.url"
+      regex: "\\.(ga|cf|gq)$"
+
+  # Localhost repository
+  - id: npm-repo-localhost
+    desc: npm repository points to localhost
+    crit: notable
+    conf: 0.80
+    for: [package.json]
+    if:
+      type: kv
+      path: "repository.url"
+      substr: "localhost"
+
+  # GitHub URL but not a repository (missing user/repo)
+  - id: npm-repo-github-no-repo
+    desc: npm repository is just github.com
+    crit: notable
+    conf: 0.75
+    for: [package.json]
+    if:
+      type: kv
+      path: "repository.url"
+      exact: "https://github.com"
+
+  # === npm package.json - Homepage URLs ===
+
+  - id: npm-homepage-fake-github-a
+    desc: npm homepage uses fake GitHub domain
+    crit: suspicious
+    conf: 0.90
+    for: [package.json]
+    if:
+      type: kv
+      path: "homepage"
+      regex: "github\\.(online|site|website)\\b"
+
+  - id: npm-homepage-fake-github-b
+    desc: npm homepage uses fake GitHub domain
+    crit: suspicious
+    conf: 0.90
+    for: [package.json]
+    if:
+      type: kv
+      path: "homepage"
+      regex: "github\\.(app|space|store|xyz)\\b"
+
+  - id: npm-homepage-ip-address
+    desc: npm homepage URL contains IP address
+    crit: suspicious
+    conf: 0.90
+    for: [package.json]
+    if:
+      type: kv
+      path: "homepage"
+      regex: "https?://[0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3}"
+
+  - id: npm-homepage-suspicious-tld-a
+    desc: npm homepage uses suspicious TLD
+    crit: suspicious
+    conf: 0.85
+    for: [package.json]
+    if:
+      type: kv
+      path: "homepage"
+      regex: "\\.(xyz|tk|ml)$"
+
+  - id: npm-homepage-suspicious-tld-b
+    desc: npm homepage uses suspicious TLD
+    crit: suspicious
+    conf: 0.85
+    for: [package.json]
+    if:
+      type: kv
+      path: "homepage"
+      regex: "\\.(ga|cf|gq)$"
+
+  - id: npm-homepage-localhost
+    desc: npm homepage points to localhost
+    crit: notable
+    conf: 0.80
+    for: [package.json]
+    if:
+      type: kv
+      path: "homepage"
+      substr: "localhost"
+
+  # === PyPI - Repository URLs ===
+
+  - id: pypi-repo-fake-github
+    desc: PyPI repository uses fake GitHub domain
+    crit: suspicious
+    conf: 0.90
+    for: [python]
+    if:
+      type: string
+      regex: "url\\s*=\\s*['\"]https?://[^'\"@]{0,100}github\\.(online|site|website|app)\\b"
+
+  # === RubyGems - Homepage URLs ===
+
+  - id: gem-homepage-fake-github
+    desc: RubyGem homepage uses fake GitHub domain
+    crit: suspicious
+    conf: 0.90
+    for: [ruby]
+    if:
+      type: string
+      regex: "\\.homepage\\s*=\\s*['\"]https?://[^'\"@]{0,100}github\\.(online|site|website|app)\\b"
+
+composite_rules:
+  # === npm Helpers ===
+  - id: npm-repo-fake-github
+    desc: npm repository uses fake GitHub domain
+    any:
+      - id: npm-repo-fake-github-a
+      - id: npm-repo-fake-github-b
+
+  - id: npm-repo-suspicious-tld
+    desc: npm repository uses suspicious TLD
+    any:
+      - id: npm-repo-suspicious-tld-a
+      - id: npm-repo-suspicious-tld-b
+
+  - id: npm-homepage-fake-github
+    desc: npm homepage uses fake GitHub domain
+    any:
+      - id: npm-homepage-fake-github-a
+      - id: npm-homepage-fake-github-b
+
+  - id: npm-homepage-suspicious-tld
+    desc: npm homepage uses suspicious TLD
+    any:
+      - id: npm-homepage-suspicious-tld-a
+      - id: npm-homepage-suspicious-tld-b
+
+  - id: npm-any-suspicious-repository
+    desc: npm package has suspicious repository URL
+    for: [package.json]
+    any:
+      - id: npm-repo-fake-github
+      - id: npm-repo-http-not-https
+      - id: npm-repo-ip-address
+      - id: npm-repo-suspicious-tld
+      - id: npm-repo-localhost
+      - id: npm-repo-github-no-repo
+
+  - id: npm-any-suspicious-homepage
+    desc: npm package has suspicious homepage URL
+    for: [package.json]
+    any:
+      - id: npm-homepage-fake-github
+      - id: npm-homepage-ip-address
+      - id: npm-homepage-suspicious-tld
+      - id: npm-homepage-localhost
+      - id: objectives/command-and-control/infrastructure/pastebin/
+      - id: objectives/exfiltration/channel/callback/
+      - id: objectives/exfiltration/channel/oob/shortener/
+      - id: objectives/discovery/network/ip-tracker/
+
+  - id: npm-any-suspicious-url
+    desc: Any suspicious npm repository or homepage URL
+    for: [package.json]
+    any:
+      - id: npm-any-suspicious-repository
+      - id: npm-any-suspicious-homepage
+
+  # === High-Risk: Suspicious URL + Install Hooks ===
+  - id: npm-suspicious-urls-with-hooks
+    desc: Suspicious repository/homepage with install hooks
+    crit: hostile
+    conf: 0.96
+    attack: "T1195.002"
+    for: [package.json]
+    all:
+      - id: objectives/lateral-movement/supply-chain/npm/metadata::install-hooks
+      - id: npm-any-suspicious-url
+
+  # === High-Risk: Suspicious URL + Quality Issues ===
+  - id: npm-suspicious-urls-low-quality
+    desc: Suspicious URLs with low quality metadata
+    crit: hostile
+    conf: 0.93
+    attack: "T1195.002"
+    for: [package.json]
+    all:
+      - id: npm-any-suspicious-url
+    any:
+      - id: metadata/quality/package-info::npm-empty-description-any
+      - id: metadata/quality/author::npm-generic-author-name
+      - id: metadata/quality/versioning::release-zero
+      - id: metadata/quality/author::npm-free-email-provider
+    needs: 2

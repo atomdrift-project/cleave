@@ -1,0 +1,849 @@
+defaults:
+  for:
+    - all
+
+traits:
+  - id: libcurl-ref
+    desc: "libcurl library reference"
+    crit: baseline
+    conf: 0.3
+    if:
+      type: string
+      substr: libcurl
+  - id: gnu-coreutils-ref
+    desc: "GNU coreutils reference"
+    crit: baseline
+    conf: 0.3
+    if:
+      type: string
+      substr: GNU coreutils
+  - id: glibc-ref
+    desc: "glibc reference"
+    crit: baseline
+    conf: 0.3
+    if:
+      type: string
+      substr: glibc
+  - id: libcxx-ref
+    desc: "LLVM libc++ stdlib"
+    crit: baseline
+    conf: 0.9
+    if:
+      type: string
+      regex: 'libc\+\+\.so|libc\+\+abi|_LIBCPP_VERSION|__libcpp_'
+  - id: libstdcxx-ref
+    desc: "GNU libstdc++ stdlib"
+    crit: baseline
+    conf: 0.9
+    if:
+      type: string
+      regex: 'libstdc\+\+\.so|__gnu_cxx|__cxxabiv1'
+  - id: system-debug-lib
+    desc: "System debug library"
+    crit: baseline
+    conf: 0.5
+    if:
+      type: string
+      regex: 'lib.{1,20}_debug\.so'
+  - id: lzma-ref
+    desc: "lzma compression reference"
+    crit: baseline
+    conf: 0.3
+    if:
+      type: string
+      regex: '(?i)\blzma\b'
+  - id: xz-ref
+    desc: "xz compression reference"
+    crit: baseline
+    conf: 0.3
+    if:
+      type: string
+      regex: '(?i)\bxz\b'
+  - id: zlib-ref
+    desc: "zlib compression reference"
+    crit: baseline
+    conf: 0.3
+    if:
+      type: string
+      regex: '(?i)\bzlib\b'
+  - id: dri-driver-ref-a
+    desc: "DRI graphics driver path reference"
+    crit: baseline
+    conf: 0.6
+    for:
+      - elf
+      - so
+    if:
+      type: string
+      regex: "/usr/(lib|X11R6/lib)/(dri|modules/dri)/"
+  - id: dri-driver-ref-b
+    desc: "DRI graphics driver marker reference"
+    crit: baseline
+    conf: 0.6
+    for:
+      - elf
+      - so
+    if:
+      type: string
+      regex: '_dri\.so|drirc|DRI_PRIME'
+  - id: x11-dga-marker-a
+    desc: "X11 DGA marker cluster A"
+    crit: baseline
+    conf: 0.9
+    for:
+      - elf
+      - so
+    if:
+      type: string
+      regex: "(?i)(XF86DGA|XDGAOpenFramebuffer|XDGACloseFramebuffer)"
+  - id: x11-dga-marker-b
+    desc: "X11 DGA marker cluster B"
+    crit: baseline
+    conf: 0.9
+    for:
+      - elf
+      - so
+    if:
+      type: string
+      regex: "(?i)(libXxf86dga|XFree86-DGA)"
+  - id: vdpau-ref
+    desc: "VDPAU video acceleration library"
+    crit: baseline
+    conf: 0.9
+    for:
+      - elf
+      - so
+    if:
+      type: string
+      regex: "(?i)(vdpau|VdpDevice|VdpVideoSurface|libvdpau)"
+  - id: drm-driver-ref-a
+    desc: "DRM/KMS graphics marker cluster A"
+    crit: baseline
+    conf: 0.8
+    for:
+      - elf
+      - so
+    if:
+      type: string
+      regex: "(?i)(libdrm|drmOpen|drmModeGetResources|DRM_IOCTL)"
+  - id: drm-driver-ref-b
+    desc: "DRM/KMS graphics marker cluster B"
+    crit: baseline
+    conf: 0.8
+    for:
+      - elf
+      - so
+    if:
+      type: string
+      regex: "(?i)(drm_mode_|/dev/dri/)"
+  - id: shell-keyword-marker
+    desc: "Shell interpreter keyword marker"
+    crit: baseline
+    conf: 0.9
+    for:
+      - elf
+      - macho
+    if:
+      type: string
+      substr: "is a shell keyword"
+  - id: shell-builtin-marker
+    desc: "Shell interpreter builtin marker"
+    crit: baseline
+    conf: 0.9
+    for:
+      - elf
+      - macho
+    if:
+      type: string
+      substr: "shell builtin"
+  - id: debugger-ptrace-marker-a
+    desc: "Debugger ptrace usage marker A"
+    crit: baseline
+    conf: 0.7
+    for:
+      - elf
+      - macho
+    if:
+      type: string
+      regex: "PTRACE_(ATTACH|DETACH|CONT|PEEKDATA)"
+  - id: debugger-ptrace-marker-b
+    desc: "Debugger ptrace usage marker B"
+    crit: baseline
+    conf: 0.7
+    for:
+      - elf
+      - macho
+    if:
+      type: string
+      regex: "PTRACE_(POKEDATA|SINGLESTEP|GETREGS|SETREGS)"
+  - id: llvm-project-ref-a
+    desc: "LLVM/Clang project family reference"
+    crit: baseline
+    conf: 0.8
+    if:
+      type: string
+      regex: '(?i)\b(libllvm|libclang|llvm-[0-9]{1,2}|clang-[0-9]{1,2})\b'
+  - id: llvm-project-ref-b
+    desc: "Compiler/project context token"
+    crit: baseline
+    conf: 0.8
+    if:
+      type: string
+      regex: '(?i)\b(llvm project|clang version|llvm version|intermediate representation)\b'
+  - id: gcc-project-ref
+    desc: "GCC project reference"
+    crit: baseline
+    conf: 0.8
+    if:
+      type: string
+      regex: '(?i)\bgcc\s+(version|compiler)|\bgnuc\b'
+  - id: cmake-build-ref
+    desc: "CMake build tool reference"
+    crit: baseline
+    conf: 0.7
+    for:
+      - c
+      - cpp
+      - shell
+      - elf
+      - macho
+      - pe
+    if:
+      type: string
+      word: cmake
+      case_insensitive: true
+  - id: x11-sm-ref
+    desc: "X11 Session Management library"
+    crit: baseline
+    conf: 0.6
+    if:
+      type: string
+      regex: "(?i)(libSM|SmcConn|SmcOpenConnection|SmcCloseConnection)"
+  - id: x11-auth-protocol
+    desc: "X11 MIT-MAGIC-COOKIE authentication"
+    crit: baseline
+    conf: 0.5
+    if:
+      type: string
+      substr: "MIT-MAGIC-COOKIE-1"
+  - id: collectd-plugin-marker
+    desc: "Collectd plugin marker"
+    crit: baseline
+    conf: 0.9
+    for:
+      - elf
+      - so
+    if:
+      type: symbol
+      regex: "^(plugin_register_|plugin_log|module_register)"
+  - id: libc-version-string
+    desc: "libc version string pattern"
+    crit: baseline
+    conf: 0.8
+    if:
+      type: string
+      regex: '(?i)libc\.so\.[0-9]|glibc|bionic|uclibc'
+  - id: libc-internal-functions-a
+    desc: "libc internal symbols cluster A"
+    crit: baseline
+    conf: 0.7
+    if:
+      type: symbol
+      regex: "^(__ctype_|__tzname\\b|__progname\\b)"
+  - id: libc-characteristic-symbols
+    desc: "Characteristic system library exports"
+    crit: baseline
+    conf: 0.5
+    if:
+      type: symbol
+      exact: __libc_start_main
+  - id: libc-characteristic-gnu-version
+    desc: "Characteristic system library export gnu_get_libc_version"
+    crit: baseline
+    conf: 0.5
+    if:
+      type: symbol
+      exact: gnu_get_libc_version
+  - id: libc-characteristic-errno
+    desc: "Characteristic system library export __errno_location"
+    crit: baseline
+    conf: 0.5
+    if:
+      type: symbol
+      exact: __errno_location
+  - id: libc-characteristic-atan2-finite
+    desc: "Characteristic system library export __atan2_finite"
+    crit: baseline
+    conf: 0.5
+    if:
+      type: symbol
+      exact: __atan2_finite
+  - id: libc-characteristic-feenableexcept
+    desc: "Characteristic system library export feenableexcept"
+    crit: baseline
+    conf: 0.5
+    if:
+      type: symbol
+      exact: feenableexcept
+  - id: libc-characteristic-log-finite
+    desc: "Characteristic system library export __log_finite"
+    crit: baseline
+    conf: 0.5
+    if:
+      type: symbol
+      exact: __log_finite
+  - id: libc-characteristic-exp2f
+    desc: "Characteristic system library export exp2f"
+    crit: baseline
+    conf: 0.5
+    if:
+      type: symbol
+      exact: exp2f
+  - id: libc-characteristic-cxa-atexit
+    desc: "Characteristic system library export __cxa_atexit"
+    crit: baseline
+    conf: 0.5
+    if:
+      type: symbol
+      exact: __cxa_atexit
+  - id: libc-characteristic-cxa-finalize
+    desc: "Characteristic system library export __cxa_finalize"
+    crit: baseline
+    conf: 0.5
+    if:
+      type: symbol
+      exact: __cxa_finalize
+  - id: libc-characteristic-assert-fail
+    desc: "Characteristic system library export __assert_fail"
+    crit: baseline
+    conf: 0.5
+    if:
+      type: symbol
+      exact: __assert_fail
+  - id: x11-ref
+    desc: "X11 windowing reference"
+    crit: baseline
+    conf: 0.5
+    if:
+      type: string
+      regex: "(?i)libX11"
+  - id: x11-libxpm-ref
+    desc: "X11 libXpm reference"
+    crit: baseline
+    conf: 0.5
+    if:
+      type: string
+      regex: "(?i)libXpm"
+  - id: x11-libxcb-ref
+    desc: "X11 libxcb reference"
+    crit: baseline
+    conf: 0.5
+    if:
+      type: string
+      regex: "(?i)libxcb"
+  - id: x11-libice-ref
+    desc: "X11 libICE reference"
+    crit: baseline
+    conf: 0.5
+    if:
+      type: string
+      regex: "(?i)libICE"
+  - id: x11-libsm-ref
+    desc: "X11 libSM reference"
+    crit: baseline
+    conf: 0.5
+    if:
+      type: string
+      regex: "(?i)libSM"
+  - id: x11-xorg-ref
+    desc: "X11 xorg reference"
+    crit: baseline
+    conf: 0.5
+    if:
+      type: string
+      regex: "(?i)xorg"
+  - id: x11-xenocara-ref
+    desc: "X11 xenocara reference"
+    crit: baseline
+    conf: 0.5
+    if:
+      type: string
+      regex: "(?i)xenocara"
+  - id: x11-open-display-ref
+    desc: "X11 XOpenDisplay reference"
+    crit: baseline
+    conf: 0.5
+    if:
+      type: string
+      regex: "(?i)XOpenDisplay"
+  - id: x11-create-window-ref
+    desc: "X11 XCreateWindow reference"
+    crit: baseline
+    conf: 0.5
+    if:
+      type: string
+      regex: "(?i)XCreateWindow"
+  - id: x11-xpm-create-ref
+    desc: "X11 XpmCreate reference"
+    crit: baseline
+    conf: 0.5
+    if:
+      type: string
+      regex: "(?i)XpmCreate"
+  - id: x11-xpm-read-ref
+    desc: "X11 XpmRead reference"
+    crit: baseline
+    conf: 0.5
+    if:
+      type: string
+      regex: "(?i)XpmRead"
+  - id: x11-smc-conn-ref
+    desc: "X11 SmcConn reference"
+    crit: baseline
+    conf: 0.5
+    if:
+      type: string
+      regex: "(?i)SmcConn"
+  - id: vaapi-ref
+    desc: "VA-API video acceleration library"
+    crit: baseline
+    conf: 0.9
+    for:
+      - elf
+      - so
+    if:
+      type: string
+      regex: '(?i)libva\b'
+  - id: vaapi-get-display
+    desc: "VA-API vaGetDisplay marker"
+    crit: baseline
+    conf: 0.9
+    for:
+      - elf
+      - so
+    if:
+      type: string
+      regex: "(?i)vaGetDisplay"
+  - id: vaapi-status
+    desc: "VA-API status marker"
+    crit: baseline
+    conf: 0.9
+    for:
+      - elf
+      - so
+    if:
+      type: string
+      regex: "(?i)VA_STATUS"
+  - id: vaapi-name
+    desc: "VA-API name marker"
+    crit: baseline
+    conf: 0.9
+    for:
+      - elf
+      - so
+    if:
+      type: string
+      regex: "(?i)VA-API"
+  - id: vaapi-init
+    desc: "VA-API initialization marker"
+    crit: baseline
+    conf: 0.9
+    for:
+      - elf
+      - so
+    if:
+      type: string
+      regex: "(?i)vaInitialize"
+  - id: vaapi-terminate
+    desc: "VA-API termination marker"
+    crit: baseline
+    conf: 0.9
+    for:
+      - elf
+      - so
+    if:
+      type: string
+      regex: "(?i)vaTerminate"
+  - id: vaapi-driver
+    desc: "VA-API driver marker"
+    crit: baseline
+    conf: 0.9
+    for:
+      - elf
+      - so
+    if:
+      type: string
+      regex: "(?i)LIBVA_DRIVER"
+  - id: gdb-debugger-ref
+    desc: "GDB debugger reference"
+    crit: baseline
+    conf: 0.9
+    for:
+      - elf
+      - macho
+    if:
+      type: string
+      regex: '(?i)\bGNU gdb\b'
+  - id: gdb-command-ref
+    desc: "GDB command-line usage marker"
+    crit: baseline
+    conf: 0.9
+    for:
+      - elf
+      - macho
+    if:
+      type: string
+      regex: '(?i)\bgdb\s+(version|debugging|remote|server)'
+  - id: gdbserver-ref
+    desc: "gdbserver marker"
+    crit: baseline
+    conf: 0.9
+    for:
+      - elf
+      - macho
+    if:
+      type: string
+      regex: '(?i)\bgdbserver\b'
+  - id: gdb-multiarch-ref
+    desc: "gdb-multiarch marker"
+    crit: baseline
+    conf: 0.9
+    for:
+      - elf
+      - macho
+    if:
+      type: string
+      regex: '(?i)\bgdb-multiarch\b'
+  - id: lldb-debugger-ref-a
+    desc: "LLDB debugger reference cluster A"
+    crit: baseline
+    conf: 0.9
+    for:
+      - elf
+      - macho
+    if:
+      type: string
+      regex: '(?i)\blldb\b.{0,30}(debugger|breakpoint)'
+  - id: lldb-debugger-ref-b
+    desc: "LLDB debugger reference cluster B"
+    crit: baseline
+    conf: 0.9
+    for:
+      - elf
+      - macho
+    if:
+      type: string
+      regex: '(?i)\blldb\b.{0,30}(frame|thread)'
+  - id: lldb-server-ref
+    desc: "LLDB server marker"
+    crit: baseline
+    conf: 0.9
+    for:
+      - elf
+      - macho
+    if:
+      type: string
+      regex: "(?i)lldb-server"
+  - id: lldb-argdumper-ref
+    desc: "LLDB argdumper marker"
+    crit: baseline
+    conf: 0.9
+    for:
+      - elf
+      - macho
+    if:
+      type: string
+      regex: "(?i)lldb-argdumper"
+  - id: lldb-sbdebugger-ref
+    desc: "LLDB SBDebugger API marker"
+    crit: baseline
+    conf: 0.9
+    for:
+      - elf
+      - macho
+    if:
+      type: string
+      regex: "(?i)SBDebugger"
+  - id: lldb-sbtarget-ref
+    desc: "LLDB SBTarget API marker"
+    crit: baseline
+    conf: 0.9
+    for:
+      - elf
+      - macho
+    if:
+      type: string
+      regex: "(?i)SBTarget"
+  - id: lldb-sbprocess-ref
+    desc: "LLDB SBProcess API marker"
+    crit: baseline
+    conf: 0.9
+    for:
+      - elf
+      - macho
+    if:
+      type: string
+      regex: "(?i)SBProcess"
+  - id: lldb-sbbreakpoint-ref
+    desc: "LLDB SBBreakpoint API marker"
+    crit: baseline
+    conf: 0.9
+    for:
+      - elf
+      - macho
+    if:
+      type: string
+      regex: "(?i)SBBreakpoint"
+  - id: lldb-sbframe-ref
+    desc: "LLDB SBFrame API marker"
+    crit: baseline
+    conf: 0.9
+    for:
+      - elf
+      - macho
+    if:
+      type: string
+      regex: "(?i)SBFrame"
+  - id: lldb-module-plugin-ref
+    desc: "LLDB module/plugin marker"
+    crit: baseline
+    conf: 0.9
+    for:
+      - elf
+      - macho
+    if:
+      type: string
+      regex: '(?i)\bLLDB\b.{0,20}(module|plugin)'
+  - id: x11-ice-conn
+    desc: "X11 ICE connection marker"
+    crit: baseline
+    conf: 0.6
+    if:
+      type: string
+      regex: "(?i)IceConn"
+  - id: x11-ice-process-message
+    desc: "X11 ICE process message marker"
+    crit: baseline
+    conf: 0.6
+    if:
+      type: string
+      regex: "(?i)IceProcessMessage"
+  - id: x11-ice-ioerror-handler
+    desc: "X11 ICE IO error handler marker"
+    crit: baseline
+    conf: 0.6
+    if:
+      type: string
+      regex: "(?i)IceSetIOErrorHandler"
+  - id: x11-ice-protocol-setup
+    desc: "X11 ICE protocol setup marker"
+    crit: baseline
+    conf: 0.6
+    if:
+      type: string
+      regex: "(?i)IceRegisterForProtocolSetup"
+
+  - id: environ-io-symbols
+    desc: "__environ and _IO_ symbols"
+    if:
+      type: symbol
+      regex: "^(__environ|_IO_)"
+
+composite_rules:
+  - id: libc-internal-functions-b
+    desc: "libc internal symbols cluster B"
+    crit: baseline
+    conf: 0.7
+    any:
+      - id: libc-characteristic-cxa-atexit
+      - id: libc-characteristic-cxa-finalize
+      - id: environ-io-symbols
+  - id: cxx-abi-symbols
+    desc: "C++ ABI symbols"
+    crit: baseline
+    conf: 0.8
+    any:
+      - id: micro-behaviors/dylib/library/abi-graphics::cxx-abi-symbols-a
+      - id: micro-behaviors/dylib/library/abi-graphics::cxx-abi-symbols-b
+  - id: mesa-ref
+    desc: "Mesa 3D graphics reference"
+    crit: baseline
+    conf: 0.5
+    any:
+      - id: micro-behaviors/dylib/library/abi-graphics::mesa-ref-a
+      - id: micro-behaviors/dylib/library/abi-graphics::mesa-ref-b
+      - id: micro-behaviors/dylib/library/abi-graphics::mesa-ref-c
+  - id: opengl-ref
+    desc: "OpenGL graphics reference"
+    crit: baseline
+    conf: 0.5
+    any:
+      - id: micro-behaviors/dylib/library/abi-graphics::opengl-ref-a
+      - id: micro-behaviors/dylib/library/abi-graphics::opengl-ref-b
+  - id: dri-driver-ref
+    desc: "DRI graphics driver reference"
+    crit: baseline
+    conf: 0.6
+    for:
+      - elf
+      - so
+    any:
+      - id: dri-driver-ref-a
+      - id: dri-driver-ref-b
+  - id: x11-dga-marker
+    desc: "X11 DGA library marker"
+    crit: baseline
+    conf: 0.9
+    for:
+      - elf
+      - so
+    any:
+      - id: x11-dga-marker-a
+      - id: x11-dga-marker-b
+  - id: drm-driver-ref
+    desc: "DRM/KMS graphics driver reference"
+    crit: baseline
+    conf: 0.8
+    for:
+      - elf
+      - so
+    any:
+      - id: drm-driver-ref-a
+      - id: drm-driver-ref-b
+  - id: debugger-ptrace-marker
+    desc: "Debugger ptrace usage marker"
+    crit: baseline
+    conf: 0.7
+    for:
+      - elf
+      - macho
+    any:
+      - id: debugger-ptrace-marker-a
+      - id: debugger-ptrace-marker-b
+  - id: llvm-project-ref
+    desc: "LLVM project reference"
+    crit: baseline
+    conf: 0.8
+    all:
+      - id: llvm-project-ref-a
+      - id: llvm-project-ref-b
+  - id: libc-internal-functions
+    desc: "libc internal functions (malloc, etc)"
+    crit: baseline
+    conf: 0.7
+    any:
+      - id: libc-internal-functions-a
+      - id: libc-internal-functions-b
+  - id: x11-ipc-lib-marker
+    desc: "X11 IPC library markers (ICE, SM)"
+    crit: baseline
+    conf: 0.6
+    any:
+      - id: x11-libice-ref
+      - id: x11-sm-ref
+      - id: x11-auth-protocol
+  - id: network-lib-marker
+    desc: "Known network library markers"
+    crit: baseline
+    conf: 0.5
+    any:
+      - id: micro-behaviors/dylib/library/ssl::libssl-ref
+      - id: micro-behaviors/dylib/library/ssl::libcrypto-ref
+      - id: libcurl-ref
+      - id: micro-behaviors/communications/ssh/client::libssh
+      - id: x11-ipc-lib-marker
+  - id: video-lib-marker
+    desc: "Video acceleration library markers (VA-API, VDPAU)"
+    crit: baseline
+    conf: 0.9
+    any:
+      - id: vaapi-ref
+      - id: vdpau-ref
+      - id: drm-driver-ref
+  - id: graphics-lib-marker
+    desc: "Graphics/OpenGL library markers"
+    crit: baseline
+    conf: 0.6
+    any:
+      - id: mesa-ref
+      - id: opengl-ref
+      - id: x11-ref
+      - id: dri-driver-ref
+      - id: video-lib-marker
+  - id: cxx-stdlib-marker
+    desc: "C++ standard library markers (libc++, libstdc++)"
+    crit: baseline
+    conf: 0.9
+    any:
+      - id: libcxx-ref
+      - id: libstdcxx-ref
+      - id: cxx-abi-symbols
+  - id: system-lib-marker
+    desc: "Known system library markers"
+    crit: baseline
+    conf: 0.5
+    any:
+      - id: gnu-coreutils-ref
+      - id: glibc-ref
+      - id: libc-characteristic-symbols
+      - id: libc-version-string
+      - id: libc-internal-functions
+      - id: system-debug-lib
+      - id: graphics-lib-marker
+      - id: cxx-stdlib-marker
+      - id: collectd-plugin-marker
+      - id: micro-behaviors/os/pam/auth::libpam-string
+  - id: compression-lib
+    desc: "Compression library markers"
+    crit: baseline
+    conf: 0.4
+    any:
+      - id: lzma-ref
+      - id: xz-ref
+      - id: zlib-ref
+  - id: shell-interpreter
+    desc: "Shell interpreter binary"
+    crit: baseline
+    conf: 0.9
+    for:
+      - elf
+      - macho
+    any:
+      - id: shell-keyword-marker
+      - id: shell-builtin-marker
+  - id: compiler-tool-marker
+    desc: "Compiler or build tool binary"
+    crit: baseline
+    conf: 0.8
+    any:
+      - id: llvm-project-ref
+      - id: metadata/lang/compiler::libllvm
+      - id: gcc-project-ref
+      - id: cmake-build-ref
+  - id: async-io-lib-marker
+    desc: "Async I/O library (libevent, libev, etc.)"
+    crit: baseline
+    conf: 0.9
+    all:
+      - id: micro-behaviors/communications/async
+  - id: lldb-debugger-ref
+    desc: "LLDB debugger reference"
+    crit: baseline
+    conf: 0.9
+    for:
+      - elf
+      - macho
+    any:
+      - id: lldb-debugger-ref-a
+      - id: lldb-debugger-ref-b
+  - id: debugger-tool-marker
+    desc: "Debugger tool (gdb, lldb, etc.)"
+    crit: baseline
+    conf: 0.9
+    for:
+      - elf
+      - macho
+    any:
+      - id: gdb-debugger-ref
+      - id: lldb-debugger-ref
+      - id: debugger-ptrace-marker

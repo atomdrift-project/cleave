@@ -1,0 +1,73 @@
+defaults:
+  crit: notable
+  conf: 0.8
+  platforms:
+  - windows
+  for:
+  - javascript
+  attack: T1059.007
+traits:
+- id: activex-object-utf16
+  desc: ActiveXObject in UTF-16 script
+  if:
+    type: raw
+    regex: A\x00c\x00t\x00i\x00v\x00e\x00X\x00O\x00b\x00j\x00e\x00c\x00t
+- id: activex-filesystem-utf16
+  desc: FileSystemObject in UTF-16 script
+  if:
+    type: raw
+    regex: F\x00i\x00l\x00e\x00S\x00y\x00s\x00t\x00e\x00m\x00O\x00b\x00j\x00e\x00c\x00t
+- id: activex-wshell-utf16
+  desc: WScript.Shell in UTF-16 script
+  if:
+    type: raw
+    regex: W\x00S\x00c\x00r\x00i\x00p\x00t\x00\.\x00S\x00h\x00e\x00l\x00l
+- id: shell-execute-utf16
+  desc: ShellExecute method in UTF-16 script
+  if:
+    type: raw
+    regex: S\x00h\x00e\x00l\x00l\x00E\x00x\x00e\x00c\x00u\x00t\x00e
+  attack: T1106
+- id: wscript-scriptfullname-utf16
+  desc: WScript.ScriptFullName in UTF-16 script
+  crit: notable
+  if:
+    type: raw
+    regex: S\x00c\x00r\x00i\x00p\x00t\x00F\x00u\x00l\x00l\x00N\x00a\x00m\x00e
+- id: wscript-quit-utf16
+  desc: WScript.Quit in UTF-16 script
+  crit: notable
+  if:
+    type: raw
+    regex: W\x00S\x00c\x00r\x00i\x00p\x00t\x00\.\x00Q\x00u\x00i\x00t
+- id: copyfile-utf16
+  desc: copyFile method in UTF-16 script
+  if:
+    type: raw
+    regex: c\x00o\x00p\x00y\x00F\x00i\x00l\x00e
+- id: frombase64-utf16
+  desc: FromBase64String in UTF-16 script
+  crit: suspicious
+  if:
+    type: raw
+    regex: F\x00r\x00o\x00m\x00B\x00a\x00s\x00e\x006\x004\x00S\x00t\x00r\x00i\x00n\x00g
+  attack: T1140
+  mbc: C0026
+- id: activex-shell-app-utf16
+  desc: Shell.Application in UTF-16 script
+  if:
+    type: raw
+    substr: S\x00h\x00e\x00l\x00l\x00\.\x00A\x00p\x00p\x00l\x00i\x00c\x00a\x00t\x00i\x00o\x00n
+composite_rules:
+- id: utf16-wsh-com-objects
+  desc: UTF-16 WSH COM object usage
+  crit: suspicious
+  conf: 0.85
+  attack: T1059.007
+  mbc: E1243
+  needs: 2
+  any:
+  - id: activex-wshell-utf16
+  - id: activex-shell-app-utf16
+  - id: activex-filesystem-utf16
+  - id: activex-object-utf16

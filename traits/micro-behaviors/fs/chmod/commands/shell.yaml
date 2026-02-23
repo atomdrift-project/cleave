@@ -1,0 +1,27 @@
+# File Permission Modification - Shell chmod commands
+# MBC: E1222 (File Permission Modification)
+# ATT&CK: T1222 (File and Directory Permissions Modification)
+
+defaults:
+  for: [all]
+  mbc: "E1222"
+  attack: "T1222"
+  crit: notable
+
+traits:
+  # Generic chmod command
+  - id: chmod-command
+    desc: chmod shell command
+    conf: 0.6
+    if:
+      type: string
+      regex: 'chmod\s+[\-\w]*\s*[0-7]{3,4}\s'
+
+  # chmod with recursive flag
+  - id: chmod-recursive
+    desc: chmod -R recursive permission change
+    conf: 0.7
+    crit: notable
+    if:
+      type: string
+      regex: 'chmod\s+\-[rR]'

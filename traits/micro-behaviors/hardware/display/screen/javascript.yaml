@@ -1,0 +1,36 @@
+# Display/Screen Capabilities - JavaScript
+# Capabilities related to display enumeration and screen capture
+
+traits:
+  - id: monitor-get-displays
+    desc: Enumerates display monitors (likely node-screenshots)
+    crit: notable
+    conf: 0.8
+    mbc: "B0002"
+    attack: "T1113"
+    for: [javascript]
+    if:
+      type: raw
+      regex: 'Monitor\.getAllDisplays'
+
+  - id: screenshot-capture-fn
+    desc: Function explicitly named to capture screenshots
+    crit: notable
+    conf: 0.6
+    mbc: "B0002"
+    attack: "T1113"
+    for: [javascript]
+    if:
+      type: raw
+      regex: 'captureScreenshots'
+
+  - id: import-node-screenshots
+    desc: Imports node-screenshots library
+    crit: notable
+    conf: 0.9
+    mbc: "B0002"
+    attack: "T1113"
+    for: [javascript]
+    if:
+      type: raw
+      regex: 'require\s*\(\s*["'']node-screenshots["'']\s*\)'

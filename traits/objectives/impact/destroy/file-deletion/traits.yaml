@@ -1,0 +1,161 @@
+traits:
+- id: destructive-gameplay-warning
+  desc: Warns that destructive gameplay will delete files
+  crit: suspicious
+  conf: 0.95
+  for:
+  - elf
+  - macho
+  - pe
+  - dll
+  - dylib
+  - so
+  attack: T1485
+  mbc: C0047
+  if:
+    type: string
+    regex: (killing|playing).{0,50}delete.{0,50}files
+    case_insensitive: true
+
+- id: deleteFile-function
+  desc: deleteFile function call
+  crit: suspicious
+  conf: 0.8
+  for:
+  - elf
+  - macho
+  - pe
+  - dll
+  - dylib
+  - so
+  attack: T1485
+  mbc: C0047
+  if:
+    type: symbol
+    regex: deleteFile
+
+- id: deleteSelf-function
+  desc: deleteSelf function call
+  crit: suspicious
+  conf: 0.85
+  for:
+  - elf
+  - macho
+  - pe
+  - dll
+  - dylib
+  - so
+  attack: T1485
+  mbc: C0047
+  if:
+    type: symbol
+    regex: deleteSelf
+
+- id: explicit-file-deletion-warning-delete
+  desc: Explicit warning of file/data deletion (delete)
+  crit: suspicious
+  conf: 0.95
+  for:
+  - elf
+  - macho
+  - pe
+  - dll
+  - dylib
+  - so
+  attack: T1485
+  mbc: C0047
+  if:
+    type: string
+    regex: delete.{0,80}(files|data|documents)
+    case_insensitive: true
+
+- id: explicit-file-deletion-warning-destroy
+  desc: Explicit warning of file/data deletion (destroy)
+  crit: suspicious
+  conf: 0.95
+  for:
+  - elf
+  - macho
+  - pe
+  - dll
+  - dylib
+  - so
+  attack: T1485
+  mbc: C0047
+  if:
+    type: string
+    regex: destroy.{0,80}(files|data|documents)
+    case_insensitive: true
+
+- id: explicit-file-deletion-warning-wipe
+  desc: Explicit warning of file/data deletion (wipe)
+  crit: suspicious
+  conf: 0.95
+  for:
+  - elf
+  - macho
+  - pe
+  - dll
+  - dylib
+  - so
+  attack: T1485
+  mbc: C0047
+  if:
+    type: string
+    regex: wipe.{0,80}(files|data|documents)
+    case_insensitive: true
+
+- id: explicit-file-deletion-warning-erase
+  desc: Explicit warning of file/data deletion (erase)
+  crit: suspicious
+  conf: 0.95
+  for:
+  - elf
+  - macho
+  - pe
+  - dll
+  - dylib
+  - so
+  attack: T1485
+  mbc: C0047
+  if:
+    type: string
+    regex: erase.{0,80}(files|data|documents)
+    case_insensitive: true
+
+composite_rules:
+- id: explicit-file-deletion-warning-all
+  desc: Explicit warning of file/data deletion
+  crit: suspicious
+  conf: 0.95
+  for:
+  - elf
+  - macho
+  - pe
+  - dll
+  - dylib
+  - so
+  attack: T1485
+  mbc: C0047
+  any:
+  - id: explicit-file-deletion-warning-delete
+  - id: explicit-file-deletion-warning-destroy
+  - id: explicit-file-deletion-warning-wipe
+  - id: explicit-file-deletion-warning-erase
+
+- id: intentional-file-destruction
+  desc: Intentional file destruction pattern
+  crit: hostile
+  conf: 0.9
+  for:
+  - elf
+  - macho
+  - pe
+  - dll
+  - dylib
+  - so
+  attack: T1485
+  mbc: C0047
+  all:
+  - id: explicit-file-deletion-warning-all
+  - id: deleteFile-function

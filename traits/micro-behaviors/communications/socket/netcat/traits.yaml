@@ -1,0 +1,20 @@
+# Netcat - Network Swiss Army Knife
+# Raw TCP/UDP connection tool
+
+defaults:
+  for: [all]
+  crit: notable
+  conf: 0.9
+
+traits:
+  - id: nc
+    desc: nc command invocation
+    if:
+      type: string
+      regex: '\bnc\s+'
+
+  - id: netcat
+    desc: netcat command
+    if:
+      type: string
+      word: "netcat"

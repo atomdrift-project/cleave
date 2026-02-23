@@ -1,0 +1,32 @@
+# HTTP Request Operations - Python requests library
+# MBC: C0002 (HTTP Communication)
+# ATT&CK: T1071.001
+
+defaults:
+  for: [python]
+
+traits:
+  - id: requests-get
+    desc: requests.get call (Python)
+    crit: baseline
+    conf: 0.7
+    if:
+      type: string
+      substr: "requests.get"
+
+  - id: requests-post
+    desc: requests.post call (Python)
+    crit: baseline
+    conf: 0.7
+    if:
+      type: string
+      substr: "requests.post"
+
+composite_rules:
+  - id: requests-python
+    desc: Python requests library usage
+    crit: notable
+    conf: 0.8
+    any:
+      - id: requests-get
+      - id: requests-post

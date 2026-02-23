@@ -1,0 +1,177 @@
+# Lateral Movement - SSH Attack Traits
+# ATT&CK: T1021.004 (Remote Services: SSH)
+# MBC: E1021
+
+defaults:
+  for: [all]
+
+traits:
+  # === Atomic: SSH Attack Terminology ===
+
+  # === Atomic: SSH Attack Terminology ===
+  - id: ssh-attack-suffix
+    desc: SSH attack function/variable (ssh_attack, ssh-attack,
+    crit: notable
+    conf: 0.8
+    attack: "T1021.004"
+    platforms: [all]
+    if:
+      type: string
+      regex: "[Ss][Ss][Hh][_\\-]?[Aa]ttack"
+
+  - id: attack-ssh-prefix
+    desc: Attack SSH function/variable (attack_ssh, attack-ssh,
+    crit: notable
+    conf: 0.8
+    attack: "T1021.004"
+    platforms: [all]
+    if:
+      type: string
+      regex: "[Aa]ttack[_\\-]?[Ss][Ss][Hh]"
+
+  - id: ssh-boom
+    desc: SSH boom function/variable reference
+    crit: notable
+    conf: 0.8
+    attack: "T1021.004"
+    platforms: [all]
+    if:
+      type: string
+      regex: "ssh[_\\-]?boom"
+
+  # === Atomic: SSH Configuration Abuse ===
+
+  - id: strict-host-disable
+    desc: StrictHostKeyChecking reference (bypass host verification)
+    crit: suspicious
+    conf: 0.75
+    attack: "T1021.004"
+    platforms: [linux, macos, unix]
+    if:
+      type: string
+      substr: "StrictHostKeyChecking"
+    downgrade:
+      any:
+        - type: basename
+          exact: "ssh"
+        - type: basename
+          exact: "scp"
+        - type: basename
+          exact: "sftp"
+        - type: basename
+          exact: "rsync"
+        - type: basename
+          regex: "wal_shipper"
+        - id: metadata/library::wal-shipper-header
+
+  - id: known-hosts-bypass
+    desc: UserKnownHostsFile reference (bypass known hosts)
+    crit: suspicious
+    conf: 0.75
+    attack: "T1021.004"
+    platforms: [linux, macos, unix]
+    if:
+      type: string
+      substr: "UserKnownHostsFile"
+
+  - id: connect-timeout
+    desc: ConnectTimeout reference (scripted SSH)
+    crit: notable
+    conf: 0.6
+    attack: "T1021.004"
+    platforms: [linux, macos, unix]
+    if:
+      type: string
+      substr: "ConnectTimeout"
+
+  # === Atomic: SSH Key Files ===
+  # NOTE: id_rsa, authorized_keys, known_hosts are defined in cred/ssh/key/
+  # Use cred/ssh/key directory reference in composite rules for those traits
+
+  - id: key-pem
+    desc: References .pem key file
+    crit: notable
+    conf: 0.6
+    attack: "T1552.004"
+    platforms: [all]
+    if:
+      type: string
+      exact: ".pem"
+
+  - id: key-identity-file
+    desc: IdentityFile SSH config option
+    crit: notable
+    conf: 0.6
+    attack: "T1552.004"
+    platforms: [linux, macos, unix]
+    if:
+      type: string
+      substr: "IdentityFile"
+
+  - id: ssh-config-parse
+    desc: Parses SSH config for hostnames
+    crit: suspicious
+    conf: 0.8
+    attack: "T1021.004"
+    platforms: [linux, macos, unix]
+    if:
+      type: string
+      regex: "grep.{0,30}HostName.{0,30}/\\.ssh/config"
+
+  # === Bash history SSH atomic indicators ===
+  - id: ssh-bash-history
+    desc: ssh with bash_history
+    crit: notable
+    conf: 0.7
+    attack: "T1021.004"
+    platforms: [linux, macos, unix]
+    if:
+      type: string
+      regex: "ssh.{2,64}bash_history"
+
+  - id: scp-bash-history
+    desc: scp with bash_history
+    crit: notable
+    conf: 0.7
+    attack: "T1021.004"
+    platforms: [linux, macos, unix]
+    if:
+      type: string
+      regex: "scp.{2,64}bash_history"
+
+  - id: getent-hosts
+    desc: Uses getent for host discovery
+    crit: suspicious
+    conf: 0.75
+    attack: "T1018"
+    platforms: [linux, unix]
+    if:
+      type: string
+      substr: "getent ahostsv4"
+
+  # === Atomic: Remote Payload Delivery ===
+
+  # Removed: remote-curl, remote-wget, remote-lwp (better covered by net/download/ traits)
+
+composite_rules:
+  # SSH attack terminology composite
+  - id: attack-ref
+    desc: SSH attack function/variable reference
+    crit: suspicious
+    conf: 0.9
+    attack: "T1021.004"
+    platforms: [all]
+    any:
+      - id: ssh-attack-suffix
+      - id: attack-ssh-prefix
+      - id: ssh-boom
+
+  - id: bash-history-ssh
+    desc: Extracts SSH targets from bash
+    crit: suspicious
+    conf: 0.85
+    attack: "T1021.004"
+    platforms: [linux, macos, unix]
+    any:
+      - id: ssh-bash-history
+      - id: scp-bash-history

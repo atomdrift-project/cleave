@@ -1,0 +1,82 @@
+# Socket Send Operations
+# MBC: C0001 (Socket Communication)
+# ATT&CK: T1071
+
+defaults:
+  for: [elf, macho, so, dylib, c]
+
+traits:
+  - id: send-symbol
+    desc: Uses send socket call
+    crit: baseline
+    conf: 0.66
+    mbc: "C0001"
+    attack: "T1071"
+    if:
+      type: symbol
+      exact: send
+
+  - id: sendmsg-symbol
+    desc: Uses sendmsg socket call
+    crit: baseline
+    conf: 0.66
+    mbc: "C0001"
+    attack: "T1071"
+    if:
+      type: symbol
+      exact: sendmsg
+
+  - id: sendto-symbol
+    desc: Uses sendto socket call
+    crit: baseline
+    conf: 0.66
+    mbc: "C0001"
+    attack: "T1071"
+    if:
+      type: symbol
+      exact: sendto
+
+  - id: sendmmsg-symbol
+    desc: Uses sendmmsg socket call
+    crit: baseline
+    conf: 0.66
+    mbc: "C0001"
+    attack: "T1071"
+    if:
+      type: symbol
+      exact: sendmmsg
+
+  - id: _send-symbol
+    desc: Uses _send socket call
+    crit: baseline
+    conf: 0.66
+    mbc: "C0001"
+    attack: "T1071"
+    if:
+      type: symbol
+      exact: _send
+
+  - id: sendfile-symbol
+    desc: Uses sendfile socket call
+    crit: baseline
+    conf: 0.66
+    mbc: "C0001"
+    attack: "T1071"
+    if:
+      type: symbol
+      exact: sendfile
+
+composite_rules:
+  - id: send
+    desc: Send a message to a socket
+    crit: baseline
+    conf: 0.66
+    mbc: "C0001"
+    attack: "T1071"
+    any:
+      - id: send-symbol
+      - id: sendmsg-symbol
+      - id: sendto-symbol
+      - id: sendmmsg-symbol
+      - id: _send-symbol
+      - id: sendfile-symbol

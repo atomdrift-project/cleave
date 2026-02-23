@@ -1,0 +1,162 @@
+# AppleScript Credential Phishing Detection
+# Detects fake password dialogs and credential harvesting
+# ATT&CK: T1056.002 (Input Capture: GUI Input Capture)
+
+defaults:
+  # osascript can be invoked from any language: python subprocess, ruby system(), etc.
+  for: [applescript, shell, python, ruby, perl, javascript, elf, macho]
+  platforms: [macos]
+  attack: "T1056.002"
+
+traits:
+  # ============================================
+  # Password Dialog Patterns
+  # ============================================
+  - id: display-dialog-password
+    desc: "Display dialog asking for password"
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: string
+      regex: "(?si)display dialog.{0,100}password"
+
+  - id: default-answer-password
+    desc: "Default answer field for password"
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: string
+      regex: "(?si)default answer.{0,100}password"
+
+  # ============================================
+  # Fake System Dialog
+  # ============================================
+  - id: icon-caution
+    desc: "Dialog with caution icon"
+    crit: notable
+    conf: 0.7
+    if:
+      type: string
+      regex: "with icon caution"
+
+  - id: icon-stop
+    desc: "Dialog with stop icon"
+    crit: notable
+    conf: 0.7
+    if:
+      type: string
+      regex: "with icon stop"
+
+  - id: title-system-preferences
+    desc: "Dialog title mimicking System Preferences"
+    crit: notable
+    conf: 0.8
+    if:
+      type: string
+      regex: 'with title "System Preferences"'
+
+  - id: enter-password-prompt
+    desc: "Prompts user to enter password"
+    crit: suspicious
+    conf: 0.85
+    # Only apply to applescript - other languages legitimately prompt for passwords on CLI
+    for: [applescript]
+    if:
+      type: string
+      regex: "(?i)enter.{0,15}password"
+    downgrade:
+      any:
+        - id: metadata/import/ruby::highline
+
+  # ============================================
+  # Keychain Password Prompts
+  # ============================================
+  - id: keychain-password
+    desc: "Asks for keychain password"
+    crit: suspicious
+    conf: 0.9
+    attack: "T1555.001"
+    # Restrict to AppleScript/shell where this pattern indicates phishing dialogs.
+    # Python/Ruby/JS legitimately manage keychains (e.g., requests SecureTransport).
+    for: [applescript, shell]
+    if:
+      type: string
+      regex: "(?i)keychain.{0,30}password"
+
+  - id: admin-password
+    desc: "Asks for admin password"
+    crit: suspicious
+    conf: 0.85
+    for: [applescript, shell]
+    if:
+      type: string
+      regex: "(?i)\\badmin\\b.{0,30}password"
+
+  # ============================================
+  # Hidden Input (Password Masking)
+  # ============================================
+  - id: hidden-answer
+    desc: "AppleScript hidden answer (password masking)"
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: string
+      regex: "with hidden answer"
+
+composite_rules:
+  # Password prompt patterns group
+  - id: password-prompt-pattern
+    desc: Password dialog prompt
+    crit: suspicious
+    conf: 0.8
+    # Included macho because binaries using osascript strings for phishing should be caught.
+    for: [applescript, shell, python, ruby, perl, javascript, macho, elf]
+    any:
+      - id: display-dialog-password
+      - id: default-answer-password
+      - id: enter-password-prompt
+    downgrade:
+      any:
+        - id: metadata/import/ruby::highline
+
+  # Fake dialog UI elements group
+  - id: fake-dialog-ui
+    desc: Fake dialog UI element
+    crit: notable
+    conf: 0.7
+    any:
+      - id: hidden-answer
+      - id: icon-caution
+      - id: icon-stop
+      - id: title-system-preferences
+
+  # System credential prompts group
+  - id: system-cred-prompt
+    desc: System credential prompt
+    crit: suspicious
+    conf: 0.85
+    any:
+      - id: keychain-password
+      - id: admin-password
+
+  # ============================================
+  # Password Phishing Dialog
+  # ============================================
+  - id: password-phishing
+    desc: AppleScript password phishing dialog
+    crit: suspicious
+    conf: 0.95
+    all:
+      - id: password-prompt-pattern
+      - id: fake-dialog-ui
+
+  # ============================================
+  # Fake System Password Prompt
+  # ============================================
+  - id: fake-system-prompt
+    desc: Fake system password prompt (credential
+    crit: suspicious
+    conf: 0.9
+    all:
+      - id: system-cred-prompt
+      - id: fake-dialog-ui

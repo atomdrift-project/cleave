@@ -1,0 +1,32 @@
+# Memory-Mapped Files
+# MBC: C0046 (Create File)
+# ATT&CK: T1106
+
+defaults:
+  for: [elf, macho, so, dylib, c]
+
+traits:
+  - id: mmap64-fn
+    desc: Map files or devices into
+    crit: baseline
+    conf: 0.66
+    if:
+      type: symbol
+      exact: "mmap64"
+
+  - id: munmap
+    desc: Unmap files from memory
+    crit: baseline
+    conf: 0.66
+    if:
+      type: symbol
+      regex: munmap
+
+composite_rules:
+  - id: mmap
+    desc: Map files or devices into
+    crit: baseline
+    conf: 0.66
+    any:
+      - id: micro-behaviors/mem/allocate/executable::mmap-symbol
+      - id: mmap64-fn

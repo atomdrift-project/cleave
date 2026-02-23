@@ -1,0 +1,24 @@
+# Process Hiding CLI Traits
+# Detects CLI messages related to hiding processes
+# ATT&CK: T1564 (Hide Artifacts)
+
+defaults:
+  for: [all]
+
+traits:
+  - id: hide-pid-msg
+    desc: '"Hiding PID" message'
+    crit: notable
+    conf: 0.8
+    attack: "T1564"
+    if:
+      type: string
+      regex: "Hiding PID"
+
+  - id: unhide-pid-msg
+    desc: '"Unhiding PID" message'
+    crit: notable
+    conf: 0.8
+    if:
+      type: string
+      regex: "Unhiding PID"

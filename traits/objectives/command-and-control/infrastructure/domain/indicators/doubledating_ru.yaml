@@ -1,0 +1,15 @@
+# Detects the specific C2 domain "profile.doubledating.ru"
+
+defaults:
+  for: [all]
+  crit: suspicious
+  conf: 0.9
+  mbc: "C0011"
+  attack: "T1071.001"
+
+traits:
+  - id: doubledating-ru
+    desc: "Malicious C2 domain profile.doubledating.ru"
+    if:
+      type: string
+      regex: "(?i)profile\\.doubledating\\.ru"

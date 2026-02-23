@@ -1,0 +1,460 @@
+# PyPI Supply-Chain Attack Patterns
+# Install-time system info exfiltration
+# ATT&CK: T1195.002 (Compromise Software Software Supply Chain)
+
+defaults:
+  for: [python]
+  attack: "T1195.002"
+
+traits:
+  # === Decoy/Placeholder Patterns ===
+  # Malicious packages often have minimal __init__.py files that just
+  # print a confirmation message. Legitimate packages have actual code.
+
+  - id: print-installed-string
+    desc: Prints "installed" confirmation
+    crit: suspicious
+    conf: 0.85
+    if:
+      type: raw
+      # Match: print("installed"), print('installed') - exact confirmation output
+      # Uses content type because AST string extraction only yields the literal,
+      # not the surrounding print() call that makes it suspicious
+      regex: "\\bprint\\s*\\(\\s*[\"'][^\"']{0,50}\\binstalled\\b[^\"']{0,20}[\"']\\s*\\)"
+    unless:
+      # Legitimate contexts: error messages about missing packages
+      - type: raw
+        substr: "not installed"
+      - type: raw
+        substr: "is installed"
+      - type: raw
+        substr: "pip install"
+
+  - id: placeholder-ellipsis
+    desc: Placeholder ellipsis string
+    crit: notable
+    conf: 0.75
+    if:
+      type: string
+      # Just dots as placeholder output ("...", "....", etc)
+      regex: "^\\.{2,}$"
+
+  - id: tiny-python-file
+    desc: Tiny Python file
+    crit: notable
+    conf: 0.8
+    size_max: 100
+    unless:
+      - type: raw
+        regex: "^(from\\s+\\S+\\s+import|import\\s+\\S+)"
+
+  - id: small-no-imports
+    desc: Small Python file with no imports
+    crit: notable
+    conf: 0.75
+    size_max: 500
+    unless:
+      - type: raw
+        substr: "import "
+
+  - id: empty-file
+    desc: Empty file (0 bytes)
+    crit: notable
+    conf: 1.0
+    for: [all]
+    size_max: 0
+
+  - id: webhook-package-name
+    desc: Package name contains webhook
+    crit: notable
+    conf: 0.9
+    if:
+      type: string
+      exact: "webhook"
+      case_insensitive: true
+
+  - id: init-py-file
+    desc: __init__.py file
+    crit: notable
+    conf: 1.0
+    for: [all]
+    if:
+      type: basename
+      exact: "__init__.py"
+
+  - id: setup-py-file
+    desc: setup.py file
+    crit: notable
+    conf: 1.0
+    for: [all]
+    if:
+      type: basename
+      regex: "(^|_)setup\\.py$"
+
+  - id: setuptools-setup-call
+    desc: setuptools setup() call
+    crit: notable
+    conf: 0.8
+    if:
+      type: symbol
+      exact: "setup"
+
+  # === Probe/Test Print Patterns ===
+  # Malicious typosquat/dependency confusion packages often include
+  # print("test ...") at module level to confirm code execution on install.
+
+  - id: probe-print-test
+    desc: Probe print with test prefix string
+    crit: notable
+    conf: 0.75
+    if:
+      type: string
+      regex: "^test\\s"
+
+  # === Suspicious URL Patterns ===
+  # Exfil endpoints commonly seen in supply-chain attacks
+
+  - id: suspicious-php-endpoint
+    desc: PHP endpoint URL with beacon parameters
+    crit: suspicious
+    conf: 0.85
+    if:
+      type: string
+      substr: ".php?live="
+    unless:
+
+  - id: version-check-url
+    desc: Suspicious version check URL
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: string
+      # Pattern: Version.php, version.php, check.php etc
+      regex: "https?://[^/]{1,120}/[Vv]ersion\\.php|https?://[^/]{1,120}/[Cc]heck\\.php"
+
+  # === Deferred Execution via atexit ===
+  # atexit.register() schedules a callback to run after install completes.
+  # Supply-chain packages use this to defer malicious execution past the
+  # install command's lifetime, evading install-time sandboxes.
+  - id: atexit-register-callback
+    desc: atexit.register deferred execution callback
+    crit: notable
+    conf: 0.85
+    size_max: 10000
+    if:
+      type: raw
+      regex: "atexit\\.register\\s*\\("
+
+  # === Base64 Encoding for Exfil ===
+  # base64-encode-string removed - use micro-behaviors/data/encode/base64::b64encode-call instead
+
+  # === Data Concatenation Patterns ===
+  # Malware typically concatenates victim info with delimiters
+
+  - id: triple-hash-delimiter
+    desc: Triple hash data delimiter
+    crit: notable
+    conf: 0.85
+    # Small files using this as a delimiter are more suspicious
+    size_max: 5000
+    if:
+      type: string
+      exact: "###"
+
+  - id: data-concat-pattern
+    desc: String concatenation with delimiter
+    crit: notable
+    conf: 0.75
+    if:
+      type: raw
+      # Pattern: var = val1 + "###" + val2 + "###" + ...
+      regex: "=\\s*\\w+\\s*\\+\\s*['\"]###['\"]\\s*\\+\\s*\\w+"
+
+  # === HTTP POST with Data ===
+  - id: urlopen-with-data
+    desc: urllib.urlopen with data parameter
+    crit: suspicious
+    conf: 0.85
+    if:
+      type: raw
+      # Require explicit data keyword to avoid matching timeout-only calls
+      regex: "urlopen\\s*\\([^)]{0,120}\\bdata\\s*="
+
+  - id: vid-parameter
+    desc: vid= POST parameter
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: string
+      exact: "vid="
+
+composite_rules:
+  # === Empty __init__.py in webhook/exfil-targeting package ===
+  # When an empty __init__.py appears in a package with "webhook" in the name,
+  # it's highly suspicious - suggests supply-chain attack targeting Discord users
+  # or webhook-based exfiltration infrastructure.
+  # Complexity: all(+3) = 3 (suspicious, not quite hostile due to archive limitations)
+  - id: empty-init-webhook-package
+    desc: Empty __init__.py in webhook-focused package
+    crit: suspicious
+    conf: 0.9
+    attack: "T1195.002"
+    all:
+      - id: empty-file
+      - id: webhook-package-name
+
+  # === Tiny .py file (type-agnostic) ===
+  # Same as tiny-python-file but matches by .py basename instead of file type,
+  # so it works even when a 0-byte .py file is typed as "unknown".
+  # Complexity: for(+1) + all(+2) = 3 (NOTABLE)
+  - id: tiny-py-by-name
+    desc: Tiny .py file (by extension)
+    crit: notable
+    conf: 0.8
+    for: [all]
+    attack: "T1195.002"
+    all:
+      - id: metadata/format/extension::py
+      - id: empty-file
+
+  # === Empty __init__.py stub module ===
+  # An __init__.py that provides no module functionality (empty file).
+  # In supply-chain attacks, __init__.py exists only to make a valid package
+  # while all malicious logic runs in setup.py at install time.
+  # Complexity: for(+1) + all(+3) = 4 (NOTABLE)
+  - id: init-py-no-code
+    desc: Empty __init__.py stub module
+    crit: notable
+    conf: 0.8
+    for: [all]
+    attack: "T1195.002"
+    all:
+      - id: init-py-file
+      - id: metadata/format/extension::py
+      - id: empty-file
+
+  # === Empty __init__.py (shell package) ===
+  # Published PyPI packages with empty __init__.py provide no runtime
+  # functionality - but this is also the standard way to declare a Python
+  # package, so alone it is only notable. Other composites (decoy-init-py,
+  # empty-init-webhook-package) escalate when combined with real indicators.
+  # Complexity: all(+2) + for(+1) = 3 (NOTABLE)
+  - id: empty-init-py
+    desc: Empty __init__.py in published package
+    crit: notable
+    conf: 0.85
+    attack: "T1195.002"
+    for: [all]
+    all:
+      - id: init-py-file
+      - id: empty-file
+
+  # === Decoy/Placeholder __init__.py ===
+  # Malicious PyPI packages often have minimal __init__.py files that just
+  # confirm installation. This is a supply-chain indicator.
+  # Complexity: for(+1) + all(+3) = 4 (meets threshold)
+  - id: decoy-init-py
+    desc: Decoy __init__.py with install confirmation
+    crit: suspicious
+    conf: 0.85
+    attack: "T1195.002"
+    all:
+      - id: init-py-file
+      - id: tiny-python-file
+      - id: print-installed-string
+
+  # === Stub Python file with Placeholder ===
+  # Malicious typosquat packages often have minimal Python files with
+  # placeholder content like print("...") - provides no real functionality.
+  # Note: basename matching doesn't work for archive members, so we can't check
+  # for __init__.py specifically. This matches any tiny Python file with placeholder.
+  # Complexity: for(+1) + all(+2) = 3 (SUSPICIOUS maintained)
+  - id: stub-placeholder-file
+    desc: Stub Python file with placeholder content
+    crit: suspicious
+    conf: 0.85
+    attack: "T1195.002"
+    all:
+      - id: tiny-python-file
+      - id: placeholder-ellipsis
+
+  # === Stub Module with No Imports ===
+  # Name-squatting/typosquat packages contain small Python modules with
+  # no imports - just trivial placeholder code. Real modules import things.
+  # Complexity: for(+1) + all(+2) + size_max(+1) = 4 (SUSPICIOUS)
+  - id: stub-squatter-module
+    desc: Stub Python module with no imports
+    crit: suspicious
+    conf: 0.85
+    attack: "T1195.002"
+    size_max: 500
+    all:
+      - id: small-no-imports
+      - id: micro-behaviors/data/control-flow/analysis::for-loop-ast
+
+  # Data collection with delimiter (fingerprint payload)
+  - id: fingerprint-payload-concat
+    desc: Fingerprint data concatenation
+    crit: suspicious
+    conf: 0.9
+    all:
+      - id: triple-hash-delimiter
+    any:
+      - id: objectives/discovery/system/
+
+  # === HOSTILE: PyPI Install-Time Exfiltration ===
+  # Classic pattern: setup.py collects system info, base64 encodes, POSTs to external server
+  # Complexity: for(+1) + all(+4) = 5 (meets HOSTILE threshold)
+
+  - id: pypi-install-exfil
+    desc: PyPI install-time system exfiltration
+    crit: hostile
+    conf: 0.95
+    mbc: "E1041"
+    attack: "T1020"
+    all:
+      - id: setup-py-file
+      - id: objectives/discovery/host/system/hardware-fingerprint::python-sysinfo-multi
+      - id: micro-behaviors/data/encode/base64::b64encode-call
+      - id: micro-behaviors/communications/http/request::request-python
+
+  # === HOSTILE: PyPI Install-Time Atexit Exfiltration ===
+  # setup.py registers atexit callback that collects system info and
+  # base64-encodes it for HTTP exfiltration. Deferred execution evades
+  # install-time sandboxes.
+  # Complexity: for(+1) + all(+4) = 5 (meets HOSTILE threshold)
+  - id: pypi-atexit-exfil
+    desc: PyPI atexit deferred system exfiltration
+    crit: hostile
+    conf: 0.95
+    mbc: "E1041"
+    attack: "T1020"
+    all:
+      - id: setup-py-file
+      - id: atexit-register-callback
+      - id: micro-behaviors/data/encode/base64::b64encode-call
+      - id: micro-behaviors/communications/http/request::request-python
+
+  # Lighter variant without setup.py check
+  # Complexity: for(+1) + all(+3) = 4 (meets HOSTILE threshold)
+  - id: python-sysinfo-exfil
+    desc: Python system info exfiltration
+    crit: hostile
+    conf: 0.92
+    mbc: "E1041"
+    attack: "T1020"
+    all:
+      - id: objectives/discovery/host/system/hardware-fingerprint::python-sysinfo-multi
+      - id: micro-behaviors/data/encode/base64::b64encode-call
+      - id: micro-behaviors/communications/http/request::request-python
+
+  # === HOSTILE: Python Environment Variable Exfiltration ===
+  # Pattern: enumerate environ + base64 encode + HTTP send
+  # Classic supply-chain attack: steal all env vars (AWS keys, tokens, secrets)
+  # Complexity: for(+1) + all(+3) = 4 (meets HOSTILE threshold)
+  - id: python-envvar-exfil
+    desc: Python environment variable exfiltration
+    crit: hostile
+    conf: 0.95
+    mbc: "E1041"
+    attack: "T1020"
+    all:
+      - id: micro-behaviors/os/env/vars::py-environ-enumerate
+      - id: micro-behaviors/data/encode/base64::b64encode-call
+      - id: micro-behaviors/communications/http/request::request-python
+
+  # Fingerprint with VID parameter (high confidence)
+  # Complexity: for(+1) + all(+3) = 4 (meets SUSPICIOUS threshold; HOSTILE would need >=4)
+  - id: pypi-vid-exfil
+    desc: PyPI VID exfiltration pattern
+    crit: suspicious
+    conf: 0.98
+    mbc: "E1041"
+    attack: "T1020"
+    all:
+      - id: vid-parameter
+      - id: micro-behaviors/data/encode/base64::b64encode-call
+      - id: micro-behaviors/communications/http/request::request-python
+
+  # === HOSTILE: PyPI OOB Callback with User Info ===
+  # Supply-chain package that POSTs user information to an OOB testing domain
+  # (interactsh, oastify, oast.fun, etc). Classic dependency confusion callback.
+  # Precision: for(+0.3) + all(+3 traits, each with their own precision) >= 4 (HOSTILE)
+  - id: pypi-oob-user-exfil
+    desc: PyPI OOB callback exfiltrating user info
+    crit: hostile
+    conf: 0.95
+    mbc: "E1041"
+    attack: "T1195.002"
+    all:
+      - id: objectives/exfiltration/channel/oob::oob-domains
+      - id: micro-behaviors/communications/http/lib/requests::requests-post
+      - id: objectives/discovery/host/user::username-env
+
+  # === HOSTILE: PyPI Install-Time Beacon ===
+  # setup.py sends system identifier (COMPUTERNAME, hostname) to a PHP endpoint
+  # via HTTP GET with query parameters. Simpler exfil pattern than the base64
+  # variants — just concatenates sysinfo into the URL.
+  # Complexity: for(+1) + all(+4) = 5 (meets HOSTILE threshold)
+  - id: pypi-install-beacon
+    desc: PyPI install-time system beacon
+    crit: hostile
+    conf: 0.95
+    mbc: "E1041"
+    attack: "T1020"
+    all:
+      - id: robust-setup-py
+      - id: suspicious-php-endpoint
+      - id: micro-behaviors/communications/http/request::request-python
+      - id: objectives/lateral-movement/supply-chain/pypi/install-patterns::windows-computername-env
+
+  # === SUSPICIOUS: PyPI Probe Package ===
+  # Typosquat/dependency confusion probe: setup.py imports a network library
+  # (requests) and prints a test/probe message to confirm code execution.
+  # No real package functionality — just a phone-home probe.
+  # Complexity: for(+1) + all(+3) = 4 (SUSPICIOUS)
+  - id: pypi-probe-package
+    desc: PyPI typosquat probe package
+    crit: suspicious
+    conf: 0.90
+    attack: "T1195.002"
+    all:
+      - id: setup-py-file
+      - id: micro-behaviors/communications/http/request::request-python
+      - id: probe-print-test
+
+  # === HOSTILE: PyPI Install-Time URL-Encoded Env Exfiltration ===
+  # Pattern: enumerate environ + urlencode + HTTP send
+  # Classic supply-chain attack: steal all env vars (AWS keys, tokens, secrets) via urlencoded POST.
+  # Complexity: for(+1) + all(+3) = 4 (meets HOSTILE threshold)
+  - id: python-envvar-urlencode-exfil
+    desc: Python environment variable urlencoded exfiltration
+    crit: hostile
+    conf: 0.95
+    mbc: "E1041"
+    attack: "T1020"
+    all:
+      - id: micro-behaviors/os/env/access::os-environ-symbol
+      - id: micro-behaviors/communications/http/lib/urllib::urllib-urlencode
+      - id: micro-behaviors/communications/http/request::request-python
+
+  # === HOSTILE: PyPI Install-Time System & Env Exfiltration ===
+  # Pattern: setup.py + sysinfo + admin-check + env + urlencode + urlopen
+  # Matches sophisticated info-stealers like 'setuptool'.
+  # Complexity: for(+1) + all(+5) = 6 (meets HOSTILE threshold)
+  - id: pypi-system-env-exfil
+    desc: PyPI install-time system and environment exfiltration SPECIAL_UNIQUE_STRING
+    crit: hostile
+    conf: 0.98
+    mbc: "E1041"
+    attack: "T1020"
+    all:
+      - id: setup-py-file
+      - id: objectives/discovery/host/system/hardware-fingerprint::python-sysinfo-multi
+      - id: micro-behaviors/os/env/access::os-environ-symbol
+      - id: micro-behaviors/communications/http/lib/urllib::urllib-urlencode
+      - id: micro-behaviors/communications/http/request::request-python
+    any:
+      - id: micro-behaviors/os/admin/check::os-getuid-admin
+      - id: micro-behaviors/os/admin/check::ctypes-is-admin
+      - id: objectives/discovery/network/scan::geo-lookup-service

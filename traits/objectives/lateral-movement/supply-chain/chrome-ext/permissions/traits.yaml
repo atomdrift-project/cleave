@@ -1,0 +1,105 @@
+# Chrome Extension Sensitive Permissions
+# APIs that access sensitive user data
+
+traits:
+  # === Suspicious Chrome API Patterns ===
+  - id: setUninstallURL
+    desc: Extension uninstall URL callback
+    crit: notable
+    conf: 0.95
+    for: [javascript]
+    if:
+      type: string
+      substr: "setUninstallURL"
+
+  - id: chrome-management
+    desc: Extension management API
+    crit: suspicious
+    conf: 0.9
+    for: [javascript]
+    if:
+      type: string
+      substr: "chrome.management"
+
+  - id: chrome-debugger
+    desc: Browser debugger API
+    crit: suspicious
+    conf: 0.95
+    for: [javascript]
+    if:
+      type: string
+      substr: "chrome.debugger"
+
+  - id: chrome-downloads
+    desc: chrome.downloads API
+    crit: notable
+    conf: 0.85
+    for: [javascript]
+    if:
+      type: string
+      substr: "chrome.downloads"
+
+  - id: chrome-cookies
+    desc: chrome.cookies API
+    crit: notable
+    conf: 0.9
+    for: [javascript]
+    if:
+      type: string
+      substr: "chrome.cookies"
+
+  - id: chrome-history
+    desc: chrome.history API
+    crit: notable
+    conf: 0.9
+    for: [javascript]
+    if:
+      type: string
+      substr: "chrome.history"
+
+  - id: chrome-bookmarks
+    desc: chrome.bookmarks API
+    crit: notable
+    conf: 0.85
+    for: [javascript]
+    if:
+      type: string
+      substr: "chrome.bookmarks"
+
+  # === Suspicious URL Patterns ===
+  - id: external-url-on-install
+    desc: External URL on install
+    crit: notable
+    conf: 0.8
+    for: [javascript]
+    if:
+      type: raw
+      regex: "onInstalled[\\s\\S]{0,50}(https?://[^\"'\\s]{1,120})"
+
+composite_rules:
+  # Uninstall tracking - adware pattern
+  - id: ext-uninstall-tracking
+    desc: Uninstall tracking callback
+    crit: suspicious
+    conf: 0.9
+    mbc: "B0030"
+    attack: "T1071.001"
+    for: [javascript]
+    all:
+      - id: setUninstallURL
+      - id: objectives/lateral-movement/supply-chain/chrome-ext/markers::chrome-runtime
+
+  # Sensitive data access in extension
+  - id: sensitive-data-access
+    desc: Sensitive browser data access
+    crit: suspicious
+    conf: 0.85
+    for: [javascript]
+    all:
+      - id: objectives/lateral-movement/supply-chain/chrome-ext/markers::chrome-extension-context
+    needs: 2
+    any:
+      - id: chrome-cookies
+      - id: chrome-history
+      - id: chrome-bookmarks
+      - id: chrome-downloads

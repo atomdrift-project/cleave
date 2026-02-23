@@ -1,0 +1,34 @@
+# Network Interface Configuration
+# Tools for listing and configuring network interfaces
+
+defaults:
+  for: [all]
+  crit: notable
+  conf: 0.9
+
+traits:
+  - id: ifconfig
+    desc: ifconfig command
+    if:
+      type: string
+      substr: ifconfig
+
+  - id: ip-addr
+    desc: ip addr command
+    if:
+      type: string
+      substr: "ip addr"
+
+  - id: ip-a
+    desc: ip a command
+    for: [elf, shell, python, ruby, perl, scripts]
+    platforms: [linux, unix]
+    if:
+      type: string
+      regex: \bip\s+a\b
+
+  - id: ip-link
+    desc: ip link command
+    if:
+      type: string
+      substr: "ip link"

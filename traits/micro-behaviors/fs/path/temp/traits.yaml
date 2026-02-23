@@ -1,0 +1,41 @@
+# Temporary Path Patterns
+# Detects common temporary file and directory paths
+
+defaults:
+  for: [all]
+  crit: notable
+  conf: 0.7
+
+traits:
+  - id: unix-temp
+    desc: Unix /tmp/ path reference
+    if:
+      type: string
+      substr: "/tmp/"
+
+  - id: unix-var-temp
+    desc: Unix /var/tmp/ path reference
+    if:
+      type: string
+      substr: "/var/tmp/"
+
+  - id: win-temp-env
+    desc: Windows %TEMP% or %TMP% environment reference
+    if:
+      type: string
+      regex: '(?i)%TMP%'
+
+  - id: win-temp-path
+    desc: Windows Temp directory path
+    if:
+      type: string
+      regex: '(?i)\\Temp'
+
+composite_rules:
+  - id: any-temp-path
+    desc: Any temporary directory path reference
+    any:
+      - id: unix-temp
+      - id: unix-var-temp
+      - id: win-temp-env
+      - id: win-temp-path

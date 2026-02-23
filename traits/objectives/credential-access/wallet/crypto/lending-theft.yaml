@@ -1,0 +1,270 @@
+# Trojanized Lending Module Cryptocurrency Theft
+# Detects malicious lending framework modules (Compound, AAVE, dydx) that steal from wallets
+# This detects the Lending.framework trojan and similar variants that:
+# 1. Inject into wallet apps via dependency injection
+# 2. Intercept lending protocol transactions
+# 3. Steal user funds from lending positions
+# ATT&CK: T1649 (Steal Crypto Wallet), T1555 (Credentials from Web Browsers)
+# MBC: B0020 (Credential Access), B0021 (Exfiltration)
+
+defaults:
+  crit: suspicious
+  attack: "T1649"
+  mbc: "B0020"
+  for: [macho, dylib]
+
+traits:
+  # === Code Injection Detection ===
+  - id: lending-injection-marker
+    desc: Lending framework dependency injection
+    crit: suspicious
+    conf: 0.95
+    if:
+      type: symbol
+      regex: "(CBInjection|InjectionKeys|getLendRepository)"
+
+  - id: objc-runtime-hook
+    desc: Objective-C runtime hooking capability
+    crit: suspicious
+    conf: 0.90
+    if:
+      type: string
+      substr: "_objc_setHook_getClass"
+
+  # === Lending Protocol Detection ===
+  - id: aave-protocol-targeting
+    desc: AAVE lending protocol targeting
+    crit: suspicious
+    conf: 0.95
+    if:
+      type: encoded
+      encoding: base64
+      substr: "aave"
+      case_insensitive: true
+
+  - id: compound-protocol-targeting
+    desc: Compound lending protocol targeting
+    crit: suspicious
+    conf: 0.95
+    if:
+      type: encoded
+      encoding: base64
+      substr: "compound"
+      case_insensitive: true
+
+  - id: dydx-protocol-targeting
+    desc: dydx lending protocol targeting
+    crit: suspicious
+    conf: 0.95
+    if:
+      type: encoded
+      encoding: base64
+      substr: "dydx"
+      case_insensitive: true
+
+  # === Transaction Hijacking Detection ===
+  - id: lending-rpc-endpoint-supply
+    desc: Lending RPC supply endpoint
+    crit: suspicious
+    conf: 0.98
+    if:
+      type: string
+      exact: "/rpc/v2/lend/supplyEth"
+
+  - id: lending-rpc-endpoint-withdraw
+    desc: Lending RPC withdrawal endpoint
+    crit: suspicious
+    conf: 0.98
+    if:
+      type: string
+      exact: "/rpc/v2/lend/withdrawEth"
+
+  - id: lending-rpc-generic-endpoint
+    desc: Lending RPC protocol endpoint
+    crit: suspicious
+    conf: 0.90
+    if:
+      type: string
+      regex: "/rpc/v2/lend/(supply|withdraw|getProvider|getSupportedTokens)"
+
+  # === Remote Command & Control Detection ===
+  - id: remote-lending-service
+    desc: Remote lending service class
+    crit: suspicious
+    conf: 0.95
+    if:
+      type: symbol
+      regex: "(RemoteLendService|_TtC7Lending17RemoteLendService)"
+
+  - id: lending-provider-fetch
+    desc: Dynamic lending provider configuration
+    crit: suspicious
+    conf: 0.90
+    if:
+      type: string
+      exact: "/rpc/v2/lend/getProvider"
+
+  # === Credential Harvesting Detection ===
+  - id: wallet-address-monitor
+    desc: Wallet address monitoring
+    crit: suspicious
+    conf: 0.95
+    if:
+      type: string
+      substr: "primaryETHAddressObservable"
+
+  - id: app-unlock-monitor
+    desc: Application unlock status monitoring
+    crit: suspicious
+    conf: 0.95
+    if:
+      type: string
+      substr: "isAppUnlockedObservable"
+
+  - id: account-id-capture
+    desc: Consumer account ID capture
+    crit: suspicious
+    conf: 0.90
+    if:
+      type: string
+      substr: "consumerAccountId"
+
+  # === Transaction Generation Detection ===
+  - id: unsigned-tx-generation
+    desc: Unsigned transaction parameter generation
+    crit: suspicious
+    conf: 0.90
+    if:
+      type: symbol
+      regex: "(LendRepositoryC|supply|withdraw|UnsignedTx)"
+
+  - id: interest-harvest
+    desc: Interest accrual monitoring
+    crit: suspicious
+    conf: 0.85
+    if:
+      type: string
+      exact: "/rpc/v2/lend/getLifetimeInterestEarned"
+
+  # === Data Exfiltration Detection ===
+  - id: lending-dto-classes
+    desc: Lending data transfer object classes
+    crit: suspicious
+    conf: 0.85
+    if:
+      type: symbol
+      regex: "(LendTokenListDTO|LendProviderResultDTO|TxParamListResultDTO)"
+
+  - id: reactive-data-streaming
+    desc: RxSwift reactive data streaming
+    crit: notable
+    conf: 0.8
+    if:
+      type: symbol
+      regex: "RxSwift.{0,50}Subject|BehaviorSubject"
+
+  # === Obfuscation Detection ===
+  - id: base64-field-encoding
+    desc: Base64 encoded field names
+    crit: suspicious
+    conf: 0.85
+    if:
+      type: symbol
+      regex: "_\\$s.{0,100}[A-Z][a-zA-Z]*"
+      count_min: 10
+
+  - id: swift-name-mangling
+    desc: Swift name mangling in dylib
+    crit: notable
+    conf: 0.8
+    if:
+      type: symbol
+      regex: "_\\$s[0-9]+[A-Za-z]+"
+      count_min: 20
+
+composite_rules:
+  # === Lending Framework Code Injection ===
+  # Complexity: all(2) + for(1) = 3
+  - id: lending-injection-framework
+    desc: Lending framework code injection
+    crit: suspicious
+    conf: 0.95
+    attack: "T1649"
+    mbc: "B0020"
+    for: [macho, dylib]
+    all:
+      - id: lending-injection-marker
+      - id: objc-runtime-hook
+
+  # === Lending Protocol Targeting ===
+  # Complexity: all(3) + for(1) = 4 >= 4 HOSTILE
+  - id: lending-protocol-theft
+    desc: Lending protocol fund theft
+    crit: hostile
+    conf: 0.96
+    attack: "T1649"
+    mbc: "B0020"
+    for: [macho, dylib]
+    all:
+      - id: aave-protocol-targeting
+      - id: lending-rpc-generic-endpoint
+      - id: unsigned-tx-generation
+
+  # === Transaction Hijacking Pattern ===
+  # Complexity: all(3) + for(1) = 4 >= 4 HOSTILE
+  - id: transaction-hijacking-pattern
+    desc: Lending transaction hijacking
+    crit: hostile
+    conf: 0.97
+    attack: "T1649"
+    mbc: "B0020"
+    for: [macho, dylib]
+    all:
+      - id: lending-rpc-endpoint-supply
+      - id: lending-rpc-endpoint-withdraw
+      - id: unsigned-tx-generation
+
+  # === Credential Harvesting Pattern ===
+  # Complexity: all(3) + for(1) = 4 >= 4 HOSTILE
+  - id: credential-harvesting
+    desc: Wallet credential harvesting
+    crit: hostile
+    conf: 0.94
+    attack: "T1649"
+    mbc: "B0020"
+    for: [macho, dylib]
+    all:
+      - id: wallet-address-monitor
+      - id: app-unlock-monitor
+      - id: account-id-capture
+
+  # === Remote C2 Infrastructure ===
+  # Complexity: all(3) + for(1) = 4 >= 4 HOSTILE
+  - id: lending-c2-infrastructure
+    desc: Lending C2 remote service
+    crit: hostile
+    conf: 0.93
+    attack: "T1649"
+    mbc: "B0030"
+    for: [macho, dylib]
+    all:
+      - id: remote-lending-service
+      - id: lending-provider-fetch
+      - id: lending-rpc-generic-endpoint
+
+  # === Complete Lending Malware Pattern ===
+  # Complexity: all(3) + any(2) + for(1) = 6 >= 4 HOSTILE
+  - id: trojanized-lending-module
+    desc: Trojanized lending module malware
+    crit: hostile
+    conf: 0.99
+    attack: "T1649"
+    mbc: "B0020"
+    for: [macho, dylib]
+    all:
+      - id: lending-injection-framework
+      - id: credential-harvesting
+      - id: lending-c2-infrastructure
+    any:
+      - id: lending-protocol-theft
+      - id: transaction-hijacking-pattern

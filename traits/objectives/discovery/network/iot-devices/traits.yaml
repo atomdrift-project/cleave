@@ -1,0 +1,136 @@
+# DVR/CCTV Platform Targeting
+# Detects malware specifically targeting DVR and CCTV systems
+# ATT&CK: T1046 (Network Service Discovery)
+# MBC: B0041 (Execution)
+
+traits:
+  # === Hi3511 DVR SoC Targeting ===
+  - id: hi3511-dvr-soc
+    desc: "Hi3511 DVR targeting"
+    crit: suspicious
+    conf: 0.95
+    for: [elf, shell]
+    if:
+      type: string
+      substr: "stm_hi3511_dvr"
+    attack: "T1046"
+
+  - id: hi3511-chipset-app
+    desc: "Hi3511 chipset app"
+    crit: suspicious
+    conf: 0.85
+    for: [elf, shell]
+    if:
+      type: string
+      substr: "app/hi3511"
+    attack: "T1046"
+
+  # === Generic DVR Identification ===
+  - id: gm-dvr-identifier
+    desc: "gmDVR identifier"
+    crit: suspicious
+    conf: 0.9
+    for: [elf, shell]
+    if:
+      type: string
+      substr: "gmDVR"
+    attack: "T1046"
+
+  # === Hikvision Firmware ===
+  - id: hikvision-firmware-targeting
+    desc: "Hikvision DVR firmware"
+    crit: suspicious
+    conf: 0.9
+    for: [elf, shell]
+    if:
+      type: string
+      substr: "dvr_main _8182T"
+    attack: "T1046"
+
+  - id: anko-dvr-sample
+    desc: "Anko DVR app targeting"
+    crit: suspicious
+    conf: 0.85
+    for: [elf, shell]
+    if:
+      type: string
+      substr: "ankosample _8182T"
+    attack: "T1046"
+
+  # === DaVinci CCTV Platform ===
+  - id: davinci-cctv-targeting
+    desc: "DaVinci CCTV platform"
+    crit: suspicious
+    conf: 0.9
+    for: [elf, shell]
+    if:
+      type: string
+      substr: "home/Davinci"
+    attack: "T1046"
+
+  # === Kylin DVR Platform ===
+  - id: kylin-nvr-targeting
+    desc: "Kylin DVR/NVR platform"
+    crit: suspicious
+    conf: 0.85
+    for: [elf, shell]
+    if:
+      type: string
+      substr: "var/Kylin"
+    attack: "T1046"
+
+  # === DVR GUI/App Paths ===
+  - id: dvr-gui-path
+    desc: "DVR GUI application path"
+    crit: suspicious
+    conf: 0.8
+    for: [elf, shell]
+    if:
+      type: string
+      substr: "mnt/mtd/app/gui"
+    attack: "T1046"
+
+composite_rules:
+  - id: hi3511-specific-targeting
+    desc: "Hi3511 DVR targeting"
+    crit: suspicious
+    conf: 0.95
+    for: [elf, shell]
+    attack: "T1046"
+    any:
+      - id: hi3511-dvr-soc
+      - id: hi3511-chipset-app
+
+  - id: generic-dvr-targeting
+    desc: "Generic DVR platform targeting"
+    crit: suspicious
+    conf: 0.9
+    for: [elf, shell]
+    attack: "T1046"
+    any:
+      - id: gm-dvr-identifier
+      - id: hikvision-firmware-targeting
+      - id: davinci-cctv-targeting
+      - id: kylin-nvr-targeting
+
+  - id: dvr-specific-targeting
+    desc: "Specific DVR platform targeting"
+    crit: suspicious
+    conf: 0.93
+    for: [elf, shell]
+    attack: "T1046"
+    mbc: "B0041"
+    any:
+      - id: hi3511-specific-targeting
+      - id: generic-dvr-targeting
+
+  - id: mirai-dvr-targeting
+    desc: "Mirai DVR targeting campaign"
+    crit: hostile
+    conf: 0.95
+    for: [elf, shell]
+    attack: "T1046"
+    mbc: "B0041"
+    all:
+      - id: well-known/malware/botnet/mirai
+      - id: dvr-specific-targeting

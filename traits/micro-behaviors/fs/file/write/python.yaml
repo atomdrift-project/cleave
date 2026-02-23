@@ -1,0 +1,13 @@
+# File Write Operations - Python
+
+defaults:
+  for: [python]
+
+traits:
+  - id: py-write
+    desc: "write() call"
+    crit: baseline
+    conf: 0.5
+    if:
+      type: string
+      regex: '\.write\('

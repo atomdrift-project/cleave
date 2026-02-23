@@ -1,0 +1,14 @@
+# Application Targeting Attempt
+# Detects attempts to locate or target specific applications
+
+defaults:
+  for: [javascript, python, ruby, shell, pe, elf, macho]
+
+composite_rules:
+  - id: app-targeting-attempt
+    desc: "Mention of specific sensitive applications (browsers, office)"
+    crit: notable
+    conf: 0.8
+    any:
+      - id: micro-behaviors/process/enumerate/apps::browser-apps
+      - id: micro-behaviors/process/enumerate/apps::office-apps

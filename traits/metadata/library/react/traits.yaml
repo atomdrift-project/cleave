@@ -1,0 +1,72 @@
+# React Library Detection
+# Neutral detection of React library presence (not malicious by itself)
+
+defaults:
+  for: [javascript]
+
+traits:
+  # Detect React version banner (appears in development builds)
+  - id: version-banner
+    desc: React version banner
+    crit: notable
+    conf: 0.95
+    if:
+      type: string
+      regex: "React (v)?[0-9]+\\.[0-9]+\\.[0-9]+"
+
+  # Detect React copyright notice
+  - id: copyright
+    desc: React copyright notice
+    crit: notable
+    conf: 0.95
+    if:
+      type: string
+      regex: "\\* React (\\(with addons\\) )?v[0-9]"
+
+  # Detect React package name
+  - id: package-name
+    desc: React package identifier
+    crit: notable
+    conf: 0.90
+    if:
+      type: string
+      regex: "@license React|React \\(c\\) (Facebook|Meta)"
+
+  # React object signature
+  - id: react-object
+    desc: React object initialization
+    crit: notable
+    conf: 0.85
+    if:
+      type: string
+      regex: "\\bReact\\.__SECRET_INTERNALS_DO_NOT_USE_OR_YOU_WILL_BE_FIRED\\b"
+
+  # ReactDOM signature
+  - id: react-dom
+    desc: ReactDOM object reference
+    crit: notable
+    conf: 0.85
+    if:
+      type: string
+      regex: "\\bReactDOM\\.(render|createRoot|hydrate)"
+
+  # React JSX pragma
+  - id: jsx-pragma
+    desc: React JSX transformation signature
+    crit: notable
+    conf: 0.80
+    if:
+      type: string
+      regex: "React\\.createElement\\("
+
+composite_rules:
+  # Detect if file is React (neutral, benign detection)
+  - id: library
+    desc: "File contains React library"
+    crit: notable
+    conf: 0.9
+    any:
+      - { id: version-banner }
+      - { id: copyright }
+      - { id: package-name }
+      - { id: react-object }

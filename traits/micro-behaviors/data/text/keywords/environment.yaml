@@ -1,0 +1,11 @@
+defaults:
+  for: [all]
+
+traits:
+  - id: environment-keyword
+    desc: '"Environment" keyword'
+    crit: baseline
+    if:
+      type: string
+      word: environment
+      case_insensitive: true

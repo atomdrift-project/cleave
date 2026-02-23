@@ -1,0 +1,29 @@
+defaults:
+  for: [all]
+
+traits:
+  # base64.b85decode - atomic patterns
+  - id: b85decode-symbol
+    desc: base64.b85decode symbol
+    crit: notable
+    conf: 0.9
+    if:
+      type: symbol
+      exact: "base64.b85decode"
+
+  - id: b85decode-dynamic
+    desc: base64.b85decode dynamic import
+    crit: notable
+    conf: 0.9
+    if:
+      type: symbol
+      exact: "import__('base64').b85decode"
+
+composite_rules:
+  - id: b85decode-call
+    desc: Calls base64.b85decode
+    crit: notable
+    conf: 0.9
+    any:
+      - id: b85decode-symbol
+      - id: b85decode-dynamic

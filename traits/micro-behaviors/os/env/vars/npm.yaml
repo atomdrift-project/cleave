@@ -1,0 +1,84 @@
+traits:
+  - id: npm-lifecycle
+    desc: Access npm lifecycle event
+    crit: notable
+    conf: 0.8
+    for: [javascript, typescript]
+    if:
+      type: ast
+      language: javascript
+      query: |
+        (member_expression
+          object: (member_expression
+            object: (identifier) @process
+            property: (property_identifier) @env
+            (#eq? @process "process")
+            (#eq? @env "env"))
+          property: (property_identifier) @prop
+          (#eq? @prop "npm_lifecycle_event")
+        )
+        (subscript_expression
+          object: (member_expression
+            object: (identifier) @process
+            property: (property_identifier) @env
+            (#eq? @process "process")
+            (#eq? @env "env"))
+          index: (string) @prop
+          (#match? @prop "npm_lifecycle_event")
+        )
+
+  - id: npm-config-user-agent
+    desc: Access npm user agent
+    crit: notable
+    conf: 0.8
+    for: [javascript, typescript]
+    if:
+      type: ast
+      language: javascript
+      query: |
+        (member_expression
+          object: (member_expression
+            object: (identifier) @process
+            property: (property_identifier) @env
+            (#eq? @process "process")
+            (#eq? @env "env"))
+          property: (property_identifier) @prop
+          (#eq? @prop "npm_config_user_agent")
+        )
+        (subscript_expression
+          object: (member_expression
+            object: (identifier) @process
+            property: (property_identifier) @env
+            (#eq? @process "process")
+            (#eq? @env "env"))
+          index: (string) @prop
+          (#match? @prop "npm_config_user_agent")
+        )
+
+  - id: npm-package-info
+    desc: Access npm package info
+    crit: notable
+    conf: 0.8
+    for: [javascript, typescript]
+    if:
+      type: ast
+      language: javascript
+      query: |
+        (member_expression
+          object: (member_expression
+            object: (identifier) @process
+            property: (property_identifier) @env
+            (#eq? @process "process")
+            (#eq? @env "env"))
+          property: (property_identifier) @prop
+          (#match? @prop "^npm_package_")
+        )
+        (subscript_expression
+          object: (member_expression
+            object: (identifier) @process
+            property: (property_identifier) @env
+            (#eq? @process "process")
+            (#eq? @env "env"))
+          index: (string) @prop
+          (#match? @prop "npm_package_")
+        )

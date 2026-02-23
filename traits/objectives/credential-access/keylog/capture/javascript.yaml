@@ -1,0 +1,16 @@
+# Keylogging - JavaScript/Node.js
+# ATT&CK: T1056.001 (Input Capture: Keylogging)
+
+composite_rules:
+  - id: js-keylogger-exfil
+    desc: JavaScript keylogger with exfiltration
+    crit: hostile
+    conf: 0.95
+    attack: "T1056.001"
+    mbc: "B0015"
+    for: [javascript]
+    all:
+      - id: micro-behaviors/communications/http/request::axios-post-call
+    any:
+      - id: micro-behaviors/hardware/input/keyboard::node-keyboard-listener
+      - id: micro-behaviors/hardware/input/keyboard::global-keyboard-listener

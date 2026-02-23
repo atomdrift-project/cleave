@@ -1,0 +1,25 @@
+# Detects Java AppletKiller malware that terminates all threads
+# Ref: https://github.com/MalwareSourceCode/Java/blob/master/Trojan.Java.AppletKiller
+# Lang: java
+
+defaults:
+  for: [all]
+
+traits:
+  - id: applet-killer-strings
+    desc: Detects AppletKiller-specific strings
+    crit: notable
+    conf: 0.8
+    if:
+      id: well-known/malware/dos/applet-killer::strings
+
+composite_rules:
+  - id: applet-killer-dos
+    desc: Java AppletKiller thread termination logic
+    crit: hostile
+    conf: 1.0
+    all:
+      - id: micro-behaviors/process/thread/terminate::stop
+      - id: micro-behaviors/process/thread/enumerate::get-group
+      - id: micro-behaviors/process/thread/enumerate::enumerate
+      - id: applet-killer-strings

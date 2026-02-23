@@ -1,0 +1,22 @@
+# macOS HTTP Dropper Patterns (NSURLSession-based)
+# Detects download framework patterns used for payload staging
+# ATT&CK: T1105 (Ingress Tool Transfer)
+# MBC: E1105 (Ingress Tool Transfer)
+
+defaults:
+  for: [macho, dylib]
+  attack: "T1105"
+  mbc: "E1105"
+
+composite_rules:
+  # macOS download framework with file staging
+  # Downloads content via NSURLSession and writes/moves files to disk
+  - id: macos-download-stager
+    desc: macOS download framework with file staging
+    crit: notable
+    conf: 0.80
+    for: [macho, dylib]
+    all:
+      - id: micro-behaviors/communications/http/lib/nsurlsession::nsurlsession-download-task
+      - id: micro-behaviors/fs/file/write::nsfilehandle-write
+      - id: micro-behaviors/fs/file/write::nsfilemanager-move

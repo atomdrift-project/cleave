@@ -1,0 +1,12 @@
+defaults:
+  for: [all]
+
+traits:
+  - id: string-arg-extension
+    desc: "Detects String.prototype.arg extension returning 'this'"
+    crit: suspicious
+    conf: 0.9
+    attack: "T1027"
+    if:
+      type: raw
+      regex: "String\\.prototype\\.arg\\s*=\\s*function|function\\s+String\\.prototype\\.arg"

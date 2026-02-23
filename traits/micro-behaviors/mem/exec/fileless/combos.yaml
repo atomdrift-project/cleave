@@ -1,0 +1,91 @@
+# Memory-based Code Execution
+# ATT&CK: T1055 (Process Injection)
+# MBC: B0033
+
+traits:
+  - id: remote-injection
+    desc: Remote process memory manipulation
+    crit: suspicious
+    conf: 0.9
+    attack: "T1055"
+    platforms: [windows]
+    for: [pe, dll]
+    if:
+      type: yara
+      source: |
+        rule remote_injection {
+          strings:
+            $op = /OpenProcess|NtOpenProcess/ ascii wide
+            $alloc = /VirtualAllocEx|NtAllocateVirtualMemory/ ascii wide
+            $write = /WriteProcessMemory|NtWriteVirtualMemory/ ascii wide
+            $protect = /VirtualProtectEx|NtProtectVirtualMemory/ ascii wide
+            $thread = /CreateRemoteThread(Ex)?|NtCreateThreadEx|RtlCreateUserThread|QueueUserAPC/ ascii wide
+          condition:
+            $op and $write and ($alloc or $protect) and $thread
+        }
+    downgrade:
+      any:
+        - type: string
+          substr: "Valve Corp."
+
+  - id: fexecve-symbol
+    desc: Linux fexecve symbol reference (fileless execution)
+    crit: notable
+    conf: 0.9
+    platforms: [linux]
+    for: [elf]
+    if:
+      type: symbol
+      regex: "^_?fexecve$"
+
+  - id: python-encode-call
+    desc: Python encode method call
+    crit: notable
+    conf: 0.8
+    platforms: [windows, linux, macos]
+    for: [python]
+    if:
+      type: ast
+      kind: call
+      exact: "encode"
+
+  - id: python-b64decode-call
+    desc: Python base64 decode call
+    crit: notable
+    conf: 0.8
+    platforms: [windows, linux, macos]
+    for: [python]
+    if:
+      type: ast
+      kind: call
+      exact: "b64decode"
+
+composite_rules:
+  - id: linux-memfd
+    desc: Fileless execution via anonymous memory
+    crit: suspicious
+    conf: 0.9
+    attack: "T1055"
+    mbc: "B0033"
+    platforms: [linux]
+    for: [elf]
+    all:
+      - id: micro-behaviors/mem/anonymous/create::memfd-create
+    any:
+      - id: fexecve-symbol
+      - id: micro-behaviors/process/create/shell::c-execve
+      - id: micro-behaviors/mem/protect/modify::mprotect-symbol
+
+  - id: python-shellcode
+    desc: Python shellcode injection via VirtualProtect
+    crit: suspicious
+    conf: 0.95
+    attack: "T1055"
+    mbc: "B0033"
+    platforms: [windows]
+    for: [python]
+    all:
+      - id: micro-behaviors/mem/protect/modify::virtualprotect-ctypes
+    any:
+      - id: python-encode-call
+      - id: python-b64decode-call

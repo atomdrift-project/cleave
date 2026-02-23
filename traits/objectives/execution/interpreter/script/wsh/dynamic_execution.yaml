@@ -1,0 +1,28 @@
+# Dynamic Execution Patterns in JScript
+# Detects obfuscated execution methods
+
+defaults:
+  crit: suspicious
+  conf: 0.8
+  for: [javascript]
+
+traits:
+  - id: dynamic-this-execution-computed
+    desc: Dynamic execution via this[func()+func()]
+    crit: notable
+    if:
+      type: raw
+      # Regex fallback for AST issues
+      # Matches this[...] (function call)
+      regex: 'this\[[a-zA-Z0-9_\(\)\+\s]+\]\('
+    downgrade:
+      any:
+        - id: metadata/library/jquery::domain
+        - id: metadata/library/jquery::version-string
+        - id: metadata/library/jquery::copyright
+        - id: metadata/library/jquery::fn-extend
+        - id: metadata/library/prototype::copyright
+        - id: metadata/library/prototype::version-string
+        - id: metadata/library/prototype::header-x
+    unless:
+      - id: metadata/library/jquery::library

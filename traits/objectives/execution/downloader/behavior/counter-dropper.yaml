@@ -1,0 +1,21 @@
+# JScript Counter-Dropper Composite Rule
+# Detects the specific obfuscation and C2 pattern of the Counter-Dropper family
+
+defaults:
+  crit: hostile
+  conf: 0.95
+
+composite_rules:
+  - id: js-counter-dropper-params
+    desc: Counter Dropper URL parameters
+    crit: notable
+    any:
+      - id: objectives/command-and-control/uri/fragment::uri-fragment-counter-id-param
+      - id: objectives/command-and-control/uri/fragment::uri-fragment-counter-rnd-param
+
+  - id: js-counter-dropper-behavior
+    desc: JScript Counter-Dropper behavior (obfuscated + C2 fragments)
+    all:
+      - id: objectives/command-and-control/uri/fragment::uri-fragment-counter-path-unte
+      - id: objectives/execution/downloader/behavior::js-counter-dropper-params
+      - id: objectives/execution/interpreter/script/wsh

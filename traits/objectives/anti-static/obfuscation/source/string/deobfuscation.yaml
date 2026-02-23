@@ -1,0 +1,67 @@
+# String Deobfuscation Techniques
+# Detects runtime string manipulation used to remove obfuscation markers
+
+traits:
+  - id: self-modifying-string-replace
+    desc: "Self-modifying strings via replace chains"
+    crit: suspicious
+    conf: 0.85
+    for: [javascript, typescript, powershell]
+    if:
+      type: string
+      regex: '\$\w+\s*=\s*\$\w+\.replace\('
+      count_min: 3
+
+  - id: custom-delimiter-obfuscation
+    desc: "Custom delimiter markers for deobfuscation"
+    crit: suspicious
+    conf: 0.9
+    for: [javascript, powershell, typescript]
+    if:
+      type: string
+      regex: '%[a-zA-Z]{3,}%'
+      count_min: 1
+    not:
+      - "%USERNAME%"
+      - "%USERPROFILE%"
+      - "%APPDATA%"
+      - "%LOCALAPPDATA%"
+      - "%TEMP%"
+      - "%TMP%"
+      - "%PATH%"
+      - "%SYSTEMROOT%"
+      - "%COMSPEC%"
+      - "%this%"
+      - regex: '^%[sdifjoOc]'
+
+  - id: powershell-replace-operator
+    desc: "PowerShell -replace operator for deobfuscation"
+    crit: notable
+    conf: 0.7
+    for: [javascript, powershell]
+    if:
+      type: string
+      regex: '\-replace\s+[''"]'
+      count_min: 1
+
+  - id: chained-replace-calls
+    desc: "Chained replace calls for multi-layer deobfuscation"
+    crit: notable
+    conf: 0.9
+    for: [javascript, typescript]
+    if:
+      type: symbol
+      regex: '\.replace\.replace'
+      count_min: 1
+    not:
+      - regex: 'replaceAll'
+
+  - id: variable-self-assignment-replace
+    desc: "Variable reassigned with replace operation"
+    crit: notable
+    conf: 0.75
+    for: [javascript, typescript, powershell]
+    if:
+      type: string
+      regex: '\$\w+\s*=\s*\$\w+\.replace'
+      count_min: 3

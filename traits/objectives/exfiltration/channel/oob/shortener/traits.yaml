@@ -1,0 +1,70 @@
+# URL Shortening Services
+# Detects usage of services that obscure the final destination URL
+# Often used to hide malicious payloads, C2 addresses, or exfiltration endpoints
+# ATT&CK: T1027 (Obfuscated Files or Information)
+
+defaults:
+  crit: notable
+  conf: 0.80
+  for: [all]
+
+traits:
+  - id: bitly
+    desc: bit.ly URL shortener
+    if:
+      type: string
+      regex: 'bit\.ly\b'
+
+  - id: tinyurl
+    desc: tinyurl.com URL shortener
+    if:
+      type: string
+      regex: 'tinyurl\.com\b'
+
+  - id: t-co
+    desc: t.co (Twitter) URL shortener
+    if:
+      type: string
+      regex: 't\.co\b'
+
+  - id: rebrandly
+    desc: rebrand.ly URL shortener
+    if:
+      type: string
+      regex: 'rebrand\.ly\b'
+
+  - id: buff-ly
+    desc: buff.ly URL shortener
+    if:
+      type: string
+      regex: 'buff\.ly\b'
+
+  - id: goo-gl
+    desc: goo.gl URL shortener (legacy)
+    if:
+      type: string
+      regex: 'goo\.gl\b'
+
+  - id: ow-ly
+    desc: ow.ly URL shortener
+    if:
+      type: string
+      regex: 'ow\.ly\b'
+
+  - id: is-gd
+    desc: is.gd URL shortener
+    if:
+      type: string
+      regex: 'is\.gd\b'
+
+  - id: su-pr
+    desc: su.pr URL shortener
+    if:
+      type: string
+      regex: 'su\.pr\b'
+
+  - id: bl-ink
+    desc: bl.ink URL shortener
+    if:
+      type: string
+      regex: 'bl\.ink\b'

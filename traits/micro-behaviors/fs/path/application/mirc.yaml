@@ -1,0 +1,39 @@
+defaults:
+  for: [all]
+
+traits:
+  - id: mirc-config-file-a
+    description: "Detects mIRC configuration file paths (group A)"
+    crit: suspicious
+    attack: T1546
+    if:
+      type: string
+      regex: '(script|mirc|remote|aliases)\.ini'
+      case_insensitive: true
+
+  - id: mirc-config-file-b
+    description: "Detects mIRC configuration file paths (group B)"
+    crit: suspicious
+    attack: T1546
+    if:
+      type: string
+      regex: '(popups|users|control)\.ini'
+      case_insensitive: true
+
+  - id: mirc-install-path
+    description: "Detects default mIRC installation path"
+    crit: suspicious
+    attack: T1546
+    if:
+      type: string
+      regex: '[cC]:[\\/]mirc[\\/]'
+      case_insensitive: true
+
+composite_rules:
+  - id: mirc-config-file
+    description: "Detects mIRC configuration file paths"
+    crit: suspicious
+    attack: T1546
+    any:
+      - id: mirc-config-file-a
+      - id: mirc-config-file-b

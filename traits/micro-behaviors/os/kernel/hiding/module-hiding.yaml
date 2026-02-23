@@ -1,0 +1,59 @@
+# Kernel Module Hiding Techniques
+# ATT&CK: T1014 (Rootkit)
+
+defaults:
+  for: [c]
+
+traits:
+  - id: list-del-this-module-regex
+    desc: Removing THIS_MODULE from module list (regex)
+    crit: suspicious
+    conf: 0.95
+    attack: "T1014"
+    if:
+      type: raw
+      regex: 'list_del\s*\(\s*&\s*THIS_MODULE\s*->\s*list\s*\)'
+
+  - id: list-del-this-module-exact
+    desc: Removing THIS_MODULE from module list (exact)
+    crit: suspicious
+    conf: 0.95
+    attack: "T1014"
+    if:
+      type: raw
+      exact: "list_del(&THIS_MODULE->list)"
+
+  - id: task-flags-10000000-regex
+    desc: Process hiding via task flags (Diamorphine)
+    crit: suspicious
+    conf: 0.95
+    attack: "T1014"
+    if:
+      type: raw
+      regex: 'task\s*->\s*flags\s*(\^|&|\|)?=\s*0x10000000'
+
+  - id: task-flags-10000000-exact
+    desc: Process hiding via task flags (Diamorphine)
+    crit: suspicious
+    conf: 0.95
+    attack: "T1014"
+    if:
+      type: raw
+      exact: "0x10000000"
+
+composite_rules:
+  - id: list-del-this-module
+    desc: Removing THIS_MODULE from module list (hiding)
+    crit: suspicious
+    conf: 0.95
+    any:
+      - id: list-del-this-module-regex
+      - id: list-del-this-module-exact
+
+  - id: task-flags-10000000
+    desc: Process hiding via task flags (Diamorphine)
+    crit: suspicious
+    conf: 0.95
+    any:
+      - id: task-flags-10000000-regex
+      - id: task-flags-10000000-exact

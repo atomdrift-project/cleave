@@ -1,0 +1,58 @@
+# HTTP Request Operations - Python urllib library
+# MBC: C0002 (HTTP Communication)
+# ATT&CK: T1071.001
+
+defaults:
+  for: [python]
+
+traits:
+  - id: urllib-word
+    desc: urllib module reference
+    crit: baseline
+    conf: 0.6
+    if:
+      type: string
+      substr: "urllib"
+
+  - id: urllib-urlopen
+    desc: urllib.request.urlopen call
+    crit: notable
+    conf: 0.7
+    if:
+      type: raw
+      substr: "urllib.request.urlopen"
+
+  - id: urllib-urlopen-py2
+    desc: urllib.urlopen call (Python 2)
+    crit: notable
+    conf: 0.7
+    if:
+      type: raw
+      substr: "urllib.urlopen"
+
+  - id: urllib-urlopen-data
+    desc: urlopen with data parameter (potential POST)
+    crit: suspicious
+    conf: 0.85
+    if:
+      type: raw
+      regex: '(urllib|urllib2|request)\.urlopen\s*\([^)]{1,200},'
+
+  # GuardDog: urlretrieve for downloading files
+  - id: urllib-urlretrieve
+    desc: urllib.request.urlretrieve call
+    crit: notable
+    conf: 0.80
+    mbc: "C0002"
+    attack: "T1105"
+    if:
+      type: symbol
+      regex: 'urllib\.(request\.)?urlretrieve'
+
+  - id: urllib-urlencode
+    desc: urllib urlencode for data serialization
+    crit: notable
+    conf: 0.80
+    if:
+      type: symbol
+      regex: "urlencode"

@@ -1,0 +1,36 @@
+# PHP Test Tools and Frameworks
+# Identifies legitimate testing tools which may share capabilities with malware (exec, file ops)
+
+defaults:
+  for: [php]
+  crit: baseline
+
+traits:
+  - id: php-test-runner
+    desc: PHP Test Runner script
+    conf: 1.0
+    if:
+      type: string
+      regex: 'php run-tests\.php \[options\]'
+
+  - id: php-test-sections
+    desc: PHP Test sections (EXPECT/EXPECTF)
+    conf: 0.8
+    if:
+      type: string
+      regex: '^={3,}\s*(EXPECT|EXPECTF|FILE|SKIPIF)'
+      multiline: true
+
+  - id: phpunit-ref
+    desc: PHPUnit framework reference
+    conf: 0.8
+    if:
+      type: string
+      regex: "PHPUnit_Framework|phpunit/phpunit"
+
+  - id: tester-ref
+    desc: Tester framework reference
+    conf: 0.8
+    if:
+      type: string
+      regex: 'Tester\\Runner\\TestHandler'

@@ -1,0 +1,33 @@
+# Terminal Device Paths
+# TTY and PTY device access - generally legitimate
+# MBC: E1083 (File and Directory Discovery)
+
+defaults:
+  for: [all]
+  crit: baseline
+  conf: 1.0
+
+traits:
+  - id: dev-tty
+    desc: /dev/tty terminal device
+    if:
+      type: string
+      substr: "/dev/tty"
+
+  - id: dev-pts
+    desc: /dev/pts pseudo-terminal
+    if:
+      type: string
+      substr: "/dev/pts"
+
+  - id: dev-ptmx
+    desc: /dev/ptmx PTY master
+    if:
+      type: string
+      substr: "/dev/ptmx"
+
+  - id: dev-console
+    desc: /dev/console system console
+    if:
+      type: string
+      substr: "/dev/console"

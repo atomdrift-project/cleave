@@ -1,0 +1,182 @@
+# Go-based C2 Implant Detection
+# Detects Go binaries with C2 agent characteristics:
+# - Heartbeat/beacon functionality
+# - Command execution
+# - File upload/download
+# - XOR/encoding for communication obfuscation
+# MBC: B0030 (C2 Communication), B0024 (Remote Access)
+# ATT&CK: T1059 (Command Execution), T1105 (Ingress Tool Transfer)
+
+defaults:
+  for: [elf, macho, pe]
+  mbc: "B0030"
+
+traits:
+  # Go C2 heartbeat function patterns
+  - id: go-heartbeat-task-loop
+    desc: Go HeartBeat/heartbeat worker functions
+    crit: suspicious
+    conf: 0.95
+    for: [go]
+    if:
+      type: string
+      regex: '(heartbeat|HeartBeat)(Task|Loop|Worker)\b'
+
+  # Go C2 command execution patterns
+  - id: go-cmd-exec-module-cmd
+    desc: Go /cmd. command execution module
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: string
+      regex: '/cmd\.(ExecShell|execCmd|Run|analysisTask)'
+
+  - id: go-cmd-exec-module-v2
+    desc: Go v2/cmd command execution module
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: string
+      regex: 'v2/cmd\.'
+
+  # Go file transfer functions (C2 feature)
+  - id: go-file-transfer
+    desc: Go C2 file transfer functions
+    crit: notable
+    conf: 0.85
+    if:
+      type: string
+      regex: '(cmd\.(uploadFile|downloadFile|Upload|Download))'
+
+  # XOR encoding for C2 comms
+  - id: go-xor-encoding
+    desc: Go XOR encoding for C2
+    crit: notable
+    conf: 0.85
+    if:
+      type: string
+      regex: '(xorBytes|XORKeyStream)'
+
+  # Monitor/worker pattern common in C2 agents
+  - id: go-monitor-worker
+    desc: Go monitor worker pattern
+    crit: notable
+    conf: 0.8
+    if:
+      type: string
+      regex: '(monitorWorker|workerLoop|TaskLoop)\b'
+
+  # Machine identification for C2 victim profiling
+  - id: go-machine-id
+    desc: Go machine identification
+    crit: notable
+    conf: 0.85
+    if:
+      type: string
+      regex: '(getMachineType|getUuid|GetMachineID)\b'
+
+  # Hidden log paths (malware staging)
+  - id: suspicious-log-path
+    desc: Suspicious hidden log path
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: string
+      regex: '/var/(tmp|log)/[a-z]{4,8}\.(log|l)$'
+
+  # DoPost pattern for C2 beacon
+  - id: go-http-post-beacon
+    desc: Go HTTP POST beacon pattern
+    crit: notable
+    conf: 0.85
+    if:
+      type: string
+      regex: '(DoPost|request\.DoPost|BuildPostData)\b'
+
+  # Base64 decode for C2 commands
+  - id: go-base64-decode
+    desc: Go base64 decode for C2
+    crit: notable
+    conf: 0.8
+    if:
+      type: string
+      regex: 'request\.base64Decode|base64\.StdEncoding\.DecodeString'
+
+composite_rules:
+- id: go-heartbeat-function
+  desc: Go C2 heartbeat function
+  crit: suspicious
+  conf: 0.95
+  any:
+    - id: objectives/command-and-control/implant/binary/capabilities::heartbeat-send
+    - id: objectives/command-and-control/implant/binary/capabilities::heartbeat-set
+    - id: go-heartbeat-task-loop
+
+- id: go-cmd-exec-module
+  desc: Go C2 command execution module
+  crit: suspicious
+  conf: 0.9
+  any:
+    - id: go-cmd-exec-module-cmd
+    - id: go-cmd-exec-module-v2
+
+  # Go C2 implant with heartbeat and exec
+  # Complexity: all(3) + for(1) = 4 >= 4 HOSTILE
+- id: go-c2-implant-heartbeat
+  desc: Go C2 implant with heartbeat
+  crit: hostile
+  conf: 0.95
+  mbc: "B0030"
+  attack: "T1071.001"
+  for: [elf, macho, pe]
+  all:
+    - id: go-heartbeat-function
+    - id: go-cmd-exec-module
+    - id: micro-behaviors/process/create/shell::go-shell-strings
+
+# Go C2 implant with file transfer
+# Complexity: all(3) + for(1) = 4 >= 4 HOSTILE
+- id: go-c2-implant-transfer
+  desc: Go C2 implant with file transfer
+  crit: hostile
+  conf: 0.95
+  mbc: "B0030"
+  attack: "T1105"
+  for: [elf, macho, pe]
+  all:
+    - id: go-heartbeat-function
+    - id: go-file-transfer
+    - id: micro-behaviors/process/create/shell::go-shell-strings
+
+# Go C2 with monitor/worker pattern
+# Complexity: all(4) + for(1) = 5 >= 4 HOSTILE
+- id: go-c2-implant-monitor
+  desc: Go C2 with monitor worker
+  crit: hostile
+  conf: 0.95
+  mbc: "B0030"
+  for: [elf, macho, pe]
+  all:
+    - id: go-heartbeat-function
+    - id: go-monitor-worker
+    - id: go-cmd-exec-module
+    - id: micro-behaviors/process/create/shell::go-shell-strings
+
+# Full Go C2 implant
+# Complexity: all(4) + any(1) + for(1) = 6 >= 4 HOSTILE
+- id: go-c2-implant-full
+  desc: Full Go C2 implant
+  crit: hostile
+  conf: 0.98
+  mbc: "B0030"
+  attack: "T1071.001"
+  for: [elf, macho, pe]
+  all:
+    - id: go-heartbeat-function
+    - id: go-cmd-exec-module
+    - id: go-file-transfer
+    - id: micro-behaviors/process/create/shell::go-shell-strings
+  any:
+    - id: go-xor-encoding
+    - id: suspicious-log-path
+    - id: go-machine-id

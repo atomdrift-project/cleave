@@ -1,0 +1,50 @@
+# API Key Harvesting via Function Parameter - Python
+# Detects malicious libraries that accept API keys as function parameters
+# and exfiltrate them via HTTP requests.
+# ATT&CK: T1528 (Steal Application Access Token)
+
+defaults:
+  for: [python]
+  attack: "T1528"
+
+traits:
+  # API key passed as function parameter (common in trojanized packages)
+  - id: api-key-parameter
+    desc: Function parameter named api_key
+    crit: notable
+    conf: 0.7
+    if:
+      type: string
+      regex: "api_key\\s*[:\\)]"
+
+  # Bearer token format string interpolation - credential in f-string
+  - id: bearer-fstring
+    desc: Bearer token via f-string interpolation
+    crit: notable
+    conf: 0.8
+    if:
+      type: string
+      regex: 'Bearer\s*\{[a-z_]+\}'
+
+  # API key used in Authorization header (formatted string)
+  - id: api-key-in-auth-header
+    desc: API key interpolated in Authorization
+    crit: notable
+    conf: 0.85
+    if:
+      type: string
+      regex: "Bearer.{0,20}\\{api_key\\}"
+
+composite_rules:
+  # API credential harvesting: accepts api_key param and uses it in HTTP auth
+  - id: credential-harvesting
+    desc: API key harvesting via function param
+    crit: suspicious
+    conf: 0.85
+    all:
+      - id: api-key-parameter
+      - id: micro-behaviors/communications/http/lib/requests::requests-post
+    any:
+      - id: bearer-fstring
+      - id: api-key-in-auth-header
+      - id: micro-behaviors/communications/http/headers::headers-auth

@@ -1,0 +1,13 @@
+# Remote Configuration Patterns - JavaScript
+
+defaults:
+  for: [all]
+
+traits:
+  - id: remote-config-service
+    desc: Remote configuration or shepherd service
+    crit: notable
+    conf: 0.7
+    if:
+      type: string
+      regex: 'shepherd\.|config\.service|remote-config'

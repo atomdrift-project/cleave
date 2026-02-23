@@ -1,0 +1,31 @@
+# Random Number Generation
+# Detects random seeding and generation patterns used for randomized behavior
+
+traits:
+  - id: srand-symbol
+    desc: Random seed initialization (srand)
+    crit: baseline
+    conf: 0.4
+    for: [elf, macho, so, dylib, c, objective-c]
+    if:
+      type: symbol
+      exact: "srand"
+
+  - id: rand-symbol
+    desc: Random number generation (rand)
+    crit: baseline
+    conf: 0.3
+    for: [elf, macho, so, dylib, c, objective-c]
+    if:
+      type: symbol
+      exact: "rand"
+
+composite_rules:
+  - id: seeded-random
+    desc: Seeded random number generation
+    crit: baseline
+    conf: 0.5
+    for: [elf, macho, so, dylib, c, objective-c]
+    all:
+      - id: srand-symbol
+      - id: rand-symbol

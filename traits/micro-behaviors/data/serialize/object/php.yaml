@@ -1,0 +1,92 @@
+# PHP Data Serialization Traits
+# MBC: C0026 (Encode Data)
+
+traits:
+  - id: json-encode
+    desc: JSON encoding for data output
+    crit: baseline
+    conf: 0.6
+    for: [php]
+    if:
+      type: string
+      substr: json_encode
+
+  - id: json-decode
+    desc: JSON decoding for data input
+    crit: baseline
+    conf: 0.6
+    for: [php]
+    if:
+      type: string
+      substr: json_decode
+
+  - id: serialize
+    desc: PHP object serialization
+    crit: notable
+    conf: 0.7
+    for: [php]
+    if:
+      type: string
+      regex: "\\bserialize\\s*\\("
+
+  - id: unserialize
+    desc: PHP object deserialization (potential RCE
+    crit: suspicious
+    conf: 0.9
+    mbc: "E1059"
+    attack: "T1059"
+    for: [php]
+    if:
+      type: string
+      regex: "\\bunserialize\\s*\\("
+
+  # === unserialize user input atomic indicators ===
+  - id: unserialize-get
+    desc: unserialize from $_GET
+    crit: baseline
+    conf: 0.8
+    for: [php]
+    if:
+      type: string
+      regex: "unserialize\\s*\\(.{0,50}\\$_GET"
+
+  - id: unserialize-post
+    desc: unserialize from $_POST
+    crit: baseline
+    conf: 0.8
+    for: [php]
+    if:
+      type: string
+      regex: "unserialize\\s*\\(.{0,50}\\$_POST"
+
+  - id: unserialize-request
+    desc: unserialize from $_REQUEST
+    crit: baseline
+    conf: 0.8
+    for: [php]
+    if:
+      type: string
+      regex: "unserialize\\s*\\(.{0,50}\\$_REQUEST"
+
+  - id: unserialize-cookie
+    desc: unserialize from $_COOKIE
+    crit: baseline
+    conf: 0.8
+    for: [php]
+    if:
+      type: string
+      regex: "unserialize\\s*\\(.{0,50}\\$_COOKIE"
+
+composite_rules:
+  - id: unserialize-user-input
+    desc: Deserialization of user input
+    crit: suspicious
+    conf: 0.95
+    mbc: "E1059"
+    attack: "T1059"
+    for: [php]
+    any:
+      - id: unserialize-get
+      - id: unserialize-post
+      - id: unserialize-request
+      - id: unserialize-cookie

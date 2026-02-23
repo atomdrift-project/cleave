@@ -1,0 +1,49 @@
+---
+# Ruby System Information Exfiltration
+# Detects system fingerprinting and data exfiltration
+# ATT&CK: T1082 (System Information Discovery), T1041 (Exfiltration Over C2 Channel)
+
+defaults:
+  for: [ruby]
+  platforms: [all]
+
+traits:
+  # === Base64 JSON Encoding ===
+  - id: base64-json-encode
+    desc: Base64 encoded JSON data
+    crit: notable
+    conf: 0.85
+    attack: "T1027"
+    if:
+      type: string
+      regex: 'Base64\.encode64.{0,50}to_json|encode64.{0,50}json'
+
+composite_rules:
+  # === Info Stealer - HOSTILE ===
+  # Combines: fingerprinting + encoding + HTTP exfil to hardcoded IP
+  # Complexity: all(4) + file_types(1) = 5 >= 4 ✓
+  - id: info-stealer
+    desc: System info stealer with HTTP exfil
+    crit: hostile
+    conf: 0.95
+    attack: "T1041"
+    for: [ruby]
+    all:
+      - id: micro-behaviors/os/sysinfo/hostname::socket-hostname
+      - id: micro-behaviors/os/network/interface::socket-ip-address
+      - id: micro-behaviors/communications/http/lib/netlib::net-http
+      - id: micro-behaviors/communications/http/lib/netlib::hardcoded-ip-url
+
+  # === System Info Exfiltration - SUSPICIOUS ===
+  # Less certainty than info-stealer, but still concerning
+  - id: system-info-exfiltration
+    desc: System information exfiltration
+    crit: suspicious
+    conf: 0.90
+    attack: "T1041"
+    needs: 2
+    any:
+      - id: micro-behaviors/os/sysinfo
+      - id: micro-behaviors/communications/http/lib/netlib::hardcoded-ip-url
+      - id: base64-json-encode
+      - id: micro-behaviors/process/env/access::getenv-user

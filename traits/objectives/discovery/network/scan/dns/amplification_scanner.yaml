@@ -1,0 +1,25 @@
+composite_rules:
+  - id: dns-recursion-check
+    desc: Detects DNS recursion flags
+    crit: notable
+    any:
+      - id: "micro-behaviors/communications/dns/client::recursion-desired-set"
+      - id: "micro-behaviors/communications/dns/client::recursion-available-check"
+
+  - id: dns-amplification-scanner
+    desc: Detects DNS amplification scanning tools (manual header + raw sockets)
+    crit: hostile
+    all:
+      - id: "micro-behaviors/communications/dns/struct::dns-header-struct-def"
+      - id: "micro-behaviors/communications/dns/struct::dns-header-rd-field"
+      - id: "objectives/discovery/network/scan/dns::dns-recursion-check"
+      - id: "micro-behaviors/communications/socket/raw::raw-socket-creation-regex"
+
+  - id: dns-amplification-scanner-weak
+    desc: Detects potential DNS scanning behavior (recursion flags + scanning loop)
+    crit: suspicious
+    all:
+      - id: "objectives/discovery/network/scan/dns::dns-recursion-check"
+    any:
+      - id: "micro-behaviors/communications/socket/send::sendto-struct-usage"
+      - id: "micro-behaviors/communications/socket/raw::raw-socket-creation-regex"

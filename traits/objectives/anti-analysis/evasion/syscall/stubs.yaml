@@ -1,0 +1,151 @@
+# Direct Syscall Instruction Stubs
+# Detects raw syscall/sysenter/int 0x80 instructions in executable sections
+# Malware uses direct syscalls to bypass userland hooks (EDR/AV evasion)
+# ATT&CK: T1106 (Native API)
+# ATT&CK: T1562.001 (Impair Defenses: Disable or Modify Tools)
+
+defaults:
+  attack: "T1106"
+  mbc: "B0009"
+  for: [pe, elf, macho]
+
+traits:
+  # === x86/x64 Syscall Instructions ===
+
+  # Modern x64 syscall instruction (0F 05)
+  - id: syscall-x64-instruction
+    desc: Direct syscall instruction (x64)
+    crit: notable
+    conf: 0.8
+    platforms: [linux, windows]
+    if:
+      type: hex
+      section: text
+      pattern: "0F 05"
+      count_min: 3  # Multiple syscalls suggest manual implementation
+
+  # Legacy x86 int 0x80 (CD 80)
+  - id: int-80-instruction
+    desc: Direct int 0x80 syscall (x86)
+    crit: notable
+    conf: 0.85
+    platforms: [linux]
+    for: [elf]
+    if:
+      type: hex
+      section: text
+      pattern: "CD 80"
+      count_min: 2
+
+  # sysenter instruction (0F 34) - fast syscall on x86
+  - id: sysenter-instruction
+    desc: Direct sysenter syscall
+    crit: notable
+    conf: 0.8
+    platforms: [linux, windows]
+    if:
+      type: hex
+      section: text
+      pattern: "0F 34"
+      count_min: 2
+
+  # === ARM64 Syscall (macOS/Linux) ===
+
+  # SVC #0x80 on macOS ARM64 (D4 00 01 01 in little-endian)
+  - id: svc-macos-arm64
+    desc: Direct SVC syscall (macOS ARM64)
+    crit: suspicious
+    conf: 0.9
+    platforms: [macos]
+    for: [macho]
+    if:
+      type: hex
+      section: text
+      pattern: "01 10 00 D4"  # svc #0x80
+      count_min: 3
+
+  # SVC #0 on Linux ARM64
+  - id: svc-linux-arm64
+    desc: Direct SVC syscall (Linux ARM64)
+    crit: notable
+    conf: 0.85
+    platforms: [linux]
+    for: [elf]
+    if:
+      type: hex
+      section: text
+      pattern: "01 00 00 D4"  # svc #0
+      count_min: 3
+
+  # === Syscall Number Patterns ===
+
+  # Common pattern: MOV RAX, imm ; SYSCALL
+  # B8 XX XX XX XX 0F 05 (mov eax, syscall_nr; syscall)
+  - id: syscall-with-number
+    desc: Syscall with immediate number
+    crit: suspicious
+    conf: 0.9
+    platforms: [linux, windows]
+    if:
+      type: hex
+      section: text
+      pattern: "B8 ?? ?? ?? ?? 0F 05"
+      count_min: 2
+
+  # Pattern: MOV R10, RCX ; MOV RAX, imm ; SYSCALL (Windows x64 convention)
+  # 4C 8B D1 B8 XX XX XX XX 0F 05
+  - id: windows-x64-syscall-stub
+    desc: Windows x64 syscall stub pattern
+    crit: suspicious
+    conf: 0.95
+    platforms: [windows]
+    for: [pe]
+    if:
+      type: hex
+      section: text
+      pattern: "4C 8B D1 B8 ?? ?? ?? 00 0F 05"
+
+  # === High Syscall Density ===
+
+  # Dense syscall usage (EDR bypass indicator)
+  - id: dense-syscalls
+    desc: High density of syscall instructions
+    crit: suspicious
+    conf: 0.85
+    if:
+      type: hex
+      section: text
+      pattern: "0F 05"
+      per_kb_min: 5.0  # 5+ syscalls per KB is unusual
+
+composite_rules:
+  # Direct syscall evasion (bypass userland hooks)
+  - id: syscall-evasion
+    desc: Direct syscall usage (EDR/hook evasion)
+    crit: hostile
+    conf: 0.95
+    attack: "T1562.001"
+    needs: 2
+    any:
+      - id: syscall-x64-instruction
+      - id: int-80-instruction
+      - id: sysenter-instruction
+      - id: svc-macos-arm64
+      - id: svc-linux-arm64
+      - id: syscall-with-number
+      - id: windows-x64-syscall-stub
+      - id: dense-syscalls
+
+  # Windows-specific direct syscalls (strong evasion indicator)
+  - id: windows-direct-syscalls
+    desc: Windows direct syscalls (EDR bypass)
+    crit: hostile
+    conf: 0.98
+    attack: "T1562.001"
+    for: [pe]
+    platforms: [windows]
+    all:
+      - id: windows-x64-syscall-stub
+    any:
+      - id: dense-syscalls
+      - id: objectives/anti-static/obfuscation/payload::minimal-pe-dynamic-load

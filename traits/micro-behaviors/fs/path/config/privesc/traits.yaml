@@ -1,0 +1,31 @@
+# Privilege Escalation Configuration Files
+# Sudo and related privilege configuration
+# ATT&CK: T1548 (Abuse Elevation Control Mechanism)
+
+defaults:
+  for: [all]
+  crit: baseline
+  conf: 0.85
+  attack: "T1548"
+
+traits:
+  - id: etc-sudoers
+    desc: /etc/sudoers sudo configuration
+    if:
+      type: string
+      substr: "/etc/sudoers"
+
+  - id: etc-sudoers-d
+    desc: /etc/sudoers.d/ sudo drop-in directory
+    if:
+      type: string
+      substr: "/etc/sudoers.d/"
+
+composite_rules:
+  - id: sudoers-files
+    desc: Sudo configuration file access
+    crit: notable
+    conf: 0.85
+    any:
+      - id: etc-sudoers
+      - id: etc-sudoers-d

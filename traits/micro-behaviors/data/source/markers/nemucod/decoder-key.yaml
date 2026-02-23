@@ -1,0 +1,12 @@
+traits:
+  - id: nemucod-decoder-key
+    desc: "Nemucod JScript decoder key string"
+    crit: suspicious
+    conf: 1.0
+    for: [javascript]
+    if:
+      type: string
+      # Exact string used as a key in XOR/modulo decryption.
+      exact: "aLtcxZjkaxS"
+    attack: "T1027" # Obfuscated Files or Information
+    mbc: "B0032" # Deobfuscate/Decode

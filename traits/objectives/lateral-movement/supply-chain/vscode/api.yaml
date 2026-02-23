@@ -1,0 +1,204 @@
+traits:
+  # VSCode Extension API Usage
+  - id: workspace-findFiles
+    desc: VSCode workspace.findFiles API call (file
+    crit: notable
+    conf: 0.85
+    for: [javascript, typescript]
+    if:
+      type: ast
+      kind: call
+      exact: "workspace.findFiles"
+
+  - id: fs-readFile
+    desc: VSCode workspace.fs.readFile API call (file
+    crit: notable
+    conf: 0.85
+    for: [javascript, typescript]
+    if:
+      type: ast
+      kind: call
+      exact: "workspace.fs.readFile"
+
+  - id: openTextDocument
+    desc: VSCode workspace.openTextDocument API call
+    crit: notable
+    conf: 0.8
+    for: [javascript, typescript]
+    if:
+      type: ast
+      kind: call
+      exact: "openTextDocument"
+
+  # === Extension Activation atomic indicators ===
+  - id: function-activate
+    desc: function activate definition
+    crit: notable
+    conf: 0.9
+    for: [javascript, typescript]
+    if:
+      id: micro-behaviors/process/create/shell/lang::activate-function
+
+  - id: async-function-activate
+    desc: async function activate definition
+    crit: notable
+    conf: 0.9
+    for: [javascript, typescript]
+    if:
+      type: string
+      substr: "async function activate"
+
+  - id: export-activate
+    desc: export activate pattern
+    crit: notable
+    conf: 0.9
+    for: [javascript, typescript]
+    if:
+      type: string
+      regex: "export.{0,30}activate"
+
+  # === Extension Deactivation atomic indicators ===
+  - id: function-deactivate
+    desc: function deactivate definition
+    crit: notable
+    conf: 0.9
+    for: [javascript, typescript]
+    if:
+      type: string
+      substr: "function deactivate"
+
+  - id: export-deactivate
+    desc: export deactivate pattern
+    crit: notable
+    conf: 0.9
+    for: [javascript, typescript]
+    if:
+      type: string
+      regex: "export.{0,30}deactivate"
+
+  # === VSCode context atomic indicators ===
+  # Use specific patterns instead of combining namespace regex + generic word
+  # to avoid duplicate detection with micro-behaviors/process/create/shell::namespace
+  - id: vscode-commands
+    desc: vscode.commands reference
+    crit: notable
+    conf: 0.9
+    for: [javascript, typescript]
+    if:
+      type: string
+      substr: "vscode.commands"
+
+  - id: vscode-window
+    desc: vscode.window reference
+    crit: notable
+    conf: 0.9
+    for: [javascript, typescript]
+    if:
+      type: string
+      substr: "vscode.window"
+
+  - id: vscode-workspace
+    desc: vscode.workspace reference
+    crit: notable
+    conf: 0.9
+    for: [javascript, typescript]
+    if:
+      type: string
+      substr: "vscode.workspace"
+
+  - id: vscode-extensions
+    desc: vscode.extensions reference
+    crit: notable
+    conf: 0.9
+    for: [javascript, typescript]
+    if:
+      type: string
+      substr: "vscode.extensions"
+
+  - id: clipboard-write
+    desc: VSCode clipboard write access
+    crit: notable
+    conf: 0.8
+    for: [javascript, typescript]
+    if:
+      type: ast
+      kind: call
+      exact: "clipboard.writeText"
+
+  - id: clipboard-read
+    desc: VSCode clipboard read access
+    crit: notable
+    conf: 0.8
+    for: [javascript, typescript]
+    if:
+      type: ast
+      kind: call
+      exact: "clipboard.readText"
+
+  - id: telemetry-event
+    desc: VSCode telemetry event sending
+    crit: notable
+    conf: 0.7
+    for: [javascript, typescript]
+    if:
+      type: string
+      substr: "sendTelemetryEvent"
+
+composite_rules:
+  # VSCode context helpers
+  - id: vscode-context
+    desc: VSCode API context markers
+    crit: notable
+    conf: 0.9
+    for: [javascript, typescript]
+    any:
+      - id: vscode-commands
+      - id: vscode-window
+      - id: vscode-workspace
+      - id: vscode-extensions
+      - id: function-activate
+
+  # Suspicious VSCode Extension Behaviors
+  # IMPORTANT: Requires VSCode markers to avoid FPs on regular npm packages
+  - id: env-access
+    desc: Access to process.env in VSCode
+    crit: suspicious
+    conf: 0.85
+    mbc: "E1592"
+    attack: "T1082"
+    for: [javascript, typescript]
+    all:
+      - id: vscode-context
+      - id: micro-behaviors/os/env/access::javascript
+
+  # Telemetry/Exfiltration Patterns
+  # IMPORTANT: Requires VSCode markers to avoid FPs on regular npm packages
+  - id: external-request
+    desc: HTTP request in VSCode extension
+    crit: suspicious
+    conf: 0.7
+    for: [javascript, typescript]
+    all:
+      - id: vscode-context
+      - id: micro-behaviors/communications/http/request/
+
+  # Activate composite
+  - id: activate
+    desc: VSCode extension activate function
+    crit: notable
+    conf: 1.0
+    for: [javascript, typescript]
+    any:
+      - id: function-activate
+      - id: async-function-activate
+      - id: export-activate
+
+  # Deactivate composite
+  - id: deactivate
+    desc: VSCode extension deactivate function
+    crit: notable
+    conf: 1.0
+    for: [javascript, typescript]
+    any:
+      - id: function-deactivate
+      - id: export-deactivate

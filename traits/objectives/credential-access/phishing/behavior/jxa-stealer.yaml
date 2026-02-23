@@ -1,0 +1,21 @@
+# JXA Credential Stealer Detection
+# Detects JXA scripts that phish for passwords and validate them
+# ATT&CK: T1056.002 (GUI Input Capture), T1552 (Unsecured Credentials)
+
+defaults:
+  platforms: [macos]
+  for: [javascript] # JXA files are often .js or .scpt
+
+composite_rules:
+  - id: jxa-phishing-stealer
+    desc: "JXA script phishing for credentials and validating them"
+    crit: hostile
+    conf: 1.0
+    attack: "T1056.002"
+    mbc: "B0032" # Obfuscation/UI
+    all:
+      - id: objectives/credential-access/phishing/ui::jxa-password-prompt
+      - id: objectives/credential-access/validation/check::dscl-flag-authonly
+    any:
+      - id: micro-behaviors/process/create/script::objc-import
+      - id: micro-behaviors/process/create/script::app-current-app

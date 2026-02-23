@@ -1,0 +1,60 @@
+# Download and Execute - Python
+# GuardDog-inspired: Detects downloading and making executable remote binaries
+# ATT&CK: T1105 (Ingress Tool Transfer)
+# MBC: E1105 (Ingress Tool Transfer)
+
+defaults:
+  for: [python]
+
+composite_rules:
+  # GuardDog: Download + make executable
+  - id: download-and-chmod
+    desc: Downloads file and makes it executable
+    crit: hostile
+    conf: 0.95
+    attack: "T1105"
+    mbc: "E1105"
+    all:
+      # Make executable capability
+      - id: micro-behaviors/fs/chmod/executable::any
+    any:
+      # HTTP download capability
+      - id: micro-behaviors/communications/http/lib/urllib::urllib-urlretrieve
+      - id: micro-behaviors/communications/http/lib/requests::requests-get
+      - id: micro-behaviors/communications/http/request::http-response
+    downgrade:
+      # Legitimate installers may download and chmod binaries
+      any:
+        - id: metadata/quality::has-tests
+        - id: metadata/signed/platform
+
+  # GuardDog: Write exe file + chmod/execute
+  - id: write-exe-execute
+    desc: Writes .exe file and executes
+    crit: hostile
+    conf: 0.95
+    attack: "T1105"
+    mbc: "E1105"
+    all:
+      # Write to .exe file
+      - id: micro-behaviors/fs/write/file::write-exe
+    any:
+      # HTTP download or execution
+      - id: micro-behaviors/communications/http/request::http-response
+      - id: micro-behaviors/fs/chmod/executable::any
+      - id: micro-behaviors/process/create/subprocess::process-execution
+    downgrade:
+      any:
+        - id: metadata/quality::has-tests
+        - id: metadata/signed/platform
+
+  # GuardDog: Combined download-and-execute pattern
+  - id: download-execute-pattern
+    desc: Download and execute remote binary
+    crit: hostile
+    conf: 0.95
+    attack: "T1105"
+    mbc: "E1105"
+    any:
+      - id: download-and-chmod
+      - id: write-exe-execute

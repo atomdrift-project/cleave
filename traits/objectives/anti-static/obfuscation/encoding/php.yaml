@@ -1,0 +1,317 @@
+# PHP Anti-Static Analysis / Obfuscation Traits
+# MBC: B0032 (Obfuscated Files or Information)
+# ATT&CK: T1027
+
+defaults:
+  for: [all]
+
+traits:
+  - id: base64-decode
+    desc: Base64 decoding (potential payload)
+    crit: notable
+    conf: 0.7
+    mbc: "B0032"
+    attack: "T1140"
+    for: [php]
+    if:
+      type: ast
+      kind: call
+      exact: "base64_decode"
+
+  - id: base64-encode
+    desc: Base64 encoding
+    crit: notable
+    conf: 0.6
+    for: [php]
+    if:
+      type: ast
+      kind: call
+      exact: "base64_encode"
+
+  - id: gzinflate
+    desc: Gzip decompression (packed payload)
+    crit: suspicious
+    conf: 0.8
+    mbc: "B0032"
+    attack: "T1140"
+    for: [php]
+    if:
+      type: ast
+      kind: call
+      exact: "gzinflate"
+
+  - id: gzuncompress
+    desc: Zlib decompression (packed payload)
+    crit: suspicious
+    conf: 0.8
+    mbc: "B0032"
+    attack: "T1140"
+    for: [php]
+    if:
+      type: ast
+      kind: call
+      exact: "gzuncompress"
+
+  - id: gzdecode
+    desc: Gzip decoding (packed payload)
+    crit: suspicious
+    conf: 0.8
+    mbc: "B0032"
+    attack: "T1140"
+    for: [php]
+    if:
+      type: ast
+      kind: call
+      exact: "gzdecode"
+
+  - id: rot13
+    desc: ROT13 encoding/decoding
+    crit: suspicious
+    conf: 0.8
+    mbc: "B0032"
+    for: [php]
+    if:
+      type: ast
+      kind: call
+      exact: "str_rot13"
+
+  - id: eval
+    desc: Dynamic code execution via eval
+    crit: suspicious
+    conf: 0.95
+    mbc: "E1059"
+    attack: "T1059"
+    for: [php]
+    if:
+      type: ast
+      kind: call
+      exact: "eval"
+
+  - id: create-function
+    desc: Dynamic function creation (deprecated, often
+    crit: suspicious
+    conf: 0.9
+    mbc: "E1059"
+    attack: "T1059"
+    for: [php]
+    if:
+      type: ast
+      kind: call
+      exact: "create_function"
+
+  - id: preg-replace-e
+    desc: preg_replace with /e modifier (code
+    crit: suspicious
+    conf: 0.95
+    mbc: "E1059"
+    attack: "T1059"
+    for: [php]
+    if:
+      type: ast
+      kind: call
+      regex: "preg_replace\\s*\\(['\"][^'\"]{0,220}\\/[a-zA-Z]{0,12}e[a-zA-Z]{0,12}['\"]"
+
+  - id: assert-dynamic
+    desc: Assert with dynamic code (code
+    crit: suspicious
+    conf: 0.85
+    mbc: "E1059"
+    attack: "T1059"
+    for: [php]
+    if:
+      type: ast
+      kind: call
+      exact: "assert"
+
+  - id: xor-loop
+    desc: Loop performing XOR on user
+    crit: suspicious
+    conf: 0.95
+    mbc: "B0032"
+    for: [php]
+    if:
+      type: ast
+      node: for_statement
+      regex: "\\^="
+
+  - id: strrev
+    desc: String reversal (obfuscation)
+    crit: notable
+    conf: 0.7
+    mbc: "B0032"
+    if:
+      type: ast
+      kind: call
+      exact: "strrev"
+
+  - id: strrev-chained
+    desc: Chained strrev calls (function name obfuscation)
+    crit: suspicious
+    conf: 0.9
+    mbc: "B0032"
+    attack: "T1027"
+    for: [php]
+    if:
+      type: raw
+      regex: "strrev\\(.{1,220}\\)\\s*\\.\\s*strrev\\("
+
+  - id: base64-admin-role
+    desc: Base64 encoded administrator role
+    crit: suspicious
+    conf: 0.95
+    mbc: "B0032"
+    attack: "T1027"
+    for: [php]
+    if:
+      type: raw
+      # YWRtaW5pc3RyYXRvcg== decodes to "administrator"
+      substr: "YWRtaW5pc3RyYXRvcg"
+
+  - id: hex2bin
+    desc: Hex to binary conversion (obfuscation)
+    crit: notable
+    conf: 0.75
+    mbc: "B0032"
+    if:
+      type: ast
+      kind: call
+      exact: "hex2bin"
+
+  - id: bin2hex
+    desc: Binary to hex conversion (obfuscation)
+    crit: notable
+    conf: 0.75
+    mbc: "B0032"
+    if:
+      type: ast
+      kind: call
+      exact: "bin2hex"
+
+  - id: substitution-cipher
+    desc: Potential substitution cipher (obfuscation)
+    crit: suspicious
+    conf: 0.8
+    mbc: "B0032"
+    if:
+      type: ast
+      kind: call
+      regex: "str_replace\\s*\\(\\s*array\\s*\\(.{1,220}\\)\\s*,\\s*array\\s*\\(.{1,220}\\)"
+
+  - id: pack
+    desc: Packs data into binary string
+    crit: notable
+    conf: 0.7
+    if:
+      type: ast
+      kind: call
+      exact: "pack"
+
+  - id: unpack
+    desc: Unpacks data from binary string
+    crit: notable
+    conf: 0.7
+    if:
+      type: ast
+      kind: call
+      exact: "unpack"
+
+  - id: variable-function-call
+    desc: Variable function call (obfuscation)
+    crit: suspicious
+    conf: 0.8
+    mbc: "B0032"
+    for: [php]
+    if:
+      type: ast
+      kind: call
+      regex: "^(\\$|\\{)[^>\\-]{1,120}\\("
+
+  - id: dynamic-variable-call
+    desc: Dynamic variable function call (e.g.
+    crit: suspicious
+    conf: 0.95
+    for: [php]
+    if:
+      type: ast
+      kind: call
+      regex: "\\$\\{.{0,50}\\}"
+
+  - id: dynamic-superglobal-call-a
+    desc: GET/POST/REQUEST used as function
+    crit: suspicious
+    conf: 0.98
+    mbc: "B0032"
+    if:
+      type: ast
+      kind: call
+      regex: "\\$_(GET|POST|REQUEST)\\s*\\("
+
+  - id: dynamic-superglobal-call-b
+    desc: COOKIE/SERVER used as function
+    crit: suspicious
+    conf: 0.98
+    mbc: "B0032"
+    if:
+      type: ast
+      kind: call
+      regex: "\\$_(COOKIE|SERVER)\\s*\\("
+
+  - id: subscript-function-call
+    desc: Subscript used as function (obfuscated
+    crit: suspicious
+    conf: 0.85
+    mbc: "B0032"
+    if:
+      type: ast
+      kind: call
+      regex: "\\$\\w+\\s*\\[[^]]+\\]\\s*\\("
+
+  - id: simple-variable-call
+    desc: Variable used as function (obfuscated
+    crit: suspicious
+    conf: 0.8
+    mbc: "B0032"
+    for: [php]
+    if:
+      type: ast
+      kind: call
+      regex: "\\$\\w+\\s*\\("
+
+  - id: dynamic-superglobal-simple-a
+    desc: GET/POST/REQUEST index as function
+    crit: suspicious
+    conf: 0.98
+    mbc: "B0032"
+    if:
+      type: ast
+      kind: call
+      regex: "\\$_(GET|POST|REQUEST)\\s*\\[[^\\]]{1,120}\\]\\s*\\("
+
+  - id: dynamic-superglobal-simple-b
+    desc: COOKIE/SERVER index as function
+    crit: suspicious
+    conf: 0.98
+    mbc: "B0032"
+    if:
+      type: ast
+      kind: call
+      regex: "\\$_(COOKIE|SERVER)\\s*\\[[^\\]]{1,120}\\]\\s*\\("
+
+composite_rules:
+  - id: dynamic-superglobal-call
+    desc: Superglobal used as function (obfuscated
+    crit: suspicious
+    conf: 0.98
+    mbc: "B0032"
+    any:
+      - id: dynamic-superglobal-call-a
+      - id: dynamic-superglobal-call-b
+
+  - id: dynamic-superglobal-simple
+    desc: Superglobal used as function (obfuscated
+    crit: suspicious
+    conf: 0.98
+    mbc: "B0032"
+    any:
+      - id: dynamic-superglobal-simple-a
+      - id: dynamic-superglobal-simple-b

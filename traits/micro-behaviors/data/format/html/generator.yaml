@@ -1,0 +1,31 @@
+# HTML Generation
+# Detects generation of HTML content
+
+defaults:
+  for: [all]
+
+traits:
+  - id: html-generator-doctype
+    desc: Generates HTML content (DOCTYPE)
+    crit: notable
+    conf: 0.8
+    if:
+      type: string
+      substr: "<!DOCTYPE html>"
+
+  - id: html-generator-tags
+    desc: Generates HTML tags
+    crit: notable
+    conf: 0.6
+    if:
+      type: string
+      regex: "<html|<head>|<body|<div"
+
+  - id: html-generator-ext
+    desc: Constructs HTML file path
+    crit: notable
+    conf: 0.8
+    for: [python]
+    if:
+      type: raw
+      regex: '["'']\.html["'']'

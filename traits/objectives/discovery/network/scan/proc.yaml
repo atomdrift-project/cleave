@@ -1,0 +1,21 @@
+# Network Discovery via /proc - Linux
+# Patterns for network reconnaissance and enumeration
+# ATT&CK: T1016 (System Network Configuration Discovery)
+
+# NOTE: Atomic traits for /proc/net/* are in micro-behaviors/fs/proc/info/
+# This file contains objective-level detection (network scanning intent)
+
+composite_rules:
+  # Network scanner composite (detects active network enumeration)
+  - id: scanner
+    desc: "Network connection enumeration (target scanning)"
+    crit: suspicious
+    conf: 0.85
+    mbc: "E1016"
+    attack: "T1016"
+    for: [elf]
+    platforms: [linux]
+    any:
+      - id: micro-behaviors/fs/proc/info::proc-net-tcp
+      - id: micro-behaviors/fs/proc/info::proc-net-udp
+      - id: micro-behaviors/fs/proc/info::proc-net-raw

@@ -1,0 +1,22 @@
+# Memory Locking - Unix
+
+traits:
+  - id: mlock
+    desc: Lock memory pages (mlock)
+    crit: baseline
+    conf: 1.0
+    platforms: [linux, macos, unix]
+    for: [elf, macho, so, dylib, c]
+    if:
+      type: symbol
+      regex: "^_?mlock2?$"
+
+  - id: mlockall
+    desc: Lock all memory pages (mlockall)
+    crit: notable
+    conf: 0.7
+    platforms: [linux, macos, unix]
+    for: [elf, macho, so, dylib, c]
+    if:
+      type: symbol
+      regex: "^_?mlockall$"

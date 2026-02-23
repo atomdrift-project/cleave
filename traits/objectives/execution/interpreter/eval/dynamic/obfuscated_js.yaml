@@ -1,0 +1,114 @@
+# Obfuscated Dynamic Execution Patterns (JavaScript)
+# Detects evasive eval usage
+# ATT&CK: T1027 + T1059.007
+
+traits:
+  # Indirect eval execution via this[var]
+  - id: js-indirect-eval-this
+    desc: Indirect eval via property
+    crit: notable
+    conf: 0.8
+    attack: "T1059.007"
+    for: [javascript]
+    if:
+        type: raw
+        regex: 'this\[\w+\]\('
+    downgrade:
+      any:
+        - id: metadata/library/jquery::domain
+        - id: metadata/library/jquery::version-string
+        - id: metadata/library/jquery::copyright
+        - id: metadata/library/jquery::fn-extend
+        - id: metadata/library/prototype::copyright
+        - id: metadata/library/prototype::version-string
+        - id: metadata/library/prototype::header-x
+    unless:
+      - id: metadata/library/jquery::domain
+      - id: metadata/library/jquery::version-string
+      - id: metadata/library/jquery::copyright
+      - id: metadata/library/jquery::fn-extend
+      - id: metadata/library/prototype::copyright
+      - id: metadata/library/prototype::version-string
+      - id: metadata/library/prototype::header-x
+
+  - id: js-indirect-eval-this-assign
+    desc: Indirect eval via variable assignment
+    crit: notable
+    conf: 0.8
+    attack: "T1059.007"
+    for: [javascript]
+    if:
+        type: raw
+        regex: '\w+\s*=\s*this\[\w{2,}\]'
+    unless:
+      - id: metadata/library/jquery::domain
+      - id: metadata/library/jquery::version-string
+      - id: metadata/library/jquery::copyright
+      - id: metadata/library/jquery::fn-extend
+      - id: metadata/library/d3::d3-detection
+      - id: metadata/library/prototype::copyright
+      - id: metadata/library/prototype::version-string
+      - id: metadata/library/prototype::header-x
+
+  - id: js-assign-global-this
+    desc: Assigning 'this' (global object) to a variable
+    crit: notable
+    conf: 0.7
+    for: [javascript]
+    if:
+        type: raw
+        regex: '\b\w+\s*=\s*this([^\.]|$)'
+        count_min: 5
+
+  - id: js-assign-common-root-1
+    desc: Global object assignment (root/self/global)
+    crit: notable
+    conf: 0.9
+    for: [javascript]
+    if:
+        type: raw
+        regex: '\b(root|self|global|that)\s*=\s*this\b'
+    unless:
+      # Exclude well-formatted code where self=this is standard pre-ES6 pattern
+      - type: metrics
+        field: text.whitespace_ratio
+        min: 0.20
+
+  - id: js-assign-common-root-2
+    desc: Global object assignment (me/window/globalThis)
+    crit: notable
+    conf: 0.9
+    for: [javascript]
+    if:
+        type: raw
+        regex: '\b(me|window|globalThis)\s*=\s*this\b'
+
+  # Indirect eval execution via window[var] or similar
+  - id: js-indirect-eval-window
+    desc: Indirect eval via global
+    crit: notable
+    conf: 0.8
+    attack: "T1059.007"
+    for: [javascript]
+    if:
+        type: raw
+        regex: '(window|self|global)\[\w+\]\('
+
+  # Construction of "eval" string (e.g., 'e'+'val')
+  - id: js-eval-construction
+    desc: Constructed eval string
+    crit: notable
+    conf: 0.85
+    for: [javascript]
+    if:
+        type: raw
+        regex: '[''"]e[''"]\s*\+\s*[''"]val[''"]'
+
+composite_rules:
+  - id: js-assign-common-root
+    desc: Common global object assignment (root, self, global)
+    crit: notable
+    conf: 0.9
+    any:
+      - id: js-assign-common-root-1
+      - id: js-assign-common-root-2

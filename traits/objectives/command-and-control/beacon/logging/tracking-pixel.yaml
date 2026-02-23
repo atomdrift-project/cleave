@@ -1,0 +1,39 @@
+# C2 Beaconing to tracking/logging services
+# Detects malware that uses tracking pixels or IP loggers for beaconing
+# ATT&CK: T1071 (Application Layer Protocol)
+
+composite_rules:
+  - id: ruby-tracking-pixel-beacon
+    desc: Ruby HTTP request to tracking/logging service (beaconing)
+    crit: suspicious
+    conf: 0.95
+    all:
+      - id: micro-behaviors/communications/http/lib/netlib::request-ruby
+    any:
+      - id: objectives/discovery/network/ip-tracker/
+      - id: objectives/discovery/network/scan::iplogger-keyword
+      - id: objectives/discovery/network/scan::iplogger-b64
+      - id: objectives/command-and-control/infrastructure/network::ruby-ast-fragmented-iplogger
+      - id: objectives/command-and-control/infrastructure/network::ruby-ast-fragmented-iplogger-alt
+
+  - id: python-tracking-pixel-beacon
+    desc: Python HTTP request to tracking/logging service (beaconing)
+    crit: suspicious
+    conf: 0.95
+    all:
+      - id: micro-behaviors/communications/http/request::request-python
+    any:
+      - id: objectives/discovery/network/ip-tracker/
+      - id: objectives/discovery/network/scan::iplogger-keyword
+      - id: objectives/discovery/network/scan::iplogger-b64
+
+  - id: generic-tracking-pixel-beacon
+    desc: HTTP request to tracking/logging service (beaconing)
+    crit: suspicious
+    conf: 0.9
+    all:
+      - id: micro-behaviors/communications/http/request/
+    any:
+      - id: objectives/discovery/network/ip-tracker/
+      - id: objectives/discovery/network/scan::iplogger-keyword
+      - id: objectives/discovery/network/scan::iplogger-b64

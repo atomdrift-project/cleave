@@ -1,0 +1,11 @@
+defaults:
+  for: [all]
+
+traits:
+  - id: pipe-return-this
+    desc: "Detects 'Object.prototype.pipe' function returning 'this' (Nemucod obfuscation)"
+    crit: suspicious
+    # This is a specific variant of the generic return-this trait used by Nemucod
+    if:
+      type: raw
+      regex: 'function\s+[a-zA-Z0-9_$]+.prototype.pipe\s*\(\s*\)\s*\{\s*return\s+this'

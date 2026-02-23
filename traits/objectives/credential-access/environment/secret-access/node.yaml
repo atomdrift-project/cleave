@@ -1,0 +1,478 @@
+# Node.js Environment Variable Access
+# ATT&CK: T1552.001 (Credentials In Files)
+
+defaults:
+  for: [javascript, typescript]
+  attack: "T1552.001"
+
+traits:
+  # === Config file access atomic indicators ===
+  # ssh-id-rsa removed - use objectives/credential-access/ssh/key::id-rsa
+  # Removed aws-credentials-file duplicate - use micro-behaviors/fs/path/sensitive/cloud::aws-credentials
+
+  - id: kube-config-file
+    desc: Kubernetes config path
+    crit: notable
+    conf: 0.6
+    if:
+      type: string
+      substr: ".kube/config"
+
+  # === AWS env atomic indicators ===
+  - id: env-aws-access-key
+    desc: AWS_ACCESS_KEY env access
+    crit: notable
+    conf: 0.7
+    if:
+      type: string
+      substr: "process.env.AWS_ACCESS_KEY"
+
+  - id: env-aws-secret
+    desc: AWS_SECRET env access
+    crit: notable
+    conf: 0.7
+    if:
+      type: string
+      substr: "process.env.AWS_SECRET"
+
+  - id: env-aws-session-token
+    desc: AWS_SESSION_TOKEN env access
+    crit: notable
+    conf: 0.7
+    if:
+      type: string
+      substr: "process.env.AWS_SESSION_TOKEN"
+
+  # === Git token atomic indicators ===
+  - id: env-github-token
+    desc: GITHUB_TOKEN env access
+    crit: notable
+    conf: 0.7
+    if:
+      type: string
+      substr: "process.env.GITHUB_TOKEN"
+
+  - id: env-gitlab-token
+    desc: GITLAB_TOKEN env access
+    crit: notable
+    conf: 0.7
+    if:
+      type: string
+      substr: "process.env.GITLAB_TOKEN"
+
+  - id: env-gh-token
+    desc: GH_TOKEN env access
+    crit: notable
+    conf: 0.7
+    if:
+      type: string
+      substr: "process.env.GH_TOKEN"
+
+  - id: env-bitbucket-token
+    desc: BITBUCKET_TOKEN env access
+    crit: notable
+    conf: 0.7
+    if:
+      type: string
+      substr: "process.env.BITBUCKET_TOKEN"
+
+  # === NPM token atomic indicators ===
+  - id: env-npm-token
+    desc: NPM_TOKEN env access
+    crit: notable
+    conf: 0.7
+    if:
+      type: string
+      substr: "process.env.NPM_TOKEN"
+
+  - id: env-npm-auth-token
+    desc: NPM_AUTH_TOKEN env access
+    crit: notable
+    conf: 0.7
+    if:
+      type: string
+      substr: "process.env.NPM_AUTH_TOKEN"
+
+  - id: env-node-auth-token
+    desc: NODE_AUTH_TOKEN env access
+    crit: notable
+    conf: 0.7
+    if:
+      type: string
+      substr: "process.env.NODE_AUTH_TOKEN"
+
+  # === Discord token atomic indicators ===
+  - id: env-discord-token
+    desc: DISCORD_TOKEN env access
+    crit: notable
+    conf: 0.7
+    if:
+      type: string
+      substr: "process.env.DISCORD_TOKEN"
+
+  - id: env-discord-bot-token
+    desc: DISCORD_BOT_TOKEN env access
+    crit: notable
+    conf: 0.7
+    if:
+      type: string
+      substr: "process.env.DISCORD_BOT_TOKEN"
+
+  - id: env-discord-client-secret
+    desc: DISCORD_CLIENT_SECRET env access
+    crit: notable
+    conf: 0.7
+    if:
+      type: string
+      substr: "process.env.DISCORD_CLIENT_SECRET"
+
+  # === Slack token atomic indicators ===
+  - id: env-slack-token
+    desc: SLACK_TOKEN env access
+    crit: notable
+    conf: 0.7
+    if:
+      type: string
+      substr: "process.env.SLACK_TOKEN"
+
+  - id: env-slack-bot-token
+    desc: SLACK_BOT_TOKEN env access
+    crit: notable
+    conf: 0.7
+    if:
+      type: string
+      substr: "process.env.SLACK_BOT_TOKEN"
+
+  - id: env-slack-webhook
+    desc: SLACK_WEBHOOK env access
+    crit: notable
+    conf: 0.7
+    if:
+      type: string
+      substr: "process.env.SLACK_WEBHOOK"
+
+  # === Database atomic indicators ===
+  - id: env-database-url
+    desc: DATABASE_URL env access
+    crit: notable
+    conf: 0.6
+    if:
+      type: string
+      substr: "process.env.DATABASE_URL"
+
+  - id: env-mongodb-uri
+    desc: MONGODB_URI env access
+    crit: notable
+    conf: 0.6
+    if:
+      type: string
+      substr: "process.env.MONGODB_URI"
+
+  - id: env-postgres-prefix
+    desc: POSTGRES_ env prefix access
+    crit: notable
+    conf: 0.6
+    if:
+      type: string
+      regex: "process\\.env\\.POSTGRES_"
+
+  - id: env-mysql-prefix
+    desc: MYSQL_ env prefix access
+    crit: notable
+    conf: 0.6
+    if:
+      type: string
+      regex: "process\\.env\\.MYSQL_"
+
+  - id: env-redis-url
+    desc: REDIS_URL env access
+    crit: notable
+    conf: 0.6
+    if:
+      type: string
+      substr: "process.env.REDIS_URL"
+
+  # === Crypto/wallet atomic indicators ===
+  - id: env-wallet-prefix
+    desc: WALLET_ env prefix access
+    crit: notable
+    conf: 0.7
+    if:
+      type: string
+      regex: "process\\.env\\.WALLET_"
+
+  - id: env-mnemonic
+    desc: MNEMONIC env access
+    crit: notable
+    conf: 0.7
+    if:
+      type: string
+      substr: "process.env.MNEMONIC"
+
+  - id: env-seed-phrase
+    desc: SEED_PHRASE env access
+    crit: notable
+    conf: 0.7
+    if:
+      type: string
+      substr: "process.env.SEED_PHRASE"
+
+  - id: env-private-key
+    desc: PRIVATE_KEY env access
+    crit: notable
+    conf: 0.7
+    if:
+      type: string
+      substr: "process.env.PRIVATE_KEY"
+
+  - id: env-eth-private
+    desc: ETH_PRIVATE env access
+    crit: notable
+    conf: 0.7
+    if:
+      type: string
+      regex: "process\\.env\\.ETH_PRIVATE"
+
+  # === CI/CD atomic indicators ===
+  - id: env-ci-token
+    desc: CI_TOKEN env access
+    crit: notable
+    conf: 0.6
+    if:
+      type: string
+      substr: "process.env.CI_TOKEN"
+
+  - id: env-circle-token
+    desc: CIRCLE_TOKEN env access
+    crit: notable
+    conf: 0.6
+    if:
+      type: string
+      substr: "process.env.CIRCLE_TOKEN"
+
+  - id: env-travis-token
+    desc: TRAVIS_TOKEN env access
+    crit: notable
+    conf: 0.6
+    if:
+      type: string
+      substr: "process.env.TRAVIS_TOKEN"
+
+  - id: env-jenkins-prefix
+    desc: JENKINS_ env prefix access
+    crit: notable
+    conf: 0.6
+    if:
+      type: string
+      regex: "process\\.env\\.JENKINS_"
+
+  - id: env-buildkite-prefix
+    desc: BUILDKITE_ env prefix access
+    crit: notable
+    conf: 0.6
+    if:
+      type: string
+      regex: "process\\.env\\.BUILDKITE_"
+
+  # === Cloud provider atomic indicators ===
+  - id: env-google-prefix
+    desc: GOOGLE_ env prefix access
+    crit: notable
+    conf: 0.6
+    if:
+      type: string
+      regex: "process\\.env\\.GOOGLE_"
+
+  - id: env-gcp-prefix
+    desc: GCP_ env prefix access
+    crit: notable
+    conf: 0.6
+    if:
+      type: string
+      regex: "process\\.env\\.GCP_"
+
+  - id: env-azure-prefix
+    desc: AZURE_ env prefix access
+    crit: notable
+    conf: 0.6
+    if:
+      type: string
+      regex: "process\\.env\\.AZURE_"
+
+  - id: env-digitalocean-prefix
+    desc: DIGITALOCEAN_ env prefix access
+    crit: notable
+    conf: 0.6
+    if:
+      type: string
+      regex: "process\\.env\\.DIGITALOCEAN_"
+
+  - id: env-heroku-api
+    desc: HEROKU_API env access
+    crit: notable
+    conf: 0.6
+    if:
+      type: string
+      regex: "process\\.env\\.HEROKU_API"
+
+  # === Env dump atomic indicators ===
+  - id: json-stringify-env
+    desc: JSON.stringify(process.env)
+    crit: notable
+    conf: 0.7
+    if:
+      type: string
+      regex: 'JSON\.stringify\(\s*process\.env\s*\)'
+
+  - id: object-keys-env
+    desc: Object.keys(process.env)
+    crit: notable
+    conf: 0.7
+    if:
+      type: string
+      regex: 'Object\.keys\(process\.env'
+
+  - id: object-entries-env
+    desc: Object.entries(process.env)
+    crit: notable
+    conf: 0.7
+    if:
+      type: string
+      regex: 'Object\.entries\(process\.env'
+
+composite_rules:
+  # Config file access composite
+  - id: node-config
+    desc: Accessing sensitive configuration files
+    crit: suspicious
+    conf: 0.7
+    any:
+      - id: objectives/credential-access/ssh/key::id-rsa
+      - id: micro-behaviors/fs/path/sensitive/cloud::aws-credentials
+      - id: kube-config-file
+
+  # AWS credentials composite
+  - id: node-aws
+    desc: Accesses AWS credentials from environment
+    crit: suspicious
+    conf: 0.9
+    any:
+      - id: env-aws-access-key
+      - id: env-aws-secret
+      - id: env-aws-session-token
+
+  # Git token composite
+  - id: node-git-token
+    desc: Accesses Git service tokens from
+    crit: suspicious
+    conf: 0.9
+    any:
+      - id: env-github-token
+      - id: env-gitlab-token
+      - id: env-gh-token
+      - id: env-bitbucket-token
+
+  # NPM token composite
+  - id: node-npm-token
+    desc: Accesses NPM authentication tokens
+    crit: suspicious
+    conf: 0.95
+    any:
+      - id: env-npm-token
+      - id: env-npm-auth-token
+      - id: env-node-auth-token
+
+  # Discord token composite
+  - id: node-discord
+    desc: Accesses Discord bot/user tokens
+    crit: suspicious
+    conf: 0.9
+    any:
+      - id: env-discord-token
+      - id: env-discord-bot-token
+      - id: env-discord-client-secret
+
+  # Slack token composite
+  - id: node-slack
+    desc: Accesses Slack tokens from environment
+    crit: suspicious
+    conf: 0.9
+    any:
+      - id: env-slack-token
+      - id: env-slack-bot-token
+      - id: env-slack-webhook
+
+  # Database composite
+  - id: node-database
+    desc: Accesses database connection strings
+    crit: suspicious
+    conf: 0.85
+    any:
+      - id: env-database-url
+      - id: env-mongodb-uri
+      - id: env-postgres-prefix
+      - id: env-mysql-prefix
+      - id: env-redis-url
+
+  # Crypto/wallet composite
+  - id: node-crypto
+    desc: Accesses cryptocurrency private keys
+    crit: suspicious
+    conf: 0.95
+    any:
+      - id: env-wallet-prefix
+      - id: env-mnemonic
+      - id: env-seed-phrase
+      - id: env-private-key
+      - id: env-eth-private
+
+  # CI/CD composite
+  - id: node-cicd
+    desc: Accesses CI/CD pipeline tokens
+    crit: suspicious
+    conf: 0.85
+    any:
+      - id: env-ci-token
+      - id: env-circle-token
+      - id: env-travis-token
+      - id: env-jenkins-prefix
+      - id: env-buildkite-prefix
+
+  # Cloud provider composite
+  - id: node-cloud
+    desc: Accesses cloud provider credentials
+    crit: suspicious
+    conf: 0.9
+    any:
+      - id: env-google-prefix
+      - id: env-gcp-prefix
+      - id: env-azure-prefix
+      - id: env-digitalocean-prefix
+      - id: env-heroku-api
+
+  # Env dump composite
+  - id: node-env-dump
+    desc: Accesses entire process.env object
+    crit: notable
+    conf: 0.85
+    any:
+      - id: json-stringify-env
+      - id: object-keys-env
+      - id: object-entries-env
+
+  # Multi-credential access
+  - id: node-multi-cred
+    desc: Accesses multiple credential sources (credential
+    crit: hostile
+    conf: 0.95
+    attack: "T1552.001"
+    mbc: "B0028"
+    for: [javascript, typescript]
+    needs: 3
+    any:
+      - id: node-aws
+      - id: node-git-token
+      - id: node-npm-token
+      - id: node-discord
+      - id: node-database
+      - id: node-crypto

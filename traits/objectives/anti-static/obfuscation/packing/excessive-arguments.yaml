@@ -1,0 +1,18 @@
+traits:
+  - id: excessive-function-arguments
+    desc: "Function definition with excessive arguments (>50)"
+    crit: suspicious
+    conf: 0.8
+    for: [javascript, typescript]
+    if:
+      type: raw
+      regex: 'function\s+[a-zA-Z0-9_]+\s*\(([a-zA-Z0-9_]+,){50,}[a-zA-Z0-9_]+\)'
+
+  - id: packed-string-decryptor
+    desc: "Common packer string decryption pattern (L function)"
+    crit: suspicious
+    conf: 0.85
+    for: [javascript, typescript]
+    if:
+      type: raw
+      regex: 'return\s+[a-zA-Z0-9_]+\([a-zA-Z0-9_]+-\s*-0x[0-9a-fA-F]+,[a-zA-Z0-9_]+\)'

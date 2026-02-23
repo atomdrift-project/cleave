@@ -1,0 +1,26 @@
+# macOS Mach Kernel Host Information
+# Mach kernel APIs for querying host information
+# MBC: E1082 (System Information Discovery)
+# ATT&CK: T1082 (System Information Discovery)
+
+defaults:
+  for: [macho, so, dylib, c]
+  platforms: [macos]
+  crit: baseline
+  mbc: "E1082"
+  attack: "T1082"
+
+traits:
+  - id: host_info
+    desc: Query host information (macOS Mach)
+    conf: 0.6
+    if:
+      type: symbol
+      regex: host_info
+
+  - id: host_statistics
+    desc: Query host statistics (macOS Mach)
+    conf: 0.6
+    if:
+      type: symbol
+      regex: host_statistics

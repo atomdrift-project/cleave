@@ -1,0 +1,25 @@
+# C++ Exception-Based Control Flow Obfuscation
+# Detects use of C++ exceptions for anti-analysis and control flow redirection
+# ATT&CK: T1027 (Obfuscated Files or Information)
+
+defaults:
+  platforms: [macos, linux]
+  for: [macho, elf]
+  mbc: "B0032"
+
+traits:
+  # cpp-exception-throw, cpp-exception-catch, cpp-personality removed
+  # Use micro-behaviors/dylib/library/abi-graphics::cxx-abi-symbols-a instead
+
+composite_rules:
+  - id: suspicious-cpp-exception-exec
+    desc: "Small C++ binary with exception-obfuscated execution"
+    crit: suspicious
+    conf: 0.85
+    # High-confidence: Small binary using exceptions AND system() calls
+    size_max: 500000
+    all:
+      - id: micro-behaviors/dylib/library/abi-graphics::cxx-abi-symbols-a
+      - id: micro-behaviors/process/create/shell::system-fn
+    none:
+      - id: metadata/signed/platform::apple

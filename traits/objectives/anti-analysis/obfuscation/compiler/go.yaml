@@ -1,0 +1,102 @@
+traits:
+- id: base64
+  desc: Base64 decoding
+  crit: notable
+  conf: 0.85
+  attack: T1140
+  for:
+  - go
+  if:
+    type: string
+    regex: base64\..{0,50}Encoding\.DecodeString
+- id: hex
+  desc: Decodes hexadecimal strings
+  crit: notable
+  conf: 0.8
+  attack: T1140
+  for:
+  - go
+  if:
+    type: string
+    substr: hex.DecodeString
+- id: compression
+  desc: Data decompression
+  crit: suspicious
+  conf: 0.75
+  attack: T1140
+  for:
+  - go
+  if:
+    type: string
+    regex: (gzip|zlib)\.NewReader
+- id: reflection
+  desc: Reflection/dynamic invocation
+  crit: notable
+  conf: 0.85
+  for:
+  - go
+  if:
+    type: string
+    regex: reflect\.(ValueOf|Call)
+- id: environment-probe-api
+  desc: Environment variable probe API
+  crit: notable
+  conf: 0.8
+  for:
+  - go
+  if:
+    id: micro-behaviors/os/env/access/go::env-access
+- id: anti-debug
+  desc: Ptrace (debugger detection)
+  crit: notable
+  conf: 0.95
+  attack: T1622
+  for:
+  - go
+  size_max: 1048576
+  if:
+    type: string
+    word: ptrace
+  unless:
+  - type: raw
+    regex: syscall|runtime
+- id: environment-probe-indicator-a
+  desc: Sandbox and VM vendors
+  crit: notable
+  conf: 0.7
+  for:
+  - go
+  if:
+    type: string
+    case_insensitive: true
+    regex: \\b(sandbox|virtualbox|vmware)\\b
+- id: environment-probe-indicator-b
+  desc: Emulator and CI environment markers
+  crit: notable
+  conf: 0.7
+  for:
+  - go
+  if:
+    type: string
+    case_insensitive: true
+    regex: \\b(qemu|vbox|travis|appveyor)\\b
+composite_rules:
+- id: environment-probe-indicator
+  desc: Sandbox/VM environment indicator
+  crit: notable
+  conf: 0.7
+  for:
+  - go
+  any:
+  - id: environment-probe-indicator-a
+  - id: environment-probe-indicator-b
+- id: environment-check
+  desc: Runtime environment checks
+  crit: suspicious
+  conf: 0.75
+  attack: T1497
+  for:
+  - go
+  all:
+  - id: environment-probe-api
+  - id: environment-probe-indicator

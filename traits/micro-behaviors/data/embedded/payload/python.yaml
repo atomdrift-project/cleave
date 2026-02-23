@@ -1,0 +1,74 @@
+# Python Image-Embedded Payload Extraction
+# Detects scripts that recover payload bytes from image pixels and emit script files.
+# MBC: F0001.006 (Embedded Payload)
+# ATT&CK: T1027.003 (Steganography)
+
+defaults:
+  for: [python]
+  mbc: "F0001.006"
+  attack: "T1027.003"
+
+traits:
+  - id: pil-pixel-access
+    desc: PIL image pixel extraction loop
+    crit: notable
+    conf: 0.85
+    if:
+      type: symbol
+      exact: "Image.open"
+
+  - id: pixel-getter-call
+    desc: Pixel getter API usage
+    crit: notable
+    conf: 0.8
+    if:
+      type: symbol
+      substr: ".getpixel"
+
+  - id: rgb-lsb-nibble-rebuild
+    desc: RGB nibble merge for byte rebuild
+    crit: suspicious
+    conf: 0.95
+    if:
+      type: raw
+      substr: "px[2] & 0xf"
+
+  - id: rgb-lsb-nibble-rebuild-alt
+    desc: RGB nibble merge variant
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: raw
+      substr: "px[1]&0xf"
+
+  - id: chr-stream-from-int-array
+    desc: Character stream from integer array
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: raw
+      substr: "map(chr,filter(None"
+
+  - id: ps1-written-from-decoded-bytes
+    desc: Writes decoded byte stream to ps1
+    crit: suspicious
+    conf: 0.95
+    attack: "T1059.001"
+    if:
+      type: raw
+      regex: "\\.ps1['\\\"]\\s*,\\s*['\\\"]w['\\\"]"
+
+composite_rules:
+  - id: png-lsb-script-extractor
+    desc: PNG LSB payload script extractor
+    crit: suspicious
+    conf: 0.95
+    all:
+      - id: pil-pixel-access
+      - id: pixel-getter-call
+      - id: rgb-lsb-nibble-rebuild
+      - id: chr-stream-from-int-array
+    any:
+      - id: rgb-lsb-nibble-rebuild-alt
+      - id: ps1-written-from-decoded-bytes
+      - id: micro-behaviors/process/create/script::powershell-script-execution

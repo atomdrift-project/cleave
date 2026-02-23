@@ -1,0 +1,11 @@
+defaults:
+  for: [all]
+
+traits:
+  - id: action-events-exec
+    desc: Executes script via ActionEvents engine
+    crit: notable
+    conf: 0.9
+    if:
+      type: string
+      regex: "ActionEvents\\.executeScript|execute\\.script"

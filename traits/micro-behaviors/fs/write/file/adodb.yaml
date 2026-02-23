@@ -1,0 +1,10 @@
+defaults:
+  for: [all]
+
+traits:
+  - id: adodb-stream
+    desc: "ADODB.Stream object"
+    crit: notable
+    if:
+      type: string
+      regex: 'ADODB\.Stream'

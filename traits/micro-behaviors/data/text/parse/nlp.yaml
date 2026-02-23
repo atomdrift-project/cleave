@@ -1,0 +1,36 @@
+defaults:
+  for: [all]
+
+traits:
+  - id: nlp-tokenization-nltk
+    desc: Uses NLP library for tokenization
+    crit: notable
+    conf: 0.8
+    if:
+      type: symbol
+      exact: "nltk"
+
+  - id: nlp-tokenization-word-tokenize
+    desc: Uses NLP library for tokenization
+    crit: notable
+    conf: 0.8
+    if:
+      type: symbol
+      exact: "word_tokenize"
+
+  - id: bigram-generation
+    desc: Generates bigrams/word pairs
+    crit: baseline
+    conf: 0.5
+    if:
+      type: string
+      regex: "word_pairs"
+
+composite_rules:
+  - id: nlp-tokenization
+    desc: Uses NLP library for tokenization
+    crit: notable
+    conf: 0.8
+    any:
+      - id: nlp-tokenization-nltk
+      - id: nlp-tokenization-word-tokenize

@@ -1,0 +1,217 @@
+---
+# Ruby AST-based behavioral detection patterns
+# Uses AST patterns to detect suspicious Ruby code structures
+# ATT&CK: T1059 (Command Execution), T1071 (Application Layer Protocol)
+
+defaults:
+  for: [ruby]
+  platforms: [all]
+
+traits:
+  # === HTTP Download in Method ===
+  - id: ruby-ast-http-in-method
+    desc: HTTP request inside method
+    crit: notable
+    conf: 0.88
+    attack: "T1071"
+    if:
+      type: ast
+      kind: call
+      exact: "Net::HTTP.get_response"
+
+  # === File Write with Binary Mode ===
+  - id: ruby-ast-file-binmode-write
+    desc: File binmode followed by write
+    crit: notable
+    conf: 0.85
+    if:
+      type: ast
+      kind: call
+      exact: ".binmode"
+
+  # === File Chmod 777 ===
+  - id: ruby-ast-chmod-777
+    desc: File permission change to 777
+    crit: notable
+    conf: 0.90
+    attack: "T1222"
+    if:
+      type: ast
+      kind: call
+      exact: ".chmod(0777)"
+
+  # === Base64 Decode in DNS Resolution ===
+  - id: ruby-ast-base64-dns
+    desc: Base64 decode before DNS lookup
+    crit: notable
+    conf: 0.92
+    attack: "T1027"
+    if:
+      type: ast
+      kind: call
+      exact: "Base64.decode64"
+
+  # === System Execution in Method ===
+  - id: ruby-ast-system-in-method
+    desc: System command execution in method
+    crit: notable
+    conf: 0.88
+    attack: "T1059"
+    if:
+      type: ast
+      kind: call
+      exact: "system("
+
+  # === Exec Execution ===
+  - id: ruby-ast-exec-in-method
+    desc: Exec command execution
+    crit: notable
+    conf: 0.88
+    attack: "T1059"
+    if:
+      type: ast
+      kind: call
+      exact: "exec("
+
+  # === File Open Binary Write ===
+  - id: ruby-ast-file-open-wb
+    desc: File binary write mode
+    crit: notable
+    conf: 0.82
+    if:
+      type: ast
+      query: |
+        ((call
+          receiver: (constant) @const
+          method: (identifier) @method
+          arguments: (argument_list
+            (string) @mode))
+         (#eq? @const "File")
+         (#eq? @method "open")
+         (#match? @mode "wb|w\\+b|ab|a\\+b"))
+
+  # === File Rename ===
+  - id: ruby-ast-file-rename
+    desc: File rename operation
+    crit: notable
+    conf: 0.95
+    if:
+      type: ast
+      query: |
+        ((call
+          receiver: (constant) @const
+          method: (identifier) @method)
+         (#eq? @const "File")
+         (#eq? @method "rename"))
+
+  # === File Rename Image to Exe ===
+  - id: ruby-ast-rename-img-to-exe
+    desc: Rename image file to executable
+    crit: suspicious
+    conf: 0.95
+    if:
+      type: ast
+      query: |
+        ((call
+          receiver: (constant) @const
+          method: (identifier) @method
+          arguments: (argument_list
+            (string) @source
+            (string) @dest))
+         (#eq? @const "File")
+         (#eq? @method "rename")
+         (#match? @source "\\.(png|jpg|jpeg|gif|bmp|ico|svg|webp)[\"']?$")
+         (#match? @dest "\\.(exe|com|bat|cmd|sh|elf|bin)[\"']?$"))
+
+  # === File Rename to Executable ===
+  - id: ruby-ast-rename-to-exe
+    desc: Rename file to executable extension
+    crit: suspicious
+    conf: 0.90
+    if:
+      type: ast
+      query: |
+        ((call
+          receiver: (constant) @const
+          method: (identifier) @method
+          arguments: (argument_list
+            (_) @source
+            (string) @dest))
+         (#eq? @const "File")
+         (#eq? @method "rename")
+         (#match? @dest "\\.exe[\"']?$"))
+
+  # === Windows OS Check (Regex) ===
+  - id: ruby-ast-check-windows-regex
+    desc: Check for Windows OS via regex
+    crit: notable
+    conf: 0.85
+    if:
+      type: ast
+      query: |
+        ((call
+          method: (identifier) @method
+          arguments: (argument_list (regex) @pattern))
+         (#match? @pattern "mswin|mingw|cygwin|wince|msys|bccwin|emc")
+         (#eq? @method "match"))
+
+  # === URL String Concatenation ===
+  - id: ruby-ast-url-concatenation
+    desc: String concatenation of URL scheme
+    crit: suspicious
+    conf: 0.85
+    if:
+      type: ast
+      query: |
+        ((binary
+          left: (string) @left
+          right: (string) @right)
+         (#match? @left "https?:")
+         (#match? @right "^/"))
+
+  # === Suspicious URL Scheme String ===
+  - id: ruby-ast-suspicious-url-scheme
+    desc: Suspicious URL scheme string literal (e.g. "https:/")
+    crit: notable
+    conf: 0.8
+    if:
+      type: ast
+      query: |
+        ((string) @str
+         (#match? @str "^[\"']https?:/[\"']$"))
+
+  # === Fragmented URL Fetch ===
+  - id: ruby-ast-fragmented-url-fetch
+    desc: Network fetch with fragmented URL construction
+    crit: suspicious
+    conf: 0.85
+    if:
+      type: ast
+      query: |
+        (call
+          method: (identifier) @method
+          arguments: (argument_list
+            (binary
+              left: (binary
+                operator: "+")
+              operator: "+"
+              right: (_)))
+          (#match? @method "^(get|post|request)$")
+        )
+
+  # === Host OS Configuration Access ===
+  - id: ruby-ast-host-os-access
+    desc: Access host OS configuration
+    crit: notable
+    conf: 0.9
+    if:
+      type: ast
+      query: |
+        ((element_reference
+          object: (constant_resolution
+            scope: (constant) @scope
+            name: (constant) @name)
+          index: (string) @key)
+         (#eq? @scope "RbConfig")
+         (#eq? @name "CONFIG")
+         (#match? @key "host_os"))

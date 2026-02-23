@@ -1,0 +1,60 @@
+# DMI/SMBIOS Hardware Information
+# Desktop Management Interface and System Management BIOS fields
+# Used for hardware identification and fingerprinting
+
+defaults:
+  for: [all]
+
+traits:
+  - id: dmidecode
+    desc: dmidecode command for hardware info
+    crit: baseline
+    conf: 0.5
+    for: [python, shell]
+    if:
+      type: string
+      substr: dmidecode
+
+  - id: dmi-sysfs
+    desc: DMI sysfs path access
+    crit: baseline
+    conf: 0.6
+    for: [python, shell]
+    if:
+      type: string
+      substr: /sys/class/dmi
+
+  - id: dmi-product-name
+    desc: DMI product_name field
+    crit: baseline
+    conf: 0.5
+    if:
+      type: string
+      substr: product_name
+
+  - id: dmi-sys-vendor
+    desc: DMI sys_vendor field
+    crit: baseline
+    conf: 0.5
+    if:
+      type: string
+      substr: sys_vendor
+
+  - id: dmi-bios-vendor
+    desc: DMI bios_vendor field
+    crit: baseline
+    conf: 0.5
+    if:
+      type: string
+      substr: bios_vendor
+
+composite_rules:
+  # DMI vendor/product fields helper
+  - id: dmi-vendor-product
+    desc: DMI vendor and product identification fields
+    crit: baseline
+    conf: 0.5
+    any:
+      - id: dmi-sys-vendor
+      - id: dmi-product-name
+      - id: dmi-bios-vendor

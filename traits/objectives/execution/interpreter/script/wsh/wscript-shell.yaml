@@ -1,0 +1,9 @@
+composite_rules:
+  - id: wscript-shell
+    desc: Creates a WScript.Shell object
+    crit: notable
+    conf: 0.8
+    for: [javascript]
+    any:
+      - id: micro-behaviors/os/com/object::wscript-shell-literal
+      - id: micro-behaviors/process/create/shell/lang::wscript-shell

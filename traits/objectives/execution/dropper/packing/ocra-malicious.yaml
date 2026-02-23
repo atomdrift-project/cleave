@@ -1,0 +1,11 @@
+composite_rules:
+  - id: ocra-c2-hostile
+    desc: OCRA packed executable with C2 indicators
+    crit: hostile
+    conf: 1.0
+    all:
+      - id: objectives/anti-analysis/packing/ocra::ocra-packed-executable
+    any:
+      - id: objectives/command-and-control/infrastructure/ip
+      - id: objectives/command-and-control/infrastructure/domain
+      - id: objectives/command-and-control/infrastructure/network::ipv4-port-string

@@ -1,0 +1,23 @@
+# /proc Network Information (Linux)
+# MBC: E1016 (System Network Configuration Discovery)
+# ATT&CK: T1016
+
+defaults:
+  for: [all]
+
+traits:
+  - id: network-dev
+    desc: Read network device statistics from
+    crit: baseline
+    conf: 0.66
+    if:
+      type: string
+      substr: /proc/net/dev
+
+  - id: network-route
+    desc: Read routing table from /proc/net/route
+    crit: notable
+    conf: 0.66
+    if:
+      type: string
+      substr: /proc/net/route

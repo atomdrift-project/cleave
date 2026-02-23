@@ -1,0 +1,169 @@
+traits:
+- id: etc-crontab-target
+  desc: Target /etc/crontab system crontab
+  crit: suspicious
+  conf: 0.85
+  for:
+  - elf
+  - shell
+  if:
+    type: string
+    substr: /etc/crontab
+  attack: T1070.004
+- id: cron-frequent-targets
+  desc: Target frequent cron directories
+  crit: suspicious
+  conf: 0.8
+  for:
+  - elf
+  - shell
+  if:
+    type: string
+    regex: (/etc/cron\.daily|/etc/cron\.hourly|/etc/cron\.weekly|/etc/cron\.monthly)
+  attack: T1070.004
+- id: sed-cron-removal
+  desc: sed-based crontab evidence removal
+  crit: suspicious
+  conf: 0.9
+  for:
+  - elf
+  - shell
+  if:
+    type: string
+    regex: sed\s+-i.{0,50}(/var/spool/cron|/etc/crontab)
+  attack: T1070.004
+- id: sed-deleted-pattern-cron
+  desc: Remove deleted cron references
+  crit: suspicious
+  conf: 0.95
+  for:
+  - elf
+  - shell
+  if:
+    type: string
+    regex: sed\s+-i.{0,50}(/var/spool/cron|/etc/cron)
+  attack: T1070.004
+- id: rm-cron-files
+  desc: Bulk removal of cron files
+  crit: suspicious
+  conf: 0.85
+  for:
+  - elf
+  - shell
+  if:
+    type: string
+    substr: rm -f /var/spool/cron
+  attack: T1070.004
+- id: cron-file-test
+  desc: Test for cron file existence
+  crit: notable
+  conf: 0.8
+  for:
+  - elf
+  - shell
+  if:
+    type: string
+    substr: '[ -f'
+  attack: T1070.004
+- id: cron-loop-iteration
+  desc: Loop iteration over cron files
+  crit: suspicious
+  conf: 0.85
+  for:
+  - elf
+  - shell
+  if:
+    type: string
+    substr: for crontab in
+  attack: T1070.004
+composite_rules:
+- id: cron-location-targeting
+  desc: Targeting multiple cron file locations
+  crit: notable
+  for:
+  - elf
+  - shell
+  any:
+  - id: objectives/persistence/cron/job::var-spool-cron-path
+    crit: notable
+  - id: etc-crontab-target
+    crit: notable
+  - id: objectives/persistence/cron/job::cron-d-path
+    crit: notable
+- id: cron-removal-methods
+  desc: Methods for removing cron evidence
+  crit: notable
+  any:
+  - id: sed-cron-removal
+    crit: notable
+  - id: sed-deleted-pattern-cron
+    crit: notable
+  - id: rm-cron-files
+    crit: notable
+- id: cron-loop-removal
+  desc: Looping removal of cron files
+  crit: notable
+  all:
+  - id: cron-loop-iteration
+    crit: notable
+  - id: cron-file-test
+    crit: notable
+  - id: cron-removal-methods
+    crit: notable
+- id: cron-file-cleanup
+  desc: Complete crontab file cleanup
+  crit: suspicious
+  conf: 0.9
+  for:
+  - elf
+  - shell
+  attack: T1070.004
+  all:
+  - id: cron-loop-removal
+    crit: notable
+  - id: cron-location-targeting
+    needs: 2
+    crit: notable
+- id: spool-cron-bulk-wipeout
+  desc: Complete /var/spool/cron wipeout
+  crit: suspicious
+  conf: 0.9
+  for:
+  - elf
+  - shell
+  attack: T1070.004
+  mbc: B0005
+  all:
+  - id: rm-cron-files
+    crit: notable
+  - id: objectives/persistence/cron/job::var-spool-cron-path
+    crit: notable
+  - id: sed-deleted-pattern-cron
+    crit: notable
+- id: comprehensive-cron-evidence-removal
+  desc: Comprehensive crontab evidence removal campaign
+  crit: hostile
+  conf: 0.95
+  for:
+  - elf
+  - shell
+  attack: T1070.004
+  mbc: B0005
+  all:
+  - id: cron-file-cleanup
+    crit: notable
+  - id: spool-cron-bulk-wipeout
+    crit: notable
+- id: kinsing-cron-cleanup
+  desc: Kinsing cron job evidence removal
+  crit: suspicious
+  conf: 0.9
+  for:
+  - elf
+  - shell
+  attack: T1070.004
+  all:
+  - id: well-known/malware/miner/kinsing::kinsing-names
+    crit: notable
+  - id: comprehensive-cron-evidence-removal
+    crit: notable

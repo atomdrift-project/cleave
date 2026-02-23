@@ -1,0 +1,132 @@
+# PyInstaller Bundle Detection
+# MBC: E1083 (File and Directory Discovery)
+# ATT&CK: T1083
+
+defaults:
+  for: [all]
+
+traits:
+  - id: pyinstaller-meipass
+    desc: References PyInstaller bundle folder
+    crit: baseline
+    conf: 0.66
+    if:
+      type: string
+      substr: sys._MEIPASS
+
+  # ELF-specific PyInstaller markers
+  - id: pyinstaller-meipass-elf
+    desc: PyInstaller _MEIPASS environment variable
+    crit: notable
+    conf: 0.85
+    for: [elf]
+    if:
+      type: string
+      exact: "_MEIPASS"
+
+  - id: pyinstaller-mpyimod
+    desc: PyInstaller bootloader module
+    crit: notable
+    conf: 0.95
+    for: [elf]
+    if:
+      type: string
+      regex: "mpyimod0[1-3]_"
+
+  - id: pyinstaller-pydata
+    desc: PyInstaller embedded data marker
+    crit: baseline
+    conf: 0.75
+    for: [elf]
+    if:
+      type: string
+      exact: "pydata"
+
+  - id: pyinstaller-script-fail
+    desc: PyInstaller script execution error
+    crit: notable
+    conf: 0.9
+    for: [elf]
+    if:
+      type: string
+      substr: "Failed to execute script"
+
+  # PyInstaller embedded Python module detection (ELF-specific)
+  # These patterns match the module list format in frozen PyInstaller binaries
+  - id: pyinstaller-socket-module
+    desc: PyInstaller bundled socket module
+    crit: baseline
+    conf: 0.9
+    for: [elf]
+    if:
+      type: string
+      regex: '^socket\('
+
+  - id: pyinstaller-subprocess-module
+    desc: PyInstaller bundled subprocess module
+    crit: baseline
+    conf: 0.9
+    for: [elf]
+    if:
+      type: string
+      regex: '^subprocess\('
+
+  - id: pyinstaller-pty-module
+    desc: PyInstaller bundled pty module
+    crit: notable
+    conf: 0.9
+    for: [elf]
+    if:
+      type: string
+      regex: '^pty\('
+
+  - id: pyinstaller-ftplib-module
+    desc: PyInstaller bundled ftplib module
+    crit: baseline
+    conf: 0.9
+    for: [elf]
+    if:
+      type: string
+      regex: '^ftplib\('
+
+  - id: pyinstaller-ssl-module
+    desc: PyInstaller bundled ssl module
+    crit: baseline
+    conf: 0.9
+    for: [elf]
+    if:
+      type: string
+      regex: '^ssl\('
+
+composite_rules:
+  - id: pyinstaller-elf-bundle
+    desc: PyInstaller bundled ELF binary
+    crit: notable
+    conf: 0.9
+    for: [elf]
+    needs: 2
+    any:
+      - id: pyinstaller-meipass-elf
+      - id: pyinstaller-mpyimod
+      - id: pyinstaller-pydata
+      - id: pyinstaller-script-fail
+
+  # Suspicious: PyInstaller ELF with network + shell capabilities
+  # Requires PyInstaller markers + at least one network/shell module
+  - id: pyinstaller-elf-network-shell
+    desc: PyInstaller ELF with network and shell modules
+    crit: suspicious
+    conf: 0.85
+    for: [elf]
+    # Require at least 3 matches, ensuring we have PyInstaller markers + networking
+    # Since PyInstaller markers provide 4 options and networking provides 4 options,
+    # requiring 3+ ensures we have meaningful PyInstaller indicators
+    needs: 3
+    any:
+      # PyInstaller markers
+      - id: pyinstaller-meipass-elf
+      - id: pyinstaller-mpyimod
+      # Dangerous modules
+      - id: pyinstaller-socket-module
+      - id: pyinstaller-subprocess-module
+      - id: pyinstaller-pty-module

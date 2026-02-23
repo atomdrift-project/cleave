@@ -1,0 +1,34 @@
+# Multi-Channel C2 Infrastructure
+# Detects malware with multiple hardcoded C2 addresses
+# Indicates redundancy planning for resilience against blocking
+
+composite_rules:
+  - id: redundant-c2-infrastructure
+    desc: Multiple C2 communication channels (failover/redundancy)
+    crit: notable
+    conf: 0.9
+    attack: "T1071"
+    mbc: "B0030"
+    platforms: [all]
+    for: [pe, elf, macho, shell, python]
+    needs: 2
+    any:
+      - id: objectives/command-and-control/infrastructure/ip
+      - id: objectives/command-and-control/infrastructure/domain
+
+  - id: multi-channel-diversity
+    desc: C2 infrastructure using multiple communication methods
+    crit: suspicious
+    conf: 0.85
+    attack: "T1071"
+    mbc: "B0030"
+    platforms: [all]
+    for: [pe, elf, macho, shell]
+    size_max: 200000
+    needs: 2
+    any:
+      - id: objectives/command-and-control/infrastructure/ip
+      - id: objectives/command-and-control/infrastructure/domain
+    downgrade:
+      any:
+        - id: metadata/quality/versioned

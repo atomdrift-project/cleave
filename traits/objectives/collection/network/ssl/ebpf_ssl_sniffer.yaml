@@ -1,0 +1,13 @@
+composite_rules:
+  - id: ebpf-ssl-sniffer
+    desc: eBPF SSL/TLS traffic sniffer
+    crit: hostile
+    conf: 0.95
+    attack: T1040
+    for: [c, elf]
+    all:
+      - id: "micro-behaviors/os/bpf/program/ssl::ssl-hook-target"
+      - id: "micro-behaviors/os/bpf/program/tracing::bpf-core-read-user"
+    any:
+      - id: "micro-behaviors/os/bpf/program/loader::bpf-ringbuf"
+      - id: "micro-behaviors/os/bpf/program/loader::data-event-struct"

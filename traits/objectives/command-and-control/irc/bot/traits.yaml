@@ -1,0 +1,159 @@
+defaults:
+  for:
+    - all
+  attack: T1071.001
+traits:
+  - id: irc-privmsg
+    desc: IRC PRIVMSG command
+    crit: notable
+    conf: 0.5
+    if:
+      type: string
+      exact: "PRIVMSG "
+    unless:
+      - type: raw
+        regex: ftplib|urllib
+  - id: irc-nick
+    desc: IRC NICK command
+    crit: notable
+    conf: 0.4
+    if:
+      type: string
+      exact: "NICK "
+    unless:
+      - type: raw
+        regex: ftplib|urllib
+  - id: irc-user
+    desc: IRC USER command
+    crit: notable
+    conf: 0.4
+    if:
+      type: string
+      exact: "USER "
+    unless:
+      - type: raw
+        regex: ftplib|urllib
+  - id: cmd-login
+    desc: Bot login command
+    crit: notable
+    conf: 0.6
+    if:
+      type: string
+      regex: \.login\b
+    unless:
+      - type: raw
+        regex: ftplib|urllib
+  - id: cmd-udp
+    desc: Bot UDP attack command
+    crit: notable
+    conf: 0.8
+    if:
+      type: string
+      exact: .udp
+  - id: cmd-tcp
+    desc: Bot TCP attack command
+    crit: notable
+    conf: 0.8
+    if:
+      type: string
+      regex: \.tcp\b
+  - id: cmd-shell
+    desc: Bot shell command
+    crit: notable
+    conf: 0.8
+    if:
+      type: string
+      regex: \.shell\b
+  - id: tsunami-name
+    desc: Tsunami bot name
+    crit: notable
+    conf: 0.7
+    if:
+      type: string
+      word: tsunami
+      case_insensitive: true
+  - id: kaiten-name
+    desc: Kaiten bot name
+    crit: notable
+    conf: 0.7
+    if:
+      type: string
+      word: kaiten
+      case_insensitive: true
+  - id: attack-pan
+    desc: PAN attack type indicator
+    crit: notable
+    conf: 0.5
+    if:
+      type: string
+      regex: (?i)(\.pan\b|pan[_-]?(attack|flood)|\bpan[_-]?ddos)
+  - id: attack-udp
+    desc: UDP attack type indicator
+    crit: notable
+    conf: 0.5
+    if:
+      type: string
+      regex: \bUDP[_-]?ATTACK\b|\bUDP[_-]?FLOOD\b
+      case_insensitive: true
+composite_rules:
+  - id: irc-protocol
+    desc: IRC protocol commands
+    any:
+      - id: irc-privmsg
+      - id: irc-nick
+      - id: irc-user
+    crit: notable
+  - id: ddos-attack-terms
+    desc: DDoS attack terminology
+    any:
+      - id: attack-pan
+      - id: attack-udp
+      - id: objectives/command-and-control/ddos/attack::flood-types
+      - id: objectives/command-and-control/ddos/attack::ddos-attack-terminology
+    crit: notable
+  - id: tsunami-artifact
+    desc: Tsunami/Kaiten IRC bot identifier
+    crit: notable
+    conf: 0.7
+    any:
+      - id: tsunami-name
+      - id: kaiten-name
+  - id: bot-logic
+    desc: IRC-based command and control logic
+    crit: suspicious
+    conf: 0.8
+    all:
+      - id: irc-protocol
+    any:
+      - id: cmd-login
+      - id: cmd-udp
+      - id: cmd-tcp
+      - id: cmd-shell
+  - id: irc-ddos
+    desc: IRC-controlled DDoS attack logic
+    crit: suspicious
+    conf: 0.9
+    all:
+      - id: irc-protocol
+      - id: ddos-attack-terms
+  - id: tsunami-irc-bot
+    desc: Tsunami/Kaiten IRC bot with C2
+    crit: suspicious
+    conf: 0.85
+    all:
+      - id: objectives/command-and-control/irc/bot::tsunami-artifact
+      - id: bot-logic
+  - id: tsunami-ddos-bot
+    desc: Tsunami/Kaiten IRC bot with DDoS
+    crit: suspicious
+    conf: 0.9
+    all:
+      - id: objectives/command-and-control/irc/bot::tsunami-artifact
+      - id: objectives/command-and-control/irc/bot::irc-ddos
+  - id: irc-bot-ddos
+    desc: IRC bot with DDoS attack
+    crit: suspicious
+    conf: 0.85
+    all:
+      - id: bot-logic
+      - id: objectives/command-and-control/irc/bot::irc-ddos

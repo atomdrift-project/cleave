@@ -1,0 +1,17 @@
+# PHP Self-Destruct/Anti-Forensic Traits
+# MBC: F0006 (Indicator Removal)
+# ATT&CK: T1070.004 (File Deletion)
+
+traits:
+  # Removed unlink duplicate - use micro-behaviors/fs/file/delete/unix::delete (POSIX unlink system call)
+
+  - id: script-self-delete
+    desc: Script self-deletion pattern (SCRIPT_FILENAME +
+    crit: suspicious
+    conf: 0.95
+    mbc: "F0006"
+    attack: "T1070.004"
+    for: [php]
+    if:
+      type: string
+      regex: "unlink\\s*\\(\\s*\\$_SERVER\\s*\\[\\s*['\"]SCRIPT_FILENAME['\"]\\s*\\]"

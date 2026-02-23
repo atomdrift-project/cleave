@@ -1,0 +1,16 @@
+# VM Detection Timing Check
+# Detects specific jitter check logic used by malware (Nemucod etc.)
+
+defaults:
+  crit: suspicious
+  conf: 0.95
+  for: [javascript]
+
+traits:
+  - id: js-date-diff-jitter-pattern
+    desc: "Checks for timing jitter using Date differences"
+    if:
+      type: raw
+      # Matches: (A != B) || (B != C) pattern
+      # Optimized regex: use \w instead of [a-zA-Z0-9_]
+      regex: '\(\s*[\w$]+\s*!=\s*[\w$]+\s*\)\s*\|\|\s*\(\s*[\w$]+\s*!=\s*[\w$]+\s*\)'

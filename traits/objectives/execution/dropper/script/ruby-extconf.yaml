@@ -1,0 +1,15 @@
+# Extconf.rb detection
+# Useful for context in composite rules
+
+defaults:
+  for: [all]
+  crit: notable
+  conf: 1.0
+
+traits:
+  - id: filename-extconf
+    desc: File is named extconf.rb
+    if:
+      type: basename
+      exact: extconf.rb
+      case_insensitive: true

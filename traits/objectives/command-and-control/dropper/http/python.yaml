@@ -1,0 +1,32 @@
+# Python HTTP Dropper Detection
+# Detects Python droppers that download and execute payloads
+# ATT&CK: T1105 (Ingress Tool Transfer), B0024 (Dropper)
+
+composite_rules:
+  - id: multi-location-dropper
+    desc: Dropper targeting multiple persistence locations
+    crit: hostile
+    conf: 0.95
+    for: [python]
+    mbc: "B0024"
+    attack: "T1105"
+    all:
+      - id: objectives/execution/dropper/http::download-and-execute-func
+      - id: objectives/execution/dropper/http::multi-persist-dirs
+      - id: objectives/execution/dropper/http::http-ip-port-url
+
+  - id: python-dropper
+    desc: Python dropper with download and execute
+    crit: hostile
+    conf: 0.95
+    for: [python]
+    mbc: "B0024"
+    attack: "T1105"
+    all:
+      - id: objectives/execution/dropper/http::download-and-execute-func
+      - id: objectives/execution/dropper/http::http-ip-port-url
+      - id: micro-behaviors/fs/path/temp
+    any:
+      - id: objectives/execution/dropper/http::is-process-running-func
+      - id: objectives/execution/dropper/http::arch-64bit-check
+      - id: micro-behaviors/process/create/subprocess::run-ast

@@ -1,0 +1,64 @@
+# Testing Framework - CATCH2
+
+traits:
+  # === Atomic: Catch2 (C++) ===
+
+  - id: catch2-namespace
+    desc: "Catch:: namespace"
+    crit: baseline
+    conf: 0.8
+    for: [c]
+    if:
+      type: string
+      substr: "Catch::"
+
+  - id: catch2-macro-prefix
+    desc: CATCH_ macro prefix
+    crit: baseline
+    conf: 0.8
+    for: [c]
+    if:
+      type: string
+      substr: "CATCH_"
+
+  - id: catch2-test-case
+    desc: TEST_CASE macro
+    crit: baseline
+    conf: 0.8
+    for: [c]
+    if:
+      type: string
+      substr: "TEST_CASE"
+
+  - id: catch2-section
+    desc: SECTION macro
+    crit: baseline
+    conf: 0.7
+    for: [c]
+    if:
+      type: string
+      word: "SECTION"
+
+  - id: catch2-require
+    desc: REQUIRE macro
+    crit: baseline
+    conf: 0.7
+    for: [c]
+    if:
+      type: string
+      word: "REQUIRE"
+
+composite_rules:
+  # Catch2 (C++)
+  - id: catch2
+    desc: Catch2 test framework
+    crit: notable
+    conf: 0.95
+    for: [c]
+    needs: 2
+    any:
+      - { id: catch2-namespace }
+      - { id: catch2-macro-prefix }
+      - { id: catch2-test-case }
+      - { id: catch2-section }
+      - { id: catch2-require }

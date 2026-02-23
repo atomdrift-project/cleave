@@ -1,0 +1,12 @@
+# Suspicious Device Paths
+
+defaults:
+  for: [elf, macho, shell]
+  crit: suspicious
+
+traits:
+  - id: dev-ptyh
+    desc: Suspicious /dev/ptyh path (Trojan wrapper config)
+    if:
+      type: raw
+      regex: '/dev/ptyh'

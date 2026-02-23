@@ -1,0 +1,14 @@
+# ufw - Uncomplicated Firewall
+# Ubuntu/Debian frontend for iptables
+
+defaults:
+  for: [all]
+  crit: notable
+  conf: 0.9
+
+traits:
+  - id: ufw
+    desc: ufw firewall command
+    if:
+      type: string
+      exact: "ufw "

@@ -1,0 +1,45 @@
+# Block Devices - Linux
+# ATT&CK: T1082 (System Information Discovery)
+
+defaults:
+  for: [all]
+
+traits:
+  # NOTE: /sys/block/ moved to fs/disk/paths/linux.yaml
+  # keeping this broader pattern for /sys/dev/block only
+  - id: sys-block
+    desc: Access block device info via
+    crit: suspicious
+    conf: 0.75
+    attack: "T1082"
+    platforms: [linux]
+    if:
+      type: string
+      regex: "/sys/dev/block"
+
+  - id: dev-sd
+    desc: Access raw SCSI/SATA block devices
+    crit: suspicious
+    conf: 0.8
+    platforms: [linux]
+    if:
+      type: string
+      regex: "/dev/sd[a-z]"
+
+  - id: dev-dm
+    desc: Access LVM device mapper
+    crit: suspicious
+    conf: 0.75
+    platforms: [linux]
+    if:
+      type: string
+      regex: "/dev/dm-\\d"
+
+  - id: dev-mapper
+    desc: Uses device mapper framework
+    crit: notable
+    conf: 0.7
+    platforms: [linux]
+    if:
+      type: string
+      regex: "/dev/mapper"

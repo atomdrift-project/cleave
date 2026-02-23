@@ -1,0 +1,46 @@
+traits:
+  - id: js-new-this-bracket
+    desc: Instantiating an object via 'this' with bracket
+    crit: suspicious
+    conf: 0.9
+    mbc: "B0032"
+    attack: "T1027"
+    for: [javascript]
+    if:
+      type: ast
+      lang: javascript
+      # Matches: new this[...]()
+      query: |
+        (new_expression
+          constructor: (member_expression
+            object: (this)
+          )
+        )
+
+  - id: js-this-bracket-access
+    desc: Property access on 'this' using bracket notation
+    crit: notable
+    conf: 0.8
+    for: [javascript]
+    if:
+      type: ast
+      lang: javascript
+      # Matches: this[...] where ... is not a simple identifier (or even if it is, in some contexts)
+      query: |
+        (member_expression
+          object: (this)
+          property: (computed_property_name)
+        )
+    unless:
+      - id: metadata/library/jquery::domain
+      - id: metadata/library/prototype::copyright
+
+composite_rules:
+  - id: js-this-global-proxy
+    desc: Use of 'this' to proxy global object access for obfuscation
+    crit: suspicious
+    for: [javascript]
+    any:
+      - id: js-new-this-bracket
+      - id: js-this-bracket-access
+        count_min: 3

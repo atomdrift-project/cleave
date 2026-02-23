@@ -1,0 +1,45 @@
+# Curl-based HTTP Exfiltration
+# ATT&CK: T1041 (Exfiltration Over C2 Channel)
+
+traits:
+  - id: curl-d-flag
+    desc: curl -d flag
+    crit: notable
+    conf: 0.8
+    attack: "T1041"
+    for: [javascript, typescript, python, shell]
+    if:
+      type: string
+      regex: "curl\\s+-d"
+
+  - id: curl-data-flag
+    desc: curl --data flag
+    crit: notable
+    conf: 0.8
+    attack: "T1041"
+    for: [javascript, typescript, python, shell]
+    if:
+      type: string
+      regex: "curl\\s+--data"
+
+  - id: curl-post-flag
+    desc: curl -X POST flag
+    crit: notable
+    conf: 0.8
+    attack: "T1041"
+    for: [javascript, typescript, python, shell]
+    if:
+      type: string
+      regex: "curl\\s+-X\\s*POST"
+
+composite_rules:
+  - id: curl-exfil
+    desc: Curl command with data parameter
+    crit: suspicious
+    conf: 0.9
+    attack: "T1041"
+    for: [javascript, typescript, python, shell]
+    any:
+      - id: curl-d-flag
+      - id: curl-data-flag
+      - id: curl-post-flag

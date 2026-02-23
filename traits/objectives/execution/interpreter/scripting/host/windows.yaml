@@ -1,0 +1,240 @@
+# Windows Scripting Objects Detection
+# ATT&CK: T1059.005 (Visual Basic), T1059.007 (JavaScript)
+# Detects WScript, ActiveX, and COM object abuse
+
+traits:
+  # Scripting.FileSystemObject
+  - id: filesystem-object-string
+    desc: FileSystemObject string reference
+    crit: notable
+    conf: 0.6
+    for: [javascript, typescript]
+    if:
+      type: string
+      substr: "FileSystemObject"
+
+  # Removed shell-application-string duplicate - use objectives/execution/activex/com::activex-shell-app
+
+  # Removed msxml2-xmlhttp-string duplicate - use objectives/execution/activex/com::activex-xmlhttp-msxml2
+  # Removed microsoft-xmlhttp-string duplicate - use micro-behaviors/os/com/object::clsid-xmlhttp-generic
+
+  # WMI scripting
+  - id: winmgmts-string
+    desc: winmgmts WMI moniker string
+    crit: notable
+    conf: 0.6
+    for: [javascript, typescript, powershell]
+    if:
+      type: string
+      substr: "winmgmts:"
+
+  # Removed wbemscripting-locator-string duplicate - use objectives/execution/activex/com::activex-wmi
+
+  # Schedule.Service (task scheduler)
+  - id: schedule-service-string
+    desc: Schedule.Service string reference
+    crit: notable
+    conf: 0.7
+    for: [javascript, typescript, powershell]
+    if:
+      type: string
+      substr: "Schedule.Service"
+
+  - id: win32-scheduledjob-string
+    desc: Win32_ScheduledJob string reference
+    crit: notable
+    conf: 0.7
+    for: [javascript, typescript, powershell]
+    if:
+      type: string
+      substr: "Win32_ScheduledJob"
+
+  # Registry manipulation keywords
+  - id: regread-method
+    desc: RegRead method call
+    crit: notable
+    conf: 0.5
+    for: [javascript, typescript]
+    if:
+      type: string
+      substr: "RegRead"
+
+  - id: regwrite-method
+    desc: RegWrite method call
+    crit: notable
+    conf: 0.5
+    for: [javascript, typescript]
+    if:
+      type: string
+      substr: "RegWrite"
+
+  - id: regdelete-method
+    desc: RegDelete method call
+    crit: notable
+    conf: 0.5
+    for: [javascript, typescript]
+    if:
+      type: string
+      substr: "RegDelete"
+
+  - id: hklm-hive
+    desc: HKLM registry hive reference
+    crit: notable
+    conf: 0.4
+    for: [javascript, typescript, powershell]
+    if:
+      type: string
+      exact: "HKLM"
+
+  - id: hkcu-hive
+    desc: HKCU registry hive reference
+    crit: notable
+    conf: 0.4
+    for: [javascript, typescript, powershell]
+    if:
+      type: string
+      exact: "HKCU"
+
+  # WinHttp for droppers
+  - id: winhttp-string
+    desc: WinHttp string reference
+    crit: notable
+    conf: 0.5
+    for: [javascript, typescript]
+    if:
+      type: string
+      substr: "WinHttp"
+
+  # Method calls
+  - id: run-method
+    desc: .Run method call
+    crit: notable
+    conf: 0.4
+    for: [javascript, typescript]
+    if:
+      type: string
+      substr: ".Run("
+
+  - id: exec-method
+    desc: .Exec method call
+    crit: notable
+    conf: 0.4
+    for: [javascript, typescript]
+    if:
+      type: string
+      substr: ".Exec("
+
+  # Removed savetofile-method duplicate - use micro-behaviors/fs/file/write::file-write
+
+# === Composite Rules ===
+composite_rules:
+  # WScript.Shell execution
+
+  # MSXML HTTP request variants
+  - id: msxml-http-variants
+    desc: MSXML HTTP request object variants
+    crit: notable
+    conf: 0.7
+    for: [javascript, typescript]
+    any:
+      - id: micro-behaviors/os/com/object::clsid-xmlhttp-generic
+      - id: micro-behaviors/communications/http/client::http-client-any
+
+
+  # WMI scripting variants
+  - id: wmi-scripting-patterns
+    desc: WMI scripting patterns
+    crit: notable
+    conf: 0.7
+    for: [javascript, typescript, powershell]
+    any:
+      - id: winmgmts-string
+      - id: objectives/execution/activex/com::activex-wmi
+
+
+  # Schedule.Service variants
+  - id: schedule-service-patterns
+    desc: Task scheduler COM object patterns
+    crit: notable
+    conf: 0.8
+    for: [javascript, typescript, powershell]
+    any:
+      - id: schedule-service-string
+      - id: win32-scheduledjob-string
+
+
+  # Registry operation methods
+  - id: registry-methods
+    desc: Registry manipulation methods
+    crit: notable
+    conf: 0.6
+    for: [javascript, typescript]
+    any:
+      - id: regread-method
+      - id: regwrite-method
+      - id: regdelete-method
+
+  # Registry hive references
+  - id: registry-hives
+    desc: Registry hive references
+    crit: notable
+    conf: 0.5
+    for: [javascript, typescript, powershell]
+    any:
+      - id: hklm-hive
+      - id: hkcu-hive
+
+  # Registry manipulation via scripting
+  - id: registry-scripting
+    desc: Registry manipulation via scripting
+    crit: suspicious
+    conf: 0.85
+    attack: "T1112"
+    for: [javascript, typescript]
+    all:
+      - id: micro-behaviors/os/com/object::wscript-shell-literal
+      - id: registry-methods
+      - id: registry-hives
+
+  # HTTP objects for droppers
+  - id: http-objects
+    desc: HTTP objects for network access
+    crit: notable
+    conf: 0.6
+    for: [javascript, typescript]
+    any:
+      - id: msxml-http-variants
+      - id: winhttp-string
+
+  # Execution methods
+  - id: execution-methods
+    desc: Code execution methods
+    crit: notable
+    conf: 0.5
+    for: [javascript, typescript]
+    any:
+      - id: run-method
+      - id: exec-method
+      - id: micro-behaviors/fs/file/write::file-write
+
+  # Shell or FSO objects
+  - id: wsh-or-fso
+    desc: WScript.Shell or FileSystemObject
+    crit: notable
+    conf: 0.7
+    for: [javascript, typescript]
+    any:
+      - id: micro-behaviors/os/com/object::wscript-shell-literal
+      - id: filesystem-object-string
+
+  # Windows Script Host dropper
+  - id: wsh-dropper
+    desc: Windows Script Host dropper pattern
+    crit: suspicious
+    conf: 0.95
+    attack: "T1059.005"
+    for: [javascript, typescript]
+    all:
+      - id: wsh-or-fso
+      - id: http-objects
+      - id: execution-methods

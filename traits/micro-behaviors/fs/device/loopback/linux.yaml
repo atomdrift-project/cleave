@@ -1,0 +1,15 @@
+# Loopback Device Access (Linux-specific)
+# MBC: E1082 (System Information Discovery)
+# ATT&CK: T1082
+
+defaults:
+  for: [all]
+
+traits:
+  - id: loopback
+    desc: Access virtual block devices (loopback)
+    crit: notable
+    conf: 0.66
+    if:
+      type: string
+      regex: "/dev/loop[\\$%\\w\\{\\}]{0,16}"

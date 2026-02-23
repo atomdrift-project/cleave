@@ -1,0 +1,59 @@
+# Shell Command Execution Frequency Patterns
+# Detects excessive or unusual frequency of shell command execution
+# High-volume popen/system calls are strong malware indicators
+
+defaults:
+  for: [elf, macho, pe]
+  platforms: [linux, macos, windows, unix]
+
+traits:
+  # GAP #2: High-volume function call pattern detection
+  # A single popen() is notable, but 10+ is highly suspicious
+  # Using both count_min and per_kb for better detection
+  - id: excessive-popen
+    desc: "Excessive popen() calls"
+    crit: suspicious
+    conf: 0.95
+    attack: "T1059"
+    if:
+      type: symbol
+      regex: "\\bpopen\\b"
+      count_min: 10
+      per_kb_min: 0.05 # At least 0.05 per KB (10 in 200KB)
+
+  - id: extreme-popen
+    desc: "Extreme popen() calls"
+    crit: suspicious
+    conf: 0.98
+    attack: "T1059"
+    if:
+      type: symbol
+      regex: "\\bpopen\\b"
+      count_min: 20
+      per_kb_min: 0.1 # At least 0.1 per KB (20 in 200KB)
+
+  - id: excessive-system
+    desc: "Excessive system() calls"
+    crit: suspicious
+    conf: 0.9
+    attack: "T1059"
+    if:
+      type: symbol
+      regex: "\\bsystem\\b"
+      count_min: 5
+      per_kb_min: 0.02 # At least 0.02 per KB
+
+composite_rules:
+  # High volume + capture = command orchestration malware
+  - id: command-orchestration-pattern
+    desc: "Command orchestration malware pattern"
+    crit: suspicious
+    conf: 0.95
+    attack: "T1059"
+    any:
+      - id: excessive-popen
+      - id: extreme-popen
+    none:
+      - id: metadata/signed/platform::apple
+      - id: micro-behaviors/dylib/library::system-lib-marker
+      - id: micro-behaviors/dylib/library::shell-interpreter

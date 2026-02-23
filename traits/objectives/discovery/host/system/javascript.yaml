@@ -1,0 +1,75 @@
+# System Information Discovery - JavaScript/Node.js
+# GuardDog-inspired: Detects system information gathering
+# ATT&CK: T1082 (System Information Discovery)
+# MBC: B0012 (Operating System Discovery)
+
+defaults:
+  for: [javascript, typescript]
+  attack: "T1082"
+  mbc: "B0012"
+  crit: notable
+
+traits:
+  # GuardDog: os.homedir() - user home directory
+  - id: js-os-homedir
+    desc: os.homedir() user home directory
+    conf: 0.80
+    if:
+      type: string
+      substr: 'os.homedir()'
+
+  # GuardDog: os.hostname() - system hostname
+  - id: js-os-hostname
+    desc: os.hostname() system hostname
+    conf: 0.80
+    if:
+      type: symbol
+      regex: 'os\.hostname\('
+
+  # GuardDog: os.userInfo() - user information
+  - id: js-os-userinfo
+    desc: os.userInfo() user information
+    conf: 0.85
+    if:
+      type: symbol
+      regex: 'os\.userInfo\('
+
+  # os.platform() - OS platform
+  - id: js-os-platform
+    desc: os.platform() OS platform
+    conf: 0.75
+    if:
+      type: symbol
+      regex: 'os\.platform\('
+
+  # os.type() - OS type
+  - id: js-os-type
+    desc: os.type() OS type
+    conf: 0.75
+    if:
+      type: symbol
+      regex: 'os\.type\('
+
+  # os.release() - OS release version
+  - id: js-os-release
+    desc: os.release() OS version
+    conf: 0.75
+    if:
+      type: symbol
+      regex: 'os\.release\('
+
+composite_rules:
+  # GuardDog: System information discovery
+  - id: js-system-info-discovery
+    desc: System information discovery (JS)
+    crit: notable
+    conf: 0.85
+    attack: "T1082"
+    mbc: "B0012"
+    any:
+      - id: js-os-homedir
+      - id: js-os-hostname
+      - id: js-os-userinfo
+      - id: js-os-platform
+      - id: js-os-type
+      - id: js-os-release

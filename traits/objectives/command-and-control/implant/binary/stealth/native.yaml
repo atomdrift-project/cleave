@@ -1,0 +1,191 @@
+# Native C2 implant detection
+# Detects statically-linked C2 implants with SOCKS/Tor capabilities
+# MBC: B0030 (C2 Communication)
+# ATT&CK: T1071 (Application Layer Protocol), T1572 (Protocol Tunneling)
+
+defaults:
+  for: [elf]
+  mbc: "B0030"
+
+traits:
+  # SOCKS5h protocol (hostname resolution via proxy) - Tor indicator
+  - id: socks5h-proto
+    desc: SOCKS5h protocol string
+    crit: notable
+    conf: 0.9
+    if:
+      type: string
+      substr: "socks5h"
+
+  # SOCKS4a protocol (hostname resolution via proxy)
+  - id: socks4a-proto
+    desc: SOCKS4a protocol string
+    crit: notable
+    conf: 0.9
+    if:
+      type: string
+      substr: "socks4a"
+
+  # Onion domain handling
+  - id: onion-domain-handling
+    desc: Tor onion domain handling
+    crit: suspicious
+    conf: 0.95
+    if:
+      type: string
+      regex: '(\.onion$|Not resolving \.onion)'
+
+  # libcurl with version string - statically linked
+  - id: libcurl-version
+    desc: libcurl version string
+    crit: notable
+    conf: 0.95
+    if:
+      type: string
+      regex: 'libcurl [0-9]+\.[0-9]+\.[0-9]+'
+
+  # musl libc target triple - Alpine/static linking indicator
+  - id: musl-libc-triple
+    desc: musl libc target triple
+    crit: notable
+    conf: 0.9
+    if:
+      type: string
+      regex: 'x86_64-[a-z]+-linux-musl'
+
+  # Alpine GCC version string
+  - id: alpine-gcc
+    desc: Alpine GCC build indicator
+    crit: notable
+    conf: 0.9
+    if:
+      type: string
+      regex: 'GCC: \(Alpine [0-9]+\.[0-9]+\.[0-9]+\)'
+
+  # Minimum threads configuration (C2 worker pools)
+  - id: min-max-threads
+    desc: Thread pool configuration strings
+    crit: notable
+    conf: 0.8
+    if:
+      type: string
+      regex: '(min|max) threads: %u'
+
+  # Websocket support (C2 protocol)
+  - id: websocket-headers
+    desc: WebSocket protocol headers
+    crit: notable
+    conf: 0.85
+    if:
+      type: string
+      regex: 'Sec-WebSocket-(Key|Version)'
+
+  # HTTP CONNECT proxy tunneling
+  - id: http-connect-proxy
+    desc: HTTP CONNECT proxy tunneling
+    crit: notable
+    conf: 0.85
+    if:
+      type: string
+      substr: "HTTP CONNECT"
+
+  # OpenSSL ChaCha20-Poly1305 (C2 encryption)
+  - id: openssl-chacha-poly
+    desc: OpenSSL ChaCha20-Poly1305
+    crit: notable
+    conf: 0.9
+    if:
+      type: string
+      substr: "ChaCha20-Poly1305"
+
+  - id: ecdh-compute-key
+    desc: ECDH_compute_key reference
+    crit: notable
+    conf: 0.9
+    if:
+      type: string
+      exact: "ECDH_compute_key"
+
+  - id: ec-key-generate-key
+    desc: EC_KEY_generate_key reference
+    crit: notable
+    conf: 0.9
+    if:
+      type: string
+      exact: "EC_KEY_generate_key"
+
+composite_rules:
+  - id: ecdh-key-exchange
+    desc: ECDH key exchange functions
+    crit: notable
+    conf: 0.9
+    any:
+      - id: ecdh-compute-key
+      - id: ec-key-generate-key
+
+  # Static C2 implant with Tor support
+  # Complexity: all(4) + for(1) = 5 >= 4 HOSTILE
+  - id: native-tor-implant
+    desc: Native C2 implant with Tor
+    crit: hostile
+    conf: 0.95
+    mbc: "B0030"
+    attack: "T1572"
+    for: [elf]
+    all:
+      - id: socks5h-proto
+      - id: onion-domain-handling
+      - id: libcurl-version
+      - id: ecdh-key-exchange
+
+  # Static Alpine implant with SOCKS
+  # Complexity: all(4) + for(1) = 5 >= 4 HOSTILE
+  - id: native-alpine-implant
+    desc: Alpine static implant with SOCKS
+    crit: hostile
+    conf: 0.93
+    mbc: "B0030"
+    attack: "T1090"
+    for: [elf]
+    all:
+      - id: musl-libc-triple
+      - id: alpine-gcc
+      - id: socks5h-proto
+      - id: ecdh-key-exchange
+
+  # Static implant with full crypto and proxy
+  # Complexity: all(3) + any(1) + for(1) = 5 >= 4 HOSTILE
+  - id: native-crypto-proxy-implant
+    desc: Native crypto proxy implant
+    crit: hostile
+    conf: 0.92
+    mbc: "B0030"
+    attack: "T1573"
+    for: [elf]
+    all:
+      - id: libcurl-version
+      - id: ecdh-key-exchange
+      - id: micro-behaviors/crypto/symmetric/stream::chacha-salsa-constant
+    any:
+      - id: socks5h-proto
+      - id: socks4a-proto
+      - id: onion-domain-handling
+      - id: http-connect-proxy
+
+  # Websocket C2 implant
+  # Complexity: all(3) + any(1) + for(1) = 5 >= 4 HOSTILE
+  - id: native-websocket-implant
+    desc: Native WebSocket C2 implant
+    crit: hostile
+    conf: 0.9
+    mbc: "B0030"
+    attack: "T1071.001"
+    for: [elf]
+    all:
+      - id: websocket-headers
+      - id: libcurl-version
+      - id: ecdh-key-exchange
+    any:
+      - id: socks5h-proto
+      - id: onion-domain-handling
+      - id: openssl-chacha-poly

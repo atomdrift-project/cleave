@@ -1,0 +1,11 @@
+defaults:
+  for: [all]
+  crit: baseline
+  conf: 0.5
+
+traits:
+  - id: crontab-keyword
+    desc: crontab keyword
+    if:
+      type: string
+      word: "crontab"

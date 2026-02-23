@@ -1,0 +1,29 @@
+# Clippy configuration for flayer
+# Additional configuration beyond workspace lints in Cargo.toml
+
+# Cognitive complexity threshold - warn if a function is too complex
+cognitive-complexity-threshold = 30
+
+# Maximum number of lines for a function before warning
+too-many-lines-threshold = 150
+
+# Warn on functions with many arguments
+# (Though we allow this in workspace lints, this helps track them)
+too-many-arguments-threshold = 8
+
+# Note: too-many-fields-threshold is not available in current Clippy version
+# Use struct-field-name-threshold if needed
+
+# Type complexity threshold
+type-complexity-threshold = 500
+
+# Warn on single character variable names (except common ones like i, j, x, y)
+single-char-binding-names-threshold = 4
+
+# Disallowed methods - methods that should never be used
+# Keep this minimal - only truly dangerous patterns
+disallowed-methods = []
+
+# Disallowed types - types that should not be used
+# Keep this minimal - only truly problematic types
+disallowed-types = []

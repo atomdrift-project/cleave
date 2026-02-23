@@ -1,0 +1,11 @@
+defaults:
+  for: [all]
+
+traits:
+  - id: suspicious-dict-override
+    desc: Suspicious system dictionary path override
+    crit: suspicious
+    conf: 1.0
+    if:
+      type: string
+      regex: "/usr/share/dict/words/"

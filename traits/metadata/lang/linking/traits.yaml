@@ -1,0 +1,22 @@
+# Linking and Static Compilation Detection
+
+defaults:
+  for: [all]
+
+traits:
+  # === Static linking micro-behaviors ===
+  - id: statically-linked
+    desc: statically linked string
+    crit: notable
+    conf: 0.8
+    if:
+      type: string
+      substr: "statically linked"
+
+  - id: ld-linux-interp
+    desc: /lib/ld-linux interpreter
+    crit: notable
+    conf: 0.7
+    if:
+      type: string
+      regex: "/lib6?4?/ld-linux"

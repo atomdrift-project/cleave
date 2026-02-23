@@ -1,0 +1,96 @@
+defaults:
+  for: [all]
+
+traits:
+  - id: pixel-access-getpixel
+    desc: Pixel operation symbols family A
+    crit: notable
+    conf: 0.8
+    if:
+      type: string
+      exact: "GetPixel"
+
+  - id: pixel-access-setpixel
+    desc: Pixel operation symbols family A
+    crit: notable
+    conf: 0.8
+    if:
+      type: string
+      exact: "SetPixel"
+
+  - id: pixel-access-lockbits
+    desc: Pixel operation symbols family A
+    crit: notable
+    conf: 0.8
+    if:
+      type: string
+      exact: "LockBits"
+
+  - id: pixel-access-bitmapdata
+    desc: Pixel operation symbols family A
+    crit: notable
+    conf: 0.8
+    if:
+      type: string
+      exact: "BitmapData"
+
+  - id: pixel-access-scan0
+    desc: Pixel operation symbols family B
+    crit: notable
+    conf: 0.8
+    if:
+      type: string
+      exact: "Scan0"
+
+  - id: pixel-access-stride
+    desc: Pixel operation symbols family B
+    crit: notable
+    conf: 0.8
+    if:
+      type: string
+      exact: "Stride"
+
+  - id: pixel-access-imagelockmode
+    desc: Pixel operation symbols family B
+    crit: notable
+    conf: 0.8
+    if:
+      type: string
+      exact: "ImageLockMode"
+
+  - id: pixel-access-pixelformat
+    desc: Pixel operation symbols family B
+    crit: notable
+    conf: 0.8
+    if:
+      type: string
+      exact: "PixelFormat"
+
+composite_rules:
+  - id: pixel-access-a
+    desc: Pixel operation symbols family A
+    crit: notable
+    conf: 0.8
+    any:
+      - id: pixel-access-getpixel
+      - id: pixel-access-setpixel
+      - id: pixel-access-lockbits
+      - id: pixel-access-bitmapdata
+
+  - id: pixel-access-b
+    desc: Pixel operation symbols family B
+    crit: notable
+    conf: 0.8
+    any:
+      - id: pixel-access-scan0
+      - id: pixel-access-stride
+      - id: pixel-access-imagelockmode
+      - id: pixel-access-pixelformat
+
+  - id: pixel-access
+    desc: Accesses image pixels
+    crit: notable
+    conf: 0.8
+    any:
+      - id: pixel-access-a
+      - id: pixel-access-b

@@ -1,0 +1,10 @@
+traits:
+  - id: parameter-manipulation
+    desc: Modifies URL query parameters (set/append)
+    crit: notable
+    conf: 0.9
+    for: [javascript, typescript]
+    if:
+      type: ast
+      regex: "\\.(set|append)$"
+      query: '$.arguments[?(@.value == "tag" || @.value == "affiliate" || @.value == "ref")]'

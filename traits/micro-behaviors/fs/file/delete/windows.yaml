@@ -1,0 +1,59 @@
+# File Delete Operations - Windows
+# MBC: C0047 (Delete File)
+# ATT&CK: T1070.004
+
+traits:
+  - id: deletefile
+    desc: Delete files (Windows API)
+    crit: notable
+    conf: 0.66
+    for: [pe, dll, c]
+    if:
+      type: symbol
+      exact: "DeleteFile"
+
+  - id: deletefile-a
+    desc: Delete files (Windows API ANSI)
+    crit: notable
+    conf: 0.66
+    for: [pe, dll, c]
+    if:
+      type: symbol
+      exact: "DeleteFileA"
+
+  - id: deletefile-w
+    desc: Delete files (Windows API)
+    crit: notable
+    conf: 0.66
+    for: [pe, dll, c]
+    if:
+      type: symbol
+      exact: "DeleteFileW"
+  - id: del-command
+    desc: 'File deletion using "del" command.'
+    crit: notable
+    conf: 0.7
+    for: [batch]
+    if:
+      type: string
+      regex: 'del %?[A-Za-z0-9_]+%?(\.exe)?' # Detects "del %var%" or "del filename.exe"
+
+  - id: batch-self-delete
+    desc: Batch script self-deletion command
+    crit: suspicious
+    conf: 0.95
+    attack: "T1070.004"
+    for: [batch, shell]
+    if:
+      type: raw
+      regex: '(?i)del\s+(/[a-z]\s+){0,3}"?%~f0"?'
+
+composite_rules:
+  - id: delete-win
+    desc: Delete files (Windows API)
+    crit: notable
+    conf: 0.66
+    any:
+      - id: deletefile
+      - id: deletefile-a
+      - id: deletefile-w

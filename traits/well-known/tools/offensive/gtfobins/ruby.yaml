@@ -1,0 +1,88 @@
+defaults:
+  for:
+    - ruby
+  platforms:
+    - all
+traits:
+  - id: gtfobins-ruby-marker
+    desc: GTFOBins Ruby pattern marker
+    crit: notable
+    conf: 0.7
+    if:
+      type: raw
+      regex: ruby -e|ruby -rsocket|ruby -ropen-uri|ruby -rfiddle
+  - id: gtfobins-ruby-file-write
+    desc: GTFOBins Ruby file write technique
+    crit: suspicious
+    conf: 0.9
+    attack: T1083
+    if:
+      type: raw
+      regex: ruby -e.{0,50}File\.(open|write).{0,50}w.{0,50}write
+  - id: gtfobins-ruby-exec-shell
+    desc: GTFOBins Ruby shell spawning
+    crit: suspicious
+    conf: 0.9
+    attack: T1059
+    if:
+      type: raw
+      regex: ruby -e.{0,30}(exec|system).{0,30}(bin/(ba)?sh|sh)
+composite_rules:
+  - id: gtfobins-ruby-library-load
+    desc: GTFOBins shared library loading via Ruby
+    crit: suspicious
+    conf: 0.93
+    attack: T1059
+    needs: 2
+    any:
+      - id: gtfobins-ruby-marker
+      - id: micro-behaviors/dylib/load::ruby-ffi-dlopen
+      - id: micro-behaviors/dylib/load::fiddle-dlopen
+  - id: gtfobins-ruby-privilege-escalation
+    desc: GTFOBins privilege escalation via Ruby
+    crit: suspicious
+    conf: 0.95
+    attack: T1068
+    needs: 2
+    any:
+      - id: gtfobins-ruby-marker
+      - id: objectives/privilege-escalation/setuid/abuse::ruby-setuid
+      - id: objectives/privilege-escalation/setuid/abuse::ruby-root-shell
+  - id: gtfobins-ruby-file-ops
+    desc: GTFOBins file operations via Ruby
+    crit: suspicious
+    conf: 0.85
+    attack: T1083
+    needs: 2
+    any:
+      - id: gtfobins-ruby-marker
+      - id: micro-behaviors/fs/file/read::ruby-file-read-content
+      - id: micro-behaviors/fs/write/file::ruby-file-write-content
+  - id: gtfobins-ruby-reverse-shell
+    desc: GTFOBins reverse shell via Ruby
+    crit: suspicious
+    conf: 0.93
+    attack: T1059
+    needs: 2
+    any:
+      - id: gtfobins-ruby-marker
+      - id: objectives/command-and-control/reverse-shell
+  - id: gtfobins-ruby-shell
+    desc: GTFOBins shell execution via Ruby
+    crit: suspicious
+    conf: 0.85
+    attack: T1059
+    needs: 2
+    any:
+      - id: gtfobins-ruby-marker
+      - id: micro-behaviors/process/create/shell/lang::ruby-shell-exec
+  - id: gtfobins-ruby-downloader
+    desc: GTFOBins file download and write via Ruby
+    crit: suspicious
+    conf: 0.95
+    attack: T1105
+    needs: 3
+    all:
+      - id: gtfobins-ruby-marker
+      - id: micro-behaviors/communications/http/lib/netlib::open-uri
+      - id: micro-behaviors/fs/write/file::io-copy-stream

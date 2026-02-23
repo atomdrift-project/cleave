@@ -1,0 +1,32 @@
+# Mount Filesystem (symbol-based detection)
+# MBC: E1222 (File Permission Modification)
+# ATT&CK: T1222
+
+defaults:
+  for: [elf, macho, so, dylib, c]
+
+traits:
+  - id: mount-underscore
+    desc: Mount file systems
+    crit: notable
+    conf: 0.66
+    if:
+      type: symbol
+      exact: "_mount"
+
+  - id: mount-fn
+    desc: Mount file systems
+    crit: notable
+    conf: 0.66
+    if:
+      type: symbol
+      exact: "mount"
+
+composite_rules:
+  - id: mount
+    desc: Mount file systems
+    crit: notable
+    conf: 0.66
+    any:
+      - id: mount-underscore
+      - id: mount-fn

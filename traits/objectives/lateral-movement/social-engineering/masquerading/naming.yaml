@@ -1,0 +1,135 @@
+# Social Engineering - Generic Naming Patterns
+# GAP #5: Detects generic/suspicious application naming used for masquerading
+# Malware often uses generic names to appear legitimate while hiding true purpose
+# ATT&CK: T1036.005 (Match Legitimate Name and Location)
+
+defaults:
+  for: [macho]
+  platforms: [macos, ios]
+  attack: "T1036.005"
+  mbc: "F0009"
+
+traits:
+  - id: generic-executable-name-1
+    desc: "Generic executable name (App/Installer/Update/Setup)"
+    crit: notable
+    conf: 0.6
+    if:
+      type: basename
+      regex: "^(Application|Installer|Update|Setup)$"
+      case_insensitive: true
+
+  - id: generic-executable-name-2
+    desc: "Generic executable name (Service/Helper/Tool/Utility)"
+    crit: notable
+    conf: 0.6
+    if:
+      type: basename
+      regex: "^(Service|Helper|Tool/Utility)$"
+      case_insensitive: true
+
+  - id: placeholder-author-generic-1
+    desc: Generic author placeholder (set 1)
+    crit: suspicious
+    conf: 0.75
+    for: [package.json, chrome-manifest, cargo.toml, pyproject.toml, composer.json, pkginfo]
+    if:
+      type: string
+      regex: "^(author|your name|name|test)$"
+      case_insensitive: true
+
+  - id: placeholder-author-generic-2a
+    desc: Generic author placeholder (user/admin/example)
+    crit: suspicious
+    conf: 0.75
+    for: [package.json, chrome-manifest, cargo.toml, pyproject.toml, composer.json, pkginfo]
+    if:
+      type: string
+      regex: "^(user|admin|example)$"
+      case_insensitive: true
+
+  - id: placeholder-author-generic-2b
+    desc: Generic author placeholder (sample/anonymous)
+    crit: suspicious
+    conf: 0.75
+    for: [package.json, chrome-manifest, cargo.toml, pyproject.toml, composer.json, pkginfo]
+    if:
+      type: string
+      regex: "^(sample|anonymous)$"
+      case_insensitive: true
+
+composite_rules:
+  - id: generic-executable-name
+    desc: "Generic executable name"
+    crit: notable
+    conf: 0.6
+    any:
+      - id: generic-executable-name-1
+      - id: generic-executable-name-2
+
+  - id: placeholder-author-generic-2
+    desc: Generic author placeholder (set 2)
+    crit: suspicious
+    conf: 0.75
+    any:
+      - id: placeholder-author-generic-2a
+      - id: placeholder-author-generic-2b
+
+  - id: placeholder-author-generic
+    desc: Generic author placeholder
+    crit: notable
+    conf: 0.7
+    any:
+      - id: placeholder-author-generic-1
+      - id: placeholder-author-generic-2
+
+  # Match bundle IDs with generic utility/app patterns
+  # The metadata/signed/id:: trait is already extracted by macho parser
+  - id: generic-bundle-id-pattern
+    desc: "Generic bundle identifier pattern"
+    crit: notable
+    conf: 0.75
+    any:
+      - id: metadata/signed/id::com.utils.application
+      - id: metadata/signed/id::com.util.application
+      - id: metadata/signed/id::com.utility.application
+      - id: metadata/signed/id::com.app.application
+      - id: metadata/signed/id::com.tools.application
+      - id: metadata/signed/id::com.tool.application
+      - id: metadata/signed/id::com.helper.application
+      - id: metadata/signed/id::com.service.application
+
+  # Combination of generic bundle ID + unsigned = suspicious
+  - id: suspicious-generic-naming
+    desc: "Suspicious generic application naming"
+    crit: suspicious
+    conf: 0.8
+    all:
+      - id: generic-bundle-id-pattern
+      - id: metadata/signed/adhoc::unsigned
+
+  # Generic naming + malicious capabilities = masquerading malware
+  - id: masquerading-malware-generic
+    desc: "Masquerading malware with generic name"
+    crit: suspicious
+    conf: 0.9
+    attack: "T1036.005"
+    all:
+      - id: generic-bundle-id-pattern
+    any:
+      - id: micro-behaviors/process/create/shell::c-popen
+      - id: micro-behaviors/process/create/shell::system-fn
+      - id: objectives/persistence/daemon/init::daemon-fork
+    none:
+      - id: metadata/signed/platform::apple
+
+  # Very suspicious: generic name + ad-hoc signature + shell execution
+  - id: unsigned-generic-shell-exec
+    desc: "Unsigned generic app with shell"
+    crit: suspicious
+    conf: 0.95
+    attack: "T1036.005"
+    all:
+      - id: metadata/signed/adhoc::unsigned
+      - id: generic-executable-name
+      - id: micro-behaviors/process/create/shell::shell-execution

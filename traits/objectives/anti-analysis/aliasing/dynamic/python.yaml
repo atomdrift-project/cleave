@@ -1,0 +1,72 @@
+# Evasive Module Aliasing Detection
+# Detects when multiple standard libraries are aliased to obfuscate intent
+
+traits:
+  # === Python aliasing atomic indicators ===
+  - id: alias-os
+    desc: os import aliased
+    crit: notable
+    conf: 0.6
+    for: [python]
+    if:
+      type: string
+      regex: 'import\s+os\s+as\s+[a-z]{1,5}\b'
+
+  - id: alias-subprocess
+    desc: subprocess import aliased
+    crit: notable
+    conf: 0.6
+    for: [python]
+    if:
+      type: string
+      regex: 'import\s+subprocess\s+as\s+[a-z]{1,5}\b'
+
+  - id: alias-platform
+    desc: platform import aliased
+    crit: notable
+    conf: 0.6
+    for: [python]
+    if:
+      type: string
+      regex: 'import\s+platform\s+as\s+[a-z]{1,5}\b'
+
+  - id: alias-getpass
+    desc: getpass import aliased
+    crit: notable
+    conf: 0.6
+    for: [python]
+    if:
+      type: string
+      regex: 'import\s+getpass\s+as\s+[a-z]{1,5}\b'
+
+  - id: alias-base64
+    desc: base64 import aliased
+    crit: notable
+    conf: 0.6
+    for: [python]
+    if:
+      type: string
+      regex: 'import\s+base64\s+as\s+[a-z]{1,5}\b'
+
+  - id: alias-urllib
+    desc: urllib import aliased
+    crit: notable
+    conf: 0.6
+    for: [python]
+    if:
+      type: string
+      regex: 'import\s+urllib\s+as\s+[a-z]{1,5}\b'
+
+composite_rules:
+  - id: python-std-alias
+    desc: "Suspicious standard library aliasing (potential"
+    crit: suspicious
+    conf: 0.8
+    for: [python]
+    any:
+      - id: alias-os
+      - id: alias-subprocess
+      - id: alias-platform
+      - id: alias-getpass
+      - id: alias-base64
+      - id: alias-urllib

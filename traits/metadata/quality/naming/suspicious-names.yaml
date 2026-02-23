@@ -1,0 +1,348 @@
+# Package Naming - Suspicious Patterns
+# Detects suspicious, test, or malicious package name patterns
+# ATT&CK: T1195.002 (Compromise Software Supply Chain)
+
+defaults:
+  crit: notable
+  conf: 0.75
+  attack: "T1195.002"
+
+traits:
+  # === npm package.json ===
+
+  # Test/temporary package names
+  - id: npm-name-test
+    desc: npm package name contains 'test'
+    crit: notable
+    conf: 0.65
+    for: [package.json]
+    if:
+      type: kv
+      path: "name"
+      regex: "\\btest\\b"
+      case_insensitive: true
+    not:
+      # Legitimate test frameworks
+      - regex: "^(@types/|@jest/|jest-|mocha-|chai-|tape-|ava-)"
+      - exact: "test"
+      - exact: "@types/test"
+
+  - id: npm-name-temp
+    desc: npm package name contains 'temp' or 'tmp'
+    crit: suspicious
+    conf: 0.80
+    for: [package.json]
+    if:
+      type: kv
+      path: "name"
+      regex: "\\b(temp|tmp)\\b"
+      case_insensitive: true
+    not:
+      # Legitimate temp utilities
+      - regex: "^(tmp|temp|@types/tmp)"
+
+  - id: npm-name-demo
+    desc: npm package name contains 'demo'
+    crit: notable
+    conf: 0.70
+    for: [package.json]
+    if:
+      type: kv
+      path: "name"
+      regex: "\\bdemo\\b"
+      case_insensitive: true
+
+  - id: npm-name-example
+    desc: npm package name contains 'example'
+    crit: notable
+    conf: 0.70
+    for: [package.json]
+    if:
+      type: kv
+      path: "name"
+      regex: "\\bexample\\b"
+      case_insensitive: true
+
+  - id: npm-name-poc
+    desc: npm package name contains 'poc' or 'proof-of-concept'
+    crit: suspicious
+    conf: 0.75
+    for: [package.json]
+    if:
+      type: kv
+      path: "name"
+      regex: "\\b(poc|proof-?of-?concept)\\b"
+      case_insensitive: true
+
+  # Malicious intent indicators
+  - id: npm-name-hack
+    desc: npm package name contains 'hack'
+    crit: suspicious
+    conf: 0.80
+    for: [package.json]
+    if:
+      type: kv
+      path: "name"
+      regex: "\\bhack(er|ing)?\\b"
+      case_insensitive: true
+    not:
+      # Legitimate hackathon/hack day tools
+      - regex: "(hackathon|growth-?hack|life-?hack)"
+
+  - id: npm-name-exploit
+    desc: npm package name contains 'exploit'
+    crit: suspicious
+    conf: 0.85
+    for: [package.json]
+    if:
+      type: kv
+      path: "name"
+      regex: "\\bexploit"
+      case_insensitive: true
+
+  - id: npm-name-backdoor
+    desc: npm package name contains 'backdoor'
+    crit: suspicious
+    conf: 0.90
+    for: [package.json]
+    if:
+      type: kv
+      path: "name"
+      regex: "\\bbackdoor"
+      case_insensitive: true
+
+  - id: npm-name-malware
+    desc: npm package name contains 'malware' or 'virus'
+    crit: suspicious
+    conf: 0.85
+    for: [package.json]
+    if:
+      type: kv
+      path: "name"
+      regex: "\\b(malware|virus|trojan|rat)\\b"
+      case_insensitive: true
+
+  # Suspicious patterns
+  - id: npm-name-all-numbers
+    desc: npm package name is only numbers
+    crit: suspicious
+    conf: 0.85
+    for: [package.json]
+    if:
+      type: kv
+      path: "name"
+      regex: "^[0-9]+$"
+
+  - id: npm-name-single-char
+    desc: npm package name is single character
+    crit: suspicious
+    conf: 0.90
+    for: [package.json]
+    if:
+      type: kv
+      path: "name"
+      regex: "^.$"
+    not:
+      # Some legitimate single-char packages exist
+      - exact: "q"
+      - exact: "y"
+      - exact: "n"
+
+  - id: npm-name-random-chars
+    desc: npm package name appears random (mixed case/numbers)
+    crit: suspicious
+    conf: 0.80
+    for: [package.json]
+    if:
+      type: kv
+      path: "name"
+      regex: "^[a-z]{1,3}[0-9]{3,}[a-z]{1,3}$"
+
+  - id: npm-name-excessive-hyphens
+    desc: npm package name has excessive hyphens
+    crit: notable
+    conf: 0.70
+    for: [package.json]
+    if:
+      type: kv
+      path: "name"
+      regex: "(-.{0,50}){5,}"
+
+  # === PyPI naming patterns ===
+
+  - id: pypi-name-test
+    desc: PyPI package name contains 'test'
+    crit: notable
+    conf: 0.65
+    for: [python]
+    if:
+      type: string
+      regex: "name\\s*=\\s*['\"][^'\"]{0,100}\\btest\\b[^'\"]{0,100}['\"]"
+      case_insensitive: true
+    not:
+      - regex: "name\\s*=\\s*['\"][^'\"]{0,100}(pytest|unittest|testtools)[^'\"]{0,100}['\"]"
+
+  - id: pypi-name-temp
+    desc: PyPI package name contains 'temp' or 'tmp'
+    crit: suspicious
+    conf: 0.80
+    for: [python]
+    if:
+      type: string
+      regex: "name\\s*=\\s*['\"][^'\"]{0,100}\\b(temp|tmp)\\b[^'\"]{0,100}['\"]"
+      case_insensitive: true
+
+  - id: pypi-name-example
+    desc: PyPI package name contains 'example'
+    crit: notable
+    conf: 0.70
+    for: [python]
+    if:
+      type: string
+      regex: "name\\s*=\\s*['\"][^'\"]{0,100}\\bexample\\b[^'\"]{0,100}['\"]"
+      case_insensitive: true
+
+  - id: pypi-name-poc
+    desc: PyPI package name contains 'poc'
+    crit: suspicious
+    conf: 0.75
+    for: [python]
+    if:
+      type: string
+      regex: "name\\s*=\\s*['\"][^'\"]{0,100}\\bpoc\\b[^'\"]{0,100}['\"]"
+      case_insensitive: true
+
+  - id: pypi-name-all-numbers
+    desc: PyPI package name is only numbers
+    crit: suspicious
+    conf: 0.85
+    for: [python]
+    if:
+      type: string
+      regex: 'name\s*=\s*[''"][0-9]+[''"]'
+
+  # === RubyGems naming patterns ===
+
+  - id: gem-name-test
+    desc: RubyGem name contains 'test'
+    crit: notable
+    conf: 0.65
+    for: [ruby]
+    if:
+      type: string
+      regex: "\\.name\\s*=\\s*['\"][^'\"]{0,100}\\btest\\b[^'\"]{0,100}['\"]"
+      case_insensitive: true
+
+  - id: gem-name-temp
+    desc: RubyGem name contains 'temp' or 'tmp'
+    crit: suspicious
+    conf: 0.80
+    for: [ruby]
+    if:
+      type: string
+      regex: "\\.name\\s*=\\s*['\"][^'\"]{0,100}\\b(temp|tmp)\\b[^'\"]{0,100}['\"]"
+      case_insensitive: true
+
+  - id: gem-name-example
+    desc: RubyGem name contains 'example'
+    crit: notable
+    conf: 0.70
+    for: [ruby]
+    if:
+      type: string
+      regex: "\\.name\\s*=\\s*['\"][^'\"]{0,100}\\bexample\\b[^'\"]{0,100}['\"]"
+      case_insensitive: true
+
+composite_rules:
+  # === npm Suspicious Names ===
+  - id: npm-test-or-temp-name
+    desc: npm package has test or temporary name
+    crit: suspicious
+    conf: 0.80
+    attack: "T1195.002"
+    for: [package.json]
+    any:
+      - id: npm-name-test
+      - id: npm-name-temp
+      - id: npm-name-demo
+      - id: npm-name-example
+      - id: npm-name-poc
+
+  - id: npm-malicious-name-indicators
+    desc: npm package name suggests malicious intent
+    crit: suspicious
+    conf: 0.85
+    attack: "T1195.002"
+    for: [package.json]
+    any:
+      - id: npm-name-hack
+      - id: npm-name-exploit
+      - id: npm-name-backdoor
+      - id: npm-name-malware
+
+  - id: npm-random-or-generated-name
+    desc: npm package name appears random or generated
+    crit: suspicious
+    conf: 0.85
+    attack: "T1195.002"
+    for: [package.json]
+    any:
+      - id: npm-name-all-numbers
+      - id: npm-name-single-char
+      - id: npm-name-random-chars
+
+  # === High-Risk: Suspicious name + install hooks ===
+  - id: npm-suspicious-name-with-hooks
+    desc: Suspicious package name with install hooks
+    crit: hostile
+    conf: 0.95
+    attack: "T1195.002"
+    for: [package.json]
+    all:
+      - id: objectives/lateral-movement/supply-chain/npm/metadata::install-hooks
+    any:
+      - id: npm-test-or-temp-name
+      - id: npm-malicious-name-indicators
+      - id: npm-random-or-generated-name
+
+  # === High-Risk: Random name + quality issues ===
+  - id: npm-random-name-low-quality
+    desc: Random name with low quality metadata
+    crit: hostile
+    conf: 0.93
+    attack: "T1195.002"
+    for: [package.json]
+    all:
+      - id: npm-random-or-generated-name
+    any:
+      - id: metadata/quality/package-info::npm-empty-description-any
+      - id: metadata/quality/author::npm-generic-author-name
+      - id: metadata/quality/versioning::release-zero
+      - id: metadata/quality/author::npm-free-email-provider
+    needs: 2
+
+  # === PyPI Composites ===
+  - id: pypi-suspicious-name
+    desc: PyPI package has suspicious name
+    crit: suspicious
+    conf: 0.80
+    attack: "T1195.002"
+    for: [python]
+    any:
+      - id: pypi-name-test
+      - id: pypi-name-temp
+      - id: pypi-name-example
+      - id: pypi-name-poc
+      - id: pypi-name-all-numbers
+
+  # === RubyGems Composites ===
+  - id: gem-suspicious-name
+    desc: RubyGem has suspicious name
+    crit: suspicious
+    conf: 0.80
+    attack: "T1195.002"
+    for: [ruby]
+    any:
+      - id: gem-name-test
+      - id: gem-name-temp
+      - id: gem-name-example

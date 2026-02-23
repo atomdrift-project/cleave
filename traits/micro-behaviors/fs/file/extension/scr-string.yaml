@@ -1,0 +1,9 @@
+traits:
+  - id: scr-string
+    desc: "Reference to .scr executable extension"
+    crit: notable
+    conf: 0.7
+    for: [javascript, python, shell]
+    if:
+      type: string
+      regex: '\.scr["'']'

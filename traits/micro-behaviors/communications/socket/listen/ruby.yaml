@@ -1,0 +1,47 @@
+# Socket Communication - Ruby
+# MBC: C0001 (Socket Communication)
+# ATT&CK: T1071
+
+defaults:
+  for: [all]
+
+traits:
+  - id: listen-ruby
+    desc: Listen on TCP socket (Ruby)
+    crit: notable
+    conf: 0.66
+    mbc: "C0001"
+    attack: "T1071"
+    if:
+      type: string
+      substr: Socket.tcp_server
+
+  - id: ruby-tcp-socket
+    desc: TCP socket connection
+    crit: notable
+    conf: 0.90
+    platforms: [all]
+    for: [ruby]
+    if:
+      type: string
+      regex: 'TCPSocket'
+
+  - id: ruby-tcp-server
+    desc: TCP server listening
+    crit: notable
+    conf: 0.90
+    platforms: [all]
+    for: [ruby]
+    if:
+      type: string
+      regex: 'TCPServer'
+
+  - id: ruby-udp-socket
+    desc: UDP socket
+    crit: notable
+    conf: 0.90
+    platforms: [all]
+    for: [ruby]
+    if:
+      type: string
+      regex: 'UDPSocket'

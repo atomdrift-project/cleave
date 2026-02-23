@@ -1,0 +1,15 @@
+# Directory Creation - Python
+# MBC: C0046 (Create File)
+# ATT&CK: T1083
+
+defaults:
+  for: [all]
+
+traits:
+  - id: mkdir-python
+    desc: Create directories (Python os.makedirs)
+    crit: baseline
+    conf: 0.66
+    if:
+      type: string
+      substr: os.makedirs

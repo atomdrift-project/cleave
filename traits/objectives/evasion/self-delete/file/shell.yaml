@@ -1,0 +1,60 @@
+defaults:
+  for:
+  - all
+traits:
+- id: rm-dollar-zero
+  desc: rm $0 self-deletion
+  crit: suspicious
+  conf: 0.8
+  mbc: F0007
+  attack: T1070.004
+  size_max: 5000
+  if:
+    type: string
+    regex: (^|\s|;)rm\s+\$0\b
+  unless:
+  - type: raw
+    regex: docutils|math2html
+- id: rm-dollar-zero-quoted
+  desc: rm "$0" self-deletion (quoted)
+  crit: suspicious
+  conf: 0.8
+  mbc: F0007
+  attack: T1070.004
+  size_max: 5000
+  if:
+    type: string
+    regex: (^|\s|;)rm\s+"\$0"\b
+  unless:
+  - type: raw
+    regex: docutils|math2html
+- id: shred-dollar-zero
+  desc: shred $0 self-deletion
+  crit: suspicious
+  conf: 0.85
+  mbc: F0007
+  attack: T1070.004
+  if:
+    type: string
+    regex: shred\s+(-[a-z]+\s+)?["']?\$0["']?
+- id: rm-install-artifacts
+  desc: Delete installer/setup artifacts
+  crit: suspicious
+  conf: 0.75
+  mbc: F0007
+  attack: T1070.004
+  if:
+    type: string
+    regex: (?i)rm\s+(-[rf]{1,4}\s+){1,4}(install|\.tar(\.gz)?|\.zip)
+composite_rules:
+- id: self-delete-shell
+  desc: Self-deleting shell script
+  crit: suspicious
+  conf: 0.66
+  mbc: F0007
+  attack: T1070.004
+  any:
+  - id: rm-dollar-zero
+  - id: rm-dollar-zero-quoted
+  - id: shred-dollar-zero
+  - id: rm-install-artifacts

@@ -1,0 +1,26 @@
+composite_rules:
+  - id: roblox-stealer-indicators
+    desc: Indicators of Roblox cookie theft
+    crit: notable
+    conf: 0.8
+    any:
+      - id: micro-behaviors/os/registry/keys::registry-access
+      - id: micro-behaviors/data/text/parsing::parse-pattern
+      - id: micro-behaviors/data/text/parsing::split-logic
+
+  - id: exfil-indicators
+    desc: Indicators of exfiltration
+    crit: notable
+    conf: 0.8
+    any:
+      - id: objectives/command-and-control/channel/service::discord-webhook-url
+      - id: objectives/exfiltration/channel/webhook::discord-exfiltration
+
+  - id: registry-stealer
+    desc: Steals Roblox cookies from Windows Registry and exfiltrates via Discord
+    crit: hostile
+    conf: 1.0
+    attack: T1552.002
+    all:
+      - id: roblox-stealer-indicators
+      - id: exfil-indicators

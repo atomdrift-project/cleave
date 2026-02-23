@@ -1,0 +1,28 @@
+# HTTP Request Operations - Rust
+# MBC: C0002 (HTTP Communication)
+# ATT&CK: T1071.001
+
+traits:
+  - id: rust-reqwest
+    desc: Makes HTTP requests using reqwest
+    crit: notable
+    conf: 0.9
+    mbc: "C0002"
+    attack: "T1071.001"
+    for: [rust]
+    if:
+      type: ast
+      kind: call
+      exact: "client.get"
+
+  - id: rust-reqwest-builder
+    desc: HTTP client builder with invalid
+    crit: suspicious
+    conf: 0.95
+    mbc: "C0002"
+    attack: "T1071.001"
+    for: [rust]
+    if:
+      type: ast
+      kind: call
+      exact: "danger_accept_invalid_certs"

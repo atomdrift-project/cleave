@@ -1,0 +1,50 @@
+# Build System - BAZEL
+
+defaults:
+  for: [all]
+
+traits:
+  # === Bazel micro-behaviors ===
+  - id: bazel-out
+    desc: bazel-out directory
+    crit: notable
+    conf: 0.85
+    if:
+      type: string
+      substr: "bazel-out"
+
+  - id: workspace-file
+    desc: WORKSPACE file
+    crit: notable
+    conf: 0.85
+    if:
+      type: string
+      substr: "WORKSPACE"
+
+  - id: build-bazel
+    desc: BUILD.bazel file
+    crit: notable
+    conf: 0.85
+    if:
+      type: string
+      substr: "BUILD.bazel"
+
+  - id: bazel-tools
+    desc: "@bazel_tools reference"
+    crit: notable
+    conf: 0.85
+    if:
+      type: string
+      substr: "@bazel_tools"
+
+composite_rules:
+  # Bazel composite (migrated from YARA)
+  - id: bazel
+    desc: Built with Bazel
+    crit: notable
+    conf: 0.85
+    any:
+      - id: bazel-out
+      - id: workspace-file
+      - id: build-bazel
+      - id: bazel-tools

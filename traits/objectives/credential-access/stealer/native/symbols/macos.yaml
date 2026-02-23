@@ -1,0 +1,12 @@
+defaults:
+  for: [all]
+
+traits:
+  - id: copy-directory-with-exclusions
+    desc: Custom directory copying with exclusion logic
+    crit: suspicious
+    conf: 0.9
+    mbc: E1083
+    if:
+      type: symbol
+      substr: "copyDirectoryWithExclusions"

@@ -1,0 +1,13 @@
+# Swap Enable
+# MBC: E1082 (System Information Discovery)
+# ATT&CK: T1082
+
+traits:
+  - id: swapon
+    desc: Start swapping to a file/device
+    crit: notable
+    conf: 0.66
+    for: [elf, so, c]
+    if:
+      type: symbol
+      regex: swapon

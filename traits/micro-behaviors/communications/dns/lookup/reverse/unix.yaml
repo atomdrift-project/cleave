@@ -1,0 +1,32 @@
+# Reverse DNS Lookup (Unix/C)
+# MBC: C0011 (DNS Communication)
+# ATT&CK: T1071.004
+
+defaults:
+  for: [elf, macho, so, dylib, c]
+  mbc: "C0011"
+  attack: "T1071.004"
+  crit: baseline
+  conf: 0.56
+
+traits:
+  - id: in-addr-arpa
+    desc: in-addr.arpa reverse lookup
+    if:
+      type: string
+      substr: ".in-addr.arpa"
+
+  - id: ip6-arpa
+    desc: ip6.arpa reverse lookup
+    if:
+      type: string
+      substr: "ip6.arpa"
+
+composite_rules:
+  - id: reverse-lookup
+    desc: Reverse DNS lookup
+    crit: notable
+    conf: 0.66
+    any:
+      - id: in-addr-arpa
+      - id: ip6-arpa

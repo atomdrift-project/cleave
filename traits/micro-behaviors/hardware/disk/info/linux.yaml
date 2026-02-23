@@ -1,0 +1,17 @@
+# Disk Information - Linux
+# ATT&CK: T1082 (System Information Discovery)
+
+traits:
+  # Removed dmidecode duplicate - use micro-behaviors/os/sysinfo/dmi::dmidecode
+  # NOTE: dmidecode is a DMI/SMBIOS tool, not specific to disk information
+
+  - id: gopsutil
+    desc: Go disk info via gopsutil
+    crit: notable
+    conf: 0.6
+    attack: "T1082"
+    platforms: [all]
+    for: [elf, macho]
+    if:
+      type: string
+      substr: "gopsutil/v3/disk"

@@ -1,0 +1,17 @@
+defaults:
+  for: [all]
+
+traits:
+  - id: reversed-nemucod-c2-url
+    desc: "Detects the reversed and obfuscated C2 URL"
+    crit: suspicious
+    if:
+      type: raw
+      regex: 'lxh/tp/t:[a-z0-9./?=&%]+'
+composite_rules:
+  - id: nemucod-c2-domain
+    desc: "Detects Nemucod C2 URL patterns."
+    crit: hostile
+    all:
+      - id: micro-behaviors/data/encode/permutation::js-permutation-loop
+      - id: objectives/command-and-control/domain/extraction::reversed-nemucod-c2-url

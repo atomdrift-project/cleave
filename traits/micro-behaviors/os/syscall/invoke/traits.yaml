@@ -1,0 +1,62 @@
+# Low-Level System Call Operations
+# Direct NT API and syscall access
+
+defaults:
+  for: ["pe", "dll"]
+  platforms: ["windows"]
+
+traits:
+  # === NTDLL Imports ===
+  - id: ntdll-import
+    desc: Direct NT API access
+    crit: notable
+    conf: 0.85
+    attack: "T1562"
+    if:
+      type: string
+      substr: "ntdll"
+
+  - id: ntdll-direct-memory-op-a
+    desc: Direct NT memory manipulation (allocate/write/protect)
+    crit: suspicious
+    conf: 0.9
+    mbc: C0021
+    if:
+      type: symbol
+      regex: "^Nt(Allocate|Write|Protect)VirtualMemory$"
+
+  - id: ntdll-direct-memory-op-b
+    desc: Direct NT memory manipulation (view/query)
+    crit: suspicious
+    conf: 0.9
+    mbc: C0021
+    if:
+      type: symbol
+      regex: "^Nt(View|Query)VirtualMemory$"
+
+  - id: ntdll-direct-process-op
+    desc: Direct NT process/thread manipulation
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: symbol
+      regex: "^Nt(Create|Open)(Process|Thread)(Ex)?$"
+
+  # === Pointer Encoding ===
+  - id: encode-pointer
+    desc: Pointer value encoding
+    crit: baseline
+    conf: 0.85
+    if:
+      type: symbol
+      exact: "EncodePointer"
+
+composite_rules:
+  - id: ntdll-direct-memory-op
+    desc: Direct NT memory manipulation (stealth)
+    crit: suspicious
+    conf: 0.9
+    mbc: C0021
+    any:
+      - id: ntdll-direct-memory-op-a
+      - id: ntdll-direct-memory-op-b

@@ -1,0 +1,49 @@
+# Apple Signature Type Detection
+# References code-generated signature traits
+
+defaults:
+  platforms: [macos]
+  for: [macho]
+
+traits:
+  # These wrap code-generated traits for use in composite rules
+  - id: adhoc
+    desc: Ad-hoc code signature
+    crit: baseline
+    conf: 1.0
+    if:
+      type: trait
+      id: metadata/signed/adhoc::unsigned
+
+  - id: platform
+    desc: Apple platform binary
+    crit: baseline
+    conf: 1.0
+    if:
+      type: trait
+      id: metadata/signed/platform::apple
+
+  - id: hardened-runtime
+    desc: Hardened runtime enabled
+    crit: baseline
+    conf: 1.0
+    if:
+      type: trait
+      id: metadata/hardened-runtime
+
+composite_rules:
+  # Match any developer-signed binary
+  - id: developer-signed
+    desc: Developer ID signed application
+    crit: baseline
+    conf: 1.0
+    any:
+      - id: metadata/signed/developer
+
+  # Match any App Store signed binary
+  - id: app-store-signed
+    desc: Mac App Store signed application
+    crit: baseline
+    conf: 1.0
+    any:
+      - id: metadata/signed/app-store

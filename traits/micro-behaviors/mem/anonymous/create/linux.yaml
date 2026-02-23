@@ -1,0 +1,28 @@
+# Anonymous Memory Creation - Linux
+# ATT&CK: T1055 (Process Injection)
+# MBC: B0033
+
+traits:
+  - id: memfd-create
+    desc: Create anonymous memory file (memfd_create)
+    crit: suspicious
+    conf: 0.8
+    attack: "T1055"
+    mbc: "B0033"
+    platforms: [linux]
+    for: [elf]
+    if:
+      type: symbol
+      regex: "memfd_create"
+
+  - id: memfd-create-go
+    desc: Create anonymous memory file (Go
+    crit: suspicious
+    conf: 0.85
+    attack: "T1055"
+    mbc: "B0033"
+    platforms: [linux]
+    for: [elf]
+    if:
+      type: string
+      substr: "MemfdCreate"

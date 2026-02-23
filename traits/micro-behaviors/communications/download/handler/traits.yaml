@@ -1,0 +1,12 @@
+# Remote File Download
+defaults:
+  for: [all]
+
+traits:
+  - id: generic
+    desc: "Function to handle remote file"
+    crit: notable
+    conf: 0.8
+    if:
+      type: string
+      substr: "handleFileDownload"

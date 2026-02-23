@@ -1,0 +1,59 @@
+# Database Connection - ELASTICSEARCH
+
+defaults:
+  for: [all]
+
+traits:
+  # === Elasticsearch micro-behaviors ===
+  - id: elasticsearch-string
+    desc: elasticsearch string
+    crit: notable
+    conf: 0.9
+    if:
+      type: string
+      substr: "elasticsearch"
+
+  - id: elastic-co
+    desc: elastic.co domain
+    crit: notable
+    conf: 0.9
+    if:
+      type: string
+      substr: "elastic.co"
+
+  - id: olivere-elastic
+    desc: olivere/elastic Go driver
+    crit: notable
+    conf: 0.9
+    if:
+      type: string
+      substr: "olivere/elastic"
+
+  - id: es-search-endpoint
+    desc: _search ES endpoint
+    crit: notable
+    conf: 0.8
+    if:
+      type: string
+      regex: "/_search"
+
+  - id: es-bulk-endpoint
+    desc: _bulk ES endpoint
+    crit: notable
+    conf: 0.8
+    if:
+      type: string
+      regex: "/_bulk"
+
+composite_rules:
+  # Elasticsearch composite (migrated from YARA)
+  - id: elasticsearch
+    desc: Elasticsearch connectivity
+    crit: notable
+    conf: 0.9
+    any:
+      - id: elasticsearch-string
+      - id: elastic-co
+      - id: olivere-elastic
+      - id: es-search-endpoint
+      - id: es-bulk-endpoint

@@ -1,0 +1,14 @@
+composite_rules:
+  - id: fake-gzip-loader
+    desc: Obfuscated loader using fake GZIP header variables
+    crit: hostile
+    conf: 0.99
+    attack: "T1027"
+    mbc: "B0032"
+    for: [javascript, typescript]
+    all:
+      - id: micro-behaviors/data/encode/gzip::gzip-header-identifier
+      - id: objectives/execution/vm/sandbox::atob-call
+    any:
+      - id: objectives/anti-static/obfuscation/strings/encoding::js-charat-loop
+      - id: objectives/anti-static/obfuscation/strings/encoding::js-array-swap

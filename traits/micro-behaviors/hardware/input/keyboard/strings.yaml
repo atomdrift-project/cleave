@@ -1,0 +1,51 @@
+# Keylogger Strings
+# Detects strings commonly found in keyloggers
+# ATT&CK: T1056.001 (Input Capture: Keylogging)
+
+defaults:
+  for: [all]
+
+traits:
+  - id: keylogger-string
+    desc: "Keylogger string"
+    crit: notable
+    conf: 0.8
+    mbc: "B0015"
+    attack: "T1056.001"
+    if:
+      type: string
+      word: "keylogger"
+      case_insensitive: true
+
+  - id: init-keylogger-sym
+    desc: "init_keylogger symbol"
+    crit: suspicious
+    conf: 0.8
+    if:
+      type: symbol
+      regex: "init_keylogger"
+
+  - id: keystroke-capture-string-a
+    desc: "Key capture strings (locks)"
+    crit: notable
+    conf: 0.7
+    if:
+      type: string
+      regex: "(CAPSLOCK|SCROLLOCK|NUMLOCK)"
+
+  - id: keystroke-capture-string-b
+    desc: "Key capture strings (actions)"
+    crit: notable
+    conf: 0.7
+    if:
+      type: string
+      regex: "(PRINTSCREEN|BACKSPACE)"
+
+composite_rules:
+  - id: keystroke-capture-string
+    desc: "Key capture strings"
+    crit: notable
+    conf: 0.7
+    any:
+      - id: keystroke-capture-string-a
+      - id: keystroke-capture-string-b

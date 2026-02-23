@@ -1,0 +1,13 @@
+# SQLite Database Indicators
+
+defaults:
+  for: [elf, macho, pe]
+  crit: notable
+  conf: 0.8
+
+traits:
+  - id: sqlite-auth-user
+    desc: SQLite auth user marker (QLITE_AUTH_USER)
+    if:
+      type: string
+      substr: "QLITE_AUTH_USER"

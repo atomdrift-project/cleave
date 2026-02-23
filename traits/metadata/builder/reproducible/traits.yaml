@@ -1,0 +1,50 @@
+# Build System - REPRODUCIBLE
+
+defaults:
+  for: [all]
+
+traits:
+  # === Reproducible build micro-behaviors ===
+  - id: source-date-epoch
+    desc: SOURCE_DATE_EPOCH variable
+    crit: notable
+    conf: 0.85
+    if:
+      type: string
+      substr: "SOURCE_DATE_EPOCH"
+
+  - id: reproducible-string
+    desc: REPRODUCIBLE string
+    crit: notable
+    conf: 0.85
+    if:
+      type: string
+      substr: "REPRODUCIBLE"
+
+  - id: build-id-string
+    desc: build-id string
+    crit: notable
+    conf: 0.85
+    if:
+      type: string
+      substr: "build-id"
+
+  - id: debuglink-string
+    desc: debuglink string
+    crit: notable
+    conf: 0.85
+    if:
+      type: string
+      substr: "debuglink"
+
+composite_rules:
+  # Reproducible build composite (migrated from YARA)
+  - id: reproducible
+    desc: Reproducible build markers
+    crit: notable
+    conf: 0.85
+    any:
+      - id: source-date-epoch
+      - id: reproducible-string
+      - id: build-id-string
+      - id: debuglink-string

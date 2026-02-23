@@ -1,0 +1,36 @@
+traits:
+  - id: target-addr
+    desc: References targetAddr (Go DDoS pattern)
+    crit: notable
+    conf: 0.7
+    for: [macho, elf]
+    if:
+      type: string
+      substr: "targetAddr"
+
+  - id: packets-sent
+    desc: References packetsSent counter (Go DDoS
+    crit: notable
+    conf: 0.7
+    for: [macho, elf]
+    if:
+      type: string
+      substr: "packetsSent"
+
+  - id: target-scheme
+    desc: References targetScheme (Go DDoS pattern)
+    crit: notable
+    conf: 0.7
+    for: [macho, elf]
+    if:
+      type: string
+      substr: "targetScheme"
+
+composite_rules:
+  - id: go-ddos-indicators
+    desc: Multiple Go-based DDoS indicators
+    crit: suspicious
+    all:
+      - id: target-addr
+      - id: packets-sent
+      - id: target-scheme

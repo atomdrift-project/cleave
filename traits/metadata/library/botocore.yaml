@@ -1,0 +1,10 @@
+defaults:
+  for: [all]
+
+traits:
+  - id: botocore-lib
+    desc: botocore library detected
+    crit: baseline
+    if:
+      type: string
+      substr: "botocore"

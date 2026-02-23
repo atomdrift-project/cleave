@@ -1,0 +1,45 @@
+# Tunneling Services
+# Detects usage of tunneling services often used for C2 or proxying
+# ATT&CK: T1090 (Proxy)
+
+defaults:
+  crit: notable
+  conf: 0.80
+  for: [all]
+
+traits:
+  - id: ngrok
+    desc: ngrok tunneling service
+    if:
+      type: string
+      regex: 'ngrok(-free)?\.(io|app)\b'
+
+  - id: localhost-run
+    desc: localhost.run tunneling service
+    if:
+      type: string
+      regex: 'localhost\.run\b'
+
+  - id: trycloudflare
+    desc: Cloudflare Tunnel (TryCloudflare)
+    if:
+      type: string
+      regex: 'trycloudflare\.com\b'
+
+  - id: pipe-run
+    desc: pipe.run tunneling service
+    if:
+      type: string
+      regex: 'pipe\.run\b'
+
+  - id: serveo
+    desc: serveo.net tunneling service
+    if:
+      type: string
+      regex: 'serveo\.net\b'
+
+  - id: telebit
+    desc: telebit.cloud tunneling service
+    if:
+      type: string
+      regex: 'telebit\.cloud\b'

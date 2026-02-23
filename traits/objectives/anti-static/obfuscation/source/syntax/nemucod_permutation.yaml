@@ -1,0 +1,9 @@
+traits:
+  - id: js-nemucod-scrambled-key
+    desc: Scrambled permutation key "452103" (stride 6)
+    crit: suspicious
+    conf: 0.95
+    for: [javascript]
+    if:
+      type: raw
+      regex: '4\s*,\s*5\s*,\s*2\s*,\s*1\s*,\s*0\s*,\s*3'

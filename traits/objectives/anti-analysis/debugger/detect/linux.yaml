@@ -1,0 +1,43 @@
+# Debugger Detection - Linux
+# MBC: B0001 (Debugger Detection)
+# ATT&CK: T1622
+
+defaults:
+  for: [all]
+  mbc: "B0001"
+  attack: "T1622"
+
+traits:
+  # debugger-ptrace: use objectives/anti-analysis/debugger/detect::ptrace-traceme (canonical)
+
+  # NOTE: /proc/self/status detection is in traits.yaml as 'proc-status'
+
+  - id: gdb-ref
+    desc: GDB debugger reference
+    crit: notable
+    conf: 0.5
+    if:
+      type: string
+      word: "gdb"
+
+  - id: lldb-ref
+    desc: LLDB debugger reference
+    crit: notable
+    conf: 0.5
+    if:
+      type: string
+      word: "lldb"
+    downgrade:
+      any:
+        - id: metadata/signed/platform::apple
+
+composite_rules:
+  # Debugger names alone aren't suspicious - many programs ship with debug info
+  # Only suspicious in combination with other anti-debug techniques
+  - id: debugger-gdb
+    desc: References gdb/lldb debugger
+    crit: notable
+    conf: 0.4
+    any:
+      - id: gdb-ref
+      - id: lldb-ref

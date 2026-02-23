@@ -1,0 +1,91 @@
+# Multi-Layer Obfuscation Detection
+# Detects combination of multiple encoding techniques (XOR + Base64)
+# ATT&CK: T1027 (Obfuscated Files or Information)
+# MBC: B0010 (Anti-Disasm)
+
+traits:
+  # === Doubly-Encoded String Detection ===
+  - id: doubly-encoded-secret-1
+    desc: "Doubly-encoded secret"
+    crit: suspicious
+    conf: 0.85
+    for: [elf, shell]
+    if:
+      type: string
+      substr: "mkqNJzBGm<X:cxE?z{{ppPj=JNmblNp1"
+    attack: "T1027"
+
+  - id: doubly-encoded-secret-2
+    desc: "Doubly-encoded secret"
+    crit: suspicious
+    conf: 0.85
+    for: [elf, shell]
+    if:
+      type: string
+      substr: "B=z<cx?XEDXXK_=0Y<JEBCSs0Bg<h0?dpoSML;m?CY0gzSSY"
+    attack: "T1027"
+
+  # === Encoding Stack Markers ===
+  - id: mixed-encoding-indicators
+    desc: "Mixed encoding indicators"
+    crit: notable
+    conf: 0.75
+    for: [elf, shell]
+    # Small binaries with mixed encoding are more suspicious
+    size_max: 500000
+    if:
+      type: string
+      regex: "[A-Za-z0-9+\/=]*[<>{][A-Za-z0-9+\/=<>]{16,}"
+    unless:
+      - type: string
+        substr: "binascii"
+      - type: raw
+        regex: "postgresql|libgcc|libc"
+    attack: "T1027"
+
+
+composite_rules:
+  - id: xor-plus-base64-obfuscation
+    desc: "XOR + Base64 obfuscation"
+    crit: suspicious
+    conf: 0.88
+    for: [elf, shell]
+    attack: "T1027"
+    mbc: "B0010"
+    any:
+      - id: doubly-encoded-secret-1
+      - id: doubly-encoded-secret-2
+
+  - id: multi-codec-obfuscation
+    desc: "Multi-codec obfuscation"
+    crit: notable
+    conf: 0.85
+    for: [elf, shell]
+    attack: "T1027"
+    mbc: "B0010"
+    all:
+      - id: mixed-encoding-indicators
+      - id: xor-plus-base64-obfuscation
+
+  - id: mirai-multi-layer-encoding
+    desc: "Mirai multi-layer encoding"
+    crit: hostile
+    conf: 0.95
+    for: [elf, shell]
+    attack: "T1027"
+    mbc: "B0010"
+    all:
+      - id: well-known/malware/botnet/mirai
+      - id: xor-plus-base64-obfuscation
+      - id: multi-codec-obfuscation
+
+  - id: sophisticated-anti-analysis
+    desc: "Sophisticated anti-analysis"
+    crit: hostile
+    conf: 0.93
+    for: [elf, shell]
+    attack: "T1027"
+    mbc: "B0010"
+    all:
+      - id: xor-plus-base64-obfuscation
+      - id: multi-codec-obfuscation

@@ -1,0 +1,108 @@
+# Supply Chain Multi-Stage Payload Detection (AST-based)
+# Detects malware using multiple git clones for staged payload delivery
+# ATT&CK: T1195.001 (Supply Chain), T1105 (Ingress Tool Transfer)
+# MBC: E1105 (Tool Transfer)
+
+defaults:
+  crit: suspicious
+  attack: "T1195.001"
+  mbc: "E1105"
+  for: [python]
+
+traits:
+  # === AST Pattern: Multiple Clone Calls ===
+  - id: ast-multiple-git-clones
+    desc: Multiple git clone calls detected
+    crit: suspicious
+    conf: 0.85
+    if:
+      type: ast
+      kind: call
+      exact: "\\.clone\\("
+      count_min: 2
+
+  # === AST Pattern: GitPython Clone ===
+  - id: ast-gitpython-clone
+    desc: GitPython clone call
+    crit: notable
+    conf: 0.75
+    if:
+      type: ast
+      kind: call
+      exact: "Git\\("
+
+  # === AST Pattern: Clone with Variable ===
+  - id: ast-clone-with-variable
+    desc: Clone using repoDirectory variable
+    crit: notable
+    conf: 0.70
+    if:
+      type: ast
+      kind: call
+      exact: "clone\\(repoDirectory|clone\\(gitUrl"
+
+  # === AST Pattern: os.startfile after operations ===
+  - id: ast-startfile-after-ops
+    desc: os.startfile after file operations
+    crit: suspicious
+    conf: 0.85
+    if:
+      type: ast
+      kind: call
+      exact: "startfile\\("
+
+  # === AST Pattern: Method with multiple calls ===
+  - id: ast-method-with-clone-and-startfile
+    desc: Method with clone and startfile
+    crit: suspicious
+    conf: 0.90
+    if:
+      type: ast
+      kind: function
+      exact: "def run"
+
+  # === AST Pattern: Environment assignment ===
+  - id: ast-environ-assignment
+    desc: Environment variable assignment
+    crit: notable
+    conf: 0.70
+    if:
+      type: ast
+      kind: assignment
+      exact: "os\\.environ"
+
+  # === AST Pattern: cmdclass in setup ===
+  - id: ast-cmdclass-in-setup
+    desc: cmdclass parameter in setup
+    crit: suspicious
+    conf: 0.75
+    if:
+      type: ast
+      kind: call
+      exact: "setup\\(.{0,50}cmdclass"
+
+composite_rules:
+  # === Multi-Stage Payload Detection ===
+  - id: ast-staged-payload-delivery
+    desc: Staged payload via git clone AST
+    crit: suspicious
+    conf: 0.90
+    attack: "T1105"
+    for: [python]
+    needs: 2
+    any:
+      - id: ast-multiple-git-clones
+      - id: ast-gitpython-clone
+      - id: ast-clone-with-variable
+
+  - id: ast-supply-chain-stager
+    desc: Supply chain stager malware AST
+    crit: hostile
+    conf: 0.95
+    attack: "T1195.001"
+    mbc: "E1105"
+    platforms: [all]
+    all:
+      - id: ast-staged-payload-delivery
+      - id: ast-method-with-clone-and-startfile
+      - id: objectives/lateral-movement/supply-chain/pypi/code-analysis::ast-install-method-override

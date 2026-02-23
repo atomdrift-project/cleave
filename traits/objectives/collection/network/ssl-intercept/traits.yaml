@@ -1,0 +1,67 @@
+# SSL/TLS Traffic Interception Detection
+# Detects tools that intercept encrypted traffic before/after encryption
+
+composite_rules:
+  # eBPF uprobe hook mechanism
+  - id: ebpf-uprobe-hook
+    desc: eBPF uprobe hooking
+    crit: notable
+    conf: 0.8
+    for: [c, elf]
+    any:
+      - id: micro-behaviors/os/bpf/program/tracing::uprobe-attach
+      - id: micro-behaviors/os/bpf/program/tracing::uprobe-sec
+
+  # eBPF-based SSL/TLS Interception
+  # Combines: uprobe attachment + BPF capabilities
+  - id: ebpf-ssl-intercept
+    desc: eBPF-based SSL/TLS interception
+    crit: suspicious
+    conf: 0.9
+    attack: "T1557"
+    mbc: "C0001"
+    for: [c, elf]
+    all:
+      - id: ebpf-uprobe-hook
+      - id: micro-behaviors/os/bpf/
+
+  # Generic SSL function hooking (non-eBPF)
+  # For LD_PRELOAD or other hooking mechanisms
+  - id: ssl-hook-pattern
+    desc: SSL/TLS function hook pattern
+    crit: suspicious
+    conf: 0.85
+    for: [c, elf]
+    all:
+      - id: micro-behaviors/os/bpf/
+    any:
+      - id: micro-behaviors/os/bpf/program/ssl::ssl-op-string
+      - id: micro-behaviors/os/bpf/program/tracing::uprobe-attach
+
+  # SSL sniffer loader program
+  # Detects the main loader program (not the eBPF probe itself)
+  - id: ssl-sniffer-loader
+    desc: SSL sniffer loader program
+    crit: suspicious
+    conf: 0.9
+    attack: "T1557"
+    for: [c, elf]
+    all:
+      - id: micro-behaviors/os/bpf/program/ssl::ssl-sniffer-loader
+    any:
+      - id: micro-behaviors/os/bpf/program/ssl::ebpf-loader-include
+      - id: objectives/discovery/host/software::ssl-lib-targets
+
+  # Multi-TLS library interception tool
+  # Targeting multiple SSL/TLS libraries = credential/traffic interception
+  - id: multi-tls-intercept
+    desc: Multi-library TLS interception
+    crit: hostile
+    conf: 0.95
+    attack: "T1557"
+    mbc: "C0001"
+    for: [c, elf]
+    all:
+      - id: micro-behaviors/os/bpf/program/ssl::ssl-sniffer-loader
+      - id: objectives/discovery/host/software::ssl-lib-targets
+      - id: micro-behaviors/os/bpf/

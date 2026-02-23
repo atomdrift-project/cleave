@@ -1,0 +1,57 @@
+# macOS Library Paths
+# ATT&CK: T1574 (Hijack Execution Flow)
+
+defaults:
+  platforms: [macos]
+  for: [macho, shell]
+
+traits:
+  - id: library-caches-path
+    desc: /Library/Caches directory reference
+    crit: baseline
+    conf: 0.6
+    if:
+      type: string
+      substr: "/Library/Caches/"
+
+  - id: library-fonts-path
+    desc: /Library/Fonts directory reference
+    crit: baseline
+    conf: 0.6
+    if:
+      type: string
+      substr: "/Library/Fonts/"
+
+  - id: library-osrecovery-path
+    desc: /Library/OSRecovery directory reference
+    crit: notable
+    conf: 0.8
+    if:
+      type: string
+      substr: "/Library/OSRecovery/"
+
+  - id: library-group-containers
+    desc: /Library/Group Containers reference
+    crit: baseline
+    conf: 0.6
+    if:
+      type: string
+      substr: "/Library/Group Containers/"
+
+  - id: hidden-library-caches
+    desc: Hidden file in /Library/Caches
+    crit: suspicious
+    conf: 0.85
+    attack: "T1564.001"
+    if:
+      type: string
+      regex: "/Library/Caches/\\.[a-zA-Z0-9_\\-]+"
+
+  - id: hidden-library-fonts
+    desc: Hidden file in /Library/Fonts
+    crit: suspicious
+    conf: 0.85
+    attack: "T1564.001"
+    if:
+      type: string
+      regex: "/Library/Fonts/\\.[a-zA-Z0-9_\\-]+"

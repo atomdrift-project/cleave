@@ -1,0 +1,157 @@
+# Electron Application Trojanization
+# Detects manipulation of Electron app.asar archives to inject malicious code
+# ATT&CK: T1195.002 (Compromise Software Supply Chain)
+# MBC: B0024 (Ingress Tool Transfer)
+
+defaults:
+  attack: "T1195.002"
+  mbc: "B0024"
+  for: [javascript, typescript]
+  crit: suspicious
+
+traits:
+  # === ASAR Archive Manipulation ===
+
+  - id: asar-extract
+    desc: ASAR archive extraction
+    crit: suspicious
+    conf: 0.85
+    if:
+      type: raw
+      regex: "asar\\.extract(All)?\\s*\\("
+
+  - id: asar-create
+    desc: ASAR archive creation
+    crit: suspicious
+    conf: 0.85
+    if:
+      type: raw
+      regex: "asar\\.(createPackage|pack)\\s*\\("
+
+  - id: asar-reference
+    desc: app.asar file reference
+    crit: notable
+    conf: 0.7
+    if:
+      type: string
+      substr: "app.asar"
+
+  # === Electron App Paths ===
+
+  - id: electron-resources-path
+    desc: Electron resources directory
+    crit: notable
+    conf: 0.7
+    if:
+      type: string
+      substr: "resources"
+    unless:
+      - id: metadata/dev/testing
+
+  - id: electron-dist-path
+    desc: Electron dist directory
+    crit: notable
+    conf: 0.6
+    if:
+      type: string
+      regex: "dist/electron"
+
+  # === File Replacement Patterns ===
+
+  - id: fs-copyfile
+    desc: File copy operation
+    crit: notable
+    conf: 0.5
+    if:
+      type: raw
+      regex: "fs\\.copyFile(Sync)?\\s*\\("
+
+  - id: fs-rm-recursive
+    desc: Recursive file/directory removal
+    crit: notable
+    conf: 0.7
+    if:
+      type: raw
+      regex: "fs\\.rm(Sync)?\\s*\\([^)]{1,120}recursive"
+
+  # === Cryptocurrency Wallet Targets ===
+  # Moved to objectives/credential-access/wallet/desktop/
+  # Reference those traits instead of duplicating
+
+  # === C2 Beacon Indicators ===
+
+  - id: install-status-beacon
+    desc: Install status C2 beacon
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: string
+      substr: "set-install-status"
+
+  # Removed: http-ip-url (use micro-behaviors/communications/network/ip::http-ip-url)
+
+composite_rules:
+  # ASAR manipulation (extract + repack pattern)
+  - id: asar-manipulation
+    desc: ASAR archive extract and repack
+    crit: suspicious
+    conf: 0.9
+    all:
+      - id: asar-extract
+      - id: asar-create
+
+  # Wallet targeting (references credential-access/wallet/)
+  - id: wallet-targeting
+    desc: Crypto wallet path targeting
+    crit: suspicious
+    conf: 0.85
+    any:
+      - id: objectives/credential-access/wallet/desktop::atomic
+      - id: objectives/credential-access/wallet/desktop::exodus
+      - id: objectives/credential-access/wallet/desktop::ledger
+
+  # File replacement pattern (copy + cleanup)
+  - id: file-replacement
+    desc: File replacement with cleanup
+    crit: suspicious
+    conf: 0.8
+    all:
+      - id: fs-copyfile
+      - id: fs-rm-recursive
+
+  # C2 beacon pattern
+  - id: c2-beacon
+    desc: C2 installation beacon
+    crit: suspicious
+    conf: 0.85
+    any:
+      - id: install-status-beacon
+      - id: micro-behaviors/communications/network/ip::http-ip-url
+
+  # Electron app trojanization (full pattern)
+  # Complexity: file_types(+1) + all(+4) = 5 >= 4 HOSTILE threshold
+  - id: electron-trojan
+    desc: Electron app trojanization
+    crit: hostile
+    conf: 0.95
+    attack: "T1195.002"
+    mbc: "B0024"
+    for: [javascript, typescript]
+    all:
+      - id: asar-reference
+      - id: wallet-targeting
+      - id: fs-copyfile
+      - id: c2-beacon
+
+  # ASAR-based supply chain attack
+  # Complexity: file_types(+1) + all(+3) = 4 >= 4 HOSTILE threshold
+  - id: asar-supply-chain
+    desc: ASAR supply chain attack
+    crit: hostile
+    conf: 0.95
+    attack: "T1195.002"
+    for: [javascript, typescript]
+    all:
+      - id: asar-manipulation
+      - id: fs-copyfile
+      - id: c2-beacon

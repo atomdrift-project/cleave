@@ -1,0 +1,11 @@
+defaults:
+  for: [all]
+
+traits:
+  - id: asm-delta-offset
+    conf: 0.8
+    crit: notable
+    desc: Assembly delta offset calculation or IP retrieval
+    if:
+      type: raw
+      regex: 'call\s+[a-zA-Z0-9_$.+]+\s+pop\s+(e[abcd]x|e[sd]i|e[bc]p)'

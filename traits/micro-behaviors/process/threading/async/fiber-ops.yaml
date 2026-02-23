@@ -1,0 +1,6 @@
+# Fiber Local Storage Operations
+# Detects use of FLS instead of TLS
+# Generic indicator for sophisticated thread pool malware
+#
+# FLS trait definitions live in objectives/execution/native/api (FlsAlloc, FlsGetValue, FlsSetValue).
+# Composite detection rules for fiber-based malware are in objectives/execution/native/runtime/suspicious.yaml.

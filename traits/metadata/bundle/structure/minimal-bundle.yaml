@@ -1,0 +1,77 @@
+# Minimal Bundle Structure Detection (macOS)
+# Detects suspiciously minimal .app bundles that lack normal structure
+# Legitimate apps have resources, frameworks, localizations
+# Malware often has minimal bundles to reduce scrutiny
+
+defaults:
+  for: [macho, plist]
+  platforms: [macos]
+
+traits:
+  # Detect minimal Info.plist with few keys
+  # Normal apps have 15-30 keys, malware often has 5-10
+  - id: minimal-info-plist
+    desc: Minimal Info.plist with few keys
+    crit: notable
+    conf: 0.7
+    for: [plist]
+    if:
+      # Check for absence of common optional keys
+      type: kv
+      path: "CFBundleDocumentTypes"
+    unless:
+      # Don't flag if it has document types (sign of real app)
+      - type: kv
+        path: "CFBundleDocumentTypes"
+
+  # Executable matches bundle name exactly (suspicious pattern)
+  - id: exe-matches-bundle-name
+    desc: Executable name matches bundle identifier
+    crit: notable
+    conf: 0.6
+    for: [plist]
+    # This would need KV comparison which we might not have
+    # Placeholder for now
+
+  # Missing common bundle components
+  - id: no-resources-dir
+    desc: Missing Resources directory
+    crit: notable
+    conf: 0.65
+    for: [plist]
+    # This would need filesystem structure checking
+    # Can't express in current trait language
+
+  # Missing localization (legitimate apps usually have en.lproj)
+  # Implemented in macos.yaml using metrics
+
+  # Minimal bundle identifier (generic pattern)
+  # Already covered in social-engineering/masquerading/naming.yaml
+
+composite_rules:
+  # Minimal bundle + generic naming = trojan dropper
+  - id: minimal-trojan-bundle
+    desc: Minimal trojan bundle structure
+    crit: suspicious
+    conf: 0.85
+    attack: "T1036.005"
+    all:
+      - id: objectives/lateral-movement/social-engineering/masquerading::generic-bundle-id-pattern
+    any:
+      - id: metadata/signed/adhoc::unsigned
+      - id: objectives/lateral-movement/social-engineering/masquerading::generic-executable-name
+
+# NOTE: Full bundle structure analysis requires additional scanner features:
+# - Directory/file enumeration within .app bundle
+# - File count detection
+# - Detection of missing standard directories (Resources/, Frameworks/, etc.)
+#
+# Current limitation: Cannot express "count files in bundle" or "check for
+# directory existence" in trait language.
+#
+# PROPOSAL: Add condition type:
+#   type: bundle_structure
+#   min_files: 3
+#   max_files: 10
+#   required_dirs: ["Contents/MacOS", "Contents/Resources"]
+#   missing_dirs: ["Contents/Frameworks"]  # Flag if missing

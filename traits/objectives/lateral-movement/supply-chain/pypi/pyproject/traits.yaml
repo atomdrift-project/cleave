@@ -1,0 +1,54 @@
+# pyproject.toml Specific Patterns
+# Traits specific to pyproject.toml build configuration
+
+defaults:
+  crit: notable
+  attack: "T1195.002"
+  mbc: "F0004"
+  for: [all]
+
+traits:
+  - id: pyproject-is-pyproject
+    desc: pyproject.toml build configuration file
+    crit: notable
+    conf: 1.0
+    if:
+      type: raw
+      substr: "[build-system]"
+
+  - id: pyproject-empty-dependencies
+    desc: pyproject.toml with empty dependencies
+    crit: notable
+    conf: 0.70
+    if:
+      type: raw
+      regex: "dependencies\\s*=\\s*\\[\\]"
+
+  - id: pyproject-has-script-entrypoint
+    desc: pyproject.toml with script entry point
+    crit: notable
+    conf: 0.80
+    if:
+      type: raw
+      regex: "\\[project\\.scripts\\]"
+
+  - id: pyproject-requests-build-dep
+    desc: pyproject.toml requires requests at build time
+    crit: suspicious
+    conf: 0.90
+    attack: "T1195.002"
+    if:
+      type: kv
+      path: "build-system.requires"
+      substr: "requests"
+
+  - id: pyproject-no-dependencies
+    desc: pyproject.toml with no dependencies declared
+    crit: notable
+    conf: 0.60
+    if:
+      type: basename
+      exact: "pyproject.toml"
+    unless:
+      - type: raw
+        regex: "dependencies\\s*="

@@ -1,0 +1,146 @@
+# Intelligence Gathering - Cloud Metadata
+# ATT&CK: T1552.005 (Cloud Instance Metadata API)
+
+traits:
+  # AWS Metadata
+  - id: aws-metadata-token
+    desc: AWS EC2 metadata token header
+    crit: suspicious
+    conf: 0.9
+    attack: "T1552.005"
+    for: [all]
+    if:
+      type: string
+      substr: "X-aws-ec2-metadata-token"
+
+  - id: aws-metadata-endpoint
+    desc: AWS EC2 metadata endpoint
+    crit: suspicious
+    conf: 0.85
+    attack: "T1552.005"
+    for: [all]
+    if:
+      type: string
+      regex: '169\.254\.169\.254/(latest/meta-data|metadata/instance)'
+    downgrade:
+      any:
+        - id: metadata/library::aws-sdk-ruby
+        - id: metadata/library::aws-sdk-ruby-constants
+        - id: metadata/library::botocore-lib
+
+  - id: aws-imds-v2
+    desc: AWS IMDSv2 token TTL header
+    crit: suspicious
+    conf: 0.9
+    attack: "T1552.005"
+    for: [all]
+    if:
+      type: string
+      substr: "X-aws-ec2-metadata-token-ttl-seconds"
+
+  - id: aws-iam-credentials
+    desc: AWS IAM credentials metadata path
+    crit: suspicious
+    conf: 0.9
+    attack: "T1552.005"
+    for: [all]
+    if:
+      type: string
+      substr: "/latest/meta-data/iam/security-credentials"
+    downgrade:
+      any:
+        - id: metadata/library::aws-sdk-ruby
+        - id: metadata/library::aws-sdk-ruby-constants
+        - id: metadata/library::botocore-lib
+
+  - id: aws-user-data
+    desc: AWS EC2 user-data endpoint
+    crit: suspicious
+    conf: 0.85
+    attack: "T1552.005"
+    for: [all]
+    if:
+      type: string
+      substr: "/latest/user-data"
+
+  # GCP Metadata
+  - id: gcp-metadata-flavor
+    desc: GCP metadata flavor header
+    crit: notable
+    conf: 0.9
+    attack: "T1552.005"
+    for: [all]
+    if:
+      type: string
+      substr: "Metadata-Flavor"
+
+  # Removed gcp-metadata-endpoint duplicate - use objectives/credential-access/cloud/token::gcp-metadata-host
+
+  - id: gcp-access-token
+    desc: GCP service account access token
+    crit: suspicious
+    conf: 0.9
+    attack: "T1552.005"
+    for: [all]
+    if:
+      type: string
+      substr: "/computeMetadata/v1/instance/service-accounts/default/token"
+
+  - id: gcp-service-accounts-path
+    desc: GCP service accounts metadata path
+    crit: notable
+    conf: 0.9
+    attack: "T1552.005"
+    for: [all]
+    if:
+      type: string
+      substr: "/computeMetadata/v1/instance/service-accounts"
+
+  # Azure Metadata
+  - id: azure-metadata-endpoint
+    desc: Azure IMDS endpoint
+    crit: suspicious
+    conf: 0.85
+    attack: "T1552.005"
+    for: [all]
+    if:
+      type: string
+      substr: "169.254.169.254/metadata/instance"
+
+  - id: azure-metadata-header
+    desc: Azure metadata header
+    crit: suspicious
+    conf: 0.9
+    attack: "T1552.005"
+    for: [all]
+    if:
+      type: string
+      substr: "Metadata:true"
+
+  - id: azure-identity-token
+    desc: Azure managed identity token endpoint
+    crit: suspicious
+    conf: 0.9
+    attack: "T1552.005"
+    for: [all]
+    if:
+      type: string
+      substr: "/metadata/identity/oauth2/token"
+
+composite_rules:
+  - id: metadata-harvesting
+    desc: Cloud metadata harvesting
+    crit: suspicious
+    conf: 0.9
+    attack: "T1552.005"
+    mbc: "B0046"
+    for: [all]
+    any:
+      - id: aws-metadata-endpoint
+      - id: objectives/credential-access/cloud/token::gcp-metadata-host
+      - id: azure-metadata-endpoint
+    downgrade:
+      any:
+        - id: metadata/library::aws-sdk-ruby
+        - id: metadata/library::aws-sdk-ruby-constants
+        - id: metadata/library::botocore-lib

@@ -1,0 +1,99 @@
+# Binary File Mode Operations Detection
+# Detects explicit binary file operations (read/write in binary mode)
+# Suspicious when combined with network operations (file exfiltration)
+# ATT&CK: T1005 (Data from Local System), T1041 (Exfiltration Over C2 Channel)
+
+defaults:
+  attack: "T1005"
+  crit: baseline
+
+traits:
+  # === Binary write modes ===
+  - id: write-binary
+    desc: "Opens file in binary write"
+    crit: baseline
+    conf: 0.6
+    for: [elf, macho, pe, c, python]
+    if:
+      type: string
+      regex: '\\b"wb"\\b|\\bfopen\\s*\\(.{1,220},\\s*"wb"\\)'
+
+  - id: write-read-binary
+    desc: "Opens file in binary write+read"
+    crit: baseline
+    conf: 0.6
+    for: [elf, macho, pe, c, python]
+    if:
+      type: string
+      regex: '\\b"w\\+b"\\b|\\bfopen\\s*\\(.{1,220},\\s*"w\\+b"\\)'
+
+  - id: read-write-binary
+    desc: "Opens file in binary read+write"
+    crit: baseline
+    conf: 0.6
+    for: [elf, macho, pe, c, python]
+    if:
+      type: string
+      regex: '\\b"r\\+b"\\b|\\bfopen\\s*\\(.{1,220},\\s*"r\\+b"\\)'
+
+  - id: read-binary
+    desc: "Opens file in binary read"
+    crit: baseline
+    conf: 0.5
+    for: [elf, macho, pe, c, python]
+    if:
+      type: string
+      regex: '\\b"rb"\\b|\\bfopen\\s*\\(.{1,220},\\s*"rb"\\)'
+
+  # === macOS file copying ===
+  - id: fcopyfile-macos
+    desc: "Copies files on macOS using"
+    crit: notable
+    conf: 0.7
+    platforms: [macos]
+    for: [macho]
+    attack: "T1005"
+    if:
+      type: symbol
+      regex: "fcopyfile"
+
+  # === Binary file I/O ===
+  # NOTE: fread/fwrite symbols are now detected in fs/file/read/unix.yaml and fs/file/write/unix.yaml
+  # These traits focus on binary mode usage patterns in strings
+
+  - id: fseek-func
+    desc: "Seeks to position in file"
+    crit: baseline
+    conf: 0.4
+    for: [elf, macho, pe]
+    if:
+      type: symbol
+      regex: "fseek"
+
+composite_rules:
+  # Binary file operations composite
+  - id: binary-read-write-ops
+    desc: "Binary file read/write operations"
+    crit: notable
+    conf: 0.7
+    attack: "T1005"
+    needs: 2
+    any:
+      - id: write-binary
+      - id: write-read-binary
+      - id: read-write-binary
+      - id: read-binary
+      - id: fseek-func
+
+  # File manipulation with seeking
+  - id: file-manipulation
+    desc: "File content manipulation (read/write/seek)"
+    crit: notable
+    conf: 0.75
+    attack: "T1005"
+    all:
+      - id: fseek-func
+    any:
+      - id: micro-behaviors/fs/file/read::read
+      - id: micro-behaviors/fs/file/write::write
+      - id: binary-read-write-ops

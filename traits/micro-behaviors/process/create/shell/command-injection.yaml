@@ -1,0 +1,47 @@
+traits:
+- id: format-string-injection
+  desc: Format string with user input
+  crit: suspicious
+  conf: 0.8
+  mbc: E1059
+  attack: T1059
+  platforms:
+  - unix
+  - linux
+  - macos
+  for:
+  - c
+  if:
+    type: raw
+    regex: sn?printf.{0,80}%s.{0,80}(system|popen|execv)
+- id: format-string-injection-shell
+  desc: Format string with user input shell path
+  crit: suspicious
+  conf: 0.8
+  mbc: E1059
+  attack: T1059
+  platforms:
+  - unix
+  - linux
+  - macos
+  for:
+  - c
+  if:
+    type: raw
+    regex: sn?printf.{0,80}%s.{0,80}(/bin/sh|cmd\.exe)
+composite_rules:
+- id: format-string-injection-any
+  desc: Format string with user input
+  crit: suspicious
+  conf: 0.8
+  mbc: E1059
+  attack: T1059
+  platforms:
+  - unix
+  - linux
+  - macos
+  for:
+  - c
+  any:
+  - id: format-string-injection
+  - id: format-string-injection-shell

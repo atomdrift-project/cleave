@@ -1,0 +1,10 @@
+traits:
+  - id: start-exe-exit-bat
+    desc: Sequence to start executable and exit
+    crit: suspicious
+    conf: 0.9
+    for: [bat, cmd]
+    attack: T1059.003
+    if:
+      type: raw
+      regex: '(?i)start\s+[^ ]{1,100}\.exe ? exit'

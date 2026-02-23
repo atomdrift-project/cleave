@@ -1,0 +1,42 @@
+# File Ownership Change - Windows
+# MBC: E1222 (File Permission Modification)
+# ATT&CK: T1222
+
+defaults:
+  for: [all]
+
+traits:
+  # === takeown atomic indicators ===
+  - id: takeown-lower
+    desc: takeown command (lowercase)
+    crit: baseline
+    conf: 0.55
+    if:
+      type: string
+      substr: "takeown"
+
+  - id: takeown-upper
+    desc: TAKEOWN command (uppercase)
+    crit: baseline
+    conf: 0.55
+    if:
+      type: string
+      substr: "TAKEOWN"
+
+  - id: chown-takeown-force
+    desc: Forcibly take ownership of files
+    crit: suspicious
+    conf: 0.66
+    if:
+      type: string
+      regex: "(takeown|TAKEOWN).{1,8}/[fFrR].{1,8}/[rRfF] .{0,32}[yY]"
+
+composite_rules:
+  # takeown composite
+  - id: chown-takeown
+    desc: Take ownership of files (Windows
+    crit: notable
+    conf: 0.66
+    any:
+      - id: takeown-lower
+      - id: takeown-upper

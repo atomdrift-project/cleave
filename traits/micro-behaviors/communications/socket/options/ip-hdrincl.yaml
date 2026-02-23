@@ -1,0 +1,11 @@
+defaults:
+  for: [all]
+
+traits:
+  - id: ip-hdrincl-option
+    desc: "Detects setting IP_HDRINCL socket option (IP header"
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: raw
+      regex: 'setsockopt\s*\([^,]{1,120},\s*[^,]{1,120},\s*IP_HDRINCL\s*,\s*[^)]{1,120}\)'

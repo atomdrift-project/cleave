@@ -1,0 +1,25 @@
+# Socket Listen - Go
+# MBC: C0001 (Socket Communication)
+# ATT&CK: T1071
+
+defaults:
+  for: [go, elf, macho, pe]
+  mbc: "C0001"
+  attack: "T1071"
+
+traits:
+  - id: listen-go
+    desc: Go net.Listen call
+    crit: notable
+    conf: 0.9
+    if:
+      type: symbol
+      exact: "net.Listen"
+
+  - id: listen-tcp
+    desc: Go net.ListenTCP call
+    crit: notable
+    conf: 0.9
+    if:
+      type: symbol
+      exact: "net.ListenTCP"

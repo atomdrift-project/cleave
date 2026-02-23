@@ -1,0 +1,18 @@
+# Screen Locker / Kiosk Mode
+# ATT&CK: T1491 (Defacement)
+
+composite_rules:
+  - id: python-screen-locker
+    desc: Python script enforcing screen lock / kiosk mode
+    crit: hostile
+    conf: 0.95
+    all:
+      - id: micro-behaviors/ui/framework/tkinter::tkinter-init
+      - id: micro-behaviors/ui/window/manage::tkinter-fullscreen
+      - id: micro-behaviors/ui/window/manage::tkinter-protocol-intercept
+    any:
+      - id: micro-behaviors/ui/window/manage::tkinter-resize-disable
+      - id: micro-behaviors/data/text/malware::computer-locked-phrase
+      - id: micro-behaviors/data/text/malware::system-locked-phrase
+      - id: micro-behaviors/data/text/malware::no-escape-phrase
+      - id: micro-behaviors/os/process/terminate::bsod-symbol

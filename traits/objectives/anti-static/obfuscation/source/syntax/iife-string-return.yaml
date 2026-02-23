@@ -1,0 +1,20 @@
+traits:
+  - id: iife-string-literal-return
+    desc: Immediately-invoked function expression (IIFE) that returns a
+    crit: suspicious
+    conf: 0.9
+    mbc: "B0032"
+    attack: "T1027"
+    for: [javascript, typescript]
+    if:
+      type: ast
+      query: |
+        (call_expression
+          function: (function_expression
+            body: (statement_block
+              (return_statement
+                (string) @string_literal
+              )
+            )
+          )
+        )

@@ -1,0 +1,39 @@
+# Bun Dropper - JavaScript
+# Detects Bun runtime installation and execution as a dropper mechanism
+# ATT&CK: T1105 (Ingress Tool Transfer), T1059 (Command and Scripting Interpreter)
+
+defaults:
+  for: [all]
+
+traits:
+  - id: bun-install-url
+    desc: Bun installation URL
+    crit: notable
+    conf: 0.8
+    if:
+      type: string
+      substr: "bun.sh/install"
+
+  - id: powershell-bun-install
+    desc: PowerShell Bun installation command
+    crit: notable
+    conf: 0.8
+    if:
+      type: raw
+      regex: 'irm\s+bun\.sh/install\.ps1'
+
+composite_rules:
+  - id: js-bun-dropper
+    desc: Bun runtime dropper (downloads and runs bun)
+    crit: suspicious
+    conf: 0.95
+    attack: "T1105"
+    for: [javascript]
+    all:
+      - id: micro-behaviors/process/create/shell/lang::js-bun-exec
+    any:
+      - id: bun-install-url
+      - id: objectives/execution/dropper/script::curl-download
+      - id: objectives/execution/dropper/script::wget-download
+      - id: objectives/execution/dropper/script::curl-silent-stdout
+      - id: powershell-bun-install

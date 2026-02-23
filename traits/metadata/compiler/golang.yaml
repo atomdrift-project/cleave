@@ -1,0 +1,9 @@
+# Identifies Go-compiled binaries
+traits:
+  - id: go-binary
+    desc: Go-compiled binary (identified by .gopclntab section)
+    crit: notable
+    for: [elf]
+    if:
+      type: section
+      exact: ".gopclntab"

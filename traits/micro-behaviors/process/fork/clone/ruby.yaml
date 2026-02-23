@@ -1,0 +1,66 @@
+# Process Lifecycle - Ruby
+
+traits:
+  # === Ruby fork atomic indicators ===
+  - id: process-fork
+    desc: Process.fork call
+    crit: baseline
+    conf: 0.7
+    platforms: [all]
+    for: [ruby]
+    if:
+      type: string
+      substr: "Process.fork"
+
+  - id: fork-brace-block
+    desc: fork with brace block
+    crit: baseline
+    conf: 0.6
+    platforms: [all]
+    for: [ruby]
+    if:
+      type: string
+      regex: "\\bfork\\s*\\{"
+
+  - id: fork-do-block
+    desc: fork with do block
+    crit: baseline
+    conf: 0.6
+    platforms: [all]
+    for: [ruby]
+    if:
+      type: string
+      regex: "\\bfork\\s*do\\b"
+
+  - id: fork-paren
+    desc: fork with parenthesis
+    crit: baseline
+    conf: 0.6
+    platforms: [all]
+    for: [ruby]
+    if:
+      type: string
+      regex: "\\bfork\\s*\\("
+
+composite_rules:
+  # Fork block composite
+  - id: fork-block
+    desc: fork with block/do
+    crit: notable
+    conf: 0.7
+    platforms: [all]
+    for: [ruby]
+    any:
+      - id: fork-brace-block
+      - id: fork-do-block
+      - id: fork-paren
+
+  - id: ruby-fork
+    desc: Fork process
+    crit: notable
+    conf: 0.88
+    platforms: [all]
+    for: [ruby]
+    any:
+      - id: process-fork
+      - id: fork-block

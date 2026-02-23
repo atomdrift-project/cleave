@@ -1,0 +1,39 @@
+# Runtime Deobfuscation Composite Rules
+# Detects patterns of runtime string deobfuscation
+
+composite_rules:
+  - id: multi-layer-deobfuscation
+    desc: "Multi-layer runtime string deobfuscation"
+    crit: hostile
+    conf: 0.9
+    for: [javascript, typescript]
+    all:
+      - id: objectives/anti-static/obfuscation/source/string::self-modifying-string-replace
+      - id: objectives/anti-static/obfuscation/source/string::custom-delimiter-obfuscation
+    any:
+      - id: objectives/anti-static/obfuscation/source/string::base64-function-keyword
+      - id: objectives/execution/interpreter/script/embedded::powershell-cmdlet-patterns
+
+  - id: obfuscation-with-duplicate-names
+    desc: "Code inflation with duplicate function names"
+    crit: hostile
+    conf: 0.95
+    for: [javascript, typescript]
+    all:
+      - id: objectives/anti-static/obfuscation/source/names::random-identifier-chains
+    any:
+      - id: objectives/anti-static/obfuscation/source/string::char-expansion-obfuscation
+      - id: objectives/anti-static/obfuscation/source/string::cyrillic-junk-padding
+      - id: objectives/anti-static/obfuscation/source/string::custom-delimiter-obfuscation
+
+  - id: embedded-code-with-deobfuscation
+    desc: "High embedded code with runtime deobfuscation"
+    crit: hostile
+    conf: 0.85
+    for: [javascript, typescript, powershell]
+    all:
+      - id: objectives/anti-static/obfuscation/source/metrics::high-embedded-code-ratio
+    any:
+      - id: objectives/anti-static/obfuscation/source/string::self-modifying-string-replace
+      - id: objectives/anti-static/obfuscation/source/string::chained-replace-calls
+      - id: objectives/anti-static/obfuscation/source/string::powershell-replace-operator

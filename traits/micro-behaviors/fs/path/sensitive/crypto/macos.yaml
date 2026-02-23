@@ -1,0 +1,11 @@
+defaults:
+  for: [all]
+
+traits:
+  - id: crypto-wallets
+    desc: Reference to macOS cryptocurrency wallet paths
+    crit: suspicious
+    conf: 0.8
+    if:
+      type: string
+      regex: "/Library/Application Support/(Bitcoin|Electrum|Exodus)"

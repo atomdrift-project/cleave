@@ -1,0 +1,13 @@
+defaults:
+  for: [all]
+
+traits:
+  - id: nested-objdata-in-data
+    desc: Nested \objdata tag inside hex stream.
+    crit: suspicious
+    conf: 0.9
+    mbc: "B0032.001"
+    if:
+      type: raw
+      regex: '(?i)[0-9a-fA-F]\s*\{\\\*\\objdata\s+'
+      description: 'Detects nested {\*\objdata} inside data'

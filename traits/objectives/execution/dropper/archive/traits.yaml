@@ -1,0 +1,174 @@
+# Archive file extension and extraction patterns
+# Detects code referencing archive formats and extraction operations
+# ATT&CK: T1105 (Ingress Tool Transfer), T1140 (Deobfuscate/Decode)
+
+traits:
+  # === Archive extraction methods ===
+  - id: extract-full
+    desc: "extractFull call"
+    crit: notable
+    conf: 0.5
+    for: [javascript, typescript]
+    if:
+      type: string
+      substr: "extractFull"
+
+  - id: extract-call
+    desc: "extract() call"
+    crit: notable
+    conf: 0.5
+    for: [javascript, typescript]
+    if:
+      type: string
+      regex: "extract\\("
+
+  - id: unzip-call
+    desc: "unzip reference"
+    crit: notable
+    conf: 0.5
+    for: [javascript, typescript]
+    if:
+      type: string
+      substr: "unzip"
+
+  - id: 7z-ref
+    desc: "7z reference"
+    crit: notable
+    conf: 0.5
+    for: [javascript, typescript]
+    if:
+      type: string
+      exact: "7z"
+
+  # === Password-protected archive parameters ===
+  - id: password-colon
+    desc: "password: parameter"
+    crit: notable
+    conf: 0.5
+    for: [javascript, typescript]
+    if:
+      type: string
+      substr: "password:"
+
+  - id: password-equals
+    desc: "password= parameter"
+    crit: notable
+    conf: 0.5
+    for: [javascript, typescript]
+    if:
+      type: string
+      substr: "password="
+
+  - id: p-flag
+    desc: "-p flag"
+    crit: notable
+    conf: 0.4
+    for: [javascript, typescript]
+    if:
+      type: string
+      exact: "-p"
+
+  # === 7-zip atomic indicators ===
+  - id: 7zip-bin-module
+    desc: "7zip-bin module"
+    crit: notable
+    conf: 0.6
+    attack: "T1140"
+    for: [javascript, typescript]
+    if:
+      type: string
+      substr: "7zip-bin"
+
+  - id: node-7z-module
+    desc: "node-7z module"
+    crit: notable
+    conf: 0.6
+    attack: "T1140"
+    for: [javascript, typescript]
+    if:
+      type: string
+      substr: "node-7z"
+
+  - id: path7za
+    desc: "path7za reference"
+    crit: notable
+    conf: 0.6
+    attack: "T1140"
+    for: [javascript, typescript]
+    if:
+      type: string
+      substr: "path7za"
+
+  # === Archive extension atomics ===
+  - id: zip-ext
+    desc: ".zip extension"
+    crit: notable
+    conf: 0.4
+    for: [javascript, typescript]
+    if:
+      type: string
+      exact: ".zip"
+
+  - id: 7z-ext
+    desc: ".7z extension"
+    crit: notable
+    conf: 0.4
+    for: [javascript, typescript]
+    if:
+      type: string
+      exact: ".7z"
+
+  - id: tar-ext
+    desc: ".tar extension"
+    crit: notable
+    conf: 0.4
+    for: [javascript, typescript]
+    if:
+      type: string
+      exact: ".tar"
+
+  - id: rar-ext
+    desc: ".rar extension"
+    crit: notable
+    conf: 0.4
+    for: [javascript, typescript]
+    if:
+      type: string
+      exact: ".rar"
+
+  # === Download zip file composite pattern ===
+  - id: download-zip
+    desc: "Downloads zip archive from remote"
+    crit: notable
+    conf: 0.85
+    attack: "T1105"
+    for: [javascript, typescript]
+    if:
+      type: yara
+      source: |
+        rule download_zip {
+          strings:
+            $dl1 = "https.get" ascii
+            $dl2 = "http.get" ascii
+            $dl3 = "fetch(" ascii
+            $dl4 = "axios.get" ascii
+            $dl5 = "request(" ascii
+            $zip1 = ".zip" ascii
+            $zip2 = ".7z" ascii
+            $zip3 = "application/zip" ascii
+            $write1 = "createWriteStream" ascii
+            $write2 = "writeFileSync" ascii
+          condition:
+            any of ($dl*) and any of ($zip*) and any of ($write*)
+        }
+
+composite_rules:
+  - id: 7z-exe
+    desc: "7z.exe reference"
+    crit: notable
+    conf: 0.6
+    attack: "T1140"
+    for: [javascript, typescript]
+    all:
+      - id: 7z-ref
+      - id: micro-behaviors/fs/path/extension::exe

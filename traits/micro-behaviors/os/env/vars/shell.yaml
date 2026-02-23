@@ -1,0 +1,13 @@
+# Shell-related Environment Variable Indicators
+
+defaults:
+  for: [elf, macho, pe]
+  crit: notable
+  conf: 0.8
+
+traits:
+  - id: shell-zsh
+    desc: SHELL environment variable zsh marker
+    if:
+      type: string
+      substr: "SHELLzsh"

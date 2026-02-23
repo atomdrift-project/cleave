@@ -1,0 +1,19 @@
+# macOS XPC Communication
+
+defaults:
+  for: [macho, dylib, c]
+
+traits:
+  - id: xpc-connection
+    desc: XPC connection symbol
+    conf: 0.9
+    if:
+      type: symbol
+      regex: "xpc_connection_create"
+
+  - id: xpc-message
+    desc: XPC message handling
+    conf: 0.85
+    if:
+      type: symbol
+      regex: "xpc_dictionary_"

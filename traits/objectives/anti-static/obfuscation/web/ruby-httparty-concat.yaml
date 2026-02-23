@@ -1,0 +1,21 @@
+defaults:
+  for: [all]
+
+traits:
+  - id: ruby-httparty-concat
+    desc: HTTParty call with concatenated string arguments
+    crit: suspicious
+    conf: 0.85
+    if:
+      type: ast
+      language: ruby
+      query: |
+        (call
+          receiver: (constant) @recv
+          method: (identifier) @method
+          arguments: (argument_list
+            (binary) @args
+          )
+          (#eq? @recv "HTTParty")
+          (#match? @method "^(get|post)$")
+        )

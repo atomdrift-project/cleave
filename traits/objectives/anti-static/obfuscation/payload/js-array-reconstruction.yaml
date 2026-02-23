@@ -1,0 +1,23 @@
+# JS Array Reconstruction Obfuscation
+# Detects reconstruction of payload from hex char array using index array and eval
+
+defaults:
+  platforms: [javascript]
+
+composite_rules:
+  - id: js-hex-array-eval
+    desc: Reconstructs and executes code from hex-encoded character array
+    crit: hostile
+    conf: 0.95
+    for: [javascript]
+    all:
+      - id: micro-behaviors/data/encode/hex::js-hex-char-array
+      - id: micro-behaviors/data/encode/arrays::js-large-int-array
+      - id: objectives/execution/interpreter/eval/dynamic::eval-call-js
+    any:
+      - id: micro-behaviors/data/control-flow/analysis::for-loop-ast
+      - id: micro-behaviors/data/control-flow/analysis::for-loop-content
+    unless:
+      - id: metadata/library/jquery::domain
+      - id: metadata/library/prototype::copyright
+      - id: metadata/library/prototype::header-x

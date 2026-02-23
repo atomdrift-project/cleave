@@ -1,0 +1,14 @@
+# Windows Startup Persistence - JavaScript
+# Composed objectives for JS startup persistence
+
+composite_rules:
+  - id: js-win-startup-persistence
+    desc: Windows Startup folder persistence via JavaScript
+    crit: hostile
+    conf: 0.95
+    attack: T1547.001
+    platforms: [windows]
+    for: [javascript, typescript]
+    all:
+      - id: micro-behaviors/os/persistence/startup::win-startup-path
+      - id: micro-behaviors/fs/write/file::write-file-async

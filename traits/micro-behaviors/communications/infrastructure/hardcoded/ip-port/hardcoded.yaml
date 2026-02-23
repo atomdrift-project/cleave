@@ -1,0 +1,29 @@
+# Detects hardcoded IPv4 addresses with a port number, often indicative of C2 communication.
+traits:
+  - id: hardcoded-ipv4-port
+    desc: Hardcoded IPv4 address with port number
+    crit: notable
+    for: [elf, pe, macho, scripts] # Applicable to various file types
+    if:
+      type: string
+      regex: '\b([0-9]{1,3}\.){3}[0-9]{1,3}:[0-9]{1,5}\b'
+    unless:
+      - type: raw
+        regex: "require\\(['\"]\\.\\./common['\"]\\)"
+      - type: raw
+        regex: "function test\\s*\\(\\)\\s*\\{"
+
+  - id: hardcoded-ipv4-port-list
+    desc: Multiple hardcoded IPv4 addresses with port
+    crit: suspicious
+    conf: 0.9
+    for: [elf, pe, macho]
+    if:
+      type: string
+      regex: '\b([0-9]{1,3}\.){3}[0-9]{1,3}:[0-9]{1,5}\b'
+      count_min: 3
+    unless:
+      - type: raw
+        regex: "require\\(['\"]\\.\\./common['\"]\\)"
+      - type: raw
+        regex: "function test\\s*\\(\\)\\s*\\{"

@@ -1,0 +1,19 @@
+defaults:
+  for: [all]
+
+traits:
+  - id: require-base64
+    desc: Requires base64
+    crit: baseline
+    conf: 1.0
+    if:
+      type: raw
+      substr: "require 'base64'"
+
+  - id: usage-base64
+    desc: Uses Base64 module
+    crit: baseline
+    conf: 1.0
+    if:
+      type: raw
+      substr: "Base64"

@@ -1,0 +1,88 @@
+# PHP Process Control Capabilities
+# MBC: C0032 (Process Creation), F0004 (Process Name Spoofing)
+# ATT&CK: T1036.004 (Masquerade Task or Service)
+
+defaults:
+  for: [php]
+
+traits:
+  # === Process Forking ===
+  - id: pcntl-fork
+    desc: Process fork via pcntl_fork()
+    crit: notable
+    conf: 0.8
+    mbc: "C0032"
+    if:
+      type: symbol
+      exact: "pcntl_fork"
+
+  - id: pcntl-waitpid
+    desc: Wait for child process
+    crit: baseline
+    conf: 0.6
+    if:
+      type: symbol
+      exact: "pcntl_waitpid"
+
+  # === Session/Daemon Control ===
+  - id: posix-setsid
+    desc: Create new session (daemonize)
+    crit: suspicious
+    conf: 0.85
+    mbc: "F0004"
+    attack: "T1036"
+    if:
+      type: symbol
+      exact: "posix_setsid"
+
+  # === Process Title Masquerading ===
+  - id: cli-set-process-title
+    desc: Set process title (masquerading)
+    crit: suspicious
+    conf: 0.9
+    mbc: "F0004"
+    attack: "T1036.004"
+    if:
+      type: symbol
+      exact: "cli_set_process_title"
+
+  - id: setproctitle
+    desc: Set process title (PECL)
+    crit: suspicious
+    conf: 0.9
+    mbc: "F0004"
+    attack: "T1036.004"
+    if:
+      type: symbol
+      exact: "setproctitle"
+
+  # === Time Control ===
+  - id: set-time-limit
+    desc: Remove execution time limit
+    crit: notable
+    conf: 0.7
+    if:
+      type: symbol
+      exact: "set_time_limit"
+
+composite_rules:
+  - id: daemonize
+    desc: PHP daemonization pattern
+    crit: suspicious
+    conf: 0.9
+    mbc: "F0004"
+    for: [php]
+    all:
+      - id: pcntl-fork
+      - id: posix-setsid
+
+  - id: process-masquerade
+    desc: PHP process name masquerading
+    crit: suspicious
+    conf: 0.9
+    mbc: "F0004"
+    attack: "T1036.004"
+    for: [php]
+    any:
+      - id: cli-set-process-title
+      - id: setproctitle

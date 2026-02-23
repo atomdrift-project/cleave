@@ -1,0 +1,50 @@
+# SSH Environment Variables
+# Environment variables set during SSH sessions
+
+defaults:
+  for: [all]
+  platforms: [linux, unix, macos]
+  crit: baseline
+  conf: 0.6
+
+traits:
+  - id: ssh-connection-var
+    desc: SSH_CONNECTION environment variable
+    if:
+      type: string
+      exact: "SSH_CONNECTION"
+
+  - id: ssh-client-var
+    desc: SSH_CLIENT environment variable
+    if:
+      type: string
+      exact: "SSH_CLIENT"
+
+  - id: ssh-tty-var
+    desc: SSH_TTY environment variable
+    if:
+      type: string
+      exact: "SSH_TTY"
+
+  - id: ssh-auth-sock-var
+    desc: SSH_AUTH_SOCK environment variable
+    if:
+      type: string
+      exact: "SSH_AUTH_SOCK"
+
+  - id: ssh-agent-pid-var
+    desc: SSH_AGENT_PID environment variable
+    if:
+      type: string
+      exact: "SSH_AGENT_PID"
+
+composite_rules:
+  - id: ssh-env-any
+    desc: Any SSH environment variable
+    conf: 0.6
+    any:
+      - id: ssh-connection-var
+      - id: ssh-client-var
+      - id: ssh-tty-var
+      - id: ssh-auth-sock-var
+      - id: ssh-agent-pid-var

@@ -1,0 +1,41 @@
+# WinInet HTTP Client
+# Low-level Windows networking capabilities
+
+defaults:
+  for: ["pe", "dll"]
+  platforms: ["windows"]
+
+traits:
+  - id: internet-open
+    desc: Initialize WinInet session
+    crit: notable
+    conf: 0.95
+    if:
+      type: symbol
+      regex: "^InternetOpen[AW]$"
+
+  - id: internet-connect
+    desc: Connect to HTTP/FTP server via WinInet
+    crit: notable
+    conf: 0.95
+    if:
+      type: symbol
+      regex: "^InternetConnect[AW]$"
+
+  - id: internet-read-file
+    desc: Read data from internet handle
+    crit: notable
+    conf: 0.95
+    mbc: C0002
+    attack: T1071.001
+    if:
+      type: symbol
+      exact: "InternetReadFile"
+
+  - id: http-send-request
+    desc: Send HTTP request via WinInet
+    crit: notable
+    conf: 0.95
+    if:
+      type: symbol
+      regex: "^HttpSendRequest[AW]$"

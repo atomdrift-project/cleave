@@ -1,0 +1,12 @@
+# Process TTY/PTY - Ruby
+
+traits:
+  - id: ruby-pty
+    desc: Pseudo-terminal (PTY) manipulation
+    crit: notable
+    conf: 0.93
+    platforms: [all]
+    for: [ruby]
+    if:
+      type: symbol
+      regex: "PTY\\.(spawn|open)"

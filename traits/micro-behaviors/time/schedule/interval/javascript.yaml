@@ -1,0 +1,18 @@
+traits:
+  - id: setInterval
+    desc: setInterval timer usage
+    crit: baseline
+    conf: 0.5
+    for: [javascript, typescript]
+    if:
+      type: string
+      regex: 'setInterval\s*\('
+
+  - id: setTimeout
+    desc: setTimeout timer usage
+    crit: baseline
+    conf: 0.5
+    for: [javascript, typescript]
+    if:
+      type: string
+      regex: 'setTimeout\s*\('

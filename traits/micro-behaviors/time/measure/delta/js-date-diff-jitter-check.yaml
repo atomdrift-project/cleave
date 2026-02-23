@@ -1,0 +1,109 @@
+traits:
+  - id: js-subtraction-func-ast
+    desc: Function returning simple subtraction (AST)
+    crit: suspicious
+    for: [javascript]
+    if:
+      type: ast
+      lang: javascript
+      # Matches: function f(a,b) { return a-b; }
+      query: |
+        (function_declaration
+          (statement_block
+            (return_statement
+              (binary_expression
+                operator: "-"
+              )
+            )
+          )
+        )
+
+  - id: js-subtraction-func-regex
+    desc: Function returning simple subtraction (Regex)
+    crit: suspicious
+    for: [javascript]
+    if:
+      type: string
+      regex: 'return\s+[a-zA-Z0-9_]+\s*-\s*[a-zA-Z0-9_]+\s*;'
+
+  - id: js-triple-date-raw
+    desc: Triple Date/Time retrieval (raw)
+    crit: notable
+    for: [javascript]
+    if:
+      type: raw
+      regex: '(Date\s*\.\s*now\s*\(|new\s+Date\s*\()'
+      count_min: 3
+
+  - id: js-triple-date-ast
+    desc: Triple Date retrieval (AST)
+    crit: notable
+    for: [javascript]
+    if:
+      type: ast
+      lang: javascript
+      query: |
+        (new_expression
+          constructor: [
+            (identifier) @id (#eq? @id "Date")
+            (member_expression
+              property: [
+                (identifier) @prop (#eq? @prop "Date")
+                (subscript_expression
+                  index: (string) @str (#match? @str "Date")
+                )
+              ]
+            )
+          ]
+        )
+      count_min: 3
+
+  - id: js-multiple-sleep-raw
+    desc: Multiple Sleep calls (anti-emulation) - Raw
+    crit: notable
+    for: [javascript]
+    if:
+      type: raw
+      regex: '\.Sleep\s*\('
+      count_min: 2
+
+  - id: js-multiple-sleep-ast
+    desc: Multiple Sleep calls (anti-emulation) - AST
+    crit: notable
+    for: [javascript]
+    if:
+      type: ast
+      lang: javascript
+      query: |
+        (call_expression
+          function: (member_expression
+            property: [
+              (identifier) @prop (#eq? @prop "Sleep")
+              (subscript_expression
+                index: (string) @str (#match? @str "Sleep")
+              )
+            ]
+          )
+        )
+      count_min: 2
+
+composite_rules:
+  - id: js-triple-date
+    desc: Triple Date/Time retrieval pattern
+    crit: notable
+    for: [javascript]
+    any:
+      - id: js-triple-date-raw
+      - id: js-triple-date-ast
+
+  - id: js-date-diff-jitter-check
+    desc: JScript timing jitter check (diff1 != diff2)
+    crit: suspicious
+    for: [javascript]
+    all:
+      - id: js-triple-date
+    any:
+      - id: js-subtraction-func-ast
+      - id: js-subtraction-func-regex
+      - id: js-multiple-sleep-raw
+      - id: js-multiple-sleep-ast

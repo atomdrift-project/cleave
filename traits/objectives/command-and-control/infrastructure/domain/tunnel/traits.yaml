@@ -1,0 +1,56 @@
+# C2 Infrastructure - Tunneling Services
+# Detects domains and endpoints for common tunneling services used for C2
+# ATT&CK: T1572 (Protocol Tunneling)
+
+defaults:
+  for: ['*']
+  attack: T1572
+
+traits:
+  - id: serveo-tunnel
+    desc: Serveo SSH tunnel endpoint (reverse shell)
+    crit: suspicious
+    conf: 0.95
+    if:
+      type: string
+      regex: serveo\.net
+
+  - id: localtunnel-me
+    desc: Localtunnel.me endpoint (reverse shell infrastructure)
+    crit: suspicious
+    conf: 0.85
+    if:
+      type: string
+      substr: localtunnel.me
+
+  - id: localtunnel
+    desc: Localtunnel endpoint (reverse shell infrastructure)
+    crit: suspicious
+    conf: 0.85
+    if:
+      type: string
+      regex: '[a-z0-9-]+\.loca\.lt'
+
+  - id: localhost-run
+    desc: Localhost.run tunnel endpoint
+    crit: suspicious
+    conf: 0.85
+    if:
+      type: string
+      regex: '[a-z0-9-]+\.localhost\.run'
+
+  - id: pinggy-io
+    desc: Pinggy.io tunnel endpoint
+    crit: suspicious
+    conf: 0.85
+    if:
+      type: string
+      substr: pinggy.io
+
+  - id: cloudflare-tunnel
+    desc: Cloudflare tunnel endpoint
+    crit: notable
+    conf: 0.7
+    if:
+      type: string
+      regex: '[a-z0-9-]+\.trycloudflare\.com'

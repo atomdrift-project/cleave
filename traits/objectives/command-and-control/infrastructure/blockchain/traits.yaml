@@ -1,0 +1,176 @@
+# Blockchain-Based C2 Infrastructure
+# ATT&CK: T1102 (Web Service)
+# Uses blockchain/smart contract storage for C2 URL retrieval
+
+traits:
+  # === Etherscan atomic indicators ===
+  - id: etherscan-api-prefix
+    desc: Etherscan API endpoint (api.etherscan.io)
+    crit: notable
+    conf: 0.8
+    attack: "T1102"
+    for: [javascript, typescript]
+    if:
+      type: string
+      substr: "api.etherscan.io"
+
+  - id: etherscan-api-suffix
+    desc: Etherscan API path (etherscan.io/api)
+    crit: notable
+    conf: 0.8
+    attack: "T1102"
+    for: [javascript, typescript]
+    if:
+      type: string
+      substr: "etherscan.io/api"
+
+  # BSCScan API (Binance Smart Chain)
+  - id: bscscan-api
+    desc: Uses BSCScan API (potential blockchain-based
+    crit: suspicious
+    conf: 0.85
+    attack: "T1102"
+    for: [javascript, typescript]
+    if:
+      type: string
+      regex: "api\\.bscscan\\.com|bscscan\\.com/api"
+
+  # PolygonScan API
+  - id: polygonscan-api
+    desc: Uses PolygonScan API (potential blockchain-based
+    crit: suspicious
+    conf: 0.85
+    attack: "T1102"
+    for: [javascript, typescript]
+    if:
+      type: string
+      regex: "api\\.polygonscan\\.com|polygonscan\\.com/api"
+
+  # === Contract read micro-behaviors (migrated from YARA) ===
+  - id: eth-call
+    desc: eth_call RPC method
+    crit: notable
+    conf: 0.6
+    attack: "T1102"
+    for: [javascript, typescript]
+    if:
+      type: string
+      substr: "eth_call"
+
+  - id: eth-getstorageat
+    desc: eth_getStorageAt RPC method
+    crit: notable
+    conf: 0.6
+    attack: "T1102"
+    for: [javascript, typescript]
+    if:
+      type: string
+      substr: "eth_getStorageAt"
+
+  - id: contract-keyword
+    desc: contract keyword
+    crit: notable
+    conf: 0.3
+    for: [javascript, typescript]
+    if:
+      type: string
+      regex: "(?i)contract"
+
+  # eth-address: use objectives/collection/clipboard/capture::ethereum-address (canonical)
+
+  # Infura/Alchemy RPC with suspicious patterns
+  - id: rpc-provider
+    desc: Uses blockchain RPC provider (monitor
+    crit: notable
+    conf: 0.6
+    attack: "T1102"
+    for: [javascript, typescript]
+    if:
+      type: string
+      regex: "infura\\.io/v3/|alchemy\\.com/v2/|quicknode\\.com|ankr\\.com"
+
+  # IPFS gateway (decentralized payload hosting)
+  - id: ipfs-gateway
+    desc: Uses IPFS gateway (decentralized content
+    crit: notable
+    conf: 0.7
+    attack: "T1102"
+    for: [javascript, typescript, shell]
+    if:
+      type: string
+      regex: "ipfs\\.io/ipfs/|gateway\\.pinata\\.cloud|cloudflare-ipfs\\.com|dweb\\.link"
+
+  # === Arweave atomic indicators ===
+  - id: arweave-net
+    desc: Arweave.net gateway
+    crit: notable
+    conf: 0.6
+    attack: "T1102"
+    for: [javascript, typescript]
+    if:
+      type: string
+      substr: "arweave.net/"
+
+  - id: ar-io-net
+    desc: AR-IO.net gateway
+    crit: notable
+    conf: 0.6
+    attack: "T1102"
+    for: [javascript, typescript]
+    if:
+      type: string
+      substr: "ar-io.net/"
+
+composite_rules:
+  # Etherscan API composite
+  - id: etherscan-api
+    desc: Uses Etherscan API (potential blockchain-based
+    crit: suspicious
+    conf: 0.85
+    attack: "T1102"
+    for: [javascript, typescript]
+    any:
+      - id: etherscan-api-prefix
+      - id: etherscan-api-suffix
+
+  # Contract read composite (migrated from YARA)
+  - id: contract-read
+    desc: Reads smart contract storage (potential
+    crit: notable
+    conf: 0.75
+    attack: "T1102"
+    for: [javascript, typescript]
+    all:
+      - id: eth-rpc-method
+      - id: contract-or-address
+
+  # Helper: eth RPC methods
+  - id: eth-rpc-method
+    desc: Ethereum RPC method
+    crit: notable
+    conf: 0.6
+    for: [javascript, typescript]
+    any:
+      - id: eth-call
+      - id: eth-getstorageat
+
+  # Helper: contract keyword or address
+  - id: contract-or-address
+    desc: Contract keyword or Ethereum address
+    crit: notable
+    conf: 0.3
+    for: [javascript, typescript]
+    any:
+      - id: contract-keyword
+      - id: objectives/collection/clipboard/capture::ethereum-address
+
+  # Arweave gateway composite
+  - id: arweave-gateway
+    desc: Uses Arweave gateway (permanent content
+    crit: notable
+    conf: 0.7
+    attack: "T1102"
+    for: [javascript, typescript]
+    any:
+      - id: arweave-net
+      - id: ar-io-net

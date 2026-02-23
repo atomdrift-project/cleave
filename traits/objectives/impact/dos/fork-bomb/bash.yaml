@@ -1,0 +1,8 @@
+composite_rules:
+  - id: bash
+    desc: "Bash Fork Bomb"
+    crit: hostile
+    conf: 1.0
+    any:
+      - id: micro-behaviors/process/fork/bomb::bomb
+      - id: micro-behaviors/process/fork/bomb::bomb-regex

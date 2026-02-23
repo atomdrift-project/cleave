@@ -1,0 +1,29 @@
+# Installer Compilation Pattern
+# Detects in-place compilation of attacker tools by installers
+# Combines compiler invocation + cleanup = suspicious staging behavior
+# ATT&CK: T1027.004 (Obfuscated Files: Compile After Delivery)
+# MBC: B0024 (Execution) / E1059 (Command and Scripting Interpreter)
+
+composite_rules:
+  - id: installer-compile-cleanup
+    desc: Installer compiles and cleans up artifacts
+    crit: suspicious
+    conf: 0.8
+    attack: "T1027.004"
+    mbc: "B0024"
+    for: [shell]
+    all:
+      - id: micro-behaviors/process/create/shell::gcc-invocation
+      - id: objectives/evasion/self-delete/file::rm-install-artifacts
+
+  - id: installer-multipart-compile
+    desc: Installer with compilation and cleanup pattern
+    crit: suspicious
+    conf: 0.75
+    attack: "T1027.004"
+    mbc: "B0024"
+    for: [shell]
+    all:
+      - id: micro-behaviors/process/create/shell::gcc-invocation
+      - id: micro-behaviors/fs/file/read::read
+      - id: objectives/impact/system/directory::recursive-delete-cmd

@@ -1,0 +1,29 @@
+defaults:
+  for:
+  - all
+traits:
+- id: offensive-symbol
+  desc: Offensive symbol marker
+  crit: notable
+  conf: 0.7
+  if:
+    type: string
+    regex: "\u5350|hackend| ransomware|encrypted your files"
+    case_insensitive: true
+- id: ransomware-banner-core
+  desc: Ransomware tool marker
+  crit: suspicious
+  conf: 0.75
+  if:
+    type: string
+    case_insensitive: true
+    regex: decrypt.{0,50}payment|your files.{0,50}encrypted
+
+composite_rules:
+- id: ransomware-banner
+  desc: Ransomware tool marker
+  crit: suspicious
+  conf: 0.8
+  any:
+  - id: ransomware-banner-core
+  - id: micro-behaviors/data/text/malware::pay-bitcoin-phrase

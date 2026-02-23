@@ -1,0 +1,17 @@
+# Anti-analysis Environment Checks
+# Detects checks for specific environment conditions (shell, paths, etc.)
+
+defaults:
+  crit: notable
+  conf: 0.8
+  for: [javascript]
+
+traits:
+  - id: js-check-cmd-path
+    desc: Checks for system32/cmd.exe path validation
+    crit: notable
+    if:
+      type: raw
+      # Matches "system32\\cmd.ex" or parts of it concatenated
+      # The sample has "system32\\cmd."+"ex"+"e"
+      regex: 'system32.{0,20}cmd\.ex'

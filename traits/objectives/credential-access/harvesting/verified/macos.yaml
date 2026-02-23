@@ -1,0 +1,18 @@
+# macOS Verified Credential Harvesting Detection
+# Detects phishing for passwords and immediately validating them via system APIs
+# This is a high-confidence indicator of active credential theft
+
+defaults:
+  platforms: [macos]
+  attack: "T1056.002"
+  mbc: "B0028"
+
+composite_rules:
+  - id: macos-credential-harvesting-verified
+    desc: "macOS Verified Credential Harvesting (Phish + Validate)"
+    crit: hostile
+    conf: 0.98
+    # Requires BOTH a phishing lure and a validation mechanism
+    all:
+      - id: objectives/credential-access/phishing/lure::password-phishing
+      - id: objectives/credential-access/validation/check::csidentity-password-auth

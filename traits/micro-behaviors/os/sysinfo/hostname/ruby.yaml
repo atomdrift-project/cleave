@@ -1,0 +1,15 @@
+# Hostname Discovery - Ruby
+# Retrieving system hostname
+
+defaults:
+  for: [ruby]
+  attack: "T1082"
+
+traits:
+  - id: socket-hostname
+    desc: Socket hostname discovery
+    crit: notable
+    conf: 0.70
+    if:
+      type: symbol
+      exact: 'gethostname'

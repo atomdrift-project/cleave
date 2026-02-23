@@ -1,0 +1,14 @@
+traits:
+  - id: load-segment-filesz-exceeds-file
+    desc: ELF LOAD segment exceeds file size
+    crit: suspicious
+    conf: 0.95
+    for: [elf]
+    if:
+      type: metrics
+      field: "elf.load_segment_max_p_filesz"
+      # Sample file size is ~3.1MB (3117056), but LOAD1 claims ~3.8MB (3799886)
+      # We use 3MB as a threshold to catch this discrepancy.
+      min: 3000000
+    mbc: B0001
+    attack: T1027

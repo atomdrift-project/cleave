@@ -1,0 +1,20 @@
+# firewalld - Dynamic Firewall Manager
+# RHEL/CentOS/Fedora firewall daemon
+
+defaults:
+  for: [all]
+  crit: notable
+  conf: 0.9
+
+traits:
+  - id: firewall-cmd
+    desc: firewall-cmd utility
+    if:
+      type: string
+      substr: firewall-cmd
+
+  - id: firewalld
+    desc: firewalld service
+    if:
+      type: string
+      substr: firewalld

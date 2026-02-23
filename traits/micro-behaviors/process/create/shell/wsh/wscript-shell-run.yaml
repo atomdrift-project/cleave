@@ -1,0 +1,11 @@
+traits:
+  - id: wscript-shell-run
+    desc: "Executes commands using WScript.Shell Run method"
+    crit: notable
+    conf: 0.8
+    for: [javascript, vbs]
+    if:
+      type: string
+      # Detects both literal "Run(" and dynamic invocation like `variable[method_name_variable](`
+      regex: '(WScript\.Shell|\w+)\[?[''"]?Run[''"]?\]?\('
+    attack: "T1059.007" # Command and Scripting Interpreter: JavaScript/JScript

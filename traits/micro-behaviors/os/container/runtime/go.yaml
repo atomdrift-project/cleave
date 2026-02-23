@@ -1,0 +1,19 @@
+# Go Container and Cloud Operations
+traits:
+  - id: docker
+    desc: "Docker operations"
+    crit: notable
+    conf: 0.8
+    for: [go]
+    if:
+      type: string
+      regex: '(^|[^A-Za-z0-9_-])(docker|containerd)([^A-Za-z0-9_-]|$)'
+
+  - id: kubernetes
+    desc: "Kubernetes API access"
+    crit: notable
+    conf: 0.85
+    for: [go]
+    if:
+      type: string
+      regex: '(kubernetes|k8s\.io)'

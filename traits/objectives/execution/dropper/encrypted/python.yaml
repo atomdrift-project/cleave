@@ -1,0 +1,64 @@
+# Encrypted Payload Loader Detection (Python)
+# Detects patterns where encrypted payloads are decrypted and executed at runtime
+# MBC: B0024 (Dropper), F0004 (Packed Executable)
+# ATT&CK: T1027.002 (Software Packing), T1620 (Reflective Code Loading)
+
+defaults:
+  for: [python]
+  mbc: "B0024"
+  attack: "T1027.002"
+
+traits:
+  # Hardcoded base64 AES key pattern (32 bytes = 44 chars base64)
+  - id: hardcoded-aes-key
+    desc: Hardcoded AES key in base64
+    crit: suspicious
+    conf: 0.85
+    if:
+      type: string
+      regex: 'b64decode\([''"][A-Za-z0-9+/]{43}=[''"]\)'
+
+  # Hardcoded base64 IV pattern (16 bytes = 22-24 chars base64)
+  - id: hardcoded-aes-iv
+    desc: Hardcoded AES IV in base64
+    crit: suspicious
+    conf: 0.85
+    if:
+      type: string
+      regex: 'b64decode\([''"][A-Za-z0-9+/]{20,24}[=]{0,2}[''"]\)'
+
+  # .aes file extension - encrypted payload file
+  - id: aes-file-extension
+    desc: AES encrypted file reference
+    crit: notable
+    conf: 0.8
+    if:
+      type: string
+      regex: '\\.aes[''"]'
+
+  # decrypt function definition
+  - id: decrypt-function-def
+    desc: Decrypt function definition
+    crit: notable
+    conf: 0.75
+    if:
+      type: ast
+      kind: function_definition
+      regex: "^decrypt$"
+
+composite_rules:
+  # Encrypted payload loader - decrypts and executes code from file
+  - id: encrypted-loader
+    desc: Decrypts and loads code from encrypted file
+    crit: suspicious
+    conf: 0.95
+    needs: 3
+    any:
+      - id: micro-behaviors/crypto/symmetric/aes
+      - id: objectives/execution/reflection/class::python-zipimporter
+      - id: objectives/execution/reflection/class::python-zipimporter-load
+      - id: micro-behaviors/data/encode/base64::b64decode-string
+      - id: micro-behaviors/fs/temp/pyinstaller::pyinstaller-meipass
+      - id: hardcoded-aes-key
+      - id: aes-file-extension
+

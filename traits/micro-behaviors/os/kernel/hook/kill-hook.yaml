@@ -1,0 +1,33 @@
+# Kernel Kill Syscall Hooking Behaviors
+# ATT&CK: T1014 (Rootkit)
+
+traits:
+  - id: kill-hook-sig-switch
+    desc: Switch signal in kill hook (control)
+    crit: suspicious
+    conf: 0.9
+    attack: "T1014"
+    for: [c]
+    if:
+      type: raw
+      regex: 'switch\s*\(\s*sig\s*\)\s*\{[\s\S]{0,500}case\s+SIG[A-Z_]+'
+
+  - id: kill-hook-privesc-trigger
+    desc: Kill hook triggers privilege escalation
+    crit: suspicious
+    conf: 0.95
+    attack: "T1068"
+    for: [c]
+    if:
+      type: raw
+      regex: 'case\s+SIG[A-Z_]+:\s*[a-zA-Z0-9_]*[Rr]oot\s*\('
+
+  - id: kill-hook-invis-toggle
+    desc: Kill hook toggles invisibility flag
+    crit: suspicious
+    conf: 0.95
+    attack: "T1014"
+    for: [c]
+    if:
+      type: raw
+      regex: 'task\s*->\s*flags\s*\^?=\s*0x10000000'

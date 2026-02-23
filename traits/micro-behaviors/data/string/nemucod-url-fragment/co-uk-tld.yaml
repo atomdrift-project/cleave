@@ -1,0 +1,18 @@
+traits:
+  - id: co-uk-tld
+    desc: Nemucod C2 TLD '.co.uk'
+    crit: suspicious
+    conf: 0.9
+    for: [javascript]
+    if:
+      type: string
+      substr: '.co.uk'
+
+  - id: co-uk-tld-nodot
+    desc: Nemucod C2 TLD 'co.uk' fragment (obfuscated assembly)
+    crit: suspicious
+    conf: 0.85
+    for: [javascript]
+    if:
+      type: string
+      substr: 'co.uk'

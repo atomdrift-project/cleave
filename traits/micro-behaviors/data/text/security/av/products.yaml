@@ -1,0 +1,50 @@
+traits:
+- id: avg-string
+  desc: AVG antivirus string
+  crit: notable
+  for:
+  - pe
+  if:
+    type: string
+    regex: (?i)(AVG\\Antivirus|AVGUI\.exe)
+- id: trusteer-rapport-name
+  desc: Trusteer Rapport product name
+  crit: notable
+  for:
+  - pe
+  if:
+    type: string
+    regex: (?i)Trusteer\\Rapport
+- id: trusteer-rapport-services-a
+  desc: Trusteer Rapport service names
+  crit: notable
+  for:
+  - pe
+  if:
+    type: string
+    regex: (?i)Rapport(Service|MgmtService|Aegle64|EI64)
+- id: trusteer-rapport-services-b
+  desc: Trusteer Rapport service names
+  crit: notable
+  for:
+  - pe
+  if:
+    type: string
+    regex: (?i)Rapport(Hades64|KE64|PG64)
+composite_rules:
+- id: trusteer-rapport-services
+  desc: Trusteer Rapport service names
+  crit: notable
+  for:
+  - pe
+  any:
+  - id: trusteer-rapport-services-a
+  - id: trusteer-rapport-services-b
+- id: trusteer-rapport-string
+  desc: Trusteer Rapport string
+  crit: notable
+  for:
+  - pe
+  any:
+  - id: trusteer-rapport-name
+  - id: trusteer-rapport-services

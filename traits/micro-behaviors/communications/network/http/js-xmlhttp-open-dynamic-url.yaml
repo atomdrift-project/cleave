@@ -1,0 +1,24 @@
+traits:
+  - id: js-xmlhttp-open-dynamic-url
+    desc: XMLHTTP.open with Dynamic URL (JS)
+    crit: suspicious
+    conf: 0.9
+    for: [javascript]
+    if:
+      type: ast
+      language: javascript
+      query: |
+        (call_expression
+          function: (member_expression
+            object: (identifier) @xmlhttp_object
+            property: (property_identifier) @open_method
+          )
+          arguments: (arguments
+            (string) @method
+            (_) @dynamic_url_arg
+            (_) @async_arg
+          )
+          (#eq? @open_method "open")
+          (#match? @method "GET|POST")
+          (#match? @xmlhttp_object "dSta")
+        )

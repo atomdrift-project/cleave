@@ -1,0 +1,9 @@
+traits:
+  - id: response-text
+    desc: Access to HTTP response body (.responseText)
+    crit: notable
+    conf: 0.7
+    for: [powershell, javascript]
+    if:
+      type: raw
+      regex: '(?i)\.responseText'

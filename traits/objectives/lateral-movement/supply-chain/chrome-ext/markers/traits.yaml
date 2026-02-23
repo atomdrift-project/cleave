@@ -1,0 +1,109 @@
+# Chrome Extension API Markers
+# Basic Chrome API usage patterns
+
+traits:
+  # === Chrome Extension API Markers ===
+  - id: chrome-runtime
+    desc: chrome.runtime API usage
+    crit: notable
+    conf: 0.9
+    for: [javascript]
+    if:
+      type: string
+      substr: "chrome.runtime"
+
+  - id: chrome-tabs
+    desc: chrome.tabs API usage
+    crit: notable
+    conf: 0.9
+    for: [javascript]
+    if:
+      type: string
+      substr: "chrome.tabs"
+
+  - id: chrome-storage
+    desc: chrome.storage API usage
+    crit: notable
+    conf: 0.9
+    for: [javascript]
+    if:
+      type: string
+      substr: "chrome.storage"
+
+  - id: chrome-webRequest
+    desc: chrome.webRequest API usage
+    crit: notable
+    conf: 0.9
+    for: [javascript]
+    if:
+      type: string
+      substr: "chrome.webRequest"
+
+  - id: chrome-scripting
+    desc: chrome.scripting API usage
+    crit: notable
+    conf: 0.9
+    for: [javascript]
+    if:
+      type: string
+      substr: "chrome.scripting"
+
+  - id: onInstalled
+    desc: chrome.runtime.onInstalled listener
+    crit: notable
+    conf: 0.9
+    for: [javascript]
+    if:
+      type: string
+      substr: "onInstalled"
+
+  # === Extension Message Passing ===
+  - id: sendMessage
+    desc: chrome.runtime.sendMessage
+    crit: notable
+    conf: 0.9
+    for: [javascript]
+    if:
+      type: raw
+      regex: "chrome\\.runtime\\.sendMessage|runtime\\.sendMessage"
+
+  - id: onMessage
+    desc: chrome.runtime.onMessage listener
+    crit: notable
+    conf: 0.9
+    for: [javascript]
+    if:
+      type: string
+      substr: "onMessage"
+
+  # === Content Script Injection Patterns ===
+  - id: executeScript
+    desc: chrome.scripting.executeScript call
+    crit: notable
+    conf: 0.9
+    for: [javascript]
+    if:
+      type: string
+      substr: "executeScript"
+
+  - id: insertCSS
+    desc: chrome.scripting.insertCSS call
+    crit: notable
+    conf: 0.85
+    for: [javascript]
+    if:
+      type: string
+      substr: "insertCSS"
+
+composite_rules:
+  # Chrome extension context marker
+  - id: chrome-extension-context
+    desc: Chrome extension API context
+    crit: notable
+    conf: 0.95
+    for: [javascript]
+    any:
+      - id: chrome-runtime
+      - id: chrome-tabs
+      - id: chrome-storage
+      - id: chrome-webRequest

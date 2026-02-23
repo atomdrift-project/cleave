@@ -1,0 +1,97 @@
+defaults:
+  for:
+  - shell
+traits:
+- id: wget-download
+  desc: "Download via wget"
+  crit: notable
+  conf: 0.7
+  mbc: C0002
+  attack: T1105
+  if:
+    type: trait
+    id: micro-behaviors/communications/download/curl::wget-cmd
+
+- id: wget-q-flag
+  desc: "wget quiet flag"
+  crit: notable
+  if:
+    type: raw
+    regex: "\\s+-q\\s+"
+
+- id: wget-output-stdout
+  desc: "wget output to stdout flag"
+  crit: notable
+  if:
+    type: raw
+    regex: "\\s+-O\\s*-\\b"
+
+- id: curl-download
+  desc: "Download via curl"
+  crit: notable
+  conf: 0.7
+  mbc: C0002
+  attack: T1105
+  if:
+    type: trait
+    id: micro-behaviors/communications/download/curl::curl-cmd
+- id: execute-dot-slash
+  desc: "./ execution pattern"
+  crit: notable
+  conf: 0.5
+  attack: T1059.004
+  if:
+    type: raw
+    regex: ^\s*\./[a-zA-Z0-9_.-]+
+  unless:
+  - type: raw
+    regex: \./([a-zA-Z0-9_.-]+\.(txt|md|log|conf|html|json|xml|yml|yaml)|ChangeLog)
+  - type: raw
+    regex: s/\./
+
+- id: inline__curl-silent-stdout__any_1
+  desc: "Curl silent download pattern 1"
+  crit: notable
+  if:
+    type: raw
+    regex: 'curl\s+[^|&\n]{0,120}-s[^|&\n]{0,120}(https?://|ftp://)'
+
+- id: inline__curl-silent-stdout__any_2
+  desc: "Curl silent download pattern 2"
+  crit: notable
+  if:
+    type: raw
+    regex: 'curl\s+[^|&\n]{0,120}--silent[^|&\n]{0,120}(https?://|ftp://)'
+
+composite_rules:
+- id: wget-silent-stdout
+  desc: "Silent wget output to stdout"
+  crit: suspicious
+  conf: 0.9
+  mbc: C0002
+  attack: T1105
+  all:
+    - id: micro-behaviors/communications/download/curl::wget-cmd
+    - id: wget-q-flag
+    - id: wget-output-stdout
+  unless:
+  - type: raw
+    regex: \|\s*([a-z/]+/)?gpg\b\s+--import
+- id: curl-silent-stdout
+  desc: "Silent curl output to stdout"
+  crit: notable
+  conf: 0.9
+  mbc: C0002
+  attack: T1105
+  size_max: 5000
+  not:
+  - regex: (?i)netbsd\.org
+  - regex: (?i)freebsd\.org
+  - regex: (?i)openbsd\.org
+  - regex: (?i)dragonflybsd\.org
+  - regex: (?i)kernel\.org
+  - regex: (?i)github\.com
+  - regex: (?i)google\.com
+  any:
+  - id: inline__curl-silent-stdout__any_1
+  - id: inline__curl-silent-stdout__any_2

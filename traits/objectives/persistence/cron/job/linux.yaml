@@ -1,0 +1,50 @@
+# Cron Persistence
+# MBC: B0028 (Scheduled Task/Job)
+# ATT&CK: T1053.003
+
+defaults:
+  for: [all]
+
+traits:
+  - id: etc-cron-path
+    desc: /etc/cron directory path (system cron
+    crit: notable
+    conf: 0.7
+    mbc: B0028
+    attack: T1053.003
+    if:
+      type: string
+      substr: "/etc/cron"
+
+  - id: var-spool-cron-path
+    desc: /var/spool/cron directory path (user cron
+    crit: notable
+    conf: 0.7
+    mbc: B0028
+    attack: T1053.003
+    if:
+      type: string
+      substr: "/var/spool/cron"
+
+  - id: cron-d-path
+    desc: /etc/cron.d directory path (additional system
+    crit: notable
+    conf: 0.7
+    mbc: B0028
+    attack: T1053.003
+    if:
+      type: string
+      substr: "/etc/cron.d"
+
+composite_rules:
+  - id: cron
+    desc: Cron job persistence (command or
+    crit: notable
+    conf: 0.66
+    mbc: B0028
+    attack: T1053.003
+    any:
+      - id: micro-behaviors/os/schedule/cron/keywords::crontab-keyword
+      - id: etc-cron-path
+      - id: var-spool-cron-path
+      - id: cron-d-path

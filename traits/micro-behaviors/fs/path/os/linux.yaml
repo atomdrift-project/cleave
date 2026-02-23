@@ -1,0 +1,68 @@
+# Operating System Information Paths (Linux)
+# Standard OS release and version file paths
+# MBC: E1082 (System Information Discovery)
+# ATT&CK: T1082 (System Information Discovery)
+
+defaults:
+  for: [c, elf, shell]
+  platforms: [linux]
+  crit: baseline
+  mbc: "E1082"
+  attack: "T1082"
+
+traits:
+  - id: os-release-path
+    desc: /etc/os-release path
+    conf: 0.5
+    if:
+      type: string
+      substr: "/etc/os-release"
+
+  - id: lsb-release
+    desc: /etc/lsb-release path
+    conf: 0.5
+    if:
+      type: string
+      substr: "/etc/lsb-release"
+
+  - id: redhat-release
+    desc: /etc/redhat-release path
+    conf: 0.5
+    if:
+      type: string
+      substr: "/etc/redhat-release"
+
+  - id: debian-version
+    desc: /etc/debian_version path
+    conf: 0.5
+    if:
+      type: string
+      substr: "/etc/debian_version"
+
+  - id: centos-release
+    desc: /etc/centos-release path
+    conf: 0.5
+    if:
+      type: string
+      substr: "/etc/centos-release"
+
+  - id: proc-version
+    desc: /proc/version path
+    conf: 0.5
+    if:
+      type: string
+      substr: "/proc/version"
+
+  - id: uname-a-cmd
+    desc: uname -a command
+    conf: 0.5
+    if:
+      type: string
+      substr: "uname -a"
+
+  - id: hostnamectl-cmd
+    desc: hostnamectl command
+    conf: 0.5
+    if:
+      type: string
+      substr: "hostnamectl"

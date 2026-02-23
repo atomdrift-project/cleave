@@ -1,0 +1,11 @@
+defaults:
+  for: [all]
+
+traits:
+  - id: residency-check
+    conf: 0.8
+    crit: suspicious
+    desc: Checks for a specific opcode at a
+    if:
+      type: raw
+      regex: 'cmp byte ptr \[(e[abcd]x|e[sd]i)\], (0x|0)?[AE][19]h?'

@@ -1,0 +1,23 @@
+# Stripped Binary with C2 Configuration
+# Detects stripped binaries containing hardcoded C2 lists
+# Strong indicator of malware attempting to hide infrastructure
+
+composite_rules:
+  - id: c2-indicators
+    desc: Indicators of C2 infrastructure (internal helper)
+    crit: notable
+    conf: 0.8
+    any:
+      - id: objectives/command-and-control/infrastructure/config::embedded-c2-list
+      - id: objectives/command-and-control/infrastructure/network::ipv4-port-string
+
+  - id: stripped-binary-with-c2-list
+    desc: Stripped binary with multiple hardcoded C2 addresses
+    crit: hostile
+    conf: 0.95
+    platforms: [linux, macos, windows]
+    mbc: "C0002"
+    attack: "T1043"
+    all:
+      - id: metadata/hardening::stripped-binary
+      - id: c2-indicators

@@ -1,0 +1,151 @@
+defaults:
+  crit: notable
+  attack: T1036.005
+  mbc: F0004
+  for:
+    - python
+traits:
+  - id: minimal-description-1
+    desc: Minimal package description (Yes/No/Ok/Test)
+    if:
+      type: string
+      regex: description.{0,50}=.{0,50}['"](Yes|No|Ok|Test)['"]
+  - id: minimal-description-2
+    desc: Minimal package description (Demo/Sample/.)
+    if:
+      type: string
+      regex: description.{0,50}=.{0,50}['"](Demo|Sample|.)['"]
+  - id: single-word-description
+    desc: Single word description
+    crit: notable
+    conf: 0.6
+    if:
+      type: string
+      regex: 'description.{0,50}=.{0,50}[''"][a-zA-Z]{1,30}[''"]'
+  - id: unknown-description
+    desc: PKG-INFO has UNKNOWN description
+    crit: notable
+    conf: 0.75
+    for:
+      - all
+    if:
+      type: kv
+      path: description
+      exact: UNKNOWN
+  - id: pkginfo-no-description-body
+    desc: PKG-INFO with no description body
+    crit: notable
+    conf: 0.75
+    for:
+      - all
+    if:
+      type: kv
+      path: description
+      regex: ^\s*$
+  - id: pkginfo-missing-description
+    desc: PKG-INFO with no description body at all
+    crit: notable
+    conf: 0.7
+    for:
+      - all
+    if:
+      type: kv
+      path: metadata-version
+    unless:
+      - type: kv
+        path: description
+  - id: desc-mentions-victim
+    desc: Package description explicitly mentions victims
+    crit: suspicious
+    conf: 0.9
+    attack: T1195.002
+    for:
+      - all
+    if:
+      type: kv
+      path: description
+      regex: victim
+      case_insensitive: true
+  - id: desc-poc-research-1
+    desc: Description claims POC/Research (POC/Research)
+    if:
+      type: string
+      regex: (proof.of.concept|\bpoc\b|security.research)
+      case_insensitive: true
+  - id: desc-poc-research-2
+    desc: Description claims POC/Research (Bounty/Confusion)
+    if:
+      type: string
+      regex: (bug.bounty|dependency.confusion)
+      case_insensitive: true
+  - id: desc-confirms-install
+    desc: Description mentions confirming installation
+    crit: suspicious
+    conf: 0.9
+    attack: T1195.002
+    for:
+      - python
+    if:
+      type: string
+      regex: confirm.{0,30}install
+      case_insensitive: true
+  - id: pyproject-placeholder-description-1
+    desc: pyproject.toml placeholder (test/example/placeholder)
+    if:
+      type: raw
+      regex: description\s*=\s*["'].{0,30}\b(test|example|placeholder)\b
+      case_insensitive: true
+  - id: pyproject-placeholder-description-2
+    desc: pyproject.toml placeholder (todo/fixme/dummy)
+    if:
+      type: raw
+      regex: description\s*=\s*["'].{0,30}\b(todo|fixme|dummy)\b
+      case_insensitive: true
+  - id: pyproject-boilerplate-description-1
+    desc: pyproject.toml boilerplate (library/package/module)
+    if:
+      type: kv
+      path: project.description
+      regex: ^A (library|package|module) for
+      case_insensitive: true
+  - id: pyproject-boilerplate-description-2
+    desc: pyproject.toml boilerplate (creating/building terminal/simple)
+    if:
+      type: kv
+      path: project.description
+      regex: (creating|building) (terminal|simple)
+      case_insensitive: true
+composite_rules:
+  - id: minimal-description
+    desc: Minimal package description
+    crit: notable
+    conf: 0.65
+    any:
+      - id: minimal-description-1
+      - id: minimal-description-2
+  - id: desc-poc-research
+    desc: Description claims proof of concept or research
+    crit: notable
+    conf: 0.65
+    attack: T1195.002
+    any:
+      - id: desc-poc-research-1
+      - id: desc-poc-research-2
+  - id: pyproject-placeholder-description
+    desc: pyproject.toml description contains placeholder text
+    crit: notable
+    conf: 0.8
+    for:
+      - all
+    any:
+      - id: pyproject-placeholder-description-1
+      - id: pyproject-placeholder-description-2
+  - id: pyproject-boilerplate-description
+    desc: pyproject.toml with boilerplate library description
+    crit: notable
+    conf: 0.75
+    for:
+      - all
+    all:
+      - id: pyproject-boilerplate-description-1
+      - id: pyproject-boilerplate-description-2

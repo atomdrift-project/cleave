@@ -1,0 +1,231 @@
+defaults:
+  for:
+  - all
+  attack: T1555
+  mbc: B0028
+  crit: suspicious
+traits:
+- id: derivation-path-bip
+  desc: HD wallet derivation path (BIP-44/49/84/86)
+  conf: 0.8
+  if:
+    type: string
+    regex: m/44'/|m/49'/|m/84'/|m/86'/
+- id: derivation-path-word
+  desc: HD wallet derivation path (keywords)
+  conf: 0.8
+  if:
+    type: string
+    regex: derivation_?path|derivationPath
+- id: mnemonic-word
+  desc: mnemonic term
+  crit: notable
+  conf: 0.5
+  for:
+  - python
+  - javascript
+  - csharp
+  - java
+  - go
+  if:
+    type: string
+    substr: mnemonic
+- id: seed-phrase-underscore
+  desc: seed_phrase term
+  crit: notable
+  conf: 0.5
+  if:
+    type: string
+    substr: seed_phrase
+- id: seedphrase-word
+  desc: seedphrase term
+  crit: notable
+  conf: 0.5
+  if:
+    type: string
+    substr: seedphrase
+- id: recovery-phrase-word
+  desc: recovery_phrase term
+  crit: notable
+  conf: 0.5
+  if:
+    type: string
+    substr: recovery_phrase
+- id: secret-words-word
+  desc: secret_words term
+  crit: notable
+  conf: 0.5
+  if:
+    type: string
+    substr: secret_words
+- id: metamask-word
+  desc: MetaMask reference
+  crit: notable
+  conf: 0.5
+  if:
+    type: string
+    word: metamask
+- id: phantom-word
+  desc: Phantom wallet reference
+  crit: notable
+  conf: 0.5
+  if:
+    type: string
+    word: phantom
+  not:
+  - PhantomJS
+  - phantomjs
+- id: browser-word
+  desc: browser wallet context
+  crit: notable
+  conf: 0.4
+  if:
+    type: string
+    regex: \bbrowser[_-]?(wallet|extension|addon)\b
+- id: word-count-check-prefix-mnemonic
+  desc: Mnemonic word count validation (mnemonic/seed)
+  conf: 0.85
+  crit: suspicious
+  if:
+    type: string
+    regex: \b(mnemonic|seed)\b.{0,40}\b(split|len|count)\b
+- id: word-count-check-prefix-words
+  desc: Mnemonic word count validation (words/phrase)
+  conf: 0.85
+  crit: suspicious
+  if:
+    type: string
+    regex: \bwords?\b.{0,40}\b(split|len|count)\b
+- id: bip39-wordlist
+  desc: BIP-39 wordlist reference
+  conf: 0.85
+  if:
+    type: string
+    regex: bip-?39|word_?list|english\.txt.{0,30}mnemonic
+- id: validation-pattern
+  desc: Mnemonic phrase validation logic
+  conf: 0.85
+  crit: suspicious
+  if:
+    type: string
+    regex: validate.{0,20}mnemonic|mnemonic.{0,20}valid|verify.{0,20}recovery
+- id: private-key-hex
+  desc: Wallet private key extraction
+  conf: 0.85
+  crit: suspicious
+  size_max: 1000000
+  if:
+    type: string
+    regex: \b(wallet|eth|btc|crypto)\b.{0,50}\bprivate_?key\b
+- id: bitcoin-wif-format
+  desc: Bitcoin WIF private key format (word)
+  conf: 0.85
+  crit: suspicious
+  if:
+    type: string
+    word: wallet_import_format
+- id: bitcoin-wif-pattern
+  desc: Bitcoin WIF private key format (pattern)
+  conf: 0.85
+  crit: suspicious
+  if:
+    type: string
+    regex: \b(wif|bitcoin)\b.{0,20}\b(wif|key|private)\b
+- id: keystore-file
+  desc: Ethereum keystore file reference
+  conf: 0.8
+  if:
+    type: string
+    regex: UTC--.{0,50}--[a-fA-F0-9]{40}|ethereum.{0,30}keystore|\.json.{0,30}wallet
+- id: variable-names-1
+  desc: Mnemonic-related variable names (mnemonic, seed)
+  conf: 0.8
+  if:
+    type: string
+    regex: \b(mnemonic|seed_?phrase)\s*[=:]
+- id: variable-names-2
+  desc: Mnemonic-related variable names (recovery, secret, wallet)
+  conf: 0.8
+  if:
+    type: string
+    regex: \b(recovery_?phrase|secret_?words|wallet_?words)\s*[=:]
+composite_rules:
+- id: derivation-path
+  desc: HD wallet derivation path (BIP-44/49/84)
+  crit: suspicious
+  conf: 0.8
+  any:
+  - id: derivation-path-bip
+  - id: derivation-path-word
+- id: word-count-check-prefix
+  desc: Mnemonic word count validation prefix
+  any:
+  - id: word-count-check-prefix-mnemonic
+  - id: word-count-check-prefix-words
+- id: bitcoin-wif
+  desc: Bitcoin WIF private key format
+  conf: 0.85
+  crit: suspicious
+  any:
+  - id: bitcoin-wif-format
+  - id: bitcoin-wif-pattern
+- id: variable-names
+  desc: Mnemonic-related variable or function names
+  conf: 0.8
+  any:
+  - id: variable-names-1
+  - id: variable-names-2
+- id: mnemonic-terms
+  desc: Mnemonic or seed phrase terminology
+  crit: notable
+  conf: 0.7
+  needs: 2
+  any:
+  - id: mnemonic-word
+  - id: seed-phrase-underscore
+  - id: seedphrase-word
+  - id: recovery-phrase-word
+  - id: secret-words-word
+- id: wallet-context
+  desc: Wallet or cryptocurrency context
+  crit: notable
+  conf: 0.7
+  needs: 2
+  any:
+  - id: objectives/impact/cryptojacking/miner::wallet-ref
+  - id: micro-behaviors/data/text/keywords::crypto-word
+  - id: metamask-word
+  - id: phantom-word
+  - id: browser-word
+- id: stealer-pattern
+  desc: Mnemonic phrase theft (extraction +
+  crit: hostile
+  conf: 0.95
+  attack: T1555
+  mbc: B0028
+  for:
+  - python
+  - javascript
+  all:
+  - id: mnemonic-terms
+  - id: micro-behaviors/communications/http/request::http-client
+  - id: wallet-context
+- id: comprehensive-stealer
+  desc: Comprehensive wallet credential theft
+  crit: hostile
+  conf: 0.95
+  attack: T1555
+  mbc: B0028
+  for:
+  - python
+  - javascript
+  - elf
+  - pe
+  - macho
+  needs: 3
+  any:
+  - id: mnemonic-terms
+  - id: private-key-hex
+  - id: keystore-file
+  - id: derivation-path
+  - id: bip39-wordlist

@@ -1,0 +1,109 @@
+traits:
+# wmi-connection: use objectives/execution/interpreter/scripting/host::winmgmts-string (canonical)
+- id: win32-process-query
+  desc: Win32_Process WMI class
+  crit: notable
+  conf: 0.75
+  platforms:
+  - windows
+  for:
+  - javascript
+  if:
+    type: string
+    substr: Win32_Process
+  attack: T1047
+  mbc: E1043
+- id: process-startup-config
+  desc: Win32_ProcessStartup config
+  crit: notable
+  conf: 0.75
+  platforms:
+  - windows
+  for:
+  - javascript
+  if:
+    type: string
+    substr: Win32_ProcessStartup
+  attack: T1047
+  mbc: E1043
+- id: wmi-get-object
+  desc: GetObject WMI retrieval
+  crit: notable
+  conf: 0.6
+  platforms:
+  - windows
+  for:
+  - javascript
+  if:
+    type: string
+    substr: GetObject(
+  attack: T1047
+- id: hidden-window-flag
+  desc: Hidden window execution
+  crit: suspicious
+  conf: 0.8
+  platforms:
+  - windows
+  for:
+  - javascript
+  if:
+    type: string
+    regex: (ShowWindow = 0|ShowWindow=0|SW_HIDE|ShowWindow\s*=\s*0)
+  attack: T1027
+  mbc: E1003
+- id: process-create-call
+  desc: Process creation via Create
+  crit: notable
+  conf: 0.75
+  platforms:
+  - windows
+  for:
+  - javascript
+  if:
+    type: string
+    substr: .Create(
+  attack: T1047
+  mbc: E1043
+composite_rules:
+- id: wmi-process-spawn
+  desc: WMI process execution
+  crit: suspicious
+  conf: 0.85
+  platforms:
+  - windows
+  for:
+  - javascript
+  attack: T1047
+  mbc: E1043
+  needs: 2
+  any:
+  - id: objectives/execution/interpreter/scripting/host::winmgmts-string
+  - id: win32-process-query
+  - id: process-startup-config
+  - id: process-create-call
+- id: wmi-fileless-malware
+  desc: WMI fileless malware
+  crit: hostile
+  conf: 0.9
+  platforms:
+  - windows
+  for:
+  - javascript
+  attack: T1047
+  mbc: E1043
+  all:
+  - id: wmi-process-spawn
+  - id: hidden-window-flag
+- id: wmi-lateral-movement
+  desc: WMI lateral movement
+  crit: hostile
+  conf: 0.9
+  platforms:
+  - windows
+  for:
+  - javascript
+  attack: T1047
+  mbc: E1080
+  all:
+  - id: wmi-process-spawn
+  - id: micro-behaviors/communications

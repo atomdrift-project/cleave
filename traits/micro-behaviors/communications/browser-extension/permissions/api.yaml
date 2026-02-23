@@ -1,0 +1,53 @@
+# Browser Extension Permission Patterns
+# Detects browser extension API capability permissions
+
+defaults:
+  for: [manifest.json]
+  crit: baseline
+  conf: 0.5
+
+traits:
+  - id: declarative-net-request
+    desc: declarativeNetRequest permission
+    if:
+      type: kv
+      path: permissions
+      exact: "declarativeNetRequest"
+
+  - id: declarative-net-request-with-host
+    desc: declarativeNetRequestWithHostAccess permission
+    if:
+      type: kv
+      path: permissions
+      exact: "declarativeNetRequestWithHostAccess"
+
+  - id: web-request
+    desc: webRequest permission
+    if:
+      type: kv
+      path: permissions
+      exact: "webRequest"
+
+  - id: web-request-blocking
+    desc: webRequestBlocking permission
+    if:
+      type: kv
+      path: permissions
+      exact: "webRequestBlocking"
+
+composite_rules:
+  - id: network-request-modification
+    desc: Extension can modify network requests
+    crit: suspicious
+    conf: 0.95
+    any:
+      - id: web-request
+      - id: web-request-blocking
+
+  - id: network-filtering
+    desc: Extension uses declarativeNetRequest
+    crit: notable
+    conf: 0.85
+    any:
+      - id: declarative-net-request
+      - id: declarative-net-request-with-host

@@ -1,0 +1,15 @@
+# Temporary File Creation - Java
+# MBC: C0046 (Create File)
+# ATT&CK: T1074
+
+defaults:
+  for: [all]
+
+traits:
+  - id: mktemp-java
+    desc: Create temporary files (Java)
+    crit: baseline
+    conf: 0.66
+    if:
+      type: string
+      substr: createTempFile

@@ -1,0 +1,185 @@
+# Shell-Specific Metrics-Based Obfuscation Detection
+# Detects shell script obfuscation patterns
+
+defaults:
+  for: [shell]
+  attack: "T1027"
+  mbc: "B0032"
+
+traits:
+  # === Shell-Specific Obfuscation Patterns ===
+  # Shell scripts legitimately use long descriptive names like:
+  # - HOMEBREW_BREW_DEFAULT_GIT_REMOTE
+  # - should_install_command_line_tools
+  # - check_run_command_as_root
+  # These have high entropy but aren't obfuscation - use higher thresholds
+
+  # Override generic many-high-entropy-identifiers for shell
+  - id: sh-many-high-entropy-identifiers
+    desc: "Many high-entropy identifiers in shell"
+    crit: suspicious
+    conf: 0.85
+    if:
+      type: metrics
+      field: identifiers.high_entropy_ratio
+      min: 0.40
+
+  - id: sh-single-char-vars
+    desc: "Excessive single-character variables"
+    crit: suspicious
+    conf: 0.8
+    if:
+      type: metrics
+      field: identifiers.single_char_ratio
+      min: 0.40
+
+  # Override generic high-entropy-identifiers for shell (avg_entropy)
+  - id: sh-high-entropy-identifiers
+    desc: "High entropy identifiers"
+    crit: suspicious
+    conf: 0.85
+    if:
+      type: metrics
+      field: identifiers.avg_entropy
+      min: 3.2
+
+  # Override generic high-entropy-function-names for shell
+  - id: sh-high-entropy-functions
+    desc: "High-entropy function names"
+    crit: notable
+    conf: 0.85
+    if:
+      type: metrics
+      field: functions.high_entropy_names
+      min: 10
+    unless:
+      - type: raw
+        regex: 'PROGRAM=libtool|PACKAGE=libtool|# libtool \(GNU libtool\)'
+      - type: raw
+        regex: 'usage\(\)\s*\{|help\(\)\s*\{|logger\(\)\s*\{|_logger'
+
+  - id: sh-encoded-payload
+    desc: "Shell script with encoded payload"
+    crit: suspicious
+    conf: 0.85
+    if:
+      type: raw
+      regex: "(^|[\\x22\\x27\\s])[A-Za-z0-9+/]{120,}={0,2}([\\x22\\x27\\s]|$)"
+
+  - id: sh-long-lines
+    desc: "Very long shell lines (compressed/obfuscated)"
+    crit: notable
+    conf: 0.8
+    if:
+      type: metrics
+      field: text.max_line_length
+      min: 300
+
+  - id: sh-no-functions
+    desc: "No shell functions (inline obfuscation)"
+    crit: notable
+    conf: 0.6
+    if:
+      type: metrics
+      field: functions.total
+      max: 0
+      min_size: 2048
+    unless:
+      # Exclude Perl wrapper scripts (polyglots)
+      - type: raw
+        substr: "eval 'exec perl -wSx \"$0\" \"$@\"'"
+
+  # === Density-Based String Obfuscation ===
+  # Shell scripts use various encoding tricks to hide payloads.
+
+  # $'\xNN' hex escapes - ANSI-C quoting for hiding strings
+  - id: sh-dense-hex-escapes
+    desc: Dense ANSI-C hex escapes
+    crit: suspicious
+    conf: 0.90
+    mbc: "B0032"
+    attack: "T1027"
+    if:
+      type: raw
+      regex: "\\$'[^']{0,120}\\\\x[0-9a-fA-F]{2}"
+      count_min: 5
+      per_kb_min: 1.0
+
+  # $'\NNN' octal escapes
+  - id: sh-dense-octal-escapes
+    desc: Dense ANSI-C octal escapes
+    crit: suspicious
+    conf: 0.88
+    mbc: "B0032"
+    attack: "T1027"
+    if:
+      type: raw
+      regex: "\\$'[^']{0,120}\\\\[0-7]{3}"
+      count_min: 5
+      per_kb_min: 1.0
+
+  # Nested command substitution used to hide commands
+  - id: sh-dense-command-subst
+    desc: Dense nested command substitution
+    crit: suspicious
+    conf: 0.85
+    mbc: "B0032"
+    attack: "T1027"
+    if:
+      type: raw
+      regex: "\\$\\([^)]{0,120}\\$\\("
+      count_min: 4
+      per_kb_min: 0.8
+
+  # eval chains: eval "$(eval "$(..."
+  - id: sh-dense-eval-chains
+    desc: Dense eval chains
+    crit: suspicious
+    conf: 0.92
+    mbc: "B0032"
+    attack: "T1027"
+    if:
+      type: raw
+      regex: "eval\\s"
+      count_min: 3
+      per_kb_min: 0.5
+
+  # printf with hex/octal used to decode payloads
+  - id: sh-dense-printf-decode
+    desc: Dense printf decoding
+    crit: suspicious
+    conf: 0.88
+    mbc: "B0032"
+    attack: "T1027"
+    if:
+      type: raw
+      regex: 'printf\s+["\x27]%s["\x27]|printf\s+["\x27]\\\\x'
+      count_min: 4
+      per_kb_min: 0.8
+
+composite_rules:
+  - id: sh-encoded-dropper
+    desc: "Shell script with encoded payload"
+    crit: hostile
+    conf: 0.9
+    all:
+      - id: objectives/anti-static/obfuscation/code-metrics::sh-encoded-payload
+      - id: objectives/anti-static/obfuscation/code-metrics/structure::no-comments
+    any:
+      - id: objectives/anti-static/obfuscation/code-metrics::sh-long-lines
+    unless:
+      - id: metadata/format/json::valid
+
+  - id: sh-compact-malware
+    desc: "Compacted shell malware pattern"
+    crit: suspicious
+    conf: 0.85
+    needs: 2
+    any:
+      - id: objectives/anti-static/obfuscation/code-metrics::sh-single-char-vars
+      - id: objectives/anti-static/obfuscation/code-metrics::sh-long-lines
+      - id: objectives/anti-static/obfuscation/code-metrics/structure::no-comments
+      - id: objectives/anti-static/obfuscation/code-metrics::sh-no-functions
+    unless:
+      - id: metadata/format/json::valid
+      - id: metadata/lang::ps-valid

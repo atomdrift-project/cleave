@@ -1,0 +1,53 @@
+# TCC (Transparency Consent Control) database manipulation
+# Removes privacy and tracking records from macOS privacy database
+# ATT&CK: T1070 (Indicator Removal), T1562.001 (Impair Defenses)
+# MBC: B0047 (Defense Evasion)
+
+defaults:
+  for: [all]
+
+traits:
+  - id: ccutil-reset-appleevents
+    desc: tccutil reset AppleEvents (TCC database wipe)
+    crit: suspicious
+    conf: 0.95
+    mbc: "B0047"
+    attack: "T1070,T1562.001"
+    platforms: [macos]
+    if:
+      type: string
+      regex: '(tcc|cc)util\s+reset\s+AppleEvents'
+      case_insensitive: true
+
+  - id: ccutil-reset-generic
+    desc: ccutil reset command (TCC database manipulation)
+    crit: suspicious
+    conf: 0.90
+    mbc: "B0047"
+    attack: "T1070,T1562.001"
+    platforms: [macos]
+    if:
+      type: string
+      word: "ccutil"
+
+  - id: tcc-delete-command
+    desc: TCC database deletion or modification
+    crit: suspicious
+    conf: 0.85
+    attack: "T1070,T1562.001"
+    platforms: [macos]
+    if:
+      type: string
+      regex: 'tccutil\s+reset|rm\s+.{0,50}tcc\.db'
+      case_insensitive: true
+
+composite_rules:
+  - id: tcc-bypass
+    desc: macOS TCC database evasion
+    crit: suspicious
+    conf: 0.95
+    platforms: [macos]
+    for: [macho, shell, python, ruby, javascript, go, perl, applescript]
+    any:
+      - id: ccutil-reset-appleevents
+      - id: tcc-delete-command

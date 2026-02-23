@@ -1,0 +1,101 @@
+# Go-specific Wiper/Destruction Patterns
+# Detects destructive patterns in Go source code and compiled binaries
+
+defaults:
+  for: [go, elf, macho, pe]
+  attack: "T1485"
+
+traits:
+  # Overwrite and remove pattern (Secure Wipe)
+  - id: secure-wipe-pattern
+    desc: Opens file for read-write and
+    crit: notable
+    conf: 0.8
+    if:
+      type: yara
+      source: |
+        rule go_secure_wipe {
+          strings:
+            $open = /os\.OpenFile\(.{0,50}os\.O_RDWR/ ascii
+            $write = /\.Write(At)?\(/ ascii
+            $remove = "os.Remove" ascii
+          condition:
+            all of them
+        }
+
+  # Known Wiper Standards
+  - id: standards-reference
+    desc: References to secure wiping standards
+    crit: notable
+    conf: 0.9
+    if:
+      type: yara
+      source: |
+        rule wiper_standards {
+          strings:
+            $s1 = "Gutmann" ascii nocase
+            $s2 = "DoD 5220.22-M" ascii
+            $s3 = "VSITR" ascii
+            $s4 = "US DoD" ascii
+          condition:
+            any of them
+        }
+
+  # Specific overwriting patterns (Gutmann)
+  - id: gutmann-patterns
+    desc: Uses Gutmann secure deletion overwrite
+    crit: notable
+    conf: 0.95
+    if:
+      type: yara
+      source: |
+        rule gutmann_patterns {
+          strings:
+            // Match both raw bytes (for binaries) and escape sequences (for source)
+            $p1_raw = { 92 49 24 }
+            $p1_src = "\\x92\\x49\\x24" ascii
+            $p2_raw = { 49 24 92 }
+            $p2_src = "\\x49\\x24\\x92" ascii
+            $p3_raw = { 24 92 49 }
+            $p3_src = "\\x24\\x92\\x49" ascii
+            $p4_raw = { 6D B6 DB }
+            $p4_src = "\\x6D\\xB6\\xDB" ascii
+            $p5_raw = { B6 DB 6D }
+            $p5_src = "\\xB6\\xDB\\x6D" ascii
+            $p6_raw = { DB 92 49 }
+            $p6_src = "\\xDB\\x92\\x49" ascii
+          condition:
+            5 of them
+        }
+
+  # Mass file destruction (Go)
+  - id: mass-destruction
+    desc: Recursively walks filesystem and deletes/overwrites
+    crit: suspicious
+    conf: 0.85
+    if:
+      type: yara
+      source: |
+        rule go_mass_destruction {
+          strings:
+            $walk1 = "filepath.Walk" ascii
+            $walk2 = "filepath.WalkDir" ascii
+            $remove1 = "os.Remove" ascii
+            $remove2 = "os.RemoveAll" ascii
+          condition:
+            any of ($walk*) and any of ($remove*)
+        }
+
+composite_rules:
+  # Secure wiper detection
+  - id: secure-wiper
+    desc: Highly confident secure wiper (recursive
+    crit: suspicious
+    conf: 0.99
+    mbc: "B0031"
+    needs: 2
+    any:
+      - id: secure-wipe-pattern
+      - id: mass-destruction
+      - id: standards-reference
+      - id: gutmann-patterns

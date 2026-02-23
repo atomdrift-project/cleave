@@ -1,0 +1,846 @@
+//! PE (Portable Executable) analyzer for Windows binaries.
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
+use crate::analyzers::Analyzer;
+use crate::capabilities::CapabilityMapper;
+use crate::entropy::{calculate_entropy, EntropyLevel};
+use crate::radare2::Radare2Analyzer;
+use crate::strings::StringExtractor;
+use crate::types::*;
+use crate::yara_engine::YaraEngine;
+use anyhow::{Context, Result};
+use goblin::pe::PE;
+use std::fs;
+use std::path::Path;
+use std::sync::Arc;
+
+/// Analyzer for Windows PE binaries (executables, DLLs, drivers)
+#[derive(Debug)]
+pub struct PEAnalyzer {
+    capability_mapper: Arc<CapabilityMapper>,
+    radare2: Radare2Analyzer,
+    string_extractor: StringExtractor,
+    yara_engine: Option<Arc<YaraEngine>>,
+    /// Pre-extracted strings from stng (avoids redundant extraction)
+    preextracted_strings: Option<Vec<StringInfo>>,
+}
+
+impl PEAnalyzer {
+    /// Creates a new PE analyzer with default configuration
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            capability_mapper: Arc::new(CapabilityMapper::empty()),
+            radare2: Radare2Analyzer::new(),
+            string_extractor: StringExtractor::new(),
+            yara_engine: None,
+            preextracted_strings: None,
+        }
+    }
+
+    /// Create analyzer with shared YARA engine
+    #[allow(dead_code)] // Used by binary target
+    #[must_use]
+    pub(crate) fn with_yara_arc(mut self, yara_engine: Arc<YaraEngine>) -> Self {
+        self.yara_engine = Some(yara_engine);
+        self
+    }
+
+    /// Create analyzer with pre-existing capability mapper (wraps in Arc)
+    #[must_use]
+    pub(crate) fn with_capability_mapper(mut self, capability_mapper: CapabilityMapper) -> Self {
+        self.capability_mapper = Arc::new(capability_mapper);
+        self
+    }
+
+    /// Create analyzer with shared capability mapper (avoids cloning)
+    #[must_use]
+    pub(crate) fn with_capability_mapper_arc(
+        mut self,
+        capability_mapper: Arc<CapabilityMapper>,
+    ) -> Self {
+        self.capability_mapper = capability_mapper;
+        self
+    }
+
+    /// Set pre-extracted strings (avoids redundant stng/radare2 extraction)
+    #[must_use]
+    #[allow(dead_code)] // Used by binary target, not visible to library
+    pub(crate) fn with_preextracted_strings(mut self, strings: Vec<StringInfo>) -> Self {
+        self.preextracted_strings = Some(strings);
+        self
+    }
+
+    /// Structural analysis of a PE binary (no main YARA scan, no trait evaluation).
+    /// Overlay analysis (self-extracting archives) still runs and uses the YARA engine
+    /// stored in this analyzer if set. Callers are responsible for running the main YARA
+    /// scan and calling `evaluate_and_merge_findings` on the returned report.
+    pub(crate) fn analyze_structural(
+        &self,
+        file_path: &Path,
+        data: &[u8],
+    ) -> Result<AnalysisReport> {
+        let start = std::time::Instant::now();
+
+        // Parse with goblin
+        let pe = PE::parse(data)?;
+
+        // Compute PE-specific metrics early
+        let pe_metrics = self.compute_pe_metrics(&pe, data);
+
+        // Calculate code_size from goblin section characteristics (more accurate than radare2)
+        let goblin_code_size = self.compute_code_size(&pe);
+
+        // Create target info
+        let target = TargetInfo {
+            path: file_path.display().to_string(),
+            file_type: "pe".to_string(),
+            size_bytes: data.len() as u64,
+            sha256: crate::analyzers::utils::calculate_sha256(data),
+            architectures: Some(vec![self.arch_name(&pe)]),
+        };
+
+        let mut report = AnalysisReport::new(target);
+        let mut tools_used = vec!["goblin".to_string()];
+
+        // Analyze header and structure
+        self.analyze_structure(&pe, &mut report);
+
+        // Extract imports and map to capabilities
+        self.analyze_imports(&pe, &mut report);
+
+        // Analyze exports
+        self.analyze_exports(&pe, &mut report);
+
+        // Analyze sections and entropy
+        self.analyze_sections(&pe, data, &mut report);
+
+        // Use radare2 for deep analysis if available - SINGLE r2 spawn for all data
+        let r2_strings = if Radare2Analyzer::is_available() {
+            tools_used.push("radare2".to_string());
+
+            // Use batched extraction - single r2 session for functions, sections, strings, imports
+            // PE binaries with no imports are packed/obfuscated; skip aa in that case.
+            let has_symbols = !pe.imports.is_empty();
+            if let Ok(batched) = self.radare2.extract_batched(file_path, has_symbols) {
+                // Compute metrics from batched data
+                let mut binary_metrics = self
+                    .radare2
+                    .compute_metrics_from_batched(&batched, data.len() as u64);
+
+                // Override code_size with goblin-based calculation (more accurate)
+                // In PE, only sections with IMAGE_SCN_MEM_EXECUTE characteristic contain executable code
+                let mut code_size = goblin_code_size;
+
+                // Sanity check: code_size should never exceed file size
+                if code_size > binary_metrics.file_size {
+                    eprintln!("WARNING: code_size ({}) > file_size ({}) - this indicates a bug in section classification", code_size, binary_metrics.file_size);
+                    code_size = binary_metrics.file_size; // Cap at file_size to prevent invalid ratio
+                }
+
+                binary_metrics.code_size = code_size;
+
+                // Recalculate code_to_data_ratio with correct code_size
+                if binary_metrics.file_size > 0 {
+                    let data_size = binary_metrics.file_size.saturating_sub(code_size);
+                    if data_size > 0 {
+                        binary_metrics.code_to_data_ratio = code_size as f32 / data_size as f32;
+
+                        // Sanity check: extremely high ratio likely indicates classification bug
+                        if binary_metrics.code_to_data_ratio > 1000.0 {
+                            eprintln!("WARNING: code_to_data_ratio ({:.2}) > 1000 - this may indicate a bug", binary_metrics.code_to_data_ratio);
+                        }
+                    }
+                }
+
+                // Recalculate density metrics that depend on code_size
+                let code_kb = goblin_code_size as f32 / 1024.0;
+                if code_kb > 0.0 {
+                    binary_metrics.import_density = binary_metrics.import_count as f32 / code_kb;
+                    binary_metrics.string_density = binary_metrics.string_count as f32 / code_kb;
+                    binary_metrics.function_density =
+                        binary_metrics.function_count as f32 / code_kb;
+                    binary_metrics.relocation_density =
+                        binary_metrics.relocation_count as f32 / code_kb;
+                    binary_metrics.complexity_per_kb =
+                        binary_metrics.avg_complexity * 1024.0 / goblin_code_size as f32;
+                }
+
+                report.metrics = Some(Metrics {
+                    binary: Some(binary_metrics),
+                    pe: Some(pe_metrics),
+                    ..Default::default()
+                });
+
+                // Convert R2Functions to Functions for the report
+                report.functions = batched.functions.into_iter().map(Function::from).collect();
+
+                // Use strings from batched data (no extra r2 spawn)
+                Some(batched.strings)
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        // Use pre-extracted strings if available, otherwise extract with stng/r2
+        if let Some(ref strings) = self.preextracted_strings {
+            report.strings = strings.clone();
+        } else {
+            // Extract strings using language-aware extraction (Go/Rust)
+            report.strings = self.string_extractor.extract_smart(data, r2_strings);
+        }
+        tools_used.push("stng".to_string());
+
+        // Analyze embedded code in strings
+        let (encoded_layers, plain_findings) =
+            crate::analyzers::embedded_code_detector::process_all_strings(
+                &file_path.display().to_string(),
+                &report.strings,
+                &self.capability_mapper,
+                0,
+            );
+        report.files.extend(encoded_layers);
+        report.findings.extend(plain_findings);
+
+        // Update binary metrics with final counts and compute ratios
+        if let Some(ref mut metrics) = report.metrics {
+            if let Some(ref mut binary) = metrics.binary {
+                binary.import_count = report.imports.len() as u32;
+                binary.export_count = report.exports.len() as u32;
+                binary.string_count = report.strings.len() as u32;
+                binary.file_size = data.len() as u64;
+
+                // Compute largest section ratio
+                if binary.file_size > 0 && !report.sections.is_empty() {
+                    let max_section_size =
+                        report.sections.iter().map(|s| s.size).max().unwrap_or(0);
+                    binary.largest_section_ratio =
+                        max_section_size as f32 / binary.file_size as f32;
+                }
+
+                // Compute ratio metrics
+                crate::radare2::Radare2Analyzer::compute_ratio_metrics(binary);
+            }
+        }
+
+        // Validate metric ranges to catch calculation bugs
+        if let Some(ref metrics) = report.metrics {
+            if let Some(ref binary) = metrics.binary {
+                binary.validate();
+            }
+        }
+
+        // Analyze overlay data for self-extracting archives
+        // Calculate the actual end of PE sections (not just SizeOfImage)
+        // Many SFX archives embed the archive within the SizeOfImage but after the last section
+        let sections_end = pe
+            .sections
+            .iter()
+            .map(|s| (s.pointer_to_raw_data + s.size_of_raw_data) as u64)
+            .max()
+            .unwrap_or(0);
+
+        if (data.len() as u64) > sections_end && sections_end > 0 {
+            let overlay_start = sections_end as usize;
+            let overlay_data = &data[overlay_start..];
+
+            // Try to analyze overlay as an archive
+            match crate::analyzers::overlay::analyze_overlay(
+                overlay_data,
+                &report.target.path,
+                Some(self.capability_mapper.clone()),
+                self.yara_engine.clone(),
+            ) {
+                Ok(Some(overlay_analysis)) => {
+                    // Get PE filename for path encoding
+                    let pe_filename = std::path::Path::new(&report.target.path)
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or("binary.exe");
+
+                    // Add SFX finding
+                    report.findings.push(overlay_analysis.sfx_finding);
+
+                    // Merge archive findings into PE report
+                    for mut finding in overlay_analysis.archive_report.findings {
+                        // Update evidence locations to use archive path format
+                        for evidence in &mut finding.evidence {
+                            if let Some(ref loc) = evidence.location {
+                                // If location already has archive: prefix, update the path
+                                if let Some(rest) = loc.strip_prefix("archive:") {
+                                    evidence.location = Some(format!(
+                                        "archive:{}{}{}",
+                                        pe_filename,
+                                        crate::types::file_analysis::ARCHIVE_DELIMITER,
+                                        rest
+                                    ));
+                                } else if !loc
+                                    .contains(crate::types::file_analysis::ARCHIVE_DELIMITER)
+                                {
+                                    // No archive prefix yet, add it with PE path
+                                    evidence.location = Some(format!(
+                                        "archive:{}{}{}",
+                                        pe_filename,
+                                        crate::types::file_analysis::ARCHIVE_DELIMITER,
+                                        loc
+                                    ));
+                                }
+                            }
+                        }
+                        report.findings.push(finding);
+                    }
+
+                    // Merge archive contents with proper path encoding
+                    for mut entry in overlay_analysis.archive_report.archive_contents {
+                        // Encode path using standard archive delimiter
+                        if !entry
+                            .path
+                            .contains(crate::types::file_analysis::ARCHIVE_DELIMITER)
+                        {
+                            entry.path = crate::types::file_analysis::encode_archive_path(
+                                pe_filename,
+                                &entry.path,
+                            );
+                        }
+                        report.archive_contents.push(entry);
+                    }
+
+                    // Merge strings from archive
+                    report
+                        .strings
+                        .extend(overlay_analysis.archive_report.strings);
+
+                    // Add tools used from archive analysis
+                    for tool in overlay_analysis.archive_report.metadata.tools_used {
+                        if !tools_used.contains(&tool) {
+                            tools_used.push(tool);
+                        }
+                    }
+                }
+                Ok(None) => {
+                    // Overlay exists but is not an archive (signature, resources, etc.)
+                }
+                Err(_e) => {
+                    // Overlay extraction/analysis failed - silently skip
+                    // (could be corrupted archive, unsupported format, etc.)
+                }
+            }
+        }
+
+        report.metadata.analysis_duration_ms = start.elapsed().as_millis() as u64;
+        report.metadata.tools_used = tools_used;
+
+        Ok(report)
+    }
+
+    fn analyze_structure<'a>(&self, pe: &PE<'a>, report: &mut AnalysisReport) {
+        report.structure.push(StructuralFeature {
+            id: "pe/header".to_string(),
+            desc: format!(
+                "PE file (machine: {}, subsystem: {:?})",
+                self.arch_name(pe),
+                pe.header
+                    .optional_header
+                    .as_ref()
+                    .map(|h| h.windows_fields.subsystem)
+            ),
+            evidence: vec![Evidence {
+                method: "header".to_string(),
+                source: "goblin".to_string(),
+                value: "PE".to_string(),
+                location: None,
+            }],
+        });
+
+        // Check if DLL
+        if pe.is_lib {
+            report.structure.push(StructuralFeature {
+                id: "pe/dll".to_string(),
+                desc: "Dynamic Link Library (DLL)".to_string(),
+                evidence: vec![Evidence {
+                    method: "header".to_string(),
+                    source: "goblin".to_string(),
+                    value: "DLL".to_string(),
+                    location: None,
+                }],
+            });
+        }
+
+        // Check for .NET
+        if pe.header.optional_header.is_some() {
+            report.structure.push(StructuralFeature {
+                id: "pe/optional_header".to_string(),
+                desc: "Has optional header (standard Windows executable)".to_string(),
+                evidence: vec![Evidence {
+                    method: "header".to_string(),
+                    source: "goblin".to_string(),
+                    value: "OptionalHeader".to_string(),
+                    location: None,
+                }],
+            });
+        }
+    }
+
+    fn analyze_imports<'a>(&self, pe: &PE<'a>, report: &mut AnalysisReport) {
+        for import in &pe.imports {
+            report.imports.push(Import::new(
+                import.name.as_ref(),
+                Some(import.dll.to_string()),
+                "goblin",
+            ));
+
+            let normalized = crate::types::binary::normalize_symbol(import.name.as_ref());
+            if let Some(capability) = self.capability_mapper.lookup(&normalized, "goblin") {
+                if !report.findings.iter().any(|c| c.id == capability.id) {
+                    report.findings.push(capability);
+                }
+            }
+        }
+    }
+
+    fn analyze_exports<'a>(&self, pe: &PE<'a>, report: &mut AnalysisReport) {
+        for export in &pe.exports {
+            if let Some(name) = export.name {
+                report.exports.push(Export::new(
+                    name,
+                    Some(format!("{:#x}", export.rva)),
+                    "goblin",
+                ));
+            }
+        }
+    }
+
+    fn analyze_sections<'a>(&self, pe: &PE<'a>, data: &[u8], report: &mut AnalysisReport) {
+        for section in &pe.sections {
+            let name = String::from_utf8_lossy(&section.name)
+                .trim_matches(char::from(0))
+                .to_string();
+            let size = section.size_of_raw_data as u64;
+            let offset = section.pointer_to_raw_data as u64;
+
+            let characteristics = section.characteristics;
+            let is_executable = (characteristics & 0x20000000) != 0;
+            let is_writable = (characteristics & 0x80000000) != 0;
+            let is_readable = (characteristics & 0x40000000) != 0;
+
+            let permissions = format!(
+                "{}{}{}",
+                if is_readable { "r" } else { "-" },
+                if is_writable { "w" } else { "-" },
+                if is_executable { "x" } else { "-" }
+            );
+
+            let entropy = if offset < data.len() as u64 {
+                let end = ((offset + size) as usize).min(data.len());
+                let section_data = &data[offset as usize..end];
+                calculate_entropy(section_data)
+            } else {
+                0.0
+            };
+
+            let _entropy_level = if entropy > 7.2 {
+                EntropyLevel::High
+            } else if entropy > 6.0 {
+                EntropyLevel::Elevated
+            } else if entropy > 4.0 {
+                EntropyLevel::Normal
+            } else {
+                EntropyLevel::VeryLow
+            };
+
+            report.sections.push(Section {
+                name: name.clone(),
+                address: Some(section.virtual_address as u64),
+                size,
+                entropy,
+                permissions: Some(permissions.clone()),
+            });
+
+            // NOTE: High entropy executable detection moved to YAML:
+            // - traits/objectives/anti-analysis/packing/high-entropy-executable.yaml
+            // NOTE: W^X section detection moved to YAML:
+            // - traits/objectives/anti-static/hardening/memory/wx-sections.yaml
+        }
+    }
+
+    fn arch_name<'a>(&self, pe: &PE<'a>) -> String {
+        match pe.header.coff_header.machine {
+            0x014c => "x86".to_string(),
+            0x8664 => "x86_64".to_string(),
+            0x01c0 => "ARM".to_string(),
+            0xaa64 => "ARM64".to_string(),
+            _ => format!("unknown-{:#x}", pe.header.coff_header.machine),
+        }
+    }
+
+    /// Compute PE-specific metrics from parsed PE binary
+    fn compute_pe_metrics<'a>(
+        &self,
+        pe: &PE<'a>,
+        data: &[u8],
+    ) -> crate::types::binary_metrics::PeMetrics {
+        use crate::types::binary_metrics::PeMetrics;
+
+        let mut metrics = PeMetrics::default();
+
+        // Timestamp anomaly check
+        let timestamp = pe.header.coff_header.time_date_stamp;
+        if timestamp < 631152000 {
+            // Before 1990
+            metrics.timestamp_anomaly = true;
+        } else if timestamp > chrono::Utc::now().timestamp() as u32 + 31536000 {
+            // More than 1 year in future
+            metrics.timestamp_anomaly = true;
+        }
+
+        // Check for Rich header (between DOS and PE signature)
+        let dos_header = pe.header.dos_header;
+        let pe_offset = dos_header.pe_pointer as usize;
+        if pe_offset > 0x80 {
+            // Rich header typically found here
+            for i in (0x80..pe_offset.min(0x200)).step_by(4) {
+                if i + 4 <= data.len() && &data[i..i + 4] == b"Rich" {
+                    metrics.rich_header_present = true;
+                    break;
+                }
+            }
+        }
+
+        // Check for .NET by looking for .NET-specific sections
+        for section in &pe.sections {
+            if let Ok(name) = section.name() {
+                if name == ".text" && section.virtual_size > 0 {
+                    // Check for .NET by looking for mscoree.dll import
+                    for import in &pe.imports {
+                        if import.dll.to_lowercase().contains("mscoree") {
+                            metrics.is_dotnet = true;
+                            break;
+                        }
+                    }
+                }
+
+                // Check resource section
+                if name == ".rsrc" {
+                    metrics.rsrc_size = section.size_of_raw_data as u64;
+                    // Compute entropy from section data
+                    let section_start = section.pointer_to_raw_data as usize;
+                    let section_end = section_start + section.size_of_raw_data as usize;
+                    if section_end <= data.len() {
+                        let section_data = &data[section_start..section_end];
+                        metrics.rsrc_entropy =
+                            crate::entropy::calculate_entropy(section_data) as f32;
+                    }
+                }
+            }
+        }
+
+        // Check for overlay data (appended after PE image)
+        // This can be:
+        // 1. Code signature (PKCS7)
+        // 2. Self-extracting archive (7z, ZIP, RAR)
+        // 3. Resources or other data
+        if let Some(opt_header) = &pe.header.optional_header {
+            let image_size = opt_header.windows_fields.size_of_image as u64;
+            if (data.len() as u64) > image_size {
+                let overlay_start = image_size as usize;
+                let overlay_data = &data[overlay_start..];
+
+                // Check if overlay looks like PKCS7 signature (starts with 0x30)
+                if !overlay_data.is_empty() && overlay_data[0] == 0x30 {
+                    metrics.has_signature = true;
+                }
+            }
+        }
+
+        // Ordinal-only imports
+        for import in &pe.imports {
+            if import.name.is_empty() {
+                metrics.ordinal_imports += 1;
+            }
+        }
+
+        // Export forwarders (exports with "." in name indicating forwarding)
+        for export in &pe.exports {
+            if let Some(name) = export.name {
+                if name.contains('.') {
+                    metrics.export_forwarders += 1;
+                }
+            }
+        }
+
+        // Section alignment check
+        if let Some(opt_header) = &pe.header.optional_header {
+            let file_alignment = opt_header.windows_fields.file_alignment;
+            let section_alignment = opt_header.windows_fields.section_alignment;
+
+            // Typical alignments: 0x200 (512) for file, 0x1000 (4096) for section
+            // Unusual if they're equal, very small, or very large
+            if file_alignment == section_alignment
+                || !(0x200..=0x10000).contains(&file_alignment)
+                || !(0x1000..=0x100000).contains(&section_alignment)
+            {
+                metrics.unusual_alignment = true;
+            }
+        }
+
+        metrics
+    }
+
+    /// Calculate code size from PE section headers using IMAGE_SCN_MEM_EXECUTE characteristic
+    /// This is more accurate than radare2's section classification
+    fn compute_code_size<'a>(&self, pe: &PE<'a>) -> u64 {
+        const IMAGE_SCN_MEM_EXECUTE: u32 = 0x20000000; // Section contains executable code
+
+        let mut code_size: u64 = 0;
+
+        for section in &pe.sections {
+            // Check if section has IMAGE_SCN_MEM_EXECUTE characteristic set
+            if section.characteristics & IMAGE_SCN_MEM_EXECUTE != 0 {
+                code_size += section.size_of_raw_data as u64;
+            }
+        }
+
+        code_size
+    }
+}
+
+impl Default for PEAnalyzer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Analyzer for PEAnalyzer {
+    fn analyze(&self, file_path: &Path) -> Result<AnalysisReport> {
+        let data = fs::read(file_path).context("Failed to read file")?;
+        let mut report = self.analyze_structural(file_path, &data)?;
+        self.capability_mapper
+            .evaluate_and_merge_findings(&mut report, &data, None, None);
+        Ok(report)
+    }
+
+    fn can_analyze(&self, file_path: &Path) -> bool {
+        if let Ok(data) = fs::read(file_path) {
+            goblin::pe::PE::parse(&data).is_ok()
+        } else {
+            false
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    fn test_pe_path() -> PathBuf {
+        PathBuf::from("tests/fixtures/test.exe")
+    }
+
+    #[test]
+    fn test_can_analyze_pe() {
+        let analyzer = PEAnalyzer::new();
+        let test_file = test_pe_path();
+
+        if test_file.exists() {
+            assert!(analyzer.can_analyze(&test_file));
+        }
+    }
+
+    #[test]
+    fn test_cannot_analyze_non_pe() {
+        let analyzer = PEAnalyzer::new();
+        assert!(!analyzer.can_analyze(&PathBuf::from("/dev/null")));
+        assert!(!analyzer.can_analyze(&PathBuf::from("tests/fixtures/test.elf")));
+    }
+
+    #[test]
+    fn test_analyze_pe_file() {
+        let analyzer = PEAnalyzer::new();
+        let test_file = test_pe_path();
+
+        if !test_file.exists() {
+            return;
+        }
+
+        let result = analyzer.analyze(&test_file);
+        assert!(result.is_ok());
+
+        let report = result.unwrap();
+        assert_eq!(report.target.file_type, "pe");
+        assert!(report.target.size_bytes > 0);
+        assert!(!report.target.sha256.is_empty());
+    }
+
+    #[test]
+    fn test_pe_has_structure() {
+        let analyzer = PEAnalyzer::new();
+        let test_file = test_pe_path();
+
+        if !test_file.exists() {
+            return;
+        }
+
+        let report = analyzer.analyze(&test_file).unwrap();
+        assert!(!report.structure.is_empty());
+    }
+
+    #[test]
+    fn test_pe_architecture_detected() {
+        let analyzer = PEAnalyzer::new();
+        let test_file = test_pe_path();
+
+        if !test_file.exists() {
+            return;
+        }
+
+        let report = analyzer.analyze(&test_file).unwrap();
+        assert!(report.target.architectures.is_some());
+        let archs = report.target.architectures.unwrap();
+        assert!(!archs.is_empty());
+    }
+
+    #[test]
+    fn test_pe_sections_analyzed() {
+        let analyzer = PEAnalyzer::new();
+        let test_file = test_pe_path();
+
+        if !test_file.exists() {
+            return;
+        }
+
+        let report = analyzer.analyze(&test_file).unwrap();
+        assert!(!report.sections.is_empty());
+    }
+
+    #[test]
+    fn test_pe_has_imports() {
+        let analyzer = PEAnalyzer::new();
+        let test_file = test_pe_path();
+
+        if !test_file.exists() {
+            return;
+        }
+
+        let report = analyzer.analyze(&test_file).unwrap();
+        assert!(!report.imports.is_empty());
+    }
+
+    #[test]
+    fn test_pe_capabilities_detected() {
+        let analyzer = PEAnalyzer::new();
+        let test_file = test_pe_path();
+
+        if !test_file.exists() {
+            return;
+        }
+
+        let report = analyzer.analyze(&test_file).unwrap();
+        // Capabilities may or may not be detected depending on the binary
+        // Just verify the analysis completes successfully
+        let _ = &report.traits;
+    }
+
+    #[test]
+    fn test_pe_strings_extracted() {
+        let analyzer = PEAnalyzer::new();
+        let test_file = test_pe_path();
+
+        if !test_file.exists() {
+            return;
+        }
+
+        let report = analyzer.analyze(&test_file).unwrap();
+        assert!(!report.strings.is_empty());
+    }
+
+    #[test]
+    fn test_pe_tools_used() {
+        let analyzer = PEAnalyzer::new();
+        let test_file = test_pe_path();
+
+        if !test_file.exists() {
+            return;
+        }
+
+        let report = analyzer.analyze(&test_file).unwrap();
+        assert!(report.metadata.tools_used.contains(&"goblin".to_string()));
+    }
+
+    #[test]
+    fn test_pe_analysis_duration() {
+        let analyzer = PEAnalyzer::new();
+        let test_file = test_pe_path();
+
+        if !test_file.exists() {
+            return;
+        }
+
+        let report = analyzer.analyze(&test_file).unwrap();
+        // Duration may be 0 for very fast analysis (sub-millisecond).
+        // The important thing is that analysis completes and the field is set.
+        // Duration is a u64, so it's always >= 0.
+        assert!(
+            report.metadata.analysis_duration_ms < 60000,
+            "Analysis should complete in under a minute"
+        );
+    }
+
+    #[test]
+    fn test_analyze_self_extracting_7z() {
+        // Test with real 7z self-extracting installer if available
+        let test_file =
+            std::path::Path::new("/Users/t/data/flayer/malware/pe/2026.7zip.com/7z2501-x64.exe");
+
+        if !test_file.exists() {
+            eprintln!("Skipping SFX test - file not found: {:?}", test_file);
+            return;
+        }
+
+        let analyzer = PEAnalyzer::new();
+        let report = analyzer.analyze(test_file).unwrap();
+
+        // Should detect the self-extracting archive
+        assert!(
+            report
+                .findings
+                .iter()
+                .any(|f| f.id.contains("self-extracting")),
+            "Should detect self-extracting archive"
+        );
+
+        // Should have analyzed the embedded archive contents
+        assert!(
+            !report.archive_contents.is_empty(),
+            "Should have extracted archive contents"
+        );
+
+        // Should have findings from the embedded files
+        eprintln!(
+            "SFX analysis found {} files in archive",
+            report.archive_contents.len()
+        );
+        eprintln!(
+            "SFX analysis found {} total findings",
+            report.findings.len()
+        );
+
+        // All archive content paths should use standard archive delimiter
+        for entry in &report.archive_contents {
+            assert!(
+                entry
+                    .path
+                    .contains(crate::types::file_analysis::ARCHIVE_DELIMITER),
+                "Archive path should use '!!': {}",
+                entry.path
+            );
+            assert!(
+                entry.path.starts_with("7z2501-x64.exe!!"),
+                "Archive path should start with PE filename: {}",
+                entry.path
+            );
+        }
+    }
+}

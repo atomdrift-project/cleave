@@ -1,0 +1,30 @@
+# Anti-Static: Packing and Obfuscation
+# Composite rules for detecting packed or obfuscated code
+
+composite_rules:
+  - id: embedded-compression
+    desc: Embedded compressed payload
+    crit: notable
+    conf: 0.90
+    attack: "T1140"
+    mbc: "C0032"
+    for: ["pe", "dll"]
+    # Bootloaders and firmware commonly embed compressed payloads
+    # Downgraded to notable - not suspicious without additional packing indicators
+    any:
+      - id: micro-behaviors/data/encode/compression::lzma-signature
+      - id: micro-behaviors/data/encode/compression::lzma-magic
+
+  - id: payload-unpacking
+    desc: Embedded payload with unpacking capability
+    crit: notable
+    conf: 0.85
+    attack: "T1140"
+    mbc: "C0032"
+    for: ["pe", "dll"]
+    all:
+      - id: objectives/anti-static/obfuscation/packing::embedded-compression
+      - id: objectives/execution/reflection/class::dynamic-load-pattern
+    downgrade:
+      any:
+        - id: metadata/vendor/valve/valve-corp-binary

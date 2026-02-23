@@ -1,0 +1,33 @@
+# Go Memory Injection Capabilities
+# ATT&CK: T1055 (Process Injection)
+
+defaults:
+  for: [macho, elf]
+  platforms: [macos, linux]
+  attack: "T1055"
+
+traits:
+  - id: inject-mac-path
+    desc: Go inject_mac package reference
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: string
+      regex: "/inject_mac/inject\\.go"
+
+  - id: inject-function
+    desc: Go Inject function for memory injection
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: string
+      regex: "inject_mac\\.Inject"
+
+  - id: rc4-decode-function
+    desc: RC4 decode function for payload decryption
+    crit: notable
+    conf: 0.75
+    if:
+      type: string
+      regex: "common\\.rc4_decode"
+

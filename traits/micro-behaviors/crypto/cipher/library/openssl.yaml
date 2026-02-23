@@ -1,0 +1,38 @@
+# OpenSSL and Cryptographic Library Indicators
+# Detects markers and internal strings from OpenSSL, BoringSSL, and other crypto libs
+
+defaults:
+  for: [elf, pe, macho]
+  crit: notable
+  conf: 0.8
+
+traits:
+  - id: cryptogams-marker
+    desc: CRYPTOGAMS OpenSSL support marker
+    if:
+      type: string
+      substr: "CRYPTOGAMS"
+
+  - id: openssl-x25519-primitives
+    desc: OpenSSL X25519 primitives
+    if:
+      type: string
+      substr: "X25519 primitives"
+
+  - id: boringssl-mike-hamburg-aes
+    desc: BoringSSL Mike Hamburg AES implementation
+    if:
+      type: string
+      substr: "E3, Mike Hamburg"
+
+  - id: aes-ni-gcm-module
+    desc: AES-NI GCM cryptographic module
+    if:
+      type: string
+      substr: "AES-NI GCM module"
+
+  - id: openssl-static-keys
+    desc: OpenSSL/BoringSSL static key markers
+    if:
+      type: string
+      substr: "KEY_SENTVAL"

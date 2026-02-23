@@ -1,0 +1,10 @@
+defaults:
+  for: [all]
+
+traits:
+  - id: wsh-adodb-download
+    desc: "Detects the use of ADODB.Stream to download"
+    crit: suspicious
+    if:
+      type: raw
+      regex: 'ADODB\.Stream.{0,220}ResponseBody.{0,220}SaveToFile'

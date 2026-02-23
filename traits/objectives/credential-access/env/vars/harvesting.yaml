@@ -1,0 +1,19 @@
+# Credential Harvesting via Environment Variables
+# ATT&CK: T1552.001 (Unsecured Credentials: Credentials In Files)
+# Detects reading multiple credential environment variables
+
+defaults:
+  attack: "T1552.001"
+  for: [all]
+
+composite_rules:
+  # Credential environment variable access
+  - id: credential-access-notable
+    desc: Reads credential environment variables
+    crit: notable
+    conf: 0.85
+    # Must have getenv capability (distinguishes reading from just strings)
+    all:
+      - id: micro-behaviors/os/env/vars::getenv
+      - id: micro-behaviors/os/env/vars::environ-global
+      - id: micro-behaviors/os/env/vars/credentials

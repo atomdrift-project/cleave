@@ -1,0 +1,12 @@
+defaults:
+  for: [rtf]
+
+traits:
+  - id: invalid-hex-escape
+    desc: RTF hex escape with invalid digit.
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: raw
+      regex: "(\\\\'([0-9a-fA-F][^0-9a-fA-F])\\s*){4,}"
+      description: "Detects repeated invalid hex escapes like '2G"

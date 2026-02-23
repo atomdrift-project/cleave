@@ -1,0 +1,74 @@
+# Collection - Archive Operations
+# ATT&CK: T1560 (Archive Collected Data)
+
+defaults:
+  # Archive commands can be embedded in any file type
+  for: ["*"]
+
+traits:
+  # === Tar Operations ===
+
+  - id: tar-create
+    desc: Creates tar archive
+    crit: notable
+    conf: 0.6
+    attack: "T1560"
+    platforms: [linux, macos, unix]
+    if:
+      type: string
+      regex: "tar\\s+-c"
+
+  - id: tar-current-dir
+    desc: Archives current directory
+    crit: suspicious
+    conf: 0.75
+    attack: "T1560"
+    platforms: [linux, macos, unix]
+    if:
+      type: string
+      regex: "tar\\s+-c\\w*\\s+\\."
+
+  - id: tar-from-file
+    desc: Tar with file list input
+    crit: suspicious
+    conf: 0.7
+    attack: "T1560"
+    platforms: [linux, macos, unix]
+    if:
+      type: string
+      regex: "tar\\s+-[rT]"
+
+  # === Zip Operations ===
+
+  - id: zip-create
+    desc: Creates zip archive
+    crit: notable
+    conf: 0.6
+    attack: "T1560"
+    platforms: [all]
+    if:
+      type: string
+      regex: "zip\\s+-[rX]"
+
+  # === Unarchive ===
+
+  - id: unarchive
+    desc: Unarchive operation
+    crit: notable
+    conf: 0.5
+    platforms: [all]
+    if:
+      type: string
+      regex: "[Uu]narchive"
+
+composite_rules:
+  - id: binary-tar-exec
+    desc: "Binary executes tar command"
+    crit: suspicious
+    conf: 0.8
+    attack: "T1560"
+    platforms: [linux, macos, unix]
+    for: [elf, macho]
+    any:
+      - id: tar-create
+      - id: tar-from-file

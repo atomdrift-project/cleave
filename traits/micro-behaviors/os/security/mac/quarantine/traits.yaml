@@ -1,0 +1,14 @@
+defaults:
+  for: [all]
+
+traits:
+  - id: xattr-bypass
+    desc: Bypass Gatekeeper/Quarantine via xattr -c
+    crit: notable
+    conf: 0.9
+    mbc: B0009
+    attack: T1553.001
+    platforms: [macos]
+    if:
+      type: string
+      substr: "xattr -c"

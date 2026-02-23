@@ -1,0 +1,28 @@
+defaults:
+  for: [all]
+
+traits:
+  - id: simd-xor-classic
+    conf: 0.8
+    crit: suspicious
+    desc: Classic SIMD XOR operations
+    if:
+      type: string
+      regex: '(pxor|xorps|xorpd)\s+xmm'
+
+  - id: simd-xor-vex
+    conf: 0.8
+    crit: suspicious
+    desc: VEX SIMD XOR operations
+    if:
+      type: string
+      regex: '(vxorps|vxorpd)\s+xmm'
+
+composite_rules:
+  - id: simd-xor
+    conf: 0.8
+    crit: suspicious
+    desc: SIMD XOR operations (often used in fast
+    any:
+      - id: simd-xor-classic
+      - id: simd-xor-vex

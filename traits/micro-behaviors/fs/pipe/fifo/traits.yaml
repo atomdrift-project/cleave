@@ -1,0 +1,18 @@
+# Named Pipes (FIFOs)
+# MBC: F0003 (Create Named Pipe)
+
+defaults:
+  for: [shell, elf, macho, python]
+
+traits:
+  - id: mkfifo-cmd
+    desc: mkfifo command (named pipe creation)
+    crit: notable
+    conf: 0.5
+    mbc: "F0003"
+    platforms: [linux, macos, unix]
+    # Exclude JS - syntax highlighters have shell command keywords
+    for: [shell, elf, macho, python]
+    if:
+      type: string
+      substr: "mkfifo"

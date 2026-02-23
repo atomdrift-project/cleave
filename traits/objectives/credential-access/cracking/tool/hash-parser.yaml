@@ -1,0 +1,15 @@
+# Credential Cracking Tools
+# Detects tools used for credential cracking or hash manipulation
+
+defaults:
+  for: [python]
+
+composite_rules:
+  - id: gui-hash-parser
+    desc: "GUI-based Hash Parser/Generator"
+    crit: suspicious
+    conf: 0.85
+    all:
+      - id: micro-behaviors/ui/framework/tkinter::tkinter-init
+      - id: micro-behaviors/data/text/parse::hash-algo-strings
+      - id: micro-behaviors/hardware/clipboard/access::tkinter-clipboard-append

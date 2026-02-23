@@ -1,0 +1,31 @@
+defaults:
+  for: [all]
+
+traits:
+  - id: memfd-create-string
+    desc: "Detects string related to memfd_create"
+    crit: suspicious
+    attack: T1055 # Process Injection
+    if:
+      type: string
+      substr: "agent started from memory using memfd_create"
+
+  - id: memfd-shm-open-fallback
+    desc: memfd_create fallback to shm_open
+    crit: suspicious
+    conf: 0.9
+    attack: T1055
+    for: [elf]
+    if:
+      type: raw
+      substr: "memfd_create failed: %v, trying shm_open"
+
+composite_rules:
+  - id: memfd-fileless-runtime-flow
+    desc: Runtime reports memory-backed fileless execution
+    crit: suspicious
+    conf: 0.95
+    for: [elf]
+    all:
+      - id: memfd-create-string
+      - id: memfd-shm-open-fallback

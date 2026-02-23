@@ -1,0 +1,155 @@
+---
+# Ruby file write operations
+
+defaults:
+  for: [ruby]
+  platforms: [all]
+
+traits:
+  # Binary write mode strings
+  - id: ruby-write-mode-binary
+    desc: Binary write mode ('wb', 'wb+')
+    crit: baseline
+    conf: 0.9
+    if:
+      type: string
+      regex: '^wb\+?$'
+
+  # binmode
+  - id: binmode-string
+    desc: .binmode string
+    crit: baseline
+    conf: 0.75
+    if:
+      type: string
+      substr: ".binmode"
+
+  - id: binmode-symbol
+    desc: binmode symbol
+    crit: baseline
+    conf: 0.75
+    if:
+      type: symbol
+      regex: "binmode"
+
+  # /tmp/ path
+  - id: tmp-slash-string
+    desc: /tmp/ directory path
+    crit: baseline
+    conf: 0.7
+    if:
+      id: micro-behaviors/fs/path/temp/linux::temp-tmp
+
+  - id: file-open-tmp-string
+    desc: File.open to /tmp/ path
+    crit: notable
+    conf: 0.85
+    if:
+      type: string
+      regex: 'File\.open\(/tmp/'
+
+  # IO.copy_stream
+  - id: io-copy-stream
+    desc: IO.copy_stream call
+    crit: notable
+    conf: 0.85
+    if:
+      type: raw
+      regex: 'IO\.copy_stream'
+
+  # File deletion
+  - id: file-delete-string
+    desc: File.delete string
+    crit: baseline
+    conf: 0.75
+    if:
+      type: string
+      substr: "File.delete"
+
+  - id: file-unlink-string
+    desc: File.unlink string
+    crit: baseline
+    conf: 0.75
+    if:
+      type: string
+      substr: "File.unlink"
+
+  # Removed unlink-symbol duplicate - use micro-behaviors/fs/file/delete/unix::delete (POSIX unlink should be in unix.yaml, not ruby-specific)
+
+  # FileUtils.rm_rf
+  - id: fileutils-rm-rf-string
+    desc: FileUtils.rm_rf string
+    crit: baseline
+    conf: 0.85
+    if:
+      type: string
+      substr: "FileUtils.rm_rf"
+
+  - id: rm-rf-symbol
+    desc: rm_rf symbol
+    crit: baseline
+    conf: 0.85
+    if:
+      type: symbol
+      regex: "rm_rf"
+
+  # fileutils library import
+  - id: fileutils-single-quote
+    desc: "'fileutils' require string"
+    crit: baseline
+    conf: 0.5
+    if:
+      type: string
+      substr: "'fileutils'"
+
+  - id: fileutils-double-quote
+    desc: '"fileutils" require string'
+    crit: baseline
+    conf: 0.5
+    if:
+      type: string
+      substr: '"fileutils"'
+
+composite_rules:
+  - id: ruby-file-open-write-binary
+    desc: Write binary file
+    crit: notable
+    conf: 0.92
+    any:
+      - id: ruby-write-mode-binary
+      - id: binmode-string
+      - id: binmode-symbol
+
+  - id: ruby-file-delete
+    desc: Delete file
+    crit: notable
+    conf: 0.90
+    any:
+      - id: file-delete-string
+      - id: file-unlink-string
+      - id: fileutils-rm-rf-string
+      - id: rm-rf-symbol
+
+  - id: ruby-rm-rf
+    desc: Recursive directory deletion
+    crit: notable
+    conf: 0.93
+    any:
+      - id: fileutils-rm-rf-string
+      - id: rm-rf-symbol
+
+  - id: ruby-fileutils
+    desc: Imports FileUtils library
+    crit: notable
+    conf: 0.6
+    any:
+      - id: fileutils-single-quote
+      - id: fileutils-double-quote
+
+  - id: ruby-file-write-tmp
+    desc: Write file to /tmp directory
+    crit: notable
+    conf: 0.90
+    any:
+      - id: tmp-slash-string
+      - id: file-open-tmp-string

@@ -1,0 +1,37 @@
+traits:
+  - id: xor-bitwise-op
+    desc: "Bitwise XOR operation"
+    crit: baseline
+    conf: 0.6
+    for: [python]
+    if:
+      type: ast
+      language: python
+      query: |
+        (binary_operator
+          operator: "^"
+        )
+
+  - id: xor-decoding-loop
+    desc: "XOR decoding loop with modulo"
+    crit: notable
+    conf: 0.8
+    for: [python]
+    if:
+      type: ast
+      language: python
+      # Matches: data[i] ^ key[... % len(key)]
+      query: |
+        (binary_operator
+          left: (subscript)
+          operator: "^"
+          right: (subscript
+            subscript: (binary_operator
+              operator: "%"
+              right: (call
+                function: (identifier) @len
+                (#eq? @len "len")
+              )
+            )
+          )
+        )

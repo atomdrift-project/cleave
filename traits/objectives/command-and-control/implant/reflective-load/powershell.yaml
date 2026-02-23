@@ -1,0 +1,26 @@
+# PowerShell Reflective Loading
+# Detects PowerShell reflective code loading patterns
+# ATT&CK: T1620 (Reflective Code Loading)
+
+composite_rules:
+  - id: ps-decode-and-load
+    desc: PowerShell decode and reflective load
+    crit: hostile
+    conf: 0.95
+    for: [powershell]
+    mbc: "E1620"
+    attack: "T1620"
+    all:
+      - id: objectives/execution/reflective-load/memory::ps-assembly-load
+      - id: objectives/execution/reflective-load/memory::ps-b64-decode
+
+  - id: ps-reflective-load
+    desc: PowerShell reflective assembly loading
+    crit: hostile
+    conf: 0.93
+    for: [powershell]
+    mbc: "E1620"
+    attack: "T1620"
+    all:
+      - id: objectives/execution/reflective-load/memory::ps-assembly-load
+      - id: objectives/execution/reflective-load/memory::ps-assembly-invoke

@@ -1,0 +1,258 @@
+# Cryptocurrency Wallet Provider Access - JavaScript
+# Detects JavaScript code interacting with injected wallet providers (MetaMask, etc.)
+# ATT&CK: T1555.003 (Credentials from Password Stores), T1539 (Steal Web Session Cookie)
+
+defaults:
+  for: [javascript]
+  attack: "T1555.003"
+  crit: suspicious
+
+traits:
+  # === window.ethereum atomic indicators ===
+  - id: window-dot-ethereum
+    desc: window.ethereum access
+    crit: notable
+    conf: 0.6
+    if:
+      type: string
+      substr: "window.ethereum"
+
+  - id: window-bracket-ethereum
+    desc: window["ethereum"] access
+    crit: notable
+    conf: 0.6
+    if:
+      type: string
+      regex: "window\\[['\"]ethereum['\"]\\]"
+
+  # === ethereum.request atomic ===
+  - id: ethereum-request-call
+    desc: ethereum.request() call
+    crit: notable
+    conf: 0.6
+    if:
+      type: string
+      regex: "ethereum\\.request\\s*\\("
+
+  - id: request-bracket-call
+    desc: '["request"]() call pattern'
+    crit: notable
+    conf: 0.5
+    if:
+      type: string
+      regex: "\\['\"]request['\"]\\]\\s*\\("
+
+  # === eth methods atomic ===
+  - id: eth-request-accounts-method
+    desc: eth_requestAccounts method
+    crit: notable
+    conf: 0.6
+    if:
+      type: string
+      substr: "eth_requestAccounts"
+
+  - id: eth-accounts-method
+    desc: eth_accounts method
+    crit: notable
+    conf: 0.5
+    if:
+      type: string
+      substr: "eth_accounts"
+
+  - id: eth-send-transaction-method
+    desc: eth_sendTransaction method
+    crit: notable
+    conf: 0.7
+    if:
+      type: string
+      substr: "eth_sendTransaction"
+
+  # ERC-20 function selectors
+  - id: erc20-approve
+    desc: "ERC-20 token approve function selector"
+    conf: 0.85
+    crit: suspicious
+    if:
+      type: string
+      substr: "0x095ea7b3"
+
+  - id: erc20-transfer
+    desc: "ERC-20 token transfer function selector"
+    conf: 0.8
+    if:
+      type: string
+      substr: "0xa9059cbb"
+
+  - id: erc20-transferFrom
+    desc: "ERC-20 token transferFrom function selector"
+    conf: 0.85
+    crit: suspicious
+    if:
+      type: string
+      substr: "0x23b872dd"
+
+  # === Drainer function atomic ===
+  - id: function-drain
+    desc: function drain
+    crit: notable
+    conf: 0.7
+    if:
+      type: string
+      regex: "function\\s+drain"
+
+  - id: function-steal
+    desc: function steal
+    crit: notable
+    conf: 0.8
+    if:
+      type: string
+      regex: "function\\s+steal"
+
+  - id: function-grab
+    desc: function grab
+    crit: notable
+    conf: 0.7
+    if:
+      type: string
+      regex: "function\\s+grab"
+
+  - id: function-hijack
+    desc: function hijack
+    crit: notable
+    conf: 0.8
+    if:
+      type: string
+      regex: "function\\s+hijack"
+
+  - id: runmask-function
+    desc: runmask function
+    crit: notable
+    conf: 0.8
+    if:
+      type: string
+      substr: "runmask"
+
+  - id: newdlocal-function
+    desc: newdlocal function
+    crit: notable
+    conf: 0.8
+    if:
+      type: string
+      substr: "newdlocal"
+
+  - id: checkethereumw-function
+    desc: checkethereumw function
+    crit: notable
+    conf: 0.8
+    if:
+      type: string
+      substr: "checkethereumw"
+
+  # MAX_UINT256 constant - used for unlimited token approval
+  - id: max-uint256-approval
+    desc: "MAX_UINT256 constant for unlimited approval"
+    conf: 0.8
+    crit: suspicious
+    if:
+      type: string
+      substr: "MAX_UINT256"
+
+  # setApprovalForAll - NFT bulk approval
+  - id: set-approval-for-all
+    desc: "NFT setApprovalForAll function call"
+    conf: 0.85
+    crit: suspicious
+    if:
+      type: string
+      substr: "setApprovalForAll"
+
+composite_rules:
+  # Ethereum provider composite
+  - id: ethereum-provider
+    desc: "Web3 wallet provider access (window.ethereum)"
+    conf: 0.75
+    any:
+      - id: window-dot-ethereum
+      - id: window-bracket-ethereum
+
+  # Ethereum request composite
+  - id: ethereum-request
+    desc: "Ethereum wallet request API"
+    conf: 0.8
+    any:
+      - id: ethereum-request-call
+      - id: request-bracket-call
+
+  # Ethereum provider or request composite
+  - id: ethereum-provider-or-request
+    desc: "Ethereum provider access or request"
+    conf: 0.75
+    any:
+      - id: ethereum-provider
+      - id: ethereum-request
+
+  # eth_requestAccounts composite
+  - id: eth-request-accounts
+    desc: "Request wallet accounts (eth_requestAccounts)"
+    conf: 0.85
+    any:
+      - id: eth-request-accounts-method
+      - id: eth-accounts-method
+
+
+  # Wallet transaction method composite
+  - id: wallet-transaction-method
+    desc: "Wallet transaction methods"
+    conf: 0.8
+    any:
+      - id: eth-send-transaction-method
+      - id: erc20-approve
+      - id: erc20-transfer
+      - id: erc20-transferFrom
+      - id: set-approval-for-all
+
+  # Drainer function names composite
+  - id: drainer-function-names
+    desc: "Suspicious wallet drainer function names"
+    conf: 0.9
+    crit: suspicious
+    any:
+      - id: function-drain
+      - id: function-steal
+      - id: function-grab
+      - id: function-hijack
+      - id: runmask-function
+      - id: newdlocal-function
+      - id: checkethereumw-function
+
+  # Drainer action functions composite
+  - id: drainer-action-functions
+    desc: "Drainer action function patterns"
+    conf: 0.85
+    crit: suspicious
+    any:
+      - id: function-drain
+      - id: function-steal
+      - id: function-grab
+
+  # Drainer indicator composite
+  - id: drainer-indicator
+    desc: "Wallet drainer indicators"
+    conf: 0.85
+    any:
+      - id: drainer-function-names
+      - id: max-uint256-approval
+      - id: set-approval-for-all
+
+  # Wallet provider access + transaction sending = wallet drainer
+  - id: wallet-drainer
+    desc: "Cryptocurrency wallet drainer (provider access"
+    crit: hostile
+    conf: 0.95
+    attack: "T1555.003"
+    mbc: "B0028"
+    for: [javascript]
+    all:
+      - id: ethereum-provider-or-request
+      - id: wallet-transaction-method
+      - id: drainer-indicator

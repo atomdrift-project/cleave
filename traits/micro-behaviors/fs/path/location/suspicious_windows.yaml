@@ -1,0 +1,48 @@
+# Suspicious Path Patterns
+# Detects suspicious file paths commonly used by malware
+
+defaults:
+  for: [all]
+  crit: notable
+  conf: 0.8
+  platforms: [windows]
+  attack: "T1204.002"
+  mbc: "F0013"
+
+traits:
+  - id: path-suspicious-appdata-exe
+    desc: Writes executable to %AppData% env var directly
+    if:
+      type: string
+      # Detects %APPDATA%.exe or %TEMP%.exe
+      regex: "(?i)%[A-Z0-9_]+%\\.exe"
+    
+  - id: path-suspicious-root-exe
+    desc: Writes executable to drive root
+    if:
+      type: string
+      regex: "(?i)[C-Z]:\\\\[^\\\\]{1,120}\\.exe"
+    
+  - id: path-suspicious-startup
+    desc: Writes to Startup folder
+    if:
+      type: string
+      regex: "(?i)Start\\s+Menu\\\\Programs\\\\Startup\\\\[^\\\\]{1,120}\\.(exe|vbs|js)"
+
+  - id: path-suspicious-startup-scripts
+    desc: Writes script to Startup folder
+    if:
+      type: string
+      regex: "(?i)Start\\s+Menu\\\\Programs\\\\Startup\\\\[^\\\\]{1,120}\\.bat"
+
+composite_rules:
+  - id: path-suspicious-startup-any
+    desc: Writes to Startup folder
+    crit: notable
+    conf: 0.8
+    platforms: [windows]
+    attack: "T1204.002"
+    mbc: "F0013"
+    any:
+      - id: path-suspicious-startup
+      - id: path-suspicious-startup-scripts

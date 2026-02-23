@@ -1,0 +1,213 @@
+defaults:
+  for: [all]
+
+traits:
+- id: recursive-delete
+  desc: Recursive directory deletion function
+  crit: notable
+  conf: 0.85
+  attack: T1485
+  for:
+  - javascript
+  - typescript
+  if:
+    type: yara
+    source: |
+      rule node_recursive_delete {
+        strings:
+          $readdir = "readdirSync" ascii
+          $unlink = "unlinkSync" ascii
+          $rmdir = "rmdirSync" ascii
+          $rmrf = "rm -rf" ascii
+          $rimraf = "rimraf" ascii
+        condition:
+          ($readdir and ($unlink or $rmdir)) or $rmrf or $rimraf
+      }
+- id: target-dev-dirs
+  desc: Targets development directories for deletion
+  crit: notable
+  conf: 0.9
+  attack: T1485
+  for:
+  - javascript
+  - typescript
+  - python
+  if:
+    type: yara
+    source: |
+      rule target_dev_directories {
+        strings:
+          $dir1 = ".git" ascii
+          $dir2 = ".svn" ascii
+          $dir3 = "node_modules" ascii
+          $dir4 = ".vscode" ascii
+          $dir5 = "/src" ascii
+          $dir6 = "/public" ascii
+          $delete1 = "unlink" ascii
+          $delete2 = "rmdir" ascii
+          $delete3 = "rm -rf" ascii
+          $delete4 = "rmtree" ascii
+          $delete5 = "shutil.rmtree" ascii
+        condition:
+          3 of ($dir*) and any of ($delete*)
+      }
+- id: target-git
+  desc: Targets .git directory (version control)
+  crit: notable
+  conf: 0.85
+  attack: T1485
+  for:
+  - javascript
+  - typescript
+  - python
+  - shell
+  if:
+    type: string
+    regex: '["'']\./?\.git["'']'
+- id: target-node-modules
+  desc: Targets node_modules directory
+  crit: notable
+  conf: 0.8
+  attack: T1485
+  for:
+  - javascript
+  - typescript
+  if:
+    type: string
+    regex: '["'']/?(\./)?node_modules["'']'
+- id: target-src
+  desc: Targets source code directory
+  crit: notable
+  conf: 0.85
+  attack: T1485
+  for:
+  - javascript
+  - typescript
+  - python
+  if:
+    type: string
+    regex: '["'']/?(\./)?src["'']'
+- id: target-vscode-dir
+  desc: Targets .vscode directory
+  crit: notable
+  conf: 0.7
+  attack: T1485
+  for:
+  - javascript
+  - typescript
+  if:
+    type: string
+    regex: '["'']/?(\./)?\.(vscode)["'']'
+- id: target-idea-dir
+  desc: Targets .idea directory
+  crit: notable
+  conf: 0.7
+  attack: T1485
+  for:
+  - javascript
+  - typescript
+  if:
+    type: string
+    regex: '["'']/?(\./)?\.(idea)["'']'
+- id: conditional-destroy
+  desc: Conditional destruction based on environment
+  crit: suspicious
+  conf: 0.95
+  attack: T1485
+  for:
+  - javascript
+  - typescript
+  if:
+    type: yara
+    source: |
+      rule conditional_destruction {
+        strings:
+          $env_check = /process\.env\[[^\]]+\]\s*(!=|!==|==|===)/ ascii
+          $node_env = "NODE_ENV" ascii
+          $destroy1 = "unlinkSync" ascii
+          $destroy2 = "rmdirSync" ascii
+          $destroy3 = "rm -rf" ascii
+        condition:
+          ($env_check or $node_env) and any of ($destroy*)
+      }
+- id: target-android-storage
+  desc: Targets Android storage directories
+  crit: suspicious
+  conf: 0.95
+  attack: T1485
+  for:
+  - javascript
+  - typescript
+  - shell
+  if:
+    type: yara
+    source: |
+      rule target_android_storage {
+        strings:
+          $sdcard = "/sdcard" ascii
+          $storage = "/storage/emulated" ascii
+          $dcim = "DCIM" ascii
+          $pictures = "Pictures" ascii
+          $downloads = "Download" ascii
+          $rm = "rm " ascii
+          $rmrf = "rm -rf" ascii
+          $spawn = "spawn(" ascii
+        condition:
+          ($sdcard or $storage) and any of ($dcim, $pictures, $downloads) and any of ($rm, $rmrf, $spawn)
+      }
+composite_rules:
+- id: mass-delete-action
+  desc: Mass deletion action primitive
+  crit: notable
+  conf: 0.85
+  any:
+    - id: micro-behaviors/fs/directory/traverse::delete-unlink-node-py
+    - id: micro-behaviors/fs/directory/traverse::delete-shell
+- id: target-vscode
+  desc: Targets .vscode configuration directory
+  crit: notable
+  conf: 0.85
+  attack: T1485
+  for:
+  - javascript
+  - typescript
+  any:
+  - id: target-vscode-dir
+  - id: target-idea-dir
+- id: mass-delete
+  desc: Mass file deletion pattern
+  crit: suspicious
+  conf: 0.85
+  attack: T1485
+  for:
+  - javascript
+  - typescript
+  - python
+  - shell
+  all:
+  - id: micro-behaviors/fs/directory/traverse::traverse-readdir-walk-find
+  - id: mass-delete-action
+- id: protestware
+  desc: Protestware pattern - conditional destruction
+  crit: suspicious
+  conf: 0.98
+  attack: T1485
+  mbc: B0031
+  for:
+  - javascript
+  - typescript
+  all:
+  - id: objectives/impact/wiper/disk::conditional-destroy
+  - id: objectives/impact/wiper/disk::target-dev-dirs
+- id: with-callback
+  desc: Wiper with HTTP callback (potential
+  crit: suspicious
+  conf: 0.95
+  attack: T1485
+  mbc: B0031
+  for:
+  - javascript
+  - typescript
+  all:
+  - id: objectives/impact/wiper/disk::recursive-delete
+  - id: micro-behaviors/communications/http/request/

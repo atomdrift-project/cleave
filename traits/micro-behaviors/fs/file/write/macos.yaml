@@ -1,0 +1,75 @@
+# macOS Objective-C File Write Operations
+# MBC: C0052 (Write File)
+# Detects NSFileHandle/NSFileManager write patterns used in macOS binaries
+
+defaults:
+  for: [macho, dylib]
+  mbc: "C0052"
+
+traits:
+  - id: nsfilehandle-write-data
+    desc: NSFileHandle file writing
+    crit: notable
+    conf: 0.7
+    if:
+      type: symbol
+      exact: "writeData"
+
+  - id: nsfilehandle-write-to-file
+    desc: NSFileHandle file writing
+    crit: notable
+    conf: 0.7
+    if:
+      type: symbol
+      exact: "writeToFile"
+
+  - id: nsfilehandle-seek
+    desc: NSFileHandle seek to file offset
+    crit: baseline
+    conf: 0.6
+    if:
+      type: symbol
+      regex: "seekToFileOffset"
+
+  - id: nsfilemanager-create
+    desc: NSFileManager file creation
+    crit: baseline
+    conf: 0.6
+    if:
+      type: symbol
+      regex: "createFileAtPath"
+
+  - id: nsfilemanager-move
+    desc: NSFileManager file move operation
+    crit: notable
+    conf: 0.7
+    if:
+      type: string
+      regex: "moveItemAt(Path|URL):to(Path|URL)"
+
+  - id: nsfilemanager-copy
+    desc: NSFileManager file copy operation
+    crit: baseline
+    conf: 0.6
+    if:
+      type: string
+      regex: "copyItemAt(URL|Path)"
+
+composite_rules:
+  - id: nsfilehandle-write
+    desc: NSFileHandle file writing
+    crit: notable
+    conf: 0.7
+    any:
+      - id: nsfilehandle-write-data
+      - id: nsfilehandle-write-to-file
+
+  # Random-access file write (seek + write) indicates staged payload assembly
+  - id: random-access-write
+    desc: Random-access file writing (seek + write)
+    crit: notable
+    conf: 0.75
+    for: [macho, dylib]
+    all:
+      - id: nsfilehandle-write
+      - id: nsfilehandle-seek

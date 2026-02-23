@@ -1,0 +1,66 @@
+# Dynamic Linker Environment Variables
+# MBC: F0015 (Hijack Execution Flow)
+# ATT&CK: T1574.006 (Dynamic Linker Hijacking)
+
+defaults:
+  for: [so, c]
+  platforms: [linux]
+
+traits:
+  - id: ld-preload
+    desc: LD_PRELOAD environment variable
+    crit: notable
+    conf: 0.7
+    mbc: "F0015"
+    attack: "T1574.006"
+    if:
+      type: string
+      substr: "LD_PRELOAD"
+
+  - id: ld-library-path
+    desc: LD_LIBRARY_PATH environment variable
+    crit: baseline
+    conf: 0.4
+    if:
+      type: string
+      substr: "LD_LIBRARY_PATH"
+
+  - id: ld-audit
+    desc: LD_AUDIT environment variable
+    crit: notable
+    conf: 0.7
+    mbc: "F0015"
+    attack: "T1574.006"
+    if:
+      type: string
+      substr: "LD_AUDIT"
+
+  - id: ld-debug
+    desc: LD_DEBUG environment variable
+    crit: baseline
+    conf: 0.4
+    if:
+      type: string
+      substr: "LD_DEBUG"
+
+  - id: ld-bind-now
+    desc: LD_BIND_NOW environment variable
+    crit: baseline
+    conf: 0.3
+    if:
+      type: string
+      substr: "LD_BIND_NOW"
+
+composite_rules:
+  - id: ld-hijack-env
+    desc: Dynamic linker hijacking environment variables
+    crit: suspicious
+    conf: 0.8
+    mbc: "F0015"
+    attack: "T1574.006"
+    any:
+      - id: ld-preload
+      - id: ld-audit
+    downgrade:
+      any:
+        - id: well-known/tools/sysadmin::stdbuf-tool

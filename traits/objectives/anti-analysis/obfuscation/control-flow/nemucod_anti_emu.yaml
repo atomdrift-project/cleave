@@ -1,0 +1,33 @@
+defaults:
+  for: [all]
+
+traits:
+  - id: nemucod-anti-emu-lister
+    desc: Nemucod anti-emulation logic (WScript.lister assignment in try-catch)
+    # ref: cf34ea315654908ac366bcd5cba7990726cb99a6935c7e741a57e5c20c1de166
+    size_min: 1024
+    crit: suspicious
+    if:
+      type: ast
+      language: javascript
+      query: |
+        (try_statement
+          body: (statement_block
+             (expression_statement
+               (assignment_expression
+                 left: (member_expression
+                   object: (identifier) @wscript
+                   property: (property_identifier) @lister
+                 )
+               )
+             )
+             (expression_statement
+               (assignment_expression
+                 right: (number) @magic_number
+               )
+             )
+          )
+          (#eq? @wscript "WScript")
+          (#eq? @lister "lister")
+          (#eq? @magic_number "232323")
+        )

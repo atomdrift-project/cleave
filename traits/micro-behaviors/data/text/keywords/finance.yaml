@@ -1,0 +1,40 @@
+defaults:
+  for: [all]
+
+traits:
+  - id: emergency-buffer
+    desc: "Financial decoy keyword 'emergency buffer'"
+    crit: notable
+    if:
+      type: string
+      substr: "emergency buffer"
+      case_insensitive: true
+
+  - id: budget-overruns
+    desc: "Financial decoy keyword 'budget overruns'"
+    crit: notable
+    if:
+      type: string
+      substr: "budget overruns"
+      case_insensitive: true
+
+  - id: freelancer-negotiation
+    desc: "Financial decoy keyword 'FreelancerNegotiationEngine'"
+    crit: notable
+    if:
+      type: string
+      substr: "FreelancerNegotiationEngine"
+
+  - id: expense-breakdown
+    desc: "Financial decoy keyword 'EXPENSE BREAKDOWN'"
+    crit: notable
+    if:
+      type: string
+      substr: "EXPENSE BREAKDOWN"
+
+  - id: submit-proposal
+    desc: "Financial decoy keyword 'SubmitProposal'"
+    crit: notable
+    if:
+      type: string
+      substr: "SubmitProposal"

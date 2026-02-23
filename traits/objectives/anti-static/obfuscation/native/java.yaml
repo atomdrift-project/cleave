@@ -1,0 +1,70 @@
+# Java Class Obfuscation Detection
+# MBC: B0032 (Obfuscated Files or Information)
+# ATT&CK: T1140 (Deobfuscate/Decode Files or Information)
+
+traits:
+  - id: java-numeric-classnames
+    desc: Java classes with numeric obfuscated names
+    crit: suspicious
+    conf: 0.85
+    mbc: "B0032"
+    attack: "T1140"
+    for: [class, java]
+    if:
+      type: yara
+      source: |
+        rule java_numeric_classnames {
+          strings:
+            $a = /L[0-9]{1,3};/ ascii
+          condition:
+            #a >= 3
+        }
+
+  - id: java-misspelled-system-classes
+    desc: Common Java class names with character substitutions
+    crit: suspicious
+    conf: 0.8
+    mbc: "B0032"
+    attack: "T1140"
+    for: [class, java]
+    if:
+      type: yara
+      source: |
+        rule java_misspelled_system {
+          strings:
+            $a = "MANGER" ascii fullword
+            $b = "Managr" ascii fullword
+            $c = "Managerr" ascii fullword
+          condition:
+            any of them
+        }
+
+  - id: java-single-letter-classnames
+    desc: Java classes with single-letter obfuscated names
+    crit: suspicious
+    conf: 0.8
+    mbc: "B0032"
+    attack: "T1140"
+    for: [class, java]
+    if:
+      type: yara
+      source: |
+        rule java_single_letter_classnames {
+          strings:
+            $a = /[a-z]\.class/ ascii
+          condition:
+            #a >= 3
+        }
+
+composite_rules:
+  - id: java-adwind-obfuscation-pattern
+    desc: Adwind RAT class name obfuscation pattern
+    crit: suspicious
+    conf: 0.9
+    mbc: "B0032"
+    attack: "T1140"
+    needs: 2
+    any:
+      - id: java-misspelled-system-classes
+      - id: java-numeric-classnames
+      - id: java-single-letter-classnames

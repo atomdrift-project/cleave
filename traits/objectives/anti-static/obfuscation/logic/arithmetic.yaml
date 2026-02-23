@@ -1,0 +1,54 @@
+traits:
+  - id: complex-arithmetic-div
+    desc: "Complex arithmetic string decoding loop"
+    crit: suspicious
+    conf: 0.8
+    for: [macho, elf, pe]
+    if:
+      # Pattern matching a loop with signed division and other arithmetic
+      # This is hard to match generically with just hex without being too specific
+      # but we can look for sdiv in proximity to other math
+      type: symbol
+      exact: "__divdi3" # Often generated for complex math if not inlined
+      # For Mach-O ARM64 specifically we saw 'sdiv' which is an instruction.
+      # Our 'symbol' match can't match instructions, but 'hex' can.
+
+  - id: complex-arithmetic-mod
+    desc: "Complex arithmetic string decoding loop"
+    crit: suspicious
+    conf: 0.8
+    for: [macho, elf, pe]
+    if:
+      type: symbol
+      exact: "__moddi3"
+      # For Mach-O ARM64 specifically we saw 'sdiv' which is an instruction.
+      # Our 'symbol' match can't match instructions, but 'hex' can.
+
+  - id: arm64-sdiv-decoding-loop
+    desc: "ARM64-specific sdiv/eor decoding loop"
+    crit: suspicious
+    conf: 0.9
+    for: [macho, elf]
+    if:
+      type: hex
+      # Matches the core arithmetic of the Kito loop:
+      # sub w16, w17, w16 (30 02 10 4b)
+      # sdiv w15, w16, w15 (0f 0e cf 1a)
+      # eor w15, w16, w15 (0f 02 0f 4a)
+      pattern: "30 02 10 4b [0-16] 0f 0e cf 1a [0-16] 0f 02 0f 4a"
+
+composite_rules:
+  - id: arithmetic-string-decoding
+    desc: "Arithmetic string decoding (de-obfuscation)"
+    crit: suspicious
+    any:
+      - id: arm64-sdiv-decoding-loop
+      - id: complex-arithmetic-loop
+
+  - id: complex-arithmetic-loop
+    desc: "Complex arithmetic string decoding loop"
+    crit: suspicious
+    conf: 0.8
+    any:
+      - id: complex-arithmetic-div
+      - id: complex-arithmetic-mod

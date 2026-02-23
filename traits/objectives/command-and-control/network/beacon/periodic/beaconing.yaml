@@ -1,0 +1,151 @@
+# C2 Beaconing Patterns
+# Detects C2 polling and sleep interval patterns
+# ATT&CK: T1071.001 (Web Protocols), T1029 (Scheduled Transfer)
+# MBC: B0030 (C2 Communication)
+
+defaults:
+  crit: suspicious
+  attack: "T1071.001"
+  mbc: "B0030"
+  for: [python, javascript, shell]
+
+traits:
+  # === Sleep Patterns ===
+  - id: sleep-in-loop
+    desc: Sleep function in loop
+    crit: notable
+    conf: 0.70
+    if:
+      type: string
+      regex: "(while.{0,50}True|while\\s+1).{0,50}sleep|sleep.{0,50}while"
+
+  - id: sleep-60-seconds
+    desc: Sleep 60 seconds interval
+    crit: suspicious
+    conf: 0.85
+    if:
+      type: string
+      regex: "sleep\\s*\\(\\s*60\\s*\\)"
+
+  - id: sleep-interval-var-a
+    desc: Sleep interval variable
+    crit: notable
+    conf: 0.65
+    if:
+      type: string
+      regex: "(interval|delay|period|beacon).{0,50}sleep"
+
+  - id: sleep-interval-var-b
+    desc: Sleep interval variable
+    crit: notable
+    conf: 0.65
+    if:
+      type: string
+      regex: "sleep.{0,50}(interval|delay|period)"
+
+  # === Polling Patterns ===
+  - id: c2-poll-loop
+    desc: C2 polling loop pattern
+    crit: suspicious
+    conf: 0.80
+    if:
+      type: string
+      regex: "while.{0,50}True.{0,50}requests\\.(get|post)|requests\\.(get|post).{0,50}while"
+
+  - id: c2-response-check-loop
+    desc: C2 response check in loop
+    crit: suspicious
+    conf: 0.75
+    if:
+      type: string
+      regex: "if.{0,50}response\\.status_code.{0,50}while|while.{0,50}status_code"
+
+  - id: c2-continue-polling
+    desc: C2 continue polling pattern
+    crit: suspicious
+    conf: 0.75
+    if:
+      type: string
+      regex: "continue.{0,50}sleep|sleep.{0,50}continue"
+
+  # === Infinite Loop Indicators ===
+  - id: infinite-while-true
+    desc: Infinite while True loop
+    crit: notable
+    conf: 0.50
+    if:
+      type: string
+      exact: "while True:"
+
+  # === Error Handling in Loops ===
+  - id: try-except-sleep
+    desc: Try-except with sleep
+    crit: suspicious
+    conf: 0.75
+    if:
+      type: string
+      regex: "try:.{0,50}sleep.{0,50}except|except.{0,50}sleep.{0,50}continue"
+
+  - id: request-exception-sleep
+    desc: Request exception with sleep
+    crit: suspicious
+    conf: 0.80
+    if:
+      type: string
+      regex: "RequestException.{0,50}sleep|sleep.{0,50}RequestException"
+
+composite_rules:
+  - id: sleep-interval-var
+    desc: Sleep interval variable
+    crit: notable
+    conf: 0.65
+    any:
+      - id: sleep-interval-var-a
+      - id: sleep-interval-var-b
+
+  # === Beaconing Detection ===
+  - id: c2-sleep-beacon
+    desc: C2 sleep beacon pattern
+    crit: suspicious
+    conf: 0.85
+    attack: "T1029"
+    all:
+      - id: infinite-while-true
+      - id: sleep-in-loop
+
+  - id: c2-polling-beacon
+    desc: C2 polling beacon
+    crit: suspicious
+    conf: 0.90
+    attack: "T1071.001"
+    needs: 2
+    any:
+      - id: c2-poll-loop
+      - id: c2-response-check-loop
+      - id: sleep-60-seconds
+
+  - id: c2-resilient-beacon
+    desc: Resilient C2 beacon with error handling
+    crit: hostile
+    conf: 0.95
+    attack: "T1071.001"
+    mbc: "B0030"
+    for: [python, javascript]
+    needs: 2
+    any:
+      - id: try-except-sleep
+      - id: request-exception-sleep
+      - id: c2-continue-polling
+    all:
+      - id: c2-polling-beacon
+
+  - id: c2-beacon-suite
+    desc: C2 beacon with sleep intervals
+    crit: hostile
+    conf: 0.95
+    attack: "T1071.001"
+    mbc: "B0030"
+    platforms: [all]
+    all:
+      - id: c2-sleep-beacon
+      - id: c2-polling-beacon

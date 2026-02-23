@@ -1,0 +1,52 @@
+defaults:
+  for: [all]
+
+traits:
+  - id: nemucod-array-init-ast
+    desc: "Nemucod-style character array initialization (AST)"
+    crit: suspicious
+    conf: 0.95
+    if:
+      type: ast
+      language: javascript
+      # Matches: [("x", ba), ("x", ix)] - array of parenthesized expressions
+      query: |
+        (array
+          (parenthesized_expression)
+        ) @nemucod_array
+      count_min: 5
+
+  - id: nemucod-var-init-ast
+    desc: "Nemucod-style variable substitution initialization (AST)"
+    crit: suspicious
+    conf: 0.95
+    if:
+      type: ast
+      language: javascript
+      # Matches: us=('b', '\x0a');
+      query: |
+        (assignment_expression
+          right: (parenthesized_expression
+            (sequence_expression
+              (string)
+              (string)
+            )
+          )
+        ) @nemucod_init
+      count_min: 10
+
+  - id: js-dynamic-property-concat
+    desc: "Property access using concatenated strings"
+    crit: suspicious
+    conf: 0.8
+    if:
+      type: ast
+      language: javascript
+      # Matches: wv["conca"+"t"] - subscript with binary expression
+      query: |
+        (subscript_expression
+          index: (binary_expression
+            left: (string)
+            right: (string)
+          )
+        ) @concat_prop

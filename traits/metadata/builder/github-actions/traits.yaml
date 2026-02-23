@@ -1,0 +1,88 @@
+# Build System - GITHUB ACTIONS
+
+defaults:
+  for: [all]
+
+traits:
+  # === GitHub Actions micro-behaviors ===
+  - id: github-actions-env
+    desc: GITHUB_ACTIONS environment variable
+    crit: notable
+    conf: 0.9
+    if:
+      type: string
+      substr: "GITHUB_ACTIONS"
+
+  - id: github-run-id
+    desc: GITHUB_RUN_ID environment variable
+    crit: notable
+    conf: 0.9
+    if:
+      type: string
+      substr: "GITHUB_RUN_ID"
+
+  - id: github-sha
+    desc: GITHUB_SHA environment variable
+    crit: notable
+    conf: 0.9
+    if:
+      type: string
+      substr: "GITHUB_SHA"
+
+  - id: actions-checkout
+    desc: actions/checkout action
+    crit: notable
+    conf: 0.9
+    if:
+      type: string
+      substr: "actions/checkout"
+
+  - id: github-workflows
+    desc: .github/workflows directory
+    crit: notable
+    conf: 0.9
+    if:
+      type: string
+      substr: ".github/workflows"
+
+  - id: github-runner-worker
+    desc: GitHub Actions Runner.Worker process
+    crit: notable
+    conf: 0.95
+    if:
+      type: string
+      substr: "Runner.Worker"
+
+  - id: github-runner-listener
+    desc: GitHub Actions Runner.Listener process
+    crit: notable
+    conf: 0.95
+    if:
+      type: string
+      substr: "Runner.Listener"
+
+composite_rules:
+  # GitHub Actions composite (migrated from YARA)
+  - id: github-actions
+    desc: GitHub Actions CI artifacts
+    crit: notable
+    conf: 0.9
+    any:
+      - id: github-actions-env
+      - id: github-run-id
+      - id: github-sha
+      - id: actions-checkout
+      - id: github-workflows
+      - id: github-runner-worker
+      - id: github-runner-listener
+
+  - id: github-runner-targeting
+    desc: Targets GitHub Actions Runner process
+    crit: suspicious
+    conf: 0.95
+    all:
+      - id: github-runner-worker
+    any:
+      - id: github-actions
+      - id: micro-behaviors/fs/proc/info::process-pid-cmdline
+      - id: micro-behaviors/fs/proc/info::process-pid-maps

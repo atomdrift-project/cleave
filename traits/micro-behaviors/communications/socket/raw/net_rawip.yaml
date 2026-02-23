@@ -1,0 +1,33 @@
+traits:
+  - id: perl-net-rawip-use
+    desc: Imports the Net::RawIP Perl module, used for
+    crit: notable
+    for: [perl, all]
+    if:
+      type: raw
+      regex: '(?i)(use|require)\s+Net::RawIP'
+
+  - id: perl-net-rawip-new
+    desc: Instantiates a Net::RawIP object
+    crit: notable
+    for: [perl, all]
+    if:
+      type: raw
+      regex: '(?i)new\s+Net::RawIP'
+
+  - id: perl-net-rawip-spoof-saddr
+    desc: Sets the source address (saddr) in Net::RawIP
+    crit: suspicious
+    for: [perl, all]
+    if:
+      type: raw
+      # Matches saddr => $ARGV[...] or saddr => $var
+      regex: '(?i)saddr\s*=>\s*(\$ARGV\[\d+\]|\$[a-zA-Z_]\w*)'
+
+  - id: perl-net-rawip-tcp-syn
+    desc: Sets the TCP SYN flag in Net::RawIP,
+    crit: notable
+    for: [perl, all]
+    if:
+      type: raw
+      regex: '(?i)syn\s*=>\s*1'

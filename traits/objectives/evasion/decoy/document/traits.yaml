@@ -1,0 +1,64 @@
+# Decoy Document Execution
+# Detects opening of documents (PDF, DOC, etc.) often used to distract from malicious activity
+# ATT&CK: T1036 (Masquerading), T1204.002 (User Execution: Malicious File)
+
+defaults:
+  for: [shell]
+
+traits:
+  - id: open-decoy-doc-macos-1a
+    desc: "Opening generic document file (macOS - Word/Excel)"
+    crit: notable
+    conf: 0.7
+    attack: "T1204.002"
+    if:
+      type: raw
+      regex: 'open\s+[^|& ]{0,220}\.(doc|docx|xls|xlsx)'
+
+  - id: open-decoy-doc-macos-1b
+    desc: "Opening generic document file (macOS - PPT)"
+    crit: notable
+    conf: 0.7
+    attack: "T1204.002"
+    if:
+      type: raw
+      regex: 'open\s+[^|& ]{0,220}\.(ppt|pptx)'
+
+  - id: open-decoy-doc-macos-2
+    desc: "Opening generic document file (macOS - PDF/RTF)"
+    crit: notable
+    conf: 0.7
+    attack: "T1204.002"
+    if:
+      type: raw
+      regex: 'open\s+[^|& ]{0,220}\.(pdf|rtf)'
+
+  - id: open-decoy-doc-macos-3
+    desc: "Opening generic document file (macOS - TXT)"
+    crit: notable
+    conf: 0.7
+    attack: "T1204.002"
+    if:
+      type: raw
+      regex: 'open\s+[^|& ]{0,220}\.(txt)'
+
+composite_rules:
+  - id: open-decoy-doc-macos
+    desc: "Opening generic document file (macOS)"
+    crit: notable
+    conf: 0.7
+    attack: "T1204.002"
+    any:
+      - id: open-decoy-doc-macos-1a
+      - id: open-decoy-doc-macos-1b
+      - id: open-decoy-doc-macos-2
+      - id: open-decoy-doc-macos-3
+
+  - id: download-and-open-decoy
+    desc: "Download and open decoy document"
+    crit: suspicious
+    conf: 0.9
+    attack: "T1036"
+    all:
+      - id: micro-behaviors/communications/download/curl::curl-output-file
+      - id: open-decoy-doc-macos

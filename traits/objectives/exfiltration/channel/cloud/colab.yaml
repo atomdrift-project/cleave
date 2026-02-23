@@ -1,0 +1,12 @@
+# Exfiltration via Cloud/Colab Channels
+
+composite_rules:
+  - id: colab-bridge-exfil
+    desc: Exfiltration via Google Colab browser bridge
+    crit: hostile
+    conf: 0.95
+    attack: "T1041" # Exfiltration Over C2 Channel
+    all:
+      - id: objectives/execution/interpreter/runtime/colab::register-callback
+      - id: objectives/execution/interpreter/runtime/colab::invoke-function
+      - id: objectives/exfiltration/channel/webhook::discord-exfiltration

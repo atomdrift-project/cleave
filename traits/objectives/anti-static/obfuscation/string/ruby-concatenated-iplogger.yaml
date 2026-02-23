@@ -1,0 +1,31 @@
+---
+# Detects fragmented "iplogger" strings in Ruby code (TacoBell malware)
+# Example: "ip" + "logger" or similar concatenation patterns
+# ATT&CK: T1027 (Obfuscated Files or Information)
+
+defaults:
+  for: [ruby]
+  crit: suspicious
+  conf: 0.85
+
+traits:
+  - id: ruby-concatenated-iplogger
+    desc: Concatenated 'iplogger' string fragment
+    if:
+      type: ast
+      query: |
+        ((binary
+          left: (string) @left
+          right: (string) @right)
+         (#match? @left "iplogger|ip")
+         (#match? @right "logger|org"))
+
+  - id: ruby-concatenated-iplogger-alt
+    desc: Concatenated 'iplogger' string fragment (alternate)
+    if:
+      type: ast
+      query: |
+        ((binary
+          left: (_)
+          right: (string) @right)
+         (#match? @right "^iplogger"))

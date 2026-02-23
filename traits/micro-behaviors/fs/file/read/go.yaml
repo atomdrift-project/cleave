@@ -1,0 +1,15 @@
+# File Read Operations - Go
+# MBC: C0051 (Read File)
+# ATT&CK: T1005
+
+defaults:
+  for: [all]
+
+traits:
+  - id: read-go
+    desc: Read files (Go)
+    crit: baseline
+    conf: 0.66
+    if:
+      type: string
+      regex: "os\\.\\(\\*File\\)\\.Read"

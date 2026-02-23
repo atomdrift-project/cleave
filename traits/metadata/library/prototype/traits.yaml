@@ -1,0 +1,27 @@
+# Prototype.js Library Identification
+# Used to suppress false positives in malware detection rules
+
+defaults:
+  crit: baseline
+  conf: 1.0
+  for: [javascript]
+
+traits:
+  - id: copyright
+    desc: Prototype.js copyright header
+    if:
+      type: raw
+      substr: "Prototype JavaScript framework"
+      ignore_case: true
+
+  - id: version-string
+    desc: Prototype.js version definition
+    if:
+      type: raw
+      substr: "var Prototype = {"
+
+  - id: header-x
+    desc: X-Prototype-Version header
+    if:
+      type: string
+      substr: "X-Prototype-Version"

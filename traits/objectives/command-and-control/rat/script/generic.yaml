@@ -1,0 +1,78 @@
+# Remote Access Trojan (RAT) - Generic
+# Detects RAT behavior combining network listening with remote command execution
+# ATT&CK: T1219 (Remote Access Software), T1071 (Application Layer Protocol)
+
+defaults:
+  for: [all]
+
+traits:
+  # === Network Communication Indicators ===
+  - id: listen-socket
+    desc: Socket listening capability
+    crit: notable
+    conf: 0.7
+    if:
+      type: string
+      substr: "SocketListen"
+
+  - id: socket-data-transfer
+    desc: Socket data transfer capability
+    crit: notable
+    conf: 0.6
+    if:
+      type: string
+      substr: "SocketReadAll"
+
+  # === Command Execution Indicators ===
+  - id: command-execution
+    desc: Command execution capability
+    crit: notable
+    conf: 0.65
+    if:
+      type: string
+      substr: "shellsoc"
+
+  - id: script-exec
+    desc: Script execution capability
+    crit: notable
+    conf: 0.65
+    if:
+      type: string
+      substr: "ScriptExecute"
+
+  # === Server Components ===
+  - id: server-component
+    desc: RAT server component
+    crit: notable
+    conf: 0.6
+    if:
+      type: string
+      regex: 'Trojan[_\s]Server|Server[_\s]1\\.1'
+
+composite_rules:
+  # Basic RAT detection (socket listen + command execution)
+  - id: rat-generic
+    desc: Remote Access Trojan behavior
+    crit: suspicious
+    conf: 0.8
+    attack: "T1219"
+    mbc: "B0022"
+    all:
+      - id: listen-socket
+    any:
+      - id: command-execution
+      - id: script-exec
+
+  # RAT server detection
+  - id: rat-server
+    desc: Remote Access Trojan server component
+    crit: suspicious
+    conf: 0.85
+    attack: "T1219"
+    mbc: "B0022"
+    all:
+      - id: listen-socket
+      - id: server-component
+    any:
+      - id: command-execution
+      - id: script-exec

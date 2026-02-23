@@ -1,0 +1,30 @@
+defaults:
+  for: [python]
+
+traits:
+  - id: openai-content-access-python
+    desc: Accesses OpenAI choices[0].message.content
+    crit: notable
+    if:
+      type: ast
+      query: |
+        (subscript
+          value: (subscript
+            value: (subscript
+              value: (subscript
+                 value: (_)
+                 subscript: (string (string_content) @k1 (#eq? @k1 "choices"))
+              )
+              subscript: (integer) @idx (#eq? @idx "0")
+            )
+            subscript: (string (string_content) @k2 (#eq? @k2 "message"))
+          )
+          subscript: (string (string_content) @k3 (#eq? @k3 "content"))
+        )
+
+  - id: openai-reject-check
+    desc: Checks for 'reject' key in LLM response
+    crit: suspicious
+    if:
+      type: raw
+      regex: "reject.{1,100}false.{1,100}lower.{1,100}true"

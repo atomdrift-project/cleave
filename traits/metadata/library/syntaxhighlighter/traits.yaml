@@ -1,0 +1,31 @@
+# SyntaxHighlighter Library Detection
+# Used to suppress false positives in syntax highlighting scripts
+
+defaults:
+  crit: baseline
+  for: [javascript]
+
+traits:
+  - id: syntaxhighlighter-core
+    desc: SyntaxHighlighter core library
+    if:
+      type: symbol
+      regex: "SyntaxHighlighter"
+
+  - id: syntaxhighlighter-brush
+    desc: SyntaxHighlighter brush definition
+    if:
+      type: symbol
+      regex: 'SyntaxHighlighter\.brushes|SyntaxHighlighter\.Highlighter'
+
+  - id: syntaxhighlighter-brush-export
+    desc: SyntaxHighlighter brush export
+    if:
+      type: symbol
+      regex: 'exports\.Brush'
+
+  - id: syntaxhighlighter-header-url
+    desc: SyntaxHighlighter project URL
+    if:
+      type: string
+      regex: 'alexgorbatchev\.com/SyntaxHighlighter'

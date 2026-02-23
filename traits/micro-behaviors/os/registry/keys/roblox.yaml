@@ -1,0 +1,11 @@
+defaults:
+  for: [all]
+
+traits:
+  - id: registry-access
+    desc: Accesses Roblox registry keys
+    crit: notable
+    conf: 0.8
+    if:
+      type: string
+      regex: '(?i)(SOFTWARE\\Roblox\\RobloxStudioBrowser\\roblox\.com|\.ROBLOSECURITY)'

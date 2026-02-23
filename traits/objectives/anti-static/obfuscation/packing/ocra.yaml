@@ -1,0 +1,15 @@
+composite_rules:
+  - id: ocra-with-evasion
+    desc: "OCRA (One-Click Ruby Application) executable with evasion/anti-analysis capabilities"
+    crit: suspicious
+    conf: 0.85
+    mbc: "B0001"
+    attack: "T1497"
+    all:
+      - id: objectives/anti-analysis/packing/ocra::ocra-packed-executable
+    any:
+      - id: objectives/anti-analysis/debugger/detect::win-comprehensive
+      - id: objectives/anti-analysis/vm/detect::instruction-based-evasion
+      - id: micro-behaviors/process/terminate/kill::terminate-process
+      - id: objectives/anti-analysis/vm/detect::multiple-rdtsc-instr
+    needs: 1

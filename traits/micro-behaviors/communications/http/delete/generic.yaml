@@ -1,0 +1,12 @@
+defaults:
+  crit: notable
+  conf: 0.7
+  for: [all]
+
+traits:
+  - id: delete
+    desc: HTTP DELETE method
+    if:
+      type: string
+      word: DELETE
+      case_insensitive: false

@@ -1,0 +1,12 @@
+defaults:
+  for: [all]
+
+traits:
+  - id: weird-function-syntax
+    desc: "Detects weird non-standard function declaration syntax (function"
+    crit: suspicious
+    conf: 0.95
+    attack: "T1027"
+    if:
+      type: raw
+      regex: 'function\s+[a-zA-Z0-9_$]+\.prototype\.[a-zA-Z0-9_$]+\s*\('

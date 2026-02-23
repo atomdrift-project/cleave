@@ -1,0 +1,16 @@
+# Terminal ANSI Color Handling - Python
+# Detects libraries/code that manipulate terminal colors and styles
+# These are benign terminal output formatting mechanisms
+
+defaults:
+  for: [python]
+  crit: baseline
+
+traits:
+  # ANSI escape code usage
+  - id: escape-codes
+    desc: "ANSI terminal escape codes"
+    conf: 0.8
+    if:
+      type: raw
+      regex: "\\x1b\\["

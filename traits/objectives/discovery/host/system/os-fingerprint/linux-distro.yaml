@@ -1,0 +1,114 @@
+# Linux Distribution Detection
+# Detects malware that identifies specific Linux distributions
+# ATT&CK: T1082 (System Information Discovery)
+# MBC: B0012 (Operating System Discovery)
+
+defaults:
+  crit: notable
+  attack: "T1082"
+  mbc: "B0012"
+  for: [python, shell, elf]
+
+traits:
+  # === OS Release File Access ===
+  # Removed etc-os-release-read duplicate - use micro-behaviors/fs/path/os::os-release-path
+
+  - id: os-release-open
+    desc: Open os-release file
+    crit: notable
+    conf: 0.70
+    if:
+      type: string
+      regex: "open\\(.{0,15}os-release|/rgp/bf-eryrnfr"
+
+  # === Distribution Identification ===
+  - id: distro-debian-check
+    desc: Debian distro check
+    crit: notable
+    conf: 0.70
+    if:
+      type: string
+      regex: "ID=debian|ID_LIKE=debian"
+
+  - id: distro-fedora-check
+    desc: Fedora distro check
+    crit: notable
+    conf: 0.70
+    if:
+      type: string
+      regex: "ID=fedora|ID_LIKE=fedora"
+
+  - id: distro-ubuntu-check
+    desc: Ubuntu distro check
+    crit: notable
+    conf: 0.70
+    if:
+      type: string
+      regex: "ID=ubuntu"
+
+  # === Distro-Specific Actions ===
+  - id: debian-specific-exec
+    desc: Debian-specific execution
+    crit: suspicious
+    conf: 0.80
+    if:
+      type: string
+      regex: "debian.{0,15}exec|exec.{0,15}debian"
+
+  - id: fedora-specific-exec
+    desc: Fedora-specific execution
+    crit: suspicious
+    conf: 0.80
+    if:
+      type: string
+      regex: "fedora.{0,15}exec|exec.{0,15}fedora"
+
+  # === Package Manager Detection ===
+  - id: apt-package-manager
+    desc: apt package manager reference
+    crit: notable
+    conf: 0.50
+    if:
+      type: string
+      exact: "apt"
+
+  # Removed duplicates - use micro-behaviors/os/package-manager/install::multi-distro-yum-ref and ::multi-distro-dnf-ref
+
+composite_rules:
+  # === Distribution Detection ===
+  - id: linux-distro-identification
+    desc: Linux distro identification
+    crit: notable
+    conf: 0.80
+    attack: "T1082"
+    any:
+      - id: micro-behaviors/fs/path/os::os-release-path
+      - id: os-release-open
+
+  - id: distro-specific-targeting
+    desc: Distro-specific malware targeting
+    crit: suspicious
+    conf: 0.85
+    attack: "T1082"
+    mbc: "B0012"
+    for: [python, shell]
+    any:
+      - id: distro-debian-check
+      - id: distro-fedora-check
+      - id: distro-ubuntu-check
+    all:
+      - id: linux-distro-identification
+
+  - id: adaptive-linux-malware
+    desc: Adaptive Linux malware
+    crit: suspicious
+    conf: 0.90
+    attack: "T1082"
+    mbc: "B0012"
+    platforms: [linux]
+    needs: 2
+    any:
+      - id: debian-specific-exec
+      - id: fedora-specific-exec
+      - id: distro-debian-check
+      - id: distro-fedora-check

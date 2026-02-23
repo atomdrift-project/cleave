@@ -1,0 +1,89 @@
+# Go Filesystem Operations
+traits:
+  - id: os-create
+    desc: "Create file via os.Create"
+    crit: notable
+    conf: 0.8
+    attack: "T1041"
+    for: [go]
+    if:
+      type: symbol
+      exact: "os.Create"
+
+  - id: os-write-file
+    desc: "Write file via os.WriteFile"
+    crit: notable
+    conf: 0.8
+    attack: "T1041"
+    for: [go]
+    if:
+      type: symbol
+      exact: "os.WriteFile"
+
+  - id: ioutil-write-file
+    desc: "Write file via ioutil.WriteFile"
+    crit: notable
+    conf: 0.8
+    attack: "T1041"
+    for: [go]
+    if:
+      type: symbol
+      exact: "ioutil.WriteFile"
+
+  - id: filepath-walk
+    desc: "Enumerate files via filepath.Walk"
+    crit: notable
+    conf: 0.75
+    attack: "T1083"
+    for: [go]
+    if:
+      type: symbol
+      exact: "filepath.Walk"
+
+  - id: ioutil-read-dir
+    desc: "Enumerate files via ioutil.ReadDir"
+    crit: notable
+    conf: 0.75
+    attack: "T1083"
+    for: [go]
+    if:
+      type: symbol
+      exact: "ioutil.ReadDir"
+
+  - id: os-chmod
+    desc: "Modify permissions via os.Chmod"
+    crit: notable
+    conf: 0.85
+    attack: "T1222.002"
+    for: [go]
+    if:
+      type: symbol
+      exact: "os.Chmod"
+
+  - id: os-chown
+    desc: "Modify ownership via os.Chown"
+    crit: notable
+    conf: 0.85
+    attack: "T1222.002"
+    for: [go]
+    if:
+      type: symbol
+      exact: "os.Chown"
+
+  - id: os-open
+    desc: "Open file via os.Open"
+    crit: baseline
+    conf: 0.9
+    for: [go, macho, elf, pe]
+    if:
+      type: symbol
+      exact: "os.Open"
+
+  - id: io-copy
+    desc: "Copy data via io.Copy"
+    crit: baseline
+    conf: 0.9
+    for: [go, macho, elf, pe]
+    if:
+      type: symbol
+      exact: "io.Copy"

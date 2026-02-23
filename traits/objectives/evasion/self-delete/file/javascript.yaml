@@ -1,0 +1,17 @@
+# JScript Self-Deletion
+# Detects scripts that delete themselves after execution or during startup
+
+defaults:
+  crit: suspicious
+  conf: 0.8
+  for: [javascript]
+
+traits:
+  - id: js-self-deletion-pattern
+    desc: "Self-deletion via ScriptFullName"
+    mbc: "B0006" # Self-Deletion
+    attack: "T1070.004"
+    if:
+      type: raw
+      # Matches DeleteFile(ScriptFullName)
+      regex: '\.DeleteFile\s*\([^)]{0,120}ScriptFullName[^)]{0,120}\)'

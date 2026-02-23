@@ -1,0 +1,201 @@
+# x86-64 Linux Staged Shellcode Detection
+# Detects Metasploit-style reverse TCP stagers and similar payloads
+# These are tiny ELF binaries that download and execute second-stage shellcode
+#
+# Key characteristics:
+# - Tiny ELF (typically 100-500 bytes) with minimal/no sections
+# - Statically linked, no symbols
+# - Uses raw syscalls via push/pop sequences
+# - Allocates RWX memory (mmap), connects to C2 (socket+connect),
+#   receives shellcode (read), and jumps to it
+#
+# ATT&CK: T1059.004 (Unix Shell), T1071.001 (Web Protocols)
+# MBC: B0030 (Dropper/Stager)
+
+defaults:
+  for: [elf]
+  platforms: [linux]
+  mbc: "B0030"
+
+traits:
+  # x86-64 mmap syscall via push/pop: push 9; pop rax; syscall
+  # Syscall 9 = mmap on Linux x86-64
+  # Hex: 6a 09 58 ... 0f 05
+  - id: x64-mmap-syscall
+    desc: x86-64 mmap syscall via push/pop
+    crit: notable
+    conf: 0.85
+    if:
+      type: hex
+      pattern: "6a 09 58 [0-20] 0f 05"
+
+  # x86-64 socket syscall: push 0x29; pop rax (41 = socket)
+  # Creates AF_INET TCP socket
+  - id: x64-socket-syscall
+    desc: x86-64 socket syscall via push/pop
+    crit: notable
+    conf: 0.85
+    if:
+      type: hex
+      pattern: "6a 29 58 [0-20] 0f 05"
+
+  # x86-64 connect syscall: push 0x2a; pop rax (42 = connect)
+  - id: x64-connect-syscall
+    desc: x86-64 connect syscall via push/pop
+    crit: notable
+    conf: 0.85
+    if:
+      type: hex
+      pattern: "6a 2a 58 [0-20] 0f 05"
+
+  # Shellcode execution transfer variants
+  # Used to jump to downloaded shellcode in mmap'd region
+
+  # jmp rsi (ff e6) - most common in Metasploit stagers
+  - id: x64-jmp-rsi
+    desc: jmp rsi instruction
+    crit: notable
+    conf: 0.8
+    size_max: 8192
+    if:
+      type: hex
+      pattern: "ff e6"
+
+  # jmp rax (ff e0)
+  - id: x64-jmp-rax
+    desc: jmp rax instruction
+    crit: notable
+    conf: 0.8
+    size_max: 8192
+    if:
+      type: hex
+      pattern: "ff e0"
+
+  # call rax (ff d0)
+  - id: x64-call-rax
+    desc: call rax instruction
+    crit: notable
+    conf: 0.8
+    size_max: 8192
+    if:
+      type: hex
+      pattern: "ff d0"
+
+  # call rsi (ff d6)
+  - id: x64-call-rsi
+    desc: call rsi instruction
+    crit: notable
+    conf: 0.8
+    size_max: 8192
+    if:
+      type: hex
+      pattern: "ff d6"
+
+  # x86-64 nanosleep syscall: push 0x23; pop rax (35 = nanosleep)
+  # Used for retry-loop delays between connection attempts
+  - id: x64-nanosleep-syscall
+    desc: x86-64 nanosleep syscall via push/pop
+    crit: notable
+    conf: 0.85
+    if:
+      type: hex
+      pattern: "6a 23 58 [0-20] 0f 05"
+
+  # x86-64 exit syscall: push 0x3c; pop rax (60 = exit)
+  - id: x64-exit-syscall
+    desc: x86-64 exit syscall via push/pop
+    crit: baseline
+    conf: 0.85
+    if:
+      type: hex
+      pattern: "6a 3c 58 [0-20] 0f 05"
+
+  # sockaddr_in structure with port (bytes 2-3) and IP (bytes 4-7)
+  # Pattern: 02 00 PP PP II II II II where PP=port, II=IP
+  # The 02 00 is sin_family = AF_INET
+  - id: sockaddr-in-struct
+    desc: sockaddr_in with hardcoded IP/port
+    crit: notable
+    conf: 0.75
+    if:
+      type: hex
+      # movabs rcx, immediate (48 b9) followed by sockaddr_in
+      pattern: "48 b9 02 00"
+
+  # Small ELF with minimal headers (stagers: raw ~100-500 bytes, page-aligned up to 8KB)
+  - id: tiny-elf
+    desc: Small ELF binary (stager-sized)
+    crit: notable
+    conf: 0.7
+    size_max: 8192
+
+composite_rules:
+  # Helper composite: any jmp/call to register (shellcode execution)
+  - id: x64-jmp-register
+    desc: Jump/call to register
+    crit: notable
+    conf: 0.8
+    any:
+      - id: x64-jmp-rsi
+      - id: x64-jmp-rax
+      - id: x64-call-rax
+      - id: x64-call-rsi
+
+  # Metasploit-style x86-64 Linux reverse TCP stager
+  # Classic pattern: mmap RWX memory + socket + connect + receive shellcode + execute
+  # Complexity: all(4) + for(1) = 5 >= 4 ✓ HOSTILE
+  - id: linux-x64-reverse-stager
+    desc: x86-64 Linux reverse shell stager
+    crit: hostile
+    conf: 0.95
+    attack: "T1059.004"
+    for: [elf]
+    all:
+      - id: x64-mmap-syscall
+      - id: x64-socket-syscall
+      - id: x64-connect-syscall
+      - id: x64-jmp-register
+
+  # Tiny shellcode ELF with syscalls
+  # Matches small ELFs that use raw syscalls - highly suspicious
+  # Complexity: all(3) + for(1) = 4 >= 4 ✓ HOSTILE
+  - id: tiny-shellcode-elf
+    desc: Tiny ELF with raw syscalls
+    crit: hostile
+    conf: 0.9
+    attack: "T1059"
+    for: [elf]
+    all:
+      - id: tiny-elf
+      - id: x64-socket-syscall
+      - id: x64-jmp-register
+
+  # Network stager with hardcoded C2
+  # Complexity: all(4) + for(1) = 5 >= 4 ✓ HOSTILE
+  - id: network-stager-hardcoded-c2
+    desc: Network stager with hardcoded C2 address
+    crit: hostile
+    conf: 0.92
+    attack: "T1071.001"
+    for: [elf]
+    all:
+      - id: x64-socket-syscall
+      - id: x64-connect-syscall
+      - id: sockaddr-in-struct
+      - id: x64-jmp-register
+
+  # Reverse stager with retry loop (nanosleep between connect attempts)
+  # This is the "reverse_tcp" variant with exponential/fixed retry
+  # Complexity: all(5) + for(1) = 6 >= 4 ✓ HOSTILE
+  - id: linux-x64-reverse-stager-retry
+    desc: x86-64 Linux reverse stager with retry
+    crit: hostile
+    conf: 0.95
+    attack: "T1059.004"
+    for: [elf]
+    all:
+      - id: x64-mmap-syscall
+      - id: x64-socket-syscall
+      - id: x64-connect-syscall
+      - id: x64-nanosleep-syscall
+      - id: x64-jmp-register

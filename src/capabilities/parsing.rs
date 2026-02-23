@@ -1,0 +1,1179 @@
+//! YAML data processing and default application.
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+//!
+//! This module handles:
+//! - Applying file-level defaults to raw trait and composite rule definitions
+//! - Parsing string fields into typed enums (FileType, Platform, Criticality)
+//! - Supporting the "none" keyword to explicitly unset defaults
+
+use crate::composite_rules::{CompositeTrait, FileType as RuleFileType, Platform, TraitDefinition};
+use crate::types::Criticality;
+use std::collections::HashSet;
+
+use super::models::{RawCompositeRule, RawTraitDefinition, TraitDefaults};
+
+/// Apply default for Option<String> fields, supporting "none" to unset
+/// - If raw is Some("none"), return None (explicit unset)
+/// - If raw is Some(value), return Some(value)
+/// - If raw is None, return default
+pub(crate) fn apply_string_default(
+    raw: Option<String>,
+    default: &Option<String>,
+) -> Option<String> {
+    match &raw {
+        Some(v) if v.eq_ignore_ascii_case("none") => None,
+        Some(_) => raw,
+        None => default.clone(),
+    }
+}
+
+/// Apply default for Vec<String> fields (file_types, platforms), supporting "none" to unset
+/// - If raw contains "none", return empty/default behavior
+/// - If raw is Some with values, use those
+/// - If raw is None, use default
+pub(crate) fn apply_vec_default(
+    raw: Option<Vec<String>>,
+    default: &Option<Vec<String>>,
+) -> Option<Vec<String>> {
+    match &raw {
+        Some(v) if v.iter().any(|s| s.eq_ignore_ascii_case("none")) => None,
+        Some(_) => raw,
+        None => default.clone(),
+    }
+}
+
+/// Convert a raw trait definition to a final TraitDefinition, applying file-level defaults
+/// Collects warnings into the provided vector instead of printing them.
+pub(crate) fn apply_trait_defaults(
+    raw: RawTraitDefinition,
+    defaults: &TraitDefaults,
+    warnings: &mut Vec<String>,
+    path: &std::path::Path,
+) -> TraitDefinition {
+    // Validation: require explicit for: either on trait or in file defaults.
+    // Silently defaulting to [All] is not allowed — authors must be explicit about target file types.
+    if raw.file_types.is_none() && defaults.r#for.is_none() {
+        warnings.push(format!(
+            "Trait '{}': missing 'for:' declaration. Every trait must specify which file types it \
+             targets. Add 'for: [all]' to this trait to match every file type, or list specific \
+             types like 'for: [python, javascript]'. To avoid repeating this on every trait in \
+             the file, add a file-wide default in the top-level 'defaults:' section, e.g.: \
+             'defaults:\\n  for: [python]'.",
+            raw.id
+        ));
+    }
+
+    // Parse file_types: use trait-specific if present (unless "none"), else defaults, else [All]
+    let file_types = apply_vec_default(raw.file_types, &defaults.r#for)
+        .map(|types| parse_file_types(&types, warnings))
+        .unwrap_or_else(|| vec![RuleFileType::All]);
+
+    // Parse platforms: use trait-specific if present (unless "none"), else defaults, else [All]
+    let platforms = apply_vec_default(raw.platforms, &defaults.platforms)
+        .map(|plats| parse_platforms(&plats))
+        .unwrap_or_else(|| vec![Platform::All]);
+
+    // Parse criticality: "none" means baseline
+    let mut criticality = match &raw.crit {
+        Some(v) if v.eq_ignore_ascii_case("none") => Criticality::Baseline,
+        Some(v) => match parse_criticality(v) {
+            Ok(crit) => crit,
+            Err(e) => {
+                warnings.push(format!("Trait '{}': {}", raw.id, e));
+                Criticality::Baseline
+            }
+        },
+        None => match defaults.crit.as_deref() {
+            Some(v) => match parse_criticality(v) {
+                Ok(crit) => crit,
+                Err(e) => {
+                    warnings.push(format!("Default criticality: {}", e));
+                    Criticality::Baseline
+                }
+            },
+            None => Criticality::Baseline,
+        },
+    };
+
+    // Stricter validation for HOSTILE traits: atomic traits cannot be HOSTILE
+    if criticality == Criticality::Hostile {
+        warnings.push(format!(
+            "Trait '{}' is an atomic trait marked 'crit: hostile'. Atomic (micro-behaviors/) traits cannot \
+             be hostile — hostile criticality requires intent inference and belongs in objectives/. \
+             Move this to objectives/ and categorize by attacker objective (e.g., objectives/command-and-control/, objectives/exfiltration/, \
+             objectives/impact/). See TAXONOMY.md: micro-behaviors/ max criticality is 'suspicious'.",
+            raw.id
+        ));
+        criticality = Criticality::Suspicious;
+    }
+
+    // Additional strictness for SUSPICIOUS/HOSTILE traits
+    if criticality >= Criticality::Suspicious && raw.desc.len() < 15 {
+        warnings.push(format!(
+            "Trait '{}' has an overly short description for its criticality.",
+            raw.id
+        ));
+    }
+
+    // Warn about overly long descriptions (> 7 words)
+    let word_count = raw.desc.split_whitespace().count();
+    if word_count > 7 {
+        warnings.push(format!(
+            "Trait '{}' has an overly long description ({} words, max 7 recommended).",
+            raw.id, word_count
+        ));
+    }
+
+    // For size-only traits without a condition, create a synthetic "always-true" condition
+    // This uses a basename regex that matches everything
+    let mut condition_with_filters =
+        raw.condition
+            .unwrap_or_else(|| crate::composite_rules::ConditionWithFilters {
+                condition: crate::composite_rules::Condition::Basename {
+                    exact: None,
+                    substr: None,
+                    regex: Some(".".to_string()),
+                    case_insensitive: false,
+                },
+                size_min: None,
+                size_max: None,
+                count_min: None,
+                count_max: None,
+                per_kb_min: None,
+                per_kb_max: None,
+            });
+
+    // Auto-fix: Convert literal regex patterns to substr for better performance
+    // If a regex pattern contains only alphanumeric chars and underscores, it's a literal
+    fix_literal_regex_patterns(&mut condition_with_filters.condition);
+
+    // Validation: regex patterns must not exceed 80 bytes.
+    check_regex_length(&raw.id, &condition_with_filters.condition, warnings);
+
+    // Support backwards compatibility: if size_min/size_max are at trait level,
+    // copy them to the condition wrapper (unless already set in the if: block)
+    if condition_with_filters.size_min.is_none() {
+        condition_with_filters.size_min = raw.size_min;
+    }
+    if condition_with_filters.size_max.is_none() {
+        condition_with_filters.size_max = raw.size_max;
+    }
+
+    let mut trait_def = TraitDefinition {
+        id: raw.id,
+        desc: raw.desc,
+        conf: raw.conf.or(defaults.conf).unwrap_or(1.0),
+        crit: criticality,
+        mbc: apply_string_default(raw.mbc, &defaults.mbc),
+        attack: apply_string_default(raw.attack, &defaults.attack),
+        platforms,
+        r#for: file_types,
+        r#if: condition_with_filters,
+        not: raw.not,
+        unless: raw.unless,
+        downgrade: raw.downgrade,
+        defined_in: path.to_path_buf(),
+        precision: None,
+    };
+
+    // Calculate and store precision immediately
+    trait_def.precision = Some(super::validation::calculate_trait_precision(&trait_def));
+
+    trait_def
+}
+
+/// Parse file type strings into FileType enum
+/// Collects warnings about unknown file types into the provided vector.
+pub(crate) fn parse_file_types(types: &[String], warnings: &mut Vec<String>) -> Vec<RuleFileType> {
+    let mut inclusions = HashSet::new();
+    let mut exclusions = HashSet::new();
+    let mut has_explicit_inclusion = false;
+
+    for type_str in types {
+        for part in type_str.split(',') {
+            let part = part.trim();
+            if part.is_empty() {
+                continue;
+            }
+
+            let (is_exclusion, name) = if let Some(stripped) = part.strip_prefix('!') {
+                (true, stripped)
+            } else if let Some(stripped) = part.strip_prefix('-') {
+                // Support YAML-safe exclusion syntax: -python, -c, etc.
+                (true, stripped)
+            } else {
+                (false, part)
+            };
+
+            let variants = match name.to_lowercase().as_str() {
+                "all" | "*" => {
+                    if is_exclusion {
+                        vec![]
+                    } else {
+                        vec![RuleFileType::All]
+                    }
+                }
+                // Groups
+                "binaries" => vec![
+                    RuleFileType::Elf,
+                    RuleFileType::Macho,
+                    RuleFileType::Pe,
+                    RuleFileType::Dylib,
+                    RuleFileType::So,
+                    RuleFileType::Dll,
+                    RuleFileType::Class,
+                ],
+                "scripts" => vec![
+                    RuleFileType::Shell,
+                    RuleFileType::Batch,
+                    RuleFileType::Python,
+                    RuleFileType::JavaScript,
+                    RuleFileType::TypeScript,
+                    RuleFileType::Ruby,
+                    RuleFileType::Php,
+                    RuleFileType::Perl,
+                    RuleFileType::Lua,
+                    RuleFileType::PowerShell,
+                    RuleFileType::AppleScript,
+                ],
+                // Binary formats
+                "elf" => vec![RuleFileType::Elf],
+                "macho" => vec![RuleFileType::Macho],
+                "pe" => vec![RuleFileType::Pe],
+                "dylib" => vec![RuleFileType::Dylib],
+                "so" => vec![RuleFileType::So],
+                "dll" => vec![RuleFileType::Dll],
+                // Scripting languages (fullname + extension)
+                "shell" | "sh" => vec![RuleFileType::Shell],
+                "batch" | "bat" | "cmd" => vec![RuleFileType::Batch],
+                "python" | "py" => vec![RuleFileType::Python],
+                "javascript" | "js" => vec![RuleFileType::JavaScript],
+                "typescript" | "ts" => vec![RuleFileType::TypeScript],
+                "ruby" | "rb" => vec![RuleFileType::Ruby],
+                "php" => vec![RuleFileType::Php],
+                "perl" | "pl" => vec![RuleFileType::Perl],
+                "powershell" | "ps1" => vec![RuleFileType::PowerShell],
+                "lua" => vec![RuleFileType::Lua],
+                "applescript" | "scpt" => vec![RuleFileType::AppleScript],
+                "vbs" => vec![RuleFileType::Vbs],
+                "html" | "htm" => vec![RuleFileType::Html],
+                // Compiled languages (fullname + extension)
+                "java" => vec![RuleFileType::Java],
+                "class" => vec![RuleFileType::Class],
+                "c" => vec![RuleFileType::C],
+                "cpp" | "c++" | "cc" | "cxx" => vec![RuleFileType::Cpp],
+                "rust" => vec![RuleFileType::Rust],
+                "go" => vec![RuleFileType::Go],
+                "csharp" | "cs" => vec![RuleFileType::CSharp],
+                "swift" => vec![RuleFileType::Swift],
+                "objective-c" | "objc" => vec![RuleFileType::ObjectiveC],
+                "groovy" => vec![RuleFileType::Groovy],
+                "scala" => vec![RuleFileType::Scala],
+                "zig" => vec![RuleFileType::Zig],
+                "elixir" => vec![RuleFileType::Elixir],
+                // Specific filenames
+                "package.json" => vec![RuleFileType::PackageJson],
+                "cargo.toml" => vec![RuleFileType::CargoToml],
+                "pyproject.toml" => vec![RuleFileType::PyProjectToml],
+                "composer.json" => vec![RuleFileType::ComposerJson],
+                // Logical types with hyphens
+                "chrome-manifest" | "manifest.json" => vec![RuleFileType::ChromeManifest],
+                "github-actions" => vec![RuleFileType::GithubActions],
+                // Archive/installer formats
+                "ipa" => vec![RuleFileType::Ipa],
+                // Generic formats
+                "text" | "txt" => vec![RuleFileType::Text],
+                // Image formats
+                "jpeg" | "jpg" => vec![RuleFileType::Jpeg],
+                "png" => vec![RuleFileType::Png],
+                // Other formats
+                "plist" => vec![RuleFileType::Plist],
+                "pkginfo" => vec![RuleFileType::PkgInfo],
+                "rtf" => vec![RuleFileType::Rtf],
+                _ => {
+                    // Unknown file type - add warning (file path will be added by caller)
+                    warnings.push(format!("Unknown file type: '{}'", name));
+                    vec![]
+                }
+            };
+
+            if name == "*" || name.eq_ignore_ascii_case("all") {
+                if !is_exclusion {
+                    has_explicit_inclusion = true;
+                    inclusions.insert(RuleFileType::All);
+                } else {
+                    for v in RuleFileType::all_concrete_variants() {
+                        exclusions.insert(v);
+                    }
+                }
+                continue;
+            }
+
+            for v in variants {
+                if is_exclusion {
+                    exclusions.insert(v);
+                } else {
+                    has_explicit_inclusion = true;
+                    inclusions.insert(v);
+                }
+            }
+        }
+    }
+
+    let mut final_set: HashSet<RuleFileType>;
+
+    if inclusions.contains(&RuleFileType::All)
+        || (!has_explicit_inclusion && !exclusions.is_empty())
+    {
+        final_set = RuleFileType::all_concrete_variants().into_iter().collect();
+    } else {
+        final_set = inclusions.clone();
+    }
+
+    for exc in &exclusions {
+        final_set.remove(exc);
+    }
+
+    if !exclusions.is_empty() {
+        let mut v: Vec<_> = final_set.into_iter().collect();
+        v.sort();
+        v
+    } else if inclusions.contains(&RuleFileType::All) {
+        vec![RuleFileType::All]
+    } else {
+        let mut v: Vec<_> = final_set.into_iter().collect();
+        v.sort();
+        v
+    }
+}
+
+/// Parse platform strings into Platform enum
+pub(crate) fn parse_platforms(platforms: &[String]) -> Vec<Platform> {
+    platforms
+        .iter()
+        .filter_map(|p| match p.to_lowercase().as_str() {
+            "all" => Some(Platform::All),
+            "linux" => Some(Platform::Linux),
+            "macos" => Some(Platform::MacOS),
+            "windows" => Some(Platform::Windows),
+            "unix" => Some(Platform::Unix),
+            "android" => Some(Platform::Android),
+            "ios" => Some(Platform::Ios),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Parse criticality string into Criticality enum
+/// Returns an error for invalid criticality values instead of silently defaulting
+pub(crate) fn parse_criticality(s: &str) -> Result<Criticality, String> {
+    match s.to_lowercase().as_str() {
+        "component" => Ok(Criticality::Component),
+        "baseline" => Ok(Criticality::Baseline),
+        "notable" => Ok(Criticality::Notable),
+        "suspicious" => Ok(Criticality::Suspicious),
+        "hostile" | "malicious" => Ok(Criticality::Hostile),
+        unknown => Err(format!(
+            "Invalid criticality '{}'. Valid values: component, baseline, notable, suspicious, hostile",
+            unknown
+        )),
+    }
+}
+
+/// Convert a raw composite rule to a final CompositeTrait, applying file-level defaults
+/// Collects warnings into the provided vector instead of printing them.
+pub(crate) fn apply_composite_defaults(
+    raw: RawCompositeRule,
+    defaults: &TraitDefaults,
+    warnings: &mut Vec<String>,
+    path: &std::path::Path,
+) -> CompositeTrait {
+    // Parse file_types: use rule-specific if present (unless "none"), else defaults, else [All]
+    let file_types = apply_vec_default(raw.file_types, &defaults.r#for)
+        .map(|types| parse_file_types(&types, warnings))
+        .unwrap_or_else(|| vec![RuleFileType::All]);
+
+    // Parse platforms: use rule-specific if present (unless "none"), else defaults, else [All]
+    let platforms = apply_vec_default(raw.platforms, &defaults.platforms)
+        .map(|plats| parse_platforms(&plats))
+        .unwrap_or_else(|| vec![Platform::All]);
+
+    // Parse criticality: "none" means baseline
+    let criticality = match &raw.crit {
+        Some(v) if v.eq_ignore_ascii_case("none") => Criticality::Baseline,
+        Some(v) => match parse_criticality(v) {
+            Ok(crit) => crit,
+            Err(e) => {
+                warnings.push(format!("Composite rule '{}': {}", raw.id, e));
+                Criticality::Baseline
+            }
+        },
+        None => match defaults.crit.as_deref() {
+            Some(v) => match parse_criticality(v) {
+                Ok(crit) => crit,
+                Err(e) => {
+                    warnings.push(format!("Default criticality: {}", e));
+                    Criticality::Baseline
+                }
+            },
+            None => Criticality::Baseline,
+        },
+    };
+
+    // Handle single condition by converting to requires_all
+    let requires_all = raw.all.or_else(|| raw.condition.map(|c| vec![c]));
+
+    CompositeTrait {
+        id: raw.id,
+        desc: raw.desc,
+        conf: raw.conf.or(defaults.conf).unwrap_or(1.0),
+        crit: criticality,
+        mbc: apply_string_default(raw.mbc, &defaults.mbc),
+        attack: apply_string_default(raw.attack, &defaults.attack),
+        platforms,
+        r#for: file_types,
+        size_min: raw.size_min,
+        size_max: raw.size_max,
+        all: requires_all,
+        any: raw.any,
+        needs: raw.needs,
+        none: raw.none,
+        near_lines: raw.near_lines,
+        near_bytes: raw.near_bytes,
+        unless: raw.unless,
+        not: raw.not,
+        downgrade: raw.downgrade,
+        defined_in: path.to_path_buf(),
+        precision: None,
+    }
+}
+
+/// Auto-fix literal regex patterns by converting them to substr.
+/// A pattern is considered literal if it contains only alphanumeric chars and underscores.
+/// This provides better performance than regex matching for simple string searches.
+fn fix_literal_regex_patterns(condition: &mut crate::composite_rules::Condition) {
+    use crate::composite_rules::Condition;
+
+    // Helper to check if a pattern is a literal (no regex metacharacters)
+    // Regex metacharacters: . * + ? ^ $ ( ) [ ] { } | \
+    let is_literal = |pattern: &str| -> bool {
+        !pattern.is_empty()
+            && !pattern.chars().any(|c| {
+                matches!(
+                    c,
+                    '.' | '*'
+                        | '+'
+                        | '?'
+                        | '^'
+                        | '$'
+                        | '('
+                        | ')'
+                        | '['
+                        | ']'
+                        | '{'
+                        | '}'
+                        | '|'
+                        | '\\'
+                )
+            })
+    };
+
+    match condition {
+        Condition::String {
+            regex: regex_opt,
+            substr,
+            ..
+        } if substr.is_none() => {
+            if let Some(pattern) = regex_opt {
+                if is_literal(pattern) {
+                    // Convert regex to substr
+                    *substr = Some(pattern.clone());
+                    *regex_opt = None;
+                }
+            }
+        }
+        Condition::Raw {
+            regex: regex_opt,
+            substr,
+            ..
+        } if substr.is_none() => {
+            if let Some(pattern) = regex_opt {
+                if is_literal(pattern) {
+                    // Convert regex to substr
+                    *substr = Some(pattern.clone());
+                    *regex_opt = None;
+                }
+            }
+        }
+        Condition::Symbol {
+            regex: regex_opt,
+            substr,
+            ..
+        } if substr.is_none() => {
+            if let Some(pattern) = regex_opt {
+                if is_literal(pattern) {
+                    // Convert regex to substr
+                    *substr = Some(pattern.clone());
+                    *regex_opt = None;
+                }
+            }
+        }
+        Condition::Basename {
+            regex: regex_opt,
+            substr,
+            ..
+        } if substr.is_none() => {
+            if let Some(pattern) = regex_opt {
+                if is_literal(pattern) {
+                    // Convert regex to substr
+                    *substr = Some(pattern.clone());
+                    *regex_opt = None;
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Check that the regex pattern in a condition does not exceed 80 bytes.
+const MAX_REGEX_OR_SYMBOLS: usize = 3;
+
+/// Count regex alternation symbols (`|`) outside character classes.
+fn count_regex_or_symbols(pattern: &str) -> usize {
+    let mut count = 0usize;
+    let mut in_char_class = false;
+    let mut escaped = false;
+
+    for ch in pattern.chars() {
+        if escaped {
+            escaped = false;
+            continue;
+        }
+
+        match ch {
+            '\\' => escaped = true,
+            '[' if !in_char_class => in_char_class = true,
+            ']' if in_char_class => in_char_class = false,
+            '|' if !in_char_class => count += 1,
+            _ => {}
+        }
+    }
+
+    count
+}
+
+/// Detect simple alphanumeric alternation chains like:
+/// `word1|word2|word3` or `^word1|word2$` (after anchor stripping).
+/// These should be split into atomic exact/word traits instead of regex.
+fn is_simple_alphanumeric_or_chain(pattern: &str) -> bool {
+    let mut p = pattern.trim();
+    if let Some(stripped) = p.strip_prefix('^') {
+        p = stripped;
+    }
+    if let Some(stripped) = p.strip_suffix('$') {
+        p = stripped;
+    }
+
+    // Must be an alternation to trigger this rule.
+    if !p.contains('|') {
+        return false;
+    }
+
+    let parts: Vec<&str> = p.split('|').collect();
+    if parts.len() < 2 {
+        return false;
+    }
+
+    parts
+        .into_iter()
+        .all(|part| !part.is_empty() && part.chars().all(|c| c.is_ascii_alphanumeric() || c == '_'))
+}
+
+fn check_regex_length(
+    trait_id: &str,
+    condition: &crate::composite_rules::Condition,
+    warnings: &mut Vec<String>,
+) {
+    use crate::composite_rules::Condition;
+
+    let regex = match condition {
+        Condition::Symbol { regex, .. }
+        | Condition::String { regex, .. }
+        | Condition::Raw { regex, .. }
+        | Condition::Ast { regex, .. }
+        | Condition::StringCount { regex, .. }
+        | Condition::Section { regex, .. }
+        | Condition::Encoded { regex, .. }
+        | Condition::Basename { regex, .. }
+        | Condition::Kv { regex, .. } => regex.as_deref(),
+        _ => None,
+    };
+
+    if let Some(pattern) = regex {
+        if pattern.len() > 80 {
+            warnings.push(format!(
+                "Trait '{}': regex pattern exceeds 80 bytes ({} bytes): {:?}",
+                trait_id,
+                pattern.len(),
+                pattern
+            ));
+        }
+
+        let or_symbol_count = count_regex_or_symbols(pattern);
+        if or_symbol_count > MAX_REGEX_OR_SYMBOLS {
+            warnings.push(format!(
+                "Trait '{}': regex uses too many '|' symbols ({} > {}): {:?}",
+                trait_id, or_symbol_count, MAX_REGEX_OR_SYMBOLS, pattern
+            ));
+        }
+
+        if is_simple_alphanumeric_or_chain(pattern) {
+            warnings.push(format!(
+                "Trait '{}': regex is a simple alphanumeric alternation chain. Use atomic exact/word traits instead: {:?}",
+                trait_id,
+                pattern
+            ));
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ==================== apply_string_default Tests ====================
+
+    #[test]
+    fn test_apply_string_default_raw_value() {
+        let result = apply_string_default(Some("custom".to_string()), &Some("default".to_string()));
+        assert_eq!(result, Some("custom".to_string()));
+    }
+
+    #[test]
+    fn test_apply_string_default_uses_default() {
+        let result = apply_string_default(None, &Some("default".to_string()));
+        assert_eq!(result, Some("default".to_string()));
+    }
+
+    #[test]
+    fn test_apply_string_default_none_unsets() {
+        let result = apply_string_default(Some("none".to_string()), &Some("default".to_string()));
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_apply_string_default_both_none() {
+        let result = apply_string_default(None, &None);
+        assert_eq!(result, None);
+    }
+
+    // ==================== apply_vec_default Tests ====================
+
+    #[test]
+    fn test_apply_vec_default_raw_value() {
+        let result = apply_vec_default(
+            Some(vec!["a".to_string(), "b".to_string()]),
+            &Some(vec!["default".to_string()]),
+        );
+        assert_eq!(result, Some(vec!["a".to_string(), "b".to_string()]));
+    }
+
+    #[test]
+    fn test_apply_vec_default_uses_default() {
+        let result = apply_vec_default(None, &Some(vec!["default".to_string()]));
+        assert_eq!(result, Some(vec!["default".to_string()]));
+    }
+
+    #[test]
+    fn test_apply_vec_default_none_unsets() {
+        let result = apply_vec_default(
+            Some(vec!["none".to_string()]),
+            &Some(vec!["default".to_string()]),
+        );
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_apply_vec_default_none_mixed() {
+        // If "none" appears anywhere in the vec, it unsets
+        let result = apply_vec_default(
+            Some(vec!["value".to_string(), "NONE".to_string()]),
+            &Some(vec!["default".to_string()]),
+        );
+        assert_eq!(result, None);
+    }
+
+    // ==================== parse_criticality Tests ====================
+
+    #[test]
+    fn test_parse_criticality_baseline() {
+        assert_eq!(parse_criticality("baseline").unwrap(), Criticality::Baseline);
+        assert_eq!(parse_criticality("baseline").unwrap(), Criticality::Baseline);
+    }
+
+    #[test]
+    fn test_parse_criticality_notable() {
+        assert_eq!(parse_criticality("notable").unwrap(), Criticality::Notable);
+        assert_eq!(parse_criticality("NOTABLE").unwrap(), Criticality::Notable);
+    }
+
+    #[test]
+    fn test_parse_criticality_suspicious() {
+        assert_eq!(
+            parse_criticality("suspicious").unwrap(),
+            Criticality::Suspicious
+        );
+        assert_eq!(
+            parse_criticality("SUSPICIOUS").unwrap(),
+            Criticality::Suspicious
+        );
+    }
+
+    #[test]
+    fn test_parse_criticality_hostile() {
+        assert_eq!(parse_criticality("hostile").unwrap(), Criticality::Hostile);
+        assert_eq!(parse_criticality("HOSTILE").unwrap(), Criticality::Hostile);
+        assert_eq!(
+            parse_criticality("malicious").unwrap(),
+            Criticality::Hostile
+        );
+    }
+
+    #[test]
+    fn test_parse_criticality_unknown_returns_error() {
+        assert!(parse_criticality("unknown").is_err());
+        assert!(parse_criticality("").is_err());
+        assert!(parse_criticality("high").is_err());
+        assert!(parse_criticality("critical").is_err());
+        assert!(parse_criticality("dangerous").is_err());
+
+        // Check error message
+        let err = parse_criticality("dangerous").unwrap_err();
+        assert!(err.contains("dangerous"));
+        assert!(err.contains("baseline"));
+        assert!(err.contains("hostile"));
+    }
+
+    // ==================== parse_platforms Tests ====================
+
+    #[test]
+    fn test_parse_platforms_all() {
+        let result = parse_platforms(&["all".to_string()]);
+        assert_eq!(result, vec![Platform::All]);
+    }
+
+    #[test]
+    fn test_parse_platforms_multiple() {
+        let result = parse_platforms(&[
+            "linux".to_string(),
+            "macos".to_string(),
+            "windows".to_string(),
+        ]);
+        assert!(result.contains(&Platform::Linux));
+        assert!(result.contains(&Platform::MacOS));
+        assert!(result.contains(&Platform::Windows));
+    }
+
+    #[test]
+    fn test_parse_platforms_case_insensitive() {
+        let result = parse_platforms(&["LINUX".to_string(), "MacOS".to_string()]);
+        assert!(result.contains(&Platform::Linux));
+        assert!(result.contains(&Platform::MacOS));
+    }
+
+    #[test]
+    fn test_parse_platforms_unknown_ignored() {
+        let result = parse_platforms(&["linux".to_string(), "unknown".to_string()]);
+        assert_eq!(result.len(), 1);
+        assert!(result.contains(&Platform::Linux));
+    }
+
+    #[test]
+    fn test_parse_platforms_unix_android_ios() {
+        let result =
+            parse_platforms(&["unix".to_string(), "android".to_string(), "ios".to_string()]);
+        assert!(result.contains(&Platform::Unix));
+        assert!(result.contains(&Platform::Android));
+        assert!(result.contains(&Platform::Ios));
+    }
+
+    // ==================== parse_file_types Tests ====================
+
+    #[test]
+    fn test_parse_file_types_all() {
+        let mut warnings = Vec::new();
+        let result = parse_file_types(&["all".to_string()], &mut warnings);
+        assert_eq!(result, vec![RuleFileType::All]);
+        assert!(warnings.is_empty());
+    }
+
+    #[test]
+    fn test_parse_file_types_star() {
+        let mut warnings = Vec::new();
+        let result = parse_file_types(&["*".to_string()], &mut warnings);
+        assert_eq!(result, vec![RuleFileType::All]);
+        assert!(warnings.is_empty());
+    }
+
+    #[test]
+    fn test_parse_file_types_specific() {
+        let mut warnings = Vec::new();
+        let result = parse_file_types(
+            &["python".to_string(), "javascript".to_string()],
+            &mut warnings,
+        );
+        assert!(result.contains(&RuleFileType::Python));
+        assert!(result.contains(&RuleFileType::JavaScript));
+        assert!(warnings.is_empty());
+    }
+
+    #[test]
+    fn test_parse_file_types_aliases() {
+        let mut warnings = Vec::new();
+        let result = parse_file_types(
+            &[
+                "py".to_string(),
+                "js".to_string(),
+                "ts".to_string(),
+                "rb".to_string(),
+            ],
+            &mut warnings,
+        );
+        assert!(result.contains(&RuleFileType::Python));
+        assert!(result.contains(&RuleFileType::JavaScript));
+        assert!(result.contains(&RuleFileType::TypeScript));
+        assert!(result.contains(&RuleFileType::Ruby));
+        assert!(warnings.is_empty());
+    }
+
+    #[test]
+    fn test_parse_file_types_binaries() {
+        let mut warnings = Vec::new();
+        let result = parse_file_types(&["binaries".to_string()], &mut warnings);
+        assert!(result.contains(&RuleFileType::Elf));
+        assert!(result.contains(&RuleFileType::Macho));
+        assert!(result.contains(&RuleFileType::Pe));
+        assert!(warnings.is_empty());
+    }
+
+    #[test]
+    fn test_parse_file_types_scripts() {
+        let mut warnings = Vec::new();
+        let result = parse_file_types(&["scripts".to_string()], &mut warnings);
+        assert!(result.contains(&RuleFileType::Shell));
+        assert!(result.contains(&RuleFileType::Python));
+        assert!(result.contains(&RuleFileType::JavaScript));
+        assert!(warnings.is_empty());
+    }
+
+    #[test]
+    fn test_parse_file_types_exclusion() {
+        let mut warnings = Vec::new();
+        let result = parse_file_types(&["all".to_string(), "-python".to_string()], &mut warnings);
+        assert!(!result.contains(&RuleFileType::Python));
+        assert!(result.contains(&RuleFileType::JavaScript));
+        assert!(result.contains(&RuleFileType::Shell));
+        assert!(warnings.is_empty());
+    }
+
+    #[test]
+    fn test_parse_file_types_comma_separated() {
+        let mut warnings = Vec::new();
+        let result = parse_file_types(&["python,javascript,ruby".to_string()], &mut warnings);
+        assert!(result.contains(&RuleFileType::Python));
+        assert!(result.contains(&RuleFileType::JavaScript));
+        assert!(result.contains(&RuleFileType::Ruby));
+        assert!(warnings.is_empty());
+    }
+
+    #[test]
+    fn test_parse_file_types_case_insensitive() {
+        let mut warnings = Vec::new();
+        let result = parse_file_types(
+            &["PYTHON".to_string(), "JavaScript".to_string()],
+            &mut warnings,
+        );
+        assert!(result.contains(&RuleFileType::Python));
+        assert!(result.contains(&RuleFileType::JavaScript));
+        assert!(warnings.is_empty());
+    }
+
+    #[test]
+    fn test_parse_file_types_package_files() {
+        let mut warnings = Vec::new();
+        let result = parse_file_types(
+            &[
+                "package.json".to_string(),
+                "cargo.toml".to_string(),
+                "pyproject.toml".to_string(),
+            ],
+            &mut warnings,
+        );
+        assert!(result.contains(&RuleFileType::PackageJson));
+        assert!(result.contains(&RuleFileType::CargoToml));
+        assert!(result.contains(&RuleFileType::PyProjectToml));
+        assert!(warnings.is_empty());
+    }
+
+    #[test]
+    fn test_parse_file_types_image_formats() {
+        let mut warnings = Vec::new();
+        let result = parse_file_types(&["jpeg".to_string(), "png".to_string()], &mut warnings);
+        assert!(result.contains(&RuleFileType::Jpeg));
+        assert!(result.contains(&RuleFileType::Png));
+        assert!(warnings.is_empty());
+    }
+
+    #[test]
+    fn test_parse_file_types_exclusion_only() {
+        // When only exclusions are provided, start with all and remove
+        let mut warnings = Vec::new();
+        let result = parse_file_types(
+            &["-python".to_string(), "-javascript".to_string()],
+            &mut warnings,
+        );
+        assert!(!result.contains(&RuleFileType::Python));
+        assert!(!result.contains(&RuleFileType::JavaScript));
+        assert!(result.contains(&RuleFileType::Shell));
+        assert!(result.contains(&RuleFileType::Ruby));
+        assert!(warnings.is_empty());
+    }
+
+    #[test]
+    fn test_parse_file_types_bang_exclusion_backcompat() {
+        let mut warnings = Vec::new();
+        let result = parse_file_types(&["all".to_string(), "!python".to_string()], &mut warnings);
+        assert!(!result.contains(&RuleFileType::Python));
+        assert!(result.contains(&RuleFileType::JavaScript));
+        assert!(warnings.is_empty());
+    }
+
+    #[test]
+    fn test_parse_file_types_unknown_type() {
+        let mut warnings = Vec::new();
+        let result = parse_file_types(
+            &["python".to_string(), "invalid_type".to_string()],
+            &mut warnings,
+        );
+        assert!(result.contains(&RuleFileType::Python));
+        assert_eq!(warnings.len(), 1);
+        assert_eq!(warnings[0], "Unknown file type: 'invalid_type'");
+    }
+
+    #[test]
+    fn test_parse_file_types_multiple_unknown() {
+        let mut warnings = Vec::new();
+        let result = parse_file_types(
+            &["pyton".to_string(), "javascrpt".to_string()],
+            &mut warnings,
+        );
+        assert!(result.is_empty());
+        assert_eq!(warnings.len(), 2);
+        assert!(warnings.contains(&"Unknown file type: 'pyton'".to_string()));
+        assert!(warnings.contains(&"Unknown file type: 'javascrpt'".to_string()));
+    }
+
+    // ==================== for: validation Tests ====================
+
+    fn make_raw_trait(
+        id: &str,
+        file_types: Option<Vec<String>>,
+    ) -> super::super::models::RawTraitDefinition {
+        super::super::models::RawTraitDefinition {
+            id: id.to_string(),
+            desc: "A valid trait description here".to_string(),
+            conf: None,
+            crit: None,
+            mbc: None,
+            attack: None,
+            platforms: None,
+            file_types,
+            size_min: None,
+            size_max: None,
+            condition: None,
+            not: None,
+            unless: None,
+            downgrade: None,
+        }
+    }
+
+    #[test]
+    fn test_for_missing_on_trait_and_defaults_warns() {
+        let defaults = super::super::models::TraitDefaults::default();
+        let raw = make_raw_trait("test-trait", None);
+        let mut warnings = Vec::new();
+        super::apply_trait_defaults(
+            raw,
+            &defaults,
+            &mut warnings,
+            std::path::Path::new("test.yaml"),
+        );
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.contains("missing 'for:' declaration")),
+            "expected for: warning, got: {:?}",
+            warnings
+        );
+    }
+
+    #[test]
+    fn test_for_on_trait_suppresses_warning() {
+        let defaults = super::super::models::TraitDefaults::default();
+        let raw = make_raw_trait("test-trait", Some(vec!["python".to_string()]));
+        let mut warnings = Vec::new();
+        super::apply_trait_defaults(
+            raw,
+            &defaults,
+            &mut warnings,
+            std::path::Path::new("test.yaml"),
+        );
+        assert!(
+            !warnings
+                .iter()
+                .any(|w| w.contains("missing 'for:' declaration")),
+            "unexpected for: warning"
+        );
+    }
+
+    #[test]
+    fn test_for_in_defaults_suppresses_warning() {
+        let defaults = super::super::models::TraitDefaults {
+            r#for: Some(vec!["all".to_string()]),
+            ..Default::default()
+        };
+        let raw = make_raw_trait("test-trait", None);
+        let mut warnings = Vec::new();
+        super::apply_trait_defaults(
+            raw,
+            &defaults,
+            &mut warnings,
+            std::path::Path::new("test.yaml"),
+        );
+        assert!(
+            !warnings
+                .iter()
+                .any(|w| w.contains("missing 'for:' declaration")),
+            "unexpected for: warning"
+        );
+    }
+
+    // ==================== Regex length Tests ====================
+
+    #[test]
+    fn test_regex_length_ok() {
+        let pattern = "a".repeat(80);
+        let condition = crate::composite_rules::Condition::Basename {
+            exact: None,
+            substr: None,
+            regex: Some(pattern),
+            case_insensitive: false,
+        };
+        let mut warnings = Vec::new();
+        super::check_regex_length("test-trait", &condition, &mut warnings);
+        assert!(warnings.is_empty());
+    }
+
+    #[test]
+    fn test_regex_length_over_limit_warns() {
+        let pattern = "a".repeat(81);
+        let condition = crate::composite_rules::Condition::Basename {
+            exact: None,
+            substr: None,
+            regex: Some(pattern),
+            case_insensitive: false,
+        };
+        let mut warnings = Vec::new();
+        super::check_regex_length("test-trait", &condition, &mut warnings);
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].contains("regex pattern exceeds 80 bytes"));
+        assert!(warnings[0].contains("81 bytes"));
+    }
+
+    #[test]
+    fn test_regex_length_no_regex_no_warning() {
+        let condition = crate::composite_rules::Condition::Basename {
+            exact: None,
+            substr: Some("some substring".to_string()),
+            regex: None,
+            case_insensitive: false,
+        };
+        let mut warnings = Vec::new();
+        super::check_regex_length("test-trait", &condition, &mut warnings);
+        assert!(warnings.is_empty());
+    }
+
+    #[test]
+    fn test_regex_length_non_regex_condition_no_warning() {
+        let condition = crate::composite_rules::Condition::Trait {
+            id: "some-trait-id".to_string(),
+        };
+        let mut warnings = Vec::new();
+        super::check_regex_length("test-trait", &condition, &mut warnings);
+        assert!(warnings.is_empty());
+    }
+
+    #[test]
+    fn test_regex_or_symbol_limit_warns() {
+        let condition = crate::composite_rules::Condition::Basename {
+            exact: None,
+            substr: None,
+            regex: Some("a|b|c|d|e".to_string()),
+            case_insensitive: false,
+        };
+        let mut warnings = Vec::new();
+        super::check_regex_length("test-trait", &condition, &mut warnings);
+        assert!(warnings.iter().any(|w| w.contains("too many '|' symbols")));
+    }
+
+    #[test]
+    fn test_regex_or_symbol_limit_allows_escaped_and_charclass_pipes() {
+        let condition = crate::composite_rules::Condition::Basename {
+            exact: None,
+            substr: None,
+            regex: Some(r"a\|b|[|]|c|d".to_string()),
+            case_insensitive: false,
+        };
+        let mut warnings = Vec::new();
+        super::check_regex_length("test-trait", &condition, &mut warnings);
+        assert!(!warnings.iter().any(|w| w.contains("too many '|' symbols")));
+    }
+
+    #[test]
+    fn test_simple_alphanumeric_alternation_warns() {
+        let condition = crate::composite_rules::Condition::Basename {
+            exact: None,
+            substr: None,
+            regex: Some("word1|word2|word3".to_string()),
+            case_insensitive: false,
+        };
+        let mut warnings = Vec::new();
+        super::check_regex_length("test-trait", &condition, &mut warnings);
+        assert!(warnings
+            .iter()
+            .any(|w| w.contains("simple alphanumeric alternation chain")));
+    }
+
+    #[test]
+    fn test_non_simple_alternation_does_not_warn() {
+        let condition = crate::composite_rules::Condition::Basename {
+            exact: None,
+            substr: None,
+            regex: Some(r"word1|word-2|\d+".to_string()),
+            case_insensitive: false,
+        };
+        let mut warnings = Vec::new();
+        super::check_regex_length("test-trait", &condition, &mut warnings);
+        assert!(!warnings
+            .iter()
+            .any(|w| w.contains("simple alphanumeric alternation chain")));
+    }
+}
+
+#[test]
+fn test_parse_file_types_ipa() {
+    let mut warnings = Vec::new();
+    let result = parse_file_types(&["ipa".to_string()], &mut warnings);
+    assert!(result.contains(&RuleFileType::Ipa));
+    assert!(warnings.is_empty());
+}

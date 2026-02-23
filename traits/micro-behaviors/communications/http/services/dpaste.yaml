@@ -1,0 +1,20 @@
+defaults:
+  for: [all]
+
+traits:
+- id: dpaste-api
+  desc: Dpaste API usage
+  crit: notable
+  conf: 0.8
+  if:
+    type: string
+    regex: dpaste\.com/api
+
+- id: dpaste-api-ast
+  desc: Dpaste API usage (AST)
+  crit: notable
+  conf: 0.9
+  if:
+    type: ast
+    node: string
+    regex: dpaste\.com/api

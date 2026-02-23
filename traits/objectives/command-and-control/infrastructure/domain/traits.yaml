@@ -1,0 +1,712 @@
+defaults:
+  for:
+  - '*'
+  mbc: C0002
+  attack: T1071.001
+
+traits:
+# Removed: iplogger-domain was a pure alias to objectives/discovery/network/ip-tracker::iplogger
+
+- id: evilpacket-net
+  desc: Evilpacket.net malicious domain
+  crit: suspicious
+  conf: 1.0
+  attack: T1071.001
+  if:
+    type: string
+    substr: evilpacket.net
+
+- id: healdsburgdistricthospital-net
+  desc: healdsburgdistricthospital.net malicious domain (Nemucod)
+  crit: suspicious
+  conf: 1.0
+  attack: T1071.001
+  if:
+    type: string
+    substr: healdsburgdistricthospital.net
+
+- id: filioruters-com
+  desc: filioruters.com malicious domain
+  crit: suspicious
+  conf: 1.0
+  attack: T1105
+  if:
+    type: string
+    substr: filioruters.com
+
+- id: anti-theft-web-heroku
+  desc: Anti-theft-web.herokuapp.com malicious domain (phpass malware)
+  crit: suspicious
+  conf: 1.0
+  attack: T1071.001
+  if:
+    type: string
+    substr: anti-theft-web.herokuapp.com
+
+- id: short-domain-url-pattern
+  desc: Very short domain in URL
+  crit: notable
+  conf: 0.8
+  if:
+    type: string
+    regex: https?://[a-zA-Z0-9]{2,3}\.[a-zA-Z]{2,4}[/:]
+
+- id: http-url-binary
+  desc: Network URL with domain name (binary)
+  crit: notable
+  conf: 0.7
+  for:
+  - binaries
+  size_max: 1000000
+  if:
+    type: string
+    regex: (https?|wss?)://[a-zA-Z0-9][-a-zA-Z0-9]*\.[a-zA-Z]{2,6}([/?#]|$|:)
+  not:
+    - substr: "ezgif.com"
+    - substr: "w3.org"
+    - substr: "schemas.microsoft.com"
+    - substr: "www.google.com"
+    - substr: "googleapis.com"
+    - substr: "mdn.io"
+    - substr: "developer.mozilla.org"
+    - substr: "docs.github.com"
+    - substr: "docs.rs"
+    - substr: "docs.python.org"
+    - substr: "nodejs.org"
+    - substr: "npmjs.com"
+    - substr: "npmjs.org"
+    - substr: "pypi.org"
+    - substr: "python.org"
+    - substr: "rust-lang.org"
+    - substr: "crates.io"
+    - substr: "travis-ci.org"
+    - substr: "travis-ci.com"
+    - substr: "circleci.com"
+    - substr: "github.com"
+    - substr: "gitlab.com"
+    - substr: "bitbucket.org"
+    - substr: "codecov.io"
+    - substr: "coveralls.io"
+    - substr: "snyk.io"
+    - substr: "registry.npmjs.org"
+    - substr: "yarnpkg.com"
+    - substr: "unpkg.com"
+    - substr: "jsdelivr.net"
+    - substr: "cdnjs.cloudflare.com"
+    - substr: "apple.com"
+    - substr: "microsoft.com"
+    - substr: "visualstudio.com"
+    - substr: "azure.com"
+    - substr: "office.com"
+    - substr: "amazon.com"
+    - substr: "aws.amazon.com"
+    - substr: "google.com"
+    - substr: "googleapis.com"
+    - substr: "gstatic.com"
+    - substr: "sourceforge.net"
+    - substr: "llvm.org"
+    - substr: "clang.llvm.org"
+    - substr: "releases.llvm.org"
+    - substr: "apt.llvm.org"
+    - substr: "sqlite.org"
+    - substr: "cmake.org"
+    - substr: "gcc.gnu.org"
+    - substr: "gnu.org"
+    - substr: "sourceware.org"
+    - substr: "savannah.gnu.org"
+    - substr: "kernel.org"
+    - substr: "freedesktop.org"
+    - substr: "mesa3d.org"
+    - substr: "x.org"
+    - substr: "xiph.org"
+    - substr: "translationproject.org"
+    - substr: "sourceware.org"
+
+- id: http-url-script
+  desc: Network URL with domain name (script)
+  crit: notable
+  conf: 0.7
+  for:
+  - scripts
+  if:
+    type: string
+    regex: (https?|wss?)://([a-zA-Z0-9][-a-zA-Z0-9]*\.){1,6}[a-zA-Z]{2,6}(/|$|:)
+  not:
+    - substr: "ezgif.com"
+    - substr: "w3.org"
+    - substr: "schemas.microsoft.com"
+    - substr: "www.google.com"
+    - substr: "googleapis.com"
+    - substr: "mdn.io"
+    - substr: "developer.mozilla.org"
+    - substr: "docs.github.com"
+    - substr: "docs.rs"
+    - substr: "docs.python.org"
+    - substr: "nodejs.org"
+    - substr: "npmjs.com"
+    - substr: "npmjs.org"
+    - substr: "pypi.org"
+    - substr: "python.org"
+    - substr: "rust-lang.org"
+    - substr: "crates.io"
+    - substr: "travis-ci.org"
+    - substr: "travis-ci.com"
+    - substr: "circleci.com"
+    - substr: "github.com"
+    - substr: "gitlab.com"
+    - substr: "bitbucket.org"
+    - substr: "codecov.io"
+    - substr: "coveralls.io"
+    - substr: "snyk.io"
+    - substr: "registry.npmjs.org"
+    - substr: "yarnpkg.com"
+    - substr: "unpkg.com"
+    - substr: "jsdelivr.net"
+    - substr: "cdnjs.cloudflare.com"
+    - substr: "apple.com"
+    - substr: "microsoft.com"
+    - substr: "visualstudio.com"
+    - substr: "azure.com"
+    - substr: "office.com"
+    - substr: "amazon.com"
+    - substr: "aws.amazon.com"
+    - substr: "google.com"
+    - substr: "googleapis.com"
+    - substr: "gstatic.com"
+    - substr: "sourceforge.net"
+    - substr: "llvm.org"
+    - substr: "clang.llvm.org"
+    - substr: "releases.llvm.org"
+    - substr: "apt.llvm.org"
+    - substr: "sqlite.org"
+    - substr: "cmake.org"
+    - substr: "gcc.gnu.org"
+    - substr: "gnu.org"
+    - substr: "sourceware.org"
+    - substr: "savannah.gnu.org"
+    - substr: "kernel.org"
+    - substr: "freedesktop.org"
+    - substr: "mesa3d.org"
+    - substr: "x.org"
+    - substr: "xiph.org"
+    - substr: "translationproject.org"
+    - substr: "sourceware.org"
+
+- id: bullethost-cloud
+  desc: Bullethost.cloud file hosting
+  crit: notable
+  conf: 0.7
+  attack: T1105
+  if:
+    type: string
+    substr: bullethost.cloud
+
+- id: anonfiles-com
+  desc: Anonfiles.com file hosting
+  crit: notable
+  conf: 0.7
+  attack: T1105
+  if:
+    type: string
+    substr: anonfiles.com
+
+- id: gofile-io
+  desc: Gofile.io file hosting
+  crit: notable
+  conf: 0.7
+  attack: T1105
+  if:
+    type: string
+    substr: gofile.io
+
+- id: transfer-sh
+  desc: Transfer.sh file hosting
+  crit: notable
+  conf: 0.7
+  attack: T1105
+  if:
+    type: string
+    substr: transfer.sh
+
+- id: tmpfiles-org
+  desc: Tmpfiles.org file hosting
+  crit: notable
+  conf: 0.7
+  attack: T1105
+  if:
+    type: string
+    substr: tmpfiles.org
+
+- id: catbox-moe
+  desc: Catbox.moe file hosting
+  crit: notable
+  conf: 0.7
+  attack: T1105
+  if:
+    type: string
+    substr: catbox.moe
+
+- id: uguu-se
+  desc: Uguu.se file hosting
+  crit: notable
+  conf: 0.7
+  attack: T1105
+  if:
+    type: string
+    substr: uguu.se
+
+- id: pomf-cat
+  desc: Pomf.cat file hosting
+  crit: notable
+  conf: 0.7
+  attack: T1105
+  if:
+    type: string
+    substr: pomf.cat
+
+- id: 0x0-st
+  desc: 0x0.st file hosting
+  crit: notable
+  conf: 0.7
+  attack: T1105
+  if:
+    type: string
+    substr: 0x0.st
+
+- id: file-io
+  desc: File.io file hosting
+  crit: notable
+  conf: 0.7
+  attack: T1105
+  if:
+    type: string
+    substr: file.io
+
+- id: filedropper-com
+  desc: Filedropper.com file hosting
+  crit: notable
+  conf: 0.7
+  attack: T1105
+  if:
+    type: string
+    substr: filedropper.com
+
+- id: doko-moe
+  desc: Doko.moe file hosting (commonly abused)
+  crit: notable
+  conf: 0.7
+  attack: T1105
+  if:
+    type: string
+    substr: doko.moe
+
+- id: openclaw-c2-domain
+  desc: OpenClaw C2 domain
+  crit: suspicious
+  conf: 1.0
+  attack: T1071.001
+  if:
+    type: string
+    substr: setup-service.com
+
+- id: appwrite-storage
+  desc: Appwrite cloud storage (commonly abused)
+  crit: suspicious
+  conf: 0.85
+  attack: T1105
+  if:
+    type: string
+    regex: '[a-z0-9-]+\.cloud\.appwrite\.io/v[0-9]+/storage/buckets/[a-z0-9]+/files/'
+
+- id: supabase-storage
+  desc: Supabase storage endpoint (can be abused)
+  crit: notable
+  conf: 0.75
+  attack: T1105
+  if:
+    type: string
+    regex: '[a-z0-9]+\.supabase\.co/storage/v[0-9]+/'
+
+- id: firebase-storage
+  desc: Firebase storage endpoint (can be abused)
+  crit: notable
+  conf: 0.7
+  attack: T1105
+  if:
+    type: string
+    regex: firebasestorage\.googleapis\.com/v[0-9]+/b/[^/]{1,120}/o/
+
+- id: php-collect
+  desc: PHP collect endpoint
+  crit: suspicious
+  conf: 0.6
+  attack: T1041
+  if:
+    type: string
+    regex: /collect[_-]?(info|data|stats)?\.php
+
+- id: php-log
+  desc: PHP log endpoint
+  crit: suspicious
+  conf: 0.6
+  attack: T1041
+  if:
+    type: string
+    regex: /log[_-]?(info|data)?\.php
+
+- id: php-report
+  desc: PHP report endpoint
+  crit: suspicious
+  conf: 0.6
+  attack: T1041
+  if:
+    type: string
+    substr: /report.php
+
+- id: php-beacon
+  desc: PHP beacon endpoint
+  crit: suspicious
+  conf: 0.6
+  attack: T1041
+  if:
+    type: string
+    substr: /beacon.php
+
+- id: php-gate
+  desc: PHP gate endpoint
+  crit: suspicious
+  conf: 0.6
+  attack: T1041
+  if:
+    type: string
+    substr: /gate.php
+
+- id: php-url
+  desc: PHP URL endpoint (often used for C2)
+  crit: suspicious
+  conf: 0.75
+  attack: T1071
+  for:
+  - shell
+  - python
+  - ruby
+  - javascript
+  - perl
+  - go
+  - rust
+  - c
+  - cpp
+  - java
+  - csharp
+  - elf
+  - macho
+  - pe
+  - typescript
+  if:
+    type: string
+    regex: https?://[a-zA-Z0-9][-a-zA-Z0-9.]{1,120}(:[0-9]+)?/.{0,220}\.php([?#]|$)
+  not:
+    - regex: '(?i)sourceforge\.net'
+    - regex: '(?i)vim\.org'
+    - regex: '(?i)docs\.'
+    - regex: '(?i)pypi\.org'
+    - regex: '(?i)npmjs\.com'
+    - regex: '(?i)github\.com'
+
+- id: aws-api-gateway
+  desc: AWS API Gateway endpoint
+  crit: notable
+  conf: 0.5
+  attack: T1071
+  if:
+    type: string
+    regex: execute-api\.[a-z0-9-]+\.amazonaws\.com
+
+- id: azure-websites
+  desc: Azure Websites endpoint
+  crit: notable
+  conf: 0.5
+  attack: T1071
+  if:
+    type: string
+    regex: '[a-z0-9-]+\.azurewebsites\.net'
+
+- id: google-cloud-functions
+  desc: Google Cloud Functions endpoint
+  crit: notable
+  conf: 0.5
+  attack: T1071
+  if:
+    type: string
+    regex: '[a-z0-9-]+\.cloudfunctions\.net'
+
+- id: vercel-app
+  desc: Vercel app endpoint
+  crit: notable
+  conf: 0.5
+  attack: T1071
+  if:
+    type: string
+    regex: '[a-z0-9-]+\.vercel\.app'
+
+- id: netlify-app
+  desc: Netlify app endpoint
+  crit: notable
+  conf: 0.5
+  attack: T1071
+  if:
+    type: string
+    regex: '[a-z0-9-]+\.netlify\.app'
+
+- id: ngrok-io-endpoint
+  desc: Ngrok.io tunnel endpoint
+  crit: notable
+  conf: 0.7
+  attack: T1071
+  if:
+    type: string
+    regex: '[a-z0-9]+\.ngrok\.io'
+
+- id: ngrok-free-app-endpoint
+  desc: Ngrok-free.app tunnel endpoint
+  crit: notable
+  conf: 0.7
+  attack: T1071
+  if:
+    type: string
+    regex: '[a-z0-9]+\.ngrok-free\.app'
+
+- id: vercel-serverless
+  desc: Contacts Vercel serverless function (commonly abused)
+  crit: suspicious
+  conf: 0.85
+  attack: T1071
+  if:
+    type: string
+    regex: '[a-z0-9-]+\.vercel\.app(/|$)'
+
+- id: replit-dev
+  desc: Replit.dev endpoint
+  crit: notable
+  conf: 0.6
+  attack: T1071
+  if:
+    type: string
+    regex: ([a-z0-9-]{1,63}\.){1,6}replit\.dev
+
+- id: repl-co
+  desc: Repl.co endpoint
+  crit: notable
+  conf: 0.6
+  attack: T1071
+  if:
+    type: string
+    regex: ([a-z0-9-]{1,63}\.){1,6}repl\.co
+
+- id: replit-id-domain
+  desc: Replit ID endpoint (commonly abused)
+  crit: suspicious
+  conf: 0.85
+  attack: T1071
+  if:
+    type: string
+    regex: '[a-f0-9-]+\.id\.repl\.co'
+
+- id: glitch-hosted
+  desc: Contacts Glitch-hosted endpoint
+  crit: suspicious
+  conf: 0.8
+  attack: T1071
+  if:
+    type: string
+    regex: '[a-z0-9-]+\.glitch\.me'
+
+- id: railway-hosted
+  desc: Contacts Railway-hosted endpoint
+  crit: notable
+  conf: 0.75
+  attack: T1071
+  if:
+    type: string
+    regex: '[a-z0-9-]+\.railway\.app'
+
+- id: render-hosted
+  desc: Contacts Render-hosted endpoint
+  crit: notable
+  conf: 0.75
+  attack: T1071
+  if:
+    type: string
+    regex: '[a-f0-9-]{8,}\.onrender\.com'
+
+- id: heroku-hosted
+  desc: Contacts Heroku-hosted endpoint
+  crit: notable
+  conf: 0.7
+  attack: T1071
+  if:
+    type: string
+    regex: '[a-z0-9-]+\.herokuapp\.com'
+
+- id: hardcoded-domain-suspicious-pattern
+  desc: Hardcoded suspicious TLD domain pattern
+  crit: suspicious
+  conf: 0.85
+  unless:
+  - type: raw
+    regex: sina\.com\.cn|163\.com|126\.com|sohu\.com|qq\.com|yahoo\.com\.cn|mysite|rambler\.ru|yandex\.ru|mail\.ru|tbcdn\.cn|xn--hgi\.ws|a\.b\.c\.xyz
+  if:
+    type: raw
+    regex: '[''\"](https?://)?([a-zA-Z0-9-]{1,63}\.){1,4}(ru|cn|xyz|top)[''"/:]'
+
+- id: suspicious-php-filename
+  desc: Suspicious PHP endpoint URL (gate/upload/etc)
+  crit: suspicious
+  conf: 0.85
+  if:
+    type: string
+    regex: https?://[^/]{1,120}/.{0,120}(gate|cmd|shell|payload)\.php
+
+- id: internal-api-probe-local
+  desc: Probes internal/localhost API endpoints
+  crit: suspicious
+  conf: 0.9
+  attack: T1046
+  for:
+  - javascript
+  - typescript
+  if:
+    type: string
+    regex: http://(internal|localhost)[-a-zA-Z0-9.]*/(api|health|status)
+
+- id: internal-api-probe-10
+  desc: Probes 10.x API endpoints
+  crit: suspicious
+  conf: 0.9
+  attack: T1046
+  for:
+  - javascript
+  - typescript
+  if:
+    type: string
+    regex: http://10\.[-a-zA-Z0-9.]*/(api|health|status)
+
+- id: dynamic-dns-domain-pattern
+  desc: Dynamic DNS domain pattern
+  crit: suspicious
+  conf: 0.9
+  if:
+    type: string
+    regex: \b[a-zA-Z0-9][-a-zA-Z0-9]*\.(duckdns|no-ip|ddns|hopto)\.[a-z]{2,6}\b
+
+composite_rules:
+- id: internal-api-probe
+  desc: Probes internal network API endpoints
+  crit: suspicious
+  conf: 0.9
+  attack: T1046
+  for:
+  - javascript
+  - typescript
+  any:
+    - id: internal-api-probe-local
+    - id: internal-api-probe-10
+
+- id: c2-domain
+  desc: Likely C2 domain (suspicious TLD)
+  crit: notable
+  conf: 0.85
+  size_max: 5000
+  any:
+  - id: hardcoded-domain-suspicious-pattern
+  - id: dynamic-dns-domain-pattern
+
+- id: malware-hosting
+  desc: Contacts known malware/payload hosting service
+  crit: notable
+  conf: 0.95
+  attack: T1105
+  any:
+  - id: bullethost-cloud
+  - id: anonfiles-com
+  - id: gofile-io
+  - id: transfer-sh
+  - id: tmpfiles-org
+  - id: catbox-moe
+  - id: uguu-se
+  - id: pomf-cat
+  - id: 0x0-st
+  - id: file-io
+  - id: filedropper-com
+  - id: doko-moe
+
+- id: php-collector
+  desc: Contacts PHP data collection endpoint
+  crit: notable
+  conf: 0.85
+  attack: T1041
+  any:
+  - id: php-collect
+  - id: php-log
+  - id: php-report
+  - id: php-beacon
+  - id: php-gate
+
+- id: serverless-function
+  desc: Contacts serverless function endpoint (Lambda, etc)
+  crit: notable
+  conf: 0.7
+  attack: T1071
+  any:
+  - id: aws-api-gateway
+  - id: azure-websites
+  - id: google-cloud-functions
+  - id: vercel-app
+  - id: netlify-app
+
+- id: ngrok-tunnel
+  desc: Contacts ngrok tunnel endpoint
+  crit: suspicious
+  conf: 0.9
+  attack: T1071
+  any:
+  - id: ngrok-io-endpoint
+  - id: ngrok-free-app-endpoint
+
+- id: paste-service
+  desc: Contacts paste/bin service (common payload hosting)
+  crit: suspicious
+  conf: 0.85
+  attack: T1102
+  any:
+  - id: objectives/exfiltration/channel/callback/
+  - id: objectives/discovery/network/ip-tracker/
+  - id: objectives/command-and-control/infrastructure/pastebin/
+
+- id: replit-hosted
+  desc: Contacts Replit-hosted endpoint (commonly abused)
+  crit: suspicious
+  conf: 0.85
+  attack: T1071
+  any:
+  - id: replit-dev
+  - id: repl-co
+  - id: replit-id-domain
+
+- id: chisel-tunnel
+  desc: Chisel reverse tunnel infrastructure
+  crit: suspicious
+  conf: 0.95
+  attack: T1572
+  any:
+  - id: well-known/tools/dual-use/chisel::func
+  - id: well-known/tools/dual-use/chisel::mode
+  - id: well-known/tools/offensive::chisel-ref
+
+- id: tunnel-service
+  desc: Contacts tunneling service endpoint
+  crit: suspicious
+  conf: 0.85
+  attack: T1572
+  any:
+  - id: objectives/command-and-control/infrastructure/tunnel/

@@ -1,0 +1,31 @@
+# NX/DEP Disabled Detection
+# Detects binaries without No-Execute protection
+# Modern macOS binaries should have NX enabled
+# ATT&CK: T1562.001 (Impair Defenses: Disable or Modify Tools)
+
+defaults:
+  platforms: [macos, linux]
+  attack: "T1562.001"
+  mbc: "F0011"
+
+traits:
+  # This would require binary metadata parsing
+  # Placeholder for now - implementation depends on binary parser
+  - id: nx-disabled-macos
+    desc: "macOS binary with NX/DEP disabled"
+    crit: suspicious
+    conf: 0.9
+    platforms: [macos]
+    for: [macho]
+    # Note: This requires checking MachO header flags
+    # MH_NO_HEAP_EXECUTION flag absence = NX disabled
+    if:
+      type: structure
+      feature: "security/nx_disabled"
+
+composite_rules:
+  # NX disabled + command execution = shellcode injection risk
+  - id: nx-disabled-with-exec
+    desc: "NX disabled with exec capability"
+    crit: notable
+    conf: 0.85

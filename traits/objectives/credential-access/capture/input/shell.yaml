@@ -1,0 +1,46 @@
+# Password Capture Patterns - Shell
+# Detects password prompting and capture in shell scripts
+# ATT&CK: T1056.002 (Input Capture: GUI Input Capture)
+
+defaults:
+  for: [shell]
+  attack: "T1056.002"
+
+traits:
+  # === Password prompting ===
+  - id: read-silent-password
+    desc: Silent password input capture
+    crit: suspicious
+    conf: 0.9
+    mbc: "F0004"
+    if:
+      type: string
+      regex: 'read\s+-s\s+\w*password'
+
+  - id: password-variable
+    desc: Password variable reference
+    crit: notable
+    conf: 0.4
+    if:
+      type: string
+      regex: '\$\{?password\}?'
+
+  - id: base64-encode
+    desc: base64 encoding command
+    crit: notable
+    conf: 0.4
+    if:
+      type: raw
+      regex: '\|\s*base64'
+
+composite_rules:
+  # Password capture and encoding (credential theft)
+  - id: password-capture-encode
+    desc: Capture and encode password
+    crit: hostile
+    conf: 0.95
+    mbc: "F0004"
+    all:
+      - id: read-silent-password
+      - id: password-variable
+      - id: base64-encode

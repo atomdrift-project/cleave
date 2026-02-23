@@ -1,0 +1,11 @@
+defaults:
+  for: [all]
+
+traits:
+  - id: actionscript-debugger-check
+    desc: Detects ActionScript Capabilities.isDebugger check (evasion)
+    crit: notable
+    conf: 0.9
+    if:
+      type: raw
+      regex: "Capabilities\\.isDebugger"

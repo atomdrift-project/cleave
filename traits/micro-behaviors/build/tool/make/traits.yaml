@@ -1,0 +1,26 @@
+# Makefile Build System Traits
+# Detects patterns related to Makefiles and build automation
+# ATT&CK: T1195 (Supply Chain Compromise)
+
+defaults:
+  for: [all]
+  platforms: [all]
+
+traits:
+  # === Dummy Targets ===
+  - id: dummy-makefile-targets
+    desc: Makefile with empty targets (install/all/clean)
+    crit: suspicious
+    conf: 0.9
+    size_max: 200
+    if:
+      type: yara
+      source: |
+        rule dummy_makefile {
+            strings:
+                $s1 = "install:"
+                $s2 = "all:"
+                $s3 = "clean:"
+            condition:
+                2 of them
+        }

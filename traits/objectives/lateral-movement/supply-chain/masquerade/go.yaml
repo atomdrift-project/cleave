@@ -1,0 +1,12 @@
+defaults:
+  for: [go]
+
+composite_rules:
+- id: uuid-library-masquerade
+  desc: UUID library masquerade (standard UUID types + HTTP/Crypto)
+  crit: notable
+  conf: 0.8
+  all:
+  - id: micro-behaviors/crypto/cipher/library::aes-new-cipher
+  - id: objectives/command-and-control/beacon/markers::net-http-import
+  - id: objectives/command-and-control/beacon/markers::encoding-json-import

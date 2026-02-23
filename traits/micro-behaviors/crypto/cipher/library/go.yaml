@@ -1,0 +1,51 @@
+# Go Cryptographic Operations
+traits:
+  - id: aes-new-cipher
+    desc: "AES cipher creation"
+    crit: notable
+    conf: 0.9
+    attack: "T1573.001"
+    for: [go]
+    if:
+      type: symbol
+      exact: "aes.NewCipher"
+
+  - id: aes-cbc-encrypter
+    desc: "AES CBC encrypter creation"
+    crit: notable
+    conf: 0.9
+    attack: "T1573.001"
+    for: [go]
+    if:
+      type: symbol
+      exact: "cipher.NewCBCEncrypter"
+
+  - id: rsa-encrypt-oaep
+    desc: "RSA OAEP encryption"
+    crit: notable
+    conf: 0.9
+    attack: "T1573.001"
+    for: [go]
+    if:
+      type: symbol
+      exact: "rsa.EncryptOAEP"
+
+  - id: rsa-generate-key
+    desc: "RSA key generation"
+    crit: notable
+    conf: 0.9
+    attack: "T1573.001"
+    for: [go]
+    if:
+      type: symbol
+      exact: "rsa.GenerateKey"
+
+  - id: aes-cfb-encrypter
+    desc: "AES CFB encrypter creation"
+    crit: notable
+    conf: 0.9
+    attack: "T1573.001"
+    for: [go]
+    if:
+      type: symbol
+      exact: "cipher.NewCFBEncrypter"

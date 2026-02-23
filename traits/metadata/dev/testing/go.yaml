@@ -1,0 +1,74 @@
+# Testing Framework - GO
+
+traits:
+  # === Atomic: Go testing ===
+
+  - id: go-testing-t
+    desc: testing.T type
+    crit: baseline
+    conf: 0.7
+    for: [go]
+    if:
+      type: string
+      substr: "testing.T"
+
+  - id: go-testing-m
+    desc: testing.M type
+    crit: baseline
+    conf: 0.7
+    for: [go]
+    if:
+      type: string
+      substr: "testing.M"
+
+  - id: go-testing-b
+    desc: testing.B type
+    crit: baseline
+    conf: 0.7
+    for: [go]
+    if:
+      type: string
+      substr: "testing.B"
+
+  - id: go-func-test
+    desc: "func Test prefix"
+    crit: baseline
+    conf: 0.8
+    for: [go]
+    if:
+      type: string
+      substr: "func Test"
+
+  - id: go-t-error
+    desc: t.Error method
+    crit: baseline
+    conf: 0.7
+    for: [go]
+    if:
+      type: string
+      substr: "t.Error"
+
+  - id: go-t-fatal
+    desc: t.Fatal method
+    crit: baseline
+    conf: 0.7
+    for: [go]
+    if:
+      type: string
+      substr: "t.Fatal"
+
+composite_rules:
+  # Go testing
+  - id: go-test
+    desc: Go testing package
+    crit: notable
+    conf: 0.95
+    for: [go]
+    needs: 2
+    any:
+      - { id: go-testing-t }
+      - { id: go-testing-m }
+      - { id: go-testing-b }
+      - { id: go-func-test }
+      - { id: go-t-error }
+      - { id: go-t-fatal }

@@ -1,0 +1,12 @@
+defaults:
+  for: [all]
+
+traits:
+  - id: gzip-header-identifier
+    desc: GZIP header magic bytes at file start
+    crit: notable
+    conf: 1.0
+    if:
+      type: hex
+      pattern: "1F 8B"
+      offset: 0

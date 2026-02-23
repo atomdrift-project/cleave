@@ -1,0 +1,52 @@
+# HTTP Request Operations - Python generic patterns
+# MBC: C0002 (HTTP Communication)
+# ATT&CK: T1071.001
+
+defaults:
+  for: [python]
+
+traits:
+  - id: url-literal
+    desc: "Direct URL literal in HTTP"
+    crit: notable
+    conf: 0.8
+    for: [python]
+    if:
+      type: ast
+      query: |
+        ((call
+          function: (attribute
+            object: (identifier) @obj
+            attribute: (identifier) @meth)
+          arguments: (argument_list
+            (string) @url))
+         (#match? @obj "^(requests|urqt|urllib|urllib2|req|r|client|http|session|httpx)$")
+         (#match? @meth "^(get|post|urlopen|urlretrieve|request)$"))
+    unless:
+      - type: basename
+        regex: '(test_|_test\.|\.test\.|\.spec\.).*\.(py)$'
+
+  - id: py-post-generic
+    desc: "Generic .post() call"
+    crit: baseline
+    conf: 0.5
+    for: [python]
+    if:
+      type: string
+      regex: "\\.post\\("
+
+composite_rules:
+  # HTTP request composite
+  - id: request-python
+    desc: "Performs HTTP request (urllib, requests, httpx)"
+    crit: baseline
+    conf: 0.9
+    any:
+      - id: micro-behaviors/communications/http/lib/requests::requests-get
+      - id: micro-behaviors/communications/http/lib/requests::requests-post
+      - id: micro-behaviors/communications/http/lib/urllib::urllib-urlopen
+      - id: micro-behaviors/communications/http/lib/urllib::urllib-urlopen-py2
+      - id: url-literal
+      - id: micro-behaviors/communications/http/lib/aiohttp::aiohttp-session
+      - id: micro-behaviors/communications/http/lib/httpx::httpx-get
+      - id: micro-behaviors/communications/http/lib/httpx::httpx-post

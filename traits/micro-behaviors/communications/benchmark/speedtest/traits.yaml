@@ -1,0 +1,14 @@
+# Speedtest - Internet Speed Testing
+# Measures internet connection speed
+
+defaults:
+  for: [all]
+  crit: notable
+  conf: 0.9
+
+traits:
+  - id: speedtest
+    desc: speedtest utility
+    if:
+      type: string
+      substr: speedtest

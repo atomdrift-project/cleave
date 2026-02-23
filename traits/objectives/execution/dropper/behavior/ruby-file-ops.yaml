@@ -1,0 +1,16 @@
+# Ruby File Operations (Suspicious)
+# Detects suspicious file manipulation patterns
+# ATT&CK: T1070
+
+defaults:
+  crit: notable
+  conf: 0.8
+  for: [ruby]
+
+composite_rules:
+  - id: ruby-file-manipulation
+    desc: Ruby file manipulation detected (rename/move)
+    any:
+      - id: objectives/execution/dropper/script::ruby-ast-file-rename
+      - id: objectives/execution/dropper/script::ruby-ast-rename-to-exe
+      - id: objectives/execution/dropper/script::ruby-ast-rename-img-to-exe

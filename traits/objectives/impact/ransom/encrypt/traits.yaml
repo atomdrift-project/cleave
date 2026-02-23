@@ -1,0 +1,481 @@
+defaults:
+  for:
+  - all
+traits:
+- id: encryption-complete-msg
+  desc: Ransomware completion status message
+  crit: suspicious
+  conf: 0.95
+  if:
+    type: string
+    substr: "Encryption complete"
+    case_insensitive: true
+  downgrade:
+    any:
+    - id: metadata/signed/platform::apple
+- id: encrypt-func-symbol-1
+  desc: File encryption function symbols (file/dir/folder)
+  crit: suspicious
+  conf: 0.9
+  for:
+  - elf
+  - pe
+  - macho
+  if:
+    type: symbol
+    regex: ^encrypt_(file|directory|folder)s?$
+- id: encrypt-func-symbol-2
+  desc: File encryption function symbols (data/content)
+  crit: suspicious
+  conf: 0.9
+  for:
+  - elf
+  - pe
+  - macho
+  if:
+    type: symbol
+    regex: ^encrypt_(data|content)s?$
+- id: ransomware-source-path-1a
+  desc: Ransomware source file path (ransomware/ransom/locker .c/.cpp)
+  crit: suspicious
+  conf: 0.95
+  if:
+    type: string
+    regex: (ransomware|ransom|locker)\.(c|cpp)$
+    case_insensitive: true
+- id: ransomware-source-path-1b
+  desc: Ransomware source file path (ransomware/ransom/locker .rs/.go)
+  crit: suspicious
+  conf: 0.95
+  if:
+    type: string
+    regex: (ransomware|ransom|locker)\.(rs|go)$
+    case_insensitive: true
+- id: ransomware-source-path-2
+  desc: Ransomware source file path (crypter)
+  crit: suspicious
+  conf: 0.95
+  if:
+    type: string
+    regex: crypter\.(c|cpp|rs|go)$
+    case_insensitive: true
+- id: locker-namespace
+  desc: Ransomware locker module namespace
+  crit: suspicious
+  conf: 0.95
+  if:
+    type: string
+    regex: 'locker::(core|lib|app)::'
+- id: encrypt-lib-path
+  desc: Encryption library source paths
+  crit: suspicious
+  conf: 0.9
+  if:
+    type: string
+    regex: library/(encrypt-lib|locker)/src/
+- id: config-note-field-name
+  desc: note_file_name config field
+  crit: notable
+  conf: 0.75
+  if:
+    type: string
+    substr: note_file_name
+- id: config-note-field-full
+  desc: note_full_text config field
+  crit: notable
+  conf: 0.75
+  if:
+    type: string
+    substr: note_full_text
+- id: config-note-field-short
+  desc: note_short_text config field
+  crit: notable
+  conf: 0.75
+  if:
+    type: string
+    substr: note_short_text
+- id: config-cipher-field-cipher
+  desc: default_file_cipher config field
+  crit: notable
+  conf: 0.7
+  if:
+    type: string
+    substr: default_file_cipher
+- id: config-cipher-field-mode
+  desc: default_file_mode config field
+  crit: notable
+  conf: 0.7
+  if:
+    type: string
+    substr: default_file_mode
+- id: template-placeholders
+  desc: Ransomware config template variables (EXTENSION, NOTE_FILE_NAME, ACCESS_KEY)
+  crit: suspicious
+  conf: 0.95
+  if:
+    type: string
+    regex: \$\{(EXTENSION|NOTE_FILE_NAME|ACCESS_KEY)\}
+- id: vm-kill-config-1
+  desc: enable_esxi_vm_kill config field
+  crit: notable
+  conf: 0.75
+  if:
+    type: string
+    substr: enable_esxi_vm_kill
+- id: vm-kill-config-2
+  desc: enable_esxi_vm_snapshot_kill config field
+  crit: notable
+  conf: 0.75
+  if:
+    type: string
+    substr: enable_esxi_vm_snapshot_kill
+- id: vm-kill-config-3
+  desc: esxi_vm_kill_exclude config field
+  crit: notable
+  conf: 0.75
+  if:
+    type: string
+    substr: esxi_vm_kill_exclude
+- id: kill-services-config-1
+  desc: kill_services config field
+  crit: notable
+  conf: 0.75
+  if:
+    type: string
+    substr: kill_services
+- id: kill-services-config-2
+  desc: kill_processes config field
+  crit: notable
+  conf: 0.75
+  if:
+    type: string
+    substr: kill_processes
+- id: ransom-extension-1
+  desc: Ransomware file extension markers (crypt/encrypted/locked)
+  crit: notable
+  conf: 0.85
+  if:
+    type: string
+    regex: '[a-zA-Z0-9_]{2,}\.(crypt|encrypted|locked)$'
+  unless:
+  - type: string
+    regex: ^(matplotlib|tex)$
+- id: ransom-extension-2
+  desc: Ransomware file extension markers (enc/crypted/cry)
+  crit: notable
+  conf: 0.85
+  if:
+    type: string
+    regex: '[a-zA-Z0-9_]{2,}\.(enc|crypted|cry)$'
+  unless:
+  - type: string
+    regex: ^(matplotlib|tex)$
+- id: babuk-config-marker
+  desc: Babuk ransomware configuration memory marker (16x 0xAF)
+  crit: suspicious
+  conf: 0.98
+  for:
+  - elf
+  if:
+    type: hex
+    pattern: af af af af af af af af af af af af af af af af
+- id: file-locked-message
+  desc: File locked status message
+  crit: suspicious
+  conf: 0.9
+  if:
+    type: string
+    regex: File Locked|locked.{0,20}PID|error.{0,20}encrypt.{0,20}rename
+- id: crypted-counter
+  desc: Encryption counter message
+  crit: suspicious
+  conf: 0.9
+  if:
+    type: string
+    regex: 'Total (Crypted|Encrypted)|Crypted:.{0,20}Error:|Files Encrypted:'
+- id: payment-status-check-1
+  desc: Ransomware payment verification (getHasPayed|checkPayment)
+  crit: suspicious
+  conf: 0.9
+  for:
+  - elf
+  - pe
+  - macho
+  if:
+    type: string
+    regex: (getHasPayed|checkPayment)
+    case_insensitive: true
+- id: payment-status-check-2
+  desc: Ransomware payment verification (isPaid|payment/verify)
+  crit: suspicious
+  conf: 0.9
+  for:
+  - elf
+  - pe
+  - macho
+  if:
+    type: string
+    regex: (isPaid|payment.{0,20}status|verify.{0,20}payment)
+    case_insensitive: true
+- id: desktop-note-path
+  desc: Ransom note file dropped to Desktop directory
+  crit: suspicious
+  conf: 0.9
+  if:
+    type: string
+    regex: (/Desktop/|\\Desktop\\)[^/\\]{1,50}\.(html?|txt)
+- id: babuk-file-status-logging
+  desc: Ransomware file encryption status logging
+  crit: suspicious
+  conf: 0.9
+  for:
+  - elf
+  - macho
+  if:
+    type: string
+    regex: \[[+!]\]\s+File\s+(not\s+)?encrypted
+- id: babuk-file-io-errors
+  desc: Ransomware file access error logging
+  crit: notable
+  conf: 0.8
+  for:
+  - elf
+  - macho
+  if:
+    type: string
+    regex: \[!\]\s+Can`t\s+(run for|open)\s+file
+- id: ransom-note-text
+  desc: Ransom note message patterns
+  crit: suspicious
+  conf: 0.95
+  if:
+    type: string
+    case_insensitive: true
+    regex: your files.{0,30}encrypted|pay.{0,20}(ransom|bitcoin)|\.onion/
+- id: encryption-pipeline
+  desc: File encryption pipeline patterns
+  crit: suspicious
+  conf: 0.9
+  if:
+    type: string
+    regex: encrypted extension|File Processing Pipeline|Files processed.{0,50}Files scanned
+- id: ransom-note-filename
+  desc: Ransom note filename patterns
+  crit: suspicious
+  conf: 0.9
+  if:
+    type: string
+    case_insensitive: true
+    regex: (README.{0,20}RESTORE|HOW[_\-\.].{0,18}RECOVER|RANSOM.{0,20}NOTE|_readme\.txt)
+- id: locker-config-field-extensions-full
+  desc: vecFullEncryptionExtensions config field
+  crit: notable
+  conf: 0.8
+  if:
+    type: string
+    substr: vecFullEncryptionExtensions
+- id: locker-config-field-extensions-skip
+  desc: vecSkipFileExtensions config field
+  crit: notable
+  conf: 0.8
+  if:
+    type: string
+    substr: vecSkipFileExtensions
+- id: locker-config-field-key
+  desc: sMasterPublicKey config field
+  crit: notable
+  conf: 0.8
+  if:
+    type: string
+    substr: sMasterPublicKey
+composite_rules:
+- id: encrypt-func-symbol
+  desc: File encryption function symbols
+  crit: suspicious
+  conf: 0.9
+  any:
+    - id: encrypt-func-symbol-1
+    - id: encrypt-func-symbol-2
+- id: ransomware-source-path
+  desc: Ransomware source file path
+  crit: suspicious
+  conf: 0.95
+  any:
+    - id: ransomware-source-path-1a
+    - id: ransomware-source-path-1b
+    - id: ransomware-source-path-2
+- id: config-note-fields
+  desc: Ransomware note config fields
+  crit: suspicious
+  conf: 0.95
+  any:
+    - id: config-note-field-name
+    - id: config-note-field-full
+    - id: config-note-field-short
+- id: config-cipher-fields
+  desc: Ransomware cipher config fields
+  crit: notable
+  conf: 0.9
+  any:
+    - id: config-cipher-field-cipher
+    - id: config-cipher-field-mode
+- id: vm-kill-config
+  desc: VM kill configuration fields
+  crit: suspicious
+  conf: 0.95
+  any:
+    - id: vm-kill-config-1
+    - id: vm-kill-config-2
+    - id: vm-kill-config-3
+- id: kill-services-config
+  desc: Service kill config for ransomware
+  crit: suspicious
+  conf: 0.85
+  any:
+    - id: kill-services-config-1
+    - id: kill-services-config-2
+- id: ransom-extension
+  desc: Ransomware file extension markers
+  crit: notable
+  conf: 0.85
+  any:
+    - id: ransom-extension-1
+    - id: ransom-extension-2
+- id: payment-status-check
+  desc: Ransomware payment verification
+  crit: suspicious
+  conf: 0.9
+  any:
+    - id: payment-status-check-1
+    - id: payment-status-check-2
+- id: locker-config-fields
+  desc: Ransomware locker configuration schema fields
+  crit: suspicious
+  conf: 0.95
+  any:
+    - id: locker-config-field-extensions-full
+    - id: locker-config-field-extensions-skip
+    - id: locker-config-field-key
+- id: locker-behavioral-indicators
+  desc: Ransomware behavioral indicators (logging and schema)
+  crit: suspicious
+  conf: 0.9
+  any:
+  - id: babuk-file-status-logging
+  - id: locker-config-fields
+  - id: babuk-file-io-errors
+  needs: 2
+- id: ransomware-basic
+  desc: Ransomware encryption pattern
+  crit: hostile
+  conf: 0.95
+  for:
+  - elf
+  - pe
+  - macho
+  all:
+  - id: micro-behaviors/crypto/operations/encryption::openssl-evp-encrypt
+  - id: ransom-note-text
+  any:
+  - id: ransom-note-filename
+  - id: ransom-extension
+  - id: crypted-counter
+  - id: file-locked-message
+- id: ransomware-with-note
+  desc: Ransomware with ransom note
+  crit: hostile
+  conf: 0.98
+  for:
+  - elf
+  - pe
+  - macho
+  all:
+  - id: ransom-note-text
+  - id: ransom-extension
+  any:
+  - id: micro-behaviors/crypto/operations/encryption::openssl-evp-encrypt
+  - id: micro-behaviors/crypto/asymmetric/rsa::rsa-public-encrypt
+  - id: crypted-counter
+- id: ransomware-locker
+  desc: Rust-based ransomware locker
+  crit: hostile
+  conf: 0.95
+  for:
+  - elf
+  - pe
+  - macho
+  all:
+  - id: locker-namespace
+  - id: config-note-fields
+  - id: config-cipher-fields
+  any:
+  - id: template-placeholders
+  - id: encryption-pipeline
+  - id: vm-kill-config
+  - id: encrypt-lib-path
+- id: ransomware-locker-esxi
+  desc: ESXi-targeting ransomware locker
+  crit: hostile
+  conf: 0.98
+  for:
+  - elf
+  all:
+  - id: locker-namespace
+  - id: config-note-fields
+  - id: vm-kill-config
+  - id: micro-behaviors/vm/detect/vmware::esxcli-vm-kill
+  any:
+  - id: config-cipher-fields
+  - id: encrypt-lib-path
+- id: ransomware-encrypt-funcs
+  desc: Ransomware with encryption functions
+  crit: hostile
+  conf: 0.95
+  for:
+  - elf
+  - pe
+  - macho
+  all:
+  - id: encrypt-func-symbol
+  - id: ransom-note-text
+  any:
+  - id: encryption-complete-msg
+  - id: ransomware-source-path
+  - id: crypted-counter
+  - id: ransom-note-filename
+- id: rust-file-encryptor
+  desc: Rust stream cipher file encryptor
+  crit: hostile
+  conf: 0.92
+  for:
+  - elf
+  all:
+  - id: micro-behaviors/crypto/symmetric/stream::chacha-salsa-constant
+  - id: micro-behaviors/process/threading/operations::pthread
+  - id: micro-behaviors/fs/file/read
+- id: c-file-encryptor
+  desc: C/C++ file encryption ransomware with payment verification
+  crit: hostile
+  conf: 0.95
+  for:
+  - elf
+  - pe
+  - macho
+  all:
+  - id: ransom-note-text
+  - id: desktop-note-path
+  - id: payment-status-check
+  any:
+  - id: data-loss-threat
+- id: data-loss-threat
+  desc: Ransomware data loss threat
+  crit: suspicious
+  conf: 0.9
+  unless:
+  - id: objectives/impact/ransom/encrypt::inline__data-loss-threat__unless_1_a
+  - id: objectives/impact/ransom/encrypt::inline__data-loss-threat__unless_1_b
+  any:
+  - id: objectives/impact/ransom/encrypt::inline__data-loss-threat__any_1
+  - id: objectives/impact/ransom/encrypt::inline__data-loss-threat__any_2
+  - id: objectives/impact/ransom/encrypt::inline__data-loss-threat__any_3
+  - id: objectives/impact/ransom/encrypt::inline__data-loss-threat__any_4

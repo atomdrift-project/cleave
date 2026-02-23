@@ -1,0 +1,110 @@
+# Windows Script Host Execution Patterns
+# Detects VBScript/JScript execution via WScript object
+# Generic indicator for script-based malware
+
+traits:
+  # === Script Host Object References ===
+  - id: wscript-createobject
+    desc: WScript.CreateObject
+    crit: notable
+    conf: 0.7
+    platforms: [windows]
+    for: [javascript]
+    if:
+      type: string
+      substr: "WScript.CreateObject"
+    attack: "T1202"
+
+  - id: wscript-getobject
+    desc: WScript.GetObject
+    crit: notable
+    conf: 0.7
+    platforms: [windows]
+    for: [javascript]
+    if:
+      type: string
+      substr: "WScript.GetObject"
+    attack: "T1202"
+
+  - id: wscript-arguments
+    desc: WScript.Arguments access
+    crit: notable
+    conf: 0.65
+    platforms: [windows]
+    for: [javascript]
+    if:
+      type: string
+      substr: "WScript.Arguments"
+
+  - id: wscript-scriptfullname
+    desc: WScript.ScriptFullName
+    crit: notable
+    conf: 0.5
+    platforms: [windows]
+    for: [javascript]
+    if:
+      type: string
+      substr: "WScript.ScriptFullName"
+
+  - id: wscript-sleep
+    desc: WScript.Sleep timing
+    crit: notable
+    conf: 0.5
+    platforms: [windows]
+    for: [javascript]
+    if:
+      type: string
+      substr: "WScript.Sleep"
+    attack: "T1060"
+
+composite_rules:
+  - id: wscript-execution
+    desc: Windows Script Host execution
+    crit: suspicious
+    conf: 0.75
+    platforms: [windows]
+    for: [javascript]
+    attack: "T1202"
+    needs: 2
+    any:
+      - id: wscript-createobject
+      - id: wscript-getobject
+      - id: wscript-sleep
+      - id: objectives/execution/activex/
+
+  - id: wscript-com-objects
+    desc: WScript COM object usage
+    crit: notable
+    conf: 0.8
+    platforms: [windows]
+    for: [javascript]
+    attack: "T1202"
+    mbc: "E1243"
+    any:
+      - id: objectives/execution/activex/
+
+  - id: wscript-process-execution
+    desc: WScript process execution
+    crit: hostile
+    conf: 0.85
+    platforms: [windows]
+    for: [javascript]
+    attack: "T1202"
+    mbc: "E1243"
+    all:
+      - id: wscript-execution
+      - id: micro-behaviors/process/create/spawn
+
+  - id: script-based-malware
+    desc: Script-based malware framework
+    crit: hostile
+    conf: 0.9
+    platforms: [windows]
+    for: [javascript]
+    attack: "T1202"
+    mbc: "E1243"
+    needs: 3
+    any:
+      - id: objectives/execution/activex/
+      - id: wscript-createobject
+      - id: wscript-sleep

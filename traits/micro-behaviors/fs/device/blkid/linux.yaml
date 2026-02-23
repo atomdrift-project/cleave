@@ -1,0 +1,13 @@
+# Block Device ID Detection (Linux-specific)
+# MBC: E1082 (System Information Discovery)
+# ATT&CK: T1082
+
+traits:
+  - id: blkid
+    desc: Works with block device attributes
+    crit: baseline
+    conf: 0.66
+    for: [all]
+    if:
+      type: symbol
+      regex: blkid

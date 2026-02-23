@@ -1,0 +1,172 @@
+# Application Impersonation Detection
+# Detects malware impersonating legitimate applications
+# ATT&CK: T1036.005 (Masquerading: Match Legitimate Name)
+# MBC: F0004 (Masquerading)
+
+defaults:
+  crit: suspicious
+  attack: "T1036.005"
+  mbc: "F0004"
+  for: [python, shell, javascript]
+
+traits:
+  # === macOS System App Impersonation ===
+  - id: apple-account-app
+    desc: AppleAccount.app impersonation
+    crit: suspicious
+    conf: 0.95
+    if:
+      type: string
+      regex: "AppleAccount\\.app|NccyrNppbhag"
+
+  - id: apple-account-assistant-clear
+    desc: AppleAccountAssistant impersonation
+    crit: suspicious
+    conf: 0.95
+    if:
+      type: string
+      exact: "AppleAccountAssistant"
+
+  - id: apple-account-assistant-rot13
+    desc: AppleAccountAssistant impersonation (obfuscated)
+    crit: suspicious
+    conf: 0.95
+    if:
+      type: string
+      exact: "NccyrNppbhagNffvfgnag"
+
+  - id: xprotect-impersonation
+    desc: XProtect impersonation
+    crit: suspicious
+    conf: 0.95
+    if:
+      type: string
+      regex: "XProtect|VPR-havk"
+
+  # === Shared/User Directory Masquerade ===
+  - id: users-shared-path
+    desc: /Users/Shared path access
+    crit: notable
+    conf: 0.70
+    if:
+      type: string
+      regex: "Users/Shared|Hfref/Funerq"
+
+  - id: temp-user-path-clear
+    desc: TempUser path access
+    crit: suspicious
+    conf: 0.75
+    if:
+      type: string
+      exact: "TempUser"
+
+  - id: temp-user-path-rot13
+    desc: TempUser path access (obfuscated)
+    crit: suspicious
+    conf: 0.75
+    if:
+      type: string
+      exact: "GrzcHfre"
+
+  # === Legitimate Service Names ===
+  - id: system-service-name
+    desc: System service name usage
+    crit: notable
+    conf: 0.60
+    if:
+      type: string
+      regex: "system.{0,20}service|service.{0,20}daemon"
+
+  - id: helper-tool-name
+    desc: Helper tool name pattern
+    crit: notable
+    conf: 0.60
+    if:
+      type: string
+      regex: "Helper\\.app|helper.{0,10}tool"
+
+  # === Obfuscated App Names ===
+  - id: obfuscated-app-name
+    desc: Obfuscated application name
+    crit: suspicious
+    conf: 0.80
+    if:
+      type: string
+      regex: "\\b[a-z]{15,}\\.app\\b|\\b[A-Z]{15,}\\.app\\b"
+      case_insensitive: true
+
+  - id: random-app-name
+    desc: Randomized application name
+    crit: suspicious
+    conf: 0.75
+    if:
+      type: string
+      regex: "\\b[a-z0-9]{10,20}\\.app\\b"
+      case_insensitive: true
+
+composite_rules:
+  # === Impersonation Detection ===
+  - id: apple-service-impersonation
+    desc: Apple service impersonation
+    crit: suspicious
+    conf: 0.98
+    attack: "T1036.005"
+    mbc: "F0004"
+    platforms: [macos]
+    any:
+      - id: apple-account-app
+      - id: apple-account-assistant
+      - id: xprotect-impersonation
+
+  - id: system-app-masquerade
+    desc: System application masquerade
+    crit: suspicious
+    conf: 0.95
+    attack: "T1036.005"
+    needs: 2
+    any:
+      - id: users-shared-path
+      - id: temp-user-path
+      - id: system-service-name
+      - id: helper-tool-name
+
+  # Apple runtime identity + non-Apple code signature = masquerading
+  # Complexity: all(2) + for(1) = 3 (suspicious, not hostile)
+  - id: apple-runtime-masquerade
+    desc: Non-Apple binary claims Apple runtime identity
+    crit: suspicious
+    conf: 0.95
+    attack: "T1036.005"
+    mbc: "F0004"
+    platforms: [macos]
+    for: [macho, dylib]
+    all:
+      - id: metadata/apple::dt-runtime
+      - id: metadata/sign/certificate/apple::developer-id
+
+  - id: fake-system-binary
+    desc: Fake system binary
+    crit: hostile
+    conf: 0.95
+    attack: "T1036.005"
+    mbc: "F0004"
+    platforms: [macos, linux]
+    all:
+      - id: apple-service-impersonation
+      - id: system-app-masquerade
+
+  - id: apple-account-assistant
+    desc: AppleAccountAssistant impersonation
+    crit: suspicious
+    conf: 0.95
+    any:
+      - id: apple-account-assistant-clear
+      - id: apple-account-assistant-rot13
+
+  - id: temp-user-path
+    desc: TempUser path access
+    crit: suspicious
+    conf: 0.75
+    any:
+      - id: temp-user-path-clear
+      - id: temp-user-path-rot13

@@ -1,0 +1,74 @@
+# User and Group Lookup
+# Detects resolution of numeric IDs to account names
+# MBC: E1083 (File and Directory Discovery)
+# ATT&CK: T1083, T1087
+
+defaults:
+  for: [elf, macho, so, dylib, c]
+  mbc: E1083
+  attack: T1083
+
+traits:
+  # getpwuid: use micro-behaviors/process/user/query/unix.yaml::getpwuid (canonical)
+  # getpwnam: use objectives/discovery/host/user/traits.yaml::getpwnam (canonical)
+  - id: user-from-uid
+    desc: Convert user ID to username (user_from_uid)
+    crit: notable
+    conf: 0.8
+    if:
+      type: symbol
+      exact: "user_from_uid"
+
+  - id: group-lookup-getgrgid
+    desc: Convert group ID to group name (getgrgid)
+    crit: notable
+    conf: 0.8
+    if:
+      type: symbol
+      exact: "getgrgid"
+
+  - id: group-lookup-getgrnam
+    desc: Convert group name to group ID (getgrnam)
+    crit: notable
+    conf: 0.8
+    if:
+      type: symbol
+      exact: "getgrnam"
+
+  - id: group-lookup-from-gid
+    desc: Convert group ID to group name (group_from_gid)
+    crit: notable
+    conf: 0.8
+    if:
+      type: symbol
+      exact: "group_from_gid"
+
+composite_rules:
+  - id: group-lookup
+    desc: Convert group ID to group name
+    crit: notable
+    conf: 0.8
+    any:
+      - id: group-lookup-getgrgid
+      - id: group-lookup-getgrnam
+      - id: group-lookup-from-gid
+
+  # user-lookup: composite referencing canonical user query traits plus local user_from_uid
+  - id: user-lookup
+    desc: Convert user ID to username
+    crit: notable
+    conf: 0.8
+    any:
+      - id: micro-behaviors/process/user/query::getpwuid
+      - id: objectives/discovery/host/user::getpwnam
+      - id: user-from-uid
+
+  - id: account-name-resolution
+    desc: Enumerate account names from IDs
+    crit: notable
+    conf: 0.85
+    mbc: E1083
+    attack: T1087
+    any:
+      - id: user-lookup
+      - id: group-lookup

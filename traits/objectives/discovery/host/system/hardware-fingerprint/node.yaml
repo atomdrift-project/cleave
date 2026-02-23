@@ -1,0 +1,124 @@
+# Node.js System Discovery
+# ATT&CK: T1082 (System Information Discovery), T1033 (System Owner/User Discovery)
+
+traits:
+  # Individual system info functions
+  - id: node-hostname
+    desc: Collects system hostname
+    crit: notable
+    conf: 0.9
+    attack: "T1082"
+    for: [javascript, typescript]
+    if:
+      type: string
+      regex: 'os\.hostname\(\)'
+
+  - id: node-homedir
+    desc: Collects user home directory path
+    crit: notable
+    conf: 0.85
+    attack: "T1082"
+    for: [javascript, typescript]
+    if:
+      id: objectives/discovery/host/system/javascript::js-os-homedir
+
+  - id: node-userinfo
+    desc: Collects user account information
+    crit: notable
+    conf: 0.85
+    attack: "T1033"
+    for: [javascript, typescript]
+    if:
+      type: string
+      regex: 'os\.userInfo\(\)'
+
+  - id: node-platform
+    desc: Collects operating system platform
+    crit: notable
+    conf: 0.9
+    attack: "T1082"
+    for: [javascript, typescript]
+    if:
+      type: string
+      regex: 'os\.platform\(\)'
+
+  - id: node-arch
+    desc: Collects CPU architecture
+    crit: notable
+    conf: 0.9
+    attack: "T1082"
+    for: [javascript, typescript]
+    if:
+      type: string
+      regex: 'os\.arch\(\)'
+
+  - id: node-release
+    desc: Collects OS release/version
+    crit: notable
+    conf: 0.9
+    attack: "T1082"
+    for: [javascript, typescript]
+    if:
+      type: string
+      regex: 'os\.release\(\)'
+
+  - id: node-cwd
+    desc: Collects current working directory
+    crit: notable
+    conf: 0.8
+    attack: "T1083"
+    for: [javascript, typescript]
+    if:
+      type: string
+      regex: 'process\.cwd\(\)'
+
+  - id: node-dirname
+    desc: Collects script directory path
+    crit: notable
+    conf: 0.75
+    for: [javascript, typescript]
+    if:
+      type: string
+      substr: __dirname
+
+  # Network interfaces
+  - id: node-network
+    desc: Enumerates network interfaces
+    crit: notable
+    conf: 0.85
+    attack: "T1016"
+    for: [javascript, typescript]
+    if:
+      type: string
+      regex: 'os\.networkInterfaces\(\)'
+
+composite_rules:
+  # Extensive system profiling (migrated from YARA)
+  - id: node
+    desc: Extensive system profiling (user, net,
+    crit: suspicious
+    conf: 0.85
+    attack: "T1082"
+    for: [javascript, typescript]
+    needs: 3
+    any:
+      - {id: node-userinfo}
+      - {id: node-network}
+      - {id: node-hostname}
+      - {id: node-platform}
+
+  # Data aggregation for exfil
+  - id: node-data-aggregation
+    desc: Aggregates system data into object
+    crit: suspicious
+    conf: 0.9
+    attack: "T1082"
+    for: [javascript, typescript]
+    needs: 3
+    any:
+      - {id: node-hostname}
+      - {id: node-homedir}
+      - {id: node-userinfo}
+      - {id: node-platform}
+      - {id: node-cwd}
+      - {id: node-network}

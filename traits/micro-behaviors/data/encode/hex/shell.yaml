@@ -1,0 +1,23 @@
+# Shell Hex Encoding
+# Detects usage of hex encoding tools in shell scripts
+# ATT&CK: T1027 (Obfuscated Files or Information)
+
+defaults:
+  for: [shell]
+
+traits:
+  - id: hex-encode-xxd
+    desc: Hex encoding via xxd
+    crit: notable
+    conf: 0.6
+    if:
+      type: string
+      regex: 'xxd\s+-p'
+
+  - id: hex-dump-od
+    desc: Hex dump via od
+    crit: notable
+    conf: 0.6
+    if:
+      type: string
+      regex: 'od\s+-t\s+x1'

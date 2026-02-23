@@ -1,0 +1,26 @@
+# AppleScript TCC Database Access
+# ATT&CK: T1555 (Credentials from Password Stores)
+
+defaults:
+  platforms: [macos]
+  for: [applescript, macho]
+  attack: "T1555"
+
+traits:
+  - id: tcc-db-alias
+    desc: TCC.db file reference via AppleScript alias
+    crit: suspicious
+    conf: 0.85
+    if:
+      type: string
+      regex: "com\\.apple\\.TCC.{0,20}as\\s+alias|/TCC\\.db.{0,20}as\\s+alias"
+
+  # Removed notes-group-alias duplicate - use objectives/collection/notes/app/macos::notes-container
+
+  - id: tccclickjack-string
+    desc: TccClickJack tooling reference
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: string
+      exact: "TccClickJack"

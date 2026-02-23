@@ -1,0 +1,12 @@
+# String Analysis Heuristics
+# Detects string quality filtering logic
+
+traits:
+  - id: alphanumeric-ratio-check
+    desc: "Checks alphanumeric character ratio in string"
+    crit: notable
+    conf: 0.7
+    for: [python]
+    if:
+      type: raw
+      regex: 'sum\([^)]{0,120}isalnum'

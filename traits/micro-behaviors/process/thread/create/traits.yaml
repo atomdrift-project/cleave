@@ -1,0 +1,25 @@
+# Thread Creation
+# Local thread creation in current process
+
+defaults:
+  for: ["pe", "dll"]
+  platforms: ["windows"]
+
+traits:
+  # === Thread Creation ===
+  - id: create-thread
+    desc: Create thread in current process
+    crit: notable
+    conf: 0.95
+    attack: "T1129"
+    if:
+      type: symbol
+      exact: "CreateThread"
+
+  - id: exit-thread
+    desc: Exit thread execution
+    crit: baseline
+    conf: 0.90
+    if:
+      type: symbol
+      exact: "ExitThread"

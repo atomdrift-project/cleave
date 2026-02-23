@@ -1,0 +1,101 @@
+# VBScript Execution Detection
+# Detects VBScript patterns for payload execution and script launching
+# ATT&CK: T1059.005 (Visual Basic)
+
+defaults:
+  attack: "T1059.005"
+  platforms: [windows]
+
+traits:
+  # === WScript.Shell Object Creation ===
+  - id: wscript-createobject
+    desc: WScript.CreateObject call
+    crit: notable
+    conf: 0.8
+    for: [all]
+    if:
+      type: string
+      regex: "WScript\\.CreateObject\\s*\\("
+
+  - id: wscript-shell-create
+    desc: WScript.Shell object creation
+    crit: notable
+    conf: 0.85
+    for: [all]
+    if:
+      type: string
+      regex: "CreateObject.{0,30}WScript\\.Shell"
+
+  # === VBScript Execution Methods ===
+  - id: wscript-run
+    desc: WScript Run method
+    crit: notable
+    conf: 0.75
+    for: [all]
+    if:
+      type: string
+      regex: "\\.run\\s+['\"]|dIon\\.run"
+      case_insensitive: true
+
+  # === Embedded VBScript Indicators ===
+  - id: set-vbscript
+    desc: VBScript Set statement
+    crit: notable
+    conf: 0.6
+    for: [all]
+    if:
+      type: string
+      regex: "^Set\\s+\\w+\\s*=|\\nSet\\s+\\w+"
+
+  - id: dim-vbscript
+    desc: VBScript Dim statement
+    crit: notable
+    conf: 0.5
+    for: [all]
+    if:
+      type: string
+      regex: "\\bDim\\s+\\w+"
+
+  # === PowerShell Launch from VBScript ===
+  - id: vbs-powershell-launch
+    desc: VBScript launching PowerShell
+    crit: suspicious
+    conf: 0.9
+    attack: "T1059.001"
+    for: [all]
+    if:
+      type: string
+      regex: "WScript.{0,50}powershell|run.{0,50}powershell.{0,30}-[eE]nc"
+      case_insensitive: true
+
+  # === Evasive VBScript Flags ===
+  - id: vbs-hidden-exec
+    desc: VBScript hidden execution (0, True)
+    crit: suspicious
+    conf: 0.85
+    for: [all]
+    if:
+      type: string
+      regex: "\\.run\\s+[^,]{1,120},\\s*0,\\s*True|\\.run\\s+[^,]{1,120},\\s*0\\s*,\\s*true"
+      case_insensitive: true
+
+composite_rules:
+  # WScript shell execution
+  - id: wscript-shell-exec
+    desc: WScript.Shell execution pattern
+    crit: notable
+    conf: 0.85
+    attack: "T1059.005"
+    any:
+      - id: wscript-createobject
+      - id: wscript-shell-create
+
+  # VBScript PowerShell launcher
+  - id: vbs-powershell-launcher
+    desc: VBScript PowerShell launcher
+    crit: suspicious
+    conf: 0.95
+    attack: "T1059.005"
+    all:
+      - id: wscript-shell-exec
+      - id: wscript-run

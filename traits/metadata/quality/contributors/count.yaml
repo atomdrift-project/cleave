@@ -1,0 +1,93 @@
+# Package Contributors - Count Analysis
+# Detects suspicious contributor patterns based on count
+# ATT&CK: T1195.002 (Compromise Software Supply Chain)
+#
+# REQUIRES: size_min/size_max KV feature (see KV_ENHANCEMENT_IMPLEMENTATION_PLAN.md)
+
+defaults:
+  crit: notable
+  conf: 0.55
+  attack: "T1195.002"
+
+traits:
+  # === npm package.json ===
+
+  # No contributors listed
+  - id: npm-no-contributors
+    desc: npm package lists no contributors
+    crit: notable
+    conf: 0.55
+    for: [package.json]
+    if:
+      type: kv
+      path: "contributors"
+      size_max: 0
+
+  # Single contributor (common for new/malicious packages)
+  - id: npm-single-contributor
+    desc: npm package has single contributor
+    crit: notable
+    conf: 0.50
+    for: [package.json]
+    if:
+      type: kv
+      path: "contributors"
+      size_min: 1
+      size_max: 1
+
+  # Many contributors (established project indicator)
+  - id: npm-many-contributors
+    desc: npm package has many contributors (10+)
+    crit: notable
+    conf: 0.40
+    for: [package.json]
+    if:
+      type: kv
+      path: "contributors"
+      size_min: 10
+
+  # === PyPI - authors in pyproject.toml ===
+
+  - id: pypi-no-authors
+    desc: PyPI package has no authors in pyproject.toml
+    crit: notable
+    conf: 0.60
+    for: [pyproject.toml]
+    if:
+      type: kv
+      path: "project.authors"
+      size_max: 0
+
+  - id: pypi-single-author
+    desc: PyPI package has single author
+    crit: notable
+    conf: 0.50
+    for: [pyproject.toml]
+    if:
+      type: kv
+      path: "project.authors"
+      size_min: 1
+      size_max: 1
+
+composite_rules:
+  # === Suspicious: No contributors + single maintainer ===
+  - id: npm-minimal-team
+    desc: No contributors and single maintainer
+    crit: notable
+    conf: 0.65
+    attack: "T1195.002"
+    for: [package.json]
+    all:
+      - id: npm-no-contributors
+      - id: metadata/quality/maintainers::npm-single-maintainer
+
+  # === High-Risk: Minimal team + install hooks ===
+  - id: npm-minimal-team-with-hooks
+    desc: Minimal team with install hooks
+    crit: hostile
+    conf: 0.90
+    attack: "T1195.002"
+    for: [package.json]
+    all:
+      - id: npm-minimal-team
+      - id: objectives/lateral-movement/supply-chain/npm/metadata::install-hooks

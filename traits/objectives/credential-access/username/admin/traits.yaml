@@ -1,0 +1,17 @@
+# admin username string
+# Standard admin/administrator reference
+
+defaults:
+  for: [all]
+
+traits:
+  - id: detected
+    desc: admin keyword
+    crit: notable
+    conf: 0.2
+    attack: "T1110.001"
+    mbc: "B0028"
+    if:
+      type: string
+      substr: "admin"
+      case_insensitive: true

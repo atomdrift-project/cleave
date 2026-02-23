@@ -1,0 +1,53 @@
+defaults:
+  for: ["*"]
+  crit: notable
+  conf: 0.8
+
+traits:
+  - id: open-handle
+    desc: Open file handle (INT 21H, AH=3DH)
+    if:
+      type: raw
+      substr: '_AH = 0x3d'
+
+  - id: close-handle
+    desc: Close file handle (INT 21H, AH=3EH)
+    if:
+      type: raw
+      substr: '_AH = 0x3e'
+
+  - id: read-file
+    desc: Read from file handle (INT 21H, AH=3FH)
+    if:
+      type: raw
+      substr: '_AH = 0x3f'
+
+  - id: write-file
+    desc: Write to file handle (INT 21H, AH=40H)
+    if:
+      type: raw
+      substr: '_AH = 0x40'
+
+  - id: set-file-attributes
+    desc: Set file attributes (INT 21H, AH=43H)
+    if:
+      type: raw
+      substr: '_AH = 0x43'
+
+  - id: find-first-file
+    desc: Find first file (INT 21H, AH=4EH)
+    if:
+      type: raw
+      substr: '_AH = 0x4e'
+
+  - id: find-next-file
+    desc: Find next file (INT 21H, AH=4FH)
+    if:
+      type: raw
+      substr: '_AH = 0x4f'
+
+  - id: get-set-file-time
+    desc: Get or Set file date/time (INT 21H,
+    if:
+      type: raw
+      substr: '_AH = 0x57'

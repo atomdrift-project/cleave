@@ -1,0 +1,12 @@
+defaults:
+  for:
+  - all
+traits:
+- id: case-insensitive-lower-asm
+  conf: 0.8
+  crit: notable
+  desc: Case-insensitive file extension check using bitwise OR
+  if:
+    type: raw
+    regex: or e[abcd]x, [0-9a-fA-F]+h?.{0,120}cmp e([abcd]x|[sd]i), ["'][^"']{1,120}["']
+composite_rules: []

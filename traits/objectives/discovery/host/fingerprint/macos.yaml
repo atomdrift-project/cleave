@@ -1,0 +1,95 @@
+# macOS-specific Hardware Fingerprinting Detection
+# Detects collection of macOS hardware identifiers
+# ATT&CK: T1082 (System Information Discovery)
+
+defaults:
+  platforms: [macos]
+  attack: "T1082"
+  mbc: "B0001.009"
+
+traits:
+  # === IOKit Registry micro-behaviors ===
+  - id: ioplatformuuid
+    desc: "References macOS hardware UUID (used"
+    crit: notable
+    conf: 0.85
+    for: [macho]
+    if:
+      type: string
+      substr: "IOPlatformUUID"
+
+  - id: iokit-registry-entry
+    desc: "Accesses macOS device driver registry"
+    crit: notable
+    conf: 0.75
+    for: [macho]
+    if:
+      type: symbol
+      regex: "IORegistryEntryFromPath"
+
+  - id: iokit-registry-property
+    desc: "Reads hardware properties from macOS"
+    crit: notable
+    conf: 0.75
+    for: [macho]
+    if:
+      type: symbol
+      regex: "IORegistryEntryCreateCFProperty"
+
+  - id: ioplatformserialnum
+    desc: "References Mac hardware serial number"
+    crit: notable
+    conf: 0.85
+    for: [macho]
+    if:
+      type: string
+      substr: "IOPlatformSerialNumber"
+
+  - id: ioservice-plane
+    desc: "References IOKit service plane (hardware"
+    crit: notable
+    conf: 0.6
+    for: [macho]
+    if:
+      type: string
+      substr: "IOService"
+
+composite_rules:
+  # IOKit registry access composite
+  - id: iokit-registry
+    desc: "IOKit registry access for hardware"
+    crit: notable
+    conf: 0.8
+    for: [macho]
+    all:
+      - id: iokit-registry-entry
+    any:
+      - id: iokit-registry-property
+      - id: ioservice-plane
+
+  # Hardware UUID collection composite
+  - id: macos-hardware-uuid
+    desc: "Collects macOS hardware UUID"
+    crit: suspicious
+    conf: 0.9
+    for: [macho]
+    all:
+      - id: ioplatformuuid
+    any:
+      - id: iokit-registry-entry
+      - id: iokit-registry-property
+
+  # Full hardware fingerprint composite
+  - id: hardware-fingerprint-macos
+    desc: "macOS hardware fingerprinting (UUID +"
+    crit: suspicious
+    conf: 0.9
+    for: [macho]
+    needs: 2
+    any:
+      - id: ioplatformuuid
+      - id: ioplatformserialnum
+      - id: iokit-registry
+    downgrade:
+      any:
+        - id: metadata/signed/platform::apple

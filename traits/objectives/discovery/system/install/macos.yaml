@@ -1,0 +1,16 @@
+# macOS Installation History Discovery
+# ATT&CK: T1082 (System Information Discovery)
+
+defaults:
+  platforms: [macos]
+  for: [shell, macho]
+  attack: "T1082"
+
+traits:
+  - id: install-log-grep
+    desc: Parse install.log for installation dates
+    crit: notable
+    conf: 0.75
+    if:
+      type: string
+      regex: "grep.{0,50}Install\\s+Succeeded.{0,50}/var/log/install\\.log"

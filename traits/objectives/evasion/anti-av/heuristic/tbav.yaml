@@ -1,0 +1,10 @@
+defaults:
+  for: [all]
+
+traits:
+  - id: tbav-evasion-asm
+    desc: TBAV Heuristic Evasion (Assembly)
+    crit: suspicious
+    if:
+      type: raw
+      regex: 'PUSH\s+AX,\s+DEC\s+BX,\s+NOP'

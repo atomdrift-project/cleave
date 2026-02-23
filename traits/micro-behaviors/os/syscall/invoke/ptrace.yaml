@@ -1,0 +1,20 @@
+traits:
+  - id: ptrace
+    desc: Uses ptrace - debugger or
+    conf: 0.85
+    crit: suspicious
+    platforms: [linux]
+    for: [elf]
+    if:
+      type: syscall
+      name: ["ptrace"]
+
+  - id: process-memory-access
+    desc: Reads or writes another process
+    conf: 0.9
+    crit: suspicious
+    platforms: [linux]
+    for: [elf]
+    if:
+      type: syscall
+      name: ["process_vm_readv", "process_vm_writev"]

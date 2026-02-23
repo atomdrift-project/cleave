@@ -1,0 +1,22 @@
+# SSL/TLS Library References
+# Generic library string references (baseline markers)
+
+defaults:
+  for: [all]
+
+traits:
+  - id: libssl-ref
+    desc: libssl library reference
+    crit: baseline
+    conf: 0.3
+    if:
+      type: string
+      substr: "libssl"
+
+  - id: libcrypto-ref
+    desc: libcrypto library reference
+    crit: baseline
+    conf: 0.3
+    if:
+      type: string
+      substr: "libcrypto"

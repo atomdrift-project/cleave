@@ -1,0 +1,27 @@
+# UTF-16 Script Encoding Obfuscation
+# JScript/VBScript files encoded as UTF-16 to evade string-based detection
+# Legitimate scripts rarely use UTF-16 encoding with null-byte interleaving
+
+defaults:
+  platforms: [windows]
+  for: [javascript]
+  attack: "T1027"
+  mbc: "B0032"
+
+traits:
+  - id: utf16-bom-script
+    desc: UTF-16 encoded script content
+    crit: notable
+    conf: 0.7
+    if:
+      type: raw
+      regex: "f\\x00u\\x00n\\x00c\\x00t\\x00i\\x00o\\x00n\\x00"
+
+composite_rules:
+  - id: utf16-wsh-obfuscation
+    desc: UTF-16 encoded WSH with COM objects
+    crit: suspicious
+    conf: 0.85
+    all:
+      - id: utf16-bom-script
+      - id: objectives/execution/activex/com::utf16-wsh-com-objects

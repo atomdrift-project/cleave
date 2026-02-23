@@ -1,0 +1,19 @@
+# Junk Code and Disassembler Frustration
+# Detects instructions designed to crash or confuse disassemblers/analyzers
+# ATT&CK: T1027 (Obfuscated Files or Information)
+
+traits:
+  - id: ud2-junk-code
+    desc: Dense undefined instructions (UD2)
+    crit: notable  # Downgraded from suspicious - can be compiler padding/alignment
+    conf: 0.75
+    for: [pe, elf, macho]
+    if:
+      type: hex
+      pattern: "0F 0B"
+      count_min: 20
+      # per_kb_min removed - count_min is sufficient for detecting deliberate junk
+    downgrade:
+      any:
+        - id: metadata/signed/platform::apple
+        - id: file/archive/self-extracting

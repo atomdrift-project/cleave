@@ -1,0 +1,64 @@
+---
+# Ruby Credential Theft Detection
+# Detects credential harvesting and theft behaviors
+# ATT&CK: T1056 (Input Capture), T1552 (Unsecured Credentials)
+
+defaults:
+  for: [ruby]
+  platforms: [all]
+
+traits:
+  # === Authentication Hook ===
+  - id: auth-hook-ruby
+    desc: Authentication method hook
+    crit: notable
+    conf: 0.90
+    attack: "T1056"
+    if:
+      type: string
+      regex: 'Identity\.prepend|prepend.{0,50}Module'
+
+  # === Password Theft ===
+  - id: password-theft-ruby
+    desc: Password theft pattern
+    crit: suspicious
+    conf: 0.92
+    attack: "T1056"
+    if:
+      type: string
+      regex: "password.{0,50}rescue"
+
+  # === Global Variable for Storage ===
+  - id: global-var-storage
+    desc: Global variable for credential storage
+    crit: notable
+    conf: 0.75
+    attack: "T1552"
+    if:
+      type: string
+      regex: '\$[a-zA-Z_][a-zA-Z0-9_]*\s*<<|global.{0,50}credential'
+
+  # === Credential Array Append ===
+  - id: credential-append
+    desc: Credential string construction
+    crit: suspicious
+    conf: 0.85
+    attack: "T1056"
+    if:
+      type: string
+      regex: "email.{0,50}password|<<.{0,50}rescue"
+
+composite_rules:
+  # === Authentication Credential Theft ===
+  - id: auth-credential-theft
+    desc: Authentication credential theft
+    crit: suspicious
+    conf: 0.93
+    attack: "T1056"
+    needs: 3
+    any:
+      - id: auth-hook-ruby
+      - id: password-theft-ruby
+      - id: global-var-storage
+      - id: credential-append
+      - id: objectives/command-and-control/advanced-backdoor/script::faraday-http

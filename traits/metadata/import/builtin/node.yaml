@@ -1,0 +1,22 @@
+# Node.js core module imports
+# Atomic detection of standard library require() calls
+
+defaults:
+  for: [javascript, typescript]
+
+traits:
+  - id: require-fs
+    desc: require('fs') import
+    crit: baseline
+    conf: 0.7
+    if:
+      type: ast
+      query: "((call_expression function: (identifier) @fn arguments: (arguments (string) @arg)) (#eq? @fn \"require\") (#match? @arg \"'fs'|\\\"fs\\\"\"))"
+
+  - id: require-child-process
+    desc: require('child_process') import
+    crit: notable
+    conf: 0.8
+    if:
+      type: ast
+      query: "((call_expression function: (identifier) @fn arguments: (arguments (string) @arg)) (#eq? @fn \"require\") (#match? @arg \"'child_process'|\\\"child_process\\\"\"))"

@@ -1,0 +1,82 @@
+# Environment Variable Access
+# MBC: C0034 (Environment Variable)
+# ATT&CK: T1082 (System Information Discovery)
+
+defaults:
+  for: [elf, macho, so, dylib, c, php, python]
+
+traits:
+  - id: getenv
+    desc: getenv function (read environment variable)
+    crit: baseline
+    conf: 0.3
+    if:
+      type: symbol
+      regex: "getenv"
+    # Reading env vars is completely normal for system libs, video drivers, etc.
+    downgrade:
+      any:
+        - id: micro-behaviors/dylib/load/video-lib-marker
+        - id: micro-behaviors/dylib/library::graphics-lib-marker
+        - id: micro-behaviors/dylib/library::system-lib-marker
+
+  - id: setenv
+    desc: setenv function (set environment variable)
+    crit: baseline
+    conf: 0.4
+    if:
+      type: symbol
+      regex: "setenv"
+
+  - id: putenv
+    desc: putenv function (modify environment variable)
+    crit: baseline
+    conf: 0.4
+    if:
+      type: symbol
+      regex: "putenv"
+
+  - id: unsetenv
+    desc: unsetenv function (remove environment variable)
+    crit: baseline
+    conf: 0.4
+    if:
+      type: symbol
+      regex: "unsetenv"
+
+  - id: environ-global
+    desc: environ global variable access
+    crit: notable
+    conf: 0.3
+    if:
+      type: symbol
+      regex: "environ"
+
+  - id: py-environ-enumerate
+    desc: Python environ enumeration
+    crit: notable
+    conf: 0.85
+    for: [python]
+    if:
+      type: raw
+      regex: "environ\\.(items|values|keys)"
+
+composite_rules:
+  - id: env-access
+    desc: Environment variable access functions
+    crit: baseline
+    conf: 0.4
+    any:
+      - id: getenv
+      - id: setenv
+      - id: putenv
+      - id: unsetenv
+
+  - id: set
+    desc: Environment variable modification
+    crit: baseline
+    conf: 0.5
+    any:
+      - id: setenv
+      - id: putenv
+      - id: unsetenv

@@ -1,0 +1,96 @@
+# TLS Callback Detection (PE)
+# Detects Thread Local Storage (TLS) callbacks in PE executables
+# Malware abuses TLS callbacks to execute code before the main entry point,
+# often to detect debuggers or decrypt payloads before analysis tools attach
+# ATT&CK: T1055.012 (Process Injection: Process Hollowing)
+# ATT&CK: T1574.001 (Hijack Execution Flow: DLL Search Order Hijacking)
+
+defaults:
+  for: [pe]
+  attack: "T1055.012"
+
+traits:
+  # TLS directory structure in PE header
+  # IMAGE_TLS_DIRECTORY contains AddressOfCallBacks pointer
+  - id: tls-directory-present
+    desc: PE TLS directory present
+    crit: notable
+    conf: 0.7
+    if:
+      type: symbol
+      substr: "__tls"
+
+  # TlsCallback functions
+  - id: tls-callback-function
+    desc: TLS callback function reference
+    crit: suspicious
+    conf: 0.85
+    if:
+      type: string
+      regex: "TlsCallback(_\\d+)?"
+      case_insensitive: true
+
+  # Common anti-debug checks in TLS callbacks
+  - id: tls-callback-anti-debug
+    desc: Anti-debug check via TLS callback
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: raw
+      regex: "\\bTlsCallback.{0,100}IsDebuggerPresent"
+      case_insensitive: true
+
+  # _tls_used symbol (compiler-generated TLS data)
+  - id: tls-used-symbol
+    desc: _tls_used symbol reference
+    crit: notable
+    conf: 0.6
+    if:
+      type: symbol
+      exact: "_tls_used"
+
+  # TLS callback array initialization
+  - id: address-of-callbacks
+    desc: AddressOfCallBacks reference
+    crit: suspicious
+    conf: 0.8
+    if:
+      type: raw
+      word: "AddressOfCallBacks"
+      case_insensitive: true
+
+  - id: tls-callback-array-ref
+    desc: TlsCallbackArray reference
+    crit: suspicious
+    conf: 0.8
+    if:
+      type: raw
+      word: "TlsCallbackArray"
+      case_insensitive: true
+
+composite_rules:
+  # TLS callback with anti-debugging
+  - id: tls-anti-debug
+    desc: TLS callback with anti-debugging
+    crit: hostile
+    conf: 0.95
+    attack: "T1622"
+    all:
+      - id: tls-callback-function
+    any:
+      - id: objectives/execution/native/runtime::debugger-detect-api
+      - id: objectives/anti-analysis/debugger/detect::check-remote-debugger
+      - id: objectives/anti-analysis/debugger/detect::nt-query-information-process
+
+  # TLS callback usage (suspicious if present)
+  - id: tls-callback-present
+    desc: PE uses TLS callbacks
+    crit: suspicious
+    conf: 0.8
+    needs: 2
+    any:
+      - id: tls-callback-function
+      - id: tls-directory-present
+      - id: address-of-callbacks
+      - id: tls-callback-array-ref
+      - id: tls-used-symbol

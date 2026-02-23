@@ -1,0 +1,6 @@
+# Process Information Discovery (Linux)
+# MBC: E1083 (File and Directory Discovery)
+# ATT&CK: T1083
+# NOTE: /proc/self/* traits moved to micro-behaviors/fs/proc/info/linux
+
+traits:

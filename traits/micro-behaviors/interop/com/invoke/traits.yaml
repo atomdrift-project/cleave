@@ -1,0 +1,51 @@
+# COM/OLE Operations
+# Component Object Model and Object Linking and Embedding
+
+defaults:
+  for: ["pe", "dll"]
+  platforms: ["windows"]
+
+traits:
+  # === COM Initialization ===
+  - id: ole-initialize
+    desc: Initialize OLE/COM subsystem
+    crit: notable
+    conf: 0.75
+    if:
+      type: symbol
+      exact: "OleInitialize"
+
+  - id: ole-uninitialize
+    desc: Uninitialize OLE/COM subsystem
+    crit: baseline
+    conf: 0.75
+    if:
+      type: symbol
+      exact: "OleUninitialize"
+
+  # === COM Object Creation ===
+  - id: co-create-instance
+    desc: Create COM object instance
+    crit: notable
+    conf: 0.80
+    if:
+      type: symbol
+      exact: "CoCreateInstance"
+
+  # === IID Resolution ===
+  - id: iid-from-string
+    desc: Convert GUID string to IID
+    crit: baseline
+    conf: 0.75
+    if:
+      type: symbol
+      exact: "IIDFromString"
+
+  # === Memory Management ===
+  - id: co-task-mem-free
+    desc: Free COM memory allocation
+    crit: baseline
+    conf: 0.70
+    if:
+      type: symbol
+      exact: "CoTaskMemFree"

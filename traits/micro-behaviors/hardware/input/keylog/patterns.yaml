@@ -1,0 +1,55 @@
+# Keylogger Data Pattern Capabilities
+# ATT&CK: T1056.001 (Input Capture: Keylogging)
+
+defaults:
+  attack: "T1056.001"
+  mbc: "E1056.001"
+
+traits:
+  - id: keylog-filename-pattern
+    desc: Timestamped keylog filename pattern
+    crit: suspicious
+    conf: 0.85
+    for: [all]
+    if:
+      type: string
+      regex: "KL\\d{12}\\.dat|keylogs"
+
+  - id: mouse-state-tracking
+    desc: Mouse state tracking string
+    crit: notable
+    conf: 0.75
+    for: [all]
+    if:
+      type: string
+      exact: "mouseStates"
+
+  - id: clipboard-capture-pattern
+    desc: Timestamped clipboard capture filename
+    crit: suspicious
+    conf: 0.85
+    for: [all]
+    if:
+      type: string
+      regex: "CA\\d{12}\\.dat"
+
+  - id: evt-marker-file
+    desc: Event marker file in /Library/Caches
+    crit: suspicious
+    conf: 0.85
+    platforms: [macos]
+    for: [macho, shell]
+    if:
+      type: string
+      regex: "touch\\s+/Library/Caches/\\.evt_|/Library/Caches/\\.evt_"
+
+composite_rules:
+  - id: keylogger-with-clipboard
+    desc: Keylogger with clipboard capture capability
+    crit: suspicious
+    conf: 0.95
+    needs: 2
+    any:
+      - id: keylog-filename-pattern
+      - id: clipboard-capture-pattern
+      - id: mouse-state-tracking

@@ -1,0 +1,36 @@
+traits:
+  - id: query-antivirus
+    desc: Queries for AntiVirus products via WMI
+    crit: notable
+    conf: 0.9
+    for: [powershell, javascript]
+    if:
+      type: raw
+      regex: '(?i)(AntiVirusProduct|FirewallProduct|SpywareProduct)'
+  
+  - id: query-security-center
+    desc: Queries SecurityCenter2 namespace
+    crit: notable
+    conf: 0.9
+    for: [powershell, javascript]
+    if:
+      type: raw
+      regex: '(?i)root.{1,2}SecurityCenter2'
+  
+  - id: query-os-info
+    desc: Queries OS information via WMI
+    crit: notable
+    conf: 0.8
+    for: [powershell, javascript]
+    if:
+      type: raw
+      regex: '(?i)(Win32_OperatingSystem|Win32_ComputerSystem|Win32_Processor)'
+
+  - id: wmi-object-cmdlet
+    desc: Uses Get-WmiObject or Gwmi cmdlet
+    crit: notable
+    conf: 0.8
+    for: [powershell]
+    if:
+      type: raw
+      regex: '(?i)(Get-WmiObject|Gwmi)\b'

@@ -1,0 +1,36 @@
+defaults:
+  crit: notable
+  conf: 1.0
+  for:
+  - all
+traits:
+- id: inline__search-engine-id__any_1
+  desc: Derived string condition
+  if:
+    type: string
+    regex: SearchProvider
+- id: inline__search-engine-id__any_2
+  desc: Derived string condition
+  if:
+    type: string
+    regex: SearchEngine
+- id: inline__search-engine-id__any_3
+  desc: Derived string condition
+  if:
+    type: string
+    regex: DefaultSearch
+- id: inline__search-engine-id__any_4
+  desc: Derived string condition
+  if:
+    type: string
+    regex: searchProvider
+- id: inline__search-engine-id__any_5
+  desc: Derived string condition
+  if:
+    type: string
+    regex: searchEngine
+- id: inline__search-engine-id__any_6
+  desc: Derived string condition
+  if:
+    type: string
+    regex: defaultSearch

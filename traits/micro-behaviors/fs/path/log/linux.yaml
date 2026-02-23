@@ -1,0 +1,15 @@
+# Log File Paths
+# MBC: E1083 (File and Directory Discovery)
+# ATT&CK: T1083
+
+defaults:
+  for: [all]
+
+traits:
+  - id: log-var
+    desc: Reference to sensitive Linux log files
+    crit: notable
+    conf: 0.66
+    if:
+      type: string
+      regex: "/var/log/(auth\\.log|secure|messages)"

@@ -1,0 +1,82 @@
+# iOS Bundle Identification Obfuscation
+# Detects suspicious/obfuscated bundle IDs and display names
+# ATT&CK: T1036 (Masquerading), T1027 (Obfuscated Files or Information)
+
+defaults:
+  for: [ipa]
+
+traits:
+  # === Obfuscated/Invalid Bundle IDs ===
+  - id: short-random-bundle-id
+    desc: Short random bundle ID
+    crit: suspicious
+    conf: 0.8
+    attack: "T1036"
+    for: [ipa]
+    if:
+      type: string
+      regex: "com\\.[a-z]{2,3}\\.[a-z0-9]{4,8}$"
+
+  - id: single-letter-bundle-component
+    desc: Single letter component
+    crit: suspicious
+    conf: 0.75
+    attack: "T1036"
+    for: [ipa]
+    if:
+      type: string
+      regex: "com\\.[a-z]\\.[a-z0-9]+$"
+
+  - id: placeholder-bundle-id-1
+    desc: Bundle ID with placeholder components (random/test)
+    crit: suspicious
+    conf: 0.8
+    attack: "T1036"
+    for: [ipa]
+    if:
+      type: string
+      regex: "\\.(sdfdf|xxxx|aaaa|test123)$"
+
+  - id: placeholder-bundle-id-2
+    desc: Bundle ID with placeholder components (dummy/fake)
+    crit: suspicious
+    conf: 0.8
+    attack: "T1036"
+    for: [ipa]
+    if:
+      type: string
+      regex: "\\.(dummy|fake)$"
+
+  # === Display Name Obfuscation ===
+  - id: zero-width-space-display-name
+    desc: Zero-width space
+    crit: suspicious
+    conf: 0.9
+    attack: "T1036"
+    for: [ipa]
+    if:
+      type: string
+      regex: "[\\u200B\\u200C\\u200D\\uFEFF]"
+
+composite_rules:
+  - id: obfuscated-bundle-identity
+    desc: Obfuscated bundle ID
+    crit: suspicious
+    conf: 0.85
+    attack: "T1036"
+    for: [ipa]
+    any:
+      - id: short-random-bundle-id
+      - id: single-letter-bundle-component
+      - id: placeholder-bundle-id-1
+      - id: placeholder-bundle-id-2
+
+  - id: suspicious-bundle-masquerading
+    desc: Suspicious masquerading
+    crit: suspicious
+    conf: 0.8
+    attack: "T1036"
+    for: [ipa]
+    any:
+      - id: obfuscated-bundle-identity
+      - id: zero-width-space-display-name

@@ -1,0 +1,66 @@
+defaults:
+  for:
+  - all
+traits:
+- id: d3-interpolate
+  desc: D3 interpolate API marker
+  crit: notable
+  conf: 1.0
+  if:
+    type: string
+    regex: d3\.interpolate[a-zA-Z]+
+- id: d3-scale-linear
+  desc: D3 linear scale API marker
+  crit: notable
+  conf: 1.0
+  if:
+    type: string
+    substr: d3.scale.linear
+- id: d3-layout-force
+  desc: D3 force layout API marker
+  crit: notable
+  conf: 1.0
+  if:
+    type: string
+    substr: d3.layout.force
+- id: d3-version-bo-object
+  desc: D3-style version object marker (Bo)
+  crit: notable
+  conf: 1.0
+  if:
+    type: string
+    regex: Bo=\{version:"[0-9.]+"\}
+- id: d3-version-object
+  desc: D3 version object marker
+  crit: notable
+  conf: 1.0
+  if:
+    type: string
+    regex: d3\s*=\s*\{version:"[0-9.]+"\}
+- id: rickshaw-graph
+  desc: Rickshaw graph marker
+  crit: notable
+  conf: 1.0
+  if:
+    type: string
+    substr: Rickshaw.Graph
+- id: rickshaw-time-fixtures
+  desc: Rickshaw time fixtures marker
+  crit: notable
+  conf: 1.0
+  if:
+    type: string
+    substr: Rickshaw.Fixtures.Time
+composite_rules:
+- id: d3-detection-all
+  desc: D3.js data visualization library
+  crit: notable
+  conf: 1.0
+  any:
+  - id: d3-interpolate
+  - id: d3-scale-linear
+  - id: d3-layout-force
+  - id: d3-version-bo-object
+  - id: d3-version-object
+  - id: rickshaw-graph
+  - id: rickshaw-time-fixtures

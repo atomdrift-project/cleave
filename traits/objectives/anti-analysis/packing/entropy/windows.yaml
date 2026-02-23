@@ -1,0 +1,22 @@
+# Packing and Entropy-based Detection
+# Detects high entropy and structural indicators of packing
+
+defaults:
+  for: [pe]
+  platforms: [windows]
+
+traits:
+  - id: high-entropy-section
+    desc: High entropy executable section (possible packing)
+    crit: suspicious
+    conf: 0.85
+    if:
+      type: section
+      # Only match executable sections (.text, CODE)
+      # High entropy in .data/.rsrc is normal (compressed resources, archives)
+      regex: '(?i)^(\.|__)(text|code)'
+      entropy_min: 7.8
+    unless:
+      - id: objectives/execution/reflection/invoke::namespace-import
+      - id: metadata/format/pe/dotnet::dotnet-assembly
+      - id: file/archive/self-extracting # SFX stubs may have compressed code

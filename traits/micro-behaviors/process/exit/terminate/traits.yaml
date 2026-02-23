@@ -1,0 +1,30 @@
+# Process Exit
+# Generic exit/termination functions
+
+traits:
+  - id: exit-call
+    desc: Generic exit call
+    crit: baseline
+    conf: 0.3
+    for: [python, shell, javascript]
+    if:
+      type: string
+      exact: exit
+
+  - id: sys-exit
+    desc: Python sys.exit call
+    crit: baseline
+    conf: 0.3
+    for: [python]
+    if:
+      type: string
+      substr: sys.exit
+
+  - id: process-exit
+    desc: Node.js process.exit call
+    crit: baseline
+    conf: 0.3
+    for: [javascript, typescript]
+    if:
+      type: string
+      substr: process.exit

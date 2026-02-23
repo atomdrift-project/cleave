@@ -1,0 +1,17 @@
+# HTTP Server Operations - Go
+# MBC: C0002 (HTTP Communication)
+# ATT&CK: T1071.001
+
+defaults:
+  for: [all]
+
+traits:
+  - id: server-go
+    desc: Go HTTP server
+    crit: notable
+    conf: 0.66
+    mbc: "C0002"
+    attack: "T1071.001"
+    if:
+      type: symbol
+      exact: "net/http.ListenAndServe"

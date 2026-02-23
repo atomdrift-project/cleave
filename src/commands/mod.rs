@@ -1,0 +1,80 @@
+//! Command implementations for flayer CLI.
+//!
+//! This module provides the structure and re-exports for flayer's command subsystem.
+//! The commands module is organized as follows:
+//!
+//! - **shared**: Common utilities, types, and functions used across multiple commands.
+//!   This includes file path expansion, analysis report generation, rule discovery,
+//!   and file format detection.
+//!
+//! ## Organization Strategy
+//!
+//! Commands are organized into logical categories that may span multiple submodules:
+//!
+//! - **Analyze Command**: Single file analysis with comprehensive malware detection
+//!   - File type detection via magic bytes
+//!   - Format-specific structural analysis (ELF, PE, Mach-O, scripts, archives)
+//!   - Parallel YARA loading and capability mapping
+//!   - Terminal and JSONL output formats
+//!   - Module: `analyze`
+//!
+//! - **Extract Commands**: Utilities for extracting information from files
+//!   - Extract sections, symbols, and metadata from binaries
+//!   - Handles multiple binary formats (ELF, Mach-O, PE)
+//!   - Module: `extract`
+//!
+//! - **Test/Profile Commands**: Testing and profiling functionality
+//!   - Test rule sets and analysis pipelines
+//!   - Profile performance and memory usage
+//!   - Module: `test`
+//!
+//! - **Diff Commands**: Differential analysis
+//!   - Compare analysis results between files
+//!   - Module: `diff`
+//!
+//! ## Shared Module
+//!
+//! The `shared` module contains critical re-exports that are used by multiple commands:
+//!
+//! ### Utilities
+//! - Path handling: `expand_paths` - Recursively expands file globs and directories
+//! - Input handling: `read_paths_from_stdin` - Reads file paths from standard input
+//! - Error handling: `check_criticality_error` - Validates critical error conditions
+//! - File type detection: `cli_file_type_to_internal` - Converts CLI file type to internal type
+//!
+//! ### Analysis Functions
+//! - `analyze_file_with_shared_mapper` - Analyzes a single file with capability mapping
+//! - `analyze_archive_streaming_jsonl` - Streams analysis of archive contents as JSONL
+//! - `process_yara_result` - Processes YARA match results for reporting
+//!
+//! ### Reporting Functions
+//! - `create_analysis_report` - Generates comprehensive analysis reports
+//! - `find_similar_rules` - Searches for rules similar to a query string
+//! - `find_rules_in_directory` - Discovers rules in a specified directory
+//!
+//! ### Data Processing
+//! - `flatten_json_to_metrics` - Flattens nested JSON to flat metric structure
+//! - `extract_strings_from_ast` - Extracts string literals from syntax trees
+//!
+//! ## Data Types
+//!
+//! The shared module re-exports key data types used in command output and processing:
+//!
+//! - `SectionInfo` - Metadata about binary sections (address, size, entropy, permissions)
+//! - `SymbolInfo` - Information about symbols in binaries (name, address, library, type)
+
+pub(crate) mod analyze;
+pub(crate) mod diff;
+pub(crate) mod extract;
+pub(crate) mod profile;
+pub(crate) mod shared;
+pub(crate) mod test;
+
+// Re-export shared utilities needed by main.rs
+pub(crate) use shared::expand_paths;
+
+// Re-export command functions for main.rs
+pub(crate) use analyze::run as analyze_command;
+pub(crate) use diff::run as diff_command;
+pub(crate) use profile::run as profile_command;
+pub(crate) use test::{test_match, test_rules};

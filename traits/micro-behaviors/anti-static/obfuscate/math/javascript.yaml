@@ -1,0 +1,11 @@
+traits:
+  - id: js-junk-math-identity
+    desc: Junk identity math for obfuscation
+    crit: notable
+    conf: 0.8
+    for: [javascript, typescript]
+    mbc: B0032
+    attack: T1027
+    if:
+      type: raw
+      regex: '1\s*\*\s*\(\s*\(\s*[-+]?\d+\s*[-+*/]\s*[-+]?\d+\s*\)\s*-\s*0\s*\)'

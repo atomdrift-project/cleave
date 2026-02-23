@@ -1,0 +1,107 @@
+# Java Credential Access Traits
+# Detects credential stealing patterns in Java bytecode
+# MBC: Credential Access
+# ATT&CK: T1555 (Credentials from Password Stores)
+
+traits:
+  # Browser password stealing
+  - id: chrome-pass-string
+    desc: Chrome password stealing indicator
+    crit: suspicious
+    conf: 0.95
+    mbc: "T1555.003"
+    attack: "T1555.003"
+    for: [class]
+    if:
+      type: string
+      substr: "chrome-pass"
+
+  - id: firefox-pass-string
+    desc: Firefox password stealing indicator
+    crit: suspicious
+    conf: 0.95
+    mbc: "T1555.003"
+    attack: "T1555.003"
+    for: [class]
+    if:
+      type: string
+      substr: "fox-pass"
+
+  - id: ie-pass-string
+    desc: Internet Explorer password stealing indicator
+    crit: suspicious
+    conf: 0.95
+    mbc: "T1555.003"
+    attack: "T1555.003"
+    for: [class]
+    if:
+      type: string
+      substr: "ie-pass"
+
+  - id: all-pass-string
+    desc: All passwords collection indicator
+    crit: suspicious
+    conf: 0.9
+    mbc: "T1555"
+    attack: "T1555"
+    for: [class]
+    if:
+      type: string
+      substr: "all-pass"
+
+  - id: save-all-pass-string
+    desc: Save all passwords indicator
+    crit: suspicious
+    conf: 0.95
+    mbc: "T1555"
+    attack: "T1555"
+    for: [class]
+    if:
+      type: string
+      substr: "save-all-pass"
+
+  # Email client passwords
+  - id: outlook-pass-string
+    desc: Outlook password stealing indicator
+    crit: suspicious
+    conf: 0.95
+    mbc: "T1555"
+    attack: "T1555"
+    for: [class]
+    if:
+      type: string
+      substr: "outlook-pass"
+
+  - id: thunderbird-pass-string
+    desc: Thunderbird password stealing indicator
+    crit: suspicious
+    conf: 0.95
+    mbc: "T1555"
+    attack: "T1555"
+    for: [class]
+    if:
+      type: string
+      substr: "tb-pass"
+
+  - id: foxmail-pass-string
+    desc: Foxmail password stealing indicator
+    crit: suspicious
+    conf: 0.95
+    mbc: "T1555"
+    attack: "T1555"
+    for: [class]
+    if:
+      type: string
+      substr: "foxmail-pass"
+
+  # Keylogging
+  - id: o-keylogger-string
+    desc: Keylogger toggle command
+    crit: suspicious
+    conf: 0.95
+    mbc: "T1056.001"
+    attack: "T1056.001"
+    for: [class]
+    if:
+      type: string
+      substr: "o-keylogger"

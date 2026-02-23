@@ -1,0 +1,11 @@
+defaults:
+  for: [pe]
+
+composite_rules:
+  - id: ocra-masqueraded-c2-stub
+    desc: OCRA payload masquerading with C2 endpoint
+    crit: hostile
+    conf: 0.98
+    all:
+      - id: objectives/command-and-control/infrastructure/network::ocra-ipv4-port-stub
+      - id: objectives/evasion/masquerade/file::pe-masquerading-as-image

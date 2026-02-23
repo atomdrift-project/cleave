@@ -1,0 +1,63 @@
+# Cron Persistence Detection for Shell Scripts
+# Detects shell scripts that establish persistence via crontab
+# ATT&CK: T1053.003 (Scheduled Task/Job: Cron)
+# MBC: B0030 (Persistence)
+
+defaults:
+  crit: suspicious
+  attack: "T1053.003"
+  mbc: "B0030"
+  for: [shell]
+
+traits:
+  # === Crontab Manipulation ===
+  - id: crontab-add
+    desc: Adds crontab entry
+    crit: notable
+    conf: 0.85
+    if:
+      type: raw
+      # Matches: crontab -l ... | crontab - or echo "..." | crontab -
+      regex: "crontab\\s+-l[^|]{0,50}\\|\\s*crontab\\s*-|echo[^|]{0,50}\\|\\s*crontab\\s*-"
+
+  - id: crontab-with-curl-wget
+    desc: Crontab with download and execute
+    crit: suspicious
+    conf: 0.95
+    if:
+      type: raw
+      # Matches crontab entries containing curl/wget piped to sh/bash
+      regex: "crontab[^;]{0,50}(curl|wget)[^|]{0,50}\\|\\s*(sh|bash)"
+
+  - id: crontab-sed-removal
+    desc: Removes crontab entries via sed
+    crit: suspicious
+    conf: 0.80
+    if:
+      type: raw
+      # Matches: crontab -l | sed '/pattern/d' | crontab -
+      regex: "crontab\\s+-l\\s*\\|\\s*sed\\s+['\"]?/[^/]{1,120}/d['\"]?\\s*\\|\\s*crontab\\s*-"
+
+  # Multiple cron manipulations indicates malware cleaning up competitors
+  - id: mass-crontab-cleanup
+    desc: Mass crontab cleanup (botkill)
+    crit: suspicious
+    conf: 0.90
+    if:
+      type: raw
+      regex: "crontab\\s+-l\\s*\\|\\s*sed"
+
+composite_rules:
+  # Cron persistence with remote payload (shell scripts)
+  # Pattern: adds crontab entry that downloads and executes from remote URL
+  # Complexity: all(4) + for(1) = 5 >= 4 ✓ HOSTILE
+  - id: cron-shell-download-execute
+    desc: Cron persistence with download-execute (shell)
+    crit: hostile
+    conf: 0.95
+    attack: "T1053.003"
+    all:
+      - id: crontab-add
+      - id: crontab-with-curl-wget
+      - id: mass-crontab-cleanup
+      - id: objectives/command-and-control/dropper/remote-eval::download-execute

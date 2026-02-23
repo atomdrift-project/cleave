@@ -1,0 +1,121 @@
+# IP Spoofing
+# MBC: C0001 (Socket Communication)
+# ATT&CK: T1071
+
+defaults:
+  for: [all]
+  attack: "T1071"
+  mbc: "C0001"
+
+traits:
+  # === IP spoofing keywords ===
+  - id: spoof-keyword
+    desc: spoof keyword
+    crit: baseline
+    conf: 0.65
+    for: [c, go, rust, python, shell, elf, macho]
+    if:
+      type: string
+      word: "spoof"
+
+  - id: forge-keyword
+    desc: forge keyword
+    crit: baseline
+    conf: 0.6
+    for: [c, go, rust, python, shell, elf, macho]
+    if:
+      type: string
+      word: "forge"
+
+  - id: ip-hdrincl-constant
+    desc: IP_HDRINCL socket option
+    crit: baseline
+    conf: 0.75
+    for: [c, go, rust, python, shell, elf, macho]
+    if:
+      type: string
+      substr: "IP_HDRINCL"
+
+  - id: ipproto-raw-constant
+    desc: IPPROTO_RAW socket type
+    crit: baseline
+    conf: 0.75
+    for: [c, go, rust, python, shell, elf, macho]
+    if:
+      type: string
+      substr: "IPPROTO_RAW"
+
+  - id: sock-raw-constant
+    desc: SOCK_RAW socket type
+    crit: baseline
+    conf: 0.7
+    for: [c, go, rust, python, shell, elf, macho]
+    if:
+      type: string
+      substr: "SOCK_RAW"
+
+  # NOTE: raw socket keyword moved to communications/socket/raw/generic.yaml
+  # as that's the more canonical location for raw socket detection
+
+  # === SYN cookie atomic indicators ===
+  - id: syncookie-word
+    desc: syncookie word
+    crit: baseline
+    conf: 0.5
+    if:
+      type: string
+      substr: "syncookie"
+
+  - id: syn-cookie
+    desc: SYN cookie or syn cookie (case variants)
+    crit: baseline
+    conf: 0.5
+    if:
+      type: string
+      regex: "(SYN|syn).?cookie"
+
+  - id: bitwise-ip-rand-source
+    desc: Random number generation function call
+    crit: baseline
+    conf: 0.8
+    if:
+      type: raw
+      regex: "(rand|rand_cmwc|rand_r)\\s*\\(\\s*\\)"
+
+  - id: bitwise-ip-shift-mask
+    desc: Bit shift and 0xFF mask pattern
+    crit: suspicious
+    conf: 0.8
+    if:
+      type: raw
+      regex: ">>\\s*[0-9]{1,2}\\s*&\\s*0xFF"
+
+composite_rules:
+  # Migrated from YARA
+  - id: spoof
+    desc: IP address spoofing capabilities
+    crit: suspicious
+    conf: 0.7
+    for: [c, go, rust, python, shell, elf, macho]
+    any:
+      - { id: spoof-keyword }
+      - { id: forge-keyword }
+      - { id: ip-hdrincl-constant }
+      - { id: ipproto-raw-constant }
+      - { id: bitwise-ip-construction }
+
+  - id: bitwise-ip-construction
+    desc: IP address construction using bitwise operations (often
+    crit: suspicious
+    conf: 0.8
+    all:
+      - id: bitwise-ip-rand-source
+      - id: bitwise-ip-shift-mask
+
+  - id: syncookie
+    desc: SYN cookie manipulation
+    crit: notable
+    conf: 0.66
+    any:
+      - { id: syncookie-word }
+      - { id: syn-cookie }

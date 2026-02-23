@@ -1,0 +1,79 @@
+# Python-Specific Metrics-Based Obfuscation Detection
+# Detects Python obfuscation patterns common in PyPI malware
+
+defaults:
+  for: [python]
+  attack: "T1027"
+  mbc: "B0032"
+
+traits:
+  # === Python-Specific Obfuscation Patterns ===
+
+  - id: py-lambda-abuse
+    desc: "Excessive lambda functions (obfuscation via"
+    crit: suspicious
+    conf: 0.8
+    if:
+      type: metrics
+      field: functions.anonymous
+      min: 15
+
+  - id: py-single-line-heavy
+    desc: "Many one-liner functions (compressed code)"
+    crit: notable
+    conf: 0.75
+    if:
+      type: metrics
+      field: functions.one_liners
+      min: 10
+
+  - id: py-nested-functions
+    desc: "Nested function definitions (closure obfuscation)"
+    crit: notable
+    conf: 0.7
+    if:
+      type: metrics
+      field: functions.nested_functions
+      min: 5
+
+  - id: py-encoded-strings
+    desc: "High string entropy (base64/hex encoded"
+    crit: notable
+    conf: 0.85
+    # Small files with high entropy strings are more suspicious
+    size_max: 50000
+    if:
+      type: metrics
+      field: strings.avg_entropy
+      min: 4.5
+      min_size: 4096
+    unless:
+      - type: raw
+        substr: "weave"
+
+composite_rules:
+  - id: py-pyobfuscate-pattern
+    desc: "Python obfuscator tool output"
+    crit: suspicious
+    conf: 0.85
+    needs: 3
+    any:
+      - id: objectives/anti-static/obfuscation/code-metrics/structure::no-comments
+      - id: objectives/anti-static/obfuscation/code-metrics::py-lambda-abuse
+      - id: objectives/anti-static/obfuscation/code-metrics::py-encoded-strings
+      - id: objectives/anti-static/obfuscation/code-metrics/functions::single-char-function-names
+      - id: objectives/anti-static/obfuscation/code-metrics/identifiers::py-many-high-entropy-identifiers
+    unless:
+      - type: raw
+        substr: "pandas"
+
+  - id: py-pypi-malware-pattern
+    desc: "PyPI malware obfuscation pattern"
+    crit: hostile
+    conf: 0.9
+    all:
+      - id: objectives/anti-static/obfuscation/code-metrics::py-encoded-strings
+      - id: objectives/anti-static/obfuscation/code-metrics/structure::no-comments
+    any:
+      - id: objectives/anti-static/obfuscation/code-metrics/functions::single-char-function-names
+      - id: objectives/anti-static/obfuscation/code-metrics/identifiers::py-many-high-entropy-identifiers

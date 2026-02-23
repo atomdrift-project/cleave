@@ -1,0 +1,14 @@
+traits:
+  - id: large-source-file-1mb
+    desc: Source file larger than 1MB
+    crit: notable
+    conf: 0.8
+    for: [javascript, typescript, python, ruby, php, java, c, cpp, go, rust]
+    size_min: 1048576
+
+  - id: large-source-file-4mb
+    desc: Source file larger than 4MB
+    crit: suspicious
+    conf: 0.9
+    for: [javascript, typescript, python, ruby, php, java, c, cpp, go, rust]
+    size_min: 4194304

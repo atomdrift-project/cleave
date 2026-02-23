@@ -1,0 +1,32 @@
+# Valve Corporation Identification
+# Detects binaries associated with Valve (Steam, games, etc.)
+# Useful for downgrading injection/hooking findings which are common in these apps.
+
+defaults:
+  for: [all]
+
+traits:
+  - id: valve-corp-string
+    desc: Valve Corporation string
+    crit: baseline
+    conf: 0.95
+    if:
+      type: string
+      substr: "Valve Corp."
+
+  - id: steam-path-string
+    desc: Steam path reference
+    crit: baseline
+    conf: 0.9
+    if:
+      type: string
+      substr: "Software\\Valve\\Steam"
+
+composite_rules:
+  - id: valve-corp-binary
+    desc: Binary from Valve Corporation
+    crit: notable
+    conf: 0.98
+    any:
+      - id: metadata/vendor/valve::valve-corp-string
+      - id: metadata/vendor/valve::steam-path-string

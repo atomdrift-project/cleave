@@ -1,0 +1,88 @@
+# macOS Security Software Discovery
+# Detects checks for common macOS security products, firewalls, and EDRs.
+# ATT&CK: T1518.001 (Software Discovery: Security Software)
+
+defaults:
+  for: [all]
+  platforms: [macos]
+  mbc: "E1518"
+  attack: "T1518.001"
+
+traits:
+  - id: little-snitch-name
+    desc: Little Snitch firewall name
+    crit: notable
+    conf: 0.9
+    if:
+      type: string
+      substr: "Little Snitch"
+
+  - id: lulu-name
+    desc: LuLu firewall name
+    crit: notable
+    conf: 0.9
+    if:
+      type: string
+      substr: "LuLu"
+
+  - id: blockblock-name
+    desc: BlockBlock security tool name
+    crit: notable
+    conf: 0.9
+    if:
+      type: string
+      substr: "BlockBlock"
+
+  - id: objective-see-path
+    desc: Objective-See security tool path
+    crit: notable
+    conf: 0.9
+    if:
+      type: string
+      substr: "/Library/Objective-See"
+
+  - id: crowdstrike-falcon-path
+    desc: CrowdStrike Falcon path
+    crit: notable
+    conf: 0.9
+    if:
+      type: string
+      substr: "/Library/CS/falcond"
+
+  - id: sentinelone-path
+    desc: SentinelOne path
+    crit: notable
+    conf: 0.9
+    if:
+      type: string
+      substr: "/Library/Sentinel/sentineld"
+
+  - id: carbon-black-path
+    desc: Carbon Black path
+    crit: notable
+    conf: 0.9
+    if:
+      type: string
+      substr: "/Applications/CarbonBlack"
+
+composite_rules:
+  - id: security-software-discovery-macos
+    desc: macOS security software discovery
+    crit: notable
+    conf: 0.95
+    any:
+      - id: little-snitch-name
+      - id: lulu-name
+      - id: blockblock-name
+      - id: objective-see-path
+      - id: crowdstrike-falcon-path
+      - id: sentinelone-path
+      - id: carbon-black-path
+
+  - id: evasion-check-little-snitch
+    desc: Checks for Little Snitch for evasion
+    crit: suspicious
+    conf: 0.95
+    all:
+      - id: little-snitch-name
+      - id: micro-behaviors/process/enumerate/shell::ps-ef

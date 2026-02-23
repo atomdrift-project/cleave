@@ -1,0 +1,72 @@
+defaults:
+  for: [js, vbs]
+
+traits:
+  - id: create-text-file-api
+    desc: Creates a text file using FileSystemObject
+    crit: notable
+    if:
+      type: raw
+      regex: '(\.CreateTextFile|\.OpenTextFile|CreateTextFile\s+|OpenTextFile\s+)'
+
+  - id: ext-bat
+    desc: Reference to .bat file extension
+    crit: notable
+    if:
+      type: raw
+      regex: '[\"\x27][^\"]{1,200}\.bat[\"\x27]'
+
+  - id: ext-cmd
+    desc: Reference to .cmd file extension
+    crit: notable
+    if:
+      type: raw
+      regex: '[\"\x27][^\"]{1,200}\.cmd[\"\x27]'
+
+  - id: ext-ps1
+    desc: Reference to .ps1 file extension
+    crit: notable
+    if:
+      type: raw
+      regex: '[\"\x27][^\"]{1,200}\.ps1[\"\x27]'
+
+  - id: ext-vbs
+    desc: Reference to .vbs file extension
+    crit: notable
+    if:
+      type: raw
+      regex: '[\"\x27][^\"]{1,200}\.vbs[\"\x27]'
+
+  - id: ext-js
+    desc: Reference to .js file extension
+    crit: notable
+    for: [vbs]
+    if:
+      type: raw
+      regex: '[\"\x27][^\"]{1,200}\.js[\"\x27]'
+
+composite_rules:
+  - id: script-extension
+    desc: Any executable script file extension
+    crit: notable
+    any:
+      - type: trait
+        id: ext-bat
+      - type: trait
+        id: ext-cmd
+      - type: trait
+        id: ext-ps1
+      - type: trait
+        id: ext-vbs
+      - type: trait
+        id: ext-js
+
+  - id: create-script-file
+    desc: Creates an executable script file (.bat, .cmd, .ps1, .vbs)
+    conf: 0.95
+    crit: suspicious
+    all:
+      - type: trait
+        id: create-text-file-api
+      - type: trait
+        id: script-extension

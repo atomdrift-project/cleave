@@ -1,0 +1,11 @@
+defaults:
+  for: [all]
+
+traits:
+  - id: suspicious-url
+    desc: Suspicious C2 URL or email address.
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: string
+      exact: "0rUWe_@cVW.axS"

@@ -1,0 +1,27 @@
+# JScript Dropper Objectives
+
+composite_rules:
+  - id: jscript-xmlhttp-adodb-dropper
+    desc: "JScript downloader using XMLHTTP and ADODB.Stream"
+    crit: hostile
+    conf: 0.95
+    attack: "T1105"
+    all:
+      - id: micro-behaviors/process/create/shell/wsh::wscript-shell-run
+    any:
+      - id: micro-behaviors/communications/http/client::js-xmlhttp-open
+      - id: micro-behaviors/communications/http/client::js-xmlhttp-send
+      - id: micro-behaviors/fs/write/file::adodb-stream-write
+      - id: micro-behaviors/os/fs/write::adodb-save-to-file
+
+  - id: jscript-rundll32-dropper
+    desc: "JScript dropper that executes payload via rundll32"
+    crit: hostile
+    conf: 1.0
+    attack: "T1218.011"
+    all:
+      - id: micro-behaviors/process/create/shell::rundll32-exec-with-args
+    any:
+      - id: micro-behaviors/os/fs/write::adodb-save-to-file
+      - id: micro-behaviors/fs/write/file::js-file-write
+      - id: objectives/anti-static/obfuscation/source/syntax::js-comma-constant-obfuscation

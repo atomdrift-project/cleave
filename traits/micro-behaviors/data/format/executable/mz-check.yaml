@@ -1,0 +1,20 @@
+traits:
+  - id: js-mz-header-check-dec
+    desc: Detects MZ header (decimal)
+    crit: suspicious
+    conf: 0.95
+    for:
+      - javascript
+    if:
+      type: raw
+      regex: '\[\s*0\s*\]\s*(!=|==)\s*77\s*(&&|\|\|)\s*\[\s*1\s*\]\s*(!=|==)\s*90'
+
+  - id: js-mz-header-check-char
+    desc: Detects MZ header (charAt)
+    crit: suspicious
+    conf: 0.95
+    for:
+      - javascript
+    if:
+      type: raw
+      regex: 'charAt\(0\)\s*==\s*[''"]M[''"]\s*&&\s*charAt\(1\)\s*==\s*[''"]Z[''"]'

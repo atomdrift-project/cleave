@@ -1,0 +1,23 @@
+# Action Engine / Remote Script Execution
+# Detects patterns where a class or engine executes remotely-delivered scripts or actions.
+
+traits:
+  - id: execute-script-class
+    desc: Class designed to execute script actions
+    crit: suspicious
+    conf: 0.85
+    for: [javascript, typescript]
+    if:
+      type: string
+      regex: 'ExecuteScriptAction'
+
+composite_rules:
+  - id: remote-action-engine
+    desc: Remote action/script execution engine
+    crit: suspicious
+    conf: 0.9
+    all:
+      - id: objectives/execution/interpreter/eval/dynamic::Function-constructor
+    any:
+      - id: objectives/execution/interpreter/script/action-engine::action-events-exec
+      - id: execute-script-class

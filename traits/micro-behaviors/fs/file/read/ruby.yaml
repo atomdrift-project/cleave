@@ -1,0 +1,27 @@
+---
+# Ruby File Operations
+# Generic file read/write capabilities
+# ATT&CK: T1083 (File and Directory Discovery)
+
+defaults:
+  for: [ruby]
+  platforms: [all]
+
+traits:
+  - id: ruby-file-read-content
+    desc: Ruby file read content
+    crit: baseline
+    conf: 0.50
+    attack: "T1083"
+    if:
+      type: raw
+      regex: 'File\.read|puts File\.read'
+
+  - id: ruby-file-read-open
+    desc: Ruby file read via open
+    crit: baseline
+    conf: 0.50
+    attack: "T1083"
+    if:
+      type: raw
+      regex: 'File\.open.{0,50}read'

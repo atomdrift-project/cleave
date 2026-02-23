@@ -1,0 +1,30 @@
+defaults:
+  for: [package.json]
+
+traits:
+  - id: npm-preinstall-script
+    desc: npm preinstall hook present
+    crit: notable
+    conf: 1.0
+    if:
+      type: kv
+      path: "scripts.preinstall"
+      regex: ".{1,512}"
+
+  - id: npm-install-script
+    desc: npm install hook present
+    crit: notable
+    conf: 1.0
+    if:
+      type: kv
+      path: "scripts.install"
+      regex: ".{1,512}"
+
+  - id: npm-postinstall-script
+    desc: npm postinstall hook present
+    crit: notable
+    conf: 1.0
+    if:
+      type: kv
+      path: "scripts.postinstall"
+      regex: ".{1,512}"

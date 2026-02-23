@@ -1,0 +1,22 @@
+composite_rules:
+  - id: xmlhttp-clsid-any
+    desc: Matches any variant of XMLHTTP CLSID
+    crit: notable
+    conf: 0.9
+    for: [powershell]
+    any:
+      - id: micro-behaviors/os/com/object::clsid-xmlhttp-b64-unicode
+      - id: micro-behaviors/os/com/object::clsid-xmlhttp-raw
+
+  - id: ps-xmlhttp-downloader
+    desc: PowerShell XMLHTTP downloader using COM objects
+    crit: hostile
+    conf: 0.95
+    attack: "T1105"
+    mbc: "E1059.001"
+    for: [powershell]
+    all:
+      - id: xmlhttp-clsid-any
+      - id: micro-behaviors/os/com/instantiation::create-instance
+      - id: micro-behaviors/communications/http/client::response-text
+      - id: objectives/execution/interpreter/eval/invoke::iex

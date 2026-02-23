@@ -1,0 +1,17 @@
+# Socket Listen - Shell (netcat)
+# MBC: C0001 (Socket Communication)
+# ATT&CK: T1071
+
+defaults:
+  for: [all]
+
+traits:
+  - id: listen-netcat
+    desc: Listen with netcat
+    crit: suspicious
+    conf: 0.66
+    mbc: "C0001"
+    attack: "T1071"
+    if:
+      type: string
+      regex: "nc -[a-z]{0,3}p"

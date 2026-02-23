@@ -1,0 +1,27 @@
+# Windows Service Persistence
+# Detects tactics used to maintain persistence via Windows Services
+# ATT&CK: T1543.003 (Create or Modify System Process: Windows Service)
+
+defaults:
+  platforms: [windows]
+  attack: "T1543.003"
+  mbc: "B0011.003" # Persistence::Service
+
+composite_rules:
+  - id: windows-service-persistence
+    desc: Maintains persistence via Windows Service DLL
+    crit: suspicious
+    conf: 0.9
+    for: [pe]
+    all:
+      - id: micro-behaviors/os/service/export::win-service-export
+      - id: micro-behaviors/os/service/host::advapi32-link
+
+  - id: suspicious-packed-service
+    desc: Highly suspicious packed Windows Service
+    crit: suspicious
+    conf: 0.95
+    for: [pe]
+    all:
+      - id: micro-behaviors/os/service/export::win-service-export
+      - id: objectives/anti-analysis/obfuscation/instruction/junk::high-entropy-generic

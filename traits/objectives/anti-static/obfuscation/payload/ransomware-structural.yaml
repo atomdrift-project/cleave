@@ -1,0 +1,81 @@
+# Ransomware/dropper detection via structural anomalies + minimal imports
+# Combines high entropy sections, dominant sections, and import minimization
+
+composite_rules:
+  # === Hostile: Structural indicators + crypto + minimal imports ===
+
+  - id: ransomware-packed-minimal
+    desc: Ransomware with packing and minimal imports
+    crit: hostile
+    conf: 0.95
+    for: [pe]
+    attack: "T1486"
+    mbc: "C0027"
+    all:
+      # Packing indicator (Rust-generated)
+      - id: objectives/anti-analysis/packing/entropy::high-entropy-section
+      # Crypto capability
+      - id: micro-behaviors/crypto
+    needs: 2
+    any:
+      # Dynamic loading (import obfuscation)
+      - id: micro-behaviors/dylib/load::load-library-a
+      - id: micro-behaviors/dylib/lookup::get-proc-address
+      # Execution
+      - id: micro-behaviors/process/create/methods::shell-execute-a
+      - id: micro-behaviors/process/create/methods::shell-execute
+      # Specific crypto APIs
+      - id: micro-behaviors/crypto/certificate/store::cert-open-store
+
+  - id: dropper-structural-concealment
+    desc: Dropper with structural obfuscation pattern
+    crit: hostile
+    conf: 0.9
+    for: [pe]
+    attack: "T1027"
+    mbc: "B0032"
+    all:
+      # High entropy section
+      - id: objectives/anti-analysis/packing/entropy::high-entropy-section
+      # Dominant section (single section is 85%+ of binary)
+      - id: objectives/anti-static/obfuscation/binary-metrics::dominant-section
+      # Dynamic loading capability
+      - id: micro-behaviors/dylib/load::load-library-a
+      - id: micro-behaviors/dylib/lookup::get-proc-address
+    any:
+      # Additional suspicious capabilities
+      - id: micro-behaviors/process/create/methods::shell-execute-a
+      - id: micro-behaviors/crypto/certificate/store::cert-open-store
+      - id: micro-behaviors/mem/protect/modify::virtual-protect
+
+  - id: encrypted-payload-binary
+    desc: Binary with encrypted payload section
+    crit: suspicious
+    conf: 0.85
+    for: [pe, elf, macho]
+    attack: "T1027"
+    mbc: "B0032"
+    all:
+      # High entropy executable section
+      - id: objectives/anti-analysis/packing/entropy::high-entropy-section
+      # Tiny string section
+      - id: objectives/anti-static/obfuscation/strings/encoding::tiny-cstring-section
+    needs: 2
+    any:
+      # Execution capabilities
+      - id: micro-behaviors/process/create/shell
+      - id: micro-behaviors/dylib/load::load-library-a
+      - id: micro-behaviors/crypto
+
+  - id: minimal-import-high-entropy
+    desc: Minimal imports with high entropy section
+    crit: suspicious
+    conf: 0.85
+    for: [pe]
+    attack: "T1027"
+    all:
+      - id: objectives/anti-analysis/packing/entropy::high-entropy-section
+    any:
+      - id: objectives/anti-static/obfuscation/payload::shell-exec-minimal-imports
+      - id: objectives/anti-static/obfuscation/imports::minimal-imports-suspicious-apis
+      - id: objectives/anti-static/obfuscation/imports::concealed-capabilities-pe

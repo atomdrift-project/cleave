@@ -1,0 +1,14 @@
+defaults:
+  for: [javascript]
+
+composite_rules:
+  - id: sysinfo-exfil-socket
+    desc: System recon combined with raw socket connection (exfiltration)
+    crit: hostile
+    conf: 0.95
+    all:
+      - id: objectives/discovery/host/fingerprint::process-list
+      - id: objectives/command-and-control/infrastructure/ip::hardcoded-ipv4-script
+    any:
+      - id: micro-behaviors/communications/socket/connect
+      - id: objectives/command-and-control/network/beacon::direct-http-c2

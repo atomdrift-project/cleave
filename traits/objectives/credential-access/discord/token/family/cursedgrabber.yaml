@@ -1,0 +1,16 @@
+# CursedGrabber Malware Family - Objective
+# Detects the CursedGrabber Discord token stealer
+
+composite_rules:
+  - id: cursedgrabber-familystealer
+    desc: CursedGrabber Discord token stealer family
+    crit: hostile
+    conf: 1.0
+    attack: T1555.003
+    mbc: B0030
+    for: [javascript, typescript]
+    needs: 2
+    any:
+      - id: well-known/malware/stealer::cursedgrabber-stop-fn
+      - id: well-known/malware/stealer::cursedgrabber-token-var
+      - id: well-known/malware/stealer::cursedgrabber-postinstall-var

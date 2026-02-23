@@ -1,0 +1,107 @@
+# Browser Extension Content Script Patterns
+# Detects content script injection capabilities targeting specific page types
+
+defaults:
+  for: [manifest.json]
+  crit: baseline
+  conf: 0.5
+
+traits:
+  - id: target-user-pages
+    desc: Content script targets /user/ pages
+    if:
+      type: kv
+      path: "content_scripts[*].matches"
+      substr: "/user/"
+
+  - id: target-account-pages
+    desc: Content script targets /account/ pages
+    if:
+      type: kv
+      path: "content_scripts[*].matches"
+      substr: "/account/"
+
+  - id: target-settings-pages
+    desc: Content script targets /settings/ pages
+    if:
+      type: kv
+      path: "content_scripts[*].matches"
+      substr: "/settings/"
+
+  - id: target-profile-pages
+    desc: Content script targets /profile/ pages
+    if:
+      type: kv
+      path: "content_scripts[*].matches"
+      substr: "/profile/"
+
+  - id: target-my-pages
+    desc: Content script targets /my/ pages
+    if:
+      type: kv
+      path: "content_scripts[*].matches"
+      substr: "/my/"
+
+  - id: target-crypto-exchange-a1
+    desc: Content script targets crypto exchanges (set A1)
+    if:
+      type: kv
+      path: "content_scripts[*].matches"
+      regex: 'binance\.com|coinbase\.com|kraken\.com'
+
+  - id: target-crypto-exchange-a2
+    desc: Content script targets crypto exchanges (set A2)
+    if:
+      type: kv
+      path: "content_scripts[*].matches"
+      regex: 'bybit\.com|okx\.com'
+
+  - id: target-crypto-exchange-b1
+    desc: Content script targets crypto exchanges (set B1)
+    if:
+      type: kv
+      path: "content_scripts[*].matches"
+      regex: 'kucoin\.com|mexc\.com|gate\.io'
+
+  - id: target-crypto-exchange-b2
+    desc: Content script targets crypto exchanges (set B2)
+    if:
+      type: kv
+      path: "content_scripts[*].matches"
+      regex: 'crypto\.com|bitfinex\.com'
+
+composite_rules:
+  - id: api-key-pages
+    desc: Content script targets API/Key management pages
+    crit: suspicious
+    conf: 0.9
+    any:
+      - id: target-user-pages
+      - id: target-account-pages
+      - id: target-settings-pages
+      - id: target-profile-pages
+      - id: target-my-pages
+
+  - id: crypto-exchange-sites-a
+    desc: Content script targets crypto exchanges (set A)
+    crit: notable
+    conf: 0.9
+    any:
+      - id: target-crypto-exchange-a1
+      - id: target-crypto-exchange-a2
+
+  - id: crypto-exchange-sites-b
+    desc: Content script targets crypto exchanges (set B)
+    crit: notable
+    conf: 0.9
+    any:
+      - id: target-crypto-exchange-b1
+      - id: target-crypto-exchange-b2
+
+  - id: crypto-exchange-sites
+    desc: Content script targets crypto exchange sites
+    crit: notable
+    conf: 0.9
+    any:
+      - id: crypto-exchange-sites-a
+      - id: crypto-exchange-sites-b

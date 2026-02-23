@@ -1,0 +1,21 @@
+traits:
+  - id: js-split-string-array
+    desc: JScript split string array assignment
+    crit: notable
+    conf: 0.9
+    for: [javascript]
+    if:
+      type: ast
+      query: |
+        (variable_declarator
+          value: (call_expression
+            function: (member_expression
+              object: (string)
+              property: (property_identifier) @split
+            )
+            arguments: (arguments (string))
+          )
+        )
+        (#eq? @split "split")
+    unless:
+      - id: metadata/library/jquery::library

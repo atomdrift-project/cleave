@@ -1,0 +1,305 @@
+---
+# Ruby malware dropper composite patterns
+
+defaults:
+  for: [ruby]
+  platforms: [all]
+
+traits:
+  # === Ruby require strings (library imports) ===
+  - id: net-http-single-quote
+    desc: "'net/http' require string"
+    crit: notable
+    conf: 0.7
+    if:
+      type: string
+      substr: "'net/http'"
+
+  - id: net-http-double-quote
+    desc: '"net/http" require string'
+    crit: notable
+    conf: 0.7
+    if:
+      type: string
+      substr: '"net/http"'
+
+  - id: uri-single-quote
+    desc: "'uri' require string"
+    crit: notable
+    conf: 0.6
+    if:
+      type: string
+      exact: "'uri'"
+
+  - id: uri-double-quote
+    desc: '"uri" require string'
+    crit: notable
+    conf: 0.6
+    if:
+      type: string
+      exact: '"uri"'
+
+  - id: base64-single-quote
+    desc: "'base64' require string"
+    crit: notable
+    conf: 0.7
+    if:
+      type: string
+      substr: "'base64'"
+
+  - id: base64-double-quote
+    desc: '"base64" require string'
+    crit: notable
+    conf: 0.7
+    if:
+      type: string
+      substr: '"base64"'
+
+  - id: resolv-single-quote
+    desc: "'resolv' require string"
+    crit: notable
+    conf: 0.7
+    if:
+      type: string
+      substr: "'resolv'"
+
+  - id: resolv-double-quote
+    desc: '"resolv" require string'
+    crit: notable
+    conf: 0.7
+    if:
+      type: string
+      substr: '"resolv"'
+
+  - id: socket-single-quote
+    desc: "'socket' require string"
+    crit: notable
+    conf: 0.75
+    if:
+      type: string
+      substr: "'socket'"
+
+  - id: socket-double-quote
+    desc: '"socket" require string'
+    crit: notable
+    conf: 0.75
+    if:
+      type: string
+      substr: '"socket"'
+
+  - id: tempfile-single-quote
+    desc: "'tempfile' require string"
+    crit: notable
+    conf: 0.7
+    if:
+      type: string
+      substr: "'tempfile'"
+
+  - id: tempfile-double-quote
+    desc: '"tempfile" require string'
+    crit: notable
+    conf: 0.7
+    if:
+      type: string
+      substr: '"tempfile"'
+
+  - id: open-uri-single-quote
+    desc: "'open-uri' require string"
+    crit: notable
+    conf: 0.75
+    if:
+      type: string
+      substr: "'open-uri'"
+
+  - id: open-uri-double-quote
+    desc: '"open-uri" require string'
+    crit: notable
+    conf: 0.75
+    if:
+      type: string
+      substr: '"open-uri"'
+
+  - id: pty-single-quote
+    desc: "'pty' require string"
+    crit: notable
+    conf: 0.75
+    if:
+      type: string
+      exact: "'pty'"
+
+  - id: pty-double-quote
+    desc: '"pty" require string'
+    crit: notable
+    conf: 0.75
+    if:
+      type: string
+      exact: '"pty"'
+
+  # === Base64 with Separator Obfuscation ===
+  - id: base64-separator-obfuscation
+    desc: Base64 with separator obfuscation
+    crit: suspicious
+    conf: 0.88
+    attack: "T1027"
+    if:
+      type: raw
+      regex: 'gsub\(.{0,10}"---"|\.gsub\(.{0,10}"---"|decode64.{0,50}gsub'
+
+  # === VBS Script Writing ===
+  - id: vbs-script-write
+    desc: VBS script file creation
+    crit: suspicious
+    conf: 0.85
+    attack: "T1059"
+    if:
+      type: raw
+      regex: 'File\.open\(.{0,50}\.vbs|\.vbs.{0,50}File\.open'
+
+composite_rules:
+  # === WScript Execution ===
+  - id: wscript-execution
+    desc: WScript execution
+    crit: notable
+    conf: 0.85
+    attack: "T1059"
+    any:
+      - id: micro-behaviors/process/create/shell/lang::wscript-exe
+      - id: micro-behaviors/process/create/shell/lang::cscript-exe
+      - id: micro-behaviors/fs/path/extension::vbs
+
+  # === Library require composites ===
+  - id: ruby-require-net-http
+    desc: Imports HTTP client library
+    crit: notable
+    conf: 0.80
+    any:
+      - id: net-http-single-quote
+      - id: net-http-double-quote
+
+  - id: ruby-require-uri
+    desc: Imports URI parsing library
+    crit: notable
+    conf: 0.75
+    any:
+      - id: uri-single-quote
+      - id: uri-double-quote
+
+  - id: ruby-require-base64
+    desc: Imports Base64 library
+    crit: notable
+    conf: 0.80
+    any:
+      - id: base64-single-quote
+      - id: base64-double-quote
+
+  - id: ruby-require-resolv
+    desc: Imports DNS resolution library
+    crit: notable
+    conf: 0.80
+    any:
+      - id: resolv-single-quote
+      - id: resolv-double-quote
+
+  - id: ruby-require-socket
+    desc: Imports socket library
+    crit: notable
+    conf: 0.85
+    any:
+      - id: socket-single-quote
+      - id: socket-double-quote
+
+  - id: ruby-require-tempfile
+    desc: Imports temporary file library
+    crit: notable
+    conf: 0.80
+    any:
+      - id: tempfile-single-quote
+      - id: tempfile-double-quote
+
+  - id: ruby-require-open-uri
+    desc: Imports Open-URI library
+    crit: notable
+    conf: 0.85
+    any:
+      - id: open-uri-single-quote
+      - id: open-uri-double-quote
+
+  - id: ruby-require-pty
+    desc: Imports PTY (pseudo-terminal) library
+    crit: notable
+    conf: 0.85
+    any:
+      - id: pty-single-quote
+      - id: pty-double-quote
+
+  # === Dropper pattern composites ===
+  - id: ruby-http-dropper
+    desc: HTTP dropper downloads and executes
+    conf: 0.95
+    crit: suspicious
+    needs: 3
+    any:
+      - id: micro-behaviors/communications/http/protocol/
+      - id: micro-behaviors/fs/write/file
+      - id: micro-behaviors/process/create/shell
+
+  - id: ruby-obfuscated-c2
+    desc: Obfuscated C2 with Base64 and
+    conf: 0.92
+    crit: suspicious
+    needs: 3
+    any:
+      - id: micro-behaviors/data/encode/base64::base64-decode
+      - id: micro-behaviors/communications/dns/lookup::dns-resolve
+      - id: micro-behaviors/communications/http/lib/netlib::net-http
+      - id: micro-behaviors/communications/http/get/
+
+  - id: ruby-tmp-execution
+    desc: Write to /tmp, chmod, and execute
+    conf: 0.93
+    crit: suspicious
+    needs: 3
+    any:
+      - id: micro-behaviors/fs/write/file
+      - id: micro-behaviors/fs/chmod
+      - id: micro-behaviors/process/create/shell
+    downgrade:
+      any:
+        - id: metadata/library::wal-shipper-header
+        - id: metadata/library::wal-shipper-config
+
+  - id: ruby-reverse-shell
+    desc: Reverse shell connection
+    conf: 0.90
+    crit: suspicious
+    needs: 2
+    any:
+      - id: micro-behaviors/communications/socket/listen::ruby-tcp-socket
+      - id: micro-behaviors/process/create/shell
+      - id: micro-behaviors/process/tty/pty::ruby-pty
+    downgrade:
+      any:
+        - id: metadata/quality/testing::ruby-test-file
+
+  - id: ruby-windows-vbs-dropper
+    desc: Windows VBS payload dropper
+    conf: 0.94
+    crit: suspicious
+    needs: 4
+    any:
+      - id: micro-behaviors/os/sysinfo/platform::windows-os-check
+      - id: base64-separator-obfuscation
+      - id: vbs-script-write
+      - id: wscript-execution
+      - id: micro-behaviors/process/create/shell::ruby-system
+      - id: micro-behaviors/data/encode/base64::base64-decode
+      - id: micro-behaviors/data/encode/base64::decode64-symbol
+
+  - id: ruby-binary-dropper
+    desc: Downloads and writes binary payload
+    conf: 0.94
+    crit: notable
+    needs: 2
+    any:
+      - id: micro-behaviors/communications/http/lib/netlib::request-ruby
+      - id: micro-behaviors/fs/write/file::ruby-file-open-write-binary

@@ -1,0 +1,27 @@
+# Sysctl Kernel State Access
+# Query or modify kernel parameters via sysctl
+
+traits:
+  - id: sysctl
+    desc: Query or modify kernel state via sysctl
+    crit: baseline
+    mbc: "E1082"
+    attack: "T1082"
+    conf: 0.6
+    for: [elf, macho, so, dylib, c]
+    if:
+      type: symbol
+      regex: sysctl
+    platforms: [unix, linux, macos]
+
+  - id: sysctlbyname
+    desc: Read or modify kernel state by name
+    crit: baseline
+    mbc: "E1082"
+    attack: "T1082"
+    conf: 0.6
+    for: [elf, macho, so, dylib, c]
+    if:
+      type: symbol
+      regex: sysctlbyname
+    platforms: [macos]

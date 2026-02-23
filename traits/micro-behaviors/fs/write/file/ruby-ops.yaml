@@ -1,0 +1,18 @@
+---
+# Ruby File Write Operations
+# Generic file write capabilities
+# ATT&CK: T1083 (File and Directory Discovery)
+
+defaults:
+  for: [ruby]
+  platforms: [all]
+
+traits:
+  - id: ruby-file-write-content
+    desc: Ruby file write content
+    crit: baseline
+    conf: 0.50
+    attack: "T1083"
+    if:
+      type: string
+      regex: 'File\.write|f\.write|File\.open.{0,50}w.{0,50}write'

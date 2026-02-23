@@ -1,0 +1,105 @@
+# HTTP Client Commands - curl/wget
+# Generic HTTP client tool usage (not exfiltration-specific)
+
+defaults:
+  for: ["*"]
+
+traits:
+  # === curl command ===
+  - id: curl-cmd
+    desc: curl command
+    crit: notable
+    conf: 0.3
+    if:
+      type: string
+      regex: "\\bcurl(\\s+-|\\s+http|\\s+--)"
+
+  - id: wget-cmd
+    desc: wget command
+    crit: notable
+    conf: 0.3
+    if:
+      type: string
+      regex: "\\bwget(\\s+-|\\s+http|\\s+--)"
+
+  # === curl POST operations ===
+  - id: curl-post-x
+    desc: curl -X POST
+    crit: notable
+    conf: 0.5
+    mbc: "C0002"
+    if:
+      type: string
+      regex: 'curl\s+-X\s+POST\s+-H'
+
+  - id: curl-user-header
+    desc: curl with user header
+    crit: notable
+    conf: 0.6
+    if:
+      type: string
+      regex: 'curl.{0,50}-H.{0,30}user:'
+
+  - id: curl-buildid-header
+    desc: curl with BuildID header
+    crit: notable
+    conf: 0.6
+    if:
+      type: string
+      regex: 'curl.{0,50}-H.{0,30}BuildID'
+
+  # === curl upload operations ===
+  - id: curl-form-upload
+    desc: curl -F form upload
+    crit: notable
+    conf: 0.5
+    if:
+      type: string
+      regex: 'curl\s+.{0,50}-F\s+'
+
+  - id: curl-data-binary
+    desc: curl --data-binary
+    crit: notable
+    conf: 0.5
+    if:
+      type: string
+      substr: "--data-binary"
+
+  - id: curl-at-tmp
+    desc: curl @/tmp/ file upload
+    crit: notable
+    conf: 0.6
+    if:
+      type: string
+      regex: 'curl.{0,50}@/tmp/'
+
+composite_rules:
+  # General HTTP client tools (curl/wget)
+  - id: client
+    desc: HTTP client command line tool
+    crit: notable
+    conf: 0.5
+    any:
+      - id: curl-cmd
+      - id: wget-cmd
+
+  # curl POST with custom identification headers
+  - id: curl-post
+    desc: curl POST with custom headers
+    crit: notable
+    conf: 0.7
+    mbc: "C0002"
+    any:
+      - id: curl-post-x
+      - id: curl-user-header
+      - id: curl-buildid-header
+
+  # curl file upload operations
+  - id: curl-upload
+    desc: curl file upload
+    crit: notable
+    conf: 0.6
+    any:
+      - id: curl-form-upload
+      - id: curl-data-binary
+      - id: curl-at-tmp

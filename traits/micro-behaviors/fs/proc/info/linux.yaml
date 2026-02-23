@@ -1,0 +1,215 @@
+# /proc Process Information (Linux)
+# MBC: E1057 (Process Discovery)
+# ATT&CK: T1057
+
+defaults:
+  for: [all]
+
+traits:
+  - id: process-arbitrary
+    desc: Access /proc for arbitrary PIDs
+    crit: notable
+    conf: 0.66
+    if:
+      type: string
+      regex: '/proc/[%{$][/\\$\\w\\}]{0,12}'
+
+  - id: process-self-exe-path
+    desc: Read own executable path (/proc/self/exe)
+    crit: baseline
+    conf: 0.66
+    if:
+      type: string
+      substr: /proc/self/exe
+
+  - id: process-self-exe-partial
+    desc: Read own executable path (self/exe)
+    crit: baseline
+    conf: 0.66
+    if:
+      type: string
+      substr: self/exe
+
+  - id: process-self-cmdline
+    desc: Read own command line via
+    crit: baseline
+    conf: 0.66
+    if:
+      type: string
+      substr: /proc/self/cmdline
+
+  - id: process-self-status
+    desc: Read own process status via
+    crit: baseline
+    conf: 0.66
+    if:
+      type: string
+      substr: /proc/self/status
+
+  - id: process-self-maps
+    desc: Read own process memory maps
+    crit: baseline
+    conf: 0.66
+    if:
+      type: string
+      substr: /proc/self/maps
+
+  - id: process-pid-maps
+    desc: Read process memory maps via
+    crit: notable
+    conf: 0.66
+    if:
+      type: string
+      regex: "/proc/[0-9]{1,10}/maps"
+
+  - id: process-pid-mem
+    desc: Access process memory via /proc/*/mem
+    crit: suspicious
+    conf: 0.75
+    if:
+      type: string
+      regex: "/proc/[0-9]{1,10}/mem"
+
+  - id: process-pid-cmdline
+    desc: Read process command line via
+    crit: notable
+    conf: 0.66
+    if:
+      type: string
+      regex: "/proc/[0-9]{1,10}/cmdline"
+
+  # NOTE: Debuggers legitimately read /proc/*/environ to inspect target process
+  # environment. Downgrade to notable for debugger tools.
+  - id: process-pid-environ
+    desc: Read process environment via /proc/*/environ
+    crit: suspicious
+    conf: 0.66
+    if:
+      type: string
+      regex: "/proc/[0-9]{1,10}/environ"
+    not:
+      - substr: "/proc/self/"
+    downgrade:
+      any:
+        - id: micro-behaviors/dylib/library::debugger-tool-marker
+
+  - id: process-pid-fd
+    desc: Access process file descriptors via
+    crit: notable
+    conf: 0.66
+    if:
+      type: string
+      regex: "/proc/[0-9]{1,10}/fd"
+
+  - id: linux-process-pid-exe
+    desc: Process exe path via /proc
+    crit: notable
+    conf: 0.66
+    if:
+      type: string
+      regex: "/proc/[0-9]{1,10}/exe"
+
+  - id: process-pid-status
+    desc: Read process status via /proc/*/status
+    crit: notable
+    conf: 0.66
+    if:
+      type: string
+      regex: "/proc/[0-9]{1,10}/status"
+
+  - id: process-pid-stat
+    desc: Read process statistics via /proc/*/stat
+    crit: notable
+    conf: 0.66
+    if:
+      type: string
+      regex: '/proc/[0-9]{1,10}/stat\b'
+
+  - id: python-proc-path-join
+    desc: os.path.join for /proc sensitive files
+    crit: notable
+    conf: 0.85
+    for: [python]
+    if:
+      type: ast
+      query: |
+        ((call
+          function: (attribute
+            object: (attribute
+              object: (identifier) @os
+              attribute: (identifier) @path)
+            attribute: (identifier) @join)
+          arguments: (argument_list
+            (string) @proc
+            (identifier)
+            (string) @file))
+         (#eq? @os "os")
+         (#eq? @path "path")
+         (#eq? @join "join")
+         (#match? @proc "/proc")
+         (#match? @file "cmdline|maps|mem|environ|exe"))
+
+  - id: process-oom
+    desc: Adjust OOM killer score via
+    crit: suspicious
+    conf: 0.66
+    if:
+      type: string
+      regex: "/proc/[0-9]{1,10}/oom_score_adj"
+
+  - id: proc-net-tcp
+    desc: Read TCP connection table
+    crit: notable
+    conf: 0.7
+    if:
+      type: string
+      substr: "/proc/net/tcp"
+
+  - id: proc-net-udp
+    desc: Read UDP connection table
+    crit: notable
+    conf: 0.7
+    if:
+      type: string
+      substr: "/proc/net/udp"
+
+  - id: proc-net-raw
+    desc: Read raw socket table
+    crit: notable
+    conf: 0.75
+    if:
+      type: string
+      substr: "/proc/net/raw"
+
+  - id: proc-net-arp
+    desc: Read ARP table
+    crit: notable
+    conf: 0.7
+    if:
+      type: string
+      substr: "/proc/net/arp"
+
+  # Removed proc-net-route duplicate - use micro-behaviors/fs/proc/network::network-route
+
+composite_rules:
+  - id: process-self-exe
+    desc: Read own executable path via /proc
+    crit: baseline
+    conf: 0.66
+    any:
+      - id: micro-behaviors/fs/proc/info::process-self-exe-path
+      - id: micro-behaviors/fs/proc/info::process-self-exe-partial
+
+  - id: process-pid-mem-maps-helper
+    desc: Helper for process memory access
+    all:
+      - id: process-pid-maps
+      - id: process-pid-mem
+
+  - id: process-memory-dumper
+    desc: Dumps process memory via /proc
+    crit: suspicious
+    conf: 0.8
+    any:
+      - id: python-proc-path-join
+      - id: process-pid-mem-maps-helper

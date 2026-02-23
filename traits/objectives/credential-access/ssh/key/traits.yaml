@@ -1,0 +1,519 @@
+defaults:
+  for:
+  - all
+  platforms:
+  - linux
+  - macos
+  - unix
+traits:
+- id: slash-dot-ssh
+  desc: /.ssh path reference
+  crit: notable
+  conf: 0.5
+  attack: T1552.004
+  if:
+    type: string
+    substr: /.ssh
+- id: dot-dot-ssh
+  desc: ..ssh/ path reference
+  crit: notable
+  conf: 0.5
+  attack: T1552.004
+  if:
+    type: string
+    substr: ..ssh/
+- id: id-rsa
+  desc: SSH id_rsa private key reference
+  crit: notable
+  conf: 0.6
+  attack: T1552.004
+  if:
+    type: string
+    regex: (\.ssh[/\\]|[/\\])id_rsa(\.pub)?$|^id_rsa$
+- id: id-dsa
+  desc: SSH id_dsa private key reference
+  crit: notable
+  conf: 0.6
+  attack: T1552.004
+  if:
+    type: string
+    regex: (\.ssh[/\\]|[/\\])id_dsa(\.pub)?$|^id_dsa$
+- id: id-ecdsa
+  desc: SSH id_ecdsa private key reference
+  crit: notable
+  conf: 0.6
+  attack: T1552.004
+  if:
+    type: string
+    regex: (\.ssh[/\\]|[/\\])id_ecdsa(\.pub)?$|^id_ecdsa$
+- id: id-ed25519
+  desc: SSH id_ed25519 private key reference
+  crit: notable
+  conf: 0.6
+  attack: T1552.004
+  if:
+    type: string
+    regex: (\.ssh[/\\]|[/\\])id_ed25519(\.pub)?$|^id_ed25519$
+- id: authorized-keys
+  desc: SSH authorized_keys file reference
+  crit: notable
+  conf: 0.6
+  attack: T1552.004
+  if:
+    type: string
+    substr: authorized_keys
+- id: known-hosts
+  desc: SSH known_hosts file reference
+  crit: notable
+  conf: 0.5
+  attack: T1552.004
+  if:
+    type: string
+    substr: known_hosts
+- id: putty-sessions
+  desc: PuTTY sessions registry reference
+  crit: suspicious
+  conf: 0.8
+  attack: T1552.004
+  platforms:
+  - windows
+  if:
+    type: string
+    substr: Software\SimonTatham\PuTTY\Sessions
+- id: sshd-net-bracket
+  desc: SSHD net process reference
+  crit: notable
+  conf: 0.7
+  if:
+    type: string
+    substr: 'sshd: [net]'
+- id: sshd-accepted-bracket
+  desc: SSHD accepted process reference
+  crit: notable
+  conf: 0.7
+  if:
+    type: string
+    substr: 'sshd: [accepted]'
+- id: sshd-proc-ref
+  desc: SSHD process reference
+  crit: suspicious
+  conf: 0.75
+  if:
+    type: string
+    regex: sshd_?proc
+- id: ptrace-tracer-tracer
+  desc: Process tracing reference (tracer)
+  crit: notable
+  conf: 0.3
+  if:
+    type: symbol
+    regex: "\\b(TracerPid|PTRACE_ATTACH)\\b"
+- id: sniff-ssh-lower
+  desc: sniff_ssh function name (lowercase)
+  crit: suspicious
+  conf: 0.85
+  for:
+  - elf
+  - macho
+  - pe
+  - dll
+  - so
+  - dylib
+  - python
+  - shell
+  if:
+    type: string
+    substr: sniff_ssh
+- id: sniff-ssh-title
+  desc: Sniff_ssh function name (titlecase)
+  crit: suspicious
+  conf: 0.85
+  for:
+  - elf
+  - macho
+  - pe
+  - dll
+  - so
+  - dylib
+  - python
+  - shell
+  if:
+    type: string
+    substr: Sniff_ssh
+- id: sniff-ssh-upper
+  desc: SNIFF_SSH constant (uppercase)
+  crit: suspicious
+  conf: 0.85
+  for:
+  - elf
+  - macho
+  - pe
+  - dll
+  - so
+  - dylib
+  - python
+  - shell
+  if:
+    type: string
+    substr: SNIFF_SSH
+- id: ssh-sniff-lower
+  desc: ssh_sniff function name (lowercase)
+  crit: suspicious
+  conf: 0.85
+  for:
+  - elf
+  - macho
+  - pe
+  - dll
+  - so
+  - dylib
+  - python
+  - shell
+  if:
+    type: string
+    substr: ssh_sniff
+- id: ssh-sniff-title
+  desc: Ssh_sniff function name (titlecase)
+  crit: suspicious
+  conf: 0.85
+  for:
+  - elf
+  - macho
+  - pe
+  - dll
+  - so
+  - dylib
+  - python
+  - shell
+  if:
+    type: string
+    substr: Ssh_sniff
+- id: ssh-sniff-upper
+  desc: SSH_SNIFF constant (uppercase)
+  crit: suspicious
+  conf: 0.85
+  for:
+  - elf
+  - macho
+  - pe
+  - dll
+  - so
+  - dylib
+  - python
+  - shell
+  if:
+    type: string
+    substr: SSH_SNIFF
+- id: sshpass-keyword
+  desc: sshpass tool reference
+  crit: suspicious
+  conf: 0.8
+  for:
+  - elf
+  - macho
+  - pe
+  - dll
+  - so
+  - dylib
+  - python
+  - shell
+  if:
+    type: string
+    word: sshpass
+- id: ssh-password-identifier
+  desc: ssh_password variable
+  crit: suspicious
+  conf: 0.85
+  for:
+  - elf
+  - macho
+  - pe
+  - dll
+  - so
+  - dylib
+  - python
+  - shell
+  if:
+    type: string
+    substr: ssh_password
+- id: ssh-cred-identifier
+  desc: ssh_cred variable
+  crit: suspicious
+  conf: 0.85
+  for:
+  - elf
+  - macho
+  - pe
+  - dll
+  - so
+  - dylib
+  - python
+  - shell
+  if:
+    type: string
+    substr: ssh_cred
+- id: sshpass-txt-file
+  desc: sshpass.txt file pattern
+  crit: suspicious
+  conf: 0.85
+  for:
+  - elf
+  - macho
+  - pe
+  - dll
+  - so
+  - dylib
+  - python
+  - shell
+  if:
+    type: string
+    regex: sshpass\d?\.txt
+- id: ssh-pass-log-file
+  desc: ssh_pass.log file
+  crit: suspicious
+  conf: 0.85
+  for:
+  - elf
+  - macho
+  - pe
+  - dll
+  - so
+  - dylib
+  - python
+  - shell
+  if:
+    type: string
+    substr: ssh_pass.log
+- id: password-txt-file
+  desc: password.txt file
+  crit: suspicious
+  conf: 0.75
+  for:
+  - elf
+  - macho
+  - pe
+  - dll
+  - so
+  - dylib
+  - python
+  - shell
+  if:
+    type: string
+    substr: password.txt
+- id: credentials-txt-file
+  desc: credentials.txt file
+  crit: suspicious
+  conf: 0.75
+  for:
+  - elf
+  - macho
+  - pe
+  - dll
+  - so
+  - dylib
+  - python
+  - shell
+  if:
+    type: string
+    substr: credentials.txt
+- id: stricthostkey-bypass
+  desc: SSH StrictHostKeyChecking bypass
+  crit: suspicious
+  conf: 0.8
+  attack: T1021.004
+  if:
+    type: string
+    substr: StrictHostKeyChecking=no
+  downgrade:
+    any:
+    - type: basename
+      exact: ssh
+    - type: basename
+      exact: scp
+    - type: basename
+      exact: sftp
+    - type: basename
+      exact: rsync
+    - type: basename
+      regex: wal_shipper
+    - id: metadata/library::wal-shipper-header
+- id: userknownhosts-bypass
+  desc: SSH UserKnownHostsFile bypass
+  crit: suspicious
+  conf: 0.75
+  attack: T1021.004
+  if:
+    type: string
+    regex: UserKnownHostsFile\s*[=/]\s*/dev/null
+  downgrade:
+    any:
+    - type: basename
+      exact: ssh
+    - type: basename
+      exact: scp
+    - type: basename
+      exact: sftp
+- id: password-pattern-1a
+  desc: Password pattern reference (prefix 1)
+  crit: notable
+  conf: 0.3
+  if:
+    type: string
+    regex: passw(or)?d[_-]?(hash|auth|cred)
+- id: password-pattern-1b
+  desc: Password pattern reference (prefix 2)
+  crit: notable
+  conf: 0.3
+  if:
+    type: string
+    regex: passw(or)?d[_-]?(steal|dump)
+- id: password-pattern-2
+  desc: Password pattern reference (suffix)
+  crit: notable
+  conf: 0.3
+  if:
+    type: string
+    regex: (steal|dump)[_-]?passw(or)?d
+composite_rules:
+- id: password-pattern
+  desc: Password pattern reference
+  crit: notable
+  conf: 0.3
+  any:
+  - id: password-pattern-1a
+  - id: password-pattern-1b
+  - id: password-pattern-2
+- id: sniff-ssh-variants
+  desc: sniff_ssh case variants
+  for:
+  - elf
+  - macho
+  - pe
+  - dll
+  - so
+  - dylib
+  - python
+  - shell
+  any:
+  - id: sniff-ssh-lower
+  - id: sniff-ssh-title
+  - id: sniff-ssh-upper
+  crit: notable
+- id: ssh-sniff-variants
+  desc: ssh_sniff case variants
+  for:
+  - elf
+  - macho
+  - pe
+  - dll
+  - so
+  - dylib
+  - python
+  - shell
+  any:
+  - id: ssh-sniff-lower
+  - id: ssh-sniff-title
+  - id: ssh-sniff-upper
+  crit: notable
+- id: ssh-sniffing-indicators
+  desc: SSH sniffing function identifiers
+  for:
+  - elf
+  - macho
+  - pe
+  - dll
+  - so
+  - dylib
+  - python
+  - shell
+  any:
+  - id: sniff-ssh-variants
+  - id: ssh-sniff-variants
+  - id: sshpass-keyword
+  - id: ssh-password-identifier
+  - id: ssh-cred-identifier
+  - id: well-known/malware/rootkit/medusa::sshdone
+  crit: notable
+- id: ssh-password-files
+  desc: SSH password file patterns
+  for:
+  - elf
+  - macho
+  - pe
+  - dll
+  - so
+  - dylib
+  - python
+  - shell
+  any:
+  - id: sshpass-txt-file
+  - id: ssh-pass-log-file
+  - id: password-txt-file
+  - id: credentials-txt-file
+  crit: notable
+- id: dot-ssh-path
+  desc: SSH directory path reference
+  crit: notable
+  conf: 0.6
+  attack: T1552.004
+  any:
+  - id: slash-dot-ssh
+  - id: dot-dot-ssh
+  - id: micro-behaviors/fs/path/sensitive/ssh::keys
+- id: sshd-net-proc
+  desc: SSHD network process reference
+  crit: suspicious
+  conf: 0.8
+  any:
+  - id: sshd-net-bracket
+  - id: sshd-accepted-bracket
+- id: private-key-theft
+  desc: SSH private key theft
+  crit: suspicious
+  conf: 0.85
+  attack: T1552.004
+  mbc: E1552
+  all:
+  - id: dot-ssh-path
+  any:
+  - id: id-rsa
+  - id: id-dsa
+  - id: id-ecdsa
+  - id: id-ed25519
+  downgrade:
+    any:
+    - id: micro-behaviors/communications/ssh/client::library
+    - id: micro-behaviors/communications/ssh/client::full-implementation
+- id: sshd-password-trace
+  desc: SSHD memory tracing for passwords
+  crit: suspicious
+  conf: 0.85
+  attack: T1552.004
+  platforms:
+  - linux
+  all:
+  - id: ptrace-tracer-tracer
+  - id: password-pattern
+  - id: micro-behaviors/os/service/remote::sshd-ref
+- id: credential-theft
+  desc: SSH key credential theft
+  crit: suspicious
+  conf: 0.95
+  attack: T1556
+  mbc: E1056
+  platforms:
+  - linux
+  for:
+  - elf
+  - macho
+  - pe
+  - dll
+  - so
+  - dylib
+  - python
+  - shell
+  any:
+  - id: ssh-sniffing-indicators
+  - id: ssh-password-files
+  all:
+  - id: micro-behaviors/os/service/remote::sshd-ref

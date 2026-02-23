@@ -1,0 +1,483 @@
+# Author Email - Free and Suspicious Domains
+# GuardDog-inspired: Detects free email providers and suspicious email domains
+# Free email domains can indicate potentially compromised or throwaway accounts
+# ATT&CK: T1195.002 (Compromise Software Supply Chain)
+
+defaults:
+  crit: notable
+  conf: 0.70
+  attack: "T1195.002"
+
+traits:
+  # === npm package.json - Free Email Providers ===
+
+  # Gmail
+  - id: npm-author-gmail
+    desc: npm package author uses Gmail
+    crit: notable
+    conf: 0.65
+    for: [package.json]
+    if:
+      type: kv
+      path: "author.email"
+      regex: "@gmail\\.com$"
+
+  - id: npm-maintainer-gmail
+    desc: npm package maintainer uses Gmail
+    crit: notable
+    conf: 0.65
+    for: [package.json]
+    if:
+      type: kv
+      path: "maintainers[*].email"
+      regex: "@gmail\\.com$"
+
+  # Yahoo
+  - id: npm-author-yahoo
+    desc: npm package author uses Yahoo
+    crit: notable
+    conf: 0.70
+    for: [package.json]
+    if:
+      type: kv
+      path: "author.email"
+      regex: "@yahoo\\.(com|co\\.uk|fr|de)$"
+
+  - id: npm-author-yahoo-extra
+    desc: npm package author uses Yahoo (extra domains)
+    crit: notable
+    conf: 0.70
+    for: [package.json]
+    if:
+      type: kv
+      path: "author.email"
+      regex: "@yahoo\\.(es|it|ca|com\\.au)$"
+
+  # Outlook/Hotmail
+  - id: npm-author-outlook
+    desc: npm package author uses Outlook
+    crit: notable
+    conf: 0.65
+    for: [package.json]
+    if:
+      type: kv
+      path: "author.email"
+      regex: "@(outlook|hotmail|live)\\.(com|co\\.uk)$"
+
+  - id: npm-author-outlook-extra
+    desc: npm package author uses Outlook (extra domains)
+    crit: notable
+    conf: 0.65
+    for: [package.json]
+    if:
+      type: kv
+      path: "author.email"
+      regex: "@(outlook|hotmail)\\.(fr|de|es)$"
+
+  - id: npm-author-outlook-extra-2
+    desc: npm package author uses Outlook (extra 2)
+    crit: notable
+    conf: 0.65
+    for: [package.json]
+    if:
+      type: kv
+      path: "author.email"
+      regex: "@(outlook|hotmail|live)\\.(it|ca)$"
+
+  # ProtonMail
+  - id: npm-author-protonmail
+    desc: npm package author uses ProtonMail
+    crit: notable
+    conf: 0.65
+    for: [package.json]
+    if:
+      type: kv
+      path: "author.email"
+      regex: "@(protonmail|proton|pm\\.me)\\.(com|ch)$"
+
+  # Mail.com
+  - id: npm-author-mail-com
+    desc: npm package author uses Mail.com
+    crit: notable
+    conf: 0.70
+    for: [package.json]
+    if:
+      type: kv
+      path: "author.email"
+      regex: "@mail\\.com$"
+
+  # Yandex
+  - id: npm-author-yandex
+    desc: npm package author uses Yandex
+    crit: notable
+    conf: 0.70
+    for: [package.json]
+    if:
+      type: kv
+      path: "author.email"
+      regex: "@yandex\\.(ru|com)$"
+
+  # iCloud
+  - id: npm-author-icloud
+    desc: npm package author uses iCloud
+    crit: notable
+    conf: 0.65
+    for: [package.json]
+    if:
+      type: kv
+      path: "author.email"
+      regex: "@(icloud|me)\\.com$"
+
+  # AOL
+  - id: npm-author-aol
+    desc: npm package author uses AOL
+    crit: notable
+    conf: 0.75
+    for: [package.json]
+    if:
+      type: kv
+      path: "author.email"
+      regex: "@aol\\.com$"
+
+  # Zoho
+  - id: npm-author-zoho
+    desc: npm package author uses Zoho
+    crit: notable
+    conf: 0.70
+    for: [package.json]
+    if:
+      type: kv
+      path: "author.email"
+      regex: "@zoho\\.(com|eu)$"
+
+  # GMX
+  - id: npm-author-gmx
+    desc: npm package author uses GMX
+    crit: notable
+    conf: 0.70
+    for: [package.json]
+    if:
+      type: kv
+      path: "author.email"
+      regex: "@gmx\\.(com|de|net)$"
+
+  # QQ.com (Chinese)
+  - id: npm-author-qq
+    desc: npm package author uses QQ.com
+    crit: notable
+    conf: 0.70
+    for: [package.json]
+    if:
+      type: kv
+      path: "author.email"
+      regex: "@qq\\.com$"
+
+  # 163.com (Chinese)
+  - id: npm-author-163
+    desc: npm package author uses 163.com
+    crit: notable
+    conf: 0.70
+    for: [package.json]
+    if:
+      type: kv
+      path: "author.email"
+      regex: "@163\\.com$"
+
+  # Temporary email services
+  - id: npm-author-temp-mail-a
+    desc: npm author uses temp email (set A)
+    crit: suspicious
+    conf: 0.90
+    for: [package.json]
+    if:
+      type: kv
+      path: "author.email"
+      regex: "@(tempmail|guerrillamail|10minutemail)\\.\\w{2,10}$"
+
+  - id: npm-author-temp-mail-b
+    desc: npm author uses temp email (set B)
+    crit: suspicious
+    conf: 0.90
+    for: [package.json]
+    if:
+      type: kv
+      path: "author.email"
+      regex: "@(mailinator|throwaway|trashmail)\\.\\w{2,10}$"
+
+  # === Suspicious TLDs in Email ===
+
+  # .xyz domain emails
+  - id: npm-author-xyz-email
+    desc: npm package author email uses .xyz TLD
+    crit: suspicious
+    conf: 0.80
+    for: [package.json]
+    if:
+      type: kv
+      path: "author.email"
+      regex: "@[^@]{1,64}\\.xyz$"
+
+  # .tk/.ml/.ga/.cf/.gq (free TLDs often abused)
+  - id: npm-author-free-tld-email-a
+    desc: npm author uses free TLD A
+    crit: suspicious
+    conf: 0.85
+    for: [package.json]
+    if:
+      type: kv
+      path: "author.email"
+      regex: "@[^@]{1,64}\\.(tk|ml|ga)$"
+
+  - id: npm-author-free-tld-email-b
+    desc: npm author uses free TLD B
+    crit: suspicious
+    conf: 0.85
+    for: [package.json]
+    if:
+      type: kv
+      path: "author.email"
+      regex: "@[^@]{1,64}\\.(cf|gq)$"
+
+  # .ru emails (higher risk for supply chain attacks)
+  - id: npm-author-ru-email
+    desc: npm package author email uses .ru TLD
+    crit: notable
+    conf: 0.75
+    for: [package.json]
+    if:
+      type: kv
+      path: "author.email"
+      regex: "@[^@]{1,64}\\.ru$"
+
+  # === PyPI setup.py / pyproject.toml ===
+
+  # Gmail
+  - id: pypi-author-gmail
+    desc: PyPI package author uses Gmail
+    crit: notable
+    conf: 0.65
+    for: [python]
+    if:
+      type: string
+      regex: 'author_email\s*=\s*[''"][^''"]{1,64}@gmail\\.com[''"]'
+
+  # Yahoo
+  - id: pypi-author-yahoo
+    desc: PyPI package author uses Yahoo
+    crit: notable
+    conf: 0.70
+    for: [python]
+    if:
+      type: string
+      regex: 'author_email\s*=\s*[''"][^''"]{1,64}@yahoo\\.(com|co\\.uk)[''"]'
+
+  # Outlook/Hotmail
+  - id: pypi-author-outlook
+    desc: PyPI package author uses Outlook/Hotmail
+    crit: notable
+    conf: 0.65
+    for: [python]
+    if:
+      type: string
+      regex: 'author_email\s*=\s*[''"][^''"]{1,64}@(outlook|hotmail|live)\\.com[''"]'
+
+  # ProtonMail
+  - id: pypi-author-protonmail
+    desc: PyPI package author uses ProtonMail
+    crit: notable
+    conf: 0.65
+    for: [python]
+    if:
+      type: string
+      regex: 'author_email\s*=\s*[''"][^''"]{1,64}@(protonmail|proton|pm\\.me)\\.(com|ch)[''"]'
+
+  # Temporary email
+  - id: pypi-author-temp-mail-a
+    desc: PyPI author temporary email A
+    crit: suspicious
+    conf: 0.90
+    for: [python]
+    if:
+      type: string
+      regex: 'author_email\s*=\s*[''"][^@]{1,64}@(tempmail|mailinator)\\.\\w{2,10}[''"]'
+
+  - id: pypi-author-temp-mail-b
+    desc: PyPI author temporary email B
+    crit: suspicious
+    conf: 0.90
+    for: [python]
+    if:
+      type: string
+      regex: 'author_email\s*=\s*[''"][^@]{1,64}@(guerrillamail|10minutemail)\\.\\w{2,10}[''"]'
+
+  # === RubyGems gemspec ===
+
+  # Gmail
+  - id: gem-author-gmail
+    desc: RubyGem author uses Gmail
+    crit: notable
+    conf: 0.65
+    for: [ruby]
+    if:
+      type: string
+      regex: "\\.email\\s*=\\s*['\"]([^'\"]{1,64})@gmail\\\\.com['\"]"
+
+  # Yahoo
+  - id: gem-author-yahoo
+    desc: RubyGem author uses Yahoo
+    crit: notable
+    conf: 0.70
+    for: [ruby]
+    if:
+      type: string
+      regex: "\\.email\\s*=\\s*['\"]([^'\"]{1,64})@yahoo\\\\.com['\"]"
+
+  # Outlook/Hotmail
+  - id: gem-author-outlook
+    desc: RubyGem author uses Outlook/Hotmail
+    crit: notable
+    conf: 0.65
+    for: [ruby]
+    if:
+      type: string
+      regex: "\\.email\\s*=\\s*['\"]([^'\"]{1,64})@(outlook|hotmail|live)\\\\.com['\"]"
+
+composite_rules:
+  # === npm Free Email Composite ===
+  - id: npm-free-email-provider
+    desc: npm package author uses free email provider
+    crit: notable
+    conf: 0.70
+    attack: "T1195.002"
+    for: [package.json]
+    any:
+      - id: npm-author-gmail
+      - id: npm-author-yahoo
+      - id: npm-author-yahoo-extra
+      - id: npm-author-outlook
+      - id: npm-author-outlook-extra
+      - id: npm-author-outlook-extra-2
+      - id: npm-author-protonmail
+      - id: npm-author-mail-com
+      - id: npm-author-yandex
+      - id: npm-author-icloud
+      - id: npm-author-aol
+      - id: npm-author-zoho
+      - id: npm-author-gmx
+      - id: npm-author-qq
+      - id: npm-author-163
+      - id: npm-maintainer-gmail
+
+  # === npm Temporary Email ===
+  - id: npm-author-temp-mail
+    desc: npm package author uses temporary email service
+    any:
+      - id: npm-author-temp-mail-a
+      - id: npm-author-temp-mail-b
+
+  # === npm Free TLD Email ===
+  - id: npm-author-free-tld-email
+    desc: npm package author email uses free/abused TLD
+    any:
+      - id: npm-author-free-tld-email-a
+      - id: npm-author-free-tld-email-b
+
+  # === npm Suspicious Email Domains ===
+  - id: npm-suspicious-email-domain
+    desc: npm package author email uses suspicious domain
+    crit: suspicious
+    conf: 0.85
+    attack: "T1195.002"
+    for: [package.json]
+    any:
+      - id: npm-author-temp-mail
+      - id: npm-author-xyz-email
+      - id: npm-author-free-tld-email
+
+  # === PyPI Free Email Composite ===
+  - id: pypi-free-email-provider
+    desc: PyPI package author uses free email provider
+    crit: notable
+    conf: 0.70
+    attack: "T1195.002"
+    for: [python]
+    any:
+      - id: pypi-author-gmail
+      - id: pypi-author-yahoo
+      - id: pypi-author-outlook
+      - id: pypi-author-protonmail
+      - id: pypi-author-temp-mail-a
+      - id: pypi-author-temp-mail-b
+
+  - id: pypi-author-temp-mail
+    desc: PyPI author uses temporary email
+    any:
+      - id: pypi-author-temp-mail-a
+      - id: pypi-author-temp-mail-b
+
+  # === RubyGems Free Email Composite ===
+  - id: gem-free-email-provider
+    desc: RubyGem author uses free email provider
+    crit: notable
+    conf: 0.70
+    attack: "T1195.002"
+    for: [ruby]
+    any:
+      - id: gem-author-gmail
+      - id: gem-author-yahoo
+      - id: gem-author-outlook
+
+  # === High-Risk: Free email + install hooks ===
+  - id: npm-free-email-with-hooks
+    desc: Free email provider with install hooks
+    crit: hostile
+    conf: 0.90
+    attack: "T1195.002"
+    for: [package.json]
+    all:
+      - id: npm-free-email-provider
+      - id: objectives/lateral-movement/supply-chain/npm/metadata::install-hooks
+
+  # === High-Risk: Temporary email + install hooks ===
+  - id: npm-temp-email-with-hooks
+    desc: Temporary email service with install hooks
+    crit: hostile
+    conf: 0.98
+    attack: "T1195.002"
+    for: [package.json]
+    all:
+      - id: npm-author-temp-mail
+      - id: objectives/lateral-movement/supply-chain/npm/metadata::install-hooks
+
+  # === High-Risk: Free email + empty description ===
+  - id: npm-free-email-empty-description
+    desc: Free email with empty description
+    crit: suspicious
+    conf: 0.85
+    attack: "T1195.002"
+    for: [package.json]
+    all:
+      - id: npm-free-email-provider
+      - id: metadata/quality/package-info::npm-empty-description-any
+
+  # === High-Risk: Free email + generic author ===
+  - id: npm-free-email-generic-author
+    desc: Free email with generic author name
+    crit: hostile
+    conf: 0.92
+    attack: "T1195.002"
+    for: [package.json]
+    all:
+      - id: npm-free-email-provider
+      - id: metadata/quality/author::npm-generic-author-name
+
+  # === High-Risk: Suspicious email + version 0.0.0 ===
+  - id: npm-suspicious-email-zero-version
+    desc: Suspicious email domain with version 0.0.0
+    crit: hostile
+    conf: 0.93
+    attack: "T1195.002"
+    for: [package.json]
+    all:
+      - id: npm-suspicious-email-domain
+      - id: metadata/quality/versioning::release-zero

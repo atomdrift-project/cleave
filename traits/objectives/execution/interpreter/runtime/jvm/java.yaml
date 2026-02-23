@@ -1,0 +1,249 @@
+# Java Execution and Security Traits
+# Detects dangerous Java patterns in source code
+# MBC: Execution, Defense Evasion
+# ATT&CK: T1059 (Command and Scripting Interpreter)
+
+traits:
+  # ============================================================
+  # COMMAND EXECUTION
+  # ============================================================
+
+  - id: runtime-exec
+    desc: Runtime.exec() command execution
+    crit: notable
+    conf: 0.95
+    mbc: "C0033"
+    attack: "T1059"
+    for: [java]
+    if:
+      type: ast
+      kind: call
+      exact: "Runtime.exec"
+
+  - id: runtime-getruntime-exec
+    desc: Runtime.getRuntime().exec() command execution
+    crit: notable
+    conf: 0.95
+    mbc: "C0033"
+    attack: "T1059"
+    for: [java]
+    if:
+      type: ast
+      kind: call
+      exact: "getRuntime().exec"
+
+  - id: processbuilder
+    desc: ProcessBuilder command execution
+    crit: notable
+    conf: 0.9
+    mbc: "C0033"
+    attack: "T1059"
+    for: [java]
+    if:
+      type: ast
+      node: object_creation_expression
+      exact: "ProcessBuilder"
+
+  # ============================================================
+  # REFLECTION (ANTI-ANALYSIS / EVASION)
+  # ============================================================
+
+  - id: class-forname
+    desc: Dynamic class loading via reflection
+    crit: notable
+    conf: 0.9
+    mbc: "F0006"
+    for: [java]
+    if:
+      type: ast
+      kind: call
+      exact: "Class.forName"
+
+  - id: method-invoke
+    desc: Dynamic method invocation via reflection
+    crit: notable
+    conf: 0.95
+    mbc: "F0006"
+    for: [java]
+    if:
+      type: ast
+      kind: call
+      exact: ".invoke("
+
+  - id: setaccessible
+    desc: Bypass Java access control via
+    crit: suspicious
+    conf: 0.95
+    mbc: "F0006"
+    for: [java]
+    if:
+      type: ast
+      kind: call
+      exact: ".setAccessible"
+
+  - id: getdeclaredmethod
+    desc: Access private methods via reflection
+    crit: notable
+    conf: 0.9
+    mbc: "F0006"
+    for: [java]
+    if:
+      type: ast
+      kind: call
+      exact: ".getDeclaredMethod"
+
+  - id: getdeclaredfield
+    desc: Access private fields via reflection
+    crit: notable
+    conf: 0.9
+    mbc: "F0006"
+    for: [java]
+    if:
+      type: ast
+      kind: call
+      exact: ".getDeclaredField"
+
+  # ============================================================
+  # DESERIALIZATION (COMMON ATTACK VECTOR)
+  # ============================================================
+
+  - id: objectinputstream
+    desc: Object deserialization (potential RCE vector)
+    crit: notable
+    conf: 0.9
+    mbc: "C0033"
+    attack: "T1059"
+    for: [java]
+    if:
+      type: ast
+      node: object_creation_expression
+      exact: "ObjectInputStream"
+
+  - id: readobject
+    desc: Deserialize object from stream
+    crit: notable
+    conf: 0.9
+    mbc: "C0033"
+    for: [java]
+    if:
+      type: ast
+      kind: call
+      exact: ".readObject("
+
+  - id: xmldecoder
+    desc: XML deserialization (CVE vector)
+    crit: suspicious
+    conf: 0.9
+    mbc: "C0033"
+    for: [java]
+    if:
+      type: ast
+      node: object_creation_expression
+      exact: "XMLDecoder"
+
+  # ============================================================
+  # NATIVE CODE LOADING
+  # ============================================================
+
+  - id: system-loadlibrary
+    desc: Load native library
+    crit: notable
+    conf: 0.9
+    mbc: "C0033"
+    attack: "T1129"
+    for: [java]
+    if:
+      type: ast
+      kind: call
+      exact: "System.loadLibrary"
+
+  - id: system-load
+    desc: Load native library by path
+    crit: notable
+    conf: 0.9
+    mbc: "C0033"
+    attack: "T1129"
+    for: [java]
+    if:
+      type: ast
+      kind: call
+      exact: "System.load("
+
+  # ============================================================
+  # DYNAMIC CLASS LOADING
+  # ============================================================
+
+  - id: urlclassloader
+    desc: Load classes from URL (supply
+    crit: suspicious
+    conf: 0.9
+    mbc: "C0033"
+    for: [java]
+    if:
+      type: ast
+      node: object_creation_expression
+      exact: "URLClassLoader"
+
+  - id: defineclass
+    desc: Define class from bytecode
+    crit: suspicious
+    conf: 0.95
+    mbc: "C0033"
+    for: [java]
+    if:
+      type: ast
+      kind: call
+      exact: ".defineClass"
+
+  # ============================================================
+  # SCRIPT EXECUTION
+  # ============================================================
+
+  - id: scriptengine
+    desc: Script engine execution
+    crit: notable
+    conf: 0.9
+    mbc: "C0033"
+    attack: "T1059"
+    for: [java]
+    if:
+      type: ast
+      node: object_creation_expression
+      exact: "ScriptEngineManager"
+
+  - id: scriptengine-eval
+    desc: Evaluate script code
+    crit: notable
+    conf: 0.9
+    mbc: "C0033"
+    attack: "T1059"
+    for: [java]
+    if:
+      type: ast
+      kind: call
+      exact: ".eval("
+
+  # ============================================================
+  # JNDI (Log4Shell vector)
+  # ============================================================
+
+  - id: initialcontext
+    desc: JNDI InitialContext (potential injection)
+    crit: notable
+    conf: 0.85
+    for: [java]
+    if:
+      type: ast
+      node: object_creation_expression
+      exact: "InitialContext"
+
+  - id: jndi-lookup
+    desc: JNDI lookup (Log4Shell attack vector)
+    crit: notable
+    conf: 0.9
+    mbc: "C0033"
+    for: [java]
+    if:
+      type: ast
+      kind: call
+      exact: ".lookup("

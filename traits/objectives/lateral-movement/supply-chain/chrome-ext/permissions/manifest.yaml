@@ -1,0 +1,362 @@
+defaults:
+  for:
+  - chrome-manifest
+traits:
+  - id: manifest-v3
+    desc: Chrome extension using Manifest V3
+    crit: notable
+    conf: 0.95
+    if:
+      type: kv
+      path: manifest_version
+      exact: '3'
+  - id: manifest-v2
+    desc: Uses deprecated Manifest V2
+    crit: notable
+    conf: 0.95
+    if:
+      type: kv
+      path: manifest_version
+      exact: '2'
+  - id: permission-all-urls
+    desc: Requests all URLs access
+    crit: suspicious
+    conf: 0.95
+    if:
+      type: kv
+      path: permissions
+      exact: '<all_urls>'
+  - id: permission-active-tab
+    desc: Extension requests activeTab permission
+    crit: notable
+    conf: 0.9
+    if:
+      type: kv
+      path: permissions
+      exact: 'activeTab'
+  - id: permission-tabs
+    desc: Extension requests tabs permission
+    crit: notable
+    conf: 0.9
+    if:
+      type: kv
+      path: permissions
+      exact: 'tabs'
+  - id: permission-cookies
+    desc: Extension requests cookies permission
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: kv
+      path: permissions
+      exact: 'cookies'
+  - id: permission-history
+    desc: Extension requests history permission
+    crit: suspicious
+    conf: 0.95
+    if:
+      type: kv
+      path: permissions
+      exact: 'history'
+  - id: permission-bookmarks
+    desc: Extension requests bookmarks permission
+    crit: notable
+    conf: 0.9
+    if:
+      type: kv
+      path: permissions
+      exact: 'bookmarks'
+  - id: permission-geolocation
+    desc: Extension requests geolocation permission
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: kv
+      path: permissions
+      exact: 'geolocation'
+  - id: permission-clipboard-read
+    desc: Extension can read clipboard
+    crit: suspicious
+    conf: 0.95
+    if:
+      type: kv
+      path: permissions
+      exact: 'clipboardRead'
+  - id: permission-clipboard-write
+    desc: Extension can write clipboard
+    crit: notable
+    conf: 0.9
+    if:
+      type: kv
+      path: permissions
+      exact: 'clipboardWrite'
+  - id: permission-native-messaging
+    desc: Extension uses native messaging
+    crit: suspicious
+    conf: 0.95
+    if:
+      type: kv
+      path: permissions
+      exact: 'nativeMessaging'
+  - id: permission-debugger
+    desc: Uses debugger API
+    crit: suspicious
+    conf: 0.98
+    if:
+      type: kv
+      path: permissions
+      exact: 'debugger'
+  - id: permission-proxy
+    desc: Extension can modify proxy settings
+    crit: suspicious
+    conf: 0.95
+    if:
+      type: kv
+      path: permissions
+      exact: 'proxy'
+  - id: permission-scripting
+    desc: Extension requests scripting permission (MV3)
+    crit: notable
+    conf: 0.9
+    if:
+      type: kv
+      path: permissions
+      exact: 'scripting'
+  - id: host-all-urls
+    desc: Host permission for all URLs
+    crit: suspicious
+    conf: 0.95
+    if:
+      type: kv
+      path: host_permissions
+      exact: '<all_urls>'
+  - id: host-all-http
+    desc: Access to all HTTP sites
+    crit: suspicious
+    conf: 0.95
+    if:
+      type: kv
+      path: host_permissions
+      regex: '^\*://\*/\*$|^https?://\*/\*$'
+  - id: host-shopping-sites
+    desc: Extension targets e-commerce sites
+    crit: notable
+    conf: 0.9
+    if:
+      type: kv
+      path: host_permissions
+      regex: 'amazon\.|ebay\.|walmart\.|aliexpress\.'
+  - id: content-script-all-urls
+    desc: Content script on all URLs
+    crit: suspicious
+    conf: 0.95
+    if:
+      type: kv
+      path: 'content_scripts[*].matches'
+      exact: '<all_urls>'
+  - id: content-script-run-at-start
+    desc: Content script runs at document_start
+    crit: notable
+    conf: 0.85
+    if:
+      type: kv
+      path: 'content_scripts[*].run_at'
+      exact: 'document_start'
+  - id: content-script-all-frames
+    desc: Content script runs in all frames
+    crit: notable
+    conf: 0.8
+    if:
+      type: kv
+      path: 'content_scripts[*].all_frames'
+      exact: 'true'
+  - id: content-script-shopping
+    desc: Content script targets shopping sites
+    crit: notable
+    conf: 0.85
+    if:
+      type: kv
+      path: 'content_scripts[*].matches'
+      regex: 'amazon\.|ebay\.|walmart\.|aliexpress\.'
+  - id: background-persistent
+    desc: Extension uses persistent background page
+    crit: notable
+    conf: 0.85
+    if:
+      type: kv
+      path: 'background.persistent'
+      exact: 'true'
+  - id: background-service-worker
+    desc: Extension uses service worker (MV3)
+    crit: notable
+    conf: 0.9
+    if:
+      type: kv
+      path: 'background.service_worker'
+  - id: host-amazon-global
+    desc: Targets many Amazon regional domains
+    crit: notable
+    conf: 0.9
+    if:
+      type: raw
+      regex: 'amazon\.'
+      count_min: 15
+  - id: externally-connectable
+    desc: Extension allows external connections
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: kv
+      path: 'externally_connectable'
+  - id: update-url-present
+    desc: Has update_url field
+    crit: notable
+    conf: 0.9
+    if:
+      type: kv
+      path: 'update_url'
+  - id: update-url-google
+    desc: Uses Google update URL
+    crit: notable
+    conf: 0.95
+    if:
+      type: kv
+      path: 'update_url'
+      substr: 'clients2.google.com'
+  - id: web-accessible-resources
+    desc: Exposes resources to web
+    crit: notable
+    conf: 0.85
+    if:
+      type: kv
+      path: 'web_accessible_resources'
+  - id: is-chrome-manifest
+    desc: Chrome extension manifest file
+    crit: notable
+    conf: 0.95
+    if:
+      type: kv
+      path: 'manifest_version'
+  - id: content-script-social-media-a
+    desc: Targets social media domains (set A)
+    crit: notable
+    conf: 0.9
+    if:
+      type: kv
+      path: 'content_scripts[*].matches'
+      regex: 'twitter\.com|x\.com|facebook\.com|instagram\.com'
+  - id: content-script-social-media-b
+    desc: Targets social media domains (set B)
+    crit: notable
+    conf: 0.9
+    if:
+      type: kv
+      path: 'content_scripts[*].matches'
+      regex: 'linkedin\.com|reddit\.com|tiktok\.com'
+composite_rules:
+- id: content-script-social-media
+  desc: Content script targets social media sites
+  crit: notable
+  conf: 0.9
+  any:
+  - id: content-script-social-media-a
+  - id: content-script-social-media-b
+- id: overprivileged
+  desc: Extension requests excessive permissions
+  crit: suspicious
+  conf: 0.9
+  needs: 3
+  any:
+  - id: permission-all-urls
+  - id: host-all-urls
+  - id: micro-behaviors/communications/browser-extension/permissions::network-request-modification
+  - id: permission-cookies
+  - id: permission-history
+  - id: permission-clipboard-read
+  - id: permission-native-messaging
+  - id: permission-debugger
+  - id: permission-proxy
+- id: ecommerce-targeting
+  desc: Extension specifically targets shopping sites
+  crit: notable
+  conf: 0.85
+  all:
+  - id: is-chrome-manifest
+  any:
+  - id: host-shopping-sites
+  - id: content-script-shopping
+  - id: host-amazon-global
+- id: broad-content-injection
+  desc: Extension can inject content into many sites
+  crit: suspicious
+  conf: 0.9
+  all:
+  - id: is-chrome-manifest
+  any:
+  - id: content-script-all-urls
+  - id: permission-all-urls
+  - id: host-all-urls
+  - id: host-all-http
+- id: data-theft-permissions
+  desc: Extension has permissions enabling data theft
+  crit: suspicious
+  conf: 0.95
+  all:
+  - id: is-chrome-manifest
+  needs: 2
+  any:
+  - id: permission-cookies
+  - id: permission-history
+  - id: permission-clipboard-read
+  - id: micro-behaviors/communications/browser-extension/permissions::network-request-modification
+- id: deprecated-with-dangerous
+  desc: MV2 extension with dangerous permissions
+  crit: suspicious
+  conf: 0.9
+  all:
+  - id: manifest-v2
+  any:
+  - id: permission-all-urls
+  - id: host-all-urls
+  - id: micro-behaviors/communications/browser-extension/permissions::network-request-modification
+  - id: permission-debugger
+- id: update-url-external
+  desc: Non-Google update URL
+  crit: suspicious
+  conf: 0.9
+  all:
+  - id: update-url-present
+  none:
+  - id: update-url-google
+- id: crypto-social-media-injection
+  desc: Crypto extension injects into social media
+  crit: suspicious
+  conf: 0.9
+  all:
+  - id: content-script-social-media
+  any:
+  - id: metadata/quality/chrome-extension::crypto-finance-name
+  - id: metadata/quality/chrome-extension::crypto-finance-description
+- id: fake-adblocker-mv3
+  desc: MV3 Ad Blocker using content scripts without declarativeNetRequest
+  crit: suspicious
+  conf: 0.95
+  all:
+  - id: manifest-v3
+  - id: ecommerce-targeting
+  any:
+  - id: metadata/quality/chrome-extension::adblocker-name
+  - id: metadata/quality/chrome-extension::adblocker-description
+  none:
+  - id: micro-behaviors/communications/browser-extension/permissions::network-filtering
+- id: crypto-api-theft-target
+  desc: Extension targets crypto exchange API key pages
+  crit: hostile
+  conf: 0.95
+  all:
+  - id: micro-behaviors/communications/browser-extension/content-scripts::crypto-exchange-sites
+  - id: micro-behaviors/communications/browser-extension/content-scripts::api-key-pages
+  any:
+  - id: permission-scripting
+  - id: permission-active-tab
+  - id: micro-behaviors/communications/browser-extension/permissions::network-request-modification

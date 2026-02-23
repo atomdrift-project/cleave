@@ -1,0 +1,9 @@
+composite_rules:
+  - id: flash-xor-decryption-loop
+    desc: Flash/ActionScript XOR decryption loop
+    crit: suspicious
+    conf: 0.8
+    all:
+      - id: micro-behaviors/data/encoding/actionscript::actionscript-writebyte
+      - id: micro-behaviors/data/encoding/actionscript::actionscript-bytearray
+      - id: micro-behaviors/data/source/syntax/keyword::js-keyword-xor

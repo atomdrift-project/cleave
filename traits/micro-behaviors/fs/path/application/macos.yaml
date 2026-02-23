@@ -1,0 +1,79 @@
+# Application Paths (macOS)
+# MBC: E1083 (File and Directory Discovery)
+# ATT&CK: T1083
+
+defaults:
+  for: [all]
+
+traits:
+  - id: application-macos
+    desc: /Applications/*.app/Contents/MacOS/ path pattern
+    crit: notable
+    conf: 0.66
+    mbc: E1083
+    attack: T1083
+    if:
+      type: string
+      regex: '/Applications/[\w\s.\-]+\.app/Contents/MacOS/[\w.\-]+'
+
+  - id: firefox-extensions
+    desc: Firefox/extensions directory path
+    crit: notable
+    conf: 0.7
+    mbc: E1083
+    attack: T1083
+    if:
+      type: string
+      substr: "Firefox/extensions"
+
+  - id: safari-extensions
+    desc: Safari/Extensions directory path
+    crit: notable
+    conf: 0.7
+    mbc: E1083
+    attack: T1083
+    if:
+      type: string
+      substr: "Safari/Extensions"
+
+  - id: chrome-extensions-dir
+    desc: /Extensions directory (Chrome extensions)
+    crit: notable
+    conf: 0.6
+    mbc: E1083
+    attack: T1083
+    if:
+      type: string
+      substr: "/Extensions"
+
+  - id: chrome-directory
+    desc: Google/Chrome directory path
+    crit: notable
+    conf: 0.6
+    mbc: E1083
+    attack: T1083
+    if:
+      type: string
+      substr: "Google/Chrome"
+
+composite_rules:
+  - id: chrome-extensions
+    desc: Chrome browser extensions path
+    crit: notable
+    conf: 0.7
+    mbc: E1083
+    attack: T1083
+    all:
+      - id: chrome-directory
+      - id: chrome-extensions-dir
+
+  - id: application-browser-extensions
+    desc: Browser extension paths (Firefox, Safari,
+    crit: suspicious
+    conf: 0.66
+    mbc: E1083
+    attack: T1083
+    any:
+      - id: firefox-extensions
+      - id: safari-extensions
+      - id: chrome-extensions

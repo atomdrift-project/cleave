@@ -1,0 +1,62 @@
+# eBPF Programs - BPF Map Operations
+# Capabilities for BPF/eBPF program detection
+
+traits:
+  # === BPF Map Operations ===
+  - id: bpf-map-lookup
+    desc: BPF map lookup helper
+    crit: notable
+    conf: 0.7
+    for: [c, elf]
+    if:
+      type: raw
+      substr: "bpf_map_lookup_elem"
+
+  - id: bpf-map-update
+    desc: BPF map update helper
+    crit: notable
+    conf: 0.7
+    for: [c, elf]
+    if:
+      type: raw
+      substr: "bpf_map_update_elem"
+
+  - id: bpf-map-delete
+    desc: BPF map delete helper
+    crit: notable
+    conf: 0.7
+    for: [c, elf]
+    if:
+      type: raw
+      substr: "bpf_map_delete_elem"
+
+  # === BPF Map Type Declarations ===
+  - id: bpf-map-array
+    desc: BPF array map type
+    crit: baseline
+    conf: 0.5
+    for: [c, elf]
+    if:
+      type: raw
+      substr: "BPF_MAP_TYPE_ARRAY"
+
+  # === eBPF Map Type Declarations ===
+  # BPF_MAP_TYPE_RINGBUF in eBPF code (data exfiltration buffer)
+  - id: bpf-map-ringbuf
+    desc: BPF ring buffer map
+    crit: notable
+    conf: 0.7
+    for: [c, elf]
+    if:
+      type: raw
+      substr: "BPF_MAP_TYPE_RINGBUF"
+
+  # BPF_MAP_TYPE_HASH for connection/context tracking
+  - id: bpf-map-hash
+    desc: BPF hash map
+    crit: baseline
+    conf: 0.5
+    for: [c, elf]
+    if:
+      type: raw
+      substr: "BPF_MAP_TYPE_HASH"

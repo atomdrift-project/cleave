@@ -1,0 +1,436 @@
+# Supply Chain Binary Backdoor Detection
+# Detects patterns consistent with supply chain attacks like XZ Utils (CVE-2024-3094)
+# ATT&CK: T1195.002 (Supply Chain Compromise: Compromise Software Supply Chain)
+# MBC: B0025 (Compromise Software Supply Chain)
+
+defaults:
+  for: [elf, pe, macho]
+  attack: "T1195.002"
+  mbc: "B0025"
+
+traits:
+  # === Obfuscation Indicators ===
+  - id: high-entropy-strings
+    desc: Large obfuscated data blob
+    crit: suspicious
+    conf: 0.7
+    if:
+      type: metrics
+      field: binary.high_entropy_strings
+      min: 20
+
+  # === Symbol interposition patterns ===
+  # === Massive Code Injection Indicators ===
+  - id: massive-code-blob
+    desc: Extremely large average function size
+    crit: suspicious
+    conf: 0.85
+    if:
+      type: metrics
+      field: binary.avg_function_size
+      min: 10000
+    downgrade:
+      any:
+        - id: metadata/signed/platform::apple
+
+  - id: many-huge-functions
+    desc: Many huge functions (>64KB) -
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: metrics
+      field: binary.huge_functions
+      min: 4
+
+  # === XZ Utils Backdoor Specific Patterns ===
+  - id: xz-backdoor-entry
+    desc: XZ backdoor entry pattern bytes
+    crit: suspicious
+    conf: 0.95
+    for: [elf]
+    if:
+      type: hex
+      pattern: "F3 0F 1E FA 55 48 89 E5 48 89 7D D8 48 C7 45 E8"
+
+  - id: lzma-crc64-table
+    desc: lzma_crc64_table reference
+    crit: notable
+    conf: 0.4
+    if:
+      type: string
+      substr: "lzma_crc64_table"
+
+  - id: xz-obf-pattern
+    desc: XZ obfuscated function marker bytes
+    crit: notable
+    conf: 0.7
+    for: [elf]
+    if:
+      type: hex
+      pattern: "0F B6 ?? ?? 0F B6 ?? ?? 31 ?? 0F B6 ?? ?? 31"
+
+  # XZ backdoor CPUID mask check pattern
+  # The sequence: cpuid; not ecx; and ecx, 0x80202
+  # This checks for SSSE3, LAHF/SAHF, and POPCNT in ECX to select backdoor variant
+  # Extremely specific to XZ backdoor - not found in legitimate LZMA libraries
+  - id: xz-cpuid-mask-check
+    desc: XZ backdoor CPUID mask
+    crit: suspicious
+    conf: 0.95
+    for: [elf]
+    if:
+      type: hex
+      pattern: "0F A2 F7 D1 81 E1 02 02 08 00"
+
+  # === SSH/Auth hooking patterns ===
+  - id: libsystemd-ref
+    desc: libsystemd reference
+    crit: notable
+    conf: 0.4
+    if:
+      type: string
+      substr: "libsystemd"
+
+  - id: mm-answer-keyallowed
+    desc: mm_answer_keyallowed SSH function
+    crit: suspicious
+    conf: 0.8
+    if:
+      type: string
+      substr: "mm_answer_keyallowed"
+
+  - id: mm-answer-authpassword
+    desc: mm_answer_authpassword SSH function
+    crit: suspicious
+    conf: 0.8
+    if:
+      type: string
+      substr: "mm_answer_authpassword"
+
+  - id: pubkey-auth-ref
+    desc: pubkey_auth reference
+    crit: notable
+    conf: 0.6
+    if:
+      type: string
+      substr: "pubkey_auth"
+
+  # === glibc hijacking patterns ===
+  - id: rtld-global-ref
+    desc: __rtld_global reference
+    crit: notable
+    conf: 0.6
+    for: [elf]
+    if:
+      type: string
+      substr: "__rtld_global"
+
+  - id: la-symbind-ref
+    desc: la_symbind audit hook
+    crit: suspicious
+    conf: 0.7
+    for: [elf]
+    if:
+      type: string
+      substr: "la_symbind"
+
+composite_rules:
+  # === Symbol interposition ===
+  - id: symbol-interposition
+    desc: Symbol interposition/override pattern
+    crit: suspicious
+    conf: 0.7
+    for: [elf]
+    all:
+      - id: micro-behaviors/dylib/lookup::dlsym-symbol
+    any:
+      - id: micro-behaviors/dylib/lookup::rtld-next
+      - id: metadata/format/elf::rtld-default-ref
+
+  # === XZ CRC patterns ===
+  - id: xz-crc-pattern
+    desc: XZ CRC64 patterns
+    crit: suspicious
+    conf: 0.6
+    for: [elf]
+    needs: 2
+    any:
+      - id: lzma-crc64-table
+      - id: metadata/format/elf::ifunc
+
+  # === XZ backdoor signature ===
+  - id: xz-backdoor-signature
+    desc: XZ Utils backdoor signature (CVE-2024-3094)
+    crit: hostile
+    conf: 0.99
+    for: [elf]
+    all:
+      - id: xz-crc-pattern
+    any:
+      - id: xz-backdoor-entry
+      - id: xz-obf-pattern
+
+  # === IFUNC resolver pattern ===
+  # NOTE: CPUID + IFUNC + resolver is extremely common in legitimate binaries
+  # that use CPU feature detection (SIMD optimizations). This pattern alone
+  # is not suspicious - it needs additional context like XZ-specific patterns.
+  - id: xz-ifunc-pattern
+    desc: IFUNC resolver pattern (potential function
+    crit: notable
+    conf: 0.4
+    for: [elf]
+    all:
+      - id: metadata/format/x86::cpuid-instr
+      - id: metadata/format/elf::resolver-markers
+      - id: metadata/format/elf::ifunc-markers
+
+  # === RSA in compression library ===
+  - id: rsa-in-compression-lib
+    desc: RSA operations in compression library
+    crit: suspicious
+    conf: 0.9
+    all:
+      - id: micro-behaviors/crypto/asymmetric/rsa::rsa-operations
+      - id: metadata/library/compression::compression-lib
+
+  # === SSH hook patterns ===
+  - id: ssh-hook-pattern
+    desc: SSH authentication hooking pattern
+    crit: suspicious
+    conf: 0.85
+    all:
+      - id: micro-behaviors/os/service/remote::sshd-ref
+    any:
+      - id: micro-behaviors/crypto/asymmetric/rsa::rsa-public-decrypt
+      - id: mm-answer-keyallowed
+      - id: mm-answer-authpassword
+      - id: pubkey-auth-ref
+    none:
+      - id: metadata/signed/platform::apple
+
+  # === glibc hijack ===
+  # NOTE: dlopen + dlsym is extremely common in legitimate binaries (graphics drivers, plugins, etc.)
+  # Only flag as hijacking when combined with actual hijacking indicators
+  - id: glibc-hijack
+    desc: glibc function hijacking patterns
+    crit: suspicious
+    conf: 0.7
+    for: [elf]
+    all:
+      # Require basic dynamic loading
+      - id: micro-behaviors/dylib/lookup::dlsym-symbol
+    any:
+      # Plus at least one actual hijacking indicator (not just dlopen)
+      - id: rtld-global-ref
+      - id: la-symbind-ref
+      - id: micro-behaviors/os/linker/env::ld-preload
+      - id: micro-behaviors/os/linker/env::ld-audit
+    # Graphics libraries use dlopen/dlsym for GPU driver loading - not hijacking
+    downgrade:
+      any:
+        - id: metadata/library/graphics-lib-marker
+        - id: micro-behaviors/dylib/library::system-lib-marker
+
+  # === Unexpected capability combinations ===
+  # References external traits for socket/process operations
+  # NOTE: Excludes libraries that legitimately use sockets:
+  # - Network libraries (libssl, libcurl, libssh)
+  # - X11 IPC libraries (libICE, libSM) - use Unix/TCP sockets for inter-client communication
+  # - Graphics libraries (Mesa, OpenGL) - may use X11 sockets
+  # - Go runtime - has built-in networking
+  # - Debuggers - use sockets for remote debugging
+  - id: unexpected-socket-ops
+    desc: Socket operations in non-network library
+    crit: notable
+    conf: 0.6
+    all:
+      - id: micro-behaviors/communications/socket/create::create
+      - id: micro-behaviors/communications/socket/connect::connect
+    none:
+      - id: micro-behaviors/dylib/library::network-lib-marker
+      - id: micro-behaviors/dylib/library::system-lib-marker
+      - id: micro-behaviors/dylib/library::x11-ipc-lib-marker
+      - id: micro-behaviors/dylib/library::graphics-lib-marker
+      - id: metadata/lang::go-runtime-marker
+      - id: micro-behaviors/dylib/library::debugger-tool-marker
+      - id: metadata/signed/platform::apple
+
+  - id: unexpected-process-ops
+    desc: Process operations in utility library
+    crit: suspicious
+    conf: 0.75
+    needs: 2
+    any:
+      - id: micro-behaviors/process/fork/clone::fork
+      - id: micro-behaviors/process/create/shell
+    none:
+      - id: metadata/lang::go-runtime-marker
+      - id: micro-behaviors/dylib/library::shell-interpreter
+      - id: micro-behaviors/dylib/library::system-lib-marker
+      - id: objectives/persistence/shell/config::tcsh-keyword
+      # Compiler tools legitimately spawn processes for compilation
+      - id: micro-behaviors/dylib/library::llvm-project-ref
+      - id: metadata/lang/compiler::libllvm
+      - id: micro-behaviors/dylib/library::gcc-project-ref
+      - id: micro-behaviors/dylib/library::cmake-build-ref
+      # Debuggers legitimately use process control for debugging
+      - id: micro-behaviors/dylib/library::debugger-tool-marker
+      - id: metadata/format::many-imports
+      - id: metadata/signed/platform::apple
+
+  - id: unexpected-crypto
+    desc: Cryptographic operations in non-crypto library
+    crit: suspicious
+    conf: 0.75
+    needs: 2
+    any:
+      - id: micro-behaviors/crypto/symmetric/aes::aes-sbox-bytes
+      - id: micro-behaviors/crypto/asymmetric/rsa::rsa-operations
+      - id: micro-behaviors/crypto/asymmetric/rsa::ed25519-constant-bytes
+
+  # === Unexpected capability combination ===
+  - id: unexpected-capabilities
+    desc: Unexpected capability combination in library
+    crit: suspicious
+    conf: 0.8
+    needs: 2
+    any:
+      - id: unexpected-socket-ops
+      - id: unexpected-process-ops
+      - id: unexpected-crypto
+
+  # === Injected code pattern ===
+  - id: injected-code-pattern
+    desc: Injected code pattern in library
+    crit: suspicious
+    conf: 0.85
+    all:
+      - id: high-entropy-strings
+    any:
+      - id: unexpected-crypto
+      - id: unexpected-socket-ops
+
+  # === XZ-style backdoor detection ===
+  # Requires more specific indicators than just CPUID/IFUNC patterns
+  # which are common in legitimate optimized binaries
+  - id: xz-style-attack
+    desc: XZ-style supply chain backdoor pattern
+    crit: suspicious
+    conf: 0.9
+    all:
+      - id: many-huge-functions
+    any:
+      - id: xz-crc-pattern
+      - id: xz-obf-pattern
+      - id: ssh-hook-pattern
+      - id: rsa-in-compression-lib
+
+  # === Potential code injection ===
+  - id: potential-code-injection
+    desc: Potential code injection indicators
+    crit: suspicious
+    conf: 0.8
+    all:
+      - id: massive-code-blob
+    any:
+      - id: many-huge-functions
+      - id: glibc-hijack
+
+  # === Authentication bypass ===
+  - id: auth-bypass-indicator
+    desc: Authentication bypass backdoor indicator
+    crit: suspicious
+    conf: 0.95
+    any:
+      - id: ssh-hook-pattern
+      - id: rsa-in-compression-lib
+      - id: symbol-interposition
+
+  # === Function hooking behavior ===
+  # Require actual hijacking indicators, not just CPUID/IFUNC patterns
+  - id: function-hooking-behavior
+    desc: Dynamic function hooking patterns
+    crit: suspicious
+    conf: 0.8
+    all:
+      - id: glibc-hijack
+    any:
+      - id: symbol-interposition
+      - id: rtld-global-ref
+      - id: la-symbind-ref
+
+  # === RWX memory with suspicious context ===
+  - id: rwx-with-injection
+    desc: RWX memory protection with code
+    crit: suspicious
+    conf: 0.75
+    all:
+      - id: micro-behaviors/mem/protect/modify::rwx-prot-bytes
+    any:
+      - id: glibc-hijack
+      - id: symbol-interposition
+      - id: high-entropy-strings
+
+  # === Compression library supply chain backdoor ===
+  # A compression library (lzma, zlib, etc.) with:
+  # 1. Multiple embedded compressed payloads (hidden stage)
+  # 2. Actual geofencing logic, not just country code data (CIS exclusion typical of state actors)
+  # This is a very strong indicator of supply chain compromise like XZ Utils backdoor
+  # Complexity: all(2) + for(1) + any(2 min 1) = 4 minimum
+  # NOTE: Excludes cis-country-codes alone since legitimate software (Node.js) contains
+  # country codes in timezone/locale data without malicious intent
+  - id: compression-lib-backdoor
+    desc: Compression library with hidden payload and geofencing
+    crit: hostile
+    conf: 0.95
+    for: [elf]
+    all:
+      - id: metadata/library/compression::compression-lib
+      - id: micro-behaviors/data/embedded/payload::multiple-compressed-payloads
+    any:
+      - id: objectives/anti-analysis/naming/intent/
+      - id: objectives/anti-analysis/geofencing/location::cis-timezone
+
+  # === Compression library with embedded executable ===
+  # A compression library embedding ELF/PE binaries is highly suspicious
+  - id: compression-lib-embedded-binary
+    desc: Compression library with embedded executable
+    crit: hostile
+    conf: 0.95
+    for: [elf]
+    all:
+      - id: metadata/library/compression::compression-lib
+    any:
+      - id: micro-behaviors/data/embedded/payload::elf-magic-embedded
+      - id: micro-behaviors/data/embedded/payload::pe-magic-embedded
+
+  # === Library with embedded payload and geofencing (generic) ===
+  # Any shared library with both hidden payloads and country exclusion logic
+  # Complexity: all(2) + for(1) + any(1) = 4 minimum
+  - id: library-payload-geofencing
+    desc: Library with embedded payload and geofencing
+    crit: suspicious
+    conf: 0.85
+    for: [elf]
+    all:
+      - id: micro-behaviors/data/embedded/payload::multiple-compressed-payloads
+      - id: objectives/anti-analysis/geofencing/location::cis-geofencing
+
+  # === Compression library with suspicious CPUID feature selection ===
+  # A compression library with:
+  # 1. Multiple embedded compressed payloads (hidden stage/backdoor)
+  # 2. Suspicious CPUID mask checks (XZ backdoor style CPU feature detection)
+  # The XZ backdoor uses CPUID to select different payload variants based on CPU features.
+  # This is NOT typical of legitimate compression libraries which use CPUID only for
+  # SIMD optimization (AVX/SSE), not for selecting between different code paths with
+  # specific masks like 0x80202.
+  # Complexity: all(3) + for(1) = 4
+  - id: compression-lib-backdoor-cpuid
+    desc: Compression library with hidden payload and suspicious CPUID
+    crit: hostile
+    conf: 0.95
+    for: [elf]
+    all:
+      - id: metadata/library/compression::compression-lib
+      - id: micro-behaviors/data/embedded/payload::multiple-compressed-payloads
+      - id: xz-cpuid-mask-check

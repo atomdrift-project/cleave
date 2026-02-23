@@ -1,0 +1,101 @@
+# Mirai botnet competitor process kill targets
+# Mirai variants enumerate and kill competing malware and system services
+# to ensure exclusive control of infected IoT devices
+
+defaults:
+  crit: suspicious
+  for: [elf]
+  platforms: [linux]
+
+traits:
+  # kill-target-crond: use objectives/anti-analysis/masquerade/process::fake-crond-path (canonical path ref)
+
+  - id: kill-target-syslogd
+    desc: Syslog daemon path reference
+    crit: notable
+    conf: 0.6
+    if:
+      type: string
+      regex: "/sbin/syslogd"
+
+  - id: kill-target-ntpd
+    desc: NTP daemon path reference
+    crit: notable
+    conf: 0.6
+    if:
+      type: string
+      regex: "/usr/sbin/ntpd"
+
+  - id: kill-target-init
+    desc: Init process path reference
+    crit: notable
+    conf: 0.65
+    if:
+      type: string
+      regex: "/sbin/init"
+
+  - id: kill-target-udhcpc
+    desc: DHCP client path reference
+    crit: notable
+    conf: 0.6
+    if:
+      type: string
+      regex: "/sbin/udhcpc"
+
+  - id: kill-target-wget
+    desc: Wget utility reference
+    crit: notable
+    conf: 0.5
+    if:
+      type: string
+      exact: "wget"
+
+  - id: kill-target-curl
+    desc: Curl utility reference
+    crit: notable
+    conf: 0.5
+    if:
+      type: string
+      exact: "curl"
+
+  - id: kill-target-tftp
+    desc: TFTP utility reference
+    crit: notable
+    conf: 0.5
+    if:
+      type: string
+      exact: "tftp"
+
+composite_rules:
+  - id: mirai-competitor-kill-list
+    desc: Mirai competitor process kill list
+    crit: suspicious
+    conf: 0.88
+    mbc: "T1562"
+    attack: "T1562.001"
+    needs: 4  # At least 4 different kill targets
+    any:
+      - id: micro-behaviors/os/service/remote::sshd-path
+      - id: micro-behaviors/os/admin/daemon::telnetd
+      - id: micro-behaviors/os/admin/daemon::httpd
+      - id: objectives/anti-analysis/masquerade/process::fake-crond-path
+      - id: kill-target-syslogd
+      - id: kill-target-ntpd
+      - id: kill-target-init
+      - id: kill-target-udhcpc
+      - id: kill-target-wget
+      - id: kill-target-curl
+      - id: kill-target-tftp
+
+  - id: mirai-botkill-behavior
+    desc: Mirai botnet competitor killing behavior
+    crit: hostile
+    conf: 0.92
+    mbc: "B0030"
+    attack: "T1562.001"
+    needs: 1
+    all:
+      - id: mirai-competitor-kill-list
+    any:
+      - id: objectives/discovery/network/scan::scanner
+      - id: objectives/persistence/botnet/mirai::mirai-backdoor-daemons

@@ -1,0 +1,50 @@
+# Menu Operations
+# Context menu and popup menu manipulation
+
+defaults:
+  for: ["pe", "dll"]
+  platforms: ["windows"]
+
+traits:
+  # === Menu Creation ===
+  - id: create-popup-menu
+    desc: Create popup/context menu
+    crit: baseline
+    conf: 0.70
+    if:
+      type: symbol
+      exact: "CreatePopupMenu"
+
+  # === Menu Item Operations ===
+  - id: append-menu
+    desc: Add item to menu
+    crit: baseline
+    conf: 0.70
+    if:
+      type: symbol
+      exact: "AppendMenuW"
+
+  - id: track-popup-menu
+    desc: Display popup menu
+    crit: baseline
+    conf: 0.70
+    if:
+      type: symbol
+      exact: "TrackPopupMenu"
+
+  # === System Menu ===
+  - id: get-system-menu
+    desc: Get window system menu
+    crit: baseline
+    conf: 0.70
+    if:
+      type: symbol
+      exact: "GetSystemMenu"
+
+  - id: enable-menu-item
+    desc: Enable/disable menu item
+    crit: baseline
+    conf: 0.70
+    if:
+      type: symbol
+      exact: "EnableMenuItem"

@@ -1,0 +1,22 @@
+defaults:
+  for: [all]
+
+traits:
+    - id: js-xmlhttp-open
+      desc: "XMLHTTP.open call"
+      crit: notable
+      conf: 0.8
+      for: [javascript]
+      if:
+        type: string
+        regex: '\.open\s*\(\s*["''](GET|POST)["'']'
+  
+    - id: js-xmlhttp-send
+      desc: "XMLHTTP.send call"
+      crit: notable
+      conf: 0.8
+      for: [javascript]
+      if:
+        type: string
+        regex: '\.send\s*\('
+  

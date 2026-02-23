@@ -1,0 +1,8 @@
+composite_rules:
+  - id: mongoose-unique-disabled
+    desc: Mongoose schema with commented out unique constraint (potential account takeover backdoor)
+    crit: suspicious
+    conf: 0.9
+    all:
+      - id: micro-behaviors/data/db/conn/mongodb::mongoose
+      - id: micro-behaviors/data/db/security::commented-out-unique

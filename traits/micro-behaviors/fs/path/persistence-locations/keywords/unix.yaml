@@ -1,0 +1,29 @@
+# Unix/Linux/macOS Persistence Location Keywords
+# Detects references to common persistence mechanisms on Unix-like systems
+
+defaults:
+  for: [all]
+  crit: baseline
+  conf: 0.5
+
+traits:
+  - id: startup-keyword
+    desc: Startup directory keyword
+    if:
+      type: string
+      word: "Startup"
+
+  - id: launchd-keyword
+    desc: launchd keyword
+    if:
+      type: string
+      word: "launchd"
+
+composite_rules:
+  - id: unix-persistence-keywords
+    desc: Unix persistence location keywords
+    crit: notable
+    conf: 0.7
+    any:
+      - id: startup-keyword
+      - id: launchd-keyword

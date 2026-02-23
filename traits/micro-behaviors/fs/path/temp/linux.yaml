@@ -1,0 +1,53 @@
+# Temporary Paths
+# MBC: E1083 (File and Directory Discovery)
+# ATT&CK: T1083
+
+defaults:
+  for: [all]
+  platforms: [linux, macos]
+
+traits:
+  - id: tmp-path-content
+    desc: "/tmp/ path component"
+    if:
+      type: string
+      regex: "(/tmp/|/var/tmp/)[\\w\\.\\-/]+"
+    not:
+      - "/tmp/out."
+      - "/tmp/out.zip"
+      - "/tmp/analysis"
+      - "/tmp/autosymbiontic"
+      - "/tmp/.X11-unix"
+      - "/var/tmp/."
+
+  - id: hidden-tmp-path
+    desc: "Hidden path prefix in /tmp"
+    if:
+      type: string
+      substr: "/tmp/."
+
+composite_rules:
+  - id: temp-tmp
+    desc: "Reference to /tmp"
+    crit: baseline
+    conf: 0.66
+    all:
+      - id: micro-behaviors/fs/path/temp::unix-temp
+      - id: tmp-path-content
+
+  - id: temp-var-tmp
+    desc: "Reference to /var/tmp"
+    crit: baseline
+    conf: 0.66
+    all:
+      - id: micro-behaviors/fs/path/temp::unix-var-temp
+      - id: tmp-path-content
+
+  - id: tmp-hidden-file
+    desc: "Hidden file path in /tmp directory"
+    crit: notable
+    conf: 0.75
+    attack: "T1564.001"
+    all:
+      - id: micro-behaviors/fs/path/temp::unix-temp
+      - id: hidden-tmp-path

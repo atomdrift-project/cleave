@@ -1,0 +1,14 @@
+# Known Malicious Domains
+# Detects hardcoded domains associated with specific malware campaigns
+
+defaults:
+  for: [all]
+  crit: suspicious
+  conf: 1.0
+
+traits:
+  - id: iterators-core-c2
+    desc: C2 domain for iterators-core malware
+    if:
+      type: string
+      substr: "425a2.33mail.ga"

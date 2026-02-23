@@ -1,0 +1,180 @@
+# ESXi Targeting Traits (Ransomware)
+# ATT&CK: T1486 (Data Encrypted for Impact)
+# MBC: C0027 (Encrypt Files)
+
+defaults:
+  for: [all]
+
+traits:
+  # ESXi VM enumeration
+  - id: vm-enumeration
+    desc: ESXi virtual machine enumeration
+    crit: suspicious
+    conf: 0.85
+    mbc: "C0027"
+    attack: "T1486"
+    if:
+      type: yara
+      source: |
+        rule esxi_vm_enum {
+          strings:
+            $vmsvc1 = "vmsvc/getallvms" ascii
+            $vmsvc2 = "vim-cmd vmsvc" ascii
+            $esxcli1 = "esxcli vm process list" ascii
+            $esxcli2 = "esxcli --formatter" ascii
+            $list1 = "WorldID" ascii
+            $list2 = "DisplayName" ascii
+          condition:
+            any of ($vmsvc*) or any of ($esxcli*) or ($list1 and $list2)
+        }
+
+  # ESXi VM termination
+  - id: vm-kill
+    desc: ESXi virtual machine termination command
+    crit: suspicious
+    conf: 0.9
+    mbc: "C0027"
+    attack: "T1489"
+    if:
+      type: yara
+      source: |
+        rule esxi_vm_kill {
+          strings:
+            $kill1 = "vm process kill" ascii
+            $kill2 = "vmsvc/power.off" ascii
+            $kill3 = "--type=force" ascii
+            $kill4 = "--type=soft" ascii
+            $kill5 = "--type=hard" ascii
+            $kill6 = "--world-id" ascii
+            $power1 = "power.off" ascii
+            $power2 = "power.suspend" ascii
+          condition:
+            any of ($kill*) or any of ($power*)
+        }
+
+  # ESXi snapshot manipulation
+  - id: snapshot
+    desc: ESXi snapshot removal command (ransomware
+    crit: suspicious
+    conf: 0.9
+    mbc: "C0027"
+    attack: "T1490"
+    if:
+      type: yara
+      source: |
+        rule esxi_snapshot {
+          strings:
+            $snap1 = "snapshot.removeall" ascii
+            $snap2 = "snapshot.remove" ascii
+            $snap3 = "vmsvc/snapshot" ascii
+            $snap4 = "RemoveAllSnapshots" ascii
+            $snap5 = "snapshot_remove" ascii
+            // Loop pattern for mass removal
+            $loop = "for i in" ascii
+            $vmsvc = "vim-cmd" ascii
+          condition:
+            any of ($snap*) or ($loop and $vmsvc)
+        }
+
+  # ESXi file targeting
+  - id: file-targeting
+    desc: ESXi-specific file extension targeting
+    crit: suspicious
+    conf: 0.85
+    mbc: "C0027"
+    attack: "T1486"
+    if:
+      type: yara
+      source: |
+        rule esxi_file_targeting {
+          strings:
+            $ext1 = ".vmdk" ascii wide
+            $ext2 = ".vmx" ascii wide
+            $ext3 = ".vmxf" ascii wide
+            $ext4 = ".vmsd" ascii wide
+            $ext5 = ".vmsn" ascii wide
+            $ext6 = ".vswp" ascii wide
+            $ext7 = ".vmem" ascii wide
+            $ext8 = ".nvram" ascii wide
+            $ext9 = ".vmss" ascii wide
+            $ext10 = ".log" ascii wide
+            $path1 = "/vmfs/volumes" ascii
+            $path2 = "/vmfs/volumes/datastore" ascii
+          condition:
+            4 of ($ext*) or any of ($path*)
+        }
+
+  # ESXi CLI tools usage
+  - id: cli-tools
+    desc: ESXi CLI tools for attack
+    crit: suspicious
+    conf: 0.8
+    mbc: "C0027"
+    attack: "T1486"
+    if:
+      type: yara
+      source: |
+        rule esxi_cli_tools {
+          strings:
+            $cli1 = "esxcli" ascii
+            $cli2 = "vim-cmd" ascii
+            $cli3 = "esxcfg-" ascii
+            $cli4 = "vmkfstools" ascii
+            $cli5 = "vmware-cmd" ascii
+            $cli6 = "/bin/esxcli" ascii
+            $cli7 = "/bin/vim-cmd" ascii
+          condition:
+            2 of them
+        }
+
+  # ESXi version detection
+  - id: version-detect
+    desc: ESXi version detection for compatibility
+    crit: notable
+    conf: 0.7
+    mbc: "C0027"
+    attack: "T1486"
+    if:
+      type: yara
+      source: |
+        rule esxi_version {
+          strings:
+            $ver1 = "EsxiVersion" ascii
+            $ver2 = "esxi_version" ascii nocase
+            $ver3 = "vmware_version" ascii nocase
+            $ver4 = "/etc/vmware/esx.conf" ascii
+            $ver5 = "system version get" ascii
+          condition:
+            any of them
+        }
+
+  # ESXi datastore access
+  - id: datastore-access
+    desc: ESXi datastore enumeration and access
+    crit: suspicious
+    conf: 0.8
+    mbc: "C0027"
+    attack: "T1486"
+    if:
+      type: yara
+      source: |
+        rule esxi_datastore {
+          strings:
+            $ds2 = "/vmfs/volumes" ascii
+            $ds3 = "storage filesystem list" ascii
+            $ds4 = "esxcli storage" ascii
+          condition:
+            $ds2 and any of ($ds3, $ds4)
+        }
+
+composite_rules:
+  # Full ESXi ransomware targeting
+  - id: full-attack
+    desc: ESXi-targeted ransomware attack chain
+    crit: suspicious
+    conf: 0.95
+    all:
+      - id: objectives/impact/ransomware/esxi::file-targeting
+    any:
+      - id: objectives/impact/ransomware/esxi::vm-kill
+      - id: objectives/impact/ransomware/esxi::snapshot

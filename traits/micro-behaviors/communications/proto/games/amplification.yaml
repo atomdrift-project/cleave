@@ -1,0 +1,62 @@
+defaults:
+  for:
+  - all
+traits:
+- id: amplification-payload-common
+  desc: Common amplification attack payloads (Quake3, Valve, Half-Life)
+  crit: suspicious
+  if:
+    type: raw
+    regex: (?x)(\xFF){4}(getstatus|rules|TSource\sEngine\sQuery|\x55)
+- id: amplification-payload-common-chr
+  desc: Amplification payload constructed with chr() sequence
+  crit: suspicious
+  if:
+    type: raw
+    regex: chr\(255\)(\s*\.\s*chr\(255\)){3}\s*\.\s*
+- id: amplification-payload-common-chr-suffix
+  desc: Amplification payload suffix after chr() sequence
+  crit: suspicious
+  if:
+    type: raw
+    regex: ("getstatus"|"rules"|"TSource\sEngine\sQuery"|chr\(85\))
+- id: gamespy-payloads
+  desc: GameSpy amplification payloads
+  crit: suspicious
+  if:
+    type: raw
+    regex: (?x)\\\\status\\\\
+- id: gamespy-status-chr-payload
+  desc: GameSpy status payload built via chr()
+  crit: suspicious
+  if:
+    type: raw
+    regex: chr\(115\)\s*\.\s*chr\(116\)\s*\.\s*chr\(97\)\s*\.\s*chr\(116\)
+- id: gamespy-cory-hex-payload
+  desc: GameSpy CORY magic payload in hex
+  crit: suspicious
+  if:
+    type: raw
+    substr: \xFE\xFD\x00CORY
+- id: gamespy-cory-chr-payload
+  desc: GameSpy CORY magic payload built via chr()
+  crit: suspicious
+  if:
+    type: raw
+    regex: chr\(254\)\s*\.\s*chr\(253\)\s*\.\s*chr\(0\)\s*\.\s*chr\(67\)
+composite_rules:
+- id: amplification-payload-common-any
+  desc: Common amplification attack payloads (Quake3, Valve, Half-Life)
+  crit: suspicious
+  any:
+  - id: amplification-payload-common
+  - id: amplification-payload-common-chr
+  - id: amplification-payload-common-chr-suffix
+- id: gamespy-payloads-any
+  desc: GameSpy amplification payloads
+  crit: suspicious
+  any:
+  - id: gamespy-payloads
+  - id: gamespy-status-chr-payload
+  - id: gamespy-cory-hex-payload
+  - id: gamespy-cory-chr-payload

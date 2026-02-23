@@ -1,0 +1,18 @@
+# Display Fingerprinting Behavior
+# Detects aggressive display/screen resolution harvesting, often for fingerprinting or anti-analysis
+# ATT&CK: T1082 (System Information Discovery)
+
+defaults:
+  crit: suspicious
+  attack: "T1082"
+
+composite_rules:
+  - id: cross-platform-display-fingerprint
+    desc: Cross-platform display resolution fingerprinting
+    crit: hostile
+    conf: 0.95
+    needs: 2
+    any:
+      - id: objectives/discovery/system/hardware/display::wmic-video-controller
+      - id: objectives/discovery/system/hardware/display::xrandr-query
+      - id: objectives/discovery/system/hardware/display::macos-system-profiler-display

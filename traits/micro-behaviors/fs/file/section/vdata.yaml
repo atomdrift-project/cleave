@@ -1,0 +1,11 @@
+defaults:
+  for: [all]
+
+traits:
+  - id: vdata
+    conf: 0.8
+    crit: suspicious
+    desc: Suspicious PE section name ".vdata" (often associated
+    if:
+      type: raw
+      regex: '\.vdata'

@@ -1,0 +1,13 @@
+defaults:
+  for: [all]
+
+traits:
+  - id: elf-mmap-wx
+    desc: Allocates anonymous executable memory (WX) via mmap
+    crit: suspicious
+    conf: 0.8
+    attack: T1055
+    mbc: B0004
+    if:
+      type: hex
+      pattern: "B9 22 00 00 00 BA 06 00 00 00"

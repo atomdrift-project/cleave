@@ -1,0 +1,97 @@
+traits:
+  - id: icmp-prog-reply
+    desc: ICMP reply program reference
+    crit: notable
+    conf: 0.8
+    for:
+      - c
+      - elf
+    if:
+      type: raw
+      regex: (?i)icmp[_-]?(prog[_-]?)?reply|reply[_-]?icmp
+  - id: icmphdr-struct
+    desc: ICMP header structure
+    crit: notable
+    conf: 0.7
+    for:
+      - c
+      - elf
+    if:
+      type: raw
+      regex: struct\s+icmphdr|icmphdr\s*\*
+  - id: icmp-type-field
+    desc: ICMP type field access
+    crit: notable
+    conf: 0.75
+    for:
+      - c
+    if:
+      type: raw
+      regex: icmp[h]?->type
+  - id: icmp-echo-request
+    desc: ICMP echo request type (8)
+    crit: baseline
+    conf: 0.6
+    for:
+      - c
+      - elf
+    if:
+      type: raw
+      regex: ->type\s*==\s*8|type\s*==\s*(ICMP_ECHO|8)
+  - id: icmp-echo-reply
+    desc: ICMP echo reply type (0)
+    crit: baseline
+    conf: 0.6
+    for:
+      - c
+      - elf
+    if:
+      type: raw
+      regex: ->type\s*=\s*0[^0-9]|type\s*=\s*ICMP_ECHOREPLY\b
+  - id: icmp-pingback
+    desc: ICMP pingback covert channel marker
+    crit: suspicious
+    conf: 0.85
+    for:
+      - c
+      - elf
+    if:
+      type: raw
+      regex: (?i)icmp[_-]?ping[_-]?back|ping[_-]?back
+composite_rules:
+  - id: icmp-parsing
+    desc: ICMP packet parsing
+    crit: notable
+    conf: 0.75
+    for:
+      - c
+      - elf
+    needs: 2
+    any:
+      - id: micro-behaviors/communications/ip/services::ipproto-icmp
+      - id: icmphdr-struct
+      - id: icmp-type-field
+      - id: icmp-echo-request
+      - id: icmp-echo-reply
+  - id: icmp-type-spoof
+    desc: ICMP type modification
+    crit: suspicious
+    conf: 0.85
+    for:
+      - c
+    all:
+      - id: icmp-type-field
+    any:
+      - id: icmp-echo-request
+      - id: icmp-echo-reply
+  - id: icmp-indicators
+    desc: ICMP covert channel indicators
+    crit: notable
+    conf: 0.8
+    for:
+      - c
+      - elf
+    any:
+      - id: icmp-pingback
+      - id: icmp-prog-reply
+      - id: micro-behaviors/communications/ip/services::services-icmp

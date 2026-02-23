@@ -1,0 +1,11 @@
+defaults:
+  for: [all]
+
+traits:
+  - id: actionscript-version-check
+    desc: Detects ActionScript Capabilities.version check (targeting)
+    crit: baseline
+    conf: 0.8
+    if:
+      type: raw
+      regex: "Capabilities\\.version"

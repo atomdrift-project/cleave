@@ -1,0 +1,32 @@
+# Group Configuration Files
+# Group membership files
+# ATT&CK: T1069 (Permission Groups Discovery)
+
+defaults:
+  for: [all]
+  crit: baseline
+  conf: 0.8
+  attack: "T1069"
+
+traits:
+  - id: etc-group
+    desc: /etc/group group database
+    if:
+      type: string
+      substr: "/etc/group"
+
+  - id: etc-gshadow
+    desc: /etc/gshadow group passwords
+    conf: 0.85
+    if:
+      type: string
+      substr: "/etc/gshadow"
+
+composite_rules:
+  - id: group-files
+    desc: Group configuration file access
+    crit: notable
+    conf: 0.8
+    any:
+      - id: etc-group
+      - id: etc-gshadow

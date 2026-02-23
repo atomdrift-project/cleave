@@ -1,0 +1,11 @@
+defaults:
+  for: [all]
+
+traits:
+  - id: js-fragmented-url-protocol
+    desc: Fragmented URL Protocol (JS)
+    crit: notable
+    conf: 0.8
+    if:
+      type: string
+      regex: "(var\\s+\\w+\\s*=\\s*\"htt\"(\\s*\\+\\s*\"p\")?|y1\\s*\\+\\s*CDhHN)"

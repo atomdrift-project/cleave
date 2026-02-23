@@ -1,0 +1,98 @@
+# Framework Header Source Injection Detection
+# Detects bundling of raw source code headers (.h files) within frameworks
+# This is a supply-chain attack pattern where attacker-controlled code is disguised as
+# legitimate library headers (OpenSSL, libcrypto, etc.) within app bundles
+# Legitimate apps should use precompiled binaries, not raw source headers
+#
+# ATT&CK: T1195.001 (Supply Chain Compromise - Compromise Software Dependencies)
+# MBC: B0005 (Defense Evasion)
+
+defaults:
+  for: [c]
+  crit: suspicious
+  attack: "T1195.001"
+  mbc: "B0005"
+
+traits:
+  # === OpenSSL source header markers ===
+  # evp.h contains distinctive OpenSSL EVP API markers
+  - id: openssl-evp-header-typedef
+    desc: OpenSSL EVP typedef header marker
+    crit: notable
+    conf: 0.95
+    if:
+      type: raw
+      regex: "typedef.{0,50}EVP_(CIPHER|MD|PKEY)(_CTX)?"
+
+  - id: openssl-evp-header-define
+    desc: OpenSSL EVP define header marker
+    crit: notable
+    conf: 0.95
+    if:
+      type: raw
+      regex: "#define EVP_(CIPHER|MD|PKEY)(_CTX)?"
+
+  # === Generic OpenSSL header signatures ===
+  - id: openssl-crypto-header-envelope
+    desc: OpenSSL envelope header marker
+    crit: notable
+    conf: 0.85
+    if:
+      type: string
+      exact: "HEADER_ENVELOPE_H"
+
+  - id: openssl-crypto-header-algorithm
+    desc: OpenSSL algorithm defines marker
+    crit: notable
+    conf: 0.85
+    if:
+      type: string
+      exact: "OPENSSL_ALGORITHM_DEFINES"
+
+  - id: openssl-crypto-header-md-size
+    desc: OpenSSL max digest size marker
+    crit: notable
+    conf: 0.85
+    if:
+      type: string
+      exact: "EVP_MAX_MD_SIZE"
+
+  # === Cryptography library headers ===
+  - id: libcrypto-marker
+    desc: libcrypto header definitions
+    crit: notable
+    conf: 0.8
+    if:
+      type: string
+      regex: "EVP_CIPHER_CTX|EVP_MD_CTX|struct evp_pkey_st"
+
+composite_rules:
+  - id: openssl-evp-header
+    desc: OpenSSL EVP header with cryptographic API definitions
+    crit: notable
+    conf: 0.95
+    any:
+      - id: openssl-evp-header-typedef
+      - id: openssl-evp-header-define
+
+  - id: openssl-crypto-header
+    desc: OpenSSL crypto header markers
+    crit: notable
+    conf: 0.85
+    any:
+      - id: openssl-crypto-header-envelope
+      - id: openssl-crypto-header-algorithm
+      - id: openssl-crypto-header-md-size
+
+  # Supply-chain injection pattern: OpenSSL headers bundled unexpectedly
+  - id: openssl-source-injection
+    desc: OpenSSL header source injected into framework
+    crit: notable
+    conf: 0.90
+    for: [c]
+    any:
+      - id: openssl-evp-header
+      - id: metadata/vendor/openssl::openssl-eric-young-copyright
+      - id: openssl-crypto-header
+    unless:
+      - id: metadata/vendor/openssl::openssl-project-copyright

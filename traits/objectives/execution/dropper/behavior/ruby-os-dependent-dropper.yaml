@@ -1,0 +1,16 @@
+# Ruby OS-Dependent Dropper Behavior
+# Detects OS checks followed by file manipulation and execution
+# ATT&CK: T1059, T1105
+
+defaults:
+  crit: suspicious
+  conf: 0.85
+  for: [ruby]
+
+composite_rules:
+  - id: ruby-os-dependent-dropper
+    desc: OS-dependent execution with file manipulation (generic dropper behavior)
+    all:
+      - id: micro-behaviors/process/create/shell/lang::ruby-exec
+      - id: objectives/execution/dropper/behavior::ruby-os-check
+      - id: objectives/execution/dropper/behavior::ruby-file-manipulation

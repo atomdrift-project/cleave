@@ -1,0 +1,98 @@
+traits:
+- id: mirai-target-systemd-path
+  desc: References systemd binary path
+  crit: notable
+  conf: 0.8
+  for:
+  - elf
+  - shell
+  if:
+    type: string
+    regex: /usr/lib/systemd/systemd
+  attack: T1547
+- id: mirai-process-monitoring
+  desc: Process monitoring
+  crit: suspicious
+  conf: 0.85
+  for:
+  - elf
+  - shell
+  if:
+    type: string
+    substr: /dev/watchdog
+  attack: T1547
+composite_rules:
+- id: mirai-backdoor-daemons
+  desc: Backdoor daemon/service references
+  crit: suspicious
+  conf: 0.85
+  for:
+  - elf
+  - shell
+  attack: T1021.004
+  any:
+  - id: micro-behaviors/os/admin/daemon::telnetd
+  - id: micro-behaviors/os/admin/daemon::httpd
+  - id: micro-behaviors/os/service/remote::sshd-path
+  - id: micro-behaviors/os/service/remote::dropbear-ref
+- id: mirai-enable-services
+  desc: Enable Mirai-related services on startup
+  crit: suspicious
+  conf: 0.8
+  for:
+  - elf
+  - shell
+  attack: T1547
+  all:
+  - id: mirai-backdoor-daemons
+  any:
+  - id: objectives/persistence/systemd/service::systemctl-enable
+  - id: objectives/persistence/autostart/systemd::chkconfig-cmd
+  - id: objectives/persistence/autostart/systemd::update-rc-d-cmd
+- id: mirai-persistence-layer-2
+  desc: Mirai service persistence
+  crit: suspicious
+  conf: 0.9
+  for:
+  - elf
+  - shell
+  attack: T1547
+  any:
+  - id: mirai-target-systemd-path
+  - id: mirai-enable-services
+- id: mirai-persistence-layer-3
+  desc: Mirai monitoring and competition
+  crit: suspicious
+  conf: 0.9
+  for:
+  - elf
+  - shell
+  attack: T1547
+  all:
+  - id: mirai-process-monitoring
+  - id: objectives/impact/destroy/malware-competition::malware-killer-pattern
+- id: mirai-complete-persistence-chain
+  desc: Mirai complete persistence
+  crit: hostile
+  conf: 0.95
+  for:
+  - elf
+  - shell
+  attack: T1547
+  mbc: B0014
+  all:
+  - id: mirai-backdoor-daemons
+  - id: mirai-persistence-layer-2
+  - id: mirai-persistence-layer-3
+- id: mirai-sophisticated-resilience
+  desc: Mirai sophisticated resilience
+  crit: hostile
+  conf: 0.95
+  for:
+  - elf
+  - shell
+  attack: T1547
+  mbc: B0014
+  all:
+  - id: well-known/malware/botnet/mirai
+  - id: mirai-complete-persistence-chain

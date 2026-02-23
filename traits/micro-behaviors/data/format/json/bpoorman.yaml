@@ -1,0 +1,54 @@
+defaults:
+  for: [all]
+
+traits:
+- id: bpoorman-json-schema-aiv
+  desc: JSON key "aiv" used in Bpoorman malware
+  crit: notable
+  conf: 0.8
+  if:
+    type: string
+    regex: '"aiv"'
+
+- id: bpoorman-json-schema-crd
+  desc: JSON key "crd" used in Bpoorman malware
+  crit: notable
+  conf: 0.8
+  if:
+    type: string
+    regex: '"crd"'
+
+- id: bpoorman-json-schema-pwd
+  desc: JSON key "pwd" used in Bpoorman malware
+  crit: notable
+  conf: 0.8
+  if:
+    type: string
+    regex: '"pwd"'
+
+- id: bpoorman-json-schema-aiv-ast
+  desc: JSON key "aiv" (AST)
+  crit: notable
+  conf: 0.9
+  if:
+    type: ast
+    node: interpreted_string_literal
+    regex: '"aiv"'
+
+- id: bpoorman-json-schema-crd-ast
+  desc: JSON key "crd" (AST)
+  crit: notable
+  conf: 0.9
+  if:
+    type: ast
+    node: interpreted_string_literal
+    regex: '"crd"'
+
+- id: bpoorman-json-schema-pwd-ast
+  desc: JSON key "pwd" (AST)
+  crit: notable
+  conf: 0.9
+  if:
+    type: ast
+    node: interpreted_string_literal
+    regex: '"pwd"'

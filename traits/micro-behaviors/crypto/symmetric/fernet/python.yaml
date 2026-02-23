@@ -1,0 +1,157 @@
+# Fernet Encryption Library Detection (Python)
+# Fernet is a symmetric encryption library often abused by malware for payload encryption
+# ATT&CK: T1027 (Obfuscated Files or Information)
+
+defaults:
+  for: [python]
+  attack: "T1027"
+  mbc: "C0027"
+
+traits:
+  # === Fernet import atomic indicators ===
+  - id: import-fernet-direct
+    desc: Direct fernet import
+    crit: baseline
+    conf: 0.8
+    if:
+      type: raw
+      regex: "\\bimport\\s+fernet\\b"
+
+  - id: from-cryptography-fernet
+    desc: From cryptography.fernet import
+    crit: baseline
+    conf: 0.8
+    if:
+      type: raw
+      regex: "\\bfrom\\s+cryptography\\.fernet\\s+import"
+
+  # Fernet class usage
+  - id: class-usage
+    desc: "Fernet encryption class instantiation"
+    crit: notable
+    conf: 0.85
+    if:
+      type: raw
+      regex: "Fernet\\s*\\("
+
+  # Fernet decrypt operation
+  - id: decrypt
+    desc: "Fernet decryption operation"
+    crit: notable
+    conf: 0.9
+    if:
+      type: raw
+      regex: "\\.decrypt\\s*\\("
+
+  # Fernet key generation
+  - id: keygen
+    desc: "Fernet key generation"
+    crit: notable
+    conf: 0.85
+    if:
+      type: raw
+      regex: "Fernet\\.generate_key\\s*\\("
+
+  # Fernet encrypt operation
+  - id: encrypt
+    desc: "Fernet encryption operation"
+    crit: notable
+    conf: 0.9
+    if:
+      type: raw
+      regex: "\\.encrypt\\s*\\("
+
+  # === Runtime installation patterns (building blocks) ===
+  - id: pip-install-fernet-lower
+    desc: pip install fernet (lowercase)
+    crit: component
+    conf: 0.75
+    if:
+      type: string
+      substr: "pip install fernet"
+
+  - id: pip-install-fernet-title
+    desc: pip install fernet (titlecase)
+    crit: component
+    conf: 0.75
+    if:
+      type: string
+      substr: "pip install Fernet"
+
+  - id: pip-install-cryptography-lower
+    desc: pip install cryptography (lowercase)
+    crit: component
+    conf: 0.7
+    if:
+      type: string
+      substr: "pip install cryptography"
+
+  - id: pip-install-cryptography-title
+    desc: pip install cryptography (titlecase)
+    crit: component
+    conf: 0.7
+    if:
+      type: string
+      substr: "pip install Cryptography"
+
+  - id: fernet-base64-key
+    desc: Fernet base64 key pattern (44
+    crit: component
+    conf: 0.8
+    if:
+      type: string
+      regex: 'b[''"][A-Za-z0-9+/]{43}=[''"]'
+
+  # === Hardcoded key patterns (building block) ===
+  - id: fernet-keyword
+    desc: Fernet keyword
+    crit: component
+    conf: 0.6
+    if:
+      type: raw
+      word: "Fernet"
+
+composite_rules:
+  # Helper composites
+  - id: pip-install-fernet-variants
+    desc: pip install fernet (case variants)
+    any:
+      - { id: pip-install-fernet-lower }
+      - { id: pip-install-fernet-title }
+      - { id: pip-install-cryptography-lower }
+      - { id: pip-install-cryptography-title }
+
+  - id: error-handling-keywords
+    desc: Error handling keywords
+    any:
+      - { id: micro-behaviors/data/control-flow/error-handling::except-keyword }
+      - {
+          id: micro-behaviors/data/control-flow/error-handling::importerror-keyword,
+        }
+      - { id: import-fernet-direct }
+
+  # Fernet import composite
+  - id: import
+    desc: Fernet symmetric encryption library import
+    crit: notable
+    conf: 0.9
+    any:
+      - { id: import-fernet-direct }
+      - { id: from-cryptography-fernet }
+
+  # Migrated from YARA
+  - id: runtime-install
+    desc: Runtime installation of fernet encryption
+    crit: suspicious
+    conf: 0.95
+    all:
+      - { id: pip-install-fernet-variants }
+      - { id: error-handling-keywords }
+
+  - id: hardcoded-key
+    desc: Fernet encryption with hardcoded key
+    crit: suspicious
+    conf: 0.9
+    all:
+      - { id: fernet-keyword }
+      - { id: fernet-base64-key }

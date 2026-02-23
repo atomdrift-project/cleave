@@ -1,0 +1,20 @@
+# macOS Identifier Masquerading Detection
+# Detects binaries masquerading as legitimate software via identifiers
+# ATT&CK: T1036 (Masquerading)
+
+defaults:
+  platforms: [macos]
+  attack: "T1036"
+  for: [macho]
+
+composite_rules:
+  - id: suspicious-identifier-masquerading
+    desc: "Suspicious identifier masquerading (Ad-hoc signed)"
+    crit: suspicious
+    conf: 0.9
+    # Requires an ad-hoc (effectively unsigned) binary with a well-known identifier
+    all:
+      - id: metadata/sign/apple::adhoc
+    any:
+      - id: objectives/persistence/launchd/agent::fake-apple-label
+      - id: objectives/persistence/launchd/agent::fake-homebrew-label

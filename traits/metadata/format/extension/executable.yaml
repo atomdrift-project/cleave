@@ -1,0 +1,67 @@
+traits:
+  - id: exe
+    desc: Windows executable extension
+    crit: baseline
+    conf: 1.0
+    for: [all]
+    if:
+      type: basename
+      regex: "\\.exe$"
+
+  - id: scr
+    desc: Windows screensaver extension
+    crit: baseline
+    conf: 1.0
+    for: [all]
+    if:
+      type: basename
+      regex: "\\.scr$"
+
+  - id: dll
+    desc: Windows DLL extension
+    crit: baseline
+    conf: 1.0
+    for: [all]
+    if:
+      type: basename
+      regex: "\\.dll$"
+
+  - id: com
+    desc: DOS executable extension
+    crit: baseline
+    conf: 1.0
+    for: [all]
+    if:
+      type: basename
+      regex: "\\.com$"
+
+  - id: bat
+    desc: Batch script extension
+    crit: baseline
+    conf: 1.0
+    for: [all]
+    if:
+      type: basename
+      regex: "\\.bat$"
+
+  - id: cmd
+    desc: Windows command script extension
+    crit: baseline
+    conf: 1.0
+    for: [all]
+    if:
+      type: basename
+      regex: "\\.cmd$"
+
+composite_rules:
+  - id: windows-executable
+    desc: Windows executable file extension
+    crit: baseline
+    conf: 1.0
+    any:
+      - id: exe
+      - id: scr
+      - id: dll
+      - id: com
+      - id: bat
+      - id: cmd

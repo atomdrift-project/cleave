@@ -1,0 +1,12 @@
+defaults:
+  for: [all]
+
+traits:
+  - id: dummy-control-word
+    desc: Repeated RTF dummy control word pattern.
+    crit: suspicious
+    conf: 0.8
+    if:
+      type: raw
+      regex: "(\\\\'R1[0-9a-fA-F]{2}){4,}|(\\\\'R1){4,}"
+      count_min: 1

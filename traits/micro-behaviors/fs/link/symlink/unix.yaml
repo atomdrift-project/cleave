@@ -1,0 +1,64 @@
+# Symbolic Link Operations
+# MBC: E1222 (File Permission Modification)
+# ATT&CK: T1222
+
+defaults:
+  for: [all]
+
+traits:
+  - id: symlink
+    desc: Create symbolic links
+    crit: baseline
+    conf: 0.66
+    if:
+      type: symbol
+      exact: "symlink"
+
+  - id: symlinkat
+    desc: Create symbolic links
+    crit: baseline
+    conf: 0.66
+    if:
+      type: symbol
+      exact: "symlinkat"
+
+  - id: readlink
+    desc: Read symbolic link target path
+    crit: notable
+    conf: 0.8
+    if:
+      type: symbol
+      exact: "readlink"
+
+  - id: readlinkat
+    desc: Read symbolic link target path
+    crit: notable
+    conf: 0.8
+    if:
+      type: symbol
+      exact: "readlinkat"
+
+  - id: symlink-resolve
+    desc: Resolve symbolic links to canonical
+    crit: baseline
+    conf: 0.66
+    if:
+      type: symbol
+      regex: realpath
+
+composite_rules:
+  - id: symlink-create
+    desc: Create symbolic links
+    crit: baseline
+    conf: 0.66
+    any:
+      - id: symlink
+      - id: symlinkat
+
+  - id: symlink-read
+    desc: Read symbolic link target path
+    crit: notable
+    conf: 0.8
+    any:
+      - id: readlink
+      - id: readlinkat

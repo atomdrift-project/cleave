@@ -1,0 +1,69 @@
+composite_rules:
+  - id: squiblydoo
+    desc: "Squiblydoo (Regsvr32 bypass) technique detected"
+    crit: hostile
+    conf: 0.95
+    attack: "T1218.010"
+    any:
+      - id: objectives/command-and-control/dropper/download-execute::squiblydoo-plain
+      - id: objectives/command-and-control/dropper/download-execute::squiblydoo-encoded
+      - id: objectives/command-and-control/dropper/download-execute::squiblydoo-raw-hex
+
+  - id: squiblydoo-plain
+    desc: "Squiblydoo pattern (plain text)"
+    crit: suspicious
+    conf: 0.8
+    all:
+      - id: micro-behaviors/process/create/tool::regsvr32
+    any:
+      - id: micro-behaviors/dylib/library::scrobj
+      - id: objectives/command-and-control/dropper/download-execute::url-arg
+
+  - id: squiblydoo-encoded
+    desc: "Squiblydoo pattern (encoded)"
+    crit: suspicious
+    conf: 0.8
+    all:
+      - id: micro-behaviors/process/create/tool::regsvr32-encoded
+    any:
+      - id: micro-behaviors/dylib/library::scrobj-encoded
+      - id: objectives/command-and-control/dropper/download-execute::url-arg-encoded
+
+  - id: squiblydoo-raw-hex
+    desc: "Squiblydoo pattern (hex encoded)"
+    crit: suspicious
+    conf: 0.8
+    all:
+      - id: micro-behaviors/process/create/tool::regsvr32-raw-hex
+    any:
+      - id: micro-behaviors/dylib/library::scrobj-raw-hex
+      - id: objectives/command-and-control/dropper/download-execute::url-arg-raw-hex
+
+defaults:
+  for: [all]
+
+traits:
+  - id: url-arg
+    desc: "Regsvr32 /i:URL argument"
+    crit: suspicious
+    if:
+      type: string
+      regex: "/i:https?://"
+      case_insensitive: true
+
+  - id: url-arg-encoded
+    desc: "Regsvr32 /i:URL argument (encoded)"
+    crit: suspicious
+    if:
+      type: encoded
+      encoding: [base64, hex]
+      regex: "/i:https?://"
+      case_insensitive: true
+
+  - id: url-arg-raw-hex
+    desc: "Regsvr32 /i:URL argument (hex encoded)"
+    crit: suspicious
+    if:
+      type: raw
+      regex: "2f693a68747470"
+      case_insensitive: true

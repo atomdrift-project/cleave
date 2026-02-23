@@ -1,0 +1,16 @@
+# Data Serialization - Ruby
+# Detects serialization of sensitive data before exfiltration
+# ATT&CK: T1027 (Obfuscated Files or Information)
+
+defaults:
+  for: [ruby]
+
+composite_rules:
+  # GuardDog: JSON-serialized environment
+  - id: ruby-serialize-environment
+    desc: Environment variables serialized as JSON (Ruby)
+    crit: notable
+    conf: 0.90
+    all:
+      - id: micro-behaviors/os/env/access::env-access
+      - id: micro-behaviors/data/serialize/object::json-generate

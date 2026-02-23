@@ -1,0 +1,52 @@
+traits:
+  - id: js-xor-array-assignment
+    desc: JavaScript array XOR assignment
+    crit: suspicious
+    conf: 0.8
+    for: [javascript]
+    if:
+      type: ast
+      query: |
+        (assignment_expression
+          left: (subscript_expression)
+          operator: "^="
+          right: (subscript_expression
+            index: (binary_expression operator: "%")
+          )
+        )
+
+  - id: js-custom-byte-mapper
+    desc: Custom byte mapping via charCodeAt
+    crit: suspicious
+    conf: 0.8
+    for: [javascript]
+    if:
+      type: string
+      regex: '\["charCodeAt"\]\(\w+\);\s*if\s*\(\w+\s*<\s*128\)'
+
+  - id: js-mz-header-check-array
+    desc: Checks for MZ header in array
+    crit: notable
+    conf: 0.9
+    for: [javascript]
+    if:
+      type: string
+      regex: '\[0\]\s*!=\s*77\s*\|\|\s*\w+\[1\]\s*!=\s*90'
+
+  - id: js-rundll32-execution-call
+    desc: Executes rundll32 via WScript.Shell
+    crit: suspicious
+    conf: 0.85
+    for: [javascript]
+    if:
+      type: string
+      regex: '\["Run"\]\("rundll32"'
+
+  - id: js-adodb-stream-charset-437
+    desc: ADODB.Stream MS-DOS Charset 437
+    crit: suspicious
+    conf: 0.85
+    for: [javascript]
+    if:
+      type: string
+      regex: '\["Charset"\]\s*=\s*"437"'

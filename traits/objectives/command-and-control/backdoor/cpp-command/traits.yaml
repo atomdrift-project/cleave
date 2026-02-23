@@ -1,0 +1,19 @@
+# C++ Command Execution Backdoor
+# Detects C++ binaries with backdoor characteristics
+# ATT&CK: T1059.004 (Unix Shell), B0022 (Backdoor)
+
+composite_rules:
+  # High-confidence backdoor pattern
+  - id: cpp-command-backdoor
+    desc: C++ command execution backdoor with string concealment
+    crit: hostile
+    conf: 0.95
+    attack: "T1059.004"
+    mbc: "B0022"
+    for: [elf, macho, pe]
+    all:
+      - id: micro-behaviors/process/create/direct::cpp-stdlib
+      - id: micro-behaviors/process/create/direct::cpp-string
+      - id: micro-behaviors/process/create/direct::cpp-exception
+      - id: micro-behaviors/process/create/direct::cpp-command-capture
+      - id: objectives/anti-static/obfuscation/strings/encoding::string-concealment

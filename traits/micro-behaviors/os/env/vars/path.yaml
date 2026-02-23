@@ -1,0 +1,14 @@
+# PATH Environment Variable
+# System executable search path
+
+defaults:
+  for: [all]
+  crit: baseline
+  conf: 0.5
+
+traits:
+  - id: path-var
+    desc: PATH environment variable
+    if:
+      type: string
+      exact: "PATH"

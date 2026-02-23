@@ -1,0 +1,19 @@
+# Network Interface Paths (Linux)
+# Basic Linux network interface paths
+# MBC: E1082 (System Information Discovery)
+# ATT&CK: T1082 (System Information Discovery)
+
+defaults:
+  for: [c, elf, shell]
+  platforms: [linux]
+  crit: baseline
+  mbc: "E1082"
+  attack: "T1082"
+
+traits:
+  - id: sys-class-net
+    desc: /sys/class/net/ path
+    conf: 0.5
+    if:
+      type: string
+      substr: "/sys/class/net/"

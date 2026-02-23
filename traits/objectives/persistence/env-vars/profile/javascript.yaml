@@ -1,0 +1,156 @@
+# Environment Variable Manipulation - JavaScript/Node.js
+# Detects tampering with PATH and other env vars for command hijacking
+# ATT&CK: T1574.007 (Hijack Execution Flow: Path Interception)
+
+defaults:
+  for: [javascript]
+
+traits:
+  # === PATH manipulation patterns (AST-based) ===
+
+  - id: env-path-assignment
+    desc: PATH environment variable assignment
+    crit: suspicious
+    conf: 0.9
+    attack: "T1574.007"
+    mbc: "E1574.007"
+    if:
+      type: ast
+      kind: assignment
+      exact: "env.PATH"
+
+  - id: path-prepending-pattern
+    desc: PATH prepending with concatenation
+    crit: suspicious
+    conf: 0.95
+    attack: "T1574.007"
+    if:
+      type: ast
+      query: |
+        ((assignment_expression
+          left: (member_expression
+            object: (identifier) @obj
+            property: (property_identifier) @prop)
+          right: (binary_expression
+            left: (_)
+            right: (member_expression
+              property: (property_identifier) @path_prop)))
+         (#eq? @prop "PATH")
+         (#eq? @path_prop "PATH"))
+
+  # === Windows persistence locations (AST-based) ===
+
+  - id: env-localappdata
+    desc: Windows LOCALAPPDATA directory access
+    crit: notable
+    conf: 0.7
+    if:
+      type: ast
+      kind: attribute
+      exact: "process.env.LOCALAPPDATA"
+
+  - id: env-appdata
+    desc: Windows APPDATA directory access
+    crit: notable
+    conf: 0.6
+    if:
+      type: string
+      substr: "process.env.APPDATA"
+
+  - id: env-userprofile
+    desc: Windows USERPROFILE directory access
+    crit: notable
+    conf: 0.5
+    if:
+      type: symbol
+      regex: "process\\.env\\.USERPROFILE"
+
+  # === String patterns ===
+
+  - id: appdata-string
+    desc: AppData directory reference
+    crit: notable
+    conf: 0.4
+    if:
+      type: string
+      word: "AppData"
+
+  - id: localappdata-string
+    desc: Local AppData reference
+    crit: notable
+    conf: 0.4
+    if:
+      type: string
+      substr: "Local"
+
+  - id: suspicious-python-version
+    desc: Non-standard Python version format
+    crit: suspicious
+    conf: 0.75
+    if:
+      type: string
+      regex: 'Python\d{4,}'
+
+  - id: windows-path-backslash
+    desc: Hardcoded Windows path separators
+    crit: notable
+    conf: 0.6
+    if:
+      type: string
+      regex: '[A-Za-z]+\\\\[A-Za-z]+\\\\[A-Za-z]+'
+
+composite_rules:
+  # PATH prepending via AST analysis (most precise)
+  - id: path-hijacking-ast
+    desc: PATH environment variable prepending
+    crit: suspicious
+    conf: 0.85
+    attack: "T1574.007"
+    mbc: "E1574.007"
+    for: [javascript] # +1 complexity
+    all: # +3 complexity (3 required patterns)
+      - id: path-prepending-pattern
+      - id: windows-path-backslash
+      - id: env-localappdata
+    # Total complexity: 4 (1 + 3 = 4)
+
+  # PATH prepending fallback (content-based for resilience)
+  - id: path-hijacking-prepend
+    desc: PATH prepending for command hijacking
+    crit: suspicious
+    conf: 0.85
+    attack: "T1574.007"
+    for: [javascript] # +1
+    all: # +2
+      - id: env-path-assignment
+      - id: windows-path-backslash
+    # Total complexity: 3 (1 + 2 = 3)
+
+  # Suspicious Python path setup (preparation for hijacking)
+  - id: suspicious-python-path-setup
+    desc: Suspicious Python path configuration
+    crit: suspicious
+    conf: 0.85
+    attack: "T1574.007"
+    for: [javascript] # +1
+    all: # +2 (2 rules)
+      - id: suspicious-python-version
+      - id: windows-path-backslash
+    any: # +1
+      - id: env-localappdata
+      - id: appdata-string
+    # Total complexity: 4 (1 + 2 + 1 = 4)
+
+  # Windows AppData path construction
+  - id: windows-appdata-path
+    desc: Windows AppData path construction
+    crit: notable
+    conf: 0.7
+    for: [javascript] # +1
+    all: # +2
+      - id: appdata-string
+      - id: localappdata-string
+    any: # +1
+      - id: env-localappdata
+      - id: objectives/discovery/host/system/hardware-fingerprint::os-homedir-call
+    # Total complexity: 4 (1 + 2 + 1 = 4)

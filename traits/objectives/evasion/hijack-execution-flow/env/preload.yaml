@@ -1,0 +1,29 @@
+# Library Injection via Environment Variables
+# Detects references to LD_PRELOAD and DYLD_INSERT_LIBRARIES
+# ATT&CK: T1574.006 (Hijack Execution Flow: Dynamic Linker Hijacking)
+
+defaults:
+  crit: suspicious
+  conf: 0.75
+  attack: "T1574.006"
+
+traits:
+  - id: ld-preload-string
+    desc: LD_PRELOAD environment variable reference
+    platforms: [linux, unix]
+    for: [elf, scripts]
+    if:
+      type: string
+      exact: "LD_PRELOAD"
+    # System utilities legitimately reference these, not hostile on its own
+
+  - id: dyld-insert-libraries-string
+    desc: DYLD_INSERT_LIBRARIES environment variable reference
+    platforms: [macos]
+    for: [macho, scripts]
+    if:
+      type: string
+      exact: "DYLD_INSERT_LIBRARIES"
+    downgrade:
+      any:
+        - id: metadata/signed/platform::apple

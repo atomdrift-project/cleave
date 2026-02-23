@@ -1,0 +1,11 @@
+defaults:
+  for: [all]
+
+traits:
+  - id: makefile-basename
+    desc: Makefile (basename)
+    crit: baseline
+    conf: 1.0
+    if:
+      type: basename
+      exact: Makefile

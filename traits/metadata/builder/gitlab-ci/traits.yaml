@@ -1,0 +1,50 @@
+# Build System - GITLAB CI
+
+defaults:
+  for: [all]
+
+traits:
+  # === GitLab CI micro-behaviors ===
+  - id: ci-pipeline-id
+    desc: CI_PIPELINE_ID variable
+    crit: notable
+    conf: 0.9
+    if:
+      type: string
+      substr: "CI_PIPELINE_ID"
+
+  - id: ci-job-id
+    desc: CI_JOB_ID variable
+    crit: notable
+    conf: 0.9
+    if:
+      type: string
+      substr: "CI_JOB_ID"
+
+  - id: gitlab-ci-env
+    desc: GITLAB_CI variable
+    crit: notable
+    conf: 0.9
+    if:
+      type: string
+      substr: "GITLAB_CI"
+
+  - id: gitlab-ci-yml
+    desc: .gitlab-ci.yml file
+    crit: notable
+    conf: 0.9
+    if:
+      type: string
+      substr: ".gitlab-ci.yml"
+
+composite_rules:
+  # GitLab CI composite (migrated from YARA)
+  - id: gitlab-ci
+    desc: GitLab CI artifacts
+    crit: notable
+    conf: 0.9
+    any:
+      - id: ci-pipeline-id
+      - id: ci-job-id
+      - id: gitlab-ci-env
+      - id: gitlab-ci-yml

@@ -1,0 +1,11 @@
+composite_rules:
+  - id: deeply-nested-extconf
+    desc: "Deeply nested extension configuration (evasion technique)"
+    crit: hostile
+    conf: 0.95
+    attack: T1027.001
+    mbc: B0001
+    any:
+      - id: micro-behaviors/config/package/layout::deeply-nested-extconf-metadata
+      - id: micro-behaviors/config/package/layout::deeply-nested-extconf-gemspec
+      - id: micro-behaviors/config/package/layout::deeply-nested-extconf-gemspec-assign

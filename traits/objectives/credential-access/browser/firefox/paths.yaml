@@ -1,0 +1,24 @@
+# Firefox Browser Credential Database Paths
+# Detects references to Firefox browser credential and data databases
+# MBC: OB0003 (Credential Access)
+# ATT&CK: T1555.003 (Credentials from Web Browsers)
+
+defaults:
+  for: [all]
+  crit: suspicious
+  conf: 0.8
+  mbc: "OB0003"
+  attack: "T1555.003"
+
+traits:
+  - id: logins
+    desc: Firefox logins.json file path
+    if:
+      type: string
+      substr: "logins.json"
+
+  - id: cookies
+    desc: Firefox cookies.sqlite database path
+    if:
+      type: string
+      substr: "cookies.sqlite"

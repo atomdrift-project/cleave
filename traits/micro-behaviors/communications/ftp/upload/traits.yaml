@@ -1,0 +1,13 @@
+# FTP Upload Patterns
+
+defaults:
+  for: [elf, macho, so, dylib, pe, dll, c]
+
+traits:
+  - id: ftp-upload-symbol
+    desc: FTP upload symbol
+    crit: notable
+    conf: 0.7
+    if:
+      type: symbol
+      regex: ftp_put|\bSTOR\b|ftp_upload

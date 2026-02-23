@@ -1,0 +1,25 @@
+defaults:
+  for: [javascript, typescript]
+traits:
+  - id: js-permutation-loop
+    desc: Nested loops with multiple charAt calls (permutation
+    crit: baseline
+    conf: 0.9
+    if:
+      type: raw
+      regex: for[^{]{0,120}\{[^{]{0,120}for[^{]{0,120}\{
+  - id: js-permutation-charat-pair
+    desc: Multiple charAt calls in close proximity
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: raw
+      regex: \.charAt\([^)]{0,120}\)[^}]{0,120}\.charAt\([^)]{0,120}\)
+composite_rules:
+  - id: js-permutation-loop-any
+    desc: Nested loops with multiple charAt calls (permutation
+    crit: suspicious
+    conf: 0.9
+    all:
+      - id: js-permutation-loop
+      - id: js-permutation-charat-pair

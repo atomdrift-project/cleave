@@ -1,0 +1,12 @@
+# Ruby Data Serialization Traits
+# Neutral capability-level serialization signals
+
+traits:
+  - id: json-generate
+    desc: Ruby JSON serialization call
+    crit: baseline
+    conf: 0.75
+    for: [ruby]
+    if:
+      type: raw
+      regex: 'JSON\.generate|\.to_json'

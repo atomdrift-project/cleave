@@ -1,0 +1,210 @@
+[package]
+name = "flayer"
+version = "0.1.0"
+edition = "2021"
+authors = ["flayer Team"]
+description = "Deep static analysis tool for extracting features from binaries and source code"
+license = "Apache-2.0"
+default-run = "flayer"
+
+[lints]
+workspace = true
+
+[workspace]
+members = [".", "crates/scpt", "flayer-macros"]
+
+# Strict but pragmatic lints - similar to the Rust project itself
+[workspace.lints.rust]
+# Deny unsafe patterns and correctness issues
+unsafe_op_in_unsafe_fn = "deny"
+rust_2018_idioms = { level = "deny", priority = -1 }
+unused_must_use = "deny"
+unused_imports = "deny"
+unused_mut = "deny"
+dead_code = "warn"
+unreachable_pub = "warn"
+missing_debug_implementations = "warn"
+missing_docs = "warn"
+
+[workspace.lints.clippy]
+# Deny common mistakes and antipatterns
+all = { level = "deny", priority = -1 }
+correctness = { level = "deny", priority = -1 }
+suspicious = { level = "deny", priority = -1 }
+style = { level = "warn", priority = -1 }
+complexity = { level = "warn", priority = -1 }
+perf = { level = "warn", priority = -1 }
+
+# Deny specific dangerous patterns
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+unimplemented = "deny"
+todo = "deny"
+unreachable = "deny"
+
+# Deny poor error handling
+result_unit_err = "deny"
+result_large_err = "deny"
+
+# Warn on code quality issues
+missing_safety_doc = "warn"
+must_use_candidate = "warn"
+needless_pass_by_value = "warn"
+unnecessary_wraps = "warn"
+
+# Encourage idiomatic Rust
+match_same_arms = "warn"
+redundant_closure_for_method_calls = "warn"
+manual_let_else = "warn"
+
+# Allow pragmatic exceptions
+# These are too noisy or conflict with readability
+too_many_arguments = "allow"
+type_complexity = "allow"
+module_name_repetitions = "allow"
+similar_names = "allow"
+single_match_else = "allow"
+missing_errors_doc = "allow"  # Too strict for internal functions
+missing_panics_doc = "allow"  # Too strict for internal functions
+
+[dependencies]
+# Procedural macros
+flayer-macros = { path = "flayer-macros" }
+
+# Binary parsing
+goblin = "0.10"
+
+# AppleScript parsing
+scpt = { path = "crates/scpt" }
+
+# YARA pattern matching
+yara-x = { version = "1.13", features = ["rules-profiling", "native-code-serialization"] }
+
+# Tree-sitter parsers
+tree-sitter = "0.26"
+streaming-iterator = "0.1"
+tree-sitter-bash = "0.25"
+tree-sitter-python = "0.25"
+tree-sitter-javascript = "0.25"
+tree-sitter-typescript = "0.23"
+tree-sitter-go = "0.25"
+tree-sitter-rust = "0.24"
+tree-sitter-java = "0.23"
+tree-sitter-ruby = "0.23"
+tree-sitter-c = "0.24"
+tree-sitter-php = "0.24"
+tree-sitter-perl = "1.1"
+tree-sitter-lua = "0.4"
+tree-sitter-c-sharp = "0.23"
+tree-sitter-powershell = "0.25"
+tree-sitter-swift = "0.7"
+tree-sitter-objc = "3.0"
+tree-sitter-groovy = "0.1"
+tree-sitter-scala = "0.24"
+tree-sitter-zig = "1.1"
+tree-sitter-elixir = "0.3"
+
+# Serialization
+plist = "1.8"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+serde_yaml = "0.9"
+simd-json = "0.14"
+toml = "1.0"
+bincode = { package = "cu-bincode", git = "https://github.com/copper-project/cu-bincode", features = ["serde", "alloc", "std"] }
+
+# CLI
+clap = { version = "4.5", features = ["derive"] }
+indicatif = "0.18"
+colored = "3.1"
+
+# File operations
+walkdir = "2.5"
+zip = { version = "8.1", default-features = true }
+sevenz-rust = "0.6"
+apple-xar = { version = "0.20", default-features = false }
+tar = "0.4"
+flate2 = "1.1"
+bzip2 = "0.6"
+xz2 = "0.1"
+ar = "0.9"
+cpio = "0.4"
+zstd = "0.13"
+unrar = "0.5"
+
+# Parallelization
+rayon = "1.11"
+crossbeam-channel = "0.5"
+
+# Cryptography (for decrypting obfuscated payloads)
+aes = "0.8"
+cbc = { version = "0.1", features = ["alloc"] }
+
+# Utilities
+sha2 = "0.10"
+regex = "1.12"
+memchr = "2.8"
+aho-corasick = "1.1"
+rustc-hash = "2.1"
+dashmap = "6.1"
+lru = "0.12"  # LRU cache for UTF-8 conversion results
+anyhow = "1.0"
+thiserror = "2.0"
+chrono = { version = "0.4", features = ["serde"] }
+hex = "0.4"
+base64 = "0.22"
+roxmltree = "0.21"
+tempfile = "3.25"
+strsim = "0.11"
+dirs = "6.0"
+parking_lot = "0.12"  # For efficient mutexes in memory tracking
+memmap2 = "0.9"  # Memory-mapped file I/O for large files
+smallvec = "1.15"  # Stack-allocated vectors for small collections
+encoding_rs = "0.8"  # Character encoding detection and conversion
+stng = { git = "https://codeberg.org/HEXXDECIMAL/stng", rev = "540183f04870a4fe37d2cd0fa2ffc61ee2051225" }
+
+# Logging (tracing is the modern standard, more powerful than log+env_logger)
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+
+[lib]
+name = "flayer"
+path = "src/lib.rs"
+
+[[bin]]
+name = "flayer"
+path = "src/main.rs"
+
+[dev-dependencies]
+assert_cmd = "2.1"
+dhat = "0.3.3"
+predicates = "3.1"
+proptest = "1.10"
+
+[profile.profiling]
+inherits = "release"
+debug = true
+
+[profile.test]
+opt-level = 1  # Faster test execution
+
+[profile.dev]
+opt-level = 0
+debug = "line-tables-only"  # Faster builds, still debuggable
+
+# Optimize heavy dependencies in debug builds for faster test execution
+[profile.dev.package.yara-x]
+opt-level = 3
+
+[profile.dev.package.regex-syntax]
+opt-level = 3
+
+[profile.dev.package.wasmtime]
+opt-level = 3
+
+[profile.dev.package.cranelift-codegen]
+opt-level = 3
+
+[profile.dev.package.regalloc2]
+opt-level = 3

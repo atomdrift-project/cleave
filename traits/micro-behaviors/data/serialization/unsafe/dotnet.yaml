@@ -1,0 +1,38 @@
+# .NET Serialization Patterns
+
+defaults:
+  for: [all]
+
+traits:
+  - id: json-newtonsoft
+    desc: Newtonsoft.Json serialization library
+    crit: notable
+    conf: 0.85
+    if:
+      type: string
+      substr: "Newtonsoft.Json"
+
+  - id: json-system
+    desc: System.Text.Json serialization
+    crit: notable
+    conf: 0.85
+    if:
+      type: string
+      substr: "System.Text.Json"
+
+  - id: xml-serializer
+    desc: XML serialization capability
+    crit: notable
+    conf: 0.75
+    if:
+      type: string
+      regex: "XmlSerializer|System\\.Xml\\.Serialization"
+
+  - id: binary-formatter
+    desc: Binary serialization (security risk)
+    crit: notable
+    conf: 0.90
+    mbc: "C0026"
+    if:
+      type: string
+      substr: "BinaryFormatter"

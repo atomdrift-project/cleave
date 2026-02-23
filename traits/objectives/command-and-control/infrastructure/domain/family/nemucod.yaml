@@ -1,0 +1,78 @@
+# Nemucod C2 Infrastructure - Domains
+# Hardcoded domains used by Nemucod downloader variants
+
+defaults:
+  for: ["*"]
+  crit: suspicious
+  conf: 1.0
+  mbc: "C0002"
+  attack: "T1071.001"
+
+traits:
+  - id: nemucod-domain-solenapeak
+    desc: Nemucod C2 domain (solenapeak.com)
+    if:
+      type: string
+      substr: "solenapeak.com"
+
+  - id: nemucod-domain-banyapike
+    desc: Nemucod C2 domain (banyapike.net)
+    if:
+      type: string
+      substr: "banyapike.net"
+
+  - id: nemucod-domain-akinave
+    desc: Nemucod C2 domain (akinave.ru)
+    if:
+      type: string
+      substr: "akinave.ru"
+
+  - id: nemucod-domain-vetchsoda
+    desc: Nemucod C2 domain (vetchsoda.org)
+    if:
+      type: string
+      substr: "vetchsoda.org"
+
+  - id: nemucod-domain-nightzax
+    desc: Nemucod C2 domain (nightzax.in)
+    if:
+      type: string
+      substr: "nightzax.in"
+
+  - id: nemucod-domain-itek
+    desc: Nemucod campaign domain (itek-products.co.uk)
+    if:
+      type: string
+      substr: "itek-products.co.uk"
+
+  - id: nemucod-domain-mojapijaca
+    desc: Nemucod campaign domain (mojapijaca.si)
+    if:
+      type: string
+      substr: "mojapijaca.si"
+
+  - id: nemucod-domain-rozette
+    desc: Nemucod campaign domain (rozette.ro)
+    if:
+      type: string
+      substr: "rozette.ro"
+
+  - id: nemucod-domain-haraccountants
+    desc: Nemucod campaign domain (haraccountants.co.uk)
+    if:
+      type: string
+      substr: "haraccountants.co.uk"
+
+composite_rules:
+  - id: nemucod-domain
+    desc: Known Nemucod C2 domain
+    any:
+      - id: nemucod-domain-solenapeak
+      - id: nemucod-domain-banyapike
+      - id: nemucod-domain-akinave
+      - id: nemucod-domain-vetchsoda
+      - id: nemucod-domain-nightzax
+      - id: nemucod-domain-itek
+      - id: nemucod-domain-mojapijaca
+      - id: nemucod-domain-rozette
+      - id: nemucod-domain-haraccountants

@@ -1,0 +1,168 @@
+defaults:
+  for:
+  - all
+traits:
+# icmp-hdr-struct removed - use micro-behaviors/os/bpf/program/icmp::icmphdr-struct instead
+- id: icmp-rcv
+  desc: ICMP receive handler
+  crit: notable
+  conf: 0.6
+  if:
+    type: string
+    substr: icmp_rcv
+- id: magic-0x539
+  desc: Magic value 0x539 (1337)
+  crit: notable
+  conf: 0.5
+  if:
+    type: string
+    substr: '0x539'
+- id: revshell-keyword-upper
+  desc: REVSHELL keyword (uppercase)
+  crit: notable
+  conf: 0.5
+  if:
+    type: string
+    substr: REVSHELL
+- id: revshell-keyword-title
+  desc: Revshell keyword (titlecase)
+  crit: notable
+  conf: 0.5
+  if:
+    type: string
+    substr: Revshell
+- id: icmp-echo-const
+  desc: ICMP_ECHO constant
+  crit: notable
+  conf: 0.6
+  if:
+    type: string
+    substr: ICMP_ECHO
+- id: magic-1337-prefix
+  desc: Magic value 1337 (prefix)
+  crit: notable
+  conf: 0.5
+  if:
+    type: string
+    regex: 1337.{0,4}(port|pass|key|magic)
+- id: magic-1337-suffix
+  desc: Magic value 1337 (suffix)
+  crit: notable
+  conf: 0.5
+  if:
+    type: string
+    regex: (port|pass|key|magic).{0,4}1337
+- id: trigger-keyword-lower-prefix
+  desc: trigger keyword (lowercase prefix)
+  crit: notable
+  conf: 0.3
+  if:
+    type: string
+    regex: (backdoor|payload|shell).{0,2}trigger
+- id: trigger-keyword-lower-suffix
+  desc: trigger keyword (lowercase suffix)
+  crit: notable
+  conf: 0.3
+  if:
+    type: string
+    regex: trigger.{0,2}(backdoor|payload|shell)
+- id: trigger-keyword-upper-prefix
+  desc: TRIGGER keyword (uppercase prefix)
+  crit: notable
+  conf: 0.3
+  if:
+    type: string
+    regex: (BACKDOOR|PAYLOAD|SHELL).{0,2}TRIGGER
+- id: trigger-keyword-upper-suffix
+  desc: TRIGGER keyword (uppercase suffix)
+  crit: notable
+  conf: 0.3
+  if:
+    type: string
+    regex: TRIGGER.{0,2}(BACKDOOR|PAYLOAD|SHELL)
+- id: trigger-keyword-title-prefix
+  desc: Trigger keyword (titlecase prefix)
+  crit: notable
+  conf: 0.3
+  if:
+    type: string
+    regex: (Backdoor|Payload|Shell).{0,2}Trigger
+- id: trigger-keyword-title-suffix
+  desc: Trigger keyword (titlecase suffix)
+  crit: notable
+  conf: 0.3
+  if:
+    type: string
+    regex: Trigger.{0,2}(Backdoor|Payload|Shell)
+- id: activate-keyword-lower
+  desc: activate keyword (lowercase)
+  crit: notable
+  conf: 0.3
+  if:
+    type: string
+    regex: backdoor.{0,2}activate|activate.{0,2}backdoor
+- id: activate-keyword-upper
+  desc: ACTIVATE keyword (uppercase)
+  crit: notable
+  conf: 0.3
+  if:
+    type: string
+    regex: BACKDOOR.{0,2}ACTIVATE|ACTIVATE.{0,2}BACKDOOR
+- id: activate-keyword-title
+  desc: Activate keyword (titlecase)
+  crit: notable
+  conf: 0.3
+  if:
+    type: string
+    regex: Backdoor.{0,2}Activate|Activate.{0,2}Backdoor
+- id: revshell-keyword-lower
+  desc: revshell keyword (lowercase)
+  crit: notable
+  conf: 0.5
+  if:
+    type: string
+    regex: (trigger|activate)[_\-\s]*revshell|revshell[_\-\s]*(trigger|activate)
+composite_rules:
+- id: icmp-context
+  desc: ICMP packet handling context
+  any:
+  - id: micro-behaviors/os/bpf/program/icmp::icmphdr-struct
+  - id: icmp-rcv
+  crit: notable
+- id: magic-values
+  desc: Magic trigger values
+  any:
+  - id: magic-1337-prefix
+  - id: magic-1337-suffix
+  - id: magic-0x539
+  crit: notable
+- id: trigger-keywords
+  desc: C2 trigger activation keywords
+  any:
+  - id: trigger-keyword-lower-prefix
+  - id: trigger-keyword-lower-suffix
+  - id: trigger-keyword-upper-prefix
+  - id: trigger-keyword-upper-suffix
+  - id: trigger-keyword-title-prefix
+  - id: trigger-keyword-title-suffix
+  - id: activate-keyword-lower
+  - id: activate-keyword-upper
+  - id: activate-keyword-title
+  - id: revshell-keyword-lower
+  - id: revshell-keyword-upper
+  - id: revshell-keyword-title
+  - id: icmp-echo-const
+  crit: notable
+- id: icmp-magic-packet
+  desc: ICMP packet inspection for magic
+  crit: suspicious
+  conf: 0.95
+  attack: T1205.001
+  for:
+  - c
+  - go
+  - python
+  all:
+  - id: icmp-context
+  - id: magic-values
+  - id: trigger-keywords

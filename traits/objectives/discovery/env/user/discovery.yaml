@@ -1,0 +1,16 @@
+# User Discovery via Environment Variables
+# ATT&CK: T1033 (System Owner/User Discovery)
+# Detects enumeration of user information through environment variables
+
+defaults:
+  crit: notable
+  conf: 0.8
+  attack: "T1033"
+  mbc: "E1033"
+
+composite_rules:
+  - id: user-info-multiple
+    desc: Discovers user information via environment variables
+    # Matches any user-related env var (USER, USERNAME, HOME, etc.)
+    any:
+      - id: micro-behaviors/os/env/vars/user-info

@@ -1,0 +1,186 @@
+defaults:
+  attack: T1564.003
+  platforms:
+  - macos
+  for:
+  - applescript
+  - shell
+  - python
+  - ruby
+  - perl
+  - javascript
+  - elf
+  - macho
+traits:
+- id: hide-window
+  desc: AppleScript Terminal window hiding
+  crit: suspicious
+  conf: 0.9
+  mbc: E1564.003
+  if:
+    type: string
+    regex: set visible of (the )?front window to false|set visible to false
+- id: window-hide
+  desc: Hide application window
+  crit: notable
+  conf: 0.8
+  if:
+    type: string
+    regex: set visible.{0,10}to false|set visible of.{0,30}window.{0,10}false
+- id: window-minimize
+  desc: Minimize application window
+  crit: notable
+  conf: 0.7
+  if:
+    type: string
+    regex: set miniaturized.{0,10}true|set collapsed.{0,10}true
+- id: app-hide
+  desc: Hide entire application
+  crit: notable
+  conf: 0.75
+  if:
+    type: string
+    regex: set visible of.{0,30}application.{0,10}false|tell application.{0,30}to
+      hide
+- id: frontmost-false
+  desc: Push application to background
+  crit: notable
+  conf: 0.7
+  if:
+    type: string
+    regex: set frontmost.{0,10}false
+- id: tell-application
+  desc: AppleScript tell application block
+  crit: notable
+  conf: 0.7
+  attack: T1059.002
+  if:
+    type: string
+    substr: tell application
+- id: dialog-password
+  desc: display dialog with password
+  crit: notable
+  conf: 0.7
+  attack: T1056.002
+  if:
+    type: string
+    regex: display dialog.{0,50}password
+- id: default-answer-password
+  desc: default answer password prompt
+  crit: notable
+  conf: 0.7
+  attack: T1056.002
+  if:
+    type: string
+    regex: default answer.{0,30}password
+- id: icon-caution-button
+  desc: icon caution with button
+  crit: notable
+  conf: 0.6
+  attack: T1056.002
+  if:
+    type: string
+    regex: with icon caution.{0,30}button
+- id: icon-stop-button
+  desc: icon stop with button
+  crit: notable
+  conf: 0.6
+  attack: T1056.002
+  if:
+    type: string
+    regex: with icon stop.{0,30}button
+- id: icon-note-button
+  desc: icon note with button
+  crit: notable
+  conf: 0.6
+  attack: T1056.002
+  if:
+    type: string
+    regex: with icon note.{0,30}button
+- id: dialog-enter-password
+  desc: display dialog enter password
+  crit: notable
+  conf: 0.7
+  attack: T1056.002
+  if:
+    type: string
+    regex: display dialog.{0,30}enter.{0,20}password
+- id: terminal-hide
+  desc: Hide Terminal window via AppleScript
+  crit: suspicious
+  conf: 0.9
+  if:
+    type: string
+    regex: Terminal.{0,20}visible.{0,10}false
+    case_insensitive: true
+- id: hide-application
+  desc: AppleScript application hiding
+  crit: suspicious
+  conf: 0.85
+  if:
+    type: string
+    regex: set visible.{0,12}false
+composite_rules:
+- id: password-dialog
+  desc: AppleScript password input dialog
+  crit: suspicious
+  conf: 0.95
+  attack: T1056.002
+  mbc: E1056.002
+  any:
+  - id: dialog-password
+  - id: default-answer-password
+- id: fake-system-dialog
+  desc: AppleScript fake system prompt
+  crit: suspicious
+  conf: 0.9
+  attack: T1056.002
+  any:
+  - id: icon-caution-button
+  - id: icon-stop-button
+  - id: icon-note-button
+  - id: dialog-enter-password
+- id: password-phishing
+  desc: AppleScript password phishing attack
+  crit: suspicious
+  conf: 0.95
+  attack: T1056.002
+  for:
+  - shell
+  - applescript
+  all:
+  - id: tell-application
+  - id: password-dialog
+  any:
+  - id: fake-system-dialog
+- id: stealthy-execution
+  desc: Hidden AppleScript execution
+  crit: hostile
+  conf: 0.9
+  for:
+  - shell
+  - applescript
+  all:
+  - id: hide-window
+  - id: micro-behaviors/process/create/script::shell-cmd
+  - id: tell-application
+- id: hidden-terminal-exec
+  desc: Hidden Terminal with shell execution
+  crit: suspicious
+  conf: 0.95
+  for:
+  - applescript
+  all:
+  - id: terminal-hide
+  - id: micro-behaviors/process/create/shell::shell-execution
+- id: hidden-cred-access
+  desc: Hidden AppleScript credential access
+  crit: suspicious
+  conf: 0.95
+  for:
+  - applescript
+  all:
+  - id: terminal-hide
+  any:
+  - id: objectives/credential-access/phishing/lure::hidden-answer
+  - id: objectives/credential-access/validation/check::dscl-authonly

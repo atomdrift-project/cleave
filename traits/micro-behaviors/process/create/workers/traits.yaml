@@ -1,0 +1,15 @@
+# Concurrency Patterns
+# Generic indicators of multi-threaded or concurrent execution
+
+defaults:
+  for: [all]
+
+traits:
+  - id: worker-pool
+    desc: References to worker pools
+    crit: baseline
+    conf: 0.6
+    if:
+      type: string
+      regex: "(worker|thread|goroutine)[_-]?pool"
+      case_insensitive: true

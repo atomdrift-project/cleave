@@ -1,0 +1,423 @@
+# npm Package Metadata Patterns
+# Detects suspicious metadata patterns in package.json
+# These patterns often indicate malicious or typosquatting packages
+
+defaults:
+  for: [package.json]
+
+traits:
+  # === VSCode Extension Detection ===
+  - id: vscode-extension
+    desc: Package is a VSCode extension
+    crit: notable
+    conf: 0.95
+    if:
+      type: kv
+      path: "engines.vscode"
+
+  # === Install Hooks ===
+  - id: preinstall-hook-key
+    desc: Package has preinstall script
+    crit: notable
+    conf: 0.85
+    if:
+      type: kv
+      path: "scripts.preinstall"
+
+  - id: postinstall-hook-key
+    desc: Package has postinstall script
+    crit: notable
+    conf: 0.85
+    if:
+      type: kv
+      path: "scripts.postinstall"
+
+  - id: install-hook-key
+    desc: Package has install script
+    crit: notable
+    conf: 0.85
+    if:
+      type: kv
+      path: "scripts.install"
+
+  # === Install Hook Installs Package ===
+  # This is highly suspicious: legitimate packages declare dependencies in package.json,
+  # they don't install packages via commands in hooks
+  - id: postinstall-runs-npm-install
+    desc: postinstall hook runs npm install
+    crit: suspicious
+    conf: 0.95
+    if:
+      type: kv
+      path: "scripts.postinstall"
+      regex: "\\bnpm\\s+(install|i|add)\\s"
+
+  - id: postinstall-runs-yarn-add
+    desc: postinstall hook runs yarn add
+    crit: suspicious
+    conf: 0.95
+    if:
+      type: kv
+      path: "scripts.postinstall"
+      regex: "\\byarn\\s+(add|global add)\\s"
+
+  - id: postinstall-runs-pnpm-add
+    desc: postinstall hook runs pnpm add
+    crit: suspicious
+    conf: 0.95
+    if:
+      type: kv
+      path: "scripts.postinstall"
+      regex: "\\bpnpm\\s+(add|install)\\s"
+
+  - id: preinstall-runs-npm-install
+    desc: preinstall hook runs npm install
+    crit: suspicious
+    conf: 0.95
+    if:
+      type: kv
+      path: "scripts.preinstall"
+      regex: "\\bnpm\\s+(install|i|add)\\s"
+
+  - id: preinstall-runs-yarn-add
+    desc: preinstall hook runs yarn add
+    crit: suspicious
+    conf: 0.95
+    if:
+      type: kv
+      path: "scripts.preinstall"
+      regex: "\\byarn\\s+(add|global add)\\s"
+
+  - id: preinstall-runs-pnpm-add
+    desc: preinstall hook runs pnpm add
+    crit: suspicious
+    conf: 0.95
+    if:
+      type: kv
+      path: "scripts.preinstall"
+      regex: "\\bpnpm\\s+(add|install)\\s"
+
+  # === Version Patterns ===
+  - id: version-1-0-0
+    desc: Package version is 1.0.0
+    crit: notable
+    conf: 0.6
+    if:
+      type: kv
+      path: "version"
+      exact: "1.0.0"
+
+  # === Repository/Homepage Patterns ===
+  - id: npm-homepage-url
+    desc: Package homepage points to npm
+    crit: notable
+    conf: 0.75
+    if:
+      type: kv
+      path: "homepage"
+      substr: "npmjs.com"
+
+  - id: npm-repo-url
+    desc: Repository URL points to npm
+    crit: notable
+    conf: 0.75
+    if:
+      type: kv
+      path: "repository.url"
+      substr: "npmjs.com"
+
+  - id: repository-key
+    desc: Package has repository field
+    crit: notable
+    conf: 0.9
+    if:
+      type: kv
+      path: "repository"
+
+  - id: has-bugs-url
+    desc: Package has bugs URL
+    crit: notable
+    conf: 0.5
+    if:
+      type: kv
+      path: "bugs.url"
+
+  - id: has-homepage
+    desc: Package has homepage URL
+    crit: notable
+    conf: 0.5
+    if:
+      type: kv
+      path: "homepage"
+
+  - id: repo-url-git-host
+    desc: Repository on GitHub/GitLab/Bitbucket
+    crit: notable
+    conf: 0.9
+    if:
+      type: kv
+      path: "repository.url"
+      regex: "github\\.com|gitlab\\.com|bitbucket\\.org"
+
+  # === Repository Format Patterns ===
+
+  # GitHub shorthand: "User/repo-name" (no full URL)
+  - id: repo-shorthand-format
+    desc: Repository uses GitHub shorthand format
+    crit: notable
+    conf: 0.8
+    if:
+      type: kv
+      path: "repository"
+      regex: "^[A-Za-z0-9_.-]+/[a-z0-9][a-z0-9._-]*$"
+
+  # Package name is a hyphenated multi-word name
+  - id: name-hyphenated-multiword
+    desc: Package name has hyphenated multi-word format
+    crit: notable
+    conf: 0.7
+    if:
+      type: kv
+      path: "name"
+      regex: "^[a-z][a-z0-9]{0,60}(-[a-z][a-z0-9]{0,60}){1,8}$"
+
+  # Package version suggests maturity (>= 0.2.0 or >= 1.0.0)
+  - id: version-mature
+    desc: Package version suggests maturity
+    crit: notable
+    conf: 0.6
+    if:
+      type: kv
+      path: "version"
+      regex: "^0\\.[2-9]\\.|^[1-9]"
+
+  - id: version-inflated
+    desc: Suspiciously high package version
+    crit: suspicious
+    conf: 0.8
+    if:
+      type: kv
+      path: "version"
+      regex: "^9[0-9]\\.[0-9]+\\.[0-9]+"
+
+  # === Description Patterns ===
+  - id: desc-lightweight
+    desc: Description mentions lightweight
+    crit: notable
+    conf: 0.5
+    if:
+      type: kv
+      path: "description"
+      substr: "lightweight"
+      case_insensitive: true
+
+  - id: desc-modern-web-apps
+    desc: Description mentions modern web apps
+    crit: notable
+    conf: 0.5
+    if:
+      type: kv
+      path: "description"
+      regex: "modern.{0,100}(web|app)"
+      case_insensitive: true
+
+  - id: desc-universal
+    desc: Description mentions universal
+    crit: notable
+    conf: 0.5
+    if:
+      type: kv
+      path: "description"
+      substr: "universal"
+      case_insensitive: true
+
+  - id: desc-powerful-library
+    desc: Description mentions powerful library
+    crit: notable
+    conf: 0.5
+    if:
+      type: kv
+      path: "description"
+      regex: "powerful.{0,100}(library|framework)"
+      case_insensitive: true
+
+  - id: desc-simple
+    desc: Description contains "simple"
+    crit: notable
+    conf: 0.5
+    if:
+      type: kv
+      path: "description"
+      substr: "simple"
+      case_insensitive: true
+
+  - id: desc-easy
+    desc: Description contains "easy"
+    crit: notable
+    conf: 0.5
+    if:
+      type: kv
+      path: "description"
+      substr: "easy"
+      case_insensitive: true
+
+  # === Security Research Patterns ===
+  - id: desc-whitehat-research
+    desc: Description claims to be for security research/whitehat
+    crit: notable
+    conf: 0.8
+    if:
+      type: kv
+      path: "description"
+      regex: "whitehat|bug.?bounty|security.?research|pentest"
+      case_insensitive: true
+
+# === Composite Rules ===
+composite_rules:
+  # Install hook group
+  - id: install-hooks
+    desc: Package has install hook
+    crit: notable
+    conf: 0.6
+    any:
+      - id: preinstall-hook-key
+      - id: postinstall-hook-key
+      - id: install-hook-key
+
+  # Install hook that installs packages (highly suspicious)
+  # Legitimate packages declare dependencies in package.json - running install commands
+  # in hooks is a supply chain attack indicator
+  - id: install-hook-runs-pkg-install
+    desc: Install hook runs npm/yarn/pnpm install command
+    crit: hostile
+    conf: 0.98
+    attack: "T1195.002"
+    any:
+      - id: postinstall-runs-npm-install
+      - id: postinstall-runs-yarn-add
+      - id: postinstall-runs-pnpm-add
+      - id: preinstall-runs-npm-install
+      - id: preinstall-runs-yarn-add
+      - id: preinstall-runs-pnpm-add
+
+  # Version 1.0.0 with install hooks
+  - id: version-1-0-0-with-hooks
+    desc: Version 1.0.0 with install hooks
+    crit: suspicious
+    conf: 0.75
+    all:
+      - id: version-1-0-0
+      - id: install-hooks
+
+  # npm URL as homepage/repository
+  - id: npm-as-homepage
+    desc: Package uses npmjs.com as homepage
+    crit: notable
+    conf: 0.8
+    any:
+      - id: npm-homepage-url
+      - id: npm-repo-url
+
+  # Repository presence check
+  - id: npm-has-repository
+    desc: Package has repository URL
+    crit: notable
+    conf: 0.5
+    any:
+      - id: repository-key
+      - id: repo-url-git-host
+
+  # Missing repository with install hooks
+  - id: no-repo-with-hooks
+    desc: Package has install hooks but no repo
+    crit: suspicious
+    conf: 0.85
+    all:
+      - id: install-hooks
+    none:
+      - id: npm-has-repository
+      - id: metadata/quality/npm/pkg-meta::has-bin-field
+
+  - id: desc-simple-easy
+    desc: Description mentions simple/easy
+    crit: notable
+    conf: 0.5
+    any:
+      - id: desc-simple
+      - id: desc-easy
+
+  # Generic descriptions group
+  - id: generic-descriptions
+    desc: Package has generic marketing description
+    crit: notable
+    conf: 0.5
+    needs: 2
+    any:
+      - id: desc-lightweight
+      - id: desc-modern-web-apps
+      - id: desc-universal
+      - id: desc-powerful-library
+      - id: desc-simple-easy
+
+  # Generic description with hooks
+  - id: generic-desc-with-hooks
+    desc: Generic description with install hooks
+    crit: suspicious
+    conf: 0.8
+    all:
+      - id: generic-descriptions
+      - id: install-hooks
+
+  # === Cloned/Copied Package Identity ===
+  - id: cloned-package-identity
+    desc: Package with shorthand repo but missing bugs/homepage (possible copy)
+    crit: notable
+    conf: 0.75
+    attack: "T1195.002"
+    all:
+      - id: repo-shorthand-format
+      - id: name-hyphenated-multiword
+    none:
+      - id: has-bugs-url
+      - id: has-homepage
+      - id: metadata/quality/npm/pkg-meta::has-files-field
+      - id: metadata/quality/npm/pkg-meta::has-engines
+      - id: metadata/quality/npm/pkg-meta::has-contributors
+
+  - id: mature-cloned-package
+    desc: Mature version package with incomplete copied metadata
+    crit: notable
+    conf: 0.85
+    attack: "T1195.002"
+    mbc: "F0004"
+    all:
+      - id: version-mature
+      - id: repo-shorthand-format
+      - id: name-hyphenated-multiword
+    none:
+      - id: has-bugs-url
+      - id: has-homepage
+      - id: metadata/quality/npm/pkg-meta::has-files-field
+      - id: metadata/quality/npm/pkg-meta::has-engines
+      - id: metadata/quality/npm/pkg-meta::has-contributors
+
+  # === Fake Security Research ===
+  - id: fake-security-research
+    desc: Package claims security research but runs install hooks
+    crit: suspicious
+    conf: 0.9
+    attack: "T1195.002"
+    all:
+      - id: desc-whitehat-research
+      - id: install-hooks
+
+  - id: dependency-confusion-candidate
+    desc: Possible dependency confusion attack package
+    crit: hostile
+    conf: 0.9
+    attack: "T1195.002"
+    all:
+      - id: version-mature
+      - id: install-hooks
+    none:
+      - id: npm-has-repository

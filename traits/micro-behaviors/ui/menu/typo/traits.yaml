@@ -1,0 +1,31 @@
+defaults:
+  for: [all]
+
+traits:
+  - id: fackbook-action
+    desc: "FackBook action selector (Facebook typo)"
+    crit: suspicious
+    if:
+      type: raw
+      substr: "ClickFackBookAction"
+
+  - id: trag-slider-action
+    desc: "Trag slider action selector (Drag typo)"
+    crit: suspicious
+    if:
+      type: raw
+      substr: "TragSafePointSliderAction"
+
+  - id: contine-demo-action
+    desc: "Contine demo action selector (Continue typo)"
+    crit: suspicious
+    if:
+      type: raw
+      substr: "ClickContineDemo"
+
+  - id: prefrence-window-action
+    desc: "Prefrence window action selector (Preference typo)"
+    crit: suspicious
+    if:
+      type: raw
+      substr: "ClosePrefrenceWindow"

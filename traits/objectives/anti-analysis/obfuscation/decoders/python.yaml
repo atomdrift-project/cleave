@@ -1,0 +1,30 @@
+# Python Decoders and Obfuscation Tools
+# Detects scripts used to decode malware payloads or strings
+# ATT&CK: T1027 (Obfuscated Files or Information)
+
+composite_rules:
+  - id: python-xor-string-decoder
+    desc: "Python script implementing XOR string decryption"
+    crit: suspicious
+    conf: 0.95
+    attack: "T1027"
+    for: [python]
+    all:
+      - id: objectives/anti-static/obfuscation/scripting::python-xor-byte-loop
+      - id: objectives/anti-static/obfuscation/scripting::python-printable-char-check
+    any:
+      - id: objectives/anti-static/obfuscation/scripting::python-sliding-key-loop
+      - id: micro-behaviors/data/encode/xor::xor-key-null-pattern
+
+  - id: python-bruteforce-string-dumper
+    desc: "Python script that brute-forces XOR keys to dump strings"
+    crit: suspicious
+    conf: 1.0
+    attack: "T1027"
+    for: [python]
+    all:
+      - id: objectives/anti-static/obfuscation/scripting::python-rolling-xor-loop
+      - id: micro-behaviors/io/console/logging::hacker-tool-log-marker
+    any:
+      - id: micro-behaviors/data/analysis/string-quality::alphanumeric-ratio-check
+      - id: objectives/anti-static/obfuscation/scripting::python-printable-char-check

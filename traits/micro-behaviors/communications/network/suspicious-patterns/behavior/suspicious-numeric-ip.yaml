@@ -1,0 +1,11 @@
+defaults:
+  for: [all]
+
+traits:
+  - id: suspicious-numeric-ip
+    desc: Suspicious numeric string or obfuscated IP.
+    crit: suspicious
+    conf: 0.8
+    if:
+      type: string
+      exact: "9087654356"

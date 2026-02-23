@@ -1,0 +1,15 @@
+defaults:
+  crit: suspicious
+  conf: 0.8
+  for:
+  - javascript
+  - python
+  - shell
+traits:
+- id: fake-error-document-corrupted
+  desc: Fake 'document corrupted' error message
+  mbc: B0011.001
+  if:
+    type: encoded
+    regex: (?i)document[^'"]{1,50}corrupted|document is corrupted
+composite_rules: []

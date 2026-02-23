@@ -1,0 +1,48 @@
+# Credential Dumping - Unix
+# MBC: E1003 (OS Credential Dumping)
+# ATT&CK: T1003 (OS Credential Dumping)
+#
+# NOTE: Basic user lookup functions (getpwnam, getpwuid) are defined in
+# objectives/discovery/user/traits.yaml as they're legitimate user discovery.
+# This file focuses on actual credential/shadow file access.
+
+traits:
+  # getpwnam/getpwuid removed - they're legitimate user lookup functions
+  # used by countless system utilities. See objectives/discovery/user/traits.yaml.
+
+  - id: getspnam
+    desc: Read shadow password file (getspnam)
+    crit: notable
+    conf: 0.8
+    mbc: "E1003.008"
+    attack: "T1003.008"
+    platforms: [linux, unix]
+    for: [elf]
+    if:
+      type: symbol
+      regex: "getspnam"
+
+composite_rules:
+  # NOTE: For ELF binaries, shadow file access is common in system utilities
+  # Real credential dumping detection requires additional context
+  # shadow file composite
+  - id: shadow-file
+    desc: Access to system shadow password
+    crit: notable
+    conf: 0.9
+    attack: "T1003.008"
+    any:
+      - id: micro-behaviors/os/privilege/paths::etc-shadow
+      - id: micro-behaviors/fs/path/config/groups::etc-gshadow
+
+  - id: shadow-extraction
+    desc: Shadow file credential extraction
+    crit: suspicious
+    conf: 0.9
+    attack: "T1003.008"
+    mbc: "E1003.008"
+    platforms: [linux, unix]
+    for: [elf]
+    all:
+      - id: getspnam
+      - id: shadow-file

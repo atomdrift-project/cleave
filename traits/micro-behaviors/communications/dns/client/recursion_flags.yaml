@@ -1,0 +1,17 @@
+defaults:
+  for: [all]
+
+traits:
+  - id: recursion-desired-set
+    desc: Sets DNS Recursion Desired (RD) bit (common
+    crit: suspicious
+    if:
+      type: raw
+      regex: '->rd\s*=\s*1'
+
+  - id: recursion-available-check
+    desc: Checks DNS Recursion Available (RA) bit (common
+    crit: suspicious
+    if:
+      type: raw
+      regex: '->ra\s*==\s*1'

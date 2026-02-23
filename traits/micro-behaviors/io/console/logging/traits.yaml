@@ -1,0 +1,14 @@
+# Console Logging Patterns
+# Detects common logging patterns used in tools and exploits
+
+defaults:
+  for: [all]
+
+traits:
+  - id: hacker-tool-log-marker
+    desc: "Hacker tool logging marker ([*], [+], ...)"
+    crit: notable
+    conf: 0.8
+    if:
+      type: string
+      regex: '(?m)^\[[*+\-!]\]\s'

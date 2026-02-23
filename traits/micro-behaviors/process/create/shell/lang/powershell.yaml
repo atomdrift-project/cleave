@@ -1,0 +1,35 @@
+# PowerShell Script Engine Patterns
+# Detects markers for PowerShell execution
+
+defaults:
+  for: [all]
+  crit: notable
+  conf: 0.7
+
+traits:
+  - id: powershell-keyword
+    desc: powershell keyword
+    if:
+      type: string
+      word: "powershell"
+      case_insensitive: true
+
+  - id: invoke-prefix
+    desc: Invoke- prefix for cmdlets
+    if:
+      type: string
+      regex: '\bInvoke-[A-Z][a-zA-Z]+'
+
+  - id: interaction-shell
+    desc: Microsoft.VisualBasic.Interaction.Shell
+    if:
+      type: string
+      substr: "Interaction.Shell"
+
+composite_rules:
+  - id: powershell-engine-markers
+    desc: PowerShell engine identification markers
+    any:
+      - id: powershell-keyword
+      - id: invoke-prefix
+      - id: interaction-shell

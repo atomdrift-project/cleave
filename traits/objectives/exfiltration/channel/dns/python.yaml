@@ -1,0 +1,32 @@
+# DNS-based Data Exfiltration - Python
+# GuardDog-inspired: Combines DNS lookup capability with sensitive data access
+# ATT&CK: T1048.003 (Exfiltration Over Alternative Protocol - DNS)
+
+composite_rules:
+  # GuardDog: DNS exfiltration pattern
+  - id: dns-exfiltration
+    desc: DNS-based data exfiltration pattern
+    crit: hostile
+    conf: 0.95
+    mbc: "B0030"
+    attack: "T1048.003"
+    for: [python]
+    all:
+      - id: micro-behaviors/communications/dns/lookup::dns-lookup-capability
+    any:
+      # Sensitive data sources
+      - id: micro-behaviors/os/env/access::os-environ-symbol
+      - id: objectives/credential-access/environment/secret-access::aws-credentials-access
+      - id: micro-behaviors/fs/path/sensitive/credentials
+      - id: micro-behaviors/fs/path/sensitive/browser
+
+  # Variant: DNS + any environment access
+  - id: dns-env-exfiltration
+    desc: DNS queries with environment access
+    crit: suspicious
+    conf: 0.90
+    attack: "T1048.003"
+    for: [python]
+    all:
+      - id: micro-behaviors/communications/dns/lookup::dns-lookup-capability
+      - id: micro-behaviors/os/env/access

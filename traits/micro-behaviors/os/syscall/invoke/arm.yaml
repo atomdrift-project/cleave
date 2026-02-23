@@ -1,0 +1,22 @@
+# ARM Direct Execution Syscalls
+# Detects hand-written ARM assembly making direct I/O syscalls
+# ATT&CK: T1059 (Command and Scripting Interpreter)
+
+defaults:
+  for: [elf]
+  crit: notable
+
+traits:
+  - id: svc-read
+    desc: "ARM direct read(2) syscall"
+    if:
+      type: hex
+      # mov r7, 3 (read); svc 0
+      pattern: "03 70 a0 e3 00 00 00 ef"
+
+  - id: svc-write
+    desc: "ARM direct write(2) syscall"
+    if:
+      type: hex
+      # mov r7, 4 (write); svc 0
+      pattern: "04 70 a0 e3 00 00 00 ef"

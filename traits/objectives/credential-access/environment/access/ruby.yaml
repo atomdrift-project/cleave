@@ -1,0 +1,64 @@
+---
+# Ruby Environment Variable Exfiltration
+# Detects theft of environment variables and secrets
+# ATT&CK: T1018 (Remote System Discovery), T1552 (Unsecured Credentials)
+
+defaults:
+  for: [ruby]
+  platforms: [all]
+
+traits:
+  # === Environment to Hash ===
+  - id: env-to-hash
+    desc: ENV to hash conversion
+    crit: suspicious
+    conf: 0.85
+    attack: "T1018"
+    if:
+      type: string
+      regex: 'ENV\.to_hash|ENV\.to_h'
+
+  # === Environment Serialization ===
+  - id: env-serialization
+    desc: Environment variable serialization
+    crit: suspicious
+    conf: 0.80
+    attack: "T1018"
+    if:
+      type: string
+      regex: "ENV.{0,50}to_yaml|ENV.{0,50}to_json|ENV.{0,50}inspect"
+
+  # === Environment Bracket Access ===
+  - id: env-bracket-access
+    desc: ENV bracket access
+    crit: notable
+    conf: 0.65
+    attack: "T1018"
+    if:
+      type: string
+      regex: 'ENV\[.{0,50}URL_HOST|ENV\[.{0,50}HOST'
+
+  # === Host Environment Check ===
+  - id: host-env-check
+    desc: Host environment validation
+    crit: notable
+    conf: 0.70
+    attack: "T1016"
+    if:
+      type: string
+      regex: 'ENV.{0,50}localhost|ENV.{0,50}include\?|ENV\[.{0,50}\]\[0\]'
+
+composite_rules:
+  # === Environment Exfiltration ===
+  - id: ruby-env-exfiltration
+    desc: Environment variable exfiltration
+    crit: suspicious
+    conf: 0.88
+    attack: "T1018"
+    needs: 2
+    any:
+      - id: env-to-hash
+      - id: env-serialization
+      - id: env-bracket-access
+      - id: host-env-check
+      - id: objectives/command-and-control/advanced-backdoor/script::faraday-http

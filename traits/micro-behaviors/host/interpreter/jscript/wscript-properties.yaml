@@ -1,0 +1,34 @@
+traits:
+  - id: wscript-lister-assignment
+    desc: Assignment to WScript.lister (Nemucod indicator)
+    crit: suspicious
+    for: [javascript]
+    if:
+      type: ast
+      language: javascript
+      query: |
+        (assignment_expression
+          left: (member_expression
+            object: (identifier) @obj
+            property: (property_identifier) @prop
+          )
+          (#eq? @obj "WScript")
+          (#eq? @prop "lister")
+        )
+
+  - id: wscript-invalid-property-assignment
+    desc: Assignment to non-standard WScript property (anti-analysis/obfuscation)
+    crit: suspicious
+    for: [javascript]
+    if:
+      type: ast
+      language: javascript
+      query: |
+        (assignment_expression
+          left: (member_expression
+            object: (identifier) @obj
+            property: (property_identifier) @prop
+          )
+          (#eq? @obj "WScript")
+          (#match? @prop "^(lister|test|check|data|val|str|len|off|pos|idx|cnt|key|temp|tmp)$")
+        )

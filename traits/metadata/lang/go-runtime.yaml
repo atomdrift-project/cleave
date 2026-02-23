@@ -1,0 +1,14 @@
+# Go Runtime
+# Go runtime function references (baseline markers)
+
+defaults:
+  for: [elf, macho, pe]
+
+traits:
+  - id: go-runtime-marker
+    desc: Go runtime markers
+    crit: baseline
+    conf: 0.5
+    if:
+      type: symbol
+      regex: 'runtime\.(main|goexit|mstart)'

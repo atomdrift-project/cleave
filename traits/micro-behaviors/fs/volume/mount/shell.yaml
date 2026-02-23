@@ -1,0 +1,58 @@
+# Mount Filesystem (shell command detection)
+# MBC: E1222 (File Permission Modification)
+# ATT&CK: T1222
+
+defaults:
+  for: [shell]
+  mbc: E1222
+  attack: T1222
+
+traits:
+  - id: mount-keyword
+    desc: Mount command keyword
+    crit: baseline
+    conf: 0.6
+    if:
+      type: string
+      word: "mount"
+
+  - id: fstab-file
+    desc: fstab file reference (filesystem table)
+    crit: notable
+    conf: 0.7
+    mbc: E1222
+    attack: T1222
+    if:
+      type: string
+      word: "fstab"
+
+  - id: remount-keyword
+    desc: remount keyword (remount filesystem)
+    crit: notable
+    conf: 0.7
+    mbc: E1222
+    attack: T1222
+    if:
+      type: string
+      word: "remount"
+
+composite_rules:
+  - id: mount-context
+    desc: Mount-related keywords (options, fstab, remount)
+    crit: notable
+    conf: 0.6
+    mbc: E1222
+    attack: T1222
+    any:
+      - id: fstab-file
+      - id: remount-keyword
+
+  - id: mount-command
+    desc: Mount file systems with command
+    crit: notable
+    conf: 0.66
+    mbc: E1222
+    attack: T1222
+    all:
+      - id: mount-keyword
+      - id: mount-context

@@ -1,0 +1,26 @@
+defaults:
+  for: [all]
+
+traits:
+  - id: image-extension-a
+    desc: Image file extension family A
+    crit: baseline
+    conf: 1.0
+    if:
+      type: basename
+      regex: '\.(png|jpe?g|gif|bmp)$'
+  - id: image-extension-b
+    desc: Image file extension family B
+    crit: baseline
+    conf: 1.0
+    if:
+      type: basename
+      regex: '\.(ico|svg|tiff|webp)$'
+composite_rules:
+  - id: image-extension
+    desc: Image file extension
+    crit: baseline
+    conf: 1.0
+    any:
+      - id: image-extension-a
+      - id: image-extension-b

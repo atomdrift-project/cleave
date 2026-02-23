@@ -1,0 +1,84 @@
+composite_rules:
+- id: extconf-missing-create-makefile
+  desc: extconf.rb script missing create_makefile call (suspicious/dropper)
+  crit: suspicious
+  conf: 0.95
+  all:
+    - id: objectives/lateral-movement/supply-chain/rubygems::extconf-file
+  none:
+    - id: objectives/execution/interpreter/script/extconf::calls-create-makefile
+
+- id: extconf-file-manipulation
+  desc: extconf.rb performs file manipulation (suspicious in build scripts)
+  crit: suspicious
+  conf: 0.9
+  all:
+    - id: objectives/lateral-movement/supply-chain/rubygems::extconf-file
+  any:
+    - id: objectives/execution/dropper/script::ruby-ast-file-rename
+    - id: micro-behaviors/fs/write/file::ruby-file-delete
+    - id: micro-behaviors/fs/file/rename::ruby-rename
+
+- id: suspicious-extension-path-1
+  desc: Media file in native extension directory (img/bmp)
+  crit: suspicious
+  conf: 0.9
+  any:
+    - id: suspicious-extension-path-img
+    - id: suspicious-extension-path-bmp
+
+- id: suspicious-extension-path-2
+  desc: Media file in native extension directory (ico/webp/tiff)
+  crit: suspicious
+  conf: 0.9
+  any:
+    - id: suspicious-extension-path-ico
+    - id: suspicious-extension-path-webp
+    - id: suspicious-extension-path-tiff
+
+- id: suspicious-extension-path
+  desc: Media file in native extension directory
+  crit: suspicious
+  conf: 0.9
+  any:
+    - id: suspicious-extension-path-1
+    - id: suspicious-extension-path-2
+
+defaults:
+  for: [all]
+
+traits:
+- id: suspicious-extension-path-img
+  desc: Image file in native extension
+  crit: notable
+  conf: 0.7
+  if: { type: raw, regex: "ext/.{0,100}\\.(png|jpg|jpeg|gif)" }
+- id: suspicious-extension-path-bmp
+  desc: BMP file in native extension
+  crit: notable
+  conf: 0.7
+  if: { type: raw, regex: "ext/.{0,100}\\.bmp" }
+- id: suspicious-extension-path-ico
+  desc: ICO/SVG file in native extension
+  crit: notable
+  conf: 0.7
+  if: { type: raw, regex: "ext/.{0,100}\\.(ico|svg)" }
+- id: suspicious-extension-path-webp
+  desc: WEBP file in native extension
+  crit: notable
+  conf: 0.7
+  if: { type: raw, regex: "ext/.{0,100}\\.webp" }
+- id: suspicious-extension-path-tiff
+  desc: TIFF file in native extension
+  crit: notable
+  conf: 0.7
+  if: { type: raw, regex: "ext/.{0,100}\\.(tiff|tif)" }
+
+- id: deeply-nested-extension-path
+  desc: Deeply nested directory in native extension
+  crit: notable
+  conf: 0.8
+  for: [ruby]
+  if:
+    type: string
+    regex: "ext/[^/]{1,120}/[^/]{1,120}/[^/]{1,120}/"

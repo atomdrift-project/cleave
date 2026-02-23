@@ -1,0 +1,38 @@
+# Remote Shell Detection
+# MBC: OB0004 (Command & Control) → B0030 (C2 Communication)
+# ATT&CK: T1059 (Command and Scripting Interpreter)
+# NOTE: Socket connect/bind/listen are defined in communications/socket/*/unix.yaml
+
+traits:
+  # Python-specific reverse shell patterns
+  - id: python-socket-connect
+    desc: Python socket connection
+    crit: notable
+    conf: 0.8
+    for: [python]
+    if:
+      type: ast
+      kind: call
+      exact: ".connect("
+
+  - id: python-dup2
+    desc: Python file descriptor duplication (os.dup2)
+    crit: notable
+    conf: 0.85
+    for: [python]
+    if:
+      type: ast
+      kind: call
+      exact: "os.dup2"
+
+  - id: python-pty-spawn
+    desc: Python PTY spawn (interactive shell)
+    crit: suspicious
+    conf: 0.9
+    for: [python]
+    if:
+      type: ast
+      kind: call
+      exact: "pty.spawn"
+
+

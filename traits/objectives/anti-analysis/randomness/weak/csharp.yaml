@@ -1,0 +1,14 @@
+# C# Randomness Traits (often used for evasion)
+# MBC: B0009 - Probabilistic Execution
+
+traits:
+  - id: next
+    desc: Random number generation (potential probabilistic
+    crit: notable
+    mbc: "B0009"
+    conf: 0.7
+    for: [csharp]
+    if:
+      type: ast
+      kind: call
+      exact: ".Next("

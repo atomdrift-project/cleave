@@ -1,0 +1,68 @@
+# Database Connection - POOLING
+
+defaults:
+  for: [all]
+
+traits:
+  # === Connection pooling micro-behaviors ===
+  - id: pgxpool
+    desc: pgxpool connection pool
+    crit: notable
+    conf: 0.85
+    if:
+      type: string
+      substr: "pgxpool"
+
+  - id: pool-pool
+    desc: pool.Pool type
+    crit: notable
+    conf: 0.85
+    if:
+      type: string
+      substr: "pool.Pool"
+
+  - id: max-open-conns
+    desc: MaxOpenConns setting
+    crit: notable
+    conf: 0.85
+    if:
+      type: string
+      substr: "MaxOpenConns"
+
+  - id: max-idle-conns
+    desc: MaxIdleConns setting
+    crit: notable
+    conf: 0.85
+    if:
+      type: string
+      substr: "MaxIdleConns"
+
+  - id: connection-pool-string
+    desc: connection_pool string
+    crit: notable
+    conf: 0.85
+    if:
+      type: string
+      substr: "connection_pool"
+
+  - id: hikaricp
+    desc: HikariCP pool
+    crit: notable
+    conf: 0.85
+    if:
+      type: string
+      substr: "HikariCP"
+
+composite_rules:
+  # Connection pool composite (migrated from YARA)
+  - id: connection-pool
+    desc: Database connection pooling
+    crit: notable
+    conf: 0.85
+    any:
+      - id: pgxpool
+      - id: pool-pool
+      - id: max-open-conns
+      - id: max-idle-conns
+      - id: connection-pool-string
+      - id: hikaricp

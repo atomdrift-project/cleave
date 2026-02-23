@@ -1,0 +1,327 @@
+defaults:
+  for: [package.json]
+
+traits:
+- id: npm-no-name-field
+  desc: Package.json has no name field (sub-package)
+  crit: notable
+  conf: 0.9
+  for:
+  - package.json
+  if:
+    type: kv
+    path: "name"
+    exists: false
+- id: has-index-entry
+  desc: Package has standard index entry
+  crit: notable
+  conf: 0.8
+  for:
+  - package.json
+  if:
+    type: string
+    regex: '"main":\s*"(index\.js|dist/|lib/|src/)'
+- id: has-types-entry
+  desc: Package has TypeScript types entry
+  crit: notable
+  conf: 0.9
+  for:
+  - package.json
+  if:
+    type: string
+    regex: '"types":\s*"|"typings":\s*"'
+- id: has-side-effects
+  desc: Package declares sideEffects
+  crit: notable
+  conf: 0.85
+  for:
+  - package.json
+  if:
+    type: string
+    regex: '"sideEffects":\s*(false|\[)'
+- id: has-browserslist
+  desc: Package has browser target configuration
+  crit: notable
+  conf: 0.8
+  for:
+  - package.json
+  if:
+    type: string
+    substr: '"browserslist":'
+- id: pkg-main-field
+  desc: '"main": field in package.json'
+  crit: notable
+  conf: 0.6
+  for:
+  - package.json
+  if:
+    type: string
+    substr: '"main":'
+- id: pkg-types-field
+  desc: '"types": field in package.json'
+  crit: notable
+  conf: 0.6
+  for:
+  - package.json
+  if:
+    type: string
+    substr: '"types":'
+- id: has-author-email
+  desc: Package has author with email
+  crit: notable
+  conf: 0.85
+  for:
+  - package.json
+  if:
+    type: string
+    regex: '"author":\\s*"[^"]{0,120}@[^"]{0,120}"|"email":\\s*"[^"]{0,120}@'
+- id: has-keywords
+  desc: Package has keywords array
+  crit: notable
+  conf: 0.75
+  for:
+  - package.json
+  if:
+    type: kv
+    path: keywords
+- id: has-engines
+  desc: Package specifies Node.js engine version
+  crit: notable
+  conf: 0.8
+  for:
+  - package.json
+  if:
+    type: kv
+    path: engines.node
+- id: has-funding
+  desc: Package has funding information
+  crit: notable
+  conf: 0.85
+  for:
+  - package.json
+  if:
+    type: string
+    substr: '"funding":'
+- id: has-bugs-url-field
+  desc: Package has bugs/issues URL
+  crit: notable
+  conf: 0.8
+  for:
+  - package.json
+  if:
+    type: kv
+    path: bugs
+- id: has-homepage-field
+  desc: Package has homepage URL
+  crit: notable
+  conf: 0.8
+  for:
+  - package.json
+  if:
+    type: string
+    regex: '"homepage":\\s*"https?://'
+- id: has-contributors
+  desc: Package has contributors list
+  crit: notable
+  conf: 0.85
+  for:
+  - package.json
+  if:
+    type: string
+    substr: '"contributors":'
+- id: has-workspaces
+  desc: Package uses workspaces (monorepo pattern)
+  crit: notable
+  conf: 0.9
+  for:
+  - package.json
+  if:
+    type: string
+    substr: '"workspaces":'
+- id: is-private
+  desc: Package marked as private
+  crit: notable
+  conf: 0.8
+  for:
+  - package.json
+  if:
+    type: string
+    substr: '"private": true'
+- id: conventional-version-base
+  desc: Uses standard version format
+  if:
+    type: string
+    regex: '"version":\s*"[0-9]+\.[0-9]+\.[0-9]+"'
+- id: conventional-version-pre-1
+  desc: Uses pre-release version format (alpha/beta/rc)
+  if:
+    type: string
+    regex: '"version":\s*"[0-9]+\.[0-9]+\.[0-9]+-(alpha|beta|rc)'
+- id: conventional-version-pre-2
+  desc: Uses pre-release version format (next/canary)
+  if:
+    type: string
+    regex: '"version":\s*"[0-9]+\.[0-9]+\.[0-9]+-(next|canary)'
+- id: mature-version
+  desc: Package has mature version number
+  crit: notable
+  conf: 0.7
+  for:
+  - package.json
+  if:
+    type: string
+    regex: '"version":\\s*"[1-9]\\.[1-9]|"version":\\s*"[0-9]+\\.[1-9]+\\.[1-9]'
+- id: has-description
+  desc: Package has meaningful description
+  crit: notable
+  conf: 0.75
+  for:
+  - package.json
+  if:
+    type: string
+    regex: '"description":\\s*"[^"]{20,}"'
+- id: has-bin-field
+  desc: Package provides CLI binary
+  crit: notable
+  conf: 0.8
+  for:
+  - package.json
+  if:
+    type: kv
+    path: bin
+- id: peer-range
+  desc: Uses version ranges for peer dependencies
+  crit: notable
+  conf: 0.85
+  for:
+  - package.json
+  if:
+    type: string
+    regex: '"peerDependencies":\s*\{[^}]{0,120}"[>=<^~]'
+- id: has-optional-deps
+  desc: Package has optional dependencies
+  crit: notable
+  conf: 0.8
+  for:
+  - package.json
+  if:
+    type: string
+    substr: '"optionalDependencies":'
+- id: has-platform-restrictions
+  desc: Package specifies platform restrictions
+  crit: notable
+  conf: 0.85
+  for:
+  - package.json
+  if:
+    type: string
+    regex: '"cpu":\s*\[|"os":\s*\['
+- id: has-peer-deps
+  desc: Package has peerDependencies (framework plugin)
+  crit: notable
+  conf: 0.85
+  for:
+  - package.json
+  if:
+    type: string
+    substr: '"peerDependencies":'
+- id: has-dev-deps
+  desc: Package has devDependencies
+  crit: notable
+  conf: 0.8
+  for:
+  - package.json
+  if:
+    type: string
+    substr: '"devDependencies":'
+- id: pkg-skeleton-small
+  desc: Tiny package.json (metadata only)
+  crit: notable
+  conf: 0.7
+  for:
+  - package.json
+  size_max: 2048
+- id: has-files-field
+  desc: Package explicitly lists published files
+  crit: notable
+  conf: 0.8
+  for:
+  - package.json
+  if:
+    type: kv
+    path: files
+- id: semver-deps
+  desc: Uses semantic versioning for dependencies
+  crit: notable
+  conf: 0.75
+  for:
+  - package.json
+  if:
+    type: string
+    regex: '"dependencies".{0,100}"[\\^~][0-9]'
+- id: has-publish-config
+  desc: Has publish configuration
+  crit: notable
+  conf: 0.85
+  for:
+  - package.json
+  if:
+    type: string
+    substr: '"publishConfig":'
+- id: ci-badge-reference-a
+  desc: References CI service domains
+  crit: notable
+  conf: 0.8
+  for:
+  - package.json
+  if:
+    type: string
+    regex: travis-ci\.org|circleci\.com|codecov\.io|coveralls\.io
+- id: ci-badge-reference-b
+  desc: References GitHub Actions
+  crit: notable
+  conf: 0.8
+  for:
+  - package.json
+  if:
+    type: string
+    regex: github\.com/.{0,50}actions
+- id: scoped-known-org-1
+  desc: Package from known org scope (types/babel/rollup/webpack)
+  if:
+    type: string
+    regex: '"name":\s*"@(types|babel|rollup|webpack)/'
+- id: scoped-known-org-2
+  desc: Package from known org scope (eslint/angular/vue)
+  if:
+    type: string
+    regex: '"name":\s*"@(eslint|angular|vue)/'
+composite_rules:
+- id: conventional-version
+  desc: Uses conventional version format
+  crit: notable
+  conf: 0.75
+  for:
+  - package.json
+  any:
+    - id: conventional-version-base
+    - id: conventional-version-pre-1
+    - id: conventional-version-pre-2
+- id: scoped-known-org
+  desc: Package from known organization scope
+  crit: notable
+  conf: 0.85
+  for:
+  - package.json
+  any:
+    - id: scoped-known-org-1
+    - id: scoped-known-org-2
+- id: ci-badge-reference
+  desc: References CI service (professional project)
+  crit: notable
+  conf: 0.8
+  for:
+  - package.json
+  any:
+  - id: ci-badge-reference-a
+  - id: ci-badge-reference-b

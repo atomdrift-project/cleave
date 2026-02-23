@@ -1,0 +1,235 @@
+# Supply Chain Package Risk Scoring
+# Combines multiple quality and security indicators for high-confidence detection
+# Based on GuardDog methodology - multiple weak signals create strong detection
+# ATT&CK: T1195.002 (Compromise Software Supply Chain)
+
+defaults:
+  attack: "T1195.002"
+  mbc: "E1195"
+
+composite_rules:
+  # === Critical Risk: Multiple Major Red Flags (3+) ===
+
+  # Requires name field to avoid FP on monorepo subpackage package.json files
+  - id: npm-critical-risk-package
+    desc: npm package with 3+ critical risk indicators
+    crit: hostile
+    conf: 0.98
+    for: [package.json]
+    all:
+      - id: metadata/quality/package-info::npm-has-name
+    any:
+      - id: objectives/lateral-movement/supply-chain/npm/metadata::install-hooks
+      - id: metadata/quality/versioning::release-zero
+      - id: metadata/quality/package-info::npm-empty-description-any
+      - id: metadata/quality/author::npm-generic-author-name
+      - id: metadata/quality/author::npm-suspicious-email-domain
+      - id: objectives/lateral-movement/supply-chain/npm/metadata::direct-url-dependency
+      - id: metadata/quality/package-info::npm-no-author
+      - id: metadata/quality/package-info::npm-no-license
+    needs: 3
+
+  # === High Risk: Install Hooks + 2 Quality Issues ===
+
+  - id: npm-install-hooks-low-quality
+    desc: Install hooks with 2+ quality issues
+    crit: hostile
+    conf: 0.96
+    for: [package.json]
+    all:
+      - id: objectives/lateral-movement/supply-chain/npm/metadata::install-hooks
+    any:
+      - id: metadata/quality/versioning::release-zero
+      - id: metadata/quality/package-info::npm-empty-description-any
+      - id: metadata/quality/author::npm-generic-author-name
+      - id: metadata/quality/author::npm-free-email-provider
+      - id: metadata/quality/package-info::npm-no-author
+    needs: 2
+
+  # === High Risk: URL Dependency + Quality Issues ===
+
+  - id: npm-url-dependency-low-quality
+    desc: Direct URL dependency with quality issues
+    crit: hostile
+    conf: 0.94
+    for: [package.json]
+    all:
+      - id: objectives/lateral-movement/supply-chain/npm/metadata::direct-url-dependency
+    any:
+      - id: metadata/quality/versioning::release-zero
+      - id: metadata/quality/package-info::npm-empty-description-any
+      - id: metadata/quality/author::npm-generic-author-name
+      - id: metadata/quality/author::npm-suspicious-email-domain
+    needs: 2
+
+  # === High Risk: Fake Version + Multiple Issues ===
+
+  - id: npm-fake-version-suspicious
+    desc: Fake version number with suspicious patterns
+    crit: hostile
+    conf: 0.93
+    for: [package.json]
+    all:
+      - id: metadata/quality/versioning::fake-version-number
+    any:
+      - id: objectives/lateral-movement/supply-chain/npm/metadata::install-hooks
+      - id: metadata/quality/package-info::npm-empty-description-any
+      - id: metadata/quality/author::npm-generic-author-name
+      - id: metadata/quality/author::npm-free-email-provider
+      - id: objectives/lateral-movement/supply-chain/npm/metadata::direct-url-dependency
+    needs: 2
+
+  # === Suspicious: Multiple Quality Issues (no hooks) ===
+
+  # Requires name field to avoid FP on monorepo subpackage package.json files
+  - id: npm-low-quality-package
+    desc: npm package with 4+ quality issues
+    crit: suspicious
+    conf: 0.88
+    for: [package.json]
+    all:
+      - id: metadata/quality/package-info::npm-has-name
+    any:
+      - id: metadata/quality/versioning::suspicious-version-patterns
+      - id: metadata/quality/package-info::npm-empty-description-any
+      - id: metadata/quality/author::npm-generic-author-name
+      - id: metadata/quality/author::npm-free-email-provider
+      - id: metadata/quality/package-info::npm-no-author
+      - id: metadata/quality/package-info::npm-no-license
+      - id: metadata/quality/package-info::npm-empty-homepage
+      - id: metadata/quality/package-info::npm-no-keywords
+    needs: 4
+
+  # === Typosquatting Combinations ===
+
+  - id: npm-typosquat-with-hooks
+    desc: Typosquatting indicators with install hooks
+    crit: hostile
+    conf: 0.98
+    for: [package.json]
+    all:
+      - id: objectives/lateral-movement/supply-chain/npm/naming::name-theft-target-combo
+      - id: objectives/lateral-movement/supply-chain/npm/metadata::install-hooks
+
+  # === Typosquatting with low quality metadata ===
+  - id: npm-typosquat-low-quality
+    desc: Typosquatting with low quality metadata
+    crit: hostile
+    conf: 0.95
+    for: [package.json]
+    all:
+      - id: objectives/lateral-movement/supply-chain/npm/naming::name-theft-target-combo
+    any:
+      - id: metadata/quality/versioning::release-zero
+      - id: metadata/quality/package-info::npm-empty-description-any
+      - id: metadata/quality/author::npm-generic-author-name
+      - id: metadata/quality/author::npm-suspicious-email-domain
+    needs: 2
+
+  # === PyPI Risk Scoring ===
+
+  - id: pypi-critical-risk-package
+    desc: PyPI package with 3+ critical risk indicators
+    crit: hostile
+    conf: 0.96
+    for: [python]
+    any:
+      - id: metadata/quality/dependencies::pypi-install-hooks-any
+      - id: metadata/quality/versioning::release-zero
+      - id: metadata/quality/package-info::pypi-empty-description
+      - id: metadata/quality/author::pypi-generic-author-name
+      - id: metadata/quality/author::pypi-author-temp-mail
+      - id: metadata/quality/package-info::pypi-empty-author
+    needs: 3
+
+  # === PyPI install hooks with quality issues ===
+  - id: pypi-install-hooks-low-quality
+    desc: PyPI install hooks with quality issues
+    crit: hostile
+    conf: 0.94
+    for: [python]
+    all:
+      - id: metadata/quality/dependencies::pypi-install-hooks-any
+    any:
+      - id: metadata/quality/versioning::release-zero
+      - id: metadata/quality/package-info::pypi-empty-description
+      - id: metadata/quality/author::pypi-generic-author-name
+      - id: metadata/quality/author::pypi-free-email-provider
+    needs: 2
+
+  # === PyPI typosquatting with install hooks ===
+  - id: pypi-typosquat-with-hooks
+    desc: PyPI typosquatting with install hooks
+    crit: hostile
+    conf: 0.98
+    for: [python]
+    all:
+      - id: objectives/lateral-movement/supply-chain/pypi/metadata::pypi-typosquat-attack
+      - id: metadata/quality/dependencies::pypi-install-hooks-any
+
+  # === RubyGems Risk Scoring ===
+
+  - id: gem-critical-risk-package
+    desc: RubyGem with 3+ critical risk indicators
+    crit: hostile
+    conf: 0.96
+    for: [ruby]
+    any:
+      - id: metadata/quality/versioning::release-zero
+      - id: metadata/quality/package-info::gem-empty-description
+      - id: metadata/quality/author::gem-generic-author-name
+      - id: metadata/quality/author::gem-free-email-provider
+      - id: metadata/quality/package-info::gem-empty-author
+    needs: 3
+
+  # === Stealth Package Indicators ===
+
+  - id: npm-stealth-malware-indicators
+    desc: Stealth malware package indicators
+    crit: hostile
+    conf: 0.97
+    for: [package.json]
+    all:
+      - id: objectives/lateral-movement/supply-chain/npm/metadata::install-hooks
+      - id: metadata/quality/package-info::npm-empty-description-any
+      - id: metadata/quality/versioning::npm-version-exactly-1-0-0
+
+  # === Throwaway Package Indicators ===
+
+  - id: npm-throwaway-package
+    desc: Throwaway/test package with hooks
+    crit: hostile
+    conf: 0.96
+    for: [package.json]
+    all:
+      - id: objectives/lateral-movement/supply-chain/npm/metadata::install-hooks
+    any:
+      - id: metadata/quality/author::pypi-author-temp-mail
+      - id: metadata/quality/versioning::release-zero
+      - id: metadata/quality/author::npm-generic-author-name
+
+  # === Professional Malware Indicators ===
+
+  - id: npm-sophisticated-supply-chain-attack
+    desc: Sophisticated supply chain attack patterns
+    crit: hostile
+    conf: 0.99
+    for: [package.json]
+    all:
+      - id: objectives/lateral-movement/supply-chain/npm/metadata::install-hooks
+      - id: objectives/lateral-movement/supply-chain/npm/metadata::direct-url-dependency
+    any:
+      - id: objectives/lateral-movement/supply-chain/npm/naming::name-theft-target-combo
+      - id: metadata/quality/author::npm-suspicious-email-domain
+
+  # === Dependency Confusion Attack Patterns ===
+
+  - id: npm-dependency-confusion-candidate
+    desc: Potential dependency confusion attack
+    crit: hostile
+    conf: 0.92
+    for: [package.json]
+    all:
+      - id: objectives/lateral-movement/supply-chain/npm/metadata::install-hooks
+      - id: metadata/quality/versioning::npm-version-inflated-major
+      - id: metadata/quality/package-info::npm-empty-description-any

@@ -1,0 +1,21 @@
+# JScript Download-Execute Dropper
+# Detects JScript/WSH droppers using obfuscated COM objects
+
+defaults:
+  crit: hostile
+  conf: 0.95
+  for: [javascript]
+
+composite_rules:
+  - id: js-obfuscated-dropper-combo
+    desc: "Obfuscated JScript Download-Execute Combo"
+    mbc: "B0032.001"
+    attack: "T1059.007"
+    all:
+      - id: objectives/execution/interpreter/scripting/host::activex-object-obfuscated
+      - id: objectives/execution/interpreter/scripting/host::xmlhttp-obfuscated
+      - id: objectives/execution/interpreter/scripting/host::adodb-stream-obfuscated
+    any:
+      - id: micro-behaviors/data/format/executable::mz-header-check
+      - id: objectives/anti-static/obfuscation/source/syntax::js-property-concatenation-obfuscation
+      - id: micro-behaviors/communications/http/url::dropper-common-params

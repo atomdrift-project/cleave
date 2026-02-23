@@ -1,0 +1,9 @@
+
+composite_rules:
+  - id: js-startup-persistence-cmd
+    description: Windows Startup folder persistence via JavaScript writing a .cmd file
+    criticality: hostile
+    all:
+      - id: micro-behaviors/os/persistence/startup::win-startup-path
+      - id: micro-behaviors/fs/write/file::write-file-async
+      - id: micro-behaviors/fs/path/extension::cmd

@@ -1,0 +1,84 @@
+defaults:
+  crit: notable
+  attack: T1070.004
+  mbc: F0005
+  for:
+  - python
+  - shell
+traits:
+- id: touch-marker-file
+  desc: Touch marker file creation
+  crit: notable
+  conf: 0.75
+  if:
+    type: string
+    regex: touch /tmp/\.[a-z]|touch.{0,50}\.(ran|done|exec)
+- id: hidden-tmp-marker
+  desc: Hidden marker in tmp
+  crit: suspicious
+  conf: 0.8
+  if:
+    type: string
+    regex: /tmp/\.[a-z].{0,50}-ran|/tmp/\.[a-z].{0,50}-done
+- id: marker-ran-indicator
+  desc: Marker file ran indicator
+  crit: suspicious
+  conf: 0.85
+  if:
+    type: string
+    regex: -ran["']|\.ran["']|_ran["']
+- id: marker-done-indicator
+  desc: Marker file done indicator
+  crit: suspicious
+  conf: 0.75
+  if:
+    type: string
+    regex: -done["']|\.done["']|_done["']
+- id: execution-tracker-a
+  desc: Python or script ran marker
+  crit: suspicious
+  conf: 0.8
+  if:
+    type: string
+    regex: (python|script)-ran
+- id: execution-tracker-b
+  desc: Marker or tracker ran status
+  crit: suspicious
+  conf: 0.8
+  if:
+    type: string
+    regex: (marker|tracker).{0,12}(ran|done)
+composite_rules:
+- id: marker-file-creation
+  desc: Marker file creation
+  crit: suspicious
+  conf: 0.85
+  attack: T1070.004
+  for:
+  - python
+  - shell
+  needs: 2
+  any:
+  - id: touch-marker-file
+  - id: hidden-tmp-marker
+  - id: marker-ran-indicator
+- id: execution-tracking
+  desc: Execution tracking behavior
+  crit: suspicious
+  conf: 0.9
+  attack: T1070.004
+  mbc: F0005
+  for:
+  - python
+  - shell
+  needs: 2
+  any:
+  - id: marker-file-creation
+  - id: execution-tracker
+- id: execution-tracker
+  desc: Execution tracking file
+  crit: suspicious
+  conf: 0.8
+  any:
+  - id: execution-tracker-a
+  - id: execution-tracker-b

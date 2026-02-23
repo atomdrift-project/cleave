@@ -1,0 +1,25 @@
+traits:
+  - id: image-extension-a
+    desc: "File has common image extension A"
+    crit: baseline
+    conf: 1.0
+    for: [all]
+    if:
+      type: basename
+      regex: '(?i)\.(png|jpe?g|gif)$'
+  - id: image-extension-b
+    desc: "File has common image extension B"
+    crit: baseline
+    conf: 1.0
+    for: [all]
+    if:
+      type: basename
+      regex: '(?i)\.(bmp|ico|webp)$'
+composite_rules:
+  - id: image-extension
+    desc: File has image extension
+    crit: baseline
+    conf: 1.0
+    any:
+      - id: image-extension-a
+      - id: image-extension-b

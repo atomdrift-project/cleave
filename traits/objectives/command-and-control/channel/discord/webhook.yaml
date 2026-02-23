@@ -1,0 +1,14 @@
+# Discord C2 Communications
+# Composed objectives for Discord-based C2
+
+composite_rules:
+  - id: discord-webhook-activation
+    desc: Discord webhook activation/kill-switch check
+    crit: hostile
+    conf: 0.95
+    attack: T1071.001
+    for: [javascript, typescript]
+    all:
+      - id: micro-behaviors/communications/http/webhook::discord-webhook-path
+      - id: micro-behaviors/communications/http/webhook::webhook-name-check
+      - id: micro-behaviors/communications/http/get::get

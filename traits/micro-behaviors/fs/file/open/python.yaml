@@ -1,0 +1,59 @@
+# File Open Operations - Python
+# MBC: C0046 (Create File)
+# ATT&CK: T1005
+
+defaults:
+  for: [all]
+
+traits:
+  - id: generic
+    desc: "Opens a file"
+    crit: baseline
+    conf: 0.9
+    for: [python]
+    if:
+      type: string
+      regex: '\bopen\('
+
+  # In-place binary file modification (common in ransomware)
+  - id: binary-rw
+    desc: "In-place binary file modification"
+    crit: notable
+    conf: 0.85
+    for: [python]
+    if:
+      type: raw
+      regex: "open\\([^)]{0,120}['\"]r\\+b['\"]"
+
+  # Sensitive file paths (browser/wallet)
+  - id: key4-db-path
+    desc: Firefox key database
+    crit: baseline
+    conf: 0.7
+    if:
+      type: string
+      substr: "key4.db"
+
+  - id: exodus-wallet-path
+    desc: Exodus cryptocurrency wallet
+    crit: baseline
+    conf: 0.7
+    if:
+      type: string
+      substr: "exodus.wallet"
+
+  - id: wallet-dat-path
+    desc: Bitcoin wallet.dat file
+    crit: baseline
+    conf: 0.7
+    if:
+      type: string
+      substr: "wallet.dat"
+
+  # === Internal Indicators (baseline) ===
+  - id: cookiejar-exclusion
+    desc: Exclude standard cookiejar implementation
+    crit: baseline
+    if:
+      type: raw
+      regex: "cookiejar"

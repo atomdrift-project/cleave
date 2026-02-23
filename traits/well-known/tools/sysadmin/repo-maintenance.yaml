@@ -1,0 +1,83 @@
+# Repository Maintenance Tools
+# Detects scripts used for maintaining code repositories
+
+defaults:
+  for: [shell, python, ruby, javascript]
+
+traits:
+  - id: jq-processing
+    desc: Uses jq for JSON processing
+    crit: baseline
+    if:
+      type: string
+      word: "jq"
+
+  - id: sed-processing
+    desc: Uses sed for text processing
+    crit: baseline
+    if:
+      type: string
+      word: "sed"
+
+  - id: awk-processing
+    desc: Uses awk for text processing
+    crit: baseline
+    if:
+      type: string
+      word: "awk"
+
+  - id: git-operations-1
+    desc: Git ops (clone/pull/push/commit)
+    if:
+      type: string
+      regex: '\bgit (clone|pull|push|commit)\b'
+
+  - id: git-operations-2
+    desc: Git ops (add/status/remote/checkout)
+    if:
+      type: string
+      regex: '\bgit (add|status|remote|checkout)\b'
+
+  - id: hg-operations-1
+    desc: Mercurial ops (init/log/status/diff)
+    if:
+      type: string
+      regex: '\bhg (init|log|status|diff)\b'
+
+  - id: hg-operations-2
+    desc: Mercurial ops (bookmarks/revert/add/forget)
+    if:
+      type: string
+      regex: '\bhg (bookmarks|revert|add|forget)\b'
+
+  - id: hg-operations-3
+    desc: Mercurial ops (commit/ci)
+    if:
+      type: string
+      regex: '\bhg (commit|ci)\b'
+
+composite_rules:
+  - id: git-operations
+    desc: Git repository operations
+    crit: baseline
+    any:
+      - id: git-operations-1
+      - id: git-operations-2
+
+  - id: hg-operations
+    desc: Mercurial repository operations
+    crit: baseline
+    any:
+      - id: hg-operations-1
+      - id: hg-operations-2
+      - id: hg-operations-3
+
+  - id: github-issue-maintenance
+    desc: GitHub issue maintenance script
+    crit: notable
+    all:
+      - id: micro-behaviors/communications/service/github::gh-issue-mgmt
+    any:
+      - id: jq-processing
+      - id: sed-processing
+      - id: awk-processing

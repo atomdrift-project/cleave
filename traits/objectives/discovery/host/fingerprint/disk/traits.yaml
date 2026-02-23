@@ -1,0 +1,67 @@
+# Disk Serial Number Fingerprinting
+# ATT&CK: T1082 (System Information Discovery)
+# NOTE: Neutral disk paths/commands (sys-block, lsblk-cmd, blkid-cmd) moved to micro-behaviors/fs/disk/paths/
+# NOTE: Kept here: device serial access traits (used for device tracking)
+
+defaults:
+  for: [all]
+  attack: "T1082"
+
+traits:
+  # === Disk serial micro-behaviors ===
+  - id: device-serial
+    desc: /device/serial path
+    crit: notable
+    conf: 0.6
+    if:
+      type: string
+      substr: "/device/serial"
+
+  - id: hdio-get-identity
+    desc: HDIO_GET_IDENTITY ioctl
+    crit: notable
+    conf: 0.6
+    if:
+      type: string
+      substr: "HDIO_GET_IDENTITY"
+
+  - id: hdparm-cmd
+    desc: hdparm -i command
+    crit: notable
+    conf: 0.6
+    if:
+      type: string
+      substr: "hdparm -i"
+
+  - id: serial-short
+    desc: serial_short udev field
+    crit: notable
+    conf: 0.6
+    if:
+      type: string
+      substr: "serial_short"
+
+  - id: id-serial
+    desc: ID_SERIAL udev field
+    crit: notable
+    conf: 0.6
+    if:
+      type: string
+      substr: "ID_SERIAL"
+
+composite_rules:
+  # Disk serial composite
+  - id: fp-disk-serial
+    desc: Disk serial number fingerprinting
+    crit: notable
+    conf: 0.75
+    needs: 2
+    any:
+      - id: micro-behaviors/fs/disk/paths::sys-block
+      - id: device-serial
+      - id: hdio-get-identity
+      - id: hdparm-cmd
+      - id: micro-behaviors/fs/disk/paths::lsblk-cmd
+      - id: micro-behaviors/fs/device/blkid::blkid
+      - id: serial-short
+      - id: id-serial

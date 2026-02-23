@@ -1,0 +1,65 @@
+# Monitoring - JavaScript/Node.js
+# ATT&CK: T1113 (Screen Capture)
+
+traits:
+  - id: js-node-screenshots
+    desc: usage of node-screenshots library
+    crit: suspicious
+    conf: 0.95
+    mbc: "B0002"
+    attack: "T1113"
+    for: [javascript]
+    if:
+      type: ast
+      kind: call
+      exact: "require('node-screenshots')"
+
+  - id: js-desktop-screenshot
+    desc: usage of desktop-screenshot library
+    crit: suspicious
+    conf: 0.95
+    mbc: "B0002"
+    attack: "T1113"
+    for: [javascript]
+    if:
+      type: ast
+      kind: call
+      exact: "require('desktop-screenshot')"
+
+  - id: js-sharp-image-processing
+    desc: "Uses sharp image processing"
+    crit: notable
+    conf: 0.8
+    for: [javascript]
+    if:
+      type: ast
+      kind: call
+      exact: "require('sharp')"
+
+composite_rules:
+  - id: js-screenshot-exfil
+    desc: "JavaScript screenshot capture exfiltration"
+    crit: suspicious
+    conf: 0.95
+    mbc: "B0002"
+    attack: "T1113"
+    for: [javascript]
+    all:
+      - id: micro-behaviors/communications/http/lib/axios::js-axios-post
+    any:
+      - id: objectives/collection/monitor/watch::js-node-screenshots
+      - id: objectives/collection/monitor/watch::js-desktop-screenshot
+      - id: micro-behaviors/hardware/display/screen::monitor-get-displays
+
+  - id: js-screenshot-file-write
+    desc: Screen capture saved to file (potential exfil staging)
+    crit: suspicious
+    conf: 0.8
+    mbc: "B0002"
+    attack: "T1113"
+    for: [javascript]
+    all:
+      - id: objectives/execution/dropper/loader::file-write
+    any:
+      - id: micro-behaviors/hardware/display/screen::monitor-get-displays
+      - id: micro-behaviors/hardware/display/screen::screenshot-capture-fn

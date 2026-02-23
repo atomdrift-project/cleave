@@ -1,0 +1,153 @@
+# Impact - System Crash (Windows)
+# Blue Screen of Death and system crash techniques
+# ATT&CK: T1499.004 (Application or System Exploitation)
+
+defaults:
+  for: [python, pe]
+  attack: "T1499.004"
+
+traits:
+  # NtRaiseHardError - forces BSOD
+  - id: nt-raise-hard-error
+    desc: NtRaiseHardError API (BSOD trigger)
+    crit: suspicious
+    conf: 0.98
+    if:
+      type: string
+      substr: "NtRaiseHardError"
+
+  # RtlAdjustPrivilege - enables shutdown privilege
+  - id: rtl-adjust-privilege
+    desc: RtlAdjustPrivilege API (privilege escalation)
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: string
+      substr: "RtlAdjustPrivilege"
+
+  # Shutdown privilege constant (19)
+  - id: shutdown-privilege
+    desc: SeShutdownPrivilege constant
+    crit: notable
+    conf: 0.7
+    for: [python]
+    if:
+      type: string
+      regex: "RtlAdjustPrivilege\\s*\\(\\s*(c_uint\\()?19"
+
+  # STATUS_ASSERTION_FAILURE error code
+  - id: status-assertion-failure
+    desc: STATUS_ASSERTION_FAILURE error code (BSOD)
+    crit: suspicious
+    conf: 0.85
+    if:
+      type: string
+      regex: "0x[Cc]000007[Bb]|3221226363"
+
+  # Python ctypes import
+  - id: ctypes-import
+    desc: Python ctypes import statement
+    crit: notable
+    conf: 0.6
+    for: [python]
+    if:
+      type: string
+      substr: "from ctypes import"
+
+  # YARA-based detection traits
+  - id: bsod-trigger-yara
+    desc: Windows BSOD trigger via YARA
+    crit: suspicious
+    conf: 0.99
+    attack: "T1499.004"
+    mbc: "B0033"
+    if:
+      type: yara
+      source: |
+        rule windows_bsod_trigger {
+          meta:
+            description = "Detects Windows BSOD trigger pattern"
+          strings:
+            $ntdll1 = "ntdll" ascii nocase
+            $ntdll2 = "windll.ntdll" ascii
+            $raise = "NtRaiseHardError" ascii
+            $adjust = "RtlAdjustPrivilege" ascii
+            $priv19 = /RtlAdjustPrivilege\s*\(\s*(c_uint\()?19/
+            $status = /0x[Cc]000007[Bb]/ ascii
+          condition:
+            filesize < 1MB and
+            any of ($ntdll*) and
+            ($raise or ($adjust and $status) or $priv19)
+        }
+
+  - id: python-bsod-yara
+    desc: Python BSOD trigger via YARA
+    crit: suspicious
+    conf: 0.99
+    for: [python]
+    attack: "T1499.004"
+    if:
+      type: yara
+      source: |
+        rule python_bsod_trigger {
+          meta:
+            description = "Python ctypes BSOD trigger"
+          strings:
+            $ctypes = "from ctypes import" ascii
+            $windll = "windll" ascii
+            $ntdll = "ntdll" ascii
+            $raise = "NtRaiseHardError" ascii
+            $adjust = "RtlAdjustPrivilege" ascii
+          condition:
+            filesize < 1MB and
+            $ctypes and $windll and $ntdll and
+            ($raise or $adjust)
+        }
+
+composite_rules:
+  # ntdll-reference: composite referencing canonical ntdll-import plus windll.ntdll Python variant
+  - id: ntdll-reference
+    desc: Reference to ntdll library (generic or Python ctypes)
+    crit: notable
+    conf: 0.7
+    any:
+      - id: micro-behaviors/os/syscall/invoke::ntdll-import
+      - id: micro-behaviors/dylib/load::ctypes-windll
+
+  # Full BSOD trigger pattern
+  # BSOD trigger via trait references (NtRaiseHardError path)
+  - id: bsod-raise-error
+    desc: BSOD via NtRaiseHardError API call
+    crit: suspicious
+    conf: 0.99
+    attack: "T1499.004"
+    mbc: "B0033"
+    all:
+      - id: ntdll-reference
+      - id: nt-raise-hard-error
+
+  # BSOD trigger via trait references (RtlAdjustPrivilege path)
+  - id: bsod-adjust-privilege
+    desc: BSOD via privilege adjustment with
+    crit: hostile
+    conf: 0.98
+    attack: "T1499.004"
+    mbc: "B0033"
+    all:
+      - id: ntdll-reference
+      - id: rtl-adjust-privilege
+      - id: status-assertion-failure
+
+  # Python BSOD via trait references
+  - id: python-bsod-traits
+    desc: Python BSOD trigger via ctypes
+    crit: hostile
+    conf: 0.99
+    for: [python]
+    attack: "T1499.004"
+    all:
+      - id: ctypes-import
+      - id: ntdll-reference
+    any:
+      - id: nt-raise-hard-error
+      - id: rtl-adjust-privilege

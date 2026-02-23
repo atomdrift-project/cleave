@@ -1,0 +1,150 @@
+# VPN Credential/Config Theft
+# Detects access to VPN configuration files containing credentials
+# ATT&CK: T1555.005 (Credentials from Password Stores: Cloud Secrets)
+
+defaults:
+  for: [all]
+  attack: "T1555"
+  mbc: "E1555"
+
+traits:
+  # FortiClient VPN
+  - id: forticlient-config
+    desc: FortiClient VPN configuration path
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: string
+      regex: "Fortinet/FortiClient|FortiClient.{0,30}\\.plist|FortiClient.{0,30}conf"
+
+  - id: forticlient-sso
+    desc: FortiClient SSO credentials
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: string
+      regex: "FortiClient.{0,30}SSO|FortiSSO"
+
+  # Cisco AnyConnect
+  - id: anyconnect-config
+    desc: Cisco AnyConnect VPN config path
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: string
+      regex: "Cisco/AnyConnect|anyconnect.{0,30}\\.xml|anyconnect.{0,30}preferences"
+
+  # OpenVPN
+  - id: openvpn-config
+    desc: OpenVPN configuration file
+    crit: notable
+    conf: 0.8
+    if:
+      type: string
+      regex: "\\.ovpn|\\.openvpn|openvpn.{0,30}\\.conf"
+
+  # GlobalProtect (Palo Alto)
+  - id: globalprotect-config-1
+    desc: GlobalProtect VPN config path (GlobalProtect)
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: string
+      substr: "GlobalProtect"
+
+  - id: globalprotect-config-2
+    desc: GlobalProtect VPN config path (PanGPS)
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: string
+      substr: "PanGPS"
+
+  # Pulse Secure / Ivanti
+  - id: pulsesecure-config-1
+    desc: Pulse Secure VPN config path (Pulse Secure)
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: string
+      substr: "Pulse Secure"
+
+  - id: pulsesecure-config-2
+    desc: Pulse Secure VPN config path (PulseSecure)
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: string
+      substr: "PulseSecure"
+
+  - id: pulsesecure-config-3
+    desc: Pulse Secure VPN config path (Ivanti Secure)
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: string
+      regex: "Ivanti.{0,30}Secure"
+
+  # WireGuard
+  - id: wireguard-config
+    desc: WireGuard VPN config
+    crit: notable
+    conf: 0.8
+    if:
+      type: string
+      regex: "\\.wg\\d{0,2}\\.conf|wireguard/.{0,50}\\.conf|/wg\\d+\\.conf"
+
+  # Generic VPN credential patterns
+  - id: vpn-credential-file
+    desc: VPN credential file pattern
+    crit: notable
+    conf: 0.75
+    if:
+      type: string
+      regex: "vpn.{0,30}credential|vpn.{0,30}password|vpn.{0,30}\\.plist|vpn.{0,30}\\.conf"
+
+composite_rules:
+  - id: globalprotect-config
+    desc: GlobalProtect VPN config path
+    crit: suspicious
+    conf: 0.9
+    any:
+      - id: globalprotect-config-1
+      - id: globalprotect-config-2
+
+  - id: pulsesecure-config
+    desc: Pulse Secure VPN config path
+    crit: suspicious
+    conf: 0.9
+    any:
+      - id: pulsesecure-config-1
+      - id: pulsesecure-config-2
+      - id: pulsesecure-config-3
+
+  # Enterprise VPN config theft
+  - id: enterprise-vpn-theft
+    desc: Enterprise VPN configuration theft
+    crit: suspicious
+    conf: 0.9
+    attack: "T1555.005"
+    any:
+      - id: forticlient-config
+      - id: forticlient-sso
+      - id: anyconnect-config
+      - id: globalprotect-config
+      - id: pulsesecure-config
+
+  # Any VPN config access
+  - id: vpn-config-access
+    desc: VPN configuration file access
+    crit: notable
+    conf: 0.8
+    attack: "T1555"
+    any:
+      - id: forticlient-config
+      - id: anyconnect-config
+      - id: openvpn-config
+      - id: globalprotect-config
+      - id: pulsesecure-config
+      - id: wireguard-config
+      - id: vpn-credential-file

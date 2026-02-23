@@ -1,0 +1,94 @@
+# Container Runtime Library Detection
+# Useful for ML baseline - legitimate container usage patterns
+
+defaults:
+  for: [all]
+
+traits:
+  # Container runtime libraries
+  - id: runtime
+    desc: Container runtime library usage
+    crit: notable
+    conf: 0.9
+    if:
+      type: yara
+      source: |
+        rule container_runtime {
+          strings:
+            $cd1 = "containerd" ascii
+            $cd2 = "containerd.io" ascii
+            $cd3 = "github.com/containerd/containerd" ascii
+            $runc1 = "opencontainers/runc" ascii
+            $runc2 = "libcontainer" ascii
+            $cri1 = "cri-api" ascii
+            $cri2 = "RuntimeService" ascii
+          condition:
+            any of ($cd*) or any of ($runc*) or all of ($cri*)
+        }
+
+  # OCI spec compliance
+  - id: oci
+    desc: OCI specification compliance
+    crit: notable
+    conf: 0.9
+    if:
+      type: yara
+      source: |
+        rule oci_spec {
+          strings:
+            $oci1 = "opencontainers" ascii
+            $oci2 = "oci-runtime-spec" ascii
+            $oci3 = "image-spec" ascii
+            $ann1 = "org.opencontainers" ascii
+            $hook1 = "prestart" ascii
+            $hook2 = "poststart" ascii
+            $hook3 = "poststop" ascii
+            $cfg1 = "config.json" ascii
+          condition:
+            any of ($oci*) or $ann1 or
+            (2 of ($hook*) and $cfg1)
+        }
+
+  # Container networking
+  - id: network
+    desc: Container networking patterns
+    crit: notable
+    conf: 0.85
+    if:
+      type: yara
+      source: |
+        rule container_network {
+          strings:
+            $cni1 = "containernetworking/cni" ascii
+            $cni2 = "CNI_" ascii
+            $cni3 = "cni/libcni" ascii
+            $ns1 = "CLONE_NEWNET" ascii
+            $ns2 = "setns" ascii
+            $net1 = "veth" ascii
+            $net2 = "bridge" ascii
+          condition:
+            any of ($cni*) or
+            ($ns1 and $ns2) or
+            (any of ($net*) and any of ($ns*))
+        }
+
+  # Kubernetes client
+  - id: kubernetes
+    desc: Kubernetes client library
+    crit: notable
+    conf: 0.9
+    if:
+      type: yara
+      source: |
+        rule k8s_client {
+          strings:
+            $k8s1 = "k8s.io/client-go" ascii
+            $k8s2 = "k8s.io/api" ascii
+            $k8s3 = "k8s.io/apimachinery" ascii
+            $api1 = "apis/apps/v1" ascii
+            $api2 = "api/v1/pods" ascii
+            $cfg1 = "KUBECONFIG" ascii
+            $cfg2 = ".kube/config" ascii
+          condition:
+            any of ($k8s*) or 2 of ($api*) or all of ($cfg*)
+        }

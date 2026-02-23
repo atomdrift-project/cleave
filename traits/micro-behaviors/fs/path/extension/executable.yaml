@@ -1,0 +1,75 @@
+# Windows Executable Extensions
+# Detects references to Windows executable and script file extensions
+
+defaults:
+  for: [all]
+  crit: notable
+  conf: 0.5
+
+traits:
+  - id: exe
+    desc: .exe extension reference
+    if:
+      type: string
+      regex: '\.exe\b'
+
+  - id: dll
+    desc: .dll extension reference
+    if:
+      type: string
+      regex: '\.dll\b'
+
+  - id: bat
+    desc: .bat extension reference
+    if:
+      type: string
+      regex: '\.bat\b'
+
+  - id: cmd
+    desc: .cmd extension reference
+    if:
+      type: string
+      regex: '\.cmd\b'
+
+  - id: ps1
+    desc: .ps1 extension reference
+    if:
+      type: string
+      regex: '\.ps1\b'
+
+  - id: vbs
+    desc: .vbs extension reference
+    if:
+      type: string
+      regex: '\.vbs\b'
+
+  - id: msi
+    desc: .msi extension reference
+    if:
+      type: string
+      regex: '\.msi\b'
+
+  - id: so
+    desc: .so extension reference
+    if:
+      type: string
+      regex: '\.so\b'
+
+composite_rules:
+  - id: library-extension
+    desc: Library file extension reference (.dll or .so)
+    any:
+      - id: dll
+      - id: so
+
+  - id: windows-extension
+    desc: Windows executable extension reference
+    any:
+      - id: exe
+      - id: dll
+      - id: bat
+      - id: cmd
+      - id: ps1
+      - id: vbs
+      - id: msi
+      - id: micro-behaviors/fs/path/extension::scr-extension

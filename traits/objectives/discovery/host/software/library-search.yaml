@@ -1,0 +1,266 @@
+# Library Discovery Patterns
+# MBC: E1083 (File and Directory Discovery) + T1518 (Software Discovery)
+# ATT&CK: T1083, T1518
+#
+# Code that searches for shared libraries on the system. This is used by:
+# - eBPF-based SSL sniffers (find libssl.so for hooking)
+# - LD_PRELOAD injection tools
+# - Library hooking/interception frameworks
+# - Dynamic linker implementations
+#
+# NOTE: Neutral library paths moved to micro-behaviors/fs/path/library/
+# NOTE: Neutral library names moved to micro-behaviors/dylib/load/library/names
+# NOTE: Neutral architecture strings moved to micro-behaviors/os/platform/architecture/
+
+defaults:
+  for: [c, elf]
+
+traits:
+
+  - id: arch-macro-detection-1
+    desc: Architecture detection macros (x86/arm)
+    crit: notable
+    conf: 0.8
+    for: [c]
+    if:
+      type: raw
+      regex: "#ifdef\\s+__(x86_64|arm|i386)__"
+
+  - id: arch-macro-detection-2
+    desc: Architecture detection macros (aarch64)
+    crit: notable
+    conf: 0.8
+    for: [c]
+    if:
+      type: raw
+      regex: "#ifdef\\s+__(aarch64)__"
+
+  - id: arch-const-mapping-1
+    desc: Multi-architecture numeric constant mapping (x86/arm)
+    crit: notable
+    conf: 0.85
+    for: [c]
+    if:
+      type: raw
+      regex: "#elif\\s+__(x86_64|arm|i386)__"
+      count_min: 2
+
+  - id: arch-const-mapping-2
+    desc: Multi-architecture numeric constant mapping (aarch64)
+    crit: notable
+    conf: 0.85
+    for: [c]
+    if:
+      type: raw
+      regex: "#elif\\s+__(aarch64)__"
+      count_min: 2
+
+  - id: arch-aware-lib-filter-1
+    desc: Architecture-aware library filtering (x86/arm)
+    crit: suspicious
+    conf: 0.9
+    for: [c]
+    if:
+      type: raw
+      regex: 'strstr\s*\(\s*[^,]{1,120}d_name\s*,\s*"(x86_64|arm|i386)"\s*\)'
+
+  - id: arch-aware-lib-filter-2
+    desc: Architecture-aware library filtering (aarch64/linux)
+    crit: suspicious
+    conf: 0.9
+    for: [c]
+    if:
+      type: raw
+      regex: 'strstr\s*\(\s*[^,]{1,120}d_name\s*,\s*"(aarch64|linux)"\s*\)'
+
+  # === Library Resolver Function Patterns ===
+  # Function naming patterns that suggest library resolution code
+
+  - id: resolve-library-fn-1
+    desc: Library resolver function name (resolve/search)
+    crit: notable
+    conf: 0.75
+    for: [c]
+    if:
+      type: raw
+      regex: "(?i)\\b(resolve|search)[_-]?(lib(rary)?|so|shared)\\b"
+
+  - id: resolve-library-fn-2
+    desc: Library resolver function name (find/lookup)
+    crit: notable
+    conf: 0.75
+    for: [c]
+    if:
+      type: raw
+      regex: "(?i)\\b(find|lookup)[_-]?(lib(rary)?|so|shared)\\b"
+
+  - id: global-search-library-fn
+    desc: Global library search function
+    crit: notable
+    conf: 0.8
+    for: [c]
+    if:
+      type: raw
+      regex: "(?i)\\bglobal[_-]?search[_-]?lib(rary)?\\b"
+
+
+  # === macOS Spotlight Application Discovery ===
+  - id: spotlight-app-query
+    desc: Spotlight query for applications
+    crit: suspicious
+    conf: 0.9
+    attack: "T1518"
+    platforms: [all]
+    for: [macho]
+    if:
+      type: string
+      regex: "kMDItemKind\\s*==\\s*'Application'"
+
+  - id: mdquery-create
+    desc: MDQuery API usage
+    crit: notable
+    conf: 0.7
+    attack: "T1518"
+    platforms: [all]
+    for: [macho]
+    if:
+      type: string
+      substr: "MDQueryCreate"
+
+composite_rules:
+  - id: arch-macro-detection
+    desc: Architecture detection macros
+    crit: notable
+    conf: 0.8
+    any:
+      - id: arch-macro-detection-1
+      - id: arch-macro-detection-2
+
+  - id: arch-const-mapping
+    desc: Multi-architecture numeric constant mapping
+    crit: notable
+    conf: 0.85
+    any:
+      - id: arch-const-mapping-1
+      - id: arch-const-mapping-2
+
+  - id: arch-aware-lib-filter
+    desc: Architecture-aware library filtering
+    crit: suspicious
+    conf: 0.9
+    any:
+      - id: arch-aware-lib-filter-1
+      - id: arch-aware-lib-filter-2
+
+  - id: resolve-library-fn
+    desc: Library resolver function name
+    crit: notable
+    conf: 0.75
+    any:
+      - id: resolve-library-fn-1
+      - id: resolve-library-fn-2
+
+  # Spotlight application enumeration
+  - id: spotlight-app-enum
+    desc: Spotlight application enumeration
+    crit: suspicious
+    conf: 0.9
+    attack: "T1518"
+    platforms: [all]
+    for: [macho]
+    all:
+      - id: mdquery-create
+      - id: spotlight-app-query
+
+  # Multiple library paths = systematic library enumeration
+  - id: lib-path-enum
+    desc: Library path enumeration
+    crit: notable
+    conf: 0.7
+    mbc: "E1083"
+    attack: "T1518"
+    needs: 3
+    any:
+      - id: micro-behaviors/fs/path/library::lib-path
+      - id: micro-behaviors/fs/path/library::usr-lib-path
+      - id: micro-behaviors/fs/path/library::usr-local-lib-path
+
+  # Architecture detection for targeting
+  - id: arch-detection
+    desc: Architecture detection strings
+    crit: notable
+    conf: 0.5
+    any:
+      - id: micro-behaviors/os/platform/architecture
+
+  # SSL/TLS library search targets
+  - id: ssl-lib-targets
+    desc: SSL/TLS library search targets
+    crit: notable
+    conf: 0.8
+    any:
+      - id: micro-behaviors/dylib/library/ssl
+
+  # Library resolver functionality
+  - id: lib-resolver-fn
+    desc: Library resolver function patterns
+    crit: notable
+    conf: 0.75
+    any:
+      - id: resolve-library-fn
+      - id: global-search-library-fn
+
+  # Library search infrastructure
+  # Library paths + directory traversal + architecture detection = library search tool
+  - id: lib-search-infra
+    desc: Library search infrastructure
+    crit: notable
+    conf: 0.8
+    mbc: "E1083"
+    attack: "T1518"
+    all:
+      - id: lib-path-enum
+    any:
+      - id: arch-detection
+      - id: lib-resolver-fn
+      - id: micro-behaviors/fs/directory/readdir::readdir
+
+  # SSL library discovery for interception
+  # Library search + SSL targets = SSL interception prep
+  - id: ssl-lib-discovery
+    desc: SSL library discovery
+    crit: suspicious
+    conf: 0.85
+    mbc: "E1083"
+    attack: "T1557"
+    all:
+      - id: lib-path-enum
+      - id: ssl-lib-targets
+
+  # Architecture-aware library resolver interface
+  # Arch detection macros + library resolver functions = multi-arch library search utility
+  - id: arch-aware-lib-resolver
+    desc: Architecture-aware library resolver interface
+    crit: suspicious
+    conf: 0.85
+    mbc: "E1083"
+    attack: "T1518"
+    all:
+      - id: lib-resolver-fn
+    any:
+      - id: arch-const-mapping
+      - id: arch-macro-detection
+
+  # Manual library resolver implementation
+  # Systematic search + architecture awareness = manual linker/hooker utility
+  - id: manual-library-resolver
+    desc: Manual recursive library resolver
+    crit: suspicious
+    conf: 0.95
+    mbc: "E1083"
+    attack: "T1518"
+    all:
+      - id: lib-search-infra
+    any:
+      - id: arch-aware-lib-filter
+      - id: arch-macro-detection

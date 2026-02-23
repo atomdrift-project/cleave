@@ -1,0 +1,6 @@
+# Copy-Execute-Delete Dropper Pattern
+# Detects shell-based dropper using copy, execute, delete pattern
+# ATT&CK: T1105, T1070.004
+
+# NOTE: Incomplete - traits don't exist yet
+composite_rules: []

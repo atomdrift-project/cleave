@@ -1,0 +1,140 @@
+# Sandbox and Analysis Tool Detection via Process Enumeration
+# Detects checks for multiple sandbox/analysis tools running on the system
+# MITRE ATT&CK: T1057 (Process Discovery), T1497 (Virtualization/Sandbox Evasion)
+
+defaults:
+  crit: suspicious
+  attack: "T1057"
+  for: [powershell, javascript, python, batch]
+
+traits:
+  # Individual tool detections (low confidence alone, high when combined)
+  - id: check-process-handle
+    desc: "Checks for handle.exe (Sysinternals Handle tool)"
+    crit: notable
+    conf: 0.6
+    if:
+      type: encoded
+      regex: 'Get-Process.{0,50}\bhandle\b'
+      case_insensitive: true
+
+  - id: check-process-runsc
+    desc: "Checks for runsc (gVisor container runtime)"
+    crit: notable
+    conf: 0.7
+    if:
+      type: encoded
+      regex: 'Get-Process.{0,50}\brunsc\b'
+      case_insensitive: true
+
+  - id: check-process-dbgview
+    desc: "Checks for Dbgview.exe (Sysinternals Debug View)"
+    crit: notable
+    conf: 0.7
+    if:
+      type: encoded
+      regex: 'Get-Process.{0,50}\bdbgview\b'
+      case_insensitive: true
+
+  - id: check-process-tcpview
+    desc: "Checks for tcpview/tcpvcon (Sysinternals network monitoring)"
+    crit: notable
+    conf: 0.7
+    if:
+      type: encoded
+      regex: 'Get-Process.{0,50}\btcp(view|vcon)\b'
+      case_insensitive: true
+
+  - id: check-process-anyrun
+    desc: "Checks for any.run sandbox environment"
+    crit: notable
+    conf: 0.75
+    if:
+      type: encoded
+      regex: 'Get-Process.{0,50}\bany\.run\b'
+      case_insensitive: true
+
+  - id: check-process-ollydbg
+    desc: "Checks for OllyDbg debugger"
+    crit: notable
+    conf: 0.7
+    if:
+      type: encoded
+      regex: 'Get-Process.{0,50}\bollydbg\b'
+      case_insensitive: true
+
+  - id: check-process-immunity
+    desc: "Checks for ImmunityDebugger"
+    crit: notable
+    conf: 0.7
+    if:
+      type: encoded
+      regex: 'Get-Process.{0,50}\bimmunit(y|ydebugger)\b'
+      case_insensitive: true
+
+  - id: check-process-wireshark
+    desc: "Checks for Wireshark network sniffer"
+    crit: notable
+    conf: 0.6
+    if:
+      type: encoded
+      regex: 'Get-Process.{0,50}\bwireshark\b'
+      case_insensitive: true
+
+  - id: check-process-apatedns
+    desc: "Checks for apateDNS (analysis tool)"
+    crit: notable
+    conf: 0.75
+    if:
+      type: encoded
+      regex: 'Get-Process.{0,50}\bapatedns\b'
+      case_insensitive: true
+
+  - id: check-process-sandbox-generic
+    desc: "Checks for generic 'sandbox' process name"
+    crit: notable
+    conf: 0.6
+    if:
+      type: encoded
+      regex: 'Get-Process.{0,50}\bsandbox\b'
+      case_insensitive: true
+
+composite_rules:
+  # Multiple sandbox tool checks - strong anti-analysis indicator
+  - id: multi-sandbox-tool-check
+    desc: "Checks for multiple sandbox/analysis tools"
+    crit: suspicious
+    conf: 0.85
+    attack: "T1497"
+    needs: 3
+    any:
+      - id: check-process-handle
+      - id: check-process-runsc
+      - id: check-process-dbgview
+      - id: check-process-tcpview
+      - id: check-process-anyrun
+      - id: check-process-ollydbg
+      - id: check-process-immunity
+      - id: check-process-wireshark
+      - id: check-process-apatedns
+      - id: check-process-sandbox-generic
+
+  # Very comprehensive sandbox check - suspicious pattern
+  - id: comprehensive-sandbox-enumeration
+    desc: "Checks for 5+ different sandbox/analysis tools"
+    crit: suspicious
+    conf: 0.95
+    attack: "T1497"
+    mbc: "B0007"
+    needs: 5
+    any:
+      - id: check-process-handle
+      - id: check-process-runsc
+      - id: check-process-dbgview
+      - id: check-process-tcpview
+      - id: check-process-anyrun
+      - id: check-process-ollydbg
+      - id: check-process-immunity
+      - id: check-process-wireshark
+      - id: check-process-apatedns
+      - id: check-process-sandbox-generic

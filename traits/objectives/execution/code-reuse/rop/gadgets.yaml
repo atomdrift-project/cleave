@@ -1,0 +1,164 @@
+# ROP Gadget Density Detection
+# Detects unusually high density of return instructions (potential ROP chains)
+# Return-Oriented Programming uses existing code snippets ending in RET
+# High RET density can indicate:
+# - Intentionally placed ROP gadgets (exploitation frameworks)
+# - Active ROP chain exploitation
+# - Unusual code generation patterns
+# ATT&CK: T1203 (Exploitation for Client Execution)
+# CWE-693: Protection Mechanism Failure
+
+defaults:
+  attack: "T1203"
+  for: [pe, elf, macho]
+
+traits:
+  # === High RET Density (ROP Indicator) ===
+
+  # Very high density of RET instructions
+  - id: high-ret-density
+    desc: High density of return instructions
+    crit: suspicious
+    conf: 0.85
+    if:
+      type: hex
+      section: text
+      pattern: "C3"
+      per_kb_min: 50.0  # 50+ returns per KB is unusual
+
+  # Extreme RET density (strong ROP indicator)
+  - id: extreme-ret-density
+    desc: Extreme return instruction density
+    crit: suspicious
+    conf: 0.95
+    if:
+      type: hex
+      section: text
+      pattern: "C3"
+      per_kb_min: 100.0  # 100+ returns per KB
+
+  # === ROP Gadget Patterns ===
+
+  # POP; POP; RET pattern (common ROP gadget)
+  - id: pop-pop-ret-gadget
+    desc: POP; POP; RET gadget pattern
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: hex
+      section: text
+      pattern: "5? 5? C3"
+      count_min: 5
+
+  # POP; RET pattern (very common gadget)
+  - id: pop-ret-gadget
+    desc: POP; RET gadget pattern
+    crit: notable
+    conf: 0.75
+    if:
+      type: hex
+      section: text
+      pattern: "5? C3"
+      count_min: 10
+
+  # Short instruction followed by RET (1-3 byte gadgets)
+  - id: short-ret-gadgets
+    desc: Short instruction sequences ending in RET
+    crit: suspicious
+    conf: 0.85
+    if:
+      type: hex
+      section: text
+      pattern: "?? C3"
+      per_kb_min: 80.0  # High density of 2-byte gadgets
+
+  # === Data Section RET Instructions ===
+
+  # RET instructions in data sections (embedded shellcode/ROP chain)
+  # C3 is a common byte value; require high density to indicate actual RET gadgets
+  - id: ret-in-data-section
+    desc: Return instructions in data section
+    crit: suspicious
+    conf: 0.95
+    for: [pe, elf]
+    if:
+      type: hex
+      section: data
+      pattern: "C3"
+      count_min: 20
+      per_kb_min: 5.0
+
+  # === Specific ROP Gadget Sequences ===
+
+  # XCHG ESP, EAX; RET (stack pivot gadget)
+  - id: stack-pivot-gadget
+    desc: Stack pivot gadget (XCHG ESP, EAX; RET)
+    crit: suspicious
+    conf: 0.98
+    for: [pe, elf]
+    if:
+      type: hex
+      section: text
+      pattern: "94 C3"
+
+  # ADD ESP, XX; RET (stack adjustment gadget)
+  - id: stack-adjust-ret
+    desc: Stack adjustment gadget
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: hex
+      section: text
+      pattern: "83 C4 ?? C3"
+      count_min: 5
+
+composite_rules:
+  # ROP chain indicators
+  - id: rop-chain-indicators
+    desc: ROP chain or gadget farm indicators
+    crit: hostile
+    conf: 0.95
+    attack: "T1203"
+    needs: 2
+    any:
+      - id: extreme-ret-density
+      - id: pop-pop-ret-gadget
+      - id: ret-in-data-section
+      - id: stack-pivot-gadget
+      - id: high-ret-density
+
+  # Intentional ROP gadget farm (exploitation toolkit)
+  - id: rop-gadget-farm
+    desc: Intentional ROP gadget farm
+    crit: hostile
+    conf: 0.98
+    all:
+      - id: extreme-ret-density
+    any:
+      - id: pop-pop-ret-gadget
+      - id: pop-ret-gadget
+      - id: stack-pivot-gadget
+
+  # Embedded ROP chain (active exploitation)
+  - id: embedded-rop-chain
+    desc: Embedded ROP chain in data
+    crit: hostile
+    conf: 0.99
+    attack: "T1203"
+    all:
+      - id: ret-in-data-section
+    any:
+      - id: objectives/anti-static/obfuscation/payload::high-entropy-data-section
+
+  # Suspicious gadget patterns
+  - id: suspicious-rop-gadgets
+    desc: Suspicious ROP gadget patterns
+    crit: suspicious
+    conf: 0.85
+    needs: 3
+    any:
+      - id: high-ret-density
+      - id: pop-pop-ret-gadget
+      - id: pop-ret-gadget
+      - id: short-ret-gadgets
+      - id: stack-adjust-ret

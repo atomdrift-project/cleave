@@ -1,0 +1,48 @@
+# Obfuscation Tool Detection
+# Detects known obfuscator signatures
+
+defaults:
+  for: [all]
+
+traits:
+  - id: blankobf
+    desc: "Obfuscated with BlankOBF"
+    crit: suspicious
+    conf: 1.0
+    attack: "T1027"
+    if:
+      type: string
+      substr: "BlankOBF"
+
+  - id: pyinstaller-bundling
+    desc: PyInstaller executable bundling
+    crit: suspicious
+    conf: 0.9
+    attack: "T1027"
+    for: [shell, batch, powershell]
+    if:
+      type: raw
+      regex: "(pyinstaller|pyi-makespec)\\s+"
+      case_insensitive: true
+
+composite_rules:
+  - id: malware-bundler
+    desc: Obfuscates malware with bundling tool
+    crit: hostile
+    conf: 0.95
+    attack: "T1027"
+    for: [shell, batch, powershell]
+    all:
+      - id: micro-behaviors/data/text/malware::suspicious-repo-name
+      - id: pyinstaller-bundling
+
+  - id: pyinstaller-screenshotter-rat
+    desc: PyInstaller bundling screen capture RAT
+    crit: hostile
+    conf: 0.95
+    attack: "T1027"
+    mbc: "B0032"
+    for: [shell, batch, powershell]
+    all:
+      - id: pyinstaller-bundling
+      - id: objectives/collection/monitor/watch::screen-capture

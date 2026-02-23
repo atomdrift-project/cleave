@@ -1,0 +1,6 @@
+# Install-Time Shell Dropper Detection
+# Detects dropper patterns in install/setup scripts
+# ATT&CK: T1105
+
+# NOTE: Incomplete - traits don't exist yet
+composite_rules: []

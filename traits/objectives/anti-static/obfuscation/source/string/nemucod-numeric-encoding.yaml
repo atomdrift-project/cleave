@@ -1,0 +1,22 @@
+traits:
+  - id: nemucod-numeric-string-encoding
+    desc: "Nemucod-style concatenated numeric string encoding"
+    crit: suspicious
+    conf: 0.9
+    for: [javascript]
+    if:
+      type: string
+      # Matches sequences of at least 30 blocks of 2-3 digits each, separated by no characters or a single non-word delimiter.
+      # This avoids false positives on hex strings (which contain letters) and binary data.
+      regex: '(\d{2,3}[^\d\w]?){30,}'
+    unless:
+      - type: raw
+        regex: "require\\(['\"]\\.\\./common['\"]\\)"
+      - type: raw
+        regex: "function test\\s*\\(\\)\\s*\\{"
+    downgrade:
+      any:
+        - id: metadata/dev/testing::is-test
+        - id: metadata/library/nodeunit::nodeunit
+    attack: "T1027" # Obfuscated Files or Information
+    mbc: "B0032" # Deobfuscate/Decode

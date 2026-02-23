@@ -1,0 +1,73 @@
+# HTTP C2 Protocol Detection - Composites
+# Detects suspicious HTTP patterns that may indicate C2 communication
+# ATT&CK: T1071.001 (Application Layer Protocol: Web Protocols)
+
+defaults:
+  for: [elf, pe, macho]
+  attack: "T1071.001"
+  crit: suspicious
+
+traits:
+  - id: http-method-get
+    desc: Hardcoded GET method string
+    crit: notable
+    conf: 0.6
+    if:
+      type: string
+      substr: "GET "
+
+  - id: http-method-post
+    desc: Hardcoded POST method string
+    crit: notable
+    conf: 0.65
+    if:
+      type: string
+      substr: "POST "
+
+  - id: http-delimiter
+    desc: HTTP header delimiter (CRLF CRLF)
+    crit: notable
+    conf: 0.5
+    if:
+      type: raw
+      regex: '\r\n\r\n'
+
+  # Removed http-user-agent duplicate - use micro-behaviors/communications/http/request::user-agent-header
+
+  - id: http-content-type
+    desc: Content-Type header string
+    crit: notable
+    conf: 0.5
+    if:
+      type: string
+      substr: "Content-Type:"
+
+composite_rules:
+  - id: http-protocol
+    desc: HTTP or HTTPS protocol marker
+    crit: notable
+    conf: 0.6
+    any:
+      - id: micro-behaviors/communications/http/protocol::http-prefix
+      - id: micro-behaviors/communications/http/protocol::https-prefix
+
+  - id: hardcoded-request
+    desc: "Hardcoded HTTP request in binary"
+    crit: suspicious
+    conf: 0.7
+    all:
+      - id: http-protocol
+    any:
+      - id: http-method-get
+      - id: http-method-post
+
+  - id: custom-client
+    desc: "Custom HTTP client implementation"
+    crit: suspicious
+    conf: 0.65
+    all:
+      - id: http-protocol
+      - id: http-delimiter
+    any:
+      - id: micro-behaviors/communications/http/request::user-agent-header
+      - id: http-content-type

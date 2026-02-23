@@ -1,0 +1,22 @@
+# Writable+Executable Sections (W^X Violation)
+# Detects sections with both write and execute permissions
+# Modern security practices enforce W^X (write XOR execute) memory protection
+
+defaults:
+  for: [pe, elf, macho]
+  crit: suspicious
+  conf: 1.0
+
+traits:
+  - id: wx-section
+    desc: Writable and executable section (W^X violation)
+    if:
+      type: section
+      writable: true
+      executable: true
+    # W^X violations indicate:
+    # - Self-modifying code
+    # - JIT compilation without proper memory protection
+    # - Malware with runtime code generation
+    # - Exploitation techniques (code injection, ROP gadgets)
+    # Modern binaries should use separate W-only and X-only pages

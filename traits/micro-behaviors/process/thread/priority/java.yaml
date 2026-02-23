@@ -1,0 +1,9 @@
+traits:
+  - id: set-max
+    desc: Sets thread priority to maximum
+    crit: notable
+    conf: 0.9
+    for: [java]
+    if:
+      type: raw
+      regex: 'setPriority\s*\(\s*(Thread\.)?MAX_PRIORITY\s*\)'

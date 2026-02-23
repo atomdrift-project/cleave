@@ -1,0 +1,81 @@
+# PyPI Custom Setup Command Actions
+# Detects malicious behaviors inside custom install/develop/egg_info commands
+# ATT&CK: T1195.002 (Compromise Software Supply Chain)
+
+defaults:
+  for: [python]
+  attack: "T1195.002"
+
+traits:
+  # Atomic traits specific to this objective context
+
+  - id: setup-request-env-concat
+    desc: setup.py concatenates env var to URL
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: ast
+      query: |
+        (call
+          function: (attribute object: (identifier) @lib (#match? @lib "requests|urllib") attribute: (identifier) @method (#match? @method "get|post|urlopen"))
+          arguments: (argument_list
+            (binary_operator
+              left: (string) @url (#match? @url "^http")
+              right: (identifier) @var
+            )
+          )
+        )
+
+  - id: setup-computername-access
+    desc: setup.py accesses COMPUTERNAME
+    crit: notable
+    conf: 0.8
+    if:
+      type: raw
+      # Match os.environ['COMPUTERNAME'] or os.getenv('COMPUTERNAME')
+      regex: "os\\.environ\\['COMPUTERNAME'\\]|os\\.getenv\\('COMPUTERNAME'\\)"
+
+composite_rules:
+
+  # === HOSTILE: Custom Install with Environment Exfiltration ===
+  # setup.py uses a custom install command to exfiltrate environment variables (like COMPUTERNAME)
+  # via HTTP request without base64 encoding (e.g. via URL parameters).
+  - id: pypi-custom-install-env-exfil
+    desc: PyPI custom install exfiltrates environment
+    crit: hostile
+    conf: 0.95
+    mbc: "E1041"
+    attack: "T1020"
+    all:
+      - id: objectives/lateral-movement/supply-chain/pypi/install-patterns::setup-py-file
+      - id: objectives/execution/setup/hooks::setuptools-run-override
+      - id: setup-computername-access
+      - id: micro-behaviors/communications/http/request::request-python
+
+  # === HOSTILE: Custom Install Download & Execute ===
+  # setup.py uses a custom install command to download a file and execute it.
+  # This is a classic dropper pattern.
+  - id: pypi-custom-install-dropper
+    desc: PyPI custom install dropper
+    crit: hostile
+    conf: 0.98
+    mbc: "E1105"
+    attack: "T1105"
+    all:
+      - id: objectives/lateral-movement/supply-chain/pypi/install-patterns::setup-py-file
+      - id: objectives/execution/setup/hooks::setuptools-run-override
+      - id: micro-behaviors/communications/http/request::request-python
+      - id: micro-behaviors/fs/file/open::generic
+      - id: micro-behaviors/process/create/shell::shell-execution-indicators
+
+  # === SUSPICIOUS: Custom Install with Network ===
+  # A custom install command that makes network requests is highly suspicious
+  # in a PyPI package (install should be offline/deterministic ideally).
+  - id: pypi-custom-install-network
+    desc: PyPI custom install with network activity
+    crit: suspicious
+    conf: 0.85
+    all:
+      - id: objectives/lateral-movement/supply-chain/pypi/install-patterns::setup-py-file
+      - id: objectives/execution/setup/hooks::setuptools-run-override
+      - id: micro-behaviors/communications/http/request::request-python

@@ -1,0 +1,305 @@
+# Execution - TTY/PTY Operations
+# ATT&CK: T1059 (Command and Scripting Interpreter)
+
+traits:
+  # === Openpty atomic indicators ===
+  - id: openpty-call
+    desc: openpty() call
+    crit: notable
+    conf: 0.7
+    attack: "T1059"
+    for: [elf, macho, python]
+    if:
+      type: string
+      substr: "openpty"
+
+  - id: pty-open-call
+    desc: pty.Open call
+    crit: notable
+    conf: 0.7
+    attack: "T1059"
+    for: [elf, macho, python]
+    if:
+      type: string
+      substr: "pty.Open"
+
+  # POSIX pseudoterminal functions (used on macOS/BSD for PTY creation)
+  # These are notable (not suspicious) because many legitimate programs use PTY:
+  # terminal emulators, SSH clients, screen/tmux, expect, etc.
+  - id: posix-openpt
+    desc: POSIX open pseudoterminal master
+    crit: notable
+    conf: 0.85
+    attack: "T1059"
+    for: [elf, macho]
+    if:
+      type: symbol
+      regex: posix_openpt
+
+  - id: grantpt
+    desc: Grant access to slave pseudoterminal
+    crit: notable
+    conf: 0.8
+    attack: "T1059"
+    for: [elf, macho]
+    if:
+      type: symbol
+      regex: grantpt
+
+  - id: unlockpt
+    desc: Unlock slave pseudoterminal
+    crit: notable
+    conf: 0.8
+    attack: "T1059"
+    for: [elf, macho]
+    if:
+      type: symbol
+      regex: unlockpt
+
+  # === Ptsname atomic indicators ===
+  - id: ptsname-symbol
+    desc: ptsname symbol
+    crit: notable
+    conf: 0.6
+    attack: "T1059"
+    for: [elf, macho]
+    if:
+      type: symbol
+      regex: ptsname
+
+  - id: ptsname-r-symbol
+    desc: ptsname_r symbol
+    crit: notable
+    conf: 0.6
+    attack: "T1059"
+    for: [elf, macho]
+    if:
+      type: symbol
+      regex: ptsname_r
+
+  - id: ttyname-r-symbol
+    desc: ttyname_r symbol
+    crit: notable
+    conf: 0.6
+    attack: "T1059"
+    for: [elf, macho]
+    if:
+      type: symbol
+      regex: ttyname_r
+
+  - id: tcgetattr
+    desc: Get terminal attributes
+    crit: notable
+    conf: 0.75
+    attack: "T1059"
+    for: [elf, macho]
+    if:
+      type: symbol
+      regex: tcgetattr
+
+  - id: tcsetattr
+    desc: Set terminal attributes
+    crit: notable
+    conf: 0.75
+    attack: "T1059"
+    for: [elf, macho]
+    if:
+      type: symbol
+      regex: tcsetattr
+
+  - id: vhangup
+    desc: Virtual terminal hangup
+    crit: notable
+    conf: 0.85
+    attack: "T1059"
+    for: [elf, macho]
+    if:
+      type: symbol
+      exact: "vhangup"
+
+  # NOTE: getpass is a standard libc function used by legitimate programs
+  # (shells, sudo, passwd, etc.) to read passwords from terminal without echo.
+  # It's notable as a capability - password prompting is not expected in web apps.
+  - id: getpass
+    desc: Terminal password prompt
+    crit: notable
+    conf: 0.6
+    attack: "T1056"
+    for: [elf, macho]
+    if:
+      type: symbol
+      exact: "getpass"
+
+  - id: setupterm
+    desc: Terminal initialization
+    crit: notable
+    conf: 0.7
+    attack: "T1059"
+    for: [elf, macho]
+    if:
+      type: string
+      substr: "setupterm"
+
+  # === Python PTY atomic indicators ===
+  - id: import-pty
+    desc: import pty statement
+    crit: notable
+    conf: 0.7
+    attack: "T1059"
+    for: [python]
+    if:
+      type: string
+      substr: "import pty"
+
+  - id: from-pty-import
+    desc: from pty import statement
+    crit: notable
+    conf: 0.7
+    attack: "T1059"
+    for: [python]
+    if:
+      type: string
+      regex: "from pty import"
+
+  - id: pty-spawn
+    desc: Python PTY spawn
+    crit: suspicious
+    conf: 0.9
+    attack: "T1059"
+    for: [python]
+    if:
+      type: string
+      substr: "pty.spawn"
+
+  # NOTE: Generic symbols (dup2, fork, execve, setsid, socket, connect, recv, send)
+  # are defined in their canonical locations under micro-behaviors/process/ and micro-behaviors/communications/.
+  # Composite rules below reference them using full paths.
+
+composite_rules:
+  # Openpty composite
+  - id: openpty
+    desc: Open pseudoterminal
+    crit: notable
+    conf: 0.85
+    attack: "T1059"
+    for: [elf, macho, python]
+    any:
+      - id: openpty-call
+      - id: pty-open-call
+
+  # Ptsname composite
+  - id: ptsname
+    desc: Get slave pseudoterminal name
+    crit: notable
+    conf: 0.8
+    attack: "T1059"
+    for: [elf, macho]
+    any:
+      - id: ptsname-symbol
+      - id: ptsname-r-symbol
+
+  # Ttyname composite
+  - id: ttyname
+    desc: Get terminal device pathname
+    crit: notable
+    conf: 0.8
+    attack: "T1059"
+    for: [elf, macho]
+    any:
+      - id: micro-behaviors/process/terminal/tty::ttyname
+      - id: ttyname-r-symbol
+
+  # Python PTY composite
+  - id: python-pty
+    desc: Python PTY module
+    crit: suspicious
+    conf: 0.85
+    attack: "T1059"
+    for: [python]
+    any:
+      - id: import-pty
+      - id: from-pty-import
+
+  # Interactive shell via PTY - requires PTY functions, not just fork/exec
+  # fork/exec alone is too common (any program using subprocess)
+  - id: interactive-shell
+    desc: Interactive shell via PTY
+    crit: notable
+    conf: 0.8
+    attack: "T1059"
+    mbc: "B0022"
+    for: [elf, macho, python]
+    needs: 2
+    any:
+      - id: openpty
+      - id: posix-openpt
+      - id: grantpt
+      - id: unlockpt
+      - id: pty-spawn
+      - id: ptsname
+  # NOTE: POSIX PTY + shell is used by many legitimate tools:
+  # - Debuggers (gdb, lldb) for controlling target process I/O
+  # - Terminal emulators (xterm, gnome-terminal)
+  # - SSH servers/clients
+  # - Screen multiplexers (screen, tmux)
+  # Downgrade for known legitimate tools
+  - id: posix-pty-shell
+    desc: POSIX PTY shell (backdoor pattern)
+    crit: suspicious
+    conf: 0.95
+    attack: "T1059"
+    mbc: "B0022"
+    for: [elf, macho]
+    platforms: [macos, linux, unix]
+    all:
+      - id: posix-openpt
+      - id: grantpt
+      - id: unlockpt
+      - id: ptsname
+      - id: micro-behaviors/process/create/shell
+    downgrade:
+      any:
+        - id: metadata/apple/system-component
+        - id: micro-behaviors/dylib/library::debugger-tool-marker
+        - id: micro-behaviors/dylib/library::system-lib-marker
+        - id: micro-behaviors/dylib/library::shell-interpreter
+
+  # PTY-based network backdoor - combines PTY with network operations
+  # NOTE: This matches legitimate shells (/bin/bash) which have all these symbols
+  # for job control, command substitution, and network utilities (like /dev/tcp).
+  # Also matches X11/graphics libraries which use sockets for display server IPC.
+  # Downgrade for Apple system components, debuggers, and graphics libraries to avoid FPs.
+  - id: pty-network-backdoor
+    desc: PTY-based network backdoor
+    crit: notable
+    conf: 0.95
+    attack: "T1059"
+    mbc: "B0022"
+    for: [elf, macho]
+    platforms: [macos, linux, unix]
+    all:
+      - id: micro-behaviors/communications/socket/create::create
+      - id: micro-behaviors/communications/socket/connect::connect
+      - id: micro-behaviors/process/fork/clone::fork
+    any:
+      - id: posix-openpt
+      - id: openpty
+      - id: grantpt
+      - id: unlockpt
+      - id: micro-behaviors/communications/socket/receive::receive
+      - id: micro-behaviors/communications/socket/send::send
+      - id: micro-behaviors/process/create/shell::c-execve
+      - id: micro-behaviors/process/create/shell::bin-sh
+    # Downgrade for Apple system components (e.g., /bin/bash), debuggers, graphics libs, and system libraries
+    downgrade:
+      any:
+        - id: metadata/apple/system-component
+        - id: micro-behaviors/dylib/library::debugger-tool-marker
+        - id: micro-behaviors/dylib/library::system-lib-marker
+        - id: micro-behaviors/dylib/library::shell-interpreter
+        - id: micro-behaviors/dylib/library::graphics-lib-marker
+        - id: micro-behaviors/dylib/library::x11-ipc-lib-marker
+        - id: micro-behaviors/dylib/library::network-lib-marker
+        - id: metadata/format::many-imports
+        - type: string
+          exact: "busybox"

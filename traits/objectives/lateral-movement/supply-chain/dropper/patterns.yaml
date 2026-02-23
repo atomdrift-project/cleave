@@ -1,0 +1,686 @@
+defaults:
+  for:
+  - all
+traits:
+- id: process-env-temp
+  desc: process.env.TEMP reference
+  crit: notable
+  conf: 0.5
+  for:
+  - javascript
+  - typescript
+  if:
+    type: string
+    substr: process.env.TEMP
+- id: process-env-tmp
+  desc: process.env.TMP reference
+  crit: notable
+  conf: 0.5
+  for:
+  - javascript
+  - typescript
+  if:
+    type: string
+    substr: process.env.TMP
+- id: os-tmpdir
+  desc: os.tmpdir() call
+  crit: notable
+  conf: 0.5
+  for:
+  - javascript
+  - typescript
+  if:
+    type: string
+    regex: os\.tmpdir\(\)
+# spawn-paren removed - use micro-behaviors/process/create/shell/lang::spawn-call instead
+- id: execfile-paren
+  desc: execFile() call
+  crit: notable
+  conf: 0.5
+  for:
+  - javascript
+  - typescript
+  if:
+    type: string
+    regex: execFile\(
+- id: py-subprocess
+  desc: subprocess module
+  crit: notable
+  conf: 0.6
+  attack: T1059
+  for:
+  - python
+  if:
+    id: micro-behaviors/process/create/subprocess::methods
+- id: python-standalone
+  desc: Downloads python-build-standalone (interpreter dropper pattern)
+  crit: suspicious
+  conf: 0.9
+  attack: T1105
+  for:
+  - javascript
+  - typescript
+  - shell
+  if:
+    type: yara
+    source: "rule python_standalone_dropper {\n  strings:\n    $repo1 = \"indygreg/python-build-standalone\"\
+      \ ascii\n    $repo2 = \"python-build-standalone/releases\" ascii\n    $url1\
+      \ = \"cpython-\" ascii\n    $url2 = \"-install_only.tar.gz\" ascii\n    $url3\
+      \ = \"python.org/ftp/python\" ascii\n  condition:\n    any of ($repo*) or ($url1\
+      \ and $url2) or $url3\n}\n"
+- id: node-standalone
+  desc: Downloads standalone Node.js interpreter
+  crit: suspicious
+  conf: 0.85
+  attack: T1105
+  for:
+  - javascript
+  - typescript
+  - shell
+  if:
+    type: yara
+    source: "rule node_standalone_dropper {\n  strings:\n    $url1 = \"nodejs.org/dist\"\
+      \ ascii\n    $url2 = \"node-v\" ascii\n    $tar = \".tar.gz\" ascii\n    $zip\
+      \ = \".zip\" ascii\n    $exec1 = \"spawn(\" ascii\n    $exec2 = \"exec(\" ascii\n\
+      \  condition:\n    ($url1 or $url2) and ($tar or $zip) and any of ($exec*)\n\
+      }\n"
+- id: stdin-exec
+  desc: Pipes code to interpreter via
+  crit: suspicious
+  conf: 0.9
+  attack: T1059
+  for:
+  - javascript
+  - typescript
+  if:
+    type: yara
+    source: "rule stdin_interpreter_exec {\n  strings:\n    // spawn with stdin pipe\
+      \ - Node.js pattern (includes .spawn for method calls)\n    $spawn1 = \"spawn(\"\
+      \ ascii\n    $spawn2 = \".spawn(\" ascii\n    $stdin1 = \"stdin.write\" ascii\n\
+      \    $stdin2 = \"stdin.end\" ascii\n    // Interpreter flags that read from\
+      \ stdin\n    $flag1 = \"['-']\" ascii  // python -, node -\n    $flag2 = \"\
+      [\\\"-\\\"]\" ascii\n    $flag3 = \", ['-']\" ascii\n    $flag4 = \", [\\\"\
+      -\\\"]\" ascii\n    // Interpreter binaries (in paths or variable names)\n \
+      \   $py1 = \"python\" ascii nocase\n    $py2 = \"bin/python\" ascii\n    $node1\
+      \ = \"/node\" ascii\n    $ruby1 = \"ruby\" ascii nocase\n    $perl1 = \"perl\"\
+      \ ascii nocase\n  condition:\n    any of ($spawn*) and any of ($stdin*) and\n\
+      \    any of ($flag*) and any of ($py*, $node*, $ruby*, $perl*)\n}\n"
+- id: stream-tar-extract
+  desc: Streams HTTP response directly to
+  crit: suspicious
+  conf: 0.9
+  attack: T1105
+  for:
+  - javascript
+  - typescript
+  if:
+    type: yara
+    source: "rule stream_tar_extract {\n  strings:\n    // HTTP get with pipe\n  \
+      \  $http1 = \"https.get\" ascii\n    $http2 = \"http.get\" ascii\n    $http3\
+      \ = \"https.request\" ascii\n    // Pipe to process\n    $pipe1 = \".pipe(\"\
+      \ ascii\n    $pipe2 = \"res.pipe\" ascii\n    // Tar command\n    $tar1 = \"\
+      spawn\" ascii\n    $tar2 = \"'tar'\" ascii\n    $tar3 = \"\\\"tar\\\"\" ascii\n\
+      \    $tar4 = \"-x\" ascii\n  condition:\n    any of ($http*) and any of ($pipe*)\
+      \ and any of ($tar*)\n}\n"
+- id: download-and-exec
+  desc: Downloads interpreter binary then executes
+  crit: suspicious
+  conf: 0.85
+  attack: T1105
+  for:
+  - javascript
+  - typescript
+  if:
+    type: yara
+    source: "rule download_interpreter_exec {\n  strings:\n    // Downloading binary\n\
+      \    $dl1 = \"https.get\" ascii\n    $dl2 = \"http.get\" ascii\n    $dl3 = \"\
+      fetch(\" ascii\n    // Interpreter paths/binaries\n    $interp1 = \"bin/python\"\
+      \ ascii\n    $interp2 = \"python.exe\" ascii\n    $interp3 = \"bin/node\" ascii\n\
+      \    $interp4 = \"node.exe\" ascii\n    $interp5 = \"bin/ruby\" ascii\n    //\
+      \ Execution\n    $exec1 = \"spawn(\" ascii\n    $exec2 = \"execFile(\" ascii\n\
+      \    $exec3 = \"exec(\" ascii\n    // File existence check (typical dropper\
+      \ pattern)\n    $exists1 = \"existsSync\" ascii\n    $exists2 = \"access(\"\
+      \ ascii\n  condition:\n    any of ($dl*) and any of ($interp*) and any of ($exec*)\
+      \ and any of ($exists*)\n}\n"
+- id: buffer-from-base64
+  desc: Buffer.from with base64
+  crit: notable
+  conf: 0.5
+  for:
+  - javascript
+  - typescript
+  if:
+    type: string
+    regex: Buffer\.from.{0,50}base64
+- id: atob-call
+  desc: atob() call
+  crit: notable
+  conf: 0.5
+  for:
+  - javascript
+  - typescript
+  if:
+    type: string
+    regex: atob\(
+- id: btoa-call
+  desc: btoa() call
+  crit: notable
+  conf: 0.5
+  for:
+  - javascript
+  - typescript
+  if:
+    type: string
+    regex: btoa\(
+- id: download-file
+  desc: Node.js HTTPS download to file
+  crit: notable
+  conf: 0.8
+  attack: T1105
+  for:
+  - javascript
+  - typescript
+  if:
+    type: yara
+    source: "rule node_download_file {\n  strings:\n    $dl1 = \"https.get\" ascii\n\
+      \    $dl2 = \"http.get\" ascii\n    $dl3 = \"https.request\" ascii\n    $dl4\
+      \ = \"http.request\" ascii\n    $write1 = \"createWriteStream\" ascii\n    $write2\
+      \ = \"writeFileSync\" ascii\n    $write3 = \".pipe(\" ascii\n  condition:\n\
+      \    any of ($dl*) and any of ($write*)\n}\n"
+- id: detached-spawn
+  desc: Detached process spawning (backgrounding)
+  crit: suspicious
+  conf: 0.9
+  attack: T1059
+  mbc: F0011
+  for:
+  - javascript
+  - typescript
+  if:
+    type: string
+    regex: spawn\([^)]{0,120}\{[^}]{0,120}detached:\s*true
+- id: exec-downloaded-raw
+  desc: Execution of file from temp (Raw)
+  crit: notable
+  conf: 0.85
+  attack: T1059
+  for:
+  - javascript
+  - typescript
+  if:
+    type: yara
+    source: "rule node_exec_temp {\n  strings:\n    $temp1 = \"process.env.TEMP\"\
+      \ ascii\n    $temp2 = \"process.env.TMP\" ascii\n    $temp3 = \"/tmp\" ascii\n\
+      \    $exec1 = \"spawn(\" ascii\n    $exec2 = \"execFile(\" ascii\n    $exec3\
+      \ = \"execSync(\" ascii\n  condition:\n    any of ($temp*) and any of ($exec*)\n\
+      }\n"
+- id: archive-extract
+  desc: Archive extraction (potential payload delivery)
+  crit: notable
+  conf: 0.75
+  for:
+  - javascript
+  - typescript
+  if:
+    type: yara
+    source: "rule node_archive_extract {\n  strings:\n    $lib1 = \"node-7z\" ascii\n\
+      \    $lib2 = \"7zip-bin\" ascii\n    $lib3 = \"adm-zip\" ascii\n    $lib4 =\
+      \ \"unzipper\" ascii\n    $lib5 = \"extract-zip\" ascii\n    $op1 = \"extractFull\"\
+      \ ascii\n    $op2 = \"extract(\" ascii\n    $op3 = \"unzip\" ascii\n  condition:\n\
+      \    any of ($lib*) or 2 of ($op*)\n}\n"
+- id: password-archive
+  desc: Password-protected archive extraction
+  crit: suspicious
+  conf: 0.85
+  for:
+  - javascript
+  - typescript
+  if:
+    type: string
+    regex: password:\s*['"][^'"]{1,120}['"]
+- id: batch-echo
+  desc: Batch file generation via echo
+  crit: suspicious
+  conf: 0.8
+  if:
+    type: string
+    regex: echo\\s+[^>]{0,120}>>[^\\n]{0,120}\\.(bat|cmd)
+- id: activex-object
+  desc: ActiveXObject usage (JScript/VBScript)
+  crit: suspicious
+  conf: 0.85
+  for:
+  - javascript
+  - vbs
+  - html
+  if:
+    type: string
+    regex: ActiveXObject\s*\(
+# adodb-stream removed - use micro-behaviors/fs/write/file::adodb-stream instead
+- id: shell-namespace
+  desc: Shell.Application namespace for ZIP operations
+  crit: suspicious
+  conf: 0.8
+  if:
+    type: string
+    regex: Shell\.Application.{0,50}namespace
+- id: msxml2-base64
+  desc: MSXml2 Base64 reference
+  crit: notable
+  conf: 0.7
+  if:
+    type: string
+    regex: MSXml2.{0,50}Base64
+- id: bin-base64
+  desc: bin.base64 reference
+  crit: notable
+  conf: 0.7
+  if:
+    type: string
+    substr: bin.base64
+- id: batch-escape
+  desc: Batch special character escaping
+  crit: suspicious
+  conf: 0.8
+  if:
+    type: string
+    regex: replace.{0,50}"\\^"
+- id: appdata-single
+  desc: '%appdata% reference'
+  crit: notable
+  conf: 0.6
+  if:
+    type: string
+    substr: '%appdata%'
+- id: appdata-double
+  desc: '%%appdata%% reference'
+  crit: notable
+  conf: 0.6
+  if:
+    type: string
+    substr: '%%appdata%%'
+- id: exe-to-batch
+  desc: EXE to batch file converter
+  crit: suspicious
+  conf: 0.95
+  attack: T1027.002
+  mbc: F0001
+  if:
+    type: yara
+    source: "rule exe_to_batch_builder {\n  meta:\n    description = \"Tool that converts\
+      \ EXE to batch dropper\"\n  strings:\n    // Base64 encoding\n    $b64_1 = \"\
+      base64.b64encode\" ascii\n    $b64_2 = \"base64.encodestring\" ascii\n    $b64_3\
+      \ = \"encodebytes\" ascii\n    // Batch file indicators\n    $batch1 = \"@echo\
+      \ off\" ascii nocase\n    $batch2 = \"echo %\" ascii\n    $batch3 = \".bat\"\
+      \ ascii\n    $batch4 = \".cmd\" ascii\n    // Script generation\n    $script1\
+      \ = \"ActiveXObject\" ascii\n    $script2 = \"WScript\" ascii\n    $script3\
+      \ = \".js\" ascii\n    $script4 = \".vbs\" ascii\n    // File read\n    $read\
+      \ = \"open(\" ascii\n    $rb = \"\\\"rb\\\"\" ascii\n  condition:\n    filesize\
+      \ < 500KB and\n    any of ($b64_*) and\n    any of ($batch*) and\n    any of\
+      \ ($script*) and\n    $read and $rb\n}\n"
+- id: jscript-dropper
+  desc: JScript-based dropper generator
+  crit: suspicious
+  conf: 0.95
+  attack: T1027.002
+  mbc: F0001
+  if:
+    type: yara
+    source: "rule jscript_dropper_builder {\n  meta:\n    description = \"Generates\
+      \ JScript dropper payloads\"\n  strings:\n    $activex = \"ActiveXObject\" ascii\n\
+      \    $adodb = \"ADODB.Stream\" ascii\n    $fso = \"FileSystemObject\" ascii\n\
+      \    $shell = \"Shell.Application\" ascii\n    $msxml = \"MSXml2\" ascii\n \
+      \   $base64 = \"Base64\" ascii\n    $save = \"saveToFile\" ascii\n  condition:\n\
+      \    filesize < 1MB and\n    $activex and\n    ($adodb or $msxml) and\n    ($fso\
+      \ or $shell) and\n    ($base64 or $save)\n}\n"
+- id: python-marshal
+  desc: Python marshal bytecode obfuscation
+  crit: suspicious
+  conf: 0.85
+  for:
+  - python
+  attack: T1027
+  if:
+    type: yara
+    source: "rule python_marshal_obfuscator {\n  meta:\n    description = \"Python\
+      \ code using marshal for obfuscation\"\n  strings:\n    $marshal = \"from marshal\
+      \ import loads\" ascii\n    $exec = \"exec(\" ascii\n    $loads = \"loads(b\"\
+      \ ascii\n    $compressed = /\\\\x78\\\\x9c/ ascii\n  condition:\n    filesize\
+      \ < 5MB and\n    $marshal and $exec and\n    ($loads or $compressed)\n}\n"
+composite_rules:
+- id: temp-dir-ref
+  desc: Temporary directory reference
+  crit: notable
+  conf: 0.6
+  for:
+  - javascript
+  - typescript
+  any:
+  - id: process-env-temp
+  - id: process-env-tmp
+  - id: os-tmpdir
+  - id: micro-behaviors/fs/path/temp::unix-temp
+- id: temp-extract
+  desc: Downloads archive to temp directory
+  crit: suspicious
+  conf: 0.85
+  attack: T1105
+  for:
+  - javascript
+  - typescript
+  all:
+  - id: temp-dir-ref
+  any:
+  - id: objectives/execution/dropper/archive
+- id: exec-downloaded
+  desc: Execution of file from temp
+  crit: suspicious
+  conf: 0.85
+  attack: T1059
+  for:
+  - javascript
+  - typescript
+  all:
+  - id: exec-downloaded-raw
+  unless:
+  - id: metadata/dev/testing::node-common-require
+  - id: metadata/library::commander
+  - id: metadata/library::commander-modern
+  downgrade:
+    any:
+    - id: metadata/dev/testing::node-common-require
+    - id: objectives/lateral-movement/supply-chain/npm/testing::assert-word
+    - id: micro-behaviors/interface/usage/help::usage-help
+    - id: objectives/lateral-movement/supply-chain/npm/testing::test-call
+    - id: metadata/quality/testing::jest-test-file
+    - id: objectives/lateral-movement/supply-chain/npm/testing::jest-test-blocks
+- id: spawn-exec
+  desc: Process spawn or exec
+  crit: notable
+  conf: 0.7
+  for:
+  - javascript
+  - typescript
+  any:
+  - id: micro-behaviors/process/create/shell/lang::spawn-call
+  - id: objectives/execution/interpreter/eval/invoke::exec-call-shell
+  - id: execfile-paren
+- id: extract-execute
+  desc: Extracts archive then executes contents
+  crit: suspicious
+  conf: 0.95
+  attack: T1105
+  for:
+  - javascript
+  - typescript
+  all:
+  - id: spawn-exec
+  any:
+  - id: objectives/execution/dropper/archive
+  - id: objectives/execution/dropper/binary-files
+- id: python-exec-call
+  desc: Python execution via os.system, exec,
+  crit: notable
+  conf: 0.85
+  attack: T1059
+  for:
+  - python
+  any:
+  - id: micro-behaviors/process/create/shell::python-os-system
+  - id: objectives/execution/interpreter/eval/invoke::exec-call-python
+  - id: py-subprocess
+- id: wscript-xmlhttp
+  desc: WScript.Shell or XMLHTTP object usage
+  crit: suspicious
+  conf: 0.85
+  for:
+  - javascript
+  any:
+  - id: micro-behaviors/os/com/object::wscript-shell-literal
+  - id: micro-behaviors/os/com/object::clsid-xmlhttp-generic
+  downgrade:
+    any:
+    - id: metadata/library/jquery::library
+    - id: metadata/library/socketio::client
+    - id: metadata/library/rxjs::ajax-observable
+    - id: metadata/library/rxjs::generic
+    - id: metadata/library/prototype::copyright
+    - id: metadata/library/prototype::version-string
+    - id: metadata/library/prototype::header-x
+- id: base64-buffer
+  desc: Base64 buffer operations
+  crit: notable
+  conf: 0.7
+  for:
+  - javascript
+  - typescript
+  any:
+  - id: buffer-from-base64
+  - id: atob-call
+  - id: btoa-call
+- id: msxml-base64
+  desc: MSXML Base64 usage
+  crit: notable
+  conf: 0.7
+  any:
+  - id: msxml2-base64
+  - id: bin-base64
+- id: full-chain
+  desc: Complete archive dropper (download +
+  crit: hostile
+  conf: 0.98
+  attack: T1105
+  mbc: B0024
+  for:
+  - javascript
+  - typescript
+  all:
+  - id: objectives/execution/dropper/archive::download-zip
+  - id: extract-execute
+  any:
+  - id: objectives/execution/dropper/binary-files
+- id: fetch-write-execute
+  desc: Complete dropper lifecycle (Fetch + Write + Execute)
+  crit: hostile
+  conf: 0.98
+  mbc: B0024
+  attack: T1105
+  for:
+  - python
+  all:
+  - id: micro-behaviors/communications/http/lib/requests::requests-get
+  - id: micro-behaviors/fs/file/write/
+  - id: python-exec-call
+- id: full-stager
+  desc: Complete interpreter-based stager (download interpreter + stdin exec)
+  crit: hostile
+  conf: 0.95
+  attack: T1059
+  mbc: B0024
+  for:
+  - javascript
+  - typescript
+  any:
+  - id: python-standalone
+  - id: node-standalone
+  all:
+  - id: stdin-exec
+  - id: stream-tar-extract
+- id: remote-payload-stager
+  desc: Downloads interpreter and fetches remote
+  crit: hostile
+  conf: 0.95
+  attack: T1105
+  mbc: B0024
+  for:
+  - javascript
+  - typescript
+  all:
+  - id: download-and-exec
+  - id: stdin-exec
+  - id: base64-buffer
+- id: python-obfuscated-stager
+  desc: Python dropper with obfuscated payload
+  crit: hostile
+  conf: 0.95
+  attack: T1105
+  mbc: B0024
+  for:
+  - javascript
+  - typescript
+  all:
+  - id: python-standalone
+  - id: stdin-exec
+- id: full-dropper
+  desc: Complete Node.js dropper (download +
+  crit: hostile
+  conf: 0.98
+  attack: T1105
+  mbc: B0024
+  for:
+  - javascript
+  - typescript
+  all:
+  - id: download-file
+  - id: archive-extract
+  - id: spawn-exec
+- id: download-detached-exec
+  desc: Download file and execute detached
+  crit: hostile
+  conf: 0.95
+  attack: T1105
+  mbc: B0024
+  for:
+  - javascript
+  - typescript
+  all:
+  - id: download-file
+  - id: detached-spawn
+  - id: exec-downloaded-raw
+- id: activex-dropper
+  desc: Classic JScript/VBScript dropper pattern (ActiveXObject
+  crit: hostile
+  conf: 0.95
+  attack: T1105
+  mbc: B0024
+  for:
+  - javascript
+  all:
+  - id: activex-object
+  - id: micro-behaviors/fs/write/file::adodb-stream
+  - id: wscript-xmlhttp
+- id: activex-modern-context
+  desc: ActiveXObject in modern JavaScript (obsolete
+  crit: notable
+  conf: 0.95
+  attack: T1059
+  mbc: B0024
+  for:
+  - javascript
+  all:
+  - id: activex-object
+  - id: metadata/lang::modern-javascript
+  - id: metadata/lang::template-literal
+- id: activex-network
+  desc: ActiveXObject with network operations (likely
+  crit: suspicious
+  conf: 0.96
+  attack: T1071
+  mbc: B0030
+  for:
+  - javascript
+  all:
+  - id: activex-object
+  any:
+  - id: micro-behaviors/communications/http/client::client
+  - id: micro-behaviors/communications/socket/connect
+  - id: micro-behaviors/communications/dns/lookup
+- id: activex-exec
+  desc: ActiveXObject with command execution (shell
+  crit: suspicious
+  conf: 0.98
+  attack: T1059
+  mbc: E1059
+  for:
+  - javascript
+  all:
+  - id: activex-object
+  any:
+  - id: micro-behaviors/process/create/shell
+  - id: micro-behaviors/process/create/direct
+  - id: micro-behaviors/os/com/object::wscript-shell-literal
+- id: wsh-creation-mechanism
+  desc: WScript/ActiveX creation
+  crit: notable
+  conf: 0.8
+  for:
+  - javascript
+  any:
+  - id: activex-object
+  - id: objectives/execution/interpreter/script/wsh::wscript-createobject
+- id: wsh-payload-handling
+  desc: WScript payload handling (Response/Stream)
+  crit: notable
+  conf: 0.8
+  for:
+  - javascript
+  any:
+  - id: objectives/execution/interpreter/script/wsh::wsh-response-body
+  - id: micro-behaviors/fs/write/file::adodb-stream
+  - id: objectives/execution/interpreter/script/wsh::wsh-adodb-stream-binary
+- id: js-obfuscation-indicators
+  desc: JavaScript obfuscation indicators
+  crit: suspicious
+  conf: 0.8
+  for:
+  - javascript
+  any:
+  - id: objectives/anti-static/obfuscation/source/syntax::js-useless-arithmetic
+  - id: objectives/anti-static/obfuscation/source/syntax::js-split-custom-delimiter
+  - id: objectives/anti-static/obfuscation/strings/encoding::js-hex-escape
+  - id: objectives/anti-static/obfuscation/strings/encoding::js-reverse-string-obfuscation
+  needs: 2
+  unless:
+  - id: metadata/dev/testing::node-common-require
+  - id: metadata/library/rxjs::generic
+  - id: metadata/library::commander
+- id: obfuscated-js-dropper
+  desc: Obfuscated JavaScript Dropper (WScript + Obfuscation)
+  crit: hostile
+  conf: 0.95
+  attack: T1105
+  mbc: B0024
+  for:
+  - javascript
+  all:
+  - id: wsh-creation-mechanism
+  - id: wsh-payload-handling
+  - id: js-obfuscation-indicators
+- id: jscript-cc-dropper
+  desc: JScript Dropper using Conditional Compilation
+  crit: hostile
+  conf: 0.95
+  attack: T1059.007
+  mbc: B0032
+  for: [javascript]
+  all:
+    - id: micro-behaviors/execution/interpreter/scripting/jscript::jscript-cc-on
+    - id: micro-behaviors/process/create/script::batch-script-execution
+  any:
+  - id: js-obfuscation-indicators
+  - id: objectives/anti-static/obfuscation/strings/encoding::js-reverse-string-obfuscation
+  - id: objectives/anti-static/obfuscation/strings/encoding::js-string-split
+- id: supply-chain-sql-backdoor
+  desc: 'Supply chain attack: malicious code in SQL library'
+  crit: suspicious
+  mbc: B0003
+  attack: T1195.001
+  conf: 0.95
+  for:
+  - all
+  all:
+  - id: micro-behaviors/data/sql/query::sqlcommand
+  any:
+  - id: micro-behaviors/process/terminate/
+  - id: objectives/execution/interpreter/eval/invoke/
+  - id: objectives/execution/reflection/invoke::assembly-load

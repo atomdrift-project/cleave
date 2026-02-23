@@ -1,0 +1,110 @@
+defaults:
+  for: [all]
+
+traits:
+  - id: js-deletefile
+    desc: DeleteFile call
+    crit: notable
+    if:
+      type: string
+      regex: '(?i)deleteFile\s*\('
+
+  - id: js-scriptfullname
+    desc: ScriptFullName property
+    crit: notable
+    if:
+      type: string
+      regex: "ScriptFullName"
+
+  - id: js-self-delete-dynamic-decoder
+    desc: Dynamic decoder resolves self path then deletes
+    crit: suspicious
+    conf: 0.9
+    for: [javascript]
+    if:
+      type: ast
+      language: javascript
+      query: |
+        (function_declaration
+          body: (statement_block
+            (variable_declaration
+              (variable_declarator
+                name: (identifier) @script_path
+                value: (subscript_expression
+                  object: (identifier) @wscript
+                  index: (call_expression
+                    function: (identifier) @decoder_a
+                    arguments: (arguments (string))
+                  )
+                )
+              )
+            )
+            .
+            (expression_statement
+              (call_expression
+                function: (subscript_expression
+                  object: (identifier)
+                  index: (call_expression
+                    function: (identifier) @decoder_b
+                    arguments: (arguments (string))
+                  )
+                )
+                arguments: (arguments (identifier) @script_path_ref)
+              )
+            )
+          )
+        )
+        (#eq? @wscript "WScript")
+        (#eq? @decoder_a @decoder_b)
+        (#eq? @script_path @script_path_ref)
+
+  - id: js-self-delete-obfuscated-markers
+    desc: Encoded ScriptFullName and deleteFile markers
+    crit: suspicious
+    conf: 0.95
+    for: [javascript]
+    if:
+      type: string
+      exact: "050047006010008046044030013020029000033017"
+      count_min: 1
+
+  - id: js-deletefile-obfuscated-marker
+    desc: Encoded deleteFile marker
+    crit: suspicious
+    conf: 0.95
+    for: [javascript]
+    if:
+      type: string
+      exact: "005041024006012063044002013029"
+      count_min: 1
+
+composite_rules:
+  - id: js-self-delete-literal
+    desc: JScript self-deletion via literal ScriptFullName/DeleteFile
+    crit: suspicious
+    all:
+      - id: js-deletefile
+      - id: js-scriptfullname
+
+  - id: js-self-delete-obfuscated-marker-pair
+    desc: Encoded markers for script path and delete method
+    crit: suspicious
+    all:
+      - id: js-self-delete-obfuscated-markers
+      - id: js-deletefile-obfuscated-marker
+
+  - id: js-self-delete-obfuscated
+    desc: JScript self-deletion via decoded dynamic member access
+    crit: suspicious
+    any:
+      - id: js-self-delete-dynamic-decoder
+      - id: js-self-delete-obfuscated-marker-pair
+    all:
+      - id: micro-behaviors/host/interpreter/jscript::is-jscript
+
+  - id: js-self-delete
+    desc: Detects JScript self-deletion logic
+    crit: suspicious
+    any:
+      - id: js-self-delete-literal
+      - id: js-self-delete-obfuscated

@@ -1,0 +1,207 @@
+defaults:
+  crit: notable
+  attack: T1037
+  for:
+  - shell
+traits:
+- id: chkconfig-header
+  desc: SysV init script header
+  crit: notable
+  conf: 0.95
+  if:
+    type: raw
+    regex: '#\s*chkconfig:\s*[-0-9]+\s+[0-9]+\s+[0-9]+'
+- id: chkconfig-all-runlevels
+  desc: Init runs in all runlevels
+  crit: suspicious
+  conf: 0.85
+  if:
+    type: raw
+    regex: '#\s*chkconfig:\s*[-]?[0-9]{4,}\s+[0-9]+\s+[0-9]+'
+- id: chkconfig-early-start
+  desc: Init with very early start
+  crit: suspicious
+  conf: 0.85
+  if:
+    type: raw
+    regex: '#\s*chkconfig:\s*[-0-9]+\s+0[0-9]\s+[0-9]+'
+- id: source-init-functions
+  desc: Sources init.d functions
+  crit: notable
+  conf: 0.85
+  if:
+    type: raw
+    regex: \.\s+/etc/rc\.d/init\.d/functions|source\s+/etc/rc\.d/init\.d/functions
+- id: source-sysconfig
+  desc: Sources sysconfig file
+  crit: notable
+  conf: 0.8
+  if:
+    type: raw
+    regex: \.\s+/etc/sysconfig/|source\s+/etc/sysconfig/
+- id: source-selinux-config
+  desc: Sources SELinux config
+  crit: suspicious
+  conf: 0.85
+  attack: T1562.001
+  if:
+    type: raw
+    regex: \.\s+/etc/selinux/|source\s+/etc/selinux/
+- id: lockfile-subsys
+  desc: Uses subsys lockfile
+  crit: notable
+  conf: 0.9
+  if:
+    type: raw
+    regex: /var/lock/subsys/
+- id: daemon-function
+  desc: Calls daemon function
+  crit: notable
+  conf: 0.85
+  if:
+    type: raw
+    regex: \bdaemon\s+\$
+- id: process-group-kill
+  desc: Kills entire process group
+  crit: suspicious
+  conf: 0.9
+  attack: T1489
+  if:
+    type: raw
+    regex: \bkill\b\s+(-9|-SIGKILL|-KILL)\s+-\$?\{?[a-zA-Z_][a-zA-Z0-9_]*\}?
+- id: ps-grep-kill-pattern
+  desc: Process hunt via ps/grep/kill
+  crit: notable
+  conf: 0.85
+  attack: T1057
+  if:
+    type: raw
+    regex: ps\s+(-ef|-aux)[^|]{0,30}\|[^|]{0,50}grep
+- id: pgrep-discovery
+  desc: Process discovery via pgrep
+  crit: notable
+  conf: 0.8
+  attack: T1057
+  if:
+    type: raw
+    regex: \bpgrep\s+
+- id: kernel-module-load
+  desc: Init loads kernel module
+  crit: suspicious
+  conf: 0.8
+  attack: T1547.006
+  if:
+    type: raw
+    regex: \bmodprobe\s+\$|\binsmod\s+
+- id: device-node-create
+  desc: Init creates device node
+  crit: suspicious
+  conf: 0.85
+  attack: T1543
+  if:
+    type: raw
+    regex: \bmknod\s+[^\n]{1,50}\s+c\s+[0-9]+
+- id: source-nonstandard-init-helper
+  desc: Sources non-standard init helper
+  crit: suspicious
+  conf: 0.85
+  attack: T1037
+  if:
+    type: raw
+    regex: \.\s+/etc/init\.d/(modules|status)|source\s+/etc/init\.d/(modules|status)
+- id: binary-from-root-dir
+  desc: Runs binary from /root
+  crit: suspicious
+  conf: 0.9
+  attack: T1543
+  if:
+    type: raw
+    regex: '"/root/[^"]{1,120}"|PROGNAME="/root/|DAEMON="/root/'
+- id: processname-mismatch-lib
+  desc: processname references library-like name
+  crit: suspicious
+  conf: 0.85
+  attack: T1036
+  if:
+    type: raw
+    regex: '#\s*processname:\s*lib[a-z_]+[._][aso]'
+- id: proc-cmdline-read
+  desc: Reads /proc process cmdline
+  crit: notable
+  conf: 0.85
+  attack: T1057
+  if:
+    type: raw
+    regex: /proc/\$\{?[a-zA-Z_][a-zA-Z0-9_]*\}?/cmdline
+composite_rules:
+- id: init-script-selinux-bypass
+  desc: Init script with SELinux bypass
+  crit: suspicious
+  conf: 0.9
+  attack: T1562.001
+  all:
+  - id: chkconfig-header
+  - id: objectives/impact/degrade/mac::selinux-setsebool
+- id: aggressive-init-persistence
+  desc: Aggressive init persistence
+  crit: suspicious
+  conf: 0.9
+  attack: T1037.004
+  all:
+  - id: chkconfig-all-runlevels
+  - id: chkconfig-early-start
+- id: init-process-group-killer
+  desc: Init script with process group kill
+  crit: suspicious
+  conf: 0.9
+  attack: T1489
+  all:
+  - id: chkconfig-header
+  - id: process-group-kill
+- id: init-process-hunter
+  desc: Init script with process hunting
+  crit: hostile
+  conf: 0.9
+  attack: T1037
+  all:
+  - id: chkconfig-header
+  - id: ps-grep-kill-pattern
+  - id: proc-cmdline-read
+  - id: process-group-kill
+- id: init-aggressive-process-control
+  desc: Init script aggressive process mgmt
+  crit: hostile
+  conf: 0.9
+  attack: T1037
+  all:
+  - id: chkconfig-all-runlevels
+  - id: pgrep-discovery
+  - id: ps-grep-kill-pattern
+  - id: process-group-kill
+- id: init-kernel-device-manipulation
+  desc: Init with kernel/device manipulation
+  crit: hostile
+  conf: 0.85
+  attack: T1547.006
+  all:
+  - id: chkconfig-header
+  - id: kernel-module-load
+  - id: device-node-create
+- id: init-backdoor-pattern
+  desc: Init with backdoor characteristics
+  crit: hostile
+  conf: 0.9
+  attack: T1037
+  all:
+  - id: chkconfig-header
+  - id: source-nonstandard-init-helper
+  - id: binary-from-root-dir
+- id: init-deceptive-service
+  desc: Deceptive init service masquerade
+  crit: hostile
+  conf: 0.9
+  attack: T1036
+  all:
+  - id: chkconfig-header
+  - id: chkconfig-all-runlevels
+  - id: processname-mismatch-lib

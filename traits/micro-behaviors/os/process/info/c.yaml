@@ -1,0 +1,11 @@
+defaults:
+  for: [c, cpp]
+
+traits:
+  - id: check-argv-0
+    desc: Accesses argv[0] (Self path)
+    conf: 0.8
+    crit: notable
+    if:
+      type: raw
+      regex: '_argv'

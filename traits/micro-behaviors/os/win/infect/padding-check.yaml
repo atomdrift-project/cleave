@@ -1,0 +1,12 @@
+defaults:
+  for: [all]
+
+traits:
+  - id: asm-infection-padding-check
+    conf: 0.8
+    crit: notable
+    desc: Assembly code checking for infection marker via
+    if:
+      type: raw
+      regex: '(div\s+ecx|size_pad|size_padding|infected_marker)'
+      count_min: 1

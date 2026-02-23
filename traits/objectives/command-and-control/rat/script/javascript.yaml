@@ -1,0 +1,180 @@
+# Remote Access Trojan (RAT) - JavaScript/Node.js
+# Detects RAT-specific patterns including runtime dependency installation,
+# module path tampering, and remote command execution setup
+# ATT&CK: T1219 (Remote Access Software), T1059.007 (Command and Scripting Interpreter: JavaScript)
+
+defaults:
+  for: [javascript]
+
+traits:
+  # === Runtime Dependency Installation (Evasion) ===
+
+  - id: npm-install-runtime-exec
+    desc: Runtime npm install via exec
+    crit: suspicious
+    conf: 0.85
+    attack: "T1027.009"
+    if:
+      type: string
+      regex: 'npm\s+.{0,50}install.{0,50}(axios|socket\.io[-\w]*)'
+
+  - id: npm-prefix-install
+    desc: npm install with --prefix flag
+    crit: notable
+    conf: 0.7
+    if:
+      type: string
+      regex: 'npm\s+.{0,50}--prefix'
+
+  - id: windows-hide-option
+    desc: windowsHide option for stealth
+    crit: suspicious
+    conf: 0.8
+    attack: "T1564.003"
+    if:
+      type: string
+      regex: 'windowsHide:\s*true'
+
+  # === Module Resolution Tampering ===
+
+  - id: module-paths-push
+    desc: module.paths.push manipulation
+    crit: suspicious
+    conf: 0.85
+    attack: "T1574.007"
+    if:
+      type: symbol
+      regex: 'module\\.paths\\.push'
+
+  - id: hidden-node-modules
+    desc: Hidden .node_modules directory in home
+    crit: notable
+    conf: 0.75
+    if:
+      type: string
+      substr: ".node_modules"
+
+  # === Remote Command Execution Setup ===
+
+  - id: socket-command-handler
+    desc: Socket command event handler
+    crit: suspicious
+    conf: 0.9
+    attack: "T1059.007"
+    if:
+      type: ast
+      query: |
+        ((call_expression
+          function: (member_expression
+            object: (_) @socket
+            property: (property_identifier) @method)
+          arguments: (arguments
+            (string) @event_name))
+         (#eq? @method "on")
+         (#match? @event_name "command|cmd|exec|run"))
+
+  # === Client Fingerprinting ===
+
+  - id: client-uuid-pattern
+    desc: Client UUID identification field
+    crit: notable
+    conf: 0.7
+    if:
+      type: string
+      word: "clientUuid"
+
+  - id: process-id-collection
+    desc: Process ID collection
+    crit: notable
+    conf: 0.6
+    if:
+      type: symbol
+      regex: 'process\\.pid'
+
+  # === Dependency Resolution Check (Evasion) ===
+
+  - id: require-resolve-check
+    desc: Module installation check via require.resolve
+    crit: notable
+    conf: 0.7
+    if:
+      type: ast
+      query: |
+        ((call_expression
+          function: (member_expression
+            object: (identifier) @obj
+            property: (property_identifier) @method)
+          arguments: (arguments
+            (string) @module_name))
+         (#eq? @obj "require")
+         (#eq? @method "resolve"))
+
+composite_rules:
+  # Runtime dependency installation (HOSTILE evasion)
+  - id: runtime-npm-install
+    desc: Runtime npm package installation (dependency evasion)
+    crit: hostile
+    conf: 0.95
+    attack: "T1027.009"
+    mbc: "E1027"
+    for: [javascript] # +1 complexity
+    all: # +3 complexity
+      - id: npm-install-runtime-exec
+      - id: objectives/execution/interpreter/eval/invoke::shell-eval
+      - id: npm-prefix-install
+    # Total complexity: 4 (1 + 3 = 4)
+
+  # Module resolution tampering for persistence
+  - id: module-path-tampering
+    desc: Node.js module path tampering for persistence
+    crit: suspicious
+    conf: 0.85
+    attack: "T1574.007"
+    for: [javascript] # +1
+    all: # +2
+      - id: module-paths-push
+      - id: hidden-node-modules
+    # Total complexity: 3 (1 + 2 = 3)
+
+  # Remote command execution RAT setup
+  - id: rat-command-execution
+    desc: Remote Access Trojan with command execution
+    crit: hostile
+    conf: 0.95
+    attack: "T1219"
+    mbc: "B0022"
+    for: [javascript] # +1
+    all: # +3
+      - id: socket-command-handler
+      - id: objectives/command-and-control/network/http-listener::socket-io
+      - id: micro-behaviors/process/create/shell::js-child-process
+    # Total complexity: 4 (1 + 3 = 4)
+
+  # Advanced RAT with runtime evasion
+  - id: advanced-rat-evasion
+    desc: Advanced RAT with runtime dependency evasion
+    crit: hostile
+    conf: 0.95
+    attack: "T1219"
+    for: [javascript] # +1
+    all: # +2
+      - id: runtime-npm-install
+      - id: module-path-tampering
+    any: # +1
+      - id: socket-command-handler
+      - id: objectives/command-and-control/network/http-listener::socket-io
+    # Total complexity: 4 (1 + 2 + 1 = 4)
+
+  # Client fingerprinting for RAT tracking
+  - id: rat-client-fingerprinting
+    desc: RAT client fingerprinting and tracking
+    crit: suspicious
+    conf: 0.85
+    attack: "T1082"
+    for: [javascript] # +1
+    all: # +1
+      - id: client-uuid-pattern
+    any: # +1
+      - id: process-id-collection
+      - id: objectives/discovery/host/system/hardware-fingerprint::os-homedir-call
+    # Total complexity: 3 (1 + 1 + 1 = 3)

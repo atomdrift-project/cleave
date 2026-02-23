@@ -1,0 +1,252 @@
+# IoT Default Credential Detection
+# Common default credentials used in IoT botnets (Mirai, etc.)
+# ATT&CK: T1110.001 (Brute Force: Password Guessing)
+
+traits:
+  # Mirai credential indicators - individual strings are suspicious
+  - id: mirai-cred-admin
+    desc: Mirai credential variant (7ujMko0admin)
+    crit: suspicious
+    conf: 0.8
+    attack: "T1110.001"
+    for: [elf]
+    if:
+      type: string
+      substr: "7ujMko0admin"
+
+  - id: mirai-cred-vizxv
+    desc: Mirai credential variant (7ujMko0vizxv)
+    crit: suspicious
+    conf: 0.8
+    attack: "T1110.001"
+    for: [elf]
+    if:
+      type: string
+      substr: "7ujMko0vizxv"
+
+  - id: mirai-cred-juantech
+    desc: Mirai credential variant (juantech)
+    crit: suspicious
+    conf: 0.75
+    attack: "T1110.001"
+    for: [elf]
+    if:
+      type: string
+      substr: "juantech"
+
+  - id: mirai-cred-xc3511
+    desc: Mirai credential variant (xc3511)
+    crit: suspicious
+    conf: 0.8
+    attack: "T1110.001"
+    for: [elf]
+    if:
+      type: string
+      substr: "xc3511"
+
+  - id: mirai-cred-jvbzd
+    desc: Mirai credential variant (jvbzd)
+    crit: suspicious
+    conf: 0.8
+    attack: "T1110.001"
+    for: [elf]
+    if:
+      type: string
+      substr: "jvbzd"
+
+  - id: mirai-cred-smcadmin
+    desc: Mirai credential variant (smcadmin)
+    crit: suspicious
+    conf: 0.75
+    attack: "T1110.001"
+    for: [elf]
+    if:
+      type: string
+      substr: "smcadmin"
+
+  - id: mirai-cred-gm8182
+    desc: Mirai credential variant (GM8182)
+    crit: suspicious
+    conf: 0.8
+    attack: "T1110.001"
+    for: [elf]
+    if:
+      type: string
+      substr: "GM8182"
+
+  - id: mirai-cred-oelinux
+    desc: Mirai credential variant (oelinux123)
+    crit: suspicious
+    conf: 0.8
+    attack: "T1110.001"
+    for: [elf]
+    if:
+      type: string
+      substr: "oelinux123"
+
+  - id: mirai-cred-hi3518
+    desc: Mirai credential variant (hi3518)
+    crit: suspicious
+    conf: 0.8
+    attack: "T1110.001"
+    for: [elf]
+    if:
+      type: string
+      substr: "hi3518"
+
+  # Dahua/Hikvision camera credentials
+  - id: camera-cred-vizxv
+    desc: IP camera credential (vizxv)
+    crit: suspicious
+    conf: 0.75
+    attack: "T1110.001"
+    for: [elf]
+    if:
+      type: string
+      substr: "vizxv"
+
+  - id: camera-cred-xmhdipc
+    desc: IP camera credential (xmhdipc)
+    crit: suspicious
+    conf: 0.8
+    attack: "T1110.001"
+    for: [elf]
+    if:
+      type: string
+      substr: "xmhdipc"
+
+  # Router default credentials
+  - id: router-cred-zte
+    desc: Router credential (Zte521)
+    crit: suspicious
+    conf: 0.75
+    attack: "T1110.001"
+    for: [elf]
+    if:
+      type: string
+      substr: "Zte521"
+
+  - id: router-cred-huawei
+    desc: Router credential (telecomadmin)
+    crit: suspicious
+    conf: 0.75
+    attack: "T1110.001"
+    for: [elf]
+    if:
+      type: string
+      substr: "telecomadmin"
+
+  # === Telnet bruteforce atomic indicators ===
+  - id: telnet-connect-str
+    desc: Telnet connect string
+    crit: notable
+    conf: 0.6
+    attack: "T1110.001"
+    for: [elf]
+    if:
+      type: string
+      regex: "(?i)telnet connect"
+
+  - id: telnet-scanner-str
+    desc: Telnet scanner string
+    crit: notable
+    conf: 0.6
+    attack: "T1110.001"
+    for: [elf]
+    if:
+      type: string
+      regex: "(?i)telnet scanner"
+
+  - id: telnet-brute-str
+    desc: Telnet brute string
+    crit: notable
+    conf: 0.6
+    attack: "T1110.001"
+    for: [elf]
+    if:
+      type: string
+      regex: "(?i)telnet brute"
+
+  # === BusyBox download atomic indicators ===
+  # Removed duplicates - use objectives/command-and-control/botnet/iot::busybox-wget and ::busybox-tftp
+
+  - id: mirai-cred-prefix
+    desc: Mirai credential prefix (7ujMko0)
+    crit: suspicious
+    conf: 0.8
+    attack: "T1110.001"
+    for: [elf]
+    if:
+      type: string
+      substr: "7ujMko0"
+
+  - id: telnet-port-scan
+    desc: Telnet port 23 scanning indicator
+    crit: suspicious
+    conf: 0.75
+    attack: "T1110.001"
+    for: [elf]
+    if:
+      type: string
+      regex: "port 23 open"
+      case_insensitive: true
+
+  - id: router-shell-enable
+    desc: Router shell enable sequence
+    crit: suspicious
+    conf: 0.8
+    attack: "T1110.001"
+    for: [elf]
+    if:
+      type: string
+      substr: "enable\nshell\nsh"
+
+composite_rules:
+  # Telnet bruteforce composite
+  - id: telnet-connect
+    desc: Telnet connection string
+    crit: suspicious
+    conf: 0.7
+    attack: "T1110.001"
+    for: [elf]
+    any:
+      - id: telnet-connect-str
+      - id: telnet-scanner-str
+      - id: telnet-brute-str
+
+  # BusyBox download composite
+  - id: busybox-download
+    desc: BusyBox download exploitation
+    crit: suspicious
+    conf: 0.8
+    attack: "T1110.001"
+    for: [elf]
+    any:
+      - id: micro-behaviors/communications/download/busybox::wget
+      - id: micro-behaviors/communications/download/busybox::tftp
+
+  # Mirai default credentials - requires 3+ credential strings
+  - id: mirai-credential-access
+    desc: Mirai botnet default credential list
+    crit: suspicious
+    conf: 0.95
+    attack: "T1110.001"
+    mbc: "E1017"
+    for: [elf]
+    needs: 3
+    any:
+      - id: mirai-cred-admin
+      - id: mirai-cred-vizxv
+      - id: mirai-cred-juantech
+      - id: mirai-cred-xc3511
+      - id: mirai-cred-jvbzd
+      - id: mirai-cred-smcadmin
+      - id: mirai-cred-gm8182
+      - id: mirai-cred-oelinux
+      - id: mirai-cred-hi3518
+
+  # Camera credential list detection
+  - id: telnet-attack
+    desc: "IoT telnet attack patterns"
+    crit: notable
+    conf: 0.95

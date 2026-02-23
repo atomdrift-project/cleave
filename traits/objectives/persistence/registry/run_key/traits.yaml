@@ -1,0 +1,9 @@
+composite_rules:
+  - id: run-key-persistence-ps
+    desc: "Persists payload via Registry Run key (PowerShell)"
+    crit: hostile
+    conf: 0.95
+    for: [powershell]
+    all:
+      - id: micro-behaviors/os/registry/persistence::run-key-write-ps
+      - id: objectives/anti-static/obfuscation/strings/concatenation::ps-hidden-window

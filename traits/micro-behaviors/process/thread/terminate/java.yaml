@@ -1,0 +1,18 @@
+# Detects usage of deprecated Thread.stop() in Java
+# Ref: https://docs.oracle.com/javase/8/docs/technotes/guides/concurrency/threadPrimitiveDeprecation.html
+# Lang: java
+
+traits:
+  - id: stop
+    desc: Detects usage of deprecated Thread.stop() in Java
+    crit: suspicious
+    conf: 0.8
+    for: [java]
+    if:
+      type: raw
+      # Matches t.stop(), Thread.stop(), anything.stop()
+      # We rely on the context of other traits to elevate this to hostile.
+      # At capability level, .stop() is suspicious in the context of Thread operations, 
+      # but ambiguous generally. However, we'll set it to suspicious 
+      # and let the analyst or composite rules decide.
+      regex: '(\bThread|\b[a-zA-Z0-9_]+)\.stop\s*\(\s*\)'

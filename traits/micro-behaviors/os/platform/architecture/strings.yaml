@@ -1,0 +1,43 @@
+# Architecture String References
+# Architecture identifier strings
+# MBC: E1082 (System Information Discovery)
+# ATT&CK: T1082 (System Information Discovery)
+
+defaults:
+  for: [c, elf]
+  crit: baseline
+  mbc: "E1082"
+  attack: "T1082"
+
+traits:
+  - id: arch-x86-64
+    desc: x86_64 architecture string
+    conf: 0.3
+    platforms: [linux, unix, macos, windows]
+    if:
+      type: string
+      substr: "x86_64"
+
+  - id: arch-aarch64
+    desc: aarch64 architecture string
+    conf: 0.3
+    platforms: [linux, unix, macos]
+    if:
+      type: string
+      substr: "aarch64"
+
+  - id: arch-i386
+    desc: i386 architecture string
+    conf: 0.3
+    platforms: [linux, unix, windows]
+    if:
+      type: string
+      exact: "i386"
+
+  - id: arch-arm
+    desc: arm architecture string
+    conf: 0.3
+    platforms: [linux, unix, macos]
+    if:
+      type: string
+      exact: "arm"

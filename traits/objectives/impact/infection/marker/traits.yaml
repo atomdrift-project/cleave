@@ -1,0 +1,82 @@
+# Impact - Infection Markers
+# ATT&CK: T1204 (User Execution)
+
+traits:
+  - id: infected-with
+    desc: Infection notification pattern
+    crit: suspicious
+    conf: 0.9
+    attack: "T1204"
+    for: [all]
+    if:
+      type: string
+      regex: ".{3,16} infected with .{3,16}"
+
+  - id: elf-infector-yara
+    desc: ELF file infector pattern via
+    crit: suspicious
+    conf: 0.95
+    attack: "T1204"
+    mbc: "B0009"
+    for: [elf]
+    if:
+      type: yara
+      source: |
+        rule elf_infector {
+          strings:
+            // High-confidence infection terminology (specific to file infectors)
+            $infect_file = /infect.{0,10}(file|elf|binary)/i
+            $virus = "virus" nocase fullword
+            $parasite = "parasite" nocase fullword
+            // Common file-scanning patterns in infectors - require word boundaries
+            // Use \b to avoid matching "scanner self" or "scanning elf"
+            $scan_elf = /\bscan[_\s]+(for[_\s]+)?elf\b/i
+            $find_target = /find.{0,10}target/i
+            // Exclusions for legitimate binaries/tools
+            $llvm = "LLVM" fullword
+            $clang = "clang" fullword
+            $objcopy = "objcopy" fullword
+            $binutils = "binutils" fullword
+            // Lexer/parser generators
+            $flex = "flex" fullword
+            $lex = " lex " nocase
+            $yacc = "yacc" fullword
+            $bison = "bison" fullword
+            $scanner = "scanner" nocase fullword
+          condition:
+            uint32(0) == 0x464C457F and
+            filesize < 1MB and
+            // Only match explicit infection terminology, NOT embedded ELF
+            // (embedded ELF is common in linkers, objcopy, etc.)
+            any of ($infect_file, $virus, $parasite, $scan_elf, $find_target) and
+            none of ($llvm, $clang, $objcopy, $binutils, $flex, $lex, $yacc, $bison, $scanner)
+        }
+
+  - id: infected-xor-yara
+    desc: XOR obfuscated infection marker pattern
+    crit: suspicious
+    conf: 0.95
+    attack: "T1027"
+    for: [binaries]
+    if:
+      type: yara
+      source: |
+        rule infected_xor {
+          strings:
+            $infected_x = "infected" xor(1-255) fullword
+            $INFECTED_x = "INFECTED" xor(1-255) fullword
+            $virus_x = "virus" xor(1-255) fullword
+            $trojan_x = "trojan" xor(1-255) fullword
+            $worm_x = "worm" xor(1-255) fullword
+            $malware_x = "malware" xor(1-255) fullword
+            $win_error = "ERROR_VIRUS_INFECTED"
+          condition:
+            filesize < 5MB and
+            any of ($infected_x, $INFECTED_x) and
+            any of ($virus_x, $trojan_x, $worm_x, $malware_x) and
+            not $win_error
+        }
+
+composite_rules:
+  # NOTE: Simple libc function references are too common in statically linked binaries
+  # Require explicit infection markers or embedded ELF payloads at non-zero offset

@@ -1,0 +1,323 @@
+defaults:
+  for:
+    - all
+traits:
+  - id: password-auth
+    desc: SSH password authentication
+    crit: notable
+    conf: 0.6
+    if:
+      type: string
+      regex: (ssh[_-]?)?password[_-]?(auth(entication)?|method)
+  - id: too-many-auth-failures
+    desc: Too many authentication failures error
+    crit: notable
+    conf: 0.6
+    if:
+      type: string
+      substr: Too many authentication failures
+  - id: admin-admin-cred
+    desc: Default credential admin:admin
+    crit: notable
+    conf: 0.7
+    if:
+      type: string
+      substr: admin:admin
+  - id: root-root-cred
+    desc: Default credential root:root
+    crit: notable
+    conf: 0.7
+    if:
+      type: string
+      substr: root:root
+  - id: admin-1234-cred
+    desc: Default credential admin:1234
+    crit: notable
+    conf: 0.7
+    if:
+      type: string
+      substr: admin:1234
+  - id: ubnt-ubnt-cred
+    desc: Default Ubiquiti credential ubnt:ubnt
+    crit: notable
+    conf: 0.7
+    if:
+      type: string
+      substr: ubnt:ubnt
+  - id: pi-raspberry-cred
+    desc: Default Raspberry Pi credential pi:raspberry
+    crit: notable
+    conf: 0.7
+    if:
+      type: string
+      substr: pi:raspberry
+  - id: admin-password-cred
+    desc: Default credential admin:password
+    crit: notable
+    conf: 0.7
+    if:
+      type: string
+      substr: admin:password
+  - id: guest-guest-cred
+    desc: Default credential guest:guest
+    crit: notable
+    conf: 0.7
+    if:
+      type: string
+      substr: guest:guest
+  - id: support-support-cred
+    desc: Default credential support:support
+    crit: notable
+    conf: 0.7
+    if:
+      type: string
+      substr: support:support
+  - id: root-vizxv-cred
+    desc: Telnet default credential root:vizxv
+    crit: notable
+    conf: 0.7
+    if:
+      type: string
+      substr: root:vizxv
+  - id: root-xc3511-cred
+    desc: Telnet default credential root:xc3511
+    crit: notable
+    conf: 0.7
+    if:
+      type: string
+      substr: root:xc3511
+  - id: root-888888-cred
+    desc: Telnet default credential root:888888
+    crit: notable
+    conf: 0.7
+    if:
+      type: string
+      substr: root:888888
+  - id: root-juantech-cred
+    desc: Telnet default credential root:juantech
+    crit: notable
+    conf: 0.7
+    if:
+      type: string
+      substr: root:juantech
+  - id: admin-admin1234-cred
+    desc: Camera default credential admin:admin1234
+    crit: notable
+    conf: 0.7
+    if:
+      type: string
+      substr: admin:admin1234
+  - id: admin-smcadmin-cred
+    desc: SMC default credential admin:smcadmin
+    crit: notable
+    conf: 0.7
+    if:
+      type: string
+      substr: admin:smcadmin
+  - id: user-user-cred
+    desc: Default credential user:user
+    crit: notable
+    conf: 0.7
+    if:
+      type: string
+      substr: user:user
+  - id: ssh-port-string-lower
+    desc: SSH port string (lowercase)
+    crit: notable
+    conf: 0.6
+    if:
+      type: string
+      substr: port 22
+  - id: ssh-port-string-upper
+    desc: SSH port string (uppercase)
+    crit: notable
+    conf: 0.6
+    if:
+      type: string
+      substr: PORT 22
+  - id: ssh-port-string-title
+    desc: SSH port string (titlecase)
+    crit: notable
+    conf: 0.6
+    if:
+      type: string
+      substr: Port 22
+  - id: ssh-port-host-22
+    desc: SSH host with :22
+    crit: notable
+    conf: 0.6
+    if:
+      type: string
+      regex: (localhost|127\.0\.0\.1|0\.0\.0\.0|\d{1,3}(\.\d{1,3}){3}):22\b
+  - id: ssh-port-setting-22
+    desc: SSH port setting 22
+    crit: notable
+    conf: 0.6
+    if:
+      type: string
+      regex: \bport\s*[:=]?\s*22\b
+  - id: scanner-keyword-1
+    desc: scanner keyword (port/network/ssh)
+    crit: notable
+    conf: 0.75
+    if:
+      type: string
+      regex: \b(port|network|ssh)[_-]?scanner\b
+      case_insensitive: true
+  - id: scanner-keyword-2
+    desc: scanner keyword (thread/target/port)
+    crit: notable
+    conf: 0.75
+    if:
+      type: string
+      regex: \bscanner[_-]?(thread|target|port)\b
+      case_insensitive: true
+  - id: scanning-keyword-1
+    desc: scanning keyword (port/network)
+    crit: notable
+    conf: 0.75
+    if:
+      type: string
+      regex: \b(port|network)[_-]?scanning\b
+      case_insensitive: true
+  - id: scanning-keyword-2
+    desc: scanning keyword (port/target/thread)
+    crit: notable
+    conf: 0.75
+    if:
+      type: string
+      regex: \bscanning[_-]?(port|target|thread)\b
+      case_insensitive: true
+composite_rules:
+  - id: scanner-keyword
+    desc: scanner keyword
+    crit: notable
+    any:
+      - id: scanner-keyword-1
+      - id: scanner-keyword-2
+  - id: scanning-keyword
+    desc: scanning keyword
+    crit: notable
+    any:
+      - id: scanning-keyword-1
+      - id: scanning-keyword-2
+  - id: ssh-auth-methods
+    desc: SSH authentication methods
+    any:
+      - id: password-auth
+      - id: micro-behaviors/communications/ssh/client::keyboard-interactive
+    crit: notable
+  - id: ssh-auth-errors
+    desc: SSH authentication error messages
+    any:
+      - id: micro-behaviors/communications/ssh/client::auth-failed
+      - id: too-many-auth-failures
+    crit: notable
+  - id: ssh-port-refs
+    desc: SSH port 22 references
+    crit: notable
+    conf: 0.6
+    any:
+      - id: ssh-port-colon
+      - id: ssh-port-string-lower
+      - id: ssh-port-string-upper
+      - id: ssh-port-string-title
+  - id: ssh-port-colon
+    desc: SSH port :22
+    crit: notable
+    conf: 0.6
+    any:
+      - id: ssh-port-host-22
+      - id: ssh-port-setting-22
+  - id: scanner-keywords
+    desc: Network scanner keywords
+    needs: 2
+    any:
+      - id: scanner-keyword
+      - id: scanning-keyword
+      - id: ssh-port-refs
+      - id: micro-behaviors/communications/socket/connect::connect
+    crit: notable
+  - id: ssh-with-auth
+    desc: SSH protocol with authentication methods
+    all:
+      - id: micro-behaviors/communications/ssh/client::protocol
+      - id: ssh-auth-methods
+    crit: notable
+  - id: auth-spray
+    desc: SSH authentication credential spraying
+    crit: suspicious
+    conf: 0.85
+    mbc: E1110
+    attack: T1110.001
+    needs: 2
+    any:
+      - id: micro-behaviors/communications/ssh/client::protocol
+      - id: ssh-auth-methods
+      - id: ssh-auth-errors
+    downgrade:
+      any:
+        - id: micro-behaviors/os/pam/auth::module
+        - id: micro-behaviors/os/pam/auth::libpam-string
+        - id: metadata/sign/apple::platform
+        - id: metadata/apple/system-component
+        - id: micro-behaviors/communications/ssh/client::library
+        - id: micro-behaviors/communications/ssh/client::full-implementation
+  - id: iot-credential-access
+    desc: Default IoT device credentials for brute-force
+    crit: suspicious
+    conf: 0.9
+    mbc: E1110
+    attack: T1078.001
+    needs: 3
+    any:
+      - id: admin-admin-cred
+      - id: root-root-cred
+      - id: admin-1234-cred
+      - id: ubnt-ubnt-cred
+      - id: pi-raspberry-cred
+      - id: admin-password-cred
+      - id: guest-guest-cred
+      - id: support-support-cred
+      - id: root-vizxv-cred
+      - id: root-xc3511-cred
+      - id: root-888888-cred
+      - id: root-juantech-cred
+      - id: admin-admin1234-cred
+      - id: admin-smcadmin-cred
+      - id: user-user-cred
+  - id: ssh-port-scanner
+    desc: SSH port with scanner keywords
+    all:
+      - id: ssh-port-refs
+      - id: scanner-keywords
+    crit: notable
+  - id: ssh-port-threaded
+    desc: SSH port with threading
+    all:
+      - id: ssh-port-refs
+      - id: micro-behaviors/process/threading/operations::concurrent
+      - id: micro-behaviors/communications/socket/connect::connect
+    crit: notable
+  - id: scanner
+    desc: SSH network scanner for brute-force
+    crit: suspicious
+    conf: 0.8
+    mbc: E1110
+    attack: T1046
+    needs: 2
+    any:
+      - id: ssh-port-scanner
+      - id: ssh-port-threaded
+  - id: botnet
+    desc: SSH brute-force botnet detected
+    crit: hostile
+    conf: 0.9
+    mbc: E1110
+    attack: T1110.001
+    for:
+      - elf
+    all:
+      - id: scanner
+      - id: iot-credential-access
+      - id: auth-spray

@@ -1,0 +1,16 @@
+# FIFO (Named Pipe) Creation
+# MBC: C0046 (Create File)
+# ATT&CK: T1071
+
+defaults:
+  for: [elf, macho, so, dylib, c]
+
+traits:
+  # mkfifo: use micro-behaviors/fs/pipe/fifo/traits.yaml::mkfifo-cmd (canonical)
+  - id: fifo
+    desc: Create FIFO named pipe via mkfifoat
+    crit: baseline
+    conf: 0.66
+    if:
+      type: symbol
+      exact: "mkfifoat"

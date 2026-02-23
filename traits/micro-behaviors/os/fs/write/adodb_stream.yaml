@@ -1,0 +1,41 @@
+defaults:
+  for: [javascript, vbs]
+
+traits:
+  - id: adodb-save-to-file
+    desc: ADODB.Stream SaveToFile method call
+    crit: notable
+    if:
+      type: raw
+      regex: '\.SaveToFile\s*\('
+
+  - id: adodb-type-binary
+    desc: ADODB.Stream Type assignment (Binary)
+    crit: notable
+    if:
+      type: raw
+      regex: '\.Type\s*=\s*1'
+
+  - id: adodb-write-response-body
+    desc: ADODB.Stream Write method call with ResponseBody
+    crit: notable
+    if:
+      type: raw
+      regex: '\.Write\s*\([^)]{0,50}ResponseBody'
+
+  - id: adodb-open
+    desc: ADODB.Stream Open method call
+    crit: baseline
+    if:
+      type: raw
+      regex: '\.Open\s*\('
+
+composite_rules:
+  - id: adodb-binary-write
+    desc: Writes binary data to file using ADODB.Stream
+    crit: suspicious
+    conf: 0.9
+    all:
+      - id: adodb-save-to-file
+      - id: adodb-type-binary
+      - id: adodb-write-response-body

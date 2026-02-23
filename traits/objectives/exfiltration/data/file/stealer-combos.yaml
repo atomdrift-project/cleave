@@ -1,0 +1,123 @@
+# File Exfiltration Pattern Detection (Stealer Combinations)
+# Detects suspicious combinations indicating data exfiltration
+# Based on real-world stealer malware patterns
+
+composite_rules:
+  # Combination 1: libcurl + file extensions = stealer
+  - id: curl-with-file-targeting
+    desc: "HTTP client with credential/wallet file"
+    crit: hostile
+    conf: 0.95
+    attack: "T1041"
+    mbc: "B0030"
+    for: [elf, macho, pe]
+    all:
+      - id: micro-behaviors/communications/download/curl::libcurl-http
+    any:
+      - id: objectives/collection/file-targeting
+      - id: objectives/impact/cryptojacking/miner::wallet-ref
+
+  # Combination 2: fcopyfile + network (macOS)
+  - id: macos-file-copy-exfil
+    desc: "macOS file copying with network"
+    crit: suspicious
+    conf: 0.9
+    attack: "T1041"
+    platforms: [macos]
+    for: [macho]
+    all:
+      - id: micro-behaviors/fs/file/binary::fcopyfile-macos
+    any:
+      - id: micro-behaviors/communications/download/curl::libcurl-http
+      - id: micro-behaviors/communications/socket/create
+
+  # Combination 3: Directory traversal + file extensions + network
+  # NOTE: Excludes system libraries (libc) which provide these primitives
+  - id: recursive-file-theft
+    desc: "Recursive directory scan with file"
+    crit: hostile
+    conf: 0.95
+    attack: "T1005"
+    mbc: "B0030"
+    for: [elf, macho, pe]
+    all:
+      - id: micro-behaviors/fs/directory/traverse
+    needs: 2
+    any:
+      - id: objectives/collection/file-targeting
+      - id: micro-behaviors/communications/download/curl::libcurl-http
+      - id: micro-behaviors/communications/socket/create
+    none:
+      - id: micro-behaviors/dylib/library::system-lib-marker
+      - id: micro-behaviors/dylib/library::network-lib-marker
+      - id: micro-behaviors/dylib/library::debugger-tool-marker
+      - id: metadata/signed/platform::apple
+      - id: metadata/signed/id::com.apple.xpc.launchd
+
+  # Combination 4: Hardware UUID + base64 = fingerprint encoding
+  - id: encoded-hardware-fingerprint
+    desc: "Hardware fingerprint with base64 encoding"
+    crit: suspicious
+    conf: 0.9
+    attack: "T1082"
+    for: [elf, macho, pe]
+    all:
+      - id: micro-behaviors/data/encode/base64::custom-implementation
+    any:
+      - id: objectives/discovery/host/fingerprint/hardware
+      - id: objectives/discovery/host/fingerprint/disk
+      - id: objectives/discovery/host/fingerprint/machine-id
+
+  # Combination 5: Custom base64 + XOR + network = obfuscated exfil
+  - id: obfuscated-exfiltration
+    desc: "Multi-layer encoding with network (obfuscated"
+    crit: hostile
+    conf: 0.95
+    attack: "T1027"
+    mbc: "B0032"
+    for: [elf, macho, pe]
+    all:
+      - id: micro-behaviors/data/encode/base64::custom-implementation
+      - id: objectives/anti-static/obfuscation/encoding::string-decrypt
+    any:
+      - id: micro-behaviors/communications/download/curl::libcurl-http
+      - id: micro-behaviors/communications/socket/create
+
+  # Combination 6: libcurl + fingerprinting + obfuscation
+  - id: stealer-trifecta
+    desc: "Complete stealer pattern (network +"
+    crit: hostile
+    conf: 0.98
+    attack: "T1041"
+    mbc: "B0030"
+    for: [elf, macho, pe]
+    all:
+      - id: micro-behaviors/communications/download/curl::libcurl-http
+      - id: objectives/anti-static/obfuscation/encoding::string-decrypt
+    any:
+      - id: objectives/discovery/host/fingerprint
+
+  # Combination 7: Chrome cookie path + curl upload
+  - id: chrome-cookie-upload
+    desc: Chrome cookie theft and upload
+    crit: hostile
+    conf: 0.95
+    attack: "T1555.003"
+    mbc: "B0028"
+    all:
+      - id: objectives/credential-access/browser/chromium::cookies
+      - id: micro-behaviors/communications/http/upload::curl-upload-file
+
+  # Combination 8: CookieMiner dropper script
+  - id: cookieminer-dropper
+    desc: CookieMiner dropper script
+    crit: hostile
+    conf: 1.0
+    attack: "T1059.004"
+    mbc: "B0024"
+    for: [shell]
+    all:
+      - id: objectives/execution/dropper/script::curl-download
+      - id: objectives/credential-access/browser/chromium::cookies
+      - id: objectives/execution/dropper/payload::cp-execute
+      - id: micro-behaviors/communications/http/upload::curl-upload-file

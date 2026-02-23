@@ -1,0 +1,13 @@
+defaults:
+  for: [all]
+
+traits:
+  - id: actionscript-initialize-nullify-uaf
+    desc: "Pattern of initializing a manager and immediately"
+    crit: suspicious
+    conf: 0.9
+    attack: T1203
+    mbc: C0038
+    if:
+      type: raw
+      regex: '(?i)\.initialize\([a-zA-Z0-9_.]+\);\s*(this\.)?[a-zA-Z0-9_.]+\s*=\s*null'

@@ -1,0 +1,183 @@
+# Process Masquerading Detection
+# Detects malware pretending to be legitimate system processes
+# MBC: F0004 (Masquerading), E1036.005 (Match Legitimate Name)
+# ATT&CK: T1036.005 (Match Legitimate Name or Location)
+
+defaults:
+  mbc: "F0004"
+  attack: "T1036.005"
+
+traits:
+  # Fake system daemon command lines embedded in binary
+  # These are used to appear legitimate in process listings
+  - id: fake-smartd
+    desc: Fake smartd process masquerade
+    crit: suspicious
+    conf: 0.9
+    for: [elf]
+    if:
+      type: string
+      regex: '/usr/sbin/smartd\s+-[nqp]'
+
+  - id: fake-syslogd
+    desc: Fake syslogd process masquerade
+    crit: suspicious
+    conf: 0.9
+    for: [elf]
+    if:
+      type: string
+      regex: '/usr/sbin/syslogd\s+-[nms]'
+
+  - id: fake-crond
+    desc: Fake crond process masquerade
+    crit: suspicious
+    conf: 0.9
+    for: [elf]
+    if:
+      type: string
+      regex: '/usr/sbin/cron[d]?\s+-[fn]'
+
+  - id: fake-sshd
+    desc: Fake sshd process masquerade
+    crit: suspicious
+    conf: 0.9
+    for: [elf]
+    if:
+      type: string
+      regex: '/usr/sbin/sshd\s+-[Dd]'
+
+  # HAL daemon PID files - often used by masquerading malware
+  - id: hald-pidfile
+    desc: HAL daemon PID file path
+    crit: suspicious
+    conf: 0.85
+    for: [elf]
+    if:
+      type: string
+      substr: "/var/run/hald-"
+
+  # Generic daemon PID file in suspicious location
+  - id: suspicious-pidfile
+    desc: Suspicious PID file location
+    crit: notable
+    conf: 0.8
+    for: [elf]
+    if:
+      type: string
+      regex: '/var/run/[a-z]+-[a-z]+\.pid$'
+
+  # Multiple system daemon paths - used for masquerading
+  # Having 3+ daemon paths in a single binary is suspicious
+  - id: daemon-paths-a
+    desc: System daemon path group A
+    crit: suspicious
+    conf: 0.9
+    for: [elf]
+    if:
+      type: string
+      regex: "/usr/sbin/(auditd|cron[d]?|acpid)"
+
+  - id: daemon-paths-b
+    desc: System daemon path group B
+    crit: suspicious
+    conf: 0.9
+    for: [elf]
+    if:
+      type: string
+      regex: "/usr/sbin/(atd|sshd|rsyslogd)"
+
+  - id: daemon-paths-c
+    desc: System daemon path group C
+    crit: suspicious
+    conf: 0.9
+    for: [elf]
+    if:
+      type: string
+      regex: "/usr/sbin/(syslogd|smartd|ntpd)"
+
+  # Individual daemon path references
+  - id: auditd-path
+    desc: auditd daemon path reference
+    crit: notable
+    conf: 0.8
+    for: [elf]
+    if:
+      type: string
+      substr: "/usr/sbin/auditd"
+
+  - id: acpid-path
+    desc: acpid daemon path reference
+    crit: notable
+    conf: 0.8
+    for: [elf]
+    if:
+      type: string
+      substr: "/usr/sbin/acpid"
+
+  # atd-path: use objectives/anti-analysis/masquerade/process::fake-atd-path (canonical)
+
+  # prctl symbol - can be used to change process name
+  - id: prctl-symbol
+    desc: prctl system call symbol
+    crit: notable
+    conf: 0.9
+    for: [elf]
+    if:
+      type: symbol
+      exact: "prctl"
+
+composite_rules:
+  - id: daemon-paths
+    desc: Multiple system daemon paths
+    crit: suspicious
+    conf: 0.9
+    for: [elf]
+    any:
+      - id: daemon-paths-a
+      - id: daemon-paths-b
+      - id: daemon-paths-c
+
+  # Process masquerading as system daemon
+  # Complexity: all(2) + any(5) = 7 >= 4 HOSTILE
+  - id: daemon-masquerade
+    desc: Process masquerading as system daemon
+    crit: hostile
+    conf: 0.92
+    for: [elf]
+    all:
+      - id: prctl-symbol
+      - id: micro-behaviors/process/daemonize/background::daemon
+    any:
+      - id: fake-smartd
+      - id: fake-syslogd
+      - id: fake-crond
+      - id: fake-sshd
+      - id: hald-pidfile
+
+  # Backdoor with masquerading - high confidence malware
+  # Complexity: all(2) + any(4) = 6 >= 4 HOSTILE
+  - id: masquerade-backdoor
+    desc: Backdoor with daemon masquerading
+    crit: hostile
+    conf: 0.95
+    for: [elf]
+    all:
+      - id: micro-behaviors/communications/socket/create
+      - id: micro-behaviors/process/create/shell::shell-symbols
+    any:
+      - id: fake-smartd
+      - id: fake-syslogd
+      - id: hald-pidfile
+      - id: daemon-paths
+
+  # Backdoor with multiple daemon path references
+  # Complexity: all(3) + for(1) = 4 >= 4 HOSTILE
+  - id: multi-daemon-backdoor
+    desc: Backdoor with daemon path masquerading
+    crit: hostile
+    conf: 0.95
+    for: [elf]
+    all:
+      - id: daemon-paths
+      - id: micro-behaviors/communications/socket/create
+      - id: micro-behaviors/process/daemonize/background::daemon

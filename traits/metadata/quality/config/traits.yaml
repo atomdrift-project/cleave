@@ -1,0 +1,67 @@
+# Code Quality Indicators - Config
+
+traits:
+  # === Atomic: Configuration Management ===
+
+  - id: config-yaml-file
+    desc: config.yaml filename
+    crit: baseline
+    conf: 0.6
+    for: [all]
+    if:
+      type: string
+      substr: "config.yaml"
+
+  - id: config-json-file
+    desc: config.json filename
+    crit: baseline
+    conf: 0.6
+    for: [all]
+    if:
+      type: string
+      substr: "config.json"
+
+  - id: config-toml-file
+    desc: config.toml filename
+    crit: baseline
+    conf: 0.6
+    for: [all]
+    if:
+      type: string
+      substr: "config.toml"
+
+  - id: dotenv-file
+    desc: .env file reference
+    crit: baseline
+    conf: 0.6
+    for: [all]
+    if:
+      type: string
+      exact: ".env"
+
+  - id: viper-config-lib
+    desc: Viper configuration library
+    crit: baseline
+    conf: 0.7
+    for: [go]
+    if:
+      type: string
+      word: "viper"
+
+  - id: configparser-module
+    desc: configparser module
+    crit: baseline
+    conf: 0.7
+    for: [python]
+    if:
+      type: string
+      word: "configparser"
+
+  - id: dotenv-module
+    desc: dotenv module reference
+    crit: baseline
+    conf: 0.7
+    for: [javascript, python]
+    if:
+      type: string
+      word: "dotenv"

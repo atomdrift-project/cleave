@@ -1,0 +1,187 @@
+defaults:
+  crit: notable
+  attack: T1036.005
+  mbc: F0004
+  for:
+    - all
+
+traits:
+  - id: unknown-summary
+    desc: PKG-INFO has UNKNOWN summary
+    crit: notable
+    conf: 0.75
+    if:
+      type: kv
+      path: summary
+      exact: UNKNOWN
+
+  - id: pkginfo-low-effort-summary
+    desc: PKG-INFO summary contains minimal-effort description
+    crit: notable
+    conf: 0.8
+    if:
+      type: kv
+      path: summary
+      regex: (?i)((a |my )?very basic \w+|\w+pyapp\b)
+
+  - id: pkginfo-single-word-summary
+    desc: PKG-INFO with single-word summary
+    crit: notable
+    conf: 0.75
+    if:
+      type: kv
+      path: summary
+      regex: ^\S{1,30}$
+
+  - id: pkginfo-security-claim-1
+    desc: Security claim (secur/protect)
+    crit: notable
+    conf: 0.75
+    if:
+      type: kv
+      path: summary
+      regex: (secur|protect)
+      case_insensitive: true
+
+  - id: pkginfo-security-claim-2
+    desc: Security claim (antivirus/scanner)
+    crit: notable
+    conf: 0.75
+    if:
+      type: kv
+      path: summary
+      regex: (antivirus|anti-virus|malware.scanner)
+      case_insensitive: true
+
+  - id: summary-requests-admin-1
+    desc: Admin request (admin/root/sudo/elevat)
+    crit: notable
+    conf: 0.75
+    if:
+      type: kv
+      path: summary
+      regex: (admin|root|sudo|elevat)
+      case_insensitive: true
+
+  - id: summary-requests-admin-2
+    desc: Admin request (install/permiss)
+    crit: notable
+    conf: 0.75
+    if:
+      type: kv
+      path: summary
+      regex: (install|permiss)
+      case_insensitive: true
+
+  - id: summary-misspelled-privilege-request-1
+    desc: Misspelled privilege (evoid/administative/permisions/adminstrat)
+    crit: notable
+    conf: 0.75
+    if:
+      type: kv
+      path: summary
+      regex: (evoid|administative|permisions|adminstrat)
+      case_insensitive: true
+
+  - id: summary-misspelled-privilege-request-2
+    desc: Misspelled privilege (privileg|instaling|elavat)
+    crit: notable
+    conf: 0.75
+    if:
+      type: kv
+      path: summary
+      regex: (privileg|instaling|elavat)
+      case_insensitive: true
+
+  - id: pkginfo-non-latin-summary
+    desc: PKG-INFO summary in non-Latin script
+    crit: notable
+    conf: 0.75
+    attack: T1204.001
+    if:
+      type: kv
+      path: summary
+      regex: "[\u0410-\u044F\u0401\u0451\u00C0-\u00D6\u00D8-\u00F6\u00F8-\u00FF\u0600-\u06FF\u4E00-\u9FFF\u3040-\u309F\u30A0-\u30FF\uAC00-\uD7AF]"
+
+  - id: pkginfo-no-summary
+    desc: PKG-INFO missing Summary field
+    crit: notable
+    conf: 0.75
+    if:
+      type: kv
+      path: metadata-version
+    unless:
+      - type: kv
+        path: summary
+
+  - id: pkginfo-placeholder-summary-test
+    desc: Placeholder summary (test)
+    crit: notable
+    conf: 0.75
+    if: { type: kv, path: summary, regex: '^\s*(test|example)\s*$', case_insensitive: true }
+
+  - id: pkginfo-placeholder-summary-placeholder
+    desc: Placeholder summary (placeholder)
+    crit: notable
+    conf: 0.75
+    if: { type: kv, path: summary, regex: '^\s*placeholder\s*$', case_insensitive: true }
+
+  - id: pkginfo-placeholder-summary-todo
+    desc: Placeholder summary (todo)
+    crit: notable
+    conf: 0.75
+    if: { type: kv, path: summary, regex: '^\s*(todo|fixme)\s*$', case_insensitive: true }
+
+  - id: pkginfo-placeholder-summary-2
+    desc: Placeholder summary (description/empty/dummy)
+    crit: notable
+    conf: 0.75
+    if:
+      type: kv
+      path: summary
+      regex: ^\s*(description|empty|dummy)\s*$
+      case_insensitive: true
+
+composite_rules:
+  - id: pkginfo-placeholder-summary-1
+    desc: Placeholder summary collection 1
+    crit: notable
+    conf: 0.75
+    any:
+      - id: pkginfo-placeholder-summary-test
+      - id: pkginfo-placeholder-summary-placeholder
+      - id: pkginfo-placeholder-summary-todo
+
+  - id: pkginfo-security-claim
+    desc: PKG-INFO summary claims security functionality
+    crit: notable
+    conf: 0.5
+    any:
+      - id: pkginfo-security-claim-1
+      - id: pkginfo-security-claim-2
+
+  - id: summary-requests-admin
+    desc: Summary requests admin privileges for install
+    crit: suspicious
+    conf: 0.9
+    attack: T1204.001
+    all:
+      - id: summary-requests-admin-1
+      - id: summary-requests-admin-2
+
+  - id: summary-misspelled-privilege-request
+    desc: Misspelled social engineering in PKG-INFO summary
+    crit: suspicious
+    conf: 0.9
+    attack: T1204.001
+    any:
+      - id: summary-misspelled-privilege-request-1
+      - id: summary-misspelled-privilege-request-2
+
+  - id: pkginfo-placeholder-summary
+    desc: PKG-INFO summary contains placeholder text
+    crit: notable
+    conf: 0.8
+    any:
+      - id: pkginfo-placeholder-summary-1
+      - id: pkginfo-placeholder-summary-2

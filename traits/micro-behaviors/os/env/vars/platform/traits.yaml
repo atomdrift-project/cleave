@@ -1,0 +1,34 @@
+# Android Platform Environment Variables
+# Environment variables specific to Android OS
+
+defaults:
+  for: [all]
+  platforms: [android]
+  crit: notable
+  conf: 0.8
+
+traits:
+  - id: android-root-var
+    desc: ANDROID_ROOT environment variable
+    if:
+      type: string
+      exact: "ANDROID_ROOT"
+
+  - id: android-data-var
+    desc: ANDROID_DATA environment variable
+    if:
+      type: string
+      exact: "ANDROID_DATA"
+
+  - id: android-storage-var
+    desc: ANDROID_STORAGE environment variable
+    if:
+      type: string
+      exact: "ANDROID_STORAGE"
+
+  - id: android-env-prefix
+    desc: ANDROID_* environment variable (any)
+    conf: 0.7
+    if:
+      type: string
+      regex: '^ANDROID_[A-Z_]+'

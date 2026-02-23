@@ -1,0 +1,95 @@
+# Process Injection Detection - Linux
+# MBC: B0033 (Process Injection)
+# ATT&CK: T1055
+
+defaults:
+  for: [elf]
+  platforms: [linux]
+
+traits:
+  # === Ptrace-based injection ===
+  - id: ptrace-attach
+    desc: PTRACE_ATTACH for process injection
+    crit: suspicious
+    conf: 0.75
+    mbc: "B0033"
+    attack: "T1055"
+    if:
+      type: string
+      substr: "PTRACE_ATTACH"
+
+  - id: ptrace-poketext
+    desc: PTRACE_POKETEXT for code injection
+    crit: suspicious
+    conf: 0.85
+    mbc: "B0033"
+    attack: "T1055"
+    if:
+      type: string
+      substr: "PTRACE_POKETEXT"
+
+  # === Process VM operations ===
+  - id: process-vm-writev
+    desc: process_vm_writev for memory injection
+    crit: notable
+    conf: 0.85
+    mbc: "B0033"
+    attack: "T1055"
+    size_max: 2097152
+    if:
+      type: symbol
+      regex: "process_vm_writev"
+
+  # === Go ptrace injection ===
+  - id: syscall-ptrace-attach
+    desc: Go syscall.PtraceAttach
+    crit: notable
+    conf: 0.75
+    for: [elf, go]
+    if:
+      type: symbol
+      exact: "syscall.PtraceAttach"
+
+  - id: syscall-ptrace-cont
+    desc: Go syscall.PtraceCont
+    crit: notable
+    conf: 0.75
+    for: [elf, go]
+    if:
+      type: symbol
+      exact: "syscall.PtraceCont"
+
+  - id: proc-mem-glob
+    desc: /proc/*/mem path for process memory injection
+    crit: notable
+    conf: 0.8
+    for: [elf, go]
+    if:
+      type: string
+      substr: "/proc/*/mem"
+
+composite_rules:
+  # Process injection via ptrace (migrated from YARA)
+  - id: process-inject-ptrace
+    desc: Process injection via ptrace
+    crit: notable
+    conf: 0.66
+    mbc: "B0033"
+    attack: "T1055"
+    any:
+      - id: ptrace-attach
+      - id: ptrace-poketext
+      - id: process-vm-writev
+
+  # Go-specific ptrace injection
+  - id: go-ptrace-inject
+    desc: Go process injection via syscall.Ptrace
+    crit: suspicious
+    conf: 0.85
+    mbc: "B0033"
+    attack: "T1055.008"
+    for: [elf, go]
+    any:
+      - id: syscall-ptrace-attach
+      - id: syscall-ptrace-cont
+      - id: proc-mem-glob

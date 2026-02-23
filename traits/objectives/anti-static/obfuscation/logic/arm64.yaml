@@ -1,0 +1,33 @@
+# ARM64 Obfuscation Patterns
+# Detects low-level code patterns used for decryption and evasion on ARM64
+# ATT&CK: T1027 (Obfuscated Files or Information)
+
+defaults:
+  platforms: [macos, linux]
+  for: [macho, elf]
+  crit: suspicious
+
+traits:
+  - id: xor-ror-decryption-loop
+    desc: "ARM64 XOR+ROR decryption loop"
+    conf: 0.9
+    mbc: "B0032"
+    if:
+      type: hex
+      # Matches eor/strb/ror sequence often used in simple obfuscators
+      # eor: ?? ?? ?? 4a
+      # strb: ?? ?? ?? 39
+      # ror: ?? ?? ?? 93
+      pattern: "?? ?? ?? 4a ?? ?? ?? 39 ?? ?? ?? 93"
+    downgrade:
+      any:
+        - id: metadata/signed/platform::apple
+        - id: metadata/signed/issuer::apple
+
+  - id: svc-instruction
+    desc: "ARM64 svc instruction"
+    crit: notable
+    conf: 0.5
+    if:
+      type: hex
+      pattern: "01 00 00 d4"

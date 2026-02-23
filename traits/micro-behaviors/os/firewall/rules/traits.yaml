@@ -1,0 +1,361 @@
+# Firewall Tool Abuse Patterns
+# Detects malware manipulating firewall rules for persistence and C2 access
+# Indicators of sophisticated backdoor installation
+
+traits:
+  - id: firewall-cmd-add-port-flag
+    desc: --add-port flag
+    crit: suspicious
+    conf: 0.85
+    for: [elf, shell]
+    if:
+      type: string
+      substr: "--add-port"
+    attack: "T1562.004"
+
+  - id: firewall-cmd-add-ssh-service
+    desc: --add-service=ssh flag
+    crit: suspicious
+    conf: 0.85
+    for: [elf, shell]
+    if:
+      type: string
+      substr: "--add-service=ssh"
+    attack: "T1562.004"
+
+  - id: firewall-cmd-add-port-pattern
+    desc: firewall-cmd add-port pattern
+    crit: suspicious
+    conf: 0.85
+    for: [elf, shell]
+    if:
+      type: string
+      regex: "firewall-cmd\\s+.{0,50}--add-port"
+    attack: "T1562.004"
+
+  - id: firewall-cmd-permanent-port22
+    desc: permanent add-port=22
+    crit: suspicious
+    conf: 0.85
+    for: [elf, shell]
+    if:
+      type: string
+      substr: "--permanent --add-port=22"
+    attack: "T1562.004"
+
+  - id: firewall-cmd-permanent-ssh
+    desc: permanent add-service=ssh
+    crit: suspicious
+    conf: 0.85
+    for: [elf, shell]
+    if:
+      type: string
+      substr: "--permanent --add-service=ssh"
+    attack: "T1562.004"
+
+  - id: firewall-cmd-permanent-pattern
+    desc: permanent add-port/service pattern
+    crit: suspicious
+    conf: 0.85
+    for: [elf, shell]
+    if:
+      type: string
+      regex: "--permanent.{0,50}--add-(port|service)"
+    attack: "T1562.004"
+
+  - id: firewall-cmd-reload-basic
+    desc: firewall-cmd --reload
+    crit: suspicious
+    conf: 0.8
+    for: [elf, shell]
+    if:
+      type: string
+      substr: "firewall-cmd --reload"
+    attack: "T1562.004"
+
+  - id: firewall-cmd-complete-reload
+    desc: firewall-cmd --complete-reload
+    crit: suspicious
+    conf: 0.8
+    for: [elf, shell]
+    if:
+      type: string
+      substr: "firewall-cmd --complete-reload"
+    attack: "T1562.004"
+
+  - id: firewalld-restart
+    desc: systemctl restart firewalld
+    crit: suspicious
+    conf: 0.8
+    for: [elf, shell]
+    if:
+      type: string
+      substr: "systemctl restart firewalld"
+    attack: "T1562.004"
+
+  - id: ufw-allow-command
+    desc: ufw allow command
+    crit: notable
+    conf: 0.75
+    for: [elf, shell]
+    if:
+      type: string
+      substr: "ufw allow"
+    attack: "T1562.004"
+
+  - id: ufw-allow-22
+    desc: ufw allow port 22 firewall rule
+    crit: suspicious
+    conf: 0.85
+    for: [elf, shell]
+    if:
+      type: string
+      substr: "ufw allow 22"
+    attack: "T1562.004"
+
+  - id: ufw-allow-ssh-name
+    desc: ufw allow SSH service by name
+    crit: suspicious
+    conf: 0.85
+    for: [elf, shell]
+    if:
+      type: string
+      substr: "ufw allow ssh"
+    attack: "T1562.004"
+
+  - id: ufw-allow-in-22
+    desc: ufw allow in 22
+    crit: suspicious
+    conf: 0.85
+    for: [elf, shell]
+    if:
+      type: string
+      substr: "ufw allow in 22"
+    attack: "T1562.004"
+
+  - id: ufw-allow-ssh-pattern
+    desc: ufw allow 22/ssh pattern
+    crit: suspicious
+    conf: 0.85
+    for: [elf, shell]
+    if:
+      type: string
+      regex: "ufw\\s+allow\\s+(22|ssh)"
+    attack: "T1562.004"
+
+  - id: ufw-enable-basic
+    desc: ufw firewall enable command
+    crit: suspicious
+    conf: 0.8
+    for: [elf, shell]
+    if:
+      type: string
+      substr: "ufw enable"
+    attack: "T1562.004"
+
+  - id: ufw-force-enable
+    desc: ufw --force enable
+    crit: suspicious
+    conf: 0.8
+    for: [elf, shell]
+    if:
+      type: string
+      substr: "ufw --force enable"
+    attack: "T1562.004"
+
+  - id: firewall-tool-which-firewall-cmd
+    desc: which firewall-cmd
+    crit: baseline
+    conf: 0.5
+    for: [elf, shell]
+    if:
+      type: string
+      substr: "which firewall-cmd"
+
+  - id: firewall-tool-which-ufw
+    desc: which ufw
+    crit: baseline
+    conf: 0.5
+    for: [elf, shell]
+    if:
+      type: string
+      substr: "which ufw"
+
+  - id: firewall-tool-command-v-ufw
+    desc: command -v ufw
+    crit: baseline
+    conf: 0.5
+    for: [elf, shell]
+    if:
+      type: string
+      substr: "command -v ufw"
+
+  - id: firewall-tool-which-iptables
+    desc: which iptables
+    crit: baseline
+    conf: 0.5
+    for: [elf, shell]
+    if:
+      type: string
+      substr: "which iptables"
+
+  - id: firewalld-enable
+    desc: systemctl enable firewalld
+    crit: suspicious
+    conf: 0.8
+    for: [elf, shell]
+    if:
+      type: string
+      substr: "systemctl enable firewalld"
+    attack: "T1562.004"
+
+  - id: firewalld-start
+    desc: systemctl start firewalld
+    crit: suspicious
+    conf: 0.8
+    for: [elf, shell]
+    if:
+      type: string
+      substr: "systemctl start firewalld"
+    attack: "T1562.004"
+
+  - id: port-22-ssh-add-port
+    desc: --add-port=22 flag
+    crit: suspicious
+    conf: 0.8
+    for: [elf, shell]
+    if:
+      type: string
+      substr: "--add-port=22"
+    attack: "T1562.004"
+
+  - id: port-22-ssh-allow-22
+    desc: firewall allow port 22 rule
+    crit: suspicious
+    conf: 0.8
+    for: [elf, shell]
+    if:
+      type: string
+      substr: "allow 22"
+    attack: "T1562.004"
+
+  - id: port-22-ssh-allow-ssh
+    desc: firewall allow SSH service rule
+    crit: suspicious
+    conf: 0.8
+    for: [elf, shell]
+    if:
+      type: string
+      substr: "allow ssh"
+    attack: "T1562.004"
+
+composite_rules:
+  # Composite rules for traits that used any:
+  - id: firewall-cmd-add-port
+    desc: firewall-cmd adding port rule
+    crit: suspicious
+    conf: 0.85
+    for: [elf, shell]
+    attack: "T1562.004"
+    any:
+      - id: firewall-cmd-add-port-flag
+      - id: firewall-cmd-add-ssh-service
+      - id: firewall-cmd-add-port-pattern
+
+  - id: firewall-cmd-permanent
+    desc: firewall-cmd permanent rule modification
+    crit: suspicious
+    conf: 0.85
+    for: [elf, shell]
+    attack: "T1562.004"
+    any:
+      - id: firewall-cmd-permanent-port22
+      - id: firewall-cmd-permanent-ssh
+      - id: firewall-cmd-permanent-pattern
+
+  - id: firewall-cmd-reload
+    desc: firewall-cmd reload or restart
+    crit: suspicious
+    conf: 0.8
+    for: [elf, shell]
+    attack: "T1562.004"
+    any:
+      - id: firewall-cmd-reload-basic
+      - id: firewall-cmd-complete-reload
+      - id: firewalld-restart
+
+  - id: ufw-allow-ssh
+    desc: ufw allowing SSH port access
+    crit: suspicious
+    conf: 0.85
+    for: [elf, shell]
+    attack: "T1562.004"
+    any:
+      - id: ufw-allow-22
+      - id: ufw-allow-ssh-name
+      - id: ufw-allow-in-22
+      - id: ufw-allow-ssh-pattern
+
+  - id: ufw-enable
+    desc: ufw firewall enable or activate
+    crit: suspicious
+    conf: 0.8
+    for: [elf, shell]
+    attack: "T1562.004"
+    any:
+      - id: ufw-enable-basic
+      - id: ufw-force-enable
+
+  - id: firewall-tool-check
+    desc: checking for firewall tool availability
+    crit: baseline
+    conf: 0.5
+    for: [elf, shell]
+    any:
+      - id: firewall-tool-which-firewall-cmd
+      - id: firewall-tool-which-ufw
+      - id: firewall-tool-command-v-ufw
+      - id: firewall-tool-which-iptables
+
+  - id: firewalld-service-control
+    desc: firewalld service enable or restart
+    crit: suspicious
+    conf: 0.8
+    for: [elf, shell]
+    attack: "T1562.004"
+    any:
+      - id: firewalld-enable
+      - id: firewalld-start
+      - id: firewalld-restart
+
+  - id: port-22-ssh-rule
+    desc: SSH port 22 firewall rule
+    crit: suspicious
+    conf: 0.8
+    for: [elf, shell]
+    attack: "T1562.004"
+    any:
+      - id: port-22-ssh-add-port
+      - id: port-22-ssh-allow-22
+      - id: port-22-ssh-allow-ssh
+
+  # Higher-level composites
+  - id: firewall-ssh-opening
+    desc: Firewall rule allowing SSH access
+    crit: suspicious
+    conf: 0.9
+    for: [elf, shell]
+    attack: "T1562.004"
+    all:
+      - id: micro-behaviors/os/firewall/firewalld::firewall-cmd
+      - id: port-22-ssh-rule
+
+  - id: firewall-persistence-setup
+    desc: Permanent firewall rule installation
+    crit: suspicious
+    conf: 0.9
+    for: [elf, shell]
+    attack: "T1562.004"
+    all:
+      - id: firewall-cmd-permanent
+      - id: firewall-cmd-reload

@@ -1,0 +1,55 @@
+defaults:
+  for: [all]
+
+traits:
+  - id: bash-shell
+    desc: Bash shell reference
+    crit: notable
+    conf: 0.7
+    if:
+      type: string
+      word: "bash"
+
+  - id: system-call-word
+    desc: system() call (string)
+    crit: notable
+    conf: 0.5
+    for: [python, ruby, perl, php, javascript, typescript, shell, scripts, c]
+    if:
+      type: string
+      regex: "(^|[^A-Za-z0-9_\\.])system\\s*[(]"
+
+  # NOTE: system() symbol detection for ruby moved to process/create/shell/lang/ruby.yaml
+  # This trait now focuses on generic system() for C/binaries
+  - id: system-fn
+    desc: system() function call
+    crit: notable
+    conf: 0.9
+    for: [elf, macho, pe, dll, so, dylib, c]
+    if:
+      type: symbol
+      exact: "system"
+
+composite_rules:
+  - id: go-shell-strings
+    desc: Go shell execution strings
+    crit: notable
+    conf: 0.9
+    any:
+      - id: micro-behaviors/process/create/shell::go-os-exec
+      - id: micro-behaviors/process/create/shell/lang::exec-cmd-run
+
+  - id: shell-symbols
+    desc: Shell execution symbols
+    crit: notable
+    conf: 0.9
+    any:
+      - id: micro-behaviors/process/create/shell
+
+  - id: shell-execution-indicators
+    desc: Shell command execution indicators
+    crit: notable
+    conf: 0.9
+    any:
+      - id: shell-symbols
+      - id: go-shell-strings

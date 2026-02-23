@@ -1,0 +1,51 @@
+# Java Cryptographic Operations
+# MBC: C0015 (Cryptography)
+# ATT&CK: T1573.001 (Encrypted Channel: Symmetric Cryptography)
+
+defaults:
+  for: [all]
+
+traits:
+  - id: secretkeyspec
+    desc: Java SecretKeySpec symmetric key construction
+    crit: notable
+    conf: 0.9
+    mbc: "C0015"
+    attack: "T1573.001"
+    if:
+      type: yara
+      source: |
+        rule java_secretkeyspec {
+          strings:
+            $a = "javax/crypto/spec/SecretKeySpec" ascii
+          condition:
+            $a
+        }
+
+  - id: cipher-init
+    desc: Java Cipher initialization and encryption
+    crit: notable
+    conf: 0.9
+    mbc: "C0015"
+    attack: "T1573.001"
+    if:
+      type: yara
+      source: |
+        rule java_cipher_init {
+          strings:
+            $cipher = "javax/crypto/Cipher" ascii
+            $dofinal = "doFinal" ascii
+          condition:
+            $cipher and $dofinal
+        }
+
+composite_rules:
+  - id: java-payload-decryption
+    desc: Java symmetric key payload decryption
+    crit: suspicious
+    conf: 0.9
+    mbc: "C0015"
+    attack: "T1140"
+    all:
+      - id: secretkeyspec
+      - id: cipher-init

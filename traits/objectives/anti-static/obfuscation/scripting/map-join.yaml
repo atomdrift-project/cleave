@@ -1,0 +1,10 @@
+defaults:
+  for: [all]
+
+traits:
+  - id: python-join-map-getattr
+    desc: Python obfuscation using join(map(getattr(...)))
+    crit: suspicious
+    conf: 0.95
+    if:
+      id: objectives/anti-static/obfuscation/scripting/advanced-python::join-map-getattr-chr

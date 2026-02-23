@@ -1,0 +1,57 @@
+# JavaScript ES Module Syntax Detection
+# Detects ES module (import/export) syntax patterns
+
+defaults:
+  for: [javascript, typescript]
+
+traits:
+  # ES export keyword patterns (baseline building blocks)
+  - id: export-const-func-class
+    desc: ES module export (const/function/class)
+    crit: baseline
+    conf: 0.75
+    if:
+      type: string
+      regex: "^export (const|function|class)"
+
+  - id: export-let-var-async
+    desc: ES module export (let/var/async)
+    crit: baseline
+    conf: 0.75
+    if:
+      type: string
+      regex: "^export (let|var|async)"
+
+  - id: export-default-const-func-class
+    desc: ES export (default/const/func/class)
+    crit: baseline
+    conf: 0.8
+    if:
+      type: string
+      regex: "^export\\s+(default|const|function|class)"
+
+  - id: export-async-let-var-brace
+    desc: ES export (async/let/var/{)
+    crit: baseline
+    conf: 0.8
+    if:
+      type: string
+      regex: "^export\\s+(async|let|var|\\{)"
+
+composite_rules:
+  # Aggregate export detection
+  - id: esm-export-keyword
+    desc: ES module export keyword pattern
+    crit: notable
+    conf: 0.75
+    any:
+      - id: export-const-func-class
+      - id: export-let-var-async
+
+  - id: esm-export
+    desc: Code uses ES module exports
+    crit: notable
+    conf: 0.85
+    any:
+      - id: export-default-const-func-class
+      - id: export-async-let-var-brace

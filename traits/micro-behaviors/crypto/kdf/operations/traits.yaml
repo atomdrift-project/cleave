@@ -1,0 +1,73 @@
+# Cryptographic Capabilities - Key Derivation
+
+defaults:
+  for: [all]
+
+traits:
+  # === KDF atomic indicators ===
+  - id: pbkdf2
+    desc: PBKDF2 key derivation
+    conf: 0.75
+    if:
+      type: string
+      substr: PBKDF2
+      case_insensitive: true
+
+  - id: scrypt
+    desc: scrypt key derivation
+    conf: 0.75
+    if:
+      type: string
+      substr: scrypt
+      case_insensitive: true
+
+  - id: argon2
+    desc: argon2 key derivation
+    conf: 0.75
+    if:
+      type: string
+      substr: argon2
+      case_insensitive: true
+
+  - id: bcrypt
+    desc: bcrypt password hashing
+    conf: 0.75
+    if:
+      type: string
+      word: bcrypt
+      case_insensitive: true
+
+  - id: hkdf
+    desc: HKDF key derivation
+    conf: 0.75
+    if:
+      type: string
+      exact: HKDF
+
+  - id: evp-pkey-derive
+    desc: EVP_PKEY_derive function
+    conf: 0.75
+    if:
+      type: string
+      substr: EVP_PKEY_derive
+
+  - id: pkcs5-pbkdf2
+    desc: PKCS5_PBKDF2_HMAC function
+    conf: 0.75
+    if:
+      type: string
+      substr: PKCS5_PBKDF2_HMAC
+
+composite_rules:
+  # Key derivation
+  - id: key-derivation
+    desc: Key derivation function usage
+    conf: 0.75
+    any:
+      - id: pbkdf2
+      - id: scrypt
+      - id: argon2
+      - id: bcrypt
+      - id: hkdf
+      - id: evp-pkey-derive
+      - id: pkcs5-pbkdf2

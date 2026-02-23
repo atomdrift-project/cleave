@@ -1,0 +1,13 @@
+traits:
+  - id: js-comma-operator-abuse
+    desc: "JavaScript comma operator abuse for obfuscation (e.g.,"
+    crit: suspicious
+    conf: 0.8
+    for: [javascript]
+    if:
+      type: string
+      # Matches sequences like (1537, 6190, 4567, 2496, 2902, 4120, 8290, 7849, 72, 5799, 7066, 3)
+      # where only the last number is used due to the comma operator.
+      regex: '\(\s*\d+\s*(,\s*\d+\s*){2,}\)'
+    attack: "T1027" # Obfuscated Files or Information
+    mbc: "B0032" # Deobfuscate/Decode

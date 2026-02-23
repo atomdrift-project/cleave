@@ -1,0 +1,40 @@
+traits:
+- id: beacon-keyword
+  desc: "Beacon C2 protocol keyword"
+  crit: notable
+  conf: 0.6
+  mbc: B0030
+  attack: T1071.001
+  for: [all]
+  if:
+    type: string
+    word: "beacon"
+    case_insensitive: true
+
+- id: compact-beacon-a
+  desc: "Dense C2 patterns in compact binary"
+  crit: suspicious
+  conf: 0.88
+  mbc: B0030
+  attack: T1071.001
+  for:
+  - elf
+  - macho
+  - pe
+  size_max: 100000
+  if:
+    type: string
+    regex: '(User-Agent:\s|Host:\s|Content-Type:\s|HTTP/1\.[01])'
+    count_min: 3
+    per_kb_min: 0.3
+
+composite_rules:
+- id: direct-http-c2
+  desc: "Direct HTTP C2 infrastructure"
+  crit: notable
+  conf: 0.95
+  mbc: B0030
+  attack: T1071.001
+  size_max: 1500000
+  all:
+  - id: objectives/command-and-control/infrastructure/ip

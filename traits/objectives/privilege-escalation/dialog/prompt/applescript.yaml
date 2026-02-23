@@ -1,0 +1,74 @@
+# AppleScript Privilege Escalation Detection
+# Detects attempts to gain admin privileges via AppleScript
+# ATT&CK: T1548.004 (Abuse Elevation Control Mechanism)
+
+defaults:
+  # osascript can be invoked from any language: python subprocess, ruby system(), etc.
+  for: [applescript, shell, python, ruby, perl, javascript, elf, macho]
+  platforms: [macos]
+  attack: "T1548.004"
+
+traits:
+  # ============================================
+  # Admin Privilege Requests
+  # ============================================
+  - id: admin-privileges
+    desc: "Requests administrator privileges"
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: string
+      substr: "administrator privileges"
+
+  - id: with-admin-privileges
+    desc: "do shell script with admin"
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: string
+      substr: "with administrator privileges"
+
+  # ============================================
+  # Sudo/Root Patterns
+  # ============================================
+  - id: sudo-in-script
+    desc: "Uses sudo in shell script"
+    crit: suspicious
+    conf: 0.85
+    if:
+      type: string
+      regex: "do shell script.{0,50}sudo"
+
+  - id: run-as-root
+    desc: "Attempts to run as root"
+    crit: notable
+    conf: 0.85
+    if:
+      type: string
+      regex: "(?i)run.{0,30}as.{0,30}root"
+    downgrade:
+      any:
+        - id: metadata/signed/platform::apple
+
+composite_rules:
+  # ============================================
+  # Admin Privilege Escalation
+  # ============================================
+  - id: admin-privilege-escalation
+    desc: "AppleScript admin privilege escalation"
+    crit: suspicious
+    conf: 0.9
+    any:
+      - { id: admin-privileges }
+      - { id: with-admin-privileges }
+
+  # ============================================
+  # Shell with Admin Privileges
+  # ============================================
+  - id: shell-admin
+    desc: "Shell execution with admin privileges"
+    crit: suspicious
+    conf: 0.9
+    all:
+      - { id: micro-behaviors/process/create/script::shell-cmd }
+      - { id: with-admin-privileges }

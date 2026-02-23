@@ -1,0 +1,48 @@
+# Ruby Console/Interaction
+# Traits for identifying console interaction in Ruby
+
+defaults:
+  for: [ruby]
+
+traits:
+  # === Interactive Shell Input ===
+  - id: stdin-gets-call
+    desc: STDIN input for interactive shell
+    crit: notable
+    conf: 0.75
+    attack: "T1059"
+    if:
+      type: symbol
+      exact: "gets"
+
+  - id: stdin-chomp-call
+    desc: STDIN input normalization for interactive shell
+    crit: notable
+    conf: 0.75
+    attack: "T1059"
+    if:
+      type: symbol
+      exact: "chomp"
+
+  # === Exit Command Pattern ===
+  # NOTE: Only applies to Ruby source code - checking for shell loop exit patterns.
+  # The string "exit" is too generic for binaries (present in error messages, help text).
+  - id: exit-command-check
+    desc: Exit command check in shell
+    crit: notable
+    conf: 0.65
+    attack: "T1059"
+    if:
+      type: ast
+      kind: call
+      exact: "exit"
+
+composite_rules:
+  - id: stdin-gets
+    desc: STDIN input for interactive shell
+    crit: notable
+    conf: 0.75
+    attack: "T1059"
+    any:
+      - id: stdin-gets-call
+      - id: stdin-chomp-call

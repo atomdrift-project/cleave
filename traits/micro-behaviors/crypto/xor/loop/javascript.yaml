@@ -1,0 +1,13 @@
+traits:
+  - id: js-xor-loop
+    desc: Custom XOR decoding loop in JavaScript
+    crit: suspicious
+    conf: 0.9
+    for:
+      - javascript
+      - typescript
+    mbc: B0032
+    attack: T1027
+    if:
+      type: raw
+      regex: 'for\s*\(.{0,50}\)\s*\{.{0,50}\^=.{0,50}\}'

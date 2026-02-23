@@ -1,0 +1,20 @@
+# Large Loop Counter (Anti-Sandbox)
+# Detects loops checking against large numbers (> 10,000,000)
+
+defaults:
+  crit: suspicious
+  conf: 0.8
+  for: [javascript, c, cpp, csharp, java, go, rust, python]
+
+traits:
+  - id: large-loop-counter
+    desc: "Loop check against large number"
+    mbc: "B0003.003" # Evasion::Stalling
+    attack: "T1497.003" # Virtualization/Sandbox Evasion::Time Based Evasion
+    if:
+      type: raw
+      # Matches: if (var == 123456789012345) or while (var < 123456789012345)
+      # Regex looks for comparison operators followed by at least 14 digits
+      regex: '(if|while|for)\s*\([^)]{1,120}([<>]=?|[!=]=)\s*[1-9][0-9]{13,}'
+      not:
+        regex: '.*(1099511627776|1073741824).*'

@@ -1,0 +1,65 @@
+defaults:
+  attack: T1027
+  mbc: B0032
+traits:
+- id: high-entropy-strings
+  desc: High entropy strings (encoded/encrypted data)
+  crit: notable
+  conf: 0.8
+  size_max: 50000
+  for:
+  - python
+  - javascript
+  - typescript
+  - shell
+  - php
+  - ruby
+  - perl
+  - rust
+  - java
+  - lua
+  - csharp
+  - powershell
+  if:
+    type: metrics
+    field: strings.avg_entropy
+    min: 4.5
+    min_size: 4096
+  unless:
+  - type: raw
+    substr: scipy
+- id: few-strings
+  desc: Very few string literals (string
+  crit: notable
+  conf: 0.4
+  for:
+  - python
+  - javascript
+  - typescript
+  - shell
+  - php
+  - ruby
+  - perl
+  - go
+  - rust
+  - java
+  - lua
+  - csharp
+  - powershell
+  if:
+    type: metrics
+    field: strings.total
+    max: 5
+    min_size: 1024
+composite_rules:
+- id: string-hiding
+  desc: String concealment/encoding
+  crit: notable
+  conf: 0.85
+  all:
+  - id: high-entropy-strings
+  any:
+  - id: few-strings
+  - id: objectives/anti-static/obfuscation/code-metrics/structure::high-text-entropy
+  unless:
+  - id: objectives/anti-static/obfuscation/code-metrics/strings::string-hiding__unless_1

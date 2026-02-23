@@ -1,0 +1,45 @@
+# Network Socket Communication - Go
+# GuardDog-inspired: Low-level network communication
+# ATT&CK: T1071 (Application Layer Protocol)
+# MBC: C0001 (Network Communication)
+
+defaults:
+  for: [go, elf, macho, pe]
+  attack: "T1071"
+  mbc: "C0001"
+  crit: notable
+
+traits:
+  # net.DialUDP - UDP connection
+  - id: net-dial-udp
+    desc: net.DialUDP UDP connection
+    conf: 0.85
+    if:
+      type: symbol
+      exact: "net.DialUDP"
+
+  # GuardDog: Connection write methods
+  - id: conn-write
+    desc: Connection Write method
+    conf: 0.80
+    if:
+      type: symbol
+      regex: '\.Write\('
+
+  - id: conn-write-string
+    desc: Connection WriteString method
+    conf: 0.80
+    if:
+      type: symbol
+      exact: "WriteString"
+
+composite_rules:
+  # Socket communication capability
+  - id: socket-dial
+    desc: Go socket dialing capability
+    crit: notable
+    conf: 0.85
+    any:
+      - id: micro-behaviors/communications/socket/connect::dial
+      - id: micro-behaviors/communications/socket/connect::dial-tcp
+      - id: net-dial-udp

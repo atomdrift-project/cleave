@@ -1,0 +1,27 @@
+# eBPF Tracing Frameworks
+# Legitimate eBPF development and tracing frameworks
+
+defaults:
+  for: [all]
+  crit: notable
+  conf: 0.85
+
+traits:
+  - id: bpftrace
+    desc: bpftrace framework
+    if:
+      type: string
+      substr: "bpftrace"
+
+  - id: bcc-lib
+    desc: BCC library
+    if:
+      type: string
+      # Require "bcc" as a word boundary to avoid matching partial strings
+      regex: "\\bbcc(_|/|\\s|$)"
+
+  - id: libbpf
+    desc: libbpf library
+    if:
+      type: string
+      substr: "libbpf"

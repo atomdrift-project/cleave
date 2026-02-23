@@ -1,0 +1,64 @@
+# Cryptographic Capabilities - Secure Random
+
+defaults:
+  for: [all]
+
+traits:
+  # === Secure random atomic indicators ===
+  # dev-urandom: use micro-behaviors/hardware/random/device::urandom (canonical)
+
+  - id: dev-random
+    desc: /dev/random access
+    conf: 0.7
+    if:
+      type: string
+      substr: /dev/random
+
+  - id: rand-bytes
+    desc: RAND_bytes function
+    conf: 0.8
+    if:
+      type: string
+      substr: RAND_bytes
+
+  - id: getrandom
+    desc: getrandom syscall
+    conf: 0.8
+    if:
+      type: string
+      substr: getrandom
+
+  - id: arc4random
+    desc: arc4random function
+    conf: 0.8
+    if:
+      type: string
+      substr: arc4random
+
+  - id: getentropy
+    desc: getentropy function
+    conf: 0.8
+    if:
+      type: string
+      substr: getentropy
+
+  - id: secrandomcopybytes
+    desc: SecRandomCopyBytes (macOS)
+    conf: 0.8
+    if:
+      type: string
+      substr: SecRandomCopyBytes
+
+composite_rules:
+  # Secure random
+  - id: secure-random
+    desc: Secure random number generation
+    conf: 0.8
+    any:
+      - id: micro-behaviors/hardware/random/device::urandom
+      - id: dev-random
+      - id: rand-bytes
+      - id: getrandom
+      - id: arc4random
+      - id: getentropy
+      - id: secrandomcopybytes

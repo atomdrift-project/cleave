@@ -1,0 +1,136 @@
+# XMLHttpRequest Hooking - JavaScript
+# Detects hooking/patching of XMLHttpRequest to intercept web traffic
+# ATT&CK: T1557 (Adversary-in-the-Middle), T1185 (Browser Session Hijacking)
+
+defaults:
+  for: [javascript]
+  attack: "T1557"
+  crit: suspicious
+
+traits:
+  # === XMLHttpRequest prototype atomic ===
+  - id: xhr-prototype-access
+    desc: XMLHttpRequest.prototype access
+    crit: notable
+    conf: 0.6
+    if:
+      type: string
+      substr: "XMLHttpRequest.prototype"
+
+  - id: xhr-bracket-access
+    desc: XMLHttpRequest bracket notation access
+    crit: notable
+    conf: 0.6
+    if:
+      type: string
+      regex: "XMLHttpRequest\\[.{1,50}\\]\\[.{1,50}\\]"
+
+  # === XMLHttpRequest.open hook atomic ===
+  - id: xhr-prototype-open-eq
+    desc: XMLHttpRequest.prototype.open assignment
+    crit: notable
+    conf: 0.7
+    if:
+      type: string
+      regex: "XMLHttpRequest\\.prototype\\.open\\s*="
+
+  - id: xhr-bracket-open-eq
+    desc: XMLHttpRequest bracket open assignment
+    crit: notable
+    conf: 0.7
+    if:
+      type: string
+      regex: "XMLHttpRequest\\[.{1,50}\\]\\[.{1,50}open.{0,20}\\]\\s*="
+
+  # === XMLHttpRequest.send hook atomic ===
+  - id: xhr-prototype-send-eq
+    desc: XMLHttpRequest.prototype.send assignment
+    crit: notable
+    conf: 0.7
+    if:
+      type: string
+      regex: "XMLHttpRequest\\.prototype\\.send\\s*="
+
+  - id: xhr-bracket-send-eq
+    desc: XMLHttpRequest bracket send assignment
+    crit: notable
+    conf: 0.7
+    if:
+      type: string
+      regex: "XMLHttpRequest\\[.{1,50}\\]\\[.{1,50}send.{0,20}\\]\\s*="
+
+  # === fetch API hook atomic ===
+  - id: window-fetch-eq
+    desc: window.fetch assignment
+    crit: notable
+    conf: 0.7
+    if:
+      type: string
+      regex: "window\\.fetch\\s*="
+
+  - id: globalthis-fetch-eq
+    desc: globalThis.fetch assignment
+    crit: notable
+    conf: 0.7
+    if:
+      type: string
+      regex: "globalThis\\.fetch\\s*="
+
+  - id: self-fetch-eq
+    desc: self.fetch assignment
+    crit: notable
+    conf: 0.7
+    if:
+      type: string
+      regex: "self\\.fetch\\s*="
+
+  # onreadystatechange interception
+  - id: readystate-intercept
+    desc: "XMLHttpRequest readystate interception"
+    conf: 0.7
+    if:
+      type: string
+      regex: "onreadystatechange\\s*=.{0,30}function"
+
+composite_rules:
+  # XMLHttpRequest prototype access composite
+  - id: prototype-access
+    desc: "XMLHttpRequest prototype access (potential hooking)"
+    conf: 0.8
+    any:
+      - id: xhr-prototype-access
+      - id: xhr-bracket-access
+
+  # XMLHttpRequest.open hook composite
+  - id: open-hook
+    desc: "XMLHttpRequest.open method hooking"
+    conf: 0.85
+    crit: suspicious
+    any:
+      - id: xhr-prototype-open-eq
+      - id: xhr-bracket-open-eq
+
+  # XMLHttpRequest.send hook composite
+  - id: send-hook
+    desc: "XMLHttpRequest.send method hooking"
+    conf: 0.85
+    crit: suspicious
+    any:
+      - id: xhr-prototype-send-eq
+      - id: xhr-bracket-send-eq
+
+  # fetch API hook composite
+  - id: fetch-hook
+    desc: "fetch API hooking"
+    conf: 0.85
+    crit: suspicious
+    any:
+      - id: window-fetch-eq
+      - id: globalthis-fetch-eq
+      - id: self-fetch-eq
+
+  # Multiple XHR hooks = request interceptor
+  - id: request-interceptor
+    desc: "XHR/Fetch request interceptor"
+    crit: notable
+    conf: 0.95

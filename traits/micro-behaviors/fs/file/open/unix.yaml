@@ -1,0 +1,50 @@
+# File Open Operations
+# MBC: C0046 (Create File)
+# ATT&CK: T1005
+
+defaults:
+  for: [elf, macho, so, dylib, c]
+
+traits:
+  - id: fopen
+    desc: Open files
+    crit: baseline
+    conf: 0.66
+    if:
+      type: symbol
+      exact: "fopen"
+
+  - id: fopen64
+    desc: Open files (64-bit)
+    crit: baseline
+    conf: 0.66
+    if:
+      type: symbol
+      exact: "fopen64"
+
+  - id: open-base
+    desc: Open files
+    crit: baseline
+    conf: 0.66
+    if:
+      type: symbol
+      exact: "open"
+
+  - id: openat
+    desc: Open files
+    crit: baseline
+    conf: 0.66
+    if:
+      type: symbol
+      exact: "openat"
+
+composite_rules:
+  - id: open
+    desc: Open files
+    crit: baseline
+    conf: 0.66
+    any:
+      - id: fopen
+      - id: fopen64
+      - id: open-base
+      - id: openat

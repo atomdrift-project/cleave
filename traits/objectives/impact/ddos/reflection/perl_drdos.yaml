@@ -1,0 +1,22 @@
+composite_rules:
+  - id: perl-net-rawip-indicator
+    desc: Detects usage of Net::RawIP
+    crit: notable
+    any:
+      - id: micro-behaviors/communications/socket/raw::perl-net-rawip-use
+      - id: micro-behaviors/communications/socket/raw::perl-net-rawip-new
+
+  - id: perl-drdos-payloads
+    desc: Detects DRDoS payloads or spoofing in Perl
+    crit: suspicious
+    any:
+      - id: micro-behaviors/communications/socket/raw::perl-net-rawip-spoof-saddr
+      - id: micro-behaviors/communications/proto/games::amplification-payload-common
+      - id: micro-behaviors/communications/proto/games::gamespy-payloads
+
+  - id: perl-drdos-tool
+    desc: Detects Perl-based DRDoS tools using Net::RawIP and game server reflection payloads
+    crit: hostile
+    all:
+      - id: perl-net-rawip-indicator
+      - id: perl-drdos-payloads

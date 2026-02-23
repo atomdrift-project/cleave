@@ -1,0 +1,92 @@
+# String Operations
+# C runtime string manipulation
+
+defaults:
+  for: ["pe", "dll"]
+  platforms: ["windows"]
+
+traits:
+  # === String Length ===
+  - id: strlen
+    desc: String length
+    crit: baseline
+    conf: 0.90
+    if:
+      type: symbol
+      exact: "strlen"
+
+  - id: wcslen
+    desc: Wide string length
+    crit: baseline
+    conf: 0.90
+    if:
+      type: symbol
+      exact: "wcslen"
+
+  # === String Comparison ===
+  - id: strcmp
+    desc: String comparison
+    crit: baseline
+    conf: 0.90
+    if:
+      type: symbol
+      exact: "strcmp"
+
+  - id: strncmp
+    desc: Limited string comparison
+    crit: baseline
+    conf: 0.90
+    if:
+      type: symbol
+      exact: "strncmp"
+
+  - id: wcscmp
+    desc: Wide string comparison
+    crit: baseline
+    conf: 0.90
+    if:
+      type: symbol
+      exact: "wcscmp"
+
+  # === String Copy ===
+  - id: strcpy
+    desc: String copy (unsafe)
+    crit: baseline
+    conf: 0.90
+    attack: "T1083"
+    if:
+      type: symbol
+      exact: "strcpy"
+
+  - id: strncpy
+    desc: Limited string copy
+    crit: baseline
+    conf: 0.90
+    if:
+      type: symbol
+      exact: "strncpy"
+
+  - id: wcscpy
+    desc: Wide string copy
+    crit: baseline
+    conf: 0.90
+    if:
+      type: symbol
+      exact: "wcscpy"
+
+  # === String Search ===
+  - id: strchr
+    desc: Find character in string
+    crit: baseline
+    conf: 0.90
+    if:
+      type: symbol
+      exact: "strchr"
+
+  - id: strstr
+    desc: Find substring
+    crit: baseline
+    conf: 0.90
+    if:
+      type: symbol
+      exact: "strstr"

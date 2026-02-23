@@ -1,0 +1,62 @@
+# Rust Background Process Execution
+# Detects daemonization and background process spawning
+# ATT&CK: T1059 (Command and Scripting Interpreter)
+
+defaults:
+  for: [rust]
+  attack: "T1059"
+
+traits:
+  - id: rust-fork-daemon
+    desc: Uses fork::daemon for background execution
+    crit: notable
+    conf: 0.85
+    mbc: "F0005"
+    if:
+      type: ast
+      kind: call
+      regex: 'daemon\s*\('
+
+  - id: rust-daemonize-crate
+    desc: Daemonize crate usage
+    crit: notable
+    conf: 0.85
+    mbc: "F0005"
+    if:
+      type: ast
+      kind: call
+      regex: "Daemonize::"
+
+  - id: rust-spawn-detached-win
+    desc: Process spawned in detached mode (Windows)
+    crit: notable
+    conf: 0.7
+    if:
+      type: string
+      word: "CREATE_NEW_PROCESS_GROUP"
+
+  - id: rust-spawn-detached-unix
+    desc: Process spawned in detached mode (Unix)
+    crit: notable
+    conf: 0.7
+    if:
+      type: string
+      substr: "detach"
+
+composite_rules:
+  - id: rust-spawn-detached
+    desc: Process spawned in detached mode
+    crit: notable
+    conf: 0.7
+    any:
+      - id: rust-spawn-detached-win
+      - id: rust-spawn-detached-unix
+
+  - id: daemonized-execution
+    desc: Process daemonization in Rust
+    crit: notable
+    conf: 0.85
+    mbc: "F0005"
+    any:
+      - id: rust-fork-daemon
+      - id: rust-daemonize-crate

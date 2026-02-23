@@ -1,0 +1,35 @@
+# File Synchronization Capabilities
+# File comparison and time-based operations
+
+defaults:
+  for: ["pe", "dll"]
+  platforms: ["windows"]
+
+traits:
+  # === File Time Comparison ===
+  - id: compare-file-time
+    desc: Compare file modification times
+    crit: baseline
+    conf: 0.70
+    if:
+      type: symbol
+      exact: "CompareFileTime"
+
+  # === File Time Manipulation ===
+  - id: set-file-time
+    desc: Modify file creation/access/write times
+    crit: notable
+    conf: 0.85
+    attack: "T1070.006"
+    if:
+      type: symbol
+      exact: "SetFileTime"
+
+  # === File Comparison ===
+  - id: get-file-size
+    desc: Get file size
+    crit: baseline
+    conf: 0.65
+    if:
+      type: symbol
+      exact: "GetFileSize"

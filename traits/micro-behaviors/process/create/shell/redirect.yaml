@@ -1,0 +1,89 @@
+traits:
+  # Linux syscall traits
+  - id: syscall-execve-linux
+    desc: Linux execve/execveat syscall for program execution
+    crit: notable
+    conf: 0.8
+    platforms: [linux]
+    for: [elf]
+    if:
+      type: syscall
+      name: ["execve", "execveat"]
+
+  - id: syscall-dup-redirect-linux
+    desc: Linux dup2/dup3 syscall for file descriptor redirection
+    crit: notable
+    conf: 0.8
+    platforms: [linux]
+    for: [elf]
+    if:
+      type: syscall
+      name: ["dup2", "dup3"]
+      count_min: 2
+
+  # macOS syscall traits
+  - id: syscall-execve-macos
+    desc: macOS execve syscall for program execution
+    crit: notable
+    conf: 0.8
+    platforms: [macos]
+    for: [macho]
+    if:
+      type: syscall
+      name: ["execve"]
+
+  - id: syscall-dup-redirect-macos
+    desc: macOS dup2 syscall for file descriptor redirection
+    crit: notable
+    conf: 0.8
+    platforms: [macos]
+    for: [macho]
+    if:
+      type: syscall
+      name: ["dup2"]
+      count_min: 2
+
+composite_rules:
+  - id: shell-redirect
+    desc: Executes program with file descriptor redirection
+    conf: 0.8
+    crit: suspicious
+    platforms: [linux]
+    for: [elf]
+    all:
+      - id: syscall-execve-linux
+      - id: syscall-dup-redirect-linux
+
+  - id: reverse-shell-pattern
+    desc: Reverse shell pattern - socket + connect + dup + execve
+    conf: 0.9
+    crit: suspicious
+    platforms: [linux]
+    for: [elf]
+    all:
+      - id: micro-behaviors/communications/socket/create::socket-create
+      - id: micro-behaviors/communications/socket/create::socket-connect
+      - id: syscall-dup-redirect-linux
+      - id: syscall-execve-linux
+
+  - id: shell-redirect-macos
+    desc: macOS program execution with FD redirection
+    conf: 0.8
+    crit: suspicious
+    platforms: [macos]
+    for: [macho]
+    all:
+      - id: syscall-execve-macos
+      - id: syscall-dup-redirect-macos
+
+  - id: reverse-shell-pattern-macos
+    desc: macOS reverse shell pattern - socket + connect + dup + execve
+    conf: 0.9
+    crit: suspicious
+    platforms: [macos]
+    for: [macho]
+    all:
+      - id: micro-behaviors/communications/socket/create::socket-socket-macos
+      - id: micro-behaviors/communications/socket/create::socket-connect-macos
+      - id: syscall-dup-redirect-macos
+      - id: syscall-execve-macos

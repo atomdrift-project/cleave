@@ -1,0 +1,63 @@
+# Testing Framework - RUST
+
+traits:
+  # === Atomic: Rust testing ===
+
+  - id: rust-test-attr
+    desc: "#[test] attribute"
+    crit: baseline
+    conf: 0.9
+    for: [rust]
+    if:
+      type: string
+      substr: "#[test]"
+
+  - id: rust-cfg-test
+    desc: "#[cfg(test)] attribute"
+    crit: baseline
+    conf: 0.9
+    for: [rust]
+    if:
+      type: string
+      substr: "#[cfg(test)]"
+
+  - id: rust-assert-macro
+    desc: "assert! macro"
+    crit: baseline
+    conf: 0.6
+    for: [rust]
+    if:
+      type: string
+      substr: "assert!"
+
+  - id: rust-assert-eq-macro
+    desc: "assert_eq! macro"
+    crit: baseline
+    conf: 0.7
+    for: [rust]
+    if:
+      type: string
+      substr: "assert_eq!"
+
+  - id: rust-cargo-test
+    desc: cargo test command
+    crit: baseline
+    conf: 0.8
+    for: [rust]
+    if:
+      type: string
+      substr: "cargo test"
+
+composite_rules:
+  # Rust testing
+  - id: rust-test
+    desc: Rust test framework
+    crit: notable
+    conf: 0.95
+    for: [rust]
+    any:
+      - { id: rust-test-attr }
+      - { id: rust-cfg-test }
+      - { id: rust-assert-macro }
+      - { id: rust-assert-eq-macro }
+      - { id: rust-cargo-test }

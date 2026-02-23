@@ -1,0 +1,40 @@
+defaults:
+  for: [javascript, typescript]
+
+composite_rules:
+  - id: local-dropper
+    desc: Writes a file and executes it locally
+    crit: suspicious
+    conf: 0.85
+    attack: "T1105"
+    all:
+      - id: micro-behaviors/fs/write/file::js-file-write
+    any:
+      - id: micro-behaviors/process/create/shell/lang::js-exec
+      - id: micro-behaviors/process/create/shell/lang::js-execsync
+      - id: micro-behaviors/process/create/shell/lang::js-spawn
+    unless:
+      - id: metadata/dev/testing::node-common-require
+    downgrade:
+      any:
+        - id: metadata/dev/testing::node-common-require
+        - id: objectives/lateral-movement/supply-chain/npm/testing::assert-word
+
+  - id: obfuscated-local-dropper
+    desc: Obfuscated local dropper (Hostile)
+    crit: hostile
+    conf: 0.95
+    attack: "T1027"
+    mbc: "B0032"
+    all:
+      - id: local-dropper
+      - id: objectives/anti-static/obfuscation/strings/encoding::js-strong-obfuscation
+
+  - id: js-malware-hosting-powershell
+    desc: References PowerShell script on known malware hosting (Dropper)
+    crit: hostile
+    conf: 0.95
+    attack: "T1105"
+    all:
+      - id: objectives/command-and-control/infrastructure/domain::malware-hosting
+      - id: micro-behaviors/process/create/script::powershell-script-execution

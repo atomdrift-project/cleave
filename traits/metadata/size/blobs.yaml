@@ -1,0 +1,27 @@
+# Detection for large contiguous data blobs in scripts
+# Indicates likely encoded payload storage
+
+defaults:
+  for: [powershell, javascript, python, shell]
+  crit: notable
+  conf: 0.9
+
+traits:
+  - id: large-embedded-b64-blob
+    desc: Large embedded Base64 blob (>100KB)
+    if:
+      type: encoded
+      encoding: base64
+      regex: "."
+      count_min: 1
+      length_min: 102400
+
+  - id: very-large-embedded-b64-blob
+    desc: Very large embedded Base64 blob (>500KB)
+    crit: suspicious
+    if:
+      type: encoded
+      encoding: base64
+      regex: "."
+      count_min: 1
+      length_min: 512000

@@ -1,0 +1,29 @@
+defaults:
+  crit: hostile
+  conf: 1.0
+
+composite_rules:
+  - id: macho-32-masquerading
+    desc: Mach-O 32-bit executable masquerading as an image file
+    all:
+      - id: metadata/format/magic::macho-32
+      - id: micro-behaviors/fs/file/extension::image-extension
+
+  - id: macho-64-masquerading
+    desc: Mach-O 64-bit executable masquerading as an image file
+    all:
+      - id: metadata/format/magic::macho-64
+      - id: micro-behaviors/fs/file/extension::image-extension
+
+  - id: macho-fat-masquerading
+    desc: Mach-O Fat executable masquerading as an image file
+    all:
+      - id: metadata/format/magic::cafebabe-magic
+      - id: micro-behaviors/fs/file/extension::image-extension
+
+  - id: macho-masquerading-as-image
+    desc: Mach-O executable masquerading as an image file
+    any:
+      - id: macho-32-masquerading
+      - id: macho-64-masquerading
+      - id: macho-fat-masquerading

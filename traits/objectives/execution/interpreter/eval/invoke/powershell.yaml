@@ -1,0 +1,67 @@
+# PowerShell Dynamic Execution
+# MBC: E1059 (Command and Scripting Interpreter)
+# ATT&CK: T1059.001
+
+defaults:
+  for: [powershell, batch, shell]
+  mbc: "E1059"
+  attack: "T1059.001"
+
+traits:
+  # Invoke-Expression (iex) - primary eval mechanism
+  - id: iex
+    desc: Invoke-Expression cmdlet
+    crit: notable
+    conf: 0.75
+    if:
+      type: raw
+      regex: "(?i)\\biex\\b|Invoke-Expression"
+
+  # Invoke-Command (icm) - remote and local execution
+  - id: icm
+    desc: Invoke-Command cmdlet
+    crit: notable
+    conf: 0.7
+    if:
+      type: raw
+      regex: "(?i)\\bicm\\b|Invoke-Command"
+
+  # ScriptBlock execution
+  - id: scriptblock
+    desc: ScriptBlock execution
+    crit: notable
+    conf: 0.7
+    if:
+      type: raw
+      regex: "(?i)\\[ScriptBlock\\]|Invoke-ScriptBlock|ScriptBlock\\.Create"
+
+  # Add-Type for compiling C#
+  - id: add-type
+    desc: Add-Type compilation
+    crit: notable
+    conf: 0.75
+    if:
+      type: raw
+      regex: "(?i)Add-Type\\s+-TypeDefinition"
+
+  # Call operator (&)
+  - id: call-operator
+    desc: PowerShell call operator
+    crit: notable
+    conf: 0.5
+    for: [powershell]
+    if:
+      type: raw
+      regex: "&\\s*\\("
+
+composite_rules:
+  # Dynamic code evaluation
+  - id: ps-dynamic-eval
+    desc: PowerShell dynamic code evaluation
+    crit: notable
+    conf: 0.8
+    for: [powershell, batch, shell]
+    any:
+      - id: iex
+      - id: scriptblock
+      - id: add-type

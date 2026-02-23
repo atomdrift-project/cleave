@@ -1,0 +1,29 @@
+# File Delete Operations - Shell
+# MBC: C0047 (Delete File)
+# ATT&CK: T1070.004
+
+defaults:
+  for: [all]
+
+traits:
+  - id: rm-force-tmp-var-dev
+    desc: rm -f command targeting /tmp,
+    crit: notable
+    conf: 0.7
+    mbc: C0047
+    attack: T1070.004
+    if:
+      type: raw
+      regex: 'rm +\-[a-zA-Z]{0,1}f[a-zA-Z]{0,1} /(tmp|var|dev)/[\w/.\-\%]{0,64}'
+
+composite_rules:
+  - id: delete-rm-hardcoded
+    desc: Deletes files in /tmp, /var,
+    crit: suspicious
+    conf: 0.66
+    mbc: C0047
+    attack: T1070.004
+    all:
+      - id: rm-force-tmp-var-dev
+    none:
+      - id: micro-behaviors/fs/path/package-manager::apt-lists

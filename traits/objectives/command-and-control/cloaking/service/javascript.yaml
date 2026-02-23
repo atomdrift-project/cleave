@@ -1,0 +1,44 @@
+# Cloaking / Traffic Distribution - JavaScript
+# Detects cloaking services (Adspect, etc.) and fake content injection
+# ATT&CK: T1027 (Obfuscated Files or Information), T1566 (Phishing)
+
+defaults:
+  for: [all]
+
+traits:
+  - id: js-adspect-keywords
+    desc: Adspect cloaking service keywords
+    crit: suspicious
+    conf: 0.95
+    if:
+      type: string
+      regex: 'ADSPECT|adspect-proxy\.php|adspect_response'
+
+  - id: js-fake-cloudflare
+    desc: Fake Cloudflare Captcha/Turnstile code
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: string
+      regex: 'verify-you-are-human|challenges\.cloudflare\.com|turnstile|cf-link'
+
+  - id: js-white-page-logic
+    desc: Cloaking "white page" (benign content) fallback
+    crit: notable
+    conf: 0.8
+    if:
+      type: string
+      regex: 'showBuiltinWhitePage|Offlido|Compliance-Forward'
+
+composite_rules:
+  - id: js-adspect-cloaking
+    desc: Adspect cloaking client script
+    crit: hostile
+    conf: 0.98
+    attack: "T1027"
+    all:
+      - id: js-adspect-keywords
+    any:
+      - id: js-fake-cloudflare
+      - id: js-white-page-logic
+      - id: objectives/anti-analysis/browser/evasion::js-disable-inspect

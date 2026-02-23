@@ -1,0 +1,13 @@
+
+traits:
+  - id: discord-webhook-api
+    description: Discord webhook API endpoint
+    criticality: suspicious
+    if:
+      type: string
+      regex: /discord(app)?.com\/api\/webhooks/
+    for:
+      - javascript
+      - typescript
+      - python
+      - shell

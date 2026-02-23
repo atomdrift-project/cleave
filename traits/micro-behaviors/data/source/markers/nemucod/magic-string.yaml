@@ -1,0 +1,12 @@
+traits:
+  - id: nemucod-magic-string
+    desc: "Nemucod JScript repetitive magic string ('FaFFIud')"
+    crit: notable
+    conf: 0.7
+    for: [javascript]
+    if:
+      type: string
+      # Exact string used repeatedly as noise in dummy code blocks.
+      exact: "FaFFIud"
+    attack: "T1027" # Obfuscated Files or Information
+    mbc: "B0032" # Deobfuscate/Decode

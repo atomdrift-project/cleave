@@ -1,0 +1,9 @@
+traits:
+  - id: js-regex-string-cleanup
+    desc: JScript string cleanup using RegExp replace
+    crit: suspicious
+    conf: 0.9
+    for: [javascript]
+    if:
+      type: raw
+      regex: '\.replace\(RegExp\(\w+,\s*[''"]g[''"]\),\s*[''"][''"]\)'

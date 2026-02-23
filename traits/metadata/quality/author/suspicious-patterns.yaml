@@ -1,0 +1,301 @@
+# Author Information - Suspicious Patterns
+# GuardDog-inspired: Detects deceptive or suspicious author information
+# ATT&CK: T1195.002 (Compromise Software Supply Chain)
+
+defaults:
+  crit: notable
+  conf: 0.80
+  attack: "T1195.002"
+
+traits:
+  # === npm package.json ===
+
+  # Generic author names
+  - id: npm-author-admin
+    desc: "npm package author is 'admin'"
+    crit: suspicious
+    conf: 0.85
+    for: [package.json]
+    if:
+      type: kv
+      path: "author.name"
+      regex: "^admin$"
+      case_insensitive: true
+
+  - id: npm-author-user
+    desc: "npm package author is 'user'"
+    crit: suspicious
+    conf: 0.85
+    for: [package.json]
+    if:
+      type: kv
+      path: "author.name"
+      regex: "^user$"
+      case_insensitive: true
+
+  - id: npm-author-test
+    desc: "npm package author is 'test'"
+    crit: suspicious
+    conf: 0.85
+    for: [package.json]
+    if:
+      type: kv
+      path: "author.name"
+      regex: "^test$"
+      case_insensitive: true
+
+  - id: npm-author-developer
+    desc: "npm package author is 'developer'"
+    crit: suspicious
+    conf: 0.85
+    for: [package.json]
+    if:
+      type: kv
+      path: "author.name"
+      regex: "^developer$"
+      case_insensitive: true
+
+  - id: npm-author-owner
+    desc: "npm package author is 'owner'"
+    crit: suspicious
+    conf: 0.85
+    for: [package.json]
+    if:
+      type: kv
+      path: "author.name"
+      regex: "^owner$"
+      case_insensitive: true
+
+  - id: npm-author-root
+    desc: "npm package author is 'root'"
+    crit: suspicious
+    conf: 0.85
+    for: [package.json]
+    if:
+      type: kv
+      path: "author.name"
+      regex: "^root$"
+      case_insensitive: true
+
+  - id: npm-author-anonymous
+    desc: "npm package author is 'anonymous'"
+    crit: suspicious
+    conf: 0.85
+    for: [package.json]
+    if:
+      type: kv
+      path: "author.name"
+      regex: "^anon(ymous)?$"
+      case_insensitive: true
+
+  # Author string variants (when author is string, not object)
+  - id: npm-author-string-admin
+    desc: "npm package author string is 'admin'"
+    crit: suspicious
+    conf: 0.85
+    for: [package.json]
+    if:
+      type: kv
+      path: "author"
+      regex: "^admin$"
+      case_insensitive: true
+
+  - id: npm-author-string-user
+    desc: "npm package author string is 'user'"
+    crit: suspicious
+    conf: 0.85
+    for: [package.json]
+    if:
+      type: kv
+      path: "author"
+      regex: "^user$"
+      case_insensitive: true
+
+  - id: npm-author-string-test
+    desc: "npm package author string is 'test'"
+    crit: suspicious
+    conf: 0.85
+    for: [package.json]
+    if:
+      type: kv
+      path: "author"
+      regex: "^test$"
+      case_insensitive: true
+
+  # Single character author names
+  - id: npm-author-single-char
+    desc: npm package author is single character
+    crit: suspicious
+    conf: 0.90
+    for: [package.json]
+    if:
+      type: kv
+      path: "author.name"
+      regex: "^.$"
+
+  # Author name is just numbers
+  - id: npm-author-numeric
+    desc: npm package author is only numbers
+    crit: suspicious
+    conf: 0.90
+    for: [package.json]
+    if:
+      type: kv
+      path: "author.name"
+      regex: "^[0-9]+$"
+
+  # === PyPI setup.py / pyproject.toml ===
+
+  # Generic author names
+  - id: pypi-author-admin
+    desc: "PyPI package author is 'admin'"
+    crit: suspicious
+    conf: 0.85
+    for: [python]
+    if:
+      type: string
+      regex: 'author\s*=\s*[''"]admin[''"]'
+      case_insensitive: true
+
+  - id: pypi-author-user
+    desc: "PyPI package author is 'user'"
+    crit: suspicious
+    conf: 0.85
+    for: [python]
+    if:
+      type: string
+      regex: 'author\s*=\s*[''"]user[''"]'
+      case_insensitive: true
+
+  - id: pypi-author-test
+    desc: "PyPI package author is 'test'"
+    crit: suspicious
+    conf: 0.85
+    for: [python]
+    if:
+      type: string
+      regex: 'author\s*=\s*[''"]test[''"]'
+      case_insensitive: true
+
+  - id: pypi-author-developer
+    desc: "PyPI package author is 'developer'"
+    crit: suspicious
+    conf: 0.85
+    for: [python]
+    if:
+      type: string
+      regex: 'author\s*=\s*[''"]developer[''"]'
+      case_insensitive: true
+
+  # === RubyGems gemspec ===
+
+  # Generic author names
+  - id: gem-author-admin
+    desc: "RubyGem author is 'admin'"
+    crit: suspicious
+    conf: 0.85
+    for: [ruby]
+    if:
+      type: string
+      regex: '\.author\s*=\s*[''"]admin[''"]'
+      case_insensitive: true
+
+  - id: gem-author-user
+    desc: "RubyGem author is 'user'"
+    crit: suspicious
+    conf: 0.85
+    for: [ruby]
+    if:
+      type: string
+      regex: '\.author\s*=\s*[''"]user[''"]'
+      case_insensitive: true
+
+  - id: gem-author-test
+    desc: "RubyGem author is 'test'"
+    crit: suspicious
+    conf: 0.85
+    for: [ruby]
+    if:
+      type: string
+      regex: '\.author\s*=\s*[''"]test[''"]'
+      case_insensitive: true
+
+composite_rules:
+  # === npm Generic Authors ===
+  - id: npm-generic-author-name
+    desc: npm package has generic author name
+    crit: suspicious
+    conf: 0.85
+    attack: "T1195.002"
+    for: [package.json]
+    any:
+      - id: npm-author-admin
+      - id: npm-author-user
+      - id: npm-author-test
+      - id: npm-author-developer
+      - id: npm-author-owner
+      - id: npm-author-root
+      - id: npm-author-anonymous
+      - id: npm-author-string-admin
+      - id: npm-author-string-user
+      - id: npm-author-string-test
+      - id: npm-author-single-char
+      - id: npm-author-numeric
+
+  # === PyPI Generic Authors ===
+  - id: pypi-generic-author-name
+    desc: PyPI package has generic author name
+    crit: suspicious
+    conf: 0.85
+    attack: "T1195.002"
+    for: [python]
+    any:
+      - id: pypi-author-admin
+      - id: pypi-author-user
+      - id: pypi-author-test
+      - id: pypi-author-developer
+
+  # === RubyGems Generic Authors ===
+  - id: gem-generic-author-name
+    desc: RubyGem has generic author name
+    crit: suspicious
+    conf: 0.85
+    attack: "T1195.002"
+    for: [ruby]
+    any:
+      - id: gem-author-admin
+      - id: gem-author-user
+      - id: gem-author-test
+
+  # === High-Risk: Generic author with install hooks ===
+  - id: npm-generic-author-with-hooks
+    desc: Generic author name with install hooks
+    crit: hostile
+    conf: 0.95
+    attack: "T1195.002"
+    for: [package.json]
+    all:
+      - id: npm-generic-author-name
+      - id: objectives/lateral-movement/supply-chain/npm/metadata::install-hooks
+
+  # === High-Risk: Generic author with empty description ===
+  - id: npm-generic-author-empty-description
+    desc: Generic author with empty description
+    crit: hostile
+    conf: 0.92
+    attack: "T1195.002"
+    for: [package.json]
+    all:
+      - id: npm-generic-author-name
+      - id: metadata/quality/package-info::npm-empty-description-any
+
+  # === Suspicious: Generic author with version 0.0.0 ===
+  - id: npm-generic-author-zero-version
+    desc: Generic author with version 0.0.0
+    crit: hostile
+    conf: 0.93
+    attack: "T1195.002"
+    for: [package.json]
+    all:
+      - id: npm-generic-author-name
+      - id: metadata/quality/versioning::npm-version-0-0-0

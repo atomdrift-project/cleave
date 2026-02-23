@@ -1,0 +1,10 @@
+traits:
+  - id: js-adodb-stream-write-responsebody
+    desc: Obfuscated ResponseBody write fragment cluster
+    crit: suspicious
+    conf: 0.9
+    for: [javascript]
+    if:
+      type: string
+      regex: '^(Resp|onse|Bo|dy)$'
+      count_min: 2

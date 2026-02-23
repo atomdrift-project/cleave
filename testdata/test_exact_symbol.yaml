@@ -1,0 +1,30 @@
+# Test trait using exact: matcher
+# This should produce notable findings but may show as baseline (BUG)
+defaults:
+  for: [pe]
+  platforms: [windows]
+
+traits:
+  - id: test-exact-ws2-32-import
+    desc: Test exact WSAStartup import
+    crit: notable
+    conf: 0.95
+    if:
+      type: symbol
+      exact: "WSAStartup"
+
+  - id: test-exact-gethostbyname
+    desc: Test exact gethostbyname import
+    crit: notable
+    conf: 0.95
+    if:
+      type: symbol
+      exact: "gethostbyname"
+
+  - id: test-exact-send
+    desc: Test exact send import
+    crit: notable
+    conf: 0.95
+    if:
+      type: symbol
+      exact: "send"

@@ -1,0 +1,36 @@
+# Rust-Specific Metrics-Based Obfuscation Detection
+# Detects obfuscation patterns in Rust source code via metrics analysis
+
+defaults:
+  for: [rust]
+  attack: "T1027"
+  mbc: "B0032"
+
+traits:
+  - id: rust-many-high-entropy-identifiers
+    desc: "Many high-entropy identifiers in Rust"
+    crit: notable
+    conf: 0.9
+    # Small binaries with high entropy identifiers are more suspicious
+    size_min: 4096
+    size_max: 500000
+    if:
+      type: metrics
+      field: identifiers.high_entropy_ratio
+      min: 0.35
+    unless:
+      # SIMD intrinsic headers often contain architectural feature names that trigger high entropy
+      - type: raw
+        substr: "relaxed_simd"
+      # Rust benchmark files often contain many repetitive benchmark-oriented
+      # identifiers (bench_*, iterator combinator chains) without obfuscation intent.
+      - type: raw
+        regex: '(?m)^\s*#\[bench\]'
+      # Runtime CPU feature detection tests include many short architecture
+      # feature identifiers (e.g., avx512*, sve2-*) that inflate entropy.
+      - type: raw
+        regex: 'is_(x86|aarch64|arm|powerpc|powerpc64)_feature_detected!\s*\('
+      # Generated FFI/binding tables often contain thousands of long ALL_CAPS
+      # constants and are not identifier obfuscation.
+      - type: raw
+        regex: '(?m)^pub const [A-Z0-9_]{20,}:'

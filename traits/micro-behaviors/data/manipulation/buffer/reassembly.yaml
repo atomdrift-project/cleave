@@ -1,0 +1,56 @@
+traits:
+  - id: offset-write
+    desc: Writing data to buffer at calculated offset
+    crit: notable
+    conf: 0.7
+    for: [javascript, typescript]
+    if:
+      type: raw
+      regex: '\[[a-zA-Z0-9_]+\s*\+\s*[a-zA-Z0-9_]+\]\s*=\s*[^"''\s]'
+
+  - id: buffer-alloc-large
+    desc: Allocating a large buffer (64KB+)
+    crit: notable
+    conf: 0.6
+    for: [javascript, typescript]
+    if:
+      type: raw
+      regex: 'Buffer\.alloc\(0xffff\)|Buffer\.alloc\(65535\)'
+
+  - id: module-exports-buffer-storage
+    desc: "Using module.exports to persist buffer across invocations"
+    crit: suspicious
+    conf: 0.8
+    for: [javascript, typescript]
+    if:
+      type: ast
+      query: |
+        (assignment_expression
+          left: (member_expression
+            object: (member_expression
+              object: (identifier) @mod
+              property: (property_identifier) @exp)
+            property: (property_identifier) @prop)
+          right: (call_expression
+              function: (member_expression
+                object: (identifier) @buf
+                property: (property_identifier) @alloc))
+          (#eq? @mod "module")
+          (#eq? @exp "exports")
+          (#eq? @buf "Buffer")
+          (#match? @alloc "^(alloc|from)$"))
+        (assignment_expression
+          left: (member_expression
+            object: (member_expression
+              object: (identifier) @mod
+              property: (property_identifier) @exp)
+            property: (property_identifier) @prop)
+          right: (binary_expression
+              right: (call_expression
+                function: (member_expression
+                  object: (identifier) @buf
+                  property: (property_identifier) @alloc)))
+          (#eq? @mod "module")
+          (#eq? @exp "exports")
+          (#eq? @buf "Buffer")
+          (#match? @alloc "^(alloc|from)$"))

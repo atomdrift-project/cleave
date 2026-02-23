@@ -1,0 +1,57 @@
+# System Information Environment Variables
+# Individual traits for system-related environment variables
+
+defaults:
+  for: [all]
+  crit: baseline
+  conf: 0.5
+
+traits:
+  - id: hostname-var
+    desc: HOSTNAME environment variable
+    platforms: [linux, unix, macos]
+    if:
+      type: string
+      exact: "HOSTNAME"
+
+  - id: shell-var
+    desc: SHELL environment variable
+    platforms: [linux, unix, macos]
+    if:
+      type: string
+      exact: "SHELL"
+
+  - id: term-var
+    desc: TERM environment variable
+    platforms: [linux, unix, macos]
+    if:
+      type: string
+      exact: "TERM"
+
+  - id: pwd-var
+    desc: PWD environment variable
+    platforms: [linux, unix, macos]
+    if:
+      type: string
+      exact: "PWD"
+
+  - id: oldpwd-var
+    desc: OLDPWD environment variable
+    platforms: [linux, unix, macos]
+    if:
+      type: string
+      exact: "OLDPWD"
+
+  - id: systemroot-var
+    desc: SYSTEMROOT environment variable
+    platforms: [windows]
+    if:
+      type: string
+      exact: "SYSTEMROOT"
+
+  - id: windir-var
+    desc: WINDIR environment variable
+    platforms: [windows]
+    if:
+      type: string
+      exact: "WINDIR"

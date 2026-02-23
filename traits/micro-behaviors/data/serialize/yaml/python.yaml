@@ -1,0 +1,24 @@
+traits:
+  - id: yaml-load-unsafe
+    desc: "Unsafe YAML deserialization using yaml.load"
+    crit: suspicious
+    for: [python]
+    if:
+      type: raw
+      regex: 'yaml\.load\s*\('
+
+  - id: yaml-loader-unsafe
+    desc: "Unsafe yaml.Loader enabling arbitrary code execution"
+    crit: suspicious
+    for: [python]
+    if:
+      type: raw
+      regex: 'Loader\s*=\s*yaml\.Loader'
+
+  - id: yaml-unsafe-load
+    desc: "Explicit unsafe YAML deserialization"
+    crit: suspicious
+    for: [python]
+    if:
+      type: raw
+      regex: 'yaml\.unsafe_load\s*\('

@@ -1,0 +1,86 @@
+# npm Web Framework Detection
+# Detects web framework usage for library identification
+
+defaults:
+  for: [javascript, typescript]
+
+traits:
+  # Individual framework detection (baseline building blocks)
+  - id: uses-express
+    desc: Uses Express framework
+    crit: baseline
+    conf: 0.6
+    if:
+      type: string
+      regex: '(require\([''"]|from [''"])express[''"]'
+
+  - id: uses-koa
+    desc: Uses Koa framework
+    crit: baseline
+    conf: 0.6
+    if:
+      type: string
+      regex: '(require\([''"]|from [''"])koa[''"]'
+
+  - id: uses-fastify
+    desc: Uses Fastify framework
+    crit: baseline
+    conf: 0.6
+    if:
+      type: string
+      regex: '(require\([''"]|from [''"])fastify[''"]'
+
+  - id: uses-hapi
+    desc: Uses Hapi framework
+    crit: baseline
+    conf: 0.6
+    if:
+      type: string
+      regex: '(require\([''"]|from [''"])hapi[''"]'
+
+  # Stream class detection (baseline building blocks)
+  - id: stream-readable
+    desc: Code uses Node.js Readable stream
+    crit: baseline
+    conf: 0.5
+    if:
+      type: string
+      word: "Readable"
+
+  - id: stream-writable
+    desc: Code uses Node.js Writable stream
+    crit: baseline
+    conf: 0.5
+    if:
+      type: string
+      word: "Writable"
+
+  - id: stream-transform
+    desc: Code uses Node.js Transform stream
+    crit: baseline
+    conf: 0.5
+    if:
+      type: string
+      word: "Transform"
+
+composite_rules:
+  # Aggregate framework detection
+  - id: uses-web-framework
+    desc: Code uses established web framework
+    crit: notable
+    conf: 0.85
+    any:
+      - id: uses-express
+      - id: uses-koa
+      - id: uses-fastify
+      - id: uses-hapi
+
+  # Stream classes aggregate
+  - id: stream-classes
+    desc: Code uses Node.js stream classes
+    crit: notable
+    conf: 0.75
+    any:
+      - id: stream-readable
+      - id: stream-writable
+      - id: stream-transform

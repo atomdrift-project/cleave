@@ -1,0 +1,53 @@
+# File Delete Operations
+# MBC: C0047 (Delete File)
+# ATT&CK: T1070.004
+
+defaults:
+  for: [all]
+
+traits:
+  # NOTE: Go runtime and standard library use unlink/remove for temp file
+  # cleanup and normal file operations.
+  - id: unlink
+    desc: Delete files
+    crit: notable
+    conf: 0.3
+    if:
+      type: symbol
+      exact: "unlink"
+
+  - id: unlinkat
+    desc: Delete files by fd/path
+    crit: notable
+    conf: 0.3
+    if:
+      type: symbol
+      exact: "unlinkat"
+
+  - id: remove
+    desc: Delete files
+    crit: notable
+    conf: 0.3
+    for: [c, cpp, go, rust, python, ruby, php, perl, shell, java, csharp, powershell, lua]
+    if:
+      type: symbol
+      exact: "remove"
+
+  - id: js-fs-remove
+    desc: Delete files (fs)
+    crit: notable
+    conf: 0.5
+    for: [javascript, typescript]
+    if:
+      type: symbol
+      regex: '(fs|fse|fsExtra)\.remove'
+
+composite_rules:
+  - id: delete
+    desc: Delete files
+    crit: notable
+    conf: 0.3
+    any:
+      - id: unlink
+      - id: unlinkat
+      - id: remove

@@ -1,0 +1,33 @@
+# Generic Telemetry Patterns - JavaScript
+# Removed telemetry-send duplicate - use micro-behaviors/data/telemetry/logging::telemetry-send
+
+defaults:
+  for: [all]
+
+traits:
+  - id: activity-tracker-client-factory
+    desc: User activity tracking library reference
+    crit: notable
+    conf: 0.7
+    if:
+      type: string
+      exact: "ClientFactory"
+
+  - id: activity-tracker-analytics-library
+    desc: User activity tracking library reference
+    crit: notable
+    conf: 0.7
+    if:
+      type: string
+      exact: "AnalyticsLibrary"
+
+composite_rules:
+  - id: activity-tracker
+    desc: User activity tracking library reference
+    crit: notable
+    conf: 0.7
+    any:
+      - id: activity-tracker-client-factory
+      - id: activity-tracker-analytics-library
+
+  # Removed tracking-identifiers duplicate - use micro-behaviors/data/telemetry/logging::hardware-id-context

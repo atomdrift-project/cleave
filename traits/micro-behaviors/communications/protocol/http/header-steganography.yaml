@@ -1,0 +1,18 @@
+traits:
+  - id: hex-command-regex
+    desc: Extract hex commands from headers
+    crit: suspicious
+    conf: 0.9
+    for: [javascript, typescript]
+    if:
+      type: raw
+      regex: 'g\(\[a-f0-9\]\{4\}\)h\(\(\?:\[a-f0-9\]\{2\}\)\+\)i'
+
+  - id: generic-hex-extraction-regex
+    desc: Regex capturing hex data and offsets
+    crit: notable
+    conf: 0.7
+    for: [javascript, typescript]
+    if:
+      type: raw
+      regex: '\[a-f0-9\]\{4\}.{0,50}\[a-f0-9\]\{2\}'

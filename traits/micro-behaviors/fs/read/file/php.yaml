@@ -1,0 +1,53 @@
+# PHP Filesystem Read Traits
+# MBC: C0051 (Read File)
+
+traits:
+  - id: file-get-contents
+    desc: File read via file_get_contents
+    crit: notable
+    conf: 0.75
+    mbc: "C0051"
+    for: [php]
+    if:
+      type: string
+      substr: file_get_contents
+
+  - id: fread
+    desc: File read via fread
+    crit: notable
+    conf: 0.75
+    mbc: "C0051"
+    for: [php]
+    if:
+      type: string
+      regex: "\\bfread\\s*\\("
+
+  - id: fgets
+    desc: Line read via fgets
+    crit: baseline
+    conf: 0.6
+    for: [php]
+    if:
+      type: string
+      regex: "\\bfgets\\s*\\("
+
+  - id: readfile
+    desc: Output file contents via readfile
+    crit: notable
+    conf: 0.75
+    mbc: "C0051"
+    for: [php]
+    if:
+      type: string
+      substr: readfile
+
+  - id: fopen
+    desc: File open operation
+    crit: baseline
+    conf: 0.6
+    for: [php]
+    if:
+      type: string
+      regex: "\\bfopen\\s*\\("
+
+  # Removed realpath duplicate - use micro-behaviors/fs/link/symlink/unix::symlink-resolve (symbol works for all file types)

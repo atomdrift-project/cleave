@@ -1,0 +1,12 @@
+traits:
+  - id: dense-instruction-padding
+    desc: Dense repetitive instructions (junk code)
+    crit: suspicious
+    conf: 0.8
+    for: [elf]
+    size_max: 1048576  # Only for smaller binaries (<1MB)
+    if:
+      type: hex
+      pattern: "?? ?? 00 41"
+      count_min: 400
+      per_kb_min: 8.0

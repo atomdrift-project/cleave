@@ -1,0 +1,53 @@
+defaults:
+  for: [all]
+
+traits:
+  - id: root-dirs-list-mnt-media
+    desc: Root directories list includes mnt/media
+    crit: notable
+    conf: 0.8
+    if:
+      type: raw
+      regex: "[\"']/(mnt|media)[\"'],\\s*[\"']/(mnt|media)[\"']"
+
+  - id: root-dirs-list-volumes
+    desc: Root directories list includes Volumes
+    crit: notable
+    conf: 0.8
+    if:
+      type: raw
+      regex: '["'']/Volumes["'']'
+
+  - id: root-drives-push
+    desc: Adds root directory to scan list
+    crit: notable
+    conf: 0.6
+    if:
+      type: raw
+      regex: "rootDrives\\.push\\(['\"]/['\"]\\)"
+
+  - id: win32-check
+    desc: Checks for win32 platform
+    crit: baseline
+    conf: 0.6
+    if:
+      type: raw
+      regex: "process\\.platform === ['\"]win32['\"]"
+
+composite_rules:
+  - id: root-dirs-list
+    desc: List of root directories for scanning
+    crit: notable
+    conf: 0.8
+    any:
+      - id: root-dirs-list-mnt-media
+      - id: root-dirs-list-volumes
+
+  - id: multi-os-root-scan
+    desc: Multi-OS root directory scanning logic
+    crit: suspicious
+    conf: 0.8
+    all:
+      - id: root-dirs-list
+      - id: root-drives-push
+      - id: win32-check

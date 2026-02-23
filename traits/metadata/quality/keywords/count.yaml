@@ -1,0 +1,18 @@
+# Package Keywords - Count Analysis
+# Detects suspicious keyword patterns based on count
+# ATT&CK: T1195.002 (Compromise Software Supply Chain)
+#
+# NOTE: size_min/size_max on kv type measures FILE SIZE in bytes, NOT array
+# element count. All count-based kv traits have been removed as they produced
+# false positives. The npm-no-keywords and pypi-no-keywords traits have been
+# moved to use exists:false in their respective empty-fields files.
+# The pypi-keyword-stuffing trait cannot be implemented with current kv type.
+
+defaults:
+  crit: notable
+  conf: 0.60
+  attack: "T1195.002"
+
+traits: []
+
+composite_rules: []

@@ -1,0 +1,41 @@
+# Windows Script and Executable Indicators
+# Generic markers for Windows executable file types and script engines
+# These are neutral capabilities that gain significance in context
+
+defaults:
+  for: [all]
+  crit: notable
+  conf: 0.5
+  platforms: [windows]
+
+traits:
+  # === Command References ===
+  - id: cmd-name
+    desc: cmd command name
+    if:
+      id: micro-behaviors/process/create/shell::cmd-name
+
+composite_rules:
+  - id: cmd-exe
+    desc: cmd.exe Windows command shell reference
+    conf: 0.4
+    all:
+      - id: micro-behaviors/fs/path/extension::exe
+      - id: cmd-name
+
+  - id: powershell-exe
+    desc: powershell.exe executable reference
+    all:
+      - id: micro-behaviors/fs/path/extension::exe
+      - id: micro-behaviors/process/create/shell/lang::powershell-keyword
+
+  # Composite for any Windows executable file type reference
+  - id: windows-executable-ref
+    desc: Windows executable or script file type reference
+    crit: notable
+    conf: 0.6
+    platforms: [windows]
+    any:
+      - id: micro-behaviors/fs/path/extension
+      - id: micro-behaviors/process/create/shell/lang::powershell-keyword
+      - id: cmd-exe

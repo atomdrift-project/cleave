@@ -1,0 +1,13 @@
+# Rootkit magic markers
+defaults:
+  for: [all]
+
+traits:
+  - id: magic
+    desc: Magic marker string
+    crit: notable
+    conf: 0.6
+    if:
+      type: string
+      regex: "\b(ebpf|bpf|rootkit|hide)[_-]?magic\b"
+      case_insensitive: true

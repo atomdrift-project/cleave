@@ -1,0 +1,129 @@
+traits:
+  - id: ld-preload-env
+    desc: LD_PRELOAD environment variable
+    crit: suspicious
+    attack: T1547.015
+    conf: 0.85
+    for:
+      - elf
+      - shell
+    if:
+      id: objectives/evasion/hijack-execution-flow/env/preload::ld-preload-string
+    downgrade:
+      any:
+        - id: metadata/dev/testing/gnu-tests::gnu-coreutils-test
+
+  - id: dlopen-call
+    desc: dlopen dynamic loading call
+    crit: notable
+    conf: 0.5
+    for:
+      - shell
+    if:
+      type: string
+      substr: dlopen
+    attack: T1574.006
+  - id: glibc-tunables
+    desc: GLIBC_TUNABLES environment variable
+    crit: notable
+    conf: 0.85
+    for:
+      - elf
+      - shell
+    if:
+      type: string
+      substr: GLIBC_TUNABLES
+    attack: T1547.015
+  - id: function-interception
+    desc: Function interception markers
+    crit: notable
+    conf: 0.6
+    for:
+      - elf
+      - shell
+    if:
+      type: string
+      regex: (dlsym\(RTLD_NEXT|__libc_dlsym|__libc_dlopen_mode)
+    attack: T1547.015
+  - id: libc-preload-env
+    desc: LD_PRELOAD references libc
+    crit: suspicious
+    conf: 0.8
+    for:
+      - elf
+      - shell
+    if:
+      type: string
+      regex: LD_PRELOAD\s*=\s*[^\s]{0,120}libc(\.so|-)
+  - id: libc-preload-file
+    desc: ld.so.preload references libc
+    crit: suspicious
+    conf: 0.8
+    for:
+      - elf
+      - shell
+    if:
+      type: string
+      regex: ld\.so\.preload[^\n]{0,80}libc(\.so|-)
+composite_rules:
+  - id: dlopen-dlsym-pattern
+    desc: dlopen+dlsym dynamic loading pair
+    crit: notable
+    conf: 0.7
+    for:
+      - elf
+      - shell
+    attack: T1574.006
+    all:
+      - id: dlopen-call
+      - id: micro-behaviors/dylib/lookup::dlsym-symbol
+  - id: ld-environment-hijacking
+    desc: LD environment variable hijacking
+    crit: suspicious
+    conf: 0.85
+    for:
+      - elf
+      - shell
+    attack: T1547.015
+    needs: 2
+    any:
+      - id: ld-preload-env
+      - id: micro-behaviors/os/linker/env::ld-audit
+      - id: micro-behaviors/os/linker/env::ld-debug
+  - id: dynamic-function-interception
+    desc: Dynamic function interception
+    crit: suspicious
+    conf: 0.85
+    for:
+      - elf
+      - shell
+    attack: T1547.015
+    needs: 2
+    any:
+      - id: objectives/anti-analysis/kernel-hide/userspace::dlsym-rtld-next-pattern
+      - id: dlopen-dlsym-pattern
+      - id: function-interception
+  - id: dynamic-linker-hijacking
+    desc: Complete dynamic linker hijacking
+    crit: suspicious
+    conf: 0.9
+    for:
+      - elf
+      - shell
+    attack: T1547.015
+    mbc: E1104
+    needs: 2
+    any:
+      - id: micro-behaviors/dylib/lookup::dlfcn-hook-symbol
+      - id: ld-environment-hijacking
+      - id: dynamic-function-interception
+  - id: libc-preload
+    desc: Preload libc library
+    crit: suspicious
+    conf: 0.8
+    for:
+      - elf
+      - shell
+    any:
+      - id: libc-preload-env
+      - id: libc-preload-file

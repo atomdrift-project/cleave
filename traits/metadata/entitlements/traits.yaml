@@ -1,0 +1,257 @@
+# macOS Application Entitlements
+# Extracted from code signature entitlements blob
+
+defaults:
+  platforms: [macos]
+  for: [macho]
+
+traits:
+  # === Privacy-Sensitive Entitlements ===
+  - id: camera
+    desc: Camera access entitlement
+    crit: notable
+    conf: 1.0
+    if:
+      type: trait
+      id: metadata/entitlement::com.apple.security.device.camera
+
+  - id: microphone
+    desc: Microphone access entitlement
+    crit: notable
+    conf: 1.0
+    if:
+      type: trait
+      id: metadata/entitlement::com.apple.security.device.audio-input
+
+  - id: location
+    desc: Location access entitlement
+    crit: suspicious
+    conf: 1.0
+    if:
+      type: trait
+      id: metadata/entitlement::com.apple.security.personal-information.location
+
+  - id: photos-library
+    desc: Photos library access entitlement
+    crit: notable
+    conf: 1.0
+    if:
+      type: trait
+      id: metadata/entitlement::com.apple.security.personal-information.photos-library
+
+  - id: contacts
+    desc: Contacts access entitlement
+    crit: notable
+    conf: 1.0
+    if:
+      type: trait
+      id: metadata/entitlement::com.apple.security.personal-information.addressbook
+
+  - id: calendar
+    desc: Calendar access entitlement
+    crit: notable
+    conf: 1.0
+    if:
+      type: trait
+      id: metadata/entitlement::com.apple.security.personal-information.calendars
+
+  # === Security-Related Entitlements ===
+  - id: disable-library-validation
+    desc: Disable library validation
+    crit: notable
+    conf: 1.0
+    if:
+      type: trait
+      id: metadata/entitlement::com.apple.security.cs.disable-library-validation
+
+  - id: allow-jit
+    desc: Allow JIT compilation
+    crit: suspicious
+    conf: 1.0
+    if:
+      type: trait
+      id: metadata/entitlement::com.apple.security.cs.allow-jit
+
+  - id: allow-unsigned-executable-memory
+    desc: Allow unsigned executable memory
+    crit: notable
+    conf: 1.0
+    if:
+      type: trait
+      id: metadata/entitlement::com.apple.security.cs.allow-unsigned-executable-memory
+
+  - id: debugger
+    desc: Debugger entitlement
+    crit: suspicious
+    conf: 1.0
+    if:
+      type: trait
+      id: metadata/entitlement::com.apple.security.cs.debugger
+
+  - id: ptrace
+    desc: Process tracing entitlement
+    crit: suspicious
+    conf: 1.0
+    if:
+      type: trait
+      id: metadata/entitlement::com.apple.security.cs.allow-runtime-attributes
+
+  # === Network Entitlements ===
+  - id: outbound-connections
+    desc: Allow outbound connections
+    crit: notable
+    conf: 1.0
+    if:
+      type: trait
+      id: metadata/entitlement::com.apple.security.network.client
+
+  - id: incoming-connections
+    desc: Allow incoming connections
+    crit: suspicious
+    conf: 1.0
+    if:
+      type: trait
+      id: metadata/entitlement::com.apple.security.network.server
+
+  - id: local-networking
+    desc: Local network access
+    crit: notable
+    conf: 1.0
+    if:
+      type: trait
+      id: metadata/entitlement::com.apple.security.network.local
+
+  - id: multicast
+    desc: Multicast networking
+    crit: notable
+    conf: 1.0
+    if:
+      type: trait
+      id: metadata/entitlement::com.apple.security.network.multicast
+
+  # === Device Entitlements ===
+  - id: usb
+    desc: USB device access
+    crit: suspicious
+    conf: 1.0
+    if:
+      type: trait
+      id: metadata/entitlement::com.apple.security.device.usb
+
+  - id: bluetooth
+    desc: Bluetooth device access
+    crit: notable
+    conf: 1.0
+    if:
+      type: trait
+      id: metadata/entitlement::com.apple.security.device.bluetooth
+
+  - id: printer
+    desc: Printer device access
+    crit: notable
+    conf: 1.0
+    if:
+      type: trait
+      id: metadata/entitlement::com.apple.security.device.print
+
+  - id: serial
+    desc: Serial device access
+    crit: suspicious
+    conf: 1.0
+    if:
+      type: trait
+      id: metadata/entitlement::com.apple.security.device.serial
+
+  # === File System Entitlements ===
+  - id: file-read-all
+    desc: Read all files entitlement
+    crit: suspicious
+    conf: 1.0
+    if:
+      type: trait
+      id: metadata/entitlement::com.apple.security.files.all
+
+  - id: file-read-downloads
+    desc: Downloads folder read access
+    crit: notable
+    conf: 1.0
+    if:
+      type: trait
+      id: metadata/entitlement::com.apple.security.files.downloads.read-only
+
+  - id: file-write-downloads
+    desc: Downloads folder write access
+    crit: suspicious
+    conf: 1.0
+    if:
+      type: trait
+      id: metadata/entitlement::com.apple.security.files.downloads.read-write
+
+  # === Keychain Entitlements ===
+  - id: keychain-access
+    desc: Keychain access
+    crit: notable
+    conf: 1.0
+    if:
+      type: trait
+      id: metadata/entitlement::keychain-access-groups
+
+  # === Application Identifier ===
+  - id: app-identifier
+    desc: Application identifier
+    crit: baseline
+    conf: 1.0
+    if:
+      type: trait
+      id: metadata/entitlement::com.apple.application-identifier
+
+  - id: temporary-exception-files-read
+    desc: Temporary exception for file read access
+    crit: suspicious
+    conf: 1.0
+    if:
+      type: trait
+      id: metadata/entitlement::com.apple.security.temporary-exception.files.absolute-path.read-only
+
+  - id: temporary-exception-mach-lookup
+    desc: Temporary exception for mach lookup
+    crit: suspicious
+    conf: 1.0
+    if:
+      type: trait
+      id: metadata/entitlement::com.apple.security.temporary-exception.mach-lookup.global-name
+
+composite_rules:
+  - id: privacy-sensitive-access
+    desc: Multiple privacy-sensitive entitlements
+    crit: suspicious
+    conf: 0.9
+    needs: 2
+    any:
+      - id: camera
+      - id: microphone
+      - id: location
+      - id: photos-library
+      - id: contacts
+      - id: calendar
+    # Downgrade for legitimate system components that have multiple entitlements by design
+    # (e.g., ReplayKit daemon for screen recording needs camera + microphone)
+    downgrade:
+      any:
+        - id: metadata/apple/system-component
+
+  - id: highly-privileged
+    desc: Highly privileged entitlements
+    crit: suspicious
+    conf: 0.95
+    any:
+      - id: disable-library-validation
+      - id: allow-unsigned-executable-memory
+      - id: ptrace
+      - id: debugger
+      - id: temporary-exception-files-read
+      - id: temporary-exception-mach-lookup
+    downgrade:
+      any:
+        - id: metadata/sign/apple::platform
+        - id: metadata/apple/system-component

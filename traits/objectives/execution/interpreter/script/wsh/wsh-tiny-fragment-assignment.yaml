@@ -1,0 +1,35 @@
+traits:
+- id: wsh-tiny-fragment-assignment-network
+  desc: Variable assignment of known network fragments (Nemucod)
+  crit: suspicious
+  for:
+  - javascript
+  if:
+    type: string
+    regex: var\s+[a-zA-Z0-9_]+\s*=\s*"(op|en|se|nd)";
+    case_insensitive: false
+- id: wsh-tiny-fragment-assignment-1
+  desc: Known fragments (Fil/Sav/ADOD/WScr) assignment
+  crit: suspicious
+  for:
+  - javascript
+  if:
+    type: string
+    case_insensitive: false
+    regex: var\s+\w+\s*=\s*"(Fil|Sav|ADOD|WScr)";
+- id: wsh-tiny-fragment-assignment-2
+  desc: Variable assignment of fragments (Resp, SaveT, open)
+  crit: suspicious
+  for:
+  - javascript
+  if:
+    type: string
+    case_insensitive: false
+    regex: var\s+\w+\s*=\s*"(Resp|SaveT|open)";
+composite_rules:
+- id: wsh-tiny-fragment-assignment
+  desc: Variable assignment of known WSH fragments (Nemucod)
+  crit: suspicious
+  any:
+  - id: wsh-tiny-fragment-assignment-1
+  - id: wsh-tiny-fragment-assignment-2

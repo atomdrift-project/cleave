@@ -1,0 +1,24 @@
+# Display Output Operations
+# Console and display-related capabilities
+
+defaults:
+  for: ["elf", "macho", "pe", "dll"]
+  platforms: ["windows"]
+
+traits:
+  # === Console Output ===
+  - id: write-console-w
+    desc: Unicode console output
+    crit: baseline
+    conf: 0.95
+    if:
+      type: symbol
+      exact: "WriteConsoleW"
+
+  - id: write-console-a
+    desc: ANSI console output
+    crit: baseline
+    conf: 0.95
+    if:
+      type: symbol
+      exact: "WriteConsoleA"

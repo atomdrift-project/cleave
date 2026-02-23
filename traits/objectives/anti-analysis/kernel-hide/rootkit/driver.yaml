@@ -1,0 +1,21 @@
+composite_rules:
+  - id: driver-hidden-api
+    desc: Kernel driver hides critical APIs using encoding
+    crit: hostile
+    conf: 0.95
+    all:
+      - id: micro-behaviors/os/kernel/routines::dynamic-resolution
+    any:
+      - id: micro-behaviors/os/kernel/hiding/exec::thread-manipulation-enc
+      - id: micro-behaviors/os/kernel/hiding/mem::mem-protect-enc
+      - id: micro-behaviors/os/kernel/hiding/mem::pe-header-enc
+      - id: micro-behaviors/os/kernel/hiding/mem::pe-data-enc
+    needs: 2
+
+  - id: driver-suspicious-path
+    desc: Kernel driver references suspicious System32 binary
+    crit: suspicious
+    conf: 0.8
+    all:
+      - id: micro-behaviors/fs/path/system::system32-bin
+      - id: micro-behaviors/os/kernel/routines::dynamic-resolution

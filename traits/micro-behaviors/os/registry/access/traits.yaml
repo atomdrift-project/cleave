@@ -1,0 +1,66 @@
+# Windows Registry Operations
+# Registry access and manipulation
+
+defaults:
+  for: ["pe", "dll"]
+  platforms: ["windows"]
+
+traits:
+  # === advapi32 Library Access ===
+  - id: advapi32-import
+    desc: Windows advanced API functions
+    crit: baseline
+    conf: 0.90
+    if:
+      type: string
+      substr: "advapi32"
+
+  # === Registry Library References ===
+  - id: registry-lib
+    desc: Registry operation library
+    crit: baseline
+    conf: 0.85
+    if:
+      type: string
+      regex: "HKEY_"
+
+  # === Registry Operations ===
+  - id: reg-create-key
+    desc: Windows RegCreateKey call
+    crit: notable
+    conf: 0.85
+    if:
+      type: string
+      regex: "RegCreateKey[WA]?"
+
+  - id: reg-set-value
+    desc: Windows RegSetValue call
+    crit: notable
+    conf: 0.85
+    if:
+      type: string
+      regex: "RegSetValue(Ex)?[WA]?"
+
+  - id: reg-open-key
+    desc: Windows RegOpenKey call
+    crit: notable
+    conf: 0.85
+    if:
+      type: string
+      regex: "RegOpenKey(Ex)?[WA]?"
+
+  - id: reg-query-value
+    desc: Windows RegQueryValue call
+    crit: notable
+    conf: 0.85
+    if:
+      type: string
+      regex: "RegQueryValue(Ex)?[WA]?"
+
+  - id: reg-delete-key
+    desc: Windows RegDeleteKey call
+    crit: notable
+    conf: 0.85
+    if:
+      type: string
+      regex: "RegDeleteKey[WA]?"

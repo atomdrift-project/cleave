@@ -1,0 +1,48 @@
+# Detects hex-encoded shell commands (often used in JS droppers)
+# These are fragments of shell commands represented as hex strings
+# e.g. "curl" -> "6375726c"
+
+traits:
+  - id: hex-encoded-curl
+    desc: Hex-encoded 'curl' command fragment
+    crit: notable
+    conf: 0.8
+    attack: "T1027"
+    mbc: "B0032"
+    for: [javascript, typescript, python]
+    if:
+      type: string
+      regex: '6375726c' # curl
+
+  - id: hex-encoded-wget
+    desc: Hex-encoded 'wget' command fragment
+    crit: notable
+    conf: 0.8
+    attack: "T1027"
+    mbc: "B0032"
+    for: [javascript, typescript, python]
+    if:
+      type: string
+      regex: '77676574' # wget
+
+  - id: hex-encoded-chmod
+    desc: Hex-encoded 'chmod' command fragment
+    crit: notable
+    conf: 0.8
+    attack: "T1027"
+    mbc: "B0032"
+    for: [javascript, typescript, python]
+    if:
+      type: string
+      regex: '63686d6f64' # chmod
+
+  - id: hex-encoded-sh
+    desc: Hex-encoded 'sh' shell fragment
+    crit: notable
+    conf: 0.7
+    attack: "T1027"
+    mbc: "B0032"
+    for: [javascript, typescript, python]
+    if:
+      type: string
+      regex: '2f62696e2f7368' # /bin/sh

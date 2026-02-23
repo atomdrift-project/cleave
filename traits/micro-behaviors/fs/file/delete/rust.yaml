@@ -1,0 +1,40 @@
+# File Delete Operations - Rust
+# MBC: C0047 (Delete File)
+# ATT&CK: T1070.004
+
+traits:
+  - id: fs-remove_file
+    desc: Delete file
+    crit: notable
+    conf: 0.9
+    mbc: "C0047"
+    attack: "T1070.004"
+    for: [rust]
+    if:
+      type: ast
+      kind: call
+      exact: "fs::remove_file"
+
+  - id: fs-remove_dir
+    desc: Delete directory
+    crit: notable
+    conf: 0.9
+    mbc: "C0047"
+    attack: "T1070.004"
+    for: [rust]
+    if:
+      type: ast
+      kind: call
+      exact: "fs::remove_dir"
+
+  - id: fs-remove_dir_all
+    desc: Recursive directory deletion
+    crit: notable
+    conf: 0.9
+    mbc: "C0047"
+    attack: "T1070.004"
+    for: [rust]
+    if:
+      type: ast
+      kind: call
+      exact: "fs::remove_dir_all"

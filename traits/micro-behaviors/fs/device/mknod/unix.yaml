@@ -1,0 +1,32 @@
+# Device Node Creation
+# MBC: E1222 (File Permission Modification)
+# ATT&CK: T1222
+
+defaults:
+  for: [elf, macho, so, dylib, c]
+
+traits:
+  - id: mknod-base
+    desc: Create device files
+    crit: notable
+    conf: 0.66
+    if:
+      type: symbol
+      exact: "mknod"
+
+  - id: mknodat
+    desc: Create device files
+    crit: notable
+    conf: 0.66
+    if:
+      type: symbol
+      exact: "mknodat"
+
+composite_rules:
+  - id: mknod
+    desc: Create device files
+    crit: notable
+    conf: 0.66
+    any:
+      - id: mknod-base
+      - id: mknodat

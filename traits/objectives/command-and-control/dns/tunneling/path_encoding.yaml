@@ -1,0 +1,62 @@
+defaults:
+  for: [all]
+
+traits:
+  - id: hex-path-chunk-split
+    desc: Splits path into chunks for hex encoding
+    crit: notable
+    conf: 0.9
+    if:
+      type: ast
+      language: javascript
+      query: |
+        ((call_expression
+          function: (member_expression
+            property: (property_identifier) @split
+          )
+          arguments: (arguments . (string (string_fragment) @slash))
+        )
+        (#eq? @split "split")
+        (#eq? @slash "/"))
+    unless:
+      - id: metadata/library::ioredis-auto-pipeline
+      - id: micro-behaviors/data/db/conn/redis::ioredis
+      - id: metadata/library::commander
+      - id: metadata/library/nodeunit::nodeunit
+      - id: metadata/library/nodeunit::nodeunit-require
+      - id: metadata/dev/testing::node-common-require
+    downgrade:
+      any:
+        - id: micro-behaviors/data/db/conn/redis::ioredis
+        - id: metadata/library::commander
+
+  - id: hex-path-p-wrapping
+    desc: Wraps encoded path chunks with 'p' characters
+    crit: notable
+    if:
+      type: ast
+      language: javascript
+      query: |
+        ((assignment_expression
+          left: (identifier) @str
+          right: (binary_expression
+            left: (call_expression
+              function: (member_expression
+                object: (identifier) @str2
+                property: (property_identifier) @slice
+              )
+              arguments: (arguments
+                (number)
+                (unary_expression
+                  operator: "-"
+                  argument: (number)
+                )
+              )
+            )
+            operator: "+"
+            right: (string (string_fragment) @p)
+          )
+        )
+        (#eq? @str @str2)
+        (#eq? @slice "slice")
+        (#eq? @p "p"))

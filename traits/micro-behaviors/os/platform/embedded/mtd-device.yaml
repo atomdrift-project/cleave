@@ -1,0 +1,17 @@
+# MTD Flash Device Detection
+# Detects embedded devices using MTD (Memory Technology Device) flash storage
+# Common in IoT devices, routers, and embedded Linux systems
+
+defaults:
+  for: [elf, macho, scripts]
+  platforms: [linux, embedded]
+  crit: suspicious
+  conf: 0.9
+
+traits:
+  - id: mtd-device-paths
+    desc: Multiple MTD flash device paths
+    if:
+      type: string
+      regex: '(/mnt/mtd/|/dev/mtd)'
+      count_min: 2

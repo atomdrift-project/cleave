@@ -1,0 +1,24 @@
+defaults:
+  for: [all]
+
+traits:
+  - id: urllib3-content
+    desc: Contains content specific to urllib3 library
+    crit: notable
+    if:
+      type: string
+      regex: "(Client-side SSL/TLS verification|File uploads with multipart encoding)"
+
+  - id: urllib3-name
+    desc: Contains the string "urllib3"
+    crit: notable
+    if:
+      type: string
+      substr: "urllib3"
+
+  - id: tui-summary
+    desc: Summary mentions Terminal User Interface
+    crit: notable
+    if:
+      type: string
+      substr: "A library for creating a terminal user interface"

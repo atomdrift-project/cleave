@@ -1,0 +1,26 @@
+defaults:
+  crit: notable
+  conf: 1.0
+  for:
+  - all
+traits:
+- id: minimal-imports-suspicious-apis__unless_1
+  desc: Derived import_combination condition
+  if:
+    type: import_combination
+    min_suspicious: 30
+- id: concealed-capabilities-pe__unless_1
+  desc: Derived import_combination condition
+  if:
+    type: import_combination
+    min_suspicious: 25
+- id: import-concealed-ransomware-pattern__unless_1
+  desc: Derived import_combination condition
+  if:
+    type: import_combination
+    min_suspicious: 20
+- id: import-concealed-dropper-pattern__unless_1
+  desc: Derived import_combination condition
+  if:
+    type: import_combination
+    min_suspicious: 20

@@ -1,0 +1,107 @@
+# Sensitive Data Exfiltration - Go
+# GuardDog-inspired: Detects exfiltration of sensitive data
+# ATT&CK: T1041 (Exfiltration Over C2 Channel)
+# MBC: B0030 (Data Exfiltration)
+
+defaults:
+  for: [go, elf, macho, pe]
+  attack: "T1041"
+  mbc: "B0030"
+
+composite_rules:
+  # GuardDog: Environment variable exfiltration via HTTP
+  - id: go-env-http-exfiltration
+    desc: Environment variable exfiltration via HTTP (Go)
+    crit: hostile
+    conf: 0.95
+    all:
+      # Sensitive data source
+      - id: micro-behaviors/os/env/access::env-access
+      # HTTP sink
+      - id: micro-behaviors/communications/http/post::http-post-methods
+    downgrade:
+      any:
+        - id: metadata/quality::has-tests
+        - id: metadata/signed/platform
+
+  # GuardDog: Sensitive file exfiltration via HTTP
+  - id: go-file-http-exfiltration
+    desc: Sensitive file read and HTTP exfiltration (Go)
+    crit: hostile
+    conf: 0.95
+    all:
+      # File read capability
+      - id: micro-behaviors/fs/file/read::read-go
+      # HTTP sink
+      - id: micro-behaviors/communications/http/post::http-post-methods
+    any:
+      # Read sensitive files
+      - id: micro-behaviors/fs/path/sensitive/credentials
+      - id: micro-behaviors/fs/path/sensitive/browser
+    downgrade:
+      any:
+        - id: metadata/quality::has-tests
+        - id: metadata/signed/platform
+
+  # GuardDog: System info exfiltration via HTTP
+  - id: go-sysinfo-http-exfiltration
+    desc: System information discovery and HTTP exfiltration (Go)
+    crit: hostile
+    conf: 0.93
+    all:
+      # System discovery
+      - id: objectives/discovery/host/system::go-system-info-discovery
+      # HTTP sink
+      - id: micro-behaviors/communications/http/post::http-post-methods
+    downgrade:
+      any:
+        - id: metadata/quality::has-tests
+        - id: metadata/signed/platform
+
+  # GuardDog: DNS exfiltration
+  - id: go-dns-exfiltration
+    desc: Data exfiltration via DNS lookups (Go)
+    crit: hostile
+    conf: 0.95
+    all:
+      # DNS lookup capability
+      - id: micro-behaviors/communications/dns/lookup::dns-lookup
+    any:
+      # Sensitive data source
+      - id: micro-behaviors/os/env/access::env-access
+      - id: micro-behaviors/fs/path/sensitive/credentials
+      - id: objectives/discovery/host/system::go-system-info-discovery
+    downgrade:
+      any:
+        - id: metadata/quality::has-tests
+        - id: metadata/signed/platform
+
+  # GuardDog: Socket-based exfiltration
+  - id: go-socket-exfiltration
+    desc: Data exfiltration via raw sockets (Go)
+    crit: hostile
+    conf: 0.95
+    all:
+      # Socket communication
+      - id: micro-behaviors/communications/network/socket::socket-dial
+    any:
+      # Sensitive data source
+      - id: micro-behaviors/os/env/access::env-access
+      - id: micro-behaviors/fs/path/sensitive/credentials
+      - id: objectives/discovery/host/system::go-system-info-discovery
+    downgrade:
+      any:
+        - id: metadata/quality::has-tests
+        - id: metadata/signed/platform
+
+  # GuardDog: Comprehensive sensitive data exfiltration
+  - id: go-sensitive-data-exfiltration
+    desc: Sensitive data exfiltration (Go)
+    crit: hostile
+    conf: 0.95
+    any:
+      - id: go-env-http-exfiltration
+      - id: go-file-http-exfiltration
+      - id: go-sysinfo-http-exfiltration
+      - id: go-dns-exfiltration
+      - id: go-socket-exfiltration

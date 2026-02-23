@@ -1,0 +1,11 @@
+defaults:
+  for: [all]
+
+traits:
+  - id: recursive-root
+    desc: "Recursive Root Directory Deletion"
+    crit: suspicious
+    conf: 1.0
+    if:
+      type: string
+      regex: "rm\\s+-[rRfF]{1,2}\\s+/\\*"

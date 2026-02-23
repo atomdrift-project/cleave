@@ -1,0 +1,25 @@
+# Random Filenames in Public Folders
+# Detects patterns of random-looking filenames in common drop locations
+
+traits:
+  - id: public-folder-short-random
+    desc: "Short random filename in C:\\Users\\Public"
+    crit: suspicious
+    conf: 0.8
+    attack: "T1564.001"
+    for: [javascript, powershell]
+    platforms: [windows]
+    if:
+      type: string
+      regex: 'C:\\\\Users\\\\Public\\\\[a-zA-Z]{5}\.'
+
+  - id: public-folder-reference
+    desc: "Reference to C:\\Users\\Public folder"
+    crit: notable
+    conf: 0.5
+    for: [javascript, powershell]
+    platforms: [windows]
+    if:
+      type: string
+      regex: 'C:\\\\Users\\\\Public\\\\'
+      count_min: 2

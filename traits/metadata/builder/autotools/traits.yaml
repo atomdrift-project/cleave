@@ -1,0 +1,59 @@
+# Build System - AUTOTOOLS
+
+defaults:
+  for: [all]
+
+traits:
+  # === Autotools micro-behaviors ===
+  - id: configure-ac
+    desc: configure.ac file
+    crit: notable
+    conf: 0.8
+    if:
+      type: raw
+      substr: "configure.ac"
+
+  - id: makefile-am
+    desc: Makefile.am file
+    crit: notable
+    conf: 0.8
+    if:
+      type: raw
+      substr: "Makefile.am"
+
+  - id: config-h-in
+    desc: config.h.in file
+    crit: notable
+    conf: 0.8
+    if:
+      type: raw
+      substr: "config.h.in"
+
+  - id: package-version
+    desc: PACKAGE_VERSION variable
+    crit: notable
+    conf: 0.8
+    if:
+      type: raw
+      substr: "PACKAGE_VERSION"
+
+  - id: ac-init
+    desc: AC_INIT macro
+    crit: notable
+    conf: 0.8
+    if:
+      type: raw
+      substr: "AC_INIT"
+
+composite_rules:
+  # Autotools composite (migrated from YARA)
+  - id: autotools
+    desc: Built with Autotools (autoconf/automake)
+    crit: notable
+    conf: 0.8
+    any:
+      - id: configure-ac
+      - id: makefile-am
+      - id: config-h-in
+      - id: package-version
+      - id: ac-init

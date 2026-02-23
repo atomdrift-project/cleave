@@ -1,0 +1,15 @@
+# File Write Operations
+# MBC: C0052 (Write File)
+# ATT&CK: T1105
+
+defaults:
+  for: [elf, macho, so, dylib, c]
+
+traits:
+  - id: write
+    desc: Write files
+    crit: baseline
+    conf: 0.66
+    if:
+      type: symbol
+      regex: ^(fwrite|write|pwrite|pwrite64)$

@@ -1,0 +1,131 @@
+defaults:
+  for:
+  - elf
+  - macho
+  - pe
+  - python
+  mbc: B0032
+  attack: T1027
+traits:
+- id: xor-decode-symbol
+  desc: xor_decode symbol
+  crit: suspicious
+  conf: 0.8
+  if:
+    type: symbol
+    exact: xor_decode
+- id: decode-xor-symbol
+  desc: decode_xor symbol
+  crit: suspicious
+  conf: 0.8
+  if:
+    type: symbol
+    exact: decode_xor
+- id: xor-decrypt-symbol
+  desc: xor_decrypt symbol
+  crit: suspicious
+  conf: 0.8
+  if:
+    type: symbol
+    exact: xor_decrypt
+- id: decrypt-xor-symbol
+  desc: decrypt_xor symbol
+  crit: suspicious
+  conf: 0.8
+  if:
+    type: symbol
+    regex: decrypt_xor
+- id: xor-string-symbol
+  desc: xor_string symbol
+  crit: suspicious
+  conf: 0.8
+  if:
+    type: symbol
+    regex: xor_string
+- id: xor-key-0x37
+  desc: XOR key 0x37 repeated
+  crit: notable
+  conf: 0.55
+  for:
+  - elf
+  if:
+    type: raw
+    regex: '0x37'
+- id: decode-table-symbol
+  desc: decode_table symbol
+  crit: notable
+  conf: 0.5
+  if:
+    type: symbol
+    regex: decode_table
+- id: table-decode-symbol
+  desc: table_decode symbol
+  crit: notable
+  conf: 0.5
+  if:
+    type: symbol
+    regex: table_decode
+- id: lookup-decode-symbol
+  desc: lookup_decode symbol
+  crit: notable
+  conf: 0.5
+  if:
+    type: symbol
+    regex: lookup_decode
+- id: char-map-symbol-a
+  desc: char_map symbol decode family
+  crit: notable
+  conf: 0.3
+  if:
+    type: symbol
+    regex: (xor|decode|decrypt)[_-]?char_map
+- id: char-map-symbol-b
+  desc: char_map symbol obfusc/cipher family
+  crit: notable
+  conf: 0.3
+  if:
+    type: symbol
+    regex: (obfusc|cipher)[_-]?char_map
+composite_rules:
+- id: xor-decode-loop
+  desc: XOR decryption loop pattern
+  crit: suspicious
+  conf: 0.85
+  any:
+  - id: xor-decode-symbol
+  - id: decode-xor-symbol
+  - id: xor-decrypt-symbol
+  - id: decrypt-xor-symbol
+  - id: xor-string-symbol
+- id: table-based-decode
+  desc: Table-based decoding function
+  crit: notable
+  conf: 0.7
+  any:
+  - id: decode-table-symbol
+  - id: table-decode-symbol
+  - id: lookup-decode-symbol
+  - id: char-map-symbol
+- id: char-map-symbol
+  desc: char_map symbol
+  crit: notable
+  conf: 0.3
+  any:
+  - id: char-map-symbol-a
+  - id: char-map-symbol-b
+- id: string-decrypt
+  desc: String decryption capability
+  crit: suspicious
+  conf: 0.8
+  any:
+  - id: xor-decode-loop
+  - id: table-based-decode
+- id: python-xor-decode
+  desc: Python XOR decoding script
+  crit: suspicious
+  conf: 0.8
+  for:
+  - python
+  all:
+  - id: micro-behaviors/data/encode/xor::xor-decoding-loop
+  - id: micro-behaviors/data/encode/hex::hex-decode-int-16

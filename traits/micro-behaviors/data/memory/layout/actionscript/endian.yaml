@@ -1,0 +1,19 @@
+defaults:
+  for: [all]
+
+traits:
+  - id: actionscript-endian-manipulation
+    desc: ActionScript ByteArray endian manipulation (often used in
+    crit: notable
+    conf: 0.8
+    if:
+      type: raw
+      regex: "\\.endian\\s*=\\s*Endian\\.LITTLE_ENDIAN"
+
+  - id: actionscript-import-endian
+    desc: ActionScript imports flash.utils.Endian
+    crit: baseline
+    conf: 0.8
+    if:
+      type: raw
+      regex: "import\\s+flash\\.utils\\.Endian"

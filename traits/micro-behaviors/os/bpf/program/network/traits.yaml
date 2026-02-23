@@ -1,0 +1,177 @@
+defaults:
+  for:
+    - all
+traits:
+  - id: so-attach-bpf
+    desc: SO_ATTACH_BPF socket option
+    crit: notable
+    conf: 0.7
+    if:
+      type: string
+      substr: SO_ATTACH_BPF
+  - id: af-packet
+    desc: AF_PACKET raw socket
+    crit: notable
+    conf: 0.6
+    if:
+      type: string
+      substr: AF_PACKET
+  - id: magic-packet
+    desc: magic_packet string
+    crit: suspicious
+    conf: 0.8
+    if:
+      type: string
+      substr: magic_packet
+  - id: trigger-packet
+    desc: trigger_packet string
+    crit: suspicious
+    conf: 0.8
+    if:
+      type: string
+      substr: trigger_packet
+  - id: port-knock
+    desc: port_knock string
+    crit: suspicious
+    conf: 0.75
+    if:
+      type: string
+      substr: port_knock
+  - id: sequence-string
+    desc: knock sequence string reference
+    crit: notable
+    conf: 0.6
+    if:
+      type: string
+      regex: \b(knock|port|packet)[_-]?sequence\b
+      case_insensitive: true
+  - id: xdp-tx
+    desc: XDP_TX packet reflection
+    crit: notable
+    conf: 0.8
+    for:
+      - c
+      - elf
+    if:
+      type: raw
+      substr: XDP_TX
+  - id: xdp-drop
+    desc: XDP_DROP packet discard
+    crit: baseline
+    conf: 0.5
+    for:
+      - c
+      - elf
+    if:
+      type: raw
+      substr: XDP_DROP
+  - id: xdp-pass
+    desc: XDP_PASS packet passthrough
+    crit: baseline
+    conf: 0.5
+    for:
+      - c
+      - elf
+    if:
+      type: raw
+      substr: XDP_PASS
+  - id: xdp-attach
+    desc: XDP program attachment to interface
+    crit: notable
+    conf: 0.9
+    for:
+      - c
+      - elf
+    if:
+      type: raw
+      substr: bpf_xdp_attach
+  - id: xdp-flags
+    desc: XDP attachment flags
+    crit: baseline
+    conf: 0.6
+    for:
+      - c
+      - elf
+    if:
+      type: raw
+      regex: XDP_FLAGS_(UPDATE_IF_NOEXIST|SKB_MODE|DRV_MODE|HW_MODE)
+  - id: bpf-skeleton-include
+    desc: BPF skeleton header include
+    crit: notable
+    conf: 0.9
+    for:
+      - c
+    if:
+      type: raw
+      regex: '#include\s+"[^"]{1,120}\.skel\.h"'
+  - id: ethhdr-struct
+    desc: Ethernet header structure
+    crit: baseline
+    conf: 0.5
+    for:
+      - c
+      - elf
+    if:
+      type: raw
+      regex: struct\s+ethhdr|ethhdr\s*\*
+  - id: iphdr-struct
+    desc: IP header structure
+    crit: baseline
+    conf: 0.5
+    for:
+      - c
+      - elf
+    if:
+      type: raw
+      regex: struct\s+iphdr|iphdr\s*\*
+  - id: ip-addr-swap
+    desc: IP address swap operation
+    crit: notable
+    conf: 0.75
+    for:
+      - c
+    if:
+      type: raw
+      regex: swap.{0,30}(saddr|daddr)|(saddr|daddr).{0,30}swap
+  - id: knock-string-port-knock
+    desc: knock string reference
+    crit: notable
+    conf: 0.6
+    for:
+      - elf
+      - c
+    if:
+      type: string
+      regex: (?i)port[_-]?knock
+  - id: knock-string-knock-terms
+    desc: knock string reference
+    crit: notable
+    conf: 0.6
+    for:
+      - elf
+      - c
+    if:
+      type: string
+      regex: (?i)knock[_-]?(sequence|packet)
+composite_rules:
+  - id: knock-string
+    desc: knock string reference
+    crit: notable
+    conf: 0.6
+    for:
+      - elf
+      - c
+    any:
+      - id: knock-string-port-knock
+      - id: knock-string-knock-terms
+  - id: xdp-packet-reflection
+    desc: XDP packet reflection pattern
+    crit: suspicious
+    conf: 0.9
+    attack: T1205.001
+    for:
+      - c
+      - elf
+    all:
+      - id: xdp-tx
+      - id: micro-behaviors/os/bpf/program/loader::packet-manip-helpers

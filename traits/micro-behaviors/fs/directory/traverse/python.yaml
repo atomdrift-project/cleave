@@ -1,0 +1,15 @@
+# Filesystem Hierarchy Traversal - Python
+# MBC: E1083 (File and Directory Discovery)
+# ATT&CK: T1083
+
+defaults:
+  for: [all]
+
+traits:
+  - id: traverse-walk
+    desc: Traverse filesystem hierarchy (os.walk)
+    crit: notable
+    conf: 0.66
+    if:
+      type: string
+      substr: os.walk

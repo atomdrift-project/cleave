@@ -1,0 +1,40 @@
+defaults:
+  for:
+  - all
+  crit: notable
+  conf: 0.8
+traits:
+- id: mz-header-check
+  desc: Check for MZ executable header
+  mbc: C0017
+  if:
+    type: encoded
+    regex: (==|===)\s*['"]MZ['"]
+- id: mz-header-literal
+  desc: Literal MZ header marker
+  mbc: C0017
+  if:
+    type: encoded
+    regex: \bMZ\b
+- id: mz-header-obfuscated-concat
+  desc: Obfuscated MZ header concat check
+  mbc: C0017
+  if:
+    type: encoded
+    regex: (==|===)\{[^:]+:['"]M['"]\}\.[a-zA-Z0-9_$]+
+- id: mz-header-obfuscated-concat-z
+  desc: Obfuscated Z concat in MZ check
+  mbc: C0017
+  if:
+    type: encoded
+    regex: \+\{[^:]+:['"]Z['"]\}\.[a-zA-Z0-9_$]+
+composite_rules:
+- id: mz-header-check-any
+  desc: Check for MZ executable header
+  crit: notable
+  conf: 0.8
+  any:
+  - id: mz-header-check
+  - id: mz-header-literal
+  - id: mz-header-obfuscated-concat
+  - id: mz-header-obfuscated-concat-z

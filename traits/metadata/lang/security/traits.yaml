@@ -1,0 +1,156 @@
+# Security Hardening Features
+# PIE, Stack Protector, FORTIFY_SOURCE, RELRO
+
+defaults:
+  for: [all]
+
+traits:
+  # === PIE micro-behaviors ===
+  - id: pie-macro
+    desc: __pie__ macro
+    crit: notable
+    conf: 0.85
+    if:
+      type: string
+      substr: "__pie__"
+
+  - id: fpie-flag
+    desc: -fPIE flag
+    crit: notable
+    conf: 0.85
+    if:
+      type: string
+      substr: "-fPIE"
+
+  - id: got-plt-section
+    desc: .got.plt section
+    crit: notable
+    conf: 0.7
+    if:
+      type: string
+      substr: ".got.plt"
+
+  # === Stack protector micro-behaviors ===
+  - id: stack-chk-fail
+    desc: __stack_chk_fail function
+    crit: baseline
+    conf: 0.9
+    if:
+      type: symbol
+      regex: "__stack_chk_fail"
+
+  - id: stack-chk-guard
+    desc: __stack_chk_guard
+    crit: baseline
+    conf: 0.9
+    if:
+      type: string
+      substr: "__stack_chk_guard"
+
+  - id: fstack-protector
+    desc: -fstack-protector flag
+    crit: notable
+    conf: 0.9
+    if:
+      type: string
+      substr: "-fstack-protector"
+
+  # === FORTIFY_SOURCE micro-behaviors ===
+  - id: fortify-fail
+    desc: __fortify_fail function
+    crit: notable
+    conf: 0.85
+    if:
+      type: symbol
+      regex: "__fortify_fail"
+
+  - id: chk-fail
+    desc: __chk_fail function
+    crit: notable
+    conf: 0.85
+    if:
+      type: symbol
+      regex: "__chk_fail"
+
+  - id: chk-suffix
+    desc: _chk@ function suffix
+    crit: notable
+    conf: 0.85
+    if:
+      type: string
+      substr: "_chk@"
+
+  - id: memcpy-chk
+    desc: __memcpy_chk function
+    crit: notable
+    conf: 0.85
+    if:
+      type: symbol
+      regex: "__memcpy_chk"
+
+  - id: strcpy-chk
+    desc: __strcpy_chk function
+    crit: notable
+    conf: 0.85
+    if:
+      type: symbol
+      regex: "__strcpy_chk"
+
+  # === RELRO micro-behaviors ===
+  - id: gnu-relro
+    desc: GNU_RELRO string
+    crit: notable
+    conf: 0.8
+    if:
+      type: string
+      substr: "GNU_RELRO"
+
+  - id: got-section
+    desc: .got section
+    crit: notable
+    conf: 0.7
+    if:
+      type: string
+      exact: ".got"
+
+composite_rules:
+  # PIE composite
+  - id: pie
+    desc: Position Independent Executable (PIE)
+    crit: notable
+    conf: 0.85
+    any:
+      - id: pie-macro
+      - id: fpie-flag
+      - id: got-plt-section
+
+  # Stack protector composite
+  - id: stack-protector
+    desc: Stack protector/canary enabled
+    crit: baseline
+    conf: 0.9
+    any:
+      - id: stack-chk-fail
+      - id: stack-chk-guard
+      - id: fstack-protector
+
+  # FORTIFY_SOURCE composite
+  - id: fortify
+    desc: FORTIFY_SOURCE hardening enabled
+    crit: notable
+    conf: 0.85
+    any:
+      - id: fortify-fail
+      - id: chk-fail
+      - id: chk-suffix
+      - id: memcpy-chk
+      - id: strcpy-chk
+
+  # RELRO composite
+  - id: relro
+    desc: RELRO hardening enabled
+    crit: notable
+    conf: 0.8
+    any:
+      - id: gnu-relro
+      - id: got-section

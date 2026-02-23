@@ -1,0 +1,16 @@
+# AES - Binary Detection
+# MBC: C0021.001 (AES)
+# ATT&CK: T1573.001
+
+defaults:
+  for: [elf, pe, macho]
+
+traits:
+  - id: aes-sbox-bytes
+    desc: AES S-box start bytes
+    crit: notable
+    conf: 0.7
+    mbc: "C0021.001"
+    if:
+      type: hex
+      pattern: "63 7C 77 7B F2 6B 6F C5"

@@ -1,0 +1,184 @@
+# Python Dropper Patterns
+# ATT&CK: T1105 (Ingress Tool Transfer)
+# MBC: B0024 (Dropper)
+# Detects Python scripts that download and execute payloads
+
+defaults:
+  for: [python]
+  mbc: "B0024"
+  attack: "T1105"
+
+traits:
+  # === Download and Execute function patterns ===
+  - id: download-and-execute-func-1
+    desc: download_and_execute function (snake_case)
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: symbol
+      substr: "download_and_execute"
+
+  - id: download-and-execute-func-2
+    desc: download_execute function (snake_case)
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: symbol
+      substr: "download_execute"
+
+  - id: download-and-execute-func-3
+    desc: downloadAndExecute function (camelCase)
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: symbol
+      substr: "downloadAndExecute"
+
+  - id: download-and-execute-func-4
+    desc: downloadExecute function (camelCase)
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: symbol
+      substr: "downloadExecute"
+
+  # === Process checking patterns (anti-duplicate infection) ===
+  - id: is-process-running-func-1
+    desc: is_process_running function (snake_case)
+    crit: notable
+    conf: 0.85
+    if:
+      type: string
+      substr: "is_process_running"
+
+  - id: is-process-running-func-2
+    desc: isProcessRunning function (camelCase)
+    crit: notable
+    conf: 0.85
+    if:
+      type: string
+      substr: "isProcessRunning"
+
+  - id: is-process-running-func-3
+    desc: check_if_running function
+    crit: notable
+    conf: 0.85
+    if:
+      type: string
+      substr: "check_if_running"
+
+  - id: is-process-running-func-4
+    desc: process_running function
+    crit: notable
+    conf: 0.85
+    if:
+      type: string
+      substr: "process_running"
+
+  # === MD5-based process validation (anti-analysis/integrity) ===
+  - id: kill-process-md5
+    desc: MD5-based process termination
+    crit: suspicious
+    conf: 0.95
+    if:
+      type: string
+      regex: "kill_process.{0,30}md5|md5.{0,30}kill.{0,30}process"
+
+  - id: kill-process-mismatch
+    desc: Kill process if mismatch
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: string
+      regex: "kill.{0,20}if.{0,20}mismatch|mismatch.{0,20}kill"
+
+  # === Platform architecture detection for payload selection ===
+  - id: platform-architecture-check
+    desc: Platform architecture check
+    crit: notable
+    conf: 0.85
+    if:
+      type: ast
+      kind: call
+      regex: "\\.architecture\\("
+
+  - id: arch-64bit-check
+    desc: 64-bit architecture check
+    crit: notable
+    conf: 0.8
+    if:
+      type: string
+      substr: "64bit"
+
+  # === Multiple persistence locations (dropper behavior) ===
+  - id: multi-persist-dirs
+    desc: Multiple persistence directories
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: raw
+      # Match scripts that reference multiple temp/persist directories
+      regex: "/tmp.{0,50}/var/tmp|/var/tmp.{0,50}/dev/shm|/tmp.{0,50}/dev/shm"
+
+  # === HTTP URL with IP and port pattern ===
+  - id: http-ip-port-url
+    desc: HTTP URL with IP:port
+    crit: suspicious
+    conf: 0.85
+    if:
+      type: string
+      # Match http://IP:PORT patterns
+      regex: "http://[0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+:[0-9]+"
+      external_ip: true
+
+  # === Binary download path patterns ===
+  - id: bin-endpoint-path
+    desc: Binary download endpoint path
+    crit: suspicious
+    conf: 0.85
+    if:
+      type: string
+      regex: "http.{0,60}/bin($|\"|\\')"
+
+composite_rules:
+  - id: download-and-execute-func
+    desc: download_and_execute function patterns
+    crit: suspicious
+    conf: 0.9
+    any:
+      - id: download-and-execute-func-1
+      - id: download-and-execute-func-2
+      - id: download-and-execute-func-3
+      - id: download-and-execute-func-4
+
+  - id: is-process-running-func
+    desc: is_process_running function patterns
+    crit: notable
+    conf: 0.85
+    any:
+      - id: is-process-running-func-1
+      - id: is-process-running-func-2
+      - id: is-process-running-func-3
+      - id: is-process-running-func-4
+
+  # Process checking + killing = anti-duplicate infection
+  - id: anti-duplicate-infection
+    desc: Anti-duplicate infection pattern
+    crit: suspicious
+    conf: 0.9
+    any:
+      - id: is-process-running-func
+      - id: kill-process-md5
+      - id: kill-process-mismatch
+
+  # Architecture-based payload selection
+  - id: arch-payload-selection
+    desc: Architecture-based payload selection
+    crit: suspicious
+    conf: 0.85
+    all:
+      - id: platform-architecture-check
+      - id: arch-64bit-check
+    any:
+      - id: http-ip-port-url
+      - id: download-and-execute-func

@@ -1,0 +1,51 @@
+# DNS TXT Record Lookup (Node.js)
+# MBC: C0011 (DNS Communication)
+# ATT&CK: T1071.004
+
+defaults:
+  for: [javascript, typescript]
+  mbc: "C0011"
+  attack: "T1071.004"
+  crit: notable
+  conf: 0.7
+
+traits:
+  - id: resolve-txt
+    desc: dns.resolveTxt() call
+    conf: 0.8
+    if:
+      type: string
+      regex: "dns\\.resolveTxt\\("
+
+  - id: resolve-txt-promise
+    desc: dns.promises.resolveTxt() call
+    conf: 0.8
+    if:
+      type: string
+      regex: "dns\\.promises\\.resolveTxt\\("
+
+  - id: resolve-txt-string
+    desc: resolveTxt string reference
+    crit: baseline
+    conf: 0.6
+    if:
+      type: string
+      substr: "resolveTxt"
+
+  - id: txt-record-type
+    desc: TXT record type constant
+    crit: baseline
+    conf: 0.5
+    if:
+      type: string
+      exact: "'TXT'"
+
+composite_rules:
+  - id: node-txt-lookup
+    desc: Node.js DNS TXT record resolution
+    crit: notable
+    conf: 0.75
+    any:
+      - id: resolve-txt
+      - id: resolve-txt-promise
+      - id: resolve-txt-string

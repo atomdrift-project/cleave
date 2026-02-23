@@ -1,0 +1,57 @@
+# InstallUtil.exe LOLBin Detection
+# InstallUtil is a legitimate .NET tool frequently abused to execute malicious assemblies
+# MITRE ATT&CK: T1218.004 (Signed Binary Proxy Execution: InstallUtil)
+
+defaults:
+  crit: suspicious
+  conf: 0.9
+  attack: "T1218.004"
+  platforms: [windows]
+  for: [powershell, javascript, batch, python]
+
+traits:
+  - id: installutil-path-reference
+    desc: "InstallUtil.exe path reference (LOLBin abuse)"
+    if:
+      type: encoded
+      # Match Framework path with installutil - handle corrupted characters
+      regex: 'Framework(64)?.{0,30}installutil'
+      case_insensitive: true
+
+  - id: installutil-exe-reference
+    desc: "InstallUtil.exe executable reference"
+    conf: 0.85
+    if:
+      type: encoded
+      substr: "installutil.exe"
+      case_insensitive: true
+
+  - id: installutil-logfile-flag
+    desc: "InstallUtil /logfile flag (output redirection)"
+    conf: 0.8
+    if:
+      type: encoded
+      regex: 'installutil.{0,20}/logfile'
+      case_insensitive: true
+
+  - id: installutil-logtoconsole-flag
+    desc: "InstallUtil /LogToConsole=false flag (stealth execution)"
+    conf: 0.85
+    if:
+      type: encoded
+      regex: 'installutil.{0,20}/LogToConsole=false'
+      case_insensitive: true
+
+composite_rules:
+  # High-confidence LOLBin abuse pattern
+  - id: installutil-lolbin-abuse
+    desc: "InstallUtil LOLBin execution with stealth flags"
+    crit: suspicious
+    conf: 0.95
+    attack: "T1218.004"
+    platforms: [windows]
+    all:
+      - id: installutil-path-reference
+    any:
+      - id: installutil-logfile-flag
+      - id: installutil-logtoconsole-flag

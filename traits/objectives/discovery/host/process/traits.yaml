@@ -1,0 +1,9 @@
+# Process Discovery Traits - Deleted
+# These simple symbol-based detections were taxonomy violations
+# They belong in micro-behaviors/ as simple capabilities, not objectives/ as objectives
+# Capabilities already exist:
+# - micro-behaviors/process/identity/query::get-pid
+# - micro-behaviors/process/identity/query::get-uid
+# - micro-behaviors/process/identity/query::get-gid
+# See python.yaml and rust.yaml for proper objective-level process discovery
+

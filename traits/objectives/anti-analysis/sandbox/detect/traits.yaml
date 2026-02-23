@@ -1,0 +1,142 @@
+defaults:
+  for:
+  - all
+traits:
+- id: hostname-19olltd
+  desc: DESKTOP-19OLLTD sandbox hostname
+  crit: suspicious
+  mbc: B0007
+  attack: T1497.001
+  conf: 0.7
+  if:
+    type: string
+    substr: DESKTOP-19OLLTD
+- id: hostname-b0t93d6
+  desc: DESKTOP-B0T93D6 sandbox hostname
+  crit: suspicious
+  mbc: B0007
+  attack: T1497.001
+  conf: 0.7
+  if:
+    type: string
+    substr: DESKTOP-B0T93D6
+- id: hostname-vrsqlag
+  desc: DESKTOP-VRSQLAG sandbox hostname
+  crit: suspicious
+  mbc: B0007
+  attack: T1497.001
+  conf: 0.7
+  if:
+    type: string
+    substr: DESKTOP-VRSQLAG
+- id: hostname-john-pc
+  desc: JOHN-PC sandbox hostname
+  crit: suspicious
+  mbc: B0007
+  attack: T1497.001
+  conf: 0.7
+  if:
+    type: string
+    substr: JOHN-PC
+- id: hostname-julia-pc
+  desc: JULIA-PC sandbox hostname
+  crit: suspicious
+  mbc: B0007
+  attack: T1497.001
+  conf: 0.7
+  if:
+    type: string
+    substr: JULIA-PC
+- id: hostname-lisa-pc
+  desc: LISA-PC sandbox hostname
+  crit: suspicious
+  mbc: B0007
+  attack: T1497.001
+  conf: 0.7
+  if:
+    type: string
+    substr: LISA-PC
+# sleep-accel removed - use composite of micro-behaviors/os/time/query and micro-behaviors/time/timing/delay instead
+- id: path-c-analysis
+  desc: C:\analysis sandbox path
+  crit: suspicious
+  mbc: B0007
+  attack: T1497.001
+  conf: 0.6
+  if:
+    type: string
+    substr: C:\analysis
+- id: path-c-sandbox
+  desc: C:\sandbox sandbox path
+  crit: suspicious
+  mbc: B0007
+  attack: T1497.001
+  conf: 0.6
+  if:
+    type: string
+    substr: C:\sandbox
+- id: path-tmp-analysis
+  desc: /tmp/analysis sandbox path
+  crit: suspicious
+  mbc: B0007
+  attack: T1497.001
+  conf: 0.6
+  if:
+    type: string
+    substr: /tmp/analysis
+composite_rules:
+- id: hostname-sandbox
+  desc: Sandbox hostname check
+  crit: notable
+  conf: 0.65
+  any:
+  - id: hostname-19olltd
+  - id: hostname-b0t93d6
+  - id: hostname-vrsqlag
+  - id: hostname-john-pc
+  - id: hostname-julia-pc
+  - id: hostname-lisa-pc
+- id: file-check-sandbox
+  desc: Sandbox file artifacts check
+  crit: notable
+  conf: 0.65
+  any:
+  - id: path-c-analysis
+  - id: path-c-sandbox
+  - id: path-tmp-analysis
+- id: username-sandbox
+  desc: Common sandbox usernames
+  crit: notable
+  mbc: B0007
+  attack: T1497.001
+  conf: 0.8
+  downgrade:
+    any:
+    - id: metadata/quality/testing::test-file-shell
+    - id: well-known/tools/sysadmin::git-operations
+    - id: well-known/tools/sysadmin::hg-operations
+  any:
+  - id: objectives/anti-analysis/sandbox/detect::inline__username-sandbox__any_1
+  - id: objectives/anti-analysis/sandbox/detect::inline__username-sandbox__any_2
+  - id: objectives/anti-analysis/sandbox/detect::inline__username-sandbox__any_3
+  - id: objectives/anti-analysis/sandbox/detect::inline__username-sandbox__any_4
+  - id: objectives/anti-analysis/sandbox/detect::inline__username-sandbox__any_5
+  - id: objectives/anti-analysis/sandbox/detect::inline__username-sandbox__any_6
+  - id: objectives/anti-analysis/sandbox/detect::inline__username-sandbox__any_7
+  - id: objectives/anti-analysis/sandbox/detect::inline__username-sandbox__any_8
+  - id: objectives/anti-analysis/sandbox/detect::inline__username-sandbox__any_9
+  - id: objectives/anti-analysis/sandbox/detect::inline__username-sandbox__any_10
+  - id: objectives/anti-analysis/sandbox/detect::inline__username-sandbox__any_11
+  - id: objectives/anti-analysis/sandbox/detect::inline__username-sandbox__any_12
+  - id: objectives/anti-analysis/sandbox/detect::inline__username-sandbox__any_13
+  - id: objectives/anti-analysis/sandbox/detect::inline__username-sandbox__any_14
+  - id: objectives/anti-analysis/sandbox/detect::inline__username-sandbox__any_15
+  - id: objectives/anti-analysis/sandbox/detect::inline__username-sandbox__any_16
+  - id: objectives/anti-analysis/sandbox/detect::inline__username-sandbox__any_17
+  - id: objectives/anti-analysis/sandbox/detect::inline__username-sandbox__any_18
+  - id: objectives/anti-analysis/sandbox/detect::inline__username-sandbox__any_19
+  - id: objectives/anti-analysis/sandbox/detect::inline__username-sandbox__any_20
+  - id: objectives/anti-analysis/sandbox/detect::inline__username-sandbox__any_21
+  - id: objectives/anti-analysis/sandbox/detect::inline__username-sandbox__any_22
+  - id: objectives/anti-analysis/sandbox/detect::inline__username-sandbox__any_23
+  - id: objectives/anti-analysis/sandbox/detect::inline__username-sandbox__any_24

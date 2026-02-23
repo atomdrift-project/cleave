@@ -1,0 +1,55 @@
+# Fragmented Payload Detection
+# Detects patterns where a payload is constructed incrementally (+=) to evade static string analysis.
+# Common in PowerShell and JavaScript droppers.
+
+defaults:
+  for: [powershell]
+  attack: "T1027"
+  mbc: "B0032"
+
+traits:
+  - id: ps1-incremental-string
+    desc: PowerShell incremental string assignment
+    crit: suspicious
+    conf: 0.8
+    if:
+      type: ast
+      query: |
+        (assignment_expression
+          left: (variable)
+          operator: "+="
+          right: [(string_literal) (expandable_string_literal)]
+        )
+
+  - id: ps1-incremental-array
+    desc: PowerShell incremental array assignment
+    crit: suspicious
+    conf: 0.8
+    if:
+      type: ast
+      query: |
+        (assignment_expression
+          left: (variable)
+          operator: "+="
+          right: (array_expression)
+        )
+
+  - id: ps1-join-operator
+    desc: PowerShell join operator usage
+    crit: notable
+    conf: 0.6
+    if:
+      type: ast
+      query: |
+        (binary_expression
+          operator: "-join"
+        )
+
+composite_rules:
+  - id: ps1-fragmented-payload
+    desc: "PowerShell fragmented payload construction"
+    crit: suspicious
+    conf: 0.85
+    all:
+      - id: ps1-incremental-array
+      - id: ps1-join-operator

@@ -1,0 +1,12 @@
+composite_rules:
+  - id: reflective-pe-loader
+    desc: Reflective PE loading with encrypted payload
+    crit: hostile
+    conf: 0.95
+    mbc: "B0005"
+    all:
+      - id: custom-pe-loader
+    any:
+      - id: micro-behaviors/mem/protect/modify::virtual-protect
+      - id: metadata/binary/section::high-entropy-rdata
+      - id: metadata/lang::object-crate

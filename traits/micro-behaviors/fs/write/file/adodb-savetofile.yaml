@@ -1,0 +1,59 @@
+traits:
+  - id: adodb-savetofile
+    desc: Uses ADODB.Stream SaveToFile method
+    crit: suspicious
+    conf: 0.95
+    for: [javascript]
+    if:
+      type: string
+      # Detects a pattern indicating usage of SaveToFile method of ADODB.Stream object
+      # or highly fragmented versions often used in Nemucod
+      regex: 'S\\x61veFile|ToF\\x69le'
+
+  - id: adodb-fragment-adod
+    desc: Obfuscated ADODB fragment "ADOD"
+    crit: notable
+    conf: 0.85
+    for: [javascript]
+    if:
+      type: string
+      substr: "ADOD"
+
+  - id: adodb-fragment-stream
+    desc: Obfuscated ADODB stream fragment ".Stre"
+    crit: notable
+    conf: 0.85
+    for: [javascript]
+    if:
+      type: string
+      substr: ".Stre"
+
+  - id: savetofile-fragment-save
+    desc: Obfuscated SaveToFile fragment "Save"
+    crit: notable
+    conf: 0.8
+    for: [javascript]
+    if:
+      type: string
+      substr: "Save"
+
+  - id: savetofile-fragment-tofil
+    desc: Obfuscated SaveToFile fragment "ToFil"
+    crit: notable
+    conf: 0.8
+    for: [javascript]
+    if:
+      type: string
+      substr: "ToFil"
+
+composite_rules:
+  - id: adodb-savetofile-obfuscated-fragments
+    desc: Obfuscated ADODB.Stream SaveToFile fragment cluster
+    crit: suspicious
+    conf: 0.92
+    for: [javascript]
+    all:
+      - id: adodb-fragment-adod
+      - id: adodb-fragment-stream
+      - id: savetofile-fragment-save
+      - id: savetofile-fragment-tofil

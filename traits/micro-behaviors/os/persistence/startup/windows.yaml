@@ -1,0 +1,13 @@
+# Windows Startup Persistence
+# Capabilities related to Windows Startup folder persistence
+
+traits:
+  - id: win-startup-path
+    desc: Windows Startup folder path reference
+    crit: notable
+    conf: 0.8
+    for: [all]
+    platforms: [windows]
+    if:
+      type: string
+      regex: '(?i)Microsoft[/\\]Windows[/\\]Start Menu'

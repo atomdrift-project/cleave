@@ -1,0 +1,37 @@
+traits:
+  - id: js-string-literal-charat-access
+    desc: Accessing charAt property on string literal via
+    crit: suspicious
+    conf: 0.95
+    mbc: "B0032"
+    attack: "T1027"
+    for: [javascript, typescript]
+    if:
+      type: raw
+      regex: '["''][^"''\n]{1,50}["'']\s*\[\s*["'']charAt["'']\s*\]'
+
+  - id: js-dense-string-literal-charat-access
+    desc: Dense access of charAt property on string
+    crit: suspicious
+    conf: 0.98
+    mbc: "B0032"
+    attack: "T1027"
+    for: [javascript, typescript]
+    if:
+      type: raw
+      regex: '["''][^"''\n]{1,50}["'']\s*\[\s*["'']charAt["'']\s*\]'
+      count_min: 5
+      per_kb_min: 1.0
+
+  - id: js-dense-charat-calls
+    desc: Dense charAt calls on variables or literals
+    crit: notable
+    conf: 0.8
+    mbc: "B0032"
+    attack: "T1027"
+    for: [javascript, typescript]
+    if:
+      type: string
+      substr: "charAt"
+      count_min: 20
+      per_kb_min: 2.0

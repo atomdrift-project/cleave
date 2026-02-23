@@ -1,0 +1,9 @@
+traits:
+  - id: node-vm
+    desc: Executing code via Node.js VM
+    crit: suspicious
+    conf: 0.9
+    for: [javascript, typescript]
+    if:
+      type: string
+      regex: 'vm\.runIn(New)?Context'

@@ -1,0 +1,13 @@
+# Virus activation patterns
+
+defaults:
+  for: [c, cpp, pe, elf, macho]
+
+composite_rules:
+  - id: virus-activation-mkdir
+    desc: Virus-like activation via directory creation (mkdir in infection context)
+    crit: suspicious
+    conf: 0.8
+    all:
+      - id: micro-behaviors/fs/directory/mkdir::mkdir
+      - id: objectives/impact/infect/binary::overwriter-virus-logic

@@ -1,0 +1,18 @@
+# Detects Ruby droppers using iplogger/tracking services
+# ATT&CK: T1195.002 (Supply Chain Compromise)
+
+composite_rules:
+  - id: ruby-iplogger-dropper
+    desc: Ruby script contacts tracking service
+    crit: hostile
+    conf: 0.95
+    for: [ruby]
+    all:
+      - id: objectives/execution/dropper/script::filename-extconf
+    any:
+      - id: objectives/discovery/network/ip-tracker/
+      - id: objectives/discovery/network/scan::iplogger-keyword
+      - id: objectives/command-and-control/infrastructure/network::ruby-ast-fragmented-iplogger
+      - id: objectives/command-and-control/infrastructure/network::ruby-ast-fragmented-iplogger-alt
+      - id: objectives/anti-static/obfuscation/string::ruby-concatenated-iplogger
+      - id: objectives/anti-static/obfuscation/string::ruby-concatenated-iplogger-alt

@@ -1,0 +1,73 @@
+# C Runtime Memory Operations
+# Standard C library memory management
+
+defaults:
+  for: ["pe", "dll"]
+  platforms: ["windows"]
+
+traits:
+  # === Dynamic Allocation ===
+  - id: malloc
+    desc: Allocate memory (C runtime)
+    crit: baseline
+    conf: 0.90
+    if:
+      type: symbol
+      exact: "malloc"
+
+  - id: free
+    desc: Free memory (C runtime)
+    crit: baseline
+    conf: 0.90
+    if:
+      type: symbol
+      exact: "free"
+
+  - id: calloc
+    desc: Allocate zeroed memory
+    crit: baseline
+    conf: 0.90
+    if:
+      type: symbol
+      exact: "calloc"
+
+  - id: realloc
+    desc: Reallocate memory
+    crit: baseline
+    conf: 0.90
+    if:
+      type: symbol
+      exact: "realloc"
+
+  # === Memory Operations ===
+  - id: memcpy
+    desc: Memory copy operation
+    crit: baseline
+    conf: 0.90
+    if:
+      type: symbol
+      exact: "memcpy"
+
+  - id: memset
+    desc: Memory fill operation
+    crit: baseline
+    conf: 0.90
+    if:
+      type: symbol
+      exact: "memset"
+
+  - id: memmove
+    desc: Memory move with overlap
+    crit: baseline
+    conf: 0.90
+    if:
+      type: symbol
+      exact: "memmove"
+
+  - id: memcmp
+    desc: Memory compare
+    crit: baseline
+    conf: 0.90
+    if:
+      type: symbol
+      exact: "memcmp"

@@ -1,0 +1,44 @@
+# macOS Security Framework Privileged Process Execution
+# Detects use of AuthorizationExecuteWithPrivileges and related APIs
+# for executing processes with elevated privileges.
+# These APIs are typically used for admin tasks but are often abused
+# by malware to escalate privileges without user interaction.
+# ATT&CK: T1548.004 (Abuse Elevation Control Mechanism)
+
+defaults:
+  for: [macho, dylib, c]
+  platforms: [macos]
+  attack: "T1548.004"
+
+traits:
+  - id: auth-execute-with-privileges
+    desc: "AuthorizationExecuteWithPrivileges API usage"
+    crit: suspicious
+    conf: 0.95
+    if:
+      type: symbol
+      exact: "AuthorizationExecuteWithPrivileges"
+
+  - id: auth-create
+    desc: "AuthorizationCreate API for auth context"
+    crit: notable
+    conf: 0.85
+    if:
+      type: symbol
+      exact: "AuthorizationCreate"
+
+  - id: auth-copy-rights
+    desc: "AuthorizationCopyRights API for privilege checks"
+    crit: notable
+    conf: 0.85
+    if:
+      type: symbol
+      exact: "AuthorizationCopyRights"
+
+  - id: security-framework
+    desc: "Security Authorization API usage"
+    crit: notable
+    conf: 0.85
+    if:
+      type: symbol
+      regex: "Authorization(Free|MakeExternalForm|CopyInfo|CopyExternalForm)"

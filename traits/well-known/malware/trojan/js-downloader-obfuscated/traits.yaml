@@ -1,0 +1,14 @@
+# Obfuscated JS Downloader Variants
+
+defaults:
+  platforms: [javascript]
+
+composite_rules:
+  - id: js-fuckit-downloader
+    desc: 'Downloader/Dropper using "fuckit" function and array obfuscation'
+    crit: hostile
+    conf: 1.0
+    for: [javascript]
+    all:
+      - id: micro-behaviors/data/source/markers/profanity::func-fuckit
+      - id: micro-behaviors/data/encode/hex::js-hex-char-array

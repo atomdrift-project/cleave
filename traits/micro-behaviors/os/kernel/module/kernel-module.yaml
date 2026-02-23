@@ -1,0 +1,72 @@
+traits:
+  - id: syscall-init-module
+    desc: "init_module syscall for loading kernel"
+    crit: notable
+    conf: 0.8
+    platforms: [linux]
+    for: [elf]
+    if:
+      type: syscall
+      name: ["init_module"]
+
+  - id: syscall-finit-module
+    desc: "finit_module syscall for loading kernel"
+    crit: notable
+    conf: 0.8
+    platforms: [linux]
+    for: [elf]
+    if:
+      type: syscall
+      name: ["finit_module"]
+
+  - id: syscall-delete-module
+    desc: "delete_module syscall for unloading kernel"
+    crit: notable
+    conf: 0.8
+    platforms: [linux]
+    for: [elf]
+    if:
+      type: syscall
+      name: ["delete_module"]
+
+  - id: syscall-kexec-load
+    desc: "kexec_load syscall for loading new"
+    crit: notable
+    conf: 0.8
+    platforms: [linux]
+    for: [elf]
+    if:
+      type: syscall
+      name: ["kexec_load"]
+
+  - id: syscall-kexec-file-load
+    desc: "kexec_file_load syscall for loading new"
+    crit: notable
+    conf: 0.8
+    platforms: [linux]
+    for: [elf]
+    if:
+      type: syscall
+      name: ["kexec_file_load"]
+
+composite_rules:
+  - id: kernel-module-load
+    desc: Loads kernel module
+    conf: 0.95
+    crit: suspicious
+    platforms: [linux]
+    for: [elf]
+    any:
+      - id: syscall-init-module
+      - id: syscall-finit-module
+
+
+  - id: kexec
+    desc: Loads new kernel for kexec
+    conf: 0.95
+    crit: suspicious
+    platforms: [linux]
+    for: [elf]
+    any:
+      - id: syscall-kexec-load
+      - id: syscall-kexec-file-load

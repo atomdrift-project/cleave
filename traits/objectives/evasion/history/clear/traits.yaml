@@ -1,0 +1,161 @@
+# Anti-Forensics: Shell History Clearing
+# MBC: F0005 (Indicator Blocking)
+# ATT&CK: T1070.003 (Clear Command History)
+
+defaults:
+  for: [all]
+
+traits:
+  # === Bash History Clearing ===
+  - id: histfile-devnull
+    desc: HISTFILE=/dev/null redirection
+    crit: suspicious
+    conf: 0.9
+    mbc: "F0005"
+    attack: "T1070.003"
+    if:
+      type: string
+      regex: "(?i)HISTFILE=/dev/null"
+
+  - id: export-histfile
+    desc: export HISTFILE= variable
+    crit: suspicious
+    conf: 0.85
+    mbc: "F0005"
+    attack: "T1070.003"
+    if:
+      type: string
+      substr: "export HISTFILE="
+
+  - id: histsize-zero
+    desc: HISTSIZE=0 disables history
+    crit: suspicious
+    conf: 0.9
+    mbc: "F0005"
+    attack: "T1070.003"
+    if:
+      type: string
+      substr: "HISTSIZE=0"
+
+  - id: histfilesize-zero
+    desc: HISTFILESIZE=0 disables history file
+    crit: suspicious
+    conf: 0.9
+    mbc: "F0005"
+    attack: "T1070.003"
+    if:
+      type: string
+      substr: "HISTFILESIZE=0"
+
+  # === MySQL History Clearing ===
+  - id: mysql-histfile-devnull
+    desc: MYSQL_HISTFILE=/dev/null redirection
+    crit: suspicious
+    conf: 0.9
+    mbc: "F0005"
+    attack: "T1070.003"
+    if:
+      type: string
+      regex: "(?i)MYSQL_HISTFILE=/dev/null"
+
+  - id: export-mysql-histfile
+    desc: export MYSQL_HISTFILE= variable
+    crit: suspicious
+    conf: 0.85
+    mbc: "F0005"
+    attack: "T1070.003"
+    if:
+      type: string
+      substr: "export MYSQL_HISTFILE="
+
+  # === PROMPT_COMMAND Clearing ===
+  - id: unset-prompt-command
+    desc: unset PROMPT_COMMAND command
+    crit: suspicious
+    conf: 0.85
+    mbc: "F0005"
+    attack: "T1070.003"
+    if:
+      type: string
+      substr: "unset PROMPT_COMMAND"
+
+  - id: prompt-command-empty
+    desc: "PROMPT_COMMAND='' empty string"
+    crit: suspicious
+    conf: 0.85
+    mbc: "F0005"
+    attack: "T1070.003"
+    if:
+      type: string
+      substr: "PROMPT_COMMAND=''"
+
+  - id: prompt-command-unset
+    desc: PROMPT_COMMAND= assignment
+    crit: notable
+    conf: 0.75
+    mbc: "F0005"
+    attack: "T1070.003"
+    if:
+      type: string
+      substr: "PROMPT_COMMAND="
+
+  # Note: TERM variable traits moved to os/env/terminal.yaml
+  # (terminal configuration is not anti-forensics)
+
+composite_rules:
+  # Bash history file clearing (migrated from YARA)
+  - id: histfile-null
+    desc: Redirects shell history to /dev/null
+    crit: notable
+    conf: 0.9
+    mbc: "F0005"
+    attack: "T1070.003"
+    any:
+      - id: histfile-devnull
+      - id: export-histfile
+      - id: objectives/evasion/log-clear/system::unset-histfile
+      - id: histsize-zero
+      - id: histfilesize-zero
+
+  # MySQL history clearing (migrated from YARA)
+  - id: mysql-histfile-null
+    desc: Clears MySQL command history
+    crit: suspicious
+    conf: 0.9
+    mbc: "F0005"
+    attack: "T1070.003"
+    any:
+      - id: mysql-histfile-devnull
+      - id: export-mysql-histfile
+
+  # Prompt command clearing (migrated from YARA)
+  - id: prompt-command-clear
+    desc: Unsets PROMPT_COMMAND to evade logging
+    crit: suspicious
+    conf: 0.85
+    mbc: "F0005"
+    attack: "T1070.003"
+    any:
+      - id: unset-prompt-command
+      - id: prompt-command-empty
+      - id: prompt-command-unset
+
+  # Combined anti-forensics helper
+  - id: history-clearing
+    desc: Shell history clearing techniques
+    crit: notable
+    conf: 0.9
+    any:
+      - id: histfile-null
+      - id: mysql-histfile-null
+
+  # BPFDoor-style anti-forensics setup
+  - id: backdoor-shell-setup
+    desc: Multiple anti-forensics techniques (backdoor indicator)
+    crit: hostile
+    conf: 0.95
+    attack: "T1070.003"
+    for: [shell, elf]
+    all:
+      - id: history-clearing
+      - id: prompt-command-clear

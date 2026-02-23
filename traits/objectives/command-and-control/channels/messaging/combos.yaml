@@ -1,0 +1,12 @@
+# Composite C2 Channel Capabilities
+
+composite_rules:
+  - id: telegram
+    desc: Data exfiltration via Telegram
+    crit: suspicious
+    mbc: "B0030.001"
+    attack: "T1567.001"
+    conf: 0.95
+    all:
+      - id: objectives/credential-access/discord/token::telegram-exfil
+      - id: http-post

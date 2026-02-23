@@ -1,0 +1,15 @@
+# Temporary File Creation - Go
+# MBC: C0046 (Create File)
+# ATT&CK: T1074
+
+defaults:
+  for: [all]
+
+traits:
+  - id: mktemp-go
+    desc: Create temporary files (Go)
+    crit: baseline
+    conf: 0.66
+    if:
+      type: string
+      regex: "(ioutil\\.TempFile|os\\.CreateTemp)"

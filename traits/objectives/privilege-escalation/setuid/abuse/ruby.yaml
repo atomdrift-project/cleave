@@ -1,0 +1,36 @@
+---
+# Ruby Setuid Privilege Escalation
+# Generic privilege escalation via setuid
+# ATT&CK: T1068 (Exploitation for Privilege Escalation)
+
+defaults:
+  for: [ruby]
+  platforms: [all]
+
+traits:
+  - id: ruby-setuid
+    desc: Ruby setuid call
+    crit: suspicious
+    conf: 0.90
+    attack: "T1068"
+    if:
+      type: string
+      regex: 'Process::Sys\.setuid|setuid\(0\)'
+
+  - id: setuid-capability
+    desc: Setuid capability check
+    crit: suspicious
+    conf: 0.85
+    attack: "T1068"
+    if:
+      type: string
+      regex: 'cap_setuid|setcap.{0,50}setuid'
+
+  - id: ruby-root-shell
+    desc: Root shell execution via setuid
+    crit: suspicious
+    conf: 0.95
+    attack: "T1068"
+    if:
+      type: string
+      regex: 'setuid.{0,50}exec.{0,50}sh|Process::Sys\.setuid.{0,50}exec'

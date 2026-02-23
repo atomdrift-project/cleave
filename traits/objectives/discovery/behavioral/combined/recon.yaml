@@ -1,0 +1,7 @@
+composite_rules:
+  - id: evasion-and-recon
+    desc: Evasion checks combined with system reconnaissance
+    crit: hostile
+    all:
+      - id: objectives/anti-analysis/evasion/detection::evasion-checks
+      - id: objectives/discovery/system/activity::significant-recon

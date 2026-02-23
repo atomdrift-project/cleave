@@ -1,0 +1,88 @@
+# JavaScript String Concealment Techniques
+# MBC: B0032 (Obfuscated Files or Information)
+# ATT&CK: T1027 (Obfuscated Files or Information)
+
+traits:
+  - id: js-adodb-position-reversed
+    desc: Reversed ADODB position string
+    crit: suspicious
+    conf: 0.95
+    for: [javascript, typescript]
+    if:
+      type: string
+      regex: 'noitisop'
+
+  - id: js-adodb-savetofile-reversed
+    desc: Reversed ADODB SaveToFile string
+    crit: suspicious
+    conf: 0.95
+    for: [javascript, typescript]
+    if:
+      type: string
+      regex: 'eliFoTevaS'
+
+  - id: js-xmlhttp-responsebody-reversed
+    desc: Reversed XMLHTTP ResponseBody string fragment
+    crit: suspicious
+    conf: 0.8
+    for: [javascript, typescript]
+    if:
+      type: string
+      regex: 'ydo'
+
+  - id: js-split-reverse-join
+    desc: String reversal via split-reverse-join
+    crit: notable
+    conf: 0.8
+    for: [javascript, typescript]
+    mbc: "B0032"
+    attack: "T1027.002"
+    if:
+      type: raw
+      regex: '\.split\(.{0,6}\)\.reverse\(\)\.join\(.{0,6}\)'
+
+  - id: js-junk-math-1
+    desc: Junk arithmetic producing small integers (pattern 1)
+    crit: notable
+    conf: 0.6
+    for: [javascript, typescript]
+    mbc: "B0032"
+    attack: "T1027"
+    if:
+      type: raw
+      # Matches (num + num) or (num - num)
+      regex: '\(\s*[-+]?\d+\s*[-+*/]\s*[-+]?\d+\s*\)'
+
+  - id: js-createobject-reversed
+    desc: Reversed CreateObject string
+    crit: suspicious
+    conf: 0.95
+    for: [javascript, typescript]
+    if:
+      type: string
+      regex: '(?i)tcejbOetaerC'
+
+  - id: js-comma-string-obfuscation
+    desc: String obfuscation using the comma operator
+    crit: suspicious
+    conf: 0.8
+    for: [javascript, typescript]
+    mbc: "B0032"
+    attack: "T1027"
+    if:
+      type: raw
+      regex: "\\([\"'].{1,20}[\"'],\\s*[\"'].{1,20}[\"'],\\s*[\"'].{1,20}[\"']\\)"
+      size_min: 8
+
+composite_rules:
+  - id: any-string-concealment
+    desc: Any string concealment pattern
+    crit: notable
+    conf: 0.8
+    for: [javascript, typescript]
+    any:
+      - id: micro-behaviors/anti-static/obfuscate/string-conceal::js-adodb-position-reversed
+      - id: micro-behaviors/anti-static/obfuscate/string-conceal::js-adodb-savetofile-reversed
+      - id: micro-behaviors/anti-static/obfuscate/string-conceal::js-xmlhttp-responsebody-reversed
+      - id: micro-behaviors/anti-static/obfuscate/string-conceal::js-split-reverse-join
+      - id: micro-behaviors/host/interpreter/jscript::createobject-fragment-ateobject

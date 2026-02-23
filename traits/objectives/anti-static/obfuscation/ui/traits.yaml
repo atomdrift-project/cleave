@@ -1,0 +1,10 @@
+composite_rules:
+  - id: ui-obfuscation
+    desc: "UI-based obfuscation"
+    crit: suspicious
+    conf: 0.9
+    for: [pe, dll, csharp]
+    platforms: [windows]
+    all:
+      - id: objectives/anti-static/obfuscation/ui-controls::vscrollbar-spam
+      - id: metadata/format/magic::pe-dos-stub

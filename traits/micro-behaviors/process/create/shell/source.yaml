@@ -1,0 +1,24 @@
+# Shell Script Indicators in Source Code
+# Detects embedded shell scripts and shell paths
+# MBC: E1059.004 (Unix Shell)
+# ATT&CK: T1059.004 (Command and Scripting Interpreter: Unix Shell)
+
+defaults:
+  for: [scripts]
+
+traits:
+  - id: embedded-shebang-sh
+    desc: Embedded shell script shebang (#!/bin/sh)
+    crit: notable
+    conf: 0.8
+    if:
+      type: string
+      substr: "#!/bin/sh"
+
+  - id: bin-sh-source
+    desc: /bin/sh reference in source
+    crit: notable
+    conf: 0.6
+    if:
+      type: string
+      substr: "/bin/sh"

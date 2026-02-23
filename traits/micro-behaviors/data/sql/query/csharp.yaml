@@ -1,0 +1,43 @@
+# C# SQL/Database Traits
+# objective: data, behavior: sql
+
+traits:
+  - id: sqlcommand
+    desc: SQL command construction or execution
+    crit: baseline
+    conf: 0.8
+    if:
+      type: ast
+      kind: identifier
+      exact: "SqlCommand"
+    for: [csharp]
+
+  - id: sqlconnection
+    desc: SQL database connection
+    crit: baseline
+    conf: 0.8
+    if:
+      type: ast
+      kind: identifier
+      exact: "SqlConnection"
+    for: [csharp]
+
+  - id: sqldatareader
+    desc: SQL data reader
+    crit: baseline
+    conf: 0.7
+    if:
+      type: ast
+      kind: identifier
+      exact: "SqlDataReader"
+    for: [csharp]
+
+  - id: extension-method
+    desc: Extension method definition (can extend
+    crit: baseline
+    conf: 0.7
+    if:
+      type: ast
+      node: parameter
+      exact: "this SqlCommand"
+    for: [csharp]

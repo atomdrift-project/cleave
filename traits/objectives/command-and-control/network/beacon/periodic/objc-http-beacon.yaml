@@ -1,0 +1,104 @@
+# Objective-C HTTP C2 Beaconing
+# Detects Objective-C malware that beacons to HTTP C2 servers via NSURLSession with scheduled timers
+# ATT&CK: T1071.001 (Web Protocols), T1029 (Scheduled Transfer)
+# MBC: B0030 (C2 Communication)
+
+defaults:
+  crit: suspicious
+  attack: "T1071.001"
+  mbc: "B0030"
+  for: [macho]
+
+traits:
+  # === Objective-C HTTP POST with JSON ===
+  - id: nsurl-post-json
+    desc: POST request with JSON
+    crit: suspicious
+    conf: 0.85
+    if:
+      type: string
+      regex: "POST\\s"
+    downgrade:
+      any:
+        - id: metadata/signed/platform::apple
+        - id: micro-behaviors/communications/download/curl::curl-easy-init
+
+  - id: nsurl-http-body
+    desc: NSURLRequest HTTP body
+    crit: notable
+    conf: 0.70
+    if:
+      type: symbol
+      regex: "setHTTPBody"
+
+  - id: json-sdf-payload
+    desc: JSON sdf/wsx payload
+    crit: suspicious
+    conf: 0.80
+    if:
+      type: string
+      substr: '{"sdf":'
+
+  - id: json-info-field
+    desc: JSON info field data
+    crit: notable
+    conf: 0.70
+    if:
+      type: string
+      substr: '"info":'
+
+  # === Objective-C Command Execution ===
+  - id: nstask-launch
+    desc: NSTask process execution
+    crit: suspicious
+    conf: 0.85
+    for: [macho]
+    if:
+      type: symbol
+      exact: "launch"
+    downgrade:
+      any:
+        - id: metadata/signed/platform::apple
+
+  - id: command-execution-response
+    desc: Command execution response handling
+    crit: suspicious
+    conf: 0.80
+    if:
+      type: string
+      substr: "Command executed successfully"
+
+  - id: command-failure-handling
+    desc: Command failure error handling
+    crit: notable
+    conf: 0.70
+    if:
+      type: string
+      substr: "Failed to execute command:"
+
+composite_rules:
+  # === Objective-C HTTP C2 Beacon ===
+  - id: objc-http-c2-beacon
+    desc: Objective-C HTTP C2 beacon
+    crit: hostile
+    conf: 0.95
+    attack: "T1071.001"
+    mbc: "B0030"
+    for: [macho]
+    all:
+      - id: micro-behaviors/time/schedule/interval::nstimer-scheduled
+      - id: micro-behaviors/communications/http/lib/nsurlsession::nsurlsession-http-request
+      - id: objectives/command-and-control/network/beacon/periodic::nsurl-post-json
+      - id: objectives/command-and-control/network/beacon/periodic::json-sdf-payload
+
+  - id: objc-c2-command-execution
+    desc: Objective-C C2 RAT
+    crit: hostile
+    conf: 0.95
+    attack: "T1071.001"
+    mbc: "B0030"
+    for: [macho]
+    all:
+      - id: objectives/command-and-control/network/beacon/periodic::objc-http-c2-beacon
+      - id: objectives/command-and-control/network/beacon/periodic::nstask-launch
+      - id: objectives/command-and-control/network/beacon/periodic::command-execution-response

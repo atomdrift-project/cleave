@@ -1,0 +1,35 @@
+# Windows Shell Execution
+# Windows API based shell/process execution
+
+defaults:
+  for: ["pe", "dll"]
+  platforms: ["windows"]
+
+traits:
+  # === Shell Execution APIs ===
+  - id: shell-execute-ex
+    desc: Execute shell command (ShellExecuteExW)
+    crit: notable
+    conf: 0.75
+    attack: "T1059.001"
+    if:
+      type: symbol
+      exact: "ShellExecuteExW"
+
+  - id: shell-execute
+    desc: Execute shell command (ShellExecuteW)
+    crit: notable
+    conf: 0.75
+    attack: "T1059.001"
+    if:
+      type: symbol
+      exact: "ShellExecuteW"
+
+  # === Command Line Execution ===
+  - id: get-command-line
+    desc: Retrieve command line arguments
+    crit: baseline
+    conf: 0.65
+    if:
+      type: symbol
+      exact: "GetCommandLineW"

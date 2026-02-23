@@ -1,0 +1,28 @@
+defaults:
+  for: [all]
+
+composite_rules:
+- id: dpaste-api-exfil
+  desc: Dpaste API exfiltration detected
+  crit: hostile
+  conf: 1.0
+  all:
+  - id: micro-behaviors/communications/http/services::dpaste-api
+  - id: dpaste-api-exfil-method
+  - id: dpaste-api-exfil-auth
+
+- id: dpaste-api-exfil-method
+  desc: Helper
+  crit: notable
+  conf: 0.8
+  any:
+    - id: micro-behaviors/communications/http/post::post
+    - id: micro-behaviors/communications/http/post::post
+
+- id: dpaste-api-exfil-auth
+  desc: Helper
+  crit: notable
+  conf: 0.8
+  any:
+    - id: micro-behaviors/data/text/secrets::bearer-token-hex-16
+    - id: micro-behaviors/communications/http/request::auth-header

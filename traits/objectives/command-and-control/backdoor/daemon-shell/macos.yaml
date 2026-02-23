@@ -1,0 +1,72 @@
+# Daemon-based Shell Backdoor (macOS)
+# GAP #1: HOSTILE composite rule for daemon + shell execution + obfuscation
+# This pattern has NO legitimate use - it's always malware
+# ATT&CK: T1059 (Command and Scripting Interpreter), T1543 (Create or Modify System Process)
+
+defaults:
+  for: [macho]
+  platforms: [macos]
+  attack: "T1059"
+  mbc: "B0009"
+
+composite_rules:
+  # GAP #1: The critical missing rule - this is ALWAYS hostile
+  # Combines: daemon (fork+setsid) + shell exec (popen/system) + obfuscation (tiny strings)
+  # No legitimate software has this exact combination
+  # Precision: all(3) + for(1) + any(2 min 1) = 5 (well above 4.0 threshold)
+  - id: daemon-shell-backdoor
+    desc: "Daemon-based shell command backdoor"
+    crit: hostile
+    conf: 0.95
+    attack: "T1059,T1543"
+    mbc: "B0009,F0006"
+    all:
+      # Daemon persistence
+      - id: objectives/persistence/daemon/init::daemon-fork
+      - id: objectives/persistence/daemon/init::daemon-setsid
+      # Shell command execution
+      - id: micro-behaviors/process/create/shell
+    # Obfuscation or frequency indicators
+    any:
+      - id: objectives/anti-static/obfuscation/payload::tiny-cstring
+      - id: micro-behaviors/process/create/shell::excessive-popen
+      - id: objectives/anti-static/obfuscation/payload::high-entropy-data-section
+    # Must be unsigned (legitimate apps are signed)
+    none:
+      - id: metadata/signed/platform::apple
+
+  # Even more severe: includes XOR-encoded commands
+  - id: obfuscated-daemon-backdoor
+    desc: "Obfuscated daemon backdoor with encoded"
+    crit: hostile
+    conf: 0.98
+    attack: "T1027,T1059,T1543"
+    all:
+      - id: objectives/persistence/daemon/init::daemon-fork
+      - id: objectives/persistence/daemon/init::daemon-setsid
+      - id: micro-behaviors/process/create/shell
+    none:
+      - id: metadata/signed/platform::apple
+
+  # Extreme case: all the indicators
+  - id: advanced-daemon-backdoor
+    desc: "Advanced daemon backdoor (all indicators)"
+    crit: hostile
+    conf: 0.99
+    attack: "T1027,T1059,T1543"
+    all:
+      - id: daemon-shell-backdoor
+    any:
+      - id: micro-behaviors/process/create/shell::extreme-popen
+      - id: micro-behaviors/process/create/shell::obfuscated-shell-malware
+      - id: objectives/anti-static/obfuscation/payload::encrypted-payload-section
+
+  # Generic name + daemon backdoor = masquerading
+  - id: masquerading-daemon-backdoor
+    desc: "Masquerading daemon backdoor malware"
+    crit: hostile
+    conf: 0.99
+    attack: "T1036,T1059,T1543"
+    all:
+      - id: daemon-shell-backdoor
+      - id: objectives/lateral-movement/social-engineering/masquerading::suspicious-generic-naming

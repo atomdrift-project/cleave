@@ -1,0 +1,94 @@
+# HTTP Polling C2 Beacon Patterns
+# Detects periodic HTTP-based C2 beacon implementations
+# ATT&CK: T1071.001 (Application Layer Protocol: Web Protocols)
+
+defaults:
+  for: [elf, macho, pe, go]
+
+traits:
+  - id: net-http-import
+    desc: net/http package import
+    crit: notable
+    conf: 0.5
+    if:
+      type: string
+      substr: "net/http"
+
+  - id: http-client
+    desc: http.Client type
+    crit: notable
+    conf: 0.6
+    if:
+      type: symbol
+      exact: "http.Client"
+
+  - id: time-ticker
+    desc: time.Ticker periodic execution
+    crit: notable
+    conf: 0.6
+    if:
+      type: symbol
+      exact: "time.Ticker"
+
+  - id: time-sleep
+    desc: time.Sleep function
+    crit: notable
+    conf: 0.5
+    if:
+      type: symbol
+      exact: "time.Sleep"
+
+  - id: encoding-base64-import
+    desc: encoding/base64 package import
+    crit: notable
+    conf: 0.5
+    if:
+      type: string
+      substr: "encoding/base64"
+
+  - id: encoding-json-import
+    desc: encoding/json package import
+    crit: notable
+    conf: 0.5
+    if:
+      type: string
+      substr: "encoding/json"
+
+composite_rules:
+  - id: http-client-funcs
+    desc: HTTP client functions
+    any:
+      - { id: net-http-import }
+      - { id: http-client }
+    crit: notable
+
+  - id: interval-funcs
+    desc: Periodic execution functions
+    any:
+      - { id: time-ticker }
+      - { id: time-sleep }
+    crit: notable
+
+  - id: encoding-imports
+    desc: Encoding package imports
+    any:
+      - { id: encoding-base64-import }
+      - { id: encoding-json-import }
+    crit: notable
+
+  - id: http-customization
+    desc: HTTP request customization
+    any:
+      - { id: micro-behaviors/communications/http/request::user-agent-header }
+      - { id: encoding-imports }
+    crit: notable
+
+  - id: c2-beacon
+    desc: HTTP C2 beacon pattern
+    crit: suspicious
+    conf: 0.8
+    attack: "T1071.001"
+    all:
+      - { id: http-client-funcs }
+      - { id: interval-funcs }
+      - { id: http-customization }

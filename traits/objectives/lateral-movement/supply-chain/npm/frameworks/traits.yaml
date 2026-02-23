@@ -1,0 +1,34 @@
+# Framework Production Build Markers
+# Indicates production builds of popular frameworks
+
+traits:
+  - id: react-production
+    desc: React production build markers
+    crit: notable
+    conf: 0.9
+    for: [javascript]
+    if:
+      type: string
+      regex: 'react\\.production\\.min|ReactDOM\\.production'
+
+  # Vue production build
+  - id: vue-production
+    desc: Vue production build markers
+    crit: notable
+    conf: 0.9
+    for: [javascript]
+    if:
+      type: string
+      regex: 'vue\\.runtime\\.esm|vue\\.esm-bundler|__VUE_PROD'
+
+  # Angular production build
+  - id: angular-production
+    desc: Angular production build markers
+    crit: notable
+    conf: 0.9
+    for: [javascript]
+    if:
+      type: string
+      regex: "@angular/core|ngDevMode|ɵɵdefineComponent"
+
+  # Known legitimate minifier output patterns

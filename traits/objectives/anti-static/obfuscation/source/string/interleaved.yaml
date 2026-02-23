@@ -1,0 +1,23 @@
+traits:
+  - id: js-interleaved-junk-chars
+    desc: "String contains interleaved junk characters (every 3rd"
+    crit: suspicious
+    conf: 0.8
+    for: [javascript, typescript, html]
+    if:
+      type: string
+      # Matches patterns like "abAcdBefC" or "ab/cd.ef?"
+      # We look for 2 lowercase fillers followed by a non-lowercase character (uppercase, digit, symbol)
+      # repeated multiple times.
+      regex: '([a-z]{2}[^a-z\s]){10,}'
+
+  - id: js-interleaved-lowercase-junk
+    desc: "String with high density of 3-character interleaved"
+    crit: notable
+    conf: 0.7
+    for: [javascript, typescript, html]
+    if:
+      type: string
+      # More general pattern: [a-z]{2}. repeated many times in a long string.
+      # We use a large count to avoid false positives on common words.
+      regex: '([a-z]{2}.){20,}'

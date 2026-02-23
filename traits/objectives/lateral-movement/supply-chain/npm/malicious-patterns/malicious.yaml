@@ -1,0 +1,69 @@
+defaults:
+  for:
+    - javascript
+    - typescript
+  attack: T1195.002
+traits:
+  - id: process-env-token-1
+    desc: Accesses process.env (TOKEN/KEY/AUTH)
+    crit: notable
+    conf: 0.75
+    if:
+      type: string
+      regex: process\.env\.(TOKEN|KEY|AUTH)
+  - id: process-env-token-2
+    desc: Accesses process.env (SECRET/PASSWORD)
+    crit: notable
+    conf: 0.75
+    if:
+      type: string
+      regex: process\.env\.(SECRET|PASSWORD)
+  - id: process-env-npm-token
+    desc: Accesses process.env for NPM tokens
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: string
+      regex: process\.env\.(NPM_TOKEN|NPMRC_TOKEN)
+  - id: encoded-id-exfil
+    desc: Encoded victim identifier
+    crit: notable
+    conf: 0.7
+    if:
+      type: string
+      regex: btoa\(os\.hostname\(\)\)|Buffer\.from\(os\.userInfo\(\)\.username\)
+composite_rules:
+  - id: process-env-token
+    desc: Accesses process.env for tokens
+    crit: notable
+    conf: 0.8
+    any:
+      - id: process-env-token-1
+      - id: process-env-token-2
+  - id: lifecycle-hook
+    desc: Lifecycle hook with system access
+    crit: suspicious
+    conf: 0.85
+    all:
+      - id: objectives/lateral-movement/supply-chain/npm/metadata::postinstall-hook-key
+    any:
+      - id: objectives/discovery/host/system/hardware-fingerprint::os-homedir-call
+      - id: objectives/discovery/host/system/hardware-fingerprint::js-sysinfo-multi
+  - id: env-token-stealer
+    desc: Environment token stealer
+    crit: hostile
+    conf: 0.95
+    mbc: E1555
+    attack: T1555.003
+    all:
+      - id: process-env-token
+      - id: micro-behaviors/communications/http/post::post
+  - id: npm-token-stealer
+    desc: NPM registry token stealer
+    crit: hostile
+    conf: 0.98
+    mbc: E1555
+    attack: T1555.003
+    all:
+      - id: process-env-npm-token
+      - id: micro-behaviors/communications/http/post::post

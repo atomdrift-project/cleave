@@ -1,0 +1,82 @@
+# Download and Execute - JavaScript/Node.js
+# ATT&CK: T1105 (Ingress Tool Transfer)
+
+traits:
+  # === Shell installer atomic indicators ===
+  - id: curl-pipe-bash-js
+    desc: curl piped to bash
+    crit: notable
+    conf: 0.7
+    attack: "T1105"
+    for: [javascript]
+    if:
+      type: string
+      regex: 'curl.{0,50}\|.{0,20}bash'
+
+  - id: curl-pipe-sh-js
+    desc: curl piped to sh
+    crit: notable
+    conf: 0.7
+    attack: "T1105"
+    for: [javascript]
+    if:
+      type: string
+      regex: 'curl.{0,50}\|.{0,20}sh'
+
+  - id: curl-pipe-zsh-js
+    desc: curl piped to zsh
+    crit: notable
+    conf: 0.7
+    attack: "T1105"
+    for: [javascript]
+    if:
+      type: string
+      regex: 'curl.{0,50}\|.{0,20}zsh'
+
+  # === PowerShell installer atomic indicators ===
+  - id: powershell-irm-iex
+    desc: PowerShell irm piped to iex
+    crit: notable
+    conf: 0.7
+    attack: "T1105"
+    for: [javascript]
+    if:
+      type: string
+      regex: 'powershell.{0,50}irm.{0,50}\|.{0,20}iex'
+
+  - id: powershell-iwr-iex
+    desc: PowerShell iwr piped to iex
+    crit: notable
+    conf: 0.7
+    attack: "T1105"
+    for: [javascript]
+    if:
+      type: string
+      regex: 'powershell.{0,50}iwr.{0,50}\|.{0,20}iex'
+
+  # Removed js-stdio-ignore duplicate - use micro-behaviors/process/spawn::stdio-ignore-string
+
+composite_rules:
+  # Shell installer composite
+  - id: js-installer-sh
+    desc: Downloads and executes shell script
+    crit: suspicious
+    conf: 0.9
+    attack: "T1105"
+    for: [javascript]
+    any:
+      - id: curl-pipe-bash-js
+      - id: curl-pipe-sh-js
+      - id: curl-pipe-zsh-js
+
+  # PowerShell installer composite
+  - id: js-installer-ps1
+    desc: Downloads and executes PowerShell script
+    crit: suspicious
+    conf: 0.9
+    attack: "T1105"
+    for: [javascript]
+    any:
+      - id: powershell-irm-iex
+      - id: powershell-iwr-iex
+

@@ -1,0 +1,23 @@
+# Hidden Process Execution - Python
+# GuardDog-inspired: Detects use of flags to hide process execution
+# ATT&CK: T1564 (Hide Artifacts)
+
+defaults:
+  for: [python]
+
+composite_rules:
+  # GuardDog: Silent process execution
+  - id: hidden-window-execution
+    desc: Hidden window process execution
+    crit: suspicious
+    conf: 0.90
+    attack: "T1564"
+    any:
+      - id: micro-behaviors/process/create/flags::create-no-window
+      - id: micro-behaviors/process/create/flags::sw-hide
+      - id: micro-behaviors/process/create/flags::detached-process
+    downgrade:
+      # Legitimate use in services/daemons
+      any:
+        - id: metadata/quality::has-tests
+        - id: metadata/signed/platform

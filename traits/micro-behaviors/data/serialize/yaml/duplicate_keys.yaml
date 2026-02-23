@@ -1,0 +1,35 @@
+# YAML Duplicate Keys Capability
+# Detects modification of YAML parser to allow duplicate keys
+# Used in PyYMAL to bypass validation or enable attacks
+
+traits:
+  - id: allow-duplicate-keys
+    desc: "YAML parser modified to allow duplicate keys"
+    crit: suspicious
+    conf: 0.9
+    for: [python]
+    if:
+      type: raw
+      # Matches: node.value.append((item_key, item_value))
+      # Standard PyYAML uses: node.value[item_key] = item_value
+      regex: 'node\.value\.append\(\((item_key, item_value|key, value)\)\)'
+
+  - id: disabled-duplicate-check
+    desc: "YAML duplicate key check explicitly disabled"
+    crit: suspicious
+    conf: 0.9
+    for: [python]
+    if:
+      type: raw
+      # Matches commented out check: #if item_key in node.value: ... raise ComposerError
+      regex: '#\s*if\s+item_key\s+in\s+node\.value:\s*\n\s*#\s*raise\s+ComposerError'
+
+composite_rules:
+  - id: yaml-duplicate-key-support
+    desc: "YAML parser supports duplicate keys (potential vulnerability/malware)"
+    crit: suspicious
+    conf: 0.95
+    any:
+      - id: allow-duplicate-keys
+      - id: disabled-duplicate-check
+

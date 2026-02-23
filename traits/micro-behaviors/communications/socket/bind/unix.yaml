@@ -1,0 +1,13 @@
+# Socket Bind Operations
+
+defaults:
+  for: [elf, macho, so, dylib, c]
+
+traits:
+  - id: bind
+    desc: Bind socket to address
+    crit: notable
+    conf: 0.75
+    if:
+      type: symbol
+      regex: "^bind$|\\bbind\\(|\\bbind\\s"

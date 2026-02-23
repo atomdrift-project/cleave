@@ -1,0 +1,32 @@
+# Flash/Embedded Storage - Linux
+
+defaults:
+  for: [all]
+
+traits:
+  - id: mtd
+    desc: Access raw flash memory (MTD)
+    crit: suspicious
+    conf: 0.8
+    platforms: [linux]
+    if:
+      type: string
+      regex: "/dev/(block/)?mtd"
+
+  - id: mmc
+    desc: Access raw SD/MMC devices
+    crit: suspicious
+    conf: 0.85
+    platforms: [linux]
+    if:
+      type: string
+      regex: "/dev/(block/)?mmcblk"
+
+  - id: ubi
+    desc: Access raw unsorted block images
+    crit: suspicious
+    conf: 0.8
+    platforms: [linux]
+    if:
+      type: string
+      regex: "/dev/ubi"

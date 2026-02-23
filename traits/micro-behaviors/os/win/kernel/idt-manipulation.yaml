@@ -1,0 +1,27 @@
+defaults:
+  for: [all]
+
+traits:
+  - id: sidt
+    conf: 0.9
+    crit: suspicious
+    desc: Detects 'sidt' instruction (Store Interrupt Descriptor Table)
+    if:
+      type: raw
+      regex: 'sidt\s+\['
+
+  - id: int5
+    conf: 0.8
+    crit: suspicious
+    desc: Detects 'int 5' instruction (often used for
+    if:
+      type: raw
+      regex: 'int\s+5'
+
+  - id: idt-modify
+    conf: 0.85
+    crit: suspicious
+    desc: Detects modification of IDT entries
+    if:
+      type: raw
+      regex: 'mov\s+word\s+ptr\s+\[edx\+5\*8\],\s+bx'

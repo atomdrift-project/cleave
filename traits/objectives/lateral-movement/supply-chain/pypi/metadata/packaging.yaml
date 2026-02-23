@@ -1,0 +1,134 @@
+# PyPI Package Distribution Patterns
+# Detects Python packaging mechanisms (setuptools, distutils)
+# These help identify setup.py context for supply-chain analysis
+
+defaults:
+  for: [python]
+  crit: notable
+
+traits:
+  # === setuptools atomic indicators ===
+  - id: from-setuptools-import
+    desc: from setuptools import statement
+    crit: notable
+    conf: 0.7
+    if:
+      type: string
+      regex: "from\\s+setuptools\\s+import"
+
+  - id: import-setuptools
+    desc: import setuptools statement
+    crit: notable
+    conf: 0.7
+    if:
+      type: string
+      regex: "import\\s+setuptools"
+
+  # distutils usage (older)
+  - id: distutils
+    desc: "Python package distribution (distutils)"
+    conf: 0.8
+    if:
+      type: string
+      substr: "import distutils"
+
+  # setup() function call
+  - id: setup-call
+    desc: "Python package setup() definition"
+    conf: 0.85
+    if:
+      type: ast
+      kind: call
+      exact: "setup("
+
+  # === Package metadata atomic indicators ===
+  - id: metadata-author
+    desc: author= metadata field
+    crit: notable
+    conf: 0.5
+    if:
+      type: string
+      regex: "author\\s*="
+
+  - id: metadata-version
+    desc: version= metadata field
+    crit: notable
+    conf: 0.5
+    if:
+      type: string
+      regex: "version\\s*="
+
+  - id: metadata-description
+    desc: description= metadata field
+    crit: notable
+    conf: 0.5
+    if:
+      type: string
+      regex: "description\\s*="
+
+  - id: metadata-packages
+    desc: packages= metadata field
+    crit: notable
+    conf: 0.5
+    if:
+      type: string
+      regex: "packages\\s*="
+
+  # Directory masquerading (evasion technique)
+  # Detects os.path.join building paths to .py files, but excludes
+  # common setup.py patterns like reading __init__.py for version
+  - id: directory-masquerade
+    desc: Directory masquerading as file (e.g.
+    crit: suspicious
+    conf: 0.8
+    for: [all]
+    if:
+      type: string
+      regex: "os\\.path\\.join\\(.{0,50}\\.py.{0,30}\\)"
+
+  # === cmdclass override atomic indicators ===
+  - id: cmdclass-dict
+    desc: cmdclass dict assignment
+    crit: notable
+    conf: 0.75
+    if:
+      type: string
+      regex: "cmdclass\\s*=\\s*\\{"
+
+  - id: install-class-inherit
+    desc: class inheriting from install
+    crit: notable
+    conf: 0.75
+    if:
+      type: string
+      regex: "class\\s+\\w+\\(install\\)"
+
+composite_rules:
+  # setuptools composite
+  - id: setuptools
+    desc: Python package distribution (setuptools)
+    crit: notable
+    conf: 0.8
+    any:
+      - id: from-setuptools-import
+      - id: import-setuptools
+
+  # metadata composite
+  - id: metadata
+    desc: Python package metadata definition
+    crit: notable
+    conf: 0.7
+    any:
+      - id: metadata-author
+      - id: metadata-version
+      - id: metadata-description
+      - id: metadata-packages
+
+  # cmdclass override composite
+  - id: cmdclass-override
+    desc: Custom install command class override
+    crit: suspicious
+    conf: 0.85
+    any:
+      - id: cmdclass-dict
+      - id: install-class-inherit

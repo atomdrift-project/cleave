@@ -1,0 +1,33 @@
+composite_rules:
+  - id: wsh-hex-payloads
+    desc: Any hex-encoded payload
+    crit: suspicious
+    any:
+      - id: micro-behaviors/data/encoding/hex::hex-encoded-powershell
+      - id: micro-behaviors/data/encoding/hex::hex-encoded-http
+      - id: micro-behaviors/process/create/script::batch-script-execution
+
+  - id: wsh-hex-dropper
+    desc: WSH script using hex decoding to drop and execute payloads
+    conf: 0.95
+    crit: hostile
+    # attack: T1027.001
+    all:
+      - id: micro-behaviors/data/encoding/hex::jscript-hex-decoder-loop
+      - id: micro-behaviors/os/wsh/file::wscript-shell-object
+    any:
+      - id: micro-behaviors/os/fs/write::create-script-file
+      - id: micro-behaviors/os/fs/write::adodb-binary-write
+      - id: wsh-hex-payloads
+
+  - id: wsh-write-batch
+    desc: WSH script writing executable batch file
+    conf: 0.8
+    crit: suspicious
+    # attack: T1059.003
+    all:
+      - id: micro-behaviors/os/fs/write::create-script-file
+      - id: micro-behaviors/os/wsh/file::wscript-shell-object
+      - id: micro-behaviors/process/create/script::batch-script-execution
+    none:
+      - id: wsh-hex-dropper

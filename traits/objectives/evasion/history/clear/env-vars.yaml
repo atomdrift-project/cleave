@@ -1,0 +1,27 @@
+traits:
+- id: histcontrol-ignorealltps
+  desc: HISTCONTROL set to ignore all history
+  crit: suspicious
+  conf: 0.8
+  for:
+  - elf
+  - shell
+  if:
+    type: string
+    regex: (HISTCONTROL=ignorealltps|export HISTCONTROL=ignorealltps)
+  attack: T1562.003
+
+composite_rules:
+- id: history-evasion-setup
+  desc: Shell history evasion via environment variables
+  crit: suspicious
+  conf: 0.9
+  for:
+  - elf
+  - shell
+  attack: T1562.003
+  needs: 2
+  any:
+  - id: objectives/evasion/history/clear::histsize-zero
+  - id: histcontrol-ignorealltps
+  - id: objectives/evasion/history/clear::prompt-command-clear

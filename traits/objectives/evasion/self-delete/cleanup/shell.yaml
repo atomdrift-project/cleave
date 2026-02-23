@@ -1,0 +1,38 @@
+# Shell Self-Delete Detection
+# Detects shell scripts that delete themselves after execution
+# ATT&CK: T1070.004 (Indicator Removal: File Deletion)
+# MBC: F0007 (File Deletion)
+
+defaults:
+  crit: suspicious
+  attack: "T1070.004"
+  mbc: "F0007"
+  for: [shell]
+
+traits:
+  # Self-deletion using $0
+  - id: rm-self-dollar-zero
+    desc: Self-deletes using rm $0
+    crit: suspicious
+    conf: 0.95
+    if:
+      type: raw
+      regex: 'rm\s+(-[rf]+\s+)?(--)?\s*["\x27]?\$0["\x27]?'
+
+  # Self-deletion using script name variable
+  - id: rm-self-script-var
+    desc: Self-deletes using script variable
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: raw
+      regex: 'rm\s+(-[rf]+\s+)?"\$\{?BASH_SOURCE(\[0\])?\}?"'
+
+  # Self-deletion using basename
+  - id: rm-self-basename
+    desc: Self-deletes using basename
+    crit: suspicious
+    conf: 0.85
+    if:
+      type: raw
+      regex: 'rm\s+(-[rf]+\s+)?\$\(basename\s+\$0\)'

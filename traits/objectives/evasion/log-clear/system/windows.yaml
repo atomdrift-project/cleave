@@ -1,0 +1,40 @@
+# Log Clearing Detection - Windows
+# MBC: F0005 (Indicator Blocking)
+# ATT&CK: T1070.001
+
+defaults:
+  for: [all]
+
+traits:
+  # === Log clear atomic indicators ===
+  - id: wevtutil-cl
+    desc: wevtutil cl command
+    crit: notable
+    conf: 0.56
+    mbc: "F0005"
+    attack: "T1070.001"
+    if:
+      type: string
+      regex: "wevtutil\\s+cl"
+
+  - id: clear-eventlog
+    desc: Clear-EventLog cmdlet
+    crit: notable
+    conf: 0.56
+    mbc: "F0005"
+    attack: "T1070.001"
+    if:
+      type: string
+      substr: "Clear-EventLog"
+
+composite_rules:
+  # Log clear composite
+  - id: log-clear-windows
+    desc: Clear Windows event logs
+    crit: suspicious
+    conf: 0.66
+    mbc: "F0005"
+    attack: "T1070.001"
+    any:
+      - id: wevtutil-cl
+      - id: clear-eventlog

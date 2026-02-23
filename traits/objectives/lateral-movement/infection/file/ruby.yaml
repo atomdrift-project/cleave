@@ -1,0 +1,158 @@
+---
+# Ruby File Infector Detection
+# Detects self-replicating malware that spreads by injecting into other files
+# ATT&KT: T1029 (Scheduled Transfer), T1491.001 (Data Encrypted for Impact)
+
+defaults:
+  for: [ruby]
+  platforms: [all]
+
+traits:
+  # === Directory Traversal ===
+  - id: recursive-dir-traverse
+    desc: Recursive directory enumeration
+    crit: notable
+    conf: 0.75
+    attack: "T1083"
+    if:
+      type: raw
+      regex: 'Dir\.foreach|Dir\.glob|Dir\.entries'
+
+  - id: recursive-call-self
+    desc: Recursive function call for traversal
+    crit: notable
+    conf: 0.80
+    attack: "T1083"
+    if:
+      type: raw
+      regex: 'find_files\s*\([^)]{0,120},[^)]{0,120},\s*\w+\s*,'
+
+  - id: depth-limit-param
+    desc: Depth-limited recursion parameter
+    crit: notable
+    conf: 0.70
+    attack: "T1083"
+    if:
+      type: raw
+      regex: 'max_depth|depth\s*[=-]'
+
+  # === File Collection ===
+  - id: file-array-append
+    desc: File path collection in array
+    crit: notable
+    conf: 0.75
+    attack: "T1083"
+    if:
+      type: raw
+      regex: '(files|paths|targets|list)\s*<<'
+
+  - id: directory-array-append
+    desc: Directory path collection in array
+    crit: notable
+    conf: 0.75
+    attack: "T1083"
+    if:
+      type: raw
+      regex: 'directories\s*<<|dirs\s*<<'
+
+  # === Extension Manipulation ===
+  - id: file-extension-rename
+    desc: File extension renaming
+    crit: suspicious
+    conf: 0.85
+    attack: "T1027"
+    if:
+      type: raw
+      regex: 'File\.rename.{0,50}\.rb|\.rb.{0,50}File\.rename'
+
+  # === Self-Replication ===
+  - id: read-self-content
+    desc: Reading own file content
+    crit: suspicious
+    conf: 0.85
+    attack: "T1059"
+    if:
+      type: raw
+      regex: 'File\.open.{0,50}malware|File\.read.{0,50}malware|file_malware\.read'
+
+  - id: write-to-other-files
+    desc: Writing content to other files
+    crit: notable
+    conf: 0.90
+    attack: "T1059"
+    if:
+      type: raw
+      regex: 'file_target\.write|\.write\s*\(\s*content'
+
+  # === Self-Preservation ===
+  - id: skip-self-check
+    desc: Skip self to avoid infection
+    crit: notable
+    conf: 0.80
+    attack: "T1070"
+    if:
+      type: raw
+      regex: 'next\s+if\s+file\s*==\s*__FILE__|!=.{0,30}malware\.rb|!=.{0,30}main\.rb'
+
+  - id: exception-swallow-file-ops
+    desc: Exception swallowing for file operations
+    crit: notable
+    conf: 0.75
+    attack: "T1070"
+    if:
+      type: raw
+      regex: 'rescue\s*\n\s*next|begin\s*\n.{0,50}File.{0,50}rescue'
+
+composite_rules:
+  # === File Enumerator ===
+  - id: file-enumerator
+    desc: Recursive file enumeration behavior
+    crit: notable
+    conf: 0.80
+    attack: "T1083"
+    needs: 2
+    any:
+      - id: recursive-dir-traverse
+      - id: recursive-call-self
+      - id: file-array-append
+      - id: depth-limit-param
+
+  # === Extension Spoofer ===
+  - id: extension-spoofer
+    desc: File extension manipulation
+    crit: suspicious
+    conf: 0.85
+    attack: "T1027"
+    needs: 2
+    any:
+      - id: file-extension-rename
+      - id: micro-behaviors/data/text/keywords::split-string
+
+  # === Self-Replicator ===
+  - id: self-replicator
+    desc: Self-replicating malware behavior
+    crit: suspicious
+    conf: 0.92
+    attack: "T1059"
+    needs: 3
+    any:
+      - id: micro-behaviors/fs/read/self::self-file-reference
+      - id: read-self-content
+      - id: write-to-other-files
+      - id: skip-self-check
+
+  # === File Infector Virus ===
+  # HOSTILE: Active file infection that modifies/overwrites other files
+  # Complexity: all(3) + any(1) = 4+ (meets hostile threshold)
+  - id: file-infector-virus
+    desc: File infector virus spreads by injecting code into other files
+    crit: hostile
+    conf: 0.95
+    attack: "T1491.001"
+    all:
+      - id: file-enumerator        # Must enumerate files
+      - id: self-replicator        # Must have self-replication behavior
+      - id: write-to-other-files   # Must write to other files
+    any:
+      - id: file-extension-rename
+      - id: exception-swallow-file-ops

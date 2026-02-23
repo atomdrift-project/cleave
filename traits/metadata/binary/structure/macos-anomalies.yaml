@@ -1,0 +1,163 @@
+# macOS Binary Structure Anomalies
+# Detects unusual structural patterns in Mach-O binaries
+# These anomalies often indicate obfuscation, packing, or malicious intent
+
+defaults:
+  for: [macho]
+  platforms: [macos, ios]
+
+traits:
+  # === String Count Anomalies ===
+
+  # Very few total extracted strings (normal is hundreds to thousands)
+  - id: minimal-string-count
+    desc: Minimal extracted string count
+    crit: notable
+    conf: 0.75
+    size_min: 100000  # Only flag if binary is >100KB
+    if:
+      type: metrics
+      field: binary.string_count
+      max: 50  # Less than 50 strings in a 100KB+ binary
+
+  - id: extreme-minimal-strings
+    desc: Extremely minimal string count
+    crit: suspicious
+    conf: 0.85
+    size_min: 100000
+    if:
+      type: metrics
+      field: binary.string_count
+      max: 20  # Less than 20 strings
+
+  # === Section Ratio Anomalies ===
+
+  # __text section is abnormally large relative to __cstring
+  # Normal ratio is 10:1 to 50:1, malware can be 1000:1
+  - id: text-dominates-cstring
+    desc: Code section dominates string section
+    crit: suspicious
+    conf: 0.8
+    if:
+      type: section_ratio
+      section: "__text"
+      compare_to: "__cstring"
+      min: 500  # __text is 500x larger than __cstring
+
+  - id: extreme-text-to-string-ratio
+    desc: Extreme code-to-string ratio
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: section_ratio
+      section: "__text"
+      compare_to: "__cstring"
+      min: 1000  # __text is 1000x larger
+
+  # __data section is abnormally large relative to __cstring
+  # Suggests encoded data stored in __data instead of readable strings
+  - id: data-larger-than-cstring
+    desc: Data section larger than strings
+    crit: notable
+    conf: 0.7
+    if:
+      type: section_ratio
+      section: "__data"
+      compare_to: "__cstring"
+      min: 50  # __data is 50x larger than __cstring
+
+  - id: data-dominates-cstring
+    desc: Data section dominates string section
+    crit: suspicious
+    conf: 0.85
+    if:
+      type: section_ratio
+      section: "__data"
+      compare_to: "__cstring"
+      min: 200  # __data is 200x larger
+
+  # === Binary Metrics Anomalies ===
+
+  # High average string entropy suggests obfuscated/encoded strings
+  - id: high-avg-string-entropy
+    desc: High average string entropy
+    crit: suspicious
+    conf: 0.8
+    if:
+      type: metrics
+      field: binary.avg_string_entropy
+      min: 4.5  # Higher than normal English text (~4.0)
+
+  # Many high-entropy strings (encrypted/encoded)
+  - id: many-high-entropy-strings
+    desc: Many high-entropy strings detected
+    crit: suspicious
+    conf: 0.85
+    if:
+      type: metrics
+      field: binary.high_entropy_strings
+      min: 10
+
+  # Low function count in medium/large binary suggests monolithic code
+  - id: low-function-density
+    desc: Low function count for binary size
+    crit: notable
+    conf: 0.65
+    size_min: 100000
+    if:
+      type: metrics
+      field: binary.function_count
+      max: 20  # Less than 20 functions in 100KB+ binary
+
+  # === Code Complexity Anomalies ===
+
+  # Extremely high maximum complexity in single function
+  - id: extreme-single-function-complexity
+    desc: Extreme complexity in single function
+    crit: suspicious
+    conf: 0.85
+    if:
+      type: metrics
+      field: binary.max_complexity
+      min: 500  # Cyclomatic complexity >500
+
+  # High average complexity across all functions
+  - id: high-avg-function-complexity
+    desc: High average function complexity
+    crit: notable
+    conf: 0.7
+    if:
+      type: metrics
+      field: binary.avg_complexity
+      min: 50  # Average complexity >50
+
+composite_rules:
+  # Sparse strings + high entropy strings = obfuscation
+  - id: obfuscated-string-pattern
+    desc: Obfuscated string storage pattern
+    crit: suspicious
+    conf: 0.9
+    all:
+      - id: minimal-string-count
+      - id: many-high-entropy-strings
+
+  # Low string count + large data section = encoded payload
+  - id: encoded-payload-pattern
+    desc: Encoded payload storage pattern
+    crit: suspicious
+    conf: 0.9
+    all:
+      - id: extreme-minimal-strings
+      - id: data-dominates-cstring
+
+  # Abnormal section ratios across the board
+  - id: structural-anomaly-pattern
+    desc: Multiple structural anomalies
+    crit: suspicious
+    conf: 0.95
+    all:
+      - id: extreme-text-to-string-ratio
+      - id: data-dominates-cstring
+    any:
+      - id: high-avg-string-entropy
+      - id: many-high-entropy-strings

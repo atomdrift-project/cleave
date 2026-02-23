@@ -1,0 +1,27 @@
+defaults:
+  for: [all]
+
+traits:
+  - id: int-2f-get-dos-seg
+    desc: Get DOS internal segment (undocumented AX=1203h)
+    crit: suspicious
+    conf: 0.95
+    if:
+      type: raw
+      regex: '(?i)(mov|xchg)\s+ax,\s*1203h(\s*;.{0,220})?\s*[\r\n]+\s*int\s+2fh'
+
+  - id: int-2f-get-sft
+    desc: Get System File Table address (undocumented AX=1216h)
+    crit: suspicious
+    conf: 0.95
+    if:
+      type: raw
+      regex: '(?i)(mov|xchg)\s+ax,\s*1216h(\s*;.{0,220})?\s*[\r\n]+\s*int\s+2fh'
+
+  - id: int-2f-get-jft
+    desc: Get Job File Table number (undocumented AX=1220h)
+    crit: suspicious
+    conf: 0.95
+    if:
+      type: raw
+      regex: '(?i)(mov|xchg)\s+ax,\s*1220h(\s*;.{0,220})?\s*[\r\n]+\s*int\s+2fh'

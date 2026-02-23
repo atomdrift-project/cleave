@@ -1,0 +1,10 @@
+composite_rules:
+  - id: nemucod-fragmented-url-download
+    desc: "Nemucod Fragmented URL Download (JS)"
+    crit: hostile
+    conf: 0.95
+    all:
+      - id: "micro-behaviors/communications/network/url::js-fragmented-url-protocol"
+      - id: "micro-behaviors/communications/network/url::js-fragmented-url-domain-part"
+      - id: "micro-behaviors/communications/network/url::js-fragmented-url-path-part"
+      - id: "micro-behaviors/communications/network/http::js-xmlhttp-open-dynamic-url"

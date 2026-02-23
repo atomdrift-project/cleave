@@ -1,0 +1,45 @@
+defaults:
+  for: [all]
+
+traits:
+  - id: hex-buffer-decode
+    desc: Usage of Buffer.from(hex, 'hex') for decoding
+    crit: notable
+    conf: 1.0
+    if:
+      type: raw
+      substr: "Buffer.from(hex, 'hex').toString('utf8')"
+
+  - id: read-font-file
+    desc: Reads a font file (woff2, ttf, otf)
+    crit: notable
+    conf: 1.0
+    if:
+      type: raw
+      regex: "readFileSync.{0,100}(woff2|ttf|otf)"
+
+  - id: function-constructor
+    desc: Generic Function constructor usage
+    crit: notable
+    conf: 1.0
+    if:
+      type: raw
+      substr: "new Function("
+
+  - id: function-constructor-require
+    desc: Function constructor with require access
+    crit: suspicious
+    conf: 1.0
+    if:
+      type: raw
+      substr: "new (Function.constructor)('require'"
+
+composite_rules:
+  - id: font-steganography-hex
+    desc: Load JavaScript from font file (hex)
+    crit: suspicious
+    conf: 1.0
+    all:
+      - id: hex-buffer-decode
+      - id: read-font-file
+      - id: function-constructor

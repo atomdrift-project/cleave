@@ -1,0 +1,23 @@
+# PyPI Shortcut Modification Behavior
+# Detects PyPI setup.py scripts attempting to modify Windows shortcuts
+# This is a specific TTP for browser extension droppers and hijackers.
+
+defaults:
+  crit: hostile
+  attack: "T1547.009"
+  mbc: "E1204"
+  for: [python]
+
+composite_rules:
+  - id: pypi-shortcut-modification
+    desc: PyPI setup.py attempts to modify Windows shortcut properties
+    crit: hostile
+    conf: 0.95
+    all:
+      - id: objectives/lateral-movement/supply-chain/pypi/install-patterns::robust-setup-py
+      - id: micro-behaviors/communications/ipc/win32com::dispatch-call
+    any:
+      - id: objectives/persistence/startup/registry::shortcut-arguments
+      - id: objectives/persistence/startup/registry::shortcut-target-path
+      - id: objectives/persistence/startup/registry::shortcut-save
+      - id: micro-behaviors/communications/ipc/win32com::wscript-shell-python

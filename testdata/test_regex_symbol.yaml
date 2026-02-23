@@ -1,0 +1,30 @@
+# Test trait using regex: matcher with anchors (equivalent to exact)
+# This should produce notable findings and WORKS correctly
+defaults:
+  for: [pe]
+  platforms: [windows]
+
+traits:
+  - id: test-regex-ws2-32-import
+    desc: Test regex WSAStartup import
+    crit: notable
+    conf: 0.95
+    if:
+      type: symbol
+      regex: "^WSAStartup$"
+
+  - id: test-regex-gethostbyname
+    desc: Test regex gethostbyname import
+    crit: notable
+    conf: 0.95
+    if:
+      type: symbol
+      regex: "^gethostbyname$"
+
+  - id: test-regex-send
+    desc: Test regex send import
+    crit: notable
+    conf: 0.95
+    if:
+      type: symbol
+      regex: "^send$"

@@ -1,0 +1,32 @@
+# Directory Creation
+# MBC: C0046 (Create File)
+# ATT&CK: T1083
+
+defaults:
+  for: [elf, macho, so, dylib, c]
+
+traits:
+  - id: mkdir-base
+    desc: Create directories
+    crit: baseline
+    conf: 0.66
+    if:
+      type: symbol
+      exact: "mkdir"
+
+  - id: mkdirat
+    desc: Create directories
+    crit: baseline
+    conf: 0.66
+    if:
+      type: symbol
+      exact: "mkdirat"
+
+composite_rules:
+  - id: mkdir
+    desc: Create directories
+    crit: baseline
+    conf: 0.66
+    any:
+      - id: mkdir-base
+      - id: mkdirat

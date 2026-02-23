@@ -1,0 +1,40 @@
+# Configuration File Operations
+# INI and configuration file manipulation
+
+defaults:
+  for: ["pe", "dll"]
+  platforms: ["windows"]
+
+traits:
+  # === INI File Operations ===
+  - id: write-private-profile
+    desc: Write to INI config file
+    crit: suspicious
+    conf: 0.75
+    if:
+      type: symbol
+      exact: "WritePrivateProfileStringW"
+
+  - id: read-private-profile
+    desc: Read from INI config file
+    crit: baseline
+    conf: 0.65
+    if:
+      type: symbol
+      exact: "GetPrivateProfileStringW"
+
+  - id: write-profile-section
+    desc: Write INI section
+    crit: suspicious
+    conf: 0.75
+    if:
+      type: symbol
+      exact: "WritePrivateProfileSectionW"
+
+  - id: get-profile-section
+    desc: Read INI section
+    crit: baseline
+    conf: 0.65
+    if:
+      type: symbol
+      exact: "GetPrivateProfileSectionW"

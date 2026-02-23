@@ -1,0 +1,86 @@
+defaults:
+  for:
+    - all
+traits:
+  - id: package-mgmt
+    desc: Package management utilities
+    crit: notable
+    conf: 0.9
+    if:
+      type: yara
+      source:
+        "rule package_management {\n  strings:\n    // Debian/Ubuntu - require\
+        \ command context, not file extensions\n    $apt1 = \"apt-get\" ascii\n    $apt2\
+        \ = /apt (install|remove|update|upgrade|purge|search|list|show)/ ascii\n   \
+        \ $apt3 = /dpkg (-|--|\\s+-)/ ascii\n    // Red Hat/CentOS\n    $yum1 = /yum\
+        \ (install|remove|update|search|list)/ ascii\n    $yum2 = /dnf (install|remove|update|search|list)/\
+        \ ascii\n    $rpm1 = /rpm (-|--|\\s+-)/ ascii\n    // Generic\n    $pkg1 = /pkg\
+        \ (install|delete|add|remove)/ ascii\n    $pkg2 = /pacman (-S|-R|-Q|-U)/ ascii\n\
+        \    $pkg3 = \"zypper\" ascii\n  condition:\n    any of them\n}\n"
+  - id: config
+    desc: System configuration utilities
+    crit: notable
+    conf: 0.9
+    if:
+      type: yara
+      source:
+        "rule sysadmin_config {\n  strings:\n    // Service management\n    $svc1\
+        \ = \"systemctl\" ascii\n    $svc2 = /service\\s+[a-zA-Z0-9_\\-]+\\s+(start|stop|restart|status|reload)/\
+        \ ascii\n    $svc3 = \"chkconfig\" ascii\n    // User management\n    $usr1\
+        \ = \"useradd\" ascii\n    $usr2 = \"usermod\" ascii\n    $usr3 = \"passwd\"\
+        \ ascii\n    // Network config\n    $net1 = \"nmcli\" ascii\n    $net2 = \"\
+        netplan\" ascii\n    $net3 = \"ip addr\" ascii\n  condition:\n    any of them\n\
+        }\n"
+  - id: monitoring-a
+    desc: System monitoring utilities
+    crit: baseline
+    conf: 0.9
+    if:
+      type: string
+      regex: \b(htop|atop|iotop|iftop)\b
+  - id: monitoring-b
+    desc: System monitoring utilities
+    crit: baseline
+    conf: 0.9
+    if:
+      type: string
+      regex: \b(vmstat|iostat|mpstat|sar)\b
+  - id: monitoring-c
+    desc: System monitoring utilities
+    crit: baseline
+    conf: 0.9
+    if:
+      type: string
+      regex: \b(lsmem)\b
+    # NOTE: lscpu moved to os/sysinfo/hardware/linux.yaml
+    # NOTE: lsblk moved to fs/disk/paths/linux.yaml
+  - id: logs-command
+    desc: Log analysis utilities
+    crit: baseline
+    conf: 0.9
+    if:
+      type: string
+      regex: \b(journalctl|dmesg|multitail)\b|\btail\s+-f\s+/var/log
+  - id: logs-path
+    desc: Log file path indicators
+    crit: baseline
+    conf: 0.9
+    if:
+      type: string
+      regex: /var/log/(syslog|auth\.log)
+composite_rules:
+  - id: monitoring
+    desc: System monitoring utilities
+    crit: baseline
+    conf: 0.9
+    any:
+      - id: monitoring-a
+      - id: monitoring-b
+      - id: monitoring-c
+  - id: logs
+    desc: Log analysis utilities
+    crit: baseline
+    conf: 0.9
+    any:
+      - id: logs-command
+      - id: logs-path

@@ -1,0 +1,22 @@
+# Resource Limit Query Functions
+# POSIX functions for querying process resource limits
+# MBC: E1082 (System Information Discovery)
+# ATT&CK: T1082 (System Information Discovery)
+
+defaults:
+  for: [elf, macho, so, dylib, c]
+  platforms: [unix, linux, macos]
+
+traits:
+  - id: getrlimit
+    desc: Query resource limits for process
+    crit: baseline
+    mbc: "E1082"
+    attack: "T1082"
+    conf: 0.4
+    if:
+      type: symbol
+      regex: getrlimit
+
+  # NOTE: setrlimit kept in objectives/ - has slight suspicion
+  # Can be used to disable core dumps or evade resource-based detection

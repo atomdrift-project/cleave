@@ -1,0 +1,18 @@
+# Python Archive Exfiltration
+# Detects Python scripts that archive files and upload them
+# ATT&CK: T1560.001 (Archive Collected Data: Archive via Utility)
+
+composite_rules:
+  - id: zip-upload
+    desc: "Python script archives files and uploads them (exfiltration)"
+    crit: hostile
+    conf: 0.9
+    attack: "T1048.003"
+    for: [python]
+    all:
+      - id: metadata/import/python/zipfile
+      - id: micro-behaviors/fs/directory/traverse::traverse-walk
+      - id: micro-behaviors/fs/file/write::py-write
+    any:
+      - id: micro-behaviors/communications/http/request::py-post-generic
+      - id: micro-behaviors/communications/http/lib/requests::requests-post

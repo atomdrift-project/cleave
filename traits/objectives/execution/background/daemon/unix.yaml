@@ -1,0 +1,68 @@
+# Unix Background Process Execution
+# Detects commands designed to run processes in background/detached
+# ATT&CK: T1059.004 (Unix Shell)
+
+defaults:
+  for: [shell]
+  attack: "T1059.004"
+  platforms: [all]
+
+traits:
+  # nohup command for detached execution
+  - id: nohup-command
+    desc: nohup detached process execution
+    crit: notable
+    conf: 0.7
+    if:
+      type: raw
+      regex: '\bnohup\s+[^\n]{1,120}'
+
+  # nohup with output redirection to /dev/null (hiding output)
+  - id: nohup-hidden-output
+    desc: nohup with hidden output
+    crit: notable
+    conf: 0.85
+    mbc: "F0005"
+    if:
+      type: raw
+      regex: 'nohup\s+[^\n]{1,120}>\s*/dev/null'
+
+  # Background with & and output suppression
+  - id: background-ampersand-hidden
+    desc: Background process with hidden output
+    crit: notable
+    conf: 0.7
+    if:
+      type: raw
+      regex: '>\s*/dev/null\s+2>&1\s*&'
+
+  # disown command (detach from shell)
+  - id: disown-command
+    desc: disown command to detach process
+    crit: notable
+    conf: 0.7
+    if:
+      type: raw
+      substr: "disown"
+
+  # setsid command (new session)
+  - id: setsid-command
+    desc: setsid command for new session
+    crit: notable
+    conf: 0.7
+    if:
+      type: raw
+      regex: '\bsetsid\s+'
+
+composite_rules:
+  # Stealthy background execution
+  - id: stealthy-background
+    desc: Stealthy background process execution
+    crit: suspicious
+    conf: 0.9
+    mbc: "F0005"
+    for: [shell]
+    any:
+      - id: nohup-hidden-output
+    all:
+      - id: background-ampersand-hidden

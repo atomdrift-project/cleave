@@ -1,0 +1,15 @@
+# Windows Service Capabilities
+# Detects mechanics related to Windows Service execution
+
+defaults:
+  for: [pe]
+  platforms: [windows]
+
+traits:
+  - id: win-service-export
+    desc: Exported ServiceMain function (Windows Service)
+    crit: notable
+    conf: 1.0
+    if:
+      type: symbol
+      exact: "ServiceMain"

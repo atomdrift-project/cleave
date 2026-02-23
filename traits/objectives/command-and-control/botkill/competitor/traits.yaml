@@ -1,0 +1,14 @@
+# Botkill Functionality
+# Functionality to kill competing malware/bots
+# ATT&CK: T1562 (Impair Defenses)
+
+traits:
+  - id: botkill
+    desc: Bot killer function (kills competing
+    crit: suspicious
+    conf: 0.85
+    attack: "T1562"
+    for: [elf, macho]
+    if:
+      type: string
+      substr: "botkill"

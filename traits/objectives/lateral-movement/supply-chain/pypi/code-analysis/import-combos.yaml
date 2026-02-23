@@ -1,0 +1,201 @@
+# PyPI Supply Chain - Suspicious Import Combinations
+# Detects unusual import patterns in Python packages, especially setup.py
+# ATT&CK: T1195.002 (Compromise Software Supply Chain)
+
+defaults:
+  for: [python]
+  attack: "T1195.002"
+
+traits:
+  # === Browser data path strings ===
+  - id: chrome-windows-path
+    desc: Chrome Windows data path
+    crit: notable
+    conf: 0.8
+    if:
+      type: string
+      substr: "Local/Google/Chrome"
+
+  - id: edge-windows-path
+    desc: Edge Windows data path
+    crit: notable
+    conf: 0.8
+    if:
+      type: string
+      substr: "Local/Microsoft/Edge"
+
+  - id: firefox-unix-path
+    desc: Firefox Unix data path
+    crit: notable
+    conf: 0.8
+    if:
+      type: string
+      substr: ".mozilla/firefox"
+
+  # === Shellcode/memory execution patterns ===
+  - id: prot-exec-word
+    desc: PROT_EXEC memory protection word
+    crit: notable
+    conf: 0.75
+    if:
+      type: string
+      word: "PROT_EXEC"
+
+  - id: page-execute-word
+    desc: PAGE_EXECUTE memory protection word
+    crit: notable
+    conf: 0.75
+    if:
+      type: string
+      word: "PAGE_EXECUTE"
+
+  # === Clipboard patterns ===
+  - id: clipboard-string
+    desc: Clipboard reference
+    crit: notable
+    conf: 0.6
+    if:
+      type: string
+      substr: "clipboard"
+
+composite_rules:
+  - id: prot-exec-string
+    desc: PROT_EXEC/PAGE_EXECUTE memory protection
+    crit: notable
+    conf: 0.9
+    any:
+      - id: prot-exec-word
+      - id: page-execute-word
+
+  # === baseline: Common legitimate patterns ===
+
+  # Network client package pattern
+  - id: network-client-imports
+    desc: Network client import pattern
+    crit: notable
+    conf: 0.6
+    any:
+      - id: metadata/import/python/requests
+      - id: metadata/import/python/urllib/
+      - id: metadata/import/python/http/
+      - id: metadata/import/python/socket
+
+  # === NOTABLE: Patterns that define package purpose ===
+
+  # Crypto + network - could be security tool or malware
+  - id: crypto-network-imports
+    desc: Cryptography with network capability
+    crit: notable
+    conf: 0.75
+    all:
+      - id: network-client-imports
+    any:
+      - id: metadata/import/python/cryptography/
+      - id: metadata/import/python/hashlib
+      - id: metadata/import/python/hmac
+
+  # ctypes + mmap - shellcode/native code execution pattern
+  - id: ctypes-mmap-combo
+    desc: ctypes with memory mapping
+    crit: notable
+    conf: 0.8
+    all:
+      - id: metadata/import/python/ctypes
+      - id: metadata/import/python/mmap
+
+  # === SUSPICIOUS: Unusual patterns in setup.py context ===
+
+  # setup.py with socket imports - packaging shouldn't need sockets
+  - id: setup-py-socket-imports
+    desc: setup.py imports socket module
+    crit: suspicious
+    conf: 0.85
+    all:
+      - id: objectives/lateral-movement/supply-chain/pypi/general::setup-py-file
+      - id: metadata/import/python/socket
+
+  # setup.py with ctypes - no legitimate reason for FFI in setup
+  - id: setup-py-ctypes-imports
+    desc: setup.py imports ctypes module
+    crit: suspicious
+    conf: 0.85
+    all:
+      - id: objectives/lateral-movement/supply-chain/pypi/general::setup-py-file
+      - id: metadata/import/python/ctypes
+
+  # setup.py with keyboard/input capture - surveillance in package install
+  - id: setup-py-input-capture
+    desc: setup.py imports input capture modules
+    crit: suspicious
+    conf: 0.9
+    all:
+      - id: objectives/lateral-movement/supply-chain/pypi/general::setup-py-file
+    any:
+      - id: metadata/import/python/pynput
+      - id: metadata/import/python/keyboard
+      - id: metadata/import/python/pyautogui
+
+  # Browser data paths
+  - id: browser-paths
+    desc: Browser data directory paths
+    crit: notable
+    conf: 0.8
+    any:
+      - id: chrome-windows-path
+      - id: edge-windows-path
+      - id: firefox-unix-path
+      - id: objectives/lateral-movement/supply-chain/npm/install::chrome-macos-support
+
+  # setup.py accessing browser data paths
+  - id: setup-py-browser-paths
+    desc: setup.py references browser data paths
+    crit: suspicious
+    conf: 0.9
+    all:
+      - id: objectives/lateral-movement/supply-chain/pypi/general::setup-py-file
+      - id: browser-paths
+
+  # Shellcode loader pattern: ctypes + mmap + struct
+  - id: shellcode-loader-imports
+    desc: Potential shellcode loader import pattern
+    crit: suspicious
+    conf: 0.85
+    all:
+      - id: metadata/import/python/ctypes
+      - id: metadata/import/python/mmap
+    any:
+      - id: metadata/import/python/struct
+      - id: prot-exec-string
+
+  # === HOSTILE: Clear malware patterns in setup.py ===
+
+  # setup.py with full dropper chain
+  # Precision: all(4) = 4.0 (meets hostile threshold)
+  - id: setup-py-dropper-imports
+    desc: setup.py with dropper import chain
+    crit: hostile
+    conf: 0.95
+    mbc: "B0024"
+    all:
+      - id: objectives/lateral-movement/supply-chain/pypi/general::setup-py-file
+      - id: metadata/import/python/socket
+      - id: metadata/import/python/base64
+    any:
+      - id: metadata/import/python/os/system
+      - id: metadata/import/python/subprocess/
+      - id: objectives/execution/interpreter/eval/
+
+  # setup.py with clipboard + network = clipper malware
+  # Precision: all(3) + any(1) = 4.0 (meets hostile threshold)
+  - id: setup-py-clipper-imports
+    desc: setup.py with crypto clipper imports
+    crit: hostile
+    conf: 0.95
+    mbc: "E1510"
+    attack: "T1115"
+    all:
+      - id: objectives/lateral-movement/supply-chain/pypi/general::setup-py-file
+      - id: network-client-imports
+    any:
+      - id: metadata/import/python/pyperclip
+      - id: clipboard-string

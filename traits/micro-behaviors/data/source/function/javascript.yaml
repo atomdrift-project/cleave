@@ -1,0 +1,34 @@
+traits:
+  - id: js-function-return-string
+    desc: Function returning a string literal (fragmentation)
+    crit: baseline
+    for: [javascript, typescript]
+    if:
+      type: ast
+      language: javascript
+      query: |
+        (function_declaration
+          body: (statement_block
+            (return_statement
+              (string)
+            )
+          )
+        ) @func_return_string
+      count_min: 10
+
+  - id: js-function-return-string-dense
+    desc: High density of functions returning string literals
+    crit: notable
+    for: [javascript, typescript]
+    if:
+      type: ast
+      language: javascript
+      query: |
+        (function_declaration
+          body: (statement_block
+            (return_statement
+              (string)
+            )
+          )
+        ) @func_return_string
+      count_min: 30

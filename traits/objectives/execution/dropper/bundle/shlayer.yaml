@@ -1,0 +1,16 @@
+# OSX.Shlayer Dropper Detection
+# ATT&CK: T1027.002 (Software Packing) + T1059.004 (Unix Shell)
+
+defaults:
+  for: ["*"]
+
+composite_rules:
+  # HOSTILE: Specific OSX.Shlayer pattern
+  - id: shlayer-dropper
+    desc: OSX.Shlayer dropper behavior (eval decrypted payload from Resources)
+    crit: hostile
+    conf: 5.0
+    all:
+      - id: micro-behaviors/process/create/methods::eval-openssl-subshell
+      - id: micro-behaviors/crypto/cmd/openssl::openssl-hardcoded-pass
+      - id: micro-behaviors/fs/path/bundle::macos-resources-dir

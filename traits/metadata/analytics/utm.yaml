@@ -1,0 +1,29 @@
+# UTM Tracking Parameters
+# Detects Urchin Tracking Module (UTM) parameters used for analytics
+
+defaults:
+  for: [all]
+  crit: baseline
+  conf: 0.5
+
+traits:
+  - id: utm-source-medium-campaign
+    desc: UTM tracking (source/medium/campaign)
+    if:
+      type: string
+      regex: "utm_(source|medium|campaign)="
+
+  - id: utm-content-term
+    desc: UTM tracking (content/term)
+    if:
+      type: string
+      regex: "utm_(content|term)="
+
+composite_rules:
+  - id: utm-tracking
+    desc: Contains UTM tracking parameters
+    crit: notable
+    conf: 0.7
+    any:
+      - id: utm-source-medium-campaign
+      - id: utm-content-term

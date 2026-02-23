@@ -1,0 +1,17 @@
+# Automatic Dependency Installation - Project Checks
+# Detects usage of project-specific check_requirements functions which may trigger auto-installation.
+# ATT&CK: T1059.006
+
+defaults:
+  for: [python]
+  mbc: "B0024"
+  attack: "T1059.006"
+  crit: notable
+
+traits:
+  - id: check-requirements-call
+    desc: Calls check_requirements function
+    conf: 0.7
+    if:
+      type: symbol
+      regex: "check_requirements"

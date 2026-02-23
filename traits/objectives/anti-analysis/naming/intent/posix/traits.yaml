@@ -1,0 +1,92 @@
+# Suspicious Intent Naming Patterns
+# Detects naming patterns that suggest malicious intent
+# Moved from metadata/intent - intent inference is objective-level, not metadata
+
+defaults:
+  crit: notable
+  conf: 0.6
+  for: [c, elf, macho, pe, shell, python, javascript, go, rust]
+
+traits:
+  # === Backdoor intent markers ===
+  - id: backdoor-keywords
+    desc: Backdoor-related naming patterns
+    if:
+      type: string
+      regex: "\\b(bkdr|bd_handler)\\w*\\b"
+      case_insensitive: true
+
+  # === Magic value markers ===
+  - id: magic-a
+    desc: Magic value naming pattern family A
+    crit: notable
+    conf: 0.5
+    if:
+      type: string
+      regex: "\\bmagic_?(key|value|number|bytes)\\w*\\b"
+  - id: magic-b
+    desc: Magic value naming pattern family B
+    crit: notable
+    conf: 0.5
+    if:
+      type: string
+      regex: "\\b(magic_?header|MAGIC_)\\w*\\b"
+
+  # === Trigger markers ===
+  - id: trigger-a
+    desc: Trigger naming pattern family A
+    if:
+      type: string
+      regex: "\\btrigger_?(func|handler|condition|event)\\b"
+      case_insensitive: true
+  - id: trigger-b
+    desc: Trigger naming pattern family B
+    if:
+      type: string
+      word: on_trigger
+      case_insensitive: true
+
+  # === Secret markers ===
+  - id: secret-a
+    desc: Secret naming pattern family A
+    if:
+      type: string
+      regex: "\\bsecret_?(key|data|payload|cmd)\\w*\\b"
+      case_insensitive: true
+  - id: secret-b
+    desc: Secret naming pattern family B
+    if:
+      type: string
+      regex: "\\b(hidden_cmd|covert_)\\w*\\b"
+      case_insensitive: true
+
+composite_rules:
+  - id: backdoor
+    desc: Backdoor naming pattern (suggests malicious intent)
+    crit: notable
+    conf: 0.6
+    any:
+      - id: backdoor-keywords
+      - id: micro-behaviors/data/text/malware::rootkit-word
+
+  - id: magic
+    desc: Magic value naming pattern
+    crit: notable
+    conf: 0.5
+    any:
+      - id: magic-a
+      - id: magic-b
+  - id: trigger
+    desc: Trigger naming pattern (suggests conditional execution)
+    crit: notable
+    conf: 0.6
+    any:
+      - id: trigger-a
+      - id: trigger-b
+  - id: secret
+    desc: Secret/hidden payload naming pattern
+    crit: notable
+    conf: 0.6
+    any:
+      - id: secret-a
+      - id: secret-b

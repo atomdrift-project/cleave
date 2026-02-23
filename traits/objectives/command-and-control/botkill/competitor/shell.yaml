@@ -1,0 +1,149 @@
+defaults:
+  crit: suspicious
+  attack: T1489
+  mbc: B0047
+  for:
+  - shell
+traits:
+- id: mass-pkill
+  desc: Mass process killing via pkill
+  crit: suspicious
+  conf: 0.85
+  if:
+    type: raw
+    regex: \bpkill\s+-f\b
+- id: miner-process-kill-primary
+  desc: Kills xmrig/kworkerds miner processes
+  crit: suspicious
+  conf: 0.95
+  if:
+    type: raw
+    regex: kill[^;]{0,30}(xmrig|kworkerds)
+- id: miner-process-kill-secondary
+  desc: Kills cryptonight miner processes
+  crit: suspicious
+  conf: 0.95
+  if:
+    type: raw
+    regex: kill[^;]{0,30}cryptonight
+- id: mass-tmp-removal
+  desc: Mass removal of /tmp files
+  crit: suspicious
+  conf: 0.8
+  if:
+    type: raw
+    regex: rm\s+-rf\s+/tmp/
+- id: competitor-path-removal
+  desc: Removes known malware paths
+  crit: suspicious
+  conf: 0.9
+  if:
+    type: raw
+    regex: rm\s+-rf?\s+(/tmp/kworkerds|/var/tmp/xmrig|/tmp/systemd|/tmp/java)
+
+- id: docker-container-kill-miner-xmr-mine
+  desc: Kills Docker containers mentioning xmr or mine
+  crit: notable
+  conf: 0.8
+  if:
+    type: raw
+    regex: docker\s+(ps|kill|rm)[^;]{0,30}(xmr|mine)
+
+- id: docker-container-kill-miner-monero
+  desc: Kills Docker containers with monero clues
+  crit: notable
+  conf: 0.8
+  if:
+    type: raw
+    regex: docker\s+(ps|kill|rm)[^;]{0,30}monero
+
+- id: docker-container-kill-secondary
+  desc: Kills Docker containers with crypto keyword
+  crit: notable
+  conf: 0.8
+  if:
+    type: raw
+    regex: docker\s+(ps|kill|rm)[^;]{0,30}crypto
+- id: mass-kill-pattern
+  desc: Mass process killing via ps/grep/kill
+  crit: suspicious
+  conf: 0.85
+  if:
+    type: raw
+    regex: ps\s+aux.{0,80}grep.{0,80}(kill|xargs.{0,20}kill)
+- id: netstat-kill-pattern
+  desc: Kills processes by network connection
+  crit: suspicious
+  conf: 0.9
+  if:
+    type: raw
+    regex: netstat.{0,80}grep.{0,80}(kill|xargs.{0,20}kill)
+- id: mining-pool-kill-primary
+  desc: Kills mining pool connections (moneropool/xmrpool)
+  crit: suspicious
+  conf: 0.95
+  if:
+    type: raw
+    regex: pkill[^;]{0,50}(moneropool|xmrpool)
+
+- id: mining-pool-kill-secondary
+  desc: Kills mining pool connections (stratum.f2pool/monerohash)
+  crit: suspicious
+  conf: 0.95
+  if:
+    type: raw
+    regex: grep[^;]{0,50}(stratum\.f2pool|monerohash)
+composite_rules:
+- id: miner-process-kill
+  desc: Kills known miner processes
+  crit: suspicious
+  conf: 0.95
+  any:
+    - id: miner-process-kill-primary
+    - id: miner-process-kill-secondary
+
+- id: docker-container-kill
+  desc: Kills Docker containers
+  crit: notable
+  conf: 0.8
+  any:
+    - id: docker-container-kill-miner-xmr-mine
+    - id: docker-container-kill-miner-monero
+    - id: docker-container-kill-secondary
+
+- id: mining-pool-kill
+  desc: Kills mining pool connections
+  crit: suspicious
+  conf: 0.95
+  any:
+    - id: mining-pool-kill-primary
+    - id: mining-pool-kill-secondary
+
+- id: miner-botkill
+  desc: Cryptominer botkill behavior
+  crit: hostile
+  conf: 0.95
+  attack: T1489
+  all:
+  - id: mass-pkill
+  - id: miner-process-kill
+  - id: mass-tmp-removal
+  - id: competitor-path-removal
+- id: miner-botkill-alt
+  desc: Cryptominer botkill (ps pattern)
+  crit: hostile
+  conf: 0.95
+  attack: T1489
+  all:
+  - id: mass-kill-pattern
+  - id: miner-process-kill
+  - id: mass-tmp-removal
+  - id: competitor-path-removal
+- id: network-botkill
+  desc: Network-based competitor killing
+  crit: suspicious
+  conf: 0.9
+  attack: T1489
+  all:
+  - id: netstat-kill-pattern
+  - id: mass-pkill

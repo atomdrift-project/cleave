@@ -1,0 +1,12 @@
+# Process Identity - Ruby
+
+traits:
+  - id: ruby-setuid
+    desc: Set user/group ID
+    crit: notable
+    conf: 0.93
+    platforms: [all]
+    for: [ruby]
+    if:
+      type: symbol
+      regex: "Process\\.setuid|Process\\.setgid|Process\\.seteuid|Process\\.setegid"

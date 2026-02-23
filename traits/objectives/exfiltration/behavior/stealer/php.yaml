@@ -1,0 +1,22 @@
+# PHP Stealer Behaviors
+
+composite_rules:
+  - id: aws-credential-access-exfil-file-get-contents
+    desc: Exfiltration of AWS credentials via file_get_contents
+    crit: hostile
+    conf: 1.0
+    attack: "T1567"
+    all:
+      - id: micro-behaviors/communications/http/client::file-get-contents-url
+      - id: objectives/credential-access/environment/secret-access::aws-access-key
+      - id: objectives/credential-access/environment/secret-access::aws-secret
+      - id: micro-behaviors/os/env/vars::getenv
+
+  - id: env-exfil-via-http-interpolation
+    desc: Potential exfiltration of environment variables via HTTP URL interpolation
+    crit: suspicious
+    conf: 0.8
+    attack: "T1567"
+    all:
+      - id: micro-behaviors/communications/http/client::file-get-contents-url-interpolation
+      - id: micro-behaviors/os/env/vars::getenv

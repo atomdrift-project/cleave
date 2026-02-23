@@ -1,0 +1,20 @@
+# Credential Access - Dev Tools
+# ATT&CK: T1552.001 (Unsecured Credentials: Credentials In Files)
+
+defaults:
+  attack: "T1552.001"
+  crit: suspicious
+
+composite_rules:
+  - id: jfrog-credential-theft
+
+    desc: JFrog CLI credential extraction
+
+    conf: 1.0
+
+    for: [javascript, typescript, shell, python]
+
+    all:
+      - id: micro-behaviors/process/create/shell::jfrog-cli-export
+
+      - id: micro-behaviors/data/encode/base64

@@ -1,0 +1,41 @@
+# System Daemon Patterns
+# Detects references to common system service daemons
+
+defaults:
+  for: [all]
+  crit: notable
+  conf: 0.7
+
+traits:
+  - id: telnetd
+    desc: telnetd daemon reference
+    if:
+      type: string
+      word: "telnetd"
+
+  - id: httpd
+    desc: httpd daemon reference
+    if:
+      type: string
+      word: "httpd"
+
+  - id: apache2
+    desc: apache2 daemon reference
+    if:
+      type: string
+      word: "apache2"
+
+  - id: ftpd
+    desc: ftpd daemon reference
+    if:
+      type: string
+      word: "ftpd"
+
+composite_rules:
+  - id: remote-access-daemons
+    desc: Remote access daemon references
+    any:
+      - id: telnetd
+      - id: micro-behaviors/os/service/remote::sshd-ref
+      - id: ftpd
+      - id: httpd

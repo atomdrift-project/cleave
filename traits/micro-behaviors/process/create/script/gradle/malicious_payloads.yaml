@@ -1,0 +1,18 @@
+traits:
+  - id: gradle-exec-calc
+    desc: Gradle executes calc.exe (PoC/Malware payload)
+    crit: suspicious
+    conf: 1.0
+    for: [groovy]
+    if:
+      type: raw
+      regex: "commandLine\\s*.{0,220}\\bcalc(\\.exe)?\\b"
+
+  - id: gradle-exec-powershell-encoded
+    desc: Gradle executes encoded PowerShell
+    crit: suspicious
+    conf: 0.8
+    for: [groovy]
+    if:
+      type: raw
+      regex: "powershell.{0,220}-e(ncodedCommand)?\\s+[A-Za-z0-9+/=]{20,}"

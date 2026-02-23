@@ -1,0 +1,78 @@
+# Go Command Execution and Pipe Redirection
+# MBC: E1059 (Command and Scripting Interpreter)
+# ATT&CK: T1059 (Command and Scripting Interpreter)
+
+defaults:
+  for: [go, elf, macho, pe]
+  crit: notable
+  conf: 0.7
+
+traits:
+  # === Go exec micro-behaviors ===
+  - id: exec-cmd-start
+    desc: exec.(*Cmd).Start reference
+    conf: 0.4
+    if:
+      type: string
+      substr: "exec.(*Cmd).Start"
+
+  - id: exec-cmd-run
+    desc: exec.(*Cmd).Run reference
+    conf: 0.4
+    if:
+      type: string
+      substr: "exec.(*Cmd).Run"
+
+  # === Go pipe micro-behaviors ===
+  - id: stdin-pipe
+    desc: StdinPipe reference
+    conf: 0.5
+    if:
+      type: string
+      substr: "StdinPipe"
+
+  - id: stdout-pipe
+    desc: StdoutPipe reference
+    conf: 0.4
+    if:
+      type: string
+      substr: "StdoutPipe"
+
+  - id: stderr-pipe
+    desc: StderrPipe reference
+    conf: 0.4
+    if:
+      type: string
+      substr: "StderrPipe"
+
+  - id: stdin-redirect
+    desc: Direct stdin redirection
+    conf: 0.6
+    if:
+      type: string
+      substr: "Stdin ="
+
+  - id: stdout-redirect
+    desc: Direct stdout redirection
+    conf: 0.6
+    if:
+      type: string
+      substr: "Stdout ="
+
+  - id: stderr-redirect
+    desc: Direct stderr redirection
+    conf: 0.6
+    if:
+      type: string
+      substr: "Stderr ="
+
+composite_rules:
+  - id: pipe-redirection
+    desc: Go pipe redirection
+    any:
+      - id: stdin-pipe
+      - id: stdout-pipe
+      - id: stderr-pipe
+      - id: stdin-redirect
+      - id: stdout-redirect
+      - id: stderr-redirect

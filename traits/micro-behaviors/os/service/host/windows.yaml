@@ -1,0 +1,15 @@
+# Windows Service Host Interaction
+# Detects linking to system libraries used for service management
+
+defaults:
+  for: [pe]
+  platforms: [windows]
+
+traits:
+  - id: advapi32-link
+    desc: Links to ADVAPI32.dll (Service Management)
+    crit: baseline
+    conf: 1.0
+    if:
+      type: symbol
+      exact: "DeregisterEventSource"

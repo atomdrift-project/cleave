@@ -1,0 +1,101 @@
+# OAuth Operations
+# MBC: C0002 (HTTP Communication)
+# ATT&CK: T1071.001
+
+defaults:
+  for: [all]
+
+traits:
+  # === OAuth atomic indicators ===
+  - id: oauth-lower
+    desc: oauth lowercase
+    crit: notable
+    conf: 0.5
+    if:
+      type: string
+      substr: "oauth"
+
+  - id: oauth-upper
+    desc: OAuth capitalized
+    crit: notable
+    conf: 0.5
+    if:
+      type: string
+      substr: "OAuth"
+
+  - id: access-token
+    desc: access_token reference
+    crit: notable
+    conf: 0.5
+    if:
+      type: string
+      substr: "access_token"
+
+  - id: refresh-token
+    desc: refresh_token reference
+    crit: notable
+    conf: 0.5
+    if:
+      type: string
+      substr: "refresh_token"
+
+  # === Google OAuth atomic indicators ===
+  - id: google-accounts
+    desc: accounts.google.com domain
+    crit: notable
+    conf: 0.6
+    if:
+      type: string
+      substr: "accounts.google.com"
+
+  - id: googleapis-oauth
+    desc: googleapis.com/oauth path
+    crit: notable
+    conf: 0.6
+    if:
+      type: string
+      substr: "googleapis.com/oauth"
+
+  # === Office365 OAuth atomic indicators ===
+  - id: microsoft-login
+    desc: login.microsoftonline.com domain
+    crit: notable
+    conf: 0.6
+    if:
+      type: string
+      substr: "login.microsoftonline.com"
+
+  - id: microsoft-graph
+    desc: graph.microsoft.com domain
+    crit: notable
+    conf: 0.6
+    if:
+      type: string
+      substr: "graph.microsoft.com"
+
+composite_rules:
+  - id: oauth
+    desc: OAuth authentication
+    crit: notable
+    conf: 0.66
+    any:
+      - id: oauth-lower
+      - id: oauth-upper
+      - id: access-token
+      - id: refresh-token
+
+  - id: oauth-google
+    desc: Google OAuth
+    crit: notable
+    conf: 0.66
+    any:
+      - id: google-accounts
+      - id: googleapis-oauth
+
+  - id: oauth-office365
+    desc: Office365 OAuth
+    crit: notable
+    conf: 0.66
+    any:
+      - id: microsoft-login
+      - id: microsoft-graph

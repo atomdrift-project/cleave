@@ -1,0 +1,52 @@
+# C2 Script Beacon Patterns
+# Detects scripting language C2 beacons (PowerShell, shell, etc.)
+# ATT&CK: T1071.001 (Web Protocols), T1059 (Command and Scripting Interpreter)
+# MBC: B0030 (C2 Communication)
+
+defaults:
+  crit: suspicious
+  attack: "T1071.001"
+  mbc: "B0030"
+
+composite_rules:
+  # PowerShell C2 beacon - HTTP POST to suspicious infrastructure
+  # Complexity: all(2) + any(1) + file_types(1) = 4
+  - id: powershell-http-beacon
+    desc: PowerShell HTTP POST to suspicious domain
+    crit: hostile
+    conf: 0.95
+    attack: "T1071.001"
+    mbc: "B0030"
+    for: [powershell]
+    all:
+      - id: micro-behaviors/communications/http/lib/requests::requests-post
+      - id: objectives/command-and-control/infrastructure/domain::c2-domain
+      - id: micro-behaviors/communications/http/request
+
+  # PowerShell C2 exfil beacon - POST with body to suspicious domain
+  # Complexity: all(3) + file_types(1) = 4
+  - id: powershell-exfil-beacon
+    desc: PowerShell data exfil to suspicious domain
+    crit: hostile
+    conf: 0.95
+    attack: "T1041"
+    mbc: "B0030"
+    for: [powershell]
+    all:
+      - id: micro-behaviors/communications/http/lib/invoke-webrequest::http-post-method
+      - id: micro-behaviors/communications/http/lib/invoke-webrequest::http-body-param
+      - id: objectives/command-and-control/infrastructure/domain::c2-domain
+
+  # Generic script HTTP beacon to suspicious infrastructure
+  # Complexity: all(2) + any(1) + file_types(1) = 4
+  - id: script-http-c2-beacon
+    desc: Script HTTP request to C2 infrastructure
+    crit: suspicious
+    conf: 0.90
+    attack: "T1071.001"
+    mbc: "B0030"
+    for: [powershell, shell, python, javascript]
+    all:
+      - id: objectives/command-and-control/infrastructure/domain::c2-domain
+      - id: micro-behaviors/communications/http/post::post
+      - id: micro-behaviors/communications/http/request

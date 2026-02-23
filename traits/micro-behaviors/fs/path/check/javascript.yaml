@@ -1,0 +1,17 @@
+traits:
+  - id: check-git-dir
+    desc: Checks for .git directory
+    crit: notable
+    conf: 0.8
+    for: [javascript, typescript]
+    if:
+      type: ast
+      language: javascript
+      query: |
+        (call_expression
+          function: (member_expression
+            property: (property_identifier) @method)
+          arguments: (arguments (string) @arg)
+          (#match? @method "^(stat|lstat|access|exists)(Sync)?$")
+          (#match? @arg "['\"]\\.git['\"]")
+        )

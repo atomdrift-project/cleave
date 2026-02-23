@@ -1,0 +1,20 @@
+# Shell Stealer Behavior
+# Detects shell script patterns indicating data theft
+# ATT&CK: T1048.003 (Exfiltration Over Alternative Protocol: Exfiltration Over Unencrypted/Obfuscated Non-C2 Protocol)
+
+defaults:
+  for: [shell]
+
+composite_rules:
+  - id: shell-dns-exfil
+    desc: Shell script exfiltrating system info via DNS/subdomain
+    crit: hostile
+    conf: 0.95
+    attack: "T1048.003"
+    needs: 1
+    any:
+      - id: micro-behaviors/data/encode/hex::hex-encode-xxd
+      - id: micro-behaviors/data/encode/hex::hex-dump-od
+    all:
+      - id: objectives/execution/dropper/script::curl-download
+      - id: objectives/discovery/host/user::whoami

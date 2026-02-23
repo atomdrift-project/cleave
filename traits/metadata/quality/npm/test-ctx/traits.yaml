@@ -1,0 +1,246 @@
+defaults:
+  for: [javascript, typescript]
+
+# Test File Context Markers
+
+traits:
+  # Jest test file markers (atomic traits)
+  - id: it-call
+    desc: it() function call
+    crit: notable
+    conf: 0.6
+    for: [javascript, typescript]
+    if:
+      type: ast
+      kind: call
+      exact: "it"
+
+  - id: before-each-call
+    desc: beforeEach hook
+    crit: notable
+    conf: 0.6
+    for: [javascript, typescript]
+    if:
+      type: ast
+      kind: call
+      exact: "beforeEach"
+
+  - id: after-each-call
+    desc: afterEach hook
+    crit: notable
+    conf: 0.6
+    for: [javascript, typescript]
+    if:
+      type: ast
+      kind: call
+      exact: "afterEach"
+
+  # Mocha test file markers
+  - id: before-call
+    desc: before() hook
+    crit: notable
+    conf: 0.6
+    for: [javascript, typescript]
+    if:
+      type: ast
+      kind: call
+      exact: "before"
+
+  - id: after-call
+    desc: after() hook
+    crit: notable
+    conf: 0.6
+    for: [javascript, typescript]
+    if:
+      type: ast
+      kind: call
+      exact: "after"
+
+  - id: chai-word
+    desc: chai keyword
+    crit: notable
+    conf: 0.6
+    for: [javascript, typescript]
+    if:
+      type: string
+      word: "chai"
+
+  - id: dot-spec-filename
+    desc: .spec. in filename
+    crit: notable
+    conf: 0.6
+    for: [javascript, typescript]
+    if:
+      type: string
+      substr: ".spec."
+
+  - id: underscore-spec-filename
+    desc: _spec. in filename
+    crit: notable
+    conf: 0.6
+    for: [javascript, typescript]
+    if:
+      type: string
+      substr: "_spec."
+
+  - id: mock-data-ref
+    desc: mockData reference
+    crit: notable
+    conf: 0.6
+    for: [javascript, typescript]
+    if:
+      type: string
+      word: "mockData"
+
+  - id: mocks-ref
+    desc: __mocks__ reference
+    crit: notable
+    conf: 0.6
+    for: [javascript, typescript]
+    if:
+      type: string
+      substr: "__mocks__"
+
+  - id: sinon-stub-call
+    desc: sinon.stub call
+    crit: notable
+    conf: 0.6
+    for: [javascript, typescript]
+    if:
+      type: string
+      substr: "sinon.stub"
+
+  - id: faker-word
+    desc: faker keyword
+    crit: notable
+    conf: 0.6
+    for: [javascript, typescript]
+    if:
+      type: string
+      word: "faker"
+
+  # Testing library patterns
+  - id: cypress-cy-command
+    desc: cy. Cypress command
+    crit: notable
+    conf: 0.6
+    for: [javascript, typescript]
+    if:
+      type: string
+      exact: "cy."
+
+  - id: screen-get-by
+    desc: screen.getBy query
+    crit: notable
+    conf: 0.6
+    for: [javascript, typescript]
+    if:
+      type: string
+      substr: "screen.getBy"
+
+  - id: screen-find-by
+    desc: screen.findBy query
+    crit: notable
+    conf: 0.6
+    for: [javascript, typescript]
+    if:
+      type: string
+      substr: "screen.findBy"
+
+  - id: screen-query-by
+    desc: screen.queryBy query
+    crit: notable
+    conf: 0.6
+    for: [javascript, typescript]
+    if:
+      type: string
+      substr: "screen.queryBy"
+
+  - id: screen-get-all-by
+    desc: screen.getAllBy query
+    crit: notable
+    conf: 0.6
+    for: [javascript, typescript]
+    if:
+      type: string
+      substr: "screen.getAllBy"
+
+  - id: fire-event-method
+    desc: fireEvent. method
+    crit: notable
+    conf: 0.6
+    for: [javascript, typescript]
+    if:
+      type: string
+      substr: "fireEvent."
+
+  - id: user-event-method
+    desc: userEvent. method
+    crit: notable
+    conf: 0.6
+    for: [javascript, typescript]
+    if:
+      type: string
+      substr: "userEvent."
+
+  - id: wait-for-call
+    desc: waitFor() call
+    crit: notable
+    conf: 0.6
+    for: [javascript, typescript]
+    if:
+      type: string
+      substr: "waitFor("
+
+  # Test configuration
+  - id: karma-conf-ref
+    desc: karma.conf config file
+    crit: notable
+    conf: 0.6
+    for: [javascript, typescript]
+    if:
+      type: string
+      substr: "karma.conf"
+
+  - id: coverage-marker-istanbul
+    desc: istanbul coverage marker
+    if: { type: string, word: "istanbul" }
+  - id: coverage-marker-nyc
+    desc: nyc coverage marker
+    if: { type: string, word: "nyc" }
+  - id: coverage-marker-c8
+    desc: c8 coverage marker
+    if: { type: string, word: "c8" }
+  - id: coverage-marker-coverage
+    desc: coverage keyword marker
+    if: { type: string, word: "coverage" }
+  - id: coverage-marker-internal
+    desc: __coverage__ marker
+    if: { type: string, substr: "__coverage__" }
+  - id: coverage-marker-lcov
+    desc: lcov marker
+    if: { type: string, word: "lcov" }
+
+composite_rules:
+  - id: coverage-markers-a
+    desc: Code coverage markers family A
+    any:
+      - id: coverage-marker-istanbul
+      - id: coverage-marker-nyc
+      - id: coverage-marker-c8
+      - id: coverage-marker-coverage
+
+  - id: coverage-markers-b
+    desc: Code coverage markers family B
+    any:
+      - id: coverage-marker-internal
+      - id: coverage-marker-lcov
+
+  - id: coverage-markers
+    desc: Code coverage markers
+    crit: notable
+    conf: 0.9
+    for: [javascript, typescript]
+    any:
+      - id: coverage-markers-a
+      - id: coverage-markers-b

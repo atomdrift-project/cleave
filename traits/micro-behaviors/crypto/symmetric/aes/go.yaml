@@ -1,0 +1,47 @@
+# AES Encryption - Go
+# MBC: C0021.001 (AES)
+# ATT&CK: T1573.001
+
+defaults:
+  mbc: "C0021.001"
+
+traits:
+  # AST-based detection (Go source only)
+  - id: go-new-cipher
+    desc: Creates a new AES cipher
+    crit: notable
+    conf: 0.9
+    for: [go]
+    if:
+      type: ast
+      kind: call
+      exact: "aes.NewCipher"
+
+  - id: go-cfb-encrypter
+    desc: Creates a new AES-CFB encrypter
+    crit: notable
+    conf: 0.9
+    for: [go]
+    if:
+      type: ast
+      kind: call
+      exact: "cipher.NewCFBEncrypter"
+
+  # String-based detection (compiled binaries)
+  - id: go-new-cipher-string
+    desc: aes.NewCipher string in binary
+    crit: notable
+    conf: 0.7
+    for: [elf, macho, pe]
+    if:
+      type: string
+      substr: "aes.NewCipher"
+
+  - id: go-cfb-encrypter-string
+    desc: cipher.NewCFBEncrypter string in binary
+    crit: notable
+    conf: 0.7
+    for: [elf, macho, pe]
+    if:
+      type: string
+      substr: "cipher.NewCFBEncrypter"

@@ -1,0 +1,58 @@
+# Build System - PIP
+
+defaults:
+  for: [all]
+
+traits:
+  # === pip/setuptools micro-behaviors ===
+  - id: setup-py
+    desc: setup.py file
+    crit: notable
+    conf: 0.85
+    if:
+      type: string
+      substr: "setup.py"
+
+  - id: pyproject-toml
+    desc: pyproject.toml file
+    crit: notable
+    conf: 0.85
+    if:
+      type: string
+      substr: "pyproject.toml"
+
+  - id: requirements-txt
+    desc: requirements.txt file
+    crit: notable
+    conf: 0.85
+    if:
+      type: string
+      substr: "requirements.txt"
+
+  - id: site-packages
+    desc: site-packages directory
+    crit: notable
+    conf: 0.85
+    if:
+      type: string
+      substr: "site-packages"
+
+  - id: setuptools-package-index
+    desc: setuptools PackageIndex class
+    crit: baseline
+    conf: 1.0
+    if:
+      type: raw
+      substr: "class PackageIndex"
+
+composite_rules:
+  # pip/setuptools composite (migrated from YARA)
+  - id: pip
+    desc: Built with pip/setuptools (Python)
+    crit: notable
+    conf: 0.85
+    any:
+      - id: setup-py
+      - id: pyproject-toml
+      - id: requirements-txt
+      - id: site-packages

@@ -1,0 +1,38 @@
+# Impact - System Degradation
+# ATT&CK: T1499 (Endpoint Denial of Service)
+
+traits:
+  - id: forkbomb
+    desc: Fork bomb pattern
+    crit: suspicious
+    conf: 0.95
+    attack: "T1499"
+    for: [shell]
+    if:
+      type: string
+      regex: ":\\(\\) \\{\\s*:\\|:&\\s*\\\\};:"
+
+  - id: bluescreen
+    desc: Windows BSOD trigger
+    crit: suspicious
+    conf: 0.95
+    attack: "T1499"
+    for: [python, pe]
+    if:
+      type: string
+      substr: "RtlAdjustPrivilege(19, 1,"
+
+  # NOTE: EDR-specific traits (stopservice, edr-kill) are defined in impact/degrade/edr/
+  # Use impact/degrade/edr directory reference in composite rules
+
+  - id: osascript-quit
+    desc: macOS application quit via osascript
+    crit: suspicious
+    conf: 0.85
+    attack: "T1489"
+    for: [macho, shell]
+    if:
+      type: string
+      regex: "osascript.{0,50}tell.{0,50}application.{0,50}quit"
+
+# NOTE: EDR bypass composite rule is defined in impact/degrade/edr/

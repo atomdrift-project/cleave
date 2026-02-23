@@ -1,0 +1,50 @@
+# File Ownership Change
+# MBC: E1222 (File Permission Modification)
+# ATT&CK: T1222
+
+defaults:
+  for: [elf, macho, so, dylib, c]
+
+traits:
+  - id: chown-fn
+    desc: Change file ownership
+    crit: notable
+    conf: 0.66
+    if:
+      type: symbol
+      exact: "chown"
+
+  - id: fchown-fn
+    desc: Change file ownership by fd
+    crit: notable
+    conf: 0.66
+    if:
+      type: symbol
+      exact: "fchown"
+
+  - id: fchownat-fn
+    desc: Change file ownership by dirfd/path
+    crit: notable
+    conf: 0.66
+    if:
+      type: symbol
+      exact: "fchownat"
+
+  - id: lchown-fn
+    desc: Change file ownership
+    crit: notable
+    conf: 0.66
+    if:
+      type: symbol
+      exact: "lchown"
+
+composite_rules:
+  - id: chown
+    desc: Change file ownership
+    crit: notable
+    conf: 0.66
+    any:
+      - id: chown-fn
+      - id: fchown-fn
+      - id: fchownat-fn
+      - id: lchown-fn

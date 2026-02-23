@@ -1,0 +1,27 @@
+defaults:
+  for: [all]
+
+traits:
+  - id: clsid-xmlhttp-b64-unicode
+    desc: Msxml2.XMLHTTP CLSID (Base64 + Unicode encoded)
+    crit: suspicious
+    conf: 1.0
+    if:
+      type: raw
+      regex: "RgA1ADAANwA4AEYAMwA1AC0AQwA1ADUAMQAtADEAMQBEADMALQA4ADkAQgA5AC0AMAAwADAAMABGADgAMQBGAEUAMgAyADEA"
+
+  - id: clsid-xmlhttp-generic
+    desc: Generic XMLHTTP CLSID reference
+    crit: notable
+    conf: 0.8
+    if:
+      type: raw
+      regex: '(?i)Msxml2\.XMLHTTP'
+
+  - id: clsid-xmlhttp-raw
+    desc: Msxml2.XMLHTTP CLSID (Raw string)
+    crit: suspicious
+    conf: 0.95
+    if:
+      type: raw
+      regex: "F5078F35-C551-11D3-89B9-0000F81FE221"

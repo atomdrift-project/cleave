@@ -1,0 +1,82 @@
+# HTTP POST Operations
+# MBC: C0002 (HTTP Communication)
+# ATT&CK: T1071.001
+
+defaults:
+  for: [all]
+  mbc: "C0002"
+  attack: "T1071.001"
+
+traits:
+  # === HTTP POST method literal ===
+  - id: post
+    desc: HTTP POST method
+    crit: notable
+    conf: 0.7
+    if:
+      type: string
+      word: "POST"
+      case_insensitive: false
+
+  # === HTTP POST atomic indicators ===
+  - id: http-post-call
+    desc: http.post call
+    crit: notable
+    conf: 0.7
+    if:
+      type: string
+      substr: "http.post"
+
+  # ... (rest of the file remains the same)
+  # === HTTP form data atomic indicators ===
+  - id: multipart-form
+    desc: multipart/form-data content type
+    crit: notable
+    conf: 0.6
+    if:
+      type: string
+      substr: "multipart/form-data"
+
+  - id: formdata-class
+    desc: FormData class
+    crit: notable
+    conf: 0.6
+    if:
+      type: string
+      substr: "FormData"
+
+  - id: enctype-attr
+    desc: enctype attribute
+    crit: notable
+    conf: 0.6
+    if:
+      type: string
+      substr: "enctype"
+
+  - id: post-ast
+    desc: HTTP POST AST calls
+    crit: notable
+    conf: 0.8
+    if:
+      type: ast
+      kind: call
+      regex: '^((http|https)\.post|axios\.post|fetch)$'
+
+composite_rules:
+  # Legacy alias for backwards compatibility
+  - id: post-method-detection
+    desc: Makes HTTP POST requests (method detection)
+    crit: notable
+    conf: 0.75
+    any:
+      - id: post
+      - id: http-post-call
+
+  - id: post-form
+    desc: HTTP form data upload
+    crit: notable
+    conf: 0.75
+    any:
+      - id: multipart-form
+      - id: formdata-class
+      - id: enctype-attr

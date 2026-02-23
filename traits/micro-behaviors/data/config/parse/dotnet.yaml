@@ -1,0 +1,66 @@
+# .NET Configuration Access Patterns
+
+defaults:
+  for: [all]
+
+traits:
+  - id: config-manager
+    desc: Application configuration access
+    crit: notable
+    conf: 0.75
+    if:
+      type: string
+      substr: "ConfigurationManager"
+
+  # === AppSettings atomic indicators ===
+  - id: appsettings-pascal
+    desc: AppSettings (PascalCase)
+    crit: baseline
+    conf: 0.6
+    if:
+      type: string
+      substr: "AppSettings"
+
+  - id: appsettings-lower
+    desc: appsettings (lowercase)
+    crit: baseline
+    conf: 0.6
+    if:
+      type: string
+      substr: "appsettings"
+
+  # === Environment variable atomic indicators ===
+  - id: get-env-var
+    desc: GetEnvironmentVariable method
+    crit: baseline
+    conf: 0.6
+    if:
+      type: string
+      substr: "GetEnvironmentVariable"
+
+  - id: environment-class
+    desc: Environment class access
+    crit: baseline
+    conf: 0.5
+    if:
+      type: string
+      regex: "Environment\\."
+
+composite_rules:
+  # AppSettings composite
+  - id: app-settings
+    desc: AppSettings configuration access
+    crit: notable
+    conf: 0.70
+    any:
+      - id: appsettings-pascal
+      - id: appsettings-lower
+
+  # Environment variable composite
+  - id: environment-vars
+    desc: Environment variable access
+    crit: notable
+    conf: 0.70
+    any:
+      - id: get-env-var
+      - id: environment-class

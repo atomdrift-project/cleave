@@ -1,0 +1,24 @@
+# Runtime Dependency Installation
+# Detects packages that install dependencies at runtime (bypassing requirements.txt)
+# ATT&CK: T1059.006
+
+defaults:
+  for: [python]
+  attack: "T1059.006"
+  crit: suspicious
+
+traits:
+  - id: hub-sdk-string
+    desc: hub-sdk string reference
+    conf: 0.8
+    if:
+      type: string
+      regex: "hub-sdk"
+
+composite_rules:
+  - id: runtime-pip-install-hub
+    desc: Runtime installation of hub-sdk
+    conf: 0.9
+    all:
+      - id: objectives/execution/autoinstall/pip::check-requirements-call
+      - id: hub-sdk-string

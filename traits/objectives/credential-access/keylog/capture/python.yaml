@@ -1,0 +1,327 @@
+# Keylogging Detection - Python
+# MBC: B0015 (Keylogging)
+# ATT&CK: T1056.001 (Input Capture: Keylogging)
+
+defaults:
+  for: [python]
+  mbc: "B0015"
+  attack: "T1056.001"
+  crit: suspicious
+
+traits:
+  # === pyHook atomic indicators ===
+  - id: import-pyhook
+    desc: import pyHook statement
+    crit: notable
+    conf: 0.6
+    platforms: [windows]
+    if:
+      type: string
+      substr: "import pyHook"
+
+  - id: from-pyhook
+    desc: from pyHook import
+    crit: notable
+    conf: 0.6
+    platforms: [windows]
+    if:
+      type: string
+      substr: "from pyHook"
+
+  - id: pyhook-hookmanager
+    desc: pyHook.HookManager
+    crit: notable
+    conf: 0.7
+    platforms: [windows]
+    if:
+      type: string
+      substr: "pyHook.HookManager"
+
+  # === pyWinhook atomic indicators ===
+  - id: import-pywinhook
+    desc: import pyWinhook statement
+    crit: notable
+    conf: 0.6
+    platforms: [windows]
+    if:
+      type: string
+      substr: "import pyWinhook"
+
+  - id: from-pywinhook
+    desc: from pyWinhook import
+    crit: notable
+    conf: 0.6
+    platforms: [windows]
+    if:
+      type: string
+      substr: "from pyWinhook"
+
+  - id: pywinhook-hookmanager
+    desc: pyWinhook.HookManager
+    crit: notable
+    conf: 0.7
+    platforms: [windows]
+    if:
+      type: string
+      substr: "pyWinhook.HookManager"
+
+  # === keyboard module atomic indicators ===
+  - id: import-keyboard
+    desc: import keyboard statement
+    crit: notable
+    conf: 0.5
+    if:
+      type: string
+      substr: "import keyboard"
+
+  - id: keyboard-on-press
+    desc: keyboard.on_press function
+    crit: notable
+    conf: 0.6
+    if:
+      type: string
+      substr: "keyboard.on_press"
+
+  - id: keyboard-hook
+    desc: keyboard.hook function
+    crit: notable
+    conf: 0.6
+    if:
+      type: string
+      substr: "keyboard.hook"
+
+  - id: keyboard-record
+    desc: keyboard.record function
+    crit: notable
+    conf: 0.6
+    if:
+      type: string
+      substr: "keyboard.record"
+
+  # === pynput atomic indicators ===
+  - id: keyboard-listener
+    desc: keyboard.Listener class
+    crit: notable
+    conf: 0.6
+    if:
+      type: string
+      substr: "keyboard.Listener("
+
+  - id: on-press-eq
+    desc: on_press= parameter
+    crit: notable
+    conf: 0.5
+    if:
+      type: string
+      regex: "on_press\\s*="
+
+  - id: on-release-eq
+    desc: on_release= parameter
+    crit: notable
+    conf: 0.5
+    if:
+      type: string
+      regex: "on_release\\s*="
+
+  # pynput-keyboard removed - use objectives/collection/monitor/watch::pynput-keyboard
+
+  # HookKeyboard method call
+  - id: python-hook-keyboard
+    desc: "Keyboard hook registration"
+    conf: 0.9
+    if:
+      type: string
+      substr: ".HookKeyboard()"
+
+  # KeyDown event handler
+  - id: python-keydown-handler
+    desc: "KeyDown event handler registration"
+    conf: 0.85
+    if:
+      type: string
+      regex: "\\.KeyDown\\s*="
+
+  # === File write atomic indicators ===
+  - id: file-open-append
+    desc: File open for appending
+    crit: notable
+    conf: 0.5
+    if:
+      type: string
+      regex: "open\\([^)]{1,120}[\"']a[\"']"
+
+  - id: file-open-write
+    desc: File open for writing
+    crit: notable
+    conf: 0.5
+    if:
+      type: string
+      regex: "open\\([^)]{1,120}[\"']w[\"']"
+
+  - id: dot-write-1
+    desc: .write() call (file handle)
+    crit: notable
+    conf: 0.4
+    if:
+      type: string
+      regex: "(file|f|handle)\\.write\\("
+
+  - id: dot-write-2
+    desc: .write() call (standard output)
+    crit: notable
+    conf: 0.4
+    if:
+      type: string
+      regex: "(log|stream|out)\\.write\\("
+
+  - id: keydown-keyword
+    desc: KeyDown keyword
+    crit: notable
+    conf: 0.5
+    if:
+      type: string
+      substr: "KeyDown"
+
+  - id: on-press-keyword
+    desc: on_press keyword
+    crit: notable
+    conf: 0.5
+    if:
+      type: string
+      substr: "on_press"
+
+  - id: on-release-keyword
+    desc: on_release keyword
+    crit: notable
+    conf: 0.5
+    if:
+      type: string
+      substr: "on_release"
+
+composite_rules:
+  # pyHook composite
+  - id: python-pyhook
+    desc: "Windows keyboard hooking (pyHook)"
+    conf: 0.85
+    platforms: [windows]
+    any:
+      - id: import-pyhook
+      - id: from-pyhook
+      - id: pyhook-hookmanager
+
+  # pyWinhook composite
+  - id: python-pywinhook
+    desc: "Windows keyboard hooking (pyWinhook)"
+    conf: 0.85
+    platforms: [windows]
+    any:
+      - id: import-pywinhook
+      - id: from-pywinhook
+      - id: pywinhook-hookmanager
+
+  # keyboard module composite
+  - id: python-keyboard
+    desc: "Cross-platform keyboard capture (keyboard module)"
+    conf: 0.8
+    any:
+      - id: import-keyboard
+      - id: keyboard-on-press
+      - id: keyboard-hook
+      - id: keyboard-record
+
+  # pynput listener composite
+  - id: python-pynput-listener
+    desc: "Keyboard listener via pynput"
+    conf: 0.8
+    any:
+      - id: keyboard-listener
+      - id: on-press-eq
+      - id: on-release-eq
+
+  # Keylogger library imports composite
+  - id: python-keylogger-import
+    desc: "Import of keylogging library"
+    crit: notable
+    conf: 0.8
+    any:
+      - id: import-pyhook
+      - id: import-pywinhook
+      - id: import-keyboard
+      - id: objectives/collection/monitor/watch::pynput-keyboard
+
+  # File open for write/append composite
+  - id: python-file-open-write
+    desc: "File open for writing or"
+    crit: notable
+    conf: 0.7
+    any:
+      - id: file-open-append
+      - id: file-open-write
+
+  # Write or key handler composite
+  - id: python-write-or-key-handler
+    desc: "Write call or key event handler"
+    crit: notable
+    conf: 0.7
+    needs: 2
+    any:
+      - id: dot-write-1
+      - id: dot-write-2
+      - id: keydown-keyword
+      - id: on-press-keyword
+
+  # Keyboard hook setup composite
+  - id: python-keyboard-hook-setup
+    desc: "Keyboard hook setup method"
+    crit: notable
+    conf: 0.85
+    any:
+      - id: python-hook-keyboard
+      - id: keyboard-listener
+      - id: keyboard-hook
+
+  # Network exfil composite
+  - id: python-network-exfil
+    desc: "Network library for potential exfiltration"
+    crit: notable
+    conf: 0.7
+    any:
+      - id: micro-behaviors/communications/http/request::request
+      - id: micro-behaviors/communications/http/request::request-python
+      - id: micro-behaviors/communications/http/request::socket-dot
+
+  # Key event handlers composite
+  - id: python-key-event-handlers
+    desc: "Key event handler callbacks"
+    crit: notable
+    conf: 0.8
+    any:
+      - id: keydown-keyword
+      - id: on-press-keyword
+      - id: on-release-keyword
+
+  # Full keylogger pattern: hook + log to file
+  - id: python-keylogger-file
+    desc: "Keylogger writing to file"
+    conf: 0.95
+    crit: hostile
+    attack: "T1056.001"
+    mbc: "B0015"
+    for: [python]
+    all:
+      - id: python-keylogger-import
+      - id: python-file-open-write
+      - id: python-write-or-key-handler
+
+  # Windows keyboard hook with exfiltration
+  - id: python-keylogger-exfil
+    desc: "Keylogger with network exfiltration"
+    conf: 0.95
+    crit: hostile
+    attack: "T1056.001"
+    mbc: "B0015"
+    for: [python]
+    all:
+      - id: python-keyboard-hook-setup
+      - id: python-network-exfil
+      - id: python-key-event-handlers

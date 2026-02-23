@@ -1,0 +1,22 @@
+traits:
+- id: rundll32-obfuscated-env-var
+  desc: Obfuscated Rundll32 with environment variables
+  crit: suspicious
+  conf: 0.9
+  for:
+  - batch
+  - shell
+  if:
+    type: raw
+    regex: (?i)Ru(%[0-9]|%[^%]{1,120}%)32
+- id: rundll32-obfuscated-split
+  desc: Obfuscated Rundll32 split strings
+  crit: suspicious
+  conf: 0.8
+  for:
+  - batch
+  - shell
+  if:
+    type: raw
+    regex: (?i)r.{0,20}u.{0,20}n.{0,20}d.{0,20}l.{0,20}l32
+composite_rules: []

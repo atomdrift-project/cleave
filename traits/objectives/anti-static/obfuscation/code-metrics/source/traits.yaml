@@ -1,0 +1,68 @@
+# Code Metrics Detection
+# Detects code patterns via statistical analysis
+# ATT&CK: T1027 (Obfuscated Files or Information)
+
+defaults:
+  crit: notable
+  attack: "T1027"
+  mbc: "B0032"
+
+traits:
+  # === Identifier Obfuscation ===
+
+  - id: high-entropy-identifiers
+    desc: High entropy identifiers (random variable names)
+    conf: 0.85
+    for:
+      [
+        python,
+        javascript,
+        typescript,
+        php,
+        ruby,
+        perl,
+        go,
+        rust,
+        java,
+        lua,
+        csharp,
+        powershell,
+      ]
+    if:
+      type: metrics
+      field: identifiers.avg_entropy
+      min: 3.0
+      min_size: 2048
+    unless:
+      # Long identifiers are descriptive (e.g. CamelCase error constants), not obfuscated
+      - type: metrics
+        field: identifiers.avg_length
+        min: 20
+
+  # === String Obfuscation ===
+
+  - id: high-entropy-strings
+    desc: High entropy strings (encoded/encrypted data)
+    crit: notable
+    conf: 0.8
+    size_max: 50000
+    for:
+      [
+        python,
+        javascript,
+        typescript,
+        shell,
+        php,
+        ruby,
+        perl,
+        rust,
+        java,
+        lua,
+        csharp,
+        powershell,
+      ]
+    if:
+      type: metrics
+      field: strings.avg_entropy
+      min: 4.0
+      min_size: 2048

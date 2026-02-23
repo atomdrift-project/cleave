@@ -1,0 +1,68 @@
+# Database Connection - REDIS
+
+defaults:
+  for: [all]
+
+traits:
+  # === Redis micro-behaviors ===
+  - id: redis-url
+    desc: redis:// URL scheme
+    crit: notable
+    conf: 0.9
+    if:
+      type: string
+      substr: "redis://"
+
+  - id: rediss-url
+    desc: rediss:// URL scheme
+    crit: notable
+    conf: 0.9
+    if:
+      type: string
+      substr: "rediss://"
+
+  - id: go-redis
+    desc: go-redis driver
+    crit: notable
+    conf: 0.9
+    if:
+      type: string
+      substr: "go-redis"
+
+  - id: redis-py
+    desc: redis-py driver
+    crit: notable
+    conf: 0.9
+    if:
+      type: string
+      substr: "redis-py"
+
+  - id: hiredis
+    desc: hiredis library
+    crit: notable
+    conf: 0.9
+    if:
+      type: string
+      substr: "hiredis"
+
+  - id: ioredis
+    desc: ioredis driver
+    crit: notable
+    conf: 1.0
+    if:
+      type: string
+      substr: "ioredis"
+
+composite_rules:
+  # Redis composite (migrated from YARA)
+  - id: redis
+    desc: Redis database connectivity
+    crit: notable
+    conf: 0.9
+    any:
+      - id: redis-url
+      - id: rediss-url
+      - id: go-redis
+      - id: redis-py
+      - id: hiredis
+      - id: ioredis

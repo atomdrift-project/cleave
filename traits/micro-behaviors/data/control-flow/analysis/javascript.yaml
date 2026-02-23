@@ -1,0 +1,44 @@
+defaults:
+  for: [all]
+
+traits:
+  - id: js-try-catch-error-method-call
+    desc: Calls a method on a property of
+    crit: notable
+    conf: 0.8
+    if:
+      type: ast
+      language: javascript
+      # Matches: catch(e) { ... e[prop][method](); } or e.prop.method()
+      query: |
+        (catch_clause
+          parameter: (identifier) @err_param
+          body: (statement_block
+            (expression_statement
+              (assignment_expression
+                right: (call_expression
+                  function: (member_expression
+                    object: (member_expression
+                      object: (identifier) @err_use
+                    )
+                  )
+                )
+              )
+            )
+          )
+        )
+        (#eq? @err_param @err_use)
+
+  - id: js-dynamic-method-call
+    desc: Calls a method on an object using
+    crit: notable
+    conf: 0.7
+    if:
+      type: ast
+      language: javascript
+      query: |
+        (call_expression
+          function: (subscript_expression
+            index: (identifier)
+          ) @computed
+        )

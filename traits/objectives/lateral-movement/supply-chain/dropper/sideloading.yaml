@@ -1,0 +1,51 @@
+defaults:
+  for:
+  - all
+traits:
+- id: sideloading-host-bugreport
+  desc: Common side-loading host binary (BugReport.exe)
+  crit: notable
+  conf: 0.8
+  if:
+    type: basename
+    exact: BugReport.exe
+- id: sideloading-host-generic-1
+  desc: Potential side-loading host (BugReport/CrashReport/Update)
+  crit: notable
+  conf: 0.6
+  if:
+    type: basename
+    regex: (?i)^(BugReport|CrashReport|Update)\.exe$
+- id: sideloading-host-generic-2
+  desc: Potential side-loading host (Setup/OneDriveStandaloneUpdater)
+  crit: notable
+  conf: 0.6
+  if:
+    type: basename
+    regex: (?i)^(Setup|OneDriveStandaloneUpdater)\.exe$
+composite_rules:
+- id: sideloading-host-generic
+  desc: Potential side-loading host binary name
+  crit: notable
+  conf: 0.6
+  any:
+    - id: sideloading-host-generic-1
+    - id: sideloading-host-generic-2
+- id: minimalist-hostile-dll
+  desc: Hostile DLL with minimal imports and high entropy
+  crit: suspicious
+  conf: 0.8
+  all:
+  - id: metadata/format::few-functions
+  - id: objectives/anti-analysis/packing/entropy::high-entropy-section
+  - id: micro-behaviors/dylib/lookup::get-proc-address
+  unless:
+  - id: metadata/sign/certificate::verified
+  - id: file/archive/self-extracting
+- id: suspicious-sideloading-host
+  desc: Suspicious side-loading host with minimal logic
+  crit: suspicious
+  conf: 0.8
+  all:
+  - id: sideloading-host-generic
+  - id: objectives/anti-analysis/vm/detect::sparse-logic-density

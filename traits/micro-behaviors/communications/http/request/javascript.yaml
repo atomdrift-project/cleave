@@ -1,0 +1,437 @@
+# HTTP Request Operations - JavaScript
+# MBC: C0002 (HTTP Communication)
+# ATT&CK: T1071.001
+
+defaults:
+  attack: "T1071.001"
+  mbc: "C0002"
+
+traits:
+  # === Import/require patterns ===
+  - id: axios
+    desc: axios library reference
+    crit: notable
+    conf: 0.6
+    for: [javascript, typescript]
+    if:
+      type: string
+      substr: "axios"
+
+  - id: axios-import-default
+    desc: axios default import
+    crit: baseline
+    conf: 0.7
+    for: [javascript, typescript]
+    if:
+      type: string
+      regex: "import\\s+axios\\s+from\\s+['\"]axios['\"]"
+
+  - id: axios-import-named
+    desc: axios named import
+    crit: baseline
+    conf: 0.7
+    for: [javascript, typescript]
+    if:
+      type: string
+      regex: "import\\s+\\{[^}]{0,220}axios[^}]{0,220}\\}\\s+from\\s+['\"]axios['\"]"
+
+  - id: axios-require
+    desc: axios require statement
+    crit: baseline
+    conf: 0.7
+    for: [javascript, typescript]
+    if:
+      type: string
+      regex: "require\\(['\"]axios['\"]\\)"
+
+  # === AST-based method call detection ===
+  - id: axios-get-call
+    desc: axios.get() HTTP GET request
+    crit: baseline
+    conf: 0.8
+    for: [javascript, typescript]
+    if:
+      type: ast
+      kind: call
+      exact: "axios.get"
+
+  - id: axios-post-call
+    desc: axios.post() HTTP POST request
+    crit: baseline
+    conf: 0.8
+    for: [javascript, typescript]
+    if:
+      type: ast
+      kind: call
+      exact: "axios.post"
+
+  - id: axios-put-call
+    desc: axios.put() HTTP PUT request
+    crit: baseline
+    conf: 0.8
+    for: [javascript, typescript]
+    if:
+      type: ast
+      kind: call
+      exact: "axios.put"
+
+  - id: axios-delete-call
+    desc: axios.delete() HTTP DELETE request
+    crit: baseline
+    conf: 0.8
+    for: [javascript, typescript]
+    if:
+      type: ast
+      kind: call
+      exact: "axios.delete"
+
+  - id: axios-patch-call
+    desc: axios.patch() HTTP PATCH request
+    crit: baseline
+    conf: 0.8
+    for: [javascript, typescript]
+    if:
+      type: ast
+      kind: call
+      exact: "axios.patch"
+
+  - id: axios-head-call
+    desc: axios.head() HTTP HEAD request
+    crit: baseline
+    conf: 0.8
+    for: [javascript, typescript]
+    if:
+      type: ast
+      kind: call
+      exact: "axios.head"
+
+  - id: axios-options-call
+    desc: axios.options() HTTP OPTIONS request
+    crit: baseline
+    conf: 0.8
+    for: [javascript, typescript]
+    if:
+      type: ast
+      kind: call
+      exact: "axios.options"
+
+  - id: axios-request-call
+    desc: axios.request() generic HTTP request
+    crit: baseline
+    conf: 0.8
+    for: [javascript, typescript]
+    if:
+      type: ast
+      kind: call
+      exact: "axios.request"
+
+  - id: axios-direct-call
+    desc: axios() direct call
+    crit: baseline
+    conf: 0.75
+    for: [javascript, typescript]
+    if:
+      type: ast
+      kind: call
+      exact: "axios"
+
+  # === Node.js built-in modules ===
+  - id: http-request
+    desc: Node.js http.request
+    crit: baseline
+    conf: 0.7
+    for: [javascript, typescript]
+    if:
+      type: string
+      substr: "http.request"
+
+  - id: https-request
+    desc: Node.js https.request
+    crit: baseline
+    conf: 0.7
+    for: [javascript, typescript]
+    if:
+      type: string
+      substr: "https.request"
+
+  - id: http-get
+    desc: Node.js http.get
+    crit: baseline
+    conf: 0.7
+    for: [javascript, typescript]
+    if:
+      type: string
+      substr: "http.get"
+
+  - id: https-get
+    desc: Node.js https.get
+    crit: baseline
+    conf: 0.7
+    for: [javascript, typescript]
+    if:
+      type: string
+      substr: "https.get"
+
+  - id: node-https-get-dynamic
+    desc: Node.js https.get dynamic call
+    crit: baseline
+    conf: 0.75
+    for: [javascript, typescript]
+    if:
+      type: raw
+      regex: '["'']https["'']\)\s*\.get'
+
+  - id: node-http-get-dynamic
+    desc: Node.js http.get dynamic call
+    crit: baseline
+    conf: 0.75
+    for: [javascript, typescript]
+    if:
+      type: raw
+      regex: '["'']http["'']\)\s*\.get'
+
+  # === Browser/Universal APIs ===
+  - id: js-fetch-call
+    desc: fetch() API call (JavaScript)
+    crit: baseline
+    conf: 0.8
+    for: [javascript, typescript]
+    if:
+      type: ast
+      kind: call
+      exact: "fetch"
+
+  - id: fetch-string
+    desc: fetch( string reference
+    crit: baseline
+    conf: 0.7
+    for: [javascript, typescript]
+    if:
+      type: string
+      substr: "fetch("
+
+  - id: xmlhttprequest-new
+    desc: new XMLHttpRequest()
+    crit: baseline
+    conf: 0.75
+    for: [javascript, typescript]
+    if:
+      type: string
+      substr: "new XMLHttpRequest()"
+
+  - id: node-fetch-import
+    desc: node-fetch import
+    crit: baseline
+    conf: 0.7
+    for: [javascript, typescript]
+    if:
+      type: string
+      regex: '(import|require).{0,50}[''"]node-fetch[''"]'
+
+  - id: got-import
+    desc: got HTTP client import
+    crit: baseline
+    conf: 0.7
+    for: [javascript, typescript]
+    if:
+      type: string
+      regex: '(import|require).{0,50}[''"]got[''"]'
+
+  - id: superagent-import
+    desc: superagent HTTP client import
+    crit: baseline
+    conf: 0.7
+    for: [javascript, typescript]
+    if:
+      type: string
+      regex: '(import|require).{0,50}[''"]superagent[''"]'
+
+  - id: needle-import
+    desc: needle HTTP client import
+    crit: baseline
+    conf: 0.7
+    for: [javascript, typescript]
+    if:
+      type: string
+      regex: '(import|require).{0,50}[''"]needle[''"]'
+
+  - id: request-import
+    desc: request HTTP client import
+    crit: baseline
+    conf: 0.7
+    for: [javascript, typescript]
+    if:
+      type: string
+      regex: '(import|require).{0,50}[''"]request[''"]'
+
+  # === HTTP configuration patterns ===
+  - id: post-method-string
+    desc: POST method string literal
+    crit: baseline
+    conf: 0.65
+    for: [javascript, typescript]
+    if:
+      type: string
+      regex: '[''"]POST[''"]'
+
+  - id: method-field
+    desc: method field in HTTP config
+    crit: baseline
+    conf: 0.6
+    for: [javascript, typescript]
+    if:
+      type: string
+      substr: "method:"
+
+  - id: application-json
+    desc: application/json content type
+    crit: baseline
+    conf: 0.65
+    for: [javascript, typescript]
+    if:
+      type: string
+      substr: "application/json"
+
+  - id: get-with-params
+    desc: HTTP GET with query parameters
+    crit: notable
+    conf: 0.8
+    for: [javascript, typescript]
+    if:
+      type: string
+      regex: "path:\\s*[`\"'][^`\"']{0,220}\\$\\{"
+
+  - id: axios-with-data
+    desc: axios request with data payload
+    crit: notable
+    conf: 0.75
+    for: [javascript, typescript]
+    if:
+      type: string
+      regex: "axios\\(\\{[^}]{0,260}data:"
+
+  - id: fetch-post-pattern
+    desc: fetch API with POST method
+    crit: notable
+    conf: 0.8
+    for: [javascript, typescript]
+    if:
+      type: string
+      regex: "fetch\\(.{1,260}\\{[^}]{0,260}method:\\s*['\"]POST['\"]"
+
+  - id: req-write
+    desc: Write data to HTTP request stream
+    crit: notable
+    conf: 0.8
+    for: [javascript, typescript]
+    if:
+      type: string
+      regex: "req\\.write\\("
+
+  - id: request-timeout
+    desc: HTTP request with timeout
+    crit: baseline
+    conf: 0.6
+    for: [javascript, typescript]
+    if:
+      type: string
+      regex: "\\.setTimeout\\(\\d+,"
+
+  - id: silent-error-handler
+    desc: Empty error handler (silences failures)
+    crit: notable
+    conf: 0.7
+    for: [javascript, typescript]
+    if:
+      type: string
+      regex: "\\.on\\(['\"]error['\"],\\s*\\(\\)\\s*=>\\s*\\{\\s*\\}\\)"
+
+composite_rules:
+  # Helper composites
+  - id: axios-import-or-require
+    desc: axios library import or require
+    crit: notable
+    for: [javascript, typescript]
+    any:
+      - { id: axios-import-default }
+      - { id: axios-import-named }
+      - { id: axios-require }
+
+  - id: axios-method-calls
+    desc: axios HTTP method calls
+    crit: notable
+    for: [javascript, typescript]
+    any:
+      - { id: axios-get-call }
+      - { id: axios-post-call }
+      - { id: axios-put-call }
+      - { id: axios-delete-call }
+      - { id: axios-patch-call }
+      - { id: axios-head-call }
+      - { id: axios-options-call }
+      - { id: axios-request-call }
+      - { id: axios-direct-call }
+
+  # Main composites
+  - id: request-axios
+    desc: HTTP requests via axios
+    crit: notable
+    conf: 0.75
+    for: [javascript, typescript]
+    any:
+      - { id: axios-import-or-require }
+      - { id: axios-method-calls }
+
+  - id: node-http
+    desc: Node.js built-in http/https module usage
+    crit: baseline
+    conf: 0.7
+    for: [javascript, typescript]
+    any:
+      - { id: http-request }
+      - { id: https-request }
+      - { id: http-get }
+      - { id: https-get }
+      - { id: node-http-get-dynamic }
+      - { id: node-https-get-dynamic }
+
+  - id: http-client-usage
+    desc: HTTP client library usage
+    crit: notable
+    conf: 0.7
+    for: [javascript, typescript]
+    any:
+      - { id: request-axios }
+      - { id: node-http }
+      - { id: js-fetch-call }
+      - { id: fetch-string }
+      - { id: xmlhttprequest-new }
+      - { id: node-fetch-import }
+      - { id: got-import }
+      - { id: superagent-import }
+      - { id: needle-import }
+      - { id: request-import }
+
+  - id: http-post-json
+    desc: HTTP POST request with JSON content
+    crit: notable
+    conf: 0.75
+    for: [javascript, typescript]
+    all:
+      - { id: method-field }
+      - { id: post-method-string }
+      - { id: application-json }
+
+  - id: http-method-calls
+    desc: HTTP request method calls
+    crit: notable
+    conf: 0.7
+    for: [javascript, typescript]
+    any:
+      - { id: axios-post-call }
+      - { id: https-request }
+      - { id: http-request }
+      - { id: fetch-string }
+      - { id: axios-with-data }
+      - { id: fetch-post-pattern }
+      - { id: get-with-params }

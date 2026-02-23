@@ -1,0 +1,156 @@
+defaults:
+  for:
+  - shell
+  crit: notable
+  attack: T1059.004
+traits:
+- id: cp-to-bin
+  desc: Copy file to /bin directory
+  crit: suspicious
+  conf: 0.85
+  mbc: B0024
+  attack: T1574.010
+  if:
+    type: raw
+    regex: cp\s+.{1,200}\s+/bin/[a-zA-Z0-9_.-]{1,80}
+  unless:
+  - id: micro-behaviors/process/create/shell::make-invocation
+  - id: micro-behaviors/dylib/library::cmake-build-ref
+- id: cp-to-sbin
+  desc: Copy file to /sbin directory
+  crit: suspicious
+  conf: 0.85
+  mbc: B0024
+  attack: T1574.010
+  if:
+    type: raw
+    regex: cp\s+.{1,200}\s+/sbin/[a-zA-Z0-9_.-]{1,80}
+  unless:
+  - id: micro-behaviors/process/create/shell::make-invocation
+  - id: micro-behaviors/dylib/library::cmake-build-ref
+- id: cp-to-usr-bin-1
+  desc: Copy file to /usr/bin or /usr/sbin
+  crit: suspicious
+  conf: 0.85
+  mbc: B0024
+  attack: T1574.010
+  if:
+    type: raw
+    regex: cp\s+.{1,240}\s+/usr/s?bin/[a-zA-Z0-9_.-]{1,80}
+- id: cp-to-usr-bin-2
+  desc: Copy file to /usr/local/bin or /usr/local/sbin
+  crit: suspicious
+  conf: 0.85
+  mbc: B0024
+  attack: T1574.010
+  if:
+    type: raw
+    regex: cp\s+.{1,240}\s+/usr/local/s?bin/[a-zA-Z0-9_.-]{1,80}
+- id: cp-force-flag
+  desc: Copy with force overwrite
+  crit: notable
+  conf: 0.5
+  if:
+    type: raw
+    regex: cp\s+(-[a-z]*f|-f\s)
+- id: exec-system-bin-start
+  desc: Execute binary from /bin or /sbin
+  crit: notable
+  conf: 0.7
+  attack: T1059.004
+  if:
+    type: raw
+    regex: ^\s*/s?bin/[a-z0-9_-]{3,}([\s>$&;]|$)
+  unless:
+  - id: micro-behaviors/process/create/shell::bin-sh-source
+  - id: micro-behaviors/process/create/shell::bin-sh-interactive
+- id: exec-system-bin-chain
+  desc: Execute binary from /bin or /sbin (chained)
+  crit: notable
+  conf: 0.7
+  attack: T1059.004
+  if:
+    type: raw
+    regex: (&&|\|\||;)\s*/s?bin/[a-z0-9_-]{3,}([\s>$&;]|$)
+- id: rm-bin-path
+  desc: Delete file in /bin directory
+  crit: suspicious
+  conf: 0.75
+  mbc: F0007
+  attack: T1070.004
+  if:
+    type: raw
+    regex: rm\s+(-[a-z]{1,8}\s+){0,3}(--\s+)?/bin/[a-zA-Z0-9_.-]{1,80}
+- id: rm-sbin-path
+  desc: Delete file in /sbin directory
+  crit: suspicious
+  conf: 0.75
+  mbc: F0007
+  attack: T1070.004
+  if:
+    type: raw
+    regex: rm\s+(-[a-z]{1,8}\s+){0,3}(--\s+)?/sbin/[a-zA-Z0-9_.-]{1,80}
+- id: cp-and-rm-chain
+  desc: Copy then remove chain
+  crit: notable
+  conf: 0.85
+  mbc: B0024
+  attack: T1059.004
+  if:
+    type: raw
+    regex: cp\s+.{1,220}&&.{0,512}rm\s+
+- id: rm-after-exec
+  desc: Delete file following execution
+  crit: suspicious
+  conf: 0.8
+  mbc: F0007
+  attack: T1070.004
+  if:
+    type: raw
+    regex: '&&\s*rm\s+(-[a-z]{1,8}\s+){0,3}/(usr/(local/)?s?bin|s?bin)/'
+- id: exec-and-rm-chain
+  desc: Execute then remove chain
+  crit: notable
+  conf: 0.85
+  mbc: F0007
+  attack: T1070.004
+  if:
+    type: raw
+    regex: /(usr/(local/)?s?bin|s?bin)/[a-zA-Z0-9_.-]{1,80}.{0,200}&&.{0,200}rm\s+
+composite_rules:
+- id: cp-to-usr-bin
+  desc: Copy file to /usr/bin directory
+  crit: suspicious
+  conf: 0.85
+  mbc: B0024
+  attack: T1574.010
+  any:
+  - id: cp-to-usr-bin-1
+  - id: cp-to-usr-bin-2
+- id: exec-system-bin
+  desc: Execute binary from /bin or /sbin
+  crit: notable
+  conf: 0.7
+  attack: T1059.004
+  any:
+  - id: exec-system-bin-start
+  - id: exec-system-bin-chain
+- id: copy-to-system-bin
+  desc: Copy file to system bin directory
+  crit: suspicious
+  conf: 0.9
+  mbc: B0024
+  attack: T1574.010
+  any:
+  - id: cp-to-bin
+  - id: cp-to-sbin
+  - id: cp-to-usr-bin
+- id: delete-from-system-bin
+  desc: Delete file from system bin directory
+  crit: suspicious
+  conf: 0.85
+  mbc: F0007
+  attack: T1070.004
+  any:
+  - id: rm-bin-path
+  - id: rm-sbin-path

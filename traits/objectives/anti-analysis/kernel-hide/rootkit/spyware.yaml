@@ -1,0 +1,22 @@
+# Rootkit Spyware Detection
+# Detects rootkits with integrated spyware capabilities
+# ATT&CK: T1014 (Rootkit), T1056.001 (Keylogging)
+
+composite_rules:
+  - id: rootkit-spyware
+    desc: Rootkit with keylogging capabilities
+    crit: hostile
+    conf: 0.95
+    attack: "T1014"
+    all:
+      - id: micro-behaviors/fs/device/ioctl::ioctl
+      - id: objectives/anti-analysis/kernel-hide/rootkit::rootkit-hiding-ops
+      - id: keylogging-ops
+
+  - id: keylogging-ops
+    desc: Keylogging operations
+    crit: notable
+    conf: 0.8
+    any:
+      - id: micro-behaviors/hardware/input/keyboard::keylogger-string
+      - id: micro-behaviors/hardware/input/keyboard::init-keylogger-sym

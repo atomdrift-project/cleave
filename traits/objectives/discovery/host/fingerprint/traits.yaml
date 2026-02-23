@@ -1,0 +1,32 @@
+# System Fingerprinting Composites
+# High-level patterns combining multiple fingerprinting techniques
+
+composite_rules:
+  # Full system fingerprinting
+  - id: full-system
+    desc: Comprehensive system fingerprinting
+    crit: notable
+    conf: 0.85
+    attack: "T1082"
+    needs: 3
+    any:
+      - id: objectives/discovery/host/fingerprint/machine-id::machine-id-collection
+      - id: objectives/discovery/host/fingerprint/hardware::cpu-info
+      - id: objectives/discovery/host/fingerprint/network::network-interfaces
+      - id: objectives/discovery/host/fingerprint/disk::fp-disk-serial
+      - id: objectives/discovery/host/fingerprint/os::os-info
+
+  # Compact binary with full system fingerprinting (more suspicious)
+  - id: full-system-compact
+    desc: Compact binary with comprehensive system fingerprinting
+    crit: suspicious
+    conf: 0.9
+    attack: "T1082"
+    size_max: 500000
+    needs: 3
+    any:
+      - id: objectives/discovery/host/fingerprint/machine-id::machine-id-collection
+      - id: objectives/discovery/host/fingerprint/hardware::cpu-info
+      - id: objectives/discovery/host/fingerprint/network::network-interfaces
+      - id: objectives/discovery/host/fingerprint/disk::fp-disk-serial
+      - id: objectives/discovery/host/fingerprint/os::os-info

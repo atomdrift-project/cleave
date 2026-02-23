@@ -1,0 +1,89 @@
+# Host Information Gathering
+# ATT&CK: T1082
+
+defaults:
+  for: [all]
+  attack: "T1082"
+
+traits:
+  # === System info label strings (common in malware) ===
+  - id: lanip-label
+    desc: "LanIP: label string"
+    crit: notable
+    conf: 0.7
+    if:
+      type: string
+      regex: "LanIP:"
+
+  - id: gateway-label
+    desc: "GateWay: label string"
+    crit: notable
+    conf: 0.7
+    if:
+      type: string
+      regex: "GateWay:"
+
+  - id: osinfo-label
+    desc: "OSInfo: label string"
+    crit: notable
+    conf: 0.7
+    if:
+      type: string
+      regex: "OSInfo:"
+
+  - id: machinename-label
+    desc: "MachineName: label string"
+    crit: notable
+    conf: 0.7
+    if:
+      type: string
+      regex: "MachineName:"
+
+  - id: domainname-label
+    desc: "DomainName: label string"
+    crit: notable
+    conf: 0.7
+    if:
+      type: string
+      regex: "DomainName:"
+
+  - id: userame-label-typo
+    desc: "Userame: label string (typo variant)"
+    crit: notable
+    conf: 0.75
+    if:
+      type: string
+      regex: "Userame:"
+
+  - id: osbits-label
+    desc: "OSBits: label string"
+    crit: notable
+    conf: 0.7
+    if:
+      type: string
+      regex: "OSBits:"
+
+  - id: processbits-label
+    desc: "Process Bits: label string"
+    crit: notable
+    conf: 0.7
+    if:
+      type: string
+      regex: "Process Bits:"
+
+composite_rules:
+  # Migrated from YARA - requires 3 of 8 patterns (at least 3)
+  - id: host_info_strings
+    desc: Detailed system information gathering strings
+    crit: suspicious
+    conf: 0.8
+    needs: 3
+    any:
+      - {id: lanip-label}
+      - {id: gateway-label}
+      - {id: osinfo-label}
+      - {id: machinename-label}
+      - {id: domainname-label}
+      - {id: userame-label-typo}
+      - {id: osbits-label}
+      - {id: processbits-label}

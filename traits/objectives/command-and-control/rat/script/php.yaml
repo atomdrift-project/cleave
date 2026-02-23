@@ -1,0 +1,217 @@
+defaults:
+  for:
+  - php
+traits:
+- id: bash-interactive
+  desc: Interactive bash shell spawn
+  crit: suspicious
+  conf: 0.9
+  attack: T1059.004
+  if:
+    type: string
+    regex: bash\s+-i
+- id: socket-to-proc-descriptor
+  desc: Socket used as process descriptor
+  crit: suspicious
+  conf: 0.95
+  attack: T1059.004
+  if:
+    type: string
+    regex: array\s*\(\s*\$socket\s*,\s*\$socket\s*,\s*\$socket\s*\)
+- id: kworker-masquerade
+  desc: Masquerade as kernel worker thread
+  crit: suspicious
+  conf: 0.95
+  mbc: F0004
+  attack: T1036.004
+  if:
+    type: string
+    regex: \[kworker/
+- id: while-true-loop
+  desc: Infinite loop (C2 beacon pattern)
+  crit: notable
+  conf: 0.5
+  if:
+    type: string
+    regex: while\s*\(\s*1\s*\)|while\s*\(\s*true\s*\)
+    case_insensitive: true
+- id: file-get-contents-url
+  desc: HTTP fetch content
+  crit: notable
+  conf: 0.7
+  if:
+    type: string
+    regex: file_get_contents\s*\([^)]{0,120}https?://
+- id: stream-socket-connect
+  desc: Stream socket client connection
+  crit: notable
+  conf: 0.8
+  if:
+    type: symbol
+    exact: stream_socket_client
+- id: com-wscript-shell
+  desc: WScript.Shell via PHP COM object
+  crit: suspicious
+  conf: 0.9
+  attack: T1059
+  platforms:
+  - windows
+  if:
+    type: string
+    exact: WScript.shell
+- id: tcp-socket-uri
+  desc: TCP socket URI with port
+  crit: notable
+  conf: 0.75
+  if:
+    type: string
+    regex: tcp://[a-zA-Z0-9.-]+:\d+
+- id: udp-socket-uri
+  desc: UDP socket URI with port
+  crit: notable
+  conf: 0.75
+  if:
+    type: string
+    regex: udp://[a-zA-Z0-9.-]+:\d+
+- id: localhost-socket-uri
+  desc: Localhost socket URI
+  crit: notable
+  conf: 1.0
+  if:
+    type: string
+    regex: tcp://(127\.0\.0\.1|localhost|0\.0\.0\.0)(:\d+)?
+- id: function-exists-exec-1
+  desc: Check for exec/system/shell_exec availability
+  crit: suspicious
+  conf: 0.85
+  attack: T1059
+  if:
+    type: string
+    regex: function_exists\(['"](exec|system|shell_exec)['"]\)
+- id: function-exists-exec-2
+  desc: Check for passthru/popen/proc_open availability
+  crit: suspicious
+  conf: 0.85
+  attack: T1059
+  if:
+    type: string
+    regex: function_exists\(['"](passthru|popen|proc_open)['"]\)
+composite_rules:
+- id: function-exists-exec
+  desc: Check for exec function availability
+  crit: suspicious
+  conf: 0.85
+  attack: T1059
+  any:
+  - id: function-exists-exec-1
+  - id: function-exists-exec-2
+- id: reverse-shell-socket
+  desc: PHP reverse shell via socket
+  crit: hostile
+  conf: 0.95
+  attack: T1059.004
+  mbc: B0033
+  for:
+  - php
+  all:
+  - id: stream-socket-connect
+  - id: micro-behaviors/process/create/shell::sh-interactive
+- id: rat-masquerading
+  desc: PHP RAT with process masquerading
+  crit: hostile
+  conf: 0.95
+  attack: T1219
+  mbc: B0022
+  for:
+  - php
+  all:
+  - id: micro-behaviors/process/control/signal::cli-set-process-title
+  - id: micro-behaviors/process/control/signal::posix-setsid
+  - id: stream-socket-connect
+- id: rat-remote-eval
+  desc: PHP RAT with remote code execution
+  crit: hostile
+  conf: 0.95
+  attack: T1219
+  mbc: B0022
+  for:
+  - php
+  all:
+  - id: objectives/anti-static/obfuscation/encoding
+  - id: stream-socket-connect
+  any:
+  - id: micro-behaviors/process/create/shell
+  - id: function-exists-exec
+  none:
+  - id: localhost-socket-uri
+  - id: metadata/purpose/test-tool::php-test-runner
+- id: rat-file-operations
+  desc: PHP RAT with file transfer capabilities
+  crit: suspicious
+  conf: 0.9
+  attack: T1219
+  for:
+  - php
+  all:
+  - id: stream-socket-connect
+  - id: micro-behaviors/fs/read/file
+  any:
+  - id: micro-behaviors/fs/write/file
+  - id: objectives/anti-static/obfuscation/encoding
+  none:
+  - id: localhost-socket-uri
+  - id: metadata/purpose/test-tool::php-test-runner
+- id: rat-full
+  desc: Full PHP RAT implementation
+  crit: hostile
+  conf: 0.98
+  attack: T1219
+  mbc: B0022
+  for:
+  - php
+  all:
+  - id: stream-socket-connect
+  - id: objectives/anti-static/obfuscation/encoding
+  - id: micro-behaviors/process/create/shell
+  any:
+  - id: kworker-masquerade
+  - id: micro-behaviors/process/control/signal::cli-set-process-title
+  - id: micro-behaviors/process/control/signal::posix-setsid
+- id: multi-method-exec
+  desc: Multi-method command execution fallback
+  crit: suspicious
+  conf: 0.9
+  attack: T1059
+  for:
+  - php
+  needs: 3
+  any:
+  - id: micro-behaviors/process/create/shell
+  - id: function-exists-exec
+  - id: socket-to-proc-descriptor
+- id: rat-com-shell
+  desc: PHP RAT with Windows COM shell
+  crit: hostile
+  conf: 0.95
+  attack: T1059
+  mbc: B0022
+  for:
+  - php
+  all:
+  - id: com-wscript-shell
+  - id: stream-socket-connect
+- id: rat-socket-c2
+  desc: PHP RAT with hardcoded C2 endpoints
+  crit: suspicious
+  conf: 0.9
+  attack: T1071
+  for:
+  - php
+  all:
+  - id: stream-socket-connect
+  any:
+  - id: tcp-socket-uri
+  - id: udp-socket-uri
+  none:
+  - id: localhost-socket-uri
+  - id: metadata/purpose/test-tool::php-test-runner

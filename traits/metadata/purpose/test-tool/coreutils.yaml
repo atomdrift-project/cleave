@@ -1,0 +1,28 @@
+defaults:
+  for: [all]
+
+traits:
+  - id: exercise-basenc
+    desc: "Exercise basenc comment"
+    crit: notable
+    if:
+      type: raw
+      substr: "Exercise basenc"
+
+  - id: coreutils-test-functions
+    desc: Coreutils test framework functions
+    crit: notable
+    for: [shell]
+    if:
+      type: symbol
+      regex: "^(framework_failure_|require_root_|require_selinux_|print_ver_)$"
+
+composite_rules:
+  - id: coreutils-test-script
+    desc: Coreutils test script
+    crit: notable
+    conf: 0.8
+    all:
+      - id: metadata/lang/shebang::perl
+      - id: metadata/vendor/fsf::fsf-copyright
+      - id: metadata/purpose/test-tool::exercise-basenc

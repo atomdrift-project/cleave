@@ -1,0 +1,84 @@
+# C++ Command Execution Detection
+# Detects C++ binaries using system()/popen() for command execution
+# Unusual pattern - C++ programs typically use native APIs or libraries
+# ATT&CK: T1059.004 (Command and Scripting Interpreter: Unix Shell)
+
+defaults:
+  attack: "T1059.004"
+  for: [elf, macho, pe]
+  platforms: [linux, macos, windows]
+
+traits:
+  # === C++ indicators ===
+  - id: cpp-stdlib
+    desc: "Uses C++ standard library"
+    crit: baseline
+    conf: 0.9
+    if:
+      type: symbol
+      regex: "std::__1::|std::basic_|std::allocator"
+
+  - id: cpp-iostream
+    desc: "Uses C++ iostream (cin/cout)"
+    crit: baseline
+    conf: 0.85
+    if:
+      type: symbol
+      regex: "std::__1::basic_(i|o)stream"
+
+  - id: cpp-string
+    desc: "Uses C++ std::string"
+    crit: baseline
+    conf: 0.85
+    if:
+      type: symbol
+      regex: "std::__1::basic_string.{0,50}char_traits"
+
+  - id: cpp-exception
+    desc: "Uses C++ exceptions"
+    crit: baseline
+    conf: 0.8
+    if:
+      type: symbol
+      regex: "__cxa_(throw|allocate_exception|begin_catch)"
+
+composite_rules:
+  # C++ with shell commands
+  # Note: This is common in build tools, compilers, and IDEs - downgraded from suspicious to notable
+  # Small binaries (<100KB) using this pattern are more suspicious (use cpp-with-system-compact)
+  - id: cpp-with-system
+    desc: "C++ program using system() for"
+    crit: notable
+    conf: 0.85
+    attack: "T1059.004"
+    all:
+      - id: cpp-stdlib
+    any:
+      - id: micro-behaviors/process/create/shell::system-fn
+      - id: micro-behaviors/process/create/shell::c-popen
+
+  # C++ with shell commands in compact binary (more suspicious)
+  - id: cpp-with-system-compact
+    desc: "Compact C++ binary using system() for command execution"
+    crit: suspicious
+    conf: 0.9
+    attack: "T1059.004"
+    size_max: 100000
+    all:
+      - id: cpp-stdlib
+    any:
+      - id: micro-behaviors/process/create/shell::system-fn
+      - id: micro-behaviors/process/create/shell::c-popen
+
+  # C++ with popen (command output capture)
+  - id: cpp-command-capture
+    desc: "C++ program capturing command output"
+    crit: notable
+    conf: 0.9
+    attack: "T1059.004"
+    all:
+      - id: cpp-string
+      - id: micro-behaviors/process/create/shell::c-popen
+    any:
+      - id: fgets-loop
+      - id: string-append

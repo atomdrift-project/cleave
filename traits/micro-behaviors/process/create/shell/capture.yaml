@@ -1,0 +1,19 @@
+composite_rules:
+  - id: capture-command-output
+    desc: "Executes shell command and captures"
+    crit: suspicious
+    conf: 0.9
+    all:
+      - id: micro-behaviors/process/create/shell::c-popen
+    any:
+      - id: micro-behaviors/process/create/direct::fgets-loop
+      - id: micro-behaviors/process/create/direct::cpp-exception
+    for: [macho, elf, pe]
+    none:
+      - id: metadata/signed/platform::apple
+    # Downgrade for system libraries and shell interpreters
+    downgrade:
+      any:
+        - id: micro-behaviors/dylib/library::system-lib-marker
+        - id: micro-behaviors/dylib/library::shell-interpreter
+        - id: micro-behaviors/dylib/library::debugger-tool-marker

@@ -1,0 +1,48 @@
+# Java Socket Operations - Network Communication
+# MBC: C0001 (Socket Communication)
+# ATT&CK: T1071 (Application Layer Protocol)
+
+traits:
+  - id: java-socket-create
+    desc: Java socket creation for network communication
+    crit: notable
+    conf: 0.8
+    mbc: "C0001"
+    attack: "T1071"
+    for: [java, class]
+    if:
+      type: string
+      substr: java.net.Socket
+
+  - id: java-serversocket-create
+    desc: Java server socket creation (listening)
+    crit: notable
+    conf: 0.8
+    mbc: "C0001"
+    attack: "T1071"
+    for: [java, class]
+    if:
+      type: string
+      substr: java.net.ServerSocket
+
+  - id: java-socket-connect
+    desc: Java socket connection to remote host
+    crit: notable
+    conf: 0.8
+    mbc: "C0001"
+    attack: "T1071"
+    for: [java, class]
+    if:
+      type: string
+      substr: .connect(
+
+  - id: java-datagramsocket-create
+    desc: Java UDP socket creation
+    crit: notable
+    conf: 0.8
+    mbc: "C0001"
+    attack: "T1071"
+    for: [java, class]
+    if:
+      type: string
+      substr: java.net.DatagramSocket

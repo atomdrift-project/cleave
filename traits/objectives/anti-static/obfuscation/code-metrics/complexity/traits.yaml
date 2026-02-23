@@ -1,0 +1,39 @@
+# Code Complexity Anomalies
+# ATT&CK: T1027 (Obfuscated Files or Information)
+
+defaults:
+  for: [python, javascript, typescript, shell, php, ruby, perl, go, rust, java, lua, csharp, powershell]
+  attack: "T1027"
+  mbc: "B0032"
+
+traits:
+  - id: monster-function
+    desc: "Extremely large function (>500 lines)"
+    crit: notable
+    conf: 0.8
+    if:
+      type: metrics
+      field: functions.over_500_lines
+      min: 1
+    unless:
+      - id: metadata/dev/testing::is-test
+
+  - id: many-large-functions
+    desc: "Multiple very large functions (>100"
+    crit: notable
+    conf: 0.7
+    if:
+      type: metrics
+      field: functions.over_100_lines
+      min: 5
+    unless:
+      - id: metadata/dev/testing::is-test
+
+  - id: many-params
+    desc: "Functions with excessive parameters (>7)"
+    crit: notable
+    conf: 0.65
+    if:
+      type: metrics
+      field: functions.many_params_count
+      min: 3

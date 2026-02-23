@@ -1,0 +1,16 @@
+# Downloaded Script Execution
+# Detects patterns where scripts are downloaded and executed
+# ATT&CK: T1059 (Command and Scripting Interpreter)
+
+traits:
+  - id: perl-execute
+    desc: Perl script execution
+    crit: notable
+    conf: 0.75
+    mbc: "C0059"
+    attack: "T1059.006"
+    for: [all]
+    if:
+      type: raw
+      regex: "perl\\s+.{1,120}\\.(pl|pm)|perl\\s+-e\\s+"
+

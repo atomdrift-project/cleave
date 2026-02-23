@@ -1,0 +1,16 @@
+# Suspicious Broken/Fragmented URL Schemes
+# Often used in string concatenation obfuscation
+# ATT&CK: T1027 (Obfuscated Files or Information)
+
+defaults:
+  for: [all]
+  crit: suspicious
+  conf: 0.8
+
+traits:
+  - id: fragmented-url-scheme
+    desc: Fragmented URL scheme string (e.g., "https:/")
+    if:
+      type: string
+      regex: ^(https?:/|ftp:/|sftp:/)$
+      case_insensitive: true

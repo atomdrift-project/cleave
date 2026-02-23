@@ -1,0 +1,31 @@
+# File Descriptor Operations
+# MBC: C0003 (File System)
+# ATT&CK: T1059 (Command and Scripting Interpreter)
+
+defaults:
+  for: [elf, macho, pe, so, dylib, c]
+
+traits:
+  - id: dup
+    desc: Duplicate file descriptor
+    crit: baseline
+    conf: 0.5
+    if:
+      type: symbol
+      exact: "dup"
+
+  - id: dup2
+    desc: Duplicate file descriptor (I/O redirection)
+    crit: baseline
+    conf: 0.5
+    if:
+      type: symbol
+      exact: "dup2"
+
+  - id: dup3
+    desc: Duplicate file descriptor (I/O redirection)
+    crit: baseline
+    conf: 0.5
+    if:
+      type: symbol
+      exact: "dup3"

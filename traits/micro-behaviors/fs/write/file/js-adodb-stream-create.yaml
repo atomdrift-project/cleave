@@ -1,0 +1,11 @@
+traits:
+- id: js-adodb-stream-create
+  desc: ADODB.Stream Object Creation (JS)
+  crit: suspicious
+  conf: 0.9
+  for:
+  - javascript
+  if:
+    type: string
+    regex: (WScript|this)\[.{0,80}\]\(.{0,80}\)
+composite_rules: []

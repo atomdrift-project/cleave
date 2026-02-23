@@ -1,0 +1,77 @@
+# Extended Attributes (xattr) - Shell command
+# MBC: E1222 (File Permission Modification)
+# ATT&CK: T1222
+
+defaults:
+  for: [all]
+
+traits:
+  - id: xattr-clear
+    desc: xattr -c (clear all extended
+    crit: notable
+    conf: 0.7
+    mbc: E1222
+    attack: T1222
+    if:
+      type: raw
+      regex: 'xattr\s+-c\b'
+
+  - id: xattr-delete
+    desc: xattr -d (delete specific attribute)
+    crit: notable
+    conf: 0.7
+    mbc: E1222
+    attack: T1222
+    if:
+      type: raw
+      regex: 'xattr\s+-d\b'
+
+  - id: xattr-write
+    desc: xattr -w (write attribute value)
+    crit: notable
+    conf: 0.7
+    mbc: E1222
+    attack: T1222
+    if:
+      type: raw
+      regex: 'xattr\s+-w\b'
+
+  - id: xattr-quarantine-remove-1
+    desc: xattr -d -r -s com.apple.quarantine
+    crit: baseline
+    conf: 1.0
+    if:
+      type: string
+      substr: "xattr -d -r -s com.apple.quarantine"
+
+  - id: xattr-quarantine-remove-2
+    desc: xattr -d -r com.apple.quarantine (legitimate
+    crit: baseline
+    conf: 1.0
+    if:
+      type: string
+      substr: "xattr -d -r com.apple.quarantine"
+
+composite_rules:
+  - id: xattr-patterns
+    desc: xattr command patterns (clear, delete,
+    crit: notable
+    conf: 0.7
+    mbc: E1222
+    attack: T1222
+    any:
+      - id: xattr-clear
+      - id: xattr-delete
+      - id: xattr-write
+
+  - id: xattr-command
+    desc: Modify extended filesystem attributes (excludes
+    crit: notable
+    conf: 0.66
+    mbc: E1222
+    attack: T1222
+    all:
+      - id: xattr-patterns
+    none:
+      - id: xattr-quarantine-remove-1
+      - id: xattr-quarantine-remove-2

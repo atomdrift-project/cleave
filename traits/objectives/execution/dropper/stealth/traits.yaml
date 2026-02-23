@@ -1,0 +1,39 @@
+# Stealth execution patterns (output hiding, process detachment)
+# MBC: F0003 (Process Detach), F0005 (Hide Output)
+# NOTE: os.setsid and preexec_fn= traits are defined in execution/command/setsid/traits.yaml
+
+traits:
+  - id: devnull
+    desc: "subprocess.DEVNULL to hide output"
+    crit: notable
+    conf: 0.75
+    mbc: "F0005"
+    for: [python]
+    if:
+      type: raw
+      substr: "subprocess.DEVNULL"
+
+  - id: close-fds
+    desc: "close_fds=True for file descriptor isolation"
+    crit: notable
+    conf: 0.7
+    for: [python]
+    if:
+      type: raw
+      substr: "close_fds=True"
+
+composite_rules:
+  - id: python
+    desc: "Process execution with output hiding"
+    conf: 0.92
+    crit: notable
+    mbc: "F0003"
+    attack: "T1036"
+    for: [python]
+    needs: 3
+    any:
+      - id: micro-behaviors/process/create/subprocess::popen-content
+      - id: devnull
+      - id: micro-behaviors/process/create/setsid::python
+      - id: close-fds
+      - id: micro-behaviors/process/create/setsid::preexec-fn

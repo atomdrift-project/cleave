@@ -1,0 +1,23 @@
+# Generic Proxy Features
+# ATT&CK: T1090 (Proxy)
+
+defaults:
+  for: [all]
+
+traits:
+  - id: proxy-func
+    desc: Proxy function reference (potential proxying
+    crit: notable
+    conf: 0.5
+    attack: "T1090"
+    if:
+      type: string
+      word: "ProxyFunc"
+
+  - id: armon-go-socks5
+    desc: Uses github.com/armon/go-socks5 library
+    crit: notable
+    conf: 0.9
+    if:
+      type: string
+      substr: "github.com/armon/go-socks5"

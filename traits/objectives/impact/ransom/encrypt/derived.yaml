@@ -1,0 +1,42 @@
+defaults:
+  crit: notable
+  conf: 1.0
+  for:
+  - all
+traits:
+- id: inline__data-loss-threat__any_1
+  desc: Derived string condition
+  if:
+    type: string
+    case_insensitive: true
+    regex: data (will be|is) lost
+- id: inline__data-loss-threat__any_2
+  desc: Derived string condition
+  if:
+    type: string
+    case_insensitive: true
+    regex: lost forever
+- id: inline__data-loss-threat__any_3
+  desc: Derived string condition
+  if:
+    type: string
+    case_insensitive: true
+    regex: cannot.{0,20}recover
+- id: inline__data-loss-threat__any_4
+  desc: Derived string condition
+  if:
+    type: string
+    case_insensitive: true
+    regex: unrecoverable.{0,30}(pay|ransom|decrypt|restore)
+- id: inline__data-loss-threat__unless_1_a
+  desc: Derived string condition (password/account/credential)
+  if:
+    type: string
+    regex: (password|account|credential).{0,80}cannot.{0,30}recover
+    case_insensitive: true
+- id: inline__data-loss-threat__unless_1_b
+  desc: Derived string condition (token/user)
+  if:
+    type: string
+    regex: (token|user).{0,80}cannot.{0,30}recover
+    case_insensitive: true

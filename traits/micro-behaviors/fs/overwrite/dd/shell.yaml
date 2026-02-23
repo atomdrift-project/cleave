@@ -1,0 +1,17 @@
+# Disk Overwrite via dd (potential wiper)
+# MBC: B0040 (Impact)
+# ATT&CK: T1561
+
+defaults:
+  for: [all]
+
+traits:
+  - id: dd-background
+    desc: dd command running in background
+    crit: suspicious
+    conf: 0.66
+    mbc: B0040
+    attack: T1561
+    if:
+      type: string
+      regex: 'dd if=[\/\w\.\-\" \=]{0,64} &[^&]'

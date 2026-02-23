@@ -1,0 +1,118 @@
+# String Obfuscation Detection - PHP
+# MBC: B0032 (Obfuscated Files or Information)
+# ATT&CK: T1027
+
+defaults:
+  for: [php]
+  mbc: "B0032"
+  attack: "T1027"
+
+traits:
+  - id: strings-chr-concat
+    desc: String obfuscation via chr() concatenation
+    crit: notable
+    conf: 0.66
+    if:
+      type: string
+      regex: "chr\\(\\d+\\)\\s*\\.\\s*chr\\(\\d+\\)"
+
+  # === Density-Based Obfuscation Detection ===
+  # PHP webshells and malware pack many obfuscation calls per KB.
+
+  - id: php-dense-chr-calls
+    desc: Dense chr() calls (string building)
+    crit: suspicious
+    conf: 0.90
+    if:
+      type: raw
+      regex: "chr\\s*\\(\\s*\\d"
+      count_min: 10
+      per_kb_min: 2.0
+
+  # pack/unpack used to hide strings
+  - id: dense-pack-calls
+    desc: Dense pack() calls (binary encoding)
+    crit: suspicious
+    conf: 0.88
+    if:
+      type: raw
+      regex: "pack\\s*\\("
+      count_min: 4
+      per_kb_min: 0.8
+
+  # base64_decode chains
+  - id: dense-base64-decode
+    desc: Dense base64_decode calls
+    crit: suspicious
+    conf: 0.90
+    if:
+      type: raw
+      regex: "base64_decode\\s*\\("
+      count_min: 3
+      per_kb_min: 0.5
+
+  # gzinflate/gzuncompress for decompressing payloads
+  - id: dense-gzip-decode
+    desc: Dense gzip decompression
+    crit: suspicious
+    conf: 0.88
+    if:
+      type: raw
+      regex: "(gzinflate|gzuncompress|gzdecode)\\s*\\("
+      count_min: 2
+      per_kb_min: 0.3
+
+  # str_rot13 for ROT13 obfuscation
+  - id: dense-rot13
+    desc: Dense str_rot13 calls
+    crit: suspicious
+    conf: 0.85
+    if:
+      type: raw
+      regex: "str_rot13\\s*\\("
+      count_min: 2
+      per_kb_min: 0.3
+
+  # Variable variables: $$var, $$$var
+  - id: dense-variable-variables
+    desc: Dense variable variables (indirection)
+    crit: suspicious
+    conf: 0.85
+    if:
+      type: raw
+      regex: "\\$\\$+[a-zA-Z_]"
+      count_min: 5
+      per_kb_min: 1.0
+
+  # eval/assert/create_function
+  - id: dense-eval-calls
+    desc: Dense eval/assert calls
+    crit: suspicious
+    conf: 0.92
+    if:
+      type: raw
+      regex: "(eval|assert|create_function)\\s*\\(\\s*\\$"
+      count_min: 3
+      per_kb_min: 0.5
+
+  # preg_replace with /e modifier (deprecated but still seen in webshells)
+  - id: preg-replace-eval
+    desc: preg_replace with /e modifier (code execution)
+    crit: suspicious
+    conf: 0.95
+    if:
+      type: raw
+      regex: 'preg_replace\s*\(\s*["\x27][^"\x27]{0,120}/e[^"\x27]{0,120}["\x27]'
+
+composite_rules:
+  # Multi-layer PHP obfuscation
+  - id: php-multi-layer-obfuscation
+    desc: Multi-layer PHP obfuscation
+    crit: suspicious
+    conf: 0.95
+    needs: 2
+    any:
+      - id: dense-base64-decode
+      - id: dense-gzip-decode
+      - id: dense-rot13
+      - id: dense-eval-calls

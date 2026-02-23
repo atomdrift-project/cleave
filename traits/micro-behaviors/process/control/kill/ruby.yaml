@@ -1,0 +1,12 @@
+# Process Control - Ruby
+
+traits:
+  - id: ruby-kill
+    desc: Kill process
+    crit: notable
+    conf: 0.90
+    platforms: [all]
+    for: [ruby]
+    if:
+      type: symbol
+      regex: "Process\\.kill"

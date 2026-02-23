@@ -1,0 +1,105 @@
+# VSCode Extension Manifest (VSIX) Traits
+# Detects metadata and properties in extension.vsixmanifest
+
+traits:
+  # === Identity atomic indicators ===
+  - id: identity-tag
+    desc: Identity XML tag
+    crit: notable
+    conf: 0.9
+    for: [all]
+    if:
+      type: raw
+      substr: "<Identity"
+
+  # === Suspicious link patterns ===
+  # Legitimate extensions have real GitHub repos, not stub links
+  # These patterns are VSIX-specific XML so won't match other files
+
+  - id: stub-github-link
+    desc: Stub GitHub link
+    crit: suspicious
+    conf: 0.9
+    for: [all]
+    if:
+      type: raw
+      # Matches Value="https://github.com" or Value="https://github.com/" without a real path
+      regex: 'Value\s*=\s*["'']https?://github\.com/?["'']'
+
+  # Multiple stub links indicate deliberate deception
+  - id: multiple-stub-links
+    desc: Multiple stub links
+    crit: suspicious
+    conf: 0.95
+    for: [all]
+    if:
+      type: raw
+      regex: 'Value\s*=\s*["'']https?://github\.com/?["'']'
+      count_min: 2
+
+  # Links section but no actual repository content
+  - id: links-source-stub
+    desc: Stub source link
+    crit: suspicious
+    conf: 0.85
+    for: [all]
+    if:
+      type: raw
+      regex: 'Links\.Source"[^>]{0,120}Value\s*=\s*"https?://github\.com/?["'']'
+
+  - id: links-github-stub
+    desc: Stub GitHub property
+    crit: suspicious
+    conf: 0.85
+    for: [all]
+    if:
+      type: raw
+      regex: 'Links\.GitHub"[^>]{0,120}Value\s*=\s*"https?://github\.com/?["'']'
+
+  # === Localization anomalies ===
+  - id: language-en-us
+    desc: Language set to en-US
+    crit: notable
+    conf: 0.9
+    for: [all]
+    if:
+      type: raw
+      regex: 'Language="en-US"'
+
+  - id: description-contains-chinese
+    desc: Description contains Chinese characters
+    crit: notable
+    conf: 0.9
+    for: [all]
+    if:
+      type: raw
+      # Match common Chinese character ranges (Unified, Ext A) inside Description tag
+      # Using bounded repetition to avoid performance issues
+      regex: '<Description[^>]{0,120}>.{0,100}[\u4e00-\u9fa5].{0,100}</Description>'
+
+composite_rules:
+  # Suspicious: stub links (impersonation indicator)
+  - id: suspicious-stub-links
+    desc: Extension with stub links
+    crit: suspicious
+    conf: 0.95
+    attack: "T1036.005"
+    mbc: "B0033"
+    for: [all]
+    any:
+      - id: stub-github-link
+      - id: multiple-stub-links
+      - id: links-source-stub
+      - id: links-github-stub
+
+  # Suspicious: Localization mismatch (en-US but Chinese description)
+  # Often seen in low-quality or copy-cat extensions
+  - id: suspicious-localization-mismatch
+    desc: Extension language mismatch (en-US with Chinese description)
+    crit: suspicious
+    conf: 0.8
+    attack: "T1036"
+    for: [all]
+    all:
+      - id: language-en-us
+      - id: description-contains-chinese

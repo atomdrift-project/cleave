@@ -1,0 +1,15 @@
+# Composite Command Execution Capabilities
+
+composite_rules:
+  - id: shell-execution
+    desc: Shell command execution capability detected
+    crit: notable
+    mbc: "E1059"
+    attack: "T1059"
+    conf: 0.9
+    any:
+      - id: system-fn
+      - id: c-popen
+      - id: python-os-system
+      - id: go-os-exec
+      - id: js-child-process

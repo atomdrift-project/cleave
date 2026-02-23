@@ -1,0 +1,36 @@
+# Error Handling Control Flow - Python
+# Detects Python exception handling and error suppression patterns
+# ATT&CK: T1027 (Obfuscated Files or Information)
+# MBC: C0027 (Error Handling)
+
+defaults:
+  for: [python]
+  attack: "T1027"
+  mbc: "C0027"
+
+traits:
+  - id: except-keyword
+    desc: except keyword
+    crit: baseline
+    conf: 0.5
+    if:
+      type: raw
+      regex: 'except\s+(ImportError|InvalidToken|Exception)'
+
+  - id: importerror-keyword
+    desc: ImportError exception
+    crit: baseline
+    conf: 0.6
+    if:
+      type: raw
+      word: "ImportError"
+
+  - id: silent-exception-pass
+    desc: Silent exception suppression via try-except-pass
+    crit: notable
+    conf: 0.85
+    if:
+      type: raw
+      # Match: try: ... except ...: pass
+      # (?s) allows . to match newlines. \s+ handles indentation.
+      regex: '(?s)try:.*?except.*?:\s+pass'

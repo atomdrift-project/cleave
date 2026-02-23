@@ -1,0 +1,22 @@
+# Unicode Obfuscation in JScript
+# Detects heavy use of Unicode escapes in identifiers and property access
+
+defaults:
+  crit: suspicious
+  conf: 0.9
+  for: [javascript]
+
+traits:
+  - id: js-unicode-escaped-identifiers
+    desc: "Unicode-escaped identifiers (variables/functions)"
+    if:
+      type: raw
+      # Matches var \uXXXX where \u is literal text in the source
+      regex: '(var|function)\s+\\\\u[0-9a-fA-F]{4}'
+
+  - id: js-activex-via-this-obfuscated
+    desc: "ActiveXObject accessed via 'this' with obfuscation"
+    if:
+      type: raw
+      # Matches this[{...:'\uXXXX'}. where \u is literal text in the source
+      regex: 'this\[\s*\{[^:]{1,120}:[''"]\\\\u[0-9a-fA-F]{4}[''"]\}\.'

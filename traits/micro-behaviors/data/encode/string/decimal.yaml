@@ -1,0 +1,11 @@
+traits:
+  - id: decimal-string-blob
+    desc: Long string of decimal digits
+    crit: notable
+    for: [javascript]
+    if:
+      type: string
+      regex: "^[0-9]{50,}$"
+    unless:
+      - id: metadata/dev/testing::node-common-require
+      - id: metadata/library/nodeunit::nodeunit

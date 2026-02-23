@@ -1,0 +1,21 @@
+# Python WScript.Shell Usage via COM
+# Detects usage of WScript.Shell object for scripting automation
+# ATT&CK: T1059.005 (Command and Scripting Interpreter: Visual Basic)
+
+defaults:
+  crit: suspicious
+  conf: 0.85
+  for: [python]
+  attack: "T1059.005"
+  mbc: "E1059"
+  platforms: [windows]
+
+traits:
+  - id: wscript-shell-python
+    desc: WScript.Shell object creation string
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: raw
+      # Matches: "WScript.Shell" or 'WScript.Shell' used in Dispatch/EnsureDispatch
+      regex: '["'']WScript\.Shell(\.[0-9]+)?["'']'

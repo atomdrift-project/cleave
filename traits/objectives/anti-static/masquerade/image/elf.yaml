@@ -1,0 +1,10 @@
+defaults:
+  crit: hostile
+  conf: 1.0
+
+composite_rules:
+  - id: elf-masquerading-as-image
+    desc: ELF executable masquerading as an image file
+    all:
+      - id: metadata/format/magic::elf-header
+      - id: micro-behaviors/fs/file/extension::image-extension

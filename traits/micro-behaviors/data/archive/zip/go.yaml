@@ -1,0 +1,21 @@
+# Go ZIP library operations
+defaults:
+  for: [all]
+
+traits:
+  - id: zip-writer
+    desc: "Go zip.NewWriter usage"
+    crit: notable
+    conf: 0.9
+    if:
+      type: string
+      substr: "archive/zip"
+
+  - id: zip-create
+    desc: "Go ZIP entry creation"
+    crit: notable
+    conf: 0.8
+    for: [go]
+    if:
+      type: string
+      substr: "z.Create"

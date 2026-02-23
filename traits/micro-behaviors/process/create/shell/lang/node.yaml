@@ -1,0 +1,80 @@
+# Node.js child_process Execution
+# Detects process execution and shell invocation patterns in Node.js
+# MBC: C0017 (Create Process)
+# ATT&CK: T1059 (Command and Scripting Interpreter)
+
+defaults:
+  for: [javascript, typescript]
+  attack: "T1059"
+
+traits:
+  # child_process module import
+  - id: child-process-require
+    desc: Node.js child_process module import
+    crit: notable
+    conf: 0.8
+    mbc: "C0017"
+    if:
+      type: string
+      substr: "child_process"
+
+  # Process execution functions
+  - id: exec-call
+    desc: exec() function call (Python/JavaScript)
+    crit: notable
+    conf: 0.85
+    mbc: "C0017"
+    for: [python, javascript, typescript]
+    if:
+      type: ast
+      kind: call
+      exact: "exec"
+
+  - id: spawn-call
+    desc: spawn() function call
+    crit: notable
+    conf: 0.7
+    if:
+      type: string
+      substr: "spawn("
+
+  - id: execSync-call
+    desc: Node.js synchronous exec
+    crit: notable
+    conf: 0.85
+    mbc: "C0017"
+    if:
+      type: ast
+      kind: call
+      exact: "child_process.execSync"
+
+  - id: getExecOutput
+    desc: Node.js exec output capture (GitHub Actions)
+    crit: notable
+    conf: 0.8
+    if:
+      type: ast
+      kind: call
+      exact: "getExecOutput"
+
+  # Silent execution
+  - id: silent-true
+    desc: Silent execution flag (hides output)
+    crit: notable
+    conf: 0.85
+    mbc: "F0005"
+    if:
+      type: string
+      regex: "silent:\\s*true"
+
+composite_rules:
+  - id: child-process-exec
+    desc: Node.js child_process execution
+    crit: notable
+    conf: 0.85
+    mbc: "C0017"
+    any:
+      - id: exec-call
+      - id: spawn-call
+      - id: execSync-call
+      - id: getExecOutput

@@ -1,0 +1,74 @@
+# Cipher-based Obfuscation Detection
+# Detects RC4, custom XOR ciphers, and table-based encoding in binaries
+# ATT&CK: T1027 (Obfuscated Files or Information)
+
+defaults:
+  for: [elf, pe, macho, dll, so, dylib]
+  attack: "T1027"
+
+traits:
+  # Migrated from YARA: RC4 S-box initialization pattern
+  - id: rc4-sbox-init
+    desc: "RC4 S-box initialization pattern (256-byte"
+    crit: notable
+    conf: 0.4
+    mbc: "C0027.001"
+    if:
+      type: hex
+      pattern: "00 01 02 03 04 05 06 07 08 09 0A 0B 0C 0D 0E 0F 10 11 12 13 14 15 16 17 18 19 1A 1B 1C 1D 1E 1F"
+
+  # NOTE: Changed pattern to avoid "ksa" matching "blocksampled" in Go runtime
+  - id: cipher-key-schedule
+    desc: "Cipher key schedule function"
+    crit: notable
+    conf: 0.7
+    mbc: "C0027"
+    if:
+      type: symbol
+      regex: "(rc4_ksa|key_schedule|expand_key)"
+
+  # NOTE: "arc4" matches arc4random which is a legitimate OS function
+  # Removed arc4 from pattern to avoid false positives
+  - id: stream-cipher-decrypt
+    desc: "Stream cipher decryption function"
+    crit: notable
+    conf: 0.6
+    mbc: "C0027"
+    if:
+      type: symbol
+      regex: "(stream_decrypt|prga|rc4_crypt|cipher_stream)"
+
+  # NOTE: Hex charset is extremely common in any binary - downgraded to baseline
+  - id: hardcoded-hex-charset
+    desc: "Hardcoded hex encoding charset (encoding/decoding)"
+    crit: notable
+    conf: 0.2
+    mbc: "C0026"
+    if:
+      type: string
+      substr: "0123456789abcdef"
+
+  # NOTE: Base64 charset is common in any binary that encodes data - downgraded to baseline
+  - id: hardcoded-base64-charset
+    desc: "Hardcoded Base64 charset"
+    crit: notable
+    conf: 0.2
+    mbc: "C0026"
+    if:
+      type: string
+      regex: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789\\+/"
+
+composite_rules:
+  # NOTE: Require 2+ indicators to avoid false positives from:
+  # - rc4-sbox-init: Sequential bytes 00-1F are common in lookup tables
+  # - Individual symbol patterns can match legitimately
+  - id: rc4-cipher
+    desc: "RC4 or RC4-like stream cipher"
+    crit: notable
+    conf: 0.7
+    mbc: "C0027.001"
+    any:
+      - id: objectives/anti-static/obfuscation/encoding::rc4-sbox-init
+      - id: objectives/anti-static/obfuscation/encoding::stream-cipher-decrypt
+      - id: objectives/anti-static/obfuscation/encoding::cipher-key-schedule
+    needs: 2

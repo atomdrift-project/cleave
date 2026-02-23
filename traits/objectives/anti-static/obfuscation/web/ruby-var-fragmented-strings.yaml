@@ -1,0 +1,9 @@
+traits:
+  - id: ruby-var-fragmented-strings
+    desc: Fragmented URL protocol variables (d="ht", aa="tps:/")
+    crit: suspicious
+    conf: 0.9
+    for: [ruby]
+    if:
+      type: raw
+      regex: '(d\s*=\s*"ht"|aa\s*=\s*"tps:/")'

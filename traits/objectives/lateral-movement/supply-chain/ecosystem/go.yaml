@@ -1,0 +1,81 @@
+# Go Supply Chain Attack Indicators
+# Metrics-based detection of supply chain attack patterns in Go code
+
+defaults:
+  for: [go]
+
+traits:
+  - id: many-init-functions
+    desc: Multiple init() functions (auto-execute on
+    crit: suspicious
+    conf: 0.85
+    attack: "T1195.001"
+    if:
+      type: metrics
+      field: go_metrics.init_function_count
+      min: 3
+
+  - id: blank-imports
+    desc: Uses blank imports for side
+    crit: notable
+    conf: 0.7
+    if:
+      type: metrics
+      field: go_metrics.blank_import_count
+      min: 1
+
+  - id: many-blank-imports
+    desc: Many blank imports (suspicious side-effect
+    crit: suspicious
+    conf: 0.85
+    if:
+      type: metrics
+      field: go_metrics.blank_import_count
+      min: 3
+
+  - id: cgo-usage
+    desc: Uses CGo for C interoperability
+    crit: notable
+    conf: 0.75
+    if:
+      type: metrics
+      field: go_metrics.cgo_usage
+      min: 1
+
+  - id: embed-directive
+    desc: Embeds files via //go:embed (payload
+    crit: notable
+    conf: 0.7
+    if:
+      type: metrics
+      field: go_metrics.embed_directive_count
+      min: 1
+
+composite_rules:
+  # Detect potential backdoor patterns
+  - id: backdoor-indicators
+    desc: Go code with backdoor-like characteristics
+    crit: suspicious
+    conf: 0.9
+    attack: "T1195.001"
+    mbc: "B0024"
+    for: [go]
+    all:
+      - id: micro-behaviors/process/create/direct::exec-command
+      - id: micro-behaviors/communications/socket/connect::dial
+      - id: many-init-functions
+
+  # Detect supply chain attack patterns
+  - id: suspicious-init
+    desc: "Suspicious Go init function"
+    crit: suspicious
+    conf: 0.95
+    attack: "T1195.001"
+    mbc: "B0024"
+    for: [go]
+    all:
+      - id: many-init-functions
+    any:
+      - id: micro-behaviors/process/create/direct::exec-command
+      - id: micro-behaviors/communications/socket/connect::dial
+      - id: micro-behaviors/communications/http/post::http-post

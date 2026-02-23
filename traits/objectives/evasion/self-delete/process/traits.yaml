@@ -1,0 +1,228 @@
+traits:
+- id: proc-exe-deleted-search
+  desc: Search /proc for deleted processes
+  crit: suspicious
+  conf: 0.85
+  for:
+  - elf
+  - shell
+  if:
+    type: string
+    substr: ls -l /proc/*/exe
+  attack: T1070.004
+- id: grep-deleted-process
+  desc: grep deleted process references
+  crit: suspicious
+  conf: 0.9
+  for:
+  - elf
+  - shell
+  if:
+    type: string
+    substr: grep deleted
+  attack: T1070.004
+- id: awk-proc-extraction
+  desc: Extract PID from /proc entries
+  crit: suspicious
+  conf: 0.8
+  for:
+  - elf
+  - shell
+  if:
+    type: string
+    substr: awk -F/
+  attack: T1070.004
+- id: kill-9-deleted-processes
+  desc: Send SIGKILL to deleted processes
+  crit: suspicious
+  conf: 0.85
+  for:
+  - elf
+  - shell
+  if:
+    type: string
+    # Kill command targeting deleted processes (e.g. via grep or awk)
+    regex: "kill -9.{0,50}deleted"
+  attack: T1070.004
+- id: pkill-deleted-pattern
+  desc: pkill -9 targeting (deleted) processes
+  crit: suspicious
+  conf: 0.9
+  for:
+  - elf
+  - shell
+  if:
+    type: string
+    substr: pkill -9 -f '(deleted)'
+  attack: T1070.004
+- id: sed-bashrc-cleanup
+  desc: sed removal from .bashrc files
+  crit: suspicious
+  conf: 0.8
+  for:
+  - elf
+  - shell
+  if:
+    type: string
+    regex: sed\s+-i.{0,50}\.bashrc
+  attack: T1070.004
+- id: sed-bash-profile-cleanup
+  desc: sed removal from .bash_profile files
+  crit: suspicious
+  conf: 0.8
+  for:
+  - elf
+  - shell
+  if:
+    type: string
+    regex: sed\s+-i.{0,50}\.bash_profile
+  attack: T1070.004
+- id: sed-profile-cleanup
+  desc: sed removal from .profile files
+  crit: suspicious
+  conf: 0.8
+  for:
+  - elf
+  - shell
+  if:
+    type: string
+    regex: sed\s+-i.{0,50}\.profile
+  attack: T1070.004
+- id: sed-zshrc-cleanup
+  desc: sed removal from .zshrc files
+  crit: suspicious
+  conf: 0.8
+  for:
+  - elf
+  - shell
+  if:
+    type: string
+    regex: sed\s+-i.{0,50}\.zshrc
+  attack: T1070.004
+- id: sed-deleted-pattern-removal
+  desc: Remove deleted references
+  crit: suspicious
+  conf: 0.9
+  for:
+  - elf
+  - shell
+  if:
+    type: string
+    regex: sed.{0,100}\(deleted\)
+  attack: T1070.004
+- id: sed-deleted-regex-pattern
+  desc: Regex for deleted process removal
+  crit: suspicious
+  conf: 0.95
+  for:
+  - elf
+  - shell
+  if:
+    type: string
+    substr: \|/usr/bin/\..* (deleted)|d
+  attack: T1070.004
+- id: sed-generic-deleted-removal
+  desc: Sed removal of deleted references
+  crit: suspicious
+  conf: 0.85
+  for:
+  - elf
+  - shell
+  if:
+    type: string
+    regex: '(: \\\+\.\*deleted|\(deleted\)\|d)'
+  attack: T1070.004
+- id: home-directory-iteration
+  desc: Iterate through home directories
+  crit: suspicious
+  conf: 0.8
+  for:
+  - elf
+  - shell
+  if:
+    type: string
+    substr: /root /home
+  attack: T1070.004
+composite_rules:
+- id: deleted-process-detection
+  desc: Detection of deleted process searches
+  crit: notable
+  any:
+  - id: proc-exe-deleted-search
+    crit: notable
+  - id: grep-deleted-process
+    crit: notable
+- id: deleted-process-termination
+  desc: Termination of deleted processes
+  crit: notable
+  any:
+  - id: kill-9-deleted-processes
+    crit: notable
+  - id: pkill-deleted-pattern
+    crit: notable
+- id: shell-config-evidence-removal
+  desc: Evidence removal from shell configuration files
+  crit: notable
+  any:
+  - id: sed-bashrc-cleanup
+    crit: notable
+  - id: sed-bash-profile-cleanup
+    crit: notable
+  - id: sed-profile-cleanup
+    crit: notable
+  - id: sed-zshrc-cleanup
+    crit: notable
+- id: deleted-pattern-removal-methods
+  desc: Methods for removing deleted process references
+  crit: notable
+  any:
+  - id: sed-deleted-pattern-removal
+    crit: notable
+  - id: sed-deleted-regex-pattern
+    crit: notable
+  - id: sed-generic-deleted-removal
+    crit: notable
+- id: comprehensive-deleted-cleanup
+  desc: Complete workflow for deleted process evidence removal
+  crit: suspicious
+  conf: 0.9
+  for:
+  - elf
+  - shell
+  attack: T1070.004
+  mbc: B0005
+  all:
+  - id: deleted-process-detection
+    crit: notable
+  - id: deleted-process-termination
+    crit: notable
+- id: targeted-shell-cleanup
+  desc: Targeted removal from specific shell files
+  crit: suspicious
+  conf: 0.85
+  for:
+  - elf
+  - shell
+  attack: T1070.004
+  all:
+  - id: home-directory-iteration
+    crit: notable
+  - id: shell-config-evidence-removal
+    needs: 2
+    crit: notable
+  - id: deleted-pattern-removal-methods
+    crit: notable
+- id: aggressive-evidence-removal
+  desc: Aggressive multi-method evidence removal pattern
+  crit: hostile
+  conf: 0.95
+  for:
+  - elf
+  - shell
+  attack: T1070.004
+  mbc: B0005
+  all:
+  - id: comprehensive-deleted-cleanup
+    crit: notable
+  - id: targeted-shell-cleanup
+    crit: notable

@@ -1,0 +1,30 @@
+# Code Quality Composite Rules
+
+composite_rules:
+  - id: terser-minifier-helpers
+    desc: Minifier helper patterns
+    for: [javascript]
+    any:
+      - { id: objectives/lateral-movement/supply-chain/npm/minifier }
+    crit: notable
+
+  - id: terser-output
+    desc: Terser/UglifyJS minified output markers
+    crit: notable
+    conf: 0.85
+    for: [javascript]
+    all:
+      - { id: objectives/lateral-movement/supply-chain/npm/minifier::use-strict-quote }
+      - { id: terser-minifier-helpers }
+
+  - id: has-multiple-entries
+    desc: Package has multiple entry points
+    crit: notable
+    conf: 0.85
+    for: [package.json]
+    needs: 2
+    any:
+      - { id: metadata/quality/npm/pkg-meta::pkg-main-field }
+      - { id: objectives/lateral-movement/supply-chain/npm/exports::pkg-module-field }
+      - { id: objectives/lateral-movement/supply-chain/npm/exports::pkg-exports-field-entry }
+      - { id: metadata/quality/npm/pkg-meta::pkg-types-field }

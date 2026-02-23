@@ -1,0 +1,105 @@
+traits:
+- id: user-agent-msie8
+  desc: Internet Explorer 8 User-Agent
+  crit: suspicious
+  conf: 0.9
+  for:
+  - elf
+  - macho
+  - shell
+  if:
+    type: string
+    substr: "mozilla/4.0 (compatible; msie 8.0; windows nt 5.1; trident/4.0)"
+  attack: T1036.005
+
+- id: user-agent-windows10-chrome-xor
+  desc: Windows 10 Chrome User-Agent
+  crit: suspicious
+  conf: 0.9
+  for:
+  - elf
+  - shell
+  if:
+    type: string
+    substr: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/62.0.3202.89 Safari/537.36
+  attack: T1036.005
+- id: user-agent-windows81-chrome-xor
+  desc: Windows 8.1 Chrome User-Agent
+  crit: suspicious
+  conf: 0.9
+  for:
+  - elf
+  - shell
+  if:
+    type: string
+    substr: Mozilla/5.0 (Windows NT 6.3; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/51.0.2704.106 Safari/537.36
+  attack: T1036.005
+- id: user-agent-windows7-chrome-xor
+  desc: Windows 7 Chrome User-Agent
+  crit: suspicious
+  conf: 0.9
+  for:
+  - elf
+  - shell
+  if:
+    type: string
+    substr: Mozilla/5.0 (Windows NT 6.1; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/48.0.2564.109 Safari/537.36
+  attack: T1036.005
+- id: user-agent-windows81-firefox-xor
+  desc: Windows 8.1 Firefox User-Agent
+  crit: suspicious
+  conf: 0.9
+  for:
+  - elf
+  - shell
+  if:
+    type: string
+    substr: Mozilla/5.0 (Windows NT 6.3; WOW64; rv:50.0) Gecko/20100101 Firefox/50.0
+  attack: T1036.005
+- id: user-agent-macos-safari-xor
+  desc: macOS Safari User-Agent
+  crit: suspicious
+  conf: 0.9
+  for:
+  - elf
+  - shell
+  if:
+    type: string
+    substr: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_11_6) AppleWebKit/601.7.7 (KHTML, like Gecko) Version/9.1.2 Safari/601.7.7
+  attack: T1036.005
+# Removed user-agent-library-marker and multi-os-targeting-pattern -
+# these regexes matched all the specific user-agent literals above (duplicate evidence).
+# The specific literals are more precise and used in meaningful composites below.
+
+composite_rules:
+- id: user-agent-old-browser
+  desc: Outdated browser user-agent (MSIE8 or old Chrome)
+  crit: suspicious
+  conf: 0.9
+  for:
+  - elf
+  - macho
+  - shell
+  attack: T1036.005
+  any:
+  - id: user-agent-msie8
+  - id: user-agent-windows7-chrome-xor
+  - id: user-agent-windows81-chrome-xor
+
+- id: xor-user-agent-spoofing
+  desc: XOR User-Agent spoofing
+  crit: suspicious
+  conf: 0.92
+  for:
+  - elf
+  - shell
+  attack: T1036.005
+  mbc: E1014
+  any:
+  - id: user-agent-windows10-chrome-xor
+  - id: user-agent-windows81-chrome-xor
+  - id: user-agent-windows7-chrome-xor
+  - id: user-agent-windows81-firefox-xor
+  - id: user-agent-macos-safari-xor
+# Removed user-agent-library-detection composite - it referenced the removed
+# regex patterns and would have matched all specific user-agents anyway

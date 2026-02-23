@@ -1,0 +1,13 @@
+defaults:
+  for: [all]
+
+traits:
+  - id: legacy-boot-config
+    desc: "References legacy DOS/Windows boot configuration files"
+    crit: suspicious
+    conf: 0.8
+    mbc: E1083
+    attack: T1083
+    if:
+      type: string
+      regex: "(?i)(config\\.sys|autoexec\\.bat)"

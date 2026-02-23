@@ -1,0 +1,24 @@
+traits:
+- id: css-js-comment-append
+  desc: Appending data to CSS/JS files inside comments
+  crit: suspicious
+  conf: 0.95
+  attack: T1041
+  for: [python]
+  if:
+    type: string
+    regex: 'bootstrap\.min\.css|jquery\.min\.js'
+    near:
+      type: string
+      regex: 'f\.write\(\s*"/\\*"\s*\+\s*output\s*\+\s*"\\*/"\s*\)'
+      near_lines: 5
+composite_rules:
+- id: web-asset-exfiltration
+  desc: Exfiltration via side-channel in web assets
+  crit: hostile
+  conf: 0.98
+  attack: T1041
+  for: [python]
+  all:
+    - id: css-js-comment-append
+    - id: micro-behaviors/process/create/subprocess::os-popen-ast

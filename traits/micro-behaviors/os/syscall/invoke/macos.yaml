@@ -1,0 +1,32 @@
+# macOS Direct System Calls
+# Detects use of direct syscall instructions instead of libc wrappers
+# This is a high-confidence indicator of evasion or low-level malware
+
+defaults:
+  platforms: [macos]
+  for: [macho]
+
+traits:
+  - id: macos-arm64-direct-syscall
+    desc: macOS ARM64 direct syscall (svc 0)
+    crit: suspicious
+    conf: 0.95
+    if:
+      type: hex
+      pattern: "01 00 00 d4" # svc 0
+      section: "__text"
+    downgrade:
+      any:
+        - id: metadata/signed/platform::apple
+
+  - id: macos-x86-64-direct-syscall
+    desc: macOS x86_64 direct syscall (syscall)
+    crit: suspicious
+    conf: 0.95
+    if:
+      type: hex
+      pattern: "0F 05" # syscall
+      section: "__text"
+    downgrade:
+      any:
+        - id: metadata/signed/platform::apple

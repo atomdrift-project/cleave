@@ -1,0 +1,68 @@
+# npm Testing Framework Detection
+# Detects test framework usage for quality assessment
+
+defaults:
+  for: [javascript, typescript, package.json]
+
+traits:
+  - id: jest-expect-call
+    desc: expect() function call (Jest/RSpec/Rust)
+    crit: baseline
+    conf: 0.6
+    for: [ruby, rust, javascript, typescript, package.json]
+    if:
+      type: string
+      substr: "expect("
+
+  - id: mocha-describe-call
+    desc: Mocha describe() call
+    crit: baseline
+    conf: 0.6
+    if:
+      type: string
+      substr: "describe("
+
+  - id: test-filename-pattern
+    desc: Common test filename pattern
+    crit: baseline
+    conf: 0.6
+    if:
+      type: string
+      regex: '\.(test|spec|test-case)\.[a-z]+$'
+
+  - id: wpt-test-title
+    desc: Web Platform Test title pattern
+    crit: baseline
+    conf: 0.6
+    if:
+      type: string
+      substr: "Web Platform Test"
+
+composite_rules:
+  - id: jest-test-file
+    desc: Jest test file
+    crit: notable
+    conf: 0.9
+    for: [javascript, typescript]
+    all:
+      - id: jest-expect-call
+      - id: test-filename-pattern
+
+  - id: mocha-test-file
+    desc: Mocha test file
+    crit: notable
+    conf: 0.9
+    for: [javascript, typescript]
+    all:
+      - id: mocha-describe-call
+      - id: test-filename-pattern
+
+  - id: wpt-test-file
+    desc: Web Platform Test (WPT) file
+    crit: notable
+    conf: 0.95
+    for: [javascript, html]
+    any:
+      - id: wpt-test-title
+      - id: metadata/lang/javascript-features::promise-test-call
+      - id: metadata/lang/javascript-features::async-test-call

@@ -1,0 +1,230 @@
+# Socket Connect - Python
+# MBC: C0001 (Socket Communication)
+# ATT&CK: T1071
+
+defaults:
+  attack: "T1071"
+  mbc: "C0001"
+
+traits:
+  # === Socket module imports ===
+  - id: socket-module-import
+    desc: import socket module
+    crit: baseline
+    conf: 0.6
+    for: [python]
+    if:
+      type: string
+      regex: "import\\s+socket"
+
+  - id: socket-from-import
+    desc: from socket import
+    crit: baseline
+    conf: 0.6
+    for: [python]
+    if:
+      type: string
+      regex: "from\\s+socket\\s+import"
+
+  # === Socket creation ===
+  - id: socket-socket-call
+    desc: socket.socket() call
+    crit: baseline
+    conf: 0.7
+    for: [python]
+    if:
+      type: symbol
+      exact: "socket.socket"
+
+  - id: socket-af-inet
+    desc: socket.AF_INET (IPv4)
+    crit: baseline
+    conf: 0.6
+    for: [python]
+    if:
+      type: symbol
+      exact: "socket.AF_INET"
+
+  - id: socket-af-inet6
+    desc: socket.AF_INET6 (IPv6)
+    crit: baseline
+    conf: 0.6
+    for: [python]
+    if:
+      type: symbol
+      exact: "socket.AF_INET6"
+
+  - id: socket-sock-stream
+    desc: socket.SOCK_STREAM (TCP)
+    crit: baseline
+    conf: 0.6
+    for: [python]
+    if:
+      type: symbol
+      exact: "socket.SOCK_STREAM"
+
+  - id: socket-sock-dgram
+    desc: socket.SOCK_DGRAM (UDP)
+    crit: baseline
+    conf: 0.6
+    for: [python]
+    if:
+      type: symbol
+      exact: "socket.SOCK_DGRAM"
+
+  # === Socket operations ===
+  - id: socket-connect-call
+    desc: socket.connect() call
+    crit: baseline
+    conf: 0.75
+    for: [python]
+    if:
+      type: symbol
+      exact: "connect"
+
+  - id: socket-connect-ex-call
+    desc: socket.connect_ex() call (non-blocking)
+    crit: baseline
+    conf: 0.75
+    for: [python]
+    if:
+      type: symbol
+      exact: "connect_ex"
+
+  - id: socket-bind-call
+    desc: socket.bind() call
+    crit: baseline
+    conf: 0.7
+    for: [python]
+    if:
+      type: symbol
+      exact: "bind"
+
+  - id: socket-accept-call
+    desc: socket.accept() call
+    crit: baseline
+    conf: 0.7
+    for: [python]
+    if:
+      type: symbol
+      exact: "accept"
+
+  - id: socket-send-call
+    desc: socket.send() call
+    crit: baseline
+    conf: 0.7
+    for: [python]
+    if:
+      type: symbol
+      exact: "send"
+
+  - id: socket-sendall-call
+    desc: socket.sendall() call
+    crit: baseline
+    conf: 0.7
+    for: [python]
+    if:
+      type: symbol
+      exact: "sendall"
+
+  - id: socket-recv-call
+    desc: socket.recv() call
+    crit: baseline
+    conf: 0.7
+    for: [python]
+    if:
+      type: symbol
+      exact: "recv"
+
+  - id: socket-recvfrom-call
+    desc: socket.recvfrom() call
+    crit: baseline
+    conf: 0.7
+    for: [python]
+    if:
+      type: symbol
+      exact: "recvfrom"
+
+  - id: socket-close-call
+    desc: socket.close() call
+    crit: baseline
+    conf: 0.6
+    for: [python]
+    if:
+      type: ast
+      kind: call
+      # Match generic object close() call; socket context is handled by surrounding composites.
+      regex: "\\b\\w+\\.close\\("
+
+  # === Socket address operations ===
+  - id: socket-gethostbyname
+    desc: socket.gethostbyname() DNS lookup
+    crit: baseline
+    conf: 0.7
+    for: [python]
+    if:
+      type: symbol
+      exact: "socket.gethostbyname"
+
+  - id: socket-getaddrinfo
+    desc: socket.getaddrinfo() DNS lookup
+    crit: baseline
+    conf: 0.7
+    for: [python]
+    if:
+      type: symbol
+      exact: "socket.getaddrinfo"
+
+  - id: socket-gethostname
+    desc: socket.gethostname() call
+    crit: baseline
+    conf: 0.6
+    for: [python]
+    if:
+      type: symbol
+      exact: "socket.gethostname"
+
+composite_rules:
+  # Helper composites
+  - id: socket-creation
+    desc: Socket creation patterns
+    for: [python]
+    any:
+      - { id: socket-socket-call }
+      - { id: socket-af-inet }
+      - { id: socket-af-inet6 }
+      - { id: socket-sock-stream }
+      - { id: socket-sock-dgram }
+
+  - id: socket-client-operations
+    desc: Client socket operations
+    for: [python]
+    any:
+      - { id: socket-connect-call }
+      - { id: socket-connect-ex-call }
+
+  - id: socket-server-operations
+    desc: Server socket operations
+    for: [python]
+    any:
+      - { id: socket-bind-call }
+      - { id: socket-accept-call }
+
+  - id: socket-data-transfer
+    desc: Socket data transfer operations
+    for: [python]
+    any:
+      - { id: socket-send-call }
+      - { id: socket-sendall-call }
+      - { id: socket-recv-call }
+      - { id: socket-recvfrom-call }
+
+  # Main composite (matches original YARA behavior)
+  - id: connect-python
+    desc: Initiate socket connection (Python)
+    crit: notable
+    conf: 0.75
+    for: [python]
+    all:
+      - { id: socket-creation }
+      - { id: socket-client-operations }

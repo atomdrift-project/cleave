@@ -1,0 +1,52 @@
+# C2 Communication Channels
+# MBC: OB0004 (Command & Control) → B0030 (C2 Communication)
+# ATT&CK: T1071 (Application Layer Protocol)
+
+defaults:
+  for: [all]
+
+traits:
+  # Messaging platforms
+  # NOTE: Telegram API traits are defined in communications/messaging/telegram/
+  # NOTE: Discord webhook traits are defined in communications/messaging/discord/
+  # Use those directory references in composite rules
+
+  - id: discord-invite
+    desc: Discord invite URL (potential command-and-control/support)
+    crit: notable
+    conf: 0.8
+    if:
+      type: string
+      regex: "discord\\.gg/[a-zA-Z0-9]+"
+
+  - id: dns-query-symbol
+    desc: DNS query symbol (potential C2 channel)
+    crit: notable
+    mbc: "B0030"
+    attack: "T1071.004"
+    conf: 0.4
+    for: [elf, macho, so, dylib, c]
+    if:
+      type: symbol
+      exact: dns_query
+
+composite_rules:
+  - id: http-post
+    desc: HTTP POST requests (potential C2)
+    crit: notable
+    mbc: "B0030"
+    attack: "T1071.001"
+    conf: 0.5
+    any:
+      - id: micro-behaviors/communications/http/post/
+
+  - id: dns-query
+    desc: DNS queries (potential C2 channel)
+    crit: notable
+    mbc: "B0030"
+    attack: "T1071.004"
+    conf: 0.4
+    for: [elf, macho, so, dylib, c]
+    any:
+      - id: micro-behaviors/communications/dns/lookup::lookup-res-query
+      - id: dns-query-symbol

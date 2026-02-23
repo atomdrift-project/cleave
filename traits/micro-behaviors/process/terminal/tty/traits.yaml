@@ -1,0 +1,77 @@
+# Terminal Detection
+# System calls and patterns for terminal/TTY detection
+
+defaults:
+  for: [all]
+  platforms: [all]
+
+traits:
+  - id: isatty
+    desc: Detect if running in terminal (isatty)
+    crit: baseline
+    conf: 0.5
+    if:
+      type: symbol
+      regex: isatty
+
+  - id: ttyname
+    desc: Get terminal name (ttyname)
+    crit: baseline
+    conf: 0.5
+    if:
+      type: symbol
+      regex: ttyname
+
+  - id: term-env
+    desc: TERM= environment setting
+    crit: baseline
+    conf: 0.3
+    if:
+      type: string
+      substr: "TERM="
+
+  - id: xterm-ref
+    desc: xterm terminal reference
+    crit: baseline
+    conf: 0.3
+    if:
+      type: string
+      substr: "xterm"
+
+  - id: stty-cmd
+    desc: stty command reference
+    crit: notable
+    conf: 0.4
+    # NOTE: stty alone is legitimate (reading user input in installers)
+    if:
+      type: string
+      exact: "stty"
+
+  - id: raw-mode
+    desc: raw mode terminal setting
+    crit: notable
+    conf: 0.4
+    if:
+      type: string
+      # Match "raw mode", "setraw", "stty raw" etc. Keep cfmakeraw in objectives/pty-shell.
+      regex: "\\braw\\s+mode\\b|setraw|stty\\s+raw"
+
+composite_rules:
+  - id: tty-markers
+    desc: TTY device markers
+    crit: baseline
+    conf: 0.5
+    any:
+      - id: isatty
+      - id: ttyname
+      - id: micro-behaviors/fs/path/device/terminal::dev-tty
+
+  - id: terminal-setup
+    desc: Terminal setup markers
+    crit: notable
+    conf: 0.4
+    any:
+      - id: term-env
+      - id: xterm-ref
+      - id: stty-cmd
+      - id: raw-mode

@@ -1,0 +1,24 @@
+# Character Expansion Obfuscation
+# Detects strings artificially expanded with spaced single-character concatenations
+# Pattern: " +  'X'  + " where X is a single character
+
+traits:
+  - id: char-expansion-obfuscation
+    desc: "Character expansion via spaced concatenation"
+    crit: suspicious
+    conf: 0.9
+    for: [javascript, typescript]
+    if:
+      type: string
+      regex: "\\s\\+\\s\\s['\"][A-Za-z0-9]['\"]\\s\\s\\+"
+      count_min: 5
+
+  - id: single-char-concat-pattern
+    desc: "Single character string concatenation pattern"
+    crit: notable
+    conf: 0.7
+    for: [javascript, typescript, python]
+    if:
+      type: raw
+      regex: '"\s*\+\s*[''"][A-Za-z0-9][''"]\s*\+'
+      count_min: 3

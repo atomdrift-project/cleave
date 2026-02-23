@@ -1,0 +1,83 @@
+# ELF Binary Features
+# ELF-specific function and symbol references
+
+defaults:
+  for: [elf]
+
+traits:
+  # === Runtime Linker ===
+  - id: libc-start-ref
+    desc: __libc_start reference
+    crit: baseline
+    conf: 0.3
+    if:
+      type: string
+      substr: "__libc_start"
+
+  - id: rtld-default-ref
+    desc: RTLD_DEFAULT macro reference
+    crit: baseline
+    conf: 0.4
+    if:
+      type: string
+      substr: "RTLD_DEFAULT"
+
+  # === IFUNC Resolvers ===
+  - id: ifunc-ref
+    desc: IFUNC reference
+    crit: baseline
+    conf: 0.4
+    if:
+      type: string
+      substr: "IFUNC"
+
+  - id: resolver-suffix
+    desc: _resolver function suffix
+    crit: baseline
+    conf: 0.4
+    if:
+      type: string
+      substr: "_resolver"
+
+  - id: getauxval-ref
+    desc: getauxval function reference
+    crit: baseline
+    conf: 0.3
+    if:
+      type: symbol
+      regex: "getauxval"
+
+  - id: ifunc
+    desc: ELF IFUNC resolver
+    crit: notable
+    conf: 1.0
+    if:
+      type: trait
+      id: metadata/format/elf::ifunc
+
+  - id: microblaze
+    desc: Xilinx MicroBlaze architecture
+    crit: notable
+    conf: 1.0
+    if:
+      type: hex
+      pattern: "00 BD"
+      offset: 18
+
+composite_rules:
+  - id: resolver-markers
+    desc: Resolver function markers
+    crit: baseline
+    conf: 0.4
+    any:
+      - id: resolver-suffix
+      - id: metadata/format/elf::gnu-hash
+      - id: libc-start-ref
+
+  - id: ifunc-markers
+    desc: IFUNC-related markers
+    crit: baseline
+    conf: 0.4
+    any:
+      - id: ifunc-ref
+      - id: getauxval-ref

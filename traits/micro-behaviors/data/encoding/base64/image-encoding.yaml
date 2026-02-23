@@ -1,0 +1,19 @@
+defaults:
+  for: [python]
+
+traits:
+  - id: pattern
+    desc: Detects base64 encoding of image files
+    crit: notable
+    conf: 0.8
+    if:
+      type: string
+      regex: 'base64\.b64encode\((image_file|f|file|handle)\.read\(\)\)\.decode\("utf-8"\)'
+
+  - id: data-uri
+    desc: Detects base64 image data URI
+    crit: notable
+    conf: 0.8
+    if:
+      type: string
+      regex: 'data:image\/[a-z]+;base64'

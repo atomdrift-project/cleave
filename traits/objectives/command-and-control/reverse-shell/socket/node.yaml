@@ -1,0 +1,328 @@
+# Node.js Reverse Shell Traits
+# Detects reverse shell and remote command execution patterns
+# MBC: B0032 (Remote Access)
+# ATT&CK: T1059 (Command Interpreter), T1095 (Non-Application Layer Protocol)
+
+traits:
+  # === Net socket micro-behaviors ===
+  - id: net-socket-string
+    desc: net.Socket string reference
+    crit: notable
+    conf: 0.7
+    for: [javascript, typescript]
+    if:
+      type: string
+      substr: "net.Socket"
+
+  - id: new-net-socket
+    desc: new net.Socket creation
+    crit: notable
+    conf: 0.7
+    for: [javascript, typescript]
+    if:
+      type: ast
+      query: |
+        ((new_expression
+          constructor: (member_expression
+            object: (identifier) @obj
+            property: (property_identifier) @prop))
+         (#eq? @obj "net")
+         (#eq? @prop "Socket"))
+
+  - id: net-createConnection
+    desc: net.createConnection call
+    crit: notable
+    conf: 0.7
+    for: [javascript, typescript]
+    if:
+      type: ast
+      kind: call
+      exact: "net.createConnection"
+
+  - id: net-connect
+    desc: net.connect call
+    crit: notable
+    conf: 0.7
+    for: [javascript, typescript]
+    if:
+      type: ast
+      kind: call
+      exact: "net.connect"
+
+  # === child_process micro-behaviors ===
+  # Use micro-behaviors/process/create/shell/lang::child-process-require instead of duplicating
+
+  - id: spawn-call
+    desc: spawn function call
+    crit: notable
+    conf: 0.7
+    for: [javascript, typescript]
+    if:
+      type: ast
+      kind: call
+      exact: "spawn"
+
+  - id: exec-call
+    desc: exec function call
+    crit: notable
+    conf: 0.7
+    for: [javascript, typescript]
+    if:
+      type: ast
+      kind: call
+      exact: ".exec("
+
+  - id: execSync-call
+    desc: execSync function call
+    crit: notable
+    conf: 0.7
+    for: [javascript, typescript]
+    if:
+      type: ast
+      kind: call
+      exact: "execSync"
+
+  - id: spawnSync-call
+    desc: spawnSync function call
+    crit: notable
+    conf: 0.7
+    for: [javascript, typescript]
+    if:
+      type: ast
+      kind: call
+      exact: "spawnSync"
+
+  # === Data event micro-behaviors ===
+  - id: on-data-event-single
+    desc: .on('data' event handler
+    crit: notable
+    conf: 0.5
+    for: [javascript, typescript]
+    if:
+      type: string
+      substr: ".on('data'"
+
+  - id: on-data-event-double
+    desc: .on("data" event handler
+    crit: notable
+    conf: 0.5
+    for: [javascript, typescript]
+    if:
+      type: string
+      substr: '.on("data"'
+
+  # === Lock file micro-behaviors ===
+  - id: dot-lock-string
+    desc: .lock file extension
+    crit: notable
+    conf: 0.5
+    for: [javascript, typescript]
+    if:
+      type: string
+      substr: ".lock"
+
+  - id: lockfile-string
+    desc: lockfile string
+    crit: notable
+    conf: 0.5
+    for: [javascript, typescript]
+    if:
+      type: string
+      substr: "lockfile"
+
+  - id: existsSync-call
+    desc: existsSync function call
+    crit: notable
+    conf: 0.5
+    for: [javascript, typescript]
+    if:
+      type: ast
+      kind: call
+      exact: "existsSync"
+
+  - id: writeFileSync-call
+    desc: writeFileSync function call
+    crit: notable
+    conf: 0.5
+    for: [javascript, typescript]
+    if:
+      type: ast
+      kind: call
+      exact: "writeFileSync"
+
+  # === Ngrok atomic indicators ===
+  - id: tcp-ngrok
+    desc: tcp.ngrok endpoint
+    crit: notable
+    conf: 0.85
+    for: [javascript, typescript]
+    if:
+      type: string
+      substr: "tcp.ngrok"
+
+  # === HTTP exclusion patterns (to avoid FPs) ===
+  - id: res-on-data
+    desc: res.on('data' HTTP response pattern
+    crit: notable
+    conf: 0.5
+    for: [javascript, typescript]
+    if:
+      type: string
+      substr: "res.on('data'"
+
+  - id: response-on-data
+    desc: response.on('data' HTTP response pattern
+    crit: notable
+    conf: 0.5
+    for: [javascript, typescript]
+    if:
+      type: string
+      substr: "response.on('data'"
+
+  - id: https-get-call
+    desc: https.get call
+    crit: notable
+    conf: 0.5
+    for: [javascript, typescript]
+    if:
+      type: ast
+      kind: call
+      exact: "https.get"
+
+  - id: http-get-call
+    desc: http.get call
+    crit: notable
+    conf: 0.5
+    for: [javascript, typescript]
+    if:
+      type: ast
+      kind: call
+      exact: "http.get"
+
+composite_rules:
+  # Net socket composite
+  - id: net-socket
+    desc: Net socket creation (potential reverse
+    crit: notable
+    conf: 0.8
+    for: [javascript, typescript]
+    any:
+      - id: net-socket-string
+      - id: new-net-socket
+      - id: net-createConnection
+      - id: net-connect
+
+  # Exec function composite
+  - id: exec-function
+    desc: Command execution function
+    crit: notable
+    conf: 0.7
+    for: [javascript, typescript]
+    any:
+      - id: spawn-call
+      - id: exec-call
+      - id: execSync-call
+      - id: spawnSync-call
+
+  # Data event composite
+  - id: on-data-event
+    desc: Data event handler
+    crit: notable
+    conf: 0.5
+    for: [javascript, typescript]
+    any:
+      - id: on-data-event-single
+      - id: on-data-event-double
+
+  # Lock file composite
+  - id: lock-pattern
+    desc: Lock file pattern
+    crit: notable
+    conf: 0.5
+    for: [javascript, typescript]
+    any:
+      - id: dot-lock-string
+      - id: lockfile-string
+
+  # HTTP response pattern composite (exclusion)
+  - id: http-response-pattern
+    desc: HTTP response data handling (not
+    crit: notable
+    conf: 0.5
+    for: [javascript, typescript]
+    any:
+      - id: res-on-data
+      - id: response-on-data
+      - id: https-get-call
+      - id: http-get-call
+
+  # Node reverse shell (migrated from YARA)
+  - id: node
+    desc: Node.js reverse shell pattern (net
+    crit: suspicious
+    conf: 0.85
+    for: [javascript, typescript]
+    all:
+      - id: net-socket
+      - id: micro-behaviors/process/create/shell/lang::child-process-require
+      - id: exec-function
+      - id: micro-behaviors/data/text/keywords::pipe
+
+  # Socket with exec (migrated from YARA)
+  - id: socket-with-exec
+    desc: Socket combined with command execution
+    crit: suspicious
+    conf: 0.95
+    mbc: "B0032"
+    attack: "T1059"
+    for: [javascript, typescript]
+    all:
+      - id: net-socket
+      - id: exec-function
+
+  # Lock file pattern (migrated from YARA)
+  - id: lock-file
+    desc: Lock file for single instance
+    crit: notable
+    conf: 0.7
+    for: [javascript, typescript]
+    all:
+      - id: lock-pattern
+      - id: existsSync-call
+      - id: writeFileSync-call
+
+  # Socket data event with exec (migrated from YARA)
+  - id: data-event-exec
+    desc: Socket data event with command
+    crit: suspicious
+    conf: 0.95
+    mbc: "B0032"
+    attack: "T1059"
+    for: [javascript, typescript]
+    all:
+      - id: net-socket
+      - id: on-data-event
+      - id: exec-function
+    none:
+      - id: http-response-pattern
+
+  - id: ngrok-tunnel
+    desc: Ngrok tunnel endpoint (C2 tunneling)
+    crit: suspicious
+    conf: 0.95
+    mbc: "C0002"
+    attack: "T1572"
+    for: [javascript, typescript]
+    any:
+      - id: objectives/command-and-control/infrastructure/domain::ngrok-io-endpoint
+      - id: objectives/command-and-control/infrastructure/domain::ngrok-free-app-endpoint
+      - id: tcp-ngrok
+
+  - id: tunnel-service
+    desc: Tunneling service endpoint
+    crit: suspicious
+    conf: 0.85
+    attack: "T1572"
+    for: [javascript, typescript]
+    any:
+      - id: objectives/command-and-control/infrastructure/domain/tunnel/

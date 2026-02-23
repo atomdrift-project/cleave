@@ -1,0 +1,14 @@
+# JFrog CLI Command Execution
+# Detects specific JFrog CLI commands used for credential extraction
+
+defaults:
+  for: [javascript, typescript, shell, python]
+  crit: notable
+
+traits:
+  - id: jfrog-cli-export
+    desc: JFrog CLI configuration export command
+    conf: 1.0
+    if:
+      type: string
+      regex: 'jf\s+c\s+export\b'

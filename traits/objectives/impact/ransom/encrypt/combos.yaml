@@ -1,0 +1,14 @@
+# Generic Ransomware Composite Rules
+
+composite_rules:
+  - id: suspicious_symbols
+    desc: "Suspicious symbols or artifacts indicating ransomware"
+    crit: suspicious
+    conf: 0.8
+    mbc: "C0027"
+    attack: "T1486"
+    for: [elf, macho, pe, so, dylib, dll]
+    any:
+      - id: objectives/impact/ransom/encrypt::encrypt-func-symbol
+      - id: objectives/impact/ransom/encrypt::ransomware-source-path
+      - id: objectives/impact/ransom/encrypt::babuk-config-marker

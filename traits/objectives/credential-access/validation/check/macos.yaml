@@ -1,0 +1,230 @@
+# macOS Credential Validation Detection
+# Detects techniques to validate stolen credentials
+# ATT&CK: T1110 (Brute Force), T1078 (Valid Accounts)
+
+defaults:
+  for: [all]
+  attack: "T1110"
+  platforms: [macos]
+  crit: suspicious
+
+traits:
+  # === dscl authonly atomic indicators ===
+  - id: dscl-dot-authonly
+    desc: dscl . authonly command
+    crit: notable
+    conf: 0.85
+    attack: "T1110.001"
+    mbc: "E1110"
+    if:
+      type: string
+      regex: "dscl\\s+\\.\\s+authonly"
+
+  - id: dscl-flag-authonly
+    desc: dscl -authonly flag
+    crit: notable
+    conf: 0.85
+    attack: "T1110.001"
+    mbc: "E1110"
+    if:
+      id: micro-behaviors/os/auth/verify::dscl-authonly
+
+
+  # === dscl read atomic indicators ===
+  - id: dscl-dot-read
+    desc: dscl . read command
+    crit: notable
+    conf: 0.6
+    attack: "T1087.001"
+    if:
+      type: string
+      regex: "dscl\\s+\\.\\s+read"
+
+  - id: dscl-flag-read
+    desc: dscl -read flag
+    crit: notable
+    conf: 0.6
+    attack: "T1087.001"
+    if:
+      type: string
+      regex: "dscl.{0,30}-read"
+
+  # === dscl list atomic indicators ===
+  - id: dscl-dot-list
+    desc: dscl . list command
+    crit: notable
+    conf: 0.55
+    attack: "T1087.001"
+    if:
+      type: string
+      regex: "dscl\\s+\\.\\s+list"
+
+  - id: dscl-flag-list
+    desc: dscl . -list command
+    crit: notable
+    conf: 0.55
+    attack: "T1087.001"
+    if:
+      type: string
+      regex: "dscl\\s+\\.\\s+-list"
+
+  # NOTE: /etc/passwd is defined in discovery/user/traits.yaml
+
+  # === Shadow password atomic indicators ===
+  - id: dslocal-db
+    desc: /var/db/dslocal directory
+    crit: notable
+    conf: 0.7
+    attack: "T1003.008"
+    if:
+      type: string
+      substr: "/var/db/dslocal"
+
+  - id: shadow-hash-data
+    desc: ShadowHashData reference
+    crit: notable
+    conf: 0.7
+    attack: "T1003.008"
+    if:
+      type: string
+      substr: "ShadowHashData"
+
+  # NOTE: /etc/shadow now defined in micro-behaviors/fs/path/config/accounts/
+
+  # Credential keyword atomic indicators moved to data/text/generic.yaml
+
+  # csidentity-auth-password: use micro-behaviors/os/auth/verify::csidentity-auth (canonical)
+
+  # === CoreServices Identity API micro-behaviors ===
+
+  - id: csidentity-query-create
+    desc: "Searches macOS user directory"
+    crit: notable
+    conf: 0.75
+    attack: "T1087.001"
+    platforms: [macos]
+    for: [macho]
+    if:
+      type: symbol
+      regex: "CSIdentityQueryCreateForName"
+
+  - id: csidentity-query-execute
+    desc: "Executes macOS directory search"
+    crit: notable
+    conf: 0.75
+    attack: "T1087.001"
+    platforms: [macos]
+    for: [macho]
+    if:
+      type: symbol
+      regex: "CSIdentityQueryExecute"
+
+  - id: csidentity-query-results
+    desc: "Retrieves macOS account results"
+    crit: notable
+    conf: 0.75
+    attack: "T1087.001"
+    platforms: [macos]
+    for: [macho]
+    if:
+      type: symbol
+      regex: "CSIdentityQueryCopyResults"
+
+  - id: csidentity-authority
+    desc: "Accesses macOS user authority"
+    crit: notable
+    conf: 0.7
+    attack: "T1087.001"
+    platforms: [macos]
+    for: [macho]
+    if:
+      type: symbol
+      regex: "CSGetDefaultIdentityAuthority"
+
+composite_rules:
+  # dscl authonly composite
+  - id: dscl-authonly
+    desc: macOS password validation
+    crit: suspicious
+    conf: 0.95
+    attack: "T1110.001"
+    mbc: "E1110"
+    any:
+      - id: dscl-dot-authonly
+      - id: dscl-flag-authonly
+
+  # dscl read composite
+  - id: dscl-read
+    desc: macOS user enumeration
+    crit: notable
+    conf: 0.7
+    attack: "T1087.001"
+    any:
+      - id: dscl-dot-read
+      - id: dscl-flag-read
+
+  # dscl list composite
+  - id: dscl-list
+    desc: macOS Directory Services listing
+    crit: notable
+    conf: 0.65
+    attack: "T1087.001"
+    any:
+      - id: dscl-dot-list
+      - id: dscl-flag-list
+
+  # Shadow hash access composite
+  - id: shadow-hash
+    desc: "Accesses shadow password hashes"
+    crit: suspicious
+    conf: 0.85
+    attack: "T1003.008"
+    platforms: [macos]
+    for: [macho, applescript]
+    any:
+      - id: dslocal-db
+      - id: shadow-hash-data
+      - id: micro-behaviors/os/privilege/paths::etc-shadow
+
+  # CoreServices Identity query composite
+  - id: csidentity-query
+    desc: "macOS CoreServices user enumeration"
+    crit: suspicious
+    conf: 0.85
+    attack: "T1087.001"
+    platforms: [macos]
+    for: [macho]
+    all:
+      - id: csidentity-query-create
+    any:
+      - id: csidentity-query-execute
+      - id: csidentity-query-results
+
+  # CoreServices password authentication composite
+  - id: csidentity-password-auth
+    desc: "macOS CoreServices password authentication"
+    crit: suspicious
+    conf: 0.95
+    attack: "T1110.001"
+    mbc: "E1110"
+    platforms: [macos]
+    for: [macho]
+    all:
+      - id: micro-behaviors/os/auth/verify::csidentity-auth
+    any:
+      - id: csidentity-query-create
+      - id: csidentity-authority
+
+  # Password validation + capture = credential theft
+  - id: validation-theft
+    desc: "macOS credential capture validation"
+    crit: suspicious
+    conf: 0.95
+    attack: "T1110.001"
+    for: [shell, applescript, python]
+    all:
+      - id: dscl-authonly
+      - id: objectives/credential-access/phishing/ui::jxa-password-prompt
+    any:
+      # Optional additional indicators
+      - id: objectives/anti-analysis/window-hide/ui::password-dialog

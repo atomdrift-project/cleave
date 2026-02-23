@@ -1,0 +1,56 @@
+# IPLogger and Tracking Domains
+# Detects usage of IP loggers and tracking services used for C2 or recon
+# ATT&CK: T1071 (Application Layer Protocol)
+
+defaults:
+  for: [all]
+
+traits:
+  - id: iplogger-domain-b
+    desc: "Detects iplogger tracking domains"
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: string
+      regex: '2no\.co|yip\.su'
+
+  - id: iplogger-http
+    desc: "Detects HTTP indicators often with iplogger"
+    crit: notable
+    conf: 0.7
+    if:
+      type: string
+      regex: 'https?://'
+
+composite_rules:
+  - id: iplogger-domain
+    desc: "Detects iplogger tracking domains"
+    crit: suspicious
+    conf: 0.95
+    any:
+      - id: objectives/discovery/network/ip-tracker::iplogger
+      - id: iplogger-domain-b
+
+  - id: tracking-services-domain
+    desc: "Detects tracking domains in malware beacons"
+    crit: suspicious
+    conf: 0.9
+    any:
+      - id: objectives/discovery/network/ip-tracker/
+
+  - id: iplogger-keyword-context
+    desc: "Detects 'iplogger' keyword with HTTP indicators"
+    crit: suspicious
+    conf: 0.85
+    all:
+      - id: objectives/discovery/network/scan::iplogger-keyword
+      - id: iplogger-http
+
+  - id: fragmented-tracking-beacon
+    desc: "Detects fragmented tracking/logging URL construction"
+    crit: suspicious
+    conf: 0.9
+    any:
+      - id: objectives/discovery/network/scan::iplogger-keyword
+      - id: iplogger-domain
+      - id: tracking-services-domain

@@ -1,0 +1,229 @@
+# Node.js VM Module Traits
+# Detects sandbox execution and potential sandbox escape patterns
+# MBC: B0024 (Sandbox Evasion), E1059 (Code Execution)
+# ATT&CK: T1059 (Command and Scripting Interpreter)
+
+traits:
+  # VM Module Imports
+  - id: vm-require
+    desc: Node.js vm module import
+    crit: notable
+    conf: 0.85
+    for: [javascript, typescript]
+    if:
+      type: string
+      regex: "require\\(['\"]vm['\"]\\)|from ['\"]vm['\"]"
+
+  - id: vm-createContext
+    desc: VM createContext (sandbox creation)
+    crit: notable
+    conf: 0.8
+    for: [javascript, typescript]
+    if:
+      type: ast
+      kind: call
+      exact: "createContext"
+
+  - id: vm-runInContext
+    desc: VM runInContext (execute code in
+    crit: suspicious
+    conf: 0.9
+    mbc: "B0024"
+    attack: "T1059"
+    for: [javascript, typescript]
+    if:
+      type: ast
+      kind: call
+      exact: "runInContext"
+
+  - id: vm-runInNewContext
+    desc: VM runInNewContext (execute in isolated
+    crit: suspicious
+    conf: 0.9
+    mbc: "B0024"
+    attack: "T1059"
+    for: [javascript, typescript]
+    if:
+      type: ast
+      kind: call
+      exact: "runInNewContext"
+
+  - id: vm-runInThisContext
+    desc: VM runInThisContext (execute in current
+    crit: suspicious
+    conf: 0.85
+    attack: "T1059"
+    for: [javascript, typescript]
+    if:
+      type: ast
+      kind: call
+      exact: "runInThisContext"
+
+  - id: vm-Script
+    desc: VM Script compilation
+    crit: notable
+    conf: 0.8
+    for: [javascript, typescript]
+    if:
+      type: string
+      regex: "new vm\\.Script|vm\\.Script\\("
+
+  # Sandbox Escape Patterns
+  - id: constructor-escape
+    desc: VM sandbox escape via constructor
+    crit: suspicious
+    conf: 0.95
+    mbc: "B0024"
+    attack: "T1059"
+    for: [javascript, typescript]
+    if:
+      type: string
+      regex: "constructor\\s*\\(\\s*['\"]return this['\"]\\s*\\)|this\\.constructor\\.constructor"
+
+  - id: process-binding
+    desc: Access to process.binding (internal Node)
+    crit: notable
+    conf: 0.9
+    for: [javascript, typescript]
+    if:
+      type: raw
+      regex: "\\bprocess\\.binding\\s*\\("
+    unless:
+      - id: micro-behaviors/vm/runtime/binding::process-binding-evals
+      - id: micro-behaviors/vm/runtime/binding::process-binding-natives
+      - id: metadata/dev/testing/benchmark::benchmark
+
+  # Function constructor patterns
+  - id: function-constructor-access
+    desc: Function.constructor access
+    crit: notable
+    conf: 0.6
+    for: [javascript, typescript]
+    if:
+      type: string
+      substr: "Function.constructor"
+
+  - id: function-direct-call
+    desc: Direct Function constructor call
+    crit: notable
+    conf: 0.5
+    for: [javascript, typescript]
+    if:
+      type: string
+      substr: "Function("
+
+  # HTTP method patterns
+  - id: request-method-call
+    desc: .request method call
+    crit: notable
+    conf: 0.4
+    for: [javascript, typescript]
+    if:
+      type: string
+      substr: ".request("
+
+  # Base64 decoding patterns
+  - id: atob-call
+    desc: atob base64 decode function
+    crit: notable
+    conf: 0.5
+    for: [javascript, typescript]
+    if:
+      type: string
+      regex: "\\batob\\s*\\("
+
+  - id: buffer-from-call
+    desc: Buffer.from conversion
+    crit: notable
+    conf: 0.4
+    for: [javascript, typescript]
+    if:
+      type: string
+      substr: "Buffer.from"
+      count_min: 3
+
+  # Base64-encoded URL detector using decoded strings
+  - id: base64-url
+    desc: Base64 encoded URL (potential C2
+    crit: suspicious
+    conf: 0.85
+    mbc: "C0026"
+    attack: "T1027"
+    for: [javascript, typescript]
+    if:
+      type: encoded
+      encoding: base64
+      regex: "https?://"
+
+# === Composite Rules ===
+composite_rules:
+  # VM run methods
+  - id: vm-run-methods
+    desc: VM code execution methods
+    crit: notable
+    conf: 0.8
+    for: [javascript, typescript]
+    any:
+      - id: vm-runInContext
+      - id: vm-runInNewContext
+
+  # HTTP client methods
+  - id: http-clients
+    desc: HTTP client library usage
+    crit: notable
+    conf: 0.6
+    for: [javascript, typescript]
+    all:
+      - id: micro-behaviors/communications/http/request
+
+  # Remote Code Execution via VM
+  - id: vm-with-http
+    desc: VM execution combined with HTTP
+    crit: suspicious
+    conf: 0.95
+    mbc: "B0024"
+    attack: "T1105"
+    for: [javascript, typescript]
+    all:
+      - id: vm-run-methods
+      - id: http-clients
+
+  # Function constructor patterns
+  - id: function-constructors
+    desc: Function constructor usage
+    crit: notable
+    conf: 0.6
+    for: [javascript, typescript]
+    any:
+      - id: objectives/anti-static/obfuscation/require::function-constructor
+      - id: function-constructor-access
+      - id: function-direct-call
+      - id: objectives/execution/interpreter/eval/dynamic::function-constructor-from-typeof
+
+  # HTTP methods for remote loading
+  - id: http-fetch-methods
+    desc: HTTP fetch methods
+    crit: notable
+    conf: 0.6
+    for: [javascript, typescript]
+    any:
+      - id: micro-behaviors/communications/http/request
+      - id: request-method-call
+
+  # Remote Code Loading via Function Constructor
+  - id: function-with-http
+    desc: Function constructor with HTTP fetch
+    crit: suspicious
+    conf: 0.95
+    mbc: "B0024"
+    attack: "T1105"
+    for: [javascript, typescript]
+    all:
+      - id: function-constructors
+      - id: http-fetch-methods
+    unless:
+      - id: metadata/library/jquery::domain
+      - id: metadata/library/jquery::version-string
+      - id: metadata/library/jquery::copyright
+      - id: metadata/library/jquery::fn-extend
+      - id: metadata/library/d3::d3-detection

@@ -1,0 +1,11 @@
+composite_rules:
+  - id: keychain-dumping
+    desc: Dump or export macOS keychain credentials
+    crit: suspicious
+    conf: 0.95
+    mbc: T1555.001
+    attack: T1555.001
+    platforms: [macos]
+    all:
+      - id: micro-behaviors/process/create/shell::shell-execution
+      - id: micro-behaviors/os/security/mac/keychain

@@ -1,0 +1,17 @@
+# Ruby Cryptographic Verification
+# Detects digital signature verification and hashing
+
+defaults:
+  for: [ruby]
+  platforms: [all]
+
+traits:
+  # === Signature Verification ===
+  - id: signature-verify
+    desc: Digital signature verification
+    crit: baseline
+    conf: 0.85
+    attack: "T1027"
+    if:
+      type: string
+      regex: '.verify\(|OpenSSL::Digest|sha256'

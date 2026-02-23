@@ -1,0 +1,160 @@
+# Executable Masquerading as non-executable
+# Detects binary executables hiding behind common document or media extensions
+# ATT&CK: T1036.003 (Rename System Utilities)
+
+defaults:
+  for: [all]
+  crit: hostile
+  conf: 0.95
+
+traits:
+  - id: basename-is-doc-office-word
+    desc: Filename has Word document extension
+    crit: notable
+    if:
+      type: basename
+      regex: '\.(doc|docx)$'
+
+  - id: basename-is-doc-office-excel
+    desc: Filename has Excel document extension
+    crit: notable
+    if:
+      type: basename
+      regex: '\.(xls|xlsx)$'
+
+  - id: basename-is-doc-office-ppt
+    desc: Filename has PPT document extension
+    crit: notable
+    if:
+      type: basename
+      regex: '\.(ppt|pptx)$'
+
+  - id: basename-is-doc-other-1
+    desc: Filename has PDF, RTF or TXT extension
+    crit: notable
+    if:
+      type: basename
+      regex: '\.(pdf|rtf|txt)$'
+
+  - id: basename-is-doc-other-2
+    desc: Filename has CSV, ODS or ODT extension
+    crit: notable
+    if:
+      type: basename
+      regex: '\.(csv|ods|odt)$'
+
+  - id: basename-is-media-video-1
+    desc: Filename has video extension (1)
+    crit: notable
+    if:
+      type: basename
+      regex: '\.(mp4|avi|mov)$'
+
+  - id: basename-is-media-video-2
+    desc: Filename has video extension (2)
+    crit: notable
+    if:
+      type: basename
+      regex: '\.(mkv|flv|wmv)$'
+
+  - id: basename-is-media-audio
+    desc: Filename has audio extension
+    crit: notable
+    if:
+      type: basename
+      regex: '\.(mp3|wav)$'
+
+  - id: basename-is-media-image-common
+    desc: Filename has common image extension
+    crit: notable
+    if:
+      type: basename
+      regex: '\.(png|jpg|jpeg|gif)$'
+
+  - id: basename-is-media-image-web
+    desc: Filename has web image extension
+    crit: notable
+    if:
+      type: basename
+      regex: '\.(bmp|ico|svg|webp)$'
+
+  - id: basename-is-media-image-pro
+    desc: Filename has professional image extension
+    crit: notable
+    if:
+      type: basename
+      regex: '\.(tiff|tif)$'
+
+composite_rules:
+  - id: basename-is-doc-office
+    desc: Filename has Office document extension
+    crit: notable
+    any:
+      - id: basename-is-doc-office-word
+      - id: basename-is-doc-office-excel
+      - id: basename-is-doc-office-ppt
+
+  - id: basename-is-doc
+    desc: Filename has document extension
+    crit: notable
+    any:
+      - id: basename-is-doc-office
+      - id: basename-is-doc-other-1
+      - id: basename-is-doc-other-2
+
+  - id: basename-is-media-image
+    desc: Filename has image extension
+    crit: notable
+    any:
+      - id: basename-is-media-image-common
+      - id: basename-is-media-image-web
+      - id: basename-is-media-image-pro
+
+  - id: basename-is-media
+    desc: Filename has media extension
+    crit: notable
+    any:
+      - id: basename-is-media-video-1
+      - id: basename-is-media-video-2
+      - id: basename-is-media-audio
+      - id: basename-is-media-image
+
+  - id: pe-masquerading-as-image
+    desc: PE executable hiding as image file
+    all:
+      - id: metadata/format/magic::pe-dos-stub
+      - id: basename-is-media
+
+  - id: pe-masquerading-as-doc
+    desc: PE executable hiding as document file
+    all:
+      - id: metadata/format/magic::pe-dos-stub
+      - id: basename-is-doc
+
+  - id: elf-masquerading-as-media
+    desc: ELF executable hiding as media file
+    all:
+      - id: metadata/format/magic::elf-header
+      - id: basename-is-media
+
+  - id: elf-masquerading-as-doc
+    desc: ELF executable hiding as document file
+    all:
+      - id: metadata/format/magic::elf-header
+      - id: basename-is-doc
+
+  - id: macho-masquerading-as-media
+    desc: Mach-O executable hiding as media file
+    any:
+      - id: metadata/format/magic::macho-32
+      - id: metadata/format/magic::macho-64
+    all:
+      - id: basename-is-media
+
+  - id: macho-masquerading-as-doc
+    desc: Mach-O executable hiding as document file
+    any:
+      - id: metadata/format/magic::macho-32
+      - id: metadata/format/magic::macho-64
+    all:
+      - id: basename-is-doc

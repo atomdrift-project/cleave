@@ -1,0 +1,89 @@
+# Module Export/Import Patterns
+# CommonJS, ES modules, package.json module fields
+
+defaults:
+  for: [package.json, javascript, typescript]
+
+traits:
+  - id: has-default-export
+    desc: Code has default export
+    crit: notable
+    conf: 0.8
+    if:
+      type: string
+      regex: "export\\s+default"
+
+  - id: module-exports-object
+    desc: "module.exports = {} object pattern"
+    crit: notable
+    conf: 0.6
+    if:
+      type: string
+      regex: "module\\.exports = \\{"
+
+  # Package.json module fields
+  - id: has-module-entry
+    desc: Package has ESM module entry
+    crit: notable
+    conf: 0.85
+    if:
+      type: string
+      regex: '"module":\s*"'
+
+  - id: pkg-module-field
+    desc: '"module": field in package.json'
+    crit: notable
+    conf: 0.6
+    if:
+      type: string
+      substr: '"module":'
+
+  - id: pkg-exports-field-entry
+    desc: '"exports": field in package.json'
+    crit: notable
+    conf: 0.6
+    if:
+      type: string
+      substr: '"exports":'
+
+  - id: has-exports-field
+    desc: Package has modern exports field
+    crit: notable
+    conf: 0.85
+    if:
+      type: kv
+      path: "exports"
+
+  - id: cjs-exports-pattern
+    desc: CommonJS exports.property pattern
+    crit: notable
+    conf: 0.6
+    if:
+      type: string
+      regex: "exports\\.[a-zA-Z]+ ="
+
+composite_rules:
+  - id: has-esm-export
+    desc: Code exports functionality via ES
+    crit: notable
+    conf: 0.85
+    any:
+      - id: metadata/lang/javascript-features::export-default-const-func-class
+      - id: metadata/lang/javascript-features::export-async-let-var-brace
+
+  - id: esm-export-pattern
+    desc: ES module export keyword pattern
+    crit: notable
+    conf: 0.6
+    any:
+      - id: metadata/lang/javascript-features::export-const-func-class
+      - id: metadata/lang/javascript-features::export-let-var-async
+
+  - id: has-multiple-exports
+    desc: Code has multiple named exports
+    crit: notable
+    conf: 0.85
+    any:
+      - { id: esm-export-pattern }
+      - { id: cjs-exports-pattern }
+      - { id: module-exports-object }

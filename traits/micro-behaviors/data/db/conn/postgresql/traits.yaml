@@ -1,0 +1,77 @@
+# Database Connection - POSTGRESQL
+
+defaults:
+  for: [all]
+
+traits:
+  # === PostgreSQL micro-behaviors ===
+  - id: libpq
+    desc: libpq library
+    crit: notable
+    conf: 0.9
+    if:
+      type: string
+      substr: "libpq"
+
+  - id: pqconnect
+    desc: PQconnect function
+    crit: notable
+    conf: 0.9
+    if:
+      type: symbol
+      regex: "PQconnect"
+
+  - id: postgres-url
+    desc: postgres:// URL scheme
+    crit: notable
+    conf: 0.9
+    if:
+      type: string
+      substr: "postgres://"
+
+  - id: postgresql-url
+    desc: postgresql:// URL scheme
+    crit: notable
+    conf: 0.9
+    if:
+      type: string
+      substr: "postgresql://"
+
+  - id: pq-dot
+    desc: pq. Go driver
+    crit: notable
+    conf: 0.9
+    if:
+      type: string
+      exact: "pq."
+
+  - id: psycopg2
+    desc: psycopg2 Python driver
+    crit: notable
+    conf: 0.9
+    if:
+      type: string
+      substr: "psycopg2"
+
+  - id: pg8000
+    desc: pg8000 Python driver
+    crit: notable
+    conf: 0.9
+    if:
+      type: string
+      substr: "pg8000"
+
+composite_rules:
+  # PostgreSQL composite (migrated from YARA)
+  - id: postgresql
+    desc: PostgreSQL database connectivity
+    crit: notable
+    conf: 0.9
+    any:
+      - id: libpq
+      - id: pqconnect
+      - id: postgres-url
+      - id: postgresql-url
+      - id: pq-dot
+      - id: psycopg2
+      - id: pg8000

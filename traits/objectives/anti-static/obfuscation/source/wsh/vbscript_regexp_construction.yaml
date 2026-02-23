@@ -1,0 +1,8 @@
+traits:
+  - id: vbscript-regexp-construction
+    desc: Detects fragmented VBScript.RegExp string construction
+    crit: suspicious
+    for: [javascript]
+    if:
+      type: raw
+      regex: '("VBS"|''VBS'')\s*\+\s*("cript"|''cript'')\s*\+\s*("\.RegE"|''\.RegE'')'

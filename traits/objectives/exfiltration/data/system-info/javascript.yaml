@@ -1,0 +1,10 @@
+composite_rules:
+  - id: env-vars
+    desc: Obfuscated exfiltration of environment variables
+    crit: hostile
+    conf: 0.95
+    for: [javascript, typescript]
+    all:
+      - id: micro-behaviors/os/env/access::javascript
+      - id: objectives/anti-static/obfuscation/require::require-hex
+      - id: micro-behaviors/data/encode/base64

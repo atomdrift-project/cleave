@@ -1,0 +1,14 @@
+defaults:
+  platforms: [macos]
+  attack: "T1105"
+
+traits: []
+
+composite_rules:
+  - id: macos-installer-stub
+    desc: Generic macOS installer stub with auto-download
+    crit: suspicious
+    conf: 0.8
+    all:
+      - id: micro-behaviors/os/package-manager/install::download-config-url
+      - id: micro-behaviors/os/package-manager/install::auto-download-launch

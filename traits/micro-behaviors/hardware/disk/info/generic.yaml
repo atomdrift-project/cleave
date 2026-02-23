@@ -1,0 +1,16 @@
+# Disk Information - Generic
+# ATT&CK: T1082 (System Information Discovery)
+
+defaults:
+  for: [all]
+
+traits:
+  - id: freespace
+    desc: Disk free space query
+    crit: baseline
+    conf: 0.5
+    attack: "T1082"
+    platforms: [all]
+    if:
+      type: string
+      substr: "DiskFreeSpace"

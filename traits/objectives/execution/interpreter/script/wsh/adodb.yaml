@@ -1,0 +1,11 @@
+defaults:
+  crit: notable
+  conf: 0.8
+  for: [javascript]
+
+traits:
+  - id: wsh-adodb-stream-binary
+    desc: "Sets stream type to binary (ADODB.Stream)"
+    if:
+      type: raw
+      regex: '\.type\s*=\s*1\b'

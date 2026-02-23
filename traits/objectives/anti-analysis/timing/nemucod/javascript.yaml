@@ -1,0 +1,11 @@
+composite_rules:
+  - id: nemucod-jitter-check
+    desc: Detects Nemucod-specific timing jitter check for VM evasion
+    crit: hostile
+    for: [javascript]
+    all:
+      - id: micro-behaviors/host/interpreter/jscript::is-jscript
+      - id: micro-behaviors/time/measure/delta::js-date-diff-jitter-check
+    any:
+      - id: micro-behaviors/anti-static/obfuscate/string-conceal/nemucod::save-to-file-fragment-oFil
+      - id: objectives/anti-static/obfuscation/source/syntax::js-fragmented-property-access

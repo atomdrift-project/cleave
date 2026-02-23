@@ -1,0 +1,526 @@
+defaults:
+  for:
+  - python
+  attack: T1195.002
+traits:
+- id: windows-start-command-a
+  desc: Windows start command execution
+  crit: suspicious
+  conf: 0.85
+  if:
+    type: string
+    regex: \bstart\s+['"]?[a-zA-Z0-9._\\/-]+\.(exe|bat|cmd|ps1)
+  unless:
+  - type: basename
+    regex: \.pyc$
+- id: windows-start-command-b
+  desc: Windows start command execution
+  crit: suspicious
+  conf: 0.85
+  if:
+    type: string
+    regex: \bstart\s+['"]?[a-zA-Z0-9._\\/-]+\.(scr|msi|com)
+  unless:
+  - type: basename
+    regex: \.pyc$
+- id: os-system-start-concat
+  desc: os.system('start ' + ...) pattern
+  crit: suspicious
+  conf: 0.9
+  if:
+    type: raw
+    regex: os\.system\s*\(\s*['"]start\s+['"]\s*\+
+- id: windows-computername-env
+  desc: COMPUTERNAME environment access
+  crit: notable
+  conf: 0.85
+  if:
+    type: string
+    substr: COMPUTERNAME
+- id: exe-file-extension
+  desc: .exe file extension reference
+  crit: notable
+  conf: 0.9
+  if:
+    id: micro-behaviors/fs/path/extension::exe
+  not:
+  - python.exe
+  - pip.exe
+  - mimikatz.exe
+  - calc.exe
+  - regex: \bwhich\b.{0,100}\.exe
+  - regex: \bfind\b.{0,100}\.exe
+
+- id: scr-file-extension
+  desc: .scr file extension (screensaver/executable)
+  crit: notable
+  conf: 0.95
+  if:
+    type: raw
+    regex: \.scr['"]
+- id: open-write-content
+  desc: open().write() to file
+  crit: notable
+  conf: 0.8
+  if:
+    type: symbol
+    regex: open\(.{0,100}\)\.write
+- id: executable-download-url-a
+  desc: URL ending in executable extension
+  crit: suspicious
+  conf: 0.9
+  if:
+    type: string
+    regex: https?://[^\s'"]{1,120}\.(exe|scr|msi|bat)([?#][^\s'"]{0,120})?$
+- id: executable-download-url-b
+  desc: URL ending in executable extension
+  crit: suspicious
+  conf: 0.9
+  if:
+    type: string
+    regex: https?://[^\s'"]{1,120}\.(cmd|ps1|dll)([?#][^\s'"]{0,120})?$
+- id: install-run-override
+  desc: Install command run() override
+  crit: notable
+  conf: 0.85
+  if:
+    type: symbol
+    exact: install.run
+- id: cmdclass-install
+  desc: cmdclass install hook
+  crit: notable
+  conf: 0.8
+  if:
+    type: string
+    regex: cmdclass.{0,50}['"]install['"]
+- id: setup-py-import-random
+  desc: random module imported in setup.py
+  crit: notable
+  conf: 0.8
+  attack: T1027
+  if:
+    type: raw
+    substr: import random
+- id: distutils-import-content
+  desc: Deprecated distutils import in source
+  crit: notable
+  conf: 0.8
+  attack: T1195.002
+  if:
+    type: raw
+    substr: from distutils
+- id: setup-py-shortcut-target-fingerprint
+  desc: Shortcut target executable fingerprinting
+  crit: notable
+  conf: 0.85
+  attack: T1518
+  if:
+    type: raw
+    substr: os.path.basename
+- id: powershell-encoded-command-in-string
+  desc: PowerShell encoded command in Python string
+  crit: suspicious
+  conf: 0.95
+  attack: T1027
+  if:
+    type: raw
+    regex: powershell.{0,60}-[Ee](ncoded)?[Cc](ommand)?\s+[A-Za-z0-9+/=]{20,}
+- id: powershell-expand-archive
+  desc: PowerShell archive extraction in string
+  crit: suspicious
+  conf: 0.9
+  attack: T1140
+  if:
+    type: string
+    substr: Expand-Archive
+- id: programdata-drop-path
+  desc: ProgramData directory as drop location
+  crit: notable
+  conf: 0.85
+  attack: T1074.001
+  if:
+    type: string
+    regex: C:[/\\\\]ProgramData[/\\\\]
+    case_insensitive: true
+- id: deceptive-install-message
+  desc: Deceptive install progress message
+  crit: suspicious
+  conf: 0.85
+  attack: T1204.001
+  if:
+    type: string
+    regex: '[Ii]nstalling dependencies.{0,50}(please wait|please be patient)'
+
+- id: surveillance-deps-install-1
+  desc: Surveillance library (screens/input)
+  crit: notable
+  conf: 0.8
+  if:
+    type: string
+    regex: pip install.{0,200}(pyscreenshot|pynput|pydirectinput)
+- id: surveillance-deps-install-2
+  desc: Surveillance library (clip/key)
+  crit: notable
+  conf: 0.8
+  if:
+    type: string
+    regex: pip install.{0,200}(pyperclip|keyring)
+
+- id: cmd-move-rename
+  desc: Windows cmd /c move file rename
+  crit: notable
+  conf: 0.85
+  attack: T1036.005
+  if:
+    type: string
+    regex: cmd /c move\b
+- id: cmd-del-cleanup
+  desc: Windows cmd /c del artifact cleanup
+  crit: notable
+  conf: 0.85
+  attack: T1070.004
+  if:
+    type: string
+    regex: cmd /c del\b
+- id: net-session-admin-check
+  desc: Windows admin check via net session
+  crit: suspicious
+  conf: 0.9
+  attack: T1033
+  if:
+    type: raw
+    substr: net session
+- id: setup-py-win32com-import
+  desc: COM automation import in setup.py
+  crit: suspicious
+  conf: 0.9
+  attack: T1559.001
+  if:
+    type: raw
+    substr: from win32com.client import Dispatch
+- id: setup-py-getenv
+  desc: Environment variable access in setup.py
+  crit: notable
+  conf: 0.85
+  attack: T1082
+  if:
+    type: raw
+    substr: os.getenv
+- id: pip-module-string
+  desc: pip module reference string
+  crit: notable
+  conf: 0.7
+  if:
+    type: string
+    regex: -m\s+pip
+
+- id: python-release-impersonation-url-1
+  desc: Fake Python release (exe/scr/msi)
+  crit: notable
+  conf: 0.85
+  if:
+    type: string
+    regex: https?://[a-z0-9-]*python[a-z0-9-]*\.[a-z]+/[^\s]{0,50}\.(exe|scr|msi)
+- id: python-release-impersonation-url-2
+  desc: Fake Python release (bat/cmd)
+  crit: notable
+  conf: 0.85
+  if:
+    type: string
+    regex: https?://[a-z0-9-]*python[a-z0-9-]*\.[a-z]+/[^\s]{0,50}\.(bat|cmd)
+
+- id: powershell-download-cmd-b
+  desc: PowerShell download command in string
+  crit: suspicious
+  conf: 0.9
+  attack: T1059.001
+  if:
+    type: string
+    regex: Start-BitsTransfer.{0,100}
+    case_insensitive: true
+- id: powershell-download-source
+  desc: PowerShell download source marker
+  crit: suspicious
+  conf: 0.9
+  attack: T1059.001
+  if:
+    type: string
+    regex: '\$env:'
+    case_insensitive: true
+
+composite_rules:
+- id: powershell-download-cmd-a
+  desc: PowerShell download command in string
+  crit: suspicious
+  conf: 0.9
+  attack: T1059.001
+  any:
+    - id: micro-behaviors/communications/http/lib/invoke-webrequest::invoke-webrequest
+    - id: micro-behaviors/communications/http/lib/invoke-webrequest::webclient-download
+- id: surveillance-deps-install
+  desc: Surveillance library mass installation
+  crit: suspicious
+  conf: 0.9
+  attack: T1059.006
+  all:
+    - id: surveillance-deps-install-1
+    - id: surveillance-deps-install-2
+- id: python-release-impersonation-url
+  desc: Fake Python release URL
+  crit: suspicious
+  conf: 0.95
+  any:
+    - id: python-release-impersonation-url-1
+    - id: python-release-impersonation-url-2
+- id: windows-start-command
+  desc: Windows start command execution
+  crit: suspicious
+  conf: 0.85
+  any:
+  - id: windows-start-command-a
+  - id: windows-start-command-b
+- id: executable-download-url
+  desc: URL ending in executable extension
+  crit: suspicious
+  conf: 0.9
+  any:
+  - id: executable-download-url-a
+  - id: executable-download-url-b
+- id: powershell-download-cmd
+  desc: PowerShell download command in string
+  crit: suspicious
+  conf: 0.9
+  attack: T1059.001
+  any:
+  - id: powershell-download-cmd-a
+  - id: powershell-download-cmd-b
+- id: powershell-download-in-string
+  desc: PowerShell download cradle in Python string
+  crit: suspicious
+  conf: 0.9
+  attack: T1059.001
+  all:
+  - id: powershell-download-cmd
+  - id: powershell-download-source
+- id: robust-setup-py
+  desc: setup.py installation file
+  crit: notable
+  conf: 1.0
+  any:
+  - id: objectives/lateral-movement/supply-chain/pypi/general::setup-py-file
+  - id: objectives/lateral-movement/supply-chain/pypi/install-patterns::setuptools-setup-call
+  - id: distutils-import-content
+- id: python-command-exec
+  desc: Python command execution
+  crit: notable
+  conf: 0.85
+  any:
+  - id: micro-behaviors/process/create/shell::python-os-system
+  - id: micro-behaviors/process/create/subprocess::methods
+- id: pypi-install-autoinstall-dropper
+  desc: PyPI setup.py executes pip install command
+  crit: hostile
+  conf: 0.95
+  mbc: B0024
+  attack: T1195.002
+  all:
+  - id: robust-setup-py
+  - id: python-command-exec
+  any:
+  - id: micro-behaviors/os/package-manager/install::pip-install
+  - id: pip-module-string
+- id: windows-start-exec
+  desc: Windows start command with executable
+  crit: suspicious
+  conf: 0.9
+  all:
+  - id: windows-start-command
+  - id: python-command-exec
+- id: executable-download
+  desc: Downloads executable file
+  crit: suspicious
+  conf: 0.9
+  all:
+  - id: micro-behaviors/communications/http/request::request-python
+  - id: executable-download-url
+- id: binary-file-drop
+  desc: Binary file write to disk
+  crit: suspicious
+  conf: 0.85
+  all:
+  - id: exe-file-extension
+  any:
+  - id: python-command-exec
+  - id: micro-behaviors/communications/http/request::request-python
+  unless:
+  - id: metadata/builder/pip::setuptools-package-index
+  downgrade:
+    any:
+    - id: metadata/quality/testing::unittest-module
+- id: scr-to-exe-mismatch
+  desc: .scr to .exe extension mismatch (dropper pattern)
+  crit: hostile
+  conf: 0.98
+  all:
+  - id: scr-file-extension
+  - id: exe-file-extension
+  any:
+  - id: open-write-content
+- id: pypi-install-dropper
+  desc: PyPI install-time dropper
+  crit: hostile
+  conf: 0.95
+  mbc: E1204
+  attack: T1204.002
+  all:
+  - id: robust-setup-py
+  - id: micro-behaviors/communications/http/request::request-python
+  - id: python-command-exec
+- id: download-execute-chain
+  desc: Downloads and executes file
+  crit: hostile
+  conf: 0.92
+  mbc: E1204
+  attack: T1204.002
+  all:
+  - id: executable-download
+  - id: python-command-exec
+- id: pypi-c2-dropper
+  desc: PyPI setup.py downloads and executes C2 payload
+  crit: hostile
+  conf: 0.95
+  mbc: E1204
+  attack: T1204.002
+  all:
+  - id: robust-setup-py
+  - id: micro-behaviors/communications/network/ip::http-ip-url
+  - id: micro-behaviors/process/create/subprocess::methods
+- id: windows-rename-execute-delete
+  desc: Windows file rename-execute-delete dropper chain
+  crit: hostile
+  conf: 0.95
+  mbc: E1204
+  attack: T1059.003
+  all:
+  - id: micro-behaviors/process/create/shell::cmd-exe
+  - id: cmd-move-rename
+  - id: cmd-del-cleanup
+- id: pypi-browser-extension-dropper
+  desc: PyPI package drops browser extension via shortcut hijack
+  crit: hostile
+  conf: 0.95
+  mbc: E1204
+  attack: T1176
+  all:
+  - id: robust-setup-py
+  - id: objectives/execution/autoinstall/pip::main-call-content
+  - id: objectives/persistence/startup/registry::windows-shortcut-argument-injection
+  - id: objectives/anti-static/obfuscation/scripting::advanced-python-obfuscation
+- id: pypi-shortcut-hijack-dropper
+  desc: PyPI package enumerates and hijacks browser shortcuts
+  crit: hostile
+  conf: 0.95
+  mbc: E1204
+  attack: T1176
+  all:
+  - id: robust-setup-py
+  - id: objectives/execution/autoinstall/pip::main-call-content
+  - id: objectives/persistence/startup/registry::windows-shortcut-walk-modify
+  - id: micro-behaviors/fs/directory/mkdir::mkdir-python
+- id: pypi-com-extension-dropper
+  desc: PyPI setup.py uses COM automation to drop extension
+  crit: hostile
+  conf: 0.95
+  mbc: E1204
+  attack: T1176
+  all:
+  - id: setup-py-win32com-import
+  - id: setup-py-getenv
+  - id: objectives/persistence/startup/registry::create-shortcut
+- id: shortcut-target-browser-fingerprint
+  desc: Browser fingerprinting via shortcut TargetPath
+  crit: suspicious
+  conf: 0.9
+  attack: T1518
+  all:
+  - id: setup-py-shortcut-target-fingerprint
+  - id: objectives/persistence/startup/registry::shortcut-target-path
+  any:
+  - id: objectives/persistence/startup/registry::shortcut-arguments
+  - id: objectives/persistence/startup/registry::create-shortcut
+- id: install-time-gated-execution
+  desc: Platform-gated install-time execution in setup.py
+  crit: hostile
+  conf: 0.9
+  mbc: B0024
+  attack: T1195.002
+  all:
+  - id: robust-setup-py
+  - id: micro-behaviors/os/info/system::sys-platform-check
+  - id: micro-behaviors/os/info/system::sys-argv-access
+  - id: objectives/execution/autoinstall/pip::main-call-content
+  downgrade:
+    any:
+    - id: metadata/quality/versioned
+- id: obfuscated-setup-py-file-dropper
+  desc: Obfuscated setup.py writes payload files to disk
+  crit: hostile
+  conf: 0.95
+  mbc: E1204
+  attack: T1195.002
+  all:
+  - id: robust-setup-py
+  - id: objectives/anti-static/obfuscation/scripting::advanced-python-obfuscation
+  - id: micro-behaviors/fs/directory/mkdir::mkdir-python
+- id: pypi-powershell-dropper
+  desc: PyPI setup.py PowerShell download-execute chain
+  crit: hostile
+  conf: 0.95
+  mbc: E1204
+  attack: T1059.001
+  all:
+  - id: robust-setup-py
+  - id: micro-behaviors/process/create/subprocess::popen-content
+  - id: powershell-download-in-string
+  - id: objectives/execution/background/daemon::powershell-hidden
+- id: pypi-powershell-encoded-dropper
+  desc: PyPI setup.py with encoded PowerShell payload
+  crit: hostile
+  conf: 0.98
+  mbc: E1204
+  attack: T1059.001
+  all:
+  - id: robust-setup-py
+  - id: micro-behaviors/process/create/subprocess::popen-content
+  - id: powershell-encoded-command-in-string
+  - id: objectives/execution/background/daemon::powershell-hidden
+- id: pypi-powershell-stager
+  desc: PyPI setup.py downloads and stages hidden payload
+  crit: hostile
+  conf: 0.95
+  mbc: B0024
+  attack: T1195.002
+  all:
+  - id: robust-setup-py
+  - id: powershell-download-in-string
+  - id: powershell-expand-archive
+  - id: objectives/execution/interpreter/vbscript/interpreter::vbs-powershell-launch
+- id: pypi-extension-dropper-admin-gated
+  desc: PyPI setup.py drops extension with admin gating
+  crit: hostile
+  conf: 0.95
+  mbc: E1204
+  attack: T1195.002
+  all:
+  - id: setup-py-getenv
+  - id: micro-behaviors/os/admin/check::ctypes-is-admin
+  - id: micro-behaviors/fs/directory/mkdir::mkdir-python
+- id: python-impersonation-dropper
+  desc: Fake Python release dropper
+  crit: hostile
+  conf: 0.98
+  mbc: E1204
+  attack: T1036.005
+  all:
+  - id: python-release-impersonation-url
+  - id: python-command-exec

@@ -1,0 +1,30 @@
+# Reverse Shell Detection - Perl
+# MBC: B0033 (Adversary-in-the-Middle)
+# ATT&CK: T1059
+
+defaults:
+  for: [perl]
+
+traits:
+  # === Perl redirect micro-trait ===
+  - id: perl-redir
+    desc: Perl file descriptor redirect
+    crit: notable
+    conf: 0.7
+    if:
+      type: string
+      exact: "\">&"
+
+composite_rules:
+  # Perl reverse shell (migrated from YARA)
+  - id: reverse-shell-perl
+    desc: Reverse shell in Perl
+    crit: suspicious
+    conf: 0.66
+    mbc: "B0033"
+    attack: "T1059"
+    all:
+      - id: micro-behaviors/communications/socket/create::socket-call
+      - id: micro-behaviors/communications/socket/create::open-call
+      - id: perl-redir
+      - id: micro-behaviors/process/create/shell::sh-interactive

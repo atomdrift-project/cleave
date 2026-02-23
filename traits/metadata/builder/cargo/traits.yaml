@@ -1,0 +1,50 @@
+# Build System - CARGO
+
+defaults:
+  for: [all]
+
+traits:
+  # === Cargo micro-behaviors ===
+  - id: cargo-toml
+    desc: Cargo.toml file
+    crit: notable
+    conf: 0.9
+    if:
+      type: string
+      substr: "Cargo.toml"
+
+  - id: cargo-namespace
+    desc: "cargo:: namespace"
+    crit: notable
+    conf: 0.9
+    if:
+      type: string
+      substr: "cargo::"
+
+  - id: registry-src
+    desc: /registry/src/ path
+    crit: notable
+    conf: 0.9
+    if:
+      type: string
+      substr: "/registry/src/"
+
+  - id: dot-cargo
+    desc: .cargo/ directory
+    crit: notable
+    conf: 0.9
+    if:
+      type: string
+      substr: ".cargo/"
+
+composite_rules:
+  # Cargo composite (migrated from YARA)
+  - id: cargo
+    desc: Built with Cargo (Rust)
+    crit: notable
+    conf: 0.9
+    any:
+      - id: cargo-toml
+      - id: cargo-namespace
+      - id: registry-src
+      - id: dot-cargo

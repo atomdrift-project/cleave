@@ -1,0 +1,109 @@
+# Dash-Prefix Filename Evasion Detection
+# Detects use of filenames starting with dash to evade command parsing
+# ATT&CK: T1036.005 (Match Legitimate Name or Location)
+# MBC: F0004 (Masquerading)
+#
+# Technique: Files/processes starting with "-" are problematic because:
+# - Many commands interpret leading dash as option flags
+# - Requires special handling (-- terminator, ./-file) to process
+# - Evades casual inspection and basic tooling
+
+defaults:
+  for: [shell]
+  crit: suspicious
+  attack: "T1036.005"
+  mbc: "F0004"
+
+traits:
+  # === Dash-prefix file in system directory ===
+  - id: dash-file-bin
+    desc: Dash-prefix file in /bin
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: raw
+      regex: "/bin/-[a-zA-Z0-9_]+"
+
+  - id: dash-file-sbin
+    desc: Dash-prefix file in /sbin
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: raw
+      regex: "/sbin/-[a-zA-Z0-9_]+"
+
+  - id: dash-file-usr
+    desc: Dash-prefix file in /usr
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: raw
+      regex: "/usr/(s?bin|local)/-[a-zA-Z0-9_]+"
+
+  - id: dash-file-tmp
+    desc: Dash-prefix file in /tmp
+    crit: suspicious
+    conf: 0.85
+    if:
+      type: raw
+      regex: "/(tmp|var/tmp|dev/shm)/-[a-zA-Z0-9_]+"
+
+  # === Copy to dash-prefix path ===
+  - id: cp-to-dash-file
+    desc: Copy file to dash-prefix name
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: raw
+      regex: 'cp\s+[^|&;\n]{1,120}\s+/[a-z/]+/-[a-zA-Z0-9_]+'
+
+  # === Execute dash-prefix file ===
+  - id: exec-dot-slash-dash
+    desc: Execute dash-prefix via ./
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: raw
+      regex: '(exec|\.\/|\$\(|`)\s*\./-[a-zA-Z0-9_]+'
+
+  # === Delete with double-dash terminator ===
+  - id: rm-double-dash
+    desc: rm with -- terminator
+    crit: notable
+    conf: 0.7
+    if:
+      type: raw
+      regex: 'rm\s+(-[a-z]{1,8}\s+){0,4}--\s+'
+
+  - id: rm-dash-prefix-file
+    desc: Delete dash-prefix file
+    crit: suspicious
+    conf: 0.85
+    if:
+      type: raw
+      regex: 'rm\s+(-[a-z]{1,8}\s+){0,4}--\s+-[a-zA-Z0-9_]+'
+
+composite_rules:
+  # Dash-prefix file in system path (any location)
+  - id: dash-prefix-system-file
+    desc: Dash-prefix file in system path
+    crit: suspicious
+    conf: 0.9
+    any:
+      - id: dash-file-bin
+      - id: dash-file-sbin
+      - id: dash-file-usr
+      - id: dash-file-tmp
+
+  # Copy-execute-delete pattern with dash-prefix
+  - id: dash-prefix-dropper
+    desc: Copy-execute-delete with dash-prefix evasion
+    crit: hostile
+    conf: 0.95
+    attack: "T1036.005"
+    mbc: "F0004"
+    for: [shell]
+    all:
+      - id: cp-to-dash-file
+      - id: exec-dot-slash-dash
+      - id: rm-dash-prefix-file

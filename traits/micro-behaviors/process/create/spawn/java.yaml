@@ -1,0 +1,63 @@
+# Java Process Management Detection
+# MBC: E1203 (Execute Code), E1064 (Run as System)
+# ATT&CK: T1059 (Command and Scripting Interpreter)
+
+traits:
+  - id: java-runtime-exec
+    desc: Java Runtime exec for command execution
+    crit: notable
+    conf: 0.85
+    mbc: "E1203"
+    attack: "T1059"
+    for: [java, class]
+    if:
+      type: string
+      substr: java.lang.Runtime.exec
+
+  - id: java-processbuilder
+    desc: Java ProcessBuilder for process creation
+    crit: notable
+    conf: 0.85
+    mbc: "E1203"
+    attack: "T1059"
+    for: [java, class]
+    if:
+      type: string
+      substr: java.lang.ProcessBuilder
+
+  - id: java-process-management-class
+    desc: Java process management classes in obfuscated code
+    crit: suspicious
+    conf: 0.8
+    mbc: "E1203"
+    attack: "T1059"
+    for: [java, class]
+    if:
+      type: string
+      regex: '[Mm]anager.{0,50}\.class'
+      count_min: 1
+
+  - id: java-process-destruction
+    desc: Java process termination
+    crit: notable
+    conf: 0.8
+    mbc: "E1203"
+    attack: "T1059"
+    for: [java, class]
+    if:
+      type: string
+      substr: .destroy(
+
+composite_rules:
+  - id: java-process-manipulation
+    desc: Java process manipulation pattern
+    crit: suspicious
+    conf: 0.88
+    mbc: "E1203"
+    attack: "T1059"
+    for: [java, class]
+    any:
+      - id: java-runtime-exec
+      - id: java-processbuilder
+    all:
+      - id: java-process-management-class

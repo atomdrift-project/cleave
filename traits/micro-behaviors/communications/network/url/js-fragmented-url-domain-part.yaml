@@ -1,0 +1,11 @@
+defaults:
+  for: [all]
+
+traits:
+  - id: js-fragmented-url-domain-part
+    desc: Fragmented URL Domain Part (JS)
+    crit: notable
+    conf: 0.8
+    if:
+      type: string
+      regex: "bil\\.gen\\.asl\\.a"

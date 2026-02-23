@@ -1,0 +1,90 @@
+defaults:
+  for: [package.json]
+
+# Configuration File Markers
+
+traits:
+  - id: has-docs
+    desc: Package has documentation directory
+    crit: notable
+    conf: 0.85
+    for: [package.json]
+    if:
+      type: string
+      regex: '"docs"|"documentation"|"doc"'
+
+  - id: has-github-config-1
+    desc: Package references GitHub (config/workflows)
+    if:
+      type: string
+      regex: '\\.github|workflows|CONTRIBUTING'
+
+  - id: has-github-config-2
+    desc: Package references GitHub (docs/security)
+    if:
+      type: string
+      regex: 'CODE_OF_CONDUCT|SECURITY\\.md'
+
+  - id: has-tsconfig
+    desc: Package has TypeScript configuration
+    crit: notable
+    conf: 0.9
+    for: [package.json]
+    if:
+      type: string
+      regex: 'tsconfig\\.json|tsconfig\\.build\\.json'
+
+  - id: has-eslint-config
+    desc: Package has ESLint configuration
+    crit: notable
+    conf: 0.9
+    for: [package.json]
+    if:
+      type: string
+      regex: '\\.eslintrc|eslint\\.config|"eslintConfig":'
+
+  - id: has-prettier-config
+    desc: Package has Prettier configuration
+    crit: notable
+    conf: 0.9
+    for: [package.json]
+    if:
+      type: string
+      regex: '\\.prettierrc|prettier\\.config|"prettier":'
+
+  - id: has-babel-config
+    desc: Package has Babel configuration
+    crit: notable
+    conf: 0.85
+    for: [package.json]
+    if:
+      type: string
+      regex: '\\.babelrc|babel\\.config|"babel":'
+
+  - id: has-editorconfig
+    desc: Package has editor configuration
+    crit: notable
+    conf: 0.85
+    for: [package.json]
+    if:
+      type: string
+      regex: '\\.editorconfig'
+
+  - id: has-npmignore-or-files
+    desc: Package has publishing configuration
+    crit: notable
+    conf: 0.85
+    for: [package.json]
+    if:
+      type: string
+      regex: '\\.npmignore|"files"'
+
+composite_rules:
+  - id: has-github-config
+    desc: Package references GitHub configuration
+    crit: notable
+    conf: 0.9
+    for: [package.json]
+    any:
+      - id: has-github-config-1
+      - id: has-github-config-2

@@ -1,0 +1,9 @@
+traits:
+  - id: curl-smb-server
+    desc: curl SMB test server script
+    crit: notable
+    conf: 1.0
+    for: [python]
+    if:
+      type: string
+      substr: "Server for testing SMB"

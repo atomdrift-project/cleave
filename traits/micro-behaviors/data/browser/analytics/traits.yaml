@@ -1,0 +1,14 @@
+# Browser Analytics - Tracking IDs
+
+defaults:
+  for: [all]
+
+traits:
+  - id: google-analytics-id
+    desc: Hardcoded Google Analytics tracking ID
+    crit: notable
+    conf: 0.8
+    platforms: [all]
+    if:
+      type: string
+      regex: "UA-\\d{5,9}-\\d{1,3}"

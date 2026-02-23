@@ -1,0 +1,10 @@
+defaults:
+  for: [all]
+
+traits:
+  - id: mbr-mod-asm
+    desc: MBR Partition Modification (Assembly)
+    crit: suspicious
+    if:
+      type: raw
+      regex: 'mov\s+(word|byte)\s+ptr\s+\[([a-z0-9]+)\+(1be|0?1be)(\+[0-9a-f]+)?\],'

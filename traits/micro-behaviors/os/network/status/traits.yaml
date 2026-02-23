@@ -1,0 +1,32 @@
+# Network Connection Status
+# Tools for viewing active connections and sockets
+
+defaults:
+  for: [all]
+  crit: notable
+  conf: 0.9
+
+traits:
+  - id: netstat
+    desc: netstat command
+    if:
+      type: string
+      substr: netstat
+
+  - id: netstat-an
+    desc: netstat -an command
+    if:
+      type: string
+      substr: "netstat -an"
+
+  - id: ss
+    desc: ss socket statistics
+    if:
+      type: string
+      regex: "\\bss\\s+-[atnlup]"
+
+  - id: lsof-i
+    desc: lsof network listing
+    if:
+      type: string
+      substr: "lsof -i"

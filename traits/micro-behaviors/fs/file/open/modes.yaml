@@ -1,0 +1,14 @@
+# File opening modes
+# Detects specific access modes that can indicate malicious intent when combined with other behaviors.
+
+defaults:
+  for: [c, cpp, pe, elf, macho]
+
+traits:
+  - id: mode-read-write-binary
+    desc: Open file in binary read/write mode (rb+,
+    crit: notable
+    conf: 0.9
+    if:
+      type: raw
+      regex: '"[rw]b\+"'

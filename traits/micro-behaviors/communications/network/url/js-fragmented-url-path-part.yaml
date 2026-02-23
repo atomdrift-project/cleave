@@ -1,0 +1,11 @@
+defaults:
+  for: [all]
+
+traits:
+  - id: js-fragmented-url-path-part
+    desc: Fragmented URL Path Part (JS)
+    crit: notable
+    conf: 0.8
+    if:
+      type: string
+      regex: "/4bsdku3d"

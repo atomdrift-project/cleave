@@ -1,0 +1,22 @@
+# C# Random Number Generation Detection
+# Detects instantiation and use of random number generators
+
+defaults:
+  crit: baseline
+  for: [csharp]
+
+traits:
+  - id: random-instantiation
+    desc: Random number generator instantiation
+    conf: 0.7
+    if:
+      type: ast
+      node: object_creation_expression
+      exact: "new Random"
+
+  - id: random-next
+    desc: Random.Next() method call
+    conf: 0.7
+    if:
+      type: symbol
+      substr: "Random.Next"

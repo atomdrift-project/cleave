@@ -1,0 +1,50 @@
+# C# Process Execution Traits
+# objective: exec, behavior: process
+
+traits:
+  - id: start
+    desc: Process execution via Process.Start
+    crit: suspicious
+    mbc: "OB0006"
+    attack: "T1059"
+    conf: 0.95
+    if:
+      type: ast
+      kind: call
+      exact: "Process.Start"
+    for: [csharp]
+
+  - id: start-info
+    desc: Process start configuration
+    crit: notable
+    mbc: "OB0006"
+    attack: "T1059"
+    conf: 0.85
+    if:
+      type: ast
+      node: object_creation_expression
+      exact: "ProcessStartInfo"
+    for: [csharp]
+
+  - id: current-process
+    desc: Acquires handle to current process
+    crit: notable
+    mbc: "OB0006"
+    conf: 0.85
+    if:
+      type: ast
+      kind: call
+      exact: "GetCurrentProcess"
+    for: [csharp]
+
+  - id: terminate
+    desc: Process termination via Kill()
+    crit: suspicious
+    mbc: "E1562"
+    attack: "T1562"
+    conf: 0.95
+    if:
+      type: ast
+      kind: call
+      exact: ".Kill("
+    for: [csharp]

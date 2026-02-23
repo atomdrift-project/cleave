@@ -1,0 +1,23 @@
+# High Entropy in Executable Sections
+# Detects packing/compression of executable code (common malware obfuscation)
+
+defaults:
+  for: [pe, elf, macho]
+  crit: suspicious
+  conf: 0.85
+
+traits:
+  - id: high-entropy-exec-section
+    desc: High entropy in executable section (possible packing)
+    if:
+      type: section
+      executable: true
+      entropy_min: 7.0
+    downgrade:
+      any:
+        - id: metadata/signed/platform::apple
+    # Shannon entropy > 7.0 in executable code indicates:
+    # - Packed/compressed code (UPX, ASPack, etc.)
+    # - Encrypted payloads
+    # - Obfuscated malware
+    # Normal compiled code has entropy ~5.5-6.5

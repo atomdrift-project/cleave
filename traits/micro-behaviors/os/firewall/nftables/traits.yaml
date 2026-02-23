@@ -1,0 +1,20 @@
+# nftables - Modern Linux Packet Filtering
+# Successor to iptables
+
+defaults:
+  for: [all]
+  crit: notable
+  conf: 0.9
+
+traits:
+  - id: nft
+    desc: nft command
+    if:
+      type: string
+      exact: "nft "
+
+  - id: nftables
+    desc: nftables reference
+    if:
+      type: string
+      substr: nftables

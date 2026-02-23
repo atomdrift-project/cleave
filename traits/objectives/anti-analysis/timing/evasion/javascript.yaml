@@ -1,0 +1,68 @@
+# JavaScript Timing Evasion
+# Detects use of Date or performance.now combined with delays to detect analysis.
+# MBC: B0001.032 (Timing/Delay Check)
+# ATT&CK: T1497.001 (Virtualization/Sandbox Evasion: System Checks)
+
+defaults:
+  for: [javascript, typescript]
+  mbc: "B0001.032"
+  attack: "T1497.001"
+
+traits:
+  - id: js-date-loop
+    desc: Multiple Date object creations in proximity
+    crit: notable
+    conf: 0.5
+    if:
+      type: ast
+      language: javascript
+      # Matches: new Date()
+      query: >
+        (new_expression
+          constructor: (identifier) @name
+          (#eq? @name "Date")
+        )
+      count_min: 2
+      near_lines: 30
+
+  - id: js-date-diff
+    desc: Date difference measurement
+    crit: notable
+    conf: 0.6
+    if:
+      type: ast
+      language: javascript
+      # Matches: t2 - t1
+      query: >
+        (binary_expression
+          left: (identifier)
+          operator: "-"
+          right: (identifier)
+        )
+
+composite_rules:
+  - id: js-wscript-sleep-timing
+    desc: JScript WScript.Sleep timing-based evasion
+    crit: suspicious
+    conf: 0.8
+    all:
+      - id: js-date-loop
+      - id: objectives/execution/interpreter/script/wsh::wscript-sleep
+
+  - id: js-obfuscated-timing-evasion
+    desc: Obfuscated JScript timing-based analysis evasion
+    crit: suspicious
+    conf: 0.8
+    needs: 2
+    any:
+      - id: objectives/execution/interpreter/script/wsh::timing-fragment-tiny-exact
+      - id: objectives/execution/interpreter/script/wsh::wscript-shell-fragment-tiny-exact
+      - id: objectives/execution/interpreter/script/wsh::readystate-fragment-tiny-exact
+
+  - id: js-timing-evasion
+    desc: JavaScript timing-based analysis evasion
+    crit: suspicious
+    conf: 0.8
+    all:
+      - id: js-date-loop
+      - id: js-date-diff

@@ -1,0 +1,49 @@
+# Distinguish Legitimate Minification from Malicious Obfuscation
+# Minified code is compressed but readable, obfuscated code hides intent
+
+defaults:
+  for: [javascript, typescript]
+
+composite_rules:
+  # Legitimate minification patterns (benign compression)
+  - id: minification-pattern
+    desc: "Code appears minified by webpack/uglify/terser"
+    crit: notable
+    conf: 0.8
+    all:
+      - {
+          id: objectives/anti-static/obfuscation/code-metrics/structure::very-long-lines,
+        }
+      - {
+          id: objectives/anti-static/obfuscation/code-metrics/functions::single-char-function-names,
+        }
+    not:
+      - { id: objectives/anti-static/obfuscation/payload::decode-exec-js }
+
+  # Hostile obfuscation (malicious encoding)
+  - id: hostile-obfuscation
+    desc: "Hostile obfuscation techniques (not just"
+    crit: suspicious
+    conf: 0.90
+    any:
+      - { id: objectives/anti-static/obfuscation/payload::decode-exec-js }
+      - { id: objectives/anti-static/obfuscation/payload::hardcoded-key-decryptor }
+
+  # Minified library with hostile capabilities (trojanized)
+  - id: minified-with-hostile-caps
+    desc: "Minified code with hostile capabilities"
+    crit: suspicious
+    conf: 0.92
+    attack: "T1195.002"
+    mbc: "B0024"
+    all:
+      - { id: minification-pattern }
+    any:
+      - { id: objectives/execution/activex/com::activex-object-create }
+      - { id: objectives/command-and-control/rat/script::socket-command-handler }
+      - { id: hostile-obfuscation }
+    unless:
+      - id: metadata/library/jquery::domain
+      - id: metadata/library/jquery::version-string
+      - id: metadata/library/jquery::copyright
+      - id: metadata/library/jquery::fn-extend

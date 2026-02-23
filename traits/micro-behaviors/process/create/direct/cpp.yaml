@@ -1,0 +1,21 @@
+defaults:
+  for: [macho, elf, pe]
+
+traits:
+  # NOTE: fgets-loop moved to micro-behaviors/fs/file-ops/ as it's file I/O, not command execution.
+  # Keeping ID reference for backwards compatibility in composite rules.
+  - id: fgets-loop
+    desc: "Line-based file reading (fgets)"
+    crit: baseline
+    if:
+      type: symbol
+      exact: fgets
+
+  - id: string-append
+    desc: "Capturing data into C++ std::string"
+    crit: baseline
+    if:
+      type: symbol
+      regex: "std::__1::basic_string.{0,50}(append|push_back|operator\\+=)"
+
+  # NOTE: popen symbol moved to micro-behaviors/process/create/shell::c-popen

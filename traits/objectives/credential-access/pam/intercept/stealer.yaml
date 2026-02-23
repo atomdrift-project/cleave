@@ -1,0 +1,95 @@
+# PAM Credential Stealer Detection
+# Detects PAM modules with network exfiltration capability
+# ATT&CK: T1556.003 (Modify Authentication Process: Pluggable Authentication Modules)
+
+defaults:
+  for: [elf, so]
+  platforms: [linux]
+  attack: "T1556.003"
+
+traits:
+  # === Hidden file paths ===
+  - id: tmp-hidden-file
+    desc: Hidden file in /tmp
+    crit: suspicious
+    conf: 0.85
+    if:
+      type: string
+      regex: "/tmp/\\.[a-z]"
+
+  - id: var-log-hidden-file
+    desc: Hidden file in /var/log
+    crit: suspicious
+    conf: 0.85
+    if:
+      type: string
+      regex: "/var/log/\\.[a-z]"
+
+  - id: log-extension
+    desc: Log file extension
+    crit: notable
+    conf: 0.5
+    if:
+      type: string
+      regex: "\\.log$"
+
+composite_rules:
+  # PAM module that also links against libcurl - unusual for auth modules
+  # Legitimate PAM modules authenticate locally; curl suggests exfil
+  - id: pam-with-curl
+    desc: PAM module with HTTP client capability
+    crit: suspicious
+    conf: 0.85
+    all:
+      - id: micro-behaviors/os/pam/auth::module
+    any:
+      - id: metadata/import/curl_easy_perform
+      - id: metadata/import/curl_easy_init
+      - id: micro-behaviors/dylib/library::libcurl-ref
+
+  # PAM module with raw socket capability
+  - id: pam-with-socket
+    desc: PAM module with raw socket capability
+    crit: suspicious
+    conf: 0.85
+    all:
+      - id: micro-behaviors/os/pam/auth::module
+    any:
+      - id: metadata/import/socket
+      - id: metadata/import/connect
+      - id: metadata/import/send
+      - id: metadata/import/sendto
+    needs: 2
+
+  # Hidden file paths for credential logging
+  - id: hidden-log-paths
+    desc: Hidden log file paths
+    crit: suspicious
+    conf: 0.85
+    any:
+      - id: tmp-hidden-file
+      - id: var-log-hidden-file
+
+  # PAM module that writes credentials to file
+  - id: pam-credential-logger
+    desc: PAM module logging credentials to file
+    crit: suspicious
+    conf: 0.9
+    all:
+      - id: objectives/credential-access/pam/intercept::interceptor
+    any:
+      - id: tmp-hidden-file
+      - id: var-log-hidden-file
+      - id: log-extension
+
+  # HOSTILE: PAM stealer with full exfil chain
+  # Precision: all(3) + platforms(1) = 4.0 (meets hostile threshold)
+  - id: pam-credential-stealer
+    desc: PAM module steals and exfiltrates credentials
+    crit: hostile
+    conf: 0.95
+    mbc: "E1003"
+    all:
+      - id: objectives/credential-access/pam/intercept::interceptor
+      - id: pam-with-curl
+      - id: pam-credential-logger

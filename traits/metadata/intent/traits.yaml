@@ -1,0 +1,20 @@
+# Intent Markers - DEPRECATED
+# This file has been moved to objectives/anti-analysis/naming/intent.yaml
+#
+# Rationale: Intent inference is objective-level analysis (attacker goal),
+# not metadata (file property). Naming patterns like "backdoor", "rootkit"
+# suggest malicious intent and should be in the objectives/ tier.
+#
+# Migration: All rules moved to objectives/anti-analysis/naming/intent.yaml
+# This file kept as stub for backward compatibility during transition.
+
+defaults:
+  crit: baseline
+  conf: 0.1
+  for: [all]
+
+traits: []
+  # All traits moved to objectives/anti-analysis/naming/intent.yaml
+
+composite_rules: []
+  # All composites moved to objectives/anti-analysis/naming/intent.yaml

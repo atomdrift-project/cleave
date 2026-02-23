@@ -1,0 +1,37 @@
+defaults:
+  for: [all]
+
+traits:
+  - id: read-fitz
+    desc: Reads/Processes PDF files
+    crit: notable
+    conf: 0.8
+    if:
+      type: symbol
+      exact: "fitz"
+
+  - id: read-pypdf2
+    desc: Reads/Processes PDF files
+    crit: notable
+    conf: 0.8
+    if:
+      type: symbol
+      exact: "PyPDF2"
+
+  - id: read-pdfminer
+    desc: Reads/Processes PDF files
+    crit: notable
+    conf: 0.8
+    if:
+      type: symbol
+      exact: "pdfminer"
+
+composite_rules:
+  - id: read
+    desc: Reads/Processes PDF files
+    crit: notable
+    conf: 0.8
+    any:
+      - id: read-fitz
+      - id: read-pypdf2
+      - id: read-pdfminer

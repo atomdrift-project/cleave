@@ -1,0 +1,89 @@
+defaults:
+  for:
+  - all
+traits:
+- id: asm-pe-header-manipulation-dos
+  conf: 0.8
+  crit: suspicious
+  desc: PE header DOS signature reference
+  if:
+    type: raw
+    exact: IMAGE_DOS_SIGNATURE
+- id: asm-pe-header-manipulation-nt
+  conf: 0.8
+  crit: suspicious
+  desc: PE header NT signature reference
+  if:
+    type: raw
+    exact: IMAGE_NT_SIGNATURE
+- id: asm-pe-header-manipulation-entrypoint
+  conf: 0.8
+  crit: suspicious
+  desc: PE header entry point reference
+  if:
+    type: raw
+    exact: AddressOfEntryPoint
+- id: asm-pe-header-manipulation-sizeofimage
+  conf: 0.8
+  crit: suspicious
+  desc: PE header SizeOfImage reference
+  if:
+    type: raw
+    exact: SizeOfImage
+- id: asm-pe-header-manipulation-layout-sections
+  conf: 0.8
+  crit: suspicious
+  desc: PE NumberOfSections reference
+  if:
+    type: raw
+    exact: NumberOfSections
+- id: asm-pe-header-manipulation-layout-sizeofraw
+  conf: 0.8
+  crit: suspicious
+  desc: PE SizeOfRawData reference
+  if:
+    type: raw
+    exact: SizeOfRawData
+- id: asm-pe-header-manipulation-layout-virtualaddr
+  conf: 0.8
+  crit: suspicious
+  desc: PE VirtualAddress reference
+  if:
+    type: raw
+    exact: VirtualAddress
+- id: asm-pe-header-manipulation-layout-characteristics
+  conf: 0.8
+  crit: suspicious
+  desc: PE characteristics reference
+  if:
+    type: raw
+    exact: characteristics
+- id: asm-pe-header-manipulation-layout-pointerraw
+  conf: 0.8
+  crit: suspicious
+  desc: PE PointerToRawData reference
+  if:
+    type: raw
+    exact: PointerToRawData
+composite_rules:
+- id: asm-pe-header-manipulation
+  conf: 0.8
+  crit: suspicious
+  desc: Assembly source code referencing multiple PE header
+  needs: 2
+  any:
+  - id: asm-pe-header-manipulation-dos
+  - id: asm-pe-header-manipulation-nt
+  - id: asm-pe-header-manipulation-entrypoint
+  - id: asm-pe-header-manipulation-sizeofimage
+- id: asm-pe-header-manipulation-layout
+  conf: 0.8
+  crit: suspicious
+  desc: PE section layout field references
+  needs: 2
+  any:
+  - id: asm-pe-header-manipulation-layout-sections
+  - id: asm-pe-header-manipulation-layout-sizeofraw
+  - id: asm-pe-header-manipulation-layout-virtualaddr
+  - id: asm-pe-header-manipulation-layout-characteristics
+  - id: asm-pe-header-manipulation-layout-pointerraw

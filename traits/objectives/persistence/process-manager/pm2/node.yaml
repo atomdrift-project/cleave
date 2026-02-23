@@ -1,0 +1,72 @@
+# Process Manager Abuse for Persistence
+# Detects abuse of process managers (PM2, forever, nodemon) for persistence
+# ATT&CK: T1543 (Create or Modify System Process)
+
+defaults:
+  attack: "T1543"
+  for: [javascript, typescript]
+
+traits:
+  # PM2 process manager
+  - id: pm2-keyword
+    desc: PM2 process manager keyword
+    crit: notable
+    conf: 0.6
+    if:
+      type: string
+      exact: "pm2"
+
+  - id: detached-option
+    desc: Detached process option
+    crit: notable
+    conf: 0.6
+    if:
+      type: string
+      substr: "detached:"
+
+  # PM2 process manager spawn
+  - id: pm2-spawn
+    desc: Spawns PM2 process manager (potential
+    crit: suspicious
+    conf: 0.85
+    if:
+      type: string
+      regex: 'spawn\(.{0,220}pm2'
+
+  # PM2 start command
+  - id: pm2-start
+    desc: Starts process via PM2 (persistence
+    crit: suspicious
+    conf: 0.85
+    if:
+      type: string
+      regex: 'pm2\s+start|exec\(.{0,220}pm2\s+start'
+
+  # Forever process manager
+  - id: forever-spawn
+    desc: Uses forever process manager (persistence)
+    crit: suspicious
+    conf: 0.8
+    if:
+      type: string
+      regex: 'forever\s+start|spawn\(.{0,220}forever'
+
+  # Nodemon for persistence
+  - id: nodemon-spawn
+    desc: Uses nodemon for process persistence
+    crit: notable
+    conf: 0.7
+    if:
+      type: string
+      regex: 'spawn\(.{0,220}nodemon'
+
+composite_rules:
+  # PM2 with detached mode
+  - id: pm2-detached
+    desc: PM2 spawned in detached mode
+    crit: suspicious
+    conf: 0.9
+    all:
+      - id: pm2-keyword
+      - id: micro-behaviors/process/create/shell/lang::spawn-call
+      - id: detached-option

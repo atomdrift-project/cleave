@@ -1,0 +1,11 @@
+defaults:
+  for: [all]
+
+traits:
+  - id: deep-extconf-path
+    desc: Deeply nested extconf.rb (Depth > 3)
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: string
+      regex: "ext/[^/]{1,120}/[^/]{1,120}/[^/]{1,120}/extconf\\.rb"

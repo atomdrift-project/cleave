@@ -1,0 +1,15 @@
+# GTFOBins Reverse Shell Detection
+# Detects reverse shell patterns using GTFOBins techniques
+# ATT&CK: T1059 (Command and Scripting Interpreter)
+
+composite_rules:
+  - id: gtfobins-ruby-reverse-shell
+    desc: GTFOBins Ruby reverse shell
+    crit: suspicious
+    conf: 0.93
+    attack: "T1059"
+    for: [ruby]
+    needs: 2
+    any:
+      - id: objectives/command-and-control/reverse-shell
+      - id: objectives/execution/gtfobins/scripts::cli-ruby-exec

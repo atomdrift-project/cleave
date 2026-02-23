@@ -1,0 +1,22 @@
+# Windows Terminal Services (wtsapi32.dll) Imports
+# Detects WTS API usage for session manipulation.
+
+defaults:
+  for: [pe]
+  crit: notable
+  attack: "T1078"
+
+traits:
+  - id: wts-disconnect
+    desc: "Imports WTSDisconnectSession"
+    conf: 0.8
+    if:
+      type: symbol
+      exact: "WTSDisconnectSession"
+
+  - id: wts-session-notification
+    desc: "Imports WTSUnRegisterSessionNotification"
+    conf: 0.8
+    if:
+      type: symbol
+      exact: "WTSUnRegisterSessionNotification"

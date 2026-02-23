@@ -1,0 +1,11 @@
+defaults:
+  for: [all]
+
+traits:
+  - id: win32-file-mapping
+    conf: 0.8
+    crit: notable
+    desc: Uses Windows API for file mapping (often
+    if:
+      type: raw
+      regex: '(CreateFileMapping[AW]|MapViewOfFile|UnmapViewOfFile)'

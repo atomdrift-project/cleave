@@ -1,0 +1,50 @@
+# Database Connection - CASSANDRA
+
+defaults:
+  for: [all]
+
+traits:
+  # === Cassandra micro-behaviors ===
+  - id: cassandra-string
+    desc: cassandra string
+    crit: notable
+    conf: 0.9
+    if:
+      type: string
+      regex: "(?i)cassandra"
+
+  - id: gocql
+    desc: gocql Go driver
+    crit: notable
+    conf: 0.9
+    if:
+      type: string
+      substr: "gocql"
+
+  - id: datastax
+    desc: datastax driver
+    crit: notable
+    conf: 0.9
+    if:
+      type: string
+      substr: "datastax"
+
+  - id: cql-url
+    desc: cql:// URL scheme
+    crit: notable
+    conf: 0.9
+    if:
+      type: string
+      substr: "cql://"
+
+composite_rules:
+  # Cassandra composite (migrated from YARA)
+  - id: cassandra
+    desc: Apache Cassandra connectivity
+    crit: notable
+    conf: 0.9
+    any:
+      - id: cassandra-string
+      - id: gocql
+      - id: datastax
+      - id: cql-url

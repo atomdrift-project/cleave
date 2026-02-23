@@ -1,0 +1,27 @@
+defaults:
+  for: [all]
+
+traits:
+  - id: spellcheckpy-text-prompt
+    desc: Detects spellcheckpy specific text prompt string
+    crit: suspicious
+    conf: 1.0
+    if:
+      type: string
+      substr: "Check this text carefully to review the spelling"
+
+  - id: spellcheckpy-image-prompt
+    desc: Detects spellcheckpy specific image prompt string
+    crit: suspicious
+    conf: 1.0
+    if:
+      type: string
+      substr: "Check this image carefully to review the spelling"
+
+  - id: spellcheckpy-reject-format
+    desc: Detects spellcheckpy specific reject format string
+    crit: suspicious
+    conf: 1.0
+    if:
+      type: string
+      substr: "{'reject': 'true' or 'false'}"

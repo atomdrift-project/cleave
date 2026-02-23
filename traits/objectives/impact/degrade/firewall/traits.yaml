@@ -1,0 +1,120 @@
+defaults:
+  attack: T1562.004
+traits:
+- id: ufw-disable
+  desc: Disables UFW firewall
+  crit: suspicious
+  conf: 0.9
+  for:
+  - shell
+  if:
+    type: raw
+    regex: \bufw\s+disable\b
+- id: ufw-reset
+  desc: Resets UFW firewall rules
+  crit: suspicious
+  conf: 0.9
+  for:
+  - shell
+  if:
+    type: raw
+    regex: \bufw\s+--force\s+reset\b
+- id: iptables-flush
+  desc: Flushes iptables rules
+  crit: suspicious
+  conf: 0.85
+  for:
+  - shell
+  if:
+    type: raw
+    regex: \biptables\s+-F\b
+- id: iptables-delete-all
+  desc: Deletes all iptables rules
+  crit: suspicious
+  conf: 0.85
+  for:
+  - shell
+  if:
+    type: string
+    regex: \biptables\s+(-X|-Z)\b
+- id: iptables-policy-accept
+  desc: iptables default policy ACCEPT
+  crit: suspicious
+  conf: 0.85
+  for:
+  - shell
+  if:
+    type: string
+    regex: \biptables\s+-P\s+(INPUT|OUTPUT|FORWARD)\s+ACCEPT\b
+- id: ip6tables-flush
+  desc: Flushes ip6tables rules
+  crit: suspicious
+  conf: 0.85
+  for:
+  - shell
+  if:
+    type: string
+    regex: \bip6tables\s+-F\b
+- id: nft-flush
+  desc: Flushes nftables ruleset
+  crit: suspicious
+  conf: 0.85
+  for:
+  - shell
+  if:
+    type: string
+    regex: \bnft\s+flush\s+ruleset\b
+- id: firewalld-stop
+  desc: Stops firewalld service
+  crit: suspicious
+  conf: 0.85
+  for:
+  - shell
+  if:
+    type: string
+    regex: \b(systemctl|service)\s+(stop|disable)\s+firewalld\b
+- id: netsh-firewall-off
+  desc: Disables Windows firewall via netsh
+  crit: suspicious
+  conf: 0.9
+  for:
+  - shell
+  - pe
+  if:
+    type: string
+    regex: netsh\s+(firewall.{0,80}disable|advfirewall.{0,80}state\s+off)
+    case_insensitive: true
+composite_rules:
+- id: disabled
+  desc: Firewall disabled
+  crit: suspicious
+  conf: 0.9
+  any:
+  - id: ufw-disable
+  - id: ufw-reset
+  - id: iptables-flush
+  - id: ip6tables-flush
+  - id: nft-flush
+  - id: firewalld-stop
+  - id: netsh-firewall-off
+- id: opened
+  desc: Firewall rules cleared and opened
+  crit: suspicious
+  conf: 0.9
+  all:
+  - id: iptables-policy-accept
+  any:
+  - id: iptables-flush
+  - id: iptables-delete-all
+- id: security-degrader
+  desc: Disables multiple security controls
+  crit: hostile
+  conf: 0.95
+  for:
+  - shell
+  all:
+  - id: disabled
+  - id: micro-behaviors/fs/attributes/chattr::chattr-command
+  any:
+  - id: objectives/anti-analysis/kernel-hide/userspace::ld-so-preload-clear
+  - id: objectives/anti-analysis/kernel-hide/userspace::ld-so-preload-chattr

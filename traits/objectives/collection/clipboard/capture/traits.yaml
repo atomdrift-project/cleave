@@ -1,0 +1,16 @@
+# Clipboard Data Capture Patterns
+# Detects markers for capturing sensitive data from clipboard
+
+defaults:
+  for: [all]
+  crit: notable
+  conf: 0.7
+
+traits:
+  - id: ethereum-address
+    desc: Ethereum address pattern (clipboard capture)
+    crit: suspicious
+    conf: 0.8
+    if:
+      type: string
+      regex: "^0x[a-fA-F0-9]{40}$"

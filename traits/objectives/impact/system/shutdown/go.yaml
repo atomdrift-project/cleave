@@ -1,0 +1,72 @@
+# Go System Shutdown/Reboot Detection
+# Detects system shutdown or reboot execution in Go
+# ATT&CK: T1529 (System Shutdown/Reboot)
+# MBC: B0029 (System Shutdown/Reboot)
+
+defaults:
+  for: [go]
+  attack: "T1529"
+  mbc: "B0029"
+
+traits:
+  # Windows shutdown command
+  - id: windows-shutdown-cmd
+    desc: Windows shutdown command string
+    crit: notable
+    conf: 0.9
+    if:
+      type: string
+      exact: "shutdown"
+
+  # Shutdown flags: force restart
+  - id: shutdown-force-restart
+    desc: Shutdown with force restart flag
+    crit: suspicious
+    conf: 0.95
+    if:
+      type: raw
+      regex: '(?is)shutdown(\.exe)?.{0,50}/r\b'
+
+  # Shutdown flags: /f (force)
+  - id: shutdown-force-flag
+    desc: Shutdown force flag
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: raw
+      regex: '(?is)shutdown(\.exe)?.{0,50}/f\b'
+
+  # Shutdown timeout flag: /t 0 (no delay)
+  - id: shutdown-no-delay
+    desc: Shutdown with no delay timeout
+    crit: suspicious
+    conf: 0.85
+    if:
+      type: raw
+      regex: '(?is)shutdown(\.exe)?.{0,50}/t\b.{0,64}(\b0\b|"0")'
+
+composite_rules:
+  # Shutdown with force and restart
+  - id: shutdown-force-restart-pattern
+    desc: "Shutdown with force and restart flag"
+    crit: suspicious
+    conf: 0.98
+    attack: "T1529"
+    mbc: "B0029"
+    for: [go]
+    all:
+      - id: objectives/impact/system/shutdown::windows-shutdown-cmd
+      - id: objectives/impact/system/shutdown::shutdown-force-restart
+
+  # Full shutdown with force + no delay (immediate reboot)
+  - id: shutdown-immediate-reboot
+    desc: "Immediate system reboot without user action"
+    crit: hostile
+    conf: 0.99
+    attack: "T1529"
+    mbc: "B0029"
+    for: [go]
+    all:
+      - id: objectives/impact/system/shutdown::windows-shutdown-cmd
+      - id: objectives/impact/system/shutdown::shutdown-force-flag
+      - id: objectives/impact/system/shutdown::shutdown-no-delay

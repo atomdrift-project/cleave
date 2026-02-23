@@ -1,0 +1,16 @@
+# Monero cryptocurrency detection
+# ATT&CK: T1496 (Resource Hijacking)
+
+traits:
+  # Monero wallet address with word boundaries
+  # Note: This uses word boundary anchors for higher precision
+  - id: monero-wallet-4-bounded
+    desc: Monero wallet address starting with
+    crit: baseline
+    conf: 0.9
+    for: [all]
+    if:
+      type: string
+      regex: "\\b4[123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz]{94}\\b"
+
+composite_rules:

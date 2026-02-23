@@ -1,0 +1,13 @@
+# User Activity Exfiltration
+
+composite_rules:
+  - id: activity-exfiltration
+    desc: Coordinated exfiltration of user activity tracking
+    crit: suspicious
+    conf: 0.9
+    all:
+      - id: micro-behaviors/data/telemetry/activity::activity-tracker
+      - id: micro-behaviors/data/telemetry/logging::hardware-id-context
+    any:
+      - id: micro-behaviors/communications/http/remote-config::remote-config-service
+      - id: micro-behaviors/data/telemetry/logging::telemetry-send

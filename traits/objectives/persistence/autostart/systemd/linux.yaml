@@ -1,0 +1,258 @@
+# Linux Desktop Autostart Persistence
+# Detects XDG autostart and other Linux GUI persistence mechanisms
+# ATT&CK: T1547.013 (Boot or Logon Autostart Execution: XDG Autostart Entries)
+
+defaults:
+  for: [all]
+  attack: "T1547.013"
+  crit: suspicious
+  platforms: [linux]
+
+traits:
+  # === XDG autostart atomic indicators ===
+  - id: config-autostart
+    desc: .config/autostart directory
+    crit: notable
+    conf: 0.7
+    if:
+      type: string
+      substr: ".config/autostart"
+
+  - id: etc-xdg-autostart
+    desc: /etc/xdg/autostart directory
+    crit: notable
+    conf: 0.7
+    if:
+      type: string
+      substr: "/etc/xdg/autostart"
+
+  - id: xdg-config-autostart
+    desc: XDG_CONFIG_HOME autostart
+    crit: notable
+    conf: 0.6
+    if:
+      type: string
+      regex: "XDG_CONFIG_HOME.{0,50}autostart"
+
+  # === Desktop entry atomic indicators ===
+  - id: dot-desktop-ext
+    desc: .desktop file extension
+    crit: notable
+    conf: 0.5
+    if:
+      type: string
+      substr: ".desktop"
+
+  - id: desktop-entry-header
+    desc: "[Desktop Entry] header"
+    crit: notable
+    conf: 0.6
+    if:
+      type: string
+      substr: "[Desktop Entry]"
+
+  - id: x-gnome-autostart
+    desc: X-GNOME-Autostart directive
+    crit: notable
+    conf: 0.7
+    if:
+      type: string
+      substr: "X-GNOME-Autostart"
+
+  # === User systemd atomic indicators ===
+  - id: config-systemd-user
+    desc: .config/systemd/user directory
+    crit: notable
+    conf: 0.7
+    if:
+      type: string
+      substr: ".config/systemd/user"
+
+  - id: local-share-systemd-user
+    desc: .local/share/systemd/user directory
+    crit: notable
+    conf: 0.7
+    if:
+      type: string
+      substr: ".local/share/systemd/user"
+
+  - id: systemctl-user-enable
+    desc: systemctl --user enable
+    crit: notable
+    conf: 0.7
+    if:
+      type: string
+      regex: "systemctl.{0,30}--user.{0,30}enable"
+
+  # === rc.local atomic indicators ===
+  - id: etc-rc-local
+    desc: /etc/rc.local file
+    crit: notable
+    conf: 0.8
+    attack: "T1037.004"
+    if:
+      type: string
+      substr: "/etc/rc.local"
+
+  - id: etc-rc-d-rc-local
+    desc: /etc/rc.d/rc.local file
+    crit: notable
+    conf: 0.8
+    attack: "T1037.004"
+    if:
+      type: string
+      substr: "/etc/rc.d/rc.local"
+
+  # === init.d atomic indicators ===
+  - id: etc-init-d
+    desc: /etc/init.d/ directory
+    crit: notable
+    conf: 0.6
+    attack: "T1037.004"
+    for: [shell, elf, macho, python]
+    if:
+      type: string
+      substr: "/etc/init.d/"
+
+  - id: init-script-header
+    desc: LSB init script header
+    crit: notable
+    conf: 0.85
+    attack: "T1037.004"
+    for: [shell]
+    platforms: [all]
+    if:
+      type: raw
+      substr: "BEGIN INIT INFO"
+
+  - id: update-rc-d-cmd
+    desc: update-rc.d command
+    crit: notable
+    conf: 0.7
+    attack: "T1037.004"
+    for: [shell, elf, macho, python]
+    if:
+      type: string
+      substr: "update-rc.d"
+
+  - id: chkconfig-cmd
+    desc: chkconfig command
+    crit: notable
+    conf: 0.7
+    attack: "T1037.004"
+    for: [shell, elf, macho, python]
+    if:
+      type: string
+      substr: "chkconfig"
+
+  # === Desktop entry exec atomic indicators ===
+  - id: exec-eq-directive
+    desc: Exec= directive
+    crit: notable
+    conf: 0.6
+    if:
+      type: string
+      substr: "Exec="
+
+  - id: hidden-false-directive
+    desc: Hidden=false directive
+    crit: notable
+    conf: 0.5
+    if:
+      type: string
+      substr: "Hidden=false"
+
+  - id: type-application-directive
+    desc: Type=Application directive
+    crit: notable
+    conf: 0.5
+    if:
+      type: string
+      substr: "Type=Application"
+
+composite_rules:
+  # XDG autostart composite
+  - id: linux-xdg-autostart
+    desc: "XDG autostart directory access"
+    conf: 0.85
+    crit: suspicious
+    any:
+      - id: config-autostart
+      - id: etc-xdg-autostart
+      - id: xdg-config-autostart
+
+  # Desktop entry composite
+  # Note: Require stronger indicators than just ".desktop" string which appears
+  # in file finders, archive managers, and documentation. The desktop entry header
+  # or GNOME autostart directive is more specific.
+  - id: linux-desktop-entry
+    desc: "Desktop entry file creation (.desktop)"
+    conf: 0.8
+    any:
+      - id: desktop-entry-header
+      - id: x-gnome-autostart
+
+  # User systemd composite
+  - id: linux-user-systemd
+    desc: "User-level systemd service persistence"
+    conf: 0.85
+    attack: "T1543.002"
+    any:
+      - id: config-systemd-user
+      - id: local-share-systemd-user
+      - id: systemctl-user-enable
+
+  # rc.local composite
+  - id: linux-rc-local
+    desc: "rc.local persistence mechanism"
+    conf: 0.9
+    crit: suspicious
+    attack: "T1037.004"
+    any:
+      - id: etc-rc-local
+      - id: etc-rc-d-rc-local
+
+  # init.d composite
+  - id: linux-init-script
+    desc: "init.d script interaction or persistence"
+    conf: 0.85
+    crit: notable
+    attack: "T1037.004"
+    for: [shell, elf, macho, python]
+    platforms: [all]
+    any:
+      - id: etc-init-d
+      - id: update-rc-d-cmd
+      - id: chkconfig-cmd
+      - id: init-script-header
+
+  # XDG autostart directory composite
+  - id: linux-xdg-autostart-dir
+    desc: "XDG autostart directory path"
+    conf: 0.8
+    crit: notable
+    any:
+      - id: config-autostart
+      - id: etc-xdg-autostart
+
+  # Desktop entry exec composite
+  - id: linux-desktop-entry-exec
+    desc: "Desktop entry executable directive"
+    conf: 0.8
+    crit: notable
+    any:
+      - id: exec-eq-directive
+      - id: hidden-false-directive
+      - id: type-application-directive
+
+  # XDG autostart with executable
+  - id: linux-xdg-executable
+    desc: "XDG autostart with executable command"
+    crit: suspicious
+    conf: 0.95
+    attack: "T1547.013"
+    mbc: "F0006"
+    for: [shell, python, elf]
+    all:
+      - id: linux-xdg-autostart-dir
+      - id: linux-desktop-entry-exec

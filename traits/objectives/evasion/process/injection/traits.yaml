@@ -1,0 +1,103 @@
+# Process Injection Patterns
+# Composite rules for code injection into other processes
+
+composite_rules:
+  # === Remote Thread Injection ===
+  - id: remote-thread-pattern
+    desc: Remote thread creation for injection
+    crit: hostile
+    conf: 0.95
+    attack: "T1055.001"
+    for: ["pe", "dll"]
+    all:
+      - id: objectives/evasion/process/injection/runtime::create-remote-thread
+      - id: objectives/evasion/process/injection/runtime::write-process-memory
+
+  # === Suspended Process Injection ===
+  - id: suspended-process-inject
+    desc: Suspend process and modify context
+    crit: suspicious
+    conf: 0.90
+    attack: "T1055"
+    for: ["pe", "dll"]
+    all:
+      - id: objectives/evasion/process/injection/runtime::suspend-thread
+      - id: objectives/evasion/process/injection/runtime::get-thread-context
+      - id: objectives/evasion/process/injection/runtime::set-thread-context
+    downgrade:
+      any:
+        - id: metadata/lang::go-runtime-marker
+        - id: metadata/vendor/valve/valve-corp-binary
+
+  # === APC Queue Injection ===
+  - id: apc-injection
+    desc: Asynchronous procedure call injection
+    crit: hostile
+    conf: 0.95
+    attack: "T1055.004"
+    for: ["pe", "dll"]
+    all:
+      - id: objectives/evasion/process/injection/runtime::queue-user-apc
+      - id: objectives/evasion/process/injection/runtime::write-process-memory
+    downgrade:
+      any:
+        - id: metadata/vendor/valve/valve-corp-binary
+
+  # === Process Hollowing Pattern ===
+  - id: process-hollowing
+    desc: Suspend + memory write + context modify
+    crit: suspicious
+    conf: 0.90
+    attack: "T1055.012"
+    for: ["pe", "dll"]
+    all:
+      - id: micro-behaviors/process/create/spawn::create-process-a
+      - id: objectives/evasion/process/injection/runtime::suspend-thread
+      - id: objectives/evasion/process/injection/runtime::write-process-memory
+      - id: objectives/evasion/process/injection/runtime::set-thread-context
+    downgrade:
+      any:
+        - id: metadata/vendor/valve/valve-corp-binary
+
+  # === Shared Library Injection ===
+  - id: dll-injection
+    desc: DLL injection into process
+    crit: hostile
+    conf: 0.90
+    attack: "T1055.001"
+    for: ["pe", "dll"]
+    all:
+      - id: objectives/evasion/process/injection/runtime::create-remote-thread
+      - id: micro-behaviors/dylib/load::load-library-a
+    downgrade:
+      any:
+        - id: metadata/vendor/valve/valve-corp-binary
+
+  # === Complete Injection Framework ===
+  - id: full-injection-capability
+    desc: Complete process injection toolkit
+    crit: suspicious
+    conf: 0.85
+    attack: "T1055"
+    for: ["pe", "dll"]
+    any:
+      - id: remote-thread-pattern
+      - id: suspended-process-inject
+      - id: apc-injection
+    downgrade:
+      any:
+        - id: metadata/lang::go-runtime-marker
+        - id: metadata/vendor/valve/valve-corp-binary
+
+  # === Local / Callback Injection ===
+  - id: hostile-callback-execution
+    desc: Potential self-injecting shellcode via callback
+    crit: hostile
+    conf: 0.95
+    mbc: "B0001.032"
+    attack: "T1055"
+    for: [pe, dll]
+    all:
+      - id: objectives/execution/native/runtime::callback-execution
+      - id: micro-behaviors/mem/protect/modify::virtual-protect
+      - id: objectives/execution/native/runtime::heap-alloc

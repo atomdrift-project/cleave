@@ -1,0 +1,52 @@
+# Third-Party YARA Rule Criticality Configuration
+#
+# This file configures criticality levels for third-party YARA rules.
+# Uses the same criticality levels as RULES.md:
+#   baseline      - Universal baseline
+#   notable    - Defines program purpose
+#   suspicious - Hides intent/crosses boundaries
+#   hostile    - Attack patterns, no legitimate use
+
+# Default criticality for all third-party rules
+default_crit: "suspicious"
+
+# Per-source criticality defaults
+sources:
+  - name: YARAForge
+    url: https://github.com/YARAHQ/yara-forge
+    crit: "hostile"
+
+  - name: elastic
+    url: https://github.com/elastic/protections-artifacts
+    crit: "hostile"
+
+  - name: huntress
+    url: https://github.com/huntresslabs/threat-intel
+    crit: "hostile"
+
+  - name: bartblaze
+    url: https://github.com/bartblaze/Yara-rules
+    crit: "suspicious"
+
+  - name: JPCERT
+    url: https://github.com/JPCERTCC/jpcert-yara
+    crit: "suspicious"
+
+  - name: TTC-CERT
+    url: https://github.com/ttc-cert/TTC-CERT-YARA-Rules
+    crit: "suspicious"
+
+  - name: RussianPanda95
+    url: https://github.com/RussianPanda95/Yara-Rules
+    crit: "suspicious"
+
+# Per-rule overrides (exact trait ID matches only)
+# Uncomment and add specific overrides as needed:
+# overrides:
+#   - id: third_party/elastic/linux/backdoor/generic
+#     crit: "notable"
+#     reason: "High false positive rate on pentesting tools"
+#
+#   - id: third_party/bartblaze/test_rule
+#     disable: true
+#     reason: "Outdated signature"

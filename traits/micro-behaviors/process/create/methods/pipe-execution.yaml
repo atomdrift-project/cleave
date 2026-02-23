@@ -1,0 +1,417 @@
+# Pipe-to-Shell Execution Patterns
+# ATT&CK: T1059.004 (Unix Shell)
+# Detects curl/wget piped to shell interpreters - common dropper pattern
+
+defaults:
+  # These command strings can appear in any file type
+  for: ["*"]
+
+traits:
+  # === Curl pipe atomic indicators ===
+  - id: curl-pipe-sh
+    desc: curl piped to sh
+    crit: suspicious
+    conf: 0.7
+    attack: "T1059.004"
+    if:
+      type: raw
+      regex: 'curl\s+.{0,200}\|\s*sh\b'
+
+  - id: curl-pipe-bash
+    desc: curl piped to bash
+    crit: suspicious
+    conf: 0.7
+    attack: "T1059.004"
+    if:
+      type: raw
+      regex: 'curl\s+.{0,200}\|\s*bash\b'
+
+  - id: curl-pipe-zsh
+    desc: curl piped to zsh
+    crit: suspicious
+    conf: 0.7
+    attack: "T1059.004"
+    if:
+      type: raw
+      regex: 'curl\s+.{0,200}\|\s*zsh\b'
+
+  - id: curl-pipe-ksh
+    desc: curl piped to ksh
+    crit: suspicious
+    conf: 0.7
+    attack: "T1059.004"
+    if:
+      type: raw
+      regex: 'curl\s+.{0,200}\|\s*ksh\b'
+
+  - id: curl-pipe-dash
+    desc: curl piped to dash
+    crit: suspicious
+    conf: 0.7
+    attack: "T1059.004"
+    if:
+      type: raw
+      regex: 'curl\s+.{0,200}\|\s*dash\b'
+
+  # === Wget pipe atomic indicators ===
+  - id: wget-pipe-sh
+    desc: wget piped to sh
+    crit: suspicious
+    conf: 0.7
+    attack: "T1059.004"
+    if:
+      type: raw
+      regex: 'wget\s+.{0,200}\|\s*sh\b'
+
+  - id: wget-pipe-bash
+    desc: wget piped to bash
+    crit: suspicious
+    conf: 0.7
+    attack: "T1059.004"
+    if:
+      type: raw
+      regex: 'wget\s+.{0,200}\|\s*bash\b'
+
+  - id: wget-pipe-zsh
+    desc: wget piped to zsh
+    crit: suspicious
+    conf: 0.7
+    attack: "T1059.004"
+    if:
+      type: raw
+      regex: 'wget\s+.{0,200}\|\s*zsh\b'
+
+  - id: wget-pipe-ksh
+    desc: wget piped to ksh
+    crit: suspicious
+    conf: 0.7
+    attack: "T1059.004"
+    if:
+      type: raw
+      regex: 'wget\s+.{0,200}\|\s*ksh\b'
+
+  - id: wget-pipe-dash
+    desc: wget piped to dash
+    crit: suspicious
+    conf: 0.7
+    attack: "T1059.004"
+    if:
+      type: raw
+      regex: 'wget\s+.{0,200}\|\s*dash\b'
+
+  # === Python pipe atomic indicators ===
+  - id: curl-pipe-python
+    desc: curl piped to python
+    crit: suspicious
+    conf: 0.75
+    attack: "T1059.006"
+    if:
+      type: raw
+      regex: 'curl\s+.{0,200}\|\s*python'
+
+  - id: wget-pipe-python
+    desc: wget piped to python
+    crit: suspicious
+    conf: 0.75
+    attack: "T1059.006"
+    if:
+      type: raw
+      regex: 'wget\s+.{0,200}\|\s*python'
+
+  # === Perl pipe atomic indicators ===
+  - id: curl-pipe-perl
+    desc: curl piped to perl
+    crit: suspicious
+    conf: 0.75
+    attack: "T1059.005"
+    if:
+      type: raw
+      regex: 'curl\s+.{0,200}\|\s*perl'
+
+  - id: wget-pipe-perl
+    desc: wget piped to perl
+    crit: suspicious
+    conf: 0.75
+    attack: "T1059.005"
+    if:
+      type: raw
+      regex: 'wget\s+.{0,200}\|\s*perl'
+
+  # === Node.js pipe atomic indicators ===
+  - id: curl-pipe-node
+    desc: curl piped to node
+    crit: suspicious
+    conf: 0.75
+    attack: "T1059.007"
+    if:
+      type: raw
+      regex: 'curl\s+.{0,200}\|\s*node'
+
+  - id: wget-pipe-node
+    desc: wget piped to node
+    crit: suspicious
+    conf: 0.75
+    attack: "T1059.007"
+    if:
+      type: raw
+      regex: 'wget\s+.{0,200}\|\s*node'
+
+  # === Ruby pipe atomic indicators ===
+  - id: curl-pipe-ruby
+    desc: curl piped to ruby
+    crit: suspicious
+    conf: 0.75
+    attack: "T1059"
+    if:
+      type: raw
+      regex: 'curl\s+.{0,200}\|\s*ruby'
+
+  - id: wget-pipe-ruby
+    desc: wget piped to ruby
+    crit: suspicious
+    conf: 0.75
+    attack: "T1059"
+    if:
+      type: raw
+      regex: 'wget\s+.{0,200}\|\s*ruby'
+
+  # === Fetch eval atomic indicators ===
+  - id: eval-curl-subshell
+    desc: eval "$(curl ..."
+    crit: suspicious
+    conf: 0.7
+    attack: "T1059.004"
+    if:
+      type: raw
+      regex: 'eval\s*"\$\(curl'
+
+  - id: eval-curl-backtick
+    desc: eval `curl ...`
+    crit: suspicious
+    conf: 0.7
+    attack: "T1059.004"
+    if:
+      type: raw
+      regex: 'eval\s*`curl'
+
+  - id: eval-wget-subshell
+    desc: eval "$(wget ..."
+    crit: suspicious
+    conf: 0.7
+    attack: "T1059.004"
+    if:
+      type: raw
+      regex: 'eval\s*"\$\(wget'
+
+  - id: eval-wget-backtick
+    desc: eval `wget ...`
+    crit: suspicious
+    conf: 0.7
+    attack: "T1059.004"
+    if:
+      type: raw
+      regex: 'eval\s*`wget'
+
+  - id: eval-openssl-subshell
+    desc: eval "$(openssl ..."
+    crit: suspicious
+    conf: 0.8
+    attack: "T1059.004"
+    if:
+      type: raw
+      regex: 'eval\s*"\$\(openssl'
+
+  # === Base64 decode exec atomic indicators ===
+  - id: base64-d-pipe-sh
+    desc: base64 -d piped to sh
+    crit: suspicious
+    conf: 0.7
+    attack: "T1027"
+    if:
+      type: raw
+      regex: 'base64\s+-d\s*\|\s*sh'
+
+  - id: base64-d-pipe-bash
+    desc: base64 -d piped to bash
+    crit: suspicious
+    conf: 0.7
+    attack: "T1027"
+    if:
+      type: raw
+      regex: 'base64\s+-d\s*\|\s*bash'
+
+  - id: base64-decode-pipe-sh
+    desc: base64 --decode piped to sh
+    crit: suspicious
+    conf: 0.7
+    attack: "T1027"
+    if:
+      type: raw
+      regex: 'base64\s+--decode\s*\|\s*sh'
+
+  - id: base64-decode-pipe-bash
+    desc: base64 --decode piped to bash
+    crit: suspicious
+    conf: 0.7
+    attack: "T1027"
+    if:
+      type: raw
+      regex: 'base64\s+--decode\s*\|\s*bash'
+
+  - id: base64-capital-d-pipe-sh
+    desc: base64 -D piped to sh
+    crit: suspicious
+    conf: 0.7
+    attack: "T1027"
+    if:
+      type: raw
+      regex: 'base64\s+-D\s*\|\s*sh\b'
+
+  - id: base64-capital-d-pipe-bash
+    desc: base64 -D piped to bash
+    crit: suspicious
+    conf: 0.7
+    attack: "T1027"
+    if:
+      type: raw
+      regex: 'base64\s+-D\s*\|\s*bash\b'
+
+  # === Process substitution atomic indicators ===
+  - id: bash-curl-process-sub
+    desc: bash <(curl ...)
+    crit: suspicious
+    conf: 0.7
+    attack: "T1059.004"
+    if:
+      type: raw
+      regex: 'bash\s+<\(curl'
+
+  - id: sh-curl-process-sub
+    desc: Remote script execution via process substitution
+    crit: suspicious
+    conf: 0.7
+    attack: "T1059.004"
+    if:
+      type: raw
+      regex: 'sh\s+<\(curl'
+
+  - id: source-curl-process-sub
+    desc: source <(curl ...)
+    crit: suspicious
+    conf: 0.7
+    attack: "T1059.004"
+    if:
+      type: raw
+      regex: 'source\s+<\(curl'
+
+  - id: source-wget-process-sub
+    desc: source <(wget ...)
+    crit: suspicious
+    conf: 0.7
+    attack: "T1059.004"
+    if:
+      type: raw
+      regex: 'source\s+<\(wget'
+
+composite_rules:
+  # Helper composites
+  - id: curl-pipe-interpreters
+    desc: Curl piped to various interpreters
+    any:
+      - { id: curl-pipe-sh }
+      - { id: curl-pipe-bash }
+      - { id: curl-pipe-zsh }
+      - { id: curl-pipe-ksh }
+      - { id: curl-pipe-dash }
+      - { id: curl-pipe-python }
+      - { id: curl-pipe-perl }
+      - { id: curl-pipe-node }
+      - { id: curl-pipe-ruby }
+
+  - id: wget-pipe-interpreters
+    desc: Wget piped to various interpreters
+    any:
+      - { id: wget-pipe-sh }
+      - { id: wget-pipe-bash }
+      - { id: wget-pipe-zsh }
+      - { id: wget-pipe-ksh }
+      - { id: wget-pipe-dash }
+      - { id: wget-pipe-python }
+      - { id: wget-pipe-perl }
+      - { id: wget-pipe-node }
+      - { id: wget-pipe-ruby }
+
+  # Migrated from YARA
+  - id: download-pipe-exec
+    desc: Download piped to interpreter (dropper
+    crit: suspicious
+    conf: 0.9
+    attack: "T1059"
+    any:
+      - { id: curl-pipe-interpreters }
+      - { id: wget-pipe-interpreters }
+
+  # Curl pipe shell composite
+  - id: curl-pipe-shell
+    desc: Curl output piped to shell
+    crit: suspicious
+    conf: 0.95
+    attack: "T1059.004"
+    any:
+      - id: curl-pipe-sh
+      - id: curl-pipe-bash
+      - id: curl-pipe-zsh
+      - id: curl-pipe-ksh
+      - id: curl-pipe-dash
+
+  # Wget pipe shell composite
+  - id: wget-pipe-shell
+    desc: Wget output piped to shell
+    crit: suspicious
+    conf: 0.95
+    attack: "T1059.004"
+    any:
+      - id: wget-pipe-sh
+      - id: wget-pipe-bash
+      - id: wget-pipe-zsh
+      - id: wget-pipe-ksh
+      - id: wget-pipe-dash
+
+  # Fetch eval composite
+  - id: fetch-eval
+    desc: Remote script fetch and eval
+    crit: suspicious
+    conf: 0.9
+    attack: "T1059.004"
+    any:
+      - id: eval-curl-subshell
+      - id: eval-curl-backtick
+      - id: eval-wget-subshell
+      - id: eval-wget-backtick
+      - id: eval-openssl-subshell
+
+  # Base64 decode exec composite
+  - id: base64-decode-exec
+    desc: Base64 decode piped to shell
+    crit: suspicious
+    conf: 0.95
+    attack: "T1027"
+    any:
+      - id: base64-d-pipe-sh
+      - id: base64-d-pipe-bash
+      - id: base64-decode-pipe-sh
+      - id: base64-decode-pipe-bash
+      - id: base64-capital-d-pipe-sh
+      - id: base64-capital-d-pipe-bash
+
+  # Process substitution composite
+  - id: process-substitution
+    desc: Process substitution for remote execution
+    crit: suspicious
+    conf: 0.85
+    attack: "T1059.004"
+    any:
+      - id: bash-curl-process-sub
+      - id: sh-curl-process-sub
+      - id: source-curl-process-sub
+      - id: source-wget-process-sub

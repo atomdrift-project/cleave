@@ -1,0 +1,478 @@
+defaults:
+  attack: T1562.001
+  platforms:
+    - linux
+traits:
+  - id: security-selinux-xattr
+    desc: security.selinux extended attribute
+    crit: notable
+    conf: 0.7
+    for:
+      - c
+      - elf
+      - shell
+    if:
+      type: string
+      substr: security.selinux
+  - id: setxattr-symbol
+    desc: setxattr function
+    crit: notable
+    conf: 0.7
+    for:
+      - elf
+    if:
+      type: symbol
+      exact: setxattr
+  - id: fsetxattr-symbol
+    desc: fsetxattr function
+    crit: notable
+    conf: 0.7
+    for:
+      - elf
+    if:
+      type: symbol
+      exact: fsetxattr
+  - id: lsetxattr-symbol
+    desc: lsetxattr function
+    crit: notable
+    conf: 0.7
+    for:
+      - elf
+    if:
+      type: symbol
+      exact: lsetxattr
+  - id: setxattr-command
+    desc: setxattr command reference
+    crit: notable
+    conf: 0.65
+    for:
+      - shell
+      - c
+    if:
+      type: string
+      word: setxattr
+  - id: unconfined-u-label
+    desc: unconfined_u SELinux user
+    crit: notable
+    conf: 0.75
+    for:
+      - shell
+      - c
+      - elf
+    if:
+      type: string
+      substr: "unconfined_u:"
+  - id: unconfined-r-label
+    desc: unconfined_r SELinux role
+    crit: notable
+    conf: 0.75
+    for:
+      - shell
+      - c
+      - elf
+    if:
+      type: string
+      substr: "unconfined_r:"
+  - id: unconfined-t-label
+    desc: unconfined_t SELinux type
+    crit: notable
+    conf: 0.75
+    for:
+      - shell
+      - c
+      - elf
+    if:
+      type: string
+      substr: unconfined_t
+  - id: object-r-label
+    desc: object_r SELinux role
+    crit: notable
+    conf: 0.7
+    for:
+      - shell
+      - c
+      - elf
+    if:
+      type: string
+      substr: "object_r:"
+  - id: setenforce-command
+    desc: setenforce command
+    crit: notable
+    conf: 0.8
+    for:
+      - shell
+    if:
+      type: string
+      word: setenforce
+  - id: getenforce-command
+    desc: getenforce command
+    crit: notable
+    conf: 0.75
+    for:
+      - shell
+    if:
+      type: string
+      word: getenforce
+  - id: selinux-enforce-sysfs
+    desc: /sys/fs/selinux/enforce path
+    crit: notable
+    conf: 0.8
+    for:
+      - shell
+      - c
+      - elf
+    if:
+      type: string
+      substr: /sys/fs/selinux/enforce
+  - id: selinux-enforce-legacy
+    desc: /selinux/enforce legacy path
+    crit: notable
+    conf: 0.8
+    for:
+      - shell
+      - c
+      - elf
+    if:
+      type: string
+      substr: /selinux/enforce
+  - id: permissive-keyword
+    desc: Permissive mode keyword
+    crit: notable
+    conf: 0.7
+    for:
+      - shell
+      - c
+      - elf
+    if:
+      type: string
+      word: Permissive
+  - id: load-policy-command
+    desc: load_policy command
+    crit: notable
+    conf: 0.8
+    for:
+      - shell
+    if:
+      type: string
+      word: load_policy
+  - id: semodule-command
+    desc: semodule command
+    crit: notable
+    conf: 0.8
+    for:
+      - shell
+    if:
+      type: string
+      word: semodule
+  - id: selinux-config-dir
+    desc: /etc/selinux directory
+    crit: notable
+    conf: 0.7
+    for:
+      - shell
+      - c
+      - elf
+    if:
+      type: string
+      substr: /etc/selinux
+  - id: chcon-command
+    desc: chcon command
+    crit: notable
+    conf: 0.75
+    for:
+      - shell
+    if:
+      type: string
+      word: chcon
+  - id: restorecon-command
+    desc: restorecon command
+    crit: notable
+    conf: 0.7
+    for:
+      - shell
+    if:
+      type: string
+      word: restorecon
+  - id: selinux-equals-zero
+    desc: selinux=0 kernel parameter
+    crit: notable
+    conf: 0.85
+    for:
+      - shell
+    if:
+      type: string
+      substr: selinux=0
+  - id: enforcing-equals-zero
+    desc: enforcing=0 kernel parameter
+    crit: notable
+    conf: 0.85
+    for:
+      - shell
+    if:
+      type: string
+      substr: enforcing=0
+  - id: selinux-disabled-config
+    desc: SELINUX=disabled config
+    crit: notable
+    conf: 0.85
+    for:
+      - shell
+    if:
+      type: string
+      substr: SELINUX=disabled
+  - id: selinux-permissive-config
+    desc: SELINUX=permissive config
+    crit: notable
+    conf: 0.8
+    for:
+      - shell
+    if:
+      type: string
+      substr: SELINUX=permissive
+  - id: selinux-state-symbol
+    desc: selinux_state kernel structure
+    crit: notable
+    conf: 0.75
+    for:
+      - c
+      - elf
+    if:
+      type: symbol
+      exact: selinux_state
+  - id: enforcing-keyword
+    desc: enforcing keyword
+    crit: notable
+    conf: 0.6
+    for:
+      - c
+      - elf
+      - shell
+    if:
+      type: string
+      word: enforcing
+  - id: fake-enforce-identifier
+    desc: fake_enforce identifier
+    crit: notable
+    conf: 0.8
+    for:
+      - c
+      - elf
+    if:
+      type: string
+      substr: fake_enforce
+  - id: sel-read-enforce-symbol
+    desc: sel_read_enforce function
+    crit: notable
+    conf: 0.8
+    for:
+      - c
+      - elf
+    if:
+      type: symbol
+      exact: sel_read_enforce
+  - id: sel-write-enforce-symbol
+    desc: sel_write_enforce function
+    crit: notable
+    conf: 0.8
+    for:
+      - c
+      - elf
+    if:
+      type: symbol
+      exact: sel_write_enforce
+  - id: policy-file-pattern-core
+    desc: SELinux policy path marker
+    crit: notable
+    conf: 0.65
+    for:
+      - shell
+      - c
+      - elf
+    if:
+      type: string
+      regex: /selinux/policy
+  - id: policy-file-pattern-ext-a
+    desc: SELinux policy extension set A
+    crit: notable
+    conf: 0.65
+    for:
+      - shell
+      - c
+      - elf
+    if:
+      type: string
+      regex: policy\.(3[0-9]|pp|te)$
+  - id: policy-file-pattern-ext-b
+    desc: SELinux policy extension set B
+    crit: notable
+    conf: 0.65
+    for:
+      - shell
+      - c
+      - elf
+    if:
+      type: string
+      regex: policy\.(fc|if)$
+composite_rules:
+  - id: unconfined-labels
+    desc: Unconfined SELinux context labels
+    for:
+      - shell
+      - c
+      - elf
+    any:
+      - id: unconfined-u-label
+      - id: unconfined-r-label
+      - id: unconfined-t-label
+    crit: notable
+  - id: enforcement-commands
+    desc: SELinux enforcement commands
+    for:
+      - shell
+      - c
+      - elf
+    any:
+      - id: setenforce-command
+      - id: getenforce-command
+      - id: selinux-enforce-sysfs
+      - id: selinux-enforce-legacy
+      - id: permissive-keyword
+    crit: notable
+  - id: policy-commands
+    desc: SELinux policy manipulation commands
+    for:
+      - shell
+    any:
+      - id: load-policy-command
+      - id: semodule-command
+      - id: chcon-command
+      - id: restorecon-command
+    crit: notable
+  - id: policy-files
+    desc: SELinux policy file references
+    for:
+      - shell
+      - c
+      - elf
+    any:
+      - id: selinux-config-dir
+      - id: policy-file-pattern
+    crit: notable
+  - id: policy-file-pattern
+    desc: SELinux policy binary file
+    crit: notable
+    conf: 0.65
+    for:
+      - shell
+      - c
+      - elf
+    any:
+      - id: policy-file-pattern-core
+      - id: policy-file-pattern-ext-a
+      - id: policy-file-pattern-ext-b
+  - id: kernel-parameters
+    desc: SELinux kernel boot parameters
+    for:
+      - shell
+    any:
+      - id: selinux-equals-zero
+      - id: enforcing-equals-zero
+      - id: selinux-disabled-config
+      - id: selinux-permissive-config
+    crit: notable
+  - id: sel-enforce-symbols
+    desc: SELinux enforcement symbols
+    for:
+      - c
+      - elf
+    all:
+      - id: sel-read-enforce-symbol
+      - id: sel-write-enforce-symbol
+    crit: notable
+  - id: xattr-manipulation
+    desc: SELinux extended attribute manipulation
+    crit: suspicious
+    conf: 0.75
+    for:
+      - c
+      - elf
+      - shell
+    all:
+      - id: security-selinux-xattr
+    any:
+      - id: setxattr-symbol
+      - id: setxattr-command
+  - id: unconfined-context
+    desc: SELinux unconfined context assignment
+    crit: suspicious
+    conf: 0.8
+    for:
+      - shell
+      - c
+      - elf
+    any:
+      - id: unconfined-labels
+      - id: object-r-label
+    downgrade:
+      any:
+        - id: metadata/purpose/test-tool::coreutils-test-functions
+  - id: policy-manipulation
+    desc: SELinux policy load or manipulation
+    crit: suspicious
+    conf: 0.8
+    for:
+      - shell
+      - c
+      - elf
+    any:
+      - id: policy-commands
+      - id: policy-files
+    downgrade:
+      any:
+        - id: micro-behaviors/dylib/library::debugger-tool-marker
+        - id: metadata/purpose/test-tool::coreutils-test-functions
+        - id: metadata/builder/autotools::autotools
+  - id: selinux-state-enforcing
+    desc: SELinux state with enforcing keyword
+    for:
+      - c
+      - elf
+    all:
+      - id: selinux-state-symbol
+      - id: enforcing-keyword
+    crit: notable
+  - id: fake-enforce-selinux
+    desc: Fake enforce with SELinux state
+    for:
+      - c
+      - elf
+    all:
+      - id: fake-enforce-identifier
+      - id: selinux-state-symbol
+    crit: notable
+  - id: runtime-patch
+    desc: Direct kernel memory manipulation of
+    crit: suspicious
+    conf: 0.95
+    for:
+      - c
+      - elf
+    any:
+      - id: selinux-state-enforcing
+      - id: sel-enforce-symbols
+      - id: fake-enforce-selinux
+  - id: bypass
+    desc: SELinux bypass detected
+    crit: suspicious
+    conf: 0.95
+    for:
+      - shell
+      - c
+      - elf
+    needs: 2
+    any:
+      - id: xattr-manipulation
+      - id: unconfined-context
+      - id: enforcement-commands
+      - id: kernel-parameters
+      - id: runtime-patch

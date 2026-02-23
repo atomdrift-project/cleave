@@ -1,0 +1,80 @@
+defaults:
+  for:
+  - all
+traits:
+- id: backdoor-shell-marker
+  desc: Backdoor shell marker
+  crit: suspicious
+  conf: 0.7
+  if:
+    type: string
+    regex: backdoor[_-]?shell
+    case_insensitive: true
+
+- id: backdoor-c2-marker
+  desc: Backdoor c2 marker
+  crit: suspicious
+  conf: 0.7
+  if:
+    type: string
+    regex: backdoor[_-]?c2
+    case_insensitive: true
+
+- id: backdoor-trojan-marker
+  desc: Backdoor trojan marker
+  crit: suspicious
+  conf: 0.7
+  if:
+    type: string
+    regex: backdoor[_-]?trojan
+    case_insensitive: true
+
+- id: backdoor-server-marker
+  desc: Backdoor server marker
+  crit: suspicious
+  conf: 0.7
+  if:
+    type: string
+    regex: backdoor[_-]?server
+    case_insensitive: true
+
+- id: backdoor-client-marker
+  desc: Backdoor client marker
+  crit: suspicious
+  conf: 0.7
+  if:
+    type: string
+    regex: backdoor[_-]?client
+    case_insensitive: true
+
+- id: backdoor-agent-marker
+  desc: Backdoor agent marker
+  crit: suspicious
+  conf: 0.7
+  if:
+    type: string
+    regex: backdoor[_-]?agent
+    case_insensitive: true
+
+- id: backdoor-payload-marker
+  desc: Backdoor payload marker
+  crit: suspicious
+  conf: 0.7
+  if:
+    type: string
+    regex: backdoor[_-]?payload
+    case_insensitive: true
+
+composite_rules:
+- id: backdoor
+  desc: Backdoor marker string
+  crit: suspicious
+  conf: 0.7
+  any:
+    - id: backdoor-shell-marker
+    - id: backdoor-c2-marker
+    - id: backdoor-trojan-marker
+    - id: backdoor-server-marker
+    - id: backdoor-client-marker
+    - id: backdoor-agent-marker
+    - id: backdoor-payload-marker

@@ -1,0 +1,26 @@
+# eBPF Observability Tools
+# Legitimate eBPF-based observability and security tools
+
+defaults:
+  for: [all]
+  crit: notable
+  conf: 0.9
+
+traits:
+  - id: cilium
+    desc: Cilium observability
+    if:
+      type: string
+      substr: "cilium"
+
+  - id: falco
+    desc: Falco security
+    if:
+      type: string
+      substr: "falco"
+
+  - id: tracee
+    desc: Tracee observability
+    if:
+      type: string
+      substr: "tracee"

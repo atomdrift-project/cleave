@@ -1,0 +1,474 @@
+defaults:
+  for:
+  - all
+traits:
+- id: chrome-name
+  desc: Chrome browser name
+  crit: notable
+  conf: 0.4
+  attack: T1217
+  for:
+  - javascript
+  - typescript
+  - python
+  - shell
+  - ruby
+  - php
+  if:
+    type: string
+    substr: Chrome
+- id: firefox-name
+  desc: Firefox browser name
+  crit: notable
+  conf: 0.4
+  attack: T1217
+  for:
+  - javascript
+  - typescript
+  - python
+  - shell
+  - ruby
+  - php
+  if:
+    type: string
+    substr: Firefox
+- id: safari-name
+  desc: Safari browser name
+  crit: notable
+  conf: 0.4
+  attack: T1217
+  for:
+  - javascript
+  - typescript
+  - python
+  - shell
+  - ruby
+  - php
+  if:
+    type: string
+    substr: Safari
+- id: edge-name-path
+  desc: Edge browser name (path)
+  crit: notable
+  conf: 0.4
+  attack: T1217
+  for:
+  - all
+  if:
+    type: string
+    regex: Edge[/\\]
+- id: edge-name-ms
+  desc: Edge browser name (MicrosoftEdge)
+  crit: notable
+  conf: 0.4
+  attack: T1217
+  for:
+  - all
+  if:
+    type: string
+    substr: MicrosoftEdge
+- id: edge-name-other
+  desc: Edge browser name (Browser/Chromium)
+  crit: notable
+  conf: 0.4
+  attack: T1217
+  for:
+  - all
+  if:
+    type: string
+    regex: Edge\s+(Browser|Chromium)
+- id: opera-name-path
+  desc: Opera browser name (path)
+  crit: notable
+  conf: 0.4
+  attack: T1217
+  for:
+  - all
+  if:
+    type: string
+    regex: Opera[/\\]
+- id: opera-name-other
+  desc: Opera browser name (GX/Stable/Browser)
+  crit: notable
+  conf: 0.4
+  attack: T1217
+  for:
+  - all
+  if:
+    type: string
+    regex: Opera\s+(GX|Stable|Browser)
+- id: brave-name
+  desc: Brave browser name
+  crit: notable
+  conf: 0.4
+  attack: T1217
+  for:
+  - all
+  if:
+    type: string
+    substr: Brave
+- id: history-file
+  desc: History file reference
+  crit: notable
+  conf: 0.5
+  attack: T1217
+  for:
+  - all
+  if:
+    type: string
+    regex: '[/\\]History$|History\.db|browser.{0,30}history|history\.sqlite'
+- id: places-sqlite
+  desc: Firefox places.sqlite
+  crit: notable
+  conf: 0.7
+  attack: T1217
+  for:
+  - all
+  if:
+    type: string
+    substr: places.sqlite
+- id: bookmarks-word
+  desc: bookmarks keyword
+  crit: notable
+  conf: 0.4
+  attack: T1217
+  for:
+  - all
+  if:
+    type: string
+    substr: bookmarks
+    case_insensitive: true
+  downgrade:
+    any:
+    - id: well-known/tools/sysadmin::hg-operations
+    - id: metadata/quality/testing::test-file-shell
+- id: bookmarks-plist
+  desc: Bookmarks.plist file
+  crit: notable
+  conf: 0.6
+  attack: T1217
+  for:
+  - all
+  if:
+    type: string
+    substr: Bookmarks.plist
+- id: chrome-extension-url
+  desc: chrome-extension:// URL
+  crit: notable
+  conf: 0.6
+  attack: T1217
+  for:
+  - all
+  if:
+    type: string
+    substr: chrome-extension://
+- id: extensions-hash-path
+  desc: Extensions path with hash
+  crit: notable
+  conf: 0.6
+  attack: T1217
+  for:
+  - all
+  if:
+    type: string
+    regex: /Extensions/[a-z]{32}
+- id: chrome-extensions-path
+  desc: Chrome Extensions path
+  crit: notable
+  conf: 0.6
+  attack: T1217
+  for:
+  - all
+  if:
+    type: string
+    regex: /Google/Chrome/.{0,50}Extensions
+- id: browser-support-extensions
+  desc: BrowserSupport Extensions path
+  crit: notable
+  conf: 0.6
+  attack: T1217
+  for:
+  - all
+  if:
+    type: string
+    substr: /BrowserSupport/Extensions
+- id: safari-plist
+  desc: Safari preferences plist file
+  crit: notable
+  conf: 0.7
+  attack: T1217
+  for:
+  - all
+  if:
+    type: string
+    substr: com.apple.Safari.plist
+- id: opera-stable
+  desc: Opera Stable
+  crit: notable
+  conf: 0.6
+  attack: T1217
+  for:
+  - all
+  if:
+    type: string
+    regex: Opera.{0,30}Stable
+- id: brave-software
+  desc: Brave Software path
+  crit: notable
+  conf: 0.6
+  attack: T1217
+  for:
+  - all
+  if:
+    type: string
+    substr: BraveSoftware
+- id: cookies-file
+  desc: Cookies file reference
+  crit: notable
+  conf: 0.5
+  attack: T1217
+  for:
+  - all
+  if:
+    type: string
+    regex: 'Cookies(\.sqlite|\.binarycookies|\.db)?$|browser.{0,30}cookies'
+  unless:
+    - id: objectives/credential-access/browser/safari::cookies-path
+composite_rules:
+- id: edge-name
+  desc: Edge browser name
+  crit: notable
+  conf: 0.4
+  attack: T1217
+  any:
+  - id: edge-name-path
+  - id: edge-name-ms
+  - id: edge-name-other
+- id: opera-name
+  desc: Opera browser name
+  crit: notable
+  conf: 0.4
+  attack: T1217
+  any:
+  - id: opera-name-path
+  - id: opera-name-other
+- id: browser-names
+  desc: Browser name references
+  crit: notable
+  conf: 0.5
+  attack: T1217
+  for:
+  - all
+  needs: 2
+  any:
+  - id: chrome-name
+  - id: firefox-name
+  - id: safari-name
+  - id: edge-name
+  - id: opera-name
+  - id: brave-name
+- id: browser-data-files
+  desc: Browser data file references
+  crit: notable
+  conf: 0.7
+  attack: T1217
+  for:
+  - all
+  any:
+  - id: history-file
+  - id: cookies-file
+  - id: micro-behaviors/fs/path/sensitive/browser::login-data
+  - id: places-sqlite
+- id: chrome-history
+  desc: Chrome browser history
+  crit: suspicious
+  conf: 0.85
+  attack: T1217
+  for:
+  - all
+  all:
+  - id: chrome-name
+  any:
+  - id: history-file
+  - id: cookies-file
+  - id: micro-behaviors/fs/path/sensitive/browser::login-data
+  downgrade:
+    any:
+    - type: basename
+      substr: chrome
+    - type: basename
+      substr: chromium
+- id: firefox-history
+  desc: Firefox browser history
+  crit: notable
+  conf: 0.85
+  attack: T1217
+  for:
+  - all
+  any:
+  - id: places-sqlite
+  - id: objectives/credential-access/browser/firefox::cookies
+  - id: objectives/credential-access/browser/firefox::logins
+  downgrade:
+    any:
+    - type: basename
+      substr: firefox
+- id: safari-history
+  desc: Safari browser history
+  crit: suspicious
+  conf: 0.85
+  attack: T1217
+  for:
+  - all
+  all:
+  - id: safari-name
+  any:
+  - id: history-file
+  - id: cookies-file
+  downgrade:
+    any:
+    - type: basename
+      substr: Safari
+- id: edge-history
+  desc: Edge browser history
+  crit: suspicious
+  conf: 0.85
+  attack: T1217
+  for:
+  - all
+  all:
+  - id: edge-name
+  any:
+  - id: history-file
+  - id: cookies-file
+  downgrade:
+    any:
+    - type: basename
+      substr: edge
+    - type: basename
+      substr: msedge
+- id: bookmarks
+  desc: Browser bookmarks access
+  crit: notable
+  conf: 0.8
+  attack: T1217
+  for:
+  - all
+  any:
+  - id: bookmarks-word
+  - id: bookmarks-plist
+  downgrade:
+    any:
+    - type: basename
+      substr: chrome
+    - type: basename
+      substr: chromium
+    - type: basename
+      substr: firefox
+    - type: basename
+      substr: Safari
+    - type: basename
+      substr: brave
+    - id: well-known/tools/sysadmin::hg-operations
+    - id: metadata/quality/testing::test-file-shell
+- id: local-storage
+  desc: Browser local storage access
+  crit: notable
+  conf: 0.8
+  attack: T1217
+  for:
+  - all
+  any:
+  - id: micro-behaviors/fs/path/sensitive/browser::local-storage-ref
+  - id: micro-behaviors/fs/path/sensitive/browser::leveldb-ref
+- id: extensions
+  desc: Browser extensions access
+  crit: suspicious
+  conf: 0.8
+  attack: T1217
+  for:
+  - all
+  any:
+  - id: chrome-extension-url
+  - id: extensions-hash-path
+  - id: chrome-extensions-path
+  - id: browser-support-extensions
+  downgrade:
+    any:
+    - type: basename
+      substr: chrome
+    - type: basename
+      substr: chromium
+    - type: basename
+      substr: firefox
+    - type: basename
+      substr: brave
+- id: opera
+  desc: Opera browser data
+  crit: notable
+  conf: 0.85
+  attack: T1217
+  for:
+  - all
+  all:
+  - id: opera-name
+  - id: opera-stable
+- id: browser-settings-hijack
+  desc: Browser search engine or homepage hijacking
+  crit: suspicious
+  conf: 0.85
+  attack: T1217
+  for:
+  - all
+  all:
+  - id: search-engine-id
+  any:
+  - id: safari-plist
+  - id: micro-behaviors/fs/file/write::write
+  - id: micro-behaviors/fs/watch/fswatch::fseventstream
+  downgrade:
+    any:
+    - type: basename
+      substr: Safari
+    - type: basename
+      substr: chrome
+    - type: basename
+      substr: firefox
+- id: multi-browser-enum
+  desc: Multiple browser data access
+  crit: suspicious
+  conf: 0.9
+  attack: T1217
+  mbc: B0046
+  for:
+  - all
+  all:
+  - id: browser-names
+  - id: browser-data-files
+- id: multi-browser-profile-targeting
+  desc: Targets profile data for 3+ browsers
+  crit: suspicious
+  conf: 0.9
+  attack: T1555.003
+  needs: 3
+  any:
+  - id: chrome-name
+  - id: edge-name
+  - id: firefox-name
+  - id: safari-name
+  - id: opera-name
+  - id: brave-name
+- id: search-engine-id
+  desc: Browser search engine identifier reference
+  crit: notable
+  conf: 0.7
+  attack: T1217
+  not:
+  - SearchProviderSearchGuide
+  any:
+  - id: objectives/discovery/host/browser::inline__search-engine-id__any_1
+  - id: objectives/discovery/host/browser::inline__search-engine-id__any_2
+  - id: objectives/discovery/host/browser::inline__search-engine-id__any_3
+  - id: objectives/discovery/host/browser::inline__search-engine-id__any_4
+  - id: objectives/discovery/host/browser::inline__search-engine-id__any_5
+  - id: objectives/discovery/host/browser::inline__search-engine-id__any_6

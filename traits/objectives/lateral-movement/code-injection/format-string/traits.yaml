@@ -1,0 +1,17 @@
+# Command Injection Detection
+# Detects format string injection executed via system calls
+# ATT&CK: T1059 (Command and Scripting Interpreter)
+
+composite_rules:
+  - id: command-injection-format-exec
+    desc: Format string executed via system()
+    crit: hostile
+    conf: 0.90
+    mbc: "E1059"
+    attack: "T1059"
+    for: [c, elf, macho]
+    all:
+      - id: micro-behaviors/process/create/shell::format-string-injection
+      - id: micro-behaviors/process/create/shell::system-fn
+      - id: micro-behaviors/communications/socket/create::create
+      - id: micro-behaviors/communications/socket/connect::connect

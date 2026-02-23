@@ -1,0 +1,7 @@
+composite_rules:
+  - id: has-pem-certificate
+    desc: File contains a PEM-encoded certificate.
+    crit: baseline
+    conf: 1.0
+    any:
+      - id: micro-behaviors/crypto/cert/operations

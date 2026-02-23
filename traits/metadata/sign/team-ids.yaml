@@ -1,0 +1,17 @@
+# Apple Code Signing Team Identifiers
+#
+# NOTE: Team IDs are dynamically extracted with signer names from certificates.
+# This file is left minimal - all discovered team IDs will automatically generate
+# traits like metadata/signed/by/{TEAM_ID} with the signer name as description.
+#
+# These traits enable ML analysis to learn patterns across different signers and
+# identify notable organizations or anomalies.
+
+defaults:
+  platforms: [macos]
+  for: [macho]
+  crit: baseline
+  conf: 1.0
+
+traits: []
+# No hardcoded entries - all team IDs are extracted dynamically from binaries

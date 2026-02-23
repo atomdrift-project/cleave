@@ -1,0 +1,20 @@
+# Wireshark - Network Protocol Analyzer
+# GUI and CLI packet analysis tools
+
+defaults:
+  for: [all]
+  crit: notable
+  conf: 0.9
+
+traits:
+  - id: wireshark
+    desc: Wireshark analyzer
+    if:
+      type: string
+      substr: wireshark
+
+  - id: tshark
+    desc: tshark CLI analyzer
+    if:
+      type: string
+      substr: tshark

@@ -1,0 +1,59 @@
+# Process Creation
+# Creating and managing processes
+
+defaults:
+  for: ["pe", "dll"]
+  platforms: ["windows"]
+
+traits:
+  # === Process Creation ===
+  - id: create-process-a
+    desc: Create process (ANSI)
+    crit: notable
+    conf: 0.95
+    attack: "T1106"
+    if:
+      type: symbol
+      exact: "CreateProcessA"
+
+  - id: create-process-w
+    desc: Create process (Unicode)
+    crit: notable
+    conf: 0.95
+    attack: "T1106"
+    if:
+      type: symbol
+      exact: "CreateProcessW"
+
+  - id: open-process
+    desc: Open process handle
+    crit: notable
+    conf: 0.95
+    attack: "T1106"
+    if:
+      type: symbol
+      exact: "OpenProcess"
+
+  - id: close-handle
+    desc: Close handle
+    crit: baseline
+    conf: 0.90
+    if:
+      type: symbol
+      exact: "CloseHandle"
+
+  - id: wait-for-single-object
+    desc: Wait for process/object
+    crit: baseline
+    conf: 0.90
+    if:
+      type: symbol
+      exact: "WaitForSingleObject"
+
+  - id: get-exit-code-process
+    desc: Get process exit code
+    crit: baseline
+    conf: 0.90
+    if:
+      type: symbol
+      exact: "GetExitCodeProcess"

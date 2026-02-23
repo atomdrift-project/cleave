@@ -1,0 +1,20 @@
+traits:
+- id: jscript-array-function-loop
+  desc: JScript array function loop (dynamic execution)
+  crit: suspicious
+  conf: 0.9
+  for:
+  - javascript
+  if:
+    type: raw
+    regex: this\[['"][a-zA-Z0-9]+['"]\s*\+\s*[a-zA-Z0-9]+\]\(
+- id: jscript-obfuscated-string-builder
+  desc: JScript obfuscated string builder function pattern
+  crit: suspicious
+  conf: 0.9
+  for:
+  - javascript
+  if:
+    type: raw
+    regex: function\s+\w+\(\)\s*\{.{0,120}return\s+\w+\(\);\s*\}
+composite_rules: []

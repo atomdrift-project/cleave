@@ -1,0 +1,1007 @@
+# Kernel Rootkit Detection
+# ATT&CK: T1014 (Rootkit)
+# MBC: F0015 (Hijack Execution Flow)
+
+defaults:
+  for: [all]
+
+traits:
+  # === Kernel Symbol Resolution ===
+  - id: proc-kallsyms
+    desc: /proc/kallsyms kernel symbol file
+    crit: notable
+    conf: 0.75
+    mbc: "F0015"
+    attack: "T1014"
+    if:
+      type: string
+      substr: "/proc/kallsyms"
+
+  - id: proc-ksyms
+    desc: /proc/ksyms legacy kernel symbol file
+    crit: notable
+    conf: 0.75
+    mbc: "F0015"
+    attack: "T1014"
+    if:
+      type: string
+      substr: "/proc/ksyms"
+
+  - id: lookup-address
+    desc: lookup_address kernel function
+    crit: notable
+    conf: 0.8
+    mbc: "F0015"
+    if:
+      type: symbol
+      regex: "lookup_address"
+
+  - id: kallsyms-lookup-fn
+    desc: kallsyms_lookup kernel function
+    crit: notable
+    conf: 0.8
+    mbc: "F0015"
+    if:
+      type: symbol
+      regex: "kallsyms_lookup"
+
+  # === TCP/UDP Seq Show Functions ===
+  - id: tcp4-seq-show
+    desc: tcp4_seq_show function
+    crit: suspicious
+    conf: 0.85
+    mbc: "F0015"
+    attack: "T1014"
+    for: [elf, c]
+    if:
+      type: symbol
+      regex: "tcp4_seq_show"
+
+  - id: tcp6-seq-show
+    desc: tcp6_seq_show function
+    crit: suspicious
+    conf: 0.85
+    mbc: "F0015"
+    attack: "T1014"
+    for: [elf, c]
+    if:
+      type: symbol
+      regex: "tcp6_seq_show"
+
+  - id: udp4-seq-show
+    desc: udp4_seq_show function
+    crit: suspicious
+    conf: 0.85
+    mbc: "F0015"
+    attack: "T1014"
+    for: [elf, c]
+    if:
+      type: symbol
+      regex: "udp4_seq_show"
+
+  - id: udp6-seq-show
+    desc: udp6_seq_show function
+    crit: suspicious
+    conf: 0.85
+    mbc: "F0015"
+    attack: "T1014"
+    for: [elf, c]
+    if:
+      type: symbol
+      regex: "udp6_seq_show"
+
+  # NOTE: /proc/net/tcp is a neutral observation (network scanning, monitoring, rootkits all use it)
+  # This atomic trait has been moved to micro-behaviors/fs/proc/info/ for proper taxonomy placement
+  # Rootkit detection requires tcp_seq_show hooking functions, not just /proc/net/tcp access
+
+  # === Proc Filesystem Hiding ===
+  - id: proc-root-readdir
+    desc: proc_root_readdir function
+    crit: suspicious
+    conf: 0.85
+    mbc: "F0015"
+    attack: "T1014"
+    for: [elf, c]
+    if:
+      type: symbol
+      regex: "proc_root_readdir"
+
+  - id: proc-iterate
+    desc: proc_iterate function
+    crit: suspicious
+    conf: 0.85
+    mbc: "F0015"
+    for: [elf, c]
+    if:
+      type: symbol
+      regex: "proc_iterate"
+
+  - id: proc-fill-cache
+    desc: proc_fill_cache function
+    crit: notable
+    conf: 0.8
+    for: [elf, c]
+    if:
+      type: symbol
+      regex: "proc_fill_cache"
+
+  - id: filldir
+    desc: filldir callback function
+    crit: notable
+    conf: 0.75
+    for: [elf, c]
+    if:
+      type: symbol
+      regex: "filldir"
+
+  - id: filldir64
+    desc: filldir64 callback function
+    crit: notable
+    conf: 0.75
+    for: [elf, c]
+    if:
+      type: symbol
+      regex: "filldir64"
+
+  - id: pid-getattr
+    desc: pid_getattr function
+    crit: notable
+    conf: 0.8
+    for: [elf, c]
+    if:
+      type: symbol
+      regex: "pid_getattr"
+
+  - id: sys-getpriority
+    desc: sys_getpriority syscall
+    crit: notable
+    conf: 0.5
+    for: [elf, c]
+    if:
+      type: symbol
+      regex: "sys_getpriority"
+
+  - id: sys-getdents
+    desc: sys_getdents syscall
+    crit: notable
+    conf: 0.7
+    for: [elf, c]
+    if:
+      type: symbol
+      regex: "sys_getdents"
+
+  - id: sys-getdents64
+    desc: sys_getdents64 syscall
+    crit: notable
+    conf: 0.7
+    for: [elf, c]
+    if:
+      type: symbol
+      regex: "sys_getdents64"
+
+  - id: sys-kill
+    desc: sys_kill syscall
+    crit: notable
+    conf: 0.5
+    for: [elf, c]
+    if:
+      type: symbol
+      regex: "sys_kill"
+
+  - id: orig-cr0
+    desc: orig_cr0 CR0 register backup
+    crit: suspicious
+    conf: 0.9
+    mbc: "F0015"
+    for: [elf, c]
+    if:
+      type: string
+      substr: "orig_cr0"
+
+  - id: write-cr0
+    desc: write_cr0 function
+    crit: suspicious
+    conf: 0.9
+    mbc: "F0015"
+    for: [elf, c]
+    if:
+      type: symbol
+      regex: "write_cr0"
+
+  - id: native-write-cr0
+    desc: native_write_cr0 function
+    crit: suspicious
+    conf: 0.9
+    mbc: "F0015"
+    for: [elf, c]
+    if:
+      type: symbol
+      regex: "native_write_cr0"
+
+  # === Kernel Module Markers ===
+  - id: init-module
+    desc: init_module entry point
+    crit: notable
+    conf: 0.5
+    if:
+      type: symbol
+      regex: "init_module"
+
+  - id: cleanup-module
+    desc: cleanup_module exit point
+    crit: notable
+    conf: 0.5
+    if:
+      type: symbol
+      regex: "cleanup_module"
+
+  - id: this-module
+    desc: __this_module reference
+    crit: notable
+    conf: 0.5
+    if:
+      type: string
+      substr: "__this_module"
+
+  - id: vermagic
+    desc: vermagic= kernel version magic
+    crit: notable
+    conf: 0.5
+    if:
+      type: string
+      substr: "vermagic="
+
+  - id: modinfo-section
+    desc: .modinfo section
+    crit: notable
+    conf: 0.5
+    if:
+      type: string
+      substr: ".modinfo"
+
+  - id: gnu-linkonce
+    desc: .gnu.linkonce section
+    crit: notable
+    conf: 0.5
+    if:
+      type: string
+      substr: ".gnu.linkonce"
+
+  # === Netfilter Hook Functions ===
+  - id: nf-register-hook
+    desc: nf_register_hook function
+    crit: notable
+    conf: 0.8
+    mbc: "F0015"
+    if:
+      type: symbol
+      regex: "nf_register_hook"
+
+  - id: nf-register-net-hook
+    desc: nf_register_net_hook function
+    crit: notable
+    conf: 0.8
+    mbc: "F0015"
+    if:
+      type: symbol
+      regex: "nf_register_net_hook"
+
+  - id: nf-unregister-hook
+    desc: nf_unregister_hook function
+    crit: notable
+    conf: 0.8
+    if:
+      type: symbol
+      regex: "nf_unregister_hook"
+
+  - id: nf-hookfn
+    desc: nf_hookfn callback type
+    crit: notable
+    conf: 0.75
+    if:
+      type: string
+      substr: "nf_hookfn"
+
+  - id: nf-accept
+    desc: NF_ACCEPT verdict
+    crit: notable
+    conf: 0.5
+    if:
+      type: string
+      substr: "NF_ACCEPT"
+
+  - id: nf-drop
+    desc: NF_DROP verdict
+    crit: notable
+    conf: 0.5
+    if:
+      type: string
+      substr: "NF_DROP"
+
+  # === VFS Layer Functions ===
+  - id: vfs-read
+    desc: vfs_read function
+    crit: notable
+    conf: 0.5
+    for: [elf, c]
+    if:
+      type: symbol
+      regex: "vfs_read"
+
+  - id: vfs-write
+    desc: vfs_write function
+    crit: notable
+    conf: 0.5
+    for: [elf, c]
+    if:
+      type: symbol
+      regex: "vfs_write"
+
+  - id: vfs-readdir
+    desc: vfs_readdir function
+    crit: notable
+    conf: 0.7
+    for: [elf, c]
+    if:
+      type: symbol
+      regex: "vfs_readdir"
+
+  - id: iterate-dir
+    desc: iterate_dir function
+    crit: notable
+    conf: 0.7
+    for: [elf, c]
+    if:
+      type: symbol
+      regex: "iterate_dir"
+
+  - id: file-operations
+    desc: file_operations struct
+    crit: notable
+    conf: 0.7
+    for: [elf, c]
+    if:
+      type: string
+      substr: "file_operations"
+
+  - id: inode-operations
+    desc: inode_operations struct
+    crit: notable
+    conf: 0.7
+    for: [elf, c]
+    if:
+      type: string
+      substr: "inode_operations"
+
+  # === macOS Kext Rootkit Indicators ===
+  - id: macos-sy-call-hook
+    desc: macOS syscall table sy_call assignment
+    crit: suspicious
+    conf: 0.9
+    mbc: "F0015"
+    attack: "T1014"
+    for: [c]
+    if:
+      type: raw
+      substr: "sy_call"
+
+  - id: macos-kauth-cred-setuidgid
+    desc: macOS kernel credential manipulation
+    crit: suspicious
+    conf: 0.95
+    attack: "T1068"
+    for: [c]
+    if:
+      type: raw
+      substr: "kauth_cred_setuidgid"
+
+  - id: macos-ipf-addv4
+    desc: macOS IPv4 filter registration
+    crit: notable
+    conf: 0.8
+    mbc: "F0015"
+    for: [c]
+    if:
+      type: raw
+      substr: "ipf_addv4"
+
+  - id: macos-kunc-execute
+    desc: macOS KUNCExecute kernel command exec
+    crit: suspicious
+    conf: 0.95
+    attack: "T1059"
+    for: [c]
+    if:
+      type: raw
+      substr: "KUNCExecute"
+
+  - id: macos-kext-getdirentries-hook
+    desc: macOS getdirentries hook function
+    crit: suspicious
+    conf: 0.9
+    mbc: "F0015"
+    attack: "T1014"
+    for: [c, macho]
+    if:
+      type: string
+      substr: "new_getdirentries"
+
+  - id: macos-kext-write-nocancel-hook
+    desc: macOS write_nocancel syscall hook
+    crit: suspicious
+    conf: 0.9
+    mbc: "F0015"
+    attack: "T1014"
+    for: [c, macho]
+    if:
+      type: string
+      substr: "new_write_nocancel"
+
+  - id: macos-kext-ipf-filter
+    desc: macOS IP filter hook function
+    crit: notable
+    conf: 0.8
+    mbc: "F0015"
+    for: [c, macho]
+    if:
+      type: string
+      substr: "ipf_input"
+
+  - id: rootkit-give-root
+    desc: Rootkit give root privilege function
+    crit: suspicious
+    conf: 0.9
+    attack: "T1068"
+    for: [c, macho]
+    if:
+      type: string
+      substr: "give root"
+
+  - id: rootkit-hide-process-string
+    desc: Rootkit hide process menu string
+    crit: suspicious
+    conf: 0.9
+    mbc: "B0003"
+    attack: "T1014"
+    for: [c, macho]
+    if:
+      type: string
+      substr: "hide a process"
+
+  - id: rootkit-hide-network-port
+    desc: Rootkit hide network port string
+    crit: suspicious
+    conf: 0.9
+    mbc: "B0003"
+    attack: "T1014"
+    for: [c, macho]
+    if:
+      type: string
+      substr: "hide a network port"
+
+  # === Diamorphine Rootkit Indicators ===
+  - id: diamorphine-name
+    desc: Diamorphine rootkit name
+    crit: suspicious
+    conf: 0.95
+    mbc: "F0015"
+    attack: "T1014"
+    for: [elf, c]
+    if:
+      type: string
+      regex: "(?i)diamorphine"
+
+  - id: is-invisible
+    desc: is_invisible function
+    crit: suspicious
+    conf: 0.9
+    for: [elf, c]
+    if:
+      type: string
+      substr: "is_invisible"
+
+  - id: module-hidden
+    desc: module_hidden flag
+    crit: suspicious
+    conf: 0.9
+    for: [elf, c]
+    if:
+      type: string
+      substr: "module_hidden"
+
+  - id: hide-module
+    desc: hide_module function
+    crit: suspicious
+    conf: 0.9
+    for: [elf, c]
+    if:
+      type: string
+      substr: "hide_module"
+
+  - id: give-root
+    desc: give_root function
+    crit: suspicious
+    conf: 0.95
+    attack: "T1068"
+    for: [elf, c]
+    if:
+      type: string
+      substr: "give_root"
+
+  - id: hacked-kill
+    desc: hacked_kill function
+    crit: suspicious
+    conf: 0.9
+    for: [elf, c]
+    if:
+      type: string
+      substr: "hacked_kill"
+
+  - id: orig-getdents
+    desc: orig_getdents function
+    crit: suspicious
+    conf: 0.9
+    for: [elf, c]
+    if:
+      type: string
+      substr: "orig_getdents"
+
+  # === Reptile Rootkit Indicators ===
+  - id: reptile-name
+    desc: Reptile rootkit name
+    crit: suspicious
+    conf: 0.95
+    mbc: "F0015"
+    attack: "T1014"
+    for: [elf, c]
+    if:
+      type: string
+      regex: "(?i)reptile"
+
+  - id: khook
+    desc: khook framework marker
+    crit: suspicious
+    conf: 0.9
+    for: [elf, c]
+    if:
+      type: string
+      substr: "khook"
+
+  - id: kmatryoshka
+    desc: kmatryoshka packer marker
+    crit: suspicious
+    conf: 0.9
+    for: [elf, c]
+    if:
+      type: string
+      substr: "kmatryoshka"
+
+  - id: reptile-hide
+    desc: reptile_hide function
+    crit: suspicious
+    conf: 0.95
+    for: [elf, c]
+    if:
+      type: string
+      substr: "reptile_hide"
+
+  - id: magic-packet
+    desc: YOURMAGICPACKET trigger
+    crit: suspicious
+    conf: 0.9
+    for: [elf, c]
+    if:
+      type: string
+      substr: "YOURMAGICPACKET"
+
+  - id: reptile-cmd
+    desc: reptile_cmd backdoor
+    crit: suspicious
+    conf: 0.95
+    for: [elf, c]
+    if:
+      type: string
+      substr: "reptile_cmd"
+
+  # === Syslogk Rootkit Indicators ===
+  - id: syslogk-name
+    desc: Syslogk rootkit name
+    crit: suspicious
+    conf: 0.95
+    mbc: "F0015"
+    attack: "T1014"
+    for: [elf, c]
+    if:
+      type: string
+      regex: "(?i)syslogk"
+
+  - id: rekoobe-magic
+    desc: Rekoobe magic string (PgSD93iu)
+    crit: suspicious
+    conf: 0.95
+    for: [elf, c]
+    if:
+      type: string
+      substr: "PgSD93iu"
+
+composite_rules:
+  # Kallsyms lookup (migrated from YARA)
+  - id: kallsyms-lookup-method
+    desc: Accesses /proc/kallsyms for kernel symbol
+    crit: notable
+    conf: 0.85
+    mbc: "F0015"
+    attack: "T1014"
+    any:
+      - id: proc-kallsyms
+      - id: proc-ksyms
+      - id: lookup-address
+      - id: kallsyms-lookup-fn
+
+  # TCP seq show functions helper
+  - id: tcp-seq-funcs
+    desc: TCP/UDP seq_show hook functions
+    crit: suspicious
+    conf: 0.85
+    for: [elf, c]
+    any:
+      - id: tcp4-seq-show
+      - id: tcp6-seq-show
+      - id: udp4-seq-show
+      - id: udp6-seq-show
+
+  # TCP hiding (migrated from YARA)
+  # Fixed: Requires BOTH hooking functions AND /proc/net/tcp (not just OR)
+  # Excludes network scanning tools (Mirai, nmap, etc.) that read /proc/net/tcp legitimately
+  - id: tcp-hiding
+    desc: Hooks TCP sequence show function
+    crit: suspicious
+    conf: 0.9
+    mbc: "F0015"
+    attack: "T1014"
+    for: [elf, c]
+    all:
+      - id: tcp-seq-funcs
+      - id: micro-behaviors/fs/proc/info::proc-net-tcp
+    none:
+      - id: objectives/discovery/network/scan::scanner
+
+  # Proc hiding functions helper
+  - id: proc-hiding-funcs
+    desc: Proc filesystem hiding functions
+    crit: suspicious
+    conf: 0.85
+    for: [elf, c]
+    needs: 2
+    any:
+      - id: proc-root-readdir
+      - id: proc-iterate
+      - id: proc-fill-cache
+      - id: filldir
+      - id: filldir64
+      - id: pid-getattr
+
+  # Syscall hook target helper
+  - id: syscall-targets
+    desc: Syscall hook targets
+    crit: notable
+    conf: 0.7
+    for: [elf, c]
+    any:
+      - id: sys-getpriority
+      - id: sys-getdents
+      - id: sys-getdents64
+      - id: sys-kill
+
+  # CR0 manipulation helper
+  - id: cr0-manipulation
+    desc: CR0 write protection bypass
+    crit: suspicious
+    conf: 0.9
+    for: [elf, c]
+    any:
+      - id: orig-cr0
+      - id: write-cr0
+      - id: native-write-cr0
+
+  # Syscall hook (migrated from YARA)
+  - id: syscall-hook
+    desc: Syscall table manipulation patterns
+    crit: suspicious
+    conf: 0.9
+    mbc: "F0015"
+    attack: "T1014"
+    for: [elf, c]
+    any:
+      - id: syscall-table-hook
+      - id: cr0-manipulation
+
+  # Syscall table hook helper
+  - id: syscall-table-hook
+    desc: Syscall table with hook targets
+    crit: suspicious
+    conf: 0.9
+    for: [elf, c]
+    all:
+      - id: micro-behaviors/os/kernel/hook::syscall-table-ref
+      - id: syscall-targets
+
+  # Module format markers helper
+  - id: module-markers
+    desc: Kernel module format markers
+    crit: notable
+    conf: 0.5
+    needs: 3
+    any:
+      - id: init-module
+      - id: cleanup-module
+      - id: this-module
+      - id: vermagic
+      - id: modinfo-section
+      - id: gnu-linkonce
+
+  # Netfilter hook registration helper
+  - id: nf-registration
+    desc: Netfilter hook registration functions
+    crit: notable
+    conf: 0.8
+    any:
+      - id: nf-register-hook
+      - id: nf-register-net-hook
+      - id: nf-unregister-hook
+      - id: nf-hookfn
+
+  # Netfilter verdicts helper
+  - id: nf-verdicts
+    desc: Netfilter verdict values
+    crit: notable
+    conf: 0.5
+    any:
+      - id: nf-accept
+      - id: nf-drop
+
+  # Netfilter hook (migrated from YARA)
+  - id: netfilter-hook
+    desc: Netfilter hook manipulation for packet
+    crit: suspicious
+    conf: 0.85
+    mbc: "F0015"
+    attack: "T1014"
+    needs: 2
+    any:
+      - id: nf-registration
+      - id: nf-verdicts
+
+  # VFS operations helper
+  - id: vfs-operations
+    desc: VFS operation structures
+    crit: notable
+    conf: 0.7
+    for: [elf, c]
+    any:
+      - id: file-operations
+      - id: inode-operations
+
+  # VFS functions helper
+  - id: vfs-functions
+    desc: VFS layer functions
+    crit: notable
+    conf: 0.6
+    for: [elf, c]
+    any:
+      - id: vfs-read
+      - id: vfs-write
+      - id: vfs-readdir
+      - id: iterate-dir
+
+  # VFS hook (migrated from YARA)
+  - id: vfs-hook
+    desc: VFS layer hooking for file
+    crit: suspicious
+    conf: 0.9
+    mbc: "F0015"
+    attack: "T1014"
+    for: [elf, c]
+    all:
+      - id: vfs-operations
+      - id: vfs-functions
+
+  # Diamorphine behavior helper
+  - id: diamorphine-behavior
+    desc: Diamorphine behavior markers
+    crit: suspicious
+    conf: 0.9
+    for: [elf, c]
+    any:
+      - id: module-hidden
+      - id: hide-module
+      - id: give-root
+
+  # Diamorphine hook helper
+  - id: diamorphine-hooks
+    desc: Diamorphine hook markers
+    crit: suspicious
+    conf: 0.9
+    for: [elf, c]
+    all:
+      - id: hacked-kill
+      - id: orig-getdents
+
+  # Diamorphine detection (migrated from YARA)
+  - id: diamorphine
+    desc: Diamorphine kernel rootkit indicators
+    crit: suspicious
+    conf: 0.95
+    mbc: "F0015"
+    attack: "T1014"
+    for: [elf, c]
+    any:
+      - id: diamorphine-name
+      - id: diamorphine-with-behavior
+      - id: diamorphine-hooks
+
+  # Diamorphine with behavior helper
+  - id: diamorphine-with-behavior
+    desc: Diamorphine with behavior markers
+    crit: suspicious
+    conf: 0.95
+    for: [elf, c]
+    all:
+      - id: is-invisible
+      - id: diamorphine-behavior
+
+  # Reptile (migrated from YARA)
+  - id: reptile
+    desc: Reptile kernel rootkit indicators
+    crit: suspicious
+    conf: 0.95
+    mbc: "F0015"
+    attack: "T1014"
+    for: [elf, c]
+    any:
+      - id: reptile-name
+      - id: reptile-markers
+
+  # Reptile markers helper
+  - id: reptile-markers
+    desc: Reptile rootkit markers
+    crit: suspicious
+    conf: 0.9
+    for: [elf, c]
+    needs: 2
+    any:
+      - id: khook
+      - id: kmatryoshka
+      - id: reptile-hide
+      - id: magic-packet
+      - id: reptile-cmd
+
+  # Syslogk behavior helper
+  - id: syslogk-behavior
+    desc: Syslogk rootkit behavior
+    crit: suspicious
+    conf: 0.9
+    for: [elf, c]
+    all:
+      - id: proc-kallsyms
+      - id: tcp4-seq-show
+
+  # Syslogk (migrated from YARA)
+  - id: syslogk
+    desc: Syslogk kernel rootkit indicators
+    crit: suspicious
+    conf: 0.95
+    mbc: "F0015"
+    attack: "T1014"
+    for: [elf, c]
+    any:
+      - id: syslogk-behavior
+      - id: syslogk-name
+      - id: rekoobe-magic
+
+  # macOS kext rootkit source code
+  - id: macos-kext-rootkit-source
+    desc: macOS kext rootkit source code
+    crit: hostile
+    conf: 0.95
+    mbc: "F0015"
+    attack: "T1014"
+    for: [c]
+    all:
+      - id: macos-sy-call-hook
+      - id: macos-kext-rootkit-behavior
+      - id: macos-kext-rootkit-hiding
+
+  # macOS kext rootkit behavior helper
+  - id: macos-kext-rootkit-behavior
+    desc: macOS kext rootkit behavior markers
+    crit: suspicious
+    conf: 0.9
+    for: [c]
+    any:
+      - id: macos-kauth-cred-setuidgid
+      - id: macos-kunc-execute
+      - id: macos-ipf-addv4
+
+  # macOS kext rootkit hiding helper
+  - id: macos-kext-rootkit-hiding
+    desc: macOS kext rootkit hiding patterns
+    crit: notable
+    conf: 0.9
+    for: [c]
+    any:
+      - id: macos-kext-getdirentries-hook
+      - id: micro-behaviors/data/text/keywords::hide
+
+  # macOS kext rootkit binary
+  - id: macos-kext-rootkit-binary
+    desc: macOS kext rootkit binary
+    crit: hostile
+    conf: 0.95
+    mbc: "F0015"
+    attack: "T1014"
+    for: [macho]
+    all:
+      - id: macos-kext-getdirentries-hook
+      - id: macos-kext-write-nocancel-hook
+      - id: macos-kext-binary-indicators
+
+  # macOS kext rootkit binary behavior helper
+  - id: macos-kext-binary-indicators
+    desc: macOS kext rootkit behavior indicators
+    crit: suspicious
+    conf: 0.9
+    for: [macho]
+    any:
+      - id: macos-kext-ipf-filter
+      - id: rootkit-give-root
+      - id: rootkit-hide-process-string
+      - id: rootkit-hide-network-port
+
+  # macOS kext rootkit controller binary
+  - id: macos-rootkit-controller
+    desc: macOS rootkit controller utility
+    crit: hostile
+    conf: 0.95
+    mbc: "F0015"
+    attack: "T1014"
+    for: [macho, c]
+    all:
+      - id: rootkit-give-root
+      - id: rootkit-controller-hiding
+      - id: objectives/command-and-control/backdoor/detection::backdoor-ref
+
+  # Rootkit controller hiding helper
+  - id: rootkit-controller-hiding
+    desc: Rootkit controller hiding functions
+    crit: suspicious
+    conf: 0.9
+    for: [macho, c]
+    any:
+      - id: rootkit-hide-process-string
+      - id: rootkit-hide-network-port
+
+  # Full kernel rootkit detection
+  - id: lkm-rootkit
+    desc: Linux Kernel Module rootkit detected
+    crit: hostile
+    conf: 0.95
+    mbc: "F0015"
+    attack: "T1014"
+    for: [elf, c]
+    all:
+      - id: module-markers
+      - id: lkm-rootkit-behavior
+      - id: kallsyms-lookup-method
+
+  # LKM rootkit behavior helper
+  - id: lkm-rootkit-behavior
+    desc: LKM rootkit behavior indicators
+    crit: suspicious
+    conf: 0.9
+    for: [elf, c]
+    any:
+      - id: syscall-hook
+      - id: proc-hiding-funcs
+      - id: tcp-hiding
+      - id: vfs-hook

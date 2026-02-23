@@ -1,0 +1,45 @@
+# Obfuscated Payload Execution - Go
+# GuardDog-inspired: Base64 + exec.Command execution patterns
+# ATT&CK: T1140 (Deobfuscate/Decode Files or Information)
+
+defaults:
+  for: [go]
+
+composite_rules:
+  # === GuardDog: Base64 + exec proximity ===
+
+  - id: base64-exec-command-proximity
+    desc: Base64 decode + exec.Command
+    crit: hostile
+    conf: 0.95
+    mbc: "B0032"
+    attack: "T1140"
+    all:
+      - id: micro-behaviors/data/encode/base64::base64-decoding
+      - id: micro-behaviors/process/create/direct::exec-command
+    unless:
+      - id: metadata/quality::has-tests
+
+  - id: base64-start-process-proximity
+    desc: Base64 decode + os.StartProcess
+    crit: hostile
+    conf: 0.95
+    mbc: "B0032"
+    attack: "T1140"
+    all:
+      - id: micro-behaviors/data/encode/base64::base64-decoding
+      - id: micro-behaviors/process/create/direct::start-process
+    unless:
+      - id: metadata/quality::has-tests
+
+  - id: base64-syscall-exec-proximity
+    desc: Base64 decode + syscall.Exec
+    crit: hostile
+    conf: 0.95
+    mbc: "B0032"
+    attack: "T1140"
+    all:
+      - id: micro-behaviors/data/encode/base64::base64-decoding
+      - id: micro-behaviors/process/create/direct::syscall-exec
+    unless:
+      - id: metadata/quality::has-tests

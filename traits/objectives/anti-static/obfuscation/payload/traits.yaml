@@ -1,0 +1,363 @@
+# Large Obfuscated Payload Detection
+# Detects large blobs of encoded data and their dynamic execution across multiple languages
+# MBC: B0032 (Obfuscated Files or Information)
+# ATT&CK: T1027, T1140, T1059
+
+traits:
+  # === Python Traits ===
+  - id: binascii-unhexlify
+    desc: Hex decoding via binascii.unhexlify
+    crit: notable
+    conf: 0.7
+    mbc: "B0032"
+    attack: "T1140"
+    for: [python]
+    if:
+      type: raw
+      substr: "binascii.unhexlify"
+
+  - id: unhexlify-import
+    desc: unhexlify function import
+    crit: notable
+    conf: 0.7
+    mbc: "B0032"
+    attack: "T1140"
+    for: [python]
+    if:
+      type: raw
+      regex: "from\\s+binascii\\s+import.{0,50}unhexlify"
+
+  - id: binascii-import
+    desc: binascii module import
+    crit: notable
+    conf: 0.9
+    for: [python]
+    if:
+      type: raw
+      regex: "import\\s+binascii\\b"
+
+  - id: exec-function-call
+    desc: exec() function call
+    crit: notable
+    conf: 0.7
+    mbc: "E1059"
+    attack: "T1059"
+    for: [python]
+    if:
+      type: raw
+      regex: "exec\\s*\\("
+
+  - id: eval-function-call
+    desc: eval() function call
+    crit: notable
+    conf: 0.7
+    mbc: "E1059"
+    attack: "T1059"
+    for: [python]
+    if:
+      type: raw
+      regex: "[=(,]\\s*eval\\s*\\("
+
+  - id: hex-encoded-eval
+    desc: Hex-encoded "eval" string
+    crit: suspicious
+    conf: 0.95
+    attack: "T1027"
+    for: [python]
+    if:
+      type: raw
+      regex: "eval\\s*\\(\\s*[\"']\\\\\\\\145\\\\\\\\166\\\\\\\\141\\\\\\\\154[\"']"
+
+  - id: hex-escape-eval
+    desc: Hex escape encoded "eval"
+    crit: suspicious
+    conf: 0.95
+    attack: "T1027"
+    for: [python]
+    if:
+      type: raw
+      regex: "eval\\s*\\(\\s*[\"']\\\\\\\\x65\\\\\\\\x76\\\\\\\\x61\\\\\\\\x6c[\"']"
+
+  - id: exec-decode-pattern
+    desc: exec() with decode chain
+    crit: suspicious
+    conf: 0.85
+    attack: "T1027"
+    for: [python]
+    if:
+      type: string
+      regex: "exec\\s*\\([^)]{0,120}decode\\s*\\("
+
+  - id: eval-decode-pattern
+    desc: eval() with decode chain
+    crit: suspicious
+    conf: 0.85
+    attack: "T1027"
+    for: [python]
+    if:
+      type: string
+      regex: "eval\\s*\\([^)]{0,120}decode\\s*\\("
+
+  - id: b64decode-exec-pattern
+    desc: Base64 decode followed by exec
+    crit: suspicious
+    conf: 0.85
+    attack: "T1140"
+    mbc: "B0032"
+    for: [python]
+    if:
+      type: string
+      regex: "b64decode.{0,64}exec"
+
+  - id: compile-exec-pattern
+    desc: compile() with exec (dynamic code)
+    crit: suspicious
+    conf: 0.8
+    attack: "T1027"
+    for: [python]
+    if:
+      type: string
+      regex: "compile\\s*\\([^)]{1,120},\\s*['\"][^'\"]{1,120}['\"]\\s*,\\s*['\"]exec['\"]\\s*\\)"
+
+  - id: pyc-magic-in-py
+    desc: Python bytecode magic in .py file
+    crit: suspicious
+    conf: 0.95
+    mbc: "B0032"
+    attack: "T1036.008"
+    for: [python]
+    if:
+      type: yara
+      source: |
+        rule pyc_magic_in_py {
+          strings:
+            $pyc = { ( CB | A7 | 61 | 42 | 6F | 55 ) 0D 0D 0A }
+          condition:
+            $pyc
+        }
+
+  - id: unhexlify-in-bytecode
+    desc: unhexlify reference in bytecode
+    crit: notable
+    conf: 0.75
+    mbc: "B0032"
+    attack: "T1140"
+    for: [python]
+    if:
+      type: raw
+      substr: "unhexlify"
+
+  - id: bytecode-exec-eval-import
+    desc: Bytecode with exec eval and __import__
+    crit: suspicious
+    conf: 0.85
+    mbc: "E1059"
+    attack: "T1059"
+    for: [python]
+    if:
+      type: yara
+      source: |
+        rule bytecode_exec_eval_import {
+          strings:
+            $exec = "exec" ascii
+            $eval = "eval" ascii
+            $import = "__import__" ascii
+            $unhex = "unhexlify" ascii
+          condition:
+            $exec and $eval and $import and $unhex
+        }
+
+  - id: bytecode-self-reader
+    desc: Bytecode reads own file for payload
+    crit: suspicious
+    conf: 0.90
+    mbc: "B0032"
+    attack: "T1027"
+    for: [python]
+    if:
+      type: yara
+      source: |
+        rule bytecode_self_reader {
+          strings:
+            $file = "__file__" ascii
+            $open_self = "open(__file__" ascii
+            $open_self_sp = "open( __file__" ascii
+            $open_self_abs = "open(os.path.abspath(__file__)" ascii
+            $exec = "exec" ascii fullword
+            $eval = "eval" ascii fullword
+            $compile = "compile" ascii fullword
+            $marshal = "marshal" ascii fullword
+            $zlib = "zlib" ascii fullword
+            $b64 = "b64decode" ascii
+            $unhex = "unhexlify" ascii
+            $import = "__import__" ascii
+            $setuptools = "setuptools" ascii
+          condition:
+            $file and ($open_self or $open_self_sp or $open_self_abs) and
+            1 of ($exec, $eval, $compile) and
+            1 of ($marshal, $zlib, $b64, $unhex, $import) and
+            not $setuptools
+        }
+
+  # === JavaScript Traits ===
+  - id: exported-decryptor
+    desc: Module exports decryption function
+    crit: notable
+    conf: 0.8
+    for: [javascript, typescript]
+    if:
+      type: raw
+      regex: "module\\.exports\\s*=\\s*function"
+
+  - id: decode-exec-js
+    desc: Base64 decode followed by eval/Function (JS)
+    crit: suspicious
+    conf: 0.85
+    for: [javascript, typescript]
+    if:
+      type: string
+      regex: "atob.{0,64}(eval|Function)"
+
+  # === Generic Traits ===
+  - id: large-base64-string
+    desc: Large base64-like string (512+ chars)
+    crit: notable
+    conf: 0.75
+    for: [all]
+    if:
+      type: string
+      regex: "[A-Za-z0-9+/]{512,}"
+
+  - id: large-hex-string
+    desc: Large hex-encoded string (1024+ chars)
+    crit: notable
+    conf: 0.75
+    for: [all]
+    if:
+      type: string
+      regex: "[0-9a-fA-F]{1024,}"
+
+composite_rules:
+  # === Base64 + Execution Proximity (Multi-language) ===
+
+  - id: base64-eval-proximity
+    desc: Base64 decode + eval in same file
+    crit: hostile
+    conf: 0.95
+    mbc: "B0032"
+    attack: "T1140"
+    all:
+      - id: micro-behaviors/data/encode/base64::base64-decoding
+    any:
+      - id: eval-function-call
+      - id: objectives/execution/interpreter/eval/dynamic::eval-call-js
+      - id: objectives/execution/interpreter/eval/dynamic::eval-call-ruby
+    unless:
+      - id: metadata/quality::has-tests
+
+  - id: base64-exec-proximity
+    desc: Base64 decode + exec in same file
+    crit: hostile
+    conf: 0.95
+    mbc: "B0032"
+    attack: "T1140"
+    all:
+      - id: micro-behaviors/data/encode/base64::base64-decoding
+    any:
+      - id: exec-function-call
+      - id: micro-behaviors/process/create/exec
+    unless:
+      - id: metadata/quality::has-tests
+
+  - id: base64-subprocess-proximity
+    desc: Base64 decode + subprocess execution
+    crit: hostile
+    conf: 0.92
+    mbc: "B0032"
+    attack: "T1059"
+    all:
+      - id: micro-behaviors/data/encode/base64::base64-decoding
+    any:
+      - id: micro-behaviors/process/create/subprocess
+      - id: micro-behaviors/process/create/shell::js-child-process
+      - id: micro-behaviors/process/create/shell::ruby-system
+    unless:
+      - id: metadata/quality::has-tests
+
+  - id: base64-function-proximity
+    desc: Base64 decode + Function constructor
+    crit: hostile
+    conf: 0.95
+    mbc: "B0032"
+    attack: "T1140"
+    all:
+      - id: micro-behaviors/data/encode/base64::base64-decoding
+      - id: objectives/anti-static/obfuscation/strings/encoding::js-function-call
+    unless:
+      - id: metadata/quality::has-tests
+
+  # === Standard Obfuscated Payload Patterns ===
+
+  - id: exec-unhexlify
+    desc: Execute hex-decoded payload
+    crit: hostile
+    conf: 0.95
+    mbc: "B0032"
+    attack: "T1027"
+    for: [python]
+    all:
+      - id: exec-function-call
+      - id: binascii-unhexlify
+    any:
+      - id: unhexlify-import
+      - id: binascii-import
+      - id: objectives/anti-static/obfuscation/code-metrics/structure::low-whitespace
+
+  - id: large-encoded-string
+    desc: Large high-entropy string literal
+    crit: notable
+    conf: 0.85
+    any:
+      - id: large-base64-string
+      - id: large-hex-string
+
+  - id: payload-execution
+    desc: Large encoded payload with dynamic execution
+    crit: hostile
+    conf: 0.95
+    mbc: "B0032"
+    attack: "T1027"
+    for: [python]
+    all:
+      - id: large-encoded-string
+    any:
+      - id: exec-decode-pattern
+      - id: eval-decode-pattern
+      - id: compile-exec-pattern
+
+  - id: bytecode-payload-execution
+    desc: Compiled bytecode payload execution pipeline
+    crit: hostile
+    conf: 0.95
+    mbc: "B0032"
+    attack: "T1027"
+    for: [python]
+    all:
+      - id: bytecode-exec-eval-import
+      - id: bytecode-self-reader
+    any:
+      - id: unhexlify-in-bytecode
+      - id: objectives/anti-static/obfuscation/code-metrics/structure::minified-code
+      - id: objectives/anti-static/obfuscation/tools::known-obfuscator-detected
+
+  - id: hardcoded-key-decryptor
+    desc: Decryption module with hardcoded key material
+    crit: suspicious
+    conf: 0.9
+    for: [javascript, typescript]
+    all:
+      - id: micro-behaviors/crypto/symmetric/aes::createDecipheriv
+      - id: micro-behaviors/crypto/symmetric/aes::hardcoded-key
+    any:
+      - id: micro-behaviors/crypto/symmetric/aes::buffer-hex-key-material
+      - id: exported-decryptor

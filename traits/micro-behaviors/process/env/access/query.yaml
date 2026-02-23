@@ -1,0 +1,28 @@
+# Environment Variable Query Patterns
+# Common patterns for querying environment variables
+# MBC: E1082 (System Information Discovery) / E1033 (System Owner/User Discovery)
+
+defaults:
+  for: [elf, macho, so, dylib, c]
+  crit: baseline
+
+traits:
+  - id: getenv-user
+    desc: Query USER environment variable
+    conf: 0.5
+    attack: "T1033"
+    mbc: "E1033"
+    platforms: [unix, linux, macos]
+    if:
+      type: string
+      regex: 'getenv\("USER"\)'
+
+  - id: getenv-home
+    desc: Query HOME environment variable
+    conf: 0.5
+    attack: "T1082"
+    mbc: "E1082"
+    platforms: [unix, linux, macos]
+    if:
+      type: string
+      regex: 'getenv\("HOME"\)'

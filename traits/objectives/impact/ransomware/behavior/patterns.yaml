@@ -1,0 +1,443 @@
+# Ransomware Detection Patterns
+# ATT&CK: T1486 (Data Encrypted for Impact)
+# Detects file encryption, key generation, and ransom note patterns
+
+defaults:
+  for: [all]
+  attack: "T1486"
+
+traits:
+  # === RSA key handling (atomic) ===
+  - id: rsa-keyword
+    desc: RSA keyword
+    crit: notable
+    conf: 0.4
+    for: [javascript, typescript, python]
+    if:
+      type: string
+      exact: "RSA"
+
+  - id: generate-keypair
+    desc: generateKeyPair function
+    crit: notable
+    conf: 0.5
+    for: [javascript, typescript, python]
+    if:
+      type: string
+      substr: "generateKeyPair"
+
+  - id: public-encrypt
+    desc: publicEncrypt function
+    crit: notable
+    conf: 0.5
+    for: [javascript, typescript, python]
+    if:
+      type: string
+      substr: "publicEncrypt"
+
+  - id: private-decrypt
+    desc: privateDecrypt function
+    crit: notable
+    conf: 0.5
+    for: [javascript, typescript, python]
+    if:
+      type: string
+      substr: "privateDecrypt"
+
+  - id: begin-rsa-key
+    desc: BEGIN RSA key header
+    crit: notable
+    conf: 0.5
+    for: [javascript, typescript, python]
+    if:
+      type: string
+      substr: "-----BEGIN RSA"
+
+  - id: begin-public-key
+    desc: BEGIN PUBLIC KEY header
+    crit: notable
+    conf: 0.5
+    for: [javascript, typescript, python]
+    if:
+      type: string
+      substr: "-----BEGIN PUBLIC KEY"
+
+  # Removed crypto-module duplicate - use micro-behaviors/data/text/keywords::crypto-substr
+
+  # === File iteration (atomic) ===
+  - id: readdir-sync
+    desc: readdirSync function
+    crit: notable
+    conf: 0.4
+    for: [javascript, typescript, python]
+    if:
+      type: string
+      substr: "readdirSync"
+
+  - id: walk-sync
+    desc: walkSync function
+    crit: notable
+    conf: 0.4
+    for: [javascript, typescript, python]
+    if:
+      type: string
+      substr: "walkSync"
+
+  - id: glob-module
+    desc: glob module
+    crit: notable
+    conf: 0.4
+    for: [javascript, typescript, python]
+    if:
+      type: string
+      exact: "glob"
+
+  # Removed os-walk duplicate - use micro-behaviors/fs/directory/traverse::traverse-walk
+
+  # === File write (atomic) ===
+  # writefile-sync and writefile-fn removed: use micro-behaviors/fs/write/file::write-file-sync and ::write-file-async
+
+  - id: open-paren
+    desc: open( function for file write
+    crit: notable
+    conf: 0.3
+    for: [javascript, typescript, python]
+    if:
+      type: string
+      regex: "open\\([^)]{0,120}[\"'][wa][\"']"
+
+  # === Ransom note (atomic) ===
+  - id: files-encrypted-msg
+    desc: Files encrypted message
+    crit: notable
+    conf: 0.7
+    for: [javascript, typescript, python, shell]
+    if:
+      type: string
+      substr: "your files have been encrypted"
+      case_insensitive: true
+
+  - id: pay-bitcoin-msg
+    desc: Pay bitcoin message
+    crit: notable
+    conf: 0.7
+    for: [javascript, typescript, python, shell]
+    if:
+      type: string
+      substr: "pay bitcoin"
+      case_insensitive: true
+
+  - id: pay-btc-msg
+    desc: Pay BTC message
+    crit: notable
+    conf: 0.7
+    for: [javascript, typescript, python, shell]
+    if:
+      type: string
+      substr: "pay btc"
+      case_insensitive: true
+
+  - id: decrypt-files-msg
+    desc: Decrypt files message
+    crit: notable
+    conf: 0.7
+    for: [javascript, typescript, python, shell]
+    if:
+      type: string
+      substr: "decrypt your files"
+      case_insensitive: true
+
+  - id: bitcoin-wallet-msg
+    desc: Bitcoin wallet message
+    crit: notable
+    conf: 0.7
+    for: [javascript, typescript, python, shell]
+    if:
+      type: string
+      substr: "bitcoin wallet"
+      case_insensitive: true
+
+  - id: restore-files-msg
+    desc: Restore files message
+    crit: notable
+    conf: 0.7
+    for: [javascript, typescript, python, shell]
+    if:
+      type: string
+      substr: "restore your files"
+      case_insensitive: true
+
+  - id: send-payment-msg
+    desc: Send payment message
+    crit: notable
+    conf: 0.7
+    for: [javascript, typescript, python, shell]
+    if:
+      type: string
+      substr: "send payment"
+      case_insensitive: true
+
+  # === File rename (atomic) ===
+  - id: rename-sync
+    desc: renameSync function
+    crit: notable
+    conf: 0.4
+    for: [javascript, typescript, python]
+    if:
+      type: string
+      substr: "renameSync"
+
+  - id: rename-fn
+    desc: rename( function
+    crit: notable
+    conf: 0.4
+    for: [javascript, typescript, python]
+    if:
+      type: string
+      substr: "rename("
+
+  - id: os-rename
+    desc: os.rename function
+    crit: notable
+    conf: 0.4
+    for: [javascript, typescript, python]
+    if:
+      type: string
+      substr: "os.rename"
+
+  # === Encrypted extensions (atomic) ===
+  - id: ext-encrypted
+    desc: .encrypted extension
+    crit: notable
+    conf: 0.6
+    for: [javascript, typescript, python]
+    if:
+      type: string
+      substr: ".encrypted"
+
+  - id: ext-locked
+    desc: .locked extension
+    crit: notable
+    conf: 0.6
+    for: [javascript, typescript, python]
+    if:
+      type: string
+      substr: ".locked"
+
+  - id: ext-enc
+    desc: .enc extension
+    crit: notable
+    conf: 0.6
+    for: [javascript, typescript, python]
+    if:
+      type: string
+      exact: ".enc"
+
+  - id: ext-crypt
+    desc: .crypt extension
+    crit: notable
+    conf: 0.6
+    for: [javascript, typescript, python]
+    if:
+      type: string
+      substr: ".crypt"
+
+  # === Medusa ransomware (atomic) ===
+  - id: medusa-name
+    desc: Medusa name
+    crit: notable
+    conf: 0.5
+    for: [javascript, typescript]
+    if:
+      type: string
+      substr: medusa
+      case_insensitive: true
+
+  - id: mutate-keyword
+    desc: mutate keyword (multiple occurrences)
+    crit: notable
+    conf: 0.4
+    for: [javascript, typescript]
+    if:
+      type: string
+      substr: mutate
+      count_min: 3
+
+  # === Shadow copy deletion (atomic) ===
+  - id: vssadmin-delete
+    desc: vssadmin delete shadows
+    crit: notable
+    conf: 0.7
+    attack: "T1490"
+    for: [javascript, powershell, shell]
+    if:
+      type: string
+      regex: 'vssadmin\s+delete\s+shadows'
+
+  - id: wmic-shadowcopy
+    desc: wmic shadowcopy delete
+    crit: notable
+    conf: 0.7
+    attack: "T1490"
+    for: [javascript, powershell, shell]
+    if:
+      type: string
+      regex: 'wmic\s+shadowcopy\s+delete'
+
+  - id: bcdedit-recovery
+    desc: bcdedit recoveryenabled no
+    crit: notable
+    conf: 0.7
+    attack: "T1490"
+    for: [javascript, powershell, shell]
+    if:
+      type: string
+      regex: "bcdedit.{0,30}recoveryenabled.{0,30}no"
+
+composite_rules:
+  # RSA key operations
+  - id: rsa-key-operations
+    desc: RSA key operations
+    crit: notable
+    conf: 0.6
+    for: [javascript, typescript, python]
+    needs: 2
+    any:
+      - id: rsa-keyword
+      - id: generate-keypair
+      - id: public-encrypt
+      - id: private-decrypt
+      - id: begin-rsa-key
+      - id: begin-public-key
+
+  # RSA key handling with crypto
+  - id: rsa-key-handling
+    desc: RSA key generation or handling
+    crit: notable
+    conf: 0.8
+    for: [javascript, typescript, python]
+    all:
+      - id: micro-behaviors/data/text/keywords::crypto-substr
+      - id: rsa-key-operations
+
+  # File iteration
+  - id: file-iteration
+    desc: File iteration functions
+    crit: notable
+    conf: 0.5
+    for: [javascript, typescript, python]
+    any:
+      - id: readdir-sync
+      - id: walk-sync
+      - id: glob-module
+      - id: micro-behaviors/fs/directory/traverse::traverse-walk
+
+  # File write functions
+  - id: file-write-functions
+    desc: File write functions
+    crit: notable
+    conf: 0.4
+    for: [javascript, typescript, python]
+    any:
+      - id: micro-behaviors/fs/write/file::write-file-sync
+      - id: micro-behaviors/fs/write/file::write-file-async
+      - id: open-paren
+
+  # File encryption loop
+  - id: file-encryption-loop
+    desc: File iteration with encryption (ransomware
+    crit: suspicious
+    conf: 0.9
+    for: [javascript, typescript, python]
+    all:
+      - id: file-iteration
+      - id: micro-behaviors/crypto/operations/encryption::encryption-functions
+      - id: file-write-functions
+
+  # Ransom note
+  - id: ransom-note
+    desc: Ransom note text patterns
+    crit: suspicious
+    conf: 0.95
+    for: [javascript, typescript, python, shell]
+    needs: 2
+    any:
+      - id: files-encrypted-msg
+      - id: pay-bitcoin-msg
+      - id: pay-btc-msg
+      - id: decrypt-files-msg
+      - id: bitcoin-wallet-msg
+      - id: restore-files-msg
+      - id: send-payment-msg
+
+  # Rename functions
+  - id: rename-functions
+    desc: File rename functions
+    crit: notable
+    conf: 0.4
+    for: [javascript, typescript, python]
+    any:
+      - id: rename-sync
+      - id: rename-fn
+      - id: os-rename
+
+  # Encrypted extensions
+  - id: encrypted-extensions
+    desc: Encrypted file extensions
+    crit: notable
+    conf: 0.6
+    for: [javascript, typescript, python]
+    any:
+      - id: ext-encrypted
+      - id: ext-locked
+      - id: ext-enc
+      - id: ext-crypt
+
+  # Extension change
+  - id: extension-change
+    desc: Changes file extensions (potential ransomware)
+    crit: suspicious
+    conf: 0.85
+    for: [javascript, typescript, python]
+    all:
+      - id: rename-functions
+      - id: encrypted-extensions
+
+  # Medusa pattern
+  - id: medusa-pattern
+    desc: Medusa ransomware implementation indicators
+    crit: notable
+    conf: 0.95
+    for: [javascript, typescript]
+    all:
+      - id: medusa-name
+    any:
+      - id: objectives/anti-analysis/self-modify/runtime::polymorphic
+      - id: mutate-keyword
+      - id: rsa-keyword
+
+  # Shadow copy deletion
+  - id: shadow-delete
+    desc: Shadow copy deletion (ransomware preparation)
+    crit: suspicious
+    conf: 0.95
+    attack: "T1490"
+    for: [javascript, powershell, shell]
+    any:
+      - id: vssadmin-delete
+      - id: wmic-shadowcopy
+      - id: bcdedit-recovery
+
+  # In-place file encryption ransomware (Python/Fernet)
+  # Combines directory traversal + in-place file write + encryption
+  - id: inplace-encrypt
+    desc: In-place file encryption ransomware
+    crit: hostile
+    conf: 0.95
+    for: [python]
+    all:
+      - id: micro-behaviors/fs/directory/traverse::traverse-walk
+      - id: micro-behaviors/fs/file/open::binary-rw
+    any:
+      - id: micro-behaviors/crypto/symmetric/fernet::encrypt
+      - id: micro-behaviors/crypto/symmetric/fernet::class-usage

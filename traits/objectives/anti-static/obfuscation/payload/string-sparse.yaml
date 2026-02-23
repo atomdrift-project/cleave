@@ -1,0 +1,85 @@
+# String Sparsity - Obfuscation Detection
+# Detects binaries with abnormally few string constants relative to code size
+# This indicates string obfuscation, XOR encoding, or runtime decryption
+# Normal binaries have 2-10% string data; malware often has <0.5%
+
+defaults:
+  for: [elf, macho, pe]
+  platforms: [linux, macos, windows, unix]
+  attack: "T1027"
+  mbc: "F0001"
+
+traits:
+  # Extremely sparse strings in macOS binaries
+  - id: extreme-string-sparsity-macos
+    desc: "Extreme string sparsity (<0.05%)"
+    crit: suspicious
+    conf: 0.9
+    for: [macho]
+    attack: "T1027"
+    if:
+      type: section_ratio
+      section: "__cstring"
+      compare_to: "total"
+      max: 0.0005  # Less than 0.05% of binary
+
+  # Very sparse strings
+  - id: very-sparse-strings-macos
+    desc: "Very sparse string section (<0.2%)"
+    crit: suspicious
+    conf: 0.8
+    for: [macho]
+    attack: "T1027"
+    if:
+      type: section_ratio
+      section: "__cstring"
+      compare_to: "total"
+      max: 0.002  # Less than 0.2% of binary
+
+  # Large data section (potential encoded payload storage)
+  - id: large-data-section-macos
+    desc: "Large __DATA section (8KB+)"
+    crit: notable
+    conf: 0.7
+    for: [macho]
+    if:
+      type: section_ratio
+      section: "__DATA.__data"
+      compare_to: "total"
+      min: 0.03  # At least 3% of binary
+
+  # High entropy in data section (encoded/encrypted payload)
+  - id: high-entropy-data-macos
+    desc: "High entropy in __DATA section"
+    crit: suspicious
+    conf: 0.85
+    for: [macho]
+    attack: "T1027"
+    if:
+      type: section
+      exact: "__DATA.__data"
+      entropy_min: 6.5  # Elevated entropy suggests encoding
+
+composite_rules:
+  # String sparsity + large data section = obfuscated payload
+  - id: obfuscated-payload-storage
+    desc: "Obfuscated payload in data section"
+    crit: suspicious
+    conf: 0.9
+    for: [macho]
+    attack: "T1027"
+    all:
+      - id: extreme-string-sparsity-macos
+      - id: large-data-section-macos
+
+  # Extreme sparsity + high entropy + shell = obfuscated malware
+  - id: string-obfuscated-malware
+    desc: "String-obfuscated malware with shell"
+    crit: suspicious
+    conf: 0.95
+    for: [macho]
+    attack: "T1027"
+    all:
+      - id: extreme-string-sparsity-macos
+      - id: high-entropy-data-macos
+      - id: micro-behaviors/process/create/shell

@@ -1,0 +1,14 @@
+composite_rules:
+  - id: rtf-byte-nibble
+    desc: RTF document with byte nibble or injection obfuscation.
+    crit: hostile
+    all:
+      - type: trait
+        id: metadata/format/magic::rtf
+    any:
+      - type: trait
+        id: objectives/anti-static/obfuscation/rtf::byte-nibble
+      - type: trait
+        id: objectives/anti-static/obfuscation/rtf::nested-object-in-data
+      - type: trait
+        id: objectives/anti-static/obfuscation/rtf::invalid-hex-escape

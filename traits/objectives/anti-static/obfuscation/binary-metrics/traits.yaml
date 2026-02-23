@@ -1,0 +1,480 @@
+# Binary Metrics-Based Obfuscation/Packing Detection
+# Detects packing, obfuscation, and anomalies in binaries via statistical analysis
+# ATT&CK: T1027 (Obfuscated Files or Information), T1045 (Software Packing)
+
+defaults:
+  for: [elf, pe, macho]
+  attack: "T1027"
+  mbc: "B0032"
+
+traits:
+  # === Entropy-Based Detection ===
+
+  - id: high-overall-entropy
+    desc: "High overall file entropy (likely"
+    crit: suspicious
+    conf: 0.85
+    if:
+      type: metrics
+      field: binary.overall_entropy
+      min: 7.0
+
+  - id: very-high-entropy
+    desc: "Very high entropy (strongly indicates"
+    crit: suspicious
+    conf: 0.95
+    attack: "T1045"
+    if:
+      type: metrics
+      field: binary.overall_entropy
+      min: 7.5
+
+  - id: high-code-entropy
+    desc: "High code section entropy (encrypted/packed"
+    crit: suspicious
+    conf: 0.8
+    attack: "T1045"
+    if:
+      type: metrics
+      field: binary.code_entropy
+      min: 7.0
+
+  - id: high-entropy-regions
+    desc: "Multiple high entropy regions"
+    crit: suspicious
+    conf: 0.75
+    if:
+      type: metrics
+      field: binary.high_entropy_regions
+      min: 3
+
+  # NOTE: Go and Rust binaries have uniform code sections due to compilation
+  # patterns, not packing. Lowered threshold - Go binaries typically have
+  # entropy variance around 0.3-0.6, so only flag truly uniform binaries.
+  # Requires min: 0.01 to avoid triggering when metrics are unavailable.
+  - id: entropy-variance-low
+    desc: "Low entropy variance (uniform packing)"
+    crit: notable
+    conf: 0.4
+    if:
+      type: metrics
+      field: binary.entropy_variance
+      min: 0.01
+      max: 0.2
+
+  # === Section Anomalies ===
+
+  - id: wx-sections
+    desc: "Writable and executable sections (self-modifying"
+    crit: suspicious
+    conf: 0.9
+    attack: "T1055"
+    for: [elf, pe, macho]
+    if:
+      type: metrics
+      field: binary.wx_sections
+      min: 1
+    # API set forwarding stubs have W+X sections as part of their
+    # minimal layout, not for self-modifying code.
+    # Also exclude relocatable object files (MH_OBJECT=1, ET_REL=1) as they
+    # often have RWX sections before final linking (e.g. Go race detector).
+    unless:
+      - type: string
+        substr: "ApiSet Stub DLL"
+      - type: metrics
+        field: macho.file_type
+        min: 1
+        max: 1
+      - type: metrics
+        field: elf.e_type
+        min: 1
+        max: 1
+
+  - id: many-wx-sections
+    desc: "Multiple W+X sections (packer pattern)"
+    crit: suspicious
+    conf: 0.95
+    attack: "T1045"
+    for: [elf, pe, macho]
+    if:
+      type: metrics
+      field: binary.wx_sections
+      min: 2
+    unless:
+      - type: metrics
+        field: macho.file_type
+        min: 1
+        max: 1
+      - type: metrics
+        field: elf.e_type
+        min: 1
+        max: 1
+
+  - id: high-section-name-entropy
+    desc: "High entropy section names (packer"
+    crit: notable
+    conf: 0.85
+    attack: "T1045"
+    if:
+      type: metrics
+      field: binary.section_name_entropy
+      min: 5.4
+
+  # NOTE: Many legitimate system binaries have a dominant .text section.
+  # This is normal for compiled C/C++ programs without large data sections.
+  # Downgraded to notable - only suspicious when combined with other packing indicators.
+  - id: dominant-section
+    desc: "Single section dominates file (packer"
+    crit: notable
+    conf: 0.6
+    attack: "T1045"
+    if:
+      type: metrics
+      field: binary.largest_section_ratio
+      min: 0.85
+
+  # === Import Anomalies ===
+  - id: high-import-entropy
+    desc: "High entropy import names (obfuscated"
+    crit: suspicious
+    conf: 0.8
+    if:
+      type: metrics
+      field: binary.import_entropy
+      min: 5.0
+
+  # === String Anomalies ===
+
+  # NOTE: Some legitimate binaries (Go, Rust) may have low string counts
+  # depending on how strings are extracted. Downgraded to baseline - only useful
+  # in composite rules with other indicators. Requires min: 1 to avoid
+  # triggering when metrics are not available (0 indicates missing data).
+  - id: no-strings
+    desc: "No readable strings (potentially encrypted/packed)"
+    crit: notable
+    conf: 0.4
+    attack: "T1045"
+    if:
+      type: metrics
+      field: binary.string_count
+      min: 1
+      max: 5
+
+  - id: high-string-entropy
+    desc: "High entropy strings (encoded data)"
+    crit: suspicious
+    conf: 0.8
+    if:
+      type: metrics
+      field: binary.avg_string_entropy
+      min: 5.0
+
+  - id: many-high-entropy-strings
+    desc: "Many high entropy strings (embedded"
+    crit: suspicious
+    conf: 0.85
+    if:
+      type: metrics
+      field: binary.high_entropy_strings
+      min: 10
+
+  # NOTE: Function detection depends on analysis depth and binary format.
+  # Shared libraries (.so, .dylib, .dll) may have few detected functions
+  # if only exported symbols are counted. Downgraded to notable to avoid
+  # false positives on legitimate libraries.
+
+  - id: huge-functions
+    desc: "Has extremely large functions (>64KB)"
+    crit: suspicious
+    conf: 0.75
+    if:
+      type: metrics
+      field: binary.huge_functions
+      min: 1
+
+  # NOTE: Go and Rust binaries have many tiny functions due to inlining,
+  # generated code, and runtime helpers. Raised threshold significantly.
+  - id: many-tiny-functions
+    desc: "Many tiny functions (<16 bytes)"
+    crit: notable
+    conf: 0.4
+    if:
+      type: metrics
+      field: binary.tiny_functions
+      min: 500
+
+  # NOTE: Requires min: 1 to avoid triggering when metrics are unavailable.
+  # Small utilities legitimately have small functions.
+  - id: small-avg-function
+    desc: "Very small average function size"
+    crit: notable
+    conf: 0.4
+    if:
+      type: metrics
+      field: binary.avg_function_size
+      min: 1
+      max: 32
+
+  # === Complexity Anomalies (Control Flow Obfuscation) ===
+
+  - id: high-avg-complexity
+    desc: "High average cyclomatic complexity (control"
+    crit: suspicious
+    conf: 0.75
+    attack: "T1027.002"
+    size_max: 500000
+    if:
+      type: metrics
+      field: binary.avg_complexity
+      min: 55
+    unless:
+      - type: metrics
+        field: binary.function_count
+        max: 10
+
+  - id: very-high-avg-complexity
+    desc: "Very high average complexity (heavy"
+    crit: suspicious
+    conf: 0.85
+    attack: "T1027.002"
+    size_max: 500000
+    if:
+      type: metrics
+      field: binary.avg_complexity
+      min: 75
+    unless:
+      - type: metrics
+        field: binary.function_count
+        max: 10
+
+  - id: extreme-max-complexity
+    desc: "Extremely high max function complexity"
+    crit: notable
+    conf: 0.7
+    attack: "T1027.002"
+    if:
+      type: metrics
+      field: binary.max_complexity
+      min: 500
+
+  # NOTE: Go runtime has many complex functions (GC, scheduler, etc.)
+  # Increased threshold and downgraded to notable
+  - id: many-complex-functions
+    desc: "Many high complexity functions (>50"
+    crit: notable
+    conf: 0.6
+    attack: "T1027.002"
+    if:
+      type: metrics
+      field: binary.high_complexity_functions
+      min: 15
+
+  # NOTE: Go runtime legitimately has functions with >100 cyclomatic complexity
+  # (e.g., runtime.mallocgc, runtime.scanobject). Increased threshold to reduce FPs.
+  - id: very-complex-functions
+    desc: "Has many very high complexity"
+    crit: notable
+    conf: 0.7
+    attack: "T1027.002"
+    if:
+      type: metrics
+      field: binary.very_high_complexity_functions
+      min: 5
+
+  # === Control Flow Anomalies ===
+
+  # NOTE: Complex libraries (parsers, state machines, protocol handlers) naturally
+  # have more basic blocks due to branching logic. Raised threshold to avoid FPs
+  # on legitimate software like XML parsers (libexpat), compressors, etc.
+  - id: many-basic-blocks
+    desc: "High basic blocks per function"
+    crit: notable
+    conf: 0.55
+    if:
+      type: metrics
+      field: binary.avg_basic_blocks
+      min: 50
+
+  - id: many-linear-functions
+    desc: "Many linear functions (possible VM"
+    crit: notable
+    conf: 0.6
+    if:
+      type: metrics
+      field: binary.linear_functions
+      min: 50
+
+  - id: recursive-functions
+    desc: "Has recursive functions"
+    crit: notable
+    conf: 0.5
+    if:
+      type: metrics
+      field: binary.recursive_functions
+      min: 3
+
+  - id: many-noreturn-functions
+    desc: "Many noreturn functions (anti-analysis pattern)"
+    crit: suspicious
+    conf: 0.7
+    if:
+      type: metrics
+      field: binary.noreturn_functions
+      min: 20
+
+  # === Stack Anomalies ===
+
+  - id: large-stack-frames
+    desc: "Has functions with large stack"
+    crit: notable
+    conf: 0.6
+    if:
+      type: metrics
+      field: binary.large_stack_functions
+      min: 3
+
+  - id: huge-stack-frame
+    desc: "Extremely large max stack frame"
+    crit: suspicious
+    conf: 0.7
+    if:
+      type: metrics
+      field: binary.max_stack_frame
+      min: 65536
+
+  - id: high-avg-stack
+    desc: "High average stack frame size"
+    crit: notable
+    conf: 0.6
+    if:
+      type: metrics
+      field: binary.avg_stack_frame
+      min: 2048
+
+  # === Overlay Anomalies ===
+
+  - id: has-overlay
+    desc: "Binary has overlay data"
+    crit: notable
+    conf: 0.5
+    if:
+      type: metrics
+      field: binary.has_overlay
+      min: 1
+
+  - id: large-overlay
+    desc: "Large overlay relative to file"
+    crit: suspicious
+    conf: 0.7
+    attack: "T1027.009"
+    if:
+      type: metrics
+      field: binary.overlay_ratio
+      min: 0.5
+
+  - id: high-entropy-overlay
+    desc: "High entropy overlay (encrypted payload)"
+    crit: suspicious
+    conf: 0.8
+    attack: "T1027.009"
+    if:
+      type: metrics
+      field: binary.overlay_entropy
+      min: 7.0
+
+composite_rules:
+  # === Combined Packing Detection ===
+  # NOTE: Removed no-strings/no-imports from this rule as they cause FPs on Go/Rust binaries
+
+  - id: binary-packed
+    desc: "Binary appears to be packed"
+    crit: suspicious
+    conf: 0.9
+    attack: "T1045"
+    for: [elf, pe, macho]
+    needs: 2
+    any:
+      - id: objectives/anti-static/obfuscation/binary-metrics::high-overall-entropy
+      - id: objectives/anti-static/obfuscation/binary-metrics::very-high-entropy
+      - id: objectives/anti-static/obfuscation/binary-metrics::high-code-entropy
+      - id: objectives/anti-static/obfuscation/binary-metrics::wx-sections
+
+  - id: binary-heavily-packed
+    desc: "Binary is heavily packed/encrypted"
+    crit: hostile
+    conf: 0.95
+    attack: "T1045"
+    for: [elf, pe, macho]
+    needs: 3
+    any:
+      - id: objectives/anti-static/obfuscation/binary-metrics::very-high-entropy
+      - id: objectives/anti-static/obfuscation/binary-metrics::no-strings
+      - id: metadata/format::no-functions
+      - id: objectives/anti-static/obfuscation/binary-metrics::wx-sections
+
+  - id: binary-encrypted-overlay
+    desc: "Binary with encrypted overlay payload"
+    crit: suspicious
+    conf: 0.85
+    attack: "T1027.009"
+    all:
+      - id: objectives/anti-static/obfuscation/binary-metrics::has-overlay
+      - id: objectives/anti-static/obfuscation/binary-metrics::high-entropy-overlay
+
+  - id: packer-signature
+    desc: "Packer signature pattern detected"
+    crit: suspicious
+    conf: 0.9
+    attack: "T1045"
+    for: [elf, pe, macho]
+    # Packers operate on substantial binaries. Tiny stubs (<20KB) like
+    # API set forwarding DLLs naturally have few sections and W+X memory.
+    size_min: 20000
+    needs: 2
+    any:
+      - id: objectives/anti-static/obfuscation/binary-metrics::high-section-name-entropy
+      - id: metadata/format::few-sections
+      - id: objectives/anti-static/obfuscation/binary-metrics::wx-sections
+
+  # === Control Flow Obfuscation Detection ===
+
+  - id: control-flow-obfuscation
+    desc: "Control flow obfuscation detected"
+    crit: suspicious
+    conf: 0.85
+    attack: "T1027.002"
+    needs: 2
+    any:
+      - id: objectives/anti-static/obfuscation/binary-metrics::high-avg-complexity
+      - id: objectives/anti-static/obfuscation/binary-metrics::many-complex-functions
+      - id: objectives/anti-static/obfuscation/binary-metrics::many-basic-blocks
+      - id: objectives/anti-static/obfuscation/binary-metrics::extreme-max-complexity
+
+  - id: heavy-control-flow-obfuscation
+    desc: "Heavy control flow obfuscation"
+    crit: hostile
+    conf: 0.9
+    attack: "T1027.002"
+    all:
+      - id: objectives/anti-static/obfuscation/binary-metrics::very-high-avg-complexity
+      - id: objectives/anti-static/obfuscation/binary-metrics::very-complex-functions
+      - id: objectives/anti-static/obfuscation/binary-metrics::many-complex-functions
+
+  - id: vm-based-obfuscation
+    desc: "VM-based obfuscation detected"
+    crit: notable
+    conf: 0.9
+
+  # NOTE: Go/Rust runtimes have complex functions and large stack frames legitimately
+  # Increased count requirement and downgraded to notable
+  - id: anti-analysis-pattern
+    desc: "Anti-analysis pattern detected"
+    crit: notable
+    conf: 0.6
+    attack: "T1027"
+    needs: 3
+    any:
+      - id: objectives/anti-static/obfuscation/binary-metrics::many-noreturn-functions
+      - id: objectives/anti-static/obfuscation/binary-metrics::many-complex-functions
+      - id: metadata/format::few-leaf-functions
+      - id: objectives/anti-static/obfuscation/binary-metrics::large-stack-frames

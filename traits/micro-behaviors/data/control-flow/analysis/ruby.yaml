@@ -1,0 +1,17 @@
+# Ruby Control Flow Patterns
+# Detects loops and other control structures in Ruby
+
+defaults:
+  for: [all]
+
+traits:
+  # === Infinite While Loop ===
+  - id: ruby-while-true
+    desc: Infinite while true loop
+    crit: notable
+    conf: 0.75
+    attack: "T1059"
+    if:
+      type: ast
+      node: while
+      exact: "while true"

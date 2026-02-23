@@ -1,0 +1,12 @@
+defaults:
+  for: [package.json]
+
+composite_rules:
+  - id: typosquat-eslint
+    desc: Package 'tslint' may be typosquatting 'eslint'
+    crit: suspicious
+    conf: 0.8
+    all:
+      - id: metadata/import/npm::tslint
+    none:
+      - id: metadata/import/npm::eslint

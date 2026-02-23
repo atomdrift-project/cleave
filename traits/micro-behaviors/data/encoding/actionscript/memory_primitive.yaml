@@ -1,0 +1,35 @@
+defaults:
+  for: [all]
+
+traits:
+  - id: actionscript-write-double
+    desc: ActionScript writeDouble call (often used for heap
+    crit: notable
+    conf: 0.8
+    if:
+      type: raw
+      substr: "writeDouble"
+
+  - id: actionscript-read-unsigned-int
+    desc: ActionScript readUnsignedInt call (often used for heap
+    crit: notable
+    conf: 0.8
+    if:
+      type: raw
+      substr: "readUnsignedInt"
+
+  - id: actionscript-write-unsigned-int
+    desc: ActionScript writeUnsignedInt call (often used for exploitation)
+    crit: notable
+    conf: 0.8
+    if:
+      type: raw
+      substr: "writeUnsignedInt"
+
+  - id: actionscript-memory-position-setting
+    desc: ActionScript .position property setting (often used for
+    crit: notable
+    conf: 0.8
+    if:
+      type: raw
+      regex: '\.position\s*='

@@ -1,0 +1,38 @@
+# Python Inline Execution from Shell
+# Detects use of python -c or python3 -c
+
+defaults:
+  for: [shell, binaries]
+
+traits:
+  - id: python-c-flag
+    desc: python -c or python3 -c command
+    crit: notable
+    conf: 0.8
+    if:
+      type: raw
+      regex: 'python[23]?\s+-c\s+'
+
+  - id: python-inline-urllib
+    desc: Inline python using urllib.request
+    crit: notable
+    conf: 0.8
+    if:
+      type: raw
+      regex: 'python[23]?\s+-c\s+[''"].{0,50}urllib\.request'
+
+  - id: python-inline-urlopen
+    desc: Inline python using urlopen
+    crit: notable
+    conf: 0.8
+    if:
+      type: raw
+      regex: 'python[23]?\s+-c\s+[''"].{0,50}urlopen'
+
+  - id: python-inline-exec
+    desc: Inline python using exec()
+    crit: notable
+    conf: 0.8
+    if:
+      type: raw
+      regex: 'python[23]?\s+-c\s+[''"].{0,50}\bexec\('

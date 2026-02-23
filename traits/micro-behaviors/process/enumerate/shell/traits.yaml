@@ -1,0 +1,28 @@
+# Process Enumeration (Shell Commands)
+# ATT&CK: T1057 (Process Discovery)
+
+defaults:
+  for: [all]
+  crit: notable
+  conf: 0.6
+  attack: "T1057"
+
+traits:
+  - id: ps-aux
+    desc: ps aux command
+    if:
+      type: string
+      substr: "ps aux"
+
+  - id: ps-ef
+    desc: ps -ef command
+    if:
+      type: string
+      substr: "ps -ef"
+
+  - id: tasklist
+    desc: tasklist command (Windows)
+    platforms: [windows]
+    if:
+      type: string
+      substr: "tasklist"

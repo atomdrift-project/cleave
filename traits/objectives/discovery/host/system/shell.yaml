@@ -1,0 +1,44 @@
+# Shell Command System Discovery
+# ATT&CK: T1082 (System Information Discovery), T1083 (File and Directory Discovery)
+
+traits:
+  - id: hostname
+    desc: Shell hostname command execution
+    crit: notable
+    conf: 0.8
+    attack: "T1082"
+    for: [javascript, typescript]
+    if:
+      type: string
+      regex: "exec(Sync)?\\(['\"]hostname['\"]"
+
+  - id: uname
+    desc: Shell uname command execution
+    crit: notable
+    conf: 0.75
+    attack: "T1082"
+    for: [javascript, typescript]
+    if:
+      type: string
+      regex: "exec(Sync)?\\(['\"]uname['\"]"
+
+  - id: pwd
+    desc: Shell pwd command execution
+    crit: notable
+    conf: 0.7
+    attack: "T1083"
+    for: [javascript, typescript]
+    if:
+      type: string
+      regex: "exec(Sync)?\\(['\"]pwd['\"]"
+
+composite_rules:
+  - id: system-profiling
+    desc: System profiling command combination
+    crit: suspicious
+    conf: 0.9
+    attack: "T1082"
+    for: [javascript, typescript]
+    all:
+      - id: hostname
+      - id: uname

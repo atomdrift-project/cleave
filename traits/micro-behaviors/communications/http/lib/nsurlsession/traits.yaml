@@ -1,0 +1,168 @@
+# HTTP Requests - Objective-C NSURLSession
+# MBC: C0002 (HTTP Communication)
+# ATT&CK: T1071.001
+
+defaults:
+  for: [all]
+  mbc: "C0002"
+  attack: "T1071.001"
+
+traits:
+  # === NSURLSession atomic indicators ===
+  - id: nsurlsession-shared
+    desc: NSURLSession shared session
+    crit: baseline
+    conf: 0.6
+    for: [macho, dylib]
+    if:
+      type: symbol
+      regex: "sharedSession"
+
+  - id: nsurlrequest-init
+    desc: NSURLRequest initialization
+    crit: baseline
+    conf: 0.6
+    for: [macho, dylib]
+    if:
+      type: symbol
+      regex: "requestWithURL"
+
+  - id: nsurlresponse-handle
+    desc: NSURLResponse handling
+    crit: baseline
+    conf: 0.6
+    for: [macho, dylib]
+    if:
+      type: symbol
+      regex: "dataTaskWithRequest"
+
+  - id: nsurlsession-post
+    desc: NSURLSession POST requests
+    crit: notable
+    conf: 0.7
+    for: [macho, dylib]
+    if:
+      type: raw
+      regex: '(setHTTPMethod|HTTPMethod).{0,24}"POST"'
+
+  - id: content-type-json
+    desc: Content-Type JSON header
+    crit: baseline
+    conf: 0.6
+    if:
+      type: string
+      substr: "Content-Type"
+
+  # === NSURLSession Download Task indicators ===
+  - id: nsurlsession-download-task
+    desc: NSURLSession download task creation
+    crit: notable
+    conf: 0.7
+    for: [macho, dylib]
+    if:
+      type: symbol
+      regex: "downloadTaskWith(Request|ResumeData)"
+
+  - id: nsurlsession-download-delegate
+    desc: NSURLSessionDownloadDelegate implementation
+    crit: notable
+    conf: 0.75
+    for: [macho, dylib]
+    if:
+      type: string
+      substr: "URLSession:downloadTask:didFinishDownloadingToURL:"
+
+  - id: nsurlsession-default-config
+    desc: NSURLSession default configuration
+    crit: baseline
+    conf: 0.6
+    for: [macho, dylib]
+    if:
+      type: symbol
+      exact: "defaultSessionConfiguration"
+
+  - id: nsurlsession-with-config
+    desc: NSURLSession with configuration
+    crit: baseline
+    conf: 0.6
+    for: [macho, dylib]
+    if:
+      type: symbol
+      exact: "sessionWithConfiguration"
+
+  - id: http-head-method
+    desc: HTTP HEAD method for server probing
+    crit: baseline
+    conf: 0.5
+    for: [macho, dylib]
+    if:
+      type: string
+      exact: "HEAD"
+
+  - id: http-set-method
+    desc: HTTP method manipulation via setHTTPMethod
+    crit: baseline
+    conf: 0.6
+    for: [macho, dylib]
+    if:
+      type: symbol
+      regex: "setHTTPMethod"
+
+  - id: http-range-header
+    desc: HTTP Accept-Ranges header (range request support)
+    crit: baseline
+    conf: 0.5
+    for: [macho, dylib]
+    if:
+      type: string
+      exact: "Accept-Ranges"
+
+  - id: http-header-manipulation
+    desc: HTTP header value manipulation
+    crit: baseline
+    conf: 0.6
+    for: [macho, dylib]
+    if:
+      type: symbol
+      regex: "setValue:forHTTPHeaderField"
+
+composite_rules:
+  - id: nsurlsession-http-request
+    desc: NSURLSession HTTP request with POST
+    crit: notable
+    conf: 0.80
+    for: [macho, dylib]
+    all:
+      - id: nsurlsession-shared
+      - id: nsurlrequest-init
+
+  # NSURLSession download with delegate and file management
+  - id: nsurlsession-download-framework
+    desc: NSURLSession download framework with delegate
+    crit: notable
+    conf: 0.80
+    for: [macho, dylib]
+    all:
+      - id: nsurlsession-download-task
+      - id: nsurlsession-download-delegate
+      - id: nsurlsession-config
+
+  - id: nsurlsession-config
+    desc: NSURLSession configuration setup
+    crit: baseline
+    conf: 0.6
+    for: [macho, dylib]
+    any:
+      - id: nsurlsession-default-config
+      - id: nsurlsession-with-config
+
+  # HTTP range request pattern (sliced downloads)
+  - id: http-range-download
+    desc: HTTP range request download capability
+    crit: notable
+    conf: 0.75
+    for: [macho, dylib]
+    all:
+      - id: http-range-header
+      - id: http-head-method
+      - id: http-header-manipulation

@@ -1,0 +1,10 @@
+traits:
+  - id: ruby-ast-string-tps
+    desc: "Detects 'tps:/' protocol fragment in Ruby code"
+    crit: suspicious
+    conf: 1.0
+    for: [ruby]
+    if:
+      type: ast
+      query: |
+        (string (string_content) @str (#match? @str "^tps:/"))

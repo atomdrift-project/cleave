@@ -1,0 +1,157 @@
+# Fake Captcha / Social Engineering Patterns
+# Detects implementations of fake verification UI used for phishing or clocking
+
+traits:
+  # Cloudflare Turnstile patterns
+  - id: verify-human-text
+    desc: Text prompting user to verify
+    crit: notable
+    conf: 0.5
+    for: [javascript, typescript, html]
+    if:
+      type: string
+      substr: "Verify you are human"
+      case_insensitive: true
+
+  - id: completing-action-text
+    desc: Text about completing action below
+    crit: notable
+    conf: 0.4
+    for: [javascript, typescript, html]
+    if:
+      type: string
+      substr: "completing the action below"
+
+  - id: cloudflare-turnstile-url
+    desc: Reference to Cloudflare Turnstile product
+    crit: notable
+    conf: 0.6
+    for: [javascript, typescript, html]
+    if:
+      type: string
+      substr: "cloudflare.com/products/turnstile"
+
+  - id: success-text
+    desc: Success message text
+    crit: notable
+    conf: 0.3
+    for: [javascript, typescript, html]
+    if:
+      type: string
+      substr: "Success!"
+
+  - id: verifying-text
+    desc: Verifying progress text
+    crit: notable
+    conf: 0.3
+    for: [javascript, typescript, html]
+    if:
+      type: string
+      substr: "Verifying..."
+
+  - id: spinner-i-element
+    desc: Spinner UI element identifier
+    crit: notable
+    conf: 0.4
+    for: [javascript, typescript, html]
+    if:
+      type: string
+      substr: "spinner-i"
+
+  - id: vfclick-element
+    desc: Verification click element identifier
+    crit: notable
+    conf: 0.5
+    for: [javascript, typescript, html]
+    if:
+      type: string
+      substr: "vfclick"
+
+  # reCAPTCHA patterns
+  - id: not-a-robot-text
+    desc: reCAPTCHA "I'm not a robot"
+    crit: notable
+    conf: 0.6
+    for: [javascript, typescript, html]
+    if:
+      type: string
+      substr: "I'm not a robot"
+      case_insensitive: true
+
+  - id: recaptcha-checkbox-element
+    desc: reCAPTCHA checkbox element identifier
+    crit: notable
+    conf: 0.6
+    for: [javascript, typescript, html]
+    if:
+      type: string
+      substr: "recaptcha-checkbox"
+
+  - id: google-recaptcha-url
+    desc: Reference to Google reCAPTCHA URL
+    crit: notable
+    conf: 0.6
+    for: [javascript, typescript, html]
+    if:
+      type: string
+      substr: "google.com/recaptcha"
+
+# === Composite Rules ===
+composite_rules:
+  # Cloudflare Turnstile UI elements
+  - id: turnstile-ui-elements
+    desc: Cloudflare Turnstile UI elements present
+    crit: notable
+    conf: 0.6
+    for: [javascript, typescript, html]
+    any:
+      - id: spinner-i-element
+      - id: vfclick-element
+
+  # Core Turnstile text patterns
+  - id: turnstile-text-patterns
+    desc: Multiple Turnstile verification text patterns
+    crit: notable
+    conf: 0.7
+    for: [javascript, typescript, html]
+    needs: 3
+    any:
+      - id: verify-human-text
+      - id: completing-action-text
+      - id: cloudflare-turnstile-url
+      - id: success-text
+      - id: verifying-text
+
+  # Helper: verify human text + UI elements
+  - id: turnstile-verify-with-ui
+    desc: Verify human text with UI
+    crit: notable
+    conf: 0.8
+    for: [javascript, typescript, html]
+    all:
+      - id: verify-human-text
+      - id: turnstile-ui-elements
+  # Fake Cloudflare Turnstile
+  - id: cloudflare-turnstile
+    desc: Fake Cloudflare Turnstile implementation (social
+    crit: suspicious
+    conf: 0.95
+    mbc: "B0021"
+    attack: "T1204.001"
+    for: [javascript, typescript, html]
+    any:
+      - id: turnstile-text-patterns
+      - id: turnstile-verify-with-ui
+
+  # Fake Google reCAPTCHA
+  - id: recaptcha
+    desc: Fake Google reCAPTCHA implementation
+    crit: suspicious
+    conf: 0.9
+    mbc: "B0021"
+    attack: "T1204.001"
+    for: [javascript, typescript, html]
+    all:
+      - id: not-a-robot-text
+      - id: recaptcha-checkbox-element
+      - id: google-recaptcha-url

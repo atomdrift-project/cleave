@@ -1,0 +1,98 @@
+# Package Maintainers - Count Analysis
+# Detects suspicious maintainer patterns based on count
+# ATT&CK: T1195.002 (Compromise Software Supply Chain)
+#
+# REQUIRES: size_min/size_max KV feature (see KV_ENHANCEMENT_IMPLEMENTATION_PLAN.md)
+
+defaults:
+  crit: notable
+  conf: 0.65
+  attack: "T1195.002"
+
+traits:
+  # === npm package.json ===
+
+  # No maintainers - high risk indicator
+  - id: npm-no-maintainers
+    desc: npm package has no maintainers listed
+    crit: suspicious
+    conf: 0.80
+    for: [package.json]
+    if:
+      type: kv
+      path: "maintainers"
+      size_max: 0
+
+  # Single maintainer (common for malicious packages)
+  - id: npm-single-maintainer
+    desc: npm package has exactly one maintainer
+    crit: notable
+    conf: 0.60
+    for: [package.json]
+    if:
+      type: kv
+      path: "maintainers"
+      size_min: 1
+      size_max: 1
+
+  # Excessive maintainers (unusual, potential compromise)
+  - id: npm-many-maintainers
+    desc: npm package has unusually many maintainers (20+)
+    crit: notable
+    conf: 0.55
+    for: [package.json]
+    if:
+      type: kv
+      path: "maintainers"
+      size_min: 20
+
+  # === PyPI - maintainers in pyproject.toml ===
+
+  - id: pypi-no-maintainers
+    desc: PyPI package has no maintainers in pyproject.toml
+    crit: notable
+    conf: 0.70
+    for: [pyproject.toml]
+    if:
+      type: kv
+      path: "project.maintainers"
+      size_max: 0
+
+  - id: pypi-single-maintainer
+    desc: PyPI package has single maintainer
+    crit: notable
+    conf: 0.55
+    for: [pyproject.toml]
+    if:
+      type: kv
+      path: "project.maintainers"
+      size_min: 1
+      size_max: 1
+
+composite_rules:
+  # === High-Risk: No maintainers + install hooks ===
+  - id: npm-no-maintainers-with-hooks
+    desc: No maintainers with install hooks
+    crit: hostile
+    conf: 0.95
+    attack: "T1195.002"
+    for: [package.json]
+    all:
+      - id: npm-no-maintainers
+      - id: objectives/lateral-movement/supply-chain/npm/metadata::install-hooks
+
+  # === High-Risk: Single maintainer + install hooks + quality issues ===
+  - id: npm-single-maintainer-suspicious
+    desc: Single maintainer with install hooks and quality issues
+    crit: hostile
+    conf: 0.92
+    attack: "T1195.002"
+    for: [package.json]
+    all:
+      - id: npm-single-maintainer
+      - id: objectives/lateral-movement/supply-chain/npm/metadata::install-hooks
+    any:
+      - id: metadata/quality/package-info::npm-empty-description-any
+      - id: metadata/quality/versioning::release-zero
+      - id: metadata/quality/author::npm-generic-author-name
+    needs: 1

@@ -1,0 +1,117 @@
+# Author Field Patterns
+# Suspicious or placeholder author names in PyPI packages
+
+defaults:
+  crit: notable
+  attack: "T1036.005"
+  mbc: "F0004"
+  for: [all]
+
+traits:
+  - id: placeholder-author-1
+    desc: Author placeholder (haha/lol/test)
+    if:
+      type: string
+      regex: 'author.{0,50}=.{0,50}[''"](haha|lol|test)[''"]'
+
+  - id: placeholder-author-2
+    desc: Author placeholder (admin/user/dev/me)
+    if:
+      type: string
+      regex: 'author.{0,50}=.{0,50}[''"](admin|user|dev|me)[''"]'
+
+  - id: unknown-author
+    desc: PKG-INFO has UNKNOWN author
+    crit: notable
+    conf: 0.75
+    if:
+      type: kv
+      path: author
+      exact: "UNKNOWN"
+
+  - id: placeholder-author-pkginfo-1a
+    desc: PKG-INFO author placeholder (Name/Test/Author)
+    if:
+      type: kv
+      path: author
+      regex: "^(Your Name|Test|Author)$"
+      case_insensitive: true
+
+  - id: placeholder-author-pkginfo-1b
+    desc: PKG-INFO author placeholder (TODO/FIXME)
+    if:
+      type: kv
+      path: author
+      regex: "^(TODO|FIXME)$"
+      case_insensitive: true
+
+  - id: placeholder-author-pkginfo-2
+    desc: PKG-INFO author placeholder (Example/Change Me/haha/lol)
+    if:
+      type: kv
+      path: author
+      regex: "^(Example|Change Me|haha|lol)$"
+      case_insensitive: true
+
+  - id: placeholder-author-pkginfo-3
+    desc: PKG-INFO author placeholder (none/asdf/abc)
+    if:
+      type: kv
+      path: author
+      regex: "^(none|asdf|abc)$"
+      case_insensitive: true
+
+  - id: pkginfo-short-author
+    desc: PKG-INFO with very short author name
+    crit: notable
+    conf: 0.75
+    if:
+      type: kv
+      path: author
+      regex: "^.{1,3}$"
+
+  - id: pkginfo-no-author
+    desc: PKG-INFO missing Author field
+    crit: notable
+    conf: 0.70
+    if:
+      type: kv
+      path: metadata-version
+    unless:
+      - type: kv
+        path: author
+
+  - id: pkginfo-numeric-author
+    desc: PKG-INFO author with numeric sequences
+    crit: notable
+    conf: 0.70
+    if:
+      type: kv
+      path: author
+      regex: "([a-zA-Z]+[0-9]{3,}|[0-9]{3,}[a-zA-Z]+)"
+
+composite_rules:
+  - id: placeholder-author
+    desc: Author field contains placeholder name
+    crit: notable
+    conf: 0.65
+    for: [python]
+    any:
+      - id: placeholder-author-1
+      - id: placeholder-author-2
+
+  - id: placeholder-author-pkginfo-1
+    desc: PKG-INFO author placeholder (Set 1)
+    any:
+      - id: placeholder-author-pkginfo-1a
+      - id: placeholder-author-pkginfo-1b
+
+  - id: placeholder-author-pkginfo
+    desc: PKG-INFO author contains placeholder text
+    crit: notable
+    conf: 0.80
+    for: [all]
+    any:
+      - id: placeholder-author-pkginfo-1
+      - id: placeholder-author-pkginfo-2
+      - id: placeholder-author-pkginfo-3

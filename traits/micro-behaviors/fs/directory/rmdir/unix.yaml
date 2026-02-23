@@ -1,0 +1,15 @@
+# Directory Removal
+# MBC: C0047 (Delete File)
+# ATT&CK: T1070.004
+
+defaults:
+  for: [elf, macho, so, dylib, c]
+
+traits:
+  - id: rmdir-base
+    desc: Remove directories
+    crit: baseline
+    conf: 0.66
+    if:
+      type: symbol
+      exact: "rmdir"

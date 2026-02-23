@@ -1,0 +1,165 @@
+# PTY Backdoor Detection
+# Detects backdoors that allocate PTY for interactive shell access over network
+# MBC: B0024 (Remote Access), E1059 (Command Execution)
+# ATT&CK: T1059.004 (Unix Shell), T1071.001 (Web Protocols)
+
+defaults:
+  for: [elf, macho]
+  mbc: "B0024"
+  attack: "T1059.004"
+
+traits:
+  # NOTE: PTY allocation functions are defined in objectives/execution/tty/pty/
+  # This file defines only backdoor-specific traits and composites
+
+  # Terminal attribute control - for PTY configuration
+  - id: termios-cfmakeraw
+    desc: cfmakeraw terminal attribute control symbol
+    crit: notable
+    conf: 0.9
+    if:
+      type: symbol
+      exact: "cfmakeraw"
+
+  - id: termios-cfsetispeed
+    desc: cfsetispeed terminal attribute control symbol
+    crit: notable
+    conf: 0.9
+    if:
+      type: symbol
+      exact: "cfsetispeed"
+
+  - id: termios-cfsetospeed
+    desc: cfsetospeed terminal attribute control symbol
+    crit: notable
+    conf: 0.9
+    if:
+      type: symbol
+      exact: "cfsetospeed"
+
+  # File descriptor duplication - use canonical micro-behaviors/ trait
+
+  # /dev/ptm* string - PTY master device
+  - id: pty-device-string
+    desc: PTY device path string
+    crit: notable
+    conf: 0.85
+    if:
+      type: string
+      regex: "/dev/pt[msy]"
+
+  # Terminal type strings (vt100, xterm, ansi, linux) - for PTY negotiation
+  - id: terminal-type-vt102
+    desc: Terminal type vt102 identifier
+    crit: notable
+    conf: 0.8
+    if:
+      type: string
+      regex: "^vt10[02]$"
+
+  - id: terminal-type-ansi
+    desc: Terminal type ansi identifier
+    crit: notable
+    conf: 0.8
+    if:
+      type: string
+      exact: "ansi"
+
+  - id: terminal-type-linux
+    desc: Terminal type linux identifier
+    crit: notable
+    conf: 0.8
+    if:
+      type: string
+      exact: "linux"
+
+  - id: terminal-type-dumb
+    desc: Terminal type dumb identifier
+    crit: notable
+    conf: 0.8
+    if:
+      type: string
+      exact: "dumb"
+
+  - id: terminal-type-screen
+    desc: Terminal type screen identifier
+    crit: notable
+    conf: 0.8
+    if:
+      type: string
+      exact: "screen"
+
+composite_rules:
+  - id: pty-alloc-symbols
+    desc: PTY allocation symbol set
+    crit: notable
+    conf: 0.9
+    any:
+      - id: objectives/execution/tty/pty
+
+  - id: termios-symbols
+    desc: Terminal attribute control symbols
+    crit: notable
+    conf: 0.9
+    any:
+      - id: objectives/execution/tty/pty::tcgetattr
+      - id: objectives/execution/tty/pty::tcsetattr
+      - id: termios-cfmakeraw
+      - id: termios-cfsetispeed
+      - id: termios-cfsetospeed
+
+  - id: terminal-type-string
+    desc: Terminal type identifier string (legacy wrapper)
+    crit: notable
+    conf: 0.8
+    any:
+      - id: terminal-type-vt102
+      - id: micro-behaviors/process/terminal/tty::xterm-ref
+      - id: terminal-type-ansi
+      - id: terminal-type-linux
+      - id: terminal-type-dumb
+      - id: terminal-type-screen
+
+  # PTY shell backdoor - allocates PTY and has network capability
+  # This is the core pattern: PTY + network = interactive remote shell
+  # Complexity: all(3) + for(1) = 4 >= 4 HOSTILE
+  - id: pty-backdoor
+    desc: PTY backdoor (interactive remote shell)
+    crit: hostile
+    conf: 0.95
+    mbc: "B0024"
+    attack: "T1059.004"
+    for: [elf]
+    all:
+      - id: pty-alloc-symbols
+      - id: micro-behaviors/communications/socket/
+      - id: micro-behaviors/process/fd/dup::dup2
+
+  # Full PTY backdoor with terminal control
+  # More confidence when termios and daemon functions present
+  # Complexity: all(4) + for(1) = 5 >= 4 HOSTILE
+  - id: pty-backdoor-full
+    desc: Full PTY backdoor with terminal control
+    crit: hostile
+    conf: 0.98
+    mbc: "B0024"
+    attack: "T1059.004"
+    for: [elf]
+    all:
+      - id: pty-alloc-symbols
+      - id: termios-symbols
+      - id: micro-behaviors/communications/socket/
+
+  # Bind shell with PTY - waits for incoming connections
+  # Complexity: all(4) + for(1) = 5 >= 4 HOSTILE
+  - id: pty-bind-shell
+    desc: PTY bind shell (listens for connections)
+    crit: hostile
+    conf: 0.95
+    mbc: "B0024"
+    for: [elf]
+    all:
+      - id: pty-alloc-symbols
+      - id: micro-behaviors/communications/socket/
+      - id: micro-behaviors/process/fd/dup::dup2
+      - id: micro-behaviors/process/create/shell::shell-symbols

@@ -1,0 +1,110 @@
+---
+# Ruby GTFOBins Abuse Detection
+# Detects Ruby being abused for various system-level operations
+# GTFOBins: https://gtfobins.github.io/
+# ATT&CK: T1059 (Command and Scripting Interpreter), T1068 (Exploitation for Privilege Escalation)
+
+defaults:
+  for: [ruby]
+  platforms: [all]
+
+traits:
+  - id: gtfobins-ruby-indicator
+    desc: GTFOBins Ruby utility indicator
+    crit: notable
+    conf: 0.5
+    if:
+      type: string
+      word: "ruby"
+
+composite_rules:
+  - id: setuid-privilege-escalation
+    desc: Setuid privilege escalation
+    crit: notable
+    conf: 0.95
+    attack: "T1068"
+    any:
+      - id: objectives/privilege-escalation/setuid/abuse::ruby-setuid
+      - id: objectives/privilege-escalation/setuid/abuse::setuid-capability
+
+  - id: root-shell-exec
+    desc: Root shell execution attempt
+    crit: suspicious
+    conf: 0.9
+    attack: "T1068"
+    all:
+      - id: objectives/privilege-escalation/setuid/abuse::ruby-root-shell
+      - id: gtfobins-ruby-indicator
+
+  - id: ruby-file-read
+    desc: Ruby file read operation
+    crit: notable
+    conf: 0.6
+    attack: "T1083"
+    any:
+      - id: micro-behaviors/fs/file/read::ruby-file-read-content
+      - id: micro-behaviors/fs/file/read::ruby-file-read-open
+
+  - id: ruby-file-write
+    desc: Ruby file write operation
+    crit: notable
+    conf: 0.6
+    attack: "T1083"
+    all:
+      - id: micro-behaviors/fs/write/file::ruby-file-write-content
+      - id: gtfobins-ruby-indicator
+
+  - id: ruby-shell-exec
+    desc: Shell command execution via Ruby
+    crit: notable
+    conf: 0.7
+    attack: "T1059"
+    all:
+      - id: micro-behaviors/process/create/shell/lang::ruby-shell-exec
+      - id: gtfobins-ruby-indicator
+
+  - id: cli-ruby-exec
+    desc: Command line Ruby execution
+    crit: notable
+    conf: 0.5
+    any:
+      - id: well-known/tools/offensive/gtfobins::gtfobins-ruby-marker
+      - id: gtfobins-ruby-indicator
+
+  # === GTFOBins Library Load ===
+  - id: gtfobins-library-load
+    desc: GTFOBins shared library loading
+    crit: suspicious
+    conf: 0.93
+    attack: "T1059"
+    needs: 2
+    any:
+      - id: micro-behaviors/dylib/load::fiddle-dlopen
+      - id: micro-behaviors/dylib/load::shared-lib-exec
+
+  # === GTFOBins Privilege Escalation ===
+  - id: gtfobins-privilege-escalation
+    desc: GTFOBins privilege escalation
+    crit: suspicious
+    conf: 0.95
+    attack: "T1068"
+    needs: 2
+    any:
+      - id: setuid-privilege-escalation
+      - id: root-shell-exec
+      - id: ruby-shell-exec
+
+  # === GTFOBins File Operations ===
+  - id: gtfobins-file-ops
+    desc: GTFOBins file operations
+    crit: notable
+    conf: 0.75
+    attack: "T1083"
+    needs: 2
+    any:
+      - id: ruby-file-read
+      - id: ruby-file-write
+      - id: cli-ruby-exec
+
+  # Note: gtfobins-reverse-shell moved to objectives/command-and-control/reverse-shell/technique/gtfobins.yaml
+  # as it infers objective (reverse shell) rather than just capability

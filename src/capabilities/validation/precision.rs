@@ -707,8 +707,10 @@ pub(crate) fn precalculate_all_composite_precisions(
 
 /// Validate and downgrade composite rules that don't meet precision requirements.
 ///
-/// - HOSTILE must have precision >= 4, else downgraded to SUSPICIOUS.
-/// - SUSPICIOUS must have precision >= 2, else downgraded to NOTABLE.
+/// - HOSTILE must have precision >= min_hostile_precision, else downgraded to SUSPICIOUS.
+/// - SUSPICIOUS must have precision >= min_suspicious_precision, else downgraded to NOTABLE.
+///
+/// Warnings are logged but NOT fatal - rules are silently downgraded to maintain safety.
 ///
 /// IMPORTANT: Call precalculate_all_composite_precisions() first!
 /// This function expects all precisions to already be calculated and stored.
@@ -719,7 +721,7 @@ pub(crate) fn validate_hostile_composite_precision(
     min_hostile_precision: f32,
     min_suspicious_precision: f32,
 ) {
-    // Check HOSTILE/SUSPICIOUS rules and downgrade if needed
+    // Check HOSTILE/SUSPICIOUS composite rules and downgrade if precision is too low
     for rule in composite_rules.iter_mut() {
         if !matches!(rule.crit, Criticality::Hostile | Criticality::Suspicious) {
             continue;
@@ -727,8 +729,8 @@ pub(crate) fn validate_hostile_composite_precision(
 
         // Precision should already be calculated - if not, that's a bug
         let precision = rule.precision.unwrap_or_else(|| {
-            eprintln!(
-                "WARNING: Composite rule '{}' has no precision calculated!",
+            tracing::warn!(
+                "Composite rule '{}' has no precision calculated!",
                 rule.id
             );
             0.0
@@ -736,11 +738,19 @@ pub(crate) fn validate_hostile_composite_precision(
 
         match rule.crit {
             Criticality::Hostile if precision < min_hostile_precision => {
-                // Silently downgrade - the precision calculation handles this automatically
+                // Log non-fatal warning and downgrade
+                tracing::debug!(
+                    "Downgrading '{}' from HOSTILE to SUSPICIOUS (precision {:.1} < {:.1})",
+                    rule.id, precision, min_hostile_precision
+                );
                 rule.crit = Criticality::Suspicious;
             }
             Criticality::Suspicious if precision < min_suspicious_precision => {
-                // Silently downgrade - the precision calculation handles this automatically
+                // Log non-fatal warning and downgrade
+                tracing::debug!(
+                    "Downgrading '{}' from SUSPICIOUS to NOTABLE (precision {:.1} < {:.1})",
+                    rule.id, precision, min_suspicious_precision
+                );
                 rule.crit = Criticality::Notable;
             }
             _ => {}

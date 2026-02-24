@@ -17,8 +17,29 @@ use crate::composite_rules::{
     CompositeTrait, Condition, FileType as RuleFileType, TraitDefinition,
 };
 use crate::types::Criticality;
+use rustc_hash::{FxHashMap, FxHashSet};
 use std::collections::{HashMap, HashSet};
 use std::sync::OnceLock;
+
+/// Global regex cache to avoid recompiling the same patterns during validation.
+/// Uses DashMap for concurrent access without locking.
+static REGEX_CACHE: OnceLock<dashmap::DashMap<String, Option<regex::Regex>>> = OnceLock::new();
+
+/// Get or compile a regex pattern, caching the result.
+/// Returns None if the pattern is invalid.
+fn get_cached_regex(pattern: &str) -> Option<regex::Regex> {
+    let cache = REGEX_CACHE.get_or_init(dashmap::DashMap::new);
+
+    // Fast path: check if already cached
+    if let Some(entry) = cache.get(pattern) {
+        return entry.value().clone();
+    }
+
+    // Slow path: compile and cache
+    let compiled = regex::Regex::new(pattern).ok();
+    cache.insert(pattern.to_string(), compiled.clone());
+    compiled
+}
 
 /// Combined: ~100-500x faster than original mutex-based implementation.
 pub(crate) fn find_duplicate_traits_and_composites(
@@ -769,6 +790,10 @@ pub(crate) fn check_regex_or_overlapping_exact(
 ///
 /// This bans regex-to-regex overlap where alternatives are shared, which usually indicates
 /// a monolithic rule layout and should be split into atomic traits.
+///
+/// OPTIMIZATION: Uses an inverted index to reduce O(n²) comparisons to O(n * avg_collisions).
+/// Instead of comparing every pair of patterns, we pre-compute normalized alternatives for
+/// each pattern and only compare patterns that share at least one alternative.
 pub(crate) fn check_overlapping_regex_patterns(
     trait_definitions: &[TraitDefinition],
     warnings: &mut Vec<String>,
@@ -776,90 +801,165 @@ pub(crate) fn check_overlapping_regex_patterns(
     let start = std::time::Instant::now();
     let initial_warning_count = warnings.len();
 
-    let mut regex_locations: Vec<PatternLocation> = Vec::new();
+    // Collect all regex patterns with their pre-computed alternatives
+    struct RegexWithAlternatives {
+        location: PatternLocation,
+        alternatives: FxHashSet<String>,
+        has_alternation: bool,
+    }
+
+    let mut regex_patterns: Vec<RegexWithAlternatives> = Vec::new();
     for trait_def in trait_definitions {
         let patterns = extract_patterns(trait_def);
         for (_, location) in patterns {
             if location.match_type == "regex" {
-                regex_locations.push(location);
+                // Pre-compute normalized alternatives for this pattern
+                let alts: FxHashSet<String> = split_top_level_alternation(&location.original_value)
+                    .into_iter()
+                    .map(|s| normalize_regex(s.trim()))
+                    .filter(|s| !s.is_empty())
+                    .collect();
+
+                // If no alternatives, use the whole normalized pattern
+                let alternatives = if alts.is_empty() {
+                    let normalized = normalize_regex(location.original_value.trim());
+                    if normalized.is_empty() {
+                        FxHashSet::default()
+                    } else {
+                        let mut set = FxHashSet::default();
+                        set.insert(normalized);
+                        set
+                    }
+                } else {
+                    alts
+                };
+
+                let has_alternation = location.original_value.contains('|');
+                regex_patterns.push(RegexWithAlternatives {
+                    location,
+                    alternatives,
+                    has_alternation,
+                });
             }
         }
     }
 
-    let mut seen_pairs: HashSet<(String, String)> = HashSet::new();
-
-    for i in 0..regex_locations.len() {
-        for j in (i + 1)..regex_locations.len() {
-            let a = &regex_locations[i];
-            let b = &regex_locations[j];
-
-            // Skip same trait instance.
-            if a.trait_id == b.trait_id && a.file_path == b.file_path {
-                continue;
-            }
-
-            // Must overlap in filetype scope to be a real conflict.
-            if !has_filetype_overlap(a, b) {
-                continue;
-            }
-
-            // Different count/per-kb thresholds are intentionally layered evidence.
-            if !has_same_count_density_filters(a, b) {
-                continue;
-            }
-
-            let shared = shared_top_level_regex_alternatives(&a.original_value, &b.original_value);
-            if shared.is_empty() {
-                continue;
-            }
-
-            // Allow overlaps when patterns differ significantly in length (>33%)
-            // AND at least one regex has no alternation (|). This permits different
-            // specificity levels like "\.exe$" vs "7z\.exe" while catching duplicates.
-            let max_len = a.original_value.len().max(b.original_value.len());
-            let len_diff_pct = if max_len > 0 {
-                (a.original_value.len() as f32 - b.original_value.len() as f32).abs()
-                    / max_len as f32
-            } else {
-                0.0
-            };
-            let has_alternation_a = a.original_value.contains('|');
-            let has_alternation_b = b.original_value.contains('|');
-
-            // Skip if significantly different length and at least one has no alternation
-            if len_diff_pct > 0.33 && (!has_alternation_a || !has_alternation_b) {
-                continue;
-            }
-
-            let key_a = format!("{}::{}", a.file_path, a.trait_id);
-            let key_b = format!("{}::{}", b.file_path, b.trait_id);
-            let key = if key_a <= key_b {
-                (key_a.clone(), key_b.clone())
-            } else {
-                (key_b.clone(), key_a.clone())
-            };
-
-            if !seen_pairs.insert(key) {
-                continue;
-            }
-
-            let mut shared_preview = shared;
-            shared_preview.sort();
-            if shared_preview.len() > 5 {
-                shared_preview.truncate(5);
-            }
-
-            warnings.push(format!(
-                "Overlapping regex patterns with same file type coverage:\n   {}::{} => {}\n   {}::{} => {}\n   shared alternatives: {}",
-                a.file_path,
-                a.trait_id,
-                a.original_value,
-                b.file_path,
-                b.trait_id,
-                b.original_value,
-                shared_preview.join(", ")
-            ));
+    // Build inverted index: alternative -> list of pattern indices
+    // This allows us to only compare patterns that share at least one alternative
+    let mut inverted_index: FxHashMap<String, Vec<usize>> = FxHashMap::default();
+    for (idx, pat) in regex_patterns.iter().enumerate() {
+        for alt in &pat.alternatives {
+            inverted_index.entry(alt.clone()).or_default().push(idx);
         }
+    }
+
+    // Find candidate pairs (patterns that share at least one alternative)
+    let mut candidate_pairs: FxHashSet<(usize, usize)> = FxHashSet::default();
+    for indices in inverted_index.values() {
+        if indices.len() > 1 {
+            // All pairs in this bucket are candidates
+            for (i, &idx_a) in indices.iter().enumerate() {
+                for &idx_b in &indices[i + 1..] {
+                    let pair = if idx_a < idx_b {
+                        (idx_a, idx_b)
+                    } else {
+                        (idx_b, idx_a)
+                    };
+                    candidate_pairs.insert(pair);
+                }
+            }
+        }
+    }
+
+    tracing::debug!(
+        "Regex overlap: {} patterns, {} candidate pairs (from inverted index with {} buckets)",
+        regex_patterns.len(),
+        candidate_pairs.len(),
+        inverted_index.len()
+    );
+
+    let mut seen_pairs: FxHashSet<(String, String)> = FxHashSet::default();
+
+    // Only check candidate pairs instead of all O(n²) pairs
+    for (i, j) in candidate_pairs {
+        let a = &regex_patterns[i];
+        let b = &regex_patterns[j];
+
+        // Skip same trait instance.
+        if a.location.trait_id == b.location.trait_id
+            && a.location.file_path == b.location.file_path
+        {
+            continue;
+        }
+
+        // Must overlap in filetype scope to be a real conflict.
+        if !has_filetype_overlap(&a.location, &b.location) {
+            continue;
+        }
+
+        // Different count/per-kb thresholds are intentionally layered evidence.
+        if !has_same_count_density_filters(&a.location, &b.location) {
+            continue;
+        }
+
+        // Compute shared alternatives (fast since we have pre-computed sets)
+        let shared: Vec<String> = a
+            .alternatives
+            .intersection(&b.alternatives)
+            .cloned()
+            .collect();
+        if shared.is_empty() {
+            continue;
+        }
+
+        // Allow overlaps when patterns differ significantly in length (>33%)
+        // AND at least one regex has no alternation (|). This permits different
+        // specificity levels like "\.exe$" vs "7z\.exe" while catching duplicates.
+        let max_len = a
+            .location
+            .original_value
+            .len()
+            .max(b.location.original_value.len());
+        let len_diff_pct = if max_len > 0 {
+            (a.location.original_value.len() as f32 - b.location.original_value.len() as f32).abs()
+                / max_len as f32
+        } else {
+            0.0
+        };
+
+        // Skip if significantly different length and at least one has no alternation
+        if len_diff_pct > 0.33 && (!a.has_alternation || !b.has_alternation) {
+            continue;
+        }
+
+        let key_a = format!("{}::{}", a.location.file_path, a.location.trait_id);
+        let key_b = format!("{}::{}", b.location.file_path, b.location.trait_id);
+        let key = if key_a <= key_b {
+            (key_a.clone(), key_b.clone())
+        } else {
+            (key_b.clone(), key_a.clone())
+        };
+
+        if !seen_pairs.insert(key) {
+            continue;
+        }
+
+        let mut shared_preview = shared;
+        shared_preview.sort();
+        if shared_preview.len() > 5 {
+            shared_preview.truncate(5);
+        }
+
+        warnings.push(format!(
+            "Overlapping regex patterns with same file type coverage:\n   {}::{} => {}\n   {}::{} => {}\n   shared alternatives: {}",
+            a.location.file_path,
+            a.location.trait_id,
+            a.location.original_value,
+            b.location.file_path,
+            b.location.trait_id,
+            b.location.original_value,
+            shared_preview.join(", ")
+        ));
     }
 
     let overlaps_found = warnings.len() - initial_warning_count;
@@ -868,33 +968,6 @@ pub(crate) fn check_overlapping_regex_patterns(
         start.elapsed(),
         overlaps_found
     );
-}
-
-fn shared_top_level_regex_alternatives(regex_a: &str, regex_b: &str) -> Vec<String> {
-    let mut set_a: HashSet<String> = split_top_level_alternation(regex_a)
-        .into_iter()
-        .map(|s| normalize_regex(s.trim()))
-        .filter(|s| !s.is_empty())
-        .collect();
-
-    let set_b: HashSet<String> = split_top_level_alternation(regex_b)
-        .into_iter()
-        .map(|s| normalize_regex(s.trim()))
-        .filter(|s| !s.is_empty())
-        .collect();
-
-    // If no top-level alternatives exist, still treat exact-normalized equality as overlap.
-    if set_a.is_empty() && set_b.is_empty() {
-        let na = normalize_regex(regex_a.trim());
-        let nb = normalize_regex(regex_b.trim());
-        if !na.is_empty() && na == nb {
-            return vec![na];
-        }
-        return Vec::new();
-    }
-
-    set_a.retain(|alt| set_b.contains(alt));
-    set_a.into_iter().collect()
 }
 
 /// Check for regex patterns that are just ^word$ and should use exact instead
@@ -1554,137 +1627,147 @@ pub(crate) fn check_regex_contains_literal(
         }
     }
 
-    // Check each regex against literals
-    for regex_pat in &regex_patterns {
-        // Try to compile regex to test matches
-        let Ok(re) = regex::Regex::new(&regex_pat.pattern) else {
-            continue; // Skip invalid regexes (will be caught by other validation)
-        };
+    // Check each regex against literals (parallelized for performance)
+    use rayon::prelude::*;
 
-        for literal_pat in &literal_patterns {
-            // Skip if criticalities are different (intentional layering)
-            if regex_pat.crit != literal_pat.crit {
-                continue;
-            }
-
-            // Skip same file
-            if literal_pat.file_path == regex_pat.file_path {
-                continue;
-            }
-
-            // Check file type overlap
-            if !has_filetype_overlap_case(&literal_pat.for_types, &regex_pat.for_types) {
-                continue;
-            }
-
-            // Check if regex matches the literal
-            if !re.is_match(&literal_pat.normalized) {
-                continue;
-            }
-
-            // Allow overlaps when patterns differ significantly in length (>33%)
-            // AND regex has no alternation (|) AND literal is not a prefix/suffix
-            // of the regex. This permits different specificity levels like ".exe"
-            // vs "mimikatz.exe" while catching true duplicates like "foo" vs "foo.*".
-            let max_len = regex_pat.pattern.len().max(literal_pat.pattern.len());
-            let len_diff_pct = if max_len > 0 {
-                (regex_pat.pattern.len() as f32 - literal_pat.pattern.len() as f32).abs()
-                    / max_len as f32
-            } else {
-                0.0
+    let new_warnings: Vec<String> = regex_patterns
+        .par_iter()
+        .flat_map(|regex_pat| {
+            // Try to compile regex to test matches (using cache)
+            let Some(re) = get_cached_regex(&regex_pat.pattern) else {
+                return Vec::new();
             };
-            let has_alternation = regex_pat.pattern.contains('|');
 
-            // Check if literal appears in the regex with only metacharacters as prefix/suffix
-            // "foo" vs "foo.*" -> block (literal + metacharacters)
-            // ".exe" vs ".*\.exe" -> block (metacharacters + escaped literal)
-            // ".exe" vs "7z\.exe" -> allow (actual content + escaped literal)
-            let escaped_literal = regex::escape(&literal_pat.pattern);
-            let is_trivial_extension = if regex_pat.pattern.starts_with(&escaped_literal) {
-                // Literal is a prefix - check if remainder is just metacharacters/anchors
-                let remainder = &regex_pat.pattern[escaped_literal.len()..];
-                remainder
-                    .chars()
-                    .all(|c| matches!(c, '.' | '*' | '+' | '?' | '$' | '^' | '\\'))
-            } else if regex_pat.pattern.ends_with(&escaped_literal) {
-                // Literal is a suffix - check if prefix is just metacharacters/anchors
-                let prefix = &regex_pat.pattern[..regex_pat.pattern.len() - escaped_literal.len()];
-                prefix
-                    .chars()
-                    .all(|c| matches!(c, '.' | '*' | '+' | '?' | '$' | '^' | '\\'))
-            } else if regex_pat.pattern.contains(&escaped_literal) {
-                // Literal appears in the middle - check if surrounding chars are metacharacters
-                if let Some(idx) = regex_pat.pattern.find(&escaped_literal) {
-                    let before = &regex_pat.pattern[..idx];
-                    let after = &regex_pat.pattern[idx + escaped_literal.len()..];
-                    before
+            let mut local_warnings = Vec::new();
+            for literal_pat in &literal_patterns {
+                // Skip if criticalities are different (intentional layering)
+                if regex_pat.crit != literal_pat.crit {
+                    continue;
+                }
+
+                // Skip same file
+                if literal_pat.file_path == regex_pat.file_path {
+                    continue;
+                }
+
+                // Check file type overlap
+                if !has_filetype_overlap_case(&literal_pat.for_types, &regex_pat.for_types) {
+                    continue;
+                }
+
+                // Check if regex matches the literal
+                if !re.is_match(&literal_pat.normalized) {
+                    continue;
+                }
+
+                // Allow overlaps when patterns differ significantly in length (>33%)
+                // AND regex has no alternation (|) AND literal is not a prefix/suffix
+                // of the regex. This permits different specificity levels like ".exe"
+                // vs "mimikatz.exe" while catching true duplicates like "foo" vs "foo.*".
+                let max_len = regex_pat.pattern.len().max(literal_pat.pattern.len());
+                let len_diff_pct = if max_len > 0 {
+                    (regex_pat.pattern.len() as f32 - literal_pat.pattern.len() as f32).abs()
+                        / max_len as f32
+                } else {
+                    0.0
+                };
+                let has_alternation = regex_pat.pattern.contains('|');
+
+                // Check if literal appears in the regex with only metacharacters as prefix/suffix
+                // "foo" vs "foo.*" -> block (literal + metacharacters)
+                // ".exe" vs ".*\.exe" -> block (metacharacters + escaped literal)
+                // ".exe" vs "7z\.exe" -> allow (actual content + escaped literal)
+                let escaped_literal = regex::escape(&literal_pat.pattern);
+                let is_trivial_extension = if regex_pat.pattern.starts_with(&escaped_literal) {
+                    // Literal is a prefix - check if remainder is just metacharacters/anchors
+                    let remainder = &regex_pat.pattern[escaped_literal.len()..];
+                    remainder
                         .chars()
                         .all(|c| matches!(c, '.' | '*' | '+' | '?' | '$' | '^' | '\\'))
-                        && after
+                } else if regex_pat.pattern.ends_with(&escaped_literal) {
+                    // Literal is a suffix - check if prefix is just metacharacters/anchors
+                    let prefix =
+                        &regex_pat.pattern[..regex_pat.pattern.len() - escaped_literal.len()];
+                    prefix
+                        .chars()
+                        .all(|c| matches!(c, '.' | '*' | '+' | '?' | '$' | '^' | '\\'))
+                } else if regex_pat.pattern.contains(&escaped_literal) {
+                    // Literal appears in the middle - check if surrounding chars are metacharacters
+                    if let Some(idx) = regex_pat.pattern.find(&escaped_literal) {
+                        let before = &regex_pat.pattern[..idx];
+                        let after = &regex_pat.pattern[idx + escaped_literal.len()..];
+                        before
                             .chars()
                             .all(|c| matches!(c, '.' | '*' | '+' | '?' | '$' | '^' | '\\'))
+                            && after
+                                .chars()
+                                .all(|c| matches!(c, '.' | '*' | '+' | '?' | '$' | '^' | '\\'))
+                    } else {
+                        false
+                    }
                 } else {
                     false
+                };
+
+                // Skip if significantly different length, no alternation, AND not a trivial extension
+                if len_diff_pct > 0.33 && !has_alternation && !is_trivial_extension {
+                    continue;
                 }
-            } else {
-                false
-            };
 
-            // Skip if significantly different length, no alternation, AND not a trivial extension
-            if len_diff_pct > 0.33 && !has_alternation && !is_trivial_extension {
-                continue;
-            }
+                // Check if this is a simple case (regex == literal after normalization)
+                let is_exact_match = regex_pat.normalized == literal_pat.normalized;
 
-            // Check if this is a simple case (regex == literal after normalization)
-            let is_exact_match = regex_pat.normalized == literal_pat.normalized;
+                // Check condition types (cross-type means different string/symbol/raw)
+                let cross_type = literal_pat.condition_type != regex_pat.condition_type;
 
-            // Check condition types (cross-type means different string/symbol/raw)
-            let cross_type = literal_pat.condition_type != regex_pat.condition_type;
-
-            if is_exact_match {
-                // Exact match: regex pattern is functionally same as literal
-                let tier_note = make_tier_note(&regex_pat.trait_id, &literal_pat.trait_id);
-                warnings.push(format!(
-                    "REGEX vs LITERAL DUPLICATE{}: Same pattern, different match types{}
+                if is_exact_match {
+                    // Exact match: regex pattern is functionally same as literal
+                    let tier_note = make_tier_note(&regex_pat.trait_id, &literal_pat.trait_id);
+                    local_warnings.push(format!(
+                        "REGEX vs LITERAL DUPLICATE{}: Same pattern, different match types{}
    Regex: '{}' ({} regex) in {}::{}
    Literal: '{}' ({} {}) in {}::{}
    → Action: Choose one canonical form (prefer {} for simpler pattern)",
-                    tier_note,
-                    if cross_type { " (cross-type)" } else { "" },
-                    regex_pat.pattern,
-                    regex_pat.condition_type,
-                    regex_pat.file_path,
-                    regex_pat.trait_id,
-                    literal_pat.pattern,
-                    literal_pat.condition_type,
-                    literal_pat.match_type,
-                    literal_pat.file_path,
-                    literal_pat.trait_id,
-                    literal_pat.match_type, // Prefer exact/substr over regex for simple patterns
-                ));
-            } else {
-                // Regex contains literal (more complex overlap)
-                let tier_note = make_tier_note(&regex_pat.trait_id, &literal_pat.trait_id);
-                warnings.push(format!(
-                    "REGEX CONTAINS LITERAL{}: Regex pattern matches literal{}
+                        tier_note,
+                        if cross_type { " (cross-type)" } else { "" },
+                        regex_pat.pattern,
+                        regex_pat.condition_type,
+                        regex_pat.file_path,
+                        regex_pat.trait_id,
+                        literal_pat.pattern,
+                        literal_pat.condition_type,
+                        literal_pat.match_type,
+                        literal_pat.file_path,
+                        literal_pat.trait_id,
+                        literal_pat.match_type, // Prefer exact/substr over regex for simple patterns
+                    ));
+                } else {
+                    // Regex contains literal (more complex overlap)
+                    let tier_note = make_tier_note(&regex_pat.trait_id, &literal_pat.trait_id);
+                    local_warnings.push(format!(
+                        "REGEX CONTAINS LITERAL{}: Regex pattern matches literal{}
    Regex: '{}' ({} regex) in {}::{}
    Matches: '{}' ({} {}) in {}::{}
    → Review: Is this intentional layering or redundant detection?",
-                    tier_note,
-                    if cross_type { " (cross-type)" } else { "" },
-                    regex_pat.pattern,
-                    regex_pat.condition_type,
-                    regex_pat.file_path,
-                    regex_pat.trait_id,
-                    literal_pat.pattern,
-                    literal_pat.condition_type,
-                    literal_pat.match_type,
-                    literal_pat.file_path,
-                    literal_pat.trait_id,
-                ));
+                        tier_note,
+                        if cross_type { " (cross-type)" } else { "" },
+                        regex_pat.pattern,
+                        regex_pat.condition_type,
+                        regex_pat.file_path,
+                        regex_pat.trait_id,
+                        literal_pat.pattern,
+                        literal_pat.condition_type,
+                        literal_pat.match_type,
+                        literal_pat.file_path,
+                        literal_pat.trait_id,
+                    ));
+                }
             }
-        }
-    }
+            local_warnings
+        })
+        .collect();
+
+    warnings.extend(new_warnings);
 
     let overlaps_found = warnings.len() - initial_warning_count;
     tracing::debug!(
@@ -1919,9 +2002,9 @@ fn regex_could_match_literal(regex: &str, literal: &str) -> bool {
         return true;
     }
 
-    // Slow path: actually compile and test the regex
+    // Slow path: actually compile and test the regex (using cache)
     // This catches cases like "c?mod" matching "chmod"
-    if let Ok(re) = regex::Regex::new(regex) {
+    if let Some(re) = get_cached_regex(regex) {
         if re.is_match(literal) {
             return true;
         }

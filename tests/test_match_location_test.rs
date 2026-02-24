@@ -114,9 +114,9 @@ fn test_hex_search_offset_range_excludes() {
     );
 }
 
-/// Test that content search with offset_range only searches within range.
+/// Test that raw search with offset_range only searches within range.
 #[test]
-fn test_content_search_offset_range_includes() {
+fn test_raw_search_offset_range_includes() {
     let temp_dir = TempDir::new().unwrap();
     let bin_path = temp_dir.path().join("test.bin");
     fs::write(&bin_path, create_test_binary()).unwrap();
@@ -126,7 +126,7 @@ fn test_content_search_offset_range_includes() {
         .args([
             "test-match",
             "--type",
-            "content",
+            "raw",
             "--pattern",
             "BBBB",
             "--offset-range",
@@ -144,9 +144,9 @@ fn test_content_search_offset_range_includes() {
     );
 }
 
-/// Test that content search with offset_range excludes patterns outside range.
+/// Test that raw search with offset_range excludes patterns outside range.
 #[test]
-fn test_content_search_offset_range_excludes() {
+fn test_raw_search_offset_range_excludes() {
     let temp_dir = TempDir::new().unwrap();
     let bin_path = temp_dir.path().join("test.bin");
     fs::write(&bin_path, create_test_binary()).unwrap();
@@ -156,7 +156,7 @@ fn test_content_search_offset_range_excludes() {
         .args([
             "test-match",
             "--type",
-            "content",
+            "raw",
             "--pattern",
             "AAAA",
             "--offset-range",
@@ -237,7 +237,7 @@ fn test_density_uses_effective_range() {
         .args([
             "test-match",
             "--type",
-            "content",
+            "raw",
             "--pattern",
             "DEADBEEF",
             "--offset-range",
@@ -270,7 +270,7 @@ fn test_hex_search_negative_offset_range() {
         .args([
             "test-match",
             "--type",
-            "content",
+            "raw",
             "--pattern",
             "END",
             "--offset-range=-20,",
@@ -393,7 +393,7 @@ fn test_external_ip_filters_private() {
     }
 }
 
-/// Test that base64 search type works.
+/// Test that base64 search type works (using encoded type with base64 encoding).
 #[test]
 fn test_base64_search_type() {
     let temp_dir = TempDir::new().unwrap();
@@ -409,11 +409,13 @@ console.log(decoded);
 
     fs::write(&script_path, script_content).unwrap();
 
-    // Search using base64 type
+    // Search using encoded type with base64 encoding filter
     let output = assert_cmd::cargo_bin_cmd!("flayer")
         .args([
             "test-match",
             "--type",
+            "encoded",
+            "--encoding",
             "base64",
             "--pattern",
             "Hello",
@@ -424,15 +426,15 @@ console.log(decoded);
 
     let stdout = String::from_utf8_lossy(&output.get_output().stdout);
 
-    // Should show base64 search context
+    // Should show encoded search context with base64
     assert!(
-        stdout.contains("base64"),
-        "Should show base64 search type. Output: {}",
+        stdout.contains("encoded") || stdout.contains("base64"),
+        "Should show encoded/base64 search type. Output: {}",
         stdout
     );
 }
 
-/// Test that xor search type works.
+/// Test that xor search type works (using encoded type with xor encoding).
 #[test]
 fn test_xor_search_type() {
     let temp_dir = TempDir::new().unwrap();
@@ -442,11 +444,13 @@ fn test_xor_search_type() {
     let data = vec![0u8; 100];
     fs::write(&bin_path, &data).unwrap();
 
-    // Search using xor type
+    // Search using encoded type with xor encoding filter
     let output = assert_cmd::cargo_bin_cmd!("flayer")
         .args([
             "test-match",
             "--type",
+            "encoded",
+            "--encoding",
             "xor",
             "--pattern",
             "secret",
@@ -457,10 +461,10 @@ fn test_xor_search_type() {
 
     let stdout = String::from_utf8_lossy(&output.get_output().stdout);
 
-    // Should show xor search context
+    // Should show encoded search context with xor
     assert!(
-        stdout.contains("xor"),
-        "Should show xor search type. Output: {}",
+        stdout.contains("encoded") || stdout.contains("xor"),
+        "Should show encoded/xor search type. Output: {}",
         stdout
     );
 }
@@ -472,7 +476,7 @@ fn test_symbol_case_insensitive() {
     let script_path = temp_dir.path().join("test.py");
 
     // Create a Python file with function definitions
-    let script_content = r#"#!/usr/bin/env python3
+    let script_raw = r#"#!/usr/bin/env python3
 def MyFunction():
     pass
 
@@ -480,7 +484,7 @@ def ANOTHER_FUNCTION():
     pass
 "#;
 
-    fs::write(&script_path, script_content).unwrap();
+    fs::write(&script_path, script_raw).unwrap();
 
     // Search WITHOUT --case-insensitive - should only match exact case
     let output = assert_cmd::cargo_bin_cmd!("flayer")
@@ -535,27 +539,27 @@ def ANOTHER_FUNCTION():
     }
 }
 
-/// Test that --external-ip works with content search.
+/// Test that --external-ip works with raw search.
 #[test]
-fn test_external_ip_content_search() {
+fn test_external_ip_raw_search() {
     let temp_dir = TempDir::new().unwrap();
     let script_path = temp_dir.path().join("test.sh");
 
     // Create a script with IPs in text
-    let script_content = r#"#!/bin/bash
+    let script_raw = r#"#!/bin/bash
 # Private IP: 10.0.0.1
 curl http://45.33.32.156/api
 echo "Done"
 "#;
 
-    fs::write(&script_path, script_content).unwrap();
+    fs::write(&script_path, script_raw).unwrap();
 
     // Search for IP pattern with --external-ip
     let output = assert_cmd::cargo_bin_cmd!("flayer")
         .args([
             "test-match",
             "--type",
-            "content",
+            "raw",
             "--pattern",
             r"\d+\.\d+\.\d+\.\d+",
             "--method",
@@ -571,7 +575,7 @@ echo "Done"
     // Should show external_ip constraint
     assert!(
         stdout.contains("external_ip: true"),
-        "Should display external_ip constraint for content search. Output: {}",
+        "Should display external_ip constraint for raw search. Output: {}",
         stdout
     );
 

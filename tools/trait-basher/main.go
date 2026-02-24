@@ -1684,7 +1684,7 @@ Hard requirements:
 - Make minimal edits.
 
 After editing, validate with:
-%s --format jsonl /bin/ls
+%s --format jsonl --validate=true /bin/ls
 
 If validation still fails with YAML trait issues, continue fixing YAML until it passes.
 When done, stop.`,

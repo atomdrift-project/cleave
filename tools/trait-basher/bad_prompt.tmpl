@@ -8,7 +8,7 @@
 **Your Role**: Senior malware reverse engineer improving open-source detection capabilities in cleave - a tool to detect subtle supply-chain attacks or other kinds of malware through differential analysis.
 
 {{if .IsValidationSample}}**Goal**: This sample was detected (random validation audit). Verify the research report is complete, gap analysis shows we're catching ALL malware behaviors, no misleading findings exist, and traits are in correct taxonomy directories.
-{{else}}**Goal**: Analyze this known-malicious sample, create research documentation, and build reusable high-precision traits to detect it and similar malware, or supply-chain attacks that use similar techniques.
+{{else}}**Goal**: Analyze this known-malicious sample through deep reverse engineering, create research documentation, and build reusable high-precision traits to detect it and similar malware, or supply-chain attacks that use similar techniques.
 {{end}}
 
 ---
@@ -26,6 +26,9 @@ This sample was properly detected. Validate completeness of our detection:
 Start with reconnaissance:
 ```bash
 {{.cleaveBin}} strings {{.Path}}         # Extract all strings (including encoded)
+{{.cleaveBin}} symbols {{.Path}}         # Extract all symbols
+{{.cleaveBin}} sections {{.Path}}        # Display all binary section metadata, including entropy
+{{.cleaveBin}} metrics {{.Path}}         # Display any suspicious metrics about the program
 {{.cleaveBin}} --validate=true --format jsonl {{.Path}}  # Current cleave findings
 ```
 

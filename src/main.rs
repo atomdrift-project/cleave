@@ -222,13 +222,17 @@ fn main() -> Result<()> {
 
     // Print banner to stderr (status info never goes to stdout) - only in terminal mode
     if format == cli::OutputFormat::Terminal {
-        // Try to show rule count if cache is available (fast header peek)
+        // Try to show combined rule count from all sources (YARA + traits + composites)
         let enable_third_party = !disabled.third_party;
-        if let Some(rule_count) = yara_engine::peek_cache_rule_count(enable_third_party) {
+        let yara_count = yara_engine::peek_cache_rule_count(enable_third_party).unwrap_or(0);
+        let (trait_count, composite_count) = cache::peek_rule_stats().unwrap_or((0, 0));
+        let total_rules = yara_count + trait_count + composite_count;
+
+        if total_rules > 0 {
             eprintln!(
                 "cleave v{} • {} rules\n",
                 env!("CARGO_PKG_VERSION"),
-                rule_count
+                total_rules
             );
         } else {
             eprintln!(

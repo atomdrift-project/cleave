@@ -51,9 +51,10 @@ Rules follow [MBC (Malware Behavior Catalog)](https://github.com/MBCProject/mbc-
 
 Confidence ranges from 1.0 (AST-level certainty) to heuristic matches (0.7–0.9). Criticality is independent of confidence—a socket import is certain but baseline; a Telegram API endpoint is uncertain but hostile.
 
-## Output
+## Competition
 
-Structured JSON for integration with threat intel platforms, SOAR systems, or ML pipelines. Terminal output is color-coded: 🔴 hostile, 🟡 suspicious, 🔵 notable, ⚪ baseline.
+- cleave was created by the author of [malcontent](https://github.com/chainguard-dev/malcontent): in comparison, cleave offers twice the rule coverage, adds AST parsing, binary reverse engineering, proper handling of Rust/Go strings, and much better encoded payload detection.
+- [capa](https://github.com/mandiant/capa) was our original inspiration. cleave is much faster, with 15X the rule coverage, and significantly broader file format support (such as machO, Python, Shell, etc). 
 
 ## Under the Hood
 

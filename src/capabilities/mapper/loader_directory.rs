@@ -182,6 +182,12 @@ impl super::CapabilityMapper {
                                             anyhow::anyhow!("Regex errors: {:?}", errs)
                                         })?;
 
+                                    // Ensure rule stats are up-to-date for banner display
+                                    let _ = crate::cache::save_rule_stats(
+                                        cache_data.trait_definitions.len(),
+                                        cache_data.composite_rules.len(),
+                                    );
+
                                     return Ok(Self {
                                         symbol_map: cache_data.symbol_map,
                                         trait_definitions: cache_data.trait_definitions,
@@ -2335,6 +2341,13 @@ impl super::CapabilityMapper {
                                 bytes.len(),
                                 cache_path
                             );
+                            // Also save rule stats for fast banner display
+                            if let Err(e) = crate::cache::save_rule_stats(
+                                trait_definitions.len(),
+                                composite_rules.len(),
+                            ) {
+                                tracing::warn!("Failed to save rule stats: {}", e);
+                            }
                         }
                     }
                     Err(e) => {

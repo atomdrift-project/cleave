@@ -192,6 +192,64 @@ pub(crate) fn mapper_cache_path() -> Result<PathBuf> {
     Ok(cache_dir()?.join(cache_key))
 }
 
+/// Rule stats stored in a tiny cache file for fast banner display.
+/// Layout: trait_count(8) + composite_count(8) + timestamp(8) = 24 bytes
+#[allow(dead_code)] // Used by binary
+const STATS_CACHE_SIZE: usize = 24;
+
+/// Get the path to the rule stats cache file
+pub(crate) fn rule_stats_cache_path() -> Result<PathBuf> {
+    Ok(cache_dir()?.join("rule-stats.bin"))
+}
+
+/// Save trait and composite counts to stats cache.
+/// Called when mapper cache is saved.
+pub(crate) fn save_rule_stats(trait_count: usize, composite_count: usize) -> Result<()> {
+    use std::io::Write;
+
+    let path = rule_stats_cache_path()?;
+    let timestamp = cache_timestamp()?
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .context("Invalid timestamp")?
+        .as_secs();
+
+    let mut file = fs::File::create(&path)?;
+    file.write_all(&(trait_count as u64).to_le_bytes())?;
+    file.write_all(&(composite_count as u64).to_le_bytes())?;
+    file.write_all(&timestamp.to_le_bytes())?;
+    Ok(())
+}
+
+/// Peek trait and composite counts from stats cache.
+/// Returns None if cache is missing, invalid, or stale.
+#[allow(dead_code)] // Used by binary
+#[must_use]
+pub(crate) fn peek_rule_stats() -> Option<(usize, usize)> {
+    use std::io::Read;
+
+    let path = rule_stats_cache_path().ok()?;
+    let mut file = fs::File::open(&path).ok()?;
+    let mut buf = [0u8; STATS_CACHE_SIZE];
+    file.read_exact(&mut buf).ok()?;
+
+    let trait_count = u64::from_le_bytes(buf[0..8].try_into().ok()?) as usize;
+    let composite_count = u64::from_le_bytes(buf[8..16].try_into().ok()?) as usize;
+    let cached_timestamp = u64::from_le_bytes(buf[16..24].try_into().ok()?);
+
+    // Validate timestamp matches current traits
+    let current_timestamp = cache_timestamp()
+        .ok()?
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .ok()?
+        .as_secs();
+
+    if cached_timestamp != current_timestamp {
+        return None;
+    }
+
+    Some((trait_count, composite_count))
+}
+
 /// Get the reverse engineering tool analysis cache directory
 /// Returns: {cache_dir}/re/
 pub(crate) fn re_cache_dir() -> Result<PathBuf> {

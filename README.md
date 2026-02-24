@@ -1,4 +1,4 @@
-![cleave](media/logo-small.jpg)
+![cleave](media/logo.jpg)
 
 # cleave
 
@@ -63,7 +63,7 @@ Structured JSON for integration with threat intel platforms, SOAR systems, or ML
 - **Radare2/Rizin** for deep binary reverse engineering (functions, control flow, syscalls, sections)
 - **Goblin** for binary header parsing (Mach-O, ELF, PE)
 - **YARA-X** for signature matching
-- **Payload decoding**: Base64, hex, AES, XOR key material, AMOS ciphers
+- **Payload decoding**: Base64, hex, AES, XOR key material
 
 ## Documentation
 

@@ -107,15 +107,7 @@ traits:
       regex: "open\\([^)]{0,120}[\"'][wa][\"']"
 
   # === Ransom note (atomic) ===
-  - id: files-encrypted-msg
-    desc: Files encrypted message
-    crit: notable
-    conf: 0.7
-    for: [javascript, typescript, python, shell]
-    if:
-      type: string
-      substr: "your files have been encrypted"
-      case_insensitive: true
+  # Removed files-encrypted-msg duplicate - use objectives/impact/ransom/encrypt::files-encrypted-msg
 
   - id: pay-bitcoin-msg
     desc: Pay bitcoin message
@@ -206,23 +198,8 @@ traits:
       substr: "os.rename"
 
   # === Encrypted extensions (atomic) ===
-  - id: ext-encrypted
-    desc: .encrypted extension
-    crit: notable
-    conf: 0.6
-    for: [javascript, typescript, python]
-    if:
-      type: string
-      substr: ".encrypted"
-
-  - id: ext-locked
-    desc: .locked extension
-    crit: notable
-    conf: 0.6
-    for: [javascript, typescript, python]
-    if:
-      type: string
-      substr: ".locked"
+  # Removed ext-encrypted duplicate - use objectives/impact/ransom/encrypt::ext-encrypted
+  # Removed ext-locked duplicate - use objectives/impact/ransom/encrypt::ext-locked
 
   - id: ext-enc
     desc: .enc extension
@@ -362,7 +339,7 @@ composite_rules:
     for: [javascript, typescript, python, shell]
     needs: 2
     any:
-      - id: files-encrypted-msg
+      - id: objectives/impact/ransom/encrypt::files-encrypted-msg
       - id: pay-bitcoin-msg
       - id: pay-btc-msg
       - id: decrypt-files-msg
@@ -388,8 +365,8 @@ composite_rules:
     conf: 0.6
     for: [javascript, typescript, python]
     any:
-      - id: ext-encrypted
-      - id: ext-locked
+      - id: objectives/impact/ransom/encrypt::ext-encrypted
+      - id: objectives/impact/ransom/encrypt::ext-locked
       - id: ext-enc
       - id: ext-crypt
 

@@ -1,4 +1,4 @@
-# Clippy configuration for flayer
+# Clippy configuration for cleave
 # Additional configuration beyond workspace lints in Cargo.toml
 
 # Cognitive complexity threshold - warn if a function is too complex

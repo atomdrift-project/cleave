@@ -1,8 +1,8 @@
 //! Example program.
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
-use flayer::analyzers::pe::PEAnalyzer;
-use flayer::memory_tracker::current_rss;
+use cleave::analyzers::pe::PEAnalyzer;
+use cleave::memory_tracker::current_rss;
 
 fn format_mb(bytes: u64) -> String {
     format!("{:.2} MB", bytes as f64 / 1024.0 / 1024.0)

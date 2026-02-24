@@ -1,6 +1,6 @@
 //! Container and archive metrics (tar, npm packages, etc.)
 
-use flayer_macros::ValidFieldPaths;
+use cleave_macros::ValidFieldPaths;
 use serde::{Deserialize, Serialize};
 
 use super::{is_false, is_zero_f32, is_zero_u32, is_zero_u64};

@@ -28,7 +28,7 @@ fn stats_map() -> &'static DashMap<&'static str, (AtomicU64, AtomicU64)> {
 
 /// Print condition evaluation statistics
 pub(crate) fn print_condition_stats() {
-    if std::env::var("FLAYER_VERBOSE").as_deref() != Ok("1") {
+    if std::env::var("cleave_VERBOSE").as_deref() != Ok("1") {
         return;
     }
 
@@ -952,7 +952,7 @@ impl TraitDefinition {
                 trait_refs: vec![],
                 evidence: vec![crate::types::Evidence {
                     method: "timeout-detection".to_string(),
-                    source: "flayer-evaluator".to_string(),
+                    source: "cleave-evaluator".to_string(),
                     value: format!(
                         "Rule '{}' exceeded {}ms timeout, took {}ms",
                         self.id,
@@ -1968,7 +1968,7 @@ impl CompositeTrait {
                     trait_refs: vec![],
                     evidence: vec![crate::types::Evidence {
                         method: "timeout-detection".to_string(),
-                        source: "flayer-evaluator".to_string(),
+                        source: "cleave-evaluator".to_string(),
                         value: format!(
                             "Composite rule '{}' exceeded {}ms timeout, took {}ms",
                             self.id,

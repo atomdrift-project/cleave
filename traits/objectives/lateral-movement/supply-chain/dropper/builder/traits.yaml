@@ -102,7 +102,7 @@ traits:
   - id: exec-paren
     desc: exec() call
     crit: component
-    for: [python]
+    for: [python, javascript, typescript]
     if:
       type: string
       substr: "exec("

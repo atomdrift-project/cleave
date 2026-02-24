@@ -3,8 +3,8 @@
 
 /// Test for host_info_strings composite rule
 /// This test specifically debugs why the composite rule doesn't fire
-use flayer::capabilities::CapabilityMapper;
-use flayer::types::{AnalysisReport, TargetInfo};
+use cleave::capabilities::CapabilityMapper;
+use cleave::types::{AnalysisReport, TargetInfo};
 
 #[test]
 fn test_host_info_composite_fires_with_4_atomics() {
@@ -19,38 +19,38 @@ fn test_host_info_composite_fires_with_4_atomics() {
 
     // Add strings that should match the host info atomic traits
     report.strings = vec![
-        flayer::types::StringInfo {
+        cleave::types::StringInfo {
             value: "LanIP: 192.168.1.1".to_string(),
             offset: Some(0x100),
             encoding: "ascii".to_string(),
-            string_type: flayer::types::StringType::Const,
+            string_type: cleave::types::StringType::Const,
             section: None,
             encoding_chain: Vec::new(),
             fragments: None,
         },
-        flayer::types::StringInfo {
+        cleave::types::StringInfo {
             value: "GateWay: 192.168.1.254".to_string(),
             offset: Some(0x200),
             encoding: "ascii".to_string(),
-            string_type: flayer::types::StringType::Const,
+            string_type: cleave::types::StringType::Const,
             section: None,
             encoding_chain: Vec::new(),
             fragments: None,
         },
-        flayer::types::StringInfo {
+        cleave::types::StringInfo {
             value: "OSInfo: Linux".to_string(),
             offset: Some(0x300),
             encoding: "ascii".to_string(),
-            string_type: flayer::types::StringType::Const,
+            string_type: cleave::types::StringType::Const,
             section: None,
             encoding_chain: Vec::new(),
             fragments: None,
         },
-        flayer::types::StringInfo {
+        cleave::types::StringInfo {
             value: "Userame: root".to_string(),
             offset: Some(0x400),
             encoding: "ascii".to_string(),
-            string_type: flayer::types::StringType::Const,
+            string_type: cleave::types::StringType::Const,
             section: None,
             encoding_chain: Vec::new(),
             fragments: None,

@@ -4,7 +4,7 @@
 //! Analysis results are stored as zstd-compressed JSON files, keyed by file SHA256.
 //!
 //! # Cache Location
-//! Cache files are stored in `~/.cache/flayer/re/` by default.
+//! Cache files are stored in `~/.cache/cleave/re/` by default.
 //!
 //! # Cache Format
 //! - Files are named by their SHA256 hash

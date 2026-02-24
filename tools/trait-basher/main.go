@@ -1,6 +1,6 @@
-// trait-basher orchestrates AI to tune flayer trait definitions.
+// trait-basher orchestrates AI to tune cleave trait definitions.
 //
-// It scans a directory with flayer and invokes an AI assistant (Claude, Gemini,
+// It scans a directory with cleave and invokes an AI assistant (Claude, Gemini,
 // Codex, or Opencode) to analyze findings and modify/create traits as needed.
 // Providers are tried in order; if one fails (e.g., quota exceeded), the next is tried.
 //
@@ -309,7 +309,7 @@ var geminiDefaultModels = []string{
 
 // archiveNeedsReview returns true if the archive needs review.
 // Returns (needsReview, isValidationSample).
-// Uses the archive summary findings when available (from flayer's aggregated output).
+// Uses the archive summary findings when available (from cleave's aggregated output).
 // For known-good archives: review if ANY hostile OR 2+ suspicious (to reduce false positives).
 //
 //	Up to 1 suspicious finding is acceptable.
@@ -327,7 +327,7 @@ func archiveNeedsReview(a *ArchiveAnalysis, knownGood bool, validateEvery int) (
 		return needsReview(agg, knownGood, validateEvery)
 	}
 
-	// Fallback to member-based logic (legacy behavior, shouldn't happen with new flayer)
+	// Fallback to member-based logic (legacy behavior, shouldn't happen with new cleave)
 	// Aggregate all member findings for accurate threshold checking
 	agg := FileAnalysis{Path: a.ArchivePath}
 	for _, m := range a.Members {
@@ -364,8 +364,8 @@ gemini-2.5-pro, gemini-2.5-flash. Popular choices:
             gemini-2.5-pro, gemini-2.5-flash, gemini-2.5-flash-lite
   codex:    gpt-5-codex, gpt-5-codex-mini, gpt-5
   opencode: gpt-4.1, gpt-4.1-mini, o4-mini, o3, moonshotai/kimi-k2.5`)
-	repoRoot := flag.String("repo-root", "", "Path to flayer repo root (auto-detected if not specified)")
-	useCargo := flag.Bool("cargo", true, "Use 'cargo run --release' instead of flayer binary")
+	repoRoot := flag.String("repo-root", "", "Path to cleave repo root (auto-detected if not specified)")
+	useCargo := flag.Bool("cargo", true, "Use 'cargo run --release' instead of cleave binary")
 	timeout := flag.Duration("timeout", 20*time.Minute, "Maximum time for each AI invocation")
 	idleTimeout := flag.Duration("idle-timeout", 8*time.Minute, "Kill LLM if no output for this duration")
 	flush := flag.Bool("flush", false, "Clear analysis cache and reprocess all files")
@@ -440,7 +440,7 @@ gemini-2.5-pro, gemini-2.5-flash. Popular choices:
 		providers = expanded
 	}
 
-	// Find repo root (for running flayer via cargo).
+	// Find repo root (for running cleave via cargo).
 	resolvedRoot := *repoRoot
 	if resolvedRoot == "" {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -466,7 +466,7 @@ gemini-2.5-pro, gemini-2.5-flash. Popular choices:
 	cleanupOrphanedExtractDirs()
 
 	// Create temp directory for extracted samples with PID for easier debugging.
-	// flayer writes files to <extract-dir>/<sha256[0:6]>/<relative-path>.
+	// cleave writes files to <extract-dir>/<sha256[0:6]>/<relative-path>.
 	// Directory persists across rescans for cache reuse.
 	extractDir := filepath.Join(os.TempDir(), fmt.Sprintf("tbsh.%d", os.Getpid()))
 	if err := os.MkdirAll(extractDir, 0o750); err != nil {
@@ -534,7 +534,7 @@ gemini-2.5-pro, gemini-2.5-flash. Popular choices:
 
 	ctx := context.Background()
 
-	// Build or locate flayer binary
+	// Build or locate cleave binary
 	if *useCargo {
 		fmt.Fprint(os.Stderr, "Building release binary with cargo build --release...\n")
 
@@ -552,23 +552,23 @@ gemini-2.5-pro, gemini-2.5-flash. Popular choices:
 		}
 
 		// Determine binary path based on OS
-		binName := "flayer"
+		binName := "cleave"
 		if runtime.GOOS == "windows" {
-			binName = "flayer.exe"
+			binName = "cleave.exe"
 		}
-		cfg.flayerBin = filepath.Join(resolvedRoot, "target", "release", binName)
+		cfg.cleaveBin = filepath.Join(resolvedRoot, "target", "release", binName)
 
 		// Verify the binary exists
-		if _, err := os.Stat(cfg.flayerBin); err != nil {
-			log.Fatalf("binary not found at %s: %v", cfg.flayerBin, err)
+		if _, err := os.Stat(cfg.cleaveBin); err != nil {
+			log.Fatalf("binary not found at %s: %v", cfg.cleaveBin, err)
 		}
 
-		fmt.Fprintf(os.Stderr, "Built release binary: %s\n", cfg.flayerBin)
+		fmt.Fprintf(os.Stderr, "Built release binary: %s\n", cfg.cleaveBin)
 	} else {
-		cfg.flayerBin = "flayer"
+		cfg.cleaveBin = "cleave"
 	}
 
-	// Sanity check: run flayer on /bin/ls to catch code errors early.
+	// Sanity check: run cleave on /bin/ls to catch code errors early.
 	for attempt := 1; ; attempt++ {
 		if err := sanityCheck(ctx, cfg); err != nil {
 			if !isYAMLTraitIssue(err.Error()) || attempt > maxYAMLAutoFixAttempts {
@@ -636,7 +636,7 @@ gemini-2.5-pro, gemini-2.5-flash. Popular choices:
 				time.Sleep(1 * time.Second)
 				continue
 			}
-			// For flayer or other errors, retry after delay (already slept in streamAnalyzeAndReview)
+			// For cleave or other errors, retry after delay (already slept in streamAnalyzeAndReview)
 			fmt.Fprint(os.Stderr, "Restarting scan after error...\n")
 			continue
 		}
@@ -717,32 +717,32 @@ type streamState struct {
 	filesReviewedCount int // Count of files sent to LLM for review
 }
 
-// streamAnalyzeAndReview streams flayer output and reviews archives as they complete.
+// streamAnalyzeAndReview streams cleave output and reviews archives as they complete.
 func streamAnalyzeAndReview(ctx context.Context, cfg *config, dbMode string) (*streamStats, error) {
 	// Generate unique session ID early for log file naming and log entries
 	sessionID := generateSessionID()
 	pid := os.Getpid()
 
-	// Determine log file path for flayer's own logs (session-specific)
-	flayerLogPath, err := getflayerLogFilePath(sessionID)
+	// Determine log file path for cleave's own logs (session-specific)
+	cleaveLogPath, err := getcleaveLogFilePath(sessionID)
 	if err != nil {
-		return nil, fmt.Errorf("could not determine flayer log path: %w", err)
+		return nil, fmt.Errorf("could not determine cleave log path: %w", err)
 	}
 
-	// Build flayer command with --extract-dir for file extraction.
-	// flayer extracts all analyzed files to <extract-dir>/<sha256>/<relative-path>.
+	// Build cleave command with --extract-dir for file extraction.
+	// cleave extracts all analyzed files to <extract-dir>/<sha256>/<relative-path>.
 	// Use --max-file-mem 0 to force all extraction to disk (not RAM) to prevent OOM
 	// Use --verbose and --log-file to capture comprehensive logs for debugging OOM issues
-	// Use --validate=true to enable trait validation (disabled by default in flayer)
+	// Use --validate=true to enable trait validation (disabled by default in cleave)
 	args := []string{
 		"--format", "jsonl",
 		"--extract-dir", cfg.extractDir,
 		"--max-file-mem", "0",
-		"--log-file", flayerLogPath,
+		"--log-file", cleaveLogPath,
 		"--validate=true",
 	}
 	args = append(args, cfg.dirs...)
-	cmd := exec.CommandContext(ctx, cfg.flayerBin, args...) //nolint:gosec // flayerBin is built from trusted cargo
+	cmd := exec.CommandContext(ctx, cfg.cleaveBin, args...) //nolint:gosec // cleaveBin is built from trusted cargo
 	if cfg.useCargo {
 		cmd.Dir = cfg.repoRoot
 	}
@@ -758,14 +758,14 @@ func streamAnalyzeAndReview(ctx context.Context, cfg *config, dbMode string) (*s
 	}
 
 	if err := cmd.Start(); err != nil {
-		return nil, fmt.Errorf("could not start flayer: %w", err)
+		return nil, fmt.Errorf("could not start cleave: %w", err)
 	}
 
-	flayerPID := cmd.Process.Pid
-	fmt.Fprintf(os.Stderr, "flayer logs: %s (PID %d)\n", flayerLogPath, flayerPID)
+	cleavePID := cmd.Process.Pid
+	fmt.Fprintf(os.Stderr, "cleave logs: %s (PID %d)\n", cleaveLogPath, cleavePID)
 
-	// Stream flayer stderr to our own stderr in background.
-	// Captures relevant lines for error messages when flayer fails.
+	// Stream cleave stderr to our own stderr in background.
+	// Captures relevant lines for error messages when cleave fails.
 	stderrCh := make(chan []string, 1)
 	go func() {
 		var lines []string
@@ -776,7 +776,7 @@ func streamAnalyzeAndReview(ctx context.Context, cfg *config, dbMode string) (*s
 			if strings.Contains(s, "Periodic memory check") {
 				continue
 			}
-			fmt.Fprintf(os.Stderr, "[flayer:%d] %s\n", flayerPID, s)
+			fmt.Fprintf(os.Stderr, "[cleave:%d] %s\n", cleavePID, s)
 			// Capture YAML validation keywords for error detection
 			lo := strings.ToLower(s)
 			if strings.Contains(lo, "error") || strings.Contains(lo, "yaml") ||
@@ -818,9 +818,9 @@ func streamAnalyzeAndReview(ctx context.Context, cfg *config, dbMode string) (*s
 	)
 
 	// Build full command line for logging
-	flayerArgs := []string{"--format", "jsonl", "--extract-dir", cfg.extractDir, "--max-file-mem", "0", "--validate=true"}
-	flayerArgs = append(flayerArgs, cfg.dirs...)
-	fullCmd := append([]string{cfg.flayerBin}, flayerArgs...)
+	cleaveArgs := []string{"--format", "jsonl", "--extract-dir", cfg.extractDir, "--max-file-mem", "0", "--validate=true"}
+	cleaveArgs = append(cleaveArgs, cfg.dirs...)
+	fullCmd := append([]string{cfg.cleaveBin}, cleaveArgs...)
 
 	sessionStart := time.Now()
 
@@ -828,8 +828,8 @@ func streamAnalyzeAndReview(ctx context.Context, cfg *config, dbMode string) (*s
 	fmt.Fprintf(os.Stderr, "\n=== trait-basher session %s (PID %d) ===\n", sessionID, pid)
 
 	logger.Info("trait-basher session started",
-		"flayer_bin", cfg.flayerBin,
-		"flayer_args", strings.Join(flayerArgs, " "),
+		"cleave_bin", cfg.cleaveBin,
+		"cleave_args", strings.Join(cleaveArgs, " "),
 		"full_command", strings.Join(fullCmd, " "),
 		"dirs", cfg.dirs,
 		"provider", cfg.provider,
@@ -935,7 +935,7 @@ func streamAnalyzeAndReview(ctx context.Context, cfg *config, dbMode string) (*s
 		// Check if we need to restart (hit review limit)
 		if state.stats.shouldRestart {
 			clearProgressLine()
-			fmt.Fprintf(os.Stderr, "%s⚡%s Reviewed %s%d%s files - restarting scan to verify trait changes (killing flayer)\n",
+			fmt.Fprintf(os.Stderr, "%s⚡%s Reviewed %s%d%s files - restarting scan to verify trait changes (killing cleave)\n",
 				colorYellow, colorReset, colorBold, state.cfg.rescanAfter, colorReset)
 			cmd.Process.Kill() //nolint:errcheck,gosec // intentional kill on restart
 			cmd.Wait()         //nolint:errcheck,gosec // reap the process
@@ -1040,27 +1040,27 @@ func streamAnalyzeAndReview(ctx context.Context, cfg *config, dbMode string) (*s
 	<-resultsDone
 
 	if err := scanner.Err(); err != nil {
-		// Kill orphaned flayer process before returning
-		log.Print("killing flayer...")
+		// Kill orphaned cleave process before returning
+		log.Print("killing cleave...")
 		cmd.Process.Kill() //nolint:errcheck,gosec // best-effort kill on error, process may already be dead
 		cmd.Wait()         //nolint:errcheck,gosec // reap the process, error doesn't matter
 		delay := retryDelay()
-		fmt.Fprintf(os.Stderr, "\n%s⚠️  Error reading flayer output:%s %v\n", colorYellow, colorReset, err)
+		fmt.Fprintf(os.Stderr, "\n%s⚠️  Error reading cleave output:%s %v\n", colorYellow, colorReset, err)
 		fmt.Fprintf(os.Stderr, "   %sRetrying in %v...%s\n", colorDim, delay.Round(time.Second), colorReset)
 		time.Sleep(delay)
-		return state.stats, fmt.Errorf("error reading flayer output: %w (will retry)", err)
+		return state.stats, fmt.Errorf("error reading cleave output: %w (will retry)", err)
 	}
 
 	if err := cmd.Wait(); err != nil {
 		delay := retryDelay()
-		fmt.Fprintf(os.Stderr, "\n%s⚠️  flayer failed:%s %v (check flayer logs for details)\n", colorYellow, colorReset, err)
+		fmt.Fprintf(os.Stderr, "\n%s⚠️  cleave failed:%s %v (check cleave logs for details)\n", colorYellow, colorReset, err)
 		fmt.Fprintf(os.Stderr, "   %sRetrying in %v...%s\n", colorDim, delay.Round(time.Second), colorReset)
 		time.Sleep(delay)
 		// Include captured stderr for YAML issue detection
 		if lines := <-stderrCh; len(lines) > 0 {
-			return state.stats, fmt.Errorf("flayer failed: %w\n%s", err, strings.Join(lines, "\n"))
+			return state.stats, fmt.Errorf("cleave failed: %w\n%s", err, strings.Join(lines, "\n"))
 		}
-		return state.stats, fmt.Errorf("flayer failed: %w (will retry)", err)
+		return state.stats, fmt.Errorf("cleave failed: %w (will retry)", err)
 	}
 
 	// Final scan summary
@@ -1098,7 +1098,7 @@ func streamAnalyzeAndReview(ctx context.Context, cfg *config, dbMode string) (*s
 func processFileEntry(ctx context.Context, st *streamState, f FileAnalysis, ap string) {
 	switch {
 	case ap == "" && st.currentArchivePath != "" && f.Path == st.currentArchivePath:
-		// Archive summary entry - flayer now emits this after all member files
+		// Archive summary entry - cleave now emits this after all member files
 		// It contains aggregated risk/findings from all members, so we use it directly
 		// instead of computing from members (which may have arrived out of order)
 		if st.currentArchive != nil {
@@ -1246,7 +1246,7 @@ func processCompletedArchive(ctx context.Context, st *streamState) {
 
 		// Save training data for properly classified archives
 		if st.cfg.trainingDataDir != "" {
-			// Concatenate all member JSONL lines (full flayer output)
+			// Concatenate all member JSONL lines (full cleave output)
 			var allLines []string
 			for _, m := range archive.Members {
 				if m.RawJSONL != "" {
@@ -1620,12 +1620,12 @@ func realFileNeedsReview(rf *RealFileAnalysis, knownGood bool, validateEvery int
 	return needsReview(agg, knownGood, validateEvery)
 }
 
-// sanityCheck runs flayer on /bin/ls to catch code errors early.
+// sanityCheck runs cleave on /bin/ls to catch code errors early.
 func sanityCheck(ctx context.Context, cfg *config) error {
 	const testFile = "/bin/ls"
-	fmt.Fprintf(os.Stderr, "Sanity check: running flayer on %s...\n", testFile)
+	fmt.Fprintf(os.Stderr, "Sanity check: running cleave on %s...\n", testFile)
 
-	cmd := exec.CommandContext(ctx, cfg.flayerBin, "--format", "jsonl", "--validate=true", testFile) //nolint:gosec // flayerBin is built from trusted cargo
+	cmd := exec.CommandContext(ctx, cfg.cleaveBin, "--format", "jsonl", "--validate=true", testFile) //nolint:gosec // cleaveBin is built from trusted cargo
 	if cfg.useCargo {
 		cmd.Dir = cfg.repoRoot // Run from repo root if using cargo
 	}
@@ -1647,9 +1647,9 @@ func sanityCheck(ctx context.Context, cfg *config) error {
 			errText = strings.TrimSpace(stdout.String())
 		}
 		if errText != "" {
-			return fmt.Errorf("flayer failed on %s: %w: %s", testFile, err, errText)
+			return fmt.Errorf("cleave failed on %s: %w: %s", testFile, err, errText)
 		}
-		return fmt.Errorf("flayer failed on %s: %w", testFile, err)
+		return fmt.Errorf("cleave failed on %s: %w", testFile, err)
 	}
 
 	fmt.Fprint(os.Stderr, "Sanity check passed.\n\n")
@@ -1670,7 +1670,7 @@ func isYAMLTraitIssue(msg string) bool {
 }
 
 func buildYAMLTraitFixPrompt(cfg *config, phase, failureOutput string) string {
-	return fmt.Sprintf(`Fix flayer trait YAML issues only.
+	return fmt.Sprintf(`Fix cleave trait YAML issues only.
 
 Failure phase: %s
 
@@ -1692,7 +1692,7 @@ When done, stop.`,
 		phase,
 		failureOutput,
 		cfg.repoRoot,
-		cfg.flayerBin,
+		cfg.cleaveBin,
 	)
 }
 
@@ -1969,7 +1969,7 @@ func invokeAI(ctx context.Context, cfg *config, f FileAnalysis, isValidation boo
 
 	data := promptData{
 		Path:               f.Path,
-		flayerBin:         cfg.flayerBin,
+		cleaveBin:         cfg.cleaveBin,
 		TraitsDir:          cfg.repoRoot + "/traits/",
 		IsArchive:          false,
 		IsBad:              cfg.knownBad,
@@ -2015,9 +2015,9 @@ func invokeAIArchive(ctx context.Context, cfg *config, a *ArchiveAnalysis, isVal
 
 	fileEntries, extractDir := buildArchiveFileEntries(sourceFiles, cfg.extractDir)
 
-	flayerPath := extractDir
-	if flayerPath == "" {
-		flayerPath = a.ArchivePath
+	cleavePath := extractDir
+	if cleavePath == "" {
+		cleavePath = a.ArchivePath
 	}
 
 	fileHash, err := hashFile(a.ArchivePath)
@@ -2029,11 +2029,11 @@ func invokeAIArchive(ctx context.Context, cfg *config, a *ArchiveAnalysis, isVal
 	hostileCount, suspiciousCount := countFindingsByCrit(allFindings)
 
 	data := promptData{
-		Path:               flayerPath,
+		Path:               cleavePath,
 		ArchiveName:        filepath.Base(a.ArchivePath),
 		Files:              fileEntries,
 		Count:              countFilesWithConcerns(a.Members),
-		flayerBin:         cfg.flayerBin,
+		cleaveBin:         cfg.cleaveBin,
 		TraitsDir:          cfg.repoRoot + "/traits/",
 		IsArchive:          true,
 		IsBad:              cfg.knownBad,

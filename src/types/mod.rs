@@ -1,6 +1,6 @@
-//! Type definitions for flayer analysis reports
+//! Type definitions for cleave analysis reports
 //!
-//! This module provides all the type definitions used throughout flayer for
+//! This module provides all the type definitions used throughout cleave for
 //! representing analysis results, metrics, and findings.
 
 // Helper functions for serde skip_serializing_if (like Go's omitempty)

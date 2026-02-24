@@ -2,9 +2,9 @@
 //!
 //! This module provides caching functionality to avoid re-analyzing unchanged files.
 //! Caches are stored in OS-appropriate directories:
-//! - macOS: `~/Library/Caches/flayer/`
-//! - Linux: `~/.cache/flayer/`
-//! - Windows: `%LOCALAPPDATA%\flayer\`
+//! - macOS: `~/Library/Caches/cleave/`
+//! - Linux: `~/.cache/cleave/`
+//! - Windows: `%LOCALAPPDATA%\cleave\`
 //!
 //! # Cache Types
 //!
@@ -21,17 +21,17 @@ use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 use walkdir::WalkDir;
 
-/// Get the cache directory for flayer
+/// Get the cache directory for cleave
 /// Returns OS-appropriate cache directory:
-/// - macOS: ~/Library/Caches/flayer
-/// - Linux: ~/.cache/flayer
-/// - Windows: %LOCALAPPDATA%\flayer
+/// - macOS: ~/Library/Caches/cleave
+/// - Linux: ~/.cache/cleave
+/// - Windows: %LOCALAPPDATA%\cleave
 pub(crate) fn cache_dir() -> Result<PathBuf> {
     let mut candidates = Vec::new();
     if let Some(base_cache) = dirs::cache_dir() {
-        candidates.push(base_cache.join("flayer"));
+        candidates.push(base_cache.join("cleave"));
     }
-    candidates.push(std::env::temp_dir().join("flayer-cache"));
+    candidates.push(std::env::temp_dir().join("cleave-cache"));
 
     for cache_path in candidates {
         if fs::create_dir_all(&cache_path).is_ok() {
@@ -46,9 +46,9 @@ pub(crate) fn cache_dir() -> Result<PathBuf> {
     anyhow::bail!("Failed to create cache directory")
 }
 
-/// Returns the traits directory path from FLAYER_TRAITS_PATH env var or "traits" default
+/// Returns the traits directory path from cleave_TRAITS_PATH env var or "traits" default
 pub(crate) fn traits_path() -> PathBuf {
-    std::env::var("FLAYER_TRAITS_PATH")
+    std::env::var("cleave_TRAITS_PATH")
         .map(PathBuf::from)
         .unwrap_or_else(|_| PathBuf::from("traits"))
 }
@@ -122,7 +122,7 @@ pub(crate) fn most_recent_yara_mtime() -> Result<SystemTime> {
     Ok(most_recent)
 }
 
-/// Returns the modification time of the flayer binary
+/// Returns the modification time of the cleave binary
 pub(crate) fn binary_mtime() -> Result<SystemTime> {
     let exe_path = std::env::current_exe().context("Failed to get current executable path")?;
 
@@ -281,7 +281,7 @@ mod tests {
         // Should either succeed or fail, but not panic
         match result {
             Ok(path) => {
-                assert!(path.to_string_lossy().contains("flayer"));
+                assert!(path.to_string_lossy().contains("cleave"));
             }
             Err(_) => {
                 // Some environments may not have cache dir

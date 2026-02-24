@@ -61,21 +61,21 @@ impl YaraEngine {
     /// Uses cache if available and valid
     ///
     /// Environment variables:
-    /// - `FLAYER_SKIP_YARA=1`: Skip YARA entirely (for fast unit tests)
-    /// - `FLAYER_BUILTIN_YARA_ONLY=1`: Load only built-in rules, skip third-party (~500 vs 14k)
-    /// - `FLAYER_MINIMAL_RULES=1`: Load only essential rules (~100 instead of 14k)
+    /// - `cleave_SKIP_YARA=1`: Skip YARA entirely (for fast unit tests)
+    /// - `cleave_BUILTIN_YARA_ONLY=1`: Load only built-in rules, skip third-party (~500 vs 14k)
+    /// - `cleave_MINIMAL_RULES=1`: Load only essential rules (~100 instead of 14k)
     pub(crate) fn load_all_rules(&mut self, enable_third_party: bool) -> (usize, usize) {
         let _span = tracing::info_span!("load_yara_rules").entered();
 
         // Fast path: skip YARA entirely for tests that don't need it
-        if std::env::var("FLAYER_SKIP_YARA").is_ok() {
-            tracing::info!("YARA skipped (FLAYER_SKIP_YARA set)");
+        if std::env::var("cleave_SKIP_YARA").is_ok() {
+            tracing::info!("YARA skipped (cleave_SKIP_YARA set)");
             return (0, 0);
         }
 
         // Override third-party setting via environment (for tests that need YARA but not 14k rules)
         let enable_third_party =
-            enable_third_party && std::env::var("FLAYER_BUILTIN_YARA_ONLY").is_err();
+            enable_third_party && std::env::var("cleave_BUILTIN_YARA_ONLY").is_err();
 
         tracing::info!("Loading YARA rules");
 

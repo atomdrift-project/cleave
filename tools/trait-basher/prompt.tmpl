@@ -5,14 +5,14 @@
 {{end}}
 **Objective**: {{if .IsBad}}Perform a deep reverse-analysis of the binary, and once its unique characteristics are understood, add high-signal detections for missed behaviors.{{else}}Fix false positives while preserving accurate detections.{{end}}
 
-You are an expert security engineer, doing cutting-edge security research that we're using to improve flayer, an open-source tool designed to detect subtle malware introduced in supply-chain attacks - such as in xzutils or ultralytics, using differential analysis of its capabilities and unique characteristics.
+You are an expert security engineer, doing cutting-edge security research that we're using to improve cleave, an open-source tool designed to detect subtle malware introduced in supply-chain attacks - such as in xzutils or ultralytics, using differential analysis of its capabilities and unique characteristics.
 
 ## Constraints
 
 Study the sample and understand all of it's unique characteristics and capabilities
 
-Reverse-engineering tools like r2 (radare2), nm, readelf are also available. You can use the "flayer strings" subcommand
-to better understand the strings that flayer can see in a program, often hidden ones. There is also the "flayer symbols" subcommand to dump symbols.
+Reverse-engineering tools like r2 (radare2), nm, readelf are also available. You can use the "cleave strings" subcommand
+to better understand the strings that cleave can see in a program, often hidden ones. There is also the "cleave symbols" subcommand to dump symbols.
 
 **Critical rules** (from TAXONOMY.md):
 - `micro-behaviors/` cannot reference `objectives/` (capabilities are atomic, not intent-inferring)
@@ -57,7 +57,7 @@ to better understand the strings that flayer can see in a program, often hidden 
 
 # Success Criteria
 - You have studied the sample and understand all of it's unique characteristics and capabilities
-- Run flayer --validate=true --format=jsonl against the file and ensure that it emits no warnings and produces the results you were hoping for. Iterate until it does.
+- Run cleave --validate=true --format=jsonl against the file and ensure that it emits no warnings and produces the results you were hoping for. Iterate until it does.
 - Ensure that all of the traits that tell the story about what this program does are "notable" rather than "baseline"
 - Ensure that all traits that would be very surprising from a security point-of-view in a random program are at least "suspicious"
 - Ensure that any traits that rely on the same evidence are not duplicates that should be merged.
@@ -65,13 +65,13 @@ to better understand the strings that flayer can see in a program, often hidden 
 
 ## Debug Commands
 ```
-{{.flayerBin}} --validate=true {{.Path}} --format jsonl   # shows full list of traits, including baseline; also shows paths to rule files
-{{.flayerBin}} metrics {{.Path}}  # shows program structure metrics
-{{.flayerBin}} symbols {{.Path}}  # shows detected symbols
-{{.flayerBin}} symbols {{.Path}}  # shows detected segment data
-{{.flayerBin}} strings {{.Path}}  # shows detected segment strings, even encoded ones
-{{.flayerBin}} test-rules {{.Path}} --rules "rule-id"
-{{.flayerBin}} test-match {{.Path}} --type string --pattern "X"
+{{.cleaveBin}} --validate=true {{.Path}} --format jsonl   # shows full list of traits, including baseline; also shows paths to rule files
+{{.cleaveBin}} metrics {{.Path}}  # shows program structure metrics
+{{.cleaveBin}} symbols {{.Path}}  # shows detected symbols
+{{.cleaveBin}} symbols {{.Path}}  # shows detected segment data
+{{.cleaveBin}} strings {{.Path}}  # shows detected segment strings, even encoded ones
+{{.cleaveBin}} test-rules {{.Path}} --rules "rule-id"
+{{.cleaveBin}} test-match {{.Path}} --type string --pattern "X"
 
 IMPORTANT: Read RULES.md to understand the bizarre rule syntax, and TAXONOMY.md to understand what directories they are placed in.
 It is critical that traits - especially atomics - are placed in the correct directory for what they will match, rather than alongside the composite.

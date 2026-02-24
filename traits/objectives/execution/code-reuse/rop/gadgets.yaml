@@ -40,26 +40,29 @@ traits:
   # === ROP Gadget Patterns ===
 
   # POP; POP; RET pattern (common ROP gadget)
+  # Note: These patterns occur naturally in function epilogues.
+  # Only meaningful when combined with other ROP indicators in composite rules.
   - id: pop-pop-ret-gadget
     desc: POP; POP; RET gadget pattern
-    crit: suspicious
+    crit: component
     conf: 0.9
     if:
       type: hex
       section: text
       pattern: "5? 5? C3"
-      count_min: 5
+      count_min: 50
 
   # POP; RET pattern (very common gadget)
+  # Note: Extremely common in all compiled code - only useful in composites
   - id: pop-ret-gadget
     desc: POP; RET gadget pattern
-    crit: notable
+    crit: component
     conf: 0.75
     if:
       type: hex
       section: text
       pattern: "5? C3"
-      count_min: 10
+      count_min: 100
 
   # Short instruction followed by RET (1-3 byte gadgets)
   - id: short-ret-gadgets

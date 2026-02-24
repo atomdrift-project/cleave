@@ -43,8 +43,8 @@ typedef unsigned char uint8_t;
     // Scan the file and check for the hardcoded-ip finding
     // Note: --format is a global flag, must come before the subcommand
     // Skip YARA - these tests use YAML traits, not YARA rules
-    let output = assert_cmd::cargo_bin_cmd!("flayer")
-        .env("FLAYER_SKIP_YARA", "1")
+    let output = assert_cmd::cargo_bin_cmd!("cleave")
+        .env("cleave_SKIP_YARA", "1")
         .args([
             "--format",
             "jsonl",
@@ -87,8 +87,8 @@ int main() {
     // Scan the file
     // Note: --format is a global flag, must come before the subcommand
     // Skip YARA - these tests use YAML traits, not YARA rules
-    let output = assert_cmd::cargo_bin_cmd!("flayer")
-        .env("FLAYER_SKIP_YARA", "1")
+    let output = assert_cmd::cargo_bin_cmd!("cleave")
+        .env("cleave_SKIP_YARA", "1")
         .args(["--format", "jsonl", "analyze", c_path.to_str().unwrap()])
         .assert()
         .success();
@@ -139,8 +139,8 @@ echo "This script is safe"
     // Scan with custom traits
     // Note: --format, --validate, and --traits-dir are global flags, must come before the subcommand
     // Skip YARA since we're only testing custom trait conditions (not YARA rules)
-    let output = assert_cmd::cargo_bin_cmd!("flayer")
-        .env("FLAYER_SKIP_YARA", "1")
+    let output = assert_cmd::cargo_bin_cmd!("cleave")
+        .env("cleave_SKIP_YARA", "1")
         .args([
             "--format",
             "jsonl",
@@ -217,8 +217,8 @@ def connect():
     // Scan with custom traits
     // Note: --format, --validate, and --traits-dir are global flags, must come before the subcommand
     // Skip YARA since we're only testing custom trait conditions (not YARA rules)
-    let output = assert_cmd::cargo_bin_cmd!("flayer")
-        .env("FLAYER_SKIP_YARA", "1")
+    let output = assert_cmd::cargo_bin_cmd!("cleave")
+        .env("cleave_SKIP_YARA", "1")
         .args([
             "--format",
             "jsonl",

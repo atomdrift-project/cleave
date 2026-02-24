@@ -1,4 +1,4 @@
-//! RTF (Rich Text Format) document analyzer for flayer
+//! RTF (Rich Text Format) document analyzer for cleave
 //!
 //! This analyzer uses the standalone RTF parser to perform structural analysis
 //! on RTF documents. Pattern detection (OLE objects, exploits, etc.) is handled

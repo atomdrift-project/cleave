@@ -105,13 +105,13 @@ func getLogFilePath(sessionID string) (string, error) {
 	return filepath.Join(logDir, fmt.Sprintf("archives-%s.log", sessionID)), nil
 }
 
-// getflayerLogFilePath returns the path for flayer's own verbose logs.
-func getflayerLogFilePath(sessionID string) (string, error) {
+// getcleaveLogFilePath returns the path for cleave's own verbose logs.
+func getcleaveLogFilePath(sessionID string) (string, error) {
 	logDir, err := getLogDir()
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(logDir, fmt.Sprintf("flayer-%s.log", sessionID)), nil
+	return filepath.Join(logDir, fmt.Sprintf("cleave-%s.log", sessionID)), nil
 }
 
 // generateSessionID returns a UUID v4 for session tracking.

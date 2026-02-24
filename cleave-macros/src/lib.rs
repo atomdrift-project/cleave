@@ -1,4 +1,4 @@
-//! Procedural macros for flayer
+//! Procedural macros for cleave
 //!
 //! This crate provides derive macros for automatically implementing traits
 //! based on struct field definitions.

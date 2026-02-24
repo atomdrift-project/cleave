@@ -22,9 +22,9 @@ fn test_analyze_command_handles_directory() {
     fs::write(subdir.join("test2.sh"), "#!/bin/bash\necho 'test2'").unwrap();
 
     #[allow(deprecated)]
-    assert_cmd::Command::cargo_bin("flayer")
+    assert_cmd::Command::cargo_bin("cleave")
         .unwrap()
-        .env("FLAYER_SKIP_YARA", "1") // Skip YARA - testing directory scanning
+        .env("cleave_SKIP_YARA", "1") // Skip YARA - testing directory scanning
         .args(["--json", "analyze", temp_dir.path().to_str().unwrap()])
         .assert()
         .success()
@@ -40,9 +40,9 @@ fn test_analyze_command_handles_single_file() {
     fs::write(&test_file, "#!/bin/bash\necho 'hello'").unwrap();
 
     #[allow(deprecated)]
-    assert_cmd::Command::cargo_bin("flayer")
+    assert_cmd::Command::cargo_bin("cleave")
         .unwrap()
-        .env("FLAYER_SKIP_YARA", "1") // Skip YARA - testing directory scanning
+        .env("cleave_SKIP_YARA", "1") // Skip YARA - testing directory scanning
         .args(["--json", "analyze", test_file.to_str().unwrap()])
         .assert()
         .success()
@@ -60,9 +60,9 @@ fn test_analyze_command_handles_multiple_paths() {
     fs::write(temp_dir2.path().join("file2.sh"), "#!/bin/bash\necho '2'").unwrap();
 
     #[allow(deprecated)]
-    assert_cmd::Command::cargo_bin("flayer")
+    assert_cmd::Command::cargo_bin("cleave")
         .unwrap()
-        .env("FLAYER_SKIP_YARA", "1") // Skip YARA - testing directory scanning
+        .env("cleave_SKIP_YARA", "1") // Skip YARA - testing directory scanning
         .args([
             "--json",
             "analyze",
@@ -80,9 +80,9 @@ fn test_analyze_empty_directory() {
     let temp_dir = TempDir::new().unwrap();
 
     #[allow(deprecated)]
-    assert_cmd::Command::cargo_bin("flayer")
+    assert_cmd::Command::cargo_bin("cleave")
         .unwrap()
-        .env("FLAYER_SKIP_YARA", "1") // Skip YARA - testing directory scanning
+        .env("cleave_SKIP_YARA", "1") // Skip YARA - testing directory scanning
         .args(["--json", "analyze", temp_dir.path().to_str().unwrap()])
         .assert()
         .success();
@@ -109,9 +109,9 @@ fn test_analyze_directory_with_archive() {
     tar.finish().unwrap();
 
     #[allow(deprecated)]
-    assert_cmd::Command::cargo_bin("flayer")
+    assert_cmd::Command::cargo_bin("cleave")
         .unwrap()
-        .env("FLAYER_SKIP_YARA", "1") // Skip YARA - testing directory scanning
+        .env("cleave_SKIP_YARA", "1") // Skip YARA - testing directory scanning
         .args(["--json", "analyze", temp_dir.path().to_str().unwrap()])
         .assert()
         .success();
@@ -122,10 +122,10 @@ fn test_analyze_directory_with_archive() {
 
 fn test_analyze_nonexistent_path() {
     #[allow(deprecated)]
-    assert_cmd::Command::cargo_bin("flayer")
+    assert_cmd::Command::cargo_bin("cleave")
         .unwrap()
-        .env("FLAYER_SKIP_YARA", "1") // Skip YARA - testing directory scanning
-        .args(["analyze", "/tmp/flayer-nonexistent-path-12345"])
+        .env("cleave_SKIP_YARA", "1") // Skip YARA - testing directory scanning
+        .args(["analyze", "/tmp/cleave-nonexistent-path-12345"])
         .assert()
         .failure()
         .stderr(
@@ -147,9 +147,9 @@ fn test_analyze_symlink_handling() {
     symlink(&target, &link).unwrap();
 
     #[allow(deprecated)]
-    assert_cmd::Command::cargo_bin("flayer")
+    assert_cmd::Command::cargo_bin("cleave")
         .unwrap()
-        .env("FLAYER_SKIP_YARA", "1") // Skip YARA - testing directory scanning
+        .env("cleave_SKIP_YARA", "1") // Skip YARA - testing directory scanning
         .args(["--json", "analyze", link.to_str().unwrap()])
         .assert()
         .success();
@@ -167,9 +167,9 @@ fn test_recursive_depth() {
     fs::write(deep_path.join("deep.sh"), "#!/bin/bash\necho 'deep'").unwrap();
 
     #[allow(deprecated)]
-    assert_cmd::Command::cargo_bin("flayer")
+    assert_cmd::Command::cargo_bin("cleave")
         .unwrap()
-        .env("FLAYER_SKIP_YARA", "1") // Skip YARA - testing directory scanning
+        .env("cleave_SKIP_YARA", "1") // Skip YARA - testing directory scanning
         .args(["--json", "analyze", temp_dir.path().to_str().unwrap()])
         .assert()
         .success()

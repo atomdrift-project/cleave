@@ -2,10 +2,10 @@
 // Rust strings are &str (pointer + length) or String (pointer + length + capacity)
 
 // ============== STATIC/CONST STRINGS ==============
-static STATIC_MARKER_1: &str = "flayer_STATIC_MARKER_1";
-static STATIC_MARKER_2: &str = "flayer_STATIC_MARKER_2";
-const CONST_MARKER_1: &str = "flayer_CONST_MARKER_1";
-const CONST_MARKER_2: &str = "flayer_CONST_MARKER_2";
+static STATIC_MARKER_1: &str = "cleave_STATIC_MARKER_1";
+static STATIC_MARKER_2: &str = "cleave_STATIC_MARKER_2";
+const CONST_MARKER_1: &str = "cleave_CONST_MARKER_1";
+const CONST_MARKER_2: &str = "cleave_CONST_MARKER_2";
 
 static STATIC_IP: &str = "10.0.0.200";
 static STATIC_URL: &str = "https://static.example.com/api";
@@ -45,8 +45,8 @@ fn main() {
     println!("IP: {}, URL: {}", STATIC_IP, STATIC_URL);
 
     // ============== STRING LITERALS IN FUNCTIONS ==============
-    println!("flayer_LITERAL_RUST_1");
-    println!("flayer_LITERAL_RUST_2");
+    println!("cleave_LITERAL_RUST_1");
+    println!("cleave_LITERAL_RUST_2");
 
     // Use static structs
     println!("Server: {} at {}:{}", SERVER.name, SERVER.host, SERVER.port);
@@ -58,7 +58,7 @@ fn main() {
     println!("Path: {}, DSN: {}", local_path, local_dsn);
 
     // ============== OWNED STRINGS (String type) ==============
-    let owned_marker = String::from("flayer_OWNED_MARKER");
+    let owned_marker = String::from("cleave_OWNED_MARKER");
     let owned_secret = String::from("owned_secret_value_abc");
     println!("{} {}", owned_marker, owned_secret);
 

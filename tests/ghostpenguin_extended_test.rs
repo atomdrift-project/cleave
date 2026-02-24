@@ -34,9 +34,9 @@ fn test_ghostpenguin_extended_detection() -> Result<(), Box<dyn std::error::Erro
     file.write_all(b"Bytes == %d")?;
     file.write_all(b"iDataSize == %d")?;
 
-    // Run flayer
+    // Run cleave
     #[allow(deprecated)]
-    let mut cmd = Command::cargo_bin("flayer")?;
+    let mut cmd = Command::cargo_bin("cleave")?;
     cmd.arg(&elf_path);
 
     let cmd_assert = cmd.assert();

@@ -24,14 +24,16 @@ traits:
       count_min: 3
 
   # DJB2 hash constant (5381 = 0x1505)
+  # Note: This 4-byte pattern can appear randomly; only meaningful in composite rules
   - id: djb2-hash-constant
     desc: DJB2 hash algorithm constant (5381)
-    crit: notable
+    crit: component
     conf: 0.75
     if:
       type: hex
       section: data
       pattern: "05 15 00 00"  # Little-endian 0x1505
+      count_min: 3
 
   # FNV1a 32-bit offset basis (0x811c9dc5)
   - id: fnv1a-offset-basis

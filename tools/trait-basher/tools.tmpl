@@ -2,13 +2,13 @@
 
 **Debug Commands**:
 ```bash
-{{.flayerBin}} --validate=true {{.Path}} --format jsonl  # All traits (including baseline) + rule paths
-{{.flayerBin}} strings {{.Path}}         # Detected strings, including encoded
-{{.flayerBin}} symbols {{.Path}}         # Detected symbols
-{{.flayerBin}} segments {{.Path}}        # Program segment information
-{{.flayerBin}} metrics {{.Path}}         # Program structure metrics
-{{.flayerBin}} test-rules {{.Path}} --rules "rule-id"
-{{.flayerBin}} test-match {{.Path}} --type string --pattern "X"
+{{.cleaveBin}} --validate=true {{.Path}} --format jsonl  # All traits (including baseline) + rule paths
+{{.cleaveBin}} strings {{.Path}}         # Detected strings, including encoded
+{{.cleaveBin}} symbols {{.Path}}         # Detected symbols
+{{.cleaveBin}} segments {{.Path}}        # Program segment information
+{{.cleaveBin}} metrics {{.Path}}         # Program structure metrics
+{{.cleaveBin}} test-rules {{.Path}} --rules "rule-id"
+{{.cleaveBin}} test-match {{.Path}} --type string --pattern "X"
 ```
 
 **Additional tools**: r2 (radare2), ghidra, nm, readelf
@@ -18,7 +18,7 @@
 **NOTE**: You can not nest any/all rules. They can be used together at the top-level of a rule though.
 ---
 
-## flayer Rules Reference
+## cleave Rules Reference
 
 ### Taxonomy Structure
 

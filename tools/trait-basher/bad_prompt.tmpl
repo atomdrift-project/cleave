@@ -5,7 +5,7 @@
 {{end}}{{else}}**Sample**: {{.Path}}
 {{end}}
 
-**Your Role**: Senior malware reverse engineer improving open-source detection capabilities in flayer - a tool to detect subtle supply-chain attacks or other kinds of malware through differential analysis.
+**Your Role**: Senior malware reverse engineer improving open-source detection capabilities in cleave - a tool to detect subtle supply-chain attacks or other kinds of malware through differential analysis.
 
 {{if .IsValidationSample}}**Goal**: This sample was detected (random validation audit). Verify the research report is complete, gap analysis shows we're catching ALL malware behaviors, no misleading findings exist, and traits are in correct taxonomy directories.
 {{else}}**Goal**: Analyze this known-malicious sample, create research documentation, and build reusable high-precision traits to detect it and similar malware, or supply-chain attacks that use similar techniques.
@@ -25,8 +25,8 @@ This sample was properly detected. Validate completeness of our detection:
 
 Start with reconnaissance:
 ```bash
-{{.flayerBin}} strings {{.Path}}         # Extract all strings (including encoded)
-{{.flayerBin}} --validate=true --format jsonl {{.Path}}  # Current flayer findings
+{{.cleaveBin}} strings {{.Path}}         # Extract all strings (including encoded)
+{{.cleaveBin}} --validate=true --format jsonl {{.Path}}  # Current cleave findings
 ```
 
 Use rizin or Ghidra for deeper analysis of control flow, API calls, and obfuscation.
@@ -46,8 +46,8 @@ Use rizin or Ghidra for deeper analysis of control flow, API calls, and obfuscat
 
 Read the gap analysis at `{{.GapAnalysisPath}}` (create/update if needed).
 
-Compare flayer output against research findings:
-- Does flayer detect the C2 pattern?
+Compare cleave output against research findings:
+- Does cleave detect the C2 pattern?
 - Persistence method?
 - File exfil?
 - Obfuscation?
@@ -85,8 +85,8 @@ Read the existing analysis at `{{.ReportPath}}` to understand the malware, then 
 
 Start with reconnaissance:
 ```bash
-{{.flayerBin}} strings {{.Path}}         # Extract all strings (including encoded)
-{{.flayerBin}} --validate=true --format jsonl {{.Path}}  # Current flayer findings
+{{.cleaveBin}} strings {{.Path}}         # Extract all strings (including encoded)
+{{.cleaveBin}} --validate=true --format jsonl {{.Path}}  # Current cleave findings
 ```
 
 Use rizin or Ghidra for deeper analysis of control flow, API calls, and obfuscation.
@@ -107,7 +107,7 @@ Use rizin or Ghidra for deeper analysis of control flow, API calls, and obfuscat
 
 **Create**: `{{.GapAnalysisPath}}`
 
-Compare flayer output against your research findings. Document gaps: Does flayer detect the C2 pattern? Persistence method? File exfil? Obfuscation? Structural anomalies?
+Compare cleave output against your research findings. Document gaps: Does cleave detect the C2 pattern? Persistence method? File exfil? Obfuscation? Structural anomalies?
 {{end}}
 
 ## {{if .IsValidationSample}}Fix Strategies{{else}}Step 3: Build Detection Traits{{end}}
@@ -140,8 +140,8 @@ Avoid deleting rules unless it's to move them to a better location - prefer fixi
 
 ### Validate
 ```bash
-{{.flayerBin}} --validate=true --format jsonl {{.Path}}                        # Verify traits fire, no YAML warnings or misleading results
-{{.flayerBin}} --validate=true --format jsonl /bin/ls /bin/bash /usr/bin/curl  # Test for false positives and misleading results
+{{.cleaveBin}} --validate=true --format jsonl {{.Path}}                        # Verify traits fire, no YAML warnings or misleading results
+{{.cleaveBin}} --validate=true --format jsonl /bin/ls /bin/bash /usr/bin/curl  # Test for false positives and misleading results
 ```
 Note: YAML changes take effect immediately, no rebuild needed.
 

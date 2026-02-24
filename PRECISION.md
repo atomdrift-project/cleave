@@ -1,6 +1,6 @@
 # Rule Precision Scoring
 
-Precision is a metric used by flayer to measure how specific and constrained a detection rule is. It helps distinguish between broad, potentially noisy rules and highly targeted, high-confidence detections.
+Precision is a metric used by cleave to measure how specific and constrained a detection rule is. It helps distinguish between broad, potentially noisy rules and highly targeted, high-confidence detections.
 
 ## Criticality Thresholds
 

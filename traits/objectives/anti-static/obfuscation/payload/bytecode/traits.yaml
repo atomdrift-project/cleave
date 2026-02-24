@@ -54,10 +54,11 @@ traits:
       pattern: "55 0D 0D 0A"
 
   # Bytecode exec/eval/import component traits
+  # Note: For JavaScript, use micro-behaviors/process/create/shell/lang::js-exec instead
   - id: exec-word
     desc: exec keyword
     crit: component
-    for: [python]
+    for: [python, typescript]  # JS covered by micro-behaviors/process/create/shell/lang::js-exec
     if:
       type: string
       word: "exec"

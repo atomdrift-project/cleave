@@ -79,8 +79,8 @@ fn extract_file_result(json_str: &str) -> Result<Value, Box<dyn std::error::Erro
     for line in json_str.lines() {
         let trimmed = line.trim();
 
-        // Skip empty lines and flayer header
-        if trimmed.is_empty() || trimmed.starts_with("flayer") {
+        // Skip empty lines and cleave header
+        if trimmed.is_empty() || trimmed.starts_with("cleave") {
             continue;
         }
 
@@ -88,7 +88,7 @@ fn extract_file_result(json_str: &str) -> Result<Value, Box<dyn std::error::Erro
         return serde_json::from_str(trimmed).map_err(Into::into);
     }
 
-    Err("No JSON output from flayer".into())
+    Err("No JSON output from cleave".into())
 }
 
 fn value_key(v: &Value, field: &str) -> String {
@@ -186,17 +186,17 @@ fn test_known_bad_integrity() {
             continue;
         }
 
-        // Run flayer on the binary
-        let output = std::process::Command::new("./target/release/flayer")
+        // Run cleave on the binary
+        let output = std::process::Command::new("./target/release/cleave")
             .arg("--format")
             .arg("jsonl")
             .arg(&binary_path)
             .output()
-            .unwrap_or_else(|_| panic!("Failed to run flayer on {}", binary_path));
+            .unwrap_or_else(|_| panic!("Failed to run cleave on {}", binary_path));
 
         if !output.status.success() {
             eprintln!(
-                "Warning: flayer failed on {}: {}",
+                "Warning: cleave failed on {}: {}",
                 binary_path,
                 String::from_utf8_lossy(&output.stderr)
             );

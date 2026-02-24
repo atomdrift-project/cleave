@@ -32,14 +32,14 @@ composite_rules:
     let target_file = temp_dir.path().join("target.sh");
     fs::write(&target_file, "#!/bin/bash\nfunc1\n").unwrap();
 
-    // Run flayer - should succeed (downgrade is non-fatal)
+    // Run cleave - should succeed (downgrade is non-fatal)
     // The rule will be silently downgraded from HOSTILE to SUSPICIOUS
-    assert_cmd::cargo_bin_cmd!("flayer")
-        .env("FLAYER_SKIP_YARA", "1") // Skip YARA - only testing trait strictness
-        .env("FLAYER_TRAITS_PATH", traits_dir.to_str().unwrap())
-        .env("FLAYER_CAPABILITIES", traits_dir.to_str().unwrap())
-        .env("FLAYER_ALLOW_INLINE_PRIMITIVES", "1")
-        .env("FLAYER_VALIDATE", "0")
+    assert_cmd::cargo_bin_cmd!("cleave")
+        .env("cleave_SKIP_YARA", "1") // Skip YARA - only testing trait strictness
+        .env("cleave_TRAITS_PATH", traits_dir.to_str().unwrap())
+        .env("cleave_CAPABILITIES", traits_dir.to_str().unwrap())
+        .env("cleave_ALLOW_INLINE_PRIMITIVES", "1")
+        .env("cleave_VALIDATE", "0")
         .args(["analyze", target_file.to_str().unwrap()])
         .assert()
         .success();
@@ -83,12 +83,12 @@ composite_rules:
     // Run without full validation - this test checks that the rule loads and works,
     // not that it passes all strict validation rules
     // Allow inline primitives since these tests are testing criticality downgrading, not inline validation
-    assert_cmd::cargo_bin_cmd!("flayer")
-        .env("FLAYER_SKIP_YARA", "1") // Skip YARA - only testing trait strictness
-        .env("FLAYER_TRAITS_PATH", traits_dir.to_str().unwrap())
-        .env("FLAYER_CAPABILITIES", traits_dir.to_str().unwrap())
-        .env("FLAYER_ALLOW_INLINE_PRIMITIVES", "1")
-        .env("FLAYER_VALIDATE", "0")
+    assert_cmd::cargo_bin_cmd!("cleave")
+        .env("cleave_SKIP_YARA", "1") // Skip YARA - only testing trait strictness
+        .env("cleave_TRAITS_PATH", traits_dir.to_str().unwrap())
+        .env("cleave_CAPABILITIES", traits_dir.to_str().unwrap())
+        .env("cleave_ALLOW_INLINE_PRIMITIVES", "1")
+        .env("cleave_VALIDATE", "0")
         .args(["analyze", target_file.to_str().unwrap()])
         .assert()
         .success();
@@ -115,11 +115,11 @@ traits:
     fs::write(&target_file, "#!/bin/bash\n# dummy\n").unwrap();
 
     // Should NOT show warning for SUSPICIOUS traits anymore
-    // Set FLAYER_TRAITS_PATH to point to our custom traits directory
-    assert_cmd::cargo_bin_cmd!("flayer")
-        .env("FLAYER_SKIP_YARA", "1") // Skip YARA - only testing trait strictness
-        .env("FLAYER_TRAITS_PATH", traits_dir.to_str().unwrap())
-        .env("FLAYER_CAPABILITIES", traits_dir.to_str().unwrap())
+    // Set cleave_TRAITS_PATH to point to our custom traits directory
+    assert_cmd::cargo_bin_cmd!("cleave")
+        .env("cleave_SKIP_YARA", "1") // Skip YARA - only testing trait strictness
+        .env("cleave_TRAITS_PATH", traits_dir.to_str().unwrap())
+        .env("cleave_CAPABILITIES", traits_dir.to_str().unwrap())
         .args(["analyze", target_file.to_str().unwrap()])
         .assert()
         .success()

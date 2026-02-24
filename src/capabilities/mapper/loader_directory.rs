@@ -70,12 +70,12 @@ impl super::CapabilityMapper {
         enable_full_validation: bool,
     ) -> Result<Self> {
         let _span = tracing::info_span!("load_capabilities").entered();
-        let debug = std::env::var("FLAYER_DEBUG").is_ok();
+        let debug = std::env::var("cleave_DEBUG").is_ok();
         let dir_path = dir_path.as_ref();
         let _t_start = std::time::Instant::now();
 
-        // Check for FLAYER_VALIDATE env var - it can override the CLI flag in either direction
-        let enable_full_validation = match std::env::var("FLAYER_VALIDATE").ok().as_deref() {
+        // Check for cleave_VALIDATE env var - it can override the CLI flag in either direction
+        let enable_full_validation = match std::env::var("cleave_VALIDATE").ok().as_deref() {
             Some("0") | Some("false") => false, // Env var explicitly disables
             Some("1") | Some("true") => true,   // Env var explicitly enables
             _ => enable_full_validation,        // Use CLI flag
@@ -1115,7 +1115,7 @@ impl super::CapabilityMapper {
                     }
                     eprintln!("\n   Use only [a-zA-Z0-9_-] in trait IDs. No slashes allowed.\n");
                 } else {
-                    eprintln!("   Set FLAYER_DEBUG=1 to see details\n");
+                    eprintln!("   Set cleave_DEBUG=1 to see details\n");
                 }
                 warnings.push(format!(
                     "{} trait/rule IDs contain invalid characters",
@@ -1192,7 +1192,7 @@ impl super::CapabilityMapper {
                 eprintln!("\n   Cross-directory references must use directory paths (e.g., 'discovery/system')");
                 eprintln!("   that match existing trait directories, not exact trait IDs.\n");
             } else {
-                eprintln!("   Set FLAYER_DEBUG=1 to see details\n");
+                eprintln!("   Set cleave_DEBUG=1 to see details\n");
             }
         }
 
@@ -1210,7 +1210,7 @@ impl super::CapabilityMapper {
         }
 
         // Debug: Print sample of valid trait IDs
-        if std::env::var("FLAYER_DEBUG").is_ok() {
+        if std::env::var("cleave_DEBUG").is_ok() {
             let mut sample_ids: Vec<_> = valid_trait_ids
                 .iter()
                 .filter(|id| {
@@ -1965,7 +1965,7 @@ impl super::CapabilityMapper {
                         && !valid_trait_ids.contains(&ref_id)
                     {
                         // Debug: Print broken reference details
-                        if std::env::var("FLAYER_DEBUG").is_ok()
+                        if std::env::var("cleave_DEBUG").is_ok()
                             && (ref_id.contains("tiny-elf")
                                 || ref_id.contains("small-elf")
                                 || ref_id.contains("setup-py")

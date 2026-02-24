@@ -5,9 +5,9 @@
 //!
 //! Run with: cargo run --release --example memory_profile_pe <pe_file>
 
-use flayer::analyzers::pe::PEAnalyzer;
-use flayer::analyzers::Analyzer;
-use flayer::memory_tracker::{
+use cleave::analyzers::pe::PEAnalyzer;
+use cleave::analyzers::Analyzer;
+use cleave::memory_tracker::{
     current_rss, global_tracker, log_after_file_processing, log_before_file_processing,
 };
 use std::env;
@@ -115,7 +115,7 @@ fn main() -> anyhow::Result<()> {
         format_bytes(strings_memory as u64)
     );
 
-    let functions_memory = report.functions.len() * std::mem::size_of::<flayer::types::Function>();
+    let functions_memory = report.functions.len() * std::mem::size_of::<cleave::types::Function>();
     println!(
         "Estimated function storage: {}",
         format_bytes(functions_memory as u64)

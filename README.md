@@ -1,10 +1,10 @@
-![flayer](media/logo-small.jpg)
+![cleave](media/logo-small.jpg)
 
-# flayer
+# cleave
 
 Deep static analysis for threat detection across binaries and source code. AST-aware, not regex-blind.
 
-flayer understands code semantics—it won't mistake a string literal `"exec"` for actual execution. It combines abstract syntax tree inspection with binary reverse engineering to detect capabilities and behaviors across 20+ languages and three binary formats in a single pass.
+cleave understands code semantics—it won't mistake a string literal `"exec"` for actual execution. It combines abstract syntax tree inspection with binary reverse engineering to detect capabilities and behaviors across 20+ languages and three binary formats in a single pass.
 
 ## Why It Exists
 
@@ -13,7 +13,7 @@ Most tools are either:
 - **Single-format**: Handle binaries or source, not both
 - **Language-blind**: Ignore syntax trees, miss semantic intent
 
-flayer does all three. It's built for supply chain defenders and threat hunters who need AST-level certainty for source code and deep symbol/string analysis for binaries. It catches what obfuscation and polymorphism hide from simpler tools.
+cleave does all three. It's built for supply chain defenders and threat hunters who need AST-level certainty for source code and deep symbol/string analysis for binaries. It catches what obfuscation and polymorphism hide from simpler tools.
 
 ## What It Analyzes
 
@@ -25,7 +25,7 @@ flayer does all three. It's built for supply chain defenders and threat hunters 
 
 ## Try It!
 
-Try our [demo web interface](https://flayer-web-362492245899.us-central1.run.app/) if you are curious about real-world behavior.
+Try our [demo web interface](https://cleave-web-362492245899.us-central1.run.app/) if you are curious about real-world behavior.
 
 ## Quick Start
 
@@ -33,14 +33,14 @@ Try our [demo web interface](https://flayer-web-362492245899.us-central1.run.app
 cargo build --release
 
 # Single target
-flayer binary-or-source.py
+cleave binary-or-source.py
 
 # Supply chain diffing
-flayer diff old-version/ new-version/ --json
+cleave diff old-version/ new-version/ --json
 
 # Deep inspection
-flayer symbols firmware.bin
-flayer strings malware.exe --min-length 10
+cleave symbols firmware.bin
+cleave strings malware.exe --min-length 10
 ```
 
 ## Detection Philosophy

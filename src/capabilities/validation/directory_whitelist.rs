@@ -7,7 +7,7 @@ use std::path::Path;
 
 /// Allowed top-level subdirectories in objectives/
 ///
-/// These correspond to MBC objectives and flayer-specific extensions.
+/// These correspond to MBC objectives and cleave-specific extensions.
 /// Update this list when adding new objectives to TAXONOMY.md.
 const ALLOWED_OBJECTIVES: &[&str] = &[
     "anti-analysis",       // MBC: Anti-Behavioral Analysis

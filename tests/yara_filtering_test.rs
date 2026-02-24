@@ -18,8 +18,8 @@ fn test_shell_script_matches_shell_rules() {
     // Script with base64 content that should trigger shell-specific base64 rule
     fs::write(&script_path, "#!/bin/bash\necho 'aWYgW1sg' | base64 -d\n").unwrap();
 
-    let output = assert_cmd::cargo_bin_cmd!("flayer")
-        .env("FLAYER_BUILTIN_YARA_ONLY", "1") // Skip third-party YARA for faster tests
+    let output = assert_cmd::cargo_bin_cmd!("cleave")
+        .env("cleave_BUILTIN_YARA_ONLY", "1") // Skip third-party YARA for faster tests
         .args(["--json", "analyze", script_path.to_str().unwrap()])
         .output()
         .unwrap();
@@ -74,8 +74,8 @@ fn test_python_rules_filtered_for_shell_scripts() {
     // Shell script that might accidentally match Python patterns
     fs::write(&script_path, "#!/bin/bash\nimport os\neval something\n").unwrap();
 
-    let output = assert_cmd::cargo_bin_cmd!("flayer")
-        .env("FLAYER_BUILTIN_YARA_ONLY", "1") // Skip third-party YARA for faster tests
+    let output = assert_cmd::cargo_bin_cmd!("cleave")
+        .env("cleave_BUILTIN_YARA_ONLY", "1") // Skip third-party YARA for faster tests
         .args(["--json", "analyze", script_path.to_str().unwrap()])
         .output()
         .unwrap();
@@ -128,8 +128,8 @@ fn test_python_file_matches_python_rules() {
     )
     .unwrap();
 
-    let output = assert_cmd::cargo_bin_cmd!("flayer")
-        .env("FLAYER_BUILTIN_YARA_ONLY", "1") // Skip third-party YARA for faster tests
+    let output = assert_cmd::cargo_bin_cmd!("cleave")
+        .env("cleave_BUILTIN_YARA_ONLY", "1") // Skip third-party YARA for faster tests
         .args(["--json", "analyze", py_file.to_str().unwrap()])
         .output()
         .unwrap();
@@ -188,8 +188,8 @@ fn test_generic_rules_never_filtered() {
     )
     .unwrap();
 
-    let output = assert_cmd::cargo_bin_cmd!("flayer")
-        .env("FLAYER_BUILTIN_YARA_ONLY", "1") // Skip third-party YARA for faster tests
+    let output = assert_cmd::cargo_bin_cmd!("cleave")
+        .env("cleave_BUILTIN_YARA_ONLY", "1") // Skip third-party YARA for faster tests
         .args(["--json", "analyze", script_path.to_str().unwrap()])
         .output()
         .unwrap();
@@ -233,8 +233,8 @@ fn test_javascript_file_filters_non_js_rules() {
     // JavaScript with some content that might match shell or Python rules
     fs::write(&js_file, "const data = 'import os';\neval(data);\n").unwrap();
 
-    let output = assert_cmd::cargo_bin_cmd!("flayer")
-        .env("FLAYER_BUILTIN_YARA_ONLY", "1") // Skip third-party YARA for faster tests
+    let output = assert_cmd::cargo_bin_cmd!("cleave")
+        .env("cleave_BUILTIN_YARA_ONLY", "1") // Skip third-party YARA for faster tests
         .args(["--json", "analyze", js_file.to_str().unwrap()])
         .output()
         .unwrap();
@@ -301,8 +301,8 @@ fn test_scan_multi_filetype_directory() {
     fs::write(&py_file, "#!/usr/bin/env python3\nprint('python')\n").unwrap();
     fs::write(&js_file, "console.log('javascript');\n").unwrap();
 
-    let output = assert_cmd::cargo_bin_cmd!("flayer")
-        .env("FLAYER_BUILTIN_YARA_ONLY", "1") // Skip third-party YARA for faster tests
+    let output = assert_cmd::cargo_bin_cmd!("cleave")
+        .env("cleave_BUILTIN_YARA_ONLY", "1") // Skip third-party YARA for faster tests
         .args(["--json", "analyze", temp_dir.path().to_str().unwrap()])
         .output()
         .unwrap();
@@ -341,8 +341,8 @@ fn test_filtered_criticality_level() {
     // Shell script with Python content that might match Python rules
     fs::write(&script_path, "#!/bin/bash\nimport marshal\n").unwrap();
 
-    let output = assert_cmd::cargo_bin_cmd!("flayer")
-        .env("FLAYER_BUILTIN_YARA_ONLY", "1") // Skip third-party YARA for faster tests
+    let output = assert_cmd::cargo_bin_cmd!("cleave")
+        .env("cleave_BUILTIN_YARA_ONLY", "1") // Skip third-party YARA for faster tests
         .args(["--json", "analyze", script_path.to_str().unwrap()])
         .output()
         .unwrap();
@@ -395,8 +395,8 @@ fn test_filtered_matches_preserved() {
     )
     .unwrap();
 
-    let output = assert_cmd::cargo_bin_cmd!("flayer")
-        .env("FLAYER_BUILTIN_YARA_ONLY", "1") // Skip third-party YARA for faster tests
+    let output = assert_cmd::cargo_bin_cmd!("cleave")
+        .env("cleave_BUILTIN_YARA_ONLY", "1") // Skip third-party YARA for faster tests
         .args(["--json", "analyze", script_path.to_str().unwrap()])
         .output()
         .unwrap();

@@ -267,7 +267,7 @@ pub(crate) fn find_short_pattern_warnings(
 
 /// Detect regex patterns that use non-capturing groups `(?:...)`.
 ///
-/// Non-capturing groups are unnecessary in flayer because we preserve the entire
+/// Non-capturing groups are unnecessary in cleave because we preserve the entire
 /// matched line for evidence, not individual capture groups. Using `(?:` adds
 /// syntactic noise without benefit and may indicate copy-pasted patterns that
 /// weren't adapted for this codebase.
@@ -297,7 +297,7 @@ pub(crate) fn find_non_capturing_groups(traits: &[TraitDefinition], warnings: &m
 
                 warnings.push(format!(
                     "Unnecessary non-capturing group: trait '{}' in {} uses '(?:' — \
-                     flayer preserves entire matched lines, not capture groups. \
+                     cleave preserves entire matched lines, not capture groups. \
                      Replace (?:...) with plain (...) or remove grouping if only used for alternation.",
                     trait_def.id, location
                 ));

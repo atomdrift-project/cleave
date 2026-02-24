@@ -3,7 +3,7 @@ rule malware_SmokeLoader {
             description = "detect SmokeLoader in memory"
             author = "JPCERT/CC Incident Response Group"
             rule_usage = "memory scan"
-            reference = "https://www.cert.pl/en/news/single/flayering-smoke-loader/"
+            reference = "https://www.cert.pl/en/news/single/cleaveing-smoke-loader/"
 
           strings:
             $a1 = { B8 25 30 38 58 }

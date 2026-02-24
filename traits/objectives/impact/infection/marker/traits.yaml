@@ -59,21 +59,10 @@ traits:
       case_insensitive: true
 
   # === Exclusion indicators for legitimate tools ===
-  - id: llvm-word
-    desc: LLVM word
-    crit: component
-    for: [elf]
-    if:
-      type: string
-      word: "LLVM"
-
-  - id: clang-word
-    desc: clang word
-    crit: component
-    for: [elf]
-    if:
-      type: string
-      word: "clang"
+  # Note: Use metadata/lang/compiler traits for compiler detection
+  # These are kept for ELF infector exclusion only - references metadata tier traits
+  # Removed llvm-word duplicate - use metadata/lang/compiler::llvm-string
+  # Removed clang-word duplicate - use metadata/lang/compiler::clang-string
 
   - id: objcopy-word
     desc: objcopy word
@@ -206,8 +195,8 @@ composite_rules:
     crit: component
     for: [elf]
     any:
-      - id: llvm-word
-      - id: clang-word
+      - id: metadata/lang/compiler::llvm-string
+      - id: metadata/lang/compiler::clang-string
       - id: objcopy-word
       - id: binutils-word
       - id: flex-word

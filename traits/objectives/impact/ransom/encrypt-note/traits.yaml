@@ -36,7 +36,7 @@ composite_rules:
     crit: notable
     conf: 0.6
     any:
-      - id: objectives/impact/ransomware/behavior::files-encrypted-msg
-      - id: objectives/impact/ransomware/behavior::restore-files-msg
+      - id: objectives/impact/ransom/encrypt::files-encrypted-msg
+      - id: objectives/impact/ransom/behavior::restore-files-msg
       - id: contact-us
       - id: pay-ransom

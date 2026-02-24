@@ -110,7 +110,7 @@ pub(crate) enum FileType {
     Plist,
     /// Rich Text Format (.rtf)
     Rtf,
-    /// iOS App Package (.ipa) - not extractable by flayer
+    /// iOS App Package (.ipa) - not extractable by cleave
     Ipa,
     /// Plain text file
     Text,

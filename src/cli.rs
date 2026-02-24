@@ -11,7 +11,7 @@
 //!
 //! # Component Control
 //!
-//! flayer supports disabling expensive analysis components:
+//! cleave supports disabling expensive analysis components:
 //! - `--disable yara` - Skip YARA pattern matching
 //! - `--disable radare2` - Skip binary disassembly
 //! - `--disable upx` - Skip UPX unpacking attempts
@@ -93,9 +93,9 @@ impl DisabledComponents {
     }
 }
 
-/// Command-line arguments for the flayer tool
+/// Command-line arguments for the cleave tool
 #[derive(Parser, Debug)]
-#[command(name = "flayer")]
+#[command(name = "cleave")]
 #[command(
     about = "Deep static analysis tool for extracting features from binaries and source code"
 )]
@@ -130,7 +130,7 @@ pub(crate) struct Args {
     pub log_file: Option<String>,
 
     /// Enable full trait validation (expensive, ~60s+). Disabled by default.
-    /// Use --validate=true to enable. Can also set FLAYER_VALIDATE=1 to enable.
+    /// Use --validate=true to enable. Can also set cleave_VALIDATE=1 to enable.
     #[arg(long, action = clap::ArgAction::Set, default_value_t = false)]
     pub validate: bool,
 
@@ -174,7 +174,7 @@ pub(crate) struct Args {
     #[arg(long, value_name = "DIR")]
     pub extract_dir: Option<String>,
 
-    /// Custom traits directory (overrides FLAYER_TRAITS_PATH env var and default "traits")
+    /// Custom traits directory (overrides cleave_TRAITS_PATH env var and default "traits")
     #[arg(long, value_name = "DIR")]
     pub traits_dir: Option<String>,
 
@@ -260,7 +260,7 @@ fn parse_criticality_level(s: &str) -> crate::types::Criticality {
     }
 }
 
-/// Available flayer subcommands
+/// Available cleave subcommands
 #[derive(Subcommand, Debug)]
 #[allow(clippy::large_enum_variant)]
 pub(crate) enum Command {
@@ -598,7 +598,7 @@ mod tests {
 
     #[test]
     fn test_parse_paths_without_subcommand() {
-        let args = Args::try_parse_from(["flayer", "file1.bin", "file2.bin", "dir1"]).unwrap();
+        let args = Args::try_parse_from(["cleave", "file1.bin", "file2.bin", "dir1"]).unwrap();
 
         assert!(args.command.is_none());
         assert_eq!(args.paths, vec!["file1.bin", "file2.bin", "dir1"]);
@@ -606,7 +606,7 @@ mod tests {
 
     #[test]
     fn test_parse_single_path_without_subcommand() {
-        let args = Args::try_parse_from(["flayer", "file.bin"]).unwrap();
+        let args = Args::try_parse_from(["cleave", "file.bin"]).unwrap();
 
         assert!(args.command.is_none());
         assert_eq!(args.paths, vec!["file.bin"]);
@@ -614,7 +614,7 @@ mod tests {
 
     #[test]
     fn test_parse_analyze_command() {
-        let args = Args::try_parse_from(["flayer", "analyze", "file.bin"]).unwrap();
+        let args = Args::try_parse_from(["cleave", "analyze", "file.bin"]).unwrap();
 
         assert!(matches!(args.command, Some(Command::Analyze { .. })));
         if let Some(Command::Analyze { targets }) = args.command {
@@ -625,7 +625,7 @@ mod tests {
     #[test]
     fn test_parse_analyze_multiple_targets() {
         let args =
-            Args::try_parse_from(["flayer", "analyze", "file1.bin", "file2.bin", "dir1"]).unwrap();
+            Args::try_parse_from(["cleave", "analyze", "file1.bin", "file2.bin", "dir1"]).unwrap();
 
         if let Some(Command::Analyze { targets }) = args.command {
             assert_eq!(targets, vec!["file1.bin", "file2.bin", "dir1"]);
@@ -634,7 +634,7 @@ mod tests {
 
     #[test]
     fn test_parse_diff_command() {
-        let args = Args::try_parse_from(["flayer", "diff", "old.bin", "new.bin"]).unwrap();
+        let args = Args::try_parse_from(["cleave", "diff", "old.bin", "new.bin"]).unwrap();
 
         assert!(matches!(args.command, Some(Command::Diff { .. })));
         if let Some(Command::Diff { old, new }) = args.command {
@@ -645,7 +645,7 @@ mod tests {
 
     #[test]
     fn test_parse_strings_command() {
-        let args = Args::try_parse_from(["flayer", "strings", "file.bin"]).unwrap();
+        let args = Args::try_parse_from(["cleave", "strings", "file.bin"]).unwrap();
 
         assert!(matches!(args.command, Some(Command::Strings { .. })));
         if let Some(Command::Strings { target, min_length }) = args.command {
@@ -656,7 +656,7 @@ mod tests {
 
     #[test]
     fn test_parse_strings_command_with_min_length() {
-        let args = Args::try_parse_from(["flayer", "strings", "file.bin", "-m", "10"]).unwrap();
+        let args = Args::try_parse_from(["cleave", "strings", "file.bin", "-m", "10"]).unwrap();
 
         if let Some(Command::Strings { target, min_length }) = args.command {
             assert_eq!(target, "file.bin");
@@ -666,7 +666,7 @@ mod tests {
 
     #[test]
     fn test_parse_symbols_command() {
-        let args = Args::try_parse_from(["flayer", "symbols", "file.bin"]).unwrap();
+        let args = Args::try_parse_from(["cleave", "symbols", "file.bin"]).unwrap();
 
         assert!(matches!(args.command, Some(Command::Symbols { .. })));
         if let Some(Command::Symbols { target }) = args.command {
@@ -676,40 +676,40 @@ mod tests {
 
     #[test]
     fn test_parse_json_flag() {
-        let args = Args::try_parse_from(["flayer", "--json", "file.bin"]).unwrap();
+        let args = Args::try_parse_from(["cleave", "--json", "file.bin"]).unwrap();
         assert!(args.json);
         assert!(matches!(args.format(), OutputFormat::Jsonl));
     }
 
     #[test]
     fn test_parse_no_json_flag() {
-        let args = Args::try_parse_from(["flayer", "file.bin"]).unwrap();
+        let args = Args::try_parse_from(["cleave", "file.bin"]).unwrap();
         assert!(!args.json);
         assert!(matches!(args.format(), OutputFormat::Terminal));
     }
 
     #[test]
     fn test_parse_output_file() {
-        let args = Args::try_parse_from(["flayer", "-o", "results.json", "file.bin"]).unwrap();
+        let args = Args::try_parse_from(["cleave", "-o", "results.json", "file.bin"]).unwrap();
         assert_eq!(args.output, Some("results.json".to_string()));
     }
 
     #[test]
     fn test_parse_verbose() {
-        let args = Args::try_parse_from(["flayer", "-v", "file.bin"]).unwrap();
+        let args = Args::try_parse_from(["cleave", "-v", "file.bin"]).unwrap();
         assert!(args.verbose);
     }
 
     #[test]
     fn test_parse_no_verbose() {
-        let args = Args::try_parse_from(["flayer", "file.bin"]).unwrap();
+        let args = Args::try_parse_from(["cleave", "file.bin"]).unwrap();
         assert!(!args.verbose);
     }
 
     #[test]
     fn test_parse_all_options_together() {
         let args = Args::try_parse_from([
-            "flayer",
+            "cleave",
             "--json",
             "-o",
             "output.json",
@@ -729,14 +729,14 @@ mod tests {
     #[test]
     fn test_parse_no_args_succeeds_with_empty_paths() {
         // Running without args is now valid (will show help or error at runtime)
-        let result = Args::try_parse_from(["flayer"]);
+        let result = Args::try_parse_from(["cleave"]);
         assert!(result.is_ok());
         assert!(result.unwrap().paths.is_empty());
     }
 
     #[test]
     fn test_precision_threshold_defaults() {
-        let args = Args::try_parse_from(["flayer", "file.bin"]).unwrap();
+        let args = Args::try_parse_from(["cleave", "file.bin"]).unwrap();
         assert_eq!(args.min_hostile_precision, 3.5);
         assert_eq!(args.min_suspicious_precision, 1.5);
     }
@@ -744,7 +744,7 @@ mod tests {
     #[test]
     fn test_precision_threshold_flags() {
         let args = Args::try_parse_from([
-            "flayer",
+            "cleave",
             "--min-hostile-precision",
             "5.5",
             "--min-suspicious-precision",
@@ -773,7 +773,7 @@ mod tests {
     #[test]
     fn test_parse_zip_password_single() {
         let args =
-            Args::try_parse_from(["flayer", "--zip-password", "secret", "analyze", "file.zip"])
+            Args::try_parse_from(["cleave", "--zip-password", "secret", "analyze", "file.zip"])
                 .unwrap();
         assert_eq!(args.zip_passwords, vec!["secret"]);
         assert!(!args.no_zip_passwords);
@@ -782,7 +782,7 @@ mod tests {
     #[test]
     fn test_parse_zip_password_multiple() {
         let args = Args::try_parse_from([
-            "flayer",
+            "cleave",
             "--zip-password",
             "pass1",
             "--zip-password",
@@ -799,14 +799,14 @@ mod tests {
     #[test]
     fn test_parse_no_zip_passwords() {
         let args =
-            Args::try_parse_from(["flayer", "--no-zip-passwords", "analyze", "file.zip"]).unwrap();
+            Args::try_parse_from(["cleave", "--no-zip-passwords", "analyze", "file.zip"]).unwrap();
         assert!(args.no_zip_passwords);
         assert!(args.zip_passwords.is_empty());
     }
 
     #[test]
     fn test_parse_zip_password_default_empty() {
-        let args = Args::try_parse_from(["flayer", "analyze", "file.zip"]).unwrap();
+        let args = Args::try_parse_from(["cleave", "analyze", "file.zip"]).unwrap();
         assert!(args.zip_passwords.is_empty());
         assert!(!args.no_zip_passwords);
     }
@@ -824,7 +824,7 @@ mod tests {
 
     #[test]
     fn test_disabled_components_default() {
-        let args = Args::try_parse_from(["flayer", "file.bin"]).unwrap();
+        let args = Args::try_parse_from(["cleave", "file.bin"]).unwrap();
         let disabled = args.disabled_components();
         // Nothing is disabled by default
         assert!(!disabled.third_party);
@@ -836,7 +836,7 @@ mod tests {
     #[test]
     fn test_disabled_components_custom() {
         let args =
-            Args::try_parse_from(["flayer", "--disable", "yara,radare2", "file.bin"]).unwrap();
+            Args::try_parse_from(["cleave", "--disable", "yara,radare2", "file.bin"]).unwrap();
         let disabled = args.disabled_components();
         assert!(disabled.yara);
         assert!(disabled.radare2);
@@ -847,7 +847,7 @@ mod tests {
     #[test]
     fn test_disabled_components_all() {
         let args = Args::try_parse_from([
-            "flayer",
+            "cleave",
             "--disable",
             "yara,radare2,upx,third-party",
             "file.bin",
@@ -862,7 +862,7 @@ mod tests {
 
     #[test]
     fn test_enable_all_overrides_disable() {
-        let args = Args::try_parse_from(["flayer", "--enable-all", "file.bin"]).unwrap();
+        let args = Args::try_parse_from(["cleave", "--enable-all", "file.bin"]).unwrap();
         let disabled = args.disabled_components();
         // --enable-all should override the default --disable=third-party
         assert!(!disabled.third_party);
@@ -900,7 +900,7 @@ mod tests {
 
     #[test]
     fn test_disable_empty_string() {
-        let args = Args::try_parse_from(["flayer", "--disable", "", "file.bin"]).unwrap();
+        let args = Args::try_parse_from(["cleave", "--disable", "", "file.bin"]).unwrap();
         let disabled = args.disabled_components();
         // Empty string means nothing disabled
         assert!(!disabled.yara);
@@ -912,7 +912,7 @@ mod tests {
     #[test]
     fn test_error_if_single_level() {
         let args =
-            Args::try_parse_from(["flayer", "--error-if", "suspicious", "file.bin"]).unwrap();
+            Args::try_parse_from(["cleave", "--error-if", "suspicious", "file.bin"]).unwrap();
         let levels = args.error_if_levels().unwrap();
         assert_eq!(levels.len(), 1);
         assert_eq!(levels[0], crate::types::Criticality::Suspicious);
@@ -920,7 +920,7 @@ mod tests {
 
     #[test]
     fn test_error_if_multiple_levels() {
-        let args = Args::try_parse_from(["flayer", "--error-if", "suspicious,hostile", "file.bin"])
+        let args = Args::try_parse_from(["cleave", "--error-if", "suspicious,hostile", "file.bin"])
             .unwrap();
         let levels = args.error_if_levels().unwrap();
         assert_eq!(levels.len(), 2);
@@ -931,7 +931,7 @@ mod tests {
     #[test]
     fn test_error_if_all_levels() {
         let args = Args::try_parse_from([
-            "flayer",
+            "cleave",
             "--error-if",
             "filtered,baseline,notable,suspicious,hostile",
             "file.bin",
@@ -949,7 +949,7 @@ mod tests {
     #[test]
     fn test_error_if_with_spaces() {
         let args = Args::try_parse_from([
-            "flayer",
+            "cleave",
             "--error-if",
             "suspicious, hostile , notable",
             "file.bin",
@@ -964,14 +964,14 @@ mod tests {
 
     #[test]
     fn test_error_if_none() {
-        let args = Args::try_parse_from(["flayer", "file.bin"]).unwrap();
+        let args = Args::try_parse_from(["cleave", "file.bin"]).unwrap();
         assert!(args.error_if_levels().is_none());
     }
 
     #[test]
     fn test_error_if_case_insensitive() {
         let args = Args::try_parse_from([
-            "flayer",
+            "cleave",
             "--error-if",
             "SUSPICIOUS,Hostile,NoTabLe",
             "file.bin",
@@ -1060,19 +1060,19 @@ mod tests {
     #[test]
     fn test_platforms_cli_flag() {
         let args =
-            Args::try_parse_from(["flayer", "--platforms", "linux,macos", "file.bin"]).unwrap();
+            Args::try_parse_from(["cleave", "--platforms", "linux,macos", "file.bin"]).unwrap();
         assert_eq!(args.platforms, "linux,macos");
     }
 
     #[test]
     fn test_platforms_default_value() {
-        let args = Args::try_parse_from(["flayer", "file.bin"]).unwrap();
+        let args = Args::try_parse_from(["cleave", "file.bin"]).unwrap();
         assert_eq!(args.platforms, "all");
     }
 
     #[test]
     fn test_parse_metrics_command() {
-        let args = Args::try_parse_from(["flayer", "metrics", "file.bin"]).unwrap();
+        let args = Args::try_parse_from(["cleave", "metrics", "file.bin"]).unwrap();
 
         assert!(matches!(args.command, Some(Command::Metrics { .. })));
         if let Some(Command::Metrics { target }) = args.command {
@@ -1083,7 +1083,7 @@ mod tests {
     #[test]
     fn test_parse_test_match_metrics() {
         let args = Args::try_parse_from([
-            "flayer",
+            "cleave",
             "test-match",
             "file.bin",
             "--type",
@@ -1119,7 +1119,7 @@ mod tests {
     #[test]
     fn test_parse_test_match_metrics_with_size_constraints() {
         let args = Args::try_parse_from([
-            "flayer",
+            "cleave",
             "test-match",
             "file.bin",
             "--type",

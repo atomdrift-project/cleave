@@ -297,14 +297,7 @@ traits:
       type: symbol
       regex: "^VirtualProtect(Ex)?$"
 
-  - id: page-execute-str
-    desc: PAGE_EXECUTE constant
-    crit: component
-    platforms: [windows]
-    for: [pe, dll]
-    if:
-      type: string
-      substr: "PAGE_EXECUTE"
+  # Removed page-execute-str duplicate - use objectives/execution/native/runtime::page-execute-str
 
   - id: map-anonymous-str
     desc: MAP_ANONYMOUS constant
@@ -485,7 +478,7 @@ composite_rules:
     any:
       - id: mprotect-sym
       - id: micro-behaviors/mem/allocate/executable::prot-exec-const
-      - id: page-execute-str
+      - id: objectives/execution/native/runtime::page-execute-str
 
   - id: unix-mmap-anon
     desc: Unix anonymous mmap
@@ -502,7 +495,7 @@ composite_rules:
     for: [pe, dll]
     all:
       - id: virtualprotect-sym
-      - id: page-execute-str
+      - id: objectives/execution/native/runtime::page-execute-str
 
   - id: executable-memory
     desc: Allocates or modifies executable memory

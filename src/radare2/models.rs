@@ -1,11 +1,11 @@
 //! Data models for radare2/rizin analysis results.
 //!
 //! This module contains the data structures used to deserialize JSON output from
-//! radare2/rizin commands, as well as conversions to flayer's internal types.
+//! radare2/rizin commands, as well as conversions to cleave's internal types.
 //!
 //! # Structure Naming
 //! - `R2*` structs are direct deserializations from rizin JSON output
-//! - Conversions to flayer types (e.g., `Function`) are implemented via `From` traits
+//! - Conversions to cleave types (e.g., `Function`) are implemented via `From` traits
 //!
 //! # Key Types
 //! - `R2Function` - Function information from `aflj` command

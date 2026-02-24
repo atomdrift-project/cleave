@@ -42,14 +42,7 @@ traits:
       type: hex
       pattern: "FC E8 82 00 00 00"
 
-  # VirtualAlloc API
-  - id: virtualalloc-str
-    desc: VirtualAlloc string
-    crit: component
-    for: [pe, dll]
-    if:
-      type: string
-      substr: "VirtualAlloc"
+  # Removed virtualalloc-str duplicate - use micro-behaviors/mem/protect/modify::virtual-alloc
 
   # PAGE_EXECUTE constant
   - id: page-execute-str
@@ -75,7 +68,7 @@ composite_rules:
     crit: component
     for: [pe, dll]
     all:
-      - id: virtualalloc-str
+      - id: micro-behaviors/mem/protect/modify::virtual-alloc
       - id: page-execute-str
 
   - id: shellcode

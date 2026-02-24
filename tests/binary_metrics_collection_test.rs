@@ -3,8 +3,8 @@
 
 /// Test to ensure binary metrics are always collected, even when radare2 fails
 /// This prevents regression of the bug where metrics were missing from test-rules output
-use flayer::analyzers::analyzer_for_file_type;
-use flayer::FileType;
+use cleave::analyzers::analyzer_for_file_type;
+use cleave::FileType;
 use std::path::PathBuf;
 
 /// Test that Mach-O files always have basic binary metrics populated
@@ -20,7 +20,7 @@ fn test_macho_binary_metrics_always_populated() {
     let test_file = test_file.unwrap();
 
     // Create capability mapper (needed for analyzer)
-    let capability_mapper = flayer::capabilities::CapabilityMapper::new();
+    let capability_mapper = cleave::capabilities::CapabilityMapper::new();
 
     // Get Mach-O analyzer
     let analyzer = analyzer_for_file_type(&FileType::MachO, Some(capability_mapper));
@@ -98,7 +98,7 @@ fn test_metrics_accessible_to_rules() {
     let test_file = test_file.unwrap();
 
     // Create capability mapper with metrics-based rules
-    let capability_mapper = flayer::capabilities::CapabilityMapper::new();
+    let capability_mapper = cleave::capabilities::CapabilityMapper::new();
 
     // Get Mach-O analyzer
     let analyzer = analyzer_for_file_type(&FileType::MachO, Some(capability_mapper.clone()));
@@ -206,7 +206,7 @@ fn test_radare2_failure_handling() {
     let test_file = test_file.unwrap();
 
     // Create capability mapper
-    let capability_mapper = flayer::capabilities::CapabilityMapper::new();
+    let capability_mapper = cleave::capabilities::CapabilityMapper::new();
 
     // Get Mach-O analyzer
     let analyzer = analyzer_for_file_type(&FileType::MachO, Some(capability_mapper));

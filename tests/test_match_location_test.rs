@@ -34,9 +34,9 @@ fn test_hex_search_no_constraints() {
     fs::write(&bin_path, create_test_binary()).unwrap();
 
     // Search for "AAAA" hex pattern (41414141)
-    let output = assert_cmd::cargo_bin_cmd!("flayer")
-        .env("FLAYER_SKIP_YARA", "1")
-        .env("FLAYER_SKIP_TRAITS", "1")
+    let output = assert_cmd::cargo_bin_cmd!("cleave")
+        .env("cleave_SKIP_YARA", "1")
+        .env("cleave_SKIP_TRAITS", "1")
         .args([
             "test-match",
             "--type",
@@ -64,9 +64,9 @@ fn test_hex_search_offset_range_includes() {
     fs::write(&bin_path, create_test_binary()).unwrap();
 
     // Search for "AAAA" (41414141) within offset range [16, 48) - should find it
-    let output = assert_cmd::cargo_bin_cmd!("flayer")
-        .env("FLAYER_SKIP_YARA", "1")
-        .env("FLAYER_SKIP_TRAITS", "1")
+    let output = assert_cmd::cargo_bin_cmd!("cleave")
+        .env("cleave_SKIP_YARA", "1")
+        .env("cleave_SKIP_TRAITS", "1")
         .args([
             "test-match",
             "--type",
@@ -96,9 +96,9 @@ fn test_hex_search_offset_range_excludes() {
     fs::write(&bin_path, create_test_binary()).unwrap();
 
     // Search for "AAAA" (41414141) within offset range [48, 80) - pattern is at 16-31
-    let output = assert_cmd::cargo_bin_cmd!("flayer")
-        .env("FLAYER_SKIP_YARA", "1")
-        .env("FLAYER_SKIP_TRAITS", "1")
+    let output = assert_cmd::cargo_bin_cmd!("cleave")
+        .env("cleave_SKIP_YARA", "1")
+        .env("cleave_SKIP_TRAITS", "1")
         .args([
             "test-match",
             "--type",
@@ -128,9 +128,9 @@ fn test_raw_search_offset_range_includes() {
     fs::write(&bin_path, create_test_binary()).unwrap();
 
     // Search for "BBBB" within offset range [32, 64) - should find it
-    let output = assert_cmd::cargo_bin_cmd!("flayer")
-        .env("FLAYER_SKIP_YARA", "1")
-        .env("FLAYER_SKIP_TRAITS", "1")
+    let output = assert_cmd::cargo_bin_cmd!("cleave")
+        .env("cleave_SKIP_YARA", "1")
+        .env("cleave_SKIP_TRAITS", "1")
         .args([
             "test-match",
             "--type",
@@ -160,9 +160,9 @@ fn test_raw_search_offset_range_excludes() {
     fs::write(&bin_path, create_test_binary()).unwrap();
 
     // Search for "AAAA" within offset range [48, 80) - pattern is at 16-31
-    let output = assert_cmd::cargo_bin_cmd!("flayer")
-        .env("FLAYER_SKIP_YARA", "1")
-        .env("FLAYER_SKIP_TRAITS", "1")
+    let output = assert_cmd::cargo_bin_cmd!("cleave")
+        .env("cleave_SKIP_YARA", "1")
+        .env("cleave_SKIP_TRAITS", "1")
         .args([
             "test-match",
             "--type",
@@ -203,9 +203,9 @@ fn test_string_search_offset_range_filters() {
     fs::write(&bin_path, &data).unwrap();
 
     // Search for "MATCH" within offset range [0, 40) - should find it
-    let output = assert_cmd::cargo_bin_cmd!("flayer")
-        .env("FLAYER_SKIP_YARA", "1")
-        .env("FLAYER_SKIP_TRAITS", "1")
+    let output = assert_cmd::cargo_bin_cmd!("cleave")
+        .env("cleave_SKIP_YARA", "1")
+        .env("cleave_SKIP_TRAITS", "1")
         .args([
             "test-match",
             "--type",
@@ -245,9 +245,9 @@ fn test_density_uses_effective_range() {
     fs::write(&bin_path, &data).unwrap();
 
     // Search with small range - density should be high (3 matches / 0.1KB = 30/KB)
-    let output = assert_cmd::cargo_bin_cmd!("flayer")
-        .env("FLAYER_SKIP_YARA", "1")
-        .env("FLAYER_SKIP_TRAITS", "1")
+    let output = assert_cmd::cargo_bin_cmd!("cleave")
+        .env("cleave_SKIP_YARA", "1")
+        .env("cleave_SKIP_TRAITS", "1")
         .args([
             "test-match",
             "--type",
@@ -280,9 +280,9 @@ fn test_hex_search_negative_offset_range() {
 
     // Search for "END" in last 20 bytes (negative offset)
     // File is 80 bytes, so -20 = offset 60
-    let output = assert_cmd::cargo_bin_cmd!("flayer")
-        .env("FLAYER_SKIP_YARA", "1")
-        .env("FLAYER_SKIP_TRAITS", "1")
+    let output = assert_cmd::cargo_bin_cmd!("cleave")
+        .env("cleave_SKIP_YARA", "1")
+        .env("cleave_SKIP_TRAITS", "1")
         .args([
             "test-match",
             "--type",
@@ -312,9 +312,9 @@ fn test_hex_search_exact_offset() {
 
     // Pattern "BBBB" is at offset 32
     // Search at offset 32 should find it
-    let output = assert_cmd::cargo_bin_cmd!("flayer")
-        .env("FLAYER_SKIP_YARA", "1")
-        .env("FLAYER_SKIP_TRAITS", "1")
+    let output = assert_cmd::cargo_bin_cmd!("cleave")
+        .env("cleave_SKIP_YARA", "1")
+        .env("cleave_SKIP_TRAITS", "1")
         .args([
             "test-match",
             "--type",
@@ -354,9 +354,9 @@ fn test_external_ip_filters_private() {
     fs::write(&bin_path, &data).unwrap();
 
     // Search for IP pattern WITHOUT --external-ip - should find both
-    let output = assert_cmd::cargo_bin_cmd!("flayer")
-        .env("FLAYER_SKIP_YARA", "1")
-        .env("FLAYER_SKIP_TRAITS", "1")
+    let output = assert_cmd::cargo_bin_cmd!("cleave")
+        .env("cleave_SKIP_YARA", "1")
+        .env("cleave_SKIP_TRAITS", "1")
         .args([
             "test-match",
             "--type",
@@ -375,9 +375,9 @@ fn test_external_ip_filters_private() {
     let found_without_filter = stdout.contains("MATCHED");
 
     // Search WITH --external-ip - should only match the external IP
-    let output = assert_cmd::cargo_bin_cmd!("flayer")
-        .env("FLAYER_SKIP_YARA", "1")
-        .env("FLAYER_SKIP_TRAITS", "1")
+    let output = assert_cmd::cargo_bin_cmd!("cleave")
+        .env("cleave_SKIP_YARA", "1")
+        .env("cleave_SKIP_TRAITS", "1")
         .args([
             "test-match",
             "--type",
@@ -432,9 +432,9 @@ console.log(decoded);
     fs::write(&script_path, script_content).unwrap();
 
     // Search using encoded type with base64 encoding filter
-    let output = assert_cmd::cargo_bin_cmd!("flayer")
-        .env("FLAYER_SKIP_YARA", "1")
-        .env("FLAYER_SKIP_TRAITS", "1")
+    let output = assert_cmd::cargo_bin_cmd!("cleave")
+        .env("cleave_SKIP_YARA", "1")
+        .env("cleave_SKIP_TRAITS", "1")
         .args([
             "test-match",
             "--type",
@@ -469,9 +469,9 @@ fn test_xor_search_type() {
     fs::write(&bin_path, &data).unwrap();
 
     // Search using encoded type with xor encoding filter
-    let output = assert_cmd::cargo_bin_cmd!("flayer")
-        .env("FLAYER_SKIP_YARA", "1")
-        .env("FLAYER_SKIP_TRAITS", "1")
+    let output = assert_cmd::cargo_bin_cmd!("cleave")
+        .env("cleave_SKIP_YARA", "1")
+        .env("cleave_SKIP_TRAITS", "1")
         .args([
             "test-match",
             "--type",
@@ -513,9 +513,9 @@ def ANOTHER_FUNCTION():
     fs::write(&script_path, script_raw).unwrap();
 
     // Search WITHOUT --case-insensitive - should only match exact case
-    let output = assert_cmd::cargo_bin_cmd!("flayer")
-        .env("FLAYER_SKIP_YARA", "1")
-        .env("FLAYER_SKIP_TRAITS", "1")
+    let output = assert_cmd::cargo_bin_cmd!("cleave")
+        .env("cleave_SKIP_YARA", "1")
+        .env("cleave_SKIP_TRAITS", "1")
         .args([
             "test-match",
             "--type",
@@ -532,9 +532,9 @@ def ANOTHER_FUNCTION():
     let stdout_no_ci = String::from_utf8_lossy(&output.get_output().stdout);
 
     // Search WITH --case-insensitive - should match regardless of case
-    let output = assert_cmd::cargo_bin_cmd!("flayer")
-        .env("FLAYER_SKIP_YARA", "1")
-        .env("FLAYER_SKIP_TRAITS", "1")
+    let output = assert_cmd::cargo_bin_cmd!("cleave")
+        .env("cleave_SKIP_YARA", "1")
+        .env("cleave_SKIP_TRAITS", "1")
         .args([
             "test-match",
             "--type",
@@ -585,9 +585,9 @@ echo "Done"
     fs::write(&script_path, script_raw).unwrap();
 
     // Search for IP pattern with --external-ip
-    let output = assert_cmd::cargo_bin_cmd!("flayer")
-        .env("FLAYER_SKIP_YARA", "1")
-        .env("FLAYER_SKIP_TRAITS", "1")
+    let output = assert_cmd::cargo_bin_cmd!("cleave")
+        .env("cleave_SKIP_YARA", "1")
+        .env("cleave_SKIP_TRAITS", "1")
         .args([
             "test-match",
             "--type",

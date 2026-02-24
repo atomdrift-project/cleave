@@ -1,4 +1,4 @@
-//! Core analysis types - the foundation of flayer reports
+//! Core analysis types - the foundation of cleave reports
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use chrono::{DateTime, Utc};

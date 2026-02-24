@@ -5,23 +5,23 @@ use serde_json::Value;
 use std::process::Command;
 
 #[test]
-#[ignore = "Requires specific test data file at /home/t.linux/data/known-bad/flayer/malware/js/2025.tailwind-magic/3.3.1/keylogger.js"]
+#[ignore = "Requires specific test data file at /home/t.linux/data/known-bad/cleave/malware/js/2025.tailwind-magic/3.3.1/keylogger.js"]
 fn test_keylogger_detection() {
     let file_path =
-        "/home/t.linux/data/known-bad/flayer/malware/js/2025.tailwind-magic/3.3.1/keylogger.js";
-    let output = Command::new("./target/release/flayer")
+        "/home/t.linux/data/known-bad/cleave/malware/js/2025.tailwind-magic/3.3.1/keylogger.js";
+    let output = Command::new("./target/release/cleave")
         .arg("--format")
         .arg("jsonl")
         .arg(file_path)
         .output()
-        .expect("Failed to execute flayer");
+        .expect("Failed to execute cleave");
 
-    assert!(output.status.success(), "flayer failed");
+    assert!(output.status.success(), "cleave failed");
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     let mut found = false;
     for line in stdout.lines() {
-        if line.trim().is_empty() || line.starts_with("flayer") {
+        if line.trim().is_empty() || line.starts_with("cleave") {
             continue;
         }
         if let Ok(json) = serde_json::from_str::<Value>(line) {

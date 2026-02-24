@@ -1,6 +1,6 @@
 //! Language-specific metrics for source code analysis
 
-use flayer_macros::ValidFieldPaths;
+use cleave_macros::ValidFieldPaths;
 use serde::{Deserialize, Serialize};
 
 use super::{is_false, is_zero_u32, is_zero_u64};

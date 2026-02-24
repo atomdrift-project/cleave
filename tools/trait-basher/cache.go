@@ -38,7 +38,7 @@ func openDB(ctx context.Context, flush bool) (*sql.DB, error) {
 			base = filepath.Join(home, ".config")
 		}
 	}
-	dir := filepath.Join(base, "flayer")
+	dir := filepath.Join(base, "cleave")
 
 	if err := os.MkdirAll(dir, 0o750); err != nil {
 		return nil, fmt.Errorf("create config directory: %w", err)
@@ -118,9 +118,9 @@ func markAnalyzed(ctx context.Context, db *sql.DB, hash, mode string) error {
 	return err
 }
 
-// saveTrainingData saves raw flayer JSONL output to a file named after the source file's SHA256.
+// saveTrainingData saves raw cleave JSONL output to a file named after the source file's SHA256.
 // If the file already exists, it's skipped (idempotent).
-// The rawJSONL should be the original line from flayer output.
+// The rawJSONL should be the original line from cleave output.
 func saveTrainingData(trainingDir, sourcePath, rawJSONL string) error {
 	if trainingDir == "" {
 		return nil // Training data output disabled
@@ -140,7 +140,7 @@ func saveTrainingData(trainingDir, sourcePath, rawJSONL string) error {
 		return nil
 	}
 
-	// Write raw JSONL data (preserves full flayer output for feature extraction)
+	// Write raw JSONL data (preserves full cleave output for feature extraction)
 	return os.WriteFile(outPath, []byte(rawJSONL+"\n"), 0o644) //nolint:gosec // training data needs readability
 }
 

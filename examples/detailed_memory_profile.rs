@@ -3,8 +3,8 @@
 
 //! Detailed memory profiling to identify memory hotspots
 
-use flayer::analyzers::{pe::PEAnalyzer, Analyzer};
-use flayer::memory_tracker::current_rss;
+use cleave::analyzers::{pe::PEAnalyzer, Analyzer};
+use cleave::memory_tracker::current_rss;
 use std::env;
 use std::fs;
 
@@ -94,7 +94,7 @@ fn main() -> anyhow::Result<()> {
         .sum();
     println!("String memory: {}", format_bytes(string_mem as u64));
 
-    let func_mem = report.functions.len() * std::mem::size_of::<flayer::types::Function>();
+    let func_mem = report.functions.len() * std::mem::size_of::<cleave::types::Function>();
     println!("Function memory: {}", format_bytes(func_mem as u64));
 
     let finding_mem: usize = report.findings.iter().map(|f| f.desc.len() + 200).sum();

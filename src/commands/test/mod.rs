@@ -1,4 +1,4 @@
-//! Test commands for flayer CLI.
+//! Test commands for cleave CLI.
 //!
 //! This module provides testing and debugging commands for rule development
 //! and pattern matching validation.
@@ -12,7 +12,7 @@
 //!
 //! **Usage:**
 //! ```text
-//! flayer test-rules <file> --rules <rule-id>[,<rule-id>...]
+//! cleave test-rules <file> --rules <rule-id>[,<rule-id>...]
 //! ```
 //!
 //! **Features:**
@@ -29,7 +29,7 @@
 //!
 //! **Usage:**
 //! ```text
-//! flayer test-match <file> --type <string|symbol|raw|kv|hex|encoded|section|metrics> \
+//! cleave test-match <file> --type <string|symbol|raw|kv|hex|encoded|section|metrics> \
 //!   --pattern <pattern> [--method <exact|contains|regex|word>] [options...]
 //! ```
 //!

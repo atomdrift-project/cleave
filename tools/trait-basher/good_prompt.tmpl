@@ -5,7 +5,7 @@
 {{end}}{{else}}**File**: {{.Path}}
 {{end}}
 
-**Your Role**: Security engineer improving flayer detection accuracy.
+**Your Role**: Security engineer improving cleave detection accuracy.
 
 {{if .IsValidationSample}}**Goal**: This file passed normal thresholds (random validation audit). Verify there are no sneaky false positives, misleading findings (even baseline/component ones), or taxonomy violations hiding in the output.
 {{else}}**Goal**: Eliminate inaccurate or misleading detections on this known-benign file while preserving genuinely accurate findings.
@@ -33,8 +33,8 @@
 
 Determine the file's legitimate purpose:
 ```bash
-{{.flayerBin}} strings {{.Path}}
-{{.flayerBin}} --validate=true --format jsonl {{.Path}}
+{{.cleaveBin}} strings {{.Path}}
+{{.cleaveBin}} --validate=true --format jsonl {{.Path}}
 ```
 
 ### Step 2: Evaluate {{if .IsValidationSample}}All Findings{{else}}Each Finding{{end}}
@@ -88,7 +88,7 @@ Avoid deleting rules unless it's to move them to a better location - prefer fixi
 
 ### Step 4: Validate & Verify
 
-Run `{{.flayerBin}} --validate=true --format jsonl {{.Path}}` and confirm:
+Run `{{.cleaveBin}} --validate=true --format jsonl {{.Path}}` and confirm:
 
 **Required:**
 - ✓ Zero hostile findings

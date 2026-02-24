@@ -1,4 +1,4 @@
-//! flayer - Deep static analysis library for extracting features from binaries and source code.
+//! cleave - Deep static analysis library for extracting features from binaries and source code.
 //!
 //! This library provides APIs for analyzing files and extracting security-relevant
 //! features including capabilities, traits, and behavioral indicators.
@@ -6,7 +6,7 @@
 //! # Example
 //!
 //! ```no_run
-//! use flayer::{analyze_file, AnalysisOptions};
+//! use cleave::{analyze_file, AnalysisOptions};
 //!
 //! let options = AnalysisOptions::default();
 //! let report = analyze_file("suspicious.py", &options).unwrap();
@@ -113,7 +113,7 @@ impl Default for AnalysisOptions {
 /// ```ignore
 /// // After processing every N files, clear caches to prevent memory growth
 /// if file_count % 100 == 0 {
-///     flayer::clear_all_thread_caches();
+///     cleave::clear_all_thread_caches();
 /// }
 /// ```
 pub fn clear_all_thread_caches() {
@@ -333,7 +333,7 @@ fn analyze_file_with_resources<P: AsRef<Path>>(
             trait_refs: vec![],
             evidence: vec![types::Evidence {
                 method: "magic-byte".to_string(),
-                source: "flayer".to_string(),
+                source: "cleave".to_string(),
                 value: format!("expected={}, actual={}", expected, actual),
                 location: None,
             }],
@@ -369,7 +369,7 @@ fn analyze_file_with_resources<P: AsRef<Path>>(
             trait_refs: vec![],
             evidence: vec![types::Evidence {
                 method: "pattern".to_string(),
-                source: "flayer".to_string(),
+                source: "cleave".to_string(),
                 value: format!(
                     "encoding={}, type={:?}, preview={}",
                     payload.encoding_chain.join(", "),

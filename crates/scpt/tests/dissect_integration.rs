@@ -1,11 +1,11 @@
-//! Test the scpt crate in isolation, simulating how flayer would use it
+//! Test the scpt crate in isolation, simulating how cleave would use it
 
 use scpt::{ScptParser, SymbolKind};
 
 const SHELL_SCRIPT_SCPT: &[u8] = include_bytes!("fixtures/shell_script.scpt");
 const TELL_APP_SCPT: &[u8] = include_bytes!("fixtures/tell_app.scpt");
 
-/// Simulate how flayer's AppleScriptAnalyzer extracts imports
+/// Simulate how cleave's AppleScriptAnalyzer extracts imports
 fn extract_imports(data: &[u8]) -> Vec<(String, Option<String>, String)> {
     let mut imports = Vec::new();
 
@@ -44,7 +44,7 @@ fn extract_imports(data: &[u8]) -> Vec<(String, Option<String>, String)> {
 }
 
 #[test]
-fn test_flayer_integration_shell_script() {
+fn test_cleave_integration_shell_script() {
     let imports = extract_imports(SHELL_SCRIPT_SCPT);
 
     // Check variables are extracted
@@ -78,7 +78,7 @@ fn test_flayer_integration_shell_script() {
 }
 
 #[test]
-fn test_flayer_integration_tell_app() {
+fn test_cleave_integration_tell_app() {
     let imports = extract_imports(TELL_APP_SCPT);
 
     // Check variables

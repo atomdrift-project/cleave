@@ -10,7 +10,7 @@
 //! - String extraction
 //! - Trait matching
 
-use flayer::{analyze_file, AnalysisOptions};
+use cleave::{analyze_file, AnalysisOptions};
 use once_cell::sync::Lazy;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -18,7 +18,7 @@ use std::sync::Arc;
 /// Shared analysis result for UTF-16 tests - analyzed once, reused across tests.
 /// This avoids re-analyzing the same file and recompiling YARA rules for each test.
 /// YARA is disabled for speed - these tests verify UTF-16 encoding, not YARA rules.
-static UTF16_ANALYSIS: Lazy<Option<Arc<flayer::AnalysisReport>>> = Lazy::new(|| {
+static UTF16_ANALYSIS: Lazy<Option<Arc<cleave::AnalysisReport>>> = Lazy::new(|| {
     let sample = PathBuf::from("tests/samples/utf16le_wsh_dropper.js");
     if !sample.exists() {
         return None;
@@ -31,7 +31,7 @@ static UTF16_ANALYSIS: Lazy<Option<Arc<flayer::AnalysisReport>>> = Lazy::new(|| 
 });
 
 /// Get the shared UTF-16 analysis result, or skip the test if sample doesn't exist
-fn get_utf16_analysis() -> Option<Arc<flayer::AnalysisReport>> {
+fn get_utf16_analysis() -> Option<Arc<cleave::AnalysisReport>> {
     UTF16_ANALYSIS.clone()
 }
 
@@ -46,7 +46,7 @@ fn fast_options() -> AnalysisOptions {
 /// Test UTF-16 LE encoded malware sample analysis.
 ///
 /// This test uses a real-world UTF-16 LE encoded WSH dropper to ensure
-/// flayer can properly analyze UTF-16 files end-to-end.
+/// cleave can properly analyze UTF-16 files end-to-end.
 /// Uses shared analysis result to avoid re-analyzing the same file.
 #[test]
 fn test_utf16le_wsh_dropper_analysis() {
@@ -67,11 +67,11 @@ fn test_utf16le_wsh_dropper_analysis() {
     let has_hostile = report
         .findings
         .iter()
-        .any(|f| matches!(f.crit, flayer::Criticality::Hostile));
+        .any(|f| matches!(f.crit, cleave::Criticality::Hostile));
     let has_suspicious = report
         .findings
         .iter()
-        .any(|f| matches!(f.crit, flayer::Criticality::Suspicious));
+        .any(|f| matches!(f.crit, cleave::Criticality::Suspicious));
 
     assert!(
         has_hostile || has_suspicious,
@@ -84,7 +84,7 @@ fn test_utf16le_wsh_dropper_analysis() {
         report
             .findings
             .iter()
-            .filter(|f| matches!(f.crit, flayer::Criticality::Hostile))
+            .filter(|f| matches!(f.crit, cleave::Criticality::Hostile))
             .count()
     );
     println!(
@@ -92,7 +92,7 @@ fn test_utf16le_wsh_dropper_analysis() {
         report
             .findings
             .iter()
-            .filter(|f| matches!(f.crit, flayer::Criticality::Suspicious))
+            .filter(|f| matches!(f.crit, cleave::Criticality::Suspicious))
             .count()
     );
     println!("  - Total findings: {}", report.findings.len());
@@ -335,12 +335,12 @@ fn test_utf16_regression_prevention() {
     let hostile_count = report
         .findings
         .iter()
-        .filter(|f| matches!(f.crit, flayer::Criticality::Hostile))
+        .filter(|f| matches!(f.crit, cleave::Criticality::Hostile))
         .count();
     let suspicious_count = report
         .findings
         .iter()
-        .filter(|f| matches!(f.crit, flayer::Criticality::Suspicious))
+        .filter(|f| matches!(f.crit, cleave::Criticality::Suspicious))
         .count();
 
     println!("✓ UTF-16 regression test passed");

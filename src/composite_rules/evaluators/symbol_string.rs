@@ -180,7 +180,7 @@ pub(crate) fn eval_string<'a, 'b>(
     trait_not: Option<&Vec<NotException>>,
     ctx: &EvaluationContext<'b>,
 ) -> ConditionResult {
-    let profile = std::env::var("FLAYER_PROFILE").is_ok();
+    let profile = std::env::var("cleave_PROFILE").is_ok();
     let t_start = if profile {
         Some(std::time::Instant::now())
     } else {
@@ -419,7 +419,7 @@ pub(crate) fn eval_raw<'a>(
     location: &ContentLocationParams,
     ctx: &EvaluationContext<'a>,
 ) -> ConditionResult {
-    let profile = std::env::var("FLAYER_PROFILE").is_ok();
+    let profile = std::env::var("cleave_PROFILE").is_ok();
     let t_start = if profile {
         Some(std::time::Instant::now())
     } else {

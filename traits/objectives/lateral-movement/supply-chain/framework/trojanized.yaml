@@ -49,10 +49,10 @@ traits:
       word: "discord"
       case_insensitive: true
 
-  - id: telegram-lib
-    desc: telegram library
+  - id: telegram-word
+    desc: telegram word
     crit: component
-    for: [package.json]
+    for: [package.json, javascript, typescript]
     if:
       type: string
       word: "telegram"
@@ -111,13 +111,7 @@ traits:
       substr: "wget "
 
   # === Additional requires atomic indicators ===
-  - id: require-express
-    desc: require express
-    crit: component
-    for: [javascript]
-    if:
-      type: string
-      substr: "require('express')"
+  # Removed require-express duplicate - use metadata/library/web-frameworks::uses-express
 
   - id: require-lodash
     desc: require lodash
@@ -167,21 +161,8 @@ traits:
       type: string
       substr: "require('fs')"
 
-  - id: fetch-call
-    desc: fetch( call
-    crit: component
-    for: [javascript]
-    if:
-      type: string
-      substr: "fetch("
-
-  - id: request-call
-    desc: .request( call
-    crit: component
-    for: [javascript]
-    if:
-      type: string
-      substr: ".request("
+  # Uses micro-behaviors/communications/http/request::fetch-string for fetch(
+  # Uses objectives/execution/vm/sandbox::request-method-call for .request(
 
   # === Discord library atomic indicators ===
   - id: discord-js
@@ -208,13 +189,7 @@ traits:
       type: string
       substr: "Discord.Client"
 
-  - id: discord-token
-    desc: DISCORD_TOKEN string
-    crit: component
-    for: [javascript, typescript]
-    if:
-      type: string
-      substr: "DISCORD_TOKEN"
+  # Uses objectives/credential-access/environment/secret-access::discord-token for DISCORD_TOKEN
 
   - id: dot-token
     desc: .token string
@@ -240,32 +215,10 @@ traits:
       type: string
       substr: "localStorage"
 
-  - id: leveldb-str
-    desc: leveldb string
-    crit: component
-    for: [javascript, typescript]
-    if:
-      type: string
-      word: "leveldb"
-
-  - id: post-method
-    desc: POST string
-    crit: component
-    for: [javascript, typescript]
-    if:
-      type: string
-      word: "POST"
+  # Uses micro-behaviors/fs/path/sensitive/browser::leveldb-ref for leveldb
+  # Uses micro-behaviors/communications/http/post::post for POST
 
   # === Telegram library atomic indicators ===
-  - id: telegram-word
-    desc: telegram word
-    crit: component
-    for: [javascript, typescript]
-    if:
-      type: string
-      word: "telegram"
-      case_insensitive: true
-
   - id: telegraf-str
     desc: telegraf string
     crit: component
@@ -274,37 +227,12 @@ traits:
       type: string
       substr: "telegraf"
 
-  - id: node-telegram-bot-str
-    desc: node-telegram-bot string
-    crit: component
-    for: [javascript, typescript]
-    if:
-      type: string
-      substr: "node-telegram-bot"
+  # Removed node-telegram-bot-str - use micro-behaviors/data/text/malware::malware-bot-tool-suffix (more generic)
 
-  - id: child-process-str
-    desc: child_process string
-    crit: component
-    for: [javascript, typescript]
-    if:
-      type: string
-      substr: "child_process"
+  # Uses micro-behaviors/process/create/shell/lang::child-process-require for child_process
+  # Uses micro-behaviors/process/create/shell/lang::spawn-call for spawn(
 
-  - id: spawn-call
-    desc: spawn( call
-    crit: component
-    for: [javascript, typescript]
-    if:
-      type: string
-      substr: "spawn("
-
-  - id: exec-call
-    desc: exec( call
-    crit: component
-    for: [javascript, typescript]
-    if:
-      type: string
-      substr: "exec("
+  # Note: Uses objectives/lateral-movement/supply-chain/dropper/builder::exec-paren for exec( matching
 
   - id: oast-str
     desc: oast string
@@ -363,21 +291,9 @@ traits:
       type: string
       word: "spawn"
 
-  - id: exec-word
-    desc: exec word
-    crit: component
-    for: [javascript, typescript]
-    if:
-      type: string
-      word: "exec"
+  # Note: Uses objectives/anti-static/obfuscation/payload/bytecode::exec-word for exec word matching
 
-  - id: etc-passwd-str
-    desc: /etc/passwd string
-    crit: component
-    for: [javascript, typescript]
-    if:
-      type: string
-      substr: "/etc/passwd"
+  # Uses micro-behaviors/fs/path/config/accounts::etc-passwd for /etc/passwd
 
   # === SDK atomic indicators ===
   - id: sdk-suffix
@@ -415,7 +331,7 @@ traits:
   - id: os-userinfo-str
     desc: os.userInfo string
     crit: component
-    for: [javascript, typescript, package.json]
+    for: [package.json]  # js/ts covered by objectives/discovery/host/system/hardware-fingerprint::os-userinfo-call
     if:
       type: string
       substr: "os.userInfo"
@@ -437,21 +353,8 @@ traits:
       type: string
       substr: "web3"
 
-  - id: wallet-word
-    desc: wallet word
-    crit: component
-    for: [javascript, typescript]
-    if:
-      type: string
-      word: "wallet"
-
-  - id: bitcoin-str
-    desc: bitcoin string
-    crit: component
-    for: [javascript, typescript]
-    if:
-      type: string
-      substr: "bitcoin"
+  # Uses objectives/impact/cryptojacking/miner::wallet-ref for wallet
+  # Uses objectives/impact/ransom/encrypt::bitcoin-word for bitcoin
 
   - id: solana-str
     desc: solana string
@@ -469,13 +372,7 @@ traits:
       type: string
       substr: "privateKey"
 
-  - id: mnemonic-str
-    desc: mnemonic string
-    crit: component
-    for: [javascript, typescript]
-    if:
-      type: string
-      substr: "mnemonic"
+  # Uses objectives/credential-access/wallet/mnemonic::mnemonic-word for mnemonic
 
   - id: seedphrase-str
     desc: seedPhrase string
@@ -526,7 +423,7 @@ composite_rules:
       - id: express-lib
       - id: react-lib
       - id: discord-lib
-      - id: telegram-lib
+      - id: telegram-word
       - id: winston-lib
       - id: pino-lib
 
@@ -563,7 +460,7 @@ composite_rules:
     crit: component
     for: [javascript]
     any:
-      - id: require-express
+      - id: metadata/library/web-frameworks::uses-express
       - id: require-lodash
       - id: require-axios
 
@@ -582,8 +479,8 @@ composite_rules:
     crit: component
     for: [javascript]
     any:
-      - id: fetch-call
-      - id: request-call
+      - id: micro-behaviors/communications/http/request::fetch-string
+      - id: objectives/execution/vm/sandbox::request-method-call
 
   - id: two-suspicious-requires
     desc: Two or more suspicious requires
@@ -622,7 +519,7 @@ composite_rules:
     crit: component
     for: [javascript, typescript]
     any:
-      - id: discord-token
+      - id: objectives/credential-access/environment/secret-access::discord-token
       - id: dot-token
 
   - id: steal-indicators
@@ -631,7 +528,7 @@ composite_rules:
     for: [javascript, typescript]
     any:
       - id: localstorage-str
-      - id: leveldb-str
+      - id: micro-behaviors/fs/path/sensitive/browser::leveldb-ref
 
   - id: exfil-indicators
     desc: Exfiltration indicators
@@ -640,7 +537,7 @@ composite_rules:
     any:
       - id: webhook-str
       - id: steal-indicators
-      - id: post-method
+      - id: micro-behaviors/communications/http/post::post
 
   - id: discord-library
     desc: Trojanized Discord library patterns
@@ -662,16 +559,16 @@ composite_rules:
     any:
       - id: telegram-word
       - id: telegraf-str
-      - id: node-telegram-bot-str
+      - id: micro-behaviors/data/text/malware::malware-bot-tool-suffix
 
   - id: malicious-process-calls
     desc: Malicious process execution calls
     crit: component
     for: [javascript, typescript]
     any:
-      - id: child-process-str
-      - id: spawn-call
-      - id: exec-call
+      - id: micro-behaviors/process/create/shell/lang::child-process-require
+      - id: micro-behaviors/process/create/shell/lang::spawn-call
+      - id: objectives/lateral-movement/supply-chain/dropper/builder::exec-paren
 
   - id: oob-exfil-indicators
     desc: Out-of-band exfiltration indicators
@@ -709,10 +606,10 @@ composite_rules:
     crit: component
     for: [javascript, typescript]
     any:
-      - id: child-process-str
+      - id: micro-behaviors/process/create/shell/lang::child-process-require
       - id: spawn-word
-      - id: exec-word
-      - id: etc-passwd-str
+      - id: objectives/anti-static/obfuscation/payload/bytecode::exec-word
+      - id: micro-behaviors/fs/path/config/accounts::etc-passwd
 
   - id: two-logging-suspicious
     desc: Two or more suspicious additions in logging library
@@ -720,10 +617,10 @@ composite_rules:
     for: [javascript, typescript]
     needs: 2
     any:
-      - id: child-process-str
+      - id: micro-behaviors/process/create/shell/lang::child-process-require
       - id: spawn-word
-      - id: exec-word
-      - id: etc-passwd-str
+      - id: objectives/anti-static/obfuscation/payload/bytecode::exec-word
+      - id: micro-behaviors/fs/path/config/accounts::etc-passwd
 
   - id: logging-library
     desc: Trojanized logging library patterns
@@ -782,8 +679,8 @@ composite_rules:
     any:
       - id: ethers-str
       - id: web3-str
-      - id: wallet-word
-      - id: bitcoin-str
+      - id: objectives/impact/cryptojacking/miner::wallet-ref
+      - id: objectives/impact/ransom/encrypt::bitcoin-word
       - id: solana-str
 
   - id: key-theft-indicators
@@ -792,7 +689,7 @@ composite_rules:
     for: [javascript, typescript]
     any:
       - id: privatekey-str
-      - id: mnemonic-str
+      - id: objectives/credential-access/wallet/mnemonic::mnemonic-word
       - id: seedphrase-str
       - id: keystore-str
 
@@ -802,7 +699,7 @@ composite_rules:
     for: [javascript, typescript]
     any:
       - id: webhook-str
-      - id: post-method
+      - id: micro-behaviors/communications/http/post::post
       - id: oast-str
 
   - id: crypto-library

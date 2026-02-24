@@ -92,7 +92,7 @@ composite_rules:
     conf: 0.98
     for: [elf]
     all:
-      - id: micro-behaviors/vm/detect/vmware::esxcli-tool
+      - id: objectives/impact/ransom/esxi::esxcli-tool
       - id: micro-behaviors/vm/detect/vmware::esxi-world-id-param
       - id: micro-behaviors/vm/detect/vmware::cpp-vm-killer-symbols
       - id: objectives/impact/ransom/encrypt::ransom-note-text
@@ -105,7 +105,7 @@ composite_rules:
     conf: 0.97
     for: [elf]
     all:
-      - id: micro-behaviors/vm/detect/vmware::esxcli-tool
+      - id: objectives/impact/ransom/esxi::esxcli-tool
       - id: micro-behaviors/vm/detect/vmware::vm-killer-flags
       - id: micro-behaviors/vm/detect/vmware::killing-vm-simple
       - id: objectives/impact/ransom/encrypt::ransom-note-text

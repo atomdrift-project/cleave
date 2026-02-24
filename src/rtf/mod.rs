@@ -1,7 +1,7 @@
 //! RTF (Rich Text Format) parser with OLE object extraction
 //!
 //! This module provides a standalone RTF parser that can be used independently
-//! or integrated with flayer. It focuses on security analysis of RTF documents,
+//! or integrated with cleave. It focuses on security analysis of RTF documents,
 //! particularly the extraction and analysis of embedded OLE objects.
 //!
 //! # Features

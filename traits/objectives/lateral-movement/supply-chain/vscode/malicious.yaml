@@ -7,7 +7,7 @@ defaults:
 
 traits:
   # NOTE: YARA kept for api-usage - requires fullword match on "activate" which
-  # flayer doesn't support, plus regex patterns for require/import
+  # cleave doesn't support, plus regex patterns for require/import
   - id: api-usage
     desc: Uses VSCode API (extension marker)
     crit: notable

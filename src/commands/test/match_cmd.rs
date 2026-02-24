@@ -145,9 +145,9 @@ pub(crate) fn run(
     };
 
     // Load capability mapper with full validation (test-match is a developer command)
-    // Allow skipping for faster tests with FLAYER_SKIP_TRAITS
-    let capability_mapper = if std::env::var("FLAYER_SKIP_TRAITS").is_ok() {
-        tracing::info!("Traits skipped (FLAYER_SKIP_TRAITS set)");
+    // Allow skipping for faster tests with cleave_SKIP_TRAITS
+    let capability_mapper = if std::env::var("cleave_SKIP_TRAITS").is_ok() {
+        tracing::info!("Traits skipped (cleave_SKIP_TRAITS set)");
         crate::capabilities::CapabilityMapper::empty()
     } else {
         crate::capabilities::CapabilityMapper::new_with_precision_thresholds(
@@ -1726,7 +1726,7 @@ pub(crate) fn run(
                             "    identifiers.avg_entropy, identifiers.reuse_ratio, ...\n",
                         );
                     }
-                    output.push_str("  Run `flayer metrics <file>` to see all available fields\n");
+                    output.push_str("  Run `cleave metrics <file>` to see all available fields\n");
                 } else {
                     output.push_str("  No metrics available for this file type\n");
                 }

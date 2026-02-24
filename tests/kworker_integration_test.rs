@@ -25,7 +25,7 @@ fn test_kworker_sample_fake_kworker_trait_match() {
         return;
     }
 
-    use flayer::analyzers::detect_file_type;
+    use cleave::analyzers::detect_file_type;
     use std::fs;
     use std::path::Path as StdPath;
 
@@ -36,7 +36,7 @@ fn test_kworker_sample_fake_kworker_trait_match() {
     let _file_type =
         detect_file_type(StdPath::new(sample_path)).expect("Failed to detect file type");
 
-    // If kworker sample exists, it should be properly detected by flayer
+    // If kworker sample exists, it should be properly detected by cleave
     // Run: cargo run -- test-rules --rules objectives/anti-analysis/masquerade/process/fake-kworker tests/fixtures/malware/kworker_obfuscated_1
     // Expected: MATCHED objectives/anti-analysis/masquerade/process/fake-kworker
     println!("\nKworker sample test:");
@@ -56,7 +56,7 @@ fn test_kworker_sample_fake_kworker_trait_match() {
 #[test]
 #[ignore] // Run with: cargo test -- --ignored kworker_stackstring_detection
 fn test_kworker_stackstring_detection() {
-    // Path to the kworker sample (relative to flayer root)
+    // Path to the kworker sample (relative to cleave root)
     let sample_path = "../stng/testdata/kworker_samples/kworker_obfuscated_1";
 
     // Only run test if sample exists
@@ -102,7 +102,7 @@ fn test_kworker_stackstring_detection() {
 #[ignore] // Run with: cargo test -- --ignored test_layer_path_computation
 fn test_layer_path_computation() {
     // Test that layer paths are correctly computed
-    use flayer::types::{StringInfo, StringType};
+    use cleave::types::{StringInfo, StringType};
 
     // Case 1: Stack string in .text section
     let stack_text = StringInfo {

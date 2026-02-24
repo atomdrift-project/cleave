@@ -8,9 +8,9 @@ use tempfile::TempDir;
 /// Test that map command produces valid DOT output
 #[test]
 fn test_graph_basic() {
-    let output = assert_cmd::cargo_bin_cmd!("flayer")
-        .env("FLAYER_SKIP_YARA", "1") // Skip YARA - not needed for graph tests
-        .env("FLAYER_SKIP_YARA", "1") // Disable validation for faster tests
+    let output = assert_cmd::cargo_bin_cmd!("cleave")
+        .env("cleave_SKIP_YARA", "1") // Skip YARA - not needed for graph tests
+        .env("cleave_SKIP_YARA", "1") // Disable validation for faster tests
         .args(["map", "--depth", "2", "--min-refs", "10"])
         .assert()
         .success()
@@ -29,8 +29,8 @@ fn test_graph_output_file() {
     let temp_dir = TempDir::new().unwrap();
     let output_path = temp_dir.path().join("traits.dot");
 
-    assert_cmd::cargo_bin_cmd!("flayer")
-        .env("FLAYER_SKIP_YARA", "1")
+    assert_cmd::cargo_bin_cmd!("cleave")
+        .env("cleave_SKIP_YARA", "1")
         .args([
             "map",
             "--depth",
@@ -53,8 +53,8 @@ fn test_graph_output_file() {
 /// Test map command with namespace filtering
 #[test]
 fn test_graph_namespace_filter() {
-    let output = assert_cmd::cargo_bin_cmd!("flayer")
-        .env("FLAYER_SKIP_YARA", "1")
+    let output = assert_cmd::cargo_bin_cmd!("cleave")
+        .env("cleave_SKIP_YARA", "1")
         .args([
             "map",
             "--depth",
@@ -82,8 +82,8 @@ fn test_graph_namespace_filter() {
 #[test]
 fn test_graph_depth_levels() {
     // Test depth 1 (top-level only: cap, obj, known, meta)
-    let output_depth1 = assert_cmd::cargo_bin_cmd!("flayer")
-        .env("FLAYER_SKIP_YARA", "1")
+    let output_depth1 = assert_cmd::cargo_bin_cmd!("cleave")
+        .env("cleave_SKIP_YARA", "1")
         .args(["map", "--depth", "1", "--min-refs", "10"])
         .assert()
         .success();
@@ -92,8 +92,8 @@ fn test_graph_depth_levels() {
     assert!(stdout_depth1.contains("digraph trait_dependencies"));
 
     // Test depth 3 (more granular)
-    let output_depth3 = assert_cmd::cargo_bin_cmd!("flayer")
-        .env("FLAYER_SKIP_YARA", "1")
+    let output_depth3 = assert_cmd::cargo_bin_cmd!("cleave")
+        .env("cleave_SKIP_YARA", "1")
         .args(["map", "--depth", "3", "--min-refs", "10"])
         .assert()
         .success();
@@ -117,8 +117,8 @@ fn test_graph_depth_levels() {
 #[test]
 fn test_graph_min_refs_filtering() {
     // Low threshold - should have more edges
-    let output_low = assert_cmd::cargo_bin_cmd!("flayer")
-        .env("FLAYER_SKIP_YARA", "1")
+    let output_low = assert_cmd::cargo_bin_cmd!("cleave")
+        .env("cleave_SKIP_YARA", "1")
         .args(["map", "--depth", "2", "--min-refs", "1"])
         .assert()
         .success();
@@ -127,8 +127,8 @@ fn test_graph_min_refs_filtering() {
     let edges_low = stdout_low.matches("->").count();
 
     // High threshold - should have fewer edges
-    let output_high = assert_cmd::cargo_bin_cmd!("flayer")
-        .env("FLAYER_SKIP_YARA", "1")
+    let output_high = assert_cmd::cargo_bin_cmd!("cleave")
+        .env("cleave_SKIP_YARA", "1")
         .args(["map", "--depth", "2", "--min-refs", "20"])
         .assert()
         .success();
@@ -148,8 +148,8 @@ fn test_graph_min_refs_filtering() {
 /// Test map command color encoding
 #[test]
 fn test_graph_color_encoding() {
-    let output = assert_cmd::cargo_bin_cmd!("flayer")
-        .env("FLAYER_SKIP_YARA", "1")
+    let output = assert_cmd::cargo_bin_cmd!("cleave")
+        .env("cleave_SKIP_YARA", "1")
         .args(["map", "--depth", "2", "--min-refs", "5"])
         .assert()
         .success();
@@ -184,8 +184,8 @@ fn test_graph_color_encoding() {
 /// Test map command edge weights
 #[test]
 fn test_graph_edge_weights() {
-    let output = assert_cmd::cargo_bin_cmd!("flayer")
-        .env("FLAYER_SKIP_YARA", "1")
+    let output = assert_cmd::cargo_bin_cmd!("cleave")
+        .env("cleave_SKIP_YARA", "1")
         .args(["map", "--depth", "2", "--min-refs", "1"])
         .assert()
         .success();
@@ -202,7 +202,7 @@ fn test_graph_edge_weights() {
 /// Test map help message
 #[test]
 fn test_graph_help() {
-    assert_cmd::cargo_bin_cmd!("flayer")
+    assert_cmd::cargo_bin_cmd!("cleave")
         .args(["map", "--help"])
         .assert()
         .success()

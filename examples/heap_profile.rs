@@ -3,7 +3,7 @@
 
 //! Heap profiling using dhat to identify memory allocation hotspots
 
-use flayer::AnalysisOptions;
+use cleave::AnalysisOptions;
 use std::env;
 
 #[global_allocator]
@@ -26,7 +26,7 @@ fn main() -> anyhow::Result<()> {
     let path = std::path::Path::new(target);
     let options = AnalysisOptions::default();
 
-    let _report = flayer::analyze_file(path, &options)?;
+    let _report = cleave::analyze_file(path, &options)?;
 
     println!("\n=== Heap Profile Complete ===");
     println!("dhat output written to dhat-heap.json");

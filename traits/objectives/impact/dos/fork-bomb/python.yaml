@@ -200,7 +200,7 @@ composite_rules:
     crit: notable
 
   # Fork without rate limiting in tight loop (suspicious)
-  # NOTE: Original YARA had filesize < 1MB constraint (not supported in flayer)
+  # NOTE: Original YARA had filesize < 1MB constraint (not supported in cleave)
   - id: rapid-fork
     desc: Rapid process forking without delay
     crit: suspicious

@@ -1,6 +1,6 @@
 //! Single file analysis command.
 //!
-//! This module implements the core file analysis functionality for flayer.
+//! This module implements the core file analysis functionality for cleave.
 //! It performs comprehensive analysis of a single file or directory, including:
 //!
 //! - File type detection via magic bytes
@@ -78,8 +78,8 @@ fn create_analysis_context(
     };
 
     // Allow skipping trait loading for tests that don't need it
-    let capability_mapper = if std::env::var("FLAYER_SKIP_TRAITS").is_ok() {
-        tracing::info!("Traits skipped (FLAYER_SKIP_TRAITS set)");
+    let capability_mapper = if std::env::var("cleave_SKIP_TRAITS").is_ok() {
+        tracing::info!("Traits skipped (cleave_SKIP_TRAITS set)");
         Arc::new(CapabilityMapper::empty())
     } else {
         Arc::new(

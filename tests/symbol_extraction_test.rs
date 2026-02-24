@@ -12,12 +12,12 @@ use tempfile::TempDir;
 /// Helper to analyze a file and check for specific traits/symbols
 /// Skips YARA and traits for speed - these tests only care about AST/tree-sitter parsing
 fn analyze_file_for_traits(file_path: &str) -> serde_json::Value {
-    let output = assert_cmd::cargo_bin_cmd!("flayer")
-        .env("FLAYER_SKIP_YARA", "1") // Skip YARA - not needed for symbol extraction tests
-        .env("FLAYER_SKIP_TRAITS", "1") // Skip trait loading - only testing AST parsing
+    let output = assert_cmd::cargo_bin_cmd!("cleave")
+        .env("cleave_SKIP_YARA", "1") // Skip YARA - not needed for symbol extraction tests
+        .env("cleave_SKIP_TRAITS", "1") // Skip trait loading - only testing AST parsing
         .args(["--json", "--verbose", "analyze", file_path])
         .output()
-        .expect("Failed to run flayer");
+        .expect("Failed to run cleave");
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     if let Ok(json) = serde_json::from_str::<serde_json::Value>(&stdout) {

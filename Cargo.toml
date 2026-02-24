@@ -1,17 +1,17 @@
 [package]
-name = "flayer"
+name = "cleave"
 version = "0.1.0"
 edition = "2021"
-authors = ["flayer Team"]
+authors = ["cleave Team"]
 description = "Deep static analysis tool for extracting features from binaries and source code"
 license = "Apache-2.0"
-default-run = "flayer"
+default-run = "cleave"
 
 [lints]
 workspace = true
 
 [workspace]
-members = [".", "crates/scpt", "flayer-macros"]
+members = [".", "crates/scpt", "cleave-macros"]
 
 # Strict but pragmatic lints - similar to the Rust project itself
 [workspace.lints.rust]
@@ -70,7 +70,7 @@ missing_panics_doc = "allow"  # Too strict for internal functions
 
 [dependencies]
 # Procedural macros
-flayer-macros = { path = "flayer-macros" }
+cleave-macros = { path = "cleave-macros" }
 
 # Binary parsing
 goblin = "0.10"
@@ -169,11 +169,11 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 
 [lib]
-name = "flayer"
+name = "cleave"
 path = "src/lib.rs"
 
 [[bin]]
-name = "flayer"
+name = "cleave"
 path = "src/main.rs"
 test = false  # Tests run via lib.rs - eliminates ~1700 duplicate tests
 

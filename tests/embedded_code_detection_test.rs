@@ -3,13 +3,13 @@
 
 //! Integration tests for embedded code detection in strings
 
-use flayer::analyzers::embedded_code_detector::{
+use cleave::analyzers::embedded_code_detector::{
     analyze_embedded_string, detect_language, EmbeddedAnalysisResult,
 };
-use flayer::analyzers::FileType;
-use flayer::capabilities::CapabilityMapper;
-use flayer::types::binary::StringInfo;
-use flayer::types::StringType;
+use cleave::analyzers::FileType;
+use cleave::capabilities::CapabilityMapper;
+use cleave::types::binary::StringInfo;
+use cleave::types::StringType;
 use std::sync::Arc;
 
 fn make_string_info(value: &str) -> StringInfo {

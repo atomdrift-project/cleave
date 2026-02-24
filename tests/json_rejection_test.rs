@@ -6,7 +6,7 @@
 //! This test verifies that only known manifest filenames are analyzed,
 //! and arbitrary structured data files are skipped.
 
-use flayer::AnalysisOptions;
+use cleave::AnalysisOptions;
 use std::fs;
 use tempfile::TempDir;
 
@@ -42,14 +42,14 @@ fn test_random_json_files_skipped_in_directory_scan() {
     )
     .unwrap();
 
-    // Scan the directory using flayer library
+    // Scan the directory using cleave library
     let options = AnalysisOptions {
         all_files: false,
         disable_yara: true, // Skip YARA - testing file filtering, not YARA rules
         ..Default::default()
     };
     let reports =
-        flayer::analyze_directory(base_path, &options).expect("Directory analysis failed");
+        cleave::analyze_directory(base_path, &options).expect("Directory analysis failed");
 
     // Should only have one report (for package.json)
     // Random JSON files should not be analyzed
@@ -116,7 +116,7 @@ fn test_random_yaml_files_skipped() {
         ..Default::default()
     };
     let reports =
-        flayer::analyze_directory(base_path, &options).expect("Directory analysis failed");
+        cleave::analyze_directory(base_path, &options).expect("Directory analysis failed");
 
     // Verify random YAML files were not analyzed
     let random_yaml_reports: Vec<_> = reports
@@ -178,7 +178,7 @@ fn test_random_toml_files_skipped() {
         ..Default::default()
     };
     let reports =
-        flayer::analyze_directory(base_path, &options).expect("Directory analysis failed");
+        cleave::analyze_directory(base_path, &options).expect("Directory analysis failed");
 
     // Verify random TOML files were not analyzed
     let random_toml_reports: Vec<_> = reports
@@ -217,7 +217,7 @@ fn test_explicit_file_argument_still_analyzed() {
         disable_yara: true, // Skip YARA - testing file argument handling
         ..Default::default()
     };
-    let report = flayer::analyze_file(&random_json, &options);
+    let report = cleave::analyze_file(&random_json, &options);
 
     // The file should be analyzed (even though it's not a known manifest)
     // because the user explicitly specified it
@@ -244,7 +244,7 @@ fn test_all_files_flag_processes_everything() {
         ..Default::default()
     };
     let reports =
-        flayer::analyze_directory(base_path, &options).expect("Directory analysis failed");
+        cleave::analyze_directory(base_path, &options).expect("Directory analysis failed");
 
     // With all_files=true, all JSON files should be present in reports
     let json_count = reports

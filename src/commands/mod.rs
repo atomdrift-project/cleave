@@ -1,6 +1,6 @@
-//! Command implementations for flayer CLI.
+//! Command implementations for cleave CLI.
 //!
-//! This module provides the structure and re-exports for flayer's command subsystem.
+//! This module provides the structure and re-exports for cleave's command subsystem.
 //! The commands module is organized as follows:
 //!
 //! - **shared**: Common utilities, types, and functions used across multiple commands.

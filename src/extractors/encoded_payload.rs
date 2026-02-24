@@ -5,7 +5,7 @@
 //!
 //! **Division of Responsibilities:**
 //! - **stng**: Detects and decodes all encoding types (base64, hex, URL, XOR, etc.)
-//! - **flayer**: Handles compression (zlib/gzip), nested encoding, and payload classification
+//! - **cleave**: Handles compression (zlib/gzip), nested encoding, and payload classification
 
 use crate::analyzers::FileType;
 use crate::types::Criticality;
@@ -276,7 +276,7 @@ fn classify_payload_suspicion(final_bytes: &[u8]) -> Criticality {
     if let Ok(text) = std::str::from_utf8(final_bytes) {
         let kind = stng::classify_string(text);
 
-        // Map stng's StringKind to flayer's Criticality
+        // Map stng's StringKind to cleave's Criticality
         match kind {
             // Hostile: Active threats
             stng::StringKind::ShellCmd
@@ -329,7 +329,7 @@ fn decompress_and_nest(
         return (data.to_vec(), chain);
     }
 
-    // Check for compression (flayer-specific: stng doesn't decompress)
+    // Check for compression (cleave-specific: stng doesn't decompress)
     if let Some((decompressed, comp_type)) = decompress_if_compressed(data) {
         chain.push(comp_type);
         // Recursively check decompressed data
@@ -408,7 +408,7 @@ fn process_decoded_string(
     // Start encoding chain with stng's detection
     let encoding_chain = vec![method_to_encoding_name(decoded_str.method).to_string()];
 
-    // flayer: Check for compression and nested encoding
+    // cleave: Check for compression and nested encoding
     let (final_bytes, final_chain) = decompress_and_nest(decoded_bytes, encoding_chain, 0);
 
     // Re-classify final decoded content for suspicion

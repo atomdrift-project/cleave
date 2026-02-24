@@ -1,4 +1,4 @@
-# flayer Taxonomy
+# cleave Taxonomy
 
 A three-tier taxonomy following [MBC (Malware Behavior Catalog)](https://github.com/MBCProject/mbc-markdown) principles.
 

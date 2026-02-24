@@ -1,6 +1,6 @@
 //! Composite scoring metrics and unified metrics container
 
-use flayer_macros::ValidFieldPaths;
+use cleave_macros::ValidFieldPaths;
 use serde::{Deserialize, Serialize};
 
 use super::binary_metrics::{BinaryMetrics, ElfMetrics, JavaClassMetrics, MachoMetrics, PeMetrics};

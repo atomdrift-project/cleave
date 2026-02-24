@@ -12,19 +12,19 @@ use std::time::Duration;
 #[test]
 #[ignore = "Test times out in debug builds - run with cargo test --release"]
 fn test_analyze_bin_ls_json_output() {
-    let bin_path = assert_cmd::cargo::cargo_bin!("flayer");
+    let bin_path = assert_cmd::cargo::cargo_bin!("cleave");
     let mut cmd = Command::new(bin_path);
 
     let output = cmd
         .args(["--json", "/bin/ls"])
         .timeout(Duration::from_secs(10))
         .output()
-        .expect("Failed to execute flayer");
+        .expect("Failed to execute cleave");
 
     // Should succeed
     assert!(
         output.status.success(),
-        "flayer should successfully analyze /bin/ls"
+        "cleave should successfully analyze /bin/ls"
     );
 
     // Parse JSON Lines output from stdout (one JSON object per line)
@@ -98,7 +98,7 @@ fn test_analyze_bin_ls_json_output() {
 #[test]
 #[ignore = "Test times out in debug builds - run with cargo test --release"]
 fn test_analyze_bin_ls_completes_quickly() {
-    let bin_path = assert_cmd::cargo::cargo_bin!("flayer");
+    let bin_path = assert_cmd::cargo::cargo_bin!("cleave");
     let mut cmd = Command::new(bin_path);
 
     let start = std::time::Instant::now();
@@ -107,13 +107,13 @@ fn test_analyze_bin_ls_completes_quickly() {
         .args(["--json", "/bin/ls"])
         .timeout(Duration::from_secs(10))
         .output()
-        .expect("Failed to execute flayer");
+        .expect("Failed to execute cleave");
 
     let elapsed = start.elapsed();
 
     assert!(
         output.status.success(),
-        "flayer should successfully analyze /bin/ls"
+        "cleave should successfully analyze /bin/ls"
     );
 
     assert!(

@@ -18,7 +18,7 @@ type fileEntry struct {
 type promptData struct {
 	Path                  string
 	ArchiveName           string
-	flayerBin            string
+	cleaveBin            string
 	TraitsDir             string
 	ReportPath            string
 	GapAnalysisPath       string
@@ -42,7 +42,7 @@ type promptData struct {
 type config struct {
 	db                *sql.DB
 	repoRoot          string
-	flayerBin        string
+	cleaveBin        string
 	provider          string
 	model             string
 	extractDir        string

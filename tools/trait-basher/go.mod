@@ -1,4 +1,4 @@
-module github.com/chainguard-dev/flayer/tools/trait-basher
+module github.com/chainguard-dev/cleave/tools/trait-basher
 
 go 1.24
 

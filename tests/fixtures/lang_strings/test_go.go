@@ -9,8 +9,8 @@ import (
 // ============== CONSTANTS ==============
 // Constants create string structures directly
 const (
-	CONST_MARKER_1 = "flayer_CONST_MARKER_1"
-	CONST_MARKER_2 = "flayer_CONST_MARKER_2"
+	CONST_MARKER_1 = "cleave_CONST_MARKER_1"
+	CONST_MARKER_2 = "cleave_CONST_MARKER_2"
 	CONST_IP       = "10.0.0.100"
 	CONST_URL      = "https://const.example.com/api"
 )
@@ -18,8 +18,8 @@ const (
 // ============== GLOBAL VARIABLES ==============
 // Global variables ensure strings get their own structures
 var (
-	VAR_MARKER_1 = "flayer_VAR_MARKER_1"
-	VAR_MARKER_2 = "flayer_VAR_MARKER_2"
+	VAR_MARKER_1 = "cleave_VAR_MARKER_1"
+	VAR_MARKER_2 = "cleave_VAR_MARKER_2"
 	VAR_PATH     = "/etc/passwd"
 	VAR_DSN      = "postgres://user:pass@localhost:5432/db"
 
@@ -84,8 +84,8 @@ func main() {
 
 	// ============== STRING LITERALS PASSED TO FUNCTIONS ==============
 	// These create string structures
-	fmt.Println("flayer_LITERAL_MARKER_1")
-	fmt.Println("flayer_LITERAL_MARKER_2")
+	fmt.Println("cleave_LITERAL_MARKER_1")
+	fmt.Println("cleave_LITERAL_MARKER_2")
 
 	// ============== STRUCT INSTANCES FROM VARIABLES ==============
 	// Field values from variables create structures

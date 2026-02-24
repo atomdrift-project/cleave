@@ -9,6 +9,25 @@ defaults:
   for: [all]
 
 traits:
+  # === ESXi CLI tools ===
+  - id: vim-cmd-tool
+    desc: VMware vim-cmd tool
+    crit: notable
+    conf: 0.9
+    for: [elf, macho, pe, so, dylib, dll]
+    if:
+      type: string
+      substr: "vim-cmd"
+
+  - id: esxcli-tool
+    desc: ESXi CLI tool
+    crit: notable
+    conf: 0.9
+    for: [elf, macho, pe, so, dylib, dll]
+    if:
+      type: string
+      substr: "esxcli"
+
   # === VM enumeration atomic indicators ===
   # vmsvc-getallvms is in objectives/impact/services/stop
 
@@ -295,8 +314,8 @@ composite_rules:
     attack: "T1486"
     needs: 2
     any:
-      - id: micro-behaviors/vm/detect/vmware::esxcli-tool
-      - id: well-known/malware/ransomware/medusa::vim-cmd
+      - id: esxcli-tool
+      - id: vim-cmd-tool
       - id: esxcfg-prefix
       - id: vmkfstools-cmd
       - id: vmware-cmd-tool

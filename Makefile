@@ -1,7 +1,7 @@
-# flayer Makefile
+# cleave Makefile
 # Build and test commands for deep static analysis tool
 
-BINARY = flayer
+BINARY = cleave
 OUT_DIR = out
 
 # Use sccache for faster compilation if available
@@ -16,7 +16,7 @@ endif
 all: build
 
 help: ## Show this help
-	@echo "flayer Makefile"
+	@echo "cleave Makefile"
 	@echo "Usage: make [target]"
 	@echo ""
 	@echo "Targets:"
@@ -30,7 +30,7 @@ help: ## Show this help
 	@echo "  lint                  - Run code formatting and linting checks"
 	@echo "  coverage              - Generate code coverage report"
 	@echo "  ci                    - Run all CI checks (test + lint)"
-	@echo "  regenerate-testdata   - Regenerate integration test snapshots from ~/data/flayer"
+	@echo "  regenerate-testdata   - Regenerate integration test snapshots from ~/data/cleave"
 	@echo "  clean                 - Clean all build artifacts"
 
 build: debug ## Build in debug mode (default)
@@ -69,9 +69,9 @@ test-fast: ## Run tests quickly (skip YARA in spawned processes, uses nextest)
 	@echo ""
 	@cargo build --quiet
 	@if command -v cargo-nextest >/dev/null 2>&1; then \
-		FLAYER_SKIP_YARA=1 cargo nextest run --workspace --lib; \
+		cleave_SKIP_YARA=1 cargo nextest run --workspace --lib; \
 	else \
-		FLAYER_SKIP_YARA=1 cargo test --workspace --lib; \
+		cleave_SKIP_YARA=1 cargo test --workspace --lib; \
 	fi
 	@echo ""
 	@echo "✓ Fast tests passed"
@@ -122,7 +122,7 @@ clean: ## Clean all build artifacts
 	@echo "✓ Clean complete"
 
 regenerate-testdata: release ## Regenerate integration test snapshots
-	@echo "Regenerating test data from ~/data/flayer..."
+	@echo "Regenerating test data from ~/data/cleave..."
 	cargo build --release --quiet --bin regenerate_testdata
 	./target/release/regenerate_testdata
 

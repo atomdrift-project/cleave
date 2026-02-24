@@ -217,17 +217,17 @@ pub(crate) fn analyze_file_with_shared_mapper(
 
     // Log memory state before processing
     if verbose {
-        use flayer::memory_tracker;
+        use cleave::memory_tracker;
         memory_tracker::log_before_file_processing(target, file_size);
     }
 
     // Read file for mismatch check and payload extraction
-    let file_data_wrapper = flayer::file_io::read_file_smart(path)?;
+    let file_data_wrapper = cleave::file_io::read_file_smart(path)?;
     let file_data = file_data_wrapper.as_slice();
 
     // Track file read for memory monitoring
     if verbose {
-        use flayer::memory_tracker;
+        use cleave::memory_tracker;
         memory_tracker::global_tracker().record_file_read(file_size, target);
     }
 
@@ -557,7 +557,7 @@ pub(crate) fn analyze_file_with_shared_mapper(
 
     // Log memory state after processing
     if verbose {
-        use flayer::memory_tracker;
+        use cleave::memory_tracker;
         memory_tracker::log_after_file_processing(target, file_size, _t_start.elapsed());
     }
 

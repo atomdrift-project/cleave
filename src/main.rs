@@ -1,6 +1,6 @@
-//! flayer - Deep Inspection of Suspicious Software for Evaluation and Classification of Threats
+//! cleave - Deep Inspection of Suspicious Software for Evaluation and Classification of Threats
 //!
-//! flayer is a comprehensive malware analysis tool that performs deep static analysis
+//! cleave is a comprehensive malware analysis tool that performs deep static analysis
 //! of binaries, scripts, and archives to identify malicious behavior patterns and capabilities.
 //!
 //! # Architecture
@@ -14,8 +14,8 @@
 //! # Usage
 //!
 //! ```text
-//! flayer <file> [options]
-//! flayer diff <file1> <file2>  # Compare two versions
+//! cleave <file> [options]
+//! cleave diff <file1> <file2>  # Compare two versions
 //! ```
 //!
 //! # Output
@@ -73,7 +73,7 @@ fn main() -> Result<()> {
     // Parse args early to get verbose flag for logging initialization
     let args = cli::Args::parse();
     if args.verbose {
-        std::env::set_var("FLAYER_VERBOSE", "1");
+        std::env::set_var("cleave_VERBOSE", "1");
     }
 
     // Determine output format early so we can use it for conditional status messages
@@ -97,12 +97,12 @@ fn main() -> Result<()> {
         } else if args.verbose {
             // Verbose: trace to both
             (
-                EnvFilter::new("flayer=trace"),
-                EnvFilter::new("flayer=trace"),
+                EnvFilter::new("cleave=trace"),
+                EnvFilter::new("cleave=trace"),
             )
         } else {
             // Default: warn to stderr, info to file
-            (EnvFilter::new("flayer=warn"), EnvFilter::new("flayer=info"))
+            (EnvFilter::new("cleave=warn"), EnvFilter::new("cleave=info"))
         };
 
         // Create or append to log file
@@ -174,9 +174,9 @@ fn main() -> Result<()> {
         let env_filter = if std::env::var("RUST_LOG").is_ok() {
             EnvFilter::from_default_env()
         } else if args.verbose {
-            EnvFilter::new("flayer=trace")
+            EnvFilter::new("cleave=trace")
         } else {
-            EnvFilter::new("flayer=warn")
+            EnvFilter::new("cleave=warn")
         };
         // No log file, just stderr
         tracing_subscriber::fmt()
@@ -190,7 +190,7 @@ fn main() -> Result<()> {
 
     // Log command line and initialization
     tracing::info!(
-        "flayer started: {}",
+        "cleave started: {}",
         std::env::args().collect::<Vec<_>>().join(" ")
     );
     tracing::trace!("Logging initialized (verbose={})", args.verbose);
@@ -208,8 +208,8 @@ fn main() -> Result<()> {
 
     // Apply custom traits directory if specified (must be before any trait loading)
     if let Some(ref traits_dir) = args.traits_dir {
-        std::env::set_var("FLAYER_TRAITS_PATH", traits_dir);
-        std::env::set_var("FLAYER_CAPABILITIES", traits_dir);
+        std::env::set_var("cleave_TRAITS_PATH", traits_dir);
+        std::env::set_var("cleave_CAPABILITIES", traits_dir);
     }
 
     // Apply global disables for radare2 and upx
@@ -226,13 +226,13 @@ fn main() -> Result<()> {
         let enable_third_party = !disabled.third_party;
         if let Some(rule_count) = yara_engine::peek_cache_rule_count(enable_third_party) {
             eprintln!(
-                "flayer v{} • {} rules\n",
+                "cleave v{} • {} rules\n",
                 env!("CARGO_PKG_VERSION"),
                 rule_count
             );
         } else {
             eprintln!(
-                "flayer v{} • Deep static analysis tool\n",
+                "cleave v{} • Deep static analysis tool\n",
                 env!("CARGO_PKG_VERSION")
             );
         }
@@ -275,7 +275,7 @@ fn main() -> Result<()> {
 
     // Start periodic memory logging if verbose mode is enabled
     let _memory_logger = if args.verbose {
-        use flayer::memory_tracker;
+        use cleave::memory_tracker;
         Some(memory_tracker::start_periodic_logging(
             std::time::Duration::from_secs(10),
         ))
@@ -430,7 +430,7 @@ fn main() -> Result<()> {
         None => {
             // No subcommand - use paths from top-level args
             if args.paths.is_empty() {
-                anyhow::bail!("No paths specified. Usage: flayer <path>... or flayer <command>");
+                anyhow::bail!("No paths specified. Usage: cleave <path>... or cleave <command>");
             }
             let expanded = expand_paths(args.paths, &format);
             if expanded.is_empty() {
@@ -474,7 +474,7 @@ fn main() -> Result<()> {
 
     // Log final memory statistics if verbose
     if args.verbose {
-        use flayer::memory_tracker;
+        use cleave::memory_tracker;
         memory_tracker::global_tracker().log_stats();
         let total_files = memory_tracker::global_tracker().files_processed();
         let peak_rss = memory_tracker::global_tracker().peak_rss();

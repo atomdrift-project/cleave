@@ -125,9 +125,10 @@ traits:
       type: string
       substr: "output"
 
+  # Note: "execute" appears in legitimate help text and documentation
   - id: execute
     desc: execute keyword
-    crit: notable
+    crit: component
     conf: 0.5
     if:
       type: string

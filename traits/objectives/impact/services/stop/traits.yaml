@@ -157,14 +157,7 @@ traits:
       substr: encrypted
       case_insensitive: true
 
-  - id: word-ransom
-    desc: Ransom keyword
-    crit: notable
-    conf: 0.5
-    if:
-      type: string
-      word: ransom
-      case_insensitive: true
+  # Removed word-ransom duplicate - use objectives/impact/ransom/encrypt::ransom-word
 
   - id: tor-service-stop-systemctl
     desc: Tor service stop systemctl command
@@ -222,14 +215,7 @@ traits:
       type: string
       regex: "tor[- ]?browser.{0,50}kill|kill.{0,50}tor[- ]?browser"
 
-  - id: word-bitcoin
-    desc: Bitcoin keyword
-    crit: notable
-    conf: 0.4
-    if:
-      type: string
-      substr: bitcoin
-      case_insensitive: true
+  # Removed word-bitcoin duplicate - use objectives/impact/ransom/encrypt::bitcoin-word
 
   - id: phrase-your-data
     desc: Your data phrase
@@ -300,8 +286,8 @@ composite_rules:
     mbc: "B0040"
     for: [elf]
     all:
-      - id: micro-behaviors/vm/detect/vmware::esxcli-tool
+      - id: objectives/impact/ransom/esxi::esxcli-tool
       - id: onion-domain
     any:
       - id: word-encrypted
-      - id: word-ransom
+      - id: objectives/impact/ransom/encrypt::ransom-word

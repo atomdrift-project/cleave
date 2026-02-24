@@ -115,12 +115,7 @@ traits:
       type: string
       substr: "/lib64"
 
-  - id: dev-shm-path
-    desc: /dev/shm path
-    crit: component
-    if:
-      type: string
-      substr: "/dev/shm"
+  # Removed dev-shm-path duplicate - use objectives/execution/fileless/memory::dev-shm
 
   - id: run-path
     desc: /run path
@@ -145,19 +140,8 @@ traits:
       type: string
       substr: "/etc/cron.d/"
 
-  - id: crontab-path
-    desc: /etc/crontab path
-    crit: component
-    if:
-      type: string
-      substr: "/etc/crontab"
-
-  - id: spool-cron-path
-    desc: /var/spool/cron path
-    crit: component
-    if:
-      type: string
-      substr: "/var/spool/cron"
+  # Removed crontab-path duplicate - use objectives/evasion/log-clear/crontab::etc-crontab-target
+  # Removed spool-cron-path duplicate - use objectives/persistence/cron/job::var-spool-cron-path
 
   # Writability test atomic traits
   - id: shell-test-w
@@ -264,8 +248,8 @@ composite_rules:
     crit: component
     any:
       - id: cron-d-path
-      - id: crontab-path
-      - id: spool-cron-path
+      - id: objectives/evasion/log-clear/crontab::etc-crontab-target
+      - id: objectives/persistence/cron/job::var-spool-cron-path
 
   - id: echo-cron
     desc: Cron persistence via echo redirect
@@ -301,7 +285,7 @@ composite_rules:
       - id: lost-found-path
       - id: etc-openal-path
       - id: etc-thermald-path
-      - id: dev-shm-path
+      - id: objectives/execution/fileless/memory::dev-shm
       - id: run-path
 
   - id: dir-func-with-unusual
@@ -324,7 +308,7 @@ composite_rules:
       - id: lost-found-path
       - id: etc-openal-path
       - id: etc-thermald-path
-      - id: dev-shm-path
+      - id: objectives/execution/fileless/memory::dev-shm
       - id: run-path
 
   - id: botdir-selection

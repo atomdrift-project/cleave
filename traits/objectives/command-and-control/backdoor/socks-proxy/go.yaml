@@ -72,6 +72,8 @@ traits:
       exact: "ptmx"
 
   # SOCKS5 version handshake hex pattern
+  # Note: 05 01 00 is only 3 bytes and appears randomly in many binaries
+  # Require multiple occurrences or use only in composite with Go SOCKS strings
   - id: socks5-handshake
     desc: SOCKS5 version handshake bytes
     crit: component
@@ -80,6 +82,7 @@ traits:
       type: hex
       # SOCKS5 version 5, 1 method, no auth required
       pattern: "05 01 00"
+      count_min: 10
 
 composite_rules:
   # === Helper composites ===

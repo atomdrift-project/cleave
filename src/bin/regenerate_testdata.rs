@@ -6,7 +6,7 @@ use std::path::Path;
 use std::process::Command;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let data_dir = Path::new(&std::env::var("HOME")?).join("data/flayer");
+    let data_dir = Path::new(&std::env::var("HOME")?).join("data/cleave");
     let verify_dir = Path::new("tests/verify");
 
     if !data_dir.exists() {
@@ -16,8 +16,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("Regenerating test data from {}...", data_dir.display());
 
-    // Run flayer on the entire directory with JSONL output
-    let mut child = Command::new("./target/release/flayer")
+    // Run cleave on the entire directory with JSONL output
+    let mut child = Command::new("./target/release/cleave")
         .arg("--format")
         .arg("jsonl")
         .arg(&data_dir)
@@ -41,7 +41,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let line_num = line_num + 1;
         let trimmed = line.trim();
 
-        if trimmed.is_empty() || trimmed.starts_with("flayer") {
+        if trimmed.is_empty() || trimmed.starts_with("cleave") {
             continue;
         }
 
@@ -79,7 +79,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let status = child.wait()?;
     if !status.success() {
-        eprintln!("Warning: flayer exited with non-zero status");
+        eprintln!("Warning: cleave exited with non-zero status");
     }
 
     println!(

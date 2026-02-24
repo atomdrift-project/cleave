@@ -1,4 +1,4 @@
-//! Extraction subcommands for flayer.
+//! Extraction subcommands for cleave.
 //!
 //! This module provides various extraction utilities for analyzing files:
 //!

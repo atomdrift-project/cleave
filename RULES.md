@@ -1,4 +1,4 @@
-# flayer Rule Writing Guide
+# cleave Rule Writing Guide
 
 ## Quick Overview
 
@@ -476,7 +476,7 @@ composite_rules:
 
 **Debug:** Use `test-rules` to see downgrade evaluation:
 ```bash
-flayer test-rules file.bin --rules "debugger-check"
+cleave test-rules file.bin --rules "debugger-check"
 # Shows: "Downgrade: suspicious -> notable (triggered)"
 ```
 
@@ -577,11 +577,11 @@ size_max: 0
 ## CLI Reference
 
 ```bash
-flayer /path/to/file                    # Analyze file
-flayer symbols <file>                   # View symbols
-flayer strings <file>                   # View strings
-flayer test-rules <file> --rules "x,y"  # Debug rules
-flayer test-match <file> --type string --pattern "eval"  # Test patterns
+cleave /path/to/file                    # Analyze file
+cleave symbols <file>                   # View symbols
+cleave strings <file>                   # View strings
+cleave test-rules <file> --rules "x,y"  # Debug rules
+cleave test-match <file> --type string --pattern "eval"  # Test patterns
 ```
 
 ### test-match Options

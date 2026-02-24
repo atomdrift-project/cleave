@@ -160,7 +160,7 @@ impl super::CapabilityMapper {
                 trait_refs: vec![],
                 evidence: vec![Evidence {
                     method: "line-length-analysis".to_string(),
-                    source: "flayer".to_string(),
+                    source: "cleave".to_string(),
                     value: "Detected line(s) exceeding 1MB (potential anti-analysis technique)"
                         .to_string(),
                     location: None,

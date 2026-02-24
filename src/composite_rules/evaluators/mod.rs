@@ -171,7 +171,7 @@ thread_local! {
     static UTF8_CACHE: RefCell<lru::LruCache<Utf8CacheKey, std::sync::Arc<str>>> = {
         use std::num::NonZeroUsize;
         RefCell::new(lru::LruCache::new(
-            NonZeroUsize::new(std::env::var("FLAYER_UTF8_CACHE_SIZE")
+            NonZeroUsize::new(std::env::var("cleave_UTF8_CACHE_SIZE")
                 .ok()
                 .and_then(|s| s.parse().ok())
                 .unwrap_or(32)

@@ -792,7 +792,7 @@ mod tests {
     fn test_analyze_self_extracting_7z() {
         // Test with real 7z self-extracting installer if available
         let test_file =
-            std::path::Path::new("/Users/t/data/flayer/malware/pe/2026.7zip.com/7z2501-x64.exe");
+            std::path::Path::new("/Users/t/data/cleave/malware/pe/2026.7zip.com/7z2501-x64.exe");
 
         if !test_file.exists() {
             eprintln!("Skipping SFX test - file not found: {:?}", test_file);

@@ -200,7 +200,7 @@ pub struct StringInfo {
 }
 
 // Re-export stng's StringKind as StringType for compatibility
-// flayer-specific source code types (Literal, Comment, Docstring) map to stng::StringKind::Const
+// cleave-specific source code types (Literal, Comment, Docstring) map to stng::StringKind::Const
 // StackString is detected via StringMethod, not as a separate kind
 pub use stng::StringKind as StringType;
 

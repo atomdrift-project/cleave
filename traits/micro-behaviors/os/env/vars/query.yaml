@@ -14,8 +14,10 @@ traits:
       type: string
       substr: "printenv"
 
+  # Note: "env" as a word is too generic (appears in certificate text, etc.)
+  # Require the executable path or command form
   - id: env-cmd
-    desc: env command
+    desc: env command path
     if:
       type: string
-      word: "env"
+      substr: "/usr/bin/env"

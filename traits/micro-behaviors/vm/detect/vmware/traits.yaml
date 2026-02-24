@@ -14,14 +14,7 @@ traits:
       type: string
       substr: "esxcli vm process list"
 
-  - id: esxcli-tool
-    desc: Reference to ESXi CLI tool (esxcli)
-    crit: notable
-    conf: 0.9
-    for: [elf, binaries]
-    if:
-      type: string
-      substr: "esxcli"
+  # esxcli and vim-cmd moved to objectives/impact/ransom/esxi (management tools, not detection)
 
   - id: vmware-extensions-core-a
     desc: VMware file extensions core group A
@@ -53,7 +46,7 @@ traits:
     conf: 0.9
     if:
       type: string
-      regex: 'World ID:|VM:.{0,20}ID:|Running VM:'
+      regex: "World ID:|VM:.{0,20}ID:|Running VM:"
 
   # === Control/Termination ===
   - id: esxcli-vm-kill
@@ -79,7 +72,7 @@ traits:
     for: [elf]
     if:
       type: string
-      regex: '--world-id[=:]?'
+      regex: "--world-id[=:]?"
 
   - id: cpp-vm-killer-symbols
     desc: C++ symbols for VM termination
@@ -97,7 +90,7 @@ traits:
     for: [elf]
     if:
       type: string
-      regex: '--(vmkill(er)?|prockill(er)?|vmlist)'
+      regex: "--(vmkill(er)?|prockill(er)?|vmlist)"
 
   # === Indicators/Messages ===
   - id: killing-vms-msg
@@ -106,7 +99,7 @@ traits:
     conf: 0.9
     if:
       type: string
-      regex: 'Killing VM[Ss]?:|Removing Snapshots'
+      regex: "Killing VM[Ss]?:|Removing Snapshots"
 
   - id: killing-vm-simple
     desc: Simple VM termination message
@@ -114,7 +107,7 @@ traits:
     conf: 0.9
     if:
       type: string
-      regex: 'Killing VM |Skipping VM '
+      regex: "Killing VM |Skipping VM "
 
   - id: esxi-preparation
     desc: Reference to ESXi preparation/waiting state

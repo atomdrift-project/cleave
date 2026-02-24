@@ -305,7 +305,8 @@ impl YaraEngine {
 
         /// Maximum pattern match ranges to collect per pattern.
         /// Patterns matching more than this are truncated to prevent memory exhaustion.
-        const MAX_PATTERN_MATCHES: usize = 100;
+        /// Set high enough to allow accurate counts and density measurements.
+        const MAX_PATTERN_MATCHES: usize = 100_000;
 
         let raw_rules: Vec<RawRule> = scan_results
             .matching_rules()

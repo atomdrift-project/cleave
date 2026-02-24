@@ -1,8 +1,6 @@
-![cleave](media/logo.jpg)
+![cleave](media/logo.png)
 
-# cleave
-
-Deep static analysis for threat detection across binaries and source code. AST-aware, not regex-blind.
+Deep static analysis of software composition across binaries and source code. AST-aware, not regex-blind.
 
 cleave understands code semantics—it won't mistake a string literal `"exec"` for actual execution. It combines abstract syntax tree inspection with binary reverse engineering to detect capabilities and behaviors across 20+ languages and three binary formats in a single pass.
 

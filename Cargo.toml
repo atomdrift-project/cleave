@@ -149,6 +149,7 @@ aho-corasick = "1.1"
 rustc-hash = "2.1"
 dashmap = "6.1"
 lru = "0.12"  # LRU cache for UTF-8 conversion results
+rand = "0.9"  # Random file ordering for trait-basher
 anyhow = "1.0"
 thiserror = "2.0"
 chrono = { version = "0.4", features = ["serde"] }

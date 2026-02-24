@@ -165,6 +165,7 @@ pub(crate) fn run(
     error_if_levels: Option<&[types::Criticality]>,
     verbose: bool,
     all_files: bool,
+    shuffle: bool,
     sample_extraction: Option<&types::SampleExtractionConfig>,
     platforms: &[composite_rules::Platform],
     min_hostile_precision: f32,
@@ -195,13 +196,24 @@ pub(crate) fn run(
         let streaming = matches!(format, cli::OutputFormat::Jsonl);
         let mut results = Vec::new();
 
-        for entry in walkdir::WalkDir::new(path)
+        // Collect all files first when shuffling, otherwise stream directly
+        let mut files: Vec<_> = walkdir::WalkDir::new(path)
             .follow_links(false)
             .into_iter()
             .filter_entry(|e| !e.file_name().to_string_lossy().starts_with(".git"))
             .filter_map(std::result::Result::ok)
             .filter(|e| e.file_type().is_file())
-        {
+            .collect();
+
+        // Shuffle files for random processing order when requested.
+        // This prevents predictable iteration patterns and ensures diverse sampling
+        // when used with trait-basher for analysis tuning.
+        if shuffle {
+            use rand::seq::SliceRandom;
+            files.shuffle(&mut rand::rng());
+        }
+
+        for entry in files {
             let file_path = entry.path().to_string_lossy().to_string();
             // Skip unknown file types unless --all-files is set
             if !all_files {

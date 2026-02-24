@@ -162,6 +162,11 @@ pub(crate) struct Args {
     #[arg(long)]
     pub all_files: bool,
 
+    /// Randomize file order when scanning directories
+    /// Useful for trait-basher to ensure diverse sampling across runs
+    #[arg(long)]
+    pub shuffle: bool,
+
     /// Filter rules by target platform(s) (comma-separated, default: all)
     /// Examples: --platforms linux,macos or --platforms windows
     /// Valid values: all, linux, macos, windows, unix, android, ios

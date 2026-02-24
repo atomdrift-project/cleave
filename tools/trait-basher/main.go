@@ -818,10 +818,8 @@ func streamAnalyzeAndReview(ctx context.Context, cfg *config, dbMode string) (*s
 		"pid", pid,
 	)
 
-	// Build full command line for logging
-	cleaveArgs := []string{"--format", "jsonl", "--extract-dir", cfg.extractDir, "--max-file-mem", "0", "--log-file", cleaveLogPath, "--validate=true", "--shuffle"}
-	cleaveArgs = append(cleaveArgs, cfg.dirs...)
-	fullCmd := append([]string{cfg.cleaveBin}, cleaveArgs...)
+	// Build full command line for logging (reuse args from above)
+	fullCmd := append([]string{cfg.cleaveBin}, args...)
 
 	sessionStart := time.Now()
 
@@ -830,7 +828,7 @@ func streamAnalyzeAndReview(ctx context.Context, cfg *config, dbMode string) (*s
 
 	logger.Info("trait-basher session started",
 		"cleave_bin", cfg.cleaveBin,
-		"cleave_args", strings.Join(cleaveArgs, " "),
+		"cleave_args", strings.Join(args, " "),
 		"full_command", strings.Join(fullCmd, " "),
 		"dirs", cfg.dirs,
 		"provider", cfg.provider,

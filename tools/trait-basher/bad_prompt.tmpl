@@ -1,176 +1,116 @@
-# Known-Bad Sample: {{if .IsValidationSample}}Detection Validation{{else}}Malware Analysis & Detection Engineering{{end}}
+# Known-Bad: {{if .IsValidationSample}}Detection Validation{{else}}Malware Analysis & Detection Engineering{{end}}
 
-{{if .IsArchive}}**Archive**: {{.ArchiveName}} ({{.Count}} files with concerning findings)
+{{if .IsArchive}}**Archive**: {{.ArchiveName}} ({{.Count}} files with concerns)
 {{range .Files}}- {{.Path}}{{if .Summary}} — {{.Summary}}{{end}}
-{{end}}{{else}}**Sample**: {{.Path}}
+{{end}}{{else}}**File**: {{.Path}}
 {{end}}
-
-**Your Role**: Senior malware reverse engineer improving open-source detection capabilities in cleave - a tool to detect subtle supply-chain attacks or other kinds of malware through differential analysis.
-
-{{if .IsValidationSample}}**Goal**: This sample was detected (random validation audit). Verify the research report is complete, gap analysis shows we're catching ALL malware behaviors, no misleading findings exist, and traits are in correct taxonomy directories.
-{{else}}**Goal**: Analyze this known-malicious sample through deep reverse engineering, create research documentation, and build reusable high-precision traits to detect it and similar malware, or supply-chain attacks that use similar techniques.
+{{if .IsValidationSample}}**Goal**: Validate detection completeness — research report covers all behaviors, gap analysis is current, no misleading findings, correct taxonomy.
+{{else}}**Goal**: Reverse engineer this malware, document capabilities, build reusable traits to detect similar attacks.
 {{end}}
-
 ---
-
 {{if .IsValidationSample}}
-## 🔍 Validation Mode
+## Validation Mode
 
-This sample was properly detected. Validate completeness of our detection:
+This sample was detected. Validate completeness:
 
-### Step 1: Verify Research Report
-
-{{if .ReportExists}}Read the existing analysis at `{{.ReportPath}}` and verify it covers all malware behaviors.
-{{else}}**No research report exists!** Create one at `{{.ReportPath}}` before proceeding:
-
-Start with reconnaissance:
-```bash
-{{.CleaveBin}} strings {{.Path}}         # Extract all strings (including encoded)
-{{.CleaveBin}} symbols {{.Path}}         # Extract all symbols
-{{.CleaveBin}} sections {{.Path}}        # Display all binary section metadata, including entropy
-{{.CleaveBin}} metrics {{.Path}}         # Display any suspicious metrics about the program
-{{.CleaveBin}} --validate=true --format jsonl {{.Path}}  # Current cleave findings
-```
-
-Use rizin or Ghidra for deeper analysis of control flow, API calls, and obfuscation.
-
-**Report must cover**:
-- Executive summary: What is this malware? What does it do? Threat level?
-- Files accessed/leaked with purpose
-- Persistence mechanisms (method, location)
-- Network command-and-control/exfil (URLs, IPs, protocols, beaconing intervals)
-- Hidden/encoded text (strings, decoding methods)
-- Structural anomalies (unusual program structure)
-- Execution flow (initial execution → final payload)
-- Unique characteristics (obfuscation, syscalls, custom protocols, fingerprints)
+### 1. Verify Research Report
+{{if .ReportExists}}Read `{{.ReportPath}}` and verify it covers all malware behaviors.
+{{else}}**No report exists!** Create `{{.ReportPath}}` first (see report structure below).
 {{end}}
+### 2. Gap Analysis
 
-### Step 2: Gap Analysis
+Review `{{.GapAnalysisPath}}` (create/update if needed). Does cleave detect: C2 patterns? Persistence? Exfil? Obfuscation? Structural anomalies?
 
-Read the gap analysis at `{{.GapAnalysisPath}}` (create/update if needed).
+### 3. Audit All Findings
 
-Compare cleave output against research findings:
-- Does cleave detect the C2 pattern?
-- Persistence method?
-- File exfil?
-- Obfuscation?
-- Structural anomalies?
+At ALL criticality levels:
+- **Accurate?** Does it correctly describe what the malware does?
+- **Taxonomy?** Check paths against TAXONOMY.md. `micro-behaviors/` cannot reference `objectives/`.
 
-**Are we catching ALL documented behaviors?**
+### 4. Fix Issues
 
-### Step 3: Audit All Findings
-
-Review every finding at ALL criticality levels:
-
-**Is it technically accurate?**
-- Does the finding correctly describe what the malware does?
-- Are there any misleading findings (even baseline/component ones)?
-
-**Is it in the correct taxonomy location?**
-- Check trait paths against TAXONOMY.md
-- `micro-behaviors/` traits must NOT reference `objectives/` traits
-- Intent-based detections belong in `objectives/`, not `micro-behaviors/`
-
-### Step 4: Fix Any Issues
-
-If gaps or issues found, use the strategies below to fix them.
+Use strategies below if gaps or inaccuracies found.
 
 {{else}}
 {{if .ReportExists}}
-## Step 1: Review Prior Analysis ✓
+## 1. Review Prior Analysis
 
-Read the existing analysis at `{{.ReportPath}}` to understand the malware, then proceed to Step 2.
+Read `{{.ReportPath}}` to understand the malware, then proceed to gap analysis.
 
 {{else}}
-## Step 1: Deep Malware Analysis
+## 1. Deep Malware Analysis
 
-**Create research report**: `{{.ReportPath}}`
+**Create report**: `{{.ReportPath}}`
 
-Start with reconnaissance:
 ```bash
-{{.CleaveBin}} strings {{.Path}}         # Extract all strings (including encoded)
-{{.CleaveBin}} --validate=true --format jsonl {{.Path}}  # Current cleave findings
+{{.CleaveBin}} strings {{.Path}}
+{{.CleaveBin}} --validate=true --format jsonl {{.Path}}
 ```
 
-Use rizin or Ghidra for deeper analysis of control flow, API calls, and obfuscation.
+Use rizin or Ghidra for control flow, API calls, and obfuscation analysis.
 
-**Report must cover**:
-- Executive summary: What is this malware? What does it do? Threat level?
-- Files accessed/leaked with purpose
-- Persistence mechanisms (method, location)
-- Network command-and-control/exfil (URLs, IPs, protocols, beaconing intervals)
-- Hidden/encoded text (strings, decoding methods)
-- Structural anomalies (unusual program structure)
-- Execution flow (initial execution → final payload)
-- Unique characteristics (obfuscation, syscalls, custom protocols, fingerprints)
+**Report structure**:
+- Executive summary: What is it? What does it do? Threat level?
+- Files accessed/leaked (with purpose)
+- Persistence (method, location)
+- C2/exfil (URLs, IPs, protocols, beaconing)
+- Hidden/encoded content (strings, decoding methods)
+- Structural anomalies
+- Execution flow (initial → payload)
+- Unique characteristics (obfuscation, syscalls, fingerprints)
 
 {{end}}
-
-## Step 2: Gap Analysis
+## 2. Gap Analysis
 
 **Create**: `{{.GapAnalysisPath}}`
 
-Compare cleave output against your research findings. Document gaps: Does cleave detect the C2 pattern? Persistence method? File exfil? Obfuscation? Structural anomalies?
+Compare cleave output against research. Document gaps: C2? Persistence? Exfil? Obfuscation? Structural anomalies?
 {{end}}
 
-## {{if .IsValidationSample}}Fix Strategies{{else}}Step 3: Build Detection Traits{{end}}
+## {{if .IsValidationSample}}Fix Strategies{{else}}3. Build Detection Traits{{end}}
 
-- First read RULES.md to understand the detection trait syntax
+Read RULES.md for trait syntax.
 
-### Create Atomic Capabilities (`micro-behaviors/`)
-- Place traits in semantically correct directories per TAXONOMY.md
-- Pattern priority: ast > symbol > string > content (highest precision first)
-- Max criticality: suspicious
-- Search existing traits first to avoid duplicates
-- Avoid hardcoding strings that are unlikely to be shared between samples, such as custom C2 IP's or hostnames; focus on detecting techniques.
-- Prefer improving existing traits over creating new ones when practical
-- Prefer multiple reusable atomic traits over complex regular expressions (prefer 3 traits over a|b|c regexes).
-- Consider using advanced rule types such as 'metrics' and 'section' to catch obfuscated samples
+### Atomic Capabilities (`micro-behaviors/`)
+- Place in semantically correct directories per TAXONOMY.md
+- Max criticality: suspicious (hostile requires intent → `objectives/`)
+- Upgrade pattern precision: raw → string → symbol → ast
+- Add constraints: `near`, `count_min`, `size_min`, `for`, `section`
+- Avoid hardcoding sample-specific strings (C2 IPs, hostnames); detect techniques instead
+- Prefer improving existing traits over creating duplicates
+- Prefer 3 atomic traits over `a|b|c` regex
+- Use `metrics` and `section` rules for obfuscated samples
 
-### Compose Objectives (`objectives/`)
+### Composed Intent (`objectives/`)
 - Combine capabilities to detect attacker intent
-- Required precision: hostile ≥4.0, suspicious ≥2.0
-- Follow TAXONOMY.md for proper directory placement
-- Atomic traits typically live in a seperate more subdirectory away from complex composite traits
-- Your goal here is to catch malware that uses similar techniques rather than just this specific sample
-- baseline traits are allowed in any tier as building blocks for composites
+- Precision thresholds: hostile ≥4.0, suspicious ≥2.0
+- Goal: catch similar attacks, not just this sample
+- Atomics live in separate subdirectories from composites
 
-## For well-known malware you've heard of before...
-- If the malware is particularly infamous, add a rule to known-good/ that would match other similar malware in this family
+### Well-Known Malware (`well-known/`)
+- For infamous malware families, add signature rules here
 
-DO NOT EDIT ANY RUST CODE - ONLY .yaml files
-Avoid deleting rules unless it's to move them to a better location - prefer fixing them unless they are hopelessly unhelpful.
+**Rules**: Edit only .yaml files. Prefer fixing over deleting. YAML changes apply immediately.
 
 ### Validate
 ```bash
-{{.CleaveBin}} --validate=true --format jsonl {{.Path}}                        # Verify traits fire, no YAML warnings or misleading results
-{{.CleaveBin}} --validate=true --format jsonl /bin/ls /bin/bash /usr/bin/curl  # Test for false positives and misleading results
+{{.CleaveBin}} --validate=true --format jsonl {{.Path}}
+{{.CleaveBin}} --validate=true --format jsonl /bin/ls /bin/bash  # False positive check
 ```
-Note: YAML changes take effect immediately, no rebuild needed.
+{{if .MayBeBenign}}
+**If actually benign**: `touch {{.BenignMarkerPath}}`
+{{end}}
 
 ---
 
-{{if .MayBeBenign}}
-**⚠️ Misclassification Check**: If this appears benign after analysis:
-```bash
-touch {{.BenignMarkerPath}}
-```
-
-{{end}}
-
 ## Success Criteria
-
-{{if not .ReportExists}}- ✓ Complete research report documenting all malware capabilities
-{{end}}- ✓ Gap analysis identifies significant missing detections - for this and similar samples
-- ✓ Traits fire on this sample with appropriate criticality
-- ✓ Reusable patterns that could potentially work for similar attacks (not sample-specific fingerprints)
-- ✓ No duplicate traits (searched existing before creating)
-- ✓ Trait IDs reflect semantic organization per TAXONOMY.md (used by humans and ML pipelines)
-- ✓ Atomic traits are properly organized based on what they detect rather than living next to intent-based composite rules.
-- ✓ baseline traits are allowed anywhere as building blocks; upgrade to notable if they describe program purpose
-- ✓ Zero misleading or inaccurate findings
-- ✓ Output accurately describes file capabilities - no false positives.
-{{if .IsValidationSample}}- ✓ Research report covers ALL malware behaviors
-- ✓ Gap analysis is current and accurate
-- ✓ Traits are in correct taxonomy directories per TAXONOMY.md
+{{if not .ReportExists}}- Research report documents all malware capabilities
+{{end}}- Gap analysis identifies missing detections for this and similar samples
+- Traits fire with appropriate criticality
+- Reusable patterns (not sample-specific fingerprints)
+- Correct taxonomy placement (atomics separate from composites)
+- Traits describing program purpose are notable, not baseline
+- Zero misleading or inaccurate findings
+{{if .IsValidationSample}}- Research report covers ALL behaviors
+- Gap analysis is current
 {{end}}

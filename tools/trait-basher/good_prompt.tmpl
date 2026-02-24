@@ -1,118 +1,76 @@
-# Known-Good Sample: {{if .IsValidationSample}}Validation Audit{{else}}False Positive Reduction{{end}}
+# Known-Good: {{if .IsValidationSample}}Validation Audit{{else}}False Positive Reduction{{end}}
 
-{{if .IsArchive}}**Archive**: {{.ArchiveName}} ({{.Count}} files with concerning findings)
+{{if .IsArchive}}**Archive**: {{.ArchiveName}} ({{.Count}} files with concerns)
 {{range .Files}}- {{.Path}}{{if .Summary}} — {{.Summary}}{{end}}
 {{end}}{{else}}**File**: {{.Path}}
 {{end}}
-
-**Your Role**: Security engineer improving cleave detection accuracy.
-
-{{if .IsValidationSample}}**Goal**: This file passed normal thresholds (random validation audit). Verify there are no sneaky false positives, misleading findings (even baseline/component ones), or taxonomy violations hiding in the output.
-{{else}}**Goal**: Eliminate inaccurate or misleading detections on this known-benign file while preserving genuinely accurate findings.
+{{if .IsValidationSample}}**Goal**: Audit ALL findings (including baseline/component) for accuracy, misleading descriptions, and taxonomy violations.
+{{else}}**Goal**: Fix inaccurate/misleading detections on this known-benign file.
 {{end}}
-
 ---
 
-## Current Status
-
-{{if .IsValidationSample}}🔍 **Validation Sample** — This file passed normal review thresholds. Audit ALL findings for accuracy:
-- Are there any false positives hiding at lower criticality levels?
-- Are any findings misleading about what the file actually does?
-- Are traits placed in the correct directories per TAXONOMY.md?
-- Are any baseline/component findings inaccurate or mischaracterizing the file?
-{{else}}{{if .HasHostileFindings}}🔴 **Hostile findings present** — These MUST be eliminated. Hostile criticality means unquestionably malicious behavior.
-{{end}}{{if .HasSuspiciousFindings}}🟡 **Suspicious findings present** — Review each one. Some may be legitimate for this tool's purpose.
+## Status
+{{if .IsValidationSample}}
+🔍 **Validation Sample** — Passed normal thresholds. Check for hidden false positives at any criticality level.
+{{else}}{{if .HasHostileFindings}}🔴 **Hostile findings** — Must be eliminated (hostile = unquestionably malicious).
+{{end}}{{if .HasSuspiciousFindings}}🟡 **Suspicious findings** — Review each; some may be legitimate for this tool type.
 {{end}}{{end}}
-
-{{if .HasRelatedBadReport}}**Context**: This file also appears in a bad collection. Review malware analysis at `{{.RelatedBadReportPath}}` to understand if the file has malicious variants or was misclassified.
+{{if .HasRelatedBadReport}}**Context**: Also in bad collection. See `{{.RelatedBadReportPath}}` for malware analysis.
 {{end}}
+## Task
 
-## Your Task
-
-### Step 1: Understand the File
-
-Determine the file's legitimate purpose:
+### 1. Understand the File
 ```bash
 {{.CleaveBin}} strings {{.Path}}
 {{.CleaveBin}} --validate=true --format jsonl {{.Path}}
 ```
 
-### Step 2: Evaluate {{if .IsValidationSample}}All Findings{{else}}Each Finding{{end}}
+### 2. Evaluate {{if .IsValidationSample}}All{{else}}Each{{end}} Finding
 
-{{if .IsValidationSample}}Audit every finding at ALL criticality levels (hostile, suspicious, notable, AND baseline/component):
-{{else}}For each hostile or suspicious finding:
+{{if .IsValidationSample}}Audit ALL criticality levels:{{else}}For hostile/suspicious findings:{{end}}
+
+- **Accurate?** Does the file exhibit this behavior? Is the trait detecting what it claims? Is suspicion level proportionate to evidence?
+- **Misleading?** Is this behavior expected for this tool type? Context matters: `kill()` is suspicious in a game, notable in htop.
+{{if .IsValidationSample}}- **Correct taxonomy?** Check paths against TAXONOMY.md. `micro-behaviors/` cannot reference `objectives/`.
 {{end}}
+### 3. Fix Strategy
 
-**Is it technically accurate?**
-- Does the file actually exhibit this behavior?
-- Is the trait detecting what it claims?
-- Is the suspicion level to high for the evidence provided?
+**A. Improve the trait** (preferred):
+- Lower criticality if accurate but overrated (suspicious→notable, notable→baseline)
+- Traits describing program purpose should be notable, not baseline
+- Add constraints: `near`, `count_min`, `size_min`, `for` (see RULES.md)
+- Upgrade pattern: raw → string → symbol → ast
+- Prefer 3 atomic traits over `a|b|c` regex
+- Move to correct taxonomy directory (update dependent composites if needed)
 
-**Is it misleading in this context?**
-- Is this behavior expected for this tool type?
-- Example: Process manager killing processes is notable, not hostile
-{{if .IsValidationSample}}
-**Is it in the correct taxonomy location?**
-- Check trait paths against TAXONOMY.md
-- `micro-behaviors/` traits must NOT reference `objectives/` traits
-- Intent-based detections belong in `objectives/`, not `micro-behaviors/`
-{{end}}
-
-### Step 3: Fix Strategy
-
-Prefer improving poorly-written traits for better signal than deleting them.
-
-**A. Improve the trait** (preferred - improves precision):
-
-- If the criticality is higher than it should be, but the query is otherwise accurate, consider adjusting it to a lower value (suspicious->notable, notable->baseline)
-- Some traits are poorly written or incomplete - find ways to address the inaccuracy by improving how it matches programs
-- Consider adding constraits like `near`, `count_min`, `size_min`, `for` - see RULES.md for details!
-- Upgrade pattern type to a more specific matcher: raw → string → symbol → ast (symbol & AST are the most specific matchers)
-- Prefer multiple reusable atomic traits over complex regular expressions (prefer 3 traits over a|b|c regexes).
-- Perfect already but in a misleading subdirectory? Move the trait to more neutral directory in taxonomy within micro-behaviors/ or metadata/
-
-**B. Downgrade criticality** (if the finding is perfect, but not suspicious in this specific case):
+**B. Downgrade** (accurate but not suspicious here):
 ```yaml
 downgrade:
   - id: path/to/trait::specific-trait-id
     to: notable
-    reason: "legitimate use in system administration tools"
+    reason: "legitimate use in system tools"
 ```
 
-**C. Suppress with unless** (use sparingly - workaround):
+**C. Suppress** (last resort):
 ```yaml
 unless:
   - id: some-exclusion-pattern
 ```
-Use only when trait is completely inapplicable.
 
-DO NOT EDIT ANY RUST CODE - ONLY .yaml files
-Avoid deleting rules unless it's to move them to a better location - prefer fixing them unless they are hopelessly unhelpful.
+**Rules**: Edit only .yaml files. Prefer improving traits over deleting. YAML changes apply immediately.
 
-### Step 4: Validate & Verify
+### 4. Validate
 
-Run `{{.CleaveBin}} --validate=true --format jsonl {{.Path}}` and confirm:
-
-**Required:**
-- ✓ Zero hostile findings
-- ✓ Zero misleading or inaccurate findings (even baseline/component ones)
-- ✓ Suspicious findings ≤1 (acceptable for security/admin tools)
-- ✓ All traits appear to be in the proper subdirectory for what they query for. Relocate them if the subdirectory is misleading (even if you have to update composite rules that depend on it).
-
-**Quality checks:**
-- ✓ Output accurately describes file capabilities - no false positives.
-- ✓ No legitimate behaviors completely hidden (prefer downgrade over unless)
-- ✓ Context-appropriate criticality (`kill()` syscall: suspicious in game, notable in htop)
-- ✓ No trait duplicates (same evidence, same scenario)
-- ✓ Component traits are building blocks, shown only when their composite fires
-- ✓ Baseline/component traits should be accurate; those that describe a program's purpose should be upgraded to notable.
-
-{{if .IsValidationSample}}- ✓ Traits are in correct taxonomy directories per TAXONOMY.md
-{{end}}
-
-{{if .MayBeBad}}
-**⚠️ Misclassification Check**: If analysis reveals this file is actually malicious:
 ```bash
-touch {{.BadMarkerPath}}
+{{.CleaveBin}} --validate=true --format jsonl {{.Path}}
+{{.CleaveBin}} --validate=true --format jsonl /bin/ls /bin/bash  # Check for regressions
 ```
+
+Confirm:
+- Zero hostile findings
+- Zero misleading findings (any criticality)
+- Suspicious ≤1 (acceptable for security/admin tools)
+- Traits in correct taxonomy subdirectories
+{{if .MayBeBad}}
+**If actually malicious**: `touch {{.BadMarkerPath}}`
 {{end}}

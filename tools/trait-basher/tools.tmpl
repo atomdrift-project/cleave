@@ -1,76 +1,59 @@
-## Available Tools
 
-**Debug Commands**:
+## Tools
+
 ```bash
-{{.CleaveBin}} --validate=true {{.Path}} --format jsonl  # All traits (including baseline) + rule paths
-{{.CleaveBin}} strings {{.Path}}         # Detected strings, including encoded
-{{.CleaveBin}} symbols {{.Path}}         # Detected symbols
-{{.CleaveBin}} segments {{.Path}}        # Program segment information
-{{.CleaveBin}} metrics {{.Path}}         # Program structure metrics
+{{.CleaveBin}} --validate=true --format jsonl {{.Path}}  # All traits + rule paths
+{{.CleaveBin}} strings {{.Path}}    # Strings (including encoded)
+{{.CleaveBin}} symbols {{.Path}}    # Symbols
+{{.CleaveBin}} metrics {{.Path}}    # Structure metrics
 {{.CleaveBin}} test-rules {{.Path}} --rules "rule-id"
 {{.CleaveBin}} test-match {{.Path}} --type string --pattern "X"
 ```
 
-**Additional tools**: r2 (radare2), ghidra, nm, readelf
+Also available: r2, ghidra, nm, readelf
 
 **Traits**: {{.TraitsDir}}
-**Docs**: RULES.md describes our unusual trait rule syntax, TAXONOMY.md describes subdirectories (a necessary read)
-**NOTE**: You can not nest any/all rules. They can be used together at the top-level of a rule though.
+**Docs**: RULES.md (syntax), TAXONOMY.md (directories)
+**Syntax note**: Cannot nest any/all rules (top-level only)
+
 ---
 
-## cleave Rules Reference
+## Quick Reference
 
-### Taxonomy Structure
+### Taxonomy
+| Tier | Purpose | Max Crit | References |
+|------|---------|----------|------------|
+| `micro-behaviors/*` | Atomic capability | suspicious | `micro-behaviors/` + `meta/` |
+| `objectives/*` | Composed intent | hostile | all except `known/` |
+| `well-known/*` | Malware signatures | any | all |
 
-| Tier | Purpose | Criticality Range | Can Reference |
-|------|---------|------------------|---------------|
-| `micro-behaviors/*` | Atomic observable capability | component → baseline → notable → suspicious | `micro-behaviors/` + `meta/` |
-| `objectives/*` | Composed attacker objective | component → baseline → notable → suspicious → hostile | `micro-behaviors/` + `objectives/` + `meta/` |
-| `known/*` | Specific malware/tool signature | any | all tiers |
+- Trait IDs: `subdirectory` or `subdirectory::trait_id` (filenames not included)
+- `micro-behaviors/` cannot reference `objectives/` or use hostile
+- Composites rarely share directories with their atomic dependencies
 
-NOTE: Composite rules are rarely in the same subdirectary as the atomic rules they depend on. Be precise in your directory selection as the subcategory you choose will be read by humans and ML pipelines alike.
-
-**Key rules**:
-- Trait ID references are either use subdirectory or subdirectory::specific_trait_id - filenames are not part of the trait ID
-- Traits require 3-4 semantic subdirectories (no generic names)
-- Atomic traits belong in their ideal directory, not alongside composites
-- `micro-behaviors/` traits are atomic (cannot reference `objectives/` or use `crit: hostile`)
-
-### Pattern Types (by precision)
-
+### Pattern Precision (high→low)
 `ast` > `symbol` > `kv` > `string` > `base64` > `xor` > `raw` > `hex`
 
-AST rules have the greatest precision, especially in the face of obfuscation.
+### Criticality
+| Level | Precision | Meaning |
+|-------|-----------|---------|
+| Hostile | ≥4.0 | Unquestionably malicious |
+| Suspicious | ≥2.0 | Surprising in random programs |
+| Notable | — | Describes program purpose |
+| Baseline | — | Common, low signal |
+| Component | — | Hidden unless composite fires |
 
-### Criticality Thresholds
+### Tightening (before downgrade/unless)
+`size_min`, `count_min`, `per_kb_min`, `near_min`, `section`, `for`, `near_bytes`, `near_lines`, `not`
 
-| Level | Threshold | Description |
-|-------|-----------|-------------|
-| **Hostile** | ≥4.0 | Unquestionably malicious behavior |
-| **Suspicious** | ≥2.0 | Very surprising in random programs |
-| **Notable** | n/a | Describes program purpose/capabilities |
-| **Baseline** | n/a | Common traits, low analytical signal |
-| **Component** | n/a | Building block, hidden unless composite fires |
+For obfuscation detection: combine metrics-based or section-based rules for max precision.
 
-### Precision Techniques
+### Quality
+- Search existing traits before creating
+- Reusable patterns, not sample fingerprints
+- Build `micro-behaviors/` first, compose `objectives/`
+- Prefer `downgrade:` over `unless:`
+- AST patterns for source code
+- Consider: would this surprise you in a supply-chain attack?
 
-Before using `unless:`/`downgrade:`, tighten with:
-- Constraints: `size_min`, `count_min`, `per_kb_min`, `near_min`
-- Scoping: `section`, `for`, `near_bytes`, `near_lines`
-- Filters: `not`
-- Pattern upgrade: raw → string → symbol → ast
-- For detecting obfuscation, consider composites with metrics-based or section-based rules for maximum precision
-
-### Quality Checklist
-
-- ✓ Search existing traits before creating (avoid duplicates)
-- ✓ Use reusable patterns (not sample-specific fingerprints)
-- ✓ Build atomic `micro-behaviors/` first, then compose `objectives/`
-- ✓ Validate taxonomy placement (semantic directories)
-- ✓ Prefer `downgrade:` over `unless:` (keep detections visible)
-- ✓ Use AST patterns for source code (highest precision)
-- ✓ No trait should be misleading or false. baseline traits are allowed anywhere as building blocks for composites.
-**Scale**: This tool analyzes millions of open-source packages. Precision is critical.
-- ✓ Consider notability and suspicion in the lens of: how surprised would you be to see this feature pop up in an updated version this file. Could it be the sign of a supply-chain attack?
-
-Try hard to not emit broken traits - review *RULES.md* for trait syntax.
+**Scale**: Millions of packages. Precision critical.

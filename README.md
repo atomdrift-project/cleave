@@ -4,6 +4,8 @@ AST-aware software decomposition. Takes binaries and source apart into their ato
 
 cleave understands code semantics—it won't mistake a string literal `"exec"` for actual execution. It combines abstract syntax tree inspection with binary reverse engineering to detect capabilities and behaviors across 20+ languages and three binary formats in a single pass.
 
+![screenshot](media/screenshot.png)
+
 ## Why It Exists
 
 Most tools are either:

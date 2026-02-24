@@ -38,6 +38,8 @@ fn create_test_trait(id: &str, condition: Condition) -> TraitDefinition {
             count_max: None,
             per_kb_min: None,
             per_kb_max: None,
+                entropy_min: None,
+                entropy_max: None,
         },
         
         unless: None,

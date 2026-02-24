@@ -14,14 +14,14 @@ use crate::capabilities::validation::{
     check_regex_alternative_subsets, check_regex_contains_literal,
     check_regex_or_overlapping_exact, check_regex_should_be_exact,
     check_same_string_different_types, collect_trait_refs_from_rule,
-    find_alternation_merge_candidates, find_banned_directory_segments, find_cap_obj_violations,
-    find_depth_violations, find_duplicate_second_level_directories,
-    find_duplicate_traits_and_composites, find_empty_condition_clauses, find_for_only_duplicates,
-    find_atomic_logic_duplicates,
-    find_hostile_cap_rules, find_impossible_count_constraints, find_impossible_needs,
-    find_impossible_size_constraints, find_invalid_trait_ids, find_line_number,
-    find_malware_subcategory_violations, find_missing_search_patterns, find_non_capturing_groups,
-    find_overlapping_conditions, find_oversized_trait_directories, find_parent_duplicate_segments,
+    find_alternation_merge_candidates, find_atomic_logic_duplicates,
+    find_banned_directory_segments, find_cap_obj_violations, find_depth_violations,
+    find_duplicate_second_level_directories, find_duplicate_traits_and_composites,
+    find_empty_condition_clauses, find_for_only_duplicates, find_hostile_cap_rules,
+    find_impossible_count_constraints, find_impossible_needs, find_impossible_size_constraints,
+    find_invalid_trait_ids, find_line_number, find_malware_subcategory_violations,
+    find_missing_search_patterns, find_non_capturing_groups, find_overlapping_conditions,
+    find_oversized_trait_directories, find_parent_duplicate_segments,
     find_platform_named_directories, find_pure_alias_traits, find_redundant_any_refs,
     find_redundant_needs_one, find_short_pattern_warnings, find_single_item_clauses,
     find_slow_regex_patterns, find_string_content_collisions, find_string_pattern_duplicates,
@@ -452,6 +452,14 @@ impl super::CapabilityMapper {
 
                     // Check for invalid size constraints
                     if let Some(warning) = trait_def.check_size_constraints() {
+                        warnings.push(format!(
+                            "trait '{}' in {:?}: {}",
+                            trait_def.id, path, warning
+                        ));
+                    }
+
+                    // Check for invalid entropy constraints
+                    if let Some(warning) = trait_def.check_entropy_constraints() {
                         warnings.push(format!(
                             "trait '{}' in {:?}: {}",
                             trait_def.id, path, warning
@@ -1583,7 +1591,9 @@ impl super::CapabilityMapper {
                     "\n⚠️  WARNING: {} trait pairs have identical matching logic but different metadata",
                     logic_duplicates.len()
                 );
-                eprintln!("   Same detection with inconsistent criticality/confidence/platforms:\n");
+                eprintln!(
+                    "   Same detection with inconsistent criticality/confidence/platforms:\n"
+                );
                 for (id_a, id_b, desc) in &logic_duplicates {
                     let source_a = rule_source_files
                         .get(id_a)
@@ -1658,7 +1668,9 @@ impl super::CapabilityMapper {
                     "\n❌ ERROR: {} composite rules have impossible `needs` values",
                     impossible_needs.len()
                 );
-                eprintln!("   The `needs` value exceeds the number of potential matches in `any:`:\n");
+                eprintln!(
+                    "   The `needs` value exceeds the number of potential matches in `any:`:\n"
+                );
                 for (rule_id, needs, potential) in &impossible_needs {
                     let source = rule_source_files
                         .get(rule_id)

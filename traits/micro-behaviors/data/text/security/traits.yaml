@@ -5,23 +5,50 @@ defaults:
   for: [all]
 
 traits:
-  - id: signatures-db
-    desc: Security signature database or threat intelligence feed
-    crit: notable
-    conf: 0.9
+  # === Security signature database atomic indicators ===
+  - id: emerging-threats-url
+    desc: Emerging Threats documentation URL
+    crit: component
     if:
-      type: yara
-      source: |
-        rule security_signatures {
-          strings:
-            $et = "http://doc.emergingthreats.net" ascii
-            $elastic = "securitySolution" ascii
-            $snort = "http://www.snort.org" ascii
-            $cve = /CVE-\d{4}-\d{4,}/
-            $exploit_db = "exploit-db.com" ascii
-          condition:
-            $et or ($elastic and #elastic > 5) or $snort or #cve > 5 or $exploit_db
-        }
+      type: string
+      substr: "http://doc.emergingthreats.net"
+
+  - id: security-solution-str
+    desc: securitySolution string (single)
+    crit: component
+    if:
+      type: string
+      substr: "securitySolution"
+
+  - id: security-solution-many
+    desc: securitySolution string (6+ occurrences)
+    crit: component
+    if:
+      type: string
+      substr: "securitySolution"
+      count_min: 6
+
+  - id: snort-url
+    desc: Snort URL
+    crit: component
+    if:
+      type: string
+      substr: "http://www.snort.org"
+
+  - id: cve-pattern-many
+    desc: CVE pattern (6+ occurrences)
+    crit: component
+    if:
+      type: string
+      regex: "CVE-\\d{4}-\\d{4,}"
+      count_min: 6
+
+  - id: exploit-db-domain
+    desc: exploit-db.com domain
+    crit: component
+    if:
+      type: string
+      substr: "exploit-db.com"
 
   - id: sanitized-url-regex
     desc: Regex for matching sanitized URLs (hXXp://)
@@ -30,3 +57,15 @@ traits:
     if:
       type: raw
       regex: 'h\.\.p\[s\]\*:\\/\\/'
+
+composite_rules:
+  - id: signatures-db
+    desc: Security signature database or threat intelligence feed
+    crit: notable
+    conf: 0.9
+    any:
+      - id: emerging-threats-url
+      - id: security-solution-many
+      - id: snort-url
+      - id: cve-pattern-many
+      - id: exploit-db-domain

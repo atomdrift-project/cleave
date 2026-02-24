@@ -124,7 +124,7 @@ impl super::CapabilityMapper {
                     }],
 
                     match_count: 0,
-                source_file: None,
+                    source_file: None,
                 });
             }
         } else {
@@ -200,7 +200,7 @@ impl super::CapabilityMapper {
                         }],
 
                         match_count: 0,
-                source_file: None,
+                        source_file: None,
                     });
                 }
             }

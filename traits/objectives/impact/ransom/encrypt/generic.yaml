@@ -6,46 +6,115 @@ defaults:
   for: [all]
 
 traits:
-  - id: encrypt
-    desc: Ransomware encryption patterns
-    crit: suspicious
-    conf: 0.75
-    mbc: "B0040"
-    attack: "T1486"
+  # === Ransom terminology atomic indicators ===
+  - id: ransom-word
+    desc: ransom word
+    crit: component
     if:
-      type: yara
-      source: |
-        rule ransomware {
-          strings:
-            // Ransom-specific terms (not generic crypto)
-            $ransom1 = "ransom" nocase fullword
-            $ransom2 = "your files have been encrypted" nocase
-            $ransom3 = "pay to decrypt" nocase
-            $ransom4 = "files will be deleted" nocase
-            // Payment indicators
-            $tor = "torproject.org"
-            $onion = /[a-z2-7]{16,56}\.onion/
-            $btc_addr = /[13][a-km-zA-HJ-NP-Z1-9]{25,34}/
-            $btc_pay = "bitcoin" nocase fullword
-            // File extension indicators
-            $ext_locked = ".locked" ascii
-            $ext_encrypted = ".encrypted" ascii
-            $ext_crypto = ".crypto" ascii
-            
-            // False Positive Reduction
-            $fp_et = "doc.emergingthreats.net" nocase
-            $fp_elastic = "securitySolution" nocase
-            $fp_signatures = "signatures" nocase fullword
-          condition:
-            filesize < 25MB and (
-              (any of ($ransom2, $ransom3) or
-              ($ransom4 and ($ransom1 or $tor or $onion or any of ($btc*) or $btc_pay)) or
-              ($ransom1 and ($tor or $onion or any of ($btc*) or any of ($ext_*))) or
-              ($tor and $btc_pay) or
-              (any of ($ext_*) and $btc_pay) or
-              ($onion and any of ($btc*)))
-            ) and not any of ($fp_*)
-        }
+      type: string
+      word: "ransom"
+      case_insensitive: true
+
+  - id: files-encrypted-msg
+    desc: your files have been encrypted message
+    crit: component
+    if:
+      type: string
+      substr: "your files have been encrypted"
+      case_insensitive: true
+
+  - id: pay-to-decrypt-msg
+    desc: pay to decrypt message
+    crit: component
+    if:
+      type: string
+      substr: "pay to decrypt"
+      case_insensitive: true
+
+  - id: files-deleted-msg
+    desc: files will be deleted message
+    crit: component
+    if:
+      type: string
+      substr: "files will be deleted"
+      case_insensitive: true
+
+  # === Payment indicators ===
+  - id: torproject-domain
+    desc: torproject.org domain
+    crit: component
+    if:
+      type: string
+      substr: "torproject.org"
+
+  - id: onion-address
+    desc: .onion address pattern
+    crit: component
+    if:
+      type: string
+      regex: "[a-z2-7]{16,56}\\.onion"
+
+  - id: bitcoin-address
+    desc: Bitcoin address pattern
+    crit: component
+    if:
+      type: string
+      regex: "[13][a-km-zA-HJ-NP-Z1-9]{25,34}"
+
+  - id: bitcoin-word
+    desc: bitcoin word
+    crit: component
+    if:
+      type: string
+      word: "bitcoin"
+      case_insensitive: true
+
+  # === Ransom extension indicators ===
+  - id: ext-locked
+    desc: .locked extension
+    crit: component
+    if:
+      type: string
+      substr: ".locked"
+
+  - id: ext-encrypted
+    desc: .encrypted extension
+    crit: component
+    if:
+      type: string
+      substr: ".encrypted"
+
+  - id: ext-crypto
+    desc: .crypto extension
+    crit: component
+    if:
+      type: string
+      substr: ".crypto"
+
+  # === False positive indicators ===
+  - id: fp-emerging-threats
+    desc: Emerging Threats documentation
+    crit: component
+    if:
+      type: string
+      substr: "doc.emergingthreats.net"
+      case_insensitive: true
+
+  - id: fp-security-solution
+    desc: securitySolution string
+    crit: component
+    if:
+      type: string
+      substr: "securitySolution"
+      case_insensitive: true
+
+  - id: fp-signatures-word
+    desc: signatures word
+    crit: component
+    if:
+      type: string
+      word: "signatures"
+      case_insensitive: true
 
   - id: encrypt-decryptor-msg-1
     desc: References decryptor (your/run/download)
@@ -104,6 +173,119 @@ traits:
 
 
 composite_rules:
+  # === Ransomware detection composites ===
+  # Helper: High-confidence ransom messages
+  - id: explicit-ransom-msgs
+    desc: Explicit ransom messages
+    crit: component
+    any:
+      - id: files-encrypted-msg
+      - id: pay-to-decrypt-msg
+
+  # Helper: Payment/Tor indicators
+  - id: payment-indicators
+    desc: Payment or Tor indicators
+    crit: component
+    any:
+      - id: torproject-domain
+      - id: onion-address
+      - id: bitcoin-address
+      - id: bitcoin-word
+
+  # Helper: Ransom file extensions
+  - id: ransom-extensions
+    desc: Ransom file extensions
+    crit: component
+    any:
+      - id: ext-locked
+      - id: ext-encrypted
+      - id: ext-crypto
+
+  # Helper: False positive indicators
+  - id: fp-indicators
+    desc: False positive indicators
+    crit: component
+    any:
+      - id: fp-emerging-threats
+      - id: fp-security-solution
+      - id: fp-signatures-word
+
+  # files will be deleted + (ransom OR tor OR onion OR btc*)
+  - id: deleted-with-payment
+    desc: Files deleted threat with payment
+    crit: component
+    all:
+      - id: files-deleted-msg
+      - id: payment-indicators
+
+  - id: deleted-with-ransom
+    desc: Files deleted threat with ransom word
+    crit: component
+    all:
+      - id: files-deleted-msg
+      - id: ransom-word
+
+  # ransom + (tor OR onion OR btc* OR ext_*)
+  - id: ransom-with-payment
+    desc: Ransom word with payment indicators
+    crit: component
+    all:
+      - id: ransom-word
+      - id: payment-indicators
+
+  - id: ransom-with-extensions
+    desc: Ransom word with ransom extensions
+    crit: component
+    all:
+      - id: ransom-word
+      - id: ransom-extensions
+
+  # tor + bitcoin
+  - id: tor-with-bitcoin
+    desc: Tor with bitcoin
+    crit: component
+    all:
+      - id: torproject-domain
+      - id: bitcoin-word
+
+  # ext_* + bitcoin
+  - id: ext-with-bitcoin
+    desc: Ransom extension with bitcoin
+    crit: component
+    all:
+      - id: ransom-extensions
+      - id: bitcoin-word
+
+  # onion + btc*
+  - id: onion-with-btc
+    desc: Onion with bitcoin indicators
+    crit: component
+    all:
+      - id: onion-address
+    any:
+      - id: bitcoin-address
+      - id: bitcoin-word
+
+  # Main ransomware detection (replaces YARA rule)
+  - id: encrypt
+    desc: Ransomware encryption patterns
+    crit: suspicious
+    conf: 0.75
+    mbc: "B0040"
+    attack: "T1486"
+    size_max: 26214400
+    any:
+      - id: explicit-ransom-msgs
+      - id: deleted-with-payment
+      - id: deleted-with-ransom
+      - id: ransom-with-payment
+      - id: ransom-with-extensions
+      - id: tor-with-bitcoin
+      - id: ext-with-bitcoin
+      - id: onion-with-btc
+    none:
+      - id: fp-indicators
+
   - id: encrypt-decryptor
     desc: References decryptor
     crit: suspicious

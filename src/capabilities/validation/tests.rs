@@ -65,6 +65,8 @@ mod duplicate_tests {
                 count_max: None,
                 per_kb_min: None,
                 per_kb_max: None,
+                entropy_min: None,
+                entropy_max: None,
             },
             r#for: for_types,
             platforms: vec![Platform::All],
@@ -1746,16 +1748,40 @@ mod duplicate_tests {
         use crate::types::Criticality;
 
         // Component, Baseline, and Filtered should all be equivalent
-        assert!(criticalities_equivalent(Criticality::Component, Criticality::Baseline));
-        assert!(criticalities_equivalent(Criticality::Baseline, Criticality::Component));
-        assert!(criticalities_equivalent(Criticality::Filtered, Criticality::Baseline));
-        assert!(criticalities_equivalent(Criticality::Filtered, Criticality::Component));
-        assert!(criticalities_equivalent(Criticality::Component, Criticality::Filtered));
+        assert!(criticalities_equivalent(
+            Criticality::Component,
+            Criticality::Baseline
+        ));
+        assert!(criticalities_equivalent(
+            Criticality::Baseline,
+            Criticality::Component
+        ));
+        assert!(criticalities_equivalent(
+            Criticality::Filtered,
+            Criticality::Baseline
+        ));
+        assert!(criticalities_equivalent(
+            Criticality::Filtered,
+            Criticality::Component
+        ));
+        assert!(criticalities_equivalent(
+            Criticality::Component,
+            Criticality::Filtered
+        ));
 
         // Same level is always equivalent
-        assert!(criticalities_equivalent(Criticality::Component, Criticality::Component));
-        assert!(criticalities_equivalent(Criticality::Baseline, Criticality::Baseline));
-        assert!(criticalities_equivalent(Criticality::Filtered, Criticality::Filtered));
+        assert!(criticalities_equivalent(
+            Criticality::Component,
+            Criticality::Component
+        ));
+        assert!(criticalities_equivalent(
+            Criticality::Baseline,
+            Criticality::Baseline
+        ));
+        assert!(criticalities_equivalent(
+            Criticality::Filtered,
+            Criticality::Filtered
+        ));
     }
 
     #[test]
@@ -1764,19 +1790,49 @@ mod duplicate_tests {
         use crate::types::Criticality;
 
         // Notable, Suspicious, Hostile should be distinct from each other and from inert levels
-        assert!(!criticalities_equivalent(Criticality::Notable, Criticality::Baseline));
-        assert!(!criticalities_equivalent(Criticality::Notable, Criticality::Component));
-        assert!(!criticalities_equivalent(Criticality::Suspicious, Criticality::Baseline));
-        assert!(!criticalities_equivalent(Criticality::Hostile, Criticality::Baseline));
+        assert!(!criticalities_equivalent(
+            Criticality::Notable,
+            Criticality::Baseline
+        ));
+        assert!(!criticalities_equivalent(
+            Criticality::Notable,
+            Criticality::Component
+        ));
+        assert!(!criticalities_equivalent(
+            Criticality::Suspicious,
+            Criticality::Baseline
+        ));
+        assert!(!criticalities_equivalent(
+            Criticality::Hostile,
+            Criticality::Baseline
+        ));
 
-        assert!(!criticalities_equivalent(Criticality::Notable, Criticality::Suspicious));
-        assert!(!criticalities_equivalent(Criticality::Notable, Criticality::Hostile));
-        assert!(!criticalities_equivalent(Criticality::Suspicious, Criticality::Hostile));
+        assert!(!criticalities_equivalent(
+            Criticality::Notable,
+            Criticality::Suspicious
+        ));
+        assert!(!criticalities_equivalent(
+            Criticality::Notable,
+            Criticality::Hostile
+        ));
+        assert!(!criticalities_equivalent(
+            Criticality::Suspicious,
+            Criticality::Hostile
+        ));
 
         // Same level is equivalent
-        assert!(criticalities_equivalent(Criticality::Notable, Criticality::Notable));
-        assert!(criticalities_equivalent(Criticality::Suspicious, Criticality::Suspicious));
-        assert!(criticalities_equivalent(Criticality::Hostile, Criticality::Hostile));
+        assert!(criticalities_equivalent(
+            Criticality::Notable,
+            Criticality::Notable
+        ));
+        assert!(criticalities_equivalent(
+            Criticality::Suspicious,
+            Criticality::Suspicious
+        ));
+        assert!(criticalities_equivalent(
+            Criticality::Hostile,
+            Criticality::Hostile
+        ));
     }
 
     // ========================================================================
@@ -2155,6 +2211,8 @@ mod pattern_tests {
                 count_max: None,
                 per_kb_min: None,
                 per_kb_max: None,
+                entropy_min: None,
+                entropy_max: None,
             },
             r#for: vec![FileType::All],
             platforms: vec![Platform::All],
@@ -2236,6 +2294,8 @@ mod constraint_tests {
                 count_max: None,
                 per_kb_min: None,
                 per_kb_max: None,
+                entropy_min: None,
+                entropy_max: None,
             },
             r#for: vec![FileType::All],
             platforms: vec![Platform::All],
@@ -2288,6 +2348,8 @@ mod constraint_tests {
                 count_max: None,
                 per_kb_min: None,
                 per_kb_max: None,
+                entropy_min: None,
+                entropy_max: None,
             },
             r#for: vec![FileType::All],
             platforms: vec![Platform::All],

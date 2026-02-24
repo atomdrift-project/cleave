@@ -168,9 +168,7 @@ pub(crate) fn run(
         let range = analyzer.preferred_arch_range(&full_data);
         let is_fat = range != (0..full_data.len());
         if is_fat {
-            eprintln!(
-                "Note: FAT binary detected, using full file for evaluation"
-            );
+            eprintln!("Note: FAT binary detected, using full file for evaluation");
         }
         (full_data[range].to_vec(), is_fat)
     } else {
@@ -187,7 +185,11 @@ pub(crate) fn run(
     }
 
     // Evaluation data: full file for FAT binaries, slice otherwise
-    let eval_data = if is_fat { &full_data[..] } else { &binary_data[..] };
+    let eval_data = if is_fat {
+        &full_data[..]
+    } else {
+        &binary_data[..]
+    };
 
     // Create debugger to access search functions
     // Note: test-match doesn't use YARA results since it tests individual conditions

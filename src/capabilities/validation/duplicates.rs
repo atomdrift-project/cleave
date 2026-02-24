@@ -578,8 +578,8 @@ pub(crate) fn find_string_pattern_duplicates(
                 // Check if confidence differs by >=0.2 OR criticality differs
                 // Note: Component/Baseline/Filtered are treated as equivalent "inert" levels
                 let conf_diff = (loc_a.confidence - loc_b.confidence).abs();
-                let conf_or_crit_differs =
-                    conf_diff >= 0.2 || !criticalities_equivalent(loc_a.criticality, loc_b.criticality);
+                let conf_or_crit_differs = conf_diff >= 0.2
+                    || !criticalities_equivalent(loc_a.criticality, loc_b.criticality);
 
                 // If this pair doesn't meet carveout criteria, bail out
                 if !(patterns_differ && conf_or_crit_differs) {
@@ -2279,10 +2279,7 @@ pub(crate) fn find_atomic_logic_duplicates(
 
     for t in trait_definitions {
         // Create signature from matching logic only
-        let signature = format!(
-            "{:?}:{:?}:{:?}",
-            t.r#if, t.not, t.unless
-        );
+        let signature = format!("{:?}:{:?}:{:?}", t.r#if, t.not, t.unless);
         groups.entry(signature).or_default().push(t);
     }
 

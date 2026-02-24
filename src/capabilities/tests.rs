@@ -218,6 +218,8 @@ fn test_apply_trait_defaults_applies_all_defaults() {
             count_max: None,
             per_kb_min: None,
             per_kb_max: None,
+            entropy_min: None,
+            entropy_max: None,
         }),
     };
 
@@ -278,6 +280,8 @@ fn test_apply_trait_defaults_trait_overrides_defaults() {
             count_max: None,
             per_kb_min: None,
             per_kb_max: None,
+            entropy_min: None,
+            entropy_max: None,
         }),
     };
 
@@ -339,6 +343,8 @@ fn test_apply_trait_defaults_unset_mbc_with_none() {
             count_max: None,
             per_kb_min: None,
             per_kb_max: None,
+            entropy_min: None,
+            entropy_max: None,
         }),
     };
 
@@ -395,6 +401,8 @@ fn test_apply_trait_defaults_unset_attack_with_none() {
             count_max: None,
             per_kb_min: None,
             per_kb_max: None,
+            entropy_min: None,
+            entropy_max: None,
         }),
     };
 
@@ -451,6 +459,8 @@ fn test_apply_trait_defaults_unset_file_types_with_none() {
             count_max: None,
             per_kb_min: None,
             per_kb_max: None,
+            entropy_min: None,
+            entropy_max: None,
         }),
     };
 
@@ -1279,6 +1289,8 @@ fn test_precision_recursive_expansion() {
             count_max: None,
             per_kb_min: None,
             per_kb_max: None,
+            entropy_min: None,
+            entropy_max: None,
         },
         not: None,
         unless: None,
@@ -2257,6 +2269,8 @@ fn test_precision_traits_with_size_restrictions() {
             count_max: None,
             per_kb_min: None,
             per_kb_max: None,
+            entropy_min: None,
+            entropy_max: None,
         },
         not: None,
         unless: None,
@@ -2296,6 +2310,8 @@ fn test_precision_traits_with_size_restrictions() {
             count_max: None,
             per_kb_min: None,
             per_kb_max: None,
+            entropy_min: None,
+            entropy_max: None,
         },
         unless: None,
         not: None,

@@ -338,7 +338,7 @@ fn analyze_file_with_resources<P: AsRef<Path>>(
                 location: None,
             }],
             match_count: 0,
-                source_file: None,
+            source_file: None,
         });
     }
 
@@ -379,7 +379,7 @@ fn analyze_file_with_resources<P: AsRef<Path>>(
                 location: Some(format!("offset:{}", payload.original_offset)),
             }],
             match_count: 0,
-                source_file: None,
+            source_file: None,
         });
 
         // Analyze the decoded payload

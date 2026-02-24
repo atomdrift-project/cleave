@@ -57,6 +57,8 @@ fn test_count_min_filter_matches_debug_and_eval() {
             count_max: None,
             per_kb_min: None,
             per_kb_max: None,
+            entropy_min: None,
+            entropy_max: None,
         },
         not: None,
         unless: None,
@@ -79,6 +81,8 @@ fn test_count_min_filter_matches_debug_and_eval() {
         inline_yara_results: None,
         cached_kv_format: OnceLock::new(),
         cached_kv_parsed: OnceLock::new(),
+        current_trait: None,
+        current_source: None,
     };
 
     let eval_result = trait_def.evaluate(&ctx);
@@ -102,6 +106,8 @@ fn test_count_min_filter_matches_debug_and_eval() {
         inline_yara_results: None,
         cached_kv_format: OnceLock::new(),
         cached_kv_parsed: OnceLock::new(),
+        current_trait: None,
+        current_source: None,
     };
 
     let debug_result = trait_def.evaluate(&debug_ctx);
@@ -170,6 +176,8 @@ fn test_per_kb_min_filter_matches_debug_and_eval() {
             count_max: None,
             per_kb_min: Some(0.1), // Density NOT satisfied (0.0067 < 0.1)
             per_kb_max: None,
+            entropy_min: None,
+            entropy_max: None,
         },
         not: None,
         unless: None,
@@ -192,6 +200,8 @@ fn test_per_kb_min_filter_matches_debug_and_eval() {
         inline_yara_results: None,
         cached_kv_format: OnceLock::new(),
         cached_kv_parsed: OnceLock::new(),
+        current_trait: None,
+        current_source: None,
     };
 
     let eval_result = trait_def.evaluate(&ctx);
@@ -215,6 +225,8 @@ fn test_per_kb_min_filter_matches_debug_and_eval() {
         inline_yara_results: None,
         cached_kv_format: OnceLock::new(),
         cached_kv_parsed: OnceLock::new(),
+        current_trait: None,
+        current_source: None,
     };
 
     let debug_result = trait_def.evaluate(&debug_ctx);
@@ -275,6 +287,8 @@ fn test_size_min_filter_matches_debug_and_eval() {
             count_max: None,
             per_kb_min: None,
             per_kb_max: None,
+            entropy_min: None,
+            entropy_max: None,
         },
         not: None,
         unless: None,
@@ -297,6 +311,8 @@ fn test_size_min_filter_matches_debug_and_eval() {
         inline_yara_results: None,
         cached_kv_format: OnceLock::new(),
         cached_kv_parsed: OnceLock::new(),
+        current_trait: None,
+        current_source: None,
     };
 
     let eval_result = trait_def.evaluate(&ctx);
@@ -320,6 +336,8 @@ fn test_size_min_filter_matches_debug_and_eval() {
         inline_yara_results: None,
         cached_kv_format: OnceLock::new(),
         cached_kv_parsed: OnceLock::new(),
+        current_trait: None,
+        current_source: None,
     };
 
     let debug_result = trait_def.evaluate(&debug_ctx);
@@ -400,6 +418,8 @@ fn test_composite_size_constraints_match_debug_and_eval() {
         inline_yara_results: None,
         cached_kv_format: OnceLock::new(),
         cached_kv_parsed: OnceLock::new(),
+        current_trait: None,
+        current_source: None,
     };
 
     let eval_result = composite.evaluate(&ctx);
@@ -423,6 +443,8 @@ fn test_composite_size_constraints_match_debug_and_eval() {
         inline_yara_results: None,
         cached_kv_format: OnceLock::new(),
         cached_kv_parsed: OnceLock::new(),
+        current_trait: None,
+        current_source: None,
     };
 
     let debug_result = composite.evaluate(&debug_ctx);
@@ -484,6 +506,8 @@ fn test_all_filters_match_when_satisfied() {
             count_max: None,
             per_kb_min: Some(0.1),
             per_kb_max: None,
+            entropy_min: None,
+            entropy_max: None,
         },
         not: None,
         unless: None,
@@ -506,6 +530,8 @@ fn test_all_filters_match_when_satisfied() {
         inline_yara_results: None,
         cached_kv_format: OnceLock::new(),
         cached_kv_parsed: OnceLock::new(),
+        current_trait: None,
+        current_source: None,
     };
 
     let eval_result = trait_def.evaluate(&ctx);
@@ -529,6 +555,8 @@ fn test_all_filters_match_when_satisfied() {
         inline_yara_results: None,
         cached_kv_format: OnceLock::new(),
         cached_kv_parsed: OnceLock::new(),
+        current_trait: None,
+        current_source: None,
     };
 
     let debug_result = trait_def.evaluate(&debug_ctx);

@@ -885,7 +885,7 @@ impl ArchiveAnalyzer {
                     }],
 
                     match_count: 0,
-                source_file: None,
+                    source_file: None,
                 });
 
                 Ok(report)

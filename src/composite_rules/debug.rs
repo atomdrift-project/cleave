@@ -73,6 +73,20 @@ pub(crate) enum SkipReason {
         /// Maximum allowed density
         max: f64,
     },
+    /// File entropy is below minimum threshold
+    EntropyTooLow {
+        /// Actual entropy (0.0-8.0)
+        actual: f64,
+        /// Minimum required entropy
+        min: f64,
+    },
+    /// File entropy is above maximum threshold
+    EntropyTooHigh {
+        /// Actual entropy (0.0-8.0)
+        actual: f64,
+        /// Maximum allowed entropy
+        max: f64,
+    },
 }
 
 impl std::fmt::Display for SkipReason {
@@ -126,6 +140,20 @@ impl std::fmt::Display for SkipReason {
                 write!(
                     f,
                     "Match density too high (actual: {:.2}/KB, max: {:.2}/KB)",
+                    actual, max
+                )
+            }
+            SkipReason::EntropyTooLow { actual, min } => {
+                write!(
+                    f,
+                    "File entropy too low (actual: {:.2}, min: {:.2})",
+                    actual, min
+                )
+            }
+            SkipReason::EntropyTooHigh { actual, max } => {
+                write!(
+                    f,
+                    "File entropy too high (actual: {:.2}, max: {:.2})",
                     actual, max
                 )
             }

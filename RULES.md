@@ -64,6 +64,8 @@ traits:
     platforms: [linux, macos, windows]   # Optional platform filter
     size_min: 1000                       # Optional min file size (bytes)
     size_max: 10485760                   # Optional max file size
+    entropy_min: 4.5                     # Optional min file entropy (0.0-8.0; section entropy handled via type: section)
+    entropy_max: 7.5                     # Optional max file entropy
     if:                                  # Condition (see below)
       type: string
       substr: ".Kill("
@@ -106,11 +108,33 @@ traits:
 
 ### Hex Pattern Syntax
 
-```
-7F 45 4C 46    # Literal bytes
-??             # Any single byte
-[4]            # Skip exactly 4 bytes
-[2-8]          # Skip 2-8 bytes
+| Token | Description | Example |
+|-------|-------------|---------|
+| `XX` | Literal byte (hex) | `7F 45 4C 46` |
+| `??` | Any single byte (wildcard) | `31 ?? 48` |
+| `X?` | High nibble fixed, low nibble wild | `4?` matches 0x40-0x4F |
+| `?X` | Low nibble fixed, high nibble wild | `?A` matches any byte ending in A |
+| `[N]` | Skip exactly N bytes | `00 [4] FF` |
+| `[N-M]` | Skip N to M bytes | `00 [2-8] FF` |
+| `(XX\|YY)` | Byte alternation (match any) | `(00\|80)` matches 0x00 or 0x80 |
+
+**Examples:**
+
+```yaml
+# ELF magic
+if:
+  type: hex
+  pattern: "7F 45 4C 46"
+
+# XOR loop detection (nibble wildcards for register variants)
+if:
+  type: hex
+  pattern: "31 ?? 88 ?? 4? 83 ?? ?? 7?"
+
+# LZMA header with size byte options
+if:
+  type: hex
+  pattern: "5D 00 00 (00|80) 00 (01|02|03|04) [7] ??"
 ```
 
 ### AST Kinds

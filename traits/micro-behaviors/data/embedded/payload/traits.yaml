@@ -20,36 +20,40 @@ traits:
       type: hex
       pattern: "28 B5 2F FD"
 
-  - id: lzma-magic
-    desc: Embedded LZMA compressed data
-    crit: notable
-    conf: 0.7
-    mbc: "F0001.006"
-    attack: "T1027.009"
-    # Bootloaders and firmware files legitimately embed LZMA-compressed payloads
-    # Only flag as suspicious if combined with other packing indicators
-    # Note: Full LZMA header is properties(1) + dict_size(4) + uncompressed_size(8)
-    # Common properties byte is 0x5D (lc=3,lp=0,pb=2). We require 13+ bytes
-    # (full header + first compressed byte) to avoid matching instruction bytes.
-    # The pattern 5D 00 00 appears frequently in x86-64 code (e.g., call offsets).
-    size_max: 52428800
+  # === LZMA detection atomic indicators ===
+  # Full LZMA header (13 bytes): props(1) + dict(4) + uncompressed_size(8)
+  # props: 5D (common, lc=3,lp=0,pb=2)
+  # dict: typically 0x00800000 (8MB) or smaller power of 2
+  # size: 8 bytes. We match if at least one byte is non-zero in a reasonable position.
+  # Note: 5D 00 00 appears frequently in x86-64 code (e.g., call offsets).
+
+  - id: lzma-sized-nonzero-1
+    desc: LZMA header nonzero size pos 1
+    crit: component
     if:
-      type: yara
-      source: |
-        rule embedded_lzma {
-          strings:
-            // Full LZMA header (13 bytes): props(1) + dict(4) + uncompressed_sized(8)
-            // props: 5D (common)
-            // dict: typically 0x00800000 (8MB) or smaller power of 2
-            // size: 8 bytes. We match if at least one byte is non-zero in a reasonable position.
-            $lzma_sized_nonzero = { 5D 00 00 (00|80) 00 (01|02|03|04|05|06|07|08|09|0A|0B|0C|0D|0E|0F|10|11|12|13|14|15|16|17|18|19|1A|1B|1C|1D|1E|1F|20) [7] ?? }
-            $lzma_sized_nonzero2 = { 5D 00 00 (00|80) 00 [1] (01|02|03|04|05|06|07|08|09|0A|0B|0C|0D|0E|0F|10|11|12|13|14|15|16|17|18|19|1A|1B|1C|1D|1E|1F|20) [6] ?? }
-            $lzma_sized_nonzero3 = { 5D 00 00 (00|80) 00 [2] (01|02|03|04|05|06|07|08|09|0A|0B|0C|0D|0E|0F|10|11|12|13|14|15|16|17|18|19|1A|1B|1C|1D|1E|1F|20) [5] ?? }
-            // LZMA with unknown size marker (-1 = 0xFFFFFFFFFFFFFFFF)
-            $lzma_unk = { 5D 00 00 (00|80) 00 FF FF FF FF FF FF FF FF 00 }
-          condition:
-            any of them
-        }
+      type: hex
+      pattern: "5D 00 00 (00|80) 00 (01|02|03|04|05|06|07|08|09|0A|0B|0C|0D|0E|0F|10|11|12|13|14|15|16|17|18|19|1A|1B|1C|1D|1E|1F|20) [7] ??"
+
+  - id: lzma-sized-nonzero-2
+    desc: LZMA header nonzero size pos 2
+    crit: component
+    if:
+      type: hex
+      pattern: "5D 00 00 (00|80) 00 [1] (01|02|03|04|05|06|07|08|09|0A|0B|0C|0D|0E|0F|10|11|12|13|14|15|16|17|18|19|1A|1B|1C|1D|1E|1F|20) [6] ??"
+
+  - id: lzma-sized-nonzero-3
+    desc: LZMA header nonzero size pos 3
+    crit: component
+    if:
+      type: hex
+      pattern: "5D 00 00 (00|80) 00 [2] (01|02|03|04|05|06|07|08|09|0A|0B|0C|0D|0E|0F|10|11|12|13|14|15|16|17|18|19|1A|1B|1C|1D|1E|1F|20) [5] ??"
+
+  - id: lzma-unknown-size
+    desc: LZMA header unknown size marker
+    crit: component
+    if:
+      type: hex
+      pattern: "5D 00 00 (00|80) 00 FF FF FF FF FF FF FF FF 00"
 
   - id: xz-magic
     desc: Embedded XZ compressed data
@@ -144,6 +148,22 @@ traits:
       substr: ".gnu_debugdata"
 
 composite_rules:
+  # LZMA detection composite
+  # Bootloaders and firmware files legitimately embed LZMA-compressed payloads
+  # Only flag as notable if combined with other packing indicators
+  - id: lzma-magic
+    desc: Embedded LZMA compressed data
+    crit: notable
+    conf: 0.7
+    mbc: "F0001.006"
+    attack: "T1027.009"
+    size_max: 52428800
+    any:
+      - id: lzma-sized-nonzero-1
+      - id: lzma-sized-nonzero-2
+      - id: lzma-sized-nonzero-3
+      - id: lzma-unknown-size
+
   # Multiple embedded compressed payloads is suspicious
   # NOTE: Excludes gzip since it's ubiquitous in legitimate binaries (Node.js, curl, etc.)
   # Requires 2+ of the more suspicious compression formats (LZMA/XZ/ZSTD/BZIP2)

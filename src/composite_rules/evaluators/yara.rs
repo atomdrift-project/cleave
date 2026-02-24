@@ -132,6 +132,17 @@ enum HexSegment {
     Wildcard,
     /// Variable gap [N] or [N-M]
     Gap { min: usize, max: usize },
+    /// Nibble mask: matches bytes where masked nibbles match
+    /// high_mask: 0xF0 if high nibble fixed, 0x00 if wild
+    /// low_mask: 0x0F if low nibble fixed, 0x00 if wild
+    /// value: the expected value after masking
+    NibbleMask {
+        high_mask: u8,
+        low_mask: u8,
+        value: u8,
+    },
+    /// Byte alternation: matches any byte in the set
+    ByteSet(Vec<u8>),
 }
 
 /// Parse a hex pattern string into segments
@@ -147,6 +158,64 @@ fn parse_hex_pattern(pattern: &str) -> Result<Vec<HexSegment>, String> {
                 segments.push(HexSegment::Bytes(std::mem::take(&mut current_bytes)));
             }
             segments.push(HexSegment::Wildcard);
+        } else if token.len() == 2 {
+            // Check for nibble wildcards: X? or ?X (but not ??)
+            let chars: Vec<char> = token.chars().collect();
+            let high_wild = chars[0] == '?';
+            let low_wild = chars[1] == '?';
+
+            if high_wild && !low_wild {
+                // ?X pattern: high nibble wild, low nibble fixed
+                if !current_bytes.is_empty() {
+                    segments.push(HexSegment::Bytes(std::mem::take(&mut current_bytes)));
+                }
+                let low_nibble = u8::from_str_radix(&token[1..2], 16)
+                    .map_err(|_| format!("invalid nibble: {}", token))?;
+                segments.push(HexSegment::NibbleMask {
+                    high_mask: 0x00,
+                    low_mask: 0x0F,
+                    value: low_nibble,
+                });
+                continue;
+            } else if !high_wild && low_wild {
+                // X? pattern: high nibble fixed, low nibble wild
+                if !current_bytes.is_empty() {
+                    segments.push(HexSegment::Bytes(std::mem::take(&mut current_bytes)));
+                }
+                let high_nibble = u8::from_str_radix(&token[0..1], 16)
+                    .map_err(|_| format!("invalid nibble: {}", token))?;
+                segments.push(HexSegment::NibbleMask {
+                    high_mask: 0xF0,
+                    low_mask: 0x00,
+                    value: high_nibble << 4,
+                });
+                continue;
+            }
+            // Fall through to regular hex byte parsing for non-wildcard 2-char tokens
+            let byte = u8::from_str_radix(token, 16)
+                .map_err(|_| format!("invalid hex byte: {}", token))?;
+            current_bytes.push(byte);
+        } else if token.starts_with('(') && token.ends_with(')') {
+            // Byte alternation: (XX|YY|ZZ)
+            if !current_bytes.is_empty() {
+                segments.push(HexSegment::Bytes(std::mem::take(&mut current_bytes)));
+            }
+
+            let inner = &token[1..token.len() - 1];
+            let alternatives: Result<Vec<u8>, String> = inner
+                .split('|')
+                .map(|s| {
+                    u8::from_str_radix(s.trim(), 16)
+                        .map_err(|_| format!("invalid alternation byte: {}", s))
+                })
+                .collect();
+
+            let bytes = alternatives?;
+            if bytes.is_empty() {
+                return Err("empty byte alternation".to_string());
+            }
+
+            segments.push(HexSegment::ByteSet(bytes));
         } else if token.starts_with('[') && token.ends_with(']') {
             // Gap: [N] or [N-M]
             if !current_bytes.is_empty() {
@@ -236,6 +305,30 @@ fn match_pattern_at(data: &[u8], pos: usize, segments: &[HexSegment]) -> bool {
                     return false;
                 }
             }
+            HexSegment::NibbleMask {
+                high_mask,
+                low_mask,
+                value,
+            } => {
+                if offset >= data.len() {
+                    return false;
+                }
+                let byte = data[offset];
+                let mask = high_mask | low_mask;
+                if (byte & mask) != *value {
+                    return false;
+                }
+                offset += 1;
+            }
+            HexSegment::ByteSet(bytes) => {
+                if offset >= data.len() {
+                    return false;
+                }
+                if !bytes.contains(&data[offset]) {
+                    return false;
+                }
+                offset += 1;
+            }
         }
     }
 
@@ -270,6 +363,20 @@ fn extract_wildcard_bytes(data: &[u8], pos: usize, segments: &[HexSegment]) -> V
                             break;
                         }
                     }
+                }
+            }
+            HexSegment::NibbleMask { .. } => {
+                // Extract the matched byte for nibble masks
+                if offset < data.len() {
+                    extracted.push(data[offset]);
+                    offset += 1;
+                }
+            }
+            HexSegment::ByteSet(_) => {
+                // Extract the matched byte for byte sets
+                if offset < data.len() {
+                    extracted.push(data[offset]);
+                    offset += 1;
                 }
             }
         }
@@ -371,6 +478,8 @@ pub(crate) fn eval_hex<'a>(
                     HexSegment::Bytes(b) => b.len(),
                     HexSegment::Wildcard => 1,
                     HexSegment::Gap { min, .. } => *min,
+                    HexSegment::NibbleMask { .. } => 1,
+                    HexSegment::ByteSet(_) => 1,
                 })
                 .sum();
 
@@ -616,5 +725,218 @@ mod tests {
     fn test_parse_invalid_hex() {
         assert!(parse_hex_pattern("ZZ 45").is_err());
         assert!(parse_hex_pattern("[abc]").is_err());
+    }
+
+    // === Nibble wildcard tests ===
+
+    #[test]
+    fn test_parse_nibble_wildcard_high() {
+        // 4? = high nibble 0x40, low nibble wild
+        let segments = parse_hex_pattern("4?").unwrap();
+        assert_eq!(segments.len(), 1);
+        match &segments[0] {
+            HexSegment::NibbleMask {
+                high_mask,
+                low_mask,
+                value,
+            } => {
+                assert_eq!(*high_mask, 0xF0);
+                assert_eq!(*low_mask, 0x00);
+                assert_eq!(*value, 0x40);
+            }
+            _ => panic!("expected NibbleMask"),
+        }
+    }
+
+    #[test]
+    fn test_parse_nibble_wildcard_low() {
+        // ?A = high nibble wild, low nibble 0x0A
+        let segments = parse_hex_pattern("?A").unwrap();
+        assert_eq!(segments.len(), 1);
+        match &segments[0] {
+            HexSegment::NibbleMask {
+                high_mask,
+                low_mask,
+                value,
+            } => {
+                assert_eq!(*high_mask, 0x00);
+                assert_eq!(*low_mask, 0x0F);
+                assert_eq!(*value, 0x0A);
+            }
+            _ => panic!("expected NibbleMask"),
+        }
+    }
+
+    #[test]
+    fn test_parse_nibble_wildcard_complex() {
+        // Mozi-style pattern
+        let segments = parse_hex_pattern("31 ?? 4? 7?").unwrap();
+        assert_eq!(segments.len(), 4);
+        assert!(matches!(&segments[0], HexSegment::Bytes(b) if b == &[0x31]));
+        assert!(matches!(segments[1], HexSegment::Wildcard));
+        assert!(matches!(
+            segments[2],
+            HexSegment::NibbleMask { value: 0x40, .. }
+        ));
+        assert!(matches!(
+            segments[3],
+            HexSegment::NibbleMask { value: 0x70, .. }
+        ));
+    }
+
+    #[test]
+    fn test_match_nibble_wildcard_high() {
+        let segments = parse_hex_pattern("4?").unwrap();
+
+        // 4? should match 0x40-0x4F
+        assert!(match_pattern_at(&[0x40], 0, &segments));
+        assert!(match_pattern_at(&[0x4F], 0, &segments));
+        assert!(match_pattern_at(&[0x48], 0, &segments));
+
+        // Should not match 0x5F (different high nibble)
+        assert!(!match_pattern_at(&[0x5F], 0, &segments));
+        assert!(!match_pattern_at(&[0x30], 0, &segments));
+    }
+
+    #[test]
+    fn test_match_nibble_wildcard_low() {
+        let segments = parse_hex_pattern("?A").unwrap();
+
+        // ?A should match any byte ending in A
+        assert!(match_pattern_at(&[0x0A], 0, &segments));
+        assert!(match_pattern_at(&[0xFA], 0, &segments));
+        assert!(match_pattern_at(&[0x5A], 0, &segments));
+
+        // Should not match xB
+        assert!(!match_pattern_at(&[0xFB], 0, &segments));
+        assert!(!match_pattern_at(&[0x00], 0, &segments));
+    }
+
+    #[test]
+    fn test_match_mozi_xor_pattern() {
+        // Real Mozi XOR loop pattern: 31 ?? 88 ?? 4? 83 ?? ?? 7?
+        let data = &[0x31, 0xC0, 0x88, 0x03, 0x48, 0x83, 0xC0, 0x01, 0x75];
+        let segments = parse_hex_pattern("31 ?? 88 ?? 4? 83 ?? ?? 7?").unwrap();
+        assert!(match_pattern_at(data, 0, &segments));
+
+        // Different high nibble at position 4 should fail
+        let data_bad = &[0x31, 0xC0, 0x88, 0x03, 0x58, 0x83, 0xC0, 0x01, 0x75];
+        assert!(!match_pattern_at(data_bad, 0, &segments));
+    }
+
+    // === Byte alternation tests ===
+
+    #[test]
+    fn test_parse_byte_alternation() {
+        let segments = parse_hex_pattern("(00|80)").unwrap();
+        assert_eq!(segments.len(), 1);
+        match &segments[0] {
+            HexSegment::ByteSet(bytes) => {
+                assert_eq!(bytes, &[0x00, 0x80]);
+            }
+            _ => panic!("expected ByteSet"),
+        }
+    }
+
+    #[test]
+    fn test_parse_byte_alternation_many() {
+        // LZMA-style: many alternatives
+        let segments = parse_hex_pattern("(01|02|03|04|05)").unwrap();
+        assert_eq!(segments.len(), 1);
+        match &segments[0] {
+            HexSegment::ByteSet(bytes) => {
+                assert_eq!(bytes, &[0x01, 0x02, 0x03, 0x04, 0x05]);
+            }
+            _ => panic!("expected ByteSet"),
+        }
+    }
+
+    #[test]
+    fn test_parse_combined_pattern() {
+        // LZMA-style: fixed + alternation + gap + wildcard
+        let segments = parse_hex_pattern("5D 00 00 (00|80) [7] ??").unwrap();
+        assert_eq!(segments.len(), 4);
+        assert!(matches!(&segments[0], HexSegment::Bytes(b) if b == &[0x5D, 0x00, 0x00]));
+        assert!(matches!(&segments[1], HexSegment::ByteSet(b) if b == &[0x00, 0x80]));
+        assert!(matches!(segments[2], HexSegment::Gap { min: 7, max: 7 }));
+        assert!(matches!(segments[3], HexSegment::Wildcard));
+    }
+
+    #[test]
+    fn test_match_byte_alternation() {
+        let segments = parse_hex_pattern("(00|80)").unwrap();
+
+        assert!(match_pattern_at(&[0x00], 0, &segments));
+        assert!(match_pattern_at(&[0x80], 0, &segments));
+
+        // Not in set
+        assert!(!match_pattern_at(&[0x40], 0, &segments));
+        assert!(!match_pattern_at(&[0x01], 0, &segments));
+    }
+
+    #[test]
+    fn test_match_byte_alternation_in_context() {
+        // Test alternation between fixed bytes
+        let segments = parse_hex_pattern("5D 00 00 (00|80) 00").unwrap();
+
+        let data1 = &[0x5D, 0x00, 0x00, 0x80, 0x00];
+        assert!(match_pattern_at(data1, 0, &segments));
+
+        let data2 = &[0x5D, 0x00, 0x00, 0x00, 0x00]; // 00 variant
+        assert!(match_pattern_at(data2, 0, &segments));
+
+        let data3 = &[0x5D, 0x00, 0x00, 0x40, 0x00]; // 40 not in set
+        assert!(!match_pattern_at(data3, 0, &segments));
+    }
+
+    #[test]
+    fn test_match_lzma_pattern() {
+        // Simplified LZMA header pattern: 5D 00 00 (00|80) 00 (10|20) [7] ??
+        let data = &[
+            0x5D, 0x00, 0x00, 0x80, 0x00, 0x10, // Header + decompressed size byte
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // 7 bytes gap
+            0xFF, // Final byte
+        ];
+        let segments = parse_hex_pattern("5D 00 00 (00|80) 00 (10|20) [7] ??").unwrap();
+        assert!(match_pattern_at(data, 0, &segments));
+
+        // With 00 variant instead of 80
+        let data2 = &[
+            0x5D, 0x00, 0x00, 0x00, 0x00, 0x20, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xAB,
+        ];
+        assert!(match_pattern_at(data2, 0, &segments));
+    }
+
+    #[test]
+    fn test_extract_nibble_wildcard_bytes() {
+        let segments = parse_hex_pattern("31 4? ??").unwrap();
+
+        // Should match 31 48 XX (0x48 has high nibble 4)
+        let data = &[0x31, 0x48, 0xFF];
+        assert!(match_pattern_at(data, 0, &segments));
+
+        let extracted = extract_wildcard_bytes(data, 0, &segments);
+        // Should extract 0x48 (nibble mask) and 0xFF (wildcard)
+        assert_eq!(extracted, vec![0x48, 0xFF]);
+    }
+
+    #[test]
+    fn test_extract_byte_set_bytes() {
+        let data = &[0x5D, 0x00, 0x80, 0xFF];
+        let segments = parse_hex_pattern("5D 00 (00|80) ??").unwrap();
+        assert!(match_pattern_at(data, 0, &segments));
+
+        let extracted = extract_wildcard_bytes(data, 0, &segments);
+        // Should extract 0x80 (byte set) and 0xFF (wildcard)
+        assert_eq!(extracted, vec![0x80, 0xFF]);
+    }
+
+    #[test]
+    fn test_is_simple_pattern_with_new_types() {
+        let with_nibble = parse_hex_pattern("4? 45").unwrap();
+        assert!(!is_simple_pattern(&with_nibble));
+
+        let with_byteset = parse_hex_pattern("(00|80) 45").unwrap();
+        assert!(!is_simple_pattern(&with_byteset));
     }
 }

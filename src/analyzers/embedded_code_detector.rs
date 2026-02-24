@@ -179,7 +179,7 @@ fn generate_language_trait(
             location: Some(format!("{:#x}", offset)),
         }],
         match_count: 0,
-                source_file: None,
+        source_file: None,
     }
 }
 

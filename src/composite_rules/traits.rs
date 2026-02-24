@@ -151,6 +151,15 @@ pub(crate) struct ConditionWithFilters {
     /// Maximum matches per kilobyte of file size (density ceiling)
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub per_kb_max: Option<f64>,
+
+    /// Minimum file entropy (0.0-8.0) - checked before evaluating condition
+    /// Uses binary.overall_entropy for binaries, text.char_entropy for scripts
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub entropy_min: Option<f64>,
+
+    /// Maximum file entropy (0.0-8.0) - checked before evaluating condition
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub entropy_max: Option<f64>,
 }
 
 impl ConditionWithFilters {
@@ -434,6 +443,38 @@ impl TraitDefinition {
             if max < min {
                 return Some(format!(
                     "size_max ({}) cannot be less than size_min ({})",
+                    max, min
+                ));
+            }
+        }
+        None
+    }
+
+    /// Check if entropy constraints are valid.
+    /// Returns an error message if invalid, None otherwise.
+    #[must_use]
+    pub(crate) fn check_entropy_constraints(&self) -> Option<String> {
+        // Validate entropy range (0.0-8.0)
+        if let Some(min) = self.r#if.entropy_min {
+            if !(0.0..=8.0).contains(&min) {
+                return Some(format!(
+                    "entropy_min ({:.2}) must be between 0.0 and 8.0",
+                    min
+                ));
+            }
+        }
+        if let Some(max) = self.r#if.entropy_max {
+            if !(0.0..=8.0).contains(&max) {
+                return Some(format!(
+                    "entropy_max ({:.2}) must be between 0.0 and 8.0",
+                    max
+                ));
+            }
+        }
+        if let (Some(min), Some(max)) = (self.r#if.entropy_min, self.r#if.entropy_max) {
+            if max < min {
+                return Some(format!(
+                    "entropy_max ({:.2}) cannot be less than entropy_min ({:.2})",
                     max, min
                 ));
             }
@@ -813,6 +854,50 @@ impl TraitDefinition {
                     }
                 }
                 return None;
+            }
+        }
+
+        // Check entropy constraints (from if: block)
+        // Uses binary.overall_entropy for binaries, text.char_entropy for scripts
+        if self.r#if.entropy_min.is_some() || self.r#if.entropy_max.is_some() {
+            let file_entropy = ctx
+                .report
+                .metrics
+                .as_ref()
+                .and_then(|m| {
+                    // Try binary entropy first, fall back to text char entropy
+                    m.binary
+                        .as_ref()
+                        .map(|b| f64::from(b.overall_entropy))
+                        .or_else(|| m.text.as_ref().map(|t| f64::from(t.char_entropy)))
+                })
+                .unwrap_or(0.0);
+
+            if let Some(min) = self.r#if.entropy_min {
+                if file_entropy < min {
+                    if let Some(collector) = &ctx.debug_collector {
+                        if let Ok(mut debug) = collector.write() {
+                            debug.record_skip(SkipReason::EntropyTooLow {
+                                actual: file_entropy,
+                                min,
+                            });
+                        }
+                    }
+                    return None;
+                }
+            }
+            if let Some(max) = self.r#if.entropy_max {
+                if file_entropy > max {
+                    if let Some(collector) = &ctx.debug_collector {
+                        if let Ok(mut debug) = collector.write() {
+                            debug.record_skip(SkipReason::EntropyTooHigh {
+                                actual: file_entropy,
+                                max,
+                            });
+                        }
+                    }
+                    return None;
+                }
             }
         }
 
@@ -1893,7 +1978,7 @@ impl CompositeTrait {
                         location: None,
                     }],
                     match_count: 0,
-                source_file: get_relative_source_file(&self.defined_in),
+                    source_file: get_relative_source_file(&self.defined_in),
                 });
             }
 

@@ -18,10 +18,7 @@ use crate::types::{AnalysisReport, TargetInfo};
 use std::sync::{Arc, OnceLock};
 
 /// Helper: Create minimal evaluation context
-fn create_test_context(
-    report: AnalysisReport,
-    binary_data: Vec<u8>,
-) -> EvaluationContext<'static> {
+fn create_test_context(report: AnalysisReport, binary_data: Vec<u8>) -> EvaluationContext<'static> {
     EvaluationContext {
         report: Box::leak(Box::new(report)),
         binary_data: Box::leak(binary_data.into_boxed_slice()),
@@ -122,7 +119,7 @@ fn test_eval_hex_no_match() {
 fn test_eval_hex_multiple_matches() {
     let binary_data = vec![
         0x48, 0x8B, 0xFF, // First match
-        0x00, 0x00,       // Filler
+        0x00, 0x00, // Filler
         0x48, 0x8B, 0xFF, // Second match
     ];
     let report = create_test_report();
@@ -133,7 +130,7 @@ fn test_eval_hex_multiple_matches() {
 
     assert!(result.matched);
     // Should collect multiple matches
-    assert!(result.evidence.len() >= 1);
+    assert!(!result.evidence.is_empty());
 }
 
 #[test]
@@ -142,8 +139,10 @@ fn test_eval_hex_offset_constraint() {
     let report = create_test_report();
     let ctx = create_test_context(report, binary_data);
 
-    let mut location = ContentLocationParams::default();
-    location.offset = Some(2);
+    let location = ContentLocationParams {
+        offset: Some(2),
+        ..Default::default()
+    };
     let result = eval_hex("4D 5A", &location, &ctx);
 
     assert!(result.matched, "Should match at specific offset");
@@ -155,8 +154,10 @@ fn test_eval_hex_offset_no_match() {
     let report = create_test_report();
     let ctx = create_test_context(report, binary_data);
 
-    let mut location = ContentLocationParams::default();
-    location.offset = Some(2); // Wrong offset
+    let location = ContentLocationParams {
+        offset: Some(2), // Wrong offset
+        ..Default::default()
+    };
     let result = eval_hex("4D 5A", &location, &ctx);
 
     assert!(!result.matched, "Should not match at wrong offset");
@@ -168,8 +169,10 @@ fn test_eval_hex_range_constraint() {
     let report = create_test_report();
     let ctx = create_test_context(report, binary_data);
 
-    let mut location = ContentLocationParams::default();
-    location.offset_range = Some((0, Some(4))); // Search in first 4 bytes
+    let location = ContentLocationParams {
+        offset_range: Some((0, Some(4))), // Search in first 4 bytes
+        ..Default::default()
+    };
     let result = eval_hex("4D 5A", &location, &ctx);
 
     assert!(result.matched, "Should match within range");
@@ -247,7 +250,10 @@ fn test_eval_hex_wildcards_at_edges() {
     let location = ContentLocationParams::default();
     let result = eval_hex("?? 48 8B ??", &location, &ctx);
 
-    assert!(result.matched, "Should match with leading/trailing wildcards");
+    assert!(
+        result.matched,
+        "Should match with leading/trailing wildcards"
+    );
 }
 
 #[test]
@@ -404,7 +410,10 @@ fn test_eval_hex_match_count_equals_evidence_when_few_matches() {
 
     assert!(result.matched);
     assert_eq!(result.evidence.len(), 2, "Should have 2 evidence items");
-    assert_eq!(result.match_count, 2, "match_count should equal evidence.len()");
+    assert_eq!(
+        result.match_count, 2,
+        "match_count should equal evidence.len()"
+    );
 }
 
 #[test]
@@ -418,7 +427,10 @@ fn test_eval_hex_no_match_count_zero() {
 
     assert!(!result.matched);
     assert!(result.evidence.is_empty());
-    assert_eq!(result.match_count, 0, "match_count should be 0 for no matches");
+    assert_eq!(
+        result.match_count, 0,
+        "match_count should be 0 for no matches"
+    );
 }
 
 #[test]
@@ -435,10 +447,7 @@ fn test_eval_hex_match_count_with_wildcards() {
     let result = eval_hex("48 ?? FF", &location, &ctx);
 
     assert!(result.matched);
-    assert!(
-        result.evidence.len() <= 16,
-        "Evidence should be capped"
-    );
+    assert!(result.evidence.len() <= 16, "Evidence should be capped");
     assert_eq!(
         result.match_count, 30,
         "match_count should track all 30 wildcard matches"

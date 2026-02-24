@@ -141,6 +141,8 @@ pub(crate) fn apply_trait_defaults(
                 count_max: None,
                 per_kb_min: None,
                 per_kb_max: None,
+                entropy_min: None,
+                entropy_max: None,
             });
 
     // Auto-fix: Convert literal regex patterns to substr for better performance

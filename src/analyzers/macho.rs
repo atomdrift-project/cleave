@@ -843,7 +843,7 @@ impl MachOAnalyzer {
             }],
 
             match_count: 0,
-                source_file: None,
+            source_file: None,
         });
 
         // Identifier trait - complete trait ID includes the bundle identifier
@@ -1177,8 +1177,12 @@ impl Analyzer for MachOAnalyzer {
                 .evaluate_and_merge_findings(&mut report, &data, None, None);
         } else {
             // Thin binary - single slice is the whole file
-            self.capability_mapper
-                .evaluate_and_merge_findings(&mut report, preferred_data, None, None);
+            self.capability_mapper.evaluate_and_merge_findings(
+                &mut report,
+                preferred_data,
+                None,
+                None,
+            );
         }
 
         Ok(report)

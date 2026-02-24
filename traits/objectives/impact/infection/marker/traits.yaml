@@ -12,45 +12,126 @@ traits:
       type: string
       regex: ".{3,16} infected with .{3,16}"
 
-  - id: elf-infector-yara
-    desc: ELF file infector pattern via
-    crit: suspicious
-    conf: 0.95
-    attack: "T1204"
-    mbc: "B0009"
+  # === ELF infector atomic indicators ===
+  - id: infect-file-pattern
+    desc: infect file/elf/binary pattern
+    crit: component
     for: [elf]
     if:
-      type: yara
-      source: |
-        rule elf_infector {
-          strings:
-            // High-confidence infection terminology (specific to file infectors)
-            $infect_file = /infect.{0,10}(file|elf|binary)/i
-            $virus = "virus" nocase fullword
-            $parasite = "parasite" nocase fullword
-            // Common file-scanning patterns in infectors - require word boundaries
-            // Use \b to avoid matching "scanner self" or "scanning elf"
-            $scan_elf = /\bscan[_\s]+(for[_\s]+)?elf\b/i
-            $find_target = /find.{0,10}target/i
-            // Exclusions for legitimate binaries/tools
-            $llvm = "LLVM" fullword
-            $clang = "clang" fullword
-            $objcopy = "objcopy" fullword
-            $binutils = "binutils" fullword
-            // Lexer/parser generators
-            $flex = "flex" fullword
-            $lex = " lex " nocase
-            $yacc = "yacc" fullword
-            $bison = "bison" fullword
-            $scanner = "scanner" nocase fullword
-          condition:
-            uint32(0) == 0x464C457F and
-            filesize < 1MB and
-            // Only match explicit infection terminology, NOT embedded ELF
-            // (embedded ELF is common in linkers, objcopy, etc.)
-            any of ($infect_file, $virus, $parasite, $scan_elf, $find_target) and
-            none of ($llvm, $clang, $objcopy, $binutils, $flex, $lex, $yacc, $bison, $scanner)
-        }
+      type: string
+      regex: "infect.{0,10}(file|elf|binary)"
+      case_insensitive: true
+
+  - id: virus-word
+    desc: virus word
+    crit: component
+    for: [elf]
+    if:
+      type: string
+      word: "virus"
+      case_insensitive: true
+
+  - id: parasite-word
+    desc: parasite word
+    crit: component
+    for: [elf]
+    if:
+      type: string
+      word: "parasite"
+      case_insensitive: true
+
+  - id: scan-elf-pattern
+    desc: scan for elf pattern
+    crit: component
+    for: [elf]
+    if:
+      type: string
+      regex: "\\bscan[_\\s]+(for[_\\s]+)?elf\\b"
+      case_insensitive: true
+
+  - id: find-target-pattern
+    desc: find target pattern
+    crit: component
+    for: [elf]
+    if:
+      type: string
+      regex: "find.{0,10}target"
+      case_insensitive: true
+
+  # === Exclusion indicators for legitimate tools ===
+  - id: llvm-word
+    desc: LLVM word
+    crit: component
+    for: [elf]
+    if:
+      type: string
+      word: "LLVM"
+
+  - id: clang-word
+    desc: clang word
+    crit: component
+    for: [elf]
+    if:
+      type: string
+      word: "clang"
+
+  - id: objcopy-word
+    desc: objcopy word
+    crit: component
+    for: [elf]
+    if:
+      type: string
+      word: "objcopy"
+
+  - id: binutils-word
+    desc: binutils word
+    crit: component
+    for: [elf]
+    if:
+      type: string
+      word: "binutils"
+
+  - id: flex-word
+    desc: flex word
+    crit: component
+    for: [elf]
+    if:
+      type: string
+      word: "flex"
+
+  - id: lex-word
+    desc: lex word
+    crit: component
+    for: [elf]
+    if:
+      type: string
+      substr: " lex "
+      case_insensitive: true
+
+  - id: yacc-word
+    desc: yacc word
+    crit: component
+    for: [elf]
+    if:
+      type: string
+      word: "yacc"
+
+  - id: bison-word
+    desc: bison word
+    crit: component
+    for: [elf]
+    if:
+      type: string
+      word: "bison"
+
+  - id: scanner-word
+    desc: scanner word
+    crit: component
+    for: [elf]
+    if:
+      type: string
+      word: "scanner"
+      case_insensitive: true
 
   # === XOR-encoded infection marker atomic indicators ===
   - id: infected-xor
@@ -108,6 +189,46 @@ traits:
       substr: "ERROR_VIRUS_INFECTED"
 
 composite_rules:
+  # === ELF infector composites ===
+  - id: infection-terminology
+    desc: Infection terminology patterns
+    crit: component
+    for: [elf]
+    any:
+      - id: infect-file-pattern
+      - id: virus-word
+      - id: parasite-word
+      - id: scan-elf-pattern
+      - id: find-target-pattern
+
+  - id: legitimate-tools
+    desc: Legitimate development tool indicators
+    crit: component
+    for: [elf]
+    any:
+      - id: llvm-word
+      - id: clang-word
+      - id: objcopy-word
+      - id: binutils-word
+      - id: flex-word
+      - id: lex-word
+      - id: yacc-word
+      - id: bison-word
+      - id: scanner-word
+
+  - id: elf-infector
+    desc: ELF file infector pattern
+    crit: suspicious
+    conf: 0.95
+    attack: "T1204"
+    mbc: "B0009"
+    for: [elf]
+    size_max: 1048576
+    all:
+      - id: infection-terminology
+    none:
+      - id: legitimate-tools
+
   # XOR-encoded malware type indicators
   - id: malware-type-xor
     desc: XOR-encoded malware type string

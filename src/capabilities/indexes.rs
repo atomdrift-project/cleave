@@ -940,6 +940,8 @@ mod tests {
                 count_max: None,
                 per_kb_min: None,
                 per_kb_max: None,
+                entropy_min: None,
+                entropy_max: None,
             },
             not: None,
             unless: None,

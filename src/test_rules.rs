@@ -2646,6 +2646,7 @@ mod tests {
             trait_refs: vec![],
             evidence: vec![],
             source_file: None,
+            match_count: 0,
         }
     }
 

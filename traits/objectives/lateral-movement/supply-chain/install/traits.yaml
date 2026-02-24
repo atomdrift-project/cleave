@@ -8,77 +8,156 @@ defaults:
   attack: "T1195.002"
 
 traits:
-  # Base64-encoded binary embedding in shell
-  - id: base64-binary-embed
-    desc: Base64-encoded binary embedded in shell
-    crit: suspicious
-    conf: 0.9
+  # === Base64 binary embedding atomic indicators ===
+  - id: base64-decode-redirect
+    desc: base64 decode to file
+    crit: component
     if:
-      type: yara
-      source: |
-        rule base64_binary_embed {
-          strings:
-            // Base64 decode piped to file
-            $decode1 = /base64\s+(-d|--decode)\s*>\s*\$?[A-Za-z_]/ ascii
-            $decode2 = /base64\s+(-d|--decode)\s*2>\/dev\/null\s*>\s*/ ascii
-            // Here-doc patterns for embedded binaries
-            $heredoc1 = "<<BOTFILEHERE" ascii nocase
-            $heredoc2 = "<<EOF_BIN" ascii nocase
-            $heredoc3 = "<<'BIN'" ascii nocase
-            $heredoc4 = "<<PAYLOAD" ascii nocase
-            // ELF magic in base64 (f0VMRg)
-            $elf_b64 = "f0VMRg" ascii
-          condition:
-            (any of ($decode*) and any of ($heredoc*, $elf_b64)) or
-            ($elf_b64 and filesize < 100KB)
-        }
+      type: string
+      regex: "base64\\s+(-d|--decode)\\s*>\\s*\\$?[A-Za-z_]"
 
-  # Bot directory selection pattern (multiple fallback paths)
-  - id: botdir-selection
-    desc: Bot directory selection with multiple
-    crit: suspicious
-    conf: 0.85
+  - id: base64-decode-stderr
+    desc: base64 decode with stderr redirect
+    crit: component
     if:
-      type: yara
-      source: |
-        rule botdir_selection {
-          strings:
-            // Function-like directory selection
-            $botdir = "botdir" ascii nocase
-            $installdir = "installdir" ascii nocase
-            $workdir = "workdir" ascii nocase
-            // Unusual installation directories
-            $lost_found = "/lost+found" ascii
-            $etc_openal = "/etc/openal" ascii
-            $etc_thermald = "/etc/thermald" ascii
-            $lib64 = "/lib64" ascii
-            // Hidden in system paths
-            $dev_shm = "/dev/shm" ascii
-            $run = "/run" ascii
-          condition:
-            (any of ($botdir, $installdir, $workdir) and 2 of ($lost_found, $etc_openal, $etc_thermald, $lib64)) or
-            (3 of ($lost_found, $etc_openal, $etc_thermald, $dev_shm, $run) and filesize < 200KB)
-        }
+      type: string
+      regex: "base64\\s+(-d|--decode)\\s*2>/dev/null\\s*>\\s*"
+
+  - id: heredoc-botfile
+    desc: BOTFILEHERE heredoc
+    crit: component
+    if:
+      type: string
+      substr: "<<BOTFILEHERE"
+      case_insensitive: true
+
+  - id: heredoc-eof-bin
+    desc: EOF_BIN heredoc
+    crit: component
+    if:
+      type: string
+      substr: "<<EOF_BIN"
+      case_insensitive: true
+
+  - id: heredoc-bin
+    desc: BIN heredoc
+    crit: component
+    if:
+      type: string
+      substr: "<<'BIN'"
+      case_insensitive: true
+
+  - id: heredoc-payload
+    desc: PAYLOAD heredoc
+    crit: component
+    if:
+      type: string
+      substr: "<<PAYLOAD"
+      case_insensitive: true
+
+  - id: elf-magic-b64
+    desc: ELF magic in base64 (f0VMRg)
+    crit: component
+    if:
+      type: string
+      substr: "f0VMRg"
+
+  # === Bot directory selection atomic indicators ===
+  - id: botdir-word
+    desc: botdir word
+    crit: component
+    if:
+      type: string
+      word: "botdir"
+      case_insensitive: true
+
+  - id: installdir-word
+    desc: installdir word
+    crit: component
+    if:
+      type: string
+      word: "installdir"
+      case_insensitive: true
+
+  - id: workdir-word
+    desc: workdir word
+    crit: component
+    if:
+      type: string
+      word: "workdir"
+      case_insensitive: true
+
+  - id: lost-found-path
+    desc: /lost+found path
+    crit: component
+    if:
+      type: string
+      substr: "/lost+found"
+
+  - id: etc-openal-path
+    desc: /etc/openal path
+    crit: component
+    if:
+      type: string
+      substr: "/etc/openal"
+
+  - id: etc-thermald-path
+    desc: /etc/thermald path
+    crit: component
+    if:
+      type: string
+      substr: "/etc/thermald"
+
+  - id: lib64-path
+    desc: /lib64 path
+    crit: component
+    if:
+      type: string
+      substr: "/lib64"
+
+  - id: dev-shm-path
+    desc: /dev/shm path
+    crit: component
+    if:
+      type: string
+      substr: "/dev/shm"
+
+  - id: run-path
+    desc: /run path
+    crit: component
+    if:
+      type: string
+      substr: "/run"
 
   # Cron persistence via echo redirect
-  - id: echo-cron
-    desc: Cron persistence via echo redirect
-    crit: suspicious
-    conf: 0.9
+  # === Cron persistence atomic indicators ===
+  - id: echo-cron-pattern
+    desc: Echo with cron schedule pattern
+    crit: component
     if:
-      type: yara
-      source: |
-        rule echo_cron_persist {
-          strings:
-            // Echo cron pattern
-            $echo_cron = /echo\s+['"][*\/0-9]+\s+[*\/0-9]+\s+[*\/0-9]+\s+[*\/0-9]+\s+[*\/0-9]+\s+/ ascii
-            // Cron paths
-            $cron_d = "/etc/cron.d/" ascii
-            $crontab = "/etc/crontab" ascii
-            $spool_cron = "/var/spool/cron" ascii
-          condition:
-            $echo_cron or (any of ($cron_d, $crontab, $spool_cron) and filesize < 200KB)
-        }
+      type: string
+      regex: "echo\\s+['\"][*/0-9]+\\s+[*/0-9]+\\s+[*/0-9]+\\s+[*/0-9]+\\s+[*/0-9]+\\s+"
+
+  - id: cron-d-path
+    desc: /etc/cron.d/ path
+    crit: component
+    if:
+      type: string
+      substr: "/etc/cron.d/"
+
+  - id: crontab-path
+    desc: /etc/crontab path
+    crit: component
+    if:
+      type: string
+      substr: "/etc/crontab"
+
+  - id: spool-cron-path
+    desc: /var/spool/cron path
+    crit: component
+    if:
+      type: string
+      substr: "/var/spool/cron"
 
   # Writability test atomic traits
   - id: shell-test-w
@@ -139,6 +218,124 @@ traits:
       regex: "stat\\s+[\"'].{1,50}[\"']\\s*\\|.{0,30}Modify"
 
 composite_rules:
+  # === Base64 binary embedding composites ===
+  - id: base64-decode-cmds
+    desc: Base64 decode commands
+    crit: component
+    any:
+      - id: base64-decode-redirect
+      - id: base64-decode-stderr
+
+  - id: heredoc-patterns
+    desc: Binary heredoc patterns
+    crit: component
+    any:
+      - id: heredoc-botfile
+      - id: heredoc-eof-bin
+      - id: heredoc-bin
+      - id: heredoc-payload
+
+  - id: heredoc-or-elf
+    desc: Heredoc or ELF base64 magic
+    crit: component
+    any:
+      - id: heredoc-patterns
+      - id: elf-magic-b64
+
+  - id: decode-with-payload
+    desc: Base64 decode with payload indicator
+    crit: component
+    all:
+      - id: base64-decode-cmds
+      - id: heredoc-or-elf
+
+  - id: base64-binary-embed
+    desc: Base64-encoded binary embedded in shell
+    crit: suspicious
+    conf: 0.9
+    size_max: 102400
+    any:
+      - id: decode-with-payload
+      - id: elf-magic-b64
+
+  # === Cron persistence composites ===
+  - id: cron-paths
+    desc: Cron configuration paths
+    crit: component
+    any:
+      - id: cron-d-path
+      - id: crontab-path
+      - id: spool-cron-path
+
+  - id: echo-cron
+    desc: Cron persistence via echo redirect
+    crit: suspicious
+    conf: 0.9
+    size_max: 204800
+    any:
+      - id: echo-cron-pattern
+      - id: cron-paths
+
+  # === Bot directory selection composites ===
+  - id: dir-function-names
+    desc: Bot directory function names
+    crit: component
+    any:
+      - id: botdir-word
+      - id: installdir-word
+      - id: workdir-word
+
+  - id: unusual-dirs
+    desc: Unusual installation directories
+    crit: component
+    any:
+      - id: lost-found-path
+      - id: etc-openal-path
+      - id: etc-thermald-path
+      - id: lib64-path
+
+  - id: hidden-system-paths
+    desc: Hidden system paths
+    crit: component
+    any:
+      - id: lost-found-path
+      - id: etc-openal-path
+      - id: etc-thermald-path
+      - id: dev-shm-path
+      - id: run-path
+
+  - id: dir-func-with-unusual
+    desc: Dir function with 2+ unusual dirs
+    crit: component
+    all:
+      - id: dir-function-names
+    needs: 2
+    any:
+      - id: lost-found-path
+      - id: etc-openal-path
+      - id: etc-thermald-path
+      - id: lib64-path
+
+  - id: three-hidden-paths
+    desc: 3+ hidden system paths
+    crit: component
+    needs: 3
+    any:
+      - id: lost-found-path
+      - id: etc-openal-path
+      - id: etc-thermald-path
+      - id: dev-shm-path
+      - id: run-path
+
+  - id: botdir-selection
+    desc: Bot directory selection with multiple paths
+    crit: suspicious
+    conf: 0.85
+    size_max: 204800
+    any:
+      - id: dir-func-with-unusual
+      - id: three-hidden-paths
+
   # Writability test composites
   - id: shell-test-dir-and-write
     desc: Tests both directory existence and writability

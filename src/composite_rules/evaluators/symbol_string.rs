@@ -456,16 +456,31 @@ pub(crate) fn eval_raw<'a>(
 
         if use_bytes_regex {
             // FAST PATH: Use bytes::Regex on raw binary data (no UTF-8 conversion!)
-            // Get or compile bytes regex from cache
-            let bytes_re = super::regex_cache_v2()
-                .entry((pattern_str.to_string(), case_insensitive))
-                .or_try_insert_with(|| super::compile_regex_optimal(pattern_str, case_insensitive))
-                .map_err(|e| anyhow::anyhow!("Regex error: {}", e))
-                .ok();
+            // Get or compile bytes regex from bounded LRU cache
+            let key = (pattern_str.to_string(), case_insensitive);
+            let bytes_re: Option<super::CachedRegex> = {
+                let cache = super::regex_cache_v2();
+                // Try to get from cache first
+                let cached = {
+                    let mut guard = cache.write();
+                    guard.get(&key).cloned()
+                };
+                if let Some(re) = cached {
+                    Some(re)
+                } else {
+                    // Compile and insert
+                    match super::compile_regex_optimal(pattern_str, case_insensitive) {
+                        Ok(re) => {
+                            let mut guard = cache.write();
+                            guard.put(key, re.clone());
+                            Some(re)
+                        }
+                        Err(_) => None,
+                    }
+                }
+            };
 
-            #[allow(clippy::redundant_closure_for_method_calls)]
-            if let Some(super::CachedRegex::Bytes(bytes_re)) = bytes_re.as_ref().map(|r| r.value())
-            {
+            if let Some(super::CachedRegex::Bytes(ref bytes_re)) = bytes_re {
                 let mut first_match = None;
                 for (idx, mat) in bytes_re.find_iter(search_data).enumerate() {
                     if idx >= MAX_MATCHES_TO_PROCESS {

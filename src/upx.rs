@@ -286,11 +286,8 @@ mod tests {
         // or return NotInstalled if UPX is not available
         assert!(result.is_err());
         match result {
-            Err(UPXError::NotInstalled) => {
-                // UPX not installed - this is acceptable
-            }
-            Err(UPXError::DecompressionFailed(_)) => {
-                // UPX installed but file is not UPX-packed - expected
+            Err(UPXError::NotInstalled | UPXError::DecompressionFailed(_)) => {
+                // Either UPX not installed (acceptable) or file is not UPX-packed (expected)
             }
             _ => panic!("Expected NotInstalled or DecompressionFailed error"),
         }

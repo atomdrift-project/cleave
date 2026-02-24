@@ -10,7 +10,7 @@ use crate::diff::utils::{
 use crate::types::{AnalysisReport, Criticality, Finding, FindingKind, TargetInfo};
 use chrono::Utc;
 
-fn create_test_report_for_diff(path: &str, trait_ids: Vec<&str>) -> AnalysisReport {
+fn create_test_report_for_diff(path: &str, trait_ids: &[&str]) -> AnalysisReport {
     let findings: Vec<Finding> = trait_ids
         .iter()
         .map(|id| Finding {
@@ -82,8 +82,8 @@ fn test_diff_analyzer_new() {
 #[test]
 fn test_compare_reports_no_changes() {
     let analyzer = DiffAnalyzer::new_for_test("/baseline", "/target");
-    let baseline = create_test_report_for_diff("/baseline/file", vec!["net/http"]);
-    let target = create_test_report_for_diff("/target/file", vec!["net/http"]);
+    let baseline = create_test_report_for_diff("/baseline/file", &["net/http"]);
+    let target = create_test_report_for_diff("/target/file", &["net/http"]);
 
     let analysis = analyzer.compare_reports("file", &baseline, &target);
     assert_eq!(analysis.file, "file");
@@ -96,8 +96,8 @@ fn test_compare_reports_no_changes() {
 #[test]
 fn test_compare_reports_new_capabilities() {
     let analyzer = DiffAnalyzer::new_for_test("/baseline", "/target");
-    let baseline = create_test_report_for_diff("/baseline/file", vec!["net/http"]);
-    let target = create_test_report_for_diff("/target/file", vec!["net/http", "fs/write"]);
+    let baseline = create_test_report_for_diff("/baseline/file", &["net/http"]);
+    let target = create_test_report_for_diff("/target/file", &["net/http", "fs/write"]);
 
     let analysis = analyzer.compare_reports("file", &baseline, &target);
     assert_eq!(analysis.new_capabilities.len(), 1);
@@ -108,8 +108,8 @@ fn test_compare_reports_new_capabilities() {
 #[test]
 fn test_compare_reports_removed_capabilities() {
     let analyzer = DiffAnalyzer::new_for_test("/baseline", "/target");
-    let baseline = create_test_report_for_diff("/baseline/file", vec!["net/http", "fs/write"]);
-    let target = create_test_report_for_diff("/target/file", vec!["net/http"]);
+    let baseline = create_test_report_for_diff("/baseline/file", &["net/http", "fs/write"]);
+    let target = create_test_report_for_diff("/target/file", &["net/http"]);
 
     let analysis = analyzer.compare_reports("file", &baseline, &target);
     assert_eq!(analysis.removed_capabilities.len(), 1);
@@ -123,8 +123,8 @@ fn test_compare_reports_removed_capabilities() {
 #[test]
 fn test_compare_reports_risk_increase() {
     let analyzer = DiffAnalyzer::new_for_test("/baseline", "/target");
-    let baseline = create_test_report_for_diff("/baseline/file", vec!["net/http"]);
-    let target = create_test_report_for_diff("/target/file", vec!["net/http", "execution/shell"]);
+    let baseline = create_test_report_for_diff("/baseline/file", &["net/http"]);
+    let target = create_test_report_for_diff("/target/file", &["net/http", "execution/shell"]);
 
     let analysis = analyzer.compare_reports("file", &baseline, &target);
     assert!(analysis.risk_increase);

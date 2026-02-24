@@ -238,6 +238,9 @@ impl ElfAnalyzer {
         report.metadata.analysis_duration_ms = start.elapsed().as_millis() as u64;
         report.metadata.tools_used = tools_used;
 
+        // Free excess vector capacity to reduce memory footprint
+        report.shrink_to_fit();
+
         report
     }
 
@@ -431,7 +434,10 @@ impl ElfAnalyzer {
 
     /// Merge findings from unpacked analysis into the packed report.
     /// Deduplicates by finding ID, keeping the highest criticality.
+    /// Evidence is capped at MAX_EVIDENCE_PER_TRAIT to prevent memory exhaustion.
     fn merge_reports(&self, packed: &mut AnalysisReport, unpacked: AnalysisReport) {
+        use crate::types::MAX_EVIDENCE_PER_TRAIT;
+
         // Merge findings by ID, keeping highest criticality
         for unpacked_finding in unpacked.findings {
             if let Some(existing) = packed
@@ -439,8 +445,11 @@ impl ElfAnalyzer {
                 .iter_mut()
                 .find(|f| f.id == unpacked_finding.id)
             {
-                // Merge evidence
-                existing.evidence.extend(unpacked_finding.evidence);
+                // Merge evidence, capped at MAX_EVIDENCE_PER_TRAIT
+                let remaining = MAX_EVIDENCE_PER_TRAIT.saturating_sub(existing.evidence.len());
+                existing
+                    .evidence
+                    .extend(unpacked_finding.evidence.into_iter().take(remaining));
                 // Keep higher criticality
                 if unpacked_finding.crit > existing.crit {
                     existing.crit = unpacked_finding.crit;
@@ -450,44 +459,57 @@ impl ElfAnalyzer {
             }
         }
 
-        // Merge strings (deduplicate by value)
+        // Merge strings using HashSet for O(1) deduplication
+        // Use owned strings to avoid borrow conflict
+        let existing_strings: std::collections::HashSet<String> =
+            packed.strings.iter().map(|s| s.value.clone()).collect();
         for s in unpacked.strings {
-            if !packed.strings.iter().any(|ps| ps.value == s.value) {
+            if !existing_strings.contains(&s.value) {
                 packed.strings.push(s);
             }
         }
 
-        // Merge imports (deduplicate by symbol)
+        // Merge imports using HashSet for O(1) deduplication
+        let existing_imports: std::collections::HashSet<String> =
+            packed.imports.iter().map(|i| i.symbol.clone()).collect();
         for imp in unpacked.imports {
-            if !packed.imports.iter().any(|pi| pi.symbol == imp.symbol) {
+            if !existing_imports.contains(&imp.symbol) {
                 packed.imports.push(imp);
             }
         }
 
-        // Merge exports (deduplicate by symbol)
+        // Merge exports using HashSet for O(1) deduplication
+        let existing_exports: std::collections::HashSet<String> =
+            packed.exports.iter().map(|e| e.symbol.clone()).collect();
         for exp in unpacked.exports {
-            if !packed.exports.iter().any(|pe| pe.symbol == exp.symbol) {
+            if !existing_exports.contains(&exp.symbol) {
                 packed.exports.push(exp);
             }
         }
 
-        // Merge functions (deduplicate by name)
+        // Merge functions using HashSet for O(1) deduplication
+        let existing_functions: std::collections::HashSet<String> =
+            packed.functions.iter().map(|f| f.name.clone()).collect();
         for func in unpacked.functions {
-            if !packed.functions.iter().any(|pf| pf.name == func.name) {
+            if !existing_functions.contains(&func.name) {
                 packed.functions.push(func);
             }
         }
 
-        // Merge sections (deduplicate by name)
+        // Merge sections using HashSet for O(1) deduplication
+        let existing_sections: std::collections::HashSet<String> =
+            packed.sections.iter().map(|s| s.name.clone()).collect();
         for sec in unpacked.sections {
-            if !packed.sections.iter().any(|ps| ps.name == sec.name) {
+            if !existing_sections.contains(&sec.name) {
                 packed.sections.push(sec);
             }
         }
 
-        // Merge YARA matches (deduplicate by rule name)
+        // Merge YARA matches using HashSet for O(1) deduplication
+        let existing_yara: std::collections::HashSet<String> =
+            packed.yara_matches.iter().map(|y| y.rule.clone()).collect();
         for ym in unpacked.yara_matches {
-            if !packed.yara_matches.iter().any(|py| py.rule == ym.rule) {
+            if !existing_yara.contains(&ym.rule) {
                 packed.yara_matches.push(ym);
             }
         }

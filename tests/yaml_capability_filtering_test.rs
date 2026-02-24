@@ -23,6 +23,7 @@ fn test_windows_keylog_capability_filtered_for_elf() {
     fs::write(&file_path, elf_magic).unwrap();
 
     let output = assert_cmd::cargo_bin_cmd!("flayer")
+        .env("FLAYER_SKIP_YARA", "1") // Skip YARA - testing YAML trait filtering
         .args(["--json", "analyze", file_path.to_str().unwrap()])
         .output()
         .unwrap();
@@ -45,7 +46,7 @@ fn test_windows_keylog_capability_filtered_for_elf() {
                 .iter()
                 .filter(|t| {
                     t.get("capability")
-                        .and_then(|c| c.as_bool())
+                        .and_then(Value::as_bool)
                         .unwrap_or(false)
                 })
                 .collect();
@@ -83,6 +84,7 @@ fn test_universal_capabilities_match_all_files() {
     fs::write(&script_path, "#!/bin/bash\necho 'test'\n").unwrap();
 
     let output = assert_cmd::cargo_bin_cmd!("flayer")
+        .env("FLAYER_SKIP_YARA", "1") // Skip YARA - testing YAML trait filtering
         .args(["--json", "analyze", script_path.to_str().unwrap()])
         .output()
         .unwrap();
@@ -105,7 +107,7 @@ fn test_universal_capabilities_match_all_files() {
                 .iter()
                 .filter(|t| {
                     t.get("capability")
-                        .and_then(|c| c.as_bool())
+                        .and_then(Value::as_bool)
                         .unwrap_or(false)
                 })
                 .collect();
@@ -130,6 +132,7 @@ fn test_python_capabilities_for_python_files() {
     .unwrap();
 
     let output = assert_cmd::cargo_bin_cmd!("flayer")
+        .env("FLAYER_SKIP_YARA", "1") // Skip YARA - testing YAML trait filtering
         .args(["--json", "analyze", py_file.to_str().unwrap()])
         .output()
         .unwrap();
@@ -151,7 +154,7 @@ fn test_python_capabilities_for_python_files() {
                 .iter()
                 .filter(|t| {
                     t.get("capability")
-                        .and_then(|c| c.as_bool())
+                        .and_then(Value::as_bool)
                         .unwrap_or(false)
                 })
                 .collect();
@@ -196,6 +199,7 @@ fn test_javascript_capabilities_for_js_files() {
     .unwrap();
 
     let output = assert_cmd::cargo_bin_cmd!("flayer")
+        .env("FLAYER_SKIP_YARA", "1") // Skip YARA - testing YAML trait filtering
         .args(["--json", "analyze", js_file.to_str().unwrap()])
         .output()
         .unwrap();
@@ -225,7 +229,7 @@ fn test_javascript_capabilities_for_js_files() {
                 .iter()
                 .filter(|t| {
                     t.get("capability")
-                        .and_then(|c| c.as_bool())
+                        .and_then(Value::as_bool)
                         .unwrap_or(false)
                 })
                 .collect();
@@ -258,6 +262,7 @@ fn test_shell_capabilities_for_shell_scripts() {
     .unwrap();
 
     let output = assert_cmd::cargo_bin_cmd!("flayer")
+        .env("FLAYER_SKIP_YARA", "1") // Skip YARA - testing YAML trait filtering
         .args(["--json", "analyze", script_path.to_str().unwrap()])
         .output()
         .unwrap();
@@ -279,7 +284,7 @@ fn test_shell_capabilities_for_shell_scripts() {
                 .iter()
                 .filter(|t| {
                     t.get("capability")
-                        .and_then(|c| c.as_bool())
+                        .and_then(Value::as_bool)
                         .unwrap_or(false)
                 })
                 .collect();
@@ -325,6 +330,7 @@ fn test_rules_without_filetype_are_universal() {
     // Analyze all three files
     for file in &[sh_file, py_file, js_file] {
         let output = assert_cmd::cargo_bin_cmd!("flayer")
+            .env("FLAYER_SKIP_YARA", "1") // Skip YARA - testing trait filtering
             .args(["--json", "analyze", file.to_str().unwrap()])
             .output()
             .unwrap();
@@ -353,7 +359,7 @@ fn test_rules_without_filetype_are_universal() {
                     .iter()
                     .filter(|t| {
                         t.get("capability")
-                            .and_then(|c| c.as_bool())
+                            .and_then(Value::as_bool)
                             .unwrap_or(false)
                     })
                     .collect();
@@ -390,6 +396,7 @@ fn test_composite_trait_file_type_filtering() {
     .unwrap();
 
     let output = assert_cmd::cargo_bin_cmd!("flayer")
+        .env("FLAYER_SKIP_YARA", "1") // Skip YARA - testing YAML trait filtering
         .args(["--json", "analyze", py_file.to_str().unwrap()])
         .output()
         .unwrap();
@@ -408,7 +415,7 @@ fn test_composite_trait_file_type_filtering() {
                 .iter()
                 .filter(|t| {
                     t.get("capability")
-                        .and_then(|c| c.as_bool())
+                        .and_then(Value::as_bool)
                         .unwrap_or(false)
                 })
                 .collect();
@@ -443,6 +450,7 @@ fn test_platform_and_filetype_constraints_together() {
     fs::write(&script, "#!/bin/bash\necho 'test'\n").unwrap();
 
     let output = assert_cmd::cargo_bin_cmd!("flayer")
+        .env("FLAYER_SKIP_YARA", "1") // Skip YARA - testing YAML trait filtering
         .args(["--json", "analyze", script.to_str().unwrap()])
         .output()
         .unwrap();

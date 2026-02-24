@@ -319,8 +319,7 @@ fn analyze_file_with_context(
             );
             let mut report = struct_result?;
             analyzer.apply_fat_metadata(&mut report, &data);
-            let inline_yara =
-                process_yara_result(&mut report, yara_result, yara_engine.as_deref());
+            let inline_yara = process_yara_result(&mut report, yara_result, yara_engine.as_deref());
             capability_mapper.evaluate_and_merge_findings(
                 &mut report,
                 arch_data,
@@ -331,8 +330,7 @@ fn analyze_file_with_context(
         }
         FileType::Elf => {
             let data = fs::read(path).context("Failed to read file")?;
-            let analyzer =
-                ElfAnalyzer::new().with_capability_mapper((**capability_mapper).clone());
+            let analyzer = ElfAnalyzer::new().with_capability_mapper((**capability_mapper).clone());
             let file_types: &[&str] = &["elf", "so", "ko"];
             let (mut report, yara_result) = rayon::join(
                 || analyzer.analyze_structural(path, &data),
@@ -343,8 +341,7 @@ fn analyze_file_with_context(
                         .map(|e| e.scan_bytes_with_inline(&data, Some(file_types)))
                 },
             );
-            let inline_yara =
-                process_yara_result(&mut report, yara_result, yara_engine.as_deref());
+            let inline_yara = process_yara_result(&mut report, yara_result, yara_engine.as_deref());
             capability_mapper.evaluate_and_merge_findings(
                 &mut report,
                 &data,
@@ -373,8 +370,7 @@ fn analyze_file_with_context(
                 },
             );
             let mut report = struct_result?;
-            let inline_yara =
-                process_yara_result(&mut report, yara_result, yara_engine.as_deref());
+            let inline_yara = process_yara_result(&mut report, yara_result, yara_engine.as_deref());
             capability_mapper.evaluate_and_merge_findings(
                 &mut report,
                 &data,

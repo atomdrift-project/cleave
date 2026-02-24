@@ -39,6 +39,7 @@ impl YaraEngine {
 
     /// Create a new YARA engine with a pre-existing capability mapper (avoids duplicate loading)
     #[must_use]
+    #[allow(dead_code)] // Used by binary target (commands/analyze.rs) and tests
     pub(crate) fn new_with_mapper(_capability_mapper: CapabilityMapper) -> Self {
         Self {
             rules: None,
@@ -73,8 +74,8 @@ impl YaraEngine {
         }
 
         // Override third-party setting via environment (for tests that need YARA but not 14k rules)
-        let enable_third_party = enable_third_party
-            && std::env::var("FLAYER_BUILTIN_YARA_ONLY").is_err();
+        let enable_third_party =
+            enable_third_party && std::env::var("FLAYER_BUILTIN_YARA_ONLY").is_err();
 
         tracing::info!("Loading YARA rules");
 
@@ -302,26 +303,45 @@ impl YaraEngine {
             patterns: Vec<(String, Vec<(usize, usize)>)>,
         }
 
+        /// Maximum pattern match ranges to collect per pattern.
+        /// Patterns matching more than this are truncated to prevent memory exhaustion.
+        const MAX_PATTERN_MATCHES: usize = 100;
+
         let raw_rules: Vec<RawRule> = scan_results
             .matching_rules()
-            .map(|rule| RawRule {
-                name: rule.identifier().to_string(),
-                namespace: rule.namespace().to_string(),
-                tags: rule.tags().map(|t| t.identifier().to_string()).collect(),
-                metadata: rule
-                    .metadata()
-                    .map(|(k, v)| (k.to_string(), format!("{:?}", v)))
-                    .collect(),
-                patterns: rule
+            .map(|rule| {
+                let patterns: Vec<_> = rule
                     .patterns()
                     .map(|pat| {
-                        let ranges = pat
+                        let total_matches = pat.matches().count();
+                        if total_matches > MAX_PATTERN_MATCHES {
+                            tracing::warn!(
+                                rule = %rule.identifier(),
+                                namespace = %rule.namespace(),
+                                pattern = %pat.identifier(),
+                                matches = total_matches,
+                                limit = MAX_PATTERN_MATCHES,
+                                "Pattern has excessive matches, truncating to prevent memory exhaustion"
+                            );
+                        }
+                        let ranges: Vec<_> = pat
                             .matches()
+                            .take(MAX_PATTERN_MATCHES)
                             .map(|m| (m.range().start, m.range().end))
                             .collect();
                         (pat.identifier().to_string(), ranges)
                     })
-                    .collect(),
+                    .collect();
+                RawRule {
+                    name: rule.identifier().to_string(),
+                    namespace: rule.namespace().to_string(),
+                    tags: rule.tags().map(|t| t.identifier().to_string()).collect(),
+                    metadata: rule
+                        .metadata()
+                        .map(|(k, v)| (k.to_string(), format!("{:?}", v)))
+                        .collect(),
+                    patterns,
+                }
             })
             .collect();
 
@@ -598,7 +618,8 @@ impl YaraEngine {
 
         // Regex to match YARA rule definitions: `rule RuleName` or `rule RuleName : tags`
         // Captures the rule name
-        let rule_start_re = Regex::new(r"(?m)^(\s*)((?:private\s+|global\s+)*)rule\s+(\w+)").unwrap();
+        let rule_start_re =
+            Regex::new(r"(?m)^(\s*)((?:private\s+|global\s+)*)rule\s+(\w+)").unwrap();
 
         let mut result = String::with_capacity(source.len());
         let mut last_end = 0;
@@ -904,8 +925,10 @@ impl YaraEngine {
         // Apply config-based criticality for third-party rules
         // Returns None if the rule is disabled via config
         if is_third_party {
-            match crate::third_party_config::third_party_criticality(&namespace, trait_id.as_deref())
-            {
+            match crate::third_party_config::third_party_criticality(
+                &namespace,
+                trait_id.as_deref(),
+            ) {
                 Some(config_crit) => crit = config_crit,
                 None => return None, // Rule disabled
             }

@@ -61,9 +61,9 @@ pub(crate) use file_analysis::{
     ARCHIVE_DELIMITER, ENCODING_DELIMITER,
 };
 
+pub(crate) use traits_findings::MAX_EVIDENCE_PER_TRAIT;
 #[allow(unused_imports)]
 pub use traits_findings::{Evidence, Finding, FindingKind, StructuralFeature, Trait, TraitKind};
-pub(crate) use traits_findings::MAX_EVIDENCE_PER_TRAIT;
 
 #[allow(unused_imports)]
 pub(crate) use paths_env::{

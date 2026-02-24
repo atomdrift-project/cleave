@@ -2656,7 +2656,10 @@ fn test_generate_import_findings_with_library() {
         .iter()
         .find(|f| f.id == "metadata/internal/symbols::printf")
         .expect("should have symbol-level finding in metadata/internal/symbols/");
-    assert!(symbol_finding.desc.is_empty(), "symbol desc should be empty for compactness");
+    assert!(
+        symbol_finding.desc.is_empty(),
+        "symbol desc should be empty for compactness"
+    );
 
     // Check library-level finding (in metadata/dylib/)
     let dylib_finding = report
@@ -2926,7 +2929,10 @@ fn test_generate_import_findings_evidence_structure() {
         .iter()
         .find(|f| f.id == "metadata/internal/symbols::nslog")
         .expect("should have symbol-level finding in metadata/internal/symbols/");
-    assert!(symbol_finding.evidence.is_empty(), "symbol evidence should be empty for compactness");
+    assert!(
+        symbol_finding.evidence.is_empty(),
+        "symbol evidence should be empty for compactness"
+    );
 
     // Check library-level finding evidence (in metadata/dylib/)
     // Dylib findings DO have evidence (method="library")

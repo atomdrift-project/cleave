@@ -273,12 +273,48 @@ pub fn log_after_file_processing(file_path: &str, file_size: u64, duration: Dura
     );
 }
 
-/// Start a periodic memory logging task
+/// Handle for controlling a periodic memory logging thread.
+/// Call `stop()` or drop to signal the thread to shut down gracefully.
+#[derive(Debug)]
+pub struct MemoryLoggerHandle {
+    shutdown: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    handle: Option<std::thread::JoinHandle<()>>,
+}
+
+impl MemoryLoggerHandle {
+    /// Signal the logging thread to stop and wait for it to finish.
+    pub fn stop(&mut self) {
+        self.shutdown
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+        if let Some(handle) = self.handle.take() {
+            let _ = handle.join();
+        }
+    }
+}
+
+impl Drop for MemoryLoggerHandle {
+    fn drop(&mut self) {
+        // Signal shutdown but don't block on join (process may be exiting)
+        self.shutdown
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
+/// Start a periodic memory logging task.
+/// Returns a handle that can be used to stop the thread gracefully.
 #[must_use]
-pub fn start_periodic_logging(interval: Duration) -> std::thread::JoinHandle<()> {
-    std::thread::spawn(move || {
-        loop {
+pub fn start_periodic_logging(interval: Duration) -> MemoryLoggerHandle {
+    let shutdown = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let shutdown_clone = shutdown.clone();
+
+    let handle = std::thread::spawn(move || {
+        while !shutdown_clone.load(std::sync::atomic::Ordering::Relaxed) {
             std::thread::sleep(interval);
+
+            // Check shutdown again after sleep
+            if shutdown_clone.load(std::sync::atomic::Ordering::Relaxed) {
+                break;
+            }
 
             if let Some(rss) = current_rss() {
                 info!(
@@ -304,7 +340,12 @@ pub fn start_periodic_logging(interval: Duration) -> std::thread::JoinHandle<()>
                 }
             }
         }
-    })
+    });
+
+    MemoryLoggerHandle {
+        shutdown,
+        handle: Some(handle),
+    }
 }
 
 /// Create a global memory tracker instance

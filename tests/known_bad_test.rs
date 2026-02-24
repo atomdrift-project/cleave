@@ -14,18 +14,18 @@ struct FileStats {
 
 fn get_highest_criticality(file_result: &Value) -> String {
     if let Some(counts) = file_result.get("counts").and_then(|c| c.as_object()) {
-        if counts.get("hostile").and_then(|h| h.as_u64()).unwrap_or(0) > 0 {
+        if counts.get("hostile").and_then(Value::as_u64).unwrap_or(0) > 0 {
             return "hostile".to_string();
         }
         if counts
             .get("suspicious")
-            .and_then(|s| s.as_u64())
+            .and_then(Value::as_u64)
             .unwrap_or(0)
             > 0
         {
             return "suspicious".to_string();
         }
-        if counts.get("notable").and_then(|n| n.as_u64()).unwrap_or(0) > 0 {
+        if counts.get("notable").and_then(Value::as_u64).unwrap_or(0) > 0 {
             return "notable".to_string();
         }
     }
@@ -85,7 +85,7 @@ fn extract_file_result(json_str: &str) -> Result<Value, Box<dyn std::error::Erro
         }
 
         // Parse the JSON object
-        return serde_json::from_str(trimmed).map_err(|e| e.into());
+        return serde_json::from_str(trimmed).map_err(Into::into);
     }
 
     Err("No JSON output from flayer".into())
@@ -151,7 +151,7 @@ fn test_known_bad_integrity() {
     }
 
     let mut test_files = Vec::new();
-    for entry in WalkDir::new(verify_dir).into_iter().filter_map(|e| e.ok()) {
+    for entry in WalkDir::new(verify_dir).into_iter().filter_map(Result::ok) {
         if entry.path().extension().and_then(|s| s.to_str()) == Some("json") {
             test_files.push(entry.path().to_path_buf());
         }
@@ -217,7 +217,7 @@ fn test_known_bad_integrity() {
         let findings_count = actual_result
             .get("findings")
             .and_then(|f| f.as_array())
-            .map(|a| a.len())
+            .map(Vec::len)
             .unwrap_or(0);
 
         let criticality = get_highest_criticality(&actual_result);

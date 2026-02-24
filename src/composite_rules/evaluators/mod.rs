@@ -13,7 +13,7 @@
 //! - YARA scanners are cached thread-locally for ~5x speedup
 //! - Hex pattern matching uses atom extraction for efficient searching
 
-use dashmap::DashMap;
+use parking_lot::RwLock;
 use regex::Regex;
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -64,21 +64,33 @@ pub(crate) enum CachedRegex {
     Bytes(regex::bytes::Regex),
 }
 
-/// Global cache for compiled regex patterns to avoid repeated compilation.
+/// Maximum number of regex patterns to cache (sized for ~128K rules, not all use regex)
+const REGEX_CACHE_MAX_SIZE: usize = 16_384;
+
+/// Global bounded LRU cache for compiled regex patterns to avoid repeated compilation.
 /// Key is (pattern, case_insensitive), value is compiled Regex.
-static REGEX_CACHE: OnceLock<DashMap<(String, bool), Regex>> = OnceLock::new();
+/// Bounded to prevent unbounded memory growth in long-running processes.
+static REGEX_CACHE: OnceLock<RwLock<lru::LruCache<(String, bool), Regex>>> = OnceLock::new();
+
+// SAFETY: REGEX_CACHE_MAX_SIZE is a compile-time constant > 0
+const REGEX_CACHE_SIZE: std::num::NonZeroUsize =
+    match std::num::NonZeroUsize::new(REGEX_CACHE_MAX_SIZE) {
+        Some(n) => n,
+        None => panic!("REGEX_CACHE_MAX_SIZE must be > 0"),
+    };
 
 /// Access the global regex cache, initializing it on first call
-pub(crate) fn regex_cache() -> &'static DashMap<(String, bool), Regex> {
-    REGEX_CACHE.get_or_init(DashMap::new)
+fn regex_cache() -> &'static RwLock<lru::LruCache<(String, bool), Regex>> {
+    REGEX_CACHE.get_or_init(|| RwLock::new(lru::LruCache::new(REGEX_CACHE_SIZE)))
 }
 
-/// V2 cache for optimized regex (supports both string and bytes variants)
-static REGEX_CACHE_V2: OnceLock<DashMap<(String, bool), CachedRegex>> = OnceLock::new();
+/// V2 bounded LRU cache for optimized regex (supports both string and bytes variants)
+static REGEX_CACHE_V2: OnceLock<RwLock<lru::LruCache<(String, bool), CachedRegex>>> =
+    OnceLock::new();
 
 /// Access the V2 regex cache (supports both string and bytes regex)
-pub(crate) fn regex_cache_v2() -> &'static DashMap<(String, bool), CachedRegex> {
-    REGEX_CACHE_V2.get_or_init(DashMap::new)
+pub(crate) fn regex_cache_v2() -> &'static RwLock<lru::LruCache<(String, bool), CachedRegex>> {
+    REGEX_CACHE_V2.get_or_init(|| RwLock::new(lru::LruCache::new(REGEX_CACHE_SIZE)))
 }
 
 /// Compile regex choosing optimal variant (bytes for ASCII, string for Unicode).
@@ -255,18 +267,26 @@ pub(crate) fn build_regex(pattern: &str, case_insensitive: bool) -> anyhow::Resu
     let cache = regex_cache();
     let key = (pattern.to_string(), case_insensitive);
 
-    // Check cache first
-    if let Some(re) = cache.get(&key) {
-        return Ok(re.value().clone());
+    // Check cache first (read lock)
+    {
+        let mut cache_guard = cache.write();
+        if let Some(re) = cache_guard.get(&key) {
+            return Ok(re.clone());
+        }
     }
 
-    // Compile and cache
+    // Compile outside lock
     let regex = if case_insensitive {
         Regex::new(&format!("(?i){}", pattern))?
     } else {
         Regex::new(pattern)?
     };
-    cache.insert(key, regex.clone());
+
+    // Insert with write lock (LRU will evict oldest if at capacity)
+    {
+        let mut cache_guard = cache.write();
+        cache_guard.put(key, regex.clone());
+    }
     Ok(regex)
 }
 

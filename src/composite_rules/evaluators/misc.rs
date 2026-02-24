@@ -26,13 +26,7 @@ pub(crate) fn eval_structure<'a>(
             count += 1;
             if evidence.len() < MAX_EVIDENCE_PER_TRAIT {
                 let remaining = MAX_EVIDENCE_PER_TRAIT - evidence.len();
-                evidence.extend(
-                    structural_feature
-                        .evidence
-                        .iter()
-                        .take(remaining)
-                        .cloned(),
-                );
+                evidence.extend(structural_feature.evidence.iter().take(remaining).cloned());
             }
         }
     }

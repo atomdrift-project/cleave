@@ -59,7 +59,8 @@ pub use types::scores::Metrics;
 pub use types::text_metrics::TextMetrics;
 pub use types::traits_findings::{Evidence, Finding, FindingKind, Trait, TraitKind};
 
-// Re-export cache management function
+// Re-export cache management functions
+pub use composite_rules::clear_condition_stats;
 pub use composite_rules::evaluators::clear_thread_local_caches;
 
 use anyhow::Result;
@@ -124,6 +125,9 @@ pub fn clear_all_thread_caches() {
         clear_thread_local_caches();
     });
 
+    // Clear global condition stats (bounded by condition type count, but useful for fresh stats)
+    clear_condition_stats();
+
     tracing::debug!("Cleared thread-local caches on all threads");
 }
 
@@ -148,9 +152,11 @@ pub fn analyze_file<P: AsRef<Path>>(path: P, options: &AnalysisOptions) -> Resul
     let yara_engine = if options.disable_yara {
         None
     } else {
-        Some(shared_resources::yara_engine(options.enable_third_party_yara))
+        Some(shared_resources::yara_engine(
+            options.enable_third_party_yara,
+        ))
     };
-    analyze_file_with_resources(path, options, &mapper, yara_engine)
+    analyze_file_with_resources(path, options, &mapper, yara_engine.as_ref())
 }
 
 /// Analyze a single file using a pre-loaded CapabilityMapper.
@@ -177,9 +183,11 @@ pub fn analyze_file_with_mapper<P: AsRef<Path>>(
     let yara_engine = if options.disable_yara {
         None
     } else {
-        Some(shared_resources::yara_engine(options.enable_third_party_yara))
+        Some(shared_resources::yara_engine(
+            options.enable_third_party_yara,
+        ))
     };
-    analyze_file_with_resources(path, options, capability_mapper, yara_engine)
+    analyze_file_with_resources(path, options, capability_mapper, yara_engine.as_ref())
 }
 
 /// Analyze a single file with full control over resources.
@@ -201,7 +209,7 @@ fn analyze_file_with_resources<P: AsRef<Path>>(
     path: P,
     options: &AnalysisOptions,
     capability_mapper: &CapabilityMapper,
-    yara_engine: Option<Arc<yara_engine::YaraEngine>>,
+    yara_engine: Option<&Arc<yara_engine::YaraEngine>>,
 ) -> Result<AnalysisReport> {
     let path = path.as_ref();
 
@@ -286,7 +294,7 @@ fn analyze_file_with_resources<P: AsRef<Path>>(
             let mut analyzer = analyzers::archive::ArchiveAnalyzer::new()
                 .with_capability_mapper_arc(mapper_arc.clone())
                 .with_zip_passwords(options.zip_passwords.clone());
-            if let Some(ref engine) = yara_engine {
+            if let Some(engine) = yara_engine {
                 analyzer = analyzer.with_yara_arc(engine.clone());
             }
             analyzer.analyze(path)?
@@ -400,7 +408,7 @@ fn analyze_file_with_resources<P: AsRef<Path>>(
     }
 
     // Run YARA for file types that didn't handle it internally
-    if let Some(ref engine) = yara_engine {
+    if let Some(engine) = yara_engine {
         if file_type.is_program() && engine.is_loaded() {
             let file_types = file_type.yara_filetypes();
             let filter = if file_types.is_empty() {

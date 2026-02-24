@@ -94,7 +94,7 @@ fn get_symbols(json: &serde_json::Value) -> Vec<String> {
         .map(|arr| {
             arr.iter()
                 .filter_map(|imp| imp.get("symbol").and_then(|s| s.as_str()))
-                .map(|s| s.to_string())
+                .map(ToString::to_string)
                 .collect()
         })
         .unwrap_or_default()

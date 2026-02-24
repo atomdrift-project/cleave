@@ -28,6 +28,13 @@ pub(crate) use section_map::SectionMap;
 pub(crate) use traits::{
     CompositeTrait, ConditionWithFilters, DowngradeConditions, TraitDefinition,
 };
+
+/// Clear condition evaluation statistics.
+/// Delegates to the internal `traits::clear_condition_stats`.
+#[allow(dead_code)] // Public API exported from lib.rs
+pub fn clear_condition_stats() {
+    traits::clear_condition_stats();
+}
 pub(crate) use types::{FileType, Platform};
 
 #[cfg(test)]

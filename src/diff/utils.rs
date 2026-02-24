@@ -477,7 +477,7 @@ mod tests {
         let baseline = vec!["a".to_string(), "b".to_string(), "c".to_string()];
         let target = vec!["b".to_string(), "c".to_string(), "d".to_string()];
 
-        let (added, removed) = compute_added_removed(&baseline, &target, |s| s.clone());
+        let (added, removed) = compute_added_removed(&baseline, &target, Clone::clone);
 
         assert_eq!(added, vec!["d".to_string()]);
         assert_eq!(removed, vec!["a".to_string()]);
@@ -488,7 +488,7 @@ mod tests {
         let baseline: Vec<String> = vec![];
         let target = vec!["a".to_string(), "b".to_string()];
 
-        let (added, removed) = compute_added_removed(&baseline, &target, |s| s.clone());
+        let (added, removed) = compute_added_removed(&baseline, &target, Clone::clone);
 
         assert_eq!(added.len(), 2);
         assert!(removed.is_empty());
@@ -499,7 +499,7 @@ mod tests {
         let baseline = vec!["a".to_string(), "b".to_string()];
         let target: Vec<String> = vec![];
 
-        let (added, removed) = compute_added_removed(&baseline, &target, |s| s.clone());
+        let (added, removed) = compute_added_removed(&baseline, &target, Clone::clone);
 
         assert!(added.is_empty());
         assert_eq!(removed.len(), 2);
@@ -510,7 +510,7 @@ mod tests {
         let baseline = vec!["a".to_string(), "b".to_string()];
         let target = vec!["a".to_string(), "b".to_string()];
 
-        let (added, removed) = compute_added_removed(&baseline, &target, |s| s.clone());
+        let (added, removed) = compute_added_removed(&baseline, &target, Clone::clone);
 
         assert!(added.is_empty());
         assert!(removed.is_empty());

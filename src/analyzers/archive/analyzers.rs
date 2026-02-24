@@ -824,7 +824,7 @@ impl ArchiveAnalyzer {
 
         let (tx, rx) = mpsc::channel();
 
-        std::thread::spawn(move || {
+        let handle = std::thread::spawn(move || {
             // Recreate analyzer in thread
             let analyzer = ArchiveAnalyzer {
                 max_depth,
@@ -842,8 +842,16 @@ impl ArchiveAnalyzer {
         });
 
         match rx.recv_timeout(timeout) {
-            Ok(result) => result,
+            Ok(result) => {
+                // Thread completed successfully, join to clean up resources
+                let _ = handle.join();
+                result
+            }
             Err(mpsc::RecvTimeoutError::Timeout) => {
+                // Thread timed out - we can't forcibly kill it, but we've documented the timeout.
+                // The thread will eventually complete and try to send on a closed channel.
+                // We intentionally don't join here to avoid blocking indefinitely.
+                // The thread will be cleaned up when it finishes (tx.send will fail silently).
                 // Analysis timed out - create a report with timeout finding
                 let file_data = fs::read(file_path).unwrap_or_default();
                 let target = TargetInfo {

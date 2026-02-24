@@ -130,6 +130,13 @@ pub(crate) enum AnalysisWarning {
         /// Maximum depth that was configured
         max_depth: usize,
     },
+    /// Pattern had excessive matches - truncated to prevent memory exhaustion
+    PatternTruncated {
+        /// The pattern that was truncated
+        pattern: String,
+        /// Maximum matches allowed
+        limit: usize,
+    },
 }
 
 impl std::fmt::Display for AnalysisWarning {
@@ -137,6 +144,13 @@ impl std::fmt::Display for AnalysisWarning {
         match self {
             Self::AstTooDeep { max_depth } => {
                 write!(f, "AST nesting limit hit (depth: {})", max_depth)
+            }
+            Self::PatternTruncated { pattern, limit } => {
+                write!(
+                    f,
+                    "Pattern '{}' matched {}+ times, truncated",
+                    pattern, limit
+                )
             }
         }
     }

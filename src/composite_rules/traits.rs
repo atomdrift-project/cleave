@@ -69,9 +69,12 @@ pub(crate) fn print_condition_stats() {
     eprintln!();
 }
 
-/// Reset condition statistics (for testing)
-#[cfg(test)]
-pub(crate) fn reset_condition_stats() {
+/// Reset condition statistics.
+/// Can be called periodically in long-running processes to prevent stats accumulation.
+/// Note: CONDITION_STATS is keyed by static condition type names (~20 entries max),
+/// so memory growth is bounded, but clearing is still useful for accurate per-batch stats.
+#[allow(dead_code)] // Called via public API wrapper in mod.rs
+pub(crate) fn clear_condition_stats() {
     stats_map().clear();
 }
 

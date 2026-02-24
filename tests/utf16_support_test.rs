@@ -23,8 +23,10 @@ static UTF16_ANALYSIS: Lazy<Option<Arc<flayer::AnalysisReport>>> = Lazy::new(|| 
     if !sample.exists() {
         return None;
     }
-    let mut options = AnalysisOptions::default();
-    options.disable_yara = true; // Skip YARA - not testing YARA, testing UTF-16 encoding
+    let options = AnalysisOptions {
+        disable_yara: true, // Skip YARA - not testing YARA, testing UTF-16 encoding
+        ..Default::default()
+    };
     analyze_file(&sample, &options).ok().map(Arc::new)
 });
 
@@ -35,9 +37,10 @@ fn get_utf16_analysis() -> Option<Arc<flayer::AnalysisReport>> {
 
 /// Fast options for tests that don't need YARA (just testing encoding)
 fn fast_options() -> AnalysisOptions {
-    let mut opts = AnalysisOptions::default();
-    opts.disable_yara = true;
-    opts
+    AnalysisOptions {
+        disable_yara: true,
+        ..Default::default()
+    }
 }
 
 /// Test UTF-16 LE encoded malware sample analysis.
@@ -289,7 +292,8 @@ fn test_utf8_passthrough() {
     temp_file.flush().expect("Failed to flush temp file");
 
     // Use fast options - only testing encoding, not YARA
-    let report = analyze_file(temp_file.path(), &fast_options()).expect("Failed to analyze UTF-8 file");
+    let report =
+        analyze_file(temp_file.path(), &fast_options()).expect("Failed to analyze UTF-8 file");
 
     // Should successfully parse as JavaScript
     assert_eq!(

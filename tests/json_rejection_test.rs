@@ -45,6 +45,7 @@ fn test_random_json_files_skipped_in_directory_scan() {
     // Scan the directory using flayer library
     let options = AnalysisOptions {
         all_files: false,
+        disable_yara: true, // Skip YARA - testing file filtering, not YARA rules
         ..Default::default()
     };
     let reports =
@@ -111,6 +112,7 @@ fn test_random_yaml_files_skipped() {
 
     let options = AnalysisOptions {
         all_files: false,
+        disable_yara: true, // Skip YARA - testing file filtering
         ..Default::default()
     };
     let reports =
@@ -172,6 +174,7 @@ fn test_random_toml_files_skipped() {
 
     let options = AnalysisOptions {
         all_files: false,
+        disable_yara: true, // Skip YARA - testing file filtering
         ..Default::default()
     };
     let reports =
@@ -210,7 +213,10 @@ fn test_explicit_file_argument_still_analyzed() {
 
     // When analyzing a specific file path (not directory scanning),
     // it should be processed
-    let options = AnalysisOptions::default();
+    let options = AnalysisOptions {
+        disable_yara: true, // Skip YARA - testing file argument handling
+        ..Default::default()
+    };
     let report = flayer::analyze_file(&random_json, &options);
 
     // The file should be analyzed (even though it's not a known manifest)
@@ -234,6 +240,7 @@ fn test_all_files_flag_processes_everything() {
     // With --all-files flag, even random JSON files should be analyzed
     let options = AnalysisOptions {
         all_files: true,
+        disable_yara: true, // Skip YARA - testing file filtering
         ..Default::default()
     };
     let reports =

@@ -24,6 +24,7 @@ fn test_analyze_command_handles_directory() {
     #[allow(deprecated)]
     assert_cmd::Command::cargo_bin("flayer")
         .unwrap()
+        .env("FLAYER_SKIP_YARA", "1") // Skip YARA - testing directory scanning
         .args(["--json", "analyze", temp_dir.path().to_str().unwrap()])
         .assert()
         .success()
@@ -41,6 +42,7 @@ fn test_analyze_command_handles_single_file() {
     #[allow(deprecated)]
     assert_cmd::Command::cargo_bin("flayer")
         .unwrap()
+        .env("FLAYER_SKIP_YARA", "1") // Skip YARA - testing directory scanning
         .args(["--json", "analyze", test_file.to_str().unwrap()])
         .assert()
         .success()
@@ -60,6 +62,7 @@ fn test_analyze_command_handles_multiple_paths() {
     #[allow(deprecated)]
     assert_cmd::Command::cargo_bin("flayer")
         .unwrap()
+        .env("FLAYER_SKIP_YARA", "1") // Skip YARA - testing directory scanning
         .args([
             "--json",
             "analyze",
@@ -79,6 +82,7 @@ fn test_analyze_empty_directory() {
     #[allow(deprecated)]
     assert_cmd::Command::cargo_bin("flayer")
         .unwrap()
+        .env("FLAYER_SKIP_YARA", "1") // Skip YARA - testing directory scanning
         .args(["--json", "analyze", temp_dir.path().to_str().unwrap()])
         .assert()
         .success();
@@ -107,6 +111,7 @@ fn test_analyze_directory_with_archive() {
     #[allow(deprecated)]
     assert_cmd::Command::cargo_bin("flayer")
         .unwrap()
+        .env("FLAYER_SKIP_YARA", "1") // Skip YARA - testing directory scanning
         .args(["--json", "analyze", temp_dir.path().to_str().unwrap()])
         .assert()
         .success();
@@ -119,6 +124,7 @@ fn test_analyze_nonexistent_path() {
     #[allow(deprecated)]
     assert_cmd::Command::cargo_bin("flayer")
         .unwrap()
+        .env("FLAYER_SKIP_YARA", "1") // Skip YARA - testing directory scanning
         .args(["analyze", "/tmp/flayer-nonexistent-path-12345"])
         .assert()
         .failure()
@@ -143,6 +149,7 @@ fn test_analyze_symlink_handling() {
     #[allow(deprecated)]
     assert_cmd::Command::cargo_bin("flayer")
         .unwrap()
+        .env("FLAYER_SKIP_YARA", "1") // Skip YARA - testing directory scanning
         .args(["--json", "analyze", link.to_str().unwrap()])
         .assert()
         .success();
@@ -162,6 +169,7 @@ fn test_recursive_depth() {
     #[allow(deprecated)]
     assert_cmd::Command::cargo_bin("flayer")
         .unwrap()
+        .env("FLAYER_SKIP_YARA", "1") // Skip YARA - testing directory scanning
         .args(["--json", "analyze", temp_dir.path().to_str().unwrap()])
         .assert()
         .success()

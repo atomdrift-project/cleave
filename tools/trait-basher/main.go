@@ -192,17 +192,18 @@ func (rc *reviewCoordinator) setWorkerIdle(workerID int) {
 	}
 }
 
-// workerPrefix returns a colored prefix for LLM output lines: "[1:filename] ".
+// workerPrefix returns a colored prefix for LLM output lines: "🟡 filename         │ ".
 func (rc *reviewCoordinator) workerPrefix(workerID int) string {
 	rc.mu.Lock()
 	defer rc.mu.Unlock()
 	w := rc.workers[workerID]
 	name := filepath.Base(w.path)
-	if len(name) > 15 {
-		name = name[:12] + "..."
+	if len(name) > 16 {
+		name = name[:16]
 	}
 	pClr := providerColor(w.provider)
-	return fmt.Sprintf("%s[%d:%s]%s ", pClr, workerID+1, name, colorReset)
+	emoji := workerEmoji(workerID)
+	return fmt.Sprintf("%s %s%-16s%s │ ", emoji, pClr, name, colorReset)
 }
 
 func (rc *reviewCoordinator) worker(ctx context.Context, id int) {
@@ -1464,7 +1465,7 @@ func processRealFile(ctx context.Context, st *streamState) {
 	if isValidation {
 		fmt.Fprintf(os.Stderr, "\n🔍 %s[VALIDATION]%s %s\n", colorCyan, colorReset, rf.RealPath)
 	} else {
-		fmt.Fprintf(os.Stderr, "\n📄 Standalone file: %s\n", rf.RealPath)
+		fmt.Fprintf(os.Stderr, "\n%s▸ %s%s\n", colorDim, rf.RealPath, colorReset)
 	}
 	if len(rf.Fragments) > 0 {
 		fmt.Fprintf(os.Stderr, "   (with %d decoded fragment(s))\n", len(rf.Fragments))
@@ -2137,10 +2138,13 @@ func runAIWithStreaming(ctx context.Context, cfg *config, prompt, sid, prefix st
 
 	cmd.Dir = cfg.repoRoot
 
-	if cfg.verbose {
-		fmt.Fprintf(os.Stderr, "%s>>> %s %s\n", prefix, cmd.Path, strings.Join(cmd.Args[1:], " "))
-		fmt.Fprintf(os.Stderr, "%s>>> Prompt: %d bytes via stdin\n", prefix, len(prompt))
+	// Always print the full prompt for visibility
+	fmt.Fprintf(os.Stderr, "%s>>> %s %s\n", prefix, cmd.Path, strings.Join(cmd.Args[1:], " "))
+	fmt.Fprintf(os.Stderr, "%s>>> Prompt (%d bytes):\n", prefix, len(prompt))
+	for _, line := range strings.Split(prompt, "\n") {
+		fmt.Fprintf(os.Stderr, "%s%s%s%s\n", prefix, colorBrightWhite, line, colorReset)
 	}
+	fmt.Fprintf(os.Stderr, "%s>>> End Prompt\n", prefix)
 
 	// Set up pipes
 	stdinPipe, err := cmd.StdinPipe()

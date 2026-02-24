@@ -14,31 +14,17 @@
 
 use super::shared::{MatchSignature, PatternLocation};
 use crate::composite_rules::{
-    CompositeTrait, Condition, FileType as RuleFileType, TraitDefinition,
+    evaluators::build_regex, CompositeTrait, Condition, FileType as RuleFileType, TraitDefinition,
 };
 use crate::types::Criticality;
 use rustc_hash::{FxHashMap, FxHashSet};
 use std::collections::{HashMap, HashSet};
 use std::sync::OnceLock;
 
-/// Global regex cache to avoid recompiling the same patterns during validation.
-/// Uses DashMap for concurrent access without locking.
-static REGEX_CACHE: OnceLock<dashmap::DashMap<String, Option<regex::Regex>>> = OnceLock::new();
-
-/// Get or compile a regex pattern, caching the result.
+/// Get or compile a regex pattern using the shared evaluator cache.
 /// Returns None if the pattern is invalid.
 fn get_cached_regex(pattern: &str) -> Option<regex::Regex> {
-    let cache = REGEX_CACHE.get_or_init(dashmap::DashMap::new);
-
-    // Fast path: check if already cached
-    if let Some(entry) = cache.get(pattern) {
-        return entry.value().clone();
-    }
-
-    // Slow path: compile and cache
-    let compiled = regex::Regex::new(pattern).ok();
-    cache.insert(pattern.to_string(), compiled.clone());
-    compiled
+    build_regex(pattern, false).ok()
 }
 
 /// Combined: ~100-500x faster than original mutex-based implementation.
@@ -2035,7 +2021,7 @@ pub(crate) fn validate_regex_overlap_with_literal(
 
     for t in trait_definitions {
         match &t.r#if.condition {
-            Condition::String { exact: Some(s), .. } => {
+            Condition::String { exact: Some(s), .. } | Condition::Symbol { exact: Some(s), .. } => {
                 literal_patterns.push((
                     s.clone(),
                     "exact".to_string(),
@@ -2046,25 +2032,8 @@ pub(crate) fn validate_regex_overlap_with_literal(
             }
             Condition::String {
                 substr: Some(s), ..
-            } => {
-                literal_patterns.push((
-                    s.clone(),
-                    "substr".to_string(),
-                    t.id.clone(),
-                    t.crit,
-                    t.r#for.clone(),
-                ));
             }
-            Condition::Symbol { exact: Some(s), .. } => {
-                literal_patterns.push((
-                    s.clone(),
-                    "exact".to_string(),
-                    t.id.clone(),
-                    t.crit,
-                    t.r#for.clone(),
-                ));
-            }
-            Condition::Symbol {
+            | Condition::Symbol {
                 substr: Some(s), ..
             } => {
                 literal_patterns.push((
@@ -2082,8 +2051,9 @@ pub(crate) fn validate_regex_overlap_with_literal(
     // Check regex patterns against literal patterns
     for t in trait_definitions {
         let regex_pattern = match &t.r#if.condition {
-            Condition::String { regex: Some(r), .. } => Some(r),
-            Condition::Symbol { regex: Some(r), .. } => Some(r),
+            Condition::String { regex: Some(r), .. } | Condition::Symbol { regex: Some(r), .. } => {
+                Some(r)
+            }
             _ => None,
         };
 

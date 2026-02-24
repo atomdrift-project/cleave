@@ -8,7 +8,7 @@
 //! - Atom extraction for efficient pattern searching
 
 use super::{get_or_create_scanner, truncate_evidence};
-use crate::composite_rules::context::{ConditionResult, EvaluationContext};
+use crate::composite_rules::context::{AnalysisWarning, ConditionResult, EvaluationContext};
 use crate::types::{Evidence, MAX_EVIDENCE_PER_TRAIT};
 use std::sync::Arc;
 
@@ -62,7 +62,8 @@ pub(crate) fn collect_yara_evidence<'a, 'b>(
 ///    return the pre-scanned evidence. This is the fast path for atomic trait conditions.
 /// 2. Per-condition compiled rules: if `compiled` is set (unless/composite conditions),
 ///    scan with the pre-compiled Rules object.
-/// 3. On-the-fly compilation: compile from source (fallback, should be rare).
+/// 3. Skip: if YARA is disabled (no inline results AND no pre-compiled rules), return no-match.
+///    This prevents expensive on-the-fly compilation when --disable=yara is set.
 #[must_use]
 pub(crate) fn eval_yara_inline<'a>(
     source: &str,
@@ -82,53 +83,44 @@ pub(crate) fn eval_yara_inline<'a>(
         };
     }
 
-    let scan_start = std::time::Instant::now();
-
     // Medium path: use per-condition pre-compiled rules (unless/composite conditions).
-    let evidence = if let Some(pre_compiled) = compiled {
+    if let Some(pre_compiled) = compiled {
+        let scan_start = std::time::Instant::now();
         let scanner = get_or_create_scanner(pre_compiled.as_ref());
-        match scanner.scan(ctx.binary_data) {
+        let evidence = match scanner.scan(ctx.binary_data) {
             Ok(results) => collect_yara_evidence(&results, ctx.binary_data),
             Err(_) => Vec::new(),
-        }
-    } else {
-        // Slow path: compile on-the-fly (should be rare).
-        let mut compiler = yara_x::Compiler::new();
-        compiler.new_namespace("inline");
-        if compiler.add_source(source.as_bytes()).is_err() {
-            return ConditionResult {
-                matched: false,
-                evidence: Vec::new(),
-                warnings: Vec::new(),
-                precision: 0.0,
-                matched_trait_ids: Vec::new(),
-            };
-        }
-        let rules = compiler.build();
-        let mut scanner = yara_x::Scanner::new(&rules);
-        match scanner.scan(ctx.binary_data) {
-            Ok(results) => collect_yara_evidence(&results, ctx.binary_data),
-            Err(_) => Vec::new(),
-        }
-    };
+        };
 
-    let scan_duration = scan_start.elapsed();
-    if scan_duration.as_millis() > 1000 {
-        tracing::warn!(
-            source_preview = source.lines().next().unwrap_or(""),
-            file_kb = ctx.binary_data.len() / 1024,
-            ms = scan_duration.as_millis(),
-            "Inline YARA rule took {}ms ({}KB); consider moving to combined engine",
-            scan_duration.as_millis(),
-            ctx.binary_data.len() / 1024,
-        );
+        let scan_duration = scan_start.elapsed();
+        if scan_duration.as_millis() > 1000 {
+            tracing::warn!(
+                source_preview = source.lines().next().unwrap_or(""),
+                file_kb = ctx.binary_data.len() / 1024,
+                ms = scan_duration.as_millis(),
+                "Inline YARA rule took {}ms ({}KB); consider moving to combined engine",
+                scan_duration.as_millis(),
+                ctx.binary_data.len() / 1024,
+            );
+        }
+
+        return ConditionResult {
+            matched: !evidence.is_empty(),
+            evidence,
+            warnings: Vec::new(),
+            precision: 1.0,
+            matched_trait_ids: Vec::new(),
+        };
     }
 
+    // No inline results AND no pre-compiled rules: YARA is effectively disabled.
+    // Return no-match instead of expensive on-the-fly compilation.
+    // This is the expected path when --disable=yara is set.
     ConditionResult {
-        matched: !evidence.is_empty(),
-        evidence,
+        matched: false,
+        evidence: Vec::new(),
         warnings: Vec::new(),
-        precision: 1.0,
+        precision: 0.0,
         matched_trait_ids: Vec::new(),
     }
 }
@@ -332,9 +324,12 @@ pub(crate) fn eval_hex<'a>(
 
     let mut matches: Vec<usize> = Vec::new();
 
-    // count/density constraints are now handled at trait level
-    // No early exit threshold - collect all matches
-    let early_exit_threshold = usize::MAX;
+    /// Maximum hex pattern matches to collect before early exit.
+    /// Patterns matching more than this are truncated to prevent memory exhaustion.
+    /// We only need enough matches for evidence (16) plus some margin for deduplication.
+    const MAX_HEX_MATCHES: usize = 100;
+
+    let early_exit_threshold = MAX_HEX_MATCHES;
 
     // Resolve effective range from location constraints
     let (search_start, search_end) = super::resolve_effective_range(location, ctx);
@@ -413,6 +408,17 @@ pub(crate) fn eval_hex<'a>(
         }
     }
 
+    // Warn if we hit the match limit (indicates potentially problematic pattern)
+    let truncated = matches.len() >= MAX_HEX_MATCHES;
+    if truncated {
+        tracing::warn!(
+            pattern = %pattern,
+            matches = matches.len(),
+            limit = MAX_HEX_MATCHES,
+            "Hex pattern has excessive matches, truncating to prevent memory exhaustion"
+        );
+    }
+
     // count/density constraints are now checked at trait level
     let matched = !matches.is_empty();
 
@@ -424,6 +430,15 @@ pub(crate) fn eval_hex<'a>(
     if location.section.is_some() {
         precision += 1.0;
     }
+
+    let warnings = if truncated {
+        vec![AnalysisWarning::PatternTruncated {
+            pattern: pattern.to_string(),
+            limit: MAX_HEX_MATCHES,
+        }]
+    } else {
+        Vec::new()
+    };
 
     ConditionResult {
         matched,
@@ -454,7 +469,7 @@ pub(crate) fn eval_hex<'a>(
         } else {
             Vec::new()
         },
-        warnings: Vec::new(),
+        warnings,
         precision,
         matched_trait_ids: Vec::new(),
     }

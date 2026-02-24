@@ -51,3 +51,6 @@ overrides:
   - id: 3p.TTC-CERT.cve_rules.EXPLOIT_cve_2022-30190::cve_202230190_html_payload
     disable: true
     reason: "Overly broad patterns ($s6 = '$(') match thousands of times in Go/jQuery files"
+  - id: 3p.YARAForge.yara-rules-full::SEKOIA_Ransomware_Lin_Avoslocker_Sections
+    disable: true
+    reason: "Slow hashing"

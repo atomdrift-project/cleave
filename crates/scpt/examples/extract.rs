@@ -1,3 +1,5 @@
+//! Example: Extract and display symbols from a macOS .scpt file.
+
 use scpt::{ScptParser, SymbolKind};
 use std::env;
 use std::fs;

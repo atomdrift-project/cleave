@@ -71,23 +71,24 @@ impl TraitIndex {
     }
 }
 
-/// Index for fast batched string matching using Aho-Corasick.
-/// Pre-computes automatons from all exact string patterns in traits,
-/// enabling single-pass matching across thousands of patterns.
+/// Index for fast batched string matching using HashSet for exact matches.
+/// Uses O(1) HashSet lookups instead of Aho-Corasick for exact string matching,
+/// with parallel processing for large string sets.
 #[derive(Clone, Default, Debug)]
 pub(crate) struct StringMatchIndex {
-    /// Aho-Corasick automaton for case-sensitive exact string patterns
-    automaton: Option<AhoCorasick>,
-    /// Maps pattern index -> trait indices that use this pattern
-    pattern_to_traits: Vec<Vec<usize>>,
-    /// Maps pattern index -> the pattern string (for evidence)
-    patterns: Vec<String>,
-    /// Aho-Corasick automaton for case-insensitive exact string patterns
-    ci_automaton: Option<AhoCorasick>,
-    /// Maps CI pattern index -> trait indices
-    ci_pattern_to_traits: Vec<Vec<usize>>,
-    /// Maps CI pattern index -> the pattern string (for evidence)
-    ci_patterns: Vec<String>,
+    // ===== Experiment 1: HashSet for O(1) exact matching =====
+    /// Case-sensitive exact pattern -> trait indices
+    exact_patterns: FxHashMap<String, Vec<usize>>,
+    /// Case-insensitive exact pattern (lowercase) -> (original pattern, trait indices)
+    ci_exact_patterns: FxHashMap<String, (String, Vec<usize>)>,
+
+    // ===== Experiment 3: Minimum pattern length for early filtering =====
+    /// Minimum length among all patterns (strings shorter than this can be skipped)
+    min_pattern_length: usize,
+    /// Minimum length among case-insensitive patterns
+    ci_min_pattern_length: usize,
+
+    // ===== Kept for regex literal pre-filtering (unchanged) =====
     /// Aho-Corasick automaton for regex literal prefixes (for pre-filtering)
     regex_literal_automaton: Option<AhoCorasick>,
     /// Maps regex literal index -> trait indices
@@ -138,17 +139,20 @@ impl StringMatchIndex {
     }
 
     /// Build the string match index from trait definitions.
-    /// Extracts all exact string patterns and builds AC automatons (case-sensitive and case-insensitive).
+    /// Uses HashSet for O(1) exact matching instead of Aho-Corasick.
     pub(crate) fn build(traits: &[TraitDefinition]) -> Self {
         // Pre-allocate capacity based on trait count to reduce reallocations
         let estimated_patterns = traits.len() / 2;
-        let mut patterns: Vec<String> = Vec::with_capacity(estimated_patterns);
-        let mut pattern_to_traits: Vec<Vec<usize>> = Vec::with_capacity(estimated_patterns);
-        let mut pattern_map: FxHashMap<String, usize> = FxHashMap::default();
 
-        let mut ci_patterns: Vec<String> = Vec::with_capacity(estimated_patterns);
-        let mut ci_pattern_to_traits: Vec<Vec<usize>> = Vec::with_capacity(estimated_patterns);
-        let mut ci_pattern_map: FxHashMap<String, usize> = FxHashMap::default();
+        // Experiment 1: Use HashMaps for O(1) exact matching
+        let mut exact_patterns: FxHashMap<String, Vec<usize>> =
+            FxHashMap::with_capacity_and_hasher(estimated_patterns, Default::default());
+        let mut ci_exact_patterns: FxHashMap<String, (String, Vec<usize>)> =
+            FxHashMap::with_capacity_and_hasher(estimated_patterns, Default::default());
+
+        // Experiment 3: Track minimum pattern lengths
+        let mut min_pattern_length = usize::MAX;
+        let mut ci_min_pattern_length = usize::MAX;
 
         let mut regex_literals: Vec<String> = Vec::with_capacity(estimated_patterns);
         let mut regex_literal_to_traits: Vec<Vec<usize>> = Vec::with_capacity(estimated_patterns);
@@ -165,21 +169,18 @@ impl StringMatchIndex {
                 } => {
                     if *case_insensitive {
                         let lower = exact_str.to_lowercase();
-                        if let Some(&pattern_idx) = ci_pattern_map.get(&lower) {
-                            ci_pattern_to_traits[pattern_idx].push(trait_idx);
-                        } else {
-                            let pattern_idx = ci_patterns.len();
-                            ci_pattern_map.insert(lower, pattern_idx);
-                            ci_patterns.push(exact_str.clone());
-                            ci_pattern_to_traits.push(vec![trait_idx]);
-                        }
-                    } else if let Some(&pattern_idx) = pattern_map.get(exact_str) {
-                        pattern_to_traits[pattern_idx].push(trait_idx);
+                        ci_min_pattern_length = ci_min_pattern_length.min(lower.len());
+                        ci_exact_patterns
+                            .entry(lower)
+                            .or_insert_with(|| (exact_str.clone(), Vec::new()))
+                            .1
+                            .push(trait_idx);
                     } else {
-                        let pattern_idx = patterns.len();
-                        pattern_map.insert(exact_str.clone(), pattern_idx);
-                        patterns.push(exact_str.clone());
-                        pattern_to_traits.push(vec![trait_idx]);
+                        min_pattern_length = min_pattern_length.min(exact_str.len());
+                        exact_patterns
+                            .entry(exact_str.clone())
+                            .or_default()
+                            .push(trait_idx);
                     }
                 }
                 // Regex string patterns - extract literal prefix for pre-filtering
@@ -203,56 +204,31 @@ impl StringMatchIndex {
             }
         }
 
-        let total_patterns = patterns.len() + ci_patterns.len();
+        let total_patterns = exact_patterns.len() + ci_exact_patterns.len();
 
-        // Build all 3 Aho-Corasick automata in parallel
-        let ((automaton, ci_automaton), regex_literal_automaton) = rayon::join(
-            || {
-                rayon::join(
-                    || {
-                        // Case-sensitive automaton
-                        if !patterns.is_empty() {
-                            AhoCorasick::builder()
-                                .ascii_case_insensitive(false)
-                                .build(&patterns)
-                                .ok()
-                        } else {
-                            None
-                        }
-                    },
-                    || {
-                        // Case-insensitive automaton
-                        if !ci_patterns.is_empty() {
-                            AhoCorasick::builder()
-                                .ascii_case_insensitive(true)
-                                .build(&ci_patterns)
-                                .ok()
-                        } else {
-                            None
-                        }
-                    },
-                )
-            },
-            || {
-                // Regex literal automaton for pre-filtering
-                if !regex_literals.is_empty() {
-                    AhoCorasick::builder()
-                        .ascii_case_insensitive(false)
-                        .build(&regex_literals)
-                        .ok()
-                } else {
-                    None
-                }
-            },
-        );
+        // Set defaults if no patterns found
+        if min_pattern_length == usize::MAX {
+            min_pattern_length = 0;
+        }
+        if ci_min_pattern_length == usize::MAX {
+            ci_min_pattern_length = 0;
+        }
+
+        // Build regex literal automaton for pre-filtering (kept as Aho-Corasick)
+        let regex_literal_automaton = if !regex_literals.is_empty() {
+            AhoCorasick::builder()
+                .ascii_case_insensitive(false)
+                .build(&regex_literals)
+                .ok()
+        } else {
+            None
+        };
 
         Self {
-            automaton,
-            pattern_to_traits,
-            patterns,
-            ci_automaton,
-            ci_pattern_to_traits,
-            ci_patterns,
+            exact_patterns,
+            ci_exact_patterns,
+            min_pattern_length,
+            ci_min_pattern_length,
             regex_literal_automaton,
             regex_literal_to_traits,
             regex_trait_indices,
@@ -268,63 +244,70 @@ impl StringMatchIndex {
     /// Find matching traits with cached evidence.
     /// Returns trait indices AND the evidence (matched patterns + offsets) for each.
     /// This avoids re-iterating strings during trait evaluation.
+    ///
+    /// Optimizations applied:
+    /// - Experiment 1: O(1) HashSet lookup instead of Aho-Corasick
+    /// - Experiment 2: Parallel processing with rayon for large string sets
+    /// - Experiment 3: Skip strings shorter than minimum pattern length
     pub(crate) fn find_matches_with_evidence(
+        &self,
+        strings: &[StringInfo],
+    ) -> (FxHashSet<usize>, FxHashMap<usize, Vec<Evidence>>) {
+        // Experiment 2: Use parallel processing for large string sets (>1000 strings)
+        const PARALLEL_THRESHOLD: usize = 1000;
+
+        if strings.len() >= PARALLEL_THRESHOLD {
+            self.find_matches_parallel(strings)
+        } else {
+            self.find_matches_sequential(strings)
+        }
+    }
+
+    /// Sequential matching for small string sets
+    fn find_matches_sequential(
         &self,
         strings: &[StringInfo],
     ) -> (FxHashSet<usize>, FxHashMap<usize, Vec<Evidence>>) {
         let mut matching_traits = FxHashSet::default();
         let mut trait_evidence: FxHashMap<usize, Vec<Evidence>> = FxHashMap::default();
 
-        // Case-sensitive matching
-        if let Some(ref ac) = self.automaton {
-            for string_info in strings {
-                for mat in ac.find_iter(&string_info.value) {
-                    // For exact matching, the match must cover the entire string
-                    if mat.start() == 0 && mat.end() == string_info.value.len() {
-                        let pattern_idx = mat.pattern().as_usize();
-                        if let Some(trait_indices) = self.pattern_to_traits.get(pattern_idx) {
-                            let pattern = &self.patterns[pattern_idx];
-                            for &trait_idx in trait_indices {
-                                matching_traits.insert(trait_idx);
-                                // Cache evidence for this trait (limited to MAX_EVIDENCE_PER_TRAIT)
-                                let entry = trait_evidence.entry(trait_idx).or_default();
-                                if entry.len() < MAX_EVIDENCE_PER_TRAIT {
-                                    entry.push(Evidence {
-                                        method: "string".to_string(),
-                                        source: "string_extractor".to_string(),
-                                        value: pattern.clone(),
-                                        location: string_info.offset.map(|o| format!("{:#x}", o)),
-                                    });
-                                }
-                            }
+        for string_info in strings {
+            let len = string_info.value.len();
+
+            // Experiment 1 + 3: O(1) HashSet lookup with length pre-filter
+            // Case-sensitive exact matching
+            if len >= self.min_pattern_length {
+                if let Some(trait_indices) = self.exact_patterns.get(&string_info.value) {
+                    for &trait_idx in trait_indices {
+                        matching_traits.insert(trait_idx);
+                        let entry = trait_evidence.entry(trait_idx).or_default();
+                        if entry.len() < MAX_EVIDENCE_PER_TRAIT {
+                            entry.push(Evidence {
+                                method: "string".to_string(),
+                                source: "string_extractor".to_string(),
+                                value: string_info.value.clone(),
+                                location: string_info.offset.map(|o| format!("{:#x}", o)),
+                            });
                         }
                     }
                 }
             }
-        }
 
-        // Case-insensitive matching
-        if let Some(ref ac) = self.ci_automaton {
-            for string_info in strings {
-                for mat in ac.find_iter(&string_info.value) {
-                    // For exact matching, the match must cover the entire string
-                    if mat.start() == 0 && mat.end() == string_info.value.len() {
-                        let pattern_idx = mat.pattern().as_usize();
-                        if let Some(trait_indices) = self.ci_pattern_to_traits.get(pattern_idx) {
-                            let pattern = &self.ci_patterns[pattern_idx];
-                            for &trait_idx in trait_indices {
-                                matching_traits.insert(trait_idx);
-                                // Limited to MAX_EVIDENCE_PER_TRAIT
-                                let entry = trait_evidence.entry(trait_idx).or_default();
-                                if entry.len() < MAX_EVIDENCE_PER_TRAIT {
-                                    entry.push(Evidence {
-                                        method: "string".to_string(),
-                                        source: "string_extractor".to_string(),
-                                        value: pattern.clone(),
-                                        location: string_info.offset.map(|o| format!("{:#x}", o)),
-                                    });
-                                }
-                            }
+            // Case-insensitive exact matching
+            if len >= self.ci_min_pattern_length {
+                let lower = string_info.value.to_lowercase();
+                if let Some((original_pattern, trait_indices)) = self.ci_exact_patterns.get(&lower)
+                {
+                    for &trait_idx in trait_indices {
+                        matching_traits.insert(trait_idx);
+                        let entry = trait_evidence.entry(trait_idx).or_default();
+                        if entry.len() < MAX_EVIDENCE_PER_TRAIT {
+                            entry.push(Evidence {
+                                method: "string".to_string(),
+                                source: "string_extractor".to_string(),
+                                value: original_pattern.clone(),
+                                location: string_info.offset.map(|o| format!("{:#x}", o)),
+                            });
                         }
                     }
                 }
@@ -332,6 +315,86 @@ impl StringMatchIndex {
         }
 
         (matching_traits, trait_evidence)
+    }
+
+    /// Parallel matching for large string sets (Experiment 2)
+    fn find_matches_parallel(
+        &self,
+        strings: &[StringInfo],
+    ) -> (FxHashSet<usize>, FxHashMap<usize, Vec<Evidence>>) {
+        // Process strings in parallel chunks
+        const CHUNK_SIZE: usize = 2000;
+
+        let chunk_results: Vec<(FxHashSet<usize>, FxHashMap<usize, Vec<Evidence>>)> = strings
+            .par_chunks(CHUNK_SIZE)
+            .map(|chunk| {
+                let mut matching_traits = FxHashSet::default();
+                let mut trait_evidence: FxHashMap<usize, Vec<Evidence>> = FxHashMap::default();
+
+                for string_info in chunk {
+                    let len = string_info.value.len();
+
+                    // Case-sensitive exact matching with length pre-filter
+                    if len >= self.min_pattern_length {
+                        if let Some(trait_indices) = self.exact_patterns.get(&string_info.value) {
+                            for &trait_idx in trait_indices {
+                                matching_traits.insert(trait_idx);
+                                let entry = trait_evidence.entry(trait_idx).or_default();
+                                if entry.len() < MAX_EVIDENCE_PER_TRAIT {
+                                    entry.push(Evidence {
+                                        method: "string".to_string(),
+                                        source: "string_extractor".to_string(),
+                                        value: string_info.value.clone(),
+                                        location: string_info.offset.map(|o| format!("{:#x}", o)),
+                                    });
+                                }
+                            }
+                        }
+                    }
+
+                    // Case-insensitive exact matching with length pre-filter
+                    if len >= self.ci_min_pattern_length {
+                        let lower = string_info.value.to_lowercase();
+                        if let Some((original_pattern, trait_indices)) =
+                            self.ci_exact_patterns.get(&lower)
+                        {
+                            for &trait_idx in trait_indices {
+                                matching_traits.insert(trait_idx);
+                                let entry = trait_evidence.entry(trait_idx).or_default();
+                                if entry.len() < MAX_EVIDENCE_PER_TRAIT {
+                                    entry.push(Evidence {
+                                        method: "string".to_string(),
+                                        source: "string_extractor".to_string(),
+                                        value: original_pattern.clone(),
+                                        location: string_info.offset.map(|o| format!("{:#x}", o)),
+                                    });
+                                }
+                            }
+                        }
+                    }
+                }
+
+                (matching_traits, trait_evidence)
+            })
+            .collect();
+
+        // Merge results from all chunks
+        let mut final_traits = FxHashSet::default();
+        let mut final_evidence: FxHashMap<usize, Vec<Evidence>> = FxHashMap::default();
+
+        for (traits, evidence) in chunk_results {
+            for trait_idx in traits {
+                final_traits.insert(trait_idx);
+            }
+            for (trait_idx, mut ev_list) in evidence {
+                let entry = final_evidence.entry(trait_idx).or_default();
+                // Respect MAX_EVIDENCE_PER_TRAIT when merging
+                let remaining = MAX_EVIDENCE_PER_TRAIT.saturating_sub(entry.len());
+                entry.extend(ev_list.drain(..remaining.min(ev_list.len())));
+            }
+        }
+
+        (final_traits, final_evidence)
     }
 
     /// Find regex traits that MIGHT match based on literal prefix matching.
@@ -799,8 +862,8 @@ mod tests {
 
         assert!(!index.has_patterns());
         assert_eq!(index.total_patterns, 0);
-        assert!(index.automaton.is_none());
-        assert!(index.ci_automaton.is_none());
+        assert!(index.exact_patterns.is_empty());
+        assert!(index.ci_exact_patterns.is_empty());
     }
 
     #[test]

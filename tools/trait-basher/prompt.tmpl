@@ -65,13 +65,13 @@ to better understand the strings that cleave can see in a program, often hidden 
 
 ## Debug Commands
 ```
-{{.cleaveBin}} --validate=true {{.Path}} --format jsonl   # shows full list of traits, including baseline; also shows paths to rule files
-{{.cleaveBin}} metrics {{.Path}}  # shows program structure metrics
-{{.cleaveBin}} symbols {{.Path}}  # shows detected symbols
-{{.cleaveBin}} symbols {{.Path}}  # shows detected segment data
-{{.cleaveBin}} strings {{.Path}}  # shows detected segment strings, even encoded ones
-{{.cleaveBin}} test-rules {{.Path}} --rules "rule-id"
-{{.cleaveBin}} test-match {{.Path}} --type string --pattern "X"
+{{.CleaveBin}} --validate=true {{.Path}} --format jsonl   # shows full list of traits, including baseline; also shows paths to rule files
+{{.CleaveBin}} metrics {{.Path}}  # shows program structure metrics
+{{.CleaveBin}} symbols {{.Path}}  # shows detected symbols
+{{.CleaveBin}} symbols {{.Path}}  # shows detected segment data
+{{.CleaveBin}} strings {{.Path}}  # shows detected segment strings, even encoded ones
+{{.CleaveBin}} test-rules {{.Path}} --rules "rule-id"
+{{.CleaveBin}} test-match {{.Path}} --type string --pattern "X"
 
 IMPORTANT: Read RULES.md to understand the bizarre rule syntax, and TAXONOMY.md to understand what directories they are placed in.
 It is critical that traits - especially atomics - are placed in the correct directory for what they will match, rather than alongside the composite.

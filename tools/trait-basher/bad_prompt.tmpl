@@ -25,11 +25,11 @@ This sample was properly detected. Validate completeness of our detection:
 
 Start with reconnaissance:
 ```bash
-{{.cleaveBin}} strings {{.Path}}         # Extract all strings (including encoded)
-{{.cleaveBin}} symbols {{.Path}}         # Extract all symbols
-{{.cleaveBin}} sections {{.Path}}        # Display all binary section metadata, including entropy
-{{.cleaveBin}} metrics {{.Path}}         # Display any suspicious metrics about the program
-{{.cleaveBin}} --validate=true --format jsonl {{.Path}}  # Current cleave findings
+{{.CleaveBin}} strings {{.Path}}         # Extract all strings (including encoded)
+{{.CleaveBin}} symbols {{.Path}}         # Extract all symbols
+{{.CleaveBin}} sections {{.Path}}        # Display all binary section metadata, including entropy
+{{.CleaveBin}} metrics {{.Path}}         # Display any suspicious metrics about the program
+{{.CleaveBin}} --validate=true --format jsonl {{.Path}}  # Current cleave findings
 ```
 
 Use rizin or Ghidra for deeper analysis of control flow, API calls, and obfuscation.
@@ -88,8 +88,8 @@ Read the existing analysis at `{{.ReportPath}}` to understand the malware, then 
 
 Start with reconnaissance:
 ```bash
-{{.cleaveBin}} strings {{.Path}}         # Extract all strings (including encoded)
-{{.cleaveBin}} --validate=true --format jsonl {{.Path}}  # Current cleave findings
+{{.CleaveBin}} strings {{.Path}}         # Extract all strings (including encoded)
+{{.CleaveBin}} --validate=true --format jsonl {{.Path}}  # Current cleave findings
 ```
 
 Use rizin or Ghidra for deeper analysis of control flow, API calls, and obfuscation.
@@ -143,8 +143,8 @@ Avoid deleting rules unless it's to move them to a better location - prefer fixi
 
 ### Validate
 ```bash
-{{.cleaveBin}} --validate=true --format jsonl {{.Path}}                        # Verify traits fire, no YAML warnings or misleading results
-{{.cleaveBin}} --validate=true --format jsonl /bin/ls /bin/bash /usr/bin/curl  # Test for false positives and misleading results
+{{.CleaveBin}} --validate=true --format jsonl {{.Path}}                        # Verify traits fire, no YAML warnings or misleading results
+{{.CleaveBin}} --validate=true --format jsonl /bin/ls /bin/bash /usr/bin/curl  # Test for false positives and misleading results
 ```
 Note: YAML changes take effect immediately, no rebuild needed.
 

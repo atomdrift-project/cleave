@@ -2,13 +2,13 @@
 
 **Debug Commands**:
 ```bash
-{{.cleaveBin}} --validate=true {{.Path}} --format jsonl  # All traits (including baseline) + rule paths
-{{.cleaveBin}} strings {{.Path}}         # Detected strings, including encoded
-{{.cleaveBin}} symbols {{.Path}}         # Detected symbols
-{{.cleaveBin}} segments {{.Path}}        # Program segment information
-{{.cleaveBin}} metrics {{.Path}}         # Program structure metrics
-{{.cleaveBin}} test-rules {{.Path}} --rules "rule-id"
-{{.cleaveBin}} test-match {{.Path}} --type string --pattern "X"
+{{.CleaveBin}} --validate=true {{.Path}} --format jsonl  # All traits (including baseline) + rule paths
+{{.CleaveBin}} strings {{.Path}}         # Detected strings, including encoded
+{{.CleaveBin}} symbols {{.Path}}         # Detected symbols
+{{.CleaveBin}} segments {{.Path}}        # Program segment information
+{{.CleaveBin}} metrics {{.Path}}         # Program structure metrics
+{{.CleaveBin}} test-rules {{.Path}} --rules "rule-id"
+{{.CleaveBin}} test-match {{.Path}} --type string --pattern "X"
 ```
 
 **Additional tools**: r2 (radare2), ghidra, nm, readelf

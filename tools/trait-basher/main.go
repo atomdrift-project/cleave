@@ -1968,7 +1968,7 @@ func invokeAI(ctx context.Context, cfg *config, f FileAnalysis, isValidation boo
 
 	data := promptData{
 		Path:               f.Path,
-		cleaveBin:         cfg.cleaveBin,
+		CleaveBin:          cfg.cleaveBin,
 		TraitsDir:          cfg.repoRoot + "/traits/",
 		IsArchive:          false,
 		IsBad:              cfg.knownBad,
@@ -1981,7 +1981,10 @@ func invokeAI(ctx context.Context, cfg *config, f FileAnalysis, isValidation boo
 		return err
 	}
 
-	prompt := buildPrompt(&data)
+	prompt, err := buildPrompt(&data)
+	if err != nil {
+		return fmt.Errorf("build prompt for %s: %w", f.Path, err)
+	}
 
 	// Add findings summary for good files.
 	if cfg.knownGood && (hostileCount > 0 || suspiciousCount > 0) {
@@ -2032,7 +2035,7 @@ func invokeAIArchive(ctx context.Context, cfg *config, a *ArchiveAnalysis, isVal
 		ArchiveName:        filepath.Base(a.ArchivePath),
 		Files:              fileEntries,
 		Count:              countFilesWithConcerns(a.Members),
-		cleaveBin:         cfg.cleaveBin,
+		CleaveBin:          cfg.cleaveBin,
 		TraitsDir:          cfg.repoRoot + "/traits/",
 		IsArchive:          true,
 		IsBad:              cfg.knownBad,
@@ -2045,7 +2048,10 @@ func invokeAIArchive(ctx context.Context, cfg *config, a *ArchiveAnalysis, isVal
 		return err
 	}
 
-	prompt := buildPrompt(&data)
+	prompt, err := buildPrompt(&data)
+	if err != nil {
+		return fmt.Errorf("build prompt for %s: %w", a.ArchivePath, err)
+	}
 
 	// Add findings summary for good archives.
 	if cfg.knownGood && (hostileCount > 0 || suspiciousCount > 0) {

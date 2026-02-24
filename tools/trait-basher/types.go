@@ -18,7 +18,7 @@ type fileEntry struct {
 type promptData struct {
 	Path                  string
 	ArchiveName           string
-	cleaveBin            string
+	CleaveBin             string
 	TraitsDir             string
 	ReportPath            string
 	GapAnalysisPath       string

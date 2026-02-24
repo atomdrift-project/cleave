@@ -33,8 +33,8 @@
 
 Determine the file's legitimate purpose:
 ```bash
-{{.cleaveBin}} strings {{.Path}}
-{{.cleaveBin}} --validate=true --format jsonl {{.Path}}
+{{.CleaveBin}} strings {{.Path}}
+{{.CleaveBin}} --validate=true --format jsonl {{.Path}}
 ```
 
 ### Step 2: Evaluate {{if .IsValidationSample}}All Findings{{else}}Each Finding{{end}}
@@ -46,6 +46,7 @@ Determine the file's legitimate purpose:
 **Is it technically accurate?**
 - Does the file actually exhibit this behavior?
 - Is the trait detecting what it claims?
+- Is the suspicion level to high for the evidence provided?
 
 **Is it misleading in this context?**
 - Is this behavior expected for this tool type?
@@ -62,13 +63,15 @@ Determine the file's legitimate purpose:
 Prefer improving poorly-written traits for better signal than deleting them.
 
 **A. Improve the trait** (preferred - improves precision):
+
+- If the criticality is higher than it should be, but the query is otherwise accurate, consider adjusting it to a lower value (suspicious->notable, notable->baseline)
 - Some traits are poorly written or incomplete - find ways to address the inaccuracy by improving how it matches programs
 - Consider adding constraits like `near`, `count_min`, `size_min`, `for` - see RULES.md for details!
 - Upgrade pattern type to a more specific matcher: raw → string → symbol → ast (symbol & AST are the most specific matchers)
 - Prefer multiple reusable atomic traits over complex regular expressions (prefer 3 traits over a|b|c regexes).
 - Perfect already but in a misleading subdirectory? Move the trait to more neutral directory in taxonomy within micro-behaviors/ or metadata/
 
-**B. Downgrade criticality** (if the finding is perfect, but contextually not suspicious):
+**B. Downgrade criticality** (if the finding is perfect, but not suspicious in this specific case):
 ```yaml
 downgrade:
   - id: path/to/trait::specific-trait-id
@@ -88,7 +91,7 @@ Avoid deleting rules unless it's to move them to a better location - prefer fixi
 
 ### Step 4: Validate & Verify
 
-Run `{{.cleaveBin}} --validate=true --format jsonl {{.Path}}` and confirm:
+Run `{{.CleaveBin}} --validate=true --format jsonl {{.Path}}` and confirm:
 
 **Required:**
 - ✓ Zero hostile findings

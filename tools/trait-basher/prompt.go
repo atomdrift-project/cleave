@@ -44,17 +44,23 @@ func loadPromptTemplate(_ string) error {
 }
 
 // buildPrompt constructs the full prompt by combining the mode-specific template with shared tools.
-func buildPrompt(data *promptData) string {
+func buildPrompt(data *promptData) (string, error) {
 	var main bytes.Buffer
 	var tools bytes.Buffer
 
 	if data.IsBad {
-		_ = badTmpl.Execute(&main, data) //nolint:errcheck // template execution errors are non-critical for prompts
+		if err := badTmpl.Execute(&main, data); err != nil {
+			return "", fmt.Errorf("execute bad prompt template: %w", err)
+		}
 	} else {
-		_ = goodTmpl.Execute(&main, data) //nolint:errcheck // template execution errors are non-critical for prompts
+		if err := goodTmpl.Execute(&main, data); err != nil {
+			return "", fmt.Errorf("execute good prompt template: %w", err)
+		}
 	}
 
-	_ = toolsTmpl.Execute(&tools, data) //nolint:errcheck // template execution errors are non-critical for prompts
+	if err := toolsTmpl.Execute(&tools, data); err != nil {
+		return "", fmt.Errorf("execute tools template: %w", err)
+	}
 
-	return main.String() + "\n" + tools.String()
+	return main.String() + "\n" + tools.String(), nil
 }

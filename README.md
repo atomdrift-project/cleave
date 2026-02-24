@@ -1,6 +1,6 @@
 ![cleave](media/logo.png)
 
-Deep static analysis of software composition across binaries and source code. AST-aware, not regex-blind.
+AST-aware software decomposition. Takes binaries and source apart into their atomic components.
 
 cleave understands code semantics—it won't mistake a string literal `"exec"` for actual execution. It combines abstract syntax tree inspection with binary reverse engineering to detect capabilities and behaviors across 20+ languages and three binary formats in a single pass.
 
@@ -21,24 +21,22 @@ cleave does all three. It's built for supply chain defenders and threat hunters 
 - **Archives**: ZIP, TAR, 7z, RAR, XAR (unpacked recursively)
 - **Bytecode**: Java .class files and JAR constant pool analysis
 
-## Try It!
+## Requirements
 
-Try our [demo web interface](https://cleave-web-362492245899.us-central1.run.app/) if you are curious about real-world behavior.
+- A modern version of [Rust](https://rust-lang.org/)
+- OPTIONAL: [rizin](https://github.com/rizinorg/rizin) for binary reverse-engineering
+- OPTIONAL: [upx](https://github.com/upx/upx) for on-the-fly unpacking
 
 ## Quick Start
 
 ```bash
-cargo build --release
+cargo install --path .
 
-# Single target
+# Analyze target
 cleave binary-or-source.py
 
-# Supply chain diffing
-cleave diff old-version/ new-version/ --json
-
-# Deep inspection
-cleave symbols firmware.bin
-cleave strings malware.exe --min-length 10
+# Analyze directory recursively (including archives)
+cleave /tmp/box-o-malware
 ```
 
 ## Detection Philosophy

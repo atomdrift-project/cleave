@@ -740,6 +740,7 @@ func streamAnalyzeAndReview(ctx context.Context, cfg *config, dbMode string) (*s
 		"--max-file-mem", "0",
 		"--log-file", cleaveLogPath,
 		"--validate=true",
+		"--shuffle",
 	}
 	args = append(args, cfg.dirs...)
 	cmd := exec.CommandContext(ctx, cfg.cleaveBin, args...) //nolint:gosec // cleaveBin is built from trusted cargo
@@ -818,7 +819,7 @@ func streamAnalyzeAndReview(ctx context.Context, cfg *config, dbMode string) (*s
 	)
 
 	// Build full command line for logging
-	cleaveArgs := []string{"--format", "jsonl", "--extract-dir", cfg.extractDir, "--max-file-mem", "0", "--validate=true", "--shuffle"}
+	cleaveArgs := []string{"--format", "jsonl", "--extract-dir", cfg.extractDir, "--max-file-mem", "0", "--log-file", cleaveLogPath, "--validate=true", "--shuffle"}
 	cleaveArgs = append(cleaveArgs, cfg.dirs...)
 	fullCmd := append([]string{cfg.cleaveBin}, cleaveArgs...)
 

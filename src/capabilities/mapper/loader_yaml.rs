@@ -53,8 +53,8 @@ impl super::CapabilityMapper {
                     desc: mapping.desc,
                     conf: mapping.conf,
                     crit: Criticality::Baseline, // Legacy format defaults to baseline
-                    mbc: None,                // Legacy format has no mbc field
-                    attack: None,             // Legacy format has no attack field
+                    mbc: None,                   // Legacy format has no mbc field
+                    attack: None,                // Legacy format has no attack field
                 },
             );
         }
@@ -68,8 +68,8 @@ impl super::CapabilityMapper {
                     desc: rule.desc,
                     conf: rule.conf,
                     crit: Criticality::Baseline, // Simple rules default to baseline
-                    mbc: None,                // Simple rules have no mbc field
-                    attack: None,             // Simple rules have no attack field
+                    mbc: None,                   // Simple rules have no mbc field
+                    attack: None,                // Simple rules have no attack field
                 },
             );
         }

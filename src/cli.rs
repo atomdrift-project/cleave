@@ -192,7 +192,6 @@ pub(crate) struct Args {
     /// Files larger than this are written to temp files. Default: 100 MB.
     #[arg(long, value_name = "MB", default_value_t = 100)]
     pub max_file_mem: u64,
-
 }
 
 impl Args {
@@ -252,7 +251,10 @@ fn parse_criticality_level(s: &str) -> crate::types::Criticality {
         "suspicious" => crate::types::Criticality::Suspicious,
         "hostile" | "malicious" => crate::types::Criticality::Hostile,
         _ => {
-            eprintln!("⚠️  Unknown criticality level '{}', treating as 'baseline'", s);
+            eprintln!(
+                "⚠️  Unknown criticality level '{}', treating as 'baseline'",
+                s
+            );
             crate::types::Criticality::Baseline
         }
     }
@@ -918,9 +920,8 @@ mod tests {
 
     #[test]
     fn test_error_if_multiple_levels() {
-        let args =
-            Args::try_parse_from(["flayer", "--error-if", "suspicious,hostile", "file.bin"])
-                .unwrap();
+        let args = Args::try_parse_from(["flayer", "--error-if", "suspicious,hostile", "file.bin"])
+            .unwrap();
         let levels = args.error_if_levels().unwrap();
         assert_eq!(levels.len(), 2);
         assert!(levels.contains(&crate::types::Criticality::Suspicious));

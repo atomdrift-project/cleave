@@ -145,12 +145,18 @@ pub(crate) fn run(
     };
 
     // Load capability mapper with full validation (test-match is a developer command)
-    let capability_mapper = crate::capabilities::CapabilityMapper::new_with_precision_thresholds(
-        min_hostile_precision,
-        min_suspicious_precision,
-        true, // Always enable full validation for test-match
-    )
-    .with_platforms(platforms.clone());
+    // Allow skipping for faster tests with FLAYER_SKIP_TRAITS
+    let capability_mapper = if std::env::var("FLAYER_SKIP_TRAITS").is_ok() {
+        tracing::info!("Traits skipped (FLAYER_SKIP_TRAITS set)");
+        crate::capabilities::CapabilityMapper::empty()
+    } else {
+        crate::capabilities::CapabilityMapper::new_with_precision_thresholds(
+            min_hostile_precision,
+            min_suspicious_precision,
+            true, // Always enable full validation for test-match
+        )
+        .with_platforms(platforms.clone())
+    };
 
     // Read file data
     let full_data = fs::read(path)?;

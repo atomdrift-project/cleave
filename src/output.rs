@@ -337,7 +337,8 @@ pub(crate) fn format_jsonl(report: &AnalysisReport) -> Result<String> {
     // Emit summary at end
     lines.push(format_jsonl_summary(report)?);
 
-    Ok(lines.join("\n"))
+    // Join with newlines and add trailing newline for proper JSONL streaming
+    Ok(format!("{}\n", lines.join("\n")))
 }
 
 /// Parse JSONL (newline-delimited JSON) back to AnalysisReport

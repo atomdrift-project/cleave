@@ -9,7 +9,7 @@ use super::{build_regex, truncate_evidence};
 use crate::composite_rules::ast_kinds::map_kind_to_node_types;
 use crate::composite_rules::context::{AnalysisWarning, ConditionResult, EvaluationContext};
 use crate::composite_rules::types::FileType;
-use crate::types::Evidence;
+use crate::types::{Evidence, MAX_EVIDENCE_PER_TRAIT};
 use streaming_iterator::StreamingIterator;
 
 /// Match mode for AST pattern matching
@@ -314,7 +314,7 @@ fn walk_ast_for_pattern_multi<'a>(
         let node_kind = node.kind();
         if target_node_types.contains(&node_kind) {
             if let Ok(text) = node.utf8_text(source) {
-                if matcher(text) {
+                if matcher(text) && evidence.len() < MAX_EVIDENCE_PER_TRAIT {
                     evidence.push(Evidence {
                         method: "ast".to_string(),
                         source: "tree-sitter".to_string(),
@@ -431,7 +431,7 @@ pub(crate) fn eval_ast_query<'a>(query_str: &str, ctx: &EvaluationContext<'a>) -
     query_cursor.set_byte_range(0..source.len().min(10_000_000)); // Limit to first 10MB
 
     let mut evidence = Vec::new();
-    const MAX_MATCHES: usize = 1000; // Cap evidence collection
+    // Cap evidence collection to MAX_EVIDENCE_PER_TRAIT
 
     // Buffers needed for text predicate evaluation
     let mut buffer1 = Vec::new();
@@ -472,14 +472,14 @@ pub(crate) fn eval_ast_query<'a>(query_str: &str, ctx: &EvaluationContext<'a>) -
                 });
 
                 // Bail early if we've collected enough evidence
-                if evidence.len() >= MAX_MATCHES {
+                if evidence.len() >= MAX_EVIDENCE_PER_TRAIT {
                     break;
                 }
             }
         }
 
         // Break outer loop too
-        if evidence.len() >= MAX_MATCHES {
+        if evidence.len() >= MAX_EVIDENCE_PER_TRAIT {
             break;
         }
     }

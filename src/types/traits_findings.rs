@@ -76,6 +76,18 @@ pub enum FindingKind {
     Weakness,
 }
 
+impl FindingKind {
+    /// Check if this is the default kind (Capability)
+    fn is_default(&self) -> bool {
+        matches!(self, Self::Capability)
+    }
+}
+
+/// Check if confidence is the default value (0.95 for internal findings)
+fn is_default_conf(conf: &f32) -> bool {
+    (*conf - 0.95).abs() < f32::EPSILON
+}
+
 /// A finding - an interpretive conclusion based on traits
 /// Findings represent what we CONCLUDE from traits (capabilities, threats, behaviors)
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -83,15 +95,16 @@ pub struct Finding {
     /// Finding identifier using / delimiter (e.g., "command-and-control/hardcoded-ip", "net/socket")
     pub id: String,
     /// Kind of finding (capability, structural, indicator, weakness)
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "FindingKind::is_default")]
     pub kind: FindingKind,
-    /// Human-readable description
+    /// Human-readable description (empty for compact internal findings)
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub desc: String,
     /// Confidence score (0.5 = heuristic, 1.0 = definitive)
-    #[serde(alias = "confidence")]
+    #[serde(alias = "confidence", skip_serializing_if = "is_default_conf")]
     pub conf: f32,
     /// Criticality level
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Criticality::is_baseline")]
     pub crit: Criticality,
     /// MBC (Malware Behavior Catalog) ID
     #[serde(skip_serializing_if = "Option::is_none", default)]
@@ -188,6 +201,10 @@ pub struct StructuralFeature {
 
 /// Maximum size for evidence value field (4KB)
 const MAX_EVIDENCE_VALUE_SIZE: usize = 4096;
+
+/// Maximum number of evidence items per trait/finding.
+/// Prevents output explosion from patterns that match thousands of times.
+pub(crate) const MAX_EVIDENCE_PER_TRAIT: usize = 16;
 
 /// Serialize evidence value, truncating to MAX_EVIDENCE_VALUE_SIZE
 fn serialize_truncated_value<S>(value: &str, serializer: S) -> Result<S::Ok, S::Error>

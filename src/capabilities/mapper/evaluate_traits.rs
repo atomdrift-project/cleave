@@ -112,12 +112,11 @@ impl super::CapabilityMapper {
             && self
                 .raw_content_regex_index
                 .has_applicable_patterns(&applicable_indices);
-        let (raw_regex_matched_traits, _has_excessive_line_length) = if raw_regex_prefilter_enabled
-        {
+        let raw_regex_matched_traits = if raw_regex_prefilter_enabled {
             self.raw_content_regex_index
                 .find_matches(binary_data, &file_type)
         } else {
-            (FxHashSet::default(), false)
+            FxHashSet::default()
         };
 
         // Evaluate only applicable traits in parallel

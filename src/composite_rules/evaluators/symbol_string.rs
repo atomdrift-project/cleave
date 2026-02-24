@@ -13,7 +13,7 @@ use crate::composite_rules::condition::NotException;
 use crate::composite_rules::context::{ConditionResult, EvaluationContext, StringParams};
 use crate::composite_rules::types::Platform;
 use crate::ip_validator::contains_external_ip;
-use crate::types::Evidence;
+use crate::types::{Evidence, MAX_EVIDENCE_PER_TRAIT};
 
 /// Maximum number of matches to process from regex find_iter() to prevent DoS on pattern-dense files
 const MAX_MATCHES_TO_PROCESS: usize = 10_000;
@@ -70,7 +70,7 @@ pub(crate) fn eval_symbol<'a>(
                 .map(|exceptions| exceptions.iter().any(|exc| exc.matches(&import.symbol)))
                 .unwrap_or(false);
 
-            if !excluded_by_not {
+            if !excluded_by_not && evidence.len() < MAX_EVIDENCE_PER_TRAIT {
                 evidence.push(Evidence {
                     method: "symbol".to_string(),
                     source: import.source.clone(),
@@ -89,7 +89,7 @@ pub(crate) fn eval_symbol<'a>(
                 .map(|exceptions| exceptions.iter().any(|exc| exc.matches(&export.symbol)))
                 .unwrap_or(false);
 
-            if !excluded_by_not {
+            if !excluded_by_not && evidence.len() < MAX_EVIDENCE_PER_TRAIT {
                 evidence.push(Evidence {
                     method: "symbol".to_string(),
                     source: export.source.clone(),
@@ -108,7 +108,7 @@ pub(crate) fn eval_symbol<'a>(
                 .map(|exceptions| exceptions.iter().any(|exc| exc.matches(&func.name)))
                 .unwrap_or(false);
 
-            if !excluded_by_not {
+            if !excluded_by_not && evidence.len() < MAX_EVIDENCE_PER_TRAIT {
                 evidence.push(Evidence {
                     method: "symbol".to_string(),
                     source: func.source.clone(),
@@ -295,7 +295,7 @@ pub(crate) fn eval_string<'a, 'b>(
             // When external_ip is set, require match to contain a valid external IP
             let excluded_by_ip = params.external_ip && !contains_external_ip(&match_value);
 
-            if !excluded_by_not && !excluded_by_ip {
+            if !excluded_by_not && !excluded_by_ip && evidence.len() < MAX_EVIDENCE_PER_TRAIT {
                 evidence.push(Evidence {
                     method: method.to_string(),
                     source: source.to_string(),
@@ -500,7 +500,7 @@ pub(crate) fn eval_raw<'a>(
 
                     match_count += 1;
                 }
-                if match_count > 0 {
+                if match_count > 0 && evidence.len() < MAX_EVIDENCE_PER_TRAIT {
                     evidence.push(Evidence {
                         method: "raw".to_string(),
                         source: "raw_content".to_string(),
@@ -539,7 +539,7 @@ pub(crate) fn eval_raw<'a>(
                     first_match = Some(match_str.to_string());
                 }
             }
-            if match_count > 0 {
+            if match_count > 0 && evidence.len() < MAX_EVIDENCE_PER_TRAIT {
                 evidence.push(Evidence {
                     method: "raw".to_string(),
                     source: "raw_content".to_string(),
@@ -568,7 +568,7 @@ pub(crate) fn eval_raw<'a>(
                 .map(|exceptions| exceptions.iter().any(|exc| exc.matches(exact_str)))
                 .unwrap_or(false);
 
-            if matched && ip_ok && !excluded_by_not {
+            if matched && ip_ok && !excluded_by_not && evidence.len() < MAX_EVIDENCE_PER_TRAIT {
                 match_count = 1;
                 evidence.push(Evidence {
                     method: "raw".to_string(),
@@ -592,7 +592,7 @@ pub(crate) fn eval_raw<'a>(
                 .map(|exceptions| exceptions.iter().any(|exc| exc.matches(exact_str)))
                 .unwrap_or(false);
 
-            if matched && ip_ok && !excluded_by_not {
+            if matched && ip_ok && !excluded_by_not && evidence.len() < MAX_EVIDENCE_PER_TRAIT {
                 match_count = 1;
                 evidence.push(Evidence {
                     method: "raw".to_string(),
@@ -654,7 +654,7 @@ pub(crate) fn eval_raw<'a>(
                     }
                 }
 
-                if match_count > 0 {
+                if match_count > 0 && evidence.len() < MAX_EVIDENCE_PER_TRAIT {
                     evidence.push(Evidence {
                         method: "raw".to_string(),
                         source: "raw_content".to_string(),
@@ -683,7 +683,7 @@ pub(crate) fn eval_raw<'a>(
                         match_count = memchr::memmem::find_iter(search_data, needle).count();
                     }
 
-                    if match_count > 0 {
+                    if match_count > 0 && evidence.len() < MAX_EVIDENCE_PER_TRAIT {
                         evidence.push(Evidence {
                             method: "raw".to_string(),
                             source: "raw_content".to_string(),
@@ -726,7 +726,7 @@ pub(crate) fn eval_raw<'a>(
                     }
                     start = abs_pos + 1;
                 }
-                if match_count > 0 {
+                if match_count > 0 && evidence.len() < MAX_EVIDENCE_PER_TRAIT {
                     evidence.push(Evidence {
                         method: "raw".to_string(),
                         source: "raw_content".to_string(),
@@ -755,7 +755,7 @@ pub(crate) fn eval_raw<'a>(
                         substr_str.clone()
                     };
                     match_count = search_content.matches(&search_pattern).count();
-                    if match_count > 0 {
+                    if match_count > 0 && evidence.len() < MAX_EVIDENCE_PER_TRAIT {
                         evidence.push(Evidence {
                             method: "raw".to_string(),
                             source: "raw_content".to_string(),
@@ -944,18 +944,20 @@ pub(crate) fn eval_encoded<'a>(
 
         if matches {
             match_count += 1;
-            let value_preview = if string_info.value.len() > 100 {
-                format!("{}...", &string_info.value[..100])
-            } else {
-                string_info.value.clone()
-            };
+            if evidence.len() < MAX_EVIDENCE_PER_TRAIT {
+                let value_preview = if string_info.value.len() > 100 {
+                    format!("{}...", &string_info.value[..100])
+                } else {
+                    string_info.value.clone()
+                };
 
-            evidence.push(Evidence {
-                method: "encoded_string".to_string(),
-                source: format!("encoding_chain:{}", string_info.encoding_chain.join("+")),
-                value: value_preview,
-                location: string_info.offset.map(|o| format!("{:#x}", o)),
-            });
+                evidence.push(Evidence {
+                    method: "encoded_string".to_string(),
+                    source: format!("encoding_chain:{}", string_info.encoding_chain.join("+")),
+                    value: value_preview,
+                    location: string_info.offset.map(|o| format!("{:#x}", o)),
+                });
+            }
         }
     }
 

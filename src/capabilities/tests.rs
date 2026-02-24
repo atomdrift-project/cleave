@@ -2645,17 +2645,18 @@ fn test_generate_import_findings_with_library() {
     CapabilityMapper::generate_import_findings(&mut report);
 
     // For binaries we generate:
-    // - metadata/internal/imported/{symbol} for symbols (ML only, not for composite traits)
+    // - metadata/internal/symbols/{symbol} for symbols (ML only, not for composite traits)
     // - metadata/dylib/{library} for linked libraries (for composite trait matching)
     assert_eq!(report.findings.len(), 2);
 
-    // Check symbol-level finding (in metadata/internal/imported/)
+    // Check symbol-level finding (in metadata/internal/symbols/)
+    // Note: desc is empty for compactness (derivable from id)
     let symbol_finding = report
         .findings
         .iter()
-        .find(|f| f.id == "metadata/internal/imported::printf")
-        .expect("should have symbol-level finding in metadata/internal/imported/");
-    assert_eq!(symbol_finding.desc, "imports printf");
+        .find(|f| f.id == "metadata/internal/symbols::printf")
+        .expect("should have symbol-level finding in metadata/internal/symbols/");
+    assert!(symbol_finding.desc.is_empty(), "symbol desc should be empty for compactness");
 
     // Check library-level finding (in metadata/dylib/)
     let dylib_finding = report
@@ -2698,7 +2699,7 @@ fn test_generate_import_findings_dedup() {
 
 #[test]
 fn test_generate_import_findings_script_function_calls() {
-    // Test that function calls in scripts go to metadata/internal/imported/
+    // Test that function calls in scripts go to metadata/internal/symbols/
     // while actual imports go to metadata/import/{lang}::{module}
     use crate::types::Import;
 
@@ -2744,14 +2745,14 @@ fn test_generate_import_findings_script_function_calls() {
         "Should have metadata/import/ for actual imports"
     );
 
-    // Function calls go to metadata/internal/imported/
+    // Function calls go to metadata/internal/symbols/
     assert!(
-        ids.contains(&"metadata/internal/imported::system"),
-        "Should have metadata/internal/imported/ for function calls"
+        ids.contains(&"metadata/internal/symbols::system"),
+        "Should have metadata/internal/symbols/ for function calls"
     );
     assert!(
-        ids.contains(&"metadata/internal/imported::open"),
-        "Should have metadata/internal/imported/ for function calls"
+        ids.contains(&"metadata/internal/symbols::open"),
+        "Should have metadata/internal/symbols/ for function calls"
     );
 }
 
@@ -2914,24 +2915,21 @@ fn test_generate_import_findings_evidence_structure() {
     CapabilityMapper::generate_import_findings(&mut report);
 
     // For binaries we generate:
-    // - metadata/internal/imported/{symbol} for symbols (ML only)
+    // - metadata/internal/symbols/{symbol} for symbols (ML only)
     // - metadata/dylib/{library} for linked libraries
     assert_eq!(report.findings.len(), 2);
 
-    // Check symbol-level finding evidence (in metadata/internal/imported/)
+    // Check symbol-level finding (in metadata/internal/symbols/)
+    // Note: evidence is empty for compactness (info is derivable from id)
     let symbol_finding = report
         .findings
         .iter()
-        .find(|f| f.id == "metadata/internal/imported::nslog")
-        .expect("should have symbol-level finding in metadata/internal/imported/");
-    assert_eq!(symbol_finding.evidence.len(), 1);
-    let evidence = &symbol_finding.evidence[0];
-    assert_eq!(evidence.method, "symbol");
-    assert_eq!(evidence.source, "goblin");
-    assert_eq!(evidence.value, "NSLog");
-    assert_eq!(evidence.location, Some("Foundation".to_string()));
+        .find(|f| f.id == "metadata/internal/symbols::nslog")
+        .expect("should have symbol-level finding in metadata/internal/symbols/");
+    assert!(symbol_finding.evidence.is_empty(), "symbol evidence should be empty for compactness");
 
     // Check library-level finding evidence (in metadata/dylib/)
+    // Dylib findings DO have evidence (method="library")
     let dylib_finding = report
         .findings
         .iter()
@@ -2978,14 +2976,14 @@ fn test_collect_trait_refs_finds_internal_paths() {
         r#for: vec![RuleFileType::All],
         all: Some(vec![
             Condition::Trait {
-                id: "metadata/internal/imported::printf".to_string(), // Forbidden!
+                id: "metadata/internal/symbols::printf".to_string(), // Forbidden!
             },
             Condition::Trait {
                 id: "metadata/import/python::socket".to_string(), // OK
             },
         ]),
         any: Some(vec![Condition::Trait {
-            id: "metadata/internal/imported::malloc".to_string(), // Forbidden!
+            id: "metadata/internal/symbols::malloc".to_string(), // Forbidden!
         }]),
         needs: None,
         none: Some(vec![Condition::Trait {
@@ -3020,8 +3018,8 @@ fn test_collect_trait_refs_finds_internal_paths() {
 
     // Verify specific internal paths found
     let internal_ids: Vec<&str> = internal_refs.iter().map(|(id, _)| id.as_str()).collect();
-    assert!(internal_ids.contains(&"metadata/internal/imported::printf"));
-    assert!(internal_ids.contains(&"metadata/internal/imported::malloc"));
+    assert!(internal_ids.contains(&"metadata/internal/symbols::printf"));
+    assert!(internal_ids.contains(&"metadata/internal/symbols::malloc"));
 }
 
 #[test]
@@ -3039,7 +3037,7 @@ fn test_meta_internal_paths_forbidden_in_composite_rules() {
         platforms: vec![Platform::All],
         r#for: vec![RuleFileType::All],
         all: Some(vec![Condition::Trait {
-            id: "metadata/internal/imported::evil_func".to_string(),
+            id: "metadata/internal/symbols::evil_func".to_string(),
         }]),
         any: None,
         needs: None,

@@ -282,7 +282,7 @@ fn test_javascript_file_filters_non_js_rules() {
     }
 }
 
-/// Test that scan command works across multiple file types with filtering
+/// Test that analyze command works across multiple file types with filtering
 #[test]
 fn test_scan_multi_filetype_directory() {
     let temp_dir = TempDir::new().unwrap();
@@ -297,7 +297,7 @@ fn test_scan_multi_filetype_directory() {
     fs::write(&js_file, "console.log('javascript');\n").unwrap();
 
     let output = assert_cmd::cargo_bin_cmd!("flayer")
-        .args(["--json", "scan", temp_dir.path().to_str().unwrap()])
+        .args(["--json", "analyze", temp_dir.path().to_str().unwrap()])
         .output()
         .unwrap();
 

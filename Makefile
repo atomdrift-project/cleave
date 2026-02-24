@@ -10,7 +10,7 @@ ifdef SCCACHE
 export RUSTC_WRAPPER := $(SCCACHE)
 endif
 
-.PHONY: all build debug release test lint fmt clean coverage ci help regenerate-testdata
+.PHONY: all build debug release test test-fast test-unit lint fmt clean coverage ci help regenerate-testdata
 
 # Default target
 all: build
@@ -24,6 +24,8 @@ help: ## Show this help
 	@echo "  debug                 - Build in debug mode"
 	@echo "  release               - Build in release mode"
 	@echo "  test                  - Run all tests (unit + integration)"
+	@echo "  test-fast             - Run tests quickly (skip YARA, lib tests only)"
+	@echo "  test-unit             - Run only unit tests (skip integration tests)"
 	@echo "  fmt                   - Format all code with rustfmt"
 	@echo "  lint                  - Run code formatting and linting checks"
 	@echo "  coverage              - Generate code coverage report"
@@ -45,16 +47,45 @@ release: $(OUT_DIR) ## Build in release mode
 	@echo "✓ Release binary: $(OUT_DIR)/$(BINARY)"
 
 test: ## Run all tests (unit + integration)
-	@echo "Running all tests (unit + integration)..."
+	@echo "Running all tests (hybrid: nextest + cargo test for state-sharing tests)..."
 	@echo ""
 	@cargo build --quiet
+	@# Run state-sharing tests with cargo test (Lazy sharing saves ~100s)
+	@echo "Phase 1: Running state-sharing tests with cargo test..."
+	@cargo test --test utf16_support_test --test embedded_code_detection_test -- --test-threads=1
+	@echo ""
+	@# Run remaining tests with nextest for parallelism
+	@echo "Phase 2: Running parallel tests with nextest..."
 	@if command -v cargo-nextest >/dev/null 2>&1; then \
-		cargo nextest run --workspace; \
+		cargo nextest run --workspace -E 'not (binary(utf16_support_test) | binary(embedded_code_detection_test))'; \
 	else \
 		cargo test --workspace; \
 	fi
 	@echo ""
 	@echo "✓ All tests passed"
+
+test-fast: ## Run tests quickly (skip YARA in spawned processes, uses nextest)
+	@echo "Running fast tests (YARA skipped in integration tests)..."
+	@echo ""
+	@cargo build --quiet
+	@if command -v cargo-nextest >/dev/null 2>&1; then \
+		FLAYER_SKIP_YARA=1 cargo nextest run --workspace --lib; \
+	else \
+		FLAYER_SKIP_YARA=1 cargo test --workspace --lib; \
+	fi
+	@echo ""
+	@echo "✓ Fast tests passed"
+
+test-unit: ## Run only unit tests (skip integration tests, fastest)
+	@echo "Running unit tests only..."
+	@echo ""
+	@if command -v cargo-nextest >/dev/null 2>&1; then \
+		cargo nextest run --lib; \
+	else \
+		cargo test --lib; \
+	fi
+	@echo ""
+	@echo "✓ Unit tests passed"
 
 fmt: ## Format all code with rustfmt
 	@echo "Formatting code..."

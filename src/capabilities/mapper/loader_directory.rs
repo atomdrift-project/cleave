@@ -18,15 +18,14 @@ use crate::capabilities::validation::{
     find_depth_violations, find_duplicate_second_level_directories,
     find_duplicate_traits_and_composites, find_empty_condition_clauses, find_for_only_duplicates,
     find_hostile_cap_rules, find_impossible_count_constraints, find_impossible_needs,
-    find_impossible_size_constraints, find_invalid_trait_ids,
-    find_line_number, find_malware_subcategory_violations, find_missing_search_patterns,
-    find_non_capturing_groups, find_overlapping_conditions, find_oversized_trait_directories,
-    find_parent_duplicate_segments, find_platform_named_directories, find_pure_alias_traits,
-    find_redundant_any_refs, find_redundant_needs_one, find_short_pattern_warnings,
-    find_single_item_clauses, find_slow_regex_patterns, find_string_content_collisions,
-    find_string_pattern_duplicates, precalculate_all_composite_precisions,
-    simple_rule_to_composite_rule, validate_composite_trait_only,
-    validate_hostile_composite_precision, MAX_TRAITS_PER_DIRECTORY,
+    find_impossible_size_constraints, find_invalid_trait_ids, find_line_number,
+    find_malware_subcategory_violations, find_missing_search_patterns, find_non_capturing_groups,
+    find_overlapping_conditions, find_oversized_trait_directories, find_parent_duplicate_segments,
+    find_platform_named_directories, find_pure_alias_traits, find_redundant_any_refs,
+    find_redundant_needs_one, find_short_pattern_warnings, find_single_item_clauses,
+    find_slow_regex_patterns, find_string_content_collisions, find_string_pattern_duplicates,
+    precalculate_all_composite_precisions, simple_rule_to_composite_rule,
+    validate_composite_trait_only, validate_hostile_composite_precision, MAX_TRAITS_PER_DIRECTORY,
 };
 use crate::composite_rules::{
     CompositeTrait, Condition, FileType as RuleFileType, Platform, TraitDefinition,
@@ -78,7 +77,7 @@ impl super::CapabilityMapper {
         let enable_full_validation = match std::env::var("FLAYER_VALIDATE").ok().as_deref() {
             Some("0") | Some("false") => false, // Env var explicitly disables
             Some("1") | Some("true") => true,   // Env var explicitly enables
-            _ => enable_full_validation,         // Use CLI flag
+            _ => enable_full_validation,        // Use CLI flag
         };
 
         tracing::info!("Loading trait definitions from {}", dir_path.display());
@@ -106,25 +105,46 @@ impl super::CapabilityMapper {
                                         cache_data.composite_rules.len()
                                     );
 
-                                    // Re-compile regexes (not serialized due to #[serde(skip)])
-                                    for trait_def in &mut cache_data.trait_definitions {
-                                        if let Err(e) = trait_def.precompile_regexes() {
-                                            tracing::warn!(
-                                                "Failed to compile regex for cached trait {}: {}",
-                                                trait_def.id,
-                                                e
-                                            );
-                                        }
-                                    }
-                                    for rule in &mut cache_data.composite_rules {
-                                        if let Err(e) = rule.precompile_regexes() {
-                                            tracing::warn!(
-                                                "Failed to compile regex for cached composite {}: {}",
-                                                rule.id,
-                                                e
-                                            );
-                                        }
-                                    }
+                                    // Re-compile regexes in parallel (not serialized due to #[serde(skip)])
+                                    // Use rayon to parallelize regex compilation across traits and composites
+                                    let t0 = std::time::Instant::now();
+                                    rayon::join(
+                                        || {
+                                            cache_data
+                                                .trait_definitions
+                                                .par_iter_mut()
+                                                .for_each(|trait_def| {
+                                                    if let Err(e) = trait_def.precompile_regexes() {
+                                                        tracing::warn!(
+                                                            "Failed to compile regex for cached trait {}: {}",
+                                                            trait_def.id,
+                                                            e
+                                                        );
+                                                    }
+                                                });
+                                        },
+                                        || {
+                                            cache_data
+                                                .composite_rules
+                                                .par_iter_mut()
+                                                .for_each(|rule| {
+                                                    if let Err(e) = rule.precompile_regexes() {
+                                                        tracing::warn!(
+                                                            "Failed to compile regex for cached composite {}: {}",
+                                                            rule.id,
+                                                            e
+                                                        );
+                                                    }
+                                                });
+                                        },
+                                    );
+                                    let t1 = std::time::Instant::now();
+                                    tracing::debug!(
+                                        "Regex precompilation took {:?} ({} traits, {} composites)",
+                                        t1.duration_since(t0),
+                                        cache_data.trait_definitions.len(),
+                                        cache_data.composite_rules.len()
+                                    );
 
                                     // Rebuild indexes from cached trait definitions (in parallel)
                                     let ((trait_index, string_match_index), raw_regex_result) =
@@ -149,6 +169,13 @@ impl super::CapabilityMapper {
                                                 )
                                             },
                                         );
+                                    let t2 = std::time::Instant::now();
+                                    tracing::debug!(
+                                        "Index building took {:?} (StringMatchIndex: {} patterns, RawContentRegexIndex: {} patterns)",
+                                        t2.duration_since(t1),
+                                        string_match_index.total_patterns,
+                                        raw_regex_result.as_ref().map(|i| i.total_patterns).unwrap_or(0)
+                                    );
                                     let raw_content_regex_index =
                                         raw_regex_result.map_err(|errs| {
                                             anyhow::anyhow!("Regex errors: {:?}", errs)
@@ -291,8 +318,8 @@ impl super::CapabilityMapper {
                         desc: mapping.desc,
                         conf: mapping.conf,
                         crit: Criticality::Baseline, // Legacy format defaults to baseline
-                        mbc: None,                // Legacy format has no mbc field
-                        attack: None,             // Legacy format has no attack field
+                        mbc: None,                   // Legacy format has no mbc field
+                        attack: None,                // Legacy format has no attack field
                     },
                 );
             }
@@ -321,8 +348,8 @@ impl super::CapabilityMapper {
                             desc: rule.desc,
                             conf: rule.conf,
                             crit: Criticality::Baseline, // Simple rules default to baseline
-                            mbc: None,                // Simple rules have no mbc field
-                            attack: None,             // Simple rules have no attack field
+                            mbc: None,                   // Simple rules have no mbc field
+                            attack: None,                // Simple rules have no attack field
                         },
                     );
                 }

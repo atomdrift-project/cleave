@@ -11,26 +11,48 @@
 //! - Trait matching
 
 use flayer::{analyze_file, AnalysisOptions};
+use once_cell::sync::Lazy;
 use std::path::PathBuf;
+use std::sync::Arc;
+
+/// Shared analysis result for UTF-16 tests - analyzed once, reused across tests.
+/// This avoids re-analyzing the same file and recompiling YARA rules for each test.
+/// YARA is disabled for speed - these tests verify UTF-16 encoding, not YARA rules.
+static UTF16_ANALYSIS: Lazy<Option<Arc<flayer::AnalysisReport>>> = Lazy::new(|| {
+    let sample = PathBuf::from("tests/samples/utf16le_wsh_dropper.js");
+    if !sample.exists() {
+        return None;
+    }
+    let mut options = AnalysisOptions::default();
+    options.disable_yara = true; // Skip YARA - not testing YARA, testing UTF-16 encoding
+    analyze_file(&sample, &options).ok().map(Arc::new)
+});
+
+/// Get the shared UTF-16 analysis result, or skip the test if sample doesn't exist
+fn get_utf16_analysis() -> Option<Arc<flayer::AnalysisReport>> {
+    UTF16_ANALYSIS.clone()
+}
+
+/// Fast options for tests that don't need YARA (just testing encoding)
+fn fast_options() -> AnalysisOptions {
+    let mut opts = AnalysisOptions::default();
+    opts.disable_yara = true;
+    opts
+}
 
 /// Test UTF-16 LE encoded malware sample analysis.
 ///
 /// This test uses a real-world UTF-16 LE encoded WSH dropper to ensure
 /// flayer can properly analyze UTF-16 files end-to-end.
+/// Uses shared analysis result to avoid re-analyzing the same file.
 #[test]
 fn test_utf16le_wsh_dropper_analysis() {
-    let sample = PathBuf::from("tests/samples/utf16le_wsh_dropper.js");
-
-    if !sample.exists() {
+    let Some(report) = get_utf16_analysis() else {
         panic!(
-            "UTF-16 LE test sample not found: {}. \
-             Copy the sample to tests/samples/ directory.",
-            sample.display()
+            "UTF-16 LE test sample not found: tests/samples/utf16le_wsh_dropper.js. \
+             Copy the sample to tests/samples/ directory."
         );
-    }
-
-    let options = AnalysisOptions::default();
-    let report = analyze_file(&sample, &options).expect("Failed to analyze UTF-16 LE file");
+    };
 
     // Should successfully analyze the file
     assert!(
@@ -78,17 +100,13 @@ fn test_utf16le_wsh_dropper_analysis() {
 ///
 /// Raw searches should find patterns in the converted UTF-8 text,
 /// not in the raw UTF-16 bytes (which have null bytes).
+/// Uses shared analysis result.
 #[test]
 fn test_utf16le_raw_searches() {
-    let sample = PathBuf::from("tests/samples/utf16le_wsh_dropper.js");
-
-    if !sample.exists() {
+    let Some(report) = get_utf16_analysis() else {
         eprintln!("Skipping test: UTF-16 LE sample not found");
         return;
-    }
-
-    let options = AnalysisOptions::default();
-    let report = analyze_file(&sample, &options).expect("Failed to analyze UTF-16 LE file");
+    };
 
     // Check for findings that rely on raw content searches
     let raw_findings: Vec<_> = report
@@ -123,17 +141,13 @@ fn test_utf16le_raw_searches() {
 ///
 /// AST parsing requires proper UTF-8 text. UTF-16 LE files must be
 /// converted first, otherwise tree-sitter will fail to parse.
+/// Uses shared analysis result.
 #[test]
 fn test_utf16le_ast_searches() {
-    let sample = PathBuf::from("tests/samples/utf16le_wsh_dropper.js");
-
-    if !sample.exists() {
+    let Some(report) = get_utf16_analysis() else {
         eprintln!("Skipping test: UTF-16 LE sample not found");
         return;
-    }
-
-    let options = AnalysisOptions::default();
-    let report = analyze_file(&sample, &options).expect("Failed to analyze UTF-16 LE file");
+    };
 
     // Check for findings that rely on AST parsing
     let ast_findings: Vec<_> = report
@@ -171,17 +185,13 @@ fn test_utf16le_ast_searches() {
 ///
 /// String extraction relies on proper text encoding. UTF-16 files
 /// should have their strings extracted after conversion to UTF-8.
+/// Uses shared analysis result.
 #[test]
 fn test_utf16le_string_extraction() {
-    let sample = PathBuf::from("tests/samples/utf16le_wsh_dropper.js");
-
-    if !sample.exists() {
+    let Some(report) = get_utf16_analysis() else {
         eprintln!("Skipping test: UTF-16 LE sample not found");
         return;
-    }
-
-    let options = AnalysisOptions::default();
-    let report = analyze_file(&sample, &options).expect("Failed to analyze UTF-16 LE file");
+    };
 
     // Check for findings that rely on string extraction
     let string_findings: Vec<_> = report
@@ -204,6 +214,7 @@ fn test_utf16le_string_extraction() {
 /// Test that UTF-16 BE (big-endian) files are also supported.
 ///
 /// Creates a synthetic UTF-16 BE file and verifies it's properly handled.
+/// Uses fast options (no YARA) since we're only testing encoding.
 #[test]
 fn test_utf16be_support() {
     use std::io::Write;
@@ -245,9 +256,9 @@ fn test_utf16be_support() {
         .expect("Failed to write UTF-16 BE test file");
     temp_file.flush().expect("Failed to flush temp file");
 
-    let options = AnalysisOptions::default();
+    // Use fast options - only testing encoding, not YARA
     let report =
-        analyze_file(temp_file.path(), &options).expect("Failed to analyze UTF-16 BE file");
+        analyze_file(temp_file.path(), &fast_options()).expect("Failed to analyze UTF-16 BE file");
 
     // Should successfully parse as JavaScript
     assert_eq!(
@@ -261,6 +272,7 @@ fn test_utf16be_support() {
 /// Test that regular UTF-8 files still work correctly.
 ///
 /// Ensures that the UTF-16 conversion logic doesn't break normal UTF-8 files.
+/// Uses fast options (no YARA) since we're only testing encoding.
 #[test]
 fn test_utf8_passthrough() {
     use std::io::Write;
@@ -276,8 +288,8 @@ fn test_utf8_passthrough() {
         .expect("Failed to write UTF-8 test file");
     temp_file.flush().expect("Failed to flush temp file");
 
-    let options = AnalysisOptions::default();
-    let report = analyze_file(temp_file.path(), &options).expect("Failed to analyze UTF-8 file");
+    // Use fast options - only testing encoding, not YARA
+    let report = analyze_file(temp_file.path(), &fast_options()).expect("Failed to analyze UTF-8 file");
 
     // Should successfully parse as JavaScript
     assert_eq!(
@@ -292,26 +304,13 @@ fn test_utf8_passthrough() {
 ///
 /// This test prevents regressions where UTF-16 files would fail analysis
 /// or produce incorrect results due to encoding issues.
+/// Uses shared analysis result.
 #[test]
 fn test_utf16_regression_prevention() {
-    let sample = PathBuf::from("tests/samples/utf16le_wsh_dropper.js");
-
-    if !sample.exists() {
+    let Some(report) = get_utf16_analysis() else {
         eprintln!("Skipping regression test: UTF-16 LE sample not found");
         return;
-    }
-
-    let options = AnalysisOptions::default();
-
-    // Should NOT panic or return error
-    let result = analyze_file(&sample, &options);
-    assert!(
-        result.is_ok(),
-        "UTF-16 LE file analysis should not fail: {:?}",
-        result.err()
-    );
-
-    let report = result.unwrap();
+    };
 
     // Should detect as JavaScript (not Unknown)
     assert_eq!(

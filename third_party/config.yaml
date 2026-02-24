@@ -41,12 +41,13 @@ sources:
     crit: "suspicious"
 
 # Per-rule overrides (exact trait ID matches only)
-# Uncomment and add specific overrides as needed:
-# overrides:
-#   - id: third_party/elastic/linux/backdoor/generic
-#     crit: "notable"
-#     reason: "High false positive rate on pentesting tools"
-#
-#   - id: third_party/bartblaze/test_rule
-#     disable: true
-#     reason: "Outdated signature"
+overrides:
+  - id: 3p.YARAForge.yara-rules-full::R3C0NST_ATM_Malware_Atmspitter
+    disable: true
+    reason: "Slow rule (129ms)"
+  - id: 3p.YARAForge.yara-rules-full::R3C0NST_ATM_Malware_Dispenserxfs
+    disable: true
+    reason: "Slow rule (153ms)"
+  - id: 3p.TTC-CERT.cve_rules.EXPLOIT_cve_2022-30190::cve_202230190_html_payload
+    disable: true
+    reason: "Overly broad patterns ($s6 = '$(') match thousands of times in Go/jQuery files"

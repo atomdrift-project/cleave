@@ -147,6 +147,17 @@ pub(crate) fn third_party_criticality(namespace: &str, trait_id: Option<&str>) -
     config().criticality_for(vendor, trait_id)
 }
 
+/// Get all disabled rule IDs from the config.
+/// Returns a set of trait IDs (format: `namespace::rule_name`) that should be excluded.
+pub(crate) fn disabled_rule_ids() -> std::collections::HashSet<String> {
+    config()
+        .overrides
+        .iter()
+        .filter(|(_, v)| v.disable)
+        .map(|(k, _)| k.clone())
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -241,5 +252,17 @@ overrides:
         assert_eq!(extract_vendor("3p.elastic"), "elastic");
         assert_eq!(extract_vendor("3p.bartblaze.APT"), "bartblaze");
         assert_eq!(extract_vendor("3p.YARAForge"), "YARAForge");
+    }
+
+    #[test]
+    fn test_disabled_rule_ids_from_config() {
+        // This tests against the actual config file
+        let disabled = super::disabled_rule_ids();
+        // Should contain the ATM malware rule we disabled
+        assert!(
+            disabled.contains("3p.YARAForge.yara-rules-full::R3C0NST_ATM_Malware_Atmspitter"),
+            "Expected disabled rules to contain ATM malware rule, got: {:?}",
+            disabled
+        );
     }
 }

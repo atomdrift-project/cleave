@@ -111,6 +111,7 @@ impl ArchiveAnalyzer {
     }
 
     /// Set a YARA engine for scanning extracted files
+    #[allow(dead_code)] // Used by library target (lib.rs), not binary
     #[must_use]
     pub(crate) fn with_yara(mut self, engine: YaraEngine) -> Self {
         self.yara_engine = Some(Arc::new(engine));

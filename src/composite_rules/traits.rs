@@ -11,7 +11,7 @@ use super::evaluators::{
     eval_structure, eval_symbol, eval_syscall, eval_trait, eval_yara_inline, ContentLocationParams,
 };
 use super::types::{default_file_types, default_platforms, FileType, Platform};
-use crate::types::{Criticality, Evidence, Finding, FindingKind};
+use crate::types::{Criticality, Evidence, Finding, FindingKind, MAX_EVIDENCE_PER_TRAIT};
 use anyhow::Context;
 use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
@@ -988,9 +988,9 @@ impl TraitDefinition {
                         Criticality::Hostile => Criticality::Suspicious,
                         Criticality::Suspicious => Criticality::Notable,
                         Criticality::Notable => Criticality::Baseline,
-                        Criticality::Baseline
-                        | Criticality::Component
-                        | Criticality::Filtered => Criticality::Component,
+                        Criticality::Baseline | Criticality::Component | Criticality::Filtered => {
+                            Criticality::Component
+                        }
                     };
                     tracing::debug!(
                         "Downgrade applied: trait '{}' from {:?} → {:?}",
@@ -1699,9 +1699,10 @@ impl CompositeTrait {
                 if !any_result.matched {
                     return None;
                 }
-                // Combine evidence and trait IDs from both
+                // Combine evidence and trait IDs from both (limited to MAX_EVIDENCE_PER_TRAIT)
                 let mut combined_evidence = all_result.evidence;
                 combined_evidence.extend(any_result.evidence);
+                combined_evidence.truncate(MAX_EVIDENCE_PER_TRAIT);
                 let mut combined_trait_ids = all_result.matched_trait_ids;
                 combined_trait_ids.extend(any_result.matched_trait_ids);
                 ConditionResult {
@@ -1747,6 +1748,7 @@ impl CompositeTrait {
             // Combine evidence (trait_ids come from positive only - none doesn't add refs)
             let mut combined_evidence = positive_result.evidence;
             combined_evidence.extend(none_result.evidence);
+            combined_evidence.truncate(MAX_EVIDENCE_PER_TRAIT);
             ConditionResult {
                 matched: true,
                 evidence: combined_evidence,
@@ -1809,9 +1811,9 @@ impl CompositeTrait {
                         Criticality::Hostile => Criticality::Suspicious,
                         Criticality::Suspicious => Criticality::Notable,
                         Criticality::Notable => Criticality::Baseline,
-                        Criticality::Baseline
-                        | Criticality::Component
-                        | Criticality::Filtered => Criticality::Component,
+                        Criticality::Baseline | Criticality::Component | Criticality::Filtered => {
+                            Criticality::Component
+                        }
                     };
                 }
 
@@ -1992,7 +1994,11 @@ impl CompositeTrait {
                     matched_trait_ids: Vec::new(),
                 };
             }
-            all_evidence.extend(result.evidence);
+            // Limit evidence to prevent explosion
+            if all_evidence.len() < MAX_EVIDENCE_PER_TRAIT {
+                let remaining = MAX_EVIDENCE_PER_TRAIT - all_evidence.len();
+                all_evidence.extend(result.evidence.into_iter().take(remaining));
+            }
             all_trait_ids.extend(result.matched_trait_ids);
             total_precision += result.precision; // SUM for 'all'
         }
@@ -2022,7 +2028,11 @@ impl CompositeTrait {
             let result = self.eval_condition(condition, ctx);
             if result.matched {
                 any_matched = true;
-                all_evidence.extend(result.evidence);
+                // Limit evidence to prevent explosion
+                if all_evidence.len() < MAX_EVIDENCE_PER_TRAIT {
+                    let remaining = MAX_EVIDENCE_PER_TRAIT - all_evidence.len();
+                    all_evidence.extend(result.evidence.into_iter().take(remaining));
+                }
                 all_trait_ids.extend(result.matched_trait_ids);
                 min_precision = min_precision.min(result.precision); // MIN for 'any'
             }
@@ -2057,7 +2067,11 @@ impl CompositeTrait {
             let result = self.eval_condition(condition, ctx);
             if result.matched {
                 matched_count += 1;
-                all_evidence.extend(result.evidence);
+                // Limit evidence to prevent explosion
+                if all_evidence.len() < MAX_EVIDENCE_PER_TRAIT {
+                    let remaining = MAX_EVIDENCE_PER_TRAIT - all_evidence.len();
+                    all_evidence.extend(result.evidence.into_iter().take(remaining));
+                }
                 all_trait_ids.extend(result.matched_trait_ids);
                 precision_sum += result.precision;
             }

@@ -707,8 +707,14 @@ mod tests {
 
     #[test]
     fn test_parse_criticality_baseline() {
-        assert_eq!(parse_criticality("baseline").unwrap(), Criticality::Baseline);
-        assert_eq!(parse_criticality("baseline").unwrap(), Criticality::Baseline);
+        assert_eq!(
+            parse_criticality("baseline").unwrap(),
+            Criticality::Baseline
+        );
+        assert_eq!(
+            parse_criticality("baseline").unwrap(),
+            Criticality::Baseline
+        );
     }
 
     #[test]

@@ -8,7 +8,7 @@
 
 use super::build_regex;
 use crate::composite_rules::context::{ConditionResult, EvaluationContext};
-use crate::types::Evidence;
+use crate::types::{Evidence, MAX_EVIDENCE_PER_TRAIT};
 use regex::Regex;
 
 /// Evaluate exports count condition
@@ -296,12 +296,14 @@ pub(crate) fn eval_section<'a>(
                 format!("{} ({})", section.name, details.join(", "))
             };
 
-            evidence.push(Evidence {
-                method: "section".to_string(),
-                source: "binary".to_string(),
-                value,
-                location: None,
-            });
+            if evidence.len() < MAX_EVIDENCE_PER_TRAIT {
+                evidence.push(Evidence {
+                    method: "section".to_string(),
+                    source: "binary".to_string(),
+                    value,
+                    location: None,
+                });
+            }
         }
     }
 
@@ -392,12 +394,14 @@ pub(crate) fn eval_import_combination<'a>(
                     matched_trait_ids: Vec::new(),
                 };
             }
-            evidence.push(Evidence {
-                method: "import".to_string(),
-                source: "required".to_string(),
-                value: pattern.clone(),
-                location: None,
-            });
+            if evidence.len() < MAX_EVIDENCE_PER_TRAIT {
+                evidence.push(Evidence {
+                    method: "import".to_string(),
+                    source: "required".to_string(),
+                    value: pattern.clone(),
+                    location: None,
+                });
+            }
         }
     }
 
@@ -411,12 +415,14 @@ pub(crate) fn eval_import_combination<'a>(
             for sym in &import_symbols {
                 if re.is_match(sym) {
                     suspicious_count += 1;
-                    evidence.push(Evidence {
-                        method: "import".to_string(),
-                        source: "suspicious".to_string(),
-                        value: (*sym).to_string(),
-                        location: None,
-                    });
+                    if evidence.len() < MAX_EVIDENCE_PER_TRAIT {
+                        evidence.push(Evidence {
+                            method: "import".to_string(),
+                            source: "suspicious".to_string(),
+                            value: (*sym).to_string(),
+                            location: None,
+                        });
+                    }
                 }
             }
         }
@@ -446,12 +452,14 @@ pub(crate) fn eval_import_combination<'a>(
                 matched_trait_ids: Vec::new(),
             };
         }
-        evidence.push(Evidence {
-            method: "import_count".to_string(),
-            source: "binary".to_string(),
-            value: format!("{} imports (max {})", ctx.report.imports.len(), max),
-            location: None,
-        });
+        if evidence.len() < MAX_EVIDENCE_PER_TRAIT {
+            evidence.push(Evidence {
+                method: "import_count".to_string(),
+                source: "binary".to_string(),
+                value: format!("{} imports (max {})", ctx.report.imports.len(), max),
+                location: None,
+            });
+        }
     }
 
     // Calculate precision: base 2.0 + 0.5 per required item + 0.3 per suspicious item
@@ -494,15 +502,17 @@ pub(crate) fn eval_syscall<'a>(
 
         if name_match && number_match && arch_match {
             match_count += 1;
-            evidence.push(Evidence {
-                method: "syscall".to_string(),
-                source: "radare2".to_string(),
-                value: format!(
-                    "{}({}) at 0x{:x}",
-                    syscall.name, syscall.number, syscall.address
-                ),
-                location: Some(format!("0x{:x}", syscall.address)),
-            });
+            if evidence.len() < MAX_EVIDENCE_PER_TRAIT {
+                evidence.push(Evidence {
+                    method: "syscall".to_string(),
+                    source: "radare2".to_string(),
+                    value: format!(
+                        "{}({}) at 0x{:x}",
+                        syscall.name, syscall.number, syscall.address
+                    ),
+                    location: Some(format!("0x{:x}", syscall.address)),
+                });
+            }
         }
     }
 

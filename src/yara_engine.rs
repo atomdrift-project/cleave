@@ -9,7 +9,7 @@
 //! Rules are compiled once at startup for performance.
 
 use crate::capabilities::CapabilityMapper;
-use crate::types::{Evidence, MatchedString, YaraMatch};
+use crate::types::{Evidence, MatchedString, YaraMatch, MAX_EVIDENCE_PER_TRAIT};
 use anyhow::{Context, Result};
 use rayon::prelude::*;
 use std::collections::HashMap;
@@ -58,8 +58,24 @@ impl YaraEngine {
 
     /// Load all YARA rules (built-in from traits/ + optionally third-party from third_party/)
     /// Uses cache if available and valid
+    ///
+    /// Environment variables:
+    /// - `FLAYER_SKIP_YARA=1`: Skip YARA entirely (for fast unit tests)
+    /// - `FLAYER_BUILTIN_YARA_ONLY=1`: Load only built-in rules, skip third-party (~500 vs 14k)
+    /// - `FLAYER_MINIMAL_RULES=1`: Load only essential rules (~100 instead of 14k)
     pub(crate) fn load_all_rules(&mut self, enable_third_party: bool) -> (usize, usize) {
         let _span = tracing::info_span!("load_yara_rules").entered();
+
+        // Fast path: skip YARA entirely for tests that don't need it
+        if std::env::var("FLAYER_SKIP_YARA").is_ok() {
+            tracing::info!("YARA skipped (FLAYER_SKIP_YARA set)");
+            return (0, 0);
+        }
+
+        // Override third-party setting via environment (for tests that need YARA but not 14k rules)
+        let enable_third_party = enable_third_party
+            && std::env::var("FLAYER_BUILTIN_YARA_ONLY").is_err();
+
         tracing::info!("Loading YARA rules");
 
         // Try to load from cache
@@ -335,7 +351,7 @@ impl YaraEngine {
         for raw in raw_rules {
             // Inline namespace: collect evidence for trait evaluation, not YARA output
             if inline_ns_set.contains(raw.namespace.as_str()) {
-                let evidence = raw
+                let evidence: Vec<Evidence> = raw
                     .patterns
                     .iter()
                     .flat_map(|(_pattern_id, ranges)| {
@@ -354,12 +370,12 @@ impl YaraEngine {
                             }
                         })
                     })
-                    .collect::<Vec<_>>();
+                    .take(MAX_EVIDENCE_PER_TRAIT)
+                    .collect();
                 // Even if empty (condition match without string patterns), record the hit
-                inline_results
-                    .entry(raw.namespace)
-                    .or_default()
-                    .extend(evidence);
+                let entry = inline_results.entry(raw.namespace).or_default();
+                let remaining = MAX_EVIDENCE_PER_TRAIT.saturating_sub(entry.len());
+                entry.extend(evidence.into_iter().take(remaining));
                 continue;
             }
 
@@ -461,6 +477,9 @@ impl YaraEngine {
         compiler: &mut yara_x::Compiler<'a>,
         dir: &Path,
     ) -> usize {
+        // Get disabled rules from config
+        let disabled_rules = crate::third_party_config::disabled_rule_ids();
+
         // Collect all YARA files
         let rule_files: Vec<PathBuf> = WalkDir::new(dir)
             .follow_links(false)
@@ -489,6 +508,7 @@ impl YaraEngine {
         let mut total = 0;
         let mut failed = 0;
         let mut vt_skipped = 0;
+        let mut disabled_count = 0;
 
         for (path, bytes) in sources {
             // Create unique namespace per file: 3p.{vendor}.{subdir}.{filename}
@@ -514,7 +534,18 @@ impl YaraEngine {
             compiler.new_namespace(&namespace);
 
             let source = String::from_utf8_lossy(&bytes);
-            match compiler.add_source(source.as_bytes()) {
+
+            // Filter out disabled rules from the source
+            let (filtered_source, removed) =
+                Self::filter_disabled_rules(&source, &namespace, &disabled_rules);
+            disabled_count += removed;
+
+            if filtered_source.trim().is_empty() {
+                // All rules in this file were disabled
+                continue;
+            }
+
+            match compiler.add_source(filtered_source.as_bytes()) {
                 Ok(_) => total += 1,
                 Err(e) => {
                     let err_str = e.to_string();
@@ -533,6 +564,9 @@ impl YaraEngine {
             }
         }
 
+        if disabled_count > 0 {
+            tracing::info!("{} third-party rule(s) disabled via config", disabled_count);
+        }
         if vt_skipped > 0 {
             tracing::info!(
                 "{} third-party rule(s) skipped (require VirusTotal context)",
@@ -545,6 +579,74 @@ impl YaraEngine {
 
         tracing::debug!("Successfully added {} third-party YARA rule sources", total);
         total
+    }
+
+    /// Filter out disabled rules from YARA source.
+    /// Returns the filtered source and the count of removed rules.
+    fn filter_disabled_rules(
+        source: &str,
+        namespace: &str,
+        disabled_rules: &std::collections::HashSet<String>,
+    ) -> (String, usize) {
+        use regex::Regex;
+
+        // Quick check: if no disabled rules match this namespace prefix, return as-is
+        let ns_prefix = format!("{}::", namespace);
+        if !disabled_rules.iter().any(|r| r.starts_with(&ns_prefix)) {
+            return (source.to_string(), 0);
+        }
+
+        // Regex to match YARA rule definitions: `rule RuleName` or `rule RuleName : tags`
+        // Captures the rule name
+        let rule_start_re = Regex::new(r"(?m)^(\s*)((?:private\s+|global\s+)*)rule\s+(\w+)").unwrap();
+
+        let mut result = String::with_capacity(source.len());
+        let mut last_end = 0;
+        let mut removed = 0;
+
+        // Find all rule starts and their positions
+        let mut rule_ranges: Vec<(usize, usize, &str)> = Vec::new();
+        for cap in rule_start_re.captures_iter(source) {
+            let rule_name = cap.get(3).unwrap().as_str();
+            let rule_start = cap.get(0).unwrap().start();
+            rule_ranges.push((rule_start, 0, rule_name)); // end will be filled later
+        }
+
+        // Fill in rule end positions (start of next rule or end of source)
+        for i in 0..rule_ranges.len() {
+            let end = if i + 1 < rule_ranges.len() {
+                rule_ranges[i + 1].0
+            } else {
+                source.len()
+            };
+            rule_ranges[i].1 = end;
+        }
+
+        // Build filtered source
+        for (start, end, rule_name) in rule_ranges {
+            let trait_id = format!("{}::{}", namespace, rule_name);
+            if disabled_rules.contains(&trait_id) {
+                // Skip this rule - add any content before it that hasn't been added yet
+                if start > last_end {
+                    result.push_str(&source[last_end..start]);
+                }
+                last_end = end;
+                removed += 1;
+                tracing::debug!("Filtered disabled rule: {}", trait_id);
+            }
+        }
+
+        // Add remaining content
+        if last_end < source.len() {
+            result.push_str(&source[last_end..]);
+        }
+
+        // If nothing was removed, return original to avoid allocation
+        if removed == 0 {
+            return (source.to_string(), 0);
+        }
+
+        (result, removed)
     }
 
     /// Extract namespace from file path with prefix
@@ -769,8 +871,11 @@ impl YaraEngine {
         }
 
         let mut matched_strings = Vec::new();
-        for (pattern_id, ranges) in patterns {
+        'outer: for (pattern_id, ranges) in patterns {
             for (start, end) in ranges {
+                if matched_strings.len() >= MAX_EVIDENCE_PER_TRAIT {
+                    break 'outer;
+                }
                 let match_len = end - start;
                 let value = if match_len <= 100 {
                     String::from_utf8_lossy(&data[*start..*end]).to_string()
@@ -797,11 +902,12 @@ impl YaraEngine {
         };
 
         // Apply config-based criticality for third-party rules
+        // Returns None if the rule is disabled via config
         if is_third_party {
-            if let Some(config_crit) =
-                crate::third_party_config::third_party_criticality(&namespace, trait_id.as_deref())
+            match crate::third_party_config::third_party_criticality(&namespace, trait_id.as_deref())
             {
-                crit = config_crit;
+                Some(config_crit) => crit = config_crit,
+                None => return None, // Rule disabled
             }
         }
 
@@ -1413,5 +1519,409 @@ rule test_rule {
 
         assert_eq!(matches.len(), 1);
         assert!(matches[0].is_capability); // Inferred from ATT&CK presence
+    }
+
+    #[test]
+    fn test_filter_disabled_rules() {
+        let source = r#"
+rule KeepMe {
+    strings:
+        $a = "keep"
+    condition:
+        $a
+}
+
+rule DisableMe {
+    strings:
+        $b = "disable"
+    condition:
+        $b
+}
+
+rule AlsoKeep {
+    strings:
+        $c = "also"
+    condition:
+        $c
+}
+"#;
+
+        let mut disabled = std::collections::HashSet::new();
+        disabled.insert("3p.test.file::DisableMe".to_string());
+
+        let (filtered, count) =
+            YaraEngine::filter_disabled_rules(source, "3p.test.file", &disabled);
+
+        assert_eq!(count, 1);
+        assert!(filtered.contains("rule KeepMe"));
+        assert!(!filtered.contains("rule DisableMe"));
+        assert!(filtered.contains("rule AlsoKeep"));
+
+        // Verify filtered source is valid YARA
+        let mut compiler = yara_x::Compiler::new();
+        assert!(compiler.add_source(filtered.as_bytes()).is_ok());
+    }
+
+    #[test]
+    fn test_filter_disabled_rules_no_match() {
+        let source = r#"
+rule KeepMe {
+    strings:
+        $a = "keep"
+    condition:
+        $a
+}
+"#;
+
+        let mut disabled = std::collections::HashSet::new();
+        disabled.insert("3p.other.file::SomeRule".to_string());
+
+        let (filtered, count) =
+            YaraEngine::filter_disabled_rules(source, "3p.test.file", &disabled);
+
+        assert_eq!(count, 0);
+        assert_eq!(filtered, source);
+    }
+
+    #[test]
+    fn test_filter_disabled_rules_with_tags() {
+        let source = r#"
+rule KeepMe : tag1 tag2 {
+    strings:
+        $a = "keep"
+    condition:
+        $a
+}
+
+rule DisableMe : hostile malware {
+    strings:
+        $b = "disable"
+    condition:
+        $b
+}
+"#;
+
+        let mut disabled = std::collections::HashSet::new();
+        disabled.insert("3p.test.file::DisableMe".to_string());
+
+        let (filtered, count) =
+            YaraEngine::filter_disabled_rules(source, "3p.test.file", &disabled);
+
+        assert_eq!(count, 1);
+        assert!(filtered.contains("rule KeepMe : tag1 tag2"));
+        assert!(!filtered.contains("rule DisableMe"));
+
+        // Verify filtered source is valid YARA
+        let mut compiler = yara_x::Compiler::new();
+        assert!(compiler.add_source(filtered.as_bytes()).is_ok());
+    }
+
+    #[test]
+    fn test_filter_disabled_rules_private_global() {
+        let source = r#"
+private rule PrivateKeep {
+    strings:
+        $a = "keep"
+    condition:
+        $a
+}
+
+global rule GlobalDisable {
+    strings:
+        $b = "disable"
+    condition:
+        $b
+}
+
+private global rule PrivateGlobalKeep {
+    strings:
+        $c = "keep2"
+    condition:
+        $c
+}
+"#;
+
+        let mut disabled = std::collections::HashSet::new();
+        disabled.insert("3p.test.file::GlobalDisable".to_string());
+
+        let (filtered, count) =
+            YaraEngine::filter_disabled_rules(source, "3p.test.file", &disabled);
+
+        assert_eq!(count, 1);
+        assert!(filtered.contains("private rule PrivateKeep"));
+        assert!(!filtered.contains("global rule GlobalDisable"));
+        assert!(filtered.contains("private global rule PrivateGlobalKeep"));
+
+        // Verify filtered source is valid YARA
+        let mut compiler = yara_x::Compiler::new();
+        assert!(compiler.add_source(filtered.as_bytes()).is_ok());
+    }
+
+    #[test]
+    fn test_filter_disabled_rules_first_rule() {
+        let source = r#"rule FirstDisabled {
+    strings:
+        $a = "first"
+    condition:
+        $a
+}
+
+rule Second {
+    strings:
+        $b = "second"
+    condition:
+        $b
+}
+"#;
+
+        let mut disabled = std::collections::HashSet::new();
+        disabled.insert("3p.test.file::FirstDisabled".to_string());
+
+        let (filtered, count) =
+            YaraEngine::filter_disabled_rules(source, "3p.test.file", &disabled);
+
+        assert_eq!(count, 1);
+        assert!(!filtered.contains("rule FirstDisabled"));
+        assert!(filtered.contains("rule Second"));
+
+        // Verify filtered source is valid YARA
+        let mut compiler = yara_x::Compiler::new();
+        assert!(compiler.add_source(filtered.as_bytes()).is_ok());
+    }
+
+    #[test]
+    fn test_filter_disabled_rules_last_rule() {
+        let source = r#"
+rule First {
+    strings:
+        $a = "first"
+    condition:
+        $a
+}
+
+rule LastDisabled {
+    strings:
+        $b = "last"
+    condition:
+        $b
+}
+"#;
+
+        let mut disabled = std::collections::HashSet::new();
+        disabled.insert("3p.test.file::LastDisabled".to_string());
+
+        let (filtered, count) =
+            YaraEngine::filter_disabled_rules(source, "3p.test.file", &disabled);
+
+        assert_eq!(count, 1);
+        assert!(filtered.contains("rule First"));
+        assert!(!filtered.contains("rule LastDisabled"));
+
+        // Verify filtered source is valid YARA
+        let mut compiler = yara_x::Compiler::new();
+        assert!(compiler.add_source(filtered.as_bytes()).is_ok());
+    }
+
+    #[test]
+    fn test_filter_disabled_rules_multiple() {
+        let source = r#"
+rule Keep1 {
+    strings:
+        $a = "keep1"
+    condition:
+        $a
+}
+
+rule Disable1 {
+    strings:
+        $b = "disable1"
+    condition:
+        $b
+}
+
+rule Keep2 {
+    strings:
+        $c = "keep2"
+    condition:
+        $c
+}
+
+rule Disable2 {
+    strings:
+        $d = "disable2"
+    condition:
+        $d
+}
+
+rule Keep3 {
+    strings:
+        $e = "keep3"
+    condition:
+        $e
+}
+"#;
+
+        let mut disabled = std::collections::HashSet::new();
+        disabled.insert("3p.test.file::Disable1".to_string());
+        disabled.insert("3p.test.file::Disable2".to_string());
+
+        let (filtered, count) =
+            YaraEngine::filter_disabled_rules(source, "3p.test.file", &disabled);
+
+        assert_eq!(count, 2);
+        assert!(filtered.contains("rule Keep1"));
+        assert!(!filtered.contains("rule Disable1"));
+        assert!(filtered.contains("rule Keep2"));
+        assert!(!filtered.contains("rule Disable2"));
+        assert!(filtered.contains("rule Keep3"));
+
+        // Verify filtered source is valid YARA
+        let mut compiler = yara_x::Compiler::new();
+        assert!(compiler.add_source(filtered.as_bytes()).is_ok());
+    }
+
+    #[test]
+    fn test_filter_disabled_rules_with_imports() {
+        let source = r#"import "pe"
+import "math"
+
+rule KeepMe {
+    strings:
+        $a = "keep"
+    condition:
+        $a
+}
+
+rule DisableMe {
+    strings:
+        $b = "disable"
+    condition:
+        $b
+}
+"#;
+
+        let mut disabled = std::collections::HashSet::new();
+        disabled.insert("3p.test.file::DisableMe".to_string());
+
+        let (filtered, count) =
+            YaraEngine::filter_disabled_rules(source, "3p.test.file", &disabled);
+
+        assert_eq!(count, 1);
+        assert!(filtered.contains("import \"pe\""));
+        assert!(filtered.contains("import \"math\""));
+        assert!(filtered.contains("rule KeepMe"));
+        assert!(!filtered.contains("rule DisableMe"));
+    }
+
+    #[test]
+    fn test_filter_disabled_rules_complex_condition() {
+        let source = r#"
+rule KeepComplex {
+    meta:
+        description = "Complex rule"
+    strings:
+        $a = "pattern1"
+        $b = "pattern2"
+        $c = /regex[0-9]+/
+    condition:
+        ($a and $b) or
+        ($c and filesize < 1MB) or
+        (
+            for any i in (0..10) : (
+                uint32(i) == 0x12345678
+            )
+        )
+}
+
+rule DisableMe {
+    strings:
+        $x = "disable"
+    condition:
+        $x
+}
+"#;
+
+        let mut disabled = std::collections::HashSet::new();
+        disabled.insert("3p.test.file::DisableMe".to_string());
+
+        let (filtered, count) =
+            YaraEngine::filter_disabled_rules(source, "3p.test.file", &disabled);
+
+        assert_eq!(count, 1);
+        assert!(filtered.contains("rule KeepComplex"));
+        assert!(filtered.contains("for any i in"));
+        assert!(!filtered.contains("rule DisableMe"));
+
+        // Verify filtered source is valid YARA
+        let mut compiler = yara_x::Compiler::new();
+        assert!(compiler.add_source(filtered.as_bytes()).is_ok());
+    }
+
+    #[test]
+    fn test_filter_disabled_rules_all_disabled() {
+        let source = r#"
+rule Disable1 {
+    strings:
+        $a = "d1"
+    condition:
+        $a
+}
+
+rule Disable2 {
+    strings:
+        $b = "d2"
+    condition:
+        $b
+}
+"#;
+
+        let mut disabled = std::collections::HashSet::new();
+        disabled.insert("3p.test.file::Disable1".to_string());
+        disabled.insert("3p.test.file::Disable2".to_string());
+
+        let (filtered, count) =
+            YaraEngine::filter_disabled_rules(source, "3p.test.file", &disabled);
+
+        assert_eq!(count, 2);
+        assert!(!filtered.contains("rule Disable1"));
+        assert!(!filtered.contains("rule Disable2"));
+        // Should be essentially empty (just whitespace)
+        assert!(filtered.trim().is_empty());
+    }
+
+    #[test]
+    fn test_filter_disabled_rules_preserves_comments() {
+        let source = r#"
+// This is a file-level comment
+/* Multi-line
+   comment */
+
+rule KeepMe {
+    // Rule comment
+    strings:
+        $a = "keep"
+    condition:
+        $a
+}
+
+rule DisableMe {
+    strings:
+        $b = "disable"
+    condition:
+        $b
+}
+"#;
+
+        let mut disabled = std::collections::HashSet::new();
+        disabled.insert("3p.test.file::DisableMe".to_string());
+
+        let (filtered, count) =
+            YaraEngine::filter_disabled_rules(source, "3p.test.file", &disabled);
+
+        assert_eq!(count, 1);
+        assert!(filtered.contains("// This is a file-level comment"));
+        assert!(filtered.contains("/* Multi-line"));
+        assert!(filtered.contains("rule KeepMe"));
+        assert!(!filtered.contains("rule DisableMe"));
     }
 }

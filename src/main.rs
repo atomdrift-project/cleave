@@ -102,10 +102,7 @@ fn main() -> Result<()> {
             )
         } else {
             // Default: warn to stderr, info to file
-            (
-                EnvFilter::new("flayer=warn"),
-                EnvFilter::new("flayer=info"),
-            )
+            (EnvFilter::new("flayer=warn"), EnvFilter::new("flayer=info"))
         };
 
         // Create or append to log file

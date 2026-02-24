@@ -729,10 +729,7 @@ pub(crate) fn validate_hostile_composite_precision(
 
         // Precision should already be calculated - if not, that's a bug
         let precision = rule.precision.unwrap_or_else(|| {
-            tracing::warn!(
-                "Composite rule '{}' has no precision calculated!",
-                rule.id
-            );
+            tracing::warn!("Composite rule '{}' has no precision calculated!", rule.id);
             0.0
         });
 
@@ -741,7 +738,9 @@ pub(crate) fn validate_hostile_composite_precision(
                 // Log non-fatal warning and downgrade
                 tracing::debug!(
                     "Downgrading '{}' from HOSTILE to SUSPICIOUS (precision {:.1} < {:.1})",
-                    rule.id, precision, min_hostile_precision
+                    rule.id,
+                    precision,
+                    min_hostile_precision
                 );
                 rule.crit = Criticality::Suspicious;
             }
@@ -749,7 +748,9 @@ pub(crate) fn validate_hostile_composite_precision(
                 // Log non-fatal warning and downgrade
                 tracing::debug!(
                     "Downgrading '{}' from SUSPICIOUS to NOTABLE (precision {:.1} < {:.1})",
-                    rule.id, precision, min_suspicious_precision
+                    rule.id,
+                    precision,
+                    min_suspicious_precision
                 );
                 rule.crit = Criticality::Notable;
             }

@@ -26,6 +26,7 @@ pub mod ip_validator;
 pub mod map;
 pub mod memory_tracker;
 mod radare2;
+mod shared_resources;
 mod strings;
 mod upx;
 
@@ -129,8 +130,10 @@ pub fn clear_all_thread_caches() {
 /// Analyze a single file and return a detailed report.
 ///
 /// This is the main entry point for analyzing files programmatically.
-/// Creates a new CapabilityMapper for each call - for batch processing,
-/// use `analyze_file_with_mapper` instead.
+/// Uses global lazy-loaded resources (CapabilityMapper and YARA engine) for efficiency.
+/// Resources are initialized on first use and shared across all analyses.
+///
+/// For custom resource management, use `analyze_file_with_mapper` instead.
 ///
 /// # Arguments
 ///
@@ -141,13 +144,20 @@ pub fn clear_all_thread_caches() {
 ///
 /// An `AnalysisReport` containing all extracted features, findings, and metrics.
 pub fn analyze_file<P: AsRef<Path>>(path: P, options: &AnalysisOptions) -> Result<AnalysisReport> {
-    let capability_mapper = CapabilityMapper::new();
-    analyze_file_with_mapper(path, options, &capability_mapper)
+    let mapper = shared_resources::capability_mapper();
+    let yara_engine = if options.disable_yara {
+        None
+    } else {
+        Some(shared_resources::yara_engine(options.enable_third_party_yara))
+    };
+    analyze_file_with_resources(path, options, &mapper, yara_engine)
 }
 
 /// Analyze a single file using a pre-loaded CapabilityMapper.
 ///
 /// Use this for batch processing to avoid reloading capabilities for each file.
+/// Note: This function still creates a new YARA engine per call. For maximum efficiency
+/// with YARA, use `analyze_file` which uses shared global resources.
 ///
 /// # Arguments
 ///
@@ -162,6 +172,36 @@ pub fn analyze_file_with_mapper<P: AsRef<Path>>(
     path: P,
     options: &AnalysisOptions,
     capability_mapper: &CapabilityMapper,
+) -> Result<AnalysisReport> {
+    // Use shared YARA engine (initialized on first use)
+    let yara_engine = if options.disable_yara {
+        None
+    } else {
+        Some(shared_resources::yara_engine(options.enable_third_party_yara))
+    };
+    analyze_file_with_resources(path, options, capability_mapper, yara_engine)
+}
+
+/// Analyze a single file with full control over resources.
+///
+/// This is the core analysis function that accepts pre-loaded resources.
+/// Use this when you need maximum control and efficiency.
+///
+/// # Arguments
+///
+/// * `path` - Path to the file to analyze
+/// * `options` - Analysis options
+/// * `capability_mapper` - Pre-loaded capability mapper
+/// * `yara_engine` - Optional pre-loaded YARA engine (None disables YARA scanning)
+///
+/// # Returns
+///
+/// An `AnalysisReport` containing all extracted features, findings, and metrics.
+fn analyze_file_with_resources<P: AsRef<Path>>(
+    path: P,
+    options: &AnalysisOptions,
+    capability_mapper: &CapabilityMapper,
+    yara_engine: Option<Arc<yara_engine::YaraEngine>>,
 ) -> Result<AnalysisReport> {
     let path = path.as_ref();
 
@@ -226,22 +266,6 @@ pub fn analyze_file_with_mapper<P: AsRef<Path>>(
     // Wrap mapper in Arc once — all analyzers share it via cheap ref-count bumps
     let mapper_arc = Arc::new(capability_mapper.clone());
 
-    // Load YARA rules if not disabled
-    // NOTE: set_capability_mapper removed - field is unused in YaraEngine
-    let mut yara_engine = if options.disable_yara {
-        None
-    } else {
-        let empty_mapper = CapabilityMapper::empty();
-        let mut engine = yara_engine::YaraEngine::new_with_mapper(empty_mapper);
-        let (builtin_count, third_party_count) =
-            engine.load_all_rules(options.enable_third_party_yara);
-        if builtin_count + third_party_count > 0 {
-            Some(engine)
-        } else {
-            None
-        }
-    };
-
     // Route to appropriate analyzer.
     // For ELF/MachO/PE the YARA engine is NOT passed to the analyzer; YARA scanning
     // happens in the post-analysis block below via scan_file_to_findings.
@@ -262,8 +286,8 @@ pub fn analyze_file_with_mapper<P: AsRef<Path>>(
             let mut analyzer = analyzers::archive::ArchiveAnalyzer::new()
                 .with_capability_mapper_arc(mapper_arc.clone())
                 .with_zip_passwords(options.zip_passwords.clone());
-            if let Some(engine) = yara_engine.take() {
-                analyzer = analyzer.with_yara(engine);
+            if let Some(ref engine) = yara_engine {
+                analyzer = analyzer.with_yara_arc(engine.clone());
             }
             analyzer.analyze(path)?
         }

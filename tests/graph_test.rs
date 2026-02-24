@@ -9,7 +9,8 @@ use tempfile::TempDir;
 #[test]
 fn test_graph_basic() {
     let output = assert_cmd::cargo_bin_cmd!("flayer")
-        .env("flayer_VALIDATE", "0") // Disable validation for faster tests
+        .env("FLAYER_SKIP_YARA", "1") // Skip YARA - not needed for graph tests
+        .env("FLAYER_SKIP_YARA", "1") // Disable validation for faster tests
         .args(["map", "--depth", "2", "--min-refs", "10"])
         .assert()
         .success()
@@ -29,7 +30,7 @@ fn test_graph_output_file() {
     let output_path = temp_dir.path().join("traits.dot");
 
     assert_cmd::cargo_bin_cmd!("flayer")
-        .env("flayer_VALIDATE", "0")
+        .env("FLAYER_SKIP_YARA", "1")
         .args([
             "map",
             "--depth",
@@ -53,7 +54,7 @@ fn test_graph_output_file() {
 #[test]
 fn test_graph_namespace_filter() {
     let output = assert_cmd::cargo_bin_cmd!("flayer")
-        .env("flayer_VALIDATE", "0")
+        .env("FLAYER_SKIP_YARA", "1")
         .args([
             "map",
             "--depth",
@@ -82,7 +83,7 @@ fn test_graph_namespace_filter() {
 fn test_graph_depth_levels() {
     // Test depth 1 (top-level only: cap, obj, known, meta)
     let output_depth1 = assert_cmd::cargo_bin_cmd!("flayer")
-        .env("flayer_VALIDATE", "0")
+        .env("FLAYER_SKIP_YARA", "1")
         .args(["map", "--depth", "1", "--min-refs", "10"])
         .assert()
         .success();
@@ -92,7 +93,7 @@ fn test_graph_depth_levels() {
 
     // Test depth 3 (more granular)
     let output_depth3 = assert_cmd::cargo_bin_cmd!("flayer")
-        .env("flayer_VALIDATE", "0")
+        .env("FLAYER_SKIP_YARA", "1")
         .args(["map", "--depth", "3", "--min-refs", "10"])
         .assert()
         .success();
@@ -117,7 +118,7 @@ fn test_graph_depth_levels() {
 fn test_graph_min_refs_filtering() {
     // Low threshold - should have more edges
     let output_low = assert_cmd::cargo_bin_cmd!("flayer")
-        .env("flayer_VALIDATE", "0")
+        .env("FLAYER_SKIP_YARA", "1")
         .args(["map", "--depth", "2", "--min-refs", "1"])
         .assert()
         .success();
@@ -127,7 +128,7 @@ fn test_graph_min_refs_filtering() {
 
     // High threshold - should have fewer edges
     let output_high = assert_cmd::cargo_bin_cmd!("flayer")
-        .env("flayer_VALIDATE", "0")
+        .env("FLAYER_SKIP_YARA", "1")
         .args(["map", "--depth", "2", "--min-refs", "20"])
         .assert()
         .success();
@@ -148,7 +149,7 @@ fn test_graph_min_refs_filtering() {
 #[test]
 fn test_graph_color_encoding() {
     let output = assert_cmd::cargo_bin_cmd!("flayer")
-        .env("flayer_VALIDATE", "0")
+        .env("FLAYER_SKIP_YARA", "1")
         .args(["map", "--depth", "2", "--min-refs", "5"])
         .assert()
         .success();
@@ -184,7 +185,7 @@ fn test_graph_color_encoding() {
 #[test]
 fn test_graph_edge_weights() {
     let output = assert_cmd::cargo_bin_cmd!("flayer")
-        .env("flayer_VALIDATE", "0")
+        .env("FLAYER_SKIP_YARA", "1")
         .args(["map", "--depth", "2", "--min-refs", "1"])
         .assert()
         .success();

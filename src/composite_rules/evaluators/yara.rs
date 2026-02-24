@@ -9,18 +9,21 @@
 
 use super::{get_or_create_scanner, truncate_evidence};
 use crate::composite_rules::context::{ConditionResult, EvaluationContext};
-use crate::types::Evidence;
+use crate::types::{Evidence, MAX_EVIDENCE_PER_TRAIT};
 use std::sync::Arc;
 
-/// Collect evidence from YARA scan results.
+/// Collect evidence from YARA scan results (limited to MAX_EVIDENCE_PER_TRAIT items).
 pub(crate) fn collect_yara_evidence<'a, 'b>(
     results: &yara_x::ScanResults<'a, 'b>,
     binary_data: &[u8],
 ) -> Vec<Evidence> {
     let mut evidence = Vec::new();
-    for matched_rule in results.matching_rules() {
+    'outer: for matched_rule in results.matching_rules() {
         for pattern in matched_rule.patterns() {
             for m in pattern.matches() {
+                if evidence.len() >= MAX_EVIDENCE_PER_TRAIT {
+                    break 'outer;
+                }
                 let match_bytes = binary_data.get(m.range());
                 let evidence_value = match match_bytes {
                     Some(bytes) => {
@@ -427,6 +430,7 @@ pub(crate) fn eval_hex<'a>(
         evidence: if matched {
             matches
                 .iter()
+                .take(MAX_EVIDENCE_PER_TRAIT)
                 .map(|pos| {
                     // Always extract wildcard bytes (consistent with regex behavior)
                     let extracted = extract_wildcard_bytes(data, *pos, &segments);

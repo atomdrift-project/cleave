@@ -7,8 +7,9 @@
 //! - `RawContentRegexIndex`: Batched regex matching for binary content
 
 use crate::composite_rules::{Condition, FileType as RuleFileType, TraitDefinition};
-use crate::types::{Evidence, StringInfo};
+use crate::types::{Evidence, StringInfo, MAX_EVIDENCE_PER_TRAIT};
 use aho_corasick::AhoCorasick;
+use rayon::prelude::*;
 use regex::{RegexSet, RegexSetBuilder};
 use rustc_hash::{FxHashMap, FxHashSet};
 
@@ -204,35 +205,46 @@ impl StringMatchIndex {
 
         let total_patterns = patterns.len() + ci_patterns.len();
 
-        // Build case-sensitive Aho-Corasick automaton
-        let automaton = if !patterns.is_empty() {
-            AhoCorasick::builder()
-                .ascii_case_insensitive(false)
-                .build(&patterns)
-                .ok()
-        } else {
-            None
-        };
-
-        // Build case-insensitive Aho-Corasick automaton
-        let ci_automaton = if !ci_patterns.is_empty() {
-            AhoCorasick::builder()
-                .ascii_case_insensitive(true)
-                .build(&ci_patterns)
-                .ok()
-        } else {
-            None
-        };
-
-        // Build regex literal automaton for pre-filtering
-        let regex_literal_automaton = if !regex_literals.is_empty() {
-            AhoCorasick::builder()
-                .ascii_case_insensitive(false)
-                .build(&regex_literals)
-                .ok()
-        } else {
-            None
-        };
+        // Build all 3 Aho-Corasick automata in parallel
+        let ((automaton, ci_automaton), regex_literal_automaton) = rayon::join(
+            || {
+                rayon::join(
+                    || {
+                        // Case-sensitive automaton
+                        if !patterns.is_empty() {
+                            AhoCorasick::builder()
+                                .ascii_case_insensitive(false)
+                                .build(&patterns)
+                                .ok()
+                        } else {
+                            None
+                        }
+                    },
+                    || {
+                        // Case-insensitive automaton
+                        if !ci_patterns.is_empty() {
+                            AhoCorasick::builder()
+                                .ascii_case_insensitive(true)
+                                .build(&ci_patterns)
+                                .ok()
+                        } else {
+                            None
+                        }
+                    },
+                )
+            },
+            || {
+                // Regex literal automaton for pre-filtering
+                if !regex_literals.is_empty() {
+                    AhoCorasick::builder()
+                        .ascii_case_insensitive(false)
+                        .build(&regex_literals)
+                        .ok()
+                } else {
+                    None
+                }
+            },
+        );
 
         Self {
             automaton,
@@ -274,13 +286,16 @@ impl StringMatchIndex {
                             let pattern = &self.patterns[pattern_idx];
                             for &trait_idx in trait_indices {
                                 matching_traits.insert(trait_idx);
-                                // Cache evidence for this trait
-                                trait_evidence.entry(trait_idx).or_default().push(Evidence {
-                                    method: "string".to_string(),
-                                    source: "string_extractor".to_string(),
-                                    value: pattern.clone(),
-                                    location: string_info.offset.map(|o| format!("{:#x}", o)),
-                                });
+                                // Cache evidence for this trait (limited to MAX_EVIDENCE_PER_TRAIT)
+                                let entry = trait_evidence.entry(trait_idx).or_default();
+                                if entry.len() < MAX_EVIDENCE_PER_TRAIT {
+                                    entry.push(Evidence {
+                                        method: "string".to_string(),
+                                        source: "string_extractor".to_string(),
+                                        value: pattern.clone(),
+                                        location: string_info.offset.map(|o| format!("{:#x}", o)),
+                                    });
+                                }
                             }
                         }
                     }
@@ -299,12 +314,16 @@ impl StringMatchIndex {
                             let pattern = &self.ci_patterns[pattern_idx];
                             for &trait_idx in trait_indices {
                                 matching_traits.insert(trait_idx);
-                                trait_evidence.entry(trait_idx).or_default().push(Evidence {
-                                    method: "string".to_string(),
-                                    source: "string_extractor".to_string(),
-                                    value: pattern.clone(),
-                                    location: string_info.offset.map(|o| format!("{:#x}", o)),
-                                });
+                                // Limited to MAX_EVIDENCE_PER_TRAIT
+                                let entry = trait_evidence.entry(trait_idx).or_default();
+                                if entry.len() < MAX_EVIDENCE_PER_TRAIT {
+                                    entry.push(Evidence {
+                                        method: "string".to_string(),
+                                        source: "string_extractor".to_string(),
+                                        value: pattern.clone(),
+                                        location: string_info.offset.map(|o| format!("{:#x}", o)),
+                                    });
+                                }
                             }
                         }
                     }
@@ -433,10 +452,16 @@ impl RawContentRegexIndex {
             }
         }
 
-        // Build regex sets for each file type, collecting errors
+        // Build regex sets for each file type in parallel, collecting errors
+        let ft_patterns_vec: Vec<_> = by_file_type_patterns.into_iter().collect();
+        let results: Vec<_> = ft_patterns_vec
+            .into_par_iter()
+            .map(|(ft, patterns)| (ft, Self::build_regex_set(patterns, traits)))
+            .collect();
+
         let mut by_file_type = FxHashMap::default();
-        for (ft, patterns) in by_file_type_patterns {
-            match Self::build_regex_set(patterns, traits) {
+        for (ft, result) in results {
+            match result {
                 Ok(Some(set)) => {
                     by_file_type.insert(ft, set);
                 }
@@ -445,6 +470,8 @@ impl RawContentRegexIndex {
             }
         }
 
+        // Build universal patterns (can run in parallel with file-type-specific building
+        // but kept separate for clarity)
         let universal = match Self::build_regex_set(universal_patterns, traits) {
             Ok(set) => set,
             Err(mut e) => {
@@ -561,29 +588,14 @@ impl RawContentRegexIndex {
     }
 
     /// Find matches using only patterns applicable to the given file type
-    ///
-    /// Returns (matching_trait_indices, has_excessive_line_length)
     pub(crate) fn find_matches(
         &self,
         binary_data: &[u8],
         file_type: &RuleFileType,
-    ) -> (FxHashSet<usize>, bool) {
+    ) -> FxHashSet<usize> {
         let mut matching_traits = FxHashSet::default();
 
         let content = String::from_utf8_lossy(binary_data);
-
-        // Check for excessively long lines (potential anti-analysis via regex backtracking)
-        // Threshold: 1MB per line
-        const MAX_LINE_LENGTH: usize = 1_000_000;
-        let has_excessive_line = content.lines().any(|line| line.len() > MAX_LINE_LENGTH);
-
-        if has_excessive_line {
-            tracing::warn!(
-                "Skipping regex matching due to excessively long line (>{} bytes, potential anti-analysis)",
-                MAX_LINE_LENGTH
-            );
-            return (matching_traits, true);
-        }
 
         // Match universal patterns
         if let Some(ref universal) = self.universal {
@@ -607,7 +619,7 @@ impl RawContentRegexIndex {
             }
         }
 
-        (matching_traits, false)
+        matching_traits
     }
 }
 
@@ -829,9 +841,8 @@ mod tests {
         let index = RawContentRegexIndex::build(&[]).unwrap();
         let content = b"some content";
 
-        let (matches, has_excessive_line) = index.find_matches(content, &RuleFileType::All);
+        let matches = index.find_matches(content, &RuleFileType::All);
         assert!(matches.is_empty());
-        assert!(!has_excessive_line);
     }
 
     #[test]
@@ -878,7 +889,7 @@ mod tests {
         // Content with invalid UTF-8 and the target string
         let content = &[0xFF, b't', b'e', b's', b't', 0xFE];
 
-        let (matches, _) = index.find_matches(content, &RuleFileType::All);
+        let matches = index.find_matches(content, &RuleFileType::All);
         // Should handle invalid UTF-8 gracefully and find the match
         assert!(!matches.is_empty());
     }

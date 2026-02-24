@@ -7,7 +7,7 @@
 //! - Trait glob patterns (matching multiple traits)
 
 use crate::composite_rules::context::{ConditionResult, EvaluationContext};
-use crate::types::Evidence;
+use crate::types::{Evidence, MAX_EVIDENCE_PER_TRAIT};
 
 /// Evaluate structure condition
 #[must_use]
@@ -24,7 +24,16 @@ pub(crate) fn eval_structure<'a>(
             || structural_feature.id.starts_with(&format!("{}/", feature))
         {
             count += 1;
-            evidence.extend(structural_feature.evidence.clone());
+            if evidence.len() < MAX_EVIDENCE_PER_TRAIT {
+                let remaining = MAX_EVIDENCE_PER_TRAIT - evidence.len();
+                evidence.extend(
+                    structural_feature
+                        .evidence
+                        .iter()
+                        .take(remaining)
+                        .cloned(),
+                );
+            }
         }
     }
 

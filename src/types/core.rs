@@ -38,6 +38,13 @@ pub enum Criticality {
     Hostile,
 }
 
+impl Criticality {
+    /// Check if this is the baseline (default) criticality
+    pub(crate) fn is_baseline(&self) -> bool {
+        matches!(self, Self::Baseline)
+    }
+}
+
 /// Main analysis output structure
 #[derive(Debug, Serialize, Deserialize)]
 pub struct AnalysisReport {

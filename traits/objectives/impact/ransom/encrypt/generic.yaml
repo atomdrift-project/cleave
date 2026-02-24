@@ -74,29 +74,34 @@ traits:
       regex: "decryptor\\.(exe|bin|bat)"
       case_insensitive: true
 
-  # Go file encryption patterns (ransomware)
-  - id: go-file-encrypt-yara
-    desc: Go file encryption patterns
-    crit: suspicious
+  # Go file encryption patterns (ransomware) - atomic indicators
+  - id: go-crypto-aes
+    desc: Go crypto/aes import
+    crit: component
     conf: 0.8
+    for: [go]
     if:
-      type: yara
-      source: |
-        rule go_file_encrypt {
-          strings:
-            $crypto1 = "crypto/aes" ascii
-            $crypto2 = "crypto/cipher" ascii
-            $crypto3 = "crypto/rsa" ascii
-            $walk1 = "filepath.Walk" ascii
-            $walk2 = "filepath.WalkDir" ascii
-            $write1 = "ioutil.WriteFile" ascii
-            $write2 = "os.WriteFile" ascii
-            $ext1 = ".encrypted" ascii
-            $ext2 = ".locked" ascii
-          condition:
-            any of ($crypto*) and any of ($walk*) and
-            (any of ($write*) or any of ($ext*))
-        }
+      type: string
+      substr: "crypto/aes"
+
+  - id: go-crypto-cipher
+    desc: Go crypto/cipher import
+    crit: component
+    conf: 0.8
+    for: [go]
+    if:
+      type: string
+      substr: "crypto/cipher"
+
+  - id: go-crypto-rsa
+    desc: Go crypto/rsa import
+    crit: component
+    conf: 0.8
+    for: [go]
+    if:
+      type: string
+      substr: "crypto/rsa"
+
 
 composite_rules:
   - id: encrypt-decryptor
@@ -107,6 +112,44 @@ composite_rules:
       - id: encrypt-decryptor-msg-1
       - id: encrypt-decryptor-msg-2
       - id: encrypt-decryptor-file
+
+  # Go file encryption composites
+  - id: go-crypto-any
+    desc: Go crypto library usage
+    crit: component
+    for: [go]
+    any:
+      - id: go-crypto-aes
+      - id: go-crypto-cipher
+      - id: go-crypto-rsa
+
+  - id: go-writefile-any
+    desc: Go file write functions
+    crit: component
+    for: [go]
+    any:
+      - id: micro-behaviors/fs/file/operations::ioutil-write-file
+      - id: micro-behaviors/fs/file/operations::os-write-file
+
+  - id: go-write-or-ext
+    desc: Go file write or ransom extension
+    crit: component
+    for: [go]
+    any:
+      - id: go-writefile-any
+      - id: objectives/impact/ransomware/behavior::encrypted-extensions
+
+  - id: go-file-encrypt
+    desc: Go file encryption patterns (ransomware)
+    crit: suspicious
+    conf: 0.8
+    for: [go]
+    mbc: "B0040"
+    attack: "T1486"
+    all:
+      - id: go-crypto-any
+      - id: objectives/impact/wiper/disk::go-walk-capability
+      - id: go-write-or-ext
 
   - id: encrypt-note
     desc: Ransom note patterns

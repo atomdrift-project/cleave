@@ -12,25 +12,25 @@ traits:
   # - Compiler/build tools with crypto libraries
   # - Large binaries with unrelated byte sequences matching by chance
   # Downgrade for known development tools
-  - id: rc4-bytecode
-    desc: "RC4 encryption byte patterns"
-    crit: suspicious
-    conf: 0.8
+
+  # RC4 key scheduling/swap pattern (mov reg, []; mov reg, []; add; mov []; mov [])
+  - id: rc4-swap-pattern
+    desc: RC4 key scheduling swap byte pattern
+    crit: component
     for: [elf, macho, pe, so, dylib, dll]
     if:
-      type: yara
-      source: |
-        rule rc4_patterns {
-          strings:
-            $rc4_1 = { 8A ?? ?? 8A ?? ?? 02 ?? 88 ?? ?? 88 ?? ?? }
-            $rc4_2 = { 30 ?? 4? 83 ?? FF 75 }
-          condition:
-            any of them
-        }
-    downgrade:
-      any:
-        - id: micro-behaviors/dylib/library::debugger-tool-marker
-        - id: micro-behaviors/dylib/load/compiler-tool-marker
+      type: hex
+      pattern: "8A ?? ?? 8A ?? ?? 02 ?? 88 ?? ?? 88 ?? ??"
+
+  # RC4 XOR decrypt loop pattern (xor []; inc/dec; cmp 0xFF; jne)
+  - id: rc4-xor-loop
+    desc: RC4 XOR decrypt loop pattern
+    crit: component
+    for: [elf, macho, pe, so, dylib, dll]
+    if:
+      type: hex
+      # 30 ?? = xor mem,reg; 4x = inc/dec reg; 83 ?? FF = cmp ??,0xFF; 75 = jne
+      pattern: "30 ?? [1] 83 ?? FF 75"
 
   - id: rc4-strings
     desc: "RC4 encryption strings"
@@ -39,3 +39,17 @@ traits:
     if:
       type: string
       regex: "(?i)rc4.{0,20}crypt"
+
+composite_rules:
+  - id: rc4-bytecode
+    desc: "RC4 encryption byte patterns"
+    crit: suspicious
+    conf: 0.8
+    for: [elf, macho, pe, so, dylib, dll]
+    any:
+      - id: rc4-swap-pattern
+      - id: rc4-xor-loop
+    downgrade:
+      any:
+        - id: micro-behaviors/dylib/library::debugger-tool-marker
+        - id: micro-behaviors/dylib/load/compiler-tool-marker

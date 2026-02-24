@@ -13,33 +13,34 @@ traits:
     mbc: "C0015"
     attack: "T1573.001"
     if:
-      type: yara
-      source: |
-        rule java_secretkeyspec {
-          strings:
-            $a = "javax/crypto/spec/SecretKeySpec" ascii
-          condition:
-            $a
-        }
+      type: string
+      substr: "javax/crypto/spec/SecretKeySpec"
 
+  - id: cipher-class
+    desc: Java Cipher class reference
+    crit: component
+    if:
+      type: string
+      substr: "javax/crypto/Cipher"
+
+  - id: dofinal-method
+    desc: Java doFinal method reference
+    crit: component
+    if:
+      type: string
+      substr: "doFinal"
+
+composite_rules:
   - id: cipher-init
     desc: Java Cipher initialization and encryption
     crit: notable
     conf: 0.9
     mbc: "C0015"
     attack: "T1573.001"
-    if:
-      type: yara
-      source: |
-        rule java_cipher_init {
-          strings:
-            $cipher = "javax/crypto/Cipher" ascii
-            $dofinal = "doFinal" ascii
-          condition:
-            $cipher and $dofinal
-        }
+    all:
+      - id: cipher-class
+      - id: dofinal-method
 
-composite_rules:
   - id: java-payload-decryption
     desc: Java symmetric key payload decryption
     crit: suspicious

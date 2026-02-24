@@ -5,17 +5,25 @@ defaults:
   for: [all]
 
 traits:
+  - id: gzip-inputstream
+    desc: Java GZIPInputStream class
+    crit: component
+    if:
+      type: string
+      substr: "java/util/zip/GZIPInputStream"
+
+  - id: bytearrayinputstream
+    desc: Java ByteArrayInputStream class
+    crit: component
+    if:
+      type: string
+      substr: "java/io/ByteArrayInputStream"
+
+composite_rules:
   - id: gzip-decompress
     desc: Java GZIP in-memory decompression
     crit: notable
     conf: 0.85
-    if:
-      type: yara
-      source: |
-        rule java_gzip_decompress {
-          strings:
-            $gzip = "java/util/zip/GZIPInputStream" ascii
-            $bais = "java/io/ByteArrayInputStream" ascii
-          condition:
-            $gzip and $bais
-        }
+    all:
+      - id: gzip-inputstream
+      - id: bytearrayinputstream

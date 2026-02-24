@@ -1,114 +1,16 @@
-# Suspicious Native Module Patterns
-# Detects compiled native binaries (.node, .so, .dll) with suspicious capabilities
+# Suspicious Native Execution Patterns
+# Detects suspicious code execution patterns in native binaries
 # ATT&CK: T1059 (Command and Scripting Interpreter)
 
+# NOTE: Removed items that belong elsewhere:
+# - cobalt-strike → well-known/malware/rat/cobalt-strike/
+# - metasploit → well-known/tools/offensive/
+# - cryptominer → objectives/impact/cryptojacking/miner/
+# - process-status-check (debugger detection) → objectives/anti-analysis/debugger/detect/
+# - process-inspection (injection) → objectives/evasion/process/injection/
+# - network-capable → micro-behaviors/communications/socket/
+
 traits:
-  # Native .node module in npm package
-  - id: node-addon
-    desc: Package contains native Node.js addon
-    crit: notable
-    conf: 0.7
-    for: [javascript, typescript, package.json]
-    if:
-      type: yara
-      source: |
-        rule node_addon {
-          strings:
-            $ext1 = ".node\"" ascii
-            $ext2 = ".node'" ascii
-            $req1 = "require(" ascii
-            $bin1 = "binding(" ascii
-            $gyp1 = "node-gyp" ascii
-          condition:
-            any of ($ext*) or ($req1 and $bin1) or $gyp1
-        }
-
-  # Native module with network capability
-  # NOTE: Go binaries always include socket functions from runtime - exclude them
-  - id: network-capable
-    desc: Native module with network/socket capabilities
-    crit: notable
-    conf: 0.6
-    attack: "T1071"
-    for: [elf, macho, pe, dll]
-    if:
-      type: yara
-      source: |
-        rule native_network {
-          strings:
-            $sock1 = "socket" ascii
-            $sock2 = "connect" ascii
-            $sock3 = "send" ascii
-            $sock4 = "recv" ascii
-            $http1 = "HTTP/1" ascii
-            $http2 = "Content-Type" ascii
-            $curl = "libcurl" ascii
-            $ssl = "SSL_connect" ascii
-            // Go runtime markers (exclude - Go always has socket primitives)
-            $go1 = "runtime.goexit" ascii
-            $go2 = "go.runtime" ascii
-            $go3 = "runtime.main" ascii
-          condition:
-            not any of ($go*) and 3 of ($sock*, $http*, $curl, $ssl)
-        }
-
-  # Process inspection/injection patterns
-  - id: process-inspection
-    desc: Native binary with process inspection
-    crit: notable
-    conf: 0.8
-    mbc: "C0043"
-    attack: "T1055"
-    for: [pe, dll, elf, macho]
-    if:
-      type: yara
-      source: |
-        rule process_inspection {
-          strings:
-            // Windows
-            $w1 = "VirtualAllocEx" ascii fullword
-            $w2 = "WriteProcessMemory" ascii fullword
-            $w3 = "CreateRemoteThread" ascii fullword
-            $w4 = "NtCreateThreadEx" ascii fullword
-            $w5 = "RtlCreateUserThread" ascii fullword
-            // Linux
-            $l1 = "ptrace" ascii fullword
-            $l2 = "PTRACE_ATTACH" ascii fullword
-            $l3 = "__libc_dlopen_mode" ascii fullword
-            // macOS
-            $m1 = "task_for_pid" ascii fullword
-            $m2 = "mach_vm_write" ascii fullword
-          condition:
-            2 of ($w*) or any of ($l*) or any of ($m*)
-        }
-
-  # Anti-debugging or process status checks
-  - id: process-status-check
-    desc: Native binary checking process status
-    crit: notable
-    conf: 0.7
-    mbc: "B0001"
-    attack: "T1622"
-    for: [pe, dll, elf, macho]
-    if:
-      type: yara
-      source: |
-        rule process_status_check {
-          strings:
-            // Windows
-            $w1 = "IsDebuggerPresent" ascii fullword
-            $w2 = "CheckRemoteDebuggerPresent" ascii fullword
-            $w3 = "NtQueryInformationProcess" ascii fullword
-            $w4 = "OutputDebugString" ascii fullword
-            // Linux
-            $l1 = "PTRACE_TRACEME" ascii fullword
-            $l2 = "/proc/self/status" ascii fullword
-            // macOS
-            $m2 = "P_TRACED" ascii fullword
-          condition:
-            any of them
-        }
-
   # Shellcode patterns
   - id: shellcode
     desc: Native binary with shellcode patterns
@@ -130,81 +32,6 @@ traits:
             $exec = "PAGE_EXECUTE" ascii
           condition:
             any of ($sc*) or ($alloc and $exec)
-        }
-
-  # Cobalt Strike beacon patterns
-  - id: cobalt-strike
-    desc: Cobalt Strike beacon indicators
-    crit: suspicious
-    conf: 0.95
-    attack: "T1071.001"
-    for: [pe, dll, elf, macho]
-    if:
-      type: yara
-      source: |
-        rule cobalt_strike_beacon {
-          strings:
-            $s1 = "%s.4444" ascii
-            $s2 = "beacon.dll" ascii wide
-            $s3 = "beacon.x64.dll" ascii wide
-            $s4 = "ReflectiveLoader" ascii
-            $s5 = "%02d/%02d/%02d %02d:%02d:%02d" ascii
-            $s6 = "poisonivy" ascii nocase
-            // Config headers - require more context to avoid false positives
-            // The short pattern { 00 01 00 01 00 02 } is too common
-            $cfg2 = { 69 68 69 68 69 6b }  // "ihihik" marker (unique to Cobalt Strike)
-            // Go runtime markers to exclude
-            $go1 = "runtime.goexit" ascii
-            $go2 = "go.runtime" ascii
-            // Rust runtime markers to exclude
-            $rust1 = "rust_begin_unwind" ascii
-            $rust2 = ".rustc" ascii
-          condition:
-            not any of ($go*) and not any of ($rust*) and (3 of ($s*) or $cfg2)
-        }
-
-  # Metasploit patterns
-  - id: metasploit
-    desc: Metasploit payload indicators
-    crit: suspicious
-    conf: 0.9
-    attack: "T1059"
-    for: [pe, dll, elf, macho]
-    if:
-      type: yara
-      source: |
-        rule metasploit_payload {
-          strings:
-            $s1 = "metsrv" ascii wide
-            $s2 = "meterpreter" ascii wide nocase
-            $s3 = "stdapi" ascii
-            $s4 = "priv_elevate" ascii
-            $s5 = "migrate" ascii
-            $s6 = { 4d 5a 52 45 }  // MZRE header
-          condition:
-            2 of them
-        }
-
-  # Cryptocurrency miner in native code
-  - id: cryptominer
-    desc: Native cryptocurrency miner binary
-    crit: suspicious
-    conf: 0.95
-    attack: "T1496"
-    for: [elf, macho, pe]
-    if:
-      type: yara
-      source: |
-        rule native_cryptominer {
-          strings:
-            $pool1 = "stratum+tcp://" ascii
-            $pool2 = "stratum+ssl://" ascii
-            $xmr1 = "cryptonight" ascii nocase
-            $xmr2 = "randomx" ascii nocase
-            $wallet = /4[123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz]{94}/ ascii  // Monero Base58
-            $algo = "cn/r" ascii
-          condition:
-            any of ($pool*) or 2 of ($xmr*, $algo, $wallet)
         }
 
 composite_rules:
@@ -268,4 +95,3 @@ composite_rules:
       - id: objectives/execution/native/runtime::enum-desktop-windows
       - id: objectives/execution/native/runtime::enum-date-formats
       - id: objectives/execution/native/runtime::line-dda
-

@@ -51,63 +51,95 @@ traits:
 
   # Removed proc-mounts-content duplicate - use micro-behaviors/fs/proc/mounts/linux::mounts (string type works for file paths)
 
-  # YARA-based patterns for content that isn't extracted by AST
-  - id: dd-dev-zero
-    desc: dd with /dev/zero source
-    crit: suspicious
-    conf: 0.85
-    attack: "T1561.002"
+  # dd with destructive source (/dev/zero, /dev/urandom)
+  - id: dd-zero-to-dev
+    desc: dd with /dev/zero to device
+    crit: component
     for: [shell]
     if:
-      type: yara
-      source: |
-        rule dd_dev_zero {
-          strings:
-            $dd_zero = /dd\s+[^\n]*if=\/dev\/zero[^\n]*of=\/dev\// ascii
-            $dd_urandom = /dd\s+[^\n]*if=\/dev\/u?random[^\n]*of=\/dev\// ascii
-          condition:
-            any of them
-        }
+      type: raw
+      regex: 'dd\s+.{0,100}if=/dev/zero.{0,100}of=/dev/'
 
-  - id: dd-of-dev
-    desc: dd writing to block device
-    crit: suspicious
-    conf: 0.85
-    attack: "T1561.002"
+  - id: dd-urandom-to-dev
+    desc: dd with /dev/urandom to device
+    crit: component
     for: [shell]
     if:
-      type: yara
-      source: |
-        rule dd_to_device {
-          strings:
-            $dd_sd = /dd\s+[^\n]*of=\/dev\/[shv]d[a-z]/ ascii
-            $dd_xvd = /dd\s+[^\n]*of=\/dev\/xvd[a-z]/ ascii
-            $dd_mmc = /dd\s+[^\n]*of=\/dev\/mmcblk[0-9]/ ascii
-            $dd_nvme = /dd\s+[^\n]*of=\/dev\/nvme[0-9]/ ascii
-            $dd_mapper = /dd\s+[^\n]*of=\/dev\/mapper\// ascii
-            $dd_disk = /dd\s+[^\n]*of=\/dev\/disk\// ascii
-            $dd_dm = /dd\s+[^\n]*of=\/dev\/dm-[0-9]/ ascii
-            $dd_mtd = /dd\s+[^\n]*of=\/dev\/mtd[0-9]/ ascii
-            $dd_mem = /dd\s+[^\n]*of=\/dev\/(k?mem|port)/ ascii
-          condition:
-            any of them
-        }
+      type: raw
+      regex: 'dd\s+.{0,100}if=/dev/u?random.{0,100}of=/dev/'
 
-  - id: proc-mounts-read
-    desc: Read /proc/mounts
-    crit: notable
-    conf: 0.7
+  # dd writing to specific block device types
+  - id: dd-to-sd
+    desc: dd writing to sd/hd/vd block device
+    crit: component
     for: [shell]
     if:
-      type: yara
-      source: |
-        rule proc_mounts {
-          strings:
-            $mounts = "/proc/mounts" ascii
-            $mountinfo = "/proc/self/mountinfo" ascii
-          condition:
-            any of them
-        }
+      type: raw
+      regex: 'dd\s+.{0,100}of=/dev/[shv]d[a-z]'
+
+  - id: dd-to-xvd
+    desc: dd writing to xvd block device
+    crit: component
+    for: [shell]
+    if:
+      type: raw
+      regex: 'dd\s+.{0,100}of=/dev/xvd[a-z]'
+
+  - id: dd-to-mmc
+    desc: dd writing to mmcblk device
+    crit: component
+    for: [shell]
+    if:
+      type: raw
+      regex: 'dd\s+.{0,100}of=/dev/mmcblk[0-9]'
+
+  - id: dd-to-nvme
+    desc: dd writing to nvme device
+    crit: component
+    for: [shell]
+    if:
+      type: raw
+      regex: 'dd\s+.{0,100}of=/dev/nvme[0-9]'
+
+  - id: dd-to-mapper
+    desc: dd writing to device mapper
+    crit: component
+    for: [shell]
+    if:
+      type: raw
+      regex: 'dd\s+.{0,100}of=/dev/mapper/'
+
+  - id: dd-to-disk
+    desc: dd writing to /dev/disk/
+    crit: component
+    for: [shell]
+    if:
+      type: raw
+      regex: 'dd\s+.{0,100}of=/dev/disk/'
+
+  - id: dd-to-dm
+    desc: dd writing to dm- device
+    crit: component
+    for: [shell]
+    if:
+      type: raw
+      regex: 'dd\s+.{0,100}of=/dev/dm-[0-9]'
+
+  - id: dd-to-mtd
+    desc: dd writing to mtd device
+    crit: component
+    for: [shell]
+    if:
+      type: raw
+      regex: 'dd\s+.{0,100}of=/dev/mtd[0-9]'
+
+  - id: dd-to-mem
+    desc: dd writing to memory device
+    crit: component
+    for: [shell]
+    if:
+      type: raw
+      regex: 'dd\s+.{0,100}of=/dev/(k?mem|port)'
 
   - id: xargs-parallel-flag
     desc: xargs with parallel flag
@@ -115,31 +147,36 @@ traits:
     conf: 0.7
     for: [shell]
     if:
-      type: yara
-      source: |
-        rule xargs_parallel {
-          strings:
-            $xargs_p = /xargs\s+[^\n]*-P\s*\d*/ ascii
-          condition:
-            $xargs_p
-        }
+      type: string
+      regex: 'xargs\s+.{0,50}-P\s*\d*'
 
-  - id: uid-check-pattern
-    desc: Shell root privilege check
-    crit: notable
+  # UID check atomic indicators
+  - id: uid-check-eq
+    desc: UID equals zero check
+    crit: component
     conf: 0.8
     for: [shell]
     if:
-      type: yara
-      source: |
-        rule uid_check {
-          strings:
-            $uid1 = /\$\{?UID\}?\s*(==|!=|-eq|-ne)\s*0/ ascii
-            $uid2 = /\$\{?EUID\}?\s*(==|!=|-eq|-ne)\s*0/ ascii
-            $uid3 = /\$\(id\s+-u\)\s*(==|!=|-eq|-ne)\s*0/ ascii
-          condition:
-            any of them
-        }
+      type: string
+      regex: '\$\{?UID\}?\s*(==|!=|-eq|-ne)\s*0'
+
+  - id: euid-check-eq
+    desc: EUID equals zero check
+    crit: component
+    conf: 0.8
+    for: [shell]
+    if:
+      type: string
+      regex: '\$\{?EUID\}?\s*(==|!=|-eq|-ne)\s*0'
+
+  - id: id-u-check
+    desc: id -u equals zero check
+    crit: component
+    conf: 0.8
+    for: [shell]
+    if:
+      type: string
+      regex: '\$\(id\s+-u\)\s*(==|!=|-eq|-ne)\s*0'
 
   - id: xargs-dd-pipeline
     desc: xargs piping to dd (wiper)
@@ -148,16 +185,31 @@ traits:
     attack: "T1561.002"
     for: [shell]
     if:
-      type: yara
-      source: |
-        rule xargs_dd_wipe {
-          strings:
-            $pipeline = /xargs\s+[^\n]*dd\s+[^\n]*\/dev\/zero/ ascii
-          condition:
-            $pipeline
-        }
+      type: raw
+      regex: 'xargs\s+.{0,100}dd\s+.{0,100}/dev/zero'
 
 composite_rules:
+  # Proc mounts read composite
+  - id: proc-mounts-read
+    desc: Read /proc/mounts
+    crit: notable
+    conf: 0.7
+    for: [shell]
+    any:
+      - id: micro-behaviors/fs/proc/mounts::mounts
+      - id: micro-behaviors/fs/proc/mounts::mounts-mountinfo
+
+  # UID check composite
+  - id: uid-check-pattern
+    desc: Shell root privilege check pattern
+    crit: notable
+    conf: 0.8
+    for: [shell]
+    any:
+      - id: uid-check-eq
+      - id: euid-check-eq
+      - id: id-u-check
+
   # Root privilege check composite
   - id: root-check
     desc: Shell root privilege check
@@ -178,6 +230,35 @@ composite_rules:
       - id: dev-grep-pattern
       - id: proc-mounts-read
       - id: micro-behaviors/fs/proc/mounts::mounts
+
+  # dd with destructive source composite
+  - id: dd-dev-zero
+    desc: dd with /dev/zero source
+    crit: suspicious
+    conf: 0.85
+    attack: "T1561.002"
+    for: [shell]
+    any:
+      - id: dd-zero-to-dev
+      - id: dd-urandom-to-dev
+
+  # dd writing to block devices composite
+  - id: dd-of-dev
+    desc: dd writing to block device
+    crit: suspicious
+    conf: 0.85
+    attack: "T1561.002"
+    for: [shell]
+    any:
+      - id: dd-to-sd
+      - id: dd-to-xvd
+      - id: dd-to-mmc
+      - id: dd-to-nvme
+      - id: dd-to-mapper
+      - id: dd-to-disk
+      - id: dd-to-dm
+      - id: dd-to-mtd
+      - id: dd-to-mem
 
   # Destructive dd composite
   - id: dd-destructive

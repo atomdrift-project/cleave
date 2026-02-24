@@ -136,33 +136,37 @@ traits:
       type: string
       exact: ".rar"
 
-  # === Download zip file composite pattern ===
+  # === Download atomic indicators ===
+  - id: application-zip-mime
+    desc: application/zip MIME type
+    crit: component
+    for: [javascript, typescript]
+    if:
+      type: string
+      substr: "application/zip"
+
+composite_rules:
+  # Archive indicators
+  - id: archive-indicators
+    desc: Archive file indicators
+    crit: component
+    for: [javascript, typescript]
+    any:
+      - id: zip-ext
+      - id: 7z-ext
+      - id: application-zip-mime
+
+  # Download zip composite - uses directory reference for HTTP and existing write composite
   - id: download-zip
-    desc: "Downloads zip archive from remote"
+    desc: Downloads zip archive from remote
     crit: notable
     conf: 0.85
     attack: "T1105"
     for: [javascript, typescript]
-    if:
-      type: yara
-      source: |
-        rule download_zip {
-          strings:
-            $dl1 = "https.get" ascii
-            $dl2 = "http.get" ascii
-            $dl3 = "fetch(" ascii
-            $dl4 = "axios.get" ascii
-            $dl5 = "request(" ascii
-            $zip1 = ".zip" ascii
-            $zip2 = ".7z" ascii
-            $zip3 = "application/zip" ascii
-            $write1 = "createWriteStream" ascii
-            $write2 = "writeFileSync" ascii
-          condition:
-            any of ($dl*) and any of ($zip*) and any of ($write*)
-        }
-
-composite_rules:
+    all:
+      - id: micro-behaviors/communications/http/request
+      - id: archive-indicators
+      - id: micro-behaviors/fs/write/file::js-file-write
   - id: 7z-exe
     desc: "7z.exe reference"
     crit: notable

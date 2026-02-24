@@ -142,8 +142,7 @@ traits:
     attack: "T1037.004"
     for: [shell, elf, macho, python]
     if:
-      type: string
-      substr: "chkconfig"
+      id: micro-behaviors/os/service/control::chkconfig-word
 
   # === Desktop entry exec atomic indicators ===
   - id: exec-eq-directive

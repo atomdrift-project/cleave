@@ -1,0 +1,14 @@
+# User Modification Commands
+
+defaults:
+  for: [shell, elf]
+  platforms: [linux]
+
+traits:
+  - id: usermod
+    desc: usermod command
+    crit: notable
+    conf: 0.8
+    if:
+      type: string
+      word: "usermod"

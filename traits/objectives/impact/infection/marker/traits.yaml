@@ -52,31 +52,86 @@ traits:
             none of ($llvm, $clang, $objcopy, $binutils, $flex, $lex, $yacc, $bison, $scanner)
         }
 
-  - id: infected-xor-yara
+  # === XOR-encoded infection marker atomic indicators ===
+  - id: infected-xor
+    desc: XOR-encoded infected string
+    crit: component
+    for: [binaries]
+    if:
+      type: encoded
+      encoding: xor
+      word: "infected"
+      case_insensitive: true
+
+  - id: virus-xor
+    desc: XOR-encoded virus string
+    crit: component
+    for: [binaries]
+    if:
+      type: encoded
+      encoding: xor
+      word: "virus"
+
+  - id: trojan-xor
+    desc: XOR-encoded trojan string
+    crit: component
+    for: [binaries]
+    if:
+      type: encoded
+      encoding: xor
+      word: "trojan"
+
+  - id: worm-xor
+    desc: XOR-encoded worm string
+    crit: component
+    for: [binaries]
+    if:
+      type: encoded
+      encoding: xor
+      word: "worm"
+
+  - id: malware-xor
+    desc: XOR-encoded malware string
+    crit: component
+    for: [binaries]
+    if:
+      type: encoded
+      encoding: xor
+      word: "malware"
+
+  - id: win-error-virus
+    desc: Windows ERROR_VIRUS_INFECTED constant
+    crit: component
+    for: [binaries]
+    if:
+      type: string
+      substr: "ERROR_VIRUS_INFECTED"
+
+composite_rules:
+  # XOR-encoded malware type indicators
+  - id: malware-type-xor
+    desc: XOR-encoded malware type string
+    crit: component
+    for: [binaries]
+    any:
+      - id: virus-xor
+      - id: trojan-xor
+      - id: worm-xor
+      - id: malware-xor
+
+  # XOR-encoded infection markers composite
+  - id: infected-xor-pattern
     desc: XOR obfuscated infection marker pattern
     crit: suspicious
     conf: 0.95
     attack: "T1027"
     for: [binaries]
-    if:
-      type: yara
-      source: |
-        rule infected_xor {
-          strings:
-            $infected_x = "infected" xor(1-255) fullword
-            $INFECTED_x = "INFECTED" xor(1-255) fullword
-            $virus_x = "virus" xor(1-255) fullword
-            $trojan_x = "trojan" xor(1-255) fullword
-            $worm_x = "worm" xor(1-255) fullword
-            $malware_x = "malware" xor(1-255) fullword
-            $win_error = "ERROR_VIRUS_INFECTED"
-          condition:
-            filesize < 5MB and
-            any of ($infected_x, $INFECTED_x) and
-            any of ($virus_x, $trojan_x, $worm_x, $malware_x) and
-            not $win_error
-        }
+    size_max: 5242880
+    all:
+      - id: infected-xor
+      - id: malware-type-xor
+    none:
+      - id: win-error-virus
 
-composite_rules:
   # NOTE: Simple libc function references are too common in statically linked binaries
   # Require explicit infection markers or embedded ELF payloads at non-zero offset

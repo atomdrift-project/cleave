@@ -78,32 +78,30 @@ pub(crate) fn run(
     // Read file data
     let full_data = fs::read(path)?;
 
-    // For Mach-O FAT binaries, we need to evaluate ALL architecture slices (like production).
-    // This ensures findings from any arch are visible, preventing discrepancies where traits
-    // match in x86_64 but not ARM64 (or vice versa).
-    let (binary_data, arch_slices): (Vec<u8>, Vec<Vec<u8>>) = if file_type == FileType::MachO {
+    // For Mach-O FAT binaries, use the full file for evaluation so string offsets are file-relative.
+    // This ensures offset_range constraints (like [-2200, -100]) work correctly.
+    let (binary_data, is_fat): (Vec<u8>, bool) = if file_type == FileType::MachO {
         let analyzer = MachOAnalyzer::new();
         let preferred_range = analyzer.preferred_arch_range(&full_data);
         let all_ranges = analyzer.all_arch_ranges(&full_data);
+        let is_fat = all_ranges.len() > 1;
 
-        if all_ranges.len() > 1 {
+        if is_fat {
             eprintln!(
-                "Note: FAT binary with {} architectures, evaluating all slices",
+                "Note: FAT binary with {} architectures, evaluating full file",
                 all_ranges.len()
             );
         }
 
-        let slices: Vec<Vec<u8>> = all_ranges
-            .iter()
-            .map(|r| full_data[r.clone()].to_vec())
-            .collect();
         let preferred = full_data[preferred_range].to_vec();
-        (preferred, slices)
+        (preferred, is_fat)
     } else {
-        (full_data.clone(), vec![full_data])
+        (full_data.clone(), false)
     };
 
     // Create a basic report by analyzing the file (uses preferred arch for structure)
+    // For FAT binaries, the MachOAnalyzer extracts strings from the full file
+    // so offsets are file-relative and offset_range constraints work correctly.
     let mut report = create_analysis_report(path, &file_type, &binary_data, &capability_mapper)?;
 
     // Run YARA scan on preferred arch slice (matching production behavior)
@@ -129,24 +127,24 @@ pub(crate) fn run(
         HashMap::new()
     };
 
-    // Evaluate traits against ALL architecture slices to match production behavior.
-    // Findings are merged/deduplicated, so traits matching in any arch will be visible.
+    // Evaluate traits against the binary data.
+    // For FAT binaries, we use the full file so string offsets are file-relative.
     let inline_yara_ref = if inline_yara.is_empty() {
         None
     } else {
         Some(&inline_yara)
     };
-    for slice in &arch_slices {
-        capability_mapper.evaluate_and_merge_findings(&mut report, slice, None, inline_yara_ref);
-    }
+    let eval_data = if is_fat { &full_data } else { &binary_data };
+    capability_mapper.evaluate_and_merge_findings(&mut report, eval_data, None, inline_yara_ref);
 
     // Create debugger and debug each rule
     // Pass platforms from CLI for consistency with production evaluation
     // Pass inline_yara so debug evaluation uses the exact same context as production
+    // For FAT binaries, use full file so string offsets are file-relative
     let debugger = test_rules::RuleDebugger::new(
         &capability_mapper,
         &report,
-        &binary_data,
+        eval_data,
         &capability_mapper.composite_rules,
         capability_mapper.trait_definitions(),
         platforms,

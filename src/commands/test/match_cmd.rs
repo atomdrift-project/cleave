@@ -161,32 +161,41 @@ pub(crate) fn run(
     // Read file data
     let full_data = fs::read(path)?;
 
-    // For Mach-O files, extract the preferred architecture slice to match production behavior.
-    // This ensures test-match evaluates the same data as a full scan, preventing discrepancies
-    // with count-based constraints (min_count) and offset-based patterns (hex offset, YARA at N).
-    let binary_data: Vec<u8> = if file_type == FileType::MachO {
+    // For Mach-O FAT binaries, use the full file for evaluation so string offsets are file-relative.
+    // This ensures offset_range constraints (like [-2200, -100]) work correctly.
+    let (binary_data, is_fat): (Vec<u8>, bool) = if file_type == FileType::MachO {
         let analyzer = MachOAnalyzer::new();
         let range = analyzer.preferred_arch_range(&full_data);
-        if range != (0..full_data.len()) {
+        let is_fat = range != (0..full_data.len());
+        if is_fat {
             eprintln!(
-                "Note: FAT binary detected, testing preferred arch slice (bytes {}..{})",
-                range.start, range.end
+                "Note: FAT binary detected, using full file for evaluation"
             );
         }
-        full_data[range].to_vec()
+        (full_data[range].to_vec(), is_fat)
     } else {
-        full_data
+        (full_data.clone(), false)
     };
 
     // Create a basic report by analyzing the file
-    let report = create_analysis_report(path, &file_type, &binary_data, &capability_mapper)?;
+    let mut report = create_analysis_report(path, &file_type, &binary_data, &capability_mapper)?;
+
+    // For FAT binaries, re-extract strings from the full file so offsets are file-relative
+    if is_fat {
+        let string_extractor = crate::strings::StringExtractor::default();
+        report.strings = string_extractor.extract_smart(&full_data, None);
+    }
+
+    // Evaluation data: full file for FAT binaries, slice otherwise
+    let eval_data = if is_fat { &full_data[..] } else { &binary_data[..] };
 
     // Create debugger to access search functions
     // Note: test-match doesn't use YARA results since it tests individual conditions
+    // For FAT binaries, use full file so string offsets are file-relative
     let debugger = RuleDebugger::new(
         &capability_mapper,
         &report,
-        &binary_data,
+        eval_data,
         &capability_mapper.composite_rules,
         capability_mapper.trait_definitions(),
         platforms.clone(),
@@ -195,7 +204,7 @@ pub(crate) fn run(
     let context_info = debugger.context_info();
 
     // Create section map for location constraint resolution
-    let section_map = composite_rules::SectionMap::from_binary(&binary_data);
+    let section_map = composite_rules::SectionMap::from_binary(eval_data);
 
     // Resolve effective byte range from location constraints
     // Returns (start, end, effective_size) where effective_size is used for density calculations

@@ -21,8 +21,7 @@ traits:
     conf: 0.7
     attack: T1543.002
     if:
-      type: string
-      word: "systemctl"
+      id: micro-behaviors/os/service/control::systemctl-word
 
   - id: etc-systemd-path
     desc: /etc/systemd directory path (system services)

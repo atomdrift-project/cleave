@@ -306,7 +306,8 @@ fn analyze_file_with_context(
             let analyzer =
                 MachOAnalyzer::new().with_capability_mapper((**capability_mapper).clone());
             let range = analyzer.preferred_arch_range(&data);
-            let arch_data = &data[range];
+            let arch_data = &data[range.clone()];
+            let is_fat = analyzer.all_arch_ranges(&data).len() > 1;
             let file_types: &[&str] = &["macho", "dylib", "kext"];
             let (struct_result, yara_result) = rayon::join(
                 || analyzer.analyze_structural(path, arch_data),
@@ -319,10 +320,26 @@ fn analyze_file_with_context(
             );
             let mut report = struct_result?;
             analyzer.apply_fat_metadata(&mut report, &data);
+
+            // For FAT binaries, re-extract strings from the full file so offsets are file-relative.
+            // This ensures offset_range constraints (like [-2200, -100]) work correctly.
+            if is_fat {
+                let string_extractor = crate::strings::StringExtractor::default();
+                report.strings = string_extractor.extract_smart(&data, None);
+                // Update string count metric
+                if let Some(ref mut metrics) = report.metrics {
+                    if let Some(ref mut binary_metrics) = metrics.binary {
+                        binary_metrics.string_count = report.strings.len() as u32;
+                    }
+                }
+            }
+
             let inline_yara = process_yara_result(&mut report, yara_result, yara_engine.as_deref());
+            // For FAT binaries, evaluate against full file since strings have file-relative offsets
+            let eval_data = if is_fat { &data[..] } else { arch_data };
             capability_mapper.evaluate_and_merge_findings(
                 &mut report,
-                arch_data,
+                eval_data,
                 None,
                 Some(&inline_yara),
             );

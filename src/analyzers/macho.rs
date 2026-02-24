@@ -1155,13 +1155,30 @@ impl Analyzer for MachOAnalyzer {
         let mut report = self.analyze_structural(file_path, preferred_data)?;
         self.apply_fat_metadata(&mut report, &data);
 
-        // Evaluate traits against ALL architecture slices to catch malware in any arch.
-        // This prevents attackers from hiding malicious code in non-preferred architectures
-        // (e.g., x86_64 slice that runs via Rosetta 2 on Apple Silicon).
-        for arch_range in &arch_ranges {
-            let arch_data = &data[arch_range.clone()];
+        // For FAT binaries, re-extract strings from the entire file so offsets are file-relative.
+        // This ensures offset_range constraints (like [-2200, -100]) work correctly.
+        let is_fat = arch_ranges.len() > 1;
+        if is_fat && self.preextracted_strings.is_none() {
+            report.strings = self.string_extractor.extract_smart(&data, None);
+            // Update string count metric
+            if let Some(ref mut metrics) = report.metrics {
+                if let Some(ref mut binary_metrics) = metrics.binary {
+                    binary_metrics.string_count = report.strings.len() as u32;
+                }
+            }
+        }
+
+        // Evaluate traits against binary data.
+        // For FAT binaries, evaluate against the full file since strings have file-relative offsets.
+        // For thin binaries, evaluate against the single slice (same as full file).
+        if is_fat {
+            // Full file evaluation - strings and offsets are file-relative
             self.capability_mapper
-                .evaluate_and_merge_findings(&mut report, arch_data, None, None);
+                .evaluate_and_merge_findings(&mut report, &data, None, None);
+        } else {
+            // Thin binary - single slice is the whole file
+            self.capability_mapper
+                .evaluate_and_merge_findings(&mut report, preferred_data, None, None);
         }
 
         Ok(report)

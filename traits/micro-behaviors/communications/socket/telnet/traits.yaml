@@ -8,7 +8,7 @@ defaults:
 
 traits:
   - id: telnet
-    desc: telnet command
+    desc: Telnet protocol reference
     if:
       type: string
-      regex: '\btelnet\s+'
+      word: "telnet"

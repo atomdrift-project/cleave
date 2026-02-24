@@ -71,25 +71,15 @@ traits:
       type: string
       exact: "ptmx"
 
-  # NOTE: Cannot migrate - requires SOCKS5 handshake hex pattern { 05 01 00 }
-  - id: go-socks-proxy
-    desc: Go SOCKS5 proxy implementation
-    crit: suspicious
-    conf: 0.8
-    for: [go]
+  # SOCKS5 version handshake hex pattern
+  - id: socks5-handshake
+    desc: SOCKS5 version handshake bytes
+    crit: component
+    for: [go, elf, macho, pe]
     if:
-      type: yara
-      source: |
-        rule go_socks {
-          strings:
-            $socks_ver = { 05 01 00 } // SOCKS5 handshake
-            $socks_auth = "socksUsernamePassword" ascii
-            $socks_dial = "socksNewDialer" ascii
-            $socks_cmd = "socksCommand" ascii
-            $socks_addr = "socksAddr" ascii
-          condition:
-            ($socks_ver and any of ($socks_*)) or 2 of ($socks_*)
-        }
+      type: hex
+      # SOCKS5 version 5, 1 method, no auth required
+      pattern: "05 01 00"
 
 composite_rules:
   # === Helper composites ===
@@ -101,6 +91,36 @@ composite_rules:
       - id: go-socks-cmd
       - id: go-socks-addr
     crit: notable
+
+  # SOCKS5 handshake with any Go SOCKS string
+  - id: socks5-with-go-strings
+    desc: SOCKS5 handshake with Go SOCKS strings
+    crit: component
+    for: [go, elf, macho, pe]
+    all:
+      - id: socks5-handshake
+      - id: go-socks-strings
+
+  # 2+ Go SOCKS library strings
+  - id: go-socks-strings-2
+    desc: Two or more Go SOCKS library strings
+    crit: component
+    for: [go, elf, macho, pe]
+    needs: 2
+    any:
+      - id: go-socks-auth
+      - id: go-socks-dialer
+      - id: go-socks-cmd
+      - id: go-socks-addr
+
+  - id: go-socks-proxy
+    desc: Go SOCKS5 proxy implementation
+    crit: suspicious
+    conf: 0.8
+    for: [go]
+    any:
+      - id: socks5-with-go-strings
+      - id: go-socks-strings-2
 
   - id: go-pty-strings
     desc: Go PTY library strings

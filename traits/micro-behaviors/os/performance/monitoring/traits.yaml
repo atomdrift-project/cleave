@@ -1,0 +1,39 @@
+# System Performance Monitoring Tools
+
+defaults:
+  for: [all]
+
+traits:
+  - id: htop-atop
+    desc: Interactive process monitors (htop/atop)
+    crit: baseline
+    conf: 0.9
+    if:
+      type: string
+      regex: "\\b(htop|atop|iotop|iftop)\\b"
+
+  - id: stat-tools
+    desc: System statistics tools (vmstat/iostat/mpstat/sar)
+    crit: baseline
+    conf: 0.9
+    if:
+      type: string
+      regex: "\\b(vmstat|iostat|mpstat|sar)\\b"
+
+  - id: lsmem
+    desc: Memory information tool
+    crit: baseline
+    conf: 0.9
+    if:
+      type: string
+      word: "lsmem"
+
+composite_rules:
+  - id: performance-monitoring
+    desc: System performance monitoring utilities
+    crit: baseline
+    conf: 0.9
+    any:
+      - id: htop-atop
+      - id: stat-tools
+      - id: lsmem

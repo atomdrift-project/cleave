@@ -54,55 +54,7 @@ traits:
       type: string
       substr: "from ctypes import"
 
-  # YARA-based detection traits
-  - id: bsod-trigger-yara
-    desc: Windows BSOD trigger via YARA
-    crit: suspicious
-    conf: 0.99
-    attack: "T1499.004"
-    mbc: "B0033"
-    if:
-      type: yara
-      source: |
-        rule windows_bsod_trigger {
-          meta:
-            description = "Detects Windows BSOD trigger pattern"
-          strings:
-            $ntdll1 = "ntdll" ascii nocase
-            $ntdll2 = "windll.ntdll" ascii
-            $raise = "NtRaiseHardError" ascii
-            $adjust = "RtlAdjustPrivilege" ascii
-            $priv19 = /RtlAdjustPrivilege\s*\(\s*(c_uint\()?19/
-            $status = /0x[Cc]000007[Bb]/ ascii
-          condition:
-            filesize < 1MB and
-            any of ($ntdll*) and
-            ($raise or ($adjust and $status) or $priv19)
-        }
-
-  - id: python-bsod-yara
-    desc: Python BSOD trigger via YARA
-    crit: suspicious
-    conf: 0.99
-    for: [python]
-    attack: "T1499.004"
-    if:
-      type: yara
-      source: |
-        rule python_bsod_trigger {
-          meta:
-            description = "Python ctypes BSOD trigger"
-          strings:
-            $ctypes = "from ctypes import" ascii
-            $windll = "windll" ascii
-            $ntdll = "ntdll" ascii
-            $raise = "NtRaiseHardError" ascii
-            $adjust = "RtlAdjustPrivilege" ascii
-          condition:
-            filesize < 1MB and
-            $ctypes and $windll and $ntdll and
-            ($raise or $adjust)
-        }
+  # NOTE: Removed bsod-trigger-yara and python-bsod-yara - replaced with composites below
 
 composite_rules:
   # ntdll-reference: composite referencing canonical ntdll-import plus windll.ntdll Python variant

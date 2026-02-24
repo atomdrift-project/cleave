@@ -80,45 +80,124 @@ traits:
             $echo_cron or (any of ($cron_d, $crontab, $spool_cron) and filesize < 200KB)
         }
 
-  # Writability test before deployment
+  # Writability test atomic traits
+  - id: shell-test-w
+    desc: Shell test writable command
+    crit: component
+    if:
+      type: string
+      substr: "test -w"
+
+  - id: shell-test-d
+    desc: Shell test directory command
+    crit: component
+    if:
+      type: string
+      substr: "test -d"
+
+  - id: shell-chmod-0755
+    desc: Shell chmod 0755 command
+    crit: component
+    if:
+      type: string
+      substr: "chmod 0755"
+
+  - id: shell-rm-f
+    desc: Shell rm -f command
+    crit: component
+    if:
+      type: string
+      substr: "rm -f"
+
+  # Mtime preservation atomic traits (for timestomping)
+  - id: stat-mtime
+    desc: mtime string reference
+    crit: component
+    if:
+      type: string
+      word: "mtime"
+
+  - id: touch-t
+    desc: touch -t command (set timestamp)
+    crit: component
+    if:
+      type: string
+      substr: "touch -t"
+
+  - id: touch-r
+    desc: touch -r command (copy timestamp)
+    crit: component
+    if:
+      type: string
+      substr: "touch -r"
+
+  - id: stat-modify-pipe
+    desc: stat piped to Modify filter
+    crit: component
+    if:
+      type: raw
+      regex: "stat\\s+[\"'].{1,50}[\"']\\s*\\|.{0,30}Modify"
+
+composite_rules:
+  # Writability test composites
+  - id: shell-test-dir-and-write
+    desc: Tests both directory existence and writability
+    crit: component
+    all:
+      - id: shell-test-w
+      - id: shell-test-d
+
+  - id: shell-chmod-any
+    desc: Any chmod executable command
+    crit: component
+    any:
+      - id: micro-behaviors/fs/chmod/executable::shell-plus-x
+      - id: shell-chmod-0755
+
   - id: writability-test
     desc: Tests directory writability before malware
     crit: suspicious
     conf: 0.8
-    if:
-      type: yara
-      source: |
-        rule writability_test {
-          strings:
-            $test_w = "test -w" ascii
-            $test_d = "test -d" ascii
-            $chmod_x = "chmod +x" ascii
-            $chmod_0755 = "chmod 0755" ascii
-            $rm_f = "rm -f" ascii
-          condition:
-            ($test_w and $test_d) and (any of ($chmod*)) and $rm_f
-        }
+    all:
+      - id: shell-test-dir-and-write
+      - id: shell-chmod-any
+      - id: shell-rm-f
 
-  # Mtime preservation pattern (for timestomping)
+  # Mtime preservation composites
+  - id: stat-any
+    desc: Any stat command reference
+    crit: component
+    any:
+      - id: stat-modify-pipe
+      - id: stat-mtime
+
+  - id: touch-any
+    desc: Any touch timestamp command
+    crit: component
+    any:
+      - id: touch-t
+      - id: touch-r
+
+  - id: stat-touch-combo
+    desc: stat + touch combination
+    crit: component
+    all:
+      - id: stat-any
+      - id: touch-any
+
+  - id: touch-mtime-combo
+    desc: touch -t + mtime combination
+    crit: component
+    all:
+      - id: touch-t
+      - id: stat-mtime
+
   - id: mtime-preservation
     desc: Preserves directory timestamps to hide
     crit: suspicious
     conf: 0.85
-    if:
-      type: yara
-      source: |
-        rule mtime_preservation {
-          strings:
-            // Stat to get modification time
-            $stat_modify = /stat\s+["'][^"']+["']\s*\|.{0,30}Modify/ ascii
-            $stat_mtime = "mtime" ascii
-            // Touch to restore
-            $touch_t = "touch -t" ascii
-            $touch_r = "touch -r" ascii
-          condition:
-            (any of ($stat*) and any of ($touch*)) or
-            ($touch_t and $stat_mtime)
-        }
+    any:
+      - id: stat-touch-combo
+      - id: touch-mtime-combo
 
-composite_rules:
   # Full supply chain dropper in shell

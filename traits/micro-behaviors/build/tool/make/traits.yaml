@@ -8,19 +8,35 @@ defaults:
 
 traits:
   # === Dummy Targets ===
+  - id: makefile-install-target
+    desc: Makefile install target
+    crit: component
+    if:
+      type: string
+      substr: "install:"
+
+  - id: makefile-all-target
+    desc: Makefile all target
+    crit: component
+    if:
+      type: string
+      substr: "all:"
+
+  - id: makefile-clean-target
+    desc: Makefile clean target
+    crit: component
+    if:
+      type: string
+      substr: "clean:"
+
+composite_rules:
   - id: dummy-makefile-targets
     desc: Makefile with empty targets (install/all/clean)
     crit: suspicious
     conf: 0.9
     size_max: 200
-    if:
-      type: yara
-      source: |
-        rule dummy_makefile {
-            strings:
-                $s1 = "install:"
-                $s2 = "all:"
-                $s3 = "clean:"
-            condition:
-                2 of them
-        }
+    needs: 2
+    any:
+      - id: makefile-install-target
+      - id: makefile-all-target
+      - id: makefile-clean-target

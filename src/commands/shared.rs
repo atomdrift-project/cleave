@@ -267,7 +267,8 @@ pub(crate) fn analyze_file_with_shared_mapper(
                 .with_capability_mapper_arc(capability_mapper.clone())
                 .with_preextracted_strings(preextracted_strings.clone());
             let range = analyzer.preferred_arch_range(file_data);
-            let arch_data = &file_data[range];
+            let arch_data = &file_data[range.clone()];
+            let is_fat = analyzer.all_arch_ranges(file_data).len() > 1;
             let engine = shared_yara_engine.as_ref();
             let file_types: &[&str] = &["macho", "dylib", "kext"];
             let (struct_result, yara_result) = rayon::join(
@@ -281,12 +282,28 @@ pub(crate) fn analyze_file_with_shared_mapper(
             let mut report = struct_result?;
             // Apply fat binary metadata
             analyzer.apply_fat_metadata(&mut report, file_data);
+
+            // For FAT binaries, re-extract strings from the full file so offsets are file-relative.
+            // This ensures offset_range constraints (like [-2200, -100]) work correctly.
+            if is_fat && preextracted_strings.is_empty() {
+                let string_extractor = crate::strings::StringExtractor::default();
+                report.strings = string_extractor.extract_smart(file_data, None);
+                // Update string count metric
+                if let Some(ref mut metrics) = report.metrics {
+                    if let Some(ref mut binary_metrics) = metrics.binary {
+                        binary_metrics.string_count = report.strings.len() as u32;
+                    }
+                }
+            }
+
             // Process YARA results and evaluate with inline YARA
             let inline_yara =
                 process_yara_result(&mut report, yara_result, engine.as_ref().map(AsRef::as_ref));
+            // For FAT binaries, evaluate against full file since strings have file-relative offsets
+            let eval_data = if is_fat { file_data } else { arch_data };
             capability_mapper.evaluate_and_merge_findings(
                 &mut report,
-                arch_data,
+                eval_data,
                 None,
                 Some(&inline_yara),
             );

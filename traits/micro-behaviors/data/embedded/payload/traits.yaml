@@ -92,7 +92,7 @@ traits:
     if:
       type: hex
       pattern: "7F 45 4C 46"
-      offset_min: 4096
+      offset_range: [4096, null]
 
   - id: pe-magic-embedded
     desc: Embedded PE/MZ binary
@@ -104,7 +104,7 @@ traits:
     if:
       type: hex
       pattern: "4D 5A 90 00"
-      offset_min: 4096
+      offset_range: [4096, null]
 
   # === Embedded Archive Formats ===
 

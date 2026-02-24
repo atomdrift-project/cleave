@@ -1,180 +1,339 @@
 # ESXi Targeting Traits (Ransomware)
 # ATT&CK: T1486 (Data Encrypted for Impact)
 # MBC: C0027 (Encrypt Files)
+#
+# NOTE: Most atomic ESXi traits are in micro-behaviors/vm/detect/vmware/
+# This file adds ransomware-specific patterns and composites.
 
 defaults:
   for: [all]
 
 traits:
-  # ESXi VM enumeration
+  # === VM enumeration atomic indicators ===
+  # vmsvc-getallvms is in objectives/impact/services/stop
+
+  - id: vim-cmd-vmsvc
+    desc: vim-cmd vmsvc command
+    crit: component
+    conf: 0.85
+    if:
+      type: string
+      substr: "vim-cmd vmsvc"
+
+  - id: esxcli-formatter
+    desc: esxcli --formatter flag
+    crit: component
+    conf: 0.7
+    if:
+      type: string
+      substr: "esxcli --formatter"
+
+  - id: world-id-str
+    desc: WorldID string
+    crit: component
+    conf: 0.6
+    if:
+      type: string
+      word: "WorldID"
+
+  - id: display-name-str
+    desc: DisplayName string
+    crit: component
+    conf: 0.5
+    if:
+      type: string
+      word: "DisplayName"
+
+  # === VM kill atomic indicators ===
+  - id: vm-process-kill
+    desc: vm process kill command
+    crit: component
+    conf: 0.9
+    if:
+      type: string
+      substr: "vm process kill"
+
+  - id: vmsvc-power-off
+    desc: vmsvc/power.off command
+    crit: component
+    conf: 0.9
+    if:
+      type: string
+      substr: "vmsvc/power.off"
+
+  - id: type-force-flag
+    desc: --type=force flag
+    crit: component
+    conf: 0.8
+    if:
+      type: string
+      substr: "--type=force"
+
+  - id: type-hard-flag
+    desc: --type=hard flag
+    crit: component
+    conf: 0.8
+    if:
+      type: string
+      substr: "--type=hard"
+
+  - id: power-off-cmd
+    desc: power.off command
+    crit: component
+    conf: 0.7
+    if:
+      type: string
+      substr: "power.off"
+
+  - id: power-suspend-cmd
+    desc: power.suspend command
+    crit: component
+    conf: 0.7
+    if:
+      type: string
+      substr: "power.suspend"
+
+  # === Snapshot atomic indicators ===
+  - id: snapshot-removeall
+    desc: snapshot.removeall command
+    crit: component
+    conf: 0.9
+    if:
+      type: string
+      substr: "snapshot.removeall"
+
+  - id: snapshot-remove
+    desc: snapshot.remove command
+    crit: component
+    conf: 0.85
+    if:
+      type: string
+      substr: "snapshot.remove"
+
+  - id: vmsvc-snapshot
+    desc: vmsvc/snapshot command
+    crit: component
+    conf: 0.85
+    if:
+      type: string
+      substr: "vmsvc/snapshot"
+
+  - id: remove-all-snapshots
+    desc: RemoveAllSnapshots function
+    crit: component
+    conf: 0.9
+    if:
+      type: string
+      word: "RemoveAllSnapshots"
+
+  # === CLI tools atomic indicators ===
+  # vim-cmd is in well-known/malware/ransomware/medusa
+
+  - id: esxcfg-prefix
+    desc: esxcfg- tool prefix
+    crit: component
+    conf: 0.8
+    if:
+      type: string
+      substr: "esxcfg-"
+
+  - id: vmkfstools-cmd
+    desc: vmkfstools command
+    crit: component
+    conf: 0.8
+    if:
+      type: string
+      word: "vmkfstools"
+
+  - id: vmware-cmd-tool
+    desc: vmware-cmd tool
+    crit: component
+    conf: 0.8
+    if:
+      type: string
+      word: "vmware-cmd"
+
+  # === Version detection atomic indicators ===
+  - id: esxi-version-var
+    desc: EsxiVersion variable
+    crit: component
+    conf: 0.7
+    if:
+      type: string
+      regex: '[Ee]sxi[_]?[Vv]ersion'
+
+  - id: vmware-version-var
+    desc: vmware_version variable
+    crit: component
+    conf: 0.7
+    if:
+      type: string
+      regex: 'vmware[_]?version'
+      case_insensitive: true
+
+  - id: esx-conf-path
+    desc: /etc/vmware/esx.conf path
+    crit: component
+    conf: 0.8
+    if:
+      type: string
+      substr: "/etc/vmware/esx.conf"
+
+  - id: system-version-get
+    desc: system version get command
+    crit: component
+    conf: 0.7
+    if:
+      type: string
+      substr: "system version get"
+
+  # === Datastore atomic indicators ===
+  - id: storage-filesystem-list
+    desc: storage filesystem list command
+    crit: component
+    conf: 0.8
+    if:
+      type: string
+      substr: "storage filesystem list"
+
+  - id: esxcli-storage
+    desc: esxcli storage command
+    crit: component
+    conf: 0.8
+    if:
+      type: string
+      substr: "esxcli storage"
+
+composite_rules:
+  # VM enumeration composite
+  - id: vmsvc-enum
+    desc: vmsvc enumeration commands
+    crit: component
+    any:
+      - id: objectives/impact/services/stop::vmsvc-getallvms
+      - id: vim-cmd-vmsvc
+
+  - id: world-display-combo
+    desc: WorldID and DisplayName combo
+    crit: component
+    all:
+      - id: world-id-str
+      - id: display-name-str
+
   - id: vm-enumeration
     desc: ESXi virtual machine enumeration
     crit: suspicious
     conf: 0.85
     mbc: "C0027"
     attack: "T1486"
-    if:
-      type: yara
-      source: |
-        rule esxi_vm_enum {
-          strings:
-            $vmsvc1 = "vmsvc/getallvms" ascii
-            $vmsvc2 = "vim-cmd vmsvc" ascii
-            $esxcli1 = "esxcli vm process list" ascii
-            $esxcli2 = "esxcli --formatter" ascii
-            $list1 = "WorldID" ascii
-            $list2 = "DisplayName" ascii
-          condition:
-            any of ($vmsvc*) or any of ($esxcli*) or ($list1 and $list2)
-        }
+    any:
+      - id: vmsvc-enum
+      - id: micro-behaviors/vm/detect/vmware::esxcli-vm-list
+      - id: esxcli-formatter
+      - id: world-display-combo
 
-  # ESXi VM termination
+  # VM kill composite
+  - id: kill-commands
+    desc: VM kill commands
+    crit: component
+    any:
+      - id: vm-process-kill
+      - id: vmsvc-power-off
+      - id: type-force-flag
+      - id: type-hard-flag
+      - id: micro-behaviors/vm/detect/vmware::esxi-world-id-param
+
+  - id: power-commands
+    desc: VM power commands
+    crit: component
+    any:
+      - id: power-off-cmd
+      - id: power-suspend-cmd
+
   - id: vm-kill
     desc: ESXi virtual machine termination command
     crit: suspicious
     conf: 0.9
     mbc: "C0027"
     attack: "T1489"
-    if:
-      type: yara
-      source: |
-        rule esxi_vm_kill {
-          strings:
-            $kill1 = "vm process kill" ascii
-            $kill2 = "vmsvc/power.off" ascii
-            $kill3 = "--type=force" ascii
-            $kill4 = "--type=soft" ascii
-            $kill5 = "--type=hard" ascii
-            $kill6 = "--world-id" ascii
-            $power1 = "power.off" ascii
-            $power2 = "power.suspend" ascii
-          condition:
-            any of ($kill*) or any of ($power*)
-        }
+    any:
+      - id: kill-commands
+      - id: power-commands
+      - id: micro-behaviors/vm/detect/vmware::esxcli-vm-kill
 
-  # ESXi snapshot manipulation
+  # Snapshot composite
   - id: snapshot
-    desc: ESXi snapshot removal command (ransomware
+    desc: ESXi snapshot removal command (ransomware)
     crit: suspicious
     conf: 0.9
     mbc: "C0027"
     attack: "T1490"
-    if:
-      type: yara
-      source: |
-        rule esxi_snapshot {
-          strings:
-            $snap1 = "snapshot.removeall" ascii
-            $snap2 = "snapshot.remove" ascii
-            $snap3 = "vmsvc/snapshot" ascii
-            $snap4 = "RemoveAllSnapshots" ascii
-            $snap5 = "snapshot_remove" ascii
-            // Loop pattern for mass removal
-            $loop = "for i in" ascii
-            $vmsvc = "vim-cmd" ascii
-          condition:
-            any of ($snap*) or ($loop and $vmsvc)
-        }
+    any:
+      - id: snapshot-removeall
+      - id: snapshot-remove
+      - id: vmsvc-snapshot
+      - id: remove-all-snapshots
+      - id: micro-behaviors/vm/detect/vmware::vimcmd-snapshot-remove
 
-  # ESXi file targeting
+  # File targeting - use existing micro-behaviors
   - id: file-targeting
     desc: ESXi-specific file extension targeting
     crit: suspicious
     conf: 0.85
     mbc: "C0027"
     attack: "T1486"
-    if:
-      type: yara
-      source: |
-        rule esxi_file_targeting {
-          strings:
-            $ext1 = ".vmdk" ascii wide
-            $ext2 = ".vmx" ascii wide
-            $ext3 = ".vmxf" ascii wide
-            $ext4 = ".vmsd" ascii wide
-            $ext5 = ".vmsn" ascii wide
-            $ext6 = ".vswp" ascii wide
-            $ext7 = ".vmem" ascii wide
-            $ext8 = ".nvram" ascii wide
-            $ext9 = ".vmss" ascii wide
-            $ext10 = ".log" ascii wide
-            $path1 = "/vmfs/volumes" ascii
-            $path2 = "/vmfs/volumes/datastore" ascii
-          condition:
-            4 of ($ext*) or any of ($path*)
-        }
+    any:
+      - id: micro-behaviors/vm/detect/vmware::vmware-extensions
+      - id: micro-behaviors/vm/detect/vmware::vmfs-path
 
-  # ESXi CLI tools usage
+  # CLI tools composite
   - id: cli-tools
     desc: ESXi CLI tools for attack
     crit: suspicious
     conf: 0.8
     mbc: "C0027"
     attack: "T1486"
-    if:
-      type: yara
-      source: |
-        rule esxi_cli_tools {
-          strings:
-            $cli1 = "esxcli" ascii
-            $cli2 = "vim-cmd" ascii
-            $cli3 = "esxcfg-" ascii
-            $cli4 = "vmkfstools" ascii
-            $cli5 = "vmware-cmd" ascii
-            $cli6 = "/bin/esxcli" ascii
-            $cli7 = "/bin/vim-cmd" ascii
-          condition:
-            2 of them
-        }
+    needs: 2
+    any:
+      - id: micro-behaviors/vm/detect/vmware::esxcli-tool
+      - id: well-known/malware/ransomware/medusa::vim-cmd
+      - id: esxcfg-prefix
+      - id: vmkfstools-cmd
+      - id: vmware-cmd-tool
 
-  # ESXi version detection
+  # Version detection composite
   - id: version-detect
     desc: ESXi version detection for compatibility
     crit: notable
     conf: 0.7
     mbc: "C0027"
     attack: "T1486"
-    if:
-      type: yara
-      source: |
-        rule esxi_version {
-          strings:
-            $ver1 = "EsxiVersion" ascii
-            $ver2 = "esxi_version" ascii nocase
-            $ver3 = "vmware_version" ascii nocase
-            $ver4 = "/etc/vmware/esx.conf" ascii
-            $ver5 = "system version get" ascii
-          condition:
-            any of them
-        }
+    any:
+      - id: esxi-version-var
+      - id: vmware-version-var
+      - id: esx-conf-path
+      - id: system-version-get
 
-  # ESXi datastore access
+  # Datastore access composite
   - id: datastore-access
     desc: ESXi datastore enumeration and access
     crit: suspicious
     conf: 0.8
     mbc: "C0027"
     attack: "T1486"
-    if:
-      type: yara
-      source: |
-        rule esxi_datastore {
-          strings:
-            $ds2 = "/vmfs/volumes" ascii
-            $ds3 = "storage filesystem list" ascii
-            $ds4 = "esxcli storage" ascii
-          condition:
-            $ds2 and any of ($ds3, $ds4)
-        }
+    all:
+      - id: micro-behaviors/vm/detect/vmware::vmfs-path
+    any:
+      - id: storage-filesystem-list
+      - id: esxcli-storage
 
-composite_rules:
   # Full ESXi ransomware targeting
   - id: full-attack
     desc: ESXi-targeted ransomware attack chain
     crit: suspicious
     conf: 0.95
     all:
-      - id: objectives/impact/ransomware/esxi::file-targeting
+      - id: file-targeting
     any:
-      - id: objectives/impact/ransomware/esxi::vm-kill
-      - id: objectives/impact/ransomware/esxi::snapshot
+      - id: vm-kill
+      - id: snapshot

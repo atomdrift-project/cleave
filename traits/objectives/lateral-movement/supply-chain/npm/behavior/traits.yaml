@@ -531,7 +531,7 @@ composite_rules:
     any:
       - id: objectives/lateral-movement/supply-chain/npm/metadata::preinstall-hook-key
       - id: objectives/lateral-movement/supply-chain/npm/metadata::postinstall-hook-key
-      - id: objectives/lateral-movement/supply-chain/npm/metadata::install-hook-key
+      - id: objectives/lateral-movement/supply-chain/npm/install::has-install
     none:
       - id: objectives/lateral-movement/supply-chain/npm/metadata::npm-has-repository
   - id: new-version-hooks

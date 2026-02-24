@@ -1,0 +1,34 @@
+# Terminal-based text editor markers (vim, emacs, nano, etc.)
+# These editors legitimately use PTY, fork, exec, and other primitives
+# that overlap with backdoor patterns.
+
+defaults:
+  for:
+    - elf
+    - macho
+
+traits:
+  # Detect via PROJECT: marker in Mach-O or characteristic version strings
+  - id: terminal-editor-project
+    desc: "Terminal editor project marker"
+    crit: baseline
+    conf: 0.9
+    if:
+      type: string
+      regex: 'PROJECT:vim|PROJECT:nano|PROJECT:emacs'
+  - id: terminal-editor-version
+    desc: "Terminal editor version string"
+    crit: baseline
+    conf: 0.9
+    if:
+      type: string
+      regex: 'VIM - Vi IMproved|GNU nano |GNU Emacs '
+
+composite_rules:
+  - id: terminal-editor-marker
+    desc: "Terminal-based text editor"
+    crit: baseline
+    conf: 0.9
+    any:
+      - id: terminal-editor-project
+      - id: terminal-editor-version

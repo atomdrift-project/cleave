@@ -13,4 +13,4 @@ composite_rules:
     for: [javascript]
     all:
       - id: objectives/credential-access/browser/chromium::password-sql
-      - id: micro-behaviors/communications/http/lib/axios::js-axios-post
+      - id: micro-behaviors/communications/http/request::axios-post-call

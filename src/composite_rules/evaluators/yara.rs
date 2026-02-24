@@ -74,9 +74,11 @@ pub(crate) fn eval_yara_inline<'a>(
     // Fast path: combined engine results are available for this namespace.
     if let (Some(ns), Some(inline_results)) = (namespace, ctx.inline_yara_results) {
         let evidence = inline_results.get(ns).cloned().unwrap_or_default();
+        let match_count = evidence.len();
         return ConditionResult {
-            matched: !evidence.is_empty(),
+            matched: match_count > 0,
             evidence,
+            match_count,
             warnings: Vec::new(),
             precision: 1.0,
             matched_trait_ids: Vec::new(),
@@ -104,9 +106,11 @@ pub(crate) fn eval_yara_inline<'a>(
             );
         }
 
+        let match_count = evidence.len();
         return ConditionResult {
-            matched: !evidence.is_empty(),
+            matched: match_count > 0,
             evidence,
+            match_count,
             warnings: Vec::new(),
             precision: 1.0,
             matched_trait_ids: Vec::new(),
@@ -116,13 +120,7 @@ pub(crate) fn eval_yara_inline<'a>(
     // No inline results AND no pre-compiled rules: YARA is effectively disabled.
     // Return no-match instead of expensive on-the-fly compilation.
     // This is the expected path when --disable=yara is set.
-    ConditionResult {
-        matched: false,
-        evidence: Vec::new(),
-        warnings: Vec::new(),
-        precision: 0.0,
-        matched_trait_ids: Vec::new(),
-    }
+    ConditionResult::no_match()
 }
 
 /// Hex pattern segment for matching
@@ -305,6 +303,7 @@ pub(crate) fn eval_hex<'a>(
                     value: format!("invalid hex pattern: {}", e),
                     location: None,
                 }],
+                match_count: 0,
                 warnings: Vec::new(),
                 precision: 0.0,
                 matched_trait_ids: Vec::new(),
@@ -313,23 +312,18 @@ pub(crate) fn eval_hex<'a>(
     };
 
     if segments.is_empty() {
-        return ConditionResult {
-            matched: false,
-            evidence: Vec::new(),
-            warnings: Vec::new(),
-            precision: 0.0,
-            matched_trait_ids: Vec::new(),
-        };
+        return ConditionResult::no_match();
     }
 
     let mut matches: Vec<usize> = Vec::new();
+    let mut total_count: usize = 0;
 
-    /// Maximum hex pattern matches to collect before early exit.
-    /// Patterns matching more than this are truncated to prevent memory exhaustion.
-    /// We only need enough matches for evidence (16) plus some margin for deduplication.
-    const MAX_HEX_MATCHES: usize = 100;
-
-    let early_exit_threshold = MAX_HEX_MATCHES;
+    /// Maximum match positions to store for evidence (memory-limited).
+    /// Aligns with MAX_EVIDENCE_PER_TRAIT; counts continue beyond this limit.
+    const MAX_STORED_MATCHES: usize = 16;
+    /// Maximum total matches to count for density/count constraints.
+    /// Beyond this we assume the pattern is too broad.
+    const MAX_COUNT_MATCHES: usize = 16384;
 
     // Resolve effective range from location constraints
     let (search_start, search_end) = super::resolve_effective_range(location, ctx);
@@ -346,6 +340,7 @@ pub(crate) fn eval_hex<'a>(
     if location.offset.is_some() && location.offset_range.is_none() {
         if match_pattern_at(data, search_start, &segments) {
             matches.push(search_start);
+            total_count = 1;
         }
     }
     // Handle search in range or entire file
@@ -354,8 +349,11 @@ pub(crate) fn eval_hex<'a>(
         if let HexSegment::Bytes(bytes) = &segments[0] {
             let finder = memchr::memmem::Finder::new(bytes);
             for pos in finder.find_iter(&data[search_start..search_end]) {
-                matches.push(search_start + pos);
-                if matches.len() >= early_exit_threshold {
+                total_count += 1;
+                if matches.len() < MAX_STORED_MATCHES {
+                    matches.push(search_start + pos);
+                }
+                if total_count >= MAX_COUNT_MATCHES {
                     break;
                 }
             }
@@ -377,6 +375,8 @@ pub(crate) fn eval_hex<'a>(
                 .sum();
 
             // Search for atom, then verify full pattern
+            // Track seen positions to avoid double-counting
+            let mut seen_positions = rustc_hash::FxHashSet::default();
             for atom_pos in finder.find_iter(&data[search_start..search_end]) {
                 let pattern_start =
                     (search_start + atom_pos).saturating_sub(atom_offset_in_pattern);
@@ -387,10 +387,14 @@ pub(crate) fn eval_hex<'a>(
                 }
 
                 if match_pattern_at(data, pattern_start, &segments)
-                    && !matches.contains(&pattern_start)
+                    && !seen_positions.contains(&pattern_start)
                 {
-                    matches.push(pattern_start);
-                    if matches.len() >= early_exit_threshold {
+                    seen_positions.insert(pattern_start);
+                    total_count += 1;
+                    if matches.len() < MAX_STORED_MATCHES {
+                        matches.push(pattern_start);
+                    }
+                    if total_count >= MAX_COUNT_MATCHES {
                         break;
                     }
                 }
@@ -399,8 +403,11 @@ pub(crate) fn eval_hex<'a>(
             // No good atom found - fall back to linear scan in range
             for pos in search_start..search_end {
                 if match_pattern_at(data, pos, &segments) {
-                    matches.push(pos);
-                    if matches.len() >= early_exit_threshold {
+                    total_count += 1;
+                    if matches.len() < MAX_STORED_MATCHES {
+                        matches.push(pos);
+                    }
+                    if total_count >= MAX_COUNT_MATCHES {
                         break;
                     }
                 }
@@ -408,19 +415,29 @@ pub(crate) fn eval_hex<'a>(
         }
     }
 
-    // Warn if we hit the match limit (indicates potentially problematic pattern)
-    let truncated = matches.len() >= MAX_HEX_MATCHES;
+    // Warn if we hit the count limit (indicates potentially problematic pattern)
+    let truncated = total_count >= MAX_COUNT_MATCHES;
     if truncated {
-        tracing::warn!(
-            pattern = %pattern,
-            matches = matches.len(),
-            limit = MAX_HEX_MATCHES,
-            "Hex pattern has excessive matches, truncating to prevent memory exhaustion"
-        );
+        if let Some(trait_id) = ctx.current_trait {
+            tracing::warn!(
+                trait_id = %trait_id,
+                pattern = %pattern,
+                count = total_count,
+                limit = MAX_COUNT_MATCHES,
+                "Hex pattern has excessive matches, count truncated"
+            );
+        } else {
+            tracing::warn!(
+                pattern = %pattern,
+                count = total_count,
+                limit = MAX_COUNT_MATCHES,
+                "Hex pattern has excessive matches, count truncated"
+            );
+        }
     }
 
     // count/density constraints are now checked at trait level
-    let matched = !matches.is_empty();
+    let matched = total_count > 0;
 
     // Calculate precision: base 2.0 (hex patterns are specific) + modifiers
     let mut precision = 2.0f32;
@@ -434,7 +451,7 @@ pub(crate) fn eval_hex<'a>(
     let warnings = if truncated {
         vec![AnalysisWarning::PatternTruncated {
             pattern: pattern.to_string(),
-            limit: MAX_HEX_MATCHES,
+            limit: MAX_COUNT_MATCHES,
         }]
     } else {
         Vec::new()
@@ -469,6 +486,7 @@ pub(crate) fn eval_hex<'a>(
         } else {
             Vec::new()
         },
+        match_count: total_count,
         warnings,
         precision,
         matched_trait_ids: Vec::new(),

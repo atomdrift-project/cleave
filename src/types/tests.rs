@@ -217,7 +217,7 @@ fn test_finding_constructor() {
         attack: None,
         trait_refs: vec![],
         evidence,
-
+        match_count: 1,
         source_file: None,
     };
 

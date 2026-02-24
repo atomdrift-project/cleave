@@ -236,7 +236,7 @@ composite_rules:
       - id: daemon-chdir-root
     downgrade:
       any:
-        - id: metadata/apple/system-component
+        - id: metadata/apple::system-component
         - id: metadata/signed/platform::apple
 
   # GAP #8: Properly link fork + setsid as persistence mechanism
@@ -257,5 +257,5 @@ composite_rules:
       any:
         - id: metadata/format::many-imports
         - id: micro-behaviors/dylib/library::system-lib-marker
-        - id: metadata/apple/system-component
+        - id: metadata/apple::system-component
         - id: metadata/signed/platform::apple

@@ -37,6 +37,14 @@ traits:
       type: raw
       regex: 'osascript\b.{0,100}[\s]-(\s|$)'
 
+  - id: osascript-do-shell-script-var
+    desc: "osascript executing shell variable"
+    crit: suspicious
+    conf: 0.95
+    if:
+      type: raw
+      regex: 'osascript\s+-e\s+["'']do shell script\s+\$[A-Za-z0-9_]+'
+
   # ============================================
   # Low-Level Apple Event Indicators (in strings)
   # ============================================

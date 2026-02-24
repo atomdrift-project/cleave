@@ -1,0 +1,231 @@
+# Python Bytecode Obfuscation Detection
+# Detects Python bytecode embedded in .py files and self-reading bytecode loaders
+# MBC: B0032 (Obfuscated Files or Information)
+# ATT&CK: T1027, T1036.008
+
+traits:
+  # Python bytecode magic component traits (different Python versions)
+  - id: pyc-magic-cb
+    desc: Python 3.11+ bytecode magic
+    crit: component
+    for: [python]
+    if:
+      type: hex
+      pattern: "CB 0D 0D 0A"
+
+  - id: pyc-magic-a7
+    desc: Python 3.10 bytecode magic
+    crit: component
+    for: [python]
+    if:
+      type: hex
+      pattern: "A7 0D 0D 0A"
+
+  - id: pyc-magic-61
+    desc: Python 3.9 bytecode magic
+    crit: component
+    for: [python]
+    if:
+      type: hex
+      pattern: "61 0D 0D 0A"
+
+  - id: pyc-magic-42
+    desc: Python 3.8 bytecode magic
+    crit: component
+    for: [python]
+    if:
+      type: hex
+      pattern: "42 0D 0D 0A"
+
+  - id: pyc-magic-6f
+    desc: Python 3.7 bytecode magic
+    crit: component
+    for: [python]
+    if:
+      type: hex
+      pattern: "6F 0D 0D 0A"
+
+  - id: pyc-magic-55
+    desc: Python 3.6 bytecode magic
+    crit: component
+    for: [python]
+    if:
+      type: hex
+      pattern: "55 0D 0D 0A"
+
+  # Bytecode exec/eval/import component traits
+  - id: exec-word
+    desc: exec keyword
+    crit: component
+    for: [python]
+    if:
+      type: string
+      word: "exec"
+
+  - id: eval-word
+    desc: eval keyword
+    crit: component
+    for: [python]
+    if:
+      type: string
+      word: "eval"
+
+  - id: import-dunder
+    desc: __import__ function
+    crit: component
+    for: [python]
+    if:
+      type: string
+      substr: "__import__"
+
+  - id: unhexlify-word
+    desc: unhexlify function
+    crit: component
+    for: [python]
+    if:
+      type: string
+      substr: "unhexlify"
+
+  - id: open-file-ref
+    desc: open(__file__ call
+    crit: component
+    for: [python]
+    if:
+      type: string
+      substr: "open(__file__"
+
+  - id: open-file-sp-ref
+    desc: open( __file__ call (with space)
+    crit: component
+    for: [python]
+    if:
+      type: string
+      substr: "open( __file__"
+
+  - id: open-abspath-ref
+    desc: open(os.path.abspath(__file__) call
+    crit: component
+    for: [python]
+    if:
+      type: string
+      substr: "open(os.path.abspath(__file__)"
+
+  - id: compile-word
+    desc: compile keyword
+    crit: component
+    for: [python]
+    if:
+      type: string
+      word: "compile"
+
+  - id: marshal-word
+    desc: marshal module
+    crit: component
+    for: [python]
+    if:
+      type: string
+      word: "marshal"
+
+  - id: zlib-word
+    desc: zlib module
+    crit: component
+    for: [python]
+    if:
+      type: string
+      word: "zlib"
+
+  - id: setuptools-word
+    desc: setuptools package
+    crit: component
+    for: [python]
+    if:
+      type: string
+      substr: "setuptools"
+
+composite_rules:
+  - id: pyc-magic-in-py
+    desc: Python bytecode magic in .py file
+    crit: suspicious
+    conf: 0.95
+    mbc: "B0032"
+    attack: "T1036.008"
+    for: [python]
+    any:
+      - id: pyc-magic-cb
+      - id: pyc-magic-a7
+      - id: pyc-magic-61
+      - id: pyc-magic-42
+      - id: pyc-magic-6f
+      - id: pyc-magic-55
+
+  - id: bytecode-exec-eval-import
+    desc: Bytecode with exec eval and __import__
+    crit: suspicious
+    conf: 0.85
+    mbc: "E1059"
+    attack: "T1059"
+    for: [python]
+    all:
+      - id: exec-word
+      - id: eval-word
+      - id: import-dunder
+      - id: unhexlify-word
+
+  - id: opens-self-file
+    desc: Opens own file reference
+    crit: component
+    for: [python]
+    any:
+      - id: open-file-ref
+      - id: open-file-sp-ref
+      - id: open-abspath-ref
+
+  - id: exec-functions
+    desc: Code execution functions
+    crit: component
+    for: [python]
+    any:
+      - id: exec-word
+      - id: eval-word
+      - id: compile-word
+
+  - id: decode-functions
+    desc: Decoding/deserialization functions
+    crit: component
+    for: [python]
+    any:
+      - id: marshal-word
+      - id: zlib-word
+      - id: micro-behaviors/data/encode/base64::b64decode-string
+      - id: unhexlify-word
+      - id: import-dunder
+
+  - id: bytecode-self-reader
+    desc: Bytecode reads own file for payload
+    crit: suspicious
+    conf: 0.90
+    mbc: "B0032"
+    attack: "T1027"
+    for: [python]
+    all:
+      - id: micro-behaviors/dylib/load::python-file-dunder
+      - id: opens-self-file
+      - id: exec-functions
+      - id: decode-functions
+    none:
+      - id: setuptools-word
+
+  - id: bytecode-payload-execution
+    desc: Compiled bytecode payload execution pipeline
+    crit: hostile
+    conf: 0.95
+    mbc: "B0032"
+    attack: "T1027"
+    for: [python]
+    all:
+      - id: bytecode-exec-eval-import
+      - id: bytecode-self-reader
+    any:
+      - id: unhexlify-word
+      - id: objectives/anti-static/obfuscation/code-metrics/structure::minified-code
+      - id: objectives/anti-static/obfuscation/tools::known-obfuscator-detected

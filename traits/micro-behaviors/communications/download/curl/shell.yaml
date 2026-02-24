@@ -21,8 +21,8 @@ traits:
     crit: notable
     conf: 0.7
     if:
-      type: string
-      regex: 'curl\s+.*?\s+(-o|--output|-O)\b'
+      type: raw
+      regex: 'curl\s+(.{0,50}\s+)?(-[a-zA-Z]{0,5}[oO]|--output)\b'
 
   - id: curlopt-ref
     desc: CURLOPT constant
@@ -46,8 +46,8 @@ traits:
     crit: notable
     conf: 0.7
     if:
-      type: string
-      regex: 'wget\s+.*?\s+(-O|--output-document)\b'
+      type: raw
+      regex: 'wget\s+(.{0,50}\s+)?(-O|--output-document)\b'
 
   - id: wget-path
     desc: wget binary path

@@ -5,14 +5,6 @@
 defaults:
   for: [go, elf, macho, pe]
 
-traits:
-  - id: cmd-plain
-    desc: Windows cmd shell reference
-    crit: notable
-    conf: 0.6
-    if:
-      id: micro-behaviors/process/create/shell::cmd-name
-
 composite_rules:
   # Go connection composite
   - id: go-net-connection
@@ -33,17 +25,6 @@ composite_rules:
       - id: micro-behaviors/process/create/shell/lang::exec-cmd-run
       - id: micro-behaviors/process/create/direct::exec-command
 
-  # Shell composite
-  - id: shell-path
-    desc: Shell path reference
-    crit: notable
-    conf: 0.5
-    any:
-      - id: micro-behaviors/process/create/shell::bin-sh
-      - id: micro-behaviors/process/create/shell::bin-bash
-      - id: micro-behaviors/process/create/shell::cmd-exe
-      - id: cmd-plain
-
   # Go reverse shell (migrated from YARA)
   - id: go-reverse-shell
     desc: Go reverse shell implementation patterns
@@ -56,4 +37,4 @@ composite_rules:
       - id: go-exec
     any:
       - id: micro-behaviors/process/create/shell/lang::pipe-redirection
-      - id: shell-path
+      - id: micro-behaviors/process/create/shell

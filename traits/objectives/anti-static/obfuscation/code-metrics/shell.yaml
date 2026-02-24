@@ -88,6 +88,12 @@ traits:
       # Exclude Perl wrapper scripts (polyglots)
       - type: raw
         substr: "eval 'exec perl -wSx \"$0\" \"$@\"'"
+      # Exclude autoconf/configure-generated scripts
+      - type: raw
+        regex: 'exec_prefix=|datarootdir=|^prefix='
+      # Exclude scripts with --help/--version argument handling
+      - type: raw
+        regex: '--help\)|\busage="?yes'
 
   # === Density-Based String Obfuscation ===
   # Shell scripts use various encoding tricks to hide payloads.

@@ -1,0 +1,140 @@
+defaults:
+  for:
+    - all
+
+traits:
+  - id: glibc-ref
+    desc: "glibc reference"
+    crit: baseline
+    conf: 0.3
+    if:
+      type: string
+      substr: glibc
+  - id: libcxx-ref
+    desc: "LLVM libc++ stdlib"
+    crit: baseline
+    conf: 0.9
+    if:
+      type: string
+      regex: 'libc\+\+\.so|libc\+\+abi|_LIBCPP_VERSION|__libcpp_'
+  - id: libstdcxx-ref
+    desc: "GNU libstdc++ stdlib"
+    crit: baseline
+    conf: 0.9
+    if:
+      type: string
+      regex: 'libstdc\+\+\.so|__gnu_cxx|__cxxabiv1'
+  - id: libc-version-string
+    desc: "libc version string pattern"
+    crit: baseline
+    conf: 0.8
+    if:
+      type: string
+      regex: '(?i)libc\.so\.[0-9]|glibc|bionic|uclibc'
+  - id: libc-internal-functions-a
+    desc: "libc internal symbols cluster A"
+    crit: baseline
+    conf: 0.7
+    if:
+      type: symbol
+      regex: "^(__ctype_|__tzname\b|__progname\b)"
+  - id: libc-characteristic-symbols
+    desc: "Characteristic system library exports"
+    crit: baseline
+    conf: 0.5
+    if:
+      type: symbol
+      exact: __libc_start_main
+  - id: libc-characteristic-gnu-version
+    desc: "Characteristic system library export gnu_get_libc_version"
+    crit: baseline
+    conf: 0.5
+    if:
+      type: symbol
+      exact: gnu_get_libc_version
+  - id: libc-characteristic-errno
+    desc: "Characteristic system library export __errno_location"
+    crit: baseline
+    conf: 0.5
+    if:
+      type: symbol
+      exact: __errno_location
+  - id: libc-characteristic-atan2-finite
+    desc: "Characteristic system library export __atan2_finite"
+    crit: baseline
+    conf: 0.5
+    if:
+      type: symbol
+      exact: __atan2_finite
+  - id: libc-characteristic-feenableexcept
+    desc: "Characteristic system library export feenableexcept"
+    crit: baseline
+    conf: 0.5
+    if:
+      type: symbol
+      exact: feenableexcept
+  - id: libc-characteristic-log-finite
+    desc: "Characteristic system library export __log_finite"
+    crit: baseline
+    conf: 0.5
+    if:
+      type: symbol
+      exact: __log_finite
+  - id: libc-characteristic-exp2f
+    desc: "Characteristic system library export exp2f"
+    crit: baseline
+    conf: 0.5
+    if:
+      type: symbol
+      exact: exp2f
+  - id: libc-characteristic-cxa-atexit
+    desc: "Characteristic system library export __cxa_atexit"
+    crit: baseline
+    conf: 0.5
+    if:
+      type: symbol
+      exact: __cxa_atexit
+  - id: libc-characteristic-cxa-finalize
+    desc: "Characteristic system library export __cxa_finalize"
+    crit: baseline
+    conf: 0.5
+    if:
+      type: symbol
+      exact: __cxa_finalize
+  - id: libc-characteristic-assert-fail
+    desc: "Characteristic system library export __assert_fail"
+    crit: baseline
+    conf: 0.5
+    if:
+      type: symbol
+      exact: __assert_fail
+  - id: environ-io-symbols
+    desc: "__environ and _IO_ symbols"
+    if:
+      type: symbol
+      regex: "^(__environ|_IO_)"
+
+composite_rules:
+  - id: libc-internal-functions-b
+    desc: "libc internal symbols cluster B"
+    crit: baseline
+    conf: 0.7
+    any:
+      - id: libc-characteristic-cxa-atexit
+      - id: libc-characteristic-cxa-finalize
+      - id: environ-io-symbols
+  - id: cxx-stdlib-marker
+    desc: "C++ standard library markers (libc++, libstdc++)"
+    crit: baseline
+    conf: 0.9
+    any:
+      - id: libcxx-ref
+      - id: libstdcxx-ref
+      - id: micro-behaviors/dylib/library::cxx-abi-symbols
+  - id: libc-internal-functions
+    desc: "libc internal functions (malloc, etc)"
+    crit: baseline
+    conf: 0.7
+    any:
+      - id: libc-internal-functions-a
+      - id: libc-internal-functions-b

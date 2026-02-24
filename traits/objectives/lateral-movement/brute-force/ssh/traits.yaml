@@ -260,7 +260,7 @@ composite_rules:
         - id: micro-behaviors/os/pam/auth::module
         - id: micro-behaviors/os/pam/auth::libpam-string
         - id: metadata/sign/apple::platform
-        - id: metadata/apple/system-component
+        - id: metadata/apple::system-component
         - id: micro-behaviors/communications/ssh/client::library
         - id: micro-behaviors/communications/ssh/client::full-implementation
   - id: iot-credential-access

@@ -22,7 +22,7 @@ traits:
     max: 10
     min_length: 4
   unless:
-  - id: objectives/anti-static/hardening/detection::stripped-binary-struct
+  - id: metadata/hardening::stripped-binary
 composite_rules:
 - id: minimal-imports-suspicious-apis
   desc: Minimal imports with suspicious API combination

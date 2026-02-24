@@ -1062,6 +1062,7 @@ impl YaraEngine {
                     mbc: yara_match.mbc.clone(),
                     attack: yara_match.attack.clone(),
                     evidence,
+                    match_count: 0,
                     source_file: None,
                 });
             }

@@ -25,7 +25,7 @@ traits:
 
   - id: echo-command
     desc: echo command (shell context)
-    crit: notable
+    crit: component
     conf: 0.5
     for: [shell, python, ruby, perl, php, javascript]
     if:

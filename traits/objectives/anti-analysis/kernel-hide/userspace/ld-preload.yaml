@@ -349,5 +349,5 @@ composite_rules:
       - id: ld-so-preload-file
     any:
       - id: ld-backup-pattern
-      - id: micro-behaviors/dylib/library::libc-internal-functions-a
+      - id: micro-behaviors/dylib/library/libc::libc-internal-functions-a
       - id: dlsym-rtld-next

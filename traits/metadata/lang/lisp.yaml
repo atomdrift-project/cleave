@@ -1,0 +1,30 @@
+# Lisp / SBCL Detection
+# Detects Steel Bank Common Lisp (SBCL) runtimes and compiled binaries
+
+traits:
+  - id: sbcl-runtime
+    desc: SBCL (Steel Bank Common Lisp) runtime indicator
+    crit: notable
+    conf: 0.99
+    for: [all]
+    if:
+      type: string
+      substr: "sbcl_runtime"
+
+  - id: sbcl-home
+    desc: SBCL_HOME string
+    crit: notable
+    conf: 0.95
+    for: [all]
+    if:
+      type: string
+      substr: "SBCL_HOME"
+
+composite_rules:
+  - id: is-sbcl
+    desc: Steel Bank Common Lisp (SBCL) binary
+    crit: notable
+    conf: 0.99
+    any:
+      - id: sbcl-runtime
+      - id: sbcl-home

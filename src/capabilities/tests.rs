@@ -721,6 +721,7 @@ fn test_finding(id: &str) -> Finding {
         attack: None,
         trait_refs: vec![],
         evidence: vec![],
+        match_count: 0,
         source_file: None,
     }
 }
@@ -2836,6 +2837,7 @@ fn test_generate_import_findings_preserves_existing() {
         attack: None,
         trait_refs: vec![],
         evidence: vec![],
+        match_count: 0,
         source_file: None,
     });
 
@@ -2882,6 +2884,7 @@ fn test_generate_import_findings_skips_existing_import_finding() {
         attack: None,
         trait_refs: vec![],
         evidence: vec![],
+        match_count: 0,
         source_file: None,
     });
 

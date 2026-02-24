@@ -72,6 +72,7 @@ impl super::CapabilityMapper {
                             attack: None,
                             trait_refs: Vec::new(),
                             evidence: Vec::new(), // Compact: evidence is redundant
+                            match_count: 0,
                             source_file: None,
                         });
                     }
@@ -122,7 +123,8 @@ impl super::CapabilityMapper {
                         location: Some(format!("{} symbols", symbols.len())),
                     }],
 
-                    source_file: None,
+                    match_count: 0,
+                source_file: None,
                 });
             }
         } else {
@@ -158,6 +160,7 @@ impl super::CapabilityMapper {
                             attack: None,
                             trait_refs: Vec::new(),
                             evidence: Vec::new(), // Compact: redundant
+                            match_count: 0,
                             source_file: None,
                         });
                     }
@@ -196,7 +199,8 @@ impl super::CapabilityMapper {
                             location: import.library.clone(),
                         }],
 
-                        source_file: None,
+                        match_count: 0,
+                source_file: None,
                     });
                 }
             }

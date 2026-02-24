@@ -32,14 +32,6 @@ traits:
       type: kv
       path: "scripts.postinstall"
 
-  - id: install-hook-key
-    desc: Package has install script
-    crit: notable
-    conf: 0.85
-    if:
-      type: kv
-      path: "scripts.install"
-
   # === Install Hook Installs Package ===
   # This is highly suspicious: legitimate packages declare dependencies in package.json,
   # they don't install packages via commands in hooks
@@ -282,7 +274,7 @@ composite_rules:
     any:
       - id: preinstall-hook-key
       - id: postinstall-hook-key
-      - id: install-hook-key
+      - id: objectives/lateral-movement/supply-chain/npm/install::has-install
 
   # Install hook that installs packages (highly suspicious)
   # Legitimate packages declare dependencies in package.json - running install commands

@@ -160,6 +160,7 @@ pub(crate) fn process_yara_result(
             mbc: yara_match.mbc.clone(),
             attack: yara_match.attack.clone(),
             evidence,
+            match_count: 0,
             source_file: None,
         });
     }
@@ -442,7 +443,7 @@ pub(crate) fn analyze_file_with_shared_mapper(
                 value: format!("expected={}, actual={}", expected, actual),
                 location: None,
             }],
-
+            match_count: 1,
             source_file: None,
         });
     }
@@ -482,7 +483,7 @@ pub(crate) fn analyze_file_with_shared_mapper(
                 ),
                 location: Some(format!("offset:{}", payload.original_offset)),
             }],
-
+            match_count: 1,
             source_file: None,
         });
 

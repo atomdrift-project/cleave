@@ -57,8 +57,8 @@ traits:
 composite_rules:
   - id: anomalous-direct-syscall
     desc: "Direct syscall in anomalous Mach-O section (possible payload)"
-    crit: hostile
-    conf: 0.98
+    crit: suspicious
+    conf: 0.9
     any:
       - id: svc-in-exception-tab
       - id: syscall-in-exception-tab

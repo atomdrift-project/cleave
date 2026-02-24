@@ -15,13 +15,3 @@ traits:
       regex: "."
       count_min: 1
       length_min: 102400
-
-  - id: very-large-embedded-b64-blob
-    desc: Very large embedded Base64 blob (>500KB)
-    crit: suspicious
-    if:
-      type: encoded
-      encoding: base64
-      regex: "."
-      count_min: 1
-      length_min: 512000

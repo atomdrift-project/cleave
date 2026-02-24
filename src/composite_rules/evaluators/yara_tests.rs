@@ -35,6 +35,8 @@ fn create_test_context(
         inline_yara_results: None,
         cached_kv_format: OnceLock::new(),
         cached_kv_parsed: OnceLock::new(),
+        current_trait: None,
+        current_source: None,
     }
 }
 
@@ -279,7 +281,7 @@ fn test_eval_yara_inline_simple() {
     "#;
 
     let compiled = Arc::new(yara_x::compile(rule).unwrap());
-    let result = eval_yara_inline(rule, Some(&compiled), &ctx);
+    let result = eval_yara_inline(rule, None, Some(&compiled), &ctx);
 
     assert!(result.matched, "Should match inline YARA rule");
     assert!(!result.evidence.is_empty());
@@ -301,7 +303,7 @@ fn test_eval_yara_inline_no_match() {
     "#;
 
     let compiled = Arc::new(yara_x::compile(rule).unwrap());
-    let result = eval_yara_inline(rule, Some(&compiled), &ctx);
+    let result = eval_yara_inline(rule, None, Some(&compiled), &ctx);
 
     assert!(!result.matched, "Should not match when pattern absent");
 }
@@ -323,7 +325,7 @@ fn test_eval_yara_inline_multiple_strings() {
     "#;
 
     let compiled = Arc::new(yara_x::compile(rule).unwrap());
-    let result = eval_yara_inline(rule, Some(&compiled), &ctx);
+    let result = eval_yara_inline(rule, None, Some(&compiled), &ctx);
 
     assert!(result.matched, "Should match multiple strings");
 }
@@ -344,7 +346,7 @@ fn test_eval_yara_inline_hex_pattern() {
     "#;
 
     let compiled = Arc::new(yara_x::compile(rule).unwrap());
-    let result = eval_yara_inline(rule, Some(&compiled), &ctx);
+    let result = eval_yara_inline(rule, None, Some(&compiled), &ctx);
 
     assert!(result.matched, "Should match hex pattern in YARA");
 }
@@ -356,8 +358,110 @@ fn test_eval_yara_inline_compilation_error() {
     let ctx = create_test_context(report, binary_data);
 
     let invalid_rule = "invalid yara syntax {{{";
-    let result = eval_yara_inline(invalid_rule, None, &ctx);
+    let result = eval_yara_inline(invalid_rule, None, None, &ctx);
 
     assert!(!result.matched, "Should not match on compilation error");
     // Should have warning or error evidence
+}
+
+// ==================== Match Count Tests ====================
+
+#[test]
+fn test_eval_hex_match_count_tracks_all_matches() {
+    // Create data with many repeated patterns (more than MAX_STORED_MATCHES=16)
+    let mut binary_data = Vec::new();
+    for _ in 0..50 {
+        binary_data.extend_from_slice(&[0xAA, 0xBB, 0x00]); // Pattern with filler
+    }
+    let report = create_test_report();
+    let ctx = create_test_context(report, binary_data);
+
+    let location = ContentLocationParams::default();
+    let result = eval_hex("AA BB", &location, &ctx);
+
+    assert!(result.matched, "Should match repeated pattern");
+    // Evidence should be capped at 16, but match_count should track all 50
+    assert!(
+        result.evidence.len() <= 16,
+        "Evidence should be capped at 16, got {}",
+        result.evidence.len()
+    );
+    assert_eq!(
+        result.match_count, 50,
+        "match_count should track all 50 matches"
+    );
+}
+
+#[test]
+fn test_eval_hex_match_count_equals_evidence_when_few_matches() {
+    // With only a few matches, match_count should equal evidence.len()
+    let binary_data = vec![0x48, 0x8B, 0xFF, 0x00, 0x48, 0x8B, 0xFF];
+    let report = create_test_report();
+    let ctx = create_test_context(report, binary_data);
+
+    let location = ContentLocationParams::default();
+    let result = eval_hex("48 8B FF", &location, &ctx);
+
+    assert!(result.matched);
+    assert_eq!(result.evidence.len(), 2, "Should have 2 evidence items");
+    assert_eq!(result.match_count, 2, "match_count should equal evidence.len()");
+}
+
+#[test]
+fn test_eval_hex_no_match_count_zero() {
+    let binary_data = vec![0x00, 0x01, 0x02, 0x03];
+    let report = create_test_report();
+    let ctx = create_test_context(report, binary_data);
+
+    let location = ContentLocationParams::default();
+    let result = eval_hex("FF FF FF", &location, &ctx);
+
+    assert!(!result.matched);
+    assert!(result.evidence.is_empty());
+    assert_eq!(result.match_count, 0, "match_count should be 0 for no matches");
+}
+
+#[test]
+fn test_eval_hex_match_count_with_wildcards() {
+    // Create data with many wildcard-matching patterns
+    let mut binary_data = Vec::new();
+    for i in 0..30u8 {
+        binary_data.extend_from_slice(&[0x48, i, 0xFF]); // 0x48 ?? 0xFF
+    }
+    let report = create_test_report();
+    let ctx = create_test_context(report, binary_data);
+
+    let location = ContentLocationParams::default();
+    let result = eval_hex("48 ?? FF", &location, &ctx);
+
+    assert!(result.matched);
+    assert!(
+        result.evidence.len() <= 16,
+        "Evidence should be capped"
+    );
+    assert_eq!(
+        result.match_count, 30,
+        "match_count should track all 30 wildcard matches"
+    );
+}
+
+#[test]
+fn test_eval_hex_match_count_with_gap() {
+    // Create data with gap-matching patterns
+    let mut binary_data = Vec::new();
+    for _ in 0..25 {
+        binary_data.extend_from_slice(&[0x48, 0x00, 0x00, 0xFF, 0x00]); // 0x48 [2] 0xFF
+    }
+    let report = create_test_report();
+    let ctx = create_test_context(report, binary_data);
+
+    let location = ContentLocationParams::default();
+    let result = eval_hex("48 [2] FF", &location, &ctx);
+
+    assert!(result.matched);
+    assert!(result.evidence.len() <= 16, "Evidence should be capped");
+    assert_eq!(
+        result.match_count, 25,
+        "match_count should track all 25 gap matches"
+    );
 }

@@ -704,6 +704,7 @@ mod tests {
                 mbc: None,
                 attack: None,
                 evidence: vec![],
+                match_count: 0,
                 source_file: None,
             },
             Finding {
@@ -716,6 +717,7 @@ mod tests {
                 mbc: None,
                 attack: None,
                 evidence: vec![],
+                match_count: 0,
                 source_file: None,
             },
         ];
@@ -740,6 +742,7 @@ mod tests {
                 mbc: None,
                 attack: None,
                 evidence: vec![],
+                match_count: 0,
                 source_file: None,
             },
             Finding {
@@ -752,6 +755,7 @@ mod tests {
                 mbc: None,
                 attack: None,
                 evidence: vec![],
+                match_count: 0,
                 source_file: None,
             },
         ];
@@ -776,6 +780,7 @@ mod tests {
                 mbc: None,
                 attack: None,
                 evidence: vec![],
+                match_count: 0,
                 source_file: None,
             },
             Finding {
@@ -788,6 +793,7 @@ mod tests {
                 mbc: None,
                 attack: None,
                 evidence: vec![],
+                match_count: 0,
                 source_file: None,
             },
         ];
@@ -845,6 +851,7 @@ mod tests {
             mbc: None,
             attack: None,
             evidence: vec![],
+            match_count: 0,
             source_file: None,
         };
         assert_eq!(format_evidence(&trait_item), "");
@@ -875,6 +882,7 @@ mod tests {
                     location: None,
                 },
             ],
+            match_count: 2,
             source_file: None,
         };
         let formatted = format_evidence(&trait_item);
@@ -901,6 +909,7 @@ mod tests {
             mbc: None,
             attack: None,
             evidence: vec![],
+            match_count: 0,
             source_file: None,
         }];
         let report = create_test_report(capabilities, vec![]);

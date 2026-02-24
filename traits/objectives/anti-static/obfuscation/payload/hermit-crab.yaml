@@ -5,7 +5,7 @@ composite_rules:
     conf: 0.95
     all:
       # Code/Data Ratio: Data section is massive compared to text
-      - id: objectives/anti-static/obfuscation/payload::data-section-dominant
+      - id: objectives/anti-static/obfuscation/payload/section::data-section-dominant
       # Entropy: The massive section is encrypted
       - id: metadata/binary/section::high-entropy-rdata
       # Capability: The intent to execute that data

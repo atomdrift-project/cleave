@@ -65,6 +65,8 @@ fn test_symbol_condition() {
         inline_yara_results: None,
         cached_kv_format: OnceLock::new(),
         cached_kv_parsed: OnceLock::new(),
+        current_trait: None,
+        current_source: None,
     };
 
     let rule = CompositeTrait {
@@ -122,6 +124,8 @@ fn test_all() {
         inline_yara_results: None,
         cached_kv_format: OnceLock::new(),
         cached_kv_parsed: OnceLock::new(),
+        current_trait: None,
+        current_source: None,
     };
 
     let rule = CompositeTrait {
@@ -191,6 +195,8 @@ fn test_count() {
         inline_yara_results: None,
         cached_kv_format: OnceLock::new(),
         cached_kv_parsed: OnceLock::new(),
+        current_trait: None,
+        current_source: None,
     };
 
     let rule = CompositeTrait {
@@ -259,6 +265,8 @@ fn test_string_exact_condition() {
         inline_yara_results: None,
         cached_kv_format: OnceLock::new(),
         cached_kv_parsed: OnceLock::new(),
+        current_trait: None,
+        current_source: None,
     };
 
     let rule = CompositeTrait {
@@ -319,6 +327,8 @@ fn test_any() {
         inline_yara_results: None,
         cached_kv_format: OnceLock::new(),
         cached_kv_parsed: OnceLock::new(),
+        current_trait: None,
+        current_source: None,
     };
 
     let rule = CompositeTrait {
@@ -406,6 +416,8 @@ fn test_not_directive_shorthand() {
         inline_yara_results: None,
         cached_kv_format: OnceLock::new(),
         cached_kv_parsed: OnceLock::new(),
+        current_trait: None,
+        current_source: None,
     };
 
     let trait_def = TraitDefinition {
@@ -491,6 +503,8 @@ fn test_not_directive_exact() {
         inline_yara_results: None,
         cached_kv_format: OnceLock::new(),
         cached_kv_parsed: OnceLock::new(),
+        current_trait: None,
+        current_source: None,
     };
 
     let trait_def = TraitDefinition {
@@ -580,6 +594,8 @@ fn test_not_directive_regex() {
         inline_yara_results: None,
         cached_kv_format: OnceLock::new(),
         cached_kv_parsed: OnceLock::new(),
+        current_trait: None,
+        current_source: None,
     };
 
     let trait_def = TraitDefinition {
@@ -648,6 +664,7 @@ fn test_unless_directive_skips_trait() {
         attack: None,
         trait_refs: vec![],
         evidence: vec![],
+        match_count: 0,
         source_file: None,
     }];
 
@@ -664,6 +681,8 @@ fn test_unless_directive_skips_trait() {
         inline_yara_results: None,
         cached_kv_format: OnceLock::new(),
         cached_kv_parsed: OnceLock::new(),
+        current_trait: None,
+        current_source: None,
     };
 
     let trait_def = TraitDefinition {
@@ -721,6 +740,8 @@ fn test_unless_directive_allows_trait() {
         inline_yara_results: None,
         cached_kv_format: OnceLock::new(),
         cached_kv_parsed: OnceLock::new(),
+        current_trait: None,
+        current_source: None,
     };
 
     let trait_def = TraitDefinition {
@@ -776,6 +797,7 @@ fn test_downgrade_to_notable() {
         attack: None,
         trait_refs: vec![],
         evidence: vec![],
+        match_count: 0,
         source_file: None,
     }];
 
@@ -792,6 +814,8 @@ fn test_downgrade_to_notable() {
         inline_yara_results: None,
         cached_kv_format: OnceLock::new(),
         cached_kv_parsed: OnceLock::new(),
+        current_trait: None,
+        current_source: None,
     };
 
     let trait_def = TraitDefinition {
@@ -861,6 +885,7 @@ fn test_downgrade_one_level() {
         attack: None,
         trait_refs: vec![],
         evidence: vec![],
+        match_count: 0,
         source_file: None,
     }];
 
@@ -877,6 +902,8 @@ fn test_downgrade_one_level() {
         inline_yara_results: None,
         cached_kv_format: OnceLock::new(),
         cached_kv_parsed: OnceLock::new(),
+        current_trait: None,
+        current_source: None,
     };
 
     let trait_def = TraitDefinition {
@@ -942,6 +969,8 @@ fn test_downgrade_no_match_keeps_original() {
         inline_yara_results: None,
         cached_kv_format: OnceLock::new(),
         cached_kv_parsed: OnceLock::new(),
+        current_trait: None,
+        current_source: None,
     };
 
     let trait_def = TraitDefinition {
@@ -1005,6 +1034,7 @@ fn test_downgrade_from_hostile() {
         attack: None,
         trait_refs: vec![],
         evidence: vec![],
+        match_count: 0,
         source_file: None,
     }];
 
@@ -1021,6 +1051,8 @@ fn test_downgrade_from_hostile() {
         inline_yara_results: None,
         cached_kv_format: OnceLock::new(),
         cached_kv_parsed: OnceLock::new(),
+        current_trait: None,
+        current_source: None,
     };
 
     let trait_def = TraitDefinition {
@@ -1104,6 +1136,7 @@ fn test_all_three_directives_combined() {
         attack: None,
         trait_refs: vec![],
         evidence: vec![],
+        match_count: 0,
         source_file: None,
     }];
 
@@ -1120,6 +1153,8 @@ fn test_all_three_directives_combined() {
         inline_yara_results: None,
         cached_kv_format: OnceLock::new(),
         cached_kv_parsed: OnceLock::new(),
+        current_trait: None,
+        current_source: None,
     };
 
     let trait_def = TraitDefinition {
@@ -1217,6 +1252,8 @@ fn test_string_exact_match_requires_full_equality() {
         inline_yara_results: None,
         cached_kv_format: OnceLock::new(),
         cached_kv_parsed: OnceLock::new(),
+        current_trait: None,
+        current_source: None,
     };
 
     // exact: "hello" should match only "hello", not "hello world"
@@ -1303,6 +1340,8 @@ fn test_string_substr_matches_substrings() {
         inline_yara_results: None,
         cached_kv_format: OnceLock::new(),
         cached_kv_parsed: OnceLock::new(),
+        current_trait: None,
+        current_source: None,
     };
 
     // substr: "hello" should match both "hello" and "hello world"
@@ -1380,6 +1419,8 @@ fn test_symbol_exact_vs_substr() {
         inline_yara_results: None,
         cached_kv_format: OnceLock::new(),
         cached_kv_parsed: OnceLock::new(),
+        current_trait: None,
+        current_source: None,
     };
 
     // exact: "read" should match only "read", not "readlink"
@@ -1485,6 +1526,8 @@ fn test_string_case_insensitive_exact() {
         inline_yara_results: None,
         cached_kv_format: OnceLock::new(),
         cached_kv_parsed: OnceLock::new(),
+        current_trait: None,
+        current_source: None,
     };
 
     // Case-insensitive exact match
@@ -1566,6 +1609,8 @@ fn test_string_word_boundary_match() {
         inline_yara_results: None,
         cached_kv_format: OnceLock::new(),
         cached_kv_parsed: OnceLock::new(),
+        current_trait: None,
+        current_source: None,
     };
 
     // word: "cat" should match "the cat sat" but not "category"
@@ -1660,6 +1705,8 @@ fn test_string_regex_match() {
         inline_yara_results: None,
         cached_kv_format: OnceLock::new(),
         cached_kv_parsed: OnceLock::new(),
+        current_trait: None,
+        current_source: None,
     };
 
     // regex for IP addresses
@@ -1727,6 +1774,8 @@ fn test_content_exact_vs_substr() {
         inline_yara_results: None,
         cached_kv_format: OnceLock::new(),
         cached_kv_parsed: OnceLock::new(),
+        current_trait: None,
+        current_source: None,
     };
 
     // exact: should match only if entire content equals the pattern (won't match)
@@ -1796,6 +1845,8 @@ fn test_basename_exact_match() {
         inline_yara_results: None,
         cached_kv_format: OnceLock::new(),
         cached_kv_parsed: OnceLock::new(),
+        current_trait: None,
+        current_source: None,
     };
 
     // exact: "__init__.py" should match
@@ -1822,6 +1873,8 @@ fn test_basename_exact_no_match() {
         inline_yara_results: None,
         cached_kv_format: OnceLock::new(),
         cached_kv_parsed: OnceLock::new(),
+        current_trait: None,
+        current_source: None,
     };
 
     // exact: "__init__.py" should not match "main.py"
@@ -1847,6 +1900,8 @@ fn test_basename_substr_match() {
         inline_yara_results: None,
         cached_kv_format: OnceLock::new(),
         cached_kv_parsed: OnceLock::new(),
+        current_trait: None,
+        current_source: None,
     };
 
     // substr: "setup" should match "setup_tools.py"
@@ -1872,6 +1927,8 @@ fn test_basename_regex_match() {
         inline_yara_results: None,
         cached_kv_format: OnceLock::new(),
         cached_kv_parsed: OnceLock::new(),
+        current_trait: None,
+        current_source: None,
     };
 
     // regex: "^test_" should match files starting with "test_"
@@ -1897,6 +1954,8 @@ fn test_basename_case_insensitive() {
         inline_yara_results: None,
         cached_kv_format: OnceLock::new(),
         cached_kv_parsed: OnceLock::new(),
+        current_trait: None,
+        current_source: None,
     };
 
     // exact: "readme.md" should match "README.md" with case_insensitive
@@ -1927,6 +1986,8 @@ fn test_basename_in_trait_definition() {
         inline_yara_results: None,
         cached_kv_format: OnceLock::new(),
         cached_kv_parsed: OnceLock::new(),
+        current_trait: None,
+        current_source: None,
     };
 
     let trait_def = TraitDefinition {
@@ -1982,6 +2043,8 @@ fn test_basename_in_composite_rule() {
         inline_yara_results: None,
         cached_kv_format: OnceLock::new(),
         cached_kv_parsed: OnceLock::new(),
+        current_trait: None,
+        current_source: None,
     };
 
     let rule = CompositeTrait {
@@ -2036,6 +2099,7 @@ fn test_composite_unless_skips_rule() {
         attack: None,
         trait_refs: vec![],
         evidence: vec![],
+        match_count: 0,
         source_file: None,
     }];
 
@@ -2052,6 +2116,8 @@ fn test_composite_unless_skips_rule() {
         inline_yara_results: None,
         cached_kv_format: OnceLock::new(),
         cached_kv_parsed: OnceLock::new(),
+        current_trait: None,
+        current_source: None,
     };
 
     // Composite rule with unless condition
@@ -2112,6 +2178,8 @@ fn test_composite_unless_allows_rule() {
         inline_yara_results: None,
         cached_kv_format: OnceLock::new(),
         cached_kv_parsed: OnceLock::new(),
+        current_trait: None,
+        current_source: None,
     };
 
     let rule = CompositeTrait {
@@ -2172,6 +2240,8 @@ fn test_composite_unless_with_basename() {
         inline_yara_results: None,
         cached_kv_format: OnceLock::new(),
         cached_kv_parsed: OnceLock::new(),
+        current_trait: None,
+        current_source: None,
     };
 
     let rule = CompositeTrait {
@@ -2246,6 +2316,8 @@ fn test_composite_unless_multiple_conditions_any_matches() {
         inline_yara_results: None,
         cached_kv_format: OnceLock::new(),
         cached_kv_parsed: OnceLock::new(),
+        current_trait: None,
+        current_source: None,
     };
 
     let rule = CompositeTrait {
@@ -2329,6 +2401,8 @@ fn test_needs_with_any_only_respects_threshold() {
         inline_yara_results: None,
         cached_kv_format: OnceLock::new(),
         cached_kv_parsed: OnceLock::new(),
+        current_trait: None,
+        current_source: None,
     };
 
     // Rule with needs: 3, but only 2 conditions can match (socket, connect)
@@ -2410,6 +2484,8 @@ fn test_needs_with_any_only_matches_when_threshold_met() {
         inline_yara_results: None,
         cached_kv_format: OnceLock::new(),
         cached_kv_parsed: OnceLock::new(),
+        current_trait: None,
+        current_source: None,
     };
 
     // Rule with needs: 2, and 2 conditions can match (socket, connect)
@@ -2486,6 +2562,8 @@ fn test_needs_with_all_and_any_respects_threshold() {
         inline_yara_results: None,
         cached_kv_format: OnceLock::new(),
         cached_kv_parsed: OnceLock::new(),
+        current_trait: None,
+        current_source: None,
     };
 
     // Rule with:
@@ -2591,6 +2669,8 @@ fn test_needs_with_all_and_any_matches_when_threshold_met() {
         inline_yara_results: None,
         cached_kv_format: OnceLock::new(),
         cached_kv_parsed: OnceLock::new(),
+        current_trait: None,
+        current_source: None,
     };
 
     // Rule with:
@@ -2683,6 +2763,8 @@ fn test_needs_with_all_and_any_all_fails() {
         inline_yara_results: None,
         cached_kv_format: OnceLock::new(),
         cached_kv_parsed: OnceLock::new(),
+        current_trait: None,
+        current_source: None,
     };
 
     // Rule where all fails but any would pass
@@ -2757,6 +2839,8 @@ fn test_all_and_any_without_needs_requires_one_any() {
         inline_yara_results: None,
         cached_kv_format: OnceLock::new(),
         cached_kv_parsed: OnceLock::new(),
+        current_trait: None,
+        current_source: None,
     };
 
     let rule = CompositeTrait {

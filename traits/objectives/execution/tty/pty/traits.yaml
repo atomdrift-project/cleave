@@ -259,10 +259,11 @@ composite_rules:
       - id: micro-behaviors/process/create/shell
     downgrade:
       any:
-        - id: metadata/apple/system-component
+        - id: metadata/apple::system-component
         - id: micro-behaviors/dylib/library::debugger-tool-marker
         - id: micro-behaviors/dylib/library::system-lib-marker
         - id: micro-behaviors/dylib/library::shell-interpreter
+        - id: micro-behaviors/dylib/library::terminal-editor-marker
 
   # PTY-based network backdoor - combines PTY with network operations
   # NOTE: This matches legitimate shells (/bin/bash) which have all these symbols
@@ -293,7 +294,7 @@ composite_rules:
     # Downgrade for Apple system components (e.g., /bin/bash), debuggers, graphics libs, and system libraries
     downgrade:
       any:
-        - id: metadata/apple/system-component
+        - id: metadata/apple::system-component
         - id: micro-behaviors/dylib/library::debugger-tool-marker
         - id: micro-behaviors/dylib/library::system-lib-marker
         - id: micro-behaviors/dylib/library::shell-interpreter

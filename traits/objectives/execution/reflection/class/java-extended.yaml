@@ -3,39 +3,6 @@
 # ATT&CK: T1140 (Deobfuscate/Decode Files or Information), T1620 (Compile Code After Delivery)
 
 traits:
-  - id: java-classloader-defineclass
-    desc: Java dynamic class definition from bytecode
-    crit: suspicious
-    conf: 0.9
-    mbc: "E1202"
-    attack: "T1140"
-    for: [java, class]
-    if:
-      type: string
-      substr: defineClass
-
-  - id: java-classloader-loadclass
-    desc: Java dynamic class loading
-    crit: notable
-    conf: 0.8
-    mbc: "E1202"
-    attack: "T1140"
-    for: [java, class]
-    if:
-      type: string
-      substr: loadClass
-
-  - id: java-classloader-findclass
-    desc: Java class finding and loading
-    crit: notable
-    conf: 0.8
-    mbc: "E1202"
-    attack: "T1140"
-    for: [java, class]
-    if:
-      type: string
-      substr: findClass
-
   - id: java-reflective-method
     desc: Java reflective method invocation
     crit: suspicious
@@ -56,8 +23,8 @@ composite_rules:
     attack: "T1140"
     for: [java, class]
     all:
-      - id: java-classloader-defineclass
+      - id: java-defineclass
     any:
-      - id: java-classloader-loadclass
-      - id: java-classloader-findclass
+      - id: java-loadclass
+      - id: java-findclass
       - id: java-reflective-method

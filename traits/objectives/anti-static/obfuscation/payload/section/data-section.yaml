@@ -49,6 +49,11 @@ traits:
       section: data
       compare_to: text
       min: 1.0
+    unless:
+      - id: well-known/tools/sysadmin::par-env-vars
+      - type: string
+        substr: "PAR_TEMP"
+      - id: metadata/signed/platform::apple
 
   # Large rodata section with medium entropy = encoded strings
   - id: encoded-rodata-section
@@ -82,7 +87,7 @@ composite_rules:
     size_min: 8192  # 8KB minimum
     all:
       - id: encrypted-data-section
-      - id: objectives/anti-static/obfuscation/payload::tiny-cstring
+      - id: objectives/anti-static/obfuscation/payload/encrypted::tiny-cstring
 
   # Data section larger than code + shell exec = dropper
   - id: data-heavy-dropper-pattern

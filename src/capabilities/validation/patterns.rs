@@ -129,7 +129,7 @@ fn large_range_regex() -> &'static regex::Regex {
 
 /// Find traits with short patterns that are likely to produce too many false positives.
 ///
-/// Short patterns (3 chars or less for substr/regex, 3 bytes or less for hex) are flagged
+/// Short patterns (3 chars or less for substr/regex, 2 bytes or less for hex) are flagged
 /// unless the trait uses specificity constraints like count_min, section, or offset.
 ///
 /// Returns `(trait_id, pattern, pattern_type, source_file)` for warnings.
@@ -245,7 +245,7 @@ pub(crate) fn find_short_pattern_warnings(
                     .split_whitespace()
                     .filter(|p| !p.starts_with('[') && !p.ends_with(']'))
                     .collect();
-                if hex_parts.len() <= 3 && !hex_parts.is_empty() {
+                if hex_parts.len() <= 2 && !hex_parts.is_empty() {
                     let source = rule_source_files
                         .get(&trait_def.id)
                         .cloned()

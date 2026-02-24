@@ -19,7 +19,7 @@ composite_rules:
       - id: micro-behaviors/hardware/clipboard/access::macos-pasteboard-items
     downgrade:
       any:
-        - id: metadata/apple/system-component
+        - id: metadata/apple::system-component
 
   - id: macos-clipboard-context-stealer
     desc: macOS clipboard stealing with context (window watching)
@@ -32,4 +32,4 @@ composite_rules:
       - id: macos-clipboard-monitor
     downgrade:
       any:
-        - id: metadata/apple/system-component
+        - id: metadata/apple::system-component

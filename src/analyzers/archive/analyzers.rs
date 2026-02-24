@@ -884,7 +884,8 @@ impl ArchiveAnalyzer {
                         location: Some(file_path.display().to_string()),
                     }],
 
-                    source_file: None,
+                    match_count: 0,
+                source_file: None,
                 });
 
                 Ok(report)

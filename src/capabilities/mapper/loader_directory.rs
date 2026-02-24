@@ -17,6 +17,7 @@ use crate::capabilities::validation::{
     find_alternation_merge_candidates, find_banned_directory_segments, find_cap_obj_violations,
     find_depth_violations, find_duplicate_second_level_directories,
     find_duplicate_traits_and_composites, find_empty_condition_clauses, find_for_only_duplicates,
+    find_atomic_logic_duplicates,
     find_hostile_cap_rules, find_impossible_count_constraints, find_impossible_needs,
     find_impossible_size_constraints, find_invalid_trait_ids, find_line_number,
     find_malware_subcategory_violations, find_missing_search_patterns, find_non_capturing_groups,
@@ -1575,6 +1576,48 @@ impl super::CapabilityMapper {
                 ));
             }
 
+            // Validate: traits with identical matching logic but different metadata
+            let logic_duplicates = find_atomic_logic_duplicates(&trait_definitions);
+            if !logic_duplicates.is_empty() {
+                eprintln!(
+                    "\n⚠️  WARNING: {} trait pairs have identical matching logic but different metadata",
+                    logic_duplicates.len()
+                );
+                eprintln!("   Same detection with inconsistent criticality/confidence/platforms:\n");
+                for (id_a, id_b, desc) in &logic_duplicates {
+                    let source_a = rule_source_files
+                        .get(id_a)
+                        .map(std::string::String::as_str)
+                        .unwrap_or("unknown");
+                    let source_b = rule_source_files
+                        .get(id_b)
+                        .map(std::string::String::as_str)
+                        .unwrap_or("unknown");
+                    let line_a = find_line_number(source_a, id_a);
+                    let line_b = find_line_number(source_b, id_b);
+
+                    let loc_a = if let Some(line) = line_a {
+                        format!("{}:{}", source_a, line)
+                    } else {
+                        source_a.to_string()
+                    };
+                    let loc_b = if let Some(line) = line_b {
+                        format!("{}:{}", source_b, line)
+                    } else {
+                        source_b.to_string()
+                    };
+
+                    eprintln!("   {} vs {}", id_a, id_b);
+                    eprintln!("      {}", loc_a);
+                    eprintln!("      {}", loc_b);
+                    eprintln!("      {}\n", desc);
+                }
+                warnings.push(format!(
+                    "{} trait pairs have identical matching but different metadata",
+                    logic_duplicates.len()
+                ));
+            }
+
             // Validate: regex patterns that could be merged with alternation (case-only differences)
             // e.g., `nc\s+-e` and `NC\s+-e` -> `(nc|NC)\s+-e`
             let alternation_candidates =
@@ -1606,15 +1649,17 @@ impl super::CapabilityMapper {
                 ));
             }
 
-            // Validate: `needs` value exceeds number of items in `any:` (impossible to satisfy)
-            let impossible_needs = find_impossible_needs(&composite_rules);
+            // Validate: `needs` value exceeds number of potential matches in `any:` (impossible to satisfy)
+            // Directory references can match multiple traits, so we count potential matches
+            let all_trait_ids: Vec<String> = valid_trait_ids.iter().cloned().collect();
+            let impossible_needs = find_impossible_needs(&composite_rules, &all_trait_ids);
             if !impossible_needs.is_empty() {
                 eprintln!(
                     "\n❌ ERROR: {} composite rules have impossible `needs` values",
                     impossible_needs.len()
                 );
-                eprintln!("   The `needs` value exceeds the number of items in `any:`:\n");
-                for (rule_id, needs, any_len) in &impossible_needs {
+                eprintln!("   The `needs` value exceeds the number of potential matches in `any:`:\n");
+                for (rule_id, needs, potential) in &impossible_needs {
                     let source = rule_source_files
                         .get(rule_id)
                         .map(std::string::String::as_str)
@@ -1622,13 +1667,13 @@ impl super::CapabilityMapper {
                     let line_hint = find_line_number(source, rule_id);
                     if let Some(line) = line_hint {
                         eprintln!(
-                            "   {}:{}: '{}' has needs: {} but only {} items in any:",
-                            source, line, rule_id, needs, any_len
+                            "   {}:{}: '{}' has needs: {} but only {} potential matches",
+                            source, line, rule_id, needs, potential
                         );
                     } else {
                         eprintln!(
-                            "   {}: '{}' has needs: {} but only {} items in any:",
-                            source, rule_id, needs, any_len
+                            "   {}: '{}' has needs: {} but only {} potential matches",
+                            source, rule_id, needs, potential
                         );
                     }
                 }

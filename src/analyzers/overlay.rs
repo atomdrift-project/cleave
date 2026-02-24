@@ -116,6 +116,7 @@ pub(crate) fn analyze_overlay(
                     value: format!("archive_type:{}", archive_type),
                     location: Some(format!("overlay:{}bytes", overlay_data.len())),
                 }],
+                match_count: 1,
                 source_file: Some(binary_path.to_string()),
             };
 
@@ -157,6 +158,7 @@ pub(crate) fn analyze_overlay(
                         location: None,
                     },
                 ],
+                match_count: 1,
                 source_file: Some(binary_path.to_string()),
             };
 

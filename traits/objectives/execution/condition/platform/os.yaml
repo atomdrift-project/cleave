@@ -30,10 +30,9 @@ composite_rules:
 
   - id: os-specific-execution
     desc: Executes different commands based on OS platform
-    crit: notable
+    crit: suspicious
     conf: 0.85
     attack: T1204.002
     all:
       - id: has-os-check
       - id: has-execution-capability
-      - id: executes-scripts

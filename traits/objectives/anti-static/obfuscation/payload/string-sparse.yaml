@@ -22,6 +22,10 @@ traits:
       section: "__cstring"
       compare_to: "total"
       max: 0.0005  # Less than 0.05% of binary
+    unless:
+      - id: well-known/tools/sysadmin::par-env-vars
+      - type: string
+        substr: "PAR_TEMP"
 
   # Very sparse strings
   - id: very-sparse-strings-macos
@@ -35,6 +39,10 @@ traits:
       section: "__cstring"
       compare_to: "total"
       max: 0.002  # Less than 0.2% of binary
+    unless:
+      - id: well-known/tools/sysadmin::par-env-vars
+      - type: string
+        substr: "PAR_TEMP"
 
   # Large data section (potential encoded payload storage)
   - id: large-data-section-macos

@@ -8,20 +8,13 @@ defaults:
   conf: 0.5
   platforms: [windows]
 
-traits:
-  # === Command References ===
-  - id: cmd-name
-    desc: cmd command name
-    if:
-      id: micro-behaviors/process/create/shell::cmd-name
-
 composite_rules:
   - id: cmd-exe
     desc: cmd.exe Windows command shell reference
     conf: 0.4
     all:
       - id: micro-behaviors/fs/path/extension::exe
-      - id: cmd-name
+      - id: micro-behaviors/process/create/shell::cmd-name
 
   - id: powershell-exe
     desc: powershell.exe executable reference

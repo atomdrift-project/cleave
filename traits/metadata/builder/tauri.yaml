@@ -1,0 +1,27 @@
+# Tauri Framework Detection
+# ATT&CK: T1587.001
+
+defaults:
+  for: [all]
+  crit: notable
+  conf: 1.0
+
+traits:
+  - id: tauri-runtime
+    desc: "Tauri framework runtime (Rust/Wry)"
+    if:
+      type: string
+      regex: 'tauri-runtime-wry|tauri_runtime_wry'
+
+  - id: tauri-cargo-path
+    desc: "Tauri cargo registry path"
+    if:
+      type: string
+      regex: '/tauri-[^/]{1,50}/src/'
+
+composite_rules:
+  - id: tauri-app
+    desc: "Tauri-based application"
+    any:
+      - { id: tauri-runtime }
+      - { id: tauri-cargo-path }

@@ -53,7 +53,7 @@ traits:
     if:
       type: string
       # Apple internal PROJECT: marker in binary
-      regex: "@\\(#\\)PROGRAM:[a-z]+\\s+PROJECT:[A-Za-z]+-[0-9]+"
+      regex: "@\\(#\\)PROGRAM:[A-Za-z][A-Za-z0-9]*\\s+PROJECT:[A-Za-z]+-[0-9]+"
 
   # === Apple Frameworks ===
 
@@ -167,6 +167,32 @@ traits:
     if:
       type: symbol
       regex: "dispatch_source_create"
+
+  # === Info.plist Properties ===
+
+  - id: lsuielement-background-agent
+    desc: LSUIElement background agent flag
+    crit: baseline
+    conf: 1.0
+    if:
+      type: raw
+      regex: '<key>LSUIElement</key>\s*<true/>'
+
+  - id: build-info-xcode
+    desc: Apple Build Information (DTPlatformBuild/DTXcode)
+    crit: baseline
+    conf: 1.0
+    if:
+      type: raw
+      regex: "(DTPlatformBuild|DTXcode)"
+
+  - id: empty-platform-build
+    desc: Empty DTPlatformBuild value
+    crit: baseline
+    conf: 1.0
+    if:
+      type: raw
+      regex: <key>DTPlatformBuild</key>\s*<string></string>
 
 composite_rules:
   - id: ad-framework

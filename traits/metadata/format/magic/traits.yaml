@@ -293,41 +293,5 @@ traits:
       pattern: "04 00 00 00" # PAK version 4
       offset: 0
 
-  # Suspicious: executable magic NOT at file start (embedded payload)
-  # These complement micro-behaviors/data/embedded but use the new offset constraint syntax
-  - id: embedded-elf
-    desc: ELF magic found past file header
-    crit: baseline
-    conf: 0.85
-    for: [all]
-    if:
-      type: hex
-      pattern: "7F 45 4C 46"
-
-  - id: embedded-pe
-    desc: MZ/PE magic found past file header
-    crit: suspicious
-    conf: 0.85
-    for: [elf, macho, shell, python, javascript] # Suspicious only for non-PE file types
-    if:
-      type: hex
-      pattern: "4D 5A [2-4096] 50 45 00 00"
-
-  - id: embedded-pe-in-pe
-    desc: Embedded PE resource in executable
-    crit: notable # Common for PE files with resources
-    conf: 0.9
-    for: [pe, dll]
-    if:
-      type: hex
-      # MZ ... [up to 4096 bytes] ... PE\0\0
-      pattern: "4D 5A [2-4096] 50 45 00 00"
-
-  - id: embedded-zip
-    desc: ZIP magic found past file header
-    crit: notable
-    conf: 0.8
-    for: [elf, macho, pe] # Only flag in executables
-    if:
-      type: hex
-      pattern: "50 4B 03 04"
+  # Embedded payload detection is in micro-behaviors/data/embedded/payload/
+  # See: elf-magic-embedded, pe-magic-embedded, zip-magic

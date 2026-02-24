@@ -100,6 +100,18 @@ traits:
     if:
       type: raw
       regex: '/tmp/\.[A-Za-z0-9][A-Za-z0-9_-]*/'
+    downgrade:
+      any:
+        - type: raw
+          substr: "/tmp/.X11-unix/"
+        - type: basename
+          exact: "ssh"
+        - type: basename
+          exact: "sshd"
+        - type: basename
+          exact: "Xorg"
+        - type: basename
+          exact: "xterm"
 
 composite_rules:
   # Any hidden directory in system binary paths

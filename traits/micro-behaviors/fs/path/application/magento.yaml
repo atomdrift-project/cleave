@@ -1,0 +1,12 @@
+# Magento-related path indicators
+# Useful for detecting malware targeting Magento e-commerce platforms
+
+traits:
+  - id: media-path
+    desc: Navigation to Magento pub/media directory
+    crit: notable
+    conf: 0.8
+    for: [shell]
+    if:
+      type: raw
+      regex: 'cd\s+pub;\s*cd\s+media'

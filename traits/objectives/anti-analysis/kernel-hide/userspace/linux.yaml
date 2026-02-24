@@ -7,16 +7,6 @@ defaults:
   for: [elf]
 
 traits:
-  # === Rootkit String Markers ===
-  - id: rootkit-string
-    desc: Rootkit string reference
-    crit: suspicious
-    conf: 0.7
-    mbc: "B0003"
-    attack: "T1014"
-    if:
-      id: micro-behaviors/data/text/malware::rootkit-word
-
   - id: hide-pid
     desc: hide_pid function
     crit: suspicious
@@ -143,7 +133,7 @@ composite_rules:
     attack: "T1014"
     needs: 2
     any:
-      - id: rootkit-string
+      - id: micro-behaviors/data/text/malware::rootkit-word
       - id: hide-pid
       - id: hide-file
       - id: objectives/anti-analysis/kernel-hide/userspace::ld-so-preload-file

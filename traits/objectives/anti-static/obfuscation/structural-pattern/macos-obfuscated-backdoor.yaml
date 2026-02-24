@@ -30,7 +30,7 @@ composite_rules:
     any:
       - id: micro-behaviors/process/create/shell::excessive-popen
       - id: objectives/anti-static/obfuscation/payload::high-entropy-data-macos
-      - id: metadata/binary/structure::many-high-entropy-strings
+      - id: objectives/anti-static/obfuscation/binary-metrics::many-high-entropy-strings
     # Must be unsigned (legitimate apps are signed)
     none:
       - id: metadata/signed/platform::apple
@@ -116,7 +116,7 @@ composite_rules:
       - id: objectives/lateral-movement/social-engineering/masquerading::suspicious-generic-naming
     # Additional obfuscation
     any:
-      - id: metadata/binary/structure::many-high-entropy-strings
+      - id: objectives/anti-static/obfuscation/binary-metrics::many-high-entropy-strings
       - id: metadata/binary/structure::extreme-text-to-string-ratio
     # Must be unsigned
     none:

@@ -52,16 +52,6 @@ traits:
   # === child_process micro-behaviors ===
   # Use micro-behaviors/process/create/shell/lang::child-process-require instead of duplicating
 
-  - id: spawn-call
-    desc: spawn function call
-    crit: notable
-    conf: 0.7
-    for: [javascript, typescript]
-    if:
-      type: ast
-      kind: call
-      exact: "spawn"
-
   - id: exec-call
     desc: exec function call
     crit: notable
@@ -219,7 +209,7 @@ composite_rules:
     conf: 0.7
     for: [javascript, typescript]
     any:
-      - id: spawn-call
+      - id: micro-behaviors/process/create/shell/lang::js-spawn
       - id: exec-call
       - id: execSync-call
       - id: spawnSync-call

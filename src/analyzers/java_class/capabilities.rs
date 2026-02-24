@@ -94,7 +94,8 @@ impl super::JavaClassAnalyzer {
                                 location: None,
                             }],
 
-                            source_file: None,
+                            match_count: 0,
+                source_file: None,
                         });
                     }
                     break;
@@ -363,6 +364,7 @@ impl super::JavaClassAnalyzer {
                     location: None,
                 }],
 
+                match_count: 0,
                 source_file: None,
             });
         }

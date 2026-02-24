@@ -27,9 +27,9 @@ composite_rules:
       - id: micro-behaviors/process/create/shell
     # Obfuscation or frequency indicators
     any:
-      - id: objectives/anti-static/obfuscation/payload::tiny-cstring
+      - id: objectives/anti-static/obfuscation/payload/encrypted::tiny-cstring
       - id: micro-behaviors/process/create/shell::excessive-popen
-      - id: objectives/anti-static/obfuscation/payload::high-entropy-data-section
+      - id: objectives/anti-static/obfuscation/payload/section::high-entropy-data-section
 
   # Includes XOR-encoded commands
   - id: linux-obfuscated-daemon-backdoor
@@ -60,4 +60,4 @@ composite_rules:
     attack: "T1059,T1543,T1105"
     all:
       - id: linux-daemon-shell-backdoor
-      - id: objectives/anti-static/obfuscation/payload::encrypted-payload-section
+      - id: objectives/anti-static/obfuscation/payload/section::encrypted-payload-section

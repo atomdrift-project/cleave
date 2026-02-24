@@ -17,14 +17,8 @@ traits:
     mbc: "F0001.006"
     attack: "T1027.009"
     if:
-      type: yara
-      source: |
-        rule embedded_zstd {
-          strings:
-            $zstd = { 28 B5 2F FD }
-          condition:
-            $zstd
-        }
+      type: hex
+      pattern: "28 B5 2F FD"
 
   - id: lzma-magic
     desc: Embedded LZMA compressed data
@@ -64,42 +58,24 @@ traits:
     mbc: "F0001.006"
     attack: "T1027.009"
     if:
-      type: yara
-      source: |
-        rule embedded_xz {
-          strings:
-            $xz = { FD 37 7A 58 5A 00 }
-          condition:
-            $xz
-        }
+      type: hex
+      pattern: "FD 37 7A 58 5A 00"
 
   - id: gzip-magic
     desc: Embedded gzip compressed data
     crit: baseline
     conf: 0.5
     if:
-      type: yara
-      source: |
-        rule embedded_gzip {
-          strings:
-            $gzip = { 1F 8B 08 }
-          condition:
-            $gzip
-        }
+      type: hex
+      pattern: "1F 8B 08"
 
   - id: bzip2-magic
     desc: Embedded bzip2 compressed data
     crit: baseline
     conf: 0.5
     if:
-      type: yara
-      source: |
-        rule embedded_bzip2 {
-          strings:
-            $bz2 = { 42 5A 68 }
-          condition:
-            $bz2
-        }
+      type: hex
+      pattern: "42 5A 68"
 
   # === Embedded Binary Magic ===
   # Note: ELF/PE/Mach-O embedded detection needs to skip the file header
@@ -112,16 +88,11 @@ traits:
     attack: "T1027.009"
     # Bootloaders and firmware files legitimately embed ELF firmware/kernel images
     # This is especially common in EFI bootloaders which may contain firmware updates
+    # ELF magic NOT at file start indicates embedded binary (skip first 4KB)
     if:
-      type: yara
-      source: |
-        rule embedded_elf {
-          strings:
-            $elf = { 7F 45 4C 46 }
-          condition:
-            // ELF magic not at file start indicates embedded binary
-            $elf and @elf[1] > 0x1000
-        }
+      type: hex
+      pattern: "7F 45 4C 46"
+      offset_min: 4096
 
   - id: pe-magic-embedded
     desc: Embedded PE/MZ binary
@@ -129,16 +100,11 @@ traits:
     conf: 0.8
     mbc: "F0001.006"
     attack: "T1027.009"
+    # MZ magic NOT at file start indicates embedded binary (skip first 4KB)
     if:
-      type: yara
-      source: |
-        rule embedded_pe {
-          strings:
-            $mz = { 4D 5A 90 00 }
-          condition:
-            // MZ magic not at file start indicates embedded binary
-            $mz and @mz[1] > 0x1000
-        }
+      type: hex
+      pattern: "4D 5A 90 00"
+      offset_min: 4096
 
   # === Embedded Archive Formats ===
 
@@ -147,42 +113,24 @@ traits:
     crit: baseline
     conf: 0.4
     if:
-      type: yara
-      source: |
-        rule embedded_zip {
-          strings:
-            $zip = { 50 4B 03 04 }
-          condition:
-            $zip
-        }
+      type: hex
+      pattern: "50 4B 03 04"
 
   - id: rar-magic
     desc: Embedded RAR archive
     crit: notable
     conf: 0.6
     if:
-      type: yara
-      source: |
-        rule embedded_rar {
-          strings:
-            $rar = { 52 61 72 21 1A 07 }
-          condition:
-            $rar
-        }
+      type: hex
+      pattern: "52 61 72 21 1A 07"
 
   - id: 7z-magic
     desc: Embedded 7-Zip archive
     crit: notable
     conf: 0.6
     if:
-      type: yara
-      source: |
-        rule embedded_7z {
-          strings:
-            $7z = { 37 7A BC AF 27 1C }
-          condition:
-            $7z
-        }
+      type: hex
+      pattern: "37 7A BC AF 27 1C"
 
   # Detect .gnu_debugdata section (LZMA-compressed mini debug info in ELF binaries)
   # This is a standard legitimate feature on Linux for minimal debugging symbols

@@ -12,7 +12,7 @@ composite_rules:
     any:
       - id: objectives/discovery/network/ip-tracker/
       - id: objectives/discovery/network/scan::iplogger-keyword
-      - id: objectives/discovery/network/scan::iplogger-b64
+      - id: objectives/discovery/network/scan::iplogger-encoded
       - id: objectives/command-and-control/infrastructure/network::ruby-ast-fragmented-iplogger
       - id: objectives/command-and-control/infrastructure/network::ruby-ast-fragmented-iplogger-alt
 
@@ -25,7 +25,7 @@ composite_rules:
     any:
       - id: objectives/discovery/network/ip-tracker/
       - id: objectives/discovery/network/scan::iplogger-keyword
-      - id: objectives/discovery/network/scan::iplogger-b64
+      - id: objectives/discovery/network/scan::iplogger-encoded
 
   - id: generic-tracking-pixel-beacon
     desc: HTTP request to tracking/logging service (beaconing)
@@ -36,4 +36,4 @@ composite_rules:
     any:
       - id: objectives/discovery/network/ip-tracker/
       - id: objectives/discovery/network/scan::iplogger-keyword
-      - id: objectives/discovery/network/scan::iplogger-b64
+      - id: objectives/discovery/network/scan::iplogger-encoded

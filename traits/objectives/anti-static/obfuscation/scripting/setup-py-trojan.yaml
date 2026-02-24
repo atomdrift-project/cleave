@@ -63,14 +63,6 @@ traits:
     type: ast
     kind: call
     exact: compile
-- id: conditional-exec-import
-  desc: __import__ execution primitive
-  crit: notable
-  conf: 0.85
-  if:
-    type: ast
-    kind: call
-    exact: __import__
 - id: post-setup-import-os-sys
   desc: setup() followed by os/sys import context
   crit: suspicious
@@ -115,7 +107,7 @@ composite_rules:
   - id: micro-behaviors/process/create/shell/lang::exec-call
   - id: conditional-exec-eval
   - id: conditional-exec-compile
-  - id: conditional-exec-import
+  - id: objectives/execution/reflection/class::py-dunder-import
   - id: micro-behaviors/process/create/shell::python-os-system
 - id: post-setup-import-context
   desc: setup() followed by import context

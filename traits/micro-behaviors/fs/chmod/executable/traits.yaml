@@ -14,8 +14,16 @@ traits:
     desc: chmod +x (make executable)
     conf: 0.75
     if:
-      type: string
+      type: raw
       regex: 'chmod\s+(\-[a-zA-Z]{1,8}\s+){0,3}\+x\s+[/\.\$\w\{]'
+
+  - id: chmod-no-space
+    desc: Typo in chmod command without space
+    crit: suspicious
+    conf: 0.85
+    if:
+      type: raw
+      regex: 'chmod\s+\+x[a-zA-Z0-9_]{1,64}'
 
   # Python os.chmod with executable bit (0o7xx pattern)
   - id: python-executable
@@ -49,7 +57,7 @@ traits:
     desc: Shell chmod 7xx (executable)
     conf: 0.7
     if:
-      type: string
+      type: raw
       regex: 'chmod\s+[\-\w]*\s*0?7[0-7][0-7]\s'
 
   # GuardDog: Python stat.S_IEXEC
@@ -69,6 +77,7 @@ composite_rules:
     conf: 0.75
     any:
       - id: shell-plus-x
+      - id: chmod-no-space
       - id: python-executable
       - id: python-0755
       - id: python-stat-iexec

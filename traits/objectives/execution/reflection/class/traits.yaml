@@ -6,65 +6,50 @@ defaults:
   for: [all]
 
 traits:
-  # dlopen/dlsym (Linux/macOS)
-  - id: dlopen
-    desc: Runtime library loading via dlopen
-    crit: notable
-    conf: 0.9
-    platforms: [linux, macos, unix]
-    for: [elf, macho, so, dylib]
-    if:
-      type: yara
-      source: |
-        rule dlopen_load {
-          strings:
-            $dlopen = "dlopen" ascii
-            $dlsym = "dlsym" ascii
-            $dlclose = "dlclose" ascii
-            $dlerror = "dlerror" ascii
-          condition:
-            $dlopen or ($dlsym and any of ($dlclose, $dlerror))
-        }
-
-  # LoadLibrary (Windows)
-  - id: loadlibrary
-    desc: Runtime library loading via LoadLibrary
-    crit: notable
-    conf: 0.9
+  # LoadLibrary (Windows) - component traits
+  - id: loadlibrary-sym
+    desc: LoadLibrary symbol
+    crit: component
     platforms: [windows]
     for: [pe, dll]
     if:
-      type: yara
-      source: |
-        rule loadlibrary_load {
-          strings:
-            $ll1 = "LoadLibrary" ascii wide
-            $ll2 = "LoadLibraryA" ascii
-            $ll3 = "LoadLibraryW" ascii
-            $ll4 = "LoadLibraryEx" ascii wide
-            $gpa = "GetProcAddress" ascii wide
-          condition:
-            any of ($ll*) or $gpa
-        }
+      type: symbol
+      regex: "^LoadLibrary(A|W|Ex)?$"
 
-  # Python dynamic import
-  - id: python-import
-    desc: Python dynamic import patterns
-    crit: notable
-    conf: 0.85
+  # Python dynamic import - component traits
+  - id: py-dunder-import
+    desc: Python __import__ builtin
+    crit: component
     for: [python]
     if:
-      type: yara
-      source: |
-        rule python_dynamic_import {
-          strings:
-            $imp1 = "__import__" ascii
-            $imp2 = "importlib.import_module" ascii
-            $imp3 = "exec(compile" ascii
-            $imp4 = "importlib.util" ascii
-          condition:
-            any of them
-        }
+      type: ast
+      kind: call
+      exact: "__import__"
+
+  - id: py-importlib-import-module
+    desc: Python importlib.import_module
+    crit: component
+    for: [python]
+    if:
+      type: ast
+      kind: call
+      exact: "importlib.import_module"
+
+  - id: py-exec-compile
+    desc: Python exec(compile(...))
+    crit: component
+    for: [python]
+    if:
+      type: string
+      substr: "exec(compile"
+
+  - id: py-importlib-util
+    desc: Python importlib.util
+    crit: component
+    for: [python]
+    if:
+      type: string
+      substr: "importlib.util"
 
   # Python chained import (often used for obfuscation)
   - id: python-import-chain
@@ -98,158 +83,236 @@ traits:
       type: symbol
       regex: "\\.load_module"
 
-  # Java reflection loading
-  - id: java-reflection
-    desc: Java reflection class loading
-    crit: notable
-    conf: 0.85
+  # Java reflection loading - component traits
+  - id: java-class-forname
+    desc: Java Class.forName
+    crit: component
     for: [class, java]
     if:
-      type: yara
-      source: |
-        rule java_reflection_load {
-          strings:
-            $ref1 = "Class.forName" ascii
-            $ref2 = "ClassLoader" ascii
-            $ref3 = "defineClass" ascii
-            $ref4 = "loadClass" ascii
-            $ref5 = "newInstance" ascii
-          condition:
-            2 of them
-        }
+      type: string
+      substr: "Class.forName"
 
-  # Java defineClass - loading bytecode dynamically
+  - id: java-classloader
+    desc: Java ClassLoader
+    crit: component
+    for: [class, java]
+    if:
+      type: string
+      substr: "ClassLoader"
+
   - id: java-defineclass
-    desc: Dynamic class definition from bytecode
-    crit: suspicious
-    conf: 0.95
+    desc: Java defineClass
+    crit: component
+    for: [class, java]
     if:
-      type: yara
-      source: |
-        rule java_defineclass {
-          strings:
-            $dc = "defineClass" ascii
-            $lc = "loadClass" ascii
-            $fc = "findClass" ascii
-          condition:
-            $dc and ($lc or $fc)
-        }
+      type: string
+      substr: "defineClass"
 
-  # Java resource-backed class loader (loads bytecode from embedded resource)
-  - id: java-resource-classloader
-    desc: Defines class from resource stream
-    crit: suspicious
-    conf: 0.92
-    for: [class]
+  - id: java-loadclass
+    desc: Java loadClass
+    crit: component
+    for: [class, java]
     if:
-      type: yara
-      source: |
-        rule java_resource_classloader {
-          strings:
-            $res = "getResourceAsStream" ascii
-            $dc = "defineClass" ascii
-            $lc = "loadClass" ascii
-            $fc = "findClass" ascii
-            $pd = "ProtectionDomain" ascii
-            $gpd = "getProtectionDomain" ascii
-          condition:
-            $res and $dc and ($lc or $fc) and ($pd or $gpd)
-        }
+      type: string
+      substr: "loadClass"
 
-  # Java reflective method invocation in bytecode
-  - id: java-reflective-invoke
-    desc: Reflective method invocation in bytecode
-    crit: suspicious
-    conf: 0.9
+  - id: java-newinstance
+    desc: Java newInstance
+    crit: component
+    for: [class, java]
     if:
-      type: yara
-      source: |
-        rule java_reflective_invoke {
-          strings:
-            $method = "java/lang/reflect/Method" ascii
-            $invoke = "invoke" ascii
-            $getmethod = "getMethod" ascii
-          condition:
-            $method and ($invoke or $getmethod)
-        }
+      type: string
+      substr: "newInstance"
 
-  # Java string deobfuscation via StringBuilder.reverse
-  - id: java-string-reversal
-    desc: String reversal deobfuscation technique
-    crit: notable
-    conf: 0.85
+  # Java findClass component
+  - id: java-findclass
+    desc: Java findClass
+    crit: component
+    for: [class, java]
     if:
-      type: yara
-      source: |
-        rule java_string_reversal {
-          strings:
-            $sb = "java/lang/StringBuilder" ascii
-            $rev = "reverse" ascii
-            $tostr = "toString" ascii
-          condition:
-            $sb and $rev and $tostr
-        }
+      type: string
+      substr: "findClass"
 
-  # .NET reflection loading
-  - id: dotnet-reflection
-    desc: .NET reflection assembly loading
-    crit: notable
-    conf: 0.85
+  # Java resource-backed class loader components
+  - id: java-getresourceasstream
+    desc: Java getResourceAsStream
+    crit: component
+    for: [class, java]
+    if:
+      type: string
+      substr: "getResourceAsStream"
+
+  - id: java-protectiondomain
+    desc: Java ProtectionDomain
+    crit: component
+    for: [class, java]
+    if:
+      type: string
+      substr: "ProtectionDomain"
+
+  - id: java-getprotectiondomain
+    desc: Java getProtectionDomain
+    crit: component
+    for: [class, java]
+    if:
+      type: string
+      substr: "getProtectionDomain"
+
+  # Java reflective method invocation components
+  - id: java-reflect-method
+    desc: Java java/lang/reflect/Method
+    crit: component
+    for: [class, java]
+    if:
+      type: string
+      substr: "java/lang/reflect/Method"
+
+  - id: java-invoke
+    desc: Java invoke method
+    crit: component
+    for: [class, java]
+    if:
+      type: string
+      word: "invoke"
+
+  - id: java-getmethod
+    desc: Java getMethod
+    crit: component
+    for: [class, java]
+    if:
+      type: string
+      substr: "getMethod"
+
+  # Java string reversal components
+  - id: java-stringbuilder
+    desc: Java java/lang/StringBuilder
+    crit: component
+    for: [class, java]
+    if:
+      type: string
+      substr: "java/lang/StringBuilder"
+
+  - id: java-reverse
+    desc: Java reverse method
+    crit: component
+    for: [class, java]
+    if:
+      type: string
+      word: "reverse"
+
+  - id: java-tostring
+    desc: Java toString method
+    crit: component
+    for: [class, java]
+    if:
+      type: string
+      word: "toString"
+
+  # .NET reflection loading components
+  - id: dotnet-assembly-load
+    desc: .NET Assembly.Load
+    crit: component
     platforms: [windows]
     for: [pe, dll, csharp]
     if:
-      type: yara
-      source: |
-        rule dotnet_reflection_load {
-          strings:
-            $ref1 = "Assembly.Load" ascii wide
-            $ref2 = "Assembly.LoadFrom" ascii wide
-            $ref3 = "Activator.CreateInstance" ascii wide
-            $ref4 = "Type.GetType" ascii wide
-            $ref5 = "MethodInfo.Invoke" ascii wide
-          condition:
-            any of them
-        }
+      type: string
+      substr: "Assembly.Load"
 
-  # Go plugin loading
-  - id: go-plugin
-    desc: Go plugin dynamic loading
-    crit: notable
-    conf: 0.9
+  - id: dotnet-assembly-loadfrom
+    desc: .NET Assembly.LoadFrom
+    crit: component
+    platforms: [windows]
+    for: [pe, dll, csharp]
+    if:
+      type: string
+      substr: "Assembly.LoadFrom"
+
+  - id: dotnet-activator-createinstance
+    desc: .NET Activator.CreateInstance
+    crit: component
+    platforms: [windows]
+    for: [pe, dll, csharp]
+    if:
+      type: string
+      substr: "Activator.CreateInstance"
+
+  - id: dotnet-type-gettype
+    desc: .NET Type.GetType
+    crit: component
+    platforms: [windows]
+    for: [pe, dll, csharp]
+    if:
+      type: string
+      substr: "Type.GetType"
+
+  - id: dotnet-methodinfo-invoke
+    desc: .NET MethodInfo.Invoke
+    crit: component
+    platforms: [windows]
+    for: [pe, dll, csharp]
+    if:
+      type: string
+      substr: "MethodInfo.Invoke"
+
+  # Go plugin loading components
+  - id: go-plugin-open
+    desc: Go plugin.Open
+    crit: component
     for: [elf, macho, pe, go]
     if:
-      type: yara
-      source: |
-        rule go_plugin_load {
-          strings:
-            $plug1 = "plugin.Open" ascii
-            $plug2 = "plugin.Lookup" ascii
-            $plug3 = "plugin.Symbol" ascii
-          condition:
-            any of them
-        }
+      type: string
+      substr: "plugin.Open"
 
-  # Executable memory allocation
-  - id: executable-memory
-    desc: Allocates or modifies executable memory
-    crit: notable
-    conf: 0.8
-    for: [pe, elf, macho, dll, so, dylib]
+  - id: go-plugin-lookup
+    desc: Go plugin.Lookup
+    crit: component
+    for: [elf, macho, pe, go]
     if:
-      type: yara
-      source: |
-        rule executable_memory_ops {
-          strings:
-            $mprot = "mprotect" ascii
-            $vprot = "VirtualProtect" ascii wide
-            $p_exec = "PROT_EXEC" ascii
-            $pg_exec = "PAGE_EXECUTE" ascii wide
-            $mmap = "mmap" ascii
-            $rwx = "MAP_ANONYMOUS" ascii
-          condition:
-            ($mmap and $rwx and ($mprot or $p_exec or $pg_exec)) or
-            ($vprot and $pg_exec)
-        }
+      type: string
+      substr: "plugin.Lookup"
+
+  - id: go-plugin-symbol
+    desc: Go plugin.Symbol
+    crit: component
+    for: [elf, macho, pe, go]
+    if:
+      type: string
+      substr: "plugin.Symbol"
+
+  # Executable memory components
+  - id: mprotect-sym
+    desc: mprotect symbol
+    crit: component
+    for: [elf, macho, so, dylib]
+    if:
+      type: symbol
+      exact: "mprotect"
+
+  - id: virtualprotect-sym
+    desc: VirtualProtect symbol
+    crit: component
+    platforms: [windows]
+    for: [pe, dll]
+    if:
+      type: symbol
+      regex: "^VirtualProtect(Ex)?$"
+
+  - id: page-execute-str
+    desc: PAGE_EXECUTE constant
+    crit: component
+    platforms: [windows]
+    for: [pe, dll]
+    if:
+      type: string
+      substr: "PAGE_EXECUTE"
+
+  - id: map-anonymous-str
+    desc: MAP_ANONYMOUS constant
+    crit: component
+    for: [elf, macho, so, dylib]
+    if:
+      type: string
+      substr: "MAP_ANONYMOUS"
 
   # JIT runtime references
   - id: jit-runtime-ref-1
@@ -269,6 +332,187 @@ traits:
       regex: "(?i)libjit|LuaJIT|V8 JIT"
 
 composite_rules:
+  # dlopen helper
+  - id: dlsym-with-cleanup
+    desc: dlsym with dlclose/dlerror
+    crit: component
+    platforms: [linux, macos, unix]
+    for: [elf, macho, so, dylib]
+    all:
+      - id: micro-behaviors/dylib/lookup::dlsym-symbol
+    any:
+      - id: micro-behaviors/dylib/load::dlclose
+      - id: micro-behaviors/dylib/load::dlerror
+
+  - id: dlopen
+    desc: Runtime library loading via dlopen
+    crit: notable
+    conf: 0.9
+    platforms: [linux, macos, unix]
+    for: [elf, macho, so, dylib]
+    any:
+      - id: micro-behaviors/dylib/load::dlopen
+      - id: dlsym-with-cleanup
+
+  - id: loadlibrary
+    desc: Runtime library loading via LoadLibrary
+    crit: notable
+    conf: 0.9
+    platforms: [windows]
+    for: [pe, dll]
+    any:
+      - id: loadlibrary-sym
+      - id: micro-behaviors/dylib/lookup::get-proc-address
+
+  - id: python-import
+    desc: Python dynamic import patterns
+    crit: notable
+    conf: 0.85
+    for: [python]
+    any:
+      - id: py-dunder-import
+      - id: py-importlib-import-module
+      - id: py-exec-compile
+      - id: py-importlib-util
+
+  - id: java-reflection
+    desc: Java reflection class loading
+    crit: notable
+    conf: 0.85
+    for: [class, java]
+    needs: 2
+    any:
+      - id: java-class-forname
+      - id: java-classloader
+      - id: java-defineclass
+      - id: java-loadclass
+      - id: java-newinstance
+
+  # Java defineClass + loadClass/findClass
+  - id: java-load-or-find
+    desc: Java loadClass or findClass
+    crit: component
+    for: [class, java]
+    any:
+      - id: java-loadclass
+      - id: java-findclass
+
+  - id: java-defineclass-dynamic
+    desc: Dynamic class definition from bytecode
+    crit: suspicious
+    conf: 0.95
+    for: [class, java]
+    all:
+      - id: java-defineclass
+      - id: java-load-or-find
+
+  # Java resource classloader
+  - id: java-protection-domain
+    desc: Java ProtectionDomain reference
+    crit: component
+    for: [class, java]
+    any:
+      - id: java-protectiondomain
+      - id: java-getprotectiondomain
+
+  - id: java-resource-classloader
+    desc: Defines class from resource stream
+    crit: suspicious
+    conf: 0.92
+    for: [class]
+    all:
+      - id: java-getresourceasstream
+      - id: java-defineclass
+      - id: java-load-or-find
+      - id: java-protection-domain
+
+  # Java reflective invoke
+  - id: java-invoke-or-getmethod
+    desc: Java invoke or getMethod
+    crit: component
+    for: [class, java]
+    any:
+      - id: java-invoke
+      - id: java-getmethod
+
+  - id: java-reflective-invoke
+    desc: Reflective method invocation in bytecode
+    crit: suspicious
+    conf: 0.9
+    for: [class, java]
+    all:
+      - id: java-reflect-method
+      - id: java-invoke-or-getmethod
+
+  - id: java-string-reversal
+    desc: String reversal deobfuscation technique
+    crit: notable
+    conf: 0.85
+    for: [class, java]
+    all:
+      - id: java-stringbuilder
+      - id: java-reverse
+      - id: java-tostring
+
+  - id: dotnet-reflection
+    desc: .NET reflection assembly loading
+    crit: notable
+    conf: 0.85
+    platforms: [windows]
+    for: [pe, dll, csharp]
+    any:
+      - id: dotnet-assembly-load
+      - id: dotnet-assembly-loadfrom
+      - id: dotnet-activator-createinstance
+      - id: dotnet-type-gettype
+      - id: dotnet-methodinfo-invoke
+
+  - id: go-plugin
+    desc: Go plugin dynamic loading
+    crit: notable
+    conf: 0.9
+    for: [elf, macho, pe, go]
+    any:
+      - id: go-plugin-open
+      - id: go-plugin-lookup
+      - id: go-plugin-symbol
+
+  # Unix executable memory
+  - id: unix-exec-perm
+    desc: Unix executable permission indicators
+    crit: component
+    for: [elf, macho, so, dylib]
+    any:
+      - id: mprotect-sym
+      - id: micro-behaviors/mem/allocate/executable::prot-exec-const
+      - id: page-execute-str
+
+  - id: unix-mmap-anon
+    desc: Unix anonymous mmap
+    crit: component
+    for: [elf, macho, so, dylib]
+    all:
+      - id: micro-behaviors/mem/allocate/executable::mmap-symbol
+      - id: map-anonymous-str
+
+  - id: windows-exec-memory
+    desc: Windows executable memory
+    crit: component
+    platforms: [windows]
+    for: [pe, dll]
+    all:
+      - id: virtualprotect-sym
+      - id: page-execute-str
+
+  - id: executable-memory
+    desc: Allocates or modifies executable memory
+    crit: notable
+    conf: 0.8
+    for: [pe, elf, macho, dll, so, dylib]
+    any:
+      - id: unix-mmap-anon
+      - id: windows-exec-memory
+
   - id: jit-runtime-ref
     desc: JIT compilation runtime reference
     crit: notable

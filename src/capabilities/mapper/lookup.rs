@@ -32,6 +32,7 @@ impl super::CapabilityMapper {
                     location: None,
                 }],
 
+                match_count: 0,
                 source_file: None,
             });
         }

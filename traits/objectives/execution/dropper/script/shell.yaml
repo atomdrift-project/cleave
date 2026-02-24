@@ -24,7 +24,7 @@ traits:
   crit: notable
   if:
     type: raw
-    regex: "\\s+-O\\s*-\\b"
+    regex: "\\s+-O\\s*-(\\s|$)"
 
 - id: curl-download
   desc: "Download via curl"
@@ -42,7 +42,7 @@ traits:
   attack: T1059.004
   if:
     type: raw
-    regex: ^\s*\./[a-zA-Z0-9_.-]+
+    regex: '(^|\n|[;&|]{1,2}|\bnohup\s+)\s*\./[a-zA-Z0-9_.-]+'
   unless:
   - type: raw
     regex: \./([a-zA-Z0-9_.-]+\.(txt|md|log|conf|html|json|xml|yml|yaml)|ChangeLog)

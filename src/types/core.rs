@@ -419,6 +419,7 @@ mod tests {
             attack: None,
             trait_refs: vec![],
             evidence: vec![],
+            match_count: 0,
             source_file: None,
         }
     }

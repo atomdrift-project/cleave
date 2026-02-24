@@ -126,19 +126,91 @@ traits:
     type: string
     regex: \|\.(java|cpp|py)\|
     case_insensitive: true
-- id: multi-extension-pattern
-  desc: Multiple file extensions in pattern
-  crit: notable
-  conf: 0.7
+# Multi-extension pattern component traits for ransomware targeting
+- id: ext-pdf
+  desc: PDF file extension
+  crit: component
   if:
-    type: yara
-    source: "rule multi_extension_target {\n  strings:\n    $ext1 = \".pdf\" ascii\n\
-      \    $ext2 = \".doc\" ascii\n    $ext3 = \".docx\" ascii\n    $ext4 = \".xls\"\
-      \ ascii\n    $ext5 = \".xlsx\" ascii\n    $ext6 = \".sql\" ascii\n    $ext7\
-      \ = \".db\" ascii\n    $ext8 = \".sqlite\" ascii\n    $ext9 = \".java\" ascii\n\
-      \    $ext10 = \".cpp\" ascii\n    $ext11 = \".py\" ascii\n    $ext12 = \".vhd\"\
-      \ ascii\n    $ext13 = \".vmdk\" ascii\n    $ext14 = \".backup\" ascii\n  condition:\n\
-      \    8 of them\n}\n"
+    type: string
+    substr: ".pdf"
+- id: ext-doc
+  desc: Word doc extension
+  crit: component
+  if:
+    type: string
+    substr: ".doc"
+- id: ext-docx
+  desc: Word docx extension
+  crit: component
+  if:
+    type: string
+    substr: ".docx"
+- id: ext-xls
+  desc: Excel xls extension
+  crit: component
+  if:
+    type: string
+    substr: ".xls"
+- id: ext-xlsx
+  desc: Excel xlsx extension
+  crit: component
+  if:
+    type: string
+    substr: ".xlsx"
+- id: ext-sql
+  desc: SQL file extension
+  crit: component
+  if:
+    type: string
+    substr: ".sql"
+- id: ext-db
+  desc: Database file extension
+  crit: component
+  if:
+    type: string
+    substr: ".db"
+- id: ext-sqlite
+  desc: SQLite file extension
+  crit: component
+  if:
+    type: string
+    substr: ".sqlite"
+- id: ext-java
+  desc: Java source extension
+  crit: component
+  if:
+    type: string
+    substr: ".java"
+- id: ext-cpp
+  desc: C++ source extension
+  crit: component
+  if:
+    type: string
+    substr: ".cpp"
+- id: ext-py
+  desc: Python source extension
+  crit: component
+  if:
+    type: string
+    substr: ".py"
+- id: ext-vhd
+  desc: Virtual disk VHD extension
+  crit: component
+  if:
+    type: string
+    substr: ".vhd"
+- id: ext-vmdk
+  desc: VMware disk extension
+  crit: component
+  if:
+    type: string
+    substr: ".vmdk"
+- id: ext-backup
+  desc: Backup file extension
+  crit: component
+  if:
+    type: string
+    substr: ".backup"
 - id: encrypt-decrypt-func
   desc: Encrypt/decrypt function artifact
   crit: notable
@@ -186,6 +258,27 @@ traits:
     case_insensitive: true
     regex: (readme(_to_|-)[a-zA-Z0-9_]+\.txt|HOW_TO_DECRYPT\.txt|READ_ME_NOW\.txt)
 composite_rules:
+- id: multi-extension-pattern
+  desc: Multiple file extensions in pattern
+  crit: notable
+  conf: 0.7
+  needs: 8
+  any:
+    - id: ext-pdf
+    - id: ext-doc
+    - id: ext-docx
+    - id: ext-xls
+    - id: ext-xlsx
+    - id: ext-sql
+    - id: ext-db
+    - id: ext-sqlite
+    - id: ext-java
+    - id: ext-cpp
+    - id: ext-py
+    - id: ext-vhd
+    - id: ext-vmdk
+    - id: ext-backup
+
 - id: extension-target-list
   desc: File extension targeting list
   crit: suspicious

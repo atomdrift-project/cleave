@@ -48,6 +48,8 @@ mod metrics_tests;
 mod misc_tests;
 #[cfg(test)]
 mod symbol_string_tests;
+#[cfg(test)]
+mod yara_tests;
 
 // =============================================================================
 // Shared Utilities

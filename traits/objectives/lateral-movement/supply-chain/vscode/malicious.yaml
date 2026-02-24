@@ -16,15 +16,6 @@ traits:
     if:
       id: micro-behaviors/process/create/shell/host::vscode-extension-marker
 
-  # === Atomic indicators for post-install-exec ===
-  - id: activate-word
-    desc: activate keyword
-    crit: notable
-    conf: 0.7
-    for: [javascript, typescript]
-    if:
-      id: micro-behaviors/process/create/shell/lang::activate-function
-
   - id: postInstall-word
     desc: postInstall keyword
     crit: notable
@@ -121,7 +112,7 @@ composite_rules:
     attack: "T1059"
     for: [javascript, typescript]
     all:
-      - id: activate-word
+      - id: objectives/lateral-movement/supply-chain/vscode::function-activate
       - id: state-markers
       - id: exec-pattern
 

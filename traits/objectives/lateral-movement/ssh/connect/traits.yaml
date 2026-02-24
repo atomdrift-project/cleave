@@ -73,6 +73,14 @@ traits:
     if:
       type: string
       substr: "UserKnownHostsFile"
+    downgrade:
+      any:
+        - type: basename
+          exact: "ssh"
+        - type: basename
+          exact: "scp"
+        - type: basename
+          exact: "sftp"
 
   - id: connect-timeout
     desc: ConnectTimeout reference (scripted SSH)

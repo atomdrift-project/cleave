@@ -27,7 +27,7 @@ fn create_test_report_for_diff(path: &str, trait_ids: &[&str]) -> AnalysisReport
             attack: None,
             trait_refs: vec![],
             evidence: vec![],
-
+            match_count: 0,
             source_file: None,
         })
         .collect();
@@ -150,6 +150,7 @@ fn make_test_cap(id: &str) -> Finding {
             value: id.to_string(),
             location: None,
         }],
+        match_count: 1,
         source_file: None,
     }
 }

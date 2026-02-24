@@ -5,8 +5,13 @@ defaults:
 traits:
   - id: generic
     desc: "Function to execute remote commands"
-    crit: suspicious
-    conf: 0.8
+    crit: notable
+    conf: 0.2
     if:
       type: string
+      # Match executeCommand but exclude ObjC selectors (trailing colon)
+      # and common legitimate patterns like executeCommandConfiguration
       regex: "(?i)\\bexecuteCommand\\b"
+    not:
+      - type: string
+        regex: "(?i)executeCommand(:|Configuration)"

@@ -38,6 +38,9 @@ traits:
       type: metrics
       field: binary.code_entropy
       min: 7.0
+    downgrade:
+      any:
+        - id: metadata/signed/platform::apple
 
   - id: high-entropy-regions
     desc: "Multiple high entropy regions"
@@ -177,6 +180,9 @@ traits:
       type: metrics
       field: binary.high_entropy_strings
       min: 10
+    downgrade:
+      any:
+        - id: metadata/signed/platform::apple
 
   # NOTE: Function detection depends on analysis depth and binary format.
   # Shared libraries (.so, .dylib, .dll) may have few detected functions

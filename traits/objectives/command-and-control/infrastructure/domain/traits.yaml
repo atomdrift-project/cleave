@@ -129,7 +129,7 @@ traits:
   for:
   - scripts
   if:
-    type: string
+    type: raw
     regex: (https?|wss?)://([a-zA-Z0-9][-a-zA-Z0-9]*\.){1,6}[a-zA-Z]{2,6}(/|$|:)
   not:
     - substr: "ezgif.com"

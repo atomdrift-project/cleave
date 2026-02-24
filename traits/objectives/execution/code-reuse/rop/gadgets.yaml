@@ -148,7 +148,7 @@ composite_rules:
     all:
       - id: ret-in-data-section
     any:
-      - id: objectives/anti-static/obfuscation/payload::high-entropy-data-section
+      - id: objectives/anti-static/obfuscation/payload/section::high-entropy-data-section
 
   # Suspicious gadget patterns
   - id: suspicious-rop-gadgets

@@ -27,35 +27,17 @@ pub(crate) fn eval_metrics<'a>(
     let file_size = ctx.report.target.size_bytes;
     if let Some(min_sz) = min_size {
         if file_size < min_sz {
-            return ConditionResult {
-                matched: false,
-                evidence: Vec::new(),
-                warnings: Vec::new(),
-                precision: 0.0,
-                matched_trait_ids: Vec::new(),
-            };
+            return ConditionResult::no_match();
         }
     }
     if let Some(max_sz) = max_size {
         if file_size > max_sz {
-            return ConditionResult {
-                matched: false,
-                evidence: Vec::new(),
-                warnings: Vec::new(),
-                precision: 0.0,
-                matched_trait_ids: Vec::new(),
-            };
+            return ConditionResult::no_match();
         }
     }
 
     let Some(metrics) = &ctx.report.metrics else {
-        return ConditionResult {
-            matched: false,
-            evidence: Vec::new(),
-            warnings: Vec::new(),
-            precision: 0.0,
-            matched_trait_ids: Vec::new(),
-        };
+        return ConditionResult::no_match();
     };
 
     // Parse field path and get value
@@ -342,13 +324,7 @@ pub(crate) fn eval_metrics<'a>(
     };
 
     let Some(value) = value else {
-        return ConditionResult {
-            matched: false,
-            evidence: Vec::new(),
-            warnings: Vec::new(),
-            precision: 0.0,
-            matched_trait_ids: Vec::new(),
-        };
+        return ConditionResult::no_match();
     };
 
     let min_ok = min.is_none_or(|m| value >= m);
@@ -370,18 +346,21 @@ pub(crate) fn eval_metrics<'a>(
         precision += 0.5;
     }
 
+    let evidence = if matched {
+        vec![Evidence {
+            method: "metrics".to_string(),
+            source: "analyzer".to_string(),
+            value: format!("{} = {:.2}", field, value),
+            location: None,
+        }]
+    } else {
+        Vec::new()
+    };
+    let match_count = evidence.len();
     ConditionResult {
         matched,
-        evidence: if matched {
-            vec![Evidence {
-                method: "metrics".to_string(),
-                source: "analyzer".to_string(),
-                value: format!("{} = {:.2}", field, value),
-                location: None,
-            }]
-        } else {
-            Vec::new()
-        },
+        evidence,
+        match_count,
         warnings: Vec::new(),
         precision,
         matched_trait_ids: Vec::new(),

@@ -34,7 +34,7 @@ traits:
     unless:
       - id: metadata/format::tiny-elf
       - id: metadata/format::many-imports
-      - id: objectives/anti-static/hardening/detection::stripped-binary-struct
+      - id: metadata/hardening::stripped-binary
       - id: metadata/signed/platform::apple
 
 composite_rules:

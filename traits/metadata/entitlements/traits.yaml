@@ -112,6 +112,9 @@ traits:
     if:
       type: trait
       id: metadata/entitlement::com.apple.security.network.server
+    downgrade:
+      any:
+        - id: metadata/signed/platform::apple
 
   - id: local-networking
     desc: Local network access
@@ -212,6 +215,9 @@ traits:
     if:
       type: trait
       id: metadata/entitlement::com.apple.security.temporary-exception.files.absolute-path.read-only
+    downgrade:
+      any:
+        - id: metadata/signed/platform::apple
 
   - id: temporary-exception-mach-lookup
     desc: Temporary exception for mach lookup
@@ -220,6 +226,9 @@ traits:
     if:
       type: trait
       id: metadata/entitlement::com.apple.security.temporary-exception.mach-lookup.global-name
+    downgrade:
+      any:
+        - id: metadata/signed/platform::apple
 
 composite_rules:
   - id: privacy-sensitive-access
@@ -238,7 +247,7 @@ composite_rules:
     # (e.g., ReplayKit daemon for screen recording needs camera + microphone)
     downgrade:
       any:
-        - id: metadata/apple/system-component
+        - id: metadata/apple::system-component
 
   - id: highly-privileged
     desc: Highly privileged entitlements
@@ -254,4 +263,4 @@ composite_rules:
     downgrade:
       any:
         - id: metadata/sign/apple::platform
-        - id: metadata/apple/system-component
+        - id: metadata/apple::system-component

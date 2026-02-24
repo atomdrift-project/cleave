@@ -91,19 +91,38 @@ traits:
     if:
       type: string
       substr: masscan
-  - id: masscan-config
-    desc: Masscan configuration patterns
-    crit: suspicious
-    conf: 0.85
-    attack: T1046
-    platforms:
-      - all
+  # Masscan config component traits
+  - id: masscan-adapter-ip
+    desc: Masscan adapter-ip option
+    crit: component
+    platforms: [all]
     if:
-      type: yara
-      source:
-        "rule masscan_config {\n  strings:\n    $adapter_ip = \"adapter-ip\"\n\
-        \    $nocapture = \"nocapture\"\n    $output_format = \"output-format\"\n  \
-        \  $randomize_hosts = \"randomize-hosts\"\n  condition:\n    3 of them\n}\n"
+      type: string
+      substr: "adapter-ip"
+
+  - id: masscan-nocapture
+    desc: Masscan nocapture option
+    crit: component
+    platforms: [all]
+    if:
+      type: string
+      substr: "nocapture"
+
+  - id: masscan-output-format
+    desc: Masscan output-format option
+    crit: component
+    platforms: [all]
+    if:
+      type: string
+      substr: "output-format"
+
+  - id: masscan-randomize-hosts
+    desc: Masscan randomize-hosts option
+    crit: component
+    platforms: [all]
+    if:
+      type: string
+      substr: "randomize-hosts"
   - id: execve-symbol
     desc: execve system call symbol
     crit: baseline
@@ -138,19 +157,46 @@ traits:
     if:
       type: string
       substr: jpillora/chisel
-  - id: chisel-functions
-    desc: Chisel tunnel tool function signatures
-    crit: suspicious
-    conf: 0.85
-    attack: T1572
-    platforms:
-      - all
+  # Chisel function component traits
+  - id: chisel-tls-letsencrypt
+    desc: Chisel tlsLetsEncrypt function
+    crit: component
+    platforms: [all]
     if:
-      type: yara
-      source:
-        "rule chisel_functions {\n  strings:\n    $f1 = \"tlsLetsEncrypt\"\n \
-        \   $f2 = \"authUser\"\n    $f3 = \"handleWebsocket\"\n    $f4 = \"tlsKeyCert\"\
-        \n    $f5 = \"tunnel_out_ssh\"\n  condition:\n    3 of them\n}\n"
+      type: string
+      substr: "tlsLetsEncrypt"
+
+  - id: chisel-auth-user
+    desc: Chisel authUser function
+    crit: component
+    platforms: [all]
+    if:
+      type: string
+      substr: "authUser"
+
+  - id: chisel-handle-websocket
+    desc: Chisel handleWebsocket function
+    crit: component
+    platforms: [all]
+    if:
+      type: string
+      substr: "handleWebsocket"
+
+  - id: chisel-tls-keycert
+    desc: Chisel tlsKeyCert function
+    crit: component
+    platforms: [all]
+    if:
+      type: string
+      substr: "tlsKeyCert"
+
+  - id: chisel-tunnel-out-ssh
+    desc: Chisel tunnel_out_ssh function
+    crit: component
+    platforms: [all]
+    if:
+      type: string
+      substr: "tunnel_out_ssh"
   - id: venom-dliv3
     desc: Venom Dliv3 GitHub reference
     crit: suspicious
@@ -221,18 +267,30 @@ traits:
     if:
       type: string
       substr: dominicbreuker/pspy
-  - id: pspy-functions
-    desc: pspy tool function signatures
-    crit: suspicious
-    conf: 0.8
-    attack: T1057
-    platforms:
-      - linux
+  # pspy function component traits
+  - id: pspy-start-fsw
+    desc: pspy startFSW function
+    crit: component
+    platforms: [linux]
     if:
-      type: yara
-      source:
-        "rule pspy_functions {\n  strings:\n    $f1 = \"startFSW\"\n    $f2 =\
-        \ \"startPSS\"\n    $f3 = \"triggerEvery\"\n  condition:\n    2 of them\n}\n"
+      type: string
+      substr: "startFSW"
+
+  - id: pspy-start-pss
+    desc: pspy startPSS function
+    crit: component
+    platforms: [linux]
+    if:
+      type: string
+      substr: "startPSS"
+
+  - id: pspy-trigger-every
+    desc: pspy triggerEvery function
+    crit: component
+    platforms: [linux]
+    if:
+      type: string
+      substr: "triggerEvery"
   - id: nmap-decoy-scan
     desc: Nmap decoy scan
     crit: suspicious
@@ -275,6 +333,45 @@ composite_rules:
       - id: metasploit-url
       - id: payload-label
       - id: shh-bin-path
+  - id: masscan-config
+    desc: Masscan configuration patterns
+    crit: suspicious
+    conf: 0.85
+    attack: T1046
+    platforms: [all]
+    needs: 3
+    any:
+      - id: masscan-adapter-ip
+      - id: masscan-nocapture
+      - id: masscan-output-format
+      - id: masscan-randomize-hosts
+
+  - id: chisel-functions
+    desc: Chisel tunnel tool function signatures
+    crit: suspicious
+    conf: 0.85
+    attack: T1572
+    platforms: [all]
+    needs: 3
+    any:
+      - id: chisel-tls-letsencrypt
+      - id: chisel-auth-user
+      - id: chisel-handle-websocket
+      - id: chisel-tls-keycert
+      - id: chisel-tunnel-out-ssh
+
+  - id: pspy-functions
+    desc: pspy tool function signatures
+    crit: suspicious
+    conf: 0.8
+    attack: T1057
+    platforms: [linux]
+    needs: 2
+    any:
+      - id: pspy-start-fsw
+      - id: pspy-start-pss
+      - id: pspy-trigger-every
+
   - id: masscan-execution
     desc: Masscan scanner execution
     crit: suspicious

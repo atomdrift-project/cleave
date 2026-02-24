@@ -430,6 +430,7 @@ impl ArchiveAnalyzer {
                     location: None,
                 }],
 
+                match_count: 0,
                 source_file: None,
             });
         }
@@ -595,6 +596,7 @@ impl ArchiveAnalyzer {
                     location: None,
                 }],
 
+                match_count: 0,
                 source_file: None,
             });
         }

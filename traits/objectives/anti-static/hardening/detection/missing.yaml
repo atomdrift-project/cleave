@@ -3,16 +3,6 @@
 # ATT&CK: T1027 (Obfuscated Files or Information)
 
 traits:
-  # NOTE: Stripped binaries are common for release builds, not suspicious alone
-  - id: stripped-binary-struct
-    desc: "Binary has symbol table stripped"
-    crit: notable
-    conf: 0.7
-    for: [elf, macho, pe]
-    if:
-      type: structure
-      feature: "binary/stripped"
-
   - id: no-pie-struct
     desc: "Binary not position-independent (no ASLR)"
     crit: notable
@@ -41,5 +31,5 @@ composite_rules:
     attack: "T1027"
     for: [elf]
     all:
-      - id: stripped-binary-struct
+      - id: metadata/hardening::stripped-binary
       - id: metadata/hardening::static-linked

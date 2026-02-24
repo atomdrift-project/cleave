@@ -5,7 +5,7 @@
 defaults:
   crit: suspicious
   conf: 0.8
-  for: [all]
+  for: [shell, batch, pe, powershell]
   platforms: [windows]
   attack: "T1027.002"
   mbc: "B0027"
@@ -34,6 +34,8 @@ composite_rules:
     conf: 0.8
     mbc: B0027
     attack: T1027.002
+    for: [shell, batch, pe, powershell]
+    platforms: [windows]
     all:
       - id: objectives/anti-static/obfuscation/interpreter/cmd::cmd-caret-excessive-raw
     unless:

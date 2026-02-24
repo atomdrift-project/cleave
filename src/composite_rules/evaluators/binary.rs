@@ -30,28 +30,31 @@ pub(crate) fn eval_exports_count<'a>(
         precision += 0.5;
     }
 
+    let evidence = if matched {
+        // Deduplicate and take first few for display
+        let mut symbols: Vec<&str> = ctx
+            .report
+            .exports
+            .iter()
+            .map(|exp| exp.symbol.as_str())
+            .collect();
+        symbols.sort();
+        symbols.dedup();
+        let sample: Vec<&str> = symbols.into_iter().take(5).collect();
+        vec![Evidence {
+            method: "exports_count".to_string(),
+            source: "analysis".to_string(),
+            value: format!("({}) {}", count, sample.join(", ")),
+            location: None,
+        }]
+    } else {
+        Vec::new()
+    };
+    let match_count = evidence.len();
     ConditionResult {
         matched,
-        evidence: if matched {
-            // Deduplicate and take first few for display
-            let mut symbols: Vec<&str> = ctx
-                .report
-                .exports
-                .iter()
-                .map(|exp| exp.symbol.as_str())
-                .collect();
-            symbols.sort();
-            symbols.dedup();
-            let sample: Vec<&str> = symbols.into_iter().take(5).collect();
-            vec![Evidence {
-                method: "exports_count".to_string(),
-                source: "analysis".to_string(),
-                value: format!("({}) {}", count, sample.join(", ")),
-                location: None,
-            }]
-        } else {
-            Vec::new()
-        },
+        evidence,
+        match_count,
         warnings: Vec::new(),
         precision,
         matched_trait_ids: Vec::new(),
@@ -68,13 +71,7 @@ pub(crate) fn eval_section_ratio<'a>(
     ctx: &EvaluationContext<'a>,
 ) -> ConditionResult {
     let Ok(section_re) = Regex::new(section_pattern) else {
-        return ConditionResult {
-            matched: false,
-            evidence: Vec::new(),
-            warnings: Vec::new(),
-            precision: 0.0,
-            matched_trait_ids: Vec::new(),
-        };
+        return ConditionResult::no_match();
     };
 
     // Find matching section(s) and sum their sizes
@@ -88,13 +85,7 @@ pub(crate) fn eval_section_ratio<'a>(
     }
 
     if matched_sections.is_empty() {
-        return ConditionResult {
-            matched: false,
-            evidence: Vec::new(),
-            warnings: Vec::new(),
-            precision: 0.0,
-            matched_trait_ids: Vec::new(),
-        };
+        return ConditionResult::no_match();
     }
 
     // Calculate comparison size
@@ -102,13 +93,7 @@ pub(crate) fn eval_section_ratio<'a>(
         ctx.report.sections.iter().map(|s| s.size).sum()
     } else {
         let Ok(compare_re) = Regex::new(compare_to) else {
-            return ConditionResult {
-                matched: false,
-                evidence: Vec::new(),
-                warnings: Vec::new(),
-                precision: 0.0,
-                matched_trait_ids: Vec::new(),
-            };
+            return ConditionResult::no_match();
         };
         ctx.report
             .sections
@@ -119,13 +104,7 @@ pub(crate) fn eval_section_ratio<'a>(
     };
 
     if compare_size == 0 {
-        return ConditionResult {
-            matched: false,
-            evidence: Vec::new(),
-            warnings: Vec::new(),
-            precision: 0.0,
-            matched_trait_ids: Vec::new(),
-        };
+        return ConditionResult::no_match();
     }
 
     let ratio = section_size as f64 / compare_size as f64;
@@ -143,25 +122,28 @@ pub(crate) fn eval_section_ratio<'a>(
         precision += 0.5;
     }
 
+    let evidence = if matched {
+        vec![Evidence {
+            method: "section_ratio".to_string(),
+            source: "binary".to_string(),
+            value: format!(
+                "{} = {:.1}% of {} ({} / {} bytes)",
+                matched_sections.join("+"),
+                ratio * 100.0,
+                compare_to,
+                section_size,
+                compare_size
+            ),
+            location: None,
+        }]
+    } else {
+        Vec::new()
+    };
+    let match_count = evidence.len();
     ConditionResult {
         matched,
-        evidence: if matched {
-            vec![Evidence {
-                method: "section_ratio".to_string(),
-                source: "binary".to_string(),
-                value: format!(
-                    "{} = {:.1}% of {} ({} / {} bytes)",
-                    matched_sections.join("+"),
-                    ratio * 100.0,
-                    compare_to,
-                    section_size,
-                    compare_size
-                ),
-                location: None,
-            }]
-        } else {
-            Vec::new()
-        },
+        evidence,
+        match_count,
         warnings: Vec::new(),
         precision,
         matched_trait_ids: Vec::new(),
@@ -352,9 +334,11 @@ pub(crate) fn eval_section<'a>(
         precision *= 0.5;
     }
 
+    let match_count = evidence.len();
     ConditionResult {
-        matched: !evidence.is_empty(),
+        matched: match_count > 0,
         evidence,
+        match_count,
         warnings: Vec::new(),
         precision,
         matched_trait_ids: Vec::new(),
@@ -386,13 +370,7 @@ pub(crate) fn eval_import_combination<'a>(
             };
             let found = import_symbols.iter().any(|sym| re.is_match(sym));
             if !found {
-                return ConditionResult {
-                    matched: false,
-                    evidence: Vec::new(),
-                    warnings: Vec::new(),
-                    precision: 0.0,
-                    matched_trait_ids: Vec::new(),
-                };
+                return ConditionResult::no_match();
             }
             if evidence.len() < MAX_EVIDENCE_PER_TRAIT {
                 evidence.push(Evidence {
@@ -431,26 +409,14 @@ pub(crate) fn eval_import_combination<'a>(
     // Check minimum suspicious count
     if let Some(min) = min_suspicious {
         if suspicious_count < min {
-            return ConditionResult {
-                matched: false,
-                evidence: Vec::new(),
-                warnings: Vec::new(),
-                precision: 0.0,
-                matched_trait_ids: Vec::new(),
-            };
+            return ConditionResult::no_match();
         }
     }
 
     // Check maximum total imports
     if let Some(max) = max_total {
         if ctx.report.imports.len() > max {
-            return ConditionResult {
-                matched: false,
-                evidence: Vec::new(),
-                warnings: Vec::new(),
-                precision: 0.0,
-                matched_trait_ids: Vec::new(),
-            };
+            return ConditionResult::no_match();
         }
         if evidence.len() < MAX_EVIDENCE_PER_TRAIT {
             evidence.push(Evidence {
@@ -471,9 +437,11 @@ pub(crate) fn eval_import_combination<'a>(
         precision += (susp.len() as f32) * 0.3;
     }
 
+    let match_count = evidence.len();
     ConditionResult {
         matched: true,
         evidence,
+        match_count,
         warnings: Vec::new(),
         precision,
         matched_trait_ids: Vec::new(),
@@ -534,6 +502,7 @@ pub(crate) fn eval_syscall<'a>(
     ConditionResult {
         matched,
         evidence: if matched { evidence } else { Vec::new() },
+        match_count,
         warnings: Vec::new(),
         precision,
         matched_trait_ids: Vec::new(),

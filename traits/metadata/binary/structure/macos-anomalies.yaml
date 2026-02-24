@@ -29,6 +29,9 @@ traits:
       type: metrics
       field: binary.string_count
       max: 20  # Less than 20 strings
+    downgrade:
+      any:
+        - id: metadata/signed/platform::apple
 
   # === Section Ratio Anomalies ===
 
@@ -75,6 +78,10 @@ traits:
       section: "__data"
       compare_to: "__cstring"
       min: 200  # __data is 200x larger
+    unless:
+      - id: well-known/tools/sysadmin::par-env-vars
+      - type: string
+        substr: "PAR_TEMP"
 
   # === Binary Metrics Anomalies ===
 
@@ -87,16 +94,9 @@ traits:
       type: metrics
       field: binary.avg_string_entropy
       min: 4.5  # Higher than normal English text (~4.0)
-
-  # Many high-entropy strings (encrypted/encoded)
-  - id: many-high-entropy-strings
-    desc: Many high-entropy strings detected
-    crit: suspicious
-    conf: 0.85
-    if:
-      type: metrics
-      field: binary.high_entropy_strings
-      min: 10
+    downgrade:
+      any:
+        - id: metadata/signed/platform::apple
 
   # Low function count in medium/large binary suggests monolithic code
   - id: low-function-density
@@ -110,16 +110,6 @@ traits:
       max: 20  # Less than 20 functions in 100KB+ binary
 
   # === Code Complexity Anomalies ===
-
-  # Extremely high maximum complexity in single function
-  - id: extreme-single-function-complexity
-    desc: Extreme complexity in single function
-    crit: suspicious
-    conf: 0.85
-    if:
-      type: metrics
-      field: binary.max_complexity
-      min: 500  # Cyclomatic complexity >500
 
   # High average complexity across all functions
   - id: high-avg-function-complexity
@@ -139,7 +129,7 @@ composite_rules:
     conf: 0.9
     all:
       - id: minimal-string-count
-      - id: many-high-entropy-strings
+      - id: objectives/anti-static/obfuscation/binary-metrics::many-high-entropy-strings
 
   # Low string count + large data section = encoded payload
   - id: encoded-payload-pattern
@@ -160,4 +150,4 @@ composite_rules:
       - id: data-dominates-cstring
     any:
       - id: high-avg-string-entropy
-      - id: many-high-entropy-strings
+      - id: objectives/anti-static/obfuscation/binary-metrics::many-high-entropy-strings

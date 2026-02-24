@@ -757,33 +757,39 @@ func streamAnalyzeAndReview(ctx context.Context, cfg *config, dbMode string) (*s
 		return nil, fmt.Errorf("could not create stderr pipe: %w", err)
 	}
 
-	// Stream flayer stderr to our own stderr in background
-	// Include PID prefix for parallel session disambiguation
-	// Filter out noisy periodic memory check logs
-	flayerPID := 0 // Will be set after cmd.Start()
-	go func() {
-		scanner := bufio.NewScanner(stderr)
-		scanner.Buffer(make([]byte, 32*1024*1024), 32*1024*1024) // 32MB buffer for panic backtraces
-		for scanner.Scan() {
-			line := scanner.Text()
-			// Skip noisy periodic memory check logs
-			if strings.Contains(line, "Periodic memory check") {
-				continue
-			}
-			if flayerPID > 0 {
-				fmt.Fprintf(os.Stderr, "[flayer:%d] %s\n", flayerPID, line)
-			} else {
-				fmt.Fprintf(os.Stderr, "[flayer] %s\n", line)
-			}
-		}
-	}()
-
 	if err := cmd.Start(); err != nil {
 		return nil, fmt.Errorf("could not start flayer: %w", err)
 	}
 
-	flayerPID = cmd.Process.Pid
+	flayerPID := cmd.Process.Pid
 	fmt.Fprintf(os.Stderr, "flayer logs: %s (PID %d)\n", flayerLogPath, flayerPID)
+
+	// Stream flayer stderr to our own stderr in background.
+	// Captures relevant lines for error messages when flayer fails.
+	stderrCh := make(chan []string, 1)
+	go func() {
+		var lines []string
+		sc := bufio.NewScanner(stderr)
+		sc.Buffer(make([]byte, 32*1024*1024), 32*1024*1024) // 32MB for panic backtraces
+		for sc.Scan() {
+			s := sc.Text()
+			if strings.Contains(s, "Periodic memory check") {
+				continue
+			}
+			fmt.Fprintf(os.Stderr, "[flayer:%d] %s\n", flayerPID, s)
+			// Capture YAML validation keywords for error detection
+			lo := strings.ToLower(s)
+			if strings.Contains(lo, "error") || strings.Contains(lo, "yaml") ||
+				strings.Contains(lo, "trait") || strings.Contains(lo, "validation") ||
+				strings.Contains(lo, "fix") {
+				lines = append(lines, s)
+				if len(lines) > 100 {
+					lines = lines[1:]
+				}
+			}
+		}
+		stderrCh <- lines
+	}()
 
 	// Set up dual-output logging: structured JSON to disk, human-readable to console
 	// Use session-specific log file to avoid conflicts with parallel sessions
@@ -1050,6 +1056,10 @@ func streamAnalyzeAndReview(ctx context.Context, cfg *config, dbMode string) (*s
 		fmt.Fprintf(os.Stderr, "\n%s⚠️  flayer failed:%s %v (check flayer logs for details)\n", colorYellow, colorReset, err)
 		fmt.Fprintf(os.Stderr, "   %sRetrying in %v...%s\n", colorDim, delay.Round(time.Second), colorReset)
 		time.Sleep(delay)
+		// Include captured stderr for YAML issue detection
+		if lines := <-stderrCh; len(lines) > 0 {
+			return state.stats, fmt.Errorf("flayer failed: %w\n%s", err, strings.Join(lines, "\n"))
+		}
 		return state.stats, fmt.Errorf("flayer failed: %w (will retry)", err)
 	}
 

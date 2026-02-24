@@ -50,6 +50,11 @@ pub(crate) struct EvaluationContext<'a> {
     pub cached_kv_format: OnceLock<StructuredFormat>,
     /// Cached parsed KV data (parse once per file, reuse for all KV conditions)
     pub cached_kv_parsed: OnceLock<Box<Value>>,
+    /// Current trait being evaluated (for warning/error context)
+    pub current_trait: Option<&'a str>,
+    /// Source file of the current trait (for warning/error context)
+    #[allow(dead_code)] // Populated during eval, intended for future logging
+    pub current_source: Option<&'a str>,
 }
 
 impl<'a> EvaluationContext<'a> {
@@ -88,6 +93,8 @@ impl<'a> EvaluationContext<'a> {
             inline_yara_results: None,
             cached_kv_format: OnceLock::new(),
             cached_kv_parsed: OnceLock::new(),
+            current_trait: None,
+            current_source: None,
         }
     }
 
@@ -161,8 +168,10 @@ impl std::fmt::Display for AnalysisWarning {
 pub(crate) struct ConditionResult {
     /// Whether the condition matched the file
     pub matched: bool,
-    /// Evidence items collected when condition matched
+    /// Evidence items collected when condition matched (capped at 128 for memory)
     pub evidence: Vec<Evidence>,
+    /// Total match count for density/count constraints (may exceed evidence.len())
+    pub match_count: usize,
     /// Anti-analysis warnings (recursion bombs, etc.)
     #[allow(dead_code)] // Populated during rule evaluation, read by binary target
     pub warnings: Vec<AnalysisWarning>,
@@ -177,6 +186,7 @@ impl Default for ConditionResult {
         Self {
             matched: false,
             evidence: Vec::new(),
+            match_count: 0,
             warnings: Vec::new(),
             precision: 0.0,
             matched_trait_ids: Vec::new(),
@@ -191,6 +201,7 @@ impl ConditionResult {
         Self {
             matched: false,
             evidence: Vec::new(),
+            match_count: 0,
             warnings: Vec::new(),
             precision: 0.0,
             matched_trait_ids: Vec::new(),
@@ -200,9 +211,25 @@ impl ConditionResult {
     /// Create a matching result with the given evidence
     #[must_use]
     pub(crate) fn matched_with(evidence: Vec<Evidence>) -> Self {
+        let count = evidence.len();
         Self {
             matched: true,
             evidence,
+            match_count: count,
+            warnings: Vec::new(),
+            precision: 0.0,
+            matched_trait_ids: Vec::new(),
+        }
+    }
+
+    /// Create a matching result with separate count (for high-frequency patterns)
+    #[allow(dead_code)] // Available for evaluators that track count separately
+    #[must_use]
+    pub(crate) fn matched_with_count(evidence: Vec<Evidence>, match_count: usize) -> Self {
+        Self {
+            matched: true,
+            evidence,
+            match_count,
             warnings: Vec::new(),
             precision: 0.0,
             matched_trait_ids: Vec::new(),

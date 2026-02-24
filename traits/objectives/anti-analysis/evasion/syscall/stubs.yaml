@@ -119,24 +119,55 @@ traits:
       per_kb_min: 5.0  # 5+ syscalls per KB is unusual
 
 composite_rules:
-  # Direct syscall evasion (bypass userland hooks)
-  - id: syscall-evasion
+  # Linux x86/x64 direct syscall evasion
+  - id: syscall-evasion-linux-x86
     desc: Direct syscall usage (EDR/hook evasion)
     crit: hostile
     conf: 0.95
     attack: "T1562.001"
+    for: [elf]
+    platforms: [linux]
     needs: 2
+    unless:
+      - id: metadata/lang::sbcl-runtime
     any:
       - id: syscall-x64-instruction
       - id: int-80-instruction
       - id: sysenter-instruction
-      - id: svc-macos-arm64
-      - id: svc-linux-arm64
       - id: syscall-with-number
-      - id: windows-x64-syscall-stub
       - id: dense-syscalls
 
-  # Windows-specific direct syscalls (strong evasion indicator)
+  # Linux ARM64 direct syscall evasion
+  - id: syscall-evasion-linux-arm64
+    desc: Direct syscall usage (EDR/hook evasion)
+    crit: hostile
+    conf: 0.95
+    attack: "T1562.001"
+    for: [elf]
+    platforms: [linux]
+    needs: 2
+    unless:
+      - id: metadata/lang/lisp::is-sbcl
+    any:
+      - id: svc-linux-arm64
+      - id: dense-syscalls
+
+  # macOS ARM64 direct syscall evasion
+  - id: syscall-evasion-macos-arm64
+    desc: Direct syscall usage (EDR/hook evasion)
+    crit: hostile
+    conf: 0.95
+    attack: "T1562.001"
+    for: [macho]
+    platforms: [macos]
+    needs: 2
+    unless:
+      - id: metadata/lang/lisp::is-sbcl
+    any:
+      - id: svc-macos-arm64
+      - id: dense-syscalls
+
+  # Windows x64 direct syscalls (strong evasion indicator)
   - id: windows-direct-syscalls
     desc: Windows direct syscalls (EDR bypass)
     crit: hostile
@@ -149,3 +180,19 @@ composite_rules:
     any:
       - id: dense-syscalls
       - id: objectives/anti-static/obfuscation/payload::minimal-pe-dynamic-load
+
+  # Windows x64 direct syscall evasion (general)
+  - id: syscall-evasion-windows
+    desc: Direct syscall usage (EDR/hook evasion)
+    crit: hostile
+    conf: 0.95
+    attack: "T1562.001"
+    for: [pe]
+    platforms: [windows]
+    needs: 2
+    any:
+      - id: syscall-x64-instruction
+      - id: sysenter-instruction
+      - id: syscall-with-number
+      - id: windows-x64-syscall-stub
+      - id: dense-syscalls

@@ -155,12 +155,6 @@ traits:
     if:
       type: string
       substr: LoadPinnedProgram
-  - id: rootkit-string
-    desc: Rootkit string reference
-    crit: suspicious
-    conf: 0.8
-    if:
-      id: micro-behaviors/data/text/malware::rootkit-word
   - id: bpf-probe-write-user
     desc: bpf_probe_write_user function (memory patching)
     crit: suspicious
@@ -435,7 +429,7 @@ composite_rules:
     for:
       - go
     any:
-      - id: rootkit-string
+      - id: micro-behaviors/data/text/malware::rootkit-word
       - id: micro-behaviors/data/text/keywords::hide
       - id: micro-behaviors/data/text/keywords::bypass
   - id: go-offensive-program

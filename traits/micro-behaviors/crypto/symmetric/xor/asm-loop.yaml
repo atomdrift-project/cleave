@@ -20,7 +20,7 @@ traits:
     desc: Detects register operands common in encryption loops
     if:
       type: raw
-      regex: \],\s+(al|e[abcd]x)
+      regex: \],\s+(al|e[abcd]x)\b
   - id: asm-loop-control-transfer
     conf: 0.7
     crit: baseline

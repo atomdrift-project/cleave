@@ -3,30 +3,51 @@
 # MBC: B0033
 
 traits:
-  - id: remote-injection
-    desc: Remote process memory manipulation
-    crit: suspicious
-    conf: 0.9
-    attack: "T1055"
+  # Remote injection component traits (Windows API symbols)
+  - id: open-process-sym
+    desc: OpenProcess/NtOpenProcess symbol
+    crit: component
     platforms: [windows]
     for: [pe, dll]
     if:
-      type: yara
-      source: |
-        rule remote_injection {
-          strings:
-            $op = /OpenProcess|NtOpenProcess/ ascii wide
-            $alloc = /VirtualAllocEx|NtAllocateVirtualMemory/ ascii wide
-            $write = /WriteProcessMemory|NtWriteVirtualMemory/ ascii wide
-            $protect = /VirtualProtectEx|NtProtectVirtualMemory/ ascii wide
-            $thread = /CreateRemoteThread(Ex)?|NtCreateThreadEx|RtlCreateUserThread|QueueUserAPC/ ascii wide
-          condition:
-            $op and $write and ($alloc or $protect) and $thread
-        }
-    downgrade:
-      any:
-        - type: string
-          substr: "Valve Corp."
+      type: symbol
+      regex: "^(OpenProcess|NtOpenProcess)$"
+
+  - id: alloc-memory-sym
+    desc: VirtualAllocEx/NtAllocateVirtualMemory symbol
+    crit: component
+    platforms: [windows]
+    for: [pe, dll]
+    if:
+      type: symbol
+      regex: "^(VirtualAllocEx|NtAllocateVirtualMemory)$"
+
+  - id: write-memory-sym
+    desc: WriteProcessMemory/NtWriteVirtualMemory symbol
+    crit: component
+    platforms: [windows]
+    for: [pe, dll]
+    if:
+      type: symbol
+      regex: "^(WriteProcessMemory|NtWriteVirtualMemory)$"
+
+  - id: protect-memory-sym
+    desc: VirtualProtectEx/NtProtectVirtualMemory symbol
+    crit: component
+    platforms: [windows]
+    for: [pe, dll]
+    if:
+      type: symbol
+      regex: "^(VirtualProtectEx|NtProtectVirtualMemory)$"
+
+  - id: create-thread-sym
+    desc: CreateRemoteThread/NtCreateThreadEx/RtlCreateUserThread/QueueUserAPC symbol
+    crit: component
+    platforms: [windows]
+    for: [pe, dll]
+    if:
+      type: symbol
+      regex: "^(CreateRemoteThreadEx?|NtCreateThreadEx|RtlCreateUserThread|QueueUserAPC)$"
 
   - id: fexecve-symbol
     desc: Linux fexecve symbol reference (fileless execution)
@@ -61,6 +82,32 @@ traits:
       exact: "b64decode"
 
 composite_rules:
+  - id: alloc-or-protect
+    desc: Memory allocation or protection change
+    crit: component
+    platforms: [windows]
+    for: [pe, dll]
+    any:
+      - id: alloc-memory-sym
+      - id: protect-memory-sym
+
+  - id: remote-injection
+    desc: Remote process memory manipulation
+    crit: suspicious
+    conf: 0.9
+    attack: "T1055"
+    platforms: [windows]
+    for: [pe, dll]
+    all:
+      - id: open-process-sym
+      - id: write-memory-sym
+      - id: alloc-or-protect
+      - id: create-thread-sym
+    downgrade:
+      any:
+        - type: string
+          substr: "Valve Corp."
+
   - id: linux-memfd
     desc: Fileless execution via anonymous memory
     crit: suspicious

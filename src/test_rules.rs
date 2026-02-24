@@ -250,6 +250,8 @@ impl<'a> RuleDebugger<'a> {
             inline_yara_results: self.inline_yara_results,
             cached_kv_format: std::sync::OnceLock::new(),
             cached_kv_parsed: std::sync::OnceLock::new(),
+            current_trait: None,
+            current_source: None,
         }
     }
 
@@ -569,6 +571,8 @@ impl<'a> RuleDebugger<'a> {
             inline_yara_results: None,
             cached_kv_format: std::sync::OnceLock::new(),
             cached_kv_parsed: std::sync::OnceLock::new(),
+            current_trait: None,
+            current_source: None,
         };
 
         match condition {
@@ -1451,6 +1455,8 @@ impl<'a> RuleDebugger<'a> {
             inline_yara_results: None,
             cached_kv_format: std::sync::OnceLock::new(),
             cached_kv_parsed: std::sync::OnceLock::new(),
+            current_trait: None,
+            current_source: None,
         };
 
         // Actually evaluate the inline YARA rule
@@ -1817,6 +1823,8 @@ impl<'a> RuleDebugger<'a> {
             inline_yara_results: None,
             cached_kv_format: std::sync::OnceLock::new(),
             cached_kv_parsed: std::sync::OnceLock::new(),
+            current_trait: None,
+            current_source: None,
         };
 
         let eval_result = crate::composite_rules::evaluators::eval_ast(
@@ -1895,6 +1903,8 @@ impl<'a> RuleDebugger<'a> {
             inline_yara_results: None,
             cached_kv_format: std::sync::OnceLock::new(),
             cached_kv_parsed: std::sync::OnceLock::new(),
+            current_trait: None,
+            current_source: None,
         };
 
         let eval_result = eval_hex(

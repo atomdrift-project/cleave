@@ -876,6 +876,7 @@ impl TraitDefinition {
                     ),
                     location: None,
                 }],
+                match_count: 0,
                 source_file: get_relative_source_file(&self.defined_in),
             };
 
@@ -905,7 +906,8 @@ impl TraitDefinition {
 
         if result.matched {
             // Apply count and density filters (centralized for all condition types)
-            let match_count = result.evidence.len();
+            // Use match_count which may exceed evidence.len() for high-frequency patterns
+            let match_count = result.match_count;
             let file_kb = (file_size as f64) / 1024.0;
 
             // Check count_min constraint
@@ -1045,6 +1047,7 @@ impl TraitDefinition {
                 attack: self.attack.clone(),
                 trait_refs: vec![],
                 evidence: result.evidence,
+                match_count: result.match_count,
                 source_file: get_relative_source_file(&self.defined_in),
             })
         } else {
@@ -1708,9 +1711,11 @@ impl CompositeTrait {
                 combined_evidence.truncate(MAX_EVIDENCE_PER_TRAIT);
                 let mut combined_trait_ids = all_result.matched_trait_ids;
                 combined_trait_ids.extend(any_result.matched_trait_ids);
+                let match_count = combined_evidence.len();
                 ConditionResult {
                     matched: true,
                     evidence: combined_evidence,
+                    match_count,
                     warnings: Vec::new(),
                     precision: 0.0,
                     matched_trait_ids: combined_trait_ids,
@@ -1730,6 +1735,7 @@ impl CompositeTrait {
                 ConditionResult {
                     matched: true,
                     evidence: Vec::new(),
+                    match_count: 0,
                     warnings: Vec::new(),
                     precision: 0.0,
                     matched_trait_ids: Vec::new(),
@@ -1752,9 +1758,11 @@ impl CompositeTrait {
             let mut combined_evidence = positive_result.evidence;
             combined_evidence.extend(none_result.evidence);
             combined_evidence.truncate(MAX_EVIDENCE_PER_TRAIT);
+            let match_count = combined_evidence.len();
             ConditionResult {
                 matched: true,
                 evidence: combined_evidence,
+                match_count,
                 warnings: Vec::new(),
                 precision: 0.0,
                 matched_trait_ids: positive_result.matched_trait_ids,
@@ -1884,7 +1892,8 @@ impl CompositeTrait {
                         ),
                         location: None,
                     }],
-                    source_file: get_relative_source_file(&self.defined_in),
+                    match_count: 0,
+                source_file: get_relative_source_file(&self.defined_in),
                 });
             }
 
@@ -1898,6 +1907,7 @@ impl CompositeTrait {
                 attack: self.attack.clone(),
                 trait_refs: result.matched_trait_ids.clone(),
                 evidence,
+                match_count: result.match_count,
                 source_file: get_relative_source_file(&self.defined_in),
             })
         } else {
@@ -1989,13 +1999,7 @@ impl CompositeTrait {
         for condition in conds {
             let result = self.eval_condition(condition, ctx);
             if !result.matched {
-                return ConditionResult {
-                    matched: false,
-                    evidence: Vec::new(),
-                    warnings: Vec::new(),
-                    precision: 0.0,
-                    matched_trait_ids: Vec::new(),
-                };
+                return ConditionResult::no_match();
             }
             // Limit evidence to prevent explosion
             if all_evidence.len() < MAX_EVIDENCE_PER_TRAIT {
@@ -2006,9 +2010,11 @@ impl CompositeTrait {
             total_precision += result.precision; // SUM for 'all'
         }
 
+        let match_count = all_evidence.len();
         ConditionResult {
             matched: true,
             evidence: all_evidence,
+            match_count,
             warnings: Vec::new(),
             precision: total_precision,
             matched_trait_ids: all_trait_ids,
@@ -2043,9 +2049,11 @@ impl CompositeTrait {
 
         let precision = if any_matched { min_precision } else { 0.0 };
 
+        let match_count = all_evidence.len();
         ConditionResult {
             matched: any_matched,
             evidence: all_evidence,
+            match_count,
             warnings: Vec::new(),
             precision,
             matched_trait_ids: all_trait_ids,
@@ -2097,9 +2105,12 @@ impl CompositeTrait {
             0.0
         };
 
+        let evidence_for_result = if matched { all_evidence } else { Vec::new() };
+        let match_count_for_result = evidence_for_result.len();
         ConditionResult {
             matched,
-            evidence: if matched { all_evidence } else { Vec::new() },
+            evidence: evidence_for_result,
+            match_count: match_count_for_result,
             warnings: Vec::new(),
             precision: avg_precision,
             matched_trait_ids: if matched { all_trait_ids } else { Vec::new() },
@@ -2115,13 +2126,7 @@ impl CompositeTrait {
         for condition in conds {
             let result = self.eval_condition(condition, ctx);
             if result.matched {
-                return ConditionResult {
-                    matched: false,
-                    evidence: Vec::new(),
-                    warnings: Vec::new(),
-                    precision: 0.0,
-                    matched_trait_ids: Vec::new(),
-                };
+                return ConditionResult::no_match();
             }
         }
 
@@ -2133,6 +2138,7 @@ impl CompositeTrait {
                 value: "negative_conditions_not_found".to_string(),
                 location: None,
             }],
+            match_count: 1,
             warnings: Vec::new(),
             precision: 0.5, // Fixed +0.5 for exclusion logic (negative conditions)
             matched_trait_ids: Vec::new(), // Negative conditions don't contribute trait refs
@@ -2458,13 +2464,7 @@ impl CompositeTrait {
                 || ctx.platforms.contains(&Platform::All)
                 || plats.iter().any(|p| ctx.platforms.contains(p));
             if !platform_match {
-                return ConditionResult {
-                    matched: false,
-                    evidence: Vec::new(),
-                    warnings: Vec::new(),
-                    precision: 0.0,
-                    matched_trait_ids: Vec::new(),
-                };
+                return ConditionResult::no_match();
             }
         }
 
@@ -2491,18 +2491,21 @@ impl CompositeTrait {
         let count = ctx.report.exports.len();
         let matched = min.is_none_or(|m| count >= m) && max.is_none_or(|m| count <= m);
 
+        let evidence = if matched {
+            vec![Evidence {
+                method: "export_count".to_string(),
+                source: "composite_rule".to_string(),
+                value: count.to_string(),
+                location: None,
+            }]
+        } else {
+            Vec::new()
+        };
+        let match_count = evidence.len();
         ConditionResult {
             matched,
-            evidence: if matched {
-                vec![Evidence {
-                    method: "export_count".to_string(),
-                    source: "composite_rule".to_string(),
-                    value: count.to_string(),
-                    location: None,
-                }]
-            } else {
-                Vec::new()
-            },
+            evidence,
+            match_count,
             warnings: Vec::new(),
             precision: 0.0,
             matched_trait_ids: Vec::new(),

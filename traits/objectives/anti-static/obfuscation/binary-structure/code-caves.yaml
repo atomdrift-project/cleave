@@ -86,6 +86,8 @@ traits:
       executable: true
       entropy_max: 2.0  # Extremely low entropy
       length_min: 32768  # At least 32KB to filter out normal const sections
+    unless:
+      - id: metadata/signed/platform::apple
 
   # === Section Slack Space ===
 

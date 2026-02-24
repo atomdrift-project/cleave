@@ -46,7 +46,7 @@ composite_rules:
     any:
       - { id: mocha-word }
       - { id: metadata/dev/testing/jest::jest-describe }
-      - { id: metadata/dev/testing/jest::jest-it }
+      - { id: metadata/quality/npm/test-ctx::it-call }
       - { id: mocha-before }
       - { id: mocha-after }
 

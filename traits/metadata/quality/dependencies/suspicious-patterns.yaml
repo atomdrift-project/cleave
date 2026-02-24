@@ -213,15 +213,6 @@ traits:
       regex: '\.add_runtime_dependency\s*\('
       exists: false
 
-  # === Internal Helpers ===
-  - id: npm-no-deps-dependencies
-    desc: npm package has no dependencies field
-    for: [package.json]
-    if:
-      type: kv
-      path: "dependencies"
-      exists: false
-
   - id: npm-no-deps-devdependencies
     desc: npm package has no devDependencies field
     for: [package.json]
@@ -249,7 +240,7 @@ composite_rules:
     conf: 0.65
     for: [package.json]
     all:
-      - id: npm-no-deps-dependencies
+      - id: npm-no-dependencies
       - id: npm-no-deps-devdependencies
 
   # === npm Unsafe Dependency Versions ===

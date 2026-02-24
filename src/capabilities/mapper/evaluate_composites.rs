@@ -165,6 +165,7 @@ impl super::CapabilityMapper {
                         .to_string(),
                     location: None,
                 }],
+                match_count: 0,
                 source_file: None,
             });
         }

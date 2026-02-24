@@ -1,0 +1,45 @@
+# Recursive Directory Deletion Operations
+# MBC: C0047 (Delete File)
+# ATT&CK: T1070.004
+
+defaults:
+  crit: notable
+  conf: 0.8
+  mbc: "C0047"
+  attack: "T1070.004"
+
+traits:
+  - id: rimraf
+    desc: rimraf npm package (recursive delete)
+    for: [javascript, typescript]
+    if:
+      type: string
+      substr: "rimraf"
+
+  - id: rm-rf
+    desc: rm -rf shell command
+    for: [shell, javascript, typescript, python]
+    if:
+      type: string
+      substr: "rm -rf"
+
+  - id: shutil-rmtree
+    desc: Python shutil.rmtree
+    for: [python]
+    if:
+      type: string
+      substr: "shutil.rmtree"
+
+  - id: fs-rm-recursive
+    desc: Node.js fs.rm with recursive option
+    for: [javascript, typescript]
+    if:
+      type: string
+      regex: 'fs\.rm(Sync)?\s*\([^)]{0,50}recursive'
+
+  - id: rmdirSync-recursive
+    desc: Node.js rmdirSync with recursive option
+    for: [javascript, typescript]
+    if:
+      type: string
+      regex: 'rmdirSync\s*\([^)]{0,50}recursive'

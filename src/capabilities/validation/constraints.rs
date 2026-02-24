@@ -5,26 +5,68 @@
 
 use crate::composite_rules::{CompositeTrait, Condition, TraitDefinition};
 
-/// Find composite rules where `needs` exceeds the number of items in `any:`.
+/// Find composite rules where `needs` exceeds the number of possible matching items in `any:`.
 ///
-/// This makes the rule impossible to satisfy.
+/// This accounts for directory references that can match multiple traits.
+/// For example, `{ id: well-known/malware/stealer/amos }` matches ALL traits in that directory,
+/// so a single entry can represent many potential matches.
 ///
-/// Returns: `Vec<(rule_id, needs_value, any_length)>`
+/// Returns: `Vec<(rule_id, needs_value, potential_matches)>`
 #[must_use]
 pub(crate) fn find_impossible_needs(
     composite_rules: &[CompositeTrait],
+    all_trait_ids: &[String],
 ) -> Vec<(String, usize, usize)> {
     let mut violations = Vec::new();
 
     for rule in composite_rules {
         if let (Some(needs), Some(any_items)) = (rule.needs, rule.any.as_ref()) {
-            if needs > any_items.len() {
-                violations.push((rule.id.clone(), needs, any_items.len()));
+            // Calculate potential matches, accounting for directory references
+            let potential_matches = count_potential_matches(any_items, all_trait_ids);
+
+            if needs > potential_matches {
+                violations.push((rule.id.clone(), needs, potential_matches));
             }
         }
     }
 
     violations
+}
+
+/// Count the potential number of trait matches for a list of conditions.
+///
+/// - Specific trait references (with `::`) count as 1
+/// - Directory references (with `/` but no `::`) count as the number of traits in that directory
+/// - Non-trait conditions count as 1
+fn count_potential_matches(conditions: &[Condition], all_trait_ids: &[String]) -> usize {
+    let mut total = 0;
+
+    for condition in conditions {
+        if let Condition::Trait { id } = condition {
+            if id.contains("::") {
+                // Specific trait reference: counts as 1
+                total += 1;
+            } else if id.contains('/') {
+                // Directory reference: count traits matching this prefix
+                let prefix_new = format!("{}::", id);
+                let prefix_legacy = format!("{}/", id);
+                let matching_count = all_trait_ids
+                    .iter()
+                    .filter(|t| t.starts_with(&prefix_new) || t.starts_with(&prefix_legacy))
+                    .count();
+                // If no traits found, still count as 1 (might be a forward reference or typo)
+                total += matching_count.max(1);
+            } else {
+                // Short name reference: counts as 1
+                total += 1;
+            }
+        } else {
+            // Non-trait conditions (inline conditions) count as 1
+            total += 1;
+        }
+    }
+
+    total
 }
 
 /// Find traits/rules with impossible size constraints (size_min > size_max).

@@ -16,6 +16,9 @@ traits:
       type: string
       # Match paths like /var/.../.hidden or /usr/.../.config
       regex: '^/(var|usr)/.{0,200}\/\.[^/]{1,50}$'
+    not:
+      # Exclude macOS system state dot-files (Apple setup/config markers)
+      - substr: '/var/db/'
     unless:
       # Exclude DWARF debug paths from compilation
       - type: raw

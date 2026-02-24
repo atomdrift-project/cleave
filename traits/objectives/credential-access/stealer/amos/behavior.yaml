@@ -1,0 +1,18 @@
+composite_rules:
+  - id: amos-detected
+    desc: "Atomic Stealer (AMOS) malware detected"
+    crit: hostile
+    conf: 0.95
+    mbc: "B0028"
+    attack: "T1555"
+    platforms: [macos]
+    for: [all]
+    any:
+      - id: well-known/malware/stealer/amos
+    # Require at least 2 AMOS indicators to avoid false positives
+    # Single weak indicators (e.g. cipher-math-imports) are insufficient
+    needs: 2
+    downgrade:
+      any:
+        - id: metadata/apple::system-component
+        - id: micro-behaviors/dylib/library::terminal-editor-marker

@@ -94,18 +94,19 @@ traits:
       type: string
       substr: "iplogger"
 
-  - id: iplogger-b64
+  - id: iplogger-base64
     desc: iplogger.org (base64 encoded)
     if:
-      type: yara
-      source: |
-        rule iplogger_b64 {
-          strings:
-            $iplogger_b64 = "aXBsb2dnZXIub3Jn" ascii // iplogger.org
-            $iplogger_x = "iplogger.org" xor(1-255)
-          condition:
-            $iplogger_b64 or $iplogger_x
-        }
+      type: encoded
+      encoding: base64
+      substr: "iplogger.org"
+
+  - id: iplogger-xor
+    desc: iplogger.org (XOR encoded)
+    if:
+      type: encoded
+      encoding: xor
+      substr: "iplogger.org"
 
 composite_rules:
   - id: ip-lookup-service
@@ -131,13 +132,20 @@ composite_rules:
       - id: geoplugin-com
       - id: ip-api-com
 
+  - id: iplogger-encoded
+    desc: iplogger.org (encoded)
+    crit: notable
+    any:
+      - id: iplogger-base64
+      - id: iplogger-xor
+
   - id: tracking-service-lookup
     desc: IP lookup via tracking/logging service
     crit: suspicious
     any:
       - id: objectives/discovery/network/ip-tracker/
       - id: iplogger-keyword
-      - id: iplogger-b64
+      - id: iplogger-encoded
 
   - id: external-recon-service
     desc: Contacts external service for IP/geo reconnaissance

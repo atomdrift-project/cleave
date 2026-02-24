@@ -56,13 +56,7 @@ pub(crate) fn eval_ast<'a>(
 ) -> ConditionResult {
     // Skip AST evaluation for file types that don't support tree-sitter parsing
     if !supports_ast(ctx.file_type) {
-        return ConditionResult {
-            matched: false,
-            evidence: Vec::new(),
-            warnings: Vec::new(),
-            precision: 0.0,
-            matched_trait_ids: Vec::new(),
-        };
+        return ConditionResult::no_match();
     }
 
     // Advanced mode: use tree-sitter query
@@ -88,34 +82,16 @@ pub(crate) fn eval_ast<'a>(
     } else if let Some(n) = node {
         vec![n]
     } else {
-        return ConditionResult {
-            matched: false,
-            evidence: Vec::new(),
-            warnings: Vec::new(),
-            precision: 0.0,
-            matched_trait_ids: Vec::new(),
-        };
+        return ConditionResult::no_match();
     };
 
     if node_types.is_empty() {
-        return ConditionResult {
-            matched: false,
-            evidence: Vec::new(),
-            warnings: Vec::new(),
-            precision: 0.0,
-            matched_trait_ids: Vec::new(),
-        };
+        return ConditionResult::no_match();
     }
 
     // Use cached AST or parse
     let Ok(source) = std::str::from_utf8(ctx.binary_data) else {
-        return ConditionResult {
-            matched: false,
-            evidence: Vec::new(),
-            warnings: Vec::new(),
-            precision: 0.0,
-            matched_trait_ids: Vec::new(),
-        };
+        return ConditionResult::no_match();
     };
 
     if let Some(cached_tree) = ctx.cached_ast {
@@ -165,36 +141,16 @@ pub(crate) fn eval_ast<'a>(
 
     let lang: tree_sitter::Language = match parser_lang {
         Some(l) => l.into(),
-        None => {
-            return ConditionResult {
-                matched: false,
-                evidence: Vec::new(),
-                warnings: Vec::new(),
-                precision: 0.0,
-                matched_trait_ids: Vec::new(),
-            }
-        }
+        None => return ConditionResult::no_match(),
     };
 
     let mut parser = tree_sitter::Parser::new();
     if parser.set_language(&lang).is_err() {
-        return ConditionResult {
-            matched: false,
-            evidence: Vec::new(),
-            warnings: Vec::new(),
-            precision: 0.0,
-            matched_trait_ids: Vec::new(),
-        };
+        return ConditionResult::no_match();
     }
 
     let Some(tree) = parser.parse(source, None) else {
-        return ConditionResult {
-            matched: false,
-            evidence: Vec::new(),
-            warnings: Vec::new(),
-            precision: 0.0,
-            matched_trait_ids: Vec::new(),
-        };
+        return ConditionResult::no_match();
     };
 
     eval_ast_pattern_multi(
@@ -221,6 +177,7 @@ fn eval_ast_pattern_multi(
         return ConditionResult {
             matched: false,
             evidence: Vec::new(),
+            match_count: 0,
             warnings: vec![AnalysisWarning::AstTooDeep { max_depth: 0 }],
             precision: 0.0,
             matched_trait_ids: Vec::new(),
@@ -231,15 +188,7 @@ fn eval_ast_pattern_multi(
     let matcher: Box<dyn Fn(&str) -> bool> = match match_mode {
         MatchMode::Regex => match build_regex(pattern, case_insensitive) {
             Ok(re) => Box::new(move |s: &str| re.is_match(s)),
-            Err(_) => {
-                return ConditionResult {
-                    matched: false,
-                    evidence: Vec::new(),
-                    warnings: Vec::new(),
-                    precision: 0.0,
-                    matched_trait_ids: Vec::new(),
-                };
-            }
+            Err(_) => return ConditionResult::no_match(),
         },
         MatchMode::Exact => {
             let pattern_owned = pattern.to_string();
@@ -292,9 +241,11 @@ fn eval_ast_pattern_multi(
         precision *= 0.5;
     }
 
+    let match_count = evidence.len();
     ConditionResult {
-        matched: !evidence.is_empty(),
+        matched: match_count > 0,
         evidence,
+        match_count,
         warnings,
         precision,
         matched_trait_ids: Vec::new(),
@@ -337,13 +288,7 @@ fn walk_ast_for_pattern_multi<'a>(
 pub(crate) fn eval_ast_query<'a>(query_str: &str, ctx: &EvaluationContext<'a>) -> ConditionResult {
     // Only works for source code files
     let Ok(source) = std::str::from_utf8(ctx.binary_data) else {
-        return ConditionResult {
-            matched: false,
-            evidence: Vec::new(),
-            warnings: Vec::new(),
-            precision: 0.0,
-            matched_trait_ids: Vec::new(),
-        };
+        return ConditionResult::no_match();
     };
 
     // Get the appropriate parser and language based on file type
@@ -368,36 +313,16 @@ pub(crate) fn eval_ast_query<'a>(query_str: &str, ctx: &EvaluationContext<'a>) -
         FileType::Scala => tree_sitter_scala::LANGUAGE.into(),
         FileType::Zig => tree_sitter_zig::LANGUAGE.into(),
         FileType::Elixir => tree_sitter_elixir::LANGUAGE.into(),
-        _ => {
-            return ConditionResult {
-                matched: false,
-                evidence: Vec::new(),
-                warnings: Vec::new(),
-                precision: 0.0,
-                matched_trait_ids: Vec::new(),
-            };
-        }
+        _ => return ConditionResult::no_match(),
     };
 
     let mut parser = tree_sitter::Parser::new();
     if parser.set_language(&lang).is_err() {
-        return ConditionResult {
-            matched: false,
-            evidence: Vec::new(),
-            warnings: Vec::new(),
-            precision: 0.0,
-            matched_trait_ids: Vec::new(),
-        };
+        return ConditionResult::no_match();
     }
 
     let Some(tree) = parser.parse(source, None) else {
-        return ConditionResult {
-            matched: false,
-            evidence: Vec::new(),
-            warnings: Vec::new(),
-            precision: 0.0,
-            matched_trait_ids: Vec::new(),
-        };
+        return ConditionResult::no_match();
     };
 
     // Skip query execution if the tree has errors (malformed input)
@@ -405,6 +330,7 @@ pub(crate) fn eval_ast_query<'a>(query_str: &str, ctx: &EvaluationContext<'a>) -
         return ConditionResult {
             matched: false,
             evidence: Vec::new(),
+            match_count: 0,
             warnings: vec![AnalysisWarning::AstTooDeep { max_depth: 0 }],
             precision: 0.0,
             matched_trait_ids: Vec::new(),
@@ -413,13 +339,7 @@ pub(crate) fn eval_ast_query<'a>(query_str: &str, ctx: &EvaluationContext<'a>) -
 
     // Compile the query
     let Ok(query) = tree_sitter::Query::new(&lang, query_str) else {
-        return ConditionResult {
-            matched: false,
-            evidence: Vec::new(),
-            warnings: Vec::new(),
-            precision: 0.0,
-            matched_trait_ids: Vec::new(),
-        };
+        return ConditionResult::no_match();
     };
 
     // Execute the query with safety limits
@@ -484,9 +404,11 @@ pub(crate) fn eval_ast_query<'a>(query_str: &str, ctx: &EvaluationContext<'a>) -
         }
     }
 
+    let match_count = evidence.len();
     ConditionResult {
-        matched: !evidence.is_empty(),
+        matched: match_count > 0,
         evidence,
+        match_count,
         warnings: Vec::new(),
         precision: 2.0, // Tree-sitter queries are complex and specific
         matched_trait_ids: Vec::new(),

@@ -40,32 +40,22 @@ traits:
   - id: defi-protocol-ref-1
     desc: DeFi protocol (uniswap/sushiswap/pancakeswap)
     if:
-      id: micro-behaviors/data/text/crypto/trading::defi-protocol-dex
+      id: micro-behaviors/data/text/crypto::defi-protocol-dex
 
   - id: defi-protocol-ref-2
     desc: DeFi protocol (curve/aave/compound)
     if:
-      id: micro-behaviors/data/text/crypto/trading::defi-protocol-lending
+      id: micro-behaviors/data/text/crypto::defi-protocol-lending
 
   - id: token-swap-pattern-1
     desc: Token swap (getReserves/calculatePrice/getPair)
     if:
-      id: micro-behaviors/data/text/crypto/trading::contract-query
+      id: micro-behaviors/data/text/crypto::contract-query
 
   - id: token-swap-pattern-2
     desc: Token swap (swapExact/swap_tokens)
     if:
-      id: micro-behaviors/data/text/crypto/trading::swap-operations
-
-  - id: arbitrage-terms-1
-    desc: Arbitrage (arbitrage/arb_for/arb_against)
-    if:
-      id: micro-behaviors/data/text/crypto/trading::arbitrage-terms
-
-  - id: arbitrage-terms-2
-    desc: Arbitrage (price_difference/flash_loan)
-    if:
-      id: micro-behaviors/data/text/crypto/trading::arbitrage-terms
+      id: micro-behaviors/data/text/crypto::swap-operations
 
   - id: web3-provider
     desc: Web3 provider usage
@@ -122,14 +112,6 @@ composite_rules:
       - id: token-swap-pattern-1
       - id: token-swap-pattern-2
 
-  - id: arbitrage-terms
-    desc: Arbitrage trading terms
-    crit: notable
-    conf: 0.50
-    any:
-      - id: arbitrage-terms-1
-      - id: arbitrage-terms-2
-
   - id: meme-token-keywords
     desc: Meme token related keywords
     crit: notable
@@ -151,7 +133,7 @@ composite_rules:
     any:
       - id: defi-protocol-ref
       - id: token-swap-pattern
-      - id: arbitrage-terms
+      - id: micro-behaviors/data/text/crypto::arbitrage-terms-arbitrage
       - id: web3-provider
       - id: meme-token-keywords
 

@@ -14,5 +14,5 @@ composite_rules:
     for: [elf]
     all:
       - id: micro-behaviors/data/embedded/payload::lzma-magic
-      - id: objectives/anti-static/obfuscation/payload::xixa-marker
+      - id: objectives/anti-static/obfuscation/payload/encrypted::xixa-marker
       - id: micro-behaviors/dylib/library::system-lib-marker

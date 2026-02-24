@@ -33,14 +33,6 @@ traits:
       substr: ".mozilla/firefox"
 
   # === Shellcode/memory execution patterns ===
-  - id: prot-exec-word
-    desc: PROT_EXEC memory protection word
-    crit: notable
-    conf: 0.75
-    if:
-      type: string
-      word: "PROT_EXEC"
-
   - id: page-execute-word
     desc: PAGE_EXECUTE memory protection word
     crit: notable
@@ -64,7 +56,7 @@ composite_rules:
     crit: notable
     conf: 0.9
     any:
-      - id: prot-exec-word
+      - id: micro-behaviors/mem/allocate/executable::prot-exec-const
       - id: page-execute-word
 
   # === baseline: Common legitimate patterns ===

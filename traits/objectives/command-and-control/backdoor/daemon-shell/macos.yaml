@@ -28,9 +28,9 @@ composite_rules:
       - id: micro-behaviors/process/create/shell
     # Obfuscation or frequency indicators
     any:
-      - id: objectives/anti-static/obfuscation/payload::tiny-cstring
+      - id: objectives/anti-static/obfuscation/payload/encrypted::tiny-cstring
       - id: micro-behaviors/process/create/shell::excessive-popen
-      - id: objectives/anti-static/obfuscation/payload::high-entropy-data-section
+      - id: objectives/anti-static/obfuscation/payload/section::high-entropy-data-section
     # Must be unsigned (legitimate apps are signed)
     none:
       - id: metadata/signed/platform::apple
@@ -59,7 +59,7 @@ composite_rules:
     any:
       - id: micro-behaviors/process/create/shell::extreme-popen
       - id: micro-behaviors/process/create/shell::obfuscated-shell-malware
-      - id: objectives/anti-static/obfuscation/payload::encrypted-payload-section
+      - id: objectives/anti-static/obfuscation/payload/section::encrypted-payload-section
 
   # Generic name + daemon backdoor = masquerading
   - id: masquerading-daemon-backdoor

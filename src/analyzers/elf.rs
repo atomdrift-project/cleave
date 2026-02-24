@@ -118,6 +118,7 @@ impl ElfAnalyzer {
                     mbc: Some("B0001".to_string()), // Defense Evasion: Software Packing/Obfuscation
                     attack: Some("T1027".to_string()), // Obfuscated Files or Information
                     evidence: vec![],
+                match_count: 0,
                     trait_refs: vec![],
 
                     source_file: None,
@@ -329,7 +330,8 @@ impl ElfAnalyzer {
                             location: Some(format!("{:#x}", dynsym.st_value)),
                         }],
 
-                        source_file: None,
+                        match_count: 0,
+                source_file: None,
                     });
                 }
 
@@ -376,7 +378,8 @@ impl ElfAnalyzer {
                                 location: Some(format!("{:#x}", sym.st_value)),
                             }],
 
-                            source_file: None,
+                            match_count: 0,
+                source_file: None,
                         });
                     }
                 }

@@ -39,7 +39,7 @@ composite_rules:
     any:
       - id: high-data-dominance
       - id: metadata/binary/structure::minimal-string-count
-      - id: objectives/anti-static/obfuscation/payload::high-entropy-const
+      - id: objectives/anti-static/obfuscation/payload/encrypted::high-entropy-const
 
   - id: macho-high-entropy-data-dropper
     desc: "Mach-O high-entropy data payload dropper"

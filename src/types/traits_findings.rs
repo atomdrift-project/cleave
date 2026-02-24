@@ -88,9 +88,14 @@ fn is_default_conf(conf: &f32) -> bool {
     (*conf - 0.95).abs() < f32::EPSILON
 }
 
+/// Check if a usize value is zero (for skip_serializing_if)
+fn is_zero_usize(n: &usize) -> bool {
+    *n == 0
+}
+
 /// A finding - an interpretive conclusion based on traits
 /// Findings represent what we CONCLUDE from traits (capabilities, threats, behaviors)
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct Finding {
     /// Finding identifier using / delimiter (e.g., "command-and-control/hardcoded-ip", "net/socket")
     pub id: String,
@@ -118,6 +123,9 @@ pub struct Finding {
     /// Additional evidence (for findings not tied to specific traits)
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub evidence: Vec<Evidence>,
+    /// Total match count for density/frequency analysis (may exceed evidence.len())
+    #[serde(skip_serializing_if = "is_zero_usize", default)]
+    pub match_count: usize,
     /// Source file path (relative to traits directory) where this trait/rule was defined
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub source_file: Option<String>,
@@ -137,6 +145,7 @@ impl Finding {
             attack: None,
             trait_refs: Vec::new(),
             evidence: Vec::new(),
+            match_count: 0,
             source_file: None,
         }
     }

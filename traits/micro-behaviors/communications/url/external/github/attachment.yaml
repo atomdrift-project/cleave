@@ -1,0 +1,17 @@
+# GitHub Attachment URL Detection
+# Detects URLs pointing to GitHub issue/PR attachments (files/ directory)
+# Attackers often use this to host malicious payloads on a trusted domain.
+# Ref: https://www.mcafee.com/blogs/other-blogs/mcafee-labs/redline-stealer-a-novel-approach/
+
+defaults:
+  for: [all]
+  attack: T1105
+
+traits:
+  - id: github-attachment-url
+    desc: "GitHub attachment/files URL"
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: raw
+      regex: github\.com/[a-zA-Z0-9._-]+/[a-zA-Z0-9._-]+/files/[0-9]+/

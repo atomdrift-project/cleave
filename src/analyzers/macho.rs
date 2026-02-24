@@ -842,7 +842,8 @@ impl MachOAnalyzer {
                 location: None,
             }],
 
-            source_file: None,
+            match_count: 0,
+                source_file: None,
         });
 
         // Identifier trait - complete trait ID includes the bundle identifier
@@ -863,6 +864,7 @@ impl MachOAnalyzer {
                     location: None,
                 }],
 
+                match_count: 0,
                 source_file: None,
             });
         }
@@ -892,6 +894,7 @@ impl MachOAnalyzer {
                     location: None,
                 }],
 
+                match_count: 0,
                 source_file: None,
             });
         }
@@ -908,6 +911,7 @@ impl MachOAnalyzer {
                 mbc: None,
                 attack: None,
                 evidence: vec![],
+                match_count: 0,
                 source_file: None,
             });
         }
@@ -930,6 +934,7 @@ impl MachOAnalyzer {
                     location: None,
                 }],
 
+                match_count: 0,
                 source_file: None,
             });
         }

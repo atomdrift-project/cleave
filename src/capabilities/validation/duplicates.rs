@@ -10,6 +10,7 @@
 //! - **Type conflicts**: Same pattern appearing as different condition types (string vs symbol vs raw)
 //! - **String/raw collisions**: Pattern appearing as both string and raw conditions with same criticality
 //! - **For-only duplicates**: Traits identical except for the `for:` field, indicating mergeable rules
+//! - **Atomic logic duplicates**: Traits with same matching logic but different metadata (crit/conf/platforms)
 //! - **Alternation merge candidates**: Regex patterns differing only in first token case that could be combined
 
 use super::shared::{MatchSignature, PatternLocation};
@@ -25,6 +26,24 @@ use std::sync::OnceLock;
 /// Returns None if the pattern is invalid.
 fn get_cached_regex(pattern: &str) -> Option<regex::Regex> {
     build_regex(pattern, false).ok()
+}
+
+/// Normalize criticality for overlap checking purposes.
+/// `Component`, `Baseline`, and `Filtered` are all treated as equivalent "inert" levels
+/// since they represent low-signal building blocks rather than meaningful findings.
+fn criticality_for_overlap(crit: Criticality) -> Criticality {
+    match crit {
+        Criticality::Filtered | Criticality::Component | Criticality::Baseline => {
+            Criticality::Baseline
+        }
+        other => other,
+    }
+}
+
+/// Check if two criticalities are equivalent for overlap purposes.
+/// Component, Baseline, and Filtered are all treated as the same level.
+pub(crate) fn criticalities_equivalent(a: Criticality, b: Criticality) -> bool {
+    criticality_for_overlap(a) == criticality_for_overlap(b)
 }
 
 /// Combined: ~100-500x faster than original mutex-based implementation.
@@ -557,9 +576,10 @@ pub(crate) fn find_string_pattern_duplicates(
                 let patterns_differ = len_diff > 2;
 
                 // Check if confidence differs by >=0.2 OR criticality differs
+                // Note: Component/Baseline/Filtered are treated as equivalent "inert" levels
                 let conf_diff = (loc_a.confidence - loc_b.confidence).abs();
                 let conf_or_crit_differs =
-                    conf_diff >= 0.2 || loc_a.criticality != loc_b.criticality;
+                    conf_diff >= 0.2 || !criticalities_equivalent(loc_a.criticality, loc_b.criticality);
 
                 // If this pair doesn't meet carveout criteria, bail out
                 if !(patterns_differ && conf_or_crit_differs) {
@@ -1627,7 +1647,8 @@ pub(crate) fn check_regex_contains_literal(
             let mut local_warnings = Vec::new();
             for literal_pat in &literal_patterns {
                 // Skip if criticalities are different (intentional layering)
-                if regex_pat.crit != literal_pat.crit {
+                // Note: Component/Baseline/Filtered are treated as equivalent "inert" levels
+                if !criticalities_equivalent(regex_pat.crit, literal_pat.crit) {
                     continue;
                 }
 
@@ -1952,7 +1973,6 @@ pub(crate) fn check_regex_alternative_subsets(
 }
 
 /// Helper function to check if two file type lists have any overlap
-#[cfg(test)]
 fn file_types_overlap(types1: &[RuleFileType], types2: &[RuleFileType]) -> bool {
     // If either contains All, they overlap
     if types1.contains(&RuleFileType::All) || types2.contains(&RuleFileType::All) {
@@ -2061,7 +2081,8 @@ pub(crate) fn validate_regex_overlap_with_literal(
             for (literal, match_type, literal_id, literal_crit, literal_types) in &literal_patterns
             {
                 // Check if criticality matches
-                if t.crit != *literal_crit {
+                // Note: Component/Baseline/Filtered are treated as equivalent "inert" levels
+                if !criticalities_equivalent(t.crit, *literal_crit) {
                     continue;
                 }
 
@@ -2234,6 +2255,87 @@ pub(crate) fn find_for_only_duplicates(
                 };
 
                 duplicates.push((trait_ids, pattern_desc));
+            }
+        }
+    }
+
+    duplicates
+}
+
+/// Find traits with identical matching logic but different metadata.
+/// These represent potential inconsistencies - same detection with conflicting criticality/confidence.
+/// Only flags pairs with overlapping file types (so they'd actually fire on the same files).
+/// Returns: Vec<(trait_id_a, trait_id_b, description)>
+#[must_use]
+pub(crate) fn find_atomic_logic_duplicates(
+    trait_definitions: &[TraitDefinition],
+) -> Vec<(String, String, String)> {
+    let mut duplicates = Vec::new();
+
+    // Group traits by matching logic signature (if + not + unless)
+    // This excludes metadata: crit, conf, desc, attack, ref, platforms, etc.
+    // Key: matching signature -> Vec<trait>
+    let mut groups: HashMap<String, Vec<&TraitDefinition>> = HashMap::new();
+
+    for t in trait_definitions {
+        // Create signature from matching logic only
+        let signature = format!(
+            "{:?}:{:?}:{:?}",
+            t.r#if, t.not, t.unless
+        );
+        groups.entry(signature).or_default().push(t);
+    }
+
+    // Check groups with multiple traits for overlapping file types
+    for (_sig, traits) in groups {
+        if traits.len() < 2 {
+            continue;
+        }
+
+        // Check each pair for overlapping file types and differing metadata
+        for i in 0..traits.len() {
+            for j in (i + 1)..traits.len() {
+                let a = traits[i];
+                let b = traits[j];
+
+                // Check if file types overlap
+                if !file_types_overlap(&a.r#for, &b.r#for) {
+                    continue;
+                }
+
+                // Check if metadata differs (crit, conf, or platforms)
+                // Use the equivalence check for criticality
+                let crit_differs = !criticalities_equivalent(a.crit, b.crit);
+                let conf_differs = (a.conf - b.conf).abs() >= 0.1;
+                let platforms_differ = a.platforms != b.platforms;
+
+                if !crit_differs && !conf_differs && !platforms_differ {
+                    // Metadata is effectively the same, not interesting
+                    continue;
+                }
+
+                // Build description of the difference
+                let mut diffs = Vec::new();
+                if crit_differs {
+                    diffs.push(format!("crit: {:?} vs {:?}", a.crit, b.crit));
+                }
+                if conf_differs {
+                    diffs.push(format!("conf: {:.2} vs {:.2}", a.conf, b.conf));
+                }
+                if platforms_differ {
+                    diffs.push(format!("platforms: {:?} vs {:?}", a.platforms, b.platforms));
+                }
+
+                let for_a: Vec<_> = a.r#for.iter().map(|f| format!("{f:?}")).collect();
+                let for_b: Vec<_> = b.r#for.iter().map(|f| format!("{f:?}")).collect();
+                let desc = format!(
+                    "Same matching logic, overlapping types ({}∩{}), but: {}",
+                    for_a.join(","),
+                    for_b.join(","),
+                    diffs.join(", ")
+                );
+
+                duplicates.push((a.id.clone(), b.id.clone(), desc));
             }
         }
     }

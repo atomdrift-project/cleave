@@ -35,6 +35,8 @@ fn create_test_context<'a>(report: &'a AnalysisReport, data: &'a [u8]) -> Evalua
         inline_yara_results: None,
         cached_kv_format: OnceLock::new(),
         cached_kv_parsed: OnceLock::new(),
+        current_trait: None,
+        current_source: None,
     }
 }
 

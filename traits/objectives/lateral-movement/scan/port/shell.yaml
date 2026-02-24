@@ -50,6 +50,9 @@ traits:
     unless:
       - type: raw
         regex: library|compiler|builtins
+      # Exclude common build artifact dotdirs (autoconf, libtool, git, svn)
+      - type: raw
+        regex: /\.(libs|deps|git|svn|hg|o)\b
   - id: script-probes-port-common
     desc: Probes common ports (21/22/23/25)
     crit: notable

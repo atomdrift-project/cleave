@@ -16,12 +16,36 @@ traits:
       type: string
       regex: 'moz_cookies'
 
-  - id: chrome-cookies
-    desc: Chrome cookies database
+  - id: chrome-cookies-path-1
+    desc: Chrome cookies database path variant 1
     for: [all]
     if:
       type: string
-      regex: 'Cookies'
+      regex: 'Chrome/.{0,50}Cookies'
+  - id: chrome-cookies-path-2
+    desc: Chrome cookies database path variant 2
+    for: [all]
+    if:
+      type: string
+      regex: 'Google/Chrome/.{0,50}Cookies'
+  - id: chrome-cookies-path-3
+    desc: Chrome cookies database path variant 3
+    for: [all]
+    if:
+      type: string
+      regex: 'Chromium/.{0,50}Cookies'
+  - id: chrome-cookies-path-4
+    desc: Chrome cookies database path variant 4
+    for: [all]
+    if:
+      type: string
+      regex: '\.config/chromium/.{0,50}Cookies'
+  - id: chrome-safe-storage
+    desc: Chrome safe storage
+    for: [all]
+    if:
+      type: string
+      regex: 'Chrome.{0,50}Safe Storage'
 
   # === Browser Login Databases ===
 
@@ -49,6 +73,15 @@ traits:
       regex: 'credit_cards'
 
 composite_rules:
+  - id: chrome-cookies
+    desc: Chrome cookies database
+    for: [all]
+    any:
+      - id: chrome-cookies-path-1
+      - id: chrome-cookies-path-2
+      - id: chrome-cookies-path-3
+      - id: chrome-cookies-path-4
+      - id: chrome-safe-storage
   # GuardDog: Browser data access
   - id: browser-sensitive-data
     desc: Browser cookies, logins, or credit cards

@@ -86,6 +86,7 @@ mod tests {
             mbc: None,
             attack: None,
             evidence: vec![],
+            match_count: 0,
             source_file: None,
         }
     }
@@ -450,6 +451,7 @@ mod tests {
                 value: "test-value".to_string(),
                 location: None,
             }],
+            match_count: 0,
             source_file: Some("test.yaml".to_string()),
         };
 

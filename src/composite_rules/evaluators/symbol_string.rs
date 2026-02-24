@@ -50,13 +50,7 @@ pub(crate) fn eval_symbol<'a>(
             || ctx.platforms.contains(&Platform::All)
             || plats.iter().any(|p| ctx.platforms.contains(p));
         if !platform_match {
-            return ConditionResult {
-                matched: false,
-                evidence: Vec::new(),
-                warnings: Vec::new(),
-                precision: 0.0,
-                matched_trait_ids: Vec::new(),
-            };
+            return ConditionResult::no_match();
         }
     }
 
@@ -132,10 +126,12 @@ pub(crate) fn eval_symbol<'a>(
 
     // count/density constraints are now checked at trait level
     let matched = !evidence.is_empty();
+    let match_count = evidence.len();
 
     ConditionResult {
         matched,
         evidence,
+        match_count,
         warnings: Vec::new(),
         precision,
         matched_trait_ids: Vec::new(),
@@ -383,10 +379,12 @@ pub(crate) fn eval_string<'a, 'b>(
 
     // count/density constraints are now checked at trait level
     let matched = !evidence.is_empty();
+    let match_count = evidence.len();
 
     ConditionResult {
         matched,
         evidence,
+        match_count,
         warnings: Vec::new(),
         precision,
         matched_trait_ids: Vec::new(),
@@ -829,6 +827,7 @@ pub(crate) fn eval_raw<'a>(
     ConditionResult {
         matched,
         evidence,
+        match_count,
         warnings: Vec::new(),
         precision,
         matched_trait_ids: Vec::new(),
@@ -1010,6 +1009,7 @@ pub(crate) fn eval_encoded<'a>(
     ConditionResult {
         matched,
         evidence,
+        match_count,
         warnings: Vec::new(),
         precision,
         matched_trait_ids: Vec::new(),
@@ -1050,23 +1050,25 @@ pub(crate) fn eval_string_count<'a>(
     let max_ok = max.is_none_or(|m| count <= m);
     let matched = min_ok && max_ok;
 
+    let evidence = if matched {
+        // Deduplicate and take first few for display
+        let mut unique: Vec<&str> = matching_strings;
+        unique.sort();
+        unique.dedup();
+        let sample: Vec<&str> = unique.into_iter().take(5).collect();
+        vec![Evidence {
+            method: "string_count".to_string(),
+            source: "binary".to_string(),
+            value: format!("({}) {}", count, sample.join(", ")),
+            location: None,
+        }]
+    } else {
+        Vec::new()
+    };
     ConditionResult {
         matched,
-        evidence: if matched {
-            // Deduplicate and take first few for display
-            let mut unique: Vec<&str> = matching_strings;
-            unique.sort();
-            unique.dedup();
-            let sample: Vec<&str> = unique.into_iter().take(5).collect();
-            vec![Evidence {
-                method: "string_count".to_string(),
-                source: "binary".to_string(),
-                value: format!("({}) {}", count, sample.join(", ")),
-                location: None,
-            }]
-        } else {
-            Vec::new()
-        },
+        evidence,
+        match_count: count,
         warnings: Vec::new(),
         precision: 0.0,
         matched_trait_ids: Vec::new(),

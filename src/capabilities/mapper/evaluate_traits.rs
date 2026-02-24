@@ -169,6 +169,7 @@ impl super::CapabilityMapper {
                                 mbc: trait_def.mbc.clone(),
                                 attack: trait_def.attack.clone(),
                                 evidence: evidence.clone(),
+                match_count: 0,
                                 kind: FindingKind::Capability,
                                 trait_refs: vec![],
                                 source_file: get_relative_source_file(&trait_def.defined_in),

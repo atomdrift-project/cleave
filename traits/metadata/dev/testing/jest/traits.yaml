@@ -22,16 +22,6 @@ traits:
       kind: call
       exact: "describe"
 
-  - id: jest-it
-    desc: "it() function"
-    crit: baseline
-    conf: 0.5
-    for: [javascript]
-    if:
-      type: ast
-      kind: call
-      exact: "it"
-
   - id: jest-expect
     desc: "expect() function"
     crit: baseline
@@ -70,7 +60,7 @@ composite_rules:
     needs: 3
     any:
       - { id: jest-describe }
-      - { id: jest-it }
+      - { id: metadata/quality/npm/test-ctx::it-call }
       - { id: jest-expect }
       - { id: jest-to-be }
       - { id: jest-to-equal }

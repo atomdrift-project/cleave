@@ -40,6 +40,8 @@ fn create_test_context<'a>(
         inline_yara_results: None,
         cached_kv_format: OnceLock::new(),
         cached_kv_parsed: OnceLock::new(),
+        current_trait: None,
+        current_source: None,
     }
 }
 
@@ -59,6 +61,7 @@ fn create_test_finding(id: &str) -> Finding {
             value: "test evidence".to_string(),
             location: None,
         }],
+        match_count: 0,
         source_file: None,
     }
 }

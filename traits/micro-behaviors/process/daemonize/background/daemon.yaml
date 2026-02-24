@@ -26,24 +26,6 @@ traits:
       type: syscall
       name: ["setsid"]
 
-  - id: fd-redirect-multiple
-    desc: Multiple file descriptor redirections
-    crit: notable
-    conf: 0.7
-    if:
-      type: syscall
-      name: ["dup2", "dup3"]
-      count_min: 2
-
-  - id: fd-redirect-macos
-    desc: File descriptor redirection on macOS
-    crit: notable
-    conf: 0.7
-    if:
-      type: syscall
-      name: ["dup2"]
-      count_min: 2
-
 composite_rules:
   - id: daemon
     desc: Daemon behavior - detaches from terminal
@@ -64,7 +46,7 @@ composite_rules:
     all:
       - id: process-fork
       - id: process-setsid
-      - id: fd-redirect-multiple
+      - id: micro-behaviors/process/create/shell::syscall-dup-redirect-linux
 
   - id: daemon-macos
     desc: macOS daemon behavior - detaches from terminal
@@ -85,4 +67,4 @@ composite_rules:
     all:
       - id: process-fork-macos
       - id: process-setsid
-      - id: fd-redirect-macos
+      - id: micro-behaviors/process/create/shell::syscall-dup-redirect-macos

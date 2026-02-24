@@ -1,0 +1,35 @@
+# Python String Concealment Techniques
+# MBC: B0032 (Obfuscated Files or Information)
+# ATT&CK: T1027 (Obfuscated Files or Information)
+
+traits:
+  - id: py-hex-exec-string
+    desc: Hex-encoded 'exec' string
+    crit: suspicious
+    conf: 0.95
+    for: [python]
+    if:
+      type: string
+      regex: '(?i)65786563'
+
+  - id: py-bytes-fromhex-exec
+    desc: Bytes fromhex containing 'exec'
+    crit: suspicious
+    conf: 0.95
+    for: [python]
+    mbc: "B0032"
+    attack: "T1027"
+    if:
+      type: raw
+      regex: 'bytes\.fromhex\(["''](?i)65786563["'']\)'
+
+  - id: py-eval-compile-base64
+    desc: Dynamic evaluation of base64 compiled code
+    crit: suspicious
+    conf: 0.8
+    for: [python]
+    mbc: "E1059"
+    attack: "T1059.006"
+    if:
+      type: raw
+      regex: 'eval\s*\(\s*compile\s*\(\s*base64\.b64decode'

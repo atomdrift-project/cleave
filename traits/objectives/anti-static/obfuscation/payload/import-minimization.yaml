@@ -160,7 +160,7 @@ composite_rules:
       - id: macho-max-35-imports
       - id: macho-stealth-resolution
     any:
-      - id: objectives/anti-static/obfuscation/payload::math-cipher-imports
+      - id: objectives/anti-static/obfuscation/payload/encrypted::math-cipher-imports
       - id: micro-behaviors/process/create/shell::system-fn
 
   # === PE Ransomware/Dropper Patterns ===

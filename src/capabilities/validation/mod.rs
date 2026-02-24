@@ -92,8 +92,8 @@ pub(crate) use duplicates::{
     check_regex_alternative_subsets, check_regex_contains_literal,
     check_regex_or_overlapping_exact, check_regex_should_be_exact,
     check_same_string_different_types, find_alternation_merge_candidates,
-    find_duplicate_traits_and_composites, find_for_only_duplicates, find_string_content_collisions,
-    find_string_pattern_duplicates,
+    find_duplicate_traits_and_composites, find_for_only_duplicates,
+    find_atomic_logic_duplicates, find_string_content_collisions, find_string_pattern_duplicates,
 };
 
 // Composite rule validation

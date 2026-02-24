@@ -25,10 +25,10 @@ traits:
     downgrade:
       any:
         # Check for Apple bundle identifier (indicates system component)
-        - id: metadata/apple/system-component
+        - id: metadata/apple::system-component
         # Check for Apple project marker (indicates system framework)
         - type: string
-          regex: "@\\(#\\)PROGRAM:[a-z]+\\s+PROJECT:[A-Za-z]+-[0-9]+"
+          regex: "@\\(#\\)PROGRAM:[A-Za-z][A-Za-z0-9]*\\s+PROJECT:[A-Za-z]+-[0-9]+"
 
   - id: cg-window-capture
     desc: macOS CGWindow capture
@@ -74,10 +74,10 @@ traits:
     downgrade:
       any:
         # Check for Apple bundle identifier (indicates system component)
-        - id: metadata/apple/system-component
+        - id: metadata/apple::system-component
         # Check for Apple project marker (indicates system framework)
         - type: string
-          regex: "@\\(#\\)PROGRAM:[a-z]+\\s+PROJECT:[A-Za-z]+-[0-9]+"
+          regex: "@\\(#\\)PROGRAM:[A-Za-z][A-Za-z0-9]*\\s+PROJECT:[A-Za-z]+-[0-9]+"
 
   # Removed screen-locked duplicate - use objectives/discovery/system/hardware::ioreg-screen-lock
 
@@ -119,10 +119,10 @@ traits:
     downgrade:
       any:
         # Check for Apple bundle identifier (indicates system component)
-        - id: metadata/apple/system-component
+        - id: metadata/apple::system-component
         # Check for Apple project marker (indicates system framework)
         - type: string
-          regex: "@\\(#\\)PROGRAM:[a-z]+\\s+PROJECT:[A-Za-z]+-[0-9]+"
+          regex: "@\\(#\\)PROGRAM:[A-Za-z][A-Za-z0-9]*\\s+PROJECT:[A-Za-z]+-[0-9]+"
 
 composite_rules:
   - id: macos-spy-detected
@@ -142,7 +142,7 @@ composite_rules:
     # UI state for screen recording (e.g., which app is being recorded, if screen is locked)
     downgrade:
       any:
-        - id: metadata/apple/system-component
+        - id: metadata/apple::system-component
 
   # Forced browser opening adware: system() + open -a + chmod 777
   # Complexity: all(3) + for(1) = 4 (meets hostile threshold)

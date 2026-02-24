@@ -2,13 +2,13 @@
 # Detects binaries lacking standard security features
 
 defaults:
-  for: [elf]
   crit: notable
 
 traits:
   - id: stripped-binary
     desc: Stripped binary (no symbols)
     conf: 0.8
+    for: [elf, macho, pe]
     if:
       type: structure
       feature: "binary/stripped"
@@ -16,6 +16,7 @@ traits:
   - id: static-linked
     desc: Statically linked binary
     conf: 0.8
+    for: [elf]
     if:
       type: structure
       feature: "binary/static"

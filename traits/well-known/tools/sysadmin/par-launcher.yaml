@@ -1,0 +1,44 @@
+# PAR (Perl Archive) Launcher Detection
+# PAR is a legitimate Perl packaging toolkit that creates self-contained executables
+# by embedding a Perl interpreter and archived modules into a native binary.
+# These binaries legitimately have large data sections, sparse strings, and few imports.
+# Common examples: /usr/bin/parl (ships with macOS)
+
+defaults:
+  for: [macho, elf, pe]
+
+traits:
+  - id: par-env-vars
+    desc: PAR environment variable references
+    crit: baseline
+    conf: 0.95
+    if:
+      type: string
+      substr: "PAR_TEMP"
+
+  - id: par-progname
+    desc: PAR program name variable
+    crit: baseline
+    conf: 0.9
+    if:
+      type: string
+      substr: "PAR_PROGNAME"
+
+  - id: par-extraction-msg
+    desc: PAR extraction failure message
+    crit: baseline
+    conf: 0.95
+    if:
+      type: string
+      substr: "extraction of"
+
+composite_rules:
+  - id: par-launcher
+    desc: PAR (Perl Archive) launcher binary
+    crit: baseline
+    conf: 0.95
+    needs: 2
+    any:
+      - id: par-env-vars
+      - id: par-progname
+      - id: par-extraction-msg

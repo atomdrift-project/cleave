@@ -1735,6 +1735,381 @@ mod duplicate_tests {
         // Should be allowed: >33% diff and one has no alternation
         assert_eq!(warnings.len(), 0);
     }
+
+    // ========================================================================
+    // Criticality Equivalence Tests
+    // ========================================================================
+
+    #[test]
+    fn test_criticalities_equivalent_inert_levels() {
+        use crate::capabilities::validation::duplicates::criticalities_equivalent;
+        use crate::types::Criticality;
+
+        // Component, Baseline, and Filtered should all be equivalent
+        assert!(criticalities_equivalent(Criticality::Component, Criticality::Baseline));
+        assert!(criticalities_equivalent(Criticality::Baseline, Criticality::Component));
+        assert!(criticalities_equivalent(Criticality::Filtered, Criticality::Baseline));
+        assert!(criticalities_equivalent(Criticality::Filtered, Criticality::Component));
+        assert!(criticalities_equivalent(Criticality::Component, Criticality::Filtered));
+
+        // Same level is always equivalent
+        assert!(criticalities_equivalent(Criticality::Component, Criticality::Component));
+        assert!(criticalities_equivalent(Criticality::Baseline, Criticality::Baseline));
+        assert!(criticalities_equivalent(Criticality::Filtered, Criticality::Filtered));
+    }
+
+    #[test]
+    fn test_criticalities_equivalent_distinct_levels() {
+        use crate::capabilities::validation::duplicates::criticalities_equivalent;
+        use crate::types::Criticality;
+
+        // Notable, Suspicious, Hostile should be distinct from each other and from inert levels
+        assert!(!criticalities_equivalent(Criticality::Notable, Criticality::Baseline));
+        assert!(!criticalities_equivalent(Criticality::Notable, Criticality::Component));
+        assert!(!criticalities_equivalent(Criticality::Suspicious, Criticality::Baseline));
+        assert!(!criticalities_equivalent(Criticality::Hostile, Criticality::Baseline));
+
+        assert!(!criticalities_equivalent(Criticality::Notable, Criticality::Suspicious));
+        assert!(!criticalities_equivalent(Criticality::Notable, Criticality::Hostile));
+        assert!(!criticalities_equivalent(Criticality::Suspicious, Criticality::Hostile));
+
+        // Same level is equivalent
+        assert!(criticalities_equivalent(Criticality::Notable, Criticality::Notable));
+        assert!(criticalities_equivalent(Criticality::Suspicious, Criticality::Suspicious));
+        assert!(criticalities_equivalent(Criticality::Hostile, Criticality::Hostile));
+    }
+
+    // ========================================================================
+    // Atomic Logic Duplicates Tests
+    // ========================================================================
+
+    #[test]
+    fn test_atomic_logic_duplicates_same_logic_different_crit() {
+        use crate::capabilities::validation::duplicates::find_atomic_logic_duplicates;
+
+        let traits = vec![
+            create_test_trait_with_conf_crit(
+                "trait_notable",
+                Condition::String {
+                    exact: Some("malicious_pattern".to_string()),
+                    substr: None,
+                    regex: None,
+                    word: None,
+                    case_insensitive: false,
+                    external_ip: false,
+                    section: None,
+                    offset: None,
+                    offset_range: None,
+                    section_offset: None,
+                    section_offset_range: None,
+                    compiled_regex: None,
+                },
+                vec![FileType::Elf],
+                "file1.yaml",
+                1.0,
+                crate::types::Criticality::Notable,
+            ),
+            create_test_trait_with_conf_crit(
+                "trait_hostile",
+                Condition::String {
+                    exact: Some("malicious_pattern".to_string()),
+                    substr: None,
+                    regex: None,
+                    word: None,
+                    case_insensitive: false,
+                    external_ip: false,
+                    section: None,
+                    offset: None,
+                    offset_range: None,
+                    section_offset: None,
+                    section_offset_range: None,
+                    compiled_regex: None,
+                },
+                vec![FileType::Elf],
+                "file2.yaml",
+                1.0,
+                crate::types::Criticality::Hostile,
+            ),
+        ];
+
+        let duplicates = find_atomic_logic_duplicates(&traits);
+        assert_eq!(duplicates.len(), 1);
+        assert!(duplicates[0].2.contains("crit:"));
+    }
+
+    #[test]
+    fn test_atomic_logic_duplicates_same_logic_different_conf() {
+        use crate::capabilities::validation::duplicates::find_atomic_logic_duplicates;
+
+        let traits = vec![
+            create_test_trait_with_conf_crit(
+                "trait_low_conf",
+                Condition::String {
+                    exact: Some("test_pattern".to_string()),
+                    substr: None,
+                    regex: None,
+                    word: None,
+                    case_insensitive: false,
+                    external_ip: false,
+                    section: None,
+                    offset: None,
+                    offset_range: None,
+                    section_offset: None,
+                    section_offset_range: None,
+                    compiled_regex: None,
+                },
+                vec![FileType::Shell],
+                "file1.yaml",
+                0.5,
+                crate::types::Criticality::Notable,
+            ),
+            create_test_trait_with_conf_crit(
+                "trait_high_conf",
+                Condition::String {
+                    exact: Some("test_pattern".to_string()),
+                    substr: None,
+                    regex: None,
+                    word: None,
+                    case_insensitive: false,
+                    external_ip: false,
+                    section: None,
+                    offset: None,
+                    offset_range: None,
+                    section_offset: None,
+                    section_offset_range: None,
+                    compiled_regex: None,
+                },
+                vec![FileType::Shell],
+                "file2.yaml",
+                0.9,
+                crate::types::Criticality::Notable,
+            ),
+        ];
+
+        let duplicates = find_atomic_logic_duplicates(&traits);
+        assert_eq!(duplicates.len(), 1);
+        assert!(duplicates[0].2.contains("conf:"));
+    }
+
+    #[test]
+    fn test_atomic_logic_duplicates_overlapping_for_types() {
+        use crate::capabilities::validation::duplicates::find_atomic_logic_duplicates;
+
+        // Same pattern, overlapping file types (both include Elf), different crit
+        let traits = vec![
+            create_test_trait_with_conf_crit(
+                "trait_elf_macho",
+                Condition::String {
+                    exact: Some("shared_pattern".to_string()),
+                    substr: None,
+                    regex: None,
+                    word: None,
+                    case_insensitive: false,
+                    external_ip: false,
+                    section: None,
+                    offset: None,
+                    offset_range: None,
+                    section_offset: None,
+                    section_offset_range: None,
+                    compiled_regex: None,
+                },
+                vec![FileType::Elf, FileType::Macho],
+                "file1.yaml",
+                1.0,
+                crate::types::Criticality::Notable,
+            ),
+            create_test_trait_with_conf_crit(
+                "trait_elf_pe",
+                Condition::String {
+                    exact: Some("shared_pattern".to_string()),
+                    substr: None,
+                    regex: None,
+                    word: None,
+                    case_insensitive: false,
+                    external_ip: false,
+                    section: None,
+                    offset: None,
+                    offset_range: None,
+                    section_offset: None,
+                    section_offset_range: None,
+                    compiled_regex: None,
+                },
+                vec![FileType::Elf, FileType::Pe],
+                "file2.yaml",
+                1.0,
+                crate::types::Criticality::Hostile,
+            ),
+        ];
+
+        let duplicates = find_atomic_logic_duplicates(&traits);
+        // Should flag: same logic, overlapping types (Elf), different crit
+        assert_eq!(duplicates.len(), 1);
+    }
+
+    #[test]
+    fn test_atomic_logic_duplicates_no_overlap_no_warning() {
+        use crate::capabilities::validation::duplicates::find_atomic_logic_duplicates;
+
+        // Same pattern but disjoint file types - no warning
+        let traits = vec![
+            create_test_trait_with_conf_crit(
+                "trait_macho",
+                Condition::String {
+                    exact: Some("platform_pattern".to_string()),
+                    substr: None,
+                    regex: None,
+                    word: None,
+                    case_insensitive: false,
+                    external_ip: false,
+                    section: None,
+                    offset: None,
+                    offset_range: None,
+                    section_offset: None,
+                    section_offset_range: None,
+                    compiled_regex: None,
+                },
+                vec![FileType::Macho],
+                "file1.yaml",
+                1.0,
+                crate::types::Criticality::Notable,
+            ),
+            create_test_trait_with_conf_crit(
+                "trait_pe",
+                Condition::String {
+                    exact: Some("platform_pattern".to_string()),
+                    substr: None,
+                    regex: None,
+                    word: None,
+                    case_insensitive: false,
+                    external_ip: false,
+                    section: None,
+                    offset: None,
+                    offset_range: None,
+                    section_offset: None,
+                    section_offset_range: None,
+                    compiled_regex: None,
+                },
+                vec![FileType::Pe],
+                "file2.yaml",
+                1.0,
+                crate::types::Criticality::Hostile,
+            ),
+        ];
+
+        let duplicates = find_atomic_logic_duplicates(&traits);
+        // No overlap in file types, so no warning even with different crit
+        assert_eq!(duplicates.len(), 0);
+    }
+
+    #[test]
+    fn test_atomic_logic_duplicates_inert_crit_equivalent() {
+        use crate::capabilities::validation::duplicates::find_atomic_logic_duplicates;
+
+        // Component vs Baseline should NOT trigger a warning (they're equivalent)
+        let traits = vec![
+            create_test_trait_with_conf_crit(
+                "trait_component",
+                Condition::String {
+                    exact: Some("building_block".to_string()),
+                    substr: None,
+                    regex: None,
+                    word: None,
+                    case_insensitive: false,
+                    external_ip: false,
+                    section: None,
+                    offset: None,
+                    offset_range: None,
+                    section_offset: None,
+                    section_offset_range: None,
+                    compiled_regex: None,
+                },
+                vec![FileType::All],
+                "file1.yaml",
+                1.0,
+                crate::types::Criticality::Component,
+            ),
+            create_test_trait_with_conf_crit(
+                "trait_baseline",
+                Condition::String {
+                    exact: Some("building_block".to_string()),
+                    substr: None,
+                    regex: None,
+                    word: None,
+                    case_insensitive: false,
+                    external_ip: false,
+                    section: None,
+                    offset: None,
+                    offset_range: None,
+                    section_offset: None,
+                    section_offset_range: None,
+                    compiled_regex: None,
+                },
+                vec![FileType::All],
+                "file2.yaml",
+                1.0,
+                crate::types::Criticality::Baseline,
+            ),
+        ];
+
+        let duplicates = find_atomic_logic_duplicates(&traits);
+        // Component and Baseline are equivalent, same conf, so no warning
+        assert_eq!(duplicates.len(), 0);
+    }
+
+    #[test]
+    fn test_atomic_logic_duplicates_different_logic_no_warning() {
+        use crate::capabilities::validation::duplicates::find_atomic_logic_duplicates;
+
+        // Different patterns - no warning even with same metadata
+        let traits = vec![
+            create_test_trait_with_conf_crit(
+                "trait_a",
+                Condition::String {
+                    exact: Some("pattern_a".to_string()),
+                    substr: None,
+                    regex: None,
+                    word: None,
+                    case_insensitive: false,
+                    external_ip: false,
+                    section: None,
+                    offset: None,
+                    offset_range: None,
+                    section_offset: None,
+                    section_offset_range: None,
+                    compiled_regex: None,
+                },
+                vec![FileType::All],
+                "file1.yaml",
+                1.0,
+                crate::types::Criticality::Notable,
+            ),
+            create_test_trait_with_conf_crit(
+                "trait_b",
+                Condition::String {
+                    exact: Some("pattern_b".to_string()),
+                    substr: None,
+                    regex: None,
+                    word: None,
+                    case_insensitive: false,
+                    external_ip: false,
+                    section: None,
+                    offset: None,
+                    offset_range: None,
+                    section_offset: None,
+                    section_offset_range: None,
+                    compiled_regex: None,
+                },
+                vec![FileType::All],
+                "file2.yaml",
+                1.0,
+                crate::types::Criticality::Hostile,
+            ),
+        ];
+
+        let duplicates = find_atomic_logic_duplicates(&traits);
+        // Different logic, so no warning
+        assert_eq!(duplicates.len(), 0);
+    }
 }
 
 #[cfg(test)]

@@ -1,0 +1,9 @@
+defaults:
+  for: [shell]
+traits:
+  - id: shell-c2-var
+    desc: Shell script C2 variable
+    crit: suspicious
+    if:
+      type: raw
+      regex: "(^|\n)\\s*([cC][cC2]|url)=[\"']?http[s]?://"

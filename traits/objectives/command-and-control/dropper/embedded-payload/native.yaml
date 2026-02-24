@@ -40,7 +40,30 @@ traits:
       # Require at least one true special char (not $ or _) to exclude
       # Swift mangled symbols and other identifier strings
       # Excludes < and > to avoid matching XML/plist content
-      regex: "[\\w!#%&()*+/=@-]*[!#%&()*+=@][\\w!#%&()*+/=@-]{63}"
+      # Use ASCII-only [A-Za-z0-9_] instead of \w to avoid matching
+      # Unicode/wide-char binary data that the string extractor may emit
+      regex: "[A-Za-z0-9_!#%&()*+/=@-]*[!#%&()*+=@][A-Za-z0-9_!#%&()*+/=@-]{63}"
+    not:
+      # Exclude comment banners and separator lines (e.g. /***...***/)
+      - regex: "^[/*=-]+$"
+      # Exclude C format strings and code templates (contain %s, %d, %@, etc.)
+      - regex: "%[sdfu@]"
+      # Exclude repeated hex format strings (e.g. %02x%02x%02x... for MAC/hash logging)
+      - regex: "(%[0-9]*[xXo]){4}"
+      # Exclude ASCII character tables (sequential printable ASCII ranges)
+      # e.g. !"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ
+      # Common in text editors (vim), libc, and other legitimate binaries
+      - regex: '!"#\$%&'
+      # Exclude Objective-C type encoding strings (method signatures)
+      # e.g. "v176@0:8@16@24@32@40@48@56@64q72i80c84q88q96q104@112..."
+      # These contain @, digits, and type chars (v,i,c,q,B,Q,d,f,etc.)
+      - regex: "^[vV@:iIcCsSqQlLdDfBn^#?{(\\[\\]0-9*]+$"
+      # Exclude C++ mangled symbol names (contain ! from mangling artifacts)
+      # e.g. "!2EP11HALS_SystemRK13audit_token_tibbbjPK10__CFStringxb..."
+      - regex: "HALS_|__CF|RKN?[0-9]|^![0-9]"
+      # Exclude CoreMediaIO HAL property tables (reversed FourCC selectors)
+      # e.g. "vrdsbolgrrdsbolgiccsbolg#mtstpni..." - repeating 4CC+"bolg" patterns
+      - regex: "[a-z]{4}bolg.*[a-z]{4}bolg"
 
 composite_rules:
   # libcurl network dropper: downloads content via libcurl, writes to disk, executes via shell
@@ -78,7 +101,7 @@ composite_rules:
     all:
       - id: micro-behaviors/communications/download/curl::libcurl-http
       - id: micro-behaviors/process/create/shell::shell-execution
-      - id: objectives/anti-static/obfuscation/payload::minimal-imports
+      - id: objectives/anti-static/obfuscation/payload/encrypted::minimal-imports
 
   # Hex-encoded dropper: large hex blob + system() + minimal imports
   # This is a classic dropper pattern: decode hex payload and execute via shell
@@ -92,7 +115,7 @@ composite_rules:
     for: [macho, elf]
     all:
       - id: large-hex-payload
-      - id: objectives/anti-static/obfuscation/payload::minimal-imports
+      - id: objectives/anti-static/obfuscation/payload/encrypted::minimal-imports
       - id: micro-behaviors/process/create/shell::shell-execution
 
   # Obfuscated payload dropper: custom encoding + large payload + exec

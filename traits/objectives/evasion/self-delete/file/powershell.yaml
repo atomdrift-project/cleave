@@ -3,19 +3,19 @@
 # ATT&CK: T1070.004
 
 defaults:
-  for: [powershell, batch, shell]
+  for: [powershell, batch]
   mbc: "F0007"
   attack: "T1070.004"
 
 traits:
-  # Remove-Item cmdlet
+  # Remove-Item cmdlet (PowerShell/batch only - Unix rm is in micro-behaviors)
   - id: remove-item
     desc: Remove-Item cmdlet
     crit: notable
     conf: 0.6
     if:
       type: string
-      regex: "Remove-Item|\\bdel\\b|\\bri\\b|\\brm\\b"
+      regex: "Remove-Item|\\bdel\\b|\\bri\\b"
       case_insensitive: true
 
   # Delete file with .ps1 extension

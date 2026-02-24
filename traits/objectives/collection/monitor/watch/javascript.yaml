@@ -45,7 +45,7 @@ composite_rules:
     attack: "T1113"
     for: [javascript]
     all:
-      - id: micro-behaviors/communications/http/lib/axios::js-axios-post
+      - id: micro-behaviors/communications/http/request::axios-post-call
     any:
       - id: objectives/collection/monitor/watch::js-node-screenshots
       - id: objectives/collection/monitor/watch::js-desktop-screenshot

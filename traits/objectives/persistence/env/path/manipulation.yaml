@@ -3,7 +3,7 @@
 # Detects modification of PATH for persistence or hijacking
 
 defaults:
-  crit: hostile
+  crit: suspicious
   conf: 0.9
   attack: "T1574.007"
 
@@ -16,3 +16,8 @@ composite_rules:
     any:
       - id: micro-behaviors/os/env/vars::setenv
       - id: micro-behaviors/os/env/vars::putenv
+    downgrade:
+      any:
+        - id: metadata/apple::system-component
+        - id: micro-behaviors/dylib/library::terminal-editor-marker
+        - id: micro-behaviors/dylib/library::shell-interpreter

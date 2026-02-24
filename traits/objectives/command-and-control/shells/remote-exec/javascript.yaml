@@ -22,7 +22,7 @@ composite_rules:
     conf: 0.98
     attack: "T1059.003"
     all:
-      - id: micro-behaviors/communications/http/lib/axios::js-axios-get
+      - id: micro-behaviors/communications/http/request::axios-get-call
       - id: micro-behaviors/process/create/shell/lang::js-execsync
-      - id: micro-behaviors/communications/http/lib/axios::js-axios-post
+      - id: micro-behaviors/communications/http/request::axios-post-call
       - id: js-output-command-var

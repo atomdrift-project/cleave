@@ -9,5 +9,12 @@ traits:
     desc: Random variable names
     if:
       type: raw
-      regex: '(\$[A-Z0-9]{5}\s*[=,\[\)]){3,}'
-      count_min: 1
+      regex: '\$[A-Z0-9]{5,}\s*[=,\[\)]'
+      count_min: 3
+
+  - id: ps-alternating-alphanumeric-vars
+    desc: Obfuscated alternating alphanumeric variable names
+    if:
+      type: raw
+      regex: '\$[A-Z][0-9][A-Z][0-9][A-Z0-9]'
+      count_min: 3

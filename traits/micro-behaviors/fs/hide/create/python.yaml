@@ -100,33 +100,42 @@ traits:
   # --- Common development hidden paths (centralized exclusions) ---
   - id: development-path-tox
     desc: "Tox development directory"
+    crit: component
     if: { type: string, substr: ".tox" }
   - id: development-path-cache
     desc: "Cache development directory"
-    if: { type: string, substr: ".cache" }
+    crit: component
+    if: { type: string, regex: '[/\"''\\s].cache[/\"''\\s]' }
   - id: development-path-git
     desc: "Git repository directory"
+    crit: component
     if: { type: string, substr: ".git" }
   - id: development-path-venv
     desc: "Python virtual environment directory"
+    crit: component
     if: { type: string, substr: ".venv" }
   - id: development-path-env
     desc: "Environment configuration file"
+    crit: component
     if:
       type: trait
       id: metadata/quality/config::dotenv-file
   - id: development-path-pytest
     desc: "Pytest cache directory"
+    crit: component
     if: { type: string, substr: ".pytest_cache" }
   - id: development-path-mypy
     desc: "Mypy cache directory"
+    crit: component
     if: { type: string, substr: ".mypy_cache" }
   - id: development-path-build
     desc: "Build output directory"
+    crit: component
     if: { type: raw, regex: '[/"'']\\.build[/"''\\s/]' }
   - id: development-path-dist
     desc: "Distribution output directory"
-    if: { type: string, substr: ".dist" }
+    crit: component
+    if: { type: string, regex: '[/\"''\\s].dist[/\"''\\s]' }
 
 composite_rules:
   - id: development-hidden-paths

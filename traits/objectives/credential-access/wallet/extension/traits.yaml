@@ -160,6 +160,56 @@ traits:
       type: string
       substr: "odbfpeeihdkbihmopkbjmoonfanlbfcl"
 
+  - id: metamask-edge
+    desc: MetaMask Edge extension ID
+    crit: suspicious
+    conf: 0.9
+    attack: "T1555.003"
+    mbc: "B0028"
+    if:
+      type: string
+      substr: "ejbalbakoplchlghecdalmeeeajnimhm"
+
+  - id: coin98
+    desc: Coin98 Wallet extension ID
+    crit: suspicious
+    conf: 0.9
+    attack: "T1555.003"
+    mbc: "B0028"
+    if:
+      type: string
+      substr: "aeachknmefphepccionboohckonoeemg"
+
+  - id: mathwallet
+    desc: MathWallet extension ID
+    crit: suspicious
+    conf: 0.9
+    attack: "T1555.003"
+    mbc: "B0028"
+    if:
+      type: string
+      substr: "hifafgmccdpekplomjjkcfgodnhcellj"
+
+  - id: safepal
+    desc: SafePal extension ID
+    crit: suspicious
+    conf: 0.9
+    attack: "T1555.003"
+    mbc: "B0028"
+    if:
+      type: string
+      substr: "jblndlipeogpafnldhgmapagcccfchpi"
+
+  - id: wombat
+    desc: Wombat Wallet extension ID
+    crit: suspicious
+    conf: 0.9
+    attack: "T1555.003"
+    mbc: "B0028"
+    if:
+      type: string
+      substr: "dlcobpjiigpikoobohmabehhmhfoodbb"
+
   # === Desktop/Universal Wallets (referenced in strings) ===
 
   - id: coinomi
@@ -209,6 +259,11 @@ composite_rules:
       - id: keplr
       - id: rabby
       - id: brave
+      - id: metamask-edge
+      - id: coin98
+      - id: mathwallet
+      - id: safepal
+      - id: wombat
     crit: notable
 
   - id: desktop-wallets
@@ -244,3 +299,8 @@ composite_rules:
       - id: temple
       - id: rabby
       - id: brave
+      - id: metamask-edge
+      - id: coin98
+      - id: mathwallet
+      - id: safepal
+      - id: wombat

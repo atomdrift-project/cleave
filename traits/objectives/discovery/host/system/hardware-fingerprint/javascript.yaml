@@ -268,3 +268,32 @@ composite_rules:
       - id: process-fingerprint-multi
       - id: micro-behaviors/communications/http/post::post
       - id: objectives/discovery/host/fingerprint::json-stringify-call
+
+  - id: js-basic-recon-indicator
+    desc: Basic host recon indicator
+    crit: component
+    for: [javascript, typescript]
+    any:
+      - id: os-hostname-call
+      - id: process-cwd-call
+      - id: os-homedir-call
+
+  - id: js-hex-encoding-indicator
+    desc: Hex encoding indicator
+    crit: component
+    for: [javascript, typescript]
+    any:
+      - id: micro-behaviors/data/encode/hex::buffer-to-hex
+      - id: micro-behaviors/data/encode/hex::buffer-hex
+
+  - id: js-encoded-recon-beacon
+    desc: Encoded basic system reconnaissance beacon
+    crit: hostile
+    conf: 0.90
+    mbc: "E1082"
+    attack: "T1082"
+    for: [javascript, typescript]
+    all:
+      - id: js-basic-recon-indicator
+      - id: js-hex-encoding-indicator
+      - id: objectives/discovery/host/fingerprint::json-stringify-call

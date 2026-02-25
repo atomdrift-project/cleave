@@ -614,6 +614,18 @@ composite_rules:
       - id: desc-dependency-confusion
       - id: desc-placeholder-package
       - id: desc-prevent-squat
+  - id: npm-interactsh-beacon
+    desc: NPM package beaconing to interact.sh
+    crit: hostile
+    conf: 0.95
+    attack: T1048
+    mbc: B0030
+    for:
+      - javascript
+    all:
+      - id: objectives/exfiltration/channel/callback::interact-sh-me-fun
+      - id: small-file-5k
+
   - id: fake-placeholder-noop
     desc: Fake package stub with no module exports
     crit: hostile

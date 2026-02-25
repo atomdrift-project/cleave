@@ -12,4 +12,4 @@ traits:
     if:
       type: ast
       query: |
-        (call function: (identifier) @name (#match? @name "exec"))
+        (call function: (identifier) @name (#eq? @name "exec"))

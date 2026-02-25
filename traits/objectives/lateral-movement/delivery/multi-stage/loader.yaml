@@ -25,13 +25,14 @@ traits:
     if:
       type: import_combination
       suspicious: ["CreateRemoteThread", "WriteProcessMemory", "VirtualAllocEx"]
-      min_suspicious: 1
+      min_suspicious: 2
     attack: "T1055"
     mbc: "C0041"
-    downgrade:
-      any:
-        - type: string
-          substr: "Valve Corp."
+    unless:
+      - type: string
+        substr: "OpenMP Runtime"
+      - type: string
+        substr: "ODBG_Plugin"
 
 composite_rules:
   - id: multi-stage-loader

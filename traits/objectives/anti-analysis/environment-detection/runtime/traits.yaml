@@ -30,7 +30,7 @@ traits:
 composite_rules:
   - id: console-environment-detection
     desc: Console environment detection checks
-    crit: suspicious
+    crit: notable
     conf: 0.75
     platforms:
       - windows
@@ -40,8 +40,10 @@ composite_rules:
     mbc: B0001
     needs: 2
     any:
-      - id: console-check-api
+      - id: objectives/anti-analysis/environment-detection/runtime::console-check-api
       - id: micro-behaviors/hardware/display/screen::write-console-w
+    unless:
+      - id: metadata/vendor/microsoft::openmp-runtime
   - id: environment-aware-malware
     desc: Environment-aware malware adaptation
     crit: suspicious
@@ -71,4 +73,13 @@ composite_rules:
     mbc: B0001
     all:
       - id: environment-aware-malware
-      - id: micro-behaviors/data/control-flow
+    any:
+      - id: objectives/anti-analysis/vm/detect
+      - id: objectives/anti-analysis/sandbox/detect
+      - id: objectives/anti-analysis/debugger/detect
+    downgrade:
+      any:
+        - id: metadata/quality/versioning::pe-version-resource
+        - id: metadata/lang/compiler::ms-visual
+        - id: metadata/format::large-executable
+        - id: metadata/format::many-imports

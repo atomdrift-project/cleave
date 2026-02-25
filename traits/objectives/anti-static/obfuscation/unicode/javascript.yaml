@@ -76,6 +76,12 @@ traits:
       type: string
       regex: "[\\x00-\\x7F]{3,}[^\\x00-\\x7F]{3,}[\\x00-\\x7F]{3,}"
       count_min: 10
+    downgrade:
+      any:
+        - type: basename
+          regex: "locale"
+        - type: string
+          regex: "defineLocale|moment\\.locale"
 
   # Unusual Unicode characters in variable names
   - id: unicode-variable-names

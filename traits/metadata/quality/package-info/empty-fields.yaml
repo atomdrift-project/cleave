@@ -263,6 +263,7 @@ composite_rules:
     for: [package.json]
     all:
       - id: npm-has-name
+      - id: metadata/quality/npm/pkg-meta::npm-has-version
     any:
       - id: npm-empty-description
       - id: npm-no-description
@@ -280,6 +281,7 @@ composite_rules:
     for: [package.json]
     all:
       - id: npm-has-name
+      - id: metadata/quality/npm/pkg-meta::npm-has-version
     needs: 3
     any:
       - id: npm-empty-description

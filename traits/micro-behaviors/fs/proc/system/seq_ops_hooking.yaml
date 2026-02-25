@@ -1,0 +1,18 @@
+traits:
+  - id: proc-dir-entry-seq-ops
+    desc: Access to seq_ops via proc_dir_entry
+    crit: suspicious
+    conf: 1.0
+    for: [all]
+    if:
+      type: raw
+      regex: '->seq_ops'
+
+  - id: proc-dir-entry-proc-ops
+    desc: Access to proc_ops via proc_dir_entry
+    crit: suspicious
+    conf: 1.0
+    for: [all]
+    if:
+      type: raw
+      regex: '->proc_ops'

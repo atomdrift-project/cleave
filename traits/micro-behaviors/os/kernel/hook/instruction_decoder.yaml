@@ -1,0 +1,55 @@
+defaults:
+  for: [all]
+
+traits:
+  - id: x86-opcode-prefix-rex
+    desc: Scanning for x86 REX prefix
+    crit: component
+    conf: 0.7
+    if:
+      type: raw
+      substr: "0x40"
+
+  - id: x86-opcode-prefix-66
+    desc: Scanning for x86 0x66 prefix
+    crit: component
+    conf: 0.7
+    if:
+      type: raw
+      substr: "0x66"
+
+  - id: x86-opcode-prefix-0f
+    desc: Scanning for x86 0x0F prefix
+    crit: component
+    conf: 0.7
+    if:
+      type: raw
+      substr: "0x0F"
+
+  - id: x86-modrm-shift
+    desc: Decoding x86 ModR/M shift
+    crit: component
+    conf: 0.8
+    if:
+      type: raw
+      regex: 'modrm\s*>>\s*6'
+
+  - id: x86-modrm-mask
+    desc: Decoding x86 ModR/M mask
+    crit: component
+    conf: 0.8
+    if:
+      type: raw
+      regex: 'modrm\s*&\s*0x7'
+
+composite_rules:
+  - id: lkm-instruction-decoder
+    desc: Kernel module contains x86 instruction length decoder
+    crit: suspicious
+    conf: 0.9
+    all:
+      - id: micro-behaviors/os/kernel/hook::x86-opcode-prefix-rex
+      - id: micro-behaviors/os/kernel/hook::x86-opcode-prefix-66
+      - id: micro-behaviors/os/kernel/hook::x86-opcode-prefix-0f
+      - id: micro-behaviors/os/kernel/hook::x86-modrm-shift
+      - id: micro-behaviors/os/kernel/hook::x86-modrm-mask

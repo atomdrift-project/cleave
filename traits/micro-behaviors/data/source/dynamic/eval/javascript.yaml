@@ -15,11 +15,11 @@ traits:
     for: [javascript]
     if:
       type: raw
-      regex: '\b(return|=)\s*eval\b'
+      regex: '\b(return|=)\s*eval\s*[^(]'
 
   - id: new-function-iife
     desc: Immediate invocation of new Function (dynamic execution)
-    crit: suspicious
+    crit: notable
     conf: 0.9
     attack: T1027
     mbc: B0032
@@ -40,12 +40,12 @@ traits:
           ]
           (#eq? @name "Function")
         )
-composite_rules:
-  - id: js-eval-assignment
-    desc: Assignment or return of 'eval' function reference
-    crit: suspicious
-    conf: 0.8
-    for: [javascript]
-    any:
-      - id: js-eval-assignment-keyword
-      - id: js-eval-assignment-return
+    downgrade:
+      any:
+        - id: metadata/dev/testing::test-basename-pattern
+        - id: metadata/quality/testing::test-directory
+        - id: metadata/dev/testing::test-function-def
+    unless:
+      - type: raw
+        regex: 'require\("\.\./transformation"\)'
+

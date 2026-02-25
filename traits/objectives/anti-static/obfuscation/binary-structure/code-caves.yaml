@@ -142,9 +142,10 @@ composite_rules:
       - id: low-entropy-executable
     downgrade:
       any:
-        - id: metadata/lang/compiler::vcruntime
+        - id: metadata/lang/compiler::msvc
         - id: metadata/format/pe::dotnet-assembly  # .NET IL has normal null padding/alignment
         - id: metadata/format::no-imports  # Data-only DLLs (keyboard layouts, codepage tables) have null padding as data structure
+        - id: metadata/format::many-imports
 
   # Injection-ready code cave
   - id: injection-ready-cave
@@ -156,6 +157,11 @@ composite_rules:
     any:
       - id: objectives/anti-static/obfuscation/payload::extreme-minimal-imports
       - id: objectives/anti-static/hardening/memory::wx-section
+    unless:
+      - type: section
+        substr: '.aspr'
+      - type: raw
+        substr: "BSJB"  # .NET NI (NGEN) DLLs have null padding + RWX sections by design
 
   # Suspicious padding pattern
   - id: suspicious-padding

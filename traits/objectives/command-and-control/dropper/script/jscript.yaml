@@ -14,6 +14,19 @@ composite_rules:
       - id: micro-behaviors/fs/write/file::adodb-stream-write
       - id: micro-behaviors/os/fs/write::adodb-save-to-file
 
+  - id: jscript-embedded-base64-adodb-dropper
+    desc: "JScript embedded base64 payload drop-and-exec"
+    crit: hostile
+    conf: 0.98
+    attack: "T1059.007"
+    platforms: [windows]
+    for: [javascript]
+    all:
+      - id: micro-behaviors/data/encode/base64::msxml-bin-base64-decode
+      - id: micro-behaviors/fs/write/file::adodb-stream
+      - id: micro-behaviors/os/fs/write::adodb-save-to-file
+      - id: micro-behaviors/process/create/shell/wsh::wscript-shell-run
+
   - id: jscript-rundll32-dropper
     desc: "JScript dropper that executes payload via rundll32"
     crit: hostile

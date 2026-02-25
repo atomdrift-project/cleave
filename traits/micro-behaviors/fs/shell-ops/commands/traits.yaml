@@ -9,7 +9,7 @@ traits:
   # === Shell File Operations ===
   - id: shell-file-operation
     desc: Perform file operation through shell
-    crit: suspicious
+    crit: notable
     conf: 0.75
     if:
       type: symbol

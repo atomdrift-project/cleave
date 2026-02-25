@@ -89,14 +89,22 @@ traits:
   if:
     type: string
     regex: \b(mnemonic|seed)\b.{0,40}\b(split|len|count)\b
-- id: word-count-check-prefix-words
-  desc: Mnemonic word count validation (words/phrase)
+- id: word-count-check-prefix-phrase
+  desc: Mnemonic word count validation (phrase)
   conf: 0.85
   crit: suspicious
   for: [python, javascript, typescript, ruby, php, perl, go, java, csharp]
   if:
     type: string
-    regex: \bwords?\b.{0,40}\b(split|len|count)\b
+    regex: \bphrase\b.{0,40}\b(split|len|count)\b
+- id: word-count-check-prefix-words
+  desc: Mnemonic word count validation (words)
+  conf: 0.85
+  crit: suspicious
+  for: [python, javascript, typescript, ruby, php, perl, go, java, csharp]
+  if:
+    type: string
+    regex: \b(secret|seed)_?words\b.{0,40}\b(split|len|count)\b
 - id: bip39-wordlist
   desc: BIP-39 wordlist reference
   conf: 0.85
@@ -162,6 +170,7 @@ composite_rules:
   desc: Mnemonic word count validation prefix
   any:
   - id: word-count-check-prefix-mnemonic
+  - id: word-count-check-prefix-phrase
   - id: word-count-check-prefix-words
 - id: bitcoin-wif
   desc: Bitcoin WIF private key format

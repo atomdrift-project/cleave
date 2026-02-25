@@ -8,6 +8,7 @@ traits:
     for:
       - javascript
       - typescript
+    size_max: 50000
     if:
       type: raw
       regex: 'for\s*\([^)]{0,120}\)\s*\{.{0,250}\w+\s*\+=\s*\w+\s*\[\s*\w+\s*\]'

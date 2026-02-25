@@ -212,6 +212,26 @@ traits:
           function: (identifier) @func
           (#eq? @func "atob"))
 
+  - id: msxml-createelement-base64data
+    desc: MSXML createElement Base64Data node
+    for: [javascript, vbs]
+    crit: notable
+    conf: 0.9
+    platforms: [windows]
+    if:
+      type: raw
+      regex: "(?i)createElement\\s*\\(\\s*['\"]Base64Data['\"]\\s*\\)"
+
+  - id: msxml-datatype-bin-base64
+    desc: MSXML dataType set to bin.base64
+    for: [javascript, vbs]
+    crit: notable
+    conf: 0.9
+    platforms: [windows]
+    if:
+      type: raw
+      regex: "(?i)dataType\\s*=\\s*['\"]bin\\.base64['\"]"
+
   # === Ruby Traits ===
   - id: base64-decode
     desc: Ruby Base64 decode
@@ -258,15 +278,13 @@ composite_rules:
       - id: decodestring-call
       - id: codecs-decode-base64
       - id: importlib-base64
-      - id: std-encoding-decode-string
-      - id: raw-std-encoding-decode-string
-      - id: url-encoding-decode-string
-      - id: raw-url-encoding-decode-string
-      - id: std-encoding-decode
-      - id: new-decoder
-      - id: buffer-from-base64
-      - id: atob-decode
-      - id: base64-decode
-      - id: base64-urlsafe-decode
-      - id: decode64-symbol
-      - id: micro-behaviors/data/encode/base85::b85decode-call
+
+  - id: msxml-bin-base64-decode
+    desc: MSXML decodes bin.base64 payload (WSH)
+    for: [javascript, vbs]
+    crit: suspicious
+    conf: 0.95
+    platforms: [windows]
+    all:
+      - id: msxml-createelement-base64data
+      - id: msxml-datatype-bin-base64

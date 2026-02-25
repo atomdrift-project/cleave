@@ -1,0 +1,52 @@
+# Resource-only PE traits
+defaults:
+  for: [pe]
+
+traits:
+  - id: mui-string
+    desc: "MUI resource file identifier"
+    crit: component
+    conf: 0.9
+    if:
+      type: string
+      regex: "(?i)\\.mui\\b"
+
+  - id: large-single-section
+    desc: "Single section takes >85% of binary"
+    crit: component
+    conf: 0.9
+    if:
+      type: metrics
+      field: binary.largest_section_ratio
+      min: 0.85
+
+  - id: resources-dll-extension
+    desc: ".resources.dll satellite assembly"
+    crit: component
+    conf: 0.9
+    if:
+      type: basename
+      regex: "(?i)\\.resources\\.dll$"
+
+  - id: low-code-entropy
+    desc: "Very low code entropy, minimal code"
+    crit: component
+    conf: 0.8
+    if:
+      type: metrics
+      field: binary.code_entropy
+      max: 2.0
+
+composite_rules:
+  - id: resource-only-dll
+    desc: "PE file consisting primarily of resources (e.g., .mui, UI localization)"
+    crit: baseline
+    conf: 0.9
+    all:
+      - id: metadata/format::no-imports
+      - id: metadata/format::no-functions
+    any:
+      - id: mui-string
+      - id: large-single-section
+      - id: resources-dll-extension
+      - id: low-code-entropy

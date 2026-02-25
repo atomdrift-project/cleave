@@ -72,6 +72,7 @@ composite_rules:
   - id: micro-behaviors/mem/protect/modify::virtual-protect
   unless:
   - id: objectives/anti-static/obfuscation/imports/minimal-concealment::concealed-capabilities-pe__unless_1
+  - id: metadata/format::many-imports
 - id: import-concealed-ransomware-pattern
   desc: Ransomware with concealed import table
   crit: hostile

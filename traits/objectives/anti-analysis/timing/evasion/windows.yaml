@@ -34,13 +34,23 @@ composite_rules:
 
   - id: timing-anti-debug
     desc: Timing-based anti-debugging pattern
-    crit: suspicious
+    crit: notable
     conf: 0.9
     all:
       - id: high-res-timing
     any:
       - id: objectives/anti-analysis/debugger/detect::debugger-api
       - id: micro-behaviors/process/terminate/kill::exit-process
+    downgrade:
+      any:
+        - type: section
+          substr: '.aspr'
+        - id: metadata/vendor/microsoft::openmp-runtime
+        - id: metadata/quality/versioning::pe-version-resource
+        - id: metadata/lang/compiler::msvc
+        - id: metadata/signed/platform::microsoft
+        - id: metadata/vendor/microsoft::is-microsoft-named
+        - id: metadata/vendor/microsoft::is-windows-named
 
   - id: timing-sandbox-evasion
     desc: Timing-based sandbox evasion
@@ -51,3 +61,17 @@ composite_rules:
     any:
       - id: objectives/anti-analysis/vm/detect
       - id: objectives/anti-analysis/sandbox/detect
+    downgrade:
+      any:
+        - type: section
+          substr: '.aspr'
+        - id: metadata/vendor/microsoft::openmp-runtime
+        - id: metadata/quality/versioning::pe-version-resource
+        - id: metadata/lang/compiler::msvc
+        - id: metadata/lang/compiler::clang-string
+        - id: metadata/format/extension::py
+        - id: metadata/signed/platform::microsoft
+        - id: metadata/vendor/microsoft::is-microsoft-named
+        - id: metadata/vendor/microsoft::is-windows-named
+        - id: metadata/format::large-executable
+        - id: metadata/format::many-imports

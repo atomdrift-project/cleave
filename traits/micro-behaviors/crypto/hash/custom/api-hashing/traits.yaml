@@ -1,0 +1,25 @@
+# Custom API Hashing
+
+defaults:
+  for: [all]
+
+traits:
+  - id: custom-asm-api-hash
+    desc: Custom API name hashing loop in assembly
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: raw
+      regex: 'lodsb\s+or\s+al,al\s+jz\s+\S+\s+add\s+cl,al\s+rol\s+eax,cl\s+add\s+ecx,eax'
+    attack: "T1027.002"
+
+  - id: pushad-lodsb-loop
+    desc: Assembly loop using LODSB after PUSHAD
+    crit: notable
+    conf: 0.8
+    if:
+      type: raw
+      regex: 'pushad\s+(.|
+)+?lodsb\s+(.|
+)+?popad'
+    attack: "T1027.002"

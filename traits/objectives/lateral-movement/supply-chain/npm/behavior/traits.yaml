@@ -130,7 +130,7 @@ traits:
       regex: 'stdio:\s*\[.{0,50}ignore'
   - id: small-file-5k
     desc: Small file under 5KB
-    crit: notable
+    crit: component
     conf: 0.7
     for:
       - javascript

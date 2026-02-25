@@ -48,7 +48,7 @@ traits:
     desc: __import__ dynamic import
     mbc: E1014
     attack: T1027
-    crit: suspicious
+    crit: notable
     conf: 0.85
     for: [python]
     if:

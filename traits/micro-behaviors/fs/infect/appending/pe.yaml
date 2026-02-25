@@ -1,0 +1,35 @@
+# PE Appending Infection
+defaults:
+  for: [all]
+traits:
+  - id: last-section-append-logic-1
+    desc: Find last section in PE header
+    crit: component
+    if:
+      type: raw
+      regex: 'SH_NumberOfSections\s*\]\s*dec\s+ecx'
+  - id: last-section-append-logic-2
+    desc: Access last section RawData
+    crit: component
+    if:
+      type: raw
+      regex: 'lea\s+esi,\[esi\+eax\]\s+lea\s+edx,\[esi\.SH_SizeOfRawData\]'
+  - id: pe-virus-size-macro
+    desc: Virus size macro
+    crit: component
+    if:
+      type: raw
+      regex: 'add\s+dword\s+\[edx\],TAILLE_VIRUS'
+composite_rules:
+  - id: pe-last-section-append
+    desc: Appends code to the last section of a PE file
+    crit: suspicious
+    conf: 0.95
+    attack: "T1542.001"
+    all:
+      - id: micro-behaviors/fs/infect/appending::last-section-append-logic-1
+      - id: micro-behaviors/fs/infect/appending::last-section-append-logic-2
+      - id: micro-behaviors/fs/infect/appending::pe-virus-size-macro
+    unless:
+      - type: string
+        substr: "OpenMP Runtime"

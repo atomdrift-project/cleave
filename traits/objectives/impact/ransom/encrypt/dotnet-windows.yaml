@@ -1,0 +1,22 @@
+defaults:
+  for: [pe, dll]
+
+composite_rules:
+  - id: dotnet-note-ext-crypto
+    desc: Dotnet ransomware note extension crypto pattern
+    crit: hostile
+    conf: 0.97
+    attack: "T1486"
+    mbc: "C0027"
+    all:
+      - id: micro-behaviors/data/text/malware::ransom-extension-filepicker-filter
+      - id: micro-behaviors/crypto/asymmetric/rsa::dotnet-rsa-key-wrap
+      - id: micro-behaviors/crypto/symmetric/aes::dotnet-aes-rsa-hybrid-keywrap-pattern
+    any:
+      - id: micro-behaviors/data/text/malware::ransom-ui-files-encrypted
+      - id: micro-behaviors/data/text/malware::ransom-ui-decryption-fee
+      - id: objectives/impact/ransom/encrypt::ransom-note-text
+      - id: objectives/impact/ransom/encrypt::crypted-counter
+    downgrade:
+      any:
+        - id: metadata/signed/platform::apple

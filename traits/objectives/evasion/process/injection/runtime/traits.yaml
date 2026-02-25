@@ -9,7 +9,7 @@ traits:
   # === Memory Manipulation for Code Execution ===
   - id: write-process-memory
     desc: Write memory to target process
-    crit: suspicious
+    crit: notable
     conf: 0.95
     attack: "T1055"
     mbc: "C0032"
@@ -24,7 +24,7 @@ traits:
 
   - id: read-process-memory
     desc: Read memory from target process
-    crit: suspicious
+    crit: notable
     conf: 0.95
     attack: "T1005"
     if:
@@ -38,27 +38,13 @@ traits:
 
   - id: create-remote-thread
     desc: Create thread in target process
-    crit: suspicious
+    crit: notable
     conf: 0.98
     attack: "T1055.001"
     mbc: "B0013"
     if:
       type: symbol
       exact: "CreateRemoteThread"
-    downgrade:
-      any:
-        - type: string
-          substr: "ApiSet Stub DLL"
-        - id: metadata/vendor/valve/valve-corp-binary
-
-  - id: create-remote-thread-ex
-    desc: Extended remote thread creation
-    crit: suspicious
-    conf: 0.98
-    attack: "T1055.001"
-    if:
-      type: symbol
-      exact: "CreateRemoteThreadEx"
     downgrade:
       any:
         - type: string
@@ -77,7 +63,7 @@ traits:
 
   - id: set-thread-context
     desc: Modify thread context/registers
-    crit: suspicious
+    crit: notable
     conf: 0.95
     attack: "T1055"
     if:
@@ -90,10 +76,13 @@ traits:
         - type: string
           substr: "ApiSet Stub DLL"
         - id: metadata/vendor/valve/valve-corp-binary
+    unless:
+      - type: basename
+        regex: '\.pyd$'
 
   - id: get-thread-context
     desc: Read thread context/registers
-    crit: suspicious
+    crit: notable
     conf: 0.90
     attack: "T1005"
     if:
@@ -106,10 +95,13 @@ traits:
         - type: string
           substr: "ApiSet Stub DLL"
         - id: metadata/vendor/valve/valve-corp-binary
+    unless:
+      - type: basename
+        regex: '\.pyd$'
 
   - id: suspend-thread
     desc: Suspend thread execution
-    crit: suspicious
+    crit: notable
     conf: 0.90
     attack: "T1055"
     if:
@@ -120,6 +112,9 @@ traits:
         - type: string
           substr: "ApiSet Stub DLL"
         - id: metadata/vendor/valve/valve-corp-binary
+    unless:
+      - type: basename
+        regex: '\.pyd$'
 
   - id: resume-thread
     desc: Resume thread execution
@@ -134,3 +129,15 @@ traits:
         - type: string
           substr: "ApiSet Stub DLL"
         - id: metadata/vendor/valve/valve-corp-binary
+
+composite_rules:
+  - id: create-remote-thread-ex
+    desc: Extended remote thread creation
+    crit: notable
+    conf: 0.98
+    attack: "T1055.001"
+    all:
+      - id: micro-behaviors/mem/exec/fileless::create-thread-sym
+    unless:
+      - type: string
+        substr: "OpenMP Runtime"

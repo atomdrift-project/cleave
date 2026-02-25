@@ -5,7 +5,7 @@
 traits:
   - id: memfd-create
     desc: Create anonymous memory file (memfd_create)
-    crit: suspicious
+    crit: notable
     conf: 0.8
     attack: "T1055"
     mbc: "B0033"

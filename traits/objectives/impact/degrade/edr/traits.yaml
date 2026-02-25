@@ -208,3 +208,8 @@ composite_rules:
       - id: micro-behaviors/process/terminate/kill::terminate-process
     all:
       - id: edr-product-name
+    downgrade:
+      any:
+        - id: metadata/vendor/microsoft::is-microsoft-named
+        - id: metadata/vendor/microsoft::is-defender-named
+        - id: metadata/signed/platform::microsoft

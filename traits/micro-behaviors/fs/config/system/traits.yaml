@@ -9,7 +9,7 @@ traits:
   # === INI File Operations ===
   - id: write-private-profile
     desc: Write to INI config file
-    crit: suspicious
+    crit: notable
     conf: 0.75
     if:
       type: symbol
@@ -25,7 +25,7 @@ traits:
 
   - id: write-profile-section
     desc: Write INI section
-    crit: suspicious
+    crit: notable
     conf: 0.75
     if:
       type: symbol

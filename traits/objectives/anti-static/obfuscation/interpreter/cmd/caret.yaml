@@ -15,7 +15,7 @@ traits:
     desc: Heavy caret obfuscation in string
     crit: notable
     if:
-      type: raw
+      type: string
       # Detects patterns like P^o^w^e^r^s^h^e^l^l or c^m^d
       # Look for at least 4 carets in close proximity (3 escaped segments)
       regex: "\\^[a-zA-Z0-9]\\^[a-zA-Z0-9]\\^[a-zA-Z0-9]\\^"
@@ -24,8 +24,10 @@ traits:
     desc: Excessive caret usage (raw match)
     crit: notable
     if:
-      type: raw
-      regex: "(\\^[a-zA-Z0-9]{0,2}){5,}"  # 5+ carets with alphanumeric chars between
+      type: string
+      regex: "(\\^[a-zA-Z0-9]{1,2}){5,}"  # 5+ carets with alphanumeric chars between
+    not:
+      - regex: "(\\^[A-Z]){5,}" # Likely control character representations like ^A^B^C
 
 composite_rules:
   - id: cmd-caret-excessive

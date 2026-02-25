@@ -8,7 +8,7 @@ traits:
     conf: 0.95
     if:
       type: string
-      regex: (__webpack_require__|webpackChunk|__webpack_modules__)
+      regex: (webpackChunk|__webpack_modules__)
 
   - id: rollup-bundled
     desc: Code bundled with rollup

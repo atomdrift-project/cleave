@@ -30,6 +30,24 @@ traits:
       type: string
       substr: "RSA_public_encrypt"
 
+  - id: dotnet-rsa-x509-public-import-raw
+    desc: Dotnet X509 RSA public key import
+    crit: notable
+    conf: 0.85
+    for: [pe, dll]
+    if:
+      type: raw
+      substr: "CreateRsaFromX509PublicKey"
+
+  - id: dotnet-rsa-padding-raw
+    desc: Dotnet RSA encryption padding API
+    crit: notable
+    conf: 0.8
+    for: [pe, dll]
+    if:
+      type: raw
+      substr: "RSAEncryptionPadding"
+
   - id: evp-pkey-ref
     desc: EVP_PKEY reference
     crit: baseline
@@ -47,3 +65,12 @@ composite_rules:
       - id: rsa-public-decrypt
       - id: rsa-public-encrypt
       - id: evp-pkey-ref
+
+  - id: dotnet-rsa-key-wrap
+    desc: Dotnet RSA key wrapping operations
+    crit: suspicious
+    conf: 0.9
+    for: [pe, dll]
+    all:
+      - id: dotnet-rsa-x509-public-import-raw
+      - id: dotnet-rsa-padding-raw

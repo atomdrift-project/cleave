@@ -16,7 +16,7 @@ traits:
     for: [javascript]
     if:
       type: raw
-      regex: '\[[^\]]{0,120}\bthis\b[^\]]{0,120}\]\s*\[\s*\d+\s*\]'
+      regex: '\[[^\]]{0,120}\bthis\b\s*[,\]][^\]]{0,120}\]\s*\[\s*\d+\s*\]'
 
   - id: js-array-dynamic-execution
     desc: Dynamic execution via indexed array literal (new

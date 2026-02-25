@@ -234,6 +234,16 @@ traits:
   if:
     type: string
     substr: '"devDependencies":'
+- id: npm-has-version
+  desc: npm package has version field
+  crit: baseline
+  conf: 1.0
+  for:
+  - package.json
+  if:
+    type: kv
+    path: "version"
+    exists: true
 - id: pkg-skeleton-small
   desc: Tiny package.json (metadata only)
   crit: notable

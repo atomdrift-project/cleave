@@ -19,7 +19,7 @@ traits:
 
   - id: virtual-protect-ex
     desc: Extended memory protection modification
-    crit: suspicious
+    crit: notable
     conf: 0.95
     attack: "T1222.001"
     if:

@@ -7,21 +7,21 @@ defaults:
 traits:
   # save-to-file fragments
   - id: save-to-file-fragment-saveto
-    desc: SaveToFile string fragment (saveTo)
+    desc: SaveToFile string fragment (SaveToF)
     if:
-      type: raw
-      substr: 'saveTo'
+      type: string
+      substr: 'SaveToF'
 
   - id: save-to-file-fragment-veto
     desc: SaveToFile string fragment (veTo)
     if:
-      type: raw
+      type: string
       substr: 'veTo'
 
   - id: save-to-file-fragment-etof
     desc: SaveToFile string fragment (eToF)
     if:
-      type: raw
+      type: string
       substr: 'eToF'
 
   # ADODB Type

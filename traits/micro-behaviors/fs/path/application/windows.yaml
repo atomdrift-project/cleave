@@ -51,4 +51,4 @@ traits:
     mbc: E1083
     if:
       type: string
-      regex: '(?i)(Extensions|Local Extension Settings|Extension State)\\\\'
+      regex: '(?i)User Data\\\\.{1,30}\\\\Extensions\\\\'

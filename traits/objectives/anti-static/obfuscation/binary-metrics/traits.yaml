@@ -96,6 +96,10 @@ traits:
       - type: metrics
         field: binary.import_density
         max: 0
+    downgrade:
+      any:
+        - type: section
+          substr: '.aspr'
 
   - id: many-wx-sections
     desc: "Multiple W+X sections (packer pattern)"
@@ -116,6 +120,10 @@ traits:
         field: elf.e_type
         min: 1
         max: 1
+    downgrade:
+      any:
+        - type: section
+          substr: '.aspr'
 
   - id: high-section-name-entropy
     desc: "High entropy section names (packer"
@@ -139,6 +147,14 @@ traits:
       type: metrics
       field: binary.largest_section_ratio
       min: 0.85
+    unless:
+      - type: metrics
+        field: binary.import_density
+        max: 0
+      # .NET assemblies naturally have a single large .text section
+      # containing all IL code + metadata - not a packing indicator
+      - type: raw
+        regex: 'BSJB'
 
   # === Import Anomalies ===
   - id: high-import-entropy

@@ -5,7 +5,7 @@ defaults:
 traits:
   - id: exec-builtin
     desc: "Python exec() built-in function"
-    crit: suspicious
+    crit: notable
     conf: 0.9
     attack: "T1059.006"
     mbc: "E1059"

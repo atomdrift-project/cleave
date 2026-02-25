@@ -1,0 +1,15 @@
+# Swift Network.framework socket receive patterns
+
+defaults:
+  for: [macho]
+
+traits:
+  - id: nwconnection-receive
+    desc: Swift NWConnection receive call
+    crit: notable
+    conf: 0.85
+    mbc: "C0001"
+    attack: "T1071"
+    if:
+      type: symbol
+      regex: "NWConnection.{0,80}receive"

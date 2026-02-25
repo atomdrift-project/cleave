@@ -1,0 +1,32 @@
+# Assembly Relocatable Code (Delta Offset)
+
+defaults:
+  for: [all]
+
+traits:
+  - id: asm-delta-offset
+    desc: Assembly delta offset calculation or IP retrieval
+    crit: notable
+    conf: 0.8
+    if:
+      type: raw
+      regex: 'call\s+\S+\s+(\S+:)?\s+pop\s+(e[abcd]x|e[sd]i|e[bc]p)'
+    unless:
+      - type: raw
+        regex: 'call\s+aligne\s+pop\s+ecx'
+
+  - id: asm-sub-reg-label
+    desc: Assembly subtraction of label from register
+    crit: component
+    if:
+      type: raw
+      regex: 'sub\s+(e[abcd]x|e[sd]i|e[bc]p),\s*[a-zA-Z0-9_$]+'
+
+composite_rules:
+  - id: asm-delta-offset-classic
+    conf: 0.95
+    crit: suspicious
+    desc: Classic assembly delta offset with subtraction
+    all:
+      - id: micro-behaviors/data/source/relocatable/asm-delta::asm-delta-offset
+      - id: micro-behaviors/data/source/relocatable/asm-delta::asm-sub-reg-label

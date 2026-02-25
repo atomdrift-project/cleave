@@ -11,6 +11,7 @@ composite_rules:
     desc: Obfuscated JScript Dropper using fragmented strings
     conf: 0.95
     crit: hostile
+    size_max: 500000
     all:
       - id: objectives/execution/interpreter/script/wsh::wscript-shell-fragment
       - id: objectives/execution/interpreter/script/wsh::adodb-fragment

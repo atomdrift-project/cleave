@@ -9,3 +9,5 @@ composite_rules:
     all:
       - id: micro-behaviors/data/embedded/payload::pe-magic-embedded
       - id: micro-behaviors/data/embedded/certificate::pkcs7-signeddata-oid
+    none:
+      - id: micro-behaviors/data/embedded/payload::pe-magic-in-rsrc

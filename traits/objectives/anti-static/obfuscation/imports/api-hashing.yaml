@@ -108,3 +108,5 @@ composite_rules:
       - id: djb2-hash-constant
       - id: fnv1a-offset-basis
       - id: peb-ldr-access
+    none:
+      - id: metadata/format/pe::dotnet-assembly

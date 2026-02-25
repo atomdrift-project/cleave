@@ -18,16 +18,6 @@ traits:
           )
         )
 
-  - id: dynamic-code-exec
-    desc: Dynamic code execution call
-    crit: suspicious
-    conf: 1.0
-    attack: T1027
-    mbc: B0032
-    if:
-      type: raw
-      regex: '\bnew Function\b'
-
   - id: math-random-index
     desc: Math.random used for indexing (probabilistic character selection)
     crit: notable
@@ -68,7 +58,7 @@ composite_rules:
     mbc: B0032
     all:
       - id: math-random-call
-      - id: dynamic-code-exec
+      - id: objectives/anti-static/obfuscation/strings/encoding::js-new-function
     downgrade:
       any:
         - id: metadata/library/jquery::domain
@@ -76,3 +66,5 @@ composite_rules:
         - id: metadata/library/jquery::copyright
         - id: metadata/library/jquery::fn-extend
         - id: metadata/library/d3::d3-detection
+        - id: metadata/library/structure::js-webpack-bundle
+        - id: metadata/library/structure::js-umd-wrapper-any

@@ -28,7 +28,7 @@ traits:
     for: [javascript, typescript]
     if:
       type: string
-      regex: 'ydo'
+      regex: 'ydoB'
 
   - id: js-split-reverse-join
     desc: String reversal via split-reverse-join

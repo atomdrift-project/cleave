@@ -45,3 +45,67 @@ traits:
     if:
       type: string
       substr: "security export"
+
+  - id: secitem-copy-matching-api
+    desc: Read keychain item via API
+    crit: notable
+    conf: 0.9
+    mbc: T1555.001
+    attack: T1555.001
+    platforms: [macos, ios]
+    for: [macho]
+    if:
+      type: symbol
+      exact: "SecItemCopyMatching"
+
+  - id: secitem-add-api
+    desc: Add keychain item via API
+    crit: notable
+    conf: 0.85
+    mbc: T1555.001
+    attack: T1555.001
+    platforms: [macos, ios]
+    for: [macho]
+    if:
+      type: symbol
+      exact: "SecItemAdd"
+
+  - id: secitem-delete-api
+    desc: Delete keychain item via API
+    crit: notable
+    conf: 0.85
+    mbc: T1555.001
+    attack: T1555.001
+    platforms: [macos, ios]
+    for: [macho]
+    if:
+      type: symbol
+      exact: "SecItemDelete"
+
+  - id: secclass-generic-password
+    desc: Generic password class key
+    crit: notable
+    conf: 0.8
+    mbc: T1555.001
+    attack: T1555.001
+    platforms: [macos, ios]
+    for: [macho]
+    if:
+      type: symbol
+      exact: "kSecClassGenericPassword"
+
+composite_rules:
+  - id: keychain-item-crud
+    desc: Keychain CRUD API usage
+    crit: suspicious
+    conf: 0.9
+    mbc: T1555.001
+    attack: T1555.001
+    platforms: [macos, ios]
+    for: [macho]
+    needs: 2
+    any:
+      - id: secitem-copy-matching-api
+      - id: secitem-add-api
+      - id: secitem-delete-api
+      - id: secclass-generic-password

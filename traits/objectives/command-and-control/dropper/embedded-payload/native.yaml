@@ -35,15 +35,19 @@ traits:
     attack: "T1027"
     if:
       type: string
-      # Custom base64 alphabet: 64 mixed chars with special characters
-      # Real custom alphabets always contain special chars (+ / = * etc.)
-      # Require at least one true special char (not $ or _) to exclude
-      # Swift mangled symbols and other identifier strings
-      # Excludes < and > to avoid matching XML/plist content
-      # Use ASCII-only [A-Za-z0-9_] instead of \w to avoid matching
-      # Unicode/wide-char binary data that the string extractor may emit
-      regex: "[A-Za-z0-9_!#%&()*+/=@-]*[!#%&()*+=@][A-Za-z0-9_!#%&()*+/=@-]{63}"
+      # Custom base64 alphabet: exactly 64 mixed chars with special characters
+      regex: "^[A-Za-z0-9_!#%&()*+/=@-]{64}$"
     not:
+      # Exclude purely alphanumeric/underscore strings (no special chars)
+      - regex: "^[A-Za-z0-9_]+$"
+      # Exclude standard base64 alphabets and common variants
+      - exact: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+      - exact: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
+      - exact: "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz+/"
+      - exact: "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz-_"
+      - exact: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789+/"
+      - exact: "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ@_"
+      - exact: "-0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ_abcdefghijklmnopqrstuvwxyz"
       # Exclude comment banners and separator lines (e.g. /***...***/)
       - regex: "^[/*=-]+$"
       # Exclude C format strings and code templates (contain %s, %d, %@, etc.)
@@ -73,6 +77,23 @@ traits:
       - regex: "@[A-Za-z].*@[A-Za-z].*@[A-Za-z]"
 
 composite_rules:
+  # PE staged loader pattern: resource extraction plus runtime API resolution.
+  # Kept suspicious (not hostile) because some installers/updaters can use parts
+  # of this chain legitimately.
+  - id: pe-resource-staged-loader
+    desc: PE resource staged loader chain
+    crit: suspicious
+    conf: 0.88
+    attack: "T1027.009"
+    for: [pe, dll]
+    size_max: 524288
+    all:
+      - id: micro-behaviors/data/embedded/payload::pe-resource-loader-api-chain
+      - id: micro-behaviors/dylib/lookup::get-proc-address
+    any:
+      - id: micro-behaviors/mem/protect/modify::virtual-alloc
+      - id: objectives/anti-analysis/timing/evasion::timing-delta-check
+
   # libcurl network dropper: downloads content via libcurl, writes to disk, executes via shell
   # Pattern seen in kworker_pretenders malware family (2024):
   # - Uses libcurl to download payloads

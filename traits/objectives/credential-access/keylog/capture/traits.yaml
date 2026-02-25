@@ -18,6 +18,7 @@ traits:
 
   - id: windows-rawinput
     desc: Windows raw input API for
+    crit: notable
     conf: 0.7
     platforms: [windows]
     for: [pe, dll]

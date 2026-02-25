@@ -1,0 +1,51 @@
+# PE Import Hijacking
+defaults:
+  for: [all]
+traits:
+  - id: import-descriptor-stosd
+    desc: Overwriting IMAGE_IMPORT_DESCRIPTOR
+    crit: component
+    if:
+      type: raw
+      regex: 'IMAGE_IMPORT_DESCRIPTOR\s+stosd'
+  - id: push-table-fill
+    desc: Filling a push table
+    crit: component
+    if:
+      type: raw
+      regex: 'stosb\s+loop\s+element_suivant_table_push'
+  - id: globalalloc-swap-logic
+    desc: GlobalAlloc substitution
+    crit: component
+    if:
+      type: raw
+      regex: 'sz_nom_globalalloc\s+db\s+''GlobalAlloc'',0'
+  - id: hijacked-function-name
+    desc: Hijacked function marker
+    crit: component
+    if:
+      type: raw
+      regex: 'sz_nom_fct_k32_altere_hote'
+composite_rules:
+  - id: pe-import-hijack-epo
+    desc: Entry Point Obscuring via import table hijacking
+    crit: suspicious
+    conf: 0.95
+    attack: "T1574.002"
+    all:
+      - id: micro-behaviors/fs/infect/import-hijack::import-descriptor-stosd
+      - id: micro-behaviors/fs/infect/import-hijack::push-table-fill
+    unless:
+      - type: string
+        substr: "OpenMP Runtime"
+  - id: pe-import-name-swap
+    desc: Swaps imported function name
+    crit: suspicious
+    conf: 0.9
+    attack: "T1574.002"
+    all:
+      - id: micro-behaviors/fs/infect/import-hijack::globalalloc-swap-logic
+      - id: micro-behaviors/fs/infect/import-hijack::hijacked-function-name
+    unless:
+      - type: string
+        substr: "OpenMP Runtime"

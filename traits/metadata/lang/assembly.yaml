@@ -1,0 +1,61 @@
+# Assembly Source Detection
+
+defaults:
+  for: [all]
+
+traits:
+  - id: fasm-format-pe
+    desc: FASM PE format directive
+    crit: baseline
+    if:
+      type: raw
+      regex: 'format\s+PE\s+GUI'
+
+  - id: fasm-include-import
+    desc: FASM import macro include
+    crit: baseline
+    if:
+      type: raw
+      regex: 'include\s+''include[\/]+macro[\/]+import\.inc'''
+
+  - id: asm-mnemonics
+    desc: Assembly mnemonics
+    crit: baseline
+    if:
+      type: raw
+      regex: '\b(pushad|popad|lea|push)\b'
+
+  - id: asm-label
+    desc: Assembly label pattern
+    crit: baseline
+    if:
+      type: raw
+      regex: '^\s{0,2}[a-zA-Z0-9_$]{1,20}:\s*$'
+
+  - id: rivanon-author
+    desc: Rivanon malware author
+    crit: suspicious
+    conf: 1.0
+    if:
+      type: string
+      regex: 'Doxtor L\.'
+
+composite_rules:
+  - id: fasm-source
+    desc: FASM assembly source code
+    crit: baseline
+    conf: 1.0
+    all:
+      - id: metadata/lang::fasm-format-pe
+      - id: metadata/lang::fasm-include-import
+
+  - id: generic-asm-source
+    desc: Generic assembly source code
+    crit: baseline
+    conf: 0.9
+    all:
+      - id: metadata/lang::asm-mnemonics
+      - id: metadata/lang::asm-label
+    unless:
+      - id: metadata/lang/shebang::perl
+      - id: metadata/lang/shebang::sh

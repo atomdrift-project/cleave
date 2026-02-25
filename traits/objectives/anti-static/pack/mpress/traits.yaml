@@ -8,7 +8,7 @@ traits:
     conf: 0.95
     if:
       type: symbol
-      substr: "mpress::_"
+      regex: "(?:^|[^a-zA-Z])[Mm][Pp]ress::_"
     mbc: B0032
     attack: T1027
 

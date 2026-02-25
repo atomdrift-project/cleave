@@ -10,12 +10,9 @@ traits:
     size_max: 200000
     if:
       type: raw
-      regex: '\$[a-zA-Z]{5}'
+      regex: '[^$]\$[a-z][A-Z][a-zA-Z]{3}'
       count_min: 10
       per_kb_min: 0.2
-    not:
-      - "$xdOMA"
-      - "$GETkE"
 
   - id: powershell-cmdlet-patterns-raw
     desc: "PowerShell cmdlet naming pattern (raw)"

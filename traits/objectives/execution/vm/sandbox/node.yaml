@@ -227,3 +227,4 @@ composite_rules:
       - id: metadata/library/jquery::copyright
       - id: metadata/library/jquery::fn-extend
       - id: metadata/library/d3::d3-detection
+      - id: metadata/library/structure::js-webpack-bundle

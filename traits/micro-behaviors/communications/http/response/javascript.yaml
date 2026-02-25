@@ -10,7 +10,7 @@ traits:
     attack: "T1059.007"
     if:
       type: raw
-      regex: 'eval\s*\(\s*(res|response|body|data)(\.[a-zA-Z0-9_]+){0,2}\s*\)'
+      regex: 'eval\s*\(\s*(res(ponse)?|data)\s*(\.[a-zA-Z0-9_]+){0,2}\s*\)'
 
   - id: axios-response-data-access
     desc: Accesses axios response data payload

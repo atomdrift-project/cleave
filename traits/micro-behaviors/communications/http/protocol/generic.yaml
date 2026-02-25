@@ -36,3 +36,12 @@ traits:
     if:
       type: string
       substr: "HTTP/2.0"
+
+  - id: itms-services-manifest
+    desc: iOS itms-services manifest URL
+    crit: notable
+    conf: 0.9
+    for: [macho]
+    if:
+      type: string
+      substr: "itms-services://?action=download-manifest&url="

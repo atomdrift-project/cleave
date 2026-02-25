@@ -4,7 +4,7 @@
 # Examples: triton libtriton.so, various PyPI/npm supply chain attacks with native code
 
 defaults:
-  for: [elf]
+  for: [so]
   platforms: [linux]
   attack: "T1195.002"
   mbc: "B0025"

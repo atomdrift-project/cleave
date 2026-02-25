@@ -73,7 +73,7 @@ traits:
   # Multiple concatenated string literals (typical in deobfuscation)
   - id: massive-string-concatenation
     desc: Massive string concatenation operations
-    crit: suspicious
+    crit: notable
     conf: 0.9
     mbc: "B0032"
     attack: "T1027"
@@ -82,7 +82,12 @@ traits:
       type: raw
       regex: "\\+\\s*['\"][^'\"]{20,}['\"]"
       count_min: 10
-      per_kb_min: 0.5
+      per_kb_min: 1.0
+    downgrade:
+      any:
+        - id: metadata/dev/testing::test-basename-pattern
+        - id: metadata/quality/testing::test-directory
+        - id: metadata/dev/testing::test-function-def
 
   # Array element access with computed indices
   - id: computed-array-access

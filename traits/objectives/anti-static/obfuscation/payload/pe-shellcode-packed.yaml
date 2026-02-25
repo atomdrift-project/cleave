@@ -1,0 +1,21 @@
+composite_rules:
+  - id: pe-zero-imports-shellcode-dropper
+    desc: "PE file with zero imports and obfuscation traits, highly indicative of shellcode/packed malware"
+    crit: hostile
+    conf: 0.9
+    for: [pe]
+    unless:
+      - id: metadata/format/pe::dotnet-metadata
+      - id: metadata/format/pe::large-single-section
+      - id: metadata/format::many-exports
+      - id: metadata/format/pe::resource-only-dll
+      - id: metadata/format/pe::mui-string
+      - id: metadata/format/pe::resources-dll-extension
+      - id: metadata/format/pe::low-code-entropy
+    all:
+      - id: metadata/format::no-imports
+      - id: metadata/format::few-functions
+    any:
+      - id: objectives/anti-static/obfuscation/binary-structure::huge-null-run-text
+      - id: objectives/anti-analysis/self-modify/runtime::xor-loop-pattern
+      - id: objectives/anti-analysis/vm/detect::multiple-rdtsc-instr

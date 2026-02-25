@@ -1,0 +1,15 @@
+defaults:
+  crit: suspicious
+  conf: 0.9
+  attack: T1555.001
+  mbc: T1555.001
+  for: [macho]
+  platforms: [ios, macos]
+
+composite_rules:
+  - id: keychain-network-collection
+    desc: Keychain access with network channel
+    all:
+      - id: micro-behaviors/os/security/mac/keychain::keychain-item-crud
+      - id: micro-behaviors/communications/socket/connect::nwconnection-connect
+      - id: micro-behaviors/communications/socket/send::nwconnection-send

@@ -15,6 +15,8 @@ traits:
     if:
       type: string
       regex: "^[A-Za-z0-9+/]{200,}={0,2}$"
+    not:
+      - substr: "PADDINGXXPADDING"
     attack: "T1140"
     mbc: "C0043"
 

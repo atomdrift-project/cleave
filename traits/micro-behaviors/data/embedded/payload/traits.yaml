@@ -26,34 +26,43 @@ traits:
   # dict: typically 0x00800000 (8MB) or smaller power of 2
   # size: 8 bytes. We match if at least one byte is non-zero in a reasonable position.
   # Note: 5D 00 00 appears frequently in x86-64 code (e.g., call offsets).
+  # Tightened: dictionary size must be non-zero (min 4KB) to avoid false positives on code.
 
   - id: lzma-sized-nonzero-1
     desc: LZMA header nonzero size pos 1
     crit: component
     if:
       type: hex
-      pattern: "5D 00 00 (00|80) 00 (01|02|03|04|05|06|07|08|09|0A|0B|0C|0D|0E|0F|10|11|12|13|14|15|16|17|18|19|1A|1B|1C|1D|1E|1F|20) [7] ??"
+      pattern: "5D 00 00 (01|02|04|08|10|20|40|80) 00 (01|02|03|04|05|06|07|08|09|0A|0B|0C|0D|0E|0F|10|11|12|13|14|15|16|17|18|19|1A|1B|1C|1D|1E|1F|20) [7] ??"
 
   - id: lzma-sized-nonzero-2
     desc: LZMA header nonzero size pos 2
     crit: component
     if:
       type: hex
-      pattern: "5D 00 00 (00|80) 00 [1] (01|02|03|04|05|06|07|08|09|0A|0B|0C|0D|0E|0F|10|11|12|13|14|15|16|17|18|19|1A|1B|1C|1D|1E|1F|20) [6] ??"
+      pattern: "5D 00 00 (01|02|04|08|10|20|40|80) 00 [1] (01|02|03|04|05|06|07|08|09|0A|0B|0C|0D|0E|0F|10|11|12|13|14|15|16|17|18|19|1A|1B|1C|1D|1E|1F|20) [6] ??"
 
   - id: lzma-sized-nonzero-3
     desc: LZMA header nonzero size pos 3
     crit: component
     if:
       type: hex
-      pattern: "5D 00 00 (00|80) 00 [2] (01|02|03|04|05|06|07|08|09|0A|0B|0C|0D|0E|0F|10|11|12|13|14|15|16|17|18|19|1A|1B|1C|1D|1E|1F|20) [5] ??"
+      pattern: "5D 00 00 (01|02|04|08|10|20|40|80) 00 [2] (01|02|03|04|05|06|07|08|09|0A|0B|0C|0D|0E|0F|10|11|12|13|14|15|16|17|18|19|1A|1B|1C|1D|1E|1F|20) [5] ??"
 
   - id: lzma-unknown-size
     desc: LZMA header unknown size marker
     crit: component
     if:
       type: hex
-      pattern: "5D 00 00 (00|80) 00 FF FF FF FF FF FF FF FF 00"
+      pattern: "5D 00 00 (01|02|04|08|10|20|40|80) 00 FF FF FF FF FF FF FF FF 00"
+
+  - id: lzma-eh-frame-false-positive
+    desc: LZMA magic false positive in .eh_frame
+    crit: component
+    if:
+      type: hex
+      pattern: "5D 00 00"
+      section: ".eh_frame"
 
   - id: xz-magic
     desc: Embedded XZ compressed data
@@ -110,6 +119,16 @@ traits:
       pattern: "4D 5A 90 00"
       offset_range: [4096, null]
 
+  - id: pe-magic-in-rsrc
+    desc: PE/MZ binary embedded in resource section
+    crit: component
+    for: [pe, dll]
+    if:
+      type: hex
+      pattern: "4D 5A 90 00"
+      section: ".rsrc"
+      offset_range: [4096, null]
+
   # === Embedded Archive Formats ===
 
   - id: zip-magic
@@ -147,7 +166,79 @@ traits:
       type: string
       substr: ".gnu_debugdata"
 
+  - id: find-resource-w
+    desc: Locate PE resource entry
+    crit: notable
+    conf: 0.8
+    attack: "T1027.009"
+    for: [pe, dll]
+    if:
+      type: symbol
+      exact: "FindResourceW"
+
+  - id: find-resource-a
+    desc: Locate PE resource entry (ANSI)
+    crit: notable
+    conf: 0.8
+    attack: "T1027.009"
+    for: [pe, dll]
+    if:
+      type: symbol
+      exact: "FindResourceA"
+
+  - id: load-resource
+    desc: Load PE resource payload
+    crit: notable
+    conf: 0.8
+    attack: "T1027.009"
+    for: [pe, dll]
+    if:
+      type: symbol
+      exact: "LoadResource"
+
+  - id: sizeof-resource
+    desc: Size PE resource payload
+    crit: notable
+    conf: 0.8
+    attack: "T1027.009"
+    for: [pe, dll]
+    if:
+      type: symbol
+      exact: "SizeofResource"
+
 composite_rules:
+  - id: find-resource-any
+    desc: Locate PE resource entry (ANSI/Unicode)
+    crit: notable
+    conf: 0.8
+    attack: "T1027.009"
+    for: [pe, dll]
+    any:
+      - id: find-resource-w
+      - id: find-resource-a
+
+  - id: load-library-ex-any
+    desc: Extended DLL loading (ANSI/Unicode)
+    crit: component
+    conf: 0.8
+    for: [pe, dll]
+    any:
+      - id: micro-behaviors/dylib/load::load-library-ex-w
+      - id: micro-behaviors/dylib/load::load-library-ex-a
+
+  - id: pe-resource-loader-api-chain
+    desc: PE resource extraction API chain
+    crit: notable
+    conf: 0.9
+    attack: "T1027.009"
+    for: [pe, dll]
+    all:
+      - id: find-resource-any
+      - id: load-resource
+      - id: sizeof-resource
+    any:
+      - id: load-library-ex-any
+
   # LZMA detection composite
   # Bootloaders and firmware files legitimately embed LZMA-compressed payloads
   # Only flag as notable if combined with other packing indicators

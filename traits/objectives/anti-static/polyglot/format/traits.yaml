@@ -4,7 +4,7 @@ traits:
     crit: suspicious
     conf: 0.85
     attack: "T1027.009"
-    for: [all]
+    for: [all, -pe, -dll]
     if:
       type: hex
       pattern: "50 4B 05 06"

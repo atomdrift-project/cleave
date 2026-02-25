@@ -12,7 +12,7 @@ traits:
   # === Suspicious PDB path patterns ===
   - id: pdb-temp-path
     desc: PDB path in temp directory
-    crit: suspicious
+    crit: notable
     conf: 0.85
     if:
       type: string
@@ -28,8 +28,8 @@ traits:
 
   - id: pdb-desktop-path
     desc: PDB path on Desktop
-    crit: suspicious
-    conf: 0.8
+    crit: notable
+    conf: 0.7
     if:
       type: string
       regex: '(?i)\\desktop\\.{1,60}\.pdb$'
@@ -101,8 +101,11 @@ composite_rules:
     conf: 0.85
     any:
       - id: pdb-temp-path
-      - id: pdb-desktop-path
       - id: pdb-downloads-path
+    downgrade:
+      any:
+        - id: metadata/quality/versioning::pe-version-resource
+        - id: metadata/format::large-executable
 
   - id: offensive-tool-pdb
     desc: Offensive security tool PDB indicator

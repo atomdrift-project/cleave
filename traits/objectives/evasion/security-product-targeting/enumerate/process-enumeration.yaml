@@ -4,7 +4,7 @@
 composite_rules:
   - id: process-enumeration-terminate
     desc: Process enumeration with termination capability
-    crit: suspicious
+    crit: notable
     conf: 0.85
     for: [pe, dll]
     platforms: [windows]

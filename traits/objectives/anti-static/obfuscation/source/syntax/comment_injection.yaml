@@ -9,3 +9,4 @@ traits:
       count_min: 10
     not:
       - regex: 'istanbul ignore'
+      - regex: '@class'

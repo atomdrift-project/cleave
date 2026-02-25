@@ -10,7 +10,7 @@ traits:
   # NtRaiseHardError - forces BSOD
   - id: nt-raise-hard-error
     desc: NtRaiseHardError API (BSOD trigger)
-    crit: suspicious
+    crit: notable
     conf: 0.98
     if:
       type: string
@@ -77,6 +77,9 @@ composite_rules:
     all:
       - id: ntdll-reference
       - id: nt-raise-hard-error
+    downgrade:
+      any:
+        - id: metadata/format::many-exports
 
   # BSOD trigger via trait references (RtlAdjustPrivilege path)
   - id: bsod-adjust-privilege

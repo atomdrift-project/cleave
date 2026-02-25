@@ -1,0 +1,23 @@
+defaults:
+  crit: baseline
+  for: [pe]
+
+traits:
+  - id: asprotect-section
+    desc: ASProtect section marker (.aspr)
+    if:
+      type: section
+      substr: '.aspr'
+
+  - id: asprotect-string
+    desc: ASProtect registry string
+    if:
+      type: string
+      exact: "Software\\\\ASProtect\\\\SpecData"
+
+composite_rules:
+  - id: asprotect
+    desc: File is packed with ASProtect
+    any:
+      - id: asprotect-section
+      - id: asprotect-string

@@ -42,6 +42,14 @@ traits:
       type: string
       substr: "Content-Type:"
 
+  - id: http-request-line
+    desc: HTTP request-line literal
+    crit: notable
+    conf: 0.7
+    if:
+      type: raw
+      regex: '(GET|POST)\s+/[^\r\n]{0,200}\s+HTTP/1\.[01]'
+
 composite_rules:
   - id: http-protocol
     desc: HTTP or HTTPS protocol marker
@@ -57,9 +65,7 @@ composite_rules:
     conf: 0.7
     all:
       - id: http-protocol
-    any:
-      - id: http-method-get
-      - id: http-method-post
+      - id: http-request-line
 
   - id: custom-client
     desc: "Custom HTTP client implementation"
@@ -71,3 +77,11 @@ composite_rules:
     any:
       - id: micro-behaviors/communications/http/request::user-agent-header
       - id: http-content-type
+    unless:
+      - type: string
+        substr: "application/ocsp-request"
+    downgrade:
+      any:
+        - type: metrics
+          field: binary.import_count
+          min: 50

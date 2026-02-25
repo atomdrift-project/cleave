@@ -12,4 +12,4 @@ traits:
       # Pattern: [consonant][vowel] repeated 5+ times.
       # Matches "lelidugagumizufafa", "gehexigerekalahiwivixifegimoxiji", "noyefigagiguwa"
       # Shortened regex to avoid length warnings. [b-df-hj-np-tv-z] covers all consonants.
-      regex: '(?i)\b[b-df-hj-np-tv-z]?([b-df-hj-np-tv-z][aeiou]){5,}[b-df-hj-np-tv-z]?\b'
+      regex: '(?i)\b[b-df-hj-np-tv-z]?([b-df-hj-np-tv-z][aeiou]){7,}[b-df-hj-np-tv-z]?\b'

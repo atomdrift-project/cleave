@@ -1,7 +1,7 @@
 traits:
 - id: service-startup
   desc: Windows Service Startup
-  crit: suspicious
+  crit: notable
   conf: 0.8
   platforms:
   - windows

@@ -8,6 +8,13 @@ traits:
       type: metrics
       field: binary.code_to_data_ratio
       max: 0.1
+    unless:
+      - type: metrics
+        field: binary.import_density
+        max: 0
+      - type: metrics
+        field: binary.data_entropy
+        max: 4.0
 
   - id: unusual-alignment-pe
     desc: "Unusual PE section alignment"

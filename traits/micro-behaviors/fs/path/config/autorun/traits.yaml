@@ -44,12 +44,14 @@ traits:
       regex: '(?i)ShellExecute\s*='
 
   - id: autorun-shellexecute-wide
-    desc: Contains Autorun ShellExecute (Wide)
+    desc: Contains Autorun ShellExecute directive (Wide)
     crit: suspicious
     conf: 0.9
+    for: [-pe, -dll]
     if:
       type: hex
-      pattern: "53 00 68 00 65 00 6C 00 6C 00 45 00 78 00 65 00 63 00 75 00 74 00 65 00"
+      # ShellExecute= (wide) - requires equals sign to distinguish from API import name
+      pattern: "53 00 68 00 65 00 6C 00 6C 00 45 00 78 00 65 00 63 00 75 00 74 00 65 00 3D 00"
 
   - id: autorun-open
     desc: Contains Autorun Open command directive
@@ -57,15 +59,17 @@ traits:
     conf: 0.9
     if:
       type: raw
-      regex: '(?i)Open\s*='
+      regex: '(?i)^Open\s*='
 
   - id: autorun-open-wide
-    desc: Contains Autorun Open (Wide)
+    desc: Contains Autorun Open directive (Wide)
     crit: notable
     conf: 0.9
+    for: [-pe, -dll]
     if:
       type: hex
-      pattern: "4F 00 70 00 65 00 6E 00"
+      # Open= (wide) - requires equals sign; bare "Open" is too generic
+      pattern: "4F 00 70 00 65 00 6E 00 3D 00"
 
   - id: autorun-action
     desc: Contains Autorun Action command directive
@@ -73,7 +77,7 @@ traits:
     conf: 0.9
     if:
       type: raw
-      regex: '(?i)Action\s*='
+      regex: '(?i)^Action\s*='
 
   - id: autorun-useautoplay
     desc: Contains Autorun UseAutoPlay directive

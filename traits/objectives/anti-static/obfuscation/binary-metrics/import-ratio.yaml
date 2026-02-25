@@ -93,6 +93,8 @@ composite_rules:
       - id: well-known/tools/sysadmin::par-env-vars
       - type: string
         substr: "PAR_TEMP"
+      - type: raw
+        substr: "mscoree"
     downgrade:
       any:
         - id: objectives/execution/reflection/invoke::namespace-import

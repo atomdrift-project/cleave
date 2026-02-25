@@ -19,6 +19,15 @@ traits:
     if:
       type: raw
       regex: typeof\s*define\s*===\s*["']function["']\s*&&\s*define\.amd
+  - id: js-webpack-bundle
+    desc: Webpack bundled JavaScript module
+    crit: baseline
+    conf: 0.95
+    for:
+      - javascript
+    if:
+      type: raw
+      substr: __webpack_require__
 composite_rules:
   - id: js-umd-wrapper-any
     desc: Universal Module Definition (UMD) wrapper

@@ -14,6 +14,12 @@ traits:
       type: section
       writable: true
       executable: true
+    downgrade:
+      any:
+        - type: section
+          substr: '.aspr'
+        - type: raw
+          substr: "BSJB"  # .NET NI (NGEN) assemblies use RWX sections for runtime fixups
     # W^X violations indicate:
     # - Self-modifying code
     # - JIT compilation without proper memory protection

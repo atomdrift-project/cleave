@@ -63,10 +63,11 @@ composite_rules:
     for: [elf, macho, pe]
     all:
       - id: micro-behaviors/data/encode/base64::custom-implementation
+      - id: objectives/discovery/host/fingerprint
     any:
-      - id: objectives/discovery/host/fingerprint/hardware
-      - id: objectives/discovery/host/fingerprint/disk
-      - id: objectives/discovery/host/fingerprint/machine-id
+      - id: micro-behaviors/communications/http/upload
+      - id: micro-behaviors/communications/socket/create
+      - id: micro-behaviors/communications/download/curl::libcurl-http
 
   # Combination 5: Custom base64 + XOR + network = obfuscated exfil
   - id: obfuscated-exfiltration

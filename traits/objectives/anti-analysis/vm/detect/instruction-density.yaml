@@ -39,6 +39,10 @@ traits:
     unless:
       - id: metadata/signed/platform::apple
       - id: metadata/quality::versioned
+      - id: metadata/format/pe::dotnet-assembly
+      - type: metrics
+        field: binary.import_density
+        max: 0
 
 composite_rules:
   - id: instruction-based-evasion
@@ -66,3 +70,5 @@ composite_rules:
     any:
       - id: objectives/anti-static/obfuscation/binary-metrics::dominant-section
       - id: metadata/binary/structure::minimal-string-count
+    none:
+      - id: metadata/format/pe::dotnet-assembly

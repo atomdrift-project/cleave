@@ -47,3 +47,9 @@ composite_rules:
     all:
       - id: addatoma-api
       - id: getatomnama-api
+    any:
+      - id: objectives/evasion/process/injection/runtime::queue-user-apc
+      - id: objectives/evasion/process/injection/runtime::write-process-memory
+      - id: globalgetatomname-api
+    none:
+      - id: metadata/format::many-exports

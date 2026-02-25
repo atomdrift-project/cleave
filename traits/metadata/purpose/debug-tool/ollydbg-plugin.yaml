@@ -1,0 +1,15 @@
+# OllyDbg / x64dbg Plugin Detection
+# These exports identify legitimate debugger plugins
+
+defaults:
+  for: [pe, dll]
+  platforms: [windows]
+
+traits:
+  - id: ollydbg-plugin-export
+    desc: OllyDbg plugin exported function
+    crit: notable
+    conf: 0.95
+    if:
+      type: string
+      substr: "ODBG_Plugin"

@@ -11,9 +11,10 @@ composite_rules:
     for: [macho, elf, pe]
     none:
       - id: metadata/signed/platform::apple
-    # Downgrade for system libraries and shell interpreters
+    # Downgrade for system libraries, shell interpreters, and large binaries
     downgrade:
       any:
         - id: micro-behaviors/dylib/library::system-lib-marker
         - id: micro-behaviors/dylib/library::shell-interpreter
         - id: micro-behaviors/dylib/library::debugger-tool-marker
+        - id: metadata/format::many-functions

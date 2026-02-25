@@ -18,6 +18,8 @@ traits:
     if:
       type: string
       substr: "ADOD"
+    not:
+      - substr: "ADODB"
 
   - id: adodb-fragment-stream
     desc: Obfuscated ADODB stream fragment ".Stre"
@@ -27,6 +29,8 @@ traits:
     if:
       type: string
       substr: ".Stre"
+    not:
+      - substr: ".Stream"
 
   - id: savetofile-fragment-save
     desc: Obfuscated SaveToFile fragment "Save"
@@ -36,6 +40,8 @@ traits:
     if:
       type: string
       substr: "Save"
+    not:
+      - substr: "SaveTo"
 
   - id: savetofile-fragment-tofil
     desc: Obfuscated SaveToFile fragment "ToFil"
@@ -45,6 +51,8 @@ traits:
     if:
       type: string
       substr: "ToFil"
+    not:
+      - substr: "ToFile"
 
 composite_rules:
   - id: adodb-savetofile-obfuscated-fragments

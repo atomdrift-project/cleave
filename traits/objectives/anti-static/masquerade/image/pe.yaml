@@ -8,3 +8,5 @@ composite_rules:
     all:
       - id: metadata/format/magic::pe-dos-stub
       - id: micro-behaviors/fs/file/extension::image-extension
+    unless:
+      - id: metadata/format/extension::exe

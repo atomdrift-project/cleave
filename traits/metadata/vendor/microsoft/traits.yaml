@@ -1,0 +1,54 @@
+defaults:
+  for: [pe, dll]
+
+traits:
+  - id: openmp-runtime
+    desc: Microsoft C/C++ OpenMP Runtime
+    crit: notable
+    conf: 1.0
+    platforms: [windows]
+    for: [pe, dll]
+    if:
+      type: string
+      substr: "Microsoft® C/C++ OpenMP Runtime"
+  - id: is-microsoft-named
+    desc: File name contains Microsoft
+    crit: notable
+    conf: 0.8
+    for: [pe, dll]
+    if:
+      type: basename
+      substr: "Microsoft"
+  - id: is-windows-named
+    desc: File name contains Windows
+    crit: notable
+    conf: 0.8
+    for: [pe, dll]
+    if:
+      type: basename
+      substr: "Windows"
+  - id: is-defender-named-1
+    desc: Defender file name 1
+    crit: notable
+    conf: 0.8
+    for: [pe, dll]
+    if:
+      type: basename
+      regex: "(?i)(Defender|MpDlp|MpEngine|MpSvc)"
+  - id: is-defender-named-2
+    desc: Defender file name 2
+    crit: notable
+    conf: 0.8
+    for: [pe, dll]
+    if:
+      type: basename
+      regex: "(?i)(MpCmdRun|MsMpEng)"
+
+composite_rules:
+  - id: is-defender-named
+    desc: Defender file name
+    crit: notable
+    conf: 0.8
+    any:
+      - id: metadata/vendor/microsoft::is-defender-named-1
+      - id: metadata/vendor/microsoft::is-defender-named-2

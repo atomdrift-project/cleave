@@ -187,5 +187,6 @@ composite_rules:
       - id: objectives/anti-static/obfuscation/code-metrics/structure::no-comments
       - id: objectives/anti-static/obfuscation/code-metrics::sh-no-functions
     unless:
+      - id: metadata/format/json::sourcemap
       - id: metadata/format/json::valid
       - id: metadata/lang::ps-valid

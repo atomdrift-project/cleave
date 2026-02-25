@@ -11,8 +11,8 @@ traits:
   - id: response-body-fragment-seB
     desc: ResponseBody fragment (seB)
     if:
-      type: raw
-      substr: "seB"
+      type: string
+      exact: "seB"
 
   - id: response-body-fragment-pon
     desc: ResponseBody fragment (pon)
@@ -23,23 +23,23 @@ traits:
   - id: save-to-file-fragment-oFil
     desc: SaveToFile fragment (oFil)
     if:
-      type: raw
-      substr: "oFil"
+      type: string
+      exact: "oFil"
 
   - id: stream-fragment-eam
     desc: Stream fragment (eam)
     if:
-      type: raw
-      substr: "eam"
+      type: string
+      exact: "eam"
 
   - id: stream-fragment-dotstr
     desc: .Stream fragment (.Str)
     if:
-      type: raw
-      substr: ".Str"
+      type: string
+      exact: ".Str"
 
   - id: adodb-fragment-odb
     desc: ADODB fragment (ODB)
     if:
-      type: raw
-      substr: "ODB"
+      type: string
+      exact: "ODB"

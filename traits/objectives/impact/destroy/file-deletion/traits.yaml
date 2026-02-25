@@ -19,7 +19,7 @@ traits:
 
 - id: deleteFile-function
   desc: deleteFile function call
-  crit: suspicious
+  crit: notable
   conf: 0.8
   for:
   - elf
@@ -32,7 +32,7 @@ traits:
   mbc: C0047
   if:
     type: symbol
-    regex: deleteFile
+    regex: "(?:^|\\b)deleteFile(?:s)?\\b"
 
 - id: deleteSelf-function
   desc: deleteSelf function call

@@ -1,0 +1,39 @@
+defaults:
+  for: [all]
+
+traits:
+  - id: lookup-address-usage
+    desc: Usage of lookup_address for kernel PTEs
+    crit: notable
+    conf: 0.8
+    if:
+      type: symbol
+      exact: lookup_address
+
+  - id: pte-write-bit-manipulation
+    desc: Manual manipulation of kernel PTE RW bit
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: raw
+      regex: 'pte\s*->\s*pte\s*(\||&)\s*=\s*(~)?_PAGE_RW'
+
+  - id: pte-nx-bit-manipulation
+    desc: Manual manipulation of kernel PTE NX bit
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: raw
+      regex: 'pte\s*->\s*pte\s*(\||&)\s*=\s*(~)?_PAGE_NX'
+
+composite_rules:
+  - id: kernel-wp-bypass
+    desc: Bypassing kernel write protection by manipulating PTEs
+    crit: suspicious
+    conf: 1.0
+    attack: T1014
+    all:
+      - id: micro-behaviors/os/kernel/memory::lookup-address-usage
+    any:
+      - id: micro-behaviors/os/kernel/memory::pte-write-bit-manipulation
+      - id: micro-behaviors/os/kernel/memory::pte-nx-bit-manipulation

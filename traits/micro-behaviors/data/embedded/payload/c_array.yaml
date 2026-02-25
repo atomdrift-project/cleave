@@ -1,0 +1,35 @@
+defaults:
+  for: [c, cpp, text]
+
+traits:
+  - id: embedded-elf-in-c-array
+    desc: Embedded ELF binary in C source array
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: raw
+      regex: '0x7f,\s*0x45,\s*0x4c,\s*0x46'
+
+  - id: embedded-pe-in-c-array
+    desc: Embedded PE binary in C source array
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: raw
+      regex: '0x4d,\s*0x5a,\s*0x90,\s*0x00'
+
+  - id: embedded-macho-le-in-c-array
+    desc: Embedded Mach-O LE binary in C array
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: raw
+      regex: '0xcf,\s*0xfa,\s*0xed,\s*0xfe'
+
+  - id: embedded-macho-be-in-c-array
+    desc: Embedded Mach-O BE binary in C array
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: raw
+      regex: '0xfe,\s*0xed,\s*0xfa,\s*0xcf'

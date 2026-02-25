@@ -1,0 +1,18 @@
+traits:
+  - id: ksymless-trampoline-stager
+    desc: x86-64 trampoline hook stager (movabs, push, ret)
+    crit: suspicious
+    conf: 1.0
+    for: [all]
+    if:
+      type: string
+      regex: 'H\xb8\x00\x00\x00\x00\x00\x00\x00\x00P\xc3'
+
+  - id: ksymless-find-address-up
+    desc: Stack walking heuristic to find x64_sys_call
+    crit: suspicious
+    conf: 1.0
+    for: [all]
+    if:
+      type: string
+      regex: 'find_address_up'

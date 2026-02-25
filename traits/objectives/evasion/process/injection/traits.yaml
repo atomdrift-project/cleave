@@ -24,10 +24,13 @@ composite_rules:
       - id: objectives/evasion/process/injection/runtime::suspend-thread
       - id: objectives/evasion/process/injection/runtime::get-thread-context
       - id: objectives/evasion/process/injection/runtime::set-thread-context
+      - id: objectives/evasion/process/injection/runtime::write-process-memory
     downgrade:
       any:
         - id: metadata/lang::go-runtime-marker
         - id: metadata/vendor/valve/valve-corp-binary
+        - id: metadata/dylib::python313/dll
+        - id: metadata/purpose/debug-tool::ollydbg-plugin-export
 
   # === APC Queue Injection ===
   - id: apc-injection
@@ -101,3 +104,5 @@ composite_rules:
       - id: objectives/execution/native/runtime::callback-execution
       - id: micro-behaviors/mem/protect/modify::virtual-protect
       - id: micro-behaviors/mem/alloc/heap::heap-alloc
+    unless:
+      - id: metadata/format::many-imports

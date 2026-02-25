@@ -1,0 +1,46 @@
+# Swift Network.framework socket connect patterns
+
+defaults:
+  for: [macho]
+
+traits:
+  - id: nwconnection-host
+    desc: Swift NWConnection host setup
+    crit: notable
+    conf: 0.85
+    mbc: "C0001"
+    attack: "T1071"
+    if:
+      type: symbol
+      regex: "NWConnection.{0,80}host.{0,80}using"
+
+  - id: nwconnection-start
+    desc: Swift NWConnection start call
+    crit: notable
+    conf: 0.8
+    mbc: "C0001"
+    attack: "T1071"
+    if:
+      type: symbol
+      regex: "NWConnection.{0,80}start"
+
+  - id: nwparameters-tcp
+    desc: Swift NWParameters TCP profile
+    crit: baseline
+    conf: 0.75
+    mbc: "C0001"
+    attack: "T1071"
+    if:
+      type: symbol
+      regex: "NWParameters.{0,80}tcp"
+
+composite_rules:
+  - id: nwconnection-connect
+    desc: Swift NWConnection connect flow
+    crit: notable
+    conf: 0.85
+    mbc: "C0001"
+    attack: "T1071"
+    all:
+      - id: nwconnection-host
+      - id: nwconnection-start

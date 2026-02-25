@@ -11,5 +11,15 @@ traits:
     conf: 0.6
     if:
       type: raw
-      regex: '^\s*\{\s*"[A-Za-z0-9_.-]{1,64}"\s*:'
+      regex: '^\s{0,256}\{\s{0,256}"[A-Za-z0-9_.-]{1,64}"\s{0,256}:'
       offset: 0
+
+  - id: sourcemap
+    desc: JavaScript Sourcemap
+    crit: notable
+    conf: 1.0
+    if:
+      type: raw
+      regex: '\{"version":3,"file":"'
+      count_min: 1
+      

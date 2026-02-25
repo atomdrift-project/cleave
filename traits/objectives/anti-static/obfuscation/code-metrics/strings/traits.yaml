@@ -51,6 +51,11 @@ traits:
     field: strings.total
     max: 5
     min_size: 1024
+  unless:
+  - type: basename
+    regex: \.d\.[cm]?ts$
+  - type: basename
+    regex: \.js\.flow$
 composite_rules:
 - id: string-hiding
   desc: String concealment/encoding

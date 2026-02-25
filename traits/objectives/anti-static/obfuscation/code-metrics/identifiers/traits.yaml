@@ -164,3 +164,8 @@ composite_rules:
       - id: objectives/anti-static/obfuscation/code-metrics::rust-many-high-entropy-identifiers
       - id: objectives/anti-static/obfuscation/code-metrics/functions::high-entropy-function-names
       - id: low-identifier-reuse
+    downgrade:
+      any:
+        - type: metrics
+          field: identifiers.avg_length
+          min: 15.0

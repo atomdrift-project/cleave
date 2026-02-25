@@ -7,4 +7,4 @@ traits:
       - javascript
     if:
       type: raw
-      regex: 'set(UTC)?FullYear\([\s"''\d]*\).{0,50}if\s*.{0,50}get(UTC)?FullYear'
+      regex: 'set(UTC)?FullYear[\s\S]{1,100}if[\s\S]{1,100}get(UTC)?FullYear'

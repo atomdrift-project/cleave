@@ -37,6 +37,16 @@ traits:
   if:
     type: string
     substr: CreateDecryptor
+- id: dotnet-create-encryptor-raw
+  desc: Uses CreateEncryptor in .NET
+  crit: notable
+  conf: 0.9
+  for:
+  - pe
+  - dll
+  if:
+    type: raw
+    substr: CreateEncryptor
 - id: dotnet-icryptotransform
   desc: Uses ICryptoTransform in .NET
   crit: notable
@@ -55,4 +65,18 @@ composite_rules:
   - id: dotnet-aes-csp
   - id: dotnet-crypto-namespace
   - id: dotnet-create-decryptor
+  - id: dotnet-create-encryptor-raw
   - id: dotnet-icryptotransform
+- id: dotnet-aes-rsa-hybrid-keywrap-pattern
+  desc: Dotnet AES and RSA key-wrap APIs
+  crit: suspicious
+  conf: 0.9
+  for:
+  - pe
+  - dll
+  all:
+  - id: dotnet-create-encryptor-raw
+  any:
+  - id: dotnet-create-decryptor
+  - id: micro-behaviors/crypto/asymmetric/rsa::dotnet-rsa-padding-raw
+  - id: micro-behaviors/crypto/asymmetric/rsa::dotnet-rsa-x509-public-import-raw

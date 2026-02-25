@@ -124,12 +124,16 @@ composite_rules:
     all:
       - id: metadata/format/magic::pe-dos-stub
       - id: basename-is-media
+    unless:
+      - id: metadata/format/extension::exe
 
   - id: pe-masquerading-as-doc
     desc: PE executable hiding as document file
     all:
       - id: metadata/format/magic::pe-dos-stub
       - id: basename-is-doc
+    unless:
+      - id: metadata/format/extension::exe
 
   - id: elf-masquerading-as-media
     desc: ELF executable hiding as media file

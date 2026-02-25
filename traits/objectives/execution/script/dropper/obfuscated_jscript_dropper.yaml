@@ -1,28 +1,40 @@
-# Obfuscated JScript Stream Downloader
-# Detects obfuscated JScript downloaders using a specific while/try-catch loop
-# waiting for readyState or network connectivity, combined with tiny fragments
-# of ADODB.Stream or XMLHTTP.
+# Obfuscated JScript decoder-loader behavior
+# Focuses on high-confidence obfuscated JScript loader structure without
+# hardcoding campaign-specific IOCs.
 
 defaults:
-  crit: hostile
-  conf: 1.0
   for: [javascript]
 
 composite_rules:
-  # Helper: Match any of the suspicious fragments
-  - id: obfuscated-adodb-fragments
-    desc: Tiny obfuscated ADODB/XMLHTTP fragments
+  - id: obfuscated-jscript-decoder-loader
+    desc: Obfuscated JScript loader with decoder loop and high-entropy structure
     crit: suspicious
-    any:
-      - id: objectives/execution/interpreter/script/wsh/
-
-  # Main Rule: Combine loop + fragments + payload handling
-  - id: obfuscated-adodb-dropper
-    desc: Obfuscated ADODB/XMLHTTP dropper behavior
+    conf: 0.93
+    attack: "T1027.002"
+    mbc: "B0032"
     all:
-      # 1. Probabilistic loader loop
       - id: objectives/execution/dropper/behavior::probabilistic-loader-loop
-      # 2. Any of the fragments
-      - id: objectives/execution/script/dropper::obfuscated-adodb-fragments
-      # 3. Payload handling (write/save)
-      - id: objectives/execution/interpreter/script/wsh::payload-handling-fragment-tiny-exact
+      - id: objectives/anti-static/obfuscation/js-obfuscator::decoder-loop-keyword-triad
+      - id: objectives/anti-static/obfuscation/code-metrics/identifiers::many-high-entropy-identifiers
+      - id: objectives/anti-static/obfuscation/code-metrics/structure::very-long-lines
+
+  - id: obfuscated-jscript-signed-comment-loader
+    desc: Obfuscated JScript loader with dual signature comment blocks
+    crit: suspicious
+    conf: 0.95
+    attack: "T1027.002"
+    mbc: "B0032"
+    all:
+      - id: objectives/execution/script/dropper::obfuscated-jscript-decoder-loader
+      - id: micro-behaviors/data/source/markers/malware::sig-comment-double-signature-block
+
+  - id: obfuscated-jscript-signed-entropy-loader
+    desc: Obfuscated JScript loader with dual signature blocks and high text entropy
+    crit: suspicious
+    conf: 0.96
+    attack: "T1027.002"
+    mbc: "B0032"
+    all:
+      - id: objectives/execution/script/dropper::obfuscated-jscript-decoder-loader
+      - id: micro-behaviors/data/source/markers/malware::sig-comment-double-signature-block
+      - id: objectives/anti-static/obfuscation/code-metrics/structure::high-text-entropy

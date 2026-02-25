@@ -88,7 +88,7 @@ traits:
 
   - id: deep-nesting
     desc: "Deeply nested functions (complexity indicator)"
-    crit: notable
+    crit: baseline
     conf: 0.75
     if:
       type: metrics

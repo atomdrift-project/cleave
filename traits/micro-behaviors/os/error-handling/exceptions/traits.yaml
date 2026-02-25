@@ -1,5 +1,5 @@
 # Error Handling Operations
-# Error suppression and handling mechanisms
+# Error suppression and handling mechanisms.
 
 defaults:
   for: ["pe", "dll"]
@@ -50,12 +50,15 @@ traits:
 
   - id: add-vectored-exception-handler
     desc: Register vectored exception handler
-    crit: suspicious
+    crit: notable
     conf: 0.9
     mbc: "B0001"
     if:
       type: symbol
       exact: "AddVectoredExceptionHandler"
+    unless:
+      - type: basename
+        regex: '\.pyd$'
 
   - id: rtl-unwind
     desc: Runtime library unwind operation

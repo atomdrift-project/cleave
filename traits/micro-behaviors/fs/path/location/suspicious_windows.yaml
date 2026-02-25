@@ -35,6 +35,30 @@ traits:
       type: string
       regex: "(?i)Start\\s+Menu\\\\Programs\\\\Startup\\\\[^\\\\]{1,120}\\.bat"
 
+  - id: path-documents-settings-exe
+    desc: Documents and Settings executable name
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: string
+      regex: "(?i)\\bDocuments and Settings\\.exe\\b"
+
+  - id: path-program-files-exe
+    desc: Program Files executable name
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: string
+      regex: "(?i)\\bProgram Files\\.exe\\b"
+
+  - id: path-system-folder-exe
+    desc: System folder executable name
+    crit: suspicious
+    conf: 0.88
+    if:
+      type: string
+      regex: "(?i)\\b(System Volume Information|Recycler)\\.exe\\b"
+
 composite_rules:
   - id: path-suspicious-startup-any
     desc: Writes to Startup folder
@@ -46,3 +70,12 @@ composite_rules:
     any:
       - id: path-suspicious-startup
       - id: path-suspicious-startup-scripts
+
+  - id: path-directory-name-exe
+    desc: Directory-like Windows name with .exe
+    crit: suspicious
+    conf: 0.9
+    any:
+      - id: path-documents-settings-exe
+      - id: path-program-files-exe
+      - id: path-system-folder-exe

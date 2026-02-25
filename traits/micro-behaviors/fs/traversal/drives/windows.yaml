@@ -1,0 +1,60 @@
+# Win32 Drive Enumeration and Traversal
+defaults:
+  for: [pe, dll]
+  platforms: [windows]
+
+traits:
+  - id: get-logical-drives
+    desc: Enumerate logical drive letters
+    crit: notable
+    conf: 0.9
+    attack: "T1083"
+    mbc: "E1083"
+    if:
+      type: symbol
+      exact: "GetLogicalDrives"
+
+  - id: get-drive-type
+    desc: Query drive type by symbol
+    crit: notable
+    conf: 0.9
+    attack: "T1083"
+    if:
+      type: symbol
+      regex: "GetDriveType[AW]?$"
+
+  - id: drive-loop-logic
+    desc: Drive count-based loop
+    crit: component
+    if:
+      type: raw
+      regex: 'mov\s+cl,26\s+div\s+cl'
+
+  - id: drive-type-check-raw
+    desc: Checks drive type via raw bytes
+    crit: component
+    if:
+      type: raw
+      regex: 'cmp\s+al,DRIVE_FIXED|cmp\s+al,DRIVE_REMOTE'
+
+  - id: get-drive-type-raw
+    desc: Call to GetDriveTypeA by raw bytes
+    crit: component
+    if:
+      type: raw
+      regex: 'GetDriveTypeA'
+
+composite_rules:
+  - id: win32-drive-loop
+    desc: Enumerates and scans all drives
+    crit: notable
+    conf: 0.85
+    attack: "T1018"
+    all:
+      - id: micro-behaviors/fs/traversal/drives::get-drive-type-raw
+      - id: micro-behaviors/fs/traversal/drives::drive-loop-logic
+    any:
+      - id: micro-behaviors/fs/traversal/drives::drive-type-check-raw
+    unless:
+      - type: string
+        substr: "OpenMP Runtime"

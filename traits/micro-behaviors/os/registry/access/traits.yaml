@@ -1,0 +1,41 @@
+defaults:
+  for: [pe, dll]
+  platforms: [windows]
+
+traits:
+  - id: reg-create-key-ex-w
+    desc: Create registry key via WinAPI
+    crit: notable
+    conf: 0.85
+    attack: "T1112"
+    if:
+      type: symbol
+      exact: "RegCreateKeyExW"
+
+  - id: reg-set-value-ex-w
+    desc: Set registry value via WinAPI
+    crit: notable
+    conf: 0.85
+    attack: "T1112"
+    if:
+      type: symbol
+      exact: "RegSetValueExW"
+
+  - id: reg-create-key-transacted-name
+    desc: Transacted registry create API lookup
+    crit: suspicious
+    conf: 0.9
+    attack: "T1112"
+    if:
+      type: string
+      exact: "RegCreateKeyTransactedW"
+
+composite_rules:
+  - id: registry-write-api-chain
+    desc: Registry key and value write chain
+    crit: notable
+    conf: 0.9
+    attack: "T1112"
+    all:
+      - id: reg-create-key-ex-w
+      - id: reg-set-value-ex-w

@@ -105,13 +105,13 @@ traits:
       regex: "(?i)vcruntime"
 
   - id: msvcrt
-    desc: msvcrt library (older MSVC C runtime)
+    desc: msvcrt library (MSVC C runtime)
     crit: notable
     conf: 0.9
     for: [pe]
     if:
       type: string
-      regex: "(?i)msvcrt"
+      regex: "(?i)msvcr"
 
   - id: ms-visual
     desc: Microsoft Visual string

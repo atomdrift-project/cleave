@@ -1,5 +1,5 @@
 defaults:
-  for: [all]
+  for: [all, -binaries]
 
 traits:
   - id: obfuscated-identifier-section

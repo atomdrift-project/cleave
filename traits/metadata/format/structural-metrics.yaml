@@ -133,6 +133,15 @@ traits:
       field: binary.function_count
       min: 30
 
+  - id: many-exports
+    desc: "Binary has many exports (>10)"
+    crit: baseline
+    conf: 0.8
+    if:
+      type: metrics
+      field: binary.export_count
+      min: 10
+
   - id: elf-no-sections
     desc: "ELF with no section headers"
     crit: baseline

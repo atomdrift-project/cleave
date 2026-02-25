@@ -53,7 +53,7 @@ traits:
     desc: Package has release management scripts (rel/pub/ver)
     if:
       type: string
-      regex: '"(release|publish|version)":'
+      regex: '"(release|publish|version)":\s*"'
 
   - id: has-release-scripts-2
     desc: Package has release management scripts (pre/post)

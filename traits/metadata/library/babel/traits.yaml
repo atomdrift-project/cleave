@@ -1,0 +1,28 @@
+traits:
+  - id: babel-core-api
+    desc: Babel core API
+    crit: notable
+    conf: 0.9
+    for: [javascript]
+    if:
+      type: raw
+      regex: 'require\("\.\./transformation"\)'
+
+  - id: babel-types-string
+    desc: Babel script types string
+    crit: notable
+    conf: 0.85
+    for: [javascript]
+    if:
+      type: string
+      regex: 'text/babel|text/6to5'
+
+composite_rules:
+  - id: babel-library
+    desc: Babel library detection
+    crit: notable
+    conf: 1.0
+    for: [javascript]
+    any:
+      - id: babel-core-api
+      - id: babel-types-string

@@ -1,49 +1,10 @@
 composite_rules:
-  - id: nemucod-packer-structure
-    desc: Detects Nemucod packer via specific decoder loop or chunked array sequence.
-    crit: suspicious
-    conf: 0.9
-    any:
-      - id: objectives/anti-static/obfuscation/source/syntax::js-nemucod-decoder-loop
-      - id: objectives/anti-static/obfuscation/source/syntax::nemucod-chunked-array-sequence
-      - id: objectives/anti-static/obfuscation/source/syntax::nemucod-function-fragmentation
-
   - id: nemucod-dropper
-    desc: Detects Nemucod JScript dropper variants using custom array-chunking and dynamic execution.
+    desc: Highly obfuscated JScript dropper utilizing date evasion and decoding PE files
     crit: hostile
-    conf: 0.95
-    attack: "T1027"
-    mbc: "B0032"
+    for:
+      - javascript
     all:
-      - id: objectives/execution/dropper/obfuscated-script::nemucod-packer-structure
-    any:
-      - id: micro-behaviors/data/source/dynamic/eval::js-eval-assignment
-      - id: objectives/execution/interpreter/eval/dynamic::eval-call-js
-      - id: objectives/anti-static/obfuscation/strings/encoding::js-dynamic-exec
-      - id: micro-behaviors/data/encode/arrays::js-large-int-array
-      - id: micro-behaviors/data/encode/arrays::js-hex-number-array
-    needs: 1
-
-  - id: nemucod-string-concealment-dropper
-    desc: Nemucod variant using reverse-string and junk math
-    crit: hostile
-    conf: 0.95
-    attack: "T1027"
-    mbc: "B0032"
-    all:
-      - id: micro-behaviors/anti-static/obfuscate/string-conceal::any-string-concealment
-      - id: micro-behaviors/process/create/script::batch-script-execution
-      - id: micro-behaviors/anti-static/obfuscate/string-conceal::js-xmlhttp-responsebody-reversed
-
-  - id: nemucod-interspersed-dropper
-    desc: Nemucod variant using interspersed character obfuscation and multi-stage download
-    crit: hostile
-    conf: 0.95
-    attack: "T1027"
-    mbc: "B0032"
-    all:
-      - id: micro-behaviors/anti-static/obfuscate/string-conceal::js-interspersed-question-marks
-    any:
-      - id: micro-behaviors/anti-static/obfuscate/string-conceal/nemucod/
+      - id: micro-behaviors/anti-static/obfuscation/strings/encoding::js-split-hash-join
       - id: micro-behaviors/anti-analysis/anti-emulation/date-evasion::js-date-setter-getter-check
-    needs: 2
+      - id: micro-behaviors/fs/file/read-write::js-mz-header-array-check

@@ -94,6 +94,7 @@ traits:
     desc: "Check updates lure text"
     crit: notable
     conf: 0.75
+    for: [applescript, shell]
     if:
       type: string
       # Match "check for updates", "check updates", "checking for updates" etc.

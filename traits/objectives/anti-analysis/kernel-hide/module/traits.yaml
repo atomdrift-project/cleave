@@ -27,15 +27,6 @@ traits:
       type: string
       substr: "/proc/ksyms"
 
-  - id: lookup-address
-    desc: lookup_address kernel function
-    crit: notable
-    conf: 0.8
-    mbc: "F0015"
-    if:
-      type: symbol
-      regex: "lookup_address"
-
   - id: kallsyms-lookup-fn
     desc: kallsyms_lookup kernel function
     crit: notable
@@ -635,7 +626,7 @@ composite_rules:
     any:
       - id: proc-kallsyms
       - id: proc-ksyms
-      - id: lookup-address
+      - id: micro-behaviors/os/kernel/memory::lookup-address-usage
       - id: kallsyms-lookup-fn
 
   # TCP seq show functions helper

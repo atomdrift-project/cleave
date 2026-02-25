@@ -3,6 +3,7 @@ traits:
     desc: Nested array concatenation
     crit: suspicious
     conf: 0.8
+    size_max: 50000
     for:
       - javascript
     if:
@@ -13,6 +14,7 @@ traits:
     desc: Nested array concat (Regex)
     crit: suspicious
     conf: 0.8
+    size_max: 50000
     for:
       - javascript
     if:

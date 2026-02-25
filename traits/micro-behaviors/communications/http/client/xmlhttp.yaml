@@ -10,6 +10,15 @@ traits:
       if:
         type: string
         regex: '\.open\s*\(\s*["''](GET|POST)["'']'
+
+    - id: js-xmlhttp-open-obfuscated-method
+      desc: "XMLHTTP.open with concatenated HTTP method"
+      crit: suspicious
+      conf: 0.9
+      for: [javascript]
+      if:
+        type: raw
+        regex: '\.open\s*\(\s*["''][A-Z]{1,4}["'']\s*\+\s*["''][A-Z]{1,4}["'']\s*,'
   
     - id: js-xmlhttp-send
       desc: "XMLHTTP.send call"

@@ -122,6 +122,9 @@ composite_rules:
       - id: fexecve-symbol
       - id: micro-behaviors/process/create/shell::c-execve
       - id: micro-behaviors/mem/protect/modify::mprotect-symbol
+    downgrade:
+      any:
+        - id: micro-behaviors/dylib/library::shell-interpreter
 
   - id: python-shellcode
     desc: Python shellcode injection via VirtualProtect

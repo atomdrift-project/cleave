@@ -22,7 +22,8 @@ traits:
     if:
       type: hex
       section: text
-      pattern: "30 ?? ?? 4? E2"  # xor [reg], al; inc; loop
+      pattern: "30 ?? 4? E2"  # xor [reg], al; inc; loop
+      count_min: 2  # Single match in large binaries is noise; 4? is REX prefix in x64
 
   # XOR with immediate, increment, conditional jump back
   # 80 3? XX EB (xor byte [reg], imm8; ... jmp short) - mod=00, reg=6 (XOR)

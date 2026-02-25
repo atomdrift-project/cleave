@@ -130,6 +130,9 @@ traits:
     - substr: "xiph.org"
     - substr: "translationproject.org"
     - substr: "sourceware.org"
+    - substr: "opensource.org"
+    - substr: "creativecommons.org"
+    - substr: "spdx.org"
 
 - id: http-url-script
   desc: Network URL with domain name (script)
@@ -200,6 +203,9 @@ traits:
     - substr: "xiph.org"
     - substr: "translationproject.org"
     - substr: "sourceware.org"
+    - substr: "opensource.org"
+    - substr: "creativecommons.org"
+    - substr: "spdx.org"
 
 - id: bullethost-cloud
   desc: Bullethost.cloud file hosting

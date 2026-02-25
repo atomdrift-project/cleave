@@ -36,12 +36,16 @@ traits:
     if:
       type: string
       substr: 'ODB.S'
+    not:
+      - substr: 'ADODB.Stream'
 
   - id: adodb-fragment-tiny-2b
     desc: Tiny ADODB.Stream fragment (variant 2b)
     if:
       type: string
       word: 'trea'
+    not:
+      - substr: 'Stream'
 
   - id: xmlhttp-fragment-tiny-2
     desc: Tiny XMLHTTP fragment (variant 2)
@@ -64,12 +68,16 @@ traits:
     if:
       type: string
       substr: 'veToF'
+    not:
+      - substr: 'SaveToFile'
 
   - id: savetofile-fragment-tiny-2b
     desc: Tiny SaveToFile fragment (variant 2b)
     if:
       type: string
       word: 'ile'
+    not:
+      - substr: 'File'
 
   - id: activex-fragment-tiny-2a
     desc: Tiny ActiveXObject fragment (variant 2a)

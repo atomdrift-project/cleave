@@ -50,3 +50,4 @@ traits:
             right: (string)
           )
         ) @concat_prop
+      count_min: 3

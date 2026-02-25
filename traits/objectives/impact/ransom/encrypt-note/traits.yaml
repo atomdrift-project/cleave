@@ -5,15 +5,6 @@ defaults:
   for: [all]
 
 traits:
-  - id: completion_msg
-    desc: "Declarative encryption completion message"
-    crit: suspicious
-    conf: 0.7
-    attack: "T1486"
-    if:
-      type: string
-      substr: "Encryption complete. Your files have been encrypted."
-
   - id: contact-us
     desc: "contact us"
     crit: notable

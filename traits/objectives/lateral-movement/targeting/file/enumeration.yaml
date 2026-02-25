@@ -32,6 +32,8 @@ composite_rules:
     downgrade:
       any:
         - id: metadata/quality::versioned
+        - id: metadata/format::large-executable
+        - id: metadata/format::many-imports
 
   - id: file-enumeration-with-access
     desc: File enumeration + access combination

@@ -8,7 +8,7 @@ traits:
 
   - id: large-source-file-4mb
     desc: Source file larger than 4MB
-    crit: suspicious
+    crit: notable
     conf: 0.9
     for: [javascript, typescript, python, ruby, php, java, c, cpp, go, rust]
     size_min: 4194304

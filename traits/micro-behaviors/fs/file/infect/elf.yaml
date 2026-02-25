@@ -1,0 +1,45 @@
+defaults:
+  for: [all]
+
+traits:
+  - id: elf-segment-growth
+    desc: Grows an ELF program segment
+    crit: suspicious
+    conf: 0.8
+    if:
+      type: raw
+      regex: 'p_filesz\s*(\+)?=\s*\w+'
+
+  - id: elf-section-growth
+    desc: Grows an ELF section
+    crit: suspicious
+    conf: 0.8
+    if:
+      type: raw
+      regex: 'sh_size\s*(\+)?=\s*\w+'
+
+  - id: elf-entry-point-redirection
+    desc: Redirects ELF entry point
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: raw
+      regex: 'e_entry\s*=\s*\w+'
+
+composite_rules:
+  - id: elf-section-segment-growth
+    desc: Grows both ELF sections and segments
+    crit: suspicious
+    conf: 0.9
+    all:
+      - id: elf-segment-growth
+      - id: elf-section-growth
+
+  - id: elf-infection-behavior
+    desc: Manipulates ELF headers to inject code or segments
+    crit: suspicious
+    conf: 1.0
+    attack: T1542.001
+    any:
+      - id: elf-section-segment-growth
+      - id: elf-entry-point-redirection

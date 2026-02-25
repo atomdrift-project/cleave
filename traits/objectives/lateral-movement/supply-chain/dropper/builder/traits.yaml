@@ -76,13 +76,6 @@ traits:
       exact: rb
 
   # jscript dropper components
-  - id: adodb-stream-str
-    desc: ADODB.Stream string
-    crit: component
-    if:
-      type: string
-      substr: "ADODB.Stream"
-
   - id: msxml2-str
     desc: MSXml2 string
     crit: component
@@ -242,7 +235,7 @@ composite_rules:
     desc: ADODB or MSXML reference
     crit: component
     any:
-      - id: adodb-stream-str
+      - id: micro-behaviors/fs/write/file::js-adodb-stream-reference
       - id: msxml2-str
 
   - id: fso-or-shell

@@ -28,7 +28,7 @@ traits:
 
   - id: ntdll-direct-memory-op-b
     desc: Direct NT memory manipulation (view/query)
-    crit: suspicious
+    crit: notable
     conf: 0.9
     mbc: C0021
     if:

@@ -114,7 +114,7 @@ traits:
   # intentional gadget placement rather than normal compiled output
   - id: stack-adjust-ret
     desc: Stack adjustment gadget
-    crit: suspicious
+    crit: component
     conf: 0.9
     if:
       type: hex

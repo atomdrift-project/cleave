@@ -25,6 +25,11 @@ traits:
       - type: metrics
         field: binary.import_density
         max: 0
+      # Delphi/Borland compilers store strings in .text, not .rdata
+      # A binary with many strings is not concealing them
+      - type: metrics
+        field: binary.string_count
+        min: 200
 
   - id: minimal-strings
     desc: "Binary has very few readable"
@@ -42,6 +47,8 @@ traits:
       - id: metadata/format::many-functions
       - id: metadata/hardening::stripped-binary
       - id: metadata/signed/platform::apple
+      - type: raw
+        substr: "BSJB"  # .NET NI (NGEN) DLLs store metadata in binary format, few readable strings
       - type: metrics
         field: binary.import_count
         min: 80

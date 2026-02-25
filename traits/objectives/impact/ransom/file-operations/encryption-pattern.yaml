@@ -41,8 +41,8 @@ composite_rules:
 
   # === Drive encryption targeting ===
 
-  - id: multi-drive-encryption-pattern
-    desc: Drive enumeration with crypto and file operations
+  - id: volume-targeting-ransomware
+    desc: Volume enumeration with encryption and file operations
     crit: hostile
     conf: 0.95
     for: [pe, dll]
@@ -50,27 +50,19 @@ composite_rules:
     attack: "T1486"
     mbc: "C0027"
     all:
-      - id: micro-behaviors/fs/enumerate/drives::get-logical-drives
+      - id: micro-behaviors/fs/enumerate/volume::find-first-volume
       - id: has-crypto-capability
       - id: has-file-operations
-
-  - id: volume-targeting-ransomware
-    desc: Volume enumeration with encryption capability
-    crit: hostile
-    conf: 0.9
-    for: [pe, dll]
-    platforms: [windows]
-    attack: "T1486"
-    all:
-      - id: has-volume-enumeration
-      - id: has-crypto-capability
-      - id: has-file-operations
+    downgrade:
+      any:
+        - id: metadata/format::many-exports
+        - id: metadata/quality/versioning::pe-version-resource
 
   # === File renaming pattern (ransomware appends extension) ===
 
   - id: mass-file-renaming
     desc: Bulk file renaming with crypto
-    crit: suspicious
+    crit: notable
     conf: 0.85
     for: [pe, dll]
     platforms: [windows]

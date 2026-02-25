@@ -155,6 +155,7 @@ composite_rules:
     conf: 0.95
     attack: T1485
     for: [javascript, typescript]
+    size_max: 50000
     all:
       - id: env-conditional
     any:

@@ -111,6 +111,9 @@ traits:
   if:
     type: string
     regex: (^|[\s;&|])last(\s|$)
+  unless:
+  - type: raw
+    regex: '\{"version":3,"file":"'
 - id: last-cmd-bin
   desc: Last command path for login history
   crit: suspicious

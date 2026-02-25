@@ -59,6 +59,39 @@ traits:
   if:
     type: raw
     regex: while\(!!\[\]\).*?try.*?parseInt.*?\.push.*?\.shift
+- id: parseint-decoder-loop
+  desc: while(!![]) try/parseInt decoder loop
+  crit: suspicious
+  conf: 0.9
+  attack: T1027
+  mbc: B0032
+  for:
+  - javascript
+  if:
+    type: raw
+    regex: while\(\s*!!\s*\[\]\s*\)\s*\{\s*try\s*\{\s*var\s+\w+\s*=\s*-?\s*parseInt\(
+- id: push-keyword
+  desc: push keyword in string-table decoder context
+  crit: notable
+  conf: 0.6
+  attack: T1027
+  mbc: B0032
+  for:
+  - javascript
+  if:
+    type: string
+    exact: push
+- id: shift-keyword
+  desc: shift keyword in string-table decoder context
+  crit: notable
+  conf: 0.6
+  attack: T1027
+  mbc: B0032
+  for:
+  - javascript
+  if:
+    type: string
+    exact: shift
 - id: array-swap-elements
   desc: Array element assignment swap step
   crit: notable
@@ -178,6 +211,19 @@ composite_rules:
   - id: push-shift-pattern
   - id: shift-push-pattern
   - id: array-shuffle-algorithm
+- id: decoder-loop-keyword-triad
+  desc: Infinite loop decoder with parseInt + push/shift keywords
+  crit: suspicious
+  conf: 0.92
+  attack: T1027.002
+  mbc: B0032
+  for:
+  - javascript
+  all:
+  - id: infinite-loop
+  - id: parseint-decoder-loop
+  - id: push-keyword
+  - id: shift-keyword
 - id: advanced-array-shuffling
   desc: Advanced array shuffling algorithm
   crit: hostile
@@ -191,6 +237,7 @@ composite_rules:
   any:
   - id: array-swap-elements
   - id: string-array-rotation
+  - id: decoder-loop-keyword-triad
 # GuardDog: Name mangling composite
 - id: hex-name-mangling
   desc: Hex-prefixed identifier names (obfuscation)

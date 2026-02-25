@@ -56,6 +56,12 @@ traits:
       - id: metadata/signed/platform::apple
       - type: string
         substr: "VS_VERSION_INFO"
+      - type: metrics
+        field: binary.export_count
+        min: 50
+      - type: metrics
+        field: binary.data_entropy
+        max: 4.0
 
   # Large rodata section with medium entropy = encoded strings
   - id: encoded-rodata-section

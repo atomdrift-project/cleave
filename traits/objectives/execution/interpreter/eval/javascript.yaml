@@ -1,0 +1,9 @@
+composite_rules:
+  - id: js-eval-assignment
+    desc: Assignment or return of 'eval' function reference
+    crit: suspicious
+    conf: 0.8
+    for: [javascript]
+    any:
+      - id: micro-behaviors/data/source/dynamic/eval::js-eval-assignment-keyword
+      - id: micro-behaviors/data/source/dynamic/eval::js-eval-assignment-return

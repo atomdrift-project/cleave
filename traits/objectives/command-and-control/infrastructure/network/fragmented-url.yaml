@@ -10,6 +10,10 @@ defaults:
 traits:
   - id: fragmented-url-scheme
     desc: Fragmented URL scheme string (e.g., "https:/")
+    unless:
+      - type: metrics
+        field: binary.import_count
+        min: 30
     if:
       type: string
       regex: ^(https?:/|ftp:/|sftp:/)$

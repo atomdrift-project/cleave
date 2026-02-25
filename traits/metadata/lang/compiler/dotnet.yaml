@@ -1,0 +1,84 @@
+# .NET/CLR Detection (Extended)
+# Additional .NET markers beyond metadata/format/pe/dotnet.yaml
+# NOTE: Basic markers (mscoree, _CorExeMain, _CorDllMain) already exist there.
+
+defaults:
+  for: [pe, dll]
+  platforms: [windows]
+
+traits:
+  # === .NET runtime strings (additional markers) ===
+  - id: clr-version
+    desc: CLR version string
+    crit: baseline
+    conf: 0.9
+    if:
+      type: string
+      regex: 'v[24]\.[0-9]{1,2}\.[0-9]{1,5}'
+
+  - id: mscorlib
+    desc: mscorlib reference
+    crit: baseline
+    conf: 0.9
+    if:
+      type: string
+      substr: 'mscorlib'
+
+  - id: system-namespace
+    desc: System namespace reference
+    crit: baseline
+    conf: 0.8
+    if:
+      type: string
+      regex: 'System\.(IO|Net|Security)'
+
+  # === .NET Framework references ===
+  - id: framework-reference
+    desc: .NET Framework reference
+    crit: baseline
+    conf: 0.85
+    if:
+      type: string
+      substr: '.NETFramework,Version='
+
+  - id: dotnet-core-reference
+    desc: .NET Core reference
+    crit: baseline
+    conf: 0.85
+    if:
+      type: string
+      substr: 'Microsoft.NETCore'
+
+  # === Suspicious .NET patterns ===
+  - id: reflection-emit
+    desc: Reflection.Emit usage (dynamic code)
+    crit: notable
+    conf: 0.8
+    if:
+      type: string
+      substr: 'System.Reflection.Emit'
+
+  - id: runtime-interop
+    desc: Runtime interop services
+    crit: notable
+    conf: 0.75
+    if:
+      type: string
+      substr: 'System.Runtime.InteropServices'
+
+  - id: codedom-compiler
+    desc: CodeDom compiler access
+    crit: notable
+    conf: 0.8
+    if:
+      type: string
+      substr: 'System.CodeDom.Compiler'
+
+composite_rules:
+  - id: dotnet-dynamic-code
+    desc: .NET dynamic code generation capability
+    crit: notable
+    conf: 0.85
+    any:
+      - id: reflection-emit
+      - id: codedom-compiler

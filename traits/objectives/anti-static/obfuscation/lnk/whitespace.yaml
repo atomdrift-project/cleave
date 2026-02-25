@@ -1,0 +1,113 @@
+# LNK Whitespace Obfuscation
+# CVE/ZDI: ZDI-CAN-25373
+# ATT&CK: T1027.010 (Command Obfuscation)
+#
+# Attackers abuse LNK shortcut files by inserting excessive whitespace
+# (spaces, tabs, newlines) to hide malicious command-line arguments
+# from visual inspection. The target command is padded far to the right
+# so it's not visible in the properties dialog.
+#
+# LIMITATION: cleave does not have native LNK file type support.
+# These patterns detect the obfuscation technique in any file context.
+
+defaults:
+  attack: "T1027.010"
+  for: [all]
+
+traits:
+  # === Excessive whitespace with command switch patterns ===
+  # More specific patterns that require both whitespace AND command context
+  - id: whitespace-cmd-exe
+    desc: Excessive whitespace before cmd.exe invocation
+    crit: suspicious
+    conf: 0.85
+    if:
+      type: raw
+      regex: '[ ]{50,}cmd\.exe'
+      case_insensitive: true
+
+  - id: whitespace-powershell-exe
+    desc: Excessive whitespace before powershell.exe
+    crit: suspicious
+    conf: 0.85
+    if:
+      type: raw
+      regex: '[ ]{50,}powershell\.exe'
+      case_insensitive: true
+
+  - id: whitespace-script-host
+    desc: Excessive whitespace before script hosts
+    crit: suspicious
+    conf: 0.85
+    if:
+      type: raw
+      regex: '[ ]{50,}(wscript|cscript)\.exe'
+      case_insensitive: true
+
+  - id: tab-padded-command
+    desc: Tab-padded command obfuscation
+    crit: suspicious
+    conf: 0.85
+    if:
+      type: raw
+      regex: '\t{20,}(cmd|powershell)\.exe'
+      case_insensitive: true
+
+  # === LNK-specific argument hiding ===
+  - id: lnk-argument-padding
+    desc: LNK argument field with excessive padding
+    crit: suspicious
+    conf: 0.8
+    if:
+      type: raw
+      regex: '(/c|/k|-c)[ ]{30,}\S'
+      case_insensitive: true
+
+  # === Encoded command after whitespace ===
+  - id: hidden-encoded-command
+    desc: Base64/encoded command after whitespace padding
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: raw
+      # Whitespace + -enc flag + base64
+      regex: '[ ]{30,}-enc\s+[A-Za-z0-9+/]{20,}'
+      case_insensitive: true
+
+composite_rules:
+  # Helper: whitespace hiding technique detected
+  - id: whitespace-hiding
+    desc: Whitespace-based command hiding
+    crit: suspicious
+    conf: 0.85
+    any:
+      - id: whitespace-cmd-exe
+      - id: whitespace-powershell-exe
+      - id: whitespace-script-host
+
+  # Helper: extended whitespace patterns
+  - id: whitespace-hiding-extended
+    desc: Extended whitespace hiding patterns
+    crit: suspicious
+    conf: 0.85
+    any:
+      - id: whitespace-hiding
+      - id: tab-padded-command
+
+  # Helper: command argument indicators
+  - id: argument-indicators
+    desc: Command argument padding or encoding
+    crit: suspicious
+    conf: 0.85
+    any:
+      - id: lnk-argument-padding
+      - id: hidden-encoded-command
+
+  # Main composite: both hiding + argument pattern
+  - id: lnk-whitespace-exploit
+    desc: LNK whitespace obfuscation exploit pattern
+    crit: hostile
+    conf: 0.95
+    all:
+      - id: whitespace-hiding-extended
+      - id: argument-indicators

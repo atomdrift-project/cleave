@@ -1,0 +1,10 @@
+composite_rules:
+  - id: fallback-exfil-channels
+    desc: "Contains fallback HTTP POST and WebSocket exfiltration capabilities"
+    conf: 0.85
+    crit: suspicious
+    attack: T1041
+    for: [javascript, typescript]
+    all:
+      - id: micro-behaviors/communications/http/post::post
+      - id: micro-behaviors/communications/http/websocket::websocket-class

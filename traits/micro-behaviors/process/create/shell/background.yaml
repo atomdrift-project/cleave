@@ -1,0 +1,13 @@
+defaults:
+  for:
+  - all
+traits:
+- id: nohup-background-miner
+  desc: Background process with mining flags
+  crit: suspicious
+  conf: 0.85
+  attack: T1496
+  mbc: B0041
+  if:
+    type: string
+    regex: nohup\s+\./.{1,30}\s+-u\s+.{1,150}\s+-o\s+.{1,150}&

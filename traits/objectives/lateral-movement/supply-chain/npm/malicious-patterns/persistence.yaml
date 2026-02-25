@@ -1,0 +1,38 @@
+# NPM Supply Chain - Persistence via package.json main field
+# ATT&CK: T1547.001 (Boot or Logon Autostart Execution: Registry Run Keys / Startup Folder)
+
+defaults:
+  attack: T1547.001
+  for:
+  - javascript
+  - typescript
+
+traits:
+- id: extract-package-json-main
+  desc: Accesses .main property of parsed JSON
+  crit: notable
+  conf: 0.6
+  mbc: E1082
+  if:
+    type: raw
+    regex: JSON\.parse\(.{0,100}\)\.main\b
+
+composite_rules:
+- id: write-cmd-to-startup
+  desc: Writes .cmd batch file to Windows Startup folder
+  crit: hostile
+  conf: 0.95
+  mbc: E1082
+  all:
+  - id: micro-behaviors/os/persistence/startup::win-startup-path
+  - id: micro-behaviors/fs/write/file::write-file-async
+  - id: micro-behaviors/fs/path/extension::cmd
+
+- id: package-json-startup-persistence
+  desc: Parses package.json to write main payload to Windows Startup folder
+  crit: hostile
+  conf: 0.99
+  mbc: E1082
+  all:
+  - id: extract-package-json-main
+  - id: write-cmd-to-startup

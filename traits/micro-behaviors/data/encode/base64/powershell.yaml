@@ -1,0 +1,18 @@
+# Base64 Decoding in PowerShell
+defaults:
+  for: [powershell]
+  crit: notable
+  conf: 0.9
+
+traits:
+  - id: from-base64-string
+    desc: "Decodes base64 in PowerShell"
+    if:
+      type: raw
+      regex: '(?i)\[System\.Convert\]::\s*FromBase64String'
+
+  - id: to-base64-string
+    desc: "Encodes base64 in PowerShell"
+    if:
+      type: raw
+      regex: '(?i)\[System\.Convert\]::\s*ToBase64String'

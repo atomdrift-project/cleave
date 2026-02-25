@@ -1,0 +1,22 @@
+defaults:
+  for:
+  - all
+traits:
+- id: wget-tar-nohup-chain
+  desc: Downloads, extracts, and background executes payload
+  crit: suspicious
+  conf: 0.85
+  attack: T1105
+  mbc: B0024
+  if:
+    type: string
+    regex: (wget|curl).{1,200}&&\s*tar.{1,50}&&\s*cd.{1,50}&&\s*nohup
+- id: wget-chmod-nohup-chain
+  desc: Downloads, makes executable, and background executes
+  crit: suspicious
+  conf: 0.85
+  attack: T1105
+  mbc: B0024
+  if:
+    type: string
+    regex: (wget|curl).{1,200}&&\s*chmod\s+\+x.{1,50}&&\s*nohup

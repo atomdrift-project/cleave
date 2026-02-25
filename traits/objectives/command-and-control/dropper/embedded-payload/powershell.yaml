@@ -1,0 +1,20 @@
+# Base64 Embedded Payload Dropper for PowerShell
+# MBC: C0025 (Encode Data), B0024 (Execution)
+# ATT&CK: T1132 (Data Encoding), T1059.001 (PowerShell)
+
+defaults:
+  for: [powershell]
+
+composite_rules:
+  - id: ps-base64-dropper
+    desc: "Decodes base64 payload, writes to disk, and executes"
+    crit: hostile
+    conf: 0.95
+    attack: "T1059.001"
+    all:
+      - id: micro-behaviors/data/encode/base64::from-base64-string
+      - id: micro-behaviors/fs/write/file::write-all-bytes
+      - id: micro-behaviors/process/create/exec::start-process
+    any:
+      - id: micro-behaviors/fs/path/temp::get-temp-path
+      - id: micro-behaviors/fs/path/temp::env-temp

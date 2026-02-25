@@ -1,0 +1,33 @@
+# French security and financial keywords
+# ATT&CK: T1005 (Data from Local System)
+
+defaults:
+  for: [all]
+
+traits:
+  - id: french-security-passwords
+    desc: French password keywords
+    crit: notable
+    conf: 0.6
+    if:
+      type: string
+      regex: '(?i)\b(motdepasse|mot_de_passe|privé)\b'
+      count_min: 2
+
+  - id: french-security-financial
+    desc: French financial keywords
+    crit: notable
+    conf: 0.6
+    if:
+      type: string
+      regex: '(?i)\b(banque|récupé|sauvegarde)\b'
+      count_min: 2
+
+composite_rules:
+  - id: french-security-keywords
+    desc: French security and financial keywords
+    crit: notable
+    conf: 0.6
+    any:
+      - id: french-security-passwords
+      - id: french-security-financial

@@ -1,0 +1,145 @@
+# Chinese Security Product Detection
+# ATT&CK: T1562.001 (Impair Defenses: Disable or Modify Tools)
+#
+# Malware often targets Chinese security products when operating in
+# that region. Detection of these product names alongside termination
+# capabilities indicates EDR evasion.
+
+defaults:
+  attack: "T1562.001"
+  for: [pe, elf]
+
+traits:
+  # === 360 Security (Qihoo) - split to stay within OR limits ===
+  - id: qihoo-360-safe
+    desc: Qihoo 360 Safe reference
+    crit: notable
+    conf: 0.6
+    if:
+      type: string
+      regex: '(?i)360(safe|sd|tray)'
+
+  - id: qihoo-name
+    desc: Qihoo company name reference
+    crit: notable
+    conf: 0.6
+    if:
+      type: string
+      substr: 'qihoo'
+      case_insensitive: true
+
+  - id: qihoo-360-process
+    desc: Qihoo 360 process names
+    crit: notable
+    conf: 0.7
+    if:
+      type: string
+      regex: '(?i)360(se|chrome|rp)\.exe'
+
+  # === Tencent Security ===
+  - id: tencent-security
+    desc: Tencent PC Manager reference
+    crit: notable
+    conf: 0.6
+    if:
+      type: string
+      regex: '(?i)(qqpctray|qqpcmgr|tav\.exe)'
+
+  # === Baidu Security ===
+  - id: baidu-security
+    desc: Baidu Antivirus reference
+    crit: notable
+    conf: 0.6
+    if:
+      type: string
+      regex: '(?i)(baidusd|bddownloader|bdmserv)'
+
+  # === Kingsoft / WPS Security - split ===
+  - id: kingsoft-name
+    desc: Kingsoft Antivirus reference
+    crit: notable
+    conf: 0.6
+    if:
+      type: string
+      substr: 'kingsoft'
+      case_insensitive: true
+
+  - id: kingsoft-kxe
+    desc: Kingsoft KXE process reference
+    crit: notable
+    conf: 0.6
+    if:
+      type: string
+      regex: '(?i)kxe(tray|scan|serv)'
+
+  - id: duba-av
+    desc: Duba Antivirus reference
+    crit: notable
+    conf: 0.6
+    if:
+      type: string
+      substr: 'duba'
+      case_insensitive: true
+
+  # === Rising Antivirus ===
+  - id: rising-av
+    desc: Rising Antivirus reference
+    crit: notable
+    conf: 0.6
+    if:
+      type: string
+      regex: '(?i)rav(mon|task|tray)\.exe'
+
+  # === Huorong Security ===
+  - id: huorong-security
+    desc: Huorong Security reference
+    crit: notable
+    conf: 0.6
+    if:
+      type: string
+      regex: '(?i)(huorong|hipstray)'
+
+composite_rules:
+  - id: qihoo-360
+    desc: Qihoo 360 security product
+    crit: notable
+    conf: 0.7
+    any:
+      - id: qihoo-360-safe
+      - id: qihoo-name
+      - id: qihoo-360-process
+
+  - id: kingsoft-security
+    desc: Kingsoft security product
+    crit: notable
+    conf: 0.7
+    any:
+      - id: kingsoft-name
+      - id: kingsoft-kxe
+      - id: duba-av
+
+  - id: chinese-av-product
+    desc: Chinese AV/security product reference
+    crit: notable
+    conf: 0.7
+    any:
+      - id: qihoo-360
+      - id: tencent-security
+      - id: baidu-security
+
+  - id: chinese-av-product-extended
+    desc: Chinese AV (extended coverage)
+    crit: notable
+    conf: 0.7
+    any:
+      - id: chinese-av-product
+      - id: kingsoft-security
+      - id: rising-av
+
+  - id: chinese-av-kill
+    desc: Chinese AV process termination
+    crit: suspicious
+    conf: 0.9
+    all:
+      - id: chinese-av-product-extended
+      - id: objectives/impact/degrade/edr::termination-verbs

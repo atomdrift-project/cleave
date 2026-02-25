@@ -1,0 +1,13 @@
+# DNS Exfil Preparations
+defaults:
+  for: [shell]
+  crit: notable
+
+traits:
+  - id: dns-label-truncation
+    desc: Truncates to DNS label max (63 chars)
+    crit: suspicious
+    conf: 0.7
+    if:
+      type: raw
+      regex: 'max_length=63\b'

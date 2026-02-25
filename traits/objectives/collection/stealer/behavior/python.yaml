@@ -1,0 +1,34 @@
+# Python generic stealer behaviors
+# ATT&CK: T1005 (Data from Local System)
+
+defaults:
+  for: [python]
+  attack: "T1005"
+  crit: hostile
+
+composite_rules:
+  - id: python-zip-stealer-wallet
+    desc: Enumerates user directories, looks for wallet data, and creates password-protected zip
+    conf: 0.95
+    all:
+      - id: objectives/collection/metadata/file::user-directory-enum
+      - id: objectives/credential-access/wallet/mnemonic::wallet-context
+      - id: micro-behaviors/process/create/subprocess::popen-zip-password
+
+  - id: python-zip-stealer-french
+    desc: Enumerates user directories, looks for French security data, and creates password-protected zip
+    conf: 0.95
+    all:
+      - id: objectives/collection/metadata/file::user-directory-enum
+      - id: micro-behaviors/data/text/keywords::french-security-keywords
+      - id: micro-behaviors/process/create/subprocess::popen-zip-password
+
+  - id: python-file-sniffer
+    desc: Traverses filesystem opening files and scanning for credentials/secrets
+    conf: 0.85
+    all:
+      - id: micro-behaviors/fs/directory/traverse::traverse-walk
+      - id: micro-behaviors/data/text/keywords::secret
+      - id: micro-behaviors/data/control-flow/analysis::for-loop-ast
+      - id: micro-behaviors/fs/read/file::file-open-content
+      - id: micro-behaviors/fs/read/file::file-read-content

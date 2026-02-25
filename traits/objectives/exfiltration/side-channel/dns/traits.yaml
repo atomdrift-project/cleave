@@ -1,0 +1,34 @@
+# DNS Exfiltration Composites
+# Detects DNS exfiltration patterns
+# ATT&CK: T1048.003 (Exfiltration Over Alternative Protocol: Exfiltration Over Unencrypted/Obfuscated Non-C2 Protocol)
+
+defaults:
+  for: [shell]
+
+composite_rules:
+  - id: dns-exfil-curl-truncation
+    desc: DNS exfil via curl with label truncation
+    crit: hostile
+    conf: 0.95
+    attack: "T1048.003"
+    all:
+      - id: micro-behaviors/communications/http/curl::curl-dynamic-subdomain
+      - id: micro-behaviors/communications/dns/exfil_prep::dns-label-truncation
+
+  - id: dns-exfil-curl-hex
+    desc: DNS exfil via curl with hex encoding
+    crit: hostile
+    conf: 0.95
+    attack: "T1048.003"
+    all:
+      - id: micro-behaviors/communications/http/curl::curl-dynamic-subdomain
+      - id: micro-behaviors/data/encode/hex::hex-encode-xxd
+
+  - id: dns-exfil-curl
+    desc: Network exfiltration via dynamic DNS subdomains using curl/wget
+    crit: hostile
+    conf: 0.95
+    attack: "T1048.003"
+    any:
+      - id: objectives/exfiltration/side-channel/dns::dns-exfil-curl-truncation
+      - id: objectives/exfiltration/side-channel/dns::dns-exfil-curl-hex

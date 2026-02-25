@@ -1,0 +1,11 @@
+# Python memory runners
+composite_rules:
+  - id: python-shellcode-runner
+    desc: Python script executes shellcode in memory via ctypes
+    crit: hostile
+    conf: 0.95
+    for: [python]
+    attack: "T1055"
+    all:
+      - id: micro-behaviors/execution/fileless/memory::python-virtualprotect-rwx
+      - id: micro-behaviors/execution/fileless/memory::python-cfunctype-cast

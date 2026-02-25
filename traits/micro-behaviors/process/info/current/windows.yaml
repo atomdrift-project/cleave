@@ -1,0 +1,32 @@
+# Process Information APIs - Windows
+# Basic process introspection and error handling APIs
+#
+# NOTE: Several traits like GetCurrentProcess, GetProcAddress already exist in:
+#   - micro-behaviors/dylib/lookup::get-proc-address
+#   - objectives/execution/module/load::get-current-process
+# This file contains complementary traits not covered elsewhere.
+
+defaults:
+  for: [pe, dll]
+  platforms: [windows]
+
+traits:
+  # NOTE: GetLastError already exists in micro-behaviors/os/error-handling/exceptions::get-last-error
+
+  - id: get-current-thread
+    desc: GetCurrentThread API call
+    crit: baseline
+    conf: 0.7
+    if:
+      type: symbol
+      exact: 'GetCurrentThread'
+
+  # NOTE: GetCurrentThreadId already exists in objectives/execution/native/runtime::get-thread-id
+
+  - id: get-module-filename
+    desc: GetModuleFileName API call
+    crit: baseline
+    conf: 0.7
+    if:
+      type: symbol
+      regex: 'GetModuleFileName[AW]?$'

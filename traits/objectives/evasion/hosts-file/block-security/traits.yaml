@@ -1,0 +1,151 @@
+# Hosts File Manipulation - Security Domain Blocking
+# ATT&CK: T1565.001 (Stored Data Manipulation)
+# MBC: F0004 (Disable or Evade Security Tools)
+#
+# Malware modifies /etc/hosts or C:\Windows\System32\drivers\etc\hosts
+# to redirect security domains to localhost, blocking AV updates and
+# threat intelligence lookups.
+
+defaults:
+  attack: "T1565.001"
+  mbc: "F0004"
+
+traits:
+  # === Windows hosts file path ===
+  - id: windows-hosts-path
+    desc: Windows hosts file path reference
+    crit: notable
+    conf: 0.7
+    platforms: [windows]
+    for: [pe, powershell, batch]
+    if:
+      type: string
+      regex: '(?i)\\system32\\drivers\\etc\\hosts'
+
+  # === Security vendor update domains (split to stay within OR limits) ===
+  - id: av-update-domain-a
+    desc: AV update domain (Kaspersky/Avast/AVG)
+    crit: suspicious
+    conf: 0.85
+    for: [all]
+    if:
+      type: string
+      regex: '(?i)(update|download)\.(kaspersky|avast|avg)\.'
+
+  - id: av-update-domain-b
+    desc: AV update domain (Bitdefender/ESET/Sophos)
+    crit: suspicious
+    conf: 0.85
+    for: [all]
+    if:
+      type: string
+      regex: '(?i)(update|download)\.(bitdefender|eset|sophos)\.'
+
+  - id: av-update-domain-c
+    desc: AV update domain (McAfee/Norton/Symantec)
+    crit: suspicious
+    conf: 0.85
+    for: [all]
+    if:
+      type: string
+      regex: '(?i)(update|download)\.(mcafee|norton|symantec)\.'
+
+  - id: microsoft-security-domain
+    desc: Microsoft security domain string
+    crit: notable
+    conf: 0.7
+    for: [all]
+    if:
+      type: string
+      regex: '(?i)(windowsupdate|smartscreen|wdcp)\.microsoft\.com'
+
+  # === Threat intel domains ===
+  # NOTE: any.run already exists in objectives/anti-analysis/sandbox/detect::any-run
+  - id: virustotal-domain
+    desc: VirusTotal domain reference
+    crit: suspicious
+    conf: 0.8
+    for: [all]
+    if:
+      type: string
+      substr: 'virustotal.com'
+
+  # === Localhost redirect patterns ===
+  - id: localhost-redirect-pattern
+    desc: Localhost IP with domain redirect pattern
+    crit: suspicious
+    conf: 0.85
+    for: [all]
+    if:
+      type: raw
+      regex: '127\.0\.0\.1\s+\S{1,60}\.(com|net|org)'
+      count_min: 3
+
+  - id: null-redirect-pattern
+    desc: Null IP redirect pattern (0.0.0.0)
+    crit: suspicious
+    conf: 0.85
+    for: [all]
+    if:
+      type: raw
+      regex: '0\.0\.0\.0\s+\S{1,60}\.(com|net|org)'
+      count_min: 3
+
+composite_rules:
+  # Helper: any hosts file path reference
+  - id: hosts-file-path
+    desc: Hosts file path reference
+    crit: notable
+    conf: 0.7
+    any:
+      - id: windows-hosts-path
+      - id: micro-behaviors/fs/path/config::config-hosts
+
+  # Helper: any AV update domain
+  - id: av-update-domain
+    desc: AV/EDR update domain reference
+    crit: suspicious
+    conf: 0.85
+    any:
+      - id: av-update-domain-a
+      - id: av-update-domain-b
+      - id: av-update-domain-c
+
+  # Helper: threat intel domains
+  - id: threat-intel-domain
+    desc: Threat intelligence service domain
+    crit: suspicious
+    conf: 0.8
+    any:
+      - id: virustotal-domain
+      - id: objectives/anti-analysis/sandbox/detect::any-run
+
+  # Helper: any security domain reference
+  - id: security-domain
+    desc: Security-related domain reference
+    crit: suspicious
+    conf: 0.8
+    any:
+      - id: av-update-domain
+      - id: microsoft-security-domain
+      - id: threat-intel-domain
+
+  # Main composite: hosts file path + security domain
+  - id: hosts-av-blocking
+    desc: Hosts file modification to block AV domains
+    crit: hostile
+    conf: 0.95
+    for: [pe, powershell, batch, python, shell]
+    all:
+      - id: hosts-file-path
+      - id: security-domain
+
+  # Multiple redirect entries (bulk blocking)
+  - id: bulk-domain-blocking
+    desc: Bulk domain blocking via hosts file
+    crit: suspicious
+    conf: 0.9
+    for: [all]
+    any:
+      - id: localhost-redirect-pattern
+      - id: null-redirect-pattern

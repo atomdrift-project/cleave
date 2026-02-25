@@ -1,0 +1,10 @@
+composite_rules:
+  - id: ruby-supply-chain-backdoor
+    desc: Persistent background RCE backdoor beacon
+    crit: hostile
+    conf: 0.95
+    for: [ruby]
+    all:
+      - id: micro-behaviors/execution/interpreter/eval::eval-open-read
+      - id: micro-behaviors/process/thread/create::thread-loop-sleep
+      - id: micro-behaviors/anti-static/obfuscation/exception::exception-swallower

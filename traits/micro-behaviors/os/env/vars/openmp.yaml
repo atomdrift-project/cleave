@@ -1,0 +1,11 @@
+defaults:
+  for:
+  - all
+traits:
+- id: omp-num-threads
+  desc: OpenMP thread count setting
+  crit: notable
+  conf: 0.8
+  if:
+    type: string
+    word: OMP_NUM_THREADS

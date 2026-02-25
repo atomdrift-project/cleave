@@ -1,0 +1,15 @@
+# Fernet Wiper Ransomware Detection
+# ATT&CK: T1486 (Data Encrypted for Impact), T1485 (Data Destruction)
+
+defaults:
+  for: [python]
+  attack: "T1486"
+
+composite_rules:
+  - id: fernet-wiper-ransomware
+    desc: "Fernet key generation combined with in-place encryption (wiper)"
+    crit: hostile
+    conf: 0.95
+    all:
+      - id: objectives/impact/ransom/behavior::inplace-encrypt
+      - id: micro-behaviors/crypto/symmetric/fernet::keygen

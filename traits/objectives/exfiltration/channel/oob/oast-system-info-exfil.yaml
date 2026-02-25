@@ -1,0 +1,11 @@
+composite_rules:
+  - id: oast-system-info-exfil
+    desc: System info exfiltration to OAST callback
+    crit: hostile
+    conf: 0.95
+    for:
+      - javascript
+      - typescript
+    all:
+      - id: micro-behaviors/process/user/query::whoami-cmd
+      - id: objectives/lateral-movement/supply-chain/framework::oast-str

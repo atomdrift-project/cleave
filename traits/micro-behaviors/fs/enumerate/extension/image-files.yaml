@@ -1,0 +1,12 @@
+defaults:
+  for: [python]
+
+traits:
+  - id: search-image-extensions
+    desc: Search for image file extensions
+    crit: notable
+    conf: 0.8
+    if:
+      type: raw
+      regex: '\*\.jpe?g|\*\.png'
+      case_insensitive: true

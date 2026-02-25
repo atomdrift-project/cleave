@@ -1,0 +1,30 @@
+defaults:
+  for:
+  - all
+composite_rules:
+  - id: solana-key-access
+    desc: Solana secret key extraction operations
+    conf: 0.8
+    crit: suspicious
+    attack: T1552.004
+    any:
+      - id: micro-behaviors/data/text/crypto::solana-keypair-fromsecretkey
+      - id: micro-behaviors/data/text/crypto::bip39-validate-mnemonic
+      - id: micro-behaviors/data/text/crypto::bs58-decode
+  - id: desktop-dir-search
+    desc: Searching Desktop directory specifically
+    conf: 0.8
+    crit: suspicious
+    attack: T1005
+    all:
+      - id: objectives/discovery/host/system/hardware-fingerprint::os-homedir-call
+      - id: micro-behaviors/fs/enumerate/directory::fs-readdir
+  - id: desktop-crypto-stealer
+    desc: Iterates Desktop looking for Solana/BIP39 secrets
+    conf: 0.95
+    crit: hostile
+    attack: T1552.004
+    all:
+      - id: solana-key-access
+      - id: desktop-dir-search
+      - id: micro-behaviors/communications/http/post::post

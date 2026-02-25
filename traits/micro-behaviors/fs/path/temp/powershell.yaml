@@ -1,0 +1,18 @@
+# Temp Path Access in PowerShell
+defaults:
+  for: [powershell]
+  crit: notable
+  conf: 0.9
+
+traits:
+  - id: get-temp-path
+    desc: Gets temp path
+    if:
+      type: raw
+      regex: '(?i)\[System\.IO\.Path\]::\s*GetTempPath'
+
+  - id: env-temp
+    desc: "Accesses temp environment variable"
+    if:
+      type: raw
+      regex: '(?i)\$env:(TEMP|TMP)\b'

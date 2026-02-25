@@ -1,0 +1,11 @@
+traits:
+  - id: eval-open-read
+    desc: Evaluates code downloaded from URL
+    crit: suspicious
+    conf: 0.9
+    for: [ruby]
+    mbc: "B0032"
+    attack: "T1059"
+    if:
+      type: raw
+      regex: 'eval\s*\(\s*(URI\.)?open\s*\([^)]{1,200}\)\s*\.read\s*\)'

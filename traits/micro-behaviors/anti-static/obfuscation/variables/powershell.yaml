@@ -1,0 +1,13 @@
+# PowerShell Obfuscation / Variable Naming
+defaults:
+  for: [powershell]
+  crit: suspicious
+  conf: 0.7
+
+traits:
+  - id: random-variable-names
+    desc: Random variable names
+    if:
+      type: raw
+      regex: '(\$[A-Z0-9]{5}\s*[=,\[\)]){3,}'
+      count_min: 1

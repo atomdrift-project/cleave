@@ -1,0 +1,27 @@
+defaults:
+  for: [all]
+
+traits:
+  - id: solana-keypair-fromsecretkey
+    desc: Solana Keypair generation from secret
+    conf: 0.8
+    crit: notable
+    if:
+      type: string
+      substr: "Keypair.fromSecretKey"
+
+  - id: bip39-validate-mnemonic
+    desc: BIP39 Mnemonic validation call
+    conf: 0.8
+    crit: notable
+    if:
+      type: string
+      substr: "validateMnemonic"
+
+  - id: bs58-decode
+    desc: Base58 decode operation
+    conf: 0.8
+    crit: notable
+    if:
+      type: string
+      substr: "bs58.decode"

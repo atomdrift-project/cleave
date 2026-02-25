@@ -1,0 +1,12 @@
+# Process Creation in PowerShell
+defaults:
+  for: [powershell]
+  crit: notable
+  conf: 0.9
+
+traits:
+  - id: start-process
+    desc: Uses Start-Process cmdlet
+    if:
+      type: raw
+      regex: '(?i)\bStart-Process\b'

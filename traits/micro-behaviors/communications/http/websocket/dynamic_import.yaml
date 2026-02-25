@@ -1,0 +1,9 @@
+traits:
+  - id: ws-dynamic-import
+    desc: "Dynamically imports the 'ws' WebSocket module"
+    conf: 0.8
+    crit: notable
+    for: [javascript, typescript]
+    if:
+      type: string
+      regex: 'import\s*\(\s*("ws"|''ws'')\s*\)'

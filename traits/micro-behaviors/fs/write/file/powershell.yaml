@@ -1,0 +1,24 @@
+# File Writing in PowerShell
+defaults:
+  for: [powershell]
+  crit: notable
+  conf: 0.9
+
+traits:
+  - id: write-all-bytes
+    desc: Writes binary data
+    if:
+      type: raw
+      regex: '(?i)\[System\.IO\.File\]::\s*WriteAllBytes'
+
+  - id: out-file
+    desc: Uses Out-File
+    if:
+      type: raw
+      regex: '(?i)\bOut-File\b'
+
+  - id: set-content
+    desc: Uses Set-Content
+    if:
+      type: raw
+      regex: '(?i)\bSet-Content\b'

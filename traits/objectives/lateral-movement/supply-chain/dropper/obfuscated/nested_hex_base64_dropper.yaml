@@ -1,0 +1,13 @@
+composite_rules:
+  - id: nested-hex-base64-dropper
+    desc: Mixed encoded payload dropper and executor
+    crit: hostile
+    conf: 0.95
+    for:
+      - javascript
+      - typescript
+    all:
+      - id: objectives/anti-static/obfuscation/strings/encoding::js-mixed-encoding-usage
+      - id: objectives/anti-static/obfuscation/payload::large-hex-string
+      - id: micro-behaviors/fs/write/file::write-file-sync
+      - id: micro-behaviors/process/create/shell/lang::js-exec

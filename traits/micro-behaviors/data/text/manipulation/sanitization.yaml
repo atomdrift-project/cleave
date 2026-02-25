@@ -1,0 +1,11 @@
+defaults:
+  for: [all]
+
+traits:
+  - id: alpha-sanitization-replace
+    desc: Generic non-alpha character removal
+    conf: 1.0
+    crit: component
+    if:
+      type: raw
+      regex: replace\(\/\[\^a-zA-Z\]\/

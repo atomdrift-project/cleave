@@ -1,0 +1,111 @@
+# Rust Compiler Detection
+# Identifies binaries compiled with the Rust toolchain via symbols and strings.
+
+defaults:
+  for: [elf, pe, macho]
+
+traits:
+  # === Rust standard library symbols ===
+  - id: std-panic
+    desc: Rust std panic handler symbol
+    crit: baseline
+    conf: 0.95
+    if:
+      type: symbol
+      regex: '^_?rust_panic'
+
+  - id: std-alloc
+    desc: Rust allocator symbol
+    crit: baseline
+    conf: 0.9
+    if:
+      type: symbol
+      regex: '^_?__rust_alloc'
+
+  - id: std-dealloc
+    desc: Rust deallocator symbol
+    crit: baseline
+    conf: 0.9
+    if:
+      type: symbol
+      regex: '^_?__rust_dealloc'
+
+  - id: core-fmt
+    desc: Rust core::fmt symbols
+    crit: baseline
+    conf: 0.9
+    if:
+      type: symbol
+      substr: 'core..fmt..'
+
+  - id: std-io
+    desc: Rust std::io symbols
+    crit: baseline
+    conf: 0.85
+    if:
+      type: symbol
+      substr: 'std..io..'
+
+  # === Rust compiler paths ===
+  - id: rustc-path
+    desc: Rust compiler path in binary
+    crit: baseline
+    conf: 0.95
+    if:
+      type: string
+      regex: '/rustc/[0-9a-f]{40}/'
+
+  - id: cargo-registry-path
+    desc: Cargo registry path in binary
+    crit: baseline
+    conf: 0.9
+    if:
+      type: string
+      substr: '.cargo/registry/src/'
+
+  - id: rust-src-path
+    desc: Rust source file path (.rs)
+    crit: baseline
+    conf: 0.85
+    if:
+      type: string
+      regex: '/[a-z_]+\.rs:'
+
+  # === Rust runtime strings ===
+  - id: panic-message
+    desc: Rust panic message format
+    crit: baseline
+    conf: 0.9
+    if:
+      type: string
+      regex: "panicked at '.{1,80}', .{1,80}\\.rs:"
+
+  - id: unwrap-failed
+    desc: Rust unwrap failure message
+    crit: baseline
+    conf: 0.85
+    if:
+      type: string
+      substr: "called `Option::unwrap()` on a `None` value"
+
+  - id: expect-failed
+    desc: Rust expect failure message
+    crit: baseline
+    conf: 0.85
+    if:
+      type: string
+      substr: "called `Result::unwrap()` on an `Err` value"
+
+composite_rules:
+  - id: rust-binary
+    desc: Rust-compiled binary
+    crit: baseline
+    conf: 0.95
+    needs: 2
+    any:
+      - id: std-panic
+      - id: std-alloc
+      - id: core-fmt
+      - id: rustc-path
+      - id: cargo-registry-path
+      - id: panic-message

@@ -1,0 +1,10 @@
+# Python RC4 characteristics
+traits:
+  - id: python-rc4-loop
+    desc: RC4 characteristics in Python
+    crit: notable
+    for: [python]
+    mbc: "C0027"
+    if:
+      type: string
+      regex: '(?s)for \w+ in range\s*\(\s*256\s*\):.{0,500}%\s*256'

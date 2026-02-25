@@ -1,0 +1,10 @@
+traits:
+  - id: thread-loop-sleep
+    desc: Background thread with loop and sleep
+    crit: suspicious
+    conf: 0.8
+    for: [ruby]
+    mbc: "B0032"
+    if:
+      type: raw
+      regex: 'Thread\.new\s*\{\s*loop\s*\{.*?sleep'

@@ -1,0 +1,11 @@
+defaults:
+  for: [python]
+
+traits:
+  - id: os-path-expanduser
+    desc: Expand user home directory
+    crit: notable
+    conf: 0.8
+    if:
+      type: string
+      substr: os.path.expanduser

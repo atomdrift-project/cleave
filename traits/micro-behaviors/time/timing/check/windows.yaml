@@ -1,0 +1,44 @@
+# Timing-Based APIs - Windows
+# ATT&CK: T1497.003 (Virtualization/Sandbox Evasion: Time Based Evasion)
+# MBC: B0003.003 (Time Based Evasion)
+#
+# Additional timing-related APIs not covered by micro-behaviors/time/timing/delay.
+# NOTE: GetTickCount64, GetSystemTime, GetLocalTime, QueryPerformanceCounter
+# already exist in micro-behaviors/time/timing/delay/traits.yaml.
+#
+# Composite rules that reference objectives/ are in:
+# objectives/anti-analysis/timing/evasion/windows.yaml
+
+defaults:
+  for: [pe, dll]
+  platforms: [windows]
+  attack: "T1497.003"
+  mbc: "B0003.003"
+
+traits:
+  - id: query-performance-frequency
+    desc: QueryPerformanceFrequency timing
+    crit: baseline
+    conf: 0.7
+    if:
+      type: symbol
+      exact: 'QueryPerformanceFrequency'
+
+  - id: timegettime
+    desc: timeGetTime multimedia timing
+    crit: baseline
+    conf: 0.7
+    if:
+      type: symbol
+      exact: 'timeGetTime'
+
+  - id: get-system-time-precise
+    desc: GetSystemTimePreciseAsFileTime high-res
+    crit: notable
+    conf: 0.8
+    if:
+      type: symbol
+      exact: 'GetSystemTimePreciseAsFileTime'
+
+# NOTE: Composite rules moved to objectives/anti-analysis/timing/evasion/windows.yaml
+# because they reference objectives-tier rules (rdtsc detection)

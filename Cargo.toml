@@ -11,7 +11,7 @@ default-run = "cleave"
 workspace = true
 
 [workspace]
-members = [".", "crates/scpt", "cleave-macros"]
+members = [".", "crates/scpt", "crates/malecule", "cleave-macros"]
 
 # Strict but pragmatic lints - similar to the Rust project itself
 [workspace.lints.rust]
@@ -78,6 +78,9 @@ lnk = "0.6"  # Windows Shell Link (.lnk) parsing
 
 # AppleScript parsing
 scpt = { path = "crates/scpt" }
+
+# Molecular visualization
+malecule = { path = "crates/malecule" }
 
 # YARA pattern matching
 yara-x = { version = "1.13", features = ["rules-profiling", "native-code-serialization"] }

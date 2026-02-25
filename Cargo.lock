@@ -611,6 +611,7 @@ dependencies = [
  "indicatif",
  "lnk",
  "lru",
+ "malecule",
  "memchr",
  "memmap2",
  "once_cell",
@@ -2051,6 +2052,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d640282b302c0bb0a2a8e0233ead9035e3bed871f0b7e81fe4a1ec829765db44"
 dependencies = [
  "libc",
+]
+
+[[package]]
+name = "malecule"
+version = "0.1.0"
+dependencies = [
+ "rustc-hash 2.1.1",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

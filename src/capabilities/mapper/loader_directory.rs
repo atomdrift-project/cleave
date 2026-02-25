@@ -26,7 +26,8 @@ use crate::capabilities::validation::{
     find_redundant_needs_one, find_short_pattern_warnings, find_single_item_clauses,
     find_slow_regex_patterns, find_string_content_collisions, find_string_pattern_duplicates,
     precalculate_all_composite_precisions, simple_rule_to_composite_rule,
-    validate_composite_trait_only, validate_hostile_composite_precision, MAX_TRAITS_PER_DIRECTORY,
+    validate_composite_trait_only, validate_directory_structure,
+    validate_hostile_composite_precision, MAX_TRAITS_PER_DIRECTORY,
 };
 use crate::composite_rules::{
     CompositeTrait, Condition, FileType as RuleFileType, Platform, TraitDefinition,
@@ -952,6 +953,21 @@ impl super::CapabilityMapper {
         // Steps 3-7: Taxonomy and naming validation (skip when validation disabled)
         let dir_list: Vec<String> = known_prefixes.iter().cloned().collect();
         if enable_full_validation {
+            // Check for unknown subdirectories in taxonomy tiers
+            // According to TAXONOMY.md, only specific subdirectories are allowed
+            tracing::debug!("Step 2b/15: Validating directory whitelist");
+            if let Err(errors) = validate_directory_structure(dir_path) {
+                eprintln!(
+                    "\n❌ ERROR: {} unknown subdirectories found in taxonomy tiers",
+                    errors.len()
+                );
+                for error in &errors {
+                    eprintln!("   {}", error);
+                }
+                eprintln!();
+                has_fatal_errors = true;
+            }
+
             // Check for taxonomy violations: platform/language names as directories
             // According to TAXONOMY.md, languages should be YAML filenames, not directories
             tracing::debug!("Step 3/15: Checking for platform-named directories");

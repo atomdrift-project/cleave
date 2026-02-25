@@ -197,6 +197,30 @@ pub(crate) struct Args {
     /// Files larger than this are written to temp files. Default: 100 MB.
     #[arg(long, value_name = "MB", default_value_t = 100)]
     pub max_file_mem: u64,
+
+    /// Generate malecule MOL file and JSON sidecar for 3D visualization.
+    /// Writes <path>.mol and <path>.json with molecular representation of findings.
+    #[arg(long, value_name = "PATH")]
+    pub mol: Option<String>,
+
+    /// Layout algorithm for malecule visualization (requires --mol).
+    /// Options: spherical (default), force, tree, spiral
+    #[arg(long, value_enum, default_value = "spherical")]
+    pub mol_layout: MolLayout,
+}
+
+/// Layout algorithm for malecule visualization.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, clap::ValueEnum)]
+pub enum MolLayout {
+    /// Concentric spherical shells by hierarchy depth (default)
+    #[default]
+    Spherical,
+    /// Spring-based force simulation
+    Force,
+    /// Radial tree from center
+    Tree,
+    /// Logarithmic spiral arrangement
+    Spiral,
 }
 
 impl Args {

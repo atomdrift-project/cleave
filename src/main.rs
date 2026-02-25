@@ -44,6 +44,7 @@ mod entropy;
 mod env_mapper;
 mod extractors;
 mod ip_validator;
+mod malecule_bridge;
 mod map;
 mod output;
 mod path_mapper;
@@ -312,6 +313,8 @@ fn main() -> Result<()> {
                     args.min_suspicious_precision,
                     max_memory_file_size,
                     args.validate,
+                    args.mol.as_deref(),
+                    args.mol_layout,
                 )?);
             }
             results.join("")
@@ -460,6 +463,8 @@ fn main() -> Result<()> {
                     args.min_suspicious_precision,
                     max_memory_file_size,
                     args.validate,
+                    args.mol.as_deref(),
+                    args.mol_layout,
                 )?);
             }
             results.join("")

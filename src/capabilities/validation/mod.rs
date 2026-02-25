@@ -31,6 +31,7 @@
 
 mod composite;
 mod constraints;
+mod directory_whitelist;
 mod duplicates;
 mod helpers;
 mod patterns;
@@ -108,6 +109,7 @@ pub(crate) use patterns::{
 };
 
 // Taxonomy validation
+pub(crate) use directory_whitelist::validate_directory_structure;
 pub(crate) use taxonomy::{
     find_banned_directory_segments, find_cap_obj_violations, find_depth_violations,
     find_duplicate_second_level_directories, find_hostile_cap_rules, find_invalid_trait_ids,

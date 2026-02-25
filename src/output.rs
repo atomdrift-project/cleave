@@ -11,6 +11,7 @@
 //! - `--json`: Full JSON report
 //! - `--summary`: Quick classification only
 
+use crate::malecule_bridge::formula_from_findings;
 use crate::types::{AnalysisReport, Criticality, Finding};
 use anyhow::Result;
 use colored::Colorize;
@@ -529,8 +530,21 @@ pub(crate) fn format_terminal(report: &AnalysisReport) -> String {
             String::new()
         };
 
-        // File header with summary
-        output.push_str(&format!("├─ {}{}\n", file.path.bright_white(), summary));
+        // Generate malecule formula for the file
+        let formula = formula_from_findings(&file.findings);
+        let formula_display = if formula.is_empty() || formula == "C" {
+            String::new()
+        } else {
+            format!(" • {}", formula.bright_magenta())
+        };
+
+        // File header with formula and summary
+        output.push_str(&format!(
+            "├─ {}{}{}\n",
+            file.path.bright_white(),
+            formula_display,
+            summary
+        ));
         output.push_str("│\n");
 
         // Sort namespaces by criticality then name, but always put "meta" last

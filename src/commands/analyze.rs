@@ -40,10 +40,12 @@ use crate::capabilities::CapabilityMapper;
 use crate::cli;
 use crate::commands::shared::{check_criticality_error, process_yara_result};
 use crate::composite_rules;
+use crate::malecule_bridge;
 use crate::output;
 use crate::types;
 use crate::yara_engine::YaraEngine;
 use anyhow::{Context, Result};
+use malecule::LayoutAlgorithm;
 use std::fs;
 use std::path::Path;
 use std::sync::Arc;
@@ -172,6 +174,8 @@ pub(crate) fn run(
     min_suspicious_precision: f32,
     max_memory_file_size: u64,
     enable_full_validation: bool,
+    mol_path: Option<&str>,
+    mol_layout: cli::MolLayout,
 ) -> Result<String> {
     let _start = std::time::Instant::now();
     let path = Path::new(target);
@@ -232,6 +236,8 @@ pub(crate) fn run(
                 sample_extraction,
                 max_memory_file_size,
                 &ctx,
+                mol_path,
+                mol_layout,
             )?;
             if streaming {
                 // Print immediately for JSONL streaming - enables progress tracking
@@ -271,6 +277,8 @@ pub(crate) fn run(
         sample_extraction,
         max_memory_file_size,
         &ctx,
+        mol_path,
+        mol_layout,
     )
 }
 
@@ -286,6 +294,8 @@ fn analyze_file_with_context(
     sample_extraction: Option<&types::SampleExtractionConfig>,
     max_memory_file_size: u64,
     ctx: &AnalysisContext,
+    mol_path: Option<&str>,
+    mol_layout: cli::MolLayout,
 ) -> Result<String> {
     let path = Path::new(target);
 
@@ -540,6 +550,11 @@ fn analyze_file_with_context(
         }
     }
 
+    // Generate MOL file if requested
+    if let Some(base_path) = mol_path {
+        write_malecule_files(&report, base_path, mol_layout)?;
+    }
+
     // Format output based on requested format
     let _t4 = std::time::Instant::now();
 
@@ -547,4 +562,297 @@ fn analyze_file_with_context(
         cli::OutputFormat::Jsonl => output::format_jsonl(&report),
         cli::OutputFormat::Terminal => Ok(output::format_terminal(&report)),
     }
+}
+
+/// Convert CLI MolLayout to malecule LayoutAlgorithm.
+fn mol_layout_to_algorithm(layout: cli::MolLayout) -> LayoutAlgorithm {
+    match layout {
+        cli::MolLayout::Spherical => LayoutAlgorithm::LayeredSpherical,
+        cli::MolLayout::Force => LayoutAlgorithm::ForceDirected,
+        cli::MolLayout::Tree => LayoutAlgorithm::HierarchicalTree,
+        cli::MolLayout::Spiral => LayoutAlgorithm::SpiralGalaxy,
+    }
+}
+
+/// Write MOL, JSON sidecar, and HTML viewer files for the analysis report.
+fn write_malecule_files(
+    report: &types::AnalysisReport,
+    base_path: &str,
+    mol_layout: cli::MolLayout,
+) -> Result<()> {
+    let layout = mol_layout_to_algorithm(mol_layout);
+
+    // Generate malecule for each file in the report
+    for file in &report.files {
+        if file.findings.is_empty() {
+            continue;
+        }
+
+        let malecule = malecule_bridge::malecule_from_file_analysis(file, layout);
+
+        // Skip if no meaningful structure
+        if malecule.atoms.len() <= 1 {
+            continue;
+        }
+
+        // Generate file-specific suffix from file path
+        let suffix = file
+            .path
+            .rsplit('/')
+            .next()
+            .unwrap_or(&file.path)
+            .replace(['.', '/', '\\', ' '], "_");
+
+        let mol_file_path = if report.files.len() == 1 {
+            format!("{}.mol", base_path)
+        } else {
+            format!("{}_{}.mol", base_path, suffix)
+        };
+
+        let json_file_path = mol_file_path.replace(".mol", ".json");
+        let html_file_path = mol_file_path.replace(".mol", ".html");
+
+        // Write MOL file
+        let mol_content = malecule::mol::generate_mol(&malecule);
+        fs::write(&mol_file_path, &mol_content).context("Failed to write MOL file")?;
+
+        // Write JSON sidecar
+        let json_content =
+            malecule::mol::generate_metadata_json(&malecule).context("Failed to generate JSON")?;
+        fs::write(&json_file_path, &json_content).context("Failed to write JSON sidecar")?;
+
+        // Write HTML viewer
+        let html_content = generate_html_viewer(&malecule.name, &mol_content, &json_content);
+        fs::write(&html_file_path, html_content).context("Failed to write HTML viewer")?;
+
+        eprintln!(
+            "Malecule: {} • formula={} • atoms={} • bonds={}",
+            html_file_path,
+            malecule.formula,
+            malecule.atoms.len(),
+            malecule.bonds.len()
+        );
+
+        tracing::info!(
+            mol = %mol_file_path,
+            json = %json_file_path,
+            html = %html_file_path,
+            formula = %malecule.formula,
+            "Wrote malecule files"
+        );
+    }
+
+    Ok(())
+}
+
+/// Generate an HTML file with embedded Three.js viewer for the malecule.
+fn generate_html_viewer(name: &str, mol_content: &str, json_content: &str) -> String {
+    format!(
+        r##"<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Malecule: {name}</title>
+    <style>
+        * {{ margin: 0; padding: 0; box-sizing: border-box; }}
+        body {{
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #1a1a2e;
+            color: #eee;
+            overflow: hidden;
+        }}
+        #container {{ width: 100vw; height: 100vh; }}
+        #info {{
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            background: rgba(0,0,0,0.7);
+            padding: 15px;
+            border-radius: 8px;
+            max-width: 300px;
+            z-index: 100;
+        }}
+        #info h1 {{ font-size: 18px; margin-bottom: 8px; }}
+        #info p {{ font-size: 12px; margin: 4px 0; opacity: 0.8; }}
+        .formula {{ font-family: monospace; font-size: 16px; color: #ff79c6; }}
+        .legend {{ margin-top: 10px; }}
+        .legend-item {{ display: flex; align-items: center; margin: 4px 0; font-size: 11px; }}
+        .legend-color {{ width: 12px; height: 12px; border-radius: 50%; margin-right: 8px; }}
+        .hostile {{ background: #ff4444; }}
+        .suspicious {{ background: #4488ff; }}
+        .notable {{ background: #ffffff; }}
+        .neutral {{ background: #888888; }}
+    </style>
+</head>
+<body>
+    <div id="info">
+        <h1>{name}</h1>
+        <p class="formula" id="formula"></p>
+        <p id="stats"></p>
+        <div class="legend">
+            <div class="legend-item"><span class="legend-color hostile"></span>Hostile</div>
+            <div class="legend-item"><span class="legend-color suspicious"></span>Suspicious</div>
+            <div class="legend-item"><span class="legend-color notable"></span>Notable</div>
+            <div class="legend-item"><span class="legend-color neutral"></span>Neutral</div>
+        </div>
+    </div>
+    <div id="container"></div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+    <script>
+        // Embedded data
+        const molData = `{mol_content}`;
+        const metadata = {json_content};
+
+        // Display info
+        document.getElementById('formula').textContent = metadata.formula;
+        document.getElementById('stats').textContent =
+            `${{metadata.summary.total_atoms}} atoms, ${{metadata.summary.total_bonds}} bonds`;
+
+        // Three.js setup
+        const container = document.getElementById('container');
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x1a1a2e);
+
+        const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+        camera.position.z = 10;
+
+        const renderer = new THREE.WebGLRenderer({{ antialias: true }});
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.setPixelRatio(window.devicePixelRatio);
+        container.appendChild(renderer.domElement);
+
+        const controls = new THREE.OrbitControls(camera, renderer.domElement);
+        controls.enableDamping = true;
+        controls.dampingFactor = 0.05;
+
+        // Lighting
+        const ambientLight = new THREE.AmbientLight(0x404040, 0.5);
+        scene.add(ambientLight);
+        const directionalLight = new THREE.DirectionalLight(0xffffff, 1);
+        directionalLight.position.set(5, 5, 5);
+        scene.add(directionalLight);
+
+        // Color mapping
+        const severityColors = {{
+            'hostile': 0xff4444,
+            'suspicious': 0x4488ff,
+            'notable': 0xffffff,
+            'neutral': 0x888888
+        }};
+
+        // Parse MOL file
+        function parseMol(molString) {{
+            const lines = molString.trim().split(/\\r?\\n/);
+            const atoms = [];
+            const bonds = [];
+
+            // Find counts line (line 4, index 3)
+            if (lines.length < 5) {{
+                console.error('Invalid MOL file: too few lines', lines.length);
+                return {{ atoms: [], bonds: [] }};
+            }}
+            const countsLine = lines[3];
+            if (!countsLine || countsLine.length < 6) {{
+                console.error('Invalid counts line:', countsLine);
+                return {{ atoms: [], bonds: [] }};
+            }}
+            const numAtoms = parseInt(countsLine.substring(0, 3).trim()) || 0;
+            const numBonds = parseInt(countsLine.substring(3, 6).trim()) || 0;
+
+            // Parse atoms (starting at line 5)
+            for (let i = 4; i < 4 + numAtoms; i++) {{
+                const line = lines[i];
+                const x = parseFloat(line.substring(0, 10).trim());
+                const y = parseFloat(line.substring(10, 20).trim());
+                const z = parseFloat(line.substring(20, 30).trim());
+                const symbol = line.substring(31, 34).trim();
+                atoms.push({{ x, y, z, symbol }});
+            }}
+
+            // Parse bonds
+            const bondStart = 4 + numAtoms;
+            for (let i = bondStart; i < bondStart + numBonds; i++) {{
+                if (i >= lines.length) break;
+                const line = lines[i];
+                const atom1 = parseInt(line.substring(0, 3).trim()) - 1;
+                const atom2 = parseInt(line.substring(3, 6).trim()) - 1;
+                const bondType = parseInt(line.substring(6, 9).trim());
+                bonds.push({{ atom1, atom2, bondType }});
+            }}
+
+            return {{ atoms, bonds }};
+        }}
+
+        // Create molecule
+        const mol = parseMol(molData);
+        const atomMeshes = [];
+
+        // Create atoms
+        mol.atoms.forEach((atom, i) => {{
+            const atomMeta = metadata.atoms[i] || {{ severity: 'neutral' }};
+            const color = severityColors[atomMeta.severity] || 0x888888;
+
+            const geometry = new THREE.SphereGeometry(0.3, 32, 32);
+            const material = new THREE.MeshPhongMaterial({{
+                color: color,
+                shininess: 100,
+                emissive: color,
+                emissiveIntensity: 0.2
+            }});
+            const sphere = new THREE.Mesh(geometry, material);
+            sphere.position.set(atom.x, atom.y, atom.z);
+            scene.add(sphere);
+            atomMeshes.push(sphere);
+        }});
+
+        // Create bonds
+        mol.bonds.forEach(bond => {{
+            const start = mol.atoms[bond.atom1];
+            const end = mol.atoms[bond.atom2];
+
+            const startVec = new THREE.Vector3(start.x, start.y, start.z);
+            const endVec = new THREE.Vector3(end.x, end.y, end.z);
+            const direction = new THREE.Vector3().subVectors(endVec, startVec);
+            const length = direction.length();
+
+            const geometry = new THREE.CylinderGeometry(0.05, 0.05, length, 8);
+            const material = new THREE.MeshPhongMaterial({{
+                color: 0x666666,
+                shininess: 50
+            }});
+
+            const cylinder = new THREE.Mesh(geometry, material);
+            cylinder.position.copy(startVec).add(direction.multiplyScalar(0.5));
+            cylinder.quaternion.setFromUnitVectors(
+                new THREE.Vector3(0, 1, 0),
+                direction.normalize()
+            );
+            scene.add(cylinder);
+        }});
+
+        // Animation loop
+        function animate() {{
+            requestAnimationFrame(animate);
+            controls.update();
+            renderer.render(scene, camera);
+        }}
+        animate();
+
+        // Handle resize
+        window.addEventListener('resize', () => {{
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        }});
+    </script>
+</body>
+</html>
+"##,
+        name = name,
+        mol_content = mol_content.replace('`', "\\`").replace("${", "\\${"),
+        json_content = json_content
+    )
 }

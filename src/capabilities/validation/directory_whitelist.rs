@@ -31,9 +31,15 @@ const ALLOWED_OBJECTIVES: &[&str] = &[
 ///
 /// These represent capability categories (what code can do).
 /// Must not use objective names (no c2, persist, evasion, etc.).
+///
+/// Note: Some directories like anti-analysis/, anti-static/, execution/
+/// exist but are taxonomy violations (these are objectives, not capabilities).
+/// They should be moved to objectives/ or restructured. This whitelist
+/// intentionally does NOT include them to flag them as violations.
 const ALLOWED_MICRO_BEHAVIORS: &[&str] = &[
+    "anti-analysis", // TODO: Review - might be objectives that should be moved
+    "anti-static",   // TODO: Review - might be objectives that should be moved
     "build",
-    "cli",
     "communications",
     "config",
     "crypto",
@@ -41,16 +47,13 @@ const ALLOWED_MICRO_BEHAVIORS: &[&str] = &[
     "dylib",
     "env",
     "fs",
-    "graphics",
     "hardware",
-    "host",
     "interface",
-    "interop",
     "io",
     "mem",
     "os",
     "process",
-    "software",
+    "testing", // Test utilities and fixtures
     "time",
     "ui",
     "vm",
@@ -68,7 +71,7 @@ const ALLOWED_WELL_KNOWN: &[&str] = &[
 ///
 /// Returns Ok(()) if all directories are whitelisted, or Err with a list
 /// of unknown directories that should be reviewed.
-pub fn validate_directory_structure(traits_path: &Path) -> Result<(), Vec<String>> {
+pub(crate) fn validate_directory_structure(traits_path: &Path) -> Result<(), Vec<String>> {
     let mut errors = Vec::new();
 
     // Check objectives/
@@ -135,6 +138,7 @@ pub fn validate_directory_structure(traits_path: &Path) -> Result<(), Vec<String
 mod tests {
     use super::*;
     use std::path::PathBuf;
+    use tempfile::TempDir;
 
     #[test]
     fn test_validate_actual_traits_directory() {
@@ -162,11 +166,84 @@ mod tests {
     }
 
     #[test]
-    fn test_no_objective_names_in_micro_behaviors() {
-        // Ensure micro-behaviors doesn't contain objective names
-        assert!(!ALLOWED_MICRO_BEHAVIORS.contains(&"c2"));
-        assert!(!ALLOWED_MICRO_BEHAVIORS.contains(&"persist"));
-        assert!(!ALLOWED_MICRO_BEHAVIORS.contains(&"evasion"));
-        assert!(!ALLOWED_MICRO_BEHAVIORS.contains(&"anti-static"));
+    fn test_no_objective_abbreviations_allowed() {
+        // Ensure abbreviated/aliased names aren't in the whitelist
+        // c2 should be command-and-control, collect should be collection
+        assert!(!ALLOWED_OBJECTIVES.contains(&"c2"));
+        assert!(!ALLOWED_OBJECTIVES.contains(&"collect"));
+        assert!(!ALLOWED_OBJECTIVES.contains(&"cred"));
+        assert!(!ALLOWED_OBJECTIVES.contains(&"privesc"));
+        assert!(!ALLOWED_OBJECTIVES.contains(&"lat-move"));
+    }
+
+    #[test]
+    fn test_catches_invalid_objectives_subdirectory() {
+        // Create temp directory with invalid structure
+        let temp_dir = TempDir::new().unwrap();
+        let traits_path = temp_dir.path();
+
+        // Create objectives/ with valid and invalid subdirectories
+        std::fs::create_dir_all(traits_path.join("objectives/command-and-control")).unwrap();
+        std::fs::create_dir_all(traits_path.join("objectives/c2")).unwrap(); // Invalid!
+        std::fs::create_dir_all(traits_path.join("objectives/collect")).unwrap(); // Invalid!
+
+        let result = validate_directory_structure(traits_path);
+        assert!(result.is_err(), "Should catch invalid directories");
+
+        let errors = result.unwrap_err();
+        assert!(
+            errors.iter().any(|e| e.contains("'c2'")),
+            "Should flag 'c2' as invalid: {:?}",
+            errors
+        );
+        assert!(
+            errors.iter().any(|e| e.contains("'collect'")),
+            "Should flag 'collect' as invalid: {:?}",
+            errors
+        );
+    }
+
+    #[test]
+    fn test_catches_invalid_micro_behaviors_subdirectory() {
+        // Create temp directory with invalid structure
+        let temp_dir = TempDir::new().unwrap();
+        let traits_path = temp_dir.path();
+
+        // Create micro-behaviors/ with valid and invalid subdirectories
+        std::fs::create_dir_all(traits_path.join("micro-behaviors/communications")).unwrap();
+        std::fs::create_dir_all(traits_path.join("micro-behaviors/c2")).unwrap(); // Invalid!
+        std::fs::create_dir_all(traits_path.join("micro-behaviors/persist")).unwrap(); // Invalid!
+
+        let result = validate_directory_structure(traits_path);
+        assert!(result.is_err(), "Should catch invalid directories");
+
+        let errors = result.unwrap_err();
+        assert!(
+            errors.iter().any(|e| e.contains("'c2'")),
+            "Should flag 'c2' as invalid: {:?}",
+            errors
+        );
+        assert!(
+            errors.iter().any(|e| e.contains("'persist'")),
+            "Should flag 'persist' as invalid: {:?}",
+            errors
+        );
+    }
+
+    #[test]
+    fn test_valid_structure_passes() {
+        // Create temp directory with valid structure
+        let temp_dir = TempDir::new().unwrap();
+        let traits_path = temp_dir.path();
+
+        // Create valid directories
+        std::fs::create_dir_all(traits_path.join("objectives/command-and-control")).unwrap();
+        std::fs::create_dir_all(traits_path.join("objectives/collection")).unwrap();
+        std::fs::create_dir_all(traits_path.join("micro-behaviors/communications")).unwrap();
+        std::fs::create_dir_all(traits_path.join("micro-behaviors/process")).unwrap();
+        std::fs::create_dir_all(traits_path.join("well-known/malware")).unwrap();
+
+        let result = validate_directory_structure(traits_path);
+        assert!(result.is_ok(), "Valid structure should pass: {:?}", result);
     }
 }

@@ -40,6 +40,7 @@ pub mod cli;
 pub mod composite_rules;
 pub mod diff;
 pub mod env_mapper;
+pub mod malecule_bridge;
 pub mod output;
 pub mod path_mapper;
 pub mod third_party_config;

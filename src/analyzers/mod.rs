@@ -391,8 +391,14 @@ pub fn detect_file_type(file_path: &Path) -> Result<FileType> {
         return Ok(FileType::Elf);
     }
 
-    // Check for PE magic bytes
+    // Check for PE magic bytes - also detect tampered PEs with junk prefix
+    // Malware often prepends bytes before the MZ header to evade detection
     if file_data.starts_with(b"MZ") {
+        return Ok(FileType::Pe);
+    }
+    // Check for MZ within first 64 bytes (tampered PE with junk prefix)
+    if let Some(mz_offset) = find_mz_header(&file_data, 64) {
+        tracing::debug!("Detected PE with MZ at offset {} (junk prefix)", mz_offset);
         return Ok(FileType::Pe);
     }
 
@@ -813,6 +819,18 @@ fn looks_like_shell(data: &[u8]) -> bool {
         || first_lines.contains("set -e")
         || first_lines.contains("if [")
         || first_lines.contains("case $")
+}
+
+/// Find MZ header within the first `max_offset` bytes
+/// Returns the offset where MZ was found, or None
+fn find_mz_header(data: &[u8], max_offset: usize) -> Option<usize> {
+    let search_limit = data.len().min(max_offset);
+    for i in 1..search_limit.saturating_sub(1) {
+        if data[i] == b'M' && data.get(i + 1) == Some(&b'Z') {
+            return Some(i);
+        }
+    }
+    None
 }
 
 /// Check if file content matches its extension's expected magic bytes

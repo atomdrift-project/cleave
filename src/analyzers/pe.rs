@@ -82,26 +82,49 @@ impl PEAnalyzer {
     ) -> Result<AnalysisReport> {
         let start = std::time::Instant::now();
 
-        // Parse with goblin
-        let pe = PE::parse(data)?;
+        // Detect and handle tampered PE (junk prefix before MZ header)
+        let (pe_data, tamper_findings) = self.detect_and_strip_tampering(data);
 
+        // Try to parse with goblin (using potentially stripped data)
+        match PE::parse(pe_data) {
+            Ok(pe) => self.analyze_valid_pe(file_path, data, pe_data, &pe, tamper_findings, start),
+            Err(e) => {
+                // PE parsing failed - create a minimal report with tampering findings
+                self.analyze_corrupted_pe(file_path, data, tamper_findings, e, start)
+            }
+        }
+    }
+
+    /// Analyze a valid (parseable) PE binary
+    fn analyze_valid_pe(
+        &self,
+        file_path: &Path,
+        original_data: &[u8],
+        pe_data: &[u8],
+        pe: &PE<'_>,
+        tamper_findings: Vec<Finding>,
+        start: std::time::Instant,
+    ) -> Result<AnalysisReport> {
         // Compute PE-specific metrics early
-        let pe_metrics = self.compute_pe_metrics(&pe, data);
+        let pe_metrics = self.compute_pe_metrics(pe, pe_data);
 
         // Calculate code_size from goblin section characteristics (more accurate than radare2)
-        let goblin_code_size = self.compute_code_size(&pe);
+        let goblin_code_size = self.compute_code_size(pe);
 
         // Create target info
         let target = TargetInfo {
             path: file_path.display().to_string(),
             file_type: "pe".to_string(),
-            size_bytes: data.len() as u64,
-            sha256: crate::analyzers::utils::calculate_sha256(data),
-            architectures: Some(vec![self.arch_name(&pe)]),
+            size_bytes: original_data.len() as u64,
+            sha256: crate::analyzers::utils::calculate_sha256(original_data),
+            architectures: Some(vec![self.arch_name(pe)]),
         };
 
         let mut report = AnalysisReport::new(target);
         let mut tools_used = vec!["goblin".to_string()];
+
+        // Add any tampering findings detected during preprocessing
+        report.findings.extend(tamper_findings);
 
         // Analyze header and structure
         self.analyze_structure(&pe, &mut report);
@@ -113,7 +136,7 @@ impl PEAnalyzer {
         self.analyze_exports(&pe, &mut report);
 
         // Analyze sections and entropy
-        self.analyze_sections(&pe, data, &mut report);
+        self.analyze_sections(pe, pe_data, &mut report);
 
         // Use radare2 for deep analysis if available - SINGLE r2 spawn for all data
         let r2_strings = if Radare2Analyzer::is_available() {
@@ -126,7 +149,7 @@ impl PEAnalyzer {
                 // Compute metrics from batched data
                 let mut binary_metrics = self
                     .radare2
-                    .compute_metrics_from_batched(&batched, data.len() as u64);
+                    .compute_metrics_from_batched(&batched, original_data.len() as u64);
 
                 // Override code_size with goblin-based calculation (more accurate)
                 // In PE, only sections with IMAGE_SCN_MEM_EXECUTE characteristic contain executable code
@@ -189,7 +212,7 @@ impl PEAnalyzer {
             report.strings = strings.clone();
         } else {
             // Extract strings using language-aware extraction (Go/Rust)
-            report.strings = self.string_extractor.extract_smart(data, r2_strings);
+            report.strings = self.string_extractor.extract_smart(pe_data, r2_strings);
         }
         tools_used.push("stng".to_string());
 
@@ -210,7 +233,7 @@ impl PEAnalyzer {
                 binary.import_count = report.imports.len() as u32;
                 binary.export_count = report.exports.len() as u32;
                 binary.string_count = report.strings.len() as u32;
-                binary.file_size = data.len() as u64;
+                binary.file_size = original_data.len() as u64;
 
                 // Compute largest section ratio
                 if binary.file_size > 0 && !report.sections.is_empty() {
@@ -242,9 +265,9 @@ impl PEAnalyzer {
             .max()
             .unwrap_or(0);
 
-        if (data.len() as u64) > sections_end && sections_end > 0 {
+        if (pe_data.len() as u64) > sections_end && sections_end > 0 {
             let overlay_start = sections_end as usize;
-            let overlay_data = &data[overlay_start..];
+            let overlay_data = &pe_data[overlay_start..];
 
             // Try to analyze overlay as an archive
             match crate::analyzers::overlay::analyze_overlay(
@@ -328,6 +351,92 @@ impl PEAnalyzer {
                 }
             }
         }
+
+        report.metadata.analysis_duration_ms = start.elapsed().as_millis() as u64;
+        report.metadata.tools_used = tools_used;
+
+        Ok(report)
+    }
+
+    /// Analyze a corrupted PE that goblin failed to parse
+    /// Still extracts useful information: tampering findings, strings, .NET detection
+    fn analyze_corrupted_pe(
+        &self,
+        file_path: &Path,
+        data: &[u8],
+        mut tamper_findings: Vec<Finding>,
+        parse_error: goblin::error::Error,
+        start: std::time::Instant,
+    ) -> Result<AnalysisReport> {
+        // Create target info for corrupted PE
+        let target = TargetInfo {
+            path: file_path.display().to_string(),
+            file_type: "pe".to_string(), // Still report as PE
+            size_bytes: data.len() as u64,
+            sha256: crate::analyzers::utils::calculate_sha256(data),
+            architectures: None, // Can't determine from corrupted header
+        };
+
+        let mut report = AnalysisReport::new(target);
+        let tools_used = vec!["cleave".to_string(), "stng".to_string()];
+
+        // Add a hostile finding for the corrupted PE
+        tamper_findings.push(Finding {
+            id: "anti-analysis/pe-tampering/corrupted-header".to_string(),
+            kind: FindingKind::Structural,
+            desc: format!(
+                "PE header too corrupted to parse: {}",
+                parse_error
+            ),
+            conf: 1.0,
+            crit: Criticality::Hostile,
+            mbc: Some("B0001".to_string()), // Executable Code Obfuscation
+            attack: Some("T1027".to_string()), // Obfuscated Files or Information
+            trait_refs: vec![],
+            evidence: vec![Evidence {
+                method: "parse-failure".to_string(),
+                source: "goblin".to_string(),
+                value: format!("{}", parse_error),
+                location: None,
+                ..Default::default()
+            }],
+            match_count: 1,
+            source_file: None,
+        });
+
+        // Add all tampering findings
+        report.findings.extend(tamper_findings);
+
+        // Add structural feature for corrupted PE
+        report.structure.push(StructuralFeature {
+            id: "pe/corrupted".to_string(),
+            desc: "Corrupted/tampered PE binary (header parsing failed)".to_string(),
+            evidence: vec![Evidence {
+                method: "parse-failure".to_string(),
+                source: "goblin".to_string(),
+                value: format!("{}", parse_error),
+                location: None,
+                ..Default::default()
+            }],
+        });
+
+        // Still extract strings using stng (works on raw bytes)
+        if self.preextracted_strings.is_some() {
+            report.strings = self.preextracted_strings.clone().unwrap_or_default();
+        } else {
+            report.strings = self.string_extractor.extract_smart(data, None);
+        }
+
+        // Analyze embedded code in strings
+        let (encoded_layers, plain_findings) =
+            crate::analyzers::embedded_code_detector::process_all_strings(
+                &file_path.display().to_string(),
+                &report.strings,
+                &self.capability_mapper,
+                0,
+            );
+        report.files.extend(encoded_layers);
+        report.findings.extend(plain_findings);
 
         report.metadata.analysis_duration_ms = start.elapsed().as_millis() as u64;
         report.metadata.tools_used = tools_used;
@@ -606,6 +715,216 @@ impl PEAnalyzer {
         }
 
         code_size
+    }
+
+    /// Detect PE tampering and return stripped data plus findings.
+    ///
+    /// Detects common anti-analysis techniques:
+    /// - Junk bytes prepended before MZ header
+    /// - Systematic byte injection (e.g., 0x20 padding throughout header)
+    /// - .NET BSJB signature presence
+    /// - PE signature corruption
+    ///
+    /// Returns (data_to_parse, findings) where data_to_parse may be a slice
+    /// starting at the MZ header if junk prefix was detected.
+    fn detect_and_strip_tampering<'a>(&self, data: &'a [u8]) -> (&'a [u8], Vec<Finding>) {
+        let mut findings = Vec::new();
+
+        // Check if MZ is at offset 0
+        if data.starts_with(b"MZ") {
+            // Normal PE, but still check for other tampering
+            self.detect_header_tampering(data, 0, &mut findings);
+            return (data, findings);
+        }
+
+        // Search for MZ header within first 64 bytes
+        let mz_offset = self.find_mz_offset(data, 64);
+
+        if let Some(offset) = mz_offset {
+            // Found MZ at non-zero offset - junk prefix detected
+            let prefix = &data[..offset];
+            let prefix_display = if prefix.len() <= 32 {
+                String::from_utf8_lossy(prefix).to_string()
+            } else {
+                format!(
+                    "{}... ({} bytes)",
+                    String::from_utf8_lossy(&prefix[..32]),
+                    prefix.len()
+                )
+            };
+
+            findings.push(Finding {
+                id: "anti-analysis/pe-tampering/junk-prefix".to_string(),
+                kind: FindingKind::Structural,
+                desc: format!(
+                    "PE has {} bytes prepended before MZ header (anti-analysis)",
+                    offset
+                ),
+                conf: 1.0,
+                crit: Criticality::Hostile,
+                mbc: Some("B0001".to_string()), // Executable Code Obfuscation
+                attack: Some("T1027".to_string()), // Obfuscated Files or Information
+                trait_refs: vec![],
+                evidence: vec![Evidence {
+                    method: "header-analysis".to_string(),
+                    source: "cleave".to_string(),
+                    value: format!("MZ at offset {:#x}, prefix: {:?}", offset, prefix_display),
+                    location: Some(format!("0x0-{:#x}", offset)),
+                    ..Default::default()
+                }],
+                match_count: 1,
+                source_file: None,
+            });
+
+            // Check for additional tampering in the actual PE data
+            let pe_data = &data[offset..];
+            self.detect_header_tampering(pe_data, offset, &mut findings);
+
+            return (pe_data, findings);
+        }
+
+        // No MZ found - check for BSJB (.NET) signature without valid PE
+        if let Some(bsjb_offset) = self.find_signature(data, b"BSJB") {
+            findings.push(Finding {
+                id: "anti-analysis/pe-tampering/dotnet-invalid-pe".to_string(),
+                kind: FindingKind::Structural,
+                desc: ".NET assembly (BSJB signature) with corrupted/missing PE header".to_string(),
+                conf: 0.95,
+                crit: Criticality::Hostile,
+                mbc: Some("B0001".to_string()),
+                attack: Some("T1027".to_string()),
+                trait_refs: vec![],
+                evidence: vec![Evidence {
+                    method: "signature".to_string(),
+                    source: "cleave".to_string(),
+                    value: format!("BSJB at offset {:#x}, no valid MZ header", bsjb_offset),
+                    location: Some(format!("{:#x}", bsjb_offset)),
+                    ..Default::default()
+                }],
+                match_count: 1,
+                source_file: None,
+            });
+        }
+
+        // Return original data (goblin will fail to parse, but that's expected)
+        (data, findings)
+    }
+
+    /// Detect tampering within PE header area
+    fn detect_header_tampering(&self, data: &[u8], base_offset: usize, findings: &mut Vec<Finding>) {
+        if data.len() < 64 {
+            return;
+        }
+
+        // Check for systematic byte injection (e.g., 0x20 padding)
+        let header_area = &data[..data.len().min(512)];
+        let mut byte_counts = [0u32; 256];
+        for &b in header_area {
+            byte_counts[b as usize] += 1;
+        }
+
+        let header_len = header_area.len() as u32;
+        for (byte_val, &count) in byte_counts.iter().enumerate() {
+            // Skip 0x00 (common in headers) and check if any byte is >40% of header
+            if byte_val != 0 && count > header_len * 2 / 5 {
+                findings.push(Finding {
+                    id: "anti-analysis/pe-tampering/byte-injection".to_string(),
+                    kind: FindingKind::Structural,
+                    desc: format!(
+                        "PE header has excessive 0x{:02X} bytes ({} of {} = {:.1}%)",
+                        byte_val,
+                        count,
+                        header_len,
+                        count as f32 / header_len as f32 * 100.0
+                    ),
+                    conf: 0.9,
+                    crit: Criticality::Suspicious,
+                    mbc: Some("B0001".to_string()),
+                    attack: Some("T1027".to_string()),
+                    trait_refs: vec![],
+                    evidence: vec![Evidence {
+                        method: "frequency-analysis".to_string(),
+                        source: "cleave".to_string(),
+                        value: format!("byte 0x{:02X} appears {} times in header", byte_val, count),
+                        location: Some(format!("{:#x}-{:#x}", base_offset, base_offset + 512)),
+                        ..Default::default()
+                    }],
+                    match_count: 1,
+                    source_file: None,
+                });
+                break; // Only report the most prominent injection
+            }
+        }
+
+        // Check for PE signature corruption (PE followed by non-null bytes)
+        if let Some(pe_sig_offset) = self.find_signature(data, b"PE") {
+            if pe_sig_offset < data.len() - 4 {
+                let sig = &data[pe_sig_offset..pe_sig_offset + 4];
+                if sig != b"PE\x00\x00" {
+                    findings.push(Finding {
+                        id: "anti-analysis/pe-tampering/pe-signature-corrupted".to_string(),
+                        kind: FindingKind::Structural,
+                        desc: format!(
+                            "PE signature corrupted: expected PE\\x00\\x00, got {:02X} {:02X} {:02X} {:02X}",
+                            sig[0], sig[1], sig[2], sig[3]
+                        ),
+                        conf: 1.0,
+                        crit: Criticality::Hostile,
+                        mbc: Some("B0001".to_string()),
+                        attack: Some("T1027".to_string()),
+                        trait_refs: vec![],
+                        evidence: vec![Evidence {
+                            method: "signature".to_string(),
+                            source: "cleave".to_string(),
+                            value: format!("PE signature at {:#x}: {:?}", pe_sig_offset, sig),
+                            location: Some(format!("{:#x}", base_offset + pe_sig_offset)),
+                            ..Default::default()
+                        }],
+                        match_count: 1,
+                        source_file: None,
+                    });
+                }
+            }
+        }
+
+        // Detect .NET via BSJB signature
+        if let Some(bsjb_offset) = self.find_signature(data, b"BSJB") {
+            findings.push(Finding {
+                id: "metadata/dotnet/bsjb-signature".to_string(),
+                kind: FindingKind::Structural,
+                desc: ".NET assembly detected via BSJB CLR metadata signature".to_string(),
+                conf: 1.0,
+                crit: Criticality::Baseline,
+                mbc: None,
+                attack: None,
+                trait_refs: vec![],
+                evidence: vec![Evidence {
+                    method: "signature".to_string(),
+                    source: "cleave".to_string(),
+                    value: format!("BSJB at offset {:#x}", bsjb_offset),
+                    location: Some(format!("{:#x}", base_offset + bsjb_offset)),
+                    ..Default::default()
+                }],
+                match_count: 1,
+                source_file: None,
+            });
+        }
+    }
+
+    /// Find MZ header within first max_offset bytes
+    fn find_mz_offset(&self, data: &[u8], max_offset: usize) -> Option<usize> {
+        let limit = data.len().min(max_offset);
+        for i in 0..limit.saturating_sub(1) {
+            if data[i] == b'M' && data.get(i + 1) == Some(&b'Z') {
+                return Some(i);
+            }
+        }
+        None
+    }
+
+    /// Find a byte signature in data
+    fn find_signature(&self, data: &[u8], needle: &[u8]) -> Option<usize> {
+        data.windows(needle.len()).position(|w| w == needle)
     }
 }
 

@@ -19,7 +19,7 @@ traits:
   # Require multiple occurrences to indicate actual code caves
   - id: large-null-run-text
     desc: Large null run in executable (64+ bytes)
-    crit: suspicious
+    crit: component
     conf: 0.85
     for: [pe, elf]
     if:
@@ -131,6 +131,7 @@ composite_rules:
     crit: suspicious
     conf: 0.9
     attack: "T1055"
+    size_min: 16384   # PE files under 16KB have null padding from normal header/section alignment
     size_max: 150000
     needs: 2
     any:
@@ -143,6 +144,7 @@ composite_rules:
       any:
         - id: metadata/lang/compiler::vcruntime
         - id: metadata/format/pe::dotnet-assembly  # .NET IL has normal null padding/alignment
+        - id: metadata/format::no-imports  # Data-only DLLs (keyboard layouts, codepage tables) have null padding as data structure
 
   # Injection-ready code cave
   - id: injection-ready-cave

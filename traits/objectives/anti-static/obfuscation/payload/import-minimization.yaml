@@ -56,6 +56,7 @@ traits:
     crit: suspicious
     conf: 0.8
     for: [pe, elf]
+    size_min: 32768  # Small utilities (<32KB) legitimately have few imports
     if:
       type: import_combination
       suspicious:

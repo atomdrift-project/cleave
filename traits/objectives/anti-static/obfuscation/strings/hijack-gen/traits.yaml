@@ -1,0 +1,36 @@
+# Obfuscated API Strings for Virus.Hijack_Gen family
+# ATT&CK: T1027 (Obfuscated Files or Information)
+
+defaults:
+  for: [pe]
+  crit: suspicious
+  attack: "T1027"
+
+traits:
+  - id: corexitprocess
+    desc: "Obfuscated CorExitProcess string (CorExitProcesD)"
+    conf: 0.95
+    if:
+      type: raw
+      substr: "CorExitProcesD"
+
+  - id: multibytetowidechar
+    desc: "Obfuscated MultiByteToWideChar string (M<tiBy oWivCha>)"
+    conf: 0.95
+    if:
+      type: raw
+      substr: "M<tiBy oWivCha>"
+
+  - id: rtlfreethreadpooltimer
+    desc: "Obfuscated RtlFreeThreadPoolTimer string (ranFeW5poolTime)"
+    conf: 0.95
+    if:
+      type: raw
+      substr: "ranFeW5poolTime"
+
+  - id: threadstackguard
+    desc: "Obfuscated ThreadStackGuard string (pTh.dStackGua)"
+    conf: 0.95
+    if:
+      type: raw
+      substr: "pTh.dStackGua"

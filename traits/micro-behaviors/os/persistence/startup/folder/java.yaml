@@ -1,0 +1,17 @@
+defaults:
+  for: [all]
+
+traits:
+  - id: java-startup-enum
+    desc: Presence of STARTUP string in Java
+    crit: notable
+    if:
+      type: string
+      word: "STARTUP"
+
+  - id: java-common-startup-enum
+    desc: Presence of COMMON_STARTUP string in Java
+    crit: notable
+    if:
+      type: string
+      word: "COMMON_STARTUP"

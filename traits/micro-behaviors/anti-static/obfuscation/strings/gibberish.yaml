@@ -1,0 +1,15 @@
+# Obfuscation: Gibberish Strings
+# Detects machine-generated strings using consonant-vowel patterns common in malware DGAs or obfuscators.
+
+traits:
+  - id: consonant-vowel-gibberish
+    desc: Consonant-vowel sequence (machine-generated)
+    crit: notable
+    conf: 0.8
+    for: [all]
+    if:
+      type: string
+      # Pattern: [consonant][vowel] repeated 5+ times.
+      # Matches "lelidugagumizufafa", "gehexigerekalahiwivixifegimoxiji", "noyefigagiguwa"
+      # Shortened regex to avoid length warnings. [b-df-hj-np-tv-z] covers all consonants.
+      regex: '(?i)\b[b-df-hj-np-tv-z]?([b-df-hj-np-tv-z][aeiou]){5,}[b-df-hj-np-tv-z]?\b'

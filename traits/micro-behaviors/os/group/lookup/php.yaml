@@ -1,0 +1,20 @@
+# Group ID Resolution (PHP)
+# Resolves GIDs to group names via POSIX functions
+
+defaults:
+  for: [php]
+  crit: notable
+  conf: 0.8
+
+traits:
+  - id: posix-getgrgid
+    desc: Resolve GID to group (posix_getgrgid)
+    if:
+      type: raw
+      regex: "\\bposix_getgrgid\\s*\\("
+
+  - id: posix-getgrnam
+    desc: Resolve group name to GID (posix_getgrnam)
+    if:
+      type: raw
+      regex: "\\bposix_getgrnam\\s*\\("

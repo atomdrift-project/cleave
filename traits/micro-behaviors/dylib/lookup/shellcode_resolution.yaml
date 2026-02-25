@@ -1,0 +1,26 @@
+traits:
+  - id: api-hash-kernel32-192299a5
+    desc: "KERNEL32.DLL shellcode hash (0x192299a5)"
+    crit: suspicious
+    for: [pe]
+    if:
+      type: hex
+      pattern: "a5 99 22 19"
+      
+  - id: virtualprotect-suffix-resolution
+    desc: "Resolve VirtualProtect via 'ect\x00' suffix"
+    crit: suspicious
+    for: [pe]
+    if:
+      type: hex
+      # sub reg, 0x746365 ; cmp reg, 0
+      pattern: "81 ?? 65 63 74 00 83 ?? 00"
+
+  - id: wide-string-uppercase-mask
+    desc: "Wide string case-insensitive hashing trick (0xdf00df)"
+    crit: suspicious
+    for: [pe]
+    if:
+      type: hex
+      # and reg32, 0xdf00df
+      pattern: "81 ?? df 00 df 00"

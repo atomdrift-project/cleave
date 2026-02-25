@@ -1,0 +1,11 @@
+defaults:
+  for: [pe, dll]
+
+traits:
+  - id: mac-format-string
+    desc: MAC address format string
+    crit: notable
+    conf: 0.9
+    if:
+      type: string
+      exact: "%02X-%02X-%02X-%02X-%02X-%02X"

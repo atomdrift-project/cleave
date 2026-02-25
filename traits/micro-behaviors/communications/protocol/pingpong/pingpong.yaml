@@ -1,0 +1,27 @@
+traits:
+  - id: pingpong-get-port
+    desc: Text-based beaconing string (get_port)
+    crit: suspicious
+    conf: 0.8
+    for: [all]
+    if:
+      type: string
+      substr: 'get_port_from_controller'
+
+  - id: pingpong-echo-return
+    desc: Text-based beaconing string (echo_return)
+    crit: suspicious
+    conf: 0.8
+    for: [all]
+    if:
+      type: string
+      substr: 'echo_and_return'
+
+  - id: pingpong-data-corrupt
+    desc: Text-based beaconing string (data corrupt)
+    crit: suspicious
+    conf: 0.8
+    for: [all]
+    if:
+      type: string
+      substr: 'DATA CORRUPT.'

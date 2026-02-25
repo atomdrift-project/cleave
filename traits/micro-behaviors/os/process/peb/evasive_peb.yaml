@@ -1,0 +1,9 @@
+traits:
+  - id: evasive-peb-access-x64
+    desc: "Indirect PEB lookup via register GS:[reg]"
+    crit: suspicious
+    for: [pe]
+    if:
+      type: hex
+      # e.g., mov r9d, 0x60 ; mov rax, qword gs:[r9]
+      pattern: "?? ?? 60 00 00 00 65 4? 8b ??"

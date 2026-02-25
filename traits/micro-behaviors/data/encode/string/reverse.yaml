@@ -1,0 +1,11 @@
+defaults:
+  for: [pe]
+
+traits:
+  - id: vb-strreverse
+    desc: Imports Visual Basic string reversal API
+    crit: notable
+    conf: 0.9
+    if:
+      type: symbol
+      regex: "rtcStrReverse|ORDINAL 713"

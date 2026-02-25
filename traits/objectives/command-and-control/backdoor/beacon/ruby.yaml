@@ -5,6 +5,6 @@ composite_rules:
     conf: 0.95
     for: [ruby]
     all:
-      - id: micro-behaviors/execution/interpreter/eval::eval-open-read
+      - id: micro-behaviors/process/interpreter/eval::eval-open-read
       - id: micro-behaviors/process/thread/create::thread-loop-sleep
       - id: micro-behaviors/anti-static/obfuscation/exception::exception-swallower

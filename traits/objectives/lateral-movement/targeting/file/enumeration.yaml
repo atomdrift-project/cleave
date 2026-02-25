@@ -31,7 +31,7 @@ composite_rules:
       - id: micro-behaviors/fs/enumerate/directory::find-next-file
     downgrade:
       any:
-        - id: metadata/quality/versioned
+        - id: metadata/quality::versioned
 
   - id: file-enumeration-with-access
     desc: File enumeration + access combination

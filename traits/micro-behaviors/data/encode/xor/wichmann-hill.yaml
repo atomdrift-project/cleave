@@ -1,0 +1,9 @@
+traits:
+  - id: js-wichmann-hill-prng
+    desc: Wichmann-Hill PRNG implementation
+    crit: notable
+    conf: 0.9
+    for: [javascript, typescript]
+    if:
+      type: raw
+      regex: '30269[\s\S]{0,150}30323'

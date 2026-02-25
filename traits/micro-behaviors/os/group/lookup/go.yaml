@@ -1,0 +1,20 @@
+# Group ID Resolution (Go)
+# Resolves GIDs to group names via os/user package
+
+defaults:
+  for: [go, elf, macho, pe]
+  crit: notable
+  conf: 0.9
+
+traits:
+  - id: lookup-group-id
+    desc: Resolve GID to group (os/user.LookupGroupId)
+    if:
+      type: symbol
+      exact: "os/user.LookupGroupId"
+
+  - id: lookup-group
+    desc: Resolve group name to group (os/user.LookupGroup)
+    if:
+      type: symbol
+      exact: "os/user.LookupGroup"

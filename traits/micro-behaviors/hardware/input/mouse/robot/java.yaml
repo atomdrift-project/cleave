@@ -1,0 +1,10 @@
+defaults:
+  for: [all]
+
+traits:
+  - id: java-robot-mouse
+    desc: Usage of java.awt.Robot for mouse interaction
+    crit: notable
+    if:
+      type: string
+      regex: "mouseMove|java/awt/MouseInfo"

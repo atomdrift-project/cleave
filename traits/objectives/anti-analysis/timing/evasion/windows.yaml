@@ -23,7 +23,7 @@ composite_rules:
 
   - id: timing-delta-check
     desc: Multiple timing calls (delta measurement)
-    crit: suspicious
+    crit: notable
     conf: 0.85
     needs: 2
     any:

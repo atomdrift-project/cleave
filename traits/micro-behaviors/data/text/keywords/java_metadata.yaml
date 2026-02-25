@@ -1,0 +1,21 @@
+defaults:
+  for: [pe]
+
+traits:
+  - id: java-platform-string
+    desc: "Java Platform SE string"
+    crit: baseline
+    conf: 0.9
+    if:
+      type: string
+      exact: "Java(TM) Platform SE binary"
+      case_insensitive: true
+
+  - id: oracle-america-string
+    desc: "Oracle America Inc string"
+    crit: baseline
+    conf: 0.9
+    if:
+      type: string
+      exact: "Oracle America Inc."
+      case_insensitive: true

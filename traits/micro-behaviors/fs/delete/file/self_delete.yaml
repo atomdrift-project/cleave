@@ -100,7 +100,7 @@ composite_rules:
       - id: js-self-delete-dynamic-decoder
       - id: js-self-delete-obfuscated-marker-pair
     all:
-      - id: micro-behaviors/host/interpreter/jscript::is-jscript
+      - id: micro-behaviors/process/interpreter/jscript::is-jscript
 
   - id: js-self-delete
     desc: Detects JScript self-deletion logic

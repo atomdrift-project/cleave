@@ -3,12 +3,12 @@ defaults:
 
 traits:
   - id: hex-buffer-decode
-    desc: Usage of Buffer.from(hex, 'hex') for decoding
+    desc: Usage of Buffer.from(..., 'hex') for decoding
     crit: notable
     conf: 1.0
     if:
       type: raw
-      substr: "Buffer.from(hex, 'hex').toString('utf8')"
+      regex: "Buffer\\.from\\(.{1,50}, ['\"]hex['\"]\\)"
 
   - id: read-font-file
     desc: Reads a font file (woff2, ttf, otf)
@@ -16,7 +16,7 @@ traits:
     conf: 1.0
     if:
       type: raw
-      regex: "readFileSync.{0,100}(woff2|ttf|otf)"
+      regex: "readFileSync.{0,100}\\.(woff2|ttf|otf)"
 
   - id: function-constructor
     desc: Generic Function constructor usage

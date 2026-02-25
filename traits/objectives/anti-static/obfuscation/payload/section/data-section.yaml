@@ -41,14 +41,14 @@ traits:
 
   # Data section dominates the binary
   - id: data-section-dominant
-    desc: "Data section larger than code"
+    desc: "Data section significantly larger than code"
     crit: suspicious
     conf: 0.8
     if:
       type: section_ratio
       section: data
       compare_to: text
-      min: 1.0
+      min: 1.5
     unless:
       - id: well-known/tools/sysadmin::par-env-vars
       - type: string

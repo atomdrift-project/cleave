@@ -1,0 +1,33 @@
+defaults:
+  for: [pe, dll]
+
+traits:
+  - id: dotnet-random-assembly-metadata-a
+    desc: Randomized assembly metadata strings
+    criticality: suspicious
+    if:
+      type: raw
+      regex: '(CompanyName|FileDescription)\x00{1,3}[A-Za-z0-9]{10,30}\x00'
+
+  - id: dotnet-random-assembly-metadata-b
+    desc: Randomized assembly metadata strings
+    criticality: suspicious
+    if:
+      type: raw
+      regex: '(LegalCopyright|ProductName)\x00{1,3}[A-Za-z0-9]{10,30}\x00'
+
+  - id: dotnet-random-assembly-attr
+    desc: Randomized assembly attributes
+    criticality: suspicious
+    if:
+      type: raw
+      regex: 'AssemblyCompanyAttribute[\x00-\x7F]{1,30}[A-Za-z0-9]{10,30}'
+
+composite_rules:
+  - id: dotnet-random-assembly-metadata
+    desc: Contains potentially randomized assembly strings
+    criticality: suspicious
+    any:
+      - id: dotnet-random-assembly-metadata-a
+      - id: dotnet-random-assembly-metadata-b
+      - id: dotnet-random-assembly-attr

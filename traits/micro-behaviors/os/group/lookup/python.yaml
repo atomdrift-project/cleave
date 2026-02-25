@@ -1,0 +1,33 @@
+# Group ID Resolution (Python)
+# Resolves GIDs to group names via grp module
+
+defaults:
+  for: [python]
+  crit: notable
+  conf: 0.8
+
+traits:
+  - id: grp-getgrgid
+    desc: Resolve GID to group (grp.getgrgid)
+    if:
+      type: raw
+      regex: "grp\\.getgrgid\\s*\\("
+
+  - id: grp-getgrnam
+    desc: Resolve group name to GID (grp.getgrnam)
+    if:
+      type: raw
+      regex: "grp\\.getgrnam\\s*\\("
+
+  - id: grp-getgrall
+    desc: Enumerate all groups (grp.getgrall)
+    if:
+      type: raw
+      regex: "grp\\.getgrall\\s*\\("
+
+  - id: grp-import
+    desc: Import grp module
+    crit: baseline
+    if:
+      type: raw
+      regex: "^\\s*import\\s+grp|from\\s+grp\\s+import"

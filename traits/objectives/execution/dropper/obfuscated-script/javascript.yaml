@@ -7,7 +7,7 @@ composite_rules:
     crit: hostile
     conf: 0.85
     all:
-      - id: micro-behaviors/execution/interpreter/scripting/jscript::jscript-cc-eval
+      - id: micro-behaviors/process/interpreter/scripting/jscript::jscript-cc-eval
     any:
       - id: objectives/anti-static/obfuscation/source/syntax::js-split-string-property
       - id: objectives/anti-static/obfuscation/code-metrics/structure::very-long-lines
@@ -22,7 +22,7 @@ composite_rules:
     conf: 0.95
     for: [javascript, typescript]
     all:
-      - id: micro-behaviors/execution/interpreter/scripting/jscript::jscript-cc-on
+      - id: micro-behaviors/process/interpreter/scripting/jscript::jscript-cc-on
       - id: micro-behaviors/process/create/script::batch-script-execution
     any:
       - id: micro-behaviors/anti-static/obfuscate/string-conceal::js-createobject-reversed
@@ -31,3 +31,29 @@ composite_rules:
     needs: 1
     attack: "T1059.003"
     mbc: "E1100"
+
+  - id: jscript-nemucod-dict-dropper
+    desc: "Obfuscated JScript Dropper using dict array mapping"
+    crit: hostile
+    conf: 0.95
+    all:
+      - id: micro-behaviors/data/encode/map::js-nested-object-table-mapping
+      - id: micro-behaviors/process/interpreter/eval::js-eval-raw
+    attack: "T1027"
+    mbc: "B0032"
+
+  - id: jscript-split-join-dropper
+    desc: "Obfuscated JScript Dropper using split/join substitution"
+    crit: hostile
+    conf: 0.90
+    for: [javascript, typescript]
+    all:
+      - id: micro-behaviors/process/interpreter/jscript::is-jscript
+      - id: micro-behaviors/process/interpreter/eval::js-eval-raw
+    any:
+      - id: micro-behaviors/anti-static/obfuscate/string-conceal/split-join::js-split-wrapper
+      - id: micro-behaviors/anti-static/obfuscate/string-conceal/split-join::js-join-wrapper
+      - id: micro-behaviors/anti-static/obfuscate/string-conceal/split-join::js-split-join-deobfuscation-dot
+    needs: 1
+    attack: "T1027"
+    mbc: "B0032"

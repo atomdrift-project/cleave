@@ -1,0 +1,11 @@
+defaults:
+  for: [pe]
+
+composite_rules:
+  - id: pecompact-packer
+    desc: Packed with PECompact
+    crit: suspicious
+    conf: 1.0
+    all:
+      - id: micro-behaviors/data/encode/pecompact::pecompact-signature
+      - id: micro-behaviors/data/encode/pecompact::pecompact-seh-trick

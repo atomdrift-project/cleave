@@ -1,0 +1,10 @@
+composite_rules:
+  - id: exif-sony-stego-c2
+    desc: "C2 IPs hidden in SONY DSC-P150 EXIF template"
+    crit: hostile
+    conf: 0.95
+    all:
+      - id: micro-behaviors/data/embedded/exif::exif-sony-camera-model
+      - id: micro-behaviors/data/embedded/exif::exif-sony-dscp150-model
+      - id: micro-behaviors/data/embedded/exif::exif-adobe-photoshop-tool
+      - id: micro-behaviors/data/embedded/exif::exif-xmpmeta-adobe

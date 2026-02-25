@@ -20,3 +20,25 @@ traits:
     if:
       type: raw
       regex: '\[[''"]split[''"]\]\([''"]\?[''"]\)\.join\([''"][''"]\)'
+
+  - id: js-split-wrapper
+    desc: split() function wrapper
+    crit: notable
+    conf: 0.8
+    for:
+      - javascript
+      - typescript
+    if:
+      type: raw
+      regex: 'return\s+[a-zA-Z_$][\w$]*\.split\([a-zA-Z_$][\w$]*\);'
+
+  - id: js-join-wrapper
+    desc: join() function wrapper
+    crit: notable
+    conf: 0.8
+    for:
+      - javascript
+      - typescript
+    if:
+      type: raw
+      regex: 'return\s+[a-zA-Z_$][\w$]*\.join\([a-zA-Z_$][\w$]*\);'

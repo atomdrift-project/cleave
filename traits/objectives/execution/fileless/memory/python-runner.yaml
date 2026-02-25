@@ -7,5 +7,5 @@ composite_rules:
     for: [python]
     attack: "T1055"
     all:
-      - id: micro-behaviors/execution/fileless/memory::python-virtualprotect-rwx
-      - id: micro-behaviors/execution/fileless/memory::python-cfunctype-cast
+      - id: micro-behaviors/mem/execute/fileless::python-virtualprotect-rwx
+      - id: micro-behaviors/mem/execute/fileless::python-cfunctype-cast

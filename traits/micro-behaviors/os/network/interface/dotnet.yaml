@@ -1,0 +1,33 @@
+defaults:
+  for: [pe, dll]
+
+traits:
+  - id: dotnet-network-namespace
+    desc: References System.Net.NetworkInformation namespace
+    criticality: notable
+    if:
+      type: raw
+      substr: "System.Net.NetworkInformation"
+      
+  - id: dotnet-get-all-interfaces
+    desc: References GetAllNetworkInterfaces method
+    criticality: notable
+    if:
+      type: raw
+      substr: "GetAllNetworkInterfaces"
+      
+  - id: dotnet-get-physical-address
+    desc: References GetPhysicalAddress method
+    criticality: notable
+    if:
+      type: raw
+      substr: "GetPhysicalAddress"
+
+composite_rules:
+  - id: dotnet-network-interface-recon
+    desc: Enumerates network interfaces for hardware addresses
+    criticality: suspicious
+    all:
+      - id: dotnet-network-namespace
+      - id: dotnet-get-all-interfaces
+      - id: dotnet-get-physical-address

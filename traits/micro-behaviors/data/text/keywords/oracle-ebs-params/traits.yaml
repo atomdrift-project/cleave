@@ -1,0 +1,31 @@
+defaults:
+  for: [all]
+
+traits:
+  - id: redirectfromjsp-param
+    desc: Oracle EBS redirectFromJsp parameter
+    crit: notable
+    if:
+      type: string
+      substr: 'redirectFromJsp'
+
+  - id: getuitype-param
+    desc: Oracle EBS getUiType parameter
+    crit: notable
+    if:
+      type: string
+      substr: 'getUiType'
+
+  - id: uiservlet-xml-initialize
+    desc: UiServlet XML initialize
+    crit: notable
+    if:
+      type: string
+      substr: '<initialize>'
+
+  - id: uiservlet-xml-return-url
+    desc: UiServlet XML return_url
+    crit: notable
+    if:
+      type: string
+      substr: '<param name="return_url">'

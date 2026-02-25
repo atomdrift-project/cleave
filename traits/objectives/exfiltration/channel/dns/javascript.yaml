@@ -1,0 +1,27 @@
+composite_rules:
+  - id: js-dns-resolution-indicator
+    desc: "DNS resolution capability in JS"
+    crit: component
+    for: [javascript, typescript]
+    any:
+      - id: micro-behaviors/communications/dns/lookup::dns-resolve4
+      - id: micro-behaviors/communications/dns/lookup::require-dns
+
+  - id: js-dns-chunking-indicator
+    desc: "DNS chunking capability in JS"
+    crit: component
+    for: [javascript, typescript]
+    any:
+      - id: micro-behaviors/communications/dns/exfil_prep::dns-regex-chunking
+      - id: micro-behaviors/communications/dns/exfil_prep::template-subdomain-chunk
+
+  - id: js-dns-exfiltration-chunking
+    desc: "DNS exfiltration via chunked subdomains"
+    crit: hostile
+    conf: 0.95
+    mbc: "B0030"
+    attack: "T1048.003"
+    for: [javascript, typescript]
+    all:
+      - id: js-dns-resolution-indicator
+      - id: js-dns-chunking-indicator

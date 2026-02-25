@@ -16,6 +16,7 @@ traits:
   desc: Extremely few extracted strings
   crit: suspicious
   conf: 0.8
+  size_min: 51200
   for:
   - pe
   - elf
@@ -26,6 +27,11 @@ traits:
   unless:
   - id: metadata/hardening::stripped-binary
   - id: metadata/format::many-functions
+  - id: metadata/format::small-elf-binary
+  - id: metadata/format::many-imports
+  - type: metrics
+    field: binary.import_count
+    min: 80
 composite_rules:
 - id: minimal-imports-suspicious-apis
   desc: Minimal imports with suspicious API combination

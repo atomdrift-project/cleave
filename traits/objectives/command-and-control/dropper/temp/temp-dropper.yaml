@@ -1,0 +1,23 @@
+defaults:
+  for: [pe]
+
+traits:
+  - id: temp-dropper-dummy
+    desc: dummy
+    crit: baseline
+    if:
+      type: string
+      exact: 'dummy_not_found_ever_temp'
+
+composite_rules:
+  - id: temp-dropper
+    desc: Writes file to Temp directory and executes it
+    crit: suspicious
+    conf: 0.8
+    all:
+      - id: micro-behaviors/fs/temp/directory::get-temp-path
+      - id: micro-behaviors/fs/file/open::fopen
+    any:
+      - id: micro-behaviors/process/create/spawn::create-process-a
+      - id: micro-behaviors/process/create/methods::shell-execute-a
+    needs: 1

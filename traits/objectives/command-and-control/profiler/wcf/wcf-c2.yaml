@@ -1,0 +1,11 @@
+defaults:
+  for: [pe, dll]
+
+composite_rules:
+  - id: dotnet-wcf-hardware-profiler
+    desc: Uses WCF to exfiltrate hardware profiles
+    criticality: hostile
+    all:
+      - id: micro-behaviors/os/network/interface::dotnet-network-interface-recon
+      - id: micro-behaviors/communications/network/wcf::dotnet-wcf-client
+      - id: micro-behaviors/communications/network/wcf::dotnet-wcf-http-binding

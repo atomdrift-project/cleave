@@ -1,0 +1,14 @@
+# Callback Execution via DDA APIs (Windows)
+# Graphics APIs that accept function pointers for pixel operations
+
+defaults:
+  for: [pe, dll]
+  crit: notable
+  conf: 0.95
+
+traits:
+  - id: line-dda
+    desc: LineDDA graphics callback
+    if:
+      type: symbol
+      exact: "LineDDA"

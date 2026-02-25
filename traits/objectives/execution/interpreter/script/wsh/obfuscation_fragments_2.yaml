@@ -104,7 +104,7 @@ composite_rules:
   - id: wscript-shell-fragment-short
     desc: WScript.Shell string fragment (short)
     any:
-      - id: micro-behaviors/host/interpreter/jscript::is-jscript # WScript
+      - id: micro-behaviors/process/interpreter/jscript::is-jscript # WScript
       - id: wscript-shell-fragment-shell
 
   - id: adodb-fragment-short

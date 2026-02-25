@@ -1,0 +1,10 @@
+traits:
+  - id: js-wichmann-hill-prng
+    desc: Wichmann-Hill PRNG implementation
+    criticality: suspicious
+    confidence: 0.9
+    for: [javascript, typescript]
+    if:
+      type: raw
+      regex: '171\s*\*\s*\w+\[.{0,20}\]\s*%\s*30269'
+      near: '30323'

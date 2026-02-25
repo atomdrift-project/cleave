@@ -1,0 +1,11 @@
+defaults:
+  for: [pe, elf, macho]
+
+traits:
+  - id: go-issandbox-func
+    desc: "Sandbox evasion check function name"
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: string
+      exact: "main.isSandbox"

@@ -1,0 +1,10 @@
+defaults:
+  for: [javascript]
+
+traits:
+  - id: js-rolling-xor-decryption
+    desc: JavaScript rolling XOR decryption loop
+    crit: suspicious
+    if:
+      type: string
+      regex: '\^=\s*[\w$]{1,20}\s*;\s*[\w$]{1,20}\s*=\s*\([\s\w$+]+\)\s*%\s*256\s*;'

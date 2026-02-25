@@ -1,0 +1,8 @@
+traits:
+  - id: test-ip
+    desc: "Test IP"
+    crit: notable
+    for: [pe, macho, elf, scripts]
+    if:
+      type: string
+      exact: "201.82.20.195:32083"

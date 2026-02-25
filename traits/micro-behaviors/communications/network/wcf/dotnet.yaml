@@ -1,0 +1,47 @@
+defaults:
+  for: [pe, dll]
+
+traits:
+  - id: dotnet-system-servicemodel
+    desc: References System.ServiceModel namespace
+    criticality: notable
+    if:
+      type: raw
+      substr: "System.ServiceModel"
+
+  - id: dotnet-wcf-clientbase
+    desc: References WCF ClientBase class
+    criticality: notable
+    if:
+      type: raw
+      substr: "ClientBase"
+
+  - id: dotnet-wcf-endpointaddress
+    desc: References WCF EndpointAddress
+    criticality: notable
+    if:
+      type: raw
+      substr: "EndpointAddress"
+
+  - id: dotnet-wcf-basichttpbinding
+    desc: References WCF BasicHttpBinding
+    criticality: notable
+    if:
+      type: raw
+      substr: "BasicHttpBinding"
+
+composite_rules:
+  - id: dotnet-wcf-client
+    desc: Implements a WCF client
+    criticality: notable
+    all:
+      - id: dotnet-system-servicemodel
+      - id: dotnet-wcf-clientbase
+      - id: dotnet-wcf-endpointaddress
+
+  - id: dotnet-wcf-http-binding
+    desc: Uses WCF BasicHttpBinding for RPC
+    criticality: notable
+    all:
+      - id: dotnet-system-servicemodel
+      - id: dotnet-wcf-basichttpbinding

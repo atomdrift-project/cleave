@@ -1,0 +1,26 @@
+# Group ID Resolution (Perl)
+# Resolves GIDs to group names via built-in functions
+
+defaults:
+  for: [perl]
+  crit: notable
+  conf: 0.8
+
+traits:
+  - id: getgrgid
+    desc: Resolve GID to group (getgrgid)
+    if:
+      type: raw
+      regex: "\\bgetgrgid\\s*\\("
+
+  - id: getgrnam
+    desc: Resolve group name to GID (getgrnam)
+    if:
+      type: raw
+      regex: "\\bgetgrnam\\s*\\("
+
+  - id: getgrent
+    desc: Iterate group entries (getgrent)
+    if:
+      type: raw
+      regex: "\\bgetgrent\\s*\\("

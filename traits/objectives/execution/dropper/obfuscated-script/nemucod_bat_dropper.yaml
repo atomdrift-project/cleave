@@ -12,7 +12,7 @@ composite_rules:
     for: [javascript, typescript]
     all:
       - id: micro-behaviors/process/create/script::batch-script-execution
-      - id: micro-behaviors/host/interpreter/jscript::adodb-fragment-dodb
+      - id: micro-behaviors/process/interpreter/jscript::adodb-fragment-dodb
     any:
       - id: micro-behaviors/anti-static/obfuscate/string-conceal::js-split-reverse-join
       - id: micro-behaviors/data/encode/charset::windows-1251-charset

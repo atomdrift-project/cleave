@@ -86,4 +86,4 @@ composite_rules:
       - id: micro-behaviors/anti-static/obfuscate/string-conceal::js-adodb-savetofile-reversed
       - id: micro-behaviors/anti-static/obfuscate/string-conceal::js-xmlhttp-responsebody-reversed
       - id: micro-behaviors/anti-static/obfuscate/string-conceal::js-split-reverse-join
-      - id: micro-behaviors/host/interpreter/jscript::createobject-fragment-ateobject
+      - id: micro-behaviors/process/interpreter/jscript::createobject-fragment-ateobject

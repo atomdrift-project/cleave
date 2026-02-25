@@ -1,0 +1,11 @@
+defaults:
+  for: [pe, elf, macho]
+
+traits:
+  - id: go-xordecrypt-func
+    desc: "Payload XOR decryption routine"
+    crit: notable
+    conf: 0.9
+    if:
+      type: string
+      exact: "main.xorDecrypt"

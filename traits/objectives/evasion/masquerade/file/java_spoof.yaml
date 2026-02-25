@@ -1,0 +1,13 @@
+composite_rules:
+  - id: dotnet-java-spoof
+    desc: ".NET executable masquerading as Java binary"
+    crit: hostile
+    conf: 0.95
+    for: [pe]
+    all:
+      - id: metadata/format/pe::mscoree-name
+    any:
+      - id: micro-behaviors/data/text/keywords::java-platform-string
+      - id: micro-behaviors/data/text/keywords::oracle-america-string
+    mbc: T1036
+    attack: T1036

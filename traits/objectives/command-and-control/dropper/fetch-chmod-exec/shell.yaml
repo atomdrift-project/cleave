@@ -1,0 +1,26 @@
+composite_rules:
+  - id: shell-download-exec-delete
+    desc: "Downloads, makes executable, executes, and deletes a payload"
+    crit: hostile
+    conf: 0.95
+    mbc: B0030
+    attack: T1105
+    for:
+      - shell
+    all:
+      - id: micro-behaviors/communications/download/curl::wget-output-file
+      - id: micro-behaviors/fs/chmod/executable::shell-7xx
+      - id: micro-behaviors/process/create/local-exec::local-execution
+      - id: micro-behaviors/fs/directory/traverse::rm-rf-cmd
+
+  - id: botnet-multi-arch-dropper
+    desc: "Botnet dropper targeting multiple architectures"
+    crit: hostile
+    conf: 0.95
+    mbc: B0030
+    attack: T1105
+    for:
+      - shell
+    all:
+      - id: objectives/command-and-control/dropper/fetch-chmod-exec::shell-download-exec-delete
+      - id: objectives/discovery/system-info/architecture::shell-multi-arch-array

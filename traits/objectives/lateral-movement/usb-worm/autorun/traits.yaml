@@ -1,0 +1,13 @@
+defaults:
+  for: [all]
+
+composite_rules:
+  - id: autorun-worm
+    desc: USB worm Autorun infection pattern
+    crit: hostile
+    conf: 0.95
+    all:
+      - id: micro-behaviors/fs/path/config/autorun::autorun-indicators
+    any:
+      - id: micro-behaviors/fs/path/config/autorun::found-dir-indicator
+      - id: micro-behaviors/fs/path/config/autorun::found-dir-wide

@@ -794,7 +794,7 @@ composite_rules:
     mbc: B0032
     for: [javascript]
     all:
-      - id: micro-behaviors/execution/interpreter/scripting/jscript::jscript-cc-on
+      - id: micro-behaviors/process/interpreter/scripting/jscript::jscript-cc-on
       - id: micro-behaviors/process/create/script::batch-script-execution
     any:
       - id: js-obfuscation-indicators

@@ -1,0 +1,35 @@
+defaults:
+  for:
+    - shell
+  crit: component
+traits:
+  - id: arch-mips
+    desc: "MIPS architecture string"
+    if:
+      type: string
+      word: mips
+  - id: arch-arm
+    desc: "ARM architecture string"
+    if:
+      type: string
+      regex: \barm[0-9]?\b
+  - id: arch-x86
+    desc: "x86 architecture string"
+    if:
+      type: string
+      word: x86
+  - id: arch-sh4
+    desc: "SH4 architecture string"
+    if:
+      type: string
+      word: sh4
+  - id: arch-ppc
+    desc: "PPC architecture string"
+    if:
+      type: string
+      word: ppc
+  - id: arch-arc
+    desc: "ARC architecture string"
+    if:
+      type: string
+      word: arc

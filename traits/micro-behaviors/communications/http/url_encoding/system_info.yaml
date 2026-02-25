@@ -1,0 +1,11 @@
+defaults:
+  for: [pe, dll]
+
+traits:
+  - id: elex-c2-query
+    desc: System info URL query string (Elex)
+    crit: suspicious
+    conf: 0.95
+    if:
+      type: string
+      regex: "OS=.{0,50}&MAC=.{0,50}&DiskNum=.{0,50}"

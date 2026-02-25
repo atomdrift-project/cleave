@@ -1,0 +1,34 @@
+# Group ID Resolution (UNIX)
+# Resolves numeric GIDs to group names
+
+defaults:
+  for: [elf, macho, so, dylib, c]
+  crit: notable
+  conf: 0.8
+
+traits:
+  - id: getgrgid
+    desc: Resolve GID to group name (getgrgid)
+    if:
+      type: symbol
+      exact: "getgrgid"
+
+  - id: getgrnam
+    desc: Resolve group name to GID (getgrnam)
+    if:
+      type: symbol
+      exact: "getgrnam"
+
+  - id: group-from-gid
+    desc: Resolve GID to group name (group_from_gid)
+    if:
+      type: symbol
+      exact: "group_from_gid"
+
+composite_rules:
+  - id: gid-resolution
+    desc: Resolve group ID to group name
+    any:
+      - id: getgrgid
+      - id: getgrnam
+      - id: group-from-gid

@@ -1,0 +1,12 @@
+# ZIP Archive Anomalies
+defaults:
+  for: [all]
+
+traits:
+  - id: zip-cd-header
+    desc: "ZIP Central Directory header"
+    crit: baseline
+    conf: 1.0
+    if:
+      type: raw
+      exact: "PK\x01\x02"

@@ -1,0 +1,10 @@
+defaults:
+  for: [javascript]
+
+traits:
+  - id: js-cp437-array-mapping
+    desc: JavaScript CP437 character decoding array map
+    crit: suspicious
+    if:
+      type: string
+      regex: '\[0xC7\]\s*=\s*0x80\s*;\s*[\w$]{1,20}\[0xFC\]\s*=\s*0x81\s*;'

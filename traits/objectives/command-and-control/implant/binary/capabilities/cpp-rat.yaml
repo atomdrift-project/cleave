@@ -107,7 +107,7 @@ traits:
   attack: T1071.001
   if:
     type: string
-    regex: (RegisterSelfToServer|RegisterToServer|RegisterClient|SelfRegister)\b
+    regex: (RegisterSelfToServer|RegisterToServer|RegisterClient)\b
 - id: session-id-mgmt
   desc: C2 session management
   crit: notable

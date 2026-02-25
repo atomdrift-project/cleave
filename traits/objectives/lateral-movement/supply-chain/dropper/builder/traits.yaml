@@ -213,7 +213,7 @@ composite_rules:
     crit: component
     any:
       - id: activex-object
-      - id: micro-behaviors/host/interpreter/jscript::is-jscript
+      - id: micro-behaviors/process/interpreter/jscript::is-jscript
       - id: js-ext
       - id: vbs-ext
 

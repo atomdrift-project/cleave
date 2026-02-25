@@ -1,0 +1,44 @@
+# VSCode Tasks Persistence
+# Detects malicious use of tasks.json for automatic code execution.
+
+traits:
+  - id: tasks-run-on-open
+    desc: VSCode task runs on folder open
+    crit: suspicious
+    conf: 1.0
+    for: [all]
+    if:
+      type: raw
+      regex: '"runOn":\s*"folderOpen"'
+
+  - id: tasks-shell-command
+    desc: VSCode task executing a shell command
+    crit: notable
+    conf: 0.8
+    for: [all]
+    if:
+      type: raw
+      regex: '"type":\s*"shell"'
+
+  - id: tasks-node-execution
+    desc: VSCode task executing node.js
+    crit: suspicious
+    conf: 0.9
+    for: [all]
+    if:
+      type: raw
+      regex: '"command":\s*"node\s+'
+
+composite_rules:
+  - id: vscode-task-persistence
+    desc: Malicious VSCode task persistence (run on folder open)
+    crit: hostile
+    conf: 1.0
+    mbc: "C0032"
+    attack: "T1547"
+    for: [all]
+    all:
+      - id: tasks-run-on-open
+    any:
+      - id: tasks-node-execution
+      - id: tasks-shell-command

@@ -24,6 +24,7 @@ traits:
     if:
       type: symbol
       regex: "^Nt(Allocate|Write|Protect)VirtualMemory$"
+      count_min: 2
 
   - id: ntdll-direct-memory-op-b
     desc: Direct NT memory manipulation (view/query)
@@ -41,6 +42,7 @@ traits:
     if:
       type: symbol
       regex: "^Nt(Create|Open)(Process|Thread)(Ex)?$"
+      count_min: 2
 
   # === Pointer Encoding ===
   - id: encode-pointer

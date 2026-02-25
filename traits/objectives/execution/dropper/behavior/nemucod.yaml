@@ -5,7 +5,7 @@ composite_rules:
     for: [javascript]
     all:
       - id: objectives/anti-static/obfuscation/source/syntax::js-decimal-xor-loop
-      - id: micro-behaviors/host/interpreter/jscript::activex-object
+      - id: micro-behaviors/process/interpreter/jscript::activex-object
     any:
       - id: micro-behaviors/data/encode/string::decimal-string-blob
       - id: objectives/anti-static/obfuscation/source/syntax::js-comma-sequence-obfuscation-v2

@@ -1,0 +1,11 @@
+traits:
+  - id: js-delay-loop
+    desc: Simple CPU exhaustion loop for delay
+    crit: suspicious
+    conf: 0.8
+    for:
+      - javascript
+      - typescript
+    if:
+      type: raw
+      regex: 'while\s*\([$\w]+\s*<\s*\d{5,10}\s*\)\s*\{\s*[$\w]+\+\+;\s*\}'

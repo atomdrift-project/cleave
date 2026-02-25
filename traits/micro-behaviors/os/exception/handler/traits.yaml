@@ -58,7 +58,7 @@ traits:
   # === System Information Query ===
   - id: query-system-information
     desc: Query system information
-    crit: suspicious
+    crit: notable
     conf: 0.85
     attack: "T1082"
     mbc: "C0046"

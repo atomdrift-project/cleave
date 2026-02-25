@@ -1,0 +1,9 @@
+traits:
+  - id: bat-iexpress-sed-polyglot
+    desc: Batch and IExpress SED polyglot pattern
+    crit: suspicious
+    conf: 0.9
+    for: [pe, batch]
+    if:
+      type: raw
+      regex: '(?i);iexpress\s+/n\s+/q\s+/m'

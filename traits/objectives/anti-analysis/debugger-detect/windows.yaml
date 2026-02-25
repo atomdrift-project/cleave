@@ -1,0 +1,23 @@
+# Debugger Detection (Windows)
+# APIs used to detect if a debugger is attached
+# MBC: B0001 (Debugger Detection)
+# ATT&CK: T1622 (Debugger Evasion)
+
+defaults:
+  for: [pe, dll]
+  crit: notable
+  conf: 0.95
+
+traits:
+  - id: is-debugger-present
+    desc: Check if debugger is attached
+    attack: "T1622"
+    mbc: "B0001"
+    if:
+      type: symbol
+      exact: "IsDebuggerPresent"
+    # API set forwarder DLLs export this symbol but do not implement debugger checks.
+    downgrade:
+      any:
+        - type: string
+          substr: "ApiSet Stub DLL"

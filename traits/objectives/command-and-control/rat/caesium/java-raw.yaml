@@ -1,0 +1,25 @@
+defaults:
+  for: [all]
+
+traits:
+  - id: caesium-filename-marker
+    desc: Caesium marker filename found in raw bytes
+    crit: notable
+    if:
+      type: raw
+      regex: 'caesium_\d+\.class'
+
+  - id: java-config-filename
+    desc: config.txt filename found in raw bytes
+    crit: notable
+    if:
+      type: raw
+      regex: 'kingDavid/resources/config\.txt'
+
+composite_rules:
+  - id: java-caesium-rat-raw
+    desc: Java RAT obfuscated with Caesium (detected via raw ZIP markers)
+    crit: hostile
+    all:
+      - id: caesium-filename-marker
+      - id: java-config-filename

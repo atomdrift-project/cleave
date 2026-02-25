@@ -1,0 +1,28 @@
+traits:
+  - id: js-nemucod-dictionary-map
+    desc: Object mapping strings to single characters
+    criticality: suspicious
+    confidence: 0.9
+    for: [javascript, typescript]
+    if:
+      type: raw
+      regex: '\{("\w+"\s*:\s*("[^"]{0,5}")\s*,\s*){20,}'
+  
+  - id: js-nemucod-dictionary-loop
+    desc: Loop concatenating string via double array index
+    criticality: suspicious
+    confidence: 0.9
+    for: [javascript, typescript]
+    if:
+      type: raw
+      regex: '\+=\s*\w+\[\w+\[\w+\]\]'
+
+  - id: js-nemucod-ascii-remap
+    desc: Custom ASCII remapping array assignment
+    crit: suspicious
+    conf: 0.9
+    for: [javascript, typescript]
+    if:
+      type: raw
+      regex: '\w+\[[^\]]{1,15}\]\s*=\s*128;\s*\w+\[[^\]]{1,15}\]\s*=\s*129;'
+

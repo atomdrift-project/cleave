@@ -61,8 +61,7 @@ traits:
     conf: 0.8
     for: [javascript, typescript]
     if:
-      type: ast
-      kind: call
+      type: symbol
       exact: "axios.post"
 
   - id: axios-put-call
@@ -345,6 +344,15 @@ traits:
     if:
       type: string
       regex: "\\.on\\(['\"]error['\"],\\s*\\(\\)\\s*=>\\s*\\{\\s*\\}\\)"
+
+  - id: custom-header-userkey
+    desc: Custom userkey HTTP header for authentication
+    crit: suspicious
+    conf: 0.8
+    for: [javascript, typescript]
+    if:
+      type: raw
+      regex: "['\\\"]?userkey['\\\"]?\\s*:\\s*"
 
 composite_rules:
   # Helper composites

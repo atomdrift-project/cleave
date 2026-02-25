@@ -1,0 +1,14 @@
+# Exception Raising (Windows)
+# Structured exception handling APIs
+
+defaults:
+  for: [pe, dll]
+  crit: baseline
+  conf: 0.85
+
+traits:
+  - id: raise-exception
+    desc: Raise structured exception
+    if:
+      type: symbol
+      exact: "RaiseException"

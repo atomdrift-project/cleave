@@ -1,0 +1,26 @@
+# Group ID Resolution (Ruby)
+# Resolves GIDs to group names via Etc module
+
+defaults:
+  for: [ruby]
+  crit: notable
+  conf: 0.8
+
+traits:
+  - id: etc-getgrgid
+    desc: Resolve GID to group (Etc.getgrgid)
+    if:
+      type: raw
+      regex: "Etc\\.getgrgid\\s*\\(?\\d*\\)?"
+
+  - id: etc-getgrnam
+    desc: Resolve group name to GID (Etc.getgrnam)
+    if:
+      type: raw
+      regex: "Etc\\.getgrnam\\s*\\("
+
+  - id: etc-group
+    desc: Iterate all groups (Etc.group)
+    if:
+      type: raw
+      regex: "Etc\\.group\\b"

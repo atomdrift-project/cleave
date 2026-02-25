@@ -1,0 +1,11 @@
+composite_rules:
+  - id: authenticode-pe-matryoshka
+    desc: Nested PE payload hidden within Authenticode signature blocks
+    crit: hostile
+    conf: 0.95
+    attack: T1027.009
+    mbc: F0001.006
+    for: [pe]
+    all:
+      - id: micro-behaviors/data/embedded/payload::pe-magic-embedded
+      - id: micro-behaviors/data/embedded/certificate::pkcs7-signeddata-oid

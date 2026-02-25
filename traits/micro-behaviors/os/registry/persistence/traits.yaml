@@ -26,6 +26,18 @@ traits:
       type: string
       regex: '(?i)\\RunServices\b'
 
+  - id: winlogon-shell-key
+    desc: Registry Winlogon Shell key
+    if:
+      type: string
+      regex: '(?i)\\Winlogon\\Shell\b'
+
+  - id: userinit-key
+    desc: Registry Userinit key
+    if:
+      type: string
+      regex: '(?i)\\Winlogon\\Userinit\b'
+
   # === PowerShell registry atomic indicators ===
   - id: set-itemproperty-run
     desc: Set-ItemProperty Run
@@ -52,6 +64,8 @@ composite_rules:
       - id: run-key
       - id: run-once-key
       - id: run-service-key
+      - id: winlogon-shell-key
+      - id: userinit-key
 
   - id: run-key-write-ps
     desc: "Modifies Run key via PowerShell"

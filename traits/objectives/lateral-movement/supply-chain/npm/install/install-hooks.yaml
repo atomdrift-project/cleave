@@ -12,7 +12,7 @@ traits:
 
   - id: has-preinstall
     desc: Has preinstall script hook
-    crit: suspicious
+    crit: notable
     conf: 0.85
     attack: "T1195.002"
     if:
@@ -31,7 +31,7 @@ traits:
 
   - id: has-postinstall
     desc: Has postinstall script hook
-    crit: suspicious
+    crit: notable
     conf: 0.85
     attack: "T1195.002"
     if:
@@ -45,7 +45,7 @@ traits:
 
   - id: has-install
     desc: Has install script hook
-    crit: suspicious
+    crit: notable
     conf: 0.85
     attack: "T1195.002"
     if:
@@ -279,7 +279,7 @@ composite_rules:
   # GuardDog: Install hook existence (supply chain risk)
   - id: install-hook-exists
     desc: Package has install-time script hooks
-    crit: suspicious
+    crit: notable
     conf: 0.85
     attack: "T1195.002"
     any:

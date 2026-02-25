@@ -133,7 +133,7 @@ traits:
     for: [javascript]
     if:
       type: raw
-      regex: '\.split\(\s*(""|'')\s*\)'
+      regex: '(\.split|\[\s*["'''']split["'''']\s*\])\s*\(\s*(""|'''')\s*\)'
 
   # Dynamic code execution patterns (atomic)
   # Moved to objectives/execution/interpreter/eval/dynamic/eval-call
@@ -167,7 +167,7 @@ traits:
     for: [javascript]
     if:
       type: raw
-      regex: '\.join\(\s*(""|'')\s*\)'
+      regex: '(\.join|\[\s*["'''']join["'''']\s*\])\s*\(\s*(""|'''')\s*\)'
 
   # Array reverse (often used with split/join for string reversal)
   - id: js-array-reverse
@@ -177,7 +177,7 @@ traits:
     for: [javascript]
     if:
       type: raw
-      regex: '\.reverse\(\s*\)'
+      regex: '(\.reverse|\[\s*["'''']reverse["'''']\s*\])\s*\(\s*\)'
 
   # String cleanup using split(key).join("") — deobfuscation technique
   # Requires non-empty split key directly followed by join (no chained methods between)
@@ -245,7 +245,7 @@ traits:
     if:
       type: raw
       regex: "\\[\\s*['\"](eval|Function|constructor|atob)['\"]\\s*\\]\\s*\\("
-      count_min: 1
+      count_min: 3
 
   - id: js-alternating-char-obfuscation
     desc: Strings with alternating junk characters (e.g., f?u?n?c?t)

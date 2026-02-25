@@ -104,6 +104,15 @@ traits:
       type: string
       regex: "(?i)vcruntime"
 
+  - id: msvcrt
+    desc: msvcrt library (older MSVC C runtime)
+    crit: notable
+    conf: 0.9
+    for: [pe]
+    if:
+      type: string
+      regex: "(?i)msvcrt"
+
   - id: ms-visual
     desc: Microsoft Visual string
     crit: notable
@@ -252,6 +261,7 @@ composite_rules:
       - id: msvc-string
       - id: msc-ver
       - id: vcruntime
+      - id: msvcrt
       - id: ms-visual
 
   # Intel composite

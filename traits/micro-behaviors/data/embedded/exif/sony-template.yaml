@@ -1,0 +1,32 @@
+traits:
+  - id: exif-sony-camera-model
+    desc: "EXIF metadata string for SONY camera"
+    crit: notable
+    for: [pe, macho, elf, scripts]
+    if:
+      type: string
+      exact: SONY
+
+  - id: exif-sony-dscp150-model
+    desc: "EXIF metadata string for DSC-P150 model"
+    crit: notable
+    for: [pe, macho, elf, scripts]
+    if:
+      type: string
+      exact: DSC-P150
+
+  - id: exif-adobe-photoshop-tool
+    desc: "EXIF metadata string for Adobe Photoshop"
+    crit: notable
+    for: [pe, macho, elf, scripts]
+    if:
+      type: string
+      regex: 'Adobe Photoshop 7\.0'
+      
+  - id: exif-xmpmeta-adobe
+    desc: "XMP metadata for Adobe"
+    crit: notable
+    for: [pe, macho, elf, scripts]
+    if:
+      type: raw
+      regex: 'x:xmpmeta xmlns:x="adobe:ns:meta/"'

@@ -1,0 +1,8 @@
+composite_rules:
+  - id: js-pe-mz-check-dropper
+    desc: JScript checking for PE MZ header
+    crit: hostile
+    conf: 0.95
+    all:
+      - id: micro-behaviors/data/file/format::js-pe-mz-check
+      - id: micro-behaviors/data/encode/skip-step::js-concat-chain

@@ -1,0 +1,10 @@
+defaults:
+  for: [all]
+
+traits:
+  - id: java-awt-robot
+    desc: Reference to java.awt.Robot
+    crit: notable
+    if:
+      type: string
+      substr: "java/awt/Robot"

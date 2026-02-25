@@ -1,0 +1,16 @@
+# VM Detection via Processor Features
+# Checking CPU features that may differ between physical and virtual machines
+# MBC: B0009 (Virtual Machine Detection)
+
+defaults:
+  for: [pe, dll]
+  crit: notable
+  conf: 0.9
+
+traits:
+  - id: is-processor-feature-present
+    desc: Check processor features (potential VM detection)
+    mbc: "B0009"
+    if:
+      type: symbol
+      exact: "IsProcessorFeaturePresent"

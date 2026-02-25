@@ -123,7 +123,7 @@ traits:
 
   - id: resume-thread
     desc: Resume thread execution
-    crit: suspicious
+    crit: notable
     conf: 0.90
     attack: "T1055"
     if:

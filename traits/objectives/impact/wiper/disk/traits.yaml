@@ -222,6 +222,7 @@ composite_rules:
     crit: suspicious
     conf: 0.85
     attack: T1485
+    size_max: 40000
     for: [javascript, typescript, python, shell]
     all:
       - id: micro-behaviors/fs/directory/traverse::traverse-readdir-walk-find

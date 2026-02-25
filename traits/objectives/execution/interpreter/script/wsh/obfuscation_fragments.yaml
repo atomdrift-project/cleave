@@ -95,14 +95,14 @@ composite_rules:
     any:
       - id: wscript-shell-fragment-1
       - id: wscript-shell-fragment-2
-      - id: micro-behaviors/host/interpreter/jscript::wscript-shell-fragment-dotshel
+      - id: micro-behaviors/process/interpreter/jscript::wscript-shell-fragment-dotshel
 
   - id: adodb-fragment
     desc: ADODB.Stream string fragment
     any:
       - id: adodb-fragment-1
       - id: adodb-fragment-2
-      - id: micro-behaviors/host/interpreter/jscript::adodb-fragment-dodb
+      - id: micro-behaviors/process/interpreter/jscript::adodb-fragment-dodb
 
   - id: filesystemobject-fragment-1
     desc: FileSystemObject string fragment (SystemObj/temObj)

@@ -1,0 +1,12 @@
+composite_rules:
+  - id: evasive-shellcode-loader
+    desc: "Evasive shellcode loading via indirect PEB and custom VirtualProtect resolution"
+    crit: hostile
+    mbc: B0004
+    attack: T1055
+    all:
+      - id: micro-behaviors/os/process/peb::evasive-peb-access-x64
+    any:
+      - id: micro-behaviors/dylib/lookup::virtualprotect-suffix-resolution
+      - id: micro-behaviors/dylib/lookup::wide-string-uppercase-mask
+      - id: micro-behaviors/dylib/lookup::api-hash-kernel32-192299a5

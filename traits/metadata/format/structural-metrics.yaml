@@ -116,13 +116,13 @@ traits:
       max: 0.01
 
   - id: many-imports
-    desc: "High number of imported symbols (>100)"
+    desc: "High number of imported symbols (>80)"
     crit: baseline
     conf: 0.8
     if:
       type: metrics
       field: binary.import_count
-      min: 100
+      min: 80
 
   - id: many-functions
     desc: "Binary has many functions (>30)"

@@ -55,7 +55,7 @@ traits:
 
   - id: duplicate-token
     desc: Create duplicate of access token
-    crit: suspicious
+    crit: notable
     conf: 0.80
     if:
       type: symbol

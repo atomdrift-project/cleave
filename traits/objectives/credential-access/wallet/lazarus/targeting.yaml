@@ -1,0 +1,41 @@
+# Lazarus-style crypto wallet targeting
+
+traits:
+  - id: solidity-files
+    desc: Solidity source files (.sol)
+    crit: notable
+    conf: 0.8
+    for: [all]
+    if:
+      type: raw
+      regex: '\.sol\b'
+
+  - id: solana-config
+    desc: Solana config file
+    crit: notable
+    conf: 0.9
+    for: [all]
+    if:
+      type: string
+      substr: "/solana/config.yml"
+
+  - id: wallet-extension-path
+    desc: Path to wallet extension settings
+    crit: suspicious
+    conf: 1.0
+    for: [all]
+    if:
+      type: string
+      substr: "/Local Extension Settings/"
+
+composite_rules:
+  - id: lazarus-crypto-targeting
+    desc: Lazarus-style targeting of crypto wallet data
+    any:
+      - id: objectives/credential-access/wallet/extension::metamask
+      - id: objectives/credential-access/wallet/extension::tronlink
+      - id: objectives/credential-access/wallet/extension::metamask-edge
+      - id: solana-config
+      - id: wallet-extension-path
+    crit: suspicious
+    conf: 0.95

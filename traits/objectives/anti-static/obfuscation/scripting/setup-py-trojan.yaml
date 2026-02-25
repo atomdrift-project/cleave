@@ -44,6 +44,7 @@ traits:
   desc: Conditional execution context (argv, os.name)
   crit: suspicious
   conf: 0.85
+  size_max: 32000
   if:
     type: raw
     regex: sdist.{0,40}argv|(os\.name|name)\s*==\s*['\"]nt['\"]

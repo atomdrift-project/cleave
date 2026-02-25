@@ -1,0 +1,35 @@
+# Synchronization Primitives (Windows)
+# Critical sections and other sync mechanisms
+
+defaults:
+  for: [pe, dll]
+  crit: baseline
+  conf: 0.9
+
+traits:
+  - id: critical-section-init
+    desc: Initialize critical section
+    if:
+      type: symbol
+      any:
+        - exact: "InitializeCriticalSection"
+        - exact: "InitializeCriticalSectionEx"
+        - exact: "InitializeCriticalSectionAndSpinCount"
+
+  - id: critical-section-enter
+    desc: Enter critical section
+    if:
+      type: symbol
+      exact: "EnterCriticalSection"
+
+  - id: critical-section-leave
+    desc: Leave critical section
+    if:
+      type: symbol
+      exact: "LeaveCriticalSection"
+
+  - id: critical-section-delete
+    desc: Delete critical section
+    if:
+      type: symbol
+      exact: "DeleteCriticalSection"

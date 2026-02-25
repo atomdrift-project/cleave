@@ -1,0 +1,24 @@
+defaults:
+  for: [pe]
+
+traits:
+  - id: mpress-packer-symbol
+    desc: MPRESS packer symbol
+    crit: suspicious
+    conf: 0.95
+    if:
+      type: symbol
+      substr: "mpress::_"
+    mbc: B0032
+    attack: T1027
+
+  - id: mpress-packer-string
+    desc: MPRESS packer string
+    crit: notable
+    conf: 0.8
+    if:
+      type: raw
+      substr: "MPRESS"
+      case_insensitive: true
+    mbc: B0032
+    attack: T1027

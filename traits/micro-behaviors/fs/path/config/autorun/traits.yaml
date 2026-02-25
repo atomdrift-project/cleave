@@ -1,0 +1,117 @@
+defaults:
+  for: [all]
+
+traits:
+  - id: autorun-inf-string
+    desc: Mentions Autorun.inf configuration file
+    crit: notable
+    conf: 0.8
+    if:
+      type: raw
+      regex: '(?i)(\\\\|:)Autorun\.inf'
+  
+  - id: autorun-inf-wide
+    desc: Mentions Autorun.inf (Wide)
+    crit: notable
+    conf: 0.8
+    if:
+      type: hex
+      pattern: "41 00 75 00 74 00 6F 00 72 00 75 00 6E 00 2E 00 69 00 6E 00 66 00"
+
+  - id: autorun-section
+    desc: Contains Autorun configuration section header
+    crit: notable
+    conf: 0.8
+    if:
+      type: raw
+      substr: "[Autorun]"
+      case_insensitive: true
+
+  - id: autorun-section-wide
+    desc: Contains Autorun section header (Wide)
+    crit: notable
+    conf: 0.8
+    if:
+      type: hex
+      pattern: "5B 00 41 00 75 00 74 00 6F 00 72 00 75 00 6E 00 5D 00"
+
+  - id: autorun-shellexecute
+    desc: Contains Autorun ShellExecute command directive
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: raw
+      regex: '(?i)ShellExecute\s*='
+
+  - id: autorun-shellexecute-wide
+    desc: Contains Autorun ShellExecute (Wide)
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: hex
+      pattern: "53 00 68 00 65 00 6C 00 6C 00 45 00 78 00 65 00 63 00 75 00 74 00 65 00"
+
+  - id: autorun-open
+    desc: Contains Autorun Open command directive
+    crit: notable
+    conf: 0.9
+    if:
+      type: raw
+      regex: '(?i)Open\s*='
+
+  - id: autorun-open-wide
+    desc: Contains Autorun Open (Wide)
+    crit: notable
+    conf: 0.9
+    if:
+      type: hex
+      pattern: "4F 00 70 00 65 00 6E 00"
+
+  - id: autorun-action
+    desc: Contains Autorun Action command directive
+    crit: notable
+    conf: 0.9
+    if:
+      type: raw
+      regex: '(?i)Action\s*='
+
+  - id: autorun-useautoplay
+    desc: Contains Autorun UseAutoPlay directive
+    crit: notable
+    conf: 0.9
+    if:
+      type: raw
+      regex: '(?i)UseAutoPlay\s*='
+
+  - id: found-dir-indicator
+    desc: References FOUND.000 hidden directory
+    crit: notable
+    conf: 0.7
+    if:
+      type: raw
+      regex: '(?i)FOUND\.\d{3}'
+
+  - id: found-dir-wide
+    desc: References FOUND.000 (Wide)
+    crit: notable
+    conf: 0.7
+    if:
+      type: hex
+      pattern: "46 00 4F 00 55 00 4E 00 44 00 2E 00"
+
+composite_rules:
+  - id: autorun-indicators
+    desc: Multiple Autorun-related indicators
+    crit: suspicious
+    any:
+      - id: autorun-inf-string
+      - id: autorun-inf-wide
+      - id: autorun-section
+      - id: autorun-section-wide
+      - id: autorun-shellexecute
+      - id: autorun-shellexecute-wide
+      - id: autorun-open
+      - id: autorun-open-wide
+      - id: autorun-action
+      - id: autorun-useautoplay
+    needs: 2

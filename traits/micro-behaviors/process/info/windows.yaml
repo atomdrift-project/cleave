@@ -1,0 +1,29 @@
+# Process/Thread Information (Windows)
+# Basic thread and module queries
+
+defaults:
+  for: [pe, dll]
+  crit: baseline
+  conf: 0.9
+
+traits:
+  - id: get-current-thread-id
+    desc: Get current thread ID
+    if:
+      type: symbol
+      exact: "GetCurrentThreadId"
+
+  - id: get-current-process-id
+    desc: Get current process ID
+    if:
+      type: symbol
+      exact: "GetCurrentProcessId"
+
+  - id: get-module-handle
+    desc: Get module handle
+    if:
+      type: symbol
+      any:
+        - exact: "GetModuleHandleA"
+        - exact: "GetModuleHandleW"
+        - exact: "GetModuleHandle"

@@ -1,0 +1,38 @@
+# Callback Execution via Enum APIs (Windows)
+# Enumeration APIs that accept function pointers, often abused for stealthy code execution
+
+defaults:
+  for: [pe, dll]
+  crit: notable
+  conf: 0.95
+
+traits:
+  - id: enum-ui-languages
+    desc: Enumerate UI languages (callback trigger)
+    if:
+      type: symbol
+      regex: "^EnumUILanguages[AW]$"
+
+  - id: enum-resource-types
+    desc: Enumerate resource types (callback trigger)
+    if:
+      type: symbol
+      regex: "^EnumResourceTypes[AW]$"
+
+  - id: enum-resource-names
+    desc: Enumerate resource names (callback trigger)
+    if:
+      type: symbol
+      regex: "^EnumResourceNames[AW]$"
+
+  - id: enum-desktop-windows
+    desc: Enumerate desktop windows (callback trigger)
+    if:
+      type: symbol
+      exact: "EnumDesktopWindows"
+
+  - id: enum-date-formats
+    desc: Enumerate date formats (callback trigger)
+    if:
+      type: symbol
+      exact: "EnumDateFormatsA"

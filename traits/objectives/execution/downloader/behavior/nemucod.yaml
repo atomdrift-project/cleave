@@ -17,7 +17,7 @@ composite_rules:
     desc: Nemucod fragmented ADODB.Stream drop and execute
     crit: hostile
     all:
-      - id: micro-behaviors/host/interpreter/jscript::is-jscript
+      - id: micro-behaviors/process/interpreter/jscript::is-jscript
     any:
       - id: micro-behaviors/fs/write/file::adodb-fragment-adod
       - id: micro-behaviors/anti-static/obfuscate/string-conceal/nemucod::save-to-file-fragment-oFil

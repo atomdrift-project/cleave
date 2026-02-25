@@ -1,0 +1,10 @@
+defaults:
+  for:
+    - shell
+traits:
+  - id: local-execution
+    desc: "Executes a file from current directory"
+    crit: component
+    if:
+      type: raw
+      regex: '(?m)(^|[\\n;&|]\s*)\./[^\s;&|]{1,80}'

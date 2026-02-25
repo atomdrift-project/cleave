@@ -1,0 +1,56 @@
+# Thread-Local Storage (Windows)
+# Fiber/thread local storage APIs
+
+defaults:
+  for: [pe, dll]
+  crit: baseline
+  conf: 0.9
+
+traits:
+  - id: fls-alloc
+    desc: Fiber-local storage allocation
+    if:
+      type: symbol
+      exact: "FlsAlloc"
+
+  - id: fls-free
+    desc: Fiber-local storage deallocation
+    if:
+      type: symbol
+      exact: "FlsFree"
+
+  - id: fls-get-value
+    desc: Fiber-local storage retrieval
+    if:
+      type: symbol
+      exact: "FlsGetValue"
+
+  - id: fls-set-value
+    desc: Fiber-local storage assignment
+    if:
+      type: symbol
+      exact: "FlsSetValue"
+
+  - id: tls-alloc
+    desc: Thread-local storage allocation
+    if:
+      type: symbol
+      exact: "TlsAlloc"
+
+  - id: tls-free
+    desc: Thread-local storage deallocation
+    if:
+      type: symbol
+      exact: "TlsFree"
+
+  - id: tls-get-value
+    desc: Thread-local storage retrieval
+    if:
+      type: symbol
+      exact: "TlsGetValue"
+
+  - id: tls-set-value
+    desc: Thread-local storage assignment
+    if:
+      type: symbol
+      exact: "TlsSetValue"

@@ -1,0 +1,11 @@
+composite_rules:
+  - id: temp-file-execution
+    desc: Drop and execute file from Temp directory
+    crit: suspicious
+    conf: 0.85
+    platforms: [windows]
+    all:
+      - id: micro-behaviors/fs/temp/directory::get-temp-path
+    any:
+      - id: micro-behaviors/process/create/spawn::create-process-a
+      - id: micro-behaviors/process/create/methods::shell-execute-a

@@ -1,0 +1,23 @@
+defaults:
+  for: [python]
+  attack: T1119
+
+composite_rules:
+  - id: pyzipper-encrypted-archive
+    desc: Create Encrypted ZIP using pyzipper
+    crit: suspicious
+    conf: 0.9
+    attack: T1560
+    all:
+      - id: micro-behaviors/data/archive/zip::pyzipper-aes
+      - id: micro-behaviors/data/archive/zip::pyzipper-setpassword
+
+  - id: python-photo-stealer
+    desc: Python Photo Stealer Behavior
+    crit: hostile
+    conf: 0.95
+    all:
+      - id: micro-behaviors/fs/enumerate/extension::search-image-extensions
+      - id: micro-behaviors/fs/path/location::os-path-expanduser
+      - id: metadata/import/python::glob
+      - id: objectives/collection/stealer/behavior::pyzipper-encrypted-archive

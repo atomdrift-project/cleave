@@ -1,0 +1,37 @@
+# Lazarus Group Modular RAT Detection
+# Detects combinations of behaviors typical of the DPRK modular RAT used in supply chain attacks.
+
+traits:
+  - id: clipboard-steal-custom
+    desc: Steals clipboard content (Get-Clipboard)
+    crit: suspicious
+    conf: 1.0
+    for: [all]
+    if:
+      type: raw
+      substr: "Get-Clipboard"
+
+  - id: data-exfiltration-path
+    desc: Exfiltration via HTTP POST to /upload
+    crit: suspicious
+    conf: 0.9
+    for: [all]
+    if:
+      type: raw
+      substr: "/upload"
+
+composite_rules:
+  - id: lazarus-modular-rat
+    desc: Lazarus Group modular RAT behavior detected
+    crit: hostile
+    conf: 1.0
+    mbc: "C0032"
+    attack: "T1071.001"
+    for: [all]
+    all:
+      - id: data-exfiltration-path
+    any:
+      - id: objectives/credential-access/clipboard/monitor::js-pbpaste
+      - id: clipboard-steal-custom
+      - id: micro-behaviors/fs/path/sensitive/credentials::aws-credentials
+      - id: micro-behaviors/fs/path/sensitive/credentials::ssh-dir

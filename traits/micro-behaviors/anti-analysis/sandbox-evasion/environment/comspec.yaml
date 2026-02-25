@@ -1,0 +1,9 @@
+traits:
+  - id: js-comspec-environment-check
+    desc: Checks ComSpec environment variable for sandbox evasion
+    crit: suspicious
+    conf: 0.8
+    for: [javascript, typescript]
+    if:
+      type: raw
+      regex: 'Environment[\s\S]{0,10}ComSpec'

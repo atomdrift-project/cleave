@@ -1,0 +1,14 @@
+composite_rules:
+  - id: shell-multi-arch-array
+    desc: "Multiple architecture strings (botnet array)"
+    crit: suspicious
+    conf: 0.85
+    for:
+      - shell
+    mbc: "Discovery"
+    all:
+      - id: micro-behaviors/os/info/architecture::arch-mips
+      - id: micro-behaviors/os/info/architecture::arch-arm
+      - id: micro-behaviors/os/info/architecture::arch-x86
+      - id: micro-behaviors/os/info/architecture::arch-sh4
+      - id: micro-behaviors/os/info/architecture::arch-ppc

@@ -1,0 +1,34 @@
+# Time Queries (Windows)
+# System time retrieval APIs
+
+defaults:
+  for: [pe, dll]
+  crit: baseline
+  conf: 0.9
+
+traits:
+  - id: get-system-time-as-filetime
+    desc: Get system time as FILETIME
+    if:
+      type: symbol
+      exact: "GetSystemTimeAsFileTime"
+
+  - id: get-system-time
+    desc: Get system time
+    if:
+      type: symbol
+      exact: "GetSystemTime"
+
+  - id: get-local-time
+    desc: Get local time
+    if:
+      type: symbol
+      exact: "GetLocalTime"
+
+  - id: get-tick-count
+    desc: Get tick count
+    if:
+      type: symbol
+      any:
+        - exact: "GetTickCount"
+        - exact: "GetTickCount64"

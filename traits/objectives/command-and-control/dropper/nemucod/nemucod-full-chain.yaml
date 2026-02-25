@@ -7,7 +7,7 @@ composite_rules:
     mbc: B0017, B0018, B0032, B0008
     for: [javascript]
     all:
-      - id: micro-behaviors/host/interpreter/jscript::is-jscript
+      - id: micro-behaviors/process/interpreter/jscript::is-jscript
       - id: objectives/anti-analysis/timing/nemucod::nemucod-jitter-check
       - id: objectives/execution/dropper/obfuscated-script::nemucod-dropper
       - id: objectives/command-and-control/dropper/nemucod::fragmented-url-dropper

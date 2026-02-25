@@ -4,8 +4,8 @@ composite_rules:
     crit: suspicious
     all:
       - id: metadata/import/python::click
-      - id: micro-behaviors/cli/argument/credential::suspicious-arg-gmail
-      - id: micro-behaviors/cli/argument/credential::suspicious-arg-passw
+      - id: micro-behaviors/process/argument/credential::suspicious-arg-gmail
+      - id: micro-behaviors/process/argument/credential::suspicious-arg-passw
 
   - id: deezer-credential-harvester
     desc: Detects python scripts that use click to harvest deezer credentials.

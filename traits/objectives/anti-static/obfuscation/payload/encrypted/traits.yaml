@@ -126,6 +126,11 @@ traits:
   downgrade:
     any:
     - id: metadata/signed/platform::apple
+  unless:
+  - id: metadata/format::many-imports
+  - type: metrics
+    field: binary.import_count
+    min: 80
 - id: math-cipher-imports
   desc: Math functions (cipher indicator) with
   crit: suspicious

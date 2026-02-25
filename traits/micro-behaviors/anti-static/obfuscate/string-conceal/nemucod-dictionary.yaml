@@ -1,0 +1,9 @@
+traits:
+  - id: js-nested-dictionary-array-mapping
+    desc: Nested array mapping inside dictionary
+    crit: suspicious
+    conf: 0.9
+    for: [javascript, typescript]
+    if:
+      type: raw
+      regex: '''[a-zA-Z0-9_]{1,5}'': \[\d+, \[\d+, ''\\x[0-9a-fA-F]{2}''\]\]'

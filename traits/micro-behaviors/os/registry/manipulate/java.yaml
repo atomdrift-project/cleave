@@ -1,0 +1,10 @@
+defaults:
+  for: [all]
+
+traits:
+  - id: java-registry-preferences
+    desc: Usage of java.util.prefs.Preferences (Windows Registry)
+    crit: notable
+    if:
+      type: string
+      regex: "java/util/prefs/Preferences|userRoot|systemRoot"

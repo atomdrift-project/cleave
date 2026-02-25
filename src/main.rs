@@ -191,6 +191,7 @@ fn main() -> Result<()> {
 
     // Log command line and initialization
     tracing::info!(
+        pid = std::process::id(),
         "cleave started: {}",
         std::env::args().collect::<Vec<_>>().join(" ")
     );
@@ -278,8 +279,9 @@ fn main() -> Result<()> {
     // Convert max_file_mem from MB to bytes
     let max_memory_file_size = args.max_file_mem * 1024 * 1024;
 
-    // Start periodic memory logging if verbose mode is enabled
-    let _memory_logger = if args.verbose {
+    // Start periodic memory logging when a log file is configured (always-on for
+    // post-mortem OOM analysis) or when verbose mode is enabled.
+    let _memory_logger = if args.verbose || args.log_file.is_some() {
         use cleave::memory_tracker;
         Some(memory_tracker::start_periodic_logging(
             std::time::Duration::from_secs(10),
@@ -481,18 +483,28 @@ fn main() -> Result<()> {
     } else {
         // Results go to stdout
         print!("{}", result);
+        use std::io::Write;
+        if let Err(e) = std::io::stdout().flush() {
+            if e.kind() == std::io::ErrorKind::BrokenPipe {
+                tracing::info!("stdout pipe closed");
+                // Fall through to exit summary logging below
+            }
+        }
     }
 
-    // Log final memory statistics if verbose
-    if args.verbose {
+    // Always log exit summary with PID and peak RSS for post-mortem correlation
+    {
         use cleave::memory_tracker;
-        memory_tracker::global_tracker().log_stats();
+        if args.verbose {
+            memory_tracker::global_tracker().log_stats();
+        }
         let total_files = memory_tracker::global_tracker().files_processed();
         let peak_rss = memory_tracker::global_tracker().peak_rss();
         tracing::info!(
+            pid = std::process::id(),
             total_files = total_files,
-            peak_rss_gb = peak_rss / 1024 / 1024 / 1024,
-            "Analysis complete"
+            peak_rss_mb = peak_rss / 1024 / 1024,
+            "cleave exiting"
         );
     }
 

@@ -19,6 +19,12 @@ impl super::CapabilityMapper {
     pub fn is_low_value_any_rule(&self, finding_id: &str) -> bool {
         // Find the composite rule with this ID
         if let Some(rule) = self.composite_rules.iter().find(|r| r.id == finding_id) {
+            // A rule is only low-value if it's a simple OR (any: with needs: 1)
+            // and has no other positive conditions (all:).
+            if rule.all.is_some() {
+                return false;
+            }
+
             // Check if it has an `any` clause
             if let Some(any_conditions) = &rule.any {
                 // If there's only 1 condition in `any`, it's always low-value

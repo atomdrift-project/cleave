@@ -376,10 +376,10 @@ impl PackageJsonAnalyzer {
 
             // Check for hidden file references (dotfiles)
             if script.contains("/.") {
-                // Extract the hidden file path
+                // Extract the hidden file path, excluding standard paths like node_modules/.bin/
                 let hidden_files: Vec<&str> = script
                     .split_whitespace()
-                    .filter(|s| s.contains("/."))
+                    .filter(|s| s.contains("/.") && !s.contains("node_modules/.bin/"))
                     .collect();
                 if !hidden_files.is_empty() {
                     report.add_finding(
@@ -761,6 +761,8 @@ impl PackageJsonAnalyzer {
             "lodash",
             "axios",
             "babel-core",
+            "babel-eslint",
+            "babel-loader",
             "babel-polyfill",
             "babel-preset-env",
             "tslint",
@@ -771,7 +773,20 @@ impl PackageJsonAnalyzer {
             "webpack-dev-server",
         ];
 
-        legitimate.contains(&name)
+        if legitimate.contains(&name) {
+            return true;
+        }
+
+        // Well-known ecosystem naming conventions
+        let legitimate_prefixes = [
+            "babel-plugin-",
+            "babel-preset-",
+            "eslint-config-",
+            "eslint-plugin-",
+            "webpack-plugin-",
+        ];
+
+        legitimate_prefixes.iter().any(|prefix| name.starts_with(prefix))
     }
 
     fn is_suspicious_domain(&self, url: &str) -> bool {

@@ -206,7 +206,17 @@ impl AnalysisReport {
         let final_count =
             self.findings.len() + self.files.iter().map(|f| f.findings.len()).sum::<usize>();
 
-        initial_count - final_count
+        let removed = initial_count - final_count;
+
+        // Recompute per-file summaries and report summary after filtering
+        if removed > 0 {
+            for file in &mut self.files {
+                file.compute_summary();
+            }
+            self.summary = Some(ReportSummary::from_files(&self.files));
+        }
+
+        removed
     }
 
     /// Filter out component-criticality findings that aren't referenced by any composite.
@@ -356,6 +366,51 @@ impl AnalysisReport {
         }
 
         file
+    }
+
+    /// Consuming version of `to_file_analysis` that moves data instead of cloning.
+    ///
+    /// Returns `(file_analysis, nested_files, archive_contents)` — the nested files
+    /// and archive contents are returned separately since archive callers need them.
+    /// This avoids the temporary doubling of memory from cloning large reports.
+    #[must_use]
+    pub fn into_file_analysis(
+        mut self,
+        id: u32,
+        verbose: bool,
+    ) -> (FileAnalysis, Vec<FileAnalysis>, Vec<ArchiveEntry>) {
+        let nested_files = std::mem::take(&mut self.files);
+        let archive_contents = std::mem::take(&mut self.archive_contents);
+
+        let mut file = FileAnalysis::new(
+            id,
+            self.target.path,
+            self.target.file_type,
+            self.target.sha256,
+            self.target.size_bytes,
+        );
+
+        file.findings = self.findings;
+        file.metrics = self.metrics;
+
+        if verbose {
+            file.traits = self.traits;
+            file.structure = self.structure;
+            file.functions = self.functions;
+            file.strings = self.strings;
+            file.sections = self.sections;
+            file.imports = self.imports;
+            file.exports = self.exports;
+            file.yara_matches = self.yara_matches;
+            file.syscalls = self.syscalls;
+            file.binary_properties = self.binary_properties;
+            file.source_code_metrics = self.source_code_metrics;
+            file.paths = self.paths;
+            file.directories = self.directories;
+            file.env_vars = self.env_vars;
+        }
+
+        (file, nested_files, archive_contents)
     }
 }
 

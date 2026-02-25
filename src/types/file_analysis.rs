@@ -209,21 +209,23 @@ impl FileAnalysis {
     /// Strip verbose fields for minimal output
     /// Note: metrics are preserved as they're small and valuable for ML training
     pub(crate) fn minimize(&mut self) {
-        self.traits.clear();
-        self.structure.clear();
-        self.functions.clear();
-        self.strings.clear();
-        self.sections.clear();
-        self.imports.clear();
-        self.exports.clear();
-        self.yara_matches.clear();
-        self.syscalls.clear();
+        // Use Vec::new() instead of clear() to actually deallocate heap memory.
+        // clear() retains allocated capacity which wastes memory for large reports.
+        self.traits = Vec::new();
+        self.structure = Vec::new();
+        self.functions = Vec::new();
+        self.strings = Vec::new();
+        self.sections = Vec::new();
+        self.imports = Vec::new();
+        self.exports = Vec::new();
+        self.yara_matches = Vec::new();
+        self.syscalls = Vec::new();
         self.binary_properties = None;
         self.source_code_metrics = None;
         // Note: metrics intentionally NOT cleared - they're compact and useful for ML
-        self.paths.clear();
-        self.directories.clear();
-        self.env_vars.clear();
+        self.paths = Vec::new();
+        self.directories = Vec::new();
+        self.env_vars = Vec::new();
     }
 }
 

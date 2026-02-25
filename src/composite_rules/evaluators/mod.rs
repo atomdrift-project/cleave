@@ -174,7 +174,7 @@ thread_local! {
             NonZeroUsize::new(std::env::var("cleave_UTF8_CACHE_SIZE")
                 .ok()
                 .and_then(|s| s.parse().ok())
-                .unwrap_or(32)
+                .unwrap_or(8)
             ).expect("Cache size must be > 0")
         ))
     };

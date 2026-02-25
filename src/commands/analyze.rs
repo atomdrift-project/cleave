@@ -250,7 +250,12 @@ pub(crate) fn run(
                 print!("{}", result);
                 // Flush for piped output (stdout is block-buffered when not a tty)
                 use std::io::Write;
-                let _ = std::io::stdout().flush();
+                if let Err(e) = std::io::stdout().flush() {
+                    if e.kind() == std::io::ErrorKind::BrokenPipe {
+                        tracing::info!("stdout pipe closed, stopping analysis");
+                        return Ok(String::new());
+                    }
+                }
             } else {
                 results.push(result);
             }
@@ -326,7 +331,7 @@ fn analyze_file_with_context(
         FileType::MachO => {
             let data = fs::read(path).context("Failed to read file")?;
             let analyzer =
-                MachOAnalyzer::new().with_capability_mapper((**capability_mapper).clone());
+                MachOAnalyzer::new().with_capability_mapper_arc(capability_mapper.clone());
             let range = analyzer.preferred_arch_range(&data);
             let arch_data = &data[range.clone()];
             let is_fat = analyzer.all_arch_ranges(&data).len() > 1;
@@ -369,7 +374,7 @@ fn analyze_file_with_context(
         }
         FileType::Elf => {
             let data = fs::read(path).context("Failed to read file")?;
-            let analyzer = ElfAnalyzer::new().with_capability_mapper((**capability_mapper).clone());
+            let analyzer = ElfAnalyzer::new().with_capability_mapper_arc(capability_mapper.clone());
             let file_types: &[&str] = &["elf", "so", "ko"];
             let (mut report, yara_result) = rayon::join(
                 || analyzer.analyze_structural(path, &data),
@@ -394,7 +399,7 @@ fn analyze_file_with_context(
         FileType::Pe => {
             let data = fs::read(path).context("Failed to read file")?;
             let mut analyzer =
-                PEAnalyzer::new().with_capability_mapper((**capability_mapper).clone());
+                PEAnalyzer::new().with_capability_mapper_arc(capability_mapper.clone());
             if let Some(arc) = yara_engine {
                 analyzer = analyzer.with_yara_arc(arc.clone());
             }
@@ -420,13 +425,13 @@ fn analyze_file_with_context(
         }
         FileType::JavaClass => {
             let analyzer = analyzers::java_class::JavaClassAnalyzer::new()
-                .with_capability_mapper((**capability_mapper).clone());
+                .with_capability_mapper_arc(capability_mapper.clone());
             analyzer.analyze(path)?
         }
         FileType::Jar => {
             // JAR files are analyzed like archives but with Java-specific handling
             let mut analyzer = ArchiveAnalyzer::new()
-                .with_capability_mapper((**capability_mapper).clone())
+                .with_capability_mapper_arc(capability_mapper.clone())
                 .with_zip_passwords(zip_passwords.to_vec())
                 .with_max_memory_file_size(max_memory_file_size);
             if let Some(engine) = yara_engine {
@@ -439,17 +444,17 @@ fn analyze_file_with_context(
         }
         FileType::PackageJson => {
             let analyzer = analyzers::package_json::PackageJsonAnalyzer::new()
-                .with_capability_mapper((**capability_mapper).clone());
+                .with_capability_mapper_arc(capability_mapper.clone());
             analyzer.analyze(path)?
         }
         FileType::VsixManifest => {
             let analyzer = analyzers::vsix_manifest::VsixManifestAnalyzer::new()
-                .with_capability_mapper((**capability_mapper).clone());
+                .with_capability_mapper_arc(capability_mapper.clone());
             analyzer.analyze(path)?
         }
         FileType::Archive => {
             let mut analyzer = ArchiveAnalyzer::new()
-                .with_capability_mapper((**capability_mapper).clone())
+                .with_capability_mapper_arc(capability_mapper.clone())
                 .with_zip_passwords(zip_passwords.to_vec())
                 .with_max_memory_file_size(max_memory_file_size);
             if let Some(engine) = yara_engine {
@@ -472,7 +477,7 @@ fn analyze_file_with_context(
         // All source code languages use the unified analyzer (or generic fallback)
         _ => {
             if let Some(analyzer) =
-                analyzers::analyzer_for_file_type(&file_type, Some((**capability_mapper).clone()))
+                analyzers::analyzer_for_file_type_arc(&file_type, Some(capability_mapper.clone()))
             {
                 analyzer.analyze(path)?
             } else {

@@ -176,14 +176,15 @@ impl ArchiveAnalyzer {
         let files_analyzed = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let total_capabilities = Arc::new(Mutex::new(HashSet::new()));
         let total_traits = Arc::new(Mutex::new(HashSet::new()));
-        // Pre-allocate capacity based on expected number of files to reduce reallocations
+        // Pre-allocate with conservative estimates; findings are deduplicated and only
+        // URL/IP/Base64 strings are collected, so actual counts are much smaller than file count.
         let expected_count = classes_to_analyze.len();
         let collected_traits = Arc::new(Mutex::new(Vec::<Finding>::with_capacity(
-            expected_count * 10,
+            expected_count.min(500),
         )));
         let collected_yara = Arc::new(Mutex::new(Vec::<YaraMatch>::with_capacity(50)));
         let collected_strings = Arc::new(Mutex::new(Vec::<StringInfo>::with_capacity(
-            expected_count * 50,
+            (expected_count * 2).min(200),
         )));
         let collected_archive_entries = Arc::new(Mutex::new(Vec::<ArchiveEntry>::with_capacity(
             expected_count,
@@ -217,7 +218,7 @@ impl ArchiveAnalyzer {
                 }
             }
 
-            if let Ok(mut file_report) = self.analyze_extracted_file_with_timeout(entry.path()) {
+            if let Ok(file_report) = self.analyze_extracted_file_with_timeout(entry.path()) {
                 files_analyzed.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
                 let (
@@ -284,20 +285,21 @@ impl ArchiveAnalyzer {
                     }
                 }
 
-                // Merge archive_contents from nested archives
-                for nested_entry in &file_report.archive_contents {
-                    all_archive_entries.push(nested_entry.clone());
-                }
-
-                // Convert to FileAnalysis for v2 flat files array
-                let mut file_entry = file_report.to_file_analysis(0, true);
+                // Convert to FileAnalysis, consuming the report to avoid cloning
+                let (mut file_entry, nested_files, archive_contents) =
+                    file_report.into_file_analysis(0, true);
                 file_entry.path = entry_path.clone();
                 file_entry.depth = 1; // Direct child of archive
                 file_entry.compute_summary();
                 all_files.push(file_entry);
 
+                // Merge archive_contents from nested archives
+                for nested_entry in archive_contents {
+                    all_archive_entries.push(nested_entry);
+                }
+
                 // Handle nested archives - add their files with updated paths
-                for mut nested_file in std::mem::take(&mut file_report.files) {
+                for mut nested_file in nested_files {
                     if !nested_file.path.contains("!!") {
                         nested_file.path = encode_archive_path(&entry_path, &nested_file.path);
                     }
@@ -360,7 +362,7 @@ impl ArchiveAnalyzer {
             }
 
             // Run file-type-specific analysis
-            if let Ok(mut file_report) = self.analyze_extracted_file_with_timeout(entry.path()) {
+            if let Ok(file_report) = self.analyze_extracted_file_with_timeout(entry.path()) {
                 files_analyzed.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
                 let (
@@ -424,20 +426,21 @@ impl ArchiveAnalyzer {
                     }
                 }
 
-                // Merge archive_contents from nested archives
-                for nested_entry in &file_report.archive_contents {
-                    all_archive_entries.push(nested_entry.clone());
-                }
-
-                // Convert to FileAnalysis for v2 flat files array
-                let mut file_entry = file_report.to_file_analysis(0, true);
+                // Convert to FileAnalysis, consuming the report to avoid cloning
+                let (mut file_entry, nested_files, archive_contents) =
+                    file_report.into_file_analysis(0, true);
                 file_entry.path = entry_path.clone();
                 file_entry.depth = 1;
                 file_entry.compute_summary();
                 all_files.push(file_entry);
 
+                // Merge archive_contents from nested archives
+                for nested_entry in archive_contents {
+                    all_archive_entries.push(nested_entry);
+                }
+
                 // Handle nested archives
-                for mut nested_file in std::mem::take(&mut file_report.files) {
+                for mut nested_file in nested_files {
                     if !nested_file.path.contains("!!") {
                         nested_file.path = encode_archive_path(&entry_path, &nested_file.path);
                     }
@@ -574,12 +577,13 @@ impl ArchiveAnalyzer {
         let files_analyzed = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let total_capabilities = Arc::new(Mutex::new(HashSet::new()));
         let total_traits = Arc::new(Mutex::new(HashSet::new()));
-        // Pre-allocate capacity based on total file count to reduce reallocations
+        // Pre-allocate with conservative estimates; findings are deduplicated and only
+        // URL/IP/Base64 strings are collected, so actual counts are much smaller than file count.
         let collected_traits =
-            Arc::new(Mutex::new(Vec::<Finding>::with_capacity(total_files * 10)));
+            Arc::new(Mutex::new(Vec::<Finding>::with_capacity(total_files.min(500))));
         let collected_yara = Arc::new(Mutex::new(Vec::<YaraMatch>::with_capacity(100)));
         let collected_strings = Arc::new(Mutex::new(Vec::<StringInfo>::with_capacity(
-            total_files * 50,
+            (total_files * 2).min(200),
         )));
         let collected_archive_entries =
             Arc::new(Mutex::new(Vec::<ArchiveEntry>::with_capacity(total_files)));
@@ -638,7 +642,7 @@ impl ArchiveAnalyzer {
                 }
             }
 
-            if let Ok(mut file_report) = self.analyze_extracted_file_with_timeout(entry.path()) {
+            if let Ok(file_report) = self.analyze_extracted_file_with_timeout(entry.path()) {
                 files_analyzed.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
                 let Ok(mut caps) = total_capabilities.lock() else {
@@ -663,8 +667,15 @@ impl ArchiveAnalyzer {
                     return;
                 };
 
-                // Aggregate findings
-                for f in &file_report.findings {
+                // Convert to FileAnalysis, consuming the report to avoid cloning
+                let (mut file_entry, nested_files, archive_contents) =
+                    file_report.into_file_analysis(0, true);
+                file_entry.path = entry_path.clone();
+                file_entry.depth = 1; // Direct child of archive
+                file_entry.compute_summary();
+
+                // Aggregate findings from the converted FileAnalysis
+                for f in &file_entry.findings {
                     traits.insert(f.id.clone());
                     caps.insert(f.id.clone());
                     if !all_traits.iter().any(|existing| existing.id == f.id) {
@@ -687,14 +698,14 @@ impl ArchiveAnalyzer {
                 }
 
                 // Aggregate YARA matches
-                for yara_match in &file_report.yara_matches {
+                for yara_match in &file_entry.yara_matches {
                     if !all_yara.iter().any(|m| m.rule == yara_match.rule) {
                         all_yara.push(yara_match.clone());
                     }
                 }
 
                 // Aggregate interesting strings
-                for string in &file_report.strings {
+                for string in &file_entry.strings {
                     if matches!(
                         string.string_type,
                         StringType::Url | StringType::IP | StringType::Base64
@@ -703,20 +714,15 @@ impl ArchiveAnalyzer {
                     }
                 }
 
-                // Merge archive_contents from nested archives
-                for nested_entry in &file_report.archive_contents {
-                    all_archive_entries.push(nested_entry.clone());
-                }
-
-                // Convert to FileAnalysis for v2 flat files array
-                let mut file_entry = file_report.to_file_analysis(0, true);
-                file_entry.path = entry_path.clone();
-                file_entry.depth = 1; // Direct child of archive
-                file_entry.compute_summary();
                 all_files.push(file_entry);
 
+                // Merge archive_contents from nested archives
+                for nested_entry in archive_contents {
+                    all_archive_entries.push(nested_entry);
+                }
+
                 // Handle nested archives - add their files with updated paths
-                for mut nested_file in std::mem::take(&mut file_report.files) {
+                for mut nested_file in nested_files {
                     // Update path to include our archive prefix
                     if !nested_file.path.contains("!!") {
                         nested_file.path = encode_archive_path(&entry_path, &nested_file.path);

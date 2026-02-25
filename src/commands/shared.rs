@@ -242,7 +242,7 @@ pub(crate) fn analyze_file_with_shared_mapper(
     // Extract strings with stng ONCE (don't call I/O-bound functions multiple times)
     // Use these results for both encoded payload extraction AND analyzer string extraction
     tracing::info!("Extracting strings with stng");
-    let opts = stng::ExtractOptions::new(16).with_garbage_filter(true); // Filter out garbage strings
+    let opts = stng::ExtractOptions::new(4).with_garbage_filter(true); // Filter out garbage strings
                                                                         // NOTE: XOR disabled - causes performance issues on large files
     let t_stng = std::time::Instant::now();
     let stng_strings = stng::extract_strings_with_options(file_data, &opts);

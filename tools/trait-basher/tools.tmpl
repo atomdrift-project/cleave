@@ -14,7 +14,10 @@ Also available: r2, ghidra, nm, readelf
 
 **Traits**: {{.TraitsDir}}
 **Docs**: RULES.md (syntax), TAXONOMY.md (directories)
-**Syntax note**: Cannot nest any/all rules (top-level only)
+
+**Syntax notes**:
+- `any`/`all` cannot be nested, but can be combined (e.g., `all` containing `any` at top level)
+- Trait IDs: `<subdirectory>` or `<subdirectory>::<trait_id>` — YAML filename is NOT part of the ID
 
 ---
 
@@ -27,7 +30,6 @@ Also available: r2, ghidra, nm, readelf
 | `objectives/*` | Composed intent | hostile | all except `known/` |
 | `well-known/*` | Malware signatures | any | all |
 
-- Trait IDs: `subdirectory` or `subdirectory::trait_id` (filenames not included)
 - `micro-behaviors/` cannot reference `objectives/` or use hostile
 - Composites rarely share directories with their atomic dependencies
 

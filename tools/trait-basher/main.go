@@ -1669,30 +1669,20 @@ func isYAMLTraitIssue(msg string) bool {
 }
 
 func buildYAMLTraitFixPrompt(cfg *config, phase, failureOutput string) string {
-	return fmt.Sprintf(`Fix cleave trait YAML issues only.
+	data := &repairPromptData{
+		Phase:         phase,
+		FailureOutput: failureOutput,
+		CleaveBin:     cfg.cleaveBin,
+		TraitsDir:     filepath.Join(cfg.repoRoot, "traits"),
+		Path:          "/bin/ls", // Default path for tools.tmpl
+	}
 
-Failure phase: %s
-
-Error output:
-%s
-
-Hard requirements:
-- Only edit existing YAML trait files under %s/traits/ (*.yaml or *.yml).
-- Do NOT edit any Rust code, Go code, scripts, docs, tests, or non-YAML files.
-- Focus only on YAML trait parser/configuration issues from the error output.
-- Keep trait IDs, taxonomy, and intent intact unless needed to fix the YAML issue.
-- Make minimal edits.
-
-After editing, validate with:
-%s --format jsonl --validate=true /bin/ls
-
-If validation still fails with YAML trait issues, continue fixing YAML until it passes.
-When done, stop.`,
-		phase,
-		failureOutput,
-		cfg.repoRoot,
-		cfg.cleaveBin,
-	)
+	prompt, err := buildRepairPrompt(data)
+	if err != nil {
+		// Fallback to simple prompt if template fails
+		return fmt.Sprintf("Fix cleave trait YAML issues. Error: %s", failureOutput)
+	}
+	return prompt
 }
 
 func invokeYAMLTraitFixer(ctx context.Context, cfg *config, phase, failureOutput string, attempt, maxAttempts int) error {

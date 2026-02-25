@@ -1,0 +1,178 @@
+# LNK Suspicious Target Detection
+# ATT&CK: T1204.002 (User Execution: Malicious File)
+#
+# Detects LNK files that target suspicious executables or have
+# suspicious characteristics commonly used in phishing attacks.
+
+defaults:
+  attack: "T1204.002"
+  for: [lnk]
+
+traits:
+  # === PowerShell targeting ===
+  - id: powershell-target
+    desc: LNK targets PowerShell
+    crit: notable
+    conf: 0.85
+    if:
+      type: kv
+      path: target_path
+      regex: '(?i)powershell\.exe$'
+
+  - id: pwsh-target
+    desc: LNK targets PowerShell Core (pwsh)
+    crit: notable
+    conf: 0.85
+    if:
+      type: kv
+      path: target_path
+      regex: '(?i)pwsh\.exe$'
+
+  # === Command prompt targeting ===
+  - id: cmd-target
+    desc: LNK targets cmd.exe
+    crit: baseline
+    conf: 0.7
+    if:
+      type: kv
+      path: target_path
+      regex: '(?i)cmd\.exe$'
+
+  - id: has-arguments
+    desc: LNK has command-line arguments
+    crit: component
+    conf: 0.9
+    if:
+      type: kv
+      path: has_arguments
+      exact: "true"
+
+  # === Script host targeting ===
+  - id: wscript-target
+    desc: LNK targets Windows Script Host (wscript)
+    crit: suspicious
+    conf: 0.85
+    if:
+      type: kv
+      path: target_path
+      regex: '(?i)wscript\.exe$'
+
+  - id: cscript-target
+    desc: LNK targets console script host (cscript)
+    crit: suspicious
+    conf: 0.85
+    if:
+      type: kv
+      path: target_path
+      regex: '(?i)cscript\.exe$'
+
+  # === LOLBIN targeting ===
+  - id: mshta-target
+    desc: LNK targets mshta.exe
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: kv
+      path: target_path
+      regex: '(?i)mshta\.exe$'
+
+  - id: regsvr32-target
+    desc: LNK targets regsvr32.exe
+    crit: suspicious
+    conf: 0.85
+    if:
+      type: kv
+      path: target_path
+      regex: '(?i)regsvr32\.exe$'
+
+  - id: rundll32-target
+    desc: LNK targets rundll32.exe
+    crit: suspicious
+    conf: 0.85
+    if:
+      type: kv
+      path: target_path
+      regex: '(?i)rundll32\.exe$'
+
+  - id: certutil-target
+    desc: LNK targets certutil.exe
+    crit: suspicious
+    conf: 0.85
+    if:
+      type: kv
+      path: target_path
+      regex: '(?i)certutil\.exe$'
+
+  # === Hidden window execution ===
+  - id: hidden-window
+    desc: LNK executes with hidden window
+    crit: suspicious
+    conf: 0.85
+    if:
+      type: kv
+      path: show_command
+      exact: "0"
+
+composite_rules:
+  # cmd.exe with arguments (more suspicious)
+  - id: cmd-with-args
+    desc: LNK targets cmd.exe with arguments
+    crit: notable
+    conf: 0.8
+    all:
+      - id: cmd-target
+      - id: has-arguments
+
+  # Helper: any script host target
+  - id: script-host-target
+    desc: LNK targets script host
+    crit: suspicious
+    conf: 0.85
+    any:
+      - id: wscript-target
+      - id: cscript-target
+
+  # Helper: any LOLBIN target
+  - id: lolbin-target
+    desc: LNK targets LOLBIN
+    crit: suspicious
+    conf: 0.9
+    any:
+      - id: mshta-target
+      - id: regsvr32-target
+      - id: rundll32-target
+
+  # Helper: PowerShell family
+  - id: powershell-family
+    desc: LNK targets PowerShell variant
+    crit: notable
+    conf: 0.85
+    any:
+      - id: powershell-target
+      - id: pwsh-target
+
+  # === Main composites ===
+  - id: suspicious-lnk-target
+    desc: LNK targets suspicious executable
+    crit: suspicious
+    conf: 0.9
+    any:
+      - id: script-host-target
+      - id: lolbin-target
+      - id: certutil-target
+
+  - id: hidden-powershell-lnk
+    desc: LNK runs PowerShell with hidden window
+    crit: hostile
+    conf: 0.95
+    all:
+      - id: powershell-family
+      - id: hidden-window
+
+  - id: hidden-lolbin-lnk
+    desc: LNK runs LOLBIN with hidden window
+    crit: hostile
+    conf: 0.95
+    all:
+      - id: lolbin-target
+      - id: hidden-window

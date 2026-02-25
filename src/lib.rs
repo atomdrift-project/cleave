@@ -290,6 +290,9 @@ fn analyze_file_with_resources<P: AsRef<Path>>(
         FileType::JavaClass => analyzers::java_class::JavaClassAnalyzer::new()
             .with_capability_mapper_arc(mapper_arc.clone())
             .analyze(path)?,
+        FileType::Lnk => analyzers::lnk::LnkAnalyzer::new()
+            .with_capability_mapper_arc(mapper_arc.clone())
+            .analyze(path)?,
         FileType::Jar | FileType::Archive => {
             let mut analyzer = analyzers::archive::ArchiveAnalyzer::new()
                 .with_capability_mapper_arc(mapper_arc.clone())

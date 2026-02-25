@@ -1,0 +1,427 @@
+# LNK Detection Rules (Ported from YARA)
+# Sources:
+#   - RustyNoob-619/SUS_WIN_LNK_Downloader_Network_Parameters_Mar25
+#   - RustyNoob-619/Actor_APT_DPRK_Konni_MAL_WIN_LNK__Mar25
+#   - bartblaze/LNK_Ruleset.yar
+#
+# ATT&CK: T1204.002 (User Execution: Malicious File)
+
+defaults:
+  attack: "T1204.002"
+  for: [lnk]
+
+traits:
+  # === PowerShell indicators (from PS_in_LNK) ===
+  - id: lnk-invoke-expression
+    desc: LNK contains Invoke expression
+    crit: suspicious
+    conf: 0.85
+    if:
+      type: raw
+      regex: 'invoke'
+      case_insensitive: true
+
+  - id: lnk-base64-convert
+    desc: LNK contains base64 conversion
+    crit: suspicious
+    conf: 0.85
+    if:
+      type: raw
+      regex: '(FromBase|\[Convert\])'
+      case_insensitive: true
+
+  - id: lnk-exec-bypass-flags
+    desc: LNK contains execution bypass flags
+    crit: suspicious
+    conf: 0.85
+    if:
+      type: raw
+      regex: '(-exec|-nop|-noni)'
+      case_insensitive: true
+
+  - id: lnk-hidden-window-flag
+    desc: LNK contains -w hidden flag
+    crit: suspicious
+    conf: 0.85
+    if:
+      type: raw
+      regex: '-w\s+hidden'
+      case_insensitive: true
+
+  - id: lnk-encoded-command-flag
+    desc: LNK contains -enc or -decode flag
+    crit: suspicious
+    conf: 0.85
+    if:
+      type: raw
+      regex: '(-enc|-decode)'
+      case_insensitive: true
+
+  # === Script indicators (from Script_in_LNK) ===
+  - id: lnk-javascript-ref
+    desc: LNK references JavaScript
+    crit: suspicious
+    conf: 0.85
+    if:
+      type: raw
+      regex: 'javascript'
+      case_insensitive: true
+
+  - id: lnk-jscript-vbscript
+    desc: LNK references JScript or VBScript
+    crit: suspicious
+    conf: 0.85
+    if:
+      type: raw
+      regex: '(jscript|vbscript)'
+      case_insensitive: true
+
+  - id: lnk-script-ext-wsh
+    desc: LNK references .wsh/.wsf/.sct extension
+    crit: suspicious
+    conf: 0.8
+    if:
+      type: raw
+      regex: '\.(wsh|wsf|sct)\b'
+      case_insensitive: true
+
+  - id: lnk-hta-extension
+    desc: LNK references .hta extension
+    crit: suspicious
+    conf: 0.85
+    if:
+      type: raw
+      regex: '\.hta\b'
+      case_insensitive: true
+
+  # === Embedded executable (from EXE_in_LNK) ===
+  - id: lnk-embedded-mz
+    desc: LNK contains embedded PE header (base64)
+    crit: suspicious
+    conf: 0.95
+    if:
+      type: raw
+      regex: 'TVqQAA'
+
+  # === Archive indicators (from Archive_in_LNK) ===
+  # Note: Generic archive extension patterns removed - covered by micro-behaviors
+  - id: lnk-archive-b64-magic
+    desc: LNK contains base64-encoded archive magic
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: raw
+      # UEsDBA = ZIP, TVNDRg = CAB
+      regex: '(UEsDBA|TVNDRg)'
+
+  # === Execution patterns (from Execution_in_LNK) ===
+  - id: lnk-cmd-echo
+    desc: LNK uses cmd /c echo pattern
+    crit: suspicious
+    conf: 0.85
+    if:
+      type: raw
+      regex: '/c\s+echo'
+      case_insensitive: true
+
+  - id: lnk-cmd-start
+    desc: LNK uses cmd /c start pattern
+    crit: suspicious
+    conf: 0.85
+    if:
+      type: raw
+      regex: '/c\s+start'
+      case_insensitive: true
+
+  - id: lnk-cmd-set
+    desc: LNK uses cmd /c set pattern
+    crit: notable
+    conf: 0.8
+    if:
+      type: raw
+      regex: '/c\s+set'
+      case_insensitive: true
+
+  - id: lnk-comspec
+    desc: LNK uses COMSPEC environment variable
+    crit: suspicious
+    conf: 0.85
+    if:
+      type: raw
+      regex: '%COMSPEC%'
+      case_insensitive: true
+
+  - id: lnk-assembly-load
+    desc: LNK contains Assembly.Load reflection
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: raw
+      regex: 'Assembly\.Load'
+      case_insensitive: true
+
+  - id: lnk-reflection-assembly
+    desc: LNK contains Reflection.Assembly load
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: raw
+      regex: '\[Reflection\.Assembly\]'
+      case_insensitive: true
+
+  - id: lnk-wmi-process
+    desc: LNK uses WMI process call
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: raw
+      regex: 'process\s+call'
+      case_insensitive: true
+
+  # === Download indicators (from Download_in_LNK) ===
+  - id: lnk-serverxmlhttp
+    desc: LNK uses ServerXMLHTTP
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: raw
+      regex: 'ServerXMLHTTP'
+      case_insensitive: true
+
+  - id: lnk-url-file
+    desc: LNK references URL file
+    crit: notable
+    conf: 0.75
+    if:
+      type: raw
+      regex: '\.url\b'
+      case_insensitive: true
+
+  - id: lnk-ftp-reference
+    desc: LNK contains FTP reference
+    crit: notable
+    conf: 0.75
+    if:
+      type: raw
+      regex: '\bftp://'
+      case_insensitive: true
+
+  # === CDN abuse patterns removed - covered by micro-behaviors/communications ===
+
+  # === Path traversal (from Long_RelativePath_LNK) ===
+  - id: lnk-deep-traversal
+    desc: LNK contains deep path traversal
+    crit: suspicious
+    conf: 0.85
+    if:
+      type: raw
+      regex: '(\.\.\\\\){6,}'
+
+  # === SMB paths (from SMB_in_LNK) ===
+  - id: lnk-smb-share
+    desc: LNK references SMB admin share
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: raw
+      regex: '\\\\c\$\\\\'
+      case_insensitive: true
+
+  # === WebDAV (from WebDAV_in_LNK) ===
+  - id: lnk-webdav-path
+    desc: LNK references WebDAV path
+    crit: suspicious
+    conf: 0.85
+    if:
+      type: raw
+      regex: '(DavWWWRoot|\\\\webdav\\\\)'
+      case_insensitive: true
+
+  # === Office macro documents (from MSOffice_in_LNK) - split ===
+  - id: lnk-macro-doc-word
+    desc: LNK references macro Word document
+    crit: suspicious
+    conf: 0.85
+    if:
+      type: raw
+      regex: '\.(docm|dotm)\b'
+      case_insensitive: true
+
+  - id: lnk-macro-doc-excel
+    desc: LNK references macro Excel document
+    crit: suspicious
+    conf: 0.85
+    if:
+      type: raw
+      regex: '\.(xlsm|xltm|xlam)\b'
+      case_insensitive: true
+
+  - id: lnk-macro-doc-ppt
+    desc: LNK references macro PowerPoint document
+    crit: suspicious
+    conf: 0.85
+    if:
+      type: raw
+      regex: '\.(potm|ppsm|pptm)\b'
+      case_insensitive: true
+
+  # === Konni APT pattern (from Actor_APT_DPRK_Konni_MAL_WIN_LNK) ===
+  - id: lnk-konni-shell-object
+    desc: LNK uses JavaScript with Shell object
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: raw
+      regex: '\.Shell'
+      case_insensitive: true
+
+  # === Download/execute patterns (KV-based) ===
+  - id: kv-curl-in-args
+    desc: LNK arguments contain curl
+    crit: suspicious
+    conf: 0.85
+    if:
+      type: kv
+      path: arguments
+      regex: '(?i)\bcurl\b'
+
+  - id: kv-wget-in-args
+    desc: LNK arguments contain wget
+    crit: suspicious
+    conf: 0.85
+    if:
+      type: kv
+      path: arguments
+      regex: '(?i)\bwget\b'
+
+  - id: kv-https-in-args
+    desc: LNK arguments contain HTTPS URL
+    crit: notable
+    conf: 0.75
+    if:
+      type: kv
+      path: arguments
+      regex: 'https://'
+
+  - id: kv-http-in-args
+    desc: LNK arguments contain HTTP URL
+    crit: suspicious
+    conf: 0.8
+    if:
+      type: kv
+      path: arguments
+      regex: 'http://'
+
+  - id: kv-encoding-flag
+    desc: LNK arguments contain encoding flag
+    crit: suspicious
+    conf: 0.85
+    if:
+      type: kv
+      path: arguments
+      regex: '(?i)-Encoding'
+
+  - id: kv-ep-bypass
+    desc: LNK arguments contain execution policy bypass
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: kv
+      path: arguments
+      regex: '(?i)-ep\s+bypass'
+
+composite_rules:
+  # === PowerShell composite (PS_in_LNK equivalent) ===
+  - id: powershell-indicators
+    desc: Multiple PowerShell indicators in LNK
+    crit: suspicious
+    conf: 0.9
+    any:
+      - id: lnk-invoke-expression
+      - id: lnk-base64-convert
+      - id: lnk-exec-bypass-flags
+      - id: lnk-hidden-window-flag
+      - id: lnk-encoded-command-flag
+
+  # === Script composite (Script_in_LNK equivalent) ===
+  - id: script-indicators
+    desc: Script language indicators in LNK
+    crit: suspicious
+    conf: 0.85
+    any:
+      - id: lnk-javascript-ref
+      - id: lnk-jscript-vbscript
+      - id: lnk-script-ext-wsh
+
+  # === Execution composite (Execution_in_LNK equivalent) ===
+  - id: execution-indicators
+    desc: Command execution indicators in LNK
+    crit: suspicious
+    conf: 0.85
+    any:
+      - id: lnk-cmd-echo
+      - id: lnk-cmd-start
+      - id: lnk-comspec
+      - id: lnk-assembly-load
+      - id: lnk-reflection-assembly
+      - id: lnk-wmi-process
+
+  # === Download composite (Download_in_LNK equivalent) ===
+  - id: download-indicators
+    desc: Download indicators in LNK
+    crit: suspicious
+    conf: 0.85
+    any:
+      - id: lnk-serverxmlhttp
+      - id: kv-curl-in-args
+      - id: kv-wget-in-args
+
+  # === Macro document composite ===
+  - id: macro-document-ref
+    desc: LNK references macro document
+    crit: suspicious
+    conf: 0.85
+    any:
+      - id: lnk-macro-doc-word
+      - id: lnk-macro-doc-excel
+      - id: lnk-macro-doc-ppt
+
+  # === Konni APT composite ===
+  - id: konni-apt-pattern
+    desc: Konni APT LNK pattern (mshta + javascript + bypass)
+    crit: hostile
+    conf: 0.95
+    all:
+      - id: lnk-javascript-ref
+      - id: kv-ep-bypass
+      - id: kv-encoding-flag
+      - id: lnk-konni-shell-object
+
+  # === Downloader composite (RustyNoob pattern) ===
+  - id: cmd-curl-mshta-downloader
+    desc: LNK cmd.exe downloads via curl and executes HTA
+    crit: hostile
+    conf: 0.95
+    all:
+      - id: kv-curl-in-args
+      - id: kv-https-in-args
+      - id: lnk-hta-extension
+
+  # === Network download + execution ===
+  - id: download-and-execute
+    desc: LNK downloads and executes content
+    crit: hostile
+    conf: 0.9
+    all:
+      - id: download-indicators
+      - id: execution-indicators
+
+  # === Evasion composite ===
+  - id: evasion-indicators
+    desc: LNK uses evasion techniques
+    crit: suspicious
+    conf: 0.85
+    any:
+      - id: lnk-deep-traversal
+      - id: lnk-webdav-path
+      - id: lnk-smb-share

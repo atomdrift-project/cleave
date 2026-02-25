@@ -110,6 +110,8 @@ pub(crate) enum FileType {
     Plist,
     /// Rich Text Format (.rtf)
     Rtf,
+    /// Windows Shell Link (.lnk)
+    Lnk,
     /// iOS App Package (.ipa) - not extractable by cleave
     Ipa,
     /// Plain text file
@@ -262,6 +264,7 @@ impl FileType {
             "plist" => FileType::Plist,
             "pkginfo" | "pkg-info" | "pkg_info" => FileType::PkgInfo,
             "rtf" => FileType::Rtf,
+            "lnk" => FileType::Lnk,
             "ipa" => FileType::Ipa,
             "text" | "txt" => FileType::Text,
             _ => FileType::All,

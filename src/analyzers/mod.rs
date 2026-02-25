@@ -31,6 +31,7 @@ pub(crate) mod utils;
 pub(crate) mod chrome_manifest;
 pub(crate) mod elf;
 pub(crate) mod java_class;
+pub(crate) mod lnk;
 pub(crate) mod macho;
 pub(crate) mod macho_codesign;
 pub(crate) mod package_json;
@@ -97,6 +98,11 @@ pub fn analyzer_for_file_type(
         // RTF documents - parse for embedded OLE objects
         FileType::Rtf => Some(Box::new(
             rtf::RtfAnalyzer::new().with_capability_mapper(mapper_or_empty),
+        )),
+
+        // LNK files - Windows shortcuts
+        FileType::Lnk => Some(Box::new(
+            lnk::LnkAnalyzer::new().with_capability_mapper(mapper_or_empty),
         )),
 
         // Package manifests - structured data parsers
@@ -169,6 +175,11 @@ pub(crate) fn analyzer_for_file_type_arc(
         // RTF documents - parse for embedded OLE objects
         FileType::Rtf => Some(Box::new(
             rtf::RtfAnalyzer::new().with_capability_mapper_arc(mapper_or_empty),
+        )),
+
+        // LNK files - Windows shortcuts
+        FileType::Lnk => Some(Box::new(
+            lnk::LnkAnalyzer::new().with_capability_mapper_arc(mapper_or_empty),
         )),
 
         // Package manifests - structured data parsers
@@ -300,6 +311,7 @@ pub(crate) fn detect_file_type_from_path(file_path: &Path) -> FileType {
             "scpt" | "applescript" => return FileType::AppleScript,
             "plist" => return FileType::Plist,
             "rtf" => return FileType::Rtf,
+            "lnk" => return FileType::Lnk,
             "zip" | "7z" | "rar" | "deb" | "rpm" | "apk" | "ipa" | "xpi" | "epub" | "nupkg"
             | "vsix" | "aar" | "egg" | "whl" | "phar" => return FileType::Archive,
             _ => {}
@@ -326,6 +338,11 @@ pub fn detect_file_type(file_path: &Path) -> Result<FileType> {
     // Check for RTF magic bytes
     if file_data.starts_with(b"{\\rtf") {
         return Ok(FileType::Rtf);
+    }
+
+    // Check for LNK magic bytes (Windows Shell Link)
+    if lnk::is_lnk(&file_data) {
+        return Ok(FileType::Lnk);
     }
 
     // Check for JPEG magic bytes (FF D8 FF)
@@ -1033,6 +1050,8 @@ pub enum FileType {
     Plist,
     /// Rich Text Format document (.rtf)
     Rtf,
+    /// Windows Shell Link file (.lnk)
+    Lnk,
     /// X.509 / DER certificate file
     #[allow(dead_code)] // Used in streaming.rs match arms
     Certificate,
@@ -1086,7 +1105,8 @@ impl FileType {
             | FileType::GithubActions
             | FileType::AppleScript
             | FileType::Plist
-            | FileType::Rtf => true,
+            | FileType::Rtf
+            | FileType::Lnk => true,
             FileType::Archive
             | FileType::Unknown
             | FileType::Jpeg
@@ -1162,6 +1182,7 @@ impl FileType {
             FileType::AppleScript => vec!["scpt", "applescript"],
             FileType::Plist => vec!["plist", "xml", "apple"],
             FileType::Rtf => vec!["rtf", "doc"],
+            FileType::Lnk => vec!["lnk", "shortcut"],
             FileType::Jpeg => vec!["jpeg", "jpg"],
             FileType::Png => vec!["png"],
             FileType::Unknown | FileType::Certificate => vec![], // No filtering for unknown types

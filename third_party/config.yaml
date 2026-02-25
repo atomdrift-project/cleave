@@ -40,17 +40,23 @@ sources:
     url: https://github.com/RussianPanda95/Yara-Rules
     crit: "suspicious"
 
-# Per-rule overrides (exact trait ID matches only)
+# Per-rule overrides (use trait ID format: third_party/vendor/path)
 overrides:
-  - id: 3p.YARAForge.yara-rules-full::R3C0NST_ATM_Malware_Atmspitter
+  - id: third_party/R3c0nst/ATM/Malware/Atmspitter
     disable: true
     reason: "Slow rule (129ms)"
-  - id: 3p.YARAForge.yara-rules-full::R3C0NST_ATM_Malware_Dispenserxfs
+  - id: third_party/R3c0nst/ATM/Malware/Dispenserxfs
     disable: true
     reason: "Slow rule (153ms)"
-  - id: 3p.TTC-CERT.cve_rules.EXPLOIT_cve_2022-30190::cve_202230190_html_payload
+  - id: third_party/TTC-CERT/cve_rules/EXPLOIT_cve_2022-30190/html_payload
     disable: true
     reason: "Overly broad patterns ($s6 = '$(') match thousands of times in Go/jQuery files"
-  - id: 3p.YARAForge.yara-rules-full::SEKOIA_Ransomware_Lin_Avoslocker_Sections
+  - id: third_party/Sekoia/Ransomware/Lin/Avoslocker/Sections
     disable: true
     reason: "Slow hashing"
+  - id: third_party/GODMODERULES/IDDQD/God/Mode/Rule
+    crit: "suspicious"
+    reason: "Broad threat detection rule - from malware to APTs"
+  - id: third_party/SecuInfra/SUSP/Powershell/Base64/Decode
+    crit: "notable"
+    reason: "High FP rate - detects PowerShell Base64 decoding"

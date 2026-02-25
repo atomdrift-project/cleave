@@ -6,9 +6,6 @@
 # (spaces, tabs, newlines) to hide malicious command-line arguments
 # from visual inspection. The target command is padded far to the right
 # so it's not visible in the properties dialog.
-#
-# LIMITATION: cleave does not have native LNK file type support.
-# These patterns detect the obfuscation technique in any file context.
 
 defaults:
   attack: "T1027.010"
@@ -74,7 +71,32 @@ traits:
       regex: '[ ]{30,}-enc\s+[A-Za-z0-9+/]{20,}'
       case_insensitive: true
 
+  # === KV-based LNK detection (uses structured LNK parsing) ===
+  - id: kv-hidden-window
+    desc: LNK executes with hidden window (SW_HIDE)
+    crit: suspicious
+    conf: 0.9
+    for: [lnk]
+    if:
+      type: kv
+      path: show_command
+      exact: "0"
+
+  - id: kv-excessive-whitespace
+    desc: LNK arguments with excessive whitespace padding
+    crit: suspicious
+    conf: 0.9
+    for: [lnk]
+    if:
+      type: kv
+      path: whitespace.excessive
+      exact: "true"
+
 composite_rules:
+  # Note: size_min/size_max in KV conditions check collection sizes (arrays/objects),
+  # not numeric value comparisons. For numeric thresholds, use the pre-computed
+  # 'whitespace.excessive' boolean field which is set when consecutive whitespace >= 50.
+
   # Helper: whitespace hiding technique detected
   - id: whitespace-hiding
     desc: Whitespace-based command hiding

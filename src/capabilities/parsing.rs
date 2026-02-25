@@ -292,6 +292,7 @@ pub(crate) fn parse_file_types(types: &[String], warnings: &mut Vec<String>) -> 
                 "plist" => vec![RuleFileType::Plist],
                 "pkginfo" => vec![RuleFileType::PkgInfo],
                 "rtf" => vec![RuleFileType::Rtf],
+                "lnk" => vec![RuleFileType::Lnk],
                 _ => {
                     // Unknown file type - add warning (file path will be added by caller)
                     warnings.push(format!("Unknown file type: '{}'", name));

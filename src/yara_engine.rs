@@ -611,9 +611,8 @@ impl YaraEngine {
     ) -> (String, usize) {
         use regex::Regex;
 
-        // Quick check: if no disabled rules match this namespace prefix, return as-is
-        let ns_prefix = format!("{}::", namespace);
-        if !disabled_rules.iter().any(|r| r.starts_with(&ns_prefix)) {
+        // Quick check: if no disabled rules, return as-is
+        if disabled_rules.is_empty() {
             return (source.to_string(), 0);
         }
 
@@ -646,7 +645,8 @@ impl YaraEngine {
 
         // Build filtered source
         for (start, end, rule_name) in rule_ranges {
-            let trait_id = format!("{}::{}", namespace, rule_name);
+            // Use trait_id format (third_party/vendor/...) for consistency with config
+            let trait_id = crate::third_party_yara::derive_trait_id(namespace, rule_name, None);
             if disabled_rules.contains(&trait_id) {
                 // Skip this rule - add any content before it that hasn't been added yet
                 if start > last_end {

@@ -143,7 +143,8 @@ impl ArchiveAnalyzer {
             | FileType::Zig
             | FileType::Elixir
             | FileType::AppleScript
-            | FileType::Rtf => {
+            | FileType::Rtf
+            | FileType::Lnk => {
                 // Use the unified analyzer for source code
                 if let Some(mapper) = &self.capability_mapper {
                     // Create a temporary file for analysis since unified analyzer needs a path

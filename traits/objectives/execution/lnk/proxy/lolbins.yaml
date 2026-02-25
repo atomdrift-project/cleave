@@ -1,0 +1,182 @@
+# LNK LOLBIN Target Detection (Extended)
+# ATT&CK: T1218 (System Binary Proxy Execution)
+#
+# Detects LNK files targeting Living Off The Land Binaries (LOLBINs)
+# that are commonly abused for code execution, download, or bypass.
+# Supplements suspicious-targets.yaml with additional LOLBINs.
+
+defaults:
+  attack: "T1218"
+  for: [lnk]
+
+traits:
+  # === Download/Transfer LOLBINs ===
+  - id: bitsadmin-target
+    desc: LNK targets bitsadmin.exe
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: kv
+      path: target_path
+      regex: '(?i)bitsadmin\.exe$'
+
+  # === Code execution LOLBINs ===
+  - id: msbuild-target
+    desc: LNK targets msbuild.exe
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: kv
+      path: target_path
+      regex: '(?i)msbuild\.exe$'
+
+  - id: installutil-target
+    desc: LNK targets installutil.exe
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: kv
+      path: target_path
+      regex: '(?i)installutil\.exe$'
+
+  - id: cmstp-target
+    desc: LNK targets cmstp.exe
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: kv
+      path: target_path
+      regex: '(?i)cmstp\.exe$'
+
+  - id: wmic-target
+    desc: LNK targets wmic.exe
+    crit: suspicious
+    conf: 0.85
+    if:
+      type: kv
+      path: target_path
+      regex: '(?i)wmic\.exe$'
+
+  - id: forfiles-target
+    desc: LNK targets forfiles.exe
+    crit: suspicious
+    conf: 0.85
+    if:
+      type: kv
+      path: target_path
+      regex: '(?i)forfiles\.exe$'
+
+  - id: pcalua-target
+    desc: LNK targets pcalua.exe (Program Compatibility Assistant)
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: kv
+      path: target_path
+      regex: '(?i)pcalua\.exe$'
+
+  # === Scripting engines ===
+  - id: bash-target
+    desc: LNK targets bash.exe (WSL)
+    crit: suspicious
+    conf: 0.85
+    if:
+      type: kv
+      path: target_path
+      regex: '(?i)bash\.exe$'
+
+  - id: wsl-target
+    desc: LNK targets wsl.exe
+    crit: suspicious
+    conf: 0.85
+    if:
+      type: kv
+      path: target_path
+      regex: '(?i)wsl\.exe$'
+
+  # === .NET execution ===
+  - id: csc-target
+    desc: LNK targets csc.exe (C# compiler)
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: kv
+      path: target_path
+      regex: '(?i)csc\.exe$'
+
+  - id: vbc-target
+    desc: LNK targets vbc.exe (VB compiler)
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: kv
+      path: target_path
+      regex: '(?i)vbc\.exe$'
+
+  - id: jsc-target
+    desc: LNK targets jsc.exe (JScript compiler)
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: kv
+      path: target_path
+      regex: '(?i)jsc\.exe$'
+
+  # === Hidden window (local copy for composites) ===
+  - id: lolbin-hidden-window
+    desc: LNK executes with hidden window
+    crit: suspicious
+    conf: 0.85
+    if:
+      type: kv
+      path: show_command
+      exact: "0"
+
+composite_rules:
+  # Helper: code execution LOLBINs
+  - id: execution-lolbin
+    desc: LNK targets execution LOLBIN
+    crit: suspicious
+    conf: 0.9
+    any:
+      - id: msbuild-target
+      - id: installutil-target
+      - id: cmstp-target
+      - id: forfiles-target
+      - id: pcalua-target
+
+  # Helper: .NET compilers
+  - id: dotnet-compiler
+    desc: LNK targets .NET compiler
+    crit: suspicious
+    conf: 0.9
+    any:
+      - id: csc-target
+      - id: vbc-target
+      - id: jsc-target
+
+  # Helper: WSL execution
+  - id: wsl-execution
+    desc: LNK targets WSL
+    crit: suspicious
+    conf: 0.85
+    any:
+      - id: bash-target
+      - id: wsl-target
+
+  # High confidence: hidden window + LOLBIN
+  - id: hidden-execution-lolbin
+    desc: LNK runs execution LOLBIN with hidden window
+    crit: hostile
+    conf: 0.95
+    all:
+      - id: execution-lolbin
+      - id: lolbin-hidden-window
+
+  - id: hidden-bitsadmin
+    desc: LNK runs bitsadmin with hidden window
+    crit: hostile
+    conf: 0.95
+    all:
+      - id: bitsadmin-target
+      - id: lolbin-hidden-window

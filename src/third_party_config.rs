@@ -258,9 +258,9 @@ overrides:
     fn test_disabled_rule_ids_from_config() {
         // This tests against the actual config file
         let disabled = super::disabled_rule_ids();
-        // Should contain the ATM malware rule we disabled
+        // Should contain the ATM malware rule we disabled (using trait_id format)
         assert!(
-            disabled.contains("3p.YARAForge.yara-rules-full::R3C0NST_ATM_Malware_Atmspitter"),
+            disabled.contains("third_party/R3c0nst/ATM/Malware/Atmspitter"),
             "Expected disabled rules to contain ATM malware rule, got: {:?}",
             disabled
         );

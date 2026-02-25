@@ -138,11 +138,8 @@ fn derive_yaraforge_id(rule_name: &str) -> String {
         .take_while(|p| !p.is_empty() && p.chars().all(|c| c.is_ascii_uppercase()))
         .count();
 
-    if caps_count == 0 {
-        return format!("third_party/{}", rule_name.to_lowercase());
-    }
-
     // Try longest all-caps prefix first, then progressively shorter ones
+    // If caps_count is 0, the iterator is empty and we fall through to capitalize_first
     let (normalized_vendor, vendor_len) = (1..=caps_count)
         .rev()
         .find_map(|len| {

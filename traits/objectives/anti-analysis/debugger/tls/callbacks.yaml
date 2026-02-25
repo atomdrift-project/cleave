@@ -78,7 +78,7 @@ composite_rules:
     all:
       - id: tls-callback-function
     any:
-      - id: objectives/execution/native/runtime::debugger-detect-api
+      - id: objectives/anti-analysis/debugger-detect/check::is-debugger-present
       - id: objectives/anti-analysis/debugger/detect::check-remote-debugger
       - id: objectives/anti-analysis/debugger/detect::nt-query-information-process
 

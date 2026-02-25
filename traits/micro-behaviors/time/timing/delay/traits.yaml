@@ -16,22 +16,7 @@ traits:
       exact: "Sleep"
 
   # === Timing Queries ===
-  - id: get-tick-count
-    desc: Query system uptime in milliseconds
-    crit: baseline
-    conf: 0.70
-    if:
-      type: symbol
-      exact: "GetTickCount"
-
-  - id: get-tick-count64
-    desc: Query system uptime 64-bit
-    crit: baseline
-    conf: 0.70
-    if:
-      type: symbol
-      exact: "GetTickCount64"
-
+  # NOTE: GetTickCount/GetTickCount64/GetSystemTime/GetLocalTime moved to micro-behaviors/os/time/query/
   - id: query-performance-counter
     desc: Query high-resolution performance counter
     crit: notable
@@ -39,20 +24,3 @@ traits:
     if:
       type: symbol
       exact: "QueryPerformanceCounter"
-
-  # === System Time ===
-  - id: get-system-time
-    desc: Get current system time
-    crit: baseline
-    conf: 0.70
-    if:
-      type: symbol
-      exact: "GetSystemTime"
-
-  - id: get-local-time
-    desc: Get current local time
-    crit: baseline
-    conf: 0.70
-    if:
-      type: symbol
-      exact: "GetLocalTime"

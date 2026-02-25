@@ -14,7 +14,7 @@ composite_rules:
     for: [pe, dll]
     size_max: 100000
     any:
-      - id: objectives/execution/native/runtime::debugger-detect-api
+      - id: objectives/anti-analysis/debugger-detect/check::is-debugger-present
       - id: micro-behaviors/os/error-handling/exceptions::unhandled-exception-filter
     downgrade:
       any:
@@ -31,7 +31,7 @@ composite_rules:
     for: [pe, dll]
     size_max: 150000
     all:
-      - id: objectives/execution/native/runtime::debugger-detect-api
+      - id: objectives/anti-analysis/debugger-detect/check::is-debugger-present
     any:
       - id: micro-behaviors/os/error-handling/exceptions::unhandled-exception-filter
       - id: micro-behaviors/time/timing/delay::query-performance-counter

@@ -291,35 +291,8 @@ composite_rules:
       - id: npm-name-single-char
       - id: npm-name-random-chars
 
-  # === High-Risk: Suspicious name + install hooks ===
-  - id: npm-suspicious-name-with-hooks
-    desc: Suspicious package name with install hooks
-    crit: hostile
-    conf: 0.95
-    attack: "T1195.002"
-    for: [package.json]
-    all:
-      - id: objectives/lateral-movement/supply-chain/npm/metadata::install-hooks
-    any:
-      - id: npm-test-or-temp-name
-      - id: npm-malicious-name-indicators
-      - id: npm-random-or-generated-name
-
-  # === High-Risk: Random name + quality issues ===
-  - id: npm-random-name-low-quality
-    desc: Random name with low quality metadata
-    crit: hostile
-    conf: 0.93
-    attack: "T1195.002"
-    for: [package.json]
-    all:
-      - id: npm-random-or-generated-name
-    any:
-      - id: metadata/quality/package-info::npm-empty-description-any
-      - id: metadata/quality/author::npm-generic-author-name
-      - id: metadata/quality/versioning::release-zero
-      - id: metadata/quality/author::npm-free-email-provider
-    needs: 2
+  # Hostile composites moved to:
+  # objectives/lateral-movement/supply-chain/npm/malicious-patterns/low-quality-indicators.yaml
 
   # === PyPI Composites ===
   - id: pypi-suspicious-name

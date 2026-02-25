@@ -29,6 +29,4 @@ traits:
     desc: Get tick count
     if:
       type: symbol
-      any:
-        - exact: "GetTickCount"
-        - exact: "GetTickCount64"
+      regex: "^GetTickCount(64)?$"

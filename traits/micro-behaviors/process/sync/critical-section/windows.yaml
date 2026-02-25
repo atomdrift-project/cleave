@@ -11,10 +11,7 @@ traits:
     desc: Initialize critical section
     if:
       type: symbol
-      any:
-        - exact: "InitializeCriticalSection"
-        - exact: "InitializeCriticalSectionEx"
-        - exact: "InitializeCriticalSectionAndSpinCount"
+      regex: "^InitializeCriticalSection(Ex|AndSpinCount)?$"
 
   - id: critical-section-enter
     desc: Enter critical section

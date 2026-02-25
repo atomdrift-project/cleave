@@ -28,7 +28,7 @@ composite_rules:
     for: ["pe", "dll"]
     size_max: 200000
     all:
-      - id: objectives/execution/native/runtime::debugger-detect-api
+      - id: objectives/anti-analysis/debugger-detect/check::is-debugger-present
       - id: micro-behaviors/process/terminate/kill::terminate-process
       - id: micro-behaviors/dylib/load::load-library-a
     downgrade:

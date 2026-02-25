@@ -11,44 +11,31 @@ traits:
     desc: Resolve SID to account/group name
     if:
       type: symbol
-      any:
-        - exact: "LookupAccountSidA"
-        - exact: "LookupAccountSidW"
-        - exact: "LookupAccountSid"
+      regex: "^LookupAccountSid[AW]?$"
 
   - id: net-local-group-get-info
     desc: Get local group information
     if:
       type: symbol
-      any:
-        - exact: "NetLocalGroupGetInfo"
-        - regex: "NetLocalGroupGetInfo"
+      exact: "NetLocalGroupGetInfo"
 
   - id: net-group-get-info
     desc: Get domain group information
     if:
       type: symbol
-      any:
-        - exact: "NetGroupGetInfo"
-        - regex: "NetGroupGetInfo"
+      exact: "NetGroupGetInfo"
 
   - id: convert-sid-to-string
     desc: Convert SID to string representation
     if:
       type: symbol
-      any:
-        - exact: "ConvertSidToStringSidA"
-        - exact: "ConvertSidToStringSidW"
-        - exact: "ConvertSidToStringSid"
+      regex: "^ConvertSidToStringSid[AW]?$"
 
   - id: convert-string-to-sid
     desc: Convert string to SID
     if:
       type: symbol
-      any:
-        - exact: "ConvertStringSidToSidA"
-        - exact: "ConvertStringSidToSidW"
-        - exact: "ConvertStringSidToSid"
+      regex: "^ConvertStringSidToSid[AW]?$"
 
 composite_rules:
   - id: sid-resolution

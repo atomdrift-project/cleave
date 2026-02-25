@@ -22,8 +22,10 @@
 //! let malecule = MaleculeBuilder::new("suspicious_package")
 //!     .add_finding(Finding {
 //!         id: "objectives/lateral-movement/supply-chain/npm".to_string(),
+//!         description: Some("Supply chain attack via npm".to_string()),
 //!         severity: Severity::Suspicious,
 //!         evidence: vec!["npm install -g malware".to_string()],
+//!         trait_refs: vec![],
 //!     })
 //!     .layout(LayoutAlgorithm::LayeredSpherical)
 //!     .build();

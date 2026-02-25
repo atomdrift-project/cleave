@@ -108,16 +108,8 @@ traits:
       size_max: 0
 
 composite_rules:
-  # === Suspicious: Single file + install hooks ===
-  - id: npm-single-file-with-hooks
-    desc: Single file listed with install hooks
-    crit: hostile
-    conf: 0.90
-    attack: "T1195.002"
-    for: [package.json]
-    all:
-      - id: npm-single-file-listed
-      - id: objectives/lateral-movement/supply-chain/npm/metadata::install-hooks
+  # Hostile composite (npm-single-file-with-hooks) moved to:
+  # objectives/lateral-movement/supply-chain/npm/malicious-patterns/low-quality-indicators.yaml
 
   # NOTE: npm-minimal-package removed - depended on broken count-based trait
   # (metadata/quality/dependencies::npm-single-dependency used size_min/size_max

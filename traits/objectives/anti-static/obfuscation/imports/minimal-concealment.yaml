@@ -48,7 +48,7 @@ composite_rules:
   - id: micro-behaviors/process/create/methods::shell-execute
   - id: micro-behaviors/process/create/methods::shell-execute-ex
   - id: micro-behaviors/crypto/certificate/store::cert-open-store
-  - id: objectives/execution/native/runtime::heap-alloc
+  - id: micro-behaviors/mem/alloc/heap::heap-alloc
   unless:
   - id: objectives/anti-static/obfuscation/imports/minimal-concealment::minimal-imports-suspicious-apis__unless_1
 - id: concealed-capabilities-pe
@@ -68,7 +68,7 @@ composite_rules:
   - id: micro-behaviors/process/create/methods::shell-execute-a
   - id: micro-behaviors/process/create/methods::shell-execute
   - id: micro-behaviors/crypto/certificate/store::cert-open-store
-  - id: objectives/execution/native/runtime::heap-alloc
+  - id: micro-behaviors/mem/alloc/heap::heap-alloc
   - id: micro-behaviors/mem/protect/modify::virtual-protect
   unless:
   - id: objectives/anti-static/obfuscation/imports/minimal-concealment::concealed-capabilities-pe__unless_1

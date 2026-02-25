@@ -683,6 +683,32 @@ fn generate_html_viewer(name: &str, mol_content: &str, json_content: &str) -> St
         .suspicious {{ background: #4488ff; }}
         .notable {{ background: #ffffff; }}
         .neutral {{ background: #888888; }}
+        #tooltip {{
+            position: absolute;
+            bottom: 20px;
+            right: 20px;
+            background: rgba(0,0,0,0.85);
+            padding: 15px;
+            border-radius: 8px;
+            max-width: 400px;
+            z-index: 100;
+            display: none;
+            border: 1px solid #444;
+        }}
+        #tooltip.visible {{ display: block; }}
+        #tooltip h2 {{ font-size: 14px; margin-bottom: 8px; color: #ff79c6; word-break: break-all; }}
+        #tooltip .severity {{ font-size: 11px; padding: 2px 8px; border-radius: 4px; margin-bottom: 8px; display: inline-block; }}
+        #tooltip .severity.hostile {{ background: #ff4444; color: #fff; }}
+        #tooltip .severity.suspicious {{ background: #4488ff; color: #fff; }}
+        #tooltip .severity.notable {{ background: #ffffff; color: #000; }}
+        #tooltip .severity.neutral {{ background: #888888; color: #fff; }}
+        #tooltip .description {{ font-size: 12px; margin: 8px 0; line-height: 1.4; color: #ccc; }}
+        #tooltip .evidence {{ font-size: 11px; margin-top: 10px; }}
+        #tooltip .evidence-title {{ color: #888; margin-bottom: 4px; }}
+        #tooltip .evidence-item {{ font-family: monospace; font-size: 10px; background: #2a2a3e; padding: 4px 8px; margin: 2px 0; border-radius: 3px; word-break: break-all; }}
+        #tooltip .close {{ position: absolute; top: 8px; right: 10px; cursor: pointer; color: #666; font-size: 16px; }}
+        #tooltip .close:hover {{ color: #fff; }}
+        #tooltip .category {{ font-size: 10px; color: #666; margin-bottom: 4px; }}
     </style>
 </head>
 <body>
@@ -696,6 +722,14 @@ fn generate_html_viewer(name: &str, mol_content: &str, json_content: &str) -> St
             <div class="legend-item"><span class="legend-color notable"></span>Notable</div>
             <div class="legend-item"><span class="legend-color neutral"></span>Neutral</div>
         </div>
+    </div>
+    <div id="tooltip">
+        <span class="close" onclick="hideTooltip()">&times;</span>
+        <div class="category" id="tooltip-category"></div>
+        <h2 id="tooltip-trait"></h2>
+        <span class="severity" id="tooltip-severity"></span>
+        <div class="description" id="tooltip-desc"></div>
+        <div class="evidence" id="tooltip-evidence"></div>
     </div>
     <div id="container"></div>
 
@@ -745,7 +779,7 @@ fn generate_html_viewer(name: &str, mol_content: &str, json_content: &str) -> St
 
         // Parse MOL file
         function parseMol(molString) {{
-            const lines = molString.trim().split(/\\r?\\n/);
+            const lines = molString.trim().split('\n');
             const atoms = [];
             const bonds = [];
 
@@ -846,6 +880,98 @@ fn generate_html_viewer(name: &str, mol_content: &str, json_content: &str) -> St
             camera.aspect = window.innerWidth / window.innerHeight;
             camera.updateProjectionMatrix();
             renderer.setSize(window.innerWidth, window.innerHeight);
+        }});
+
+        // Raycasting for click detection
+        const raycaster = new THREE.Raycaster();
+        const mouse = new THREE.Vector2();
+
+        function showTooltip(atomIndex) {{
+            const atomMeta = metadata.atoms[atomIndex];
+            if (!atomMeta) return;
+
+            const tooltip = document.getElementById('tooltip');
+            const categoryEl = document.getElementById('tooltip-category');
+            const traitEl = document.getElementById('tooltip-trait');
+            const severityEl = document.getElementById('tooltip-severity');
+            const descEl = document.getElementById('tooltip-desc');
+            const evidenceEl = document.getElementById('tooltip-evidence');
+
+            // Category path
+            categoryEl.textContent = atomMeta.category || '';
+
+            // Trait ID (or element symbol for hub atoms)
+            if (atomMeta.trait_id) {{
+                traitEl.textContent = atomMeta.trait_id;
+            }} else {{
+                traitEl.textContent = atomMeta.symbol + ' (' + (atomMeta.category || 'core') + ')';
+            }}
+
+            // Severity badge
+            severityEl.textContent = atomMeta.severity;
+            severityEl.className = 'severity ' + atomMeta.severity;
+
+            // Description
+            if (atomMeta.description) {{
+                descEl.textContent = atomMeta.description;
+                descEl.style.display = 'block';
+            }} else {{
+                descEl.style.display = 'none';
+            }}
+
+            // Evidence
+            if (atomMeta.evidence && atomMeta.evidence.length > 0) {{
+                let html = '<div class="evidence-title">Evidence:</div>';
+                atomMeta.evidence.forEach(ev => {{
+                    // Truncate long evidence
+                    const truncated = ev.length > 100 ? ev.substring(0, 100) + '...' : ev;
+                    html += '<div class="evidence-item">' + escapeHtml(truncated) + '</div>';
+                }});
+                evidenceEl.innerHTML = html;
+                evidenceEl.style.display = 'block';
+            }} else {{
+                evidenceEl.style.display = 'none';
+            }}
+
+            tooltip.classList.add('visible');
+        }}
+
+        function hideTooltip() {{
+            document.getElementById('tooltip').classList.remove('visible');
+        }}
+
+        function escapeHtml(text) {{
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }}
+
+        // Click handler
+        renderer.domElement.addEventListener('click', (event) => {{
+            mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
+            mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
+
+            raycaster.setFromCamera(mouse, camera);
+            const intersects = raycaster.intersectObjects(atomMeshes);
+
+            if (intersects.length > 0) {{
+                const clickedMesh = intersects[0].object;
+                const atomIndex = atomMeshes.indexOf(clickedMesh);
+                if (atomIndex >= 0) {{
+                    showTooltip(atomIndex);
+                }}
+            }}
+        }});
+
+        // Hover cursor change
+        renderer.domElement.addEventListener('mousemove', (event) => {{
+            mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
+            mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
+
+            raycaster.setFromCamera(mouse, camera);
+            const intersects = raycaster.intersectObjects(atomMeshes);
+
+            renderer.domElement.style.cursor = intersects.length > 0 ? 'pointer' : 'default';
         }});
     </script>
 </body>

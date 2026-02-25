@@ -1,7 +1,7 @@
 traits:
   - id: pkcs7-signeddata-oid
     desc: PKCS7 SignedData OID pattern
-    crit: notable
+    crit: baseline
     conf: 0.8
     for: [pe, dll, elf, macho]
     if:

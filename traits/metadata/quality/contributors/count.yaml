@@ -81,13 +81,5 @@ composite_rules:
       - id: npm-no-contributors
       - id: metadata/quality/maintainers::npm-single-maintainer
 
-  # === High-Risk: Minimal team + install hooks ===
-  - id: npm-minimal-team-with-hooks
-    desc: Minimal team with install hooks
-    crit: hostile
-    conf: 0.90
-    attack: "T1195.002"
-    for: [package.json]
-    all:
-      - id: npm-minimal-team
-      - id: objectives/lateral-movement/supply-chain/npm/metadata::install-hooks
+  # Hostile composites moved to:
+  # objectives/lateral-movement/supply-chain/npm/malicious-patterns/low-quality-indicators.yaml

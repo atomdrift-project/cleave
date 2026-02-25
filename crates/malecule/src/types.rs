@@ -55,8 +55,12 @@ pub struct Atom {
     pub severity: Severity,
     /// 3D position
     pub position: (f64, f64, f64),
-    /// Count of findings with this category
-    pub count: usize,
+    /// Full trait ID (e.g., "objectives/lateral-movement/supply-chain/npm/install-hooks")
+    pub trait_id: Option<String>,
+    /// Trait description
+    pub description: Option<String>,
+    /// Evidence that triggered this trait
+    pub evidence: Vec<String>,
 }
 
 /// A bond between two atoms.
@@ -104,7 +108,33 @@ impl Malecule {
             category,
             severity,
             position: (0.0, 0.0, 0.0),
-            count: 1,
+            trait_id: None,
+            description: None,
+            evidence: Vec::new(),
+        });
+        id
+    }
+
+    /// Adds a trait atom with full details and returns its ID.
+    pub fn add_trait_atom(
+        &mut self,
+        element: Element,
+        category: String,
+        severity: Severity,
+        trait_id: String,
+        description: Option<String>,
+        evidence: Vec<String>,
+    ) -> usize {
+        let id = self.atoms.len();
+        self.atoms.push(Atom {
+            id,
+            element,
+            category,
+            severity,
+            position: (0.0, 0.0, 0.0),
+            trait_id: Some(trait_id),
+            description,
+            evidence,
         });
         id
     }
@@ -153,8 +183,15 @@ pub struct AtomMetadata {
     pub severity: Severity,
     /// Hex color
     pub color: String,
-    /// Finding count for this category
-    pub count: usize,
+    /// Trait ID (full path, e.g., "objectives/lateral-movement/supply-chain/npm/install-hooks")
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub trait_id: Option<String>,
+    /// Trait description
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// Evidence that triggered this trait
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub evidence: Vec<String>,
 }
 
 /// Summary statistics for the malecule.

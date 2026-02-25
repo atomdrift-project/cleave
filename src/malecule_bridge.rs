@@ -57,8 +57,10 @@ pub fn malecule_from_file_analysis(file: &FileAnalysis, layout: LayoutAlgorithm)
 
         builder.add_finding(malecule::Finding {
             id: finding.id.clone(),
+            description: Some(finding.desc.clone()),
             severity: criticality_to_severity(finding.crit),
             evidence,
+            trait_refs: finding.trait_refs.clone(),
         });
     }
 

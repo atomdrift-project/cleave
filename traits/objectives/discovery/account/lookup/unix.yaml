@@ -3,6 +3,7 @@
 # MBC: E1083 (File and Directory Discovery)
 # ATT&CK: T1083, T1087
 #
+# User lookup traits: use micro-behaviors/os/user/lookup (canonical)
 # Group lookup traits: use micro-behaviors/os/group/lookup (canonical)
 
 defaults:
@@ -10,28 +11,7 @@ defaults:
   mbc: E1083
   attack: T1083
 
-traits:
-  # getpwuid: use micro-behaviors/process/user/query/unix.yaml::getpwuid (canonical)
-  # getpwnam: use objectives/discovery/host/user/traits.yaml::getpwnam (canonical)
-  - id: user-from-uid
-    desc: Convert user ID to username (user_from_uid)
-    crit: notable
-    conf: 0.8
-    if:
-      type: symbol
-      exact: "user_from_uid"
-
 composite_rules:
-  # user-lookup: composite referencing canonical user query traits plus local user_from_uid
-  - id: user-lookup
-    desc: Convert user ID to username
-    crit: notable
-    conf: 0.8
-    any:
-      - id: micro-behaviors/process/user/query::getpwuid
-      - id: objectives/discovery/host/user::getpwnam
-      - id: user-from-uid
-
   - id: account-name-resolution
     desc: Enumerate account names from IDs
     crit: notable
@@ -39,5 +19,5 @@ composite_rules:
     mbc: E1083
     attack: T1087
     any:
-      - id: user-lookup
+      - id: micro-behaviors/os/user/lookup
       - id: micro-behaviors/os/group/lookup

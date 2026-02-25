@@ -7,20 +7,20 @@ defaults:
   conf: 0.8
 
 traits:
-  - id: getgrgid
-    desc: Resolve GID to group (getgrgid)
+  - id: perl-getgrgid
+    desc: Resolve GID to group (Perl getgrgid)
     if:
       type: raw
       regex: "\\bgetgrgid\\s*\\("
 
-  - id: getgrnam
-    desc: Resolve group name to GID (getgrnam)
+  - id: perl-getgrnam
+    desc: Resolve group name to GID (Perl getgrnam)
     if:
       type: raw
       regex: "\\bgetgrnam\\s*\\("
 
-  - id: getgrent
-    desc: Iterate group entries (getgrent)
+  - id: perl-getgrent
+    desc: Iterate group entries (Perl getgrent)
     if:
       type: raw
       regex: "\\bgetgrent\\s*\\("

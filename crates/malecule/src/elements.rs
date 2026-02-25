@@ -101,6 +101,9 @@ pub const PLATINUM: Element = Element::new(78, "Pt", "Platinum");
 /// Tungsten - well-known malware families.
 pub const TUNGSTEN: Element = Element::new(74, "W", "Tungsten");
 
+/// Thorium - third-party signatures/rules.
+pub const THORIUM: Element = Element::new(90, "Th", "Thorium");
+
 /// Hydrogen - for count decoration.
 pub const HYDROGEN: Element = Element::new(1, "H", "Hydrogen");
 
@@ -117,6 +120,7 @@ pub fn category_to_element(category: &str) -> Option<Element> {
         m.insert("micro-behaviors", BORON);
         m.insert("metadata", MAGNESIUM);
         m.insert("well-known", TUNGSTEN);
+        m.insert("third_party", THORIUM);
 
         // Objective subcategories
         m.insert("anti-analysis", ALUMINUM);

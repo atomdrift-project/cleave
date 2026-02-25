@@ -58,11 +58,4 @@ traits:
     if:
       type: symbol
       exact: "GetCurrentProcess"
-
-  - id: get-current-process-id
-    desc: Get current process ID
-    crit: notable
-    conf: 0.70
-    if:
-      type: symbol
-      exact: "GetCurrentProcessId"
+  # NOTE: GetCurrentProcessId moved to micro-behaviors/process/info/thread/

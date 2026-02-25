@@ -45,11 +45,7 @@ traits:
 
   # Windows - individual API presence is notable (standard MSVC CRT imports);
   # combinations in composite rules elevate to suspicious
-  # Removed win-isdebuggerpresent duplicate - use objectives/execution/native/runtime::debugger-detect-api
-
-  # Removed: duplicate of micro-behaviors/os/sysinfo/sysctl::sysctlbyname
-  # Just checking for sysctlbyname symbol doesn't prove debugger detection
-  # Real debugger detection would need P_TRACED string or kern.proc checks
+  # Removed win-isdebuggerpresent duplicate - use objectives/anti-analysis/debugger-detect/check::is-debugger-present
 
 composite_rules:
   # Process inspection composite (migrated from YARA)
@@ -88,7 +84,7 @@ composite_rules:
     conf: 0.9
     platforms: [windows]
     any:
-      - id: objectives/execution/native/runtime::debugger-detect-api
+      - id: objectives/anti-analysis/debugger-detect/check::is-debugger-present
       - id: objectives/anti-analysis/debugger/detect::check-remote-debugger
       - id: objectives/anti-analysis/debugger/detect::nt-query-information-process
     downgrade:

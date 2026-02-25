@@ -69,30 +69,5 @@ traits:
       size_min: 1
       size_max: 1
 
-composite_rules:
-  # === High-Risk: No maintainers + install hooks ===
-  - id: npm-no-maintainers-with-hooks
-    desc: No maintainers with install hooks
-    crit: hostile
-    conf: 0.95
-    attack: "T1195.002"
-    for: [package.json]
-    all:
-      - id: npm-no-maintainers
-      - id: objectives/lateral-movement/supply-chain/npm/metadata::install-hooks
-
-  # === High-Risk: Single maintainer + install hooks + quality issues ===
-  - id: npm-single-maintainer-suspicious
-    desc: Single maintainer with install hooks and quality issues
-    crit: hostile
-    conf: 0.92
-    attack: "T1195.002"
-    for: [package.json]
-    all:
-      - id: npm-single-maintainer
-      - id: objectives/lateral-movement/supply-chain/npm/metadata::install-hooks
-    any:
-      - id: metadata/quality/package-info::npm-empty-description-any
-      - id: metadata/quality/versioning::release-zero
-      - id: metadata/quality/author::npm-generic-author-name
-    needs: 1
+# Hostile composites moved to:
+# objectives/lateral-movement/supply-chain/npm/malicious-patterns/low-quality-indicators.yaml

@@ -92,9 +92,9 @@ composite_rules:
     attack: "T1129"
     needs: 2
     any:
-      - id: objectives/execution/native/runtime::tls-alloc
-      - id: objectives/execution/native/runtime::tls-get-value
-      - id: objectives/execution/native/runtime::tls-set-value
+      - id: micro-behaviors/process/tls/fiber::fls-alloc
+      - id: micro-behaviors/process/tls/fiber::fls-get-value
+      - id: micro-behaviors/process/tls/fiber::fls-set-value
     downgrade:
       any:
         - id: metadata/quality/versioned
@@ -136,9 +136,5 @@ composite_rules:
     attack: "T1055"
     for: [pe, dll]
     any:
-      - id: objectives/execution/native/runtime::enum-ui-languages
-      - id: objectives/execution/native/runtime::enum-resource-types
-      - id: objectives/execution/native/runtime::enum-resource-names
-      - id: objectives/execution/native/runtime::enum-desktop-windows
-      - id: objectives/execution/native/runtime::enum-date-formats
-      - id: objectives/execution/native/runtime::line-dda
+      - id: objectives/execution/callback/enum
+      - id: objectives/execution/callback/dda

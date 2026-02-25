@@ -77,7 +77,9 @@ pub fn generate_metadata(malecule: &Malecule) -> MaleculeMetadata {
             category: atom.category.clone(),
             severity: atom.severity,
             color: atom.severity.color().to_string(),
-            count: atom.count,
+            trait_id: atom.trait_id.clone(),
+            description: atom.description.clone(),
+            evidence: atom.evidence.clone(),
         })
         .collect();
 

@@ -27,7 +27,7 @@ composite_rules:
     conf: 0.85
     needs: 2
     any:
-      - id: micro-behaviors/time/timing/delay::get-tick-count64
+      - id: micro-behaviors/os/time/query::get-tick-count
       - id: micro-behaviors/time/timing/delay::query-performance-counter
       - id: micro-behaviors/time/timing/check::timegettime
       - id: objectives/anti-analysis/timing/evasion::rdtsc

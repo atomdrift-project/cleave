@@ -18,7 +18,8 @@ use crate::capabilities::validation::{
     find_banned_directory_segments, find_cap_obj_violations, find_depth_violations,
     find_duplicate_second_level_directories, find_duplicate_traits_and_composites,
     find_empty_condition_clauses, find_for_only_duplicates, find_hostile_cap_rules,
-    find_impossible_count_constraints, find_impossible_needs, find_impossible_size_constraints,
+    find_hostile_meta_rules, find_impossible_count_constraints, find_impossible_needs,
+    find_impossible_size_constraints,
     find_invalid_trait_ids, find_line_number, find_malware_subcategory_violations,
     find_missing_search_patterns, find_non_capturing_groups, find_overlapping_conditions,
     find_oversized_trait_directories, find_parent_duplicate_segments,
@@ -1360,6 +1361,38 @@ impl super::CapabilityMapper {
                     "{} micro-behaviors/ rules have hostile criticality (should be in objectives/)",
                     hostile_cap_rules.len()
                 ));
+            }
+
+            // Validate that metadata/ rules are never hostile
+            // Hostile criticality requires intent inference and belongs in objectives/
+            tracing::debug!("Step 13a/15: Checking for hostile metadata rules");
+            let hostile_meta_rules =
+                find_hostile_meta_rules(&trait_definitions, &composite_rules, &rule_source_files);
+
+            if !hostile_meta_rules.is_empty() {
+                eprintln!(
+                    "\n❌ ERROR: {} metadata/ rules have hostile criticality",
+                    hostile_meta_rules.len()
+                );
+                eprintln!("   Metadata rules are purely informational file-level properties.");
+                eprintln!(
+                    "   Hostile rules require intent inference and should be in objectives/:\n"
+                );
+                for (rule_id, source_file) in &hostile_meta_rules {
+                    let line_hint = find_line_number(source_file, "crit: hostile");
+                    if let Some(line) = line_hint {
+                        eprintln!("   {}:{}: Rule '{}'", source_file, line, rule_id);
+                    } else {
+                        eprintln!("   {}: Rule '{}'", source_file, rule_id);
+                    }
+                }
+                eprintln!("\n   Metadata rules should have baseline criticality only.");
+                eprintln!("   Move hostile composites to objectives/lateral-movement/supply-chain/ or similar.");
+                warnings.push(format!(
+                    "{} metadata/ rules have hostile criticality (should be in objectives/)",
+                    hostile_meta_rules.len()
+                ));
+                has_fatal_errors = true;
             }
 
             // NOTE: baseline traits are now allowed in objectives/ - they serve as building blocks

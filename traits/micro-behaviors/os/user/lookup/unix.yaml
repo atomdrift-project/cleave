@@ -1,0 +1,22 @@
+# User ID Resolution (Unix)
+# Resolves UIDs to usernames via system calls
+# NOTE: getpwuid defined in micro-behaviors/process/user/query/posix.yaml
+# NOTE: getpwnam defined in objectives/discovery/host/user/traits.yaml
+
+defaults:
+  for: [elf, macho, so, dylib, c]
+  crit: notable
+  conf: 0.8
+
+traits:
+  - id: user-from-uid
+    desc: Convert user ID to username (user_from_uid)
+    if:
+      type: symbol
+      exact: "user_from_uid"
+
+  - id: getpwent
+    desc: Iterate password entries
+    if:
+      type: symbol
+      exact: "getpwent"

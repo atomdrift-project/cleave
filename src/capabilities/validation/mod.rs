@@ -112,8 +112,8 @@ pub(crate) use patterns::{
 pub(crate) use directory_whitelist::validate_directory_structure;
 pub(crate) use taxonomy::{
     find_banned_directory_segments, find_cap_obj_violations, find_depth_violations,
-    find_duplicate_second_level_directories, find_hostile_cap_rules, find_invalid_trait_ids,
-    find_malware_subcategory_violations, find_oversized_trait_directories,
+    find_duplicate_second_level_directories, find_hostile_cap_rules, find_hostile_meta_rules,
+    find_invalid_trait_ids, find_malware_subcategory_violations, find_oversized_trait_directories,
     find_parent_duplicate_segments, find_platform_named_directories, MAX_TRAITS_PER_DIRECTORY,
 };
 

@@ -267,35 +267,5 @@ composite_rules:
       - id: gem-author-user
       - id: gem-author-test
 
-  # === High-Risk: Generic author with install hooks ===
-  - id: npm-generic-author-with-hooks
-    desc: Generic author name with install hooks
-    crit: hostile
-    conf: 0.95
-    attack: "T1195.002"
-    for: [package.json]
-    all:
-      - id: npm-generic-author-name
-      - id: objectives/lateral-movement/supply-chain/npm/metadata::install-hooks
-
-  # === High-Risk: Generic author with empty description ===
-  - id: npm-generic-author-empty-description
-    desc: Generic author with empty description
-    crit: hostile
-    conf: 0.92
-    attack: "T1195.002"
-    for: [package.json]
-    all:
-      - id: npm-generic-author-name
-      - id: metadata/quality/package-info::npm-empty-description-any
-
-  # === Suspicious: Generic author with version 0.0.0 ===
-  - id: npm-generic-author-zero-version
-    desc: Generic author with version 0.0.0
-    crit: hostile
-    conf: 0.93
-    attack: "T1195.002"
-    for: [package.json]
-    all:
-      - id: npm-generic-author-name
-      - id: metadata/quality/versioning::npm-version-0-0-0
+  # Hostile composites moved to:
+  # objectives/lateral-movement/supply-chain/npm/malicious-patterns/low-quality-indicators.yaml

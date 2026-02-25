@@ -23,7 +23,4 @@ traits:
     desc: Get module handle
     if:
       type: symbol
-      any:
-        - exact: "GetModuleHandleA"
-        - exact: "GetModuleHandleW"
-        - exact: "GetModuleHandle"
+      regex: "^GetModuleHandle[AW]?$"

@@ -267,25 +267,8 @@ composite_rules:
       - id: npm-empty-description
       - id: npm-no-description
 
-  # GuardDog: Critical metadata missing
-  # Requires name field to avoid FP on monorepo subpackage package.json files
-  # Note: inline atomic traits instead of composite refs to avoid evaluation issues
-  - id: npm-critical-metadata-missing
-    desc: npm package missing critical metadata
-    crit: hostile
-    conf: 0.90
-    attack: "T1195.002"
-    for: [package.json]
-    all:
-      - id: npm-has-name
-    needs: 2
-    any:
-      - id: npm-empty-description
-      - id: npm-no-description
-      - id: npm-empty-author
-      - id: npm-no-author
-      - id: npm-empty-license
-      - id: npm-no-license
+  # Hostile composite (npm-critical-metadata-missing) moved to:
+  # objectives/lateral-movement/supply-chain/npm/malicious-patterns/low-quality-indicators.yaml
 
   # Low-quality package (many empty fields)
   # Requires name field to avoid FP on monorepo subpackage package.json files

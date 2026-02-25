@@ -1,5 +1,5 @@
 traits: []
-# Removed cpu-feature-check duplicate - use objectives/execution/native/runtime::processor-feature-check
+# Removed cpu-feature-check duplicate - use objectives/anti-analysis/vm-detect/processor-features::is-processor-feature-present
 composite_rules:
 - id: evasion-aware-malware
   desc: Malware with multiple anti-analysis awareness checks
@@ -19,7 +19,7 @@ composite_rules:
   - id: micro-behaviors/time/timing/delay::query-performance-counter
   - id: micro-behaviors/os/time/query::gettimeofday
   - id: micro-behaviors/os/time/query::clock_gettime
-  - id: objectives/execution/native/runtime::processor-feature-check
+  - id: objectives/anti-analysis/vm-detect/processor-features::is-processor-feature-present
   - id: objectives/anti-analysis/emulator/detect::comprehensive
   downgrade:
     any:

@@ -2,7 +2,7 @@
 //!
 //! Generates molecular formula strings like "C₁O₁La₁Sn₁F₂" from analysis findings.
 
-use crate::elements::{category_to_element, Element, BORON, CARBON, MAGNESIUM, OXYGEN, TUNGSTEN};
+use crate::elements::{category_to_element, Element, BORON, MAGNESIUM, OXYGEN, THORIUM, TUNGSTEN};
 use crate::types::Severity;
 use rustc_hash::FxHashMap;
 use std::cmp::Reverse;
@@ -39,6 +39,7 @@ pub fn generate_formula<'a>(findings: impl Iterator<Item = &'a FindingInput>) ->
     let mut has_micro_behaviors = false;
     let mut has_metadata = false;
     let mut has_well_known = false;
+    let mut third_party_count = 0usize;
 
     for finding in findings {
         let parts: Vec<&str> = finding.id.split('/').collect();
@@ -52,6 +53,11 @@ pub fn generate_formula<'a>(findings: impl Iterator<Item = &'a FindingInput>) ->
             "micro-behaviors" => has_micro_behaviors = true,
             "metadata" => has_metadata = true,
             "well-known" => has_well_known = true,
+            "third_party" => {
+                // Third party just counts, no sub-elements
+                third_party_count += 1;
+                continue;
+            }
             _ => {}
         }
 
@@ -72,21 +78,21 @@ pub fn generate_formula<'a>(findings: impl Iterator<Item = &'a FindingInput>) ->
     // Build formula with consistent ordering
     let mut formula_parts: Vec<(&'static str, usize, u8)> = Vec::new();
 
-    // Always start with Carbon (central atom)
-    formula_parts.push((CARBON.symbol, 1, 0));
-
-    // Add top-level category atoms in order: O, B, Mg, W
+    // Add top-level category atoms in order: O, B, Mg, W, Th
     if has_objectives {
-        formula_parts.push((OXYGEN.symbol, 1, 1));
+        formula_parts.push((OXYGEN.symbol, 1, 0));
     }
     if has_micro_behaviors {
-        formula_parts.push((BORON.symbol, 1, 2));
+        formula_parts.push((BORON.symbol, 1, 1));
     }
     if has_metadata {
-        formula_parts.push((MAGNESIUM.symbol, 1, 3));
+        formula_parts.push((MAGNESIUM.symbol, 1, 2));
     }
     if has_well_known {
-        formula_parts.push((TUNGSTEN.symbol, 1, 4));
+        formula_parts.push((TUNGSTEN.symbol, 1, 3));
+    }
+    if third_party_count > 0 {
+        formula_parts.push((THORIUM.symbol, third_party_count, 4));
     }
 
     // Sort remaining elements by count (descending), then alphabetically
@@ -99,6 +105,7 @@ pub fn generate_formula<'a>(findings: impl Iterator<Item = &'a FindingInput>) ->
             || symbol == BORON.symbol
             || symbol == MAGNESIUM.symbol
             || symbol == TUNGSTEN.symbol
+            || symbol == THORIUM.symbol
         {
             continue;
         }
@@ -209,10 +216,9 @@ mod tests {
         ];
 
         let formula = generate_formula(findings.iter());
-        // Should have C (central), O (objectives), B (micro-behaviors), Mg (metadata)
+        // Should have O (objectives), B (micro-behaviors), Mg (metadata)
         // Plus La (lateral-movement), Xe (execution), F (fs), Au₂ (quality x2)
-        assert!(formula.starts_with('C'));
-        assert!(formula.contains('O'));
+        assert!(formula.starts_with('O')); // Objectives is first top-level
         assert!(formula.contains('B'));
         assert!(formula.contains("Mg"));
         assert!(formula.contains("Au")); // quality

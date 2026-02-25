@@ -271,46 +271,6 @@ composite_rules:
       - id: pypi-includes-exe
       - id: pypi-includes-dll
 
-  # === High-Risk: Windows Executable + Install Hooks ===
-  - id: npm-exe-with-hooks
-    desc: Windows executables with install hooks
-    crit: hostile
-    conf: 0.98
-    attack: "T1195.002"
-    for: [package.json]
-    all:
-      - id: objectives/lateral-movement/supply-chain/npm/metadata::install-hooks
-      - id: npm-windows-executables
-
-  # === High-Risk: Native Binary + Install Hooks ===
-  - id: npm-native-with-hooks
-    desc: Native binaries with install hooks
-    crit: hostile
-    conf: 0.95
-    attack: "T1195.002"
-    for: [package.json]
-    all:
-      - id: objectives/lateral-movement/supply-chain/npm/metadata::install-hooks
-      - id: npm-native-binaries
-
-  # === High-Risk: Archive + Install Hooks ===
-  - id: npm-archive-with-hooks
-    desc: Archives with install hooks
-    crit: hostile
-    conf: 0.93
-    attack: "T1195.002"
-    for: [package.json]
-    all:
-      - id: objectives/lateral-movement/supply-chain/npm/metadata::install-hooks
-      - id: npm-archive-includes
-
-  # === PyPI High-Risk ===
-  - id: pypi-exe-with-hooks
-    desc: PyPI package includes executables and install hooks
-    crit: hostile
-    conf: 0.98
-    attack: "T1195.002"
-    for: [python]
-    all:
-      - id: metadata/quality/dependencies::pypi-install-hooks-any
-      - id: pypi-includes-exe
+  # Hostile composites moved to:
+  # objectives/lateral-movement/supply-chain/npm/malicious-patterns/low-quality-indicators.yaml
+  # objectives/lateral-movement/supply-chain/pypi/malicious-packages/low-quality-indicators.yaml

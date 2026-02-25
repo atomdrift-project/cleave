@@ -100,4 +100,4 @@ composite_rules:
     all:
       - id: objectives/execution/native/runtime::callback-execution
       - id: micro-behaviors/mem/protect/modify::virtual-protect
-      - id: objectives/execution/native/runtime::heap-alloc
+      - id: micro-behaviors/mem/alloc/heap::heap-alloc

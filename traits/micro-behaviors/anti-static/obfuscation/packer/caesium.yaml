@@ -20,6 +20,7 @@ traits:
   - id: caesium-code-bin-magic
     desc: File content indicates compiled Java class data
     crit: notable
+    for: [all, -macho, -java, -class]
     if:
       type: hex
       pattern: "ca fe ba be"

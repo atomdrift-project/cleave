@@ -185,6 +185,60 @@ pub(crate) fn find_hostile_cap_rules(
     violations
 }
 
+/// Find metadata/ rules with Hostile criticality.
+///
+/// Metadata rules are purely informational file-level properties (format, language, quality).
+/// They should only have baseline criticality. Hostile criticality requires intent inference
+/// which belongs in objectives/ where attacker goals are categorized.
+///
+/// Returns: `Vec<(rule_id, source_file)>` for violations.
+#[must_use]
+pub(crate) fn find_hostile_meta_rules(
+    trait_definitions: &[TraitDefinition],
+    composite_rules: &[CompositeTrait],
+    rule_source_files: &HashMap<String, String>,
+) -> Vec<(String, String)> {
+    let mut violations = Vec::new();
+
+    // Helper to check if rule is in metadata/
+    fn is_meta_rule(id: &str) -> bool {
+        if let Some(idx) = id.find("::") {
+            let prefix = &id[..idx];
+            if let Some(slash_idx) = prefix.find('/') {
+                return &prefix[..slash_idx] == "metadata";
+            }
+            return prefix == "metadata";
+        } else if let Some(slash_idx) = id.find('/') {
+            return &id[..slash_idx] == "metadata";
+        }
+        false
+    }
+
+    // Check trait definitions
+    for trait_def in trait_definitions {
+        if is_meta_rule(&trait_def.id) && trait_def.crit == Criticality::Hostile {
+            let source = rule_source_files
+                .get(&trait_def.id)
+                .cloned()
+                .unwrap_or_else(|| "unknown".to_string());
+            violations.push((trait_def.id.clone(), source));
+        }
+    }
+
+    // Check composite rules
+    for rule in composite_rules {
+        if is_meta_rule(&rule.id) && rule.crit == Criticality::Hostile {
+            let source = rule_source_files
+                .get(&rule.id)
+                .cloned()
+                .unwrap_or_else(|| "unknown".to_string());
+            violations.push((rule.id.clone(), source));
+        }
+    }
+
+    violations
+}
+
 // NOTE: baseline traits are now allowed in any tier including objectives/.
 // They serve as building blocks for composite rules and can be useful
 // for downgrade/unless conditions even without direct analytical signal.

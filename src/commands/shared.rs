@@ -137,7 +137,12 @@ pub(crate) fn process_yara_result(
     };
     report.yara_matches = matches.clone();
     for yara_match in &matches {
-        let cap_id = yara_match.namespace.replace('.', "/");
+        // Prefer trait_id for third-party rules (e.g., "third_party/elastic/...")
+        // Fall back to namespace conversion for built-in rules
+        let cap_id = yara_match
+            .trait_id
+            .clone()
+            .unwrap_or_else(|| yara_match.namespace.replace('.', "/"));
         if report.findings.iter().any(|c| c.id == cap_id) {
             continue;
         }

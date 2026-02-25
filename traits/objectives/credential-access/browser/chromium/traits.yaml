@@ -58,6 +58,14 @@ traits:
   if:
     type: string
     substr: User Data/Vivaldi
+- id: yandex-path
+  desc: Yandex browser profile path
+  crit: suspicious
+  conf: 0.7
+  attack: T1555.003
+  if:
+    type: string
+    substr: Yandex/YandexBrowser
 - id: arc-macos-path
   desc: Arc macOS profile path
   crit: notable
@@ -246,3 +254,4 @@ composite_rules:
   - id: operagx-path
   - id: vivaldi-path
   - id: arc-path
+  - id: yandex-path

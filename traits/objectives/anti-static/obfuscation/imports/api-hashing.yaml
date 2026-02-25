@@ -21,7 +21,8 @@ traits:
       type: hex
       section: text
       pattern: "C1 C? 0D"  # ROR reg, 0x0D (rotate right 13 bits)
-      count_min: 3
+      count_min: 15
+      per_kb_min: 0.05
 
   # DJB2 hash constant (5381 = 0x1505)
   # Note: This 4-byte pattern can appear randomly; only meaningful in composite rules

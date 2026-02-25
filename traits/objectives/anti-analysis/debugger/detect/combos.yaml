@@ -1,6 +1,9 @@
 # Composite Debugger Detection Capabilities
 
 composite_rules:
+  # IsDebuggerPresent and UnhandledExceptionFilter are standard MSVC CRT
+  # imports linked into virtually every Windows binary. Restrict to small
+  # binaries where these APIs more likely indicate intentional anti-debug.
   - id: win-basic
     desc: Windows debugger detection (basic)
     crit: suspicious
@@ -9,12 +12,14 @@ composite_rules:
     conf: 0.85
     platforms: [windows]
     for: [pe, dll]
+    size_max: 100000
     any:
       - id: objectives/execution/native/runtime::debugger-detect-api
       - id: micro-behaviors/os/error-handling/exceptions::unhandled-exception-filter
     downgrade:
       any:
-        - id: metadata/quality/versioned
+        - id: metadata/quality::versioned
+        - id: metadata/lang/compiler::vcruntime
 
   - id: win-comprehensive
     desc: Windows debugger/VM detection (multiple signals)
@@ -24,14 +29,16 @@ composite_rules:
     conf: 0.9
     platforms: [windows]
     for: [pe, dll]
-    needs: 2
-    any:
+    size_max: 150000
+    all:
       - id: objectives/execution/native/runtime::debugger-detect-api
+    any:
       - id: micro-behaviors/os/error-handling/exceptions::unhandled-exception-filter
       - id: micro-behaviors/time/timing/delay::query-performance-counter
     downgrade:
       any:
-        - id: metadata/quality/versioned
+        - id: metadata/quality::versioned
+        - id: metadata/lang/compiler::vcruntime
 
   - id: linux-comprehensive
     desc: Linux debugger detection across multiple

@@ -33,6 +33,14 @@ traits:
       type: string
       regex: "\\.write_bytes\\("
 
+  - id: python-file-truncate
+    desc: "Truncate file (truncate())"
+    conf: 0.8
+    crit: notable
+    if:
+      type: string
+      regex: "\\.truncate\\("
+
   # File content from HTTP response
   - id: python-write-response-content
     desc: "Write HTTP response content to"

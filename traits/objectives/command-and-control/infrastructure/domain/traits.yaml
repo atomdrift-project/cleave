@@ -7,6 +7,15 @@ defaults:
 traits:
 # Removed: iplogger-domain was a pure alias to objectives/discovery/network/ip-tracker::iplogger
 
+- id: ipcheck-cloud
+  desc: ipcheck.cloud malicious domain (C2/Dropper)
+  crit: suspicious
+  conf: 1.0
+  attack: T1071.001
+  if:
+    type: string
+    substr: ipcheck.cloud
+
 - id: evilpacket-net
   desc: Evilpacket.net malicious domain
   crit: suspicious

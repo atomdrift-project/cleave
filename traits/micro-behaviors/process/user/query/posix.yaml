@@ -25,6 +25,15 @@ traits:
       type: symbol
       regex: "getpwuid"
 
+  - id: hostname-pwd-whoami
+    desc: Chained recon commands hostname pwd whoami
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: string
+      regex: "hostname\\s*&&\\s*pwd\\s*&&\\s*whoami"
+      case_insensitive: true
+
   - id: whoami-cmd
     desc: whoami command
     conf: 0.5

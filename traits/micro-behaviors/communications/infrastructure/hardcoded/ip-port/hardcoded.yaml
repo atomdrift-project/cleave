@@ -27,3 +27,8 @@ traits:
         regex: "require\\(['\"]\\.\\./common['\"]\\)"
       - type: raw
         regex: "function test\\s*\\(\\)\\s*\\{"
+    downgrade:
+      any:
+        - type: metrics
+          field: binary.section_count
+          min: 20

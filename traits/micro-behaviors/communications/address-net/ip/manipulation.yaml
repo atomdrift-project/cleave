@@ -22,8 +22,9 @@ traits:
         )
         (#eq? @prop "replace")
         (#match? @pat "\\.")
-        (#match? @repl "-")
+        (#eq? @repl "-")
     unless:
+      - id: micro-behaviors/data/text/manipulation::alpha-sanitization-replace
       - id: metadata/builder/autotools::autotools
       - id: metadata/builder/autotools::configure-ac
       - id: metadata/builder/pip::setup-py
@@ -52,8 +53,9 @@ traits:
         )
         (#eq? @prop "replace")
         (#match? @pat ":")
-        (#match? @repl "-")
+        (#eq? @repl "-")
     unless:
+      - id: micro-behaviors/data/text/manipulation::alpha-sanitization-replace
       - id: metadata/builder/autotools::autotools
       - id: metadata/builder/autotools::configure-ac
       - id: metadata/builder/pip::setup-py
@@ -71,6 +73,7 @@ composite_rules:
       - id: dashed-ip-regex
       - id: dashed-ip-colon-regex
     unless:
+      - id: micro-behaviors/data/text/manipulation::alpha-sanitization-replace
       - id: metadata/builder/autotools::autotools
       - id: metadata/builder/autotools::configure-ac
       - id: metadata/builder/pip::setup-py

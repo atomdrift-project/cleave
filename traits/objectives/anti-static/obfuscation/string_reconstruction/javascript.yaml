@@ -25,10 +25,12 @@ traits:
   desc: Object mapping short strings to single characters
   crit: suspicious
   conf: 0.8
+  size_max: 200000
   for:
   - javascript
   - typescript
   if:
     type: raw
     regex: var\s+\w+\s*=\s*\{[^}]{0,160}\\x[0-9a-fA-F]{2}[^}]{0,160}\}
+    count_min: 3
 composite_rules: []

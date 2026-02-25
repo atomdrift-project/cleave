@@ -74,7 +74,7 @@ composite_rules:
     attack: T1129
   - id: srw-lock-ops
     desc: SRW lock operations
-    crit: suspicious
+    crit: notable
     conf: 0.7
     platforms:
       - windows
@@ -86,12 +86,9 @@ composite_rules:
       - id: srw-lock-acquire
       - id: srw-lock-release
       - id: srw-lock-shared
-    downgrade:
-      any:
-        - id: metadata/quality/versioned
   - id: condition-variable-ops
     desc: Condition variable ops
-    crit: suspicious
+    crit: notable
     conf: 0.7
     platforms:
       - windows
@@ -103,7 +100,7 @@ composite_rules:
       - id: condition-variable-signal
   - id: slist-sync-ops
     desc: Interlocked SList sync
-    crit: suspicious
+    crit: notable
     conf: 0.7
     platforms:
       - windows
@@ -115,7 +112,7 @@ composite_rules:
       - id: slist-operations
   - id: advanced-sync-primitives
     desc: Advanced sync primitives
-    crit: suspicious
+    crit: notable
     conf: 0.75
     platforms:
       - windows
@@ -129,7 +126,7 @@ composite_rules:
       - id: slist-sync-ops
   - id: advanced-sync-server
     desc: Advanced server infrastructure
-    crit: suspicious
+    crit: notable
     conf: 0.8
     platforms:
       - windows

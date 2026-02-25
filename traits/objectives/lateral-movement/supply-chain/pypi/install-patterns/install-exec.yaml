@@ -1,5 +1,5 @@
 defaults:
-  crit: notable
+  crit: component
   conf: 1.0
   for:
   - all

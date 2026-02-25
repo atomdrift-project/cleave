@@ -17,6 +17,7 @@ traits:
   if:
     type: raw
     regex: (0[oO][0-7]+|0x[\da-fA-F]+)\s*[-+*/&|^%]\s*(0[oO][0-7]+|0x[\da-fA-F]+)
+    count_min: 5
 composite_rules:
 - id: js-complex-obfuscation
   desc: Complex JavaScript obfuscation (hex/octal math + eval)

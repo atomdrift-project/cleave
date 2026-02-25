@@ -54,6 +54,8 @@ traits:
       - type: string
         substr: "PAR_TEMP"
       - id: metadata/signed/platform::apple
+      - type: string
+        substr: "VS_VERSION_INFO"
 
   # Large rodata section with medium entropy = encoded strings
   - id: encoded-rodata-section

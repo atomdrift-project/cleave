@@ -14,3 +14,4 @@ traits:
       type: raw
       regex: 'this(\s|/\*.*?\*/){0,5}\[(\s|/\*.*?\*/){0,5}[a-zA-Z_]\w*(\s|/\*.*?\*/){0,5}\]'
       count_min: 6
+      per_kb_min: 0.5

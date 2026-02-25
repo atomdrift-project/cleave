@@ -81,7 +81,7 @@ traits:
     conf: 0.4
     if:
       type: string
-      substr: "Local"
+      substr: "LocalAppData"
 
   - id: suspicious-python-version
     desc: Non-standard Python version format

@@ -761,6 +761,7 @@ composite_rules:
     desc: JavaScript obfuscation indicators
     crit: suspicious
     conf: 0.8
+    size_max: 200000
     for: [javascript]
     any:
       - id: objectives/anti-static/obfuscation/source/syntax::js-useless-arithmetic

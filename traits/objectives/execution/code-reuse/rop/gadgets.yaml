@@ -40,7 +40,8 @@ traits:
   # === ROP Gadget Patterns ===
 
   # POP; POP; RET pattern (common ROP gadget)
-  # Note: These patterns occur naturally in function epilogues.
+  # Note: These patterns occur naturally in function epilogues in all compiled code.
+  # x64 binaries routinely have 100+ such sequences in normal epilogues.
   # Only meaningful when combined with other ROP indicators in composite rules.
   - id: pop-pop-ret-gadget
     desc: POP; POP; RET gadget pattern
@@ -50,7 +51,7 @@ traits:
       type: hex
       section: text
       pattern: "5? 5? C3"
-      count_min: 50
+      count_min: 200
 
   # POP; RET pattern (very common gadget)
   # Note: Extremely common in all compiled code - only useful in composites
@@ -94,6 +95,8 @@ traits:
   # === Specific ROP Gadget Sequences ===
 
   # XCHG ESP, EAX; RET (stack pivot gadget)
+  # Require multiple occurrences since 94 C3 can appear as coincidental byte
+  # alignment in normal compiled code
   - id: stack-pivot-gadget
     desc: Stack pivot gadget (XCHG ESP, EAX; RET)
     crit: suspicious
@@ -103,8 +106,12 @@ traits:
       type: hex
       section: text
       pattern: "94 C3"
+      count_min: 15
+      per_kb_min: 0.1
 
   # ADD ESP, XX; RET (stack adjustment gadget)
+  # Standard function epilogue in x86 code; require high count to indicate
+  # intentional gadget placement rather than normal compiled output
   - id: stack-adjust-ret
     desc: Stack adjustment gadget
     crit: suspicious
@@ -113,7 +120,8 @@ traits:
       type: hex
       section: text
       pattern: "83 C4 ?? C3"
-      count_min: 5
+      count_min: 50
+      per_kb_min: 2.0
 
 composite_rules:
   # ROP chain indicators

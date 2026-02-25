@@ -35,7 +35,8 @@ traits:
       type: hex
       section: text
       pattern: "80 3? ?? EB ??"
-      count_min: 2
+      count_min: 4
+      per_kb_min: 0.05
 
   # Dense XOR instructions in small code region (polymorphic stub)
   - id: dense-xor-operations

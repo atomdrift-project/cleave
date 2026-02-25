@@ -57,7 +57,7 @@ traits:
 
   - id: timing-fragment-tiny-exact-1
     desc: Tiny timing fragments (Sl, eep, Date)
-    crit: notable
+    crit: component
     if:
       type: string
       regex: '^(Sl|eep|Date)$'

@@ -41,7 +41,7 @@ traits:
     conf: 0.7
     for: [javascript, typescript]
     if:
-      type: string
+      type: raw
       regex: "require\\(['\"]axios['\"]\\)"
 
   # === AST-based method call detection ===

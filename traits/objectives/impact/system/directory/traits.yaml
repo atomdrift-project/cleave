@@ -76,7 +76,7 @@ traits:
   conf: 0.6
   if:
     type: string
-    regex: rd.{0,30}(/s|/q)
+    regex: \brd\s+/[sq]\b|\brmdir\s+/[sq]\b
 - id: windows-system32-delete-cmd-first
   desc: Windows System32 deletion (cmd first)
   crit: suspicious

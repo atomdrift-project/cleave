@@ -30,7 +30,7 @@ traits:
     if:
       type: string
       # Match terminate in process/service termination contexts, not std::terminate
-      regex: "(?i)\\b(terminate[_-]?(process|service|task)|process[_-]?terminate)\\b"
+      regex: "(?i)\\b(terminate[_-]?(service|task))\\b"
 
   # === EDR/AV product names (atomic) ===
   - id: defender-name

@@ -107,6 +107,16 @@ traits:
   if:
     type: string
     substr: Brave
+- id: yandex-name
+  desc: Yandex browser name
+  crit: notable
+  conf: 0.4
+  attack: T1217
+  for:
+  - all
+  if:
+    type: string
+    substr: Yandex
 - id: history-file
   desc: History file reference
   crit: notable
@@ -267,6 +277,7 @@ composite_rules:
   - id: edge-name
   - id: opera-name
   - id: brave-name
+  - id: yandex-name
 - id: browser-data-files
   desc: Browser data file references
   crit: notable
@@ -458,6 +469,7 @@ composite_rules:
   - id: safari-name
   - id: opera-name
   - id: brave-name
+  - id: yandex-name
 - id: search-engine-id
   desc: Browser search engine identifier reference
   crit: notable

@@ -55,6 +55,14 @@ traits:
       type: string
       regex: /boot(/|$)
 
+  - id: home-dir
+    desc: /home directory reference
+    crit: notable
+    conf: 0.7
+    if:
+      type: string
+      exact: /home
+
   - id: usr-dir
     desc: /usr directory reference
     crit: baseline

@@ -94,6 +94,7 @@ composite_rules:
       - { id: metadata/quality/versioning::version-v2 }
       - { id: metadata/quality/versioning::version-upper }
       - { id: metadata/quality/versioning::semver-pattern }
+      - { id: metadata/quality/versioning::pe-version-resource }
 
   # Help/usage information
   - id: has-help

@@ -12,7 +12,7 @@ composite_rules:
     attack: "T1620"
     all:
       - id: objectives/execution/reflective-load/memory::ps-assembly-load
-      - id: objectives/execution/reflective-load/memory::ps-b64-decode
+      - id: micro-behaviors/data/encode/base64::from-base64-string
 
   - id: ps-reflective-load
     desc: PowerShell reflective assembly loading

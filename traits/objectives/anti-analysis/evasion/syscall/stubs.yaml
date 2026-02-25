@@ -22,7 +22,8 @@ traits:
       type: hex
       section: text
       pattern: "0F 05"
-      count_min: 3  # Multiple syscalls suggest manual implementation
+      count_min: 8
+      per_kb_min: 0.03
 
   # Legacy x86 int 0x80 (CD 80)
   - id: int-80-instruction
@@ -47,7 +48,8 @@ traits:
       type: hex
       section: text
       pattern: "0F 34"
-      count_min: 2
+      count_min: 5
+      per_kb_min: 0.03
 
   # === ARM64 Syscall (macOS/Linux) ===
 
@@ -130,6 +132,9 @@ composite_rules:
     needs: 2
     unless:
       - id: metadata/lang::sbcl-runtime
+      - type: metrics
+        field: binary.section_count
+        min: 20
     any:
       - id: syscall-x64-instruction
       - id: int-80-instruction

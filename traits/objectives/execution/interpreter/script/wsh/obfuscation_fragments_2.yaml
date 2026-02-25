@@ -27,6 +27,7 @@ traits:
   # ADODB Type
   - id: type-binary-fragment
     desc: ADODB Type assignment fragment (ype =)
+    size_max: 50000
     if:
       type: raw
       substr: 'ype ='

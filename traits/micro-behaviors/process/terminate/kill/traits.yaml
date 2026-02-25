@@ -9,9 +9,8 @@ traits:
   # === Process Termination ===
   - id: terminate-process
     desc: Process termination via TerminateProcess
-    crit: suspicious
+    crit: notable
     conf: 0.95
-    attack: "T1562.001"
     mbc: "B0033"
     if:
       type: symbol

@@ -67,18 +67,13 @@ traits:
 
   - id: queue-user-apc
     desc: Queue APC to thread
-    crit: suspicious
+    crit: notable
     conf: 0.95
     attack: "T1055.004"
     mbc: "B0018"
     if:
       type: symbol
       exact: "QueueUserAPC"
-    downgrade:
-      any:
-        - type: string
-          substr: "ApiSet Stub DLL"
-        - id: metadata/vendor/valve/valve-corp-binary
 
   - id: set-thread-context
     desc: Modify thread context/registers

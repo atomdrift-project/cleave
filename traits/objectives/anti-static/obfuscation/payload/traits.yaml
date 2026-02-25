@@ -267,3 +267,14 @@ composite_rules:
     any:
       - id: micro-behaviors/crypto/symmetric/aes::buffer-hex-key-material
       - id: exported-decryptor
+
+  - id: exec-join-chr-obfuscation
+    desc: exec() combined with join(chr()) integer array obfuscation
+    crit: hostile
+    conf: 0.99
+    attack: "T1027"
+    mbc: "B0032"
+    for: [python]
+    all:
+      - id: exec-function-call
+      - id: objectives/command-and-control/dropper/remote-eval::join-chr-comprehension

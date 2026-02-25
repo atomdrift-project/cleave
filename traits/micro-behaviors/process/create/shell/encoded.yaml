@@ -243,8 +243,9 @@ traits:
     attack: "T1027"
     if:
       type: encoded
+      encoding: [xor, base64, hex]
       regex: "/tmp/[a-zA-Z0-9]+"
-      count_min: 1
+      count_min: 2
 
 composite_rules:
   - id: xor-shell-command

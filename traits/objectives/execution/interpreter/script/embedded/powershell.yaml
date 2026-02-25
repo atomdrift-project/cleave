@@ -7,10 +7,12 @@ traits:
     crit: suspicious
     conf: 0.9
     for: [javascript, typescript]
+    size_max: 200000
     if:
       type: raw
       regex: '\$[a-zA-Z]{5}'
-      count_min: 5
+      count_min: 10
+      per_kb_min: 0.2
     not:
       - "$xdOMA"
       - "$GETkE"

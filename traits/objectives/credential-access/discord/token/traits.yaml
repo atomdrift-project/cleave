@@ -264,7 +264,7 @@ composite_rules:
       - typescript
     all:
       - id: firefox-storage-access
-      - id: appdata-ref
+      - id: objectives/persistence/env-vars/profile::appdata-string
       - id: objectives/discovery/host/system/hardware-fingerprint::os-homedir-call
     any:
       - id: extract-tokens-fn

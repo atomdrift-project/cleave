@@ -48,8 +48,8 @@ traits:
       - regex: "^[/*=-]+$"
       # Exclude C format strings and code templates (contain %s, %d, %@, etc.)
       - regex: "%[sdfu@]"
-      # Exclude repeated hex format strings (e.g. %02x%02x%02x... for MAC/hash logging)
-      - regex: "(%[0-9]*[xXo]){4}"
+      # Exclude repeated hex format strings (e.g. %02x%02x%02x, %02hhx for GUID/MAC/hash logging)
+      - regex: "(%[0-9]*[hlL]*[xXo]){4}"
       # Exclude ASCII character tables (sequential printable ASCII ranges)
       # e.g. !"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ
       # Common in text editors (vim), libc, and other legitimate binaries
@@ -64,6 +64,13 @@ traits:
       # Exclude CoreMediaIO HAL property tables (reversed FourCC selectors)
       # e.g. "vrdsbolgrrdsbolgiccsbolg#mtstpni..." - repeating 4CC+"bolg" patterns
       - regex: "[a-z]{4}bolg.*[a-z]{4}bolg"
+      # Exclude MSVC C++ mangled symbol names (use @@ as namespace separator)
+      # e.g. "Init@ElementProvider@DirectUI@@MAEJPAVElement@2@..."
+      - substr: "@@"
+      # Exclude C++/WinRT mangled names with multiple @Namespace chains
+      # e.g. "EnableVirtualCamera@VirtualCameraProxy@implementation@WinRT@Streaming@CrossDevice@winrt@"
+      # Encoding alphabets don't have 3+ @UppercaseName patterns
+      - regex: "@[A-Za-z].*@[A-Za-z].*@[A-Za-z]"
 
 composite_rules:
   # libcurl network dropper: downloads content via libcurl, writes to disk, executes via shell

@@ -18,10 +18,12 @@ traits:
     desc: URL construction from many concatenated fragments (Regex)
     crit: suspicious
     conf: 0.9
+    size_max: 100000
     for:
       - javascript
     if:
       type: raw
       regex: (\([\w\s]*\)|\w+)(\s*\+\s*(\([\w\s]*\)|\w+)){3}
-      count_min: 2
+      count_min: 10
+      per_kb_min: 0.5
 composite_rules: []

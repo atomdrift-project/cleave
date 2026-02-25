@@ -41,7 +41,7 @@ traits:
 
   - id: python-sliding-key-loop
     desc: "Python loop iterating over key length"
-    crit: notable
+    crit: component
     conf: 0.6
     for: [python]
     if:

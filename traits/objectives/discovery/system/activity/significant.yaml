@@ -2,10 +2,10 @@ composite_rules:
   - id: significant-recon
     desc: Significant system reconnaissance activity
     crit: suspicious
+    needs: 2
     any:
       - id: objectives/discovery/host/system/hardware-fingerprint::js-sysinfo-multi
       - id: micro-behaviors/fs/enumerate/directory::fs-readdir
-      - id: objectives/impact/ransom/behavior::readdir-sync
       - id: objectives/lateral-movement/supply-chain/npm/behavior::npm-victim-exfil
     unless:
       - id: metadata/library::commander

@@ -9,7 +9,7 @@ traits:
   # === Memory Protection Changes ===
   - id: virtual-protect
     desc: Modify memory page protection
-    crit: suspicious
+    crit: notable
     conf: 0.95
     attack: "T1222.001"
     mbc: "C0021"

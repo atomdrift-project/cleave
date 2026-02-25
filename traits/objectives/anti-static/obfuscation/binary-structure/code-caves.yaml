@@ -15,6 +15,8 @@ traits:
 
   # Large run of null bytes in .text section (64+ bytes)
   # Mach-O universals commonly have alignment padding
+  # PE files routinely have small null-padded gaps for section/function alignment
+  # Require multiple occurrences to indicate actual code caves
   - id: large-null-run-text
     desc: Large null run in executable (64+ bytes)
     crit: suspicious
@@ -24,12 +26,15 @@ traits:
       type: hex
       section: text
       pattern: "00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00"
+      count_min: 10
 
   # Very large null run (256+ bytes) - suspicious in PE/ELF
   # Mach-O universals commonly have alignment padding with null runs
+  # PE files can have null runs from virtual-size > raw-size alignment gaps
+  # Require multiple distinct occurrences to avoid PE alignment false positives
   - id: huge-null-run-text
     desc: Huge null run in executable (256+ bytes)
-    crit: suspicious
+    crit: component
     conf: 0.95
     for: [pe, elf]
     if:
@@ -38,6 +43,8 @@ traits:
       pattern: "00 [256-512]"  # 256-512 byte gap of nulls
 
   # Repeated INT3 instructions (0xCC) - debugger breakpoint padding
+  # MSVC uses CC padding for 16-byte function alignment; require high density
+  # to distinguish intentional code caves from normal compiler alignment
   - id: int3-padding-text
     desc: Dense INT3 breakpoint instructions
     crit: suspicious
@@ -46,6 +53,7 @@ traits:
       type: hex
       section: text
       pattern: "CC CC CC CC CC CC CC CC CC CC CC CC CC CC CC CC"
+      per_kb_min: 3.0
 
   # === Mixed Padding Patterns ===
 
@@ -77,15 +85,18 @@ traits:
   # Executable section with very low entropy (mostly zeros/padding)
   # Mach-O __TEXT segment includes __const data sections with rx permissions,
   # so require larger size to avoid matching normal const data tables
+  # Low entropy in executable sections can indicate code caves/padding, but also
+  # occurs normally in PE files with virtual-size > raw-size alignment gaps.
+  # Use as a building block in composites rather than standalone suspicious finding.
   - id: low-entropy-executable
     desc: Executable section with very low entropy
-    crit: suspicious
+    crit: notable
     conf: 0.8
     if:
       type: section
       executable: true
-      entropy_max: 2.0  # Extremely low entropy
-      length_min: 32768  # At least 32KB to filter out normal const sections
+      entropy_max: 1.0  # Nearly zero information content (true code caves only)
+      length_min: 65536  # At least 64KB to filter out normal const/padding sections
     unless:
       - id: metadata/signed/platform::apple
 
@@ -105,11 +116,17 @@ traits:
 
 composite_rules:
   # Code cave with null padding
+  # MSVC-compiled PE files routinely have null padding and low-entropy sections
+  # from virtual-size alignment and function padding, so downgrade for those
+  # Large legitimate PE/ELF binaries routinely have null padding, INT3 alignment,
+  # and low-entropy regions from section alignment and function padding. Restrict
+  # to smaller binaries where these patterns are more indicative of code caves.
   - id: code-cave-null-padding
     desc: Code cave with null byte padding
     crit: suspicious
     conf: 0.9
     attack: "T1055"
+    size_max: 150000
     needs: 2
     any:
       - id: large-null-run-text
@@ -117,6 +134,9 @@ composite_rules:
       - id: int3-padding-text
       - id: null-nop-pattern
       - id: low-entropy-executable
+    downgrade:
+      any:
+        - id: metadata/lang/compiler::vcruntime
 
   # Injection-ready code cave
   - id: injection-ready-cave

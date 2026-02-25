@@ -9,7 +9,7 @@ traits:
   # === Clipboard Access ===
   - id: open-clipboard
     desc: Open clipboard access
-    crit: suspicious
+    crit: notable
     conf: 0.75
     if:
       type: symbol
@@ -26,7 +26,7 @@ traits:
   # === Clipboard Manipulation ===
   - id: set-clipboard-data
     desc: Write data to clipboard
-    crit: suspicious
+    crit: notable
     conf: 0.80
     if:
       type: symbol
@@ -34,7 +34,7 @@ traits:
 
   - id: get-clipboard-data
     desc: Read data from clipboard
-    crit: suspicious
+    crit: notable
     conf: 0.75
     if:
       type: symbol
@@ -42,7 +42,7 @@ traits:
 
   - id: empty-clipboard
     desc: Clear clipboard contents
-    crit: suspicious
+    crit: notable
     conf: 0.75
     if:
       type: symbol

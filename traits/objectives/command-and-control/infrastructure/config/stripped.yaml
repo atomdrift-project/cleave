@@ -18,6 +18,10 @@ composite_rules:
     platforms: [linux, macos, windows]
     mbc: "C0002"
     attack: "T1043"
+    unless:
+      - type: metrics
+        field: binary.section_count
+        min: 20
     all:
       - id: metadata/hardening::stripped-binary
       - id: c2-indicators

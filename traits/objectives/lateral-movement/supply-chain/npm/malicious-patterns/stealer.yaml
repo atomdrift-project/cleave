@@ -25,7 +25,7 @@ traits:
   mbc: B0007
   attack: T1497.001
   if:
-    type: string
+    type: raw
     regex: homedir\(\)\s*===?\s*['"]/?app['"]
 - id: app-path-string
   desc: /app path string (cloud sandbox)

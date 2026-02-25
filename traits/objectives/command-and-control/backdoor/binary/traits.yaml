@@ -287,6 +287,11 @@ composite_rules:
       - id: micro-behaviors/crypto/symmetric/aes::aes-sbox-bytes
       - id: micro-behaviors/crypto/asymmetric/rsa::rsa-operations
       - id: micro-behaviors/crypto/asymmetric/rsa::ed25519-constant-bytes
+    downgrade:
+      any:
+        - type: metrics
+          field: binary.section_count
+          min: 20
 
   # === Unexpected capability combination ===
   - id: unexpected-capabilities

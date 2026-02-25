@@ -69,6 +69,10 @@ composite_rules:
       - id: micro-behaviors/dylib/lookup::get-proc-address
       - id: micro-behaviors/crypto
       - id: micro-behaviors/process/create/shell
+    unless:
+      - type: metrics
+        field: binary.section_count
+        min: 20
 
   - id: embedded-payload-binary
     desc: Binary with suspected embedded payload
@@ -94,3 +98,6 @@ composite_rules:
         - id: objectives/execution/reflection/invoke::namespace-import
         - id: objectives/execution/reflection/invoke::method-info
         - id: objectives/execution/reflection/invoke::property-info
+        - type: metrics
+          field: binary.section_count
+          min: 20

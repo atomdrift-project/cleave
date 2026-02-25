@@ -36,15 +36,6 @@ traits:
       type: raw
       regex: '(?i)\.EntryPoint\.Invoke\('
 
-  # [System.Convert]::FromBase64String(...)
-  - id: ps-b64-decode
-    desc: PowerShell Base64 decode
-    crit: notable
-    conf: 0.9
-    if:
-      type: raw
-      regex: '(?i)\[System\.Convert\]::FromBase64String'
-
 composite_rules:
   # Reflective .NET loading chain (B64 decode -> Load -> Invoke)
   - id: reflective-dotnet-loader
@@ -54,7 +45,7 @@ composite_rules:
     attack: "T1620"
     all:
       - id: ps-assembly-load
-      - id: ps-b64-decode
+      - id: micro-behaviors/data/encode/base64::from-base64-string
     any:
       - id: ps-assembly-invoke
       - id: micro-behaviors/process/create/shell/lang::invoke-prefix

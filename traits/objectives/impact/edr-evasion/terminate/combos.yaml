@@ -2,6 +2,9 @@
 # Composite rules for terminating security processes
 
 composite_rules:
+  # TerminateProcess + GetCurrentProcess is extremely common in Windows binaries
+  # (MSVC CRT links both for abort/exit paths). Restrict to small binaries where
+  # this combination is more likely to indicate targeted process termination.
   - id: terminate-process-evasion
     desc: EDR/antivirus termination capability
     crit: suspicious
@@ -9,12 +12,13 @@ composite_rules:
     attack: "T1562.001"
     mbc: "B0033"
     for: ["pe", "dll"]
+    size_max: 100000
     all:
       - id: micro-behaviors/process/terminate/kill::terminate-process
-      - id: objectives/execution/module/load::get-current-process
+      - id: micro-behaviors/process/create/spawn::open-process
     downgrade:
       any:
-        - id: metadata/quality/versioned
+        - id: metadata/quality::versioned
 
   - id: process-termination-chain
     desc: Debugger evasion with process termination
@@ -29,4 +33,4 @@ composite_rules:
       - id: micro-behaviors/dylib/load::load-library-a
     downgrade:
       any:
-        - id: metadata/quality/versioned
+        - id: metadata/quality::versioned

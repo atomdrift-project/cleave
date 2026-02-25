@@ -93,6 +93,7 @@ traits:
   desc: Mnemonic word count validation (words/phrase)
   conf: 0.85
   crit: suspicious
+  for: [python, javascript, typescript, ruby, php, perl, go, java, csharp]
   if:
     type: string
     regex: \bwords?\b.{0,40}\b(split|len|count)\b

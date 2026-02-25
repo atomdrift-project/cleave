@@ -28,3 +28,23 @@ composite_rules:
     all:
       - id: npm-victim-id-recon
       - id: npm-exfil-method
+
+  - id: npm-install-recon-dns-exfil-combo
+    desc: NPM script sysinfo recon and DNS exfil (combo)
+    crit: hostile
+    conf: 0.95
+    attack: T1048.003
+    all:
+      - id: micro-behaviors/process/user/query::hostname-pwd-whoami
+      - id: objectives/exfiltration/side-channel/dns::dns-exfil-curl
+
+  - id: npm-install-recon-dns-exfil-parts
+    desc: NPM script sysinfo recon and DNS exfil (parts)
+    crit: hostile
+    conf: 0.95
+    attack: T1048.003
+    all:
+      - id: micro-behaviors/process/user/query::whoami-cmd
+      - id: micro-behaviors/data/text/keywords::pwd
+      - id: objectives/discovery/host/system::hostname-cmd
+      - id: objectives/exfiltration/side-channel/dns::dns-exfil-curl

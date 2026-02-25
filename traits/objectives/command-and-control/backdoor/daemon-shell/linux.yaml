@@ -41,6 +41,10 @@ composite_rules:
       - id: objectives/persistence/daemon/init::daemon-fork
       - id: objectives/persistence/daemon/init::daemon-setsid
       - id: micro-behaviors/process/create/shell
+    any:
+      - id: objectives/anti-static/obfuscation/payload/encrypted::tiny-cstring
+      - id: objectives/anti-static/obfuscation/payload/section::high-entropy-data-section
+      - id: objectives/anti-static/obfuscation/payload/section::encrypted-payload-section
 
   # Extreme case: high-volume command execution
   - id: linux-command-orchestration-backdoor

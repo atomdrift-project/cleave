@@ -18,5 +18,5 @@ traits:
       entropy_min: 7.8
     unless:
       - id: objectives/execution/reflection/invoke::namespace-import
-      - id: metadata/format/pe/dotnet::dotnet-assembly
+      - id: metadata/format/pe::dotnet-assembly
       - id: file/archive/self-extracting # SFX stubs may have compressed code

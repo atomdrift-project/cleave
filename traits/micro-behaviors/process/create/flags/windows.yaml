@@ -25,7 +25,7 @@ traits:
   - id: detached-process
     desc: DETACHED_PROCESS flag
     if:
-      type: symbol
+      type: raw
       exact: "DETACHED_PROCESS"
 
   - id: startupinfo

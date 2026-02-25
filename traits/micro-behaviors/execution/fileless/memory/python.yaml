@@ -6,8 +6,8 @@ traits:
     for: [python]
     attack: "T1055"
     if:
-      type: string
-      regex: '(?s)ctypes\.cast\s*\([^)]{0,100}ctypes\.CFUNCTYPE'
+      type: raw
+      regex: '(?s)ctypes\.cast\s*\(.{0,100}?ctypes\.CFUNCTYPE'
 
   - id: python-virtualprotect-rwx
     desc: Allocate RWX memory via VirtualProtect
@@ -15,5 +15,5 @@ traits:
     for: [python]
     attack: "T1055"
     if:
-      type: string
-      regex: '(?s)VirtualProtect\s*\([^)]{0,100}\s*(0x40|64)\s*,.{0,100}\)'
+      type: raw
+      regex: '(?s)VirtualProtect\s*\(.{0,200}?(0x40|64)\s*,'

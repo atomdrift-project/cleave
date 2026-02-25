@@ -27,6 +27,9 @@ traits:
       section: text
       pattern: "00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00"
       count_min: 10
+    unless:
+      - type: raw
+        substr: "mscoree"  # .NET assemblies have normal null padding in IL sections
 
   # Very large null run (256+ bytes) - suspicious in PE/ELF
   # Mach-O universals commonly have alignment padding with null runs
@@ -99,6 +102,8 @@ traits:
       length_min: 65536  # At least 64KB to filter out normal const/padding sections
     unless:
       - id: metadata/signed/platform::apple
+      - type: raw
+        substr: "mscoree"  # .NET assemblies have normal low-entropy IL regions
 
   # === Section Slack Space ===
 
@@ -137,6 +142,7 @@ composite_rules:
     downgrade:
       any:
         - id: metadata/lang/compiler::vcruntime
+        - id: metadata/format/pe::dotnet-assembly  # .NET IL has normal null padding/alignment
 
   # Injection-ready code cave
   - id: injection-ready-cave

@@ -1,0 +1,28 @@
+composite_rules:
+  - id: base64-decode-any
+    desc: "Helper for any base64 decode"
+    conf: 0.8
+    crit: component
+    any:
+      - id: micro-behaviors/data/encode/base64::b64decode-call
+      - id: micro-behaviors/data/encode/base64::b64decode-string
+
+  - id: detached-execution-any
+    desc: "Helper for any detached execution"
+    conf: 0.8
+    crit: component
+    any:
+      - id: objectives/anti-analysis/process-hide/creation-flags::creationflags
+      - id: micro-behaviors/process/create/setsid::preexec-fn
+
+  - id: python-base64-detached-dropper
+    desc: "Decodes a base64 payload, writes to temp directory, and executes via detached subprocess"
+    conf: 0.95
+    crit: hostile
+    mbc: "B0032"
+    attack: "T1105"
+    all:
+      - id: base64-decode-any
+      - id: micro-behaviors/fs/temp/directory::temp-directory
+      - id: detached-execution-any
+      - id: micro-behaviors/fs/read/file::file-open-content

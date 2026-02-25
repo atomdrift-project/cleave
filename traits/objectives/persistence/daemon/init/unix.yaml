@@ -259,3 +259,5 @@ composite_rules:
         - id: micro-behaviors/dylib/library::system-lib-marker
         - id: metadata/apple::system-component
         - id: metadata/signed/platform::apple
+        - id: metadata/hardening::pledge
+        - id: metadata/hardening::unveil

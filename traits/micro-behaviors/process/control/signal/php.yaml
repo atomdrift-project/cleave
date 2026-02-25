@@ -48,10 +48,11 @@ traits:
 
   - id: setproctitle
     desc: Set process title (PECL)
-    crit: suspicious
+    crit: notable
     conf: 0.9
     mbc: "F0004"
     attack: "T1036.004"
+    for: [php]
     if:
       type: symbol
       exact: "setproctitle"

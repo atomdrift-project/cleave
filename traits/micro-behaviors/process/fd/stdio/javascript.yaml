@@ -1,0 +1,11 @@
+traits:
+  - id: js-stdout-write-empty
+    desc: Empty buffer stdout write
+    crit: suspicious
+    conf: 0.8
+    for:
+      - javascript
+      - typescript
+    if:
+      type: raw
+      regex: 'process\.stdout\._write\(\s*\[\s*\]\s*,'

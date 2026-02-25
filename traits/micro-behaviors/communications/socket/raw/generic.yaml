@@ -18,6 +18,14 @@ traits:
       regex: "raw.?socket"
       case_insensitive: true
 
+  - id: raw-socket-error
+    desc: Raw socket creation error
+    crit: suspicious
+    conf: 0.8
+    if:
+      type: string
+      regex: "(?i)(could not|failed to).{1,15}raw.?socket"
+
   # Removed proc-net-raw duplicate - use micro-behaviors/fs/proc/info::proc-net-raw
 
 composite_rules:
@@ -27,4 +35,5 @@ composite_rules:
     conf: 0.8
     any:
       - id: raw-socket-ref
+      - id: raw-socket-error
       - id: micro-behaviors/fs/proc/info::proc-net-raw

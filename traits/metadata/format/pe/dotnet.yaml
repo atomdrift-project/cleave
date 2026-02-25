@@ -8,7 +8,7 @@ traits:
   - id: mscoree-name
     desc: "mscoree name reference"
     if:
-      type: string
+      type: raw
       substr: "mscoree"
 
   - id: dotnet-runtime

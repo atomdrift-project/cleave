@@ -1,0 +1,21 @@
+defaults:
+  for: [ruby]
+
+traits:
+  - id: ruby-socket-connect
+    desc: Ruby socket connect call
+    crit: notable
+    conf: 0.8
+    if:
+      type: symbol
+      source: ast
+      exact: connect
+
+  - id: ruby-sockaddr-in
+    desc: Ruby Socket.sockaddr_in
+    crit: notable
+    conf: 0.8
+    if:
+      type: symbol
+      source: ast
+      exact: sockaddr_in

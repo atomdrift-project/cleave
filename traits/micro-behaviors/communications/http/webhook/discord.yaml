@@ -21,3 +21,12 @@ traits:
     if:
       type: raw
       regex: '\.name\s*(!==|===)\s*[''"]true[''"]'
+
+  - id: discord-webhook-client-hardcoded
+    desc: WebhookClient instantiation with hardcoded ID/Token
+    crit: suspicious
+    conf: 0.9
+    for: [javascript, typescript]
+    if:
+      type: raw
+      regex: 'new [\w.]*WebhookClient\([''"]\d{18,20}[''"],\s*[''"][\w-]{60,80}[''"]\)'

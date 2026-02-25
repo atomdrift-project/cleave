@@ -482,9 +482,7 @@ composite_rules:
   platforms:
   - all
   any:
-  - id: micro-behaviors/communications/socket/connect::connect-symbol
-  - id: micro-behaviors/communications/socket/connect::_connect-symbol
-  - id: micro-behaviors/communications/socket/connect::socket-connect-call
+  - id: micro-behaviors/communications/socket/connect
 - id: service-port
   desc: Common service port numbers
   crit: notable

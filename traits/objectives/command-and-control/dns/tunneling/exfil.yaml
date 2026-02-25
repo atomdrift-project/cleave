@@ -8,3 +8,29 @@ composite_rules:
     any:
       - id: objectives/discovery/host/system/hardware-fingerprint::js-sysinfo-multi
       - id: objectives/discovery/host/system/hardware-fingerprint::js-victim-id
+
+  - id: js-dns-tunneling-chunked-exfil
+    desc: DNS exfiltration using regex chunking and template subdomains
+    crit: hostile
+    conf: 0.95
+    attack: "T1071.004"
+    all:
+      - id: micro-behaviors/communications/dns/exfil_prep::dns-regex-chunking
+      - id: micro-behaviors/communications/dns/exfil_prep::template-subdomain-chunk
+      - id: micro-behaviors/data/encode/hex::buffer-to-hex
+    any:
+      - id: micro-behaviors/communications/dns/lookup::dns-resolve4
+      - id: micro-behaviors/communications/dns/lookup::node-dns-lookup
+
+  - id: js-interactsh-recon-exfil
+    desc: System reconnaissance exfiltrated via Interactsh DNS
+    crit: hostile
+    conf: 0.95
+    attack: "T1567.002"
+    all:
+      - id: objectives/exfiltration/channel/callback::interact-sh-me-fun
+      - id: objectives/discovery/host/system/hardware-fingerprint::os-hostname-call
+    any:
+      - id: micro-behaviors/communications/dns/lookup::dns-resolve4
+      - id: micro-behaviors/communications/dns/lookup::node-dns-lookup
+      - id: micro-behaviors/communications/dns/exfil_prep::template-subdomain-chunk

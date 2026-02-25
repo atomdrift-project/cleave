@@ -1,0 +1,11 @@
+# Complete alphanumeric character set
+
+traits:
+  - id: full-alphanumeric-mixed
+    desc: Complete mixed-case alphanumeric character set
+    crit: notable
+    conf: 0.8
+    for: [all]
+    if:
+      type: string
+      exact: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"

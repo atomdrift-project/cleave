@@ -1,0 +1,11 @@
+defaults:
+  for: [python]
+  crit: notable
+
+traits:
+  - id: codecs-decode-call
+    desc: "Calls codecs.decode for data transformation"
+    conf: 0.8
+    if:
+      type: symbol
+      regex: 'codecs\.decode'

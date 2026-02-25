@@ -6,5 +6,5 @@ traits:
     for: [python]
     mbc: "C0027"
     if:
-      type: string
+      type: raw
       regex: '(?s)for \w+ in range\s*\(\s*256\s*\):.{0,500}%\s*256'

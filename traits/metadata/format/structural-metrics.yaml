@@ -124,6 +124,15 @@ traits:
       field: binary.import_count
       min: 100
 
+  - id: many-functions
+    desc: "Binary has many functions (>30)"
+    crit: baseline
+    conf: 0.8
+    if:
+      type: metrics
+      field: binary.function_count
+      min: 30
+
   - id: elf-no-sections
     desc: "ELF with no section headers"
     crit: baseline

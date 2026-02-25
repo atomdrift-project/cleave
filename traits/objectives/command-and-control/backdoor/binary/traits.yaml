@@ -277,6 +277,9 @@ composite_rules:
       - id: micro-behaviors/dylib/library::debugger-tool-marker
       - id: metadata/format::many-imports
       - id: metadata/signed/platform::apple
+      # OpenBSD hardened binaries are legitimate system tools
+      - id: metadata/hardening::pledge
+      - id: metadata/hardening::unveil
 
   - id: unexpected-crypto
     desc: Cryptographic operations in non-crypto library

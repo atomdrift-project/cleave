@@ -9,14 +9,14 @@ traits:
     conf: 0.95
     if:
       type: string
-      regex: '[A-Za-z0-9_-]{24}\\.[A-Za-z0-9_-]{6}\\.[A-Za-z0-9_-]{27}'
+      regex: '[A-Za-z0-9_-]{24}\.[A-Za-z0-9_-]{6}\.[A-Za-z0-9_-]{27}'
   - id: regex-mfa
     desc: Discord MFA token regex pattern
     crit: suspicious
     conf: 0.95
     if:
       type: string
-      regex: mfa\\.[A-Za-z0-9_-]{84}
+      regex: mfa\.[A-Za-z0-9_-]{84}
   - id: literal-pattern
     desc: Discord token in code
     crit: suspicious
@@ -270,3 +270,15 @@ composite_rules:
       - id: extract-tokens-fn
       - id: get-tokens-fn
       - id: discord-domain-filter
+  - id: script-kiddie-webhook-grabber
+    desc: Discord token grabber using hardcoded WebhookClient
+    crit: hostile
+    conf: 0.98
+    attack: T1555.003
+    mbc: B0030
+    for:
+      - javascript
+      - typescript
+    all:
+      - id: micro-behaviors/communications/http/webhook::discord-webhook-client-hardcoded
+      - id: discord-path

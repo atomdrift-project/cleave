@@ -10,6 +10,8 @@ traits:
     type: string_count
     max: 20
     min_length: 4
+  unless:
+  - id: metadata/format::many-functions
 - id: extremely-low-strings
   desc: Extremely few extracted strings
   crit: suspicious
@@ -23,6 +25,7 @@ traits:
     min_length: 4
   unless:
   - id: metadata/hardening::stripped-binary
+  - id: metadata/format::many-functions
 composite_rules:
 - id: minimal-imports-suspicious-apis
   desc: Minimal imports with suspicious API combination

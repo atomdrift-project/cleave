@@ -607,6 +607,7 @@ impl MachOAnalyzer {
                 source: "goblin".to_string(),
                 value: format!("0x{:x}", macho.header.magic),
                 location: None,
+                ..Default::default()
             }],
         });
 
@@ -620,6 +621,7 @@ impl MachOAnalyzer {
                 source: "goblin".to_string(),
                 value: format!("cputype=0x{:x}", macho.header.cputype),
                 location: None,
+                ..Default::default()
             }],
         });
 
@@ -640,6 +642,7 @@ impl MachOAnalyzer {
                     source: "goblin".to_string(),
                     value: "LC_CODE_SIGNATURE".to_string(),
                     location: Some("load_commands".to_string()),
+                    ..Default::default()
                 }],
             });
         }
@@ -783,6 +786,7 @@ impl MachOAnalyzer {
                                 source: "entropy_analyzer".to_string(),
                                 value: format!("{:.2}", entropy),
                                 location: Some(section_name),
+                                ..Default::default()
                             }],
                         });
                     }
@@ -840,6 +844,7 @@ impl MachOAnalyzer {
                 source: "codesign_parser".to_string(),
                 value: format!("{}::{}", sig_category, signer),
                 location: None,
+                ..Default::default()
             }],
 
             match_count: 0,
@@ -862,6 +867,7 @@ impl MachOAnalyzer {
                     source: "codesign_parser".to_string(),
                     value: identifier.clone(),
                     location: None,
+                    ..Default::default()
                 }],
 
                 match_count: 0,
@@ -892,6 +898,7 @@ impl MachOAnalyzer {
                     source: "codesign_parser".to_string(),
                     value: format!("{}={}", entitlement_key, value_str),
                     location: None,
+                    ..Default::default()
                 }],
 
                 match_count: 0,
@@ -932,6 +939,7 @@ impl MachOAnalyzer {
                     source: "codesign_parser".to_string(),
                     value: "0x00010000".to_string(),
                     location: None,
+                    ..Default::default()
                 }],
 
                 match_count: 0,

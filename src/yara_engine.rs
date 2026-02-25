@@ -9,7 +9,9 @@
 //! Rules are compiled once at startup for performance.
 
 use crate::capabilities::CapabilityMapper;
-use crate::types::{Evidence, MatchedString, YaraMatch, MAX_EVIDENCE_PER_TRAIT};
+use crate::types::{
+    deduplicate_evidence, Evidence, MatchedString, YaraMatch, MAX_EVIDENCE_PER_TRAIT,
+};
 use anyhow::{Context, Result};
 use rayon::prelude::*;
 use std::collections::HashMap;
@@ -388,6 +390,7 @@ impl YaraEngine {
                                 source: "yara-x".to_string(),
                                 value,
                                 location: Some(format!("offset:0x{:x}", start)),
+                                ..Default::default()
                             }
                         })
                     })
@@ -414,6 +417,12 @@ impl YaraEngine {
                 yara_matches.push(m);
             }
         }
+
+        // Deduplicate evidence in inline results
+        let inline_results: HashMap<String, Vec<Evidence>> = inline_results
+            .into_iter()
+            .map(|(k, v)| (k, deduplicate_evidence(v)))
+            .collect();
 
         Ok((yara_matches, inline_results))
     }
@@ -976,6 +985,7 @@ impl YaraEngine {
                 source: "yara-x".to_string(),
                 value: evidence_value,
                 location: Some(format!("offset:0x{:x}", matched_str.offset)),
+                ..Default::default()
             });
         }
 
@@ -986,6 +996,7 @@ impl YaraEngine {
                 source: "yara-x".to_string(),
                 value: yara_match.rule.clone(),
                 location: Some(yara_match.namespace.clone()),
+                ..Default::default()
             });
         }
 
@@ -1572,7 +1583,8 @@ rule AlsoKeep {
 "#;
 
         let mut disabled = std::collections::HashSet::new();
-        disabled.insert("3p.test.file::DisableMe".to_string());
+        // derive_trait_id("3p.test.file", "DisableMe", None) -> "third_party/test/file/disableme"
+        disabled.insert("third_party/test/file/disableme".to_string());
 
         let (filtered, count) =
             YaraEngine::filter_disabled_rules(source, "3p.test.file", &disabled);
@@ -1599,7 +1611,8 @@ rule KeepMe {
 "#;
 
         let mut disabled = std::collections::HashSet::new();
-        disabled.insert("3p.other.file::SomeRule".to_string());
+        // Different namespace - won't match rules in test.file
+        disabled.insert("third_party/other/file/somerule".to_string());
 
         let (filtered, count) =
             YaraEngine::filter_disabled_rules(source, "3p.test.file", &disabled);
@@ -1627,7 +1640,7 @@ rule DisableMe : hostile malware {
 "#;
 
         let mut disabled = std::collections::HashSet::new();
-        disabled.insert("3p.test.file::DisableMe".to_string());
+        disabled.insert("third_party/test/file/disableme".to_string());
 
         let (filtered, count) =
             YaraEngine::filter_disabled_rules(source, "3p.test.file", &disabled);
@@ -1667,7 +1680,7 @@ private global rule PrivateGlobalKeep {
 "#;
 
         let mut disabled = std::collections::HashSet::new();
-        disabled.insert("3p.test.file::GlobalDisable".to_string());
+        disabled.insert("third_party/test/file/globaldisable".to_string());
 
         let (filtered, count) =
             YaraEngine::filter_disabled_rules(source, "3p.test.file", &disabled);
@@ -1700,7 +1713,7 @@ rule Second {
 "#;
 
         let mut disabled = std::collections::HashSet::new();
-        disabled.insert("3p.test.file::FirstDisabled".to_string());
+        disabled.insert("third_party/test/file/firstdisabled".to_string());
 
         let (filtered, count) =
             YaraEngine::filter_disabled_rules(source, "3p.test.file", &disabled);
@@ -1733,7 +1746,7 @@ rule LastDisabled {
 "#;
 
         let mut disabled = std::collections::HashSet::new();
-        disabled.insert("3p.test.file::LastDisabled".to_string());
+        disabled.insert("third_party/test/file/lastdisabled".to_string());
 
         let (filtered, count) =
             YaraEngine::filter_disabled_rules(source, "3p.test.file", &disabled);
@@ -1787,8 +1800,8 @@ rule Keep3 {
 "#;
 
         let mut disabled = std::collections::HashSet::new();
-        disabled.insert("3p.test.file::Disable1".to_string());
-        disabled.insert("3p.test.file::Disable2".to_string());
+        disabled.insert("third_party/test/file/disable1".to_string());
+        disabled.insert("third_party/test/file/disable2".to_string());
 
         let (filtered, count) =
             YaraEngine::filter_disabled_rules(source, "3p.test.file", &disabled);
@@ -1826,7 +1839,7 @@ rule DisableMe {
 "#;
 
         let mut disabled = std::collections::HashSet::new();
-        disabled.insert("3p.test.file::DisableMe".to_string());
+        disabled.insert("third_party/test/file/disableme".to_string());
 
         let (filtered, count) =
             YaraEngine::filter_disabled_rules(source, "3p.test.file", &disabled);
@@ -1867,7 +1880,7 @@ rule DisableMe {
 "#;
 
         let mut disabled = std::collections::HashSet::new();
-        disabled.insert("3p.test.file::DisableMe".to_string());
+        disabled.insert("third_party/test/file/disableme".to_string());
 
         let (filtered, count) =
             YaraEngine::filter_disabled_rules(source, "3p.test.file", &disabled);
@@ -1901,8 +1914,8 @@ rule Disable2 {
 "#;
 
         let mut disabled = std::collections::HashSet::new();
-        disabled.insert("3p.test.file::Disable1".to_string());
-        disabled.insert("3p.test.file::Disable2".to_string());
+        disabled.insert("third_party/test/file/disable1".to_string());
+        disabled.insert("third_party/test/file/disable2".to_string());
 
         let (filtered, count) =
             YaraEngine::filter_disabled_rules(source, "3p.test.file", &disabled);
@@ -1938,7 +1951,7 @@ rule DisableMe {
 "#;
 
         let mut disabled = std::collections::HashSet::new();
-        disabled.insert("3p.test.file::DisableMe".to_string());
+        disabled.insert("third_party/test/file/disableme".to_string());
 
         let (filtered, count) =
             YaraEngine::filter_disabled_rules(source, "3p.test.file", &disabled);

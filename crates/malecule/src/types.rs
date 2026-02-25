@@ -4,7 +4,9 @@ use crate::elements::Element;
 use serde::{Deserialize, Serialize};
 
 /// Severity level for coloring atoms.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Serialize, Deserialize,
+)]
 #[serde(rename_all = "lowercase")]
 pub enum Severity {
     /// Neutral - gray
@@ -151,9 +153,9 @@ impl Malecule {
     /// Checks if a bond exists between two atoms.
     #[must_use]
     pub fn has_bond(&self, a: usize, b: usize) -> bool {
-        self.bonds
-            .iter()
-            .any(|bond| (bond.atom1 == a && bond.atom2 == b) || (bond.atom1 == b && bond.atom2 == a))
+        self.bonds.iter().any(|bond| {
+            (bond.atom1 == a && bond.atom2 == b) || (bond.atom1 == b && bond.atom2 == a)
+        })
     }
 }
 

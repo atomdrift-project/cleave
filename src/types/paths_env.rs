@@ -440,6 +440,7 @@ mod tests {
             source: "strings".to_string(),
             value: "/etc/passwd".to_string(),
             location: Some("0x1000".to_string()),
+            ..Default::default()
         };
 
         let path_info = PathInfo {
@@ -521,6 +522,7 @@ mod tests {
                 source: "tree-sitter".to_string(),
                 value: "os.getenv('AWS_SECRET_ACCESS_KEY')".to_string(),
                 location: Some("line:42".to_string()),
+                ..Default::default()
             }],
             referenced_by_traits: vec!["credential/aws".to_string()],
         };

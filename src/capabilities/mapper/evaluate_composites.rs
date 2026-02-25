@@ -164,6 +164,7 @@ impl super::CapabilityMapper {
                     value: "Detected line(s) exceeding 1MB (potential anti-analysis technique)"
                         .to_string(),
                     location: None,
+                    ..Default::default()
                 }],
                 match_count: 0,
                 source_file: None,

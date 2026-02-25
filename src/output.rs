@@ -530,11 +530,7 @@ pub(crate) fn format_terminal(report: &AnalysisReport) -> String {
         };
 
         // File header with summary
-        output.push_str(&format!(
-            "├─ {}{}\n",
-            file.path.bright_white(),
-            summary
-        ));
+        output.push_str(&format!("├─ {}{}\n", file.path.bright_white(), summary));
         output.push_str("│\n");
 
         // Sort namespaces by criticality then name, but always put "meta" last
@@ -878,12 +874,14 @@ mod tests {
                     source: "test".to_string(),
                     value: "cmd.exe".to_string(),
                     location: None,
+                    ..Default::default()
                 },
                 Evidence {
                     method: "yara".to_string(),
                     source: "test".to_string(),
                     value: "powershell".to_string(),
                     location: None,
+                    ..Default::default()
                 },
             ],
             match_count: 2,

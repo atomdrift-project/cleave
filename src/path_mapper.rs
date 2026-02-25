@@ -37,6 +37,7 @@ fn analyze_path(path_str: &str, source: &str) -> PathInfo {
             source: source.to_string(),
             value: path_str.to_string(),
             location: None,
+            ..Default::default()
         }],
         referenced_by_traits: Vec::new(),
     }

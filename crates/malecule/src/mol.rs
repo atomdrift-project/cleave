@@ -128,7 +128,7 @@ pub fn generate_metadata_json(malecule: &Malecule) -> Result<String, serde_json:
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::elements::{BORON, CARBON, OXYGEN};
+    use crate::elements::{CARBON, HYDROGEN_MICRO, OXYGEN};
     use crate::types::Severity;
 
     #[test]
@@ -174,7 +174,11 @@ mod tests {
         let mut m = Malecule::new("test");
         m.add_atom(CARBON, "".to_string(), Severity::Neutral);
         m.add_atom(OXYGEN, "objectives".to_string(), Severity::Neutral);
-        m.add_atom(BORON, "micro-behaviors".to_string(), Severity::Neutral);
+        m.add_atom(
+            HYDROGEN_MICRO,
+            "micro-behaviors".to_string(),
+            Severity::Neutral,
+        );
         m.add_bond(0, 1, 1);
         m.add_bond(0, 2, 1);
 

@@ -1009,6 +1009,7 @@ impl<'a> RuleDebugger<'a> {
                     source: "test_rules".to_string(),
                     value: s.to_string(),
                     location: None,
+                    ..Default::default()
                 })
                 .collect();
 

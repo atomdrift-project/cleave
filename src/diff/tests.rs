@@ -149,6 +149,7 @@ fn make_test_cap(id: &str) -> Finding {
             source: "test".to_string(),
             value: id.to_string(),
             location: None,
+            ..Default::default()
         }],
         match_count: 1,
         source_file: None,

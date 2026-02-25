@@ -92,6 +92,7 @@ impl super::JavaClassAnalyzer {
                                 source: "constant_pool".to_string(),
                                 value: class_ref.clone(),
                                 location: None,
+                                ..Default::default()
                             }],
 
                             match_count: 0,
@@ -362,6 +363,7 @@ impl super::JavaClassAnalyzer {
                     source: "constant_pool".to_string(),
                     value: evidence_value.to_string(),
                     location: None,
+                    ..Default::default()
                 }],
 
                 match_count: 0,

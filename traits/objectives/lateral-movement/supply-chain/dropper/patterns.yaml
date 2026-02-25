@@ -814,3 +814,15 @@ composite_rules:
       - id: micro-behaviors/process/terminate/
       - id: objectives/execution/interpreter/eval/invoke/
       - id: objectives/execution/reflection/invoke::assembly-load
+
+  # Download and persist to startup folder
+  - id: download-to-startup
+    desc: Downloads file to Windows Startup folder
+    crit: hostile
+    conf: 0.95
+    attack: T1547.001
+    mbc: F0004
+    for: [javascript, typescript]
+    all:
+      - id: download-file
+      - id: objectives/persistence/startup/registry::start-menu-startup

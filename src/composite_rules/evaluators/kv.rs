@@ -508,10 +508,7 @@ fn parse_lnk(content: &[u8]) -> Option<Value> {
         "show_command".to_string(),
         Value::Number(lnk_data.show_command.into()),
     );
-    map.insert(
-        "hotkey".to_string(),
-        Value::Number(lnk_data.hotkey.into()),
-    );
+    map.insert("hotkey".to_string(), Value::Number(lnk_data.hotkey.into()));
 
     // Boolean flags
     map.insert(
@@ -559,7 +556,12 @@ fn parse_lnk(content: &[u8]) -> Option<Value> {
     );
     ws_map.insert(
         "max_consecutive".to_string(),
-        Value::Number(lnk_data.whitespace_analysis.max_consecutive_whitespace.into()),
+        Value::Number(
+            lnk_data
+                .whitespace_analysis
+                .max_consecutive_whitespace
+                .into(),
+        ),
     );
     ws_map.insert(
         "excessive".to_string(),
@@ -663,6 +665,7 @@ pub(crate) fn evaluate_kv(condition: &Condition, ctx: &EvaluationContext<'_>) ->
                 source: file_path.display().to_string(),
                 value: format!("field '{}' does not exist", path),
                 location: Some(path.clone()),
+                ..Default::default()
             });
         }
     }
@@ -691,6 +694,7 @@ pub(crate) fn evaluate_kv(condition: &Condition, ctx: &EvaluationContext<'_>) ->
                 source: file_path.display().to_string(),
                 value: matched_value,
                 location: Some(path.clone()),
+                ..Default::default()
             });
         }
     }

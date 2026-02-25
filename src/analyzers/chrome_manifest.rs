@@ -135,6 +135,7 @@ impl ChromeManifestAnalyzer {
                 source: "serde_json".to_string(),
                 value: "manifest.json".to_string(),
                 location: None,
+                ..Default::default()
             }],
         });
 
@@ -185,6 +186,7 @@ impl ChromeManifestAnalyzer {
                         source: "manifest.json".to_string(),
                         value: "manifest_version: 2".to_string(),
                         location: Some("manifest_version".to_string()),
+                        ..Default::default()
                     }]),
                 );
             }
@@ -201,6 +203,7 @@ impl ChromeManifestAnalyzer {
                         source: "manifest.json".to_string(),
                         value: "manifest_version: 3".to_string(),
                         location: Some("manifest_version".to_string()),
+                        ..Default::default()
                     }]),
                 );
             }
@@ -401,6 +404,7 @@ impl ChromeManifestAnalyzer {
                         source: "manifest.json".to_string(),
                         value: perm.clone(),
                         location: Some("permissions".to_string()),
+                        ..Default::default()
                     }]),
             );
         }
@@ -427,6 +431,7 @@ impl ChromeManifestAnalyzer {
                         .collect::<Vec<_>>()
                         .join(", "),
                     location: Some("permissions".to_string()),
+                    ..Default::default()
                 }]),
             );
         }
@@ -485,6 +490,7 @@ impl ChromeManifestAnalyzer {
                     source: "manifest.json".to_string(),
                     value: "<all_urls>".to_string(),
                     location: Some("host_permissions".to_string()),
+                    ..Default::default()
                 }]),
             );
         }
@@ -516,6 +522,7 @@ impl ChromeManifestAnalyzer {
                     source: "manifest.json".to_string(),
                     value: format!("{} shopping sites", shopping_sites),
                     location: Some("host_permissions".to_string()),
+                    ..Default::default()
                 }]),
             );
         }
@@ -544,6 +551,7 @@ impl ChromeManifestAnalyzer {
                         .collect::<Vec<_>>()
                         .join(", "),
                     location: Some("host_permissions".to_string()),
+                    ..Default::default()
                 }]),
             );
         }
@@ -565,6 +573,7 @@ impl ChromeManifestAnalyzer {
                         source: "manifest.json".to_string(),
                         value: "all_frames: true".to_string(),
                         location: Some(format!("content_scripts[{}]", idx)),
+                        ..Default::default()
                     }]),
                 );
             }
@@ -583,6 +592,7 @@ impl ChromeManifestAnalyzer {
                         source: "manifest.json".to_string(),
                         value: "run_at: document_start".to_string(),
                         location: Some(format!("content_scripts[{}]", idx)),
+                        ..Default::default()
                     }]),
                 );
             }
@@ -604,6 +614,7 @@ impl ChromeManifestAnalyzer {
                     source: "manifest.json".to_string(),
                     value: "externally_connectable present".to_string(),
                     location: Some("externally_connectable".to_string()),
+                    ..Default::default()
                 }]),
             );
         }
@@ -625,6 +636,7 @@ impl ChromeManifestAnalyzer {
                     source: "manifest.json".to_string(),
                     value: format!("{} resources", manifest.web_accessible_resources.len()),
                     location: Some("web_accessible_resources".to_string()),
+                    ..Default::default()
                 }]),
             );
         }
@@ -644,6 +656,7 @@ impl ChromeManifestAnalyzer {
                         source: "manifest.json".to_string(),
                         value: "persistent: true".to_string(),
                         location: Some("background".to_string()),
+                        ..Default::default()
                     }]),
                 );
             }
@@ -670,6 +683,7 @@ impl ChromeManifestAnalyzer {
                     source: "manifest.json".to_string(),
                     value: url.clone(),
                     location: Some("update_url".to_string()),
+                    ..Default::default()
                 }]),
             );
         }

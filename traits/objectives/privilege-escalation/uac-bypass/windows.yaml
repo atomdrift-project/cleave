@@ -1,0 +1,147 @@
+# Windows UAC Bypass Detection
+# ATT&CK: T1548.002 (Abuse Elevation Control Mechanism: Bypass User Account Control)
+#
+# Detects common Windows UAC bypass techniques including:
+# - fodhelper.exe abuse
+# - ms-settings protocol hijacking
+# - Auto-elevating binary exploitation
+
+defaults:
+  attack: "T1548.002"
+  crit: suspicious
+  for: [batch, powershell, pe]
+  platforms: [windows]
+
+traits:
+  # === fodhelper.exe UAC bypass ===
+  # fodhelper.exe auto-elevates and checks ms-settings CurVer
+  - id: fodhelper-exe
+    desc: fodhelper.exe invocation (UAC bypass binary)
+    crit: notable
+    conf: 0.8
+    if:
+      type: raw
+      regex: '(?i)fodhelper\.exe'
+
+  # ms-settings CurVer hijacking (points to attacker-controlled handler)
+  - id: ms-settings-curver
+    desc: ms-settings CurVer registry modification
+    crit: suspicious
+    conf: 0.95
+    if:
+      type: raw
+      regex: '(?i)HKCU\\\\?Software\\\\?Classes\\\\?ms-settings\\\\?CurVer'
+
+  # Custom protocol handler Shell\Open\command registration
+  - id: shell-open-command-reg
+    desc: Shell Open command registry key
+    crit: notable
+    conf: 0.7
+    if:
+      type: raw
+      regex: '(?i)\\\\?Shell\\\\?Open\\\\?command'
+
+  # === eventvwr.exe UAC bypass ===
+  - id: eventvwr-exe
+    desc: eventvwr.exe invocation (UAC bypass binary)
+    crit: notable
+    conf: 0.7
+    if:
+      type: raw
+      regex: '(?i)eventvwr\.exe'
+
+  # mscfile registry hijacking for eventvwr bypass
+  - id: mscfile-curver
+    desc: mscfile CurVer registry modification
+    crit: suspicious
+    conf: 0.95
+    if:
+      type: raw
+      regex: '(?i)HKCU\\\\?Software\\\\?Classes\\\\?mscfile\\\\?CurVer'
+
+  # === computerdefaults.exe UAC bypass ===
+  - id: computerdefaults-exe
+    desc: computerdefaults.exe (UAC bypass binary)
+    crit: notable
+    conf: 0.7
+    if:
+      type: raw
+      regex: '(?i)computerdefaults\.exe'
+
+  # === sdclt.exe UAC bypass ===
+  - id: sdclt-exe
+    desc: sdclt.exe invocation (UAC bypass binary)
+    crit: notable
+    conf: 0.7
+    if:
+      type: raw
+      regex: '(?i)sdclt\.exe'
+
+  # === Hidden window execution ===
+  - id: conhost-headless
+    desc: conhost.exe --headless execution
+    crit: suspicious
+    conf: 0.9
+    attack: "T1564.003"
+    if:
+      type: raw
+      regex: '(?i)conhost\.exe\s+--headless'
+
+  # PowerShell hidden window
+  - id: powershell-hidden-window
+    desc: PowerShell hidden window flag
+    crit: notable
+    conf: 0.8
+    attack: "T1564.003"
+    if:
+      type: raw
+      regex: '(?i)powershell[^\n]{0,30}-w\s+h(?:idden)?'
+
+composite_rules:
+  # fodhelper UAC bypass composite
+  - id: fodhelper-uac-bypass
+    desc: fodhelper.exe UAC bypass technique
+    crit: hostile
+    conf: 0.98
+    mbc: "E1548"
+    all:
+      - id: fodhelper-exe
+      - id: ms-settings-curver
+
+  # Protocol hijack UAC bypass (ms-settings variant)
+  - id: protocol-hijack-ms-settings
+    desc: ms-settings protocol UAC bypass
+    crit: suspicious
+    conf: 0.9
+    all:
+      - id: ms-settings-curver
+      - id: shell-open-command-reg
+
+  # Protocol hijack UAC bypass (mscfile variant)
+  - id: protocol-hijack-mscfile
+    desc: mscfile protocol UAC bypass
+    crit: suspicious
+    conf: 0.9
+    all:
+      - id: mscfile-curver
+      - id: shell-open-command-reg
+
+  # eventvwr UAC bypass composite
+  - id: eventvwr-uac-bypass
+    desc: eventvwr.exe UAC bypass technique
+    crit: hostile
+    conf: 0.95
+    mbc: "E1548"
+    all:
+      - id: eventvwr-exe
+      - id: mscfile-curver
+
+  # Hidden execution composite
+  - id: hidden-console-execution
+    desc: Hidden console/window execution
+    crit: suspicious
+    conf: 0.9
+    attack: "T1564.003"
+    any:
+      - id: conhost-headless
+      - id: powershell-hidden-window

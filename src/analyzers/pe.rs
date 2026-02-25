@@ -351,6 +351,7 @@ impl PEAnalyzer {
                 source: "goblin".to_string(),
                 value: "PE".to_string(),
                 location: None,
+                ..Default::default()
             }],
         });
 
@@ -364,6 +365,7 @@ impl PEAnalyzer {
                     source: "goblin".to_string(),
                     value: "DLL".to_string(),
                     location: None,
+                    ..Default::default()
                 }],
             });
         }
@@ -378,6 +380,7 @@ impl PEAnalyzer {
                     source: "goblin".to_string(),
                     value: "OptionalHeader".to_string(),
                     location: None,
+                    ..Default::default()
                 }],
             });
         }

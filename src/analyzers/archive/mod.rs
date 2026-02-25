@@ -428,6 +428,7 @@ impl ArchiveAnalyzer {
                     source: "streaming_analyzer".to_string(),
                     value: evidence_value,
                     location: None,
+                    ..Default::default()
                 }],
 
                 match_count: 0,
@@ -448,6 +449,7 @@ impl ArchiveAnalyzer {
                     .unwrap_or("unknown")
                     .to_string(),
                 location: None,
+                ..Default::default()
             }],
         });
 
@@ -594,6 +596,7 @@ impl ArchiveAnalyzer {
                     source: "archive_analyzer".to_string(),
                     value: evidence_value,
                     location: None,
+                    ..Default::default()
                 }],
 
                 match_count: 0,
@@ -614,6 +617,7 @@ impl ArchiveAnalyzer {
                     .unwrap_or("unknown")
                     .to_string(),
                 location: None,
+                ..Default::default()
             }],
         });
 

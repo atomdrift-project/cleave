@@ -45,6 +45,39 @@ traits:
       type: raw
       regex: 'set\s+[^=]{1,120}=[A-Za-z0-9+/]{100,}'
 
+  # Fragmented command via undefined env vars
+  # Pattern: %VAR%s%VAR%e%VAR%t or %VAR%c%VAR%m%VAR%d
+  # When vars are undefined, they resolve to empty: %abc%s%def%et → "set"
+  - id: batch-fragmented-command-undefined-vars
+    desc: Command fragmented via undefined env vars
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: raw
+      # Matches %VAR%<1-2 chars>%VAR% repeated pattern
+      regex: '(%[a-zA-Z][a-zA-Z0-9_]{0,30}%[a-z]{1,2}){2,}'
+
+  # Excessive undefined variable references (noise generation)
+  - id: batch-excessive-undefined-vars
+    desc: Excessive undefined variable references
+    crit: suspicious
+    conf: 0.85
+    if:
+      type: raw
+      # Long random-looking variable names used as noise
+      regex: '%[a-zA-Z][a-zA-Z0-9]{5,30}%'
+      count_min: 10
+
+  # REM comment noise (random words as padding)
+  - id: batch-rem-noise-padding
+    desc: REM comments with random word padding
+    crit: notable
+    conf: 0.7
+    if:
+      type: raw
+      regex: '(?im)^REM\s+[a-z]+(\s+[a-z]+){4,}\s*$'
+      count_min: 2
+
 composite_rules:
   - id: batch-heavy-obfuscation
     desc: Heavy batch script obfuscation
@@ -56,3 +89,5 @@ composite_rules:
       - id: batch-obfuscated-command-start
       - id: batch-command-reconstruction
       - id: batch-base64-payload
+      - id: batch-fragmented-command-undefined-vars
+      - id: batch-excessive-undefined-vars

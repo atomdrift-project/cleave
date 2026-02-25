@@ -48,6 +48,7 @@ pub(crate) fn collect_yara_evidence<'a, 'b>(
                     source: "yara-x".to_string(),
                     value: evidence_value,
                     location: Some(format!("offset:{}", m.range().start)),
+                    ..Default::default()
                 });
             }
         }
@@ -409,6 +410,7 @@ pub(crate) fn eval_hex<'a>(
                     source: "error".to_string(),
                     value: format!("invalid hex pattern: {}", e),
                     location: None,
+                    ..Default::default()
                 }],
                 match_count: 0,
                 warnings: Vec::new(),
@@ -589,6 +591,7 @@ pub(crate) fn eval_hex<'a>(
                         source: "binary".to_string(),
                         value,
                         location: Some(format!("0x{:x}", pos)),
+                        ..Default::default()
                     }
                 })
                 .collect()

@@ -7,7 +7,7 @@
 //! - `RawContentRegexIndex`: Batched regex matching for binary content
 
 use crate::composite_rules::{Condition, FileType as RuleFileType, TraitDefinition};
-use crate::types::{Evidence, StringInfo, MAX_EVIDENCE_PER_TRAIT};
+use crate::types::{deduplicate_evidence, Evidence, StringInfo, MAX_EVIDENCE_PER_TRAIT};
 use aho_corasick::AhoCorasick;
 use rayon::prelude::*;
 use regex::{RegexSet, RegexSetBuilder};
@@ -287,6 +287,7 @@ impl StringMatchIndex {
                                 source: "string_extractor".to_string(),
                                 value: string_info.value.clone(),
                                 location: string_info.offset.map(|o| format!("{:#x}", o)),
+                                ..Default::default()
                             });
                         }
                     }
@@ -307,12 +308,19 @@ impl StringMatchIndex {
                                 source: "string_extractor".to_string(),
                                 value: original_pattern.clone(),
                                 location: string_info.offset.map(|o| format!("{:#x}", o)),
+                                ..Default::default()
                             });
                         }
                     }
                 }
             }
         }
+
+        // Deduplicate evidence for each trait
+        let trait_evidence: FxHashMap<usize, Vec<Evidence>> = trait_evidence
+            .into_iter()
+            .map(|(k, v)| (k, deduplicate_evidence(v)))
+            .collect();
 
         (matching_traits, trait_evidence)
     }
@@ -346,6 +354,7 @@ impl StringMatchIndex {
                                         source: "string_extractor".to_string(),
                                         value: string_info.value.clone(),
                                         location: string_info.offset.map(|o| format!("{:#x}", o)),
+                                        ..Default::default()
                                     });
                                 }
                             }
@@ -367,6 +376,7 @@ impl StringMatchIndex {
                                         source: "string_extractor".to_string(),
                                         value: original_pattern.clone(),
                                         location: string_info.offset.map(|o| format!("{:#x}", o)),
+                                        ..Default::default()
                                     });
                                 }
                             }
@@ -386,13 +396,21 @@ impl StringMatchIndex {
             for trait_idx in traits {
                 final_traits.insert(trait_idx);
             }
-            for (trait_idx, mut ev_list) in evidence {
+            for (trait_idx, ev_list) in evidence {
                 let entry = final_evidence.entry(trait_idx).or_default();
-                // Respect MAX_EVIDENCE_PER_TRAIT when merging
-                let remaining = MAX_EVIDENCE_PER_TRAIT.saturating_sub(entry.len());
-                entry.extend(ev_list.drain(..remaining.min(ev_list.len())));
+                entry.extend(ev_list);
             }
         }
+
+        // Deduplicate evidence for each trait and truncate
+        let final_evidence: FxHashMap<usize, Vec<Evidence>> = final_evidence
+            .into_iter()
+            .map(|(k, v)| {
+                let mut deduped = deduplicate_evidence(v);
+                deduped.truncate(MAX_EVIDENCE_PER_TRAIT);
+                (k, deduped)
+            })
+            .collect();
 
         (final_traits, final_evidence)
     }

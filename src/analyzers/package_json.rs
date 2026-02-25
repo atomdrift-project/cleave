@@ -107,6 +107,7 @@ impl PackageJsonAnalyzer {
                 source: "serde_json".to_string(),
                 value: "package.json".to_string(),
                 location: None,
+                ..Default::default()
             }],
         });
 
@@ -156,6 +157,7 @@ impl PackageJsonAnalyzer {
                         source: "package.json".to_string(),
                         value: script.chars().take(100).collect(),
                         location: Some(format!("scripts.{}", name)),
+                        ..Default::default()
                     }]),
                 );
             }
@@ -179,6 +181,7 @@ impl PackageJsonAnalyzer {
                         source: "package.json".to_string(),
                         value: script.chars().take(100).collect(),
                         location: Some(format!("scripts.{}", name)),
+                        ..Default::default()
                     }]),
                 );
             }
@@ -202,6 +205,7 @@ impl PackageJsonAnalyzer {
                         source: "package.json".to_string(),
                         value: script.chars().take(100).collect(),
                         location: Some(format!("scripts.{}", name)),
+                        ..Default::default()
                     }]),
                 );
             }
@@ -224,6 +228,7 @@ impl PackageJsonAnalyzer {
                         source: "package.json".to_string(),
                         value: script.chars().take(100).collect(),
                         location: Some(format!("scripts.{}", name)),
+                        ..Default::default()
                     }]),
                 );
             }
@@ -247,6 +252,7 @@ impl PackageJsonAnalyzer {
                         source: "package.json".to_string(),
                         value: script.chars().take(100).collect(),
                         location: Some(format!("scripts.{}", name)),
+                        ..Default::default()
                     }]),
                 );
             }
@@ -269,6 +275,7 @@ impl PackageJsonAnalyzer {
                         source: "package.json".to_string(),
                         value: script.chars().take(200).collect(),
                         location: Some(format!("scripts.{}", name)),
+                        ..Default::default()
                     }]),
                 );
             }
@@ -288,6 +295,7 @@ impl PackageJsonAnalyzer {
                         source: "package.json".to_string(),
                         value: script.chars().take(200).collect(),
                         location: Some(format!("scripts.{}", name)),
+                        ..Default::default()
                     }]),
                 );
             }
@@ -315,6 +323,7 @@ impl PackageJsonAnalyzer {
                             source: "package.json".to_string(),
                             value: script.chars().take(200).collect(),
                             location: Some(format!("scripts.{}", name)),
+                            ..Default::default()
                         }]),
                     );
                 }
@@ -347,6 +356,7 @@ impl PackageJsonAnalyzer {
                         source: "package.json".to_string(),
                         value: script.chars().take(300).collect(),
                         location: Some(format!("scripts.{}", name)),
+                        ..Default::default()
                     }]),
                 );
             }
@@ -370,6 +380,7 @@ impl PackageJsonAnalyzer {
                         source: "package.json".to_string(),
                         value: script.chars().take(200).collect(),
                         location: Some(format!("scripts.{}", name)),
+                        ..Default::default()
                     }]),
                 );
             }
@@ -399,6 +410,7 @@ impl PackageJsonAnalyzer {
                             source: "package.json".to_string(),
                             value: hidden_files.join(", "),
                             location: Some(format!("scripts.{}", name)),
+                            ..Default::default()
                         }]),
                     );
                 }
@@ -422,6 +434,7 @@ impl PackageJsonAnalyzer {
                         source: "package.json".to_string(),
                         value: script.chars().take(200).collect(),
                         location: Some(format!("scripts.{}", name)),
+                        ..Default::default()
                     }]),
                 );
             }
@@ -442,6 +455,7 @@ impl PackageJsonAnalyzer {
                             source: "package.json".to_string(),
                             value: url,
                             location: Some(format!("scripts.{}", name)),
+                            ..Default::default()
                         }]),
                     );
                 }
@@ -475,6 +489,7 @@ impl PackageJsonAnalyzer {
                     source: "package.json".to_string(),
                     value: "author field is empty".to_string(),
                     location: Some("author".to_string()),
+                    ..Default::default()
                 }]),
             );
         }
@@ -494,6 +509,7 @@ impl PackageJsonAnalyzer {
                         source: "package.json".to_string(),
                         value: name.clone(),
                         location: Some("name".to_string()),
+                        ..Default::default()
                     }]),
                 );
             }
@@ -521,6 +537,7 @@ impl PackageJsonAnalyzer {
                         source: "package.json".to_string(),
                         value: "version 1.0.0 with install hooks".to_string(),
                         location: Some("version + scripts".to_string()),
+                        ..Default::default()
                     }]),
                 );
             }
@@ -555,6 +572,7 @@ impl PackageJsonAnalyzer {
                         source: "package.json".to_string(),
                         value: version.to_string(),
                         location: Some(format!("dependencies.{}", name)),
+                        ..Default::default()
                     }]),
                 );
             }
@@ -573,6 +591,7 @@ impl PackageJsonAnalyzer {
                         source: "package.json".to_string(),
                         value: version.to_string(),
                         location: Some(format!("dependencies.{}", name)),
+                        ..Default::default()
                     }]),
                 );
             }
@@ -591,6 +610,7 @@ impl PackageJsonAnalyzer {
                         source: "package.json".to_string(),
                         value: name.to_string(),
                         location: Some("dependencies".to_string()),
+                        ..Default::default()
                     }]),
                 );
             }
@@ -609,6 +629,7 @@ impl PackageJsonAnalyzer {
                         source: "package.json".to_string(),
                         value: format!("{} -> {}", name, original),
                         location: Some("dependencies".to_string()),
+                        ..Default::default()
                     }]),
                 );
             }
@@ -663,6 +684,7 @@ impl PackageJsonAnalyzer {
                         source: "package.json".to_string(),
                         value: script.chars().take(200).collect(),
                         location: Some(format!("scripts.{}", hook)),
+                        ..Default::default()
                     }]),
                 );
             }
@@ -786,7 +808,9 @@ impl PackageJsonAnalyzer {
             "webpack-plugin-",
         ];
 
-        legitimate_prefixes.iter().any(|prefix| name.starts_with(prefix))
+        legitimate_prefixes
+            .iter()
+            .any(|prefix| name.starts_with(prefix))
     }
 
     fn is_suspicious_domain(&self, url: &str) -> bool {

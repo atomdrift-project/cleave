@@ -255,6 +255,7 @@ impl ElfAnalyzer {
                 source: "goblin".to_string(),
                 value: format!("0x{:x}", elf.header.e_ident[0]),
                 location: None,
+                ..Default::default()
             }],
         });
 
@@ -268,6 +269,7 @@ impl ElfAnalyzer {
                 source: "goblin".to_string(),
                 value: format!("e_machine={}", elf.header.e_machine),
                 location: None,
+                ..Default::default()
             }],
         });
 
@@ -281,6 +283,7 @@ impl ElfAnalyzer {
                     source: "goblin".to_string(),
                     value: "no_symbols".to_string(),
                     location: None,
+                    ..Default::default()
                 }],
             });
         }
@@ -295,6 +298,7 @@ impl ElfAnalyzer {
                     source: "goblin".to_string(),
                     value: "ET_DYN".to_string(),
                     location: None,
+                    ..Default::default()
                 }],
             });
         }
@@ -328,6 +332,7 @@ impl ElfAnalyzer {
                             source: "goblin".to_string(),
                             value: "STT_GNU_IFUNC (LOOS)".to_string(),
                             location: Some(format!("{:#x}", dynsym.st_value)),
+                            ..Default::default()
                         }],
 
                         match_count: 0,
@@ -376,6 +381,7 @@ impl ElfAnalyzer {
                                 source: "goblin".to_string(),
                                 value: "STT_GNU_IFUNC (LOOS)".to_string(),
                                 location: Some(format!("{:#x}", sym.st_value)),
+                                ..Default::default()
                             }],
 
                             match_count: 0,
@@ -416,6 +422,7 @@ impl ElfAnalyzer {
                                 source: "entropy_analyzer".to_string(),
                                 value: format!("{:.2}", entropy),
                                 location: Some(name.to_string()),
+                                ..Default::default()
                             }],
                         });
                     }
@@ -1039,6 +1046,7 @@ mod tests {
                     source: "goblin".to_string(),
                     value: "socket".to_string(),
                     location: None,
+                    ..Default::default()
                 }]),
         );
 
@@ -1049,6 +1057,7 @@ mod tests {
                     source: "goblin".to_string(),
                     value: "connect".to_string(),
                     location: None,
+                    ..Default::default()
                 }]),
         );
 

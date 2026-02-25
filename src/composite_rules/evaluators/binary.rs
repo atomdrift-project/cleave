@@ -46,6 +46,7 @@ pub(crate) fn eval_exports_count<'a>(
             source: "analysis".to_string(),
             value: format!("({}) {}", count, sample.join(", ")),
             location: None,
+            ..Default::default()
         }]
     } else {
         Vec::new()
@@ -135,6 +136,7 @@ pub(crate) fn eval_section_ratio<'a>(
                 compare_size
             ),
             location: None,
+            ..Default::default()
         }]
     } else {
         Vec::new()
@@ -284,6 +286,7 @@ pub(crate) fn eval_section<'a>(
                     source: "binary".to_string(),
                     value,
                     location: None,
+                    ..Default::default()
                 });
             }
         }
@@ -378,6 +381,7 @@ pub(crate) fn eval_import_combination<'a>(
                     source: "required".to_string(),
                     value: pattern.clone(),
                     location: None,
+                    ..Default::default()
                 });
             }
         }
@@ -399,6 +403,7 @@ pub(crate) fn eval_import_combination<'a>(
                             source: "suspicious".to_string(),
                             value: (*sym).to_string(),
                             location: None,
+                            ..Default::default()
                         });
                     }
                 }
@@ -424,6 +429,7 @@ pub(crate) fn eval_import_combination<'a>(
                 source: "binary".to_string(),
                 value: format!("{} imports (max {})", ctx.report.imports.len(), max),
                 location: None,
+                ..Default::default()
             });
         }
     }
@@ -479,6 +485,7 @@ pub(crate) fn eval_syscall<'a>(
                         syscall.name, syscall.number, syscall.address
                     ),
                     location: Some(format!("0x{:x}", syscall.address)),
+                    ..Default::default()
                 });
             }
         }

@@ -1,0 +1,60 @@
+# Batch File Self-Installation/Persistence
+# ATT&CK: T1547.001 (Boot or Logon Autostart Execution)
+#
+# Detects batch files that copy themselves for persistence
+
+defaults:
+  attack: "T1547.001"
+  crit: suspicious
+  for: [batch]
+  platforms: [windows]
+
+traits:
+  # Self-copy using %~f0 (full path to current script)
+  - id: batch-self-copy
+    desc: Batch script copies itself for persistence
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: raw
+      regex: '(?i)copy\s+(/[a-z]\s+)?%~f0'
+
+  # Copy to AppData location
+  - id: batch-copy-to-appdata
+    desc: Copies file to AppData directory
+    crit: notable
+    conf: 0.8
+    if:
+      type: raw
+      regex: '(?i)%AppData%[\\\/]'
+
+  # Copy to ProgramData
+  - id: batch-copy-to-programdata
+    desc: Copies file to ProgramData directory
+    crit: notable
+    conf: 0.7
+    if:
+      type: raw
+      regex: '(?i)%ProgramData%[\\\/]'
+
+  # Output suppression (>nul, 2>&1, etc.)
+  - id: batch-output-suppression
+    desc: Output suppression (hiding activity)
+    crit: notable
+    conf: 0.6
+    attack: "T1564.003"
+    if:
+      type: raw
+      regex: '(?i)>\s*nul|2>&1'
+      count_min: 2
+
+composite_rules:
+  # Self-copy to AppData persistence
+  - id: batch-self-install-appdata
+    desc: Batch self-installs to AppData
+    crit: suspicious
+    conf: 0.95
+    mbc: "F0004"
+    all:
+      - id: batch-self-copy
+      - id: batch-copy-to-appdata

@@ -243,8 +243,27 @@ fn truncate_str(s: &str, max_bytes: usize) -> &str {
     &s[..end]
 }
 
-/// A single piece of evidence supporting a finding
-#[derive(Debug, Serialize, Deserialize, Clone)]
+/// Maximum number of byte offsets to include in JSON output
+const MAX_OFFSETS_IN_JSON: usize = 8;
+
+/// Serialize byte offsets, truncating to MAX_OFFSETS_IN_JSON
+fn serialize_truncated_offsets<S>(offsets: &[u64], serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    use serde::ser::SerializeSeq;
+    let len = offsets.len().min(MAX_OFFSETS_IN_JSON);
+    let mut seq = serializer.serialize_seq(Some(len))?;
+    for offset in offsets.iter().take(MAX_OFFSETS_IN_JSON) {
+        seq.serialize_element(offset)?;
+    }
+    seq.end()
+}
+
+/// A single piece of evidence supporting a finding.
+/// Evidence items with the same (method, source, value) tuple can be deduplicated
+/// by merging their offsets into a single Evidence with multiple locations.
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct Evidence {
     /// Detection method (symbol, yara, tree-sitter, radare2, entropy, magic, etc.)
     pub method: String,
@@ -253,9 +272,139 @@ pub struct Evidence {
     /// Value discovered (symbol name, pattern match, etc.) - truncated to 4KB on serialization
     #[serde(serialize_with = "serialize_truncated_value")]
     pub value: String,
-    /// Optional location context
+    /// Optional location context (semantic labels like "import", archive paths, etc.)
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub location: Option<String>,
+    /// Byte offsets where this evidence was found (truncated to 8 in JSON output)
+    #[serde(
+        skip_serializing_if = "Vec::is_empty",
+        default,
+        serialize_with = "serialize_truncated_offsets"
+    )]
+    pub offsets: Vec<u64>,
+    /// Total occurrence count when offsets are truncated (0 means use offsets.len())
+    #[serde(skip_serializing_if = "is_zero_usize", default)]
+    pub count: usize,
+}
+
+impl Evidence {
+    /// Create a new evidence item with the given method, source, and value.
+    #[allow(dead_code)] // Builder API for future use
+    #[must_use]
+    pub fn new(
+        method: impl Into<String>,
+        source: impl Into<String>,
+        value: impl Into<String>,
+    ) -> Self {
+        Self {
+            method: method.into(),
+            source: source.into(),
+            value: value.into(),
+            location: None,
+            offsets: Vec::new(),
+            count: 0,
+        }
+    }
+
+    /// Set the location context.
+    #[allow(dead_code)] // Builder API for future use
+    #[must_use]
+    pub fn with_location(mut self, location: impl Into<String>) -> Self {
+        self.location = Some(location.into());
+        self
+    }
+
+    /// Add a byte offset where this evidence was found.
+    #[allow(dead_code)] // Builder API for future use
+    #[must_use]
+    pub fn with_offset(mut self, offset: u64) -> Self {
+        self.offsets.push(offset);
+        self
+    }
+
+    /// Add multiple byte offsets.
+    #[allow(dead_code)] // Builder API for future use
+    #[must_use]
+    pub fn with_offsets(mut self, offsets: impl IntoIterator<Item = u64>) -> Self {
+        self.offsets.extend(offsets);
+        self
+    }
+
+    /// Returns the deduplication key for this evidence.
+    #[allow(dead_code)] // Used internally for debugging
+    fn dedup_key(&self) -> (&str, &str, &str) {
+        (&self.method, &self.source, &self.value)
+    }
+
+    /// Merge another evidence item with the same (method, source, value) into this one.
+    /// Combines offsets and updates the count.
+    pub fn merge(&mut self, other: Evidence) {
+        // Add other's count (or 1 if unset)
+        let other_count = if other.count > 0 { other.count } else { 1 };
+        if self.count == 0 {
+            self.count = 1;
+        }
+        self.count += other_count;
+
+        // Try to extract offset from other.location if it looks like a hex offset
+        if let Some(offset) = other.parse_offset_from_location() {
+            self.offsets.push(offset);
+        }
+
+        // Merge other's offsets
+        self.offsets.extend(other.offsets);
+    }
+
+    /// Try to parse a byte offset from the location string.
+    /// Handles formats like "0x1234", "offset:0x1234", "offset:1234"
+    fn parse_offset_from_location(&self) -> Option<u64> {
+        let loc = self.location.as_ref()?;
+
+        // Try "offset:0x..." or "offset:..."
+        if let Some(rest) = loc.strip_prefix("offset:") {
+            return parse_hex_or_dec(rest);
+        }
+
+        // Try plain "0x..."
+        if loc.starts_with("0x") || loc.starts_with("0X") {
+            return parse_hex_or_dec(loc);
+        }
+
+        None
+    }
+}
+
+/// Parse a string as hex (0x prefix) or decimal
+fn parse_hex_or_dec(s: &str) -> Option<u64> {
+    if let Some(hex) = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X")) {
+        u64::from_str_radix(hex, 16).ok()
+    } else {
+        s.parse().ok()
+    }
+}
+
+/// Deduplicate a list of evidence items by (method, source, value).
+/// Items with the same key are merged, combining their offsets and counts.
+#[must_use]
+pub(crate) fn deduplicate_evidence(evidence: Vec<Evidence>) -> Vec<Evidence> {
+    use std::collections::HashMap;
+
+    if evidence.len() <= 1 {
+        return evidence;
+    }
+
+    // Group by (method, source, value) - use indices to avoid cloning keys
+    let mut groups: HashMap<(String, String, String), Evidence> = HashMap::new();
+
+    for ev in evidence {
+        let key = (ev.method.clone(), ev.source.clone(), ev.value.clone());
+        groups
+            .entry(key)
+            .and_modify(|existing| existing.merge(ev.clone()))
+            .or_insert(ev);
+    }
+
+    groups.into_values().collect()
 }
 
 #[cfg(test)]
@@ -399,6 +548,7 @@ mod tests {
             source: "goblin".to_string(),
             value: "connect".to_string(),
             location: Some("0x1000".to_string()),
+            ..Default::default()
         }];
 
         let f = Finding::capability("test".to_string(), "desc".to_string(), 0.9)
@@ -474,6 +624,7 @@ mod tests {
             source: "yara-x".to_string(),
             value: "suspicious_pattern".to_string(),
             location: Some("0x1234".to_string()),
+            ..Default::default()
         };
 
         assert_eq!(e.method, "yara");
@@ -489,6 +640,7 @@ mod tests {
             source: "goblin".to_string(),
             value: "CreateRemoteThread".to_string(),
             location: None,
+            ..Default::default()
         };
 
         assert!(e.location.is_none());
@@ -506,6 +658,7 @@ mod tests {
                 source: "goblin".to_string(),
                 value: "MZ".to_string(),
                 location: Some("0x0".to_string()),
+                ..Default::default()
             }],
         };
 

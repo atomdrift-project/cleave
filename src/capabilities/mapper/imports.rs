@@ -121,6 +121,7 @@ impl super::CapabilityMapper {
                         source: "goblin".to_string(),
                         value: library,
                         location: Some(format!("{} symbols", symbols.len())),
+                        ..Default::default()
                     }],
 
                     match_count: 0,
@@ -197,6 +198,7 @@ impl super::CapabilityMapper {
                             source: import.source.clone(),
                             value: import.symbol.clone(),
                             location: import.library.clone(),
+                            ..Default::default()
                         }],
 
                         match_count: 0,

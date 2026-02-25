@@ -320,6 +320,20 @@ pub(crate) fn eval_metrics<'a>(
             .as_ref()
             .map(|g| g.blank_import_count as f64),
 
+        // PNG metrics (for steganography detection)
+        "png.width" => metrics.png.as_ref().map(|p| p.width as f64),
+        "png.height" => metrics.png.as_ref().map(|p| p.height as f64),
+        "png.bit_depth" => metrics.png.as_ref().map(|p| p.bit_depth as f64),
+        "png.channels" => metrics.png.as_ref().map(|p| p.channels as f64),
+        "png.pixel_entropy" => metrics.png.as_ref().map(|p| p.pixel_entropy as f64),
+        "png.histogram_flatness" => metrics.png.as_ref().map(|p| p.histogram_flatness as f64),
+        "png.edge_density" => metrics.png.as_ref().map(|p| p.edge_density as f64),
+        "png.compression_ratio" => metrics.png.as_ref().map(|p| p.compression_ratio as f64),
+        "png.r_entropy" => metrics.png.as_ref().map(|p| p.r_entropy as f64),
+        "png.g_entropy" => metrics.png.as_ref().map(|p| p.g_entropy as f64),
+        "png.b_entropy" => metrics.png.as_ref().map(|p| p.b_entropy as f64),
+        "png.a_entropy" => metrics.png.as_ref().map(|p| p.a_entropy as f64),
+
         _ => None,
     };
 
@@ -352,6 +366,7 @@ pub(crate) fn eval_metrics<'a>(
             source: "analyzer".to_string(),
             value: format!("{} = {:.2}", field, value),
             location: None,
+            ..Default::default()
         }]
     } else {
         Vec::new()

@@ -275,6 +275,7 @@ fn walk_ast_for_pattern_multi<'a>(
                             node.start_position().row + 1,
                             node.start_position().column + 1
                         )),
+                        ..Default::default()
                     });
                 }
             }
@@ -389,6 +390,7 @@ pub(crate) fn eval_ast_query<'a>(query_str: &str, ctx: &EvaluationContext<'a>) -
                         capture.node.start_position().row + 1,
                         capture.node.start_position().column + 1
                     )),
+                    ..Default::default()
                 });
 
                 // Bail early if we've collected enough evidence

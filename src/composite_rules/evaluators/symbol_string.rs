@@ -70,6 +70,7 @@ pub(crate) fn eval_symbol<'a>(
                     source: import.source.clone(),
                     value: import.symbol.clone(),
                     location: Some("import".to_string()),
+                    ..Default::default()
                 });
             }
         }
@@ -89,6 +90,7 @@ pub(crate) fn eval_symbol<'a>(
                     source: export.source.clone(),
                     value: export.symbol.clone(),
                     location: export.offset.clone(),
+                    ..Default::default()
                 });
             }
         }
@@ -108,6 +110,7 @@ pub(crate) fn eval_symbol<'a>(
                     source: func.source.clone(),
                     value: func.name.clone(),
                     location: func.offset.clone(),
+                    ..Default::default()
                 });
             }
         }
@@ -297,6 +300,7 @@ pub(crate) fn eval_string<'a, 'b>(
                     source: source.to_string(),
                     value: match_value,
                     location,
+                    ..Default::default()
                 });
             }
         }
@@ -519,6 +523,7 @@ pub(crate) fn eval_raw<'a>(
                         source: "raw_content".to_string(),
                         value: format!("Found {} {}", match_count, first_match.unwrap_or_default()),
                         location: Some("file".to_string()),
+                        ..Default::default()
                     });
                 }
             }
@@ -558,6 +563,7 @@ pub(crate) fn eval_raw<'a>(
                     source: "raw_content".to_string(),
                     value: format!("Found {} {}", match_count, first_match.unwrap_or_default()),
                     location: Some("file".to_string()),
+                    ..Default::default()
                 });
             }
         }
@@ -588,6 +594,7 @@ pub(crate) fn eval_raw<'a>(
                     source: "raw_content".to_string(),
                     value: format!("Exact match: {}", exact_str),
                     location: Some("file".to_string()),
+                    ..Default::default()
                 });
             }
         } else {
@@ -612,6 +619,7 @@ pub(crate) fn eval_raw<'a>(
                     source: "raw_content".to_string(),
                     value: format!("Exact match: {}", exact_str),
                     location: Some("file".to_string()),
+                    ..Default::default()
                 });
             }
         }
@@ -676,6 +684,7 @@ pub(crate) fn eval_raw<'a>(
                             match_count, substr_str
                         ),
                         location: Some("file".to_string()),
+                        ..Default::default()
                     });
                 }
             } else {
@@ -702,6 +711,7 @@ pub(crate) fn eval_raw<'a>(
                             source: "raw_content".to_string(),
                             value: format!("Found {} occurrences of {}", match_count, substr_str),
                             location: Some("file".to_string()),
+                            ..Default::default()
                         });
                     }
                 }
@@ -748,6 +758,7 @@ pub(crate) fn eval_raw<'a>(
                             match_count, substr_str
                         ),
                         location: Some("file".to_string()),
+                        ..Default::default()
                     });
                 }
             } else {
@@ -774,6 +785,7 @@ pub(crate) fn eval_raw<'a>(
                             source: "raw_content".to_string(),
                             value: format!("Found {} occurrences of {}", match_count, substr_str),
                             location: Some("file".to_string()),
+                            ..Default::default()
                         });
                     }
                 }
@@ -970,6 +982,7 @@ pub(crate) fn eval_encoded<'a>(
                     source: format!("encoding_chain:{}", string_info.encoding_chain.join("+")),
                     value: value_preview,
                     location: string_info.offset.map(|o| format!("{:#x}", o)),
+                    ..Default::default()
                 });
             }
         }
@@ -1061,6 +1074,7 @@ pub(crate) fn eval_string_count<'a>(
             source: "binary".to_string(),
             value: format!("({}) {}", count, sample.join(", ")),
             location: None,
+            ..Default::default()
         }]
     } else {
         Vec::new()

@@ -11,7 +11,9 @@ use super::evaluators::{
     eval_structure, eval_symbol, eval_syscall, eval_trait, eval_yara_inline, ContentLocationParams,
 };
 use super::types::{default_file_types, default_platforms, FileType, Platform};
-use crate::types::{Criticality, Evidence, Finding, FindingKind, MAX_EVIDENCE_PER_TRAIT};
+use crate::types::{
+    deduplicate_evidence, Criticality, Evidence, Finding, FindingKind, MAX_EVIDENCE_PER_TRAIT,
+};
 use anyhow::Context;
 use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
@@ -960,6 +962,7 @@ impl TraitDefinition {
                         duration.as_millis()
                     ),
                     location: None,
+                    ..Default::default()
                 }],
                 match_count: 0,
                 source_file: get_relative_source_file(&self.defined_in),
@@ -1793,10 +1796,13 @@ impl CompositeTrait {
                 // Combine evidence and trait IDs from both (limited to MAX_EVIDENCE_PER_TRAIT)
                 let mut combined_evidence = all_result.evidence;
                 combined_evidence.extend(any_result.evidence);
+                // Deduplicate before truncating to maximize unique evidence
+                let combined_evidence = deduplicate_evidence(combined_evidence);
+                let match_count = combined_evidence.len();
+                let mut combined_evidence = combined_evidence;
                 combined_evidence.truncate(MAX_EVIDENCE_PER_TRAIT);
                 let mut combined_trait_ids = all_result.matched_trait_ids;
                 combined_trait_ids.extend(any_result.matched_trait_ids);
-                let match_count = combined_evidence.len();
                 ConditionResult {
                     matched: true,
                     evidence: combined_evidence,
@@ -1842,8 +1848,11 @@ impl CompositeTrait {
             // Combine evidence (trait_ids come from positive only - none doesn't add refs)
             let mut combined_evidence = positive_result.evidence;
             combined_evidence.extend(none_result.evidence);
-            combined_evidence.truncate(MAX_EVIDENCE_PER_TRAIT);
+            // Deduplicate before truncating to maximize unique evidence
+            let combined_evidence = deduplicate_evidence(combined_evidence);
             let match_count = combined_evidence.len();
+            let mut combined_evidence = combined_evidence;
+            combined_evidence.truncate(MAX_EVIDENCE_PER_TRAIT);
             ConditionResult {
                 matched: true,
                 evidence: combined_evidence,
@@ -1976,6 +1985,7 @@ impl CompositeTrait {
                             duration.as_millis()
                         ),
                         location: None,
+                        ..Default::default()
                     }],
                     match_count: 0,
                     source_file: get_relative_source_file(&self.defined_in),
@@ -2095,6 +2105,8 @@ impl CompositeTrait {
             total_precision += result.precision; // SUM for 'all'
         }
 
+        // Deduplicate evidence before returning
+        let all_evidence = deduplicate_evidence(all_evidence);
         let match_count = all_evidence.len();
         ConditionResult {
             matched: true,
@@ -2134,6 +2146,8 @@ impl CompositeTrait {
 
         let precision = if any_matched { min_precision } else { 0.0 };
 
+        // Deduplicate evidence before returning
+        let all_evidence = deduplicate_evidence(all_evidence);
         let match_count = all_evidence.len();
         ConditionResult {
             matched: any_matched,
@@ -2190,6 +2204,8 @@ impl CompositeTrait {
             0.0
         };
 
+        // Deduplicate evidence before returning
+        let all_evidence = deduplicate_evidence(all_evidence);
         let evidence_for_result = if matched { all_evidence } else { Vec::new() };
         let match_count_for_result = evidence_for_result.len();
         ConditionResult {
@@ -2222,6 +2238,7 @@ impl CompositeTrait {
                 source: "composite_rule".to_string(),
                 value: "negative_conditions_not_found".to_string(),
                 location: None,
+                ..Default::default()
             }],
             match_count: 1,
             warnings: Vec::new(),
@@ -2582,6 +2599,7 @@ impl CompositeTrait {
                 source: "composite_rule".to_string(),
                 value: count.to_string(),
                 location: None,
+                ..Default::default()
             }]
         } else {
             Vec::new()

@@ -120,7 +120,11 @@ fn layout_force_directed(malecule: &mut Malecule) {
     for (i, atom) in malecule.atoms.iter_mut().enumerate() {
         let angle = TAU * i as f64 / n.max(1) as f64;
         let radius = (i as f64 + 1.0) * 0.5;
-        atom.position = (radius * angle.cos(), radius * angle.sin(), (i as f64 * 0.3) - (n as f64 * 0.15));
+        atom.position = (
+            radius * angle.cos(),
+            radius * angle.sin(),
+            (i as f64 * 0.3) - (n as f64 * 0.15),
+        );
     }
 
     // Build adjacency from bonds
@@ -238,7 +242,7 @@ fn layout_hierarchical_tree(malecule: &mut Malecule) {
         parent_idx: usize,
         parent_pos: (f64, f64, f64),
         direction: (f64, f64, f64),
-        depth: usize,
+        _depth: usize,
     ) {
         let kids = &children[parent_idx];
         if kids.is_empty() {
@@ -265,9 +269,15 @@ fn layout_hierarchical_tree(malecule: &mut Malecule) {
 
             let perp = normalize(cross(direction, base_dir));
 
-            let offset_x = len * (phi.sin() * (theta.cos() * base_dir.0 + theta.sin() * perp.0) + phi.cos() * direction.0);
-            let offset_y = len * (phi.sin() * (theta.cos() * base_dir.1 + theta.sin() * perp.1) + phi.cos() * direction.1);
-            let offset_z = len * (phi.sin() * (theta.cos() * base_dir.2 + theta.sin() * perp.2) + phi.cos() * direction.2);
+            let offset_x = len
+                * (phi.sin() * (theta.cos() * base_dir.0 + theta.sin() * perp.0)
+                    + phi.cos() * direction.0);
+            let offset_y = len
+                * (phi.sin() * (theta.cos() * base_dir.1 + theta.sin() * perp.1)
+                    + phi.cos() * direction.1);
+            let offset_z = len
+                * (phi.sin() * (theta.cos() * base_dir.2 + theta.sin() * perp.2)
+                    + phi.cos() * direction.2);
 
             let child_pos = (
                 parent_pos.0 + offset_x,
@@ -279,7 +289,7 @@ fn layout_hierarchical_tree(malecule: &mut Malecule) {
 
             // New direction for children
             let new_dir = normalize((offset_x, offset_y, offset_z));
-            place_children(atoms, children, child, child_pos, new_dir, depth + 1);
+            place_children(atoms, children, child, child_pos, new_dir, _depth + 1);
         }
     }
 
@@ -294,10 +304,10 @@ fn layout_hierarchical_tree(malecule: &mut Malecule) {
 
     // Handle disconnected atoms
     let mut orphan_idx = 0;
-    for i in 0..n {
-        if !visited[i] {
+    for (&is_visited, atom) in visited.iter().zip(malecule.atoms.iter_mut()) {
+        if !is_visited {
             let angle = TAU * orphan_idx as f64 / 8.0;
-            malecule.atoms[i].position = (
+            atom.position = (
                 3.0 * BOND_LENGTH * angle.cos(),
                 3.0 * BOND_LENGTH * angle.sin(),
                 -2.0 * BOND_LENGTH,
@@ -418,9 +428,10 @@ fn center_molecule(malecule: &mut Malecule) {
     }
 
     let n = malecule.atoms.len() as f64;
-    let (cx, cy, cz) = malecule.atoms.iter().fold((0.0, 0.0, 0.0), |acc, atom| {
-        add(acc, atom.position)
-    });
+    let (cx, cy, cz) = malecule
+        .atoms
+        .iter()
+        .fold((0.0, 0.0, 0.0), |acc, atom| add(acc, atom.position));
 
     let center = (cx / n, cy / n, cz / n);
 
@@ -442,8 +453,16 @@ mod tests {
         m.add_atom(CARBON, "".to_string(), Severity::Neutral);
 
         // Top-level categories
-        m.add_atom(crate::elements::OXYGEN, "objectives".to_string(), Severity::Neutral);
-        m.add_atom(crate::elements::BORON, "micro-behaviors".to_string(), Severity::Neutral);
+        m.add_atom(
+            crate::elements::OXYGEN,
+            "objectives".to_string(),
+            Severity::Neutral,
+        );
+        m.add_atom(
+            crate::elements::HYDROGEN_MICRO,
+            "micro-behaviors".to_string(),
+            Severity::Neutral,
+        );
 
         // Subcategories
         m.add_atom(

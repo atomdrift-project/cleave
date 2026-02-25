@@ -39,6 +39,7 @@ pub mod binary;
 pub(crate) mod binary_metrics;
 pub(crate) mod code_structure;
 pub(crate) mod container_metrics;
+pub(crate) mod png_metrics;
 pub(crate) mod core;
 pub(crate) mod diff;
 pub(crate) mod field_paths;
@@ -61,7 +62,7 @@ pub(crate) use file_analysis::{
     ARCHIVE_DELIMITER, ENCODING_DELIMITER,
 };
 
-pub(crate) use traits_findings::MAX_EVIDENCE_PER_TRAIT;
+pub(crate) use traits_findings::{deduplicate_evidence, MAX_EVIDENCE_PER_TRAIT};
 #[allow(unused_imports)]
 pub use traits_findings::{Evidence, Finding, FindingKind, StructuralFeature, Trait, TraitKind};
 
@@ -104,6 +105,7 @@ pub(crate) use language_metrics::{
 };
 
 pub(crate) use binary_metrics::{BinaryMetrics, MachoMetrics};
+pub(crate) use png_metrics::PngMetrics;
 
 pub(crate) use scores::Metrics;
 

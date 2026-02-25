@@ -54,6 +54,7 @@ pub(crate) fn create_language_feature(
             source: parser_name.to_string(),
             value: language.to_string(),
             location: Some("AST".to_string()),
+            ..Default::default()
         }],
     }
 }

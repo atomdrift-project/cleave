@@ -30,6 +30,7 @@ impl super::CapabilityMapper {
                     source: source.to_string(),
                     value: symbol.to_string(),
                     location: None,
+                    ..Default::default()
                 }],
 
                 match_count: 0,

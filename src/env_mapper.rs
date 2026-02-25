@@ -184,6 +184,7 @@ fn analyze_env_var(name: &str, source: &str, access_type: EnvVarAccessType) -> E
             source: source.to_string(),
             value: name.to_string(),
             location: None,
+            ..Default::default()
         }],
         referenced_by_traits: Vec::new(),
     }

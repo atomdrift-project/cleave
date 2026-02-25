@@ -177,6 +177,7 @@ fn generate_language_trait(
                 offset
             ),
             location: Some(format!("{:#x}", offset)),
+            ..Default::default()
         }],
         match_count: 0,
         source_file: None,

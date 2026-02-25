@@ -1,11 +1,13 @@
 //! Formula string generation from findings.
 //!
-//! Generates molecular formula strings like "C₁O₁La₁Sn₁F₂" from analysis findings.
+//! Generates molecular formula strings like "O₇C₂As₂DyXePH₂CoDb" from analysis findings.
+//! Format: TopLevel^count followed by subcategories sorted by severity then count.
 
-use crate::elements::{category_to_element, Element, BORON, MAGNESIUM, OXYGEN, THORIUM, TUNGSTEN};
+use crate::elements::{
+    category_to_element, Element, HYDROGEN_MICRO, MENDELEVIUM, OXYGEN, POTASSIUM, THORIUM,
+};
 use crate::types::Severity;
 use rustc_hash::FxHashMap;
-use std::cmp::Reverse;
 
 /// A parsed finding for formula generation.
 #[derive(Debug, Clone)]
@@ -17,7 +19,7 @@ pub struct FindingInput {
 }
 
 /// Counts of elements with their max severity.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 struct ElementCount {
     count: usize,
     max_severity: Severity,
@@ -29,17 +31,23 @@ struct ElementCount {
 /// * `findings` - Iterator of finding inputs
 ///
 /// # Returns
-/// A formula string like "C₁O₁La₁Sn₁F₂Mg₁Au₂"
+/// A formula string like "O₇C₂As₂DyXePH₂CoDb" - top-level categories with counts,
+/// followed by subcategories sorted by severity (suspicious first) then count.
 #[must_use]
 pub fn generate_formula<'a>(findings: impl Iterator<Item = &'a FindingInput>) -> String {
     let mut element_counts: FxHashMap<&'static str, ElementCount> = FxHashMap::default();
 
-    // Track which top-level categories are present
-    let mut has_objectives = false;
-    let mut has_micro_behaviors = false;
-    let mut has_metadata = false;
-    let mut has_well_known = false;
+    // Track top-level category counts and max severity
+    let mut objectives_count = 0usize;
+    let mut objectives_max_sev = Severity::Neutral;
+    let mut micro_count = 0usize;
+    let mut micro_max_sev = Severity::Neutral;
+    let mut metadata_count = 0usize;
+    let mut metadata_max_sev = Severity::Neutral;
+    let mut well_known_count = 0usize;
+    let mut well_known_max_sev = Severity::Neutral;
     let mut third_party_count = 0usize;
+    let mut third_party_max_sev = Severity::Neutral;
 
     for finding in findings {
         let parts: Vec<&str> = finding.id.split('/').collect();
@@ -47,16 +55,38 @@ pub fn generate_formula<'a>(findings: impl Iterator<Item = &'a FindingInput>) ->
             continue;
         }
 
-        // Track top-level category
+        // Track top-level category counts
         match parts[0] {
-            "objectives" => has_objectives = true,
-            "micro-behaviors" => has_micro_behaviors = true,
-            "metadata" => has_metadata = true,
-            "well-known" => has_well_known = true,
+            "objectives" => {
+                objectives_count += 1;
+                if finding.severity > objectives_max_sev {
+                    objectives_max_sev = finding.severity;
+                }
+            }
+            "micro-behaviors" => {
+                micro_count += 1;
+                if finding.severity > micro_max_sev {
+                    micro_max_sev = finding.severity;
+                }
+            }
+            "metadata" => {
+                metadata_count += 1;
+                if finding.severity > metadata_max_sev {
+                    metadata_max_sev = finding.severity;
+                }
+            }
+            "well-known" => {
+                well_known_count += 1;
+                if finding.severity > well_known_max_sev {
+                    well_known_max_sev = finding.severity;
+                }
+            }
             "third_party" => {
-                // Third party just counts, no sub-elements
                 third_party_count += 1;
-                continue;
+                if finding.severity > third_party_max_sev {
+                    third_party_max_sev = finding.severity;
+                }
+                continue; // Third party doesn't have sub-elements
             }
             _ => {}
         }
@@ -75,46 +105,87 @@ pub fn generate_formula<'a>(findings: impl Iterator<Item = &'a FindingInput>) ->
         }
     }
 
-    // Build formula with consistent ordering
-    let mut formula_parts: Vec<(&'static str, usize, u8)> = Vec::new();
+    // Build formula parts: (symbol, count, severity_priority, is_top_level)
+    // severity_priority: 0=hostile, 1=suspicious, 2=notable, 3=neutral
+    let mut formula_parts: Vec<(&'static str, usize, u8, bool)> = Vec::new();
 
-    // Add top-level category atoms in order: O, B, Mg, W, Th
-    if has_objectives {
-        formula_parts.push((OXYGEN.symbol, 1, 0));
+    // Add top-level categories with their counts
+    if objectives_count > 0 {
+        formula_parts.push((
+            OXYGEN.symbol,
+            objectives_count,
+            severity_to_priority(objectives_max_sev),
+            true,
+        ));
     }
-    if has_micro_behaviors {
-        formula_parts.push((BORON.symbol, 1, 1));
+    if micro_count > 0 {
+        formula_parts.push((
+            HYDROGEN_MICRO.symbol,
+            micro_count,
+            severity_to_priority(micro_max_sev),
+            true,
+        ));
     }
-    if has_metadata {
-        formula_parts.push((MAGNESIUM.symbol, 1, 2));
+    if metadata_count > 0 {
+        formula_parts.push((
+            MENDELEVIUM.symbol,
+            metadata_count,
+            severity_to_priority(metadata_max_sev),
+            true,
+        ));
     }
-    if has_well_known {
-        formula_parts.push((TUNGSTEN.symbol, 1, 3));
+    if well_known_count > 0 {
+        formula_parts.push((
+            POTASSIUM.symbol,
+            well_known_count,
+            severity_to_priority(well_known_max_sev),
+            true,
+        ));
     }
     if third_party_count > 0 {
-        formula_parts.push((THORIUM.symbol, third_party_count, 4));
+        formula_parts.push((
+            THORIUM.symbol,
+            third_party_count,
+            severity_to_priority(third_party_max_sev),
+            true,
+        ));
     }
 
-    // Sort remaining elements by count (descending), then alphabetically
-    let mut sorted: Vec<_> = element_counts.into_iter().collect();
-    sorted.sort_by_key(|(sym, ec)| (Reverse(ec.count), *sym));
-
-    for (symbol, ec) in sorted {
-        // Skip top-level elements we already added
-        if symbol == OXYGEN.symbol
-            || symbol == BORON.symbol
-            || symbol == MAGNESIUM.symbol
-            || symbol == TUNGSTEN.symbol
-            || symbol == THORIUM.symbol
+    // Add subcategory elements
+    for (symbol, ec) in &element_counts {
+        // Skip top-level elements
+        if *symbol == OXYGEN.symbol
+            || *symbol == HYDROGEN_MICRO.symbol
+            || *symbol == MENDELEVIUM.symbol
+            || *symbol == POTASSIUM.symbol
+            || *symbol == THORIUM.symbol
         {
             continue;
         }
-        formula_parts.push((symbol, ec.count, 10)); // 10 = subcategory priority
+        formula_parts.push((
+            symbol,
+            ec.count,
+            severity_to_priority(ec.max_severity),
+            false,
+        ));
     }
+
+    // Sort: top-level first (by severity), then subcategories (by severity, then count desc)
+    formula_parts.sort_by(|a, b| {
+        // Top-level categories come first, sorted by severity
+        match (a.3, b.3) {
+            (true, false) => std::cmp::Ordering::Less,
+            (false, true) => std::cmp::Ordering::Greater,
+            _ => {
+                // Same level: sort by severity (lower priority = more severe), then count desc
+                a.2.cmp(&b.2).then_with(|| b.1.cmp(&a.1))
+            }
+        }
+    });
 
     // Build the formula string
     let mut formula = String::with_capacity(formula_parts.len() * 4);
-    for (symbol, count, _) in formula_parts {
+    for (symbol, count, _, _) in formula_parts {
         formula.push_str(symbol);
         if count > 1 {
             formula.push_str(&to_subscript(count));
@@ -122,6 +193,16 @@ pub fn generate_formula<'a>(findings: impl Iterator<Item = &'a FindingInput>) ->
     }
 
     formula
+}
+
+/// Converts severity to sort priority (lower = more severe = first).
+fn severity_to_priority(sev: Severity) -> u8 {
+    match sev {
+        Severity::Hostile => 0,
+        Severity::Suspicious => 1,
+        Severity::Notable => 2,
+        Severity::Neutral => 3,
+    }
 }
 
 /// Converts a number to subscript Unicode characters.
@@ -192,7 +273,7 @@ mod tests {
 
     #[test]
     fn test_generate_formula() {
-        let findings = vec![
+        let findings = [
             FindingInput {
                 id: "objectives/lateral-movement/supply-chain/npm".to_string(),
                 severity: Severity::Suspicious,
@@ -216,11 +297,11 @@ mod tests {
         ];
 
         let formula = generate_formula(findings.iter());
-        // Should have O (objectives), B (micro-behaviors), Mg (metadata)
-        // Plus La (lateral-movement), Xe (execution), F (fs), Au₂ (quality x2)
-        assert!(formula.starts_with('O')); // Objectives is first top-level
-        assert!(formula.contains('B'));
-        assert!(formula.contains("Mg"));
+        // Should have O₂ (2 objectives), H (1 micro-behavior), Mg₂ (2 metadata)
+        // Plus La, Xe, F, Au₂ subcategories
+        assert!(formula.contains('O')); // Objectives
+        assert!(formula.contains('H')); // Micro-behaviors (now H not B)
+        assert!(formula.contains("Md")); // Metadata
         assert!(formula.contains("Au")); // quality
     }
 
@@ -244,7 +325,7 @@ mod tests {
         );
         assert_eq!(
             finding_to_top_level("micro-behaviors/fs"),
-            Some(crate::elements::BORON)
+            Some(crate::elements::HYDROGEN_MICRO)
         );
     }
 }

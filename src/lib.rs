@@ -340,6 +340,7 @@ fn analyze_file_with_resources<P: AsRef<Path>>(
                 source: "cleave".to_string(),
                 value: format!("expected={}, actual={}", expected, actual),
                 location: None,
+                ..Default::default()
             }],
             match_count: 0,
             source_file: None,
@@ -381,6 +382,7 @@ fn analyze_file_with_resources<P: AsRef<Path>>(
                     payload.preview
                 ),
                 location: Some(format!("offset:{}", payload.original_offset)),
+                ..Default::default()
             }],
             match_count: 0,
             source_file: None,

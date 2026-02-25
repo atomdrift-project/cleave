@@ -205,6 +205,7 @@ fn test_finding_constructor() {
         source: "goblin".to_string(),
         value: "socket".to_string(),
         location: Some("0x1000".to_string()),
+        ..Default::default()
     }];
 
     let finding = Finding {
@@ -233,6 +234,7 @@ fn test_evidence_creation() {
         source: "goblin".to_string(),
         value: "socket".to_string(),
         location: Some("0x1000".to_string()),
+        ..Default::default()
     };
 
     assert_eq!(evidence.method, "symbol");

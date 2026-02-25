@@ -75,6 +75,7 @@ cleave-macros = { path = "cleave-macros" }
 # Binary parsing
 goblin = "0.10"
 lnk = "0.6"  # Windows Shell Link (.lnk) parsing
+png = "0.17"  # PNG image parsing for steganography detection
 
 # AppleScript parsing
 scpt = { path = "crates/scpt" }

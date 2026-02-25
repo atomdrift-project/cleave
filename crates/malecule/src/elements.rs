@@ -26,14 +26,14 @@ impl Element {
     }
 }
 
-/// Carbon - Central nucleus atom for all malecules.
+/// Carbon - Command and Control objective.
 pub const CARBON: Element = Element::new(6, "C", "Carbon");
 /// Oxygen - Objectives category.
 pub const OXYGEN: Element = Element::new(8, "O", "Oxygen");
-/// Boron - Micro-behaviors category.
-pub const BORON: Element = Element::new(5, "B", "Boron");
-/// Magnesium - Metadata category.
-pub const MAGNESIUM: Element = Element::new(12, "Mg", "Magnesium");
+/// Hydrogen - Micro-behaviors category (small and common).
+pub const HYDROGEN_MICRO: Element = Element::new(1, "H", "Hydrogen");
+/// Mendelevium - Metadata category.
+pub const MENDELEVIUM: Element = Element::new(101, "Md", "Mendelevium");
 
 /// Aluminum - anti-analysis objective.
 pub const ALUMINUM: Element = Element::new(13, "Al", "Aluminum");
@@ -41,7 +41,7 @@ pub const ALUMINUM: Element = Element::new(13, "Al", "Aluminum");
 pub const ARSENIC: Element = Element::new(33, "As", "Arsenic");
 /// Cobalt - collection objective.
 pub const COBALT: Element = Element::new(27, "Co", "Cobalt");
-/// Copper - command-and-control objective.
+/// Copper - (unused, command-and-control now uses Carbon).
 pub const COPPER: Element = Element::new(29, "Cu", "Copper");
 /// Calcium - credential-access objective.
 pub const CALCIUM: Element = Element::new(20, "Ca", "Calcium");
@@ -98,8 +98,8 @@ pub const SILVER: Element = Element::new(47, "Ag", "Silver");
 /// Platinum - lang metadata.
 pub const PLATINUM: Element = Element::new(78, "Pt", "Platinum");
 
-/// Tungsten - well-known malware families.
-pub const TUNGSTEN: Element = Element::new(74, "W", "Tungsten");
+/// Potassium - well-known (K for "Known") malware families.
+pub const POTASSIUM: Element = Element::new(19, "K", "Potassium");
 
 /// Thorium - third-party signatures/rules.
 pub const THORIUM: Element = Element::new(90, "Th", "Thorium");
@@ -117,16 +117,16 @@ pub fn category_to_element(category: &str) -> Option<Element> {
 
         // Top-level categories
         m.insert("objectives", OXYGEN);
-        m.insert("micro-behaviors", BORON);
-        m.insert("metadata", MAGNESIUM);
-        m.insert("well-known", TUNGSTEN);
+        m.insert("micro-behaviors", HYDROGEN_MICRO);
+        m.insert("metadata", MENDELEVIUM);
+        m.insert("well-known", POTASSIUM);
         m.insert("third_party", THORIUM);
 
         // Objective subcategories
         m.insert("anti-analysis", ALUMINUM);
         m.insert("anti-static", ARSENIC);
         m.insert("collection", COBALT);
-        m.insert("command-and-control", COPPER);
+        m.insert("command-and-control", CARBON);
         m.insert("credential-access", CALCIUM);
         m.insert("discovery", DYSPROSIUM);
         m.insert("execution", XENON);
@@ -156,7 +156,7 @@ pub fn category_to_element(category: &str) -> Option<Element> {
         m.insert("lang", PLATINUM);
 
         // Malware families (well-known)
-        m.insert("malware", TUNGSTEN);
+        m.insert("malware", POTASSIUM);
 
         m
     });
@@ -169,20 +169,30 @@ pub fn category_to_element(category: &str) -> Option<Element> {
 pub fn parent_element(category: &str) -> Option<Element> {
     match category {
         // Objective subcategories -> O
-        "anti-analysis" | "anti-static" | "collection" | "command-and-control"
-        | "credential-access" | "discovery" | "execution" | "exfiltration" | "impact"
-        | "lateral-movement" | "persistence" | "privilege-escalation" | "evasion"
+        "anti-analysis"
+        | "anti-static"
+        | "collection"
+        | "command-and-control"
+        | "credential-access"
+        | "discovery"
+        | "execution"
+        | "exfiltration"
+        | "impact"
+        | "lateral-movement"
+        | "persistence"
+        | "privilege-escalation"
+        | "evasion"
         | "resource-development" => Some(OXYGEN),
 
-        // Micro-behavior subcategories -> B
+        // Micro-behavior subcategories -> H
         "crypto" | "communications" | "fs" | "process" | "os" | "data" | "host" | "hardware"
-        | "network" | "dylib" => Some(BORON),
+        | "network" | "dylib" => Some(HYDROGEN_MICRO),
 
         // Metadata subcategories -> Mg
-        "quality" | "format" | "lang" => Some(MAGNESIUM),
+        "quality" | "format" | "lang" => Some(MENDELEVIUM),
 
         // Well-known -> W
-        "malware" => Some(TUNGSTEN),
+        "malware" => Some(POTASSIUM),
 
         _ => None,
     }
@@ -203,7 +213,7 @@ mod tests {
     #[test]
     fn test_parent_element() {
         assert_eq!(parent_element("lateral-movement"), Some(OXYGEN));
-        assert_eq!(parent_element("fs"), Some(BORON));
-        assert_eq!(parent_element("quality"), Some(MAGNESIUM));
+        assert_eq!(parent_element("fs"), Some(HYDROGEN_MICRO));
+        assert_eq!(parent_element("quality"), Some(MENDELEVIUM));
     }
 }

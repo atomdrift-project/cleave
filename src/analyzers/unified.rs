@@ -636,6 +636,7 @@ impl UnifiedSourceAnalyzer {
                         source: "aes_extractor".to_string(),
                         value: format!("preview={}", payload.preview),
                         location: Some(format!("offset:{}", payload.original_offset)),
+                        ..Default::default()
                     }],
                 });
 

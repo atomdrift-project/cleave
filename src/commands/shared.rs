@@ -243,7 +243,7 @@ pub(crate) fn analyze_file_with_shared_mapper(
     // Use these results for both encoded payload extraction AND analyzer string extraction
     tracing::info!("Extracting strings with stng");
     let opts = stng::ExtractOptions::new(4).with_garbage_filter(true); // Filter out garbage strings
-                                                                        // NOTE: XOR disabled - causes performance issues on large files
+                                                                       // NOTE: XOR disabled - causes performance issues on large files
     let t_stng = std::time::Instant::now();
     let stng_strings = stng::extract_strings_with_options(file_data, &opts);
     tracing::info!(
@@ -464,6 +464,7 @@ pub(crate) fn analyze_file_with_shared_mapper(
                 source: "dissect".to_string(),
                 value: format!("expected={}, actual={}", expected, actual),
                 location: None,
+                ..Default::default()
             }],
             match_count: 1,
             source_file: None,
@@ -504,6 +505,7 @@ pub(crate) fn analyze_file_with_shared_mapper(
                     payload.preview
                 ),
                 location: Some(format!("offset:{}", payload.original_offset)),
+                ..Default::default()
             }],
             match_count: 1,
             source_file: None,

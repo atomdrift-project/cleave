@@ -239,6 +239,7 @@ pub(crate) fn eval_basename<'a>(
                 source: "target".to_string(),
                 value: basename.to_string(),
                 location: None,
+                ..Default::default()
             }]
         } else {
             Vec::new()

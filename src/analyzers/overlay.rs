@@ -115,6 +115,7 @@ pub(crate) fn analyze_overlay(
                     source: "overlay_analyzer".to_string(),
                     value: format!("archive_type:{}", archive_type),
                     location: Some(format!("overlay:{}bytes", overlay_data.len())),
+                    ..Default::default()
                 }],
                 match_count: 1,
                 source_file: Some(binary_path.to_string()),
@@ -150,12 +151,14 @@ pub(crate) fn analyze_overlay(
                         source: "overlay_analyzer".to_string(),
                         value: format!("archive_type:{}", archive_type),
                         location: Some(format!("overlay:{}bytes", overlay_data.len())),
+                        ..Default::default()
                     },
                     Evidence {
                         method: "extraction_error".to_string(),
                         source: "overlay_analyzer".to_string(),
                         value: format!("{}", e),
                         location: None,
+                        ..Default::default()
                     },
                 ],
                 match_count: 1,

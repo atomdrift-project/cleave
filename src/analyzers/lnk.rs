@@ -99,10 +99,7 @@ pub(crate) fn extract_lnk_data(data: &[u8]) -> Option<LnkData> {
         .as_ref()
         .map(|s| s.to_string());
     let working_dir = string_data.working_dir().as_ref().map(|s| s.to_string());
-    let icon_location = string_data
-        .icon_location()
-        .as_ref()
-        .map(|s| s.to_string());
+    let icon_location = string_data.icon_location().as_ref().map(|s| s.to_string());
 
     // Analyze whitespace in arguments
     let whitespace_analysis = analyze_whitespace(arguments.as_deref());
@@ -394,7 +391,10 @@ mod tests {
             .join("tests/fixtures/lnk/whitespace_obfuscated.lnk");
 
         if !fixture_path.exists() {
-            eprintln!("Fixture not found: {:?} - run generate.py first", fixture_path);
+            eprintln!(
+                "Fixture not found: {:?} - run generate.py first",
+                fixture_path
+            );
             return;
         }
 
@@ -428,7 +428,10 @@ mod tests {
             .join("tests/fixtures/lnk/benign_notepad.lnk");
 
         if !fixture_path.exists() {
-            eprintln!("Fixture not found: {:?} - run generate.py first", fixture_path);
+            eprintln!(
+                "Fixture not found: {:?} - run generate.py first",
+                fixture_path
+            );
             return;
         }
 

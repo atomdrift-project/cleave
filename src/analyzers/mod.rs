@@ -36,6 +36,7 @@ pub(crate) mod macho;
 pub(crate) mod macho_codesign;
 pub(crate) mod package_json;
 pub mod pe;
+pub(crate) mod png;
 pub(crate) mod rtf;
 pub(crate) mod vsix_manifest;
 
@@ -103,6 +104,11 @@ pub fn analyzer_for_file_type(
         // LNK files - Windows shortcuts
         FileType::Lnk => Some(Box::new(
             lnk::LnkAnalyzer::new().with_capability_mapper(mapper_or_empty),
+        )),
+
+        // PNG images - steganography detection
+        FileType::Png => Some(Box::new(
+            png::PngAnalyzer::new().with_capability_mapper(mapper_or_empty),
         )),
 
         // Package manifests - structured data parsers
@@ -180,6 +186,11 @@ pub(crate) fn analyzer_for_file_type_arc(
         // LNK files - Windows shortcuts
         FileType::Lnk => Some(Box::new(
             lnk::LnkAnalyzer::new().with_capability_mapper_arc(mapper_or_empty),
+        )),
+
+        // PNG images - steganography detection
+        FileType::Png => Some(Box::new(
+            png::PngAnalyzer::new().with_capability_mapper_arc(mapper_or_empty),
         )),
 
         // Package manifests - structured data parsers
@@ -1106,12 +1117,12 @@ impl FileType {
             | FileType::AppleScript
             | FileType::Plist
             | FileType::Rtf
-            | FileType::Lnk => true,
+            | FileType::Lnk
+            | FileType::Png => true, // PNG included for steganography detection
             FileType::Archive
             | FileType::Unknown
             | FileType::Jpeg
-            | FileType::Png
-            | FileType::Certificate => false, // Skip images and unknown files by default in dir scans
+            | FileType::Certificate => false, // Skip other images and unknown files by default in dir scans
         }
     }
 

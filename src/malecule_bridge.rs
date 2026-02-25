@@ -105,6 +105,7 @@ mod tests {
                 source: "test".to_string(),
                 value: "test_value".to_string(),
                 location: None,
+                ..Default::default()
             }],
             match_count: 1,
             source_file: None,
@@ -134,14 +135,24 @@ mod tests {
     #[test]
     fn test_formula_generation() {
         let findings = vec![
-            test_finding("objectives/lateral-movement/supply-chain", Criticality::Suspicious),
+            test_finding(
+                "objectives/lateral-movement/supply-chain",
+                Criticality::Suspicious,
+            ),
             test_finding("micro-behaviors/fs/file", Criticality::Notable),
         ];
 
         let formula = formula_from_findings(&findings);
-        assert!(formula.contains('C')); // Central
-        assert!(formula.contains('O')); // Objectives
-        assert!(formula.contains('B')); // Micro-behaviors
+        assert!(formula.contains('O'), "Expected O (Oxygen) for objectives"); // Objectives
+        assert!(
+            formula.contains('H'),
+            "Expected H (Hydrogen) for micro-behaviors"
+        ); // Micro-behaviors
+        assert!(
+            formula.contains("La"),
+            "Expected La (Lanthanum) for lateral-movement"
+        ); // lateral-movement subcategory
+        assert!(formula.contains('F'), "Expected F (Fluorine) for fs"); // fs subcategory
     }
 
     #[test]

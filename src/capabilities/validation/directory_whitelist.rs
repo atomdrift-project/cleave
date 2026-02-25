@@ -10,21 +10,21 @@ use std::path::Path;
 /// These correspond to MBC objectives and cleave-specific extensions.
 /// Update this list when adding new objectives to TAXONOMY.md.
 const ALLOWED_OBJECTIVES: &[&str] = &[
-    "anti-analysis",       // MBC: Anti-Behavioral Analysis
-    "anti-static",         // MBC: Anti-Static Analysis
-    "evasion",            // MBC: Defense Evasion (extended)
-    "command-and-control", // MBC: Command and Control
-    "collection",         // MBC: Collection
-    "credential-access",  // MBC: Credential Access
-    "discovery",          // MBC: Discovery
-    "execution",          // MBC: Execution
-    "exfiltration",       // MBC: Exfiltration
-    "impact",             // MBC: Impact
-    "lateral-movement",   // MBC: Lateral Movement
-    "persistence",        // MBC: Persistence
+    "anti-analysis",        // MBC: Anti-Behavioral Analysis
+    "anti-static",          // MBC: Anti-Static Analysis
+    "evasion",              // MBC: Defense Evasion (extended)
+    "command-and-control",  // MBC: Command and Control
+    "collection",           // MBC: Collection
+    "credential-access",    // MBC: Credential Access
+    "discovery",            // MBC: Discovery
+    "execution",            // MBC: Execution
+    "exfiltration",         // MBC: Exfiltration
+    "impact",               // MBC: Impact
+    "lateral-movement",     // MBC: Lateral Movement
+    "persistence",          // MBC: Persistence
     "privilege-escalation", // MBC: Privilege Escalation
     // Meta categories
-    "false-positives",    // Special: downgrade rules for reducing FPs
+    "false-positives", // Special: downgrade rules for reducing FPs
 ];
 
 /// Allowed top-level subdirectories in micro-behaviors/
@@ -62,10 +62,7 @@ const ALLOWED_MICRO_BEHAVIORS: &[&str] = &[
 /// Allowed top-level subdirectories in well-known/
 ///
 /// These represent specific malware families and tools.
-const ALLOWED_WELL_KNOWN: &[&str] = &[
-    "malware",
-    "tools",
-];
+const ALLOWED_WELL_KNOWN: &[&str] = &["malware", "tools"];
 
 /// Validates that only known subdirectories exist in taxonomy tiers.
 ///
@@ -135,6 +132,7 @@ pub(crate) fn validate_directory_structure(traits_path: &Path) -> Result<(), Vec
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
     use std::path::PathBuf;

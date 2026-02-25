@@ -71,6 +71,7 @@ impl VsixManifestAnalyzer {
                 source: "roxmltree".to_string(),
                 value: identity,
                 location: None,
+                ..Default::default()
             }],
         });
 
@@ -91,6 +92,7 @@ impl VsixManifestAnalyzer {
                             source: "vsixmanifest".to_string(),
                             value: "ExecutesCode=true".to_string(),
                             location: None,
+                            ..Default::default()
                         }]),
                     );
                 }

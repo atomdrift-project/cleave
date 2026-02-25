@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 
 use super::binary_metrics::{BinaryMetrics, ElfMetrics, JavaClassMetrics, MachoMetrics, PeMetrics};
 use super::container_metrics::{ArchiveMetrics, PackageJsonMetrics};
+use super::png_metrics::PngMetrics;
 use super::is_zero_f32;
 use super::language_metrics::{
     CMetrics, CSharpMetrics, GoMetrics, JavaScriptMetrics, JavaSourceMetrics, LuaMetrics,
@@ -112,6 +113,11 @@ pub struct Metrics {
     /// npm package.json metrics
     #[serde(skip_serializing_if = "Option::is_none")]
     pub package_json: Option<PackageJsonMetrics>,
+
+    // === Image metrics ===
+    /// PNG image metrics for steganography detection
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub png: Option<PngMetrics>,
 
     // === Composite scores ===
     /// Composite obfuscation score with component breakdown

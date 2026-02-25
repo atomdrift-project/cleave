@@ -60,6 +60,7 @@ fn create_test_finding(id: &str) -> Finding {
             source: "test".to_string(),
             value: "test evidence".to_string(),
             location: None,
+            ..Default::default()
         }],
         match_count: 0,
         source_file: None,
@@ -81,6 +82,7 @@ fn test_eval_structure_exact_match() {
             source: "binary".to_string(),
             value: "DOS header found".to_string(),
             location: Some("0x0".to_string()),
+            ..Default::default()
         }],
     });
     let data = vec![];
@@ -259,12 +261,14 @@ fn test_eval_trait_evidence_propagation() {
             source: "import".to_string(),
             value: "execve".to_string(),
             location: Some("0x1000".to_string()),
+            ..Default::default()
         },
         Evidence {
             method: "string".to_string(),
             source: "binary".to_string(),
             value: "/bin/sh".to_string(),
             location: Some("0x2000".to_string()),
+            ..Default::default()
         },
     ];
     report.findings.push(finding);

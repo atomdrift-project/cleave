@@ -450,6 +450,7 @@ mod tests {
                 source: "test".to_string(),
                 value: "test-value".to_string(),
                 location: None,
+                ..Default::default()
             }],
             match_count: 0,
             source_file: Some("test.yaml".to_string()),

@@ -46,7 +46,9 @@ pub fn analyze_function(func: &Function) -> Vec<Finding> {
                     method: "trait".to_string(),
                     source: "radare2".to_string(),
                     value: "noreturn".to_string(),
-                    location: Some(func.name.clone()),
+                    location: Some(func.name.clone())
+                ,
+                    ..Default::default()
                 }],
                 source_file: None,
             });
@@ -78,7 +80,9 @@ fn analyze_control_flow(cf: &ControlFlowMetrics, func_name: &str) -> Vec<Finding
                     "complexity={}, loops={}",
                     cf.cyclomatic_complexity, cf.loop_count
                 ),
-                location: Some(func_name.to_string()),
+                location: Some(func_name.to_string())
+            ,
+                ..Default::default()
             }],
             source_file: None,
         });
@@ -98,7 +102,9 @@ fn analyze_control_flow(cf: &ControlFlowMetrics, func_name: &str) -> Vec<Finding
                     method: "trait".to_string(),
                     source: "radare2".to_string(),
                     value: format!("complexity={}", cf.cyclomatic_complexity),
-                    location: Some(func_name.to_string()),
+                    location: Some(func_name.to_string())
+                ,
+                    ..Default::default()
                 }],
                 source_file: None,
             });
@@ -120,7 +126,9 @@ fn analyze_control_flow(cf: &ControlFlowMetrics, func_name: &str) -> Vec<Finding
                 method: "trait".to_string(),
                 source: "radare2".to_string(),
                 value: format!("loops={}", cf.loop_count),
-                location: Some(func_name.to_string()),
+                location: Some(func_name.to_string())
+            ,
+                ..Default::default()
             }],
             source_file: None,
         });
@@ -150,7 +158,9 @@ fn analyze_instructions(instr: &InstructionAnalysis, func_name: &str) -> Vec<Fin
                         method: "trait".to_string(),
                         source: "radare2".to_string(),
                         value: unusual_inst.clone(),
-                        location: Some(func_name.to_string()),
+                        location: Some(func_name.to_string())
+                    ,
+                        ..Default::default()
                     }],
                     source_file: None,
                 });
@@ -169,7 +179,9 @@ fn analyze_instructions(instr: &InstructionAnalysis, func_name: &str) -> Vec<Fin
                         method: "trait".to_string(),
                         source: "radare2".to_string(),
                         value: unusual_inst.clone(),
-                        location: Some(func_name.to_string()),
+                        location: Some(func_name.to_string())
+                    ,
+                        ..Default::default()
                     }],
                     source_file: None,
                 });
@@ -188,7 +200,9 @@ fn analyze_instructions(instr: &InstructionAnalysis, func_name: &str) -> Vec<Fin
                         method: "trait".to_string(),
                         source: "radare2".to_string(),
                         value: unusual_inst.clone(),
-                        location: Some(func_name.to_string()),
+                        location: Some(func_name.to_string())
+                    ,
+                        ..Default::default()
                     }],
                     source_file: None,
                 });
@@ -207,7 +221,9 @@ fn analyze_instructions(instr: &InstructionAnalysis, func_name: &str) -> Vec<Fin
                         method: "trait".to_string(),
                         source: "radare2".to_string(),
                         value: unusual_inst.clone(),
-                        location: Some(func_name.to_string()),
+                        location: Some(func_name.to_string())
+                    ,
+                        ..Default::default()
                     }],
                     source_file: None,
                 });
@@ -227,7 +243,9 @@ fn analyze_instructions(instr: &InstructionAnalysis, func_name: &str) -> Vec<Fin
                         method: "trait".to_string(),
                         source: "radare2".to_string(),
                         value: unusual_inst.clone(),
-                        location: Some(func_name.to_string()),
+                        location: Some(func_name.to_string())
+                    ,
+                        ..Default::default()
                     }],
                     source_file: None,
                 });
@@ -252,7 +270,9 @@ fn analyze_instructions(instr: &InstructionAnalysis, func_name: &str) -> Vec<Fin
                 method: "trait".to_string(),
                 source: "radare2".to_string(),
                 value: format!("xor_ratio={:.2}", xor_ratio),
-                location: Some(func_name.to_string()),
+                location: Some(func_name.to_string())
+            ,
+                ..Default::default()
             }],
             source_file: None,
         });
@@ -273,7 +293,9 @@ fn analyze_instructions(instr: &InstructionAnalysis, func_name: &str) -> Vec<Fin
                 method: "trait".to_string(),
                 source: "radare2".to_string(),
                 value: format!("crypto_instructions={}", instr.categories.crypto),
-                location: Some(func_name.to_string()),
+                location: Some(func_name.to_string())
+            ,
+                ..Default::default()
             }],
             source_file: None,
         });
@@ -294,7 +316,9 @@ fn analyze_instructions(instr: &InstructionAnalysis, func_name: &str) -> Vec<Fin
                 method: "trait".to_string(),
                 source: "radare2".to_string(),
                 value: format!("string_ops={}", instr.categories.string_ops),
-                location: Some(func_name.to_string()),
+                location: Some(func_name.to_string())
+            ,
+                ..Default::default()
             }],
             source_file: None,
         });
@@ -315,7 +339,9 @@ fn analyze_instructions(instr: &InstructionAnalysis, func_name: &str) -> Vec<Fin
                 method: "trait".to_string(),
                 source: "radare2".to_string(),
                 value: format!("syscalls={}", instr.categories.system),
-                location: Some(func_name.to_string()),
+                location: Some(func_name.to_string())
+            ,
+                ..Default::default()
             }],
             source_file: None,
         });
@@ -336,7 +362,9 @@ fn analyze_instructions(instr: &InstructionAnalysis, func_name: &str) -> Vec<Fin
                 method: "trait".to_string(),
                 source: "radare2".to_string(),
                 value: format!("privileged={}", instr.categories.privileged),
-                location: Some(func_name.to_string()),
+                location: Some(func_name.to_string())
+            ,
+                ..Default::default()
             }],
             source_file: None,
         });
@@ -369,7 +397,9 @@ fn analyze_constants(
                             method: "constant_decode".to_string(),
                             source: "radare2".to_string(),
                             value: decoded.decoded_value.clone(),
-                            location: Some(func_name.to_string()),
+                            location: Some(func_name.to_string())
+                        ,
+                            ..Default::default()
                         }],
                         source_file: None,
                     });
@@ -388,7 +418,9 @@ fn analyze_constants(
                             method: "constant_decode".to_string(),
                             source: "radare2".to_string(),
                             value: decoded.decoded_value.clone(),
-                            location: Some(func_name.to_string()),
+                            location: Some(func_name.to_string())
+                        ,
+                            ..Default::default()
                         }],
                         source_file: None,
                     });
@@ -421,7 +453,9 @@ pub fn analyze_binary_properties(props: &BinaryProperties) -> Vec<Finding> {
                 method: "trait".to_string(),
                 source: "radare2".to_string(),
                 value: "no_canary,no_nx,no_pic".to_string(),
-                location: None,
+                location: None
+            ,
+                ..Default::default()
             }],
             source_file: None,
         });
@@ -443,6 +477,7 @@ pub fn analyze_binary_properties(props: &BinaryProperties) -> Vec<Finding> {
                 source: "radare2".to_string(),
                 value: "stripped".to_string(),
                 location: None,
+                    ..Default::default()
             }],
             source_file: None,
         });
@@ -464,6 +499,7 @@ pub fn analyze_binary_properties(props: &BinaryProperties) -> Vec<Finding> {
                 source: "radare2".to_string(),
                 value: "static".to_string(),
                 location: None,
+                    ..Default::default()
             }],
             source_file: None,
         });
@@ -492,6 +528,7 @@ pub fn analyze_binary_properties(props: &BinaryProperties) -> Vec<Finding> {
                 source: "radare2".to_string(),
                 value: anomaly.anomaly_type.clone(),
                 location: None,
+                    ..Default::default()
             }],
             source_file: None,
         });

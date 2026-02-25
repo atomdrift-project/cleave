@@ -579,8 +579,9 @@ impl ArchiveAnalyzer {
         let total_traits = Arc::new(Mutex::new(HashSet::new()));
         // Pre-allocate with conservative estimates; findings are deduplicated and only
         // URL/IP/Base64 strings are collected, so actual counts are much smaller than file count.
-        let collected_traits =
-            Arc::new(Mutex::new(Vec::<Finding>::with_capacity(total_files.min(500))));
+        let collected_traits = Arc::new(Mutex::new(Vec::<Finding>::with_capacity(
+            total_files.min(500),
+        )));
         let collected_yara = Arc::new(Mutex::new(Vec::<YaraMatch>::with_capacity(100)));
         let collected_strings = Arc::new(Mutex::new(Vec::<StringInfo>::with_capacity(
             (total_files * 2).min(200),
@@ -888,6 +889,7 @@ impl ArchiveAnalyzer {
                         source: "archive_analyzer".to_string(),
                         value: format!("timeout:{}s", MAX_FILE_ANALYSIS_TIME_SECS),
                         location: Some(file_path.display().to_string()),
+                        ..Default::default()
                     }],
 
                     match_count: 0,

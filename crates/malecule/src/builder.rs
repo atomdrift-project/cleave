@@ -1,6 +1,8 @@
 //! Malecule builder - constructs malecules from analysis findings.
 
-use crate::elements::{category_to_element, BORON, CARBON, MAGNESIUM, OXYGEN, THORIUM, TUNGSTEN};
+use crate::elements::{
+    category_to_element, CARBON, HYDROGEN_MICRO, MENDELEVIUM, OXYGEN, POTASSIUM, THORIUM,
+};
 use crate::formula::{generate_formula, FindingInput};
 use crate::layout::{apply_layout, LayoutAlgorithm};
 use crate::types::{Malecule, Severity};
@@ -105,16 +107,22 @@ impl MaleculeBuilder {
         let mut path_to_atom: FxHashMap<String, usize> = FxHashMap::default();
 
         // Create atoms for top-level categories
-        let top_levels = ["objectives", "micro-behaviors", "metadata", "well-known", "third_party"];
+        let top_levels = [
+            "objectives",
+            "micro-behaviors",
+            "metadata",
+            "well-known",
+            "third_party",
+        ];
         let mut top_atom_ids: Vec<usize> = Vec::new();
 
         for top in top_levels {
             if let Some(node) = tree.get(top) {
                 let element = match top {
                     "objectives" => OXYGEN,
-                    "micro-behaviors" => BORON,
-                    "metadata" => MAGNESIUM,
-                    "well-known" => TUNGSTEN,
+                    "micro-behaviors" => HYDROGEN_MICRO,
+                    "metadata" => MENDELEVIUM,
+                    "well-known" => POTASSIUM,
                     "third_party" => THORIUM,
                     _ => CARBON,
                 };
@@ -125,13 +133,7 @@ impl MaleculeBuilder {
                 top_atom_ids.push(atom_id);
 
                 // Recursively create child atoms
-                self.create_child_atoms(
-                    &mut malecule,
-                    &tree,
-                    &mut path_to_atom,
-                    node,
-                    atom_id,
-                );
+                self.create_child_atoms(&mut malecule, &tree, &mut path_to_atom, node, atom_id);
             }
         }
 
@@ -182,7 +184,10 @@ impl MaleculeBuilder {
                         child_path.clone(),
                         child_node.max_severity,
                         child_path.clone(),
-                        child_node.best_finding.as_ref().and_then(|f| f.description.clone()),
+                        child_node
+                            .best_finding
+                            .as_ref()
+                            .and_then(|f| f.description.clone()),
                         child_node.all_evidence.clone(),
                     );
                     path_to_atom.insert(child_path.clone(), atom_id);
@@ -197,7 +202,13 @@ impl MaleculeBuilder {
                     self.create_child_atoms(malecule, tree, path_to_atom, child_node, atom_id);
                 } else {
                     // Single-child intermediate - skip this node, connect child directly to parent
-                    self.create_child_atoms(malecule, tree, path_to_atom, child_node, parent_atom_id);
+                    self.create_child_atoms(
+                        malecule,
+                        tree,
+                        path_to_atom,
+                        child_node,
+                        parent_atom_id,
+                    );
                 }
             }
         }
@@ -222,9 +233,9 @@ impl MaleculeBuilder {
         // Fallback to top-level element
         match parts.first() {
             Some(&"objectives") => OXYGEN,
-            Some(&"micro-behaviors") => BORON,
-            Some(&"metadata") => MAGNESIUM,
-            Some(&"well-known") => TUNGSTEN,
+            Some(&"micro-behaviors") => HYDROGEN_MICRO,
+            Some(&"metadata") => MENDELEVIUM,
+            Some(&"well-known") => POTASSIUM,
             _ => CARBON,
         }
     }
@@ -232,7 +243,7 @@ impl MaleculeBuilder {
     /// Builds a tree of categories from findings.
     /// Each node tracks the max severity and all evidence in its subtree.
     /// Tree depth is limited to 3 levels: top-level -> second -> third (leaf).
-    fn build_category_tree<'a>(&self, findings: &[&'a Finding]) -> FxHashMap<String, CategoryNode> {
+    fn build_category_tree(&self, findings: &[&Finding]) -> FxHashMap<String, CategoryNode> {
         let mut tree: FxHashMap<String, CategoryNode> = FxHashMap::default();
 
         // Maximum depth: top-level (1) -> second (2) -> third/leaf (3)
@@ -249,7 +260,11 @@ impl MaleculeBuilder {
 
             for i in 1..=depth {
                 let path = parts[..i].join("/");
-                let parent_path = if i > 1 { parts[..i - 1].join("/") } else { String::new() };
+                let parent_path = if i > 1 {
+                    parts[..i - 1].join("/")
+                } else {
+                    String::new()
+                };
                 let name = parts[i - 1].to_string();
 
                 // Update or create the node
@@ -267,18 +282,23 @@ impl MaleculeBuilder {
                 node.all_evidence.extend(finding.evidence.clone());
 
                 // Track best finding at leaf level (depth == MAX_DEPTH or actual leaf)
-                if i == depth {
-                    if node.best_finding.is_none() || finding.severity > node.best_finding.as_ref().unwrap().severity {
-                        node.best_finding = Some(finding.clone());
-                    }
+                if i == depth
+                    && node
+                        .best_finding
+                        .as_ref()
+                        .is_none_or(|bf| finding.severity > bf.severity)
+                {
+                    node.best_finding = Some(finding.clone());
                 }
 
                 // Add this node as child of parent
                 if !parent_path.is_empty() {
-                    let parent = tree.entry(parent_path.clone()).or_insert_with(|| CategoryNode {
-                        path: parent_path,
-                        ..Default::default()
-                    });
+                    let parent = tree
+                        .entry(parent_path.clone())
+                        .or_insert_with(|| CategoryNode {
+                            path: parent_path,
+                            ..Default::default()
+                        });
                     if !parent.children.contains(&name) {
                         parent.children.push(name);
                     }
@@ -380,10 +400,10 @@ impl MaleculeBuilder {
             })
             .collect()
     }
-
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
 
@@ -445,7 +465,10 @@ mod tests {
 
         // Should have a double bond between the two trait atoms (shared evidence)
         let double_bonds: Vec<_> = malecule.bonds.iter().filter(|b| b.bond_type == 2).collect();
-        assert!(!double_bonds.is_empty(), "Should have evidence overlap bonds");
+        assert!(
+            !double_bonds.is_empty(),
+            "Should have evidence overlap bonds"
+        );
     }
 
     #[test]
@@ -472,16 +495,29 @@ mod tests {
                 id: "objectives/lateral-movement/supply-chain/npm/install-hooks".to_string(),
                 description: Some("NPM install hooks allow code execution".to_string()),
                 severity: Severity::Hostile,
-                evidence: vec!["postinstall script".to_string(), "preinstall script".to_string()],
+                evidence: vec![
+                    "postinstall script".to_string(),
+                    "preinstall script".to_string(),
+                ],
                 trait_refs: vec![],
             })
             .build();
 
         // With max depth 3, the leaf is at "objectives/lateral-movement/supply-chain"
         // Find the leaf atom (the one with evidence, not intermediate nodes)
-        let leaf_atom = malecule.atoms.iter().find(|a| !a.evidence.is_empty()).unwrap();
-        assert_eq!(leaf_atom.trait_id.as_deref(), Some("objectives/lateral-movement/supply-chain"));
-        assert_eq!(leaf_atom.description.as_deref(), Some("NPM install hooks allow code execution"));
+        let leaf_atom = malecule
+            .atoms
+            .iter()
+            .find(|a| !a.evidence.is_empty())
+            .unwrap();
+        assert_eq!(
+            leaf_atom.trait_id.as_deref(),
+            Some("objectives/lateral-movement/supply-chain")
+        );
+        assert_eq!(
+            leaf_atom.description.as_deref(),
+            Some("NPM install hooks allow code execution")
+        );
         assert_eq!(leaf_atom.evidence.len(), 2);
     }
 
@@ -508,10 +544,16 @@ mod tests {
         // Neutral trait should be filtered out (not referenced)
         // With max depth 3, "objectives/lateral-movement/supply-chain" is the leaf
         // Only O -> lateral-movement -> supply-chain hierarchy should exist
-        let leaf_atoms: Vec<_> = malecule.atoms.iter()
+        let leaf_atoms: Vec<_> = malecule
+            .atoms
+            .iter()
             .filter(|a| a.trait_id.as_deref() == Some("objectives/lateral-movement/supply-chain"))
             .collect();
-        assert_eq!(leaf_atoms.len(), 1, "Should have one leaf for the notable+ trait");
+        assert_eq!(
+            leaf_atoms.len(),
+            1,
+            "Should have one leaf for the notable+ trait"
+        );
     }
 
     #[test]
@@ -539,11 +581,18 @@ mod tests {
         // objectives/lateral-movement/composite -> creates: objectives, objectives/lateral-movement, objectives/lateral-movement/composite
         // metadata/format/pe -> creates: metadata, metadata/format, metadata/format/pe
         // Check that both leaf subdirectories exist
-        let has_objectives_leaf = malecule.atoms.iter()
+        let has_objectives_leaf = malecule
+            .atoms
+            .iter()
             .any(|a| a.trait_id.as_deref() == Some("objectives/lateral-movement/composite"));
-        let has_metadata_leaf = malecule.atoms.iter()
+        let has_metadata_leaf = malecule
+            .atoms
+            .iter()
             .any(|a| a.trait_id.as_deref() == Some("metadata/format/pe"));
         assert!(has_objectives_leaf, "objectives leaf should exist");
-        assert!(has_metadata_leaf, "metadata leaf should exist (referenced neutral)");
+        assert!(
+            has_metadata_leaf,
+            "metadata leaf should exist (referenced neutral)"
+        );
     }
 }

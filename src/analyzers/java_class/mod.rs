@@ -64,6 +64,7 @@ impl JavaClassAnalyzer {
                 source: "class-parser".to_string(),
                 value: "CAFEBABE".to_string(),
                 location: Some("0x0".to_string()),
+                ..Default::default()
             }],
         });
 

@@ -10,6 +10,8 @@ defaults:
 
 traits:
   # === Startup folder atomic indicators ===
+  # Note: Rules use regex to match both raw strings (single backslash)
+  # and source code strings (escaped double backslash)
   - id: start-menu-startup
     desc: Start Menu Programs Startup path
     crit: notable
@@ -17,7 +19,8 @@ traits:
     platforms: [windows]
     if:
       type: string
-      substr: "\\Start Menu\\Programs\\Startup"
+      # Matches: \Start Menu\Programs\Startup or \\Start Menu\\Programs\\Startup
+      regex: "\\\\{1,2}Start Menu\\\\{1,2}Programs\\\\{1,2}Startup"
 
   - id: appdata-startup
     desc: AppData Roaming Startup path
@@ -26,7 +29,8 @@ traits:
     platforms: [windows]
     if:
       type: string
-      substr: "AppData\\Roaming\\Microsoft\\Windows\\Start Menu\\Programs\\Startup"
+      # Matches both escaped and unescaped path separators
+      regex: "AppData\\\\{1,2}Roaming\\\\{1,2}Microsoft\\\\{1,2}Windows\\\\{1,2}Start Menu\\\\{1,2}Programs\\\\{1,2}Startup"
 
   - id: shell-startup
     desc: shell:startup special folder
@@ -331,9 +335,10 @@ traits:
 composite_rules:
   # Startup folder composite
   - id: windows-startup-folder
-    desc: "Targets Windows Startup folder for"
+    desc: "Targets Windows Startup folder for persistence"
     conf: 0.85
     crit: suspicious
+    for: [pe, py, rb, js, ts, batch]
     platforms: [windows]
     any:
       - id: start-menu-startup

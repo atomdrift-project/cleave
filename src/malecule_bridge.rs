@@ -53,7 +53,10 @@ pub fn malecule_from_file_analysis(file: &FileAnalysis, layout: LayoutAlgorithm)
     builder.layout(layout);
 
     for finding in &file.findings {
-        let evidence: Vec<String> = finding.evidence.iter().map(|e| e.value.clone()).collect();
+        // Collect, deduplicate, and sort evidence
+        let mut evidence: Vec<String> = finding.evidence.iter().map(|e| e.value.clone()).collect();
+        evidence.sort();
+        evidence.dedup();
 
         builder.add_finding(malecule::Finding {
             id: finding.id.clone(),

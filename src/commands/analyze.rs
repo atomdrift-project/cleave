@@ -997,7 +997,10 @@ fn generate_galaxy_html_viewer(
         }}
         .molecule-item:hover {{ background: rgba(255,255,255,0.1); }}
         .molecule-item.selected {{ background: rgba(255,121,198,0.3); border: 1px solid #ff79c6; }}
-        .molecule-color {{ width: 10px; height: 10px; border-radius: 50%; margin-right: 8px; }}
+        .molecule-color {{ width: 10px; height: 10px; border-radius: 50%; margin-right: 8px; flex-shrink: 0; }}
+        .molecule-info {{ display: flex; flex-direction: column; overflow: hidden; }}
+        .molecule-name {{ white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }}
+        .molecule-formula {{ font-size: 9px; color: #888; font-family: monospace; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }}
         .layout-switcher {{ margin-top: 10px; padding-top: 10px; border-top: 1px solid #333; }}
         .layout-switcher-title {{ font-size: 11px; color: #888; margin-bottom: 6px; }}
         .layout-btn {{
@@ -1289,7 +1292,7 @@ fn generate_galaxy_html_viewer(
             addLabel(moleculeNames[molIndex], offset, moleculeColors[molIndex]);
         }});
 
-        // Create inter-file link bonds (thicker, colored)
+        // Create inter-file link bonds (thicker, colored) with arrows
         interFileLinks.forEach(link => {{
             const offset1 = getMoleculeOffset(link[0], molLayouts.length);
             const offset2 = getMoleculeOffset(link[1], molLayouts.length);
@@ -1298,22 +1301,33 @@ fn generate_galaxy_html_viewer(
             const endVec = new THREE.Vector3(offset2.x, offset2.y, offset2.z);
             const direction = new THREE.Vector3().subVectors(endVec, startVec);
             const length = direction.length();
+            const dirNorm = direction.clone().normalize();
 
-            const geometry = new THREE.CylinderGeometry(0.15, 0.15, length, 8);
-            const material = new THREE.MeshPhongMaterial({{
+            const arrowLength = 1.4;
+            const arrowGap = 2.5; // Distance from molecule center
+            const shaftLength = length - arrowLength - arrowGap;
+
+            const linkMaterial = new THREE.MeshPhongMaterial({{
                 color: 0xff79c6,
                 shininess: 100,
                 transparent: true,
                 opacity: 0.6
             }});
 
-            const cylinder = new THREE.Mesh(geometry, material);
-            cylinder.position.copy(startVec).add(direction.clone().multiplyScalar(0.5));
-            cylinder.quaternion.setFromUnitVectors(
-                new THREE.Vector3(0, 1, 0),
-                direction.normalize()
-            );
-            scene.add(cylinder);
+            // Shaft (cylinder)
+            const shaftGeometry = new THREE.CylinderGeometry(0.12, 0.12, shaftLength, 8);
+            const shaft = new THREE.Mesh(shaftGeometry, linkMaterial);
+            shaft.position.copy(startVec).add(dirNorm.clone().multiplyScalar(shaftLength / 2));
+            shaft.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dirNorm);
+            scene.add(shaft);
+
+            // Arrow head (cone) - positioned with gap from molecule center
+            const arrowGeometry = new THREE.ConeGeometry(0.5, arrowLength, 12);
+            const arrow = new THREE.Mesh(arrowGeometry, linkMaterial);
+            const arrowPos = endVec.clone().sub(dirNorm.clone().multiplyScalar(arrowGap + arrowLength / 2));
+            arrow.position.copy(arrowPos);
+            arrow.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dirNorm);
+            scene.add(arrow);
         }});
 
         // Add text label using sprite
@@ -1345,7 +1359,8 @@ fn generate_galaxy_html_viewer(
         moleculeNames.forEach((name, i) => {{
             const item = document.createElement('div');
             item.className = 'molecule-item';
-            item.innerHTML = `<span class="molecule-color" style="background: #${{moleculeColors[i].getHexString()}}"></span>${{name}}`;
+            const formula = metadataList[i]?.formula || '';
+            item.innerHTML = `<span class="molecule-color" style="background: #${{moleculeColors[i].getHexString()}}"></span><div class="molecule-info"><span class="molecule-name">${{name}}</span><span class="molecule-formula">${{formula}}</span></div>`;
             item.onclick = () => focusMolecule(i);
             listEl.appendChild(item);
         }});

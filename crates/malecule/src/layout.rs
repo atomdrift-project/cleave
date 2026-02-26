@@ -134,9 +134,9 @@ fn layout_force_directed(malecule: &mut Malecule) {
         neighbors[bond.atom2].push(bond.atom1);
     }
 
-    // Simulation parameters
-    let ideal_length = BOND_LENGTH;
-    let repulsion = 2.0;
+    // Simulation parameters - use half bond length for more compact layout
+    let ideal_length = BOND_LENGTH * 0.5;
+    let repulsion = 1.0;
     let attraction = 0.1;
     let damping = 0.9;
     let iterations = 100;

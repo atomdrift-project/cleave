@@ -28,7 +28,7 @@ traits:
 
   - id: js-triple-date-raw
     desc: Triple Date/Time retrieval (raw)
-    crit: notable
+    crit: component
     for: [javascript]
     if:
       type: raw
@@ -37,7 +37,7 @@ traits:
 
   - id: js-triple-date-ast
     desc: Triple Date retrieval (AST)
-    crit: notable
+    crit: component
     for: [javascript]
     if:
       type: ast

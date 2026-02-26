@@ -29,6 +29,12 @@ traits:
   - type: basename
     regex: (test_|_test\.|\.test\.|\.spec\.).*\.(py|js|ts|go|php|rb|java)$
   - id: metadata/dev/testing::is-test
+  downgrade:
+    any:
+      - type: raw
+        substr: _interopRequireDefault
+      - type: raw
+        substr: __esModule
 - id: very-low-comment-ratio
   desc: Very low comment-to-code ratio (<1%)
   crit: notable
@@ -42,6 +48,12 @@ traits:
   - type: basename
     regex: (test_|_test\.|\.test\.|\.spec\.).*\.(py|js|ts|go|php|rb|java)$
   - id: metadata/dev/testing::is-test
+  downgrade:
+    any:
+      - type: raw
+        substr: _interopRequireDefault
+      - type: raw
+        substr: __esModule
 - id: very-long-lines
   desc: Very long lines (>1000 chars)
   crit: notable

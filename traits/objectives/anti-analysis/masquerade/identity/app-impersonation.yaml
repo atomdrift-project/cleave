@@ -86,14 +86,14 @@ traits:
       regex: "Helper\\.app|helper.{0,10}tool"
 
   # === Obfuscated App Names ===
+  # Require path separator to target macOS .app bundles, not Python attribute access
   - id: obfuscated-app-name
     desc: Obfuscated application name
     crit: suspicious
     conf: 0.80
     if:
       type: string
-      regex: "\\b[a-z]{15,}\\.app\\b|\\b[A-Z]{15,}\\.app\\b"
-      case_insensitive: true
+      regex: "/[a-zA-Z]{15,}\\.app(/|$)"
 
   - id: random-app-name
     desc: Randomized application name
@@ -101,7 +101,7 @@ traits:
     conf: 0.75
     if:
       type: string
-      regex: "\\b[a-z0-9]{10,20}\\.app\\b"
+      regex: "/[a-z0-9]{10,20}\\.app(/|$)"
       case_insensitive: true
 
 composite_rules:

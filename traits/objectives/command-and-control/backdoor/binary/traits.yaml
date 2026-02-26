@@ -294,6 +294,9 @@ composite_rules:
       - id: micro-behaviors/crypto/symmetric/aes::aes-sbox-bytes
       - id: micro-behaviors/crypto/asymmetric/rsa::rsa-operations
       - id: micro-behaviors/crypto/asymmetric/rsa::ed25519-constant-bytes
+    none:
+      - id: micro-behaviors/dylib/library/ssl::libcrypto-ref
+      - id: metadata/vendor/openssl::openssl-project-copyright
     downgrade:
       any:
         - type: metrics
@@ -405,6 +408,8 @@ composite_rules:
 
   # === Compression library with embedded executable ===
   # A compression library embedding ELF/PE binaries is highly suspicious
+  # Exclude archive libraries (libarchive) that contain ELF/PE
+  # magic as inline .text comparison constants for format detection
   - id: compression-lib-embedded-binary
     desc: Compression library with embedded executable
     crit: hostile
@@ -415,6 +420,8 @@ composite_rules:
     any:
       - id: micro-behaviors/data/embedded/payload::elf-magic-embedded
       - id: micro-behaviors/data/embedded/payload::pe-magic-embedded
+    unless:
+      - id: metadata/library/compression::archive-lib
 
   # === Library with embedded payload and geofencing (generic) ===
   # Any shared library with both hidden payloads and country exclusion logic

@@ -47,6 +47,7 @@ composite_rules:
     attack: "T1574.002"
     mbc: "F0015"
     for: [javascript, typescript]
+    size_max: 10000
     all:
       - id: micro-behaviors/fs/path/extension::exe
     any:
@@ -104,6 +105,7 @@ composite_rules:
     attack: "T1574.002"
     mbc: "F0015"
     for: [python]
+    size_max: 10000
     all:
       - id: micro-behaviors/fs/path/extension::exe
     any:

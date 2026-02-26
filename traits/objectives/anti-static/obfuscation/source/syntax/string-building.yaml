@@ -14,6 +14,7 @@ traits:
     if:
         type: raw
         regex: 'function\s+\w+\(\)\s*\{\s*\w+\s*\+='
+        count_min: 3
 
   # Pattern: function name() { var += 'str'; };
 #  - id: js-incremental-string-func

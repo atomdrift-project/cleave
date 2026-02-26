@@ -23,6 +23,9 @@ composite_rules:
       - id: js-local-paths
     any:
       - id: micro-behaviors/process/create/shell/lang
+    downgrade:
+      any:
+        - id: metadata/library/prettier::prettier-detection
 
   - id: obfuscated-node-dropper
     desc: Highly obfuscated Node.js file dropper and executor

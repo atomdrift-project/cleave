@@ -23,7 +23,7 @@ traits:
 
   - id: reg-create-key-transacted-name
     desc: Transacted registry create API lookup
-    crit: suspicious
+    crit: notable
     conf: 0.9
     attack: "T1112"
     if:

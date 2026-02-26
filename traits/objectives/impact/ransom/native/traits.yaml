@@ -278,6 +278,10 @@ composite_rules:
       - id: ext-vhd
       - id: ext-vmdk
       - id: ext-backup
+    downgrade:
+      any:
+        - id: metadata/vendor/microsoft::is-microsoft-named
+        - id: metadata/quality/versioning::pe-version-resource
 
   - id: extension-target-list
     desc: File extension targeting list

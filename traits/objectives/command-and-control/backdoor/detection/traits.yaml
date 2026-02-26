@@ -15,6 +15,7 @@ traits:
     if:
       type: string
       regex: '\b[bB]ackdoor\b'
+      count_min: 2
 
   # === Known false positive exclusions ===
   - id: vcpu-backdoor

@@ -27,9 +27,10 @@ traits:
     crit: suspicious
     conf: 0.9
     for: [javascript]
+    size_max: 100000
     if:
       type: raw
-      # Match a pattern like a?b?c?d?e?f? where ? is the same char
-      # Note: We can't use backreferences in standard Rust regex, so we use a more generic pattern
-      # that looks for repeated single-character gaps.
-      regex: '([a-zA-Z0-9][^a-zA-Z0-9]){30,}'
+      # Match a pattern like a?b?c?d?e?f? where ? is the same non-standard char
+      # Excludes common JS punctuation (,.;:=(){}[] and space) to avoid matching
+      # minified code like comma-separated numbers or dot-chained property access.
+      regex: '([a-zA-Z0-9][^a-zA-Z0-9,.\s;:=(){}\[\]+\-*/<>!&|"''`]){30,}'

@@ -107,6 +107,11 @@ traits:
       type: encoded
       regex: "\\beval\\s*\\("
     attack: "T1059"
+    unless:
+      - type: raw
+        regex: 'typeof\s*exports\s*={2,3}\s*["'']object["'']'
+      - type: raw
+        regex: 'typeof\s*define\s*={2,3}\s*["'']function["'']\s*&&\s*define\.amd'
 
   - id: encoded-python-exec
     desc: "Encoded Python exec() call"
@@ -154,11 +159,13 @@ traits:
     crit: suspicious
     conf: 0.9
     for: [javascript, typescript]
+    size_max: 1000000
     if:
       type: encoded
       regex: "\\bFunction\\s*\\([^)]*"
       not:
         - 'Function("d",'
+        - 'Function("return this")'
         - 'JSON.stringify(n)+": d["+t+"]"'
         - 'return {'
         - 'version:"'
@@ -171,6 +178,10 @@ traits:
         - id: metadata/library/jquery::copyright
         - id: metadata/library/jquery::fn-extend
         - id: metadata/library/d3::d3-detection
+        - id: metadata/library/structure::js-umd-wrapper
+        - id: metadata/library/structure::js-umd-wrapper-minified
+        - id: metadata/library/structure::js-umd-wrapper-amd
+        - id: metadata/library/structure::js-umd-wrapper-amd-minified
         - type: string
           regex: 'd3\.interpolate[a-zA-Z]+|d3\.scale\.linear|d3\.layout\.force|Bo=\{version:"[0-9.]+"\}|d3\s*=\s*\{version:"[0-9.]+"\}|Rickshaw\.Graph|Rickshaw\.Fixtures\.Time'
     unless:
@@ -179,18 +190,31 @@ traits:
       - id: metadata/library/jquery::copyright
       - id: metadata/library/jquery::fn-extend
       - id: metadata/library/d3::d3-detection
+      - id: metadata/library/structure::js-umd-wrapper-any
+      - id: metadata/library/structure::js-umd-wrapper
+      - id: metadata/library/structure::js-umd-wrapper-minified
+      - id: metadata/library/structure::js-umd-wrapper-amd
+      - id: metadata/library/structure::js-umd-wrapper-amd-minified
       - type: string
         regex: 'd3\.interpolate[a-zA-Z]+|d3\.scale\.linear|d3\.layout\.force|Bo=\{version:"[0-9.]+"\}|d3\s*=\s*\{version:"[0-9.]+"\}|Rickshaw\.Graph|Rickshaw\.Fixtures\.Time'
+      - type: raw
+        regex: 'typeof\s*exports\s*={2,3}\s*["'']object["'']'
+      - type: raw
+        regex: 'typeof\s*define\s*={2,3}\s*["'']function["'']\s*&&\s*define\.amd'
 
   - id: encoded-node-child-process
     desc: "Encoded child_process module"
     crit: suspicious
     conf: 0.95
     for: [javascript, typescript]
+    size_max: 1000000
     if:
       type: encoded
       substr: "child_process"
     attack: "T1059.007"
+    downgrade:
+      any:
+        - id: metadata/library/structure::js-umd-wrapper-any
 
   - id: encoded-node-vm
     desc: "Encoded Node.js vm module"
@@ -422,6 +446,7 @@ composite_rules:
     crit: suspicious
     conf: 0.9
     for: [javascript, typescript]
+    size_max: 1000000
     attack: "T1059.007"
     mbc: "F0001"
     needs: 2
@@ -430,3 +455,5 @@ composite_rules:
       - id: encoded-eval
       - id: encoded-node-child-process
       - id: encoded-node-require
+    unless:
+      - id: metadata/library/structure::js-umd-wrapper-any

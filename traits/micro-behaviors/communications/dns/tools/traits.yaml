@@ -22,6 +22,7 @@ traits:
   - id: host
     desc: host DNS command
     crit: baseline
+    for: [shell, python, javascript, ruby, php, go, elf, macho]
     if:
       type: string
       regex: '\bhost\s+'

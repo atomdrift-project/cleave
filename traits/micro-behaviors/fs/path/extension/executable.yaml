@@ -15,6 +15,7 @@ traits:
 
   - id: dll
     desc: .dll extension reference
+    crit: baseline
     if:
       type: string
       regex: '\.dll\b'
@@ -51,6 +52,7 @@ traits:
 
   - id: so
     desc: .so extension reference
+    crit: baseline
     if:
       type: string
       regex: '\.so\b'

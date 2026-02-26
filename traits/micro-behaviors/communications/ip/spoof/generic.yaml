@@ -84,7 +84,7 @@ traits:
 
   - id: bitwise-ip-shift-mask
     desc: Bit shift and 0xFF mask pattern
-    crit: suspicious
+    crit: component
     conf: 0.8
     if:
       type: raw

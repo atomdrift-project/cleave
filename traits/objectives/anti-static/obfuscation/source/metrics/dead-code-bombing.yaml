@@ -29,6 +29,7 @@ traits:
     crit: notable
     conf: 0.5
     for: [javascript, typescript, python]
+    size_min: 1000
     if:
       type: metrics
       field: "text.empty_line_ratio"

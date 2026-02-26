@@ -16,7 +16,7 @@ traits:
     regex: chr\(255\)(\s*\.\s*chr\(255\)){3}\s*\.\s*
 - id: amplification-payload-common-chr-suffix
   desc: Amplification payload suffix after chr() sequence
-  crit: suspicious
+  crit: component
   if:
     type: raw
     regex: ("getstatus"|"rules"|"TSource\sEngine\sQuery"|chr\(85\))
@@ -45,13 +45,18 @@ traits:
     type: raw
     regex: chr\(254\)\s*\.\s*chr\(253\)\s*\.\s*chr\(0\)\s*\.\s*chr\(67\)
 composite_rules:
+- id: amplification-payload-chr-full
+  desc: Amplification payload constructed with chr() prefix and command suffix
+  crit: suspicious
+  all:
+  - id: amplification-payload-common-chr
+  - id: amplification-payload-common-chr-suffix
 - id: amplification-payload-common-any
   desc: Common amplification attack payloads (Quake3, Valve, Half-Life)
   crit: suspicious
   any:
   - id: amplification-payload-common
-  - id: amplification-payload-common-chr
-  - id: amplification-payload-common-chr-suffix
+  - id: amplification-payload-chr-full
 - id: gamespy-payloads-any
   desc: GameSpy amplification payloads
   crit: suspicious

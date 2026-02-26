@@ -85,7 +85,9 @@ composite_rules:
       - id: micro-behaviors/process/create/shell::bin-bash
     none:
       - id: metadata/signed/platform::apple
-    # Downgrade for legitimate network servers/debuggers/system libraries
+    unless:
+      - id: micro-behaviors/process/fork/clone::daemon
+    # Downgrade for legitimate debuggers/system libraries
     downgrade:
       any:
         - id: micro-behaviors/dylib/library::debugger-tool-marker

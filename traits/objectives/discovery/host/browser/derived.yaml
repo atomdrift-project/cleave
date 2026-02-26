@@ -16,6 +16,8 @@ traits:
     regex: SearchEngine
 - id: inline__search-engine-id__any_3
   desc: Derived string condition
+  not:
+  - DefaultSearchBase
   if:
     type: string
     regex: DefaultSearch
@@ -31,6 +33,8 @@ traits:
     regex: searchEngine
 - id: inline__search-engine-id__any_6
   desc: Derived string condition
+  not:
+  - defaultSearchBase
   if:
     type: string
     regex: defaultSearch

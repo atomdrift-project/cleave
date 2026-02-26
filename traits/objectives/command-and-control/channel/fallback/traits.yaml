@@ -8,3 +8,6 @@ composite_rules:
     all:
       - id: micro-behaviors/communications/http/post::post
       - id: micro-behaviors/communications/http/websocket::websocket-class
+    unless:
+      - id: metadata/library::rxjs-websocket-constructor-error
+      - id: metadata/library::rxjs-cold-observable-offset-error

@@ -124,6 +124,10 @@ traits:
     if:
       type: symbol
       exact: "ResumeThread"
+    unless:
+      - type: metrics
+        field: binary.import_count
+        min: 80
     downgrade:
       any:
         - type: string

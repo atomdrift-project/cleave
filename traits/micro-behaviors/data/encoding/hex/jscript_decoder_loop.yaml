@@ -44,6 +44,7 @@ composite_rules:
     desc: JScript loop structure consistent with hex decoding
     conf: 0.9
     crit: suspicious
+    size_max: 50000
     all:
       - id: micro-behaviors/data/control-flow/analysis::iteration-loop-pattern
       - id: parseint-16

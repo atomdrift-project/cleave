@@ -1,9 +1,10 @@
 traits:
   - id: pd-fragment
     desc: Nemucod C2 URL path fragment '/pd'
-    crit: suspicious
+    crit: component
     conf: 0.9
     for: [javascript]
+    size_max: 5000
     if:
       type: string
       substr: '/pd'

@@ -12,7 +12,7 @@ traits:
 composite_rules:
   - id: temp-dropper
     desc: Writes file to Temp directory and executes it
-    crit: suspicious
+    crit: notable
     conf: 0.8
     all:
       - id: micro-behaviors/fs/temp/directory::get-temp-path

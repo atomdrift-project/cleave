@@ -167,8 +167,8 @@ traits:
     platforms: [all]
     for: [macho, elf]
     if:
-      type: string
-      regex: "_(infectApps|infect_apps|InfectApps)"
+      type: symbol
+      regex: "^(infectApps|infect_apps|InfectApps)$"
 
   - id: copy-self-symbol
     desc: Self-copy function name
@@ -178,8 +178,8 @@ traits:
     platforms: [all]
     for: [macho, elf]
     if:
-      type: string
-      regex: "_(copySelf|copy_self|CopySelf)"
+      type: symbol
+      regex: "^(copySelf|copy_self|CopySelf)$"
 
   - id: install-hooks-symbol
     desc: Hook installation function name
@@ -189,8 +189,8 @@ traits:
     platforms: [all]
     for: [macho, elf]
     if:
-      type: string
-      regex: "_(installHooks|install_hooks|InstallHooks)"
+      type: symbol
+      regex: "^(installHooks|install_hooks|InstallHooks)$"
 
 composite_rules:
   # Self-replication indicators

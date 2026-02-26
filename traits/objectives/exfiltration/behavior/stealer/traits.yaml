@@ -68,6 +68,7 @@ composite_rules:
       - id: metadata/quality/testing::mocha-test-file
       - id: metadata/quality/testing::test-filename-pattern
       - id: objectives/lateral-movement/supply-chain/npm/testing::test-fixtures
+      - id: metadata/library/axios::axios-class
 
   # Full exfiltration pattern: must have POST with custom headers or C2 indicators
   # NOTE: Simple curl downloads (without POST/upload indicators) won't trigger this

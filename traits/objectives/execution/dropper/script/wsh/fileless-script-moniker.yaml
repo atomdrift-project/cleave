@@ -1,0 +1,10 @@
+defaults:
+  for: [all]
+
+composite_rules:
+  - id: fileless-script-moniker-execution
+    desc: "Executes a remote script filelessly using GetObject and a script: moniker URL"
+    crit: hostile
+    all:
+      - id: micro-behaviors/process/script/wsh::wsh-getobject-call
+      - id: micro-behaviors/process/script/wsh::script-moniker-url

@@ -12,7 +12,7 @@ traits:
   # === Memory/Buffer Terms ===
   - id: overflow
     desc: overflow keyword
-    crit: notable
+    crit: component
     conf: 0.5
     if:
       type: string
@@ -163,7 +163,7 @@ traits:
   # === Security/Evasion Terms ===
   - id: bypass
     desc: bypass keyword
-    crit: notable
+    crit: component
     conf: 0.6
     if:
       type: string

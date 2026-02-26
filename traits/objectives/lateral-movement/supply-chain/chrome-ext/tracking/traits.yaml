@@ -18,7 +18,7 @@ traits:
 
   - id: affiliate-domain-pattern-1
     desc: Affiliate domain (affiliate/partner/track/click)
-    crit: suspicious
+    crit: notable
     conf: 0.8
     if:
       type: string
@@ -27,7 +27,7 @@ traits:
 
   - id: affiliate-domain-pattern-2
     desc: Affiliate domain (redir/monetize/revenue/earn)
-    crit: suspicious
+    crit: notable
     conf: 0.85
     if:
       type: string

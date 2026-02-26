@@ -96,7 +96,7 @@ traits:
     conf: 0.95
     attack: "T1070.006"
     if:
-      type: string
+      type: symbol
       exact: "modifyTimestamp"
 
   - id: go-timestomp-touch-time

@@ -22,7 +22,7 @@ traits:
 
   - id: esmodule-export
     desc: __esModule property
-    crit: notable
+    crit: component
     conf: 0.6
     for: [javascript]
     if:

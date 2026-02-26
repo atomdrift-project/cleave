@@ -17,6 +17,8 @@ traits:
       type: string
       word: "cuckoo"
       case_insensitive: true
+    not:
+      - regex: '[a-z]{2,4}\.cuckoo'
 
   - id: joe-sandbox
     desc: Joe Sandbox reference

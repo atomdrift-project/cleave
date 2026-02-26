@@ -71,6 +71,8 @@ traits:
     type: string
     regex: (https?|wss?)://[a-zA-Z0-9][-a-zA-Z0-9]*\.[a-zA-Z]{2,6}([/?#]|$|:)
   not:
+    - substr: "jquery.com"
+    - substr: "vimeo.com"
     - substr: "ezgif.com"
     - substr: "w3.org"
     - substr: "schemas.microsoft.com"
@@ -133,6 +135,10 @@ traits:
     - substr: "opensource.org"
     - substr: "creativecommons.org"
     - substr: "spdx.org"
+    - substr: "purl.org"
+    - substr: "upnp.org"
+    - substr: "dlna.org"
+    - substr: "mongoosejs.com"
 
 - id: http-url-script
   desc: Network URL with domain name (script)
@@ -144,6 +150,8 @@ traits:
     type: raw
     regex: (https?|wss?)://([a-zA-Z0-9][-a-zA-Z0-9]*\.){1,6}[a-zA-Z]{2,6}(/|$|:)
   not:
+    - substr: "jquery.com"
+    - substr: "vimeo.com"
     - substr: "ezgif.com"
     - substr: "w3.org"
     - substr: "schemas.microsoft.com"
@@ -206,6 +214,10 @@ traits:
     - substr: "opensource.org"
     - substr: "creativecommons.org"
     - substr: "spdx.org"
+    - substr: "purl.org"
+    - substr: "upnp.org"
+    - substr: "dlna.org"
+    - substr: "mongoosejs.com"
 
 - id: bullethost-cloud
   desc: Bullethost.cloud file hosting
@@ -569,7 +581,7 @@ traits:
   conf: 0.85
   unless:
   - type: raw
-    regex: sina\.com\.cn|163\.com|126\.com|sohu\.com|qq\.com|yahoo\.com\.cn|mysite|rambler\.ru|yandex\.ru|mail\.ru|tbcdn\.cn|xn--hgi\.ws|a\.b\.c\.xyz
+    regex: sina\.com\.cn|163\.com|126\.com|sohu\.com|qq\.com|yahoo\.com\.cn|mysite|rambler\.ru|yandex\.ru|mail\.ru|tbcdn\.cn|xn--hgi\.ws|a\.b\.c\.xyz|apowersoft\.cn|aliyuncs\.com
   if:
     type: raw
     regex: '[''\"](https?://)?([a-zA-Z0-9-]{1,63}\.){1,4}(ru|cn|xyz|top)[''"/:]'
@@ -613,6 +625,8 @@ traits:
   if:
     type: string
     regex: \b[a-zA-Z0-9][-a-zA-Z0-9]*\.(duckdns|no-ip|ddns|hopto)\.[a-z]{2,6}\b
+  not:
+    - regex: '\b[a-z]{2,4}\.(ddns|hopto|duckdns|no-ip)\.'
 
 composite_rules:
 - id: internal-api-probe

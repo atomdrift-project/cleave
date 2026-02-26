@@ -95,11 +95,14 @@ composite_rules:
         substr: "PAR_TEMP"
       - type: raw
         substr: "mscoree"
+      - type: basename
+        regex: '\.(mun|mui)$'
     downgrade:
       any:
         - id: objectives/execution/reflection/invoke::namespace-import
         - id: objectives/execution/reflection/invoke::method-info
         - id: objectives/execution/reflection/invoke::property-info
+        - id: micro-behaviors/dylib/library::libcurl-ref
         - type: metrics
           field: binary.section_count
           min: 20

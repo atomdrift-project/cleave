@@ -34,6 +34,7 @@ traits:
     desc: Go net error - connection refused
     crit: baseline
     conf: 0.6
+    for: [go]
     if:
       type: string
       substr: "connection refused"
@@ -41,6 +42,7 @@ traits:
     desc: Go net error - connection timed out
     crit: baseline
     conf: 0.6
+    for: [go]
     if:
       type: string
       substr: "connection timed out"
@@ -48,6 +50,7 @@ traits:
     desc: Go net error - reset by peer
     crit: baseline
     conf: 0.6
+    for: [go]
     if:
       type: string
       substr: "connection reset by peer"
@@ -55,6 +58,7 @@ traits:
     desc: Go net error - connection abort
     crit: baseline
     conf: 0.6
+    for: [go]
     if:
       type: string
       regex: "connection (abort|dropped)"

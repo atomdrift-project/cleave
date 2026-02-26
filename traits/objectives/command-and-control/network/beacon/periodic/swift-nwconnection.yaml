@@ -14,3 +14,6 @@ composite_rules:
       - id: micro-behaviors/communications/socket/connect::nwconnection-connect
       - id: micro-behaviors/communications/socket/send::nwconnection-send
       - id: micro-behaviors/communications/socket/receive::nwconnection-receive
+    downgrade:
+      any:
+        - id: metadata/signed/platform::apple

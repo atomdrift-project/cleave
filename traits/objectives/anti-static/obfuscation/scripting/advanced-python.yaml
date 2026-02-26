@@ -12,6 +12,7 @@ traits:
     if:
       type: raw
       regex: "[\u4E00-\u9FFF]+="
+      count_min: 3
   - id: bit-shift-arithmetic
     desc: Bit shift obfuscation
     crit: suspicious
@@ -85,6 +86,7 @@ traits:
     if:
       type: raw
       regex: "[\\u4E00-\\u9FFF\\u3040-\\u30FF][\\u4E00-\\u9FFF\\u3040-\\u30FFA-Za-z0-9_]{0,63}\\s*="
+      count_min: 3
   - id: getattr-builtins-obfuscation
     desc: getattr builtins obfuscation
     crit: suspicious

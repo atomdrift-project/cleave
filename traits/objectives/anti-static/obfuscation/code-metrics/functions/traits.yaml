@@ -47,7 +47,7 @@ traits:
     if:
       type: metrics
       field: functions.anonymous
-      min: 5
+      min: 15
     unless:
       - type: basename
         regex: "test.*\\.js$|.*\\.test\\.js$|.*\\.spec\\.js$|.*\\.test\\.ts$|.*\\.spec\\.ts$|.*test.*\\.py$|.*_test\\.py$|.*spec.*\\.rb$|.*_spec\\.rb$|\\.window\\.js$"

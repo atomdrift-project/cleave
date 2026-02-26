@@ -13,7 +13,7 @@ traits:
 
   - id: data-exfiltration-path
     desc: Exfiltration via HTTP POST to /upload
-    crit: suspicious
+    crit: component
     conf: 0.9
     for: [all]
     if:

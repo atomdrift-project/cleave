@@ -68,8 +68,8 @@ traits:
     conf: 0.7
     for: [python, javascript, ruby]
     if:
-      type: string
-      exact: '0123456789abcdef'
+      type: raw
+      regex: '(?i)(iv|nonce).{0,40}0123456789abcdef'
 
   - id: openssl-evp-encrypt
     desc: OpenSSL EVP encryption functions

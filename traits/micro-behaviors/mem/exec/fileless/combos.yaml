@@ -103,6 +103,8 @@ composite_rules:
       - id: write-memory-sym
       - id: alloc-or-protect
       - id: create-thread-sym
+    none:
+      - id: metadata/format::many-exports
     downgrade:
       any:
         - type: string

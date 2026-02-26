@@ -43,13 +43,20 @@ traits:
     for: [pe]
     if:
       type: import_combination
-      suspicious:
+      required:
         - "^(ShellExecute|WinExec|CreateProcess)"
+      suspicious:
         - "^LoadLibrary"
         - "^GetProcAddress"
         - "^Virtual(Alloc|Protect)"
-      min_suspicious: 3
+      min_suspicious: 2
       max_total: 20
+    downgrade:
+      any:
+        - type: section
+          regex: "^(UPX\\d|\\.upx)"  # UPX stub always has dynamic loading + minimal imports
+        - type: raw
+          substr: "PECompac"  # PECompact stub uses minimal imports
 
   - id: extreme-minimal-imports
     desc: "Extremely minimal import table"
@@ -66,6 +73,12 @@ traits:
         - "^(ShellExecute|WinExec|CreateProcess|system|exec)"
       min_suspicious: 2
       max_total: 15
+    downgrade:
+      any:
+        - type: section
+          regex: "^(UPX\\d|\\.upx)"  # UPX stub uses minimal imports by design
+        - type: raw
+          substr: "PECompac"  # PECompact stub uses minimal imports
 
   - id: suspicious-ratio-imports
     desc: "High ratio of suspicious to total imports"
@@ -94,8 +107,12 @@ traits:
         - "^Reg(Open|Create|Set|Delete|Query)Key"
         # Network
         - "^(WSA|socket|connect|send|recv)"
-      min_suspicious: 5
+      min_suspicious: 7
       max_total: 20
+    downgrade:
+      any:
+        - type: section
+          regex: "^(UPX\\d|\\.upx)"  # UPX imports are always "suspicious" by nature
 
   # === ELF Import Patterns ===
 
@@ -177,6 +194,10 @@ composite_rules:
       - id: crypto-minimal-pe
       - id: shell-exec-minimal-imports
       - id: extreme-minimal-imports
+    unless:
+      - id: objectives/anti-static/packer/detect::upx-section  # UPX stub inherently uses minimal imports
+      - type: raw
+        substr: "PECompac"  # PECompact stub uses minimal imports
 
   - id: pe-concealed-capability
     desc: "PE binary concealing capabilities via import minimization"
@@ -189,6 +210,10 @@ composite_rules:
       - id: shell-exec-minimal-imports
       - id: suspicious-ratio-imports
       - id: extreme-minimal-imports
+    downgrade:
+      any:
+        - id: objectives/anti-static/packer/detect::upx-section
+        - id: micro-behaviors/data/encode/pecompact::pecompact-signature  # PECompact stub has minimal imports
 
   - id: elf-concealed-capability
     desc: "ELF binary concealing capabilities via import minimization"

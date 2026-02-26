@@ -1,0 +1,32 @@
+# JetBrains s.r.o. Identification
+# Detects binaries from JetBrains (IntelliJ, CLion, Code With Me, etc.)
+# JetBrains IDEs use process injection APIs for debugger attachment and JVM management.
+
+defaults:
+  for: [all]
+
+traits:
+  - id: jetbrains-company-string
+    desc: JetBrains company string
+    crit: baseline
+    conf: 0.95
+    if:
+      type: string
+      substr: "JetBrains s.r.o."
+
+  - id: jetbrains-product-info
+    desc: JetBrains product descriptor
+    crit: baseline
+    conf: 0.9
+    if:
+      type: string
+      substr: "product-info.json"
+
+composite_rules:
+  - id: jetbrains-binary
+    desc: Binary from JetBrains
+    crit: notable
+    conf: 0.98
+    any:
+      - id: metadata/vendor/jetbrains::jetbrains-company-string
+      - id: metadata/vendor/jetbrains::jetbrains-product-info

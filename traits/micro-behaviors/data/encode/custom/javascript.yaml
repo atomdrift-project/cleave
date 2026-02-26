@@ -6,5 +6,6 @@ traits:
     for: [javascript]
     if:
       type: raw
-      # Matches standard or interleaved array index assignments (e.g. arr[123]=456; or a?r?r?[?1?2?3?]?=?4?5?6?)
-      regex: '([a-zA-Z0-9_$?]{1,20}\[.?(\d.)+\]?.?=.?(\d.)+;?.?){10,}'
+      # Matches numeric array index assignments mapping indices to numeric values (e.g. arr[123]=456)
+      # Excludes boolean assignments like _[71]=!0 common in minified parsers
+      regex: '([a-zA-Z0-9_$?]{1,20}\[.?\d{2,}.?\]?.?=.?\d{2,}.?[;,].?){10,}'

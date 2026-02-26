@@ -6,4 +6,11 @@ traits:
     crit: suspicious
     if:
       type: raw
-      regex: "(^|\n)\\s*([cC][cC2]|url)=[\"']?http[s]?://"
+      regex: "(^|\n)\\s*[cC][2cC]=[\"']?https?://"
+
+  - id: shell-c2-callback-var
+    desc: Shell script C2 callback variable
+    crit: suspicious
+    if:
+      type: raw
+      regex: "(^|\n)\\s*([sS]erver|[cC]allback|[bB]eacon)=[\"']?https?://"

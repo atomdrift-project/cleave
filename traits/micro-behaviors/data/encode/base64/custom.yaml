@@ -53,6 +53,8 @@ traits:
     if:
       type: string
       regex: '[|\$}][a-zA-Z0-9+/]{10,20}[rstuvwxyz].{0,10}[\{\$]'
+    not:
+      - regex: '@'
 composite_rules:
   - id: custom-implementation
     desc: Custom base64 implementation

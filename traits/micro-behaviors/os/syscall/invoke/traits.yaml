@@ -7,11 +7,11 @@ defaults:
 
 traits:
   # === NTDLL Imports ===
+  # Nearly every Windows binary links ntdll.dll for core runtime support
   - id: ntdll-import
     desc: Direct NT API access
-    crit: notable
+    crit: baseline
     conf: 0.85
-    attack: "T1562"
     if:
       type: string
       substr: "ntdll"

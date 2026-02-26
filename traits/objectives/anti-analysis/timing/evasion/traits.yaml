@@ -12,6 +12,7 @@ traits:
     desc: RDTSC instruction (hardware timestamp)
     crit: notable
     conf: 0.5
+    size_max: 1048576
     if:
       type: hex
       pattern: "0F 31"
@@ -19,6 +20,9 @@ traits:
     unless:
       - type: raw
         substr: "BSJB"  # .NET IL bytecode contains 0F 31 sequences that aren't RDTSC
+      - type: metrics
+        field: binary.import_count
+        min: 80
 
   # NOTE: "time" is far too generic - matches Go runtime, standard library, etc.
   # Changed to more specific pattern

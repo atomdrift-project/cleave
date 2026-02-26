@@ -31,6 +31,13 @@ composite_rules:
       - id: micro-behaviors/time/timing/delay::query-performance-counter
       - id: micro-behaviors/time/timing/check::timegettime
       - id: objectives/anti-analysis/timing/evasion::rdtsc
+    # GetTickCount + QueryPerformanceCounter is standard CRT; only notable in composites
+    downgrade:
+      any:
+        - id: metadata/vendor/microsoft::is-microsoft-named
+        - id: metadata/vendor/microsoft::is-windows-named
+        - id: metadata/quality/versioning::pe-version-resource
+        - id: metadata/format::many-imports
 
   - id: timing-anti-debug
     desc: Timing-based anti-debugging pattern

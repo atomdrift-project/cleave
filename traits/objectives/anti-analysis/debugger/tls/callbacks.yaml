@@ -52,7 +52,7 @@ traits:
   # TLS callback array initialization
   - id: address-of-callbacks
     desc: AddressOfCallBacks reference
-    crit: suspicious
+    crit: component
     conf: 0.8
     if:
       type: raw

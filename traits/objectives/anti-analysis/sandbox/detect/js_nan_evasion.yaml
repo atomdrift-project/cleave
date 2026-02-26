@@ -8,3 +8,4 @@ traits:
     if:
       type: raw
       regex: '=\s*0\s*\/\s*0\s*;'
+      count_min: 2

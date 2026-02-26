@@ -40,8 +40,9 @@ traits:
     for: [pe, elf]
     if:
       type: string
-      substr: defender
-      case_insensitive: true
+      regex: "(?i)\\b(windows\\s*)?defender\\b"
+    not:
+      - regex: "(?i)bitdefender"
 
   - id: malwarebytes-name
     desc: Malwarebytes reference
@@ -159,6 +160,8 @@ composite_rules:
       - id: avast-service-other
 
   # EDR/AV product names composite
+  # Requires 2+ distinct AV product names - a single mention is typically
+  # a compatibility/diagnostic message, not an EDR bypass tool
   - id: edr-product-name
     desc: EDR/Antivirus product name reference
     crit: notable
@@ -176,6 +179,7 @@ composite_rules:
       - id: sophos-name
       - id: eset-lower
       - id: eset-upper
+    needs: 2
 
   # EDR termination verbs composite
   - id: termination-verbs

@@ -10,9 +10,12 @@ traits:
       # Patterns for MZ header check, e_lfanew offset (0x3c), and PE header check
       pattern: "66 81 ?? 4d 5a 75 ?? ?? ?? ?? 3c ?? ?? ?? ?? ?? 50 45 00 00"
     unless:
-      # MinGW/GCC runtime includes PE validation for module loading
+      # MinGW/GCC runtime includes PE validation for pseudo-relocation
       - type: string
         substr: "PyInit_"
       # MSVC runtime PE validation
       - type: string
         substr: "VS_VERSION_INFO"
+      # MinGW-w64 CRT pseudo-relocation runtime
+      - type: string
+        substr: "Mingw-w64 runtime failure:"

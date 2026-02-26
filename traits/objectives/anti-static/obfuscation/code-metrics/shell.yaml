@@ -74,6 +74,10 @@ traits:
       type: metrics
       field: text.max_line_length
       min: 300
+    unless:
+      # Exclude data files misidentified as shell
+      - type: basename
+        regex: "\\.(json|yaml|yml)$"
 
   - id: sh-no-functions
     desc: "No shell functions (inline obfuscation)"
@@ -94,6 +98,9 @@ traits:
       # Exclude scripts with --help/--version argument handling
       - type: raw
         regex: '--help\)|\busage="?yes'
+      # Exclude JSON/YAML data files misidentified as shell
+      - type: basename
+        regex: "\\.(json|yaml|yml)$"
 
   # === Density-Based String Obfuscation ===
   # Shell scripts use various encoding tricks to hide payloads.
@@ -149,6 +156,10 @@ traits:
       regex: "eval\\s"
       count_min: 3
       per_kb_min: 0.5
+    unless:
+      # Legitimate build/doc tools use eval "$cmd" to log-then-execute
+      - type: raw
+        regex: '--help\)\s+echo|--version\)\s+echo|Usage:\s'
 
   # printf with hex/octal used to decode payloads
   - id: sh-dense-printf-decode
@@ -175,6 +186,8 @@ composite_rules:
       - id: objectives/anti-static/obfuscation/code-metrics::sh-long-lines
     unless:
       - id: metadata/format/json::valid
+      - type: basename
+        regex: "\\.json$"
 
   - id: sh-compact-malware
     desc: "Compacted shell malware pattern"
@@ -190,3 +203,6 @@ composite_rules:
       - id: metadata/format/json::sourcemap
       - id: metadata/format/json::valid
       - id: metadata/lang::ps-valid
+      # Exclude .json files misidentified as shell
+      - type: basename
+        regex: "\\.json$"

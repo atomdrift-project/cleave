@@ -33,6 +33,14 @@ traits:
         substr: "OpenMP Runtime"
       - type: string
         substr: "ODBG_Plugin"
+      - type: string
+        substr: "JetBrains s.r.o."
+      - type: string
+        substr: "AutoIt"
+      - type: symbol
+        regex: "^(Steam_|Breakpad_Steam)"
+      - type: string
+        substr: "Valve Corp."
 
 composite_rules:
   - id: multi-stage-loader

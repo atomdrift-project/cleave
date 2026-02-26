@@ -55,4 +55,4 @@ traits:
     for: [javascript]
     if:
       type: raw
-      regex: '(?i)lave'
+      regex: '(?i)(^|[^a-zA-Z])lave([^a-zA-Z]|$)'

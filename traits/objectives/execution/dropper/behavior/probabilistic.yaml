@@ -19,3 +19,6 @@ composite_rules:
       - id: objectives/execution/vm/random-code::math-random-index
       - id: micro-behaviors/data/encode/hex_xor::fragmented-hex-xor-decoder
       - id: micro-behaviors/data/encode/hex_xor::js-obfuscated-fragment-xor-decode
+    downgrade:
+      any:
+        - id: metadata/library/prettier::prettier-detection

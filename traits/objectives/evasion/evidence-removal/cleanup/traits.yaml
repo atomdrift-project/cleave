@@ -105,7 +105,6 @@ traits:
   crit: suspicious
   conf: 0.85
   for:
-  - elf
   - shell
   if:
     type: string

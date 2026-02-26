@@ -13,3 +13,4 @@ composite_rules:
         - id: metadata/quality/testing::test-directory
         - id: metadata/dev/testing::test-function-def
         - id: metadata/dev/testing::node-common-require
+        - id: micro-behaviors/crypto/symmetric/aes::buffer-hex-key-material

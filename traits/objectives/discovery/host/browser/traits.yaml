@@ -117,8 +117,8 @@ traits:
   if:
     type: string
     substr: Yandex
-- id: history-file
-  desc: History file reference
+- id: history-file-path
+  desc: Browser history file path
   crit: notable
   conf: 0.5
   attack: T1217
@@ -126,7 +126,17 @@ traits:
   - all
   if:
     type: string
-    regex: '[/\\]History$|History\.db|browser.{0,30}history|history\.sqlite'
+    regex: '(User Data|Default|Profile)[/\\]History$'
+- id: history-file-db
+  desc: Browser history database reference
+  crit: notable
+  conf: 0.5
+  attack: T1217
+  for:
+  - all
+  if:
+    type: string
+    regex: 'History\.db|browser.{0,30}history|history\.sqlite'
 - id: places-sqlite
   desc: Firefox places.sqlite
   crit: notable
@@ -245,6 +255,14 @@ traits:
   unless:
     - id: objectives/credential-access/browser/safari::cookies-path
 composite_rules:
+- id: history-file
+  desc: History file reference
+  crit: notable
+  conf: 0.5
+  attack: T1217
+  any:
+  - id: history-file-path
+  - id: history-file-db
 - id: edge-name
   desc: Edge browser name
   crit: notable
@@ -477,6 +495,8 @@ composite_rules:
   attack: T1217
   not:
   - SearchProviderSearchGuide
+  - defaultSearchBase
+  - DefaultSearchBase
   any:
   - id: objectives/discovery/host/browser::inline__search-engine-id__any_1
   - id: objectives/discovery/host/browser::inline__search-engine-id__any_2

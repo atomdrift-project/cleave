@@ -57,8 +57,8 @@ traits:
     substr: PhysicalDrive0
 - id: physical-drive-unc
   desc: Windows \\.\PhysicalDrive UNC path reference
-  crit: suspicious
-  conf: 0.9
+  crit: notable
+  conf: 0.7
   attack: T1561.002
   if:
     type: string
@@ -93,7 +93,7 @@ traits:
     platforms: [windows]
 - id: windows-recursive-delete-rd
   desc: Windows recursive deletion via rmdir/rd
-  crit: suspicious
+  crit: notable
   if:
     type: string
     regex: r(d|mdir)\s+/s
@@ -131,7 +131,7 @@ composite_rules:
     - id: windows-system32-delete-path-first
 - id: windows-recursive-delete
   desc: Windows system directory recursive deletion
-  crit: suspicious
+  crit: notable
   conf: 0.9
   platforms:
   - windows
@@ -140,7 +140,7 @@ composite_rules:
   - id: windows-recursive-delete-del-path
 - id: windows-recursive-delete-rd-path
   desc: Windows recursive delete via rmdir with target
-  crit: suspicious
+  crit: notable
   conf: 0.9
   platforms:
   - windows
@@ -149,7 +149,7 @@ composite_rules:
   - id: windows-recursive-delete-target
 - id: windows-recursive-delete-del-path
   desc: Windows recursive delete via del with target
-  crit: suspicious
+  crit: notable
   conf: 0.9
   platforms:
   - windows
@@ -193,7 +193,7 @@ composite_rules:
   - id: micro-behaviors/fs/path/system
 - id: mass-deletion
   desc: Mass system file deletion
-  crit: suspicious
+  crit: notable
   conf: 0.95
   all:
   - id: recursive-delete-cmd

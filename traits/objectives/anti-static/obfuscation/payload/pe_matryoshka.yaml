@@ -11,3 +11,4 @@ composite_rules:
       - id: micro-behaviors/data/embedded/certificate::pkcs7-signeddata-oid
     none:
       - id: micro-behaviors/data/embedded/payload::pe-magic-in-rsrc
+      - id: metadata/format/pe::dotnet-metadata

@@ -126,11 +126,19 @@ traits:
   downgrade:
     any:
     - id: metadata/signed/platform::apple
+    - type: section
+      regex: "^(UPX\\d|\\.upx)"  # UPX-packed binaries compress all strings
+    - type: raw
+      substr: "PECompac"  # PECompact-packed binaries have no visible strings
   unless:
   - id: metadata/format::many-imports
+  - id: metadata/format::many-functions
   - type: metrics
     field: binary.import_count
     min: 80
+  - type: metrics
+    field: binary.function_count
+    min: 30
 - id: math-cipher-imports
   desc: Math functions (cipher indicator) with
   crit: suspicious

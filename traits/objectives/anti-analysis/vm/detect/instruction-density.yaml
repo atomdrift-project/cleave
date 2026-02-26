@@ -13,16 +13,22 @@ traits:
     desc: Multiple CPUID instructions detected
     crit: notable
     conf: 0.7
+    size_max: 1048576
     if:
       type: hex
       pattern: "0F A2"
-      count_min: 3
+      count_min: 5
+    unless:
+      - type: metrics
+        field: binary.import_count
+        min: 80
 
   # RDTSC occurrence check
   - id: multiple-rdtsc-instr
     desc: Multiple RDTSC instructions (timing primitives)
     crit: notable
     conf: 0.7
+    size_max: 1048576
     if:
       type: hex
       pattern: "0F 31"
@@ -30,6 +36,9 @@ traits:
     unless:
       - type: raw
         substr: "BSJB"  # .NET IL bytecode contains 0F 31 sequences that aren't RDTSC
+      - type: metrics
+        field: binary.import_count
+        min: 80
 
   - id: sparse-logic-density
     desc: "Extremely low logic density (function sparsity)"

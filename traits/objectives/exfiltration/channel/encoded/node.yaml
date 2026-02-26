@@ -21,3 +21,4 @@ composite_rules:
     unless:
       - id: micro-behaviors/os/admin/legitimate/http-tools/package-manager
       - id: micro-behaviors/os/admin/legitimate/http-tools/ci-cd-pipeline
+      - id: metadata/library/axios::axios-detection

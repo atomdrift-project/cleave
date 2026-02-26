@@ -14,9 +14,11 @@ traits:
         regex: "require\\(['\"]\\.\\./common['\"]\\)"
       - type: raw
         regex: "function test\\s*\\(\\)\\s*\\{"
+    size_max: 500000
     downgrade:
       any:
         - id: metadata/dev/testing::is-test
         - id: metadata/library/nodeunit::nodeunit
+        - id: metadata/library/structure::js-umd-wrapper-any
     attack: "T1027" # Obfuscated Files or Information
     mbc: "B0032" # Deobfuscate/Decode

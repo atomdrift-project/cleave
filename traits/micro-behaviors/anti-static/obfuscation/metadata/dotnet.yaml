@@ -8,9 +8,12 @@ traits:
     if:
       type: raw
       regex: '(CompanyName|FileDescription)\x00{1,3}[A-Za-z0-9]{10,30}\x00'
+      section: text
     unless:
       - type: raw
         regex: '\x00(FileDescription|LegalCopyright|ProductName|FileVersion|AssemblyVersion|InternalName|OriginalFilename|ProductVersion|Comments|CompanyName|StringFileInfo|VarFileInfo|Translation)\x00'
+      - type: string
+        regex: '^(FileDescription|LegalCopyright|ProductName|FileVersion|InternalName|OriginalFilename|ProductVersion|CompanyName|StringFileInfo|VarFileInfo)$'
 
   - id: dotnet-random-assembly-metadata-b
     desc: Randomized assembly metadata strings
@@ -18,9 +21,12 @@ traits:
     if:
       type: raw
       regex: '(LegalCopyright|ProductName)\x00{1,3}[A-Za-z0-9]{10,30}\x00'
+      section: text
     unless:
       - type: raw
         regex: '\x00(FileDescription|LegalCopyright|ProductName|FileVersion|AssemblyVersion|InternalName|OriginalFilename|ProductVersion|Comments|CompanyName|StringFileInfo|VarFileInfo|Translation)\x00'
+      - type: string
+        regex: '^(FileDescription|LegalCopyright|ProductName|FileVersion|InternalName|OriginalFilename|ProductVersion|CompanyName|StringFileInfo|VarFileInfo)$'
 
   - id: dotnet-random-assembly-attr
     desc: Randomized assembly attributes

@@ -49,13 +49,13 @@ traits:
   # Section-based detection (migrated from YARA)
   - id: upx-section
     desc: UPX packed binary section name
-    crit: suspicious
+    crit: notable
     conf: 0.95
     mbc: "F0001.008"
     for: [binaries]
     if:
       type: section
-      regex: "^(UPX\\d*|\\.UPX\\d*)$"
+      regex: "(?i)^(\\.?UPX\\d*)$"
 
   - id: vmprotect-section
     desc: VMProtect packed binary section name

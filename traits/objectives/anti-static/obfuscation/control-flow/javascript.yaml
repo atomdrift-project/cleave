@@ -18,6 +18,8 @@ traits:
       regex: "(?s)for\\s*\\(([^()]|\\([^()]{0,120}\\))*\\)\\s*\\{[^}]{0,300}\\s*try\\s*\\{"
     not:
       - regex: "for\\s*\\([^)]*\\)\\s*\\{[^}]*//[^}]*try\\s*\\{"
+      - regex: "for\\s*\\(\\s*var\\s+\\w+\\s+in\\b"
+      - regex: "for\\s*\\(\\s*(?:const|let|var)\\s+\\w+\\s+of\\b"
 
   - id: retry-loop-with-success
     desc: Retry loop with success counter

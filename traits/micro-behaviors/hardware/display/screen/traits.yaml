@@ -22,3 +22,69 @@ traits:
     if:
       type: symbol
       exact: "WriteConsoleA"
+
+  # === Windows GDI Screen Capture Primitives ===
+  - id: gdi-bitblt
+    desc: GDI BitBlt screen blit API
+    crit: notable
+    conf: 0.9
+    mbc: "C0014"
+    attack: "T1113"
+    if:
+      type: symbol
+      exact: "BitBlt"
+
+  - id: gdi-getdibits
+    desc: GDI GetDIBits pixel readback
+    crit: notable
+    conf: 0.9
+    mbc: "C0014"
+    attack: "T1113"
+    if:
+      type: symbol
+      exact: "GetDIBits"
+
+  - id: gdi-create-compatible-dc
+    desc: GDI compatible device context
+    crit: notable
+    conf: 0.85
+    mbc: "C0014"
+    attack: "T1113"
+    if:
+      type: symbol
+      exact: "CreateCompatibleDC"
+
+  - id: gdi-create-compatible-bitmap
+    desc: GDI compatible bitmap allocation
+    crit: notable
+    conf: 0.85
+    mbc: "C0014"
+    attack: "T1113"
+    if:
+      type: symbol
+      exact: "CreateCompatibleBitmap"
+
+  - id: get-desktop-window
+    desc: Desktop window handle access
+    crit: notable
+    conf: 0.8
+    mbc: "C0014"
+    attack: "T1113"
+    if:
+      type: symbol
+      exact: "GetDesktopWindow"
+
+composite_rules:
+  - id: gdi-screen-capture-primitives
+    desc: Windows GDI screenshot primitives
+    crit: notable
+    conf: 0.93
+    mbc: "C0014"
+    attack: "T1113"
+    all:
+      - id: gdi-bitblt
+      - id: gdi-getdibits
+    any:
+      - id: gdi-create-compatible-dc
+      - id: gdi-create-compatible-bitmap
+      - id: get-desktop-window

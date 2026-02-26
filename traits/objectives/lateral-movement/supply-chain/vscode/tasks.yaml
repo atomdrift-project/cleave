@@ -28,6 +28,10 @@ traits:
     if:
       type: raw
       regex: '"command":\s*"node\s+'
+    unless:
+      # Exclude wireit build tool commands in package.json
+      - type: raw
+        substr: '"wireit"'
 
 composite_rules:
   - id: vscode-task-persistence

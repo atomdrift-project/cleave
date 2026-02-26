@@ -129,6 +129,32 @@ traits:
       section: ".rsrc"
       offset_range: [4096, null]
 
+  - id: elf-magic-in-image-body
+    desc: ELF magic inside image payload
+    crit: suspicious
+    conf: 0.9
+    mbc: "F0001.006"
+    attack: "T1027.009"
+    for: [png, jpeg]
+    size_min: 4096
+    if:
+      type: hex
+      pattern: "7F 45 4C 46"
+      offset_range: [1024, null]
+
+  - id: pe-magic-in-image-body
+    desc: PE signature inside image payload
+    crit: suspicious
+    conf: 0.9
+    mbc: "F0001.006"
+    attack: "T1027.009"
+    for: [png, jpeg]
+    size_min: 4096
+    if:
+      type: hex
+      pattern: "4D 5A ?? ?? 50 45 00 00"
+      offset_range: [1024, null]
+
   # === Embedded Archive Formats ===
 
   - id: zip-magic
@@ -279,3 +305,6 @@ composite_rules:
       any:
         - id: gnu-debugdata-section
         - id: metadata/apple::system-component
+        # Compression/archive libraries naturally contain compression format magic
+        # bytes as constants for format detection (e.g., libarchive, libzip)
+        - id: metadata/library/compression::compression-lib

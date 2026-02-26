@@ -10,9 +10,8 @@ traits:
     crit: baseline
     conf: 0.6
     if:
-      type: raw
-      regex: '^\s{0,256}\{\s{0,256}"[A-Za-z0-9_.-]{1,64}"\s{0,256}:'
-      offset: 0
+      type: basename
+      regex: "\\.json$"
 
   - id: sourcemap
     desc: JavaScript Sourcemap
@@ -20,6 +19,4 @@ traits:
     conf: 1.0
     if:
       type: raw
-      regex: '\{"version":3,"file":"'
-      count_min: 1
-      
+      regex: '\{\s{0,32}"version"\s{0,4}:\s{0,4}3\s{0,4},\s{0,32}"(file|sources)"'

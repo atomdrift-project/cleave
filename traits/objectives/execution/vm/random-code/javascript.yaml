@@ -68,3 +68,4 @@ composite_rules:
         - id: metadata/library/d3::d3-detection
         - id: metadata/library/structure::js-webpack-bundle
         - id: metadata/library/structure::js-umd-wrapper-any
+        - id: metadata/library/prettier::prettier-detection

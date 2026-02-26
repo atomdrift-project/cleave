@@ -51,7 +51,7 @@ traits:
       substr: KVMKVMKVM
   - id: vendor-vmware
     desc: VMware hypervisor vendor string
-    crit: suspicious
+    crit: notable
     conf: 0.7
     for:
       - javascript

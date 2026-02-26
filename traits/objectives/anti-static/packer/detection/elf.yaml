@@ -5,7 +5,7 @@
 traits:
   - id: no-section-headers
     desc: "No section headers"
-    crit: suspicious
+    crit: notable
     conf: 0.8
     mbc: "F0001"
     attack: "T1027.002"

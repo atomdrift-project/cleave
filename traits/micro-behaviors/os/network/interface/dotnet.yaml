@@ -26,7 +26,7 @@ traits:
 composite_rules:
   - id: dotnet-network-interface-recon
     desc: Enumerates network interfaces for hardware addresses
-    criticality: suspicious
+    criticality: notable
     all:
       - id: dotnet-network-namespace
       - id: dotnet-get-all-interfaces

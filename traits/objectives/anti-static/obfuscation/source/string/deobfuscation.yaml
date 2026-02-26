@@ -17,10 +17,11 @@ traits:
     crit: suspicious
     conf: 0.9
     for: [javascript, powershell, typescript]
+    size_max: 500000
     if:
       type: string
       regex: '%[a-zA-Z]{3,}%'
-      count_min: 1
+      count_min: 3
     not:
       - "%USERNAME%"
       - "%USERPROFILE%"

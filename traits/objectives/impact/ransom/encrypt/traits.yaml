@@ -172,7 +172,7 @@ traits:
     regex: ^(matplotlib|tex)$
 - id: babuk-config-marker
   desc: Babuk ransomware configuration memory marker (16x 0xAF)
-  crit: suspicious
+  crit: component
   conf: 0.98
   for:
   - elf
@@ -181,8 +181,8 @@ traits:
     pattern: af af af af af af af af af af af af af af af af
 - id: file-locked-message
   desc: File locked status message
-  crit: suspicious
-  conf: 0.9
+  crit: notable
+  conf: 0.7
   if:
     type: string
     regex: File Locked|locked.{0,20}PID|error.{0,20}encrypt.{0,20}rename
@@ -258,7 +258,7 @@ traits:
   conf: 0.9
   if:
     type: string
-    regex: encrypted extension|File Processing Pipeline|Files processed.{0,50}Files scanned
+    regex: encrypted extension[^s]|File Processing Pipeline|Files processed.{0,50}scanned
 - id: ransom-note-filename
   desc: Ransom note filename patterns
   crit: suspicious

@@ -22,9 +22,10 @@ traits:
     desc: Redirects ELF entry point
     crit: suspicious
     conf: 0.9
+    for: [c, cpp, python, rust, go]
     if:
       type: raw
-      regex: 'e_entry\s*=\s*\w+'
+      regex: '(^|[^a-zA-Z_])e_entry\s*=\s*\w+'
 
 composite_rules:
   - id: elf-section-segment-growth

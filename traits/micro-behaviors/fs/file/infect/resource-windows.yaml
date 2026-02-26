@@ -1,7 +1,7 @@
 traits:
   - id: update-resource-a
     desc: "Modify PE resources via UpdateResourceA"
-    crit: suspicious
+    crit: notable
     for: [pe]
     if:
       type: symbol
@@ -9,7 +9,7 @@ traits:
       
   - id: begin-update-resource-a
     desc: "Begin modifying PE resources"
-    crit: suspicious
+    crit: notable
     for: [pe]
     if:
       type: symbol
@@ -17,7 +17,7 @@ traits:
       
   - id: end-update-resource-a
     desc: "Commit PE resource modifications"
-    crit: suspicious
+    crit: notable
     for: [pe]
     if:
       type: symbol

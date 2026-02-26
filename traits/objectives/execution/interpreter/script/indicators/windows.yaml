@@ -8,14 +8,16 @@ defaults:
   conf: 0.5
   platforms: [windows]
 
-composite_rules:
+traits:
   - id: cmd-exe
     desc: cmd.exe Windows command shell reference
+    crit: notable
     conf: 0.4
-    all:
-      - id: micro-behaviors/fs/path/extension::exe
-      - id: micro-behaviors/process/create/shell::cmd-name
+    if:
+      type: string
+      regex: "(?i)cmd\\.exe"
 
+composite_rules:
   - id: powershell-exe
     desc: powershell.exe executable reference
     all:

@@ -4,6 +4,7 @@ traits:
     crit: suspicious
     conf: 0.95
     for: [javascript]
+    size_max: 500000
     if:
       type: ast
       language: javascript
@@ -13,4 +14,4 @@ traits:
             (string)
           )
         ) @seq_expr
-      count_min: 2
+      count_min: 5

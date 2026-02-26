@@ -17,6 +17,12 @@ traits:
       regex: "[^\\x00-\\x7F]{10,}"
       count_min: 3
       per_kb_min: 0.5
+    downgrade:
+      any:
+        - type: basename
+          regex: "locale|localize|formatRelative|formatLong|formatDistance"
+        - type: raw
+          regex: "formatRelative|formatLong|formatDistance|localize|defineLocale|weekday|month"
 
   # International script characters (Devanagari, Cyrillic, Arabic, etc.)
   - id: international-script-obfuscation
@@ -30,12 +36,13 @@ traits:
       type: string
       regex: "[\\p{Devanagari}\\p{Cyrillic}\\p{Arabic}\\p{Hebrew}\\p{Han}]"
       count_min: 5
-    downgrade:
-      any:
-        - type: basename
-          regex: "^[a-z]{2,3}(-[A-Z][a-z]{3})?(-[A-Z]{2})?\\.js$"
-        - type: string
-          regex: "moment\\.lang\\(['\"][a-z]{2}"
+    unless:
+      - type: raw
+        regex: "defineLocale|moment\\.locale|moment\\.lang"
+      - type: basename
+        regex: "^[a-z]{2,3}(-[A-Z][a-z]{3})?(-[A-Z]{2})?\\.js$"
+      - type: raw
+        regex: "formatRelative|formatLong|formatDistance|localize|weekday|month"
 
   # Mixed Unicode blocks in single string (sophisticated obfuscation)
   - id: mixed-unicode-blocks
@@ -95,6 +102,15 @@ traits:
       type: raw
       regex: "[\\$a-zA-Z_][\\$a-zA-Z0-9_]*[^\\x00-\\x7F][\\$a-zA-Z0-9_]*"
       count_min: 3
+    unless:
+      - type: raw
+        regex: "defineLocale|moment\\.locale|moment\\.lang"
+      - type: raw
+        regex: "matchPattern|parsePattern|formatLong|localize"
+      - type: basename
+        regex: "i18n|l10n|locale"
+      - type: basename
+        regex: "^[a-z]{2,3}(-[A-Z][a-z]{3})?(-[A-Z]{2})?\\.js$"
 
 composite_rules:
   # Advanced Unicode obfuscation composite

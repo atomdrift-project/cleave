@@ -107,13 +107,13 @@ traits:
     type: string
     substr: os_crypt
 - id: logins-table
-  desc: Chromium logins table reference
+  desc: Chromium Login Data database reference
   crit: notable
-  conf: 0.6
+  conf: 0.7
   attack: T1555.003
   if:
     type: string
-    regex: (?i)\blogins\b
+    regex: (?i)Login\s+Data
 - id: chromium-cookie-sql
   desc: Chromium cookies table SQL query
   crit: notable

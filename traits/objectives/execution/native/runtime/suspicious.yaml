@@ -85,7 +85,7 @@ composite_rules:
   # Fiber Local Storage (FLS) usage patterns
   - id: fiber-local-storage-ops
     desc: Fiber-based thread local storage
-    crit: notable
+    crit: component
     conf: 0.75
     platforms: [windows]
     for: [pe, dll]
@@ -95,23 +95,21 @@ composite_rules:
       - id: micro-behaviors/process/tls/fiber::fls-alloc
       - id: micro-behaviors/process/tls/fiber::fls-get-value
       - id: micro-behaviors/process/tls/fiber::fls-set-value
-    downgrade:
-      any:
-        - id: metadata/quality/versioned
 
-  - id: thread-pool-based-malware
+  - id: thread-pool-fiber-scheduling
     desc: Thread pool with fiber-based scheduling
     crit: notable
     conf: 0.8
     platforms: [windows]
     for: [pe, dll]
     attack: "T1129"
+    size_max: 500000
     all:
       - id: fiber-local-storage-ops
       - id: micro-behaviors/process/thread/create
-    downgrade:
-      any:
-        - id: metadata/quality/versioned
+    unless:
+      - id: metadata/format::many-imports
+      - id: metadata/lang/compiler::ms-visual
 
   - id: fiber-dispatch-framework
     desc: Fiber-based dispatch and scheduling framework
@@ -120,12 +118,13 @@ composite_rules:
     platforms: [windows]
     for: [pe, dll]
     attack: "T1129"
+    size_max: 500000
     all:
-      - id: thread-pool-based-malware
+      - id: thread-pool-fiber-scheduling
       - id: micro-behaviors/process/create/
-    downgrade:
-      any:
-        - id: metadata/quality/versioned
+    unless:
+      - id: metadata/format::many-imports
+      - id: metadata/lang/compiler::ms-visual
 
   # System callback execution patterns (stealthy shellcode triggers)
   - id: callback-execution

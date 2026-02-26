@@ -14,6 +14,10 @@ traits:
       exact: "FindFirstFileExW"
     attack: "T1083"
     mbc: "C0000"
+    downgrade:
+      any:
+        - id: metadata/format::many-imports
+        - id: metadata/format::large-executable
 
   # Removed duplicates - use micro-behaviors/fs/enumerate/directory::find-next-file and ::find-close
 
@@ -46,3 +50,8 @@ composite_rules:
     all:
       - id: file-enumeration-targeting
       - id: micro-behaviors/fs/file/open
+    downgrade:
+      any:
+        - id: metadata/quality::versioned
+        - id: metadata/format::large-executable
+        - id: metadata/format::many-imports

@@ -19,3 +19,5 @@ composite_rules:
     any:
       - id: micro-behaviors/data/encoding/actionscript
       - id: cve-2018-4878-grooming-21845
+    none:
+      - id: metadata/format/pe::dotnet-assembly

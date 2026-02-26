@@ -10,6 +10,10 @@ composite_rules:
     all:
       - id: micro-behaviors/dylib/load::load-library-a
       - id: micro-behaviors/dylib/lookup::get-proc-address
+    downgrade:
+      any:
+        - id: metadata/format::many-imports
+        - id: metadata/lang/compiler::ms-visual
 
   - id: dynamic-load-extended
     desc: Extended dynamic loading with alternate APIs

@@ -533,3 +533,8 @@ composite_rules:
     any:
       - id: dlopen
       - id: loadlibrary
+    # PE viewers/debuggers display PAGE_* constants as UI labels
+    downgrade:
+      any:
+        - id: micro-behaviors/mem/allocate/executable::page-protection-enum
+        - id: micro-behaviors/fs/file/section::pe-viewer-machine-types

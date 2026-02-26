@@ -4,7 +4,7 @@
 traits:
   - id: detected
     desc: root keyword
-    crit: notable
+    crit: component
     conf: 0.2
     attack: "T1110.001"
     mbc: "B0028"

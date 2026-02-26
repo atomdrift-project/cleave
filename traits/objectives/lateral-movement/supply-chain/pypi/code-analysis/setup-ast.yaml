@@ -11,7 +11,7 @@ traits:
   # === Custom Install Class Detection ===
   - id: custom-install-inherit
     desc: Custom install inherits install
-    crit: suspicious
+    crit: component
     conf: 0.85
     if:
       type: raw

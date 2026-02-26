@@ -27,6 +27,7 @@ traits:
     desc: SysV service stop
     crit: suspicious
     conf: 0.8
+    for: [elf, macho, shell]
     if:
       type: string
       regex: "service\\s+\\w+\\s+stop"
@@ -150,7 +151,7 @@ traits:
 
   - id: word-encrypted
     desc: Encrypted keyword
-    crit: notable
+    crit: component
     conf: 0.4
     if:
       type: string

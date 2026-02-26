@@ -10,77 +10,88 @@ defaults:
 traits:
   - id: basename-is-doc-office-word
     desc: Filename has Word document extension
-    crit: notable
+    crit: component
+    for: [pe, elf, macho]
     if:
       type: basename
       regex: '\.(doc|docx)$'
 
   - id: basename-is-doc-office-excel
     desc: Filename has Excel document extension
-    crit: notable
+    crit: component
+    for: [pe, elf, macho]
     if:
       type: basename
       regex: '\.(xls|xlsx)$'
 
   - id: basename-is-doc-office-ppt
     desc: Filename has PPT document extension
-    crit: notable
+    crit: component
+    for: [pe, elf, macho]
     if:
       type: basename
       regex: '\.(ppt|pptx)$'
 
   - id: basename-is-doc-other-1
     desc: Filename has PDF, RTF or TXT extension
-    crit: notable
+    crit: component
+    for: [pe, elf, macho]
     if:
       type: basename
       regex: '\.(pdf|rtf|txt)$'
 
   - id: basename-is-doc-other-2
     desc: Filename has CSV, ODS or ODT extension
-    crit: notable
+    crit: component
+    for: [pe, elf, macho]
     if:
       type: basename
       regex: '\.(csv|ods|odt)$'
 
   - id: basename-is-media-video-1
     desc: Filename has video extension (1)
-    crit: notable
+    crit: component
+    for: [pe, elf, macho]
     if:
       type: basename
       regex: '\.(mp4|avi|mov)$'
 
   - id: basename-is-media-video-2
     desc: Filename has video extension (2)
-    crit: notable
+    crit: component
+    for: [pe, elf, macho]
     if:
       type: basename
       regex: '\.(mkv|flv|wmv)$'
 
   - id: basename-is-media-audio
     desc: Filename has audio extension
-    crit: notable
+    crit: component
+    for: [pe, elf, macho]
     if:
       type: basename
       regex: '\.(mp3|wav)$'
 
   - id: basename-is-media-image-common
     desc: Filename has common image extension
-    crit: notable
+    crit: component
+    for: [pe, elf, macho]
     if:
       type: basename
       regex: '\.(png|jpg|jpeg|gif)$'
 
   - id: basename-is-media-image-web
     desc: Filename has web image extension
-    crit: notable
+    crit: component
+    for: [pe, elf, macho]
     if:
       type: basename
       regex: '\.(bmp|ico|svg|webp)$'
 
   - id: basename-is-media-image-pro
     desc: Filename has professional image extension
-    crit: notable
+    crit: component
+    for: [pe, elf, macho]
     if:
       type: basename
       regex: '\.(tiff|tif)$'
@@ -88,7 +99,7 @@ traits:
 composite_rules:
   - id: basename-is-doc-office
     desc: Filename has Office document extension
-    crit: notable
+    crit: component
     any:
       - id: basename-is-doc-office-word
       - id: basename-is-doc-office-excel
@@ -96,7 +107,7 @@ composite_rules:
 
   - id: basename-is-doc
     desc: Filename has document extension
-    crit: notable
+    crit: component
     any:
       - id: basename-is-doc-office
       - id: basename-is-doc-other-1
@@ -104,7 +115,7 @@ composite_rules:
 
   - id: basename-is-media-image
     desc: Filename has image extension
-    crit: notable
+    crit: component
     any:
       - id: basename-is-media-image-common
       - id: basename-is-media-image-web
@@ -112,7 +123,7 @@ composite_rules:
 
   - id: basename-is-media
     desc: Filename has media extension
-    crit: notable
+    crit: component
     any:
       - id: basename-is-media-video-1
       - id: basename-is-media-video-2

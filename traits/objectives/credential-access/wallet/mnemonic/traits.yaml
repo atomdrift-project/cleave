@@ -86,9 +86,10 @@ traits:
   desc: Mnemonic word count validation (mnemonic/seed)
   conf: 0.85
   crit: suspicious
+  for: [python, javascript, typescript, ruby, php, perl, go, java, csharp]
   if:
     type: string
-    regex: \b(mnemonic|seed)\b.{0,40}\b(split|len|count)\b
+    regex: \b(mnemonic|seed)\b.{0,20}\b(split|len|count)\b
 - id: word-count-check-prefix-phrase
   desc: Mnemonic word count validation (phrase)
   conf: 0.85
@@ -110,7 +111,13 @@ traits:
   conf: 0.85
   if:
     type: string
-    regex: bip-?39|word_?list|english\.txt.{0,30}mnemonic
+    regex: bip-?39|english\.txt.{0,30}mnemonic
+- id: bip39-wordlist-ref
+  desc: Mnemonic wordlist reference
+  conf: 0.85
+  if:
+    type: string
+    regex: word_?list.{0,40}(mnemonic|seed|bip|wallet)
 - id: validation-pattern
   desc: Mnemonic phrase validation logic
   conf: 0.85

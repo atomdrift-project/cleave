@@ -88,6 +88,7 @@ composite_rules:
   conf: 0.66
   mbc: B0041
   attack: T1496
+  size_max: 500000
   needs: 2
   any:
   - id: stratum-tcp

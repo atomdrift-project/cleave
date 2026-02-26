@@ -73,6 +73,7 @@ traits:
     conf: 0.9
     attack: "T1055"
     for: [elf, pe, macho]
+    size_min: 8192    # Tiny legacy PEs have rwx from old compiler defaults, not self-modifying code
     if:
       type: metrics
       field: binary.wx_sections
@@ -100,6 +101,12 @@ traits:
       any:
         - type: section
           substr: '.aspr'
+        - type: raw
+          substr: "ntoskrnl"  # Windows kernel drivers have RWX INIT sections (discarded after load)
+        - type: section
+          regex: "^(UPX\\d|\\.upx)"  # UPX-packed binaries inherently have RWX sections for decompression
+        - type: raw
+          substr: "PECompac"  # PECompact-packed binaries have RWX sections
 
   - id: many-wx-sections
     desc: "Multiple W+X sections (packer pattern)"
@@ -124,6 +131,10 @@ traits:
       any:
         - type: section
           substr: '.aspr'
+        - type: section
+          regex: "^(UPX\\d|\\.upx)"  # UPX-packed binaries inherently have multiple RWX sections
+        - type: raw
+          substr: "PECompac"  # PECompact-packed binaries have multiple RWX sections
 
   - id: high-section-name-entropy
     desc: "High entropy section names (packer"
@@ -431,6 +442,10 @@ composite_rules:
     conf: 0.95
     attack: "T1045"
     for: [elf, pe, macho]
+    # Small binaries (<20KB) naturally have few strings/functions/imports;
+    # these metrics only indicate packing in binaries large enough to
+    # expect substantial code and data.
+    size_min: 20000
     needs: 3
     any:
       - id: objectives/anti-static/obfuscation/binary-metrics::very-high-entropy
@@ -475,6 +490,10 @@ composite_rules:
       - id: objectives/anti-static/obfuscation/binary-metrics::many-complex-functions
       - id: objectives/anti-static/obfuscation/binary-metrics::many-basic-blocks
       - id: objectives/anti-static/obfuscation/binary-metrics::extreme-max-complexity
+    downgrade:
+      any:
+        - id: metadata/format::many-imports
+        - id: metadata/vendor/jetbrains::jetbrains-company-string
 
   - id: heavy-control-flow-obfuscation
     desc: "Heavy control flow obfuscation"

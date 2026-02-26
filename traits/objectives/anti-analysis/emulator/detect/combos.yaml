@@ -7,7 +7,7 @@ composite_rules:
     mbc: "B0009"
     attack: "T1497.001"
     conf: 0.9
-    needs: 2
+    needs: 3
     any:
       - id: objectives/anti-analysis/vm/detect::vendor-vmware
       - id: virtualbox-string
@@ -20,7 +20,7 @@ composite_rules:
     mbc: "B0009"
     attack: "T1497.001"
     conf: 0.9
-    needs: 2
+    needs: 3
     any:
       - id: objectives/anti-analysis/vm/detect::vendor-vmware
       - id: virtualbox-string

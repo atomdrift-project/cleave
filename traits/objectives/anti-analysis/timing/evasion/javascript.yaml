@@ -11,7 +11,7 @@ defaults:
 traits:
   - id: js-date-loop
     desc: Multiple Date object creations in proximity
-    crit: notable
+    crit: component
     conf: 0.5
     if:
       type: ast
@@ -27,7 +27,7 @@ traits:
 
   - id: js-date-diff
     desc: Date difference measurement
-    crit: notable
+    crit: component
     conf: 0.6
     if:
       type: ast
@@ -53,6 +53,7 @@ composite_rules:
     desc: Obfuscated JScript timing-based analysis evasion
     crit: suspicious
     conf: 0.8
+    size_max: 50000
     needs: 2
     any:
       - id: objectives/execution/interpreter/script/wsh::timing-fragment-tiny-exact

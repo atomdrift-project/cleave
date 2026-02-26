@@ -145,7 +145,6 @@ composite_rules:
     desc: Binary includes test code (unusual in production)
     crit: baseline
     conf: 0.5
-    needs: 2
     any:
       - { id: metadata/quality/testing::go-test-main }
       - { id: metadata/quality/testing::go-test-file }
@@ -154,6 +153,10 @@ composite_rules:
       - { id: metadata/quality/testing::pytest-module }
       - { id: metadata/dev/testing::rust-test-attr }
       - { id: metadata/dev/testing::go-testing-t }
+      - { id: metadata/dev/testing::go-test }
+      - { id: metadata/dev/testing/jest::jest }
+      - { id: metadata/dev/testing/mocha::mocha }
+      - { id: metadata/dev/testing/pytest::pytest }
 
   # Metrics/telemetry
   - id: has-metrics

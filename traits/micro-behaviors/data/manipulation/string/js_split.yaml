@@ -1,7 +1,7 @@
 traits:
   - id: js-split-string-array
-    desc: JScript split string array assignment
-    crit: notable
+    desc: String split to array assignment
+    crit: baseline
     conf: 0.9
     for: [javascript]
     if:

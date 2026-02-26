@@ -21,8 +21,19 @@ traits:
   crit: suspicious
   desc: PE header entry point reference
   if:
-    type: raw
-    exact: AddressOfEntryPoint
+    type: string
+    word: AddressOfEntryPoint
+  downgrade:
+    any:
+      - type: string
+        word: IMAGE_FILE_MACHINE_I386
+# PE viewers display machine type constants as UI labels
+- id: pe-viewer-machine-types
+  crit: component
+  desc: PE machine type display labels
+  if:
+    type: string
+    word: IMAGE_FILE_MACHINE_I386
 - id: asm-pe-header-manipulation-sizeofimage
   conf: 0.8
   crit: suspicious

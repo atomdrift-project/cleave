@@ -6,6 +6,7 @@ traits:
   for:
   - javascript
   - typescript
+  size_max: 500000
   if:
     type: raw
     regex: =\s*([\w"'\.]+\s*\+\s*){5,}

@@ -9,6 +9,11 @@ traits:
   if:
     type: string
     word: IMAGE_EXPORT_DIRECTORY
+  # PE viewers/debuggers enumerate PE struct fields as display labels
+  downgrade:
+    any:
+      - type: string
+        word: IMAGE_FILE_MACHINE_I386
 - id: asm-manual-import-addr-names
   conf: 0.9
   crit: suspicious
@@ -16,6 +21,10 @@ traits:
   if:
     type: string
     word: AddressOfNames
+  downgrade:
+    any:
+      - type: string
+        word: IMAGE_FILE_MACHINE_I386
 - id: asm-manual-import-addr-functions
   conf: 0.9
   crit: suspicious
@@ -23,6 +32,10 @@ traits:
   if:
     type: string
     word: AddressOfFunctions
+  downgrade:
+    any:
+      - type: string
+        word: IMAGE_FILE_MACHINE_I386
 - id: asm-manual-import-addr-ordinals
   conf: 0.9
   crit: suspicious
@@ -30,6 +43,10 @@ traits:
   if:
     type: string
     word: AddressOfOrdinals
+  downgrade:
+    any:
+      - type: string
+        word: IMAGE_FILE_MACHINE_I386
 composite_rules:
 - id: asm-manual-import-parsing
   conf: 0.9
@@ -41,3 +58,6 @@ composite_rules:
   - id: asm-manual-import-addr-names
   - id: asm-manual-import-addr-functions
   - id: asm-manual-import-addr-ordinals
+  downgrade:
+    any:
+      - id: micro-behaviors/fs/file/section::pe-viewer-machine-types

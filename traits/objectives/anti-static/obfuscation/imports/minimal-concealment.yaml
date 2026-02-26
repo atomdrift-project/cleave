@@ -32,6 +32,15 @@ traits:
   - type: metrics
     field: binary.import_count
     min: 80
+  - type: metrics
+    field: binary.function_count
+    min: 30
+  downgrade:
+    any:
+    - type: section
+      regex: "^(UPX\\d|\\.upx)"  # UPX-packed binaries compress all strings
+    - type: raw
+      substr: "PECompac"  # PECompact-packed binaries compress all strings
 composite_rules:
 - id: minimal-imports-suspicious-apis
   desc: Minimal imports with suspicious API combination
@@ -51,6 +60,10 @@ composite_rules:
   - id: micro-behaviors/mem/alloc/heap::heap-alloc
   unless:
   - id: objectives/anti-static/obfuscation/imports/minimal-concealment::minimal-imports-suspicious-apis__unless_1
+  - id: metadata/format::many-imports
+  - type: metrics
+    field: binary.import_count
+    min: 50
 - id: concealed-capabilities-pe
   desc: Concealed capabilities via import minimization
   crit: suspicious

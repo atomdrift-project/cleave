@@ -20,6 +20,12 @@ traits:
           substr: '.aspr'
         - type: raw
           substr: "BSJB"  # .NET NI (NGEN) assemblies use RWX sections for runtime fixups
+        - type: raw
+          substr: "ntoskrnl"  # Windows kernel drivers have RWX INIT sections (discarded after load)
+        - type: section
+          regex: "^(UPX\\d|\\.upx)"  # UPX-packed binaries inherently have RWX sections for decompression
+        - type: raw
+          substr: "PECompac"  # PECompact-packed binaries have RWX sections
     # W^X violations indicate:
     # - Self-modifying code
     # - JIT compilation without proper memory protection

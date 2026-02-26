@@ -84,7 +84,7 @@ traits:
     conf: 0.9
     if:
       type: string
-      regex: 'Activ($|[^e])'
+      regex: 'Activ($|[^aeio])'
     downgrade:
       any:
         - id: metadata/library/jquery::domain

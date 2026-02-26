@@ -15,7 +15,7 @@ traits:
   # These specific constants appear in GetProcAddress hash implementations
   - id: ror13-hash-seed
     desc: ROR13 hash algorithm constant
-    crit: suspicious
+    crit: component
     conf: 0.8
     if:
       type: hex
@@ -48,10 +48,10 @@ traits:
 
   # PEB walk pattern (accessing PEB->Ldr for module enumeration)
   # MOV eax, fs:[0x30] = 64 A1 30 00 00 00
-  # Common in legitimate MSVC-compiled DLLs (CRT, WIL) — only suspicious in composites
+  # Common in legitimate MSVC-compiled DLLs (CRT __security_init_cookie) — only meaningful in composites
   - id: peb-ldr-access
     desc: PEB Ldr access for module enumeration
-    crit: notable
+    crit: component
     conf: 0.85
     for: [pe]
     if:

@@ -15,7 +15,7 @@ traits:
     for: [javascript]
     if:
       type: raw
-      regex: '\b(return|=)\s*eval\s*[^(]'
+      regex: '\b(return|=)\s*eval[^a-zA-Z0-9_(]'
 
   - id: new-function-iife
     desc: Immediate invocation of new Function (dynamic execution)

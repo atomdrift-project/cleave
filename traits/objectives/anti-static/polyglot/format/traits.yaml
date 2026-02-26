@@ -47,7 +47,9 @@ traits:
     desc: ELF binary appended to file
     crit: suspicious
     conf: 0.9
-    for: [all]
+    # Exclude ELF files: ELF magic in .text/.rodata is normal for archive libraries,
+    # linkers, and format detection code (e.g., libarchive)
+    for: [all, -elf]
     size_max: 1000000
     if:
       type: hex
@@ -93,3 +95,33 @@ traits:
       type: hex
       pattern: "49 45 4E 44 AE 42 60 82"
       offset_range: [0, -256]
+
+composite_rules:
+  - id: image-embedded-exec-magic
+    desc: Image carries executable header magic
+    crit: suspicious
+    conf: 0.9
+    for: [png, jpeg]
+    any:
+      - id: micro-behaviors/data/embedded/payload::elf-magic-in-image-body
+      - id: micro-behaviors/data/embedded/payload::pe-magic-in-image-body
+
+  - id: png-trailing-embedded-exec
+    desc: PNG trailing data with executable payload
+    crit: suspicious
+    conf: 0.95
+    attack: "T1027.009"
+    for: [png]
+    all:
+      - id: png-trailing-data
+      - id: image-embedded-exec-magic
+
+  - id: jpeg-trailing-embedded-exec
+    desc: JPEG trailing data with executable payload
+    crit: suspicious
+    conf: 0.95
+    attack: "T1027.009"
+    for: [jpeg]
+    all:
+      - id: jpeg-trailing-data
+      - id: image-embedded-exec-magic

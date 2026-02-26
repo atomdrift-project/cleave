@@ -23,7 +23,8 @@ traits:
       type: hex
       section: text
       pattern: "30 ?? 4? E2"  # xor [reg], al; inc; loop
-      count_min: 2  # Single match in large binaries is noise; 4? is REX prefix in x64
+      count_min: 4  # Require multiple matches to avoid coincidental patterns in large binaries
+      per_kb_min: 0.05  # Require density to distinguish stubs from scattered matches
 
   # XOR with immediate, increment, conditional jump back
   # 80 3? XX EB (xor byte [reg], imm8; ... jmp short) - mod=00, reg=6 (XOR)

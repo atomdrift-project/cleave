@@ -75,6 +75,10 @@ traits:
       # e.g. "EnableVirtualCamera@VirtualCameraProxy@implementation@WinRT@Streaming@CrossDevice@winrt@"
       # Encoding alphabets don't have 3+ @UppercaseName patterns
       - regex: "@[A-Za-z].*@[A-Za-z].*@[A-Za-z]"
+      # Exclude strings with 6+ repeated special chars (padding/wildcard patterns)
+      # e.g. "abcdefghijklmnopqrstuvwxyz0123456789****************************"
+      # Real custom alphabets have diverse special characters, not padding runs
+      - regex: "[*]{6}|[#]{6}|[!]{6}|[=]{6}|[-]{6}|[+]{6}|[_]{6}"
 
 composite_rules:
   # PE staged loader pattern: resource extraction plus runtime API resolution.
@@ -93,6 +97,12 @@ composite_rules:
     any:
       - id: micro-behaviors/mem/protect/modify::virtual-alloc
       - id: objectives/anti-analysis/timing/evasion::timing-delta-check
+    downgrade:
+      any:
+        - id: metadata/quality/versioning::pe-version-resource
+        - id: metadata/format::many-imports
+        - id: metadata/lang/compiler::msvc
+        - id: metadata/vendor/microsoft::is-microsoft-named
 
   # libcurl network dropper: downloads content via libcurl, writes to disk, executes via shell
   # Pattern seen in kworker_pretenders malware family (2024):

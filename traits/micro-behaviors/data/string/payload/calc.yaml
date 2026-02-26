@@ -3,8 +3,8 @@ defaults:
 
 traits:
   - id: calc
-    desc: Reference to calc.exe (often used as PoC
-    crit: suspicious
+    desc: Reference to calc.exe (often used as PoC)
+    crit: component
     conf: 0.8
     if:
       type: string

@@ -4,7 +4,7 @@ defaults:
 traits:
   - id: metasploit-ref
     desc: Metasploit framework reference
-    crit: suspicious
+    crit: notable
     conf: 0.8
     attack: T1588.002
     platforms:
@@ -83,14 +83,14 @@ traits:
       regex: (nmap|scan).{0,50}-S\s+[0-9]|arguments.{0,20}-S\s+[0-9]|'-S\s+[0-9]
   - id: masscan-ref
     desc: Masscan port scanner reference
-    crit: suspicious
+    crit: notable
     conf: 0.75
     attack: T1046
     platforms:
       - all
     if:
       type: string
-      substr: masscan
+      word: masscan
   # Masscan config component traits
   - id: masscan-adapter-ip
     desc: Masscan adapter-ip option

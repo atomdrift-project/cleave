@@ -47,7 +47,7 @@ traits:
     platforms: [macos]
     if:
       type: string
-      substr: "History.db"
+      regex: '(?:Safari|WebKit)[/\\\\].{0,50}History\.db|History\.db.{0,30}Safari'
 
   - id: localstorage
     desc: Safari LocalStorage path

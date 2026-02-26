@@ -175,7 +175,7 @@ traits:
 
   - id: weevely
     desc: weevely webshell family
-    crit: suspicious
+    crit: notable
     conf: 0.95
     if:
       type: string
@@ -249,6 +249,7 @@ composite_rules:
     desc: Webshell family identified with generic
     crit: suspicious
     conf: 0.85
+    size_max: 100000
     all:
       - id: identifier
       - id: specific-family

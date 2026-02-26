@@ -61,8 +61,11 @@ traits:
         - type: basename
           exact: "rsync"
         - type: basename
+          exact: "remotectl"
+        - type: basename
           regex: "wal_shipper"
         - id: metadata/library::wal-shipper-header
+        - id: metadata/signed/platform::apple
 
   - id: known-hosts-bypass
     desc: UserKnownHostsFile reference (bypass known hosts)
@@ -81,6 +84,9 @@ traits:
           exact: "scp"
         - type: basename
           exact: "sftp"
+        - type: basename
+          exact: "remotectl"
+        - id: metadata/signed/platform::apple
 
   - id: connect-timeout
     desc: ConnectTimeout reference (scripted SSH)

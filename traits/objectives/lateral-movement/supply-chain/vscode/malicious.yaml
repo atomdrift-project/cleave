@@ -43,7 +43,7 @@ traits:
 
   - id: readFile-pattern
     desc: readFile function pattern
-    crit: notable
+    crit: component
     conf: 0.6
     for: [javascript, typescript]
     if:

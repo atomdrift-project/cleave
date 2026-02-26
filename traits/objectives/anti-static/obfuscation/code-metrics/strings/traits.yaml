@@ -50,7 +50,7 @@ traits:
     type: metrics
     field: strings.total
     max: 5
-    min_size: 1024
+    min_size: 2048
   unless:
   - type: basename
     regex: \.d\.[cm]?ts$

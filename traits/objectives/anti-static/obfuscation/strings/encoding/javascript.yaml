@@ -271,6 +271,7 @@ composite_rules:
     attack: "T1027.002"
     mbc: "B0032"
     for: [javascript]
+    size_max: 500000
     all:
       - id: js-global-property-write-assignment
     any:
@@ -278,6 +279,10 @@ composite_rules:
       - id: js-function-call
       - id: micro-behaviors/data/encode/base64::atob-decode
       - id: js-new-function
+    unless:
+      - id: metadata/library/structure::js-umd-wrapper-any
+      - id: metadata/library/jquery::domain
+      - id: metadata/library/jquery::copyright
 
   # String deobfuscation pattern (charAt/split + swap + join)
   # String deobfuscation pattern (charAt/split + swap + join)

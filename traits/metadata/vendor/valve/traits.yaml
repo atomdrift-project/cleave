@@ -22,6 +22,16 @@ traits:
       type: string
       substr: "Software\\Valve\\Steam"
 
+  - id: steam-api-exports
+    desc: Steam API exports
+    crit: baseline
+    conf: 0.95
+    for: [pe]
+    if:
+      type: symbol
+      regex: "^(SteamAPI_|Steam_|Breakpad_Steam)"
+      count_min: 5
+
 composite_rules:
   - id: valve-corp-binary
     desc: Binary from Valve Corporation
@@ -30,3 +40,4 @@ composite_rules:
     any:
       - id: metadata/vendor/valve::valve-corp-string
       - id: metadata/vendor/valve::steam-path-string
+      - id: metadata/vendor/valve::steam-api-exports

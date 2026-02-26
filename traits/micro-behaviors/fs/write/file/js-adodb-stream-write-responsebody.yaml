@@ -4,7 +4,9 @@ traits:
     crit: suspicious
     conf: 0.9
     for: [javascript]
+    size_max: 200000
     if:
       type: string
       regex: '^(Resp|onse|Bo|dy)$'
-      count_min: 2
+      count_min: 3
+      near_bytes: 500

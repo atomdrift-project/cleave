@@ -1,0 +1,38 @@
+traits:
+  - id: prettier-api
+    desc: Prettier code formatter API usage
+    crit: baseline
+    conf: 0.95
+    for: [javascript]
+    if:
+      type: raw
+      regex: 'prettier\.(format|__debug|version|formatWithCursor)'
+
+  - id: prettier-config
+    desc: Prettier configuration via cosmiconfig
+    crit: baseline
+    conf: 0.95
+    for: [javascript]
+    if:
+      type: raw
+      substr: 'cosmiconfig("prettier")'
+
+  - id: prettier-ignore-symbols
+    desc: Prettier ignore handling symbols
+    crit: baseline
+    conf: 0.95
+    for: [javascript]
+    if:
+      type: symbol
+      regex: '(isPrettierIgnore|PrettierIgnore)'
+      count_min: 3
+
+composite_rules:
+  - id: prettier-detection
+    desc: Prettier code formatter bundle
+    crit: baseline
+    conf: 0.95
+    any:
+      - id: prettier-api
+      - id: prettier-config
+      - id: prettier-ignore-symbols

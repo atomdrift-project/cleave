@@ -11,7 +11,7 @@ traits:
     for: [javascript, typescript, python, shell]
     if:
       type: raw
-      regex: fs\.readdirSync|os\.walk|find\s+\.
+      regex: fs\.readdirSync|os\.walk|find\s+\./?\s
 
   - id: delete-unlink-node-py
     desc: File deletion operation (Node.js/Python)

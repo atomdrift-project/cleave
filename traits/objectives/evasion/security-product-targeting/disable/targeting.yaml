@@ -1,7 +1,7 @@
 traits:
   - id: windows-defender-target
     desc: Windows Defender/Security Essentials specifically targeted
-    crit: suspicious
+    crit: component
     conf: 0.85
     platforms:
       - windows
@@ -13,7 +13,7 @@ traits:
     attack: T1562.001
   - id: kaspersky-target
     desc: Kaspersky AV/Internet Security specifically targeted
-    crit: suspicious
+    crit: component
     conf: 0.85
     platforms:
       - windows
@@ -25,7 +25,7 @@ traits:
     attack: T1562.001
   - id: mcafee-target
     desc: McAfee AV specifically targeted
-    crit: suspicious
+    crit: component
     conf: 0.85
     platforms:
       - windows

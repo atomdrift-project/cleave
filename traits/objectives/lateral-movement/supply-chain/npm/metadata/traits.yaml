@@ -413,3 +413,4 @@ composite_rules:
       - id: install-hooks
     none:
       - id: npm-has-repository
+      - id: metadata/quality/npm/pkg-meta::has-bin-field

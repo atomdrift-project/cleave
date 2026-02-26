@@ -52,6 +52,15 @@ traits:
       - type: metrics
         field: binary.import_count
         min: 80
+      - type: metrics
+        field: binary.function_count
+        min: 30
+    downgrade:
+      any:
+        - type: section
+          regex: "^(UPX\\d|\\.upx)"  # UPX-packed binaries have no readable strings
+        - type: raw
+          substr: "PECompac"  # PECompact-packed binaries have no readable strings
 
 composite_rules:
   # String concealment pattern

@@ -14,8 +14,8 @@ composite_rules:
       - id: objectives/anti-static/obfuscation/binary-structure::low-entropy-executable
     unless:
       - id: metadata/format::many-exports
+      - id: metadata/format::many-imports
     downgrade:
       any:
         - id: metadata/quality/versioning::pe-version-resource
         - id: metadata/format::large-executable
-        - id: metadata/format::many-imports

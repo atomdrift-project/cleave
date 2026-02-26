@@ -1,0 +1,31 @@
+# Axios HTTP Client Library Detection
+# Neutral detection of axios library presence
+
+defaults:
+  for: [javascript, typescript]
+
+traits:
+  - id: axios-class
+    desc: Axios class identifiers
+    crit: baseline
+    conf: 0.95
+    if:
+      type: string
+      substr: "AxiosError"
+
+  - id: axios-version
+    desc: Axios version string
+    crit: baseline
+    conf: 0.95
+    if:
+      type: string
+      regex: "\\[Axios v[0-9]"
+
+composite_rules:
+  - id: axios-detection
+    desc: Axios HTTP client library
+    crit: baseline
+    conf: 0.95
+    any:
+      - id: axios-class
+      - id: axios-version

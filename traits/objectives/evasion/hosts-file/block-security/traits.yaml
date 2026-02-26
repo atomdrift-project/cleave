@@ -63,7 +63,7 @@ traits:
   # NOTE: any.run already exists in objectives/anti-analysis/sandbox/detect::any-run
   - id: virustotal-domain
     desc: VirusTotal domain reference
-    crit: suspicious
+    crit: notable
     conf: 0.8
     for: [all]
     if:

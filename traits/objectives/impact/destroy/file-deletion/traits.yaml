@@ -84,8 +84,10 @@ traits:
   mbc: C0047
   if:
     type: string
-    regex: destroy.{0,80}(files|data|documents)
+    regex: \bdestroy\b.{1,30}\b(files|data|documents)\b
     case_insensitive: true
+  not:
+    - regex: 'destroy\('
 
 - id: explicit-file-deletion-warning-wipe
   desc: Explicit warning of file/data deletion (wipe)

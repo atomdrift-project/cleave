@@ -16,11 +16,12 @@ traits:
       exact: "CompareFileTime"
 
   # === File Time Manipulation ===
+  # SetFileTime is a common legitimate API (file copy, archive extraction, etc.)
+  # T1070.006 (timestomping) mapping belongs in composites with anti-forensic intent
   - id: set-file-time
     desc: Modify file creation/access/write times
     crit: notable
     conf: 0.85
-    attack: "T1070.006"
     if:
       type: symbol
       exact: "SetFileTime"

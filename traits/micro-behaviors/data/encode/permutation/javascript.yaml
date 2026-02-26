@@ -7,7 +7,7 @@ traits:
     conf: 0.9
     if:
       type: raw
-      regex: for[^{]{0,120}\{[^{]{0,120}for[^{]{0,120}\{
+      regex: \bfor\s*\([^{]{0,120}\{[^{]{0,120}\bfor\s*\([^{]{0,120}\{
   - id: js-permutation-charat-pair
     desc: Multiple charAt calls in close proximity
     crit: suspicious
@@ -17,7 +17,7 @@ traits:
       type: raw
       regex: \.charAt\([^)]{0,120}\)[^}]{0,120}\.charAt\([^)]{0,120}\)
       count_min: 10
-      per_kb_min: 0.2
+      per_kb_min: 0.5
 composite_rules:
   - id: js-permutation-loop-any
     desc: Nested loops with multiple charAt calls (permutation

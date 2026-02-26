@@ -67,37 +67,6 @@ traits:
       type: string
       regex: '[''"].{0,120}CRED.{0,120}[''"]'
 
-  # === GuardDog: Specific AWS Credential Keys ===
-
-  - id: aws-access-key-id
-    desc: AWS_ACCESS_KEY_ID environment variable
-    crit: suspicious
-    conf: 0.95
-    attack: "T1552.001"
-    for: [python]
-    if:
-      type: string
-      exact: "AWS_ACCESS_KEY_ID"
-
-  - id: aws-secret-access-key
-    desc: AWS_SECRET_ACCESS_KEY environment variable
-    crit: suspicious
-    conf: 0.95
-    attack: "T1552.001"
-    for: [python]
-    if:
-      type: string
-      exact: "AWS_SECRET_ACCESS_KEY"
-
-  - id: aws-session-token
-    desc: AWS_SESSION_TOKEN environment variable
-    crit: suspicious
-    conf: 0.95
-    attack: "T1552.001"
-    for: [python]
-    if:
-      type: string
-      exact: "AWS_SESSION_TOKEN"
 
 composite_rules:
   # Helper composites
@@ -150,7 +119,4 @@ composite_rules:
     for: [python]
     all:
       - id: micro-behaviors/os/env/vars::getenv
-    any:
-      - id: aws-access-key-id
-      - id: aws-secret-access-key
-      - id: aws-session-token
+      - id: micro-behaviors/os/env/vars/credentials::aws-credentials

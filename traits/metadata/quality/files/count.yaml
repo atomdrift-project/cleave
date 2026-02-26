@@ -49,26 +49,30 @@ traits:
       size_max: 3
 
   # Very large files array (potential bloat or hiding)
+  # NOTE: size_min here is the FILE SIZE filter (serde flatten captures it
+  # for ConditionWithFilters, not Kv::size_min). 10KB+ package.json files
+  # are unusually large and may have extensive explicit file listings.
   - id: npm-many-files-listed
-    desc: npm package lists many explicit files (100+)
+    desc: Very large package.json with files
     crit: notable
     conf: 0.55
     for: [package.json]
     if:
       type: kv
       path: "files"
-      size_min: 100
+      size_min: 10000
 
-  # Moderate files array (50+)
+  # Moderate files array
+  # NOTE: size_min here is the FILE SIZE filter (see above).
   - id: npm-moderate-files-listed
-    desc: npm package lists 50+ files
+    desc: Large package.json with files
     crit: notable
     conf: 0.45
     for: [package.json]
     if:
       type: kv
       path: "files"
-      size_min: 50
+      size_min: 5000
 
   # === npm bin object ===
 

@@ -12,6 +12,10 @@ composite_rules:
     all:
       - id: objectives/evasion/process/injection/runtime::create-remote-thread
       - id: objectives/evasion/process/injection/runtime::write-process-memory
+    none:
+      - id: metadata/format::many-exports
+    unless:
+      - id: metadata/vendor/jetbrains::jetbrains-company-string
 
   # === Suspended Process Injection ===
   - id: suspended-process-inject
@@ -25,6 +29,8 @@ composite_rules:
       - id: objectives/evasion/process/injection/runtime::get-thread-context
       - id: objectives/evasion/process/injection/runtime::set-thread-context
       - id: objectives/evasion/process/injection/runtime::write-process-memory
+    none:
+      - id: metadata/format::many-exports
     downgrade:
       any:
         - id: metadata/lang::go-runtime-marker
@@ -42,6 +48,8 @@ composite_rules:
     all:
       - id: objectives/evasion/process/injection/runtime::queue-user-apc
       - id: objectives/evasion/process/injection/runtime::write-process-memory
+    none:
+      - id: metadata/format::many-exports
     downgrade:
       any:
         - id: metadata/vendor/valve/valve-corp-binary
@@ -58,6 +66,8 @@ composite_rules:
       - id: objectives/evasion/process/injection/runtime::suspend-thread
       - id: objectives/evasion/process/injection/runtime::write-process-memory
       - id: objectives/evasion/process/injection/runtime::set-thread-context
+    none:
+      - id: metadata/format::many-exports
     downgrade:
       any:
         - id: metadata/vendor/valve/valve-corp-binary
@@ -72,9 +82,13 @@ composite_rules:
     all:
       - id: objectives/evasion/process/injection/runtime::create-remote-thread
       - id: micro-behaviors/dylib/load::load-library-a
+    none:
+      - id: metadata/format::many-exports
     downgrade:
       any:
         - id: metadata/vendor/valve/valve-corp-binary
+    unless:
+      - id: metadata/vendor/jetbrains::jetbrains-company-string
 
   # === Complete Injection Framework ===
   - id: full-injection-capability
@@ -87,6 +101,8 @@ composite_rules:
       - id: remote-thread-pattern
       - id: suspended-process-inject
       - id: apc-injection
+    none:
+      - id: metadata/format::many-exports
     downgrade:
       any:
         - id: metadata/lang::go-runtime-marker

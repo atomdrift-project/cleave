@@ -49,11 +49,12 @@ traits:
         substr: "BSJB"  # .NET assemblies have normal null padding in IL sections
 
   # Repeated INT3 instructions (0xCC) - debugger breakpoint padding
-  # MSVC uses CC padding for 16-byte function alignment; require high density
-  # to distinguish intentional code caves from normal compiler alignment
+  # MSVC uses CC padding for 16-byte function alignment extensively;
+  # this is normal in all MSVC-compiled binaries. Use as component for
+  # composites that combine it with other suspicious indicators.
   - id: int3-padding-text
     desc: Dense INT3 breakpoint instructions
-    crit: suspicious
+    crit: component
     conf: 0.8
     if:
       type: hex
@@ -64,6 +65,7 @@ traits:
   # === Mixed Padding Patterns ===
 
   # Alternating null and NOP pattern (obfuscated cave)
+  # Single occurrences are normal compiler alignment padding in large binaries
   - id: null-nop-pattern
     desc: Alternating null and NOP pattern
     crit: suspicious
@@ -72,6 +74,7 @@ traits:
       type: hex
       section: text
       pattern: "00 90 00 90 00 90 00 90 00 90 00 90 00 90 00 90"
+      count_min: 3
 
   # High density of NOP instructions (cave or alignment abuse)
   - id: dense-nops-executable
@@ -107,6 +110,9 @@ traits:
       - id: metadata/signed/platform::apple
       - type: raw
         substr: "mscoree"  # .NET assemblies have normal low-entropy IL regions
+      - type: metrics
+        field: binary.import_count
+        min: 80  # Normal binaries with many imports have legitimate low-entropy sections
 
   # === Section Slack Space ===
 
@@ -118,9 +124,10 @@ traits:
     if:
       type: section
       executable: true
-      length_min: 1048576  # 1MB+ executable section
+      length_min: 4194304  # 4MB+ executable section
     unless:
       - id: metadata/compiler::go-binary  # Go binaries are large
+      - id: metadata/format::many-imports
 
 composite_rules:
   # Code cave with null padding
@@ -149,12 +156,15 @@ composite_rules:
         - id: metadata/format/pe::dotnet-assembly  # .NET IL has normal null padding/alignment
         - id: metadata/format::no-imports  # Data-only DLLs (keyboard layouts, codepage tables) have null padding as data structure
         - id: metadata/format::many-imports
+        - type: raw
+          substr: "PECompac"  # PECompact has null padding in packed sections
 
   # Injection-ready code cave
   - id: injection-ready-cave
     desc: Code cave suitable for code injection
     crit: hostile
     conf: 0.95
+    size_min: 16384   # Tiny PEs have null padding from section alignment, not injection caves
     all:
       - id: huge-null-run-text
     any:
@@ -165,15 +175,25 @@ composite_rules:
         substr: '.aspr'
       - type: raw
         substr: "BSJB"  # .NET NI (NGEN) DLLs have null padding + RWX sections by design
+      - type: raw
+        substr: "ntoskrnl"  # Windows kernel drivers have null padding + RWX INIT sections normally
+      - type: raw
+        substr: "PECompac"  # PECompact-packed binaries have null padding + RWX sections
 
   # Suspicious padding pattern
+  # Large legitimate binaries routinely have null padding and alignment artifacts
   - id: suspicious-padding
     desc: Suspicious executable section padding
     crit: suspicious
     conf: 0.85
+    size_max: 500000
     needs: 2
     any:
       - id: large-null-run-text
       - id: int3-padding-text
       - id: null-nop-pattern
       - id: dense-nops-executable
+    downgrade:
+      any:
+        - id: metadata/format::many-imports
+        - id: metadata/format::many-exports

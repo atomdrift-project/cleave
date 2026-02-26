@@ -23,6 +23,7 @@ composite_rules:
       any:
         - id: metadata/quality::has-tests
         - id: metadata/signed/platform
+        - id: micro-behaviors/process/create/shell/lang::child-process-require
 
   # GuardDog: Sensitive file exfiltration
   - id: js-sensitive-file-exfiltration

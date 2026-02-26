@@ -15,3 +15,5 @@ composite_rules:
         - id: metadata/dev/testing::node-common-require
         - id: metadata/library/structure::js-webpack-bundle
         - id: metadata/library/structure::js-umd-wrapper-any
+        - id: metadata/library::rxjs-websocket-constructor-error
+        - id: metadata/library::rxjs-cold-observable-offset-error

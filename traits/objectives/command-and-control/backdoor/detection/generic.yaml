@@ -13,7 +13,7 @@ traits:
 
   - id: webshell-ref
     desc: Web shell terminology reference
-    crit: suspicious
+    crit: notable
     conf: 0.9
     attack: "T1505.003"
     platforms: [all]
@@ -22,15 +22,7 @@ traits:
       regex: "w[3e]b[_\\s]*sh[e3]ll"
       case_insensitive: true
 
-  - id: traits-backdoor-ref
-    desc: Backdoor terminology reference
-    crit: suspicious
-    conf: 0.75
-    attack: "T1059"
-    platforms: [all]
-    if:
-      type: string
-      regex: "\\b[Bb]ackdoor\\b"
+  # traits-backdoor-ref removed — redundant with backdoor-ref in traits.yaml
 
   # === Atomic: Bash Reverse Shell ===
   # Removed bash-dev-tcp duplicate - use objectives/command-and-control/reverse-shell/socket/sh::reverse-shell-bash

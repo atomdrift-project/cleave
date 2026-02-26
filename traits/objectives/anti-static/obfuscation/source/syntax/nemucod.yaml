@@ -6,6 +6,7 @@ traits:
     desc: "Nemucod-style variable substitution map (comma operator)"
     crit: suspicious
     conf: 0.95
+    size_max: 500000
     if:
       type: ast
       language: javascript
@@ -48,6 +49,7 @@ traits:
     desc: "Nemucod function-based string fragmentation"
     crit: suspicious
     conf: 0.95
+    size_max: 500000
     if:
       type: ast
       language: javascript

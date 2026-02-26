@@ -49,6 +49,7 @@ composite_rules:
     platforms: [windows]
     attack: "T1486"
     mbc: "C0027"
+    size_max: 1048576
     all:
       - id: micro-behaviors/fs/enumerate/volume::find-first-volume
       - id: has-crypto-capability

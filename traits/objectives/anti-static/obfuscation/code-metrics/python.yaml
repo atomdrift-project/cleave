@@ -26,6 +26,10 @@ traits:
       type: metrics
       field: functions.one_liners
       min: 10
+    unless:
+      - type: raw
+        regex: 'def\s+\w+\(.*\).*:\s*\.\.\.'
+        count_min: 5
 
   - id: py-nested-functions
     desc: "Nested function definitions (closure obfuscation)"

@@ -48,8 +48,8 @@ traits:
   # Hexadecimal character codes in fromCharCode
   - id: fromcharcode-hex
     desc: Hexadecimal codes in fromCharCode
-    crit: suspicious
-    conf: 0.9
+    crit: notable
+    conf: 0.8
     mbc: "B0032"
     attack: "T1027"
     for: [javascript, typescript]
@@ -96,7 +96,7 @@ traits:
     if:
       type: raw
       regex: "\\d+\\s*[\\+\\-\\*\\/]\\s*0x[0-9a-fA-F]+"
-      count_min: 2
+      count_min: 4
 
   # Hexadecimal in conditional statements
   - id: hex-conditionals
@@ -109,7 +109,8 @@ traits:
     if:
       type: raw
       regex: "if\\s*\\([^)]{0,120}0x[0-9a-fA-F]+[^)]{0,120}\\)"
-      count_min: 2
+      count_min: 5
+      per_kb_min: 1.0
 
 composite_rules:
   # Advanced hex obfuscation composite

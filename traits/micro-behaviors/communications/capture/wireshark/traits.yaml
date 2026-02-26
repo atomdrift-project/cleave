@@ -12,6 +12,8 @@ traits:
     if:
       type: string
       substr: wireshark
+    not:
+      - regex: '[a-z]{2,4}\.wireshark'
 
   - id: tshark
     desc: tshark CLI analyzer

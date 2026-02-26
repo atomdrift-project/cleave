@@ -1,5 +1,6 @@
 # File moving and renaming - Windows
-# Critical ransomware capability - files are renamed after encryption
+# General file operation; T1486 (ransomware) mapping belongs in composites
+# that combine MoveFile with encryption indicators
 defaults:
   for: [pe, dll]
   platforms: [windows]
@@ -9,7 +10,6 @@ traits:
     desc: Move or rename file
     crit: notable
     conf: 0.9
-    attack: "T1486"
     if:
       type: symbol
       regex: "MoveFile[AW]?$"
@@ -18,7 +18,6 @@ traits:
     desc: Move or rename file with options
     crit: notable
     conf: 0.9
-    attack: "T1486"
     if:
       type: symbol
       regex: "MoveFileEx[AW]?$"

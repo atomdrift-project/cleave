@@ -351,6 +351,11 @@ func archiveProblematicMembers(a *ArchiveAnalysis, knownGood bool) []FileAnalysi
 }
 
 func main() {
+	// Set environment variables for all child processes (including LLM-spawned cleave instances).
+	// This ensures debug logging and validation are always enabled for post-mortem analysis.
+	os.Setenv("CLEAVE_FILE_LOGGING", "1")
+	os.Setenv("CLEAVE_VALIDATE", "1")
+
 	log.SetFlags(0)
 
 	knownGood := flag.Bool("good", false, "Review known-good files for false positives (suspicious/hostile findings)")

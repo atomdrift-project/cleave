@@ -302,12 +302,19 @@ impl Drop for MemoryLoggerHandle {
 
 /// Start a periodic memory logging task.
 /// Returns a handle that can be used to stop the thread gracefully.
+///
+/// This enhanced version also logs:
+/// - Orphaned analysis thread statistics
+/// - Rizin subprocess statistics
+/// - YARA scanner cache statistics
 #[must_use]
 pub fn start_periodic_logging(interval: Duration) -> MemoryLoggerHandle {
     let shutdown = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     let shutdown_clone = shutdown.clone();
 
     let handle = std::thread::spawn(move || {
+        let mut iteration = 0u64;
+
         while !shutdown_clone.load(std::sync::atomic::Ordering::Relaxed) {
             std::thread::sleep(interval);
 
@@ -316,10 +323,16 @@ pub fn start_periodic_logging(interval: Duration) -> MemoryLoggerHandle {
                 break;
             }
 
+            iteration += 1;
+
             if let Some(rss) = current_rss() {
+                let rss_mb = rss / 1024 / 1024;
+                let rss_gb = rss / 1024 / 1024 / 1024;
+
                 info!(
-                    rss_mb = rss / 1024 / 1024,
-                    rss_gb = rss / 1024 / 1024 / 1024,
+                    rss_mb = rss_mb,
+                    rss_gb = rss_gb,
+                    iteration = iteration,
                     "Periodic memory check"
                 );
 
@@ -329,14 +342,24 @@ pub fn start_periodic_logging(interval: Duration) -> MemoryLoggerHandle {
 
                 if rss > CRITICAL_THRESHOLD {
                     tracing::error!(
-                        rss_gb = rss / 1024 / 1024 / 1024,
+                        rss_gb = rss_gb,
                         "CRITICAL: Memory usage extremely high - OOM imminent"
                     );
+                    // Log all statistics for post-mortem analysis
+                    log_all_memory_stats();
                 } else if rss > WARNING_THRESHOLD {
                     warn!(
-                        rss_gb = rss / 1024 / 1024 / 1024,
+                        rss_gb = rss_gb,
                         "WARNING: High memory usage detected"
                     );
+                    // Log stats when memory is high for debugging
+                    log_all_memory_stats();
+                }
+
+                // Log full stats every 6 iterations (once per minute at 10s interval)
+                // for post-mortem analysis even when memory is normal
+                if iteration.is_multiple_of(6) {
+                    log_all_memory_stats();
                 }
             }
         }
@@ -346,6 +369,28 @@ pub fn start_periodic_logging(interval: Duration) -> MemoryLoggerHandle {
         shutdown,
         handle: Some(handle),
     }
+}
+
+/// Log all memory-related statistics for post-mortem analysis.
+/// This consolidates stats from various subsystems that can cause memory issues.
+pub(crate) fn log_all_memory_stats() {
+    // Log current RSS
+    if let Some(rss) = current_rss() {
+        info!(
+            rss_mb = rss / 1024 / 1024,
+            rss_gb = rss / 1024 / 1024 / 1024,
+            "Memory stats snapshot - RSS"
+        );
+    }
+
+    // Log orphaned thread statistics
+    crate::analyzers::archive::analyzers::log_orphaned_thread_stats();
+
+    // Log rizin subprocess statistics
+    crate::radare2::log_rizin_stats();
+
+    // Note: Scanner cache stats are thread-local and can't be easily aggregated,
+    // but they are logged when evictions occur.
 }
 
 /// Create a global memory tracker instance

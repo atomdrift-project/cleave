@@ -4,7 +4,7 @@
 //! guaranteed by the code structure (e.g., parsed paths, validated indices).
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-mod analyzers;
+pub(crate) mod analyzers;
 mod guards;
 // #[cfg(test)]
 // mod guards_test;

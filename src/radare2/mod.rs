@@ -19,6 +19,11 @@
 //! - Zstd-compressed caching by file SHA256
 //! - Skip expensive analysis for large binaries (>20MB)
 //! - Architecture-aware syscall detection
+//!
+//! # Memory Safety
+//!
+//! All rizin subprocess calls now have timeouts to prevent hung processes
+//! from accumulating and causing memory exhaustion.
 
 mod cache;
 mod models;
@@ -33,15 +38,27 @@ use crate::types::BinaryMetrics;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
-use std::process::Command;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::OnceLock;
+use std::time::Duration;
+use tracing::{debug, trace, warn};
+
+/// Default timeout for rizin subprocess execution (60 seconds).
+/// This prevents hung processes from accumulating during archive analysis.
+const RIZIN_DEFAULT_TIMEOUT_SECS: u64 = 60;
 
 /// Global flag to disable radare2 analysis
 static RADARE2_DISABLED: AtomicBool = AtomicBool::new(false);
 
 /// Cached result of radare2 availability check (avoids subprocess per file)
 static RADARE2_AVAILABLE: OnceLock<bool> = OnceLock::new();
+
+/// Statistics for rizin subprocess execution
+static RIZIN_TOTAL_CALLS: AtomicU64 = AtomicU64::new(0);
+static RIZIN_TIMEOUTS: AtomicU64 = AtomicU64::new(0);
+static RIZIN_FAILURES: AtomicU64 = AtomicU64::new(0);
+static RIZIN_SUCCESSES: AtomicU64 = AtomicU64::new(0);
 
 /// Disable radare2 analysis globally
 pub(crate) fn disable_radare2() {
@@ -51,6 +68,155 @@ pub(crate) fn disable_radare2() {
 /// Check if radare2 is disabled
 pub(crate) fn is_disabled() -> bool {
     RADARE2_DISABLED.load(Ordering::SeqCst)
+}
+
+/// Get rizin execution statistics for debugging.
+#[allow(dead_code)]
+pub(crate) fn rizin_stats() -> (u64, u64, u64, u64) {
+    (
+        RIZIN_TOTAL_CALLS.load(Ordering::Relaxed),
+        RIZIN_SUCCESSES.load(Ordering::Relaxed),
+        RIZIN_TIMEOUTS.load(Ordering::Relaxed),
+        RIZIN_FAILURES.load(Ordering::Relaxed),
+    )
+}
+
+/// Log rizin statistics for post-mortem analysis.
+pub(crate) fn log_rizin_stats() {
+    let (total, successes, timeouts, failures) = rizin_stats();
+    if total > 0 {
+        tracing::info!(
+            total_calls = total,
+            successes = successes,
+            timeouts = timeouts,
+            failures = failures,
+            timeout_rate_pct = (timeouts as f64 / total as f64) * 100.0,
+            failure_rate_pct = (failures as f64 / total as f64) * 100.0,
+            "Rizin subprocess statistics"
+        );
+    }
+}
+
+/// Execute a rizin command with timeout protection.
+///
+/// This prevents hung rizin processes from accumulating during archive analysis,
+/// which was a major cause of memory exhaustion.
+///
+/// # Arguments
+/// * `args` - Command line arguments for rizin
+/// * `timeout` - Maximum time to wait for the process
+///
+/// # Returns
+/// * `Ok(Output)` - The process output
+/// * `Err` - If the process times out or fails to execute
+fn execute_rizin_with_timeout(
+    args: &[&str],
+    timeout: Duration,
+) -> Result<std::process::Output> {
+    use std::io::Read;
+
+    RIZIN_TOTAL_CALLS.fetch_add(1, Ordering::Relaxed);
+
+    let start = std::time::Instant::now();
+    let args_str = args.join(" ");
+
+    trace!(
+        command = %format!("rizin {}", args_str),
+        timeout_secs = timeout.as_secs(),
+        "Executing rizin with timeout"
+    );
+
+    let mut child = Command::new("rizin")
+        .args(args)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .context("Failed to spawn rizin process")?;
+
+    // Wait for the process with timeout
+    let deadline = std::time::Instant::now() + timeout;
+    let poll_interval = Duration::from_millis(100);
+
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                // Process has completed
+                let elapsed = start.elapsed();
+
+                // Read stdout and stderr
+                let mut stdout = Vec::new();
+                let mut stderr = Vec::new();
+
+                if let Some(mut stdout_handle) = child.stdout.take() {
+                    let _ = stdout_handle.read_to_end(&mut stdout);
+                }
+                if let Some(mut stderr_handle) = child.stderr.take() {
+                    let _ = stderr_handle.read_to_end(&mut stderr);
+                }
+
+                let output = std::process::Output {
+                    status,
+                    stdout,
+                    stderr,
+                };
+
+                if status.success() {
+                    RIZIN_SUCCESSES.fetch_add(1, Ordering::Relaxed);
+                    debug!(
+                        elapsed_ms = elapsed.as_millis(),
+                        stdout_bytes = output.stdout.len(),
+                        "Rizin completed successfully"
+                    );
+                } else {
+                    RIZIN_FAILURES.fetch_add(1, Ordering::Relaxed);
+                    let stderr_str = String::from_utf8_lossy(&output.stderr);
+                    warn!(
+                        elapsed_ms = elapsed.as_millis(),
+                        exit_code = ?status.code(),
+                        stderr = %stderr_str,
+                        "Rizin exited with error"
+                    );
+                }
+
+                return Ok(output);
+            }
+            Ok(None) => {
+                // Process still running - check timeout
+                if std::time::Instant::now() > deadline {
+                    // Timeout! Kill the process
+                    RIZIN_TIMEOUTS.fetch_add(1, Ordering::Relaxed);
+
+                    warn!(
+                        timeout_secs = timeout.as_secs(),
+                        command = %format!("rizin {}", args_str),
+                        "Rizin process timed out - killing"
+                    );
+
+                    // Try to kill the process
+                    let _ = child.kill();
+
+                    // Give it a moment to die, then return error
+                    std::thread::sleep(Duration::from_millis(100));
+                    let _ = child.wait(); // Reap the zombie
+
+                    // Log statistics on timeout
+                    log_rizin_stats();
+
+                    anyhow::bail!(
+                        "Rizin process timed out after {}s",
+                        timeout.as_secs()
+                    );
+                }
+
+                // Still within timeout, sleep briefly and retry
+                std::thread::sleep(poll_interval);
+            }
+            Err(e) => {
+                RIZIN_FAILURES.fetch_add(1, Ordering::Relaxed);
+                return Err(anyhow::anyhow!("Failed to check rizin process status: {}", e));
+            }
+        }
+    }
 }
 
 /// Batched analysis result containing all data from a single r2 session
@@ -79,23 +245,26 @@ impl Radare2Analyzer {
         *RADARE2_AVAILABLE.get_or_init(|| Command::new("rizin").arg("-v").output().is_ok())
     }
 
-    /// Extract all symbols (imports, exports, and internal symbols) in a single session
+    /// Extract all symbols (imports, exports, and internal symbols) in a single session.
+    /// Uses timeout protection to prevent hung processes.
     #[allow(dead_code)] // Used by main.rs binary
     pub(crate) fn extract_all_symbols(
         &self,
         file_path: &Path,
     ) -> Result<(Vec<R2Import>, Vec<R2Export>, Vec<R2Symbol>)> {
-        let output = Command::new("rizin")
-            .arg("-q")
-            .arg("-e")
-            .arg("scr.color=0")
-            .arg("-e")
-            .arg("log.level=0")
-            .arg("-c")
-            .arg("iij; echo SEPARATOR; iEj; echo SEPARATOR; isj") // Batched imports, exports, and symbols
-            .arg(file_path)
-            .output()
-            .context("Failed to execute radare2")?;
+        let file_path_str = file_path.to_string_lossy();
+        let timeout = Duration::from_secs(RIZIN_DEFAULT_TIMEOUT_SECS);
+
+        let output = execute_rizin_with_timeout(
+            &[
+                "-q",
+                "-e", "scr.color=0",
+                "-e", "log.level=0",
+                "-c", "iij; echo SEPARATOR; iEj; echo SEPARATOR; isj",
+                &file_path_str,
+            ],
+            timeout,
+        )?;
 
         if !output.status.success() {
             return Ok((Vec::new(), Vec::new(), Vec::new()));
@@ -131,15 +300,15 @@ impl Radare2Analyzer {
         Ok((imports, exports, symbols))
     }
 
-    /// Extract imports
+    /// Extract imports with timeout protection.
     pub(crate) fn extract_imports(&self, file_path: &Path) -> Result<Vec<R2Import>> {
-        let output = Command::new("rizin")
-            .arg("-q")
-            .arg("-c")
-            .arg("iij") // List imports as JSON
-            .arg(file_path)
-            .output()
-            .context("Failed to execute radare2")?;
+        let file_path_str = file_path.to_string_lossy();
+        let timeout = Duration::from_secs(RIZIN_DEFAULT_TIMEOUT_SECS);
+
+        let output = execute_rizin_with_timeout(
+            &["-q", "-c", "iij", &file_path_str],
+            timeout,
+        )?;
 
         if !output.status.success() {
             return Ok(Vec::new());
@@ -151,9 +320,11 @@ impl Radare2Analyzer {
         Ok(imports)
     }
 
-    /// Extract functions, sections, and strings in a SINGLE r2 session
+    /// Extract functions, sections, and strings in a SINGLE r2 session.
     /// This significantly reduces overhead compared to calling each method separately.
     /// Results are cached by SHA256 with zstd compression.
+    ///
+    /// Uses timeout protection to prevent hung processes from accumulating.
     ///
     /// `has_symbols`: when false (stripped binary), function analysis (`aa; aflj`) is skipped.
     /// Stripped binaries yield only heuristically-guessed unnamed functions of limited value,
@@ -163,8 +334,7 @@ impl Radare2Analyzer {
         file_path: &Path,
         has_symbols: bool,
     ) -> Result<BatchedAnalysis> {
-        use tracing::{debug, trace, warn};
-        let _t_start = std::time::Instant::now();
+        let t_start = std::time::Instant::now();
 
         debug!("Running radare2 batched analysis on {:?}", file_path);
 
@@ -209,27 +379,39 @@ impl Radare2Analyzer {
             "aa; aflj; echo SEP; iSj; echo SEP; izj"
         };
 
-        trace!("Executing rizin with command: {}", command);
+        trace!(command = command, "Executing rizin batched analysis");
 
-        let output = Command::new("rizin")
-            .arg("-q")
-            .arg("-e")
-            .arg("scr.color=0")
-            .arg("-e")
-            .arg("log.level=0")
-            .arg("-c")
-            .arg(command)
-            .arg(file_path)
-            .output()
-            .context("Failed to execute radare2")?;
+        let file_path_str = file_path.to_string_lossy();
+
+        // Use longer timeout for batched analysis (includes 'aa' for full analysis)
+        let timeout = if skip_function_analysis {
+            Duration::from_secs(RIZIN_DEFAULT_TIMEOUT_SECS)
+        } else {
+            // Full analysis with 'aa' can take longer
+            Duration::from_secs(RIZIN_DEFAULT_TIMEOUT_SECS * 2)
+        };
+
+        let output = execute_rizin_with_timeout(
+            &[
+                "-q",
+                "-e", "scr.color=0",
+                "-e", "log.level=0",
+                "-c", command,
+                &file_path_str,
+            ],
+            timeout,
+        )?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            warn!("radare2 exited with status {}: {}", output.status, stderr);
+            warn!(status = %output.status, stderr = %stderr, "radare2 exited with error");
             anyhow::bail!("radare2 failed with status {}: {}", output.status, stderr);
         }
 
-        debug!("radare2 completed successfully");
+        debug!(
+            elapsed_ms = t_start.elapsed().as_millis(),
+            "radare2 batched analysis completed successfully"
+        );
 
         let output_str = String::from_utf8_lossy(&output.stdout);
         let parts: Vec<&str> = output_str.split("SEP").collect();

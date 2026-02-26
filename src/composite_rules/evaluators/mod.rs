@@ -16,7 +16,6 @@
 use parking_lot::RwLock;
 use regex::Regex;
 use std::cell::RefCell;
-use std::collections::HashMap;
 use std::hash::Hash;
 use std::sync::OnceLock;
 
@@ -120,16 +119,71 @@ pub(crate) fn compile_regex_optimal(
     }
 }
 
+/// Maximum number of YARA scanners to cache per thread.
+/// Each scanner contains a wasmtime VM instance (~10-50MB each).
+/// Bounded to prevent unbounded memory growth in long-running processes.
+const SCANNER_CACHE_MAX_SIZE: usize = 32;
+
 // Thread-local cache for YARA Scanners to avoid expensive Scanner::new() calls.
 // Scanner creation involves wasmtime VM instantiation which is expensive (~200µs).
 // Reusing scanners provides ~5x speedup.
+// BOUNDED: Uses LRU eviction to prevent unbounded memory growth.
 thread_local! {
-    /// Thread-local YARA scanner cache keyed by Rules pointer address
-    pub static SCANNER_CACHE: RefCell<HashMap<usize, yara_x::Scanner<'static>>> =
-        RefCell::new(HashMap::new());
+    /// Thread-local YARA scanner LRU cache keyed by Rules pointer address.
+    /// Bounded to SCANNER_CACHE_MAX_SIZE entries to prevent memory leaks.
+    #[allow(clippy::expect_used)]
+    pub static SCANNER_CACHE: RefCell<lru::LruCache<usize, yara_x::Scanner<'static>>> = {
+        use std::num::NonZeroUsize;
+        let size = std::env::var("CLEAVE_SCANNER_CACHE_SIZE")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(SCANNER_CACHE_MAX_SIZE);
+        RefCell::new(lru::LruCache::new(
+            NonZeroUsize::new(size).expect("Scanner cache size must be > 0")
+        ))
+    };
+
+    /// Counter for scanner cache statistics (hits, misses, evictions)
+    static SCANNER_CACHE_STATS: RefCell<(u64, u64, u64)> = const { RefCell::new((0, 0, 0)) };
 }
 
-/// Get or create a Scanner for the given Rules, using thread-local caching.
+/// Log scanner cache statistics for debugging memory issues.
+/// Call this periodically or at process end for post-mortem analysis.
+#[allow(dead_code)]
+pub(crate) fn log_scanner_cache_stats() {
+    SCANNER_CACHE.with(|cache| {
+        let cache = cache.borrow();
+        SCANNER_CACHE_STATS.with(|stats| {
+            let (hits, misses, evictions) = *stats.borrow();
+            tracing::info!(
+                cache_size = cache.len(),
+                cache_capacity = SCANNER_CACHE_MAX_SIZE,
+                hits = hits,
+                misses = misses,
+                evictions = evictions,
+                hit_rate_pct = if hits + misses > 0 {
+                    (hits as f64 / (hits + misses) as f64) * 100.0
+                } else {
+                    0.0
+                },
+                "YARA scanner cache statistics"
+            );
+        });
+    });
+}
+
+/// Clear the scanner cache for this thread. Useful for freeing memory.
+#[allow(dead_code)]
+pub(crate) fn clear_scanner_cache() {
+    SCANNER_CACHE.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        let cleared = cache.len();
+        cache.clear();
+        tracing::debug!(cleared_entries = cleared, "Cleared YARA scanner cache");
+    });
+}
+
+/// Get or create a Scanner for the given Rules, using thread-local LRU caching.
 ///
 /// # Safety
 /// The Rules pointer must remain valid for the duration of Scanner use.
@@ -142,16 +196,40 @@ pub(crate) fn get_or_create_scanner<'a>(rules: &'a yara_x::Rules) -> &'a mut yar
     SCANNER_CACHE.with(|cache| {
         let mut cache = cache.borrow_mut();
 
-        // Get or insert scanner for these rules
-        // SAFETY: We extend the lifetime to 'static for storage in the thread-local.
-        // This is safe because:
-        // 1. Rules is behind Arc<Rules> in TraitDefinition, living for program duration
-        // 2. We only use the Scanner while Rules is valid (within eval_yara_inline)
-        // 3. Thread-local storage means no cross-thread access
-        let scanner = cache.entry(key).or_insert_with(|| {
+        // Track if we'll evict an entry
+        let will_evict = cache.len() >= SCANNER_CACHE_MAX_SIZE && !cache.contains(&key);
+
+        // Check if already in cache (this also promotes to most-recently-used)
+        if cache.get(&key).is_some() {
+            SCANNER_CACHE_STATS.with(|stats| {
+                stats.borrow_mut().0 += 1; // hit
+            });
+        } else {
+            SCANNER_CACHE_STATS.with(|stats| {
+                let mut s = stats.borrow_mut();
+                s.1 += 1; // miss
+                if will_evict {
+                    s.2 += 1; // eviction
+                    tracing::trace!(
+                        cache_size = SCANNER_CACHE_MAX_SIZE,
+                        "YARA scanner cache evicting oldest entry"
+                    );
+                }
+            });
+
+            // Create new scanner - LRU will auto-evict oldest if at capacity
             let scanner = yara_x::Scanner::new(rules);
-            unsafe { std::mem::transmute(scanner) }
-        });
+            // SAFETY: We extend the lifetime to 'static for storage in the thread-local.
+            // This is safe because:
+            // 1. Rules is behind Arc<Rules> in TraitDefinition, living for program duration
+            // 2. We only use the Scanner while Rules is valid (within eval_yara_inline)
+            // 3. Thread-local storage means no cross-thread access
+            let static_scanner: yara_x::Scanner<'static> = unsafe { std::mem::transmute(scanner) };
+            cache.put(key, static_scanner);
+        }
+
+        // Get the scanner (guaranteed to exist now)
+        let scanner = cache.get_mut(&key).expect("Scanner was just inserted");
 
         // Transmute lifetime back to caller's lifetime
         // SAFETY: We're returning a reference with the caller's lifetime 'a,

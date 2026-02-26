@@ -15,6 +15,12 @@
 //! 3. Analyze non-class files (scripts, configs, manifests)
 //!
 //! This balances thoroughness with performance.
+//!
+//! # Memory Safety
+//!
+//! Analysis threads are tracked to prevent unbounded thread accumulation.
+//! When threads timeout, they are tracked as "orphaned" and the system
+//! blocks new analysis when too many orphans exist.
 
 use super::utils::{calculate_sha256, find_main_class, is_benign_java_path};
 use super::ArchiveAnalyzer;
@@ -25,9 +31,89 @@ use rayon::prelude::*;
 use std::collections::HashSet;
 use std::fs;
 use std::path::Path;
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
+use std::thread::JoinHandle;
 
 const MAX_FILE_ANALYSIS_TIME_SECS: u64 = 10;
+
+/// Maximum number of orphaned (timed-out) threads allowed before blocking new analysis.
+/// Each orphaned thread holds ~8MB stack + analysis resources.
+/// At 50 orphans = ~400MB+ of leaked memory, we start blocking.
+const MAX_ORPHANED_THREADS: usize = 50;
+
+/// Global tracking of orphaned analysis threads for memory leak prevention.
+/// These are threads that timed out but are still running in the background.
+static ORPHANED_THREAD_COUNT: AtomicUsize = AtomicUsize::new(0);
+
+/// Total number of threads that have been orphaned (cumulative, for logging)
+static TOTAL_ORPHANED_THREADS: AtomicU64 = AtomicU64::new(0);
+
+/// Total number of orphaned threads that have completed and been cleaned up
+static ORPHANED_THREADS_COMPLETED: AtomicU64 = AtomicU64::new(0);
+
+/// Total number of successful (non-timeout) analyses
+static SUCCESSFUL_ANALYSES: AtomicU64 = AtomicU64::new(0);
+
+/// Total number of timed-out analyses
+static TIMEOUT_ANALYSES: AtomicU64 = AtomicU64::new(0);
+
+/// Storage for orphaned thread handles to allow eventual cleanup
+static ORPHANED_HANDLES: Mutex<Vec<JoinHandle<()>>> = Mutex::new(Vec::new());
+
+/// Get current orphaned thread statistics for debugging.
+#[allow(dead_code)]
+pub(crate) fn orphaned_thread_stats() -> (usize, u64, u64, u64, u64) {
+    (
+        ORPHANED_THREAD_COUNT.load(Ordering::Relaxed),
+        TOTAL_ORPHANED_THREADS.load(Ordering::Relaxed),
+        ORPHANED_THREADS_COMPLETED.load(Ordering::Relaxed),
+        SUCCESSFUL_ANALYSES.load(Ordering::Relaxed),
+        TIMEOUT_ANALYSES.load(Ordering::Relaxed),
+    )
+}
+
+/// Log orphaned thread statistics for post-mortem analysis.
+pub(crate) fn log_orphaned_thread_stats() {
+    let (current, total, completed, successful, timeouts) = orphaned_thread_stats();
+    tracing::info!(
+        current_orphaned = current,
+        total_orphaned = total,
+        orphans_completed = completed,
+        successful_analyses = successful,
+        timeout_analyses = timeouts,
+        timeout_rate_pct = if successful + timeouts > 0 {
+            (timeouts as f64 / (successful + timeouts) as f64) * 100.0
+        } else {
+            0.0
+        },
+        max_allowed_orphans = MAX_ORPHANED_THREADS,
+        "Archive analysis thread statistics"
+    );
+}
+
+/// Try to clean up any orphaned threads that have finished.
+/// Call periodically to reclaim resources from threads that eventually completed.
+pub(crate) fn cleanup_finished_orphans() {
+    let mut handles = match ORPHANED_HANDLES.lock() {
+        Ok(h) => h,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+
+    let initial_count = handles.len();
+    handles.retain(|handle| !handle.is_finished());
+    let removed = initial_count - handles.len();
+
+    if removed > 0 {
+        ORPHANED_THREAD_COUNT.fetch_sub(removed, Ordering::Relaxed);
+        ORPHANED_THREADS_COMPLETED.fetch_add(removed as u64, Ordering::Relaxed);
+        tracing::debug!(
+            cleaned_up = removed,
+            remaining_orphans = handles.len(),
+            "Cleaned up finished orphaned analysis threads"
+        );
+    }
+}
 
 impl ArchiveAnalyzer {
     /// Analyze JAR-like archives (JAR, WAR, EAR, APK, AAR) with optimized class file handling.
@@ -803,12 +889,18 @@ impl ArchiveAnalyzer {
     /// 10-second timeout. If timeout occurs, returns a report with a timeout
     /// finding instead of hanging forever.
     ///
+    /// # Memory Safety
+    ///
+    /// Timed-out threads are tracked as "orphaned" to prevent unbounded memory growth.
+    /// When too many orphaned threads exist, new analysis is blocked until some complete.
+    /// This prevents the OOM scenarios seen in long-running archive analysis.
+    ///
     /// # Arguments
     /// * `file_path` - Path to the extracted file
     ///
     /// # Returns
     /// * `Ok(AnalysisReport)` - Normal analysis or timeout report
-    /// * `Err` - Only if thread crashes (not timeout)
+    /// * `Err` - If thread crashes or too many orphaned threads
     pub(super) fn analyze_extracted_file_with_timeout(
         &self,
         file_path: &Path,
@@ -816,8 +908,50 @@ impl ArchiveAnalyzer {
         use std::sync::mpsc;
         use std::time::Duration;
 
+        let file_path_str = file_path.display().to_string();
+
+        // Periodically clean up finished orphaned threads
+        cleanup_finished_orphans();
+
+        // Check if we have too many orphaned threads - if so, block to prevent OOM
+        let current_orphans = ORPHANED_THREAD_COUNT.load(Ordering::Relaxed);
+        if current_orphans >= MAX_ORPHANED_THREADS {
+            tracing::warn!(
+                orphaned_threads = current_orphans,
+                max_allowed = MAX_ORPHANED_THREADS,
+                file_path = %file_path_str,
+                "Too many orphaned analysis threads - blocking new analysis to prevent OOM"
+            );
+
+            // Wait for some orphans to complete before proceeding
+            let wait_start = std::time::Instant::now();
+            let max_wait = Duration::from_secs(30);
+            while ORPHANED_THREAD_COUNT.load(Ordering::Relaxed) >= MAX_ORPHANED_THREADS {
+                cleanup_finished_orphans();
+                if wait_start.elapsed() > max_wait {
+                    tracing::error!(
+                        orphaned_threads = ORPHANED_THREAD_COUNT.load(Ordering::Relaxed),
+                        waited_secs = max_wait.as_secs(),
+                        file_path = %file_path_str,
+                        "Timeout waiting for orphaned threads to complete - skipping file"
+                    );
+                    return Err(anyhow::anyhow!(
+                        "Too many orphaned analysis threads ({}) - analysis blocked",
+                        current_orphans
+                    ));
+                }
+                std::thread::sleep(Duration::from_millis(100));
+            }
+            tracing::info!(
+                waited_ms = wait_start.elapsed().as_millis(),
+                remaining_orphans = ORPHANED_THREAD_COUNT.load(Ordering::Relaxed),
+                "Orphaned thread count reduced - resuming analysis"
+            );
+        }
+
         let timeout = Duration::from_secs(MAX_FILE_ANALYSIS_TIME_SECS);
         let file_path_clone = file_path.to_path_buf();
+        let file_path_for_log = file_path_str.clone();
 
         // Clone self for thread (we need to move capability_mapper and yara_engine)
         let capability_mapper = self.capability_mapper.clone();
@@ -830,6 +964,14 @@ impl ArchiveAnalyzer {
         let max_memory_file_size = self.max_memory_file_size;
 
         let (tx, rx) = mpsc::channel();
+
+        tracing::trace!(
+            file_path = %file_path_str,
+            timeout_secs = MAX_FILE_ANALYSIS_TIME_SECS,
+            "Starting timed file analysis"
+        );
+
+        let analysis_start = std::time::Instant::now();
 
         let handle = std::thread::spawn(move || {
             // Recreate analyzer in thread
@@ -850,15 +992,54 @@ impl ArchiveAnalyzer {
 
         match rx.recv_timeout(timeout) {
             Ok(result) => {
+                let elapsed = analysis_start.elapsed();
                 // Thread completed successfully, join to clean up resources
                 let _ = handle.join();
+                SUCCESSFUL_ANALYSES.fetch_add(1, Ordering::Relaxed);
+                tracing::trace!(
+                    file_path = %file_path_str,
+                    elapsed_ms = elapsed.as_millis(),
+                    success = result.is_ok(),
+                    "File analysis completed within timeout"
+                );
                 result
             }
             Err(mpsc::RecvTimeoutError::Timeout) => {
-                // Thread timed out - we can't forcibly kill it, but we've documented the timeout.
-                // The thread will eventually complete and try to send on a closed channel.
-                // We intentionally don't join here to avoid blocking indefinitely.
-                // The thread will be cleaned up when it finishes (tx.send will fail silently).
+                // Thread timed out - track it as orphaned for memory management
+                let orphan_count = ORPHANED_THREAD_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
+                TOTAL_ORPHANED_THREADS.fetch_add(1, Ordering::Relaxed);
+                TIMEOUT_ANALYSES.fetch_add(1, Ordering::Relaxed);
+
+                // Wrap the handle so we can track when it finishes
+                let wrapped_handle = std::thread::spawn(move || {
+                    // Wait for the actual analysis thread to complete
+                    let _ = handle.join();
+                    // Thread completed - decrement will happen in cleanup_finished_orphans
+                    tracing::debug!(
+                        file_path = %file_path_for_log,
+                        "Orphaned analysis thread eventually completed"
+                    );
+                });
+
+                // Store the wrapped handle for eventual cleanup
+                if let Ok(mut handles) = ORPHANED_HANDLES.lock() {
+                    handles.push(wrapped_handle);
+                }
+
+                tracing::warn!(
+                    file_path = %file_path_str,
+                    timeout_secs = MAX_FILE_ANALYSIS_TIME_SECS,
+                    current_orphans = orphan_count,
+                    total_orphaned = TOTAL_ORPHANED_THREADS.load(Ordering::Relaxed),
+                    max_allowed = MAX_ORPHANED_THREADS,
+                    "File analysis timed out - thread orphaned (potential memory leak)"
+                );
+
+                // Log statistics periodically when we see timeouts
+                if orphan_count.is_multiple_of(10) {
+                    log_orphaned_thread_stats();
+                }
+
                 // Analysis timed out - create a report with timeout finding
                 let file_data = fs::read(file_path).unwrap_or_default();
                 let target = TargetInfo {
@@ -877,8 +1058,8 @@ impl ArchiveAnalyzer {
                     trait_refs: vec![],
                     id: "anti-analysis/timeout/analysis-timeout".to_string(),
                     desc: format!(
-                        "File analysis exceeded {}s timeout (possible anti-analysis)",
-                        MAX_FILE_ANALYSIS_TIME_SECS
+                        "File analysis exceeded {}s timeout (possible anti-analysis). Orphaned threads: {}",
+                        MAX_FILE_ANALYSIS_TIME_SECS, orphan_count
                     ),
                     conf: 0.8,
                     crit: Criticality::Baseline,
@@ -887,7 +1068,7 @@ impl ArchiveAnalyzer {
                     evidence: vec![Evidence {
                         method: "timeout".to_string(),
                         source: "archive_analyzer".to_string(),
-                        value: format!("timeout:{}s", MAX_FILE_ANALYSIS_TIME_SECS),
+                        value: format!("timeout:{}s,orphans:{}", MAX_FILE_ANALYSIS_TIME_SECS, orphan_count),
                         location: Some(file_path.display().to_string()),
                         ..Default::default()
                     }],
@@ -899,6 +1080,10 @@ impl ArchiveAnalyzer {
                 Ok(report)
             }
             Err(mpsc::RecvTimeoutError::Disconnected) => {
+                tracing::error!(
+                    file_path = %file_path_str,
+                    "Analysis thread crashed (channel disconnected)"
+                );
                 Err(anyhow::anyhow!("Analysis thread crashed"))
             }
         }

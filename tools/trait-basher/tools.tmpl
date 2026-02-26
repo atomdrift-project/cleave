@@ -2,12 +2,18 @@
 ## Tools
 
 ```bash
-{{.CleaveBin}} --validate=true --format jsonl {{.Path}}  # All traits + rule paths
-{{.CleaveBin}} strings {{.Path}}    # Strings (including encoded)
-{{.CleaveBin}} symbols {{.Path}}    # Symbols
-{{.CleaveBin}} metrics {{.Path}}    # Structure metrics
-{{.CleaveBin}} test-rules {{.Path}} --rules "rule-id"
-{{.CleaveBin}} test-match {{.Path}} --type string --pattern "X"
+{{.CleaveBin}} --format jsonl <filename> # All traits + rule paths
+{{.CleaveBin}} strings <filename>        # Program strings (including XOR encoded)
+{{.CleaveBin}} symbols <filename>        # Symbols
+{{.CleaveBin}} sections <filename>       # Binary section data
+{{.CleaveBin}} metrics <filename>        # Structure metrics
+```
+
+These are useful to debug rules:
+
+```
+{{.CleaveBin}} test-rules <filename> --rules "rule-id"
+{{.CleaveBin}} test-match <filename> --type string --pattern "X"
 ```
 
 Also available: r2, ghidra, nm, readelf
@@ -41,9 +47,9 @@ Also available: r2, ghidra, nm, readelf
 |-------|-----------|---------|
 | Hostile | ≥4.0 | Unquestionably malicious |
 | Suspicious | ≥2.0 | Surprising in random programs |
-| Notable | — | Describes program purpose |
-| Baseline | — | Common, low signal |
-| Component | — | Hidden unless composite fires |
+| Notable | — | Describes program purpose, things you'd like to see in differential analysis |
+| Baseline | — | Common across most programs on a platform, low signal |
+| Component | — | Uninteresting fragments that only serve to build up a composite rule |
 
 ### Tightening (before downgrade/unless)
 `size_min`, `count_min`, `per_kb_min`, `near_min`, `section`, `for`, `near_bytes`, `near_lines`, `not`

@@ -1571,6 +1571,7 @@ func processRealFile(ctx context.Context, st *streamState) {
 func needsReview(f FileAnalysis, knownGood bool, validateEvery int) (review bool, isValidation bool) {
 	if !knownGood {
 		// Known-bad mode: review if no suspicious/hostile findings (FN check)
+		hasNonMetadataFinding := false
 		for _, finding := range f.Findings {
 			c := strings.ToLower(finding.Crit)
 			if c == "suspicious" || c == "hostile" {
@@ -1580,6 +1581,19 @@ func needsReview(f FileAnalysis, knownGood bool, validateEvery int) (review bool
 				}
 				return false, false // Has detection, skip review
 			}
+			// Track if any finding is outside metadata/ or above baseline/component
+			if c != "baseline" && c != "component" {
+				hasNonMetadataFinding = true
+			} else if !strings.HasPrefix(finding.ID, "metadata/") {
+				hasNonMetadataFinding = true
+			}
+		}
+		// Skip review if only metadata/ baseline/component findings (supporting data files)
+		if len(f.Findings) > 0 && !hasNonMetadataFinding {
+			if validateEvery > 0 && rand.IntN(validateEvery) == 0 { //nolint:gosec // non-cryptographic sampling
+				return true, true // Validation sample
+			}
+			return false, false // Only inert metadata findings, skip review
 		}
 		return true, false // No detection, needs review
 	}

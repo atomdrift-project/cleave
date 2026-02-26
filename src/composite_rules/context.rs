@@ -5,7 +5,7 @@ use super::evaluators::kv::StructuredFormat;
 use super::section_map::SectionMap;
 use super::types::{FileType, Platform};
 use crate::types::{AnalysisReport, Evidence, Finding};
-use rustc_hash::{FxHashSet, FxHasher};
+use rustc_hash::{FxHashMap, FxHashSet, FxHasher};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
@@ -55,6 +55,12 @@ pub(crate) struct EvaluationContext<'a> {
     /// Source file of the current trait (for warning/error context)
     #[allow(dead_code)] // Populated during eval, intended for future logging
     pub current_source: Option<&'a str>,
+    /// Index for O(1) exact string lookups: string value -> vec of (source, offset)
+    /// Includes report.strings, imports, and exports. Lazy-initialized on first use.
+    pub string_exact_index: OnceLock<FxHashMap<String, Vec<(String, Option<u64>)>>>,
+    /// Index for O(1) case-insensitive exact lookups: lowercased value -> vec of (original, source, offset)
+    /// Lazy-initialized on first use.
+    pub string_exact_index_ci: OnceLock<FxHashMap<String, Vec<(String, String, Option<u64>)>>>,
 }
 
 impl<'a> EvaluationContext<'a> {
@@ -95,7 +101,88 @@ impl<'a> EvaluationContext<'a> {
             cached_kv_parsed: OnceLock::new(),
             current_trait: None,
             current_source: None,
+            string_exact_index: OnceLock::new(),
+            string_exact_index_ci: OnceLock::new(),
         }
+    }
+
+    /// Get or build the exact string index for O(1) lookups
+    pub(crate) fn get_string_exact_index(
+        &self,
+    ) -> &FxHashMap<String, Vec<(String, Option<u64>)>> {
+        self.string_exact_index.get_or_init(|| {
+            let mut index: FxHashMap<String, Vec<(String, Option<u64>)>> = FxHashMap::default();
+
+            // Index strings from report
+            for s in &self.report.strings {
+                index
+                    .entry(s.value.clone())
+                    .or_default()
+                    .push(("string_extractor".to_string(), s.offset));
+            }
+
+            // Index imports
+            for import in &self.report.imports {
+                index
+                    .entry(import.symbol.clone())
+                    .or_default()
+                    .push((import.source.clone(), None));
+            }
+
+            // Index exports
+            for export in &self.report.exports {
+                let offset = export.offset.as_ref().and_then(|s| {
+                    s.strip_prefix("0x")
+                        .and_then(|hex| u64::from_str_radix(hex, 16).ok())
+                });
+                index
+                    .entry(export.symbol.clone())
+                    .or_default()
+                    .push((export.source.clone(), offset));
+            }
+
+            index
+        })
+    }
+
+    /// Get or build the case-insensitive exact string index for O(1) lookups
+    pub(crate) fn get_string_exact_index_ci(
+        &self,
+    ) -> &FxHashMap<String, Vec<(String, String, Option<u64>)>> {
+        self.string_exact_index_ci.get_or_init(|| {
+            let mut index: FxHashMap<String, Vec<(String, String, Option<u64>)>> =
+                FxHashMap::default();
+
+            // Index strings from report
+            for s in &self.report.strings {
+                index
+                    .entry(s.value.to_lowercase())
+                    .or_default()
+                    .push((s.value.clone(), "string_extractor".to_string(), s.offset));
+            }
+
+            // Index imports
+            for import in &self.report.imports {
+                index
+                    .entry(import.symbol.to_lowercase())
+                    .or_default()
+                    .push((import.symbol.clone(), import.source.clone(), None));
+            }
+
+            // Index exports
+            for export in &self.report.exports {
+                let offset = export.offset.as_ref().and_then(|s| {
+                    s.strip_prefix("0x")
+                        .and_then(|hex| u64::from_str_radix(hex, 16).ok())
+                });
+                index
+                    .entry(export.symbol.to_lowercase())
+                    .or_default()
+                    .push((export.symbol.clone(), export.source.clone(), offset));
+            }
+
+            index
+        })
     }
 
     /// Set section map for location-constrained matching

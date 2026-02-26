@@ -111,6 +111,7 @@ pub(crate) fn log_rizin_stats() {
 /// * `Err` - If the process times out or fails to execute
 fn execute_rizin_with_timeout(args: &[&str], timeout: Duration) -> Result<std::process::Output> {
     use std::io::Read;
+    use std::sync::mpsc;
 
     RIZIN_TOTAL_CALLS.fetch_add(1, Ordering::Relaxed);
 
@@ -130,6 +131,32 @@ fn execute_rizin_with_timeout(args: &[&str], timeout: Duration) -> Result<std::p
         .spawn()
         .context("Failed to spawn rizin process")?;
 
+    // Read stdout/stderr in background threads to prevent pipe buffer deadlock
+    // This is critical - if stdout fills up, rizin blocks and we timeout
+    let stdout_handle = child.stdout.take();
+    let stderr_handle = child.stderr.take();
+
+    let (stdout_tx, stdout_rx) = mpsc::channel();
+    let (stderr_tx, stderr_rx) = mpsc::channel();
+
+    // Spawn thread to read stdout
+    let stdout_thread = std::thread::spawn(move || {
+        let mut stdout = Vec::new();
+        if let Some(mut handle) = stdout_handle {
+            let _ = handle.read_to_end(&mut stdout);
+        }
+        let _ = stdout_tx.send(stdout);
+    });
+
+    // Spawn thread to read stderr
+    let stderr_thread = std::thread::spawn(move || {
+        let mut stderr = Vec::new();
+        if let Some(mut handle) = stderr_handle {
+            let _ = handle.read_to_end(&mut stderr);
+        }
+        let _ = stderr_tx.send(stderr);
+    });
+
     // Wait for the process with timeout
     let deadline = std::time::Instant::now() + timeout;
     let poll_interval = Duration::from_millis(100);
@@ -140,16 +167,11 @@ fn execute_rizin_with_timeout(args: &[&str], timeout: Duration) -> Result<std::p
                 // Process has completed
                 let elapsed = start.elapsed();
 
-                // Read stdout and stderr
-                let mut stdout = Vec::new();
-                let mut stderr = Vec::new();
-
-                if let Some(mut stdout_handle) = child.stdout.take() {
-                    let _ = stdout_handle.read_to_end(&mut stdout);
-                }
-                if let Some(mut stderr_handle) = child.stderr.take() {
-                    let _ = stderr_handle.read_to_end(&mut stderr);
-                }
+                // Collect output from threads
+                let _ = stdout_thread.join();
+                let _ = stderr_thread.join();
+                let stdout = stdout_rx.recv().unwrap_or_default();
+                let stderr = stderr_rx.recv().unwrap_or_default();
 
                 let output = std::process::Output {
                     status,
@@ -196,6 +218,10 @@ fn execute_rizin_with_timeout(args: &[&str], timeout: Duration) -> Result<std::p
                     std::thread::sleep(Duration::from_millis(100));
                     let _ = child.wait(); // Reap the zombie
 
+                    // Clean up reader threads
+                    let _ = stdout_thread.join();
+                    let _ = stderr_thread.join();
+
                     // Log statistics on timeout
                     log_rizin_stats();
 
@@ -207,6 +233,9 @@ fn execute_rizin_with_timeout(args: &[&str], timeout: Duration) -> Result<std::p
             }
             Err(e) => {
                 RIZIN_FAILURES.fetch_add(1, Ordering::Relaxed);
+                // Clean up reader threads
+                let _ = stdout_thread.join();
+                let _ = stderr_thread.join();
                 return Err(anyhow::anyhow!(
                     "Failed to check rizin process status: {}",
                     e
@@ -222,6 +251,9 @@ pub(crate) struct BatchedAnalysis {
     pub functions: Vec<R2Function>,
     pub sections: Vec<R2Section>,
     pub strings: Vec<R2String>,
+    /// True if rizin analysis timed out - indicates potential anti-analysis
+    #[serde(default)]
+    pub timed_out: bool,
 }
 
 /// Radare2 integration for deep binary analysis
@@ -364,6 +396,17 @@ impl Radare2Analyzer {
             debug!("Stripped binary, skipping function analysis (aa/aflj)");
         }
 
+        let file_path_str = file_path.to_string_lossy().to_string();
+
+        // Helper to parse JSON from a SEP-delimited part
+        let parse_json_part = |part: Option<&&str>| -> Option<String> {
+            part.and_then(|p| {
+                let start = p.find('[')?;
+                let end = p.rfind(']')?;
+                Some(p[start..=end].to_string())
+            })
+        };
+
         // SINGLE r2 spawn with ALL data extraction
         // Commands separated by "echo SEP" for parsing:
         // - aa: full analysis (only for unstripped binaries under 20MB)
@@ -373,34 +416,41 @@ impl Radare2Analyzer {
         let command = if skip_function_analysis {
             "iSj; echo SEP; izj"
         } else {
+            // Print user-visible status for slow function analysis
+            eprintln!("Reverse-engineering binary (this may take a moment)...");
             "aa; aflj; echo SEP; iSj; echo SEP; izj"
         };
 
         trace!(command = command, "Executing rizin batched analysis");
 
-        let file_path_str = file_path.to_string_lossy();
-
-        // Use longer timeout for batched analysis (includes 'aa' for full analysis)
-        let timeout = if skip_function_analysis {
-            Duration::from_secs(RIZIN_DEFAULT_TIMEOUT_SECS)
-        } else {
-            // Full analysis with 'aa' can take longer
-            Duration::from_secs(RIZIN_DEFAULT_TIMEOUT_SECS * 2)
-        };
+        // Use 60 second timeout - if rizin can't finish in time,
+        // the binary is likely packed/obfuscated (anti-analysis)
+        let timeout = Duration::from_secs(60);
 
         let output = execute_rizin_with_timeout(
-            &[
-                "-q",
-                "-e",
-                "scr.color=0",
-                "-e",
-                "log.level=0",
-                "-c",
-                command,
-                &file_path_str,
-            ],
+            &["-q", "-e", "scr.color=0", "-e", "log.level=0", "-c", command, &file_path_str],
             timeout,
-        )?;
+        );
+
+        // Handle timeout as potential anti-analysis indicator
+        let output = match output {
+            Ok(out) => out,
+            Err(e) => {
+                let err_str = e.to_string();
+                if err_str.contains("timed out") {
+                    // Timeout likely indicates anti-analysis or packed binary
+                    warn!("Rizin analysis timed out after 60s - binary may be packed or anti-analysis");
+                    // Return result with timed_out flag set - consumers can add finding
+                    return Ok(BatchedAnalysis {
+                        functions: Vec::new(),
+                        sections: Vec::new(),
+                        strings: Vec::new(),
+                        timed_out: true,
+                    });
+                }
+                return Err(e);
+            }
+        };
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
@@ -408,51 +458,45 @@ impl Radare2Analyzer {
             anyhow::bail!("radare2 failed with status {}: {}", output.status, stderr);
         }
 
-        debug!(
-            elapsed_ms = t_start.elapsed().as_millis(),
-            "radare2 batched analysis completed successfully"
-        );
-
         let output_str = String::from_utf8_lossy(&output.stdout);
         let parts: Vec<&str> = output_str.split("SEP").collect();
 
-        // Helper to parse JSON from a part
-        let parse_json = |part: Option<&&str>| -> Option<String> {
-            part.and_then(|p| {
-                let start = p.find('[')?;
-                let end = p.rfind(']')?;
-                Some(p[start..=end].to_string())
-            })
-        };
-
         let (functions, sections, strings) = if skip_function_analysis {
-            // Large binary: sections and strings (no functions)
-            // String extraction is slow but cached, provides context for stng deduplication
-            let sections: Vec<R2Section> = parse_json(parts.first())
+            // Large/stripped binary: sections and strings only
+            let sections: Vec<R2Section> = parse_json_part(parts.first())
                 .and_then(|j| serde_json::from_str(&j).ok())
                 .unwrap_or_default();
-            let strings: Vec<R2String> = parse_json(parts.get(1))
+            let strings: Vec<R2String> = parse_json_part(parts.get(1))
                 .and_then(|j| serde_json::from_str(&j).ok())
                 .unwrap_or_default();
             (Vec::new(), sections, strings)
         } else {
-            // Small binary: functions, sections, strings
-            let functions: Vec<R2Function> = parse_json(parts.first())
+            // Full analysis: functions, sections, strings
+            let functions: Vec<R2Function> = parse_json_part(parts.first())
                 .and_then(|j| serde_json::from_str(&j).ok())
                 .unwrap_or_default();
-            let sections: Vec<R2Section> = parse_json(parts.get(1))
+            let sections: Vec<R2Section> = parse_json_part(parts.get(1))
                 .and_then(|j| serde_json::from_str(&j).ok())
                 .unwrap_or_default();
-            let strings: Vec<R2String> = parse_json(parts.get(2))
+            let strings: Vec<R2String> = parse_json_part(parts.get(2))
                 .and_then(|j| serde_json::from_str(&j).ok())
                 .unwrap_or_default();
             (functions, sections, strings)
         };
 
+        debug!(
+            elapsed_ms = t_start.elapsed().as_millis(),
+            functions = functions.len(),
+            sections = sections.len(),
+            strings = strings.len(),
+            "radare2 batched analysis completed"
+        );
+
         let result = BatchedAnalysis {
             functions,
             sections,
             strings,
+            timed_out: false,
         };
 
         // Save to cache
@@ -734,6 +778,7 @@ mod tests {
                 },
             ],
             strings: vec![],
+            timed_out: false,
         };
 
         let file_size = 1800u64;

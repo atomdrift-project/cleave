@@ -8,11 +8,51 @@
 //! 4. Composite rules are evaluated (can reference both traits and imports)
 //! 5. All findings are deduplicated and merged
 
-use crate::types::{AnalysisReport, Evidence, Finding};
+use crate::composite_rules::FileType as RuleFileType;
+use crate::types::{AnalysisReport, Evidence};
 use rustc_hash::FxHashSet;
 use std::collections::HashMap;
 
 impl super::CapabilityMapper {
+    /// Pre-compute raw content regex matches once for the binary.
+    /// This is expensive (converts entire binary to string and runs regex set)
+    /// so we do it once and pass to all trait evaluation calls.
+    ///
+    /// For files > 1MB, skip this optimization as the cost of running 2500+ regexes
+    /// against a multi-MB string exceeds the benefit. Individual trait evaluation
+    /// will still work, just without pre-filtering.
+    fn precompute_raw_regex_matches(
+        &self,
+        binary_data: &[u8],
+        file_type: &RuleFileType,
+    ) -> FxHashSet<usize> {
+        // Skip for large files - the regex matching is O(patterns * size) and becomes
+        // a bottleneck for multi-MB binaries. Empty result means no pre-filtering;
+        // traits will evaluate their conditions individually.
+        const MAX_SIZE_FOR_REGEX_PREFILTER: usize = 1024 * 1024; // 1MB
+        if binary_data.len() > MAX_SIZE_FOR_REGEX_PREFILTER {
+            tracing::debug!(
+                "Skipping raw regex pre-filter for large file ({} bytes > {} threshold)",
+                binary_data.len(),
+                MAX_SIZE_FOR_REGEX_PREFILTER
+            );
+            return FxHashSet::default();
+        }
+
+        let t_start = std::time::Instant::now();
+        let result = if self.raw_content_regex_index.has_patterns() {
+            self.raw_content_regex_index.find_matches(binary_data, file_type)
+        } else {
+            FxHashSet::default()
+        };
+        let elapsed = t_start.elapsed();
+        tracing::debug!(
+            "Precomputed raw regex matches in {:?}, found {} matches",
+            elapsed,
+            result.len()
+        );
+        result
+    }
     /// Evaluate all rules (atomic traits + composite rules) and merge findings into the report.
     /// This is the correct, foolproof way to evaluate traits that ensures evidence propagates
     /// from atomic traits to composite rules. Analyzers should use this method instead of
@@ -45,14 +85,27 @@ impl super::CapabilityMapper {
         cached_ast: Option<&tree_sitter::Tree>,
         inline_yara: Option<&HashMap<String, Vec<Evidence>>>,
     ) {
+        // Detect file type once
+        let file_type = self.detect_file_type(&report.target.file_type);
+
+        // Pre-compute raw regex matches ONCE (expensive: converts binary to string, runs regex set)
+        // This is passed to all trait evaluation calls to avoid recomputing
+        let raw_regex_matches = self.precompute_raw_regex_matches(binary_data, &file_type);
+
         // Build a seen-IDs set once from existing report findings, then keep it up-to-date
         // as we merge — O(1) per lookup instead of O(n) linear scan.
         let mut seen: FxHashSet<String> = report.findings.iter().map(|f| f.id.clone()).collect();
 
         // Step 1: Evaluate independent atomic traits (no trait: dependencies)
         // These can be evaluated in parallel without worrying about order
-        let independent_findings =
-            self.evaluate_traits_independent(report, binary_data, cached_ast, inline_yara);
+        let independent_findings = self.evaluate_traits_filtered_with_cache(
+            report,
+            binary_data,
+            cached_ast,
+            inline_yara,
+            false,
+            &raw_regex_matches,
+        );
 
         // Merge independent findings into report
         for finding in independent_findings {
@@ -67,8 +120,14 @@ impl super::CapabilityMapper {
         // until no new findings are produced (handles chained dependencies: A -> B -> C)
         const MAX_ITERATIONS: usize = 10; // Prevent infinite loops
         for _ in 0..MAX_ITERATIONS {
-            let dependent_findings =
-                self.evaluate_traits_dependent(report, binary_data, cached_ast, inline_yara);
+            let dependent_findings = self.evaluate_traits_filtered_with_cache(
+                report,
+                binary_data,
+                cached_ast,
+                inline_yara,
+                true,
+                &raw_regex_matches,
+            );
 
             if dependent_findings.is_empty() {
                 break;
@@ -108,27 +167,4 @@ impl super::CapabilityMapper {
         }
     }
 
-    /// Evaluate only independent atomic traits (those without trait: dependencies).
-    /// These can be safely evaluated in parallel without ordering concerns.
-    fn evaluate_traits_independent(
-        &self,
-        report: &AnalysisReport,
-        binary_data: &[u8],
-        cached_ast: Option<&tree_sitter::Tree>,
-        inline_yara: Option<&HashMap<String, Vec<Evidence>>>,
-    ) -> Vec<Finding> {
-        self.evaluate_traits_filtered(report, binary_data, cached_ast, inline_yara, false)
-    }
-
-    /// Evaluate only dependent atomic traits (those with trait: dependencies).
-    /// These are evaluated after independent traits, so they can see their results.
-    fn evaluate_traits_dependent(
-        &self,
-        report: &AnalysisReport,
-        binary_data: &[u8],
-        cached_ast: Option<&tree_sitter::Tree>,
-        inline_yara: Option<&HashMap<String, Vec<Evidence>>>,
-    ) -> Vec<Finding> {
-        self.evaluate_traits_filtered(report, binary_data, cached_ast, inline_yara, true)
-    }
 }

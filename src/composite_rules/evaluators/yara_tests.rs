@@ -34,6 +34,8 @@ fn create_test_context(report: AnalysisReport, binary_data: Vec<u8>) -> Evaluati
         cached_kv_parsed: OnceLock::new(),
         current_trait: None,
         current_source: None,
+        string_exact_index: OnceLock::new(),
+        string_exact_index_ci: OnceLock::new(),
     }
 }
 

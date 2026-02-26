@@ -88,6 +88,18 @@ pub(crate) struct StringMatchIndex {
     /// Minimum length among case-insensitive patterns
     ci_min_pattern_length: usize,
 
+    // ===== Experiment 4: Aho-Corasick for substr matching =====
+    /// Aho-Corasick automaton for case-sensitive substr patterns
+    substr_automaton: Option<AhoCorasick>,
+    /// Maps substr pattern index -> (pattern string, trait indices)
+    substr_to_traits: Vec<(String, Vec<usize>)>,
+    /// Aho-Corasick automaton for case-insensitive substr patterns (patterns lowercased)
+    ci_substr_automaton: Option<AhoCorasick>,
+    /// Maps CI substr pattern index -> (original pattern, trait indices)
+    ci_substr_to_traits: Vec<(String, Vec<usize>)>,
+    /// Set of trait indices with substr patterns (for quick lookup)
+    substr_trait_indices: FxHashSet<usize>,
+
     // ===== Kept for regex literal pre-filtering (unchanged) =====
     /// Aho-Corasick automaton for regex literal prefixes (for pre-filtering)
     regex_literal_automaton: Option<AhoCorasick>,
@@ -154,6 +166,15 @@ impl StringMatchIndex {
         let mut min_pattern_length = usize::MAX;
         let mut ci_min_pattern_length = usize::MAX;
 
+        // Experiment 4: Collect substr patterns for Aho-Corasick
+        let mut substr_patterns: Vec<String> = Vec::with_capacity(estimated_patterns);
+        let mut substr_pattern_map: FxHashMap<String, usize> = FxHashMap::default();
+        let mut substr_to_traits: Vec<(String, Vec<usize>)> = Vec::with_capacity(estimated_patterns);
+        let mut ci_substr_patterns: Vec<String> = Vec::with_capacity(estimated_patterns);
+        let mut ci_substr_pattern_map: FxHashMap<String, usize> = FxHashMap::default();
+        let mut ci_substr_to_traits: Vec<(String, Vec<usize>)> = Vec::with_capacity(estimated_patterns);
+        let mut substr_trait_indices: FxHashSet<usize> = FxHashSet::default();
+
         let mut regex_literals: Vec<String> = Vec::with_capacity(estimated_patterns);
         let mut regex_literal_to_traits: Vec<Vec<usize>> = Vec::with_capacity(estimated_patterns);
         let mut regex_literal_map: FxHashMap<String, usize> = FxHashMap::default();
@@ -183,6 +204,38 @@ impl StringMatchIndex {
                             .push(trait_idx);
                     }
                 }
+                // Substr string patterns - add to Aho-Corasick index
+                Condition::String {
+                    substr: Some(ref substr_str),
+                    case_insensitive,
+                    // Skip patterns with location constraints - they need special handling
+                    section: None,
+                    offset: None,
+                    offset_range: None,
+                    section_offset: None,
+                    section_offset_range: None,
+                    ..
+                } => {
+                    substr_trait_indices.insert(trait_idx);
+                    if *case_insensitive {
+                        let lower = substr_str.to_lowercase();
+                        if let Some(&pattern_idx) = ci_substr_pattern_map.get(&lower) {
+                            ci_substr_to_traits[pattern_idx].1.push(trait_idx);
+                        } else {
+                            let pattern_idx = ci_substr_patterns.len();
+                            ci_substr_pattern_map.insert(lower.clone(), pattern_idx);
+                            ci_substr_patterns.push(lower);
+                            ci_substr_to_traits.push((substr_str.clone(), vec![trait_idx]));
+                        }
+                    } else if let Some(&pattern_idx) = substr_pattern_map.get(substr_str) {
+                        substr_to_traits[pattern_idx].1.push(trait_idx);
+                    } else {
+                        let pattern_idx = substr_patterns.len();
+                        substr_pattern_map.insert(substr_str.clone(), pattern_idx);
+                        substr_patterns.push(substr_str.clone());
+                        substr_to_traits.push((substr_str.clone(), vec![trait_idx]));
+                    }
+                }
                 // Regex string patterns - extract literal prefix for pre-filtering
                 Condition::String {
                     regex: Some(ref regex_str),
@@ -204,7 +257,8 @@ impl StringMatchIndex {
             }
         }
 
-        let total_patterns = exact_patterns.len() + ci_exact_patterns.len();
+        let total_patterns = exact_patterns.len() + ci_exact_patterns.len()
+            + substr_to_traits.len() + ci_substr_to_traits.len();
 
         // Set defaults if no patterns found
         if min_pattern_length == usize::MAX {
@@ -213,6 +267,25 @@ impl StringMatchIndex {
         if ci_min_pattern_length == usize::MAX {
             ci_min_pattern_length = 0;
         }
+
+        // Build Aho-Corasick automaton for substr patterns (Experiment 4)
+        let substr_automaton = if !substr_patterns.is_empty() {
+            AhoCorasick::builder()
+                .ascii_case_insensitive(false)
+                .build(&substr_patterns)
+                .ok()
+        } else {
+            None
+        };
+
+        let ci_substr_automaton = if !ci_substr_patterns.is_empty() {
+            AhoCorasick::builder()
+                .ascii_case_insensitive(true)
+                .build(&ci_substr_patterns)
+                .ok()
+        } else {
+            None
+        };
 
         // Build regex literal automaton for pre-filtering (kept as Aho-Corasick)
         let regex_literal_automaton = if !regex_literals.is_empty() {
@@ -229,6 +302,11 @@ impl StringMatchIndex {
             ci_exact_patterns,
             min_pattern_length,
             ci_min_pattern_length,
+            substr_automaton,
+            substr_to_traits,
+            ci_substr_automaton,
+            ci_substr_to_traits,
+            substr_trait_indices,
             regex_literal_automaton,
             regex_literal_to_traits,
             regex_trait_indices,
@@ -314,6 +392,50 @@ impl StringMatchIndex {
                     }
                 }
             }
+
+            // Experiment 4: Aho-Corasick substr matching (case-sensitive)
+            if let Some(ref ac) = self.substr_automaton {
+                for mat in ac.find_iter(&string_info.value) {
+                    let pattern_idx = mat.pattern().as_usize();
+                    if let Some((pattern_str, trait_indices)) = self.substr_to_traits.get(pattern_idx) {
+                        for &trait_idx in trait_indices {
+                            matching_traits.insert(trait_idx);
+                            let entry = trait_evidence.entry(trait_idx).or_default();
+                            if entry.len() < MAX_EVIDENCE_PER_TRAIT {
+                                entry.push(Evidence {
+                                    method: "string".to_string(),
+                                    source: "string_extractor".to_string(),
+                                    value: format!("{} (contains: {})", string_info.value.chars().take(80).collect::<String>(), pattern_str),
+                                    location: string_info.offset.map(|o| format!("{:#x}", o)),
+                                    ..Default::default()
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Experiment 4: Aho-Corasick substr matching (case-insensitive)
+            if let Some(ref ac) = self.ci_substr_automaton {
+                for mat in ac.find_iter(&string_info.value) {
+                    let pattern_idx = mat.pattern().as_usize();
+                    if let Some((original_pattern, trait_indices)) = self.ci_substr_to_traits.get(pattern_idx) {
+                        for &trait_idx in trait_indices {
+                            matching_traits.insert(trait_idx);
+                            let entry = trait_evidence.entry(trait_idx).or_default();
+                            if entry.len() < MAX_EVIDENCE_PER_TRAIT {
+                                entry.push(Evidence {
+                                    method: "string".to_string(),
+                                    source: "string_extractor".to_string(),
+                                    value: format!("{} (contains: {})", string_info.value.chars().take(80).collect::<String>(), original_pattern),
+                                    location: string_info.offset.map(|o| format!("{:#x}", o)),
+                                    ..Default::default()
+                                });
+                            }
+                        }
+                    }
+                }
+            }
         }
 
         // Deduplicate evidence for each trait
@@ -378,6 +500,50 @@ impl StringMatchIndex {
                                         location: string_info.offset.map(|o| format!("{:#x}", o)),
                                         ..Default::default()
                                     });
+                                }
+                            }
+                        }
+                    }
+
+                    // Experiment 4: Aho-Corasick substr matching (case-sensitive)
+                    if let Some(ref ac) = self.substr_automaton {
+                        for mat in ac.find_iter(&string_info.value) {
+                            let pattern_idx = mat.pattern().as_usize();
+                            if let Some((pattern_str, trait_indices)) = self.substr_to_traits.get(pattern_idx) {
+                                for &trait_idx in trait_indices {
+                                    matching_traits.insert(trait_idx);
+                                    let entry = trait_evidence.entry(trait_idx).or_default();
+                                    if entry.len() < MAX_EVIDENCE_PER_TRAIT {
+                                        entry.push(Evidence {
+                                            method: "string".to_string(),
+                                            source: "string_extractor".to_string(),
+                                            value: format!("{} (contains: {})", string_info.value.chars().take(80).collect::<String>(), pattern_str),
+                                            location: string_info.offset.map(|o| format!("{:#x}", o)),
+                                            ..Default::default()
+                                        });
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // Experiment 4: Aho-Corasick substr matching (case-insensitive)
+                    if let Some(ref ac) = self.ci_substr_automaton {
+                        for mat in ac.find_iter(&string_info.value) {
+                            let pattern_idx = mat.pattern().as_usize();
+                            if let Some((original_pattern, trait_indices)) = self.ci_substr_to_traits.get(pattern_idx) {
+                                for &trait_idx in trait_indices {
+                                    matching_traits.insert(trait_idx);
+                                    let entry = trait_evidence.entry(trait_idx).or_default();
+                                    if entry.len() < MAX_EVIDENCE_PER_TRAIT {
+                                        entry.push(Evidence {
+                                            method: "string".to_string(),
+                                            source: "string_extractor".to_string(),
+                                            value: format!("{} (contains: {})", string_info.value.chars().take(80).collect::<String>(), original_pattern),
+                                            location: string_info.offset.map(|o| format!("{:#x}", o)),
+                                            ..Default::default()
+                                        });
+                                    }
                                 }
                             }
                         }
@@ -452,6 +618,22 @@ impl StringMatchIndex {
     /// Check if a trait has a regex string pattern
     pub(crate) fn is_regex_trait(&self, trait_idx: usize) -> bool {
         self.regex_trait_indices.contains(&trait_idx)
+    }
+
+    /// Check if a trait has a substr string pattern that's indexed
+    pub(crate) fn is_substr_trait(&self, trait_idx: usize) -> bool {
+        self.substr_trait_indices.contains(&trait_idx)
+    }
+
+    /// Get statistics about indexed patterns
+    #[allow(dead_code)]
+    pub(crate) fn stats(&self) -> (usize, usize, usize, usize) {
+        (
+            self.exact_patterns.len(),
+            self.ci_exact_patterns.len(),
+            self.substr_to_traits.len(),
+            self.ci_substr_to_traits.len(),
+        )
     }
 }
 

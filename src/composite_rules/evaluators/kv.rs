@@ -787,6 +787,8 @@ mod tests {
             cached_kv_parsed: OnceLock::new(),
             current_trait: None,
             current_source: None,
+            string_exact_index: OnceLock::new(),
+            string_exact_index_ci: OnceLock::new(),
         }
     }
 

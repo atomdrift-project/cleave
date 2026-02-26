@@ -36,6 +36,8 @@ fn create_test_context<'a>(report: &'a AnalysisReport, data: &'a [u8]) -> Evalua
         cached_kv_parsed: OnceLock::new(),
         current_trait: None,
         current_source: None,
+        string_exact_index: OnceLock::new(),
+        string_exact_index_ci: OnceLock::new(),
     }
 }
 

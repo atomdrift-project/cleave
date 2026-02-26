@@ -112,7 +112,7 @@ impl super::CapabilityMapper {
             && self
                 .raw_content_regex_index
                 .has_applicable_patterns(&applicable_indices);
-        let raw_regex_matched_traits = if raw_regex_prefilter_enabled {
+        let raw_regex_matches = if raw_regex_prefilter_enabled {
             self.raw_content_regex_index
                 .find_matches(binary_data, &file_type)
         } else {
@@ -125,7 +125,7 @@ impl super::CapabilityMapper {
 
         // Early termination: if no strings and no pre-matched traits, skip evaluation
         let has_any_matches = !string_matched_traits.is_empty()
-            || !raw_regex_matched_traits.is_empty()
+            || !raw_regex_matches.is_empty()
             || !regex_candidates.is_empty();
 
         if !has_any_matches && all_strings.is_empty() && binary_data.len() < 100 {
@@ -179,6 +179,47 @@ impl super::CapabilityMapper {
                     return None;
                 }
 
+                // Fast path for simple substr patterns (no location constraints, no filters)
+                let is_simple_substr_string = trait_def.downgrade.is_none()
+                    && matches!(
+                        &trait_def.r#if.condition,
+                        Condition::String {
+                            substr: Some(_),
+                            section: None,
+                            offset: None,
+                            offset_range: None,
+                            section_offset: None,
+                            section_offset_range: None,
+                            ..
+                        }
+                    )
+                    && trait_def.r#if.count_min.unwrap_or(1) == 1
+                    && trait_def.r#if.count_max.is_none()
+                    && trait_def.r#if.per_kb_min.is_none()
+                    && trait_def.r#if.per_kb_max.is_none();
+
+                if is_simple_substr_string {
+                    // Use cached evidence from Aho-Corasick index
+                    if let Some(evidence) = cached_evidence.get(&idx) {
+                        if !evidence.is_empty() {
+                            return Some(Finding {
+                                id: trait_def.id.clone(),
+                                desc: trait_def.desc.clone(),
+                                conf: trait_def.conf,
+                                crit: trait_def.crit,
+                                mbc: trait_def.mbc.clone(),
+                                attack: trait_def.attack.clone(),
+                                evidence: evidence.clone(),
+                                match_count: 0,
+                                kind: FindingKind::Capability,
+                                trait_refs: vec![],
+                                source_file: get_relative_source_file(&trait_def.defined_in),
+                            });
+                        }
+                    }
+                    return None;
+                }
+
                 // Check if this trait has an exact string pattern that wasn't matched
                 let has_exact_string = matches!(
                     trait_def.r#if.condition,
@@ -187,6 +228,12 @@ impl super::CapabilityMapper {
 
                 // If trait has an exact string pattern and it wasn't matched, skip it
                 if has_exact_string && !string_matched_traits.contains(&idx) {
+                    skip_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    return None;
+                }
+
+                // If trait has a substr string pattern that's indexed and wasn't matched, skip it
+                if self.string_match_index.is_substr_trait(idx) && !string_matched_traits.contains(&idx) {
                     skip_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                     return None;
                 }
@@ -208,7 +255,7 @@ impl super::CapabilityMapper {
                 if has_content_regex
                     && raw_regex_prefilter_enabled
                     && self.raw_content_regex_index.is_indexed_trait(idx)
-                    && !raw_regex_matched_traits.contains(&idx)
+                    && !raw_regex_matches.contains(&idx)
                 {
                     skip_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                     return None;
@@ -273,6 +320,7 @@ impl super::CapabilityMapper {
     /// This enables proper ordering: independent traits are evaluated first, then
     /// dependent traits can see their results via `report.findings`.
     #[must_use]
+    #[allow(dead_code)] // May be used by tests or binary
     pub(crate) fn evaluate_traits_filtered(
         &self,
         report: &AnalysisReport,
@@ -280,6 +328,35 @@ impl super::CapabilityMapper {
         cached_ast: Option<&tree_sitter::Tree>,
         inline_yara: Option<&HashMap<String, Vec<Evidence>>>,
         dependent_only: bool,
+    ) -> Vec<Finding> {
+        // Compute raw regex matches (this is expensive but necessary if no cache provided)
+        let file_type = self.detect_file_type(&report.target.file_type);
+        let raw_regex_matches = if self.raw_content_regex_index.has_patterns() {
+            self.raw_content_regex_index.find_matches(binary_data, &file_type)
+        } else {
+            FxHashSet::default()
+        };
+        self.evaluate_traits_filtered_with_cache(
+            report,
+            binary_data,
+            cached_ast,
+            inline_yara,
+            dependent_only,
+            &raw_regex_matches,
+        )
+    }
+
+    /// Evaluate traits filtered by dependency status, with pre-computed raw regex matches.
+    /// This is the optimized version that avoids recomputing regex matches on each call.
+    #[must_use]
+    pub(crate) fn evaluate_traits_filtered_with_cache(
+        &self,
+        report: &AnalysisReport,
+        binary_data: &[u8],
+        cached_ast: Option<&tree_sitter::Tree>,
+        inline_yara: Option<&HashMap<String, Vec<Evidence>>>,
+        dependent_only: bool,
+        raw_regex_matches: &FxHashSet<usize>,
     ) -> Vec<Finding> {
         // Determine file type from report
         let file_type = self.detect_file_type(&report.target.file_type);
@@ -359,19 +436,15 @@ impl super::CapabilityMapper {
 
         let regex_candidates = self.string_match_index.find_regex_candidates(&all_strings);
 
-        let raw_regex_prefilter_enabled = self.raw_content_regex_index.has_patterns()
-            && self
-                .raw_content_regex_index
-                .has_applicable_patterns(&filtered_indices);
-        let raw_regex_matched_traits = if raw_regex_prefilter_enabled {
-            self.raw_content_regex_index
-                .find_matches(binary_data, &file_type)
-        } else {
-            FxHashSet::default()
-        };
+        // Use pre-computed raw regex matches (passed in from caller)
+        let raw_regex_prefilter_enabled = !raw_regex_matches.is_empty()
+            || (self.raw_content_regex_index.has_patterns()
+                && self
+                    .raw_content_regex_index
+                    .has_applicable_patterns(&filtered_indices));
 
         let has_any_matches = !string_matched_traits.is_empty()
-            || !raw_regex_matched_traits.is_empty()
+            || !raw_regex_matches.is_empty()
             || !regex_candidates.is_empty();
 
         // For dependent traits, we can't skip based on string matches alone
@@ -424,12 +497,59 @@ impl super::CapabilityMapper {
                         return None;
                     }
 
+                    // Fast path for simple substr patterns
+                    let is_simple_substr_string = trait_def.downgrade.is_none()
+                        && matches!(
+                            &trait_def.r#if.condition,
+                            Condition::String {
+                                substr: Some(_),
+                                section: None,
+                                offset: None,
+                                offset_range: None,
+                                section_offset: None,
+                                section_offset_range: None,
+                                ..
+                            }
+                        )
+                        && trait_def.r#if.count_min.unwrap_or(1) == 1
+                        && trait_def.r#if.count_max.is_none()
+                        && trait_def.r#if.per_kb_min.is_none()
+                        && trait_def.r#if.per_kb_max.is_none();
+
+                    if is_simple_substr_string {
+                        if let Some(evidence) = cached_evidence.get(&idx) {
+                            if !evidence.is_empty() {
+                                return Some(Finding {
+                                    id: trait_def.id.clone(),
+                                    desc: trait_def.desc.clone(),
+                                    conf: trait_def.conf,
+                                    crit: trait_def.crit,
+                                    mbc: trait_def.mbc.clone(),
+                                    attack: trait_def.attack.clone(),
+                                    evidence: evidence.clone(),
+                                    match_count: 0,
+                                    kind: FindingKind::Capability,
+                                    trait_refs: vec![],
+                                    source_file: get_relative_source_file(&trait_def.defined_in),
+                                });
+                            }
+                        }
+                        return None;
+                    }
+
                     // String-based pre-filtering
                     let has_exact_string = matches!(
                         trait_def.r#if.condition,
                         Condition::String { exact: Some(_), .. }
                     );
                     if has_exact_string && !string_matched_traits.contains(&idx) {
+                        return None;
+                    }
+
+                    // Skip indexed substr traits that weren't matched
+                    if self.string_match_index.is_substr_trait(idx)
+                        && !string_matched_traits.contains(&idx)
+                    {
                         return None;
                     }
 
@@ -447,7 +567,7 @@ impl super::CapabilityMapper {
                     if has_content_regex
                         && raw_regex_prefilter_enabled
                         && self.raw_content_regex_index.is_indexed_trait(idx)
-                        && !raw_regex_matched_traits.contains(&idx)
+                        && !raw_regex_matches.contains(&idx)
                     {
                         return None;
                     }

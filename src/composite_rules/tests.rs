@@ -67,6 +67,8 @@ fn test_symbol_condition() {
         cached_kv_parsed: OnceLock::new(),
         current_trait: None,
         current_source: None,
+        string_exact_index: OnceLock::new(),
+        string_exact_index_ci: OnceLock::new(),
     };
 
     let rule = CompositeTrait {
@@ -126,6 +128,8 @@ fn test_all() {
         cached_kv_parsed: OnceLock::new(),
         current_trait: None,
         current_source: None,
+        string_exact_index: OnceLock::new(),
+        string_exact_index_ci: OnceLock::new(),
     };
 
     let rule = CompositeTrait {
@@ -197,6 +201,8 @@ fn test_count() {
         cached_kv_parsed: OnceLock::new(),
         current_trait: None,
         current_source: None,
+        string_exact_index: OnceLock::new(),
+        string_exact_index_ci: OnceLock::new(),
     };
 
     let rule = CompositeTrait {
@@ -267,6 +273,8 @@ fn test_string_exact_condition() {
         cached_kv_parsed: OnceLock::new(),
         current_trait: None,
         current_source: None,
+        string_exact_index: OnceLock::new(),
+        string_exact_index_ci: OnceLock::new(),
     };
 
     let rule = CompositeTrait {
@@ -329,6 +337,8 @@ fn test_any() {
         cached_kv_parsed: OnceLock::new(),
         current_trait: None,
         current_source: None,
+        string_exact_index: OnceLock::new(),
+        string_exact_index_ci: OnceLock::new(),
     };
 
     let rule = CompositeTrait {
@@ -418,6 +428,8 @@ fn test_not_directive_shorthand() {
         cached_kv_parsed: OnceLock::new(),
         current_trait: None,
         current_source: None,
+        string_exact_index: OnceLock::new(),
+        string_exact_index_ci: OnceLock::new(),
     };
 
     let trait_def = TraitDefinition {
@@ -507,6 +519,8 @@ fn test_not_directive_exact() {
         cached_kv_parsed: OnceLock::new(),
         current_trait: None,
         current_source: None,
+        string_exact_index: OnceLock::new(),
+        string_exact_index_ci: OnceLock::new(),
     };
 
     let trait_def = TraitDefinition {
@@ -600,6 +614,8 @@ fn test_not_directive_regex() {
         cached_kv_parsed: OnceLock::new(),
         current_trait: None,
         current_source: None,
+        string_exact_index: OnceLock::new(),
+        string_exact_index_ci: OnceLock::new(),
     };
 
     let trait_def = TraitDefinition {
@@ -689,6 +705,8 @@ fn test_unless_directive_skips_trait() {
         cached_kv_parsed: OnceLock::new(),
         current_trait: None,
         current_source: None,
+        string_exact_index: OnceLock::new(),
+        string_exact_index_ci: OnceLock::new(),
     };
 
     let trait_def = TraitDefinition {
@@ -750,6 +768,8 @@ fn test_unless_directive_allows_trait() {
         cached_kv_parsed: OnceLock::new(),
         current_trait: None,
         current_source: None,
+        string_exact_index: OnceLock::new(),
+        string_exact_index_ci: OnceLock::new(),
     };
 
     let trait_def = TraitDefinition {
@@ -826,6 +846,8 @@ fn test_downgrade_to_notable() {
         cached_kv_parsed: OnceLock::new(),
         current_trait: None,
         current_source: None,
+        string_exact_index: OnceLock::new(),
+        string_exact_index_ci: OnceLock::new(),
     };
 
     let trait_def = TraitDefinition {
@@ -916,6 +938,8 @@ fn test_downgrade_one_level() {
         cached_kv_parsed: OnceLock::new(),
         current_trait: None,
         current_source: None,
+        string_exact_index: OnceLock::new(),
+        string_exact_index_ci: OnceLock::new(),
     };
 
     let trait_def = TraitDefinition {
@@ -985,6 +1009,8 @@ fn test_downgrade_no_match_keeps_original() {
         cached_kv_parsed: OnceLock::new(),
         current_trait: None,
         current_source: None,
+        string_exact_index: OnceLock::new(),
+        string_exact_index_ci: OnceLock::new(),
     };
 
     let trait_def = TraitDefinition {
@@ -1069,6 +1095,8 @@ fn test_downgrade_from_hostile() {
         cached_kv_parsed: OnceLock::new(),
         current_trait: None,
         current_source: None,
+        string_exact_index: OnceLock::new(),
+        string_exact_index_ci: OnceLock::new(),
     };
 
     let trait_def = TraitDefinition {
@@ -1173,6 +1201,8 @@ fn test_all_three_directives_combined() {
         cached_kv_parsed: OnceLock::new(),
         current_trait: None,
         current_source: None,
+        string_exact_index: OnceLock::new(),
+        string_exact_index_ci: OnceLock::new(),
     };
 
     let trait_def = TraitDefinition {
@@ -1274,6 +1304,8 @@ fn test_string_exact_match_requires_full_equality() {
         cached_kv_parsed: OnceLock::new(),
         current_trait: None,
         current_source: None,
+        string_exact_index: OnceLock::new(),
+        string_exact_index_ci: OnceLock::new(),
     };
 
     // exact: "hello" should match only "hello", not "hello world"
@@ -1364,6 +1396,8 @@ fn test_string_substr_matches_substrings() {
         cached_kv_parsed: OnceLock::new(),
         current_trait: None,
         current_source: None,
+        string_exact_index: OnceLock::new(),
+        string_exact_index_ci: OnceLock::new(),
     };
 
     // substr: "hello" should match both "hello" and "hello world"
@@ -1445,6 +1479,8 @@ fn test_symbol_exact_vs_substr() {
         cached_kv_parsed: OnceLock::new(),
         current_trait: None,
         current_source: None,
+        string_exact_index: OnceLock::new(),
+        string_exact_index_ci: OnceLock::new(),
     };
 
     // exact: "read" should match only "read", not "readlink"
@@ -1556,6 +1592,8 @@ fn test_string_case_insensitive_exact() {
         cached_kv_parsed: OnceLock::new(),
         current_trait: None,
         current_source: None,
+        string_exact_index: OnceLock::new(),
+        string_exact_index_ci: OnceLock::new(),
     };
 
     // Case-insensitive exact match
@@ -1641,6 +1679,8 @@ fn test_string_word_boundary_match() {
         cached_kv_parsed: OnceLock::new(),
         current_trait: None,
         current_source: None,
+        string_exact_index: OnceLock::new(),
+        string_exact_index_ci: OnceLock::new(),
     };
 
     // word: "cat" should match "the cat sat" but not "category"
@@ -1739,6 +1779,8 @@ fn test_string_regex_match() {
         cached_kv_parsed: OnceLock::new(),
         current_trait: None,
         current_source: None,
+        string_exact_index: OnceLock::new(),
+        string_exact_index_ci: OnceLock::new(),
     };
 
     // regex for IP addresses
@@ -1810,6 +1852,8 @@ fn test_content_exact_vs_substr() {
         cached_kv_parsed: OnceLock::new(),
         current_trait: None,
         current_source: None,
+        string_exact_index: OnceLock::new(),
+        string_exact_index_ci: OnceLock::new(),
     };
 
     // exact: should match only if entire content equals the pattern (won't match)
@@ -1881,6 +1925,8 @@ fn test_basename_exact_match() {
         cached_kv_parsed: OnceLock::new(),
         current_trait: None,
         current_source: None,
+        string_exact_index: OnceLock::new(),
+        string_exact_index_ci: OnceLock::new(),
     };
 
     // exact: "__init__.py" should match
@@ -1909,6 +1955,8 @@ fn test_basename_exact_no_match() {
         cached_kv_parsed: OnceLock::new(),
         current_trait: None,
         current_source: None,
+        string_exact_index: OnceLock::new(),
+        string_exact_index_ci: OnceLock::new(),
     };
 
     // exact: "__init__.py" should not match "main.py"
@@ -1936,6 +1984,8 @@ fn test_basename_substr_match() {
         cached_kv_parsed: OnceLock::new(),
         current_trait: None,
         current_source: None,
+        string_exact_index: OnceLock::new(),
+        string_exact_index_ci: OnceLock::new(),
     };
 
     // substr: "setup" should match "setup_tools.py"
@@ -1963,6 +2013,8 @@ fn test_basename_regex_match() {
         cached_kv_parsed: OnceLock::new(),
         current_trait: None,
         current_source: None,
+        string_exact_index: OnceLock::new(),
+        string_exact_index_ci: OnceLock::new(),
     };
 
     // regex: "^test_" should match files starting with "test_"
@@ -1990,6 +2042,8 @@ fn test_basename_case_insensitive() {
         cached_kv_parsed: OnceLock::new(),
         current_trait: None,
         current_source: None,
+        string_exact_index: OnceLock::new(),
+        string_exact_index_ci: OnceLock::new(),
     };
 
     // exact: "readme.md" should match "README.md" with case_insensitive
@@ -2022,6 +2076,8 @@ fn test_basename_in_trait_definition() {
         cached_kv_parsed: OnceLock::new(),
         current_trait: None,
         current_source: None,
+        string_exact_index: OnceLock::new(),
+        string_exact_index_ci: OnceLock::new(),
     };
 
     let trait_def = TraitDefinition {
@@ -2081,6 +2137,8 @@ fn test_basename_in_composite_rule() {
         cached_kv_parsed: OnceLock::new(),
         current_trait: None,
         current_source: None,
+        string_exact_index: OnceLock::new(),
+        string_exact_index_ci: OnceLock::new(),
     };
 
     let rule = CompositeTrait {
@@ -2154,6 +2212,8 @@ fn test_composite_unless_skips_rule() {
         cached_kv_parsed: OnceLock::new(),
         current_trait: None,
         current_source: None,
+        string_exact_index: OnceLock::new(),
+        string_exact_index_ci: OnceLock::new(),
     };
 
     // Composite rule with unless condition
@@ -2216,6 +2276,8 @@ fn test_composite_unless_allows_rule() {
         cached_kv_parsed: OnceLock::new(),
         current_trait: None,
         current_source: None,
+        string_exact_index: OnceLock::new(),
+        string_exact_index_ci: OnceLock::new(),
     };
 
     let rule = CompositeTrait {
@@ -2278,6 +2340,8 @@ fn test_composite_unless_with_basename() {
         cached_kv_parsed: OnceLock::new(),
         current_trait: None,
         current_source: None,
+        string_exact_index: OnceLock::new(),
+        string_exact_index_ci: OnceLock::new(),
     };
 
     let rule = CompositeTrait {
@@ -2354,6 +2418,8 @@ fn test_composite_unless_multiple_conditions_any_matches() {
         cached_kv_parsed: OnceLock::new(),
         current_trait: None,
         current_source: None,
+        string_exact_index: OnceLock::new(),
+        string_exact_index_ci: OnceLock::new(),
     };
 
     let rule = CompositeTrait {
@@ -2439,6 +2505,8 @@ fn test_needs_with_any_only_respects_threshold() {
         cached_kv_parsed: OnceLock::new(),
         current_trait: None,
         current_source: None,
+        string_exact_index: OnceLock::new(),
+        string_exact_index_ci: OnceLock::new(),
     };
 
     // Rule with needs: 3, but only 2 conditions can match (socket, connect)
@@ -2522,6 +2590,8 @@ fn test_needs_with_any_only_matches_when_threshold_met() {
         cached_kv_parsed: OnceLock::new(),
         current_trait: None,
         current_source: None,
+        string_exact_index: OnceLock::new(),
+        string_exact_index_ci: OnceLock::new(),
     };
 
     // Rule with needs: 2, and 2 conditions can match (socket, connect)
@@ -2600,6 +2670,8 @@ fn test_needs_with_all_and_any_respects_threshold() {
         cached_kv_parsed: OnceLock::new(),
         current_trait: None,
         current_source: None,
+        string_exact_index: OnceLock::new(),
+        string_exact_index_ci: OnceLock::new(),
     };
 
     // Rule with:
@@ -2707,6 +2779,8 @@ fn test_needs_with_all_and_any_matches_when_threshold_met() {
         cached_kv_parsed: OnceLock::new(),
         current_trait: None,
         current_source: None,
+        string_exact_index: OnceLock::new(),
+        string_exact_index_ci: OnceLock::new(),
     };
 
     // Rule with:
@@ -2801,6 +2875,8 @@ fn test_needs_with_all_and_any_all_fails() {
         cached_kv_parsed: OnceLock::new(),
         current_trait: None,
         current_source: None,
+        string_exact_index: OnceLock::new(),
+        string_exact_index_ci: OnceLock::new(),
     };
 
     // Rule where all fails but any would pass
@@ -2877,6 +2953,8 @@ fn test_all_and_any_without_needs_requires_one_any() {
         cached_kv_parsed: OnceLock::new(),
         current_trait: None,
         current_source: None,
+        string_exact_index: OnceLock::new(),
+        string_exact_index_ci: OnceLock::new(),
     };
 
     let rule = CompositeTrait {

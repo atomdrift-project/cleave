@@ -245,6 +245,109 @@ pub(crate) fn eval_string<'a, 'b>(
     // Use pre-compiled regex from trait definition (compiled at startup)
     let compiled_regex = params.compiled_regex;
 
+    // FAST PATH: Use indexed lookup for exact matches (O(1) instead of O(n))
+    if let Some(exact_str) = params.exact {
+        if effective_range.is_none() {
+            // No offset constraints - can use the index directly
+            if params.case_insensitive {
+                if let Some(match_list) = ctx
+                    .get_string_exact_index_ci()
+                    .get(&exact_str.to_lowercase())
+                {
+                    for (i, (original_value, source, offset)) in match_list.iter().enumerate() {
+                        if i >= MAX_EVIDENCE_PER_TRAIT {
+                            break;
+                        }
+
+                        // Apply not: exclusion filter
+                        let excluded_by_not = trait_not
+                            .map(|exceptions| {
+                                exceptions.iter().any(|exc| exc.matches(original_value))
+                            })
+                            .unwrap_or(false);
+                        let excluded_by_ip =
+                            params.external_ip && !contains_external_ip(original_value);
+
+                        if !excluded_by_not && !excluded_by_ip {
+                            let method = if source == "string_extractor" {
+                                "string"
+                            } else if ctx.report.imports.iter().any(|i| i.source == *source) {
+                                "import_symbol"
+                            } else {
+                                "export_symbol"
+                            };
+                            evidence.push(Evidence {
+                                method: method.to_string(),
+                                source: source.clone(),
+                                value: original_value.clone(),
+                                location: offset.map(|o| format!("{:#x}", o)),
+                                ..Default::default()
+                            });
+                        }
+                    }
+                }
+            } else if let Some(match_list) = ctx
+                .get_string_exact_index()
+                .get(exact_str.as_str())
+            {
+                for (i, (source, offset)) in match_list.iter().enumerate() {
+                    if i >= MAX_EVIDENCE_PER_TRAIT {
+                        break;
+                    }
+
+                    // Apply not: exclusion filter
+                    let excluded_by_not = trait_not
+                        .map(|exceptions| exceptions.iter().any(|exc| exc.matches(exact_str)))
+                        .unwrap_or(false);
+                    let excluded_by_ip =
+                        params.external_ip && !contains_external_ip(exact_str);
+
+                    if !excluded_by_not && !excluded_by_ip {
+                        let method = if source == "string_extractor" {
+                            "string"
+                        } else if ctx.report.imports.iter().any(|i| i.source == *source) {
+                            "import_symbol"
+                        } else {
+                            "export_symbol"
+                        };
+                        evidence.push(Evidence {
+                            method: method.to_string(),
+                            source: source.clone(),
+                            value: exact_str.clone(),
+                            location: offset.map(|o| format!("{:#x}", o)),
+                            ..Default::default()
+                        });
+                    }
+                }
+            }
+
+            // Early return for indexed exact match
+            if let Some(t) = t_start {
+                if profile {
+                    eprintln!(
+                        "[PROFILE]   eval_string (indexed): {}ms",
+                        t.elapsed().as_millis()
+                    );
+                }
+            }
+
+            let matched = !evidence.is_empty();
+            let match_count = evidence.len();
+            let precision = if params.case_insensitive { 1.0 } else { 2.0 };
+
+            return ConditionResult {
+                matched,
+                evidence,
+                match_count,
+                warnings: Vec::new(),
+                precision,
+                matched_trait_ids: Vec::new(),
+            };
+        }
+    }
+
+    // SLOW PATH: Fall back to iteration for substr/regex/offset-constrained matches
+
     // Helper to check if a value matches and add to evidence
     let check_and_add_evidence = |value: &str,
                                   source: &str,

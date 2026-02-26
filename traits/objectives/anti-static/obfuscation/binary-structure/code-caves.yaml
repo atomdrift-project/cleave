@@ -31,19 +31,21 @@ traits:
       - type: raw
         substr: "mscoree"  # .NET assemblies have normal null padding in IL sections
 
-  # Very large null run (256+ bytes) - suspicious in PE/ELF
+  # Very large null run (128+ bytes) - suspicious in PE/ELF
   # Mach-O universals commonly have alignment padding with null runs
   # PE files can have null runs from virtual-size > raw-size alignment gaps
-  # Require multiple distinct occurrences to avoid PE alignment false positives
+  # Note: Pattern must be explicit null bytes, not [N-M] gap syntax (which matches any bytes)
+  # Using 128 bytes as 256+ would be an extremely long pattern
   - id: huge-null-run-text
-    desc: Huge null run in executable (256+ bytes)
+    desc: Huge null run in executable (128+ bytes)
     crit: component
     conf: 0.95
     for: [pe, elf]
     if:
       type: hex
       section: text
-      pattern: "00 [256-512]"  # 256-512 byte gap of nulls
+      # 128 consecutive null bytes - indicates significant padding/cave
+      pattern: "00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00"
     unless:
       - type: raw
         substr: "BSJB"  # .NET assemblies have normal null padding in IL sections

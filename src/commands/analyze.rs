@@ -442,9 +442,28 @@ fn analyze_file_with_context(
             report
         }
         FileType::JavaClass => {
+            let data = fs::read(path).context("Failed to read file")?;
             let analyzer = analyzers::java_class::JavaClassAnalyzer::new()
                 .with_capability_mapper_arc(capability_mapper.clone());
-            analyzer.analyze(path)?
+            let file_types: &[&str] = &["java", "class"];
+            let (struct_result, yara_result) = rayon::join(
+                || analyzer.analyze_structural(path, &data),
+                || {
+                    yara_engine
+                        .as_ref()
+                        .filter(|e| e.is_loaded())
+                        .map(|e| e.scan_bytes_with_inline(&data, Some(file_types)))
+                },
+            );
+            let mut report = struct_result?;
+            let inline_yara = process_yara_result(&mut report, yara_result, yara_engine.as_deref());
+            capability_mapper.evaluate_and_merge_findings(
+                &mut report,
+                &data,
+                None,
+                Some(&inline_yara),
+            );
+            report
         }
         FileType::Jar => {
             // JAR files are analyzed like archives but with Java-specific handling
@@ -506,8 +525,18 @@ fn analyze_file_with_context(
 
     // Run YARA universally for file types that didn't handle it internally
     // This ensures all program files get scanned with YARA rules
+    // Skip for types that already run YARA in parallel with structural analysis
+    let yara_handled_internally = matches!(
+        file_type,
+        FileType::Elf
+            | FileType::Pe
+            | FileType::MachO
+            | FileType::Archive
+            | FileType::Jar
+            | FileType::JavaClass
+    );
     if let Some(engine) = yara_engine {
-        if file_type.is_program() && engine.is_loaded() {
+        if file_type.is_program() && engine.is_loaded() && !yara_handled_internally {
             let file_types = file_type.yara_filetypes();
             let filter = if file_types.is_empty() {
                 None

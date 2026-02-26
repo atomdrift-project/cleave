@@ -44,6 +44,21 @@ impl JavaClassAnalyzer {
 
     fn analyze_class(&self, file_path: &Path, data: &[u8]) -> Result<AnalysisReport> {
         let start = std::time::Instant::now();
+        let mut report = self.analyze_structural(file_path, data)?;
+
+        // Evaluate all rules (atomic + composite) and merge into report
+        self.capability_mapper
+            .evaluate_and_merge_findings(&mut report, data, None, None);
+
+        let elapsed = start.elapsed().as_millis() as u64;
+        report.metadata.analysis_duration_ms = elapsed;
+
+        Ok(report)
+    }
+
+    /// Analyze class file structure only, without trait evaluation.
+    /// Use this when you want to run YARA in parallel and evaluate traits after.
+    pub(crate) fn analyze_structural(&self, file_path: &Path, data: &[u8]) -> Result<AnalysisReport> {
         let class_info = self.parse_class_file(data)?;
 
         let target = TargetInfo {
@@ -69,13 +84,6 @@ impl JavaClassAnalyzer {
         });
 
         self.detect_capabilities(&class_info, &mut report);
-
-        // Evaluate all rules (atomic + composite) and merge into report
-        self.capability_mapper
-            .evaluate_and_merge_findings(&mut report, data, None, None);
-
-        let elapsed = start.elapsed().as_millis() as u64;
-        report.metadata.analysis_duration_ms = elapsed;
 
         Ok(report)
     }

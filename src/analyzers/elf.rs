@@ -146,6 +146,28 @@ impl ElfAnalyzer {
 
             // Use batched extraction - single r2 session for functions, sections, strings, imports
             if let Ok(batched) = self.radare2.extract_batched(file_path, has_symbols) {
+                // Check if rizin timed out - add anti-analysis finding
+                if batched.timed_out {
+                    report.findings.push(Finding {
+                        kind: FindingKind::Capability,
+                        id: "anti-analysis/evasion/analysis-resistant".to_string(),
+                        desc: "Binary resistant to automated analysis (rizin timeout)".to_string(),
+                        conf: 0.8,
+                        crit: Criticality::Suspicious,
+                        mbc: Some("B0003".to_string()), // Defense Evasion: Anti-Analysis
+                        attack: Some("T1027".to_string()), // Obfuscated Files or Information
+                        evidence: vec![Evidence {
+                            method: "timeout".to_string(),
+                            source: "rizin".to_string(),
+                            value: "Analysis timed out after 60 seconds".to_string(),
+                            ..Default::default()
+                        }],
+                        match_count: 0,
+                        trait_refs: vec![],
+                        source_file: None,
+                    });
+                }
+
                 // Compute metrics from batched data
                 let mut binary_metrics = self
                     .radare2

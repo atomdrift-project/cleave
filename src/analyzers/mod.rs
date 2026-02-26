@@ -12,10 +12,23 @@
 //! - Fallback: Generic analyzer for unsupported file types (Batch, Unknown)
 //!
 //! Each analyzer implements the `Analyzer` trait for consistent interface.
+//!
+//! ## Unified Data Flow
+//!
+//! All analyzers receive an `AnalysisInput` containing pre-extracted data:
+//! - File bytes (read once at entry point)
+//! - Pre-extracted strings (stng called once)
+//! - File type (detected once)
+//!
+//! This eliminates redundant I/O and string extraction across the codebase.
 
 pub(crate) mod applescript;
 pub(crate) mod archive;
 pub(crate) mod ast_walker;
+
+// Unified analysis input type
+mod input;
+pub use input::AnalysisInput;
 
 // Universal metrics analyzers
 pub(crate) mod comment_metrics;
@@ -231,13 +244,43 @@ pub(crate) fn analyzer_for_file_type_arc(
     }
 }
 
-/// Trait for file analyzers
+/// Trait for file analyzers.
+///
+/// Analyzers can implement either:
+/// - `analyze_input()` - receives pre-extracted data (preferred, no redundant I/O)
+/// - `analyze()` - reads file from path (legacy, for backwards compatibility)
+///
+/// The default implementations call each other, so implementors only need one.
+/// New analyzers should implement `analyze_input()`.
 #[allow(dead_code)] // Used by tests and archive_utils, false positive from lib/bin split
 pub trait Analyzer {
-    /// Analyze a file and return a report
-    fn analyze(&self, file_path: &Path) -> Result<AnalysisReport>;
+    /// Analyze with pre-extracted input (preferred method).
+    ///
+    /// Default implementation calls legacy `analyze()` method.
+    /// Analyzers should override this to use `input.data` and `input.strings`
+    /// instead of reading files and extracting strings internally.
+    fn analyze_input(&self, input: &AnalysisInput<'_>) -> Result<AnalysisReport> {
+        // Default: delegate to legacy analyze() method
+        // This allows incremental migration - analyzers can be updated one by one
+        self.analyze(input.path)
+    }
 
-    /// Check if this analyzer can handle the given file
+    /// Analyze from file path (legacy method).
+    ///
+    /// Default implementation reads file, extracts strings, and calls `analyze_input()`.
+    /// Once all analyzers implement `analyze_input()`, this default will be the only
+    /// implementation needed.
+    fn analyze(&self, file_path: &Path) -> Result<AnalysisReport> {
+        let data = std::fs::read(file_path)?;
+        let file_type = detect_file_type(file_path)?;
+        let opts = stng::ExtractOptions::new(4).with_garbage_filter(true);
+        let strings = stng::extract_strings_with_options(&data, &opts);
+
+        let input = AnalysisInput::with_strings(file_path, &data, &strings, file_type);
+        self.analyze_input(&input)
+    }
+
+    /// Check if this analyzer can handle the given file.
     fn can_analyze(&self, file_path: &Path) -> bool;
 }
 
@@ -823,6 +866,7 @@ fn looks_like_shell(data: &[u8]) -> bool {
 
 /// Find MZ header within the first `max_offset` bytes
 /// Returns the offset where MZ was found, or None
+#[allow(clippy::manual_find)]
 fn find_mz_header(data: &[u8], max_offset: usize) -> Option<usize> {
     let search_limit = data.len().min(max_offset);
     for i in 1..search_limit.saturating_sub(1) {

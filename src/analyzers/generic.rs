@@ -5,8 +5,8 @@
 //! falls back to basic text/regex-based analysis.
 
 use crate::analyzers::symbol_extraction;
-use crate::analyzers::Analyzer;
 use crate::analyzers::FileType;
+use crate::analyzers::{AnalysisInput, Analyzer};
 use crate::capabilities::CapabilityMapper;
 use crate::types::*;
 use anyhow::{Context, Result};
@@ -85,17 +85,6 @@ impl GenericAnalyzer {
             FileType::Plist => "plist",
             _ => "unknown",
         }
-    }
-
-    /// Analyze source with pre-extracted stng strings (avoids duplicate string extraction)
-    #[allow(dead_code)] // Used by binary target
-    pub(crate) fn analyze_source_with_stng(
-        &self,
-        file_path: &Path,
-        content: &str,
-        stng_strings: &[stng::ExtractedString],
-    ) -> AnalysisReport {
-        self.analyze_source_internal(file_path, content, Some(stng_strings), None)
     }
 
     #[allow(dead_code)] // Used by embedded_code_detector
@@ -431,6 +420,17 @@ impl GenericAnalyzer {
 }
 
 impl Analyzer for GenericAnalyzer {
+    fn analyze_input(&self, input: &AnalysisInput<'_>) -> Result<AnalysisReport> {
+        // Use data and strings from input (no file read, no string extraction)
+        let content = String::from_utf8_lossy(input.data);
+        Ok(self.analyze_source_internal(
+            input.path,
+            &content,
+            Some(input.strings),
+            Some(input.data),
+        ))
+    }
+
     fn analyze(&self, file_path: &Path) -> Result<AnalysisReport> {
         let bytes = fs::read(file_path).context("Failed to read file")?;
         let content = String::from_utf8_lossy(&bytes);

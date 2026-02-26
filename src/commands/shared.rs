@@ -11,7 +11,7 @@
 //! - **Analysis Helpers**: File analysis, YARA processing, and report creation
 //! - **Utility Functions**: Type conversions, string extraction, and metric flattening
 
-use crate::analyzers::{self, detect_file_type, Analyzer, FileType};
+use crate::analyzers::{self, detect_file_type, AnalysisInput, Analyzer, FileType};
 use crate::types;
 use crate::yara_engine::YaraEngine;
 use anyhow::Result;
@@ -260,6 +260,10 @@ pub(crate) fn analyze_file_with_shared_mapper(
     let string_extractor = crate::strings::StringExtractor::new();
     let preextracted_strings = string_extractor.convert_stng_strings(&stng_strings);
 
+    // Create unified analysis input for analyzers using the new data flow
+    let analysis_input =
+        AnalysisInput::with_strings(path, file_data, &stng_strings, file_type.clone());
+
     let _t_analyze = std::time::Instant::now();
 
     // Route to appropriate analyzer
@@ -376,7 +380,7 @@ pub(crate) fn analyze_file_with_shared_mapper(
         FileType::JavaClass => {
             let analyzer = analyzers::java_class::JavaClassAnalyzer::new()
                 .with_capability_mapper_arc(capability_mapper.clone());
-            analyzer.analyze(path)?
+            analyzer.analyze_input(&analysis_input)?
         }
         FileType::Jar => {
             // JAR files are analyzed like archives but with Java-specific handling
@@ -395,17 +399,17 @@ pub(crate) fn analyze_file_with_shared_mapper(
         FileType::PackageJson => {
             let analyzer = analyzers::package_json::PackageJsonAnalyzer::new()
                 .with_capability_mapper_arc(capability_mapper.clone());
-            analyzer.analyze(path)?
+            analyzer.analyze_input(&analysis_input)?
         }
         FileType::VsixManifest => {
             let analyzer = analyzers::vsix_manifest::VsixManifestAnalyzer::new()
                 .with_capability_mapper_arc(capability_mapper.clone());
-            analyzer.analyze(path)?
+            analyzer.analyze_input(&analysis_input)?
         }
         FileType::AppleScript => {
             let analyzer = analyzers::applescript::AppleScriptAnalyzer::new()
                 .with_capability_mapper_arc(capability_mapper.clone());
-            analyzer.analyze(path)?
+            analyzer.analyze_input(&analysis_input)?
         }
         FileType::Archive => {
             let mut analyzer = analyzers::archive::ArchiveAnalyzer::new()
@@ -421,24 +425,12 @@ pub(crate) fn analyze_file_with_shared_mapper(
             analyzer.analyze(path)?
         }
         // All source code languages use the unified analyzer (or generic fallback)
+        // Use analyze_input() for unified data flow - no duplicate file reads or string extraction
         _ => {
-            // For file types that use GenericAnalyzer (Batch, Unknown, etc.),
-            // pass stng strings to avoid wasteful duplicate string extraction
-            if matches!(
-                file_type,
-                FileType::Batch | FileType::Unknown | FileType::PkgInfo | FileType::Plist
-            ) {
-                let analyzer = analyzers::generic::GenericAnalyzer::new(file_type.clone())
-                    .with_capability_mapper_arc(capability_mapper.clone());
-                analyzer.analyze_source_with_stng(
-                    path,
-                    &String::from_utf8_lossy(file_data),
-                    &stng_strings,
-                )
-            } else if let Some(analyzer) =
+            if let Some(analyzer) =
                 analyzers::analyzer_for_file_type_arc(&file_type, Some(capability_mapper.clone()))
             {
-                analyzer.analyze(path)?
+                analyzer.analyze_input(&analysis_input)?
             } else {
                 anyhow::bail!("Unsupported file type: {:?}", file_type);
             }
@@ -516,38 +508,44 @@ pub(crate) fn analyze_file_with_shared_mapper(
         // Consider refactoring to share this logic between CLI and library paths
     }
 
-    // Run YARA universally for file types that didn't handle it internally
-    // This ensures all program files get scanned with YARA rules
-    if let Some(engine) = shared_yara_engine {
-        if file_type.is_program() && engine.is_loaded() {
-            let file_types = file_type.yara_filetypes();
-            let filter = if file_types.is_empty() {
-                None
-            } else {
-                Some(file_types.as_slice())
-            };
+    // Run YARA for file types that didn't handle it internally.
+    // Binary types (MachO, Elf, Pe) and archives already ran YARA with parallel scanning above.
+    let handled_yara_internally = matches!(
+        file_type,
+        FileType::MachO | FileType::Elf | FileType::Pe | FileType::Archive | FileType::Jar
+    );
+    if !handled_yara_internally {
+        if let Some(engine) = shared_yara_engine {
+            if file_type.is_program() && engine.is_loaded() {
+                let file_types = file_type.yara_filetypes();
+                let filter = if file_types.is_empty() {
+                    None
+                } else {
+                    Some(file_types.as_slice())
+                };
 
-            match engine.scan_file_to_findings(path, filter) {
-                Ok((matches, findings)) => {
-                    // Add YARA matches to report
-                    report.yara_matches = matches;
+                match engine.scan_file_to_findings(path, filter) {
+                    Ok((matches, findings)) => {
+                        // Add YARA matches to report
+                        report.yara_matches = matches;
 
-                    // Add findings that don't already exist
-                    let existing: std::collections::HashSet<String> =
-                        report.findings.iter().map(|f| f.id.clone()).collect();
-                    for finding in findings {
-                        if !existing.contains(finding.id.as_str()) {
-                            report.findings.push(finding);
+                        // Add findings that don't already exist
+                        let existing: std::collections::HashSet<String> =
+                            report.findings.iter().map(|f| f.id.clone()).collect();
+                        for finding in findings {
+                            if !existing.contains(finding.id.as_str()) {
+                                report.findings.push(finding);
+                            }
+                        }
+
+                        // Mark that we used YARA
+                        if !report.metadata.tools_used.contains(&"yara-x".to_string()) {
+                            report.metadata.tools_used.push("yara-x".to_string());
                         }
                     }
-
-                    // Mark that we used YARA
-                    if !report.metadata.tools_used.contains(&"yara-x".to_string()) {
-                        report.metadata.tools_used.push("yara-x".to_string());
+                    Err(e) => {
+                        eprintln!("⚠️  YARA scan failed: {}", e);
                     }
-                }
-                Err(e) => {
-                    eprintln!("⚠️  YARA scan failed: {}", e);
                 }
             }
         }

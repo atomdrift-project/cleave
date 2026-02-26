@@ -5,7 +5,7 @@
 //! by YAML trait rules in the capabilities system for maintainability and
 //! flexibility.
 
-use super::Analyzer;
+use super::{AnalysisInput, Analyzer};
 use crate::capabilities::CapabilityMapper;
 use crate::types::{AnalysisReport, TargetInfo};
 use anyhow::Result;
@@ -93,6 +93,10 @@ impl Default for RtfAnalyzer {
 }
 
 impl Analyzer for RtfAnalyzer {
+    fn analyze_input(&self, input: &AnalysisInput<'_>) -> Result<AnalysisReport> {
+        Ok(self.analyze_rtf(input.path, input.data))
+    }
+
     fn analyze(&self, file_path: &Path) -> Result<AnalysisReport> {
         let data = std::fs::read(file_path)?;
         Ok(self.analyze_rtf(file_path, &data))

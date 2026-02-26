@@ -3,7 +3,7 @@
 //!
 //! Analyzes ELF binaries using radare2/rizin and string extraction.
 
-use crate::analyzers::Analyzer;
+use crate::analyzers::{AnalysisInput, Analyzer};
 use crate::capabilities::CapabilityMapper;
 use crate::entropy::{calculate_entropy, EntropyLevel};
 use crate::radare2::Radare2Analyzer;
@@ -63,7 +63,16 @@ impl ElfAnalyzer {
         self
     }
 
-    fn analyze_elf_core(&self, file_path: &Path, data: &[u8]) -> AnalysisReport {
+    /// Core ELF analysis logic.
+    ///
+    /// If `stng_strings` is provided, uses those directly (avoids redundant extraction).
+    /// Otherwise falls back to `self.preextracted_strings` or extracts with stng.
+    fn analyze_elf_core(
+        &self,
+        file_path: &Path,
+        data: &[u8],
+        stng_strings: Option<&[stng::ExtractedString]>,
+    ) -> AnalysisReport {
         let start = std::time::Instant::now();
         let _t_sha = std::time::Instant::now();
         let sha256 = crate::analyzers::utils::calculate_sha256(data);
@@ -208,9 +217,14 @@ impl ElfAnalyzer {
             None
         };
 
-        // Use pre-extracted strings if available, otherwise extract with stng/r2
+        // Use strings in order of preference:
+        // 1. stng_strings parameter (from AnalysisInput - avoids redundant extraction)
+        // 2. self.preextracted_strings (legacy builder pattern)
+        // 3. Extract fresh with stng/r2
         let _t_stng = std::time::Instant::now();
-        if let Some(ref strings) = self.preextracted_strings {
+        if let Some(strings) = stng_strings {
+            report.strings = self.string_extractor.convert_stng_strings(strings);
+        } else if let Some(ref strings) = self.preextracted_strings {
             report.strings = strings.clone();
         } else {
             // Extract strings using language-aware extraction (Go/Rust)
@@ -697,11 +711,11 @@ impl ElfAnalyzer {
         use crate::upx::{UPXDecompressor, UPXError};
 
         if !UPXDecompressor::is_upx_packed(data) {
-            return self.analyze_elf_core(file_path, data);
+            return self.analyze_elf_core(file_path, data, None);
         }
 
         // UPX-packed: structural analysis of packed binary first
-        let mut report = self.analyze_elf_core(file_path, data);
+        let mut report = self.analyze_elf_core(file_path, data, None);
 
         report.findings.push(
             Finding::structural(
@@ -729,7 +743,7 @@ impl ElfAnalyzer {
                 if let Ok(temp_file) = tempfile::NamedTempFile::new() {
                     if fs::write(temp_file.path(), &unpacked_data).is_ok() {
                         let unpacked_report =
-                            self.analyze_elf_core(temp_file.path(), &unpacked_data);
+                            self.analyze_elf_core(temp_file.path(), &unpacked_data, None);
                         self.merge_reports(&mut report, unpacked_report);
                         report.metadata.tools_used.push("upx".to_string());
                     }
@@ -777,6 +791,18 @@ impl ElfAnalyzer {
 }
 
 impl Analyzer for ElfAnalyzer {
+    fn analyze_input(&self, input: &AnalysisInput<'_>) -> Result<AnalysisReport> {
+        // Use data and strings from input (no file read, no string extraction)
+        let mut report = self.analyze_elf_core(input.path, input.data, Some(input.strings));
+
+        // Post-processing
+        self.capability_mapper
+            .evaluate_and_merge_findings(&mut report, input.data, None, None);
+        crate::path_mapper::analyze_and_link_paths(&mut report);
+        crate::env_mapper::analyze_and_link_env_vars(&mut report);
+        Ok(report)
+    }
+
     fn analyze(&self, file_path: &Path) -> Result<AnalysisReport> {
         let data = fs::read(file_path).context("Failed to read file")?;
         let mut report = self.analyze_structural(file_path, &data);

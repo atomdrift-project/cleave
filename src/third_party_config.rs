@@ -260,7 +260,7 @@ overrides:
         let disabled = super::disabled_rule_ids();
         // Should contain the ATM malware rule we disabled (using trait_id format)
         assert!(
-            disabled.contains("third_party/R3c0nst/ATM/Malware/Atmspitter"),
+            disabled.contains("third_party/R3C0NST/ATM/Malware/Atmspitter"),
             "Expected disabled rules to contain ATM malware rule, got: {:?}",
             disabled
         );

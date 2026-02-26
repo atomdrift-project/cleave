@@ -16,7 +16,7 @@ mod zip;
 
 pub(crate) use guards::HostileArchiveReason;
 
-use crate::analyzers::Analyzer;
+use crate::analyzers::{AnalysisInput, Analyzer};
 use crate::capabilities::CapabilityMapper;
 use crate::types::*;
 use crate::yara_engine::YaraEngine;
@@ -687,6 +687,21 @@ impl Default for ArchiveAnalyzer {
     }
 }
 impl Analyzer for ArchiveAnalyzer {
+    fn analyze_input(&self, input: &AnalysisInput<'_>) -> Result<AnalysisReport> {
+        // Archives require file on disk for extraction libraries
+        // Write input data to temp file if needed
+        if input.path.exists() {
+            // File exists on disk, use directly
+            self.analyze_archive(input.path)
+        } else {
+            // Data came from another source (e.g., embedded archive)
+            // Write to temp file for extraction
+            let temp_file = tempfile::NamedTempFile::new()?;
+            std::fs::write(temp_file.path(), input.data)?;
+            self.analyze_archive(temp_file.path())
+        }
+    }
+
     fn analyze(&self, file_path: &Path) -> Result<AnalysisReport> {
         self.analyze_archive(file_path)
     }

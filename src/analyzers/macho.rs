@@ -2,7 +2,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use crate::analyzers::macho_codesign;
-use crate::analyzers::Analyzer;
+use crate::analyzers::{AnalysisInput, Analyzer};
 use crate::capabilities::CapabilityMapper;
 use crate::entropy::{calculate_entropy, EntropyLevel};
 use crate::radare2::Radare2Analyzer;
@@ -68,6 +68,16 @@ impl MachOAnalyzer {
         &self,
         file_path: &Path,
         data: &[u8],
+    ) -> Result<AnalysisReport> {
+        self.analyze_structural_with_strings(file_path, data, None)
+    }
+
+    /// Structural analysis with optional pre-extracted strings.
+    fn analyze_structural_with_strings(
+        &self,
+        file_path: &Path,
+        data: &[u8],
+        stng_strings: Option<&[stng::ExtractedString]>,
     ) -> Result<AnalysisReport> {
         let start = std::time::Instant::now(); // Parse with goblin
         let macho = match goblin::mach::Mach::parse(data)? {
@@ -271,8 +281,13 @@ impl MachOAnalyzer {
             None
         };
 
-        // Use pre-extracted strings if available, otherwise extract with stng/r2
-        if let Some(ref strings) = self.preextracted_strings {
+        // Use strings in order of preference:
+        // 1. stng_strings parameter (from AnalysisInput - avoids redundant extraction)
+        // 2. self.preextracted_strings (legacy builder pattern)
+        // 3. Extract fresh with stng/r2
+        if let Some(strings) = stng_strings {
+            report.strings = self.string_extractor.convert_stng_strings(strings);
+        } else if let Some(ref strings) = self.preextracted_strings {
             report.strings = strings.clone();
         } else {
             // Extract strings using language-aware extraction (Go/Rust)
@@ -1151,6 +1166,41 @@ impl MachOAnalyzer {
 }
 
 impl Analyzer for MachOAnalyzer {
+    fn analyze_input(&self, input: &AnalysisInput<'_>) -> Result<AnalysisReport> {
+        // Get all architecture slices (for FAT binaries) or the single slice (for thin binaries)
+        let arch_ranges = self.all_arch_ranges(input.data);
+
+        // Use preferred arch for structural analysis (imports, exports, strings, etc.)
+        let preferred_range = self.preferred_arch_range(input.data);
+        let preferred_data = &input.data[preferred_range];
+        let mut report =
+            self.analyze_structural_with_strings(input.path, preferred_data, Some(input.strings))?;
+        self.apply_fat_metadata(&mut report, input.data);
+
+        // For FAT binaries, strings should already be file-relative from input.strings
+        // (extracted from the full file by the entry point)
+        let is_fat = arch_ranges.len() > 1;
+
+        // Evaluate traits against binary data.
+        // For FAT binaries, evaluate against the full file since strings have file-relative offsets.
+        // For thin binaries, evaluate against the single slice (same as full file).
+        if is_fat {
+            // Full file evaluation - strings and offsets are file-relative
+            self.capability_mapper
+                .evaluate_and_merge_findings(&mut report, input.data, None, None);
+        } else {
+            // Thin binary - single slice is the whole file
+            self.capability_mapper.evaluate_and_merge_findings(
+                &mut report,
+                preferred_data,
+                None,
+                None,
+            );
+        }
+
+        Ok(report)
+    }
+
     fn analyze(&self, file_path: &Path) -> Result<AnalysisReport> {
         let data = fs::read(file_path).context("Failed to read file")?;
 

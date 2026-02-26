@@ -478,10 +478,10 @@ pub(crate) fn eval_hex<'a>(
                 .take_while(|s| !matches!(s, HexSegment::Bytes(b) if b.as_slice() == atom))
                 .map(|s| match s {
                     HexSegment::Bytes(b) => b.len(),
-                    HexSegment::Wildcard => 1,
                     HexSegment::Gap { min, .. } => *min,
-                    HexSegment::NibbleMask { .. } => 1,
-                    HexSegment::ByteSet(_) => 1,
+                    HexSegment::Wildcard
+                    | HexSegment::NibbleMask { .. }
+                    | HexSegment::ByteSet(_) => 1,
                 })
                 .sum();
 

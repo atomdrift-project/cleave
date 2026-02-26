@@ -7,7 +7,7 @@
 //! - Content scripts running on all URLs
 //! - External update URLs
 
-use crate::analyzers::Analyzer;
+use crate::analyzers::{AnalysisInput, Analyzer};
 use crate::capabilities::CapabilityMapper;
 use crate::types::*;
 use anyhow::{Context, Result};
@@ -697,6 +697,11 @@ impl Default for ChromeManifestAnalyzer {
 }
 
 impl Analyzer for ChromeManifestAnalyzer {
+    fn analyze_input(&self, input: &AnalysisInput<'_>) -> Result<AnalysisReport> {
+        let content = String::from_utf8_lossy(input.data);
+        self.analyze_manifest(input.path, &content)
+    }
+
     fn analyze(&self, file_path: &Path) -> Result<AnalysisReport> {
         let bytes =
             fs::read(file_path).context(format!("Failed to read file: {}", file_path.display()))?;

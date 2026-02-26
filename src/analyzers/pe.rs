@@ -1,7 +1,7 @@
 //! PE (Portable Executable) analyzer for Windows binaries.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-use crate::analyzers::Analyzer;
+use crate::analyzers::{AnalysisInput, Analyzer};
 use crate::capabilities::CapabilityMapper;
 use crate::entropy::{calculate_entropy, EntropyLevel};
 use crate::radare2::Radare2Analyzer;
@@ -75,10 +75,22 @@ impl PEAnalyzer {
     /// Overlay analysis (self-extracting archives) still runs and uses the YARA engine
     /// stored in this analyzer if set. Callers are responsible for running the main YARA
     /// scan and calling `evaluate_and_merge_findings` on the returned report.
+    ///
+    /// If `stng_strings` is provided, uses those directly (avoids redundant extraction).
     pub(crate) fn analyze_structural(
         &self,
         file_path: &Path,
         data: &[u8],
+    ) -> Result<AnalysisReport> {
+        self.analyze_structural_with_strings(file_path, data, None)
+    }
+
+    /// Structural analysis with optional pre-extracted strings.
+    fn analyze_structural_with_strings(
+        &self,
+        file_path: &Path,
+        data: &[u8],
+        stng_strings: Option<&[stng::ExtractedString]>,
     ) -> Result<AnalysisReport> {
         let start = std::time::Instant::now();
 
@@ -87,15 +99,24 @@ impl PEAnalyzer {
 
         // Try to parse with goblin (using potentially stripped data)
         match PE::parse(pe_data) {
-            Ok(pe) => self.analyze_valid_pe(file_path, data, pe_data, &pe, tamper_findings, start),
+            Ok(pe) => self.analyze_valid_pe(
+                file_path,
+                data,
+                pe_data,
+                &pe,
+                tamper_findings,
+                start,
+                stng_strings,
+            ),
             Err(e) => {
                 // PE parsing failed - create a minimal report with tampering findings
-                self.analyze_corrupted_pe(file_path, data, tamper_findings, e, start)
+                self.analyze_corrupted_pe(file_path, data, tamper_findings, &e, start, stng_strings)
             }
         }
     }
 
     /// Analyze a valid (parseable) PE binary
+    #[allow(clippy::unnecessary_wraps)]
     fn analyze_valid_pe(
         &self,
         file_path: &Path,
@@ -104,6 +125,7 @@ impl PEAnalyzer {
         pe: &PE<'_>,
         tamper_findings: Vec<Finding>,
         start: std::time::Instant,
+        stng_strings: Option<&[stng::ExtractedString]>,
     ) -> Result<AnalysisReport> {
         // Compute PE-specific metrics early
         let pe_metrics = self.compute_pe_metrics(pe, pe_data);
@@ -127,13 +149,13 @@ impl PEAnalyzer {
         report.findings.extend(tamper_findings);
 
         // Analyze header and structure
-        self.analyze_structure(&pe, &mut report);
+        self.analyze_structure(pe, &mut report);
 
         // Extract imports and map to capabilities
-        self.analyze_imports(&pe, &mut report);
+        self.analyze_imports(pe, &mut report);
 
         // Analyze exports
-        self.analyze_exports(&pe, &mut report);
+        self.analyze_exports(pe, &mut report);
 
         // Analyze sections and entropy
         self.analyze_sections(pe, pe_data, &mut report);
@@ -207,8 +229,13 @@ impl PEAnalyzer {
             None
         };
 
-        // Use pre-extracted strings if available, otherwise extract with stng/r2
-        if let Some(ref strings) = self.preextracted_strings {
+        // Use strings in order of preference:
+        // 1. stng_strings parameter (from AnalysisInput - avoids redundant extraction)
+        // 2. self.preextracted_strings (legacy builder pattern)
+        // 3. Extract fresh with stng/r2
+        if let Some(strings) = stng_strings {
+            report.strings = self.string_extractor.convert_stng_strings(strings);
+        } else if let Some(ref strings) = self.preextracted_strings {
             report.strings = strings.clone();
         } else {
             // Extract strings using language-aware extraction (Go/Rust)
@@ -360,13 +387,15 @@ impl PEAnalyzer {
 
     /// Analyze a corrupted PE that goblin failed to parse
     /// Still extracts useful information: tampering findings, strings, .NET detection
+    #[allow(clippy::unnecessary_wraps)]
     fn analyze_corrupted_pe(
         &self,
         file_path: &Path,
         data: &[u8],
         mut tamper_findings: Vec<Finding>,
-        parse_error: goblin::error::Error,
+        parse_error: &goblin::error::Error,
         start: std::time::Instant,
+        stng_strings: Option<&[stng::ExtractedString]>,
     ) -> Result<AnalysisReport> {
         // Create target info for corrupted PE
         let target = TargetInfo {
@@ -417,9 +446,11 @@ impl PEAnalyzer {
             }],
         });
 
-        // Still extract strings using stng (works on raw bytes)
-        if self.preextracted_strings.is_some() {
-            report.strings = self.preextracted_strings.clone().unwrap_or_default();
+        // Use strings in order of preference (same as analyze_valid_pe)
+        if let Some(strings) = stng_strings {
+            report.strings = self.string_extractor.convert_stng_strings(strings);
+        } else if let Some(ref strings) = self.preextracted_strings {
+            report.strings = strings.clone();
         } else {
             report.strings = self.string_extractor.extract_smart(data, None);
         }
@@ -914,6 +945,7 @@ impl PEAnalyzer {
     }
 
     /// Find MZ header within first max_offset bytes
+    #[allow(clippy::manual_find)]
     fn find_mz_offset(&self, data: &[u8], max_offset: usize) -> Option<usize> {
         let limit = data.len().min(max_offset);
         for i in 0..limit.saturating_sub(1) {
@@ -937,6 +969,17 @@ impl Default for PEAnalyzer {
 }
 
 impl Analyzer for PEAnalyzer {
+    fn analyze_input(&self, input: &AnalysisInput<'_>) -> Result<AnalysisReport> {
+        // Use data and strings from input (no file read, no string extraction)
+        let mut report =
+            self.analyze_structural_with_strings(input.path, input.data, Some(input.strings))?;
+
+        // Post-processing
+        self.capability_mapper
+            .evaluate_and_merge_findings(&mut report, input.data, None, None);
+        Ok(report)
+    }
+
     fn analyze(&self, file_path: &Path) -> Result<AnalysisReport> {
         let data = fs::read(file_path).context("Failed to read file")?;
         let mut report = self.analyze_structural(file_path, &data)?;

@@ -6,7 +6,7 @@
 //! - Lack of visual structure (no edges/gradients)
 //! - Poor compression ratio (random data doesn't compress well)
 
-use super::Analyzer;
+use super::{AnalysisInput, Analyzer};
 use crate::capabilities::CapabilityMapper;
 use crate::entropy::calculate_entropy;
 use crate::types::{AnalysisReport, Metrics, PngMetrics, TargetInfo};
@@ -85,6 +85,10 @@ impl Default for PngAnalyzer {
 }
 
 impl Analyzer for PngAnalyzer {
+    fn analyze_input(&self, input: &AnalysisInput<'_>) -> Result<AnalysisReport> {
+        Ok(self.analyze_png(input.path, input.data))
+    }
+
     fn analyze(&self, file_path: &Path) -> Result<AnalysisReport> {
         let data = std::fs::read(file_path)?;
         Ok(self.analyze_png(file_path, &data))
@@ -114,11 +118,10 @@ fn analyze_png_data(data: &[u8]) -> Option<PngMetrics> {
 
     // Determine number of channels
     let channels = match color_type {
-        png::ColorType::Grayscale => 1,
+        png::ColorType::Grayscale | png::ColorType::Indexed => 1, // Indexed is palette-based
         png::ColorType::GrayscaleAlpha => 2,
         png::ColorType::Rgb => 3,
         png::ColorType::Rgba => 4,
-        png::ColorType::Indexed => 1, // Palette-based
     };
 
     // Decode pixel data

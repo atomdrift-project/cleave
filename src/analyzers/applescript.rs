@@ -2,7 +2,7 @@
 //!
 //! Analyzes AppleScript files for macOS-specific threats.
 
-use crate::analyzers::Analyzer;
+use crate::analyzers::{AnalysisInput, Analyzer};
 use crate::capabilities::CapabilityMapper;
 use crate::strings::StringExtractor;
 use crate::types::*;
@@ -93,6 +93,45 @@ impl Default for AppleScriptAnalyzer {
 }
 
 impl Analyzer for AppleScriptAnalyzer {
+    fn analyze_input(&self, input: &AnalysisInput<'_>) -> Result<AnalysisReport> {
+        let target = TargetInfo {
+            path: input.path.display().to_string(),
+            file_type: "applescript".to_string(),
+            size_bytes: input.data.len() as u64,
+            sha256: crate::analyzers::utils::calculate_sha256(input.data),
+            architectures: None,
+        };
+
+        let mut report = AnalysisReport::new(target);
+
+        // Extract symbols from compiled AppleScript
+        self.extract_scpt_symbols(input.data, &mut report);
+
+        // Use pre-extracted strings if available, otherwise extract
+        if !input.strings.is_empty() {
+            report.strings = self.string_extractor.convert_stng_strings(input.strings);
+        } else {
+            report.strings = self.string_extractor.extract_smart(input.data, None);
+        }
+
+        // Analyze embedded code in strings
+        let (encoded_layers, plain_findings) =
+            crate::analyzers::embedded_code_detector::process_all_strings(
+                &input.path.display().to_string(),
+                &report.strings,
+                &self.capability_mapper,
+                0,
+            );
+        report.files.extend(encoded_layers);
+        report.findings.extend(plain_findings);
+
+        // Evaluate all rules (atomic + composite) and merge into report
+        self.capability_mapper
+            .evaluate_and_merge_findings(&mut report, input.data, None, None);
+
+        Ok(report)
+    }
+
     fn can_analyze(&self, file_path: &Path) -> bool {
         if let Ok(metadata) = fs::metadata(file_path) {
             if metadata.is_file() {

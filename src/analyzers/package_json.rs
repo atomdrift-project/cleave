@@ -1,7 +1,7 @@
 //! package.json analyzer for npm packages.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-use crate::analyzers::Analyzer;
+use crate::analyzers::{AnalysisInput, Analyzer};
 use crate::capabilities::CapabilityMapper;
 use crate::types::*;
 use anyhow::{Context, Result};
@@ -1059,6 +1059,11 @@ impl Default for PackageJsonAnalyzer {
 }
 
 impl Analyzer for PackageJsonAnalyzer {
+    fn analyze_input(&self, input: &AnalysisInput<'_>) -> Result<AnalysisReport> {
+        let content = String::from_utf8_lossy(input.data);
+        self.analyze_package(input.path, &content)
+    }
+
     fn analyze(&self, file_path: &Path) -> Result<AnalysisReport> {
         let bytes =
             fs::read(file_path).context(format!("Failed to read file: {}", file_path.display()))?;

@@ -1,4 +1,5 @@
 //! Condition evaluators for composite rules.
+#![allow(clippy::expect_used)]
 //!
 //! This module contains evaluation functions for different condition types:
 //! - **symbol_string**: Symbol and string matching (imports, exports, strings, decoded content)

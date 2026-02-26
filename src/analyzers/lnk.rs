@@ -5,7 +5,7 @@
 //! excessive whitespace padding (ZDI-CAN-25373).
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-use super::Analyzer;
+use super::{AnalysisInput, Analyzer};
 use crate::capabilities::CapabilityMapper;
 use crate::types::{AnalysisReport, TargetInfo};
 use anyhow::Result;
@@ -97,9 +97,15 @@ pub(crate) fn extract_lnk_data(data: &[u8]) -> Option<LnkData> {
     let arguments = string_data
         .command_line_arguments()
         .as_ref()
-        .map(|s| s.to_string());
-    let working_dir = string_data.working_dir().as_ref().map(|s| s.to_string());
-    let icon_location = string_data.icon_location().as_ref().map(|s| s.to_string());
+        .map(std::string::ToString::to_string);
+    let working_dir = string_data
+        .working_dir()
+        .as_ref()
+        .map(std::string::ToString::to_string);
+    let icon_location = string_data
+        .icon_location()
+        .as_ref()
+        .map(std::string::ToString::to_string);
 
     // Analyze whitespace in arguments
     let whitespace_analysis = analyze_whitespace(arguments.as_deref());
@@ -298,6 +304,10 @@ impl Default for LnkAnalyzer {
 }
 
 impl Analyzer for LnkAnalyzer {
+    fn analyze_input(&self, input: &AnalysisInput<'_>) -> Result<AnalysisReport> {
+        Ok(self.analyze_lnk(input.path, input.data))
+    }
+
     fn analyze(&self, file_path: &Path) -> Result<AnalysisReport> {
         let data = std::fs::read(file_path)?;
         Ok(self.analyze_lnk(file_path, &data))

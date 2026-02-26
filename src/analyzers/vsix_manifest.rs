@@ -2,7 +2,7 @@
 //!
 //! Analyzes .vsixmanifest files from VS Code extensions for suspicious patterns.
 
-use crate::analyzers::Analyzer;
+use crate::analyzers::{AnalysisInput, Analyzer};
 use crate::capabilities::CapabilityMapper;
 use crate::types::*;
 use anyhow::{Context, Result};
@@ -121,6 +121,11 @@ impl Default for VsixManifestAnalyzer {
 }
 
 impl Analyzer for VsixManifestAnalyzer {
+    fn analyze_input(&self, input: &AnalysisInput<'_>) -> Result<AnalysisReport> {
+        let content = String::from_utf8_lossy(input.data);
+        self.analyze_manifest(input.path, &content)
+    }
+
     fn analyze(&self, file_path: &Path) -> Result<AnalysisReport> {
         let bytes = fs::read(file_path).context("Failed to read .vsixmanifest file")?;
         let content = String::from_utf8_lossy(&bytes);

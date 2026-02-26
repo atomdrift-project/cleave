@@ -16,7 +16,8 @@ use crate::analyzers::comment_metrics::{self, CommentStyle};
 use crate::analyzers::function_metrics::{self, FunctionInfo};
 use crate::analyzers::symbol_extraction;
 use crate::analyzers::{
-    identifier_metrics, import_metrics, string_metrics, text_metrics, Analyzer, FileType,
+    identifier_metrics, import_metrics, string_metrics, text_metrics, AnalysisInput, Analyzer,
+    FileType,
 };
 use crate::capabilities::CapabilityMapper;
 use crate::types::*;
@@ -1172,6 +1173,30 @@ impl UnifiedSourceAnalyzer {
 }
 
 impl Analyzer for UnifiedSourceAnalyzer {
+    fn analyze_input(&self, input: &AnalysisInput<'_>) -> Result<AnalysisReport> {
+        // Handle UTF-16 encoding (same as analyze())
+        let bytes: std::borrow::Cow<'_, [u8]> =
+            if input.data.len() >= 2 && input.data[0] == 0xFF && input.data[1] == 0xFE {
+                // UTF-16 LE BOM
+                use encoding_rs::UTF_16LE;
+                let (decoded, _, _) = UTF_16LE.decode(&input.data[2..]);
+                std::borrow::Cow::Owned(decoded.into_owned().into_bytes())
+            } else if input.data.len() >= 2 && input.data[0] == 0xFE && input.data[1] == 0xFF {
+                // UTF-16 BE BOM
+                use encoding_rs::UTF_16BE;
+                let (decoded, _, _) = UTF_16BE.decode(&input.data[2..]);
+                std::borrow::Cow::Owned(decoded.into_owned().into_bytes())
+            } else {
+                std::borrow::Cow::Borrowed(input.data)
+            };
+
+        let content = String::from_utf8_lossy(&bytes);
+
+        // Use existing internal method - eliminates file read but still does internal stng extraction
+        // Future optimization: pass input.strings to avoid redundant extraction
+        self.analyze_source_with_original(input.path, &content, input.data)
+    }
+
     fn analyze(&self, file_path: &Path) -> Result<AnalysisReport> {
         // Read file and detect UTF-16 encoding
         let mut bytes = fs::read(file_path).context("Failed to read file")?;

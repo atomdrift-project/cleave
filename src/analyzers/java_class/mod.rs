@@ -1,6 +1,6 @@
 //! Java bytecode (.class) analyzer.
 
-use crate::analyzers::Analyzer;
+use crate::analyzers::{AnalysisInput, Analyzer};
 use crate::capabilities::CapabilityMapper;
 use crate::types::*;
 use anyhow::Result;
@@ -82,6 +82,10 @@ impl JavaClassAnalyzer {
 }
 
 impl Analyzer for JavaClassAnalyzer {
+    fn analyze_input(&self, input: &AnalysisInput<'_>) -> Result<AnalysisReport> {
+        self.analyze_class(input.path, input.data)
+    }
+
     fn analyze(&self, file_path: &Path) -> Result<AnalysisReport> {
         let data = std::fs::read(file_path)?;
         self.analyze_class(file_path, &data)

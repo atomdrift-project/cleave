@@ -360,26 +360,9 @@ fn main() -> Result<()> {
         upx::disable_upx();
     }
 
-    // Print banner to stderr (status info never goes to stdout) - only in terminal mode
+    // Print version banner to stderr (status info never goes to stdout) - only in terminal mode
     if format == cli::OutputFormat::Terminal {
-        // Try to show combined rule count from all sources (YARA + traits + composites)
-        let enable_third_party = !disabled.third_party;
-        let yara_count = yara_engine::peek_cache_rule_count(enable_third_party).unwrap_or(0);
-        let (trait_count, composite_count) = cache::peek_rule_stats().unwrap_or((0, 0));
-        let total_rules = yara_count + trait_count + composite_count;
-
-        if total_rules > 0 {
-            eprintln!(
-                "cleave v{} • {} rules\n",
-                env!("CARGO_PKG_VERSION"),
-                total_rules
-            );
-        } else {
-            eprint!(
-                "cleave v{} • Precompiling rules…",
-                env!("CARGO_PKG_VERSION")
-            );
-        }
+        eprintln!("cleave v{}\n", env!("CARGO_PKG_VERSION"));
     }
 
     // Collect zip passwords (default + custom, unless disabled)

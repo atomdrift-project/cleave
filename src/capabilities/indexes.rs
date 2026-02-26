@@ -114,12 +114,38 @@ pub(crate) struct StringMatchIndex {
 impl StringMatchIndex {
     /// Extract the literal prefix from a regex pattern.
     /// Returns None if no useful literal can be extracted (pattern starts with metachar).
-    fn extract_regex_literal(pattern: &str) -> Option<String> {
+    pub(crate) fn extract_regex_literal(pattern: &str) -> Option<String> {
+        // Strip common regex flags at the start: (?i), (?m), (?s), (?x), etc.
+        let pattern = if pattern.starts_with("(?") {
+            if let Some(end) = pattern.find(')') {
+                &pattern[end + 1..]
+            } else {
+                pattern
+            }
+        } else {
+            pattern
+        };
+
+        // Skip patterns that start with anchors or wildcards
+        if pattern.starts_with('^') || pattern.starts_with(".*") || pattern.starts_with(".+") {
+            // Try to find a literal after the anchor/wildcard
+            let skip = if pattern.starts_with(".*") || pattern.starts_with(".+") {
+                2
+            } else {
+                1
+            };
+            return Self::extract_literal_from(&pattern[skip..]);
+        }
+
+        Self::extract_literal_from(pattern)
+    }
+
+    /// Extract literal from a pattern starting at the given position.
+    fn extract_literal_from(pattern: &str) -> Option<String> {
         let mut literal = String::new();
-        let chars = pattern.chars().peekable();
         let mut in_escape = false;
 
-        for c in chars {
+        for c in pattern.chars() {
             if in_escape {
                 // Handle escaped characters
                 match c {
@@ -654,10 +680,28 @@ pub(crate) struct RawContentRegexIndex {
 /// Regex set for a specific file type
 #[derive(Clone)]
 struct FileTypeRegexSet {
+    /// Full regex set (kept for fallback, but rarely used)
+    #[allow(dead_code)]
     regex_set: RegexSet,
     pattern_to_traits: Vec<Vec<usize>>,
     /// Original pattern strings for debugging/profiling
     patterns: Vec<String>,
+    /// Individual compiled regexes for patterns WITH extractable literals
+    individual_regexes: Vec<Option<regex::Regex>>,
+    /// Smaller RegexSet for ONLY patterns without extractable literals
+    no_literal_regex_set: Option<RegexSet>,
+    /// Maps no_literal_regex_set index -> original pattern index
+    no_literal_to_original: Vec<usize>,
+    /// Aho-Corasick automaton for CASE-SENSITIVE literal prefix pre-filtering
+    cs_literal_prefilter: Option<AhoCorasick>,
+    /// Maps case-sensitive literal index -> pattern indices
+    cs_literal_to_patterns: Vec<Vec<usize>>,
+    /// Aho-Corasick automaton for CASE-INSENSITIVE literal prefix pre-filtering
+    ci_literal_prefilter: Option<AhoCorasick>,
+    /// Maps case-insensitive literal index -> pattern indices
+    ci_literal_to_patterns: Vec<Vec<usize>>,
+    /// Pattern indices that have no extractable literal prefix
+    patterns_without_literals: Vec<usize>,
 }
 
 impl std::fmt::Debug for FileTypeRegexSet {
@@ -666,6 +710,74 @@ impl std::fmt::Debug for FileTypeRegexSet {
             .field("pattern_count", &self.patterns.len())
             .field("patterns", &self.patterns)
             .finish()
+    }
+}
+
+impl FileTypeRegexSet {
+    /// Find matching traits using hybrid literal pre-filtering strategy:
+    /// 1. Run case-sensitive Aho-Corasick for case-sensitive patterns
+    /// 2. Run case-insensitive Aho-Corasick for case-insensitive patterns
+    /// 3. Run individual regexes for patterns with matching literals
+    /// 4. Run smaller RegexSet for patterns without literals (unavoidable)
+    fn find_matches(&self, content: &str) -> Vec<usize> {
+        let mut matching_trait_indices = Vec::new();
+        let mut literal_candidates: FxHashSet<usize> = FxHashSet::default();
+
+        // Step 1a: Find case-sensitive patterns with matching literals
+        if let Some(ref ac) = self.cs_literal_prefilter {
+            for mat in ac.find_iter(content) {
+                let literal_idx = mat.pattern().as_usize();
+                if let Some(pattern_indices) = self.cs_literal_to_patterns.get(literal_idx) {
+                    for &pattern_idx in pattern_indices {
+                        literal_candidates.insert(pattern_idx);
+                    }
+                }
+            }
+        }
+
+        // Step 1b: Find case-insensitive patterns with matching literals
+        // The CI automaton was built with lowercased literals and ascii_case_insensitive=true
+        if let Some(ref ac) = self.ci_literal_prefilter {
+            for mat in ac.find_iter(content) {
+                let literal_idx = mat.pattern().as_usize();
+                if let Some(pattern_indices) = self.ci_literal_to_patterns.get(literal_idx) {
+                    for &pattern_idx in pattern_indices {
+                        literal_candidates.insert(pattern_idx);
+                    }
+                }
+            }
+        }
+
+        tracing::trace!(
+            "Hybrid prefilter: {} literal candidates, {} no-literal patterns",
+            literal_candidates.len(),
+            self.patterns_without_literals.len()
+        );
+
+        // Step 2: Run individual regexes for patterns with matching literals
+        for &pattern_idx in &literal_candidates {
+            if let Some(Some(ref regex)) = self.individual_regexes.get(pattern_idx) {
+                if regex.is_match(content) {
+                    if let Some(trait_indices) = self.pattern_to_traits.get(pattern_idx) {
+                        matching_trait_indices.extend(trait_indices.iter().copied());
+                    }
+                }
+            }
+        }
+
+        // Step 3: Run smaller RegexSet for patterns without extractable literals
+        if let Some(ref no_lit_set) = self.no_literal_regex_set {
+            for no_lit_idx in no_lit_set.matches(content).iter() {
+                // Map back to original pattern index
+                if let Some(&original_idx) = self.no_literal_to_original.get(no_lit_idx) {
+                    if let Some(trait_indices) = self.pattern_to_traits.get(original_idx) {
+                        matching_trait_indices.extend(trait_indices.iter().copied());
+                    }
+                }
+            }
+        }
+
+        matching_trait_indices
     }
 }
 
@@ -796,7 +908,91 @@ impl RawContentRegexIndex {
             .filter_map(|p| pattern_map.get(p).cloned())
             .collect();
 
-        // Try to build the regex set.
+        // Extract literal prefixes for Aho-Corasick pre-filtering
+        // Separate case-sensitive and case-insensitive patterns
+        let mut cs_literal_prefixes: Vec<String> = Vec::new();
+        let mut cs_literal_to_patterns: Vec<Vec<usize>> = Vec::new();
+        let mut cs_literal_map: FxHashMap<String, usize> = FxHashMap::default();
+        let mut ci_literal_prefixes: Vec<String> = Vec::new();
+        let mut ci_literal_to_patterns: Vec<Vec<usize>> = Vec::new();
+        let mut ci_literal_map: FxHashMap<String, usize> = FxHashMap::default();
+        let mut patterns_without_literals: Vec<usize> = Vec::new();
+
+        for (pattern_idx, pattern) in pattern_strs.iter().enumerate() {
+            // Check if pattern is case-insensitive (starts with (?i))
+            let is_case_insensitive = pattern.starts_with("(?i)");
+
+            if let Some(literal) = StringMatchIndex::extract_regex_literal(pattern) {
+                if is_case_insensitive {
+                    // Case-insensitive: lowercase the literal for matching
+                    let lower_literal = literal.to_lowercase();
+                    if let Some(&literal_idx) = ci_literal_map.get(&lower_literal) {
+                        ci_literal_to_patterns[literal_idx].push(pattern_idx);
+                    } else {
+                        let literal_idx = ci_literal_prefixes.len();
+                        ci_literal_map.insert(lower_literal.clone(), literal_idx);
+                        ci_literal_prefixes.push(lower_literal);
+                        ci_literal_to_patterns.push(vec![pattern_idx]);
+                    }
+                } else {
+                    // Case-sensitive: use literal as-is
+                    if let Some(&literal_idx) = cs_literal_map.get(&literal) {
+                        cs_literal_to_patterns[literal_idx].push(pattern_idx);
+                    } else {
+                        let literal_idx = cs_literal_prefixes.len();
+                        cs_literal_map.insert(literal.clone(), literal_idx);
+                        cs_literal_prefixes.push(literal);
+                        cs_literal_to_patterns.push(vec![pattern_idx]);
+                    }
+                }
+            } else {
+                // No extractable literal - must always run this pattern
+                patterns_without_literals.push(pattern_idx);
+            }
+        }
+
+        // Build case-sensitive Aho-Corasick automaton
+        let cs_literal_prefilter = if !cs_literal_prefixes.is_empty() {
+            AhoCorasick::builder()
+                .ascii_case_insensitive(false)
+                .build(&cs_literal_prefixes)
+                .ok()
+        } else {
+            None
+        };
+
+        // Build case-insensitive Aho-Corasick automaton
+        let ci_literal_prefilter = if !ci_literal_prefixes.is_empty() {
+            AhoCorasick::builder()
+                .ascii_case_insensitive(true)
+                .build(&ci_literal_prefixes)
+                .ok()
+        } else {
+            None
+        };
+
+        // Pre-compile individual regexes for patterns WITH literals (used after Aho-Corasick match)
+        let individual_regexes: Vec<Option<regex::Regex>> = pattern_strs
+            .iter()
+            .map(|p| regex::Regex::new(p).ok())
+            .collect();
+
+        // Build smaller RegexSet for ONLY patterns without extractable literals
+        let no_literal_patterns: Vec<&str> = patterns_without_literals
+            .iter()
+            .filter_map(|&idx| pattern_strs.get(idx).map(|s| s.as_str()))
+            .collect();
+        let no_literal_to_original: Vec<usize> = patterns_without_literals.clone();
+        let no_literal_regex_set = if !no_literal_patterns.is_empty() {
+            RegexSetBuilder::new(&no_literal_patterns)
+                .size_limit(100 * 1024 * 1024)
+                .build()
+                .ok()
+        } else {
+            None
+        };
+
+        // Try to build the full regex set (kept for fallback).
         match RegexSetBuilder::new(&pattern_strs)
             .size_limit(100 * 1024 * 1024)
             .build()
@@ -805,6 +1001,14 @@ impl RawContentRegexIndex {
                 regex_set,
                 pattern_to_traits: pattern_to_traits.clone(),
                 patterns: pattern_strs,
+                individual_regexes,
+                no_literal_regex_set,
+                no_literal_to_original,
+                cs_literal_prefilter,
+                cs_literal_to_patterns,
+                ci_literal_prefilter,
+                ci_literal_to_patterns,
+                patterns_without_literals,
             })),
             Err(e) => {
                 // RegexSet creation failed. Find invalid patterns and report them as errors.
@@ -850,7 +1054,8 @@ impl RawContentRegexIndex {
         self.indexed_traits.contains(&trait_idx)
     }
 
-    /// Find matches using only patterns applicable to the given file type
+    /// Find matches using only patterns applicable to the given file type.
+    /// Uses Aho-Corasick literal prefix pre-filtering to skip RegexSet when possible.
     pub(crate) fn find_matches(
         &self,
         binary_data: &[u8],
@@ -858,27 +1063,20 @@ impl RawContentRegexIndex {
     ) -> FxHashSet<usize> {
         let mut matching_traits = FxHashSet::default();
 
+        // Convert to string once (this is expensive for large files)
         let content = String::from_utf8_lossy(binary_data);
 
-        // Match universal patterns
+        // Match universal patterns (with literal pre-filtering)
         if let Some(ref universal) = self.universal {
-            for pattern_idx in universal.regex_set.matches(&content).iter() {
-                if let Some(trait_indices) = universal.pattern_to_traits.get(pattern_idx) {
-                    for &trait_idx in trait_indices {
-                        matching_traits.insert(trait_idx);
-                    }
-                }
+            for trait_idx in universal.find_matches(&content) {
+                matching_traits.insert(trait_idx);
             }
         }
 
-        // Match file-type-specific patterns
+        // Match file-type-specific patterns (with literal pre-filtering)
         if let Some(ft_set) = self.by_file_type.get(file_type) {
-            for pattern_idx in ft_set.regex_set.matches(&content).iter() {
-                if let Some(trait_indices) = ft_set.pattern_to_traits.get(pattern_idx) {
-                    for &trait_idx in trait_indices {
-                        matching_traits.insert(trait_idx);
-                    }
-                }
+            for trait_idx in ft_set.find_matches(&content) {
+                matching_traits.insert(trait_idx);
             }
         }
 
@@ -940,8 +1138,14 @@ mod tests {
             StringMatchIndex::extract_regex_literal("ab.*"),
             Some("ab.".to_string())
         );
-        // Starts with metachar, returns None
-        assert_eq!(StringMatchIndex::extract_regex_literal(".*test"), None);
+        // Starts with .* but has literal after - now extracts the literal
+        assert_eq!(
+            StringMatchIndex::extract_regex_literal(".*test"),
+            Some("test".to_string())
+        );
+        // Truly no literal
+        assert_eq!(StringMatchIndex::extract_regex_literal(".*"), None);
+        assert_eq!(StringMatchIndex::extract_regex_literal(".*.*"), None);
     }
 
     #[test]
@@ -1002,8 +1206,12 @@ mod tests {
 
     #[test]
     fn test_extract_regex_literal_starts_with_metachar() {
-        // Pattern starting with metachar should return None
-        assert_eq!(StringMatchIndex::extract_regex_literal(".*hello"), None);
+        // Pattern starting with .* extracts literal after the prefix
+        assert_eq!(
+            StringMatchIndex::extract_regex_literal(".*hello"),
+            Some("hello".to_string())
+        );
+        // Pattern starting with other metachars returns None
         assert_eq!(StringMatchIndex::extract_regex_literal("[a-z]+"), None);
         assert_eq!(StringMatchIndex::extract_regex_literal("(foo|bar)"), None);
     }

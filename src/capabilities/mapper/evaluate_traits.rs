@@ -342,7 +342,7 @@ impl super::CapabilityMapper {
             cached_ast,
             inline_yara,
             dependent_only,
-            &raw_regex_matches,
+            Some(&raw_regex_matches),
         )
     }
 
@@ -356,7 +356,7 @@ impl super::CapabilityMapper {
         cached_ast: Option<&tree_sitter::Tree>,
         inline_yara: Option<&HashMap<String, Vec<Evidence>>>,
         dependent_only: bool,
-        raw_regex_matches: &FxHashSet<usize>,
+        raw_regex_matches: Option<&FxHashSet<usize>>,
     ) -> Vec<Finding> {
         // Determine file type from report
         let file_type = self.detect_file_type(&report.target.file_type);
@@ -437,14 +437,13 @@ impl super::CapabilityMapper {
         let regex_candidates = self.string_match_index.find_regex_candidates(&all_strings);
 
         // Use pre-computed raw regex matches (passed in from caller)
-        let raw_regex_prefilter_enabled = !raw_regex_matches.is_empty()
-            || (self.raw_content_regex_index.has_patterns()
-                && self
-                    .raw_content_regex_index
-                    .has_applicable_patterns(&filtered_indices));
+        // Some(set) = prefilter was run (set may be empty if nothing matched)
+        // None = prefilter was skipped (e.g., file too large)
+        // Only enable prefilter-based skipping when prefilter was actually run
+        let raw_regex_prefilter_enabled = raw_regex_matches.is_some();
 
         let has_any_matches = !string_matched_traits.is_empty()
-            || !raw_regex_matches.is_empty()
+            || raw_regex_matches.map_or(false, |s| !s.is_empty())
             || !regex_candidates.is_empty();
 
         // For dependent traits, we can't skip based on string matches alone
@@ -567,7 +566,7 @@ impl super::CapabilityMapper {
                     if has_content_regex
                         && raw_regex_prefilter_enabled
                         && self.raw_content_regex_index.is_indexed_trait(idx)
-                        && !raw_regex_matches.contains(&idx)
+                        && raw_regex_matches.map_or(false, |s| !s.contains(&idx))
                     {
                         return None;
                     }

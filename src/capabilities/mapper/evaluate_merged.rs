@@ -18,16 +18,18 @@ impl super::CapabilityMapper {
     /// This is expensive (converts entire binary to string and runs regex set)
     /// so we do it once and pass to all trait evaluation calls.
     ///
+    /// Returns `Some(matches)` if prefilter was run (even if empty - means nothing matched).
+    /// Returns `None` if prefilter was skipped (e.g., file too large).
+    ///
     /// For files > 1MB, skip this optimization as the cost of running 2500+ regexes
-    /// against a multi-MB string exceeds the benefit. Individual trait evaluation
-    /// will still work, just without pre-filtering.
+    /// against a multi-MB string exceeds the benefit.
     fn precompute_raw_regex_matches(
         &self,
         binary_data: &[u8],
         file_type: &RuleFileType,
-    ) -> FxHashSet<usize> {
+    ) -> Option<FxHashSet<usize>> {
         // Skip for large files - the regex matching is O(patterns * size) and becomes
-        // a bottleneck for multi-MB binaries. Empty result means no pre-filtering;
+        // a bottleneck for multi-MB binaries. None means prefilter skipped;
         // traits will evaluate their conditions individually.
         const MAX_SIZE_FOR_REGEX_PREFILTER: usize = 1024 * 1024; // 1MB
         if binary_data.len() > MAX_SIZE_FOR_REGEX_PREFILTER {
@@ -36,7 +38,7 @@ impl super::CapabilityMapper {
                 binary_data.len(),
                 MAX_SIZE_FOR_REGEX_PREFILTER
             );
-            return FxHashSet::default();
+            return None;
         }
 
         let t_start = std::time::Instant::now();
@@ -51,7 +53,7 @@ impl super::CapabilityMapper {
             elapsed,
             result.len()
         );
-        result
+        Some(result)
     }
     /// Evaluate all rules (atomic traits + composite rules) and merge findings into the report.
     /// This is the correct, foolproof way to evaluate traits that ensures evidence propagates
@@ -90,7 +92,9 @@ impl super::CapabilityMapper {
 
         // Pre-compute raw regex matches ONCE (expensive: converts binary to string, runs regex set)
         // This is passed to all trait evaluation calls to avoid recomputing
+        // Returns Some(matches) if run, None if skipped (file too large)
         let raw_regex_matches = self.precompute_raw_regex_matches(binary_data, &file_type);
+        let raw_regex_matches_ref = raw_regex_matches.as_ref();
 
         // Build a seen-IDs set once from existing report findings, then keep it up-to-date
         // as we merge — O(1) per lookup instead of O(n) linear scan.
@@ -104,7 +108,7 @@ impl super::CapabilityMapper {
             cached_ast,
             inline_yara,
             false,
-            &raw_regex_matches,
+            raw_regex_matches_ref,
         );
 
         // Merge independent findings into report
@@ -126,7 +130,7 @@ impl super::CapabilityMapper {
                 cached_ast,
                 inline_yara,
                 true,
-                &raw_regex_matches,
+                raw_regex_matches_ref,
             );
 
             if dependent_findings.is_empty() {

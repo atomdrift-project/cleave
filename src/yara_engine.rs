@@ -149,9 +149,6 @@ impl YaraEngine {
         // Count actual compiled rules (not source files)
         let actual_rule_count = rules.iter().count();
 
-        // Print rule count on same line as banner (banner used eprint without newline)
-        eprintln!(" • {} rules compiled\n", actual_rule_count);
-
         self.rules = Some(rules);
 
         // Save to cache for next time
@@ -1189,31 +1186,6 @@ const CACHE_MAGIC: &[u8; 4] = b"YARC";
 const CACHE_VERSION: u32 = 5;
 const CACHE_HEADER_SIZE: usize = 4 + 4 + 8 + 8 + 8 + 8 + 8 + 8; // 56 bytes
 
-/// Quickly peek at the cache to get the rule count without loading rules.
-/// Returns None if cache is missing, invalid, or wrong version.
-#[must_use]
-pub fn peek_cache_rule_count(enable_third_party: bool) -> Option<usize> {
-    let cache_path = crate::cache::yara_cache_path(enable_third_party).ok()?;
-    let file = std::fs::File::open(&cache_path).ok()?;
-    let mut header = [0u8; CACHE_HEADER_SIZE];
-
-    use std::io::Read;
-    let mut reader = std::io::BufReader::new(file);
-    reader.read_exact(&mut header).ok()?;
-
-    // Validate magic and version
-    if &header[0..4] != CACHE_MAGIC {
-        return None;
-    }
-    let version = u32::from_le_bytes(header[4..8].try_into().ok()?);
-    if version != CACHE_VERSION {
-        return None;
-    }
-
-    // rule_count is at offset 24 (after magic + version + builtin + third_party)
-    let rule_count = u64::from_le_bytes(header[24..32].try_into().ok()?) as usize;
-    Some(rule_count)
-}
 
 impl Default for YaraEngine {
     fn default() -> Self {

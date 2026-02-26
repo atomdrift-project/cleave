@@ -19,7 +19,7 @@ This sample was detected. Validate completeness:
 {{end}}
 ### 2. Gap Analysis
 
-Review `{{.GapAnalysisPath}}` (create/update if needed). Does cleave detect: C2 patterns? Persistence? Exfil? Obfuscation? Structural anomalies?
+Review `{{.GapAnalysisPath}}` (create/update if needed). Does cleave detect every capability and unique characteristic of this binary? If not, improve the traits so that it can.
 
 ### 3. Audit All Findings
 
@@ -90,7 +90,7 @@ Read RULES.md for trait syntax.
 ### Well-Known Malware (`well-known/`)
 - For infamous malware families, add signature rules here
 
-**Rules**: Edit only .yaml files. Prefer fixing over deleting. YAML changes apply immediately.
+Prefer fixing rules over deleting them. YAML changes apply immediately.
 
 ### Validate
 ```bash

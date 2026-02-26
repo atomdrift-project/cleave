@@ -44,7 +44,7 @@ Read `{{.ReportPath}}` to understand the malware, then proceed to gap analysis.
 
 ```bash
 {{.CleaveBin}} strings {{.Path}}
-{{.CleaveBin}} --validate=true --format jsonl {{.Path}}
+{{.CleaveBin}} --format jsonl {{.Path}}
 ```
 
 Use rizin or Ghidra for control flow, API calls, and obfuscation analysis.
@@ -94,8 +94,8 @@ Read RULES.md for trait syntax.
 
 ### Validate
 ```bash
-{{.CleaveBin}} --validate=true --format jsonl {{.Path}}
-{{.CleaveBin}} --validate=true --format jsonl /bin/ls /bin/bash /usr/bin/curl # False positive check
+{{.CleaveBin}} --format jsonl {{.Path}}
+{{.CleaveBin}} --format jsonl /bin/ls /bin/bash /usr/bin/curl # False positive check
 ```
 
 {{if .MayBeBenign}}

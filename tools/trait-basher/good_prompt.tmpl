@@ -22,7 +22,7 @@
 ### 1. Understand the File
 ```bash
 {{.CleaveBin}} strings {{.Path}}
-{{.CleaveBin}} --validate=true --format jsonl {{.Path}}
+{{.CleaveBin}} --format jsonl {{.Path}}
 ```
 
 ### 2. Evaluate {{if .IsValidationSample}}All{{else}}Each{{end}} Finding
@@ -62,8 +62,8 @@ unless:
 ### 4. Validate
 
 ```bash
-{{.CleaveBin}} --validate=true --format jsonl {{.Path}}
-{{.CleaveBin}} --validate=true --format jsonl /bin/ls /bin/bash /usr/bin/curl # Check for regressions
+{{.CleaveBin}} --format jsonl {{.Path}}
+{{.CleaveBin}} --format jsonl /bin/ls /bin/bash /usr/bin/curl # Check for regressions
 ```
 
 Confirm:

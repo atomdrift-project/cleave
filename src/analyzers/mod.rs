@@ -1137,10 +1137,7 @@ impl FileType {
             | FileType::Rtf
             | FileType::Lnk
             | FileType::Png => true, // PNG included for steganography detection
-            FileType::Archive
-            | FileType::Unknown
-            | FileType::Jpeg
-            | FileType::Certificate => false, // Skip other images and unknown files by default in dir scans
+            FileType::Archive | FileType::Unknown | FileType::Jpeg | FileType::Certificate => false, // Skip other images and unknown files by default in dir scans
         }
     }
 

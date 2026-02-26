@@ -21,12 +21,12 @@ use crate::capabilities::validation::{
     find_hostile_meta_rules, find_impossible_count_constraints, find_impossible_needs,
     find_impossible_size_constraints, find_invalid_trait_ids, find_line_number,
     find_malware_subcategory_violations, find_missing_search_patterns, find_non_capturing_groups,
-    find_overlapping_conditions, find_oversized_trait_directories, find_parent_duplicate_segments,
-    find_platform_named_directories, find_pure_alias_traits, find_redundant_any_refs,
-    find_redundant_needs_one, find_short_pattern_warnings, find_single_item_clauses,
-    find_slow_regex_patterns, find_string_content_collisions, find_string_pattern_duplicates,
-    precalculate_all_composite_precisions, simple_rule_to_composite_rule,
-    validate_composite_trait_only, validate_directory_structure,
+    find_orphaned_components, find_overlapping_conditions, find_oversized_trait_directories,
+    find_parent_duplicate_segments, find_platform_named_directories, find_pure_alias_traits,
+    find_redundant_any_refs, find_redundant_needs_one, find_short_pattern_warnings,
+    find_single_item_clauses, find_slow_regex_patterns, find_string_content_collisions,
+    find_string_pattern_duplicates, precalculate_all_composite_precisions,
+    simple_rule_to_composite_rule, validate_composite_trait_only, validate_directory_structure,
     validate_hostile_composite_precision, MAX_TRAITS_PER_DIRECTORY,
 };
 use crate::composite_rules::{
@@ -1935,6 +1935,40 @@ impl super::CapabilityMapper {
                 warnings.push(format!(
                     "{} traits are pure aliases with no added value",
                     pure_aliases.len()
+                ));
+            }
+
+            // Validate: orphaned component traits not referenced by any rule
+            let orphaned_components =
+                find_orphaned_components(&trait_definitions, &composite_rules, &rule_source_files);
+            if !orphaned_components.is_empty() {
+                eprintln!(
+                    "\n⚠️  WARNING: {} component traits are never referenced",
+                    orphaned_components.len()
+                );
+                eprintln!(
+                    "   Component traits (crit: component) are building blocks that should only exist"
+                );
+                eprintln!(
+                    "   to be referenced by composite rules or via `if: id:` in other traits."
+                );
+                eprintln!("   These components are orphaned and serve no purpose:\n");
+                for (trait_id, source_file) in &orphaned_components {
+                    let line_hint = find_line_number(source_file, trait_id);
+                    if let Some(line) = line_hint {
+                        eprintln!("   {}:{}: '{}'", source_file, line, trait_id);
+                    } else {
+                        eprintln!("   {}: '{}'", source_file, trait_id);
+                    }
+                }
+                eprintln!();
+                eprintln!(
+                    "   Add it as a dependent trait within a composite rule, or delete the rule."
+                );
+                eprintln!();
+                warnings.push(format!(
+                    "{} component traits are orphaned (not referenced by any rule)",
+                    orphaned_components.len()
                 ));
             }
 

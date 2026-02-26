@@ -44,9 +44,9 @@ use std::sync::OnceLock;
 use std::time::Duration;
 use tracing::{debug, trace, warn};
 
-/// Default timeout for rizin subprocess execution (60 seconds).
+/// Default timeout for rizin subprocess execution (120 seconds).
 /// This prevents hung processes from accumulating during archive analysis.
-const RIZIN_DEFAULT_TIMEOUT_SECS: u64 = 60;
+const RIZIN_DEFAULT_TIMEOUT_SECS: u64 = 120;
 
 /// Global flag to disable radare2 analysis
 static RADARE2_DISABLED: AtomicBool = AtomicBool::new(false);
@@ -109,10 +109,7 @@ pub(crate) fn log_rizin_stats() {
 /// # Returns
 /// * `Ok(Output)` - The process output
 /// * `Err` - If the process times out or fails to execute
-fn execute_rizin_with_timeout(
-    args: &[&str],
-    timeout: Duration,
-) -> Result<std::process::Output> {
+fn execute_rizin_with_timeout(args: &[&str], timeout: Duration) -> Result<std::process::Output> {
     use std::io::Read;
 
     RIZIN_TOTAL_CALLS.fetch_add(1, Ordering::Relaxed);
@@ -202,10 +199,7 @@ fn execute_rizin_with_timeout(
                     // Log statistics on timeout
                     log_rizin_stats();
 
-                    anyhow::bail!(
-                        "Rizin process timed out after {}s",
-                        timeout.as_secs()
-                    );
+                    anyhow::bail!("Rizin process timed out after {}s", timeout.as_secs());
                 }
 
                 // Still within timeout, sleep briefly and retry
@@ -213,7 +207,10 @@ fn execute_rizin_with_timeout(
             }
             Err(e) => {
                 RIZIN_FAILURES.fetch_add(1, Ordering::Relaxed);
-                return Err(anyhow::anyhow!("Failed to check rizin process status: {}", e));
+                return Err(anyhow::anyhow!(
+                    "Failed to check rizin process status: {}",
+                    e
+                ));
             }
         }
     }
@@ -258,9 +255,12 @@ impl Radare2Analyzer {
         let output = execute_rizin_with_timeout(
             &[
                 "-q",
-                "-e", "scr.color=0",
-                "-e", "log.level=0",
-                "-c", "iij; echo SEPARATOR; iEj; echo SEPARATOR; isj",
+                "-e",
+                "scr.color=0",
+                "-e",
+                "log.level=0",
+                "-c",
+                "iij; echo SEPARATOR; iEj; echo SEPARATOR; isj",
                 &file_path_str,
             ],
             timeout,
@@ -305,10 +305,7 @@ impl Radare2Analyzer {
         let file_path_str = file_path.to_string_lossy();
         let timeout = Duration::from_secs(RIZIN_DEFAULT_TIMEOUT_SECS);
 
-        let output = execute_rizin_with_timeout(
-            &["-q", "-c", "iij", &file_path_str],
-            timeout,
-        )?;
+        let output = execute_rizin_with_timeout(&["-q", "-c", "iij", &file_path_str], timeout)?;
 
         if !output.status.success() {
             return Ok(Vec::new());
@@ -394,9 +391,12 @@ impl Radare2Analyzer {
         let output = execute_rizin_with_timeout(
             &[
                 "-q",
-                "-e", "scr.color=0",
-                "-e", "log.level=0",
-                "-c", command,
+                "-e",
+                "scr.color=0",
+                "-e",
+                "log.level=0",
+                "-c",
+                command,
                 &file_path_str,
             ],
             timeout,

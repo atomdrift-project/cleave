@@ -222,7 +222,10 @@ fn main() -> Result<()> {
             )
         } else if using_env_logging {
             // CLEAVE_FILE_LOGGING: warn to stderr, debug to file for comprehensive logging
-            (EnvFilter::new("cleave=warn"), EnvFilter::new("cleave=debug"))
+            (
+                EnvFilter::new("cleave=warn"),
+                EnvFilter::new("cleave=debug"),
+            )
         } else {
             // --log-file flag: warn to stderr, info to file
             (EnvFilter::new("cleave=warn"), EnvFilter::new("cleave=info"))
@@ -366,7 +369,11 @@ fn main() -> Result<()> {
         let total_rules = yara_count + trait_count + composite_count;
 
         if total_rules > 0 {
-            eprintln!("cleave v{} • {} rules\n", env!("CARGO_PKG_VERSION"), total_rules);
+            eprintln!(
+                "cleave v{} • {} rules\n",
+                env!("CARGO_PKG_VERSION"),
+                total_rules
+            );
         } else {
             eprint!(
                 "cleave v{} • Precompiling rules…",

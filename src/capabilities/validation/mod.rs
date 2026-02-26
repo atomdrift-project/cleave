@@ -120,8 +120,8 @@ pub(crate) use taxonomy::{
 // Logic constraint validation
 pub(crate) use constraints::{
     find_empty_condition_clauses, find_impossible_count_constraints, find_impossible_needs,
-    find_impossible_size_constraints, find_missing_search_patterns, find_pure_alias_traits,
-    find_redundant_needs_one,
+    find_impossible_size_constraints, find_missing_search_patterns, find_orphaned_components,
+    find_pure_alias_traits, find_redundant_needs_one,
 };
 
 // Utility functions

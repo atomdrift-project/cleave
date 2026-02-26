@@ -8,38 +8,14 @@ defaults:
   for: [javascript]
 
 traits:
-  - id: response-body-fragment-seB
-    desc: ResponseBody fragment (seB)
-    if:
-      type: string
-      exact: "seB"
-
-  - id: response-body-fragment-pon
-    desc: ResponseBody fragment (pon)
-    if:
-      type: string
-      exact: "pon"
-
   - id: save-to-file-fragment-oFil
     desc: SaveToFile fragment (oFil)
     if:
       type: string
       exact: "oFil"
 
-  - id: stream-fragment-eam
-    desc: Stream fragment (eam)
-    if:
-      type: string
-      exact: "eam"
-
   - id: stream-fragment-dotstr
     desc: .Stream fragment (.Str)
     if:
       type: string
       exact: ".Str"
-
-  - id: adodb-fragment-odb
-    desc: ADODB fragment (ODB)
-    if:
-      type: string
-      exact: "ODB"

@@ -337,13 +337,12 @@ impl YaraEngine {
             for (i, profiling_data) in slowest.iter().enumerate() {
                 let total =
                     profiling_data.condition_exec_time + profiling_data.pattern_matching_time;
-                eprintln!(
-                    "  {}. {:>6}ms  {}::{}",
-                    i + 1,
-                    total.as_millis(),
-                    profiling_data.namespace,
-                    profiling_data.rule
+                let trait_id = crate::third_party_yara::derive_trait_id(
+                    &profiling_data.namespace,
+                    &profiling_data.rule,
+                    None,
                 );
+                eprintln!("  {}. {:>6}ms  {}", i + 1, total.as_millis(), trait_id);
             }
             eprintln!();
         }

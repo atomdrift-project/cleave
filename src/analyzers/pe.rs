@@ -384,10 +384,7 @@ impl PEAnalyzer {
         tamper_findings.push(Finding {
             id: "objectives/anti-analysis/pe-tampering/corrupted-header".to_string(),
             kind: FindingKind::Structural,
-            desc: format!(
-                "PE header too corrupted to parse: {}",
-                parse_error
-            ),
+            desc: format!("PE header too corrupted to parse: {}", parse_error),
             conf: 1.0,
             crit: Criticality::Hostile,
             mbc: Some("B0001".to_string()), // Executable Code Obfuscation
@@ -811,7 +808,12 @@ impl PEAnalyzer {
     }
 
     /// Detect tampering within PE header area
-    fn detect_header_tampering(&self, data: &[u8], base_offset: usize, findings: &mut Vec<Finding>) {
+    fn detect_header_tampering(
+        &self,
+        data: &[u8],
+        base_offset: usize,
+        findings: &mut Vec<Finding>,
+    ) {
         if data.len() < 64 {
             return;
         }

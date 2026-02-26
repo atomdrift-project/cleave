@@ -12,3 +12,4 @@ composite_rules:
       - id: micro-behaviors/os/info/architecture::arch-x86
       - id: micro-behaviors/os/info/architecture::arch-sh4
       - id: micro-behaviors/os/info/architecture::arch-ppc
+      - id: micro-behaviors/os/info/architecture::arch-arc

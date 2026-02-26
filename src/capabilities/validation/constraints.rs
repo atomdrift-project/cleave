@@ -307,3 +307,174 @@ pub(crate) fn find_redundant_needs_one(composite_rules: &[CompositeTrait]) -> Ve
 
     violations
 }
+
+/// Find component traits that are never referenced by any composite rule or atomic trait.
+///
+/// Component traits (`crit: component`) are building blocks that should only exist to be
+/// referenced by composite rules or by other traits via `if: id:` form. If a component
+/// isn't referenced anywhere, it's "orphaned" and serves no purpose.
+///
+/// Returns: `Vec<(trait_id, source_file)>`
+#[must_use]
+pub(crate) fn find_orphaned_components(
+    trait_definitions: &[TraitDefinition],
+    composite_rules: &[CompositeTrait],
+    trait_source_files: &std::collections::HashMap<String, String>,
+) -> Vec<(String, String)> {
+    use crate::types::Criticality;
+    use std::collections::HashSet;
+
+    // Collect all component trait IDs
+    let component_ids: HashSet<&str> = trait_definitions
+        .iter()
+        .filter(|t| t.crit == Criticality::Component)
+        .map(|t| t.id.as_str())
+        .collect();
+
+    if component_ids.is_empty() {
+        return Vec::new();
+    }
+
+    // Collect all trait references from composite rules
+    let mut referenced_ids: HashSet<String> = HashSet::new();
+
+    for rule in composite_rules {
+        // Check all:, any:, none: clauses
+        for conditions in [rule.all.as_ref(), rule.any.as_ref(), rule.none.as_ref()]
+            .into_iter()
+            .flatten()
+        {
+            for condition in conditions {
+                if let Condition::Trait { id } = condition {
+                    // Handle both specific references (with ::) and directory references
+                    if id.contains("::") {
+                        referenced_ids.insert(id.clone());
+                    } else {
+                        // Directory reference - mark all traits in that directory as referenced
+                        let prefix = format!("{}::", id);
+                        for component_id in &component_ids {
+                            if component_id.starts_with(&prefix) {
+                                referenced_ids.insert((*component_id).to_string());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Also check unless: and downgrade: conditions
+        if let Some(unless_conditions) = &rule.unless {
+            for condition in unless_conditions {
+                if let Condition::Trait { id } = condition {
+                    if id.contains("::") {
+                        referenced_ids.insert(id.clone());
+                    } else {
+                        let prefix = format!("{}::", id);
+                        for component_id in &component_ids {
+                            if component_id.starts_with(&prefix) {
+                                referenced_ids.insert((*component_id).to_string());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if let Some(downgrade) = &rule.downgrade {
+            for conditions in [downgrade.any.as_ref(), downgrade.all.as_ref()]
+                .into_iter()
+                .flatten()
+            {
+                for condition in conditions {
+                    if let Condition::Trait { id } = condition {
+                        if id.contains("::") {
+                            referenced_ids.insert(id.clone());
+                        } else {
+                            let prefix = format!("{}::", id);
+                            for component_id in &component_ids {
+                                if component_id.starts_with(&prefix) {
+                                    referenced_ids.insert((*component_id).to_string());
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Collect trait references from atomic traits (if: id: form)
+    for trait_def in trait_definitions {
+        if let Condition::Trait { id } = &trait_def.r#if.condition {
+            if id.contains("::") {
+                referenced_ids.insert(id.clone());
+            } else if id.contains('/') {
+                // Directory reference
+                let prefix = format!("{}::", id);
+                for component_id in &component_ids {
+                    if component_id.starts_with(&prefix) {
+                        referenced_ids.insert((*component_id).to_string());
+                    }
+                }
+            }
+        }
+
+        // Also check unless: and downgrade: conditions on atomic traits
+        if let Some(unless_conditions) = &trait_def.unless {
+            for condition in unless_conditions {
+                if let Condition::Trait { id } = condition {
+                    if id.contains("::") {
+                        referenced_ids.insert(id.clone());
+                    } else {
+                        let prefix = format!("{}::", id);
+                        for component_id in &component_ids {
+                            if component_id.starts_with(&prefix) {
+                                referenced_ids.insert((*component_id).to_string());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if let Some(downgrade) = &trait_def.downgrade {
+            for conditions in [downgrade.any.as_ref(), downgrade.all.as_ref()]
+                .into_iter()
+                .flatten()
+            {
+                for condition in conditions {
+                    if let Condition::Trait { id } = condition {
+                        if id.contains("::") {
+                            referenced_ids.insert(id.clone());
+                        } else {
+                            let prefix = format!("{}::", id);
+                            for component_id in &component_ids {
+                                if component_id.starts_with(&prefix) {
+                                    referenced_ids.insert((*component_id).to_string());
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Find orphaned components (not in referenced set)
+    let mut orphans: Vec<(String, String)> = component_ids
+        .into_iter()
+        .filter(|id| !referenced_ids.contains(*id))
+        .map(|id| {
+            let source = trait_source_files
+                .get(id)
+                .cloned()
+                .unwrap_or_else(|| "unknown".to_string());
+            (id.to_string(), source)
+        })
+        .collect();
+
+    // Sort for deterministic output
+    orphans.sort_by(|a, b| a.0.cmp(&b.0));
+
+    orphans
+}

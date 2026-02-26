@@ -56,13 +56,6 @@ traits:
       type: hex
       pattern: "5D 00 00 (01|02|04|08|10|20|40|80) 00 FF FF FF FF FF FF FF FF 00"
 
-  - id: lzma-eh-frame-false-positive
-    desc: LZMA magic false positive in .eh_frame
-    crit: component
-    if:
-      type: hex
-      pattern: "5D 00 00"
-      section: ".eh_frame"
 
   - id: xz-magic
     desc: Embedded XZ compressed data

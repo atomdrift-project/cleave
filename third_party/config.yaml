@@ -42,10 +42,10 @@ sources:
 
 # Per-rule overrides (use trait ID format: third_party/vendor/path)
 overrides:
-  - id: third_party/R3c0nst/ATM/Malware/Atmspitter
+  - id: third_party/R3C0NST/ATM/Malware/Atmspitter
     disable: true
-    reason: "Slow rule (129ms)"
-  - id: third_party/R3c0nst/ATM/Malware/Dispenserxfs
+    reason: "Slow rule (193ms)"
+  - id: third_party/R3C0NST/ATM/Malware/Dispenserxfs
     disable: true
     reason: "Slow rule (153ms)"
   - id: third_party/TTC-CERT/cve_rules/EXPLOIT_cve_2022-30190/html_payload

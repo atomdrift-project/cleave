@@ -348,10 +348,7 @@ pub fn start_periodic_logging(interval: Duration) -> MemoryLoggerHandle {
                     // Log all statistics for post-mortem analysis
                     log_all_memory_stats();
                 } else if rss > WARNING_THRESHOLD {
-                    warn!(
-                        rss_gb = rss_gb,
-                        "WARNING: High memory usage detected"
-                    );
+                    warn!(rss_gb = rss_gb, "WARNING: High memory usage detected");
                     // Log stats when memory is high for debugging
                     log_all_memory_stats();
                 }

@@ -127,7 +127,10 @@ fn analyze_png_data(data: &[u8]) -> Option<PngMetrics> {
     let pixels = &pixels[..output_info.buffer_size()];
 
     // Calculate raw pixel size for compression ratio
-    let raw_size = (width as usize) * (height as usize) * (channels as usize) * (bit_depth as usize / 8).max(1);
+    let raw_size = (width as usize)
+        * (height as usize)
+        * (channels as usize)
+        * (bit_depth as usize / 8).max(1);
     let compression_ratio = if raw_size > 0 {
         data.len() as f32 / raw_size as f32
     } else {
@@ -148,7 +151,8 @@ fn analyze_png_data(data: &[u8]) -> Option<PngMetrics> {
     let histogram_flatness = calculate_histogram_flatness(pixels);
 
     // Calculate edge density (measure of visual structure)
-    let edge_density = calculate_edge_density(pixels, width as usize, height as usize, channels as usize);
+    let edge_density =
+        calculate_edge_density(pixels, width as usize, height as usize, channels as usize);
 
     Some(PngMetrics {
         width,
@@ -285,7 +289,11 @@ mod tests {
             }
         }
         let flatness = calculate_histogram_flatness(&data);
-        assert!(flatness > 0.95, "Uniform data should have high flatness: {}", flatness);
+        assert!(
+            flatness > 0.95,
+            "Uniform data should have high flatness: {}",
+            flatness
+        );
     }
 
     #[test]
@@ -293,7 +301,11 @@ mod tests {
         // All same values should have zero flatness
         let data = vec![128u8; 1000];
         let flatness = calculate_histogram_flatness(&data);
-        assert!(flatness < 0.01, "Constant data should have near-zero flatness: {}", flatness);
+        assert!(
+            flatness < 0.01,
+            "Constant data should have near-zero flatness: {}",
+            flatness
+        );
     }
 
     #[test]
@@ -301,7 +313,11 @@ mod tests {
         // Constant image has no edges
         let pixels = vec![128u8; 100 * 100 * 3]; // 100x100 RGB
         let density = calculate_edge_density(&pixels, 100, 100, 3);
-        assert!(density < 0.01, "Constant image should have near-zero edge density: {}", density);
+        assert!(
+            density < 0.01,
+            "Constant image should have near-zero edge density: {}",
+            density
+        );
     }
 
     #[test]
@@ -314,7 +330,11 @@ mod tests {
         }
         let density = calculate_edge_density(&pixels, 100, 100, 3);
         // Noise has SOME edges but not the structured edges of real images
-        assert!(density > 0.0 && density < 1.0, "Noise edge density: {}", density);
+        assert!(
+            density > 0.0 && density < 1.0,
+            "Noise edge density: {}",
+            density
+        );
     }
 
     #[test]

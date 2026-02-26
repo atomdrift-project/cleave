@@ -857,8 +857,8 @@ fn detect_inter_file_links(molecules: &[GalaxyMolecule]) -> Vec<InterFileLink> {
             let shared_root = stems_share_root(stem_a, stem_b);
 
             // Check 3: parent-child relationship (layered content)
-            let parent_child = mol_a.parent_id == Some(mol_b.file_id)
-                || mol_b.parent_id == Some(mol_a.file_id);
+            let parent_child =
+                mol_a.parent_id == Some(mol_b.file_id) || mol_b.parent_id == Some(mol_a.file_id);
 
             if b_in_a || a_in_b || shared_root || parent_child {
                 links.push(InterFileLink {

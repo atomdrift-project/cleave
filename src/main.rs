@@ -231,14 +231,10 @@ fn main() -> Result<()> {
         let total_rules = yara_count + trait_count + composite_count;
 
         if total_rules > 0 {
-            eprintln!(
-                "cleave v{} • {} rules\n",
-                env!("CARGO_PKG_VERSION"),
-                total_rules
-            );
+            eprintln!("cleave v{} • {} rules\n", env!("CARGO_PKG_VERSION"), total_rules);
         } else {
-            eprintln!(
-                "cleave v{} • Deep static analysis tool\n",
+            eprint!(
+                "cleave v{} • Precompiling rules…",
                 env!("CARGO_PKG_VERSION")
             );
         }

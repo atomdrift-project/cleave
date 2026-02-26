@@ -24,6 +24,9 @@ traits:
       pattern: "0F 05"
       count_min: 8
       per_kb_min: 0.03
+    unless:
+      - type: raw
+        substr: "BSJB"  # .NET IL bytecode contains 0F 05 sequences that aren't syscalls
 
   # Legacy x86 int 0x80 (CD 80)
   - id: int-80-instruction

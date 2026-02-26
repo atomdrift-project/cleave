@@ -95,11 +95,22 @@ impl GenericAnalyzer {
         content: &str,
         stng_strings: &[stng::ExtractedString],
     ) -> AnalysisReport {
-        self.analyze_source_internal(file_path, content, Some(stng_strings))
+        self.analyze_source_internal(file_path, content, Some(stng_strings), None)
     }
 
+    #[allow(dead_code)] // Used by embedded_code_detector
     fn analyze_source(&self, file_path: &Path, content: &str) -> AnalysisReport {
-        self.analyze_source_internal(file_path, content, None)
+        self.analyze_source_internal(file_path, content, None, None)
+    }
+
+    /// Analyze source with original bytes for accurate hash/size computation
+    fn analyze_source_with_bytes(
+        &self,
+        file_path: &Path,
+        content: &str,
+        original_bytes: &[u8],
+    ) -> AnalysisReport {
+        self.analyze_source_internal(file_path, content, None, Some(original_bytes))
     }
 
     fn analyze_source_internal(
@@ -107,6 +118,7 @@ impl GenericAnalyzer {
         file_path: &Path,
         content: &str,
         stng_strings: Option<&[stng::ExtractedString]>,
+        original_bytes: Option<&[u8]>,
     ) -> AnalysisReport {
         let start = std::time::Instant::now();
         tracing::info!(
@@ -114,11 +126,25 @@ impl GenericAnalyzer {
             file_path.display()
         );
 
+        // Use original bytes for hash/size if available, otherwise fall back to content
+        // This fixes incorrect hash/size when analyzing binary files as text
+        let (size_bytes, sha256) = if let Some(bytes) = original_bytes {
+            (
+                bytes.len() as u64,
+                crate::analyzers::utils::calculate_sha256(bytes),
+            )
+        } else {
+            (
+                content.len() as u64,
+                crate::analyzers::utils::calculate_sha256(content.as_bytes()),
+            )
+        };
+
         let target = TargetInfo {
             path: file_path.display().to_string(),
             file_type: self.file_type_str().to_string(),
-            size_bytes: content.len() as u64,
-            sha256: crate::analyzers::utils::calculate_sha256(content.as_bytes()),
+            size_bytes,
+            sha256,
             architectures: None,
         };
         tracing::info!("GenericAnalyzer: Target created in {:?}", start.elapsed());
@@ -408,7 +434,7 @@ impl Analyzer for GenericAnalyzer {
     fn analyze(&self, file_path: &Path) -> Result<AnalysisReport> {
         let bytes = fs::read(file_path).context("Failed to read file")?;
         let content = String::from_utf8_lossy(&bytes);
-        Ok(self.analyze_source(file_path, &content))
+        Ok(self.analyze_source_with_bytes(file_path, &content, &bytes))
     }
 
     fn can_analyze(&self, _file_path: &Path) -> bool {

@@ -143,6 +143,7 @@ traits:
     desc: Embedded RAR archive
     crit: notable
     conf: 0.6
+    for: [elf, pe, macho, -go, -rust]
     if:
       type: hex
       pattern: "52 61 72 21 1A 07"

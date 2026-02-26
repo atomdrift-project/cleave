@@ -530,7 +530,7 @@ pub(crate) fn eval_hex<'a>(
     let truncated = total_count >= MAX_COUNT_MATCHES;
     if truncated {
         if let Some(trait_id) = ctx.current_trait {
-            tracing::warn!(
+            tracing::debug!(
                 trait_id = %trait_id,
                 pattern = %pattern,
                 count = total_count,
@@ -538,7 +538,7 @@ pub(crate) fn eval_hex<'a>(
                 "Hex pattern has excessive matches, count truncated"
             );
         } else {
-            tracing::warn!(
+            tracing::debug!(
                 pattern = %pattern,
                 count = total_count,
                 limit = MAX_COUNT_MATCHES,

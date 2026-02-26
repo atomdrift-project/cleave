@@ -95,7 +95,7 @@ traits:
     attack: "T1564.003"
     if:
       type: raw
-      regex: '(?i)powershell[^\n]{0,30}-w\s+h(?:idden)?'
+      regex: '(?i)powershell[^\n]{0,30}-w\s+h(idden)?'
 
 composite_rules:
   # fodhelper UAC bypass composite

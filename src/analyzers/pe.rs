@@ -382,7 +382,7 @@ impl PEAnalyzer {
 
         // Add a hostile finding for the corrupted PE
         tamper_findings.push(Finding {
-            id: "anti-analysis/pe-tampering/corrupted-header".to_string(),
+            id: "objectives/anti-analysis/pe-tampering/corrupted-header".to_string(),
             kind: FindingKind::Structural,
             desc: format!(
                 "PE header too corrupted to parse: {}",
@@ -754,7 +754,7 @@ impl PEAnalyzer {
             };
 
             findings.push(Finding {
-                id: "anti-analysis/pe-tampering/junk-prefix".to_string(),
+                id: "objectives/anti-analysis/pe-tampering/junk-prefix".to_string(),
                 kind: FindingKind::Structural,
                 desc: format!(
                     "PE has {} bytes prepended before MZ header (anti-analysis)",
@@ -786,7 +786,7 @@ impl PEAnalyzer {
         // No MZ found - check for BSJB (.NET) signature without valid PE
         if let Some(bsjb_offset) = self.find_signature(data, b"BSJB") {
             findings.push(Finding {
-                id: "anti-analysis/pe-tampering/dotnet-invalid-pe".to_string(),
+                id: "objectives/anti-analysis/pe-tampering/dotnet-invalid-pe".to_string(),
                 kind: FindingKind::Structural,
                 desc: ".NET assembly (BSJB signature) with corrupted/missing PE header".to_string(),
                 conf: 0.95,
@@ -828,7 +828,7 @@ impl PEAnalyzer {
             // Skip 0x00 (common in headers) and check if any byte is >40% of header
             if byte_val != 0 && count > header_len * 2 / 5 {
                 findings.push(Finding {
-                    id: "anti-analysis/pe-tampering/byte-injection".to_string(),
+                    id: "objectives/anti-analysis/pe-tampering/byte-injection".to_string(),
                     kind: FindingKind::Structural,
                     desc: format!(
                         "PE header has excessive 0x{:02X} bytes ({} of {} = {:.1}%)",
@@ -862,7 +862,7 @@ impl PEAnalyzer {
                 let sig = &data[pe_sig_offset..pe_sig_offset + 4];
                 if sig != b"PE\x00\x00" {
                     findings.push(Finding {
-                        id: "anti-analysis/pe-tampering/pe-signature-corrupted".to_string(),
+                        id: "objectives/anti-analysis/pe-tampering/pe-signature-corrupted".to_string(),
                         kind: FindingKind::Structural,
                         desc: format!(
                             "PE signature corrupted: expected PE\\x00\\x00, got {:02X} {:02X} {:02X} {:02X}",

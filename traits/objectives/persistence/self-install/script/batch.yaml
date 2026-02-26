@@ -37,7 +37,7 @@ traits:
       type: raw
       regex: '(?i)%ProgramData%[\\\/]'
 
-  # Output suppression (>nul, 2>&1, etc.)
+  # Output suppression (>nul redirects stdout to null device)
   - id: batch-output-suppression
     desc: Output suppression (hiding activity)
     crit: notable
@@ -45,7 +45,7 @@ traits:
     attack: "T1564.003"
     if:
       type: raw
-      regex: '(?i)>\s*nul|2>&1'
+      regex: '(?i)>\s*nul'
       count_min: 2
 
 composite_rules:

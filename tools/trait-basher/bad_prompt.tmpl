@@ -95,8 +95,9 @@ Read RULES.md for trait syntax.
 ### Validate
 ```bash
 {{.CleaveBin}} --validate=true --format jsonl {{.Path}}
-{{.CleaveBin}} --validate=true --format jsonl /bin/ls /bin/bash  # False positive check
+{{.CleaveBin}} --validate=true --format jsonl /bin/ls /bin/bash /usr/bin/curl # False positive check
 ```
+
 {{if .MayBeBenign}}
 **If actually benign**: `touch {{.BenignMarkerPath}}`
 {{end}}

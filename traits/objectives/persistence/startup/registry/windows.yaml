@@ -29,8 +29,8 @@ traits:
     platforms: [windows]
     if:
       type: string
-      # Matches both escaped and unescaped path separators
-      regex: "AppData\\\\{1,2}Roaming\\\\{1,2}Microsoft\\\\{1,2}Windows\\\\{1,2}Start Menu\\\\{1,2}Programs\\\\{1,2}Startup"
+      # Matches Roaming path leading to Startup folder
+      regex: "Roaming.{1,50}Programs.{1,20}Startup"
 
   - id: shell-startup
     desc: shell:startup special folder

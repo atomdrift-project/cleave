@@ -48,10 +48,10 @@ traits:
       type: string
       regex: '(cmd\.(uploadFile|downloadFile|Upload|Download))'
 
-  # XOR encoding for C2 comms
+  # XOR operations (can be used for C2 comms or benign TLS)
   - id: go-xor-encoding
-    desc: Go XOR encoding for C2
-    crit: notable
+    desc: Go XOR stream operations
+    crit: component
     conf: 0.85
     if:
       type: string

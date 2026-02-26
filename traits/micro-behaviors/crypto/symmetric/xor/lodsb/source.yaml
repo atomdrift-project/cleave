@@ -1,6 +1,6 @@
 # Assembly Source XOR Decryption Loops
 defaults:
-  for: [all]
+  for: [all, -elf, -pe, -macho, -dll]
 traits:
   - id: asm-lodsb
     desc: Assembly LODSB

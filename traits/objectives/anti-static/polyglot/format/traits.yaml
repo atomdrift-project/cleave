@@ -68,7 +68,7 @@ traits:
     desc: Data before JAR/ZIP header
     crit: notable
     conf: 0.8
-    for: [all]
+    for: [all, -go, -rust]
     if:
       type: hex
       pattern: "50 4B 03 04"

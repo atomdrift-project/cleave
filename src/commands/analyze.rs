@@ -329,18 +329,11 @@ fn analyze_file_with_context(
 ) -> Result<String> {
     let path = Path::new(target);
 
-    // Status messages go to stderr (only in terminal mode)
-    if *format == cli::OutputFormat::Terminal {
-        eprintln!("Analyzing: {}", target);
-    }
     tracing::info!("Starting analysis of {}", target);
 
     // Detect file type first (fast - just reads magic bytes)
     tracing::debug!("Detecting file type");
     let file_type = detect_file_type(path)?;
-    if *format == cli::OutputFormat::Terminal {
-        eprintln!("Detected file type: {:?}", file_type);
-    }
     tracing::info!("File type: {:?}", file_type);
 
     // Use pre-loaded YARA engine and capability mapper from context

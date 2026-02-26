@@ -22,6 +22,7 @@ traits:
     desc: prctl syscall instruction (x86_64)
     crit: notable
     conf: 0.9
+    for: [elf, -go]
     if:
       type: hex
       pattern: "B8 9D 00 00 00"

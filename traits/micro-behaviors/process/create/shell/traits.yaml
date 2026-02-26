@@ -38,6 +38,7 @@ composite_rules:
     any:
       - id: micro-behaviors/process/create/shell::go-os-exec
       - id: micro-behaviors/process/create/shell/lang::exec-cmd-run
+      - id: micro-behaviors/process/create/shell/lang::pipe-redirection
 
   - id: shell-symbols
     desc: Shell execution symbols

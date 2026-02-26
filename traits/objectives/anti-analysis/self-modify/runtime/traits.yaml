@@ -60,7 +60,7 @@ traits:
       type: hex
       pattern: "90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90"
     unless:
-      - id: metadata/language/go
+      - id: metadata/compiler::go-binary
 
   # === Hook installation (atomic) ===
   - id: inline-hook-ref

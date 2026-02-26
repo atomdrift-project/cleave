@@ -44,6 +44,9 @@ traits:
       type: hex
       section: text
       pattern: "00 [256-512]"  # 256-512 byte gap of nulls
+    unless:
+      - type: raw
+        substr: "BSJB"  # .NET assemblies have normal null padding in IL sections
 
   # Repeated INT3 instructions (0xCC) - debugger breakpoint padding
   # MSVC uses CC padding for 16-byte function alignment; require high density
@@ -81,7 +84,7 @@ traits:
       pattern: "90"
       per_kb_min: 100.0  # 100+ NOPs per KB is unusual
     unless:
-      - id: metadata/language/go  # Go uses NOPs for alignment
+      - id: metadata/compiler::go-binary  # Go uses NOPs for alignment
 
   # === Low Entropy in Executable Sections ===
 
@@ -117,7 +120,7 @@ traits:
       executable: true
       length_min: 1048576  # 1MB+ executable section
     unless:
-      - id: metadata/language/go  # Go binaries are large
+      - id: metadata/compiler::go-binary  # Go binaries are large
 
 composite_rules:
   # Code cave with null padding

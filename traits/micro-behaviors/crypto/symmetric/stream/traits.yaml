@@ -5,6 +5,14 @@ defaults:
   for: [all]
 
 traits:
+  - id: go-chacha8rand
+    desc: Go 1.22+ internal chacha8rand
+    crit: baseline
+    conf: 1.0
+    if:
+      type: string
+      substr: "internal/chacha8rand"
+
   # ChaCha20/Salsa20 magic constant
   - id: chacha-salsa-constant
     desc: ChaCha20/Salsa20 cipher constant
@@ -13,6 +21,9 @@ traits:
     if:
       type: string
       substr: "expand 32-byte k"
+    downgrade:
+      any:
+        - id: go-chacha8rand
 
   # Rust stream cipher block assertions
   - id: rust-cipher-partial-block

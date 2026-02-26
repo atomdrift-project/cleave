@@ -11,6 +11,8 @@
 //! - `--json`: Full JSON report
 //! - `--summary`: Quick classification only
 
+#[allow(unused_imports)] // Used by binary target via format_human_single
+use crate::malecule_bridge;
 use crate::types::{AnalysisReport, Criticality, Finding};
 use anyhow::Result;
 use colored::Colorize;
@@ -162,6 +164,19 @@ fn split_trait_id(id: &str) -> (String, String) {
         (parts[start_idx].to_string(), parts[start_idx].to_string())
     } else {
         (id.to_string(), id.to_string())
+    }
+}
+
+/// Get sort order for namespace (fixed order: well-known, objectives, micro-behaviors, metadata, third-party)
+#[allow(dead_code)] // Used by binary target
+fn namespace_sort_order(ns: &str) -> u8 {
+    match ns {
+        "well-known" => 0,
+        "objectives" => 1,
+        "micro-behaviors" => 2,
+        "metadata" => 3,
+        "third-party" | "third_party" => 4,
+        _ => 5, // Unknown namespaces go last
     }
 }
 
@@ -487,12 +502,10 @@ pub(crate) fn format_terminal(report: &AnalysisReport) -> String {
             continue;
         }
 
-        // Group by namespace and count criticality levels
+        // Group by namespace and find max criticality
         let mut by_namespace: HashMap<String, Vec<&Finding>> = HashMap::new();
         let mut ns_max_crit: HashMap<String, Criticality> = HashMap::new();
-        let mut hostile_count = 0;
-        let mut suspicious_count = 0;
-        let mut notable_count = 0;
+        let mut max_crit = Criticality::Notable;
 
         for finding in &filtered {
             let (ns, _) = split_trait_id(&finding.id);
@@ -502,58 +515,46 @@ pub(crate) fn format_terminal(report: &AnalysisReport) -> String {
             }
             by_namespace.entry(ns).or_default().push(finding);
 
-            // Count by criticality
-            match finding.crit {
-                Criticality::Hostile => hostile_count += 1,
-                Criticality::Suspicious => suspicious_count += 1,
-                Criticality::Notable => notable_count += 1,
-                _ => {}
+            // Track max criticality for file
+            if finding.crit > max_crit {
+                max_crit = finding.crit;
             }
         }
 
-        // Build summary for file header
-        let mut summary_parts = Vec::new();
-        if hostile_count > 0 {
-            summary_parts.push(format!("🛑 {} hostile", hostile_count));
-        }
-        if suspicious_count > 0 {
-            summary_parts.push(format!("🟡 {} suspicious", suspicious_count));
-        }
-        if notable_count > 0 {
-            summary_parts.push(format!("🔵 {} notable", notable_count));
-        }
+        // Generate formula from filtered findings
+        let formula = malecule_bridge::formula_from_findings(&filtered);
 
-        let summary = if !summary_parts.is_empty() {
-            format!(" • {}", summary_parts.join(" • "))
+        // Format file type (uppercase, e.g., "PE", "ELF")
+        let file_type_display = file.file_type.to_uppercase();
+
+        // File header: emoji path • TYPE:formula
+        let emoji = risk_emoji(&max_crit);
+        let type_formula = if formula.is_empty() {
+            file_type_display
         } else {
-            String::new()
+            format!("{}:{}", file_type_display, formula)
         };
-
-        // File header with summary
-        output.push_str(&format!("├─ {}{}\n", file.path.bright_white(), summary));
+        output.push_str(&format!(
+            "├─ {} {} • {}\n",
+            emoji,
+            file.path.bright_white(),
+            type_formula
+        ));
         output.push_str("│\n");
 
-        // Sort namespaces by criticality then name, but always put "meta" last
+        // Sort namespaces in fixed order: well-known, objectives, micro-behaviors, metadata, third-party
+        // Within each category, sort by criticality (most critical first)
         let mut namespaces: Vec<String> = by_namespace.keys().cloned().collect();
-        let mut has_meta = false;
-        namespaces.retain(|ns| {
-            if ns == "meta" {
-                has_meta = true;
-                false
-            } else {
-                true
-            }
-        });
         namespaces.sort_by(|a, b| {
-            let crit_a = ns_max_crit.get(a).unwrap_or(&Criticality::Baseline);
-            let crit_b = ns_max_crit.get(b).unwrap_or(&Criticality::Baseline);
-            crit_b
-                .cmp(crit_a)
-                .then_with(|| namespace_long_name(a).cmp(&namespace_long_name(b)))
+            let order_a = namespace_sort_order(a);
+            let order_b = namespace_sort_order(b);
+            order_a.cmp(&order_b).then_with(|| {
+                // Within same category, sort by criticality (higher first)
+                let crit_a = ns_max_crit.get(a).unwrap_or(&Criticality::Baseline);
+                let crit_b = ns_max_crit.get(b).unwrap_or(&Criticality::Baseline);
+                crit_b.cmp(crit_a)
+            })
         });
-        if has_meta {
-            namespaces.push("meta".to_string());
-        }
 
         // Render each namespace
         for ns in &namespaces {

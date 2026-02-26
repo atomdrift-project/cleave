@@ -1,7 +1,7 @@
 //! Formula string generation from findings.
 //!
-//! Generates molecular formula strings like "O₇C₂As₂DyXePH₂CoDb" from analysis findings.
-//! Format: TopLevel^count followed by subcategories sorted by severity then count.
+//! Generates molecular formula strings like "O₇(AlCXe)H₂(FDb)" from analysis findings.
+//! Format: TopLevel_count(subcategories) with subcategories sorted by severity.
 
 use crate::elements::{
     category_to_element, Element, HYDROGEN_MICRO, MENDELEVIUM, OXYGEN, POTASSIUM, THORIUM,
@@ -25,29 +25,31 @@ struct ElementCount {
     max_severity: Severity,
 }
 
+/// Top-level category with its subcategory elements.
+#[derive(Debug, Default)]
+struct CategoryGroup {
+    count: usize,
+    max_severity: Severity,
+    /// Subcategory elements: (symbol, count, severity)
+    subcategories: FxHashMap<&'static str, ElementCount>,
+}
+
 /// Generates a formula string from findings.
 ///
 /// # Arguments
 /// * `findings` - Iterator of finding inputs
 ///
 /// # Returns
-/// A formula string like "O₇C₂As₂DyXePH₂CoDb" - top-level categories with counts,
-/// followed by subcategories sorted by severity (suspicious first) then count.
+/// A formula string like "O₇(AlCXe)H₂(FDb)" - top-level categories with counts,
+/// with subcategories in parentheses sorted by severity.
 #[must_use]
 pub fn generate_formula<'a>(findings: impl Iterator<Item = &'a FindingInput>) -> String {
-    let mut element_counts: FxHashMap<&'static str, ElementCount> = FxHashMap::default();
-
-    // Track top-level category counts and max severity
-    let mut objectives_count = 0usize;
-    let mut objectives_max_sev = Severity::Neutral;
-    let mut micro_count = 0usize;
-    let mut micro_max_sev = Severity::Neutral;
-    let mut metadata_count = 0usize;
-    let mut metadata_max_sev = Severity::Neutral;
-    let mut well_known_count = 0usize;
-    let mut well_known_max_sev = Severity::Neutral;
-    let mut third_party_count = 0usize;
-    let mut third_party_max_sev = Severity::Neutral;
+    // Track each top-level category with its subcategories
+    let mut well_known = CategoryGroup::default();
+    let mut objectives = CategoryGroup::default();
+    let mut micro = CategoryGroup::default();
+    let mut metadata = CategoryGroup::default();
+    let mut third_party = CategoryGroup::default();
 
     for finding in findings {
         let parts: Vec<&str> = finding.id.split('/').collect();
@@ -55,47 +57,35 @@ pub fn generate_formula<'a>(findings: impl Iterator<Item = &'a FindingInput>) ->
             continue;
         }
 
-        // Track top-level category counts
-        match parts[0] {
-            "objectives" => {
-                objectives_count += 1;
-                if finding.severity > objectives_max_sev {
-                    objectives_max_sev = finding.severity;
-                }
-            }
-            "micro-behaviors" => {
-                micro_count += 1;
-                if finding.severity > micro_max_sev {
-                    micro_max_sev = finding.severity;
-                }
-            }
-            "metadata" => {
-                metadata_count += 1;
-                if finding.severity > metadata_max_sev {
-                    metadata_max_sev = finding.severity;
-                }
-            }
-            "well-known" => {
-                well_known_count += 1;
-                if finding.severity > well_known_max_sev {
-                    well_known_max_sev = finding.severity;
-                }
-            }
-            "third_party" => {
-                third_party_count += 1;
-                if finding.severity > third_party_max_sev {
-                    third_party_max_sev = finding.severity;
-                }
-                continue; // Third party doesn't have sub-elements
-            }
-            _ => {}
+        // Determine which category group this finding belongs to
+        let group = match parts[0] {
+            "well-known" => &mut well_known,
+            "objectives" => &mut objectives,
+            "micro-behaviors" => &mut micro,
+            "metadata" => &mut metadata,
+            "third_party" | "third-party" => &mut third_party,
+            _ => continue,
+        };
+
+        // Update category count and max severity
+        group.count += 1;
+        if finding.severity > group.max_severity {
+            group.max_severity = finding.severity;
         }
 
-        // Get the most specific category that maps to an element
-        // Try from most specific to least specific
+        // Find subcategory element (skip top-level, try from most specific to least)
         for i in (1..parts.len()).rev() {
             if let Some(element) = category_to_element(parts[i]) {
-                let entry = element_counts.entry(element.symbol).or_default();
+                // Skip if this is a top-level element symbol
+                if element.symbol == OXYGEN.symbol
+                    || element.symbol == HYDROGEN_MICRO.symbol
+                    || element.symbol == MENDELEVIUM.symbol
+                    || element.symbol == POTASSIUM.symbol
+                    || element.symbol == THORIUM.symbol
+                {
+                    continue;
+                }
+                let entry = group.subcategories.entry(element.symbol).or_default();
                 entry.count += 1;
                 if finding.severity > entry.max_severity {
                     entry.max_severity = finding.severity;
@@ -105,90 +95,46 @@ pub fn generate_formula<'a>(findings: impl Iterator<Item = &'a FindingInput>) ->
         }
     }
 
-    // Build formula parts: (symbol, count, severity_priority, is_top_level)
-    // severity_priority: 0=hostile, 1=suspicious, 2=notable, 3=neutral
-    let mut formula_parts: Vec<(&'static str, usize, u8, bool)> = Vec::new();
+    // Build formula in fixed order: well-known, objectives, micro-behaviors, metadata, third-party
+    let mut formula = String::with_capacity(64);
 
-    // Add top-level categories with their counts
-    if objectives_count > 0 {
-        formula_parts.push((
-            OXYGEN.symbol,
-            objectives_count,
-            severity_to_priority(objectives_max_sev),
-            true,
-        ));
-    }
-    if micro_count > 0 {
-        formula_parts.push((
-            HYDROGEN_MICRO.symbol,
-            micro_count,
-            severity_to_priority(micro_max_sev),
-            true,
-        ));
-    }
-    if metadata_count > 0 {
-        formula_parts.push((
-            MENDELEVIUM.symbol,
-            metadata_count,
-            severity_to_priority(metadata_max_sev),
-            true,
-        ));
-    }
-    if well_known_count > 0 {
-        formula_parts.push((
-            POTASSIUM.symbol,
-            well_known_count,
-            severity_to_priority(well_known_max_sev),
-            true,
-        ));
-    }
-    if third_party_count > 0 {
-        formula_parts.push((
-            THORIUM.symbol,
-            third_party_count,
-            severity_to_priority(third_party_max_sev),
-            true,
-        ));
-    }
+    let categories: [(&CategoryGroup, &str); 5] = [
+        (&well_known, POTASSIUM.symbol),
+        (&objectives, OXYGEN.symbol),
+        (&micro, HYDROGEN_MICRO.symbol),
+        (&metadata, MENDELEVIUM.symbol),
+        (&third_party, THORIUM.symbol),
+    ];
 
-    // Add subcategory elements
-    for (symbol, ec) in &element_counts {
-        // Skip top-level elements
-        if *symbol == OXYGEN.symbol
-            || *symbol == HYDROGEN_MICRO.symbol
-            || *symbol == MENDELEVIUM.symbol
-            || *symbol == POTASSIUM.symbol
-            || *symbol == THORIUM.symbol
-        {
+    for (group, symbol) in categories {
+        if group.count == 0 {
             continue;
         }
-        formula_parts.push((
-            symbol,
-            ec.count,
-            severity_to_priority(ec.max_severity),
-            false,
-        ));
-    }
 
-    // Sort: top-level first (by severity), then subcategories (by severity, then count desc)
-    formula_parts.sort_by(|a, b| {
-        // Top-level categories come first, sorted by severity
-        match (a.3, b.3) {
-            (true, false) => std::cmp::Ordering::Less,
-            (false, true) => std::cmp::Ordering::Greater,
-            _ => {
-                // Same level: sort by severity (lower priority = more severe), then count desc
-                a.2.cmp(&b.2).then_with(|| b.1.cmp(&a.1))
-            }
-        }
-    });
-
-    // Build the formula string
-    let mut formula = String::with_capacity(formula_parts.len() * 4);
-    for (symbol, count, _, _) in formula_parts {
+        // Add top-level symbol with count
         formula.push_str(symbol);
-        if count > 1 {
-            formula.push_str(&to_subscript(count));
+        if group.count > 1 {
+            formula.push_str(&to_subscript(group.count));
+        }
+
+        // Add subcategories in parentheses if any
+        if !group.subcategories.is_empty() {
+            // Sort subcategories by severity (most severe first), then by count desc
+            let mut subs: Vec<_> = group.subcategories.iter().collect();
+            subs.sort_by(|a, b| {
+                severity_to_priority(a.1.max_severity)
+                    .cmp(&severity_to_priority(b.1.max_severity))
+                    .then_with(|| b.1.count.cmp(&a.1.count))
+            });
+
+            formula.push('(');
+            for (sym, ec) in subs {
+                formula.push_str(sym);
+                if ec.count > 1 {
+                    formula.push_str(&to_subscript(ec.count));
+                }
+            }
+            formula.push(')');
         }
     }
 
@@ -297,10 +243,16 @@ mod tests {
         ];
 
         let formula = generate_formula(findings.iter());
-        // Should have O₂ (2 objectives), H (1 micro-behavior), Mg₂ (2 metadata)
-        // Plus La, Xe, F, Au₂ subcategories
-        assert!(formula.contains('O')); // Objectives
-        assert!(formula.contains('H')); // Micro-behaviors (now H not B)
+        // New format: O₂(LaXe)H(F)Md₂(Au₂)
+        // - O₂ with La (lateral-movement, suspicious) and Xe (execution, notable)
+        // - H with F (fs)
+        // - Md₂ with Au₂ (quality x2)
+        assert!(formula.contains("O₂")); // 2 objectives
+        assert!(formula.contains('(')); // Has parentheses for subcategories
+        assert!(formula.contains("La")); // lateral-movement
+        assert!(formula.contains("Xe")); // execution
+        assert!(formula.contains('H')); // Micro-behaviors
+        assert!(formula.contains('F')); // fs
         assert!(formula.contains("Md")); // Metadata
         assert!(formula.contains("Au")); // quality
     }

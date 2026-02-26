@@ -101,17 +101,8 @@ impl YaraEngine {
             }
         }
 
-        // Cache miss or invalid - compile from source with progress spinner
+        // Cache miss or invalid - compile from source
         tracing::info!("Compiling YARA rules from source");
-
-        let pb = indicatif::ProgressBar::new_spinner();
-        #[allow(clippy::expect_used)] // Static template string is always valid
-        pb.set_style(
-            indicatif::ProgressStyle::default_spinner()
-                .template("{spinner:.cyan} {msg}")
-                .expect("valid template"),
-        );
-        pb.enable_steady_tick(std::time::Duration::from_millis(80));
 
         let traits_dir = crate::cache::traits_path();
         let third_party_dir = Path::new("third_party");
@@ -122,7 +113,6 @@ impl YaraEngine {
         let mut inline_count = 0;
 
         // 0. Load inline YARA from trait YAML files
-        pb.set_message("Loading inline rules...");
         if traits_dir.exists() {
             self.compiled_inline_namespaces =
                 Self::load_inline_trait_rules(&mut compiler, &traits_dir);
@@ -130,7 +120,6 @@ impl YaraEngine {
         }
 
         // 1. Load built-in YARA rules from traits directory
-        pb.set_message("Loading trait rules...");
         if traits_dir.exists() {
             match self.load_rules_into_compiler(&mut compiler, &traits_dir, "traits") {
                 Ok(count) => builtin_count = count,
@@ -145,32 +134,23 @@ impl YaraEngine {
 
         // 2. Optionally load third-party YARA rules
         if enable_third_party && third_party_dir.exists() {
-            pb.set_message("Loading third-party rules...");
             third_party_count = self.load_third_party_rules(&mut compiler, third_party_dir);
         }
 
         let total_count = builtin_count + third_party_count + inline_count;
         if total_count == 0 {
-            pb.finish_and_clear();
-            eprintln!("⚠️  No YARA rules loaded");
+            eprintln!("\n⚠️  No YARA rules loaded");
             return (0, 0);
         }
 
         // Compile all rules (JIT optimization)
-        pb.set_message(format!("Compiling {} sources...", total_count));
-        let compile_start = std::time::Instant::now();
         let rules = compiler.build();
-        let compile_time = compile_start.elapsed();
 
         // Count actual compiled rules (not source files)
         let actual_rule_count = rules.iter().count();
 
-        pb.finish_and_clear();
-        eprintln!(
-            "✅ Compiled {} rules in {:.1}s (first run only)",
-            actual_rule_count,
-            compile_time.as_secs_f64()
-        );
+        // Print rule count on same line as banner (banner used eprint without newline)
+        eprintln!(" • {} rules compiled\n", actual_rule_count);
 
         self.rules = Some(rules);
 

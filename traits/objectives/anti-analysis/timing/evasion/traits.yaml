@@ -3,7 +3,7 @@
 # ATT&CK: T1497.001 (Virtualization/Sandbox Evasion: System Checks)
 
 defaults:
-  for: [elf, macho, pe, dll]
+  for: [elf, macho, pe, dll, -go, -rust]
   mbc: "B0001.032"
   attack: "T1497.001"
 
@@ -16,6 +16,9 @@ traits:
       type: hex
       pattern: "0F 31"
       count_min: 2
+    unless:
+      - type: raw
+        substr: "BSJB"  # .NET IL bytecode contains 0F 31 sequences that aren't RDTSC
 
   # NOTE: "time" is far too generic - matches Go runtime, standard library, etc.
   # Changed to more specific pattern

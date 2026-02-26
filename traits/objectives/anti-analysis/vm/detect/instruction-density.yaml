@@ -4,7 +4,7 @@
 
 defaults:
   platforms: [linux, macos, windows]
-  for: [pe, macho, elf]
+  for: [pe, macho, elf, -go, -rust]
   attack: "T1497.001"
 
 traits:
@@ -27,6 +27,9 @@ traits:
       type: hex
       pattern: "0F 31"
       count_min: 3
+    unless:
+      - type: raw
+        substr: "BSJB"  # .NET IL bytecode contains 0F 31 sequences that aren't RDTSC
 
   - id: sparse-logic-density
     desc: "Extremely low logic density (function sparsity)"

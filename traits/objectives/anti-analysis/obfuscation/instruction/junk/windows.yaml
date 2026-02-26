@@ -7,7 +7,7 @@ traits:
     desc: Dense undefined instructions (UD2)
     crit: notable  # Downgraded from suspicious - can be compiler padding/alignment
     conf: 0.75
-    for: [pe, elf, macho]
+    for: [pe, elf, macho, -go, -rust]
     if:
       type: hex
       pattern: "0F 0B"

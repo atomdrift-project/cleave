@@ -7,7 +7,7 @@ traits:
     desc: Binary has 30 or fewer imports
     crit: notable
     conf: 0.7
-    for: [pe, elf, macho]
+    for: [pe, elf, macho, -go, -rust]
     size_min: 524288  # 512KB - small utilities legitimately have few imports
     if:
       type: import_combination
@@ -17,7 +17,7 @@ traits:
     desc: Binary has 25 or fewer imports
     crit: notable
     conf: 0.75
-    for: [pe, elf, macho]
+    for: [pe, elf, macho, -go, -rust]
     size_min: 524288  # 512KB
     if:
       type: import_combination
@@ -27,7 +27,7 @@ traits:
     desc: Binary has 50 or fewer imports
     crit: notable
     conf: 0.7
-    for: [pe, elf, macho]
+    for: [pe, elf, macho, -go, -rust]
     size_min: 524288  # 512KB
     if:
       type: import_combination
@@ -40,7 +40,7 @@ composite_rules:
     desc: Large binary with minimal imports
     crit: suspicious
     conf: 0.9
-    for: [pe, elf, macho]
+    for: [pe, elf, macho, -go, -rust]
     attack: "T1027"
     mbc: "B0032"
     size_min: 5242880  # 5MB
@@ -57,7 +57,7 @@ composite_rules:
     desc: Huge binary with minimal imports
     crit: hostile
     conf: 0.95
-    for: [pe, elf, macho]
+    for: [pe, elf, macho, -go, -rust]
     attack: "T1027"
     mbc: "B0032"
     size_min: 10485760  # 10MB
@@ -78,7 +78,7 @@ composite_rules:
     desc: Binary with suspected embedded payload
     crit: suspicious
     conf: 0.85
-    for: [pe, elf, macho]
+    for: [pe, elf, macho, -go, -rust]
     attack: "T1027.009"
     size_min: 1048576  # 1MB
     all:

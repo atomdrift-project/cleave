@@ -52,14 +52,14 @@ traits:
     crit: component
     if:
       type: string
-      regex: "[a-z2-7]{16,56}\\.onion"
+      regex: "[a-z2-7]{16,56}\\.onion\\b"
 
   - id: bitcoin-address
     desc: Bitcoin address pattern
     crit: component
     if:
       type: string
-      regex: "[13][a-km-zA-HJ-NP-Z1-9]{25,34}"
+      regex: "\\b[13][a-km-zA-HJ-NP-Z1-9]{25,34}\\b"
 
   - id: bitcoin-word
     desc: bitcoin word

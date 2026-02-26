@@ -792,6 +792,53 @@ impl TraitDefinition {
         None
     }
 
+    /// Check if this trait has any dependencies on other traits via `trait:` conditions.
+    /// Used to determine evaluation order - traits with dependencies must be evaluated
+    /// after their dependencies have been resolved.
+    #[must_use]
+    pub(crate) fn has_trait_dependency(&self) -> bool {
+        // Check main condition
+        if self.r#if.condition.is_trait_reference() {
+            return true;
+        }
+
+        // Check unless conditions
+        if let Some(ref unless) = self.unless {
+            for cond in unless {
+                if cond.is_trait_reference() {
+                    return true;
+                }
+            }
+        }
+
+        // Check downgrade conditions
+        if let Some(ref downgrade) = self.downgrade {
+            if let Some(ref any) = downgrade.any {
+                for cond in any {
+                    if cond.is_trait_reference() {
+                        return true;
+                    }
+                }
+            }
+            if let Some(ref all) = downgrade.all {
+                for cond in all {
+                    if cond.is_trait_reference() {
+                        return true;
+                    }
+                }
+            }
+            if let Some(ref none) = downgrade.none {
+                for cond in none {
+                    if cond.is_trait_reference() {
+                        return true;
+                    }
+                }
+            }
+        }
+
+        false
+    }
+
     /// Evaluate this trait definition against the analysis context
     pub(crate) fn evaluate<'a>(&self, ctx: &EvaluationContext<'a>) -> Option<Finding> {
         use super::debug::{ConditionDebug, DowngradeDebug, SkipReason};

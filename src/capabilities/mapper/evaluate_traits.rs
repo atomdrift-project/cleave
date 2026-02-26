@@ -265,4 +265,224 @@ impl super::CapabilityMapper {
     ) -> Vec<Finding> {
         self.evaluate_traits_with_ast(report, binary_data, None, None)
     }
+
+    /// Evaluate traits filtered by dependency status.
+    /// When `dependent_only` is false, evaluates only traits WITHOUT trait: dependencies.
+    /// When `dependent_only` is true, evaluates only traits WITH trait: dependencies.
+    ///
+    /// This enables proper ordering: independent traits are evaluated first, then
+    /// dependent traits can see their results via `report.findings`.
+    #[must_use]
+    pub(crate) fn evaluate_traits_filtered(
+        &self,
+        report: &AnalysisReport,
+        binary_data: &[u8],
+        cached_ast: Option<&tree_sitter::Tree>,
+        inline_yara: Option<&HashMap<String, Vec<Evidence>>>,
+        dependent_only: bool,
+    ) -> Vec<Finding> {
+        // Determine file type from report
+        let file_type = self.detect_file_type(&report.target.file_type);
+
+        // Build section map for location-constrained matching
+        let section_map = SectionMap::from_binary(binary_data);
+
+        let mut ctx = EvaluationContext::new(
+            report,
+            binary_data,
+            file_type,
+            self.platforms.clone(),
+            None,
+            cached_ast,
+        )
+        .with_section_map(section_map);
+        if let Some(results) = inline_yara {
+            ctx = ctx.with_inline_yara(results);
+        }
+
+        // Get applicable traits filtered by file type
+        let applicable_indices: Vec<usize> = self.trait_index.get_applicable(&file_type).collect();
+
+        // Further filter by dependency status
+        let filtered_indices: Vec<usize> = applicable_indices
+            .into_iter()
+            .filter(|&idx| {
+                let trait_def = &self.trait_definitions[idx];
+                trait_def.has_trait_dependency() == dependent_only
+            })
+            .collect();
+
+        if filtered_indices.is_empty() {
+            return vec![];
+        }
+
+        // Pre-filter using batched Aho-Corasick string matching WITH evidence caching
+        let total_capacity = report.strings.len() + report.imports.len() + report.exports.len();
+        let mut all_strings = Vec::with_capacity(total_capacity);
+
+        all_strings.extend_from_slice(&report.strings);
+
+        for imp in &report.imports {
+            all_strings.push(crate::types::StringInfo {
+                value: imp.symbol.clone(),
+                offset: None,
+                encoding: "symbol".to_string(),
+                string_type: crate::types::StringType::Import,
+                section: None,
+                encoding_chain: Vec::new(),
+                fragments: None,
+            });
+        }
+
+        for exp in &report.exports {
+            let offset = exp.offset.as_ref().and_then(|s| {
+                let s = s.trim().trim_start_matches("0x").trim_start_matches("0X");
+                u64::from_str_radix(s, 16).ok()
+            });
+            all_strings.push(crate::types::StringInfo {
+                value: exp.symbol.clone(),
+                offset,
+                encoding: "symbol".to_string(),
+                string_type: crate::types::StringType::Export,
+                section: None,
+                encoding_chain: Vec::new(),
+                fragments: None,
+            });
+        }
+
+        let (string_matched_traits, cached_evidence) = if self.string_match_index.has_patterns() {
+            self.string_match_index
+                .find_matches_with_evidence(&all_strings)
+        } else {
+            (FxHashSet::default(), FxHashMap::default())
+        };
+
+        let regex_candidates = self.string_match_index.find_regex_candidates(&all_strings);
+
+        let raw_regex_prefilter_enabled = self.raw_content_regex_index.has_patterns()
+            && self
+                .raw_content_regex_index
+                .has_applicable_patterns(&filtered_indices);
+        let raw_regex_matched_traits = if raw_regex_prefilter_enabled {
+            self.raw_content_regex_index
+                .find_matches(binary_data, &file_type)
+        } else {
+            FxHashSet::default()
+        };
+
+        let has_any_matches = !string_matched_traits.is_empty()
+            || !raw_regex_matched_traits.is_empty()
+            || !regex_candidates.is_empty();
+
+        // For dependent traits, we can't skip based on string matches alone
+        // because the trait: condition might match even if strings don't
+        if !dependent_only && !has_any_matches && all_strings.is_empty() && binary_data.len() < 100
+        {
+            return vec![];
+        }
+
+        drop(all_strings);
+
+        let all_findings: Vec<Finding> = filtered_indices
+            .par_iter()
+            .with_min_len(64)
+            .filter_map(|&idx| {
+                let trait_def = &self.trait_definitions[idx];
+
+                // For dependent traits, skip string-based optimizations since
+                // we're matching on trait: conditions, not strings
+                if !dependent_only {
+                    // Check if this is an exact string trait with cached evidence
+                    let is_simple_exact_string = trait_def.downgrade.is_none()
+                        && matches!(
+                            &trait_def.r#if.condition,
+                            Condition::String { exact: Some(_), .. }
+                        )
+                        && trait_def.r#if.count_min.unwrap_or(1) == 1
+                        && trait_def.r#if.count_max.is_none()
+                        && trait_def.r#if.per_kb_min.is_none()
+                        && trait_def.r#if.per_kb_max.is_none();
+
+                    if is_simple_exact_string {
+                        if let Some(evidence) = cached_evidence.get(&idx) {
+                            if !evidence.is_empty() {
+                                return Some(Finding {
+                                    id: trait_def.id.clone(),
+                                    desc: trait_def.desc.clone(),
+                                    conf: trait_def.conf,
+                                    crit: trait_def.crit,
+                                    mbc: trait_def.mbc.clone(),
+                                    attack: trait_def.attack.clone(),
+                                    evidence: evidence.clone(),
+                                    match_count: 0,
+                                    kind: FindingKind::Capability,
+                                    trait_refs: vec![],
+                                    source_file: get_relative_source_file(&trait_def.defined_in),
+                                });
+                            }
+                        }
+                        return None;
+                    }
+
+                    // String-based pre-filtering
+                    let has_exact_string = matches!(
+                        trait_def.r#if.condition,
+                        Condition::String { exact: Some(_), .. }
+                    );
+                    if has_exact_string && !string_matched_traits.contains(&idx) {
+                        return None;
+                    }
+
+                    if self.string_match_index.is_regex_trait(idx)
+                        && !regex_candidates.contains(&idx)
+                    {
+                        return None;
+                    }
+
+                    let has_content_regex = matches!(
+                        trait_def.r#if.condition,
+                        Condition::Raw { regex: Some(_), .. }
+                            | Condition::Raw { word: Some(_), .. }
+                    );
+                    if has_content_regex
+                        && raw_regex_prefilter_enabled
+                        && self.raw_content_regex_index.is_indexed_trait(idx)
+                        && !raw_regex_matched_traits.contains(&idx)
+                    {
+                        return None;
+                    }
+                }
+
+                if !trait_def.r#if.can_match_file_type(&file_type) {
+                    return None;
+                }
+
+                trait_def.evaluate(&ctx)
+            })
+            .collect();
+
+        // Deduplicate findings
+        let mut seen = std::collections::HashSet::new();
+        let mut unique_findings: Vec<Finding> = all_findings
+            .into_iter()
+            .filter(|f| seen.insert(f.id.clone()))
+            .collect();
+
+        unique_findings.shrink_to_fit();
+
+        const MAX_FINDINGS_PER_FILE: usize = 500;
+        if unique_findings.len() > MAX_FINDINGS_PER_FILE {
+            unique_findings.sort_by(|a, b| {
+                b.crit.cmp(&a.crit).then_with(|| {
+                    let conf_a = (a.conf * 100.0) as i32;
+                    let conf_b = (b.conf * 100.0) as i32;
+                    conf_b.cmp(&conf_a)
+                })
+            });
+            unique_findings.truncate(MAX_FINDINGS_PER_FILE);
+            unique_findings.shrink_to_fit();
+        }
+
+        unique_findings
+    }
 }

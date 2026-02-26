@@ -732,3 +732,146 @@ traits:
     // Should match if section exists
     assert!(findings.len() > 0);
 }
+
+/// Test that atomic traits can depend on other atomic traits via `trait:` conditions.
+/// This is a regression test for the evaluation order bug where traits evaluated in
+/// parallel couldn't see each other's results.
+#[test]
+fn test_evaluate_traits_with_trait_dependency() {
+    // Create two traits: A depends on B via `trait:` condition
+    // Both are atomic traits that should be evaluated together
+    let yaml = r#"
+defaults:
+  for: [all]
+
+traits:
+  # Base trait - detects a string pattern
+  - id: "test/base::string-marker"
+    desc: "Base trait that matches a string"
+    crit: baseline
+    conf: 0.9
+    if:
+      type: string
+      exact: "MARKER_STRING"
+
+  # Dependent trait - depends on the base trait
+  - id: "test/derived::depends-on-marker"
+    desc: "Trait that depends on base trait"
+    crit: notable
+    conf: 0.9
+    if:
+      type: trait
+      id: "test/base::string-marker"
+"#;
+    let (_dir, path) = create_test_yaml(yaml);
+    let mapper = CapabilityMapper::from_yaml(&path).unwrap();
+
+    // Verify both traits were loaded
+    assert_eq!(mapper.trait_definitions_count(), 2);
+
+    let binary_data = b"MARKER_STRING";
+    let mut report = create_test_report_with_size(binary_data.len() as u64);
+
+    // Add the string to the report
+    report.strings.push(crate::types::StringInfo {
+        value: "MARKER_STRING".to_string(),
+        offset: Some(0),
+        encoding: "ascii".to_string(),
+        string_type: crate::types::StringType::Const,
+        section: None,
+        encoding_chain: Vec::new(),
+        fragments: None,
+    });
+
+    // Use evaluate_and_merge_findings which is the production code path
+    mapper.evaluate_and_merge_findings(&mut report, binary_data, None, None);
+
+    // Both traits should match:
+    // 1. Base trait matches the string
+    // 2. Derived trait should see the base trait's finding and also match
+    let base_found = report
+        .findings
+        .iter()
+        .any(|f| f.id == "test/base::string-marker");
+    let derived_found = report
+        .findings
+        .iter()
+        .any(|f| f.id == "test/derived::depends-on-marker");
+
+    assert!(
+        base_found,
+        "Base trait should match the MARKER_STRING pattern"
+    );
+    assert!(
+        derived_found,
+        "Derived trait should match because base trait matched (trait dependency bug)"
+    );
+}
+
+/// Test multi-level trait dependencies (A -> B -> C)
+#[test]
+fn test_evaluate_traits_with_chained_dependency() {
+    let yaml = r#"
+defaults:
+  for: [all]
+
+traits:
+  # Level 1: Base trait
+  - id: "test/chain::level1"
+    desc: "Level 1 base trait"
+    crit: baseline
+    conf: 0.9
+    if:
+      type: string
+      exact: "CHAIN_START"
+
+  # Level 2: Depends on level 1
+  - id: "test/chain::level2"
+    desc: "Level 2 depends on level 1"
+    crit: baseline
+    conf: 0.9
+    if:
+      type: trait
+      id: "test/chain::level1"
+
+  # Level 3: Depends on level 2
+  - id: "test/chain::level3"
+    desc: "Level 3 depends on level 2"
+    crit: notable
+    conf: 0.9
+    if:
+      type: trait
+      id: "test/chain::level2"
+"#;
+    let (_dir, path) = create_test_yaml(yaml);
+    let mapper = CapabilityMapper::from_yaml(&path).unwrap();
+
+    assert_eq!(mapper.trait_definitions_count(), 3);
+
+    let binary_data = b"CHAIN_START";
+    let mut report = create_test_report_with_size(binary_data.len() as u64);
+
+    report.strings.push(crate::types::StringInfo {
+        value: "CHAIN_START".to_string(),
+        offset: Some(0),
+        encoding: "ascii".to_string(),
+        string_type: crate::types::StringType::Const,
+        section: None,
+        encoding_chain: Vec::new(),
+        fragments: None,
+    });
+
+    mapper.evaluate_and_merge_findings(&mut report, binary_data, None, None);
+
+    // All three levels should match
+    let level1_found = report.findings.iter().any(|f| f.id == "test/chain::level1");
+    let level2_found = report.findings.iter().any(|f| f.id == "test/chain::level2");
+    let level3_found = report.findings.iter().any(|f| f.id == "test/chain::level3");
+
+    assert!(level1_found, "Level 1 should match the string pattern");
+    assert!(level2_found, "Level 2 should match because level 1 matched");
+    assert!(
+        level3_found,
+        "Level 3 should match because level 2 matched (chained dependency)"
+    );
+}

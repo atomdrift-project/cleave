@@ -36,6 +36,7 @@ type promptData struct {
 	HasHostileFindings    bool
 	HasSuspiciousFindings bool
 	IsValidationSample    bool
+	ExternalTools         string // Comma-separated list of available external tools (rizin, ghidra, nm, readelf)
 }
 
 // config holds all configuration for a trait-basher session.

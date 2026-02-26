@@ -16,7 +16,7 @@ These are useful to debug rules:
 {{.CleaveBin}} test-match <filename> --type string --pattern "X"
 ```
 
-Also available: r2, ghidra, nm, readelf
+{{if .ExternalTools}}Also available: {{.ExternalTools}}{{end}}
 
 **Traits**: {{.TraitsDir}}
 **Docs**: RULES.md (syntax), TAXONOMY.md (directories)

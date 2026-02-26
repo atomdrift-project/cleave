@@ -1680,6 +1680,7 @@ func buildYAMLTraitFixPrompt(cfg *config, phase, failureOutput string) string {
 		CleaveBin:     cfg.cleaveBin,
 		TraitsDir:     filepath.Join(cfg.repoRoot, "traits"),
 		Path:          "/bin/ls", // Default path for tools.tmpl
+		ExternalTools: detectExternalTools(),
 	}
 
 	prompt, err := buildRepairPrompt(data)
@@ -1970,6 +1971,7 @@ func invokeAI(ctx context.Context, cfg *config, f FileAnalysis, isValidation boo
 		IsValidationSample: isValidation,
 		BenignMarkerPath:   misclassificationMarkerPath(f.Path, "BENIGN"),
 		BadMarkerPath:      misclassificationMarkerPath(f.Path, "BAD"),
+		ExternalTools:      detectExternalTools(),
 	}
 
 	if err := setupReportPaths(&data, cfg, fileHash, hostileCount, suspiciousCount); err != nil {
@@ -2037,6 +2039,7 @@ func invokeAIArchive(ctx context.Context, cfg *config, a *ArchiveAnalysis, isVal
 		IsValidationSample: isValidation,
 		BenignMarkerPath:   misclassificationMarkerPath(a.ArchivePath, "BENIGN"),
 		BadMarkerPath:      misclassificationMarkerPath(a.ArchivePath, "BAD"),
+		ExternalTools:      detectExternalTools(),
 	}
 
 	if err := setupReportPaths(&data, cfg, fileHash, hostileCount, suspiciousCount); err != nil {

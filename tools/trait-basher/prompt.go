@@ -4,6 +4,9 @@ import (
 	"bytes"
 	_ "embed"
 	"fmt"
+	"os/exec"
+	"strings"
+	"sync"
 	"text/template"
 )
 
@@ -52,6 +55,27 @@ func loadPromptTemplate(_ string) error {
 	return nil
 }
 
+var (
+	externalToolsOnce   sync.Once
+	externalToolsCached string
+)
+
+// detectExternalTools checks which external binary analysis tools are available
+// in the system PATH. Results are cached after the first call.
+func detectExternalTools() string {
+	externalToolsOnce.Do(func() {
+		tools := []string{"rizin", "ghidra", "nm", "readelf"}
+		var available []string
+		for _, tool := range tools {
+			if _, err := exec.LookPath(tool); err == nil {
+				available = append(available, tool)
+			}
+		}
+		externalToolsCached = strings.Join(available, ", ")
+	})
+	return externalToolsCached
+}
+
 // buildPrompt constructs the full prompt by combining the mode-specific template with shared tools.
 func buildPrompt(data *promptData) (string, error) {
 	var main bytes.Buffer
@@ -81,6 +105,7 @@ type repairPromptData struct {
 	CleaveBin     string
 	TraitsDir     string
 	Path          string // For tools.tmpl compatibility
+	ExternalTools string // Comma-separated list of available external tools
 }
 
 // buildRepairPrompt constructs the repair prompt with tools reference.

@@ -120,94 +120,7 @@ impl ArchiveAnalyzer {
 
         // Route to appropriate analyzer based on file type
         match file_type {
-            // Source code files - use unified analyzer with in-memory parsing
-            FileType::Shell
-            | FileType::Batch
-            | FileType::Python
-            | FileType::JavaScript
-            | FileType::TypeScript
-            | FileType::Go
-            | FileType::Rust
-            | FileType::Java
-            | FileType::Ruby
-            | FileType::C
-            | FileType::Php
-            | FileType::Swift
-            | FileType::ObjectiveC
-            | FileType::Scala
-            | FileType::Lua
-            | FileType::Perl
-            | FileType::PowerShell
-            | FileType::CSharp
-            | FileType::Groovy
-            | FileType::Zig
-            | FileType::Elixir
-            | FileType::AppleScript
-            | FileType::Rtf
-            | FileType::Lnk => {
-                // Use the unified analyzer for source code
-                if let Some(mapper) = &self.capability_mapper {
-                    // Create a temporary file for analysis since unified analyzer needs a path
-                    // TODO: Refactor unified analyzer to support in-memory analysis
-                    let temp = tempfile::NamedTempFile::new()?;
-                    std::fs::write(temp.path(), data)?;
-
-                    if let Some(analyzer) = crate::analyzers::analyzer_for_file_type_arc(
-                        file_type,
-                        Some(mapper.clone()),
-                    ) {
-                        if let Ok(report) = analyzer.analyze(temp.path()) {
-                            // Extract findings and other info from report
-                            file_analysis.findings = report.findings;
-                            file_analysis.strings = report.strings;
-                            file_analysis.imports = report.imports;
-                            file_analysis.exports = report.exports;
-                            file_analysis.functions = report.functions;
-                        }
-                    }
-                }
-            }
-
-            // Binary files - need temp file for goblin parsing
-            FileType::Elf | FileType::MachO | FileType::Pe => {
-                if let Some(mapper) = &self.capability_mapper {
-                    let temp = tempfile::NamedTempFile::new()?;
-                    std::fs::write(temp.path(), data)?;
-
-                    if let Some(analyzer) = crate::analyzers::analyzer_for_file_type_arc(
-                        file_type,
-                        Some(mapper.clone()),
-                    ) {
-                        if let Ok(report) = analyzer.analyze(temp.path()) {
-                            file_analysis.findings = report.findings;
-                            file_analysis.strings = report.strings;
-                            file_analysis.imports = report.imports;
-                            file_analysis.exports = report.exports;
-                            file_analysis.functions = report.functions;
-                            file_analysis.sections = report.sections;
-                            file_analysis.syscalls = report.syscalls;
-                        }
-                    }
-                }
-            }
-
-            // Java class files
-            FileType::JavaClass => {
-                if let Some(mapper) = &self.capability_mapper {
-                    let temp = tempfile::NamedTempFile::new()?;
-                    std::fs::write(temp.path(), data)?;
-
-                    let analyzer = crate::analyzers::java_class::JavaClassAnalyzer::new()
-                        .with_capability_mapper_arc(mapper.clone());
-                    if let Ok(report) = analyzer.analyze(temp.path()) {
-                        file_analysis.findings = report.findings;
-                        file_analysis.strings = report.strings;
-                        file_analysis.imports = report.imports;
-                    }
-                }
-            }
-
-            // Nested archives - need recursive handling
+            // Nested archives - need recursive handling with depth tracking
             FileType::Archive | FileType::Jar => {
                 if self.current_depth + 1 < self.max_depth {
                     // For nested archives, we need to write to temp and recurse
@@ -251,76 +164,31 @@ impl ArchiveAnalyzer {
                 }
             }
 
-            // Package manifests
-            FileType::PackageJson => {
+            // Non-analyzable file types - images, certificates, etc.
+            FileType::Jpeg | FileType::Png | FileType::Certificate => {}
+
+            // All other file types - use analyzer_for_file_type_arc (single source of truth)
+            _ => {
                 if let Some(mapper) = &self.capability_mapper {
-                    let temp = tempfile::NamedTempFile::new()?;
-                    std::fs::write(temp.path(), data)?;
-
-                    let analyzer = crate::analyzers::package_json::PackageJsonAnalyzer::new()
-                        .with_capability_mapper_arc(mapper.clone());
-                    if let Ok(report) = analyzer.analyze(temp.path()) {
-                        file_analysis.findings = report.findings;
-                    }
-                }
-            }
-
-            FileType::VsixManifest => {
-                if let Some(mapper) = &self.capability_mapper {
-                    let temp = tempfile::NamedTempFile::new()?;
-                    std::fs::write(temp.path(), data)?;
-
-                    let analyzer = crate::analyzers::vsix_manifest::VsixManifestAnalyzer::new()
-                        .with_capability_mapper_arc(mapper.clone());
-                    if let Ok(report) = analyzer.analyze(temp.path()) {
-                        file_analysis.findings = report.findings;
-                    }
-                }
-            }
-
-            FileType::ChromeManifest => {
-                if let Some(mapper) = &self.capability_mapper {
-                    let temp = tempfile::NamedTempFile::new()?;
-                    std::fs::write(temp.path(), data)?;
-
-                    let analyzer = crate::analyzers::chrome_manifest::ChromeManifestAnalyzer::new()
-                        .with_capability_mapper_arc(mapper.clone());
-                    if let Ok(report) = analyzer.analyze(temp.path()) {
-                        file_analysis.findings = report.findings;
-                    }
-                }
-            }
-
-            // Python package metadata - use generic analyzer
-            FileType::PkgInfo | FileType::Plist => {
-                if let Some(mapper) = &self.capability_mapper {
-                    let temp = tempfile::NamedTempFile::new()?;
-                    std::fs::write(temp.path(), data)?;
-
                     if let Some(analyzer) = crate::analyzers::analyzer_for_file_type_arc(
                         file_type,
                         Some(mapper.clone()),
                     ) {
+                        let temp = tempfile::NamedTempFile::new()?;
+                        std::fs::write(temp.path(), data)?;
+
                         if let Ok(report) = analyzer.analyze(temp.path()) {
                             file_analysis.findings = report.findings;
                             file_analysis.strings = report.strings;
+                            file_analysis.imports = report.imports;
+                            file_analysis.exports = report.exports;
+                            file_analysis.functions = report.functions;
+                            file_analysis.sections = report.sections;
+                            file_analysis.syscalls = report.syscalls;
                         }
                     }
                 }
             }
-
-            // Manifest, image, certificate, text, and unknown files - no specific deep analysis beyond YARA/traits
-            FileType::CargoToml
-            | FileType::PyProjectToml
-            | FileType::ComposerJson
-            | FileType::GithubActions
-            | FileType::Jpeg
-            | FileType::Png
-            | FileType::Certificate
-            | FileType::Html
-            | FileType::Text
-            | FileType::Markdown
-            | FileType::Unknown => {}
         }
 
         // Compute summary

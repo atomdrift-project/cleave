@@ -35,7 +35,7 @@ use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 
-const MAX_FILE_ANALYSIS_TIME_SECS: u64 = 10;
+const MAX_FILE_ANALYSIS_TIME_SECS: u64 = 30;
 
 /// Maximum number of orphaned (timed-out) threads allowed before blocking new analysis.
 /// Each orphaned thread holds ~8MB stack + analysis resources.
@@ -886,7 +886,7 @@ impl ArchiveAnalyzer {
     ///
     /// Some files (especially obfuscated or malformed ones) can cause analysis
     /// to hang indefinitely. This wrapper spawns analysis in a thread with a
-    /// 10-second timeout. If timeout occurs, returns a report with a timeout
+    /// 30-second timeout. If timeout occurs, returns a report with a timeout
     /// finding instead of hanging forever.
     ///
     /// # Memory Safety

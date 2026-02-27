@@ -350,7 +350,7 @@ pub(crate) fn format_jsonl_line(file: &crate::types::FileAnalysis) -> Result<Str
 
 /// Format the summary as a JSONL line (for end of streaming output)
 #[allow(dead_code)] // Used by binary target
-fn format_jsonl_summary(report: &AnalysisReport) -> Result<String> {
+pub(crate) fn format_jsonl_summary(report: &AnalysisReport) -> Result<String> {
     let summary = report.summary.as_ref();
     let counts = summary.map(|s| &s.counts);
 

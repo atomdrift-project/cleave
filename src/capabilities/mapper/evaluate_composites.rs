@@ -240,4 +240,207 @@ impl super::CapabilityMapper {
             findings[idx].crit = new_crit;
         }
     }
+
+    /// Evaluate composite rules at the container level using findings from all nested files.
+    ///
+    /// This enables cross-file composite rules that can detect patterns spanning multiple
+    /// files within an archive. For example:
+    /// - "npm package with suspicious DLL" (package.json in one file + .dll in another)
+    /// - "Python package with compiled binary" (setup.py + .so/.pyd files)
+    ///
+    /// # Arguments
+    /// * `container_report` - The container/archive report to add findings to
+    /// * `nested_findings` - All findings from nested files within the container
+    /// * `file_type` - File type of the container (e.g., "archive", "zip")
+    ///
+    /// # Returns
+    /// New findings that should be added to the container report
+    #[must_use]
+    pub(crate) fn evaluate_container_composites(
+        &self,
+        container_report: &AnalysisReport,
+        nested_findings: &[Finding],
+        file_type: &str,
+    ) -> Vec<Finding> {
+        // Detect file type for the container
+        let rule_file_type = self.detect_file_type(file_type);
+
+        // Track which composite IDs have already matched
+        let mut seen_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
+        for finding in &container_report.findings {
+            seen_ids.insert(finding.id.clone());
+        }
+
+        // Create evaluation context with nested findings as additional_findings
+        // This allows composite rules to "see" findings from all nested files
+        let ctx = EvaluationContext::new(
+            container_report,
+            &[], // No binary data for container-level evaluation
+            rule_file_type,
+            self.platforms.clone(),
+            Some(nested_findings),
+            None, // No AST for container
+        );
+
+        // Evaluate all composite rules at container level - rules will only match if their
+        // conditions are met by findings from nested files. This enables cross-file patterns
+        // like "npm package with .dll" where package.json is in one file and .dll in another.
+        let mut container_findings: Vec<Finding> = Vec::new();
+
+        // Iterative evaluation to handle chained dependencies
+        const MAX_ITERATIONS: usize = 5;
+        for _ in 0..MAX_ITERATIONS {
+            let new_findings: Vec<Finding> = self
+                .composite_rules
+                .iter()
+                .filter_map(|rule| rule.evaluate(&ctx))
+                .filter(|f| !seen_ids.contains(&f.id))
+                .collect();
+
+            if new_findings.is_empty() {
+                break;
+            }
+
+            for finding in new_findings {
+                seen_ids.insert(finding.id.clone());
+                container_findings.push(finding);
+            }
+        }
+
+        // Mark container-level findings with source context
+        for finding in &mut container_findings {
+            if finding.evidence.is_empty() {
+                finding.evidence.push(Evidence {
+                    method: "container-composite".to_string(),
+                    source: "cross-file-analysis".to_string(),
+                    value: "Finding spans multiple files in container".to_string(),
+                    location: None,
+                    ..Default::default()
+                });
+            }
+        }
+
+        container_findings
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::types::{AnalysisReport, Criticality, Finding, TargetInfo};
+
+    fn make_test_report() -> AnalysisReport {
+        AnalysisReport::new(TargetInfo {
+            path: "test.zip".to_string(),
+            file_type: "zip".to_string(),
+            size_bytes: 1000,
+            sha256: "abc123".to_string(),
+            architectures: None,
+        })
+    }
+
+    fn make_test_finding(id: &str, crit: Criticality) -> Finding {
+        Finding::capability(id.to_string(), format!("Test finding: {}", id), 0.9)
+            .with_criticality(crit)
+    }
+
+    #[test]
+    fn test_evaluate_container_composites_empty_findings() {
+        // Skip if traits directory not available
+        let traits_path = std::path::Path::new("traits");
+        if !traits_path.exists() {
+            return;
+        }
+
+        let mapper = super::super::CapabilityMapper::new();
+        let report = make_test_report();
+
+        // With no nested findings, should return empty
+        let container_findings = mapper.evaluate_container_composites(&report, &[], "zip");
+        // Either empty or only rules that match on file type alone
+        // (depends on the rules in traits directory)
+        assert!(container_findings.len() < 100, "Should not have excessive findings");
+    }
+
+    #[test]
+    fn test_evaluate_container_composites_deduplication() {
+        // Skip if traits directory not available
+        let traits_path = std::path::Path::new("traits");
+        if !traits_path.exists() {
+            return;
+        }
+
+        let mapper = super::super::CapabilityMapper::new();
+        let mut report = make_test_report();
+
+        // Pre-populate report with a finding
+        let preexisting = make_test_finding("test/preexisting", Criticality::Notable);
+        report.findings.push(preexisting);
+
+        // Evaluate with nested findings
+        let nested = vec![make_test_finding("nested/finding", Criticality::Suspicious)];
+        let container_findings = mapper.evaluate_container_composites(&report, &nested, "zip");
+
+        // Should not include preexisting finding IDs
+        assert!(
+            !container_findings.iter().any(|f| f.id == "test/preexisting"),
+            "Should not duplicate preexisting findings"
+        );
+    }
+
+    #[test]
+    fn test_evaluate_container_composites_evidence_marking() {
+        // Skip if traits directory not available
+        let traits_path = std::path::Path::new("traits");
+        if !traits_path.exists() {
+            return;
+        }
+
+        let mapper = super::super::CapabilityMapper::new();
+        let report = make_test_report();
+
+        // Create nested findings that might trigger a composite
+        let nested = vec![
+            make_test_finding("metadata/builder/npm::package-json", Criticality::Baseline),
+            make_test_finding("micro-behaviors/fs/file/dll::dll-file", Criticality::Notable),
+        ];
+
+        let container_findings = mapper.evaluate_container_composites(&report, &nested, "zip");
+
+        // Any findings without evidence should get the container-composite marker
+        for finding in &container_findings {
+            if !finding.evidence.is_empty() {
+                // Verify the evidence is properly marked
+                let has_container_marker = finding
+                    .evidence
+                    .iter()
+                    .any(|e| e.method == "container-composite" || e.source.contains("cross-file"));
+                // Either has container marker or has other evidence from the rule
+                assert!(
+                    has_container_marker || finding.evidence.iter().any(|e| !e.method.is_empty()),
+                    "Finding should have evidence: {:?}",
+                    finding.id
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_evaluate_container_composites_file_type_detection() {
+        // Skip if traits directory not available
+        let traits_path = std::path::Path::new("traits");
+        if !traits_path.exists() {
+            return;
+        }
+
+        let mapper = super::super::CapabilityMapper::new();
+
+        // Test with various archive types
+        for file_type in &["zip", "tar", "7z", "archive", "jar", "deb", "rpm"] {
+            let report = make_test_report();
+            let nested = vec![make_test_finding("test/nested", Criticality::Notable)];
+
+            // Should not panic for any archive type
+            let _ = mapper.evaluate_container_composites(&report, &nested, file_type);
+        }
+    }
 }

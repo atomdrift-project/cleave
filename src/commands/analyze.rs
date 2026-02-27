@@ -502,11 +502,97 @@ fn analyze_file_with_context(
             }
             // Use streaming for JSONL format to emit files as they're analyzed
             if matches!(format, cli::OutputFormat::Jsonl) {
-                analyzer.analyze_streaming(path, |file_analysis| {
-                    if let Ok(line) = output::format_jsonl_line(file_analysis) {
+                let archive_path = path.display().to_string();
+                let report = analyzer.analyze_streaming(path, |file_analysis| {
+                    let mut fa = file_analysis.clone();
+                    fa.path = types::file_analysis::encode_archive_path(&archive_path, &fa.path);
+                    if let Ok(line) = output::format_jsonl_line(&fa) {
                         println!("{}", line);
                     }
-                })?
+                })?;
+
+                // Emit archive-level entry with container findings and formula
+                let mut max_risk = report
+                    .summary
+                    .as_ref()
+                    .and_then(|s| s.max_risk)
+                    .unwrap_or(types::Criticality::Baseline);
+                let mut counts = report
+                    .summary
+                    .as_ref()
+                    .map(|s| s.counts.clone())
+                    .unwrap_or_default();
+
+                // Include archive-level findings in risk calculation
+                for finding in &report.findings {
+                    if finding.crit > max_risk {
+                        max_risk = finding.crit;
+                    }
+                    match finding.crit {
+                        types::Criticality::Hostile => counts.hostile += 1,
+                        types::Criticality::Suspicious => counts.suspicious += 1,
+                        types::Criticality::Notable => counts.notable += 1,
+                        _ => {}
+                    }
+                }
+
+                // Create archive-level FileAnalysis with findings and formula
+                let mut archive_entry = types::FileAnalysis {
+                    id: 0,
+                    path: archive_path,
+                    parent_id: None,
+                    depth: 0,
+                    file_type: report.target.file_type.clone(),
+                    sha256: report.target.sha256.clone(),
+                    size: report.target.size_bytes,
+                    risk: if max_risk > types::Criticality::Baseline {
+                        Some(max_risk)
+                    } else {
+                        None
+                    },
+                    counts: if counts.hostile > 0 || counts.suspicious > 0 || counts.notable > 0 {
+                        Some(counts)
+                    } else {
+                        None
+                    },
+                    encoding: None,
+                    findings: report.findings.clone(),
+                    traits: report.traits.clone(),
+                    structure: report.structure.clone(),
+                    functions: Vec::new(),
+                    strings: Vec::new(),
+                    sections: Vec::new(),
+                    imports: Vec::new(),
+                    exports: Vec::new(),
+                    yara_matches: report.yara_matches.clone(),
+                    syscalls: Vec::new(),
+                    binary_properties: None,
+                    source_code_metrics: None,
+                    metrics: None,
+                    paths: Vec::new(),
+                    directories: Vec::new(),
+                    env_vars: Vec::new(),
+                    extracted_path: None,
+                    formula: None,
+                };
+                archive_entry.compute_summary();
+
+                if let Ok(line) = output::format_jsonl_line(&archive_entry) {
+                    println!("{}", line);
+                }
+
+                // Emit summary line for streaming output
+                if let Ok(line) = output::format_jsonl_summary(&report) {
+                    println!("{}", line);
+                }
+
+                // Check criticality error before returning
+                check_criticality_error(&report, error_if_levels)?;
+
+                // For streaming JSONL, we've already printed all output via callbacks,
+                // the archive entry, and summary above. Return empty string to avoid
+                // duplicate output from format_jsonl which would create another root file.
+                return Ok(String::new());
             } else {
                 analyzer.analyze(path)?
             }

@@ -3,6 +3,7 @@ package main
 import (
 	"database/sql"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -43,7 +44,7 @@ type promptData struct {
 type config struct {
 	db                *sql.DB
 	repoRoot          string
-	cleaveBin        string
+	cleaveBin         string
 	provider          string
 	model             string
 	extractDir        string
@@ -55,6 +56,7 @@ type config struct {
 	idleTimeout       time.Duration
 	rescanAfter       int
 	restartAfter      int
+	maxPending        int
 	concurrency       int
 	validateEvery     int
 	knownGood         bool
@@ -132,11 +134,11 @@ type streamStats struct {
 	totalStandaloneFiles int
 	estimatedTotal       int
 	mu                   sync.Mutex
-	shouldRestart        bool
+	shouldRestart        atomic.Bool // atomic for lock-free read from scanner loop
 }
 
 // critRank maps criticality levels to numeric ranks for comparison.
-// component and baseline are both low-value (0), notable=1, suspicious=2, hostile=3
+// critRank maps criticality levels to numeric ranks for comparison.
 var critRank = map[string]int{"component": 0, "baseline": 0, "notable": 1, "suspicious": 2, "hostile": 3}
 
 // workerState tracks the current state of a single LLM worker slot.

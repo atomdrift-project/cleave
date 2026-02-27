@@ -33,6 +33,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -82,13 +83,14 @@ func hasMisclassificationMarker(filePath string) (found bool, markerType string)
 
 // reviewCoordinator manages concurrent LLM review sessions.
 type reviewCoordinator struct {
-	jobs    chan reviewJob
-	results chan reviewResult
-	cfg     *config
-	logger  *slog.Logger
-	workers []workerState
-	wg      sync.WaitGroup
-	mu      sync.Mutex
+	jobs           chan reviewJob
+	results        chan reviewResult
+	cfg            *config
+	logger         *slog.Logger
+	workers        []workerState
+	wg             sync.WaitGroup
+	mu             sync.Mutex
+	pendingReviews int64 // atomic: jobs submitted but not yet completed
 }
 
 // newReviewCoordinator creates a coordinator with N worker goroutines.
@@ -118,7 +120,18 @@ func newReviewCoordinator(ctx context.Context, cfg *config, logger *slog.Logger)
 
 // submit sends a job for review. Blocks if buffer is full (backpressure).
 func (rc *reviewCoordinator) submit(job reviewJob) {
+	atomic.AddInt64(&rc.pendingReviews, 1)
 	rc.jobs <- job
+}
+
+// completeReview decrements the pending review counter.
+func (rc *reviewCoordinator) completeReview() {
+	atomic.AddInt64(&rc.pendingReviews, -1)
+}
+
+// pendingCount returns the number of reviews in progress or queued.
+func (rc *reviewCoordinator) pendingCount() int64 {
+	return atomic.LoadInt64(&rc.pendingReviews)
 }
 
 // close signals no more jobs and waits for all workers to finish.
@@ -353,8 +366,8 @@ func archiveProblematicMembers(a *ArchiveAnalysis, knownGood bool) []FileAnalysi
 func main() {
 	// Set environment variables for all child processes (including LLM-spawned cleave instances).
 	// This ensures debug logging and validation are always enabled for post-mortem analysis.
-	os.Setenv("CLEAVE_FILE_LOGGING", "1")
-	os.Setenv("CLEAVE_VALIDATE", "1")
+	os.Setenv("CLEAVE_FILE_LOGGING", "1") //nolint:errcheck,gosec // only fails if key empty
+	os.Setenv("CLEAVE_VALIDATE", "1")     //nolint:errcheck,gosec // only fails if key empty
 
 	log.SetFlags(0)
 
@@ -375,11 +388,12 @@ gemini-2.5-pro, gemini-2.5-flash. Popular choices:
 	idleTimeout := flag.Duration("idle-timeout", 7*time.Minute, "Kill LLM if no output for this duration")
 	flush := flag.Bool("flush", false, "Clear analysis cache and reprocess all files")
 	rescanAfter := flag.Int("rescan-after", 4, "Restart scan after reviewing N files to verify fixes (0 = disabled)")
-	restartAfter := flag.Int("restart-after", 200, "Kill and restart cleave after analyzing N files to avoid memory leaks (0 = disabled)")
+	restartAfter := flag.Int("restart-after", 400, "Kill and restart cleave after analyzing N files to avoid memory leaks (0 = disabled)")
+	maxPending := flag.Int("max-pending", 50, "Pause cleave when this many reviews are pending (backpressure to limit memory)")
 	concurrency := flag.Int("concurrency", 2, "Number of concurrent LLM review sessions")
 	verbose := flag.Bool("verbose", false, "Show detailed skip/progress messages")
 	validateEvery := flag.Int("validate-every", 500, "Randomly validate 1 in N files even if properly classified (0 = disabled)")
-	trainingDir := flag.String("training-dir", "", "Root directory for saving training JSONL (creates good/, bad/, good-review/, bad-review/ subdirs)")
+	trainingDir := flag.String("training-dir", "", "Root dir for training JSONL (creates good/, bad/, good-review/, bad-review/)")
 
 	flag.Parse()
 
@@ -507,10 +521,17 @@ gemini-2.5-pro, gemini-2.5-flash. Popular choices:
 		}
 		trainingDataDir = filepath.Join(*trainingDir, subdir)
 		trainingReviewDir = filepath.Join(*trainingDir, reviewSubdir)
+		//nolint:gosec // training data needs user readability (G301)
 		if err := os.MkdirAll(trainingDataDir, 0o755); err != nil {
+			db.Close()               //nolint:errcheck,gosec // best-effort cleanup before fatal
+			os.RemoveAll(extractDir) //nolint:errcheck,gosec // best-effort cleanup before fatal
+			//nolint:gocritic // exitAfterDefer is intentional; manual cleanup done above
 			log.Fatalf("Could not create training data directory %s: %v", trainingDataDir, err)
 		}
+		//nolint:gosec // training data needs user readability (G301)
 		if err := os.MkdirAll(trainingReviewDir, 0o755); err != nil {
+			db.Close()               //nolint:errcheck,gosec // best-effort cleanup before fatal
+			os.RemoveAll(extractDir) //nolint:errcheck,gosec // best-effort cleanup before fatal
 			log.Fatalf("Could not create training review directory %s: %v", trainingReviewDir, err)
 		}
 		fmt.Fprintf(os.Stderr, "%sTraining data:%s %s (confirmed), %s (review)\n", colorDim, colorReset, trainingDataDir, trainingReviewDir)
@@ -535,6 +556,7 @@ gemini-2.5-pro, gemini-2.5-flash. Popular choices:
 		trainingReviewDir: trainingReviewDir,
 		rescanAfter:       *rescanAfter,
 		restartAfter:      *restartAfter,
+		maxPending:        *maxPending,
 		concurrency:       *concurrency,
 		validateEvery:     *validateEvery,
 	}
@@ -563,7 +585,6 @@ gemini-2.5-pro, gemini-2.5-flash. Popular choices:
 		if err := cmd.Run(); err != nil {
 			db.Close()               //nolint:errcheck,gosec // best-effort cleanup before fatal
 			os.RemoveAll(extractDir) //nolint:errcheck,gosec // best-effort cleanup before fatal
-			//nolint:gocritic // exitAfterDefer is intentional; manual cleanup done above
 			log.Fatalf("cargo build --release failed: %v (%s)", err, stderr.String())
 		}
 
@@ -658,7 +679,7 @@ gemini-2.5-pro, gemini-2.5-flash. Popular choices:
 		}
 		yamlFixAttempts = 0
 
-		if !stats.shouldRestart {
+		if !stats.shouldRestart.Load() {
 			// No more files to review
 			wallClockTime := time.Since(sessionStartTime)
 			fmt.Fprint(os.Stderr, "\n=== Session Complete ===\n")
@@ -877,6 +898,7 @@ func streamAnalyzeAndReview(ctx context.Context, cfg *config, dbMode string) (*s
 	go func() {
 		defer close(resultsDone)
 		for result := range coordinator.results {
+			coordinator.completeReview() // Decrement pending counter for backpressure
 			path := jobPath(result.job)
 			if result.err != nil {
 				logger.Error("review_failed",
@@ -916,7 +938,7 @@ func streamAnalyzeAndReview(ctx context.Context, cfg *config, dbMode string) (*s
 
 				// Check rescan threshold
 				if cfg.rescanAfter > 0 && state.filesReviewedCount >= cfg.rescanAfter {
-					state.stats.shouldRestart = true
+					state.stats.shouldRestart.Store(true)
 				}
 			}
 			state.stats.mu.Unlock()
@@ -948,13 +970,33 @@ func streamAnalyzeAndReview(ctx context.Context, cfg *config, dbMode string) (*s
 
 	for scanner.Scan() {
 		// Check if we need to restart (hit review limit)
-		if state.stats.shouldRestart {
+		if state.stats.shouldRestart.Load() {
 			clearProgressLine()
 			fmt.Fprintf(os.Stderr, "%s⚡%s Reviewed %s%d%s files - restarting scan to verify trait changes (killing cleave)\n",
 				colorYellow, colorReset, colorBold, state.cfg.rescanAfter, colorReset)
 			cmd.Process.Kill() //nolint:errcheck,gosec // intentional kill on restart
 			cmd.Wait()         //nolint:errcheck,gosec // reap the process
+			// Wait for pending reviews before restart to avoid overwriting files LLMs are reading
+			if activeCount := coordinator.activeCount(); activeCount > 0 {
+				fmt.Fprintf(os.Stderr, "%s⏳%s Waiting for %s%d%s active review(s) before restart...\n",
+					colorYellow, colorReset, colorYellow, activeCount, colorReset)
+			}
+			coordinator.close()
+			<-resultsDone
 			return state.stats, nil
+		}
+
+		// Backpressure: pause reading from cleave when too many reviews are pending.
+		// This naturally throttles cleave via OS pipe buffering, limiting memory growth.
+		if cfg.maxPending > 0 && coordinator.pendingCount() >= int64(cfg.maxPending) {
+			clearProgressLine()
+			fmt.Fprintf(os.Stderr, "%s⏸%s  Backpressure: %d pending reviews (max %d), pausing cleave...\n",
+				colorYellow, colorReset, coordinator.pendingCount(), cfg.maxPending)
+			for coordinator.pendingCount() >= int64(cfg.maxPending) {
+				time.Sleep(500 * time.Millisecond)
+			}
+			fmt.Fprintf(os.Stderr, "%s▶%s  Resuming cleave scan\n", colorGreen, colorReset)
+			progressLines = 0 // Reset progress display after backpressure message
 		}
 
 		line := strings.TrimSpace(scanner.Text())
@@ -987,9 +1029,16 @@ func streamAnalyzeAndReview(ctx context.Context, cfg *config, dbMode string) (*s
 			clearProgressLine()
 			fmt.Fprintf(os.Stderr, "%s⚡%s Analyzed %s%d%s files - restarting cleave to avoid memory leak\n",
 				colorYellow, colorReset, colorBold, fileCount, colorReset)
-			state.stats.shouldRestart = true
+			state.stats.shouldRestart.Store(true)
 			cmd.Process.Kill() //nolint:errcheck,gosec // intentional kill on restart
 			cmd.Wait()         //nolint:errcheck,gosec // reap the process
+			// Wait for pending reviews before restart to avoid overwriting files LLMs are reading
+			if activeCount := coordinator.activeCount(); activeCount > 0 {
+				fmt.Fprintf(os.Stderr, "%s⏳%s Waiting for %s%d%s active review(s) before restart...\n",
+					colorYellow, colorReset, colorYellow, activeCount, colorReset)
+			}
+			coordinator.close()
+			<-resultsDone
 			return state.stats, nil
 		}
 
@@ -1580,17 +1629,6 @@ func processRealFile(ctx context.Context, st *streamState) {
 	}
 }
 
-// hasNotableOrHigher returns true if the file has at least one finding with
-// criticality of notable, suspicious, or hostile.
-func hasNotableOrHigher(f FileAnalysis) bool {
-	for _, finding := range f.Findings {
-		if critRank[strings.ToLower(finding.Crit)] >= 1 {
-			return true
-		}
-	}
-	return false
-}
-
 // needsReview determines if a file needs AI review based on mode.
 // Returns (needsReview, isValidationSample).
 // --good: Review files WITH hostile findings OR 2+ suspicious findings (reduce false positives).
@@ -1616,9 +1654,7 @@ func needsReview(f FileAnalysis, knownGood bool, validateEvery int) (review bool
 				return false, false // Has detection, skip review
 			}
 			// Track if any finding is outside metadata/ or above baseline/component
-			if c != "baseline" && c != "component" {
-				hasNonMetadataFinding = true
-			} else if !strings.HasPrefix(finding.ID, "metadata/") {
+			if (c != "baseline" && c != "component") || !strings.HasPrefix(finding.ID, "metadata/") {
 				hasNonMetadataFinding = true
 			}
 		}
@@ -1650,8 +1686,12 @@ func needsReview(f FileAnalysis, knownGood bool, validateEvery int) (review bool
 	}
 
 	// Would normally skip - but maybe validate if file has notable+ findings
-	if validateEvery > 0 && hasNotableOrHigher(f) && rand.IntN(validateEvery) == 0 { //nolint:gosec // non-cryptographic sampling
-		return true, true // Validation sample
+	if validateEvery > 0 && rand.IntN(validateEvery) == 0 { //nolint:gosec // non-cryptographic sampling
+		for _, finding := range f.Findings {
+			if critRank[strings.ToLower(finding.Crit)] >= 1 {
+				return true, true // Validation sample with notable+ finding
+			}
+		}
 	}
 	return false, false
 }
@@ -1675,7 +1715,8 @@ func sanityCheck(ctx context.Context, cfg *config) error {
 	const testFile = "/bin/ls"
 	fmt.Fprintf(os.Stderr, "Sanity check: running cleave on %s...\n", testFile)
 
-	cmd := exec.CommandContext(ctx, cfg.cleaveBin, "--format", "jsonl", "--validate=true", testFile) //nolint:gosec // cleaveBin is built from trusted cargo
+	//nolint:gosec // cleaveBin is built from trusted cargo
+	cmd := exec.CommandContext(ctx, cfg.cleaveBin, "--format", "jsonl", "--validate=true", testFile)
 	if cfg.useCargo {
 		cmd.Dir = cfg.repoRoot // Run from repo root if using cargo
 	}
@@ -1866,15 +1907,6 @@ func buildFindingsSummary(findings []Finding) string {
 		}
 	}
 	return sb.String()
-}
-
-// collectArchiveFindings gathers all findings from archive members.
-func collectArchiveFindings(members []FileAnalysis) []Finding {
-	var all []Finding
-	for _, m := range members {
-		all = append(all, m.Findings...)
-	}
-	return all
 }
 
 // buildFileEntry creates a fileEntry from a FileAnalysis with summary stats.
@@ -2070,7 +2102,10 @@ func invokeAIArchive(ctx context.Context, cfg *config, a *ArchiveAnalysis, isVal
 		fileHash = hashString(a.ArchivePath)
 	}
 
-	allFindings := collectArchiveFindings(a.Members)
+	var allFindings []Finding
+	for _, m := range a.Members {
+		allFindings = append(allFindings, m.Findings...)
+	}
 	hostileCount, suspiciousCount := countFindingsByCrit(allFindings)
 
 	data := promptData{
@@ -2200,7 +2235,7 @@ func runAIWithStreaming(ctx context.Context, cfg *config, prompt, sid, prefix st
 	// Always print the full prompt for visibility
 	fmt.Fprintf(os.Stderr, "%s>>> %s %s\n", prefix, cmd.Path, strings.Join(cmd.Args[1:], " "))
 	fmt.Fprintf(os.Stderr, "%s>>> Prompt (%d bytes):\n", prefix, len(prompt))
-	for _, line := range strings.Split(prompt, "\n") {
+	for line := range strings.SplitSeq(prompt, "\n") {
 		fmt.Fprintf(os.Stderr, "%s%s%s%s\n", prefix, colorBrightWhite, line, colorReset)
 	}
 	fmt.Fprintf(os.Stderr, "%s>>> End Prompt\n", prefix)

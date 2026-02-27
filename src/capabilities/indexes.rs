@@ -112,65 +112,60 @@ pub(crate) struct StringMatchIndex {
 }
 
 impl StringMatchIndex {
-    /// Extract the literal prefix from a regex pattern.
-    /// Returns None if no useful literal can be extracted (pattern starts with metachar).
+    /// Extract a literal prefix from a regex pattern using proper regex parsing.
+    ///
+    /// Uses `regex_syntax` to correctly handle all regex syntax including:
+    /// - Optional characters (`s?` extracts nothing for `s`)
+    /// - Character classes (`[abc]` extracts nothing)
+    /// - Alternations (`foo|bar` extracts nothing)
+    /// - Escaped metacharacters (`\.` extracts `.`)
+    ///
+    /// Returns None if no useful literal (>= 3 chars) can be extracted.
     pub(crate) fn extract_regex_literal(pattern: &str) -> Option<String> {
-        // Strip common regex flags at the start: (?i), (?m), (?s), (?x), etc.
-        let pattern = if pattern.starts_with("(?") {
-            if let Some(end) = pattern.find(')') {
-                &pattern[end + 1..]
-            } else {
-                pattern
-            }
-        } else {
-            pattern
-        };
+        use regex_syntax::hir::literal::{ExtractKind, Extractor};
+        use regex_syntax::Parser;
 
-        // Skip patterns that start with anchors or wildcards
-        if pattern.starts_with('^') || pattern.starts_with(".*") || pattern.starts_with(".+") {
-            // Try to find a literal after the anchor/wildcard
-            let skip = if pattern.starts_with(".*") || pattern.starts_with(".+") {
-                2
-            } else {
-                1
-            };
-            return Self::extract_literal_from(&pattern[skip..]);
+        // Parse the regex pattern into HIR (High-level Intermediate Representation)
+        let hir = Parser::new().parse(pattern).ok()?;
+
+        // Extract prefix literals (guaranteed to appear at the start of any match)
+        let mut extractor = Extractor::new();
+        extractor.kind(ExtractKind::Prefix);
+        let seq = extractor.extract(&hir);
+
+        // Get the literals - if extraction failed or is infinite, return None
+        let literals = seq.literals()?;
+
+        if literals.is_empty() {
+            return None;
         }
 
-        Self::extract_literal_from(pattern)
-    }
+        // Find the longest common prefix among all possible literal prefixes.
+        // This is the guaranteed prefix that must appear in any match.
+        let first = literals.first()?;
+        let mut common_prefix_len = first.as_bytes().len();
 
-    /// Extract literal from a pattern starting at the given position.
-    fn extract_literal_from(pattern: &str) -> Option<String> {
-        let mut literal = String::new();
-        let mut in_escape = false;
-
-        for c in pattern.chars() {
-            if in_escape {
-                // Handle escaped characters
-                match c {
-                    // Common escapes that represent literals
-                    's' | 'S' | 'd' | 'D' | 'w' | 'W' | 'b' | 'B' => break, // meta escapes
-                    '.' | '*' | '+' | '?' | '[' | ']' | '(' | ')' | '{' | '}' | '|' | '^' | '$'
-                    | '\\' => {
-                        literal.push(c);
-                    }
-                    _ => literal.push(c),
+        for lit in literals.iter().skip(1) {
+            let bytes = lit.as_bytes();
+            common_prefix_len = common_prefix_len.min(bytes.len());
+            for (i, (a, b)) in first.as_bytes().iter().zip(bytes.iter()).enumerate() {
+                if a != b {
+                    common_prefix_len = common_prefix_len.min(i);
+                    break;
                 }
-                in_escape = false;
-            } else if c == '\\' {
-                in_escape = true;
-            } else if c.is_alphanumeric() || c == '_' || c == '-' || c == '/' || c == '.' {
-                literal.push(c);
-            } else {
-                // Hit a metacharacter, stop
-                break;
             }
         }
 
-        // Return literal if it's at least 3 chars (useful for filtering)
-        if literal.len() >= 3 {
-            Some(literal)
+        if common_prefix_len < 3 {
+            return None;
+        }
+
+        // Convert to string (regex-syntax guarantees valid UTF-8 for string patterns)
+        let prefix_bytes = &first.as_bytes()[..common_prefix_len];
+        let prefix = String::from_utf8_lossy(prefix_bytes);
+
+        if prefix.len() >= 3 {
+            Some(prefix.into_owned())
         } else {
             None
         }
@@ -1109,40 +1104,39 @@ mod tests {
 
     #[test]
     fn test_extract_regex_literal_simple() {
-        // Simple alphanumeric prefix - note that . is allowed as a literal char
-        // The * is what stops extraction, so "hello." is included
+        // Simple alphanumeric prefix
+        // .* is a wildcard (matches any chars), so we stop before the .
         assert_eq!(
             StringMatchIndex::extract_regex_literal("hello.*world"),
-            Some("hello.".to_string())
+            Some("hello".to_string())
         );
     }
 
     #[test]
     fn test_extract_regex_literal_with_special_chars() {
-        // ':' is not an allowed char, so stops at "http"
+        // regex_syntax correctly handles escaped \. as literal dot
         assert_eq!(
             StringMatchIndex::extract_regex_literal("http://example\\.com/.*"),
-            Some("http".to_string())
+            Some("http://example.com/".to_string())
         );
-        // Without colon, should work (. / - _ are allowed)
+        // Unescaped . is a metachar (matches any char), so stops before it
         assert_eq!(
             StringMatchIndex::extract_regex_literal("example/path/file.txt"),
+            Some("example/path/file".to_string())
+        );
+        // With escaped dot, full literal is extracted
+        assert_eq!(
+            StringMatchIndex::extract_regex_literal(r"example/path/file\.txt"),
             Some("example/path/file.txt".to_string())
         );
     }
 
     #[test]
     fn test_extract_regex_literal_too_short() {
-        // "ab." is 3 chars, which is the minimum - returns Some
-        assert_eq!(
-            StringMatchIndex::extract_regex_literal("ab.*"),
-            Some("ab.".to_string())
-        );
-        // Starts with .* but has literal after - now extracts the literal
-        assert_eq!(
-            StringMatchIndex::extract_regex_literal(".*test"),
-            Some("test".to_string())
-        );
+        // "ab" is only 2 chars, too short for useful prefiltering
+        assert_eq!(StringMatchIndex::extract_regex_literal("ab.*"), None);
+        // Prefix extraction only - .* at start means no guaranteed prefix
+        assert_eq!(StringMatchIndex::extract_regex_literal(".*test"), None);
         // Truly no literal
         assert_eq!(StringMatchIndex::extract_regex_literal(".*"), None);
         assert_eq!(StringMatchIndex::extract_regex_literal(".*.*"), None);
@@ -1168,49 +1162,45 @@ mod tests {
 
     #[test]
     fn test_extract_regex_literal_with_path_chars() {
-        // Unix path-like patterns - . is a literal char
+        // Unix path-like patterns - .* is a wildcard, so stop before the .
         assert_eq!(
             StringMatchIndex::extract_regex_literal("/usr/bin/.*"),
-            Some("/usr/bin/.".to_string())
+            Some("/usr/bin/".to_string())
         );
-        // Windows paths with drive letters use : which stops extraction
-        // So C:\\ extracts just "C" which is too short (< 3 chars)
+        // regex_syntax correctly handles \\ as escaped backslash, : as literal
         assert_eq!(
             StringMatchIndex::extract_regex_literal(r"C:\\Windows\\.*"),
-            None
+            Some("C:\\Windows\\".to_string())
         );
-        // But without the drive letter, Windows paths work
+        // Windows paths without drive letter
         assert_eq!(
             StringMatchIndex::extract_regex_literal(r"\\Windows\\System32\\.*"),
-            Some("\\Windows\\System32\\.".to_string())
+            Some("\\Windows\\System32\\".to_string())
         );
     }
 
     #[test]
     fn test_extract_regex_literal_with_underscore() {
-        // Underscores are allowed - . before * is included
+        // Underscores are allowed - .* is a wildcard, so stop before the .
         assert_eq!(
             StringMatchIndex::extract_regex_literal("some_function_name.*"),
-            Some("some_function_name.".to_string())
+            Some("some_function_name".to_string())
         );
     }
 
     #[test]
     fn test_extract_regex_literal_with_hyphen() {
-        // Hyphens are allowed - . before * is included
+        // Hyphens are allowed - .* is a wildcard, so stop before the .
         assert_eq!(
             StringMatchIndex::extract_regex_literal("my-app-name-.*"),
-            Some("my-app-name-.".to_string())
+            Some("my-app-name-".to_string())
         );
     }
 
     #[test]
     fn test_extract_regex_literal_starts_with_metachar() {
-        // Pattern starting with .* extracts literal after the prefix
-        assert_eq!(
-            StringMatchIndex::extract_regex_literal(".*hello"),
-            Some("hello".to_string())
-        );
+        // Prefix extraction - .* at start means no guaranteed prefix
+        assert_eq!(StringMatchIndex::extract_regex_literal(".*hello"), None);
         // Pattern starting with other metachars returns None
         assert_eq!(StringMatchIndex::extract_regex_literal("[a-z]+"), None);
         assert_eq!(StringMatchIndex::extract_regex_literal("(foo|bar)"), None);
@@ -1230,25 +1220,32 @@ mod tests {
 
     #[test]
     fn test_extract_regex_literal_alternation() {
-        // Alternation | should stop extraction
+        // Alternation with no common prefix returns None
+        assert_eq!(StringMatchIndex::extract_regex_literal("foo|bar"), None);
+        // Alternation with common prefix extracts it
         assert_eq!(
-            StringMatchIndex::extract_regex_literal("foo|bar"),
-            Some("foo".to_string())
+            StringMatchIndex::extract_regex_literal("hello_foo|hello_bar"),
+            Some("hello_".to_string())
         );
     }
 
     #[test]
     fn test_extract_regex_literal_question_mark() {
-        // Question mark should stop extraction
+        // ? makes preceding char optional - common prefix is "hell" (without optional 'o')
         assert_eq!(
             StringMatchIndex::extract_regex_literal("hello?world"),
-            Some("hello".to_string())
+            Some("hell".to_string())
+        );
+        // https? matches http:// or https:// - common prefix is "http" (this is the bug we fixed!)
+        assert_eq!(
+            StringMatchIndex::extract_regex_literal("https?://"),
+            Some("http".to_string())
         );
     }
 
     #[test]
     fn test_extract_regex_literal_plus() {
-        // Plus should stop extraction
+        // + means one or more - at least one 'o' is guaranteed
         assert_eq!(
             StringMatchIndex::extract_regex_literal("hello+world"),
             Some("hello".to_string())

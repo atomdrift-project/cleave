@@ -54,6 +54,7 @@ type config struct {
 	timeout           time.Duration
 	idleTimeout       time.Duration
 	rescanAfter       int
+	restartAfter      int
 	concurrency       int
 	validateEvery     int
 	knownGood         bool

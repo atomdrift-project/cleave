@@ -375,6 +375,7 @@ gemini-2.5-pro, gemini-2.5-flash. Popular choices:
 	idleTimeout := flag.Duration("idle-timeout", 7*time.Minute, "Kill LLM if no output for this duration")
 	flush := flag.Bool("flush", false, "Clear analysis cache and reprocess all files")
 	rescanAfter := flag.Int("rescan-after", 4, "Restart scan after reviewing N files to verify fixes (0 = disabled)")
+	restartAfter := flag.Int("restart-after", 200, "Kill and restart cleave after analyzing N files to avoid memory leaks (0 = disabled)")
 	concurrency := flag.Int("concurrency", 2, "Number of concurrent LLM review sessions")
 	verbose := flag.Bool("verbose", false, "Show detailed skip/progress messages")
 	validateEvery := flag.Int("validate-every", 500, "Randomly validate 1 in N files even if properly classified (0 = disabled)")
@@ -533,6 +534,7 @@ gemini-2.5-pro, gemini-2.5-flash. Popular choices:
 		trainingDataDir:   trainingDataDir,
 		trainingReviewDir: trainingReviewDir,
 		rescanAfter:       *rescanAfter,
+		restartAfter:      *restartAfter,
 		concurrency:       *concurrency,
 		validateEvery:     *validateEvery,
 	}
@@ -979,6 +981,17 @@ func streamAnalyzeAndReview(ctx context.Context, cfg *config, dbMode string) (*s
 
 		fileCount++
 		state.currentScanPath = entry.Path
+
+		// Check if we should restart cleave due to memory leak workaround
+		if cfg.restartAfter > 0 && fileCount >= cfg.restartAfter {
+			clearProgressLine()
+			fmt.Fprintf(os.Stderr, "%s⚡%s Analyzed %s%d%s files - restarting cleave to avoid memory leak\n",
+				colorYellow, colorReset, colorBold, fileCount, colorReset)
+			state.stats.shouldRestart = true
+			cmd.Process.Kill() //nolint:errcheck,gosec // intentional kill on restart
+			cmd.Wait()         //nolint:errcheck,gosec // reap the process
+			return state.stats, nil
+		}
 
 		// Update progress display periodically
 		if time.Since(last) > 100*time.Millisecond {

@@ -1558,6 +1558,17 @@ func processRealFile(ctx context.Context, st *streamState) {
 	}
 }
 
+// hasNotableOrHigher returns true if the file has at least one finding with
+// criticality of notable, suspicious, or hostile.
+func hasNotableOrHigher(f FileAnalysis) bool {
+	for _, finding := range f.Findings {
+		if critRank[strings.ToLower(finding.Crit)] >= 1 {
+			return true
+		}
+	}
+	return false
+}
+
 // needsReview determines if a file needs AI review based on mode.
 // Returns (needsReview, isValidationSample).
 // --good: Review files WITH hostile findings OR 2+ suspicious findings (reduce false positives).
@@ -1568,6 +1579,7 @@ func processRealFile(ctx context.Context, st *streamState) {
 //
 // When validateEvery > 0, randomly selects 1 in N files that would normally be skipped
 // for validation review (checking for sneaky issues even in "passing" files).
+// Validation sampling only applies to files with at least one notable+ finding.
 func needsReview(f FileAnalysis, knownGood bool, validateEvery int) (review bool, isValidation bool) {
 	if !knownGood {
 		// Known-bad mode: review if no suspicious/hostile findings (FN check)
@@ -1589,10 +1601,8 @@ func needsReview(f FileAnalysis, knownGood bool, validateEvery int) (review bool
 			}
 		}
 		// Skip review if only metadata/ baseline/component findings (supporting data files)
+		// No validation sampling here - these files have no notable+ findings
 		if len(f.Findings) > 0 && !hasNonMetadataFinding {
-			if validateEvery > 0 && rand.IntN(validateEvery) == 0 { //nolint:gosec // non-cryptographic sampling
-				return true, true // Validation sample
-			}
 			return false, false // Only inert metadata findings, skip review
 		}
 		return true, false // No detection, needs review
@@ -1617,8 +1627,8 @@ func needsReview(f FileAnalysis, knownGood bool, validateEvery int) (review bool
 		return true, false // Normal review needed
 	}
 
-	// Would normally skip - but maybe validate
-	if validateEvery > 0 && rand.IntN(validateEvery) == 0 { //nolint:gosec // non-cryptographic sampling
+	// Would normally skip - but maybe validate if file has notable+ findings
+	if validateEvery > 0 && hasNotableOrHigher(f) && rand.IntN(validateEvery) == 0 { //nolint:gosec // non-cryptographic sampling
 		return true, true // Validation sample
 	}
 	return false, false

@@ -41,12 +41,14 @@ traits:
   # NOTE: Hex charset is extremely common in any binary - downgraded to baseline
   - id: hardcoded-hex-charset
     desc: "Hardcoded hex encoding charset (encoding/decoding)"
-    crit: baseline
+    crit: component
     conf: 0.2
     mbc: "C0026"
+    for: [javascript, typescript, python, shell, php, powershell, ruby]
     if:
       type: string
       substr: "0123456789abcdef"
+      count_min: 2
 
 composite_rules:
   # NOTE: Require 2+ indicators to avoid false positives from:

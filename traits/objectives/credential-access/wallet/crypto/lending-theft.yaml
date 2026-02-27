@@ -136,7 +136,7 @@ traits:
     conf: 0.90
     if:
       type: symbol
-      regex: "(LendRepositoryC|supply|withdraw|UnsignedTx)"
+      regex: "(LendRepositoryC|UnsignedTx|TxParamListResultDTO)"
 
   - id: interest-harvest
     desc: Interest accrual monitoring
@@ -153,7 +153,7 @@ traits:
     conf: 0.85
     if:
       type: symbol
-      regex: "(LendTokenListDTO|LendProviderResultDTO|TxParamListResultDTO)"
+      regex: "(LendTokenListDTO|LendProviderResultDTO)"
 
   - id: reactive-data-streaming
     desc: RxSwift reactive data streaming

@@ -83,6 +83,7 @@ traits:
       # SOCKS5 version 5, 1 method, no auth required
       pattern: "05 01 00"
       count_min: 10
+      per_kb_min: 0.1
     unless:
       - type: raw
         substr: "BSJB"  # .NET IL bytecode contains 05 01 00 sequences that aren't SOCKS

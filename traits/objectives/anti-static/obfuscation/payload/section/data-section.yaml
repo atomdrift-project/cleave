@@ -25,19 +25,30 @@ traits:
     conf: 0.9
     if:
       type: section
-      exact: "data"
+      regex: '\.(data|rdata)'
       entropy_min: 7.5
-      entropy_max: 8.0
+
+  # Encrypted rdata section (PE-specific, common in crypters)
+  - id: encrypted-rdata-section
+    desc: "Encrypted rdata section (PE crypter)"
+    crit: suspicious
+    conf: 0.9
+    for: [pe, dll]
+    if:
+      type: section
+      substr: "rdata"
+      entropy_min: 7.5
   # Large data section relative to text section
   - id: oversized-data-section
     desc: "Oversized data section vs code"
-    crit: notable
+    crit: baseline
     conf: 0.7
+    size_min: 32768
     if:
       type: section_ratio
       section: data
       compare_to: text
-      min: 0.5
+      min: 1.5
 
   # Data section dominates the binary
   - id: data-section-dominant

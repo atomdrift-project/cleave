@@ -25,4 +25,4 @@ traits:
     for: [shell, python, javascript, ruby, php, go, elf, macho]
     if:
       type: string
-      regex: '\bhost\s+'
+      regex: '(?m)(^|[;&|\s(])host\s+([A-Za-z0-9*_-]+\.){1,5}[A-Za-z]{2,}\b'

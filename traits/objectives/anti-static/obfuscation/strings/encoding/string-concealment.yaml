@@ -61,6 +61,9 @@ traits:
           regex: "^(UPX\\d|\\.upx)"  # UPX-packed binaries have no readable strings
         - type: raw
           substr: "PECompac"  # PECompact-packed binaries have no readable strings
+        - id: metadata/internal/symbols::icv_iconv
+        - type: basename
+          regex: "^[^/]+%[^/]+\\.so(?:\\.\\d+)*"
 
 composite_rules:
   # String concealment pattern

@@ -31,6 +31,5 @@ traits:
     conf: 0.85
     if:
       type: raw
-      # Match: try: ... except ...: pass
-      # (?s) allows . to match newlines. \s+ handles indentation.
-      regex: '(?s)try:.*?except.*?:\s+pass'
+      # Treat only broad except:pass as notable suppression, not specific exception handlers.
+      regex: '(?m)^\s*except\s*(Exception|BaseException|):\s*\n\s*pass\b'

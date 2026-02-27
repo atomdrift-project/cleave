@@ -9,15 +9,28 @@ defaults:
 
 composite_rules:
   - id: path-modification
-    desc: Modifies PATH environment variable for persistence/hijacking
+    desc: Modifies PATH environment variable (broad capability)
+    crit: notable
     # Requires both PATH reference AND setenv/putenv
     all:
       - id: micro-behaviors/os/env/vars::path-var
     any:
       - id: micro-behaviors/os/env/vars::setenv
       - id: micro-behaviors/os/env/vars::putenv
+    unless:
+      - id: metadata/quality::has-help
+      - id: metadata/quality/help::usage-title
+      - id: metadata/quality/help::help-long-flag
     downgrade:
       any:
         - id: metadata/apple::system-component
         - id: micro-behaviors/dylib/library::terminal-editor-marker
         - id: micro-behaviors/dylib/library::shell-interpreter
+        - id: metadata/quality::has-help
+
+  - id: path-modification-prepend-tmp
+    desc: Modifies PATH and prepends /tmp (execution-flow hijack)
+    crit: suspicious
+    all:
+      - id: path-modification
+      - id: objectives/evasion/hijack-execution-flow/env::path-prepend-tmp

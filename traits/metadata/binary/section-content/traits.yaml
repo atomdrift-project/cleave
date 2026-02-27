@@ -7,28 +7,28 @@
 # - Obfuscated content in specific locations
 
 traits:
-  # Suspicious patterns in data sections
+  # Byte-pattern indicators (coarse; kept notable to avoid over-alerting)
   - id: executable-pattern-in-data
-    desc: x86 function prologue in data section
-    crit: suspicious
-    conf: 0.7
+    desc: Repeated x86 prologue byte pattern
+    crit: notable
+    conf: 0.55
     for: [elf, pe]
     if:
       type: hex
       pattern: "55 89 E5" # push ebp; mov ebp, esp
-      section: data
-      count_min: 3
+      count_min: 24
+      per_kb_min: 1.0
 
   - id: nop-sled-in-data
-    desc: NOP sled pattern in data section
-    crit: suspicious
-    conf: 0.85
+    desc: Repeated NOP-run byte pattern
+    crit: notable
+    conf: 0.65
     for: [elf, pe]
     size_max: 1000000
     if:
       type: hex
-      pattern: "90 90 90 90 90 90 90 90" # 8 NOPs
-      section: data
+      pattern: "90 90 90 90 90 90 90 90 90 90 90 90 90 90 90 90" # 16 NOPs
+      count_min: 2
 
   - id: shellcode-prologue-data
     desc: Common shellcode start in data section
@@ -85,7 +85,7 @@ traits:
 
   - id: fini-array-hooks
     desc: Content in finalization array
-    crit: notable
+    crit: baseline
     conf: 0.8
     for: [elf]
     if:

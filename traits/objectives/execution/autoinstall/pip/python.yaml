@@ -98,19 +98,19 @@ traits:
 
   - id: except-module-not-found-content
     desc: "except ModuleNotFoundError in source"
-    crit: notable
+    crit: component
     conf: 0.80
     if:
       type: raw
-      substr: "except ModuleNotFoundError"
+      regex: "except ModuleNotFoundError.{0,200}pip"
 
   - id: except-import-error-content
     desc: "except ImportError in source"
-    crit: notable
+    crit: component
     conf: 0.70
     if:
       type: raw
-      substr: "except ImportError"
+      regex: "except ImportError.{0,200}pip"
 
 composite_rules:
   # Migrated from YARA

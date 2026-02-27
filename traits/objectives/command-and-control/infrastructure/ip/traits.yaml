@@ -39,6 +39,19 @@ traits:
 
   # Removed: http-raw-ip-url was a pure alias to micro-behaviors/communications/network/ip::http-ip-url
 
+
+  - id: hardcoded-ipv4-port-encoded
+    desc: Encoded external IPv4 with port
+    crit: suspicious
+    conf: 0.9
+    mbc: "C0002"
+    attack: "T1071.001"
+    size_max: 1500000
+    for: [elf, macho, pe]
+    if:
+      id: micro-behaviors/communications/network/ip::encoded-external-ipv4-port-binary
+
+
   # === Port number atomic indicators ===
   - id: port-23
     desc: "Port 23 (telnet)"

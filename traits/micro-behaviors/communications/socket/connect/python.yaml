@@ -80,7 +80,7 @@ traits:
     for: [python]
     if:
       type: symbol
-      exact: "connect"
+      exact: "socket.connect"
 
   - id: socket-connect-ex-call
     desc: socket.connect_ex() call (non-blocking)
@@ -89,7 +89,7 @@ traits:
     for: [python]
     if:
       type: symbol
-      exact: "connect_ex"
+      exact: "socket.connect_ex"
 
   - id: socket-bind-call
     desc: socket.bind() call
@@ -98,7 +98,7 @@ traits:
     for: [python]
     if:
       type: symbol
-      exact: "bind"
+      exact: "socket.bind"
 
   - id: socket-accept-call
     desc: socket.accept() call
@@ -107,7 +107,7 @@ traits:
     for: [python]
     if:
       type: symbol
-      exact: "accept"
+      exact: "socket.accept"
 
   - id: socket-send-call
     desc: socket.send() call
@@ -116,7 +116,7 @@ traits:
     for: [python]
     if:
       type: symbol
-      exact: "send"
+      exact: "socket.send"
 
   - id: socket-sendall-call
     desc: socket.sendall() call
@@ -125,7 +125,7 @@ traits:
     for: [python]
     if:
       type: symbol
-      exact: "sendall"
+      exact: "socket.sendall"
 
   - id: socket-recv-call
     desc: socket.recv() call
@@ -134,7 +134,7 @@ traits:
     for: [python]
     if:
       type: symbol
-      exact: "recv"
+      exact: "socket.recv"
 
   - id: socket-recvfrom-call
     desc: socket.recvfrom() call
@@ -143,7 +143,7 @@ traits:
     for: [python]
     if:
       type: symbol
-      exact: "recvfrom"
+      exact: "socket.recvfrom"
 
   - id: socket-close-call
     desc: socket.close() call
@@ -151,11 +151,8 @@ traits:
     conf: 0.6
     for: [python]
     if:
-      type: ast
-      kind: call
-      # Match generic object close() call; socket context is handled by surrounding composites.
-      regex: "\\b\\w+\\.close\\("
-
+      type: symbol
+      exact: "socket.close"
   # === Socket address operations ===
   - id: socket-gethostbyname
     desc: socket.gethostbyname() DNS lookup

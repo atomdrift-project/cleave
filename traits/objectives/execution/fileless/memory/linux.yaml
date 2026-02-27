@@ -176,13 +176,12 @@ traits:
 
   - id: dot-content
     desc: .content response attribute
-    crit: notable
+    crit: component
     conf: 0.3
     for: [python]
     if:
-      type: string
-      substr: ".content"
-
+      type: raw
+      regex: '\b(resp|response)\.content\b|requests\.(get|post).{0,30}\.content\b'
   # === write indicators (atomic) ===
   - id: os-write
     desc: os.write function

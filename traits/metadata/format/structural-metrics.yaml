@@ -9,7 +9,7 @@ traits:
 
   - id: small-elf-binary
     desc: "Small ELF binary (< 50KB)"
-    crit: notable
+    crit: baseline
     conf: 0.6
     for: [elf]
     size_max: 51200
@@ -49,13 +49,17 @@ traits:
   # === Complexity Metrics ===
 
   - id: low-average-complexity
-    desc: "Low average code complexity (simple"
+    desc: "Low average code complexity"
     crit: baseline
     conf: 0.75
     if:
       type: metrics
       field: binary.avg_complexity
       max: 3
+    unless:
+      - type: metrics
+        field: binary.function_count
+        max: 0
 
   # === Sparsity Metrics (Neutral) ===
 
@@ -69,13 +73,20 @@ traits:
       max: 3
 
   - id: no-functions
-    desc: "No detected functions (packed/obfuscated)"
+    desc: "No detected functions (packed/obfuscated or analysis-limited)"
     crit: baseline
     conf: 0.5
     if:
       type: metrics
       field: binary.function_count
       max: 3
+    unless:
+      - type: metrics
+        field: binary.section_count
+        min: 20
+      - type: metrics
+        field: elf.has_plt
+        min: 1
 
   - id: few-functions
     desc: "Very few functions detected"
@@ -85,6 +96,13 @@ traits:
       type: metrics
       field: binary.function_count
       max: 10
+    unless:
+      - type: metrics
+        field: binary.function_count
+        max: 3
+      - type: metrics
+        field: binary.section_count
+        min: 40
 
   - id: few-basic-blocks
     desc: "Very few basic blocks (obfuscated"
@@ -110,10 +128,15 @@ traits:
     desc: "No imported symbols"
     crit: baseline
     conf: 0.7
+    for: [pe]
     if:
       type: metrics
       field: binary.import_density
       max: 0.01
+    unless:
+      - type: metrics
+        field: elf.needed_libs
+        min: 1
 
   - id: many-imports
     desc: "High number of imported symbols (>80)"

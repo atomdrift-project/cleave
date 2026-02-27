@@ -7,7 +7,7 @@ defaults:
 traits:
   # === Indirect Call Instructions ===
   - id: indirect-call-reg
-    desc: Indirect call via register (call
+    desc: Indirect call via register
     crit: baseline
     conf: 0.3
     if:
@@ -16,7 +16,7 @@ traits:
       count_min: 2
 
   - id: indirect-call-mem
-    desc: Indirect call via memory (call
+    desc: Indirect call via memory
     crit: baseline
     conf: 0.3
     if:

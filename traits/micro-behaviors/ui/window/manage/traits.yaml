@@ -170,6 +170,14 @@ traits:
       type: symbol
       exact: "SendMessageW"
 
+  - id: send-message-a
+    desc: Send message to window (ANSI)
+    crit: baseline
+    conf: 0.70
+    if:
+      type: symbol
+      exact: "SendMessageA"
+
   - id: send-message-timeout
     desc: Send message with timeout
     crit: baseline

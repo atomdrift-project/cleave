@@ -38,7 +38,7 @@ traits:
     conf: 0.5
     if:
       type: raw
-      regex: "file\\.write\\(|f\\.write\\("
+      regex: "(file|f)\\.write\\(\\s*(request\\.data)"
 
   - id: http-post-endpoint
     desc: HTTP POST method handler
@@ -52,4 +52,4 @@ traits:
     conf: 0.7
     if:
       type: raw
-      regex: '@.{0,30}(route|post).{0,20}[''"]/?[''"]'
+      regex: '@.{0,30}(route|post).{0,20}[''\"]/?[''\"]'

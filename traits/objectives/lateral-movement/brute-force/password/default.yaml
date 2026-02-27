@@ -1,7 +1,7 @@
 traits:
   - id: numeric-123456
     desc: "Default credential: 123456"
-    crit: suspicious
+    crit: component
     conf: 0.8
     attack: T1110.001
     for:
@@ -9,6 +9,7 @@ traits:
     if:
       type: string
       exact: "123456"
+      count_min: 2
   - id: literal-password
     desc: "Default credential: password"
     crit: notable

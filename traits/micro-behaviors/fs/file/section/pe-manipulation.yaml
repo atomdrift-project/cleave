@@ -18,7 +18,7 @@ traits:
     exact: IMAGE_NT_SIGNATURE
 - id: asm-pe-header-manipulation-entrypoint
   conf: 0.8
-  crit: suspicious
+  crit: notable
   desc: PE header entry point reference
   if:
     type: string

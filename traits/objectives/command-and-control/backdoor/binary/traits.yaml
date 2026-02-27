@@ -279,11 +279,16 @@ composite_rules:
       - id: metadata/signed/platform::apple
       - id: micro-behaviors/communications/ssh/connect::connect
       - id: metadata/quality/help::usage-lower
+      - id: metadata/quality::has-help
       # OpenBSD hardened binaries are legitimate system tools
       - id: metadata/hardening::pledge
       - id: metadata/hardening::unveil
       # Network servers/daemons legitimately fork and exec
       - id: micro-behaviors/communications/socket/listen::listen
+    downgrade:
+      any:
+        # CLI utilities often fork/exec for command wrappers and subprocess orchestration.
+        - id: metadata/quality::has-help
 
   - id: unexpected-crypto
     desc: Cryptographic operations in non-crypto library

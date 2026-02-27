@@ -15,6 +15,14 @@ traits:
       type: symbol
       exact: "DialogBoxParamW"
 
+  - id: dialog-box-param-a
+    desc: Create modal dialog box (ANSI)
+    crit: baseline
+    conf: 0.70
+    if:
+      type: symbol
+      exact: "DialogBoxParamA"
+
   # === Modeless Dialogs ===
   - id: create-dialog-param
     desc: Create modeless dialog
@@ -32,6 +40,14 @@ traits:
     if:
       type: symbol
       exact: "MessageBoxIndirectW"
+
+  - id: message-box-a
+    desc: Display message box (ANSI)
+    crit: baseline
+    conf: 0.70
+    if:
+      type: symbol
+      exact: "MessageBoxA"
 
   # === Dialog Item Manipulation ===
   - id: get-dialog-item-text

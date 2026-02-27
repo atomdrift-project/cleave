@@ -45,6 +45,7 @@ traits:
     if:
       type: string
       regex: '(?i)(opengl|glx|\begl\b|vulkan)'
+      count_min: 2
   - id: opengl-ref-b
     desc: "OpenGL graphics reference cluster B"
     crit: baseline

@@ -190,7 +190,6 @@ composite_rules:
     any:
       - id: xor-infection-marker
       - id: xor-marker-extended
-      - id: tab-terminated-strings
 
   - id: xor-obfuscation-evidence
     desc: "XOR obfuscation evidence"
@@ -202,8 +201,7 @@ composite_rules:
     needs: 2
     any:
       - id: xor-encoded-strings
-      - id: unusual-character-combinations
-      - id: xor-key-null-pattern
+      - id: dense-unusual-chars
     unless:
       - id: micro-behaviors/interface/usage/usage-help
       - id: micro-behaviors/data/db/libpq

@@ -14,9 +14,9 @@ traits:
       regex: "^_?mprotect$"
 
   - id: rwx-prot-bytes
-    desc: RWX protection bytes (PROT_READ|WRITE|EXEC = 7)
-    crit: baseline
-    conf: 0.6
+    desc: Constant 0x07 in code (possible PROT_RWX bitmask)
+    crit: component
+    conf: 0.25
     attack: "T1055"
     platforms: [linux, macos, unix]
     for: [elf, so, dylib]

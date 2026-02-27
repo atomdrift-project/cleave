@@ -82,6 +82,9 @@ traits:
     if:
       type: raw
       regex: '/home/\w+/\.[A-Za-z0-9][A-Za-z0-9_-]*/'
+    not:
+      # Common XDG user directories are normal and appear in package docs.
+      - regex: '/home/\w+/\.(local|config|cache)/'
 
   # Hidden directory in web server paths - common webshell staging
   - id: var-www-hidden-dir

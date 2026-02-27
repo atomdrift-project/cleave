@@ -73,7 +73,7 @@ composite_rules:
 
   - id: bind-shell
     desc: Bind shell pattern (socket +
-    crit: hostile
+    crit: suspicious
     mbc: "B0030.003"
     attack: "T1059"
     conf: 0.95
@@ -93,6 +93,7 @@ composite_rules:
         - id: micro-behaviors/dylib/library::debugger-tool-marker
         - id: micro-behaviors/dylib/library::system-lib-marker
         - id: micro-behaviors/dylib/library::shell-interpreter
+        - id: objectives/persistence/daemon/init::unix-daemon-persistence
 
   - id: python-redirection
     desc: "Python shell redirection (pty/dup2)"

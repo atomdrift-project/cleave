@@ -71,6 +71,7 @@ traits:
     type: string
     regex: (https?|wss?)://[a-zA-Z0-9][-a-zA-Z0-9]*\.[a-zA-Z]{2,6}([/?#]|$|:)
   not:
+    - substr: "opensolaris.org"
     - substr: "jquery.com"
     - substr: "vimeo.com"
     - substr: "ezgif.com"
@@ -150,6 +151,7 @@ traits:
     type: raw
     regex: (https?|wss?)://([a-zA-Z0-9][-a-zA-Z0-9]*\.){1,6}[a-zA-Z]{2,6}(/|$|:)
   not:
+    - substr: "opensolaris.org"
     - substr: "jquery.com"
     - substr: "vimeo.com"
     - substr: "ezgif.com"

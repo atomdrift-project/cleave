@@ -46,8 +46,8 @@ traits:
     crit: baseline
     conf: 0.3
     if:
-      type: string
-      word: "while"
+      type: raw
+      regex: '(?m)^\s*while\s+.{1,100}:'
 
   - id: glob-pattern
     desc: glob module pattern

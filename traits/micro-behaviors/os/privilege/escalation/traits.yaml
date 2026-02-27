@@ -60,3 +60,13 @@ traits:
     if:
       type: symbol
       exact: "DuplicateTokenEx"
+
+  # === UAC Elevation ===
+  - id: runas-verb
+    desc: ShellExecute runas verb for elevation
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: string
+      exact: "runas"
+      section: text

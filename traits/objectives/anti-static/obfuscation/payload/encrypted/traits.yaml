@@ -31,7 +31,7 @@ traits:
     min: 0.8
 - id: large-data-section
   desc: Large .data section (>70% of
-  crit: suspicious
+  crit: notable
   conf: 0.75
   for:
   - elf
@@ -87,6 +87,31 @@ traits:
     type: section
     regex: \.(data|rdata|rodata)
     entropy_min: 7.5
+- id: high-entropy-rsrc
+  desc: High entropy in .rsrc section
+  crit: notable
+  conf: 0.6
+  mbc: C0027
+  for:
+  - pe
+  - dll
+  if:
+    type: section
+    exact: .rsrc
+    entropy_min: 7.0
+- id: dominant-rsrc-section
+  desc: Dominant .rsrc section (>60% of binary)
+  crit: notable
+  conf: 0.7
+  for:
+  - pe
+  - dll
+  size_min: 20000
+  if:
+    type: section_ratio
+    section: \.rsrc
+    compare_to: total
+    min: 0.6
   downgrade:
     any:
     - type: basename
@@ -107,10 +132,18 @@ traits:
   desc: Very few visible strings (<10)
   crit: notable
   conf: 0.7
+  size_min: 51200
   if:
     type: string_count
     max: 10
     min_length: 4
+  unless:
+  - id: metadata/format::small-elf-binary
+  - id: metadata/format::many-imports
+  - id: metadata/format::many-functions
+  - id: metadata/internal/symbols::icv_iconv
+  - type: basename
+    regex: "^[^/]+%[^/]+\.so(?:\.\d+)*"
 - id: no-strings
   desc: No visible strings in binary
   crit: suspicious
@@ -207,10 +240,11 @@ composite_rules:
   mbc: B0032
   for:
   - elf
-  needs: 2
+  all:
+  - id: high-entropy-data
+  needs: 1
   any:
   - id: large-data-section
-  - id: high-entropy-data
   - id: string-concealment
 - id: obfuscated-macos-daemon-dropper
   desc: Obfuscated macOS daemon dropper (encrypted payload

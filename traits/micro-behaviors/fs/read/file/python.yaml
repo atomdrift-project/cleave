@@ -8,7 +8,7 @@ defaults:
 traits:
   - id: file-read-content
     desc: Reads file content (Python)
-    crit: notable
+    crit: baseline
     conf: 0.6
     mbc: "E1005"
     if:
@@ -17,9 +17,9 @@ traits:
 
   - id: file-open-content
     desc: Opens a file (Python)
-    crit: notable
+    crit: baseline
     conf: 0.6
     mbc: "E1005"
     if:
       type: raw
-      regex: '(\bopen\(|with\s+open\()'
+      regex: 'with open\s*\('

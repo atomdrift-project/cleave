@@ -6,7 +6,7 @@ defaults:
 
 traits:
   - id: stripped-binary
-    desc: Stripped binary (no symbols)
+    desc: No full symbol table (likely stripped)
     conf: 0.8
     for: [elf, macho, pe]
     if:

@@ -58,12 +58,13 @@ traits:
   # === Credential Terms ===
   - id: token
     desc: token keyword
-    crit: notable
-    conf: 0.5
+    crit: component
+    conf: 0.3
     if:
       type: string
       word: "token"
       case_insensitive: true
+      count_min: 2
 
   - id: password
     desc: password keyword

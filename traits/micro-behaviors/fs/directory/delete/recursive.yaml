@@ -25,6 +25,7 @@ traits:
 
   - id: shutil-rmtree
     desc: Python shutil.rmtree
+    crit: baseline
     for: [python]
     if:
       type: string

@@ -15,7 +15,7 @@ traits:
   # === GuardDog: API obfuscation patterns ===
 
   - id: dict-subscript-access
-    desc: __dict__ subscript attribute access
+    desc: __dict__ access with dunder string key
     mbc: E1014
     attack: T1027
     crit: suspicious
@@ -27,10 +27,13 @@ traits:
         (subscript
           value: (attribute
             attribute: (identifier) @attr)
-          (#eq? @attr "__dict__"))
+          subscript: (string
+            (string_content) @key)
+          (#eq? @attr "__dict__")
+          (#match? @key "^__.+__$"))
 
   - id: getattribute-call
-    desc: __getattribute__ method call
+    desc: __getattribute__ with computed attribute name
     mbc: E1014
     attack: T1027
     crit: suspicious
@@ -42,6 +45,10 @@ traits:
         (call
           function: (attribute
             attribute: (identifier) @method)
+          arguments: (argument_list
+            (_)
+            [(call) (binary_operator) (subscript) (attribute)] @dynamic_attr
+          )
           (#eq? @method "__getattribute__"))
 
   - id: dunder-import-call

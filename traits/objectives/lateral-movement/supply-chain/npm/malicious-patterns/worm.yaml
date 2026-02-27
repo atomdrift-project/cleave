@@ -1,15 +1,15 @@
-# NPM Worm / Replication Behaviors
-# ATT&CK: T1098 (Account Manipulation), T1562 (Defense Evasion)
+# NPM Worm / Replication / Registry Spam Behaviors
+# ATT&CK: T1098 (Account Manipulation), T1195.002 (Supply Chain Compromise)
 # MBC: F0001 (Worm-like Replication)
 
 defaults:
-  attack: "T1098"
   mbc: "F0001"
 
 traits:
   - id: npm-owner-add-exec
     desc: Executes npm owner add command
     crit: suspicious
+    attack: "T1098"
     for: [javascript, typescript]
     if:
       type: string
@@ -18,6 +18,7 @@ traits:
   - id: npm-whoami-exec
     desc: Executes npm whoami command
     crit: notable
+    attack: "T1098"
     for: [javascript, typescript]
     if:
       type: string
@@ -26,6 +27,7 @@ traits:
   - id: npm-profile-url
     desc: NPM user profile URL pattern
     crit: notable
+    attack: "T1098"
     for: [javascript, typescript]
     if:
       type: string
@@ -34,10 +36,31 @@ traits:
   - id: remove-postinstall
     desc: Removes postinstall script
     crit: suspicious
+    attack: "T1098"
     for: [javascript, typescript]
     if:
       type: string
       regex: 'delete\s+\w+\.scripts\.postinstall'
+
+  - id: npm-publish-exec
+    desc: Executes npm publish command
+    crit: suspicious
+    conf: 0.9
+    attack: "T1195.002"
+    for: [javascript, typescript]
+    if:
+      type: raw
+      regex: 'npm\s+publish'
+
+  - id: delete-private-field
+    desc: Deletes private field from package data
+    crit: suspicious
+    conf: 0.85
+    attack: "T1195.002"
+    for: [javascript, typescript]
+    if:
+      type: raw
+      regex: 'delete\s+\w{1,50}\.private'
 
 composite_rules:
   - id: npm-package-worm
@@ -50,3 +73,13 @@ composite_rules:
     any:
       - id: npm-profile-url
       - id: remove-postinstall
+
+  - id: npm-package-spam
+    desc: Modifies and mass-publishes npm packages
+    crit: hostile
+    conf: 0.95
+    attack: "T1195.002"
+    for: [javascript, typescript]
+    all:
+      - id: npm-publish-exec
+      - id: micro-behaviors/process/create/shell/lang::js-exec

@@ -9,8 +9,8 @@ defaults:
 
 traits:
   - id: rdtsc
-    desc: RDTSC instruction (hardware timestamp)
-    crit: notable
+    desc: RDTSC timing instruction present
+    crit: baseline
     conf: 0.5
     size_max: 1048576
     if:

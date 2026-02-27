@@ -15,6 +15,14 @@ traits:
       type: symbol
       exact: "GetStartupInfoW"
 
+  - id: get-startup-info-a
+    desc: Read startup info via GetStartupInfoA
+    crit: baseline
+    conf: 0.70
+    if:
+      type: symbol
+      exact: "GetStartupInfoA"
+
   # === Module Information ===
   - id: get-module-filename-ex
     desc: Get module filename for process

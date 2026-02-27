@@ -72,9 +72,10 @@ traits:
     crit: component
     for: [python]
     if:
-      type: string
-      exact: rb
-
+      type: raw
+      regex: "(?m)open\\s*\\([^\\n]{0,120}[\"']rb[\"']"
+    not:
+      - substr: "os.devnull"
   # jscript dropper components
   - id: msxml2-str
     desc: MSXml2 string

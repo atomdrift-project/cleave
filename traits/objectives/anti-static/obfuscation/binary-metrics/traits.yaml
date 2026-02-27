@@ -185,8 +185,9 @@ traits:
   # triggering when metrics are not available (0 indicates missing data).
   - id: no-strings
     desc: "No readable strings (potentially encrypted/packed)"
-    crit: notable
+    crit: baseline
     conf: 0.4
+    size_min: 32768
     attack: "T1045"
     if:
       type: metrics

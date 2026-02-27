@@ -171,3 +171,20 @@ composite_rules:
       - id: large-hex-payload
       - id: custom-encoding-alphabet
       - id: micro-behaviors/process/create/shell::shell-execution
+
+
+  - id: pe-embedded-payload-sandbox-aware
+    desc: Embedded PE payload with sandbox-evasion corpus
+    crit: suspicious
+    conf: 0.93
+    mbc: "B0030"
+    attack: "T1027.009"
+    for: [pe, dll]
+    all:
+      - id: micro-behaviors/data/embedded/payload::pe-magic-embedded
+    any:
+      - id: micro-behaviors/anti-analysis/sandbox-evasion/environment
+    downgrade:
+      any:
+        - id: metadata/quality/versioning::pe-version-resource
+        - id: metadata/vendor/microsoft::is-microsoft-named

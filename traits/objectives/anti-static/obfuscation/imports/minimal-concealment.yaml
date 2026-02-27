@@ -3,6 +3,7 @@ traits:
   desc: Very few extracted strings
   crit: notable
   conf: 0.7
+  size_min: 51200
   for:
   - pe
   - elf
@@ -11,7 +12,11 @@ traits:
     max: 20
     min_length: 4
   unless:
+  - id: metadata/format::small-elf-binary
   - id: metadata/format::many-functions
+  - id: metadata/internal/symbols::icv_iconv
+  - type: basename
+    regex: "^[^/]+%[^/]+\.so(?:\.\d+)*"
 - id: extremely-low-strings
   desc: Extremely few extracted strings
   crit: suspicious
@@ -41,6 +46,9 @@ traits:
       regex: "^(UPX\\d|\\.upx)"  # UPX-packed binaries compress all strings
     - type: raw
       substr: "PECompac"  # PECompact-packed binaries compress all strings
+    - id: metadata/internal/symbols::icv_iconv
+    - type: basename
+      regex: "^[^/]+%[^/]+\\.so(?:\\.\\d+)*"
 composite_rules:
 - id: minimal-imports-suspicious-apis
   desc: Minimal imports with suspicious API combination

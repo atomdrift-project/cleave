@@ -28,33 +28,47 @@ traits:
       regex: "^(Service|Helper|Tool/Utility)$"
       case_insensitive: true
 
-  - id: placeholder-author-generic-1
-    desc: Generic author placeholder (set 1)
+  - id: placeholder-author-generic-1a
+    desc: Author field set to test placeholder
     crit: suspicious
     conf: 0.75
     for: [package.json, chrome-manifest, cargo.toml, pyproject.toml, composer.json, pkginfo]
     if:
-      type: string
+      type: kv
+      path: "author"
+      regex: "^(author|your name|name|test)$"
+      case_insensitive: true
+
+  - id: placeholder-author-generic-1b
+    desc: Maintainer field set to test placeholder
+    crit: suspicious
+    conf: 0.75
+    for: [package.json, chrome-manifest, cargo.toml, pyproject.toml, composer.json, pkginfo]
+    if:
+      type: kv
+      path: "maintainers[*]"
       regex: "^(author|your name|name|test)$"
       case_insensitive: true
 
   - id: placeholder-author-generic-2a
-    desc: Generic author placeholder (user/admin/example)
+    desc: Author field set to generic user
     crit: suspicious
     conf: 0.75
     for: [package.json, chrome-manifest, cargo.toml, pyproject.toml, composer.json, pkginfo]
     if:
-      type: string
+      type: kv
+      path: "author"
       regex: "^(user|admin|example)$"
       case_insensitive: true
 
   - id: placeholder-author-generic-2b
-    desc: Generic author placeholder (sample/anonymous)
+    desc: Author field set to anonymous
     crit: suspicious
     conf: 0.75
     for: [package.json, chrome-manifest, cargo.toml, pyproject.toml, composer.json, pkginfo]
     if:
-      type: string
+      type: kv
+      path: "author"
       regex: "^(sample|anonymous)$"
       case_insensitive: true
 
@@ -66,6 +80,14 @@ composite_rules:
     any:
       - id: generic-executable-name-1
       - id: generic-executable-name-2
+
+  - id: placeholder-author-generic-1
+    desc: Generic author placeholder (set 1)
+    crit: suspicious
+    conf: 0.75
+    any:
+      - id: placeholder-author-generic-1a
+      - id: placeholder-author-generic-1b
 
   - id: placeholder-author-generic-2
     desc: Generic author placeholder (set 2)

@@ -16,7 +16,7 @@ traits:
   - id: metadata/format::many-functions
   - id: metadata/internal/symbols::icv_iconv
   - type: basename
-    regex: "^[^/]+%[^/]+\.so(?:\.\d+)*"
+    regex: '^[^/]+%[^/]+\.so(\.\d+)*$'
 - id: extremely-low-strings
   desc: Extremely few extracted strings
   crit: suspicious

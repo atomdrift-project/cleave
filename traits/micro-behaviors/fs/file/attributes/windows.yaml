@@ -1,0 +1,23 @@
+# File Attribute Manipulation - Windows
+# Modifying file attributes (hidden, system, read-only)
+
+defaults:
+  for: [pe, dll]
+  platforms: [windows]
+
+traits:
+  - id: set-file-attributes-a
+    desc: Set file attributes (ANSI)
+    crit: notable
+    conf: 0.9
+    if:
+      type: symbol
+      exact: "SetFileAttributesA"
+
+  - id: set-file-attributes-w
+    desc: Set file attributes (Unicode)
+    crit: notable
+    conf: 0.9
+    if:
+      type: symbol
+      exact: "SetFileAttributesW"

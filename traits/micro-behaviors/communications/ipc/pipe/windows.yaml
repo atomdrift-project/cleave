@@ -1,0 +1,46 @@
+# Windows Pipe IPC APIs
+# Anonymous and named pipe creation/access for process I/O redirection
+# ATT&CK: T1559 (Inter-Process Communication)
+
+defaults:
+  for: [pe, dll]
+  platforms: [windows]
+
+traits:
+  - id: create-pipe
+    desc: Create anonymous pipe
+    crit: notable
+    conf: 0.9
+    attack: "T1559"
+    if:
+      type: symbol
+      exact: "CreatePipe"
+
+  - id: peek-named-pipe
+    desc: Peek at pipe data without reading
+    crit: notable
+    conf: 0.9
+    attack: "T1559"
+    if:
+      type: symbol
+      exact: "PeekNamedPipe"
+
+  - id: duplicate-handle
+    desc: Duplicate object handle
+    crit: baseline
+    conf: 0.8
+    if:
+      type: symbol
+      exact: "DuplicateHandle"
+
+composite_rules:
+  - id: pipe-io-redirect
+    desc: Pipe creation with handle redirect
+    crit: notable
+    conf: 0.9
+    all:
+      - id: create-pipe
+    any:
+      - id: micro-behaviors/io/console/output::set-std-handle
+      - id: duplicate-handle
+      - id: peek-named-pipe

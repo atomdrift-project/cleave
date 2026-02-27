@@ -14,7 +14,7 @@ traits:
       regex: "^_?mprotect$"
 
   - id: rwx-prot-bytes
-    desc: Constant 0x07 in code (possible PROT_RWX bitmask)
+    desc: Repeated 0x07 code constant (possible PROT_RWX)
     crit: component
     conf: 0.25
     attack: "T1055"
@@ -23,4 +23,5 @@ traits:
     if:
       type: hex
       pattern: "07 00 00 00"
+      count_min: 2
       section: text

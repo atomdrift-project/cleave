@@ -76,7 +76,7 @@ traits:
       type: string
       regex: "(?i)contract"
 
-  # eth-address: use objectives/collection/clipboard/capture::ethereum-address (canonical)
+  # eth-address: use objectives/collection/clipboard/capture::eth-address-literal (canonical)
 
   # Infura/Alchemy RPC with suspicious patterns
   - id: rpc-provider
@@ -162,7 +162,7 @@ composite_rules:
     for: [javascript, typescript]
     any:
       - id: contract-keyword
-      - id: objectives/collection/clipboard/capture::ethereum-address
+      - id: objectives/collection/clipboard/capture::eth-address-literal
 
   # Arweave gateway composite
   - id: arweave-gateway

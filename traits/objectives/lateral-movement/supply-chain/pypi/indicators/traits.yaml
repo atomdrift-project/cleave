@@ -99,7 +99,7 @@ composite_rules:
   # === All-UNKNOWN Metadata Package ===
   - id: pkginfo-all-unknown-metadata
     desc: PKG-INFO with all metadata fields UNKNOWN
-    crit: suspicious
+    crit: notable
     conf: 0.90
     attack: "T1195.002"
     mbc: "F0004"
@@ -211,6 +211,7 @@ composite_rules:
       - id: objectives/lateral-movement/supply-chain/pypi/general::is-pkginfo-file
       - id: objectives/lateral-movement/supply-chain/pypi/summary::pkginfo-single-word-summary
       - id: objectives/lateral-movement/supply-chain/pypi/general::pkginfo-tiny
+      - id: objectives/lateral-movement/supply-chain/pypi/version::pkginfo-lowest-version
     none:
       - id: objectives/lateral-movement/supply-chain/pypi/version::pkginfo-dev-version
 

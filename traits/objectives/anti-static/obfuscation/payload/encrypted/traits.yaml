@@ -143,7 +143,7 @@ traits:
   - id: metadata/format::many-functions
   - id: metadata/internal/symbols::icv_iconv
   - type: basename
-    regex: "^[^/]+%[^/]+\.so(?:\.\d+)*"
+    regex: '^[^/]+%[^/]+\.so(\.\d+)*$'
 - id: no-strings
   desc: No visible strings in binary
   crit: suspicious
@@ -280,3 +280,23 @@ composite_rules:
   unless:
   - id: objectives/anti-static/obfuscation/payload/encrypted::obfuscated-elf-daemon-dropper__unless_1
   - id: metadata/format::many-imports
+# PE encrypted resource with anti-analysis: dominant encrypted .rsrc + full resource
+# extraction chain + process scanning (anti-AV) or anti-debug
+- id: pe-encrypted-resource-with-evasion
+  desc: PE encrypted resource with anti-analysis
+  crit: suspicious
+  conf: 0.88
+  attack: T1027
+  mbc: B0032
+  for:
+  - pe
+  - dll
+  all:
+  - id: dominant-rsrc-section
+  - id: micro-behaviors/data/embedded/payload::pe-resource-full-extraction
+  any:
+  - id: micro-behaviors/process/enumerate/psapi::enum-processes
+  - id: micro-behaviors/process/enumerate/psapi::psapi-process-scan
+  downgrade:
+    any:
+    - id: metadata/vendor/microsoft::is-microsoft-named

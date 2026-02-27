@@ -309,7 +309,7 @@ impl ArchiveAnalyzer {
                 }
             }
 
-            // Manifest, image, certificate, and unknown files - no specific deep analysis beyond YARA/traits
+            // Manifest, image, certificate, text, and unknown files - no specific deep analysis beyond YARA/traits
             FileType::CargoToml
             | FileType::PyProjectToml
             | FileType::ComposerJson
@@ -317,6 +317,9 @@ impl ArchiveAnalyzer {
             | FileType::Jpeg
             | FileType::Png
             | FileType::Certificate
+            | FileType::Html
+            | FileType::Text
+            | FileType::Markdown
             | FileType::Unknown => {}
         }
 

@@ -16,11 +16,14 @@ traits:
     regex: SearchEngine
 - id: inline__search-engine-id__any_3
   desc: Derived string condition
-  not:
-  - DefaultSearchBase
   if:
     type: string
-    regex: DefaultSearch
+    regex: '[dD]efaultSearch(Engine|Provider|URL)'
+- id: inline__search-engine-id__any_3_1
+  desc: Derived string condition
+  if:
+    type: string
+    regex: '[dD]efaultSearch(Keyword|Homepage|HomePage)'
 - id: inline__search-engine-id__any_4
   desc: Derived string condition
   if:
@@ -31,10 +34,3 @@ traits:
   if:
     type: string
     regex: searchEngine
-- id: inline__search-engine-id__any_6
-  desc: Derived string condition
-  not:
-  - defaultSearchBase
-  if:
-    type: string
-    regex: defaultSearch

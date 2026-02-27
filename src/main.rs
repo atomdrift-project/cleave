@@ -32,6 +32,13 @@
 // even though they ARE reachable via the library crate. Suppress this false positive.
 #![allow(unreachable_pub)]
 
+// Use jemalloc for better memory management in long-running sessions.
+// This prevents memory fragmentation from repeated wasmtime VM allocations (YARA scanning).
+// Enable with: cargo build --release --features jemalloc
+#[cfg(all(unix, feature = "jemalloc"))]
+#[global_allocator]
+static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
+
 mod analyzers;
 mod archive_utils;
 mod cache;
@@ -182,7 +189,7 @@ fn main() -> Result<()> {
     // Parse args early to get verbose flag for logging initialization
     let args = cli::Args::parse();
     if args.verbose {
-        std::env::set_var("cleave_VERBOSE", "1");
+        std::env::set_var("CLEAVE_VERBOSE", "1");
     }
 
     // Determine output format early so we can use it for conditional status messages
@@ -348,8 +355,8 @@ fn main() -> Result<()> {
 
     // Apply custom traits directory if specified (must be before any trait loading)
     if let Some(ref traits_dir) = args.traits_dir {
-        std::env::set_var("cleave_TRAITS_PATH", traits_dir);
-        std::env::set_var("cleave_CAPABILITIES", traits_dir);
+        std::env::set_var("CLEAVE_TRAITS_PATH", traits_dir);
+        std::env::set_var("CLEAVE_TRAITS_DIR", traits_dir);
     }
 
     // Apply global disables for radare2 and upx

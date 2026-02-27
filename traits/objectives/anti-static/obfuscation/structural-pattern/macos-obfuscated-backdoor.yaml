@@ -93,7 +93,7 @@ composite_rules:
     any:
       - id: objectives/persistence/daemon/init::unix-daemon-persistence
       - id: objectives/lateral-movement/social-engineering/masquerading::suspicious-generic-naming
-      - id: objectives/command-and-control/backdoor/binary::unexpected-process-ops
+      # - id: objectives/command-and-control/backdoor/binary::unexpected-process-ops
     none:
       - id: metadata/signed/platform::apple
 

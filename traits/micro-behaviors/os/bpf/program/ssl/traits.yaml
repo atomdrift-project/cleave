@@ -23,13 +23,14 @@ traits:
   # SSL CTX reference in comments or identifiers
   - id: ssl-ctx-ref
     desc: SSL context reference
-    crit: notable
-    conf: 0.7
+    crit: component
+    conf: 0.4
     for: [c, elf]
     if:
       type: raw
       regex: "\\bSSL[_\\s]?CTX\\b"
       case_insensitive: true
+      count_min: 3
 
   # BPF attachment helper
   - id: ssl-attach-openssl

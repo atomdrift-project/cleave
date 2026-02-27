@@ -16,7 +16,7 @@ traits:
     conf: 0.8
     if:
       type: symbol
-      regex: '^_?findfirst$'
+      regex: '^_?findfirst(64)?$'
 
   - id: findnext
     desc: Find next file (DOS/Windows)
@@ -24,4 +24,4 @@ traits:
     conf: 0.8
     if:
       type: symbol
-      regex: '^_?findnext$'
+      regex: '^_?findnext(64)?$'

@@ -1,0 +1,95 @@
+# GitHub Raw URL as C2 Dead Drop
+# ATT&CK: T1102 (Web Service)
+# Detects use of GitHub raw URLs for C2 indirection/dead drop
+
+defaults:
+  crit: suspicious
+  attack: "T1102"
+  for: [all]
+
+traits:
+  # === Raw GitHub Content URLs ===
+  - id: raw-githubusercontent-url
+    desc: raw.githubusercontent.com URL with file extension
+    crit: suspicious
+    conf: 0.8
+    if:
+      type: string
+      regex: 'raw\.githubusercontent\.com/.{1,100}\.(html|txt|php)'
+
+  - id: raw-githubusercontent-refs
+    desc: GitHub raw URL with refs/heads path
+    crit: suspicious
+    conf: 0.85
+    if:
+      type: string
+      regex: 'raw\.githubusercontent\.com/.{1,80}/refs/heads/'
+
+  # === GitHub API for Raw Content ===
+  - id: github-api-contents
+    desc: GitHub API contents endpoint
+    crit: notable
+    conf: 0.7
+    if:
+      type: string
+      regex: 'api\.github\.com/repos/.{1,80}/contents/'
+
+  # === Gist Raw URLs ===
+  - id: gist-raw-url
+    desc: GitHub Gist raw content URL
+    crit: suspicious
+    conf: 0.8
+    if:
+      type: string
+      regex: 'gist\.githubusercontent\.com/.{1,80}/raw/'
+
+  # === Fetching from GitHub Raw ===
+  - id: fetch-github-raw-curl
+    desc: curl request to GitHub raw content
+    crit: suspicious
+    conf: 0.85
+    for: [shell]
+    if:
+      type: raw
+      regex: 'curl.{0,50}raw\.githubusercontent\.com'
+
+  - id: fetch-github-raw-wget
+    desc: wget request to GitHub raw content
+    crit: suspicious
+    conf: 0.85
+    for: [shell]
+    if:
+      type: raw
+      regex: 'wget.{0,50}raw\.githubusercontent\.com'
+
+composite_rules:
+  # === GitHub Raw Fetch ===
+  - id: github-raw-fetch
+    desc: Fetches from GitHub raw content
+    crit: suspicious
+    conf: 0.85
+    any:
+      - id: fetch-github-raw-curl
+      - id: fetch-github-raw-wget
+
+  # === GitHub C2 Dead Drop Pattern ===
+  - id: github-c2-deaddrop
+    desc: GitHub raw URL used for C2 indirection
+    crit: hostile
+    conf: 0.9
+    attack: "T1102"
+    mbc: "C0002"
+    near_lines: 30
+    all:
+      - id: github-raw-fetch
+      - id: micro-behaviors/process/create/shell::shell-execution
+
+  # === Suspicious GitHub Fetch Pattern ===
+  - id: suspicious-github-fetch
+    desc: Suspicious GitHub raw content fetch
+    crit: suspicious
+    conf: 0.85
+    any:
+      - id: raw-githubusercontent-refs
+      - id: gist-raw-url
+      - id: github-raw-fetch

@@ -44,22 +44,14 @@ traits:
       type: symbol
       regex: '(^|\.)unsetenv$'
 
-  - id: environ-global
-    desc: environ global variable access
-    crit: notable
-    conf: 0.3
-    if:
-      type: symbol
-      regex: "environ"
-
-  - id: py-environ-enumerate
-    desc: Python environ enumeration
-    crit: notable
+  - id: python-environ-iteration
+    desc: Python environ iteration helpers
+    crit: baseline
     conf: 0.85
     for: [python]
     if:
       type: raw
-      regex: "environ\\.(items|values|keys)"
+      regex: 'environ\.(items|values|keys)'
 
 composite_rules:
   - id: env-access
@@ -71,6 +63,7 @@ composite_rules:
       - id: setenv
       - id: putenv
       - id: unsetenv
+      - id: python-environ-iteration
 
   - id: set
     desc: Environment variable modification

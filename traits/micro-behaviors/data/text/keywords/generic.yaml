@@ -100,8 +100,8 @@ traits:
 
   - id: secret
     desc: secret keyword
-    crit: notable
-    conf: 0.5
+    crit: component
+    conf: 0.3
     if:
       type: string
       substr: "secret"

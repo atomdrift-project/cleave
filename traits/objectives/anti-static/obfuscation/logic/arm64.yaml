@@ -25,9 +25,11 @@ traits:
         - id: metadata/signed/issuer::apple
 
   - id: svc-instruction
-    desc: "ARM64 svc instruction"
-    crit: notable
-    conf: 0.5
+    desc: "Repeated ARM64 svc instructions in executable code"
+    crit: baseline
+    conf: 0.4
     if:
       type: hex
       pattern: "01 00 00 d4"
+      section: "text"
+      count_min: 4

@@ -71,6 +71,8 @@ pub(crate) struct KvMatcher {
     pub exact: Option<String>,
     /// Require the value to contain this substring
     pub substr: Option<String>,
+    /// Pre-computed lowercase of substr (avoids allocation per match)
+    substr_lower: Option<String>,
     /// Require the value to match this compiled regex
     pub regex: Option<Regex>,
     /// If true, perform case-insensitive matching
@@ -97,9 +99,16 @@ impl KvMatcher {
         size_min: Option<usize>,
         size_max: Option<usize>,
     ) -> Self {
+        // Pre-compute lowercase pattern to avoid allocation per match
+        let substr_lower = if case_insensitive {
+            substr.map(|s| s.to_lowercase())
+        } else {
+            None
+        };
         Self {
             exact: exact.cloned(),
             substr: substr.cloned(),
+            substr_lower,
             regex: regex.cloned(),
             case_insensitive,
             exists,
@@ -179,7 +188,14 @@ impl KvMatcher {
 
         if let Some(ref substr_val) = self.substr {
             return if self.case_insensitive {
-                s.to_lowercase().contains(&substr_val.to_lowercase())
+                let s_lower = s.to_lowercase();
+                // Use pre-computed lowercase if available, else compute (for direct struct init)
+                if let Some(ref pattern_lower) = self.substr_lower {
+                    s_lower.contains(pattern_lower.as_str())
+                } else {
+                    // Fallback: compute lowercase (happens when struct initialized directly)
+                    s_lower.contains(&substr_val.to_lowercase())
+                }
             } else {
                 s.contains(substr_val.as_str())
             };

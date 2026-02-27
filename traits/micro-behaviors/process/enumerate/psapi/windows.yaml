@@ -1,0 +1,57 @@
+# Process enumeration via PSAPI - Windows
+# Alternative to Toolhelp32 snapshot-based enumeration
+# Used by malware to scan for security tools before payload execution
+defaults:
+  for: [pe, dll]
+  platforms: [windows]
+
+traits:
+  - id: enum-processes
+    desc: Enumerate all running processes (PSAPI)
+    crit: notable
+    conf: 0.9
+    attack: "T1057"
+    mbc: "E1057"
+    if:
+      type: symbol
+      exact: "EnumProcesses"
+
+  - id: enum-process-modules
+    desc: Enumerate modules in process (PSAPI)
+    crit: notable
+    conf: 0.85
+    attack: "T1057"
+    if:
+      type: symbol
+      exact: "EnumProcessModules"
+
+  - id: get-module-basename-w
+    desc: Get process module name (PSAPI)
+    crit: notable
+    conf: 0.85
+    attack: "T1057"
+    if:
+      type: symbol
+      exact: "GetModuleBaseNameW"
+
+  - id: get-module-basename-a
+    desc: Get process module name ANSI (PSAPI)
+    crit: notable
+    conf: 0.85
+    attack: "T1057"
+    if:
+      type: symbol
+      exact: "GetModuleBaseNameA"
+
+composite_rules:
+  - id: psapi-process-scan
+    desc: PSAPI process enumeration chain
+    crit: notable
+    conf: 0.9
+    attack: "T1057"
+    all:
+      - id: enum-processes
+    any:
+      - id: enum-process-modules
+      - id: get-module-basename-w
+      - id: get-module-basename-a

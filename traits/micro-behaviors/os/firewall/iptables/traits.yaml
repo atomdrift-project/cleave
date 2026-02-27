@@ -24,3 +24,38 @@ traits:
     if:
       type: string
       substr: iptables-save
+
+  # === Policy Changes ===
+  - id: iptables-policy
+    desc: iptables policy change
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: string
+      regex: 'iptables\s+(-P|--policy)'
+
+  - id: iptables-flush-flag
+    desc: iptables flush flag
+    crit: notable
+    conf: 0.85
+    if:
+      type: string
+      regex: 'iptables\s+(-F|--flush)'
+
+  - id: iptables-delete-chain-flag
+    desc: iptables delete chain flag
+    crit: notable
+    conf: 0.8
+    if:
+      type: string
+      regex: 'iptables\s+(-X|--delete-chain)'
+
+composite_rules:
+  - id: iptables-manipulation
+    desc: iptables rule manipulation
+    crit: notable
+    conf: 0.85
+    any:
+      - id: iptables-policy
+      - id: iptables-flush-flag
+      - id: iptables-delete-chain-flag

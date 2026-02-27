@@ -1,0 +1,108 @@
+# Hidden Binary/Persistence Paths
+# ATT&CK: T1564.001 (Hide Artifacts: Hidden Files and Directories)
+# Detects binaries hidden in unusual locations
+
+defaults:
+  crit: suspicious
+  attack: "T1564.001"
+  for: [elf, macho, shell]
+  platforms: [linux, unix]
+
+traits:
+  # === Binaries in Include Directories ===
+  - id: binary-in-include
+    desc: Binary or suspicious file in /usr/include
+    crit: suspicious
+    conf: 0.95
+    if:
+      type: string
+      regex: '/usr/include/.{1,50}\.(sh|py|bin)'
+
+  - id: header-like-in-include
+    desc: Suspicious .h file path (not a header)
+    crit: suspicious
+    conf: 0.85
+    if:
+      type: string
+      regex: '/usr/include/[a-z]{5,}\.h$'
+    not:
+      - regex: '(stdio|stdlib|string|time|math|signal|errno|fcntl|unistd)'
+
+  # === Known Malicious Paths ===
+  - id: sdfwex-path
+    desc: Known malicious sdfwex hidden path
+    crit: suspicious
+    conf: 1.0
+    if:
+      type: string
+      substr: "sdfwex"
+
+  # === Temp Directory Persistence ===
+  - id: hidden-tmp-binary
+    desc: Hidden executable in /tmp
+    crit: suspicious
+    conf: 0.85
+    if:
+      type: string
+      regex: '/tmp/\.[a-z]{2,10}$'
+
+  - id: mid-tmp-path
+    desc: /tmp/mid path (common dropper location)
+    crit: suspicious
+    conf: 0.85
+    if:
+      type: string
+      regex: '/tmp/midd?$'
+
+  # === Run Directory Hiding ===
+  - id: hidden-run-file
+    desc: Hidden file in /run or /var/run
+    crit: suspicious
+    conf: 0.8
+    if:
+      type: string
+      regex: '/(var/)?run/\..{1,30}'
+
+  # === Dev Directory Abuse ===
+  - id: hidden-dev-file
+    desc: Hidden file in /dev
+    crit: suspicious
+    conf: 0.85
+    if:
+      type: string
+      regex: '/dev/\..{1,30}'
+
+composite_rules:
+  # === Binary Hiding in System Dirs ===
+  - id: binary-hiding
+    desc: Binary hidden in unusual system location
+    crit: hostile
+    conf: 0.9
+    attack: "T1564.001"
+    any:
+      - id: binary-in-include
+      - id: sdfwex-path
+      - id: hidden-dev-file
+
+  # === Dropper Temp Paths ===
+  - id: dropper-temp-paths
+    desc: Common dropper temporary paths
+    crit: suspicious
+    conf: 0.85
+    any:
+      - id: hidden-tmp-binary
+      - id: hidden-tmp-binary
+      - id: mid-tmp-path
+
+  # === All Hidden Persistence Indicators ===
+  - id: hidden-persistence
+    desc: Hidden persistence indicators
+    crit: suspicious
+    conf: 0.85
+    needs: 2
+    any:
+      - id: binary-in-include
+      - id: sdfwex-path
+      - id: hidden-tmp-binary
+      - id: hidden-tmp-binary
+      - id: hidden-run-file

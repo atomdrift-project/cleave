@@ -88,7 +88,7 @@ traits:
       type: string
       substr: "set-install-status"
 
-  # Removed: http-ip-url (use micro-behaviors/communications/network/ip::http-ip-url)
+  # Removed: http-ip-url (use micro-behaviors/communications/ipv4/ip::http-ip-url)
 
 composite_rules:
   # ASAR manipulation (extract + repack pattern)
@@ -126,7 +126,7 @@ composite_rules:
     conf: 0.85
     any:
       - id: install-status-beacon
-      - id: micro-behaviors/communications/network/ip::http-ip-url
+      - id: micro-behaviors/communications/ipv4/ip::http-ip-url
 
   # Electron app trojanization (full pattern)
   # Complexity: file_types(+1) + all(+4) = 5 >= 4 HOSTILE threshold

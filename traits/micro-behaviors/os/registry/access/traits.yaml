@@ -3,6 +3,15 @@ defaults:
   platforms: [windows]
 
 traits:
+  - id: reg-open-key-w
+    desc: Open registry key via WinAPI
+    crit: notable
+    conf: 0.85
+    attack: "T1112"
+    if:
+      type: symbol
+      regex: "^RegOpenKey(Ex)?[AW]$"
+
   - id: reg-create-key-ex-w
     desc: Create registry key via WinAPI
     crit: notable

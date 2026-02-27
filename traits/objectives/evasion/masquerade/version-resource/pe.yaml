@@ -1,0 +1,50 @@
+# PE Version Resource Masquerading
+# Detects small PE binaries claiming to be Microsoft Office products
+# ATT&CK: T1036.005 (Match Legitimate Name or Location)
+defaults:
+  for: [pe]
+  platforms: [windows]
+
+traits:
+  - id: microsoft-corp-versioninfo
+    desc: Claims Microsoft Corp in version resource
+    crit: component
+    conf: 0.9
+    attack: "T1036.005"
+    if:
+      type: string
+      substr: "Microsoft Corp."
+    downgrade:
+      any:
+        - id: metadata/quality/versioning::pe-version-resource
+
+  - id: winword-original-filename
+    desc: Claims WINWORD.exe as original filename
+    crit: component
+    conf: 0.9
+    attack: "T1036.005"
+    if:
+      type: string
+      substr: "WINWORD.exe"
+
+  - id: office-product-claim
+    desc: Claims to be Microsoft Office product
+    crit: component
+    conf: 0.9
+    attack: "T1036.005"
+    if:
+      type: string
+      substr: "Microsoft Office 20"
+
+composite_rules:
+  - id: fake-microsoft-office-binary
+    desc: Small PE masquerades as Microsoft Office
+    crit: suspicious
+    conf: 0.85
+    attack: "T1036.005"
+    size_max: 500000
+    all:
+      - id: microsoft-corp-versioninfo
+    any:
+      - id: winword-original-filename
+      - id: office-product-claim

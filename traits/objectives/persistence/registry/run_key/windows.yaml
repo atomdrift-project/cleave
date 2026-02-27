@@ -1,0 +1,19 @@
+# Win32 Registry Persistence via API
+# Detects PE binaries that write registry values and copy themselves
+# ATT&CK: T1547.001 (Boot or Logon Autostart Execution: Registry Run Keys)
+defaults:
+  for: [pe]
+  platforms: [windows]
+
+composite_rules:
+  - id: pe-registry-self-install
+    desc: Registry write with self-copy pattern
+    crit: suspicious
+    conf: 0.85
+    attack: "T1547.001"
+    all:
+      - id: micro-behaviors/os/registry/access::reg-set-value-ex-w
+      - id: micro-behaviors/process/info/current::get-module-filename
+    any:
+      - id: micro-behaviors/fs/file/operations::file-create-win
+      - id: micro-behaviors/fs/file/move::move-file

@@ -23,7 +23,7 @@ traits:
   attack: T1574.006
 - id: ld-audit-hook
   desc: LD_AUDIT dynamic linker hook
-  crit: suspicious
+  crit: notable
   conf: 0.9
   for:
   - elf
@@ -31,6 +31,12 @@ traits:
   if:
     type: string
     regex: (LD_AUDIT=|export LD_AUDIT|export\s+LD_AUDIT)
+  downgrade:
+    all:
+    - id: metadata/internal/symbols::la_version
+    any:
+    - id: metadata/internal/symbols::la_objopen
+    - id: metadata/internal/symbols::la_symbind64
   attack: T1574.006
 - id: ld-preload-injection
   desc: LD_PRELOAD library injection setup

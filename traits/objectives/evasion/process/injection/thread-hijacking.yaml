@@ -1,0 +1,19 @@
+composite_rules:
+  - id: thread-execution-hijacking
+    desc: Manipulate thread execution context (Hijacking)
+    crit: hostile
+    conf: 0.90
+    attack: "T1055.003"
+    for: ["pe", "dll"]
+    all:
+      - id: objectives/evasion/process/injection/runtime::suspend-thread
+      - id: objectives/evasion/process/injection/runtime::get-thread-context
+      - id: objectives/evasion/process/injection/runtime::set-thread-context
+      - id: objectives/evasion/process/injection/runtime::resume-thread
+    none:
+      - id: metadata/format::many-exports
+    downgrade:
+      any:
+        - id: metadata/lang::go-runtime-marker
+        - id: metadata/vendor/valve/valve-corp-binary
+        - id: metadata/purpose/debug-tool::ollydbg-plugin-export

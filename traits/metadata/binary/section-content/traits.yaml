@@ -74,7 +74,7 @@ traits:
 
   # Init/fini sections (persistence/hooks)
   - id: init-array-hooks
-    desc: Content in initialization array
+    desc: Non-empty initialization array section
     crit: baseline
     conf: 0.95
     for: [elf]
@@ -84,7 +84,7 @@ traits:
       min: 0.0001
 
   - id: fini-array-hooks
-    desc: Content in finalization array
+    desc: Non-empty finalization array section
     crit: baseline
     conf: 0.8
     for: [elf]

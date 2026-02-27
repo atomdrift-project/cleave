@@ -80,8 +80,8 @@ fn create_analysis_context(
     };
 
     // Allow skipping trait loading for tests that don't need it
-    let capability_mapper = if std::env::var("cleave_SKIP_TRAITS").is_ok() {
-        tracing::info!("Traits skipped (cleave_SKIP_TRAITS set)");
+    let capability_mapper = if std::env::var("CLEAVE_SKIP_TRAITS").is_ok() {
+        tracing::info!("Traits skipped (CLEAVE_SKIP_TRAITS set)");
         Arc::new(CapabilityMapper::empty())
     } else {
         Arc::new(

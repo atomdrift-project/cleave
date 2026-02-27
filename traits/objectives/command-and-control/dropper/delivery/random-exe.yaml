@@ -1,0 +1,9 @@
+composite_rules:
+  - id: random-executable-dropper
+    desc: Detects dropping of executables with random names into root or temporary directories.
+    crit: hostile
+    conf: 0.9
+    for: [pe]
+    any:
+      - id: micro-behaviors/fs/file/create::random-named-exe-in-root
+      - id: micro-behaviors/fs/file/create::random-named-exe-in-temp

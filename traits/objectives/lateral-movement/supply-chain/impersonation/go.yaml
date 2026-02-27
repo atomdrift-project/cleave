@@ -1,0 +1,155 @@
+# Go Supply Chain Attack Detection - Package Impersonation
+# ATT&CK: T1195.002 (Compromise Software Supply Chain)
+# Detects Go packages that masquerade as legitimate stdlib/x packages
+
+defaults:
+  for: [go]
+  crit: suspicious
+  attack: "T1195.002"
+
+traits:
+  # === Package Declaration Detection ===
+  - id: terminal-package-decl
+    desc: Package named 'terminal'
+    crit: notable
+    conf: 0.6
+    if:
+      type: raw
+      regex: '^package terminal\b'
+
+  # === Wraps Legitimate Library ===
+  - id: wraps-x-term
+    desc: Imports golang.org/x/term (real terminal library)
+    crit: notable
+    conf: 0.5
+    if:
+      type: string
+      substr: "golang.org/x/term"
+
+  # === Suspicious Dependencies ===
+  - id: bitfield-script-import
+    desc: Uses github.com/bitfield/script library
+    crit: notable
+    conf: 0.75
+    if:
+      type: string
+      substr: "github.com/bitfield/script"
+
+  # === Password Function Interception ===
+  - id: readpassword-func
+    desc: ReadPassword function definition
+    crit: notable
+    conf: 0.6
+    if:
+      type: raw
+      regex: 'func ReadPassword\s*\('
+
+  - id: term-readpassword-call
+    desc: Calls term.ReadPassword
+    crit: notable
+    conf: 0.5
+    if:
+      type: raw
+      substr: "term.ReadPassword"
+
+  # === File Exfiltration in Password Context ===
+  - id: echo-call
+    desc: script.Echo method call
+    crit: notable
+    conf: 0.5
+    if:
+      type: raw
+      substr: "script.Echo("
+
+  # === HTTP Exfiltration ===
+  - id: script-get-call
+    desc: script.Get method call
+    crit: notable
+    conf: 0.6
+    if:
+      type: raw
+      substr: "script.Get("
+
+  # === Shell Execution ===
+  - id: exec-command-sh
+    desc: exec.Command with /bin/sh
+    crit: suspicious
+    conf: 0.8
+    if:
+      type: raw
+      regex: 'exec\.Command\s*\(\s*"/bin/sh"'
+
+  - id: exec-command-start
+    desc: Calls .Start() on Command
+    crit: notable
+    conf: 0.5
+    if:
+      type: raw
+      substr: ").Start()"
+
+composite_rules:
+  # === Terminal Package Wrapper Detection ===
+  - id: terminal-wrapper
+    desc: Wrapper around real terminal package
+    crit: suspicious
+    conf: 0.85
+    all:
+      - id: terminal-package-decl
+      - id: wraps-x-term
+      - id: readpassword-func
+
+  # === Password Interception Pattern ===
+  - id: password-intercept
+    desc: Password interception with file write
+    crit: hostile
+    conf: 0.95
+    all:
+      - id: term-readpassword-call
+      - id: objectives/credential-access/capture/input::appendfile-call
+
+  # === Password Exfiltration Pattern ===
+  - id: password-exfil-http
+    desc: Password captured and sent via HTTP
+    crit: hostile
+    conf: 0.95
+    all:
+      - id: term-readpassword-call
+      - id: objectives/credential-access/capture/input::http-post-call
+
+  # === Remote Code Execution After Fetch ===
+  - id: fetch-and-exec
+    desc: Fetches URL and executes as shell command
+    crit: hostile
+    conf: 0.95
+    all:
+      - id: script-get-call
+      - id: exec-command-sh
+      - id: exec-command-start
+
+  # === Full Supply Chain Attack Pattern ===
+  - id: go-terminal-supply-chain
+    desc: Go terminal package supply chain attack
+    crit: hostile
+    conf: 0.98
+    attack: "T1195.002"
+    mbc: "E1056"
+    all:
+      - id: terminal-wrapper
+    any:
+      - id: password-intercept
+      - id: password-exfil-http
+      - id: fetch-and-exec
+
+  # === Credential Theft Package ===
+  - id: credential-theft-package
+    desc: Go package with credential theft capability
+    crit: hostile
+    conf: 0.95
+    attack: "T1056"
+    needs: 3
+    any:
+      - id: readpassword-func
+      - id: objectives/credential-access/capture/input::appendfile-call
+      - id: objectives/credential-access/capture/input::http-post-call
+      - id: bitfield-script-import
+      - id: exec-command-sh

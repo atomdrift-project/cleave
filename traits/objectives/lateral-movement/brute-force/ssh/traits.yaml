@@ -250,11 +250,13 @@ composite_rules:
     conf: 0.85
     mbc: E1110
     attack: T1110.001
-    needs: 2
-    any:
+    all:
       - id: micro-behaviors/communications/ssh/client::protocol
-      - id: ssh-auth-methods
       - id: ssh-auth-errors
+    any:
+      - id: ssh-auth-methods
+      - id: scanner-keywords
+      - id: iot-credential-access
     downgrade:
       any:
         - id: micro-behaviors/os/pam/auth::module

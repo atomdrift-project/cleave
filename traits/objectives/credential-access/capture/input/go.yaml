@@ -1,0 +1,146 @@
+# Go Credential Input Capture
+# ATT&CK: T1056 (Input Capture)
+# Detects Go code that intercepts credential input
+
+defaults:
+  for: [go]
+  crit: suspicious
+  attack: "T1056"
+
+traits:
+  # === Password Reading Functions ===
+  - id: readpassword-call
+    desc: ReadPassword function call
+    crit: notable
+    conf: 0.6
+    if:
+      type: raw
+      regex: 'ReadPassword\s*\('
+
+  - id: term-readpassword
+    desc: term.ReadPassword call
+    crit: notable
+    conf: 0.6
+    if:
+      type: raw
+      substr: "term.ReadPassword("
+
+  - id: terminal-readpassword
+    desc: terminal.ReadPassword call
+    crit: notable
+    conf: 0.6
+    if:
+      type: raw
+      substr: "terminal.ReadPassword("
+
+  # === File Write Operations ===
+  - id: appendfile-call
+    desc: AppendFile method call
+    crit: notable
+    conf: 0.7
+    if:
+      type: raw
+      substr: ".AppendFile("
+
+  - id: writefile-call
+    desc: WriteFile method call
+    crit: notable
+    conf: 0.5
+    if:
+      type: raw
+      substr: ".WriteFile("
+
+  - id: os-writefile
+    desc: os.WriteFile call
+    crit: notable
+    conf: 0.5
+    if:
+      type: raw
+      substr: "os.WriteFile("
+
+  - id: ioutil-writefile
+    desc: ioutil.WriteFile call
+    crit: notable
+    conf: 0.5
+    if:
+      type: raw
+      substr: "ioutil.WriteFile("
+
+  # === HTTP Exfiltration ===
+  - id: http-post-call
+    desc: HTTP POST method call
+    crit: notable
+    conf: 0.6
+    if:
+      type: raw
+      regex: '\.(Post|PostForm)\s*\('
+
+  - id: http-client-do
+    desc: http.Client.Do call
+    crit: notable
+    conf: 0.5
+    if:
+      type: raw
+      substr: ".Do("
+
+composite_rules:
+  # === Password Reading Composite ===
+  - id: password-reading
+    desc: Password reading function
+    crit: notable
+    conf: 0.6
+    any:
+      - id: readpassword-call
+      - id: term-readpassword
+      - id: terminal-readpassword
+
+  # === File Write Composite ===
+  - id: file-write-operation
+    desc: File write operation
+    crit: notable
+    conf: 0.6
+    any:
+      - id: appendfile-call
+      - id: writefile-call
+      - id: os-writefile
+      - id: ioutil-writefile
+
+  # === HTTP Exfil Composite ===
+  - id: http-exfil-operation
+    desc: HTTP exfiltration operation
+    crit: notable
+    conf: 0.6
+    any:
+      - id: http-post-call
+      - id: http-client-do
+
+  # === Password Captured to File ===
+  - id: password-exfil-file
+    desc: Password captured and written to file
+    crit: hostile
+    conf: 0.95
+    attack: "T1056"
+    mbc: "E1056"
+    all:
+      - id: password-reading
+      - id: file-write-operation
+
+  # === Password Exfiltrated via HTTP ===
+  - id: password-exfil-http
+    desc: Password captured and sent via HTTP
+    crit: hostile
+    conf: 0.95
+    attack: "T1056"
+    mbc: "E1056"
+    all:
+      - id: password-reading
+      - id: http-exfil-operation
+
+  # === Any Credential Capture ===
+  - id: credential-capture
+    desc: Credential input capture capability
+    crit: suspicious
+    conf: 0.85
+    any:
+      - id: password-exfil-file
+      - id: password-exfil-http

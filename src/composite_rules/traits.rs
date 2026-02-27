@@ -30,7 +30,7 @@ fn stats_map() -> &'static DashMap<&'static str, (AtomicU64, AtomicU64)> {
 
 /// Print condition evaluation statistics
 pub(crate) fn print_condition_stats() {
-    if std::env::var("cleave_VERBOSE").as_deref() != Ok("1") {
+    if std::env::var("CLEAVE_VERBOSE").as_deref() != Ok("1") {
         return;
     }
 

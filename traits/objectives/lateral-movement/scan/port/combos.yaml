@@ -96,3 +96,8 @@ composite_rules:
     all:
       - id: rpc-enum-pmap
       - id: sym-hostname-resolve
+    downgrade:
+      any:
+        - id: micro-behaviors/fs/path/extension::so
+        - type: basename
+          regex: "^lib[^\\/]*\\.so(\\.[0-9]+)*$"

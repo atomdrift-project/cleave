@@ -130,7 +130,7 @@ pub(crate) struct Args {
     pub log_file: Option<String>,
 
     /// Enable full trait validation (expensive, ~60s+). Disabled by default.
-    /// Use --validate=true to enable. Can also set cleave_VALIDATE=1 to enable.
+    /// Use --validate=true to enable. Can also set CLEAVE_VALIDATE=1 to enable.
     #[arg(long, action = clap::ArgAction::Set, default_value_t = false)]
     pub validate: bool,
 
@@ -179,7 +179,7 @@ pub(crate) struct Args {
     #[arg(long, value_name = "DIR")]
     pub extract_dir: Option<String>,
 
-    /// Custom traits directory (overrides cleave_TRAITS_PATH env var and default "traits")
+    /// Custom traits directory (overrides CLEAVE_TRAITS_DIR env var and default "traits")
     #[arg(long, value_name = "DIR")]
     pub traits_dir: Option<String>,
 

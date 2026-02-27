@@ -541,9 +541,11 @@ gemini-2.5-pro, gemini-2.5-flash. Popular choices:
 
 	// Build or locate cleave binary
 	if *useCargo {
-		fmt.Fprint(os.Stderr, "Building release binary with cargo build --release...\n")
+		fmt.Fprint(os.Stderr, "Building release binary with cargo build --release --features jemalloc...\n")
 
-		cmd := exec.CommandContext(ctx, "cargo", "build", "--release")
+		// Use jemalloc for better memory management in long-running sessions.
+		// Prevents memory fragmentation from repeated wasmtime VM allocations.
+		cmd := exec.CommandContext(ctx, "cargo", "build", "--release", "--features", "jemalloc")
 		cmd.Dir = resolvedRoot
 
 		var stderr bytes.Buffer
@@ -553,7 +555,7 @@ gemini-2.5-pro, gemini-2.5-flash. Popular choices:
 			db.Close()               //nolint:errcheck,gosec // best-effort cleanup before fatal
 			os.RemoveAll(extractDir) //nolint:errcheck,gosec // best-effort cleanup before fatal
 			//nolint:gocritic // exitAfterDefer is intentional; manual cleanup done above
-			log.Fatalf("cargo build --release failed: %v (%s)", err, stderr.String())
+			log.Fatalf("cargo build --release --features jemalloc failed: %v (%s)", err, stderr.String())
 		}
 
 		// Determine binary path based on OS

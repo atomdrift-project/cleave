@@ -501,6 +501,6 @@ composite_rules:
   - id: objectives/discovery/host/browser::inline__search-engine-id__any_1
   - id: objectives/discovery/host/browser::inline__search-engine-id__any_2
   - id: objectives/discovery/host/browser::inline__search-engine-id__any_3
+  - id: objectives/discovery/host/browser::inline__search-engine-id__any_3_1
   - id: objectives/discovery/host/browser::inline__search-engine-id__any_4
   - id: objectives/discovery/host/browser::inline__search-engine-id__any_5
-  - id: objectives/discovery/host/browser::inline__search-engine-id__any_6

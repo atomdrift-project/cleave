@@ -173,6 +173,48 @@ composite_rules:
       - id: micro-behaviors/process/create/shell::shell-execution
 
 
+  # PE encrypted resource dropper: extracts encrypted resource, writes to disk, executes
+  # This is the canonical Windows resource dropper pattern seen in dropper families
+  # Signal depth: FindResource + LoadResource + SizeofResource + LockResource + WriteFile
+  #              + dominant encrypted .rsrc + ShellExecute = 7+ independent signals
+  # Complexity: all(3) + any(1) + for(1) = 5 >= 4 ✓ HOSTILE
+  - id: pe-encrypted-resource-dropper
+    desc: PE encrypted resource dropper (extract, write, execute)
+    crit: hostile
+    conf: 0.93
+    mbc: "B0030"
+    attack: "T1027.009"
+    for: [pe, dll]
+    all:
+      - id: micro-behaviors/data/embedded/payload::pe-resource-full-extraction
+      - id: micro-behaviors/io/console/output::write-file
+      - id: objectives/anti-static/obfuscation/payload/encrypted::dominant-rsrc-section
+    any:
+      - id: micro-behaviors/process/create/methods::shell-execute-ex
+      - id: micro-behaviors/process/create/methods::shell-execute
+    downgrade:
+      any:
+        - id: metadata/vendor/microsoft::is-microsoft-named
+
+  # PE resource dropper with process scanning (anti-AV reconnaissance)
+  # Combines resource extraction + file write + process enumeration
+  # Malware scans running processes to detect AV before dropping payload
+  # Complexity: all(3) + for(1) = 4 >= 4 ✓ HOSTILE
+  - id: pe-resource-dropper-with-process-scan
+    desc: PE resource dropper with process scanning
+    crit: hostile
+    conf: 0.92
+    mbc: "B0030"
+    attack: "T1027.009"
+    for: [pe, dll]
+    all:
+      - id: micro-behaviors/data/embedded/payload::pe-resource-full-extraction
+      - id: micro-behaviors/io/console/output::write-file
+      - id: micro-behaviors/process/enumerate/psapi::enum-processes
+    downgrade:
+      any:
+        - id: metadata/vendor/microsoft::is-microsoft-named
+
   - id: pe-embedded-payload-sandbox-aware
     desc: Embedded PE payload with sandbox-evasion corpus
     crit: suspicious

@@ -188,6 +188,15 @@ default = []
 # Skip YARA rule loading in tests for faster execution
 # Unit tests that don't need YARA scanning use this
 test_fast = []
+# Use jemalloc allocator for better memory management in long-running sessions.
+# Helps prevent memory fragmentation from repeated wasmtime VM allocations.
+# Supported on Linux, macOS, illumos, and other Unix-like systems.
+# Build with: cargo build --release --features jemalloc
+jemalloc = ["tikv-jemallocator"]
+
+# jemalloc for unix-like systems (Linux, macOS, illumos, FreeBSD, etc.)
+[target.'cfg(unix)'.dependencies]
+tikv-jemallocator = { version = "0.6", optional = true }
 
 [dev-dependencies]
 assert_cmd = "2.1"

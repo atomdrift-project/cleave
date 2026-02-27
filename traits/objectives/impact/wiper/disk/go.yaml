@@ -57,42 +57,42 @@ traits:
     crit: component
     if:
       type: hex
-      pattern: "92 49 24"
+      pattern: "92 49 24 92 49 24"
 
   - id: gutmann-hex-2
     desc: Gutmann pattern 49 24 92
     crit: component
     if:
       type: hex
-      pattern: "49 24 92"
+      pattern: "49 24 92 49 24 92"
 
   - id: gutmann-hex-3
     desc: Gutmann pattern 24 92 49
     crit: component
     if:
       type: hex
-      pattern: "24 92 49"
+      pattern: "24 92 49 24 92 49"
 
   - id: gutmann-hex-4
     desc: Gutmann pattern 6D B6 DB
     crit: component
     if:
       type: hex
-      pattern: "6D B6 DB"
+      pattern: "6D B6 DB 6D B6 DB"
 
   - id: gutmann-hex-5
     desc: Gutmann pattern B6 DB 6D
     crit: component
     if:
       type: hex
-      pattern: "B6 DB 6D"
+      pattern: "B6 DB 6D B6 DB 6D"
 
   - id: gutmann-hex-6
     desc: Gutmann pattern DB 92 49
     crit: component
     if:
       type: hex
-      pattern: "DB 92 49"
+      pattern: "DB 92 49 DB 92 49"
 
   # Go filesystem walk components
   - id: go-filepath-walkdir

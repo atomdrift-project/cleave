@@ -77,7 +77,7 @@ impl super::CapabilityMapper {
         enable_full_validation: bool,
     ) -> Self {
         let caps_path =
-            std::env::var("cleave_CAPABILITIES").unwrap_or_else(|_| "traits".to_string());
+            std::env::var("CLEAVE_TRAITS_DIR").unwrap_or_else(|_| "traits".to_string());
 
         let path = std::path::Path::new(&caps_path);
 
@@ -106,8 +106,8 @@ impl super::CapabilityMapper {
                 std::process::exit(1);
             })
         } else {
-            eprintln!("Error: Capabilities path does not exist: {}", caps_path);
-            eprintln!("Set cleave_CAPABILITIES to point to a valid traits directory or YAML file");
+            eprintln!("Error: Traits path does not exist: {}", caps_path);
+            eprintln!("Set CLEAVE_TRAITS_DIR to point to a valid traits directory or YAML file");
             std::process::exit(1);
         }
     }

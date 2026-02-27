@@ -50,6 +50,7 @@ composite_rules:
     any:
       - id: objectives/evasion/process/injection/runtime::queue-user-apc
       - id: objectives/evasion/process/injection/runtime::write-process-memory
+      - id: objectives/evasion/process/injection/runtime::set-thread-context
       - id: globalgetatomname-api
     none:
       - id: metadata/format::many-exports

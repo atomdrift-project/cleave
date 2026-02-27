@@ -63,21 +63,21 @@ impl YaraEngine {
     /// Uses cache if available and valid
     ///
     /// Environment variables:
-    /// - `cleave_SKIP_YARA=1`: Skip YARA entirely (for fast unit tests)
-    /// - `cleave_BUILTIN_YARA_ONLY=1`: Load only built-in rules, skip third-party (~500 vs 14k)
-    /// - `cleave_MINIMAL_RULES=1`: Load only essential rules (~100 instead of 14k)
+    /// - `CLEAVE_SKIP_YARA=1`: Skip YARA entirely (for fast unit tests)
+    /// - `CLEAVE_BUILTIN_YARA_ONLY=1`: Load only built-in rules, skip third-party (~500 vs 14k)
+    /// - `CLEAVE_MINIMAL_RULES=1`: Load only essential rules (~100 instead of 14k)
     pub(crate) fn load_all_rules(&mut self, enable_third_party: bool) -> (usize, usize) {
         let _span = tracing::info_span!("load_yara_rules").entered();
 
         // Fast path: skip YARA entirely for tests that don't need it
-        if std::env::var("cleave_SKIP_YARA").is_ok() {
-            tracing::info!("YARA skipped (cleave_SKIP_YARA set)");
+        if std::env::var("CLEAVE_SKIP_YARA").is_ok() {
+            tracing::info!("YARA skipped (CLEAVE_SKIP_YARA set)");
             return (0, 0);
         }
 
         // Override third-party setting via environment (for tests that need YARA but not 14k rules)
         let enable_third_party =
-            enable_third_party && std::env::var("cleave_BUILTIN_YARA_ONLY").is_err();
+            enable_third_party && std::env::var("CLEAVE_BUILTIN_YARA_ONLY").is_err();
 
         tracing::info!("Loading YARA rules");
 
@@ -105,7 +105,7 @@ impl YaraEngine {
         tracing::info!("Compiling YARA rules from source");
 
         let traits_dir = crate::cache::traits_path();
-        let third_party_dir = Path::new("third_party");
+        let third_party_dir = crate::cache::third_party_path();
 
         let mut compiler = yara_x::Compiler::new();
         let mut builtin_count = 0;
@@ -134,7 +134,7 @@ impl YaraEngine {
 
         // 2. Optionally load third-party YARA rules
         if enable_third_party && third_party_dir.exists() {
-            third_party_count = self.load_third_party_rules(&mut compiler, third_party_dir);
+            third_party_count = self.load_third_party_rules(&mut compiler, &third_party_dir);
         }
 
         let total_count = builtin_count + third_party_count + inline_count;

@@ -359,7 +359,7 @@ composite_rules:
     mbc: "E1041"
     attack: "T1020"
     all:
-      - id: micro-behaviors/os/env/vars::py-environ-enumerate
+      # - id: micro-behaviors/os/env/vars::py-environ-enumerate
       - id: micro-behaviors/data/encode/base64::b64encode-call
       - id: micro-behaviors/communications/http/request::request-python
 

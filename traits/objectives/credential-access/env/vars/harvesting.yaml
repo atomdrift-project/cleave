@@ -15,5 +15,5 @@ composite_rules:
     # Must have getenv capability (distinguishes reading from just strings)
     all:
       - id: micro-behaviors/os/env/vars::getenv
-      - id: micro-behaviors/os/env/vars::environ-global
+      # - id: micro-behaviors/os/env/vars::environ-global
       - id: micro-behaviors/os/env/vars/credentials

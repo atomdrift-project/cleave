@@ -46,11 +46,19 @@ pub(crate) fn cache_dir() -> Result<PathBuf> {
     anyhow::bail!("Failed to create cache directory")
 }
 
-/// Returns the traits directory path from cleave_TRAITS_PATH env var or "traits" default
+/// Returns the traits directory path from CLEAVE_TRAITS_DIR env var or "traits" default
 pub(crate) fn traits_path() -> PathBuf {
-    std::env::var("cleave_TRAITS_PATH")
+    std::env::var("CLEAVE_TRAITS_DIR")
+        .or_else(|_| std::env::var("CLEAVE_TRAITS_PATH"))
         .map(PathBuf::from)
         .unwrap_or_else(|_| PathBuf::from("traits"))
+}
+
+/// Returns the third-party directory path from CLEAVE_3P_DIR env var or "third_party" default
+pub(crate) fn third_party_path() -> PathBuf {
+    std::env::var("CLEAVE_3P_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| PathBuf::from("third_party"))
 }
 
 /// Check if we're running in developer mode (traits directory exists)
@@ -91,8 +99,9 @@ pub(crate) fn most_recent_yara_mtime() -> Result<SystemTime> {
     }
 
     // Check third_party directory
-    if Path::new("third_party").exists() {
-        for entry in WalkDir::new("third_party")
+    let tp_path = third_party_path();
+    if tp_path.exists() {
+        for entry in WalkDir::new(&tp_path)
             .follow_links(false)
             .into_iter()
             .flatten()

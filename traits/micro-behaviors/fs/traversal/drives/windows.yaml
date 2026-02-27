@@ -14,6 +14,16 @@ traits:
       type: symbol
       exact: "GetLogicalDrives"
 
+  - id: get-logical-drive-strings
+    desc: Enumerate logical drive strings
+    crit: notable
+    conf: 0.9
+    attack: "T1083"
+    mbc: "E1083"
+    if:
+      type: symbol
+      regex: "^GetLogicalDriveStrings[AW]$"
+
   - id: get-drive-type
     desc: Query drive type by symbol
     crit: notable

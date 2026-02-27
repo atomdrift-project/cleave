@@ -393,15 +393,19 @@ pub(crate) fn deduplicate_evidence(evidence: Vec<Evidence>) -> Vec<Evidence> {
         return evidence;
     }
 
-    // Group by (method, source, value) - use indices to avoid cloning keys
+    // Group by (method, source, value)
+    // Use Entry API with match to avoid clone in and_modify (ev consumed exactly once)
+    use std::collections::hash_map::Entry;
     let mut groups: HashMap<(String, String, String), Evidence> = HashMap::new();
 
     for ev in evidence {
         let key = (ev.method.clone(), ev.source.clone(), ev.value.clone());
-        groups
-            .entry(key)
-            .and_modify(|existing| existing.merge(ev.clone()))
-            .or_insert(ev);
+        match groups.entry(key) {
+            Entry::Occupied(mut entry) => entry.get_mut().merge(ev),
+            Entry::Vacant(entry) => {
+                entry.insert(ev);
+            }
+        }
     }
 
     groups.into_values().collect()

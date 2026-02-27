@@ -1,0 +1,31 @@
+traits:
+  - id: nuitka-onefile-strings
+    desc: Nuitka one-file packer strings
+    crit: notable
+    conf: 0.9
+    mbc: "B0032"
+    attack: "T1027.009"
+    for: [pe, elf, macho]
+    if:
+      type: string
+      substr: "NUITKA_ONEFILE_"
+      count_min: 2
+      
+  - id: nuitka-loader-strings
+    desc: Nuitka module loader metadata
+    crit: baseline
+    for: [pe, elf, macho]
+    if:
+      type: string
+      substr: "Nuitka_"
+
+composite_rules:
+  - id: nuitka-packer
+    desc: Nuitka compiled Python executable (packer)
+    crit: suspicious
+    conf: 0.8
+    mbc: "B0032"
+    attack: "T1027.002"
+    all:
+      - id: nuitka-onefile-strings
+      - id: micro-behaviors/data/embedded/payload::zstd-magic

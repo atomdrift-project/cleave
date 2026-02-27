@@ -1,0 +1,116 @@
+# SSH Authorized Keys Backdoor Detection
+# ATT&CK: T1098.004 (Account Manipulation: SSH Authorized Keys)
+# Detects SSH authorized_keys modification for persistence
+
+defaults:
+  crit: suspicious
+  attack: "T1098.004"
+  for: [shell, python, ruby, go, perl]
+  platforms: [linux, unix, macos]
+
+traits:
+  # === Direct authorized_keys Modification ===
+  - id: authorized-keys-append
+    desc: Append to SSH authorized_keys
+    crit: suspicious
+    conf: 0.95
+    if:
+      type: raw
+      regex: '(>>|>).{0,100}authorized_keys'
+
+  - id: authorized-keys-echo-append
+    desc: Echo to authorized_keys file
+    crit: suspicious
+    conf: 0.95
+    if:
+      type: raw
+      regex: 'echo.{0,200}>>.{0,50}authorized_keys'
+
+  # === SSH Public Key Patterns ===
+  - id: ssh-rsa-key
+    desc: SSH RSA public key
+    crit: notable
+    conf: 0.8
+    if:
+      type: string
+      regex: 'ssh-rsa\s+AAAA[A-Za-z0-9+/]{100,}'
+
+  - id: ssh-ed25519-key
+    desc: SSH ed25519 public key
+    crit: notable
+    conf: 0.8
+    if:
+      type: string
+      regex: 'ssh-ed25519\s+AAAA[A-Za-z0-9+/]{40,}'
+
+  - id: ssh-ecdsa-key
+    desc: SSH ECDSA public key
+    crit: notable
+    conf: 0.8
+    if:
+      type: string
+      regex: 'ssh-ecdsa\s+AAAA[A-Za-z0-9+/]{80,}'
+
+  # === SSH Directory Creation/Access ===
+  - id: mkdir-ssh
+    desc: Creates .ssh directory
+    crit: notable
+    conf: 0.7
+    if:
+      type: string
+      regex: 'mkdir.{0,30}\.ssh'
+
+  - id: chmod-ssh-dir
+    desc: Sets permissions on .ssh directory
+    crit: notable
+    conf: 0.7
+    if:
+      type: string
+      regex: 'chmod\s+[0-9]+.{0,30}\.ssh'
+
+  - id: home-ssh-path
+    desc: Home directory .ssh path
+    crit: notable
+    conf: 0.5
+    if:
+      type: string
+      regex: '(/home/.{1,50}|/root|~)/\.ssh/'
+
+composite_rules:
+  # === SSH Public Key Injection ===
+  - id: ssh-pubkey-injection
+    desc: SSH public key injection pattern
+    crit: suspicious
+    conf: 0.9
+    any:
+      - id: ssh-rsa-key
+      - id: ssh-ed25519-key
+      - id: ssh-ecdsa-key
+
+  # === SSH Backdoor Installation ===
+  - id: ssh-backdoor
+    desc: SSH authorized_keys backdoor injection
+    crit: hostile
+    conf: 0.95
+    attack: "T1098.004"
+    mbc: "E1098"
+    near_lines: 10
+    all:
+      - id: authorized-keys-append
+    any:
+      - id: ssh-pubkey-injection
+      - id: ssh-rsa-key
+      - id: ssh-ed25519-key
+      - id: ssh-ecdsa-key
+
+  # === SSH Persistence Setup ===
+  - id: ssh-persistence-setup
+    desc: SSH persistence infrastructure setup
+    crit: suspicious
+    conf: 0.85
+    needs: 2
+    any:
+      - id: mkdir-ssh
+      - id: chmod-ssh-dir
+      - id: authorized-keys-append
+      - id: home-ssh-path

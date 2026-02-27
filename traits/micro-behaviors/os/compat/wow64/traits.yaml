@@ -1,0 +1,48 @@
+# WoW64 Compatibility Layer Operations
+# 32-bit processes manipulating WoW64 filesystem/registry redirection
+# ATT&CK: T1106 (Native API)
+
+defaults:
+  for: [pe, dll]
+  platforms: [windows]
+
+traits:
+  - id: wow64-fs-redirect
+    desc: WoW64 filesystem redirection control
+    crit: suspicious
+    conf: 0.9
+    attack: "T1574"
+    if:
+      type: string
+      substr: "Wow64EnableWow64FsRedirection"
+
+  - id: wow64-disable-redirect
+    desc: Disable WoW64 filesystem redirection
+    crit: suspicious
+    conf: 0.9
+    attack: "T1574"
+    if:
+      type: string
+      substr: "Wow64DisableWow64FsRedirection"
+
+  - id: wow64-revert-redirect
+    desc: Revert WoW64 filesystem redirection
+    conf: 0.8
+    if:
+      type: string
+      substr: "Wow64RevertWow64FsRedirection"
+
+  - id: is-wow64-process
+    desc: Check if running under WoW64
+    conf: 0.7
+    if:
+      type: string
+      substr: "IsWow64Process"
+
+  - id: wow64-process-stack
+    desc: Wow64Process reference via stack string
+    crit: notable
+    conf: 0.75
+    if:
+      type: string
+      exact: "Wow64Process"

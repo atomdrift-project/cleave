@@ -1,0 +1,11 @@
+defaults:
+  for: [all]
+
+traits:
+  - id: base64-alphabet-numeric-mixed
+    desc: Custom Base64 Encoding Alphabet (Mixed Numeric)
+    crit: suspicious
+    conf: 0.85
+    if:
+      type: string
+      exact: "a56ghijklmnuvwxyz07opqrsbcdef1234t89"

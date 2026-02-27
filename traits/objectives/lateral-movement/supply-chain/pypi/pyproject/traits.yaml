@@ -13,8 +13,9 @@ traits:
     crit: notable
     conf: 1.0
     if:
-      type: raw
-      substr: "[build-system]"
+      type: kv
+      path: "build-system.requires"
+      exists: true
 
   - id: pyproject-empty-dependencies
     desc: pyproject.toml with empty dependencies

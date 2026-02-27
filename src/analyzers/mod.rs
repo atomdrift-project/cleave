@@ -135,8 +135,12 @@ pub fn analyzer_for_file_type(
             chrome_manifest::ChromeManifestAnalyzer::new().with_capability_mapper(mapper_or_empty),
         )),
 
-        // Python package metadata - use generic analyzer for string/trait matching
-        FileType::PkgInfo | FileType::Plist => Some(Box::new(
+        // Text-based formats without tree-sitter - use generic analyzer
+        FileType::PkgInfo
+        | FileType::Plist
+        | FileType::Html
+        | FileType::Markdown
+        | FileType::Text => Some(Box::new(
             generic::GenericAnalyzer::new(file_type.clone())
                 .with_capability_mapper(mapper_or_empty),
         )),
@@ -218,8 +222,12 @@ pub(crate) fn analyzer_for_file_type_arc(
                 .with_capability_mapper_arc(mapper_or_empty),
         )),
 
-        // Python package metadata - use generic analyzer for string/trait matching
-        FileType::PkgInfo | FileType::Plist => Some(Box::new(
+        // Text-based formats without tree-sitter - use generic analyzer
+        FileType::PkgInfo
+        | FileType::Plist
+        | FileType::Html
+        | FileType::Markdown
+        | FileType::Text => Some(Box::new(
             generic::GenericAnalyzer::new(file_type.clone())
                 .with_capability_mapper_arc(mapper_or_empty),
         )),
@@ -368,6 +376,9 @@ pub(crate) fn detect_file_type_from_path(file_path: &Path) -> FileType {
             "lnk" => return FileType::Lnk,
             "zip" | "7z" | "rar" | "deb" | "rpm" | "apk" | "ipa" | "xpi" | "epub" | "nupkg"
             | "vsix" | "aar" | "egg" | "whl" | "phar" => return FileType::Archive,
+            "html" | "htm" => return FileType::Html,
+            "md" | "markdown" => return FileType::Markdown,
+            "txt" | "rst" | "csv" | "log" => return FileType::Text,
             _ => {}
         }
     }
@@ -735,6 +746,20 @@ pub fn detect_file_type(file_path: &Path) -> Result<FileType> {
         if ext_str == "scpt" || ext_str == "applescript" {
             return Ok(FileType::AppleScript);
         }
+        if ext_str == "html" || ext_str == "htm" {
+            // Check if it actually contains HTML markup
+            if looks_like_html(&file_data) {
+                return Ok(FileType::Html);
+            }
+            // HTML extension but no markup - treat as plain text
+            return Ok(FileType::Text);
+        }
+        if matches!(ext_str.as_str(), "md" | "markdown") {
+            return Ok(FileType::Markdown);
+        }
+        if matches!(ext_str.as_str(), "txt" | "rst" | "csv" | "log") {
+            return Ok(FileType::Text);
+        }
     }
 
     // Content-based detection for files without recognized extensions
@@ -748,6 +773,30 @@ pub fn detect_file_type(file_path: &Path) -> Result<FileType> {
     }
 
     Ok(FileType::Unknown)
+}
+
+/// Check if content looks like HTML (has actual markup tags)
+fn looks_like_html(data: &[u8]) -> bool {
+    let s = String::from_utf8_lossy(data);
+    let content_lower = s.to_lowercase();
+
+    // Must contain at least one HTML tag pattern
+    // Look for common HTML tags or DOCTYPE
+    content_lower.contains("<!doctype html")
+        || content_lower.contains("<html")
+        || content_lower.contains("<head")
+        || content_lower.contains("<body")
+        || content_lower.contains("<script")
+        || content_lower.contains("<div")
+        || content_lower.contains("<span")
+        || content_lower.contains("<p>")
+        || content_lower.contains("<a ")
+        || content_lower.contains("<img")
+        || content_lower.contains("<form")
+        || content_lower.contains("<table")
+        || content_lower.contains("<meta")
+        || content_lower.contains("<link")
+        || content_lower.contains("<style")
 }
 
 /// Heuristic detection for PowerShell files without .ps1 extension
@@ -1132,6 +1181,12 @@ pub enum FileType {
     Jpeg,
     /// PNG image
     Png,
+    /// HTML document (.html, .htm)
+    Html,
+    /// Markdown document (.md, .markdown)
+    Markdown,
+    /// Plain text file (no specific language detected)
+    Text,
     /// File type could not be determined
     Unknown,
 }
@@ -1181,7 +1236,7 @@ impl FileType {
             | FileType::Rtf
             | FileType::Lnk
             | FileType::Png => true, // PNG included for steganography detection
-            FileType::Archive | FileType::Unknown | FileType::Jpeg | FileType::Certificate => false, // Skip other images and unknown files by default in dir scans
+            FileType::Archive | FileType::Unknown | FileType::Jpeg | FileType::Certificate | FileType::Html | FileType::Markdown | FileType::Text => false, // Skip other images, text, and unknown files by default in dir scans
         }
     }
 
@@ -1255,6 +1310,9 @@ impl FileType {
             FileType::Lnk => vec!["lnk", "shortcut"],
             FileType::Jpeg => vec!["jpeg", "jpg"],
             FileType::Png => vec!["png"],
+            FileType::Html => vec!["html", "htm"],
+            FileType::Markdown => vec!["md", "markdown"],
+            FileType::Text => vec!["txt", "text"],
             FileType::Unknown | FileType::Certificate => vec![], // No filtering for unknown types
         }
     }
@@ -1374,5 +1432,101 @@ mod tests {
 
         let file_type = detect_file_type_from_path(&path);
         assert_eq!(file_type, FileType::JavaScript);
+    }
+
+    #[test]
+    fn test_html_extension_detection() {
+        // .html extension should be detected
+        let path = PathBuf::from("page.html");
+        assert_eq!(detect_file_type_from_path(&path), FileType::Html);
+
+        let path = PathBuf::from("index.htm");
+        assert_eq!(detect_file_type_from_path(&path), FileType::Html);
+    }
+
+    #[test]
+    fn test_markdown_extension_detection() {
+        let path = PathBuf::from("README.md");
+        assert_eq!(detect_file_type_from_path(&path), FileType::Markdown);
+
+        let path = PathBuf::from("docs.markdown");
+        assert_eq!(detect_file_type_from_path(&path), FileType::Markdown);
+    }
+
+    #[test]
+    fn test_text_extension_detection() {
+        let path = PathBuf::from("notes.txt");
+        assert_eq!(detect_file_type_from_path(&path), FileType::Text);
+
+        let path = PathBuf::from("data.csv");
+        assert_eq!(detect_file_type_from_path(&path), FileType::Text);
+
+        let path = PathBuf::from("app.log");
+        assert_eq!(detect_file_type_from_path(&path), FileType::Text);
+    }
+
+    #[test]
+    fn test_looks_like_html_with_markup() {
+        // Various HTML patterns should be detected
+        assert!(looks_like_html(b"<!DOCTYPE html><html></html>"));
+        assert!(looks_like_html(b"<html><body></body></html>"));
+        assert!(looks_like_html(b"<head><title>Test</title></head>"));
+        assert!(looks_like_html(b"<body><p>Hello</p></body>"));
+        assert!(looks_like_html(b"<script>alert('xss')</script>"));
+        assert!(looks_like_html(b"<div class='container'></div>"));
+        assert!(looks_like_html(b"<a href='http://evil.com'>click</a>"));
+        assert!(looks_like_html(b"<img src='payload.png'>"));
+        assert!(looks_like_html(b"<form action='steal.php'></form>"));
+        assert!(looks_like_html(b"<style>.hidden{display:none}</style>"));
+    }
+
+    #[test]
+    fn test_looks_like_html_without_markup() {
+        // Plain text should not be detected as HTML
+        assert!(!looks_like_html(b"https://example.com/page.html"));
+        assert!(!looks_like_html(b"Just some plain text"));
+        assert!(!looks_like_html(b"Hello, world!"));
+        assert!(!looks_like_html(b"192.168.1.1"));
+        assert!(!looks_like_html(b"user@example.com"));
+    }
+
+    #[test]
+    fn test_html_content_detection() {
+        use std::io::Write;
+        use tempfile::NamedTempFile;
+
+        // HTML file with actual markup -> Html
+        let mut html_file = NamedTempFile::with_suffix(".html").unwrap();
+        html_file.write_all(b"<html><body>Hello</body></html>").unwrap();
+        let file_type = detect_file_type(html_file.path()).unwrap();
+        assert_eq!(file_type, FileType::Html);
+
+        // HTML file without markup -> Text
+        let mut text_file = NamedTempFile::with_suffix(".html").unwrap();
+        text_file.write_all(b"https://example.com/c2").unwrap();
+        let file_type = detect_file_type(text_file.path()).unwrap();
+        assert_eq!(file_type, FileType::Text);
+    }
+
+    #[test]
+    fn test_markdown_content_detection() {
+        use std::io::Write;
+        use tempfile::NamedTempFile;
+
+        let mut md_file = NamedTempFile::with_suffix(".md").unwrap();
+        md_file.write_all(b"# Heading\n\nSome text").unwrap();
+        let file_type = detect_file_type(md_file.path()).unwrap();
+        assert_eq!(file_type, FileType::Markdown);
+    }
+
+    #[test]
+    fn test_text_content_detection() {
+        use std::io::Write;
+        use tempfile::NamedTempFile;
+
+        let mut txt_file = NamedTempFile::with_suffix(".txt").unwrap();
+        txt_file.write_all(b"Plain text content").unwrap();
+        let file_type = detect_file_type(txt_file.path()).unwrap();
+        assert_eq!(file_type, FileType::Text);
     }
 }

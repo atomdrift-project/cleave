@@ -107,7 +107,7 @@ traits:
 
   - id: got-section
     desc: .got section
-    crit: notable
+    crit: baseline
     conf: 0.7
     if:
       type: string

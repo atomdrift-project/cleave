@@ -14,7 +14,7 @@ traits:
       substr: "setup.py"
 
   - id: pyproject-toml
-    desc: pyproject.toml file
+    desc: pyproject.toml reference
     crit: notable
     conf: 0.85
     if:
@@ -22,7 +22,7 @@ traits:
       substr: "pyproject.toml"
 
   - id: requirements-txt
-    desc: requirements.txt file
+    desc: requirements.txt reference
     crit: notable
     conf: 0.85
     if:

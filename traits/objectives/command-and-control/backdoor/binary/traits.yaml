@@ -127,7 +127,7 @@ traits:
 
   - id: la-symbind-ref
     desc: la_symbind audit hook
-    crit: suspicious
+    crit: notable
     conf: 0.7
     for: [elf]
     if:
@@ -289,6 +289,9 @@ composite_rules:
       any:
         # CLI utilities often fork/exec for command wrappers and subprocess orchestration.
         - id: metadata/quality::has-help
+        - type: basename
+          regex: '^lib[^/]*\.so(\.[0-9]+)*$'
+        - id: micro-behaviors/fs/path/extension::so
 
   - id: unexpected-crypto
     desc: Cryptographic operations in non-crypto library
@@ -308,7 +311,6 @@ composite_rules:
           field: binary.section_count
           min: 20
 
-  # === Unexpected capability combination ===
   - id: unexpected-capabilities
     desc: Unexpected capability combination in library
     crit: suspicious
@@ -458,3 +460,4 @@ composite_rules:
       - id: metadata/library/compression::compression-lib
       - id: micro-behaviors/data/embedded/payload::multiple-compressed-payloads
       - id: xz-cpuid-mask-check
+

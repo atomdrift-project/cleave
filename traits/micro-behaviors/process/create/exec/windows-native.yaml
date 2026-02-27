@@ -1,0 +1,17 @@
+# Windows Native Command Execution APIs
+# Low-level WinAPI execution methods
+# ATT&CK: T1106 (Native API)
+
+defaults:
+  for: [pe, dll]
+  platforms: [windows]
+
+traits:
+  - id: winexec
+    desc: WinExec command execution API
+    crit: notable
+    conf: 0.9
+    attack: "T1106"
+    if:
+      type: symbol
+      exact: "WinExec"

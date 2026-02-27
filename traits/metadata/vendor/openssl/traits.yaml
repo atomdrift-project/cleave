@@ -5,7 +5,7 @@
 traits:
   - id: openssl-project-copyright
     desc: Modern OpenSSL Project copyright
-    crit: notable
+    crit: baseline
     conf: 0.95
     for: [all]
     if:
@@ -14,7 +14,7 @@ traits:
 
   - id: openssl-eric-young-copyright
     desc: OpenSSL copyright and license header
-    crit: notable
+    crit: baseline
     conf: 0.90
     for: [all]
     if:

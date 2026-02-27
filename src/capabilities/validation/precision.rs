@@ -423,8 +423,8 @@ pub(crate) fn calculate_composite_precision(
         return precision;
     }
 
-    // Debug output controlled by cleave_DEBUG environment variable
-    let debug = std::env::var("cleave_DEBUG").is_ok();
+    // Debug output controlled by CLEAVE_DEBUG environment variable
+    let debug = std::env::var("CLEAVE_DEBUG").is_ok();
 
     // Detect cycles
     if !visiting.insert(rule_id.to_string()) {

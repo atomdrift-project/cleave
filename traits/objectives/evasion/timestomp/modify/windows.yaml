@@ -11,4 +11,14 @@ defaults:
   mbc: "F0006"
   attack: "T1070.006"
 
-composite_rules: []
+composite_rules:
+  - id: timestomp-with-file-copy
+    desc: File timestamp modification with file operations
+    crit: suspicious
+    conf: 0.85
+    all:
+      - id: micro-behaviors/fs/sync/fsync::set-file-time
+      - id: micro-behaviors/fs/enumerate/directory::find-first-file
+    any:
+      - id: micro-behaviors/io/console/output::write-file
+      - id: micro-behaviors/fs/file/operations::file-create-win

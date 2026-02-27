@@ -183,7 +183,7 @@ pub(crate) fn eval_string<'a, 'b>(
     trait_not: Option<&Vec<NotException>>,
     ctx: &EvaluationContext<'b>,
 ) -> ConditionResult {
-    let profile = std::env::var("cleave_PROFILE").is_ok();
+    let profile = std::env::var("CLEAVE_PROFILE").is_ok();
     let t_start = if profile {
         Some(std::time::Instant::now())
     } else {
@@ -348,6 +348,13 @@ pub(crate) fn eval_string<'a, 'b>(
 
     // SLOW PATH: Fall back to iteration for substr/regex/offset-constrained matches
 
+    // Pre-compute lowercase pattern once (avoids allocation per string checked)
+    let substr_lower: Option<String> = if params.case_insensitive {
+        params.substr.map(|s| s.to_lowercase())
+    } else {
+        None
+    };
+
     // Helper to check if a value matches and add to evidence
     let check_and_add_evidence = |value: &str,
                                   source: &str,
@@ -367,8 +374,9 @@ pub(crate) fn eval_string<'a, 'b>(
                 match_value = exact_str.clone();
             }
         } else if let Some(contains_str) = params.substr {
-            matched = if params.case_insensitive {
-                value.to_lowercase().contains(&contains_str.to_lowercase())
+            matched = if let Some(ref pattern_lower) = substr_lower {
+                // Use pre-computed lowercase pattern (avoids allocation per iteration)
+                value.to_lowercase().contains(pattern_lower.as_str())
             } else {
                 value.contains(contains_str)
             };
@@ -526,7 +534,7 @@ pub(crate) fn eval_raw<'a>(
     location: &ContentLocationParams,
     ctx: &EvaluationContext<'a>,
 ) -> ConditionResult {
-    let profile = std::env::var("cleave_PROFILE").is_ok();
+    let profile = std::env::var("CLEAVE_PROFILE").is_ok();
     let t_start = if profile {
         Some(std::time::Instant::now())
     } else {
@@ -737,8 +745,10 @@ pub(crate) fn eval_raw<'a>(
                     let needle = pattern_lower.as_bytes();
                     let finder = memchr::memmem::Finder::new(needle);
 
+                    // Pre-lowercase entire search data ONCE (not per-iteration!)
+                    let search_lower = search_data.to_ascii_lowercase();
                     let mut pos = 0;
-                    while let Some(offset) = finder.find(&search_data[pos..].to_ascii_lowercase()) {
+                    while let Some(offset) = finder.find(&search_lower[pos..]) {
                         let abs_pos = pos + offset;
                         // Convert only context window for IP check (not entire file!)
                         let ctx_start = abs_pos.saturating_sub(50);
@@ -800,9 +810,9 @@ pub(crate) fn eval_raw<'a>(
                     if case_insensitive {
                         let pattern_lower = substr_str.to_ascii_lowercase();
                         let needle = pattern_lower.as_bytes();
-                        match_count =
-                            memchr::memmem::find_iter(&search_data.to_ascii_lowercase(), needle)
-                                .count();
+                        // Pre-lowercase once, not inside find_iter (avoids O(file_size) allocation per call)
+                        let search_lower = search_data.to_ascii_lowercase();
+                        match_count = memchr::memmem::find_iter(&search_lower, needle).count();
                     } else {
                         let needle = substr_str.as_bytes();
                         match_count = memchr::memmem::find_iter(search_data, needle).count();

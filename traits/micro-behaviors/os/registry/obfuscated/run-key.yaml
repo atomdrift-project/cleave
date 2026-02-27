@@ -1,0 +1,30 @@
+defaults:
+  for: [all]
+
+traits:
+  - id: run-key-underscore-software
+    desc: Obfuscated Registry Key with underscores
+    crit: suspicious
+    conf: 0.90
+    platforms: [windows]
+    if:
+      type: string
+      regex: '(?i)S_O_F_T_W_A_R_E_\\M_i_c_r_o_s_o_f_t'
+
+  - id: run-key-underscore-software-alt
+    desc: Obfuscated Registry Key alternate spacing
+    crit: suspicious
+    conf: 0.90
+    platforms: [windows]
+    if:
+      type: string
+      regex: '(?i)SO_FT_WA_RE_\\M_icr_o_so_ft'
+
+  - id: run-key-underscore-run
+    desc: Obfuscated Registry Run Key with underscores
+    crit: suspicious
+    conf: 0.90
+    platforms: [windows]
+    if:
+      type: string
+      regex: '(?i)V_e_r_s_i_on\\R_u_n'

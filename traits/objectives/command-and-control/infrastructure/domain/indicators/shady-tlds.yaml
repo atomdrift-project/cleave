@@ -3,7 +3,7 @@
 # ATT&CK: T1071 (Application Layer Protocol)
 
 defaults:
-  for: [python, javascript, typescript, go, ruby, java, php, shell]
+  for: [all]
   crit: suspicious
   attack: "T1071"
 
@@ -84,6 +84,31 @@ traits:
     not:
       - regex: '^\s*#'
 
+  - id: tld-cc
+    desc: .cc domain (commonly abused)
+    crit: suspicious
+    conf: 0.75
+    for: [all]
+    if:
+      type: raw
+      regex: 'https?://.{1,120}\.cc(/|\s|$)'
+
+  - id: tld-su
+    desc: .su domain (Soviet Union - commonly abused)
+    conf: 0.85
+    if:
+      type: raw
+      regex: 'https?://.{1,120}\.su(/|\s|$)'
+
+  # === PHP Endpoints ===
+  - id: php-endpoint-url
+    desc: URL with .php endpoint
+    crit: notable
+    conf: 0.6
+    if:
+      type: raw
+      regex: 'https?://.{1,120}\.php\b'
+
   # === File Sharing Services ===
 
   - id: transfer-sh
@@ -152,15 +177,8 @@ composite_rules:
       - id: tld-xyz
       - id: tld-top
       - id: tld-zip
-
-  # Tunneling services
-  - id: tunnel-service
-    desc: Tunneling/proxy service URL
-    crit: suspicious
-    conf: 0.90
-    attack: "T1090"
-    any:
-      - id: objectives/command-and-control/infrastructure/tunnel/
+      - id: tld-cc
+      - id: tld-su
 
   # Paste/sharing services
   - id: paste-service
@@ -190,14 +208,16 @@ composite_rules:
     any:
       - id: objectives/exfiltration/channel/oob/shortener/
 
-  # IP Trackers
-  - id: ip-tracker-service
-    desc: IP logging or tracking service
-    crit: suspicious
-    conf: 0.85
-    attack: "T1592"
-    any:
-      - id: objectives/discovery/network/ip-tracker/
+  # PHP endpoint on shady TLD - strong C2 indicator
+  - id: php-c2-endpoint
+    desc: PHP endpoint on suspicious domain
+    crit: hostile
+    conf: 0.95
+    attack: "T1071"
+    near_lines: 0
+    all:
+      - id: php-endpoint-url
+      - id: suspicious-tld
 
   # GuardDog: All shady URLs
   - id: shady-url
@@ -207,10 +227,10 @@ composite_rules:
     attack: "T1071"
     any:
       - id: suspicious-tld
-      - id: tunnel-service
+      - id: objectives/command-and-control/infrastructure/domain::tunnel-service
       - id: paste-service
       - id: oob-service
       - id: url-shortener
-      - id: ip-tracker-service
+      - id: objectives/command-and-control/domain/tracking::tracking-services-domain
       - id: discord-api
       - id: ip-address-url

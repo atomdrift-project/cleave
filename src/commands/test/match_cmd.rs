@@ -145,9 +145,9 @@ pub(crate) fn run(
     };
 
     // Load capability mapper with full validation (test-match is a developer command)
-    // Allow skipping for faster tests with cleave_SKIP_TRAITS
-    let capability_mapper = if std::env::var("cleave_SKIP_TRAITS").is_ok() {
-        tracing::info!("Traits skipped (cleave_SKIP_TRAITS set)");
+    // Allow skipping for faster tests with CLEAVE_SKIP_TRAITS
+    let capability_mapper = if std::env::var("CLEAVE_SKIP_TRAITS").is_ok() {
+        tracing::info!("Traits skipped (CLEAVE_SKIP_TRAITS set)");
         crate::capabilities::CapabilityMapper::empty()
     } else {
         crate::capabilities::CapabilityMapper::new_with_precision_thresholds(

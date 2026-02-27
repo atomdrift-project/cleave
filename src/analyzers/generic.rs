@@ -9,8 +9,7 @@ use crate::analyzers::FileType;
 use crate::analyzers::{AnalysisInput, Analyzer};
 use crate::capabilities::CapabilityMapper;
 use crate::types::*;
-use anyhow::{Context, Result};
-use std::fs;
+use anyhow::Result;
 use std::path::Path;
 use std::sync::Arc;
 use tree_sitter::Language;
@@ -83,6 +82,9 @@ impl GenericAnalyzer {
             FileType::Batch => "batch",
             FileType::PkgInfo => "pkg-info",
             FileType::Plist => "plist",
+            FileType::Html => "html",
+            FileType::Markdown => "markdown",
+            FileType::Text => "text",
             _ => "unknown",
         }
     }
@@ -90,16 +92,6 @@ impl GenericAnalyzer {
     #[allow(dead_code)] // Used by embedded_code_detector
     fn analyze_source(&self, file_path: &Path, content: &str) -> AnalysisReport {
         self.analyze_source_internal(file_path, content, None, None)
-    }
-
-    /// Analyze source with original bytes for accurate hash/size computation
-    fn analyze_source_with_bytes(
-        &self,
-        file_path: &Path,
-        content: &str,
-        original_bytes: &[u8],
-    ) -> AnalysisReport {
-        self.analyze_source_internal(file_path, content, None, Some(original_bytes))
     }
 
     fn analyze_source_internal(
@@ -429,12 +421,6 @@ impl Analyzer for GenericAnalyzer {
             Some(input.strings),
             Some(input.data),
         ))
-    }
-
-    fn analyze(&self, file_path: &Path) -> Result<AnalysisReport> {
-        let bytes = fs::read(file_path).context("Failed to read file")?;
-        let content = String::from_utf8_lossy(&bytes);
-        Ok(self.analyze_source_with_bytes(file_path, &content, &bytes))
     }
 
     fn can_analyze(&self, _file_path: &Path) -> bool {

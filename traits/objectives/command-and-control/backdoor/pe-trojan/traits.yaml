@@ -1,0 +1,48 @@
+# Windows PE Trojan/Backdoor Detection
+# Composites detecting common Windows trojan behavior patterns
+# ATT&CK: T1071.001 (Application Layer Protocol: Web Protocols)
+# MBC: B0030 (Command and Control)
+
+defaults:
+  for: [pe, dll]
+  platforms: [windows]
+
+composite_rules:
+  # PE with dynamic WinInet + command execution = C2 backdoor
+  - id: dynamic-wininet-c2
+    desc: Dynamic WinInet loading with command execution
+    crit: hostile
+    conf: 0.95
+    attack: "T1071.001"
+    all:
+      - id: micro-behaviors/communications/http/get::wininet-dynamic-load
+      - id: objectives/execution/reflection/class::dynamic-load-pattern
+    any:
+      - id: micro-behaviors/process/create/spawn::create-process-w
+      - id: micro-behaviors/process/create/spawn::create-process-a
+      - id: micro-behaviors/process/create/exec::winexec
+
+  # PE with HTTP + process kill + persistence = trojan
+  - id: pe-trojan-indicators
+    desc: HTTP communication with defense evasion
+    crit: suspicious
+    conf: 0.9
+    attack: "T1071.001"
+    all:
+      - id: objectives/evasion/security-product-targeting/enumerate::process-enumeration-terminate
+    any:
+      - id: micro-behaviors/communications/http/get::wininet-dynamic-load
+      - id: micro-behaviors/communications/http/get::internet-open
+
+  # Pipe-based command capture with C2 indicators
+  - id: pipe-command-capture-c2
+    desc: Pipe command capture with network communication
+    crit: suspicious
+    conf: 0.9
+    attack: "T1059"
+    all:
+      - id: micro-behaviors/communications/ipc/pipe::pipe-io-redirect
+    any:
+      - id: micro-behaviors/communications/http/get::wininet-dynamic-load
+      - id: micro-behaviors/communications/http/get::internet-open
+      - id: micro-behaviors/process/create/spawn::create-process-w

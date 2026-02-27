@@ -10,6 +10,7 @@ defaults:
 traits:
   - id: ld-preload-string
     desc: LD_PRELOAD environment variable reference
+    crit: notable
     platforms: [linux, unix]
     for: [elf, scripts]
     if:
@@ -19,6 +20,7 @@ traits:
 
   - id: dyld-insert-libraries-string
     desc: DYLD_INSERT_LIBRARIES environment variable reference
+    crit: notable
     platforms: [macos]
     for: [macho, scripts]
     if:

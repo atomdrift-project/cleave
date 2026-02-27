@@ -1,0 +1,42 @@
+# Win32 System Information APIs
+# System profiling capabilities used by RATs for beacon data
+defaults:
+  for: [pe, dll]
+  platforms: [windows]
+
+traits:
+  - id: get-computer-name
+    desc: Query computer/host name
+    crit: notable
+    conf: 0.9
+    attack: "T1082"
+    if:
+      type: symbol
+      regex: "^GetComputerName[AW]$"
+
+  - id: get-user-name
+    desc: Query current username
+    crit: notable
+    conf: 0.9
+    attack: "T1033"
+    if:
+      type: symbol
+      regex: "^GetUserName[AW]$"
+
+  - id: get-version-ex
+    desc: Query Windows version info
+    crit: baseline
+    conf: 0.9
+    attack: "T1082"
+    if:
+      type: symbol
+      regex: "^GetVersionEx[AW]$"
+
+  - id: get-system-default-lang-id
+    desc: Query system default language
+    crit: baseline
+    conf: 0.9
+    attack: "T1082"
+    if:
+      type: symbol
+      exact: "GetSystemDefaultLangID"

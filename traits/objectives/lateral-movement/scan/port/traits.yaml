@@ -304,7 +304,7 @@ traits:
     regex: \d+\.\d+\.\d+\.\d+/\d+
 - id: rpc-enum-pmap
   desc: RPC portmapper enumeration function
-  crit: suspicious
+  crit: notable
   conf: 0.95
   platforms:
   - all

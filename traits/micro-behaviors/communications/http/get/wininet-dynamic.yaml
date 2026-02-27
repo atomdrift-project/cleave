@@ -1,0 +1,85 @@
+# WinInet HTTP Client - Dynamic Resolution
+# Detects WinInet API names as strings (not in import table)
+# Malware commonly loads WinInet dynamically via LoadLibrary+GetProcAddress
+# to evade static import analysis
+# ATT&CK: T1071.001 (Application Layer Protocol: Web Protocols)
+
+defaults:
+  for: ["pe", "dll"]
+  platforms: ["windows"]
+  attack: "T1071.001"
+
+traits:
+  - id: internet-open-str
+    desc: InternetOpen API name as string
+    crit: component
+    conf: 0.9
+    if:
+      type: string
+      exact: "InternetOpenA"
+
+  - id: internet-connect-str
+    desc: InternetConnect API name as string
+    crit: component
+    conf: 0.9
+    if:
+      type: string
+      exact: "InternetConnectA"
+
+  - id: http-open-request-str
+    desc: HttpOpenRequest API name as string
+    crit: component
+    conf: 0.9
+    if:
+      type: string
+      exact: "HttpOpenRequestA"
+
+  - id: http-send-request-str
+    desc: HttpSendRequest API name as string
+    crit: component
+    conf: 0.9
+    if:
+      type: string
+      exact: "HttpSendRequestA"
+
+  - id: internet-close-handle-str
+    desc: InternetCloseHandle API name as string
+    crit: component
+    conf: 0.9
+    if:
+      type: string
+      exact: "InternetCloseHandle"
+
+  - id: http-query-info-str
+    desc: HttpQueryInfo API name as string
+    crit: component
+    conf: 0.9
+    if:
+      type: string
+      exact: "HttpQueryInfoA"
+
+  - id: obtain-user-agent-str
+    desc: ObtainUserAgentString API name as string
+    crit: component
+    conf: 0.85
+    if:
+      type: string
+      exact: "ObtainUserAgentString"
+
+composite_rules:
+  - id: wininet-dynamic-load
+    desc: WinInet APIs resolved dynamically
+    crit: suspicious
+    conf: 0.9
+    attack: "T1027"
+    all:
+      - id: internet-open-str
+    any:
+      - id: http-send-request-str
+      - id: http-open-request-str
+      - id: internet-connect-str
+      - id: micro-behaviors/communications/http/get::internet-read-file
+      - id: internet-close-handle-str
+      - id: http-query-info-str
+      - id: obtain-user-agent-str
+    needs: 2

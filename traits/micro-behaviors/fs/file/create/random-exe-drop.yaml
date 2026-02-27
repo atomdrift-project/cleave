@@ -1,0 +1,18 @@
+traits:
+  - id: random-named-exe-in-root
+    desc: Random-named executable in root directory
+    crit: suspicious
+    conf: 0.8
+    for: [pe]
+    if:
+      type: string
+      regex: "C:\\\\[a-zA-Z0-9]{8}\\.exe"
+
+  - id: random-named-exe-in-temp
+    desc: Hash-named executable in temp directory
+    crit: suspicious
+    conf: 0.9
+    for: [pe]
+    if:
+      type: string
+      regex: "C:\\\\Users\\\\[a-zA-Z0-9_\\- ]{1,50}\\\\AppData\\\\Local\\\\Temp\\\\[a-fA-F0-9]{32,64}\\.exe"

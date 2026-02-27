@@ -186,6 +186,16 @@ traits:
       type: string
       substr: ".gnu_debugdata"
 
+  - id: lock-resource
+    desc: Access PE resource data pointer
+    crit: notable
+    conf: 0.8
+    attack: "T1027.009"
+    for: [pe, dll]
+    if:
+      type: symbol
+      exact: "LockResource"
+
   - id: find-resource-w
     desc: Locate PE resource entry
     crit: notable
@@ -258,6 +268,21 @@ composite_rules:
       - id: sizeof-resource
     any:
       - id: load-library-ex-any
+
+  # Complete resource extraction: all 4 core APIs (Find + Load + Size + Lock)
+  # Unlike pe-resource-loader-api-chain, does NOT require LoadLibraryEx
+  # LockResource is the differentiator: it retrieves the actual data pointer
+  - id: pe-resource-full-extraction
+    desc: Complete PE resource extraction with data access
+    crit: notable
+    conf: 0.95
+    attack: "T1027.009"
+    for: [pe, dll]
+    all:
+      - id: find-resource-any
+      - id: load-resource
+      - id: sizeof-resource
+      - id: lock-resource
 
   # LZMA detection composite
   # Bootloaders and firmware files legitimately embed LZMA-compressed payloads

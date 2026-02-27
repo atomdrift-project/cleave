@@ -1,0 +1,34 @@
+# Win32 File-Copy Worm Behavior
+# Detects the pattern of enumerating directories + copying self
+# ATT&CK: T1091 (Replication Through Removable Media) / T1570 (Lateral Tool Transfer)
+
+defaults:
+  for: [pe]
+  platforms: [windows]
+
+composite_rules:
+  - id: win32-file-copy-worm
+    desc: Win32 file-copy worm pattern
+    crit: suspicious
+    conf: 0.85
+    attack: "T1091"
+    all:
+      - id: micro-behaviors/fs/enumerate/directory
+      - id: micro-behaviors/fs/file/copy
+    any:
+      - id: micro-behaviors/os/info/directories::get-windows-directory
+      - id: micro-behaviors/os/info/directories::get-system-directory
+
+  - id: win32-drive-spread-worm
+    desc: Drive enumeration with file write pattern
+    crit: suspicious
+    conf: 0.85
+    attack: "T1091"
+    all:
+      - id: micro-behaviors/fs/traversal/drives::get-logical-drive-strings
+      - id: micro-behaviors/fs/traversal/drives::get-drive-type
+      - id: micro-behaviors/fs/enumerate/directory
+    any:
+      - id: micro-behaviors/io/console/output::write-file
+      - id: micro-behaviors/fs/file/operations::file-create-win
+      - id: micro-behaviors/process/info/current::get-module-filename

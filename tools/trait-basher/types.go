@@ -56,6 +56,7 @@ type config struct {
 	idleTimeout       time.Duration
 	rescanAfter       int
 	restartAfter      int
+	maxMemoryMB       int
 	maxPending        int
 	concurrency       int
 	validateEvery     int

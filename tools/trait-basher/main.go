@@ -389,6 +389,7 @@ gemini-2.5-pro, gemini-2.5-flash. Popular choices:
 	flush := flag.Bool("flush", false, "Clear analysis cache and reprocess all files")
 	rescanAfter := flag.Int("rescan-after", 4, "Restart scan after reviewing N files to verify fixes (0 = disabled)")
 	restartAfter := flag.Int("restart-after", 400, "Kill and restart cleave after analyzing N files to avoid memory leaks (0 = disabled)")
+	maxMemoryMB := flag.Int("max-memory-mb", 8192, "Kill cleave if RSS exceeds this many MB (0 = disabled)")
 	maxPending := flag.Int("max-pending", 50, "Pause cleave when this many reviews are pending (backpressure to limit memory)")
 	concurrency := flag.Int("concurrency", 2, "Number of concurrent LLM review sessions")
 	verbose := flag.Bool("verbose", false, "Show detailed skip/progress messages")
@@ -556,6 +557,7 @@ gemini-2.5-pro, gemini-2.5-flash. Popular choices:
 		trainingReviewDir: trainingReviewDir,
 		rescanAfter:       *rescanAfter,
 		restartAfter:      *restartAfter,
+		maxMemoryMB:       *maxMemoryMB,
 		maxPending:        *maxPending,
 		concurrency:       *concurrency,
 		validateEvery:     *validateEvery,
@@ -1040,6 +1042,25 @@ func streamAnalyzeAndReview(ctx context.Context, cfg *config, dbMode string) (*s
 			coordinator.close()
 			<-resultsDone
 			return state.stats, nil
+		}
+
+		// Check cleave memory usage every 50 files (avoid excessive /proc reads)
+		if cfg.maxMemoryMB > 0 && fileCount%50 == 0 {
+			if rssMB := getProcessRSSMB(cleavePID); rssMB > cfg.maxMemoryMB {
+				clearProgressLine()
+				fmt.Fprintf(os.Stderr, "%s🔴%s cleave RSS %s%dMB%s exceeds limit %dMB - restarting\n",
+					colorRed, colorReset, colorBold, rssMB, colorReset, cfg.maxMemoryMB)
+				state.stats.shouldRestart.Store(true)
+				cmd.Process.Kill() //nolint:errcheck,gosec // intentional kill on memory limit
+				cmd.Wait()         //nolint:errcheck,gosec // reap the process
+				if activeCount := coordinator.activeCount(); activeCount > 0 {
+					fmt.Fprintf(os.Stderr, "%s⏳%s Waiting for %s%d%s active review(s) before restart...\n",
+						colorYellow, colorReset, colorYellow, activeCount, colorReset)
+				}
+				coordinator.close()
+				<-resultsDone
+				return state.stats, nil
+			}
 		}
 
 		// Update progress display periodically

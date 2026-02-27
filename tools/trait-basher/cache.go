@@ -177,3 +177,46 @@ func cleanupOrphanedExtractDirs() {
 		os.RemoveAll(orphanPath) //nolint:errcheck,gosec // best-effort cleanup
 	}
 }
+
+// getProcessRSSMB returns the RSS (resident set size) of a process in megabytes.
+// Returns 0 if the process doesn't exist or RSS can't be determined.
+func getProcessRSSMB(pid int) int {
+	switch runtime.GOOS {
+	case "linux":
+		// Read from /proc/<pid>/statm - second field is RSS in pages
+		data, err := os.ReadFile(fmt.Sprintf("/proc/%d/statm", pid))
+		if err != nil {
+			return 0
+		}
+		fields := strings.Fields(string(data))
+		if len(fields) < 2 {
+			return 0
+		}
+		rssPages, err := strconv.ParseInt(fields[1], 10, 64)
+		if err != nil {
+			return 0
+		}
+		// Convert pages to MB (page size is typically 4KB)
+		pageSize := int64(syscall.Getpagesize())
+		return int(rssPages * pageSize / (1024 * 1024))
+
+	case "darwin":
+		// Read from /proc doesn't work on macOS, use ps command
+		// ps -o rss= returns RSS in KB
+		out, err := os.ReadFile(fmt.Sprintf("/proc/%d/statm", pid))
+		if err == nil {
+			// Rosetta/Linux compat layer might work
+			fields := strings.Fields(string(out))
+			if len(fields) >= 2 {
+				if rssPages, err := strconv.ParseInt(fields[1], 10, 64); err == nil {
+					return int(rssPages * int64(syscall.Getpagesize()) / (1024 * 1024))
+				}
+			}
+		}
+		// Fallback: can't easily get RSS on macOS without exec, return 0
+		return 0
+
+	default:
+		return 0
+	}
+}

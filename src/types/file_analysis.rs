@@ -133,6 +133,11 @@ pub struct FileAnalysis {
     /// Allows external tools (radare2, objdump, strings) to analyze the file directly
     #[serde(skip_serializing_if = "Option::is_none")]
     pub extracted_path: Option<String>,
+
+    /// Molecular formula representing the file's behavioral fingerprint
+    /// Generated from findings using the malecule library
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub formula: Option<String>,
 }
 
 impl FileAnalysis {
@@ -167,6 +172,7 @@ impl FileAnalysis {
             directories: Vec::new(),
             env_vars: Vec::new(),
             extracted_path: None,
+            formula: None,
         }
     }
 

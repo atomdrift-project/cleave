@@ -583,7 +583,7 @@ pub(crate) fn eval_hex<'a>(
                         // Format extracted bytes as hex string
                         let hex_str: Vec<String> =
                             extracted.iter().map(|b| format!("{:02x}", b)).collect();
-                        format!("extracted: {}", hex_str.join(" "))
+                        hex_str.join(" ")
                     };
 
                     Evidence {

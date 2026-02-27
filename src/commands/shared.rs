@@ -693,6 +693,7 @@ pub(crate) fn analyze_archive_streaming_jsonl(
         directories: Vec::new(),
         env_vars: Vec::new(),
         extracted_path: None,
+        formula: None,
     };
 
     if let Ok(line) = crate::output::format_jsonl_line(&archive_entry) {

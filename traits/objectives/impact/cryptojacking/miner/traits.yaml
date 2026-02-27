@@ -37,6 +37,8 @@ traits:
   if:
     type: string
     regex: '(https?|stratum\+tcp|stratum\+ssl)://[^\s]{1,120}pool'
+  not:
+    - substr: spool
 
 - id: miner-word
   desc: miner keyword

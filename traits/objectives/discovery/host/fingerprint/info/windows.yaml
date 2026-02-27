@@ -11,9 +11,6 @@ composite_rules:
     conf: 0.85
     attack: "T1082"
     any:
-      - id: micro-behaviors/os/info/system::get-computer-name
-      - id: micro-behaviors/os/info/system::get-user-name
-      - id: micro-behaviors/os/info/system::get-version-ex
-      - id: micro-behaviors/os/info/system::get-system-default-lang-id
+      - id: micro-behaviors/os/info/system
       - id: micro-behaviors/fs/enumerate/volume::get-volume-info
     needs: 3

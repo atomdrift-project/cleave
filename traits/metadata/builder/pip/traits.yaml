@@ -15,7 +15,7 @@ traits:
 
   - id: pyproject-toml
     desc: pyproject.toml reference
-    crit: notable
+    crit: baseline
     conf: 0.85
     if:
       type: string

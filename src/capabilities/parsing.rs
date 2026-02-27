@@ -625,7 +625,7 @@ fn check_regex_length(
         let or_symbol_count = count_regex_or_symbols(pattern);
         if or_symbol_count > MAX_REGEX_OR_SYMBOLS {
             warnings.push(format!(
-                "Trait '{}': regex uses too many '|' symbols ({} > {}): {:?}",
+                "Trait '{}': regex uses too many '|' symbols ({} > {}). Decompose into multiple traits for better ML analysis: {:?}",
                 trait_id, or_symbol_count, MAX_REGEX_OR_SYMBOLS, pattern
             ));
         }

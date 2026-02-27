@@ -629,13 +629,15 @@ pub(crate) fn eval_raw<'a>(
                     match_count += 1;
                 }
                 if match_count > 0 && evidence.len() < MAX_EVIDENCE_PER_TRAIT {
-                    evidence.push(Evidence {
-                        method: "raw".to_string(),
-                        source: "raw_content".to_string(),
-                        value: format!("Found {} {}", match_count, first_match.unwrap_or_default()),
-                        location: Some("file".to_string()),
-                        ..Default::default()
-                    });
+                    if let Some(matched) = first_match {
+                        evidence.push(Evidence {
+                            method: "raw".to_string(),
+                            source: "raw_content".to_string(),
+                            value: matched,
+                            location: Some("file".to_string()),
+                            ..Default::default()
+                        });
+                    }
                 }
             }
         } else {
@@ -669,13 +671,15 @@ pub(crate) fn eval_raw<'a>(
                 }
             }
             if match_count > 0 && evidence.len() < MAX_EVIDENCE_PER_TRAIT {
-                evidence.push(Evidence {
-                    method: "raw".to_string(),
-                    source: "raw_content".to_string(),
-                    value: format!("Found {} {}", match_count, first_match.unwrap_or_default()),
-                    location: Some("file".to_string()),
-                    ..Default::default()
-                });
+                if let Some(matched) = first_match {
+                    evidence.push(Evidence {
+                        method: "raw".to_string(),
+                        source: "raw_content".to_string(),
+                        value: matched,
+                        location: Some("file".to_string()),
+                        ..Default::default()
+                    });
+                }
             }
         }
     } else if let Some(exact_str) = exact {
@@ -792,10 +796,7 @@ pub(crate) fn eval_raw<'a>(
                     evidence.push(Evidence {
                         method: "raw".to_string(),
                         source: "raw_content".to_string(),
-                        value: format!(
-                            "Found {} occurrences of {} (with external IP)",
-                            match_count, substr_str
-                        ),
+                        value: substr_str.to_string(),
                         location: Some("file".to_string()),
                         ..Default::default()
                     });
@@ -822,7 +823,7 @@ pub(crate) fn eval_raw<'a>(
                         evidence.push(Evidence {
                             method: "raw".to_string(),
                             source: "raw_content".to_string(),
-                            value: format!("Found {} occurrences of {}", match_count, substr_str),
+                            value: substr_str.to_string(),
                             location: Some("file".to_string()),
                             ..Default::default()
                         });
@@ -866,10 +867,7 @@ pub(crate) fn eval_raw<'a>(
                     evidence.push(Evidence {
                         method: "raw".to_string(),
                         source: "raw_content".to_string(),
-                        value: format!(
-                            "Found {} occurrences of {} (with external IP)",
-                            match_count, substr_str
-                        ),
+                        value: substr_str.to_string(),
                         location: Some("file".to_string()),
                         ..Default::default()
                     });
@@ -896,7 +894,7 @@ pub(crate) fn eval_raw<'a>(
                         evidence.push(Evidence {
                             method: "raw".to_string(),
                             source: "raw_content".to_string(),
-                            value: format!("Found {} occurrences of {}", match_count, substr_str),
+                            value: substr_str.to_string(),
                             location: Some("file".to_string()),
                             ..Default::default()
                         });

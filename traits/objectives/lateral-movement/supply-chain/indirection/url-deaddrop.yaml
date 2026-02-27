@@ -1,0 +1,146 @@
+# URL Indirection / Dead Drop Detection
+# ATT&CK: T1102.001 (Web Service: Dead Drop Resolver)
+# Detects pattern where fetched content is used as a URL for subsequent requests
+# This hides the real C2 infrastructure from static analysis
+
+defaults:
+  crit: suspicious
+  attack: "T1102.001"
+
+traits:
+  # === Go: Fetch then use result as URL ===
+  - id: go-get-then-post
+    desc: HTTP GET result used in POST
+    crit: suspicious
+    conf: 0.85
+    for: [go]
+    if:
+      type: raw
+      multiline: true
+      regex: '\.Get\s*\(.{1,50}\)[\s\S]{0,200}\.Post\s*\('
+
+  - id: go-get-then-get
+    desc: HTTP GET result used in second GET
+    crit: notable
+    conf: 0.75
+    for: [go]
+    if:
+      type: raw
+      multiline: true
+      regex: '\.Get\s*\(.{1,50}\)\.String\s*\(\)[\s\S]{0,250}\.Get\s*\('
+
+  # === Python: requests chaining ===
+  - id: py-requests-chain
+    desc: requests.get result used as URL
+    crit: suspicious
+    conf: 0.8
+    for: [python]
+    if:
+      type: raw
+      regex: 'requests\.get\s*\(.{1,50}\)\.text[\s\S]{0,100}requests\.(get|post)\s*\('
+
+  - id: py-urllib-chain
+    desc: urllib result used as URL
+    crit: suspicious
+    conf: 0.8
+    for: [python]
+    if:
+      type: raw
+      regex: 'urlopen\s*\(.{1,50}\)\.read\(\)[\s\S]{0,100}urlopen\s*\('
+
+  # === JavaScript: fetch chaining ===
+  - id: js-fetch-chain
+    desc: fetch result used as URL
+    crit: suspicious
+    conf: 0.8
+    for: [javascript, typescript]
+    if:
+      type: raw
+      regex: 'fetch\s*\(.{1,50}\)[\s\S]{0,100}\.text\s*\(\)[\s\S]{0,100}fetch\s*\('
+
+  - id: js-axios-chain
+    desc: axios result used as URL
+    crit: suspicious
+    conf: 0.8
+    for: [javascript, typescript]
+    if:
+      type: raw
+      regex: 'axios\.get\s*\(.{1,50}\)[\s\S]{0,100}\.data[\s\S]{0,100}axios\.(get|post)\s*\('
+
+  # === Shell: curl/wget result used as URL ===
+  - id: shell-curl-chain
+    desc: curl output used as URL
+    crit: suspicious
+    conf: 0.85
+    for: [shell]
+    if:
+      type: raw
+      regex: '\$\(curl.{1,80}\)|`curl.{1,80}`'
+
+  - id: shell-wget-chain
+    desc: wget result used as URL
+    crit: suspicious
+    conf: 0.85
+    for: [shell]
+    if:
+      type: raw
+      regex: '\$\(wget.{1,80}\)|`wget.{1,80}`'
+
+  # === Ruby: Net::HTTP chaining ===
+  - id: ruby-http-chain
+    desc: HTTP response used as URL
+    crit: suspicious
+    conf: 0.8
+    for: [ruby]
+    if:
+      type: raw
+      regex: 'Net::HTTP\.get[^;]{0,100}Net::HTTP\.(get|post)'
+
+composite_rules:
+  # === URL Dead Drop Pattern ===
+  - id: url-deaddrop-go
+    desc: Go URL dead drop pattern
+    crit: hostile
+    conf: 0.9
+    attack: "T1102.001"
+    mbc: "C0002"
+    any:
+      - id: go-get-then-post
+      - id: go-get-then-get
+
+  - id: url-deaddrop-python
+    desc: Python URL dead drop pattern
+    crit: hostile
+    conf: 0.9
+    any:
+      - id: py-requests-chain
+      - id: py-urllib-chain
+
+  - id: url-deaddrop-javascript
+    desc: JavaScript URL dead drop pattern
+    crit: hostile
+    conf: 0.9
+    any:
+      - id: js-fetch-chain
+      - id: js-axios-chain
+
+  - id: url-deaddrop-shell
+    desc: Shell URL dead drop pattern
+    crit: hostile
+    conf: 0.9
+    any:
+      - id: shell-curl-chain
+      - id: shell-wget-chain
+
+  - id: url-deaddrop
+    desc: URL dead drop / indirection pattern
+    crit: hostile
+    conf: 0.95
+    attack: "T1102.001"
+    mbc: "C0002"
+    any:
+      - id: url-deaddrop-go
+      - id: url-deaddrop-python
+      - id: url-deaddrop-javascript
+      - id: url-deaddrop-shell
+      - id: ruby-http-chain

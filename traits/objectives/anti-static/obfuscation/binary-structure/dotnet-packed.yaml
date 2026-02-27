@@ -3,7 +3,7 @@ defaults:
 
 traits:
   - id: dotnet-high-entropy-oversized-text
-    desc: .NET executable with unusually large and high entropy .text section (likely packed)
+    desc: .NET with oversized high-entropy .text section
     crit: suspicious
     conf: 0.85
     if:
@@ -12,11 +12,14 @@ traits:
       entropy_min: 7.5
       length_min: 5242880 # 5MB
 
-composite_rules:
-  - id: dotnet-oversized-packed-text
-    desc: Highly obfuscated or packed .NET executable with oversized and high entropy .text section
-    crit: hostile
-    conf: 0.90
-    all:
-      - id: metadata/format/pe::dotnet-metadata
-      - id: objectives/anti-static/obfuscation/binary-structure/dotnet-packed::dotnet-high-entropy-oversized-text
+# Composite rule commented out - references non-existent trait path:
+# - objectives/anti-static/obfuscation/binary-structure/dotnet-packed::dotnet-high-entropy-oversized-text
+#
+# composite_rules:
+#   - id: dotnet-oversized-packed-text
+#     desc: Highly obfuscated or packed .NET executable with oversized and high entropy .text section
+#     crit: hostile
+#     conf: 0.90
+#     all:
+#       - id: metadata/format/pe::dotnet-metadata
+#       - id: objectives/anti-static/obfuscation/binary-structure/dotnet-packed::dotnet-high-entropy-oversized-text

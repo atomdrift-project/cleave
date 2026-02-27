@@ -1,0 +1,333 @@
+# Function Shadowing / Wrapper Attack Detection
+# ATT&CK: T1195.002 (Compromise Software Supply Chain)
+# Detects pattern where code redefines a well-known function name,
+# calls through to the "real" version, but intercepts/exfiltrates data
+
+defaults:
+  crit: suspicious
+  attack: "T1195.002"
+
+traits:
+  # ============================================================
+  # GO: Well-known function redefinitions that call real versions
+  # ============================================================
+
+  # --- Password/Credential Functions ---
+  - id: go-func-readpassword-shadow
+    desc: ReadPassword function calling term.ReadPassword
+    crit: suspicious
+    conf: 0.95
+    for: [go]
+    if:
+      type: raw
+      multiline: true
+      regex: 'func ReadPassword\s*\(.{0,50}\)[\s\S]{0,100}\{[\s\S]{0,800}term\.ReadPassword'
+
+  - id: go-readpassword-with-io
+    desc: ReadPassword with file/network I/O
+    crit: suspicious
+    conf: 0.95
+    for: [go]
+    if:
+      type: raw
+      multiline: true
+      regex: 'ReadPassword[\s\S]{0,500}(\.Post\(|\.AppendFile\(|\.WriteFile\(|os\.WriteFile)'
+
+  # --- Crypto Functions ---
+  - id: go-func-encrypt-shadow
+    desc: Encrypt function calling real crypto
+    crit: suspicious
+    conf: 0.8
+    for: [go]
+    if:
+      type: raw
+      regex: 'func Encrypt\s*\(.{0,50}\).{0,50}\{[\s\S]{0,500}(cipher\.|aes\.|crypto/)'
+
+  - id: go-func-decrypt-shadow
+    desc: Decrypt function calling real crypto
+    crit: suspicious
+    conf: 0.8
+    for: [go]
+    if:
+      type: raw
+      regex: 'func Decrypt\s*\(.{0,50}\).{0,50}\{[\s\S]{0,500}(cipher\.|aes\.|crypto/)'
+
+  # ============================================================
+  # PYTHON: Well-known function redefinitions
+  # ============================================================
+
+  # --- getpass shadowing ---
+  - id: py-func-getpass-shadow
+    desc: getpass function calling real getpass
+    crit: suspicious
+    conf: 0.95
+    for: [python]
+    if:
+      type: raw
+      regex: 'def getpass\s*\(.{0,30}\):[\s\S]{0,300}getpass\.getpass\s*\('
+
+  # Atomic: getpass keyword presence
+  - id: py-getpass-keyword
+    desc: getpass keyword
+    crit: suspicious
+    conf: 0.7
+    for: [python]
+    if:
+      type: raw
+      regex: 'getpass'
+
+  # NOTE: password keyword detection uses micro-behaviors/data/text/keywords::password
+  # Composite py-credential-keyword below references it directly
+
+  # Atomic: requests library network call
+  - id: py-requests-call
+    desc: requests library POST or GET call
+    crit: suspicious
+    conf: 0.6
+    for: [python]
+    if:
+      type: raw
+      regex: 'requests\.(post|get)'
+
+  # Atomic: file open operation
+  - id: py-file-open
+    desc: file open operation
+    crit: suspicious
+    conf: 0.5
+    for: [python]
+    if:
+      type: raw
+      regex: 'open\s*\('
+
+  # Atomic: urlopen network call
+  - id: py-urlopen-call
+    desc: urlopen network call
+    crit: suspicious
+    conf: 0.6
+    for: [python]
+    if:
+      type: raw
+      regex: 'urlopen'
+
+  # --- input shadowing ---
+  - id: py-func-input-shadow
+    desc: input function calling builtin input
+    crit: suspicious
+    conf: 0.85
+    for: [python]
+    if:
+      type: raw
+      regex: 'def input\s*\(.{0,30}\):[\s\S]{0,300}(__builtins__|builtins)\.input\s*\('
+
+  # --- print shadowing (for exfil) ---
+  - id: py-func-print-shadow
+    desc: print function with network call
+    crit: suspicious
+    conf: 0.8
+    for: [python]
+    if:
+      type: raw
+      regex: 'def print\s*\(.{0,30}\):[\s\S]{0,300}(requests\.|urllib|socket)'
+
+  # ============================================================
+  # JAVASCRIPT: Well-known function redefinitions
+  # ============================================================
+
+  # --- console.log shadowing ---
+  - id: js-console-log-shadow
+    desc: console.log redefined with network call
+    crit: suspicious
+    conf: 0.85
+    for: [javascript, typescript]
+    if:
+      type: raw
+      regex: 'console\.log\s*=\s*[^;]{0,200}(fetch|axios|http\.request)'
+
+  # --- require shadowing ---
+  - id: js-require-shadow
+    desc: require function shadowed
+    crit: suspicious
+    conf: 0.85
+    for: [javascript, typescript]
+    if:
+      type: raw
+      regex: '(const|let|var)\s+require\s*=|require\s*=\s*function'
+
+  # --- crypto function shadowing (atomic traits) ---
+  # Atomic: encrypt function definition
+  - id: js-encrypt-func-def
+    desc: encrypt function definition
+    crit: suspicious
+    conf: 0.6
+    for: [javascript, typescript]
+    if:
+      type: raw
+      regex: 'encrypt\s*[=:]\s*function'
+
+  # Atomic: decrypt function definition
+  - id: js-decrypt-func-def
+    desc: decrypt function definition
+    crit: suspicious
+    conf: 0.6
+    for: [javascript, typescript]
+    if:
+      type: raw
+      regex: 'decrypt\s*[=:]\s*function'
+
+  # Atomic: hash function definition
+  - id: js-hash-func-def
+    desc: hash function definition
+    crit: suspicious
+    conf: 0.6
+    for: [javascript, typescript]
+    if:
+      type: raw
+      regex: 'hash\s*[=:]\s*function'
+
+  # Atomic: fetch network call
+  - id: js-fetch-call
+    desc: fetch network call
+    crit: suspicious
+    conf: 0.5
+    for: [javascript, typescript]
+    if:
+      type: raw
+      regex: 'fetch\s*\('
+
+  # Removed js-axios-call duplicate - use micro-behaviors/communications/http/request::axios
+
+  # Atomic: http module call
+  - id: js-http-call
+    desc: http module call
+    crit: suspicious
+    conf: 0.5
+    for: [javascript, typescript]
+    if:
+      type: raw
+      regex: 'http\.(request|get)'
+
+  # ============================================================
+  # RUBY: Well-known method redefinitions
+  # ============================================================
+
+  - id: ruby-gets-shadow
+    desc: gets method redefined with I/O
+    crit: suspicious
+    conf: 0.8
+    for: [ruby]
+    if:
+      type: raw
+      regex: 'def gets[\s\S]{0,300}(Net::HTTP|open\s*\(|File\.write)'
+
+composite_rules:
+  # === Python Credential Keywords ===
+  # Composite: combines getpass and password keywords (replaces py-credential-keyword)
+  - id: py-credential-keyword
+    desc: Python credential-related keyword
+    crit: suspicious
+    conf: 0.7
+    any:
+      - id: py-getpass-keyword
+      - id: micro-behaviors/data/text/keywords::password
+
+  # === Go Function Shadowing ===
+  - id: go-credential-shadow
+    desc: Go credential function shadowing
+    crit: hostile
+    conf: 0.95
+    attack: "T1056"
+    mbc: "E1056"
+    any:
+      - id: go-func-readpassword-shadow
+      - id: go-readpassword-with-io
+
+  - id: go-crypto-shadow
+    desc: Go crypto function shadowing
+    crit: suspicious
+    conf: 0.85
+    any:
+      - id: go-func-encrypt-shadow
+      - id: go-func-decrypt-shadow
+
+  # === Python Function Shadowing ===
+  # Composite: Python I/O operations (network or file)
+  - id: py-io-operation
+    desc: Python I/O operation
+    crit: suspicious
+    conf: 0.6
+    any:
+      - id: py-requests-call
+      - id: py-file-open
+      - id: py-urlopen-call
+
+  # Composite: credential keyword with I/O (replaces py-getpass-with-io)
+  - id: py-getpass-with-io
+    desc: getpass with file/network I/O
+    crit: suspicious
+    conf: 0.85
+    all:
+      - id: py-credential-keyword
+      - id: py-io-operation
+
+  - id: python-credential-shadow
+    desc: Python credential function shadowing
+    crit: hostile
+    conf: 0.95
+    attack: "T1056"
+    mbc: "E1056"
+    any:
+      - id: py-func-getpass-shadow
+      - id: py-getpass-with-io
+      - id: py-func-input-shadow
+
+  # === JavaScript Function Shadowing ===
+  # Composite: JS crypto function definitions
+  - id: js-crypto-func-def
+    desc: JavaScript crypto function definition
+    crit: suspicious
+    conf: 0.6
+    any:
+      - id: js-encrypt-func-def
+      - id: js-decrypt-func-def
+      - id: js-hash-func-def
+
+  # Composite: JS network operations
+  - id: js-network-call
+    desc: JavaScript network call
+    crit: suspicious
+    conf: 0.5
+    any:
+      - id: js-fetch-call
+      - id: micro-behaviors/communications/http/request::axios
+      - id: js-http-call
+
+  # Composite: crypto function with exfil (replaces js-crypto-shadow)
+  - id: js-crypto-shadow
+    desc: crypto function with exfil
+    crit: suspicious
+    conf: 0.8
+    all:
+      - id: js-crypto-func-def
+      - id: js-network-call
+
+  - id: javascript-function-shadow
+    desc: JavaScript function shadowing
+    crit: suspicious
+    conf: 0.85
+    any:
+      - id: js-console-log-shadow
+      - id: js-require-shadow
+      - id: js-crypto-shadow
+
+  # === Cross-Language Function Shadowing ===
+  - id: function-shadow-attack
+    desc: Function shadowing supply chain attack
+    crit: hostile
+    conf: 0.95
+    attack: "T1195.002"
+    mbc: "E1056"
+    any:
+      - id: go-credential-shadow
+      - id: python-credential-shadow
+      - id: javascript-function-shadow
+      - id: ruby-gets-shadow

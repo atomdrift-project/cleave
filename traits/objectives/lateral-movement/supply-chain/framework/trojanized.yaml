@@ -13,14 +13,7 @@ traits:
       word: "lodash"
       case_insensitive: true
 
-  - id: axios-lib
-    desc: axios library
-    crit: component
-    for: [package.json]
-    if:
-      type: string
-      word: "axios"
-      case_insensitive: true
+  # Removed axios-lib duplicate - use micro-behaviors/communications/http/request::axios
 
   - id: express-lib
     desc: express library
@@ -419,7 +412,7 @@ composite_rules:
     for: [package.json]
     any:
       - id: lodash-lib
-      - id: axios-lib
+      - id: micro-behaviors/communications/http/request::axios
       - id: express-lib
       - id: react-lib
       - id: discord-lib

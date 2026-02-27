@@ -310,9 +310,37 @@ struct JsonlSummary {
     analysis_duration_ms: u64,
 }
 
+/// Filter findings for formula generation.
+/// Aggregates by directory and removes baseline/low-confidence findings.
+#[allow(dead_code)] // Used by binary target
+fn filter_findings_for_formula(findings: &[Finding]) -> Vec<Finding> {
+    let aggregated = aggregate_findings_by_directory(findings);
+    aggregated
+        .into_iter()
+        .filter(|f| f.crit != Criticality::Baseline && f.conf >= 0.5)
+        .collect()
+}
+
 /// Format a single file analysis as a JSONL line
 #[allow(dead_code)] // Used by binary target
 pub(crate) fn format_jsonl_line(file: &crate::types::FileAnalysis) -> Result<String> {
+    // Compute formula if not already set and file has findings
+    if file.formula.is_none() && !file.findings.is_empty() {
+        let mut file_with_formula = file.clone();
+        // Filter findings for formula (aggregate and remove baseline/low-confidence)
+        // This ensures formula consistency between terminal and JSON output
+        let filtered = filter_findings_for_formula(&file.findings);
+        let formula = malecule_bridge::formula_from_findings(&filtered);
+        if !formula.is_empty() {
+            file_with_formula.formula = Some(formula);
+        }
+        let entry = JsonlFileEntry {
+            entry_type: "file",
+            file: &file_with_formula,
+        };
+        return Ok(serde_json::to_string(&entry)?);
+    }
+
     let entry = JsonlFileEntry {
         entry_type: "file",
         file,

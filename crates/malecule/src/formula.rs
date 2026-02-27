@@ -1,13 +1,23 @@
 //! Formula string generation from findings.
 //!
-//! Generates molecular formula strings like "O₇(AlCXe)H₂(FDb)" from analysis findings.
-//! Format: TopLevel_count(subcategories) with subcategories sorted by severity.
+//! Generates molecular formula strings like "O₄(CaLaPC)H₂(DbPo)" from analysis findings.
+//!
+//! # Formula Structure
+//!
+//! - Top-level isotope number = count of unique second-level directories
+//! - Subcategory isotope number = count of unique third-level+ directories
+//! - Subcategories sorted by severity (most severe first), then alphabetically
+//! - Isotope of 1 is omitted
+//!
+//! Example: `O₄(CaLaPC)H₂(DbPo)` means:
+//! - O₄: 4 unique objective categories (Ca, La, P, C)
+//! - H₂: 2 unique micro-behavior categories (Db, Po)
 
 use crate::elements::{
     category_to_element, Element, HYDROGEN_MICRO, MENDELEVIUM, OXYGEN, POTASSIUM, THORIUM,
 };
 use crate::types::Severity;
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 /// A parsed finding for formula generation.
 #[derive(Debug, Clone)]
@@ -18,20 +28,24 @@ pub struct FindingInput {
     pub severity: Severity,
 }
 
-/// Counts of elements with their max severity.
+/// Tracks unique subdirectories and max severity for a subcategory element.
 #[derive(Debug, Default, Clone)]
-struct ElementCount {
-    count: usize,
+struct SubcategoryInfo {
+    /// Unique third-level+ directory paths beneath this subcategory
+    unique_deeper_paths: FxHashSet<String>,
+    /// Maximum severity among findings in this subcategory
     max_severity: Severity,
 }
 
 /// Top-level category with its subcategory elements.
 #[derive(Debug, Default)]
 struct CategoryGroup {
-    count: usize,
+    /// Unique second-level directory names (determines top-level isotope)
+    unique_second_levels: FxHashSet<String>,
+    /// Maximum severity among all findings in this category
     max_severity: Severity,
-    /// Subcategory elements: (symbol, count, severity)
-    subcategories: FxHashMap<&'static str, ElementCount>,
+    /// Subcategory elements mapped by symbol
+    subcategories: FxHashMap<&'static str, SubcategoryInfo>,
 }
 
 /// Generates a formula string from findings.
@@ -40,8 +54,10 @@ struct CategoryGroup {
 /// * `findings` - Iterator of finding inputs
 ///
 /// # Returns
-/// A formula string like "O₇(AlCXe)H₂(FDb)" - top-level categories with counts,
-/// with subcategories in parentheses sorted by severity.
+/// A formula string like "O₄(CaLaPC)H₂(DbPo)" where:
+/// - Top-level isotope = count of unique second-level directories
+/// - Subcategory isotope = count of unique third-level+ directories
+/// - Subcategories sorted by severity (most severe first), then alphabetically
 #[must_use]
 pub fn generate_formula<'a>(findings: impl Iterator<Item = &'a FindingInput>) -> String {
     // Track each top-level category with its subcategories
@@ -53,7 +69,7 @@ pub fn generate_formula<'a>(findings: impl Iterator<Item = &'a FindingInput>) ->
 
     for finding in findings {
         let parts: Vec<&str> = finding.id.split('/').collect();
-        if parts.is_empty() {
+        if parts.len() < 2 {
             continue;
         }
 
@@ -67,30 +83,37 @@ pub fn generate_formula<'a>(findings: impl Iterator<Item = &'a FindingInput>) ->
             _ => continue,
         };
 
-        // Update category count and max severity
-        group.count += 1;
+        // Track unique second-level directory for top-level isotope
+        group.unique_second_levels.insert(parts[1].to_string());
+
+        // Update max severity
         if finding.severity > group.max_severity {
             group.max_severity = finding.severity;
         }
 
-        // Find subcategory element (skip top-level, try from most specific to least)
-        for i in (1..parts.len()).rev() {
-            if let Some(element) = category_to_element(parts[i]) {
-                // Skip if this is a top-level element symbol
-                if element.symbol == OXYGEN.symbol
-                    || element.symbol == HYDROGEN_MICRO.symbol
-                    || element.symbol == MENDELEVIUM.symbol
-                    || element.symbol == POTASSIUM.symbol
-                    || element.symbol == THORIUM.symbol
-                {
-                    continue;
-                }
-                let entry = group.subcategories.entry(element.symbol).or_default();
-                entry.count += 1;
-                if finding.severity > entry.max_severity {
-                    entry.max_severity = finding.severity;
-                }
-                break;
+        // Find subcategory element from second-level directory
+        if let Some(element) = category_to_element(parts[1]) {
+            // Skip if this is a top-level element symbol
+            if element.symbol == OXYGEN.symbol
+                || element.symbol == HYDROGEN_MICRO.symbol
+                || element.symbol == MENDELEVIUM.symbol
+                || element.symbol == POTASSIUM.symbol
+                || element.symbol == THORIUM.symbol
+            {
+                continue;
+            }
+
+            let entry = group.subcategories.entry(element.symbol).or_default();
+
+            // Track unique third-level+ paths for subcategory isotope
+            if parts.len() > 2 {
+                // Join all remaining path components as the "deeper path"
+                let deeper_path = parts[2..].join("/");
+                entry.unique_deeper_paths.insert(deeper_path);
+            }
+
+            if finding.severity > entry.max_severity {
+                entry.max_severity = finding.severity;
             }
         }
     }
@@ -107,31 +130,35 @@ pub fn generate_formula<'a>(findings: impl Iterator<Item = &'a FindingInput>) ->
     ];
 
     for (group, symbol) in categories {
-        if group.count == 0 {
+        // Use unique second-level count for top-level isotope
+        let top_level_count = group.unique_second_levels.len();
+        if top_level_count == 0 {
             continue;
         }
 
-        // Add top-level symbol with count
+        // Add top-level symbol with isotope (omit if 1)
         formula.push_str(symbol);
-        if group.count > 1 {
-            formula.push_str(&to_subscript(group.count));
+        if top_level_count > 1 {
+            formula.push_str(&to_subscript(top_level_count));
         }
 
         // Add subcategories in parentheses if any
         if !group.subcategories.is_empty() {
-            // Sort subcategories by severity (most severe first), then by count desc
+            // Sort subcategories by severity (most severe first), then alphabetically by symbol
             let mut subs: Vec<_> = group.subcategories.iter().collect();
             subs.sort_by(|a, b| {
                 severity_to_priority(a.1.max_severity)
                     .cmp(&severity_to_priority(b.1.max_severity))
-                    .then_with(|| b.1.count.cmp(&a.1.count))
+                    .then_with(|| a.0.cmp(b.0))
             });
 
             formula.push('(');
-            for (sym, ec) in subs {
+            for (sym, info) in subs {
                 formula.push_str(sym);
-                if ec.count > 1 {
-                    formula.push_str(&to_subscript(ec.count));
+                // Use unique deeper paths count for subcategory isotope (omit if 1)
+                let sub_count = info.unique_deeper_paths.len();
+                if sub_count > 1 {
+                    formula.push_str(&to_subscript(sub_count));
                 }
             }
             formula.push(')');

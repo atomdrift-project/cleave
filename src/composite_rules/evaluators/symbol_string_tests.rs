@@ -582,7 +582,8 @@ fn test_eval_raw_substr_count() {
     );
 
     assert!(result.matched);
-    assert!(result.evidence[0].value.contains("4 occurrences"));
+    // Evidence value contains the matched pattern
+    assert!(result.evidence[0].value.contains("token"));
 }
 
 #[test]

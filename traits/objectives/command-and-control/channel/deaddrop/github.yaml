@@ -9,13 +9,37 @@ defaults:
 
 traits:
   # === Raw GitHub Content URLs ===
-  - id: raw-githubusercontent-url
-    desc: raw.githubusercontent.com URL with file extension
+  - id: raw-githubusercontent-web-file
+    desc: raw.githubusercontent.com URL with web file extension
+    crit: notable
+    conf: 0.7
+    if:
+      type: string
+      regex: 'raw\.githubusercontent\.com/.{1,100}\.(html|txt|php)'
+
+  - id: raw-githubusercontent-script-file
+    desc: raw.githubusercontent.com URL with script file extension
     crit: suspicious
     conf: 0.8
     if:
       type: string
-      regex: 'raw\.githubusercontent\.com/.{1,100}\.(html|txt|php)'
+      regex: 'raw\.githubusercontent\.com/.{1,100}\.(sh|py|ps1)'
+
+  - id: raw-githubusercontent-scripting-lang
+    desc: raw.githubusercontent.com URL with scripting language extension
+    crit: suspicious
+    conf: 0.8
+    if:
+      type: string
+      regex: 'raw\.githubusercontent\.com/.{1,100}\.(rb|pl|js)'
+
+  - id: raw-githubusercontent-any
+    desc: raw.githubusercontent.com URL (any path)
+    crit: notable
+    conf: 0.7
+    if:
+      type: string
+      regex: 'raw\.githubusercontent\.com/[a-zA-Z0-9._-]+/[a-zA-Z0-9._-]+/'
 
   - id: raw-githubusercontent-refs
     desc: GitHub raw URL with refs/heads path
@@ -71,6 +95,16 @@ composite_rules:
     any:
       - id: fetch-github-raw-curl
       - id: fetch-github-raw-wget
+
+  # === Raw GitHub URL with executable/script extension ===
+  - id: raw-githubusercontent-url
+    desc: raw.githubusercontent.com URL with executable file extension
+    crit: suspicious
+    conf: 0.8
+    any:
+      - id: raw-githubusercontent-web-file
+      - id: raw-githubusercontent-script-file
+      - id: raw-githubusercontent-scripting-lang
 
   # === GitHub C2 Dead Drop Pattern ===
   - id: github-c2-deaddrop

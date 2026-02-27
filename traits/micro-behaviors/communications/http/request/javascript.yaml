@@ -12,7 +12,7 @@ traits:
     desc: axios library reference
     crit: notable
     conf: 0.6
-    for: [javascript, typescript]
+    for: [javascript, typescript, package.json]
     if:
       type: string
       substr: "axios"

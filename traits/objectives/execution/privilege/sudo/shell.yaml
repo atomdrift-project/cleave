@@ -1,0 +1,102 @@
+# Sudo Privilege Escalation Detection for Shell Scripts
+# ATT&CK: T1548.003 (Abuse Elevation Control Mechanism: Sudo and Sudo Caching)
+# Detects suspicious sudo usage patterns in dropper scripts
+
+defaults:
+  for: [shell]
+  crit: suspicious
+  attack: "T1548.003"
+  platforms: [linux, unix]
+
+traits:
+  # === Sudo with Download Commands ===
+  - id: sudo-curl
+    desc: sudo curl command
+    crit: suspicious
+    conf: 0.8
+    if:
+      type: raw
+      regex: 'sudo\s+curl\s+'
+
+  - id: sudo-wget
+    desc: sudo wget command
+    crit: suspicious
+    conf: 0.8
+    if:
+      type: raw
+      regex: 'sudo\s+wget\s+'
+
+  # === Sudo with Execution Permissions ===
+  - id: sudo-chmod-777
+    desc: sudo chmod 777 (full permissions)
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: raw
+      regex: 'sudo\s+chmod\s+777\s+'
+
+  - id: sudo-chmod-exec
+    desc: sudo chmod with executable permissions
+    crit: notable
+    conf: 0.75
+    if:
+      type: raw
+      regex: 'sudo\s+chmod\s+(7[0-7]{2}|\+x)\s+'
+
+  # === Sudo with Background Execution ===
+  - id: sudo-nohup
+    desc: sudo nohup background execution
+    crit: suspicious
+    conf: 0.85
+    if:
+      type: raw
+      regex: 'sudo\s+nohup\s+'
+
+  # === Sudo with Direct Execution ===
+  - id: sudo-tmp-exec
+    desc: sudo execution from /tmp directory
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: raw
+      regex: 'sudo\s+/tmp/'
+
+  - id: sudo-rm-rf
+    desc: sudo rm -rf (force recursive delete)
+    crit: notable
+    conf: 0.7
+    if:
+      type: raw
+      regex: 'sudo\s+rm\s+-rf\s+'
+
+composite_rules:
+  # === Sudo Download Pattern ===
+  - id: sudo-download
+    desc: sudo with download command
+    crit: suspicious
+    conf: 0.85
+    any:
+      - id: sudo-curl
+      - id: sudo-wget
+
+  # === Sudo Execute Pattern ===
+  - id: sudo-execute
+    desc: sudo with execution pattern
+    crit: suspicious
+    conf: 0.85
+    any:
+      - id: sudo-chmod-777
+      - id: sudo-chmod-exec
+      - id: sudo-nohup
+      - id: sudo-tmp-exec
+
+  # === Full Dropper Pattern ===
+  - id: sudo-dropper-chain
+    desc: sudo download-execute chain
+    crit: hostile
+    conf: 0.95
+    attack: "T1548.003"
+    mbc: "E1059"
+    all:
+      - id: sudo-download
+      - id: sudo-execute

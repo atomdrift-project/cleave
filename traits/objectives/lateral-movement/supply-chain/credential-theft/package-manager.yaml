@@ -1,0 +1,592 @@
+# Supply Chain Credential Theft Detection
+# ATT&CK: T1552.001 (Credentials In Files)
+# Detects packages that steal credentials from package managers, CI systems, and IDEs
+# Common in supply chain attacks to propagate through development infrastructure
+
+defaults:
+  crit: suspicious
+  attack: "T1552.001"
+
+traits:
+  # ============================================================
+  # PACKAGE MANAGER CREDENTIALS
+  # ============================================================
+
+  # --- Python PyPI ---
+  - id: pypirc-path
+    desc: .pypirc credential file reference
+    crit: suspicious
+    conf: 0.9
+    for: [python]
+    if:
+      type: string
+      regex: '\.pypirc'
+
+  - id: pypirc-read
+    desc: Reads .pypirc file
+    crit: suspicious
+    conf: 0.95
+    for: [python]
+    if:
+      type: raw
+      regex: 'open\s*\(.{0,50}\.pypirc'
+
+  - id: pip-conf-path
+    desc: pip.conf credential file reference
+    crit: notable
+    conf: 0.75
+    for: [python]
+    if:
+      type: string
+      regex: '(pip\.conf|pip/pip\.conf)'
+
+  # --- Rust Cargo ---
+  - id: cargo-credentials-path
+    desc: Cargo credentials file reference
+    crit: suspicious
+    conf: 0.9
+    for: [rust]
+    if:
+      type: string
+      regex: '\.cargo/credentials'
+
+  - id: cargo-registry-token
+    desc: Cargo registry token reference
+    crit: suspicious
+    conf: 0.85
+    for: [rust]
+    if:
+      type: string
+      regex: 'registry\.token|CARGO_REGISTRY_TOKEN'
+
+  # --- Ruby Gems ---
+  - id: gem-credentials-path
+    desc: Gem credentials file reference
+    crit: suspicious
+    conf: 0.9
+    for: [ruby]
+    if:
+      type: string
+      regex: '\.gem/credentials'
+
+  - id: rubygems-api-key-var
+    desc: RubyGems API key variable
+    crit: suspicious
+    conf: 0.85
+    for: [ruby]
+    if:
+      type: string
+      word: 'rubygems_api_key'
+
+  - id: gem-host-api-key-var
+    desc: GEM_HOST_API_KEY variable
+    crit: suspicious
+    conf: 0.85
+    for: [ruby]
+    if:
+      type: string
+      word: 'GEM_HOST_API_KEY'
+
+  # --- Go Modules ---
+  - id: goprivate-netrc
+    desc: Go private module auth via netrc
+    crit: notable
+    conf: 0.8
+    for: [go]
+    if:
+      type: string
+      regex: 'GOPRIVATE|\.netrc'
+
+  # --- PHP Composer ---
+  - id: composer-auth-json
+    desc: Composer auth.json reference
+    crit: suspicious
+    conf: 0.9
+    for: [php]
+    if:
+      type: string
+      regex: 'auth\.json|composer.{0,20}token'
+
+  # --- Maven/Gradle ---
+  - id: maven-settings-xml
+    desc: Maven settings.xml with credentials
+    crit: suspicious
+    conf: 0.85
+    for: [java]
+    if:
+      type: string
+      regex: '\.m2/settings\.xml|<server>|<password>'
+
+  - id: gradle-properties
+    desc: Gradle properties with credentials
+    crit: notable
+    conf: 0.8
+    for: [java, groovy]
+    if:
+      type: string
+      regex: 'gradle\.properties|systemProp\.(http|https)\.proxyPassword'
+
+  # --- NuGet ---
+  - id: nuget-config
+    desc: NuGet.Config credential reference
+    crit: suspicious
+    conf: 0.85
+    for: [csharp]
+    if:
+      type: string
+      regex: 'NuGet\.Config|<packageSourceCredentials>'
+
+  # ============================================================
+  # CI/CD CREDENTIALS
+  # ============================================================
+
+  - id: circleci-token-var
+    desc: CIRCLECI_TOKEN variable
+    crit: suspicious
+    conf: 0.9
+    for: [all]
+    if:
+      type: string
+      word: 'CIRCLECI_TOKEN'
+
+  - id: circle-token-var
+    desc: CIRCLE_TOKEN variable
+    crit: suspicious
+    conf: 0.9
+    for: [all]
+    if:
+      type: string
+      word: 'CIRCLE_TOKEN'
+
+  - id: travis-token-var
+    desc: TRAVIS_TOKEN variable
+    crit: suspicious
+    conf: 0.9
+    for: [all]
+    if:
+      type: string
+      word: 'TRAVIS_TOKEN'
+
+  - id: jenkins-token-var
+    desc: JENKINS_TOKEN variable
+    crit: suspicious
+    conf: 0.9
+    for: [all]
+    if:
+      type: string
+      word: 'JENKINS_TOKEN'
+
+  - id: jenkins-api-token-var
+    desc: JENKINS_API_TOKEN variable
+    crit: suspicious
+    conf: 0.9
+    for: [all]
+    if:
+      type: string
+      word: 'JENKINS_API_TOKEN'
+
+  - id: gitlab-token-var
+    desc: GITLAB_TOKEN variable
+    crit: suspicious
+    conf: 0.9
+    for: [all]
+    if:
+      type: string
+      word: 'GITLAB_TOKEN'
+
+  - id: ci-job-token-var
+    desc: CI_JOB_TOKEN variable
+    crit: suspicious
+    conf: 0.9
+    for: [all]
+    if:
+      type: string
+      word: 'CI_JOB_TOKEN'
+
+  - id: gitlab-private-token-var
+    desc: GITLAB_PRIVATE_TOKEN variable
+    crit: suspicious
+    conf: 0.9
+    for: [all]
+    if:
+      type: string
+      word: 'GITLAB_PRIVATE_TOKEN'
+
+  - id: codecov-token-var
+    desc: CODECOV_TOKEN variable
+    crit: suspicious
+    conf: 0.85
+    for: [all]
+    if:
+      type: string
+      word: 'CODECOV_TOKEN'
+
+  # ============================================================
+  # IDE/EDITOR CREDENTIALS
+  # ============================================================
+
+  - id: vscode-settings
+    desc: VS Code settings with potential secrets
+    crit: notable
+    conf: 0.7
+    for: [all]
+    if:
+      type: string
+      regex: '\.vscode/settings\.json'
+
+  - id: jetbrains-secrets
+    desc: JetBrains IDE secrets
+    crit: notable
+    conf: 0.75
+    for: [all]
+    if:
+      type: string
+      regex: '\.idea/.{1,30}\.(xml|iml)|jetbrains.{0,20}token'
+      case_insensitive: true
+
+  # ============================================================
+  # CREDENTIAL ACCESS PATTERNS (Language-specific)
+  # ============================================================
+
+  # --- Python credential access ---
+  - id: py-home-expand-cred
+    desc: Python expands home dir for credential file
+    crit: suspicious
+    conf: 0.85
+    for: [python]
+    if:
+      type: raw
+      regex: 'expanduser\s*\(.{0,30}(\.pypirc|\.netrc|\.git-credentials|credentials)'
+
+  - id: py-pathlib-cred
+    desc: Python pathlib access to credential file
+    crit: suspicious
+    conf: 0.85
+    for: [python]
+    if:
+      type: raw
+      regex: 'Path\s*\(.{0,50}(\.pypirc|\.netrc|\.aws|\.ssh)'
+
+  # --- Node/JS credential access ---
+  - id: js-homedir-cred
+    desc: JS accesses credential file via homedir
+    crit: suspicious
+    conf: 0.85
+    for: [javascript, typescript]
+    if:
+      type: raw
+      regex: '(homedir|HOME).{0,50}(\.npmrc|\.netrc|\.git-credentials)'
+
+  - id: js-env-home-cred
+    desc: JS uses env HOME for credential access
+    crit: suspicious
+    conf: 0.85
+    for: [javascript, typescript]
+    if:
+      type: raw
+      regex: 'process\.env\.(HOME|USERPROFILE).{0,50}(\.npmrc|credentials)'
+
+  # --- Shell credential access (atomic traits) ---
+  - id: shell-cat-npmrc
+    desc: Shell reads .npmrc file
+    crit: suspicious
+    conf: 0.9
+    for: [shell]
+    if:
+      type: raw
+      regex: 'cat\s+.{0,30}\.npmrc'
+
+  - id: shell-cat-pypirc
+    desc: Shell reads .pypirc file
+    crit: suspicious
+    conf: 0.9
+    for: [shell]
+    if:
+      type: raw
+      regex: 'cat\s+.{0,30}\.pypirc'
+
+  - id: shell-cat-netrc
+    desc: Shell reads .netrc file
+    crit: suspicious
+    conf: 0.9
+    for: [shell]
+    if:
+      type: raw
+      regex: 'cat\s+.{0,30}\.netrc'
+
+  - id: shell-cat-git-credentials
+    desc: Shell reads .git-credentials file
+    crit: suspicious
+    conf: 0.9
+    for: [shell]
+    if:
+      type: raw
+      regex: 'cat\s+.{0,30}\.git-credentials'
+
+  - id: shell-cat-credentials
+    desc: Shell reads credentials file
+    crit: suspicious
+    conf: 0.9
+    for: [shell]
+    if:
+      type: raw
+      regex: 'cat\s+.{0,30}credentials'
+
+  - id: shell-curl-cred
+    desc: Shell curls with credential file
+    crit: suspicious
+    conf: 0.9
+    for: [shell]
+    if:
+      type: raw
+      regex: 'curl.{0,50}--netrc|curl.{0,50}-n\s'
+
+  # ============================================================
+  # EXFILTRATION PATTERNS
+  # ============================================================
+
+  - id: cred-to-http-py
+    desc: Python sends credentials via HTTP
+    crit: suspicious
+    conf: 0.9
+    for: [python]
+    if:
+      type: raw
+      multiline: true
+      regex: '(\.pypirc|\.netrc|credentials)[\s\S]{0,300}requests\.(post|put)'
+
+  # --- JS credential exfiltration (atomic traits) ---
+  - id: js-npmrc-to-fetch
+    desc: JS sends .npmrc via fetch
+    crit: suspicious
+    conf: 0.9
+    for: [javascript, typescript]
+    if:
+      type: raw
+      multiline: true
+      regex: '\.npmrc[\s\S]{0,300}fetch'
+
+  - id: js-npmrc-to-axios
+    desc: JS sends .npmrc via axios
+    crit: suspicious
+    conf: 0.9
+    for: [javascript, typescript]
+    if:
+      type: raw
+      multiline: true
+      regex: '\.npmrc[\s\S]{0,300}axios'
+
+  - id: js-npmrc-to-http
+    desc: JS sends .npmrc via http.request
+    crit: suspicious
+    conf: 0.9
+    for: [javascript, typescript]
+    if:
+      type: raw
+      multiline: true
+      regex: '\.npmrc[\s\S]{0,300}http\.request'
+
+  - id: js-netrc-to-fetch
+    desc: JS sends .netrc via fetch
+    crit: suspicious
+    conf: 0.9
+    for: [javascript, typescript]
+    if:
+      type: raw
+      multiline: true
+      regex: '\.netrc[\s\S]{0,300}fetch'
+
+  - id: js-netrc-to-axios
+    desc: JS sends .netrc via axios
+    crit: suspicious
+    conf: 0.9
+    for: [javascript, typescript]
+    if:
+      type: raw
+      multiline: true
+      regex: '\.netrc[\s\S]{0,300}axios'
+
+  - id: js-netrc-to-http
+    desc: JS sends .netrc via http.request
+    crit: suspicious
+    conf: 0.9
+    for: [javascript, typescript]
+    if:
+      type: raw
+      multiline: true
+      regex: '\.netrc[\s\S]{0,300}http\.request'
+
+  - id: js-creds-to-fetch
+    desc: JS sends credentials via fetch
+    crit: suspicious
+    conf: 0.9
+    for: [javascript, typescript]
+    if:
+      type: raw
+      multiline: true
+      regex: 'credentials[\s\S]{0,300}fetch'
+
+  - id: js-creds-to-axios
+    desc: JS sends credentials via axios
+    crit: suspicious
+    conf: 0.9
+    for: [javascript, typescript]
+    if:
+      type: raw
+      multiline: true
+      regex: 'credentials[\s\S]{0,300}axios'
+
+  - id: js-creds-to-http
+    desc: JS sends credentials via http.request
+    crit: suspicious
+    conf: 0.9
+    for: [javascript, typescript]
+    if:
+      type: raw
+      multiline: true
+      regex: 'credentials[\s\S]{0,300}http\.request'
+
+  # --- Base64 encoding of credentials (atomic traits) ---
+  - id: creds-base64-encode
+    desc: credentials base64 encoded
+    crit: suspicious
+    conf: 0.85
+    for: [python, javascript, shell]
+    if:
+      type: raw
+      multiline: true
+      regex: 'credentials[\s\S]{0,200}(base64|btoa|b64encode)'
+
+  - id: npmrc-base64-encode
+    desc: .npmrc base64 encoded
+    crit: suspicious
+    conf: 0.85
+    for: [python, javascript, shell]
+    if:
+      type: raw
+      multiline: true
+      regex: '\.npmrc[\s\S]{0,200}(base64|btoa|b64encode)'
+
+  - id: pypirc-base64-encode
+    desc: .pypirc base64 encoded
+    crit: suspicious
+    conf: 0.85
+    for: [python, javascript, shell]
+    if:
+      type: raw
+      multiline: true
+      regex: '\.pypirc[\s\S]{0,200}(base64|btoa|b64encode)'
+
+composite_rules:
+  # === Shell Credential Access (composite of atomic traits) ===
+  - id: shell-cat-cred
+    desc: Shell reads credential file
+    crit: suspicious
+    conf: 0.9
+    any:
+      - id: shell-cat-npmrc
+      - id: shell-cat-pypirc
+      - id: shell-cat-netrc
+      - id: shell-cat-git-credentials
+      - id: shell-cat-credentials
+
+  # === Base64 Credential Encoding (composite of atomic traits) ===
+  - id: cred-base64-encode
+    desc: Credentials base64 encoded before send
+    crit: suspicious
+    conf: 0.85
+    any:
+      - id: creds-base64-encode
+      - id: npmrc-base64-encode
+      - id: pypirc-base64-encode
+
+  # === Package Manager Credential Theft ===
+  - id: pypi-credential-theft
+    desc: PyPI credential theft
+    crit: hostile
+    conf: 0.95
+    attack: "T1552.001"
+    mbc: "E1552"
+    any:
+      - id: pypirc-read
+      - id: py-home-expand-cred
+    all:
+      - id: cred-to-http-py
+
+  - id: cred-to-http-js
+    desc: JS sends credentials via HTTP
+    crit: suspicious
+    conf: 0.9
+    any:
+      - id: js-npmrc-to-fetch
+      - id: js-npmrc-to-axios
+      - id: js-npmrc-to-http
+      - id: js-netrc-to-fetch
+      - id: js-netrc-to-axios
+      - id: js-netrc-to-http
+      - id: js-creds-to-fetch
+      - id: js-creds-to-axios
+      - id: js-creds-to-http
+
+  - id: npm-credential-theft
+    desc: NPM credential theft (supplemental)
+    crit: hostile
+    conf: 0.95
+    attack: "T1552.001"
+    any:
+      - id: js-homedir-cred
+      - id: js-env-home-cred
+    all:
+      - id: cred-to-http-js
+
+  - id: cargo-credential-theft
+    desc: Cargo credential theft
+    crit: hostile
+    conf: 0.95
+    attack: "T1552.001"
+    all:
+      - id: cargo-credentials-path
+      - id: cargo-registry-token
+
+  - id: gem-credential-theft
+    desc: RubyGems credential theft
+    crit: hostile
+    conf: 0.95
+    attack: "T1552.001"
+    all:
+      - id: gem-credentials-path
+    any:
+      - id: rubygems-api-key-var
+      - id: gem-host-api-key-var
+
+  # === CI/CD Credential Theft ===
+  - id: ci-credential-theft
+    desc: CI/CD credential theft
+    crit: hostile
+    conf: 0.95
+    attack: "T1552.001"
+    needs: 2
+    any:
+      - id: circleci-token-var
+      - id: circle-token-var
+      - id: travis-token-var
+      - id: jenkins-token-var
+      - id: jenkins-api-token-var
+      - id: gitlab-token-var
+      - id: ci-job-token-var
+      - id: gitlab-private-token-var
+      - id: codecov-token-var
+
+  # === Combined Credential Theft ===
+  - id: supply-chain-credential-theft
+    desc: Supply chain credential theft attack
+    crit: hostile
+    conf: 0.98
+    attack: "T1552.001"
+    mbc: "E1552"
+    any:
+      - id: pypi-credential-theft
+      - id: npm-credential-theft
+      - id: cargo-credential-theft
+      - id: gem-credential-theft
+      - id: ci-credential-theft

@@ -88,11 +88,13 @@ pub async fn run(config: ServerConfig) -> anyhow::Result<()> {
         }
     });
 
+    // Layer order matters: outermost (last added) runs first.
+    // We want: rate limit -> body size limit -> handler
     let app = Router::new()
         .route("/health", get(handlers::health))
         .route("/analyze", post(analyze_with_headers))
         .layer(RequestBodyLimitLayer::new(config.max_body_size))
-        .route_layer(middleware::from_fn_with_state(
+        .layer(middleware::from_fn_with_state(
             Arc::clone(&state),
             rate_limit_middleware,
         ))

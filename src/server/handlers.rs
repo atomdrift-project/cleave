@@ -65,8 +65,16 @@ pub(super) async fn analyze(
         }
     };
 
-    // Get filename if provided
-    let filename = field.file_name().map(String::from).unwrap_or_default();
+    // Get filename if provided, sanitize for logging (truncate, remove control chars)
+    let filename = field
+        .file_name()
+        .map(|s| {
+            s.chars()
+                .filter(|c| !c.is_control())
+                .take(255)
+                .collect::<String>()
+        })
+        .unwrap_or_default();
 
     // Read file data
     let data = match field.bytes().await {
@@ -145,10 +153,11 @@ pub(super) async fn analyze(
             Json(report).into_response()
         }
         Ok(Ok(Err(e))) => {
+            // Log full error internally, return generic message to client
             warn!(%client_ip, filename = %filename, elapsed_ms = elapsed_ms, "Analysis failed: {}", e);
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": format!("Analysis failed: {}", e)})),
+                Json(serde_json::json!({"error": "Analysis failed"})),
             )
                 .into_response()
         }

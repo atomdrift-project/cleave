@@ -45,7 +45,7 @@ traits:
     conf: 0.90
     attack: "T1587.001"
     if:
-      type: symbol
+      type: string
       exact: "VirtualAllocEx"
 
   - id: virtual-free
@@ -56,12 +56,6 @@ traits:
       type: symbol
       exact: "VirtualFree"
 
-  - id: setwindowshook
-    desc: Windows SetWindowsHookEx API
-    crit: notable
-    conf: 0.7
-    if:
-      type: symbol
-      exact: "SetWindowsHookEx"
+  # setwindowshook: moved to micro-behaviors/hardware/input/keyboard::set-windows-hook (canonical namespace)
 
   # virtual-query: use micro-behaviors/mem/query/info::virtualquery (canonical namespace)

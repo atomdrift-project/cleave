@@ -20,6 +20,7 @@ composite_rules:
         - id: metadata/dev/testing::node-common-require
         - id: objectives/lateral-movement/supply-chain/npm/testing::assert-word
         - id: metadata/library/prettier::prettier-detection
+        - id: metadata/quality/documentation::has-jsdoc
 
   - id: obfuscated-local-dropper
     desc: Obfuscated local dropper (Hostile)

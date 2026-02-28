@@ -46,3 +46,24 @@ traits:
     if:
       type: string
       substr: "/dev/mmcblk"
+
+  - id: windows-physicaldrive-path
+    desc: Windows raw PhysicalDrive device path
+    crit: notable
+    conf: 0.8
+    platforms: [windows]
+    for: [pe, dll]
+    if:
+      type: string
+      regex: '\\\\\.\\physicaldrive\d*'
+      case_insensitive: true
+
+  - id: windows-device-unc-template
+    desc: Windows device UNC path format
+    crit: component
+    conf: 0.6
+    platforms: [windows]
+    for: [pe, dll]
+    if:
+      type: string
+      exact: '\\\\.\\%s'

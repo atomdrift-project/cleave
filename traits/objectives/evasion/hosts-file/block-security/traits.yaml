@@ -22,6 +22,26 @@ traits:
       type: string
       regex: '(?i)\\system32\\drivers\\etc\\hosts'
 
+  - id: windows-hosts-template-path
+    desc: Windows hosts path format string
+    crit: suspicious
+    conf: 0.85
+    platforms: [windows]
+    for: [all]
+    if:
+      type: raw
+      regex: '(?i)%s\\drivers\\etc\\hosts'
+
+  - id: windows-hosts-backup-template
+    desc: Hosts backup template reference
+    crit: suspicious
+    conf: 0.85
+    platforms: [windows]
+    for: [all]
+    if:
+      type: raw
+      regex: '(?i)%s\\hosts\.sam'
+
   # === Security vendor update domains (split to stay within OR limits) ===
   - id: av-update-domain-a
     desc: AV update domain (Kaspersky/Avast/AVG)
@@ -99,6 +119,8 @@ composite_rules:
     conf: 0.7
     any:
       - id: windows-hosts-path
+      - id: windows-hosts-template-path
+      - id: windows-hosts-backup-template
       - id: micro-behaviors/fs/path/config::config-hosts
 
   # Helper: any AV update domain
@@ -149,3 +171,16 @@ composite_rules:
     any:
       - id: localhost-redirect-pattern
       - id: null-redirect-pattern
+
+  - id: windows-hosts-tamper-api
+    desc: Hosts tamper with file APIs
+    crit: suspicious
+    conf: 0.9
+    for: [pe]
+    platforms: [windows]
+    all:
+      - id: hosts-file-path
+    any:
+      - id: micro-behaviors/fs/file/attributes::set-file-attributes-a
+      - id: micro-behaviors/fs/file/delete::deletefile-a
+      - id: micro-behaviors/fs/file/copy::copyfile-a

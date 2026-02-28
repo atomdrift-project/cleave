@@ -43,6 +43,8 @@ composite_rules:
         - id: metadata/lang/compiler::vcruntime
         - id: metadata/lang/compiler::msvcrt
         - id: metadata/lang/compiler::ms-visual
+        - id: metadata/vendor/microsoft::is-windows-named
+        - id: metadata/vendor/microsoft::is-microsoft-named
 
   - id: linux-comprehensive
     desc: Linux debugger detection across multiple

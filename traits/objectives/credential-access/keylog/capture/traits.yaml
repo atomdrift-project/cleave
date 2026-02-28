@@ -484,7 +484,7 @@ composite_rules:
     for: [pe, dll]
     needs: 2
     any:
-      - { id: micro-behaviors/mem/protect/modify::setwindowshook }
+      - { id: micro-behaviors/hardware/input/keyboard::set-windows-hook }
       - { id: windows-rawinput }
       - { id: windows-asynckey }
 

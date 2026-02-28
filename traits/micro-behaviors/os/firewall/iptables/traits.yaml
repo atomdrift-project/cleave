@@ -50,6 +50,14 @@ traits:
       type: string
       regex: 'iptables\s+(-X|--delete-chain)'
 
+  - id: iptables-prerouting-redirect
+    desc: iptables PREROUTING REDIRECT rule
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: string
+      regex: 'iptables\s+.{0,100}-t\s+nat\s+.{0,100}-A\s+PREROUTING\s+.{0,100}-j\s+REDIRECT'
+
 composite_rules:
   - id: iptables-manipulation
     desc: iptables rule manipulation

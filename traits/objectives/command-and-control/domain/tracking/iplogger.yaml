@@ -14,14 +14,6 @@ traits:
       type: string
       regex: '2no\.co|yip\.su'
 
-  - id: iplogger-http
-    desc: "Detects HTTP indicators often with iplogger"
-    crit: notable
-    conf: 0.7
-    if:
-      type: string
-      regex: 'https?://'
-
 composite_rules:
   - id: iplogger-domain
     desc: "Detects iplogger tracking domains"
@@ -44,7 +36,9 @@ composite_rules:
     conf: 0.85
     all:
       - id: objectives/discovery/network/scan::iplogger-keyword
-      - id: iplogger-http
+    any:
+      - id: micro-behaviors/communications/http/protocol::http-prefix
+      - id: micro-behaviors/communications/http/protocol::https-prefix
 
   - id: fragmented-tracking-beacon
     desc: "Detects fragmented tracking/logging URL construction"

@@ -47,3 +47,19 @@ traits:
     if:
       type: symbol
       exact: "AreFileApisANSI"
+
+  - id: create-environment-block
+    desc: Build user environment block
+    crit: notable
+    conf: 0.8
+    if:
+      type: symbol
+      exact: "CreateEnvironmentBlock"
+
+  - id: destroy-environment-block
+    desc: Release user environment block
+    crit: baseline
+    conf: 0.75
+    if:
+      type: symbol
+      exact: "DestroyEnvironmentBlock"

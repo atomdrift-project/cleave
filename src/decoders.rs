@@ -37,7 +37,7 @@ pub fn extract_base64_strings(data: &[u8]) -> Vec<DecodedString> {
 
                 if printable_ratio > 0.7 {
                     let encoded_preview = if encoded.len() > 100 {
-                        format!("{}...", &encoded[..100])
+                        format!("{}...", &encoded[..encoded.floor_char_boundary(100)])
                     } else {
                         encoded.to_string()
                     };
@@ -240,5 +240,30 @@ mod tests {
             "XOR extraction took {}ms",
             elapsed.as_millis()
         );
+    }
+
+    #[test]
+    fn test_utf8_boundary_truncation() {
+        // Regression test: truncating strings at byte index 100 must not panic
+        // when multi-byte UTF-8 characters cross that boundary.
+        // 99 ASCII chars + 'Ä' (2 bytes) = 'Ä' spans bytes 99-100
+        let text = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAÄÄÄÄ";
+
+        // Verify our test string has multi-byte chars crossing byte 100
+        assert!(text.len() > 100);
+        assert!(
+            !text.is_char_boundary(100),
+            "Test string should have a multi-byte char crossing byte 100"
+        );
+
+        // This is the pattern that was fixed - it should not panic
+        let truncated = if text.len() > 100 {
+            format!("{}...", &text[..text.floor_char_boundary(100)])
+        } else {
+            text.to_string()
+        };
+
+        assert!(truncated.ends_with("..."));
+        assert!(truncated.len() <= 103); // 100 bytes max + "..."
     }
 }

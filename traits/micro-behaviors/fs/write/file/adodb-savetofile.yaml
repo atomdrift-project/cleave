@@ -65,3 +65,5 @@ composite_rules:
       - id: adodb-fragment-stream
       - id: savetofile-fragment-save
       - id: savetofile-fragment-tofil
+    unless:
+      - id: micro-behaviors/fs/write/file::adodb-stream

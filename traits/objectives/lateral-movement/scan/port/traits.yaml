@@ -246,6 +246,9 @@ traits:
   if:
     type: string
     regex: \b[Pp]robing\b
+  not:
+    - substr: "transport"
+    - substr: "Transport"
 - id: port-number-ftp
   desc: FTP port number (21)
   crit: notable
@@ -502,6 +505,7 @@ composite_rules:
   mbc: E1046
   for:
   - shell
+  size_max: 100000
   all:
   - id: probing-keyword
   - id: service-port

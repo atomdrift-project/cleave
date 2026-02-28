@@ -42,7 +42,7 @@ traits:
     regex: setup\([^)]{0,120}\)\s*\n.{20,500}(exec|eval|__import__|compile)
 - id: conditional-exec-context
   desc: Conditional execution context (argv, os.name)
-  crit: suspicious
+  crit: component
   conf: 0.85
   size_max: 32000
   if:

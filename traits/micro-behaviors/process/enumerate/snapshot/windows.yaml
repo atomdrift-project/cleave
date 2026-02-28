@@ -33,6 +33,15 @@ traits:
       type: symbol
       regex: "Process32Next[AW]?$"
 
+  - id: toolhelp-api-name-triplet
+    desc: Embedded Toolhelp process API triplet
+    crit: notable
+    conf: 0.82
+    attack: "T1057"
+    if:
+      type: raw
+      regex: "Process32Next.{0,8}Process32First.{0,8}CreateToolhelp32Snapshot"
+
   - id: module32-first
     desc: Get first module from snapshot
     crit: notable
@@ -42,9 +51,32 @@ traits:
       regex: "Module32First[AW]?$"
 
   - id: module32-next
-    desc: Enumerate next module in snapshot
+    desc: Enumerate next module from snapshot
     crit: notable
     conf: 0.85
     if:
       type: symbol
       regex: "Module32Next[AW]?$"
+
+composite_rules:
+  - id: toolhelp-process-enumeration-symbol
+    desc: Toolhelp process enumeration via imports
+    crit: suspicious
+    conf: 0.9
+    attack: "T1057"
+    all:
+      - id: create-toolhelp32-snapshot
+      - id: process32-first
+      - id: process32-next
+    downgrade:
+      any:
+        - id: metadata/quality/versioning::pe-version-resource
+
+  - id: toolhelp-process-enumeration
+    desc: Toolhelp snapshot process enumeration
+    crit: suspicious
+    conf: 0.9
+    attack: "T1057"
+    any:
+      - id: toolhelp-process-enumeration-symbol
+      - id: toolhelp-api-name-triplet

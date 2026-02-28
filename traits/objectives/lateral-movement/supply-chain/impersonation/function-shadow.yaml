@@ -79,30 +79,20 @@ traits:
   # NOTE: password keyword detection uses micro-behaviors/data/text/keywords::password
   # Composite py-credential-keyword below references it directly
 
-  # Atomic: requests library network call
-  - id: py-requests-call
-    desc: requests library POST or GET call
-    crit: suspicious
-    conf: 0.6
-    for: [python]
-    if:
-      type: raw
-      regex: 'requests\.(post|get)'
-
   # Atomic: file open operation
   - id: py-file-open
     desc: file open operation
-    crit: suspicious
+    crit: component
     conf: 0.5
     for: [python]
     if:
       type: raw
-      regex: 'open\s*\('
+      regex: 'open\s*\(\s*[''"]'
 
   # Atomic: urlopen network call
   - id: py-urlopen-call
     desc: urlopen network call
-    crit: suspicious
+    crit: component
     conf: 0.6
     for: [python]
     if:
@@ -123,7 +113,7 @@ traits:
   - id: py-func-print-shadow
     desc: print function with network call
     crit: suspicious
-    conf: 0.8
+    conf: 0.85
     for: [python]
     if:
       type: raw
@@ -149,6 +139,7 @@ traits:
     crit: suspicious
     conf: 0.85
     for: [javascript, typescript]
+    size_max: 102400
     if:
       type: raw
       regex: '(const|let|var)\s+require\s*=|require\s*=\s*function'
@@ -187,7 +178,7 @@ traits:
   # Atomic: fetch network call
   - id: js-fetch-call
     desc: fetch network call
-    crit: suspicious
+    crit: component
     conf: 0.5
     for: [javascript, typescript]
     if:
@@ -196,15 +187,7 @@ traits:
 
   # Removed js-axios-call duplicate - use micro-behaviors/communications/http/request::axios
 
-  # Atomic: http module call
-  - id: js-http-call
-    desc: http module call
-    crit: suspicious
-    conf: 0.5
-    for: [javascript, typescript]
-    if:
-      type: raw
-      regex: 'http\.(request|get)'
+  # ============================================================
 
   # ============================================================
   # RUBY: Well-known method redefinitions
@@ -256,7 +239,7 @@ composite_rules:
     crit: suspicious
     conf: 0.6
     any:
-      - id: py-requests-call
+      - id: micro-behaviors/communications/http/lib/requests::requests-python
       - id: py-file-open
       - id: py-urlopen-call
 
@@ -299,9 +282,10 @@ composite_rules:
     any:
       - id: js-fetch-call
       - id: micro-behaviors/communications/http/request::axios
-      - id: js-http-call
+      - id: micro-behaviors/communications/http/request::http-get
+      - id: micro-behaviors/communications/http/request::http-request
 
-  # Composite: crypto function with exfil (replaces js-crypto-shadow)
+  # Composite: crypto function with exfil
   - id: js-crypto-shadow
     desc: crypto function with exfil
     crit: suspicious

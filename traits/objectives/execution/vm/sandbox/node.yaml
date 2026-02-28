@@ -234,3 +234,5 @@ composite_rules:
       - id: metadata/library::rxjs-cold-observable-offset-error
       - id: metadata/library/axios::axios-detection
       - id: metadata/library/prettier::prettier-detection
+      - id: metadata/library/prettier::prettier-language-js
+      - id: metadata/library/prettier::prettier-api

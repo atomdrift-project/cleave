@@ -27,6 +27,16 @@ traits:
       regex: '(isPrettierIgnore|PrettierIgnore)'
       count_min: 3
 
+  - id: prettier-language-js
+    desc: Prettier language-js parser bundle
+    crit: baseline
+    conf: 0.95
+    for: [javascript]
+    if:
+      type: string
+      regex: 'src/language-js/(pragma|parse/utils/create-parser)\.js'
+      count_min: 2
+
 composite_rules:
   - id: prettier-detection
     desc: Prettier code formatter bundle
@@ -36,3 +46,4 @@ composite_rules:
       - id: prettier-api
       - id: prettier-config
       - id: prettier-ignore-symbols
+      - id: prettier-language-js

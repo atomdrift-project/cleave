@@ -28,6 +28,7 @@ traits:
       regex: "(\\^[a-zA-Z0-9]{1,2}){5,}"  # 5+ carets with alphanumeric chars between
     not:
       - regex: "(\\^[A-Z]){5,}" # Likely control character representations like ^A^B^C
+      - regex: "(\\^[a-z]){5,}" # Lowercase control character representations like ^s^t^u^v
 
 composite_rules:
   - id: cmd-caret-excessive

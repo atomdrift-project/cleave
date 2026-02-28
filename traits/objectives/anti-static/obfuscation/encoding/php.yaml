@@ -261,6 +261,7 @@ traits:
     crit: suspicious
     conf: 0.85
     mbc: "B0032"
+    for: [php]
     if:
       type: ast
       kind: call

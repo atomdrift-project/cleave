@@ -49,11 +49,13 @@ traits:
     conf: 0.9
     # Exclude ELF files: ELF magic in .text/.rodata is normal for archive libraries,
     # linkers, and format detection code (e.g., libarchive)
+    # Require valid ELF header: class (01=32-bit|02=64-bit), data (01=LE|02=BE), version (01)
+    # This avoids matching bare magic constants used for format recognition
     for: [all, -elf]
     size_max: 1000000
     if:
       type: hex
-      pattern: "7F 45 4C 46"
+      pattern: "7F 45 4C 46 (01|02) (01|02) 01"
       offset_range: [1, ~]
 
   - id: appended-pe-binary
@@ -125,3 +127,16 @@ composite_rules:
     all:
       - id: jpeg-trailing-data
       - id: image-embedded-exec-magic
+
+  - id: pe-multi-embedded-payload-container
+    desc: PE with many embedded PE headers
+    crit: suspicious
+    conf: 0.92
+    attack: "T1027.009"
+    for: [pe, dll]
+    all:
+      - id: micro-behaviors/data/embedded/payload::pe-magic-embedded-multiple
+    any:
+      - id: objectives/anti-static/obfuscation/binary-metrics::large-overlay
+      - id: objectives/anti-static/obfuscation/binary-metrics::has-overlay
+      - id: metadata/format::few-functions

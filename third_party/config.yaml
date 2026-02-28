@@ -60,3 +60,15 @@ overrides:
   - id: third_party/SecuInfra/SUSP/Powershell/Base64/Decode
     crit: "notable"
     reason: "High FP rate - detects PowerShell Base64 decoding"
+  - id: third_party/RussianPanda95/MetaStealer/metastealer_12-2023_packer/metastealer_net_reactor_packer
+    crit: "notable"
+    reason: "NET Reactor packer pattern is too broad for family-level confidence"
+  - id: third_party/RUSSIANPANDA/Metastealer/NET/Reactor/Packer
+    crit: "notable"
+    reason: "NET Reactor packer marker alone should not imply MetaStealer family"
+  - id: third_party/SigBase/SUSP/NET/NAME/Confuserex
+    crit: "notable"
+    reason: "ConfuserEx naming pattern detection - matches tool components and legitimate uses, not just packed malware (author score=40)"
+  - id: third_party/bartblaze/generic/EnigmaStub/enigmastub
+    crit: "notable"
+    reason: "Enigma Protector plugin exports match legitimate Enigma ecosystem components, not just packed malware"

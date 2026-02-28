@@ -26,7 +26,7 @@ traits:
     for: [shell]
     if:
       type: raw
-      regex: 'base64.{0,50}\|.{0,50}base64'
+      regex: '\|\s*base64\b.{0,50}\|\s*base64\b'
 
 composite_rules:
   - id: github-actions-targeting

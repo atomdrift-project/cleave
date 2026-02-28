@@ -13,8 +13,9 @@ traits:
     conf: 0.75
     attack: "T1059.001"
     if:
-      type: symbol
+      type: string
       exact: "ShellExecuteExW"
+      section: rdata
 
   - id: shell-execute
     desc: Execute shell command (ShellExecuteW)
@@ -22,8 +23,9 @@ traits:
     conf: 0.75
     attack: "T1059.001"
     if:
-      type: symbol
+      type: string
       exact: "ShellExecuteW"
+      section: rdata
 
   # === Command Line Execution ===
   - id: get-command-line

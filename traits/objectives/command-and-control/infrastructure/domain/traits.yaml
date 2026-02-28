@@ -220,6 +220,11 @@ traits:
     - substr: "upnp.org"
     - substr: "dlna.org"
     - substr: "mongoosejs.com"
+    - substr: "wikipedia.org"
+    - substr: "caniuse.com"
+    - substr: "rfc-editor.org"
+    - substr: "stackoverflow.com"
+    - substr: "socket.io"
 
 - id: bullethost-cloud
   desc: Bullethost.cloud file hosting
@@ -441,6 +446,10 @@ traits:
     - regex: '(?i)pypi\.org'
     - regex: '(?i)npmjs\.com'
     - regex: '(?i)github\.com'
+    - regex: '(?i)facebook\.com'
+    - regex: '(?i)twitter\.com'
+    - regex: '(?i)linkedin\.com'
+    - regex: '(?i)php\.net'
 
 - id: aws-api-gateway
   desc: AWS API Gateway endpoint

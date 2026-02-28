@@ -83,3 +83,5 @@ composite_rules:
         - id: metadata/lang/compiler::ms-visual
         - id: metadata/format::large-executable
         - id: metadata/format::many-imports
+        - id: metadata/vendor/microsoft::is-windows-named
+        - id: metadata/vendor/microsoft::is-microsoft-named

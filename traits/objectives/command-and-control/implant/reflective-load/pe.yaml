@@ -13,9 +13,61 @@ traits:
       # MinGW/GCC runtime includes PE validation for pseudo-relocation
       - type: string
         substr: "PyInit_"
-      # MSVC runtime PE validation
-      - type: string
-        substr: "VS_VERSION_INFO"
       # MinGW-w64 CRT pseudo-relocation runtime
       - type: string
         substr: "Mingw-w64 runtime failure:"
+
+  - id: loader-api-surface
+    desc: Native loader API surface pattern
+    crit: suspicious
+    conf: 0.86
+    mbc: "B0005"
+    attack: "T1620"
+    for: [pe, dll]
+    if:
+      type: import_combination
+      required:
+        - VirtualAlloc
+        - LoadLibraryA
+        - GetProcAddress
+      suspicious:
+        - IsBadReadPtr
+        - VirtualProtect
+        - GetModuleFileNameA
+        - fopen
+        - fread
+      min_suspicious: 2
+    unless:
+      # Large import tables indicate a normal application, not a reflective loader
+      # Reflective loaders resolve APIs dynamically and typically have <50 imports
+      - type: metrics
+        field: binary.import_count
+        min: 120
+
+composite_rules:
+  - id: native-loader-obfuscated
+    desc: Native reflective loader with packer profile
+    crit: suspicious
+    conf: 0.9
+    all:
+      - id: loader-api-surface
+      - id: objectives/anti-static/obfuscation/binary-metrics::dominant-section
+
+  - id: resource-backed-native-loader
+    desc: Resource-backed native memory loader chain
+    crit: suspicious
+    conf: 0.92
+    mbc: "B0005"
+    attack: "T1620"
+    for: [pe, dll]
+    all:
+      - id: loader-api-surface
+      - id: micro-behaviors/data/embedded/payload::pe-resource-load-lock-chain
+    any:
+      - id: objectives/anti-analysis/timing/evasion::timing-delta-check
+      - id: objectives/anti-analysis/environment-detection/runtime::environment-adaptive-behavior
+      - id: micro-behaviors/time/timing/delay::sleep
+    downgrade:
+      any:
+        - id: metadata/quality/versioning::pe-version-resource
+        - id: metadata/vendor/microsoft::is-microsoft-named

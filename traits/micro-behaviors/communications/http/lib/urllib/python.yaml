@@ -36,7 +36,7 @@ traits:
     conf: 0.85
     if:
       type: raw
-      regex: '(urllib|urllib2|request)\.urlopen\s*\([^)]{1,200},'
+      regex: '(urllib|urllib2|request)\.urlopen\s*\([^)]{0,200}\bdata\s*='
 
   # GuardDog: urlretrieve for downloading files
   - id: urllib-urlretrieve

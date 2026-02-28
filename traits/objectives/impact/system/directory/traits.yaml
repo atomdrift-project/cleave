@@ -63,6 +63,8 @@ traits:
   if:
     type: string
     substr: \\.\PhysicalDrive
+    case_insensitive: true
+
 - id: rmtree-call
   desc: rmtree function call
   crit: notable
@@ -177,6 +179,26 @@ composite_rules:
     - id: metadata/library::botocore-lib
     - id: metadata/import/python::boto3
     - id: micro-behaviors/communications/ssh/connect::paramiko
+- id: windows-raw-disk-io-api-set
+  desc: Raw disk I/O API set
+  crit: notable
+  conf: 0.88
+  platforms:
+  - windows
+  all:
+  - id: micro-behaviors/fs/file/operations::file-create-win
+  - id: micro-behaviors/fs/file/operations::device-io-control-win
+  - id: micro-behaviors/io/console/output::read-file
+- id: windows-raw-disk-read-profile
+  desc: Windows raw disk read profile
+  crit: suspicious
+  conf: 0.92
+  attack: T1561.001
+  platforms:
+  - windows
+  all:
+  - id: physical-drive-unc
+  - id: windows-raw-disk-io-api-set
 - id: recursive-delete-cmd
   desc: Recursive deletion command pattern
   crit: notable

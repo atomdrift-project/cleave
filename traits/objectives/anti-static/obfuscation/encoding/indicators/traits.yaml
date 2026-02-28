@@ -44,6 +44,8 @@ traits:
     if:
       type: encoded
       id: micro-behaviors/fs/chmod/executable::shell-plus-x
+    not:
+      - regex: 'chmod\s+\+x\s'
     attack: "T1222.002"
 
   - id: encoded-tmp-path
@@ -201,6 +203,7 @@ traits:
         regex: 'typeof\s*exports\s*={2,3}\s*["'']object["'']'
       - type: raw
         regex: 'typeof\s*define\s*={2,3}\s*["'']function["'']\s*&&\s*define\.amd'
+      - id: metadata/library/prettier::prettier-language-js
 
   - id: encoded-node-child-process
     desc: "Encoded child_process module"

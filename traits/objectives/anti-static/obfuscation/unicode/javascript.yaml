@@ -89,6 +89,8 @@ traits:
           regex: "locale"
         - type: string
           regex: "defineLocale|moment\\.locale"
+        - type: raw
+          regex: "MathJax|mathjax|sre\\.Semantic|Speech\\.?Rule|numberToUnicode"
 
   # Unusual Unicode characters in variable names
   - id: unicode-variable-names

@@ -28,6 +28,15 @@ traits:
     if:
       type: basename
       substr: "Windows"
+  - id: diagnostics-hub
+    desc: Microsoft DiagnosticsHub component
+    crit: notable
+    conf: 0.9
+    for: [pe, dll]
+    if:
+      type: basename
+      substr: "DiagnosticsHub"
+
   - id: is-defender-named-1
     desc: Defender file name
     crit: notable

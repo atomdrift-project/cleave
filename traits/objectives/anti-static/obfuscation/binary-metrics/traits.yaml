@@ -266,9 +266,12 @@ traits:
       field: binary.avg_complexity
       min: 55
     unless:
+      # With fewer than 20 detected functions, average complexity is
+      # statistically unreliable — a few complex parsers/state machines
+      # easily skew the mean (e.g., DLLs where only exports are counted)
       - type: metrics
         field: binary.function_count
-        max: 10
+        max: 20
 
   - id: very-high-avg-complexity
     desc: "Very high average complexity (heavy"
@@ -283,7 +286,7 @@ traits:
     unless:
       - type: metrics
         field: binary.function_count
-        max: 10
+        max: 20
 
   - id: extreme-max-complexity
     desc: "Extremely high max function complexity"

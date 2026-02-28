@@ -246,6 +246,8 @@ traits:
       - substr: application-identifier
       - substr: temporary-exception
       - substr: com.apple
+      - substr: github.com
+      - substr: .com-1ecc6299db9ec823
     downgrade:
       any:
         - id: metadata/signed/platform::apple

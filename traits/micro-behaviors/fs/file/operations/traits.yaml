@@ -15,6 +15,22 @@ traits:
       type: symbol
       exact: "CreateFileW"
 
+  - id: device-io-control-win
+    desc: DeviceIoControl API usage
+    crit: notable
+    conf: 0.85
+    if:
+      type: symbol
+      exact: "DeviceIoControl"
+
+  - id: set-file-information-by-handle
+    desc: Modify file metadata attributes
+    crit: notable
+    conf: 0.85
+    if:
+      type: symbol
+      exact: "SetFileInformationByHandle"
+
 composite_rules:
   - id: binary-file-ops
     desc: Binary file operations

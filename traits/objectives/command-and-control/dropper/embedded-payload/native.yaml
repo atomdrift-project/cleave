@@ -104,6 +104,46 @@ composite_rules:
         - id: metadata/lang/compiler::msvc
         - id: metadata/vendor/microsoft::is-microsoft-named
 
+  - id: pe-resource-loader-registry-evasion-chain
+    desc: PE resource loader with registry tamper and anti-analysis
+    crit: suspicious
+    conf: 0.93
+    attack: "T1027.009"
+    for: [pe, dll]
+    all:
+      - id: micro-behaviors/data/embedded/payload::pe-resource-loader-api-chain
+      - id: objectives/execution/reflection/class::dynamic-load-pattern
+      - id: micro-behaviors/os/registry/access::registry-write-api-chain
+      - id: objectives/anti-analysis/timing/evasion::timing-anti-debug
+    any:
+      - id: micro-behaviors/process/thread/create::create-thread
+      - id: micro-behaviors/fs/enumerate/directory::find-next-file
+      - id: micro-behaviors/fs/path/check::path-is-directory
+    downgrade:
+      any:
+        - id: metadata/vendor/microsoft::is-microsoft-named
+        - id: metadata/signed/platform::microsoft
+
+  - id: pe-resource-memory-stage-with-hooking
+    desc: PE resource loader with memory staging and UI hook setup
+    crit: suspicious
+    conf: 0.91
+    attack: "T1027.009"
+    for: [pe, dll]
+    all:
+      - id: micro-behaviors/data/embedded/payload::pe-resource-full-extraction
+      - id: objectives/execution/reflection/class::dynamic-load-pattern
+      - id: micro-behaviors/mem/protect/modify::virtual-protect
+    any:
+      - id: micro-behaviors/hardware/input/keyboard::set-windows-hook
+      - id: micro-behaviors/hardware/display/screen::gdi-screen-capture-primitives
+      - id: objectives/anti-static/obfuscation/payload/section::oversized-data-section
+    needs: 1
+    downgrade:
+      any:
+        - id: metadata/vendor/microsoft::is-microsoft-named
+        - id: metadata/signed/platform::microsoft
+
   # libcurl network dropper: downloads content via libcurl, writes to disk, executes via shell
   # Pattern seen in kworker_pretenders malware family (2024):
   # - Uses libcurl to download payloads
@@ -215,6 +255,51 @@ composite_rules:
       any:
         - id: metadata/vendor/microsoft::is-microsoft-named
 
+  # PE resource dropper that stages payload in temp and launches it, while
+  # also showing persistence/evasion behavior. Tuned for reusable behavior,
+  # not family-specific IoCs.
+  - id: pe-resource-temp-stager-persistence-chain
+    desc: PE resource dropper with temp staging, spawn, and persistence chain
+    crit: hostile
+    conf: 0.94
+    mbc: "B0030"
+    attack: "T1027.009"
+    for: [pe, dll]
+    all:
+      - id: micro-behaviors/data/embedded/payload::pe-resource-full-extraction
+      - id: micro-behaviors/fs/temp/directory::temp-file-staging-primitives
+      - id: micro-behaviors/process/create/spawn::create-process-w
+    any:
+      - id: micro-behaviors/fs/file/move::move-file-ex
+      - id: micro-behaviors/os/service/control::reconfigure-and-start-service
+      - id: micro-behaviors/os/registry/access::registry-write-api-chain
+      - id: objectives/anti-analysis/timing/evasion::timing-anti-debug
+    needs: 2
+    downgrade:
+      any:
+        - id: metadata/vendor/microsoft::is-microsoft-named
+        - id: metadata/quality/versioning::pe-version-resource
+
+  - id: pe-resource-service-hijack-stager
+    desc: Resource stager with service hijack chain
+    crit: hostile
+    conf: 0.95
+    mbc: "B0030"
+    attack: "T1543.003"
+    for: [pe, dll]
+    all:
+      - id: micro-behaviors/data/embedded/payload::pe-resource-full-extraction
+      - id: micro-behaviors/fs/temp/directory::temp-file-staging-primitives
+      - id: micro-behaviors/process/create/spawn::create-process-w
+      - id: micro-behaviors/os/service/control::reconfigure-and-start-service
+    any:
+      - id: micro-behaviors/fs/file/move::move-file-ex
+      - id: micro-behaviors/os/registry/access::registry-write-api-chain
+      - id: micro-behaviors/process/create/methods::shell-execute
+    downgrade:
+      any:
+        - id: metadata/vendor/microsoft::is-microsoft-named
+
   - id: pe-embedded-payload-sandbox-aware
     desc: Embedded PE payload with sandbox-evasion corpus
     crit: suspicious
@@ -230,3 +315,45 @@ composite_rules:
       any:
         - id: metadata/quality/versioning::pe-version-resource
         - id: metadata/vendor/microsoft::is-microsoft-named
+
+  # PE staged archive loader pattern:
+  # multiple embedded ZIP local headers + anti-analysis instruction checks +
+  # dynamic loader behavior suggest staged payload extraction.
+  - id: pe-zip-staged-loader
+    desc: PE staged ZIP payload loader chain
+    crit: suspicious
+    conf: 0.91
+    mbc: "B0030"
+    attack: "T1027.009"
+    for: [pe, dll]
+    all:
+      - id: micro-behaviors/data/embedded/payload::zip-magic-multiple-pe
+      - id: objectives/anti-analysis/vm/detect::instruction-based-evasion
+    any:
+      - id: micro-behaviors/dylib/lookup::get-proc-address
+      - id: micro-behaviors/dylib/load::load-library-w
+      - id: objectives/anti-static/polyglot/format::jar-polyglot-prefix
+
+  # Nim-style in-memory payload loader:
+  # base64 decode + RC4 decrypt + executable memory APIs.
+  # This captures reusable technique chains without family-specific IoCs.
+  - id: pe-nim-rc4-memory-loader
+    desc: PE Nim RC4 decode to memory-exec chain
+    crit: suspicious
+    conf: 0.94
+    mbc: "B0030"
+    attack: "T1055"
+    platforms: [windows]
+    for: [pe, dll]
+    all:
+      - id: micro-behaviors/data/encode/base64::nim-base64-decoder-symbol
+      - id: micro-behaviors/crypto/symmetric/stream::rc4-symbol-chain
+      - id: micro-behaviors/mem/protect/modify::virtual-alloc
+    any:
+      - id: micro-behaviors/mem/protect/modify::virtual-protect
+      - id: objectives/execution/native/runtime::shellcode
+      - id: micro-behaviors/dylib/lookup::get-proc-address
+    downgrade:
+      any:
+        - id: metadata/vendor/microsoft::is-microsoft-named
+        - id: metadata/quality/versioning::pe-version-resource

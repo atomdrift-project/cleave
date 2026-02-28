@@ -17,6 +17,11 @@ traits:
     if:
       type: string
       substr: 'veTo'
+    not:
+      - substr: 'SaveToFile'
+      - substr: 'saveToken'
+      - substr: 'moveTo'
+      - substr: 'ActiveTo'
 
   - id: save-to-file-fragment-etof
     desc: SaveToFile string fragment (eToF)

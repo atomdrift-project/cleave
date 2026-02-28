@@ -70,6 +70,39 @@ traits:
       type: string
       substr: "HTTP/1."
 
+  - id: proxy-connect-method
+    desc: HTTP CONNECT proxy tunnel method
+    crit: notable
+    conf: 0.8
+    mbc: "C0002"
+    attack: "T1071.001"
+    for: [pe, dll]
+    if:
+      type: string
+      regex: "CONNECT\\s+%s:%d\\s+HTTP/1\\.[01]"
+
+  - id: proxy-connection-keepalive
+    desc: Proxy-Connection keep-alive header
+    crit: notable
+    conf: 0.75
+    mbc: "C0002"
+    attack: "T1071.001"
+    for: [pe, dll]
+    if:
+      type: string
+      exact: "Proxy-Connection: Keep-Alive"
+
+  - id: proxy-auth-basic-header
+    desc: Proxy Basic authorization header
+    crit: notable
+    conf: 0.78
+    mbc: "C0002"
+    attack: "T1071.001"
+    for: [pe, dll]
+    if:
+      type: string
+      exact: "Proxy-Authorization: Basic %s"
+
   - id: http-response
     desc: HTTP response reference
     crit: baseline
@@ -154,3 +187,14 @@ composite_rules:
       - id: socket-dot
       - id: micro-behaviors/communications/http/request::fetch-string
       - id: xmlhttprequest-word
+
+  - id: http-proxy-connect-auth-tunnel
+    desc: Authenticated HTTP CONNECT proxy tunnel
+    crit: suspicious
+    conf: 0.88
+    attack: "T1071.001"
+    for: [pe, dll]
+    all:
+      - id: proxy-connect-method
+      - id: proxy-connection-keepalive
+      - id: proxy-auth-basic-header

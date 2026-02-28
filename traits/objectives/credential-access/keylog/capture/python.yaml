@@ -142,28 +142,12 @@ traits:
       regex: "\\.KeyDown\\s*="
 
   # === File write atomic indicators ===
-  - id: file-open-append
-    desc: File open for appending
-    crit: notable
-    conf: 0.5
-    if:
-      type: string
-      regex: "open\\([^)]{1,120}[\"']a[\"']"
-
-  - id: file-open-write
-    desc: File open for writing
-    crit: notable
-    conf: 0.5
-    if:
-      type: string
-      regex: "open\\([^)]{1,120}[\"']w[\"']"
-
   - id: dot-write-1
     desc: .write() call (file handle)
     crit: notable
     conf: 0.4
     if:
-      type: string
+      type: raw
       regex: "(file|f|handle)\\.write\\("
 
   - id: dot-write-2
@@ -171,7 +155,7 @@ traits:
     crit: notable
     conf: 0.4
     if:
-      type: string
+      type: raw
       regex: "(log|stream|out)\\.write\\("
 
   - id: keydown-keyword
@@ -179,7 +163,7 @@ traits:
     crit: notable
     conf: 0.5
     if:
-      type: string
+      type: raw
       substr: "KeyDown"
 
   - id: on-press-keyword
@@ -187,7 +171,7 @@ traits:
     crit: notable
     conf: 0.5
     if:
-      type: string
+      type: raw
       substr: "on_press"
 
   - id: on-release-keyword
@@ -195,7 +179,7 @@ traits:
     crit: notable
     conf: 0.5
     if:
-      type: string
+      type: raw
       substr: "on_release"
 
 composite_rules:
@@ -255,8 +239,8 @@ composite_rules:
     crit: notable
     conf: 0.7
     any:
-      - id: file-open-append
-      - id: file-open-write
+      - id: micro-behaviors/fs/write/file::python-open-append
+      - id: micro-behaviors/fs/write/file::python-open-write
 
   # Write or key handler composite
   - id: python-write-or-key-handler

@@ -12,9 +12,11 @@ composite_rules:
     crit: suspicious
     conf: 0.85
     attack: "T1091"
+    size_max: 500000
     all:
       - id: micro-behaviors/fs/enumerate/directory
       - id: micro-behaviors/fs/file/copy
+      - id: micro-behaviors/process/info/current::get-module-filename
     any:
       - id: micro-behaviors/os/info/directories::get-windows-directory
       - id: micro-behaviors/os/info/directories::get-system-directory

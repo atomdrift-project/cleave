@@ -7,7 +7,7 @@ traits:
     desc: Hardcoded external IPv4 address
     crit: notable
     conf: 0.85
-    size_max: 1500000
+    size_max: 2000000
     for: [elf, macho, pe]
     if:
       type: string
@@ -40,7 +40,7 @@ traits:
     desc: Encoded external IPv4 with TCP port
     crit: suspicious
     conf: 0.92
-    size_max: 1500000
+    size_max: 2000000
     for: [elf, macho, pe]
     if:
       type: encoded

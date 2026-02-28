@@ -158,7 +158,7 @@ traits:
   # --- GitHub/Git (Python specific) ---
   - id: py-harvest-github-token
     desc: Python harvests GITHUB_TOKEN env var
-    crit: suspicious
+    crit: component
     conf: 0.95
     for: [python]
     if:

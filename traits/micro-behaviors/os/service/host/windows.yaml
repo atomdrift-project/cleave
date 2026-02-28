@@ -13,3 +13,20 @@ traits:
     if:
       type: symbol
       exact: "DeregisterEventSource"
+
+  - id: service-dll-value-name
+    desc: ServiceDll registry value marker
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: string
+      exact: "servicedll"
+      case_insensitive: true
+
+  - id: system32-service-dll-target
+    desc: Service DLL path under System32
+    crit: notable
+    conf: 0.85
+    if:
+      type: string
+      regex: "%SystemRoot%\\\\System32\\\\"

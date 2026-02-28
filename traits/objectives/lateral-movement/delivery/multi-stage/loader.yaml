@@ -37,10 +37,14 @@ traits:
         substr: "JetBrains s.r.o."
       - type: string
         substr: "AutoIt"
+      - type: raw
+        substr: "AutoHotkey"
       - type: symbol
         regex: "^(Steam_|Breakpad_Steam)"
       - type: string
         substr: "Valve Corp."
+      - type: basename
+        substr: "DiagnosticsHub"
 
 composite_rules:
   - id: multi-stage-loader

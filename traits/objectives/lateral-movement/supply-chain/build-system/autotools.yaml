@@ -107,7 +107,7 @@ traits:
 
   - id: m4-exec-call
     desc: exec call in M4 macro context
-    crit: suspicious
+    crit: component
     conf: 0.75
     if:
       type: raw
@@ -257,16 +257,16 @@ traits:
     desc: Pre-compiled Unix object in source tree
     crit: suspicious
     conf: 0.8
-    for: [all]
+    for: [all, -javascript, -typescript]
     if:
       type: string
-      regex: '\.(o|lo|a)\s*$'
+      regex: '\w\.(o|lo|a)\s*$'
 
   - id: object-file-in-source-win
     desc: Pre-compiled Windows object in source tree
     crit: suspicious
     conf: 0.8
-    for: [all]
+    for: [all, -javascript, -typescript]
     if:
       type: string
       regex: '\.(obj|lib)\s*$'

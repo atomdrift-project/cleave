@@ -40,6 +40,24 @@ traits:
       type: string
       regex: "(?i)rc4.{0,20}crypt"
 
+  - id: rc4-init-symbol
+    desc: RC4 key scheduler symbol
+    crit: notable
+    conf: 0.9
+    for: [elf, macho, pe, so, dylib, dll]
+    if:
+      type: raw
+      regex: "(?i)(rc4init__|arc4_setkey|rc4_set_key)"
+
+  - id: rc4-crypt-symbol
+    desc: RC4 stream transform symbol
+    crit: notable
+    conf: 0.9
+    for: [elf, macho, pe, so, dylib, dll]
+    if:
+      type: raw
+      regex: "(?i)(rc4crypt__|arc4_crypt)"
+
 composite_rules:
   - id: rc4-bytecode
     desc: "RC4 encryption byte patterns"
@@ -53,3 +71,12 @@ composite_rules:
       any:
         - id: micro-behaviors/dylib/library::debugger-tool-marker
         - id: micro-behaviors/dylib/load/compiler-tool-marker
+
+  - id: rc4-symbol-chain
+    desc: RC4 init and crypt symbol chain
+    crit: suspicious
+    conf: 0.88
+    for: [elf, macho, pe, so, dylib, dll]
+    all:
+      - id: rc4-init-symbol
+      - id: rc4-crypt-symbol

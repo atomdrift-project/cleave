@@ -137,6 +137,7 @@ traits:
     crit: suspicious
     conf: 0.9
     for: [javascript, typescript]
+    size_max: 102400
     if:
       type: raw
       multiline: true

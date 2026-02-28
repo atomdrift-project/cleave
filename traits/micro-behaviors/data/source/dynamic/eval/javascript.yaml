@@ -1,7 +1,7 @@
 traits:
   - id: js-eval-assignment-keyword
     desc: Variable declaration with 'eval' (var/const/let)
-    crit: suspicious
+    crit: notable
     conf: 0.8
     for: [javascript]
     if:

@@ -35,3 +35,19 @@ traits:
       type: kv
       path: "Main-Class"
       exact: "kingDavid.FirstRun"
+
+  - id: stringer
+    desc: "Obfuscated by Stringer"
+    crit: notable
+    conf: 0.9
+    if:
+      type: string
+      substr: "Stringer"
+
+  - id: stringer-licelus
+    desc: "Obfuscated by Stringer (Licel US)"
+    crit: notable
+    conf: 0.9
+    if:
+      type: string
+      substr: "Licel US"

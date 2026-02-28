@@ -270,6 +270,7 @@ traits:
       regex: 'com\.apple\.[A-Z][A-Za-z]+'
     unless:
       - id: metadata/sign/anchor-apple
+      - id: metadata/signed/platform::apple
 
   - id: fake-homebrew-label
     desc: Fake homebrew identifier (com.homebrew)

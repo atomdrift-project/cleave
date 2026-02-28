@@ -2249,7 +2249,7 @@ pub(crate) fn find_for_only_duplicates(
 
                 // Extract a brief pattern description from the signature
                 let pattern_desc = if sig.len() > 100 {
-                    format!("{}...", &sig[..100])
+                    format!("{}...", &sig[..sig.floor_char_boundary(100)])
                 } else {
                     sig
                 };

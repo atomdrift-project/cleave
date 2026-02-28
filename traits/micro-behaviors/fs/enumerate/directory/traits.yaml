@@ -23,6 +23,14 @@ traits:
       type: symbol
       exact: "FindFirstFileW"
 
+  - id: find-first-file-ex
+    desc: Extended directory enumeration
+    crit: notable
+    conf: 0.90
+    if:
+      type: symbol
+      exact: "FindFirstFileExW"
+
   - id: find-close
     desc: Close directory enumeration handle
     crit: baseline

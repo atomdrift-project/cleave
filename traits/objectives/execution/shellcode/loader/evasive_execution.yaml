@@ -10,3 +10,17 @@ composite_rules:
       - id: micro-behaviors/dylib/lookup::virtualprotect-suffix-resolution
       - id: micro-behaviors/dylib/lookup::wide-string-uppercase-mask
       - id: micro-behaviors/dylib/lookup::api-hash-kernel32-192299a5
+
+  - id: ntdll-remap-shellcode-runner
+    desc: NTDLL remap plus shellcode execution workflow
+    crit: hostile
+    conf: 0.94
+    attack: T1055
+    mbc: B0004
+    all:
+      - id: micro-behaviors/fs/memory/mmap::ntdll-image-remap-cluster
+      - id: micro-behaviors/io/console/logging::shellcode-execution-status
+      - id: micro-behaviors/mem/protect/modify::virtual-alloc
+    any:
+      - id: objectives/anti-analysis/timing/evasion::timing-anti-debug
+      - id: objectives/anti-analysis/debugger/detect::debugger-api

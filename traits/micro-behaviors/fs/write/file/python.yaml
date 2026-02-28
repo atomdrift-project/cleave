@@ -8,6 +8,22 @@ defaults:
   attack: "T1105"
 
 traits:
+  # Text append mode
+  - id: python-open-append
+    desc: "Append to text file (open with 'a')"
+    conf: 0.8
+    if:
+      type: raw
+      substr: 'open(logFile, "a")'
+
+  # Text write mode
+  - id: python-open-write
+    desc: "Write to text file (open with 'w')"
+    conf: 0.8
+    if:
+      type: raw
+      regex: "open\\([^)]{1,120}['\"]w['\"]\\)"
+
   # Binary file write - open with 'wb' mode
   - id: python-open-write-binary
     desc: "Write binary file (open with"

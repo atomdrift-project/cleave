@@ -82,17 +82,21 @@ traits:
 
   # RET instructions in data sections (embedded shellcode/ROP chain)
   # C3 is a common byte value; require high density to indicate actual RET gadgets
+  # Use exact section name .data to avoid fuzzy match issues with non-standard names
+  # Downgraded to notable: single-byte C3 pattern alone is too imprecise for suspicious;
+  # actual ROP chains are caught by composite rules requiring multiple indicators
   - id: ret-in-data-section
     desc: Return instructions in data section
-    crit: suspicious
+    crit: notable
     conf: 0.95
     for: [pe, elf]
     if:
       type: hex
-      section: data
+      section: .data
       pattern: "C3"
       count_min: 20
       per_kb_min: 5.0
+      size_min: 1024
 
   # === Specific ROP Gadget Sequences ===
 

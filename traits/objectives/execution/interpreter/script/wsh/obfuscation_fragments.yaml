@@ -12,6 +12,8 @@ traits:
     if:
       type: raw
       substr: 'WScr'
+    unless:
+      - id: micro-behaviors/os/com/object::wscript-shell-literal
 
   - id: wscript-shell-fragment-2
     desc: WScript.Shell string fragment (Shell/Shel)
@@ -30,6 +32,8 @@ traits:
     if:
       type: raw
       regex: 'B\.Str|B\.St|DB\.St|ODB\.St'
+    unless:
+      - id: micro-behaviors/fs/write/file::adodb-stream
 
   - id: filesystemobject-fragment-1a
     desc: FileSystemObject string fragment (SystemObj)
@@ -55,7 +59,7 @@ traits:
       type: raw
       substr: 'xpandE'
     unless:
-      - id: micro-behaviors/data/text/keywords::environment-keyword
+      - id: micro-behaviors/os/com/object::wscript-shell-literal
 
   - id: expand-env-fragment-2
     desc: ExpandEnvironmentStrings fragment (nviron)
@@ -66,10 +70,10 @@ traits:
       - id: micro-behaviors/data/text/keywords::environment-keyword
 
   - id: response-body-fragment-1
-    desc: ResponseBody fragment (ResponseB/Response)
+    desc: ResponseBody fragment (ResponseB)
     if:
       type: raw
-      substr: 'Response'
+      substr: 'ResponseB'
 
   - id: response-body-fragment-2a
     desc: ResponseBody fragment (nseBody)

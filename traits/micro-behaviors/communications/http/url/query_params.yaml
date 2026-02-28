@@ -19,6 +19,14 @@ traits:
   if:
     type: encoded
     regex: '[?&]\{[^:]+:[''"]a[''"]\}\.[a-zA-Z0-9_$]+\+\{[^:]+:[''"]d[''"]\}\.[a-zA-Z0-9_$]+'
+- id: mac-query-param-format
+  desc: URL query includes formatted MAC address
+  crit: suspicious
+  conf: 0.9
+  for: [pe, dll]
+  if:
+    type: raw
+    regex: '[?&]mac=%02X-%02X-%02X-%02X-%02X-%02X'
 composite_rules:
 - id: dropper-common-params-any
   desc: Common dropper URL parameters (add, uuid)
@@ -28,3 +36,4 @@ composite_rules:
   - id: dropper-common-params
   - id: dropper-uuid-param
   - id: dropper-obfuscated-add-param
+  - id: mac-query-param-format

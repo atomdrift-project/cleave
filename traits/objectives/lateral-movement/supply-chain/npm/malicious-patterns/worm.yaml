@@ -48,8 +48,9 @@ traits:
     conf: 0.9
     attack: "T1195.002"
     for: [javascript, typescript]
+    size_max: 500000
     if:
-      type: raw
+      type: string
       regex: 'npm\s+publish'
 
   - id: delete-private-field
@@ -83,3 +84,7 @@ composite_rules:
     all:
       - id: npm-publish-exec
       - id: micro-behaviors/process/create/shell/lang::js-exec
+    any:
+      - id: delete-private-field
+      - id: npm-owner-add-exec
+      - id: remove-postinstall

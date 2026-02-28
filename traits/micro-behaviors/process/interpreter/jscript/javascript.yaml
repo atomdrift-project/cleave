@@ -18,12 +18,16 @@ traits:
     if:
       type: raw
       substr: 'DODB'
+    unless:
+      - id: micro-behaviors/fs/write/file::adodb-stream
 
   - id: wscript-shell-fragment-dotshel
     desc: WScript.Shell string fragment (.Shel)
     if:
       type: raw
       substr: '.Shel'
+    unless:
+      - id: micro-behaviors/os/com/object::wscript-shell-literal
 
   - id: createobject-fragment-ateobject
     desc: CreateObject string fragment (ateObject)

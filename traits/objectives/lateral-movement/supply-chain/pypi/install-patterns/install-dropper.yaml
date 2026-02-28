@@ -42,12 +42,15 @@ traits:
   crit: notable
   conf: 0.9
   if:
-    id: micro-behaviors/fs/path/extension::exe
+    type: string
+    regex: '[a-zA-Z0-9_-]+\.exe\b'
   not:
   - python.exe
   - pip.exe
   - mimikatz.exe
   - calc.exe
+  - convert.exe
+  - magick.exe
   - regex: \bwhich\b.{0,100}\.exe
   - regex: \bfind\b.{0,100}\.exe
 

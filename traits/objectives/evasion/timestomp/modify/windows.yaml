@@ -16,9 +16,11 @@ composite_rules:
     desc: File timestamp modification with file operations
     crit: suspicious
     conf: 0.85
+    size_max: 500000
     all:
       - id: micro-behaviors/fs/sync/fsync::set-file-time
       - id: micro-behaviors/fs/enumerate/directory::find-first-file
+      - id: micro-behaviors/process/info/current::get-module-filename
     any:
       - id: micro-behaviors/io/console/output::write-file
       - id: micro-behaviors/fs/file/operations::file-create-win

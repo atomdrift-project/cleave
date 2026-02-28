@@ -87,6 +87,15 @@ traits:
         - type: string
           substr: "APPID"
 
+  - id: dense-global-numeric-mutexes
+    desc: Many numbered global mutex names
+    crit: suspicious
+    conf: 0.86
+    if:
+      type: string
+      regex: '(?i)\\bGlobal\\\\[0-9]{2,5}\\b'
+      count_min: 8
+
 composite_rules:
   - id: mutex-api
     desc: Mutex creation/access API
@@ -95,6 +104,14 @@ composite_rules:
     any:
       - id: create-mutex
       - id: create-mutex-ex
+      - id: open-mutex
+
+  - id: dynamic-mutex-resolution
+    desc: Dynamic resolution of mutex objects
+    crit: notable
+    conf: 0.8
+    any:
+      - id: create-mutex
       - id: open-mutex
 
   - id: global-mutex-single-instance

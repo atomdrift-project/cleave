@@ -2,24 +2,7 @@
 # Detects malware searching files for encryption/infection
 # Generic indicator for ransomware, worms, data exfiltration
 
-traits:
-  - id: file-find-api
-    desc: File enumeration API (FindFirstFileExW)
-    crit: notable
-    conf: 0.75
-    platforms: [windows]
-    for: [pe]
-    if:
-      type: symbol
-      exact: "FindFirstFileExW"
-    attack: "T1083"
-    mbc: "C0000"
-    downgrade:
-      any:
-        - id: metadata/format::many-imports
-        - id: metadata/format::large-executable
-
-  # Removed duplicates - use micro-behaviors/fs/enumerate/directory::find-next-file and ::find-close
+  # file-find-api removed - use micro-behaviors/fs/enumerate/directory::find-first-file-ex instead
 
 composite_rules:
   - id: file-enumeration-targeting
@@ -31,13 +14,15 @@ composite_rules:
     attack: "T1083"
     mbc: "C0000"
     all:
-      - id: file-find-api
+      - id: micro-behaviors/fs/enumerate/directory::find-first-file
       - id: micro-behaviors/fs/enumerate/directory::find-next-file
     downgrade:
       any:
         - id: metadata/quality::versioned
         - id: metadata/format::large-executable
         - id: metadata/format::many-imports
+        - id: metadata/vendor/microsoft::is-windows-named
+        - id: metadata/vendor/microsoft::is-microsoft-named
 
   - id: file-enumeration-with-access
     desc: File enumeration + access combination

@@ -164,6 +164,17 @@ traits:
       type: hex
       pattern: "30 ?? 4? 83 ?? ?? 7?"
 
+  - id: xor-modulo-key-loop-x64
+    desc: XOR loop with modulo key index
+    crit: suspicious
+    conf: 0.75
+    for: [pe, dll]
+    platforms: [windows]
+    if:
+      type: hex
+      # x64 loop: div by key length, then XOR byte with key[index % key_len]
+      pattern: "31 C9 89 CA 48 F7 74 24 ?? 48 8B 04 24 44 0F B6 04 10 48 8B 44 24 ?? 48 8B 4C 24 ?? 0F B6 14 08 44 31 C2 88 14 08"
+
 composite_rules:
   - id: page-rwx-literal
     desc: PAGE_EXECUTE_READWRITE constant literal
@@ -221,7 +232,7 @@ composite_rules:
     crit: notable
     conf: 0.7
     any:
-      - id: micro-behaviors/mem/protect/modify::setwindowshook
+      - id: micro-behaviors/hardware/input/keyboard::set-windows-hook
       - id: inline-hook-ref
       - id: detour-ref
     downgrade:
@@ -250,6 +261,7 @@ composite_rules:
       - id: metamorphic-ref
       - id: self-modifying-ref
       - id: xor-loop-pattern
+      - id: xor-modulo-key-loop-x64
 
   - id: active
     desc: Active self-modification behavior
@@ -268,5 +280,5 @@ composite_rules:
     crit: notable
     conf: 0.7
     any:
-      - id: micro-behaviors/mem/protect/modify::setwindowshook
+      - id: micro-behaviors/hardware/input/keyboard::set-windows-hook
       - id: inline-hook-ref

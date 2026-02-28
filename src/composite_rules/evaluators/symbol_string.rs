@@ -1083,7 +1083,7 @@ pub(crate) fn eval_encoded<'a>(
             match_count += 1;
             if evidence.len() < MAX_EVIDENCE_PER_TRAIT {
                 let value_preview = if string_info.value.len() > 100 {
-                    format!("{}...", &string_info.value[..100])
+                    format!("{}...", &string_info.value[..string_info.value.floor_char_boundary(100)])
                 } else {
                     string_info.value.clone()
                 };

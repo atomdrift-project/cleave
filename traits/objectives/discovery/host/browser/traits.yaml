@@ -251,7 +251,7 @@ traits:
   - all
   if:
     type: string
-    regex: 'Cookies(\.sqlite|\.binarycookies|\.db)?$|browser.{0,30}cookies'
+    regex: '[/\\]Cookies(\.sqlite|\.binarycookies|\.db)?$|browser.{0,30}cookies'
   unless:
     - id: objectives/credential-access/browser/safari::cookies-path
 composite_rules:
@@ -479,6 +479,8 @@ composite_rules:
   crit: suspicious
   conf: 0.9
   attack: T1555.003
+  all:
+  - id: browser-data-files
   needs: 3
   any:
   - id: chrome-name

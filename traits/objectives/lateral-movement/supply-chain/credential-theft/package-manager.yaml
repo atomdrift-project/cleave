@@ -424,7 +424,7 @@ traits:
     if:
       type: raw
       multiline: true
-      regex: 'credentials[\s\S]{0,300}fetch'
+      regex: '[\./]credentials[\s\S]{0,300}fetch'
 
   - id: js-creds-to-axios
     desc: JS sends credentials via axios
@@ -434,7 +434,7 @@ traits:
     if:
       type: raw
       multiline: true
-      regex: 'credentials[\s\S]{0,300}axios'
+      regex: '[\./]credentials[\s\S]{0,300}axios'
 
   - id: js-creds-to-http
     desc: JS sends credentials via http.request
@@ -444,7 +444,7 @@ traits:
     if:
       type: raw
       multiline: true
-      regex: 'credentials[\s\S]{0,300}http\.request'
+      regex: '[\./]credentials[\s\S]{0,300}http\.request'
 
   # --- Base64 encoding of credentials (atomic traits) ---
   - id: creds-base64-encode
@@ -455,7 +455,7 @@ traits:
     if:
       type: raw
       multiline: true
-      regex: 'credentials[\s\S]{0,200}(base64|btoa|b64encode)'
+      regex: '[\./]credentials[\s\S]{0,200}(base64|btoa|b64encode)'
 
   - id: npmrc-base64-encode
     desc: .npmrc base64 encoded

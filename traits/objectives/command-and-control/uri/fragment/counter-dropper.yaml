@@ -44,13 +44,6 @@ traits:
       regex: 'yesl'
       min_len: 4
 
-  - id: uri-fragment-counter-domain-illa
-    desc: URL domain fragment 'illa' (part of yeslilla.net)
-    if:
-      type: string
-      regex: 'illa'
-      min_len: 4
-
   - id: uri-fragment-counter-domain-dronunte
     desc: URL domain fragment 'dronunte'
     if:

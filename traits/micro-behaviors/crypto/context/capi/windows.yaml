@@ -38,3 +38,62 @@ traits:
     if:
       type: symbol
       exact: "CryptHashData"
+
+  - id: crypt-derive-key
+    desc: Derive symmetric key from hash
+    crit: notable
+    conf: 0.9
+    if:
+      type: symbol
+      exact: "CryptDeriveKey"
+
+  - id: crypt-import-key
+    desc: Import encrypted key material
+    crit: notable
+    conf: 0.88
+    if:
+      type: symbol
+      exact: "CryptImportKey"
+
+  - id: crypt-encrypt
+    desc: Encrypt buffer with CryptoAPI
+    crit: notable
+    conf: 0.9
+    if:
+      type: symbol
+      exact: "CryptEncrypt"
+
+  - id: crypt-decrypt
+    desc: Decrypt buffer with CryptoAPI
+    crit: notable
+    conf: 0.9
+    if:
+      type: symbol
+      exact: "CryptDecrypt"
+
+composite_rules:
+  - id: capi-key-material-setup
+    desc: CryptoAPI key setup from derived or imported material
+    crit: notable
+    conf: 0.88
+    all:
+      - id: crypt-acquire-context
+    any:
+      - id: crypt-derive-key
+      - id: crypt-import-key
+
+  - id: capi-buffer-crypto-operations
+    desc: CryptoAPI buffer encrypt decrypt operations
+    crit: notable
+    conf: 0.9
+    any:
+      - id: crypt-encrypt
+      - id: crypt-decrypt
+
+  - id: capi-keyed-buffer-crypto-chain
+    desc: CryptoAPI key setup with buffer encryption operations
+    crit: suspicious
+    conf: 0.9
+    all:
+      - id: capi-key-material-setup
+      - id: capi-buffer-crypto-operations

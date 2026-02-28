@@ -12,4 +12,21 @@ traits:
       type: symbol
       regex: "GetTempPath[AW]?$"
 
-# composite rule 'directory-windows' removed - was redundant single-trait wrapper
+  - id: get-temp-file-name
+    desc: Build temporary file name via GetTempFileName
+    crit: notable
+    conf: 0.75
+    for: [pe, dll, c]
+    if:
+      type: symbol
+      regex: "GetTempFileName[AW]?$"
+
+composite_rules:
+  - id: temp-file-staging-primitives
+    desc: Temp directory and temp file name APIs present
+    crit: notable
+    conf: 0.8
+    for: [pe, dll, c]
+    all:
+      - id: get-temp-path
+      - id: get-temp-file-name

@@ -6,7 +6,7 @@ traits:
     for: [javascript]
     if:
       type: raw
-      regex: '\[\s*[^\]]{1,120}\s*\]\s*\[\s*\d+\s*\]'
+      regex: '\[\s*[^\]]{0,60},[^\]]{0,60}\]\s*\[\s*\d+\s*\]'
       count_min: 2
 
   - id: js-array-global-object-access

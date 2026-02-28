@@ -33,6 +33,22 @@ traits:
       type: symbol
       regex: "GetDriveType[AW]?$"
 
+  - id: get-current-directory
+    desc: Read current working directory
+    crit: notable
+    conf: 0.85
+    if:
+      type: symbol
+      regex: "^GetCurrentDirectory[AW]$"
+
+  - id: set-current-directory
+    desc: Switch current working directory
+    crit: notable
+    conf: 0.9
+    if:
+      type: symbol
+      regex: "^SetCurrentDirectory[AW]$"
+
   - id: drive-loop-logic
     desc: Drive count-based loop
     crit: component
@@ -68,3 +84,12 @@ composite_rules:
     unless:
       - type: string
         substr: "OpenMP Runtime"
+
+  - id: drive-context-switching
+    desc: Drive context switching via cwd APIs
+    crit: suspicious
+    conf: 0.86
+    attack: "T1083"
+    all:
+      - id: get-current-directory
+      - id: set-current-directory

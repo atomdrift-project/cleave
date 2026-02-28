@@ -68,6 +68,15 @@ traits:
       type: string
       substr: b64decode
 
+  - id: nim-base64-decoder-symbol
+    desc: Nim stdlib base64 decode symbol
+    for: [pe, dll, elf, macho]
+    crit: notable
+    conf: 0.9
+    if:
+      type: raw
+      regex: "(decode|decodeSize)__pureZbase64_u\\d+"
+
   - id: codecs-decode-base64
     desc: codecs.decode with base64 encoding (Python)
     for: [python]
@@ -278,6 +287,7 @@ composite_rules:
       - id: decodestring-call
       - id: codecs-decode-base64
       - id: importlib-base64
+      - id: nim-base64-decoder-symbol
 
   - id: msxml-bin-base64-decode
     desc: MSXML decodes bin.base64 payload (WSH)

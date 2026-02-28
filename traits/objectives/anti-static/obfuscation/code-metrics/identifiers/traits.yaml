@@ -102,6 +102,7 @@ traits:
     desc: "Sequential identifiers (a, b, c,"
     crit: notable
     conf: 0.8
+    size_min: 1024
     for: [javascript, typescript, php, ruby, perl, go, java, lua, csharp, powershell]
     if:
       type: metrics

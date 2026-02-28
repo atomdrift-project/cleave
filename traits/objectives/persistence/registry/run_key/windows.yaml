@@ -11,9 +11,16 @@ composite_rules:
     crit: suspicious
     conf: 0.85
     attack: "T1547.001"
+    size_max: 1000000
     all:
-      - id: micro-behaviors/os/registry/access::reg-set-value-ex-w
+      - id: micro-behaviors/os/registry/access::registry-set-value-api
+      - id: micro-behaviors/os/registry/access::registry-create-key-api
       - id: micro-behaviors/process/info/current::get-module-filename
+      - id: micro-behaviors/os/registry/persistence
     any:
       - id: micro-behaviors/fs/file/operations::file-create-win
       - id: micro-behaviors/fs/file/move::move-file
+      - id: micro-behaviors/fs/file/copy::copyfile-a
+    downgrade:
+      any:
+        - id: metadata/quality/versioning::pe-version-resource

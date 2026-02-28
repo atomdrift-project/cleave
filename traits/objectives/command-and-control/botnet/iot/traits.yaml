@@ -36,15 +36,26 @@ traits:
 
 composite_rules:
   - id: curl-http-download
-    desc: "Curl HTTP payload download"
-    crit: suspicious
-    conf: 0.9
+    desc: "Curl command with HTTP URL"
+    crit: notable
+    conf: 0.5
     attack: "T1105"
     for: [elf]
     platforms: [linux]
     all:
       - id: micro-behaviors/communications/download/curl::curl-cmd
       - id: http-prefix
+
+  - id: curl-http-download-exec
+    desc: "Curl HTTP download piped/executed by shell"
+    crit: suspicious
+    conf: 0.9
+    attack: "T1059.004"
+    for: [elf]
+    platforms: [linux]
+    all:
+      - id: curl-http-download
+      - id: pipe-sh-or-bash
 
   # Helper: curl or wget download command
   - id: download-cmd

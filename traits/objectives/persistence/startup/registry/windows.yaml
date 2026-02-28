@@ -78,6 +78,33 @@ traits:
       type: string
       substr: "CurrentVersion\\Run"
 
+  - id: windows-registry-run-access
+    desc: Accesses Windows registry Run key
+    crit: notable
+    conf: 0.75
+    platforms: [windows]
+    if:
+      type: raw
+      regex: "(?i)currentversion\\\\run"
+
+  - id: currentversion-windows-key
+    desc: CurrentVersion Windows key path
+    crit: notable
+    conf: 0.72
+    platforms: [windows]
+    if:
+      type: string
+      substr: "CurrentVersion\\Windows"
+
+  - id: run-value-name
+    desc: Run value name string
+    crit: component
+    conf: 0.6
+    platforms: [windows]
+    if:
+      type: string
+      exact: "Run"
+
   # === RunOnce atomic indicators ===
   - id: runonce-word
     desc: RunOnce keyword
@@ -322,15 +349,8 @@ traits:
     crit: suspicious
     platforms: [windows]
     if:
+      type: trait
       id: micro-behaviors/os/registry/persistence::run-key-write-ps
-
-  - id: windows-registry-run-access
-    desc: "Accesses Windows registry Run key"
-    conf: 0.8
-    crit: notable
-    platforms: [windows]
-    if:
-      id: currentversion-run
 
 composite_rules:
   # Startup folder composite
@@ -356,9 +376,21 @@ composite_rules:
       - id: hkcu-run
       - id: hklm-run
       - id: currentversion-run
+      - id: windows-registry-run-access
     downgrade:
       any:
         - id: metadata/quality/versioned
+
+  - id: windows-registry-windows-run-value
+    desc: Writes Run value in Windows key
+    conf: 0.9
+    crit: suspicious
+    attack: "T1547.001"
+    platforms: [windows]
+    all:
+      - id: currentversion-windows-key
+      - id: run-value-name
+      - id: micro-behaviors/os/registry/access::reg-set-value-ex-w
 
   # RunOnce composite
   - id: windows-registry-runonce
@@ -504,6 +536,22 @@ composite_rules:
     any:
       - id: lnk-endswith-filter
       - id: endswith-filter-content
+
+  # Native PE startup-folder resolution + shortcut filtering + registry writes
+  - id: windows-native-shortcut-startup-tamper
+    desc: Native startup shortcut and registry tamper chain
+    crit: suspicious
+    conf: 0.92
+    attack: "T1547.001"
+    platforms: [windows]
+    for: [pe, dll]
+    all:
+      - id: micro-behaviors/os/persistence/startup::startup-folder-shell-api-chain
+      - id: lnk-endswith-filter
+      - id: micro-behaviors/os/registry/access::registry-write-api-chain
+    any:
+      - id: micro-behaviors/os/registry/access::internet-settings-autodial-tamper
+      - id: micro-behaviors/process/create/spawn::create-process-a
 
   # Full browser shortcut argument injection chain
   - id: windows-shortcut-walk-argument-inject

@@ -112,6 +112,21 @@ traits:
       pattern: "4D 5A 90 00"
       offset_range: [4096, null]
 
+  - id: pe-magic-embedded-multiple
+    desc: Multiple embedded PE/MZ headers
+    crit: suspicious
+    conf: 0.9
+    mbc: "F0001.006"
+    attack: "T1027.009"
+    for: [pe, dll]
+    size_min: 200000
+    # Multiple MZ headers far from file start indicates staged/polyglot payload containers.
+    if:
+      type: hex
+      pattern: "4D 5A 90 00"
+      offset_range: [4096, null]
+      count_min: 4
+
   - id: pe-magic-in-rsrc
     desc: PE/MZ binary embedded in resource section
     crit: component
@@ -157,6 +172,18 @@ traits:
     if:
       type: hex
       pattern: "50 4B 03 04"
+
+  - id: zip-magic-multiple-pe
+    desc: Multiple embedded ZIP local headers in PE
+    crit: suspicious
+    conf: 0.85
+    attack: "T1027.009"
+    for: [pe, dll]
+    size_min: 200000
+    if:
+      type: hex
+      pattern: "50 4B 03 04"
+      count_min: 3
 
   - id: rar-magic
     desc: Embedded RAR archive
@@ -216,6 +243,26 @@ traits:
       type: symbol
       exact: "FindResourceA"
 
+  - id: find-resource-ex-w
+    desc: Locate PE resource entry with language
+    crit: notable
+    conf: 0.85
+    attack: "T1027.009"
+    for: [pe, dll]
+    if:
+      type: symbol
+      exact: "FindResourceExW"
+
+  - id: find-resource-ex-a
+    desc: Locate PE resource entry with language (ANSI)
+    crit: notable
+    conf: 0.85
+    attack: "T1027.009"
+    for: [pe, dll]
+    if:
+      type: symbol
+      exact: "FindResourceExA"
+
   - id: load-resource
     desc: Load PE resource payload
     crit: notable
@@ -238,7 +285,7 @@ traits:
 
 composite_rules:
   - id: find-resource-any
-    desc: Locate PE resource entry (ANSI/Unicode)
+    desc: Locate PE resource entry (all variants)
     crit: notable
     conf: 0.8
     attack: "T1027.009"
@@ -246,6 +293,8 @@ composite_rules:
     any:
       - id: find-resource-w
       - id: find-resource-a
+      - id: find-resource-ex-w
+      - id: find-resource-ex-a
 
   - id: load-library-ex-any
     desc: Extended DLL loading (ANSI/Unicode)
@@ -282,6 +331,17 @@ composite_rules:
       - id: find-resource-any
       - id: load-resource
       - id: sizeof-resource
+      - id: lock-resource
+
+  - id: pe-resource-load-lock-chain
+    desc: PE resource load and data pointer chain
+    crit: notable
+    conf: 0.9
+    attack: "T1027.009"
+    for: [pe, dll]
+    all:
+      - id: find-resource-any
+      - id: load-resource
       - id: lock-resource
 
   # LZMA detection composite

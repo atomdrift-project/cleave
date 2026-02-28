@@ -64,6 +64,14 @@ traits:
       type: symbol
       exact: "SetForegroundWindow"
 
+  - id: get-foreground-window
+    desc: Query current foreground window
+    crit: notable
+    conf: 0.8
+    if:
+      type: symbol
+      exact: "GetForegroundWindow"
+
   # === Window Information ===
   - id: is-window
     desc: Check if window exists
@@ -104,6 +112,14 @@ traits:
     if:
       type: symbol
       exact: "SetWindowTextW"
+
+  - id: get-window-text
+    desc: Read active window title text
+    crit: notable
+    conf: 0.8
+    if:
+      type: symbol
+      exact: "GetWindowTextW"
 
   - id: get-window-long
     desc: Get window data

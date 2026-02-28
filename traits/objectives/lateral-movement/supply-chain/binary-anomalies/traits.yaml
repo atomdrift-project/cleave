@@ -29,7 +29,7 @@ traits:
     conf: 0.95
     if:
       type: basename
-      exact: pyproject.toml
+      regex: '^[p]yproject\.toml$'
 
   # === Binary file detection in archive context ===
   - id: archive-has-exe
@@ -38,7 +38,7 @@ traits:
     conf: 0.95
     if:
       type: basename
-      regex: '\.exe$'
+      regex: '\.[e]xe$'
       case_insensitive: true
 
   - id: archive-has-dll
@@ -47,7 +47,7 @@ traits:
     conf: 0.95
     if:
       type: basename
-      regex: '\.dll$'
+      regex: '\.[d]ll$'
       case_insensitive: true
 
   - id: archive-has-so
@@ -56,7 +56,7 @@ traits:
     conf: 0.95
     if:
       type: basename
-      regex: '\.so(\.[0-9]+)*$'
+      regex: '\.so(\.[0-9]+){0,3}$'
 
   - id: archive-has-dylib
     desc: Archive contains macOS dynamic library (.dylib)

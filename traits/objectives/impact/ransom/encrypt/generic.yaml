@@ -288,6 +288,18 @@ composite_rules:
       - id: encrypt-decryptor-msg-2
       - id: encrypt-decryptor-file
 
+  - id: web-api-cryptor-workflow
+    desc: Web API driven file cryptor workflow
+    crit: suspicious
+    conf: 0.9
+    for: [pe, dll, elf, macho]
+    all:
+      - id: micro-behaviors/communications/http/server::crypt-api-with-upload-staging
+      - id: micro-behaviors/fs/file/operations::set-file-information-by-handle
+    any:
+      - id: micro-behaviors/fs/enumerate/directory::find-first-file-ex
+      - id: micro-behaviors/fs/enumerate/directory::find-next-file
+
   # Go file encryption composites
   - id: go-crypto-any
     desc: Go crypto library usage

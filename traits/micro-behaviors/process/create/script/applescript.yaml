@@ -103,6 +103,14 @@ traits:
       type: string
       regex: '"Terminal"'
 
+  - id: open-g-bg
+    desc: "Open background lure"
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: string
+      regex: 'open\s+-(g|bg)'
+
 composite_rules:
   # ============================================
   # Shell Execution via osascript

@@ -14,7 +14,7 @@ traits:
     attack: "T1055"
     mbc: "C0032"
     if:
-      type: symbol
+      type: string
       exact: "WriteProcessMemory"
     downgrade:
       any:
@@ -43,13 +43,14 @@ traits:
     attack: "T1055.001"
     mbc: "B0013"
     if:
-      type: symbol
+      type: string
       exact: "CreateRemoteThread"
     downgrade:
       any:
         - type: string
           substr: "ApiSet Stub DLL"
         - id: metadata/vendor/valve/valve-corp-binary
+
 
   - id: queue-user-apc
     desc: Queue APC to thread

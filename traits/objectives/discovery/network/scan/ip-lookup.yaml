@@ -9,35 +9,14 @@ defaults:
   for: [all]
 
 traits:
-  - id: ifconfig-me
-    desc: ifconfig.me IP lookup
-    if:
-      type: string
-      substr: "ifconfig.me"
-
-  - id: icanhazip
-    desc: icanhazip.com IP lookup
-    if:
-      type: string
-      substr: "icanhazip.com"
+  # NOTE: Core IP lookup services now defined in micro-behaviors/communications/http/ip-discovery/
+  # These traits reference them for backward compatibility
 
   - id: ident-me
     desc: ident.me IP lookup
     if:
       type: string
       substr: "ident.me"
-
-  - id: ipecho-net
-    desc: ipecho.net IP lookup
-    if:
-      type: string
-      substr: "ipecho.net"
-
-  - id: checkip-amazonaws
-    desc: checkip.amazonaws.com IP lookup
-    if:
-      type: string
-      substr: "checkip.amazonaws.com"
 
   - id: whatismyip-akamai
     desc: whatismyip.akamai.com IP lookup
@@ -57,18 +36,6 @@ traits:
       type: string
       substr: "curlmyip.org"
 
-  - id: wtfismyip-com
-    desc: wtfismyip.com IP lookup
-    if:
-      type: string
-      substr: "wtfismyip.com"
-
-  - id: ipinfo-io
-    desc: ipinfo.io geolocation lookup
-    if:
-      type: string
-      substr: "ipinfo.io"
-
   - id: db-ip-com
     desc: db-ip.com geolocation lookup
     if:
@@ -80,12 +47,6 @@ traits:
     if:
       type: string
       substr: "geoplugin.com"
-
-  - id: ip-api-com
-    desc: ip-api.com geolocation lookup
-    if:
-      type: string
-      substr: "ip-api.com"
 
   # === IP loggers / tracking (legacy / common) ===
   - id: iplogger-keyword
@@ -112,25 +73,21 @@ composite_rules:
   - id: ip-lookup-service
     desc: Any public IP lookup service
     any:
-      - id: ifconfig-me
-      - id: icanhazip
+      - id: micro-behaviors/communications/http/ip-discovery
       - id: ident-me
-      - id: ipecho-net
-      - id: checkip-amazonaws
       - id: whatismyip-akamai
       - id: ipify-org
       - id: curlmyip-org
-      - id: wtfismyip-com
 
   - id: geo-lookup-service
     desc: Any public geolocation lookup service
     any:
       - id: objectives/discovery/host/geo::ipapi-co
-      - id: ipinfo-io
+      - id: micro-behaviors/communications/http/ip-discovery::ipinfo-io
       - id: objectives/discovery/host/geo::freegeoip-app
       - id: db-ip-com
       - id: geoplugin-com
-      - id: ip-api-com
+      - id: micro-behaviors/communications/http/ip-discovery::ip-api-com
 
   - id: iplogger-encoded
     desc: iplogger.org (encoded)

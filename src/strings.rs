@@ -156,28 +156,40 @@ impl StringExtractor {
         }
     }
 
-    /// Extract all strings from binary data
-    /// Extract strings using language-aware analysis with optional pre-extracted r2 strings.
-    /// When r2_strings are provided (from cache), use them directly to avoid redundant extraction.
+    /// Extract strings using stng for comprehensive extraction.
+    /// If r2_strings are provided, they are passed to stng for integration.
     pub(crate) fn extract_smart(
         &self,
         data: &[u8],
         r2_strings: Option<Vec<R2String>>,
     ) -> Vec<StringInfo> {
-        // Fast path: if we have r2_strings from cache, use them directly
-        // This avoids a redundant stng extraction (~300ms savings)
-        if let Some(r2s) = r2_strings {
-            return r2s
-                .into_iter()
-                .filter(|s| s.string.len() >= self.min_length)
-                .map(|s| self.convert_r2_string(s))
-                .collect();
-        }
-
-        // Slow path: no r2 strings, do full stng extraction
-        let opts = ExtractOptions::new(self.min_length)
+        let mut opts = ExtractOptions::new(self.min_length)
             .with_garbage_filter(true)
             .with_xor(None);
+
+        // Convert and pass r2 strings to stng if available
+        if let Some(r2s) = r2_strings {
+            let stng_r2_strings: Vec<ExtractedString> = r2s
+                .into_iter()
+                .map(|r| ExtractedString {
+                    value: r.string,
+                    data_offset: r.paddr,
+                    section: None,
+                    method: StringMethod::R2String,
+                    kind: stng::StringKind::Const,
+                    raw: None,
+                    source: None,
+                    fragments: None,
+                    section_size: None,
+                    section_executable: None,
+                    section_writable: None,
+                    architecture: None,
+                    function_meta: None,
+                })
+                .collect();
+            opts = opts.with_r2_strings(stng_r2_strings);
+        }
+
         let lang_strings = stng::extract_strings_with_options(data, &opts);
         let mut strings = Vec::with_capacity(lang_strings.len());
         for es in lang_strings {
@@ -726,6 +738,37 @@ mod tests {
         assert!(
             strings.iter().any(|s| s.value.contains("library/std")),
             "Should find stdlib paths in Rust binary"
+        );
+    }
+
+    #[test]
+    fn test_extract_smart_r2_strings_add_to_output() {
+        // Verify that r2_strings add to the output (not replace it)
+        let data = b"consistent test\0http://test.com\0";
+        let extractor = StringExtractor::new();
+
+        let strings_without_r2 = extractor.extract_smart(data, None);
+
+        let r2_strings = vec![crate::radare2::R2String {
+            vaddr: 0,
+            paddr: 1000, // Different offset to avoid dedup
+            length: 9,
+            size: 9,
+            string: "r2_unique".to_string(),
+            string_type: "ascii".to_string(),
+        }];
+        let strings_with_r2 = extractor.extract_smart(data, Some(r2_strings));
+
+        // With r2 strings, we should have at least the r2 string plus stng strings
+        assert!(
+            strings_with_r2.len() >= strings_without_r2.len(),
+            "Adding r2 strings should not reduce output count"
+        );
+
+        // The r2 string should be present
+        assert!(
+            strings_with_r2.iter().any(|s| s.value == "r2_unique"),
+            "r2 string should be in output"
         );
     }
 }

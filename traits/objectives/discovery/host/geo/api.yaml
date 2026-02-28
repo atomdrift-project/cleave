@@ -37,14 +37,7 @@ traits:
       type: string
       substr: "ipapi.co"
 
-  - id: api-ipify
-    desc: api.ipify.org endpoint
-    crit: notable
-    conf: 0.7
-    attack: "T1016"
-    if:
-      type: string
-      substr: "api.ipify.org"
+  # NOTE: api.ipify.org now defined in micro-behaviors/communications/http/ip-discovery::ipify-api
 
   - id: ipgeolocation-api
     desc: ipgeolocation.io API
@@ -196,7 +189,7 @@ composite_rules:
     conf: 0.8
     attack: "T1016"
     any:
-      - id: api-ipify
+      - id: micro-behaviors/communications/http/ip-discovery::ipify-api
       - id: objectives/discovery/network/scan::ipify-org
 
   # MaxMind API composite
@@ -249,8 +242,8 @@ composite_rules:
     attack: "T1016"
     any:
       - id: db-ip-api
-      - id: objectives/discovery/network/scan::ipinfo-io
-      - id: objectives/discovery/network/scan::ip-api-com
+      - id: micro-behaviors/communications/http/ip-discovery::ipinfo-io
+      - id: micro-behaviors/communications/http/ip-discovery::ip-api-com
       - id: ipapi-co
       - id: ipgeolocation-api
       - id: freegeoip-api

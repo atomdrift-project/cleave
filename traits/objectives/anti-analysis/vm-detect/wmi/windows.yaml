@@ -1,0 +1,79 @@
+# WMI-based VM Detection
+# Queries WMI classes to fingerprint hardware and detect virtual environments
+# MBC: B0009 (Virtual Machine Detection)
+
+defaults:
+  for: [pe, dll, csharp]
+  crit: component
+  conf: 0.85
+  mbc: "B0009"
+  platforms: [windows]
+
+traits:
+  - id: processor-query
+    desc: WMI processor class query
+    if:
+      type: string
+      substr: Win32_Processor
+
+  - id: video-controller-query
+    desc: WMI video controller class query
+    if:
+      type: string
+      substr: Win32_VideoController
+
+  - id: disk-drive-query
+    desc: WMI disk drive class query
+    if:
+      type: string
+      substr: Win32_DiskDrive
+
+  - id: operating-system-query
+    desc: WMI operating system class query
+    if:
+      type: string
+      substr: Win32_OperatingSystem
+
+  - id: computer-system-query
+    desc: WMI computer system class query
+    if:
+      type: string
+      substr: Win32_ComputerSystem
+
+  - id: bios-query
+    desc: WMI BIOS class query
+    if:
+      type: string
+      substr: Win32_BIOS
+
+  - id: baseboard-query
+    desc: WMI baseboard class query
+    if:
+      type: string
+      substr: Win32_BaseBoard
+
+  - id: network-adapter-query
+    desc: WMI network adapter class query
+    if:
+      type: string
+      substr: Win32_NetworkAdapterConfiguration
+
+composite_rules:
+  - id: wmi-vm-fingerprint
+    desc: WMI-based VM fingerprinting
+    crit: suspicious
+    conf: 0.9
+    mbc: "B0009"
+    attack: "T1082"
+    for: [pe, dll, csharp]
+    platforms: [windows]
+    needs: 3
+    any:
+      - id: processor-query
+      - id: video-controller-query
+      - id: disk-drive-query
+      - id: operating-system-query
+      - id: computer-system-query
+      - id: bios-query
+      - id: baseboard-query
+      - id: network-adapter-query

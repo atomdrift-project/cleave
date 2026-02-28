@@ -3390,8 +3390,8 @@ checksum = "6ce2be8dc25455e1f91df71bfa12ad37d7af1092ae736f3a6cd0e37bc7810596"
 
 [[package]]
 name = "stng"
-version = "0.1.0"
-source = "git+https://codeberg.org/isotope13/stng?rev=540183f04870a4fe37d2cd0fa2ffc61ee2051225#540183f04870a4fe37d2cd0fa2ffc61ee2051225"
+version = "1.0.0"
+source = "git+https://codeberg.org/atomdrift/stng?rev=5bfa410ba1686e21c71f0b41eb74a2facc446a6f#5bfa410ba1686e21c71f0b41eb74a2facc446a6f"
 dependencies = [
  "aho-corasick",
  "anyhow",

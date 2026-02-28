@@ -1,0 +1,58 @@
+# Security Product Detection via WMI SecurityCenter2
+# Queries for installed AV, firewall, and antispyware products
+# MBC: B0013 (Security Product Detection)
+
+defaults:
+  for: [pe, dll, csharp]
+  crit: component
+  conf: 0.9
+  mbc: "B0013"
+  platforms: [windows]
+
+traits:
+  - id: security-center2-namespace
+    desc: WMI SecurityCenter2 namespace
+    if:
+      type: string
+      regex: 'root[/\\]SecurityCenter2'
+
+  - id: antivirus-product-class
+    desc: WMI AntivirusProduct class query
+    if:
+      type: string
+      substr: AntivirusProduct
+
+  - id: firewall-product-class
+    desc: WMI FirewallProduct class query
+    if:
+      type: string
+      substr: FirewallProduct
+
+  - id: antispyware-product-class
+    desc: WMI AntiSpywareProduct class query
+    if:
+      type: string
+      substr: AntiSpywareProduct
+
+  - id: display-name-field
+    desc: Security product displayName field
+    crit: baseline
+    if:
+      type: string
+      substr: displayName
+
+composite_rules:
+  - id: security-product-enumeration
+    desc: Security product enumeration via WMI
+    crit: suspicious
+    conf: 0.95
+    mbc: "B0013"
+    attack: "T1518.001"
+    for: [pe, dll, csharp]
+    platforms: [windows]
+    all:
+      - id: security-center2-namespace
+    any:
+      - id: antivirus-product-class
+      - id: firewall-product-class
+      - id: antispyware-product-class

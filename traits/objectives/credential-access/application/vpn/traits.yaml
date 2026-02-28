@@ -1,0 +1,91 @@
+# VPN Client Credential Access
+# Detection of VPN configuration and credential file access
+# ATT&CK: T1555 (Credentials from Password Stores)
+
+defaults:
+  for: [all]
+  crit: notable
+  conf: 0.85
+  attack: "T1555"
+
+traits:
+  # NordVPN
+  - id: nordvpn-path
+    desc: NordVPN application directory
+    if:
+      type: string
+      substr: NordVPN
+
+  - id: nordvpn-config
+    desc: NordVPN user.config file
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: string
+      regex: 'NordVPN[/\\].{0,50}user\.config'
+
+  # ProtonVPN
+  - id: protonvpn-path
+    desc: ProtonVPN application directory
+    if:
+      type: string
+      substr: ProtonVPN
+
+  - id: protonvpn-config
+    desc: ProtonVPN configuration access
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: string
+      regex: 'ProtonVPN[/\\].{0,50}\.config'
+
+  # OpenVPN
+  - id: openvpn-path
+    desc: OpenVPN application directory
+    if:
+      type: string
+      substr: OpenVPN
+
+  # NOTE: .ovpn extension detection is in objectives/credential-access/vpn/config::openvpn-config
+
+  - id: openvpn-config-dir
+    desc: OpenVPN config directory
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: string
+      regex: 'OpenVPN[/\\]+config'
+
+  - id: auth-user-pass
+    desc: OpenVPN auth-user-pass directive
+    crit: suspicious
+    conf: 0.95
+    if:
+      type: string
+      substr: auth-user-pass
+
+composite_rules:
+  - id: vpn-credential-stealer
+    desc: VPN credential stealer detected
+    crit: suspicious
+    conf: 0.95
+    attack: "T1555"
+    for: [all]
+    needs: 2
+    any:
+      - id: nordvpn-config
+      - id: protonvpn-config
+      - id: openvpn-config-dir
+      - id: auth-user-pass
+
+  - id: multi-vpn-targeting
+    desc: Multiple VPN clients targeted
+    crit: suspicious
+    conf: 0.9
+    attack: "T1555"
+    for: [all]
+    needs: 2
+    any:
+      - id: nordvpn-path
+      - id: protonvpn-path
+      - id: openvpn-path

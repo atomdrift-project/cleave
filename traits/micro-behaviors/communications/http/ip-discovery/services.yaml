@@ -1,0 +1,104 @@
+# Public IP Discovery Services
+# Services commonly used to determine victim's external IP address
+# These are legitimate services but commonly abused by malware for victim profiling
+
+defaults:
+  for: [all]
+  crit: component
+  conf: 0.85
+
+traits:
+  - id: ipify-api
+    desc: ipify.org IP discovery API
+    if:
+      type: string
+      substr: api.ipify.org
+
+  - id: icanhazip
+    desc: icanhazip.com IP discovery
+    if:
+      type: string
+      substr: icanhazip.com
+
+  - id: wtfismyip
+    desc: wtfismyip.com IP discovery
+    if:
+      type: string
+      substr: wtfismyip.com
+
+  - id: checkip-dyndns
+    desc: DynDNS checkip service
+    if:
+      type: string
+      substr: checkip.dyndns.org
+
+  - id: checkip-aws
+    desc: AWS checkip service
+    if:
+      type: string
+      substr: checkip.amazonaws.com
+
+  - id: ip-sb-geoip
+    desc: IP.SB geoip API
+    if:
+      type: string
+      substr: api.ip.sb
+
+  - id: whatismyipaddress
+    desc: whatismyipaddress.com bot API
+    if:
+      type: string
+      substr: whatismyipaddress.com
+
+  - id: ipinfo-io
+    desc: ipinfo.io IP information API
+    if:
+      type: string
+      substr: ipinfo.io
+
+  - id: ip-api-com
+    desc: ip-api.com geolocation service
+    if:
+      type: string
+      substr: ip-api.com
+
+  - id: myexternalip
+    desc: myexternalip.com service
+    if:
+      type: string
+      substr: myexternalip.com
+
+  - id: ifconfig-me
+    desc: ifconfig.me IP discovery
+    if:
+      type: string
+      substr: ifconfig.me
+
+  - id: ipecho
+    desc: ipecho.net IP discovery
+    if:
+      type: string
+      substr: ipecho.net
+
+composite_rules:
+  - id: multi-ip-discovery
+    desc: Multiple IP discovery services (stealer behavior)
+    crit: suspicious
+    conf: 0.9
+    mbc: "C0004"
+    attack: "T1016"
+    for: [all]
+    needs: 3
+    any:
+      - id: ipify-api
+      - id: icanhazip
+      - id: wtfismyip
+      - id: checkip-dyndns
+      - id: checkip-aws
+      - id: ip-sb-geoip
+      - id: whatismyipaddress
+      - id: ipinfo-io
+      - id: ip-api-com
+      - id: myexternalip
+      - id: ifconfig-me
+      - id: ipecho

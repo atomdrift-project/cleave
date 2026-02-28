@@ -1,0 +1,116 @@
+# PHP Cookie Handling Traits
+# Detects cookie-based authentication patterns common in webshells
+# MBC: C0002 (HTTP Communication)
+
+defaults:
+  for: [php]
+
+traits:
+  # setcookie detection via symbol/import
+  - id: setcookie-call
+    desc: Sets HTTP cookie via setcookie()
+    crit: notable
+    conf: 0.5
+    if:
+      type: symbol
+      exact: "setcookie"
+
+  # Long expiry cookies (persistence indicator)
+  - id: setcookie-long-expiry-30d
+    desc: Cookie with 30-day expiry
+    crit: notable
+    conf: 0.7
+    if:
+      type: string
+      regex: "setcookie\\s*\\([^)]{0,100}86400\\s*\\*\\s*30"
+
+  - id: setcookie-long-expiry-365d
+    desc: Cookie with 365-day expiry
+    crit: notable
+    conf: 0.75
+    if:
+      type: string
+      regex: "setcookie\\s*\\([^)]{0,100}86400\\s*\\*\\s*365"
+
+  - id: setcookie-long-expiry-large
+    desc: Cookie with very long expiry (large number)
+    crit: notable
+    conf: 0.7
+    if:
+      type: string
+      regex: "setcookie\\s*\\([^)]{0,100}(2592000|31536000|63072000)"
+
+  # Cookie authentication gate patterns
+  - id: cookie-isset-check
+    desc: Checks if cookie is set (auth gate)
+    crit: notable
+    conf: 0.6
+    if:
+      type: string
+      regex: "isset\\s*\\(\\s*\\$_COOKIE"
+
+  - id: cookie-auth-gate
+    desc: Cookie-based authentication gate pattern
+    crit: suspicious
+    conf: 0.8
+    attack: "T1505.003"
+    if:
+      type: string
+      regex: "if\\s*\\(!?\\s*isset\\s*\\(\\s*\\$_COOKIE"
+
+  - id: cookie-unset
+    desc: Unsets/clears cookie
+    crit: notable
+    conf: 0.5
+    if:
+      type: string
+      regex: "unset\\s*\\(\\s*\\$_COOKIE"
+
+  # Cookie value comparison patterns
+  - id: cookie-value-comparison
+    desc: Compares cookie value (authentication check)
+    crit: notable
+    conf: 0.7
+    if:
+      type: string
+      regex: "\\$_COOKIE\\s*\\[[^]]+\\]\\s*==\\s*['\"]"
+
+  # Short/weak cookie names (webshell indicator)
+  - id: short-cookie-name
+    desc: Short cookie name (potential webshell auth)
+    crit: notable
+    conf: 0.6
+    if:
+      type: string
+      regex: "setcookie\\s*\\(['\"][a-z]{2,8}['\"]"
+
+  # Hardcoded password in POST comparison
+  - id: post-password-hardcoded
+    desc: Hardcoded password comparison in POST
+    crit: suspicious
+    conf: 0.85
+    attack: "T1505.003"
+    if:
+      type: string
+      regex: "\\$_POST\\s*\\[['\"]pass(word)?['\"]\\]\\s*==\\s*['\"][^'\"]{3,30}['\"]"
+
+composite_rules:
+  - id: cookie-auth-persistence
+    desc: "Cookie-based authentication with persistence"
+    crit: suspicious
+    conf: 0.85
+    attack: "T1505.003"
+    all:
+      - id: setcookie-call
+      - id: cookie-auth-gate
+
+  - id: webshell-auth-pattern
+    desc: "Webshell authentication pattern"
+    crit: suspicious
+    conf: 0.9
+    attack: "T1505.003"
+    all:
+      - id: cookie-auth-gate
+    any:
+      - id: post-password-hardcoded
+      - id: cookie-value-comparison

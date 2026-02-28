@@ -62,14 +62,7 @@ traits:
       kind: call
       exact: "ignore_user_abort"
 
-  - id: output-buffering
-    desc: Uses output buffering (potential evasion)
-    crit: notable
-    conf: 0.7
-    if:
-      type: ast
-      kind: call
-      exact: "ob_start"
+  # output-buffering: Removed - use micro-behaviors/process/io/buffer::ob-start directly
 
   - id: error-reporting-off
     desc: Disables error reporting (stealth)

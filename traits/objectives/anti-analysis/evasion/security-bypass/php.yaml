@@ -1,0 +1,170 @@
+# PHP Security Bypass Traits
+# Detects attempts to bypass PHP security restrictions
+# MBC: B0032 (Defense Evasion)
+# ATT&CK: T1562.001 (Impair Defenses: Disable or Modify Tools)
+
+defaults:
+  for: [php]
+  mbc: "B0032"
+  attack: "T1562.001"
+
+traits:
+  # disable_functions bypass detection
+  - id: ini-get-disable-functions
+    desc: Checks disable_functions setting
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: ast
+      kind: call
+      regex: "ini_get\\s*\\(['\"]disable_functions['\"]\\)"
+
+  - id: ini-get-open-basedir
+    desc: Checks open_basedir restriction
+    crit: suspicious
+    conf: 0.85
+    if:
+      type: ast
+      kind: call
+      regex: "ini_get\\s*\\(['\"]open_basedir['\"]\\)"
+
+  - id: ini-get-safe-mode
+    desc: Checks safe_mode setting
+    crit: suspicious
+    conf: 0.85
+    if:
+      type: ast
+      kind: call
+      regex: "ini_get\\s*\\(['\"]safe_mode['\"]\\)"
+
+  # function_exists checks for exec functions
+  - id: function-exists-shell-exec
+    desc: Checks if shell_exec exists
+    crit: suspicious
+    conf: 0.85
+    if:
+      type: string
+      regex: "function_exists\\s*\\(['\"]shell_exec['\"]\\)"
+
+  - id: function-exists-exec
+    desc: Checks if exec exists
+    crit: suspicious
+    conf: 0.85
+    if:
+      type: string
+      regex: "function_exists\\s*\\(['\"]exec['\"]\\)"
+
+  - id: function-exists-system
+    desc: Checks if system exists
+    crit: suspicious
+    conf: 0.85
+    if:
+      type: string
+      regex: "function_exists\\s*\\(['\"]system['\"]\\)"
+
+  - id: function-exists-passthru
+    desc: Checks if passthru exists
+    crit: suspicious
+    conf: 0.85
+    if:
+      type: string
+      regex: "function_exists\\s*\\(['\"]passthru['\"]\\)"
+
+  - id: function-exists-popen
+    desc: Checks if popen exists
+    crit: suspicious
+    conf: 0.85
+    if:
+      type: string
+      regex: "function_exists\\s*\\(['\"]popen['\"]\\)"
+
+  - id: function-exists-proc-open
+    desc: Checks if proc_open exists
+    crit: suspicious
+    conf: 0.85
+    if:
+      type: string
+      regex: "function_exists\\s*\\(['\"]proc_open['\"]\\)"
+
+  # in_array check for disabled functions
+  - id: in-array-disabled-check
+    desc: Checks if function is in disabled list
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: string
+      regex: "in_array\\s*\\([^)]{0,50}disable_functions"
+
+  # preg_split on disable_functions
+  - id: preg-split-disable-functions
+    desc: Parses disable_functions list
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: string
+      regex: "preg_split\\s*\\([^)]{0,80}disable_functions"
+
+  # Fallback execution chain pattern
+  - id: elseif-function-exists
+    desc: Fallback execution chain (elseif function_exists)
+    crit: suspicious
+    conf: 0.85
+    if:
+      type: string
+      regex: "elseif\\s*\\(\\s*function_exists\\s*\\("
+
+  # dl() for loading extensions
+  - id: dl-extension-load
+    desc: Dynamically loads PHP extension via dl()
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: ast
+      kind: call
+      exact: "dl"
+
+  # putenv for LD_PRELOAD attacks
+  - id: putenv-ld-preload
+    desc: Sets LD_PRELOAD environment variable
+    crit: suspicious
+    conf: 0.95
+    attack: "T1574.006"
+    if:
+      type: string
+      regex: "putenv\\s*\\(['\"]LD_PRELOAD"
+
+composite_rules:
+  - id: disable-functions-bypass
+    desc: "Attempts to bypass disable_functions"
+    crit: suspicious
+    conf: 0.95
+    all:
+      - id: ini-get-disable-functions
+    any:
+      - id: function-exists-shell-exec
+      - id: function-exists-exec
+      - id: function-exists-system
+      - id: function-exists-passthru
+      - id: function-exists-popen
+      - id: function-exists-proc-open
+
+  - id: exec-fallback-chain
+    desc: "Execution fallback chain (bypass attempt)"
+    crit: suspicious
+    conf: 0.95
+    all:
+      - id: elseif-function-exists
+    any:
+      - id: function-exists-shell-exec
+      - id: function-exists-exec
+      - id: function-exists-system
+      - id: function-exists-passthru
+
+  - id: security-restriction-probe
+    desc: "Security restriction check (bypass attempt)"
+    crit: suspicious
+    conf: 0.9
+    any:
+      - id: ini-get-disable-functions
+      - id: ini-get-open-basedir
+      - id: ini-get-safe-mode

@@ -1,0 +1,113 @@
+# PHP File Permission Modification Traits
+# Detects chmod and permission manipulation
+# ATT&CK: T1222 (File and Directory Permissions Modification)
+
+defaults:
+  for: [php]
+  attack: "T1222"
+
+traits:
+  # AST-based chmod detection
+  - id: chmod-call
+    desc: Changes file permissions via chmod()
+    crit: notable
+    conf: 0.7
+    if:
+      type: ast
+      kind: call
+      exact: "chmod"
+
+  - id: chown-call
+    desc: Changes file owner via chown()
+    crit: suspicious
+    conf: 0.8
+    if:
+      type: ast
+      kind: call
+      exact: "chown"
+
+  - id: chgrp-call
+    desc: Changes file group via chgrp()
+    crit: notable
+    conf: 0.7
+    if:
+      type: ast
+      kind: call
+      exact: "chgrp"
+
+  # chmod with user input (dangerous)
+  - id: chmod-user-input
+    desc: chmod with user-controlled path
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: string
+      regex: "chmod\\s*\\([^)]{0,30}\\$_(GET|POST|REQUEST)"
+
+  # octdec for permission conversion
+  - id: octdec-call
+    desc: Converts octal string to decimal (for chmod)
+    crit: notable
+    conf: 0.7
+    if:
+      type: ast
+      kind: call
+      exact: "octdec"
+
+  # chmod with octdec pattern
+  - id: chmod-octdec-pattern
+    desc: chmod with octdec conversion
+    crit: notable
+    conf: 0.75
+    if:
+      type: string
+      regex: "chmod\\s*\\([^)]{0,50}octdec\\s*\\("
+
+  # File permission reading
+  - id: fileperms-call
+    desc: Gets file permissions
+    crit: notable
+    conf: 0.5
+    if:
+      type: ast
+      kind: call
+      exact: "fileperms"
+
+  # clearstatcache for permission checks
+  - id: clearstatcache-call
+    desc: Clears file stat cache
+    crit: notable
+    conf: 0.4
+    if:
+      type: ast
+      kind: call
+      exact: "clearstatcache"
+
+  # umask manipulation
+  - id: umask-call
+    desc: Gets/sets file creation mask
+    crit: notable
+    conf: 0.6
+    if:
+      type: ast
+      kind: call
+      exact: "umask"
+
+composite_rules:
+  - id: chmod-with-user-input
+    desc: "Permission modification with user input"
+    crit: suspicious
+    conf: 0.9
+    all:
+      - id: chmod-call
+    any:
+      - id: chmod-user-input
+      - id: octdec-call
+
+  - id: permission-manipulation
+    desc: "File permission manipulation pattern"
+    crit: suspicious
+    conf: 0.85
+    any:
+      - id: chmod-call
+      - id: chown-call

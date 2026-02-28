@@ -1,0 +1,116 @@
+# PHP Custom HTTP Header C2 Trigger Traits
+# Detects use of custom/non-standard HTTP headers as command triggers
+# MBC: B0030 (C2 Communication)
+# ATT&CK: T1071.001 (Web Protocols)
+
+defaults:
+  for: [php]
+  mbc: "B0030"
+  attack: "T1071.001"
+
+traits:
+  # Custom X- headers in $_SERVER
+  - id: http-x-custom-header
+    desc: Accesses custom X- HTTP header
+    crit: notable
+    conf: 0.7
+    if:
+      type: string
+      regex: "\\$_SERVER\\s*\\[['\"]HTTP_X_[A-Z_]+['\"]\\]"
+
+  # Specific suspicious custom headers
+  - id: http-x-ajax-header
+    desc: Custom AJAX trigger header
+    crit: suspicious
+    conf: 0.85
+    if:
+      type: string
+      regex: "\\$_SERVER\\s*\\[['\"]HTTP_X_[A-Z_]*(AJAX|XHR|ASYNC)[A-Z_]*['\"]\\]"
+
+  - id: http-x-cmd-header
+    desc: Custom command header
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: string
+      regex: "\\$_SERVER\\s*\\[['\"]HTTP_X_[A-Z_]*(CMD|COMMAND|EXEC|RUN)[A-Z_]*['\"]\\]"
+
+  - id: http-x-auth-header
+    desc: Custom authentication header
+    crit: notable
+    conf: 0.75
+    if:
+      type: string
+      regex: "\\$_SERVER\\s*\\[['\"]HTTP_X_[A-Z_]*(AUTH|TOKEN|KEY|PASS)[A-Z_]*['\"]\\]"
+
+  - id: http-x-data-header
+    desc: Custom data header
+    crit: notable
+    conf: 0.7
+    if:
+      type: string
+      regex: "\\$_SERVER\\s*\\[['\"]HTTP_X_[A-Z_]*(DATA|PAYLOAD|CONTENT)[A-Z_]*['\"]\\]"
+
+  # isset check on custom header (trigger detection)
+  - id: isset-http-x-header
+    desc: Checks if custom HTTP header is set
+    crit: suspicious
+    conf: 0.8
+    if:
+      type: string
+      regex: "isset\\s*\\(\\s*\\$_SERVER\\s*\\[['\"]HTTP_X_[A-Z_]+['\"]\\]\\s*\\)"
+
+  # empty check on custom header
+  - id: empty-http-x-header
+    desc: Checks if custom HTTP header is non-empty
+    crit: suspicious
+    conf: 0.8
+    if:
+      type: string
+      regex: "!\\s*empty\\s*\\(\\s*\\$_SERVER\\s*\\[['\"]HTTP_X_[A-Z_]+['\"]\\]\\s*\\)"
+
+  # Conditional based on custom header
+  - id: if-http-x-header
+    desc: Conditional execution based on custom header
+    crit: suspicious
+    conf: 0.85
+    if:
+      type: string
+      regex: "if\\s*\\([^)]{0,50}\\$_SERVER\\s*\\[['\"]HTTP_X_[A-Z_]+['\"]\\]"
+
+  # getallheaders usage (alternative header access)
+  - id: getallheaders-call
+    desc: Gets all HTTP headers
+    crit: notable
+    conf: 0.6
+    if:
+      type: ast
+      kind: call
+      exact: "getallheaders"
+
+  - id: apache-request-headers
+    desc: Gets Apache request headers
+    crit: notable
+    conf: 0.6
+    if:
+      type: ast
+      kind: call
+      exact: "apache_request_headers"
+
+composite_rules:
+  - id: custom-header-c2-trigger
+    desc: "Custom HTTP header as C2 trigger"
+    crit: suspicious
+    conf: 0.9
+    any:
+      - id: isset-http-x-header
+      - id: empty-http-x-header
+      - id: if-http-x-header
+
+  - id: custom-header-command-channel
+    desc: "Custom header used as command channel"
+    crit: suspicious
+    conf: 0.95
+    any:
+      - id: http-x-cmd-header
+      - id: http-x-ajax-header

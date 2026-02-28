@@ -107,13 +107,7 @@ traits:
       case_insensitive: true
 
   # === DoH C2 indicators ===
-  - id: doh-cloudflare
-    desc: Cloudflare DoH endpoint
-    crit: notable
-    conf: 0.7
-    if:
-      type: string
-      substr: cloudflare-dns.com/dns-query
+  # doh-cloudflare: use micro-behaviors/communications/dns/doh::doh-cloudflare-json instead
 
   - id: doh-google
     desc: Google DoH endpoint
@@ -145,7 +139,7 @@ composite_rules:
     crit: notable
     conf: 0.7
     any:
-      - id: doh-cloudflare
+      - id: micro-behaviors/communications/dns/doh::doh-cloudflare-json
       - id: doh-google
       - id: doh-quad9
 

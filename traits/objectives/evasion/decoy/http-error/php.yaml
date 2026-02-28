@@ -1,0 +1,158 @@
+# PHP Fake HTTP Error Decoy Traits
+# Webshells often display fake 404/403 pages to hide from casual inspection
+# MBC: B0011 (Deceptive Output)
+# ATT&CK: T1036 (Masquerading)
+
+defaults:
+  for: [php]
+  mbc: "B0011"
+  attack: "T1036"
+
+traits:
+  # AST-based detection of http_response_code calls
+  - id: http-response-code-404
+    desc: Sets HTTP 404 response code programmatically
+    crit: notable
+    conf: 0.7
+    if:
+      type: ast
+      kind: call
+      regex: "http_response_code\\s*\\(\\s*404"
+
+  - id: http-response-code-403
+    desc: Sets HTTP 403 response code programmatically
+    crit: notable
+    conf: 0.7
+    if:
+      type: ast
+      kind: call
+      regex: "http_response_code\\s*\\(\\s*403"
+
+  - id: http-response-code-500
+    desc: Sets HTTP 500 response code programmatically
+    crit: notable
+    conf: 0.6
+    if:
+      type: ast
+      kind: call
+      regex: "http_response_code\\s*\\(\\s*500"
+
+  - id: header-404
+    desc: Sets 404 via header() function
+    crit: notable
+    conf: 0.7
+    if:
+      type: string
+      regex: 'header\s*\(\s*[''"]HTTP/[^"'']{1,20}404'
+
+  - id: header-403
+    desc: Sets 403 via header() function
+    crit: notable
+    conf: 0.7
+    if:
+      type: string
+      regex: 'header\s*\(\s*[''"]HTTP/[^"'']{1,20}403'
+
+  # Fake error page HTML content
+  - id: fake-nginx-404
+    desc: Fake nginx 404 error HTML
+    crit: suspicious
+    conf: 0.85
+    if:
+      type: string
+      regex: '<center><h1>404 Not Found</h1></center>[^<]{0,30}<hr><center>nginx'
+
+  - id: fake-apache-404
+    desc: Fake Apache 404 error HTML
+    crit: suspicious
+    conf: 0.85
+    if:
+      type: string
+      regex: 'The requested URL[^<]{0,100}was not found on this server'
+
+  - id: fake-iis-404
+    desc: Fake IIS 404 error HTML
+    crit: suspicious
+    conf: 0.85
+    if:
+      type: string
+      regex: 'HTTP Error 404[^<]{0,50}The resource you are looking for'
+
+  - id: fake-error-title-404
+    desc: Fake 404 title tag
+    crit: notable
+    conf: 0.6
+    if:
+      type: string
+      regex: '<title>\s*404 Not Found\s*</title>'
+
+  - id: fake-error-title-403
+    desc: Fake 403 title tag
+    crit: notable
+    conf: 0.6
+    if:
+      type: string
+      regex: '<title>\s*403 Forbidden\s*</title>'
+
+  # Server software detection for targeted decoy
+  - id: server-software-check
+    desc: Checks SERVER_SOFTWARE for targeted decoy
+    crit: notable
+    conf: 0.75
+    if:
+      type: string
+      regex: '\$_SERVER\s*\[\s*[''"]SERVER_SOFTWARE[''"]\s*\]'
+
+  - id: server-software-nginx-check
+    desc: Detects nginx in SERVER_SOFTWARE
+    crit: notable
+    conf: 0.8
+    if:
+      type: string
+      regex: "strpos\\s*\\([^)]{0,50}SERVER_SOFTWARE[^)]{0,30}nginx"
+
+  - id: server-software-apache-check
+    desc: Detects Apache in SERVER_SOFTWARE
+    crit: notable
+    conf: 0.8
+    if:
+      type: string
+      regex: "strpos\\s*\\([^)]{0,50}SERVER_SOFTWARE[^)]{0,30}(apache|Apache)"
+
+composite_rules:
+  - id: fake-404-decoy
+    desc: "Fake 404 error page decoy"
+    crit: suspicious
+    conf: 0.9
+    mbc: "B0011.001"
+    all:
+      - id: http-response-code-404
+    any:
+      - id: fake-nginx-404
+      - id: fake-apache-404
+      - id: fake-iis-404
+      - id: fake-error-title-404
+
+  - id: fake-404-header-decoy
+    desc: "Fake 404 via header() with decoy HTML"
+    crit: suspicious
+    conf: 0.9
+    mbc: "B0011.001"
+    all:
+      - id: header-404
+    any:
+      - id: fake-nginx-404
+      - id: fake-apache-404
+      - id: fake-iis-404
+      - id: fake-error-title-404
+
+  - id: server-targeted-decoy
+    desc: "Server-type targeted decoy page"
+    crit: suspicious
+    conf: 0.9
+    mbc: "B0011.001"
+    all:
+      - id: server-software-check
+    any:
+      - id: server-software-nginx-check
+      - id: server-software-apache-check

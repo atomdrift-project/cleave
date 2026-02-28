@@ -1,0 +1,229 @@
+# PHP Host Fingerprinting Traits
+# Detects system/environment enumeration common in webshells
+# MBC: E1082 (System Information Discovery)
+# ATT&CK: T1082 (System Information Discovery)
+
+defaults:
+  for: [php]
+  mbc: "E1082"
+  attack: "T1082"
+
+traits:
+  # PHP constants for system info
+  - id: php-os-constant
+    desc: Accesses PHP_OS constant (OS detection)
+    crit: notable
+    conf: 0.7
+    if:
+      type: raw
+      word: "PHP_OS"
+
+  - id: php-version-constant
+    desc: Accesses PHP_VERSION constant
+    crit: notable
+    conf: 0.5
+    if:
+      type: raw
+      word: "PHP_VERSION"
+
+  - id: php-sapi-name
+    desc: Gets PHP SAPI name
+    crit: notable
+    conf: 0.6
+    if:
+      type: ast
+      kind: call
+      exact: "php_sapi_name"
+
+  - id: php-uname-call
+    desc: Gets OS information via php_uname()
+    crit: notable
+    conf: 0.75
+    if:
+      type: ast
+      kind: call
+      exact: "php_uname"
+
+  - id: phpinfo-call
+    desc: Dumps PHP configuration via phpinfo()
+    crit: notable
+    conf: 0.7
+    if:
+      type: ast
+      kind: call
+      exact: "phpinfo"
+
+  - id: phpversion-call
+    desc: Gets PHP version
+    crit: notable
+    conf: 0.5
+    if:
+      type: ast
+      kind: call
+      exact: "phpversion"
+
+  # getcwd for directory enumeration
+  - id: getcwd-call
+    desc: Gets current working directory
+    crit: notable
+    conf: 0.6
+    if:
+      type: ast
+      kind: call
+      exact: "getcwd"
+
+  - id: dirname-call
+    desc: Gets directory name
+    crit: notable
+    conf: 0.4
+    if:
+      type: ast
+      kind: call
+      exact: "dirname"
+
+  - id: realpath-call
+    desc: Resolves real path
+    crit: notable
+    conf: 0.4
+    if:
+      type: ast
+      kind: call
+      exact: "realpath"
+
+  # Server variable fingerprinting
+  - id: server-software-access
+    desc: Accesses SERVER_SOFTWARE variable
+    crit: notable
+    conf: 0.7
+    if:
+      type: string
+      regex: "\\$_SERVER\\s*\\[['\"]SERVER_SOFTWARE['\"]\\]"
+
+  - id: server-name-access
+    desc: Accesses SERVER_NAME variable
+    crit: notable
+    conf: 0.5
+    if:
+      type: string
+      regex: "\\$_SERVER\\s*\\[['\"]SERVER_NAME['\"]\\]"
+
+  - id: document-root-access
+    desc: Accesses DOCUMENT_ROOT variable
+    crit: notable
+    conf: 0.6
+    if:
+      type: string
+      regex: "\\$_SERVER\\s*\\[['\"]DOCUMENT_ROOT['\"]\\]"
+
+  # getenv for environment enumeration
+  - id: getenv-call
+    desc: Gets environment variable
+    crit: notable
+    conf: 0.5
+    if:
+      type: ast
+      kind: call
+      exact: "getenv"
+
+  - id: getenv-path
+    desc: Gets PATH environment variable
+    crit: notable
+    conf: 0.6
+    if:
+      type: string
+      regex: "getenv\\s*\\(['\"]PATH['\"]\\)"
+
+  - id: getenv-home
+    desc: Gets HOME environment variable
+    crit: notable
+    conf: 0.6
+    if:
+      type: string
+      regex: "getenv\\s*\\(['\"]HOME['\"]\\)"
+
+  # Disk/memory info
+  - id: disk-free-space
+    desc: Checks disk free space
+    crit: notable
+    conf: 0.6
+    if:
+      type: ast
+      kind: call
+      exact: "disk_free_space"
+
+  - id: disk-total-space
+    desc: Checks total disk space
+    crit: notable
+    conf: 0.6
+    if:
+      type: ast
+      kind: call
+      exact: "disk_total_space"
+
+  - id: memory-get-usage
+    desc: Gets memory usage
+    crit: notable
+    conf: 0.5
+    if:
+      type: ast
+      kind: call
+      exact: "memory_get_usage"
+
+  # User/process info
+  - id: get-current-user
+    desc: Gets current PHP process user
+    crit: notable
+    conf: 0.7
+    if:
+      type: ast
+      kind: call
+      exact: "get_current_user"
+
+  - id: getmyuid-call
+    desc: Gets PHP script UID
+    crit: notable
+    conf: 0.7
+    if:
+      type: ast
+      kind: call
+      exact: "getmyuid"
+
+  - id: getmygid-call
+    desc: Gets PHP script GID
+    crit: notable
+    conf: 0.7
+    if:
+      type: ast
+      kind: call
+      exact: "getmygid"
+
+  - id: posix-getpwuid
+    desc: Gets user info by UID
+    crit: notable
+    conf: 0.7
+    if:
+      type: ast
+      kind: call
+      exact: "posix_getpwuid"
+
+composite_rules:
+  - id: system-fingerprint
+    desc: "System fingerprinting pattern"
+    crit: suspicious
+    conf: 0.8
+    any:
+      - id: php-os-constant
+      - id: php-uname-call
+      - id: getcwd-call
+      - id: server-software-access
+
+  - id: webshell-recon
+    desc: "Webshell reconnaissance pattern"
+    crit: suspicious
+    conf: 0.85
+    all:
+      - id: getcwd-call
+    any:
+      - id: php-os-constant
+      - id: server-software-access
+      - id: get-current-user

@@ -1,0 +1,82 @@
+# PHP File Rename/Move Traits
+# Detects file renaming and moving operations
+# ATT&CK: T1036.005 (Masquerading: Match Legitimate Name or Location)
+
+defaults:
+  for: [php]
+
+traits:
+  # AST-based rename detection
+  - id: rename-call
+    desc: Renames/moves file via rename()
+    crit: notable
+    conf: 0.6
+    if:
+      type: ast
+      kind: call
+      exact: "rename"
+
+  - id: copy-call
+    desc: Copies file via copy()
+    crit: notable
+    conf: 0.5
+    if:
+      type: ast
+      kind: call
+      exact: "copy"
+
+  # rename with user input (dangerous)
+  - id: rename-user-input
+    desc: rename with user-controlled path
+    crit: suspicious
+    conf: 0.85
+    attack: "T1036.005"
+    if:
+      type: string
+      regex: "rename\\s*\\([^)]{0,30}\\$_(GET|POST|REQUEST)"
+
+  # copy with user input
+  - id: copy-user-input
+    desc: copy with user-controlled path
+    crit: suspicious
+    conf: 0.85
+    if:
+      type: string
+      regex: "copy\\s*\\([^)]{0,30}\\$_(GET|POST|REQUEST)"
+
+  # dirname for path manipulation
+  - id: dirname-rename-pattern
+    desc: dirname used with rename (path manipulation)
+    crit: notable
+    conf: 0.7
+    if:
+      type: string
+      regex: "rename\\s*\\([^)]{0,50}dirname\\s*\\("
+
+  # Rename to different extension
+  - id: rename-extension-change
+    desc: File extension modification pattern
+    crit: notable
+    conf: 0.7
+    if:
+      type: string
+      regex: "rename\\s*\\([^)]{0,100}\\.(php|phtml|php[3-7]|phar)"
+
+composite_rules:
+  - id: file-rename-user-controlled
+    desc: "User-controlled file rename/move"
+    crit: suspicious
+    conf: 0.9
+    attack: "T1036.005"
+    any:
+      - id: rename-user-input
+      - id: copy-user-input
+
+  - id: file-manipulation-pattern
+    desc: "File manipulation pattern"
+    crit: notable
+    conf: 0.8
+    all:
+      - id: rename-call
+    any:
+      - id: dirname-rename-pattern

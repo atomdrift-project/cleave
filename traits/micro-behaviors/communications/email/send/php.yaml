@@ -1,0 +1,159 @@
+# PHP Email Send Traits
+# Detects mail() usage, especially for exfiltration/notification
+# ATT&CK: T1048 (Exfiltration Over Alternative Protocol)
+
+defaults:
+  for: [php]
+
+traits:
+  # AST-based mail() detection
+  - id: mail-call
+    desc: Sends email via mail()
+    crit: notable
+    conf: 0.6
+    if:
+      type: ast
+      kind: call
+      exact: "mail"
+
+  - id: mail-suppressed
+    desc: Sends email with error suppression (@mail)
+    crit: suspicious
+    conf: 0.8
+    mbc: "B0032"
+    if:
+      type: ast
+      node: error_suppression_expression
+      regex: "mail\\s*\\("
+
+  # Hardcoded email addresses (potential attacker contact)
+  - id: hardcoded-gmail
+    desc: Hardcoded Gmail address
+    crit: notable
+    conf: 0.5
+    if:
+      type: string
+      regex: '[a-zA-Z0-9._%+-]+@gmail\.com'
+
+  - id: hardcoded-protonmail
+    desc: Hardcoded ProtonMail address
+    crit: notable
+    conf: 0.6
+    if:
+      type: string
+      regex: '[a-zA-Z0-9._%+-]+@protonmail\.(com|ch)'
+
+  - id: hardcoded-tutanota
+    desc: Hardcoded Tutanota address
+    crit: notable
+    conf: 0.6
+    if:
+      type: string
+      regex: '[a-zA-Z0-9._%+-]+@tutanota\.(com|de)'
+
+  - id: hardcoded-yandex
+    desc: Hardcoded Yandex address
+    crit: notable
+    conf: 0.6
+    if:
+      type: string
+      regex: '[a-zA-Z0-9._%+-]+@yandex\.(com|ru)'
+
+  # Email with server variables (exfiltration indicator)
+  - id: mail-with-remote-addr
+    desc: Email includes REMOTE_ADDR (visitor IP)
+    crit: suspicious
+    conf: 0.85
+    attack: "T1048"
+    if:
+      type: string
+      regex: 'REMOTE_ADDR'
+
+  - id: mail-with-request-uri
+    desc: Email includes REQUEST_URI
+    crit: suspicious
+    conf: 0.85
+    attack: "T1048"
+    if:
+      type: string
+      regex: 'REQUEST_URI'
+
+  - id: mail-with-http-host
+    desc: Email includes HTTP_HOST
+    crit: notable
+    conf: 0.7
+    if:
+      type: string
+      regex: 'HTTP_HOST'
+
+  # Notification message patterns
+  - id: access-notification-string
+    desc: Access notification message pattern
+    crit: suspicious
+    conf: 0.85
+    if:
+      type: string
+      substr: "Access Notification"
+
+  - id: login-notification-string
+    desc: Login notification message pattern
+    crit: suspicious
+    conf: 0.85
+    if:
+      type: string
+      substr: "Login Notification"
+
+  - id: visitor-alert-string
+    desc: Visitor alert message pattern
+    crit: suspicious
+    conf: 0.85
+    if:
+      type: string
+      substr: "visitor"
+
+  - id: shell-access-string
+    desc: Shell access notification pattern
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: string
+      substr: "shell access"
+
+  # Removed: backdoor pattern - use micro-behaviors/data/text/malware::backdoor-word instead
+
+composite_rules:
+  - id: mail-exfiltration
+    desc: "Email exfiltration of server/visitor info"
+    crit: suspicious
+    conf: 0.9
+    attack: "T1048"
+    all:
+      - id: mail-call
+    any:
+      - id: mail-with-remote-addr
+      - id: mail-with-request-uri
+
+  - id: mail-suppressed-notification
+    desc: "Suppressed email notification (stealth)"
+    crit: suspicious
+    conf: 0.9
+    mbc: "B0032"
+    attack: "T1048"
+    all:
+      - id: mail-suppressed
+    any:
+      - id: access-notification-string
+      - id: mail-with-remote-addr
+      - id: mail-with-request-uri
+
+  - id: attacker-email-contact
+    desc: "Hardcoded email in suspicious context"
+    crit: suspicious
+    conf: 0.85
+    all:
+      - id: mail-call
+    any:
+      - id: hardcoded-gmail
+      - id: hardcoded-protonmail
+      - id: hardcoded-tutanota
+      - id: hardcoded-yandex

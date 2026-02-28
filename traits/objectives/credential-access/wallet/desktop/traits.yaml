@@ -63,12 +63,11 @@ traits:
 
   # === Exodus atomic indicators ===
   - id: exodus-wallet-dir
-    desc: Exodus/exodus.wallet
+    desc: Exodus exodus.wallet path
     conf: 0.7
     crit: notable
     if:
-      type: string
-      substr: "Exodus/exodus.wallet"
+      id: micro-behaviors/fs/file/open::exodus-wallet-path
 
   - id: exodus-passphrase
     desc: exodus passphrase

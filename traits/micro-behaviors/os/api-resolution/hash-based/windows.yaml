@@ -1,0 +1,196 @@
+# Hash-Based API Resolution / Lazy Importer
+# Detects API resolution by hash to evade import table analysis
+# ATT&CK: T1027.002 (Software Packing), T1106 (Native API)
+# MBC: F0004 (System Calls)
+
+defaults:
+  for: [pe, dll]
+  platforms: [windows]
+  attack: "T1027.002"
+  mbc: "F0004"
+
+traits:
+  # PEB walking patterns
+  - id: peb-ldr-data
+    desc: PEB_LDR_DATA structure access
+    crit: notable
+    conf: 0.8
+    if:
+      type: string
+      substr: "PEB_LDR_DATA"
+
+  - id: in-memory-order
+    desc: InMemoryOrderModuleList traversal
+    crit: notable
+    conf: 0.85
+    if:
+      type: string
+      substr: "InMemoryOrderModuleList"
+
+  - id: in-load-order
+    desc: InLoadOrderModuleList traversal
+    crit: notable
+    conf: 0.85
+    if:
+      type: string
+      substr: "InLoadOrderModuleList"
+
+  - id: in-init-order
+    desc: InInitializationOrderModuleList traversal
+    crit: notable
+    conf: 0.85
+    if:
+      type: string
+      substr: "InInitializationOrderModuleList"
+
+  # x64 PEB access via TEB (gs:[0x60])
+  - id: peb-gs-access
+    desc: PEB access via GS segment (x64)
+    crit: notable
+    conf: 0.8
+    if:
+      type: hex
+      pattern: "65 48 8b ?? 60"
+
+  # x86 PEB access via TEB (fs:[0x30])
+  - id: peb-fs-access
+    desc: PEB access via FS segment (x86)
+    crit: notable
+    conf: 0.8
+    if:
+      type: hex
+      pattern: "64 a1 30 00 00 00"
+
+  # Export table parsing
+  - id: image-export-directory
+    desc: IMAGE_EXPORT_DIRECTORY parsing
+    crit: notable
+    conf: 0.75
+    if:
+      type: string
+      substr: "IMAGE_EXPORT_DIRECTORY"
+
+  - id: address-of-functions
+    desc: AddressOfFunctions export parsing
+    crit: notable
+    conf: 0.8
+    if:
+      type: string
+      substr: "AddressOfFunctions"
+
+  - id: address-of-names
+    desc: AddressOfNames export parsing
+    crit: notable
+    conf: 0.8
+    if:
+      type: string
+      substr: "AddressOfNames"
+
+  - id: address-of-name-ordinals
+    desc: AddressOfNameOrdinals export parsing
+    crit: notable
+    conf: 0.8
+    if:
+      type: string
+      substr: "AddressOfNameOrdinals"
+
+  # Lazy importer library indicators
+  - id: lazy-importer-str
+    desc: Lazy importer library string
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: string
+      regex: "(?i)lazy.?import(er)?"
+
+  - id: li-fn-macro
+    desc: LI_FN macro usage
+    crit: suspicious
+    conf: 0.95
+    if:
+      type: string
+      substr: "LI_FN"
+
+  - id: li-module-macro
+    desc: LI_MODULE macro usage
+    crit: suspicious
+    conf: 0.95
+    if:
+      type: string
+      substr: "LI_MODULE"
+
+  # Hash algorithm indicators
+  - id: fnv1a-hash
+    desc: FNV-1a hash algorithm
+    crit: notable
+    conf: 0.65
+    if:
+      type: string
+      regex: "(?i)fnv.?1a"
+
+  - id: djb2-hash
+    desc: DJB2 hash algorithm
+    crit: notable
+    conf: 0.65
+    if:
+      type: string
+      regex: "(?i)djb2"
+
+  # Get function by hash patterns
+  - id: get-proc-by-hash
+    desc: Get procedure by hash function
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: string
+      regex: "(?i)get.?proc.?by.?hash"
+
+  - id: resolve-by-hash
+    desc: Resolve API by hash function
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: string
+      regex: "(?i)resolve.?by.?hash"
+
+composite_rules:
+  # PEB traversal patterns
+  - id: peb-traversal
+    desc: PEB module list traversal
+    crit: notable
+    conf: 0.85
+    any:
+      - id: in-memory-order
+      - id: in-load-order
+      - id: in-init-order
+
+  # Export table parsing
+  - id: export-parsing
+    desc: PE export table parsing
+    crit: notable
+    conf: 0.8
+    needs: 2
+    any:
+      - id: image-export-directory
+      - id: address-of-functions
+      - id: address-of-names
+      - id: address-of-name-ordinals
+
+  # Lazy importer usage
+  - id: lazy-importer
+    desc: Lazy importer library usage
+    crit: suspicious
+    conf: 0.9
+    any:
+      - id: lazy-importer-str
+      - id: li-fn-macro
+      - id: li-module-macro
+
+  # Hash-based API resolution
+  - id: hash-api-resolution
+    desc: Hash-based API resolution technique
+    crit: suspicious
+    conf: 0.95
+    all:
+      - id: peb-traversal
+      - id: export-parsing

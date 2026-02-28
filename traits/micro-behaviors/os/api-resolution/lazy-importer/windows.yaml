@@ -1,0 +1,94 @@
+# Lazy Importer Library Detection
+# Detects usage of lazy_importer library for API obfuscation
+# ATT&CK: T1027.002 (Obfuscated Files or Information: Software Packing)
+
+defaults:
+  for: [pe, dll, c, cpp]
+  platforms: [windows]
+  attack: "T1027.002"
+
+traits:
+  # Lazy importer macros - use raw for source code matching
+  - id: li-fn-macro
+    desc: LI_FN macro (lazy import function)
+    crit: suspicious
+    conf: 0.95
+    if:
+      type: raw
+      substr: "LI_FN("
+
+  - id: li-module-macro
+    desc: LI_MODULE macro (lazy import module)
+    crit: suspicious
+    conf: 0.95
+    if:
+      type: raw
+      substr: "LI_MODULE("
+
+  - id: lazy-importer-khash
+    desc: LAZY_IMPORTER_KHASH compile-time hash
+    crit: suspicious
+    conf: 0.95
+    if:
+      type: raw
+      substr: "LAZY_IMPORTER_KHASH"
+
+  # Library header indicators
+  - id: lazy-importer-hpp
+    desc: lazy_importer.hpp header
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: raw
+      regex: "lazy_importer(\\.hpp)?"
+
+  - id: justas-lazy-importer
+    desc: JustasMasiulis lazy_importer attribution
+    crit: suspicious
+    conf: 0.95
+    if:
+      type: raw
+      substr: "JustasMasiulis"
+
+  # Implementation patterns
+  - id: lazy-function-template
+    desc: lazy_function template class
+    crit: notable
+    conf: 0.85
+    if:
+      type: raw
+      substr: "lazy_function"
+
+  - id: cached-call-pattern
+    desc: .cached() lazy import call
+    crit: notable
+    conf: 0.8
+    if:
+      type: raw
+      regex: "\\.cached\\(\\)\\("
+
+  - id: safe-cached-pattern
+    desc: .safe_cached() lazy import call
+    crit: notable
+    conf: 0.85
+    if:
+      type: raw
+      regex: "\\.safe_cached\\(\\)\\("
+
+composite_rules:
+  - id: lazy-importer-usage
+    desc: Lazy importer library usage
+    crit: suspicious
+    conf: 0.95
+    any:
+      - id: li-fn-macro
+      - id: li-module-macro
+      - id: lazy-importer-khash
+
+  - id: lazy-importer-calls
+    desc: Lazy importer cached calls
+    crit: suspicious
+    conf: 0.9
+    any:
+      - id: cached-call-pattern
+      - id: safe-cached-pattern

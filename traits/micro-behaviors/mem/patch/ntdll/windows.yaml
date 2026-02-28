@@ -1,0 +1,110 @@
+# ntdll Patching / Unhooking Patterns
+# Detects techniques to patch ntdll functions to evade detection
+# ATT&CK: T1562.001 (Impair Defenses: Disable or Modify Tools)
+
+defaults:
+  for: [pe, dll]
+  platforms: [windows]
+  attack: "T1562.001"
+
+traits:
+  # ZwQueryVirtualMemory patching (hide memory regions)
+  - id: zw-query-virtual-memory
+    desc: ZwQueryVirtualMemory function reference
+    crit: notable
+    conf: 0.7
+    if:
+      type: string
+      substr: "ZwQueryVirtualMemory"
+
+  - id: nt-query-virtual-memory
+    desc: NtQueryVirtualMemory function reference
+    crit: notable
+    conf: 0.7
+    if:
+      type: string
+      substr: "NtQueryVirtualMemory"
+
+  # NtManageHotPatch (disable hot patching)
+  - id: nt-manage-hot-patch
+    desc: NtManageHotPatch function reference
+    crit: suspicious
+    conf: 0.85
+    if:
+      type: string
+      substr: "NtManageHotPatch"
+
+  # STATUS_NOT_SUPPORTED return patching
+  - id: status-not-supported
+    desc: STATUS_NOT_SUPPORTED constant
+    crit: notable
+    conf: 0.6
+    if:
+      type: hex
+      pattern: "bb 01 00 00 c0"
+
+  # Common unhooking patterns
+  - id: ntdll-unhook-str
+    desc: ntdll unhook string indicator
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: string
+      regex: "(?i)(unhook|patch).?ntdll"
+
+  - id: fresh-ntdll-str
+    desc: Fresh ntdll copy indicator
+    crit: suspicious
+    conf: 0.85
+    if:
+      type: string
+      regex: "(?i)fresh.?ntdll"
+
+  # KnownDlls reference (for getting clean ntdll)
+  - id: knowndlls-path
+    desc: KnownDlls object path
+    crit: notable
+    conf: 0.8
+    if:
+      type: string
+      substr: "\\KnownDlls\\"
+
+  # ntdll.dll.txt (disk copy technique)
+  - id: ntdll-disk-copy
+    desc: ntdll disk copy path
+    crit: suspicious
+    conf: 0.85
+    if:
+      type: string
+      regex: "(?i)ntdll\\.dll\\.(txt|bak|old|copy)"
+
+  # VirtualProtect on ntdll
+  - id: ntdll-text-section
+    desc: ntdll .text section reference
+    crit: notable
+    conf: 0.7
+    if:
+      type: string
+      regex: "ntdll.{0,30}\\.text"
+
+composite_rules:
+  - id: query-memory-functions
+    desc: Virtual memory query functions
+    any:
+      - id: zw-query-virtual-memory
+      - id: nt-query-virtual-memory
+
+  - id: knowndlls-text-combo
+    desc: KnownDlls with .text section access
+    all:
+      - id: knowndlls-path
+      - id: ntdll-text-section
+
+  - id: ntdll-evasion
+    desc: ntdll patching/unhooking technique
+    crit: suspicious
+    conf: 0.9
+    any:
+      - id: ntdll-unhook-str
+      - id: fresh-ntdll-str
+      - id: knowndlls-text-combo

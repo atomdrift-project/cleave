@@ -1,0 +1,76 @@
+# In-Memory DLL Loading (MemoryModule)
+# Detects MemoryModule library for loading DLLs from memory
+# ATT&CK: T1620 (Reflective Code Loading)
+
+defaults:
+  for: [pe, dll, c, cpp]
+  platforms: [windows]
+  attack: "T1620"
+  mbc: "E1620"
+
+traits:
+  - id: memory-load-library
+    desc: MemoryLoadLibrary function
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: string
+      substr: "MemoryLoadLibrary"
+
+  - id: memory-get-proc-address
+    desc: MemoryGetProcAddress function
+    crit: suspicious
+    conf: 0.85
+    if:
+      type: string
+      substr: "MemoryGetProcAddress"
+
+  - id: memory-free-library
+    desc: MemoryFreeLibrary function
+    crit: notable
+    conf: 0.8
+    if:
+      type: string
+      substr: "MemoryFreeLibrary"
+
+  - id: hmemorymodule-type
+    desc: HMEMORYMODULE type definition
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: string
+      substr: "HMEMORYMODULE"
+
+  - id: memory-call-entry-point
+    desc: MemoryCallEntryPoint function
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: string
+      substr: "MemoryCallEntryPoint"
+
+  - id: custom-load-library-func
+    desc: CustomLoadLibraryFunc callback
+    crit: notable
+    conf: 0.8
+    if:
+      type: string
+      substr: "CustomLoadLibraryFunc"
+
+  - id: copy-sections-fn
+    desc: CopySections function (PE manipulation)
+    crit: notable
+    conf: 0.75
+    if:
+      type: string
+      substr: "CopySections"
+
+composite_rules:
+  - id: memory-module-usage
+    desc: MemoryModule library usage
+    crit: suspicious
+    conf: 0.95
+    any:
+      - id: memory-load-library
+      - id: hmemorymodule-type
+      - id: memory-call-entry-point

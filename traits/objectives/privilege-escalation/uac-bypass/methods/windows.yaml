@@ -145,3 +145,13 @@ composite_rules:
     any:
       - id: conhost-headless
       - id: powershell-hidden-window
+
+  # computerdefaults.exe UAC bypass (ms-settings variant)
+  - id: computerdefaults-uac-bypass
+    desc: ComputerDefaults.exe UAC bypass technique
+    crit: hostile
+    conf: 0.98
+    mbc: "E1548"
+    all:
+      - id: computerdefaults-exe
+      - id: shell-open-command-reg

@@ -1,0 +1,98 @@
+# Windows DPAPI Usage Detection
+# Detects usage of Data Protection API for credential decryption
+# ATT&CK: T1555.003 (Credentials from Web Browsers)
+
+defaults:
+  for: [pe, dll]
+  platforms: [windows]
+  attack: "T1555.003"
+  mbc: "E1555.003"
+
+traits:
+  # DPAPI decryption functions
+  - id: crypt-unprotect-data
+    desc: CryptUnprotectData API call
+    crit: notable
+    conf: 0.8
+    if:
+      type: string
+      substr: "CryptUnprotectData"
+
+  # DATA_BLOB structure
+  - id: data-blob-struct
+    desc: DATA_BLOB structure reference
+    crit: notable
+    conf: 0.6
+    if:
+      type: string
+      substr: "DATA_BLOB"
+
+  # AES-GCM for Chromium v80+
+  - id: aes-gcm-decrypt
+    desc: AES-GCM decryption (Chromium v80+)
+    crit: notable
+    conf: 0.7
+    if:
+      type: string
+      regex: "(?i)aes.?gcm"
+
+  - id: bcrypt-aes-gcm
+    desc: BCrypt AES-GCM algorithm
+    crit: notable
+    conf: 0.75
+    if:
+      type: string
+      substr: "BCRYPT_AES_GCM"
+
+  # v10/v11 prefix (Chromium encrypted values)
+  - id: chromium-v10-prefix
+    desc: Chromium v10 encryption prefix
+    crit: notable
+    conf: 0.7
+    if:
+      type: string
+      substr: "v10"
+
+  - id: chromium-v11-prefix
+    desc: Chromium v11 encryption prefix
+    crit: notable
+    conf: 0.7
+    if:
+      type: string
+      substr: "v11"
+
+  # Master key paths
+  - id: master-key-path
+    desc: DPAPI master key path
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: string
+      regex: "(?i)Protect[/\\\\]+S-1-"
+
+  - id: roaming-credentials
+    desc: Roaming credentials path
+    crit: notable
+    conf: 0.75
+    if:
+      type: string
+      regex: "(?i)AppData[/\\\\]+Roaming[/\\\\]+Microsoft[/\\\\]+Credentials"
+
+composite_rules:
+  # Chromium encryption prefixes
+  - id: chromium-encryption-prefix
+    desc: Chromium encryption version prefix
+    crit: notable
+    conf: 0.75
+    any:
+      - id: chromium-v10-prefix
+      - id: chromium-v11-prefix
+
+  # DPAPI usage
+  - id: dpapi-usage
+    desc: DPAPI credential decryption
+    crit: suspicious
+    conf: 0.85
+    all:
+      - id: crypt-unprotect-data
+      - id: data-blob-struct

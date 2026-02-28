@@ -58,9 +58,10 @@ pub(crate) enum FileType {
     Java,
     /// Ruby source file
     Ruby,
-    /// C source file
+    /// C/C++ source file (cpp aliases to this)
     C,
-    /// C++ source file
+    /// C++ source file (aliased to C, kept for backwards compatibility)
+    #[allow(dead_code)]
     Cpp,
     /// Go source file
     Go,
@@ -230,7 +231,7 @@ impl FileType {
             "python" | "python_script" => FileType::Python,
             "javascript" | "js" => FileType::JavaScript,
             "typescript" | "ts" => FileType::TypeScript,
-            "c" | "h" => FileType::C,
+            "c" | "h" | "cpp" | "cxx" | "cc" | "hpp" | "hxx" => FileType::C,
             "rust" | "rs" => FileType::Rust,
             "go" => FileType::Go,
             "java" => FileType::Java,
@@ -250,7 +251,7 @@ impl FileType {
             "applescript" | "scpt" => FileType::AppleScript,
             "vbs" | "vbscript" => FileType::Vbs,
             "html" | "htm" => FileType::Html,
-            "cpp" | "cxx" | "cc" | "hpp" | "hxx" => FileType::Cpp,
+            // cpp aliases to c (handled above)
             // Manifest/config formats
             "package.json" | "packagejson" => FileType::PackageJson,
             "chrome-manifest" | "chromemanifest" => FileType::ChromeManifest,

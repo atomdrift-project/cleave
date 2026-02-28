@@ -1,0 +1,147 @@
+# Electron Application Infection
+# Detects targeting and replacement of Electron app.asar files
+# ATT&CK: T1195.002 (Supply Chain Compromise: Compromise Software Supply Chain)
+
+defaults:
+  for: [all]
+  attack: "T1195.002"
+  mbc: "E1478"
+
+traits:
+  # app.asar file targeting
+  - id: app-asar-path
+    desc: Electron app.asar file path
+    crit: notable
+    conf: 0.7
+    if:
+      type: string
+      regex: "(?i)app\\.asar"
+
+  - id: resources-app-asar
+    desc: Electron resources/app.asar path
+    crit: notable
+    conf: 0.8
+    if:
+      type: string
+      regex: "(?i)resources[/\\\\]+app\\.asar"
+
+  # app-* directory enumeration (Electron version dirs)
+  - id: app-version-dir
+    desc: Electron app-* version directory pattern
+    crit: notable
+    conf: 0.75
+    if:
+      type: string
+      regex: "[/\\\\]app-[0-9*]"
+
+  # Electron application paths
+  - id: discord-app-path
+    desc: Discord application directory
+    crit: notable
+    conf: 0.7
+    if:
+      type: string
+      regex: "(?i)(discord|discordcanary|discordptb)[/\\\\]"
+
+  - id: slack-app-path
+    desc: Slack application directory
+    crit: notable
+    conf: 0.7
+    if:
+      type: string
+      regex: "(?i)slack[/\\\\]"
+
+  - id: teams-app-path
+    desc: Microsoft Teams application directory
+    crit: notable
+    conf: 0.7
+    if:
+      type: string
+      regex: "(?i)Microsoft[/\\\\]Teams[/\\\\]"
+
+  - id: vscode-app-path
+    desc: VS Code application directory
+    crit: notable
+    conf: 0.7
+    if:
+      type: string
+      regex: "(?i)(Code|VSCode)[/\\\\]"
+
+  - id: signal-app-path
+    desc: Signal application directory
+    crit: notable
+    conf: 0.7
+    if:
+      type: string
+      regex: "(?i)Signal[/\\\\]"
+
+  # Asar manipulation indicators
+  - id: asar-extract
+    desc: asar extract operation
+    crit: notable
+    conf: 0.75
+    if:
+      type: string
+      regex: "(?i)asar.{0,20}(extract|unpack)"
+
+  - id: asar-pack
+    desc: asar pack operation
+    crit: notable
+    conf: 0.75
+    if:
+      type: string
+      regex: "(?i)asar.{0,20}(pack|create)"
+
+  # File size check (infection marker)
+  - id: file-size-check
+    desc: File size comparison (infection check)
+    crit: notable
+    conf: 0.6
+    if:
+      type: string
+      substr: "file_size"
+
+  # Download replacement payload
+  - id: curl-asar-download
+    desc: curl download to asar path
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: string
+      regex: "curl.{0,50}app\\.asar"
+
+composite_rules:
+  # Electron app paths
+  - id: electron-app-paths
+    desc: Electron application directory paths
+    any:
+      - id: discord-app-path
+      - id: slack-app-path
+      - id: teams-app-path
+      - id: vscode-app-path
+      - id: signal-app-path
+
+  # app.asar with version dir
+  - id: asar-with-version-dir
+    desc: app.asar with version directory
+    all:
+      - id: app-asar-path
+      - id: app-version-dir
+
+  # app.asar targeting
+  - id: asar-targeting
+    desc: Electron app.asar file targeting
+    crit: notable
+    conf: 0.8
+    any:
+      - id: resources-app-asar
+      - id: asar-with-version-dir
+
+  # Electron app infection
+  - id: electron-infection
+    desc: Electron application infection pattern
+    crit: hostile
+    conf: 0.95
+    all:
+      - id: electron-app-paths
+      - id: resources-app-asar

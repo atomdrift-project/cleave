@@ -1,0 +1,77 @@
+# Named Pipe IPC Detection
+# Detects named pipe usage for inter-process communication
+# ATT&CK: T1559.001 (Inter-Process Communication: COM)
+
+defaults:
+  for: [pe, dll, c, cpp]
+  platforms: [windows]
+  attack: "T1559"
+
+traits:
+  # Named pipe path patterns
+  - id: pipe-path-prefix
+    desc: Named pipe path prefix
+    crit: notable
+    conf: 0.7
+    if:
+      type: string
+      regex: "\\\\\\\\\\.\\\\pipe\\\\"
+
+  - id: create-named-pipe
+    desc: CreateNamedPipe API call
+    crit: notable
+    conf: 0.7
+    if:
+      type: string
+      regex: "CreateNamedPipe[AW]?"
+
+  - id: connect-named-pipe
+    desc: ConnectNamedPipe API call
+    crit: notable
+    conf: 0.65
+    if:
+      type: string
+      substr: "ConnectNamedPipe"
+
+  # Pipe access modes
+  - id: pipe-access-duplex
+    desc: PIPE_ACCESS_DUPLEX mode
+    crit: notable
+    conf: 0.6
+    if:
+      type: string
+      substr: "PIPE_ACCESS_DUPLEX"
+
+  - id: pipe-type-message
+    desc: PIPE_TYPE_MESSAGE mode
+    crit: notable
+    conf: 0.6
+    if:
+      type: string
+      substr: "PIPE_TYPE_MESSAGE"
+
+  # Suspicious pipe names
+  - id: vcc-framework-pipe
+    desc: VccFramework malware pipe
+    crit: suspicious
+    conf: 0.95
+    if:
+      type: string
+      substr: "VccFramework"
+
+composite_rules:
+  - id: named-pipe-server
+    desc: Named pipe server creation
+    crit: notable
+    conf: 0.8
+    all:
+      - id: create-named-pipe
+      - id: connect-named-pipe
+
+  - id: duplex-message-pipe
+    desc: Full-duplex message pipe
+    crit: notable
+    conf: 0.75
+    all:
+      - id: pipe-access-duplex
+      - id: pipe-type-message

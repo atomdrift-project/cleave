@@ -56,6 +56,31 @@ traits:
       type: string
       substr: 8.8.8.8/dns-query
 
+  # Google DoH JSON API (used by malware for stealth DNS)
+  - id: doh-google-json
+    desc: Google DoH JSON API endpoint
+    crit: notable
+    conf: 0.8
+    if:
+      type: string
+      substr: "dns.google/resolve"
+
+  - id: doh-cloudflare-json
+    desc: Cloudflare DoH JSON API endpoint
+    crit: notable
+    conf: 0.8
+    if:
+      type: string
+      substr: "cloudflare-dns.com/dns-query"
+
+  - id: doh-quad9-json
+    desc: Quad9 DoH endpoint
+    crit: notable
+    conf: 0.75
+    if:
+      type: string
+      substr: "dns.quad9.net"
+
 composite_rules:
   - id: doh
     desc: DNS over HTTPS support
@@ -68,3 +93,6 @@ composite_rules:
       - id: doh-query-path
       - id: doh-cloudflare-ip
       - id: doh-google-ip
+      - id: doh-google-json
+      - id: doh-cloudflare-json
+      - id: doh-quad9-json

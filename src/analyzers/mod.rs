@@ -361,7 +361,7 @@ pub(crate) fn detect_file_type_from_path(file_path: &Path) -> FileType {
             "pl" | "pm" | "t" => return FileType::Perl,
             "ps1" | "psm1" | "psd1" => return FileType::PowerShell,
             "bat" | "cmd" => return FileType::Batch,
-            "c" | "h" => return FileType::C,
+            "c" | "h" | "cpp" | "hpp" | "cc" | "cxx" | "hxx" | "hh" => return FileType::C,
             "lua" => return FileType::Lua,
             "cs" => return FileType::CSharp,
             "swift" => return FileType::Swift,
@@ -585,6 +585,12 @@ pub fn detect_file_type(file_path: &Path) -> Result<FileType> {
                         | "exs"
                         | "c"
                         | "h"
+                        | "cpp"
+                        | "hpp"
+                        | "cc"
+                        | "cxx"
+                        | "hxx"
+                        | "hh"
                 )
             )
         });
@@ -631,6 +637,12 @@ pub fn detect_file_type(file_path: &Path) -> Result<FileType> {
                     | "exs"
                     | "c"
                     | "h"
+                    | "cpp"
+                    | "hpp"
+                    | "cc"
+                    | "cxx"
+                    | "hxx"
+                    | "hh"
                     | "sh"
                     | "bat"
                     | "cmd"
@@ -716,7 +728,7 @@ pub fn detect_file_type(file_path: &Path) -> Result<FileType> {
         if matches!(ext_str.as_str(), "bat" | "cmd") {
             return Ok(FileType::Batch);
         }
-        if ext_str == "c" || ext_str == "h" {
+        if matches!(ext_str.as_str(), "c" | "h" | "cpp" | "hpp" | "cc" | "cxx" | "hxx" | "hh") {
             return Ok(FileType::C);
         }
         if ext_str == "lua" {

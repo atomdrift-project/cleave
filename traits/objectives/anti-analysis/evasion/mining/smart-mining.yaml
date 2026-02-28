@@ -1,0 +1,198 @@
+# Smart Mining Evasion Detection
+# Detects cryptocurrency miners that evade detection by pausing when monitored
+# ATT&CK: T1496 (Resource Hijacking), T1497 (Virtualization/Sandbox Evasion)
+
+defaults:
+  for: [all]
+  attack: "T1496"
+  mbc: "B0004"
+
+traits:
+  # Task Manager detection
+  - id: taskmgr-check
+    desc: Task Manager process check
+    crit: notable
+    conf: 0.8
+    if:
+      type: string
+      regex: "(?i)taskmgr(\\.exe)?"
+
+  - id: procexp-check
+    desc: Process Explorer check
+    crit: notable
+    conf: 0.85
+    if:
+      type: string
+      regex: "(?i)procexp(64)?(\\.exe)?"
+
+  - id: procmon-check
+    desc: Process Monitor check
+    crit: notable
+    conf: 0.85
+    if:
+      type: string
+      regex: "(?i)procmon(64)?(\\.exe)?"
+
+  - id: perfmon-check
+    desc: Performance Monitor check
+    crit: notable
+    conf: 0.7
+    if:
+      type: string
+      regex: "(?i)perfmon(\\.exe)?"
+
+  - id: resmon-check
+    desc: Resource Monitor check
+    crit: notable
+    conf: 0.75
+    if:
+      type: string
+      regex: "(?i)resmon(\\.exe)?"
+
+  # User activity monitoring
+  - id: get-last-input-info
+    desc: GetLastInputInfo API (idle detection)
+    crit: notable
+    conf: 0.7
+    for: [pe, dll]
+    if:
+      type: string
+      substr: "GetLastInputInfo"
+
+  - id: get-foreground-window
+    desc: GetForegroundWindow API
+    crit: notable
+    conf: 0.6
+    for: [pe, dll]
+    if:
+      type: string
+      substr: "GetForegroundWindow"
+
+  - id: get-idle-time
+    desc: GetIdleTime function
+    crit: notable
+    conf: 0.7
+    if:
+      type: string
+      regex: "(?i)get.?idle.?time"
+
+  # Mining-specific strings
+  - id: pause-if-str
+    desc: PauseIf conditional string
+    crit: suspicious
+    conf: 0.85
+    if:
+      type: string
+      regex: "(?i)pause.?if.?(task|active|idle|user)"
+
+  - id: xmrig-str
+    desc: XMRig miner reference
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: string
+      regex: "(?i)xmrig"
+
+  - id: stratum-protocol
+    desc: Stratum mining protocol
+    crit: suspicious
+    conf: 0.85
+    if:
+      type: string
+      regex: "stratum\\+tcp://"
+
+  - id: mining-pool-monero
+    desc: Monero mining pool reference
+    crit: notable
+    conf: 0.75
+    if:
+      type: string
+      regex: "(?i)pool\\.monero"
+
+  - id: mining-pool-xmr
+    desc: XMR mining pool reference
+    crit: notable
+    conf: 0.75
+    if:
+      type: string
+      regex: "(?i)(2miners|nanopool|nicehash)"
+
+  - id: monero-wallet-regex
+    desc: Monero wallet address pattern
+    crit: notable
+    conf: 0.8
+    if:
+      type: string
+      regex: "[48][0-9AB][1-9A-HJ-NP-Za-km-z]{93}"
+
+  # CPU throttling
+  - id: set-thread-affinity
+    desc: SetThreadAffinityMask API (CPU control)
+    crit: notable
+    conf: 0.6
+    for: [pe, dll]
+    if:
+      type: string
+      substr: "SetThreadAffinityMask"
+
+  - id: cpu-usage-str
+    desc: CPU usage monitoring string
+    crit: notable
+    conf: 0.6
+    if:
+      type: string
+      regex: "(?i)cpu.?(usage|percent|load)"
+
+composite_rules:
+  # Monitoring tool checks
+  - id: monitoring-tool-checks
+    desc: System monitoring tool detection
+    crit: suspicious
+    conf: 0.85
+    needs: 2
+    any:
+      - id: taskmgr-check
+      - id: procexp-check
+      - id: procmon-check
+      - id: perfmon-check
+      - id: resmon-check
+
+  # User activity monitoring
+  - id: activity-monitoring
+    desc: User activity monitoring
+    crit: notable
+    conf: 0.8
+    any:
+      - id: get-last-input-info
+      - id: get-idle-time
+
+  # Mining indicators
+  - id: mining-indicators
+    desc: Cryptocurrency mining indicators
+    crit: suspicious
+    conf: 0.9
+    any:
+      - id: xmrig-str
+      - id: stratum-protocol
+      - id: mining-pool-monero
+      - id: mining-pool-xmr
+
+  # Smart miner (evades monitoring)
+  - id: smart-miner
+    desc: Smart cryptocurrency miner with evasion
+    crit: hostile
+    conf: 0.95
+    attack: "T1496"
+    all:
+      - id: mining-indicators
+      - id: monitoring-tool-checks
+
+  # Activity-aware miner
+  - id: activity-aware-miner
+    desc: Activity-aware cryptocurrency miner
+    crit: hostile
+    conf: 0.95
+    attack: "T1496"
+    all:
+      - id: mining-indicators
+      - id: activity-monitoring

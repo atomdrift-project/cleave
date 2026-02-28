@@ -292,8 +292,7 @@ pub(crate) fn parse_file_types(types: &[String], warnings: &mut Vec<String>) -> 
                 // Compiled languages (fullname + extension)
                 "java" => vec![RuleFileType::Java],
                 "class" => vec![RuleFileType::Class],
-                "c" => vec![RuleFileType::C],
-                "cpp" | "c++" | "cc" | "cxx" => vec![RuleFileType::Cpp],
+                "c" | "cpp" | "c++" | "cc" | "cxx" => vec![RuleFileType::C],
                 "rust" => vec![RuleFileType::Rust],
                 "go" => vec![RuleFileType::Go],
                 "csharp" | "cs" => vec![RuleFileType::CSharp],

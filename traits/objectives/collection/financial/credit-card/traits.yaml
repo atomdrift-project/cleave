@@ -1,0 +1,173 @@
+# Credit Card Data Collection
+# Detects credit card number validation and exfiltration
+# ATT&CK: T1005 (Data from Local System)
+
+defaults:
+  for: [all]
+  attack: "T1005"
+  mbc: "B0030"
+
+traits:
+  # Luhn algorithm indicators
+  - id: luhn-algorithm
+    desc: Luhn algorithm implementation
+    crit: suspicious
+    conf: 0.85
+    if:
+      type: string
+      regex: "(?i)luhn"
+
+  - id: mod10-check
+    desc: Modulo 10 check (Luhn)
+    crit: notable
+    conf: 0.7
+    if:
+      type: string
+      regex: "(?i)mod.?10"
+
+  - id: checksum-digit
+    desc: Checksum digit validation
+    crit: notable
+    conf: 0.6
+    if:
+      type: string
+      regex: "(?i)check.?sum.?digit"
+
+  # Card type detection
+  - id: visa-detection
+    desc: Visa card detection
+    crit: suspicious
+    conf: 0.85
+    if:
+      type: string
+      regex: "(?i)(card.?type|provider).{0,20}visa"
+
+  - id: mastercard-detection
+    desc: Mastercard detection
+    crit: suspicious
+    conf: 0.85
+    if:
+      type: string
+      regex: "(?i)(card.?type|provider).{0,20}master"
+
+  - id: amex-detection
+    desc: American Express detection
+    crit: suspicious
+    conf: 0.85
+    if:
+      type: string
+      regex: "(?i)(card.?type|provider).{0,20}(amex|american.?express)"
+
+  - id: discover-detection
+    desc: Discover card detection
+    crit: suspicious
+    conf: 0.85
+    if:
+      type: string
+      regex: "(?i)(card.?type|provider).{0,20}discover"
+
+  # Credit card regex patterns
+  - id: cc-regex-16digit
+    desc: 16-digit card number regex
+    crit: suspicious
+    conf: 0.85
+    if:
+      type: string
+      regex: "\\[0-9\\]\\{16\\}"
+
+  - id: cc-regex-pattern
+    desc: Credit card format regex
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: string
+      regex: "\\d{4}.?\\d{4}.?\\d{4}.?\\d{4}"
+
+  # Card prefix detection (BIN ranges)
+  - id: visa-bin
+    desc: Visa BIN range (starts with 4)
+    crit: notable
+    conf: 0.7
+    if:
+      type: string
+      regex: 'startsWith.{0,20}"4"'
+
+  - id: mastercard-bin
+    desc: Mastercard BIN range (51-55, 2221-2720)
+    crit: notable
+    conf: 0.75
+    if:
+      type: string
+      regex: 'starts.{0,20}(5[1-5]|2[2-7])'
+
+  # CVV/CVC patterns
+  - id: cvv-field
+    desc: CVV/CVC field reference
+    crit: notable
+    conf: 0.7
+    if:
+      type: string
+      regex: "(?i)(cvv|cvc|cvn|cv2)"
+
+  - id: expiry-field
+    desc: Card expiry field reference
+    crit: notable
+    conf: 0.6
+    if:
+      type: string
+      regex: "(?i)expir(y|ation)"
+
+  # Chromium autofill database
+  - id: autofill-db
+    desc: Chromium autofill database
+    crit: suspicious
+    conf: 0.85
+    if:
+      type: string
+      regex: "(?i)(Web Data|autofill)"
+
+  - id: credit-cards-table
+    desc: credit_cards database table
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: string
+      substr: "credit_cards"
+
+composite_rules:
+  # Card type detection
+  - id: card-type-detection
+    desc: Credit card type detection
+    crit: suspicious
+    conf: 0.9
+    needs: 2
+    any:
+      - id: visa-detection
+      - id: mastercard-detection
+      - id: amex-detection
+      - id: discover-detection
+
+  # Mod10 with regex combo
+  - id: mod10-regex-combo
+    desc: Mod10 check with card regex
+    all:
+      - id: mod10-check
+      - id: cc-regex-16digit
+
+  # Card validation
+  - id: card-validation
+    desc: Credit card validation logic
+    crit: suspicious
+    conf: 0.9
+    any:
+      - id: luhn-algorithm
+      - id: mod10-regex-combo
+
+  # Credit card stealer
+  - id: credit-card-stealer
+    desc: Credit card data stealer
+    crit: hostile
+    conf: 0.95
+    all:
+      - id: card-type-detection
+      - id: cvv-field

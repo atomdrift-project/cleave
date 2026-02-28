@@ -41,77 +41,25 @@ traits:
   # Compression tools (zstd, lzma, xz, etc.) contain Huffman/FSE lookup tables
   # that legitimately contain unusual character sequences.
   # Build tools (make, cmake, etc.) contain shell metacharacter definitions.
+  # Note: This rule fires on many legitimate binaries with lookup tables.
+  # Use as component only - combine with other indicators for signal.
   - id: unusual-character-combinations
     desc: "Unusual character combinations"
-    crit: notable
-    conf: 0.65
+    crit: component
+    conf: 0.5
     for: [elf]
     size_max: 2097152
     if:
       type: string
       regex: "[^a-zA-Z0-9\\s\\.,\\-_/\\\\:@]{8,}"
     not:
-      # Shell metacharacter definitions used by build tools, shells, interpreters
-      # Includes sequences like !\"#$%&'())**++
       - regex: "^[#;\"'*?\\[\\]&|<>(){}$`^~!+]+$"
-      # Common padding or separator strings in legitimate binaries
       - regex: "^!+$"
       - regex: "^=+$"
-      - substr: "========"
-      # ASCII symbol ranges
-      - regex: "^!\"#\\$%&'\\(\\)\\*\\+$"
-      # ISO-8859-1 upper character range (often used in character sets/tables)
       - regex: "^[\\xA0-\\xFF]{8,}$"
-      # Sequential byte patterns
       - substr: "0123456789"
       - substr: "abcdefghijklmnopqrstuvwxyz"
-      - substr: "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
     attack: "T1027"
-    unless:
-      - id: micro-behaviors/dylib/library::system-lib-marker
-      - id: micro-behaviors/interface/usage/usage-help
-      - id: micro-behaviors/data/encode/base64/alphabet-standard
-      # Exclude curl/libcurl which has special chars in help text
-      - id: micro-behaviors/communications/download/curl::curl-easy-init
-      # Exclude character set definitions
-      - id: micro-behaviors/data/text/encoding/iso-8859-1
-    downgrade:
-      any:
-        # Binutils and other development tools often have lookup tables for symbols
-        - type: string
-          substr: "binutils"
-        - type: string
-          substr: "GNU ar"
-        - type: string
-          substr: "GNU make"
-        - type: string
-          substr: "make"
-        # Compression libraries have Huffman/FSE lookup tables that trigger this
-        - type: string
-          substr: "ZSTD_CCtx"
-        - type: string
-          substr: "ZSTD_DCtx"
-        - type: string
-          substr: "libzstd"
-        - type: string
-          substr: "liblzma"
-        - type: string
-          substr: "LzmaEnc"
-        - type: string
-          substr: "LzmaDec"
-        - type: string
-          substr: "deflate"
-        - type: string
-          substr: "liblz4"
-        - type: string
-          substr: "LZ4_compress"
-        # Database clients have locale/collation tables that trigger this
-        - type: string
-          substr: "libpq"
-        - type: string
-          substr: "postgresql"
-        # Go binaries have large tables for Unicode support
-        - id: metadata/lang/go
 
   # Dense unusual character patterns indicate active obfuscation rather than
   # occasional lookup tables. Benign binaries have <0.5 matches/KB; obfuscated
@@ -202,16 +150,13 @@ composite_rules:
     any:
       - id: xor-encoded-strings
       - id: dense-unusual-chars
+      - id: unusual-character-combinations
     unless:
       - id: micro-behaviors/interface/usage/usage-help
       - id: micro-behaviors/data/db/libpq
     downgrade:
       any:
-        - id: micro-behaviors/data/compression/zstd
-        - id: micro-behaviors/data/compression/lzma
-        - id: micro-behaviors/data/compression/zlib
-        - id: micro-behaviors/data/compression/lz4
-        - id: micro-behaviors/data/compression/bzip2
+        - id: micro-behaviors/data/compression
 
   - id: mirai-xor-obfuscation
     desc: "Mirai XOR obfuscation"

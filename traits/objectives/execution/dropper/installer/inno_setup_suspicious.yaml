@@ -1,0 +1,9 @@
+traits: []
+composite_rules:
+  - id: suspicious-massive-inno-setup
+    desc: "Detects extremely large Inno Setup installers (>50MB) with sparse logic density, often indicative of bundled backdoors, games, or heavily packed malware payloads."
+    criticality: suspicious
+    all:
+      - id: metadata/format/installer::inno-setup
+      - id: metadata/format::massive-executable
+      - id: objectives/anti-analysis/vm/detect::sparse-logic-density

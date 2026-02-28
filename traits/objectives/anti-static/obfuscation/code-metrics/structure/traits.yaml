@@ -26,8 +26,6 @@ traits:
     max: 0
     min_size: 2048
   unless:
-  - type: basename
-    regex: (test_|_test\.|\.test\.|\.spec\.).*\.(py|js|ts|go|php|rb|java)$
   - id: metadata/dev/testing::is-test
   downgrade:
     any:
@@ -45,8 +43,6 @@ traits:
     max: 0.01
     min_size: 2048
   unless:
-  - type: basename
-    regex: (test_|_test\.|\.test\.|\.spec\.).*\.(py|js|ts|go|php|rb|java)$
   - id: metadata/dev/testing::is-test
   downgrade:
     any:

@@ -1,0 +1,18 @@
+defaults:
+  for: [elf]
+  mbc: "C0027"
+  attack: "T1486"
+  crit: hostile
+
+composite_rules:
+  - id: esxi-ransomware-recovery-tool
+    desc: ESXi ransomware masquerading as a file recovery tool
+    all:
+      - id: micro-behaviors/interface/usage/tools::file-recovery-tool
+      - id: micro-behaviors/vm/detect/vmware::vmfs-path
+
+  - id: esxi-ransomware-logs
+    desc: ESXi ransomware logs combined with VMFS targeting
+    all:
+      - id: micro-behaviors/vm/detect/vmware::vmfs-path
+      - id: micro-behaviors/data/text/logs

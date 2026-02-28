@@ -23,21 +23,9 @@ composite_rules:
     attack: "T1071.004"
     for: [javascript]
     unless:
-      - id: metadata/dev/testing::node-common-require
-      - id: metadata/library::ioredis-auto-pipeline
-      - id: micro-behaviors/data/db/conn/redis::ioredis
-      - id: metadata/library::ioredis-utils
-      - id: metadata/library::cmd-proto-command
-      - id: metadata/library::cmd-proto-option
-      - id: metadata/library::cmd-proto-parse
-      - id: objectives/lateral-movement/supply-chain/npm/testing::has-assertions
-      - id: metadata/library/nodeunit::nodeunit
-      - id: metadata/library/nodeunit::nodeunit-require
-      - id: metadata/library::moment-locale
-    downgrade:
-      any:
-        - id: metadata/library/nodeunit::nodeunit
-        - id: metadata/library/nodeunit::nodeunit-require
+      - id: metadata/dev/testing
+      - id: micro-behaviors/data/db/conn/redis
+      - id: metadata/library/nodeunit
     any:
       - id: objectives/command-and-control/dns/tunneling::hex-chunk-concat-loop
       - id: objectives/command-and-control/dns/tunneling::hex-path-chunk-split

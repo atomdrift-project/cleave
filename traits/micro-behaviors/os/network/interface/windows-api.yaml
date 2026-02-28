@@ -1,0 +1,110 @@
+defaults:
+  for: [pe, dll]
+  platforms: [windows]
+  attack: "T1016"
+
+traits:
+  - id: get-adapters-info
+    desc: Enumerate local adapters via GetAdaptersInfo
+    crit: notable
+    conf: 0.9
+    if:
+      type: symbol
+      exact: "GetAdaptersInfo"
+
+  - id: get-adapters-addresses
+    desc: Enumerate local network adapter addresses
+    crit: notable
+    conf: 0.9
+    if:
+      type: symbol
+      exact: "GetAdaptersAddresses"
+
+  - id: net-domain-join-info
+    desc: Query host domain join status
+    crit: notable
+    conf: 0.8
+    if:
+      type: symbol
+      exact: "NetGetJoinInformation"
+
+  - id: wlan-open-handle
+    desc: Open WLAN API client handle
+    crit: notable
+    conf: 0.9
+    if:
+      type: symbol
+      exact: "WlanOpenHandle"
+
+  - id: wlan-enum-interfaces
+    desc: Enumerate WLAN interfaces
+    crit: notable
+    conf: 0.9
+    if:
+      type: symbol
+      exact: "WlanEnumInterfaces"
+
+  - id: wlan-get-available-network-list
+    desc: Enumerate nearby WiFi networks
+    crit: notable
+    conf: 0.95
+    if:
+      type: symbol
+      exact: "WlanGetAvailableNetworkList"
+
+  - id: wlan-api-provider
+    desc: WLAN API provider library
+    crit: notable
+    conf: 0.95
+    if:
+      type: basename
+      exact: "wlanapi.dll"
+
+  - id: bluetooth-find-first-radio
+    desc: Enumerate local Bluetooth radios
+    crit: notable
+    conf: 0.9
+    if:
+      type: symbol
+      exact: "BluetoothFindFirstRadio"
+
+  - id: bluetooth-find-first-device
+    desc: Enumerate nearby Bluetooth devices
+    crit: notable
+    conf: 0.9
+    if:
+      type: symbol
+      exact: "BluetoothFindFirstDevice"
+
+composite_rules:
+  - id: wlan-network-recon
+    desc: WLAN adapter and network enumeration
+    crit: suspicious
+    conf: 0.9
+    all:
+      - id: wlan-open-handle
+      - id: wlan-enum-interfaces
+      - id: wlan-get-available-network-list
+    downgrade:
+      any:
+        - id: wlan-api-provider
+
+  - id: bluetooth-device-recon
+    desc: Bluetooth radio and device enumeration
+    crit: suspicious
+    conf: 0.85
+    all:
+      - id: bluetooth-find-first-radio
+      - id: bluetooth-find-first-device
+
+  - id: host-network-fingerprint-surface
+    desc: Multi-source host network fingerprinting
+    crit: suspicious
+    conf: 0.9
+    needs: 3
+    any:
+      - id: get-adapters-info
+      - id: get-adapters-addresses
+      - id: net-domain-join-info
+      - id: wlan-network-recon
+      - id: bluetooth-device-recon

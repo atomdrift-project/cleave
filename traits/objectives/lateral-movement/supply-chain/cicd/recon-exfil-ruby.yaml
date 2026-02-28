@@ -1,0 +1,60 @@
+# CI/CD Reconnaissance + Exfiltration - Ruby
+# Detects RubyGems supply chain attacks targeting CI/CD environments
+# ATT&CK: T1195.001 (Supply Chain Compromise: Compromise Software Dependencies)
+
+defaults:
+  crit: hostile
+  attack: "T1195.001"
+  for: [ruby]
+
+composite_rules:
+  # =====================================================
+  # HTTP EXFILTRATION (Net::HTTP, HTTParty, etc.)
+  # =====================================================
+  - id: gem-runner-recon-http
+    desc: Ruby gem exfiltrates CI/CD info via HTTP
+    conf: 0.95
+    attack: "T1041"
+    all:
+      - id: micro-behaviors/os/env/vars/cicd::ruby-runner-fingerprinting
+    any:
+      - id: micro-behaviors/communications/http/request::net-http-post
+      - id: micro-behaviors/communications/http/request::net-http-get
+
+  # =====================================================
+  # DNS EXFILTRATION (Resolv)
+  # =====================================================
+  - id: gem-runner-recon-dns
+    desc: Ruby gem exfiltrates CI/CD info via DNS
+    conf: 0.95
+    attack: "T1048.003"
+    all:
+      - id: micro-behaviors/os/env/vars/cicd::ruby-runner-fingerprinting
+    any:
+      - id: micro-behaviors/communications/dns/lookup::dns-resolve
+
+  # =====================================================
+  # GEM CREDENTIAL THEFT
+  # =====================================================
+  - id: gem-credential-theft
+    desc: Ruby gem steals RubyGems/GitHub credentials
+    conf: 0.98
+    attack: "T1552.001"
+    all:
+      - id: micro-behaviors/os/env/vars/cicd::ruby-gem-credential-access
+    any:
+      - id: micro-behaviors/communications/http/request
+      - id: micro-behaviors/communications/dns/lookup
+
+  # =====================================================
+  # COMBINED DETECTION
+  # =====================================================
+  - id: gem-supply-chain-attack
+    desc: RubyGems supply chain attack targeting CI/CD
+    conf: 0.95
+    attack: "T1195.001"
+    needs: 2
+    any:
+      - id: micro-behaviors/os/env/vars/cicd::ruby-runner-fingerprinting
+      - id: micro-behaviors/os/env/vars/cicd::ruby-gem-credential-access
+      - id: micro-behaviors/os/env/vars/cicd::ruby-system-fingerprinting

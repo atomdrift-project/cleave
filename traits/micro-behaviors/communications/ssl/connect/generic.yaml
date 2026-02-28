@@ -69,7 +69,11 @@ traits:
       regex: "\\bverify_mode\\s*=\\s*(ssl\\.)?CERT_NONE\\b"
     unless:
       - type: string
-        regex: "urllib3|requests|botocore"
+        substr: "urllib3"
+      - type: string
+        substr: "requests"
+      - type: string
+        substr: "botocore"
 
   - id: reject-unauthorized-false
     desc: rejectUnauthorized false (Node.js)

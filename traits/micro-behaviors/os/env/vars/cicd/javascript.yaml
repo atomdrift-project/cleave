@@ -1,0 +1,125 @@
+# CI/CD Environment Variable Targeting - JavaScript/Node.js
+# Detects access to CI/CD runner environment variables in npm packages
+# ATT&CK: T1082 (System Information Discovery)
+
+defaults:
+  for: [javascript, typescript]
+  crit: notable
+  conf: 0.75
+
+traits:
+  # GitHub Actions runner variables via process.env
+  - id: process-env-runner-name
+    desc: process.env.RUNNER_NAME access
+    conf: 0.85
+    if:
+      type: raw
+      regex: "process\\.env\\.RUNNER_NAME"
+
+  - id: process-env-runner-os
+    desc: process.env.RUNNER_OS access
+    conf: 0.8
+    if:
+      type: raw
+      regex: "process\\.env\\.RUNNER_OS"
+
+  - id: process-env-github-actions
+    desc: process.env.GITHUB_ACTIONS access
+    conf: 0.8
+    if:
+      type: raw
+      regex: "process\\.env\\.GITHUB_ACTIONS"
+
+  - id: process-env-github-token
+    desc: process.env.GITHUB_TOKEN access
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: raw
+      regex: "process\\.env\\.GITHUB_TOKEN"
+
+  - id: process-env-npm-token
+    desc: process.env.NPM_TOKEN access
+    crit: suspicious
+    conf: 0.95
+    if:
+      type: raw
+      regex: "process\\.env\\.NPM_TOKEN"
+
+  # Bracket notation access (evasion technique)
+  - id: process-env-bracket-runner
+    desc: process.env bracket access for runner vars
+    conf: 0.85
+    if:
+      type: raw
+      regex: "process\\.env\\[[\"']RUNNER_"
+
+  - id: process-env-bracket-github
+    desc: process.env bracket access for github vars
+    conf: 0.8
+    if:
+      type: raw
+      regex: "process\\.env\\[[\"']GITHUB_"
+
+  # os.hostname() for fingerprinting
+  - id: os-hostname-call
+    desc: os.hostname() call
+    conf: 0.75
+    if:
+      type: ast
+      query: |
+        (call_expression
+          function: (member_expression
+            object: (identifier) @obj
+            property: (property_identifier) @prop)
+          (#eq? @obj "os")
+          (#eq? @prop "hostname"))
+
+  # os.platform/arch/type for fingerprinting
+  - id: os-platform-call
+    desc: os.platform() system fingerprinting
+    conf: 0.75
+    if:
+      type: raw
+      regex: "os\\.(platform|arch|type|release)\\s*\\("
+
+  # os.userInfo() for user fingerprinting
+  - id: os-userinfo-call
+    desc: os.userInfo() user fingerprinting
+    conf: 0.8
+    if:
+      type: raw
+      regex: "os\\.userInfo\\s*\\("
+
+composite_rules:
+  - id: js-runner-fingerprinting
+    desc: CI/CD runner fingerprinting via process.env
+    crit: suspicious
+    conf: 0.85
+    attack: "T1082"
+    needs: 2
+    any:
+      - id: process-env-runner-name
+      - id: process-env-runner-os
+      - id: process-env-github-actions
+      - id: process-env-bracket-runner
+      - id: process-env-bracket-github
+
+  - id: js-cicd-token-access
+    desc: CI/CD token/credential access
+    crit: suspicious
+    conf: 0.9
+    attack: "T1552.001"
+    any:
+      - id: process-env-github-token
+      - id: process-env-npm-token
+
+  - id: js-system-fingerprinting
+    desc: System fingerprinting via os module
+    crit: notable
+    conf: 0.8
+    needs: 2
+    any:
+      - id: os-hostname-call
+      - id: os-platform-call
+      - id: os-userinfo-call

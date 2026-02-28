@@ -358,7 +358,10 @@ mod tests {
         let container_findings = mapper.evaluate_container_composites(&report, &[], "zip");
         // Either empty or only rules that match on file type alone
         // (depends on the rules in traits directory)
-        assert!(container_findings.len() < 100, "Should not have excessive findings");
+        assert!(
+            container_findings.len() < 100,
+            "Should not have excessive findings"
+        );
     }
 
     #[test]
@@ -382,7 +385,9 @@ mod tests {
 
         // Should not include preexisting finding IDs
         assert!(
-            !container_findings.iter().any(|f| f.id == "test/preexisting"),
+            !container_findings
+                .iter()
+                .any(|f| f.id == "test/preexisting"),
             "Should not duplicate preexisting findings"
         );
     }
@@ -401,7 +406,10 @@ mod tests {
         // Create nested findings that might trigger a composite
         let nested = vec![
             make_test_finding("metadata/builder/npm::package-json", Criticality::Baseline),
-            make_test_finding("micro-behaviors/fs/file/dll::dll-file", Criticality::Notable),
+            make_test_finding(
+                "micro-behaviors/fs/file/dll::dll-file",
+                Criticality::Notable,
+            ),
         ];
 
         let container_findings = mapper.evaluate_container_composites(&report, &nested, "zip");

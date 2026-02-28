@@ -1186,7 +1186,6 @@ const CACHE_MAGIC: &[u8; 4] = b"YARC";
 const CACHE_VERSION: u32 = 5;
 const CACHE_HEADER_SIZE: usize = 4 + 4 + 8 + 8 + 8 + 8 + 8 + 8; // 56 bytes
 
-
 impl Default for YaraEngine {
     fn default() -> Self {
         Self::new()

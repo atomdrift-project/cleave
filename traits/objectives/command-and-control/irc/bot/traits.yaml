@@ -12,7 +12,9 @@ traits:
       exact: "PRIVMSG "
     unless:
       - type: raw
-        regex: ftplib|urllib
+        substr: ftplib
+      - type: raw
+        substr: urllib
   - id: irc-nick
     desc: IRC NICK command
     crit: notable
@@ -22,7 +24,9 @@ traits:
       exact: "NICK "
     unless:
       - type: raw
-        regex: ftplib|urllib
+        substr: ftplib
+      - type: raw
+        substr: urllib
   - id: irc-user
     desc: IRC USER command
     crit: notable
@@ -32,7 +36,9 @@ traits:
       exact: "USER "
     unless:
       - type: raw
-        regex: ftplib|urllib
+        substr: ftplib
+      - type: raw
+        substr: urllib
   - id: cmd-login
     desc: Bot login command
     crit: notable
@@ -42,7 +48,9 @@ traits:
       regex: \.login\b
     unless:
       - type: raw
-        regex: ftplib|urllib
+        substr: ftplib
+      - type: raw
+        substr: urllib
   - id: cmd-udp
     desc: Bot UDP attack command
     crit: notable

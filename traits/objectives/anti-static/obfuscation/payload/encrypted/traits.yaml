@@ -101,7 +101,7 @@ traits:
     entropy_min: 7.0
 - id: dominant-rsrc-section
   desc: Dominant .rsrc section (>60% of binary)
-  crit: notable
+  crit: baseline
   conf: 0.7
   for:
   - pe
@@ -112,10 +112,6 @@ traits:
     section: \.rsrc
     compare_to: total
     min: 0.6
-  downgrade:
-    any:
-    - type: basename
-      regex: ^lib(X11|xcb|ssl|crypto|c|z|png|jpeg|xml|curl|pcre|iconv|icu|freetype|fontconfig|harfbuzz|cairo|pango|glib|gtk|qt)\b
 - id: high-entropy-text
   desc: High entropy in code section
   crit: suspicious

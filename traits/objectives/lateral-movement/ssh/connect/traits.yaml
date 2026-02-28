@@ -43,8 +43,8 @@ traits:
 
   - id: strict-host-disable
     desc: StrictHostKeyChecking reference (bypass host verification)
-    crit: suspicious
-    conf: 0.75
+    crit: notable
+    conf: 0.7
     attack: "T1021.004"
     platforms: [linux, macos, unix]
     if:
@@ -58,13 +58,6 @@ traits:
           exact: "scp"
         - type: basename
           exact: "sftp"
-        - type: basename
-          exact: "rsync"
-        - type: basename
-          exact: "remotectl"
-        - type: basename
-          regex: "wal_shipper"
-        - id: metadata/library::wal-shipper-header
         - id: metadata/signed/platform::apple
 
   - id: known-hosts-bypass

@@ -57,6 +57,6 @@ traits:
     crit: notable
     conf: 0.70
     size_max: 200
-    unless:
-      - type: basename
-        regex: "\\.(py|sh|js|ts|c|cpp|h|hpp|md|txt|html|css|json|yml|yaml|pyi|rtf|bat|cmd|ps1)$"
+    if:
+      type: kv
+      path: metadata-version

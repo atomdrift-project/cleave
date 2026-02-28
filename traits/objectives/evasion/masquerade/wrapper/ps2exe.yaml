@@ -1,0 +1,10 @@
+composite_rules:
+  - id: ps2exe-compiled-payload
+    desc: Binary matches PS2EXE PowerShell compilation wrapper signatures
+    crit: suspicious
+    conf: 0.95
+    attack: "T1036"
+    all:
+      - id: micro-behaviors/process/create/wrapper::ps2exe-namespace
+      - id: micro-behaviors/process/create/wrapper::ps2exe-proxy
+      - id: micro-behaviors/process/create/wrapper::ps2exe-rawui

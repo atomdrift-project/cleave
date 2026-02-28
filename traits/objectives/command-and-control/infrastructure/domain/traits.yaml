@@ -586,16 +586,37 @@ traits:
     type: string
     regex: '[a-z0-9-]+\.herokuapp\.com'
 
-- id: hardcoded-domain-suspicious-pattern
-  desc: Hardcoded suspicious TLD domain pattern
-  crit: suspicious
-  conf: 0.85
-  unless:
-  - type: raw
-    regex: sina\.com\.cn|163\.com|126\.com|sohu\.com|qq\.com|yahoo\.com\.cn|mysite|rambler\.ru|yandex\.ru|mail\.ru|tbcdn\.cn|xn--hgi\.ws|a\.b\.c\.xyz|apowersoft\.cn|aliyuncs\.com
+- id: hardcoded-domain-ru
+  desc: Hardcoded .ru domain
+  crit: notable
+  conf: 0.6
   if:
     type: raw
-    regex: '[''\"](https?://)?([a-zA-Z0-9-]{1,63}\.){1,4}(ru|cn|xyz|top)[''"/:]'
+    regex: '[''\"](https?://)?([a-zA-Z0-9-]{1,63}\.){1,4}ru[''"/:]'
+
+- id: hardcoded-domain-cn
+  desc: Hardcoded .cn domain
+  crit: notable
+  conf: 0.6
+  if:
+    type: raw
+    regex: '[''\"](https?://)?([a-zA-Z0-9-]{1,63}\.){1,4}cn[''"/:]'
+
+- id: hardcoded-domain-xyz
+  desc: Hardcoded .xyz domain
+  crit: notable
+  conf: 0.7
+  if:
+    type: raw
+    regex: '[''\"](https?://)?([a-zA-Z0-9-]{1,63}\.){1,4}xyz[''"/:]'
+
+- id: hardcoded-domain-top
+  desc: Hardcoded .top domain
+  crit: notable
+  conf: 0.7
+  if:
+    type: raw
+    regex: '[''\"](https?://)?([a-zA-Z0-9-]{1,63}\.){1,4}top[''"/:]'
 
 - id: suspicious-php-filename
   desc: Suspicious PHP endpoint URL (gate/upload/etc)
@@ -651,6 +672,16 @@ composite_rules:
   any:
     - id: internal-api-probe-local
     - id: internal-api-probe-10
+
+- id: hardcoded-domain-suspicious-pattern
+  desc: Hardcoded suspicious TLD domain pattern
+  crit: notable
+  conf: 0.7
+  any:
+    - id: hardcoded-domain-ru
+    - id: hardcoded-domain-cn
+    - id: hardcoded-domain-xyz
+    - id: hardcoded-domain-top
 
 - id: c2-domain
   desc: Likely C2 domain (suspicious TLD)

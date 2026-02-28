@@ -1,0 +1,47 @@
+# Subdomain Data Encoding
+# Detects encoding data into DNS subdomain structure for exfiltration
+# ATT&CK: T1048.003 (Exfiltration Over Alternative Protocol: DNS)
+
+defaults:
+  for: [python]
+  crit: notable
+  conf: 0.85
+
+traits:
+  # F-string with multiple variable interpolations separated by dots
+  - id: fstring-subdomain-vars
+    desc: F-string subdomain construction with variables
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: raw
+      regex: "f[\"']\\{.{1,50}\\}\\.\\{.{1,50}\\}\\.\\{.{1,50}\\}"
+
+  # Domain string concatenation pattern
+  - id: domain-concat-vars
+    desc: Domain concatenation with variables
+    crit: suspicious
+    conf: 0.85
+    if:
+      type: raw
+      regex: "\\+\\s*[\"']\\.[\"']?\\s*\\+\\s*\\w+\\s*\\+\\s*[\"']\\."
+
+  # Exfil domain variable naming
+  - id: exfil-domain-var
+    desc: Exfiltration domain variable naming
+    crit: suspicious
+    conf: 0.8
+    if:
+      type: raw
+      regex: "(exfil_domain|exfiltration_domain|c2_domain|beacon_domain)\\s*="
+
+composite_rules:
+  - id: subdomain-data-encoding
+    desc: Data encoded in DNS subdomains
+    crit: suspicious
+    conf: 0.9
+    attack: "T1048.003"
+    any:
+      - id: fstring-subdomain-vars
+      - id: domain-concat-vars
+      - id: exfil-domain-var

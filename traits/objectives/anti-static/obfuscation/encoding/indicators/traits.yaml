@@ -158,8 +158,8 @@ traits:
 
   - id: encoded-js-function-constructor
     desc: "Encoded Function() constructor"
-    crit: suspicious
-    conf: 0.9
+    crit: notable
+    conf: 0.8
     for: [javascript, typescript]
     size_max: 1000000
     if:
@@ -168,42 +168,13 @@ traits:
       not:
         - 'Function("d",'
         - 'Function("return this")'
-        - 'JSON.stringify(n)+": d["+t+"]"'
-        - 'return {'
         - 'version:"'
         - 'Rickshaw'
     attack: "T1059.007"
-    downgrade:
-      any:
-        - id: metadata/library/jquery::domain
-        - id: metadata/library/jquery::version-string
-        - id: metadata/library/jquery::copyright
-        - id: metadata/library/jquery::fn-extend
-        - id: metadata/library/d3::d3-detection
-        - id: metadata/library/structure::js-umd-wrapper
-        - id: metadata/library/structure::js-umd-wrapper-minified
-        - id: metadata/library/structure::js-umd-wrapper-amd
-        - id: metadata/library/structure::js-umd-wrapper-amd-minified
-        - type: string
-          regex: 'd3\.interpolate[a-zA-Z]+|d3\.scale\.linear|d3\.layout\.force|Bo=\{version:"[0-9.]+"\}|d3\s*=\s*\{version:"[0-9.]+"\}|Rickshaw\.Graph|Rickshaw\.Fixtures\.Time'
     unless:
-      - id: metadata/library/jquery::domain
-      - id: metadata/library/jquery::version-string
-      - id: metadata/library/jquery::copyright
-      - id: metadata/library/jquery::fn-extend
-      - id: metadata/library/d3::d3-detection
-      - id: metadata/library/structure::js-umd-wrapper-any
-      - id: metadata/library/structure::js-umd-wrapper
-      - id: metadata/library/structure::js-umd-wrapper-minified
-      - id: metadata/library/structure::js-umd-wrapper-amd
-      - id: metadata/library/structure::js-umd-wrapper-amd-minified
-      - type: string
-        regex: 'd3\.interpolate[a-zA-Z]+|d3\.scale\.linear|d3\.layout\.force|Bo=\{version:"[0-9.]+"\}|d3\s*=\s*\{version:"[0-9.]+"\}|Rickshaw\.Graph|Rickshaw\.Fixtures\.Time'
-      - type: raw
-        regex: 'typeof\s*exports\s*={2,3}\s*["'']object["'']'
-      - type: raw
-        regex: 'typeof\s*define\s*={2,3}\s*["'']function["'']\s*&&\s*define\.amd'
-      - id: metadata/library/prettier::prettier-language-js
+      - id: metadata/library/jquery
+      - id: metadata/library/d3
+      - id: metadata/library/structure
 
   - id: encoded-node-child-process
     desc: "Encoded child_process module"

@@ -1,0 +1,12 @@
+defaults:
+  for: [pe, dll]
+
+traits:
+  - id: wininet-ftp-api
+    desc: "Uses WinInet FTP APIs"
+    mbc: "C0002"
+    attack: "T1071.002"
+    crit: notable
+    if:
+      type: symbol
+      regex: "^Ftp(Open|Get|Put)File[AW]$|^FtpGetFileSize$"

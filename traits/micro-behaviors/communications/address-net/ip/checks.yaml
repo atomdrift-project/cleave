@@ -21,20 +21,10 @@ traits:
           (#not-match? @ip "^console$")
           (#match? @range "^(10\\.|172\\.|192\\.168|127\\.|fe80::)")
         )
-    downgrade:
-      any:
-        - type: basename
-          regex: "^[a-z]{2,3}(-[A-Z][a-z]{3})?(-[A-Z]{2})?\\.js$"
-        - id: metadata/dev/testing::test-basename-pattern
     unless:
-      - id: metadata/builder/autotools::autotools
-      - id: metadata/builder/autotools::configure-ac
-      - id: metadata/builder/pip::setup-py
-      - id: metadata/quality/help::usage-title
-      - id: objectives/lateral-movement/supply-chain/npm/minifier::esmodule-export
-      - id: metadata/library::js-module-exports
-      - id: metadata/dev/testing::is-test
-      - id: metadata/dev/testing::test-basename-pattern
+      - id: metadata/builder
+      - id: metadata/dev/testing
+      - id: metadata/library
 
   - id: private-ip-parts-js
     desc: Checks IP parts for private ranges (JS)

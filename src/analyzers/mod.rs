@@ -1236,7 +1236,13 @@ impl FileType {
             | FileType::Rtf
             | FileType::Lnk
             | FileType::Png => true, // PNG included for steganography detection
-            FileType::Archive | FileType::Unknown | FileType::Jpeg | FileType::Certificate | FileType::Html | FileType::Markdown | FileType::Text => false, // Skip other images, text, and unknown files by default in dir scans
+            FileType::Archive
+            | FileType::Unknown
+            | FileType::Jpeg
+            | FileType::Certificate
+            | FileType::Html
+            | FileType::Markdown
+            | FileType::Text => false, // Skip other images, text, and unknown files by default in dir scans
         }
     }
 
@@ -1497,7 +1503,9 @@ mod tests {
 
         // HTML file with actual markup -> Html
         let mut html_file = NamedTempFile::with_suffix(".html").unwrap();
-        html_file.write_all(b"<html><body>Hello</body></html>").unwrap();
+        html_file
+            .write_all(b"<html><body>Hello</body></html>")
+            .unwrap();
         let file_type = detect_file_type(html_file.path()).unwrap();
         assert_eq!(file_type, FileType::Html);
 

@@ -1,0 +1,46 @@
+# DNS Port Connection - Python
+# Detects direct TCP/UDP connections to DNS port 53
+# ATT&CK: T1071.004 (Application Layer Protocol: DNS)
+
+defaults:
+  for: [python]
+  crit: notable
+  conf: 0.8
+
+traits:
+  # Hardcoded port 53
+  - id: dns-port-hardcoded
+    desc: Hardcoded DNS port 53
+    conf: 0.7
+    if:
+      type: raw
+      regex: "(dns_port|DNS_PORT)\\s*=\\s*53\\b"
+
+  # Port 53 in tuple (common pattern: (host, 53))
+  - id: dns-port-tuple
+    desc: Port 53 in connection tuple
+    conf: 0.75
+    if:
+      type: raw
+      regex: "\\(\\s*\\w+\\s*,\\s*53\\s*\\)"
+
+  # Connect to port 53
+  - id: dns-port-connect
+    desc: Socket connect with port 53
+    conf: 0.8
+    if:
+      type: raw
+      regex: "\\.connect\\s*\\(.{0,50},\\s*53\\s*\\)"
+
+composite_rules:
+  - id: tcp-dns-connect
+    desc: TCP socket connection to DNS port
+    crit: suspicious
+    conf: 0.85
+    attack: "T1071.004"
+    all:
+      - id: micro-behaviors/communications/socket/connect::socket-sock-stream
+    any:
+      - id: dns-port-hardcoded
+      - id: dns-port-tuple
+      - id: dns-port-connect

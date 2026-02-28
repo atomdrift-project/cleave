@@ -65,7 +65,9 @@ traits:
     regex: ((^|\s)find\s+.{0,50}-exec\s+rm|(^|\s)find\s+.{0,50}-delete\b)
   unless:
   - type: raw
-    regex: gcc|gcov
+    substr: gcc
+  - type: raw
+    substr: gcov
   attack: T1070.003
 - id: cron-removal
   desc: Cron job removal

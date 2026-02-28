@@ -58,13 +58,10 @@ traits:
 composite_rules:
   - id: custom-implementation
     desc: Custom base64 implementation
-    crit: notable
-    conf: 0.9
+    crit: baseline
+    conf: 0.7
     attack: T1027.010
     mbc: B0032.001
-    all:
+    any:
       - id: decode-table
-    downgrade:
-      any:
-        - type: basename
-          regex: ^lib(X11|xcb|ssl|crypto|c|z|png|jpeg|xml|curl|pcre|iconv)\b
+      - id: alphabet-standard

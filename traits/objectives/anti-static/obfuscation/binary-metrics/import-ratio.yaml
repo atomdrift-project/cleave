@@ -90,19 +90,10 @@ composite_rules:
       - id: micro-behaviors/process/create/shell
       - id: micro-behaviors/crypto
     unless:
-      - id: well-known/tools/sysadmin::par-env-vars
-      - type: string
-        substr: "PAR_TEMP"
+      - id: well-known/tools/sysadmin
       - type: raw
         substr: "mscoree"
-      - type: basename
-        regex: '\.(mun|mui)$'
     downgrade:
       any:
-        - id: objectives/execution/reflection/invoke::namespace-import
-        - id: objectives/execution/reflection/invoke::method-info
-        - id: objectives/execution/reflection/invoke::property-info
-        - id: micro-behaviors/dylib/library::libcurl-ref
-        - type: metrics
-          field: binary.section_count
-          min: 20
+        - id: objectives/execution/reflection/invoke
+        - id: micro-behaviors/dylib/library

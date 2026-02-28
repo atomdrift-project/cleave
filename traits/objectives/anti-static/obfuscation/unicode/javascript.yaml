@@ -5,10 +5,11 @@
 
 traits:
   # High density of non-ASCII characters
+  # Note: fires frequently on i18n/localization code, use as component
   - id: dense-non-ascii
     desc: Dense non-ASCII character payload
-    crit: notable
-    conf: 0.88
+    crit: component
+    conf: 0.6
     mbc: "B0032"
     attack: "T1027"
     for: [javascript, typescript]
@@ -17,18 +18,13 @@ traits:
       regex: "[^\\x00-\\x7F]{10,}"
       count_min: 3
       per_kb_min: 0.5
-    downgrade:
-      any:
-        - type: basename
-          regex: "locale|localize|formatRelative|formatLong|formatDistance"
-        - type: raw
-          regex: "formatRelative|formatLong|formatDistance|localize|defineLocale|weekday|month"
 
   # International script characters (Devanagari, Cyrillic, Arabic, etc.)
+  # Note: fires frequently on i18n/localization code, use as component
   - id: international-script-obfuscation
     desc: International script character obfuscation
-    crit: notable
-    conf: 0.75
+    crit: component
+    conf: 0.5
     mbc: "B0032"
     attack: "T1027"
     for: [javascript, typescript]
@@ -36,13 +32,6 @@ traits:
       type: string
       regex: "[\\p{Devanagari}\\p{Cyrillic}\\p{Arabic}\\p{Hebrew}\\p{Han}]"
       count_min: 5
-    unless:
-      - type: raw
-        regex: "defineLocale|moment\\.locale|moment\\.lang"
-      - type: basename
-        regex: "^[a-z]{2,3}(-[A-Z][a-z]{3})?(-[A-Z]{2})?\\.js$"
-      - type: raw
-        regex: "formatRelative|formatLong|formatDistance|localize|weekday|month"
 
   # Mixed Unicode blocks in single string (sophisticated obfuscation)
   - id: mixed-unicode-blocks
@@ -72,10 +61,11 @@ traits:
       per_kb_min: 0.3
 
   # String containing both Unicode and ASCII obfuscation
+  # Note: fires on i18n code and math libraries, use as component
   - id: mixed-ascii-unicode
     desc: Mixed ASCII and Unicode obfuscation
-    crit: suspicious
-    conf: 0.83
+    crit: component
+    conf: 0.6
     mbc: "B0032"
     attack: "T1027"
     for: [javascript, typescript]
@@ -83,14 +73,6 @@ traits:
       type: string
       regex: "[\\x00-\\x7F]{3,}[^\\x00-\\x7F]{3,}[\\x00-\\x7F]{3,}"
       count_min: 10
-    downgrade:
-      any:
-        - type: basename
-          regex: "locale"
-        - type: string
-          regex: "defineLocale|moment\\.locale"
-        - type: raw
-          regex: "MathJax|mathjax|sre\\.Semantic|Speech\\.?Rule|numberToUnicode"
 
   # Unusual Unicode characters in variable names
   - id: unicode-variable-names
@@ -106,13 +88,17 @@ traits:
       count_min: 3
     unless:
       - type: raw
-        regex: "defineLocale|moment\\.locale|moment\\.lang"
+        substr: "defineLocale"
       - type: raw
-        regex: "matchPattern|parsePattern|formatLong|localize"
+        substr: "moment.locale"
+      - type: raw
+        substr: "localize"
       - type: basename
-        regex: "i18n|l10n|locale"
+        substr: "i18n"
       - type: basename
-        regex: "^[a-z]{2,3}(-[A-Z][a-z]{3})?(-[A-Z]{2})?\\.js$"
+        substr: "l10n"
+      - type: basename
+        substr: "locale"
 
 composite_rules:
   # Advanced Unicode obfuscation composite

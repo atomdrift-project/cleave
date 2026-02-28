@@ -1,0 +1,30 @@
+defaults:
+  for: [all]
+
+traits:
+  - id: new-local-user
+    desc: Uses New-LocalUser PowerShell cmdlet
+    crit: notable
+    conf: 0.9
+    attack: "T1136.001"
+    if:
+      type: raw
+      regex: '(?i)New-LocalUser'
+
+  - id: add-local-group-member
+    desc: Uses Add-LocalGroupMember PowerShell cmdlet
+    crit: notable
+    conf: 0.9
+    attack: "T1098"
+    if:
+      type: raw
+      regex: '(?i)Add-LocalGroupMember'
+
+  - id: remove-local-group-member
+    desc: Uses Remove-LocalGroupMember PowerShell cmdlet
+    crit: notable
+    conf: 0.9
+    attack: "T1531"
+    if:
+      type: raw
+      regex: '(?i)Remove-LocalGroupMember'

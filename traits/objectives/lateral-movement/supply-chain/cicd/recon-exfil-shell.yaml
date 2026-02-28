@@ -1,0 +1,61 @@
+# CI/CD Reconnaissance + Exfiltration - Shell
+# Detects CI/CD pipeline injection attacks via shell scripts
+# ATT&CK: T1195.002 (Supply Chain Compromise: Compromise Software Supply Chain)
+
+defaults:
+  crit: hostile
+  attack: "T1195.002"
+  for: [shell]
+
+composite_rules:
+  # =====================================================
+  # CURL/WGET EXFILTRATION
+  # =====================================================
+  - id: shell-runner-recon-curl
+    desc: Shell script exfiltrates CI/CD info via curl
+    conf: 0.95
+    attack: "T1041"
+    all:
+      - id: micro-behaviors/os/env/vars/cicd::shell-runner-fingerprinting
+    any:
+      - id: micro-behaviors/communications/http/client::client
+      - id: micro-behaviors/communications/download/curl::wget
+
+  # =====================================================
+  # ENV DUMP TO EXTERNAL
+  # =====================================================
+  - id: shell-env-dump-exfil
+    desc: Shell dumps environment to external server
+    conf: 0.95
+    attack: "T1552.001"
+    any:
+      - id: micro-behaviors/os/env/vars/cicd::sh-github-token
+    all:
+      - id: micro-behaviors/communications/http/client::client
+
+  # =====================================================
+  # SYSTEM FINGERPRINT + EXFIL
+  # =====================================================
+  - id: shell-fingerprint-exfil
+    desc: Shell fingerprints system and exfiltrates
+    conf: 0.90
+    attack: "T1082"
+    all:
+      - id: micro-behaviors/os/env/vars/cicd::shell-system-fingerprinting
+    any:
+      - id: micro-behaviors/communications/http/client::client
+      - id: micro-behaviors/communications/download/curl::wget
+      - id: micro-behaviors/communications/dns/tools
+
+  # =====================================================
+  # CI/CD PIPELINE INJECTION
+  # =====================================================
+  - id: cicd-pipeline-injection
+    desc: CI/CD pipeline script injection attack
+    conf: 0.95
+    attack: "T1195.002"
+    needs: 2
+    any:
+      - id: micro-behaviors/os/env/vars/cicd::shell-runner-fingerprinting
+      - id: micro-behaviors/os/env/vars/cicd::shell-system-fingerprinting
+      - id: micro-behaviors/os/env/vars/cicd::sh-github-token

@@ -279,14 +279,7 @@ composite_rules:
     conf: 0.9
     needs: 2
     unless:
-      - id: metadata/library::faker-library
-      - id: metadata/library::faker-js-export-regex
-      - id: metadata/library::faker-js-export-str1
-      - id: metadata/library::faker-js-export-str2
-      - id: metadata/library::faker-js-definition
-      - id: metadata/library::faker-js-locale-regex
-      - id: metadata/library::faker-js-locale-str
-      - id: metadata/library::faker-js-new
+      - id: metadata/library/faker
     any:
       - id: russian-locale
       - id: cis-timezone
@@ -303,14 +296,7 @@ composite_rules:
     conf: 0.85
     needs: 2
     unless:
-      - id: metadata/library::faker-library
-      - id: metadata/library::faker-js-export-regex
-      - id: metadata/library::faker-js-export-str1
-      - id: metadata/library::faker-js-export-str2
-      - id: metadata/library::faker-js-definition
-      - id: metadata/library::faker-js-locale-regex
-      - id: metadata/library::faker-js-locale-str
-      - id: metadata/library::faker-js-new
+      - id: metadata/library/faker
     any:
       - id: cis-locale
       - id: cis-timezone

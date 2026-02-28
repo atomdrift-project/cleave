@@ -1,0 +1,27 @@
+# SSL PTY Backdoor
+# Detects interactive PTY shells over SSL
+# MBC: B0022 (Backdoor)
+# ATT&CK: T1059
+
+defaults:
+  mbc: "B0022"
+  attack: "T1059"
+
+composite_rules:
+  # SSL PTY Backdoor
+  # Complexity: all(3) = 3 >= 2 SUSPICIOUS
+  - id: ssl-pty-backdoor
+    desc: Interactive PTY shell over SSL connection
+    crit: suspicious
+    conf: 0.9
+    for: [elf, macho]
+    all:
+      - id: objectives/execution/tty/pty::interactive-shell
+      - id: micro-behaviors/process/create/shell
+    any:
+      - id: micro-behaviors/os/bpf/program/ssl::ssl-openssl-fn-a
+      - id: micro-behaviors/os/bpf/program/ssl::ssl-openssl-fn-b
+      - id: well-known/malware/backdoor/fdm::elf-ssl
+    none:
+      - id: micro-behaviors/dylib/library::network-lib-marker
+      - id: micro-behaviors/dylib/library::system-lib-marker

@@ -1,0 +1,97 @@
+defaults:
+  for: [pe, dll]
+  platforms: [windows]
+
+composite_rules:
+  - id: ini-driven-file-stager
+    desc: INI driven file stager with process handoff
+    crit: suspicious
+    conf: 0.92
+    attack: "T1106"
+    mbc: "B0030"
+    all:
+      - id: micro-behaviors/fs/file/copy::copyfile-w
+      - id: micro-behaviors/process/create/spawn::create-process-w
+      - id: micro-behaviors/fs/config/system::ini-read-write-cycle
+    any:
+      - id: micro-behaviors/fs/file/delete::deletefile-w
+      - id: micro-behaviors/process/sync/mutex::dynamic-mutex-resolution
+      - id: objectives/execution/reflection/class::dynamic-load-pattern
+      - id: micro-behaviors/io/console/output::write-file
+    needs: 2
+    downgrade:
+      any:
+        - id: metadata/vendor/microsoft::is-microsoft-named
+        - id: metadata/vendor/microsoft::is-windows-named
+        - id: metadata/format::large-executable
+
+  - id: ini-driven-plugin-loader
+    desc: INI configured DLL plugin loader
+    crit: suspicious
+    conf: 0.93
+    attack: "T1574.002"
+    mbc: "B0030"
+    all:
+      - id: micro-behaviors/fs/config/system::ini-read-write-cycle
+      - id: micro-behaviors/dylib/load::load-library-w
+      - id: micro-behaviors/dylib/lookup::get-proc-address
+      - id: micro-behaviors/process/thread/create::create-thread
+    any:
+      - id: micro-behaviors/data/embedded/payload::pe-resource-full-extraction
+      - id: micro-behaviors/fs/file/copy::copyfile-w
+      - id: micro-behaviors/process/create/spawn::create-process-w
+    needs: 1
+    downgrade:
+      any:
+        - id: metadata/vendor/microsoft::is-microsoft-named
+        - id: metadata/vendor/microsoft::is-windows-named
+        - id: metadata/quality/versioning::pe-version-resource
+
+  - id: ini-int-configured-plugin-loader
+    desc: INI integer configured plugin loader
+    crit: suspicious
+    conf: 0.91
+    attack: "T1574.002"
+    mbc: "B0030"
+    all:
+      - id: micro-behaviors/fs/config/system::ini-read-int-write-cycle
+      - id: micro-behaviors/dylib/load::load-library-w
+      - id: micro-behaviors/dylib/lookup::get-proc-address
+      - id: micro-behaviors/process/thread/create::create-thread
+    any:
+      - id: micro-behaviors/data/embedded/payload::pe-resource-full-extraction
+      - id: micro-behaviors/fs/file/copy::copyfile-w
+      - id: micro-behaviors/process/create/spawn::create-process-w
+    needs: 1
+    downgrade:
+      any:
+        - id: metadata/vendor/microsoft::is-microsoft-named
+        - id: metadata/vendor/microsoft::is-windows-named
+        - id: metadata/quality/versioning::pe-version-resource
+
+  - id: userprofile-staged-native-loader
+    desc: User profile staged native loader
+    crit: suspicious
+    conf: 0.9
+    attack: "T1027"
+    mbc: "B0032"
+    all:
+      - id: micro-behaviors/os/env/vars/user-info::userprofile-var
+      - id: micro-behaviors/fs/directory/mkdir::create-directory-a
+      - id: micro-behaviors/fs/file/operations::file-create-win
+      - id: micro-behaviors/io/console/output::write-file
+    any:
+      - id: objectives/anti-analysis/self-modify/runtime::xor-modulo-key-loop-x64
+      - id: objectives/anti-analysis/self-modify/runtime::xor-loop-pattern
+      - id: objectives/anti-static/obfuscation/payload/encrypted::large-data-section
+      - id: objectives/anti-static/obfuscation/payload/section::oversized-data-section
+      - id: micro-behaviors/dylib/load::load-library-ex-w
+      - id: micro-behaviors/dylib/lookup::get-proc-address
+    needs: 2
+    downgrade:
+      any:
+        - id: metadata/vendor/microsoft::is-microsoft-named
+        - id: metadata/vendor/microsoft::is-windows-named
+        - id: metadata/quality/versioning::pe-version-resource
+        - id: metadata/lang/compiler::msvc
+        - id: metadata/signed/platform::microsoft

@@ -1,0 +1,51 @@
+defaults:
+  for: [pe, dll]
+  platforms: [windows]
+
+traits:
+  - id: form-urlencoded-header
+    desc: Form URL encoded HTTP payload header
+    crit: notable
+    conf: 0.75
+    attack: "T1071.001"
+    if:
+      type: string
+      exact: "Content-Type:application/x-www-form-urlencoded"
+
+  - id: uid-file-telemetry-query
+    desc: UID file telemetry query format string
+    crit: suspicious
+    conf: 0.85
+    attack: "T1071.001"
+    if:
+      type: string
+      regex: '\\?uid=%s&ft=\\d+&st=%d&fn=%s&fl=%d'
+
+composite_rules:
+  - id: wininet-download-write-exec
+    desc: WinInet download write and execute chain
+    crit: suspicious
+    conf: 0.9
+    attack: "T1105"
+    all:
+      - id: micro-behaviors/communications/http/get::internet-open
+      - id: micro-behaviors/communications/http/get::internet-read-file
+      - id: micro-behaviors/io/console/output::write-file
+      - id: micro-behaviors/process/create/spawn::create-process-a
+    any:
+      - id: micro-behaviors/fs/file/delete::deletefile-a
+      - id: micro-behaviors/os/error-handling/exceptions::get-last-error
+
+  - id: wininet-uid-beacon-telemetry
+    desc: WinInet UID beacon and telemetry reporting
+    crit: suspicious
+    conf: 0.9
+    attack: "T1071.001"
+    all:
+      - id: micro-behaviors/communications/http/get::internet-open
+      - id: micro-behaviors/communications/http/get::internet-read-file
+      - id: micro-behaviors/communications/http/protocol::http-prefix
+    any:
+      - id: uid-file-telemetry-query
+      - id: form-urlencoded-header
+      - id: micro-behaviors/os/registry/access::internet-settings-autodial-tamper

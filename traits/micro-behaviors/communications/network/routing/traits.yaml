@@ -1,0 +1,20 @@
+defaults:
+  for: [pe]
+  platforms: [windows]
+
+traits:
+  - id: create-ip-forward-entry
+    desc: Create IP forward entry (route manipulation)
+    crit: notable
+    conf: 0.9
+    if:
+      type: symbol
+      exact: "CreateIpForwardEntry"
+
+  - id: delete-ip-forward-entry
+    desc: Delete IP forward entry (route manipulation)
+    crit: notable
+    conf: 0.9
+    if:
+      type: symbol
+      exact: "DeleteIpForwardEntry"

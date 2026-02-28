@@ -1,0 +1,127 @@
+# Domain Encoding for Exfiltration - Python AST Detection
+# Detects patterns where collected data is encoded into domain-like structures
+# ATT&CK: T1048.003 (Exfiltration Over Alternative Protocol: DNS)
+
+defaults:
+  for: [python]
+  crit: notable
+  conf: 0.8
+
+traits:
+  # === F-string with 3+ dot-separated interpolations ===
+  # Pattern: f"{var1}.{var2}.{var3}.domain" - classic subdomain encoding
+  - id: fstring-multi-interpolation
+    desc: F-string with multiple dot-separated variable interpolations
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: ast
+      query: |
+        (string
+          (string_start) @start (#match? @start "^f")
+          (interpolation)
+          (string_content) @dot1 (#match? @dot1 "^\\.$")
+          (interpolation)
+          (string_content) @dot2 (#match? @dot2 "^\\.$")
+          (interpolation))
+
+  # === Loop iterating over domain.split(".") ===
+  # Pattern: for label in domain.split(".") - manual DNS label encoding
+  - id: for-loop-domain-split
+    desc: Loop iterating over string split by dots
+    crit: suspicious
+    conf: 0.85
+    if:
+      type: ast
+      query: |
+        (for_statement
+          right: (call
+            function: (attribute
+              attribute: (identifier) @method)
+            arguments: (argument_list
+              (string) @arg))
+          (#eq? @method "split")
+          (#match? @arg "^[\"']\\.[\"']$"))
+
+  # === bytes([len(x)]) pattern - DNS label length prefix ===
+  # Pattern: bytes([len(label)]) - manual DNS qname encoding
+  - id: bytes-len-prefix
+    desc: Bytes array with length prefix encoding
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: ast
+      query: |
+        (call
+          function: (identifier) @func
+          arguments: (argument_list
+            (list
+              (call
+                function: (identifier) @len)))
+          (#eq? @func "bytes")
+          (#eq? @len "len"))
+
+  # === struct.pack with network byte order ===
+  # Pattern: struct.pack("!H...", ...) - network protocol construction
+  - id: struct-pack-network-order
+    desc: struct.pack with network byte order (big-endian)
+    crit: notable
+    conf: 0.85
+    if:
+      type: ast
+      query: |
+        (call
+          function: (attribute
+            object: (identifier) @obj
+            attribute: (identifier) @method)
+          arguments: (argument_list
+            (string) @fmt)
+          (#eq? @obj "struct")
+          (#eq? @method "pack")
+          (#match? @fmt "^[\"']!"))
+
+  # === String .encode("ascii") in loop context ===
+  # Pattern: label.encode("ascii") - text to bytes for protocol
+  - id: encode-ascii-in-loop
+    desc: ASCII encoding inside iteration (protocol construction)
+    crit: notable
+    conf: 0.75
+    if:
+      type: ast
+      query: |
+        (for_statement
+          body: (block
+            (expression_statement
+              (augmented_assignment
+                right: (binary_expression
+                  right: (call
+                    function: (attribute
+                      attribute: (identifier) @method)
+                    arguments: (argument_list
+                      (string) @enc)))))))
+          (#eq? @method "encode")
+          (#match? @enc "ascii"))
+
+composite_rules:
+  # === DNS Label Manual Construction ===
+  - id: dns-label-manual-construction
+    desc: Manual DNS label construction pattern
+    crit: suspicious
+    conf: 0.9
+    attack: "T1071.004"
+    needs: 2
+    any:
+      - id: for-loop-domain-split
+      - id: bytes-len-prefix
+      - id: encode-ascii-in-loop
+
+  # === Subdomain Data Encoding ===
+  - id: subdomain-exfil-pattern
+    desc: Data encoded into subdomain structure
+    crit: suspicious
+    conf: 0.9
+    attack: "T1048.003"
+    any:
+      - id: fstring-multi-interpolation
+    all:
+      - id: struct-pack-network-order

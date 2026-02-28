@@ -308,6 +308,49 @@ pub(crate) fn find_redundant_needs_one(composite_rules: &[CompositeTrait]) -> Ve
     violations
 }
 
+/// Find traits/rules with excessive unless: and downgrade: clauses combined.
+///
+/// A rule with 8 or more combined skip/downgrade conditions likely has poor precision
+/// and should be improved rather than patched with exceptions.
+///
+/// Returns: `Vec<(id, unless_count, downgrade_count, is_composite)>`
+#[must_use]
+pub(crate) fn find_excessive_skip_conditions(
+    trait_definitions: &[TraitDefinition],
+    composite_rules: &[CompositeTrait],
+) -> Vec<(String, usize, usize, bool)> {
+    const MAX_COMBINED: usize = 8;
+    let mut violations = Vec::new();
+
+    for t in trait_definitions {
+        let unless_count = t.unless.as_ref().map_or(0, Vec::len);
+        let downgrade_count = t.downgrade.as_ref().map_or(0, |d| {
+            d.any.as_ref().map_or(0, Vec::len)
+                + d.all.as_ref().map_or(0, Vec::len)
+                + d.none.as_ref().map_or(0, Vec::len)
+        });
+
+        if unless_count + downgrade_count >= MAX_COMBINED {
+            violations.push((t.id.clone(), unless_count, downgrade_count, false));
+        }
+    }
+
+    for r in composite_rules {
+        let unless_count = r.unless.as_ref().map_or(0, Vec::len);
+        let downgrade_count = r.downgrade.as_ref().map_or(0, |d| {
+            d.any.as_ref().map_or(0, Vec::len)
+                + d.all.as_ref().map_or(0, Vec::len)
+                + d.none.as_ref().map_or(0, Vec::len)
+        });
+
+        if unless_count + downgrade_count >= MAX_COMBINED {
+            violations.push((r.id.clone(), unless_count, downgrade_count, true));
+        }
+    }
+
+    violations
+}
+
 /// Find component traits that are never referenced by any composite rule or atomic trait.
 ///
 /// Component traits (`crit: component`) are building blocks that should only exist to be

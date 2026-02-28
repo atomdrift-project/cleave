@@ -17,16 +17,17 @@ use crate::capabilities::validation::{
     find_alternation_merge_candidates, find_atomic_logic_duplicates,
     find_banned_directory_segments, find_cap_obj_violations, find_depth_violations,
     find_duplicate_second_level_directories, find_duplicate_traits_and_composites,
-    find_empty_condition_clauses, find_for_only_duplicates, find_hostile_cap_rules,
-    find_hostile_meta_rules, find_impossible_count_constraints, find_impossible_needs,
-    find_impossible_size_constraints, find_invalid_trait_ids, find_line_number,
-    find_malware_subcategory_violations, find_missing_search_patterns, find_non_capturing_groups,
-    find_orphaned_components, find_overlapping_conditions, find_oversized_trait_directories,
-    find_parent_duplicate_segments, find_platform_named_directories, find_pure_alias_traits,
-    find_redundant_any_refs, find_redundant_needs_one, find_short_pattern_warnings,
-    find_single_item_clauses, find_slow_regex_patterns, find_string_content_collisions,
-    find_string_pattern_duplicates, precalculate_all_composite_precisions,
-    simple_rule_to_composite_rule, validate_composite_trait_only, validate_directory_structure,
+    find_empty_condition_clauses, find_excessive_skip_conditions, find_for_only_duplicates,
+    find_hostile_cap_rules, find_hostile_meta_rules, find_impossible_count_constraints,
+    find_impossible_needs, find_impossible_size_constraints, find_invalid_trait_ids,
+    find_line_number, find_malware_subcategory_violations, find_missing_search_patterns,
+    find_non_capturing_groups, find_orphaned_components, find_overlapping_conditions,
+    find_oversized_trait_directories, find_parent_duplicate_segments,
+    find_platform_named_directories, find_pure_alias_traits, find_redundant_any_refs,
+    find_redundant_needs_one, find_short_pattern_warnings, find_single_item_clauses,
+    find_slow_regex_patterns, find_string_content_collisions, find_string_pattern_duplicates,
+    precalculate_all_composite_precisions, simple_rule_to_composite_rule,
+    validate_composite_trait_only, validate_directory_structure,
     validate_hostile_composite_precision, MAX_TRAITS_PER_DIRECTORY,
 };
 use crate::composite_rules::{
@@ -1902,6 +1903,48 @@ impl super::CapabilityMapper {
                 warnings.push(format!(
                     "{} composite rules have redundant `needs: 1`",
                     redundant_needs.len()
+                ));
+            }
+
+            // Validate: excessive unless:/downgrade: clauses (8+ combined)
+            let excessive_skips =
+                find_excessive_skip_conditions(&trait_definitions, &composite_rules);
+            if !excessive_skips.is_empty() {
+                eprintln!(
+                    "\n❌ ERROR: {} rules have 8+ combined unless:/downgrade: clauses",
+                    excessive_skips.len()
+                );
+                eprintln!(
+                    "   Either improve the rule precision or refactor with a more appropriate"
+                );
+                eprintln!(
+                    "   taxonomy and criticality. If the rule is so broad that it provides no"
+                );
+                eprintln!("   signal to humans or ML pipelines, consider removing it:\n");
+                for (id, unless_count, downgrade_count, is_composite) in &excessive_skips {
+                    let source = rule_source_files
+                        .get(id)
+                        .map(std::string::String::as_str)
+                        .unwrap_or("unknown");
+                    let line_hint = find_line_number(source, id);
+                    let kind = if *is_composite { "composite" } else { "trait" };
+                    let combined = unless_count + downgrade_count;
+                    if let Some(line) = line_hint {
+                        eprintln!(
+                            "   {}:{}: {} '{}' ({} unless + {} downgrade = {} total)",
+                            source, line, kind, id, unless_count, downgrade_count, combined
+                        );
+                    } else {
+                        eprintln!(
+                            "   {}: {} '{}' ({} unless + {} downgrade = {} total)",
+                            source, kind, id, unless_count, downgrade_count, combined
+                        );
+                    }
+                }
+                eprintln!();
+                warnings.push(format!(
+                    "{} rules have excessive unless:/downgrade: clauses",
+                    excessive_skips.len()
                 ));
             }
 

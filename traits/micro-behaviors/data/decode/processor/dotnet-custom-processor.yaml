@@ -1,0 +1,52 @@
+defaults:
+  for: [pe]
+  platforms: [windows]
+
+traits:
+  - id: biginteger-byte-processor
+    desc: "Uses custom BigIntegerByteProcessor class"
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: raw
+      substr: "BigIntegerByteProcessor"
+
+  - id: regex-byte-processor
+    desc: "Uses custom RegexByteProcessor class"
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: raw
+      substr: "RegexByteProcessor"
+
+  - id: network-address-provider-class
+    desc: "Uses custom NetworkAddressProvider class"
+    crit: suspicious
+    conf: 0.8
+    if:
+      type: raw
+      substr: "NetworkAddressProvider"
+
+  - id: hashtable-accumulator
+    desc: "Uses custom HashtableAccumulator class"
+    crit: suspicious
+    conf: 0.8
+    if:
+      type: raw
+      substr: "HashtableAccumulator"
+
+  - id: sortedlist-accumulator
+    desc: "Uses custom SortedListAccumulator class"
+    crit: suspicious
+    conf: 0.8
+    if:
+      type: raw
+      substr: "SortedListAccumulator"
+
+  - id: bitconversion-processor
+    desc: "Uses custom BitConversionProcessor class"
+    crit: suspicious
+    conf: 0.8
+    if:
+      type: raw
+      substr: "BitConversionProcessor"

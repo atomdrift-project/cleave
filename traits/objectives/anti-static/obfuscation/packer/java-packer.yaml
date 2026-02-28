@@ -1,0 +1,19 @@
+# Java Packer / Obfuscator Objectives
+composite_rules:
+  - id: java-obfuscated-packer
+    desc: Java dropper/packer combining reflection, cryptography and archive handling
+    crit: hostile
+    conf: 0.9
+    all:
+      - id: micro-behaviors/anti-static/obfuscation/packer::java-classloader-usage
+      - id: micro-behaviors/anti-static/obfuscation/packer::java-jar-usage
+    any:
+      - id: micro-behaviors/anti-static/obfuscation/packer::java-crypto-cipher
+      - id: micro-behaviors/anti-static/obfuscation/packer::java-crypto-security
+
+  - id: stringer-obfuscator
+    desc: Java archive protected by Stringer Obfuscator
+    crit: suspicious
+    any:
+      - id: micro-behaviors/data/meta/format/obfuscator::stringer
+      - id: micro-behaviors/data/meta/format/obfuscator::stringer-licelus

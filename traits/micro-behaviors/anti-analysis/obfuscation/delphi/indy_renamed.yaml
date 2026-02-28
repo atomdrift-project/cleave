@@ -1,0 +1,42 @@
+defaults:
+  for: [pe]
+
+traits:
+  - id: indy-tcpconnection
+    desc: Delphi Indy TCPConnection string
+    crit: notable
+    if:
+      type: string
+      exact: InTCPConnection
+
+  - id: indy-iohandlersocket
+    desc: Delphi Indy IOHandlerSocket string
+    crit: notable
+    if:
+      type: string
+      exact: InIOHandlerSocket
+
+  - id: indy-socks
+    desc: Delphi Indy Socks string
+    crit: notable
+    if:
+      type: string
+      exact: InSocks
+
+  - id: indy-antifreeze
+    desc: Delphi Indy AntiFreezeBase string
+    crit: notable
+    if:
+      type: string
+      exact: InAntiFreezeBase
+
+composite_rules:
+  - id: indy-components-renamed
+    desc: Delphi Indy components renamed to evade detection
+    crit: suspicious
+    attack: T1027
+    any:
+      - id: indy-tcpconnection
+      - id: indy-iohandlersocket
+      - id: indy-socks
+      - id: indy-antifreeze

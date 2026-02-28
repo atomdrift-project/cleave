@@ -1,0 +1,11 @@
+defaults:
+  for: [python]
+
+composite_rules:
+  - id: python-zeta-obfuscator
+    desc: Python script obfuscated by Zeta/similar packer (joins long hex strings assigned to class attributes)
+    crit: hostile
+    all:
+      - id: micro-behaviors/anti-static/obfuscate/packer::exec-join-class-attributes
+      - id: objectives/anti-static/obfuscation/strings::hex-encoding
+      - id: micro-behaviors/process/interpreter/python::exec-builtin

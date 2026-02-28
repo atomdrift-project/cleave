@@ -8,13 +8,5 @@ composite_rules:
       - id: micro-behaviors/fs/enumerate/directory::fs-readdir
       - id: objectives/lateral-movement/supply-chain/npm/behavior::npm-victim-exfil
     unless:
-      - id: metadata/library::commander
-      - id: metadata/library/nodeunit::nodeunit
-      - id: metadata/library/nodeunit::nodeunit-require
-      - id: metadata/dev/testing::node-common-require
-    downgrade:
-      any:
-        - id: objectives/lateral-movement/supply-chain/npm/testing::test-fixtures
-        - id: objectives/lateral-movement/supply-chain/npm/testing::has-assertions
-        - id: metadata/library/nodeunit::nodeunit
-        - id: metadata/library/nodeunit::nodeunit-require
+      - id: metadata/library
+      - id: metadata/dev/testing

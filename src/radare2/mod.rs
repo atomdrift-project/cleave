@@ -428,7 +428,16 @@ impl Radare2Analyzer {
         let timeout = Duration::from_secs(60);
 
         let output = execute_rizin_with_timeout(
-            &["-q", "-e", "scr.color=0", "-e", "log.level=0", "-c", command, &file_path_str],
+            &[
+                "-q",
+                "-e",
+                "scr.color=0",
+                "-e",
+                "log.level=0",
+                "-c",
+                command,
+                &file_path_str,
+            ],
             timeout,
         );
 

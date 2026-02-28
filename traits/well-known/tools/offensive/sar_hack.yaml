@@ -1,0 +1,44 @@
+defaults:
+  for: [all]
+
+traits:
+  - id: sar-hack-name
+    desc: "Super Animal Royale game hack name string"
+    crit: component
+    if:
+      type: string
+      regex: 'S\.A\.R\. hack v[0-9]+'
+
+  - id: sar-hack-vision
+    desc: "Vision hacks (XRAY)"
+    crit: component
+    if:
+      type: string
+      substr: "Toggle Vision Hacks"
+
+  - id: sar-hack-source
+    desc: "Hack source code paths"
+    crit: component
+    if:
+      type: string
+      regex: 'src\\hacks\\[a-z]+\.rs'
+
+composite_rules:
+  - id: sar-hack-api
+    desc: "Memory injection/read APIs"
+    crit: component
+    any:
+      - id: objectives/evasion/process/injection/runtime::write-process-memory
+      - id: objectives/evasion/process/injection/runtime::read-process-memory
+      - id: micro-behaviors/process/enumerate/snapshot::create-toolhelp32-snapshot
+
+  - id: sar-hack-tool
+    desc: "Super Animal Royale memory modification tool (Game Cheat)"
+    crit: suspicious
+    conf: 0.95
+    all:
+      - id: sar-hack-api
+    any:
+      - id: sar-hack-name
+      - id: sar-hack-vision
+      - id: sar-hack-source

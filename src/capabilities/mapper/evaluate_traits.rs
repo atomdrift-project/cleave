@@ -233,7 +233,9 @@ impl super::CapabilityMapper {
                 }
 
                 // If trait has a substr string pattern that's indexed and wasn't matched, skip it
-                if self.string_match_index.is_substr_trait(idx) && !string_matched_traits.contains(&idx) {
+                if self.string_match_index.is_substr_trait(idx)
+                    && !string_matched_traits.contains(&idx)
+                {
                     skip_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                     return None;
                 }
@@ -332,7 +334,8 @@ impl super::CapabilityMapper {
         // Compute raw regex matches (this is expensive but necessary if no cache provided)
         let file_type = self.detect_file_type(&report.target.file_type);
         let raw_regex_matches = if self.raw_content_regex_index.has_patterns() {
-            self.raw_content_regex_index.find_matches(binary_data, &file_type)
+            self.raw_content_regex_index
+                .find_matches(binary_data, &file_type)
         } else {
             FxHashSet::default()
         };

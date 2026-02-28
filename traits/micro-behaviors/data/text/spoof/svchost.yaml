@@ -1,0 +1,10 @@
+defaults:
+  for: [all]
+
+traits:
+  - id: double-extension-svchost
+    crit: suspicious
+    desc: "Double extension svchost evasion string"
+    if:
+      type: raw
+      substr: "svchost.svchost.exe"

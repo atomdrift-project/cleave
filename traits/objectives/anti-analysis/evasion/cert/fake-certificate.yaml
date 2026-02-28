@@ -1,0 +1,21 @@
+defaults:
+  for: [pe]
+  platforms: [windows]
+
+traits:
+  - id: simon-tatham-cert
+    desc: "Signed with Simon Tatham / PuTTY certificate"
+    crit: notable
+    conf: 0.9
+    if:
+      type: raw
+      substr: "Simon Tatham"
+
+composite_rules:
+  - id: fake-putty-cert-dotnet
+    desc: "Uses Simon Tatham / PuTTY cert on .NET binary"
+    crit: suspicious
+    conf: 0.9
+    all:
+      - id: simon-tatham-cert
+      - id: metadata/format/pe::dotnet-metadata

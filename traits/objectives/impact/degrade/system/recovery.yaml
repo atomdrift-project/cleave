@@ -1,0 +1,9 @@
+composite_rules:
+  - id: locker-ransomware-behavior
+    desc: Disables registry tools and sets custom legal notice on logon screen
+    crit: hostile
+    conf: 0.95
+    attack: "T1486"
+    all:
+      - id: micro-behaviors/os/registry/manipulate::disable-registry-tools
+      - id: objectives/impact/deface/screen::ransom-note-logon-ui

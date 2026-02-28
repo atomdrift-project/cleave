@@ -1,0 +1,82 @@
+# CI/CD Environment Variable Targeting
+# Detects access to CI/CD runner environment variables
+# ATT&CK: T1082 (System Information Discovery)
+
+defaults:
+  for: [all]
+  crit: notable
+  conf: 0.75
+
+traits:
+  # GitHub Actions runner variables
+  - id: runner-name
+    desc: RUNNER_NAME environment variable access
+    conf: 0.85
+    if:
+      type: string
+      exact: "RUNNER_NAME"
+
+  - id: runner-os
+    desc: RUNNER_OS environment variable access
+    conf: 0.8
+    if:
+      type: string
+      exact: "RUNNER_OS"
+
+  - id: runner-arch
+    desc: RUNNER_ARCH environment variable access
+    conf: 0.8
+    if:
+      type: string
+      exact: "RUNNER_ARCH"
+
+  - id: runner-temp
+    desc: RUNNER_TEMP environment variable access
+    conf: 0.75
+    if:
+      type: string
+      exact: "RUNNER_TEMP"
+
+  # GitHub context variables (non-secret)
+  - id: github-actor
+    desc: GITHUB_ACTOR environment variable
+    conf: 0.7
+    if:
+      type: string
+      exact: "GITHUB_ACTOR"
+
+  - id: github-repository
+    desc: GITHUB_REPOSITORY environment variable
+    conf: 0.7
+    if:
+      type: string
+      exact: "GITHUB_REPOSITORY"
+
+  - id: github-workflow
+    desc: GITHUB_WORKFLOW environment variable
+    conf: 0.7
+    if:
+      type: string
+      exact: "GITHUB_WORKFLOW"
+
+composite_rules:
+  - id: runner-fingerprinting
+    desc: CI/CD runner fingerprinting via env vars
+    crit: suspicious
+    conf: 0.85
+    attack: "T1082"
+    needs: 2
+    any:
+      - id: runner-name
+      - id: runner-os
+      - id: runner-arch
+      - id: runner-temp
+
+  - id: github-context-access
+    desc: GitHub Actions context access
+    crit: notable
+    conf: 0.8
+    any:
+      - id: github-actor
+      - id: github-repository
+      - id: github-workflow

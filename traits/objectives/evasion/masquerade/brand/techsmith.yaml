@@ -1,0 +1,9 @@
+traits:
+  - id: techsmith
+    desc: Typosquatting TechSmith Corporation brand
+    crit: suspicious
+    conf: 0.95
+    for: [all]
+    if:
+      type: string
+      regex: '(?i)TechSimth|TechSmtih|TachSmith'

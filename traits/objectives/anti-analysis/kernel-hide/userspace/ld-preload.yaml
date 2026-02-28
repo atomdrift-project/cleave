@@ -234,16 +234,9 @@ composite_rules:
     for:
       - elf
     unless:
-      - id: micro-behaviors/dylib/load/gnu-coreutils-ref
-      - id: micro-behaviors/dylib/load/glibc-ref
-      - id: micro-behaviors/dylib/load/systemd-ref
-      - id: micro-behaviors/dylib/load/libc-characteristic-symbols
-      - id: micro-behaviors/dylib/library::llvm-project-ref
-      - id: metadata/lang/compiler::libllvm
-      - id: micro-behaviors/dylib/library::gcc-project-ref
-      - id: micro-behaviors/dylib/load/gdb-debugger-ref
-      - id: micro-behaviors/dylib/load/lldb-debugger-ref
-      - id: micro-behaviors/dylib/load/debugger-ptrace-marker
+      - id: micro-behaviors/dylib/load
+      - id: micro-behaviors/dylib/library
+      - id: metadata/lang/compiler
     any:
       - id: original-prefix-a
       - id: original-prefix-b
@@ -254,16 +247,9 @@ composite_rules:
     for:
       - elf
     unless:
-      - id: micro-behaviors/dylib/load/gnu-coreutils-ref
-      - id: micro-behaviors/dylib/load/glibc-ref
-      - id: micro-behaviors/dylib/load/systemd-ref
-      - id: micro-behaviors/dylib/load/libc-characteristic-symbols
-      - id: micro-behaviors/dylib/library::llvm-project-ref
-      - id: metadata/lang/compiler::libllvm
-      - id: micro-behaviors/dylib/library::gcc-project-ref
-      - id: micro-behaviors/dylib/load/gdb-debugger-ref
-      - id: micro-behaviors/dylib/load/lldb-debugger-ref
-      - id: micro-behaviors/dylib/load/debugger-ptrace-marker
+      - id: micro-behaviors/dylib/load
+      - id: micro-behaviors/dylib/library
+      - id: metadata/lang/compiler
     any:
       - id: real-prefix-a
       - id: real-prefix-b

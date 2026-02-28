@@ -1,0 +1,111 @@
+# CI/CD Environment Variable Targeting - Ruby
+# Detects access to CI/CD runner environment variables in Ruby gems
+# ATT&CK: T1082 (System Information Discovery)
+
+defaults:
+  for: [ruby]
+  crit: notable
+  conf: 0.75
+
+traits:
+  # GitHub Actions runner variables via ENV[]
+  - id: rb-runner-name
+    desc: Ruby ENV RUNNER_NAME access
+    conf: 0.85
+    if:
+      type: raw
+      regex: "ENV\\[[\"']RUNNER_NAME[\"']\\]"
+
+  - id: rb-runner-os
+    desc: Ruby ENV RUNNER_OS access
+    conf: 0.8
+    if:
+      type: raw
+      regex: "ENV\\[[\"']RUNNER_OS[\"']\\]"
+
+  - id: rb-github-actions
+    desc: Ruby ENV GITHUB_ACTIONS access
+    conf: 0.8
+    if:
+      type: raw
+      regex: "ENV\\[[\"']GITHUB_ACTIONS[\"']\\]"
+
+  - id: rb-github-token
+    desc: Ruby ENV GITHUB_TOKEN access
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: raw
+      regex: "ENV\\[[\"']GITHUB_TOKEN[\"']\\]"
+
+  - id: rb-gem-credentials
+    desc: Ruby ENV for gem credentials
+    crit: suspicious
+    conf: 0.95
+    if:
+      type: raw
+      regex: "ENV\\[[\"'](GEM_HOST_API_KEY|RUBYGEMS_API_KEY)[\"']\\]"
+
+  # ENV.fetch patterns
+  - id: rb-fetch-runner
+    desc: Ruby ENV.fetch for runner vars
+    conf: 0.85
+    if:
+      type: raw
+      regex: "ENV\\.fetch\\([\"']RUNNER_"
+
+  - id: rb-fetch-github
+    desc: Ruby ENV.fetch for github vars
+    conf: 0.8
+    if:
+      type: raw
+      regex: "ENV\\.fetch\\([\"']GITHUB_"
+
+  # System info via Socket
+  - id: rb-socket-gethostname
+    desc: Ruby Socket.gethostname call
+    conf: 0.8
+    if:
+      type: raw
+      regex: "Socket\\.gethostname"
+
+  # Etc module for user info
+  - id: rb-etc-getlogin
+    desc: Ruby Etc.getlogin for username
+    conf: 0.75
+    if:
+      type: raw
+      regex: "Etc\\.(getlogin|getpwuid)"
+
+composite_rules:
+  - id: ruby-runner-fingerprinting
+    desc: CI/CD runner fingerprinting via ENV
+    crit: suspicious
+    conf: 0.85
+    attack: "T1082"
+    needs: 2
+    any:
+      - id: rb-runner-name
+      - id: rb-runner-os
+      - id: rb-github-actions
+      - id: rb-fetch-runner
+      - id: rb-fetch-github
+
+  - id: ruby-gem-credential-access
+    desc: RubyGems credential access
+    crit: suspicious
+    conf: 0.9
+    attack: "T1552.001"
+    any:
+      - id: rb-github-token
+      - id: rb-gem-credentials
+
+  - id: ruby-system-fingerprinting
+    desc: System fingerprinting via Ruby APIs
+    crit: notable
+    conf: 0.8
+    needs: 2
+    any:
+      - id: rb-socket-gethostname
+      - id: micro-behaviors/os/sysinfo/platform::ruby-platform-const
+      - id: rb-etc-getlogin

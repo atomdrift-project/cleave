@@ -152,6 +152,36 @@ pub(crate) fn apply_trait_defaults(
     // Validation: regex patterns must not exceed 80 bytes.
     check_regex_length(&raw.id, &condition_with_filters.condition, warnings);
 
+    // Also check regex patterns in unless: conditions
+    if let Some(ref unless_conditions) = raw.unless {
+        for (idx, cond) in unless_conditions.iter().enumerate() {
+            let ctx = format!("{} unless[{}]", raw.id, idx);
+            check_regex_length(&ctx, cond, warnings);
+        }
+    }
+
+    // Also check regex patterns in downgrade: conditions
+    if let Some(ref downgrade) = raw.downgrade {
+        if let Some(ref any) = downgrade.any {
+            for (idx, cond) in any.iter().enumerate() {
+                let ctx = format!("{} downgrade.any[{}]", raw.id, idx);
+                check_regex_length(&ctx, cond, warnings);
+            }
+        }
+        if let Some(ref all) = downgrade.all {
+            for (idx, cond) in all.iter().enumerate() {
+                let ctx = format!("{} downgrade.all[{}]", raw.id, idx);
+                check_regex_length(&ctx, cond, warnings);
+            }
+        }
+        if let Some(ref none) = downgrade.none {
+            for (idx, cond) in none.iter().enumerate() {
+                let ctx = format!("{} downgrade.none[{}]", raw.id, idx);
+                check_regex_length(&ctx, cond, warnings);
+            }
+        }
+    }
+
     // Support backwards compatibility: if size_min/size_max are at trait level,
     // copy them to the condition wrapper (unless already set in the if: block)
     if condition_with_filters.size_min.is_none() {
@@ -425,6 +455,28 @@ pub(crate) fn apply_composite_defaults(
 
     // Handle single condition by converting to requires_all
     let requires_all = raw.all.or_else(|| raw.condition.map(|c| vec![c]));
+
+    // Check regex patterns in all condition lists
+    let mut check_conditions = |conditions: &Option<Vec<crate::composite_rules::Condition>>,
+                                clause_name: &str| {
+        if let Some(ref conds) = conditions {
+            for (idx, cond) in conds.iter().enumerate() {
+                let ctx = format!("{} {}[{}]", raw.id, clause_name, idx);
+                check_regex_length(&ctx, cond, warnings);
+            }
+        }
+    };
+
+    check_conditions(&requires_all, "all");
+    check_conditions(&raw.any, "any");
+    check_conditions(&raw.none, "none");
+    check_conditions(&raw.unless, "unless");
+
+    if let Some(ref downgrade) = raw.downgrade {
+        check_conditions(&downgrade.any, "downgrade.any");
+        check_conditions(&downgrade.all, "downgrade.all");
+        check_conditions(&downgrade.none, "downgrade.none");
+    }
 
     CompositeTrait {
         id: raw.id,

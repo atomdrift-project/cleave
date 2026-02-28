@@ -34,10 +34,9 @@ traits:
       min: 8
       min_size: 12288
     unless:
-      - type: basename
-        regex: "^test.*\\.(js|ts|py|rb|php|go|rs|java|cs|ps1|sh)$|.*\\.(test|spec)\\.(js|ts|py|rb|php|go|rs|java|cs|ps1|sh)$|.*_test\\.(go|py|rb|php|rs|java|cs|sh)$|^tests?\\.(rs|py|js|ts|go|java|cs|php|rb|sh)$|ast\\.js$"
+      - id: metadata/dev/testing::is-test
       - type: string
-        regex: "MathJax|wgxpath"
+        substr: "MathJax"
 
   - id: many-anonymous-functions
     desc: "Many anonymous functions"
@@ -49,8 +48,7 @@ traits:
       field: functions.anonymous
       min: 15
     unless:
-      - type: basename
-        regex: "test.*\\.js$|.*\\.test\\.js$|.*\\.spec\\.js$|.*\\.test\\.ts$|.*\\.spec\\.ts$|.*test.*\\.py$|.*_test\\.py$|.*spec.*\\.rb$|.*_spec\\.rb$|\\.window\\.js$"
+      - id: metadata/dev/testing::is-test
       # Exclude well-formatted code (likely callbacks, not obfuscation)
       - type: metrics
         field: text.whitespace_ratio

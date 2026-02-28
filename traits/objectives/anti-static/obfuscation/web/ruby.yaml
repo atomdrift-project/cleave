@@ -113,7 +113,9 @@ traits:
       per_kb_min: 2.0
     unless:
       - type: string
-        regex: "IRB|ActiveSupport"
+        substr: "IRB"
+      - type: string
+        substr: "ActiveSupport"
 
   # eval with string manipulation
   - id: dense-eval-calls

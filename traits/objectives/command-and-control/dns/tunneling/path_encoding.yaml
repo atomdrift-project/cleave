@@ -19,16 +19,9 @@ traits:
         (#eq? @split "split")
         (#eq? @slash "/"))
     unless:
-      - id: metadata/library::ioredis-auto-pipeline
-      - id: micro-behaviors/data/db/conn/redis::ioredis
-      - id: metadata/library::commander
-      - id: metadata/library/nodeunit::nodeunit
-      - id: metadata/library/nodeunit::nodeunit-require
-      - id: metadata/dev/testing::node-common-require
-    downgrade:
-      any:
-        - id: micro-behaviors/data/db/conn/redis::ioredis
-        - id: metadata/library::commander
+      - id: micro-behaviors/data/db/conn/redis
+      - id: metadata/library/nodeunit
+      - id: metadata/dev/testing
 
   - id: hex-path-p-wrapping
     desc: Wraps encoded path chunks with 'p' characters

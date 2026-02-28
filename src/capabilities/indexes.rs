@@ -190,10 +190,12 @@ impl StringMatchIndex {
         // Experiment 4: Collect substr patterns for Aho-Corasick
         let mut substr_patterns: Vec<String> = Vec::with_capacity(estimated_patterns);
         let mut substr_pattern_map: FxHashMap<String, usize> = FxHashMap::default();
-        let mut substr_to_traits: Vec<(String, Vec<usize>)> = Vec::with_capacity(estimated_patterns);
+        let mut substr_to_traits: Vec<(String, Vec<usize>)> =
+            Vec::with_capacity(estimated_patterns);
         let mut ci_substr_patterns: Vec<String> = Vec::with_capacity(estimated_patterns);
         let mut ci_substr_pattern_map: FxHashMap<String, usize> = FxHashMap::default();
-        let mut ci_substr_to_traits: Vec<(String, Vec<usize>)> = Vec::with_capacity(estimated_patterns);
+        let mut ci_substr_to_traits: Vec<(String, Vec<usize>)> =
+            Vec::with_capacity(estimated_patterns);
         let mut substr_trait_indices: FxHashSet<usize> = FxHashSet::default();
 
         let mut regex_literals: Vec<String> = Vec::with_capacity(estimated_patterns);
@@ -278,8 +280,10 @@ impl StringMatchIndex {
             }
         }
 
-        let total_patterns = exact_patterns.len() + ci_exact_patterns.len()
-            + substr_to_traits.len() + ci_substr_to_traits.len();
+        let total_patterns = exact_patterns.len()
+            + ci_exact_patterns.len()
+            + substr_to_traits.len()
+            + ci_substr_to_traits.len();
 
         // Set defaults if no patterns found
         if min_pattern_length == usize::MAX {
@@ -418,7 +422,9 @@ impl StringMatchIndex {
             if let Some(ref ac) = self.substr_automaton {
                 for mat in ac.find_iter(&string_info.value) {
                     let pattern_idx = mat.pattern().as_usize();
-                    if let Some((pattern_str, trait_indices)) = self.substr_to_traits.get(pattern_idx) {
+                    if let Some((pattern_str, trait_indices)) =
+                        self.substr_to_traits.get(pattern_idx)
+                    {
                         for &trait_idx in trait_indices {
                             matching_traits.insert(trait_idx);
                             let entry = trait_evidence.entry(trait_idx).or_default();
@@ -426,7 +432,11 @@ impl StringMatchIndex {
                                 entry.push(Evidence {
                                     method: "string".to_string(),
                                     source: "string_extractor".to_string(),
-                                    value: format!("{} (contains: {})", string_info.value.chars().take(80).collect::<String>(), pattern_str),
+                                    value: format!(
+                                        "{} (contains: {})",
+                                        string_info.value.chars().take(80).collect::<String>(),
+                                        pattern_str
+                                    ),
                                     location: string_info.offset.map(|o| format!("{:#x}", o)),
                                     ..Default::default()
                                 });
@@ -440,7 +450,9 @@ impl StringMatchIndex {
             if let Some(ref ac) = self.ci_substr_automaton {
                 for mat in ac.find_iter(&string_info.value) {
                     let pattern_idx = mat.pattern().as_usize();
-                    if let Some((original_pattern, trait_indices)) = self.ci_substr_to_traits.get(pattern_idx) {
+                    if let Some((original_pattern, trait_indices)) =
+                        self.ci_substr_to_traits.get(pattern_idx)
+                    {
                         for &trait_idx in trait_indices {
                             matching_traits.insert(trait_idx);
                             let entry = trait_evidence.entry(trait_idx).or_default();
@@ -448,7 +460,11 @@ impl StringMatchIndex {
                                 entry.push(Evidence {
                                     method: "string".to_string(),
                                     source: "string_extractor".to_string(),
-                                    value: format!("{} (contains: {})", string_info.value.chars().take(80).collect::<String>(), original_pattern),
+                                    value: format!(
+                                        "{} (contains: {})",
+                                        string_info.value.chars().take(80).collect::<String>(),
+                                        original_pattern
+                                    ),
                                     location: string_info.offset.map(|o| format!("{:#x}", o)),
                                     ..Default::default()
                                 });
@@ -530,7 +546,9 @@ impl StringMatchIndex {
                     if let Some(ref ac) = self.substr_automaton {
                         for mat in ac.find_iter(&string_info.value) {
                             let pattern_idx = mat.pattern().as_usize();
-                            if let Some((pattern_str, trait_indices)) = self.substr_to_traits.get(pattern_idx) {
+                            if let Some((pattern_str, trait_indices)) =
+                                self.substr_to_traits.get(pattern_idx)
+                            {
                                 for &trait_idx in trait_indices {
                                     matching_traits.insert(trait_idx);
                                     let entry = trait_evidence.entry(trait_idx).or_default();
@@ -538,8 +556,18 @@ impl StringMatchIndex {
                                         entry.push(Evidence {
                                             method: "string".to_string(),
                                             source: "string_extractor".to_string(),
-                                            value: format!("{} (contains: {})", string_info.value.chars().take(80).collect::<String>(), pattern_str),
-                                            location: string_info.offset.map(|o| format!("{:#x}", o)),
+                                            value: format!(
+                                                "{} (contains: {})",
+                                                string_info
+                                                    .value
+                                                    .chars()
+                                                    .take(80)
+                                                    .collect::<String>(),
+                                                pattern_str
+                                            ),
+                                            location: string_info
+                                                .offset
+                                                .map(|o| format!("{:#x}", o)),
                                             ..Default::default()
                                         });
                                     }
@@ -552,7 +580,9 @@ impl StringMatchIndex {
                     if let Some(ref ac) = self.ci_substr_automaton {
                         for mat in ac.find_iter(&string_info.value) {
                             let pattern_idx = mat.pattern().as_usize();
-                            if let Some((original_pattern, trait_indices)) = self.ci_substr_to_traits.get(pattern_idx) {
+                            if let Some((original_pattern, trait_indices)) =
+                                self.ci_substr_to_traits.get(pattern_idx)
+                            {
                                 for &trait_idx in trait_indices {
                                     matching_traits.insert(trait_idx);
                                     let entry = trait_evidence.entry(trait_idx).or_default();
@@ -560,8 +590,18 @@ impl StringMatchIndex {
                                         entry.push(Evidence {
                                             method: "string".to_string(),
                                             source: "string_extractor".to_string(),
-                                            value: format!("{} (contains: {})", string_info.value.chars().take(80).collect::<String>(), original_pattern),
-                                            location: string_info.offset.map(|o| format!("{:#x}", o)),
+                                            value: format!(
+                                                "{} (contains: {})",
+                                                string_info
+                                                    .value
+                                                    .chars()
+                                                    .take(80)
+                                                    .collect::<String>(),
+                                                original_pattern
+                                            ),
+                                            location: string_info
+                                                .offset
+                                                .map(|o| format!("{:#x}", o)),
                                             ..Default::default()
                                         });
                                     }

@@ -29,22 +29,11 @@ traits:
     attack: "T1055"
     mbc: "C0041"
     unless:
-      - type: string
-        substr: "OpenMP Runtime"
-      - type: string
-        substr: "ODBG_Plugin"
-      - type: string
-        substr: "JetBrains s.r.o."
-      - type: string
-        substr: "AutoIt"
+      - id: metadata/vendor/microsoft
+      - id: metadata/vendor/valve
+      - id: metadata/vendor/jetbrains
       - type: raw
         substr: "AutoHotkey"
-      - type: symbol
-        regex: "^(Steam_|Breakpad_Steam)"
-      - type: string
-        substr: "Valve Corp."
-      - type: basename
-        substr: "DiagnosticsHub"
 
 composite_rules:
   - id: multi-stage-loader

@@ -1,0 +1,26 @@
+traits:
+  - id: inno-setup-installer
+    desc: "Inno Setup installer string indicator"
+    crit: component
+    conf: 1.0
+    for: [pe, all]
+    if:
+      type: string
+      substr: "Inno Setup Setup Data ("
+
+  - id: inno-setup-zlb-data
+    desc: "Inno Setup compressed data block signature"
+    crit: component
+    conf: 1.0
+    for: [pe, all]
+    if:
+      type: hex
+      pattern: "7A 6C 62 1A" # zlb\x1a
+
+composite_rules:
+  - id: inno-setup
+    desc: "Inno Setup installer file with data block"
+    crit: notable
+    all:
+      - id: metadata/format/installer::inno-setup-installer
+      - id: metadata/format/installer::inno-setup-zlb-data

@@ -9,15 +9,15 @@ traits:
   crit: notable
   conf: 0.8
   if:
-    type: string
-    substr: ./stealer
+    type: raw
+    regex: "require\\s*\\(\\s*['\"]\\./stealer"
 - id: grabber-string
   desc: Grabber module string reference
   crit: notable
   conf: 0.8
   if:
-    type: string
-    substr: ./grabber
+    type: raw
+    regex: "require\\s*\\(\\s*['\"]\\./grabber"
 - id: homedir-app-check
   desc: Homedir /app sandbox check
   crit: suspicious

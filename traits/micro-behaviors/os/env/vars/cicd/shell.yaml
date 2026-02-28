@@ -1,0 +1,108 @@
+# CI/CD Environment Variable Targeting - Shell
+# Detects access to CI/CD runner environment variables in shell scripts
+# ATT&CK: T1082 (System Information Discovery)
+
+defaults:
+  for: [shell]
+  crit: notable
+  conf: 0.75
+
+traits:
+  # GitHub Actions runner variables
+  - id: sh-runner-name
+    desc: $RUNNER_NAME shell environment access
+    conf: 0.85
+    if:
+      type: raw
+      regex: "\\$\\{?RUNNER_NAME\\}?"
+
+  - id: sh-runner-os
+    desc: $RUNNER_OS shell environment access
+    conf: 0.8
+    if:
+      type: raw
+      regex: "\\$\\{?RUNNER_OS\\}?"
+
+  - id: sh-github-actions
+    desc: $GITHUB_ACTIONS shell environment access
+    conf: 0.8
+    if:
+      type: raw
+      regex: "\\$\\{?GITHUB_ACTIONS\\}?"
+
+  - id: sh-github-token
+    desc: $GITHUB_TOKEN shell environment access
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: raw
+      regex: "\\$\\{?GITHUB_TOKEN\\}?"
+
+  - id: sh-github-actor
+    desc: $GITHUB_ACTOR shell environment access
+    conf: 0.75
+    if:
+      type: raw
+      regex: "\\$\\{?GITHUB_ACTOR\\}?"
+
+  - id: sh-github-repository
+    desc: $GITHUB_REPOSITORY shell env access
+    conf: 0.75
+    if:
+      type: raw
+      regex: "\\$\\{?GITHUB_REPOSITORY\\}?"
+
+  # CI detection variables
+  - id: sh-ci-variable
+    desc: $CI shell environment variable
+    conf: 0.7
+    if:
+      type: raw
+      regex: "\\$\\{?CI\\}?"
+
+  # System info collection
+  - id: sh-uname-fingerprint
+    desc: uname command for fingerprinting
+    conf: 0.8
+    if:
+      type: raw
+      regex: "\\$\\(uname\\s+-[a-z]+\\)|`uname\\s+-[a-z]+`"
+
+  - id: sh-hostname-command
+    desc: Shell hostname command substitution
+    conf: 0.75
+    if:
+      type: raw
+      regex: "\\$\\(hostname\\)|`hostname`"
+
+  - id: sh-whoami-command
+    desc: whoami command
+    conf: 0.75
+    if:
+      type: raw
+      regex: "\\$\\(whoami\\)|`whoami`|\\bwhoami\\b"
+
+composite_rules:
+  - id: shell-runner-fingerprinting
+    desc: CI/CD runner fingerprinting in shell
+    crit: suspicious
+    conf: 0.85
+    attack: "T1082"
+    needs: 2
+    any:
+      - id: sh-runner-name
+      - id: sh-runner-os
+      - id: sh-github-actions
+      - id: sh-github-actor
+      - id: sh-github-repository
+
+  - id: shell-system-fingerprinting
+    desc: System fingerprinting shell commands
+    crit: notable
+    conf: 0.8
+    needs: 2
+    any:
+      - id: sh-uname-fingerprint
+      - id: sh-hostname-command
+      - id: sh-whoami-command
+      - id: sh-ci-variable

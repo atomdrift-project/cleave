@@ -1,0 +1,39 @@
+defaults:
+  for: [pe]
+  platforms: [windows]
+
+traits:
+  - id: winpty-pipe-prefix
+    desc: Winpty named pipe prefix
+    crit: notable
+    conf: 0.95
+    if:
+      type: raw
+      substr: "winpty-"
+
+  - id: winpty-agent-banner
+    desc: Winpty agent usage banner
+    crit: notable
+    conf: 1.0
+    if:
+      type: raw
+      substr: "Ordinarily, this program is launched by winpty.dll"
+
+  - id: winpty-agent-pdb
+    desc: Winpty agent debug path
+    crit: notable
+    conf: 0.9
+    if:
+      type: raw
+      substr: "winpty-agent.pdb"
+
+composite_rules:
+  - id: winpty-agent
+    desc: Winpty console broker utility
+    crit: notable
+    conf: 0.98
+    needs: 2
+    any:
+      - id: winpty-pipe-prefix
+      - id: winpty-agent-banner
+      - id: winpty-agent-pdb

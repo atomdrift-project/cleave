@@ -1,0 +1,44 @@
+defaults:
+  for: [all]
+
+traits:
+  - id: disable-registry-tools
+    desc: References DisableRegistryTools policy key
+    crit: suspicious
+    conf: 0.9
+    attack: "T1112"
+    if:
+      type: raw
+      regex: '(?i)DisableRegistryTools'
+
+  - id: legal-notice-caption
+    desc: References legalnoticecaption registry value
+    crit: notable
+    conf: 0.85
+    if:
+      type: raw
+      regex: '(?i)legalnoticecaption'
+
+  - id: legal-notice-text
+    desc: References legalnoticetext registry value
+    crit: notable
+    conf: 0.85
+    if:
+      type: raw
+      regex: '(?i)legalnoticetext'
+
+  - id: no-changing-wallpaper
+    desc: References NoChangingWallpaper policy key
+    crit: notable
+    conf: 0.85
+    if:
+      type: raw
+      regex: '(?i)NoChangingWallpaper'
+
+  - id: lock-screen-image-path
+    desc: References LockScreenImagePath registry value
+    crit: notable
+    conf: 0.85
+    if:
+      type: raw
+      regex: '(?i)LockScreenImagePath'

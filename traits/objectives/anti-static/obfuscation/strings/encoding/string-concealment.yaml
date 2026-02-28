@@ -33,37 +33,25 @@ traits:
 
   - id: minimal-strings
     desc: "Binary has very few readable"
-    crit: suspicious
-    conf: 0.85
+    crit: notable
+    conf: 0.7
     size_min: 51200
     if:
       type: string_count
       max: 20
       min_length: 4
     unless:
-      - id: metadata/format::tiny-elf
-      - id: metadata/format::small-elf-binary
-      - id: metadata/format::many-imports
-      - id: metadata/format::many-functions
-      - id: metadata/hardening::stripped-binary
+      - id: metadata/format
+      - id: metadata/hardening
       - id: metadata/signed/platform::apple
       - type: raw
-        substr: "BSJB"  # .NET NI (NGEN) DLLs store metadata in binary format, few readable strings
-      - type: metrics
-        field: binary.import_count
-        min: 80
-      - type: metrics
-        field: binary.function_count
-        min: 30
+        substr: "BSJB"
     downgrade:
       any:
         - type: section
-          regex: "^(UPX\\d|\\.upx)"  # UPX-packed binaries have no readable strings
+          regex: "^(UPX|upx)"
         - type: raw
-          substr: "PECompac"  # PECompact-packed binaries have no readable strings
-        - id: metadata/internal/symbols::icv_iconv
-        - type: basename
-          regex: "^[^/]+%[^/]+\\.so(?:\\.\\d+)*"
+          substr: "PECompac"
 
 composite_rules:
   # String concealment pattern

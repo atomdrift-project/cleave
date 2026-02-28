@@ -107,9 +107,7 @@ impl<'a> EvaluationContext<'a> {
     }
 
     /// Get or build the exact string index for O(1) lookups
-    pub(crate) fn get_string_exact_index(
-        &self,
-    ) -> &FxHashMap<String, Vec<(String, Option<u64>)>> {
+    pub(crate) fn get_string_exact_index(&self) -> &FxHashMap<String, Vec<(String, Option<u64>)>> {
         self.string_exact_index.get_or_init(|| {
             let mut index: FxHashMap<String, Vec<(String, Option<u64>)>> = FxHashMap::default();
 
@@ -155,10 +153,11 @@ impl<'a> EvaluationContext<'a> {
 
             // Index strings from report
             for s in &self.report.strings {
-                index
-                    .entry(s.value.to_lowercase())
-                    .or_default()
-                    .push((s.value.clone(), "string_extractor".to_string(), s.offset));
+                index.entry(s.value.to_lowercase()).or_default().push((
+                    s.value.clone(),
+                    "string_extractor".to_string(),
+                    s.offset,
+                ));
             }
 
             // Index imports

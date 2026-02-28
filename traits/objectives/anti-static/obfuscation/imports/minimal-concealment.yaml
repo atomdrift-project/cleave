@@ -19,8 +19,8 @@ traits:
     regex: '^[^/]+%[^/]+\.so(\.\d+)*$'
 - id: extremely-low-strings
   desc: Extremely few extracted strings
-  crit: suspicious
-  conf: 0.8
+  crit: notable
+  conf: 0.7
   size_min: 51200
   for:
   - pe
@@ -30,25 +30,8 @@ traits:
     max: 10
     min_length: 4
   unless:
-  - id: metadata/hardening::stripped-binary
-  - id: metadata/format::many-functions
-  - id: metadata/format::small-elf-binary
-  - id: metadata/format::many-imports
-  - type: metrics
-    field: binary.import_count
-    min: 80
-  - type: metrics
-    field: binary.function_count
-    min: 30
-  downgrade:
-    any:
-    - type: section
-      regex: "^(UPX\\d|\\.upx)"  # UPX-packed binaries compress all strings
-    - type: raw
-      substr: "PECompac"  # PECompact-packed binaries compress all strings
-    - id: metadata/internal/symbols::icv_iconv
-    - type: basename
-      regex: "^[^/]+%[^/]+\\.so(?:\\.\\d+)*"
+  - id: metadata/hardening
+  - id: metadata/format
 composite_rules:
 - id: minimal-imports-suspicious-apis
   desc: Minimal imports with suspicious API combination

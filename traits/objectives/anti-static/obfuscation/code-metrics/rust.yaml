@@ -22,15 +22,9 @@ traits:
       # SIMD intrinsic headers often contain architectural feature names that trigger high entropy
       - type: raw
         substr: "relaxed_simd"
-      # Rust benchmark files often contain many repetitive benchmark-oriented
-      # identifiers (bench_*, iterator combinator chains) without obfuscation intent.
+      # Rust benchmark files
       - type: raw
-        regex: '(?m)^\s*#\[bench\]'
-      # Runtime CPU feature detection tests include many short architecture
-      # feature identifiers (e.g., avx512*, sve2-*) that inflate entropy.
+        substr: "#[bench]"
+      # Runtime CPU feature detection macros
       - type: raw
-        regex: 'is_(x86|aarch64|arm|powerpc|powerpc64)_feature_detected!\s*\('
-      # Generated FFI/binding tables often contain thousands of long ALL_CAPS
-      # constants and are not identifier obfuscation.
-      - type: raw
-        regex: '(?m)^pub const [A-Z0-9_]{20,}:'
+        substr: "_feature_detected!"

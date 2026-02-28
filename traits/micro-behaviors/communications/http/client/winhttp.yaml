@@ -1,0 +1,75 @@
+defaults:
+  for: [pe, dll]
+  platforms: [windows]
+  attack: "T1071.001"
+  mbc: "C0002"
+
+traits:
+  - id: winhttp-open
+    desc: Initialize WinHTTP session
+    crit: notable
+    conf: 0.9
+    if:
+      type: symbol
+      exact: "WinHttpOpen"
+
+  - id: winhttp-connect
+    desc: Connect WinHTTP to remote host
+    crit: notable
+    conf: 0.9
+    if:
+      type: symbol
+      exact: "WinHttpConnect"
+
+  - id: winhttp-open-request
+    desc: Create WinHTTP HTTP request handle
+    crit: notable
+    conf: 0.9
+    if:
+      type: symbol
+      exact: "WinHttpOpenRequest"
+
+  - id: winhttp-send-request
+    desc: Send WinHTTP request to server
+    crit: notable
+    conf: 0.9
+    if:
+      type: symbol
+      exact: "WinHttpSendRequest"
+
+  - id: winhttp-receive-response
+    desc: Receive WinHTTP server response
+    crit: notable
+    conf: 0.9
+    if:
+      type: symbol
+      exact: "WinHttpReceiveResponse"
+
+  - id: winhttp-read-data
+    desc: Read WinHTTP response body
+    crit: notable
+    conf: 0.85
+    if:
+      type: symbol
+      exact: "WinHttpReadData"
+
+  - id: winhttp-query-data-available
+    desc: Query WinHTTP buffered response bytes
+    crit: notable
+    conf: 0.85
+    if:
+      type: symbol
+      exact: "WinHttpQueryDataAvailable"
+
+composite_rules:
+  - id: winhttp-request-flow
+    desc: WinHTTP request response data flow
+    crit: notable
+    conf: 0.9
+    all:
+      - id: winhttp-open-request
+      - id: winhttp-send-request
+      - id: winhttp-receive-response
+    any:
+      - id: winhttp-read-data
+      - id: winhttp-query-data-available

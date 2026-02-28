@@ -52,17 +52,16 @@ traits:
     conf: 0.65
     platforms: [linux, unix]
     # NOTE: Exclude shared libraries (.so) as XGrabKey is a core X11 API
-    # libX11.so and other X11 libraries legitimately export this function
     for: [elf]
     if:
       type: symbol
       regex: "XGrabKey"
-    # Skip if this looks like a system X11 library
+    # Skip shared libraries - they legitimately export X11 functions
     unless:
       - type: basename
-        regex: "^lib(X11|xcb|Xext|Xt|Xmu|Xi|Xrandr|Xrender|Xfixes|Xcomposite|Xdamage|Xinput|Xinerama|Xss|Xkb)\\b"
+        regex: "^lib.*\\.so"
       - type: string
-        regex: "X11R[0-9]|xenocara|xorg"
+        substr: "xorg"
 
   # === Atomic: macOS Keyboard Capture ===
   - id: macos-eventtap

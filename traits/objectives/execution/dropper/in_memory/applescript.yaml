@@ -1,0 +1,26 @@
+# AppleScript Droppers
+
+defaults:
+  for: [applescript]
+  platforms: [macos]
+
+composite_rules:
+  - id: applescript-in-memory-downloader
+    desc: "AppleScript downloads and executes a script in memory"
+    crit: hostile
+    conf: 0.95
+    attack: "T1105"
+    all:
+      - id: micro-behaviors/process/create/script::shell-cmd
+      - id: micro-behaviors/process/create/script::osascript-exec
+    any:
+      - id: micro-behaviors/communications/http/client::curl-cmd
+      - id: micro-behaviors/communications/download/curl::curl-cmd
+
+  - id: applescript-lure-downloader
+    desc: "AppleScript uses a background lure while acting as a dropper"
+    crit: hostile
+    conf: 0.95
+    all:
+      - id: micro-behaviors/process/create/script::open-g-bg
+      - id: objectives/execution/dropper/in_memory::applescript-in-memory-downloader

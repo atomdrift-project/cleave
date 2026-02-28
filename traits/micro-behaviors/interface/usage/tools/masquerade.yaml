@@ -1,0 +1,11 @@
+defaults:
+  for: [elf, macho, pe]
+  crit: suspicious
+
+traits:
+  - id: file-recovery-tool
+    desc: Mentions FileRecoveryTool
+    if:
+      type: string
+      substr: "FileRecoveryTool"
+      case_insensitive: true

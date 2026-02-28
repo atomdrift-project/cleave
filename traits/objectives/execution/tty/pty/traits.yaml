@@ -294,13 +294,6 @@ composite_rules:
     # Downgrade for Apple system components (e.g., /bin/bash), debuggers, graphics libs, and system libraries
     downgrade:
       any:
-        - id: metadata/apple::system-component
-        - id: micro-behaviors/dylib/library::debugger-tool-marker
-        - id: micro-behaviors/dylib/library::system-lib-marker
-        - id: micro-behaviors/dylib/library::shell-interpreter
-        - id: micro-behaviors/dylib/library::graphics-lib-marker
-        - id: micro-behaviors/dylib/library::x11-ipc-lib-marker
-        - id: micro-behaviors/dylib/library::network-lib-marker
-        - id: metadata/format::many-imports
-        - type: string
-          exact: "busybox"
+        - id: metadata/apple
+        - id: micro-behaviors/dylib/library
+        - id: metadata/format

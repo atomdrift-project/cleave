@@ -1,0 +1,13 @@
+defaults:
+  for: [pe]
+
+composite_rules:
+  - id: proxy-backdoor-service
+    desc: "Interactive proxy backdoor installed as a service"
+    attack: "T1090"
+    crit: hostile
+    all:
+      - id: micro-behaviors/communications/network/routing::create-ip-forward-entry
+      - id: micro-behaviors/process/create/spawn::create-process-as-user
+      - id: micro-behaviors/process/create/spawn::winsta0-default
+      - id: micro-behaviors/os/service/control::create-service

@@ -53,13 +53,19 @@ Both `component` and `baseline` are allowed in any tier.
 ## Trait Definition
 
 ```yaml
+# File-level defaults (apply to all traits/composites in file unless overridden)
+defaults:
+  for: [python]
+  crit: notable
+  conf: 0.85
+
 traits:
   - id: execution/terminate          # ID relative to directory
     desc: Process termination API call   # 4-6 words, what was detected
     crit: suspicious                     # baseline|notable|suspicious|hostile
     conf: 0.95                           # 0.0-1.0
-    mbc: "E1562"                         # Optional MBC code
-    attack: "T1562"                      # Optional ATT&CK code
+    mbc: "E1562"                         # Optional MBC code (B0001 behavior, C0015 micro, E1234 ATT&CK+MBC)
+    attack: "T1562"                      # Optional ATT&CK code (T1234 or T1234.001)
     for: [csharp]                        # File types (see below)
     platforms: [linux, macos, windows]   # Optional platform filter
     size_min: 1000                       # Optional min file size (bytes)
@@ -71,10 +77,15 @@ traits:
       substr: ".Kill("
 ```
 
-**File types:** `elf`, `macho`, `pe`, `dll`, `so`, `dylib`, `shell`, `batch`, `python`, `javascript`, `typescript`, `rust`, `java`, `class`, `ruby`, `c`, `cpp`, `go`, `csharp`, `php`, `perl`, `powershell`, `lua`, `swift`, `objectivec`, `groovy`, `scala`, `zig`, `elixir`, `vbs`, `html`, `applescript`, `packagejson`, `chrome-manifest`, `cargo-toml`, `pyproject-toml`, `github-actions`, `composer-json`, `plist`, `ipa`, `text`, `rtf`, `all`.
+**Field override:** Set any field to `none` (case-insensitive) to unset it, ignoring file-level defaults. Example: `for: [none]` removes file type filtering even if defaults specify types.
+
+**File types:** `elf`, `macho`, `pe`, `dll`, `so`, `dylib`, `shell`, `batch`, `python`, `javascript`, `typescript`, `rust`, `java`, `class`, `ruby`, `c`, `cpp`, `go`, `csharp`, `php`, `perl`, `powershell`, `lua`, `swift`, `objectivec`, `groovy`, `scala`, `zig`, `elixir`, `vbs`, `html`, `applescript`, `packagejson`, `chrome-manifest`, `cargo-toml`, `pyproject-toml`, `github-actions`, `composer-json`, `plist`, `ipa`, `text`, `rtf`, `lnk`, `jpeg`, `png`, `pkginfo`, `all`.
+
+**Platforms:** `linux`, `macos`, `windows`, `unix`, `android`, `ios`, `all`.
 
 **Groups:** `binaries` (or `binary`), `scripts` (or `script`, `scripting`).
 **Exclusions:** Prefix with `-` (e.g., `-php`, `scripts,-python`).
+**Unset field:** Use `none` anywhere in the list to unset the field entirely, ignoring defaults.
 
 ## Condition Types
 
@@ -86,25 +97,97 @@ traits:
 | `raw` | Raw file bytes | `exact`, `substr`, `regex`, `word` | count, density, location, `case_insensitive`, `external_ip` |
 | `symbol` | Imports/exports | `exact`, `substr`, `regex` | `platforms` |
 | `hex` | Byte patterns (wildcards always extracted) | pattern string | count, density, `offset`, `offset_range` |
-| `encoded` | **All decoded strings** | `exact`, `substr`, `regex`, `word` | count, density, location, `encoding`, `case_insensitive` |
+| `encoded` | **All decoded strings** | `exact`, `substr`, `regex`, `word` | count, density, location, `encoding`, `case_insensitive`, `external_ip` |
 | `base64` | Base64-decoded *(deprecated - use `encoded`)* | `exact`, `substr`, `regex` | count, density, location, `case_insensitive` |
 | `xor` | XOR-decoded *(deprecated - use `encoded`)* | `exact`, `substr`, `regex` | count, density, location, `key`, `case_insensitive` |
-| `kv` | Manifest data | `exact`, `substr`, `regex` | `path`, `case_insensitive` |
+| `kv` | Manifest data | `exact`, `substr`, `regex` | `path`, `exists`, `size_min`, `size_max`, `case_insensitive` (value only) |
 | `basename` | Filename | `exact`, `substr`, `regex` | `case_insensitive` |
+
+**Matcher notes:**
+- `word` - Word boundary match (equivalent to `\b{value}\b`). Available on `string`, `raw`, `section`, `encoded`. NOT available on `symbol`, `basename`, `hex`.
+- `external_ip` - Only match if evidence contains a valid external IP (rejects RFC1918, loopback, reserved ranges).
 
 ### Structural
 
 | Type | Purpose | Fields |
 |------|---------|--------|
-| `ast` | Parse source | `kind`/`node`, `exact`/`substr`/`regex`/`query` |
-| `syscall` | Direct syscalls | `name`, `number`, `arch`, `count_min`, `count_max`, `per_kb_min`, `per_kb_max` |
+| `ast` | Parse source | `kind`/`node`, `exact`/`substr`/`regex`/`query` (tree-sitter S-expression) |
+| `syscall` | Direct syscalls | `name`, `number`, `arch` (all optional, OR within field, AND across fields), `count_min`, `count_max`, `per_kb_min`, `per_kb_max` |
 | `section` | Binary sections | `exact`, `substr`, `regex`, `word`, `case_insensitive`, `length_min`, `length_max`, `entropy_min`, `entropy_max`, `readable`, `writable`, `executable` |
-| `section_ratio` | Section size ratio | `section`, `compare_to`, `min`, `max` |
-| `import_combination` | Import patterns | `required`, `suspicious`, `min_suspicious` |
-| `metrics` | Code metrics | `field`, `min`, `max`, `min_size` |
+| `section_ratio` | Section size ratio | `section`, `compare_to` (default: "total"), `min`, `max` |
+| `import_combination` | Import patterns | `required`, `suspicious`, `min_suspicious`, `max_total` |
+| `structure` | Binary structure | `feature` (hierarchical ID), `min_sections` |
+| `exports_count` | Export count bounds | `min`, `max` |
+| `string_count` | String count analysis | `min`, `max`, `min_length`, `regex` (filter) |
+| `metrics` | Code metrics | `field` (e.g., "identifiers.avg_entropy"), `min`, `max`, `min_size`, `max_size` |
 | `trait_glob` | Match traits | `pattern`, `match` (any/all/N) |
 | `filesize` | File size | `min`, `max` |
 | `yara` | YARA rule | `source` |
+
+### Syscall Matching
+
+The `syscall` type filters are all optional. Within each field (name, number, arch), matching is OR (any value matches). Across fields, matching is AND (all specified fields must match).
+
+```yaml
+# Match by name (any of these)
+- id: network-syscalls
+  if:
+    type: syscall
+    name: ["socket", "connect", "bind"]
+
+# Match by number on specific arch
+- id: execve-x64
+  if:
+    type: syscall
+    number: [59]
+    arch: ["x86_64"]
+```
+
+### Structural Condition Examples
+
+Feature IDs use hierarchical paths. Common features include:
+- `binary/format/elf`, `binary/format/macho`, `binary/format/pe`
+- `binary/arch/{arch}` (e.g., `binary/arch/x86_64`, `binary/arch/arm`)
+- `binary/stripped`, `binary/signed`, `binary/pie`
+- `entropy/high` (high entropy section, suggests packing/encryption)
+- `source/language/{lang}` (e.g., `source/language/python`)
+
+Matching uses prefix logic: `feature: "binary"` matches all `binary/*` features.
+
+```yaml
+# Detect high entropy (packed/encrypted) sections
+- id: high-entropy-section
+  if:
+    type: structure
+    feature: "entropy/high"
+
+# Detect stripped binary
+- id: stripped-binary
+  if:
+    type: structure
+    feature: "binary/stripped"
+
+# Detect binaries with suspiciously few exports
+- id: minimal-exports
+  if:
+    type: exports_count
+    max: 5
+
+# Detect string obfuscation (very few visible strings)
+- id: few-strings
+  if:
+    type: string_count
+    max: 20
+    min_length: 4    # Only count strings 4+ chars
+
+# Detect obfuscated identifiers via entropy
+- id: high-entropy-identifiers
+  if:
+    type: metrics
+    field: "identifiers.avg_entropy"
+    min: 4.5
+    min_size: 10000  # Only check files >10KB
+```
 
 ### Hex Pattern Syntax
 
@@ -187,6 +270,14 @@ Available on `string`, `raw`, `encoded`, `base64`, `xor`. Hex supports `offset` 
     type: hex
     pattern: "7F 45 4C 46"
     offset: 0
+
+# Within .rodata section, first 256 bytes
+- id: rodata-header
+  if:
+    type: string
+    substr: "CONFIG"
+    section: rodata
+    section_offset_range: [0, 256]
 ```
 
 ## Section Constraints
@@ -282,6 +373,7 @@ The `encoded` type searches decoded/encoded strings with optional encoding filte
 | Omit `encoding:` | Search **all** encoded strings | `type: encoded, substr: "eval"` |
 | Single string | Search single encoding type | `encoding: base64` |
 | Array | Search multiple types (OR) | `encoding: [base64, hex]` |
+| Chain syntax | Apply decodings in sequence | `encoding: "xor+base64"` (XOR first, then base64) |
 
 ### Examples
 
@@ -368,8 +460,12 @@ composite_rules:
       - id: pattern-b
     none:                             # NOT (none may match)
       - id: legitimate-use
-    needs: 2                          # Min matches from `any:`
+    needs: 2                          # Min matches from `any:` ONLY (has no effect on `all:`)
 ```
+
+**Trait references:** Use `{ id: trait-id }` in condition lists. The `type:` field can be omitted for trait references.
+
+**Circular references:** Composites can reference other composites, but circular references are not detected and will cause infinite recursion. Ensure referenced traits are defined before the referencing composite.
 
 ## Trait References in `if:`
 
@@ -431,7 +527,7 @@ composite_rules:
 | `unless:` | Skip if condition matches (trait refs or inline conditions) |
 | `downgrade:` | Reduce criticality by one level if condition matches |
 
-**Proximity:** `near_bytes:`, `near_lines:` - require evidence within N bytes/lines
+**Proximity (composites only):** `near_bytes: N`, `near_lines: N` - require evidence from different conditions to be within N bytes/lines of each other
 
 ### Downgrade Behavior
 
@@ -444,6 +540,8 @@ Reduces criticality by **one level** when conditions match:
 | `notable` → `baseline` | Common capability in trusted context (becomes invisible) |
 
 **Syntax** (works on both atomic traits and composite rules):
+
+`downgrade:` supports full boolean logic with `all:`, `any:`, `none:`, and `needs:` - the same structure as composite rule conditions.
 
 ```yaml
 traits:
@@ -468,8 +566,10 @@ composite_rules:
       - id: micro-behaviors/process/create
       - id: micro-behaviors/mem/allocate/rwx
     downgrade:                           # → suspicious if debugger
-      any:
+      all:                               # Full boolean logic supported
         - id: micro-behaviors/process/create/load/library::debugger-tool-marker
+      none:
+        - id: objectives/anti-analysis/packing::upx
 ```
 
 **Note:** Downgrade to `baseline` removes the finding from output entirely. Use `unless:` if you want to skip matching instead.
@@ -573,6 +673,26 @@ size_max: 0
 - `size_min`/`size_max` apply to arrays (element count) and objects (key count)
 - Scalars (strings, numbers, booleans) will fail size constraints
 - Evidence output includes `size: N (array)` or `size: N (object)`
+
+## Validation & Auto-Fix
+
+### Regex Constraints
+
+Regex patterns are validated at load time:
+- Maximum 80 bytes for regex patterns
+- Maximum 3 `|` alternation symbols outside character classes
+- Simple alphanumeric alternation (like `foo|bar|baz`) triggers a warning to use separate atomic traits
+
+### Auto-Fix Behaviors
+
+- **Literal regex conversion:** Patterns without regex metacharacters (`.`, `*`, `+`, `?`, `^`, `$`, `(`, `)`, `[`, `]`, `{`, `}`, `|`, `\`) are auto-converted to `substr:` for performance
+- **Size-only traits:** Traits with `size_min`/`size_max` but no `if:` condition get a synthetic "always-true" condition
+
+### Evidence Handling
+
+- Duplicate evidence strings are automatically deduplicated
+- Evidence is capped per trait (typically 512-1024 entries)
+- Count/density constraints are applied AFTER location filtering
 
 ## CLI Reference
 

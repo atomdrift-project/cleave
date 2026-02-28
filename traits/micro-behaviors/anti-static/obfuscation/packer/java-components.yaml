@@ -1,0 +1,31 @@
+defaults:
+  for: [all]
+
+traits:
+  - id: java-classloader-usage
+    desc: Dynamic class loading
+    crit: notable
+    if:
+      type: raw
+      regex: 'java/lang/ClassLoader'
+      
+  - id: java-jar-usage
+    desc: JAR archive operations
+    crit: notable
+    if:
+      type: raw
+      regex: 'java/util/jar/Jar'
+      
+  - id: java-crypto-cipher
+    desc: Cryptographic operations
+    crit: notable
+    if:
+      type: raw
+      regex: 'javax/crypto/Ciphe[r]'
+
+  - id: java-crypto-security
+    desc: Security operations
+    crit: notable
+    if:
+      type: raw
+      regex: 'java/security/MessageDiges[t]'

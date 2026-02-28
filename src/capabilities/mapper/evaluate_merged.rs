@@ -43,7 +43,8 @@ impl super::CapabilityMapper {
 
         let t_start = std::time::Instant::now();
         let result = if self.raw_content_regex_index.has_patterns() {
-            self.raw_content_regex_index.find_matches(binary_data, file_type)
+            self.raw_content_regex_index
+                .find_matches(binary_data, file_type)
         } else {
             FxHashSet::default()
         };
@@ -170,5 +171,4 @@ impl super::CapabilityMapper {
             }
         }
     }
-
 }

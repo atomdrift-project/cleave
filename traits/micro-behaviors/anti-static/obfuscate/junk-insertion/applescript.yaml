@@ -1,0 +1,16 @@
+# AppleScript Obfuscation
+
+defaults:
+  for: [applescript]
+  platforms: [macos]
+
+traits:
+  - id: excessive-vertical-padding
+    desc: "Excessive AppleScript vertical whitespace padding"
+    crit: suspicious
+    conf: 0.9
+    attack: "T1027"
+    if:
+      type: string
+      regex: '(
+\s*){50,}'

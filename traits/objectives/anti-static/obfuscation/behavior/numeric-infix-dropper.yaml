@@ -1,0 +1,13 @@
+composite_rules:
+  - id: numeric-infix-dropper
+    desc: "Obfuscated numeric infix Python dropper/utility"
+    crit: hostile
+    for: [python]
+    all:
+      - type: trait
+        id: micro-behaviors/anti-static/obfuscation/variables::numeric-infix
+    any:
+      - type: trait
+        id: metadata/import/python::tarfile
+      - type: trait
+        id: metadata/import/python::sqlite3

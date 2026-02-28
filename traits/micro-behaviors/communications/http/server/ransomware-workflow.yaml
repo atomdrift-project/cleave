@@ -1,0 +1,53 @@
+defaults:
+  for: [pe, dll, elf, macho]
+
+traits:
+  - id: api-route-crypt
+    desc: API route for crypt operation
+    crit: notable
+    conf: 0.8
+    if:
+      type: raw
+      substr: "/api/crypt"
+
+  - id: api-route-scan-id
+    desc: API route for scan by id
+    crit: notable
+    conf: 0.8
+    if:
+      type: raw
+      regex: "/api/scan/(:id|\\$\\{[a-zA-Z0-9_]+\\}|\\{id\\})"
+
+  - id: api-route-download-id
+    desc: API route for download by id
+    crit: notable
+    conf: 0.8
+    if:
+      type: raw
+      regex: "/api/download/(:id|\\$\\{[a-zA-Z0-9_]+\\}|\\{id\\})"
+
+  - id: uploads-staging-path
+    desc: Upload staging directory path
+    crit: notable
+    conf: 0.7
+    if:
+      type: raw
+      substr: "uploads/"
+
+composite_rules:
+  - id: api-crypt-scan-download-workflow
+    desc: Encrypt scan download API workflow
+    crit: suspicious
+    conf: 0.85
+    all:
+      - id: api-route-crypt
+      - id: api-route-scan-id
+      - id: api-route-download-id
+
+  - id: crypt-api-with-upload-staging
+    desc: API crypt workflow with upload staging
+    crit: suspicious
+    conf: 0.9
+    all:
+      - id: api-crypt-scan-download-workflow
+      - id: uploads-staging-path

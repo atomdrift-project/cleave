@@ -1,0 +1,17 @@
+defaults:
+  for: [pe, dll]
+
+traits:
+  - id: appcompatflags-registry-key
+    desc: "References AppCompatFlags Layers registry key"
+    crit: notable
+    if:
+      type: raw
+      regex: "(?i)SOFTWARE\\\\Microsoft\\\\Windows NT\\\\CurrentVersion\\\\AppCompatFlags\\\\Layers"
+
+  - id: runasadmin-string
+    desc: "References RUNASADMIN string"
+    crit: notable
+    if:
+      type: string
+      regex: "(?i)~\\s*RUNASADMIN"

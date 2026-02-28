@@ -1114,7 +1114,7 @@ pub(crate) enum Condition {
 
     /// Match a structural feature
     Structure {
-        /// Feature identifier (e.g., "packed", "stripped", "signed")
+        /// Feature identifier (e.g., "binary/stripped", "entropy/high", "binary/format/elf")
         feature: String,
         /// Minimum number of matching sections required
         #[serde(skip_serializing_if = "Option::is_none")]

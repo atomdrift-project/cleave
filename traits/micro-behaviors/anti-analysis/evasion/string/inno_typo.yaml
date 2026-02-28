@@ -1,0 +1,11 @@
+defaults:
+  for: [pe]
+
+traits:
+  - id: inno-setup-typo
+    desc: Intentional typo of Inno Setup string
+    crit: suspicious
+    attack: T1027
+    if:
+      type: string
+      substr: "ikstallation was built with Inno setip"

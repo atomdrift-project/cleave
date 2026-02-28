@@ -58,7 +58,11 @@ impl JavaClassAnalyzer {
 
     /// Analyze class file structure only, without trait evaluation.
     /// Use this when you want to run YARA in parallel and evaluate traits after.
-    pub(crate) fn analyze_structural(&self, file_path: &Path, data: &[u8]) -> Result<AnalysisReport> {
+    pub(crate) fn analyze_structural(
+        &self,
+        file_path: &Path,
+        data: &[u8],
+    ) -> Result<AnalysisReport> {
         let class_info = self.parse_class_file(data)?;
 
         let target = TargetInfo {

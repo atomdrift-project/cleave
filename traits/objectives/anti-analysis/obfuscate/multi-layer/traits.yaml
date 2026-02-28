@@ -39,8 +39,12 @@ traits:
     unless:
       - type: string
         substr: "binascii"
-      - type: raw
-        regex: "postgresql|libgcc|libc"
+      - type: string
+        substr: "postgresql"
+      - type: string
+        substr: "libgcc"
+      - type: string
+        substr: "libc"
     attack: "T1027"
 
 

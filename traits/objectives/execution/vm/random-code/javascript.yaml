@@ -61,11 +61,7 @@ composite_rules:
       - id: objectives/anti-static/obfuscation/strings/encoding::js-new-function
     downgrade:
       any:
-        - id: metadata/library/jquery::domain
-        - id: metadata/library/jquery::version-string
-        - id: metadata/library/jquery::copyright
-        - id: metadata/library/jquery::fn-extend
-        - id: metadata/library/d3::d3-detection
-        - id: metadata/library/structure::js-webpack-bundle
-        - id: metadata/library/structure::js-umd-wrapper-any
-        - id: metadata/library/prettier::prettier-detection
+        - id: metadata/library/jquery
+        - id: metadata/library/d3
+        - id: metadata/library/structure
+        - id: metadata/library/prettier

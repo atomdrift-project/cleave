@@ -38,16 +38,12 @@ traits:
 - id: execute-dot-slash
   desc: "./ execution pattern"
   crit: notable
-  conf: 0.5
+  conf: 0.6
+  for: [shell, python, ruby, perl, javascript]
   attack: T1059.004
   if:
     type: raw
     regex: '(^|\n|[;&|]{1,2}|\bnohup\s+)\s*\./[a-zA-Z0-9_][a-zA-Z0-9_.-]+'
-  unless:
-  - type: raw
-    regex: \./([a-zA-Z0-9_.-]+\.(txt|md|log|conf|html|json|xml|yml|yaml)|ChangeLog)
-  - type: raw
-    regex: s/\./
 
 - id: inline__curl-silent-stdout__any_1
   desc: "Curl silent download pattern 1"

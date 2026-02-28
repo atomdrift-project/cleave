@@ -1,0 +1,93 @@
+# CI/CD Reconnaissance + Exfiltration (Protocol-Agnostic)
+# Detects CI/CD environment reconnaissance followed by data exfiltration via ANY channel
+# ATT&CK: T1592.004 (Gather Victim Identity Information: Client Configurations)
+
+defaults:
+  crit: hostile
+  attack: "T1592.004"
+  for: [python]
+
+composite_rules:
+  # =====================================================
+  # DNS EXFILTRATION
+  # =====================================================
+  - id: runner-recon-dns-exfil
+    desc: GitHub Actions runner recon exfiltrated via DNS
+    conf: 0.95
+    attack: "T1048.003"
+    all:
+      - id: micro-behaviors/os/env/vars/cicd::runner-name
+    any:
+      - id: objectives/exfiltration/channel/dns::raw-socket-dns-exfil
+      - id: objectives/exfiltration/channel/dns::tcp-dns-subdomain-exfil
+      - id: objectives/exfiltration/channel/dns::dns-exfiltration
+      - id: micro-behaviors/communications/dns/raw::python-dns-construction
+
+  # =====================================================
+  # HTTP EXFILTRATION
+  # =====================================================
+  - id: runner-recon-http-exfil
+    desc: CI/CD runner recon exfiltrated via HTTP
+    conf: 0.95
+    attack: "T1041"
+    all:
+      - id: micro-behaviors/os/env/vars/cicd::runner-name
+    any:
+      - id: micro-behaviors/communications/http/request::request-python
+      - id: micro-behaviors/communications/http/lib/requests::requests-python
+      - id: micro-behaviors/communications/http/lib/urllib
+
+  # =====================================================
+  # WEBHOOK EXFILTRATION (Discord, Slack, Telegram)
+  # =====================================================
+  - id: runner-recon-webhook-exfil
+    desc: CI/CD runner recon exfiltrated via webhook
+    conf: 0.95
+    attack: "T1567"
+    all:
+      - id: micro-behaviors/os/env/vars/cicd::runner-name
+    any:
+      - id: objectives/exfiltration/channel/webhook
+
+  # =====================================================
+  # CLOUD EXFILTRATION (Pastebin, etc.)
+  # =====================================================
+  - id: runner-recon-cloud-exfil
+    desc: CI/CD runner recon via cloud service
+    conf: 0.90
+    attack: "T1567.002"
+    all:
+      - id: micro-behaviors/os/env/vars/cicd::runner-name
+    any:
+      - id: objectives/exfiltration/channel/cloud
+      - id: objectives/exfiltration/channel/oob
+
+  # =====================================================
+  # RAW DNS EXFILTRATION
+  # =====================================================
+  - id: runner-recon-raw-dns-exfil
+    desc: CI/CD runner recon via raw DNS construction
+    conf: 0.95
+    attack: "T1048.003"
+    all:
+      - id: micro-behaviors/os/env/vars/cicd::runner-name
+      - id: micro-behaviors/communications/dns/raw::python-dns-construction
+    any:
+      - id: micro-behaviors/communications/socket/connect::connect-python
+
+  # =====================================================
+  # COMBINED: ANY CI/CD RECON + ANY EXFIL CHANNEL
+  # =====================================================
+  - id: cicd-recon-any-exfil
+    desc: CI/CD recon with any exfiltration channel
+    conf: 0.95
+    attack: "T1592.004"
+    all:
+      - id: micro-behaviors/os/env/vars/cicd::runner-name
+    any:
+      - id: micro-behaviors/communications/socket/connect
+      - id: micro-behaviors/communications/http/request
+      - id: micro-behaviors/communications/dns/lookup
+      - id: objectives/exfiltration/channel/webhook
+      - id: objectives/exfiltration/channel/cloud
+      - id: objectives/exfiltration/channel/oob

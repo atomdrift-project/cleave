@@ -1,0 +1,22 @@
+defaults:
+  for: [pe, dll]
+  platforms: [windows]
+
+composite_rules:
+  - id: staged-gentee-runtime-loader
+    desc: Staged Gentee runtime DLL loader
+    crit: suspicious
+    conf: 0.95
+    attack: "T1055"
+    all:
+      - id: micro-behaviors/vm/runtime/binding::gentee-runtime-init
+      - id: micro-behaviors/vm/runtime/binding::gentee-runtime-load
+      - id: micro-behaviors/vm/runtime/binding::gentee-runtime-temp-dll-template
+    any:
+      - id: micro-behaviors/vm/runtime/binding::gentee-launcher-decode-get
+      - id: micro-behaviors/fs/temp/directory::get-temp-path
+      - id: micro-behaviors/dylib/load::load-library-a
+      - id: micro-behaviors/dylib/lookup::get-proc-address
+      - id: micro-behaviors/fs/file/delete::deletefile-a
+      - id: micro-behaviors/process/sync/mutex::create-mutex
+    needs: 3

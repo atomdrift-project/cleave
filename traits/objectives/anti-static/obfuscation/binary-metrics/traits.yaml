@@ -78,35 +78,19 @@ traits:
       type: metrics
       field: binary.wx_sections
       min: 1
-    # API set forwarding stubs have W+X sections as part of their
-    # minimal layout, not for self-modifying code.
-    # Also exclude relocatable object files (MH_OBJECT=1, ET_REL=1) as they
-    # often have RWX sections before final linking (e.g. Go race detector).
+    # API set forwarding stubs and relocatable object files have W+X sections legitimately
     unless:
       - type: string
         substr: "ApiSet Stub DLL"
-      - type: metrics
-        field: macho.file_type
-        min: 1
-        max: 1
-      - type: metrics
-        field: elf.e_type
-        min: 1
-        max: 1
-      # Resource-only PEs (.mui, etc.) have no code; W+X is meaningless
       - type: metrics
         field: binary.import_density
         max: 0
     downgrade:
       any:
-        - type: section
-          substr: '.aspr'
         - type: raw
-          substr: "ntoskrnl"  # Windows kernel drivers have RWX INIT sections (discarded after load)
+          substr: "ntoskrnl"
         - type: section
-          regex: "^(UPX\\d|\\.upx)"  # UPX-packed binaries inherently have RWX sections for decompression
-        - type: raw
-          substr: "PECompac"  # PECompact-packed binaries have RWX sections
+          regex: "^(UPX|upx|.aspr)"
 
   - id: many-wx-sections
     desc: "Multiple W+X sections (packer pattern)"

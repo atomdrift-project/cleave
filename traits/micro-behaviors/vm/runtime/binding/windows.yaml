@@ -1,0 +1,88 @@
+defaults:
+  for: [pe, dll]
+  platforms: [windows]
+
+traits:
+  - id: gentee-runtime-init
+    desc: Gentee runtime init API
+    crit: notable
+    conf: 0.96
+    if:
+      type: string
+      exact: "gentee_init"
+
+  - id: gentee-runtime-deinit
+    desc: Gentee runtime deinit API
+    crit: notable
+    conf: 0.96
+    if:
+      type: string
+      exact: "gentee_deinit"
+
+  - id: gentee-runtime-load
+    desc: Gentee runtime load API
+    crit: notable
+    conf: 0.96
+    if:
+      type: string
+      exact: "gentee_load"
+
+  - id: gentee-runtime-set
+    desc: Gentee runtime set API
+    crit: notable
+    conf: 0.96
+    if:
+      type: string
+      exact: "gentee_set"
+
+  - id: gentee-runtime-call
+    desc: Gentee runtime call API
+    crit: notable
+    conf: 0.96
+    if:
+      type: string
+      exact: "gentee_call"
+
+  - id: gentee-launcher-decode-get
+    desc: Gentee launcher get API
+    crit: suspicious
+    conf: 0.93
+    if:
+      type: string
+      exact: "launcher_get"
+
+  - id: gentee-launcher-decode-lzge
+    desc: Gentee launcher decode API
+    crit: suspicious
+    conf: 0.93
+    if:
+      type: string
+      exact: "lzge_decode"
+
+  - id: gentee-runtime-temp-dll-template
+    desc: Temp sidecar DLL template for runtime
+    crit: suspicious
+    conf: 0.94
+    if:
+      type: string
+      exact: '%s\\genteert.dll'
+
+composite_rules:
+  - id: gentee-runtime-api-cluster
+    desc: Gentee runtime API symbol cluster
+    crit: suspicious
+    conf: 0.97
+    all:
+      - id: gentee-runtime-init
+      - id: gentee-runtime-deinit
+      - id: gentee-runtime-load
+      - id: gentee-runtime-set
+      - id: gentee-runtime-call
+
+  - id: gentee-launcher-decode-apis
+    desc: Gentee launcher decode API names
+    crit: suspicious
+    conf: 0.93
+    all:
+      - id: gentee-launcher-decode-get
+      - id: gentee-launcher-decode-lzge

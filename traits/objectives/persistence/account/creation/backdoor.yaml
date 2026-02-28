@@ -1,0 +1,10 @@
+composite_rules:
+  - id: hostile-account-takeover
+    desc: Revokes admin rights from users while creating a new backdoor admin account
+    crit: hostile
+    conf: 0.95
+    attack: "T1531"
+    all:
+      - id: micro-behaviors/os/user/account::new-local-user
+      - id: micro-behaviors/os/user/account::add-local-group-member
+      - id: micro-behaviors/os/user/account::remove-local-group-member

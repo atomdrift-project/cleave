@@ -286,10 +286,7 @@ pub(crate) fn eval_string<'a, 'b>(
                         }
                     }
                 }
-            } else if let Some(match_list) = ctx
-                .get_string_exact_index()
-                .get(exact_str.as_str())
-            {
+            } else if let Some(match_list) = ctx.get_string_exact_index().get(exact_str.as_str()) {
                 for (i, (source, offset)) in match_list.iter().enumerate() {
                     if i >= MAX_EVIDENCE_PER_TRAIT {
                         break;
@@ -299,8 +296,7 @@ pub(crate) fn eval_string<'a, 'b>(
                     let excluded_by_not = trait_not
                         .map(|exceptions| exceptions.iter().any(|exc| exc.matches(exact_str)))
                         .unwrap_or(false);
-                    let excluded_by_ip =
-                        params.external_ip && !contains_external_ip(exact_str);
+                    let excluded_by_ip = params.external_ip && !contains_external_ip(exact_str);
 
                     if !excluded_by_not && !excluded_by_ip {
                         let method = if source == "string_extractor" {
@@ -1083,7 +1079,10 @@ pub(crate) fn eval_encoded<'a>(
             match_count += 1;
             if evidence.len() < MAX_EVIDENCE_PER_TRAIT {
                 let value_preview = if string_info.value.len() > 100 {
-                    format!("{}...", &string_info.value[..string_info.value.floor_char_boundary(100)])
+                    format!(
+                        "{}...",
+                        &string_info.value[..string_info.value.floor_char_boundary(100)]
+                    )
                 } else {
                     string_info.value.clone()
                 };

@@ -1,0 +1,51 @@
+# Event Synchronization - Windows
+# MBC: C0039 (Inter-Process Communication)
+
+defaults:
+  for: [pe, dll]
+  platforms: [windows]
+  mbc: "C0039"
+
+traits:
+  - id: open-event
+    desc: Open named event object
+    crit: notable
+    conf: 0.85
+    if:
+      type: symbol
+      regex: '^OpenEvent[AW]?$'
+
+  - id: pulse-event
+    desc: Pulse event object state
+    crit: notable
+    conf: 0.9
+    if:
+      type: symbol
+      exact: 'PulseEvent'
+
+  - id: set-event
+    desc: Set event object state
+    crit: baseline
+    conf: 0.8
+    if:
+      type: symbol
+      exact: 'SetEvent'
+
+  - id: reset-event
+    desc: Reset event object state
+    crit: baseline
+    conf: 0.8
+    if:
+      type: symbol
+      exact: 'ResetEvent'
+
+composite_rules:
+  - id: event-sync-control
+    desc: Event object synchronization controls
+    crit: notable
+    conf: 0.85
+    any:
+      - id: open-event
+      - id: pulse-event
+      - id: set-event
+      - id: reset-event

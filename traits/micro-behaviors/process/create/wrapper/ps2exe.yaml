@@ -1,0 +1,27 @@
+defaults:
+  for: [all]
+
+traits:
+  - id: ps2exe-namespace
+    desc: PS2EXE wrapper namespace
+    crit: notable
+    conf: 0.95
+    if:
+      type: raw
+      regex: 'MainModuleUI'
+
+  - id: ps2exe-proxy
+    desc: PS2EXE console color proxy
+    crit: component
+    conf: 0.95
+    if:
+      type: raw
+      regex: 'ConsoleColorProxy'
+
+  - id: ps2exe-rawui
+    desc: PS2EXE raw UI
+    crit: component
+    conf: 0.95
+    if:
+      type: raw
+      regex: 'MainModuleRawUI'

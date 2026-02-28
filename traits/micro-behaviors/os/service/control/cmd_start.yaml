@@ -1,0 +1,12 @@
+defaults:
+  for: [pe, shell, bat]
+
+traits:
+  - id: sc-start-timeout
+    desc: "Uses timeout to delay sc.exe start"
+    attack: "T1543.003"
+    crit: suspicious
+    if:
+      type: string
+      regex: 'timeout[ \w/]+&& sc start'
+      case_insensitive: true

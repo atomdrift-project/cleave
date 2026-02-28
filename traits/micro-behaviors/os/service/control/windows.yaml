@@ -1,0 +1,75 @@
+# Windows Service Control APIs
+# Service manipulation primitives frequently used for persistence.
+
+defaults:
+  for: [pe, dll]
+  platforms: [windows]
+
+traits:
+  - id: open-sc-manager
+    desc: Open service control manager
+    crit: notable
+    conf: 0.85
+    attack: "T1543.003"
+    if:
+      type: string
+      regex: "^OpenSCManager[AW]$"
+
+  - id: open-service
+    desc: Open existing service handle
+    crit: notable
+    conf: 0.85
+    attack: "T1543.003"
+    if:
+      type: string
+      regex: "^OpenService[AW]$"
+
+  - id: query-service-config
+    desc: Query service configuration
+    crit: notable
+    conf: 0.8
+    attack: "T1543.003"
+    if:
+      type: string
+      regex: "^QueryServiceConfig[AW]$"
+
+  - id: change-service-config
+    desc: Modify service configuration
+    crit: notable
+    conf: 0.9
+    attack: "T1543.003"
+    if:
+      type: string
+      regex: "^ChangeServiceConfig[AW]$"
+
+  - id: create-service
+    desc: Create Windows service
+    crit: notable
+    conf: 0.85
+    attack: "T1543.003"
+    if:
+      type: string
+      regex: "^CreateService[AW]$"
+
+  - id: start-service
+    desc: Start Windows service
+    crit: notable
+    conf: 0.85
+    attack: "T1543.003"
+    if:
+      type: string
+      regex: "^StartService[AW]?$"
+
+composite_rules:
+  - id: reconfigure-and-start-service
+    desc: Reconfigure service then start
+    crit: notable
+    conf: 0.9
+    attack: "T1543.003"
+    all:
+      - id: open-sc-manager
+      - id: open-service
+      - id: change-service-config
+    any:
+      - id: start-service
+      - id: query-service-config

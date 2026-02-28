@@ -1,0 +1,21 @@
+defaults:
+  for: [all]
+
+composite_rules:
+  - id: steam-extraction-indicators
+    crit: suspicious
+    desc: "Indicators of embedded Steam extraction"
+    any:
+      - id: micro-behaviors/data/text/malware::extract-launch-steam
+      - id: micro-behaviors/data/text/malware::get-embedded-steam
+      - id: micro-behaviors/data/text/malware::extracting-steam-resources
+
+  - id: steam-stealer-loader
+    crit: hostile
+    desc: "Fake UI or masquerade with Steam extraction"
+    all:
+      - id: objectives/credential-access/steam/dropper::steam-extraction-indicators
+    any:
+      - id: micro-behaviors/data/text/spoof::telegram-bypass-tool-string
+      - id: micro-behaviors/data/text/spoof::telegram-fix-string
+      - id: micro-behaviors/data/text/spoof::double-extension-svchost

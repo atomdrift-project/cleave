@@ -14,7 +14,9 @@ traits:
     regex: (^|\s|;)rm\s+\$0\b
   unless:
   - type: raw
-    regex: docutils|math2html
+    substr: docutils
+  - type: raw
+    substr: math2html
 - id: rm-dollar-zero-quoted
   desc: rm "$0" self-deletion (quoted)
   crit: suspicious
@@ -27,7 +29,9 @@ traits:
     regex: (^|\s|;)rm\s+"\$0"\b
   unless:
   - type: raw
-    regex: docutils|math2html
+    substr: docutils
+  - type: raw
+    substr: math2html
 - id: shred-dollar-zero
   desc: shred $0 self-deletion
   crit: suspicious

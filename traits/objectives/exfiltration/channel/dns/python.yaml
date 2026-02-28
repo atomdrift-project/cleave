@@ -30,3 +30,43 @@ composite_rules:
     all:
       - id: micro-behaviors/communications/dns/lookup::dns-lookup-capability
       - id: micro-behaviors/os/env/access
+
+  # Raw socket DNS exfiltration (bypasses standard DNS libraries)
+  - id: raw-socket-dns-exfil
+    desc: Raw socket DNS exfiltration with system info
+    crit: hostile
+    conf: 0.95
+    attack: "T1048.003"
+    mbc: "B0030"
+    for: [python]
+    all:
+      - id: micro-behaviors/communications/dns/raw::python-dns-construction
+      - id: micro-behaviors/communications/socket/connect::connect-python
+    any:
+      - id: objectives/discovery/host/system/hardware-fingerprint::python-sysinfo-multi
+      - id: objectives/discovery/host/system/hardware-fingerprint::python-platform-uname
+      - id: objectives/discovery/host/system/hardware-fingerprint::gethostname-string
+
+  # TCP DNS exfiltration via subdomain encoding
+  - id: tcp-dns-subdomain-exfil
+    desc: TCP DNS exfiltration via subdomain encoding
+    crit: hostile
+    conf: 0.95
+    attack: "T1048.003"
+    for: [python]
+    all:
+      - id: micro-behaviors/communications/dns/connect::tcp-dns-connect
+      - id: micro-behaviors/communications/dns/exfil_prep::subdomain-data-encoding
+
+  # CI/CD targeted DNS exfiltration
+  - id: cicd-dns-exfil
+    desc: CI/CD environment exfiltrated via DNS
+    crit: hostile
+    conf: 0.95
+    attack: "T1048.003"
+    for: [python]
+    any:
+      - id: micro-behaviors/os/env/vars/cicd::runner-fingerprinting
+      - id: micro-behaviors/os/env/vars/cicd::runner-name
+    all:
+      - id: micro-behaviors/communications/dns/raw::python-dns-construction

@@ -1,0 +1,20 @@
+defaults:
+  for: [pe]
+
+traits:
+  - id: create-process-as-user
+    desc: "Create process using a specific user token"
+    attack: "T1134"
+    crit: notable
+    if:
+      type: string
+      regex: 'CreateProcessAsUser[AW]?'
+      case_insensitive: true
+
+  - id: winsta0-default
+    desc: "References default interactive window station (winsta0\\default)"
+    crit: notable
+    if:
+      type: string
+      regex: 'winsta0\\\\default'
+      case_insensitive: true

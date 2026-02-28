@@ -85,19 +85,10 @@ traits:
     if:
       type: string
       regex: 'Activ($|[^aeio])'
-    downgrade:
-      any:
-        - id: metadata/library/jquery::domain
-        - id: metadata/library/jquery::version-string
-        - id: metadata/library/jquery::copyright
-        - id: metadata/library/jquery::fn-extend
     unless:
       - id: micro-behaviors/process/interpreter/jscript::activex-object
       - id: micro-behaviors/data/db/conn/redis::ioredis
-      - id: metadata/library/jquery::domain
-      - id: metadata/library/jquery::version-string
-      - id: metadata/library/jquery::copyright
-      - id: metadata/library/jquery::fn-extend
+      - id: metadata/library/jquery
 
   - id: activex-fragment-tiny-2b
     desc: Tiny ActiveXObject fragment (variant 2b)

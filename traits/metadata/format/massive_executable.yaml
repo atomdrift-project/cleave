@@ -1,0 +1,7 @@
+traits:
+  - id: massive-executable
+    desc: "Massive executable binary (> 50MB)"
+    crit: notable
+    conf: 0.7
+    for: [pe, elf, macho]
+    size_min: 52428800

@@ -58,8 +58,10 @@ traits:
     type: string
     word: ptrace
   unless:
-  - type: raw
-    regex: syscall|runtime
+  - type: string
+    substr: syscall
+  - type: string
+    substr: runtime
 - id: environment-probe-indicator-a
   desc: Sandbox and VM vendors
   crit: notable

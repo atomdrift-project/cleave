@@ -13,23 +13,9 @@ traits:
     if:
         type: raw
         regex: 'this\[\w+\]\('
-    downgrade:
-      any:
-        - id: metadata/library/jquery::domain
-        - id: metadata/library/jquery::version-string
-        - id: metadata/library/jquery::copyright
-        - id: metadata/library/jquery::fn-extend
-        - id: metadata/library/prototype::copyright
-        - id: metadata/library/prototype::version-string
-        - id: metadata/library/prototype::header-x
     unless:
-      - id: metadata/library/jquery::domain
-      - id: metadata/library/jquery::version-string
-      - id: metadata/library/jquery::copyright
-      - id: metadata/library/jquery::fn-extend
-      - id: metadata/library/prototype::copyright
-      - id: metadata/library/prototype::version-string
-      - id: metadata/library/prototype::header-x
+      - id: metadata/library/jquery
+      - id: metadata/library/prototype
 
   - id: js-indirect-eval-this-assign
     desc: Indirect eval via variable assignment
@@ -41,14 +27,9 @@ traits:
         type: raw
         regex: '\w+\s*=\s*this\[\w{2,}\]'
     unless:
-      - id: metadata/library/jquery::domain
-      - id: metadata/library/jquery::version-string
-      - id: metadata/library/jquery::copyright
-      - id: metadata/library/jquery::fn-extend
-      - id: metadata/library/d3::d3-detection
-      - id: metadata/library/prototype::copyright
-      - id: metadata/library/prototype::version-string
-      - id: metadata/library/prototype::header-x
+      - id: metadata/library/jquery
+      - id: metadata/library/d3
+      - id: metadata/library/prototype
 
   - id: js-assign-global-this
     desc: Assigning 'this' (global object) to a variable

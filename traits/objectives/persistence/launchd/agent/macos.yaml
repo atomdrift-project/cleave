@@ -552,10 +552,16 @@ composite_rules:
       # Exclude legitimate Apple paths
       - type: kv
         path: "Program"
-        regex: "^(/System/Library/|/usr/libexec/|/usr/bin/|/System/Applications/|/Library/Internet Plug-Ins/)"
+        regex: "^/System/"
+      - type: kv
+        path: "Program"
+        regex: "^/usr/"
       - type: kv
         path: "ProgramArguments[0]"
-        regex: "^(/System/Library/|/usr/libexec/|/usr/bin/|/System/Applications/|/Library/Internet Plug-Ins/)"
+        regex: "^/System/"
+      - type: kv
+        path: "ProgramArguments[0]"
+        regex: "^/usr/"
 
   - id: launchd-masquerading-zoom
     desc: Zoom-labeled Launchd item launching from unusual location

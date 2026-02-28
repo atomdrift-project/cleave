@@ -1,0 +1,17 @@
+defaults:
+  for: [pe, dll]
+
+composite_rules:
+  - id: ftp-downloader-with-uac-bypass
+    desc: "FTP Downloader that attempts UAC bypass"
+    mbc: "B0047"
+    attack: "T1105"
+    crit: hostile
+    all:
+      - id: "micro-behaviors/communications/ftp/client::wininet-ftp-api"
+      - id: "micro-behaviors/os/privilege/escalation/appcompatflags::appcompatflags-registry-key"
+      - id: "micro-behaviors/os/privilege/escalation/appcompatflags::runasadmin-string"
+    any:
+      - id: "micro-behaviors/process/create/spawn::create-process-a"
+      - id: "micro-behaviors/process/create/spawn::create-process-w"
+      - id: "micro-behaviors/process/create/shell::cmd-exe-file-path"

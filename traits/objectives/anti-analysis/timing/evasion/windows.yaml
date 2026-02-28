@@ -70,15 +70,7 @@ composite_rules:
       - id: objectives/anti-analysis/sandbox/detect
     downgrade:
       any:
-        - type: section
-          substr: '.aspr'
-        - id: metadata/vendor/microsoft::openmp-runtime
-        - id: metadata/quality/versioning::pe-version-resource
-        - id: metadata/lang/compiler::msvc
-        - id: metadata/lang/compiler::clang-string
-        - id: metadata/format/extension::py
-        - id: metadata/signed/platform::microsoft
-        - id: metadata/vendor/microsoft::is-microsoft-named
-        - id: metadata/vendor/microsoft::is-windows-named
-        - id: metadata/format::large-executable
-        - id: metadata/format::many-imports
+        - id: metadata/vendor/microsoft
+        - id: metadata/lang/compiler
+        - id: metadata/signed/platform
+        - id: metadata/format

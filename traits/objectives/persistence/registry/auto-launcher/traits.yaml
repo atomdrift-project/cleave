@@ -1,0 +1,16 @@
+defaults:
+  for: [all]
+
+composite_rules:
+  - id: malicious-auto-launcher-indicators
+    crit: suspicious
+    desc: "Indicators of malicious auto-launcher"
+    any:
+      - id: micro-behaviors/data/text/malware/autolauncher
+
+  - id: hidden-auto-launcher
+    crit: hostile
+    desc: "Malicious auto-launcher with double-extension evasion"
+    all:
+      - id: objectives/persistence/registry/auto-launcher::malicious-auto-launcher-indicators
+      - id: micro-behaviors/data/text/spoof::double-extension-svchost

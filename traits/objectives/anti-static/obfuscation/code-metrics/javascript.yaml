@@ -16,7 +16,13 @@ traits:
     min_size: 2048
   unless:
   - type: string
-    regex: MathJax|wgxpath|trix|actiontext
+    substr: MathJax
+  - type: string
+    substr: wgxpath
+  - type: string
+    substr: trix
+  - type: string
+    substr: actiontext
   - id: metadata/dev/testing::is-test
 - id: js-deep-callback-nesting
   desc: Deep function nesting (callback hell

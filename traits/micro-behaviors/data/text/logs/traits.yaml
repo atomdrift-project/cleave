@@ -1,0 +1,28 @@
+defaults:
+  for: [elf, macho, pe]
+  crit: suspicious
+
+traits:
+  - id: meta-decryption-failed
+    desc: Ransomware log indicating meta decryption failed
+    if:
+      type: string
+      substr: "Meta Decryption Failed"
+      
+  - id: file-not-encrypted
+    desc: Ransomware log indicating file not encrypted
+    if:
+      type: string
+      substr: "File NOT Encrypted"
+      
+  - id: decrypted-content-verification-failed
+    desc: Ransomware log indicating decrypted content verification failed
+    if:
+      type: string
+      substr: "Decrypted Content Verification Failed"
+
+  - id: file-decrypted-successfully
+    desc: Ransomware log indicating successful decryption
+    if:
+      type: string
+      substr: "File Decrypted Successfully"

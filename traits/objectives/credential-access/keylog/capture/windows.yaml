@@ -1,0 +1,20 @@
+# Windows keylogging intent composites
+# ATT&CK: T1056.001 (Input Capture: Keylogging)
+
+defaults:
+  for: [pe, dll]
+  platforms: [windows]
+  attack: "T1056.001"
+  mbc: "B0015"
+
+composite_rules:
+  - id: windows-active-window-keylogger
+    desc: Keyboard hook with active window context
+    crit: suspicious
+    conf: 0.92
+    all:
+      - id: micro-behaviors/hardware/input/keyboard::set-windows-hook
+      - id: micro-behaviors/hardware/input/keyboard::get-key-state
+      - id: micro-behaviors/ui/window/manage::get-foreground-window
+      - id: micro-behaviors/ui/window/manage::get-window-text
+      - id: micro-behaviors/hardware/input/keyboard::virtual-key-label-map

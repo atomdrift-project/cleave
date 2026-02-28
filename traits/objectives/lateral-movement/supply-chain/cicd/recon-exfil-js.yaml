@@ -1,0 +1,74 @@
+# CI/CD Reconnaissance + Exfiltration - JavaScript/Node.js
+# Detects npm supply chain attacks targeting CI/CD environments
+# ATT&CK: T1195.001 (Supply Chain Compromise: Compromise Software Dependencies)
+
+defaults:
+  crit: hostile
+  attack: "T1195.001"
+  for: [javascript, typescript]
+
+composite_rules:
+  # =====================================================
+  # HTTP EXFILTRATION (fetch, axios, http)
+  # =====================================================
+  - id: npm-runner-recon-http
+    desc: npm package exfiltrates CI/CD info via HTTP
+    conf: 0.95
+    attack: "T1041"
+    all:
+      - id: micro-behaviors/os/env/vars/cicd::js-runner-fingerprinting
+    any:
+      - id: micro-behaviors/communications/http/request::request-axios
+      - id: micro-behaviors/communications/http/request::js-fetch-call
+      - id: micro-behaviors/communications/http/request::node-http
+
+  # =====================================================
+  # DNS EXFILTRATION
+  # =====================================================
+  - id: npm-runner-recon-dns
+    desc: npm package exfiltrates CI/CD info via DNS
+    conf: 0.95
+    attack: "T1048.003"
+    all:
+      - id: micro-behaviors/os/env/vars/cicd::js-runner-fingerprinting
+    any:
+      - id: micro-behaviors/communications/dns/lookup::node-dns-lookup
+
+  # =====================================================
+  # WEBHOOK EXFILTRATION
+  # =====================================================
+  - id: npm-runner-recon-webhook
+    desc: npm package exfiltrates CI/CD via webhook
+    conf: 0.95
+    attack: "T1567"
+    all:
+      - id: micro-behaviors/os/env/vars/cicd::js-runner-fingerprinting
+    any:
+      - id: objectives/exfiltration/channel/webhook
+
+  # =====================================================
+  # TOKEN THEFT + EXFILTRATION
+  # =====================================================
+  - id: npm-token-theft
+    desc: npm package steals CI/CD tokens
+    conf: 0.98
+    attack: "T1552.001"
+    all:
+      - id: micro-behaviors/os/env/vars/cicd::js-cicd-token-access
+    any:
+      - id: micro-behaviors/communications/http/request
+      - id: micro-behaviors/communications/dns/lookup::node-dns-lookup
+      - id: objectives/exfiltration/channel/webhook
+
+  # =====================================================
+  # COMBINED DETECTION
+  # =====================================================
+  - id: npm-supply-chain-attack
+    desc: npm supply chain attack with CI/CD targeting
+    conf: 0.95
+    attack: "T1195.001"
+    needs: 2
+    any:
+      - id: micro-behaviors/os/env/vars/cicd::js-runner-fingerprinting
+      - id: micro-behaviors/os/env/vars/cicd::js-cicd-token-access
+      - id: micro-behaviors/os/env/vars/cicd::js-system-fingerprinting

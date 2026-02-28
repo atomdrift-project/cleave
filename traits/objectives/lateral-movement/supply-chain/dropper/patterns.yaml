@@ -525,17 +525,9 @@ composite_rules:
     all:
       - id: exec-downloaded-raw
     unless:
-      - id: metadata/dev/testing::node-common-require
-      - id: metadata/library::commander
-      - id: metadata/library::commander-modern
-    downgrade:
-      any:
-        - id: metadata/dev/testing::node-common-require
-        - id: objectives/lateral-movement/supply-chain/npm/testing::assert-word
-        - id: micro-behaviors/interface/usage/help::usage-help
-        - id: objectives/lateral-movement/supply-chain/npm/testing::test-call
-        - id: metadata/quality/testing::jest-test-file
-        - id: objectives/lateral-movement/supply-chain/npm/testing::jest-test-blocks
+      - id: metadata/dev/testing
+      - id: metadata/library
+      - id: metadata/quality/testing
 
   - id: spawn-exec
     desc: Process spawn or exec

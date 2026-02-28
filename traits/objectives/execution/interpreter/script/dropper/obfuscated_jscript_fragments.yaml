@@ -26,13 +26,7 @@ composite_rules:
       - id: objectives/anti-static/obfuscation/code-metrics/functions::many-one-liner-functions
       - id: objectives/anti-static/obfuscation/code-metrics/structure::no-comments
     unless:
-      - id: metadata/library/jquery::domain
-      - id: metadata/library/jquery::version-string
-      - id: metadata/library/jquery::copyright
-      - id: metadata/library/jquery::fn-extend
-      - id: metadata/library/d3::d3-detection
-      - id: metadata/library/prototype::copyright
-      - id: metadata/library/prototype::version-string
-      - id: metadata/library/prototype::header-x
-      - id: metadata/library/structure::js-webpack-bundle
-      - id: metadata/library/structure::js-umd-wrapper-any
+      - id: metadata/library/jquery
+      - id: metadata/library/d3
+      - id: metadata/library/prototype
+      - id: metadata/library/structure

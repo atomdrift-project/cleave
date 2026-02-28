@@ -175,6 +175,15 @@ stng = { git = "https://codeberg.org/atomdrift/stng", rev = "5bfa410ba1686e21c71
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 
+# HTTP server (for `cleave server` subcommand)
+axum = "0.8"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "fs", "signal"] }
+tower = { version = "0.5", features = ["timeout", "limit"] }
+tower-http = { version = "0.6", features = ["limit"] }
+multer = "3"
+futures-core = "0.3"
+futures-util = "0.3"
+
 [lib]
 name = "cleave"
 path = "src/lib.rs"

@@ -538,6 +538,25 @@ pub(crate) enum Command {
         #[arg(long)]
         show_low_value: bool,
     },
+
+    /// Start HTTP API server for file analysis
+    Server {
+        /// Address to bind to (default: 127.0.0.1:8080)
+        #[arg(long, default_value = "127.0.0.1:8080")]
+        bind: String,
+
+        /// Max requests per second per IP (default: 100)
+        #[arg(long, default_value = "100")]
+        qps: u32,
+
+        /// Analysis timeout in seconds (default: 120)
+        #[arg(long, default_value = "120")]
+        timeout: u64,
+
+        /// Max upload size in MB (default: 100)
+        #[arg(long, default_value = "100")]
+        max_size_mb: u64,
+    },
 }
 
 /// Parse an offset range like "0,4096" or "-1024," into (start, Option<end>)

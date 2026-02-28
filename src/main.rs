@@ -192,6 +192,9 @@ fn main() -> Result<()> {
         std::env::set_var("CLEAVE_VERBOSE", "1");
     }
 
+    // Check if running server command (needs info-level logging by default)
+    let is_server = matches!(args.command, Some(cli::Command::Server { .. }));
+
     // Determine output format early so we can use it for conditional status messages
     let format = args.format();
 
@@ -226,6 +229,12 @@ fn main() -> Result<()> {
             (
                 EnvFilter::new("cleave=trace"),
                 EnvFilter::new("cleave=trace"),
+            )
+        } else if is_server {
+            // Server mode: info to stderr for request logging, debug to file
+            (
+                EnvFilter::new("cleave=info"),
+                EnvFilter::new("cleave=debug"),
             )
         } else if using_env_logging {
             // CLEAVE_FILE_LOGGING: warn to stderr, debug to file for comprehensive logging
@@ -308,6 +317,9 @@ fn main() -> Result<()> {
             EnvFilter::from_default_env()
         } else if args.verbose {
             EnvFilter::new("cleave=trace")
+        } else if is_server {
+            // Server mode defaults to info level for request logging
+            EnvFilter::new("cleave=info")
         } else {
             EnvFilter::new("cleave=warn")
         };
@@ -567,6 +579,27 @@ fn main() -> Result<()> {
         }
         Some(cli::Command::YaraProfile { target, min_ms }) => {
             return profile_command(Path::new(&target), min_ms);
+        }
+        Some(cli::Command::Server {
+            bind,
+            qps,
+            timeout,
+            max_size_mb,
+        }) => {
+            let bind_addr: std::net::SocketAddr = bind.parse().context(format!(
+                "Invalid bind address '{}'. Expected format: IP:PORT (e.g., 127.0.0.1:8080)",
+                bind
+            ))?;
+            let config = cleave::server::ServerConfig {
+                bind: bind_addr,
+                qps,
+                timeout_secs: timeout,
+                max_body_size: (max_size_mb * 1024 * 1024) as usize,
+            };
+            // Run the async server
+            let rt = tokio::runtime::Runtime::new().context("Failed to create tokio runtime")?;
+            rt.block_on(cleave::server::run(config))?;
+            return Ok(());
         }
         None => {
             // No subcommand - use paths from top-level args

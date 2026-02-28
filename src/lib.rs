@@ -48,6 +48,9 @@ pub mod third_party_yara;
 pub mod types;
 pub mod yara_engine;
 
+// HTTP API server
+pub mod server;
+
 // Re-export commonly used types at crate root
 pub use analyzers::{detect_file_type, AnalysisInput, Analyzer, FileType};
 pub use capabilities::CapabilityMapper;

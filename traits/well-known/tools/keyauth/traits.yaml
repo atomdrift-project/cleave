@@ -1,0 +1,45 @@
+# KeyAuth Licensing Infrastructure
+# KeyAuth is a licensing/authentication service commonly used by:
+# - Game cheats and hacks
+# - Potentially unwanted programs (PUPs)
+# - Some legitimate software
+#
+# While KeyAuth itself is not malicious, its presence often indicates
+# commercial game cheats or tools that evade game anti-cheat systems.
+
+defaults:
+  for: [pe, elf, macho]
+  crit: notable
+  conf: 0.85
+
+traits:
+  - id: keyauth-domain
+    desc: KeyAuth licensing domain
+    if:
+      type: string
+      regex: 'keyauth\.(cc|win|uk|us)'
+
+  - id: keyauth-api
+    desc: KeyAuth API endpoint
+    conf: 0.9
+    if:
+      type: string
+      regex: 'api\.keyauth\.(cc|win|uk)'
+
+  - id: keyauth-string
+    desc: KeyAuth identifier string
+    conf: 0.8
+    if:
+      type: string
+      regex: '(?i)keyauth[_-]?(invalid|license|auth|key)'
+
+composite_rules:
+  - id: keyauth-infrastructure
+    desc: KeyAuth licensing system detected
+    crit: suspicious
+    conf: 0.9
+    for: [pe, elf, macho]
+    any:
+      - id: keyauth-domain
+      - id: keyauth-api
+      - id: keyauth-string

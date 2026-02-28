@@ -1,0 +1,36 @@
+# Node.js Crypto Module Import
+# Detects import/require of the crypto module
+
+defaults:
+  for: [javascript, typescript]
+  crit: baseline
+  conf: 0.6
+
+traits:
+  - id: require-crypto
+    desc: require('crypto') call
+    if:
+      type: string
+      regex: "require\\s*\\(['\"]crypto['\"]\\)"
+
+  - id: from-crypto-import
+    desc: from 'crypto' import
+    if:
+      type: string
+      regex: "from\\s+['\"]crypto['\"]"
+
+  - id: import-crypto
+    desc: import crypto
+    if:
+      type: string
+      regex: "import\\s+.{0,50}['\"]crypto['\"]"
+
+composite_rules:
+  - id: crypto-module-import
+    desc: Node.js crypto module import
+    crit: baseline
+    any:
+      - id: require-crypto
+      - id: from-crypto-import
+      - id: import-crypto
+      - id: micro-behaviors/crypto/symmetric/aes::crypto-require-call

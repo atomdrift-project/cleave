@@ -138,7 +138,7 @@ composite_rules:
     attack: "T1027"
     for: [javascript, typescript]
     all:
-      - id: well-known/malware/dropper::js-decrypt-eval
+      - id: objectives/command-and-control/dropper/encrypted::js-decrypt-eval
       - id: api-usage
       - id: vscode-namespace
 

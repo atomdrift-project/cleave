@@ -1,0 +1,64 @@
+# x86-64 Linux Raw Syscall Patterns
+# Detects direct syscall invocation via push/pop sequences
+# Common in shellcode and position-independent code
+
+defaults:
+  for: [elf]
+  platforms: [linux]
+  crit: notable
+  conf: 0.85
+
+traits:
+  # Syscall 9 = mmap on Linux x86-64
+  # Hex: 6a 09 58 ... 0f 05 (push 9; pop rax; syscall)
+  - id: x64-mmap-syscall
+    desc: x86-64 mmap syscall via push/pop
+    if:
+      type: hex
+      pattern: "6a 09 58 [0-20] 0f 05"
+
+  # Syscall 41 = socket
+  - id: x64-socket-syscall
+    desc: x86-64 socket syscall via push/pop
+    if:
+      type: hex
+      pattern: "6a 29 58 [0-20] 0f 05"
+
+  # Syscall 42 = connect
+  - id: x64-connect-syscall
+    desc: x86-64 connect syscall via push/pop
+    if:
+      type: hex
+      pattern: "6a 2a 58 [0-20] 0f 05"
+
+  # Syscall 35 = nanosleep
+  - id: x64-nanosleep-syscall
+    desc: x86-64 nanosleep syscall via push/pop
+    if:
+      type: hex
+      pattern: "6a 23 58 [0-20] 0f 05"
+
+  # Syscall 60 = exit
+  - id: x64-exit-syscall
+    desc: x86-64 exit syscall via push/pop
+    crit: baseline
+    if:
+      type: hex
+      pattern: "6a 3c 58 [0-20] 0f 05"
+
+  # Syscall 0 = read
+  - id: x64-read-syscall
+    desc: x86-64 read syscall via push/pop
+    crit: baseline
+    if:
+      type: hex
+      pattern: "6a 00 58 [0-20] 0f 05"
+
+composite_rules:
+  - id: raw-network-syscalls
+    desc: Raw socket+connect syscalls
+    crit: suspicious
+    conf: 0.9
+    all:
+      - id: x64-socket-syscall
+      - id: x64-connect-syscall

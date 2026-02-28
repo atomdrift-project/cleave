@@ -1,0 +1,68 @@
+# Game Cheat Frameworks
+# Detection of known game cheat/hack frameworks
+#
+# These frameworks are used to create "external" or "internal" cheats
+# that bypass game anti-cheat systems. While not malware per se,
+# they often employ malware-like techniques (process injection,
+# anti-debugging, driver loading).
+
+defaults:
+  for: [pe]
+  crit: suspicious
+  conf: 0.85
+
+traits:
+  - id: breachcore-framework
+    desc: BreachCore game cheat framework
+    conf: 0.95
+    if:
+      type: string
+      regex: '(?i)breach\s*core'
+
+  - id: breachcore-useragent
+    desc: BreachCore HTTP user agent
+    conf: 0.95
+    if:
+      type: string
+      substr: "BreachCore/"
+
+  - id: breachcore-pdb
+    desc: BreachCore PDB debug path
+    conf: 0.95
+    if:
+      type: string
+      regex: '(?i)\\BreachCore\\'
+
+  - id: cs2-external-mutex
+    desc: CS2/CSGO external cheat mutex
+    conf: 0.85
+    if:
+      type: string
+      regex: '(?i)(CS2|CSGO)[_-]?External[_-]?(Unique)?[_-]?Mutex'
+
+  - id: rust-external-mutex
+    desc: Rust game external cheat mutex
+    conf: 0.85
+    if:
+      type: string
+      regex: '(?i)Rust[_-]?External[_-]?(Unique)?[_-]?Mutex'
+
+composite_rules:
+  - id: breachcore-detected
+    desc: BreachCore game cheat framework detected
+    crit: suspicious
+    conf: 0.95
+    for: [pe]
+    any:
+      - id: breachcore-framework
+      - id: breachcore-useragent
+      - id: breachcore-pdb
+
+  - id: external-cheat-mutex
+    desc: External cheat mutex pattern
+    crit: notable
+    conf: 0.85
+    for: [pe]
+    any:
+      - id: cs2-external-mutex
+      - id: rust-external-mutex

@@ -1,0 +1,94 @@
+# JavaScript Encrypted Dropper Patterns
+# Detects JavaScript that decrypts and executes payloads
+# ATT&CK: T1027 (Obfuscated Files or Information)
+# MBC: C0025 (Encryption)
+
+defaults:
+  for: [javascript, typescript]
+  attack: "T1027"
+  mbc: "C0025"
+
+traits:
+  # Decryption method calls
+  - id: createdecipher-call
+    desc: crypto.createDecipher call
+    crit: component
+    conf: 0.7
+    if:
+      type: symbol
+      exact: "createDecipher"
+
+  - id: decrypt-call
+    desc: .decrypt() method call
+    crit: component
+    conf: 0.65
+    if:
+      type: symbol
+      exact: "decrypt"
+
+  # AST-based eval detection
+  - id: eval-ast-call
+    desc: eval() via AST pattern
+    crit: notable
+    conf: 0.8
+    if:
+      type: ast
+      kind: call
+      exact: "eval"
+
+  - id: js-staged-generator
+    desc: Generator function yielding eval
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: string
+      regex: 'function\*.{0,50}yield\s+eval\('
+
+composite_rules:
+  # Helper: decryption methods
+  - id: decryption-methods
+    desc: Decryption method calls
+    any:
+      - id: createdecipher-call
+      - id: micro-behaviors/crypto/symmetric/aes::createDecipheriv
+      - id: decrypt-call
+
+  # Helper: code execution methods
+  - id: code-execution-methods
+    desc: Dynamic code execution methods
+    crit: notable
+    conf: 0.9
+    any:
+      - id: objectives/execution/interpreter/eval/dynamic::eval-call-js
+      - id: eval-ast-call
+      - id: objectives/anti-static/obfuscation/require::function-constructor
+
+  # Helper: encoded data
+  - id: encoded-data
+    desc: Encoded data (blobs or buffer decoding)
+    any:
+      - id: micro-behaviors/data/encode/embedded::large-encoded-blob
+      - id: micro-behaviors/data/decode/buffer::buffer-decoding
+
+  # Main composite: Decrypt and execute payload
+  - id: js-decrypt-eval
+    desc: Decrypts hardcoded payload and executes it
+    crit: suspicious
+    conf: 0.95
+    all:
+      - id: micro-behaviors/crypto/import/module::crypto-module-import
+      - id: decryption-methods
+      - id: code-execution-methods
+      - id: encoded-data
+
+  # Remote code execution: HTTP fetch + eval
+  - id: js-remote-exec
+    desc: Fetches and executes remote code
+    crit: hostile
+    conf: 0.95
+    attack: "T1105"
+    mbc: "B0024"
+    size_max: 10000
+    all:
+      - id: micro-behaviors/communications/http/request::http-client-usage
+      - id: code-execution-methods

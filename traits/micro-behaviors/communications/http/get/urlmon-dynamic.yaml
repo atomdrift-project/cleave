@@ -1,0 +1,56 @@
+# urlmon.dll HTTP Download - Dynamic Resolution
+# Detects urlmon API names as strings (not in import table)
+# Malware commonly loads urlmon dynamically via LoadLibrary+GetProcAddress
+# to evade static import analysis
+# ATT&CK: T1071.001 (Application Layer Protocol: Web Protocols)
+
+defaults:
+  for: ["pe", "dll"]
+  platforms: ["windows"]
+  attack: "T1071.001"
+
+traits:
+  - id: url-download-to-file-str
+    desc: URLDownloadToFile API name as string
+    crit: notable
+    conf: 0.9
+    if:
+      type: string
+      regex: "URLDownloadToFile[AW]?"
+
+  - id: url-download-to-cache-str
+    desc: URLDownloadToCacheFile API name as string
+    crit: component
+    conf: 0.9
+    if:
+      type: string
+      regex: "URLDownloadToCacheFile[AW]?"
+
+  - id: url-open-blocking-stream-str
+    desc: URLOpenBlockingStream API name as string
+    crit: component
+    conf: 0.9
+    if:
+      type: string
+      regex: "URLOpenBlockingStream[AW]?"
+
+  - id: url-open-stream-str
+    desc: URLOpenStream API name as string
+    crit: component
+    conf: 0.9
+    if:
+      type: string
+      regex: "URLOpenStream[AW]?"
+
+composite_rules:
+  - id: urlmon-dynamic-load
+    desc: urlmon download APIs resolved dynamically
+    crit: suspicious
+    conf: 0.9
+    attack: "T1027"
+    all:
+      - id: url-download-to-file-str
+    any:
+      - id: url-download-to-cache-str
+      - id: url-open-blocking-stream-str
+      - id: url-open-stream-str

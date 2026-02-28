@@ -1,0 +1,43 @@
+# Rust Filesystem Write Operations
+# Detects std::fs file write operations in Rust binaries
+
+defaults:
+  for: [elf, macho, pe]
+  crit: baseline
+  conf: 0.7
+
+traits:
+  - id: std-fs-file-create
+    desc: std::fs::File::create Rust method
+    if:
+      type: symbol
+      exact: "std::fs::File::create"
+
+  - id: std-fs-write
+    desc: std::fs::write Rust function
+    if:
+      type: symbol
+      exact: "std::fs::write"
+
+  - id: std-fs-openoptions
+    desc: std::fs::OpenOptions Rust type
+    if:
+      type: symbol
+      exact: "std::fs::OpenOptions"
+
+  - id: std-io-copy
+    desc: std::io::copy Rust function
+    if:
+      type: symbol
+      exact: "std::io::copy"
+
+composite_rules:
+  - id: rust-fs-write
+    desc: Rust filesystem write operations
+    crit: notable
+    conf: 0.8
+    any:
+      - id: std-fs-file-create
+      - id: std-fs-write
+      - id: std-fs-openoptions
+      - id: std-io-copy

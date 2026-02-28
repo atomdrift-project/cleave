@@ -168,4 +168,4 @@ composite_rules:
     all:
       - id: micro-behaviors/fs/proc/info::process-self-exe
       - id: micro-behaviors/mem/protect/modify::rwx-prot-bytes
-      - id: well-known/tools/offensive/stagers::x64-jmp-register
+      - id: micro-behaviors/mem/shellcode/transfer::register-transfer

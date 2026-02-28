@@ -1,0 +1,36 @@
+# Rust Process Execution
+# Detects std::process::Command usage in Rust binaries
+
+defaults:
+  for: [elf, macho, pe]
+  crit: baseline
+  conf: 0.7
+
+traits:
+  - id: std-process-command
+    desc: std::process::Command Rust type
+    if:
+      type: symbol
+      exact: "std::process::Command"
+
+  - id: command-new
+    desc: Command::new Rust method
+    if:
+      type: symbol
+      exact: "Command::new"
+
+  - id: std-process-child
+    desc: std::process::Child Rust type
+    if:
+      type: symbol
+      exact: "std::process::Child"
+
+composite_rules:
+  - id: rust-process-exec
+    desc: Rust process execution capability
+    crit: notable
+    conf: 0.8
+    any:
+      - id: std-process-command
+      - id: command-new
+      - id: std-process-child

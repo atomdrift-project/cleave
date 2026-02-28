@@ -10,7 +10,7 @@ composite_rules:
     mbc: "B0024"
     all:
       - id: micro-behaviors/communications/http/request::http-client-usage
-      - id: well-known/malware/dropper::code-execution-methods
+      - id: objectives/command-and-control/dropper/encrypted::code-execution-methods
     size_max: 50000
 
   - id: js-eval-response-data-dropper

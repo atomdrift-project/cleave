@@ -1,0 +1,92 @@
+# x86-64 Linux Staged Shellcode Patterns
+# Detects Metasploit-style reverse TCP stagers and similar payloads
+# These are tiny ELF binaries that download and execute second-stage shellcode
+#
+# Key characteristics:
+# - Tiny ELF (typically 100-500 bytes) with minimal/no sections
+# - Uses raw syscalls via push/pop sequences
+# - Allocates RWX memory (mmap), connects to C2 (socket+connect),
+#   receives shellcode (read), and jumps to it
+#
+# ATT&CK: T1059.004 (Unix Shell), T1071.001 (Web Protocols)
+# MBC: B0030 (Dropper/Stager)
+
+defaults:
+  for: [elf]
+  platforms: [linux]
+  mbc: "B0030"
+
+traits:
+  # sockaddr_in structure with port (bytes 2-3) and IP (bytes 4-7)
+  # Pattern: 02 00 PP PP II II II II where PP=port, II=IP
+  # The 02 00 is sin_family = AF_INET
+  - id: sockaddr-in-immediate
+    desc: sockaddr_in with hardcoded IP/port
+    crit: notable
+    conf: 0.75
+    if:
+      type: hex
+      # movabs rcx, immediate (48 b9) followed by sockaddr_in
+      pattern: "48 b9 02 00"
+
+  # Small ELF with minimal headers (stagers: raw ~100-500 bytes, page-aligned up to 8KB)
+  - id: tiny-elf
+    desc: Small ELF binary (stager-sized)
+    crit: notable
+    conf: 0.7
+    size_max: 8192
+
+composite_rules:
+  # Metasploit-style x86-64 Linux reverse TCP stager
+  # Classic pattern: mmap RWX memory + socket + connect + receive shellcode + execute
+  - id: linux-x64-reverse-stager
+    desc: x86-64 Linux reverse shell stager
+    crit: hostile
+    conf: 0.95
+    attack: "T1059.004"
+    for: [elf]
+    all:
+      - id: micro-behaviors/os/syscall/raw::x64-mmap-syscall
+      - id: micro-behaviors/os/syscall/raw::x64-socket-syscall
+      - id: micro-behaviors/os/syscall/raw::x64-connect-syscall
+      - id: micro-behaviors/mem/shellcode/transfer::register-transfer
+
+  # Tiny shellcode ELF with syscalls
+  # Matches small ELFs that use raw syscalls - highly suspicious
+  - id: tiny-shellcode-elf
+    desc: Tiny ELF with raw syscalls
+    crit: hostile
+    conf: 0.9
+    attack: "T1059"
+    for: [elf]
+    all:
+      - id: tiny-elf
+      - id: micro-behaviors/os/syscall/raw::x64-socket-syscall
+      - id: micro-behaviors/mem/shellcode/transfer::register-transfer
+
+  # Network stager with hardcoded C2
+  - id: network-stager-hardcoded-c2
+    desc: Network stager with hardcoded C2 address
+    crit: hostile
+    conf: 0.92
+    attack: "T1071.001"
+    for: [elf]
+    all:
+      - id: micro-behaviors/os/syscall/raw::x64-socket-syscall
+      - id: micro-behaviors/os/syscall/raw::x64-connect-syscall
+      - id: sockaddr-in-immediate
+      - id: micro-behaviors/mem/shellcode/transfer::register-transfer
+
+  # Reverse stager with retry loop (nanosleep between connect attempts)
+  - id: linux-x64-reverse-stager-retry
+    desc: x86-64 Linux reverse stager with retry
+    crit: hostile
+    conf: 0.95
+    attack: "T1059.004"
+    for: [elf]
+    all:
+      - id: micro-behaviors/os/syscall/raw::x64-mmap-syscall
+      - id: micro-behaviors/os/syscall/raw::x64-socket-syscall
+      - id: micro-behaviors/os/syscall/raw::x64-connect-syscall
+      - id: micro-behaviors/os/syscall/raw::x64-nanosleep-syscall
+      - id: micro-behaviors/mem/shellcode/transfer::register-transfer

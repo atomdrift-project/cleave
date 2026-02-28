@@ -149,6 +149,25 @@ traits:
       type: string
       regex: '(?i)apimonitor(-x64)?\.exe'
 
+  - id: http-debugger
+    desc: HTTP Debugger UI
+    crit: notable
+    conf: 0.85
+    for: [pe]
+    if:
+      type: string
+      regex: '(?i)httpdebugger(ui)?\.exe'
+
+  # === Game Hacking / Memory Tools ===
+  - id: cheatengine-process
+    desc: Cheat Engine memory editor
+    crit: notable
+    conf: 0.9
+    for: [pe]
+    if:
+      type: string
+      regex: '(?i)cheatengine[_-]?(x86[_-]?64|i386|x64)?\.exe'
+
   # === PE Analysis Tools ===
   - id: pestudio-process
     desc: PEStudio analysis tool
@@ -189,6 +208,8 @@ composite_rules:
       - id: process-hacker
       - id: autoruns-process
       - id: api-monitor
+      - id: http-debugger
+      - id: cheatengine-process
 
   - id: debugger-tool
     desc: Debugger tool detection

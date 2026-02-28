@@ -1,0 +1,51 @@
+# Rust HTTP Client Libraries
+# Detects common Rust HTTP client crates
+
+defaults:
+  for: [elf, macho, pe]
+  crit: baseline
+  conf: 0.7
+
+traits:
+  - id: reqwest-crate
+    desc: reqwest Rust HTTP library
+    if:
+      type: string
+      word: "reqwest"
+
+  - id: ureq-crate
+    desc: ureq Rust HTTP library
+    if:
+      type: string
+      word: "ureq"
+
+  - id: hyper-crate
+    desc: hyper Rust HTTP library
+    if:
+      type: string
+      word: "hyper"
+
+  # NOTE: "surf" as a word is too generic - appears in graphics libraries
+  - id: surf-crate
+    desc: surf Rust HTTP library
+    if:
+      type: string
+      regex: '(surf-\d+\.\d+|surf::)'
+
+  - id: curl-rust-crate
+    desc: curl-rust Rust HTTP library
+    if:
+      type: string
+      substr: "curl-rust"
+
+composite_rules:
+  - id: rust-http-client
+    desc: Rust HTTP client library detected
+    crit: baseline
+    conf: 0.7
+    any:
+      - id: reqwest-crate
+      - id: ureq-crate
+      - id: hyper-crate
+      - id: surf-crate
+      - id: curl-rust-crate

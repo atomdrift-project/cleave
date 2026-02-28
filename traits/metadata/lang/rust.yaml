@@ -2,6 +2,24 @@ defaults:
   for: [all]
 
 traits:
+  - id: rustc-compiler
+    desc: rustc Rust compiler reference
+    crit: baseline
+    conf: 0.6
+    for: [elf, macho, pe]
+    if:
+      type: string
+      word: "rustc"
+
+  - id: static-pie
+    desc: Rust static-pie build type
+    crit: baseline
+    conf: 0.7
+    for: [elf, macho, pe]
+    if:
+      type: string
+      substr: "static-pie"
+
   - id: gimli-crate
     desc: "Rust gimli crate (DWARF parsing)"
     crit: baseline

@@ -318,6 +318,10 @@ pub(crate) enum Command {
         /// Minimum string length
         #[arg(short, long, default_value = "4")]
         min_length: usize,
+
+        /// Filter to a specific layer (e.g., "upx@0" for UPX-unpacked content)
+        #[arg(short = 'L', long)]
+        layer: Option<String>,
     },
 
     /// Extract symbols (imports, exports, functions) from a binary or source file
@@ -325,6 +329,10 @@ pub(crate) enum Command {
         /// Target file (binary or source)
         #[arg(required = true)]
         target: String,
+
+        /// Filter to a specific layer (e.g., "upx@0" for UPX-unpacked content)
+        #[arg(short = 'L', long)]
+        layer: Option<String>,
     },
 
     /// Extract section information (name, address, size, entropy) from a binary
@@ -332,6 +340,10 @@ pub(crate) enum Command {
         /// Target binary file
         #[arg(required = true)]
         target: String,
+
+        /// Filter to a specific layer (e.g., "upx@0" for UPX-unpacked content)
+        #[arg(short = 'L', long)]
+        layer: Option<String>,
     },
 
     /// Extract computed metrics from a binary or source file
@@ -339,6 +351,10 @@ pub(crate) enum Command {
         /// Target file (binary or source)
         #[arg(required = true)]
         target: String,
+
+        /// Filter to a specific layer (e.g., "upx@0" for UPX-unpacked content)
+        #[arg(short = 'L', long)]
+        layer: Option<String>,
     },
 
     /// Debug rule evaluation - trace through how rules match or fail
@@ -677,9 +693,15 @@ mod tests {
         let args = Args::try_parse_from(["cleave", "strings", "file.bin"]).unwrap();
 
         assert!(matches!(args.command, Some(Command::Strings { .. })));
-        if let Some(Command::Strings { target, min_length }) = args.command {
+        if let Some(Command::Strings {
+            target,
+            min_length,
+            layer,
+        }) = args.command
+        {
             assert_eq!(target, "file.bin");
             assert_eq!(min_length, 4); // Default value
+            assert!(layer.is_none());
         }
     }
 
@@ -687,9 +709,32 @@ mod tests {
     fn test_parse_strings_command_with_min_length() {
         let args = Args::try_parse_from(["cleave", "strings", "file.bin", "-m", "10"]).unwrap();
 
-        if let Some(Command::Strings { target, min_length }) = args.command {
+        if let Some(Command::Strings {
+            target,
+            min_length,
+            layer,
+        }) = args.command
+        {
             assert_eq!(target, "file.bin");
             assert_eq!(min_length, 10);
+            assert!(layer.is_none());
+        }
+    }
+
+    #[test]
+    fn test_parse_strings_command_with_layer() {
+        let args =
+            Args::try_parse_from(["cleave", "strings", "file.bin", "--layer", "upx@0"]).unwrap();
+
+        if let Some(Command::Strings {
+            target,
+            min_length,
+            layer,
+        }) = args.command
+        {
+            assert_eq!(target, "file.bin");
+            assert_eq!(min_length, 4);
+            assert_eq!(layer, Some("upx@0".to_string()));
         }
     }
 
@@ -698,8 +743,20 @@ mod tests {
         let args = Args::try_parse_from(["cleave", "symbols", "file.bin"]).unwrap();
 
         assert!(matches!(args.command, Some(Command::Symbols { .. })));
-        if let Some(Command::Symbols { target }) = args.command {
+        if let Some(Command::Symbols { target, layer }) = args.command {
             assert_eq!(target, "file.bin");
+            assert!(layer.is_none());
+        }
+    }
+
+    #[test]
+    fn test_parse_symbols_command_with_layer() {
+        let args =
+            Args::try_parse_from(["cleave", "symbols", "file.bin", "--layer", "upx@0"]).unwrap();
+
+        if let Some(Command::Symbols { target, layer }) = args.command {
+            assert_eq!(target, "file.bin");
+            assert_eq!(layer, Some("upx@0".to_string()));
         }
     }
 
@@ -1104,8 +1161,20 @@ mod tests {
         let args = Args::try_parse_from(["cleave", "metrics", "file.bin"]).unwrap();
 
         assert!(matches!(args.command, Some(Command::Metrics { .. })));
-        if let Some(Command::Metrics { target }) = args.command {
+        if let Some(Command::Metrics { target, layer }) = args.command {
             assert_eq!(target, "file.bin");
+            assert!(layer.is_none());
+        }
+    }
+
+    #[test]
+    fn test_parse_metrics_command_with_layer() {
+        let args =
+            Args::try_parse_from(["cleave", "metrics", "file.bin", "--layer", "upx@0"]).unwrap();
+
+        if let Some(Command::Metrics { target, layer }) = args.command {
+            assert_eq!(target, "file.bin");
+            assert_eq!(layer, Some("upx@0".to_string()));
         }
     }
 

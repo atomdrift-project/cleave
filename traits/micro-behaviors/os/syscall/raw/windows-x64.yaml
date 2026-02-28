@@ -76,14 +76,8 @@ traits:
       type: string
       substr: "NtOpenProcess"
 
-  # Direct syscall library indicators
-  - id: syscall-trampoline-str
-    desc: Syscall trampoline string indicator
-    crit: suspicious
-    conf: 0.9
-    if:
-      type: string
-      regex: "(?i)syscall.?trampoline"
+  # syscall-trampoline-str: use canonical version from os/syscall/trampoline
+  # (removed to avoid duplicate pattern)
 
   - id: ssn-resolution-str
     desc: SSN resolution string indicator

@@ -5,6 +5,7 @@
 //! - AST-based extraction for source files
 //! - Multiple encoding detection (UTF-8, UTF-16, base64, etc.)
 //! - String classification (URLs, IPs, emails, paths, shell commands)
+//! - Layer filtering (e.g., --layer upx@0 for UPX-unpacked content)
 
 use crate::analyzers::{
     detect_file_type, elf::ElfAnalyzer, macho::MachOAnalyzer, pe::PEAnalyzer, Analyzer, FileType,
@@ -13,11 +14,100 @@ use crate::cli;
 use crate::commands::shared::extract_strings_from_ast;
 use crate::radare2::Radare2Analyzer;
 use crate::strings;
+use crate::types::file_analysis::ENCODING_DELIMITER;
 use anyhow::Result;
 use std::fs;
 use std::path::Path;
 
-pub(crate) fn run(target: &str, min_length: usize, format: &cli::OutputFormat) -> Result<String> {
+pub(crate) fn run(
+    target: &str,
+    min_length: usize,
+    layer: Option<&str>,
+    format: &cli::OutputFormat,
+) -> Result<String> {
+    // If a layer is specified, we need to run full analysis to get that layer's data
+    if let Some(layer_name) = layer {
+        return run_with_layer(target, min_length, layer_name, format);
+    }
+    run_direct(target, min_length, format)
+}
+
+/// Run string extraction with layer filtering (requires full analysis)
+fn run_with_layer(
+    target: &str,
+    min_length: usize,
+    layer: &str,
+    format: &cli::OutputFormat,
+) -> Result<String> {
+    let path = Path::new(target);
+    if !path.exists() {
+        anyhow::bail!("File does not exist: {}", target);
+    }
+
+    let data = fs::read(path)?;
+    let file_type = detect_file_type(path)?;
+
+    // Run full analysis to get all layers
+    let capability_mapper = crate::capabilities::CapabilityMapper::empty();
+    let mut report = match file_type {
+        FileType::Elf => ElfAnalyzer::new()
+            .with_capability_mapper(capability_mapper)
+            .analyze_structural(path, &data),
+        FileType::Pe => PEAnalyzer::new()
+            .with_capability_mapper(capability_mapper)
+            .analyze_structural(path, &data)?,
+        FileType::MachO => MachOAnalyzer::new()
+            .with_capability_mapper(capability_mapper)
+            .analyze(path)?,
+        _ => anyhow::bail!("Layer filtering only supported for binary files (ELF, PE, Mach-O)"),
+    };
+
+    // Convert to v2 format to populate files array
+    report.convert_to_v2(true);
+
+    // Find the requested layer
+    let layer_suffix = format!("{}{}", ENCODING_DELIMITER, layer);
+    let file_analysis = report
+        .files
+        .iter()
+        .find(|f| f.path.ends_with(&layer_suffix))
+        .ok_or_else(|| {
+            let available: Vec<_> = report
+                .files
+                .iter()
+                .filter_map(|f| {
+                    f.path
+                        .rfind(ENCODING_DELIMITER)
+                        .map(|idx| &f.path[idx + ENCODING_DELIMITER.len()..])
+                })
+                .collect();
+            if available.is_empty() {
+                anyhow::anyhow!(
+                    "Layer '{}' not found. No encoded layers in this file.",
+                    layer
+                )
+            } else {
+                anyhow::anyhow!(
+                    "Layer '{}' not found. Available layers: {}",
+                    layer,
+                    available.join(", ")
+                )
+            }
+        })?;
+
+    // Filter strings by minimum length
+    let strings: Vec<_> = file_analysis
+        .strings
+        .iter()
+        .filter(|s| s.value.len() >= min_length)
+        .cloned()
+        .collect();
+
+    format_strings_output(&strings, format)
+}
+
+/// Direct string extraction without layer filtering (fast path)
+fn run_direct(target: &str, min_length: usize, format: &cli::OutputFormat) -> Result<String> {
     let path = Path::new(target);
     if !path.exists() {
         anyhow::bail!("File does not exist: {}", target);
@@ -154,14 +244,21 @@ pub(crate) fn run(target: &str, min_length: usize, format: &cli::OutputFormat) -
         .with_functions(&functions);
 
     let strings = extractor.extract_smart(&data, None);
+    format_strings_output(&strings, format)
+}
 
+/// Format strings output for display
+fn format_strings_output(
+    strings: &[crate::types::StringInfo],
+    format: &cli::OutputFormat,
+) -> Result<String> {
     match format {
         cli::OutputFormat::Jsonl => Ok(serde_json::to_string_pretty(&strings)?),
         cli::OutputFormat::Terminal => {
             let mut output = String::new();
 
             // Sort strings by offset to show them in file order
-            let mut strings = strings;
+            let mut strings: Vec<_> = strings.to_vec();
             strings.sort_by_key(|s| s.offset);
 
             let mut current_section: Option<&str> = None;

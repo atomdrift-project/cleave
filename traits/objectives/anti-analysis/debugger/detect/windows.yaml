@@ -20,13 +20,12 @@ traits:
 
   - id: nt-query-information-process
     desc: NtQueryInformationProcess (debugger detection via NT)
-    crit: notable
-    conf: 0.8
+    crit: suspicious
+    conf: 0.85
     mbc: "B0001"
     attack: "T1622"
     if:
-      type: symbol
-      exact: "NtQueryInformationProcess"
+      id: micro-behaviors/os/syscall/raw::nt-query-info-ssn
 
 composite_rules:
   # debugger-api: composite referencing canonical IsDebuggerPresent plus local variants

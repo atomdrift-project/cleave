@@ -4,6 +4,7 @@
 //! - Binary metrics (entropy, section sizes, import/export counts)
 //! - Source code metrics (lines of code, cyclomatic complexity, etc.)
 //! - Structural metrics (function counts, string statistics)
+//! - Supports layer filtering (e.g., --layer upx@0 for UPX-unpacked content)
 
 use crate::analyzers::{
     self, detect_file_type, elf::ElfAnalyzer, macho::MachOAnalyzer, pe::PEAnalyzer, Analyzer,
@@ -11,14 +12,95 @@ use crate::analyzers::{
 };
 use crate::cli;
 use crate::commands::shared::flatten_json_to_metrics;
+use crate::types::file_analysis::ENCODING_DELIMITER;
 use anyhow::Result;
+use std::fs;
 use std::path::Path;
 
 pub(crate) fn run(
     target: &str,
+    layer: Option<&str>,
     format: &cli::OutputFormat,
     _disabled: &cli::DisabledComponents,
 ) -> Result<String> {
+    // If a layer is specified, we need to run full analysis to get that layer's data
+    if let Some(layer_name) = layer {
+        return run_with_layer(target, layer_name, format);
+    }
+    run_direct(target, format)
+}
+
+/// Run metrics extraction with layer filtering (requires full analysis)
+fn run_with_layer(target: &str, layer: &str, format: &cli::OutputFormat) -> Result<String> {
+    let path = Path::new(target);
+    if !path.exists() {
+        anyhow::bail!("File does not exist: {}", target);
+    }
+
+    let data = fs::read(path)?;
+    let file_type = detect_file_type(path)?;
+
+    // Run full analysis to get all layers
+    let capability_mapper = crate::capabilities::CapabilityMapper::empty();
+    let mut report = match file_type {
+        FileType::Elf => ElfAnalyzer::new()
+            .with_capability_mapper(capability_mapper)
+            .analyze_structural(path, &data),
+        FileType::Pe => PEAnalyzer::new()
+            .with_capability_mapper(capability_mapper)
+            .analyze_structural(path, &data)?,
+        FileType::MachO => MachOAnalyzer::new()
+            .with_capability_mapper(capability_mapper)
+            .analyze(path)?,
+        _ => anyhow::bail!("Layer filtering only supported for binary files (ELF, PE, Mach-O)"),
+    };
+
+    // Convert to v2 format to populate files array
+    report.convert_to_v2(true);
+
+    // Find the requested layer
+    let layer_suffix = format!("{}{}", ENCODING_DELIMITER, layer);
+    let file_analysis = report
+        .files
+        .iter()
+        .find(|f| f.path.ends_with(&layer_suffix))
+        .ok_or_else(|| {
+            let available: Vec<_> = report
+                .files
+                .iter()
+                .filter_map(|f| {
+                    f.path
+                        .rfind(ENCODING_DELIMITER)
+                        .map(|idx| &f.path[idx + ENCODING_DELIMITER.len()..])
+                })
+                .collect();
+            if available.is_empty() {
+                anyhow::anyhow!(
+                    "Layer '{}' not found. No encoded layers in this file.",
+                    layer
+                )
+            } else {
+                anyhow::anyhow!(
+                    "Layer '{}' not found. Available layers: {}",
+                    layer,
+                    available.join(", ")
+                )
+            }
+        })?;
+
+    // Extract metrics from the layer's FileAnalysis
+    let metrics = file_analysis.metrics.clone().ok_or_else(|| {
+        anyhow::anyhow!(
+            "No metrics available for layer '{}' (layer may not support metrics)",
+            layer
+        )
+    })?;
+
+    format_metrics_output(&metrics, target, &file_type, format)
+}
+
+/// Direct metrics extraction without layer filtering (fast path)
+fn run_direct(target: &str, format: &cli::OutputFormat) -> Result<String> {
     let path = Path::new(target);
     if !path.exists() {
         anyhow::bail!("File does not exist: {}", target);
@@ -195,7 +277,16 @@ pub(crate) fn run(
         }
     }
 
-    // Format output
+    format_metrics_output(&metrics, target, &file_type, format)
+}
+
+/// Format metrics output for display
+fn format_metrics_output(
+    metrics: &crate::types::Metrics,
+    target: &str,
+    file_type: &FileType,
+    format: &cli::OutputFormat,
+) -> Result<String> {
     match format {
         cli::OutputFormat::Jsonl => {
             // JSON output - just serialize the metrics
@@ -203,7 +294,7 @@ pub(crate) fn run(
         }
         cli::OutputFormat::Terminal => {
             // Convert metrics to JSON value, then flatten to get all field paths
-            let json_value = serde_json::to_value(&metrics)?;
+            let json_value = serde_json::to_value(metrics)?;
             let mut flattened = Vec::new();
             flatten_json_to_metrics(&json_value, "", &mut flattened);
 

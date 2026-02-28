@@ -76,8 +76,8 @@ traits:
       regex: "(?i)Signal[/\\\\]"
 
   # Asar manipulation indicators
-  - id: asar-extract
-    desc: asar extract operation
+  - id: asar-extract-unpack
+    desc: asar extract/unpack operation
     crit: notable
     conf: 0.75
     if:

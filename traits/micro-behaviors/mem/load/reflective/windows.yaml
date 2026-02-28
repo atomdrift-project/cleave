@@ -9,13 +9,8 @@ defaults:
   attack: "T1620"
 
 traits:
-  - id: memory-load-library-str
-    desc: MemoryLoadLibrary function reference
-    crit: suspicious
-    conf: 0.95
-    if:
-      type: string
-      substr: "MemoryLoadLibrary"
+  # memory-load-library: use canonical version from process/create/load/memory-module
+  # (removed to avoid duplicate pattern)
 
   - id: mz-signature-check
     desc: MZ DOS signature validation string

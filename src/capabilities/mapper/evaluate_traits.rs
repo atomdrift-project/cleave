@@ -446,7 +446,7 @@ impl super::CapabilityMapper {
         let raw_regex_prefilter_enabled = raw_regex_matches.is_some();
 
         let has_any_matches = !string_matched_traits.is_empty()
-            || raw_regex_matches.map_or(false, |s| !s.is_empty())
+            || raw_regex_matches.is_some_and(|s| !s.is_empty())
             || !regex_candidates.is_empty();
 
         // For dependent traits, we can't skip based on string matches alone
@@ -569,7 +569,7 @@ impl super::CapabilityMapper {
                     if has_content_regex
                         && raw_regex_prefilter_enabled
                         && self.raw_content_regex_index.is_indexed_trait(idx)
-                        && raw_regex_matches.map_or(false, |s| !s.contains(&idx))
+                        && raw_regex_matches.is_some_and(|s| !s.contains(&idx))
                     {
                         return None;
                     }

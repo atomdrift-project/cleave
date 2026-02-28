@@ -17,13 +17,8 @@ traits:
       type: string
       substr: "ZwQueryVirtualMemory"
 
-  - id: nt-query-virtual-memory
-    desc: NtQueryVirtualMemory function reference
-    crit: notable
-    conf: 0.7
-    if:
-      type: string
-      substr: "NtQueryVirtualMemory"
+  # nt-query-virtual-memory: use symbol in syscall/invoke for cross-type matching
+  # Keep this for string context (ntdll patching) while invoke uses symbol
 
   # NtManageHotPatch (disable hot patching)
   - id: nt-manage-hot-patch
@@ -92,7 +87,7 @@ composite_rules:
     desc: Virtual memory query functions
     any:
       - id: zw-query-virtual-memory
-      - id: nt-query-virtual-memory
+      - id: micro-behaviors/os/syscall/invoke::ntdll-direct-memory-op-b
 
   - id: knowndlls-text-combo
     desc: KnownDlls with .text section access

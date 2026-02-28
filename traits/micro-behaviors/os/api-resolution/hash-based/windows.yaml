@@ -61,30 +61,11 @@ traits:
       type: hex
       pattern: "64 a1 30 00 00 00"
 
-  # Export table parsing
-  - id: image-export-directory
-    desc: IMAGE_EXPORT_DIRECTORY parsing
-    crit: notable
-    conf: 0.75
-    if:
-      type: string
-      substr: "IMAGE_EXPORT_DIRECTORY"
+  # Export table parsing - use canonical versions from manual-import
+  # (removed to avoid duplicate patterns, reference manual-import versions instead)
 
-  - id: address-of-functions
-    desc: AddressOfFunctions export parsing
-    crit: notable
-    conf: 0.8
-    if:
-      type: string
-      substr: "AddressOfFunctions"
-
-  - id: address-of-names
-    desc: AddressOfNames export parsing
-    crit: notable
-    conf: 0.8
-    if:
-      type: string
-      substr: "AddressOfNames"
+  # address-of-names: use canonical version from manual-import
+  # (removed to avoid duplicate pattern)
 
   - id: address-of-name-ordinals
     desc: AddressOfNameOrdinals export parsing
@@ -94,14 +75,8 @@ traits:
       type: string
       substr: "AddressOfNameOrdinals"
 
-  # Lazy importer library indicators
-  - id: lazy-importer-str
-    desc: Lazy importer library string
-    crit: suspicious
-    conf: 0.9
-    if:
-      type: string
-      regex: "(?i)lazy.?import(er)?"
+  # lazy-importer-str: use canonical version from os/api-resolution/lazy-importer
+  # (removed to avoid duplicate pattern)
 
   - id: li-fn-macro
     desc: LI_FN macro usage
@@ -164,25 +139,25 @@ composite_rules:
       - id: in-load-order
       - id: in-init-order
 
-  # Export table parsing
+  # Export table parsing - reference manual-import versions
   - id: export-parsing
     desc: PE export table parsing
     crit: notable
     conf: 0.8
     needs: 2
     any:
-      - id: image-export-directory
-      - id: address-of-functions
-      - id: address-of-names
+      - id: micro-behaviors/process/create/load/manual-import::asm-manual-import-export-dir
+      - id: micro-behaviors/process/create/load/manual-import::asm-manual-import-addr-functions
+      - id: micro-behaviors/process/create/load/manual-import::asm-manual-import-addr-names
       - id: address-of-name-ordinals
 
-  # Lazy importer usage
+  # Lazy importer usage - reference lazy-importer namespace
   - id: lazy-importer
     desc: Lazy importer library usage
     crit: suspicious
     conf: 0.9
     any:
-      - id: lazy-importer-str
+      - id: micro-behaviors/os/api-resolution/lazy-importer::lazy-importer-usage
       - id: li-fn-macro
       - id: li-module-macro
 

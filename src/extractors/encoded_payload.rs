@@ -320,7 +320,7 @@ fn classify_payload_suspicion(final_bytes: &[u8]) -> Criticality {
 
 /// Recursively decompress and check for nested encodings
 /// This handles compression + nested base64/hex that stng doesn't process
-fn decompress_and_nest(
+pub(crate) fn decompress_and_nest(
     data: &[u8],
     mut chain: Vec<String>,
     depth: usize,

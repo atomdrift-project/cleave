@@ -24,7 +24,7 @@ use std::sync::Arc;
 // Data Structures
 // ============================================================================
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 pub(crate) struct SectionInfo {
     pub(crate) name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -35,7 +35,7 @@ pub(crate) struct SectionInfo {
     pub(crate) permissions: Option<String>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 pub(crate) struct SymbolInfo {
     pub(crate) name: String,
     #[serde(skip_serializing_if = "Option::is_none")]

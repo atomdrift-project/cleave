@@ -76,13 +76,95 @@ impl PEAnalyzer {
     /// stored in this analyzer if set. Callers are responsible for running the main YARA
     /// scan and calling `evaluate_and_merge_findings` on the returned report.
     ///
+    /// Handles UPX decompression internally - unpacked content becomes a separate FileAnalysis
+    /// entry in `report.files` with `encoding: ["upx"]`.
+    ///
     /// If `stng_strings` is provided, uses those directly (avoids redundant extraction).
     pub(crate) fn analyze_structural(
         &self,
         file_path: &Path,
         data: &[u8],
     ) -> Result<AnalysisReport> {
-        self.analyze_structural_with_strings(file_path, data, None)
+        use crate::types::file_analysis::encode_upx_path;
+        use crate::upx::{UPXDecompressor, UPXError};
+
+        if !UPXDecompressor::is_upx_packed(data) {
+            return self.analyze_structural_with_strings(file_path, data, None);
+        }
+
+        // UPX-packed: structural analysis of packed binary first
+        let mut report = self.analyze_structural_with_strings(file_path, data, None)?;
+
+        report.findings.push(
+            Finding::structural(
+                "anti-static/packer/upx".to_string(),
+                "Binary is packed with UPX".to_string(),
+                1.0,
+            )
+            .with_criticality(Criticality::Suspicious),
+        );
+
+        if !UPXDecompressor::is_available() {
+            report.findings.push(
+                Finding::structural(
+                    "anti-static/packer/upx/tool-missing".to_string(),
+                    "UPX binary not found in PATH - unpacked analysis skipped".to_string(),
+                    1.0,
+                )
+                .with_criticality(Criticality::Notable),
+            );
+            return Ok(report);
+        }
+
+        match UPXDecompressor::decompress(file_path) {
+            Ok(unpacked_data) => {
+                if let Ok(temp_file) = tempfile::NamedTempFile::new() {
+                    if fs::write(temp_file.path(), &unpacked_data).is_ok() {
+                        if let Ok(unpacked_report) =
+                            self.analyze_structural_with_strings(temp_file.path(), &unpacked_data, None)
+                        {
+                            // Create separate FileAnalysis for unpacked layer
+                            let unpacked_sha256 =
+                                crate::analyzers::utils::calculate_sha256(&unpacked_data);
+                            let virtual_path = encode_upx_path(&file_path.display().to_string());
+
+                            let mut unpacked_file = unpacked_report.to_file_analysis(0, true);
+                            unpacked_file.path = virtual_path;
+                            unpacked_file.sha256 = unpacked_sha256;
+                            unpacked_file.size = unpacked_data.len() as u64;
+                            unpacked_file.depth = 1;
+                            unpacked_file.parent_id = Some(0);
+                            unpacked_file.encoding = Some(vec!["upx".to_string()]);
+                            unpacked_file.compute_summary();
+
+                            // Add nested files from unpacked analysis (e.g., embedded code)
+                            report.files.extend(unpacked_report.files);
+                            report.files.push(unpacked_file);
+
+                            report.metadata.tools_used.push("upx".to_string());
+                        }
+                    }
+                }
+            }
+            Err(e) => {
+                let description = match e {
+                    UPXError::DecompressionFailed(msg) => {
+                        format!("UPX decompression failed (possibly tampered): {}", msg)
+                    }
+                    _ => format!("UPX decompression failed: {}", e),
+                };
+                report.findings.push(
+                    Finding::structural(
+                        "anti-static/packer/upx/decompression-failed".to_string(),
+                        description,
+                        1.0,
+                    )
+                    .with_criticality(Criticality::Suspicious),
+                );
+            }
+        }
+
+        Ok(report)
     }
 
     /// Structural analysis with optional pre-extracted strings.
@@ -1209,5 +1291,177 @@ mod tests {
                 entry.path
             );
         }
+    }
+
+    // =========================================================================
+    // UPX Integration Tests
+    // =========================================================================
+
+    #[test]
+    fn test_pe_upx_detection_in_data() {
+        use crate::upx::UPXDecompressor;
+
+        // PE with UPX magic
+        let mut upx_data = vec![0u8; 256];
+        // MZ header
+        upx_data[0..2].copy_from_slice(b"MZ");
+        // UPX magic
+        upx_data[100..104].copy_from_slice(b"UPX!");
+        assert!(UPXDecompressor::is_upx_packed(&upx_data));
+
+        // PE without UPX magic
+        let mut normal_data = vec![0u8; 256];
+        normal_data[0..2].copy_from_slice(b"MZ");
+        assert!(!UPXDecompressor::is_upx_packed(&normal_data));
+    }
+
+    #[test]
+    fn test_pe_upx_packed_creates_finding() {
+        use crate::upx::UPXDecompressor;
+
+        let analyzer = PEAnalyzer::new();
+
+        // Create minimal UPX-packed PE-like data (won't actually decompress)
+        let mut upx_data = vec![0u8; 512];
+        // DOS header
+        upx_data[0..2].copy_from_slice(b"MZ");
+        // e_lfanew pointing to PE header
+        upx_data[0x3c..0x40].copy_from_slice(&[0x80, 0x00, 0x00, 0x00]);
+        // PE signature at offset 0x80
+        upx_data[0x80..0x84].copy_from_slice(b"PE\x00\x00");
+        // Machine type (x64)
+        upx_data[0x84..0x86].copy_from_slice(&[0x64, 0x86]);
+        // UPX magic
+        upx_data[200..204].copy_from_slice(b"UPX!");
+
+        assert!(UPXDecompressor::is_upx_packed(&upx_data));
+
+        let temp_file = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(temp_file.path(), &upx_data).unwrap();
+
+        let report = analyzer.analyze_structural(temp_file.path(), &upx_data);
+        assert!(report.is_ok(), "Analysis should succeed");
+
+        let report = report.unwrap();
+
+        // Should have UPX packer finding
+        assert!(
+            report.findings.iter().any(|f| f.id == "anti-static/packer/upx"),
+            "Should have UPX packer finding"
+        );
+    }
+
+    #[test]
+    fn test_pe_upx_tool_missing_creates_finding() {
+        use crate::upx::{disable_upx, UPXDecompressor};
+
+        // Temporarily disable UPX to simulate tool not available
+        disable_upx();
+
+        let analyzer = PEAnalyzer::new();
+
+        // Create minimal UPX-packed PE-like data
+        let mut upx_data = vec![0u8; 512];
+        upx_data[0..2].copy_from_slice(b"MZ");
+        upx_data[0x3c..0x40].copy_from_slice(&[0x80, 0x00, 0x00, 0x00]);
+        upx_data[0x80..0x84].copy_from_slice(b"PE\x00\x00");
+        upx_data[0x84..0x86].copy_from_slice(&[0x64, 0x86]);
+        upx_data[200..204].copy_from_slice(b"UPX!");
+
+        assert!(UPXDecompressor::is_upx_packed(&upx_data));
+
+        let temp_file = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(temp_file.path(), &upx_data).unwrap();
+
+        let report = analyzer
+            .analyze_structural(temp_file.path(), &upx_data)
+            .unwrap();
+
+        // Should have both UPX finding and tool-missing finding
+        assert!(
+            report.findings.iter().any(|f| f.id == "anti-static/packer/upx"),
+            "Should have UPX packer finding"
+        );
+        assert!(
+            report
+                .findings
+                .iter()
+                .any(|f| f.id == "anti-static/packer/upx/tool-missing"),
+            "Should have tool-missing finding when UPX is disabled"
+        );
+
+        // Should NOT have unpacked file analysis
+        assert!(
+            report.files.is_empty(),
+            "Should not have unpacked FileAnalysis when tool is missing"
+        );
+    }
+
+    #[test]
+    fn test_pe_non_upx_data_no_upx_finding() {
+        let analyzer = PEAnalyzer::new();
+
+        // Create minimal PE-like data without UPX magic
+        let mut pe_data = vec![0u8; 512];
+        pe_data[0..2].copy_from_slice(b"MZ");
+        pe_data[0x3c..0x40].copy_from_slice(&[0x80, 0x00, 0x00, 0x00]);
+        pe_data[0x80..0x84].copy_from_slice(b"PE\x00\x00");
+        pe_data[0x84..0x86].copy_from_slice(&[0x64, 0x86]);
+
+        let temp_file = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(temp_file.path(), &pe_data).unwrap();
+
+        let report = analyzer
+            .analyze_structural(temp_file.path(), &pe_data)
+            .unwrap();
+
+        // Should NOT have UPX packer finding
+        assert!(
+            !report.findings.iter().any(|f| f.id == "anti-static/packer/upx"),
+            "Should not have UPX finding for non-UPX binary"
+        );
+
+        // Should NOT have unpacked file analysis
+        assert!(
+            report.files.is_empty(),
+            "Should not have unpacked FileAnalysis for non-UPX binary"
+        );
+    }
+
+    #[test]
+    fn test_pe_upx_finding_criticality() {
+        use crate::upx::UPXDecompressor;
+
+        let analyzer = PEAnalyzer::new();
+
+        let mut upx_data = vec![0u8; 512];
+        upx_data[0..2].copy_from_slice(b"MZ");
+        upx_data[0x3c..0x40].copy_from_slice(&[0x80, 0x00, 0x00, 0x00]);
+        upx_data[0x80..0x84].copy_from_slice(b"PE\x00\x00");
+        upx_data[0x84..0x86].copy_from_slice(&[0x64, 0x86]);
+        upx_data[200..204].copy_from_slice(b"UPX!");
+
+        assert!(UPXDecompressor::is_upx_packed(&upx_data));
+
+        let temp_file = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(temp_file.path(), &upx_data).unwrap();
+
+        let report = analyzer
+            .analyze_structural(temp_file.path(), &upx_data)
+            .unwrap();
+
+        // Find the UPX finding
+        let upx_finding = report
+            .findings
+            .iter()
+            .find(|f| f.id == "anti-static/packer/upx");
+
+        assert!(upx_finding.is_some(), "Should have UPX finding");
+        let finding = upx_finding.unwrap();
+
+        // UPX packing is Suspicious criticality
+        assert_eq!(finding.crit, Criticality::Suspicious);
+        assert_eq!(finding.conf, 1.0);
+        assert_eq!(finding.desc, "Binary is packed with UPX");
     }
 }

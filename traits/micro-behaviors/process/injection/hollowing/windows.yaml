@@ -43,22 +43,11 @@ traits:
       type: string
       substr: "ZwUnmapViewOfSection"
 
-  # Memory allocation in remote process
-  - id: virtual-alloc-ex
-    desc: VirtualAllocEx call
-    crit: notable
-    conf: 0.7
-    if:
-      type: string
-      substr: "VirtualAllocEx"
+  # virtual-alloc-ex: use canonical version from mem/protect/modify
+  # (removed to avoid duplicate pattern)
 
-  - id: nt-allocate-remote
-    desc: NtAllocateVirtualMemory for remote process
-    crit: notable
-    conf: 0.75
-    if:
-      type: string
-      substr: "NtAllocateVirtualMemory"
+  # nt-allocate-remote: use canonical version from os/syscall/raw::nt-allocate-ssn
+  # (removed to avoid duplicate pattern)
 
   # Memory writing
   - id: write-process-memory
@@ -69,13 +58,8 @@ traits:
       type: string
       substr: "WriteProcessMemory"
 
-  - id: nt-write-virtual
-    desc: NtWriteVirtualMemory call
-    crit: notable
-    conf: 0.75
-    if:
-      type: string
-      substr: "NtWriteVirtualMemory"
+  # nt-write-virtual: use canonical version from os/syscall/raw::nt-write-ssn
+  # (removed to avoid duplicate pattern)
 
   # Thread context manipulation
   - id: get-thread-context
@@ -167,7 +151,7 @@ composite_rules:
     desc: Process memory writing APIs
     any:
       - id: write-process-memory
-      - id: nt-write-virtual
+      - id: micro-behaviors/os/syscall/raw::nt-write-ssn
 
   # Thread context APIs
   - id: thread-context-apis

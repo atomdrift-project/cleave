@@ -477,90 +477,6 @@ impl ElfAnalyzer {
             _ => format!("unknown_{}", elf.header.e_machine),
         }
     }
-
-    /// Merge findings from unpacked analysis into the packed report.
-    /// Deduplicates by finding ID, keeping the highest criticality.
-    /// Evidence is capped at MAX_EVIDENCE_PER_TRAIT to prevent memory exhaustion.
-    fn merge_reports(&self, packed: &mut AnalysisReport, unpacked: AnalysisReport) {
-        use crate::types::MAX_EVIDENCE_PER_TRAIT;
-
-        // Merge findings by ID, keeping highest criticality
-        for unpacked_finding in unpacked.findings {
-            if let Some(existing) = packed
-                .findings
-                .iter_mut()
-                .find(|f| f.id == unpacked_finding.id)
-            {
-                // Merge evidence, capped at MAX_EVIDENCE_PER_TRAIT
-                let remaining = MAX_EVIDENCE_PER_TRAIT.saturating_sub(existing.evidence.len());
-                existing
-                    .evidence
-                    .extend(unpacked_finding.evidence.into_iter().take(remaining));
-                // Keep higher criticality
-                if unpacked_finding.crit > existing.crit {
-                    existing.crit = unpacked_finding.crit;
-                }
-            } else {
-                packed.findings.push(unpacked_finding);
-            }
-        }
-
-        // Merge strings using HashSet for O(1) deduplication
-        // Use owned strings to avoid borrow conflict
-        let existing_strings: std::collections::HashSet<String> =
-            packed.strings.iter().map(|s| s.value.clone()).collect();
-        for s in unpacked.strings {
-            if !existing_strings.contains(&s.value) {
-                packed.strings.push(s);
-            }
-        }
-
-        // Merge imports using HashSet for O(1) deduplication
-        let existing_imports: std::collections::HashSet<String> =
-            packed.imports.iter().map(|i| i.symbol.clone()).collect();
-        for imp in unpacked.imports {
-            if !existing_imports.contains(&imp.symbol) {
-                packed.imports.push(imp);
-            }
-        }
-
-        // Merge exports using HashSet for O(1) deduplication
-        let existing_exports: std::collections::HashSet<String> =
-            packed.exports.iter().map(|e| e.symbol.clone()).collect();
-        for exp in unpacked.exports {
-            if !existing_exports.contains(&exp.symbol) {
-                packed.exports.push(exp);
-            }
-        }
-
-        // Merge functions using HashSet for O(1) deduplication
-        let existing_functions: std::collections::HashSet<String> =
-            packed.functions.iter().map(|f| f.name.clone()).collect();
-        for func in unpacked.functions {
-            if !existing_functions.contains(&func.name) {
-                packed.functions.push(func);
-            }
-        }
-
-        // Merge sections using HashSet for O(1) deduplication
-        let existing_sections: std::collections::HashSet<String> =
-            packed.sections.iter().map(|s| s.name.clone()).collect();
-        for sec in unpacked.sections {
-            if !existing_sections.contains(&sec.name) {
-                packed.sections.push(sec);
-            }
-        }
-
-        // Merge YARA matches using HashSet for O(1) deduplication
-        let existing_yara: std::collections::HashSet<String> =
-            packed.yara_matches.iter().map(|y| y.rule.clone()).collect();
-        for ym in unpacked.yara_matches {
-            if !existing_yara.contains(&ym.rule) {
-                packed.yara_matches.push(ym);
-            }
-        }
-    }
-
     /// Compute ELF-specific metrics from parsed ELF binary
     fn compute_elf_metrics<'a>(&self, elf: &Elf<'a>) -> ElfMetrics {
         use goblin::elf::dynamic::*;
@@ -727,9 +643,11 @@ impl Default for ElfAnalyzer {
 
 impl ElfAnalyzer {
     /// Perform structural analysis of an ELF binary (no YARA scan, no trait evaluation).
-    /// Handles UPX decompression internally. Callers are responsible for running YARA
-    /// and calling `evaluate_and_merge_findings` on the returned report.
+    /// Handles UPX decompression internally - unpacked content becomes a separate FileAnalysis
+    /// entry in `report.files` with `encoding: ["upx"]`.
+    /// Callers are responsible for running YARA and calling `evaluate_and_merge_findings`.
     pub(crate) fn analyze_structural(&self, file_path: &Path, data: &[u8]) -> AnalysisReport {
+        use crate::types::file_analysis::encode_upx_path;
         use crate::upx::{UPXDecompressor, UPXError};
 
         if !UPXDecompressor::is_upx_packed(data) {
@@ -766,7 +684,25 @@ impl ElfAnalyzer {
                     if fs::write(temp_file.path(), &unpacked_data).is_ok() {
                         let unpacked_report =
                             self.analyze_elf_core(temp_file.path(), &unpacked_data, None);
-                        self.merge_reports(&mut report, unpacked_report);
+
+                        // Create separate FileAnalysis for unpacked layer
+                        let unpacked_sha256 =
+                            crate::analyzers::utils::calculate_sha256(&unpacked_data);
+                        let virtual_path = encode_upx_path(&file_path.display().to_string());
+
+                        let mut unpacked_file = unpacked_report.to_file_analysis(0, true);
+                        unpacked_file.path = virtual_path;
+                        unpacked_file.sha256 = unpacked_sha256;
+                        unpacked_file.size = unpacked_data.len() as u64;
+                        unpacked_file.depth = 1;
+                        unpacked_file.parent_id = Some(0);
+                        unpacked_file.encoding = Some(vec!["upx".to_string()]);
+                        unpacked_file.compute_summary();
+
+                        // Add nested files from unpacked analysis (e.g., embedded code)
+                        report.files.extend(unpacked_report.files);
+                        report.files.push(unpacked_file);
+
                         report.metadata.tools_used.push("upx".to_string());
                     }
                 }
@@ -786,25 +722,6 @@ impl ElfAnalyzer {
                     )
                     .with_criticality(Criticality::Suspicious),
                 );
-            }
-        }
-
-        // Update binary metrics with final counts after UPX merge
-        if let Some(ref mut metrics) = report.metrics {
-            if let Some(ref mut binary) = metrics.binary {
-                binary.import_count = report.imports.len() as u32;
-                binary.export_count = report.exports.len() as u32;
-                binary.string_count = report.strings.len() as u32;
-                binary.file_size = data.len() as u64;
-
-                if binary.file_size > 0 && !report.sections.is_empty() {
-                    let max_section_size =
-                        report.sections.iter().map(|s| s.size).max().unwrap_or(0);
-                    binary.largest_section_ratio =
-                        max_section_size as f32 / binary.file_size as f32;
-                }
-
-                crate::radare2::Radare2Analyzer::compute_ratio_metrics(binary);
             }
         }
 
@@ -1016,448 +933,216 @@ mod tests {
         assert!(!UPXDecompressor::is_upx_packed(normal_data));
     }
 
-    // =========================================================================
-    // merge_reports Tests
-    // =========================================================================
+    #[test]
+    fn test_upx_packed_creates_finding() {
+        use crate::upx::UPXDecompressor;
 
-    fn create_test_report() -> AnalysisReport {
-        let target = TargetInfo {
-            path: "/test/path".to_string(),
-            file_type: "elf".to_string(),
-            size_bytes: 1000,
-            sha256: "abc123".to_string(),
-            architectures: Some(vec!["x86_64".to_string()]),
-        };
-        AnalysisReport::new(target)
+        let analyzer = ElfAnalyzer::new();
+
+        // Create minimal UPX-packed ELF-like data (won't actually decompress)
+        let mut upx_data = vec![0u8; 256];
+        // ELF magic
+        upx_data[0..4].copy_from_slice(b"\x7fELF");
+        // UPX magic
+        upx_data[100..104].copy_from_slice(b"UPX!");
+
+        assert!(UPXDecompressor::is_upx_packed(&upx_data));
+
+        // Use a temp file for the analysis
+        let temp_file = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(temp_file.path(), &upx_data).unwrap();
+
+        let report = analyzer.analyze_structural(temp_file.path(), &upx_data);
+
+        // Should have UPX packer finding
+        assert!(
+            report.findings.iter().any(|f| f.id == "anti-static/packer/upx"),
+            "Should have UPX packer finding"
+        );
     }
 
     #[test]
-    fn test_merge_reports_findings_dedup_by_id() {
-        let analyzer = ElfAnalyzer::new();
-        let mut packed = create_test_report();
-        let mut unpacked = create_test_report();
+    fn test_upx_tool_missing_creates_finding() {
+        use crate::upx::{disable_upx, UPXDecompressor};
 
-        // Add same finding to both with different criticality
-        packed.findings.push(
-            Finding::capability("net/socket".to_string(), "Network socket".to_string(), 0.9)
-                .with_criticality(Criticality::Notable),
+        // Temporarily disable UPX to simulate tool not available
+        disable_upx();
+
+        let analyzer = ElfAnalyzer::new();
+
+        // Create minimal UPX-packed ELF-like data
+        let mut upx_data = vec![0u8; 256];
+        upx_data[0..4].copy_from_slice(b"\x7fELF");
+        upx_data[100..104].copy_from_slice(b"UPX!");
+
+        assert!(UPXDecompressor::is_upx_packed(&upx_data));
+
+        let temp_file = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(temp_file.path(), &upx_data).unwrap();
+
+        let report = analyzer.analyze_structural(temp_file.path(), &upx_data);
+
+        // Should have both UPX finding and tool-missing finding
+        assert!(
+            report.findings.iter().any(|f| f.id == "anti-static/packer/upx"),
+            "Should have UPX packer finding"
+        );
+        assert!(
+            report
+                .findings
+                .iter()
+                .any(|f| f.id == "anti-static/packer/upx/tool-missing"),
+            "Should have tool-missing finding when UPX is disabled"
         );
 
-        unpacked.findings.push(
-            Finding::capability("net/socket".to_string(), "Network socket".to_string(), 0.9)
-                .with_criticality(Criticality::Suspicious),
+        // Should NOT have unpacked file analysis (since tool is missing)
+        assert!(
+            report.files.is_empty(),
+            "Should not have unpacked FileAnalysis when tool is missing"
+        );
+    }
+
+    #[test]
+    fn test_non_upx_data_no_upx_finding() {
+        let analyzer = ElfAnalyzer::new();
+
+        // Create minimal ELF-like data without UPX magic
+        let mut elf_data = vec![0u8; 256];
+        elf_data[0..4].copy_from_slice(b"\x7fELF");
+        elf_data[4] = 2; // 64-bit
+        elf_data[5] = 1; // little-endian
+
+        let temp_file = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(temp_file.path(), &elf_data).unwrap();
+
+        let report = analyzer.analyze_structural(temp_file.path(), &elf_data);
+
+        // Should NOT have UPX packer finding
+        assert!(
+            !report.findings.iter().any(|f| f.id == "anti-static/packer/upx"),
+            "Should not have UPX finding for non-UPX binary"
         );
 
-        analyzer.merge_reports(&mut packed, unpacked);
-
-        // Should have only one finding with higher criticality
-        assert_eq!(packed.findings.len(), 1);
-        assert_eq!(packed.findings[0].crit, Criticality::Suspicious);
+        // Should NOT have unpacked file analysis
+        assert!(
+            report.files.is_empty(),
+            "Should not have unpacked FileAnalysis for non-UPX binary"
+        );
     }
 
     #[test]
-    fn test_merge_reports_findings_unique_added() {
-        let analyzer = ElfAnalyzer::new();
-        let mut packed = create_test_report();
-        let mut unpacked = create_test_report();
+    fn test_upx_path_encoding_format() {
+        use crate::types::file_analysis::encode_upx_path;
 
-        packed.findings.push(Finding::capability(
-            "net/socket".to_string(),
-            "Network socket".to_string(),
-            0.9,
-        ));
+        // Test basic path encoding
+        assert_eq!(encode_upx_path("/path/to/file.elf"), "/path/to/file.elf##upx@0");
 
-        unpacked.findings.push(Finding::capability(
-            "execution/shell".to_string(),
-            "Shell execution".to_string(),
-            0.9,
-        ));
-
-        analyzer.merge_reports(&mut packed, unpacked);
-
-        // Should have both findings
-        assert_eq!(packed.findings.len(), 2);
-        assert!(packed.findings.iter().any(|f| f.id == "net/socket"));
-        assert!(packed.findings.iter().any(|f| f.id == "execution/shell"));
-    }
-
-    #[test]
-    fn test_merge_reports_evidence_combined() {
-        let analyzer = ElfAnalyzer::new();
-        let mut packed = create_test_report();
-        let mut unpacked = create_test_report();
-
-        packed.findings.push(
-            Finding::capability("net/socket".to_string(), "Network socket".to_string(), 0.9)
-                .with_evidence(vec![Evidence {
-                    method: "symbol".to_string(),
-                    source: "goblin".to_string(),
-                    value: "socket".to_string(),
-                    location: None,
-                    ..Default::default()
-                }]),
+        // Test path with special characters
+        assert_eq!(
+            encode_upx_path("/tmp/test-file_v1.2.elf"),
+            "/tmp/test-file_v1.2.elf##upx@0"
         );
 
-        unpacked.findings.push(
-            Finding::capability("net/socket".to_string(), "Network socket".to_string(), 0.9)
-                .with_evidence(vec![Evidence {
-                    method: "symbol".to_string(),
-                    source: "goblin".to_string(),
-                    value: "connect".to_string(),
-                    location: None,
-                    ..Default::default()
-                }]),
+        // Test path that already has archive delimiter
+        assert_eq!(
+            encode_upx_path("archive.zip!!inner.elf"),
+            "archive.zip!!inner.elf##upx@0"
+        );
+    }
+
+    #[test]
+    fn test_upx_file_analysis_fields() {
+        use crate::types::file_analysis::{encode_upx_path, FileAnalysis};
+
+        // Create a FileAnalysis as if from UPX unpacking
+        let parent_path = "/test/sample.elf";
+        let virtual_path = encode_upx_path(parent_path);
+
+        let mut file = FileAnalysis::new(
+            1, // id (unpacked is typically id=1)
+            virtual_path.clone(),
+            "elf".to_string(),
+            "abc123def456".to_string(),
+            1000,
+        );
+        file.parent_id = Some(0);
+        file.depth = 1;
+        file.encoding = Some(vec!["upx".to_string()]);
+        file.compute_summary();
+
+        // Verify all UPX-specific fields
+        assert_eq!(file.id, 1);
+        assert_eq!(file.path, "/test/sample.elf##upx@0");
+        assert_eq!(file.parent_id, Some(0));
+        assert_eq!(file.depth, 1);
+        assert_eq!(file.encoding, Some(vec!["upx".to_string()]));
+        assert_eq!(file.file_type, "elf");
+    }
+
+    #[test]
+    fn test_upx_finding_criticality() {
+        use crate::upx::UPXDecompressor;
+
+        let analyzer = ElfAnalyzer::new();
+
+        let mut upx_data = vec![0u8; 256];
+        upx_data[0..4].copy_from_slice(b"\x7fELF");
+        upx_data[100..104].copy_from_slice(b"UPX!");
+
+        assert!(UPXDecompressor::is_upx_packed(&upx_data));
+
+        let temp_file = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(temp_file.path(), &upx_data).unwrap();
+
+        let report = analyzer.analyze_structural(temp_file.path(), &upx_data);
+
+        // Find the UPX finding
+        let upx_finding = report
+            .findings
+            .iter()
+            .find(|f| f.id == "anti-static/packer/upx");
+
+        assert!(upx_finding.is_some(), "Should have UPX finding");
+        let finding = upx_finding.unwrap();
+
+        // UPX packing is Suspicious criticality
+        assert_eq!(finding.crit, Criticality::Suspicious);
+        assert_eq!(finding.conf, 1.0);
+        assert_eq!(finding.desc, "Binary is packed with UPX");
+    }
+
+    #[test]
+    fn test_upx_tampered_magic_detection() {
+        use crate::upx::UPXDecompressor;
+
+        // Test tampered UPX magic variants (APX!, BPX!, etc.)
+        let mut data_apx = vec![0u8; 256];
+        data_apx[100..104].copy_from_slice(b"APX!");
+        assert!(
+            UPXDecompressor::is_upx_packed(&data_apx),
+            "Should detect APX! (tampered UPX)"
         );
 
-        analyzer.merge_reports(&mut packed, unpacked);
-
-        // Evidence should be combined
-        assert_eq!(packed.findings.len(), 1);
-        assert_eq!(packed.findings[0].evidence.len(), 2);
-    }
-
-    #[test]
-    fn test_merge_reports_strings_dedup() {
-        let analyzer = ElfAnalyzer::new();
-        let mut packed = create_test_report();
-        let mut unpacked = create_test_report();
-
-        packed.strings.push(StringInfo {
-            value: "hello".to_string(),
-            offset: Some(0x100),
-            encoding: "utf8".to_string(),
-            string_type: StringType::Const,
-            section: None,
-            encoding_chain: Vec::new(),
-            fragments: None,
-        });
-
-        // Same string value - should be deduped
-        unpacked.strings.push(StringInfo {
-            value: "hello".to_string(),
-            offset: Some(0x200),
-            encoding: "utf8".to_string(),
-            string_type: StringType::Const,
-            section: None,
-            encoding_chain: Vec::new(),
-            fragments: None,
-        });
-
-        // Different string - should be added
-        unpacked.strings.push(StringInfo {
-            value: "world".to_string(),
-            offset: Some(0x300),
-            encoding: "utf8".to_string(),
-            string_type: StringType::Const,
-            section: None,
-            encoding_chain: Vec::new(),
-            fragments: None,
-        });
-
-        analyzer.merge_reports(&mut packed, unpacked);
-
-        assert_eq!(packed.strings.len(), 2);
-        assert!(packed.strings.iter().any(|s| s.value == "hello"));
-        assert!(packed.strings.iter().any(|s| s.value == "world"));
-    }
-
-    #[test]
-    fn test_merge_reports_imports_dedup() {
-        let analyzer = ElfAnalyzer::new();
-        let mut packed = create_test_report();
-        let mut unpacked = create_test_report();
-
-        packed.imports.push(Import {
-            symbol: "printf".to_string(),
-            library: Some("libc.so.6".to_string()),
-            source: "goblin".to_string(),
-        });
-
-        // Same symbol - should be deduped
-        unpacked.imports.push(Import {
-            symbol: "printf".to_string(),
-            library: Some("libc.so.6".to_string()),
-            source: "goblin".to_string(),
-        });
-
-        // Different symbol - should be added
-        unpacked.imports.push(Import {
-            symbol: "malloc".to_string(),
-            library: Some("libc.so.6".to_string()),
-            source: "goblin".to_string(),
-        });
-
-        analyzer.merge_reports(&mut packed, unpacked);
-
-        assert_eq!(packed.imports.len(), 2);
-        assert!(packed.imports.iter().any(|i| i.symbol == "printf"));
-        assert!(packed.imports.iter().any(|i| i.symbol == "malloc"));
-    }
-
-    #[test]
-    fn test_merge_reports_exports_dedup() {
-        let analyzer = ElfAnalyzer::new();
-        let mut packed = create_test_report();
-        let mut unpacked = create_test_report();
-
-        packed.exports.push(Export {
-            symbol: "main".to_string(),
-            offset: Some("0x1000".to_string()),
-            source: "goblin".to_string(),
-        });
-
-        unpacked.exports.push(Export {
-            symbol: "main".to_string(),
-            offset: Some("0x2000".to_string()),
-            source: "goblin".to_string(),
-        });
-
-        unpacked.exports.push(Export {
-            symbol: "helper".to_string(),
-            offset: Some("0x3000".to_string()),
-            source: "goblin".to_string(),
-        });
-
-        analyzer.merge_reports(&mut packed, unpacked);
-
-        assert_eq!(packed.exports.len(), 2);
-    }
-
-    #[test]
-    fn test_merge_reports_functions_dedup() {
-        let analyzer = ElfAnalyzer::new();
-        let mut packed = create_test_report();
-        let mut unpacked = create_test_report();
-
-        packed.functions.push(Function {
-            name: "main".to_string(),
-            offset: Some("0x1000".to_string()),
-            size: Some(100),
-            complexity: Some(5),
-            calls: vec![],
-            source: "radare2".to_string(),
-            control_flow: None,
-            instruction_analysis: None,
-            register_usage: None,
-            constants: vec![],
-            properties: None,
-            signature: None,
-            nesting: None,
-            call_patterns: None,
-        });
-
-        unpacked.functions.push(Function {
-            name: "main".to_string(),
-            offset: Some("0x2000".to_string()),
-            size: Some(200),
-            complexity: Some(10),
-            calls: vec![],
-            source: "radare2".to_string(),
-            control_flow: None,
-            instruction_analysis: None,
-            register_usage: None,
-            constants: vec![],
-            properties: None,
-            signature: None,
-            nesting: None,
-            call_patterns: None,
-        });
-
-        unpacked.functions.push(Function {
-            name: "helper".to_string(),
-            offset: Some("0x3000".to_string()),
-            size: Some(50),
-            complexity: Some(2),
-            calls: vec![],
-            source: "radare2".to_string(),
-            control_flow: None,
-            instruction_analysis: None,
-            register_usage: None,
-            constants: vec![],
-            properties: None,
-            signature: None,
-            nesting: None,
-            call_patterns: None,
-        });
-
-        analyzer.merge_reports(&mut packed, unpacked);
-
-        assert_eq!(packed.functions.len(), 2);
-        assert!(packed.functions.iter().any(|f| f.name == "main"));
-        assert!(packed.functions.iter().any(|f| f.name == "helper"));
-    }
-
-    #[test]
-    fn test_merge_reports_sections_dedup() {
-        let analyzer = ElfAnalyzer::new();
-        let mut packed = create_test_report();
-        let mut unpacked = create_test_report();
-
-        packed.sections.push(Section {
-            name: ".text".to_string(),
-            address: Some(0x1000),
-            size: 1000,
-            entropy: 6.5,
-            permissions: Some("r-x".to_string()),
-        });
-
-        unpacked.sections.push(Section {
-            name: ".text".to_string(),
-            address: Some(0x1000),
-            size: 5000,
-            entropy: 5.5,
-            permissions: Some("r-x".to_string()),
-        });
-
-        unpacked.sections.push(Section {
-            name: ".data".to_string(),
-            address: Some(0x2000),
-            size: 2000,
-            entropy: 3.0,
-            permissions: Some("rw-".to_string()),
-        });
-
-        analyzer.merge_reports(&mut packed, unpacked);
-
-        assert_eq!(packed.sections.len(), 2);
-    }
-
-    #[test]
-    fn test_merge_reports_yara_matches_dedup() {
-        let analyzer = ElfAnalyzer::new();
-        let mut packed = create_test_report();
-        let mut unpacked = create_test_report();
-
-        packed.yara_matches.push(YaraMatch {
-            rule: "suspicious_strings".to_string(),
-            namespace: "malware".to_string(),
-            crit: "hostile".to_string(),
-            desc: "Suspicious strings detected".to_string(),
-            matched_strings: vec![],
-            is_capability: false,
-            mbc: None,
-            attack: None,
-            trait_id: None,
-        });
-
-        unpacked.yara_matches.push(YaraMatch {
-            rule: "suspicious_strings".to_string(),
-            namespace: "malware".to_string(),
-            crit: "hostile".to_string(),
-            desc: "Suspicious strings detected".to_string(),
-            matched_strings: vec![],
-            is_capability: false,
-            mbc: None,
-            attack: None,
-            trait_id: None,
-        });
-
-        unpacked.yara_matches.push(YaraMatch {
-            rule: "crypto_constants".to_string(),
-            namespace: "crypto".to_string(),
-            crit: "suspicious".to_string(),
-            desc: "Crypto constants found".to_string(),
-            matched_strings: vec![],
-            is_capability: false,
-            mbc: None,
-            attack: None,
-            trait_id: None,
-        });
-
-        analyzer.merge_reports(&mut packed, unpacked);
-
-        assert_eq!(packed.yara_matches.len(), 2);
-    }
-
-    #[test]
-    fn test_merge_reports_empty_unpacked() {
-        let analyzer = ElfAnalyzer::new();
-        let mut packed = create_test_report();
-        let unpacked = create_test_report();
-
-        packed.findings.push(Finding::capability(
-            "net/socket".to_string(),
-            "Network socket".to_string(),
-            0.9,
-        ));
-
-        analyzer.merge_reports(&mut packed, unpacked);
-
-        // Should still have original finding
-        assert_eq!(packed.findings.len(), 1);
-    }
-
-    #[test]
-    fn test_merge_reports_empty_packed() {
-        let analyzer = ElfAnalyzer::new();
-        let mut packed = create_test_report();
-        let mut unpacked = create_test_report();
-
-        unpacked.findings.push(Finding::capability(
-            "net/socket".to_string(),
-            "Network socket".to_string(),
-            0.9,
-        ));
-
-        analyzer.merge_reports(&mut packed, unpacked);
-
-        // Should have the unpacked finding
-        assert_eq!(packed.findings.len(), 1);
-    }
-
-    #[test]
-    fn test_merge_reports_criticality_keeps_higher() {
-        let analyzer = ElfAnalyzer::new();
-        let mut packed = create_test_report();
-        let mut unpacked = create_test_report();
-
-        // Packed has Hostile
-        packed.findings.push(
-            Finding::capability(
-                "malware/backdoor".to_string(),
-                "Backdoor detected".to_string(),
-                0.9,
-            )
-            .with_criticality(Criticality::Hostile),
+        let mut data_bpx = vec![0u8; 256];
+        data_bpx[100..104].copy_from_slice(b"BPX!");
+        assert!(
+            UPXDecompressor::is_upx_packed(&data_bpx),
+            "Should detect BPX! (tampered UPX)"
         );
 
-        // Unpacked has Suspicious (lower)
-        unpacked.findings.push(
-            Finding::capability(
-                "malware/backdoor".to_string(),
-                "Backdoor detected".to_string(),
-                0.9,
-            )
-            .with_criticality(Criticality::Suspicious),
+        let mut data_zpx = vec![0u8; 256];
+        data_zpx[100..104].copy_from_slice(b"ZPX!");
+        assert!(
+            UPXDecompressor::is_upx_packed(&data_zpx),
+            "Should detect ZPX! (tampered UPX)"
         );
 
-        analyzer.merge_reports(&mut packed, unpacked);
-
-        // Should keep Hostile (higher)
-        assert_eq!(packed.findings[0].crit, Criticality::Hostile);
-    }
-
-    #[test]
-    fn test_merge_reports_criticality_upgrades() {
-        let analyzer = ElfAnalyzer::new();
-        let mut packed = create_test_report();
-        let mut unpacked = create_test_report();
-
-        // Packed has Notable (lower)
-        packed.findings.push(
-            Finding::capability("net/socket".to_string(), "Network socket".to_string(), 0.9)
-                .with_criticality(Criticality::Notable),
+        // lowercase should NOT match
+        let mut data_lowercase = vec![0u8; 256];
+        data_lowercase[100..104].copy_from_slice(b"upx!");
+        assert!(
+            !UPXDecompressor::is_upx_packed(&data_lowercase),
+            "Should not detect lowercase upx!"
         );
-
-        // Unpacked has Hostile (higher)
-        unpacked.findings.push(
-            Finding::capability("net/socket".to_string(), "Network socket".to_string(), 0.9)
-                .with_criticality(Criticality::Hostile),
-        );
-
-        analyzer.merge_reports(&mut packed, unpacked);
-
-        // Should upgrade to Hostile
-        assert_eq!(packed.findings[0].crit, Criticality::Hostile);
     }
 }

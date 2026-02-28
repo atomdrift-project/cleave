@@ -82,13 +82,8 @@ traits:
       type: string
       regex: "\\b(bc1|[13])[a-zA-HJ-NP-Z0-9]{25,39}\\b"
 
-  - id: hardcoded-eth-addr
-    desc: Hardcoded Ethereum address
-    crit: notable
-    conf: 0.7
-    if:
-      type: string
-      regex: "\\b0x[a-fA-F0-9]{40}\\b"
+  # hardcoded-eth-addr: use canonical version from crypto-theft/clipboard/address-swap
+  # (removed to avoid duplicate pattern)
 
   - id: hardcoded-xmr-addr
     desc: Hardcoded Monero address
@@ -133,7 +128,7 @@ composite_rules:
     needs: 2
     any:
       - id: hardcoded-btc-addr
-      - id: hardcoded-eth-addr
+      - id: objectives/impact/crypto-theft/clipboard::eth-address-hardcoded
       - id: hardcoded-xmr-addr
 
   # Clipboard crypto hijacker

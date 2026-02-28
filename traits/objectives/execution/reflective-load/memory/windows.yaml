@@ -15,7 +15,7 @@ composite_rules:
     crit: suspicious
     conf: 0.95
     all:
-      - id: micro-behaviors/mem/load/reflective::memory-load-library-str
+      - id: micro-behaviors/process/create/load/memory-module::memory-load-library
     any:
       - id: micro-behaviors/mem/load/reflective::mz-signature-check
       - id: micro-behaviors/mem/load/reflective::payload-thread-str

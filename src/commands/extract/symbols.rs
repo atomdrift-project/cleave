@@ -2,6 +2,7 @@
 //!
 //! Extracts symbols (imports, exports, functions) from binary files and source code.
 //! Supports ELF, PE, Mach-O binaries as well as various script languages.
+//! Supports layer filtering (e.g., --layer upx@0 for UPX-unpacked content).
 
 use crate::analyzers::{
     self, detect_file_type, elf::ElfAnalyzer, macho::MachOAnalyzer, pe::PEAnalyzer, Analyzer,
@@ -10,10 +11,115 @@ use crate::analyzers::{
 use crate::cli;
 use crate::commands::shared::SymbolInfo;
 use crate::radare2::Radare2Analyzer;
+use crate::types::file_analysis::ENCODING_DELIMITER;
 use anyhow::Result;
+use std::fs;
 use std::path::Path;
 
-pub(crate) fn run(target: &str, format: &cli::OutputFormat) -> Result<String> {
+pub(crate) fn run(target: &str, layer: Option<&str>, format: &cli::OutputFormat) -> Result<String> {
+    // If a layer is specified, we need to run full analysis to get that layer's data
+    if let Some(layer_name) = layer {
+        return run_with_layer(target, layer_name, format);
+    }
+    run_direct(target, format)
+}
+
+/// Run symbol extraction with layer filtering (requires full analysis)
+fn run_with_layer(target: &str, layer: &str, format: &cli::OutputFormat) -> Result<String> {
+    let path = Path::new(target);
+    if !path.exists() {
+        anyhow::bail!("File does not exist: {}", target);
+    }
+
+    let data = fs::read(path)?;
+    let file_type = detect_file_type(path)?;
+
+    // Run full analysis to get all layers
+    let capability_mapper = crate::capabilities::CapabilityMapper::empty();
+    let mut report = match file_type {
+        FileType::Elf => ElfAnalyzer::new()
+            .with_capability_mapper(capability_mapper)
+            .analyze_structural(path, &data),
+        FileType::Pe => PEAnalyzer::new()
+            .with_capability_mapper(capability_mapper)
+            .analyze_structural(path, &data)?,
+        FileType::MachO => MachOAnalyzer::new()
+            .with_capability_mapper(capability_mapper)
+            .analyze(path)?,
+        _ => anyhow::bail!("Layer filtering only supported for binary files (ELF, PE, Mach-O)"),
+    };
+
+    // Convert to v2 format to populate files array
+    report.convert_to_v2(true);
+
+    // Find the requested layer
+    let layer_suffix = format!("{}{}", ENCODING_DELIMITER, layer);
+    let file_analysis = report
+        .files
+        .iter()
+        .find(|f| f.path.ends_with(&layer_suffix))
+        .ok_or_else(|| {
+            let available: Vec<_> = report
+                .files
+                .iter()
+                .filter_map(|f| {
+                    f.path
+                        .rfind(ENCODING_DELIMITER)
+                        .map(|idx| &f.path[idx + ENCODING_DELIMITER.len()..])
+                })
+                .collect();
+            if available.is_empty() {
+                anyhow::anyhow!(
+                    "Layer '{}' not found. No encoded layers in this file.",
+                    layer
+                )
+            } else {
+                anyhow::anyhow!(
+                    "Layer '{}' not found. Available layers: {}",
+                    layer,
+                    available.join(", ")
+                )
+            }
+        })?;
+
+    // Convert FileAnalysis symbols to SymbolInfo
+    let mut symbols: Vec<SymbolInfo> = Vec::new();
+
+    for import in &file_analysis.imports {
+        symbols.push(SymbolInfo {
+            name: import.symbol.clone(),
+            address: None,
+            library: import.library.clone(),
+            symbol_type: "import".to_string(),
+            source: import.source.clone(),
+        });
+    }
+
+    for export in &file_analysis.exports {
+        symbols.push(SymbolInfo {
+            name: export.symbol.clone(),
+            address: export.offset.clone(),
+            library: None,
+            symbol_type: "export".to_string(),
+            source: export.source.clone(),
+        });
+    }
+
+    for func in &file_analysis.functions {
+        symbols.push(SymbolInfo {
+            name: func.name.clone(),
+            address: func.offset.clone(),
+            library: None,
+            symbol_type: "function".to_string(),
+            source: func.source.clone(),
+        });
+    }
+
+    format_symbols_output(&symbols, target, format)
+}
+
+/// Direct symbol extraction without layer filtering (fast path)
+fn run_direct(target: &str, format: &cli::OutputFormat) -> Result<String> {
     let path = Path::new(target);
     if !path.exists() {
         anyhow::bail!("File does not exist: {}", target);
@@ -177,7 +283,17 @@ pub(crate) fn run(target: &str, format: &cli::OutputFormat) -> Result<String> {
         anyhow::bail!("Unable to detect file type for: {}", target);
     }
 
+    format_symbols_output(&symbols, target, format)
+}
+
+/// Format symbols output for display
+fn format_symbols_output(
+    symbols: &[SymbolInfo],
+    target: &str,
+    format: &cli::OutputFormat,
+) -> Result<String> {
     // Sort symbols by address (if available), then by name
+    let mut symbols: Vec<_> = symbols.to_vec();
     symbols.sort_by(|a, b| {
         match (&a.address, &b.address) {
             (Some(addr_a), Some(addr_b)) => {
@@ -213,8 +329,8 @@ pub(crate) fn run(target: &str, format: &cli::OutputFormat) -> Result<String> {
                 "", "", "", ""
             ));
 
-            for sym in symbols {
-                let addr = sym.address.unwrap_or_else(|| "-".to_string());
+            for sym in &symbols {
+                let addr = sym.address.as_deref().unwrap_or("-");
                 let lib = sym.library.as_deref().unwrap_or("-");
                 output.push_str(&format!(
                     "{:<18} {:<12} {:<20} {}\n",

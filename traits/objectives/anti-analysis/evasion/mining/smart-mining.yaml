@@ -59,14 +59,8 @@ traits:
       type: string
       substr: "GetLastInputInfo"
 
-  - id: get-foreground-window
-    desc: GetForegroundWindow API
-    crit: notable
-    conf: 0.6
-    for: [pe, dll]
-    if:
-      type: string
-      substr: "GetForegroundWindow"
+  # get-foreground-window: use canonical version from micro-behaviors/ui/window/manage
+  # (removed to avoid tier violation)
 
   - id: get-idle-time
     desc: GetIdleTime function
@@ -141,7 +135,7 @@ traits:
     conf: 0.6
     if:
       type: string
-      regex: "(?i)cpu.?(usage|percent|load)"
+      regex: "(?i)cpu.?(usage|percent|utilization)"
 
 composite_rules:
   # Monitoring tool checks

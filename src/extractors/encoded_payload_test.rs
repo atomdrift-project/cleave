@@ -166,24 +166,39 @@ payload2 = base64.b64decode('aW1wb3J0IHN5czsgc3lzLmV4aXQoMCk7IHByaW50KCdmaW5pc2h
 
     #[test]
     fn test_recursion_depth_limit() {
-        // Create deeply nested encoding: base64(base64(base64(...)))
-        // Using longer initial data to ensure it remains >= 50 chars after 5 levels
-        // "import os; os.system('whoami'); print('test complete now')" = 49 chars
-        let mut data = b"import os; os.system('whoami'); print('test complete now')".to_vec();
-        for _ in 0..5 {
-            data = general_purpose::STANDARD.encode(&data).into_bytes();
-        }
+        // Test that decompress_and_nest stops at MAX_RECURSION_DEPTH=3
+        // Create base64(base64(base64(base64(base64(code))))) - 5 levels of nesting
+        // The function should stop decoding after 3 levels
+        let original = b"import os; os.system('whoami'); print('done')";
 
-        let content = String::from_utf8_lossy(&data);
-        let payloads = extract_encoded_payloads_from_content(content.as_bytes());
+        // Encode 5 levels deep
+        let level1 = general_purpose::STANDARD.encode(original);
+        let level2 = general_purpose::STANDARD.encode(&level1);
+        let level3 = general_purpose::STANDARD.encode(&level2);
+        let level4 = general_purpose::STANDARD.encode(&level3);
+        let level5 = general_purpose::STANDARD.encode(&level4);
 
-        // Should stop at 3 levels
-        assert!(!payloads.is_empty(), "Should extract at least 1 payload");
+        // Call decompress_and_nest directly with initial chain
+        let initial_chain = vec!["base64".to_string()]; // Simulating stng's first decode
+        let (final_data, final_chain) =
+            super::super::decompress_and_nest(level5.as_bytes(), initial_chain, 0);
 
-        // Cleanup
-        for payload in payloads {
-            let _ = std::fs::remove_file(&payload.temp_path);
-        }
+        // Should have stopped at depth 3 (initial + 3 more = 4 total base64 entries)
+        // But we start at depth 0, so we get 3 more decodings max
+        assert!(
+            final_chain.len() <= 4,
+            "Should stop decoding at depth limit, got {} entries: {:?}",
+            final_chain.len(),
+            final_chain
+        );
+
+        // The final data should still be base64 (not fully decoded to original)
+        // because we stopped before reaching the innermost level
+        let final_str = String::from_utf8_lossy(&final_data);
+        assert!(
+            final_str != String::from_utf8_lossy(original),
+            "Should not fully decode - recursion limit should stop early"
+        );
     }
 
     #[test]

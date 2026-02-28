@@ -36,8 +36,7 @@ traits:
     crit: suspicious
     conf: 0.85
     if:
-      type: string
-      regex: '\b(1|3)[1-9A-HJ-NP-Za-km-z]{25,34}\b'
+      id: btc-address-hardcoded
       count_min: 2
 
   # --- Ethereum addresses ---
@@ -54,8 +53,7 @@ traits:
     crit: suspicious
     conf: 0.85
     if:
-      type: string
-      regex: '\b0x[a-fA-F0-9]{40}\b'
+      id: eth-address-hardcoded
       count_min: 2
 
   # --- Monero addresses ---

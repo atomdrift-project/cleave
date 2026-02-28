@@ -7,6 +7,7 @@ defaults:
 
 traits:
   # === Memory Manipulation for Code Execution ===
+  # These traits reference micro-behaviors and add downgrade/unless rules for context
   - id: write-process-memory
     desc: Write memory to target process
     crit: notable
@@ -14,8 +15,7 @@ traits:
     attack: "T1055"
     mbc: "C0032"
     if:
-      type: string
-      exact: "WriteProcessMemory"
+      id: micro-behaviors/process/injection/hollowing::write-process-memory
     downgrade:
       any:
         - type: string
@@ -68,8 +68,7 @@ traits:
     conf: 0.95
     attack: "T1055"
     if:
-      type: symbol
-      exact: "SetThreadContext"
+      id: micro-behaviors/process/injection/hollowing::set-thread-context
     # API set forwarding stubs export these symbols as forwarders,
     # not as actual injection implementations.
     downgrade:
@@ -87,8 +86,7 @@ traits:
     conf: 0.90
     attack: "T1005"
     if:
-      type: symbol
-      exact: "GetThreadContext"
+      id: micro-behaviors/process/injection/hollowing::get-thread-context
     # API set forwarding stubs export these symbols as forwarders,
     # not as actual injection implementations.
     downgrade:
@@ -123,8 +121,7 @@ traits:
     conf: 0.90
     attack: "T1055"
     if:
-      type: symbol
-      exact: "ResumeThread"
+      id: micro-behaviors/process/injection/hollowing::resume-thread
     unless:
       - type: metrics
         field: binary.import_count

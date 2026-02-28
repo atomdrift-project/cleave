@@ -16,14 +16,7 @@ traits:
       type: string
       substr: "go-sqlite3"
 
-  - id: crypt-unprotect-data
-    desc: CryptUnprotectData Windows API
-    crit: notable
-    conf: 0.75
-    for: [pe]
-    if:
-      type: symbol
-      exact: "CryptUnprotectData"
+  # crypt-unprotect-data: removed, use micro-behaviors/crypto/dpapi/decrypt::crypt-unprotect-data
 
   # === AWS credential harvesting ===
   # Removed: os-getenv was a pure alias to micro-behaviors/os/env/access::os-getenv
@@ -70,5 +63,5 @@ composite_rules:
     conf: 0.85
     any:
       - { id: browser-cred-harvest }
-      - { id: crypt-unprotect-data }
+      - { id: micro-behaviors/crypto/dpapi/decrypt::crypt-unprotect-data }
       - { id: aws-cred-harvest }

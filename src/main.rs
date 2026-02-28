@@ -451,17 +451,19 @@ fn main() -> Result<()> {
             results.join("")
         }
         Some(cli::Command::Diff { old, new }) => diff_command(&old, &new, &format)?,
-        Some(cli::Command::Strings { target, min_length }) => {
-            commands::extract::strings::run(&target, min_length, &format)?
+        Some(cli::Command::Strings {
+            target,
+            min_length,
+            layer,
+        }) => commands::extract::strings::run(&target, min_length, layer.as_deref(), &format)?,
+        Some(cli::Command::Symbols { target, layer }) => {
+            commands::extract::symbols::run(&target, layer.as_deref(), &format)?
         }
-        Some(cli::Command::Symbols { target }) => {
-            commands::extract::symbols::run(&target, &format)?
+        Some(cli::Command::Sections { target, layer }) => {
+            commands::extract::sections::run(&target, layer.as_deref(), &format)?
         }
-        Some(cli::Command::Sections { target }) => {
-            commands::extract::sections::run(&target, &format)?
-        }
-        Some(cli::Command::Metrics { target }) => {
-            commands::extract::metrics::run(&target, &format, &disabled)?
+        Some(cli::Command::Metrics { target, layer }) => {
+            commands::extract::metrics::run(&target, layer.as_deref(), &format, &disabled)?
         }
         Some(cli::Command::TestRules { target, rules }) => test_rules(
             &target,

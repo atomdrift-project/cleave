@@ -323,6 +323,14 @@ pub(crate) fn encode_decoded_path(parent: &str, encoding: &[String], offset: usi
     )
 }
 
+/// Encode a UPX-unpacked content path
+///
+/// Example: encode_upx_path("sample.elf") -> "sample.elf##upx@0"
+#[must_use]
+pub(crate) fn encode_upx_path(parent: &str) -> String {
+    format!("{}{}upx@0", parent, ENCODING_DELIMITER)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -649,6 +657,16 @@ mod tests {
             encode_decoded_path("file.py", &["base64".to_string(), "gzip".to_string()], 1234),
             "file.py##base64+gzip@1234"
         );
+    }
+
+    #[test]
+    fn test_encode_upx_path() {
+        assert_eq!(encode_upx_path("sample.elf"), "sample.elf##upx@0");
+    }
+
+    #[test]
+    fn test_encode_upx_path_with_directory() {
+        assert_eq!(encode_upx_path("/tmp/sample.elf"), "/tmp/sample.elf##upx@0");
     }
 
     #[test]

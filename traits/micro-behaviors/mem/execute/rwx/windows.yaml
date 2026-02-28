@@ -9,14 +9,9 @@ defaults:
   mbc: "E1055"
 
 traits:
-  # RWX memory allocation
-  - id: page-execute-readwrite
-    desc: PAGE_EXECUTE_READWRITE allocation
-    crit: suspicious
-    conf: 0.85
-    if:
-      type: string
-      substr: "PAGE_EXECUTE_READWRITE"
+  # page-execute-readwrite: use canonical version from mem/allocate/executable
+  # This composite references the canonical definition
+  # (removed to avoid duplicate pattern)
 
   - id: page-execute-read
     desc: PAGE_EXECUTE_READ allocation
@@ -81,7 +76,7 @@ composite_rules:
     crit: suspicious
     conf: 0.85
     any:
-      - id: page-execute-readwrite
+      - id: micro-behaviors/mem/allocate/executable::page-execute-readwrite
       - id: exec-read-commit
 
   - id: code-injection-flush

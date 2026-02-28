@@ -75,13 +75,8 @@ traits:
       type: string
       regex: "\\[0-9\\]\\{16\\}"
 
-  - id: cc-regex-pattern
-    desc: Credit card format regex
-    crit: suspicious
-    conf: 0.9
-    if:
-      type: string
-      regex: "\\d{4}.?\\d{4}.?\\d{4}.?\\d{4}"
+  # cc-regex-pattern: removed (too broad, matches hex strings)
+  # Use cc-regex-16digit for detecting CC validation regex in code
 
   # Card prefix detection (BIN ranges)
   - id: visa-bin
@@ -117,22 +112,16 @@ traits:
       type: string
       regex: "(?i)expir(y|ation)"
 
-  # Chromium autofill database
+  # Chromium autofill database - use autofill only (Web Data is in chromium/paths.yaml)
   - id: autofill-db
     desc: Chromium autofill database
     crit: suspicious
     conf: 0.85
     if:
       type: string
-      regex: "(?i)(Web Data|autofill)"
+      regex: "(?i)autofill"
 
-  - id: credit-cards-table
-    desc: credit_cards database table
-    crit: suspicious
-    conf: 0.9
-    if:
-      type: string
-      substr: "credit_cards"
+  # credit-cards-table: removed, use micro-behaviors/fs/path/sensitive/browser::browser-credit-cards
 
 composite_rules:
   # Card type detection

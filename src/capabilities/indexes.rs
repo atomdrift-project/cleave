@@ -1015,7 +1015,7 @@ impl RawContentRegexIndex {
         // Build smaller RegexSet for ONLY patterns without extractable literals
         let no_literal_patterns: Vec<&str> = patterns_without_literals
             .iter()
-            .filter_map(|&idx| pattern_strs.get(idx).map(|s| s.as_str()))
+            .filter_map(|&idx| pattern_strs.get(idx).map(String::as_str))
             .collect();
         let no_literal_to_original: Vec<usize> = patterns_without_literals.clone();
         let no_literal_regex_set = if !no_literal_patterns.is_empty() {

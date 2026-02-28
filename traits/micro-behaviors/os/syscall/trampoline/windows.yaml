@@ -55,7 +55,7 @@ traits:
     conf: 0.8
     if:
       type: string
-      regex: "\\bssn\\b"
+      word: "ssn"
 
   # Syscall wrapper suffix pattern
   - id: syscall-suffix-pattern

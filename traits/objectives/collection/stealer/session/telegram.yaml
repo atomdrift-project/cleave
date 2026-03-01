@@ -1,0 +1,15 @@
+# Telegram Session Stealing
+# Targets Telegram Desktop session data
+
+defaults:
+  for: [all]
+
+traits:
+  - id: telegram-tdata-access
+    desc: Access to Telegram tdata directory (session hijacking)
+    crit: suspicious
+    conf: 0.95
+    attack: T1539
+    if:
+      type: string
+      regex: '(?i)Telegram Desktop\\tdata'

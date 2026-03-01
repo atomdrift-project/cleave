@@ -225,6 +225,7 @@ composite_rules:
     mbc: "B0030"
     attack: "T1027.009"
     for: [pe, dll]
+    size_max: 5242880 # 5MB limit for dropper
     all:
       - id: micro-behaviors/data/embedded/payload::pe-resource-full-extraction
       - id: micro-behaviors/io/console/output::write-file
@@ -235,6 +236,7 @@ composite_rules:
     downgrade:
       any:
         - id: metadata/vendor/microsoft::is-microsoft-named
+        - id: metadata/quality/versioning::pe-version-resource
 
   # PE resource dropper with process scanning (anti-AV reconnaissance)
   # Combines resource extraction + file write + process enumeration
@@ -247,6 +249,7 @@ composite_rules:
     mbc: "B0030"
     attack: "T1027.009"
     for: [pe, dll]
+    size_max: 5242880
     all:
       - id: micro-behaviors/data/embedded/payload::pe-resource-full-extraction
       - id: micro-behaviors/io/console/output::write-file
@@ -254,6 +257,7 @@ composite_rules:
     downgrade:
       any:
         - id: metadata/vendor/microsoft::is-microsoft-named
+        - id: metadata/quality/versioning::pe-version-resource
 
   # PE resource dropper that stages payload in temp and launches it, while
   # also showing persistence/evasion behavior. Tuned for reusable behavior,
@@ -265,6 +269,7 @@ composite_rules:
     mbc: "B0030"
     attack: "T1027.009"
     for: [pe, dll]
+    size_max: 5242880
     all:
       - id: micro-behaviors/data/embedded/payload::pe-resource-full-extraction
       - id: micro-behaviors/fs/temp/directory::temp-file-staging-primitives

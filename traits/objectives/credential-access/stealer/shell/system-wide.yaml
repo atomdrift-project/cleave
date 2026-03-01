@@ -1,0 +1,14 @@
+# System-Wide Shell Stealing
+# Detects broad entitlements combined with shell execution capability
+
+composite_rules:
+  - id: system-wide-shell-stealer
+    desc: MacOS shell stealer with root file system read access
+    crit: hostile
+    conf: 0.95
+    attack: T1059.004
+    all:
+      - id: metadata/entitlements::temporary-exception-files-read
+    any:
+      - id: micro-behaviors/process/create/shell::system-fn
+      - id: micro-behaviors/process/create/shell::c-popen

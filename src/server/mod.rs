@@ -32,6 +32,13 @@ pub struct ServerConfig {
     pub timeout_secs: u64,
     /// Maximum request body size in bytes.
     pub max_body_size: usize,
+    /// Directories allowed for local file path analysis via /analyze-path endpoint.
+    /// Empty means the feature is disabled.
+    /// DANGEROUS: Only enable when server is bound to localhost.
+    pub allowed_local_paths: Vec<std::path::PathBuf>,
+    /// Directory for extracting archive contents.
+    /// When set, archive members are extracted here and paths are included in responses.
+    pub extract_dir: Option<std::path::PathBuf>,
 }
 
 impl Default for ServerConfig {
@@ -41,6 +48,8 @@ impl Default for ServerConfig {
             qps: 100,
             timeout_secs: 120,
             max_body_size: 100 * 1024 * 1024, // 100 MB
+            allowed_local_paths: Vec::new(),
+            extract_dir: None,
         }
     }
 }
@@ -54,6 +63,11 @@ pub struct AppState {
     pub timeout_secs: u64,
     /// Maximum request body size in bytes.
     pub max_body_size: usize,
+    /// Directories allowed for local file path analysis.
+    /// Empty means the feature is disabled.
+    pub allowed_local_paths: Vec<std::path::PathBuf>,
+    /// Directory for extracting archive contents.
+    pub extract_dir: Option<std::path::PathBuf>,
 }
 
 /// Start the HTTP server with the given configuration.
@@ -72,10 +86,25 @@ pub async fn run(config: ServerConfig) -> anyhow::Result<()> {
 
     eprintln!("Resources loaded");
 
+    let allowed_local_paths = config.allowed_local_paths.clone();
+    let extract_dir = config.extract_dir.clone();
+
+    if !allowed_local_paths.is_empty() {
+        eprintln!(
+            "WARNING: /analyze-path endpoint enabled for directories: {:?}",
+            allowed_local_paths
+        );
+    }
+    if let Some(ref dir) = extract_dir {
+        eprintln!("Extract directory: {:?}", dir);
+    }
+
     let state = Arc::new(AppState {
         rate_limiter: RateLimiter::new(config.qps),
         timeout_secs: config.timeout_secs,
         max_body_size: config.max_body_size,
+        allowed_local_paths,
+        extract_dir,
     });
 
     // Spawn background task to clean up stale rate limiter entries
@@ -93,6 +122,7 @@ pub async fn run(config: ServerConfig) -> anyhow::Result<()> {
     let app = Router::new()
         .route("/health", get(handlers::health))
         .route("/analyze", post(analyze_with_headers))
+        .route("/analyze-path", post(handlers::analyze_path))
         .layer(RequestBodyLimitLayer::new(config.max_body_size))
         .layer(middleware::from_fn_with_state(
             Arc::clone(&state),

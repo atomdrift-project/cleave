@@ -126,6 +126,34 @@ traits:
       type: string
       regex: "%APPDATA%.{0,50}\\.(exe|dll)|AppData.{0,30}Roaming.{0,50}\\.exe"
 
+  # Legacy/Unusual App Masquerading
+  - id: legacy-app-lotus
+    desc: Legacy Lotus Approach registry path (masquerading)
+    crit: suspicious
+    conf: 0.85
+    for: [all]
+    if:
+      type: string
+      regex: 'Software\\Lotus\\Approach'
+
+  - id: legacy-app-borland
+    desc: Legacy Borland Delphi registry path (masquerading)
+    crit: suspicious
+    conf: 0.85
+    for: [all]
+    if:
+      type: string
+      regex: 'Software\\Borland\\Delphi'
+
+  - id: legacy-app-netscape
+    desc: Legacy Netscape Navigator registry path (masquerading)
+    crit: suspicious
+    conf: 0.85
+    for: [all]
+    if:
+      type: string
+      regex: 'Software\\Netscape\\Netscape Navigator'
+
 composite_rules:
   # Helper: Run key paths (references existing rule for CurrentVersion\Run)
   - id: run-key-path

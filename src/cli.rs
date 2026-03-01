@@ -556,6 +556,18 @@ pub(crate) enum Command {
         /// Max upload size in MB (default: 100)
         #[arg(long, default_value = "100")]
         max_size_mb: u64,
+
+        /// DANGEROUS: Allow analyzing local file paths via /analyze-path endpoint.
+        /// Comma-separated list of directories to allow access to (e.g., "/data/samples,/tmp/test").
+        /// Only paths within these directories can be analyzed.
+        #[arg(long)]
+        dangerous_local_file_paths: Option<String>,
+
+        /// Directory for extracting archive contents.
+        /// When set, archive members are extracted here and paths are included in responses.
+        /// This directory is automatically added to allowed local paths.
+        #[arg(long)]
+        extract_dir: Option<String>,
     },
 }
 

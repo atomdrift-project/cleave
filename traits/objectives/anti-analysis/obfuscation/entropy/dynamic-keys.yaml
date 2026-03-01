@@ -1,0 +1,15 @@
+# Dynamic Key Generation for Obfuscation
+# Detects random data access near decryption/deobfuscation patterns
+
+composite_rules:
+  - id: dynamic-obfuscation-key-gen
+    desc: Possible dynamic key generation for payload decryption
+    crit: suspicious
+    conf: 0.85
+    attack: T1027
+    all:
+      - id: micro-behaviors/hardware/random/device::urandom
+    any:
+      - id: objectives/anti-analysis/self-modify/runtime::xor-loop-pattern
+      - id: objectives/anti-static/obfuscation/logic::xor-ror-decryption-loop
+    near_bytes: 1024

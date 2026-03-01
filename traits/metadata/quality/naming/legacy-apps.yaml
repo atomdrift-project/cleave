@@ -1,0 +1,51 @@
+# Fossil or Legacy Application Strings
+# These paths are common in modern malware for masquerading/obfuscation
+
+defaults:
+  crit: suspicious
+  conf: 0.85
+  for: [all]
+
+traits:
+  - id: registry-path-lotus
+    desc: Legacy Lotus Approach registry path
+    if:
+      type: string
+      regex: '(?i)Software\\Lotus\\Approach'
+
+  - id: registry-path-borland
+    desc: Legacy Borland Delphi registry path
+    if:
+      type: string
+      regex: '(?i)Software\\Borland\\Delphi'
+
+  - id: registry-path-netscape
+    desc: Legacy Netscape Navigator registry path
+    if:
+      type: string
+      regex: '(?i)Software\\Netscape\\Netscape Navigator'
+
+  - id: registry-path-aol
+    desc: Legacy AOL Desktop registry path
+    if:
+      type: string
+      regex: '(?i)Software\\AOL\\Desktop'
+
+  - id: registry-path-compuserve
+    desc: Legacy Compuserve registry path
+    if:
+      type: string
+      regex: '(?i)Software\\Compuserve'
+
+  - id: registry-path-symantec-act
+    desc: Legacy Symantec ACT! registry path
+    if:
+      type: string
+      regex: '(?i)Software\\Symantec\\ACT!'
+
+  - id: obsolete-app-marker
+    desc: Obsolete application marker (Lotus, Borland, Netscape)
+    conf: 0.8
+    if:
+      type: string
+      regex: '(?i)(Lotus Approach|Borland Delphi|Netscape Navigator|Netscape Communicator)'

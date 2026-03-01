@@ -12,28 +12,36 @@ traits:
   # ============================================================================
   # HTTP/2 Internal Types (net/http internals that survive garbling)
   # ============================================================================
-  - id: go-http2-framer
+  - id: go-http2-framer-internals
     desc: Go HTTP/2 framer internals
     conf: 0.85
     if:
       type: raw
-      regex: 'http2Framer|http2Frame[A-Z]'
-      count_min: 3
+      regex: 'http2Frame[A-Z]'
+      count_min: 2
 
-  - id: go-http2-frames
+  - id: go-http2-frame-types
     desc: Go HTTP/2 frame types
     conf: 0.85
     if:
       type: raw
-      regex: 'http2(Ping|GoAway|Data|Settings|Headers|RST|Window|Continuation)Frame'
+      regex: 'http2(Ping|GoAway|Data|Settings)Frame'
       count_min: 2
 
-  - id: go-http2-transport
+  - id: go-http2-frame-headers
+    desc: Go HTTP/2 frame headers/control
+    conf: 0.85
+    if:
+      type: raw
+      regex: 'http2(Headers|RST|Window|Continuation)Frame'
+      count_min: 2
+
+  - id: go-http2-transport-internals
     desc: Go HTTP/2 transport internals
     conf: 0.85
     if:
       type: raw
-      regex: 'http2(Transport|ClientConn|clientStream|noDialClientConnPool)'
+      regex: 'http2(clientStream|noDialClientConnPool)'
       count_min: 2
 
   # ============================================================================
@@ -59,71 +67,120 @@ traits:
   # golang.org/x/crypto/cryptobyte - ASN.1 parsing library
   # Very distinctive method names that survive garbling
   # ============================================================================
-  - id: go-cryptobyte-asn1
-    desc: Go cryptobyte ASN.1 parsing (x/crypto)
+  - id: go-cryptobyte-asn1-core
+    desc: Go cryptobyte ASN.1 core
     crit: suspicious
     conf: 0.9
     if:
       type: raw
-      regex: 'ReadASN1(Integer|Boolean|BitString|ObjectIdentifier|Element|GeneralizedTime|UTCTime)?'
-      count_min: 3
+      regex: 'ReadASN1(Integer|Boolean|BitString|ObjectIdentifier)'
+      count_min: 2
+
+  - id: go-cryptobyte-asn1-types
+    desc: Go cryptobyte ASN.1 types
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: raw
+      regex: 'ReadASN1(Element|GeneralizedTime|UTCTime)'
+      count_min: 2
 
   - id: go-cryptobyte-methods
     desc: Go cryptobyte buffer methods
     conf: 0.85
     if:
       type: raw
-      regex: 'ReadUint(8|16|24|32)LengthPrefixed|ReadOptionalASN1'
+      regex: 'ReadUint(8|16|24|32)LengthPrefixed'
       count_min: 2
 
   # ============================================================================
   # Proxy/SOCKS Internal Types
   # ============================================================================
-  - id: go-proxy-internals
-    desc: Go proxy function internals
+  - id: go-proxy-connect-header
+    desc: Go proxy connect header
     crit: suspicious
     conf: 0.85
     if:
       type: raw
-      regex: 'ProxyFunc|ProxyConnectHeader|OnProxyConnectResponse|isProxy'
-      count_min: 2
+      exact: "ProxyConnectHeader"
+
+  - id: go-proxy-connect-response
+    desc: Go proxy connect response
+    crit: suspicious
+    conf: 0.85
+    if:
+      type: raw
+      exact: "OnProxyConnectResponse"
+
+  - id: go-proxy-is-proxy
+    desc: Go proxy detection internal
+    crit: suspicious
+    conf: 0.8
+    if:
+      type: raw
+      word: "isProxy"
 
   # ============================================================================
   # encoding/base64 - Encode/Decode method signatures
   # ============================================================================
-  - id: go-base64-methods
-    desc: Go base64 encoding methods
+  - id: go-base64-encode
+    desc: Go base64 encoding
     conf: 0.75
     if:
       type: raw
-      regex: '\.(Encode|Decode)(ToString|dLen)?|AppendEncode|AppendDecode'
-      count_min: 3
+      regex: '\.Encode(ToString|dLen)?|AppendEncode'
+      count_min: 2
+
+  - id: go-base64-decode
+    desc: Go base64 decoding
+    conf: 0.75
+    if:
+      type: raw
+      regex: '\.Decode(ToString|dLen)?|AppendDecode'
+      count_min: 2
 
   # ============================================================================
   # bytes.Buffer internal signatures
   # ============================================================================
-  - id: go-bytes-buffer
-    desc: Go bytes.Buffer operations
+  - id: go-bytes-buffer-io
+    desc: Go bytes.Buffer I/O
     conf: 0.7
     if:
       type: raw
-      regex: '\.(ReadFrom|WriteTo|ReadByte|WriteByte|WriteString)\b'
-      count_min: 4
+      regex: '\.(ReadFrom|WriteTo)'
+      count_min: 2
+
+  - id: go-bytes-buffer-methods
+    desc: Go bytes.Buffer methods
+    conf: 0.7
+    if:
+      type: raw
+      regex: '\.(ReadByte|WriteByte|WriteString)\b'
+      count_min: 3
 
   # ============================================================================
   # Composite Rules: Detect garbled Go with specific capabilities
   # ============================================================================
 
 composite_rules:
+  - id: go-http2-transport-core
+    desc: Go HTTP/2 transport core
+    conf: 0.85
+    all:
+      - id: go-http-internal-http2transport
+      - id: go-http-internal-http2clientconn
+
   # Helper: HTTP/2 capability present
   - id: go-http2-present
     desc: "Go HTTP/2 internals present"
     crit: notable
     conf: 0.85
     any:
-      - id: go-http2-framer
-      - id: go-http2-frames
-      - id: go-http2-transport
+      - id: go-http2-framer-internals
+      - id: go-http2-frame-types
+      - id: go-http2-frame-headers
+      - id: go-http2-transport-core
+      - id: go-http2-transport-internals
 
   # Helper: TLS internals present
   - id: go-tls-present
@@ -133,6 +190,16 @@ composite_rules:
     any:
       - id: go-tls-handshake-internals
       - id: go-tls-cipher-internals
+
+  # Helper: Cryptobyte present
+  - id: go-cryptobyte-present
+    desc: "Go cryptobyte ASN.1 parsing present"
+    crit: notable
+    conf: 0.85
+    any:
+      - id: go-cryptobyte-asn1-core
+      - id: go-cryptobyte-asn1-types
+      - id: go-cryptobyte-methods
 
   # Helper: Garble indicators present
   - id: go-garble-indicators
@@ -160,8 +227,16 @@ composite_rules:
     conf: 0.9
     all:
       - id: metadata/compiler::go-binary
-      - id: go-cryptobyte-asn1
+      - id: go-cryptobyte-present
       - id: go-garble-indicators
+
+  - id: go-proxy-internals-core
+    desc: Go proxy function internals
+    crit: suspicious
+    conf: 0.85
+    all:
+      - id: go-proxy-connect-header
+      - id: go-proxy-connect-response
 
   # Garbled Go with proxy capability
   - id: go-garbled-proxy-client
@@ -170,8 +245,10 @@ composite_rules:
     conf: 0.85
     all:
       - id: metadata/compiler::go-binary
-      - id: go-proxy-internals
       - id: go-garble-indicators
+    any:
+      - id: go-proxy-internals-core
+      - id: go-proxy-is-proxy
 
   # Full C2 profile: Garbled Go + HTTP/2 + TLS + cryptobyte
   - id: go-garbled-c2-profile
@@ -180,7 +257,7 @@ composite_rules:
     conf: 0.95
     all:
       - id: metadata/compiler::go-binary
-      - id: go-cryptobyte-asn1
+      - id: go-cryptobyte-present
       - id: go-http2-present
       - id: go-tls-present
       - id: go-garble-indicators

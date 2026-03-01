@@ -1,0 +1,16 @@
+# Service Typosquatting
+# Detects minor variations of security service names
+
+defaults:
+  for: [all]
+
+traits:
+  - id: defender-typosquat
+    desc: Typosquatted Windows Defender service name
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: string
+      regex: 'WindowsDefender[A-Z0-9]\b'
+      not:
+        - exact: "WindowsDefender.exe"

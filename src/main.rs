@@ -585,16 +585,52 @@ fn main() -> Result<()> {
             qps,
             timeout,
             max_size_mb,
+            dangerous_local_file_paths,
+            extract_dir,
         }) => {
             let bind_addr: std::net::SocketAddr = bind.parse().context(format!(
                 "Invalid bind address '{}'. Expected format: IP:PORT (e.g., 127.0.0.1:8080)",
                 bind
             ))?;
+            // Parse comma-separated directories into canonicalized PathBufs
+            let mut allowed_local_paths: Vec<std::path::PathBuf> = dangerous_local_file_paths
+                .map(|s| {
+                    s.split(',')
+                        .map(|p| p.trim())
+                        .filter(|p| !p.is_empty())
+                        .map(|p| {
+                            std::path::Path::new(p)
+                                .canonicalize()
+                                .unwrap_or_else(|_| std::path::PathBuf::from(p))
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+
+            // Handle extract_dir: canonicalize and add to allowed paths
+            let extract_dir_path = extract_dir.map(|p| {
+                let path = std::path::PathBuf::from(&p);
+                // Create the directory if it doesn't exist
+                if !path.exists() {
+                    std::fs::create_dir_all(&path).ok();
+                }
+                path.canonicalize().unwrap_or(path)
+            });
+
+            // Auto-add extract_dir to allowed paths
+            if let Some(ref extract_path) = extract_dir_path {
+                if !allowed_local_paths.contains(extract_path) {
+                    allowed_local_paths.push(extract_path.clone());
+                }
+            }
+
             let config = cleave::server::ServerConfig {
                 bind: bind_addr,
                 qps,
                 timeout_secs: timeout,
                 max_body_size: (max_size_mb * 1024 * 1024) as usize,
+                allowed_local_paths,
+                extract_dir: extract_dir_path,
             };
             // Run the async server
             let rt = tokio::runtime::Runtime::new().context("Failed to create tokio runtime")?;

@@ -71,7 +71,11 @@ pub fn detect_language(string_info: &StringInfo, is_encoded: bool) -> Option<Fil
         StringType::PythonCode => return Some(FileType::Python),
         StringType::JavaScriptCode => return Some(FileType::JavaScript),
         StringType::PhpCode => return Some(FileType::Php),
-        StringType::ShellCmd => return Some(FileType::Shell),
+        StringType::ShellCmd => {
+            if is_real_shell(value) {
+                return Some(FileType::Shell);
+            }
+        }
         // If not classified as code, classify it now
         _ => {
             // Classify using stng (tree-sitter strings come through here)
@@ -80,13 +84,44 @@ pub fn detect_language(string_info: &StringInfo, is_encoded: bool) -> Option<Fil
                 StringType::PythonCode => return Some(FileType::Python),
                 StringType::JavaScriptCode => return Some(FileType::JavaScript),
                 StringType::PhpCode => return Some(FileType::Php),
-                StringType::ShellCmd => return Some(FileType::Shell),
+                StringType::ShellCmd => {
+                    if is_real_shell(value) {
+                        return Some(FileType::Shell);
+                    }
+                }
                 _ => {}
             }
         }
     }
 
     None
+}
+
+/// Additional heuristic to filter out false positive shell detection (like foreign languages)
+fn is_real_shell(value: &str) -> bool {
+    // If it has a shebang, it's definitely a script
+    if value.starts_with("#!") {
+        return true;
+    }
+
+    // Look for common shell keywords/patterns that are rare in natural language
+    let keywords = [
+        "sudo ", "grep ", "curl ", "wget ", "chmod ", "chown ", "apt-get ",
+        "yum ", "systemctl ", "service ", "export ", "unset ", "alias ",
+        "2>&1", "> /dev/null", " | sh", " | bash", "rm -rf ", "mkdir -p ",
+        "tail -f ", "cat <<", "EOF",
+    ];
+
+    if keywords.iter().any(|&k| value.contains(k)) {
+        return true;
+    }
+
+    // Check for variable assignment followed by usage
+    if value.contains('=') && (value.contains('$') || value.contains("${")) {
+        return true;
+    }
+
+    false
 }
 
 /// Calculate Shannon entropy of data

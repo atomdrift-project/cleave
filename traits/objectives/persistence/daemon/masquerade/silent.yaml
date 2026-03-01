@@ -1,0 +1,15 @@
+# Silent Daemon Persistence with Masquerading
+# Detects background process creation combined with generic/misleading identity
+
+composite_rules:
+  - id: silent-daemon-masquerade
+    desc: Silent background daemon with masqueraded identity
+    crit: hostile
+    conf: 0.95
+    attack: T1543.001
+    all:
+      - id: objectives/persistence/daemon/init::daemon-fork
+      - id: objectives/persistence/daemon/init::daemon-setsid
+    any:
+      - id: objectives/lateral-movement/social-engineering/masquerading::generic-bundle-id-pattern
+      - id: objectives/lateral-movement/social-engineering/masquerading::generic-executable-name

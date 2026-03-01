@@ -1,0 +1,16 @@
+# CPUID Instruction Detection
+# Used for hypervisor/VM detection
+
+defaults:
+  crit: notable
+  conf: 0.9
+
+traits:
+  - id: cpuid-instruction
+    desc: CPUID instruction (hypervisor fingerprinting)
+    crit: notable
+    conf: 0.95
+    for: [pe, elf, macho]
+    if:
+      type: hex
+      pattern: "0F A2"

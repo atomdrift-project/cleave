@@ -1,0 +1,13 @@
+# Environmental Fingerprinting via Hardware Interrogation
+# Detects clusters of instructions like CPUID, RDTSC, etc.
+
+composite_rules:
+  - id: hardware-interrogation-cluster
+    desc: High density of hardware interrogation instructions
+    crit: suspicious
+    conf: 0.95
+    attack: T1497.001
+    all:
+      - id: micro-behaviors/anti-analysis/vm/detect::cpuid-instruction
+      - id: micro-behaviors/anti-analysis/vm/detect::rdtsc-instruction
+    near_bytes: 512

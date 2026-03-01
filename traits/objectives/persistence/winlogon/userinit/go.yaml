@@ -1,0 +1,87 @@
+# Winlogon Userinit Persistence
+# Detects persistence via Winlogon Userinit registry modification
+# MBC: F0012 (Persistence)
+# ATT&CK: T1547.004 (Winlogon Helper DLL)
+
+defaults:
+  mbc: "F0012"
+  attack: "T1547.004"
+  platforms: [windows]
+
+traits:
+  # Winlogon registry path
+  - id: winlogon-path
+    desc: Winlogon registry path
+    crit: suspicious
+    conf: 0.9
+    for: [go, elf, macho, pe, powershell, batch]
+    if:
+      type: string
+      substr: "Microsoft\\Windows NT\\CurrentVersion\\Winlogon"
+
+  - id: winlogon-short
+    desc: Winlogon key reference
+    crit: notable
+    conf: 0.8
+    for: [go, elf, macho, pe]
+    if:
+      type: string
+      word: "Winlogon"
+
+  # Userinit value
+  - id: userinit-value
+    desc: Userinit registry value
+    crit: suspicious
+    conf: 0.95
+    for: [go, elf, macho, pe, powershell]
+    if:
+      type: string
+      word: "Userinit"
+
+  # Shell value (alternative persistence)
+  - id: shell-value
+    desc: Shell registry value
+    crit: notable
+    conf: 0.8
+    for: [go, elf, macho, pe]
+    if:
+      type: string
+      regex: "Winlogon.{0,50}Shell"
+
+  # Notify value
+  - id: notify-value
+    desc: Winlogon Notify subkey
+    crit: suspicious
+    conf: 0.9
+    for: [go, elf, macho, pe]
+    if:
+      type: string
+      regex: "Winlogon.{0,30}Notify"
+
+composite_rules:
+  # Winlogon registry access
+  - id: winlogon-access
+    desc: Winlogon registry access
+    crit: suspicious
+    conf: 0.85
+    for: [go, elf, macho, pe]
+    all:
+      - id: winlogon-path
+    any:
+      - id: userinit-value
+      - id: shell-value
+      - id: notify-value
+
+  # Winlogon Userinit persistence
+  # Complexity: all(2) + for(1) = 3
+  - id: winlogon-userinit-persistence
+    desc: Winlogon Userinit persistence
+    crit: hostile
+    conf: 0.95
+    for: [go, elf, macho, pe]
+    all:
+      - id: winlogon-path
+      - id: userinit-value
+    any:
+      - id: objectives/persistence/registry/run-key::registry-set-string
+      - id: objectives/persistence/registry/run-key::masquerade-name

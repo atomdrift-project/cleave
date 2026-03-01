@@ -1,0 +1,127 @@
+# C2 via Tor Hidden Service
+# Detects command-and-control infrastructure using Tor onion services
+# This is a strong indicator of RAT/malware infrastructure
+# MBC: B0030 (C2 Communication)
+# ATT&CK: T1090.003 (Multi-hop Proxy)
+
+defaults:
+  mbc: "B0030"
+  attack: "T1090.003"
+
+traits:
+  # Embedded onion address (C2 indicator)
+  - id: embedded-onion-c2
+    desc: Embedded .onion C2 address
+    crit: suspicious
+    conf: 0.9
+    for: [go, elf, macho, pe]
+    if:
+      type: string
+      regex: "[a-z2-7]{56}\\.onion:[0-9]+"
+
+  # C2 port patterns - atomic traits
+  - id: onion-port-1337
+    desc: Onion service on port 1337
+    crit: suspicious
+    conf: 0.9
+    for: [go, elf, macho, pe]
+    if:
+      type: string
+      substr: ".onion:1337"
+
+  - id: onion-port-4444
+    desc: Onion service on port 4444
+    crit: suspicious
+    conf: 0.9
+    for: [go, elf, macho, pe]
+    if:
+      type: string
+      substr: ".onion:4444"
+
+  - id: onion-port-9001
+    desc: Onion service on port 9001
+    crit: suspicious
+    conf: 0.85
+    for: [go, elf, macho, pe]
+    if:
+      type: string
+      substr: ".onion:9001"
+
+  # Hidden service server setup
+  - id: hidden-service-listener
+    desc: Tor hidden service listener setup
+    crit: suspicious
+    conf: 0.9
+    for: [go]
+    if:
+      type: string
+      regex: "Listen.{0,20}onion|onion.{0,20}Listen"
+
+  - id: create-hidden-service
+    desc: CreateHiddenService call
+    crit: suspicious
+    conf: 0.9
+    for: [go]
+    if:
+      type: string
+      word: "CreateHiddenService"
+
+composite_rules:
+  # Helper: C2 port patterns
+  - id: onion-c2-port
+    desc: Tor C2 with common RAT ports
+    crit: suspicious
+    conf: 0.85
+    for: [go, elf, macho, pe]
+    any:
+      - id: onion-port-1337
+      - id: onion-port-4444
+      - id: onion-port-9001
+
+  # Helper: Hidden service setup
+  - id: hidden-service-setup
+    desc: Hidden service setup operations
+    crit: suspicious
+    conf: 0.9
+    for: [go]
+    any:
+      - id: hidden-service-listener
+      - id: create-hidden-service
+
+  # Tor C2 infrastructure
+  # Complexity: all(2) + for(1) = 3
+  - id: tor-c2-infrastructure
+    desc: Tor hidden service C2 infrastructure
+    crit: suspicious
+    conf: 0.95
+    for: [go]
+    all:
+      - id: micro-behaviors/communications/tor/hidden-service::bine-import
+    any:
+      - id: embedded-onion-c2
+      - id: onion-c2-port
+      - id: hidden-service-setup
+
+  # Tor C2 with RPC (RAT pattern)
+  # Complexity: all(3) + for(1) = 4 >= 4 HOSTILE
+  - id: tor-rpc-c2
+    desc: Tor hidden service with RPC C2
+    crit: hostile
+    conf: 0.98
+    for: [go]
+    all:
+      - id: micro-behaviors/communications/tor/hidden-service::bine-import
+      - id: micro-behaviors/communications/rpc/server::rpc-register
+      - id: micro-behaviors/communications/tor/hidden-service::onion-address-v3
+
+  # Tor C2 in binary
+  # Complexity: all(3) + for(1) = 4 >= 4 HOSTILE
+  - id: tor-c2-binary
+    desc: Compiled binary with Tor C2 infrastructure
+    crit: hostile
+    conf: 0.95
+    for: [elf, macho, pe]
+    all:
+      - id: micro-behaviors/communications/tor/hidden-service::bine-string
+      - id: micro-behaviors/communications/tor/hidden-service::onion-address-v3
+      - id: micro-behaviors/communications/rpc/server::rpc-register-string

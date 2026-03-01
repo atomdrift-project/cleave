@@ -1,0 +1,98 @@
+# Go Directory Enumeration
+# Detects directory listing and file enumeration
+# MBC: E1083 (File and Directory Discovery)
+# ATT&CK: T1083 (File and Directory Discovery)
+
+defaults:
+  mbc: "E1083"
+  attack: "T1083"
+
+traits:
+  # Directory reading
+  - id: readdir-call
+    desc: os.ReadDir directory listing
+    crit: baseline
+    conf: 0.6
+    for: [go]
+    if:
+      type: ast
+      kind: call
+      exact: "os.ReadDir"
+
+  - id: ioutil-readdir
+    desc: ioutil.ReadDir directory listing (deprecated)
+    crit: baseline
+    conf: 0.6
+    for: [go]
+    if:
+      type: ast
+      kind: call
+      exact: "ioutil.ReadDir"
+
+  - id: file-readdir
+    desc: File.Readdir method
+    crit: baseline
+    conf: 0.6
+    for: [go]
+    if:
+      type: ast
+      kind: call
+      regex: "\\.Readdir\\(|\\.ReadDir\\("
+
+  # Working directory manipulation
+  - id: chdir-call
+    desc: os.Chdir working directory change
+    crit: notable
+    conf: 0.7
+    for: [go]
+    if:
+      type: ast
+      kind: call
+      exact: "os.Chdir"
+
+  - id: getwd-call
+    desc: os.Getwd get working directory
+    crit: baseline
+    conf: 0.5
+    for: [go]
+    if:
+      type: ast
+      kind: call
+      exact: "os.Getwd"
+
+  # filepath.Walk for recursive enumeration
+  - id: filepath-walk
+    desc: filepath.Walk recursive directory traversal
+    crit: notable
+    conf: 0.7
+    for: [go]
+    if:
+      type: ast
+      kind: call
+      regex: "filepath\\.Walk|filepath\\.WalkDir"
+
+  # Note: ReadDir binary pattern is in objectives/command-and-control/implant
+  # We use AST detection for source code instead
+
+composite_rules:
+  # Directory enumeration capability
+  - id: directory-enumeration
+    desc: Directory enumeration capability
+    crit: notable
+    conf: 0.7
+    for: [go]
+    any:
+      - id: readdir-call
+      - id: ioutil-readdir
+      - id: file-readdir
+      - id: filepath-walk
+
+  # Working directory manipulation
+  - id: workdir-manipulation
+    desc: Working directory manipulation
+    crit: notable
+    conf: 0.75
+    for: [go]
+    all:
+      - id: chdir-call
+      - id: getwd-call

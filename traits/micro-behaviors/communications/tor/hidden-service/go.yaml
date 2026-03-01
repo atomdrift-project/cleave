@@ -1,0 +1,143 @@
+# Go Tor Hidden Service Capabilities
+# Detects Tor integration for anonymous C2 communication
+# MBC: C0026 (Proxy Communication)
+# ATT&CK: T1090.003 (Multi-hop Proxy)
+
+defaults:
+  mbc: "C0026"
+  attack: "T1090.003"
+
+traits:
+  # bine library (embedded Tor)
+  - id: bine-import
+    desc: cretz/bine Tor library import
+    crit: suspicious
+    conf: 0.95
+    for: [go]
+    if:
+      type: ast
+      kind: import
+      regex: "github\\.com/cretz/bine"
+
+  - id: bine-string
+    desc: cretz/bine Tor library in binary
+    crit: suspicious
+    conf: 0.9
+    for: [elf, macho, pe]
+    if:
+      type: string
+      regex: "github\\.com/cretz/bine"
+
+  # Tor dialer patterns
+  - id: tor-dialer
+    desc: Tor Dialer creation
+    crit: suspicious
+    conf: 0.9
+    for: [go]
+    if:
+      type: ast
+      kind: call
+      regex: "tor\\.Dialer|Dialer\\("
+
+  - id: tor-start
+    desc: Tor process start
+    crit: suspicious
+    conf: 0.9
+    for: [go]
+    if:
+      type: ast
+      kind: call
+      exact: "tor.Start"
+
+  # Hidden service patterns
+  - id: listen-hidden-service
+    desc: Tor hidden service listener
+    crit: suspicious
+    conf: 0.95
+    for: [go]
+    if:
+      type: string
+      word: "HiddenServicePort"
+
+  - id: onion-key
+    desc: Tor onion service key handling
+    crit: suspicious
+    conf: 0.9
+    for: [go, elf, macho, pe]
+    if:
+      type: string
+      exact: "hs_private"
+
+  # .onion address patterns (v3 onion = 56 chars)
+  - id: onion-address-v3
+    desc: Tor v3 onion address
+    crit: suspicious
+    conf: 0.85
+    for: [go, elf, macho, pe, text]
+    if:
+      type: string
+      regex: "[a-z2-7]{56}\\.onion"
+
+  - id: onion-address-v2
+    desc: Tor v2 onion address (deprecated)
+    crit: suspicious
+    conf: 0.85
+    for: [go, elf, macho, pe, text]
+    if:
+      type: string
+      regex: "[a-z2-7]{16}\\.onion"
+
+  # go-libtor (statically linked Tor)
+  - id: go-libtor
+    desc: go-libtor embedded Tor
+    crit: suspicious
+    conf: 0.95
+    for: [go, elf, macho, pe]
+    if:
+      type: string
+      substr: "go-libtor"
+
+composite_rules:
+  # Helper: Tor library detection
+  - id: tor-library
+    desc: Tor library usage
+    crit: suspicious
+    conf: 0.9
+    any:
+      - id: bine-import
+      - id: bine-string
+      - id: go-libtor
+
+  # Helper: Tor operations
+  - id: tor-operations
+    desc: Tor network operations
+    crit: notable
+    conf: 0.85
+    any:
+      - id: tor-dialer
+      - id: tor-start
+
+  # Helper: Hidden service indicators
+  - id: hidden-service-setup
+    desc: Hidden service configuration
+    crit: suspicious
+    conf: 0.9
+    any:
+      - id: listen-hidden-service
+      - id: onion-key
+
+  - id: tor-client
+    desc: Tor client connectivity
+    crit: suspicious
+    conf: 0.9
+    all:
+      - id: tor-library
+      - id: tor-operations
+
+  - id: tor-hidden-service
+    desc: Tor hidden service setup
+    crit: suspicious
+    conf: 0.95
+    all:
+      - id: tor-library
+      - id: hidden-service-setup

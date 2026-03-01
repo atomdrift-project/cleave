@@ -1,0 +1,123 @@
+# Go Screenshot Capture Capabilities
+# Detects screen capture for surveillance/data collection
+# MBC: E1113 (Screen Capture)
+# ATT&CK: T1113 (Screen Capture)
+
+defaults:
+  mbc: "E1113"
+  attack: "T1113"
+
+traits:
+  # vova616/screenshot library
+  - id: screenshot-import
+    desc: vova616/screenshot library import
+    crit: notable
+    conf: 0.9
+    for: [go]
+    if:
+      type: ast
+      kind: import
+      regex: "vova616/screenshot|screenshot"
+
+  - id: screenshot-string
+    desc: screenshot library in binary
+    crit: notable
+    conf: 0.85
+    for: [elf, macho, pe]
+    if:
+      type: string
+      regex: "vova616/screenshot|screenshot\\.Capture"
+
+  # kbinani/screenshot (alternative library)
+  - id: kbinani-screenshot
+    desc: kbinani/screenshot library
+    crit: notable
+    conf: 0.9
+    for: [go]
+    if:
+      type: ast
+      kind: import
+      regex: "kbinani/screenshot"
+
+  # Screenshot capture calls
+  - id: capture-screen
+    desc: Screen capture function call
+    crit: notable
+    conf: 0.85
+    for: [go]
+    if:
+      type: ast
+      kind: call
+      regex: "screenshot\\.Capture|CaptureScreen|GetScreenshot"
+
+  - id: capture-rect
+    desc: Screen region capture
+    crit: notable
+    conf: 0.8
+    for: [go]
+    if:
+      type: ast
+      kind: call
+      exact: "screenshot.CaptureRect"
+
+  # Display bounds (prep for screenshot)
+  - id: display-bounds
+    desc: Display bounds enumeration
+    crit: baseline
+    conf: 0.7
+    for: [go]
+    if:
+      type: ast
+      kind: call
+      regex: "screenshot\\.GetDisplayBounds|NumActiveDisplays"
+
+  # PNG encoding (common for screenshots)
+  - id: png-encode-screen
+    desc: PNG encoding for screen capture
+    crit: baseline
+    conf: 0.6
+    for: [go]
+    if:
+      type: ast
+      kind: call
+      exact: "png.Encode"
+
+  # robotgo (automation + screenshots)
+  - id: robotgo-capture
+    desc: robotgo screen capture
+    crit: notable
+    conf: 0.85
+    for: [go]
+    if:
+      type: string
+      regex: "robotgo\\.CaptureScreen|robotgo\\.SaveCapture"
+
+composite_rules:
+  # Helper: Screenshot library
+  - id: screenshot-library
+    desc: Screenshot library usage
+    crit: notable
+    conf: 0.85
+    any:
+      - id: screenshot-import
+      - id: screenshot-string
+      - id: kbinani-screenshot
+
+  # Helper: Capture operations
+  - id: capture-operations
+    desc: Screen capture operations
+    crit: notable
+    conf: 0.8
+    any:
+      - id: capture-screen
+      - id: capture-rect
+      - id: robotgo-capture
+
+  - id: go-screen-capture
+    desc: Go screen capture capability
+    crit: notable
+    conf: 0.9
+    for: [go]
+    all:
+      - id: screenshot-library
+      - id: capture-operations

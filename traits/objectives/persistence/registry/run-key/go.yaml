@@ -1,0 +1,206 @@
+# Windows Registry Run Key Persistence
+# Detects persistence via HKCU/HKLM Run keys with masquerading
+# MBC: F0012 (Persistence)
+# ATT&CK: T1547.001 (Registry Run Keys)
+
+defaults:
+  mbc: "F0012"
+  attack: "T1547.001"
+  platforms: [windows]
+
+traits:
+  # Run key paths
+  - id: hkcu-run-key
+    desc: HKCU Run registry key path
+    crit: notable
+    conf: 0.8
+    for: [go, elf, macho, pe]
+    if:
+      type: string
+      regex: "HKCU.{0,20}\\\\Software\\\\Microsoft\\\\Windows\\\\CurrentVersion\\\\Run"
+
+  - id: hklm-run-key
+    desc: HKLM Run registry key path
+    crit: notable
+    conf: 0.8
+    for: [go, elf, macho, pe]
+    if:
+      type: string
+      regex: "HKLM.{0,20}\\\\Software\\\\Microsoft\\\\Windows\\\\CurrentVersion\\\\Run"
+
+  # Note: CurrentVersion\Run detection is in objectives/persistence/startup/registry
+  # We reference it via composite rule instead of duplicating
+
+  # Registry manipulation imports
+  - id: registry-import
+    desc: Windows registry package import
+    crit: baseline
+    conf: 0.9
+    for: [go]
+    if:
+      type: ast
+      kind: import
+      exact: "golang.org/x/sys/windows/registry"
+
+  # Registry key operations
+  - id: registry-open-key
+    desc: Registry OpenKey call
+    crit: notable
+    conf: 0.75
+    for: [go]
+    if:
+      type: ast
+      kind: call
+      regex: "registry\\.OpenKey|OpenKey\\("
+
+  - id: registry-set-string-value
+    desc: Registry SetStringValue call
+    crit: notable
+    conf: 0.8
+    for: [go]
+    if:
+      type: ast
+      kind: call
+      exact: "SetStringValue"
+
+  - id: registry-set-dword-value
+    desc: Registry SetDWordValue call
+    crit: notable
+    conf: 0.8
+    for: [go]
+    if:
+      type: ast
+      kind: call
+      exact: "SetDWordValue"
+
+  # Masquerading names (common fake service names)
+  - id: masquerade-windows-defender
+    desc: WindowsDefender masquerade name
+    crit: suspicious
+    conf: 0.9
+    for: [go, elf, macho, pe]
+    if:
+      type: string
+      regex: "WindowsDefender[^.]|OneDriveUpdate|MicrosoftEdgeUpdate"
+      not:
+        - substr: "Windows Defender"
+        - substr: "microsoft.com"
+        - substr: "WindowsDefender.exe"
+        - substr: "WindowsDefender.dll"
+
+  # Fake system service names - atomic traits
+  - id: masquerade-system-update
+    desc: SystemUpdate masquerade name
+    crit: notable
+    conf: 0.8
+    for: [go, elf, macho, pe]
+    if:
+      type: string
+      word: "SystemUpdate"
+
+  - id: masquerade-security-health
+    desc: SecurityHealth masquerade name
+    crit: notable
+    conf: 0.8
+    for: [go, elf, macho, pe]
+    if:
+      type: string
+      word: "SecurityHealth"
+
+  - id: masquerade-trusted-installer
+    desc: TrustedInstaller masquerade name
+    crit: notable
+    conf: 0.8
+    for: [go, elf, macho, pe]
+    if:
+      type: string
+      word: "TrustedInstaller"
+
+  # AppData installation path
+  - id: appdata-install-path
+    desc: AppData installation path
+    crit: notable
+    conf: 0.75
+    for: [go, elf, macho, pe]
+    if:
+      type: string
+      regex: "%APPDATA%.{0,50}\\.(exe|dll)|AppData.{0,30}Roaming.{0,50}\\.exe"
+
+composite_rules:
+  # Helper: Run key paths (references existing rule for CurrentVersion\Run)
+  - id: run-key-path
+    desc: Registry Run key path
+    crit: notable
+    conf: 0.8
+    for: [go, elf, macho, pe]
+    any:
+      - id: hkcu-run-key
+      - id: hklm-run-key
+      - id: objectives/persistence/startup/registry::currentversion-run
+
+  # Helper: Registry set operations
+  - id: registry-set-string
+    desc: Registry set value operations
+    crit: notable
+    conf: 0.8
+    for: [go]
+    any:
+      - id: registry-set-string-value
+      - id: registry-set-dword-value
+
+  # Helper: System service masquerade
+  - id: masquerade-system-service
+    desc: System service masquerade names
+    crit: notable
+    conf: 0.8
+    for: [go, elf, macho, pe]
+    any:
+      - id: masquerade-system-update
+      - id: masquerade-security-health
+      - id: masquerade-trusted-installer
+
+  # Helper: Masquerade names
+  - id: masquerade-name
+    desc: Service masquerade name
+    crit: suspicious
+    conf: 0.85
+    for: [go, elf, macho, pe]
+    any:
+      - id: masquerade-windows-defender
+      - id: masquerade-system-service
+
+  # Registry Run key persistence
+  - id: run-key-persistence
+    desc: Registry Run key persistence
+    crit: suspicious
+    conf: 0.9
+    for: [go]
+    all:
+      - id: registry-import
+      - id: registry-set-string
+      - id: run-key-path
+
+  # Run key with masquerading
+  # Complexity: all(4) + for(1) = 5 >= 4 HOSTILE
+  - id: run-key-masquerade
+    desc: Registry Run key with service masquerading
+    crit: hostile
+    conf: 0.95
+    for: [go]
+    all:
+      - id: registry-import
+      - id: registry-set-string
+      - id: run-key-path
+      - id: masquerade-name
+
+  # AppData + Run key (dropper pattern)
+  # Complexity: all(3) + for(1) = 4 >= 4 HOSTILE
+  - id: appdata-run-persistence
+    desc: AppData installation with Run key persistence
+    crit: hostile
+    conf: 0.95
+    for: [go, elf, macho, pe]
+    all:
+      - id: appdata-install-path
+      - id: run-key-path
+      - id: masquerade-name

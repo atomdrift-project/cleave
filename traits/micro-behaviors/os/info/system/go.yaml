@@ -1,0 +1,125 @@
+# Go System Information Discovery
+# Detects OS and system information gathering
+# MBC: E1082 (System Information Discovery)
+# ATT&CK: T1082 (System Information Discovery)
+
+defaults:
+  mbc: "E1082"
+  attack: "T1082"
+
+traits:
+  # runtime OS detection
+  - id: runtime-goos
+    desc: runtime.GOOS OS detection
+    crit: baseline
+    conf: 0.5
+    for: [go]
+    if:
+      type: ast
+      kind: selector
+      exact: "runtime.GOOS"
+
+  - id: runtime-goarch
+    desc: runtime.GOARCH architecture detection
+    crit: baseline
+    conf: 0.5
+    for: [go]
+    if:
+      type: ast
+      kind: selector
+      exact: "runtime.GOARCH"
+
+  - id: runtime-numcpu
+    desc: runtime.NumCPU CPU count
+    crit: baseline
+    conf: 0.5
+    for: [go]
+    if:
+      type: ast
+      kind: call
+      exact: "runtime.NumCPU"
+
+  # Hostname
+  - id: os-hostname
+    desc: os.Hostname() call
+    crit: notable
+    conf: 0.7
+    for: [go]
+    if:
+      type: ast
+      kind: call
+      exact: "os.Hostname"
+
+  - id: hostname-string
+    desc: Hostname in binary
+    crit: notable
+    conf: 0.65
+    for: [elf, macho, pe]
+    if:
+      type: string
+      word: "Hostname"
+
+  # Username
+  - id: user-current
+    desc: user.Current() call
+    crit: notable
+    conf: 0.7
+    for: [go]
+    if:
+      type: ast
+      kind: call
+      exact: "user.Current"
+
+  - id: os-getuid
+    desc: os.Getuid() call
+    crit: notable
+    conf: 0.7
+    for: [go]
+    if:
+      type: ast
+      kind: call
+      exact: "os.Getuid"
+
+  # Executable path
+  - id: os-executable
+    desc: os.Executable() self path
+    crit: notable
+    conf: 0.7
+    for: [go]
+    if:
+      type: ast
+      kind: call
+      exact: "os.Executable"
+
+  # Process ID
+  - id: os-getpid
+    desc: os.Getpid() call
+    crit: baseline
+    conf: 0.5
+    for: [go]
+    if:
+      type: ast
+      kind: call
+      exact: "os.Getpid"
+
+composite_rules:
+  # System fingerprinting
+  - id: system-fingerprint
+    desc: System fingerprinting capability
+    crit: notable
+    conf: 0.75
+    for: [go]
+    any:
+      - id: os-hostname
+      - id: user-current
+      - id: os-executable
+
+  # Full system reconnaissance
+  - id: full-system-recon
+    desc: Full system reconnaissance
+    crit: suspicious
+    conf: 0.85
+    for: [go]
+    all:
+      - id: os-hostname
+      - id: user-current

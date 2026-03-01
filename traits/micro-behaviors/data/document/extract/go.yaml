@@ -1,0 +1,111 @@
+# Go Document Text Extraction
+# Detects libraries that extract text from documents (PDF, DOCX, etc.)
+# MBC: E1119 (Automated Collection)
+# ATT&CK: T1119 (Automated Collection)
+
+defaults:
+  mbc: "E1119"
+  attack: "T1119"
+
+traits:
+  # lu4p/cat library (used by ToRat)
+  - id: lu4p-cat-import
+    desc: lu4p/cat document extraction library
+    crit: suspicious
+    conf: 0.9
+    for: [go]
+    if:
+      type: ast
+      kind: import
+      regex: "github\\.com/lu4p/cat|lu4p/cat"
+
+  - id: lu4p-cat-string
+    desc: lu4p/cat library in binary
+    crit: suspicious
+    conf: 0.85
+    for: [elf, macho, pe]
+    if:
+      type: string
+      substr: "lu4p/cat"
+
+  # cat.File() call
+  - id: cat-file-call
+    desc: cat.File document extraction call
+    crit: suspicious
+    conf: 0.9
+    for: [go]
+    if:
+      type: ast
+      kind: call
+      regex: "cat\\.File|cat\\.Doc"
+
+  # PDF extraction libraries
+  - id: pdfcpu-import
+    desc: pdfcpu PDF library
+    crit: notable
+    conf: 0.7
+    for: [go]
+    if:
+      type: ast
+      kind: import
+      regex: "pdfcpu"
+
+  - id: unipdf-import
+    desc: unipdf PDF library
+    crit: notable
+    conf: 0.7
+    for: [go]
+    if:
+      type: ast
+      kind: import
+      regex: "unidoc/unipdf"
+
+  # DOCX extraction
+  - id: docx-import
+    desc: DOCX parsing library
+    crit: notable
+    conf: 0.7
+    for: [go]
+    if:
+      type: ast
+      kind: import
+      regex: "baliance/gooxml|nguyenthenguyen/docx"
+
+  # Generic document keywords - atomic traits
+  - id: extract-text-string
+    desc: ExtractText function
+    crit: notable
+    conf: 0.75
+    for: [go, elf, macho, pe]
+    if:
+      type: string
+      word: "ExtractText"
+
+  - id: parse-document-string
+    desc: ParseDocument function
+    crit: notable
+    conf: 0.75
+    for: [go, elf, macho, pe]
+    if:
+      type: string
+      word: "ParseDocument"
+
+composite_rules:
+  # Document extraction library
+  - id: document-extractor
+    desc: Document text extraction capability
+    crit: suspicious
+    conf: 0.85
+    any:
+      - id: lu4p-cat-import
+      - id: lu4p-cat-string
+      - id: cat-file-call
+
+  # PDF extraction
+  - id: pdf-extraction
+    desc: PDF text extraction
+    crit: notable
+    conf: 0.75
+    any:
+      - id: pdfcpu-import
+      - id: unipdf-import

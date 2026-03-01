@@ -1,0 +1,175 @@
+# WMI Event Subscription Persistence
+# Detects fileless persistence via WMI event filters and consumers
+# MBC: F0012 (Persistence)
+# ATT&CK: T1546.003 (WMI Event Subscription)
+
+defaults:
+  mbc: "F0012"
+  attack: "T1546.003"
+  platforms: [windows]
+
+traits:
+  # WMI namespaces
+  - id: wmi-subscription-namespace
+    desc: WMI subscription namespace
+    crit: notable
+    conf: 0.8
+    for: [go, elf, macho, pe, powershell, vbs]
+    if:
+      type: string
+      regex: "root\\\\subscription|ROOT\\\\SUBSCRIPTION"
+
+  - id: wmi-cimv2-namespace
+    desc: WMI CIMv2 namespace
+    crit: baseline
+    conf: 0.6
+    for: [go, elf, macho, pe]
+    if:
+      type: string
+      substr: "root\\cimv2"
+
+  # Note: __EventFilter for PE/scripting is in objectives/persistence/startup/registry
+  # This covers Go/ELF/Mach-O binaries only
+  - id: wmi-event-filter
+    desc: WMI __EventFilter class
+    crit: suspicious
+    conf: 0.9
+    for: [go, elf, macho, powershell, vbs]
+    if:
+      type: string
+      word: "__EventFilter"
+
+  - id: wmi-eventfilter-create
+    desc: WMI EventFilter CREATE
+    crit: suspicious
+    conf: 0.9
+    for: [go, elf, macho, pe, powershell, vbs]
+    if:
+      type: string
+      regex: "EventFilter.{0,20}CREATE|CREATE.{0,20}EventFilter"
+
+  # Event consumer types - for Go binaries only (non-PE)
+  - id: wmi-commandline-consumer
+    desc: WMI CommandLineEventConsumer
+    crit: suspicious
+    conf: 0.95
+    for: [go, elf, macho, powershell, vbs]
+    if:
+      type: string
+      word: "CommandLineEventConsumer"
+
+  - id: wmi-activescript-consumer
+    desc: WMI ActiveScriptEventConsumer
+    crit: suspicious
+    conf: 0.95
+    for: [go, elf, macho, powershell, vbs]
+    if:
+      type: string
+      word: "ActiveScriptEventConsumer"
+
+  # Filter to consumer binding - for Go binaries only (non-PE)
+  - id: wmi-filter-binding
+    desc: WMI FilterToConsumerBinding
+    crit: suspicious
+    conf: 0.9
+    for: [go, elf, macho, powershell, vbs]
+    if:
+      type: string
+      word: "__FilterToConsumerBinding"
+
+  # wmic command for persistence
+  - id: wmic-namespace-create
+    desc: wmic NAMESPACE CREATE command
+    crit: suspicious
+    conf: 0.85
+    for: [go, elf, macho, pe, shell, batch]
+    if:
+      type: string
+      regex: "wmic.{0,30}/NAMESPACE.{0,30}CREATE"
+
+  - id: wmic-process-create
+    desc: wmic process call create
+    crit: suspicious
+    conf: 0.85
+    for: [go, elf, macho, pe, shell, batch]
+    if:
+      type: string
+      regex: "wmic.{0,30}process.{0,20}call.{0,20}create"
+
+  # Common WMI trigger queries
+  - id: wmi-instance-modification
+    desc: WMI InstanceModificationEvent query
+    crit: suspicious
+    conf: 0.9
+    for: [go, elf, macho, pe, powershell, vbs]
+    if:
+      type: string
+      word: "__InstanceModificationEvent"
+
+  - id: wmi-process-start-trace
+    desc: Win32_ProcessStartTrace event
+    crit: suspicious
+    conf: 0.9
+    for: [go, elf, macho, pe, powershell, vbs]
+    if:
+      type: string
+      word: "Win32_ProcessStartTrace"
+
+  - id: wmi-interval-timer
+    desc: WMI interval timer instruction
+    crit: notable
+    conf: 0.8
+    for: [go, elf, macho, pe]
+    if:
+      type: string
+      word: "__IntervalTimerInstruction"
+
+composite_rules:
+  # Helper: WMI startup queries
+  - id: wmi-startup-query
+    desc: WMI startup trigger queries
+    crit: suspicious
+    conf: 0.9
+    for: [go, elf, macho, pe, powershell, vbs]
+    any:
+      - id: wmi-instance-modification
+      - id: wmi-process-start-trace
+      - id: wmi-interval-timer
+
+  # Helper: wmic create commands
+  - id: wmic-create
+    desc: wmic CREATE commands
+    crit: suspicious
+    conf: 0.85
+    for: [go, elf, macho, pe, shell, batch]
+    any:
+      - id: wmic-namespace-create
+      - id: wmic-process-create
+
+  # WMI event subscription setup
+  # Complexity: all(2) + any(1) + for(1) = 4 >= 4 HOSTILE
+  - id: wmi-persistence
+    desc: WMI event subscription persistence
+    crit: hostile
+    conf: 0.95
+    for: [go, elf, macho, pe]
+    all:
+      - id: wmi-event-filter
+      - id: wmi-filter-binding
+    any:
+      - id: wmi-commandline-consumer
+      - id: wmi-activescript-consumer
+
+  # WMI with command execution
+  # Complexity: all(3) + for(1) = 4 >= 4 HOSTILE
+  - id: wmi-command-persistence
+    desc: WMI persistence with command execution
+    crit: hostile
+    conf: 0.95
+    for: [go, elf, macho, pe]
+    all:
+      - id: wmi-subscription-namespace
+      - id: wmi-commandline-consumer
+    any:
+      - id: wmi-event-filter
+      - id: wmi-startup-query

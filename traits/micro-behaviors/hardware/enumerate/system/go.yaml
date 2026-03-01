@@ -1,0 +1,125 @@
+# Go Hardware Enumeration
+# Detects hardware information gathering
+# MBC: E1082 (System Information Discovery)
+# ATT&CK: T1082 (System Information Discovery)
+
+defaults:
+  mbc: "E1082"
+  attack: "T1082"
+
+traits:
+  # jaypipes/ghw library (used by ToRat)
+  - id: ghw-import
+    desc: jaypipes/ghw hardware info library
+    crit: suspicious
+    conf: 0.9
+    for: [go]
+    if:
+      type: ast
+      kind: import
+      regex: "github\\.com/jaypipes/ghw|jaypipes/ghw"
+
+  - id: ghw-string
+    desc: ghw library in binary
+    crit: suspicious
+    conf: 0.85
+    for: [elf, macho, pe]
+    if:
+      type: string
+      substr: "jaypipes/ghw"
+
+  # ghw function calls
+  - id: ghw-cpu
+    desc: ghw.CPU() call
+    crit: notable
+    conf: 0.8
+    for: [go]
+    if:
+      type: ast
+      kind: call
+      exact: "ghw.CPU"
+
+  - id: ghw-memory
+    desc: ghw.Memory() call
+    crit: notable
+    conf: 0.8
+    for: [go]
+    if:
+      type: ast
+      kind: call
+      exact: "ghw.Memory"
+
+  - id: ghw-block
+    desc: ghw.Block() storage info
+    crit: notable
+    conf: 0.8
+    for: [go]
+    if:
+      type: ast
+      kind: call
+      exact: "ghw.Block"
+
+  - id: ghw-gpu
+    desc: ghw.GPU() call
+    crit: notable
+    conf: 0.8
+    for: [go]
+    if:
+      type: ast
+      kind: call
+      exact: "ghw.GPU"
+
+  - id: ghw-network
+    desc: ghw.Network() call
+    crit: notable
+    conf: 0.8
+    for: [go]
+    if:
+      type: ast
+      kind: call
+      exact: "ghw.Network"
+
+  # shirou/gopsutil (alternative)
+  - id: gopsutil-import
+    desc: shirou/gopsutil system info library
+    crit: notable
+    conf: 0.75
+    for: [go]
+    if:
+      type: ast
+      kind: import
+      regex: "shirou/gopsutil|gopsutil"
+
+  - id: gopsutil-string
+    desc: gopsutil library in binary
+    crit: notable
+    conf: 0.7
+    for: [elf, macho, pe]
+    if:
+      type: string
+      substr: "gopsutil"
+
+composite_rules:
+  # Hardware enumeration library
+  - id: hardware-enum-library
+    desc: Hardware enumeration library
+    crit: suspicious
+    conf: 0.85
+    any:
+      - id: ghw-import
+      - id: ghw-string
+      - id: gopsutil-import
+      - id: gopsutil-string
+
+  # Hardware info gathering
+  - id: hardware-info-gathering
+    desc: Hardware information gathering
+    crit: suspicious
+    conf: 0.9
+    all:
+      - id: hardware-enum-library
+    any:
+      - id: ghw-cpu
+      - id: ghw-memory
+      - id: ghw-block
+      - id: ghw-gpu

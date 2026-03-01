@@ -1,0 +1,246 @@
+# Supply Chain RAT Detection
+# Composite rules for detecting RAT-like functionality in Go packages
+# Designed to catch surreptitiously inserted RAT capabilities
+# MBC: B0024 (Remote Access)
+# ATT&CK: T1195.002 (Supply Chain Compromise: Software Supply Chain)
+
+defaults:
+  mbc: "B0024"
+  attack: "T1195.002"
+
+traits:
+  # Supply chain insertion indicators
+  - id: obfuscated-c2-config
+    desc: Obfuscated C2 configuration
+    crit: suspicious
+    conf: 0.85
+    for: [go]
+    if:
+      type: string
+      regex: "config.{0,30}base64|decode.{0,30}server|xor.{0,30}addr"
+
+  - id: embedded-binary-blob
+    desc: Large embedded binary blob
+    crit: notable
+    conf: 0.75
+    for: [go]
+    if:
+      type: string
+      regex: "//go:embed.{0,50}\\.(exe|elf|bin)|embeddedBinary"
+
+  - id: hidden-init-function
+    desc: Hidden initialization in init()
+    crit: notable
+    conf: 0.7
+    for: [go]
+    if:
+      type: ast
+      query: |
+        (function_declaration
+          name: (identifier) @name
+          (#eq? @name "init"))
+
+  - id: goroutine-connect
+    desc: Goroutine connect pattern
+    crit: suspicious
+    conf: 0.8
+    for: [go]
+    if:
+      type: string
+      regex: "go\\s+connect"
+
+  - id: goroutine-beacon
+    desc: Goroutine beacon pattern
+    crit: suspicious
+    conf: 0.8
+    for: [go]
+    if:
+      type: string
+      regex: "go\\s+beacon"
+
+  - id: goroutine-dial
+    desc: Goroutine dial pattern
+    crit: notable
+    conf: 0.75
+    for: [go]
+    if:
+      type: string
+      regex: "go\\s+dial"
+
+composite_rules:
+  # === Helper Composites ===
+
+  # Goroutine backdoor pattern
+  - id: goroutine-backdoor
+    desc: Goroutine backdoor patterns
+    crit: suspicious
+    conf: 0.8
+    for: [go]
+    any:
+      - id: goroutine-connect
+      - id: goroutine-beacon
+      - id: goroutine-dial
+
+  # Network connectivity options
+  - id: network-connectivity
+    desc: Network connectivity method
+    crit: notable
+    conf: 0.8
+    for: [go]
+    any:
+      - id: micro-behaviors/communications/socket/connect::dial
+      - id: micro-behaviors/communications/tor/hidden-service::bine-import
+
+  # RAT capabilities
+  - id: rat-capabilities
+    desc: RAT additional capabilities
+    crit: notable
+    conf: 0.8
+    for: [go]
+    any:
+      - id: micro-behaviors/hardware/display/screen::screenshot-import
+      - id: micro-behaviors/communications/scan/port::gomap-import
+      - id: micro-behaviors/fs/delete/secure::shred-import
+
+  # Persistence mechanisms
+  - id: persistence-mechanism
+    desc: Persistence mechanism
+    crit: suspicious
+    conf: 0.85
+    for: [go]
+    any:
+      - id: objectives/persistence/registry/run-key::run-key-persistence
+      - id: objectives/persistence/scheduled-task/masquerade::schtask-persistence
+      - id: objectives/persistence/wmi/subscription::wmi-persistence
+      - id: objectives/persistence/autostart/xdg::xdg-persistence
+
+  # Execution methods
+  - id: execution-method
+    desc: Execution method
+    crit: notable
+    conf: 0.8
+    for: [go]
+    any:
+      - id: micro-behaviors/process/create/direct::exec-command
+      - id: micro-behaviors/os/privilege/escalate::go-escalate-import
+
+  # C2 backend
+  - id: c2-backend
+    desc: C2 communication backend
+    crit: notable
+    conf: 0.85
+    for: [go]
+    any:
+      - id: micro-behaviors/process/create/direct::exec-command
+      - id: micro-behaviors/communications/rpc/server::rpc-register
+
+  # === Basic RAT Profiles ===
+
+  # RAT with shell access
+  # Complexity: all(3) + for(1) = 4 >= 4 HOSTILE
+  - id: rat-shell-access
+    desc: RAT with remote shell execution
+    crit: hostile
+    conf: 0.95
+    for: [go]
+    all:
+      - id: micro-behaviors/communications/rpc/server::rpc-register
+      - id: micro-behaviors/process/create/direct::exec-command
+      - id: network-connectivity
+
+  # RAT with screenshot capability
+  # Complexity: all(3) + for(1) = 4 >= 4 HOSTILE
+  - id: rat-screenshot
+    desc: RAT with screen capture
+    crit: hostile
+    conf: 0.95
+    for: [go]
+    all:
+      - id: micro-behaviors/hardware/display/screen::screenshot-import
+      - id: micro-behaviors/communications/rpc/server::rpc-register
+      - id: network-connectivity
+
+  # RAT with network reconnaissance
+  # Complexity: all(3) + for(1) = 4 >= 4 HOSTILE
+  - id: rat-network-recon
+    desc: RAT with network scanning
+    crit: hostile
+    conf: 0.95
+    for: [go]
+    all:
+      - id: micro-behaviors/communications/scan/port::gomap-import
+      - id: micro-behaviors/communications/rpc/server::rpc-register
+      - id: c2-backend
+
+  # === Tor-Based RAT ===
+
+  # Tor RAT (ToRat-style)
+  # Complexity: all(4) + for(1) = 5 >= 4 HOSTILE
+  - id: tor-rat
+    desc: Tor-based Remote Access Trojan
+    crit: hostile
+    conf: 0.98
+    for: [go]
+    all:
+      - id: micro-behaviors/communications/tor/hidden-service::bine-import
+      - id: micro-behaviors/communications/rpc/server::rpc-register
+      - id: micro-behaviors/process/create/direct::exec-command
+      - id: rat-capabilities
+
+  # Tor RAT with persistence
+  # Complexity: all(4) + for(1) = 5 >= 4 HOSTILE
+  - id: tor-rat-persistent
+    desc: Tor RAT with persistence mechanisms
+    crit: hostile
+    conf: 0.98
+    for: [go]
+    all:
+      - id: micro-behaviors/communications/tor/hidden-service::bine-import
+      - id: micro-behaviors/communications/rpc/server::rpc-register
+      - id: persistence-mechanism
+      - id: execution-method
+
+  # === Supply Chain Specific ===
+
+  # Hidden RAT in package init()
+  # Complexity: all(4) + for(1) = 5 >= 4 HOSTILE
+  - id: supply-chain-rat-init
+    desc: RAT functionality hidden in init()
+    crit: hostile
+    conf: 0.95
+    for: [go]
+    all:
+      - id: hidden-init-function
+      - id: goroutine-backdoor
+      - id: network-connectivity
+      - id: c2-backend
+
+  # Supply chain with anti-forensics
+  # Complexity: all(4) + for(1) = 5 >= 4 HOSTILE
+  - id: supply-chain-rat-antiforensics
+    desc: RAT with anti-forensic capabilities
+    crit: hostile
+    conf: 0.98
+    for: [go]
+    all:
+      - id: micro-behaviors/fs/delete/secure::shred-import
+      - id: micro-behaviors/communications/rpc/server::rpc-register
+      - id: network-connectivity
+      - id: execution-method
+
+  # === Full-Featured RAT ===
+
+  # Complete RAT profile (ToRat-like)
+  # Complexity: all(5) + for(1) = 6 >= 4 HOSTILE
+  - id: full-rat-profile
+    desc: Full-featured Remote Access Trojan
+    crit: hostile
+    conf: 0.99
+    for: [go]
+    all:
+      - id: micro-behaviors/communications/rpc/server::rpc-register
+      - id: micro-behaviors/process/create/direct::exec-command
+      - id: network-connectivity
+      - id: rat-capabilities
+      - id: persistence-mechanism
+

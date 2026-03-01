@@ -1,0 +1,253 @@
+# Linux Autostart Persistence
+# Detects persistence via XDG autostart, init.d, profile.d, crontab
+# MBC: F0012 (Persistence)
+# ATT&CK: T1547.013 (XDG Autostart Entries)
+
+defaults:
+  mbc: "F0012"
+  attack: "T1547.013"
+  platforms: [linux, unix]
+
+traits:
+  # XDG autostart directories - user path with tilde (Go-specific pattern)
+  - id: xdg-autostart-user
+    desc: XDG user autostart directory with tilde
+    crit: notable
+    conf: 0.8
+    for: [go, elf, shell]
+    if:
+      type: string
+      substr: "~/.config/autostart"
+
+  # Note: /etc/xdg/autostart detection is in objectives/persistence/autostart/systemd
+  # We reference it via composite rule instead of duplicating
+
+  # Desktop file creation
+  - id: desktop-file-write
+    desc: Desktop file creation for autostart
+    crit: notable
+    conf: 0.8
+    for: [go, elf, shell]
+    if:
+      type: string
+      regex: "\\.desktop.{0,30}write|write.{0,30}\\.desktop"
+
+  # Note: [Desktop Entry] detection is in objectives/persistence/autostart/systemd
+  # We reference it via composite rule instead of duplicating
+
+  - id: desktop-entry-exec
+    desc: Desktop entry Exec directive
+    crit: notable
+    conf: 0.75
+    for: [go, elf, shell, text]
+    if:
+      type: string
+      regex: "Exec=.{0,100}/"
+
+  # KDE Plasma autostart
+  - id: kde-autostart-scripts
+    desc: KDE Plasma autostart scripts directory
+    crit: notable
+    conf: 0.8
+    for: [go, elf, shell]
+    if:
+      type: string
+      substr: ".config/autostart-scripts"
+
+  - id: plasma-autostart
+    desc: Plasma autostart pattern
+    crit: notable
+    conf: 0.8
+    for: [go, elf, shell]
+    if:
+      type: string
+      regex: "plasma.{0,20}autostart"
+
+  # init.d scripts
+  - id: initd-script
+    desc: init.d script installation
+    crit: suspicious
+    conf: 0.85
+    for: [go, elf, shell]
+    if:
+      type: string
+      regex: "/etc/init\\.d/|update-rc\\.d"
+
+  # profile.d scripts
+  - id: profiled-script
+    desc: profile.d script installation
+    crit: suspicious
+    conf: 0.85
+    for: [go, elf, shell]
+    if:
+      type: string
+      regex: "/etc/profile\\.d/"
+
+  # Crontab persistence - atomic traits
+  - id: crontab-at-reboot
+    desc: Crontab @reboot directive
+    crit: suspicious
+    conf: 0.9
+    for: [go, elf, shell]
+    if:
+      type: string
+      word: "@reboot"
+
+  - id: crontab-edit
+    desc: Crontab edit operation
+    crit: notable
+    conf: 0.8
+    for: [go, elf, shell]
+    if:
+      type: string
+      regex: "crontab.{0,10}-e"
+
+  # Note: /etc/cron.* detection is in objectives/persistence/cron/job
+  # We reference it via composite rule instead of duplicating
+
+  # Hidden installation paths
+  - id: hidden-cache-install
+    desc: Hidden cache directory installation
+    crit: suspicious
+    conf: 0.85
+    for: [go, elf]
+    if:
+      type: string
+      regex: "\\.cache/[a-z]+/[a-z]+|\\.local/share/\\.[a-z]+"
+
+  # Masquerade as system library - atomic traits
+  - id: masquerade-libssh
+    desc: Masquerade as libssh in cache
+    crit: suspicious
+    conf: 0.85
+    for: [go, elf]
+    if:
+      type: string
+      substr: ".cache/libssh"
+
+  - id: masquerade-libssl
+    desc: Masquerade as libssl in cache
+    crit: suspicious
+    conf: 0.85
+    for: [go, elf]
+    if:
+      type: string
+      substr: ".cache/libssl"
+
+  - id: masquerade-libcrypto
+    desc: Masquerade as libcrypto in cache
+    crit: suspicious
+    conf: 0.85
+    for: [go, elf]
+    if:
+      type: string
+      substr: ".cache/libcrypto"
+
+composite_rules:
+  # Helper: Masquerade as library
+  - id: masquerade-lib
+    desc: Masquerade as system library
+    crit: suspicious
+    conf: 0.85
+    for: [go, elf]
+    any:
+      - id: masquerade-libssh
+      - id: masquerade-libssl
+      - id: masquerade-libcrypto
+
+  # Helper: Crontab reboot persistence
+  - id: crontab-reboot
+    desc: Crontab reboot persistence
+    crit: suspicious
+    conf: 0.9
+    for: [go, elf, shell]
+    any:
+      - id: crontab-at-reboot
+      - id: crontab-edit
+
+  # Helper: XDG autostart paths (uses existing systemd rule for system path)
+  - id: xdg-autostart-path
+    desc: XDG autostart directory
+    crit: notable
+    conf: 0.8
+    for: [go, elf]
+    any:
+      - id: xdg-autostart-user
+      - id: objectives/persistence/autostart/systemd::etc-xdg-autostart
+
+  # Helper: Desktop file operations (uses existing systemd rule for header)
+  - id: desktop-file-ops
+    desc: Desktop file operations
+    crit: notable
+    conf: 0.75
+    for: [go, elf]
+    any:
+      - id: desktop-file-write
+      - id: desktop-entry-exec
+      - id: objectives/persistence/autostart/systemd::desktop-entry-header
+
+  # Helper: System persistence paths
+  - id: system-persistence-path
+    desc: System persistence locations
+    crit: suspicious
+    conf: 0.85
+    for: [go, elf]
+    any:
+      - id: initd-script
+      - id: profiled-script
+      - id: objectives/persistence/autostart/systemd::etc-xdg-autostart
+
+  # Helper: Evasion techniques
+  - id: linux-evasion
+    desc: Linux persistence evasion
+    crit: suspicious
+    conf: 0.85
+    for: [go, elf]
+    any:
+      - id: hidden-cache-install
+      - id: masquerade-lib
+      - id: crontab-reboot
+
+  # Helper: User autostart
+  - id: user-autostart
+    desc: User-level autostart
+    crit: notable
+    conf: 0.75
+    for: [go, elf]
+    any:
+      - id: xdg-autostart-user
+      - id: crontab-reboot
+      - id: kde-autostart-scripts
+
+  # XDG autostart persistence
+  - id: xdg-persistence
+    desc: XDG autostart persistence
+    crit: suspicious
+    conf: 0.9
+    for: [go, elf]
+    all:
+      - id: xdg-autostart-path
+      - id: desktop-file-ops
+
+  # System-level Linux persistence
+  # Complexity: all(2) + for(1) = 3
+  - id: linux-system-persistence
+    desc: Linux system-level persistence
+    crit: suspicious
+    conf: 0.9
+    for: [go, elf]
+    all:
+      - id: system-persistence-path
+      - id: linux-evasion
+
+  # Hidden persistence with masquerading
+  # Complexity: all(3) + for(1) = 4 >= 4 HOSTILE
+  - id: hidden-linux-persistence
+    desc: Hidden Linux persistence with masquerading
+    crit: hostile
+    conf: 0.95
+    for: [go, elf]
+    all:
+      - id: hidden-cache-install
+      - id: masquerade-lib
+      - id: user-autostart

@@ -1,0 +1,124 @@
+# Go Local Network Discovery
+# Detects local network enumeration and reconnaissance
+# MBC: E1016 (System Network Configuration Discovery)
+# ATT&CK: T1016 (System Network Configuration Discovery)
+
+defaults:
+  mbc: "E1016"
+  attack: "T1016"
+
+traits:
+  # Network interfaces
+  - id: net-interfaces
+    desc: net.Interfaces() enumeration
+    crit: notable
+    conf: 0.75
+    for: [go]
+    if:
+      type: ast
+      kind: call
+      exact: "net.Interfaces"
+
+  - id: net-interfaceaddrs
+    desc: net.InterfaceAddrs() call
+    crit: notable
+    conf: 0.75
+    for: [go]
+    if:
+      type: ast
+      kind: call
+      exact: "net.InterfaceAddrs"
+
+  # IP parsing
+  - id: net-parseip
+    desc: net.ParseIP() call
+    crit: baseline
+    conf: 0.5
+    for: [go]
+    if:
+      type: ast
+      kind: call
+      exact: "net.ParseIP"
+
+  # IP network iteration
+  - id: ipnet-contains
+    desc: IPNet.Contains() call
+    crit: notable
+    conf: 0.8
+    for: [go]
+    if:
+      type: ast
+      kind: call
+      regex: "\\.Contains\\("
+
+  # Local IP ranges - atomic traits
+  - id: local-ip-192
+    desc: 192.168.x.x local range
+    crit: notable
+    conf: 0.7
+    for: [go, elf, macho, pe]
+    if:
+      type: string
+      substr: "192.168."
+
+  - id: local-ip-10
+    desc: 10.x.x.x local range
+    crit: notable
+    conf: 0.65
+    for: [go, elf, macho, pe]
+    if:
+      type: string
+      substr: "10."
+
+  # Note: ARP detection is in micro-behaviors/fs/proc/info and objectives/discovery/network
+  # We reference existing rules via composites
+
+  # Network scan function names
+  - id: scan-subnet-func
+    desc: scanSubnet function
+    crit: suspicious
+    conf: 0.8
+    for: [go, elf, macho, pe]
+    if:
+      type: string
+      word: "scanSubnet"
+
+  - id: scan-network-func
+    desc: ScanNetwork function
+    crit: suspicious
+    conf: 0.8
+    for: [go, elf, macho, pe]
+    if:
+      type: string
+      word: "ScanNetwork"
+
+composite_rules:
+  # Network interface enumeration
+  - id: interface-enumeration
+    desc: Network interface enumeration
+    crit: notable
+    conf: 0.8
+    for: [go]
+    any:
+      - id: net-interfaces
+      - id: net-interfaceaddrs
+
+  # Local IP detection
+  - id: local-ip-detection
+    desc: Local IP range detection
+    crit: notable
+    conf: 0.7
+    for: [go, elf, macho, pe]
+    any:
+      - id: local-ip-192
+      - id: local-ip-10
+
+  # Local network reconnaissance
+  - id: local-network-recon
+    desc: Local network reconnaissance
+    crit: suspicious
+    conf: 0.9
+    for: [go]
+    all:
+      - id: interface-enumeration
+      - id: micro-behaviors/communications/scan/port::cidr-parse

@@ -1,0 +1,113 @@
+# Secure File Deletion Capabilities
+# Detects anti-forensic file wiping with multi-pass overwrite
+# MBC: F0005 (Data Destruction)
+# ATT&CK: T1485 (Data Destruction)
+
+defaults:
+  mbc: "F0005"
+  attack: "T1485"
+
+traits:
+  # shred library
+  - id: shred-import
+    desc: lu4p/shred secure deletion library
+    crit: suspicious
+    conf: 0.95
+    for: [go]
+    if:
+      type: ast
+      kind: import
+      regex: "lu4p/shred|shred"
+
+  - id: shred-string
+    desc: shred library in binary
+    crit: suspicious
+    conf: 0.9
+    for: [elf, macho, pe]
+    if:
+      type: string
+      regex: "lu4p/shred|\\.Shred\\(|shred\\.Conf"
+
+  # Shred function calls
+  - id: shred-path
+    desc: Shred file path call
+    crit: suspicious
+    conf: 0.9
+    for: [go]
+    if:
+      type: ast
+      kind: call
+      regex: "shred\\.Path|Shred\\("
+
+  - id: shred-dir
+    desc: Shred directory call
+    crit: suspicious
+    conf: 0.9
+    for: [go]
+    if:
+      type: ast
+      kind: call
+      exact: "shred.Dir"
+
+  # Multi-pass overwrite patterns
+  - id: overwrite-pattern
+    desc: Multi-pass file overwrite pattern
+    crit: suspicious
+    conf: 0.85
+    for: [go, elf, macho, pe]
+    if:
+      type: string
+      regex: "overwrite.{0,20}pass|pass.{0,20}overwrite"
+
+  - id: secure-delete-string
+    desc: Secure delete function naming
+    crit: notable
+    conf: 0.8
+    for: [go, elf, macho, pe]
+    if:
+      type: string
+      word: "SecureDelete"
+
+  # Random data overwrite
+  - id: crypto-rand-overwrite
+    desc: Crypto random data for overwriting
+    crit: notable
+    conf: 0.75
+    for: [go]
+    if:
+      type: ast
+      query: |
+        (call_expression
+          function: (selector_expression
+            operand: (identifier) @pkg
+            field: (field_identifier) @func)
+          (#eq? @pkg "rand")
+          (#eq? @func "Read"))
+
+composite_rules:
+  # Helper: Shred library
+  - id: shred-library
+    desc: Shred library usage
+    crit: suspicious
+    conf: 0.9
+    any:
+      - id: shred-import
+      - id: shred-string
+
+  # Helper: Shred operations
+  - id: shred-operations
+    desc: Secure deletion operations
+    crit: suspicious
+    conf: 0.85
+    any:
+      - id: shred-path
+      - id: shred-dir
+      - id: overwrite-pattern
+
+  - id: secure-file-deletion
+    desc: Secure file deletion capability
+    crit: suspicious
+    conf: 0.9
+    all:
+      - id: shred-library
+      - id: shred-operations

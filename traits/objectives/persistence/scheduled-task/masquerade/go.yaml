@@ -1,0 +1,216 @@
+# Scheduled Task Persistence with Masquerading
+# Detects schtasks abuse with fake Microsoft metadata
+# MBC: F0012 (Persistence)
+# ATT&CK: T1053.005 (Scheduled Task)
+
+defaults:
+  mbc: "F0012"
+  attack: "T1053.005"
+  platforms: [windows]
+
+traits:
+  # schtasks command
+  - id: schtasks-create
+    desc: schtasks /create command
+    crit: notable
+    conf: 0.8
+    for: [go, elf, macho, pe, shell, batch, powershell]
+    if:
+      type: string
+      regex: "schtasks.{0,20}/create|schtasks.{0,20}/CREATE"
+
+  - id: schtasks-xml
+    desc: schtasks with XML definition
+    crit: notable
+    conf: 0.75
+    for: [go, elf, macho, pe]
+    if:
+      type: string
+      regex: "schtasks.{0,20}/xml|schtasks.{0,20}/XML"
+
+  # Task triggers
+  - id: logon-trigger
+    desc: Task triggers on user logon
+    crit: notable
+    conf: 0.75
+    for: [go, elf, macho, pe, shell, batch]
+    if:
+      type: string
+      regex: "/sc\\s+onlogon|ONLOGON|LogonTrigger"
+
+  - id: boot-trigger
+    desc: Task triggers on system boot
+    crit: notable
+    conf: 0.75
+    for: [go, elf, macho, pe, shell, batch]
+    if:
+      type: string
+      regex: "/sc\\s+onstart|ONSTART|BootTrigger"
+
+  # Task properties for evasion
+  - id: task-hidden-xml
+    desc: Hidden scheduled task XML
+    crit: suspicious
+    conf: 0.85
+    for: [go, elf, macho, pe]
+    if:
+      type: string
+      substr: "<Hidden>true</Hidden>"
+
+  - id: task-hidden-pattern
+    desc: Hidden task pattern
+    crit: suspicious
+    conf: 0.8
+    for: [go, elf, macho, pe]
+    if:
+      type: string
+      regex: "hidden.{0,10}true"
+
+  - id: task-runlevel-highest
+    desc: Task RunLevel Highest
+    crit: suspicious
+    conf: 0.8
+    for: [go, elf, macho, pe]
+    if:
+      type: string
+      regex: "RunLevel.{0,10}Highest"
+
+  - id: task-highest-available
+    desc: HighestAvailable privilege
+    crit: suspicious
+    conf: 0.8
+    for: [go, elf, macho, pe]
+    if:
+      type: string
+      word: "HighestAvailable"
+
+  # Fake Microsoft author
+  - id: fake-microsoft-author-xml
+    desc: Fake Microsoft Corporation author XML
+    crit: suspicious
+    conf: 0.9
+    for: [go, elf, macho, pe]
+    if:
+      type: string
+      substr: "<Author>Microsoft Corporation</Author>"
+      not:
+        - substr: "microsoft.com"
+        - substr: "windows.com"
+
+  - id: fake-microsoft-author-string
+    desc: Author Microsoft pattern
+    crit: suspicious
+    conf: 0.85
+    for: [go, elf, macho, pe]
+    if:
+      type: string
+      regex: "Author.{0,10}Microsoft"
+      not:
+        - substr: "microsoft.com"
+
+  # Masquerade task names
+  - id: masquerade-task-name
+    desc: Masqueraded scheduled task name
+    crit: suspicious
+    conf: 0.85
+    for: [go, elf, macho, pe]
+    if:
+      type: string
+      regex: "\\\\(OneDriveUpdate|WindowsDefender|MicrosoftEdge|SecurityHealth)\\b"
+
+  # Restart settings (persistence)
+  - id: task-restart-on-failure
+    desc: Task restarts on failure
+    crit: notable
+    conf: 0.7
+    for: [go, elf, macho, pe]
+    if:
+      type: string
+      regex: "RestartOnFailure|RestartCount|<Interval>"
+
+composite_rules:
+  # Helper: Task triggers
+  - id: task-trigger
+    desc: Task startup trigger
+    crit: notable
+    conf: 0.75
+    for: [go, elf, macho, pe]
+    any:
+      - id: logon-trigger
+      - id: boot-trigger
+
+  # Helper: Task hidden
+  - id: task-hidden
+    desc: Hidden scheduled task
+    crit: suspicious
+    conf: 0.85
+    for: [go, elf, macho, pe]
+    any:
+      - id: task-hidden-xml
+      - id: task-hidden-pattern
+
+  # Helper: Task highest privilege
+  - id: task-highest-privilege
+    desc: Task runs with highest privileges
+    crit: suspicious
+    conf: 0.8
+    for: [go, elf, macho, pe]
+    any:
+      - id: task-runlevel-highest
+      - id: task-highest-available
+
+  # Helper: Fake Microsoft author
+  - id: fake-microsoft-author
+    desc: Fake Microsoft Corporation author
+    crit: suspicious
+    conf: 0.9
+    for: [go, elf, macho, pe]
+    any:
+      - id: fake-microsoft-author-xml
+      - id: fake-microsoft-author-string
+
+  # Helper: Task evasion
+  - id: task-evasion
+    desc: Task evasion techniques
+    crit: suspicious
+    conf: 0.85
+    for: [go, elf, macho, pe]
+    any:
+      - id: masquerade-task-name
+      - id: task-hidden
+      - id: task-restart-on-failure
+
+  # Basic scheduled task persistence
+  - id: schtask-persistence
+    desc: Scheduled task persistence
+    crit: suspicious
+    conf: 0.85
+    for: [go, elf, macho, pe]
+    all:
+      - id: schtasks-create
+      - id: task-trigger
+
+  # Scheduled task with masquerading
+  # Complexity: all(3) + for(1) = 4 >= 4 HOSTILE
+  - id: schtask-masquerade
+    desc: Scheduled task with Microsoft masquerading
+    crit: hostile
+    conf: 0.95
+    for: [go, elf, macho, pe]
+    all:
+      - id: schtasks-create
+      - id: fake-microsoft-author
+      - id: task-evasion
+
+  # Elevated scheduled task persistence
+  # Complexity: all(4) + for(1) = 5 >= 4 HOSTILE
+  - id: schtask-elevated
+    desc: Elevated scheduled task with persistence
+    crit: hostile
+    conf: 0.95
+    for: [go, elf, macho, pe]
+    all:
+      - id: schtasks-create
+      - id: task-highest-privilege
+      - id: task-trigger
+      - id: task-evasion

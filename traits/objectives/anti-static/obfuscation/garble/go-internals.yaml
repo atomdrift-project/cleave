@@ -1,0 +1,188 @@
+# Go Internal Type Fingerprints
+# Detects Go standard library usage via internal type names that survive garbling.
+# When Go packages are obfuscated with tools like Garble, the package names are
+# randomized but internal struct/method names often remain because they're
+# referenced by runtime reflection.
+# ATT&CK: T1027 (Obfuscated Files or Information)
+
+defaults:
+  for: [elf, macho, pe]
+  crit: notable
+  attack: "T1027"
+
+traits:
+  # net/http internal types that survive garbling
+  - id: go-http-internal-http2transport
+    desc: Go net/http http2Transport internal type
+    conf: 0.7
+    if:
+      type: string
+      exact: "http2Transport"
+
+  - id: go-http-internal-persistconn
+    desc: Go net/http persistConn internal type
+    conf: 0.7
+    if:
+      type: string
+      exact: "persistConn"
+
+  - id: go-http-internal-wantconn
+    desc: Go net/http wantConn internal type
+    conf: 0.7
+    if:
+      type: string
+      exact: "wantConn"
+
+  - id: go-http-internal-roundtripper
+    desc: Go net/http RoundTripper internal type
+    conf: 0.6
+    if:
+      type: string
+      exact: "RoundTripper"
+
+  - id: go-http-internal-http2framer
+    desc: Go net/http http2Framer internal type
+    conf: 0.7
+    if:
+      type: string
+      exact: "http2Framer"
+
+  - id: go-http-internal-http2clientconn
+    desc: Go net/http http2ClientConn internal type
+    conf: 0.8
+    if:
+      type: string
+      exact: "http2ClientConn"
+
+  # crypto/tls internal types that survive garbling
+  - id: go-tls-internal-serverhello
+    desc: Go crypto/tls serverHello internal type
+    conf: 0.7
+    if:
+      type: string
+      exact: "serverHello"
+
+  - id: go-tls-internal-ciphersuites
+    desc: Go crypto/tls CipherSuites internal type
+    conf: 0.6
+    if:
+      type: string
+      exact: "CipherSuites"
+
+  - id: go-tls-internal-peercertificates
+    desc: Go crypto/tls peerCertificates internal type
+    conf: 0.8
+    if:
+      type: string
+      exact: "peerCertificates"
+
+  - id: go-tls-internal-handshakecontext
+    desc: Go crypto/tls HandshakeContext internal type
+    conf: 0.8
+    if:
+      type: string
+      exact: "HandshakeContext"
+
+  # Note: socks5 detection is in micro-behaviors/communications/proxy/socks
+  # We reference it via composite rule instead of duplicating
+
+  # Garbled package name pattern - must have letters AND digits (excludes stdlib)
+  # Matches patterns like *yvo6rOL.Transport, *TmNsITLHs5dP.Conn
+  # The [a-zA-Z]+[0-9]+ ensures we only match randomized names, not stdlib
+  - id: go-garbled-type-pointer
+    desc: Go garbled package type pointer
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: raw
+      # Package name must contain both letters and digits (garble signature)
+      regex: '\*[a-zA-Z]+[0-9]+[a-zA-Z0-9_]*\.[A-Z][a-zA-Z0-9_]+'
+      count_min: 30
+
+  # Garbled method receiver pattern
+  # Matches patterns like yvo6rOL.(*Transport).RoundTrip
+  - id: go-garbled-method-receiver
+    desc: Go garbled method receiver pattern
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: raw
+      # Package name must contain both letters and digits
+      regex: '[a-zA-Z]+[0-9]+[a-zA-Z0-9_]*\.\(\*[a-zA-Z0-9_]+\)\.[A-Z][a-zA-Z]+'
+      count_min: 15
+
+  # Note: Intermediate composite rules moved to composite_rules section
+
+composite_rules:
+  # Helper: Go HTTP internals detected
+  - id: go-http-internals-present
+    desc: Go HTTP internal types detected
+    crit: notable
+    conf: 0.8
+    any:
+      - id: go-http-internal-http2transport
+      - id: go-http-internal-persistconn
+      - id: go-http-internal-http2clientconn
+      - id: go-http-internal-wantconn
+
+  # Helper: Go TLS internals detected
+  - id: go-tls-internals-present
+    desc: Go TLS internal types detected
+    crit: notable
+    conf: 0.8
+    any:
+      - id: go-tls-internal-serverhello
+      - id: go-tls-internal-peercertificates
+      - id: go-tls-internal-handshakecontext
+      - id: go-tls-internal-ciphersuites
+
+  # Detect Go binary with HTTP capability via internal type names
+  # This works even when package names are fully garbled
+  - id: go-http-capability-garbled
+    desc: "Garbled Go binary with HTTP client capability"
+    crit: suspicious
+    conf: 0.85
+    all:
+      - id: metadata/compiler::go-binary
+      - id: go-http-internals-present
+    any:
+      - id: go-garbled-type-pointer
+      - id: go-garbled-method-receiver
+
+  # Detect Go binary with TLS capability via internal type names
+  - id: go-tls-capability-garbled
+    desc: "Garbled Go binary with TLS capability"
+    crit: suspicious
+    conf: 0.85
+    all:
+      - id: metadata/compiler::go-binary
+      - id: go-tls-internals-present
+    any:
+      - id: go-garbled-type-pointer
+      - id: go-garbled-method-receiver
+
+  # Detect garbled Go binary with SOCKS proxy capability
+  - id: go-socks-proxy-garbled
+    desc: "Garbled Go binary with SOCKS5 proxy capability"
+    crit: hostile
+    conf: 0.9
+    all:
+      - id: metadata/compiler::go-binary
+      - id: micro-behaviors/communications/proxy/socks::socks5-string
+    any:
+      - id: go-garbled-type-pointer
+      - id: go-garbled-method-receiver
+
+  # Full garbled Go backdoor signature - HTTP + TLS + SOCKS
+  - id: go-garbled-backdoor
+    desc: "Garbled Go backdoor with HTTP/TLS and proxy"
+    crit: hostile
+    conf: 0.95
+    all:
+      - id: metadata/compiler::go-binary
+      - id: micro-behaviors/communications/proxy/socks::socks5-string
+      - id: go-http-internals-present
+      - id: go-tls-internals-present
+    any:
+      - id: go-garbled-type-pointer
+      - id: go-garbled-method-receiver

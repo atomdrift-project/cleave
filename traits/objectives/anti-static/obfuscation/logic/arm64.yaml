@@ -8,10 +8,39 @@ defaults:
   crit: suspicious
 
 traits:
-  - id: xor-ror-decryption-loop
-    desc: "ARM64 XOR+ROR decryption loop"
-    conf: 0.9
-    mbc: "B0032"
+  # Architecture detection traits (used by composite rules below)
+  - id: arch-arm64-elf
+    desc: "ARM64/AArch64 ELF binary"
+    crit: baseline
+    conf: 1.0
+    for: [elf]
+    if:
+      type: structure
+      feature: "binary/arch/aarch64"
+
+  - id: arch-arm64-macho
+    desc: "ARM64 Mach-O binary"
+    crit: baseline
+    conf: 1.0
+    for: [macho]
+    if:
+      type: structure
+      feature: "binary/arch/arm64"
+
+  - id: arch-arm64e-macho
+    desc: "ARM64e Mach-O binary"
+    crit: baseline
+    conf: 1.0
+    for: [macho]
+    if:
+      type: structure
+      feature: "binary/arch/arm64e"
+
+  # Raw hex patterns (internal - used by composite rules)
+  - id: xor-ror-hex-pattern
+    desc: "ARM64 XOR+ROR instruction sequence"
+    crit: baseline
+    conf: 0.5
     if:
       type: hex
       # Matches eor/strb/ror sequence often used in simple obfuscators
@@ -19,17 +48,43 @@ traits:
       # strb: ?? ?? ?? 39
       # ror: ?? ?? ?? 93
       pattern: "?? ?? ?? 4a ?? ?? ?? 39 ?? ?? ?? 93"
-    downgrade:
-      any:
-        - id: metadata/signed/platform::apple
-        - id: metadata/signed/issuer::apple
 
-  - id: svc-instruction
-    desc: "Repeated ARM64 svc instructions in executable code"
+  - id: svc-hex-pattern
+    desc: "ARM64 svc instruction sequence"
     crit: baseline
-    conf: 0.4
+    conf: 0.3
     if:
       type: hex
       pattern: "01 00 00 d4"
       section: "text"
       count_min: 4
+
+composite_rules:
+  # ARM64 XOR+ROR decryption loop - only fires on ARM64 binaries
+  - id: xor-ror-decryption-loop
+    desc: "ARM64 XOR+ROR decryption loop"
+    crit: suspicious
+    conf: 0.9
+    mbc: "B0032"
+    all:
+      - id: xor-ror-hex-pattern
+    any:
+      - id: arch-arm64-elf
+      - id: arch-arm64-macho
+      - id: arch-arm64e-macho
+    downgrade:
+      any:
+        - id: metadata/signed/platform::apple
+        - id: metadata/signed/issuer::apple
+
+  # Repeated ARM64 svc instructions - only fires on ARM64 binaries
+  - id: svc-instruction
+    desc: "Repeated ARM64 svc instructions in executable code"
+    crit: baseline
+    conf: 0.4
+    all:
+      - id: svc-hex-pattern
+    any:
+      - id: arch-arm64-elf
+      - id: arch-arm64-macho
+      - id: arch-arm64e-macho

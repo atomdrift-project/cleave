@@ -65,6 +65,7 @@ type config struct {
 	useCargo          bool
 	flush             bool
 	verbose           bool
+	useServer         bool // Use cleave server mode instead of subprocess
 }
 
 // reviewJob represents a file or archive to be reviewed by an LLM.

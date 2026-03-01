@@ -395,6 +395,7 @@ gemini-2.5-pro, gemini-2.5-flash. Popular choices:
 	verbose := flag.Bool("verbose", false, "Show detailed skip/progress messages")
 	validateEvery := flag.Int("validate-every", 500, "Randomly validate 1 in N files even if properly classified (0 = disabled)")
 	trainingDir := flag.String("training-dir", "", "Root dir for training JSONL (creates good/, bad/, good-review/, bad-review/)")
+	useServer := flag.Bool("server", false, "Use cleave server mode instead of subprocess (experimental)")
 
 	flag.Parse()
 
@@ -561,6 +562,7 @@ gemini-2.5-pro, gemini-2.5-flash. Popular choices:
 		maxPending:        *maxPending,
 		concurrency:       *concurrency,
 		validateEvery:     *validateEvery,
+		useServer:         *useServer,
 	}
 
 	ctx := context.Background()
@@ -662,7 +664,13 @@ gemini-2.5-pro, gemini-2.5-flash. Popular choices:
 		// Reset to first provider on each scan iteration so all providers get re-evaluated
 		cfg.provider = cfg.providers[0]
 
-		stats, err := streamAnalyzeAndReview(ctx, cfg, dbMode)
+		var stats *streamStats
+		var err error
+		if cfg.useServer {
+			stats, err = streamAnalyzeAndReviewServer(ctx, cfg, dbMode)
+		} else {
+			stats, err = streamAnalyzeAndReview(ctx, cfg, dbMode)
+		}
 		if err != nil {
 			if isYAMLTraitIssue(err.Error()) && yamlFixAttempts < maxYAMLAutoFixAttempts {
 				yamlFixAttempts++
@@ -1189,6 +1197,286 @@ func streamAnalyzeAndReview(ctx context.Context, cfg *config, dbMode string) (*s
 		colorYellow, reviewed, colorReset,
 		colorDim, skipped, colorReset)
 	return state.stats, nil
+}
+
+// streamAnalyzeAndReviewServer uses cleave server mode instead of subprocess.
+// It starts a cleave server, walks directories, and POSTs each file for analysis.
+func streamAnalyzeAndReviewServer(ctx context.Context, cfg *config, dbMode string) (*streamStats, error) {
+	sessionID := generateSessionID()
+	pid := os.Getpid()
+
+	// Start cleave server
+	server, err := startCleaveServer(ctx, cfg)
+	if err != nil {
+		return nil, fmt.Errorf("could not start cleave server: %w", err)
+	}
+	defer server.stop()
+
+	// Set up logging
+	logPath, err := getLogFilePath(sessionID)
+	if err != nil {
+		return nil, fmt.Errorf("could not determine log path: %w", err)
+	}
+
+	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644) //nolint:gosec // logs need user readability
+	if err != nil {
+		return nil, fmt.Errorf("could not create log file: %w", err)
+	}
+	defer logFile.Close() //nolint:errcheck // best-effort cleanup
+
+	fmt.Fprintf(os.Stderr, "Logging to: %s\n", logPath)
+
+	flushingFile := &flushingWriter{w: logFile}
+	fileHandler := slog.NewJSONHandler(flushingFile, &slog.HandlerOptions{Level: slog.LevelInfo})
+	logger := slog.New(fileHandler).With("session_id", sessionID, "pid", pid)
+
+	sessionStart := time.Now()
+	fmt.Fprintf(os.Stderr, "\n=== trait-basher session %s (PID %d) [server mode] ===\n", sessionID, pid)
+
+	logger.Info("trait-basher session started (server mode)",
+		"server_url", server.baseURL,
+		"dirs", cfg.dirs,
+		"provider", cfg.provider,
+		"mode", dbMode,
+	)
+
+	// Count files for progress estimation
+	estimatedTotal := countFiles(cfg.dirs)
+
+	stats := &streamStats{
+		scanStartTime:  time.Now(),
+		estimatedTotal: estimatedTotal,
+	}
+
+	state := &streamState{
+		cfg:         cfg,
+		stats:       stats,
+		dbMode:      dbMode,
+		coordinator: newReviewCoordinator(ctx, cfg, logger),
+	}
+
+	// Start result processing goroutine
+	resultsDone := make(chan struct{})
+	go func() {
+		defer close(resultsDone)
+		for result := range state.coordinator.results {
+			if result.err != nil {
+				logger.Error("review failed",
+					"path", result.job.archive.ArchivePath,
+					"error", result.err.Error(),
+					"provider", result.provider,
+				)
+			} else {
+				logger.Info("review completed",
+					"path", result.job.archive.ArchivePath,
+					"duration", result.duration,
+					"provider", result.provider,
+				)
+			}
+		}
+	}()
+
+	defer func() {
+		logger.Info("trait-basher session ended",
+			"duration_seconds", time.Since(sessionStart).Seconds(),
+			"total_files", stats.totalFiles,
+			"archives_reviewed", stats.archivesReviewed,
+			"skipped_cached", stats.skippedCached,
+			"skipped_no_review", stats.skippedNoReview,
+		)
+	}()
+
+	// Walk directories and analyze each file
+	paths, err := walkDirs(ctx, cfg.dirs)
+	if err != nil {
+		return nil, fmt.Errorf("could not walk directories: %w", err)
+	}
+
+	fileCount := 0
+	last := time.Now()
+	progressLines := 0
+
+	for path := range paths {
+		// Check if we need to restart (hit review limit)
+		if stats.shouldRestart.Load() {
+			clearProgressLine()
+			fmt.Fprintf(os.Stderr, "%s⚡%s Reviewed %s%d%s files - restarting scan to verify trait changes\n",
+				colorYellow, colorReset, colorBold, cfg.rescanAfter, colorReset)
+			if activeCount := state.coordinator.activeCount(); activeCount > 0 {
+				fmt.Fprintf(os.Stderr, "%s⏳%s Waiting for %s%d%s active review(s) before restart...\n",
+					colorYellow, colorReset, colorYellow, activeCount, colorReset)
+			}
+			state.coordinator.close()
+			<-resultsDone
+			return stats, nil
+		}
+
+		// Backpressure
+		if cfg.maxPending > 0 && state.coordinator.pendingCount() >= int64(cfg.maxPending) {
+			clearProgressLine()
+			fmt.Fprintf(os.Stderr, "%s⏸%s  Backpressure: %d pending reviews (max %d), pausing...\n",
+				colorYellow, colorReset, state.coordinator.pendingCount(), cfg.maxPending)
+			for state.coordinator.pendingCount() >= int64(cfg.maxPending) {
+				time.Sleep(500 * time.Millisecond)
+			}
+			fmt.Fprintf(os.Stderr, "%s▶%s  Resuming scan\n", colorGreen, colorReset)
+			progressLines = 0
+		}
+
+		// Analyze file via server
+		report, err := server.analyzePath(ctx, path)
+		if err != nil {
+			// Log error but continue
+			if cfg.verbose {
+				fmt.Fprintf(os.Stderr, "%s⚠%s  Error analyzing %s: %v\n", colorYellow, colorReset, path, err)
+			}
+			continue
+		}
+
+		// Convert to jsonlEntry format
+		entry := report.toJSONLEntry()
+
+		fileCount++
+		state.currentScanPath = entry.Path
+
+		// Check if we should restart due to file count limit
+		if cfg.restartAfter > 0 && fileCount >= cfg.restartAfter {
+			clearProgressLine()
+			fmt.Fprintf(os.Stderr, "%s⚡%s Analyzed %s%d%s files - restarting server\n",
+				colorYellow, colorReset, colorBold, fileCount, colorReset)
+			stats.shouldRestart.Store(true)
+			if activeCount := state.coordinator.activeCount(); activeCount > 0 {
+				fmt.Fprintf(os.Stderr, "%s⏳%s Waiting for %s%d%s active review(s) before restart...\n",
+					colorYellow, colorReset, colorYellow, activeCount, colorReset)
+			}
+			state.coordinator.close()
+			<-resultsDone
+			return stats, nil
+		}
+
+		// Update progress display
+		if time.Since(last) > 100*time.Millisecond {
+			elapsed := time.Since(stats.scanStartTime).Seconds()
+			filesPerSec := 0.0
+			if elapsed > 0 {
+				filesPerSec = float64(fileCount) / elapsed
+			}
+
+			stats.mu.Lock()
+			totalProcessed := stats.skippedNoReview + stats.archivesReviewed + stats.standaloneReviewed
+			stats.mu.Unlock()
+			detectionRate := 0.0
+			if totalProcessed > 0 {
+				detectionRate = float64(stats.skippedNoReview) / float64(totalProcessed) * 100
+			}
+
+			slotLines := state.coordinator.slotStatus()
+			progress := formatProgress(fileCount, stats.estimatedTotal, detectionRate, filesPerSec, entry.Path, cfg.knownGood)
+
+			totalLines := 1 + len(slotLines)
+			if progressLines > 0 {
+				fmt.Fprintf(os.Stderr, "\033[%dA", progressLines)
+			}
+			fmt.Fprintf(os.Stderr, "\033[K%s\n", progress)
+			for _, line := range slotLines {
+				fmt.Fprintf(os.Stderr, "\033[K%s\n", line)
+			}
+			progressLines = totalLines
+			last = time.Now()
+		}
+
+		// Cap finding descriptions
+		for i := range entry.Findings {
+			if len(entry.Findings[i].Desc) > 256 {
+				entry.Findings[i].Desc = entry.Findings[i].Desc[:256] + "..."
+			}
+		}
+
+		f := FileAnalysis{
+			Path:          entry.Path,
+			Risk:          entry.Risk,
+			Findings:      entry.Findings,
+			ExtractedPath: entry.ExtractedPath,
+		}
+
+		// In server mode, we treat each file as standalone (no archive member grouping)
+		// since the server returns aggregate results per file
+		processServerFileEntry(ctx, state, f)
+	}
+
+	// Process any remaining file
+	if state.currentRealFile != nil {
+		clearProgressLine()
+		processRealFile(ctx, state)
+	}
+
+	// Close coordinator and wait for reviews
+	clearProgressLine()
+	if activeCount := state.coordinator.activeCount(); activeCount > 0 {
+		fmt.Fprintf(os.Stderr, "%s✓%s Scan complete. Waiting for %s%d%s active review(s) to finish...\n",
+			colorGreen, colorReset, colorYellow, activeCount, colorReset)
+	}
+	state.coordinator.close()
+	<-resultsDone
+
+	// Final summary
+	clearProgressLine()
+	elapsed := time.Since(stats.scanStartTime).Seconds()
+	filesPerSec := 0.0
+	if elapsed > 0 {
+		filesPerSec = float64(fileCount) / elapsed
+	}
+	stats.mu.Lock()
+	totalProcessed := stats.skippedNoReview + stats.archivesReviewed + stats.standaloneReviewed
+	reviewed := stats.archivesReviewed + stats.standaloneReviewed
+	skipped := stats.skippedNoReview + stats.skippedCached
+	stats.mu.Unlock()
+	detectionRate := 0.0
+	if totalProcessed > 0 {
+		detectionRate = float64(stats.skippedNoReview) / float64(totalProcessed) * 100
+	}
+	rateLabel := "Det"
+	if cfg.knownGood {
+		rateLabel = "Clean"
+	}
+	rateClr := rateColor(detectionRate)
+	fmt.Fprintf(os.Stderr, "%s✓%s Scanned %s%d%s files in %.1fs (%s%.0f/s%s) | %s%s:%.0f%%%s | Reviewed:%s%d%s Skipped:%s%d%s\n",
+		colorGreen, colorReset,
+		colorBold, fileCount, colorReset,
+		elapsed,
+		colorCyan, filesPerSec, colorReset,
+		rateClr, rateLabel, detectionRate, colorReset,
+		colorYellow, reviewed, colorReset,
+		colorDim, skipped, colorReset)
+	return stats, nil
+}
+
+// processServerFileEntry processes a single file from server mode.
+// Unlike subprocess mode, we don't have archive member grouping - each file is atomic.
+func processServerFileEntry(ctx context.Context, st *streamState, f FileAnalysis) {
+	// Process any pending file first
+	if st.currentRealFile != nil {
+		clearProgressLine()
+		processRealFile(ctx, st)
+		st.currentRealFile = nil
+		st.currentRealPath = ""
+	}
+
+	// Create a new real file entry
+	rf := &RealFileAnalysis{
+		RealPath:  f.Path,
+		Root:      f,
+		Fragments: []FileAnalysis{},
+	}
+	st.currentRealFile = rf
+	st.currentRealPath = f.Path
+	st.stats.totalStandaloneFiles++
+
+	// Process immediately (no grouping needed)
+	clearProgressLine()
+	processRealFile(ctx, st)
+	st.currentRealFile = nil
+	st.currentRealPath = ""
 }
 
 func processFileEntry(ctx context.Context, st *streamState, f FileAnalysis, ap string) {

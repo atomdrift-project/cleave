@@ -303,16 +303,13 @@ pub(super) async fn analyze_path(
     }
 
     // Canonicalize the path to resolve symlinks and ..
-    let canonical_path = match path.canonicalize() {
-        Ok(p) => p,
-        Err(_) => {
-            warn!(%client_ip, path = %request.path, "File not found or not accessible");
-            return (
-                StatusCode::NOT_FOUND,
-                Json(serde_json::json!({"error": "File not found"})),
-            )
-                .into_response();
-        }
+    let Ok(canonical_path) = path.canonicalize() else {
+        warn!(%client_ip, path = %request.path, "File not found or not accessible");
+        return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "File not found"})),
+        )
+            .into_response();
     };
 
     // Check path is within allowed directories

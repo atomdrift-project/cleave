@@ -170,6 +170,37 @@ fn split_trait_id(id: &str) -> (String, String) {
     }
 }
 
+/// Namespace categories for grouping findings
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[allow(dead_code)] // Used by binary target
+enum Namespace {
+    WellKnown,
+    Objectives,
+    MicroBehaviors,
+}
+
+impl Namespace {
+    /// Parse namespace from trait ID prefix
+    fn from_trait_id(id: &str) -> Option<Self> {
+        let prefix = id.split('/').next()?;
+        match prefix {
+            "well-known" => Some(Self::WellKnown),
+            "objectives" => Some(Self::Objectives),
+            "micro-behaviors" => Some(Self::MicroBehaviors),
+            _ => None,
+        }
+    }
+
+    /// Display name for section header
+    fn display_name(&self) -> &'static str {
+        match self {
+            Self::WellKnown => "WELL-KNOWN",
+            Self::Objectives => "OBJECTIVES",
+            Self::MicroBehaviors => "MICRO-BEHAVIORS",
+        }
+    }
+}
+
 /// Get sort order for namespace (fixed order: well-known, objectives, micro-behaviors, metadata, third-party)
 #[allow(dead_code)] // Used by binary target
 fn namespace_sort_order(ns: &str) -> u8 {
@@ -504,14 +535,64 @@ pub(crate) fn parse_jsonl(jsonl: &str) -> Result<AnalysisReport> {
     Ok(report)
 }
 
-/// Format analysis report for terminal display (malcontent-style)
+/// Get terminal width, defaulting to 100 if unavailable
+#[allow(dead_code)] // Used by binary target
+fn terminal_width() -> usize {
+    terminal_size::terminal_size()
+        .map(|(w, _)| w.0 as usize)
+        .unwrap_or(100)
+}
+
+/// Truncate string to max width, using ellipsis (…) if needed
+#[allow(dead_code)] // Used by binary target
+fn truncate_with_ellipsis(s: &str, max_width: usize) -> String {
+    if s.len() <= max_width {
+        return s.to_string();
+    }
+    if max_width <= 1 {
+        return "…".to_string();
+    }
+    // Find char boundary for truncation
+    let mut end = max_width - 1;
+    while !s.is_char_boundary(end) && end > 0 {
+        end -= 1;
+    }
+    format!("{}…", &s[..end])
+}
+
+/// Colorize text based on criticality
+#[allow(dead_code)] // Used by binary target
+fn colorize_by_crit(text: &str, crit: &Criticality) -> colored::ColoredString {
+    match crit {
+        Criticality::Hostile => text.bright_red(),
+        Criticality::Suspicious => text.bright_yellow(),
+        _ => text.bright_cyan(),
+    }
+}
+
+/// Extract short trait ID (strip namespace prefix)
+/// e.g., "well-known/malware/BPFDoor" -> "BPFDoor"
+/// e.g., "objectives/c2/http/beacon" -> "c2/http/beacon"
+/// e.g., "micro-behaviors/fs/read/file" -> "fs/read/file"
+#[allow(dead_code)] // Used by binary target
+fn short_trait_id(id: &str) -> String {
+    let parts: Vec<&str> = id.split('/').collect();
+    if parts.len() > 1 {
+        // Skip namespace prefix (well-known, objectives, micro-behaviors)
+        let first = parts[0];
+        if first == "well-known" || first == "objectives" || first == "micro-behaviors" {
+            return parts[1..].join("/");
+        }
+    }
+    id.to_string()
+}
+
+/// Format analysis report for terminal display
 /// Uses the v2 flat files array structure.
 #[allow(dead_code)] // Used by binary target
 pub(crate) fn format_terminal(report: &AnalysisReport) -> String {
     let mut output = String::new();
-
-    // Compile ANSI strip regex once, outside all loops
-    let ansi_re = ansi_strip_regex();
+    let term_width = terminal_width();
 
     // Iterate over files that have findings
     for file in &report.files {
@@ -523,7 +604,7 @@ pub(crate) fn format_terminal(report: &AnalysisReport) -> String {
         // Aggregate findings by directory path
         let aggregated = aggregate_findings_by_directory(&file.findings);
 
-        // Filter: remove criticality=none and confidence<0.5
+        // Filter: remove baseline and low-confidence findings
         let filtered: Vec<Finding> = aggregated
             .into_iter()
             .filter(|f| f.crit != Criticality::Baseline && f.conf >= 0.5)
@@ -533,24 +614,37 @@ pub(crate) fn format_terminal(report: &AnalysisReport) -> String {
             continue;
         }
 
-        // Group by namespace and find max criticality
-        let mut by_namespace: HashMap<String, Vec<&Finding>> = HashMap::new();
-        let mut ns_max_crit: HashMap<String, Criticality> = HashMap::new();
-        let mut max_crit = Criticality::Notable;
-
+        // Group findings by namespace
+        let mut by_namespace: HashMap<Namespace, Vec<&Finding>> = HashMap::new();
         for finding in &filtered {
-            let (ns, _) = split_trait_id(&finding.id);
-            let current_max = ns_max_crit.get(&ns).unwrap_or(&Criticality::Baseline);
-            if &finding.crit > current_max {
-                ns_max_crit.insert(ns.clone(), finding.crit);
-            }
-            by_namespace.entry(ns).or_default().push(finding);
-
-            // Track max criticality for file
-            if finding.crit > max_crit {
-                max_crit = finding.crit;
+            if let Some(ns) = Namespace::from_trait_id(&finding.id) {
+                by_namespace.entry(ns).or_default().push(finding);
             }
         }
+
+        // Sort findings within each namespace by criticality (hostile first)
+        for findings in by_namespace.values_mut() {
+            findings.sort_by(|a, b| b.crit.cmp(&a.crit).then_with(|| a.id.cmp(&b.id)));
+        }
+
+        // Pre-calculate column widths across ALL findings in this file
+        let all_findings: Vec<&&Finding> = by_namespace.values().flat_map(|v| v.iter()).collect();
+
+        let trait_width = all_findings
+            .iter()
+            .map(|f| short_trait_id(&f.id).len())
+            .max()
+            .unwrap_or(20);
+
+        let desc_width = all_findings
+            .iter()
+            .map(|f| terse_description(&f.desc).len())
+            .max()
+            .unwrap_or(30);
+
+        // Evidence gets remaining space: term_width - 2 (bullet+space) - trait - 2 - desc - 2
+        let fixed_width = 2 + trait_width + 2 + desc_width + 2;
+        let evidence_width = term_width.saturating_sub(fixed_width);
 
         // Generate formula from filtered findings
         let formula = malecule_bridge::formula_from_findings(&filtered);
@@ -558,109 +652,63 @@ pub(crate) fn format_terminal(report: &AnalysisReport) -> String {
         // Format file type (uppercase, e.g., "PE", "ELF")
         let file_type_display = file.file_type.to_uppercase();
 
-        // File header: emoji path • TYPE:formula
-        let emoji = risk_emoji(&max_crit);
+        // File header: path  type • formula • sha256:hash
         let type_formula = if formula.is_empty() {
             file_type_display
         } else {
-            format!("{}:{}", file_type_display, formula)
+            format!("{} • {}", file_type_display, formula)
         };
+
+        let sha_display = if file.sha256.is_empty() {
+            String::new()
+        } else {
+            format!(" • {}", format!("sha256:{}", file.sha256).bright_black())
+        };
+
         output.push_str(&format!(
-            "├─ {} {} • {}\n",
-            emoji,
-            file.path.bright_white(),
-            type_formula
+            "{}  {}{}\n",
+            file.path.bright_white().bold(),
+            type_formula.bright_black(),
+            sha_display
         ));
-        output.push_str("│\n");
+        output.push('\n');
 
-        // Sort namespaces in fixed order: well-known, objectives, micro-behaviors, metadata, third-party
-        // Within each category, sort by criticality (most critical first)
-        let mut namespaces: Vec<String> = by_namespace.keys().cloned().collect();
-        namespaces.sort_by(|a, b| {
-            let order_a = namespace_sort_order(a);
-            let order_b = namespace_sort_order(b);
-            order_a.cmp(&order_b).then_with(|| {
-                // Within same category, sort by criticality (higher first)
-                let crit_a = ns_max_crit.get(a).unwrap_or(&Criticality::Baseline);
-                let crit_b = ns_max_crit.get(b).unwrap_or(&Criticality::Baseline);
-                crit_b.cmp(crit_a)
-            })
-        });
-
-        // Render each namespace
-        for ns in &namespaces {
-            let Some(findings) = by_namespace.get(ns) else {
-                continue;
+        // Render namespaces in fixed order: WELL-KNOWN, OBJECTIVES, MICRO-BEHAVIORS
+        for ns in [Namespace::WellKnown, Namespace::Objectives, Namespace::MicroBehaviors] {
+            let Some(findings) = by_namespace.get(&ns) else {
+                continue; // Skip empty sections
             };
-            output.push_str(&format!("│ ◇ {}\n", &namespace_long_name(ns)));
 
-            let mut sorted_findings = findings.clone();
-            sorted_findings.sort_by(|a, b| b.crit.cmp(&a.crit).then_with(|| a.id.cmp(&b.id)));
+            // Section header
+            output.push_str(&format!("{}\n", ns.display_name().bright_magenta().bold()));
 
-            for finding in sorted_findings {
-                let emoji = risk_emoji(&finding.crit);
-                let evidence = format_evidence(finding);
+            // Render each finding
+            for finding in findings {
+                let trait_id = short_trait_id(&finding.id);
                 let desc = terse_description(&finding.desc);
+                let evidence = format_evidence(finding);
 
-                // Determine if this is an internal finding (generated by code) or from YAML
-                let is_internal = !finding.evidence.is_empty()
-                    && finding.evidence.iter().any(|e| {
-                        // Internal sources (generated by analyzers, not from YAML traits)
-                        e.source == "codesign_parser"
-                            || e.source == "binary_analyzer"
-                            || e.source == "strings_extractor"
-                            || e.source == "import_mapper"
-                    });
+                // Build the line with proper column alignment
+                // Format: ● trait_id  description  evidence
+                let bullet = colorize_by_crit("●", &finding.crit);
+                let padded_trait = format!("{:width$}", trait_id, width = trait_width);
+                let padded_desc = format!("{:width$}", desc, width = desc_width);
+                let truncated_evidence = truncate_with_ellipsis(&evidence, evidence_width);
+                let colored_evidence = colorize_by_crit(&truncated_evidence, &finding.crit);
 
-                // Show full trait ID for internal/generated findings
-                // Truncate for YAML-loaded findings (to show just the meaningful suffix)
-                let trait_id = if is_internal {
-                    finding.id.clone()
-                } else {
-                    let (_, rest) = split_trait_id(&finding.id);
-                    rest
-                };
-
-                let content = match finding.crit {
-                    Criticality::Hostile => {
-                        format!("{} {} — {}", emoji, trait_id, desc).bright_red()
-                    }
-                    Criticality::Suspicious => {
-                        format!("{} {} — {}", emoji, trait_id, desc).bright_yellow()
-                    }
-                    _ => format!("{} {} — {}", emoji, trait_id, desc).bright_cyan(),
-                };
-
-                if evidence.is_empty() {
-                    output.push_str(&format!("│   {}\n", content));
-                } else {
-                    // Strip ANSI codes for accurate length measurement
-                    let display_len = ansi_re
-                        .replace_all(&format!("{}: {}", content, evidence), "")
-                        .len();
-                    if display_len > 120 {
-                        output.push_str(&format!("│   {}\n", content));
-                        output.push_str(&format!("│      {}\n", evidence.bright_black()));
-                    } else {
-                        output.push_str(&format!(
-                            "│   {}{} {}\n",
-                            content,
-                            ":".bright_black(),
-                            evidence.bright_black()
-                        ));
-                    }
-                }
+                output.push_str(&format!(
+                    "{} {}  {}  {}\n",
+                    bullet, padded_trait, padded_desc, colored_evidence
+                ));
             }
-            output.push_str("│\n");
+            output.push('\n');
         }
-        // Consistent blank line after each file
-        output.push_str("│\n");
     }
 
     // If no files had findings, show a simple message
     if output.is_empty() {
-        output.push_str(&format!("├─ {}\n", report.target.path.bright_white()));
-        output.push_str("│  No findings\n");
+        output.push_str(&format!("{}\n", report.target.path.bright_white()));
+        output.push_str("No findings\n");
     }
 
     output
@@ -936,7 +984,7 @@ mod tests {
         let capabilities = vec![Finding {
             kind: FindingKind::Capability,
             trait_refs: vec![],
-            id: "execution/shell".to_string(),
+            id: "micro-behaviors/execution/shell".to_string(),
             desc: "Execute shell commands".to_string(),
             conf: 0.9,
             crit: Criticality::Hostile,
@@ -948,6 +996,6 @@ mod tests {
         }];
         let report = create_test_report(capabilities, vec![]);
         let output = format_terminal(&report);
-        assert!(output.contains("execution/shell") || output.contains("shell"));
+        assert!(output.contains("execution/shell") || output.contains("MICRO-BEHAVIORS"));
     }
 }

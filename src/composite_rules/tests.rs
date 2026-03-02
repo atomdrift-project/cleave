@@ -3018,3 +3018,773 @@ fn test_all_and_any_without_needs_requires_one_any() {
         "Rule with all + any (no needs) should match when 1 any-condition is satisfied"
     );
 }
+
+// ============================================================================
+// Proximity constraint tests (near_lines, near_bytes)
+// ============================================================================
+
+/// Helper: build a Finding with evidence at a specific line:column location (AST-style).
+/// Each finding gets a unique value (the id) to prevent deduplication during evidence merging.
+fn finding_at_line(id: &str, line: usize, col: usize) -> Finding {
+    Finding {
+        id: id.to_string(),
+        kind: FindingKind::Capability,
+        desc: format!("Test finding at line {}", line),
+        conf: 1.0,
+        crit: Criticality::Baseline,
+        mbc: None,
+        attack: None,
+        trait_refs: vec![],
+        evidence: vec![crate::types::Evidence {
+            method: "ast".to_string(),
+            source: "tree-sitter".to_string(),
+            value: id.to_string(), // unique per finding to avoid dedup
+            location: Some(format!("{}:{}", line, col)),
+            ..Default::default()
+        }],
+        match_count: 0,
+        source_file: None,
+    }
+}
+
+/// Helper: build a Finding with evidence at a specific byte offset.
+/// Each finding gets a unique value (the id) to prevent deduplication during evidence merging.
+fn finding_at_offset(id: &str, offset: u64) -> Finding {
+    Finding {
+        id: id.to_string(),
+        kind: FindingKind::Capability,
+        desc: format!("Test finding at offset {}", offset),
+        conf: 1.0,
+        crit: Criticality::Baseline,
+        mbc: None,
+        attack: None,
+        trait_refs: vec![],
+        evidence: vec![crate::types::Evidence {
+            method: "string".to_string(),
+            source: "test".to_string(),
+            value: id.to_string(), // unique per finding to avoid dedup
+            location: None,
+            offsets: vec![offset],
+            ..Default::default()
+        }],
+        match_count: 0,
+        source_file: None,
+    }
+}
+
+/// Helper: build a CompositeTrait for proximity tests with `all` conditions referencing trait IDs.
+fn proximity_rule(
+    trait_ids: &[&str],
+    near_lines: Option<usize>,
+    near_bytes: Option<usize>,
+) -> CompositeTrait {
+    let all_conds: Vec<Condition> = trait_ids
+        .iter()
+        .map(|id| Condition::Trait { id: id.to_string() })
+        .collect();
+    CompositeTrait {
+        id: "test/proximity".to_string(),
+        desc: "Proximity test".to_string(),
+        conf: 0.9,
+        crit: Criticality::Baseline,
+        mbc: None,
+        attack: None,
+        platforms: vec![Platform::All],
+        r#for: vec![FileType::All],
+        size_min: None,
+        size_max: None,
+        all: Some(all_conds),
+        any: None,
+        none: None,
+        unless: None,
+        not: None,
+        downgrade: None,
+        needs: None,
+        near_lines,
+        near_bytes,
+        defined_in: std::path::PathBuf::from("test.yaml"),
+        precision: None,
+    }
+}
+
+/// Helper: create an EvaluationContext with given findings and binary data.
+fn proximity_ctx<'a>(
+    report: &'a AnalysisReport,
+    data: &'a [u8],
+    findings: &'a [Finding],
+) -> EvaluationContext<'a> {
+    EvaluationContext {
+        report,
+        binary_data: data,
+        file_type: FileType::Python,
+        platforms: vec![Platform::All],
+        additional_findings: Some(findings),
+        cached_ast: None,
+        finding_id_index: None,
+        debug_collector: None,
+        section_map: None,
+        inline_yara_results: None,
+        cached_kv_format: OnceLock::new(),
+        cached_kv_parsed: OnceLock::new(),
+        current_trait: None,
+        current_source: None,
+        string_exact_index: OnceLock::new(),
+        string_exact_index_ci: OnceLock::new(),
+    }
+}
+
+fn empty_report() -> AnalysisReport {
+    AnalysisReport::new(TargetInfo {
+        path: "/test.py".to_string(),
+        file_type: "python".to_string(),
+        size_bytes: 100,
+        sha256: "test".to_string(),
+        architectures: None,
+    })
+}
+
+#[test]
+fn test_near_lines_same_line_passes() {
+    let report = empty_report();
+    let data = b"line1\nline2\nline3\n";
+    let findings = vec![
+        finding_at_line("trait-a", 2, 1),
+        finding_at_line("trait-b", 2, 10),
+    ];
+    let ctx = proximity_ctx(&report, data, &findings);
+    let rule = proximity_rule(&["trait-a", "trait-b"], Some(0), None);
+    assert!(
+        rule.evaluate(&ctx).is_some(),
+        "near_lines: 0 should pass when evidence is on the same line"
+    );
+}
+
+#[test]
+fn test_near_lines_same_line_fails() {
+    let report = empty_report();
+    let data = b"line1\nline2\nline3\n";
+    let findings = vec![
+        finding_at_line("trait-a", 1, 1),
+        finding_at_line("trait-b", 2, 1),
+    ];
+    let ctx = proximity_ctx(&report, data, &findings);
+    let rule = proximity_rule(&["trait-a", "trait-b"], Some(0), None);
+    assert!(
+        rule.evaluate(&ctx).is_none(),
+        "near_lines: 0 should fail when evidence is on different lines"
+    );
+}
+
+#[test]
+fn test_near_lines_within_window() {
+    let report = empty_report();
+    let data = b"line1\nline2\nline3\nline4\nline5\n";
+    let findings = vec![
+        finding_at_line("trait-a", 2, 1),
+        finding_at_line("trait-b", 4, 1),
+    ];
+    let ctx = proximity_ctx(&report, data, &findings);
+    let rule = proximity_rule(&["trait-a", "trait-b"], Some(5), None);
+    assert!(
+        rule.evaluate(&ctx).is_some(),
+        "near_lines: 5 should pass when evidence is 2 lines apart"
+    );
+}
+
+#[test]
+fn test_near_lines_outside_window() {
+    let report = empty_report();
+    let data = b"line1\nline2\nline3\nline4\nline5\n";
+    let findings = vec![
+        finding_at_line("trait-a", 1, 1),
+        finding_at_line("trait-b", 5, 1),
+    ];
+    let ctx = proximity_ctx(&report, data, &findings);
+    let rule = proximity_rule(&["trait-a", "trait-b"], Some(2), None);
+    assert!(
+        rule.evaluate(&ctx).is_none(),
+        "near_lines: 2 should fail when evidence is 4 lines apart"
+    );
+}
+
+#[test]
+fn test_near_lines_boundary_exact() {
+    let report = empty_report();
+    let data = b"line1\nline2\nline3\nline4\nline5\n";
+    // Lines 2 and 5 are exactly 3 apart
+    let findings = vec![
+        finding_at_line("trait-a", 2, 1),
+        finding_at_line("trait-b", 5, 1),
+    ];
+    let ctx = proximity_ctx(&report, data, &findings);
+
+    let pass_rule = proximity_rule(&["trait-a", "trait-b"], Some(3), None);
+    assert!(
+        pass_rule.evaluate(&ctx).is_some(),
+        "near_lines: 3 should pass when evidence is exactly 3 lines apart"
+    );
+
+    let fail_rule = proximity_rule(&["trait-a", "trait-b"], Some(2), None);
+    assert!(
+        fail_rule.evaluate(&ctx).is_none(),
+        "near_lines: 2 should fail when evidence is exactly 3 lines apart"
+    );
+}
+
+#[test]
+fn test_near_lines_with_byte_offsets() {
+    // Simulate a text file where evidence has byte offsets (no line:column location).
+    // File: "aaa\nbbb\nccc\nddd\neee\n" — 5 lines, each 4 bytes (3 chars + newline)
+    let report = empty_report();
+    let data = b"aaa\nbbb\nccc\nddd\neee\n";
+    // Byte offset 0 = line 1, offset 4 = line 2, offset 8 = line 3, offset 12 = line 4
+    let findings = vec![
+        finding_at_offset("trait-a", 4),  // line 2
+        finding_at_offset("trait-b", 12), // line 4
+    ];
+    let ctx = proximity_ctx(&report, data, &findings);
+
+    let pass = proximity_rule(&["trait-a", "trait-b"], Some(5), None);
+    assert!(
+        pass.evaluate(&ctx).is_some(),
+        "near_lines: 5 should pass — byte offsets map to lines 2 and 4 (2 apart)"
+    );
+
+    let fail = proximity_rule(&["trait-a", "trait-b"], Some(1), None);
+    assert!(
+        fail.evaluate(&ctx).is_none(),
+        "near_lines: 1 should fail — byte offsets map to lines 2 and 4 (2 apart)"
+    );
+}
+
+#[test]
+fn test_near_lines_mixed_evidence_formats() {
+    // Mix of AST evidence (line:column) and string evidence (byte offset)
+    let report = empty_report();
+    let data = b"aaa\nbbb\nccc\nddd\neee\n";
+    let findings = vec![
+        finding_at_line("trait-a", 3, 1), // AST evidence at line 3
+        finding_at_offset("trait-b", 12), // Byte offset 12 → line 4
+    ];
+    let ctx = proximity_ctx(&report, data, &findings);
+
+    let pass = proximity_rule(&["trait-a", "trait-b"], Some(5), None);
+    assert!(
+        pass.evaluate(&ctx).is_some(),
+        "Should pass with mixed evidence formats (line 3 + line 4, 1 apart)"
+    );
+
+    let fail = proximity_rule(&["trait-a", "trait-b"], Some(0), None);
+    assert!(
+        fail.evaluate(&ctx).is_none(),
+        "Same-line constraint should fail for lines 3 and 4"
+    );
+}
+
+#[test]
+fn test_near_lines_all_requires_multiple() {
+    // With 3 `all` conditions, min_required = 3. Need 3 items in the window.
+    let report = empty_report();
+    let data = b"line1\nline2\nline3\nline4\nline5\n";
+    let findings = vec![
+        finding_at_line("trait-a", 1, 1),
+        finding_at_line("trait-b", 2, 1),
+        finding_at_line("trait-c", 3, 1),
+    ];
+    let ctx = proximity_ctx(&report, data, &findings);
+
+    let rule = proximity_rule(&["trait-a", "trait-b", "trait-c"], Some(5), None);
+    assert!(
+        rule.evaluate(&ctx).is_some(),
+        "3 all conditions within 5 lines should pass"
+    );
+}
+
+#[test]
+fn test_near_lines_all_three_too_spread() {
+    // 3 conditions, one is too far from the others
+    let report = empty_report();
+    let data: Vec<u8> = "x\n".repeat(200).into_bytes();
+    let findings = vec![
+        finding_at_line("trait-a", 1, 1),
+        finding_at_line("trait-b", 3, 1),
+        finding_at_line("trait-c", 100, 1),
+    ];
+    let ctx = proximity_ctx(&report, &data, &findings);
+
+    let rule = proximity_rule(&["trait-a", "trait-b", "trait-c"], Some(5), None);
+    assert!(
+        rule.evaluate(&ctx).is_none(),
+        "3 conditions with one 100 lines away should fail with near_lines: 5"
+    );
+}
+
+#[test]
+fn test_near_lines_any_with_needs() {
+    // `any` with needs: 3 and near_lines: 10. Need 3 items in the window.
+    let report = empty_report();
+    let data = b"line1\nline2\nline3\nline4\nline5\n";
+    let findings = vec![
+        finding_at_line("trait-a", 1, 1),
+        finding_at_line("trait-b", 3, 1),
+        finding_at_line("trait-c", 5, 1),
+        finding_at_line("trait-d", 2, 1),
+    ];
+    let ctx = proximity_ctx(&report, data, &findings);
+
+    let mut rule = CompositeTrait {
+        id: "test/any-needs".to_string(),
+        desc: "Any with needs".to_string(),
+        conf: 0.9,
+        crit: Criticality::Baseline,
+        mbc: None,
+        attack: None,
+        platforms: vec![Platform::All],
+        r#for: vec![FileType::All],
+        size_min: None,
+        size_max: None,
+        all: None,
+        any: Some(vec![
+            Condition::Trait {
+                id: "trait-a".to_string(),
+            },
+            Condition::Trait {
+                id: "trait-b".to_string(),
+            },
+            Condition::Trait {
+                id: "trait-c".to_string(),
+            },
+            Condition::Trait {
+                id: "trait-d".to_string(),
+            },
+        ]),
+        none: None,
+        unless: None,
+        not: None,
+        downgrade: None,
+        needs: Some(3),
+        near_lines: Some(10),
+        near_bytes: None,
+        defined_in: std::path::PathBuf::from("test.yaml"),
+        precision: None,
+    };
+
+    assert!(
+        rule.evaluate(&ctx).is_some(),
+        "any with needs: 3, near_lines: 10 should pass (4 items within 5 lines)"
+    );
+
+    // Tighten the window — all 4 are within 4 lines so needs:3 can still fit
+    rule.near_lines = Some(2);
+    assert!(
+        rule.evaluate(&ctx).is_some(),
+        "near_lines: 2 should pass — lines 1,2,3 are within 2 lines of each other"
+    );
+}
+
+#[test]
+fn test_near_lines_any_with_needs_too_spread() {
+    let report = empty_report();
+    let data: Vec<u8> = "x\n".repeat(200).into_bytes();
+    let findings = vec![
+        finding_at_line("trait-a", 1, 1),
+        finding_at_line("trait-b", 50, 1),
+        finding_at_line("trait-c", 100, 1),
+        finding_at_line("trait-d", 150, 1),
+    ];
+    let ctx = proximity_ctx(&report, &data, &findings);
+
+    let rule = CompositeTrait {
+        id: "test/spread".to_string(),
+        desc: "Spread test".to_string(),
+        conf: 0.9,
+        crit: Criticality::Baseline,
+        mbc: None,
+        attack: None,
+        platforms: vec![Platform::All],
+        r#for: vec![FileType::All],
+        size_min: None,
+        size_max: None,
+        all: None,
+        any: Some(vec![
+            Condition::Trait {
+                id: "trait-a".to_string(),
+            },
+            Condition::Trait {
+                id: "trait-b".to_string(),
+            },
+            Condition::Trait {
+                id: "trait-c".to_string(),
+            },
+            Condition::Trait {
+                id: "trait-d".to_string(),
+            },
+        ]),
+        none: None,
+        unless: None,
+        not: None,
+        downgrade: None,
+        needs: Some(3),
+        near_lines: Some(10),
+        near_bytes: None,
+        defined_in: std::path::PathBuf::from("test.yaml"),
+        precision: None,
+    };
+
+    assert!(
+        rule.evaluate(&ctx).is_none(),
+        "4 traits each 50 lines apart should fail near_lines: 10 with needs: 3"
+    );
+}
+
+#[test]
+fn test_near_lines_all_plus_any() {
+    // all(2) + any(needs:2) = min_required 4
+    let report = empty_report();
+    let data = b"line1\nline2\nline3\nline4\nline5\nline6\n";
+    let findings = vec![
+        finding_at_line("all-a", 2, 1),
+        finding_at_line("all-b", 3, 1),
+        finding_at_line("any-a", 4, 1),
+        finding_at_line("any-b", 5, 1),
+        finding_at_line("any-c", 6, 1),
+    ];
+    let ctx = proximity_ctx(&report, data, &findings);
+
+    let rule = CompositeTrait {
+        id: "test/all-any".to_string(),
+        desc: "All + any".to_string(),
+        conf: 0.9,
+        crit: Criticality::Baseline,
+        mbc: None,
+        attack: None,
+        platforms: vec![Platform::All],
+        r#for: vec![FileType::All],
+        size_min: None,
+        size_max: None,
+        all: Some(vec![
+            Condition::Trait {
+                id: "all-a".to_string(),
+            },
+            Condition::Trait {
+                id: "all-b".to_string(),
+            },
+        ]),
+        any: Some(vec![
+            Condition::Trait {
+                id: "any-a".to_string(),
+            },
+            Condition::Trait {
+                id: "any-b".to_string(),
+            },
+            Condition::Trait {
+                id: "any-c".to_string(),
+            },
+        ]),
+        none: None,
+        unless: None,
+        not: None,
+        downgrade: None,
+        needs: Some(2),
+        near_lines: Some(10),
+        near_bytes: None,
+        defined_in: std::path::PathBuf::from("test.yaml"),
+        precision: None,
+    };
+
+    assert!(
+        rule.evaluate(&ctx).is_some(),
+        "all(2) + any(needs:2) with near_lines:10 should pass (lines 2-6)"
+    );
+}
+
+#[test]
+fn test_near_bytes_with_offsets() {
+    let report = empty_report();
+    let data = b"some file content here";
+    let findings = vec![
+        finding_at_offset("trait-a", 100),
+        finding_at_offset("trait-b", 150),
+    ];
+    let ctx = proximity_ctx(&report, data, &findings);
+
+    let pass = proximity_rule(&["trait-a", "trait-b"], None, Some(100));
+    assert!(
+        pass.evaluate(&ctx).is_some(),
+        "near_bytes: 100 should pass (offsets 100 and 150 are 50 apart)"
+    );
+
+    let fail = proximity_rule(&["trait-a", "trait-b"], None, Some(30));
+    assert!(
+        fail.evaluate(&ctx).is_none(),
+        "near_bytes: 30 should fail (offsets 100 and 150 are 50 apart)"
+    );
+}
+
+#[test]
+fn test_near_bytes_boundary_exact() {
+    let report = empty_report();
+    let data = b"x";
+    let findings = vec![
+        finding_at_offset("trait-a", 100),
+        finding_at_offset("trait-b", 200),
+    ];
+    let ctx = proximity_ctx(&report, data, &findings);
+
+    let pass = proximity_rule(&["trait-a", "trait-b"], None, Some(100));
+    assert!(
+        pass.evaluate(&ctx).is_some(),
+        "near_bytes: 100 should pass (exactly 100 apart)"
+    );
+
+    let fail = proximity_rule(&["trait-a", "trait-b"], None, Some(99));
+    assert!(
+        fail.evaluate(&ctx).is_none(),
+        "near_bytes: 99 should fail (100 apart)"
+    );
+}
+
+#[test]
+fn test_near_lines_no_location_evidence_fails() {
+    // Evidence with no location or offsets cannot participate in proximity
+    let report = empty_report();
+    let data = b"some content\n";
+    let findings = vec![
+        Finding {
+            id: "trait-a".to_string(),
+            kind: FindingKind::Capability,
+            desc: "No location".to_string(),
+            conf: 1.0,
+            crit: Criticality::Baseline,
+            mbc: None,
+            attack: None,
+            trait_refs: vec![],
+            evidence: vec![crate::types::Evidence {
+                method: "symbol".to_string(),
+                source: "test".to_string(),
+                value: "trait-a".to_string(),
+                location: Some("import".to_string()),
+                ..Default::default()
+            }],
+            match_count: 0,
+            source_file: None,
+        },
+        Finding {
+            id: "trait-b".to_string(),
+            kind: FindingKind::Capability,
+            desc: "No location".to_string(),
+            conf: 1.0,
+            crit: Criticality::Baseline,
+            mbc: None,
+            attack: None,
+            trait_refs: vec![],
+            evidence: vec![crate::types::Evidence {
+                method: "symbol".to_string(),
+                source: "test".to_string(),
+                value: "trait-b".to_string(),
+                location: Some("import".to_string()),
+                ..Default::default()
+            }],
+            match_count: 0,
+            source_file: None,
+        },
+    ];
+    let ctx = proximity_ctx(&report, data, &findings);
+
+    let rule = proximity_rule(&["trait-a", "trait-b"], Some(5), None);
+    assert!(
+        rule.evaluate(&ctx).is_none(),
+        "Evidence with non-numeric locations should not satisfy proximity constraints"
+    );
+}
+
+#[test]
+fn test_near_lines_hex_offset_location() {
+    // Evidence with hex offset location (e.g., "0x10") should be converted via line index
+    let report = empty_report();
+    // 5 lines: "aaaa\nbbbb\ncccc\ndddd\neeee\n" — each line 5 bytes
+    let data = b"aaaa\nbbbb\ncccc\ndddd\neeee\n";
+    let findings = vec![
+        // Hex offset 0x05 = byte 5 = start of line 2
+        Finding {
+            id: "trait-a".to_string(),
+            kind: FindingKind::Capability,
+            desc: "Hex loc".to_string(),
+            conf: 1.0,
+            crit: Criticality::Baseline,
+            mbc: None,
+            attack: None,
+            trait_refs: vec![],
+            evidence: vec![crate::types::Evidence {
+                method: "string".to_string(),
+                source: "test".to_string(),
+                value: "bbbb".to_string(),
+                location: Some("0x05".to_string()),
+                ..Default::default()
+            }],
+            match_count: 0,
+            source_file: None,
+        },
+        // Hex offset 0x0f = byte 15 = start of line 4
+        Finding {
+            id: "trait-b".to_string(),
+            kind: FindingKind::Capability,
+            desc: "Hex loc".to_string(),
+            conf: 1.0,
+            crit: Criticality::Baseline,
+            mbc: None,
+            attack: None,
+            trait_refs: vec![],
+            evidence: vec![crate::types::Evidence {
+                method: "string".to_string(),
+                source: "test".to_string(),
+                value: "dddd".to_string(),
+                location: Some("0x0f".to_string()),
+                ..Default::default()
+            }],
+            match_count: 0,
+            source_file: None,
+        },
+    ];
+    let ctx = proximity_ctx(&report, data, &findings);
+
+    let pass = proximity_rule(&["trait-a", "trait-b"], Some(5), None);
+    assert!(
+        pass.evaluate(&ctx).is_some(),
+        "Hex offset locations should map to lines — 0x05 (line 2) and 0x0f (line 4) are 2 apart"
+    );
+
+    let fail = proximity_rule(&["trait-a", "trait-b"], Some(1), None);
+    assert!(
+        fail.evaluate(&ctx).is_none(),
+        "near_lines: 1 should fail when hex offsets map to lines 2 and 4"
+    );
+}
+
+// ============================================================================
+// Unit tests for proximity helper functions
+// ============================================================================
+
+#[test]
+fn test_build_line_index() {
+    let data = b"hello\nworld\nfoo\n";
+    let idx = super::traits::build_line_index(data);
+    assert_eq!(idx, vec![0, 6, 12, 16]);
+}
+
+#[test]
+fn test_build_line_index_empty() {
+    let idx = super::traits::build_line_index(b"");
+    assert_eq!(idx, vec![0]);
+}
+
+#[test]
+fn test_build_line_index_no_newlines() {
+    let idx = super::traits::build_line_index(b"no newlines");
+    assert_eq!(idx, vec![0]);
+}
+
+#[test]
+fn test_byte_offset_to_line() {
+    let data = b"aaa\nbbb\nccc\n";
+    let idx = super::traits::build_line_index(data);
+    // Line starts: [0, 4, 8, 12]
+    assert_eq!(super::traits::byte_offset_to_line(&idx, 0), 1); // start of line 1
+    assert_eq!(super::traits::byte_offset_to_line(&idx, 2), 1); // within line 1
+    assert_eq!(super::traits::byte_offset_to_line(&idx, 4), 2); // start of line 2
+    assert_eq!(super::traits::byte_offset_to_line(&idx, 6), 2); // within line 2
+    assert_eq!(super::traits::byte_offset_to_line(&idx, 8), 3); // start of line 3
+    assert_eq!(super::traits::byte_offset_to_line(&idx, 11), 3); // end of line 3
+}
+
+#[test]
+fn test_evidence_to_line_line_column() {
+    let line_starts = vec![0]; // doesn't matter for line:column
+    let e = crate::types::Evidence {
+        method: "ast".to_string(),
+        source: "tree-sitter".to_string(),
+        value: "test".to_string(),
+        location: Some("42:5".to_string()),
+        ..Default::default()
+    };
+    assert_eq!(super::traits::evidence_to_line(&e, &line_starts), Some(42));
+}
+
+#[test]
+fn test_evidence_to_line_byte_offset() {
+    // "aaa\nbbb\n" — line starts at [0, 4]
+    let line_starts = vec![0, 4];
+    let e = crate::types::Evidence {
+        method: "string".to_string(),
+        source: "test".to_string(),
+        value: "test".to_string(),
+        location: None,
+        offsets: vec![5], // within line 2
+        ..Default::default()
+    };
+    assert_eq!(super::traits::evidence_to_line(&e, &line_starts), Some(2));
+}
+
+#[test]
+fn test_evidence_to_line_hex_location() {
+    // "aaa\nbbb\n" — line starts at [0, 4]
+    let line_starts = vec![0, 4];
+    let e = crate::types::Evidence {
+        method: "string".to_string(),
+        source: "test".to_string(),
+        value: "test".to_string(),
+        location: Some("0x05".to_string()),
+        ..Default::default()
+    };
+    assert_eq!(super::traits::evidence_to_line(&e, &line_starts), Some(2));
+}
+
+#[test]
+fn test_evidence_to_line_unparseable() {
+    let line_starts = vec![0];
+    let e = crate::types::Evidence {
+        method: "symbol".to_string(),
+        source: "test".to_string(),
+        value: "test".to_string(),
+        location: Some("import".to_string()),
+        ..Default::default()
+    };
+    assert_eq!(super::traits::evidence_to_line(&e, &line_starts), None);
+}
+
+#[test]
+fn test_evidence_to_byte_offset_from_offsets() {
+    let e = crate::types::Evidence {
+        method: "string".to_string(),
+        source: "test".to_string(),
+        value: "test".to_string(),
+        location: None,
+        offsets: vec![42, 100],
+        ..Default::default()
+    };
+    assert_eq!(super::traits::evidence_to_byte_offset(&e), Some(42));
+}
+
+#[test]
+fn test_evidence_to_byte_offset_from_hex_location() {
+    let e = crate::types::Evidence {
+        method: "string".to_string(),
+        source: "test".to_string(),
+        value: "test".to_string(),
+        location: Some("0x1000".to_string()),
+        ..Default::default()
+    };
+    assert_eq!(super::traits::evidence_to_byte_offset(&e), Some(0x1000));
+}
+
+#[test]
+fn test_evidence_to_byte_offset_none() {
+    let e = crate::types::Evidence {
+        method: "symbol".to_string(),
+        source: "test".to_string(),
+        value: "test".to_string(),
+        location: Some("import".to_string()),
+        ..Default::default()
+    };
+    assert_eq!(super::traits::evidence_to_byte_offset(&e), None);
+}

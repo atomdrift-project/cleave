@@ -1917,7 +1917,8 @@ impl CompositeTrait {
 
         if result.matched {
             // Check proximity constraints (near_lines, near_bytes)
-            let proximity_result = self.check_proximity_constraints(result.evidence.clone());
+            let proximity_result =
+                self.check_proximity_constraints(result.evidence.clone(), ctx.binary_data);
 
             // Record proximity debug if applicable
             if self.near_lines.is_some() || self.near_bytes.is_some() {
@@ -2662,27 +2663,40 @@ impl CompositeTrait {
         }
     }
 
-    /// Check if evidence satisfies proximity constraints
-    /// Returns None if constraints fail, otherwise returns the filtered evidence
-    fn check_proximity_constraints(&self, evidence: Vec<Evidence>) -> Option<Vec<Evidence>> {
-        // If no proximity constraints, pass through
+    /// Check if evidence satisfies proximity constraints.
+    /// Returns None if constraints fail, otherwise returns the evidence unchanged.
+    fn check_proximity_constraints(
+        &self,
+        evidence: Vec<Evidence>,
+        binary_data: &[u8],
+    ) -> Option<Vec<Evidence>> {
         if self.near_lines.is_none() && self.near_bytes.is_none() {
             return Some(evidence);
         }
 
-        // Get the minimum required matches (needs or 1)
-        let min_required = self.needs.unwrap_or(1).max(1);
+        // Derive min_required from rule structure, not from `needs` (which controls `any` matching).
+        // For `all`: every condition must contribute nearby evidence.
+        // For `any` with `needs`: that many conditions must contribute nearby evidence.
+        // Always at least 2 — proximity with a single item is vacuously true.
+        let min_required = {
+            let all_count = self.all.as_ref().map_or(0, Vec::len);
+            let any_required = if self.any.is_some() {
+                self.needs.unwrap_or(1)
+            } else {
+                0
+            };
+            (all_count + any_required).max(2)
+        };
 
-        // Check near_lines constraint
         if let Some(max_line_span) = self.near_lines {
-            if !self.evidence_within_line_range(&evidence, max_line_span, min_required) {
+            let line_starts = build_line_index(binary_data);
+            if !evidence_within_line_range(&evidence, max_line_span, min_required, &line_starts) {
                 return None;
             }
         }
 
-        // Check near_bytes constraint
         if let Some(max_byte_span) = self.near_bytes {
-            if !self.evidence_within_byte_range(&evidence, max_byte_span, min_required) {
+            if !evidence_within_byte_range(&evidence, max_byte_span, min_required) {
                 return None;
             }
         }
@@ -2690,106 +2704,172 @@ impl CompositeTrait {
         Some(evidence)
     }
 
-    /// Check if at least min_required evidence items have line numbers within max_line_span
-    /// Location format is "line:column" (e.g., "42:5")
-    fn evidence_within_line_range(
-        &self,
-        evidence: &[Evidence],
-        max_line_span: usize,
-        min_required: usize,
-    ) -> bool {
-        // Extract line numbers from evidence
-        let mut line_numbers: Vec<usize> = evidence
-            .iter()
-            .filter_map(|e| {
-                e.location.as_ref().and_then(|loc| {
-                    loc.split(':')
-                        .next()
-                        .and_then(|line_str| line_str.parse::<usize>().ok())
-                })
-            })
-            .collect();
-
-        if line_numbers.len() < min_required {
-            return false; // Not enough evidence with line numbers
-        }
-
-        // Sort to find the smallest window
-        line_numbers.sort_unstable();
-
-        // Check all possible windows of size max_line_span to see if we can fit min_required items
-        for i in 0..line_numbers.len() {
-            let start_line = line_numbers[i];
-            let mut count = 0;
-            for &line in line_numbers[i..].iter() {
-                if line - start_line <= max_line_span {
-                    count += 1;
-                    if count >= min_required {
-                        return true;
-                    }
-                } else {
-                    break;
-                }
-            }
-        }
-
-        false
-    }
-
-    /// Check if at least min_required evidence items have byte offsets within max_byte_span
-    /// Location format can be "line:column" where we extract the byte offset, or direct byte offsets
-    fn evidence_within_byte_range(
-        &self,
-        evidence: &[Evidence],
-        max_byte_span: usize,
-        min_required: usize,
-    ) -> bool {
-        // Extract byte offsets from evidence
-        let mut byte_offsets: Vec<usize> = evidence
-            .iter()
-            .filter_map(|e| {
-                e.location.as_ref().and_then(|loc| {
-                    // Try to parse as direct byte offset first
-                    if let Ok(offset) = loc.parse::<usize>() {
-                        return Some(offset);
-                    }
-                    // Otherwise try "line:column" format - column is often byte position within line
-                    loc.split(':')
-                        .nth(1)
-                        .and_then(|col_str| col_str.parse::<usize>().ok())
-                })
-            })
-            .collect();
-
-        if byte_offsets.len() < min_required {
-            return false; // Not enough evidence with byte offsets
-        }
-
-        // Sort to find the smallest window
-        byte_offsets.sort_unstable();
-
-        // Check all possible windows of size max_byte_span
-        for i in 0..byte_offsets.len() {
-            let start_offset = byte_offsets[i];
-            let mut count = 0;
-            for &offset in byte_offsets[i..].iter() {
-                if offset - start_offset <= max_byte_span {
-                    count += 1;
-                    if count >= min_required {
-                        return true;
-                    }
-                } else {
-                    break;
-                }
-            }
-        }
-
-        false
-    }
-
     /// Returns true if this rule has negative (none) conditions
     #[must_use]
     pub(crate) fn has_negative_conditions(&self) -> bool {
         self.none.as_ref().map(|n| !n.is_empty()).unwrap_or(false)
     }
+}
+
+/// Build an index of byte offsets for the start of each line (0-indexed line numbers).
+/// Line 0 starts at byte 0, line 1 starts after the first `\n`, etc.
+pub(super) fn build_line_index(data: &[u8]) -> Vec<usize> {
+    let mut starts = vec![0];
+    for (i, &b) in data.iter().enumerate() {
+        if b == b'\n' {
+            starts.push(i + 1);
+        }
+    }
+    starts
+}
+
+/// Convert a byte offset to a 1-indexed line number using the precomputed line index.
+pub(super) fn byte_offset_to_line(line_starts: &[usize], offset: usize) -> usize {
+    match line_starts.binary_search(&offset) {
+        Ok(idx) => idx + 1, // Exact start of a line
+        Err(idx) => idx,    // Falls within line (idx-1), but 1-indexed → idx
+    }
+}
+
+/// Extract a line number from an evidence item.
+///
+/// Tries in priority order:
+/// 1. Parse `location` as "line:column" (e.g., "42:5") — produced by AST evidence
+/// 2. Use first byte offset from `offsets` vec — produced by string/yara evidence
+/// 3. Parse `location` as hex byte offset (e.g., "0x1234") — older string evidence
+pub(super) fn evidence_to_line(evidence: &Evidence, line_starts: &[usize]) -> Option<usize> {
+    // Try "line:column" format first
+    if let Some(ref loc) = evidence.location {
+        if let Some(colon_pos) = loc.find(':') {
+            if let Ok(line) = loc[..colon_pos].parse::<usize>() {
+                // Sanity check: line numbers from AST are positive integers, not hex
+                if line > 0 {
+                    return Some(line);
+                }
+            }
+        }
+    }
+
+    // Try byte offsets from the offsets vec
+    if let Some(&first_offset) = evidence.offsets.first() {
+        return Some(byte_offset_to_line(line_starts, first_offset as usize));
+    }
+
+    // Try hex offset from location (e.g., "0x1234", "offset:0x1234")
+    if let Some(ref loc) = evidence.location {
+        if let Some(offset) = parse_location_as_byte_offset(loc) {
+            return Some(byte_offset_to_line(line_starts, offset as usize));
+        }
+    }
+
+    None
+}
+
+/// Extract a byte offset from an evidence item.
+///
+/// Tries in priority order:
+/// 1. First byte offset from `offsets` vec
+/// 2. Parse `location` as hex byte offset (e.g., "0x1234", "offset:0x1234")
+pub(super) fn evidence_to_byte_offset(evidence: &Evidence) -> Option<u64> {
+    if let Some(&first_offset) = evidence.offsets.first() {
+        return Some(first_offset);
+    }
+
+    if let Some(ref loc) = evidence.location {
+        return parse_location_as_byte_offset(loc);
+    }
+
+    None
+}
+
+/// Parse a location string as a byte offset.
+/// Handles "0x1234", "offset:0x1234", "offset:1234".
+fn parse_location_as_byte_offset(loc: &str) -> Option<u64> {
+    if let Some(rest) = loc.strip_prefix("offset:") {
+        return parse_hex_or_dec_offset(rest);
+    }
+    if loc.starts_with("0x") || loc.starts_with("0X") {
+        return parse_hex_or_dec_offset(loc);
+    }
+    None
+}
+
+fn parse_hex_or_dec_offset(s: &str) -> Option<u64> {
+    if let Some(hex) = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X")) {
+        u64::from_str_radix(hex, 16).ok()
+    } else {
+        s.parse().ok()
+    }
+}
+
+/// Check if at least `min_required` evidence items have line numbers within `max_line_span`.
+fn evidence_within_line_range(
+    evidence: &[Evidence],
+    max_line_span: usize,
+    min_required: usize,
+    line_starts: &[usize],
+) -> bool {
+    let mut line_numbers: Vec<usize> = evidence
+        .iter()
+        .filter_map(|e| evidence_to_line(e, line_starts))
+        .collect();
+
+    if line_numbers.len() < min_required {
+        return false;
+    }
+
+    line_numbers.sort_unstable();
+
+    // Sliding window: find any window of max_line_span that contains min_required items
+    for i in 0..line_numbers.len() {
+        let start_line = line_numbers[i];
+        let mut count = 0;
+        for &line in &line_numbers[i..] {
+            if line - start_line <= max_line_span {
+                count += 1;
+                if count >= min_required {
+                    return true;
+                }
+            } else {
+                break;
+            }
+        }
+    }
+
+    false
+}
+
+/// Check if at least `min_required` evidence items have byte offsets within `max_byte_span`.
+fn evidence_within_byte_range(
+    evidence: &[Evidence],
+    max_byte_span: usize,
+    min_required: usize,
+) -> bool {
+    let mut byte_offsets: Vec<u64> = evidence
+        .iter()
+        .filter_map(evidence_to_byte_offset)
+        .collect();
+
+    if byte_offsets.len() < min_required {
+        return false;
+    }
+
+    byte_offsets.sort_unstable();
+
+    for i in 0..byte_offsets.len() {
+        let start = byte_offsets[i];
+        let mut count = 0;
+        for &offset in &byte_offsets[i..] {
+            if (offset - start) <= max_byte_span as u64 {
+                count += 1;
+                if count >= min_required {
+                    return true;
+                }
+            } else {
+                break;
+            }
+        }
+    }
+
+    false
 }

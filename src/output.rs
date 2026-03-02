@@ -674,7 +674,11 @@ pub(crate) fn format_terminal(report: &AnalysisReport) -> String {
         output.push('\n');
 
         // Render namespaces in fixed order: WELL-KNOWN, OBJECTIVES, MICRO-BEHAVIORS
-        for ns in [Namespace::WellKnown, Namespace::Objectives, Namespace::MicroBehaviors] {
+        for ns in [
+            Namespace::WellKnown,
+            Namespace::Objectives,
+            Namespace::MicroBehaviors,
+        ] {
             let Some(findings) = by_namespace.get(&ns) else {
                 continue; // Skip empty sections
             };

@@ -181,10 +181,7 @@ fn test_utf16le_ast_searches() {
     assert!(
         has_ast_patterns,
         "Should detect code patterns via AST. Found AST findings: {:?}",
-        ast_findings
-            .iter()
-            .map(|f| &f.id)
-            .collect::<Vec<_>>()
+        ast_findings.iter().map(|f| &f.id).collect::<Vec<_>>()
     );
 
     println!("✓ AST searches work correctly on UTF-16 LE");

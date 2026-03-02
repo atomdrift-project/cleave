@@ -70,9 +70,8 @@ impl RateLimiter {
     /// Call periodically to prevent memory growth from many unique IPs.
     pub fn cleanup(&self, max_age_secs: u64) {
         let now = Instant::now();
-        self.buckets.retain(|_, bucket| {
-            now.duration_since(bucket.last_update).as_secs() < max_age_secs
-        });
+        self.buckets
+            .retain(|_, bucket| now.duration_since(bucket.last_update).as_secs() < max_age_secs);
     }
 }
 

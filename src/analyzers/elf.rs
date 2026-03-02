@@ -956,7 +956,10 @@ mod tests {
 
         // Should have UPX packer finding
         assert!(
-            report.findings.iter().any(|f| f.id == "anti-static/packer/upx"),
+            report
+                .findings
+                .iter()
+                .any(|f| f.id == "anti-static/packer/upx"),
             "Should have UPX packer finding"
         );
     }
@@ -984,7 +987,10 @@ mod tests {
 
         // Should have both UPX finding and tool-missing finding
         assert!(
-            report.findings.iter().any(|f| f.id == "anti-static/packer/upx"),
+            report
+                .findings
+                .iter()
+                .any(|f| f.id == "anti-static/packer/upx"),
             "Should have UPX packer finding"
         );
         assert!(
@@ -1019,7 +1025,10 @@ mod tests {
 
         // Should NOT have UPX packer finding
         assert!(
-            !report.findings.iter().any(|f| f.id == "anti-static/packer/upx"),
+            !report
+                .findings
+                .iter()
+                .any(|f| f.id == "anti-static/packer/upx"),
             "Should not have UPX finding for non-UPX binary"
         );
 
@@ -1035,7 +1044,10 @@ mod tests {
         use crate::types::file_analysis::encode_upx_path;
 
         // Test basic path encoding
-        assert_eq!(encode_upx_path("/path/to/file.elf"), "/path/to/file.elf##upx@0");
+        assert_eq!(
+            encode_upx_path("/path/to/file.elf"),
+            "/path/to/file.elf##upx@0"
+        );
 
         // Test path with special characters
         assert_eq!(

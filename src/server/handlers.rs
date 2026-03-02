@@ -122,10 +122,7 @@ pub(super) async fn analyze(
 
     // Run analysis in blocking thread with timeout
     let result = tokio::time::timeout(timeout_duration, async {
-        tokio::task::spawn_blocking(move || {
-            analyze_file(&path, &AnalysisOptions::default())
-        })
-        .await
+        tokio::task::spawn_blocking(move || analyze_file(&path, &AnalysisOptions::default())).await
     })
     .await;
 
@@ -137,9 +134,21 @@ pub(super) async fn analyze(
     match result {
         Ok(Ok(Ok(report))) => {
             // Summarize findings for logging
-            let hostile = report.findings.iter().filter(|f| f.crit == Criticality::Hostile).count();
-            let suspicious = report.findings.iter().filter(|f| f.crit == Criticality::Suspicious).count();
-            let notable = report.findings.iter().filter(|f| f.crit == Criticality::Notable).count();
+            let hostile = report
+                .findings
+                .iter()
+                .filter(|f| f.crit == Criticality::Hostile)
+                .count();
+            let suspicious = report
+                .findings
+                .iter()
+                .filter(|f| f.crit == Criticality::Suspicious)
+                .count();
+            let notable = report
+                .findings
+                .iter()
+                .filter(|f| f.crit == Criticality::Notable)
+                .count();
 
             info!(
                 %client_ip,
@@ -213,11 +222,7 @@ fn body_to_stream(body: Bytes) -> impl futures_core::Stream<Item = Result<Bytes,
 /// Returns the extracted path if successful.
 ///
 /// Files are organized as: `<extract_dir>/<sha256[0:6]>/<filename>`
-fn extract_file_to_dir(
-    source_path: &Path,
-    extract_dir: &Path,
-    sha256: &str,
-) -> Option<String> {
+fn extract_file_to_dir(source_path: &Path, extract_dir: &Path, sha256: &str) -> Option<String> {
     // Use first 6 chars of SHA256 for the subdirectory
     let short_sha = if sha256.len() >= 6 {
         &sha256[..6]
@@ -346,10 +351,8 @@ pub(super) async fn analyze_path(
 
     // Run analysis in blocking thread with timeout
     let result = tokio::time::timeout(timeout_duration, async {
-        tokio::task::spawn_blocking(move || {
-            analyze_file(&path_owned, &AnalysisOptions::default())
-        })
-        .await
+        tokio::task::spawn_blocking(move || analyze_file(&path_owned, &AnalysisOptions::default()))
+            .await
     })
     .await;
 
@@ -357,9 +360,21 @@ pub(super) async fn analyze_path(
 
     match result {
         Ok(Ok(Ok(report))) => {
-            let hostile = report.findings.iter().filter(|f| f.crit == Criticality::Hostile).count();
-            let suspicious = report.findings.iter().filter(|f| f.crit == Criticality::Suspicious).count();
-            let notable = report.findings.iter().filter(|f| f.crit == Criticality::Notable).count();
+            let hostile = report
+                .findings
+                .iter()
+                .filter(|f| f.crit == Criticality::Hostile)
+                .count();
+            let suspicious = report
+                .findings
+                .iter()
+                .filter(|f| f.crit == Criticality::Suspicious)
+                .count();
+            let notable = report
+                .findings
+                .iter()
+                .filter(|f| f.crit == Criticality::Notable)
+                .count();
 
             // Extract file to extract_dir if configured
             let extracted_path = if let Some(ref extract_base) = extract_dir {

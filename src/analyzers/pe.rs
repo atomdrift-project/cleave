@@ -120,9 +120,11 @@ impl PEAnalyzer {
             Ok(unpacked_data) => {
                 if let Ok(temp_file) = tempfile::NamedTempFile::new() {
                     if fs::write(temp_file.path(), &unpacked_data).is_ok() {
-                        if let Ok(unpacked_report) =
-                            self.analyze_structural_with_strings(temp_file.path(), &unpacked_data, None)
-                        {
+                        if let Ok(unpacked_report) = self.analyze_structural_with_strings(
+                            temp_file.path(),
+                            &unpacked_data,
+                            None,
+                        ) {
                             // Create separate FileAnalysis for unpacked layer
                             let unpacked_sha256 =
                                 crate::analyzers::utils::calculate_sha256(&unpacked_data);
@@ -1346,7 +1348,10 @@ mod tests {
 
         // Should have UPX packer finding
         assert!(
-            report.findings.iter().any(|f| f.id == "anti-static/packer/upx"),
+            report
+                .findings
+                .iter()
+                .any(|f| f.id == "anti-static/packer/upx"),
             "Should have UPX packer finding"
         );
     }
@@ -1379,7 +1384,10 @@ mod tests {
 
         // Should have both UPX finding and tool-missing finding
         assert!(
-            report.findings.iter().any(|f| f.id == "anti-static/packer/upx"),
+            report
+                .findings
+                .iter()
+                .any(|f| f.id == "anti-static/packer/upx"),
             "Should have UPX packer finding"
         );
         assert!(
@@ -1417,7 +1425,10 @@ mod tests {
 
         // Should NOT have UPX packer finding
         assert!(
-            !report.findings.iter().any(|f| f.id == "anti-static/packer/upx"),
+            !report
+                .findings
+                .iter()
+                .any(|f| f.id == "anti-static/packer/upx"),
             "Should not have UPX finding for non-UPX binary"
         );
 

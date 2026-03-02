@@ -728,7 +728,10 @@ pub fn detect_file_type(file_path: &Path) -> Result<FileType> {
         if matches!(ext_str.as_str(), "bat" | "cmd") {
             return Ok(FileType::Batch);
         }
-        if matches!(ext_str.as_str(), "c" | "h" | "cpp" | "hpp" | "cc" | "cxx" | "hxx" | "hh") {
+        if matches!(
+            ext_str.as_str(),
+            "c" | "h" | "cpp" | "hpp" | "cc" | "cxx" | "hxx" | "hh"
+        ) {
             return Ok(FileType::C);
         }
         if ext_str == "lua" {

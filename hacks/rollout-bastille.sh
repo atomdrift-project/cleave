@@ -59,6 +59,7 @@ doas bastille cmd "$RUN" tar -xzf /tmp/cleave.tgz -C /usr/local/share/cleave
 doas bastille cmd "$RUN" rm -f /tmp/cleave.tgz
 
 log "Creating rc.d service"
+doas bastille cmd "$RUN" mkdir -p /usr/local/etc/rc.d
 doas bastille cmd "$RUN" tee /usr/local/etc/rc.d/cleave >/dev/null <<'EOF'
 #!/bin/sh
 

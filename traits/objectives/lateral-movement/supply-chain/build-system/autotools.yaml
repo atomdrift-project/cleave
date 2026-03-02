@@ -51,7 +51,6 @@ traits:
     conf: 0.85
     if:
       type: raw
-      multiline: true
       regex: 'AC_INIT[\s\S]{0,500}(system|exec|popen)\s*\('
 
   # Atomic: Environment dump commands
@@ -228,7 +227,6 @@ traits:
     conf: 0.85
     if:
       type: raw
-      multiline: true
       regex: 'test.{0,50}xz[\s\S]{0,100}(sh|bash|\|)'
 
   - id: test-fixture-exec-gzip
@@ -237,7 +235,6 @@ traits:
     conf: 0.85
     if:
       type: raw
-      multiline: true
       regex: 'test.{0,50}(gzip|gunzip)[\s\S]{0,100}(sh|bash|\|)'
 
   - id: test-fixture-exec-bzcat
@@ -246,7 +243,6 @@ traits:
     conf: 0.85
     if:
       type: raw
-      multiline: true
       regex: 'test.{0,50}bzcat[\s\S]{0,100}(sh|bash|\|)'
 
   # ============================================================

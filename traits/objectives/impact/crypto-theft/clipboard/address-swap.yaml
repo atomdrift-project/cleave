@@ -83,7 +83,6 @@ traits:
     conf: 0.9
     if:
       type: raw
-      multiline: true
       regex: 'if.{0,50}(address|wallet)[\s\S]{0,100}0x[a-fA-F0-9]{40}'
 
   - id: address-swap-conditional-btc
@@ -92,7 +91,6 @@ traits:
     conf: 0.9
     if:
       type: raw
-      multiline: true
       regex: 'if.{0,50}(address|wallet)[\s\S]{0,100}[13][a-zA-HJ-NP-Z0-9]{25,}'
 
   # Split into atomic traits to avoid regex overlap with keywords::address
@@ -140,7 +138,6 @@ traits:
     for: [python]
     if:
       type: raw
-      multiline: true
       regex: '(pyperclip|clipboard|paste)[\s\S]{0,200}0x[a-fA-F0-9]{40}'
 
   - id: py-clipboard-wallet-btc
@@ -150,7 +147,6 @@ traits:
     for: [python]
     if:
       type: raw
-      multiline: true
       regex: '(pyperclip|clipboard|paste)[\s\S]{0,200}[13][a-zA-HJ-NP-Z0-9]{25,}'
 
   - id: py-clipboard-replace
@@ -160,7 +156,6 @@ traits:
     for: [python]
     if:
       type: raw
-      multiline: true
       regex: '(pyperclip|clipboard)\.copy[\s\S]{0,100}\.replace'
 
   # --- JavaScript clipboard ---
@@ -171,7 +166,6 @@ traits:
     for: [javascript, typescript]
     if:
       type: raw
-      multiline: true
       regex: 'navigator\.clipboard[\s\S]{0,200}(0x[a-fA-F0-9]{40}|[13][a-zA-HJ-NP-Z0-9]{25,})'
 
   - id: js-clipboard-monitor

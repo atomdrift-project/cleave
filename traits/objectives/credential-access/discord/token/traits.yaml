@@ -73,7 +73,6 @@ traits:
     if:
       type: string
       substr: Discord
-      not: https?://
   - id: discord-canary-path
     desc: Discord Canary application path reference
     crit: notable

@@ -19,7 +19,6 @@ traits:
     if:
       type: kv
       path: "dependencies"
-      exists: false
 
   # Wildcard version dependencies (unsafe)
   - id: npm-wildcard-dependency
@@ -132,7 +131,6 @@ traits:
     if:
       type: kv
       path: "scripts.prepare"
-      exists: true
 
   # Prepublish/postpublish hooks
   - id: npm-publish-hooks
@@ -154,7 +152,6 @@ traits:
     if:
       type: kv
       path: "scripts.download"
-      exists: true
 
   - id: npm-script-exec
     desc: npm package has 'exec' or 'execute' script
@@ -174,7 +171,6 @@ traits:
     if:
       type: kv
       path: "scripts.backdoor"
-      exists: true
 
   # === PyPI Dependencies ===
 
@@ -211,7 +207,6 @@ traits:
     if:
       type: string
       regex: '\.add_runtime_dependency\s*\('
-      exists: false
 
   - id: npm-no-deps-devdependencies
     desc: npm package has no devDependencies field
@@ -219,7 +214,6 @@ traits:
     if:
       type: kv
       path: "devDependencies"
-      exists: false
 
 composite_rules:
   # === Helpers ===

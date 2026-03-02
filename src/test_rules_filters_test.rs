@@ -44,12 +44,13 @@ fn test_count_min_filter_matches_debug_and_eval() {
         r#for: vec![RuleFileType::All],
         r#if: Condition::Hex {
             pattern: "0F A2".to_string(),
+            not: None,
             offset: None,
             offset_range: None,
             section: None,
             section_offset: None,
             section_offset_range: None,
-            },
+        },
         size_max: None,
         count_min: Some(3), // Require at least 3 matches
         count_max: None,
@@ -81,6 +82,8 @@ fn test_count_min_filter_matches_debug_and_eval() {
         cached_kv_parsed: OnceLock::new(),
         current_trait: None,
         current_source: None,
+        string_exact_index: OnceLock::new(),
+        string_exact_index_ci: OnceLock::new(),
     };
 
     let eval_result = trait_def.evaluate(&ctx);
@@ -106,6 +109,8 @@ fn test_count_min_filter_matches_debug_and_eval() {
         cached_kv_parsed: OnceLock::new(),
         current_trait: None,
         current_source: None,
+        string_exact_index: OnceLock::new(),
+        string_exact_index_ci: OnceLock::new(),
     };
 
     let debug_result = trait_def.evaluate(&debug_ctx);
@@ -161,12 +166,13 @@ fn test_per_kb_min_filter_matches_debug_and_eval() {
         r#for: vec![RuleFileType::All],
         r#if: Condition::Hex {
             pattern: "0F A2".to_string(),
+            not: None,
             offset: None,
             offset_range: None,
             section: None,
             section_offset: None,
             section_offset_range: None,
-            },
+        },
         size_max: None,
         count_min: Some(3), // Count satisfied (4 >= 3)
         count_max: None,
@@ -198,6 +204,8 @@ fn test_per_kb_min_filter_matches_debug_and_eval() {
         cached_kv_parsed: OnceLock::new(),
         current_trait: None,
         current_source: None,
+        string_exact_index: OnceLock::new(),
+        string_exact_index_ci: OnceLock::new(),
     };
 
     let eval_result = trait_def.evaluate(&ctx);
@@ -223,6 +231,8 @@ fn test_per_kb_min_filter_matches_debug_and_eval() {
         cached_kv_parsed: OnceLock::new(),
         current_trait: None,
         current_source: None,
+        string_exact_index: OnceLock::new(),
+        string_exact_index_ci: OnceLock::new(),
     };
 
     let debug_result = trait_def.evaluate(&debug_ctx);
@@ -269,13 +279,14 @@ fn test_size_min_filter_matches_debug_and_eval() {
             word: None,
             case_insensitive: false,
             external_ip: false,
+            not: None,
             offset: None,
             offset_range: None,
             section: None,
             section_offset: None,
             section_offset_range: None,
             compiled_regex: None,
-            },
+        },
         size_max: None,
         count_min: None,
         count_max: None,
@@ -307,6 +318,8 @@ fn test_size_min_filter_matches_debug_and_eval() {
         cached_kv_parsed: OnceLock::new(),
         current_trait: None,
         current_source: None,
+        string_exact_index: OnceLock::new(),
+        string_exact_index_ci: OnceLock::new(),
     };
 
     let eval_result = trait_def.evaluate(&ctx);
@@ -332,6 +345,8 @@ fn test_size_min_filter_matches_debug_and_eval() {
         cached_kv_parsed: OnceLock::new(),
         current_trait: None,
         current_source: None,
+        string_exact_index: OnceLock::new(),
+        string_exact_index_ci: OnceLock::new(),
     };
 
     let debug_result = trait_def.evaluate(&debug_ctx);
@@ -380,6 +395,7 @@ fn test_composite_size_constraints_match_debug_and_eval() {
             word: None,
             case_insensitive: false,
             external_ip: false,
+            not: None,
             offset: None,
             offset_range: None,
             section: None,
@@ -414,6 +430,8 @@ fn test_composite_size_constraints_match_debug_and_eval() {
         cached_kv_parsed: OnceLock::new(),
         current_trait: None,
         current_source: None,
+        string_exact_index: OnceLock::new(),
+        string_exact_index_ci: OnceLock::new(),
     };
 
     let eval_result = composite.evaluate(&ctx);
@@ -439,6 +457,8 @@ fn test_composite_size_constraints_match_debug_and_eval() {
         cached_kv_parsed: OnceLock::new(),
         current_trait: None,
         current_source: None,
+        string_exact_index: OnceLock::new(),
+        string_exact_index_ci: OnceLock::new(),
     };
 
     let debug_result = composite.evaluate(&debug_ctx);
@@ -487,12 +507,13 @@ fn test_all_filters_match_when_satisfied() {
         r#for: vec![RuleFileType::All],
         r#if: Condition::Hex {
             pattern: "0F A2".to_string(),
+            not: None,
             offset: None,
             offset_range: None,
             section: None,
             section_offset: None,
             section_offset_range: None,
-            },
+        },
         size_max: None,
         count_min: Some(3),
         count_max: None,
@@ -524,6 +545,8 @@ fn test_all_filters_match_when_satisfied() {
         cached_kv_parsed: OnceLock::new(),
         current_trait: None,
         current_source: None,
+        string_exact_index: OnceLock::new(),
+        string_exact_index_ci: OnceLock::new(),
     };
 
     let eval_result = trait_def.evaluate(&ctx);
@@ -549,6 +572,8 @@ fn test_all_filters_match_when_satisfied() {
         cached_kv_parsed: OnceLock::new(),
         current_trait: None,
         current_source: None,
+        string_exact_index: OnceLock::new(),
+        string_exact_index_ci: OnceLock::new(),
     };
 
     let debug_result = trait_def.evaluate(&debug_ctx);

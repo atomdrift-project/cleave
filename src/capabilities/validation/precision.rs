@@ -5,7 +5,8 @@
 //! precision for atomic traits and recursively for composite rules.
 
 use crate::composite_rules::{
-    CompositeTrait, Condition, FileType as RuleFileType, Platform, TraitDefinition,
+    condition::NotExceptionStructured, CompositeTrait, Condition, FileType as RuleFileType,
+    Platform, TraitDefinition,
 };
 use crate::types::Criticality;
 use std::collections::{HashMap, HashSet};
@@ -221,6 +222,7 @@ fn score_condition(condition: &Condition) -> f32 {
         }
         Condition::Hex {
             pattern,
+            not: _,
             offset,
             offset_range,
             section,
@@ -337,11 +339,13 @@ fn score_not_exceptions(exceptions: &[crate::composite_rules::condition::NotExce
             crate::composite_rules::condition::NotException::Shorthand(value) => {
                 score += score_string_value(value);
             }
-            crate::composite_rules::condition::NotException::Structured {
-                exact,
-                substr,
-                regex,
-            } => {
+            crate::composite_rules::condition::NotException::Structured(
+                NotExceptionStructured {
+                    exact,
+                    substr,
+                    regex,
+                },
+            ) => {
                 score += exact.as_deref().map(score_string_value).unwrap_or(0.0);
                 score += substr.as_deref().map(score_string_value).unwrap_or(0.0);
                 score += regex.as_deref().map(score_regex_value).unwrap_or(0.0);

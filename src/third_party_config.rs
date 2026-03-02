@@ -19,6 +19,7 @@ struct ConfigFile {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct SourceConfig {
     name: String,
     #[serde(default)]
@@ -28,6 +29,7 @@ struct SourceConfig {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct RuleOverride {
     id: String,
     #[serde(default)]

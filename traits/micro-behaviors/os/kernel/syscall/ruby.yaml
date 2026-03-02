@@ -10,5 +10,4 @@ traits:
     crit: notable
     if:
       type: symbol
-      source: ast
       exact: syscall

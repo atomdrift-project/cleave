@@ -148,10 +148,7 @@ impl super::CapabilityMapper {
                 // Works for both case-sensitive and case-insensitive
                 // NOTE: Cannot use fast path for traits with downgrade rules - they need full evaluation
                 let is_simple_exact_string = trait_def.downgrade.is_none()
-                    && matches!(
-                        &trait_def.r#if,
-                        Condition::String { exact: Some(_), .. }
-                    )
+                    && matches!(&trait_def.r#if, Condition::String { exact: Some(_), .. })
                     && trait_def.count_min.unwrap_or(1) == 1
                     && trait_def.count_max.is_none()
                     && trait_def.per_kb_min.is_none()
@@ -221,10 +218,8 @@ impl super::CapabilityMapper {
                 }
 
                 // Check if this trait has an exact string pattern that wasn't matched
-                let has_exact_string = matches!(
-                    trait_def.r#if,
-                    Condition::String { exact: Some(_), .. }
-                );
+                let has_exact_string =
+                    matches!(trait_def.r#if, Condition::String { exact: Some(_), .. });
 
                 // If trait has an exact string pattern and it wasn't matched, skip it
                 if has_exact_string && !string_matched_traits.contains(&idx) {
@@ -469,10 +464,7 @@ impl super::CapabilityMapper {
                 if !dependent_only {
                     // Check if this is an exact string trait with cached evidence
                     let is_simple_exact_string = trait_def.downgrade.is_none()
-                        && matches!(
-                            &trait_def.r#if,
-                            Condition::String { exact: Some(_), .. }
-                        )
+                        && matches!(&trait_def.r#if, Condition::String { exact: Some(_), .. })
                         && trait_def.count_min.unwrap_or(1) == 1
                         && trait_def.count_max.is_none()
                         && trait_def.per_kb_min.is_none()
@@ -540,10 +532,8 @@ impl super::CapabilityMapper {
                     }
 
                     // String-based pre-filtering
-                    let has_exact_string = matches!(
-                        trait_def.r#if,
-                        Condition::String { exact: Some(_), .. }
-                    );
+                    let has_exact_string =
+                        matches!(trait_def.r#if, Condition::String { exact: Some(_), .. });
                     if has_exact_string && !string_matched_traits.contains(&idx) {
                         return None;
                     }

@@ -104,7 +104,6 @@ traits:
     conf: 0.9
     if:
       type: raw
-      multiline: true
       regex: '(codecov|coveralls|codeclimate)[\s\S]{0,300}(curl|wget).{0,50}\$'
 
   # Atomic traits for bash uploader pattern (decomposed to avoid overlaps)
@@ -114,7 +113,6 @@ traits:
     conf: 0.85
     if:
       type: raw
-      multiline: true
       regex: 'sh.{0,30}<\(curl[\s\S]{0,200}env[^a-z]'
 
   - id: sh-curl-process-sub-var
@@ -123,7 +121,6 @@ traits:
     conf: 0.85
     if:
       type: raw
-      multiline: true
       regex: 'sh.{0,30}<\(curl[\s\S]{0,200}\$[A-Z_]+'
 
   # ============================================================
@@ -168,7 +165,6 @@ traits:
     for: [text, shell]
     if:
       type: raw
-      multiline: true
       regex: '(script|after_success|before_install)[\s\S]{0,200}(env|printenv).{0,30}curl'
 
   - id: circleci-env-curl
@@ -178,7 +174,6 @@ traits:
     for: [text, shell]
     if:
       type: raw
-      multiline: true
       regex: '(run:|command:)[\s\S]{0,100}(env|printenv).{0,30}(curl|wget)'
 
   # ============================================================
@@ -239,7 +234,6 @@ traits:
     conf: 0.9
     if:
       type: raw
-      multiline: true
       regex: 'curl.{0,100}(dist|build|out|target)/'
 
   - id: download-replace-artifact-wget
@@ -248,7 +242,6 @@ traits:
     conf: 0.9
     if:
       type: raw
-      multiline: true
       regex: 'wget.{0,100}(dist|build|out|target)/'
 
 composite_rules:

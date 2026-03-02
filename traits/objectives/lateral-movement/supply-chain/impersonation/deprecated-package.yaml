@@ -23,7 +23,6 @@ traits:
     for: [go]
     if:
       type: raw
-      multiline: true
       regex: '^package terminal\s*$'
 
   # --- ioutil (deprecated -> io and os) ---

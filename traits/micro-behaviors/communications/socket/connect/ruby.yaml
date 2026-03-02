@@ -8,7 +8,6 @@ traits:
     conf: 0.8
     if:
       type: symbol
-      source: ast
       exact: connect
 
   - id: ruby-sockaddr-in
@@ -17,5 +16,4 @@ traits:
     conf: 0.8
     if:
       type: symbol
-      source: ast
       exact: sockaddr_in

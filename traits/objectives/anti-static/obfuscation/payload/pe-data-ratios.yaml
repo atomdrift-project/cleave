@@ -24,7 +24,7 @@ traits:
     if:
       type: metrics
       field: pe.unusual_alignment
-      exact: "true"
+      min: 1
 
 composite_rules:
   - id: pe-packed-dropper-anomaly

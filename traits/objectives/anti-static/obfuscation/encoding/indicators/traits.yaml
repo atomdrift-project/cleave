@@ -43,9 +43,7 @@ traits:
     for: [elf, shell, python, javascript]
     if:
       type: encoded
-      id: micro-behaviors/fs/chmod/executable::shell-plus-x
-    not:
-      - regex: 'chmod\s+\+x\s'
+      regex: 'chmod\s+(\-[a-zA-Z]{1,8}\s+){0,3}\+x\s+[/\.\$\w\{]'
     attack: "T1222.002"
 
   - id: encoded-tmp-path
@@ -55,7 +53,7 @@ traits:
     for: [elf, shell, python, javascript]
     if:
       type: encoded
-      id: micro-behaviors/fs/path/temp/traits::unix-temp
+      substr: "/tmp/"
     attack: "T1074.001"
 
   # === Wget/Curl Download Commands ===

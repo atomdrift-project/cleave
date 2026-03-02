@@ -93,9 +93,6 @@ traits:
     if:
       type: string
       substr: "<Author>Microsoft Corporation</Author>"
-      not:
-        - substr: "microsoft.com"
-        - substr: "windows.com"
 
   - id: fake-microsoft-author-string
     desc: Author Microsoft pattern

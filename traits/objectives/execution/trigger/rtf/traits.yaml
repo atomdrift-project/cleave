@@ -9,7 +9,6 @@ traits:
     if:
       type: raw
       regex: 'objupdate'
-      description: "Match objupdate directive"
 
   - id: objautlink
     desc: RTF objautlink directive for automatic linking.
@@ -18,4 +17,3 @@ traits:
     if:
       type: raw
       regex: 'objautlink'
-      description: "Match objautlink directive"

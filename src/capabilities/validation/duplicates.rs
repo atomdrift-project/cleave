@@ -2415,14 +2415,7 @@ pub(crate) fn find_alternation_merge_candidates(
             // Create key including directory so we only group traits from the same directory
             let key = format!(
                 "{}:{:?}:{:?}:{:?}:{:?}:{:?}:{:?}:{:?}",
-                directory,
-                t.crit,
-                t.r#for,
-                t.platforms,
-                t.size_min,
-                t.size_max,
-                t.not,
-                t.unless
+                directory, t.crit, t.r#for, t.platforms, t.size_min, t.size_max, t.not, t.unless
             );
             groups.entry(key).or_default().push((t.id.clone(), regex));
         }

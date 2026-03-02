@@ -61,20 +61,6 @@ traits:
     if:
       type: raw
       regex: \w+\[\w+\]\s*\(
-  - id: bracket-property-access-var
-    desc: Bracket property access with variable index
-    crit: notable
-    conf: 0.6
-    for:
-      - javascript
-    count_min: 30
-    if:
-      type: raw
-      regex: \b\w+\[[a-zA-Z_$][a-zA-Z0-9_$]*\]
-      not:
-        regex: \b(arr|array|coll|tasks|listeners|console|Object|this|exports|module|window|redis|queue|scripts|pending|results|commands|items|slots|options|errors)\[|\[(i|j|k|n|m|o|p|t|e|key|prop|index|idx|it|name|slot|sha|type|cmd|err|val)\]
-    unless:
-      - id: metadata/dev/testing::is-test
   - id: vm-runIn-method
     desc: vm.runIn method
     crit: notable

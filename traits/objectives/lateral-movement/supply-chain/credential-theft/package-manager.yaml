@@ -352,7 +352,6 @@ traits:
     for: [python]
     if:
       type: raw
-      multiline: true
       regex: '(\.pypirc|\.netrc|credentials)[\s\S]{0,300}requests\.(post|put)'
 
   # --- JS credential exfiltration (atomic traits) ---
@@ -363,7 +362,6 @@ traits:
     for: [javascript, typescript]
     if:
       type: raw
-      multiline: true
       regex: '\.npmrc[\s\S]{0,300}fetch'
 
   - id: js-npmrc-to-axios
@@ -373,7 +371,6 @@ traits:
     for: [javascript, typescript]
     if:
       type: raw
-      multiline: true
       regex: '\.npmrc[\s\S]{0,300}axios'
 
   - id: js-npmrc-to-http
@@ -383,7 +380,6 @@ traits:
     for: [javascript, typescript]
     if:
       type: raw
-      multiline: true
       regex: '\.npmrc[\s\S]{0,300}http\.request'
 
   - id: js-netrc-to-fetch
@@ -393,7 +389,6 @@ traits:
     for: [javascript, typescript]
     if:
       type: raw
-      multiline: true
       regex: '\.netrc[\s\S]{0,300}fetch'
 
   - id: js-netrc-to-axios
@@ -403,7 +398,6 @@ traits:
     for: [javascript, typescript]
     if:
       type: raw
-      multiline: true
       regex: '\.netrc[\s\S]{0,300}axios'
 
   - id: js-netrc-to-http
@@ -413,7 +407,6 @@ traits:
     for: [javascript, typescript]
     if:
       type: raw
-      multiline: true
       regex: '\.netrc[\s\S]{0,300}http\.request'
 
   - id: js-creds-to-fetch
@@ -423,7 +416,6 @@ traits:
     for: [javascript, typescript]
     if:
       type: raw
-      multiline: true
       regex: '[\./]credentials[\s\S]{0,300}fetch'
 
   - id: js-creds-to-axios
@@ -433,7 +425,6 @@ traits:
     for: [javascript, typescript]
     if:
       type: raw
-      multiline: true
       regex: '[\./]credentials[\s\S]{0,300}axios'
 
   - id: js-creds-to-http
@@ -443,7 +434,6 @@ traits:
     for: [javascript, typescript]
     if:
       type: raw
-      multiline: true
       regex: '[\./]credentials[\s\S]{0,300}http\.request'
 
   # --- Base64 encoding of credentials (atomic traits) ---
@@ -454,7 +444,6 @@ traits:
     for: [python, javascript, shell]
     if:
       type: raw
-      multiline: true
       regex: '[\./]credentials[\s\S]{0,200}(base64|btoa|b64encode)'
 
   - id: npmrc-base64-encode
@@ -464,7 +453,6 @@ traits:
     for: [python, javascript, shell]
     if:
       type: raw
-      multiline: true
       regex: '\.npmrc[\s\S]{0,200}(base64|btoa|b64encode)'
 
   - id: pypirc-base64-encode
@@ -474,7 +462,6 @@ traits:
     for: [python, javascript, shell]
     if:
       type: raw
-      multiline: true
       regex: '\.pypirc[\s\S]{0,200}(base64|btoa|b64encode)'
 
 composite_rules:

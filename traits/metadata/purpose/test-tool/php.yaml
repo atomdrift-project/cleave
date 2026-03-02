@@ -19,8 +19,6 @@ traits:
     if:
       type: string
       regex: '^={3,}\s*(EXPECT|EXPECTF|FILE|SKIPIF)'
-      multiline: true
-
   - id: phpunit-ref
     desc: PHPUnit framework reference
     conf: 0.8

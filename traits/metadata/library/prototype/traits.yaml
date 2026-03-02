@@ -12,7 +12,7 @@ traits:
     if:
       type: raw
       substr: "Prototype JavaScript framework"
-      ignore_case: true
+      case_insensitive: true
 
   - id: version-string
     desc: Prototype.js version definition

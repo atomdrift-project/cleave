@@ -12,10 +12,6 @@ traits:
     if:
       type: string
       substr: "WScript.Shell"
-      exclude_patterns:
-        - "Interaction\\.Shell"
-        - "Shellexec\\.ShellExecute"
-        - "Shellinject\\.ShellInject"
 
   - id: wscript-exe
     desc: wscript.exe executable reference

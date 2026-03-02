@@ -20,7 +20,7 @@ traits:
     for: [javascript]
     if:
       type: ast
-      lang: javascript
+      language: javascript
       # Matches property access where the property is constructed by adding results of function calls
       query: |
         (member_expression
@@ -51,7 +51,7 @@ traits:
     for: [javascript]
     if:
       type: ast
-      lang: javascript
+      language: javascript
       query: |
         (member_expression
           object: (identifier) @obj_name (#eq? @obj_name "WScript")

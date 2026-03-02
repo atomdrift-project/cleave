@@ -39,8 +39,6 @@ traits:
     if:
         type: raw
         regex: '\b\w+\s*=\s*this([^\.]|$)'
-        count_min: 5
-
   - id: js-assign-common-root-1
     desc: Global object assignment (root/self/global)
     crit: notable

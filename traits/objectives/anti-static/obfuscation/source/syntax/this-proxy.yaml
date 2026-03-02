@@ -8,7 +8,7 @@ traits:
     for: [javascript]
     if:
       type: ast
-      lang: javascript
+      language: javascript
       # Matches: new this[...]()
       query: |
         (new_expression
@@ -24,7 +24,7 @@ traits:
     for: [javascript]
     if:
       type: ast
-      lang: javascript
+      language: javascript
       # Matches: this[...] where ... is not a simple identifier (or even if it is, in some contexts)
       query: |
         (member_expression

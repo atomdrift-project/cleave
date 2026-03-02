@@ -3,7 +3,7 @@
 //! This module contains TraitDefinition (atomic traits) and CompositeTrait
 //! (boolean combinations of conditions).
 
-use super::condition::{Condition, NotException};
+use super::condition::{Condition, NotException, NotExceptionStructured};
 use super::context::{ConditionResult, EvaluationContext, StringParams};
 use super::evaluators::{
     eval_ast, eval_basename, eval_encoded, eval_exports_count, eval_hex, eval_import_combination,
@@ -237,7 +237,8 @@ impl TraitDefinition {
     /// Pre-compile all regexes in this trait's conditions for performance.
     /// Returns an error if any regex pattern is invalid.
     pub(crate) fn precompile_regexes(&mut self) -> anyhow::Result<()> {
-        self.r#if.precompile_regexes()
+        self.r#if
+            .precompile_regexes()
             .with_context(|| format!("in trait '{}' main condition", self.id))?;
         if let Some(ref mut conds) = self.unless {
             for (idx, cond) in conds.iter_mut().enumerate() {
@@ -520,10 +521,10 @@ impl TraitDefinition {
                                 ));
                             }
                         }
-                        NotException::Structured {
+                        NotException::Structured(NotExceptionStructured {
                             exact: Some(exc_str),
                             ..
-                        } => {
+                        }) => {
                             if !exc_str.contains(search_substr) {
                                 return Some(format!(
                                     "not: exception (exact) '{}' does not contain the search substr '{}' - symbols matching the substr won't match this exception, so it will never be applied",
@@ -531,10 +532,10 @@ impl TraitDefinition {
                                 ));
                             }
                         }
-                        NotException::Structured {
+                        NotException::Structured(NotExceptionStructured {
                             substr: Some(exc_substr),
                             ..
-                        } => {
+                        }) => {
                             if !exc_substr.contains(search_substr)
                                 && !search_substr.contains(exc_substr)
                             {
@@ -565,10 +566,10 @@ impl TraitDefinition {
                             }
                         }
                         // Validate exact exceptions - check if the exact string matches the regex
-                        NotException::Structured {
+                        NotException::Structured(NotExceptionStructured {
                             exact: Some(exc_str),
                             ..
-                        } => {
+                        }) => {
                             if !pattern_could_match(pattern, exc_str) {
                                 return Some(format!(
                                     "not: exception (exact) '{}' does not match the search regex '{}' - it will never be applied",
@@ -624,10 +625,10 @@ impl TraitDefinition {
                                 ));
                             }
                         }
-                        NotException::Structured {
+                        NotException::Structured(NotExceptionStructured {
                             exact: Some(exc_str),
                             ..
-                        } => {
+                        }) => {
                             // Exception is exact match - it should contain the search substr
                             if !contains_substr(exc_str, search_substr, case_insensitive) {
                                 return Some(format!(
@@ -636,10 +637,10 @@ impl TraitDefinition {
                                 ));
                             }
                         }
-                        NotException::Structured {
+                        NotException::Structured(NotExceptionStructured {
                             substr: Some(exc_substr),
                             ..
-                        } => {
+                        }) => {
                             // Exception is substr - it should contain the search substr or vice versa
                             // Either the exception contains the search, or the search contains the exception
                             if !contains_substr(exc_substr, search_substr, case_insensitive)
@@ -651,10 +652,10 @@ impl TraitDefinition {
                                 ));
                             }
                         }
-                        NotException::Structured {
+                        NotException::Structured(NotExceptionStructured {
                             regex: Some(_exc_regex),
                             ..
-                        } => {
+                        }) => {
                             // For regex exceptions with substr search, we can't easily validate
                             // The regex might match strings containing the substr
                             // We'll allow this without validation
@@ -695,10 +696,10 @@ impl TraitDefinition {
                             }
                         }
                         // Validate exact exceptions - check if the exact string matches the regex
-                        NotException::Structured {
+                        NotException::Structured(NotExceptionStructured {
                             exact: Some(exc_str),
                             ..
-                        } => {
+                        }) => {
                             if !pattern_could_match(pattern, exc_str) {
                                 return Some(format!(
                                     "not: exception (exact) '{}' does not match the search regex '{}' - it will never be applied",
@@ -1204,6 +1205,8 @@ impl TraitDefinition {
                 word,
                 case_insensitive,
                 external_ip,
+                not: _,
+                platforms: _,
                 section,
                 offset,
                 offset_range,
@@ -1326,6 +1329,7 @@ impl TraitDefinition {
             ),
             Condition::Hex {
                 pattern,
+                not: _,
                 offset,
                 offset_range,
                 section,
@@ -1352,6 +1356,7 @@ impl TraitDefinition {
                 word,
                 case_insensitive,
                 external_ip,
+                not: _,
                 section,
                 offset,
                 offset_range,
@@ -1421,6 +1426,8 @@ impl TraitDefinition {
                 regex,
                 word,
                 case_insensitive,
+                external_ip: _,
+                not: _,
                 section,
                 offset,
                 offset_range,
@@ -2257,6 +2264,8 @@ impl CompositeTrait {
                 word,
                 case_insensitive,
                 external_ip,
+                not: _,
+                platforms: _,
                 section,
                 offset,
                 offset_range,
@@ -2377,6 +2386,7 @@ impl CompositeTrait {
             ),
             Condition::Hex {
                 pattern,
+                not: _,
                 offset,
                 offset_range,
                 section,
@@ -2403,6 +2413,7 @@ impl CompositeTrait {
                 word,
                 case_insensitive,
                 external_ip,
+                not: _,
                 section,
                 offset,
                 offset_range,
@@ -2472,6 +2483,8 @@ impl CompositeTrait {
                 regex,
                 word,
                 case_insensitive,
+                external_ip: _,
+                not: _,
                 section,
                 offset,
                 offset_range,

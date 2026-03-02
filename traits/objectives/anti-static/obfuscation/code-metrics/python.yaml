@@ -18,6 +18,15 @@ traits:
       field: functions.anonymous
       min: 15
 
+  - id: py-stub-definitions
+    desc: "Python stub definitions (def ...: ...)"
+    crit: component
+    conf: 0.5
+    count_min: 5
+    if:
+      type: raw
+      regex: 'def\s+\w+\(.*\).*:\s*\.\.\.'
+
   - id: py-single-line-heavy
     desc: "Many one-liner functions (compressed code)"
     crit: notable
@@ -27,9 +36,7 @@ traits:
       field: functions.one_liners
       min: 10
     unless:
-      - type: raw
-        regex: 'def\s+\w+\(.*\).*:\s*\.\.\.'
-        count_min: 5
+      - id: py-stub-definitions
 
   - id: py-nested-functions
     desc: "Nested function definitions (closure obfuscation)"

@@ -38,7 +38,6 @@ traits:
     for: [python]
     if:
       type: raw
-      multiline: true
       regex: 'json\.(dumps|dump)\s*\(.{0,50}os\.environ'
 
   # --- Shell ---
@@ -223,7 +222,6 @@ traits:
     for: [python]
     if:
       type: raw
-      multiline: true
       regex: 'os\.environ[\s\S]{0,200}requests\.(post|put)'
 
   - id: js-env-to-fetch
@@ -233,7 +231,6 @@ traits:
     for: [javascript, typescript]
     if:
       type: raw
-      multiline: true
       regex: 'process\.env[\s\S]{0,200}(fetch|axios)\s*\('
 
   # Atomic traits for shell env exfiltration

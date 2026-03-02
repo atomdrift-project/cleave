@@ -19,8 +19,6 @@ traits:
     if:
       type: raw
       regex: '(setup\.py|pyproject|setup\.cfg)[\s\S]{0,100}os\.system\s*\('
-      multiline: true
-
   - id: setup-py-subprocess-run
     desc: setup.py cmdclass/build_ext with subprocess.run
     crit: suspicious
@@ -28,7 +26,6 @@ traits:
     for: [python]
     if:
       type: raw
-      multiline: true
       regex: '(cmdclass|build_ext)[\s\S]{0,500}subprocess\.run'
 
   - id: setup-py-subprocess-popen
@@ -38,7 +35,6 @@ traits:
     for: [python]
     if:
       type: raw
-      multiline: true
       regex: '(cmdclass|build_ext)[\s\S]{0,500}subprocess\.Popen'
 
   - id: setup-py-subprocess-call
@@ -48,7 +44,6 @@ traits:
     for: [python]
     if:
       type: raw
-      multiline: true
       regex: 'install[\s\S]{0,500}subprocess\.(call|run|Popen)'
 
   # Atomic: setup.py curl/wget with exec
@@ -59,7 +54,6 @@ traits:
     for: [python]
     if:
       type: raw
-      multiline: true
       regex: '(setup\.py|cmdclass)[\s\S]{0,500}(curl|wget)[\s\S]{0,200}exec'
 
   # Atomic: setup.py curl/wget with eval
@@ -70,7 +64,6 @@ traits:
     for: [python]
     if:
       type: raw
-      multiline: true
       regex: '(setup\.py|cmdclass)[\s\S]{0,500}(curl|wget)[\s\S]{0,200}eval'
 
   # Atomic: setup.py urlopen with exec
@@ -81,7 +74,6 @@ traits:
     for: [python]
     if:
       type: raw
-      multiline: true
       regex: '(setup\.py|cmdclass)[\s\S]{0,500}urlopen[\s\S]{0,200}exec'
 
   # Atomic: setup.py urlopen with eval
@@ -92,7 +84,6 @@ traits:
     for: [python]
     if:
       type: raw
-      multiline: true
       regex: '(setup\.py|cmdclass)[\s\S]{0,500}urlopen[\s\S]{0,200}eval'
 
   # Atomic: setup.py urlopen with os.system
@@ -103,7 +94,6 @@ traits:
     for: [python]
     if:
       type: raw
-      multiline: true
       regex: '(setup\.py|cmdclass)[\s\S]{0,500}urlopen[\s\S]{0,200}os\.system'
 
   - id: setup-py-requests-exec
@@ -113,7 +103,6 @@ traits:
     for: [python]
     if:
       type: raw
-      multiline: true
       regex: '(setup\.py|cmdclass)[\s\S]{0,500}requests\.get[\s\S]{0,200}exec'
 
   - id: setup-py-requests-eval
@@ -123,7 +112,6 @@ traits:
     for: [python]
     if:
       type: raw
-      multiline: true
       regex: '(setup\.py|cmdclass)[\s\S]{0,500}requests\.get[\s\S]{0,200}eval'
 
   - id: setup-py-requests-ossystem
@@ -133,7 +121,6 @@ traits:
     for: [python]
     if:
       type: raw
-      multiline: true
       regex: '(setup\.py|cmdclass)[\s\S]{0,500}requests\.get[\s\S]{0,200}os\.system'
 
   - id: setup-py-network-in-install
@@ -143,7 +130,6 @@ traits:
     for: [python]
     if:
       type: raw
-      multiline: true
       regex: 'class.{0,50}(install|build)[\s\S]{0,500}(requests\.|urllib|socket\.)'
 
   # ============================================================
@@ -206,7 +192,6 @@ traits:
     for: [rust]
     if:
       type: raw
-      multiline: true
       regex: '(build\.rs|fn main)[\s\S]{0,300}Command::new\s*\(\s*"(sh|bash)"'
 
   - id: rust-build-rs-download-command
@@ -216,7 +201,6 @@ traits:
     for: [rust]
     if:
       type: raw
-      multiline: true
       regex: '(build\.rs|fn main)[\s\S]{0,300}Command::new\s*\(\s*"(curl|wget)"'
 
   - id: rust-build-rs-network
@@ -226,7 +210,6 @@ traits:
     for: [rust]
     if:
       type: raw
-      multiline: true
       regex: '(build\.rs|build script)[\s\S]{0,500}(reqwest|hyper|curl)::get'
 
   - id: rust-build-rs-env-exfil
@@ -236,7 +219,6 @@ traits:
     for: [rust]
     if:
       type: raw
-      multiline: true
       regex: 'std::env::(vars|var)[\s\S]{0,300}(reqwest|Command::new)'
 
   # ============================================================
@@ -281,8 +263,6 @@ traits:
     if:
       type: raw
       regex: '^\.[a-z]+:[\s\S]{0,100}(curl|wget|nc )'
-      multiline: true
-
 composite_rules:
   # === Composite: setup.py curl/wget execution ===
   - id: setup-py-curl-exec

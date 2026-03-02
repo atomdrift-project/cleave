@@ -10,4 +10,3 @@ traits:
     if:
       type: raw
       regex: '(?i)[0-9a-fA-F]\s*\{\\\*\\objdata\s+'
-      description: 'Detects nested {\*\objdata} inside data'

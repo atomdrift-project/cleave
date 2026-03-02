@@ -14,46 +14,33 @@ traits:
     if:
       type: string
       regex: 'unte'
-      min_len: 4
-
   - id: uri-fragment-counter-id-param
     desc: URL parameter fragment 'd="+s' (part of ?id=)
     if:
       type: string
       regex: 'd="\+s'
-      min_len: 5
-
   - id: uri-fragment-counter-rnd-param
     desc: URL parameter fragment 'tr+"' (part of &rnd=)
     if:
       type: string
       regex: 'tr\+"'
-      min_len: 4
-
   - id: uri-fragment-counter-domain-dron
     desc: URL domain fragment 'dron' (part of dronunte.com)
     if:
       type: string
       regex: 'dron'
-      min_len: 4
-
   - id: uri-fragment-counter-domain-yesl
     desc: URL domain fragment 'yesl' (part of yeslilla.net)
     if:
       type: string
       regex: 'yesl'
-      min_len: 4
-
   - id: uri-fragment-counter-domain-dronunte
     desc: URL domain fragment 'dronunte'
     if:
       type: string
       regex: 'dronunte'
-      min_len: 8
-
   - id: uri-fragment-counter-domain-yeslilla
     desc: URL domain fragment 'yeslilla'
     if:
       type: string
       regex: 'yeslilla'
-      min_len: 8

@@ -9,4 +9,3 @@ traits:
     if:
       type: raw
       regex: "(\\\\'([0-9a-fA-F][^0-9a-fA-F])\\s*){4,}"
-      description: "Detects repeated invalid hex escapes like '2G"

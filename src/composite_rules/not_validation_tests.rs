@@ -6,14 +6,12 @@
 #[cfg(test)]
 mod validation_tests {
     use crate::composite_rules::{
-        condition::NotException, Condition, TraitDefinition,
+        condition::{NotException, NotExceptionStructured},
+        Condition, TraitDefinition,
     };
     use crate::types::Criticality;
 
-    fn create_test_trait(
-        condition: Condition,
-        not: Option<Vec<NotException>>,
-    ) -> TraitDefinition {
+    fn create_test_trait(condition: Condition, not: Option<Vec<NotException>>) -> TraitDefinition {
         TraitDefinition {
             id: "test".to_string(),
             desc: "Test trait".to_string(),
@@ -54,14 +52,13 @@ mod validation_tests {
             offset_range: None,
             section_offset: None,
             section_offset_range: None,
+            not: None,
+            platforms: None,
             compiled_regex: None,
         };
 
         let not = vec![NotException::Shorthand("test".to_string())];
-        let trait_def = create_test_trait(
-            cond,
-            Some(not),
-        );
+        let trait_def = create_test_trait(cond, Some(not));
 
         let warning = trait_def.check_not_field_usage();
         assert!(warning.is_some());
@@ -86,14 +83,13 @@ mod validation_tests {
             offset_range: None,
             section_offset: None,
             section_offset_range: None,
+            not: None,
+            platforms: None,
             compiled_regex: None,
         };
 
         let not = vec![NotException::Shorthand("testing".to_string())];
-        let trait_def = create_test_trait(
-            cond,
-            Some(not),
-        );
+        let trait_def = create_test_trait(cond, Some(not));
 
         let warning = trait_def.check_not_field_usage();
         assert!(
@@ -117,14 +113,13 @@ mod validation_tests {
             offset_range: None,
             section_offset: None,
             section_offset_range: None,
+            not: None,
+            platforms: None,
             compiled_regex: None,
         };
 
         let not = vec![NotException::Shorthand("hurl".to_string())];
-        let trait_def = create_test_trait(
-            cond,
-            Some(not),
-        );
+        let trait_def = create_test_trait(cond, Some(not));
 
         let warning = trait_def.check_not_field_usage();
         assert!(warning.is_some());
@@ -152,18 +147,17 @@ mod validation_tests {
             offset_range: None,
             section_offset: None,
             section_offset_range: None,
+            not: None,
+            platforms: None,
             compiled_regex: None,
         };
 
-        let not = vec![NotException::Structured {
+        let not = vec![NotException::Structured(NotExceptionStructured {
             exact: Some("testing".to_string()),
             substr: None,
             regex: None,
-        }];
-        let trait_def = create_test_trait(
-            cond,
-            Some(not),
-        );
+        })];
+        let trait_def = create_test_trait(cond, Some(not));
 
         let warning = trait_def.check_not_field_usage();
         assert!(warning.is_none());
@@ -185,18 +179,17 @@ mod validation_tests {
             offset_range: None,
             section_offset: None,
             section_offset_range: None,
+            not: None,
+            platforms: None,
             compiled_regex: None,
         };
 
-        let not = vec![NotException::Structured {
+        let not = vec![NotException::Structured(NotExceptionStructured {
             exact: Some("hurl".to_string()),
             substr: None,
             regex: None,
-        }];
-        let trait_def = create_test_trait(
-            cond,
-            Some(not),
-        );
+        })];
+        let trait_def = create_test_trait(cond, Some(not));
 
         let warning = trait_def.check_not_field_usage();
         assert!(warning.is_some());
@@ -220,18 +213,17 @@ mod validation_tests {
             offset_range: None,
             section_offset: None,
             section_offset_range: None,
+            not: None,
+            platforms: None,
             compiled_regex: None,
         };
 
-        let not = vec![NotException::Structured {
+        let not = vec![NotException::Structured(NotExceptionStructured {
             exact: None,
             substr: Some("testing".to_string()),
             regex: None,
-        }];
-        let trait_def = create_test_trait(
-            cond,
-            Some(not),
-        );
+        })];
+        let trait_def = create_test_trait(cond, Some(not));
 
         let warning = trait_def.check_not_field_usage();
         assert!(warning.is_none());
@@ -253,18 +245,17 @@ mod validation_tests {
             offset_range: None,
             section_offset: None,
             section_offset_range: None,
+            not: None,
+            platforms: None,
             compiled_regex: None,
         };
 
-        let not = vec![NotException::Structured {
+        let not = vec![NotException::Structured(NotExceptionStructured {
             exact: None,
             substr: Some("hurl".to_string()),
             regex: None,
-        }];
-        let trait_def = create_test_trait(
-            cond,
-            Some(not),
-        );
+        })];
+        let trait_def = create_test_trait(cond, Some(not));
 
         let warning = trait_def.check_not_field_usage();
         assert!(warning.is_some());
@@ -287,14 +278,13 @@ mod validation_tests {
             offset_range: None,
             section_offset: None,
             section_offset_range: None,
+            not: None,
+            platforms: None,
             compiled_regex: None,
         };
 
         let not = vec![NotException::Shorthand("TESTING".to_string())];
-        let trait_def = create_test_trait(
-            cond,
-            Some(not),
-        );
+        let trait_def = create_test_trait(cond, Some(not));
 
         let warning = trait_def.check_not_field_usage();
         assert!(warning.is_none());
@@ -316,14 +306,13 @@ mod validation_tests {
             offset_range: None,
             section_offset: None,
             section_offset_range: None,
+            not: None,
+            platforms: None,
             compiled_regex: None,
         };
 
         let not = vec![NotException::Shorthand("curl".to_string())];
-        let trait_def = create_test_trait(
-            cond,
-            Some(not),
-        );
+        let trait_def = create_test_trait(cond, Some(not));
 
         let warning = trait_def.check_not_field_usage();
         assert!(warning.is_none());
@@ -345,14 +334,13 @@ mod validation_tests {
             offset_range: None,
             section_offset: None,
             section_offset_range: None,
+            not: None,
+            platforms: None,
             compiled_regex: None,
         };
 
         let not = vec![NotException::Shorthand("hurl".to_string())];
-        let trait_def = create_test_trait(
-            cond,
-            Some(not),
-        );
+        let trait_def = create_test_trait(cond, Some(not));
 
         let warning = trait_def.check_not_field_usage();
         assert!(warning.is_some());
@@ -377,14 +365,13 @@ mod validation_tests {
             offset_range: None,
             section_offset: None,
             section_offset_range: None,
+            not: None,
+            platforms: None,
             compiled_regex: None,
         };
 
         let not = vec![NotException::Shorthand("testing".to_string())];
-        let trait_def = create_test_trait(
-            cond,
-            Some(not),
-        );
+        let trait_def = create_test_trait(cond, Some(not));
 
         let warning = trait_def.check_not_field_usage();
         assert!(warning.is_some());
@@ -408,14 +395,12 @@ mod validation_tests {
             offset_range: None,
             section_offset: None,
             section_offset_range: None,
+            not: None,
             compiled_regex: None,
         };
 
         let not = vec![NotException::Shorthand("testing".to_string())];
-        let trait_def = create_test_trait(
-            cond,
-            Some(not),
-        );
+        let trait_def = create_test_trait(cond, Some(not));
 
         let warning = trait_def.check_not_field_usage();
         assert!(warning.is_some());
@@ -438,14 +423,12 @@ mod validation_tests {
             offset_range: None,
             section_offset: None,
             section_offset_range: None,
+            not: None,
             compiled_regex: None,
         };
 
         let not = vec![NotException::Shorthand("test".to_string())];
-        let trait_def = create_test_trait(
-            cond,
-            Some(not),
-        );
+        let trait_def = create_test_trait(cond, Some(not));
 
         let warning = trait_def.check_not_field_usage();
         assert!(warning.is_some());
@@ -468,14 +451,12 @@ mod validation_tests {
             offset_range: None,
             section_offset: None,
             section_offset_range: None,
+            not: None,
             compiled_regex: None,
         };
 
         let not = vec![NotException::Shorthand("testing".to_string())];
-        let trait_def = create_test_trait(
-            cond,
-            Some(not),
-        );
+        let trait_def = create_test_trait(cond, Some(not));
 
         let warning = trait_def.check_not_field_usage();
         assert!(warning.is_none());
@@ -493,10 +474,7 @@ mod validation_tests {
         };
 
         let not = vec![NotException::Shorthand("test".to_string())];
-        let trait_def = create_test_trait(
-            cond,
-            Some(not),
-        );
+        let trait_def = create_test_trait(cond, Some(not));
 
         let warning = trait_def.check_not_field_usage();
         assert!(warning.is_some());
@@ -516,10 +494,7 @@ mod validation_tests {
         };
 
         let not = vec![NotException::Shorthand("testing".to_string())];
-        let trait_def = create_test_trait(
-            cond,
-            Some(not),
-        );
+        let trait_def = create_test_trait(cond, Some(not));
 
         let warning = trait_def.check_not_field_usage();
         assert!(warning.is_none());
@@ -537,10 +512,7 @@ mod validation_tests {
         };
 
         let not = vec![NotException::Shorthand("hurl".to_string())];
-        let trait_def = create_test_trait(
-            cond,
-            Some(not),
-        );
+        let trait_def = create_test_trait(cond, Some(not));
 
         let warning = trait_def.check_not_field_usage();
         assert!(warning.is_some());
@@ -561,10 +533,7 @@ mod validation_tests {
         };
 
         let not = vec![NotException::Shorthand("curl".to_string())];
-        let trait_def = create_test_trait(
-            cond,
-            Some(not),
-        );
+        let trait_def = create_test_trait(cond, Some(not));
 
         let warning = trait_def.check_not_field_usage();
         assert!(warning.is_none());
@@ -582,10 +551,7 @@ mod validation_tests {
         };
 
         let not = vec![NotException::Shorthand("hurl".to_string())];
-        let trait_def = create_test_trait(
-            cond,
-            Some(not),
-        );
+        let trait_def = create_test_trait(cond, Some(not));
 
         let warning = trait_def.check_not_field_usage();
         assert!(warning.is_some());
@@ -615,6 +581,8 @@ mod criticality_tests {
             offset_range: None,
             section_offset: None,
             section_offset_range: None,
+            not: None,
+            platforms: None,
             compiled_regex: None,
         };
 
@@ -674,6 +642,8 @@ mod criticality_tests {
                 offset_range: None,
                 section_offset: None,
                 section_offset_range: None,
+                not: None,
+                platforms: None,
                 compiled_regex: None,
             };
 
@@ -727,6 +697,8 @@ mod constraint_tests {
             offset_range: None,
             section_offset: None,
             section_offset_range: None,
+            not: None,
+            platforms: None,
             compiled_regex: None,
         };
 
@@ -774,6 +746,8 @@ mod constraint_tests {
             offset_range: None,
             section_offset: None,
             section_offset_range: None,
+            not: None,
+            platforms: None,
             compiled_regex: None,
         };
 
@@ -821,6 +795,8 @@ mod constraint_tests {
             offset_range: None,
             section_offset: None,
             section_offset_range: None,
+            not: None,
+            platforms: None,
             compiled_regex: None,
         };
 
@@ -869,6 +845,8 @@ mod constraint_tests {
             offset_range: None,
             section_offset: None,
             section_offset_range: None,
+            not: None,
+            platforms: None,
             compiled_regex: None,
         };
 
@@ -917,6 +895,8 @@ mod constraint_tests {
             offset_range: None,
             section_offset: None,
             section_offset_range: None,
+            not: None,
+            platforms: None,
             compiled_regex: None,
         };
 
@@ -965,6 +945,8 @@ mod constraint_tests {
             offset_range: None,
             section_offset: None,
             section_offset_range: None,
+            not: None,
+            platforms: None,
             compiled_regex: None,
         };
 
@@ -989,6 +971,8 @@ mod constraint_tests {
             offset_range: None,
             section_offset: None,
             section_offset_range: None,
+            not: None,
+            platforms: None,
             compiled_regex: None,
         };
 
@@ -1045,6 +1029,8 @@ mod llm_validation_tests {
             offset_range: None,
             section_offset: None,
             section_offset_range: None,
+            not: None,
+            platforms: None,
             compiled_regex: None,
         };
 
@@ -1067,6 +1053,8 @@ mod llm_validation_tests {
             offset_range: None,
             section_offset: None,
             section_offset_range: None,
+            not: None,
+            platforms: None,
             compiled_regex: None,
         };
 
@@ -1089,6 +1077,8 @@ mod llm_validation_tests {
             offset_range: None,
             section_offset: None,
             section_offset_range: None,
+            not: None,
+            platforms: None,
             compiled_regex: None,
         };
 
@@ -1111,6 +1101,8 @@ mod llm_validation_tests {
             offset_range: None,
             section_offset: None,
             section_offset_range: None,
+            not: None,
+            platforms: None,
             compiled_regex: None,
         };
 
@@ -1133,6 +1125,8 @@ mod llm_validation_tests {
             offset_range: None,
             section_offset: None,
             section_offset_range: None,
+            not: None,
+            platforms: None,
             compiled_regex: None,
         };
 
@@ -1158,6 +1152,8 @@ mod llm_validation_tests {
             offset_range: None,
             section_offset: None,
             section_offset_range: None,
+            not: None,
+            platforms: None,
             compiled_regex: None,
         };
 
@@ -1179,6 +1175,8 @@ mod llm_validation_tests {
             offset_range: None,
             section_offset: None,
             section_offset_range: None,
+            not: None,
+            platforms: None,
             compiled_regex: None,
         };
 
@@ -1201,6 +1199,8 @@ mod llm_validation_tests {
             offset_range: None,
             section_offset: None,
             section_offset_range: None,
+            not: None,
+            platforms: None,
             compiled_regex: None,
         };
 
@@ -1222,6 +1222,8 @@ mod llm_validation_tests {
             offset_range: None,
             section_offset: None,
             section_offset_range: None,
+            not: None,
+            platforms: None,
             compiled_regex: None,
         };
 
@@ -1272,6 +1274,8 @@ mod llm_validation_tests {
             offset_range: None,
             section_offset: None,
             section_offset_range: None,
+            not: None,
+            platforms: None,
             compiled_regex: None,
         };
 
@@ -1293,6 +1297,8 @@ mod llm_validation_tests {
             offset_range: None,
             section_offset: None,
             section_offset_range: None,
+            not: None,
+            platforms: None,
             compiled_regex: None,
         };
 
@@ -1342,6 +1348,8 @@ mod llm_validation_tests {
             offset_range: None,
             section_offset: None,
             section_offset_range: None,
+            not: None,
+            platforms: None,
             compiled_regex: None,
         };
 
@@ -1391,6 +1399,8 @@ mod llm_validation_tests {
             offset_range: None,
             section_offset: None,
             section_offset_range: None,
+            not: None,
+            platforms: None,
             compiled_regex: None,
         };
 
@@ -1438,6 +1448,8 @@ mod llm_validation_tests {
             offset_range: None,
             section_offset: None,
             section_offset_range: None,
+            not: None,
+            platforms: None,
             compiled_regex: None,
         };
 
@@ -1484,6 +1496,8 @@ mod llm_validation_tests {
             offset_range: None,
             section_offset: None,
             section_offset_range: None,
+            not: None,
+            platforms: None,
             compiled_regex: None,
         };
 
@@ -1531,6 +1545,8 @@ mod llm_validation_tests {
             offset_range: None,
             section_offset: None,
             section_offset_range: None,
+            not: None,
+            platforms: None,
             compiled_regex: None,
         };
 

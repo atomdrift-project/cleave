@@ -15,4 +15,4 @@ traits:
     if:
       type: raw
       regex: 'objclass oLe2LInk'
-      case_sensitive: false
+      case_insensitive: true

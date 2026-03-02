@@ -19,10 +19,10 @@ use crate::capabilities::validation::{
     find_duplicate_second_level_directories, find_duplicate_traits_and_composites,
     find_empty_condition_clauses, find_excessive_skip_conditions, find_for_only_duplicates,
     find_hostile_cap_rules, find_hostile_meta_rules, find_impossible_count_constraints,
-    find_impossible_needs, find_impossible_size_constraints, find_invalid_trait_ids,
-    find_line_number, find_malware_subcategory_violations, find_missing_search_patterns,
-    find_non_capturing_groups, find_orphaned_components, find_overlapping_conditions,
-    find_oversized_trait_directories, find_parent_duplicate_segments,
+    find_impossible_needs, find_impossible_size_constraints, find_invalid_not_usage,
+    find_invalid_trait_ids, find_line_number, find_malware_subcategory_violations,
+    find_missing_search_patterns, find_non_capturing_groups, find_orphaned_components,
+    find_overlapping_conditions, find_oversized_trait_directories, find_parent_duplicate_segments,
     find_platform_named_directories, find_pure_alias_traits, find_redundant_any_refs,
     find_redundant_needs_one, find_short_pattern_warnings, find_single_item_clauses,
     find_slow_regex_patterns, find_string_content_collisions, find_string_pattern_duplicates,
@@ -523,10 +523,7 @@ impl super::CapabilityMapper {
                     }
 
                     // Check for useless case_insensitive
-                    if let Some(warning) = trait_def
-                        .r#if
-                        .check_case_insensitive_on_non_alpha()
-                    {
+                    if let Some(warning) = trait_def.r#if.check_case_insensitive_on_non_alpha() {
                         warnings.push(format!(
                             "trait '{}' in {:?}: {}",
                             trait_def.id, path, warning
@@ -1876,6 +1873,26 @@ impl super::CapabilityMapper {
                 warnings.push(format!(
                     "{} traits have no search pattern",
                     missing_patterns.len()
+                ));
+            }
+
+            // Validate: `not:` only used with `regex:` patterns
+            let invalid_not = find_invalid_not_usage(&trait_definitions);
+            if !invalid_not.is_empty() {
+                eprintln!(
+                    "\n❌ ERROR: {} traits use `not:` without `regex:`",
+                    invalid_not.len()
+                );
+                eprintln!(
+                    "   `not:` filters individual matches and only makes sense with `regex:` patterns:\n"
+                );
+                for msg in &invalid_not {
+                    eprintln!("   {}", msg);
+                }
+                eprintln!();
+                warnings.push(format!(
+                    "{} traits use `not:` without `regex:`",
+                    invalid_not.len()
                 ));
             }
 

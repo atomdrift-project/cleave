@@ -8,4 +8,3 @@ traits:
     if:
       type: raw
       regex: '([0-9a-fA-F]{1,8}\\''[0-9a-fA-F]{2}\s*){10,}'
-      description: "Detects dense Byte Nibble obfuscation"

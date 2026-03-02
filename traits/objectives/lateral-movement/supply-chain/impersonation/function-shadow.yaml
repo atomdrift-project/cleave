@@ -20,7 +20,6 @@ traits:
     for: [go]
     if:
       type: raw
-      multiline: true
       regex: 'func ReadPassword\s*\(.{0,50}\)[\s\S]{0,100}\{[\s\S]{0,800}term\.ReadPassword'
 
   - id: go-readpassword-with-io
@@ -30,7 +29,6 @@ traits:
     for: [go]
     if:
       type: raw
-      multiline: true
       regex: 'ReadPassword[\s\S]{0,500}(\.Post\(|\.AppendFile\(|\.WriteFile\(|os\.WriteFile)'
 
   # --- Crypto Functions ---

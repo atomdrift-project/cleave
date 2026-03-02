@@ -10,4 +10,3 @@ traits:
     if:
       type: raw
       regex: '[0-9a-fA-F]\{\\object\}[0-9a-fA-F]'
-      description: 'Detects {\object} tag embedded directly in hex data'

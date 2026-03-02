@@ -596,7 +596,7 @@ fn main() -> Result<()> {
             let mut allowed_local_paths: Vec<std::path::PathBuf> = dangerous_local_file_paths
                 .map(|s| {
                     s.split(',')
-                        .map(|p| p.trim())
+                        .map(str::trim)
                         .filter(|p| !p.is_empty())
                         .map(|p| {
                             std::path::Path::new(p)

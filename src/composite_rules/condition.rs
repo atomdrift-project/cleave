@@ -99,6 +99,21 @@ pub(crate) enum EncodingSpec {
     Multiple(Vec<String>),
 }
 
+/// Structured not-exception with explicit match type
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct NotExceptionStructured {
+    /// Require exact string equality to trigger the exception
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub exact: Option<String>,
+    /// Require the value to contain this substring to trigger the exception
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub substr: Option<String>,
+    /// Require the value to match this regex to trigger the exception
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub regex: Option<String>,
+}
+
 /// String exception specification for `not:` directive
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(untagged)]
@@ -107,17 +122,7 @@ pub(crate) enum NotException {
     Shorthand(String),
 
     /// Structured exception with explicit match type
-    Structured {
-        /// Require exact string equality to trigger the exception
-        #[serde(skip_serializing_if = "Option::is_none")]
-        exact: Option<String>,
-        /// Require the value to contain this substring to trigger the exception
-        #[serde(skip_serializing_if = "Option::is_none")]
-        substr: Option<String>,
-        /// Require the value to match this regex to trigger the exception
-        #[serde(skip_serializing_if = "Option::is_none")]
-        regex: Option<String>,
-    },
+    Structured(NotExceptionStructured),
 }
 
 impl NotException {
@@ -128,16 +133,12 @@ impl NotException {
             NotException::Shorthand(pattern) => {
                 value.to_lowercase().contains(&pattern.to_lowercase())
             }
-            NotException::Structured {
-                exact,
-                substr,
-                regex,
-            } => {
-                if let Some(exact_str) = exact {
+            NotException::Structured(s) => {
+                if let Some(exact_str) = &s.exact {
                     value.eq_ignore_ascii_case(exact_str)
-                } else if let Some(substr_str) = substr {
+                } else if let Some(substr_str) = &s.substr {
                     value.to_lowercase().contains(&substr_str.to_lowercase())
-                } else if let Some(regex_str) = regex {
+                } else if let Some(regex_str) = &s.regex {
                     regex::Regex::new(regex_str)
                         .map(|re| re.is_match(value))
                         .unwrap_or(false)
@@ -197,6 +198,13 @@ enum ConditionTagged {
         /// Require match to contain a valid external IP address (not private/loopback/reserved)
         #[serde(default)]
         external_ip: bool,
+        /// Exclude individual matches where evidence matches any of these patterns.
+        /// Only valid when `regex` is set — rejected by validation otherwise.
+        #[serde(default)]
+        not: Option<Vec<NotException>>,
+        /// Platform filter - only evaluate this condition for these platforms
+        #[serde(default)]
+        platforms: Option<Vec<Platform>>,
         /// Section constraint: only match strings in this section (supports fuzzy names like "text")
         #[serde(default)]
         section: Option<String>,
@@ -318,6 +326,9 @@ enum ConditionTagged {
     },
     Hex {
         pattern: String,
+        /// Exclude individual matches where evidence matches any of these patterns
+        #[serde(default)]
+        not: Option<Vec<NotException>>,
         /// Absolute file offset (negative = from end of file)
         #[serde(default)]
         offset: Option<i64>,
@@ -362,6 +373,10 @@ enum ConditionTagged {
         /// Require match to contain a valid external IP address (not private/loopback/reserved)
         #[serde(default)]
         external_ip: bool,
+        /// Exclude individual matches where evidence matches any of these patterns.
+        /// Only valid when `regex` is set — rejected by validation otherwise.
+        #[serde(default)]
+        not: Option<Vec<NotException>>,
         /// Section constraint: only match in this section (supports fuzzy names like "text")
         #[serde(default)]
         section: Option<String>,
@@ -454,6 +469,13 @@ enum ConditionTagged {
         /// Case insensitive matching
         #[serde(default)]
         case_insensitive: bool,
+        /// Require match to contain a valid external IP address (not private/loopback/reserved)
+        #[serde(default)]
+        external_ip: bool,
+        /// Exclude individual matches where evidence matches any of these patterns.
+        /// Only valid when `regex` is set — rejected by validation otherwise.
+        #[serde(default)]
+        not: Option<Vec<NotException>>,
         /// Section constraint: only match in this section (supports fuzzy names like "text")
         #[serde(default)]
         section: Option<String>,
@@ -554,6 +576,8 @@ impl From<ConditionDeser> for Condition {
                     word,
                     case_insensitive,
                     external_ip,
+                    not,
+                    platforms,
                     section,
                     offset,
                     offset_range,
@@ -566,6 +590,8 @@ impl From<ConditionDeser> for Condition {
                     word,
                     case_insensitive,
                     external_ip,
+                    not,
+                    platforms,
                     section,
                     offset,
                     offset_range,
@@ -658,6 +684,7 @@ impl From<ConditionDeser> for Condition {
                 },
                 ConditionTagged::Hex {
                     pattern,
+                    not,
                     offset,
                     offset_range,
                     section,
@@ -665,6 +692,7 @@ impl From<ConditionDeser> for Condition {
                     section_offset_range,
                 } => Condition::Hex {
                     pattern,
+                    not,
                     offset,
                     offset_range,
                     section,
@@ -678,6 +706,7 @@ impl From<ConditionDeser> for Condition {
                     word,
                     case_insensitive,
                     external_ip,
+                    not,
                     section,
                     offset,
                     offset_range,
@@ -690,6 +719,7 @@ impl From<ConditionDeser> for Condition {
                     word,
                     case_insensitive,
                     external_ip,
+                    not,
                     section,
                     offset,
                     offset_range,
@@ -731,6 +761,8 @@ impl From<ConditionDeser> for Condition {
                     regex,
                     word,
                     case_insensitive,
+                    external_ip,
+                    not,
                     section,
                     offset,
                     offset_range,
@@ -743,6 +775,8 @@ impl From<ConditionDeser> for Condition {
                     regex,
                     word,
                     case_insensitive,
+                    external_ip,
+                    not,
                     section,
                     offset,
                     offset_range,
@@ -808,6 +842,8 @@ impl From<Condition> for ConditionTagged {
                 word,
                 case_insensitive,
                 external_ip,
+                not,
+                platforms,
                 section,
                 offset,
                 offset_range,
@@ -821,6 +857,8 @@ impl From<Condition> for ConditionTagged {
                 word,
                 case_insensitive,
                 external_ip,
+                not,
+                platforms,
                 section,
                 offset,
                 offset_range,
@@ -912,6 +950,7 @@ impl From<Condition> for ConditionTagged {
             },
             Condition::Hex {
                 pattern,
+                not,
                 offset,
                 offset_range,
                 section,
@@ -919,6 +958,7 @@ impl From<Condition> for ConditionTagged {
                 section_offset_range,
             } => ConditionTagged::Hex {
                 pattern,
+                not,
                 offset,
                 offset_range,
                 section,
@@ -932,6 +972,7 @@ impl From<Condition> for ConditionTagged {
                 word,
                 case_insensitive,
                 external_ip,
+                not,
                 section,
                 offset,
                 offset_range,
@@ -945,6 +986,7 @@ impl From<Condition> for ConditionTagged {
                 word,
                 case_insensitive,
                 external_ip,
+                not,
                 section,
                 offset,
                 offset_range,
@@ -985,6 +1027,8 @@ impl From<Condition> for ConditionTagged {
                 regex,
                 word,
                 case_insensitive,
+                external_ip,
+                not,
                 section,
                 offset,
                 offset_range,
@@ -998,6 +1042,8 @@ impl From<Condition> for ConditionTagged {
                 regex,
                 word,
                 case_insensitive,
+                external_ip,
+                not,
                 section,
                 offset,
                 offset_range,
@@ -1086,6 +1132,12 @@ pub(crate) enum Condition {
         /// Require match to contain a valid external IP address (not private/loopback/reserved)
         #[serde(default)]
         external_ip: bool,
+        /// Exclude individual matches where evidence matches any of these patterns
+        #[serde(skip_serializing_if = "Option::is_none")]
+        not: Option<Vec<NotException>>,
+        /// Platform filter - only evaluate this condition for these platforms
+        #[serde(skip_serializing_if = "Option::is_none")]
+        platforms: Option<Vec<Platform>>,
         /// Section constraint: only match strings in this section (supports fuzzy names like "text")
         #[serde(skip_serializing_if = "Option::is_none")]
         section: Option<String>,
@@ -1303,6 +1355,9 @@ pub(crate) enum Condition {
         /// Hex pattern with optional wildcards (??) and gaps ([N] or [N-M])
         /// Format: space-separated hex bytes, ?? for any byte, [N] for N-byte gap
         pattern: String,
+        /// Exclude individual matches where evidence matches any of these patterns
+        #[serde(skip_serializing_if = "Option::is_none")]
+        not: Option<Vec<NotException>>,
         /// Absolute file offset (negative = from end of file)
         #[serde(skip_serializing_if = "Option::is_none")]
         offset: Option<i64>,
@@ -1348,6 +1403,9 @@ pub(crate) enum Condition {
         /// Require match to contain a valid external IP address (not private/loopback/reserved)
         #[serde(default)]
         external_ip: bool,
+        /// Exclude individual matches where evidence matches any of these patterns
+        #[serde(skip_serializing_if = "Option::is_none")]
+        not: Option<Vec<NotException>>,
         /// Section constraint: only match in this section (supports fuzzy names like "text")
         #[serde(skip_serializing_if = "Option::is_none")]
         section: Option<String>,
@@ -1441,6 +1499,12 @@ pub(crate) enum Condition {
         /// Case insensitive matching
         #[serde(default)]
         case_insensitive: bool,
+        /// Require match to contain a valid external IP address (not private/loopback/reserved)
+        #[serde(default)]
+        external_ip: bool,
+        /// Exclude individual matches where evidence matches any of these patterns
+        #[serde(skip_serializing_if = "Option::is_none")]
+        not: Option<Vec<NotException>>,
         /// Section constraint: only match in this section (supports fuzzy names like "text")
         #[serde(skip_serializing_if = "Option::is_none")]
         section: Option<String>,
@@ -2680,11 +2744,13 @@ mod location_constraint_tests {
             word: None,
             case_insensitive: false,
             external_ip: false,
+            not: None,
             section: None,
             offset: Some(0x100),
             offset_range: Some((0, Some(0x1000))), // Mutually exclusive with offset
             section_offset: None,
             section_offset_range: None,
+            platforms: None,
             compiled_regex: None,
         };
         assert!(condition.validate(true).is_err());
@@ -2700,6 +2766,7 @@ mod location_constraint_tests {
             word: None,
             case_insensitive: false,
             external_ip: false,
+            not: None,
             section: Some(".text".to_string()),
             offset: None,
             offset_range: Some((0, Some(0x1000))),

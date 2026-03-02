@@ -521,3 +521,35 @@ pub(crate) fn find_orphaned_components(
 
     orphans
 }
+
+/// Find traits where `not:` is used inside a condition without `regex:`.
+///
+/// The `not:` field excludes individual evidence matches and only makes sense
+/// with ambiguous patterns: `regex:` on string/raw/encoded conditions, or any
+/// `hex:` condition (which inherently has wildcards). With `exact:`, `substr:`,
+/// or `word:`, the match is already precise — change the pattern instead.
+#[must_use]
+pub(crate) fn find_invalid_not_usage(trait_definitions: &[TraitDefinition]) -> Vec<String> {
+    let mut violations = Vec::new();
+
+    for t in trait_definitions {
+        let invalid = match &t.r#if {
+            // String/Raw/Encoded: not requires regex
+            Condition::String { regex, not, .. }
+            | Condition::Raw { regex, not, .. }
+            | Condition::Encoded { regex, not, .. } => not.is_some() && regex.is_none(),
+            // Hex: not is always valid (patterns are inherently ambiguous).
+            // All other condition types: not is not supported.
+            _ => false,
+        };
+
+        if invalid {
+            violations.push(format!(
+                "{}: `not:` is only valid with `regex:` or `hex:` patterns",
+                t.id,
+            ));
+        }
+    }
+
+    violations
+}

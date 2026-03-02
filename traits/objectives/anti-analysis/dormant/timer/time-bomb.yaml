@@ -37,7 +37,6 @@ traits:
     for: [python]
     if:
       type: raw
-      multiline: true
       regex: 'time\.time[\s\S]{0,100}exec'
 
   - id: py-time-then-eval
@@ -47,7 +46,6 @@ traits:
     for: [python]
     if:
       type: raw
-      multiline: true
       regex: 'time\.time[\s\S]{0,100}eval'
 
   - id: py-time-then-os-system
@@ -57,7 +55,6 @@ traits:
     for: [python]
     if:
       type: raw
-      multiline: true
       regex: 'time\.time[\s\S]{0,100}os\.system'
 
   - id: py-datetime-then-exec
@@ -67,7 +64,6 @@ traits:
     for: [python]
     if:
       type: raw
-      multiline: true
       regex: 'datetime\.(now|today)[\s\S]{0,100}(exec|eval)'
 
   - id: py-datetime-then-subprocess
@@ -77,7 +73,6 @@ traits:
     for: [python]
     if:
       type: raw
-      multiline: true
       regex: 'datetime\.(now|today)[\s\S]{0,100}subprocess'
 
   - id: py-time-then-subprocess
@@ -87,7 +82,6 @@ traits:
     for: [python]
     if:
       type: raw
-      multiline: true
       regex: 'time\.time[\s\S]{0,100}subprocess'
 
   - id: py-sleep-then-exec
@@ -97,7 +91,6 @@ traits:
     for: [python]
     if:
       type: raw
-      multiline: true
       regex: 'time\.sleep\s*\(\s*[0-9]{4,}\s*\)[\s\S]{0,200}(exec|eval|requests|urllib)'
 
   # ============================================================
@@ -140,7 +133,6 @@ traits:
     size_max: 102400
     if:
       type: raw
-      multiline: true
       regex: 'Date\.now[\s\S]{0,150}eval'
 
   - id: js-datenow-then-function
@@ -150,7 +142,6 @@ traits:
     for: [javascript, typescript]
     if:
       type: raw
-      multiline: true
       regex: 'Date\.now[\s\S]{0,150}Function'
 
   - id: js-datenow-then-fetch
@@ -160,7 +151,6 @@ traits:
     for: [javascript, typescript]
     if:
       type: raw
-      multiline: true
       regex: 'Date\.now[\s\S]{0,150}fetch'
 
   - id: js-newdate-then-eval
@@ -170,7 +160,6 @@ traits:
     for: [javascript, typescript]
     if:
       type: raw
-      multiline: true
       regex: 'new Date[\s\S]{0,150}eval'
 
   - id: js-newdate-then-function
@@ -180,7 +169,6 @@ traits:
     for: [javascript, typescript]
     if:
       type: raw
-      multiline: true
       regex: 'new Date[\s\S]{0,150}Function'
 
   - id: js-newdate-then-fetch
@@ -190,7 +178,6 @@ traits:
     for: [javascript, typescript]
     if:
       type: raw
-      multiline: true
       regex: 'new Date[\s\S]{0,150}fetch'
 
   # ============================================================
@@ -277,7 +264,6 @@ traits:
     for: [python, javascript, shell]
     if:
       type: raw
-      multiline: true
       regex: '\bCI\b[\s\S]{0,200}curl'
 
   - id: ci-var-then-wget
@@ -287,7 +273,6 @@ traits:
     for: [python, javascript, shell]
     if:
       type: raw
-      multiline: true
       regex: '\bCI\b[\s\S]{0,200}wget'
 
   - id: github-actions-then-curl
@@ -297,7 +282,6 @@ traits:
     for: [python, javascript, shell]
     if:
       type: raw
-      multiline: true
       regex: 'GITHUB_ACTIONS[\s\S]{0,200}curl'
 
   - id: github-actions-then-wget
@@ -307,7 +291,6 @@ traits:
     for: [python, javascript, shell]
     if:
       type: raw
-      multiline: true
       regex: 'GITHUB_ACTIONS[\s\S]{0,200}wget'
 
   - id: travis-then-curl
@@ -317,7 +300,6 @@ traits:
     for: [python, javascript, shell]
     if:
       type: raw
-      multiline: true
       regex: 'TRAVIS[\s\S]{0,200}curl'
 
   - id: travis-then-wget
@@ -327,7 +309,6 @@ traits:
     for: [python, javascript, shell]
     if:
       type: raw
-      multiline: true
       regex: 'TRAVIS[\s\S]{0,200}wget'
 
   - id: ci-exfil-requests
@@ -337,7 +318,6 @@ traits:
     for: [python, javascript, shell]
     if:
       type: raw
-      multiline: true
       regex: '\bCI\b[\s\S]{0,200}requests'
 
   - id: github-actions-then-requests
@@ -347,7 +327,6 @@ traits:
     for: [python, javascript, shell]
     if:
       type: raw
-      multiline: true
       regex: 'GITHUB_ACTIONS[\s\S]{0,200}requests'
 
   - id: travis-then-requests
@@ -357,7 +336,6 @@ traits:
     for: [python, javascript, shell]
     if:
       type: raw
-      multiline: true
       regex: 'TRAVIS[\s\S]{0,200}requests'
 
   - id: ci-var-then-fetch
@@ -367,7 +345,6 @@ traits:
     for: [python, javascript, shell]
     if:
       type: raw
-      multiline: true
       regex: '\bCI\b[\s\S]{0,200}fetch'
 
   - id: ci-var-then-http
@@ -377,7 +354,6 @@ traits:
     for: [python, javascript, shell]
     if:
       type: raw
-      multiline: true
       regex: '\bCI\b[\s\S]{0,200}http'
 
   - id: github-actions-then-fetch
@@ -387,7 +363,6 @@ traits:
     for: [python, javascript, shell]
     if:
       type: raw
-      multiline: true
       regex: 'GITHUB_ACTIONS[\s\S]{0,200}fetch'
 
   - id: github-actions-then-http
@@ -397,7 +372,6 @@ traits:
     for: [python, javascript, shell]
     if:
       type: raw
-      multiline: true
       regex: 'GITHUB_ACTIONS[\s\S]{0,200}http'
 
   - id: travis-then-fetch
@@ -407,7 +381,6 @@ traits:
     for: [python, javascript, shell]
     if:
       type: raw
-      multiline: true
       regex: 'TRAVIS[\s\S]{0,200}fetch'
 
   - id: travis-then-http
@@ -417,7 +390,6 @@ traits:
     for: [python, javascript, shell]
     if:
       type: raw
-      multiline: true
       regex: 'TRAVIS[\s\S]{0,200}http'
 
 composite_rules:

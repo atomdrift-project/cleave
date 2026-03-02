@@ -14,4 +14,3 @@ traits:
       type: encoded
       encoding: base64
       regex: "."
-      length_min: 102400

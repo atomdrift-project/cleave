@@ -16,7 +16,6 @@ traits:
     for: [go]
     if:
       type: raw
-      multiline: true
       regex: '\.Get\s*\(.{1,50}\)[\s\S]{0,200}\.Post\s*\('
 
   - id: go-get-then-get
@@ -26,7 +25,6 @@ traits:
     for: [go]
     if:
       type: raw
-      multiline: true
       regex: '\.Get\s*\(.{1,50}\)\.String\s*\(\)[\s\S]{0,250}\.Get\s*\('
 
   # === Python: requests chaining ===

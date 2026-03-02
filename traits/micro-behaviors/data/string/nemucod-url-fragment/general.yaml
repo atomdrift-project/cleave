@@ -9,7 +9,7 @@ traits:
       - javascript
     if:
       type: ast
-      lang: javascript
+      language: javascript
       query:
         "(binary_expression\n  operator: \"+\"\n  left: (binary_expression\n  \
         \  operator: \"+\"\n    left: (string) @s1 (#match? @s1 \"^\"https?\"$\")\n\

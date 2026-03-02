@@ -6,7 +6,7 @@ traits:
     mbc: "B0032"
     attack: "T1027"
     for: [python, javascript, typescript, go, rust]
+    count_min: 5
     if:
       type: raw
       regex: "[\\U0001D400-\\U0001D7FF]"
-      count_min: 5

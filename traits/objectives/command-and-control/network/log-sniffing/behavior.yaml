@@ -7,10 +7,6 @@ traits:
   if:
     type: raw
     regex: '/var/log/[\w\.-]+_error\.log|sslvpn_ngx_error\.log'
-    near:
-      type: raw
-      regex: 're\.search|re\.findall'
-      near_lines: 10
 composite_rules:
 - id: log-command-extraction
   desc: Extracting commands from log files

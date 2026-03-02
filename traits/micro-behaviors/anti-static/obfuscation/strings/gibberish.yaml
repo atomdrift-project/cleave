@@ -7,6 +7,7 @@ traits:
     crit: notable
     conf: 0.8
     for: [all]
+    count_min: 2
     if:
       type: string
       # Pattern: [consonant][vowel] repeated 5+ times.
@@ -14,4 +15,3 @@ traits:
       # Shortened regex to avoid length warnings. [b-df-hj-np-tv-z] covers all consonants.
       # count_min: 2 avoids FP on legitimate compound words like "lifetimemanager"
       regex: '(?i)\b[b-df-hj-np-tv-z]?([b-df-hj-np-tv-z][aeiou]){7,}[b-df-hj-np-tv-z]?\b'
-      count_min: 2

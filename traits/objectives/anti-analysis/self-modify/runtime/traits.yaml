@@ -85,11 +85,11 @@ traits:
     desc: Trampoline hook terminology
     crit: notable
     conf: 0.3
+    count_min: 3
     if:
       type: string
       substr: trampoline
       case_insensitive: true
-      count_min: 3
     downgrade:
       any:
         - id: metadata/signed/platform::apple

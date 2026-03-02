@@ -23,10 +23,10 @@ traits:
   - id: security-solution-many
     desc: securitySolution string (6+ occurrences)
     crit: component
+    count_min: 6
     if:
       type: string
       substr: "securitySolution"
-      count_min: 6
 
   - id: snort-url
     desc: Snort URL
@@ -38,10 +38,10 @@ traits:
   - id: cve-pattern-many
     desc: CVE pattern (6+ occurrences)
     crit: component
+    count_min: 6
     if:
       type: string
       regex: "CVE-\\d{4}-\\d{4,}"
-      count_min: 6
 
   - id: exploit-db-domain
     desc: exploit-db.com domain

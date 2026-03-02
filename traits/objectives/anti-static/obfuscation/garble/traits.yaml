@@ -12,24 +12,24 @@ traits:
     desc: Go binary with Garble randomized filenames
     crit: suspicious
     conf: 0.95
+    count_min: 100
     if:
       type: string
       # Looks for multiple instances of randomly generated 5-15 character filenames
       # Garble frequently uses a mix of upper, lower, numbers and underscores.
       # e.g., aacIDWgGjQR.go, ZzHqdTvg.go, zzYMT2rrN.go
       regex: '^[a-zA-Z0-9_]{5,15}\.go$'
-      count_min: 100
 
   - id: garble-random-packages
     desc: Go binary with Garble randomized packages
     crit: suspicious
     conf: 0.95
+    count_min: 20
     if:
       type: string
       # Looks for randomized Go function names
       # e.g., Jj6F5T.(*LMBs3S4W8).XORKeyStream
       regex: '^[a-zA-Z0-9_]{5,15}\.\(\*[a-zA-Z0-9_]{5,15}\)\.[a-zA-Z0-9_]+'
-      count_min: 20
 
 composite_rules:
   - id: garble-obfuscated-go

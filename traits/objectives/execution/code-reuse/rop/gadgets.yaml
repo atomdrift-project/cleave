@@ -20,22 +20,22 @@ traits:
     desc: High density of return instructions
     crit: suspicious
     conf: 0.85
+    per_kb_min: 50.0  # 50+ returns per KB is unusual
     if:
       type: hex
       section: text
       pattern: "C3"
-      per_kb_min: 50.0  # 50+ returns per KB is unusual
 
   # Extreme RET density (strong ROP indicator)
   - id: extreme-ret-density
     desc: Extreme return instruction density
     crit: suspicious
     conf: 0.95
+    per_kb_min: 100.0  # 100+ returns per KB
     if:
       type: hex
       section: text
       pattern: "C3"
-      per_kb_min: 100.0  # 100+ returns per KB
 
   # === ROP Gadget Patterns ===
 
@@ -48,12 +48,12 @@ traits:
     desc: POP; POP; RET gadget pattern
     crit: component
     conf: 0.9
+    count_min: 200
+    per_kb_min: 2.0
     if:
       type: hex
       section: text
       pattern: "5? 5? C3"
-      count_min: 200
-      per_kb_min: 2.0
 
   # POP; RET pattern (very common gadget)
   # Note: Extremely common in all compiled code - only useful in composites
@@ -61,22 +61,22 @@ traits:
     desc: POP; RET gadget pattern
     crit: component
     conf: 0.75
+    count_min: 100
     if:
       type: hex
       section: text
       pattern: "5? C3"
-      count_min: 100
 
   # Short instruction followed by RET (1-3 byte gadgets)
   - id: short-ret-gadgets
     desc: Short instruction sequences ending in RET
     crit: suspicious
     conf: 0.85
+    per_kb_min: 80.0  # High density of 2-byte gadgets
     if:
       type: hex
       section: text
       pattern: "?? C3"
-      per_kb_min: 80.0  # High density of 2-byte gadgets
 
   # === Data Section RET Instructions ===
 
@@ -90,13 +90,13 @@ traits:
     crit: notable
     conf: 0.95
     for: [pe, elf]
+    count_min: 20
+    per_kb_min: 5.0
+    size_min: 1024
     if:
       type: hex
       section: .data
       pattern: "C3"
-      count_min: 20
-      per_kb_min: 5.0
-      size_min: 1024
 
   # === Specific ROP Gadget Sequences ===
 
@@ -109,12 +109,12 @@ traits:
     crit: suspicious
     conf: 0.98
     for: [pe, elf]
+    count_min: 50
+    per_kb_min: 1.0
     if:
       type: hex
       section: text
       pattern: "94 C3"
-      count_min: 50
-      per_kb_min: 1.0
 
   # ADD ESP, XX; RET (stack adjustment gadget)
   # Standard function epilogue in x86 code; require high count to indicate
@@ -123,12 +123,12 @@ traits:
     desc: Stack adjustment gadget
     crit: component
     conf: 0.9
+    count_min: 50
+    per_kb_min: 2.0
     if:
       type: hex
       section: text
       pattern: "83 C4 ?? C3"
-      count_min: 50
-      per_kb_min: 2.0
 
 composite_rules:
   # ROP chain indicators

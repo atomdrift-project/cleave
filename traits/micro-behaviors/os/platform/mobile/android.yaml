@@ -11,7 +11,7 @@ defaults:
 traits:
   - id: android-platform-paths
     desc: Multiple Android platform paths
+    count_min: 3
     if:
       type: string
       regex: '^(/system/|/data/data/|/apex/)'
-      count_min: 3

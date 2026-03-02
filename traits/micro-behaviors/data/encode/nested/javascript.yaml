@@ -6,7 +6,7 @@ traits:
     for: [javascript, typescript]
     mbc: "B0032"
     attack: "T1027"
+    count_min: 2
     if:
       type: raw
       regex: 'Buffer\.from\([^,]{1,50},\s*["''](hex|base64)["'']\)'
-      count_min: 2

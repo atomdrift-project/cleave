@@ -283,7 +283,7 @@ pub(crate) fn find_cap_obj_violations(
             }
 
             // Check if the trait condition references other traits
-            if let Condition::Trait { id: ref_id } = &trait_def.r#if.condition {
+            if let Condition::Trait { id: ref_id } = &trait_def.r#if {
                 if let Some(ref_tier) = extract_tier(ref_id) {
                     if ref_tier == "objectives" {
                         let source = rule_source_files

@@ -9,10 +9,10 @@ defaults:
 traits:
   - id: pkginfo-body-has-badges
     desc: PKG-INFO body contains CI/CD badge URLs
+    count_min: 2
     if:
       type: raw
       substr: "img.shields.io"
-      count_min: 2
 
   - id: pkginfo-body-has-sponsorship
     desc: PKG-INFO body references Tidelift sponsorship
@@ -22,10 +22,10 @@ traits:
 
   - id: pkginfo-body-has-maintainer-list
     desc: PKG-INFO body lists GitHub @username maintainers
+    count_min: 3
     if:
       type: raw
       regex: "github\\.com/[a-zA-Z0-9_-]+>"
-      count_min: 3
 
 
 composite_rules:

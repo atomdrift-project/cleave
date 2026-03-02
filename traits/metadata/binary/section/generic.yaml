@@ -6,7 +6,7 @@ traits:
     desc: High entropy .rdata section (likely encrypted)
     crit: notable
     conf: 0.8
+    entropy_min: 7.9
     if:
       type: section
       substr: ".rdata"
-      entropy_min: 7.9

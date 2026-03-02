@@ -3,10 +3,10 @@ traits:
     desc: Detects comments injected inside member expressions or
     crit: suspicious
     for: [javascript, typescript]
+    count_min: 10
     if:
       type: raw
       regex: '(\.\s*/\*.*?\*/\s*\w+)|(\w+\s*/\*.*?\*/\s*\()|(\[\s*/\*.*?\*/\s*)'
-      count_min: 10
     not:
       - regex: 'istanbul ignore'
       - regex: '@class'

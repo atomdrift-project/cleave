@@ -368,8 +368,8 @@ fn sum_weakest(mut values: Vec<f32>, count: usize) -> f32 {
 pub(crate) fn calculate_trait_precision(trait_def: &TraitDefinition) -> f32 {
     let mut precision = BASE_TRAIT_PRECISION;
 
-    precision += score_presence(trait_def.r#if.size_min.as_ref());
-    precision += score_presence(trait_def.r#if.size_max.as_ref());
+    precision += score_presence(trait_def.size_min.as_ref());
+    precision += score_presence(trait_def.size_max.as_ref());
 
     for platform in trait_def.platforms.iter().filter(|p| **p != Platform::All) {
         precision += score_string_value(&format!("{:?}", platform).to_lowercase());
@@ -383,7 +383,7 @@ pub(crate) fn calculate_trait_precision(trait_def: &TraitDefinition) -> f32 {
         precision += score_string_value(&format!("{:?}", file_type).to_lowercase());
     }
 
-    precision += score_condition(&trait_def.r#if.condition);
+    precision += score_condition(&trait_def.r#if);
 
     if let Some(exceptions) = trait_def.not.as_ref() {
         precision += PARAM_UNIT;

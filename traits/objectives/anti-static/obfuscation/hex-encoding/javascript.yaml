@@ -12,11 +12,11 @@ traits:
     mbc: "B0032"
     attack: "T1027"
     for: [javascript, typescript]
+    count_min: 5
+    per_kb_min: 0.2
     if:
       type: string
       regex: "0x[0-9a-fA-F]{4,}"
-      count_min: 5
-      per_kb_min: 0.2
 
   # Hexadecimal array access patterns
   - id: hex-array-access
@@ -26,11 +26,11 @@ traits:
     mbc: "B0032"
     attack: "T1027"
     for: [javascript, typescript]
+    count_min: 5
+    per_kb_min: 0.3
     if:
       type: raw
       regex: "\\w+\\[\\s*0x[0-9a-fA-F]{2,}\\s*\\]"
-      count_min: 5
-      per_kb_min: 0.3
 
   # Hexadecimal arithmetic in string operations
   - id: hex-string-arithmetic
@@ -40,10 +40,10 @@ traits:
     mbc: "B0032"
     attack: "T1027"
     for: [javascript, typescript]
+    count_min: 3
     if:
       type: raw
       regex: "0x[0-9a-fA-F]+\\s*[\\+\\-\\*\\/]"
-      count_min: 3
 
   # Hexadecimal character codes in fromCharCode
   - id: fromcharcode-hex
@@ -53,11 +53,11 @@ traits:
     mbc: "B0032"
     attack: "T1027"
     for: [javascript, typescript]
+    count_min: 3
+    per_kb_min: 0.2
     if:
       type: raw
       regex: "fromCharCode\\s*\\(\\s*0x[0-9a-fA-F]+"
-      count_min: 3
-      per_kb_min: 0.2
 
   # Buffer hex encoding patterns
   - id: buffer-hex-encoding
@@ -67,10 +67,10 @@ traits:
     mbc: "B0032"
     attack: "T1027"
     for: [javascript, typescript]
+    count_min: 2
     if:
       type: raw
       regex: "Buffer\\.from\\s*\\(\\s*['\"][0-9a-fA-F]+['\"]\\s*,\\s*['\"]hex['\"]"
-      count_min: 2
 
   # Hexadecimal concatenation patterns
   - id: hex-concatenation
@@ -80,10 +80,10 @@ traits:
     mbc: "B0032"
     attack: "T1027"
     for: [javascript, typescript]
+    count_min: 3
     if:
       type: raw
       regex: "\\+\\s*0x[0-9a-fA-F]{4,}"
-      count_min: 3
 
   # Mixed hex and decimal operations
   - id: mixed-hex-decimal
@@ -93,10 +93,10 @@ traits:
     mbc: "B0032"
     attack: "T1027"
     for: [javascript, typescript]
+    count_min: 4
     if:
       type: raw
       regex: "\\d+\\s*[\\+\\-\\*\\/]\\s*0x[0-9a-fA-F]+"
-      count_min: 4
 
   # Hexadecimal in conditional statements
   - id: hex-conditionals
@@ -106,11 +106,11 @@ traits:
     mbc: "B0032"
     attack: "T1027"
     for: [javascript, typescript]
+    count_min: 5
+    per_kb_min: 1.0
     if:
       type: raw
       regex: "if\\s*\\([^)]{0,120}0x[0-9a-fA-F]+[^)]{0,120}\\)"
-      count_min: 5
-      per_kb_min: 1.0
 
 composite_rules:
   # Advanced hex obfuscation composite

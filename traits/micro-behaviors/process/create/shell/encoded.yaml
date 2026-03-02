@@ -180,11 +180,11 @@ traits:
     crit: suspicious
     conf: 0.95
     attack: "T1027"
+    count_min: 3
     if:
       type: encoded
       encoding: [xor, base64, hex]
       regex: "\\bbash\\b"
-      count_min: 3
       case_insensitive: true
 
   - id: multiple-encoded-shell-cmd-exe
@@ -192,11 +192,11 @@ traits:
     crit: suspicious
     conf: 0.95
     attack: "T1027"
+    count_min: 3
     if:
       type: encoded
       encoding: [xor, base64, hex]
       regex: "\\bcmd\\.exe\\b"
-      count_min: 3
       case_insensitive: true
 
   - id: multiple-encoded-shell-powershell
@@ -204,11 +204,11 @@ traits:
     crit: suspicious
     conf: 0.95
     attack: "T1027"
+    count_min: 3
     if:
       type: encoded
       encoding: [xor, base64, hex]
       regex: "\\bpowershell\\b"
-      count_min: 3
       case_insensitive: true
 
   - id: multiple-encoded-shell-bin-sh
@@ -216,11 +216,11 @@ traits:
     crit: suspicious
     conf: 0.95
     attack: "T1027"
+    count_min: 3
     if:
       type: encoded
       encoding: [xor, base64, hex]
       regex: "/bin/sh"
-      count_min: 3
       case_insensitive: true
 
   - id: multiple-encoded-shell-bin-bash
@@ -228,11 +228,11 @@ traits:
     crit: suspicious
     conf: 0.95
     attack: "T1027"
+    count_min: 3
     if:
       type: encoded
       encoding: [xor, base64, hex]
       regex: "/bin/bash"
-      count_min: 3
       case_insensitive: true
 
   # Encoded command with common malware paths
@@ -241,11 +241,11 @@ traits:
     crit: suspicious
     conf: 0.9
     attack: "T1027"
+    count_min: 2
     if:
       type: encoded
       encoding: [xor, base64, hex]
       regex: "/tmp/[a-zA-Z0-9]+"
-      count_min: 2
 
 composite_rules:
   - id: xor-shell-command

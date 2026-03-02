@@ -4,7 +4,7 @@ traits:
     crit: suspicious
     conf: 0.7
     for: [all]
+    count_min: 1
     if:
       type: string
       substr: '128.92.4.4'
-      count_min: 1

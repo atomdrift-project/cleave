@@ -5,7 +5,7 @@ traits:
     desc: "Numeric infix obfuscation (e.g. com0715press)"
     crit: suspicious
     conf: 0.8
+    count_min: 2
     if:
       type: raw
       regex: '\b[a-zA-Z]{3,}[0-9]{4}[a-zA-Z]{3,}\b'
-      count_min: 2

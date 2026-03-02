@@ -22,11 +22,11 @@ traits:
     crit: component
     conf: 0.85
     for: [pe, elf]
+    count_min: 10
     if:
       type: hex
       section: text
       pattern: "00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00"
-      count_min: 10
     unless:
       - type: raw
         substr: "mscoree"  # .NET assemblies have normal null padding in IL sections
@@ -58,11 +58,11 @@ traits:
     desc: Dense INT3 breakpoint instructions
     crit: component
     conf: 0.8
+    per_kb_min: 3.0
     if:
       type: hex
       section: text
       pattern: "CC CC CC CC CC CC CC CC CC CC CC CC CC CC CC CC"
-      per_kb_min: 3.0
 
   # === Mixed Padding Patterns ===
 
@@ -72,22 +72,22 @@ traits:
     desc: Alternating null and NOP pattern
     crit: suspicious
     conf: 0.85
+    count_min: 3
     if:
       type: hex
       section: text
       pattern: "00 90 00 90 00 90 00 90 00 90 00 90 00 90 00 90"
-      count_min: 3
 
   # High density of NOP instructions (cave or alignment abuse)
   - id: dense-nops-executable
     desc: Dense NOP instructions in executable section
     crit: notable
     conf: 0.75
+    per_kb_min: 100.0  # 100+ NOPs per KB is unusual
     if:
       type: hex
       section: text
       pattern: "90"
-      per_kb_min: 100.0  # 100+ NOPs per KB is unusual
     unless:
       - id: metadata/compiler::go-binary  # Go uses NOPs for alignment
 
@@ -103,10 +103,10 @@ traits:
     desc: Executable section with very low entropy
     crit: notable
     conf: 0.8
+    entropy_max: 1.0  # Nearly zero information content (true code caves only)
     if:
       type: section
       executable: true
-      entropy_max: 1.0  # Nearly zero information content (true code caves only)
       length_min: 65536  # At least 64KB to filter out normal const/padding sections
     unless:
       - id: metadata/signed/platform::apple

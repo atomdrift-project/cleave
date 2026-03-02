@@ -36,10 +36,10 @@ traits:
   desc: Dense hex escape sequences
   crit: suspicious
   conf: 0.85
+  count_min: 20
   if:
     type: raw
     regex: \\x[0-9a-f]{2}\\x[0-9a-f]{2}\\x[0-9a-f]{2}
-    count_min: 20
 - id: chrome-windows-userdata
   desc: Chrome Windows User Data path
   crit: notable

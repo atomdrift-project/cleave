@@ -92,11 +92,11 @@ traits:
     desc: Dense chr() calls (string building)
     crit: suspicious
     conf: 0.90
+    count_min: 15
+    per_kb_min: 3.0
     if:
       type: raw
       regex: "\\b\\d+\\.chr\\b"
-      count_min: 15
-      per_kb_min: 3.0
     unless:
       - type: string
         regex: "IRB"
@@ -106,11 +106,11 @@ traits:
     desc: Dense send() calls (dynamic dispatch)
     crit: suspicious
     conf: 0.88
+    count_min: 10
+    per_kb_min: 2.0
     if:
       type: raw
       regex: "\\.send\\s*\\("
-      count_min: 10
-      per_kb_min: 2.0
     unless:
       - type: string
         substr: "IRB"
@@ -122,11 +122,11 @@ traits:
     desc: Dense eval calls
     crit: suspicious
     conf: 0.92
+    count_min: 8
+    per_kb_min: 1.5
     if:
       type: raw
       regex: "\\beval\\s*\\("
-      count_min: 8
-      per_kb_min: 1.5
     unless:
       - type: string
         regex: "IRB"
@@ -136,11 +136,11 @@ traits:
     desc: Dense metaprogramming eval
     crit: suspicious
     conf: 0.85
+    count_min: 10
+    per_kb_min: 2.0
     if:
       type: raw
       regex: "(instance_eval|class_eval|module_eval)\\s*[({]"
-      count_min: 10
-      per_kb_min: 2.0
     unless:
       - type: string
         regex: "IRB"
@@ -150,11 +150,11 @@ traits:
     desc: Dense pack/unpack calls
     crit: suspicious
     conf: 0.85
+    count_min: 10
+    per_kb_min: 2.0
     if:
       type: raw
       regex: "\\.(pack|unpack)\\s*\\(\\s*['\"][A-Za-z0-9\\*]{1,4}['\"]"
-      count_min: 10
-      per_kb_min: 2.0
     unless:
       - type: string
         regex: "IRB"
@@ -164,11 +164,11 @@ traits:
     desc: Dense string interpolation
     crit: notable
     conf: 0.75
+    count_min: 15
+    per_kb_min: 3.0
     if:
       type: raw
       regex: "#\\{[^}]{1,120}\\}"
-      count_min: 15
-      per_kb_min: 3.0
 
 composite_rules:
   # Multi-layer Ruby obfuscation

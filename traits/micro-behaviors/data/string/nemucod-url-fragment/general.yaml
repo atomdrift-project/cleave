@@ -21,9 +21,9 @@ traits:
     size_max: 100000
     for:
       - javascript
+    count_min: 10
+    per_kb_min: 0.5
     if:
       type: raw
       regex: (\([\w\s]*\)|\w+)(\s*\+\s*(\([\w\s]*\)|\w+)){3}
-      count_min: 10
-      per_kb_min: 0.5
 composite_rules: []

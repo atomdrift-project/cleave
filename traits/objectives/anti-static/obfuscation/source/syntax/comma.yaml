@@ -4,6 +4,7 @@ traits:
     crit: notable
     conf: 0.8
     for: [javascript, typescript]
+    count_min: 5
     if:
       type: ast
       language: javascript
@@ -13,7 +14,6 @@ traits:
         (expression_statement
           (sequence_expression)
         ) @seq
-      count_min: 5
     downgrade:
       any:
         - type: string

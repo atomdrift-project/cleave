@@ -10,12 +10,12 @@ traits:
   - id: dynamic-this-execution-computed
     desc: Dynamic execution via this[func()+func()]
     crit: notable
+    count_min: 2
     if:
       type: raw
       # Matches this[expr()+expr()] style computed dynamic dispatch
       # Requires function call or concatenation inside brackets (not just this[a]())
       regex: 'this\[[a-zA-Z0-9_\s]*[\(\+][a-zA-Z0-9_\(\)\+\s]*\]\('
-      count_min: 2
     unless:
       - id: metadata/library/jquery
       - id: metadata/library/prototype

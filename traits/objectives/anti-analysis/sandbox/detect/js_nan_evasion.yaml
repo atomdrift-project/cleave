@@ -5,7 +5,7 @@ traits:
     conf: 0.8
     for:
       - javascript
+    count_min: 2
     if:
       type: raw
       regex: '=\s*0\s*\/\s*0\s*;'
-      count_min: 2

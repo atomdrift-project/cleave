@@ -96,20 +96,20 @@ traits:
     crit: suspicious
     conf: 0.85
     for: [all]
+    count_min: 3
     if:
       type: raw
       regex: '127\.0\.0\.1\s+\S{1,60}\.(com|net|org)'
-      count_min: 3
 
   - id: null-redirect-pattern
     desc: Null IP redirect pattern (0.0.0.0)
     crit: suspicious
     conf: 0.85
     for: [all]
+    count_min: 3
     if:
       type: raw
       regex: '0\.0\.0\.0\s+\S{1,60}\.(com|net|org)'
-      count_min: 3
 
 composite_rules:
   # Helper: any hosts file path reference

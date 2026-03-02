@@ -20,10 +20,10 @@ traits:
     desc: "Massive block of array assignments"
     crit: suspicious
     conf: 0.9
+    count_min: 3
     if:
       type: string
       regex: '\$\w{5,}\s*\+?=\s*@\('
-      count_min: 3
 
   - id: ps1-char-array-cast
     desc: "Cast to char array (obfuscation)"

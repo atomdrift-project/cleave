@@ -197,10 +197,10 @@ traits:
     desc: Targets many Amazon regional domains
     crit: notable
     conf: 0.9
+    count_min: 15
     if:
       type: raw
       regex: 'amazon\.'
-      count_min: 15
   - id: externally-connectable
     desc: Extension allows external connections
     crit: suspicious

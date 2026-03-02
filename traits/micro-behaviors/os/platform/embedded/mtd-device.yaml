@@ -11,7 +11,7 @@ defaults:
 traits:
   - id: mtd-device-paths
     desc: Multiple MTD flash device paths
+    count_min: 2
     if:
       type: string
       regex: '(/mnt/mtd/|/dev/mtd)'
-      count_min: 2

@@ -18,14 +18,10 @@ traits:
     crit: notable
     conf: 0.9
     for: [elf, pe, macho]
+    count_min: 3
     if:
       type: string
       regex: '\b([0-9]{1,3}\.){3}[0-9]{1,3}:[0-9]{1,5}\b'
-      count_min: 3
-      near_bytes: 128
-      near:
-        type: string
-        regex: '(?i)(https?://|socket|connect|beacon|command\s*and\s*control|c2|server|host|endpoint|tcp|udp)'
     unless:
       - type: raw
         regex: "require\\(['\"]\\.\\./common['\"]\\)"

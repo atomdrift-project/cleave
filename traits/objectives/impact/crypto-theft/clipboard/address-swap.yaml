@@ -35,9 +35,9 @@ traits:
     desc: Multiple Bitcoin addresses (legacy)
     crit: suspicious
     conf: 0.85
+    count_min: 2
     if:
       id: btc-address-hardcoded
-      count_min: 2
 
   # --- Ethereum addresses ---
   - id: eth-address-hardcoded
@@ -52,9 +52,9 @@ traits:
     desc: Multiple Ethereum addresses
     crit: suspicious
     conf: 0.85
+    count_min: 2
     if:
       id: eth-address-hardcoded
-      count_min: 2
 
   # --- Monero addresses ---
   - id: xmr-address-hardcoded

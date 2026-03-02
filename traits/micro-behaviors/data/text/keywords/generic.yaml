@@ -60,11 +60,11 @@ traits:
     desc: token keyword
     crit: component
     conf: 0.3
+    count_min: 2
     if:
       type: string
       word: "token"
       case_insensitive: true
-      count_min: 2
 
   - id: password
     desc: password keyword

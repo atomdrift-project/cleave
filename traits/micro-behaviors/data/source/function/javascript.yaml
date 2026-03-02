@@ -3,6 +3,7 @@ traits:
     desc: Function returning a string literal (fragmentation)
     crit: baseline
     for: [javascript, typescript]
+    count_min: 10
     if:
       type: ast
       language: javascript
@@ -14,12 +15,12 @@ traits:
             )
           )
         ) @func_return_string
-      count_min: 10
 
   - id: js-function-return-string-dense
     desc: High density of functions returning string literals
     crit: notable
     for: [javascript, typescript]
+    count_min: 30
     if:
       type: ast
       language: javascript
@@ -31,4 +32,3 @@ traits:
             )
           )
         ) @func_return_string
-      count_min: 30

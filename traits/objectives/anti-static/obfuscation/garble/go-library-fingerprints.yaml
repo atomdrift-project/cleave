@@ -15,34 +15,34 @@ traits:
   - id: go-http2-framer-internals
     desc: Go HTTP/2 framer internals
     conf: 0.85
+    count_min: 2
     if:
       type: raw
       regex: 'http2Frame[A-Z]'
-      count_min: 2
 
   - id: go-http2-frame-types
     desc: Go HTTP/2 frame types
     conf: 0.85
+    count_min: 2
     if:
       type: raw
       regex: 'http2(Ping|GoAway|Data|Settings)Frame'
-      count_min: 2
 
   - id: go-http2-frame-headers
     desc: Go HTTP/2 frame headers/control
     conf: 0.85
+    count_min: 2
     if:
       type: raw
       regex: 'http2(Headers|RST|Window|Continuation)Frame'
-      count_min: 2
 
   - id: go-http2-transport-internals
     desc: Go HTTP/2 transport internals
     conf: 0.85
+    count_min: 2
     if:
       type: raw
       regex: 'http2(clientStream|noDialClientConnPool)'
-      count_min: 2
 
   # ============================================================================
   # TLS/Crypto Internal Types (crypto/tls internals)
@@ -50,18 +50,18 @@ traits:
   - id: go-tls-handshake-internals
     desc: Go TLS handshake internal types
     conf: 0.85
+    count_min: 2
     if:
       type: raw
       regex: '(client|server)Handshake(State|Msg)|HelloMsg'
-      count_min: 2
 
   - id: go-tls-cipher-internals
     desc: Go TLS cipher suite internals
     conf: 0.8
+    count_min: 2
     if:
       type: raw
       regex: 'cipherSuite(TLS13)?|SignatureScheme'
-      count_min: 2
 
   # ============================================================================
   # golang.org/x/crypto/cryptobyte - ASN.1 parsing library
@@ -71,27 +71,27 @@ traits:
     desc: Go cryptobyte ASN.1 core
     crit: suspicious
     conf: 0.9
+    count_min: 2
     if:
       type: raw
       regex: 'ReadASN1(Integer|Boolean|BitString|ObjectIdentifier)'
-      count_min: 2
 
   - id: go-cryptobyte-asn1-types
     desc: Go cryptobyte ASN.1 types
     crit: suspicious
     conf: 0.9
+    count_min: 2
     if:
       type: raw
       regex: 'ReadASN1(Element|GeneralizedTime|UTCTime)'
-      count_min: 2
 
   - id: go-cryptobyte-methods
     desc: Go cryptobyte buffer methods
     conf: 0.85
+    count_min: 2
     if:
       type: raw
       regex: 'ReadUint(8|16|24|32)LengthPrefixed'
-      count_min: 2
 
   # ============================================================================
   # Proxy/SOCKS Internal Types
@@ -126,18 +126,18 @@ traits:
   - id: go-base64-encode
     desc: Go base64 encoding
     conf: 0.75
+    count_min: 2
     if:
       type: raw
       regex: '\.Encode(ToString|dLen)?|AppendEncode'
-      count_min: 2
 
   - id: go-base64-decode
     desc: Go base64 decoding
     conf: 0.75
+    count_min: 2
     if:
       type: raw
       regex: '\.Decode(ToString|dLen)?|AppendDecode'
-      count_min: 2
 
   # ============================================================================
   # bytes.Buffer internal signatures
@@ -145,18 +145,18 @@ traits:
   - id: go-bytes-buffer-io
     desc: Go bytes.Buffer I/O
     conf: 0.7
+    count_min: 2
     if:
       type: raw
       regex: '\.(ReadFrom|WriteTo)'
-      count_min: 2
 
   - id: go-bytes-buffer-methods
     desc: Go bytes.Buffer methods
     conf: 0.7
+    count_min: 3
     if:
       type: raw
       regex: '\.(ReadByte|WriteByte|WriteString)\b'
-      count_min: 3
 
   # ============================================================================
   # Composite Rules: Detect garbled Go with specific capabilities

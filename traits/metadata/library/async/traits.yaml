@@ -12,19 +12,19 @@ traits:
     crit: baseline
     for:
       - javascript
+    count_min: 3
     if:
       type: raw
       regex: async\.(forEach|series|parallel|waterfall)\s*=
-      count_min: 3
   - id: async-exports-utility-regex-b
     desc: Exports from async utility family B
     crit: baseline
     for:
       - javascript
+    count_min: 3
     if:
       type: raw
       regex: async\.(map|filter|reduce)\s*=
-      count_min: 3
 composite_rules:
   - id: async-exports-utility-regex-any
     desc: Exports from async library

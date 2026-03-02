@@ -8,21 +8,21 @@ traits:
     conf: 0.9
     for: [javascript, typescript]
     size_max: 200000
+    count_min: 10
+    per_kb_min: 0.2
     if:
       type: raw
       regex: '[^$]\$[a-z][A-Z][a-zA-Z]{3}'
-      count_min: 10
-      per_kb_min: 0.2
 
   - id: powershell-cmdlet-patterns-raw
     desc: "PowerShell cmdlet naming pattern (raw)"
     crit: notable
     conf: 0.8
     for: [javascript, typescript, python]
+    count_min: 1
     if:
       type: string
       regex: 'Out-File|Get-Content|Invoke-Expression'
-      count_min: 1
 
 composite_rules:
   - id: powershell-cmdlet-patterns

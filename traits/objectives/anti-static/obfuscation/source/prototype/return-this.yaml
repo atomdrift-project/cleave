@@ -6,10 +6,10 @@ traits:
   desc: Detects heavy prototype function manipulation
   crit: notable
   conf: 0.7
+  count_min: 20
   if:
     type: raw
     regex: \.prototype\.[a-zA-Z0-9_$]+
-    count_min: 20
 - id: return-this-body
   desc: Detects function returning this
   crit: notable

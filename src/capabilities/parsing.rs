@@ -126,31 +126,21 @@ pub(crate) fn apply_trait_defaults(
 
     // For size-only traits without a condition, create a synthetic "always-true" condition
     // This uses a basename regex that matches everything
-    let mut condition_with_filters =
-        raw.condition
-            .unwrap_or_else(|| crate::composite_rules::ConditionWithFilters {
-                condition: crate::composite_rules::Condition::Basename {
-                    exact: None,
-                    substr: None,
-                    regex: Some(".".to_string()),
-                    case_insensitive: false,
-                },
-                size_min: None,
-                size_max: None,
-                count_min: None,
-                count_max: None,
-                per_kb_min: None,
-                per_kb_max: None,
-                entropy_min: None,
-                entropy_max: None,
-            });
+    let mut condition = raw.condition.unwrap_or_else(|| {
+        crate::composite_rules::Condition::Basename {
+            exact: None,
+            substr: None,
+            regex: Some(".".to_string()),
+            case_insensitive: false,
+        }
+    });
 
     // Auto-fix: Convert literal regex patterns to substr for better performance
     // If a regex pattern contains only alphanumeric chars and underscores, it's a literal
-    fix_literal_regex_patterns(&mut condition_with_filters.condition);
+    fix_literal_regex_patterns(&mut condition);
 
     // Validation: regex patterns must not exceed 80 bytes.
-    check_regex_length(&raw.id, &condition_with_filters.condition, warnings);
+    check_regex_length(&raw.id, &condition, warnings);
 
     // Also check regex patterns in unless: conditions
     if let Some(ref unless_conditions) = raw.unless {
@@ -182,15 +172,6 @@ pub(crate) fn apply_trait_defaults(
         }
     }
 
-    // Support backwards compatibility: if size_min/size_max are at trait level,
-    // copy them to the condition wrapper (unless already set in the if: block)
-    if condition_with_filters.size_min.is_none() {
-        condition_with_filters.size_min = raw.size_min;
-    }
-    if condition_with_filters.size_max.is_none() {
-        condition_with_filters.size_max = raw.size_max;
-    }
-
     let mut trait_def = TraitDefinition {
         id: raw.id,
         desc: raw.desc,
@@ -200,7 +181,15 @@ pub(crate) fn apply_trait_defaults(
         attack: apply_string_default(raw.attack, &defaults.attack),
         platforms,
         r#for: file_types,
-        r#if: condition_with_filters,
+        r#if: condition,
+        size_min: raw.size_min,
+        size_max: raw.size_max,
+        count_min: raw.count_min,
+        count_max: raw.count_max,
+        per_kb_min: raw.per_kb_min,
+        per_kb_max: raw.per_kb_max,
+        entropy_min: raw.entropy_min,
+        entropy_max: raw.entropy_max,
         not: raw.not,
         unless: raw.unless,
         downgrade: raw.downgrade,
@@ -1050,6 +1039,12 @@ mod tests {
             file_types,
             size_min: None,
             size_max: None,
+            count_min: None,
+            count_max: None,
+            per_kb_min: None,
+            per_kb_max: None,
+            entropy_min: None,
+            entropy_max: None,
             condition: None,
             not: None,
             unless: None,

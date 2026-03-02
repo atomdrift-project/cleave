@@ -26,11 +26,11 @@ traits:
     crit: component
     conf: 0.4
     for: [c, elf]
+    count_min: 3
     if:
       type: raw
       regex: "\\bSSL[_\\s]?CTX\\b"
       case_insensitive: true
-      count_min: 3
 
   # BPF attachment helper
   - id: ssl-attach-openssl

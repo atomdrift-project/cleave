@@ -15,11 +15,11 @@ traits:
     desc: Multiple git clone calls detected
     crit: suspicious
     conf: 0.85
+    count_min: 2
     if:
       type: ast
       kind: call
       exact: "\\.clone\\("
-      count_min: 2
 
   # === AST Pattern: GitPython Clone ===
   - id: ast-gitpython-clone

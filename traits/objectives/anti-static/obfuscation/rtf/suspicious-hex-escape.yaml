@@ -5,8 +5,8 @@ traits:
     for: [rtf]
     conf: 0.8
     mbc: "B0032.001"
+    count_min: 1
     if:
       type: raw
       # Match \' followed by a control char code (00-1F) or a non-hex character
       regex: "\\\\'([0-1][0-9a-fA-F]|[^0-9a-fA-F])"
-      count_min: 1

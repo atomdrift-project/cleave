@@ -6,6 +6,7 @@ traits:
     desc: "Nemucod-style character array initialization (AST)"
     crit: suspicious
     conf: 0.95
+    count_min: 5
     if:
       type: ast
       language: javascript
@@ -14,12 +15,12 @@ traits:
         (array
           (parenthesized_expression)
         ) @nemucod_array
-      count_min: 5
 
   - id: nemucod-var-init-ast
     desc: "Nemucod-style variable substitution initialization (AST)"
     crit: suspicious
     conf: 0.95
+    count_min: 10
     if:
       type: ast
       language: javascript
@@ -33,12 +34,12 @@ traits:
             )
           )
         ) @nemucod_init
-      count_min: 10
 
   - id: js-dynamic-property-concat
     desc: "Property access using concatenated strings"
     crit: suspicious
     conf: 0.8
+    count_min: 3
     if:
       type: ast
       language: javascript
@@ -50,4 +51,3 @@ traits:
             right: (string)
           )
         ) @concat_prop
-      count_min: 3

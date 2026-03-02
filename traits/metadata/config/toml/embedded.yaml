@@ -14,10 +14,10 @@ traits:
     desc: Multiple TOML config file references
     crit: notable
     conf: 0.75
+    count_min: 2
     if:
       type: string
       regex: '\b[a-z_-]+\.toml\b'
-      count_min: 2
 
   # === Hidden TOML Config ===
   - id: toml-config-hidden

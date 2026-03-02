@@ -93,11 +93,11 @@ traits:
     desc: Go garbled package type pointer
     crit: suspicious
     conf: 0.9
+    count_min: 30
     if:
       type: raw
       # Package name must contain both letters and digits (garble signature)
       regex: '\*[a-zA-Z]+[0-9]+[a-zA-Z0-9_]*\.[A-Z][a-zA-Z0-9_]+'
-      count_min: 30
 
   # Garbled method receiver pattern
   # Matches patterns like yvo6rOL.(*Transport).RoundTrip
@@ -105,11 +105,11 @@ traits:
     desc: Go garbled method receiver pattern
     crit: suspicious
     conf: 0.9
+    count_min: 15
     if:
       type: raw
       # Package name must contain both letters and digits
       regex: '[a-zA-Z]+[0-9]+[a-zA-Z0-9_]*\.\(\*[a-zA-Z0-9_]+\)\.[A-Z][a-zA-Z]+'
-      count_min: 15
 
   # Note: Intermediate composite rules moved to composite_rules section
 

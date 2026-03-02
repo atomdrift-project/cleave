@@ -45,10 +45,10 @@ traits:
     conf: 0.2
     mbc: "C0026"
     for: [javascript, typescript, python, shell, php, powershell, ruby]
+    count_min: 2
     if:
       type: string
       substr: "0123456789abcdef"
-      count_min: 2
 
 composite_rules:
   # NOTE: Require 2+ indicators to avoid false positives from:

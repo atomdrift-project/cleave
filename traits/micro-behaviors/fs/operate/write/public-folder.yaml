@@ -19,7 +19,7 @@ traits:
     conf: 0.5
     for: [javascript, powershell]
     platforms: [windows]
+    count_min: 2
     if:
       type: string
       regex: 'C:\\\\Users\\\\Public\\\\'
-      count_min: 2

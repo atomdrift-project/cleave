@@ -8,10 +8,6 @@ traits:
   if:
     type: string
     regex: 'bootstrap\.min\.css|jquery\.min\.js'
-    near:
-      type: string
-      regex: 'f\.write\(\s*"/\\*"\s*\+\s*output\s*\+\s*"\\*/"\s*\)'
-      near_lines: 5
 composite_rules:
 - id: web-asset-exfiltration
   desc: Exfiltration via side-channel in web assets

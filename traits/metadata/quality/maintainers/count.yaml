@@ -18,10 +18,10 @@ traits:
     crit: suspicious
     conf: 0.80
     for: [package.json]
+    size_max: 0
     if:
       type: kv
       path: "maintainers"
-      size_max: 0
 
   # Single maintainer (common for malicious packages)
   - id: npm-single-maintainer
@@ -29,11 +29,11 @@ traits:
     crit: notable
     conf: 0.60
     for: [package.json]
+    size_min: 1
+    size_max: 1
     if:
       type: kv
       path: "maintainers"
-      size_min: 1
-      size_max: 1
 
   # Excessive maintainers (unusual, potential compromise)
   - id: npm-many-maintainers
@@ -41,10 +41,10 @@ traits:
     crit: notable
     conf: 0.55
     for: [package.json]
+    size_min: 20
     if:
       type: kv
       path: "maintainers"
-      size_min: 20
 
   # === PyPI - maintainers in pyproject.toml ===
 
@@ -53,21 +53,21 @@ traits:
     crit: notable
     conf: 0.70
     for: [pyproject.toml]
+    size_max: 0
     if:
       type: kv
       path: "project.maintainers"
-      size_max: 0
 
   - id: pypi-single-maintainer
     desc: PyPI package has single maintainer
     crit: notable
     conf: 0.55
     for: [pyproject.toml]
+    size_min: 1
+    size_max: 1
     if:
       type: kv
       path: "project.maintainers"
-      size_min: 1
-      size_max: 1
 
 # Hostile composites moved to:
 # objectives/lateral-movement/supply-chain/npm/malicious-patterns/low-quality-indicators.yaml

@@ -280,7 +280,7 @@ impl<'a> RuleDebugger<'a> {
             "trait",
             &trait_def.desc,
             finding.is_some(),
-            &trait_def.r#if.condition,
+            &trait_def.r#if,
         );
 
         // Add warning about trait-level `not` exclusions

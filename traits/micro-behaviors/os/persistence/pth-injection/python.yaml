@@ -17,7 +17,3 @@ traits:
   if:
     type: raw
     regex: 'import\s+base64\s*;\s*exec\('
-    near:
-      type: string
-      regex: '\.pth'
-      near_lines: 5

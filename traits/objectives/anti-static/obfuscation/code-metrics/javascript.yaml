@@ -46,9 +46,9 @@ traits:
   crit: notable
   conf: 0.85
   size_min: 2048
+  count_min: 5
   if:
     type: raw
-    count_min: 5
     regex: \(\s*(async\s+)?function\s*\([^)]{0,50}\)\s*\{|\(\s*[^)]{0,50}\)\s*=>
 composite_rules:
 - id: js-obfuscator-pattern

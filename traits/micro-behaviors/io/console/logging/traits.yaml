@@ -17,7 +17,7 @@ traits:
     desc: Shellcode execution status logging
     crit: suspicious
     conf: 0.92
+    count_min: 2
     if:
       type: string
       regex: '(?i)(shellcode finished with a return value|Allocating %d bytes of memory)'
-      count_min: 2

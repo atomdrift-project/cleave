@@ -20,8 +20,8 @@ traits:
     attack: "T1055"
     platforms: [linux, macos, unix]
     for: [elf, so, dylib]
+    count_min: 2
     if:
       type: hex
       pattern: "07 00 00 00"
-      count_min: 2
       section: text

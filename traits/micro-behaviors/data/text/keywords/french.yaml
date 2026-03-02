@@ -9,19 +9,19 @@ traits:
     desc: French password keywords
     crit: notable
     conf: 0.6
+    count_min: 2
     if:
       type: string
       regex: '(?i)\b(motdepasse|mot_de_passe|privé)\b'
-      count_min: 2
 
   - id: french-security-financial
     desc: French financial keywords
     crit: notable
     conf: 0.6
+    count_min: 2
     if:
       type: string
       regex: '(?i)\b(banque|récupé|sauvegarde)\b'
-      count_min: 2
 
 composite_rules:
   - id: french-security-keywords

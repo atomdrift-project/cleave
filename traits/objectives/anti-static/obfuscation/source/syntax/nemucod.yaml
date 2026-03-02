@@ -7,10 +7,10 @@ traits:
     crit: suspicious
     conf: 0.95
     size_max: 500000
+    count_min: 10
     if:
       type: ast
       language: javascript
-      count_min: 10
       query: |
         (sequence_expression
           (string) @left
@@ -50,6 +50,7 @@ traits:
     crit: suspicious
     conf: 0.95
     size_max: 500000
+    count_min: 20
     if:
       type: ast
       language: javascript
@@ -61,4 +62,3 @@ traits:
             )
           )
         ) @func_return_string
-      count_min: 20

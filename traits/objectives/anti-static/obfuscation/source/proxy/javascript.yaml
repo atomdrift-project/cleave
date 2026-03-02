@@ -33,6 +33,7 @@ traits:
       desc: Massive use of identity function proxies (obfuscation)
       crit: suspicious
       conf: 0.9
+      count_min: 20
       if:
         type: ast
         language: javascript
@@ -51,5 +52,4 @@ traits:
             )
             (#eq? @param @ret)
           )
-        count_min: 20
   

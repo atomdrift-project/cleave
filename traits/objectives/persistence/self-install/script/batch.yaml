@@ -43,10 +43,10 @@ traits:
     crit: notable
     conf: 0.6
     attack: "T1564.003"
+    count_min: 2
     if:
       type: raw
       regex: '(?i)>\s*nul'
-      count_min: 2
 
 composite_rules:
   # Self-copy to AppData persistence

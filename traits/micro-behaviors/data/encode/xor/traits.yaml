@@ -71,11 +71,11 @@ traits:
     for: [elf]
     size_max: 500000
     attack: "T1027"
+    count_min: 5
+    per_kb_min: 1.0
     if:
       type: string
       regex: "[^a-zA-Z0-9\\s\\.,\\-_/\\\\:@]{8,}"
-      count_min: 5
-      per_kb_min: 1.0
     not:
       - regex: "^[#;\"'*?\\[\\]&|<>(){}$`^~!+]+$"
       - regex: "^!+$"

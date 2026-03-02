@@ -53,11 +53,11 @@ traits:
     conf: 0.8
     for: [elf, shell]
     size_max: 50000
+    count_min: 3
     if:
       type: encoded
       encoding: base64
       regex: "^/[a-z]{2,}[a-z_/]*$"
-      count_min: 3
     attack: "T1027.001"
 
   # Note: Base64-like strings are common in legitimate binaries (certificates, keys)
@@ -84,11 +84,11 @@ traits:
     conf: 0.85
     for: [elf, shell]
     size_max: 200000
+    count_min: 5
+    per_kb_min: 0.3
     if:
       type: string
       regex: "^[a-zA-Z0-9+/]{40,}={0,2}$"
-      count_min: 5
-      per_kb_min: 0.3
     not:
       - "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/="
       - "RgA1ADAANwA4AEYAMwA1AC0AQwA1ADUAMQAtADEAMQBEADMALQA4ADkAQgA5AC0AMAAwADAAMABGADgAMQBGAEUAMgAyADEA"

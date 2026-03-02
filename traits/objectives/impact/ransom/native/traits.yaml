@@ -237,11 +237,11 @@ traits:
     desc: Custom encrypted file extension
     crit: notable
     conf: 0.7
+    count_min: 2
     if:
       type: string
       # Require hash-like suffix (digits mixed with letters) after hyphen
       regex: \b\.[a-z]{3,10}-[a-z]*[0-9][a-z0-9]{5,}\b
-      count_min: 2
     not:
       - substr: application-identifier
       - substr: temporary-exception

@@ -91,10 +91,10 @@ traits:
     desc: Many numbered global mutex names
     crit: suspicious
     conf: 0.86
+    count_min: 8
     if:
       type: string
       regex: '(?i)\\bGlobal\\\\[0-9]{2,5}\\b'
-      count_min: 8
 
 composite_rules:
   - id: mutex-api

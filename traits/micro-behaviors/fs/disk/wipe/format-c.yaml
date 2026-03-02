@@ -8,10 +8,10 @@ traits:
     platforms: [windows]
     size_min: 10
     for: [cmd, php]
+    count_min: 1
     if:
       type: string
       regex: "(?i)format\\s+c:\\s+(/y|/autotest|/q\\s+/u)"
-      count_min: 1
   - id: format-c-no-colon
     desc: "Format C Drive (No Colon)"
     crit: suspicious
@@ -21,7 +21,7 @@ traits:
     platforms: [windows]
     size_min: 10
     for: [cmd, php]
+    count_min: 1
     if:
       type: string
       regex: "(?i)format\\s+c\\s+(/y)"
-      count_min: 1

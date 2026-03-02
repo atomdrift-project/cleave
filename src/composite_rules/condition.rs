@@ -164,7 +164,7 @@ enum ConditionDeser {
 
 /// Internal tagged enum for serializing/deserializing conditions with explicit `type` field
 #[derive(Debug, Clone, Deserialize, Serialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 enum ConditionTagged {
     Symbol {
         /// Full symbol name match (entire symbol must equal this)

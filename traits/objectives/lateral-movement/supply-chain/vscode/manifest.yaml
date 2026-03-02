@@ -32,10 +32,10 @@ traits:
     crit: suspicious
     conf: 0.95
     for: [all]
+    count_min: 2
     if:
       type: raw
       regex: 'Value\s*=\s*["'']https?://github\.com/?["'']'
-      count_min: 2
 
   # Links section but no actual repository content
   - id: links-source-stub

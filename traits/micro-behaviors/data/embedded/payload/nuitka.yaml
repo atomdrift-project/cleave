@@ -6,10 +6,10 @@ traits:
     mbc: "B0032"
     attack: "T1027.009"
     for: [pe, elf, macho]
+    count_min: 2
     if:
       type: string
       substr: "NUITKA_ONEFILE_"
-      count_min: 2
       
   - id: nuitka-loader-strings
     desc: Nuitka module loader metadata

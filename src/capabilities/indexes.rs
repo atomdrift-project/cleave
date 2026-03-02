@@ -204,7 +204,7 @@ impl StringMatchIndex {
         let mut regex_trait_indices: FxHashSet<usize> = FxHashSet::default();
 
         for (trait_idx, trait_def) in traits.iter().enumerate() {
-            match &trait_def.r#if.condition {
+            match &trait_def.r#if {
                 // Exact string patterns
                 Condition::String {
                     exact: Some(ref exact_str),
@@ -826,7 +826,7 @@ impl RawContentRegexIndex {
 
         for (trait_idx, trait_def) in traits.iter().enumerate() {
             // Extract regex patterns from Content traits
-            let pattern_opt = match &trait_def.r#if.condition {
+            let pattern_opt = match &trait_def.r#if {
                 Condition::Raw {
                     regex: Some(ref regex_str),
                     case_insensitive,
@@ -1364,30 +1364,28 @@ mod tests {
             attack: None,
             platforms: vec![Platform::All],
             r#for: vec![RuleFileType::All],
-            r#if: crate::composite_rules::traits::ConditionWithFilters {
-                condition: Condition::Raw {
-                    exact: None,
-                    substr: None,
-                    regex: Some("test".to_string()),
-                    word: None,
-                    case_insensitive: false,
-                    external_ip: false,
-                    section: None,
-                    offset: None,
-                    offset_range: None,
-                    section_offset: None,
-                    section_offset_range: None,
-                    compiled_regex: None,
+            r#if: Condition::Raw {
+                exact: None,
+                substr: None,
+                regex: Some("test".to_string()),
+                word: None,
+                case_insensitive: false,
+                external_ip: false,
+                section: None,
+                offset: None,
+                offset_range: None,
+                section_offset: None,
+                section_offset_range: None,
+                compiled_regex: None,
                 },
-                size_min: None,
-                size_max: None,
-                count_min: None,
-                count_max: None,
-                per_kb_min: None,
-                per_kb_max: None,
-                entropy_min: None,
-                entropy_max: None,
-            },
+            size_max: None,
+            count_min: None,
+            count_max: None,
+            per_kb_min: None,
+            per_kb_max: None,
+            entropy_min: None,
+            entropy_max: None,
+            size_min: None,
             not: None,
             unless: None,
             downgrade: None,

@@ -71,10 +71,10 @@ traits:
   mbc: C0027
   for:
   - macho
+  entropy_min: 7.5
   if:
     type: section
     exact: __const
-    entropy_min: 7.5
 - id: high-entropy-data
   desc: High entropy in data section
   crit: notable
@@ -83,10 +83,10 @@ traits:
   for:
   - elf
   - pe
+  entropy_min: 7.5
   if:
     type: section
     regex: \.(data|rdata|rodata)
-    entropy_min: 7.5
 - id: high-entropy-rsrc
   desc: High entropy in .rsrc section
   crit: notable
@@ -95,10 +95,10 @@ traits:
   for:
   - pe
   - dll
+  entropy_min: 7.0
   if:
     type: section
     exact: .rsrc
-    entropy_min: 7.0
 - id: dominant-rsrc-section
   desc: Dominant .rsrc section (>60% of binary)
   crit: baseline
@@ -117,10 +117,10 @@ traits:
   crit: suspicious
   conf: 0.9
   mbc: B0032.002
+  entropy_min: 7.0
   if:
     type: section
     regex: (__text|\.text)
-    entropy_min: 7.0
   downgrade:
     any:
     - id: metadata/signed/platform::apple

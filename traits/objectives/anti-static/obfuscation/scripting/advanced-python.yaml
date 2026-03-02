@@ -9,10 +9,10 @@ traits:
     desc: Chinese character variables
     crit: suspicious
     conf: 0.9
+    count_min: 3
     if:
       type: raw
       regex: "[\u4E00-\u9FFF]+="
-      count_min: 3
   - id: bit-shift-arithmetic
     desc: Bit shift obfuscation
     crit: suspicious
@@ -53,18 +53,18 @@ traits:
     desc: String built via join(map(getattr(__builtins__)))
     crit: suspicious
     conf: 0.92
+    count_min: 3
     if:
       type: raw
       substr: join(map(getattr(__builtins__
-      count_min: 3
   - id: builtin-repr-chr-construction
     desc: Builds chr via builtin repr introspection
     crit: suspicious
     conf: 0.95
+    count_min: 3
     if:
       type: raw
       regex: (oct|hex|c[a-z]+)\.__str__\(\)
-      count_min: 3
   - id: is-admin-flag
     desc: IsAdmin flag check (Python)
     crit: notable
@@ -83,10 +83,10 @@ traits:
     desc: Unicode variable names
     crit: suspicious
     conf: 0.85
+    count_min: 3
     if:
       type: raw
       regex: "[\\u4E00-\\u9FFF\\u3040-\\u30FF][\\u4E00-\\u9FFF\\u3040-\\u30FFA-Za-z0-9_]{0,63}\\s*="
-      count_min: 3
   - id: getattr-builtins-obfuscation
     desc: getattr builtins obfuscation
     crit: suspicious

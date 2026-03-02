@@ -12,11 +12,11 @@ traits:
     mbc: "B0032"
     attack: "T1027"
     for: [javascript, typescript]
+    count_min: 3
+    per_kb_min: 0.1
     if:
       type: raw
       regex: "\\b(var|let|const)\\s+[A-Z][a-zA-Z0-9_]{25,}\\b"
-      count_min: 3
-      per_kb_min: 0.1
 
   # String array with hexadecimal indexing patterns
   - id: string-array-hex-index
@@ -26,11 +26,11 @@ traits:
     mbc: "B0032"
     attack: "T1027"
     for: [javascript, typescript]
+    count_min: 10
+    per_kb_min: 0.5
     if:
       type: raw
       regex: "\\w+\\(\\s*0x[0-9a-fA-F]{2,4}\\s*\\)"
-      count_min: 10
-      per_kb_min: 0.5
 
   # String assignment to array with hex indices
   - id: hex-array-assignment
@@ -40,10 +40,10 @@ traits:
     mbc: "B0032"
     attack: "T1027"
     for: [javascript, typescript]
+    count_min: 3
     if:
       type: raw
       regex: "\\[\\s*['\"][0-9a-fA-F]{2,4}['\"]\\s*\\]\\s*=\\s*['\"][^'\"]{1,120}['\"]"
-      count_min: 3
 
   # String array declaration with large obfuscated variable names
   - id: obfuscated-string-array
@@ -53,10 +53,10 @@ traits:
     mbc: "B0032"
     attack: "T1027"
     for: [javascript, typescript]
+    count_min: 3
     if:
       type: raw
       regex: "var\\s+[A-Z][a-zA-Z0-9_]{20,}\\s*=\\s*[A-Z][a-zA-Z0-9_]{20,}\\s*;"
-      count_min: 3
 
   # Function call with hex string argument pattern
   - id: hex-string-function-call
@@ -66,10 +66,10 @@ traits:
     mbc: "B0032"
     attack: "T1027"
     for: [javascript, typescript]
+    count_min: 2
     if:
       type: raw
       regex: "\\w+\\s*\\(\\s*['\"][0-9a-fA-F]{6,}['\"]\\s*\\)"
-      count_min: 2
 
   # Multiple concatenated string literals (typical in deobfuscation)
   - id: massive-string-concatenation
@@ -79,11 +79,11 @@ traits:
     mbc: "B0032"
     attack: "T1027"
     for: [javascript, typescript]
+    count_min: 10
+    per_kb_min: 1.0
     if:
       type: raw
       regex: "\\+\\s*['\"][^'\"]{20,}['\"]"
-      count_min: 10
-      per_kb_min: 1.0
     downgrade:
       any:
         - id: metadata/dev/testing::test-basename-pattern
@@ -98,10 +98,10 @@ traits:
     mbc: "B0032"
     attack: "T1027"
     for: [javascript, typescript]
+    count_min: 3
     if:
       type: raw
       regex: "\\w+\\[\\s*\\w+\\s*\\+\\s*0x[0-9a-fA-F]+\\s*\\]"
-      count_min: 3
 
 composite_rules:
   # Advanced string array obfuscation composite

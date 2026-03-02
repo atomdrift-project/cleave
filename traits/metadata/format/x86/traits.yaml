@@ -10,38 +10,38 @@ traits:
     desc: Indirect call via register
     crit: baseline
     conf: 0.3
+    count_min: 2
     if:
       type: hex
       pattern: "FF D?"
-      count_min: 2
 
   - id: indirect-call-mem
     desc: Indirect call via memory
     crit: baseline
     conf: 0.3
+    count_min: 2
     if:
       type: hex
       pattern: "FF 1?"
-      count_min: 2
 
   # === CPU Feature Detection ===
   - id: cpuid-instr
     desc: CPUID instruction bytes
     crit: baseline
     conf: 0.3
+    count_min: 1
     if:
       type: hex
       pattern: "0F A2"
-      count_min: 1
 
   - id: xgetbv-instr
     desc: XGETBV instruction bytes
     crit: baseline
     conf: 0.3
+    count_min: 1
     if:
       type: hex
       pattern: "0F 01 D0"
-      count_min: 1
 
 composite_rules:
   - id: cpuid-fingerprinting

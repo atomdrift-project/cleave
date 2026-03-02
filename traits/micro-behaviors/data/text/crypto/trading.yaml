@@ -27,10 +27,6 @@ traits:
       type: string
       word: "compound"
       case_insensitive: true
-      near_bytes: 500
-      near:
-        type: string
-        regex: "(?i)(defi|liquidity|lending|borrow|yield|token|swap)"
 
   - id: defi-protocol-curve-finance
     desc: DeFi Curve Finance protocol reference

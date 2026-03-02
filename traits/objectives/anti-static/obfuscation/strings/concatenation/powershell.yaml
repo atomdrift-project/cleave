@@ -107,11 +107,11 @@ traits:
     mbc: "B0032"
     attack: "T1027"
     for: [powershell]
+    count_min: 8
+    per_kb_min: 2.0
     if:
       type: raw
       regex: "\\[char\\]\\d{2,3}"
-      count_min: 8
-      per_kb_min: 2.0
 
   # Backtick escaping is used to break up keywords
   # e.g., `I`n`v`o`k`e`-`E`x`p`r`e`s`s`i`o`n
@@ -122,11 +122,11 @@ traits:
     mbc: "B0032"
     attack: "T1027"
     for: [powershell]
+    count_min: 10
+    per_kb_min: 3.0
     if:
       type: raw
       regex: "`[a-zA-Z]"
-      count_min: 10
-      per_kb_min: 3.0
 
   # Format string obfuscation: "{0}{1}" -f 'In','voke'
   - id: dense-format-strings
@@ -136,11 +136,11 @@ traits:
     mbc: "B0032"
     attack: "T1027"
     for: [powershell]
+    count_min: 4
+    per_kb_min: 1.0
     if:
       type: raw
       regex: '"\{\\d+\}"\\s*-f'
-      count_min: 4
-      per_kb_min: 1.0
 
   # String concatenation used to hide commands
   - id: dense-string-concat
@@ -150,11 +150,11 @@ traits:
     mbc: "B0032"
     attack: "T1027"
     for: [powershell]
+    count_min: 6
+    per_kb_min: 1.5
     if:
       type: raw
       regex: "'[^']{1,10}'\\s*\\+\\s*'[^']{1,10}'"
-      count_min: 6
-      per_kb_min: 1.5
 
 composite_rules:
   # Character array obfuscation pattern

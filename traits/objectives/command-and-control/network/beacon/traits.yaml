@@ -22,11 +22,11 @@ traits:
   - macho
   - pe
   size_max: 100000
+  count_min: 3
+  per_kb_min: 0.3
   if:
     type: string
     regex: '(User-Agent:\s|Host:\s|Content-Type:\s|HTTP/1\.[01])'
-    count_min: 3
-    per_kb_min: 0.3
 
 composite_rules:
 - id: direct-http-c2

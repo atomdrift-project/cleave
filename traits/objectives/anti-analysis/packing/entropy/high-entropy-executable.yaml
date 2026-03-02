@@ -9,10 +9,10 @@ defaults:
 traits:
   - id: high-entropy-exec-section
     desc: High entropy in executable section (possible packing)
+    entropy_min: 7.0
     if:
       type: section
       executable: true
-      entropy_min: 7.0
     downgrade:
       any:
         - id: metadata/signed/platform::apple

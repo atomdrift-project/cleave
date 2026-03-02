@@ -121,11 +121,11 @@ traits:
     for: [pe, dll]
     size_min: 200000
     # Multiple MZ headers far from file start indicates staged/polyglot payload containers.
+    count_min: 4
     if:
       type: hex
       pattern: "4D 5A 90 00"
       offset_range: [4096, null]
-      count_min: 4
 
   - id: pe-magic-in-rsrc
     desc: PE/MZ binary embedded in resource section
@@ -180,10 +180,10 @@ traits:
     attack: "T1027.009"
     for: [pe, dll]
     size_min: 200000
+    count_min: 3
     if:
       type: hex
       pattern: "50 4B 03 04"
-      count_min: 3
 
   - id: rar-magic
     desc: Embedded RAR archive

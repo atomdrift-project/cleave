@@ -552,10 +552,10 @@ traits:
   - id: "test/count::multiple"
     desc: "Multiple occurrences"
     crit: suspicious
+    count_min: 3
     if:
       type: string
       substr: "keyword"
-      count_min: 3
 "#;
     let (_dir, path) = create_test_yaml(yaml);
     let mapper = CapabilityMapper::from_yaml(&path).unwrap();

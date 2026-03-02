@@ -591,6 +591,7 @@ pub(crate) fn eval_raw<'a>(
 
             if let Some(super::CachedRegex::Bytes(ref bytes_re)) = bytes_re {
                 let mut first_match = None;
+                let mut first_offset = None;
                 for (idx, mat) in bytes_re.find_iter(search_data).enumerate() {
                     if idx >= MAX_MATCHES_TO_PROCESS {
                         eprintln!(
@@ -614,11 +615,13 @@ pub(crate) fn eval_raw<'a>(
                         }
                         if first_match.is_none() {
                             first_match = Some(match_str.to_string());
+                            first_offset = Some((search_start + mat.start()) as u64);
                         }
                     } else {
                         // No filters, just count
                         if first_match.is_none() {
                             first_match = Some(String::from_utf8_lossy(match_bytes).to_string());
+                            first_offset = Some((search_start + mat.start()) as u64);
                         }
                     }
 
@@ -630,7 +633,8 @@ pub(crate) fn eval_raw<'a>(
                             method: "raw".to_string(),
                             source: "raw_content".to_string(),
                             value: matched,
-                            location: Some("file".to_string()),
+                            location: None,
+                            offsets: first_offset.into_iter().collect(),
                             ..Default::default()
                         });
                     }
@@ -641,6 +645,7 @@ pub(crate) fn eval_raw<'a>(
             let content = super::get_utf8_cached(ctx.binary_data, (search_start, search_end));
 
             let mut first_match = None;
+            let mut first_offset = None;
             for (idx, mat) in re.find_iter(&content).enumerate() {
                 // Limit match processing to prevent DoS on pattern-dense files
                 if idx >= MAX_MATCHES_TO_PROCESS {
@@ -664,6 +669,7 @@ pub(crate) fn eval_raw<'a>(
                 match_count += 1;
                 if first_match.is_none() {
                     first_match = Some(match_str.to_string());
+                    first_offset = Some((search_start + mat.start()) as u64);
                 }
             }
             if match_count > 0 && evidence.len() < MAX_EVIDENCE_PER_TRAIT {
@@ -672,7 +678,8 @@ pub(crate) fn eval_raw<'a>(
                         method: "raw".to_string(),
                         source: "raw_content".to_string(),
                         value: matched,
-                        location: Some("file".to_string()),
+                        location: None,
+                        offsets: first_offset.into_iter().collect(),
                         ..Default::default()
                     });
                 }
@@ -704,7 +711,8 @@ pub(crate) fn eval_raw<'a>(
                     method: "raw".to_string(),
                     source: "raw_content".to_string(),
                     value: format!("Exact match: {}", exact_str),
-                    location: Some("file".to_string()),
+                    location: None,
+                    offsets: vec![search_start as u64],
                     ..Default::default()
                 });
             }
@@ -729,7 +737,8 @@ pub(crate) fn eval_raw<'a>(
                     method: "raw".to_string(),
                     source: "raw_content".to_string(),
                     value: format!("Exact match: {}", exact_str),
-                    location: Some("file".to_string()),
+                    location: None,
+                    offsets: vec![search_start as u64],
                     ..Default::default()
                 });
             }
@@ -740,6 +749,7 @@ pub(crate) fn eval_raw<'a>(
             // Fast path: Byte-level substring search (avoids UTF-8 conversion)
             if external_ip {
                 // Need to check each match context for external IP
+                let mut first_match_offset = None;
                 if case_insensitive {
                     let pattern_lower = substr_str.to_ascii_lowercase();
                     let needle = pattern_lower.as_bytes();
@@ -760,6 +770,9 @@ pub(crate) fn eval_raw<'a>(
                                 .map(|excs| excs.iter().any(|e| e.matches(substr_str)))
                                 .unwrap_or(false);
                             if !excluded {
+                                if first_match_offset.is_none() {
+                                    first_match_offset = Some((search_start + abs_pos) as u64);
+                                }
                                 match_count += 1;
                             }
                         }
@@ -781,6 +794,9 @@ pub(crate) fn eval_raw<'a>(
                                 .map(|excs| excs.iter().any(|e| e.matches(substr_str)))
                                 .unwrap_or(false);
                             if !excluded {
+                                if first_match_offset.is_none() {
+                                    first_match_offset = Some((search_start + abs_pos) as u64);
+                                }
                                 match_count += 1;
                             }
                         }
@@ -793,7 +809,8 @@ pub(crate) fn eval_raw<'a>(
                         method: "raw".to_string(),
                         source: "raw_content".to_string(),
                         value: substr_str.to_string(),
-                        location: Some("file".to_string()),
+                        location: None,
+                        offsets: first_match_offset.into_iter().collect(),
                         ..Default::default()
                     });
                 }
@@ -804,15 +821,19 @@ pub(crate) fn eval_raw<'a>(
                     .unwrap_or(false);
 
                 if !excluded {
+                    let first_offset;
                     if case_insensitive {
                         let pattern_lower = substr_str.to_ascii_lowercase();
                         let needle = pattern_lower.as_bytes();
-                        // Pre-lowercase once, not inside find_iter (avoids O(file_size) allocation per call)
                         let search_lower = search_data.to_ascii_lowercase();
-                        match_count = memchr::memmem::find_iter(&search_lower, needle).count();
+                        let iter = memchr::memmem::find_iter(&search_lower, needle);
+                        first_offset = iter.clone().next().map(|o| (search_start + o) as u64);
+                        match_count = iter.count();
                     } else {
                         let needle = substr_str.as_bytes();
-                        match_count = memchr::memmem::find_iter(search_data, needle).count();
+                        let iter = memchr::memmem::find_iter(search_data, needle);
+                        first_offset = iter.clone().next().map(|o| (search_start + o) as u64);
+                        match_count = iter.count();
                     }
 
                     if match_count > 0 && evidence.len() < MAX_EVIDENCE_PER_TRAIT {
@@ -820,7 +841,8 @@ pub(crate) fn eval_raw<'a>(
                             method: "raw".to_string(),
                             source: "raw_content".to_string(),
                             value: substr_str.to_string(),
-                            location: Some("file".to_string()),
+                            location: None,
+                            offsets: first_offset.into_iter().collect(),
                             ..Default::default()
                         });
                     }
@@ -842,6 +864,7 @@ pub(crate) fn eval_raw<'a>(
                 } else {
                     substr_str.clone()
                 };
+                let mut first_match_offset = None;
                 let mut start = 0;
                 while let Some(pos) = search_content[start..].find(&search_pattern) {
                     let abs_pos = start + pos;
@@ -854,6 +877,9 @@ pub(crate) fn eval_raw<'a>(
                             .map(|exceptions| exceptions.iter().any(|exc| exc.matches(substr_str)))
                             .unwrap_or(false);
                         if !excluded_by_not {
+                            if first_match_offset.is_none() {
+                                first_match_offset = Some((search_start + abs_pos) as u64);
+                            }
                             match_count += 1;
                         }
                     }
@@ -864,7 +890,8 @@ pub(crate) fn eval_raw<'a>(
                         method: "raw".to_string(),
                         source: "raw_content".to_string(),
                         value: substr_str.to_string(),
-                        location: Some("file".to_string()),
+                        location: None,
+                        offsets: first_match_offset.into_iter().collect(),
                         ..Default::default()
                     });
                 }
@@ -885,13 +912,17 @@ pub(crate) fn eval_raw<'a>(
                     } else {
                         substr_str.clone()
                     };
+                    let first_offset = search_content
+                        .find(&search_pattern)
+                        .map(|o| (search_start + o) as u64);
                     match_count = search_content.matches(&search_pattern).count();
                     if match_count > 0 && evidence.len() < MAX_EVIDENCE_PER_TRAIT {
                         evidence.push(Evidence {
                             method: "raw".to_string(),
                             source: "raw_content".to_string(),
                             value: substr_str.to_string(),
-                            location: Some("file".to_string()),
+                            location: None,
+                            offsets: first_offset.into_iter().collect(),
                             ..Default::default()
                         });
                     }

@@ -4,10 +4,10 @@ traits:
     crit: notable
     conf: 0.8
     for: [javascript]
+    count_min: 2
     if:
       type: raw
       regex: '\[\s*[^\]]{0,60},[^\]]{0,60}\]\s*\[\s*\d+\s*\]'
-      count_min: 2
 
   - id: js-array-global-object-access
     desc: Accessing global object (this) via indexed array

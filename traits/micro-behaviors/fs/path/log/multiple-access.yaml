@@ -9,11 +9,11 @@ defaults:
 traits:
   - id: multiple-log-files
     desc: Accesses multiple log files
+    count_min: 2
     if:
       type: string
       # Match sensitive auth/system logs; require multiple hits for signal
       regex: '/var/log/(wtmp|btmp)'
-      count_min: 2
     # Many legitimate tools access log files:
     # - sessreg, logrotate, logging daemons
     # - System monitoring tools

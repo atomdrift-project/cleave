@@ -16,10 +16,10 @@ traits:
     crit: notable
     conf: 0.7
     attack: "T1574.001"
+    count_min: 2
     if:
       type: string
       substr: "CFBundleExecutable"
-      count_min: 2
 
   - id: app-contents-path
     desc: .app/Contents/ bundle path access

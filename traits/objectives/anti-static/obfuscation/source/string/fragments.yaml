@@ -9,7 +9,7 @@ defaults:
 traits:
   - id: math-random-fragment
     desc: Math.random string fragment in string literal
+    count_min: 2
     if:
       type: string
       regex: 'Math\.ran|ath\.rando|Random\.'
-      count_min: 2

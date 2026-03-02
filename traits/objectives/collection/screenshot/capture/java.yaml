@@ -41,10 +41,10 @@ traits:
     mbc: "C0014"
     attack: "T1113"
     for: [java, class]
+    count_min: 1
     if:
       type: string
       regex: "\\.png.{0,50}temp|tmp.{0,50}\\.png|/var/.{0,50}\\.png|/tmp/.{0,50}\\.png"
-      count_min: 1
 
 composite_rules:
   - id: java-screenshot-exfil

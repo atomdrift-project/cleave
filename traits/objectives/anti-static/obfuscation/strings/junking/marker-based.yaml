@@ -11,18 +11,18 @@ traits:
   - id: as21-marker
     desc: String junking with as21 marker
     conf: 0.9
+    count_min: 5
     if:
       type: string
       regex: '\w{3,}as21\w{3,}'
-      count_min: 5
 
   - id: underscore-digit-marker
     desc: String junking with underscore-digit markers
     conf: 0.8
+    count_min: 5
     if:
       type: string
       regex: '\w{3,}_[0-9]+_\w{3,}'
-      count_min: 5
 
 composite_rules:
   - id: string-junking-detected

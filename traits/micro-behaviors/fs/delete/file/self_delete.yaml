@@ -63,20 +63,20 @@ traits:
     crit: suspicious
     conf: 0.95
     for: [javascript]
+    count_min: 1
     if:
       type: string
       exact: "050047006010008046044030013020029000033017"
-      count_min: 1
 
   - id: js-deletefile-obfuscated-marker
     desc: Encoded deleteFile marker
     crit: suspicious
     conf: 0.95
     for: [javascript]
+    count_min: 1
     if:
       type: string
       exact: "005041024006012063044002013029"
-      count_min: 1
 
 composite_rules:
   - id: js-self-delete-literal

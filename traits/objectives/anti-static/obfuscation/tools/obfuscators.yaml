@@ -77,11 +77,11 @@ traits:
     desc: Dense underscore variable obfuscation
     crit: suspicious
     conf: 0.92
+    count_min: 10
+    per_kb_min: 2.0
     if:
       type: raw
       regex: "_{3,}\\s*="
-      count_min: 10
-      per_kb_min: 2.0
 
   # === eval(compile()) Pattern ===
   - id: eval-compile-chain

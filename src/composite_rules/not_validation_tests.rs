@@ -6,12 +6,12 @@
 #[cfg(test)]
 mod validation_tests {
     use crate::composite_rules::{
-        condition::NotException, Condition, ConditionWithFilters, TraitDefinition,
+        condition::NotException, Condition, TraitDefinition,
     };
     use crate::types::Criticality;
 
     fn create_test_trait(
-        condition: ConditionWithFilters,
+        condition: Condition,
         not: Option<Vec<NotException>>,
     ) -> TraitDefinition {
         TraitDefinition {
@@ -25,6 +25,14 @@ mod validation_tests {
             r#for: vec![],
             r#if: condition,
             not,
+            size_min: None,
+            size_max: None,
+            count_min: None,
+            count_max: None,
+            per_kb_min: None,
+            per_kb_max: None,
+            entropy_min: None,
+            entropy_max: None,
             unless: None,
             downgrade: None,
             defined_in: std::path::PathBuf::new(),
@@ -51,17 +59,7 @@ mod validation_tests {
 
         let not = vec![NotException::Shorthand("test".to_string())];
         let trait_def = create_test_trait(
-            ConditionWithFilters {
-                condition: cond,
-                size_min: None,
-                size_max: None,
-                count_min: None,
-                count_max: None,
-                per_kb_min: None,
-                per_kb_max: None,
-                entropy_min: None,
-                entropy_max: None,
-            },
+            cond,
             Some(not),
         );
 
@@ -93,17 +91,7 @@ mod validation_tests {
 
         let not = vec![NotException::Shorthand("testing".to_string())];
         let trait_def = create_test_trait(
-            ConditionWithFilters {
-                condition: cond,
-                size_min: None,
-                size_max: None,
-                count_min: None,
-                count_max: None,
-                per_kb_min: None,
-                per_kb_max: None,
-                entropy_min: None,
-                entropy_max: None,
-            },
+            cond,
             Some(not),
         );
 
@@ -134,17 +122,7 @@ mod validation_tests {
 
         let not = vec![NotException::Shorthand("hurl".to_string())];
         let trait_def = create_test_trait(
-            ConditionWithFilters {
-                condition: cond,
-                size_min: None,
-                size_max: None,
-                count_min: None,
-                count_max: None,
-                per_kb_min: None,
-                per_kb_max: None,
-                entropy_min: None,
-                entropy_max: None,
-            },
+            cond,
             Some(not),
         );
 
@@ -183,17 +161,7 @@ mod validation_tests {
             regex: None,
         }];
         let trait_def = create_test_trait(
-            ConditionWithFilters {
-                condition: cond,
-                size_min: None,
-                size_max: None,
-                count_min: None,
-                count_max: None,
-                per_kb_min: None,
-                per_kb_max: None,
-                entropy_min: None,
-                entropy_max: None,
-            },
+            cond,
             Some(not),
         );
 
@@ -226,17 +194,7 @@ mod validation_tests {
             regex: None,
         }];
         let trait_def = create_test_trait(
-            ConditionWithFilters {
-                condition: cond,
-                size_min: None,
-                size_max: None,
-                count_min: None,
-                count_max: None,
-                per_kb_min: None,
-                per_kb_max: None,
-                entropy_min: None,
-                entropy_max: None,
-            },
+            cond,
             Some(not),
         );
 
@@ -271,17 +229,7 @@ mod validation_tests {
             regex: None,
         }];
         let trait_def = create_test_trait(
-            ConditionWithFilters {
-                condition: cond,
-                size_min: None,
-                size_max: None,
-                count_min: None,
-                count_max: None,
-                per_kb_min: None,
-                per_kb_max: None,
-                entropy_min: None,
-                entropy_max: None,
-            },
+            cond,
             Some(not),
         );
 
@@ -314,17 +262,7 @@ mod validation_tests {
             regex: None,
         }];
         let trait_def = create_test_trait(
-            ConditionWithFilters {
-                condition: cond,
-                size_min: None,
-                size_max: None,
-                count_min: None,
-                count_max: None,
-                per_kb_min: None,
-                per_kb_max: None,
-                entropy_min: None,
-                entropy_max: None,
-            },
+            cond,
             Some(not),
         );
 
@@ -354,17 +292,7 @@ mod validation_tests {
 
         let not = vec![NotException::Shorthand("TESTING".to_string())];
         let trait_def = create_test_trait(
-            ConditionWithFilters {
-                condition: cond,
-                size_min: None,
-                size_max: None,
-                count_min: None,
-                count_max: None,
-                per_kb_min: None,
-                per_kb_max: None,
-                entropy_min: None,
-                entropy_max: None,
-            },
+            cond,
             Some(not),
         );
 
@@ -393,17 +321,7 @@ mod validation_tests {
 
         let not = vec![NotException::Shorthand("curl".to_string())];
         let trait_def = create_test_trait(
-            ConditionWithFilters {
-                condition: cond,
-                size_min: None,
-                size_max: None,
-                count_min: None,
-                count_max: None,
-                per_kb_min: None,
-                per_kb_max: None,
-                entropy_min: None,
-                entropy_max: None,
-            },
+            cond,
             Some(not),
         );
 
@@ -432,17 +350,7 @@ mod validation_tests {
 
         let not = vec![NotException::Shorthand("hurl".to_string())];
         let trait_def = create_test_trait(
-            ConditionWithFilters {
-                condition: cond,
-                size_min: None,
-                size_max: None,
-                count_min: None,
-                count_max: None,
-                per_kb_min: None,
-                per_kb_max: None,
-                entropy_min: None,
-                entropy_max: None,
-            },
+            cond,
             Some(not),
         );
 
@@ -474,17 +382,7 @@ mod validation_tests {
 
         let not = vec![NotException::Shorthand("testing".to_string())];
         let trait_def = create_test_trait(
-            ConditionWithFilters {
-                condition: cond,
-                size_min: None,
-                size_max: None,
-                count_min: None,
-                count_max: None,
-                per_kb_min: None,
-                per_kb_max: None,
-                entropy_min: None,
-                entropy_max: None,
-            },
+            cond,
             Some(not),
         );
 
@@ -515,17 +413,7 @@ mod validation_tests {
 
         let not = vec![NotException::Shorthand("testing".to_string())];
         let trait_def = create_test_trait(
-            ConditionWithFilters {
-                condition: cond,
-                size_min: None,
-                size_max: None,
-                count_min: None,
-                count_max: None,
-                per_kb_min: None,
-                per_kb_max: None,
-                entropy_min: None,
-                entropy_max: None,
-            },
+            cond,
             Some(not),
         );
 
@@ -555,17 +443,7 @@ mod validation_tests {
 
         let not = vec![NotException::Shorthand("test".to_string())];
         let trait_def = create_test_trait(
-            ConditionWithFilters {
-                condition: cond,
-                size_min: None,
-                size_max: None,
-                count_min: None,
-                count_max: None,
-                per_kb_min: None,
-                per_kb_max: None,
-                entropy_min: None,
-                entropy_max: None,
-            },
+            cond,
             Some(not),
         );
 
@@ -595,17 +473,7 @@ mod validation_tests {
 
         let not = vec![NotException::Shorthand("testing".to_string())];
         let trait_def = create_test_trait(
-            ConditionWithFilters {
-                condition: cond,
-                size_min: None,
-                size_max: None,
-                count_min: None,
-                count_max: None,
-                per_kb_min: None,
-                per_kb_max: None,
-                entropy_min: None,
-                entropy_max: None,
-            },
+            cond,
             Some(not),
         );
 
@@ -626,17 +494,7 @@ mod validation_tests {
 
         let not = vec![NotException::Shorthand("test".to_string())];
         let trait_def = create_test_trait(
-            ConditionWithFilters {
-                condition: cond,
-                size_min: None,
-                size_max: None,
-                count_min: None,
-                count_max: None,
-                per_kb_min: None,
-                per_kb_max: None,
-                entropy_min: None,
-                entropy_max: None,
-            },
+            cond,
             Some(not),
         );
 
@@ -659,17 +517,7 @@ mod validation_tests {
 
         let not = vec![NotException::Shorthand("testing".to_string())];
         let trait_def = create_test_trait(
-            ConditionWithFilters {
-                condition: cond,
-                size_min: None,
-                size_max: None,
-                count_min: None,
-                count_max: None,
-                per_kb_min: None,
-                per_kb_max: None,
-                entropy_min: None,
-                entropy_max: None,
-            },
+            cond,
             Some(not),
         );
 
@@ -690,17 +538,7 @@ mod validation_tests {
 
         let not = vec![NotException::Shorthand("hurl".to_string())];
         let trait_def = create_test_trait(
-            ConditionWithFilters {
-                condition: cond,
-                size_min: None,
-                size_max: None,
-                count_min: None,
-                count_max: None,
-                per_kb_min: None,
-                per_kb_max: None,
-                entropy_min: None,
-                entropy_max: None,
-            },
+            cond,
             Some(not),
         );
 
@@ -724,17 +562,7 @@ mod validation_tests {
 
         let not = vec![NotException::Shorthand("curl".to_string())];
         let trait_def = create_test_trait(
-            ConditionWithFilters {
-                condition: cond,
-                size_min: None,
-                size_max: None,
-                count_min: None,
-                count_max: None,
-                per_kb_min: None,
-                per_kb_max: None,
-                entropy_min: None,
-                entropy_max: None,
-            },
+            cond,
             Some(not),
         );
 
@@ -755,17 +583,7 @@ mod validation_tests {
 
         let not = vec![NotException::Shorthand("hurl".to_string())];
         let trait_def = create_test_trait(
-            ConditionWithFilters {
-                condition: cond,
-                size_min: None,
-                size_max: None,
-                count_min: None,
-                count_max: None,
-                per_kb_min: None,
-                per_kb_max: None,
-                entropy_min: None,
-                entropy_max: None,
-            },
+            cond,
             Some(not),
         );
 
@@ -779,7 +597,7 @@ mod validation_tests {
 
 #[cfg(test)]
 mod criticality_tests {
-    use crate::composite_rules::{Condition, ConditionWithFilters, TraitDefinition};
+    use crate::composite_rules::{Condition, TraitDefinition};
     use crate::types::Criticality;
 
     #[test]
@@ -809,17 +627,15 @@ mod criticality_tests {
             attack: None,
             platforms: vec![],
             r#for: vec![],
-            r#if: ConditionWithFilters {
-                condition: cond,
-                size_min: None,
-                size_max: None,
-                count_min: None,
-                count_max: None,
-                per_kb_min: None,
-                per_kb_max: None,
-                entropy_min: None,
-                entropy_max: None,
-            },
+            r#if: cond,
+            size_min: None,
+            size_max: None,
+            count_min: None,
+            count_max: None,
+            per_kb_min: None,
+            per_kb_max: None,
+            entropy_min: None,
+            entropy_max: None,
             not: None,
             unless: None,
             downgrade: None,
@@ -870,17 +686,15 @@ mod criticality_tests {
                 attack: None,
                 platforms: vec![],
                 r#for: vec![],
-                r#if: ConditionWithFilters {
-                    condition: cond,
-                    size_min: None,
-                    size_max: None,
-                    count_min: None,
-                    count_max: None,
-                    per_kb_min: None,
-                    per_kb_max: None,
-                    entropy_min: None,
-                    entropy_max: None,
-                },
+                r#if: cond,
+                size_min: None,
+                size_max: None,
+                count_min: None,
+                count_max: None,
+                per_kb_min: None,
+                per_kb_max: None,
+                entropy_min: None,
+                entropy_max: None,
                 not: None,
                 unless: None,
                 downgrade: None,
@@ -896,7 +710,7 @@ mod criticality_tests {
 
 #[cfg(test)]
 mod constraint_tests {
-    use crate::composite_rules::{Condition, ConditionWithFilters, TraitDefinition};
+    use crate::composite_rules::{Condition, TraitDefinition};
     use crate::types::Criticality;
 
     #[test]
@@ -925,17 +739,15 @@ mod constraint_tests {
             attack: None,
             platforms: vec![],
             r#for: vec![],
-            r#if: ConditionWithFilters {
-                condition: cond,
-                size_min: None,
-                size_max: None,
-                count_min: None,
-                count_max: None,
-                per_kb_min: None,
-                per_kb_max: None,
-                entropy_min: None,
-                entropy_max: None,
-            },
+            r#if: cond,
+            size_min: None,
+            size_max: None,
+            count_min: None,
+            count_max: None,
+            per_kb_min: None,
+            per_kb_max: None,
+            entropy_min: None,
+            entropy_max: None,
             not: None,
             unless: None,
             downgrade: None,
@@ -974,17 +786,15 @@ mod constraint_tests {
             attack: None,
             platforms: vec![],
             r#for: vec![],
-            r#if: ConditionWithFilters {
-                condition: cond,
-                size_min: None,
-                size_max: None,
-                count_min: None,
-                count_max: None,
-                per_kb_min: None,
-                per_kb_max: None,
-                entropy_min: None,
-                entropy_max: None,
-            },
+            r#if: cond,
+            size_min: None,
+            size_max: None,
+            count_min: None,
+            count_max: None,
+            per_kb_min: None,
+            per_kb_max: None,
+            entropy_min: None,
+            entropy_max: None,
             not: None,
             unless: None,
             downgrade: None,
@@ -1023,17 +833,15 @@ mod constraint_tests {
             attack: None,
             platforms: vec![],
             r#for: vec![],
-            r#if: ConditionWithFilters {
-                condition: cond,
-                size_min: Some(1000),
-                size_max: Some(500), // max < min
-                count_min: None,
-                count_max: None,
-                per_kb_min: None,
-                per_kb_max: None,
-                entropy_min: None,
-                entropy_max: None,
-            },
+            r#if: cond,
+            size_min: Some(1000),
+            size_max: Some(500), // max < min
+            count_min: None,
+            count_max: None,
+            per_kb_min: None,
+            per_kb_max: None,
+            entropy_min: None,
+            entropy_max: None,
             not: None,
             unless: None,
             downgrade: None,
@@ -1073,17 +881,15 @@ mod constraint_tests {
             attack: None,
             platforms: vec![],
             r#for: vec![],
-            r#if: ConditionWithFilters {
-                condition: cond,
-                size_min: None,
-                size_max: None,
-                count_min: Some(10),
-                count_max: Some(5), // max < min
-                per_kb_min: None,
-                per_kb_max: None,
-                entropy_min: None,
-                entropy_max: None,
-            },
+            r#if: cond,
+            size_min: None,
+            size_max: None,
+            count_min: Some(10),
+            count_max: Some(5), // max < min
+            per_kb_min: None,
+            per_kb_max: None,
+            entropy_min: None,
+            entropy_max: None,
             not: None,
             unless: None,
             downgrade: None,
@@ -1091,7 +897,7 @@ mod constraint_tests {
             precision: None,
         };
 
-        let warning = trait_def.r#if.check_count_constraints(&trait_def.id);
+        let warning = trait_def.check_count_constraints();
         assert!(warning.is_some());
         assert!(warning.as_ref().unwrap().contains("count_max"));
         assert!(warning.as_ref().unwrap().contains("count_min"));
@@ -1123,17 +929,15 @@ mod constraint_tests {
             attack: None,
             platforms: vec![],
             r#for: vec![],
-            r#if: ConditionWithFilters {
-                condition: cond,
-                size_min: None,
-                size_max: None,
-                count_min: None,
-                count_max: None,
-                per_kb_min: Some(10.0),
-                per_kb_max: Some(5.0), // max < min
-                entropy_min: None,
-                entropy_max: None,
-            },
+            r#if: cond,
+            size_min: None,
+            size_max: None,
+            count_min: None,
+            count_max: None,
+            per_kb_min: Some(10.0),
+            per_kb_max: Some(5.0), // max < min
+            entropy_min: None,
+            entropy_max: None,
             not: None,
             unless: None,
             downgrade: None,
@@ -1141,7 +945,7 @@ mod constraint_tests {
             precision: None,
         };
 
-        let warning = trait_def.r#if.check_density_constraints(&trait_def.id);
+        let warning = trait_def.check_density_constraints();
         assert!(warning.is_some());
         assert!(warning.as_ref().unwrap().contains("per_kb_max"));
         assert!(warning.as_ref().unwrap().contains("per_kb_min"));
@@ -1201,17 +1005,15 @@ mod constraint_tests {
             attack: None,
             platforms: vec![],
             r#for: vec![],
-            r#if: ConditionWithFilters {
-                condition: cond,
-                size_min: None,
-                size_max: None,
-                count_min: None,
-                count_max: None,
-                per_kb_min: None,
-                per_kb_max: None,
-                entropy_min: None,
-                entropy_max: None,
-            },
+            r#if: cond,
+            size_min: None,
+            size_max: None,
+            count_min: None,
+            count_max: None,
+            per_kb_min: None,
+            per_kb_max: None,
+            entropy_min: None,
+            entropy_max: None,
             not: None,
             unless: None,
             downgrade: None,
@@ -1226,7 +1028,7 @@ mod constraint_tests {
 
 #[cfg(test)]
 mod llm_validation_tests {
-    use crate::composite_rules::{Condition, ConditionWithFilters, TraitDefinition};
+    use crate::composite_rules::{Condition, TraitDefinition};
     use crate::types::Criticality;
 
     #[test]
@@ -1423,8 +1225,16 @@ mod llm_validation_tests {
             compiled_regex: None,
         };
 
-        let cond_with_filters = ConditionWithFilters {
-            condition: cond,
+        let trait_def = TraitDefinition {
+            id: "test-trait".to_string(),
+            desc: "Test trait".to_string(),
+            conf: 0.8,
+            crit: Criticality::Notable,
+            mbc: None,
+            attack: None,
+            platforms: vec![],
+            r#for: vec![],
+            r#if: cond,
             size_min: None,
             size_max: None,
             count_min: Some(0), // Invalid: count_min should not be 0
@@ -1433,9 +1243,14 @@ mod llm_validation_tests {
             per_kb_max: None,
             entropy_min: None,
             entropy_max: None,
+            not: None,
+            unless: None,
+            downgrade: None,
+            defined_in: std::path::PathBuf::new(),
+            precision: None,
         };
 
-        let warning = cond_with_filters.check_count_min_value("test-trait");
+        let warning = trait_def.check_count_min_value();
         assert!(warning.is_some());
         assert!(
             warning.as_ref().unwrap().contains("count_min: 0")
@@ -1490,17 +1305,15 @@ mod llm_validation_tests {
             attack: None,
             platforms: vec![],
             r#for: vec![],
-            r#if: ConditionWithFilters {
-                condition: cond,
-                size_min: None,
-                size_max: None,
-                count_min: None,
-                count_max: None,
-                per_kb_min: None,
-                per_kb_max: None,
-                entropy_min: None,
-                entropy_max: None,
-            },
+            r#if: cond,
+            size_min: None,
+            size_max: None,
+            count_min: None,
+            count_max: None,
+            per_kb_min: None,
+            per_kb_max: None,
+            entropy_min: None,
+            entropy_max: None,
             not: None,
             unless: None,
             downgrade: None,
@@ -1541,17 +1354,15 @@ mod llm_validation_tests {
             attack: None,
             platforms: vec![],
             r#for: vec![],
-            r#if: ConditionWithFilters {
-                condition: cond,
-                size_min: None,
-                size_max: None,
-                count_min: None,
-                count_max: None,
-                per_kb_min: None,
-                per_kb_max: None,
-                entropy_min: None,
-                entropy_max: None,
-            },
+            r#if: cond,
+            size_min: None,
+            size_max: None,
+            count_min: None,
+            count_max: None,
+            per_kb_min: None,
+            per_kb_max: None,
+            entropy_min: None,
+            entropy_max: None,
             not: None,
             unless: None,
             downgrade: None,
@@ -1592,17 +1403,15 @@ mod llm_validation_tests {
             attack: None,
             platforms: vec![],
             r#for: vec![],
-            r#if: ConditionWithFilters {
-                condition: cond,
-                size_min: None,
-                size_max: None,
-                count_min: None,
-                count_max: None,
-                per_kb_min: None,
-                per_kb_max: None,
-                entropy_min: None,
-                entropy_max: None,
-            },
+            r#if: cond,
+            size_min: None,
+            size_max: None,
+            count_min: None,
+            count_max: None,
+            per_kb_min: None,
+            per_kb_max: None,
+            entropy_min: None,
+            entropy_max: None,
             not: None,
             unless: None,
             downgrade: None,
@@ -1641,17 +1450,15 @@ mod llm_validation_tests {
             attack: None,
             platforms: vec![],
             r#for: vec![],
-            r#if: ConditionWithFilters {
-                condition: cond,
-                size_min: None,
-                size_max: None,
-                count_min: None,
-                count_max: None,
-                per_kb_min: None,
-                per_kb_max: None,
-                entropy_min: None,
-                entropy_max: None,
-            },
+            r#if: cond,
+            size_min: None,
+            size_max: None,
+            count_min: None,
+            count_max: None,
+            per_kb_min: None,
+            per_kb_max: None,
+            entropy_min: None,
+            entropy_max: None,
             not: None,
             unless: None,
             downgrade: None,
@@ -1689,17 +1496,15 @@ mod llm_validation_tests {
             attack: None,
             platforms: vec![],
             r#for: vec![],
-            r#if: ConditionWithFilters {
-                condition: cond,
-                size_min: None,
-                size_max: None,
-                count_min: None,
-                count_max: None,
-                per_kb_min: None,
-                per_kb_max: None,
-                entropy_min: None,
-                entropy_max: None,
-            },
+            r#if: cond,
+            size_min: None,
+            size_max: None,
+            count_min: None,
+            count_max: None,
+            per_kb_min: None,
+            per_kb_max: None,
+            entropy_min: None,
+            entropy_max: None,
             not: Some(vec![]),
             unless: None,
             downgrade: None,
@@ -1738,17 +1543,15 @@ mod llm_validation_tests {
             attack: None,
             platforms: vec![],
             r#for: vec![],
-            r#if: ConditionWithFilters {
-                condition: cond,
-                size_min: None,
-                size_max: None,
-                count_min: None,
-                count_max: None,
-                per_kb_min: None,
-                per_kb_max: None,
-                entropy_min: None,
-                entropy_max: None,
-            },
+            r#if: cond,
+            size_min: None,
+            size_max: None,
+            count_min: None,
+            count_max: None,
+            per_kb_min: None,
+            per_kb_max: None,
+            entropy_min: None,
+            entropy_max: None,
             not: None,
             unless: Some(vec![]),
             downgrade: None,

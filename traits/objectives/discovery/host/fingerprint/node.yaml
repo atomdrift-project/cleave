@@ -202,10 +202,10 @@ traits:
   for:
   - javascript
   - typescript
+  count_min: 3
   if:
     type: string
     substr: Object.keys
-    count_min: 3
 - id: object-entries-call
   desc: Object.entries call
   crit: notable

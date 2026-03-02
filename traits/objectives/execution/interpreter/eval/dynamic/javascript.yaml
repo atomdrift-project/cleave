@@ -67,10 +67,10 @@ traits:
     conf: 0.6
     for:
       - javascript
+    count_min: 30
     if:
       type: raw
       regex: \b\w+\[[a-zA-Z_$][a-zA-Z0-9_$]*\]
-      count_min: 30
       not:
         regex: \b(arr|array|coll|tasks|listeners|console|Object|this|exports|module|window|redis|queue|scripts|pending|results|commands|items|slots|options|errors)\[|\[(i|j|k|n|m|o|p|t|e|key|prop|index|idx|it|name|slot|sha|type|cmd|err|val)\]
     unless:
@@ -111,20 +111,20 @@ traits:
     conf: 0.9
     for:
       - javascript
+    count_min: 5
     if:
       type: raw
       regex: \(\s*(async\s+)?function\s*\([^)]{0,50}\)\s*\{
-      count_min: 5
   - id: variable-immediate-call
     desc: Many variable-assigned function expressions
     crit: notable
     conf: 0.7
     for:
       - javascript
+    count_min: 15
     if:
       type: raw
       regex: var\s+\w+\s*=\s*function\s*\([^)]{0,120}\)\s*\{|var\s+\w+\s*=\s*\(\s*\)\s*=>
-      count_min: 15
   - id: eval-function-definition
     desc: eval() compiling a function string
     crit: notable

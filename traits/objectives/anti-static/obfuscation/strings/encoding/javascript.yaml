@@ -206,11 +206,11 @@ traits:
     mbc: "B0032"
     attack: "T1027"
     for: [javascript, typescript]
+    count_min: 5
+    per_kb_min: 1.0
     if:
       type: string
       regex: "fromCharCode\\s*\\(\\s*\\d"
-      count_min: 5
-      per_kb_min: 1.0
 
   - id: dense-unicode-escapes
     desc: Dense Unicode escape sequences
@@ -219,11 +219,11 @@ traits:
     mbc: "B0032"
     attack: "T1027"
     for: [javascript, typescript]
+    count_min: 4
+    per_kb_min: 0.8
     if:
       type: string
       regex: '(\\u[0-9a-fA-F]{4}){3,}'
-      count_min: 4
-      per_kb_min: 0.8
 
   - id: js-dense-hex-escapes
     desc: Dense hex escape sequences
@@ -232,11 +232,11 @@ traits:
     mbc: "B0032"
     attack: "T1027"
     for: [javascript, typescript]
+    count_min: 4
+    per_kb_min: 0.8
     if:
       type: string
       regex: '(\\x[0-9a-fA-F]{2}){4,}'
-      count_min: 4
-      per_kb_min: 0.8
 
   # Bracket notation property access is used to hide method names
   # e.g., window["eval"] instead of window.eval
@@ -247,10 +247,10 @@ traits:
     mbc: "B0032"
     attack: "T1027"
     for: [javascript, typescript]
+    count_min: 3
     if:
       type: raw
       regex: "\\[\\s*['\"](eval|Function|constructor|atob)['\"]\\s*\\]\\s*\\("
-      count_min: 3
 
   - id: js-alternating-char-obfuscation
     desc: Strings with alternating junk characters (e.g., f?u?n?c?t)
@@ -258,10 +258,10 @@ traits:
     conf: 0.8
     for: [javascript]
     size_max: 100000
+    count_min: 5
     if:
       type: raw
       regex: '["''][a-zA-Z0-9_]([^a-zA-Z0-9\s"''\\]{1,3}[a-zA-Z0-9_]){5,}["'']'
-      count_min: 5
 
 composite_rules:
   - id: js-global-property-write

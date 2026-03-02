@@ -22,20 +22,20 @@ traits:
     crit: baseline
     conf: 0.95
     for: [javascript]
+    count_min: 3
     if:
       type: symbol
       regex: '(isPrettierIgnore|PrettierIgnore)'
-      count_min: 3
 
   - id: prettier-language-js
     desc: Prettier language-js parser bundle
     crit: baseline
     conf: 0.95
     for: [javascript]
+    count_min: 2
     if:
       type: string
       regex: 'src/language-js/(pragma|parse/utils/create-parser)\.js'
-      count_min: 2
 
 composite_rules:
   - id: prettier-detection

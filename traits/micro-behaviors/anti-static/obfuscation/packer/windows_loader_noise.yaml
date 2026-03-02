@@ -41,11 +41,11 @@ traits:
     desc: Oversized low-entropy .reloc masking section
     crit: suspicious
     conf: 0.88
+    entropy_max: 4.2
     if:
       type: section
       exact: ".reloc"
       length_min: 4194304
-      entropy_max: 4.2
     downgrade:
       any:
         - id: metadata/signed/platform::microsoft

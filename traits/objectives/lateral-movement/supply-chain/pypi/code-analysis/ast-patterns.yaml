@@ -35,11 +35,11 @@ traits:
     desc: Multiple clone() calls in function
     crit: suspicious
     conf: 0.85
+    count_min: 2
     if:
       type: ast
       kind: call
       exact: "\\.clone\\(.{0,50}\\)"
-      count_min: 2
 
   # === AST Pattern: Environment Set in Method ===
   - id: ast-env-set-in-method
@@ -56,11 +56,11 @@ traits:
     desc: Clone move execute chain
     crit: suspicious
     conf: 0.90
+    count_min: 3
     if:
       type: ast
       kind: call
       exact: "(clone|rename|startfile)"
-      count_min: 3
 
   # === AST Pattern: cmdclass with Custom Install ===
   - id: ast-cmdclass-install-override

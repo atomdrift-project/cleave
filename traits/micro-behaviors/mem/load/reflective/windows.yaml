@@ -35,8 +35,6 @@ traits:
     if:
       type: string
       substr: "OEP"
-      near_bytes: 512
-      near_min: 1
 
   - id: payload-thread-str
     desc: Payload thread execution reference

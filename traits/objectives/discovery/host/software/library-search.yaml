@@ -40,20 +40,20 @@ traits:
     crit: notable
     conf: 0.85
     for: [c]
+    count_min: 2
     if:
       type: raw
       regex: "#elif\\s+__(x86_64|arm|i386)__"
-      count_min: 2
 
   - id: arch-const-mapping-2
     desc: Multi-architecture numeric constant mapping (aarch64)
     crit: notable
     conf: 0.85
     for: [c]
+    count_min: 2
     if:
       type: raw
       regex: "#elif\\s+__(aarch64)__"
-      count_min: 2
 
   - id: arch-aware-lib-filter-1
     desc: Architecture-aware library filtering (x86/arm)

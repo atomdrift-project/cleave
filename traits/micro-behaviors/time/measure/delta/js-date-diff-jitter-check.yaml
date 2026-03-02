@@ -30,15 +30,16 @@ traits:
     desc: Triple Date/Time retrieval (raw)
     crit: component
     for: [javascript]
+    count_min: 3
     if:
       type: raw
       regex: '(Date\s*\.\s*now\s*\(|new\s+Date\s*\()'
-      count_min: 3
 
   - id: js-triple-date-ast
     desc: Triple Date retrieval (AST)
     crit: component
     for: [javascript]
+    count_min: 3
     if:
       type: ast
       lang: javascript
@@ -56,21 +57,21 @@ traits:
             )
           ]
         )
-      count_min: 3
 
   - id: js-multiple-sleep-raw
     desc: Multiple Sleep calls (anti-emulation) - Raw
     crit: notable
     for: [javascript]
+    count_min: 2
     if:
       type: raw
       regex: '\.Sleep\s*\('
-      count_min: 2
 
   - id: js-multiple-sleep-ast
     desc: Multiple Sleep calls (anti-emulation) - AST
     crit: notable
     for: [javascript]
+    count_min: 2
     if:
       type: ast
       lang: javascript
@@ -85,7 +86,6 @@ traits:
             ]
           )
         )
-      count_min: 2
 
 composite_rules:
   - id: js-triple-date

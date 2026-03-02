@@ -30,17 +30,15 @@ fn create_test_trait(id: &str, condition: Condition) -> TraitDefinition {
         platforms: vec![Platform::All],
         mbc: None,
         attack: None,
-        r#if: ConditionWithFilters {
-            condition,
-            size_min: None,
-            size_max: None,
-            count_min: None,
-            count_max: None,
-            per_kb_min: None,
-            per_kb_max: None,
-                entropy_min: None,
-                entropy_max: None,
-        },
+        condition,
+        size_min: None,
+        size_max: None,
+        count_min: None,
+        count_max: None,
+        per_kb_min: None,
+        per_kb_max: None,
+        entropy_min: None,
+        entropy_max: None,
         
         unless: None,
         downgrade: None,
@@ -95,7 +93,7 @@ fn test_size_min_constraint_pass() {
     };
 
     let mut trait_def = create_test_trait("test/size::min_pass", condition);
-    trait_def.r#if.size_min = Some(100); // Require at least 100 bytes
+    trait_def.size_min = Some(100); // Require at least 100 bytes
 
     let mut report = create_report_with_size(1024); // 1KB file
     report.imports.push(Import {
@@ -121,7 +119,7 @@ fn test_size_min_constraint_fail() {
     };
 
     let mut trait_def = create_test_trait("test/size::min_fail", condition);
-    trait_def.r#if.size_min = Some(2000); // Require at least 2000 bytes
+    trait_def.size_min = Some(2000); // Require at least 2000 bytes
 
     let mut report = create_report_with_size(1024); // 1KB file (too small)
     report.imports.push(Import {
@@ -147,7 +145,7 @@ fn test_size_max_constraint_pass() {
     };
 
     let mut trait_def = create_test_trait("test/size::max_pass", condition);
-    trait_def.r#if.size_max = Some(5000); // Max 5000 bytes
+    trait_def.size_max = Some(5000); // Max 5000 bytes
 
     let mut report = create_report_with_size(1024); // 1KB file
     report.imports.push(Import {
@@ -173,7 +171,7 @@ fn test_size_max_constraint_fail() {
     };
 
     let mut trait_def = create_test_trait("test/size::max_fail", condition);
-    trait_def.r#if.size_max = Some(500); // Max 500 bytes
+    trait_def.size_max = Some(500); // Max 500 bytes
 
     let mut report = create_report_with_size(1024); // 1KB file (too large)
     report.imports.push(Import {
@@ -199,8 +197,8 @@ fn test_size_range_constraint() {
     };
 
     let mut trait_def = create_test_trait("test/size::range", condition);
-    trait_def.r#if.size_min = Some(500);
-    trait_def.r#if.size_max = Some(2000);
+    trait_def.size_min = Some(500);
+    trait_def.size_max = Some(2000);
 
     let mut report = create_report_with_size(1024); // 1KB file (within range)
     report.imports.push(Import {
@@ -228,7 +226,7 @@ fn test_count_min_constraint_pass() {
     };
 
     let mut trait_def = create_test_trait("test/count::min_pass", condition);
-    trait_def.r#if.count_min = Some(2); // Require at least 2 matches
+    trait_def.count_min = Some(2); // Require at least 2 matches
 
     let mut report = create_report_with_size(1024);
     report.imports.push(Import {
@@ -264,7 +262,7 @@ fn test_count_min_constraint_fail() {
     };
 
     let mut trait_def = create_test_trait("test/count::min_fail", condition);
-    trait_def.r#if.count_min = Some(5); // Require at least 5 matches
+    trait_def.count_min = Some(5); // Require at least 5 matches
 
     let mut report = create_report_with_size(1024);
     report.imports.push(Import {
@@ -295,7 +293,7 @@ fn test_count_max_constraint_pass() {
     };
 
     let mut trait_def = create_test_trait("test/count::max_pass", condition);
-    trait_def.r#if.count_max = Some(5); // Max 5 matches
+    trait_def.count_max = Some(5); // Max 5 matches
 
     let mut report = create_report_with_size(1024);
     report.imports.push(Import {
@@ -326,7 +324,7 @@ fn test_count_max_constraint_fail() {
     };
 
     let mut trait_def = create_test_trait("test/count::max_fail", condition);
-    trait_def.r#if.count_max = Some(1); // Max 1 match
+    trait_def.count_max = Some(1); // Max 1 match
 
     let mut report = create_report_with_size(1024);
     report.imports.push(Import {
@@ -364,7 +362,7 @@ fn test_per_kb_min_constraint_pass() {
     };
 
     let mut trait_def = create_test_trait("test/density::min_pass", condition);
-    trait_def.r#if.per_kb_min = Some(1.0); // At least 1 match per KB
+    trait_def.per_kb_min = Some(1.0); // At least 1 match per KB
 
     let mut report = create_report_with_size(2048); // 2KB file
     // Add 3 matches = 1.5 matches/KB
@@ -404,7 +402,7 @@ fn test_per_kb_min_constraint_fail() {
     };
 
     let mut trait_def = create_test_trait("test/density::min_fail", condition);
-    trait_def.r#if.per_kb_min = Some(5.0); // At least 5 matches per KB
+    trait_def.per_kb_min = Some(5.0); // At least 5 matches per KB
 
     let mut report = create_report_with_size(2048); // 2KB file
     // Add 2 matches = 1.0 matches/KB (too low)
@@ -436,7 +434,7 @@ fn test_per_kb_max_constraint_pass() {
     };
 
     let mut trait_def = create_test_trait("test/density::max_pass", condition);
-    trait_def.r#if.per_kb_max = Some(10.0); // Max 10 matches per KB
+    trait_def.per_kb_max = Some(10.0); // Max 10 matches per KB
 
     let mut report = create_report_with_size(1024); // 1KB file
     // Add 5 matches = 5.0 matches/KB
@@ -468,7 +466,7 @@ fn test_per_kb_max_constraint_fail() {
     };
 
     let mut trait_def = create_test_trait("test/density::max_fail", condition);
-    trait_def.r#if.per_kb_max = Some(2.0); // Max 2 matches per KB
+    trait_def.per_kb_max = Some(2.0); // Max 2 matches per KB
 
     let mut report = create_report_with_size(1024); // 1KB file
     // Add 10 matches = 10.0 matches/KB (too high)
@@ -643,12 +641,12 @@ fn test_all_constraints_combined() {
     };
 
     let mut trait_def = create_test_trait("test/constraints::combined", condition);
-    trait_def.r#if.size_min = Some(512);
-    trait_def.r#if.size_max = Some(2048);
-    trait_def.r#if.count_min = Some(2);
-    trait_def.r#if.count_max = Some(10);
-    trait_def.r#if.per_kb_min = Some(1.0);
-    trait_def.r#if.per_kb_max = Some(5.0);
+    trait_def.size_min = Some(512);
+    trait_def.size_max = Some(2048);
+    trait_def.count_min = Some(2);
+    trait_def.count_max = Some(10);
+    trait_def.per_kb_min = Some(1.0);
+    trait_def.per_kb_max = Some(5.0);
 
     let mut report = create_report_with_size(1024); // 1KB file
     // Add 3 matches = 3.0 matches/KB

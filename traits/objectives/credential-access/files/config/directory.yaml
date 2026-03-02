@@ -11,12 +11,12 @@ defaults:
 traits:
   - id: credential-files-config
     desc: Multiple credential files in config directories
+    count_min: 2
     if:
       type: string
       # Match paths in Config or /etc/ containing credential-related keywords
       regex: '/(Config|etc)/.{0,200}(account|passwd|password)'
       case_insensitive: true
-      count_min: 2
     # Detects patterns like:
     # /etc/passwd, /etc/shadow
     # ~/Library/Application Support/Config/accounts.db, ~/Library/Application Support/Config/passwords.txt

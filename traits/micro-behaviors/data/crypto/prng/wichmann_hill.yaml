@@ -7,4 +7,3 @@ traits:
     if:
       type: raw
       regex: '171\s*\*\s*\w+\[.{0,20}\]\s*%\s*30269'
-      near: '30323'

@@ -61,8 +61,20 @@ pub(crate) struct RawTraitDefinition {
     pub(crate) size_min: Option<usize>,
     #[serde(default)]
     pub(crate) size_max: Option<usize>,
+    #[serde(default)]
+    pub(crate) count_min: Option<usize>,
+    #[serde(default)]
+    pub(crate) count_max: Option<usize>,
+    #[serde(default)]
+    pub(crate) per_kb_min: Option<f64>,
+    #[serde(default)]
+    pub(crate) per_kb_max: Option<f64>,
+    #[serde(default)]
+    pub(crate) entropy_min: Option<f64>,
+    #[serde(default)]
+    pub(crate) entropy_max: Option<f64>,
     #[serde(default, alias = "if")]
-    pub(crate) condition: Option<crate::composite_rules::ConditionWithFilters>,
+    pub(crate) condition: Option<crate::composite_rules::Condition>,
     #[serde(default)]
     pub(crate) not: Option<Vec<crate::composite_rules::condition::NotException>>,
     #[serde(default)]

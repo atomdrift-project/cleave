@@ -14,10 +14,10 @@ traits:
     crit: notable
     conf: 0.7
     size_max: 1048576
+    count_min: 5
     if:
       type: hex
       pattern: "0F A2"
-      count_min: 5
     unless:
       - type: metrics
         field: binary.import_count
@@ -29,10 +29,10 @@ traits:
     crit: notable
     conf: 0.7
     size_max: 1048576
+    count_min: 5
     if:
       type: hex
       pattern: "0F 31"
-      count_min: 5
     unless:
       - type: raw
         substr: "BSJB"  # .NET IL bytecode contains 0F 31 sequences that aren't RDTSC

@@ -20,10 +20,10 @@ traits:
     desc: Cordova hook type list
     crit: baseline
     conf: 0.7
+    count_min: 6
     if:
       type: string
       regex: (after|before)_[a-z_]+|pre_package
-      count_min: 6
 composite_rules:
   - id: cordova-hook-insertion
     desc: Cordova config hook insertion

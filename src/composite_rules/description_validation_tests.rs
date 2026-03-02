@@ -6,7 +6,7 @@
 #[cfg(test)]
 #[allow(clippy::module_inception)]
 mod description_validation_tests {
-    use crate::composite_rules::{Condition, ConditionWithFilters, TraitDefinition};
+    use crate::composite_rules::{Condition, TraitDefinition};
     use crate::types::Criticality;
 
     fn create_test_trait_with_desc(desc: &str) -> TraitDefinition {
@@ -19,30 +19,28 @@ mod description_validation_tests {
             attack: None,
             platforms: vec![],
             r#for: vec![],
-            r#if: ConditionWithFilters {
-                condition: Condition::String {
-                    exact: Some("test".to_string()),
-                    substr: None,
-                    regex: None,
-                    word: None,
-                    case_insensitive: false,
-                    external_ip: false,
-                    section: None,
-                    offset: None,
-                    offset_range: None,
-                    section_offset: None,
-                    section_offset_range: None,
-                    compiled_regex: None,
+            r#if: Condition::String {
+                exact: Some("test".to_string()),
+                substr: None,
+                regex: None,
+                word: None,
+                case_insensitive: false,
+                external_ip: false,
+                section: None,
+                offset: None,
+                offset_range: None,
+                section_offset: None,
+                section_offset_range: None,
+                compiled_regex: None,
                 },
-                size_min: None,
-                size_max: None,
-                count_min: None,
-                count_max: None,
-                per_kb_min: None,
-                per_kb_max: None,
-                entropy_min: None,
-                entropy_max: None,
-            },
+            size_max: None,
+            count_min: None,
+            count_max: None,
+            per_kb_min: None,
+            per_kb_max: None,
+            entropy_min: None,
+            entropy_max: None,
+            size_min: None,
             not: None,
             unless: None,
             downgrade: None,

@@ -137,10 +137,10 @@ traits:
     crit: notable
     conf: 0.4
     for: [javascript, typescript]
+    count_min: 3
     if:
       type: string
       substr: "Buffer.from"
-      count_min: 3
 
   # Base64-encoded URL detector using decoded strings
   - id: base64-url

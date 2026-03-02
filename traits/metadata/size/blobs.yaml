@@ -9,9 +9,9 @@ defaults:
 traits:
   - id: large-embedded-b64-blob
     desc: Large embedded Base64 blob (>100KB)
+    count_min: 1
     if:
       type: encoded
       encoding: base64
       regex: "."
-      count_min: 1
       length_min: 102400

@@ -141,12 +141,12 @@ pub(crate) fn find_short_pattern_warnings(
     let mut warnings = Vec::new();
 
     for trait_def in trait_definitions {
-        // Check if trait has specificity constraints on ConditionWithFilters
+        // Check if trait has specificity constraints on TraitDefinition
         // count_min: 1 is not meaningful (it's the default), require count_min >= 2
-        let has_meaningful_count = trait_def.r#if.count_min.is_some_and(|c| c >= 2)
-            || trait_def.r#if.count_max.is_some()
-            || trait_def.r#if.per_kb_min.is_some()
-            || trait_def.r#if.per_kb_max.is_some();
+        let has_meaningful_count = trait_def.count_min.is_some_and(|c| c >= 2)
+            || trait_def.count_max.is_some()
+            || trait_def.per_kb_min.is_some()
+            || trait_def.per_kb_max.is_some();
 
         // Specific file type constraints provide specificity (not matching all file types)
         // For 3-char patterns, require no more than 3 specific file types
@@ -198,13 +198,13 @@ pub(crate) fn find_short_pattern_warnings(
         // Skip if trait has any specificity constraints
         if has_meaningful_count
             || has_specific_file_types
-            || has_location_constraints(&trait_def.r#if.condition)
+            || has_location_constraints(&trait_def.r#if)
         {
             continue;
         }
 
         // Check the condition
-        match &trait_def.r#if.condition {
+        match &trait_def.r#if {
             Condition::Raw { substr, regex, .. } => {
                 // Check substr length
                 if let Some(pattern) = substr {
@@ -273,7 +273,7 @@ pub(crate) fn find_short_pattern_warnings(
 /// weren't adapted for this codebase.
 pub(crate) fn find_non_capturing_groups(traits: &[TraitDefinition], warnings: &mut Vec<String>) {
     for trait_def in traits {
-        let pattern_opt = match &trait_def.r#if.condition {
+        let pattern_opt = match &trait_def.r#if {
             Condition::Raw {
                 regex: Some(ref regex_str),
                 ..
@@ -313,7 +313,7 @@ pub(crate) fn find_non_capturing_groups(traits: &[TraitDefinition], warnings: &m
 /// for common backtracking pitfalls.
 pub(crate) fn find_slow_regex_patterns(traits: &[TraitDefinition], warnings: &mut Vec<String>) {
     for trait_def in traits {
-        let pattern_opt = match &trait_def.r#if.condition {
+        let pattern_opt = match &trait_def.r#if {
             Condition::Raw {
                 regex: Some(ref regex_str),
                 case_insensitive,

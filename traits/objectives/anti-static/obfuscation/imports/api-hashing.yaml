@@ -17,12 +17,12 @@ traits:
     desc: ROR13 hash algorithm constant
     crit: component
     conf: 0.8
+    count_min: 15
+    per_kb_min: 0.05
     if:
       type: hex
       section: text
       pattern: "C1 C? 0D"  # ROR reg, 0x0D (rotate right 13 bits)
-      count_min: 15
-      per_kb_min: 0.05
 
   # DJB2 hash constant (5381 = 0x1505)
   # Note: This 4-byte pattern can appear randomly; only meaningful in composite rules
@@ -30,11 +30,11 @@ traits:
     desc: DJB2 hash algorithm constant (5381)
     crit: component
     conf: 0.75
+    count_min: 3
     if:
       type: hex
       section: data
       pattern: "05 15 00 00"  # Little-endian 0x1505
-      count_min: 3
 
   # FNV1a 32-bit offset basis (0x811c9dc5)
   - id: fnv1a-offset-basis

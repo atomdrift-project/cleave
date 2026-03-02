@@ -8,7 +8,7 @@ traits:
     # Removed for: to ensure it runs
 
     # Detects repeated uint definitions like 'var a0:uint;'
+    count_min: 1
     if:
       type: raw
       regex: "var\\s+a\\d+\\s*:\\s*uint"
-      count_min: 1

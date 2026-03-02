@@ -27,10 +27,10 @@ traits:
     crit: baseline
     conf: 0.95
     for: [pe]
+    count_min: 5
     if:
       type: symbol
       regex: "^(SteamAPI_|Steam_|Breakpad_Steam)"
-      count_min: 5
 
 composite_rules:
   - id: valve-corp-binary

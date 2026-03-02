@@ -18,12 +18,12 @@ traits:
     crit: notable
     conf: 0.8
     platforms: [linux, windows]
+    count_min: 8
+    per_kb_min: 0.03
     if:
       type: hex
       section: text
       pattern: "0F 05"
-      count_min: 8
-      per_kb_min: 0.03
     unless:
       - type: raw
         substr: "BSJB"  # .NET IL bytecode contains 0F 05 sequences that aren't syscalls
@@ -35,11 +35,11 @@ traits:
     conf: 0.85
     platforms: [linux]
     for: [elf]
+    count_min: 2
     if:
       type: hex
       section: text
       pattern: "CD 80"
-      count_min: 2
 
   # sysenter instruction (0F 34) - fast syscall on x86
   - id: sysenter-instruction
@@ -47,12 +47,12 @@ traits:
     crit: notable
     conf: 0.8
     platforms: [linux, windows]
+    count_min: 5
+    per_kb_min: 0.03
     if:
       type: hex
       section: text
       pattern: "0F 34"
-      count_min: 5
-      per_kb_min: 0.03
 
   # === ARM64 Syscall (macOS/Linux) ===
 
@@ -63,11 +63,11 @@ traits:
     conf: 0.9
     platforms: [macos]
     for: [macho]
+    count_min: 3
     if:
       type: hex
       section: text
       pattern: "01 10 00 D4"  # svc #0x80
-      count_min: 3
 
   # SVC #0 on Linux ARM64
   - id: svc-linux-arm64
@@ -76,11 +76,11 @@ traits:
     conf: 0.85
     platforms: [linux]
     for: [elf]
+    count_min: 3
     if:
       type: hex
       section: text
       pattern: "01 00 00 D4"  # svc #0
-      count_min: 3
 
   # === Syscall Number Patterns ===
 
@@ -91,11 +91,11 @@ traits:
     crit: suspicious
     conf: 0.9
     platforms: [linux, windows]
+    count_min: 2
     if:
       type: hex
       section: text
       pattern: "B8 ?? ?? ?? ?? 0F 05"
-      count_min: 2
 
   # Pattern: MOV R10, RCX ; MOV RAX, imm ; SYSCALL (Windows x64 convention)
   # 4C 8B D1 B8 XX XX XX XX 0F 05
@@ -117,11 +117,11 @@ traits:
     desc: High density of syscall instructions
     crit: suspicious
     conf: 0.85
+    per_kb_min: 5.0  # 5+ syscalls per KB is unusual
     if:
       type: hex
       section: text
       pattern: "0F 05"
-      per_kb_min: 5.0  # 5+ syscalls per KB is unusual
 
 composite_rules:
   # Linux x86/x64 direct syscall evasion

@@ -72,8 +72,6 @@ traits:
     conf: 0.8
     if:
       id: objectives/lateral-movement/supply-chain/electron::signal-app-path
-      near_bytes: 256
-      near_substr: "config.json"
 
   - id: signal-sql-db
     desc: Signal SQLite database path
@@ -81,8 +79,6 @@ traits:
     conf: 0.8
     if:
       id: objectives/lateral-movement/supply-chain/electron::signal-app-path
-      near_bytes: 256
-      near_substr: "db.sqlite"
 
   # === Slack Desktop atomic indicators ===
   # These reference electron/infection for base path detection, add specific file context
@@ -93,8 +89,6 @@ traits:
     conf: 0.8
     if:
       id: objectives/lateral-movement/supply-chain/electron::slack-app-path
-      near_bytes: 256
-      near_substr: "storage"
 
   - id: slack-indexeddb-path
     desc: Slack IndexedDB path
@@ -102,8 +96,6 @@ traits:
     conf: 0.8
     if:
       id: objectives/lateral-movement/supply-chain/electron::slack-app-path
-      near_bytes: 256
-      near_substr: "IndexedDB"
 
   # === WhatsApp Desktop atomic indicators ===
 

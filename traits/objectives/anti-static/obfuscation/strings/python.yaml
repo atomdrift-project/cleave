@@ -11,7 +11,7 @@ traits:
   - id: hex-encoding
     desc: Hex-encoded string pattern
     conf: 0.85
+    count_min: 5
     if:
       type: string
       regex: '\\x[0-9a-fA-F]{2}'
-      count_min: 5

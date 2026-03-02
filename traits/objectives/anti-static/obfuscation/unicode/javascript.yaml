@@ -13,11 +13,11 @@ traits:
     mbc: "B0032"
     attack: "T1027"
     for: [javascript, typescript]
+    count_min: 3
+    per_kb_min: 0.5
     if:
       type: string
       regex: "[^\\x00-\\x7F]{10,}"
-      count_min: 3
-      per_kb_min: 0.5
 
   # International script characters (Devanagari, Cyrillic, Arabic, etc.)
   # Note: fires frequently on i18n/localization code, use as component
@@ -28,10 +28,10 @@ traits:
     mbc: "B0032"
     attack: "T1027"
     for: [javascript, typescript]
+    count_min: 5
     if:
       type: string
       regex: "[\\p{Devanagari}\\p{Cyrillic}\\p{Arabic}\\p{Hebrew}\\p{Han}]"
-      count_min: 5
 
   # Mixed Unicode blocks in single string (sophisticated obfuscation)
   - id: mixed-unicode-blocks
@@ -41,10 +41,10 @@ traits:
     mbc: "B0032"
     attack: "T1027"
     for: [javascript, typescript]
+    count_min: 2
     if:
       type: raw
       regex: "[\\U00010000-\\U0010FFFF][\\u0900-\\u097F][\\U0001F000-\\U0001F999]"
-      count_min: 2
 
   # Unicode string concatenation patterns
   - id: unicode-string-concatenation
@@ -54,11 +54,11 @@ traits:
     mbc: "B0032"
     attack: "T1027"
     for: [javascript, typescript]
+    count_min: 5
+    per_kb_min: 0.3
     if:
       type: raw
       regex: "\\+\\s*[\"'][^\\x00-\\x7F]{3,}[\"']"
-      count_min: 5
-      per_kb_min: 0.3
 
   # String containing both Unicode and ASCII obfuscation
   # Note: fires on i18n code and math libraries, use as component
@@ -69,10 +69,10 @@ traits:
     mbc: "B0032"
     attack: "T1027"
     for: [javascript, typescript]
+    count_min: 10
     if:
       type: string
       regex: "[\\x00-\\x7F]{3,}[^\\x00-\\x7F]{3,}[\\x00-\\x7F]{3,}"
-      count_min: 10
 
   # Unusual Unicode characters in variable names
   - id: unicode-variable-names
@@ -82,10 +82,10 @@ traits:
     mbc: "B0032"
     attack: "T1027"
     for: [javascript, typescript]
+    count_min: 3
     if:
       type: raw
       regex: "[\\$a-zA-Z_][\\$a-zA-Z0-9_]*[^\\x00-\\x7F][\\$a-zA-Z0-9_]*"
-      count_min: 3
     unless:
       - type: raw
         substr: "defineLocale"

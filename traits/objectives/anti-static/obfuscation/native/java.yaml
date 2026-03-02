@@ -10,10 +10,10 @@ traits:
     mbc: "B0032"
     attack: "T1140"
     for: [class, java]
+    count_min: 3
     if:
       type: string
       regex: 'L[0-9]{1,3};'
-      count_min: 3
 
   # Java misspelled class component traits
   - id: manger-typo
@@ -47,10 +47,10 @@ traits:
     mbc: "B0032"
     attack: "T1140"
     for: [class, java]
+    count_min: 3
     if:
       type: string
       regex: '[a-z]\.class'
-      count_min: 3
 
 composite_rules:
   - id: java-misspelled-system-classes

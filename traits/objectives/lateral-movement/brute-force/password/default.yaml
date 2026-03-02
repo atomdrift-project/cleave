@@ -6,10 +6,10 @@ traits:
     attack: T1110.001
     for:
       - elf
+    count_min: 2
     if:
       type: string
       exact: "123456"
-      count_min: 2
   - id: literal-password
     desc: "Default credential: password"
     crit: notable
@@ -86,20 +86,20 @@ traits:
     conf: 0.7
     for:
       - elf
+    count_min: 8
     if:
       type: string
       regex: '[\x00-\x1f](admin|root|password|default)[\x00-\x1f]?'
-      count_min: 8
   - id: credential-wordlist-2
     desc: Dense credential wordlist (guest/user/1234/qwerty)
     crit: notable
     conf: 0.7
     for:
       - elf
+    count_min: 8
     if:
       type: string
       regex: '[\x00-\x1f](guest|user|1234|qwerty)[\x00-\x1f]?'
-      count_min: 8
 composite_rules:
   - id: credential-wordlist
     desc: Dense credential wordlist (brute-force dictionary)

@@ -21,10 +21,10 @@ traits:
     crit: suspicious
     conf: 0.9
     mbc: C0021
+    count_min: 2
     if:
       type: symbol
       regex: "^Nt(Allocate|Write|Protect)VirtualMemory$"
-      count_min: 2
 
   - id: ntdll-direct-memory-op-b
     desc: Direct NT memory manipulation (view/query)
@@ -39,10 +39,10 @@ traits:
     desc: Direct NT process/thread manipulation
     crit: suspicious
     conf: 0.9
+    count_min: 2
     if:
       type: symbol
       regex: "^Nt(Create|Open)(Process|Thread)(Ex)?$"
-      count_min: 2
 
   # === Pointer Encoding ===
   - id: encode-pointer

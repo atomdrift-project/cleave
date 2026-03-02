@@ -122,143 +122,10 @@ fn get_relative_source_file(path: &std::path::Path) -> Option<String> {
         .map(std::string::ToString::to_string)
 }
 
-/// Wrapper for conditions with common filters applied at trait level.
-/// Uses #[serde(flatten)] to merge filters into the if: block ergonomically.
-#[derive(Debug, Clone, Deserialize, Serialize)]
-pub(crate) struct ConditionWithFilters {
-    /// The actual condition (symbol, string, raw, etc.)
-    #[serde(flatten)]
-    pub condition: Condition,
-
-    /// Minimum file size in bytes - checked before evaluating condition
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub size_min: Option<usize>,
-
-    /// Maximum file size in bytes - checked before evaluating condition
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub size_max: Option<usize>,
-
-    /// Minimum match count - trait matches only if condition matches at least this many times
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub count_min: Option<usize>,
-
-    /// Maximum match count - trait fails if condition matches more than this many times
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub count_max: Option<usize>,
-
-    /// Minimum matches per kilobyte of file size (density threshold)
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub per_kb_min: Option<f64>,
-
-    /// Maximum matches per kilobyte of file size (density ceiling)
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub per_kb_max: Option<f64>,
-
-    /// Minimum file entropy (0.0-8.0) - checked before evaluating condition
-    /// Uses binary.overall_entropy for binaries, text.char_entropy for scripts
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub entropy_min: Option<f64>,
-
-    /// Maximum file entropy (0.0-8.0) - checked before evaluating condition
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub entropy_max: Option<f64>,
-}
-
-impl ConditionWithFilters {
-    /// Delegate method calls to the underlying condition
-    pub(crate) fn precompile_regexes(&mut self) -> anyhow::Result<()> {
-        self.condition.precompile_regexes()
-    }
-
-    #[must_use]
-    pub(crate) fn can_match_file_type(&self, file_type: &FileType) -> bool {
-        self.condition.can_match_file_type(file_type)
-    }
-
-    pub(crate) fn validate(&self, _trait_id: &str, full: bool) -> Result<(), String> {
-        self.condition.validate(full).map_err(|e| e.to_string())
-    }
-
-    #[must_use]
-    pub(crate) fn check_greedy_patterns(&self, _trait_id: &str) -> Option<String> {
-        self.condition.check_greedy_patterns()
-    }
-
-    #[must_use]
-    pub(crate) fn check_word_boundary_regex(&self, _trait_id: &str) -> Option<String> {
-        self.condition.check_word_boundary_regex()
-    }
-
-    #[must_use]
-    pub(crate) fn check_short_case_insensitive(&self, file_type_count: usize) -> Option<String> {
-        self.condition.check_short_case_insensitive(file_type_count)
-    }
-
-    #[must_use]
-    pub(crate) fn check_count_constraints(&self, _trait_id: &str) -> Option<String> {
-        // Check count_min and count_max on ConditionWithFilters
-        if let (Some(min), Some(max)) = (self.count_min, self.count_max) {
-            if max < min {
-                return Some(format!(
-                    "count_max ({}) is less than count_min ({})",
-                    max, min
-                ));
-            }
-        }
-        // Also check condition-level constraints
-        self.condition.check_count_constraints()
-    }
-
-    #[must_use]
-    pub(crate) fn check_density_constraints(&self, _trait_id: &str) -> Option<String> {
-        // Check per_kb_min and per_kb_max on ConditionWithFilters
-        if let (Some(min), Some(max)) = (self.per_kb_min, self.per_kb_max) {
-            if max < min {
-                return Some(format!(
-                    "per_kb_max ({}) is less than per_kb_min ({})",
-                    max, min
-                ));
-            }
-        }
-        // Also check condition-level constraints
-        self.condition.check_density_constraints()
-    }
-
-    #[must_use]
-    pub(crate) fn check_match_exclusivity(&self, _trait_id: &str) -> Option<String> {
-        self.condition.check_match_exclusivity()
-    }
-
-    #[must_use]
-    pub(crate) fn check_empty_patterns(&self, _trait_id: &str) -> Option<String> {
-        self.condition.check_empty_patterns()
-    }
-
-    #[must_use]
-    pub(crate) fn check_short_patterns(&self, _trait_id: &str) -> Option<String> {
-        self.condition.check_short_patterns()
-    }
-
-    #[must_use]
-    pub(crate) fn check_literal_regex(&self, _trait_id: &str) -> Option<String> {
-        self.condition.check_literal_regex()
-    }
-
-    #[must_use]
-    pub(crate) fn check_case_insensitive_on_non_alpha(&self, _trait_id: &str) -> Option<String> {
-        self.condition.check_case_insensitive_on_non_alpha()
-    }
-
-    #[must_use]
-    pub(crate) fn check_count_min_value(&self, _trait_id: &str) -> Option<String> {
-        // Check count_min on ConditionWithFilters
-        if let Some(0) = self.count_min {
-            return Some("count_min: 0 is meaningless (default is 1)".to_string());
-        }
-        // Also check condition-level validation
-        self.condition.check_count_min_value()
-    }
-}
+// NOTE: ConditionWithFilters was removed. Filter fields (count_min, count_max,
+// per_kb_min, per_kb_max, entropy_min, entropy_max, size_min, size_max) now
+// live directly on TraitDefinition. The `if:` field is now a plain Condition,
+// which enables `deny_unknown_fields` on it (serde's flatten prevented this).
 
 /// Conditions for a downgrade level (supports composite syntax)
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -310,20 +177,51 @@ pub(crate) struct TraitDefinition {
     #[serde(default = "default_file_types")]
     pub r#for: Vec<FileType>,
 
-    // Detection condition with filters - all matching logic in one place
-    /// The detection condition with optional filters
-    pub r#if: ConditionWithFilters,
+    /// The detection condition (plain Condition — no flatten, enables deny_unknown_fields)
+    pub r#if: Condition,
 
-    /// String-level exceptions - filter matched strings
+    /// Minimum file size in bytes — checked before evaluating condition
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub size_min: Option<usize>,
+
+    /// Maximum file size in bytes — checked before evaluating condition
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub size_max: Option<usize>,
+
+    /// Minimum match count — trait matches only if condition matches at least this many times
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub count_min: Option<usize>,
+
+    /// Maximum match count — trait fails if condition matches more than this many times
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub count_max: Option<usize>,
+
+    /// Minimum matches per kilobyte of file size (density threshold)
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub per_kb_min: Option<f64>,
+
+    /// Maximum matches per kilobyte of file size (density ceiling)
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub per_kb_max: Option<f64>,
+
+    /// Minimum file entropy (0.0–8.0) — checked before evaluating condition
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub entropy_min: Option<f64>,
+
+    /// Maximum file entropy (0.0–8.0) — checked before evaluating condition
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub entropy_max: Option<f64>,
+
+    /// String-level exceptions — filter matched strings
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub not: Option<Vec<NotException>>,
 
-    /// File-level skip conditions - composite rule that skips trait if matched
+    /// File-level skip conditions — composite rule that skips trait if matched
     /// Default semantics: skip if ANY condition matches (unless: [list])
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub unless: Option<Vec<Condition>>,
 
-    /// Criticality downgrade rules - map of target criticality to conditions
+    /// Criticality downgrade rules — map of target criticality to conditions
     /// Only levels LOWER than base `crit` are allowed (validated at load time)
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub downgrade: Option<DowngradeConditions>,
@@ -339,8 +237,7 @@ impl TraitDefinition {
     /// Pre-compile all regexes in this trait's conditions for performance.
     /// Returns an error if any regex pattern is invalid.
     pub(crate) fn precompile_regexes(&mut self) -> anyhow::Result<()> {
-        self.r#if
-            .precompile_regexes()
+        self.r#if.precompile_regexes()
             .with_context(|| format!("in trait '{}' main condition", self.id))?;
         if let Some(ref mut conds) = self.unless {
             for (idx, cond) in conds.iter_mut().enumerate() {
@@ -393,7 +290,7 @@ impl TraitDefinition {
     /// Also compiles any `unless` YARA conditions independently (they are rare).
     pub(crate) fn set_yara_if_namespace(&mut self) {
         let ns = format!("inline.{}", self.id);
-        self.r#if.condition.set_yara_namespace(ns);
+        self.r#if.set_yara_namespace(ns);
         // Still compile unless conditions the old way — they are rare and not in the combined engine
         if let Some(ref mut conds) = self.unless {
             for cond in conds.iter_mut() {
@@ -437,11 +334,11 @@ impl TraitDefinition {
     pub(crate) fn check_size_constraints(&self) -> Option<String> {
         // Skip validation for Section conditions - they have their own size_min/size_max
         // for section sizes, which are separate from file size constraints
-        if matches!(self.r#if.condition, Condition::Section { .. }) {
+        if matches!(self.r#if, Condition::Section { .. }) {
             return None;
         }
 
-        if let (Some(min), Some(max)) = (self.r#if.size_min, self.r#if.size_max) {
+        if let (Some(min), Some(max)) = (self.size_min, self.size_max) {
             if max < min {
                 return Some(format!(
                     "size_max ({}) cannot be less than size_min ({})",
@@ -457,7 +354,7 @@ impl TraitDefinition {
     #[must_use]
     pub(crate) fn check_entropy_constraints(&self) -> Option<String> {
         // Validate entropy range (0.0-8.0)
-        if let Some(min) = self.r#if.entropy_min {
+        if let Some(min) = self.entropy_min {
             if !(0.0..=8.0).contains(&min) {
                 return Some(format!(
                     "entropy_min ({:.2}) must be between 0.0 and 8.0",
@@ -465,7 +362,7 @@ impl TraitDefinition {
                 ));
             }
         }
-        if let Some(max) = self.r#if.entropy_max {
+        if let Some(max) = self.entropy_max {
             if !(0.0..=8.0).contains(&max) {
                 return Some(format!(
                     "entropy_max ({:.2}) must be between 0.0 and 8.0",
@@ -473,7 +370,7 @@ impl TraitDefinition {
                 ));
             }
         }
-        if let (Some(min), Some(max)) = (self.r#if.entropy_min, self.r#if.entropy_max) {
+        if let (Some(min), Some(max)) = (self.entropy_min, self.entropy_max) {
             if max < min {
                 return Some(format!(
                     "entropy_max ({:.2}) cannot be less than entropy_min ({:.2})",
@@ -482,6 +379,43 @@ impl TraitDefinition {
             }
         }
         None
+    }
+
+    /// Check if count constraints are valid.
+    #[must_use]
+    pub(crate) fn check_count_constraints(&self) -> Option<String> {
+        if let (Some(min), Some(max)) = (self.count_min, self.count_max) {
+            if max < min {
+                return Some(format!(
+                    "count_max ({}) is less than count_min ({})",
+                    max, min
+                ));
+            }
+        }
+        self.r#if.check_count_constraints()
+    }
+
+    /// Check if density constraints are valid.
+    #[must_use]
+    pub(crate) fn check_density_constraints(&self) -> Option<String> {
+        if let (Some(min), Some(max)) = (self.per_kb_min, self.per_kb_max) {
+            if max < min {
+                return Some(format!(
+                    "per_kb_max ({}) is less than per_kb_min ({})",
+                    max, min
+                ));
+            }
+        }
+        self.r#if.check_density_constraints()
+    }
+
+    /// Check for meaningless count_min: 0.
+    #[must_use]
+    pub(crate) fn check_count_min_value(&self) -> Option<String> {
+        if let Some(0) = self.count_min {
+            return Some("count_min: 0 is meaningless (default is 1)".to_string());
+        }
+        self.r#if.check_count_min_value()
     }
 
     /// Check for empty or very short descriptions (common LLM mistake).
@@ -559,7 +493,7 @@ impl TraitDefinition {
             }
         }
 
-        match &self.r#if.condition {
+        match &self.r#if {
             // Symbol conditions with not: - validate exceptions match the pattern
             Condition::Symbol {
                 exact: Some(_),
@@ -798,7 +732,7 @@ impl TraitDefinition {
     #[must_use]
     pub(crate) fn has_trait_dependency(&self) -> bool {
         // Check main condition
-        if self.r#if.condition.is_trait_reference() {
+        if self.r#if.is_trait_reference() {
             return true;
         }
 
@@ -879,7 +813,7 @@ impl TraitDefinition {
 
         // Check size constraints (from if: block)
         let file_size = ctx.report.target.size_bytes as usize;
-        if let Some(min) = self.r#if.size_min {
+        if let Some(min) = self.size_min {
             if file_size < min {
                 if let Some(collector) = &ctx.debug_collector {
                     if let Ok(mut debug) = collector.write() {
@@ -892,7 +826,7 @@ impl TraitDefinition {
                 return None;
             }
         }
-        if let Some(max) = self.r#if.size_max {
+        if let Some(max) = self.size_max {
             if file_size > max {
                 if let Some(collector) = &ctx.debug_collector {
                     if let Ok(mut debug) = collector.write() {
@@ -908,7 +842,7 @@ impl TraitDefinition {
 
         // Check entropy constraints (from if: block)
         // Uses binary.overall_entropy for binaries, text.char_entropy for scripts
-        if self.r#if.entropy_min.is_some() || self.r#if.entropy_max.is_some() {
+        if self.entropy_min.is_some() || self.entropy_max.is_some() {
             let file_entropy = ctx
                 .report
                 .metrics
@@ -922,7 +856,7 @@ impl TraitDefinition {
                 })
                 .unwrap_or(0.0);
 
-            if let Some(min) = self.r#if.entropy_min {
+            if let Some(min) = self.entropy_min {
                 if file_entropy < min {
                     if let Some(collector) = &ctx.debug_collector {
                         if let Ok(mut debug) = collector.write() {
@@ -935,7 +869,7 @@ impl TraitDefinition {
                     return None;
                 }
             }
-            if let Some(max) = self.r#if.entropy_max {
+            if let Some(max) = self.entropy_max {
                 if file_entropy > max {
                     if let Some(collector) = &ctx.debug_collector {
                         if let Ok(mut debug) = collector.write() {
@@ -971,7 +905,7 @@ impl TraitDefinition {
 
         // Evaluate the condition (traits only have one atomic condition) with timeout protection
         let start = Instant::now();
-        let result = self.eval_condition(&self.r#if.condition, ctx);
+        let result = self.eval_condition(&self.r#if, ctx);
         let duration = start.elapsed();
 
         // Check for timeout violations (potential anti-analysis technique)
@@ -1046,7 +980,7 @@ impl TraitDefinition {
             let file_kb = (file_size as f64) / 1024.0;
 
             // Check count_min constraint
-            if let Some(min) = self.r#if.count_min {
+            if let Some(min) = self.count_min {
                 if match_count < min {
                     if let Some(collector) = &ctx.debug_collector {
                         if let Ok(mut debug) = collector.write() {
@@ -1061,7 +995,7 @@ impl TraitDefinition {
             }
 
             // Check count_max constraint
-            if let Some(max) = self.r#if.count_max {
+            if let Some(max) = self.count_max {
                 if match_count > max {
                     if let Some(collector) = &ctx.debug_collector {
                         if let Ok(mut debug) = collector.write() {
@@ -1076,7 +1010,7 @@ impl TraitDefinition {
             }
 
             // Check per_kb_min constraint (density threshold)
-            if let Some(min_density) = self.r#if.per_kb_min {
+            if let Some(min_density) = self.per_kb_min {
                 if file_kb > 0.0 {
                     let actual_density = (match_count as f64) / file_kb;
                     if actual_density < min_density {
@@ -1094,7 +1028,7 @@ impl TraitDefinition {
             }
 
             // Check per_kb_max constraint (density ceiling)
-            if let Some(max_density) = self.r#if.per_kb_max {
+            if let Some(max_density) = self.per_kb_max {
                 if file_kb > 0.0 {
                     let actual_density = (match_count as f64) / file_kb;
                     if actual_density > max_density {

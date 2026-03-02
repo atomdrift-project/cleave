@@ -32,10 +32,10 @@ traits:
     crit: suspicious
     conf: 0.85
     for: [batch]
+    count_min: 5
     if:
       type: raw
       regex: '(?i)set\s+[^=]{1,120}=[^ \t\n\r]{1,4}([\t\r\n ]|$)'
-      count_min: 5
 
   # Base64-like payload in set command
   - id: batch-base64-payload
@@ -63,21 +63,21 @@ traits:
     desc: Excessive undefined variable references
     crit: suspicious
     conf: 0.85
+    count_min: 10
     if:
       type: raw
       # Long random-looking variable names used as noise
       regex: '%[a-zA-Z][a-zA-Z0-9]{5,30}%'
-      count_min: 10
 
   # REM comment noise (random words as padding)
   - id: batch-rem-noise-padding
     desc: REM comments with random word padding
     crit: notable
     conf: 0.7
+    count_min: 2
     if:
       type: raw
       regex: '(?im)^REM\s+[a-z]+(\s+[a-z]+){4,}\s*$'
-      count_min: 2
 
 composite_rules:
   - id: batch-heavy-obfuscation

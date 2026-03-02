@@ -80,7 +80,7 @@ pub(crate) fn find_impossible_size_constraints(
     let mut violations = Vec::new();
 
     for t in trait_definitions {
-        if let (Some(min), Some(max)) = (t.r#if.size_min, t.r#if.size_max) {
+        if let (Some(min), Some(max)) = (t.size_min, t.size_max) {
             if min > max {
                 violations.push((t.id.clone(), min, max, false));
             }
@@ -108,8 +108,8 @@ pub(crate) fn find_impossible_count_constraints(
     let mut violations = Vec::new();
 
     for t in trait_definitions {
-        // count_min and count_max are now at trait level in ConditionWithFilters
-        if let (Some(min), Some(max)) = (t.r#if.count_min, t.r#if.count_max) {
+        // count_min and count_max are now at trait level on TraitDefinition
+        if let (Some(min), Some(max)) = (t.count_min, t.count_max) {
             if min > max {
                 violations.push((t.id.clone(), min, max));
             }
@@ -162,7 +162,7 @@ pub(crate) fn find_missing_search_patterns(trait_definitions: &[TraitDefinition]
     let mut violations = Vec::new();
 
     for t in trait_definitions {
-        let has_pattern = match &t.r#if.condition {
+        let has_pattern = match &t.r#if {
             Condition::String {
                 exact,
                 substr,
@@ -229,7 +229,7 @@ pub(crate) fn find_pure_alias_traits(
 
     for t in trait_definitions {
         // Check if the condition is a trait reference
-        let Condition::Trait { id: ref_id } = &t.r#if.condition else {
+        let Condition::Trait { id: ref_id } = &t.r#if else {
             continue;
         };
 
@@ -244,12 +244,12 @@ pub(crate) fn find_pure_alias_traits(
         }
 
         // Check for any filtering constraints that add value
-        let has_filters = t.r#if.count_min.is_some()
-            || t.r#if.count_max.is_some()
-            || t.r#if.size_min.is_some()
-            || t.r#if.size_max.is_some()
-            || t.r#if.per_kb_min.is_some()
-            || t.r#if.per_kb_max.is_some();
+        let has_filters = t.count_min.is_some()
+            || t.count_max.is_some()
+            || t.size_min.is_some()
+            || t.size_max.is_some()
+            || t.per_kb_min.is_some()
+            || t.per_kb_max.is_some();
 
         if has_filters {
             continue;
@@ -448,7 +448,7 @@ pub(crate) fn find_orphaned_components(
 
     // Collect trait references from atomic traits (if: id: form)
     for trait_def in trait_definitions {
-        if let Condition::Trait { id } = &trait_def.r#if.condition {
+        if let Condition::Trait { id } = &trait_def.r#if {
             if id.contains("::") {
                 referenced_ids.insert(id.clone());
             } else if id.contains('/') {

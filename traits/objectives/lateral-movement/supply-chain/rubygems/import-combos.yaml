@@ -103,10 +103,10 @@ traits:
     desc: Dense hex escape sequences
     crit: suspicious
     conf: 0.85
+    count_min: 10
     if:
       type: string
       regex: "\\\\x[0-9a-f]{2}\\\\x[0-9a-f]{2}"
-      count_min: 10
 
   - id: pack-hex
     desc: pack('H*') hex decode

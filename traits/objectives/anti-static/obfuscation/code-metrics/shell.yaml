@@ -112,11 +112,11 @@ traits:
     conf: 0.90
     mbc: "B0032"
     attack: "T1027"
+    count_min: 5
+    per_kb_min: 1.0
     if:
       type: raw
       regex: "\\$'[^']{0,120}\\\\x[0-9a-fA-F]{2}"
-      count_min: 5
-      per_kb_min: 1.0
 
   # $'\NNN' octal escapes
   - id: sh-dense-octal-escapes
@@ -125,11 +125,11 @@ traits:
     conf: 0.88
     mbc: "B0032"
     attack: "T1027"
+    count_min: 5
+    per_kb_min: 1.0
     if:
       type: raw
       regex: "\\$'[^']{0,120}\\\\[0-7]{3}"
-      count_min: 5
-      per_kb_min: 1.0
 
   # Nested command substitution used to hide commands
   - id: sh-dense-command-subst
@@ -138,11 +138,11 @@ traits:
     conf: 0.85
     mbc: "B0032"
     attack: "T1027"
+    count_min: 4
+    per_kb_min: 0.8
     if:
       type: raw
       regex: "\\$\\([^)]{0,120}\\$\\("
-      count_min: 4
-      per_kb_min: 0.8
 
   # eval chains: eval "$(eval "$(..."
   - id: sh-dense-eval-chains
@@ -151,11 +151,11 @@ traits:
     conf: 0.92
     mbc: "B0032"
     attack: "T1027"
+    count_min: 3
+    per_kb_min: 0.5
     if:
       type: raw
       regex: "eval\\s"
-      count_min: 3
-      per_kb_min: 0.5
     unless:
       # Legitimate build/doc tools use eval "$cmd" to log-then-execute
       - type: raw
@@ -168,11 +168,11 @@ traits:
     conf: 0.88
     mbc: "B0032"
     attack: "T1027"
+    count_min: 4
+    per_kb_min: 0.8
     if:
       type: raw
       regex: 'printf\s+["\x27]%s["\x27]|printf\s+["\x27]\\\\x'
-      count_min: 4
-      per_kb_min: 0.8
 
 composite_rules:
   - id: sh-encoded-dropper

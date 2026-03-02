@@ -398,7 +398,7 @@ impl super::CapabilityMapper {
                 // Validate YARA/AST conditions at load time
                 trait_def
                     .r#if
-                    .validate(&trait_def.id, enable_full_validation)
+                    .validate(enable_full_validation)
                     .map_err(|e| anyhow::anyhow!("{}", e))
                     .with_context(|| {
                         format!(
@@ -409,14 +409,14 @@ impl super::CapabilityMapper {
                 // Per-trait validation checks - skip when validation is disabled
                 if enable_full_validation {
                     // Check for greedy regex patterns
-                    if let Some(warning) = trait_def.r#if.check_greedy_patterns(&trait_def.id) {
+                    if let Some(warning) = trait_def.r#if.check_greedy_patterns() {
                         warnings.push(format!(
                             "trait '{}' in {:?}: {}",
                             trait_def.id, path, warning
                         ));
                     }
                     // Check for word boundary regex patterns that should use type: word
-                    if let Some(warning) = trait_def.r#if.check_word_boundary_regex(&trait_def.id) {
+                    if let Some(warning) = trait_def.r#if.check_word_boundary_regex() {
                         warnings.push(format!(
                             "trait '{}' in {:?}: {}",
                             trait_def.id, path, warning
@@ -474,16 +474,16 @@ impl super::CapabilityMapper {
                         ));
                     }
 
-                    // Check for invalid count constraints in condition
-                    if let Some(warning) = trait_def.r#if.check_count_constraints(&trait_def.id) {
+                    // Check for invalid count constraints
+                    if let Some(warning) = trait_def.check_count_constraints() {
                         warnings.push(format!(
                             "trait '{}' in {:?}: {}",
                             trait_def.id, path, warning
                         ));
                     }
 
-                    // Check for invalid density constraints in condition
-                    if let Some(warning) = trait_def.r#if.check_density_constraints(&trait_def.id) {
+                    // Check for invalid density constraints
+                    if let Some(warning) = trait_def.check_density_constraints() {
                         warnings.push(format!(
                             "trait '{}' in {:?}: {}",
                             trait_def.id, path, warning
@@ -491,7 +491,7 @@ impl super::CapabilityMapper {
                     }
 
                     // Check for mutually exclusive match types in condition
-                    if let Some(warning) = trait_def.r#if.check_match_exclusivity(&trait_def.id) {
+                    if let Some(warning) = trait_def.r#if.check_match_exclusivity() {
                         warnings.push(format!(
                             "trait '{}' in {:?}: {}",
                             trait_def.id, path, warning
@@ -499,7 +499,7 @@ impl super::CapabilityMapper {
                     }
 
                     // Check for empty patterns
-                    if let Some(warning) = trait_def.r#if.check_empty_patterns(&trait_def.id) {
+                    if let Some(warning) = trait_def.r#if.check_empty_patterns() {
                         warnings.push(format!(
                             "trait '{}' in {:?}: {}",
                             trait_def.id, path, warning
@@ -507,7 +507,7 @@ impl super::CapabilityMapper {
                     }
 
                     // Check for overly short patterns
-                    if let Some(warning) = trait_def.r#if.check_short_patterns(&trait_def.id) {
+                    if let Some(warning) = trait_def.r#if.check_short_patterns() {
                         warnings.push(format!(
                             "trait '{}' in {:?}: {}",
                             trait_def.id, path, warning
@@ -515,7 +515,7 @@ impl super::CapabilityMapper {
                     }
 
                     // Check for literal strings used as regex
-                    if let Some(warning) = trait_def.r#if.check_literal_regex(&trait_def.id) {
+                    if let Some(warning) = trait_def.r#if.check_literal_regex() {
                         warnings.push(format!(
                             "trait '{}' in {:?}: {}",
                             trait_def.id, path, warning
@@ -525,7 +525,7 @@ impl super::CapabilityMapper {
                     // Check for useless case_insensitive
                     if let Some(warning) = trait_def
                         .r#if
-                        .check_case_insensitive_on_non_alpha(&trait_def.id)
+                        .check_case_insensitive_on_non_alpha()
                     {
                         warnings.push(format!(
                             "trait '{}' in {:?}: {}",
@@ -534,7 +534,7 @@ impl super::CapabilityMapper {
                     }
 
                     // Check for count_min: 0
-                    if let Some(warning) = trait_def.r#if.check_count_min_value(&trait_def.id) {
+                    if let Some(warning) = trait_def.check_count_min_value() {
                         warnings.push(format!(
                             "trait '{}' in {:?}: {}",
                             trait_def.id, path, warning
@@ -598,7 +598,7 @@ impl super::CapabilityMapper {
                     platforms: _,
                     compiled_regex: _,
                     ..
-                } = &trait_def.r#if.condition
+                } = &trait_def.r#if
                 {
                     // If exact is specified, add it directly
                     if let Some(exact_val) = exact {
@@ -774,11 +774,11 @@ impl super::CapabilityMapper {
         // namespace here — actual compilation and scanning happen in the engine.
         let yara_count_traits = trait_definitions
             .iter()
-            .filter(|t| matches!(t.r#if.condition, Condition::Yara { .. }))
+            .filter(|t| matches!(t.r#if, Condition::Yara { .. }))
             .count();
 
         trait_definitions.par_iter_mut().for_each(|t| {
-            if matches!(t.r#if.condition, Condition::Yara { .. }) {
+            if matches!(t.r#if, Condition::Yara { .. }) {
                 // Set namespace for the combined engine; also compiles any `unless` YARA conditions.
                 t.set_yara_if_namespace();
             }

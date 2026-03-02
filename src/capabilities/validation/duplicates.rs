@@ -72,10 +72,23 @@ pub(crate) fn find_duplicate_traits_and_composites(
             .map(|chunk| {
                 let mut local_map: HashMap<u64, Vec<String>> = HashMap::with_capacity(chunk.len());
                 for t in chunk {
-                    // Serialize the trait's unique characteristics
-                    // Note: size_min/size_max are already inside r#if, no need to serialize separately
+                    // Serialize the trait's unique characteristics including filter fields
                     if let Ok(serialized) = bincode::serde::encode_to_vec(
-                        (&t.r#if, &t.platforms, &t.r#for, &t.not, &t.unless),
+                        (
+                            &t.r#if,
+                            &t.platforms,
+                            &t.r#for,
+                            &t.not,
+                            &t.unless,
+                            &t.size_min,
+                            &t.size_max,
+                            &t.count_min,
+                            &t.count_max,
+                            &t.per_kb_min,
+                            &t.per_kb_max,
+                            &t.entropy_min,
+                            &t.entropy_max,
+                        ),
                         bincode::config::standard(),
                     ) {
                         // Hash the serialized data to get a u64 key (much faster HashMap operations)
@@ -392,10 +405,10 @@ fn extract_patterns(trait_def: &TraitDefinition) -> Vec<(String, PatternLocation
                 match_type: match_type.to_string(),
                 original_value: value,
                 for_types: for_types.clone(),
-                count_min: trait_def.r#if.count_min,
-                count_max: trait_def.r#if.count_max,
-                per_kb_min: trait_def.r#if.per_kb_min,
-                per_kb_max: trait_def.r#if.per_kb_max,
+                count_min: trait_def.count_min,
+                count_max: trait_def.count_max,
+                per_kb_min: trait_def.per_kb_min,
+                per_kb_max: trait_def.per_kb_max,
                 confidence: trait_def.conf,
                 criticality: trait_def.crit,
             },
@@ -403,7 +416,7 @@ fn extract_patterns(trait_def: &TraitDefinition) -> Vec<(String, PatternLocation
     };
 
     // Extract patterns from String, Symbol, and Raw conditions
-    match &trait_def.r#if.condition {
+    match &trait_def.r#if {
         Condition::String {
             exact,
             substr,
@@ -1298,7 +1311,7 @@ pub(crate) fn check_case_insensitive_overlaps(
             };
 
         // Extract patterns from conditions that support case_insensitive
-        match &trait_def.r#if.condition {
+        match &trait_def.r#if {
             Condition::String {
                 exact,
                 substr,
@@ -1555,7 +1568,7 @@ pub(crate) fn check_regex_contains_literal(
             });
         };
 
-        match &trait_def.r#if.condition {
+        match &trait_def.r#if {
             Condition::String { regex: Some(r), .. } => add_regex("string", r.clone()),
             Condition::Symbol { regex: Some(r), .. } => add_regex("symbol", r.clone()),
             Condition::Raw { regex: Some(r), .. } => add_regex("raw", r.clone()),
@@ -1588,7 +1601,7 @@ pub(crate) fn check_regex_contains_literal(
             });
         };
 
-        match &trait_def.r#if.condition {
+        match &trait_def.r#if {
             Condition::String {
                 exact,
                 substr,
@@ -1845,7 +1858,7 @@ pub(crate) fn check_regex_alternative_subsets(
             }
         };
 
-        match &trait_def.r#if.condition {
+        match &trait_def.r#if {
             Condition::String {
                 regex: Some(r),
                 case_insensitive,
@@ -2040,7 +2053,7 @@ pub(crate) fn validate_regex_overlap_with_literal(
         Vec::new();
 
     for t in trait_definitions {
-        match &t.r#if.condition {
+        match &t.r#if {
             Condition::String { exact: Some(s), .. } | Condition::Symbol { exact: Some(s), .. } => {
                 literal_patterns.push((
                     s.clone(),
@@ -2070,7 +2083,7 @@ pub(crate) fn validate_regex_overlap_with_literal(
 
     // Check regex patterns against literal patterns
     for t in trait_definitions {
-        let regex_pattern = match &t.r#if.condition {
+        let regex_pattern = match &t.r#if {
             Condition::String { regex: Some(r), .. } | Condition::Symbol { regex: Some(r), .. } => {
                 Some(r)
             }
@@ -2170,7 +2183,7 @@ pub(crate) fn find_string_content_collisions(
     let mut groups: SignatureGroup = HashMap::new();
 
     for t in trait_definitions {
-        if let Some((is_string, sig)) = extract_match_signature(&t.r#if.condition) {
+        if let Some((is_string, sig)) = extract_match_signature(&t.r#if) {
             // Create a key that includes criticality, for, and platforms
             let crit_key = format!("{:?}", t.crit);
             let for_key = format!("{:?}", t.r#for);
@@ -2229,8 +2242,21 @@ pub(crate) fn find_for_only_duplicates(
 
     for t in trait_definitions {
         let signature = format!(
-            "{:?}:{:?}:{:.2}:{:?}:{:?}:{:?}:{:?}:{:?}",
-            t.r#if, t.crit, t.conf, t.platforms, t.r#if.size_min, t.r#if.size_max, t.not, t.unless
+            "{:?}:{:?}:{:.2}:{:?}:{:?}:{:?}:{:?}:{:?}:{:?}:{:?}:{:?}:{:?}:{:?}:{:?}",
+            t.r#if,
+            t.crit,
+            t.conf,
+            t.platforms,
+            t.size_min,
+            t.size_max,
+            t.count_min,
+            t.count_max,
+            t.per_kb_min,
+            t.per_kb_max,
+            t.entropy_min,
+            t.entropy_max,
+            t.not,
+            t.unless,
         );
         groups
             .entry(signature)
@@ -2278,8 +2304,21 @@ pub(crate) fn find_atomic_logic_duplicates(
     let mut groups: HashMap<String, Vec<&TraitDefinition>> = HashMap::new();
 
     for t in trait_definitions {
-        // Create signature from matching logic only
-        let signature = format!("{:?}:{:?}:{:?}", t.r#if, t.not, t.unless);
+        // Create signature from matching logic including filter fields
+        let signature = format!(
+            "{:?}:{:?}:{:?}:{:?}:{:?}:{:?}:{:?}:{:?}:{:?}:{:?}:{:?}",
+            t.r#if,
+            t.not,
+            t.unless,
+            t.size_min,
+            t.size_max,
+            t.count_min,
+            t.count_max,
+            t.per_kb_min,
+            t.per_kb_max,
+            t.entropy_min,
+            t.entropy_max,
+        );
         groups.entry(signature).or_default().push(t);
     }
 
@@ -2359,7 +2398,7 @@ pub(crate) fn find_alternation_merge_candidates(
     let mut groups: HashMap<String, Vec<(String, String)>> = HashMap::new(); // key -> [(trait_id, regex)]
 
     for t in trait_definitions {
-        let regex_pattern = match &t.r#if.condition {
+        let regex_pattern = match &t.r#if {
             Condition::String { regex: Some(r), .. } | Condition::Raw { regex: Some(r), .. } => {
                 Some(r.clone())
             }
@@ -2380,8 +2419,8 @@ pub(crate) fn find_alternation_merge_candidates(
                 t.crit,
                 t.r#for,
                 t.platforms,
-                t.r#if.size_min,
-                t.r#if.size_max,
+                t.size_min,
+                t.size_max,
                 t.not,
                 t.unless
             );
@@ -2568,7 +2607,7 @@ pub(crate) fn check_basename_pattern_duplicates(
             substr,
             regex,
             case_insensitive,
-        } = &trait_def.r#if.condition
+        } = &trait_def.r#if
         {
             // Skip basename conditions that don't actually have any patterns
             // (These can occur when a trait only has size constraints)

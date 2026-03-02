@@ -22,11 +22,6 @@ traits:
     if:
       type: string
       substr: "-authonly"
-      near_bytes: 256
-      near_min: 1
-      near:
-        - type: string
-          substr: "dscl"
 
   - id: dscl-local-default
     desc: "macOS dscl /Local/Default (local directory service)"
@@ -35,8 +30,3 @@ traits:
     if:
       type: string
       substr: "/Local/Default"
-      near_bytes: 256
-      near_min: 1
-      near:
-        - type: string
-          substr: "dscl"

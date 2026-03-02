@@ -99,10 +99,10 @@ traits:
   attack: T1027
   for:
   - javascript
+  count_min: 3
   if:
     type: raw
     regex: \w+\[\w+\]\s*=\s*\w+\[\w+\]
-    count_min: 3
 # GuardDog: Boolean coercion in for loop
 - id: for-boolean-coercion
   desc: For loop with boolean coercion (+!!false)
@@ -159,10 +159,10 @@ traits:
   mbc: B0032
   for:
   - javascript
+  count_min: 2
   if:
     type: raw
     regex: '[\[\]\(\)!]{3,}[\+][\[\]\(\)!]{3,}'
-    count_min: 2
 # GuardDog: Whitespace hiding
 - id: whitespace-hiding
   desc: Very long horizontal whitespace to hide code

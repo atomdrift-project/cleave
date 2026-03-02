@@ -9,11 +9,6 @@ traits:
     type: ast
     kind: call
     exact: os.utime
-    near:
-      type: ast
-      kind: call
-      regex: 'os\.path\.get[am]time'
-      near_lines: 10
 composite_rules:
 - id: timestamp-preservation
   desc: Preserving file timestamps after modification

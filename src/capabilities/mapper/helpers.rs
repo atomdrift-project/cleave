@@ -24,7 +24,7 @@ pub(super) fn validate_conditions(
 
     // Check trait definitions
     for trait_def in trait_definitions {
-        if check_condition(&trait_def.r#if.condition, &trait_def.id, path) {
+        if check_condition(&trait_def.r#if, &trait_def.id, path) {
             has_errors = true;
         }
     }
@@ -158,7 +158,7 @@ fn check_condition(condition: &Condition, trait_id: &str, path: &Path) -> bool {
 /// Collect all metric field references from a trait definition
 pub(super) fn collect_metric_refs_from_trait(trait_def: &TraitDefinition) -> Vec<String> {
     let mut fields = Vec::new();
-    collect_metric_refs_from_condition(&trait_def.r#if.condition, &mut fields);
+    collect_metric_refs_from_condition(&trait_def.r#if, &mut fields);
     fields
 }
 

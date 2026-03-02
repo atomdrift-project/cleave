@@ -32,10 +32,10 @@ traits:
     mbc: "E1203"
     attack: "T1059"
     for: [java, class]
+    count_min: 1
     if:
       type: string
       regex: '[Mm]anager.{0,50}\.class'
-      count_min: 1
 
   - id: java-process-destruction
     desc: Java process termination

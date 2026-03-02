@@ -16,10 +16,10 @@ traits:
     conf: 0.8
     platforms: [linux]
     for: [elf]
+    count_min: 2
     if:
       type: syscall
       name: ["dup2", "dup3"]
-      count_min: 2
 
   # macOS syscall traits
   - id: syscall-execve-macos
@@ -38,10 +38,10 @@ traits:
     conf: 0.8
     platforms: [macos]
     for: [macho]
+    count_min: 2
     if:
       type: syscall
       name: ["dup2"]
-      count_min: 2
 
 composite_rules:
   - id: shell-redirect

@@ -5,10 +5,10 @@ traits:
   - id: random-paths
     desc: "Randomized File Path Padding"
     crit: suspicious
+    count_min: 50
     if:
       type: raw
       regex: 'C\x00:\x00\\\x00([a-zA-Z0-9_]\x00){8}\.\x00e\x00x\x00e\x00'
-      count_min: 50
 
   - id: sandbox-paths
     desc: "Sandbox-like Path Padding"

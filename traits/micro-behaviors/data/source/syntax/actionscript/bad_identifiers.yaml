@@ -8,7 +8,7 @@ traits:
     conf: 0.8
     mbc: B0032
     attack: T1027
+    count_min: 2
     if:
       type: raw
       regex: "§[^\\x00]{1,100}§"
-      count_min: 2

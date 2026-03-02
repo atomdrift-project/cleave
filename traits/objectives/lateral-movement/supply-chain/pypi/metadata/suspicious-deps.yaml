@@ -31,10 +31,10 @@ traits:
     desc: discord.py dependency
     crit: notable
     conf: 0.60
+    count_min: 1
     if:
       type: string
       regex: "install_requires.{0,50}discord|discord.{0,50}install"
-      count_min: 1
 
   - id: dependency-dhooks
     desc: dhooks Discord webhook library

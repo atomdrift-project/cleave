@@ -28,10 +28,10 @@ traits:
     desc: Embedded function key labels (keylogger format)
     crit: component
     conf: 0.85
+    count_min: 6
     if:
       type: string
       regex: "\\[F[0-9]{1,2}\\]"
-      count_min: 6
 
   - id: virtual-key-label-modifiers
     desc: Embedded modifier key labels (keylogger format)

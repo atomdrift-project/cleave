@@ -53,11 +53,11 @@ traits:
     desc: "ARM64 svc instruction sequence"
     crit: baseline
     conf: 0.3
+    count_min: 4
     if:
       type: hex
       pattern: "01 00 00 d4"
       section: "text"
-      count_min: 4
 
 composite_rules:
   # ARM64 XOR+ROR decryption loop - only fires on ARM64 binaries

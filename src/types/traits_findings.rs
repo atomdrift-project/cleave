@@ -346,6 +346,13 @@ impl Evidence {
         }
         self.count += other_count;
 
+        // On first merge, extract self's location offset too (otherwise it's lost)
+        if self.offsets.is_empty() {
+            if let Some(offset) = self.parse_offset_from_location() {
+                self.offsets.push(offset);
+            }
+        }
+
         // Try to extract offset from other.location if it looks like a hex offset
         if let Some(offset) = other.parse_offset_from_location() {
             self.offsets.push(offset);

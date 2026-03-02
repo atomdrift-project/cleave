@@ -12,10 +12,10 @@ traits:
     desc: Backdoor keyword reference
     crit: notable
     conf: 0.5
+    count_min: 2
     if:
       type: string
       regex: '\b[bB]ackdoor\b'
-      count_min: 2
 
   # === Known false positive exclusions ===
   - id: vcpu-backdoor

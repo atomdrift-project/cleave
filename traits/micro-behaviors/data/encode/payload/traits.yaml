@@ -58,10 +58,10 @@ traits:
     conf: 0.75
     platforms: [windows]
     for: [pe]
+    entropy_min: 6.5
     if:
       type: section
       regex: "^\\.rdata"
-      entropy_min: 6.5
 composite_rules:
   - id: embedded-obfuscated-payload
     desc: Embedded obfuscated payload

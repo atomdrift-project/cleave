@@ -17,11 +17,11 @@ traits:
     mbc: "B0032"
     attack: "T1027"
     for: [javascript, typescript]
+    count_min: 5
+    per_kb_min: 1.0
     if:
       type: raw
       regex: '["''][^"''\n]{1,50}["'']\s*\[\s*["'']charAt["'']\s*\]'
-      count_min: 5
-      per_kb_min: 1.0
 
   - id: js-dense-charat-calls
     desc: Dense charAt calls on variables or literals
@@ -30,8 +30,8 @@ traits:
     mbc: "B0032"
     attack: "T1027"
     for: [javascript, typescript]
+    count_min: 20
+    per_kb_min: 2.0
     if:
       type: string
       substr: "charAt"
-      count_min: 20
-      per_kb_min: 2.0

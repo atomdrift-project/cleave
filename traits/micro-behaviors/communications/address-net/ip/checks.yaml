@@ -31,10 +31,10 @@ traits:
     # NOTE: #match? predicates are not enforced by engine, so this matches
     # any parts[N] === "string" pattern. Demoted to baseline until predicates work.
     crit: baseline
+    count_min: 2
     if:
       type: ast
       language: javascript
-      count_min: 2
       query: |
         (binary_expression
           left: (subscript_expression

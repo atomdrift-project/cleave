@@ -1,16 +1,13 @@
 # cleave Makefile
 # Build and test commands for deep static analysis tool
+# Compatible with both GNU make and BSD make
 
 BINARY = cleave
 OUT_DIR = out
 
-# Use sccache for faster compilation if available
-SCCACHE := $(shell command -v sccache 2>/dev/null)
-ifdef SCCACHE
-export RUSTC_WRAPPER := $(SCCACHE)
-endif
+# For sccache, set RUSTC_WRAPPER=sccache in your environment
 
-.PHONY: all build debug release test test-fast test-unit lint fmt clean coverage ci help regenerate-testdata
+.PHONY: all build debug release tarball rollout-bastille test test-fast test-unit lint fmt clean coverage ci help regenerate-testdata
 
 # Default target
 all: build
@@ -23,6 +20,8 @@ help: ## Show this help
 	@echo "  build                 - Build in debug mode (default)"
 	@echo "  debug                 - Build in debug mode"
 	@echo "  release               - Build in release mode"
+	@echo "  tarball               - Build release tarball (binary + traits)"
+	@echo "  rollout-bastille      - Deploy to Bastille jails (BUILD=jail RUN=jail)"
 	@echo "  test                  - Run all tests (unit + integration)"
 	@echo "  test-fast             - Run tests quickly (skip YARA, lib tests only)"
 	@echo "  test-unit             - Run only unit tests (skip integration tests)"
@@ -45,6 +44,15 @@ release: $(OUT_DIR) ## Build in release mode
 	cargo build --release
 	cp target/release/$(BINARY) $(OUT_DIR)/
 	@echo "✓ Release binary: $(OUT_DIR)/$(BINARY)"
+
+tarball: release ## Build release tarball with binary and traits
+	@echo "Creating tarball..."
+	tar -czf $(OUT_DIR)/cleave.tgz -C $(OUT_DIR) cleave -C "$$PWD" traits
+	@echo "✓ Tarball: $(OUT_DIR)/cleave.tgz"
+
+rollout-bastille: ## Deploy to Bastille jails (BUILD=jail RUN=jail)
+	@[ -n "$(BUILD)" ] && [ -n "$(RUN)" ] || { echo "Usage: make rollout-bastille BUILD=<build-jail> RUN=<run-jail>"; exit 1; }
+	./hacks/rollout-bastille.sh "$(BUILD)" "$(RUN)"
 
 test: ## Run all tests (unit + integration)
 	@echo "Running all tests (hybrid: nextest + cargo test for state-sharing tests)..."

@@ -1,10 +1,11 @@
 #!/bin/sh
-# rollout-bastille.sh - Deploy cleave into a Bastille jail
-# Usage: ./rollout-bastille.sh <jail-name>
+# rollout-bastille.sh - Deploy cleave using separate build and run jails
+# Usage: ./rollout-bastille.sh <build-jail> <run-jail>
 
 set -e
 
-JAIL="$1"
+BUILD="$1"
+RUN="$2"
 
 die() {
     echo "error: $*" >&2
@@ -15,28 +16,50 @@ log() {
     echo "==> $*"
 }
 
-[ -z "$JAIL" ] && die "usage: $0 <jail-name>"
+[ -z "$BUILD" ] || [ -z "$RUN" ] && die "usage: $0 <build-jail> <run-jail>"
 
-# Verify jail is accessible
-bastille cmd "$JAIL" true || die "jail '$JAIL' not accessible"
+# Verify jails are accessible
+doas bastille cmd "$BUILD" true || die "build jail '$BUILD' not accessible"
+doas bastille cmd "$RUN" true || die "run jail '$RUN' not accessible"
 
-log "Ensuring user 'cleave' exists"
-bastille cmd "$JAIL" id -u cleave >/dev/null 2>&1 || \
-    bastille cmd "$JAIL" pw useradd cleave -m -s /bin/sh -c "Cleave Service"
+# --- Build jail setup ---
 
-log "Installing dependencies"
-bastille pkg "$JAIL" install -y rust go tmux upx rizin 7-zip
+log "Ensuring build user exists"
+doas bastille cmd "$BUILD" id -u cleave >/dev/null 2>&1 || \
+    doas bastille cmd "$BUILD" pw useradd cleave -m -s /bin/sh -c "Cleave Build"
 
-log "Copying source tree"
-bastille cmd "$JAIL" rm -rf /home/cleave/cleave
-bastille cp "$JAIL" . /home/cleave/cleave
-bastille cmd "$JAIL" chown -R cleave:cleave /home/cleave/cleave
+log "Installing build dependencies"
+doas bastille pkg "$BUILD" install -y rust go sccache
 
-log "Building release binary"
-bastille cmd "$JAIL" su -l cleave -c "cd ~/cleave && cargo build --release"
+log "Copying source tree to build jail"
+doas bastille cmd "$BUILD" rm -rf /home/cleave/cleave
+doas bastille cp "$BUILD" . /home/cleave/cleave
+doas bastille cmd "$BUILD" chown -R cleave:cleave /home/cleave/cleave
+
+log "Building tarball"
+doas bastille cmd "$BUILD" su -l cleave -c "cd ~/cleave && RUSTC_WRAPPER=sccache make tarball"
+
+# --- Transfer tarball via jail filesystem ---
+
+log "Transferring tarball to run jail"
+BASTILLE_DIR="/usr/local/bastille/jails"
+doas cp "$BASTILLE_DIR/$BUILD/root/home/cleave/cleave/out/cleave.tgz" \
+       "$BASTILLE_DIR/$RUN/root/tmp/cleave.tgz"
+
+# --- Run jail setup ---
+
+log "Ensuring run user exists"
+doas bastille cmd "$RUN" id -u cleave >/dev/null 2>&1 || \
+    doas bastille cmd "$RUN" pw useradd cleave -m -s /bin/sh -c "Cleave Service"
+
+log "Extracting tarball"
+doas bastille cmd "$RUN" rm -rf /usr/local/share/cleave
+doas bastille cmd "$RUN" mkdir -p /usr/local/share/cleave
+doas bastille cmd "$RUN" tar -xzf /tmp/cleave.tgz -C /usr/local/share/cleave
+doas bastille cmd "$RUN" rm -f /tmp/cleave.tgz
 
 log "Creating rc.d service"
-bastille cmd "$JAIL" tee /usr/local/etc/rc.d/cleave >/dev/null <<'EOF'
+doas bastille cmd "$RUN" tee /usr/local/etc/rc.d/cleave >/dev/null <<'EOF'
 #!/bin/sh
 
 # PROVIDE: cleave
@@ -54,16 +77,17 @@ load_rc_config $name
 
 pidfile="/var/run/${name}.pid"
 command="/usr/sbin/daemon"
-command_args="-c -f -P ${pidfile} -r -u cleave /bin/sh -c 'cd /home/cleave/cleave && exec ./target/release/cleave server --bind 0.0.0.0:8000'"
+cleave_env="CLEAVE_TRAITS_DIR=/usr/local/share/cleave/traits"
+command_args="-c -f -P ${pidfile} -r -u cleave /usr/bin/env ${cleave_env} /usr/local/share/cleave/cleave server --bind 0.0.0.0:8000"
 
 run_rc_command "$1"
 EOF
 
-bastille cmd "$JAIL" chmod 755 /usr/local/etc/rc.d/cleave
+doas bastille cmd "$RUN" chmod 755 /usr/local/etc/rc.d/cleave
 
 log "Enabling and restarting cleave service"
-bastille sysrc "$JAIL" cleave_enable=YES
-bastille service "$JAIL" cleave stop 2>/dev/null || true
-bastille service "$JAIL" cleave start
+doas bastille sysrc "$RUN" cleave_enable=YES
+doas bastille service "$RUN" cleave stop 2>/dev/null || true
+doas bastille service "$RUN" cleave start
 
 log "Deployment complete"

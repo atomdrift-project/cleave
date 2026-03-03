@@ -1748,3 +1748,455 @@ fn test_eval_string_offset_skips_imports() {
         "Without offset constraint, both string and import should match"
     );
 }
+
+// =============================================================================
+// Gap #4: word: boundary matching in eval_string
+// =============================================================================
+
+#[test]
+fn test_eval_string_word_boundary() {
+    let mut report = create_test_report();
+    // "cat" as standalone word
+    report.strings.push(StringInfo {
+        value: "the cat sat".to_string(),
+        offset: Some(0x1000),
+        encoding: "utf8".to_string(),
+        string_type: StringType::Const,
+        section: None,
+        encoding_chain: Vec::new(),
+        fragments: None,
+    });
+    // "cat" inside another word — should NOT match word boundary
+    report.strings.push(StringInfo {
+        value: "category list".to_string(),
+        offset: Some(0x2000),
+        encoding: "utf8".to_string(),
+        string_type: StringType::Const,
+        section: None,
+        encoding_chain: Vec::new(),
+        fragments: None,
+    });
+    let data = vec![];
+    let ctx = create_test_context(&report, &data);
+
+    let word = "cat".to_string();
+    let word_regex = regex::Regex::new(r"\bcat\b").unwrap();
+    let params = StringParams {
+        exact: None,
+        substr: None,
+        regex: None,
+        word: Some(&word),
+        case_insensitive: false,
+        external_ip: false,
+        compiled_regex: Some(&word_regex),
+        section: None,
+        offset: None,
+        offset_range: None,
+        section_offset: None,
+        section_offset_range: None,
+    };
+
+    let result = eval_string(&params, None, &ctx);
+    assert!(result.matched);
+    assert_eq!(
+        result.match_count, 1,
+        "Only 'the cat sat' should match word boundary, not 'category list'"
+    );
+    // Evidence contains the matched string value
+    assert!(
+        result.evidence[0].value.contains("cat"),
+        "Evidence should contain the matched word: {:?}",
+        result.evidence[0].value
+    );
+}
+
+// =============================================================================
+// Gap #5: offset_range, section_offset, section_offset_range tests
+// =============================================================================
+
+#[test]
+fn test_eval_raw_offset_range_filters() {
+    let report = create_test_report();
+    // Place "MARKER" at two locations in binary data
+    let mut data = vec![0u8; 200];
+    data[10..16].copy_from_slice(b"MARKER"); // offset 10
+    data[150..156].copy_from_slice(b"MARKER"); // offset 150
+
+    let ctx = create_test_context(&report, &data);
+
+    // Search only in range [0, 50) — should find first MARKER only
+    let location = ContentLocationParams {
+        offset_range: Some((0, Some(50))),
+        ..Default::default()
+    };
+    let result = eval_raw(
+        None,
+        Some(&"MARKER".to_string()),
+        None,
+        None,
+        false,
+        false,
+        None,
+        None,
+        &location,
+        &ctx,
+    );
+    assert!(result.matched);
+    assert_eq!(
+        result.match_count, 1,
+        "Only MARKER at offset 10 should match"
+    );
+
+    // Search only in range [100, 200) — should find second MARKER only
+    let location2 = ContentLocationParams {
+        offset_range: Some((100, Some(200))),
+        ..Default::default()
+    };
+    let result2 = eval_raw(
+        None,
+        Some(&"MARKER".to_string()),
+        None,
+        None,
+        false,
+        false,
+        None,
+        None,
+        &location2,
+        &ctx,
+    );
+    assert!(result2.matched);
+    assert_eq!(
+        result2.match_count, 1,
+        "Only MARKER at offset 150 should match"
+    );
+
+    // Search in range [50, 100) — should find no MARKER
+    let location3 = ContentLocationParams {
+        offset_range: Some((50, Some(100))),
+        ..Default::default()
+    };
+    let result3 = eval_raw(
+        None,
+        Some(&"MARKER".to_string()),
+        None,
+        None,
+        false,
+        false,
+        None,
+        None,
+        &location3,
+        &ctx,
+    );
+    assert!(!result3.matched);
+}
+
+#[test]
+fn test_eval_raw_offset_range_negative() {
+    let report = create_test_report();
+    // Place "END" at the very end of the data
+    let mut data = vec![0u8; 100];
+    data[97..100].copy_from_slice(b"END");
+
+    let ctx = create_test_context(&report, &data);
+
+    // Negative offset_range start: last 10 bytes
+    let location = ContentLocationParams {
+        offset_range: Some((-10, None)),
+        ..Default::default()
+    };
+    let result = eval_raw(
+        None,
+        Some(&"END".to_string()),
+        None,
+        None,
+        false,
+        false,
+        None,
+        None,
+        &location,
+        &ctx,
+    );
+    assert!(
+        result.matched,
+        "Negative offset should search from end of file"
+    );
+
+    // Negative offset_range too small to reach "END"
+    let location2 = ContentLocationParams {
+        offset_range: Some((-2, None)),
+        ..Default::default()
+    };
+    let result2 = eval_raw(
+        None,
+        Some(&"END".to_string()),
+        None,
+        None,
+        false,
+        false,
+        None,
+        None,
+        &location2,
+        &ctx,
+    );
+    assert!(
+        !result2.matched,
+        "Last 2 bytes should not contain full 'END'"
+    );
+}
+
+#[test]
+fn test_eval_string_section_offset_with_section_map() {
+    use crate::composite_rules::section_map::SectionMap;
+
+    let mut report = create_test_report();
+    // String at absolute offset 0x1100 (= .text + 0x100)
+    report.strings.push(StringInfo {
+        value: "MAGIC".to_string(),
+        offset: Some(0x1100),
+        encoding: "utf8".to_string(),
+        string_type: StringType::Const,
+        section: None,
+        encoding_chain: Vec::new(),
+        fragments: None,
+    });
+    // String at absolute offset 0x2050 (= .data + 0x50)
+    report.strings.push(StringInfo {
+        value: "OTHER".to_string(),
+        offset: Some(0x2050),
+        encoding: "utf8".to_string(),
+        string_type: StringType::Const,
+        section: None,
+        encoding_chain: Vec::new(),
+        fragments: None,
+    });
+
+    let data = vec![0u8; 0x3000];
+    let section_map = SectionMap::from_sections_and_size(
+        vec![(".text", 0x1000, 0x2000), (".data", 0x2000, 0x3000)],
+        0x3000,
+    );
+
+    let mut ctx = create_test_context(&report, &data);
+    ctx.section_map = Some(section_map);
+
+    // section + section_offset_range covering .text[0..0x200) — should match MAGIC
+    let substr = "MAGIC".to_string();
+    let sec_text = ".text".to_string();
+    let sec_data = ".data".to_string();
+    let params = StringParams {
+        exact: None,
+        substr: Some(&substr),
+        regex: None,
+        word: None,
+        case_insensitive: false,
+        external_ip: false,
+        compiled_regex: None,
+        section: Some(&sec_text),
+        offset: None,
+        offset_range: None,
+        section_offset: None,
+        section_offset_range: Some((0, Some(0x200))),
+    };
+    let result = eval_string(&params, None, &ctx);
+    assert!(
+        result.matched,
+        "MAGIC at .text+0x100 should be in range [0, 0x200)"
+    );
+    assert_eq!(result.match_count, 1);
+
+    // section .data + range covering [0, 0x100) — should match OTHER at .data+0x50
+    let substr2 = "OTHER".to_string();
+    let params2 = StringParams {
+        exact: None,
+        substr: Some(&substr2),
+        regex: None,
+        word: None,
+        case_insensitive: false,
+        external_ip: false,
+        compiled_regex: None,
+        section: Some(&sec_data),
+        offset: None,
+        offset_range: None,
+        section_offset: None,
+        section_offset_range: Some((0, Some(0x100))),
+    };
+    let result2 = eval_string(&params2, None, &ctx);
+    assert!(
+        result2.matched,
+        "OTHER at .data+0x50 should be in range [0, 0x100)"
+    );
+
+    // section .text — should NOT find OTHER (it's in .data)
+    let params3 = StringParams {
+        exact: None,
+        substr: Some(&substr2),
+        regex: None,
+        word: None,
+        case_insensitive: false,
+        external_ip: false,
+        compiled_regex: None,
+        section: Some(&sec_text),
+        offset: None,
+        offset_range: None,
+        section_offset: None,
+        section_offset_range: Some((0, Some(0x1000))),
+    };
+    let result3 = eval_string(&params3, None, &ctx);
+    assert!(
+        !result3.matched,
+        "OTHER should not be found in .text section"
+    );
+}
+
+#[test]
+fn test_eval_raw_section_offset_range() {
+    use crate::composite_rules::section_map::SectionMap;
+
+    let report = create_test_report();
+    let mut data = vec![0u8; 0x3000];
+    // Place "ALPHA" at .text + 0x100 = absolute 0x1100
+    data[0x1100..0x1105].copy_from_slice(b"ALPHA");
+    // Place "BETA" at .text + 0x800 = absolute 0x1800
+    data[0x1800..0x1804].copy_from_slice(b"BETA");
+
+    let section_map = SectionMap::from_sections_and_size(vec![(".text", 0x1000, 0x2000)], 0x3000);
+
+    let mut ctx = create_test_context(&report, &data);
+    ctx.section_map = Some(section_map);
+
+    // section_offset_range [0, 0x200) in .text — should find ALPHA but not BETA
+    let location = ContentLocationParams {
+        section: Some(".text".to_string()),
+        section_offset_range: Some((0, Some(0x200))),
+        ..Default::default()
+    };
+    let result = eval_raw(
+        None,
+        Some(&"ALPHA".to_string()),
+        None,
+        None,
+        false,
+        false,
+        None,
+        None,
+        &location,
+        &ctx,
+    );
+    assert!(
+        result.matched,
+        "ALPHA at section offset 0x100 should be in range [0, 0x200)"
+    );
+
+    let result2 = eval_raw(
+        None,
+        Some(&"BETA".to_string()),
+        None,
+        None,
+        false,
+        false,
+        None,
+        None,
+        &location,
+        &ctx,
+    );
+    assert!(
+        !result2.matched,
+        "BETA at section offset 0x800 should be outside range [0, 0x200)"
+    );
+
+    // section_offset_range [0x700, 0x900) — should find BETA but not ALPHA
+    let location2 = ContentLocationParams {
+        section: Some(".text".to_string()),
+        section_offset_range: Some((0x700, Some(0x900))),
+        ..Default::default()
+    };
+    let result3 = eval_raw(
+        None,
+        Some(&"BETA".to_string()),
+        None,
+        None,
+        false,
+        false,
+        None,
+        None,
+        &location2,
+        &ctx,
+    );
+    assert!(
+        result3.matched,
+        "BETA at section offset 0x800 should be in range [0x700, 0x900)"
+    );
+}
+
+#[test]
+fn test_eval_string_offset_range_filters() {
+    let mut report = create_test_report();
+    // String at offset 100
+    report.strings.push(StringInfo {
+        value: "target_string".to_string(),
+        offset: Some(100),
+        encoding: "utf8".to_string(),
+        string_type: StringType::Const,
+        section: None,
+        encoding_chain: Vec::new(),
+        fragments: None,
+    });
+    // Same string at offset 5000
+    report.strings.push(StringInfo {
+        value: "target_string".to_string(),
+        offset: Some(5000),
+        encoding: "utf8".to_string(),
+        string_type: StringType::Const,
+        section: None,
+        encoding_chain: Vec::new(),
+        fragments: None,
+    });
+    let data = vec![];
+    let ctx = create_test_context(&report, &data);
+
+    let substr = "target_string".to_string();
+
+    // offset_range [0, 200) — should match only the string at offset 100
+    let params = StringParams {
+        exact: None,
+        substr: Some(&substr),
+        regex: None,
+        word: None,
+        case_insensitive: false,
+        external_ip: false,
+        compiled_regex: None,
+        section: None,
+        offset: None,
+        offset_range: Some((0, Some(200))),
+        section_offset: None,
+        section_offset_range: None,
+    };
+    let result = eval_string(&params, None, &ctx);
+    assert!(result.matched);
+    assert_eq!(
+        result.match_count, 1,
+        "Only string at offset 100 should match"
+    );
+
+    // offset_range [4000, 6000) — should match only the string at offset 5000
+    let params2 = StringParams {
+        exact: None,
+        substr: Some(&substr),
+        regex: None,
+        word: None,
+        case_insensitive: false,
+        external_ip: false,
+        compiled_regex: None,
+        section: None,
+        offset: None,
+        offset_range: Some((4000, Some(6000))),
+        section_offset: None,
+        section_offset_range: None,
+    };
+    let result2 = eval_string(&params2, None, &ctx);
+    assert!(result2.matched);
+    assert_eq!(
+        result2.match_count, 1,
+        "Only string at offset 5000 should match"
+    );
+}

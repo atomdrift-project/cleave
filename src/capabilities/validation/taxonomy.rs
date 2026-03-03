@@ -531,17 +531,19 @@ pub(crate) fn find_duplicate_second_level_directories(
     let mut second_level_map: HashMap<String, Vec<String>> = HashMap::new();
 
     for dir_path in trait_dirs {
-        // Split path: "micro-behaviors/communications/http" -> ["cap", "comm", "http"]
         let parts: Vec<&str> = dir_path.split('/').collect();
         if parts.len() < 2 {
             continue; // Need at least namespace/second-level
         }
 
-        let namespace = parts[0]; // "cap", "obj", "known", "meta"
-        let second_level = parts[1]; // "comm", "c2", "discovery", etc.
+        let namespace = parts[0];
+        let second_level = parts[1];
 
         // Only check the four main namespaces
-        if !matches!(namespace, "cap" | "obj" | "known" | "meta") {
+        if !matches!(
+            namespace,
+            "micro-behaviors" | "objectives" | "well-known" | "metadata"
+        ) {
             continue;
         }
 

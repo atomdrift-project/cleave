@@ -24,14 +24,14 @@ use crate::capabilities::validation::{
     find_invalid_not_usage, find_invalid_trait_ids, find_kv_exists_with_matcher, find_line_number,
     find_malware_subcategory_violations, find_metadata_cross_tier_refs,
     find_missing_search_patterns, find_needs_without_any, find_needs_zero,
-    find_non_capturing_groups, find_none_only_with_proximity,
-    find_orphaned_components, find_overlapping_conditions, find_oversized_trait_directories,
-    find_parent_duplicate_segments, find_platform_named_directories, find_pure_alias_traits,
-    find_redundant_any_refs, find_redundant_needs_one, find_short_pattern_warnings,
-    find_single_item_clauses, find_slow_regex_patterns, find_string_content_collisions,
-    find_string_pattern_duplicates, find_unanchored_wellknown_composites,
-    find_wellknown_category_violations, precalculate_all_composite_precisions,
-    simple_rule_to_composite_rule, validate_composite_trait_only, validate_directory_structure,
+    find_non_capturing_groups, find_none_only_with_proximity, find_orphaned_components,
+    find_overlapping_conditions, find_oversized_trait_directories, find_parent_duplicate_segments,
+    find_platform_named_directories, find_pure_alias_traits, find_redundant_any_refs,
+    find_redundant_needs_one, find_short_pattern_warnings, find_single_item_clauses,
+    find_slow_regex_patterns, find_string_content_collisions, find_string_pattern_duplicates,
+    find_unanchored_wellknown_composites, find_wellknown_category_violations,
+    precalculate_all_composite_precisions, simple_rule_to_composite_rule,
+    validate_composite_trait_only, validate_directory_structure,
     validate_hostile_composite_precision, MAX_TRAITS_PER_DIRECTORY,
 };
 use crate::composite_rules::{
@@ -2137,7 +2137,9 @@ impl super::CapabilityMapper {
                     "\n❌ ERROR: {} composite rules have proximity on none-only rules",
                     none_prox.len()
                 );
-                eprintln!("   `near_lines`/`near_bytes` requires positive conditions (`all:`/`any:`).");
+                eprintln!(
+                    "   `near_lines`/`near_bytes` requires positive conditions (`all:`/`any:`)."
+                );
                 eprintln!("   A `none:`-only rule with proximity can never match:\n");
                 for rule_id in &none_prox {
                     let source = rule_source_files

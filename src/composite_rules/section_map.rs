@@ -318,6 +318,23 @@ impl SectionMap {
     pub(crate) fn has_sections(&self) -> bool {
         !self.sections.is_empty()
     }
+
+    /// Build a section map from a list of (name, start, end) tuples.
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) fn from_sections_and_size(sections: Vec<(&str, u64, u64)>, file_size: u64) -> Self {
+        Self {
+            sections: sections
+                .into_iter()
+                .map(|(name, start, end)| SectionInfo {
+                    name: name.to_string(),
+                    start,
+                    end,
+                })
+                .collect(),
+            file_size,
+        }
+    }
 }
 
 /// Resolve a potentially negative offset to an absolute position.

@@ -476,3 +476,120 @@ fn test_eval_hex_match_count_with_gap() {
         "match_count should track all 25 gap matches"
     );
 }
+
+// ==================== Nibble Wildcard Tests ====================
+
+#[test]
+fn test_eval_hex_nibble_wildcard_high() {
+    // Pattern "4?" matches any byte 0x40-0x4F
+    let binary_data = vec![0x00, 0x4D, 0x5A, 0x90]; // 0x4D matches "4?"
+    let report = create_test_report();
+    let ctx = create_test_context(report, binary_data);
+
+    let location = ContentLocationParams::default();
+    let result = eval_hex("4? 5A", &location, &ctx);
+    assert!(result.matched, "4? should match 0x4D");
+}
+
+#[test]
+fn test_eval_hex_nibble_wildcard_low() {
+    // Pattern "?A" matches any byte with low nibble 0xA (0x0A, 0x1A, ..., 0xFA)
+    let binary_data = vec![0x00, 0x3A, 0xFF]; // 0x3A matches "?A"
+    let report = create_test_report();
+    let ctx = create_test_context(report, binary_data);
+
+    let location = ContentLocationParams::default();
+    let result = eval_hex("?A FF", &location, &ctx);
+    assert!(result.matched, "?A should match 0x3A");
+}
+
+#[test]
+fn test_eval_hex_nibble_wildcard_no_match() {
+    // Pattern "4?" should NOT match 0x5D (high nibble is 5, not 4)
+    let binary_data = vec![0x5D, 0x5A];
+    let report = create_test_report();
+    let ctx = create_test_context(report, binary_data);
+
+    let location = ContentLocationParams::default();
+    let result = eval_hex("4? 5A", &location, &ctx);
+    assert!(!result.matched, "4? should not match 0x5D");
+}
+
+#[test]
+fn test_eval_hex_nibble_mixed_pattern() {
+    // Real-world pattern: Mozi XOR loop (31 ?? 88 ?? 4? 83 ?? ?? 7?)
+    let binary_data = vec![
+        0x31, 0xC0, // xor eax, eax (31 ??)
+        0x88, 0x01, // mov [ecx], al (88 ??)
+        0x40, // inc eax (4?)
+        0x83, 0xF8, 0x10, // cmp eax, 0x10 (83 ?? ??)
+        0x72, // jb short (7?)
+    ];
+    let report = create_test_report();
+    let ctx = create_test_context(report, binary_data);
+
+    let location = ContentLocationParams::default();
+    let result = eval_hex("31 ?? 88 ?? 4? 83 ?? ?? 7?", &location, &ctx);
+    assert!(result.matched, "Mozi XOR pattern should match");
+}
+
+// ==================== Byte Alternation Tests ====================
+
+#[test]
+fn test_eval_hex_alternation() {
+    // Pattern "(4D|5A)" matches either 0x4D or 0x5A
+    let binary_data = vec![0x00, 0x5A, 0x90]; // 0x5A matches
+    let report = create_test_report();
+    let ctx = create_test_context(report, binary_data);
+
+    let location = ContentLocationParams::default();
+    let result = eval_hex("(4D|5A) 90", &location, &ctx);
+    assert!(result.matched, "(4D|5A) should match 0x5A");
+}
+
+#[test]
+fn test_eval_hex_alternation_no_match() {
+    // Pattern "(4D|5A)" should NOT match 0xFF
+    let binary_data = vec![0xFF, 0x90];
+    let report = create_test_report();
+    let ctx = create_test_context(report, binary_data);
+
+    let location = ContentLocationParams::default();
+    let result = eval_hex("(4D|5A) 90", &location, &ctx);
+    assert!(!result.matched, "(4D|5A) should not match 0xFF");
+}
+
+#[test]
+fn test_eval_hex_alternation_multi() {
+    // Multi-alternative: (01|02|03|04|05)
+    let binary_data = vec![0xAA, 0x03, 0xBB];
+    let report = create_test_report();
+    let ctx = create_test_context(report, binary_data);
+
+    let location = ContentLocationParams::default();
+    let result = eval_hex("(01|02|03|04|05) BB", &location, &ctx);
+    assert!(result.matched, "Multi-alternative should match 0x03");
+}
+
+#[test]
+fn test_eval_hex_lzma_pattern() {
+    // LZMA compression header: 5D 00 00 (00|80) 00 (10|20) [7] ??
+    let mut binary_data = vec![
+        0x5D, 0x00, 0x00, // LZMA magic
+        0x80, // (00|80)
+        0x00, // 0x00
+        0x20, // (10|20)
+    ];
+    binary_data.extend_from_slice(&[0x00; 7]); // [7] gap
+    binary_data.push(0xFF); // ??
+
+    let report = create_test_report();
+    let ctx = create_test_context(report, binary_data);
+
+    let location = ContentLocationParams::default();
+    let result = eval_hex("5D 00 00 (00|80) 00 (10|20) [7] ??", &location, &ctx);
+    assert!(
+        result.matched,
+        "LZMA pattern with alternation and gaps should match"
+    );
+}

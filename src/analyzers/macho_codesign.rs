@@ -465,29 +465,33 @@ fn extract_der_string(data: &[u8], tag: &[u8]) -> Option<String> {
     None
 }
 
-/// Check for hardened runtime flag in code directory
+/// Check for hardened runtime flag in code directory.
+///
+/// CodeDirectory layout (blob header already skipped):
+///   offset 0: version (4), offset 4: flags (4), offset 8: hashOffset (4), ...
 fn check_hardened_runtime_flag(cd_data: &[u8]) -> bool {
-    if cd_data.len() < 36 {
+    if cd_data.len() < 8 {
         return false;
     }
 
-    // Code directory flags are at offset 32
-    // Hardened runtime flag is 0x00010000
-    let flags = u32::from_be_bytes([cd_data[32], cd_data[33], cd_data[34], cd_data[35]]);
+    // Flags field is at offset 4 (after version)
+    // CS_RUNTIME (hardened runtime) = 0x00010000
+    let flags = u32::from_be_bytes([cd_data[4], cd_data[5], cd_data[6], cd_data[7]]);
     (flags & 0x00010000) != 0
 }
 
-/// Extract identifier string from code directory
+/// Extract identifier string from code directory.
+///
+/// CodeDirectory layout (blob header already skipped):
+///   offset 0: version (4), offset 4: flags (4), offset 8: hashOffset (4),
+///   offset 12: identOffset (4)
+///
+/// The identOffset points directly to the null-terminated identifier string.
 fn extract_identifier(cd_data: &[u8]) -> Option<String> {
     if cd_data.len() < 16 {
         return None;
     }
 
-    // Code directory structure (8-byte blob header already skipped by caller):
-    // offset 0: version (4 bytes)
-    // offset 4: flags (4 bytes)
-    // offset 8: hash_offset (4 bytes)
-    // offset 12: ident_offset (4 bytes)
     let ident_offset = u32::from_be_bytes([cd_data[12], cd_data[13], cd_data[14], cd_data[15]]);
     let ident_offset = ident_offset as usize;
 
@@ -495,38 +499,19 @@ fn extract_identifier(cd_data: &[u8]) -> Option<String> {
         return None;
     }
 
-    // Find null-terminated string starting from ident_offset
+    // Extract null-terminated string starting at ident_offset
     let ident_data = &cd_data[ident_offset..];
-
-    // Search backwards from ident_offset to find the start of the identifier
-    // (usually preceded by null byte or hash data)
-    let mut start_offset = ident_offset;
-    if ident_offset > 0 {
-        // Search backwards for a null byte or start of printable ASCII
-        for i in (0..ident_offset).rev() {
-            if cd_data[i] == 0 {
-                start_offset = i + 1;
-                break;
-            }
-            // Also break if we find something that's definitely not part of identifier
-            if !cd_data[i].is_ascii_graphic() && cd_data[i] != b'.' {
-                start_offset = i + 1;
-                break;
-            }
-        }
+    let len = ident_data
+        .iter()
+        .position(|&b| b == 0)
+        .unwrap_or(ident_data.len());
+    if len == 0 {
+        return None;
     }
 
-    // Find null terminator from ident_offset
-    if let Some(null_pos) = ident_data.iter().position(|&b| b == 0) {
-        let end_offset = ident_offset + null_pos;
-        if let Ok(ident_str) = std::str::from_utf8(&cd_data[start_offset..end_offset]) {
-            if !ident_str.is_empty() {
-                return Some(ident_str.to_string());
-            }
-        }
-    }
-
-    None
+    std::str::from_utf8(&ident_data[..len])
+        .ok()
+        .map(String::from)
 }
 
 #[cfg(test)]
@@ -706,25 +691,24 @@ mod tests {
     #[test]
     fn test_check_hardened_runtime_flag_set() {
         let mut cd_data = vec![0u8; 40];
-        // Code directory flags are at offset 32 (version=0, flags=4-7, but actual flag bits at 32)
-        // Set hardened runtime flag (0x00010000) at offset 32
-        cd_data[32] = 0x00;
-        cd_data[33] = 0x01;
-        cd_data[34] = 0x00;
-        cd_data[35] = 0x00;
+        // Flags field at offset 4 (after version), CS_RUNTIME = 0x00010000
+        cd_data[4] = 0x00;
+        cd_data[5] = 0x01;
+        cd_data[6] = 0x00;
+        cd_data[7] = 0x00;
 
         assert!(check_hardened_runtime_flag(&cd_data));
     }
 
     #[test]
     fn test_check_hardened_runtime_flag_not_set() {
-        let cd_data = vec![0u8; 36];
+        let cd_data = vec![0u8; 8];
         assert!(!check_hardened_runtime_flag(&cd_data));
     }
 
     #[test]
     fn test_check_hardened_runtime_flag_too_small() {
-        let cd_data = vec![0u8; 35];
+        let cd_data = vec![0u8; 7];
         assert!(!check_hardened_runtime_flag(&cd_data));
     }
 

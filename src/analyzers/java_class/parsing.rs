@@ -148,12 +148,12 @@ impl super::JavaClassAnalyzer {
                     }
                 }
                 _ => {
-                    // Skip unknown types
+                    // Skip known-but-unused types by their defined sizes
                     pos += match tag {
-                        9 | 11 | 18 => 4, // Fieldref, InterfaceMethodref, InvokeDynamic
-                        15 => 3,          // MethodHandle
-                        16 => 2,          // MethodType
-                        _ => 0,
+                        9 | 11 | 17 | 18 => 4, // Fieldref, InterfaceMethodref, Dynamic, InvokeDynamic
+                        15 => 3,               // MethodHandle
+                        16 | 19 | 20 => 2,     // MethodType, Module, Package
+                        _ => bail!("Unknown constant pool tag {} at offset {}", tag, pos - 1),
                     };
                 }
             }

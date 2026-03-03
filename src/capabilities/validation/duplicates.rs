@@ -243,7 +243,14 @@ fn split_top_level_alternation(pattern: &str) -> Vec<&str> {
         let mut matches_at_end = false;
 
         for i in 0..bytes.len() {
-            if i > 0 && bytes[i - 1] == b'\\' {
+            // Count consecutive preceding backslashes; odd count means escaped
+            let mut backslash_count = 0;
+            let mut j = i;
+            while j > 0 && bytes[j - 1] == b'\\' {
+                backslash_count += 1;
+                j -= 1;
+            }
+            if backslash_count % 2 != 0 {
                 continue; // escaped character
             }
             match bytes[i] {

@@ -1020,6 +1020,285 @@ fn test_eval_syscall_arch_exact_match() {
 }
 
 // =============================================================================
+// Section length_min / length_max tests
+// =============================================================================
+
+#[test]
+fn test_eval_section_length_min() {
+    let mut report = create_test_report();
+    report.sections.push(Section {
+        name: ".text".to_string(),
+        address: Some(0x1000),
+        size: 5000,
+        entropy: 6.5,
+        permissions: None,
+    });
+    report.sections.push(Section {
+        name: ".data".to_string(),
+        address: Some(0x2000),
+        size: 200,
+        entropy: 4.0,
+        permissions: None,
+    });
+    let data = vec![];
+    let ctx = create_test_context(&report, &data);
+
+    // length_min: 1000 — only .text (5000) should match
+    let result = eval_section(
+        None,
+        None,
+        None,
+        None,
+        false,
+        Some(1000), // length_min
+        None,       // length_max
+        None,
+        None,
+        None,
+        None,
+        None,
+        &ctx,
+    );
+    assert!(result.matched);
+    assert_eq!(result.evidence.len(), 1);
+    assert!(result.evidence[0].value.contains(".text"));
+    assert!(result.evidence[0].value.contains("size: 5000"));
+}
+
+#[test]
+fn test_eval_section_length_min_no_match() {
+    let mut report = create_test_report();
+    report.sections.push(Section {
+        name: ".text".to_string(),
+        address: Some(0x1000),
+        size: 500,
+        entropy: 6.5,
+        permissions: None,
+    });
+    let data = vec![];
+    let ctx = create_test_context(&report, &data);
+
+    // length_min: 1000 — .text (500) too small
+    let result = eval_section(
+        None,
+        None,
+        None,
+        None,
+        false,
+        Some(1000),
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        &ctx,
+    );
+    assert!(!result.matched);
+}
+
+#[test]
+fn test_eval_section_length_max() {
+    let mut report = create_test_report();
+    report.sections.push(Section {
+        name: ".text".to_string(),
+        address: Some(0x1000),
+        size: 5000,
+        entropy: 6.5,
+        permissions: None,
+    });
+    report.sections.push(Section {
+        name: ".data".to_string(),
+        address: Some(0x2000),
+        size: 200,
+        entropy: 4.0,
+        permissions: None,
+    });
+    let data = vec![];
+    let ctx = create_test_context(&report, &data);
+
+    // length_max: 1000 — only .data (200) should match
+    let result = eval_section(
+        None,
+        None,
+        None,
+        None,
+        false,
+        None,       // length_min
+        Some(1000), // length_max
+        None,
+        None,
+        None,
+        None,
+        None,
+        &ctx,
+    );
+    assert!(result.matched);
+    assert_eq!(result.evidence.len(), 1);
+    assert!(result.evidence[0].value.contains(".data"));
+    assert!(result.evidence[0].value.contains("size: 200"));
+}
+
+#[test]
+fn test_eval_section_length_range() {
+    let mut report = create_test_report();
+    report.sections.push(Section {
+        name: ".small".to_string(),
+        address: None,
+        size: 50,
+        entropy: 4.0,
+        permissions: None,
+    });
+    report.sections.push(Section {
+        name: ".medium".to_string(),
+        address: None,
+        size: 500,
+        entropy: 5.0,
+        permissions: None,
+    });
+    report.sections.push(Section {
+        name: ".large".to_string(),
+        address: None,
+        size: 50000,
+        entropy: 7.0,
+        permissions: None,
+    });
+    let data = vec![];
+    let ctx = create_test_context(&report, &data);
+
+    // length_min: 100, length_max: 10000 — only .medium (500) should match
+    let result = eval_section(
+        None,
+        None,
+        None,
+        None,
+        false,
+        Some(100),
+        Some(10000),
+        None,
+        None,
+        None,
+        None,
+        None,
+        &ctx,
+    );
+    assert!(result.matched);
+    assert_eq!(result.evidence.len(), 1);
+    assert!(result.evidence[0].value.contains(".medium"));
+}
+
+#[test]
+fn test_eval_section_length_with_name_pattern() {
+    let mut report = create_test_report();
+    report.sections.push(Section {
+        name: "UPX0".to_string(),
+        address: None,
+        size: 10000,
+        entropy: 7.9,
+        permissions: None,
+    });
+    report.sections.push(Section {
+        name: "UPX1".to_string(),
+        address: None,
+        size: 200,
+        entropy: 7.8,
+        permissions: None,
+    });
+    let data = vec![];
+    let ctx = create_test_context(&report, &data);
+
+    // Match UPX sections with size >= 5000
+    let regex = "^UPX".to_string();
+    let result = eval_section(
+        None,
+        None,
+        Some(&regex),
+        None,
+        false,
+        Some(5000),
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        &ctx,
+    );
+    assert!(result.matched);
+    assert_eq!(result.evidence.len(), 1);
+    assert!(result.evidence[0].value.contains("UPX0"));
+}
+
+#[test]
+fn test_eval_section_length_precision_boost() {
+    let mut report = create_test_report();
+    report.sections.push(Section {
+        name: ".text".to_string(),
+        address: None,
+        size: 1000,
+        entropy: 6.5,
+        permissions: None,
+    });
+    let data = vec![];
+    let ctx = create_test_context(&report, &data);
+
+    // Substr alone: precision 1.0
+    let substr = "text".to_string();
+    let result_base = eval_section(
+        None,
+        Some(&substr),
+        None,
+        None,
+        false,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        &ctx,
+    );
+    assert_eq!(result_base.precision, 1.0);
+
+    // Substr + length_min: precision 1.5
+    let result_min = eval_section(
+        None,
+        Some(&substr),
+        None,
+        None,
+        false,
+        Some(500),
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        &ctx,
+    );
+    assert_eq!(result_min.precision, 1.5);
+
+    // Substr + length_min + length_max: precision 2.0
+    let result_both = eval_section(
+        None,
+        Some(&substr),
+        None,
+        None,
+        false,
+        Some(500),
+        Some(5000),
+        None,
+        None,
+        None,
+        None,
+        None,
+        &ctx,
+    );
+    assert_eq!(result_both.precision, 2.0);
+}
+
+// =============================================================================
 // T8: Section permission flags
 // =============================================================================
 

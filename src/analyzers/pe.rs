@@ -765,16 +765,19 @@ impl PEAnalyzer {
         // 1. Code signature (PKCS7)
         // 2. Self-extracting archive (7z, ZIP, RAR)
         // 3. Resources or other data
-        if let Some(opt_header) = &pe.header.optional_header {
-            let image_size = opt_header.windows_fields.size_of_image as u64;
-            if (data.len() as u64) > image_size {
-                let overlay_start = image_size as usize;
-                let overlay_data = &data[overlay_start..];
+        let sig_sections_end = pe
+            .sections
+            .iter()
+            .map(|s| (s.pointer_to_raw_data + s.size_of_raw_data) as u64)
+            .max()
+            .unwrap_or(0);
+        if (data.len() as u64) > sig_sections_end && sig_sections_end > 0 {
+            let overlay_start = sig_sections_end as usize;
+            let overlay_data = &data[overlay_start..];
 
-                // Check if overlay looks like PKCS7 signature (starts with 0x30)
-                if !overlay_data.is_empty() && overlay_data[0] == 0x30 {
-                    metrics.has_signature = true;
-                }
+            // Check if overlay looks like PKCS7 signature (starts with 0x30)
+            if !overlay_data.is_empty() && overlay_data[0] == 0x30 {
+                metrics.has_signature = true;
             }
         }
 

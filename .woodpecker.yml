@@ -1,0 +1,15 @@
+when:
+  - event: pull_request
+
+steps:
+  - name: test
+    image: rust:latest
+    commands:
+      - cargo test --workspace
+
+  - name: lint
+    image: rust:latest
+    commands:
+      - rustup component add rustfmt clippy
+      - cargo fmt --all --check
+      - cargo clippy --workspace --all-targets --all-features

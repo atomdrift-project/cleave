@@ -205,6 +205,7 @@ impl FileType {
             FileType::PkgInfo,
             FileType::Plist,
             FileType::Rtf,
+            FileType::Lnk,
             // Archive/installer formats
             FileType::Ipa,
             // Generic formats

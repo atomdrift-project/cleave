@@ -108,10 +108,12 @@ pub(super) fn check_yaml_patterns(content: &str, path: &Path) -> Vec<String> {
     // capability — it belongs in objectives/, not micro-behaviors/.
     {
         let components: Vec<_> = path.components().collect();
-        // Find the index of a component named "cap"
-        let cap_idx = components
-            .iter()
-            .position(|c| c.as_os_str().to_string_lossy().eq_ignore_ascii_case("cap"));
+        // Find the index of the "micro-behaviors" directory component
+        let cap_idx = components.iter().position(|c| {
+            c.as_os_str()
+                .to_string_lossy()
+                .eq_ignore_ascii_case("micro-behaviors")
+        });
         if let Some(cap_pos) = cap_idx {
             // Check directory components after "micro-behaviors/" but before the filename
             let dir_components = &components[cap_pos + 1..components.len().saturating_sub(1)];

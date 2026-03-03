@@ -257,6 +257,66 @@ impl AnalysisReport {
         })
     }
 
+    /// Merge encoding layers (files with `##` in their path) into their parent files.
+    ///
+    /// Each encoding layer's findings are merged into the parent file, deduplicating
+    /// by finding ID (keeping the highest criticality). The layer entries are removed
+    /// from the files array.
+    ///
+    /// Returns the indices (in the post-merge files array) of files that had layers merged,
+    /// so callers can recalculate composites on those files.
+    pub fn merge_encoding_layers(&mut self) -> Vec<usize> {
+        use super::file_analysis::ENCODING_DELIMITER;
+
+        // Identify which files are encoding layers and map them to their parent path
+        // A layer path looks like: "parent_path##encoding@offset"
+        // The parent is everything before the first "##"
+        let mut layer_findings: std::collections::HashMap<String, Vec<Finding>> =
+            std::collections::HashMap::new();
+
+        let mut layer_indices = Vec::new();
+        for (i, file) in self.files.iter().enumerate() {
+            if let Some(pos) = file.path.find(ENCODING_DELIMITER) {
+                let parent_path = &file.path[..pos];
+                layer_findings
+                    .entry(parent_path.to_string())
+                    .or_default()
+                    .extend(file.findings.clone());
+                layer_indices.push(i);
+            }
+        }
+
+        if layer_indices.is_empty() {
+            return Vec::new();
+        }
+
+        // Remove layer entries from files (in reverse order to preserve indices)
+        for &i in layer_indices.iter().rev() {
+            self.files.remove(i);
+        }
+
+        // Merge layer findings into their parent files
+        let mut merged_file_indices = Vec::new();
+        for (i, file) in self.files.iter_mut().enumerate() {
+            if let Some(findings) = layer_findings.remove(&file.path) {
+                // Merge findings, deduplicating by ID (keep highest criticality)
+                for finding in findings {
+                    if let Some(existing) = file.findings.iter_mut().find(|f| f.id == finding.id) {
+                        if finding.crit > existing.crit {
+                            *existing = finding;
+                        }
+                    } else {
+                        file.findings.push(finding);
+                    }
+                }
+                file.compute_summary();
+                merged_file_indices.push(i);
+            }
+        }
+
+        merged_file_indices
+    }
+
     /// Shrink all Vec fields to fit their contents, freeing excess capacity.
     /// Call this after analysis is complete to reduce memory footprint.
     pub fn shrink_to_fit(&mut self) {
@@ -649,5 +709,194 @@ mod tests {
         };
 
         assert!(entry.path.contains('!'));
+    }
+
+    // ==================== merge_encoding_layers Tests ====================
+
+    fn test_file(path: &str, findings: Vec<Finding>) -> FileAnalysis {
+        let mut fa = FileAnalysis::new(
+            0,
+            path.to_string(),
+            "macho".to_string(),
+            "sha256hash".to_string(),
+            1024,
+        );
+        fa.findings = findings;
+        fa.compute_summary();
+        fa
+    }
+
+    #[test]
+    fn test_merge_no_layers() {
+        let mut report = AnalysisReport::new(test_target());
+        report.files = vec![test_file(
+            "/bin/sample",
+            vec![test_finding("cap/a", Criticality::Notable)],
+        )];
+
+        let merged = report.merge_encoding_layers();
+
+        assert!(merged.is_empty());
+        assert_eq!(report.files.len(), 1);
+        assert_eq!(report.files[0].findings.len(), 1);
+    }
+
+    #[test]
+    fn test_merge_single_root_with_layers() {
+        let mut report = AnalysisReport::new(test_target());
+        report.files = vec![
+            test_file(
+                "/bin/sample",
+                vec![test_finding("cap/a", Criticality::Notable)],
+            ),
+            test_file(
+                "/bin/sample##xor@100",
+                vec![test_finding("cap/b", Criticality::Suspicious)],
+            ),
+            test_file(
+                "/bin/sample##xor@200",
+                vec![test_finding("cap/c", Criticality::Notable)],
+            ),
+        ];
+
+        let merged = report.merge_encoding_layers();
+
+        assert_eq!(merged, vec![0]);
+        assert_eq!(report.files.len(), 1);
+        assert_eq!(report.files[0].path, "/bin/sample");
+        assert_eq!(report.files[0].findings.len(), 3);
+
+        let ids: Vec<&str> = report.files[0]
+            .findings
+            .iter()
+            .map(|f| f.id.as_str())
+            .collect();
+        assert!(ids.contains(&"cap/a"));
+        assert!(ids.contains(&"cap/b"));
+        assert!(ids.contains(&"cap/c"));
+    }
+
+    #[test]
+    fn test_merge_dedup_keeps_highest_criticality() {
+        let mut report = AnalysisReport::new(test_target());
+        report.files = vec![
+            test_file(
+                "/bin/sample",
+                vec![test_finding("cap/a", Criticality::Notable)],
+            ),
+            test_file(
+                "/bin/sample##xor@100",
+                vec![test_finding("cap/a", Criticality::Hostile)],
+            ),
+        ];
+
+        report.merge_encoding_layers();
+
+        assert_eq!(report.files.len(), 1);
+        assert_eq!(report.files[0].findings.len(), 1);
+        assert_eq!(report.files[0].findings[0].crit, Criticality::Hostile);
+    }
+
+    #[test]
+    fn test_merge_dedup_keeps_existing_when_higher() {
+        let mut report = AnalysisReport::new(test_target());
+        report.files = vec![
+            test_file(
+                "/bin/sample",
+                vec![test_finding("cap/a", Criticality::Hostile)],
+            ),
+            test_file(
+                "/bin/sample##xor@100",
+                vec![test_finding("cap/a", Criticality::Notable)],
+            ),
+        ];
+
+        report.merge_encoding_layers();
+
+        assert_eq!(report.files.len(), 1);
+        assert_eq!(report.files[0].findings.len(), 1);
+        assert_eq!(report.files[0].findings[0].crit, Criticality::Hostile);
+    }
+
+    #[test]
+    fn test_merge_archive_members_preserved() {
+        let mut report = AnalysisReport::new(test_target());
+        report.files = vec![
+            test_file(
+                "/archive.zip",
+                vec![test_finding("cap/a", Criticality::Notable)],
+            ),
+            test_file(
+                "/archive.zip!!member.py",
+                vec![test_finding("cap/b", Criticality::Suspicious)],
+            ),
+        ];
+
+        let merged = report.merge_encoding_layers();
+
+        assert!(merged.is_empty());
+        assert_eq!(report.files.len(), 2);
+    }
+
+    #[test]
+    fn test_merge_archive_member_with_layers() {
+        let mut report = AnalysisReport::new(test_target());
+        report.files = vec![
+            test_file(
+                "/archive.zip!!member.py",
+                vec![test_finding("cap/a", Criticality::Notable)],
+            ),
+            test_file(
+                "/archive.zip!!member.py##base64@0",
+                vec![test_finding("cap/b", Criticality::Hostile)],
+            ),
+        ];
+
+        let merged = report.merge_encoding_layers();
+
+        assert_eq!(merged, vec![0]);
+        assert_eq!(report.files.len(), 1);
+        assert_eq!(report.files[0].path, "/archive.zip!!member.py");
+        assert_eq!(report.files[0].findings.len(), 2);
+    }
+
+    #[test]
+    fn test_merge_layer_only_findings_appear() {
+        let mut report = AnalysisReport::new(test_target());
+        report.files = vec![
+            test_file("/bin/sample", vec![]),
+            test_file(
+                "/bin/sample##xor@100",
+                vec![test_finding("cap/layer_only", Criticality::Suspicious)],
+            ),
+        ];
+
+        report.merge_encoding_layers();
+
+        assert_eq!(report.files.len(), 1);
+        assert_eq!(report.files[0].findings.len(), 1);
+        assert_eq!(report.files[0].findings[0].id, "cap/layer_only");
+    }
+
+    #[test]
+    fn test_merge_recomputes_summary() {
+        let mut report = AnalysisReport::new(test_target());
+        report.files = vec![
+            test_file(
+                "/bin/sample",
+                vec![test_finding("cap/a", Criticality::Notable)],
+            ),
+            test_file(
+                "/bin/sample##xor@100",
+                vec![test_finding("cap/b", Criticality::Hostile)],
+            ),
+        ];
+
+        report.merge_encoding_layers();
+
+        assert_eq!(report.files[0].risk, Some(Criticality::Hostile));
+        let counts = report.files[0].counts.as_ref().unwrap();
+        assert_eq!(counts.hostile, 1);
+        assert_eq!(counts.notable, 1);
     }
 }

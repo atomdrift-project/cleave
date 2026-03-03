@@ -367,10 +367,10 @@ composite_rules:
         - id: metadata/apple::system-component
         - id: metadata/sign/apple::platform
         - id: micro-behaviors/dylib/library::system-lib-marker
-        - id: micro-behaviors/dylib/load/video-lib-marker
+        - id: micro-behaviors/dylib/library::video-lib-marker
         - id: micro-behaviors/dylib/library::graphics-lib-marker
         - id: micro-behaviors/dylib/library::shell-interpreter
-        - id: micro-behaviors/dylib/library::cxx-stdlib-marker
+        - id: micro-behaviors/dylib/library/libc::cxx-stdlib-marker
 
   # ctypes CDLL composite
   - id: ctypes-cdll

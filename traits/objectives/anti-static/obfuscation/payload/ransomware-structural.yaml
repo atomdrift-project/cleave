@@ -22,8 +22,8 @@ composite_rules:
       - id: micro-behaviors/dylib/load::load-library-a
       - id: micro-behaviors/dylib/lookup::get-proc-address
       # Execution
-      - id: micro-behaviors/process/create/methods::shell-execute-a
-      - id: micro-behaviors/process/create/methods::shell-execute
+      - id: micro-behaviors/process/create/exec::shell-execute-a
+      - id: micro-behaviors/process/create/exec::shell-execute
       # Specific crypto APIs
       - id: micro-behaviors/crypto/certificate/store::cert-open-store
 
@@ -44,7 +44,7 @@ composite_rules:
       - id: micro-behaviors/dylib/lookup::get-proc-address
     any:
       # Additional suspicious capabilities
-      - id: micro-behaviors/process/create/methods::shell-execute-a
+      - id: micro-behaviors/process/create/exec::shell-execute-a
       - id: micro-behaviors/crypto/certificate/store::cert-open-store
       - id: micro-behaviors/mem/protect/modify::virtual-protect
 

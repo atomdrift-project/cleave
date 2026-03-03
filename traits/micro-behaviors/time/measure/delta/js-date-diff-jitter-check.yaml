@@ -45,17 +45,7 @@ traits:
       language: javascript
       query: |
         (new_expression
-          constructor: [
-            (identifier) @id (#eq? @id "Date")
-            (member_expression
-              property: [
-                (identifier) @prop (#eq? @prop "Date")
-                (subscript_expression
-                  index: (string) @str (#match? @str "Date")
-                )
-              ]
-            )
-          ]
+          constructor: (identifier) @id (#eq? @id "Date")
         )
 
   - id: js-multiple-sleep-raw
@@ -78,12 +68,7 @@ traits:
       query: |
         (call_expression
           function: (member_expression
-            property: [
-              (identifier) @prop (#eq? @prop "Sleep")
-              (subscript_expression
-                index: (string) @str (#match? @str "Sleep")
-              )
-            ]
+            property: (property_identifier) @prop (#eq? @prop "Sleep")
           )
         )
 

@@ -279,7 +279,7 @@ composite_rules:
     conf: 0.9
     needs: 2
     unless:
-      - id: metadata/library/faker
+      - id: metadata/library::faker-library
     any:
       - id: russian-locale
       - id: cis-timezone
@@ -296,7 +296,7 @@ composite_rules:
     conf: 0.85
     needs: 2
     unless:
-      - id: metadata/library/faker
+      - id: metadata/library::faker-library
     any:
       - id: cis-locale
       - id: cis-timezone

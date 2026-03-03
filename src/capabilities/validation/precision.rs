@@ -389,6 +389,12 @@ pub(crate) fn calculate_trait_precision(trait_def: &TraitDefinition) -> f32 {
 
     precision += score_condition(&trait_def.r#if);
 
+    // Count/density constraints (scored at trait level, not condition level)
+    precision += score_presence(trait_def.count_min.as_ref());
+    precision += score_presence(trait_def.count_max.as_ref());
+    precision += score_presence(trait_def.per_kb_min.as_ref());
+    precision += score_presence(trait_def.per_kb_max.as_ref());
+
     if let Some(exceptions) = trait_def.not.as_ref() {
         precision += PARAM_UNIT;
         precision += score_not_exceptions(exceptions);

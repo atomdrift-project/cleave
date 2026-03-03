@@ -25,8 +25,7 @@ composite_rules:
       - id: micro-behaviors/process/create/spawn::stdio-ignore
       - id: micro-behaviors/process/create/spawn::child-unref-call
     unless:
-      - id: metadata/dev/testing::node-core-test
-      - id: objectives/lateral-movement/supply-chain/npm/testing::test-filename-pattern
+      - id: metadata/quality/testing::test-filename-pattern
 
   # Node.js self-spawning dropper pattern
   # Complexity: file_types (1) + all (4) = 5 (meets HOSTILE threshold)
@@ -43,8 +42,7 @@ composite_rules:
       - id: micro-behaviors/process/create/spawn::stdio-ignore
       - id: micro-behaviors/process/create/spawn::child-unref-call
     unless:
-      - id: metadata/dev/testing::node-core-test
-      - id: objectives/lateral-movement/supply-chain/npm/testing::test-filename-pattern
+      - id: metadata/quality/testing::test-filename-pattern
 
   # Supply-chain dropper: child_process + stealth spawn + no exports
   # Complexity: file_types (1) + all (3) = 4 (meets HOSTILE threshold)

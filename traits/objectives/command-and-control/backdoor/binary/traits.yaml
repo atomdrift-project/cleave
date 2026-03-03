@@ -228,7 +228,7 @@ composite_rules:
     # Graphics libraries use dlopen/dlsym for GPU driver loading - not hijacking
     downgrade:
       any:
-        - id: metadata/library/graphics-lib-marker
+        - id: micro-behaviors/dylib/library::graphics-lib-marker
         - id: micro-behaviors/dylib/library::system-lib-marker
 
   # === Unexpected capability combinations ===

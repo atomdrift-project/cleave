@@ -152,8 +152,8 @@ composite_rules:
       - id: dense-unusual-chars
       - id: unusual-character-combinations
     unless:
-      - id: micro-behaviors/interface/usage/usage-help
-      - id: micro-behaviors/data/db/libpq
+      - id: micro-behaviors/interface/usage/help::usage-help
+      - id: micro-behaviors/data/db/conn/postgresql::libpq
     downgrade:
       any:
         - id: micro-behaviors/data/compression

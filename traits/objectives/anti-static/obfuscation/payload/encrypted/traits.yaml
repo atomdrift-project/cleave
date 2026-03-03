@@ -274,7 +274,6 @@ composite_rules:
   - id: micro-behaviors/process/create/shell::shell-execution
   - id: micro-behaviors/process/create/shell::shell-execution-indicators
   unless:
-  - id: objectives/anti-static/obfuscation/payload/encrypted::obfuscated-elf-daemon-dropper__unless_1
   - id: metadata/format::many-imports
 # PE encrypted resource with anti-analysis: dominant encrypted .rsrc + full resource
 # extraction chain + process scanning (anti-AV) or anti-debug

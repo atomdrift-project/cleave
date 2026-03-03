@@ -59,7 +59,7 @@ traits:
     downgrade:
       any:
         - id: micro-behaviors/dylib/library::system-lib-marker
-        - id: micro-behaviors/dylib/load/video-lib-marker
+        - id: micro-behaviors/dylib/library::video-lib-marker
 
   - id: etc-profile
     desc: /etc/profile system-wide shell configuration

@@ -121,7 +121,7 @@ composite_rules:
       - id: objectives/anti-analysis/kernel-hide/lkm/headers::force-order-str
     downgrade:
       none:
-        - id: kernel-module-header
+        - id: objectives/anti-analysis/kernel-hide/lkm/headers::kernel-module-header
 
   # Rootkit header pattern (kernel module with hooking)
   - id: rootkit-header

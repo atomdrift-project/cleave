@@ -424,9 +424,13 @@ pub(crate) fn find_orphaned_components(
         }
 
         if let Some(downgrade) = &rule.downgrade {
-            for conditions in [downgrade.any.as_ref(), downgrade.all.as_ref()]
-                .into_iter()
-                .flatten()
+            for conditions in [
+                downgrade.any.as_ref(),
+                downgrade.all.as_ref(),
+                downgrade.none.as_ref(),
+            ]
+            .into_iter()
+            .flatten()
             {
                 for condition in conditions {
                     if let Condition::Trait { id } = condition {
@@ -481,9 +485,13 @@ pub(crate) fn find_orphaned_components(
         }
 
         if let Some(downgrade) = &trait_def.downgrade {
-            for conditions in [downgrade.any.as_ref(), downgrade.all.as_ref()]
-                .into_iter()
-                .flatten()
+            for conditions in [
+                downgrade.any.as_ref(),
+                downgrade.all.as_ref(),
+                downgrade.none.as_ref(),
+            ]
+            .into_iter()
+            .flatten()
             {
                 for condition in conditions {
                     if let Condition::Trait { id } = condition {

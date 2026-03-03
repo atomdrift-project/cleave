@@ -6,7 +6,7 @@ composite_rules:
     all:
       - id: metadata/builder/pip::setup-py
       - id: micro-behaviors/data/text/keywords::urllib3-content
-    not:
+    none:
       - id: micro-behaviors/data/text/keywords::urllib3-name
       - id: metadata/library::botocore-lib
 

@@ -560,6 +560,42 @@ pub(crate) fn analyze_file_with_shared_mapper(
     // Convert to v2 schema (flat files array) and filter based on verbosity
     report.convert_to_v2(verbose);
 
+    // Merge encoding layers (##xor, ##base64, etc.) into their parent files
+    // and recalculate composites with the full merged trait set
+    let merged_indices = report.merge_encoding_layers();
+    for &idx in &merged_indices {
+        let file = &report.files[idx];
+        let mut temp_report = types::AnalysisReport::new(types::TargetInfo {
+            path: file.path.clone(),
+            file_type: file.file_type.clone(),
+            sha256: file.sha256.clone(),
+            size_bytes: file.size,
+            architectures: None,
+        });
+        temp_report.findings = file.findings.clone();
+
+        let new_composites = capability_mapper.evaluate_container_composites(
+            &temp_report,
+            &file.findings,
+            &file.file_type,
+        );
+        if !new_composites.is_empty() {
+            let file = &mut report.files[idx];
+            for finding in new_composites {
+                if !file.findings.iter().any(|f| f.id == finding.id) {
+                    file.findings.push(finding);
+                }
+            }
+            file.compute_summary();
+        }
+    }
+    if !merged_indices.is_empty() {
+        tracing::debug!(
+            "Merged encoding layers into {} parent file(s)",
+            merged_indices.len()
+        );
+    }
+
     // Log memory state after processing
     if verbose {
         use cleave::memory_tracker;

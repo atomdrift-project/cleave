@@ -379,7 +379,7 @@ composite_rules:
       - id: windows-registry-run-access
     downgrade:
       any:
-        - id: metadata/quality/versioned
+        - id: metadata/quality::versioned
 
   - id: windows-registry-windows-run-value
     desc: Writes Run value in Windows key

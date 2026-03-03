@@ -12,4 +12,4 @@ composite_rules:
         - id: metadata/dev/testing
         - id: metadata/quality/testing
         - id: metadata/library/structure
-        - id: metadata/library/rxjs
+        - id: metadata/library::generic-rxjs

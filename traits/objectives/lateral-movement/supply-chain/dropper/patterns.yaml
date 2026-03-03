@@ -684,8 +684,8 @@ composite_rules:
       any:
         - id: metadata/library/jquery::library
         - id: metadata/library/socketio::client
-        - id: metadata/library/rxjs::ajax-observable
-        - id: metadata/library/rxjs::generic
+        - id: metadata/library::ajax-observable
+        - id: metadata/library::generic
         - id: metadata/library/prototype::copyright
         - id: metadata/library/prototype::version-string
         - id: metadata/library/prototype::header-x
@@ -763,7 +763,7 @@ composite_rules:
     needs: 2
     unless:
       - id: metadata/dev/testing::node-common-require
-      - id: metadata/library/rxjs::generic
+      - id: metadata/library::generic
       - id: metadata/library::commander
 
   - id: obfuscated-js-dropper

@@ -20,7 +20,7 @@ traits:
       any:
         - type: string
           substr: "ApiSet Stub DLL"
-        - id: metadata/vendor/valve/valve-corp-binary
+        - id: metadata/vendor/valve::valve-corp-binary
 
   - id: read-process-memory
     desc: Read memory from target process
@@ -34,7 +34,7 @@ traits:
       any:
         - type: string
           substr: "ApiSet Stub DLL"
-        - id: metadata/vendor/valve/valve-corp-binary
+        - id: metadata/vendor/valve::valve-corp-binary
 
   - id: create-remote-thread
     desc: Create thread in target process
@@ -49,7 +49,7 @@ traits:
       any:
         - type: string
           substr: "ApiSet Stub DLL"
-        - id: metadata/vendor/valve/valve-corp-binary
+        - id: metadata/vendor/valve::valve-corp-binary
 
 
   - id: queue-user-apc
@@ -75,7 +75,7 @@ traits:
       any:
         - type: string
           substr: "ApiSet Stub DLL"
-        - id: metadata/vendor/valve/valve-corp-binary
+        - id: metadata/vendor/valve::valve-corp-binary
     unless:
       - type: basename
         regex: '\.pyd$'
@@ -93,7 +93,7 @@ traits:
       any:
         - type: string
           substr: "ApiSet Stub DLL"
-        - id: metadata/vendor/valve/valve-corp-binary
+        - id: metadata/vendor/valve::valve-corp-binary
     unless:
       - type: basename
         regex: '\.pyd$'
@@ -110,7 +110,7 @@ traits:
       any:
         - type: string
           substr: "ApiSet Stub DLL"
-        - id: metadata/vendor/valve/valve-corp-binary
+        - id: metadata/vendor/valve::valve-corp-binary
     unless:
       - type: basename
         regex: '\.pyd$'
@@ -130,7 +130,7 @@ traits:
       any:
         - type: string
           substr: "ApiSet Stub DLL"
-        - id: metadata/vendor/valve/valve-corp-binary
+        - id: metadata/vendor/valve::valve-corp-binary
 
 composite_rules:
   - id: create-remote-thread-ex

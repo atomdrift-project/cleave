@@ -40,8 +40,6 @@ composite_rules:
   - id: objectives/anti-analysis/packing/entropy::high-entropy-section
   - id: micro-behaviors/dylib/lookup::get-proc-address
   unless:
-  - id: metadata/sign/certificate::verified
-  - id: file/archive/self-extracting
 - id: suspicious-sideloading-host
   desc: Suspicious side-loading host with minimal logic
   crit: suspicious

@@ -172,17 +172,8 @@ fn eval_ast_pattern_multi(
     match_mode: MatchMode,
     case_insensitive: bool,
 ) -> ConditionResult {
-    // Skip analysis if the tree has errors (malformed input)
-    if tree.root_node().has_error() {
-        return ConditionResult {
-            matched: false,
-            evidence: Vec::new(),
-            match_count: 0,
-            warnings: vec![AnalysisWarning::AstTooDeep { max_depth: 0 }],
-            precision: 0.0,
-            matched_trait_ids: Vec::new(),
-        };
-    }
+    // Track parse errors but continue — tree-sitter recovers from minor errors
+    let has_parse_errors = tree.root_node().has_error();
 
     // Build the pattern matcher based on match mode
     let matcher: Box<dyn Fn(&str) -> bool> = match match_mode {
@@ -221,6 +212,9 @@ fn eval_ast_pattern_multi(
     );
 
     let mut warnings = Vec::new();
+    if has_parse_errors {
+        warnings.push(AnalysisWarning::AstParseError);
+    }
     if stats.depth_limit_hit {
         warnings.push(AnalysisWarning::AstTooDeep {
             max_depth: stats.max_depth_reached,
@@ -293,7 +287,7 @@ pub(crate) fn eval_ast_query<'a>(query_str: &str, ctx: &EvaluationContext<'a>) -
         return ConditionResult::no_match();
     };
 
-    // Get the appropriate parser and language based on file type
+    // Get the appropriate language for this file type
     let lang: tree_sitter::Language = match ctx.file_type {
         FileType::C => tree_sitter_c::LANGUAGE.into(),
         FileType::Python => tree_sitter_python::LANGUAGE.into(),
@@ -318,26 +312,24 @@ pub(crate) fn eval_ast_query<'a>(query_str: &str, ctx: &EvaluationContext<'a>) -
         _ => return ConditionResult::no_match(),
     };
 
-    let mut parser = tree_sitter::Parser::new();
-    if parser.set_language(&lang).is_err() {
-        return ConditionResult::no_match();
-    }
-
-    let Some(tree) = parser.parse(source, None) else {
-        return ConditionResult::no_match();
+    // Use cached AST if available, otherwise parse on demand
+    let parsed_tree;
+    let tree = if let Some(cached) = ctx.cached_ast {
+        cached
+    } else {
+        let mut parser = tree_sitter::Parser::new();
+        if parser.set_language(&lang).is_err() {
+            return ConditionResult::no_match();
+        }
+        parsed_tree = match parser.parse(source, None) {
+            Some(t) => t,
+            None => return ConditionResult::no_match(),
+        };
+        &parsed_tree
     };
 
-    // Skip query execution if the tree has errors (malformed input)
-    if tree.root_node().has_error() {
-        return ConditionResult {
-            matched: false,
-            evidence: Vec::new(),
-            match_count: 0,
-            warnings: vec![AnalysisWarning::AstTooDeep { max_depth: 0 }],
-            precision: 0.0,
-            matched_trait_ids: Vec::new(),
-        };
-    }
+    // Track parse errors but continue — tree-sitter recovers from minor errors
+    let has_parse_errors = tree.root_node().has_error();
 
     // Compile the query
     let Ok(query) = tree_sitter::Query::new(&lang, query_str) else {
@@ -353,7 +345,6 @@ pub(crate) fn eval_ast_query<'a>(query_str: &str, ctx: &EvaluationContext<'a>) -
     query_cursor.set_byte_range(0..source.len().min(10_000_000)); // Limit to first 10MB
 
     let mut evidence = Vec::new();
-    // Cap evidence collection to MAX_EVIDENCE_PER_TRAIT
 
     // Buffers needed for text predicate evaluation
     let mut buffer1 = Vec::new();
@@ -413,7 +404,11 @@ pub(crate) fn eval_ast_query<'a>(query_str: &str, ctx: &EvaluationContext<'a>) -
         matched: match_count > 0,
         evidence,
         match_count,
-        warnings: Vec::new(),
+        warnings: if has_parse_errors {
+            vec![AnalysisWarning::AstParseError]
+        } else {
+            Vec::new()
+        },
         precision: 2.0, // Tree-sitter queries are complex and specific
         matched_trait_ids: Vec::new(),
     }

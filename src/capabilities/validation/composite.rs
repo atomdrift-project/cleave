@@ -79,6 +79,20 @@ pub(crate) fn autoprefix_trait_refs(rule: &mut CompositeTrait, prefix: &str) {
     if let Some(ref mut conditions) = rule.none {
         prefix_conditions(conditions, prefix);
     }
+    if let Some(ref mut conditions) = rule.unless {
+        prefix_conditions(conditions, prefix);
+    }
+    if let Some(ref mut downgrade) = rule.downgrade {
+        if let Some(ref mut conditions) = downgrade.all {
+            prefix_conditions(conditions, prefix);
+        }
+        if let Some(ref mut conditions) = downgrade.any {
+            prefix_conditions(conditions, prefix);
+        }
+        if let Some(ref mut conditions) = downgrade.none {
+            prefix_conditions(conditions, prefix);
+        }
+    }
 }
 
 /// Collect all trait reference IDs from a composite rule's conditions.
@@ -109,6 +123,20 @@ pub(crate) fn collect_trait_refs_from_rule(rule: &CompositeTrait) -> Vec<(String
     }
     if let Some(ref conditions) = rule.none {
         collect_from_conditions(conditions, &rule.id, &mut refs);
+    }
+    if let Some(ref conditions) = rule.unless {
+        collect_from_conditions(conditions, &rule.id, &mut refs);
+    }
+    if let Some(ref downgrade) = rule.downgrade {
+        if let Some(ref conditions) = downgrade.all {
+            collect_from_conditions(conditions, &rule.id, &mut refs);
+        }
+        if let Some(ref conditions) = downgrade.any {
+            collect_from_conditions(conditions, &rule.id, &mut refs);
+        }
+        if let Some(ref conditions) = downgrade.none {
+            collect_from_conditions(conditions, &rule.id, &mut refs);
+        }
     }
 
     refs

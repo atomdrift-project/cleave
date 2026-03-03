@@ -16,7 +16,7 @@ traits:
     # Reading env vars is completely normal for system libs, video drivers, etc.
     downgrade:
       any:
-        - id: micro-behaviors/dylib/load/video-lib-marker
+        - id: micro-behaviors/dylib/library::video-lib-marker
         - id: micro-behaviors/dylib/library::graphics-lib-marker
         - id: micro-behaviors/dylib/library::system-lib-marker
 

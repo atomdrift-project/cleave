@@ -744,16 +744,6 @@ composite_rules:
   - id: ngrok-io-endpoint
   - id: ngrok-free-app-endpoint
 
-- id: paste-service
-  desc: Contacts paste/bin service (common payload hosting)
-  crit: suspicious
-  conf: 0.85
-  attack: T1102
-  any:
-  - id: objectives/exfiltration/channel/callback/
-  - id: objectives/discovery/network/ip-tracker/
-  - id: objectives/command-and-control/infrastructure/pastebin/
-
 - id: replit-hosted
   desc: Contacts Replit-hosted endpoint (commonly abused)
   crit: suspicious

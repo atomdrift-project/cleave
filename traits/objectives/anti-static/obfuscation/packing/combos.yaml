@@ -27,4 +27,4 @@ composite_rules:
       - id: objectives/execution/reflection/class::dynamic-load-pattern
     downgrade:
       any:
-        - id: metadata/vendor/valve/valve-corp-binary
+        - id: metadata/vendor/valve::valve-corp-binary

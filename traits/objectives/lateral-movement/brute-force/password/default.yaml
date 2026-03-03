@@ -110,7 +110,7 @@ composite_rules:
       - elf
     size_max: 200000
     unless:
-      - id: micro-behaviors/interface/usage/usage-help
+      - id: micro-behaviors/interface/usage/help::usage-help
     any:
       - id: credential-wordlist-1
       - id: credential-wordlist-2

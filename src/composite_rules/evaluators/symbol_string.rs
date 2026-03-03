@@ -351,12 +351,16 @@ pub(crate) fn eval_string<'a, 'b>(
         None
     };
 
+    // Separate match counter — not capped by MAX_EVIDENCE_PER_TRAIT
+    let mut match_count: usize = 0;
+
     // Helper to check if a value matches and add to evidence
     let check_and_add_evidence = |value: &str,
                                   source: &str,
                                   method: &str,
                                   location: Option<String>,
-                                  evidence: &mut Vec<Evidence>| {
+                                  evidence: &mut Vec<Evidence>,
+                                  match_count: &mut usize| {
         let mut matched = false;
         let mut match_value = String::new();
 
@@ -401,14 +405,17 @@ pub(crate) fn eval_string<'a, 'b>(
             // When external_ip is set, require match to contain a valid external IP
             let excluded_by_ip = params.external_ip && !contains_external_ip(&match_value);
 
-            if !excluded_by_not && !excluded_by_ip && evidence.len() < MAX_EVIDENCE_PER_TRAIT {
-                evidence.push(Evidence {
-                    method: method.to_string(),
-                    source: source.to_string(),
-                    value: match_value,
-                    location,
-                    ..Default::default()
-                });
+            if !excluded_by_not && !excluded_by_ip {
+                *match_count += 1;
+                if evidence.len() < MAX_EVIDENCE_PER_TRAIT {
+                    evidence.push(Evidence {
+                        method: method.to_string(),
+                        source: source.to_string(),
+                        value: match_value,
+                        location,
+                        ..Default::default()
+                    });
+                }
             }
         }
     };
@@ -425,6 +432,7 @@ pub(crate) fn eval_string<'a, 'b>(
             "string",
             string_info.offset.map(|o| format!("{:#x}", o)),
             &mut evidence,
+            &mut match_count,
         );
     }
 
@@ -436,6 +444,7 @@ pub(crate) fn eval_string<'a, 'b>(
             "import_symbol",
             None,
             &mut evidence,
+            &mut match_count,
         );
     }
 
@@ -447,6 +456,7 @@ pub(crate) fn eval_string<'a, 'b>(
             "export_symbol",
             export.offset.clone(),
             &mut evidence,
+            &mut match_count,
         );
     }
 
@@ -490,7 +500,6 @@ pub(crate) fn eval_string<'a, 'b>(
 
     // count/density constraints are now checked at trait level
     let matched = !evidence.is_empty();
-    let match_count = evidence.len();
 
     ConditionResult {
         matched,
@@ -767,7 +776,7 @@ pub(crate) fn eval_raw<'a>(
 
                         if contains_external_ip(&context) {
                             let excluded = not
-                                .map(|excs| excs.iter().any(|e| e.matches(substr_str)))
+                                .map(|excs| excs.iter().any(|e| e.matches(&context)))
                                 .unwrap_or(false);
                             if !excluded {
                                 if first_match_offset.is_none() {
@@ -791,7 +800,7 @@ pub(crate) fn eval_raw<'a>(
 
                         if contains_external_ip(&context) {
                             let excluded = not
-                                .map(|excs| excs.iter().any(|e| e.matches(substr_str)))
+                                .map(|excs| excs.iter().any(|e| e.matches(&context)))
                                 .unwrap_or(false);
                             if !excluded {
                                 if first_match_offset.is_none() {
@@ -814,38 +823,88 @@ pub(crate) fn eval_raw<'a>(
                         ..Default::default()
                     });
                 }
+            } else if not.is_some() {
+                // Per-match not: filtering — extract context per match
+                let mut first_match_offset = None;
+                if case_insensitive {
+                    let pattern_lower = substr_str.to_ascii_lowercase();
+                    let needle = pattern_lower.as_bytes();
+                    let search_lower = search_data.to_ascii_lowercase();
+                    let finder = memchr::memmem::Finder::new(needle);
+                    let mut pos = 0;
+                    while let Some(offset) = finder.find(&search_lower[pos..]) {
+                        let abs_pos = pos + offset;
+                        let ctx_start = abs_pos.saturating_sub(50);
+                        let ctx_end = (abs_pos + needle.len() + 50).min(search_data.len());
+                        let context = String::from_utf8_lossy(&search_data[ctx_start..ctx_end]);
+                        let excluded = not
+                            .map(|excs| excs.iter().any(|e| e.matches(&context)))
+                            .unwrap_or(false);
+                        if !excluded {
+                            if first_match_offset.is_none() {
+                                first_match_offset = Some((search_start + abs_pos) as u64);
+                            }
+                            match_count += 1;
+                        }
+                        pos = abs_pos + 1;
+                    }
+                } else {
+                    let needle = substr_str.as_bytes();
+                    let finder = memchr::memmem::Finder::new(needle);
+                    let mut pos = 0;
+                    while let Some(offset) = finder.find(&search_data[pos..]) {
+                        let abs_pos = pos + offset;
+                        let ctx_start = abs_pos.saturating_sub(50);
+                        let ctx_end = (abs_pos + needle.len() + 50).min(search_data.len());
+                        let context = String::from_utf8_lossy(&search_data[ctx_start..ctx_end]);
+                        let excluded = not
+                            .map(|excs| excs.iter().any(|e| e.matches(&context)))
+                            .unwrap_or(false);
+                        if !excluded {
+                            if first_match_offset.is_none() {
+                                first_match_offset = Some((search_start + abs_pos) as u64);
+                            }
+                            match_count += 1;
+                        }
+                        pos = abs_pos + 1;
+                    }
+                }
+                if match_count > 0 && evidence.len() < MAX_EVIDENCE_PER_TRAIT {
+                    evidence.push(Evidence {
+                        method: "raw".to_string(),
+                        source: "raw_content".to_string(),
+                        value: substr_str.to_string(),
+                        location: None,
+                        offsets: first_match_offset.into_iter().collect(),
+                        ..Default::default()
+                    });
+                }
             } else {
-                // Simple count - just count byte occurrences (fastest path!)
-                let excluded = not
-                    .map(|excs| excs.iter().any(|e| e.matches(substr_str)))
-                    .unwrap_or(false);
+                // Simple count - just count byte occurrences (fastest path, no not: filter)
+                let first_offset;
+                if case_insensitive {
+                    let pattern_lower = substr_str.to_ascii_lowercase();
+                    let needle = pattern_lower.as_bytes();
+                    let search_lower = search_data.to_ascii_lowercase();
+                    let iter = memchr::memmem::find_iter(&search_lower, needle);
+                    first_offset = iter.clone().next().map(|o| (search_start + o) as u64);
+                    match_count = iter.count();
+                } else {
+                    let needle = substr_str.as_bytes();
+                    let iter = memchr::memmem::find_iter(search_data, needle);
+                    first_offset = iter.clone().next().map(|o| (search_start + o) as u64);
+                    match_count = iter.count();
+                }
 
-                if !excluded {
-                    let first_offset;
-                    if case_insensitive {
-                        let pattern_lower = substr_str.to_ascii_lowercase();
-                        let needle = pattern_lower.as_bytes();
-                        let search_lower = search_data.to_ascii_lowercase();
-                        let iter = memchr::memmem::find_iter(&search_lower, needle);
-                        first_offset = iter.clone().next().map(|o| (search_start + o) as u64);
-                        match_count = iter.count();
-                    } else {
-                        let needle = substr_str.as_bytes();
-                        let iter = memchr::memmem::find_iter(search_data, needle);
-                        first_offset = iter.clone().next().map(|o| (search_start + o) as u64);
-                        match_count = iter.count();
-                    }
-
-                    if match_count > 0 && evidence.len() < MAX_EVIDENCE_PER_TRAIT {
-                        evidence.push(Evidence {
-                            method: "raw".to_string(),
-                            source: "raw_content".to_string(),
-                            value: substr_str.to_string(),
-                            location: None,
-                            offsets: first_offset.into_iter().collect(),
-                            ..Default::default()
-                        });
-                    }
+                if match_count > 0 && evidence.len() < MAX_EVIDENCE_PER_TRAIT {
+                    evidence.push(Evidence {
+                        method: "raw".to_string(),
+                        source: "raw_content".to_string(),
+                        value: substr_str.to_string(),
+                        location: None,
+                        offsets: first_offset.into_iter().collect(),
+                        ..Default::default()
+                    });
                 }
             }
         } else {
@@ -874,7 +933,7 @@ pub(crate) fn eval_raw<'a>(
                     let context = &content[context_start..context_end];
                     if contains_external_ip(context) {
                         let excluded_by_not = not
-                            .map(|exceptions| exceptions.iter().any(|exc| exc.matches(substr_str)))
+                            .map(|exceptions| exceptions.iter().any(|exc| exc.matches(context)))
                             .unwrap_or(false);
                         if !excluded_by_not {
                             if first_match_offset.is_none() {
@@ -895,37 +954,71 @@ pub(crate) fn eval_raw<'a>(
                         ..Default::default()
                     });
                 }
-            } else {
-                // Skip matches that trigger 'not' filters
-                let excluded_by_not = not
-                    .map(|exceptions| exceptions.iter().any(|exc| exc.matches(substr_str)))
-                    .unwrap_or(false);
-
-                if !excluded_by_not {
-                    let search_content = if case_insensitive {
-                        content.to_lowercase()
-                    } else {
-                        content.to_string()
-                    };
-                    let search_pattern = if case_insensitive {
-                        substr_str.to_lowercase()
-                    } else {
-                        substr_str.clone()
-                    };
-                    let first_offset = search_content
-                        .find(&search_pattern)
-                        .map(|o| (search_start + o) as u64);
-                    match_count = search_content.matches(&search_pattern).count();
-                    if match_count > 0 && evidence.len() < MAX_EVIDENCE_PER_TRAIT {
-                        evidence.push(Evidence {
-                            method: "raw".to_string(),
-                            source: "raw_content".to_string(),
-                            value: substr_str.to_string(),
-                            location: None,
-                            offsets: first_offset.into_iter().collect(),
-                            ..Default::default()
-                        });
+            } else if not.is_some() {
+                // Per-match not: filtering on Unicode content
+                let search_content = if case_insensitive {
+                    content.to_lowercase()
+                } else {
+                    content.to_string()
+                };
+                let search_pattern = if case_insensitive {
+                    substr_str.to_lowercase()
+                } else {
+                    substr_str.clone()
+                };
+                let mut first_match_offset = None;
+                let mut start = 0;
+                while let Some(pos) = search_content[start..].find(&search_pattern) {
+                    let abs_pos = start + pos;
+                    let context_start = abs_pos.saturating_sub(50);
+                    let context_end = (abs_pos + search_pattern.len() + 50).min(content.len());
+                    let match_context = &content[context_start..context_end];
+                    let excluded = not
+                        .map(|excs| excs.iter().any(|e| e.matches(match_context)))
+                        .unwrap_or(false);
+                    if !excluded {
+                        if first_match_offset.is_none() {
+                            first_match_offset = Some((search_start + abs_pos) as u64);
+                        }
+                        match_count += 1;
                     }
+                    start = abs_pos + 1;
+                }
+                if match_count > 0 && evidence.len() < MAX_EVIDENCE_PER_TRAIT {
+                    evidence.push(Evidence {
+                        method: "raw".to_string(),
+                        source: "raw_content".to_string(),
+                        value: substr_str.to_string(),
+                        location: None,
+                        offsets: first_match_offset.into_iter().collect(),
+                        ..Default::default()
+                    });
+                }
+            } else {
+                // Simple count - no not: filter (fastest path)
+                let search_content = if case_insensitive {
+                    content.to_lowercase()
+                } else {
+                    content.to_string()
+                };
+                let search_pattern = if case_insensitive {
+                    substr_str.to_lowercase()
+                } else {
+                    substr_str.clone()
+                };
+                let first_offset = search_content
+                    .find(&search_pattern)
+                    .map(|o| (search_start + o) as u64);
+                match_count = search_content.matches(&search_pattern).count();
+                if match_count > 0 && evidence.len() < MAX_EVIDENCE_PER_TRAIT {
+                    evidence.push(Evidence {
+                        method: "raw".to_string(),
+                        source: "raw_content".to_string(),
+                        value: substr_str.to_string(),
+                        location: None,
+                        offsets: first_offset.into_iter().collect(),
+                        ..Default::default()
+                    });
                 }
             }
         }
@@ -1005,6 +1098,8 @@ pub(crate) fn eval_encoded<'a>(
     case_insensitive: bool,
     compiled_regex: Option<&regex::Regex>,
     location: &ContentLocationParams,
+    external_ip: bool,
+    not: Option<&Vec<crate::composite_rules::condition::NotException>>,
     ctx: &EvaluationContext<'a>,
 ) -> ConditionResult {
     use crate::composite_rules::condition::EncodingSpec;
@@ -1107,24 +1202,33 @@ pub(crate) fn eval_encoded<'a>(
         }
 
         if matches {
-            match_count += 1;
-            if evidence.len() < MAX_EVIDENCE_PER_TRAIT {
-                let value_preview = if string_info.value.len() > 100 {
-                    format!(
-                        "{}...",
-                        &string_info.value[..string_info.value.floor_char_boundary(100)]
-                    )
-                } else {
-                    string_info.value.clone()
-                };
+            // Apply not: exclusions
+            let excluded_by_not = not
+                .map(|exceptions| exceptions.iter().any(|exc| exc.matches(&string_info.value)))
+                .unwrap_or(false);
+            // Apply external_ip: filter
+            let excluded_by_ip = external_ip && !contains_external_ip(&string_info.value);
 
-                evidence.push(Evidence {
-                    method: "encoded_string".to_string(),
-                    source: format!("encoding_chain:{}", string_info.encoding_chain.join("+")),
-                    value: value_preview,
-                    location: string_info.offset.map(|o| format!("{:#x}", o)),
-                    ..Default::default()
-                });
+            if !excluded_by_not && !excluded_by_ip {
+                match_count += 1;
+                if evidence.len() < MAX_EVIDENCE_PER_TRAIT {
+                    let value_preview = if string_info.value.len() > 100 {
+                        format!(
+                            "{}...",
+                            &string_info.value[..string_info.value.floor_char_boundary(100)]
+                        )
+                    } else {
+                        string_info.value.clone()
+                    };
+
+                    evidence.push(Evidence {
+                        method: "encoded_string".to_string(),
+                        source: format!("encoding_chain:{}", string_info.encoding_chain.join("+")),
+                        value: value_preview,
+                        location: string_info.offset.map(|o| format!("{:#x}", o)),
+                        ..Default::default()
+                    });
+                }
             }
         }
     }

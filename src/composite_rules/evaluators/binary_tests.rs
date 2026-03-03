@@ -922,3 +922,99 @@ fn test_eval_section_precision_scoring() {
     );
     assert_eq!(result4.precision, 2.0); // 1.0 (substr) + 0.5 (entropy_min) + 0.5 (entropy_max)
 }
+
+// =============================================================================
+// B7+B18: import_combination fixes
+// =============================================================================
+
+#[test]
+fn test_import_combination_empty_constraints_no_match() {
+    let report = create_test_report();
+    let data = vec![];
+    let ctx = create_test_context(&report, &data);
+
+    // No required, no suspicious, no max — should NOT match
+    let result = eval_import_combination(None, None, None, None, &ctx);
+    assert!(!result.matched, "Empty import_combination should not match");
+}
+
+#[test]
+fn test_import_combination_suspicious_no_double_count() {
+    let mut report = create_test_report();
+    report.imports.push(Import {
+        symbol: "VirtualAlloc".to_string(),
+        library: None,
+        source: "kernel32".to_string(),
+    });
+    report.imports.push(Import {
+        symbol: "CreateFile".to_string(),
+        library: None,
+        source: "kernel32".to_string(),
+    });
+    let data = vec![];
+    let ctx = create_test_context(&report, &data);
+
+    // Two patterns that both match "VirtualAlloc"
+    let suspicious = vec!["Virtual.*".to_string(), ".*Alloc".to_string()];
+    let result = eval_import_combination(None, Some(&suspicious), Some(1), None, &ctx);
+    assert!(result.matched);
+    // VirtualAlloc matches both patterns but should be counted only once
+    // CreateFile matches neither
+    let suspicious_evidence: Vec<_> = result
+        .evidence
+        .iter()
+        .filter(|e| e.source == "suspicious")
+        .collect();
+    assert_eq!(
+        suspicious_evidence.len(),
+        1,
+        "VirtualAlloc should be counted once despite matching two patterns"
+    );
+}
+
+#[test]
+fn test_eval_syscall_arch_exact_match() {
+    let mut report = create_test_report();
+    report.syscalls.push(SyscallInfo {
+        name: "exit".to_string(),
+        number: 60,
+        address: 0x1000,
+        desc: "Exit process".to_string(),
+        arch: "x86_64".to_string(),
+    });
+    let data = vec![];
+    let ctx = create_test_context(&report, &data);
+
+    // "x86_64" should match exactly
+    let result = eval_syscall(
+        Some(&vec!["exit".to_string()]),
+        None,
+        Some(&vec!["x86_64".to_string()]),
+        &ctx,
+    );
+    assert!(result.matched, "Exact arch match should succeed");
+
+    // "x86" should NOT match "x86_64" (no substring matching)
+    let result = eval_syscall(
+        Some(&vec!["exit".to_string()]),
+        None,
+        Some(&vec!["x86".to_string()]),
+        &ctx,
+    );
+    assert!(
+        !result.matched,
+        "Substring arch 'x86' should NOT match 'x86_64'"
+    );
+
+    // "64" should NOT match "x86_64"
+    let result = eval_syscall(
+        Some(&vec!["exit".to_string()]),
+        None,
+        Some(&vec!["64".to_string()]),
+        &ctx,
+    );
+    assert!(
+        !result.matched,
+        "Substring arch '64' should NOT match 'x86_64'"
+    );
+}

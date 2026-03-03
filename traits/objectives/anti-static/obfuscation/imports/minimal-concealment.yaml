@@ -44,9 +44,9 @@ composite_rules:
   any:
   - id: micro-behaviors/dylib/load::load-library-a
   - id: micro-behaviors/dylib/lookup::get-proc-address
-  - id: micro-behaviors/process/create/methods::shell-execute-a
-  - id: micro-behaviors/process/create/methods::shell-execute
-  - id: micro-behaviors/process/create/methods::shell-execute-ex
+  - id: micro-behaviors/process/create/exec::shell-execute-a
+  - id: micro-behaviors/process/create/exec::shell-execute
+  - id: micro-behaviors/process/create/exec::shell-execute-ex
   - id: micro-behaviors/crypto/certificate/store::cert-open-store
   - id: micro-behaviors/mem/alloc/heap::heap-alloc
   unless:
@@ -69,8 +69,8 @@ composite_rules:
   any:
   - id: micro-behaviors/dylib/load::load-library-a
   - id: micro-behaviors/dylib/lookup::get-proc-address
-  - id: micro-behaviors/process/create/methods::shell-execute-a
-  - id: micro-behaviors/process/create/methods::shell-execute
+  - id: micro-behaviors/process/create/exec::shell-execute-a
+  - id: micro-behaviors/process/create/exec::shell-execute
   - id: micro-behaviors/crypto/certificate/store::cert-open-store
   - id: micro-behaviors/mem/alloc/heap::heap-alloc
   - id: micro-behaviors/mem/protect/modify::virtual-protect
@@ -92,7 +92,7 @@ composite_rules:
   any:
   - id: micro-behaviors/dylib/load::load-library-a
   - id: micro-behaviors/dylib/lookup::get-proc-address
-  - id: micro-behaviors/process/create/methods::shell-execute-a
+  - id: micro-behaviors/process/create/exec::shell-execute-a
   - id: micro-behaviors/mem/protect/modify::virtual-protect
   - id: micro-behaviors/fs
   unless:
@@ -111,8 +111,8 @@ composite_rules:
   - id: micro-behaviors/dylib/lookup::get-proc-address
   needs: 2
   any:
-  - id: micro-behaviors/process/create/methods::shell-execute-a
-  - id: micro-behaviors/process/create/methods::shell-execute
+  - id: micro-behaviors/process/create/exec::shell-execute-a
+  - id: micro-behaviors/process/create/exec::shell-execute
   - id: micro-behaviors/crypto/certificate/store::cert-open-store
   - id: micro-behaviors/mem/protect/modify::virtual-protect
   - id: micro-behaviors/fs

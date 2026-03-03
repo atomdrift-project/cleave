@@ -295,9 +295,9 @@ composite_rules:
     platforms: [windows]
     for: [pe, dll]
     any:
-      - id: micro-behaviors/process/create/methods::shell-execute-a
-      - id: micro-behaviors/process/create/methods::shell-execute
-      - id: micro-behaviors/process/create/methods::shell-execute-ex
+      - id: micro-behaviors/process/create/exec::shell-execute-a
+      - id: micro-behaviors/process/create/exec::shell-execute
+      - id: micro-behaviors/process/create/exec::shell-execute-ex
       - id: shell-execute-ex-a
 
   - id: shell-platform-check

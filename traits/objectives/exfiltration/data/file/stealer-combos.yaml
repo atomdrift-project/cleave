@@ -79,7 +79,7 @@ composite_rules:
     for: [elf, macho, pe]
     all:
       - id: micro-behaviors/data/encode/base64::custom-implementation
-      - id: objectives/anti-static/obfuscation/encoding::string-decrypt
+      - id: objectives/anti-static/obfuscation/encoding/xor::string-decrypt
     any:
       - id: micro-behaviors/communications/download/curl::libcurl-http
       - id: micro-behaviors/communications/socket/create
@@ -94,7 +94,7 @@ composite_rules:
     for: [elf, macho, pe]
     all:
       - id: micro-behaviors/communications/download/curl::libcurl-http
-      - id: objectives/anti-static/obfuscation/encoding::string-decrypt
+      - id: objectives/anti-static/obfuscation/encoding/xor::string-decrypt
     any:
       - id: objectives/discovery/host/fingerprint
 

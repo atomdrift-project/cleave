@@ -21,8 +21,6 @@ composite_rules:
     all:
       - id: hardcoded-windows-root-pattern
     unless:
-      - id: metadata/library/vscode::vscode-extension
-      - id: metadata/library/test::test-framework
     downgrade:
       any:
         - id: metadata/library::botocore-lib

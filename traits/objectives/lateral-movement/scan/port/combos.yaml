@@ -29,8 +29,8 @@ composite_rules:
         - id: micro-behaviors/dylib/library::debugger-tool-marker
         - id: micro-behaviors/dylib/library::system-lib-marker
         - id: micro-behaviors/dylib/library::network-lib-marker
-        - id: micro-behaviors/communications/ssh/connect/connect
-        - id: metadata/quality/has-help
+        - id: micro-behaviors/communications/ssh/connect::connect
+        - id: metadata/quality::has-help
         - id: metadata/signed/platform::apple
         - id: micro-behaviors/communications/dns/tools::dig
 

@@ -66,6 +66,99 @@ traits:
   if:
     type: raw
     regex: \b(LDR|WGET|DL)\s*=\s*(curl|wget)
+
+  # === Eval fetch patterns ===
+- id: eval-curl-subshell
+  desc: eval "$(curl ..."
+  crit: suspicious
+  conf: 0.7
+  attack: "T1059.004"
+  for: ["*"]
+  if:
+    type: raw
+    regex: 'eval\s*"\$\(curl'
+
+- id: eval-curl-backtick
+  desc: eval `curl ...`
+  crit: suspicious
+  conf: 0.7
+  attack: "T1059.004"
+  for: ["*"]
+  if:
+    type: raw
+    regex: 'eval\s*`curl'
+
+- id: eval-wget-subshell
+  desc: eval "$(wget ..."
+  crit: suspicious
+  conf: 0.7
+  attack: "T1059.004"
+  for: ["*"]
+  if:
+    type: raw
+    regex: 'eval\s*"\$\(wget'
+
+- id: eval-wget-backtick
+  desc: eval `wget ...`
+  crit: suspicious
+  conf: 0.7
+  attack: "T1059.004"
+  for: ["*"]
+  if:
+    type: raw
+    regex: 'eval\s*`wget'
+
+- id: eval-openssl-subshell
+  desc: eval "$(openssl ..." (decrypt and execute payload)
+  crit: suspicious
+  conf: 0.8
+  attack: "T1059.004"
+  for: ["*"]
+  if:
+    type: raw
+    regex: 'eval\s*"\$\(openssl'
+
+  # === Process substitution patterns ===
+- id: bash-curl-process-sub
+  desc: bash <(curl ...)
+  crit: suspicious
+  conf: 0.7
+  attack: "T1059.004"
+  for: ["*"]
+  if:
+    type: raw
+    regex: 'bash\s+<\(curl'
+
+- id: sh-curl-process-sub
+  desc: sh <(curl ...) process substitution
+  crit: suspicious
+  conf: 0.7
+  attack: "T1059.004"
+  for: ["*"]
+  if:
+    type: raw
+    regex: 'sh\s+<\(curl'
+
+- id: source-curl-process-sub
+  desc: source <(curl ...)
+  crit: suspicious
+  conf: 0.7
+  attack: "T1059.004"
+  for: ["*"]
+  if:
+    type: raw
+    regex: 'source\s+<\(curl'
+
+- id: source-wget-process-sub
+  desc: source <(wget ...)
+  crit: suspicious
+  conf: 0.7
+  attack: "T1059.004"
+  for: ["*"]
+  if:
+    type: raw
+    regex: 'source\s+<\(wget'
+
 composite_rules:
 - id: loader-selection
   desc: Selects curl or wget dynamically
@@ -93,3 +186,26 @@ composite_rules:
   all:
   - id: download-execute
   - id: download-url-hardcoded
+
+- id: fetch-eval
+  desc: Remote script fetch and eval
+  crit: suspicious
+  conf: 0.9
+  attack: "T1059.004"
+  any:
+    - id: eval-curl-subshell
+    - id: eval-curl-backtick
+    - id: eval-wget-subshell
+    - id: eval-wget-backtick
+    - id: eval-openssl-subshell
+
+- id: process-substitution
+  desc: Process substitution for remote execution
+  crit: suspicious
+  conf: 0.85
+  attack: "T1059.004"
+  any:
+    - id: bash-curl-process-sub
+    - id: sh-curl-process-sub
+    - id: source-curl-process-sub
+    - id: source-wget-process-sub

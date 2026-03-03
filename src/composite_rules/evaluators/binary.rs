@@ -387,25 +387,21 @@ pub(crate) fn eval_import_combination<'a>(
         }
     }
 
-    // Count suspicious imports
+    // Count suspicious imports — each import counted at most once even if it matches multiple patterns
     let mut suspicious_count = 0;
     if let Some(susp) = suspicious {
-        for pattern in susp {
-            let Ok(re) = Regex::new(pattern) else {
-                continue;
-            };
-            for sym in &import_symbols {
-                if re.is_match(sym) {
-                    suspicious_count += 1;
-                    if evidence.len() < MAX_EVIDENCE_PER_TRAIT {
-                        evidence.push(Evidence {
-                            method: "import".to_string(),
-                            source: "suspicious".to_string(),
-                            value: (*sym).to_string(),
-                            location: None,
-                            ..Default::default()
-                        });
-                    }
+        let compiled: Vec<Regex> = susp.iter().filter_map(|p| Regex::new(p).ok()).collect();
+        for sym in &import_symbols {
+            if compiled.iter().any(|re| re.is_match(sym)) {
+                suspicious_count += 1;
+                if evidence.len() < MAX_EVIDENCE_PER_TRAIT {
+                    evidence.push(Evidence {
+                        method: "import".to_string(),
+                        source: "suspicious".to_string(),
+                        value: (*sym).to_string(),
+                        location: None,
+                        ..Default::default()
+                    });
                 }
             }
         }
@@ -445,7 +441,7 @@ pub(crate) fn eval_import_combination<'a>(
 
     let match_count = evidence.len();
     ConditionResult {
-        matched: true,
+        matched: !evidence.is_empty(),
         evidence,
         match_count,
         warnings: Vec::new(),
@@ -471,7 +467,7 @@ pub(crate) fn eval_syscall<'a>(
         let arch_match = arch.is_none_or(|archs| {
             archs
                 .iter()
-                .any(|a| syscall.arch.to_lowercase().contains(&a.to_lowercase()))
+                .any(|a| syscall.arch.to_lowercase() == a.to_lowercase())
         });
 
         if name_match && number_match && arch_match {

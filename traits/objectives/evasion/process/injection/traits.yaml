@@ -37,8 +37,7 @@ composite_rules:
     downgrade:
       any:
         - id: metadata/lang::go-runtime-marker
-        - id: metadata/vendor/valve/valve-corp-binary
-        - id: metadata/dylib::python313/dll
+        - id: metadata/vendor/valve::valve-corp-binary
         - id: metadata/purpose/debug-tool::ollydbg-plugin-export
 
   # === APC Queue Injection ===
@@ -55,7 +54,7 @@ composite_rules:
       - id: metadata/format::many-exports
     downgrade:
       any:
-        - id: metadata/vendor/valve/valve-corp-binary
+        - id: metadata/vendor/valve::valve-corp-binary
 
   # === Process Hollowing Pattern ===
   - id: process-hollowing
@@ -73,7 +72,7 @@ composite_rules:
       - id: metadata/format::many-exports
     downgrade:
       any:
-        - id: metadata/vendor/valve/valve-corp-binary
+        - id: metadata/vendor/valve::valve-corp-binary
 
   # === Shared Library Injection ===
   - id: dll-injection
@@ -89,7 +88,7 @@ composite_rules:
       - id: metadata/format::many-exports
     downgrade:
       any:
-        - id: metadata/vendor/valve/valve-corp-binary
+        - id: metadata/vendor/valve::valve-corp-binary
     unless:
       - id: metadata/vendor/jetbrains::jetbrains-company-string
 
@@ -109,7 +108,7 @@ composite_rules:
     downgrade:
       any:
         - id: metadata/lang::go-runtime-marker
-        - id: metadata/vendor/valve/valve-corp-binary
+        - id: metadata/vendor/valve::valve-corp-binary
 
   # === Local / Callback Injection ===
   - id: hostile-callback-execution

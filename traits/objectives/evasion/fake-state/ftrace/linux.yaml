@@ -161,7 +161,7 @@ composite_rules:
     # debuggers, video drivers (for trace logging), and system monitoring tools.
     downgrade:
       any:
-        - id: micro-behaviors/dylib/load/video-lib-marker
+        - id: micro-behaviors/dylib/library::video-lib-marker
         - id: micro-behaviors/dylib/library::graphics-lib-marker
         - id: micro-behaviors/dylib/library::system-lib-marker
         - id: micro-behaviors/dylib/library::debugger-tool-marker
@@ -188,7 +188,7 @@ composite_rules:
     # combination with actual rootkit infrastructure.
     downgrade:
       any:
-        - id: micro-behaviors/dylib/load/video-lib-marker
+        - id: micro-behaviors/dylib/library::video-lib-marker
         - id: micro-behaviors/dylib/library::graphics-lib-marker
         - id: micro-behaviors/dylib/library::system-lib-marker
         - id: micro-behaviors/dylib/library::debugger-tool-marker

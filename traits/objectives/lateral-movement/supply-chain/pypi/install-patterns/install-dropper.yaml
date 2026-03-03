@@ -464,7 +464,7 @@ composite_rules:
   - id: objectives/execution/autoinstall/pip::main-call-content
   downgrade:
     any:
-    - id: metadata/quality/versioned
+    - id: metadata/quality::versioned
 - id: obfuscated-setup-py-file-dropper
   desc: Obfuscated setup.py writes payload files to disk
   crit: hostile

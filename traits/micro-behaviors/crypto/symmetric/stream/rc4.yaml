@@ -70,7 +70,7 @@ composite_rules:
     downgrade:
       any:
         - id: micro-behaviors/dylib/library::debugger-tool-marker
-        - id: micro-behaviors/dylib/load/compiler-tool-marker
+        - id: micro-behaviors/dylib/library::compiler-tool-marker
 
   - id: rc4-symbol-chain
     desc: RC4 init and crypt symbol chain

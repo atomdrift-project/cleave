@@ -13,5 +13,4 @@ traits:
       # and common legitimate patterns like executeCommandConfiguration
       regex: "(?i)\\bexecuteCommand\\b"
     not:
-      - type: string
-        regex: "(?i)executeCommand(:|Configuration)"
+      - regex: "(?i)executeCommand(:|Configuration)"

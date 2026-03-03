@@ -1,0 +1,75 @@
+# Base64 Decode-to-Exec Patterns
+# Decoding base64 content and piping directly to shell interpreters
+# ATT&CK: T1027 (Obfuscated Files or Information)
+
+defaults:
+  for: ["*"]
+
+traits:
+  - id: base64-d-pipe-sh
+    desc: base64 -d piped to sh
+    crit: suspicious
+    conf: 0.7
+    attack: "T1027"
+    if:
+      type: raw
+      regex: 'base64\s+-d\s*\|\s*sh'
+
+  - id: base64-d-pipe-bash
+    desc: base64 -d piped to bash
+    crit: suspicious
+    conf: 0.7
+    attack: "T1027"
+    if:
+      type: raw
+      regex: 'base64\s+-d\s*\|\s*bash'
+
+  - id: base64-decode-pipe-sh
+    desc: base64 --decode piped to sh
+    crit: suspicious
+    conf: 0.7
+    attack: "T1027"
+    if:
+      type: raw
+      regex: 'base64\s+--decode\s*\|\s*sh'
+
+  - id: base64-decode-pipe-bash
+    desc: base64 --decode piped to bash
+    crit: suspicious
+    conf: 0.7
+    attack: "T1027"
+    if:
+      type: raw
+      regex: 'base64\s+--decode\s*\|\s*bash'
+
+  - id: base64-capital-d-pipe-sh
+    desc: base64 -D piped to sh
+    crit: suspicious
+    conf: 0.7
+    attack: "T1027"
+    if:
+      type: raw
+      regex: 'base64\s+-D\s*\|\s*sh\b'
+
+  - id: base64-capital-d-pipe-bash
+    desc: base64 -D piped to bash
+    crit: suspicious
+    conf: 0.7
+    attack: "T1027"
+    if:
+      type: raw
+      regex: 'base64\s+-D\s*\|\s*bash\b'
+
+composite_rules:
+  - id: base64-decode-exec
+    desc: Base64 decode piped to shell
+    crit: suspicious
+    conf: 0.95
+    attack: "T1027"
+    any:
+      - id: base64-d-pipe-sh
+      - id: base64-d-pipe-bash
+      - id: base64-decode-pipe-sh
+      - id: base64-decode-pipe-bash
+      - id: base64-capital-d-pipe-sh
+      - id: base64-capital-d-pipe-bash

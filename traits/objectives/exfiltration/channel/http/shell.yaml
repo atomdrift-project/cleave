@@ -18,10 +18,10 @@ composite_rules:
     all:
       - id: micro-behaviors/communications/http/client::curl-post
     unless:
-      - id: micro-behaviors/os/admin/legitimate/http-tools/package-manager
-      - id: micro-behaviors/os/admin/legitimate/http-tools/ci-cd-pipeline
-      - id: micro-behaviors/os/admin/legitimate/http-tools/health-check
-      - id: micro-behaviors/os/admin/legitimate/http-tools/installer-script
+      - id: micro-behaviors/os/admin/legitimate::package-manager
+      - id: micro-behaviors/os/admin/legitimate::ci-cd-pipeline
+      - id: micro-behaviors/os/admin/legitimate::health-check
+      - id: micro-behaviors/os/admin/legitimate::installer-script
 
   - id: curl-upload-file
     desc: Curl file upload
@@ -30,9 +30,9 @@ composite_rules:
     all:
       - id: micro-behaviors/communications/http/client::curl-upload
     unless:
-      - id: micro-behaviors/os/admin/legitimate/http-tools/package-manager
-      - id: micro-behaviors/os/admin/legitimate/http-tools/ci-cd-pipeline
-      - id: micro-behaviors/os/admin/legitimate/http-tools/backup-script
+      - id: micro-behaviors/os/admin/legitimate::package-manager
+      - id: micro-behaviors/os/admin/legitimate::ci-cd-pipeline
+      - id: micro-behaviors/os/admin/legitimate::backup-script
       - id: metadata/signed/id::com.apple.curl
       - id: micro-behaviors/communications/download/curl::curl-easy-init
 

@@ -36,10 +36,10 @@ composite_rules:
       - id: micro-behaviors/os/time/query::gettimeofday
     downgrade:
       any:
-        - id: micro-behaviors/dylib/load/video-lib-marker
+        - id: micro-behaviors/dylib/library::video-lib-marker
         - id: micro-behaviors/dylib/library::graphics-lib-marker
         - id: micro-behaviors/dylib/library::system-lib-marker
-        - id: micro-behaviors/dylib/load/async-io-lib-marker
+        - id: micro-behaviors/dylib/library::async-io-lib-marker
 
   # Delay with network = evasion or C2 beaconing
   # NOTE: nanosleep + socket is extremely common in any network program.

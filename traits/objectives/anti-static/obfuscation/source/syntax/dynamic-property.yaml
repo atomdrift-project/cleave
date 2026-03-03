@@ -21,13 +21,11 @@ traits:
     if:
       type: ast
       language: javascript
-      # Matches property access where the property is constructed by adding results of function calls
+      # Matches: obj[func1() + func2()] - bracket access with concatenated calls
       query: |
-        (member_expression
-          property: (binary_expression
+        (subscript_expression
+          (binary_expression
             operator: "+"
-            left: (call_expression)
-            right: (call_expression)
           )
         )
 
@@ -53,9 +51,8 @@ traits:
       type: ast
       language: javascript
       query: |
-        (member_expression
+        (subscript_expression
           object: (identifier) @obj_name (#eq? @obj_name "WScript")
-          property: (computed_property_name)
         )
 
 composite_rules:

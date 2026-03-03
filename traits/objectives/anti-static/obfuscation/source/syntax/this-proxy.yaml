@@ -12,7 +12,7 @@ traits:
       # Matches: new this[...]()
       query: |
         (new_expression
-          constructor: (member_expression
+          constructor: (subscript_expression
             object: (this)
           )
         )
@@ -25,11 +25,10 @@ traits:
     if:
       type: ast
       language: javascript
-      # Matches: this[...] where ... is not a simple identifier (or even if it is, in some contexts)
+      # Matches: this[...] - bracket notation on 'this'
       query: |
-        (member_expression
+        (subscript_expression
           object: (this)
-          property: (computed_property_name)
         )
     unless:
       - id: metadata/library/jquery::domain

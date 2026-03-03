@@ -217,7 +217,7 @@ impl super::CapabilityMapper {
                     if let Some(rule) = composite_map.get(finding.id.as_str()) {
                         if let Some(downgrade_rules) = &rule.downgrade {
                             let new_crit =
-                                rule.evaluate_downgrade(downgrade_rules, &rule.crit, &ctx);
+                                rule.evaluate_downgrade(downgrade_rules, &finding.crit, &ctx);
                             if new_crit != finding.crit {
                                 return Some((i, new_crit));
                             }

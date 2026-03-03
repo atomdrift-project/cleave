@@ -19,6 +19,6 @@ composite_rules:
       - id: micro-behaviors/data/encode/base64
       - id: micro-behaviors/communications/http/request::http-client-usage
     unless:
-      - id: micro-behaviors/os/admin/legitimate/http-tools/package-manager
-      - id: micro-behaviors/os/admin/legitimate/http-tools/ci-cd-pipeline
+      - id: micro-behaviors/os/admin/legitimate::package-manager
+      - id: micro-behaviors/os/admin/legitimate::ci-cd-pipeline
       - id: metadata/library/axios::axios-detection

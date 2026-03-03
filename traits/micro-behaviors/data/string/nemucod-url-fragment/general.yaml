@@ -10,10 +10,11 @@ traits:
     if:
       type: ast
       language: javascript
-      query:
-        "(binary_expression\n  operator: \"+\"\n  left: (binary_expression\n  \
-        \  operator: \"+\"\n    left: (string) @s1 (#match? @s1 \"^\"https?\"$\")\n\
-        \  )\n)\n"
+      query: |
+        (binary_expression
+          operator: "+"
+          (string) @s1 (#match? @s1 "https?")
+        )
   - id: js-fragmented-url-regex
     desc: URL construction from many concatenated fragments (Regex)
     crit: suspicious

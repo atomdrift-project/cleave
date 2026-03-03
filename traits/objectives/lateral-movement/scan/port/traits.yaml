@@ -447,7 +447,7 @@ composite_rules:
   downgrade:
     any:
     - id: micro-behaviors/dylib/library::graphics-lib-marker
-    - id: micro-behaviors/dylib/load/x11-ref
+    - id: micro-behaviors/dylib/library::x11-ref
 - id: root-exploit-ref
   desc: Root exploitation terminology (leetspeak/hacker slang)
   crit: notable

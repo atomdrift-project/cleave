@@ -10,4 +10,4 @@ composite_rules:
     unless:
       - id: metadata/library/syntaxhighlighter::syntaxhighlighter-brush
       - id: metadata/library::commander
-      - id: metadata/dev/testing/node::node-common-require
+      - id: metadata/dev/testing::node-common-require

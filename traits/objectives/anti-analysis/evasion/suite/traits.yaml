@@ -23,7 +23,7 @@ composite_rules:
   - id: objectives/anti-analysis/emulator/detect::comprehensive
   downgrade:
     any:
-    - id: metadata/quality/versioned
+    - id: metadata/quality::versioned
 - id: anti-forensics-defensive
   desc: Malware with both anti-analysis AND anti-forensics capabilities
   crit: hostile

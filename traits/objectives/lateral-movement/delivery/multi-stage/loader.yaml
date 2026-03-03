@@ -50,7 +50,7 @@ composite_rules:
       - id: remote-code-injection
     downgrade:
       any:
-        - id: metadata/vendor/valve/valve-corp-binary
+        - id: metadata/vendor/valve::valve-corp-binary
 
   - id: flexible-execution-framework
     desc: Flexible malware execution with multiple deployment methods
@@ -66,4 +66,4 @@ composite_rules:
       - id: objectives/evasion/process/injection/atom-bombing::atom-bombing-capable
     downgrade:
       any:
-        - id: metadata/vendor/valve/valve-corp-binary
+        - id: metadata/vendor/valve::valve-corp-binary

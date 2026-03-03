@@ -16,7 +16,7 @@ traits:
     conf: 0.95
     if:
       id: metadata/apple/bundle-id::generic-apple
-    not:
+    unless:
       - id: metadata/apple/bundle-id::mail
       - id: metadata/apple/bundle-id::ichat
       - id: metadata/apple/bundle-id::messages

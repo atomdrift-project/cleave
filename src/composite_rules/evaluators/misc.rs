@@ -214,7 +214,10 @@ pub(crate) fn eval_basename<'a>(
         };
         regex::Regex::new(&pattern)
             .map(|re| re.is_match(basename))
-            .unwrap_or(false)
+            .unwrap_or_else(|e| {
+                eprintln!("WARNING: invalid basename regex '{}': {}", regex_str, e);
+                false
+            })
     } else {
         false
     };
@@ -251,5 +254,56 @@ pub(crate) fn eval_basename<'a>(
         warnings: Vec::new(),
         precision,
         matched_trait_ids: Vec::new(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::composite_rules::types::{FileType, Platform};
+    use crate::types::{AnalysisReport, TargetInfo};
+    use std::sync::OnceLock;
+
+    fn create_test_context_with_path<'a>(
+        report: &'a AnalysisReport,
+        data: &'a [u8],
+    ) -> EvaluationContext<'a> {
+        EvaluationContext {
+            report,
+            binary_data: data,
+            file_type: FileType::Elf,
+            platforms: vec![Platform::Linux],
+            additional_findings: None,
+            cached_ast: None,
+            finding_id_index: None,
+            debug_collector: None,
+            section_map: None,
+            inline_yara_results: None,
+            cached_kv_format: OnceLock::new(),
+            cached_kv_parsed: OnceLock::new(),
+            current_trait: None,
+            current_source: None,
+            string_exact_index: OnceLock::new(),
+            string_exact_index_ci: OnceLock::new(),
+        }
+    }
+
+    #[test]
+    fn test_eval_basename_invalid_regex_no_panic() {
+        let target = TargetInfo {
+            path: "/test/malware.exe".to_string(),
+            file_type: "pe".to_string(),
+            size_bytes: 1024,
+            sha256: "abc".to_string(),
+            architectures: None,
+        };
+        let report = AnalysisReport::new(target);
+        let data = vec![];
+        let ctx = create_test_context_with_path(&report, &data);
+
+        // Invalid regex should not panic, should return no match
+        let bad_regex = "[invalid(".to_string();
+        let result = eval_basename(None, None, Some(&bad_regex), false, &ctx);
+        assert!(!result.matched, "Invalid regex should not match");
     }
 }

@@ -31,4 +31,4 @@ composite_rules:
       - id: objectives/command-and-control/infrastructure/domain
     downgrade:
       any:
-        - id: metadata/quality/versioned
+        - id: metadata/quality::versioned

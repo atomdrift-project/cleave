@@ -62,6 +62,6 @@ composite_rules:
     # Graphics libraries legitimately access /dev/mem, /dev/fb*, /dev/dri/*
     downgrade:
       any:
-        - id: micro-behaviors/dylib/load/x11-dga-marker
+        - id: micro-behaviors/dylib/library::x11-dga-marker
         - id: micro-behaviors/dylib/library::graphics-lib-marker
-        - id: micro-behaviors/dylib/load/drm-driver-ref
+        - id: micro-behaviors/dylib/library::drm-driver-ref

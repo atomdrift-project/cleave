@@ -3778,3 +3778,448 @@ fn test_evidence_to_byte_offset_none() {
     };
     assert_eq!(super::traits::evidence_to_byte_offset(&e), None);
 }
+
+// =============================================================================
+// B2+B3: Downgrade combinatorial all/any/none + needs threshold
+// =============================================================================
+
+#[test]
+fn test_downgrade_combined_all_and_none_blocked_by_none() {
+    let (mut report, data) = create_test_context();
+
+    // Add strings for all: condition
+    report.strings.push(StringInfo {
+        value: "suspicious_call".to_string(),
+        offset: Some(0x2000),
+        encoding: "utf8".to_string(),
+        string_type: crate::types::StringType::Const,
+        section: None,
+        encoding_chain: Vec::new(),
+        fragments: None,
+    });
+
+    // Add finding for none: condition — this should BLOCK the downgrade
+    let findings = vec![Finding {
+        id: "file/type/binary".to_string(),
+        kind: FindingKind::Capability,
+        desc: "Binary file".to_string(),
+        conf: 1.0,
+        crit: Criticality::Baseline,
+        mbc: None,
+        attack: None,
+        trait_refs: vec![],
+        evidence: vec![],
+        match_count: 0,
+        source_file: None,
+    }];
+
+    let ctx = EvaluationContext {
+        report: &report,
+        binary_data: &data,
+        file_type: FileType::Elf,
+        platforms: vec![Platform::All],
+        additional_findings: Some(&findings),
+        cached_ast: None,
+        finding_id_index: None,
+        debug_collector: None,
+        section_map: None,
+        inline_yara_results: None,
+        cached_kv_format: OnceLock::new(),
+        cached_kv_parsed: OnceLock::new(),
+        current_trait: None,
+        current_source: None,
+        string_exact_index: OnceLock::new(),
+        string_exact_index_ci: OnceLock::new(),
+    };
+
+    let trait_def = TraitDefinition {
+        id: "test/combined-downgrade".to_string(),
+        desc: "Test combined all+none downgrade".to_string(),
+        conf: 1.0,
+        crit: Criticality::Suspicious,
+        mbc: None,
+        attack: None,
+        platforms: vec![Platform::All],
+        r#for: vec![FileType::All],
+        r#if: Condition::String {
+            exact: Some("suspicious_call".to_string()),
+            substr: None,
+            regex: None,
+            word: None,
+            case_insensitive: false,
+            external_ip: false,
+            section: None,
+            offset: None,
+            offset_range: None,
+            section_offset: None,
+            section_offset_range: None,
+            not: None,
+            platforms: None,
+            compiled_regex: None,
+        },
+        size_max: None,
+        count_min: None,
+        count_max: None,
+        per_kb_min: None,
+        per_kb_max: None,
+        entropy_min: None,
+        entropy_max: None,
+        size_min: None,
+        not: None,
+        unless: None,
+        downgrade: Some(DowngradeConditions {
+            // all: passes (string matches)
+            all: Some(vec![Condition::String {
+                exact: Some("/bin/sh".to_string()),
+                substr: None,
+                regex: None,
+                word: None,
+                case_insensitive: false,
+                external_ip: false,
+                section: None,
+                offset: None,
+                offset_range: None,
+                section_offset: None,
+                section_offset_range: None,
+                not: None,
+                platforms: None,
+                compiled_regex: None,
+            }]),
+            any: None,
+            // none: should block downgrade because "file/type/binary" IS present
+            none: Some(vec![Condition::Trait {
+                id: "file/type/binary".to_string(),
+            }]),
+            needs: None,
+        }),
+        defined_in: std::path::PathBuf::from("test.yaml"),
+        precision: None,
+    };
+
+    let result = trait_def.evaluate(&ctx);
+    assert!(result.is_some());
+    let finding = result.unwrap();
+    // none: blocked the downgrade, so crit stays at Suspicious
+    assert_eq!(finding.crit, Criticality::Suspicious);
+}
+
+#[test]
+fn test_downgrade_combined_all_and_none_pass() {
+    let (mut report, data) = create_test_context();
+
+    report.strings.push(StringInfo {
+        value: "suspicious_call".to_string(),
+        offset: Some(0x2000),
+        encoding: "utf8".to_string(),
+        string_type: crate::types::StringType::Const,
+        section: None,
+        encoding_chain: Vec::new(),
+        fragments: None,
+    });
+
+    // No findings that would match the none: condition
+    let findings = vec![];
+
+    let ctx = EvaluationContext {
+        report: &report,
+        binary_data: &data,
+        file_type: FileType::Elf,
+        platforms: vec![Platform::All],
+        additional_findings: Some(&findings),
+        cached_ast: None,
+        finding_id_index: None,
+        debug_collector: None,
+        section_map: None,
+        inline_yara_results: None,
+        cached_kv_format: OnceLock::new(),
+        cached_kv_parsed: OnceLock::new(),
+        current_trait: None,
+        current_source: None,
+        string_exact_index: OnceLock::new(),
+        string_exact_index_ci: OnceLock::new(),
+    };
+
+    let trait_def = TraitDefinition {
+        id: "test/combined-downgrade-pass".to_string(),
+        desc: "Test combined all+none downgrade passes".to_string(),
+        conf: 1.0,
+        crit: Criticality::Suspicious,
+        mbc: None,
+        attack: None,
+        platforms: vec![Platform::All],
+        r#for: vec![FileType::All],
+        r#if: Condition::String {
+            exact: Some("suspicious_call".to_string()),
+            substr: None,
+            regex: None,
+            word: None,
+            case_insensitive: false,
+            external_ip: false,
+            section: None,
+            offset: None,
+            offset_range: None,
+            section_offset: None,
+            section_offset_range: None,
+            not: None,
+            platforms: None,
+            compiled_regex: None,
+        },
+        size_max: None,
+        count_min: None,
+        count_max: None,
+        per_kb_min: None,
+        per_kb_max: None,
+        entropy_min: None,
+        entropy_max: None,
+        size_min: None,
+        not: None,
+        unless: None,
+        downgrade: Some(DowngradeConditions {
+            all: Some(vec![Condition::String {
+                exact: Some("/bin/sh".to_string()),
+                substr: None,
+                regex: None,
+                word: None,
+                case_insensitive: false,
+                external_ip: false,
+                section: None,
+                offset: None,
+                offset_range: None,
+                section_offset: None,
+                section_offset_range: None,
+                not: None,
+                platforms: None,
+                compiled_regex: None,
+            }]),
+            any: None,
+            // none: passes because "nonexistent/trait" is NOT present
+            none: Some(vec![Condition::Trait {
+                id: "nonexistent/trait".to_string(),
+            }]),
+            needs: None,
+        }),
+        defined_in: std::path::PathBuf::from("test.yaml"),
+        precision: None,
+    };
+
+    let result = trait_def.evaluate(&ctx);
+    assert!(result.is_some());
+    let finding = result.unwrap();
+    // Both all: and none: pass → downgrade fires: Suspicious → Notable
+    assert_eq!(finding.crit, Criticality::Notable);
+}
+
+#[test]
+fn test_downgrade_needs_threshold_not_met() {
+    let (report, data) = create_test_context();
+
+    // Only one finding present (socket)
+    let findings = vec![Finding {
+        id: "test/socket".to_string(),
+        kind: FindingKind::Capability,
+        desc: "Socket".to_string(),
+        conf: 1.0,
+        crit: Criticality::Baseline,
+        mbc: None,
+        attack: None,
+        trait_refs: vec![],
+        evidence: vec![],
+        match_count: 0,
+        source_file: None,
+    }];
+
+    let ctx = EvaluationContext {
+        report: &report,
+        binary_data: &data,
+        file_type: FileType::Elf,
+        platforms: vec![Platform::All],
+        additional_findings: Some(&findings),
+        cached_ast: None,
+        finding_id_index: None,
+        debug_collector: None,
+        section_map: None,
+        inline_yara_results: None,
+        cached_kv_format: OnceLock::new(),
+        cached_kv_parsed: OnceLock::new(),
+        current_trait: None,
+        current_source: None,
+        string_exact_index: OnceLock::new(),
+        string_exact_index_ci: OnceLock::new(),
+    };
+
+    let trait_def = TraitDefinition {
+        id: "test/needs-threshold".to_string(),
+        desc: "Test needs threshold".to_string(),
+        conf: 1.0,
+        crit: Criticality::Suspicious,
+        mbc: None,
+        attack: None,
+        platforms: vec![Platform::All],
+        r#for: vec![FileType::All],
+        r#if: Condition::String {
+            exact: Some("/bin/sh".to_string()),
+            substr: None,
+            regex: None,
+            word: None,
+            case_insensitive: false,
+            external_ip: false,
+            section: None,
+            offset: None,
+            offset_range: None,
+            section_offset: None,
+            section_offset_range: None,
+            not: None,
+            platforms: None,
+            compiled_regex: None,
+        },
+        size_max: None,
+        count_min: None,
+        count_max: None,
+        per_kb_min: None,
+        per_kb_max: None,
+        entropy_min: None,
+        entropy_max: None,
+        size_min: None,
+        not: None,
+        unless: None,
+        downgrade: Some(DowngradeConditions {
+            all: None,
+            any: Some(vec![
+                Condition::Trait {
+                    id: "test/socket".to_string(),
+                },
+                Condition::Trait {
+                    id: "test/nonexistent".to_string(),
+                },
+                Condition::Trait {
+                    id: "test/also-nonexistent".to_string(),
+                },
+            ]),
+            none: None,
+            needs: Some(2), // Requires 2 matches, only 1 present
+        }),
+        defined_in: std::path::PathBuf::from("test.yaml"),
+        precision: None,
+    };
+
+    let result = trait_def.evaluate(&ctx);
+    assert!(result.is_some());
+    let finding = result.unwrap();
+    // needs: 2 but only 1 matched → no downgrade
+    assert_eq!(finding.crit, Criticality::Suspicious);
+}
+
+#[test]
+fn test_downgrade_needs_threshold_met() {
+    let (report, data) = create_test_context();
+
+    // Two findings present
+    let findings = vec![
+        Finding {
+            id: "test/socket".to_string(),
+            kind: FindingKind::Capability,
+            desc: "Socket".to_string(),
+            conf: 1.0,
+            crit: Criticality::Baseline,
+            mbc: None,
+            attack: None,
+            trait_refs: vec![],
+            evidence: vec![],
+            match_count: 0,
+            source_file: None,
+        },
+        Finding {
+            id: "test/connect".to_string(),
+            kind: FindingKind::Capability,
+            desc: "Connect".to_string(),
+            conf: 1.0,
+            crit: Criticality::Baseline,
+            mbc: None,
+            attack: None,
+            trait_refs: vec![],
+            evidence: vec![],
+            match_count: 0,
+            source_file: None,
+        },
+    ];
+
+    let ctx = EvaluationContext {
+        report: &report,
+        binary_data: &data,
+        file_type: FileType::Elf,
+        platforms: vec![Platform::All],
+        additional_findings: Some(&findings),
+        cached_ast: None,
+        finding_id_index: None,
+        debug_collector: None,
+        section_map: None,
+        inline_yara_results: None,
+        cached_kv_format: OnceLock::new(),
+        cached_kv_parsed: OnceLock::new(),
+        current_trait: None,
+        current_source: None,
+        string_exact_index: OnceLock::new(),
+        string_exact_index_ci: OnceLock::new(),
+    };
+
+    let trait_def = TraitDefinition {
+        id: "test/needs-threshold-met".to_string(),
+        desc: "Test needs threshold met".to_string(),
+        conf: 1.0,
+        crit: Criticality::Suspicious,
+        mbc: None,
+        attack: None,
+        platforms: vec![Platform::All],
+        r#for: vec![FileType::All],
+        r#if: Condition::String {
+            exact: Some("/bin/sh".to_string()),
+            substr: None,
+            regex: None,
+            word: None,
+            case_insensitive: false,
+            external_ip: false,
+            section: None,
+            offset: None,
+            offset_range: None,
+            section_offset: None,
+            section_offset_range: None,
+            not: None,
+            platforms: None,
+            compiled_regex: None,
+        },
+        size_max: None,
+        count_min: None,
+        count_max: None,
+        per_kb_min: None,
+        per_kb_max: None,
+        entropy_min: None,
+        entropy_max: None,
+        size_min: None,
+        not: None,
+        unless: None,
+        downgrade: Some(DowngradeConditions {
+            all: None,
+            any: Some(vec![
+                Condition::Trait {
+                    id: "test/socket".to_string(),
+                },
+                Condition::Trait {
+                    id: "test/connect".to_string(),
+                },
+                Condition::Trait {
+                    id: "test/nonexistent".to_string(),
+                },
+            ]),
+            none: None,
+            needs: Some(2), // Requires 2 matches, 2 present
+        }),
+        defined_in: std::path::PathBuf::from("test.yaml"),
+        precision: None,
+    };
+
+    let result = trait_def.evaluate(&ctx);
+    assert!(result.is_some());
+    let finding = result.unwrap();
+    // needs: 2 and 2 matched → downgrade fires: Suspicious → Notable
+    assert_eq!(finding.crit, Criticality::Notable);
+}

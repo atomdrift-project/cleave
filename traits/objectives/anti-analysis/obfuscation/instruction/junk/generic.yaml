@@ -18,4 +18,3 @@ traits:
       regex: '(?i)^(\.|__)(text|code)'
     unless:
       - id: objectives/execution/reflection/invoke::namespace-import
-      - id: file/archive/self-extracting # SFX stubs may have compressed code

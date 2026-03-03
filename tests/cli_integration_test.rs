@@ -3,6 +3,7 @@
 
 use predicates::prelude::*;
 
+use std::collections::HashSet;
 use std::fs;
 use tempfile::TempDir;
 
@@ -621,6 +622,81 @@ fn test_error_if_analyze_stops_early() {
         stderr.contains("--error-if"),
         "Expected '--error-if' in stderr, got: {}",
         stderr
+    );
+}
+
+/// Sanity check: a benign system binary should not trigger suspicious/hostile findings.
+/// Asserts no more than 6 notable subdirectories, 0 suspicious/hostile, and no stderr output.
+/// Uses /bin/ls on Unix, or C:\Windows\System32\attrib.exe on Windows.
+#[test]
+fn test_system_binary_false_positive_sanity() {
+    use std::path::Path;
+
+    #[cfg(not(windows))]
+    let binary = "/bin/ls";
+    #[cfg(windows)]
+    let binary = r"C:\Windows\System32\attrib.exe";
+
+    if !Path::new(binary).exists() {
+        eprintln!("skipping: {binary} not found");
+        return;
+    }
+
+    let output = assert_cmd::cargo_bin_cmd!("cleave")
+        .args(["--validate=false", "--json", "analyze", binary])
+        .output()
+        .unwrap();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.is_empty(), "Expected empty stderr, got:\n{}", stderr);
+    assert!(output.status.success(), "cleave exited with failure");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let file_line = stdout
+        .lines()
+        .find(|l| l.contains(r#""type":"file""#))
+        .unwrap_or_else(|| panic!("no file entry in JSONL output for {binary}"));
+
+    let file_entry: serde_json::Value =
+        serde_json::from_str(file_line).expect("invalid JSON in file entry");
+
+    let findings = file_entry["findings"]
+        .as_array()
+        .expect("findings should be an array");
+
+    let mut notable_dirs = HashSet::new();
+    let mut suspicious = 0u32;
+    let mut hostile = 0u32;
+
+    for finding in findings {
+        let crit = finding.get("crit").and_then(|v| v.as_str());
+        let id = finding["id"].as_str().unwrap_or("");
+
+        let subdir = id.split("::").next().unwrap_or(id);
+
+        match crit {
+            Some("notable") => {
+                notable_dirs.insert(subdir.to_string());
+            }
+            Some("suspicious") => suspicious += 1,
+            Some("hostile") => hostile += 1,
+            _ => {}
+        }
+    }
+
+    assert_eq!(
+        hostile, 0,
+        "expected 0 hostile findings for {binary}, got {hostile}"
+    );
+    assert_eq!(
+        suspicious, 0,
+        "expected 0 suspicious findings for {binary}, got {suspicious}"
+    );
+    assert!(
+        notable_dirs.len() <= 6,
+        "expected at most 6 notable subdirectories for {binary}, got {}: {:?}",
+        notable_dirs.len(),
+        notable_dirs
     );
 }
 

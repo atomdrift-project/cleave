@@ -13,6 +13,14 @@ traits:
   # ============================================
   # Command Execution
   # ============================================
+  - id: osascript
+    desc: osascript execution
+    crit: notable
+    conf: 0.7
+    if:
+      type: string
+      substr: "osascript"
+
   - id: osascript-exec
     desc: osascript command execution
     crit: notable

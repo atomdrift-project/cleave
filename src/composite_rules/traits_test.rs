@@ -11,9 +11,9 @@
 //! - Platform and file type filtering
 //! - Downgrade logic
 
-use super::traits::*;
 use super::condition::Condition;
 use super::context::EvaluationContext;
+use super::traits::*;
 use super::types::{FileType, Platform};
 use crate::types::{AnalysisReport, Criticality, Import, TargetInfo};
 use std::path::PathBuf;
@@ -30,7 +30,7 @@ fn create_test_trait(id: &str, condition: Condition) -> TraitDefinition {
         platforms: vec![Platform::All],
         mbc: None,
         attack: None,
-        condition,
+        r#if: condition,
         size_min: None,
         size_max: None,
         count_min: None,
@@ -39,7 +39,7 @@ fn create_test_trait(id: &str, condition: Condition) -> TraitDefinition {
         per_kb_max: None,
         entropy_min: None,
         entropy_max: None,
-        
+
         unless: None,
         downgrade: None,
         defined_in: PathBuf::from("test.yaml"),
@@ -60,10 +60,7 @@ fn create_report_with_size(size_bytes: u64) -> AnalysisReport {
 }
 
 /// Helper: Create test context
-fn create_test_context(
-    report: AnalysisReport,
-    binary_data: Vec<u8>,
-) -> EvaluationContext<'static> {
+fn create_test_context(report: AnalysisReport, binary_data: Vec<u8>) -> EvaluationContext<'static> {
     EvaluationContext {
         report: Box::leak(Box::new(report)),
         binary_data: Box::leak(binary_data.into_boxed_slice()),
@@ -77,6 +74,10 @@ fn create_test_context(
         inline_yara_results: None,
         cached_kv_format: OnceLock::new(),
         cached_kv_parsed: OnceLock::new(),
+        current_trait: None,
+        current_source: None,
+        string_exact_index: OnceLock::new(),
+        string_exact_index_ci: OnceLock::new(),
     }
 }
 
@@ -365,7 +366,7 @@ fn test_per_kb_min_constraint_pass() {
     trait_def.per_kb_min = Some(1.0); // At least 1 match per KB
 
     let mut report = create_report_with_size(2048); // 2KB file
-    // Add 3 matches = 1.5 matches/KB
+                                                    // Add 3 matches = 1.5 matches/KB
     report.imports.push(Import {
         symbol: "func1".to_string(),
         library: None,
@@ -385,10 +386,7 @@ fn test_per_kb_min_constraint_pass() {
     let ctx = create_test_context(report, vec![]);
     let result = trait_def.evaluate(&ctx);
 
-    assert!(
-        result.is_some(),
-        "Should match when density >= per_kb_min"
-    );
+    assert!(result.is_some(), "Should match when density >= per_kb_min");
 }
 
 #[test]
@@ -405,7 +403,7 @@ fn test_per_kb_min_constraint_fail() {
     trait_def.per_kb_min = Some(5.0); // At least 5 matches per KB
 
     let mut report = create_report_with_size(2048); // 2KB file
-    // Add 2 matches = 1.0 matches/KB (too low)
+                                                    // Add 2 matches = 1.0 matches/KB (too low)
     report.imports.push(Import {
         symbol: "func1".to_string(),
         library: None,
@@ -420,7 +418,10 @@ fn test_per_kb_min_constraint_fail() {
     let ctx = create_test_context(report, vec![]);
     let result = trait_def.evaluate(&ctx);
 
-    assert!(result.is_none(), "Should not match when density < per_kb_min");
+    assert!(
+        result.is_none(),
+        "Should not match when density < per_kb_min"
+    );
 }
 
 #[test]
@@ -437,7 +438,7 @@ fn test_per_kb_max_constraint_pass() {
     trait_def.per_kb_max = Some(10.0); // Max 10 matches per KB
 
     let mut report = create_report_with_size(1024); // 1KB file
-    // Add 5 matches = 5.0 matches/KB
+                                                    // Add 5 matches = 5.0 matches/KB
     for i in 0..5 {
         report.imports.push(Import {
             symbol: format!("func{}", i),
@@ -449,10 +450,7 @@ fn test_per_kb_max_constraint_pass() {
     let ctx = create_test_context(report, vec![]);
     let result = trait_def.evaluate(&ctx);
 
-    assert!(
-        result.is_some(),
-        "Should match when density <= per_kb_max"
-    );
+    assert!(result.is_some(), "Should match when density <= per_kb_max");
 }
 
 #[test]
@@ -469,7 +467,7 @@ fn test_per_kb_max_constraint_fail() {
     trait_def.per_kb_max = Some(2.0); // Max 2 matches per KB
 
     let mut report = create_report_with_size(1024); // 1KB file
-    // Add 10 matches = 10.0 matches/KB (too high)
+                                                    // Add 10 matches = 10.0 matches/KB (too high)
     for i in 0..10 {
         report.imports.push(Import {
             symbol: format!("func{}", i),
@@ -481,7 +479,10 @@ fn test_per_kb_max_constraint_fail() {
     let ctx = create_test_context(report, vec![]);
     let result = trait_def.evaluate(&ctx);
 
-    assert!(result.is_none(), "Should not match when density > per_kb_max");
+    assert!(
+        result.is_none(),
+        "Should not match when density > per_kb_max"
+    );
 }
 
 // ==================== Platform filtering tests ====================
@@ -539,7 +540,10 @@ fn test_platform_filter_no_match() {
 
     let result = trait_def.evaluate(&ctx);
 
-    assert!(result.is_none(), "Should not match when platforms don't intersect");
+    assert!(
+        result.is_none(),
+        "Should not match when platforms don't intersect"
+    );
 }
 
 #[test]
@@ -625,7 +629,10 @@ fn test_file_type_filter_no_match() {
 
     let result = trait_def.evaluate(&ctx);
 
-    assert!(result.is_none(), "Should not match when file type doesn't match");
+    assert!(
+        result.is_none(),
+        "Should not match when file type doesn't match"
+    );
 }
 
 // ==================== Constraint combination tests ====================
@@ -649,7 +656,7 @@ fn test_all_constraints_combined() {
     trait_def.per_kb_max = Some(5.0);
 
     let mut report = create_report_with_size(1024); // 1KB file
-    // Add 3 matches = 3.0 matches/KB
+                                                    // Add 3 matches = 3.0 matches/KB
     report.imports.push(Import {
         symbol: "func1".to_string(),
         library: None,
@@ -669,7 +676,10 @@ fn test_all_constraints_combined() {
     let ctx = create_test_context(report, vec![]);
     let result = trait_def.evaluate(&ctx);
 
-    assert!(result.is_some(), "Should match when all constraints satisfied");
+    assert!(
+        result.is_some(),
+        "Should match when all constraints satisfied"
+    );
 }
 
 // ==================== Finding generation tests ====================
@@ -698,7 +708,10 @@ fn test_finding_contains_evidence() {
 
     assert!(result.is_some());
     let finding = result.unwrap();
-    assert!(!finding.evidence.is_empty(), "Finding should contain evidence");
+    assert!(
+        !finding.evidence.is_empty(),
+        "Finding should contain evidence"
+    );
     assert_eq!(finding.evidence[0].value, "test");
 }
 

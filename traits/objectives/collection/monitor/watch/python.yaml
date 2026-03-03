@@ -56,7 +56,7 @@ composite_rules:
       - id: clipboard-get
     downgrade:
       any:
-        - id: metadata/quality/versioned
+        - id: metadata/quality::versioned
 
   # Keyboard logger composite
   - id: keyboard-logger

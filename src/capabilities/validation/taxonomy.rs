@@ -88,9 +88,12 @@ const BANNED_DIRECTORY_SEGMENTS: &[&str] = &[
     "helpers",    // too vague
     "hostile",    // dumping ground
     "impl",       // implementation detail
-    "kind",       // too vague
-    "kinds",      // too vague
-    "method",     // everything is a method
+    "indicator",
+    "indicators",
+    "kind",   // too vague
+    "kinds",  // too vague
+    "method", // everything is a method
+    "methods",
     "misc",       // dumping ground
     "modes",      // dumping ground
     "new",        // temporal, will rot

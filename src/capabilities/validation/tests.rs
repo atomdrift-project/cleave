@@ -7,8 +7,103 @@
 
 #[cfg(test)]
 mod precision_tests {
-    // Precision calculation tests would go here
-    // Tests from original validation.rs lines ~3312-4200
+    use crate::capabilities::validation::precision::calculate_trait_precision;
+    use crate::composite_rules::{Condition, FileType, Platform, TraitDefinition};
+    use std::path::PathBuf;
+
+    fn create_minimal_trait(condition: Condition) -> TraitDefinition {
+        TraitDefinition {
+            id: "test/precision".to_string(),
+            desc: "test".to_string(),
+            conf: 1.0,
+            crit: crate::types::Criticality::Notable,
+            mbc: None,
+            attack: None,
+            r#if: condition,
+            size_min: None,
+            size_max: None,
+            count_min: None,
+            count_max: None,
+            per_kb_min: None,
+            per_kb_max: None,
+            entropy_min: None,
+            entropy_max: None,
+            r#for: vec![FileType::All],
+            platforms: vec![Platform::All],
+            not: None,
+            unless: None,
+            downgrade: None,
+            defined_in: PathBuf::from("test.yml"),
+            precision: None,
+        }
+    }
+
+    #[test]
+    fn test_precision_count_min_scored() {
+        let mut trait_def = create_minimal_trait(Condition::String {
+            exact: Some("test".to_string()),
+            substr: None,
+            regex: None,
+            word: None,
+            case_insensitive: false,
+            external_ip: false,
+            not: None,
+            platforms: None,
+            section: None,
+            offset: None,
+            offset_range: None,
+            section_offset: None,
+            section_offset_range: None,
+            compiled_regex: None,
+        });
+        let base = calculate_trait_precision(&trait_def);
+
+        trait_def.count_min = Some(3);
+        let with_count_min = calculate_trait_precision(&trait_def);
+
+        assert!(
+            with_count_min > base,
+            "count_min should add precision: base={}, with_count_min={}",
+            base,
+            with_count_min
+        );
+        // Should add exactly PARAM_UNIT (0.3)
+        assert!((with_count_min - base - 0.3).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_precision_density_scored() {
+        let mut trait_def = create_minimal_trait(Condition::String {
+            exact: Some("test".to_string()),
+            substr: None,
+            regex: None,
+            word: None,
+            case_insensitive: false,
+            external_ip: false,
+            not: None,
+            platforms: None,
+            section: None,
+            offset: None,
+            offset_range: None,
+            section_offset: None,
+            section_offset_range: None,
+            compiled_regex: None,
+        });
+        let base = calculate_trait_precision(&trait_def);
+
+        trait_def.per_kb_min = Some(1.0);
+        trait_def.per_kb_max = Some(10.0);
+        let with_density = calculate_trait_precision(&trait_def);
+
+        assert!(
+            with_density > base,
+            "density constraints should add precision: base={}, with_density={}",
+            base,
+            with_density
+        );
+        // Should add 2 * PARAM_UNIT (0.6)
+        assert!((with_density - base - 0.6).abs() < 0.01);
+    }
 }
 
 #[cfg(test)]
@@ -2583,5 +2678,233 @@ mod constraint_tests {
         let violations = find_pure_alias_traits(&traits);
 
         assert_eq!(violations.len(), 2);
+    }
+}
+
+#[cfg(test)]
+mod autoprefix_tests {
+    use super::super::composite::{autoprefix_trait_refs, collect_trait_refs_from_rule};
+    use crate::composite_rules::condition::Condition;
+    use crate::composite_rules::traits::{CompositeTrait, DowngradeConditions};
+    use crate::composite_rules::types::{FileType, Platform};
+    use crate::types::Criticality;
+
+    fn make_rule(
+        unless: Option<Vec<Condition>>,
+        downgrade: Option<DowngradeConditions>,
+    ) -> CompositeTrait {
+        CompositeTrait {
+            id: "test/rule".to_string(),
+            desc: "Test".to_string(),
+            conf: 1.0,
+            crit: Criticality::Suspicious,
+            mbc: None,
+            attack: None,
+            platforms: vec![Platform::All],
+            r#for: vec![FileType::All],
+            size_min: None,
+            size_max: None,
+            all: None,
+            any: None,
+            needs: None,
+            none: None,
+            near_lines: None,
+            near_bytes: None,
+            unless,
+            not: None,
+            downgrade,
+            defined_in: std::path::PathBuf::from("test.yaml"),
+            precision: None,
+        }
+    }
+
+    #[test]
+    fn test_autoprefix_unless_refs() {
+        let mut rule = make_rule(
+            Some(vec![Condition::Trait {
+                id: "local-trait".to_string(),
+            }]),
+            None,
+        );
+
+        autoprefix_trait_refs(&mut rule, "my-prefix");
+
+        match &rule.unless.unwrap()[0] {
+            Condition::Trait { id } => {
+                assert_eq!(id, "my-prefix::local-trait");
+            }
+            _ => panic!("Expected Trait condition"),
+        }
+    }
+
+    #[test]
+    fn test_autoprefix_downgrade_refs() {
+        let mut rule = make_rule(
+            None,
+            Some(DowngradeConditions {
+                all: Some(vec![Condition::Trait {
+                    id: "all-local".to_string(),
+                }]),
+                any: Some(vec![Condition::Trait {
+                    id: "any-local".to_string(),
+                }]),
+                none: Some(vec![Condition::Trait {
+                    id: "none-local".to_string(),
+                }]),
+                needs: None,
+            }),
+        );
+
+        autoprefix_trait_refs(&mut rule, "pfx");
+
+        let dg = rule.downgrade.unwrap();
+        match &dg.all.unwrap()[0] {
+            Condition::Trait { id } => assert_eq!(id, "pfx::all-local"),
+            _ => panic!("Expected Trait"),
+        }
+        match &dg.any.unwrap()[0] {
+            Condition::Trait { id } => assert_eq!(id, "pfx::any-local"),
+            _ => panic!("Expected Trait"),
+        }
+        match &dg.none.unwrap()[0] {
+            Condition::Trait { id } => assert_eq!(id, "pfx::none-local"),
+            _ => panic!("Expected Trait"),
+        }
+    }
+
+    #[test]
+    fn test_collect_refs_includes_unless_and_downgrade() {
+        let rule = make_rule(
+            Some(vec![Condition::Trait {
+                id: "unless-ref".to_string(),
+            }]),
+            Some(DowngradeConditions {
+                all: None,
+                any: Some(vec![Condition::Trait {
+                    id: "dg-any-ref".to_string(),
+                }]),
+                none: Some(vec![Condition::Trait {
+                    id: "dg-none-ref".to_string(),
+                }]),
+                needs: None,
+            }),
+        );
+
+        let refs = collect_trait_refs_from_rule(&rule);
+        let ids: Vec<&str> = refs.iter().map(|(id, _)| id.as_str()).collect();
+        assert!(ids.contains(&"unless-ref"));
+        assert!(ids.contains(&"dg-any-ref"));
+        assert!(ids.contains(&"dg-none-ref"));
+    }
+}
+
+#[cfg(test)]
+mod orphan_tests {
+    use crate::capabilities::validation::constraints::find_orphaned_components;
+    use crate::composite_rules::traits::{CompositeTrait, DowngradeConditions};
+    use crate::composite_rules::{Condition, FileType, Platform, TraitDefinition};
+    use std::collections::HashMap;
+    use std::path::PathBuf;
+
+    fn make_component_trait(id: &str) -> TraitDefinition {
+        TraitDefinition {
+            id: id.to_string(),
+            desc: "component".to_string(),
+            conf: 1.0,
+            crit: crate::types::Criticality::Component,
+            mbc: None,
+            attack: None,
+            r#if: Condition::String {
+                exact: Some("test".to_string()),
+                substr: None,
+                regex: None,
+                word: None,
+                case_insensitive: false,
+                external_ip: false,
+                not: None,
+                platforms: None,
+                section: None,
+                offset: None,
+                offset_range: None,
+                section_offset: None,
+                section_offset_range: None,
+                compiled_regex: None,
+            },
+            size_min: None,
+            size_max: None,
+            count_min: None,
+            count_max: None,
+            per_kb_min: None,
+            per_kb_max: None,
+            entropy_min: None,
+            entropy_max: None,
+            r#for: vec![FileType::All],
+            platforms: vec![Platform::All],
+            not: None,
+            unless: None,
+            downgrade: None,
+            defined_in: PathBuf::from("test.yml"),
+            precision: None,
+        }
+    }
+
+    fn make_composite(
+        id: &str,
+        all_conditions: Vec<Condition>,
+        downgrade: Option<DowngradeConditions>,
+    ) -> CompositeTrait {
+        CompositeTrait {
+            id: id.to_string(),
+            desc: "composite".to_string(),
+            conf: 1.0,
+            crit: crate::types::Criticality::Suspicious,
+            mbc: None,
+            attack: None,
+            platforms: vec![Platform::All],
+            r#for: vec![FileType::All],
+            size_min: None,
+            size_max: None,
+            all: Some(all_conditions),
+            any: None,
+            needs: None,
+            none: None,
+            near_lines: None,
+            near_bytes: None,
+            unless: None,
+            not: None,
+            downgrade,
+            defined_in: PathBuf::from("test.yml"),
+            precision: None,
+        }
+    }
+
+    #[test]
+    fn test_find_orphaned_includes_downgrade_none() {
+        // Component referenced ONLY in downgrade.none: should NOT be orphaned
+        let trait_defs = vec![make_component_trait("test::comp-none-ref")];
+        let composites = vec![make_composite(
+            "test::my-composite",
+            vec![Condition::Trait {
+                id: "some-other".to_string(),
+            }],
+            Some(DowngradeConditions {
+                all: None,
+                any: None,
+                none: Some(vec![Condition::Trait {
+                    id: "test::comp-none-ref".to_string(),
+                }]),
+                needs: None,
+            }),
+        )];
+
+        let source_files: HashMap<String, String> = HashMap::new();
+        let orphans = find_orphaned_components(&trait_defs, &composites, &source_files);
+        let orphan_ids: Vec<&str> = orphans.iter().map(|(id, _)| id.as_str()).collect();
+
+        assert!(
+            !orphan_ids.contains(&"test::comp-none-ref"),
+            "Component referenced in downgrade.none should NOT be orphaned, but got orphans: {:?}",
+            orphan_ids
+        );
     }
 }

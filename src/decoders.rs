@@ -266,4 +266,15 @@ mod tests {
         assert!(truncated.ends_with("..."));
         assert!(truncated.len() <= 103); // 100 bytes max + "..."
     }
+
+    #[test]
+    fn test_extract_base64_shell_command() {
+        // Windows command "type nul > prueba33.txt" encoded in base64
+        let data = b"os.system(b64d(\"dHlwZSBudWwgPiBwcnVlYmEzMy50eHQ=\"))";
+        let decoded = extract_base64_strings(data);
+
+        assert_eq!(decoded.len(), 1);
+        assert_eq!(decoded[0].value, "type nul > prueba33.txt");
+        assert_eq!(decoded[0].method, "base64");
+    }
 }

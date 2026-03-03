@@ -237,7 +237,7 @@ composite_rules:
       - id: micro-behaviors/hardware/clipboard/access::pyperclip-copy
     downgrade:
       any:
-        - id: metadata/quality/versioned
+        - id: metadata/quality::versioned
 
   # wxPython clipboard composite
   - id: python-wx-clipboard

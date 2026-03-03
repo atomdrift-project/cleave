@@ -109,18 +109,6 @@ traits:
       type: raw
       regex: 'https?://.{1,120}\.php\b'
 
-  # === File Sharing Services ===
-
-  - id: transfer-sh
-    desc: transfer.sh file sharing
-    conf: 0.85
-    attack: "T1567"
-    if:
-      type: string
-      regex: 'transfer\.sh'
-    not:
-      - regex: '^\s*#'
-
   # === Discord (non-invite URLs) ===
 
   - id: discord-api

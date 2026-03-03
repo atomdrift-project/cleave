@@ -173,8 +173,8 @@ composite_rules:
     attack: "T1027"
     for: [php]
     all:
-      - id: objectives/anti-static/obfuscation/encoding::gzinflate
-      - id: objectives/anti-static/obfuscation/encoding::eval
+      - id: objectives/anti-static/obfuscation/encoding/decode-eval::gzinflate
+      - id: objectives/anti-static/obfuscation/encoding/decode-eval::eval
 
   # Obfuscated dynamic backdoor
   - id: php-obfuscated-dynamic-backdoor
@@ -330,6 +330,6 @@ composite_rules:
       - id: objectives/command-and-control/webshell/backdoor::wp-user-creation
       - id: objectives/command-and-control/webshell/backdoor::wp-role-assignment
     any:
-      - id: objectives/anti-static/obfuscation/encoding::strrev-chained
-      - id: objectives/anti-static/obfuscation/encoding::base64-admin-role
+      - id: objectives/anti-static/obfuscation/encoding/decode-eval::strrev-chained
+      - id: objectives/anti-static/obfuscation/encoding/decode-eval::base64-admin-role
       - id: objectives/command-and-control/webshell/backdoor::wp-plugin-path-encoded

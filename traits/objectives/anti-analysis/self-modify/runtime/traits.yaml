@@ -198,7 +198,7 @@ composite_rules:
       - id: page-rwx-literal
     downgrade:
       any:
-        - id: micro-behaviors/dylib/load/x11-dga-marker
+        - id: micro-behaviors/dylib/library::x11-dga-marker
         - id: micro-behaviors/dylib/library::graphics-lib-marker
         - id: micro-behaviors/dylib/library::system-lib-marker
 
@@ -212,7 +212,7 @@ composite_rules:
       - id: self-patch-ref
     downgrade:
       any:
-        - id: metadata/vendor/valve/valve-corp-binary
+        - id: metadata/vendor/valve::valve-corp-binary
 
   - id: code-cave
     desc: Code cave or slack space
@@ -225,7 +225,7 @@ composite_rules:
       - id: nop-sled
     downgrade:
       any:
-        - id: metadata/vendor/valve/valve-corp-binary
+        - id: metadata/vendor/valve::valve-corp-binary
 
   - id: hook-install
     desc: Dynamic interposition hook patterns
@@ -237,7 +237,7 @@ composite_rules:
       - id: detour-ref
     downgrade:
       any:
-        - id: metadata/vendor/valve/valve-corp-binary
+        - id: metadata/vendor/valve::valve-corp-binary
 
   - id: iat-hook
     desc: Import Address Table hooking

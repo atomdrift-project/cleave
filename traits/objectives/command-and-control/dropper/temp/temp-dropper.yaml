@@ -19,5 +19,5 @@ composite_rules:
       - id: micro-behaviors/fs/file/open::fopen
     any:
       - id: micro-behaviors/process/create/spawn::create-process-a
-      - id: micro-behaviors/process/create/methods::shell-execute-a
+      - id: micro-behaviors/process/create/exec::shell-execute-a
     needs: 1

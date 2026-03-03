@@ -120,4 +120,4 @@ composite_rules:
     attack: "T1036.005"
     all:
       - id: fake-macos-installer-msg
-      - id: micro-behaviors/process/create/methods::base64-decode-exec
+      - id: objectives/anti-static/obfuscation/encoding/base64::base64-decode-exec

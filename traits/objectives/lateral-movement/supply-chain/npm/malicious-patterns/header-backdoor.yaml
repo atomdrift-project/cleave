@@ -22,8 +22,8 @@ composite_rules:
       - id: micro-behaviors/communications/protocol/http::hex-command-regex
       - id: micro-behaviors/communications/protocol/http::header-stringify-scan
       - id: objectives/execution/vm/sandbox::vm-runInThisContext
-      - id: objectives/anti-static/obfuscation/encoding/indicators::encoded-node-require
-      - id: objectives/anti-static/obfuscation/encoding/indicators::encoded-node-vm
-      - id: objectives/anti-static/obfuscation/encoding/indicators::encoded-node-vm-run
+      - id: objectives/anti-static/obfuscation/encoding::encoded-node-require
+      - id: objectives/anti-static/obfuscation/encoding::encoded-node-vm
+      - id: objectives/anti-static/obfuscation/encoding::encoded-node-vm-run
       - id: micro-behaviors/data/manipulation/buffer::buffer-alloc-large
       - id: micro-behaviors/data/manipulation/buffer::module-exports-buffer-storage

@@ -70,7 +70,6 @@ composite_rules:
         - id: objectives/execution/reflection/invoke::method-info
         - id: objectives/execution/reflection/invoke::property-info
         - id: metadata/signed/platform::apple
-        - id: file/archive/self-extracting
 
   - id: sparse-execution-anomaly
     desc: "Sparse execution structural anomaly (possible packer)"

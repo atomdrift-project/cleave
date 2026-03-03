@@ -75,8 +75,8 @@ composite_rules:
     for: [elf]
     platforms: [linux]
     any:
-      - id: micro-behaviors/process/create/shell::pipe-sh
-      - id: micro-behaviors/process/create/shell::pipe-bash
+      - id: micro-behaviors/process/create/shell/from-pipe::pipe-sh
+      - id: micro-behaviors/process/create/shell/from-pipe::pipe-bash
 
   # Helper: download + pipe to shell
   - id: download-pipe-shell
@@ -102,7 +102,7 @@ composite_rules:
     platforms: [linux]
     any:
       - id: download-pipe-shell
-      - id: micro-behaviors/process/create/shell::output-pipe-sh
+      - id: micro-behaviors/process/create/shell/from-pipe::output-pipe-sh
 
   # Helper: send functions or download tools
   - id: send-or-download

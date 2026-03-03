@@ -11,6 +11,6 @@ composite_rules:
     crit: hostile
     conf: 5.0
     all:
-      - id: micro-behaviors/process/create/methods::eval-openssl-subshell
+      - id: objectives/command-and-control/dropper/remote-eval::eval-openssl-subshell
       - id: micro-behaviors/crypto/cmd/openssl::openssl-hardcoded-pass
       - id: micro-behaviors/fs/path/bundle::macos-resources-dir

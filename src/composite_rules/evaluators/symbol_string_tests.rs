@@ -966,6 +966,8 @@ fn test_eval_encoded_single_encoding_filter() {
         false,
         None,
         &location,
+        false,
+        None,
         &ctx,
     );
 
@@ -997,6 +999,8 @@ fn test_eval_encoded_multiple_encoding_filter() {
         false,
         None,
         &location,
+        false,
+        None,
         &ctx,
     );
 
@@ -1022,6 +1026,8 @@ fn test_eval_encoded_no_filter_all_encodings() {
         false,
         None,
         &location,
+        false,
+        None,
         &ctx,
     );
 
@@ -1049,6 +1055,8 @@ fn test_eval_encoded_exact_match() {
         false,
         None,
         &location,
+        false,
+        None,
         &ctx,
     );
 
@@ -1075,6 +1083,8 @@ fn test_eval_encoded_substr_match() {
         false,
         None,
         &location,
+        false,
+        None,
         &ctx,
     );
 
@@ -1101,6 +1111,8 @@ fn test_eval_encoded_regex_match() {
         false,
         None,
         &location,
+        false,
+        None,
         &ctx,
     );
 
@@ -1127,6 +1139,8 @@ fn test_eval_encoded_word_match() {
         false,
         None,
         &location,
+        false,
+        None,
         &ctx,
     );
 
@@ -1143,6 +1157,8 @@ fn test_eval_encoded_word_match() {
         false,
         None,
         &location,
+        false,
+        None,
         &ctx,
     );
     assert!(result.matched);
@@ -1167,6 +1183,8 @@ fn test_eval_encoded_case_insensitive() {
         true, // case insensitive
         None,
         &location,
+        false,
+        None,
         &ctx,
     );
 
@@ -1190,6 +1208,8 @@ fn test_eval_encoded_count_constraints() {
         false,
         None,
         &location,
+        false,
+        None,
         &ctx,
     );
 
@@ -1217,6 +1237,8 @@ fn test_eval_encoded_no_match_wrong_encoding() {
         false,
         None,
         &location,
+        false,
+        None,
         &ctx,
     );
 
@@ -1240,6 +1262,8 @@ fn test_eval_encoded_excludes_plain_strings() {
         false,
         None,
         &location,
+        false,
+        None,
         &ctx,
     );
 
@@ -1266,10 +1290,198 @@ fn test_eval_encoded_count_min_not_met() {
         false,
         None,
         &location,
+        false,
+        None,
         &ctx,
     );
 
     // Should match - "password123" contains "password"
     assert!(result.matched);
     assert!(!result.evidence.is_empty());
+}
+
+// =============================================================================
+// B4: eval_string match_count exceeds evidence cap
+// =============================================================================
+
+#[test]
+fn test_eval_string_match_count_exceeds_evidence_cap() {
+    let mut report = create_test_report();
+
+    // Add 25 strings that all match a substr pattern
+    for i in 0..25u64 {
+        report.strings.push(StringInfo {
+            value: format!("token_match_{}", i),
+            offset: Some(0x1000 + i * 0x100),
+            encoding: "utf8".to_string(),
+            string_type: crate::types::StringType::Const,
+            section: None,
+            encoding_chain: Vec::new(),
+            fragments: None,
+        });
+    }
+
+    let data = vec![];
+    let ctx = create_test_context(&report, &data);
+
+    let substr_val = "token_match".to_string();
+    let params = StringParams {
+        exact: None,
+        substr: Some(&substr_val),
+        regex: None,
+        word: None,
+        case_insensitive: false,
+        external_ip: false,
+        compiled_regex: None,
+        section: None,
+        offset: None,
+        offset_range: None,
+        section_offset: None,
+        section_offset_range: None,
+    };
+
+    let result = eval_string(&params, None, &ctx);
+    assert!(result.matched);
+    // Evidence is capped at 16 (MAX_EVIDENCE_PER_TRAIT)
+    assert_eq!(result.evidence.len(), 16);
+    // But match_count should reflect all 25 actual matches
+    assert_eq!(result.match_count, 25);
+}
+
+// =============================================================================
+// B1: eval_encoded not: and external_ip: filtering
+// =============================================================================
+
+#[test]
+fn test_eval_encoded_not_filter() {
+    use crate::composite_rules::condition::EncodingSpec;
+
+    let mut report = create_test_report();
+    report.strings.push(StringInfo {
+        value: "http://evil.com/payload".to_string(),
+        offset: Some(0x1000),
+        encoding: "utf8".to_string(),
+        string_type: crate::types::StringType::Url,
+        section: None,
+        encoding_chain: vec!["base64".to_string()],
+        fragments: None,
+    });
+    report.strings.push(StringInfo {
+        value: "http://apple.com/safe".to_string(),
+        offset: Some(0x2000),
+        encoding: "utf8".to_string(),
+        string_type: crate::types::StringType::Url,
+        section: None,
+        encoding_chain: vec!["base64".to_string()],
+        fragments: None,
+    });
+
+    let data = vec![];
+    let ctx = create_test_context(&report, &data);
+    let location = ContentLocationParams::default();
+
+    let encoding = Some(EncodingSpec::Single("base64".to_string()));
+    let not_exceptions = vec![NotException::Shorthand("apple.com".to_string())];
+
+    let result = eval_encoded(
+        encoding.as_ref(),
+        None,
+        Some(&"http".to_string()),
+        None,
+        None,
+        false,
+        None,
+        &location,
+        false,
+        Some(&not_exceptions),
+        &ctx,
+    );
+
+    assert!(result.matched);
+    // Only evil.com should match — apple.com excluded by not:
+    assert_eq!(result.match_count, 1);
+    assert!(result.evidence[0].value.contains("evil.com"));
+}
+
+#[test]
+fn test_eval_encoded_external_ip_filter() {
+    use crate::composite_rules::condition::EncodingSpec;
+
+    let mut report = create_test_report();
+    // String with external IP
+    report.strings.push(StringInfo {
+        value: "connect 8.8.8.8:443".to_string(),
+        offset: Some(0x1000),
+        encoding: "utf8".to_string(),
+        string_type: crate::types::StringType::Const,
+        section: None,
+        encoding_chain: vec!["base64".to_string()],
+        fragments: None,
+    });
+    // String with RFC1918 internal IP
+    report.strings.push(StringInfo {
+        value: "connect 192.168.1.1:80".to_string(),
+        offset: Some(0x2000),
+        encoding: "utf8".to_string(),
+        string_type: crate::types::StringType::Const,
+        section: None,
+        encoding_chain: vec!["base64".to_string()],
+        fragments: None,
+    });
+
+    let data = vec![];
+    let ctx = create_test_context(&report, &data);
+    let location = ContentLocationParams::default();
+
+    let encoding = Some(EncodingSpec::Single("base64".to_string()));
+
+    let result = eval_encoded(
+        encoding.as_ref(),
+        None,
+        Some(&"connect".to_string()),
+        None,
+        None,
+        false,
+        None,
+        &location,
+        true, // external_ip: true
+        None,
+        &ctx,
+    );
+
+    assert!(result.matched);
+    // Only the external IP (8.8.8.8) should match
+    assert_eq!(result.match_count, 1);
+    assert!(result.evidence[0].value.contains("8.8.8.8"));
+}
+
+#[test]
+fn test_eval_raw_not_excludes_by_context() {
+    // B19: not: filtering should use match context, not the search pattern.
+    // Content has two "http" matches: one near "safe.com" (excluded) and one near "evil.com" (kept).
+    let report = create_test_report();
+    let content = b"aaaa http://safe.com/ok bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb http://evil.com/bad cccc";
+    let ctx = create_test_context(&report, content.as_ref());
+
+    let not_exceptions = vec![NotException::Shorthand("safe.com".to_string())];
+    let location = ContentLocationParams::default();
+    let result = eval_raw(
+        None,
+        Some(&"http".to_string()),
+        None,
+        None,
+        false,
+        false,
+        None,
+        Some(&not_exceptions),
+        &location,
+        &ctx,
+    );
+
+    assert!(result.matched, "Should still match http://evil.com context");
+    // Only the non-excluded match should count
+    assert_eq!(
+        result.match_count, 1,
+        "Only http://evil.com should count (safe.com excluded by not:)"
+    );
 }

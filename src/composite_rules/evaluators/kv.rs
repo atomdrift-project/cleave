@@ -747,7 +747,7 @@ fn format_evidence_value_with_size(
 
     // Truncate if too long
     let truncated = if s.len() > 200 {
-        format!("{}...", &s[..197])
+        format!("{}...", &s[..s.floor_char_boundary(197)])
     } else {
         s
     };
@@ -2508,5 +2508,21 @@ Author-Email: test@example.com
             compiled_regex: Some(Regex::new(r"^/tmp/").unwrap()),
         };
         assert!(evaluate_kv_test(&cond_program, plist, path).is_some());
+    }
+
+    #[test]
+    fn test_format_evidence_multibyte_truncation() {
+        // Create a string where byte position 197 falls inside a multi-byte CJK char.
+        // Each CJK character is 3 bytes in UTF-8.
+        // 65 CJK chars = 195 bytes, then 1 more = 198 bytes, crossing the 197 boundary.
+        let cjk: String = "漢".repeat(70); // 210 bytes
+        assert!(cjk.len() > 200);
+
+        let value = json!(cjk);
+        // This should not panic — previously it would slice mid-character
+        let result = format_evidence_value_with_size(&value, None, None);
+        assert!(result.ends_with("..."));
+        // Verify the truncated string is valid UTF-8
+        assert!(result.is_char_boundary(0));
     }
 }

@@ -87,7 +87,7 @@ composite_rules:
   any:
     - id: router-default-admin-1
     - id: router-default-admin-2
-  not:
+  none:
   - id: metadata/signed/platform::apple
   unless:
   - type: raw

@@ -964,16 +964,6 @@ impl TraitDefinition {
             }
         }
 
-        // Debug: trace evaluation result for eco/npm traits
-        if self.id.contains("eco/npm/metadata/vscode") {
-            eprintln!(
-                "DEBUG evaluate: {} result.matched={} evidence_count={}",
-                self.id,
-                result.matched,
-                result.evidence.len()
-            );
-        }
-
         if result.matched {
             // Apply count and density filters (centralized for all condition types)
             // Use match_count which may exceed evidence.len() for high-frequency patterns
@@ -1125,26 +1115,31 @@ impl TraitDefinition {
         }
     }
 
-    /// Evaluate a single downgrade condition set
+    /// Evaluate a single downgrade condition set.
+    /// All specified blocks (all/any/none) must pass for the downgrade to trigger.
     fn eval_downgrade_conditions<'a>(
         &self,
         conditions: &DowngradeConditions,
         ctx: &EvaluationContext<'a>,
     ) -> bool {
         let debug_downgrade = std::env::var("DEBUG_DOWNGRADE").is_ok();
+        let mut has_any_block = false;
 
-        // If 'all' is specified, all must match
+        // If 'all' is specified, every condition must match
         if let Some(all_conds) = &conditions.all {
+            has_any_block = true;
             for cond in all_conds {
                 if !self.eval_condition(cond, ctx).matched {
                     return false;
                 }
             }
-            return true;
         }
 
-        // If 'any' is specified, at least one must match
+        // If 'any' is specified, at least `needs` conditions must match (default 1)
         if let Some(any_conds) = &conditions.any {
+            has_any_block = true;
+            let threshold = conditions.needs.unwrap_or(1);
+            let mut matched_count = 0;
             for (i, cond) in any_conds.iter().enumerate() {
                 let result = self.eval_condition(cond, ctx);
                 if debug_downgrade {
@@ -1154,23 +1149,25 @@ impl TraitDefinition {
                     );
                 }
                 if result.matched {
-                    return true;
+                    matched_count += 1;
                 }
             }
-            return false;
+            if matched_count < threshold {
+                return false;
+            }
         }
 
-        // If 'none' is specified, none can match
+        // If 'none' is specified, none may match
         if let Some(none_conds) = &conditions.none {
+            has_any_block = true;
             for cond in none_conds {
                 if self.eval_condition(cond, ctx).matched {
                     return false;
                 }
             }
-            return true;
         }
 
-        false
+        has_any_block
     }
 
     /// Evaluate a single condition
@@ -1426,8 +1423,8 @@ impl TraitDefinition {
                 regex,
                 word,
                 case_insensitive,
-                external_ip: _,
-                not: _,
+                external_ip,
+                not,
                 section,
                 offset,
                 offset_range,
@@ -1454,6 +1451,8 @@ impl TraitDefinition {
                         *case_insensitive,
                         compiled_regex.as_ref(),
                         &location,
+                        *external_ip,
+                        not.as_ref(),
                         ctx,
                     )
                 )
@@ -2022,26 +2021,31 @@ impl CompositeTrait {
         *base_crit
     }
 
-    /// Evaluate a single downgrade condition set
+    /// Evaluate a single downgrade condition set.
+    /// All specified blocks (all/any/none) must pass for the downgrade to trigger.
     fn eval_downgrade_conditions<'a>(
         &self,
         conditions: &DowngradeConditions,
         ctx: &EvaluationContext<'a>,
     ) -> bool {
         let debug_downgrade = std::env::var("DEBUG_DOWNGRADE").is_ok();
+        let mut has_any_block = false;
 
-        // If 'all' is specified, all must match
+        // If 'all' is specified, every condition must match
         if let Some(all_conds) = &conditions.all {
+            has_any_block = true;
             for cond in all_conds {
                 if !self.eval_condition(cond, ctx).matched {
                     return false;
                 }
             }
-            return true;
         }
 
-        // If 'any' is specified, at least one must match
+        // If 'any' is specified, at least `needs` conditions must match (default 1)
         if let Some(any_conds) = &conditions.any {
+            has_any_block = true;
+            let threshold = conditions.needs.unwrap_or(1);
+            let mut matched_count = 0;
             for (i, cond) in any_conds.iter().enumerate() {
                 let result = self.eval_condition(cond, ctx);
                 if debug_downgrade {
@@ -2051,23 +2055,25 @@ impl CompositeTrait {
                     );
                 }
                 if result.matched {
-                    return true;
+                    matched_count += 1;
                 }
             }
-            return false;
+            if matched_count < threshold {
+                return false;
+            }
         }
 
-        // If 'none' is specified, none can match
+        // If 'none' is specified, none may match
         if let Some(none_conds) = &conditions.none {
+            has_any_block = true;
             for cond in none_conds {
                 if self.eval_condition(cond, ctx).matched {
                     return false;
                 }
             }
-            return true;
         }
 
-        false
+        has_any_block
     }
 
     /// Evaluate ALL conditions must match (AND)
@@ -2483,8 +2489,8 @@ impl CompositeTrait {
                 regex,
                 word,
                 case_insensitive,
-                external_ip: _,
-                not: _,
+                external_ip,
+                not,
                 section,
                 offset,
                 offset_range,
@@ -2511,6 +2517,8 @@ impl CompositeTrait {
                         *case_insensitive,
                         compiled_regex.as_ref(),
                         &location,
+                        *external_ip,
+                        not.as_ref(),
                         ctx,
                     )
                 )

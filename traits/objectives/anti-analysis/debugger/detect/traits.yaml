@@ -89,7 +89,7 @@ composite_rules:
       - id: objectives/anti-analysis/debugger/detect::nt-query-information-process
     downgrade:
       any:
-        - id: metadata/quality/versioned
+        - id: metadata/quality::versioned
 
   # Full anti-debug composite
   - id: anti-debug-full

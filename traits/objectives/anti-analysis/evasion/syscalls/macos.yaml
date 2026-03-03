@@ -22,7 +22,7 @@ traits:
         - id: metadata/signed/platform::apple
 
   - id: syscall-in-exception-tab
-    desc: "Direct x86_64 syscall found in __gcc_except_tab section"
+    desc: "Direct x86_64 syscall in __gcc_except_tab"
     conf: 0.95
     if:
       type: hex

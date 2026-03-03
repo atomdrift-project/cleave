@@ -16,4 +16,3 @@ traits:
     downgrade:
       any:
         - id: metadata/signed/platform::apple
-        - id: file/archive/self-extracting

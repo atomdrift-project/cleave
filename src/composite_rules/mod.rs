@@ -46,3 +46,6 @@ mod description_validation_tests;
 
 #[cfg(test)]
 mod python_aes_import_test;
+
+#[cfg(test)]
+mod traits_test;

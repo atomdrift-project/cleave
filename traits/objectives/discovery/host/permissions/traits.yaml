@@ -127,7 +127,7 @@ composite_rules:
       - id: getgroups
     downgrade:
       any:
-        - id: micro-behaviors/dylib/load/video-lib-marker
+        - id: micro-behaviors/dylib/library::video-lib-marker
         - id: micro-behaviors/dylib/library::graphics-lib-marker
         - id: micro-behaviors/dylib/library::system-lib-marker
         - id: micro-behaviors/dylib/library::x11-ipc-lib-marker

@@ -223,6 +223,8 @@ pub(crate) enum AnalysisWarning {
         /// Maximum depth that was configured
         max_depth: usize,
     },
+    /// AST has parse errors but partial results may still be valid
+    AstParseError,
     /// Pattern had excessive matches - truncated to prevent memory exhaustion
     PatternTruncated {
         /// The pattern that was truncated
@@ -237,6 +239,9 @@ impl std::fmt::Display for AnalysisWarning {
         match self {
             Self::AstTooDeep { max_depth } => {
                 write!(f, "AST nesting limit hit (depth: {})", max_depth)
+            }
+            Self::AstParseError => {
+                write!(f, "AST has parse errors (results may be incomplete)")
             }
             Self::PatternTruncated { pattern, limit } => {
                 write!(

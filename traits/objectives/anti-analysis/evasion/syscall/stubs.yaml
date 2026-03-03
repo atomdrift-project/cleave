@@ -155,7 +155,7 @@ composite_rules:
     platforms: [linux]
     needs: 2
     unless:
-      - id: metadata/lang/lisp::is-sbcl
+      - id: metadata/lang::is-sbcl
     any:
       - id: svc-linux-arm64
       - id: dense-syscalls
@@ -170,7 +170,7 @@ composite_rules:
     platforms: [macos]
     needs: 2
     unless:
-      - id: metadata/lang/lisp::is-sbcl
+      - id: metadata/lang::is-sbcl
     any:
       - id: svc-macos-arm64
       - id: dense-syscalls

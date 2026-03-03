@@ -231,8 +231,8 @@ composite_rules:
       - id: micro-behaviors/io/console/output::write-file
       - id: objectives/anti-static/obfuscation/payload/encrypted::dominant-rsrc-section
     any:
-      - id: micro-behaviors/process/create/methods::shell-execute-ex
-      - id: micro-behaviors/process/create/methods::shell-execute
+      - id: micro-behaviors/process/create/exec::shell-execute-ex
+      - id: micro-behaviors/process/create/exec::shell-execute
     downgrade:
       any:
         - id: metadata/vendor/microsoft::is-microsoft-named
@@ -300,7 +300,7 @@ composite_rules:
     any:
       - id: micro-behaviors/fs/file/move::move-file-ex
       - id: micro-behaviors/os/registry/access::registry-write-api-chain
-      - id: micro-behaviors/process/create/methods::shell-execute
+      - id: micro-behaviors/process/create/exec::shell-execute
     downgrade:
       any:
         - id: metadata/vendor/microsoft::is-microsoft-named

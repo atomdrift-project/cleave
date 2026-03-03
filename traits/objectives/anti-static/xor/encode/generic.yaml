@@ -22,7 +22,7 @@ traits:
       type: string
       substr: xor_encrypt
 
-  # Removed xor-decode duplicate - use objectives/anti-static/obfuscation/encoding::xor-decode-symbol
+  # Removed xor-decode duplicate - use objectives/anti-static/obfuscation/encoding/xor::xor-decode-symbol
 
   - id: xor-loop
     desc: XOR operation with hex byte
@@ -42,5 +42,5 @@ composite_rules:
     any:
       - id: xor-key
       - id: xor-encrypt
-      - id: objectives/anti-static/obfuscation/encoding::xor-decode-symbol
+      - id: objectives/anti-static/obfuscation/encoding/xor::xor-decode-symbol
       - id: xor-loop

@@ -560,13 +560,23 @@ fn truncate_with_ellipsis(s: &str, max_width: usize) -> String {
     format!("{}…", &s[..end])
 }
 
-/// Colorize text based on criticality
+/// Emoji bullet based on criticality (traffic light: red/yellow/green)
+#[allow(dead_code)] // Used by binary target
+fn bullet_for_crit(crit: &Criticality) -> &'static str {
+    match crit {
+        Criticality::Hostile => "🔴",
+        Criticality::Suspicious => "🟡",
+        _ => "🟢",
+    }
+}
+
+/// Colorize text based on criticality (matches traffic light emoji colors)
 #[allow(dead_code)] // Used by binary target
 fn colorize_by_crit(text: &str, crit: &Criticality) -> colored::ColoredString {
     match crit {
         Criticality::Hostile => text.bright_red(),
         Criticality::Suspicious => text.bright_yellow(),
-        _ => text.bright_cyan(),
+        _ => text.bright_green(),
     }
 }
 
@@ -642,8 +652,8 @@ pub(crate) fn format_terminal(report: &AnalysisReport) -> String {
             .max()
             .unwrap_or(30);
 
-        // Evidence gets remaining space: term_width - 2 (bullet+space) - trait - 2 - desc - 2
-        let fixed_width = 2 + trait_width + 2 + desc_width + 2;
+        // Evidence gets remaining space: term_width - 3 (emoji=2 cols + space) - trait - 2 - desc - 2
+        let fixed_width = 3 + trait_width + 2 + desc_width + 2;
         let evidence_width = term_width.saturating_sub(fixed_width);
 
         // Generate formula from filtered findings
@@ -659,17 +669,10 @@ pub(crate) fn format_terminal(report: &AnalysisReport) -> String {
             format!("{} • {}", file_type_display, formula)
         };
 
-        let sha_display = if file.sha256.is_empty() {
-            String::new()
-        } else {
-            format!(" • {}", format!("sha256:{}", file.sha256).bright_black())
-        };
-
         output.push_str(&format!(
-            "{}  {}{}\n",
+            "{}  {}\n",
             file.path.bright_white().bold(),
-            type_formula.bright_black(),
-            sha_display
+            type_formula.bright_black()
         ));
         output.push('\n');
 
@@ -694,7 +697,7 @@ pub(crate) fn format_terminal(report: &AnalysisReport) -> String {
 
                 // Build the line with proper column alignment
                 // Format: ● trait_id  description  evidence
-                let bullet = colorize_by_crit("●", &finding.crit);
+                let bullet = bullet_for_crit(&finding.crit);
                 let padded_trait = format!("{:width$}", trait_id, width = trait_width);
                 let padded_desc = format!("{:width$}", desc, width = desc_width);
                 let truncated_evidence = truncate_with_ellipsis(&evidence, evidence_width);

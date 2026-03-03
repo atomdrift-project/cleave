@@ -98,8 +98,8 @@ traits:
 | `symbol` | Imports/exports | `exact`, `substr`, `regex` | `platforms` |
 | `hex` | Byte patterns (wildcards always extracted) | pattern string | count, density, `offset`, `offset_range` |
 | `encoded` | **All decoded strings** | `exact`, `substr`, `regex`, `word` | count, density, location, `encoding`, `case_insensitive`, `external_ip` |
-| `base64` | Base64-decoded *(deprecated - use `encoded`)* | `exact`, `substr`, `regex` | count, density, location, `case_insensitive` |
-| `xor` | XOR-decoded *(deprecated - use `encoded`)* | `exact`, `substr`, `regex` | count, density, location, `key`, `case_insensitive` |
+| ~~`base64`~~ | *(removed — use `encoded`)* | | |
+| ~~`xor`~~ | *(removed — use `encoded`)* | | |
 | `kv` | Manifest data | `exact`, `substr`, `regex` | `path`, `exists`, `size_min`, `size_max`, `case_insensitive` (value only) |
 | `basename` | Filename | `exact`, `substr`, `regex` | `case_insensitive` |
 
@@ -120,9 +120,9 @@ traits:
 | `exports_count` | Export count bounds | `min`, `max` |
 | `string_count` | String count analysis | `min`, `max`, `min_length`, `regex` (filter) |
 | `metrics` | Code metrics | `field` (e.g., "identifiers.avg_entropy"), `min`, `max`, `min_size`, `max_size` |
-| `trait_glob` | Match traits | `pattern`, `match` (any/all/N) |
-| `filesize` | File size | `min`, `max` |
 | `yara` | YARA rule | `source` |
+
+> **Note**: File size filtering uses trait-level `size_min`/`size_max` fields, not a condition type.
 
 ### Syscall Matching
 
@@ -373,7 +373,6 @@ The `encoded` type searches decoded/encoded strings with optional encoding filte
 | Omit `encoding:` | Search **all** encoded strings | `type: encoded, substr: "eval"` |
 | Single string | Search single encoding type | `encoding: base64` |
 | Array | Search multiple types (OR) | `encoding: [base64, hex]` |
-| Chain syntax | Apply decodings in sequence | `encoding: "xor+base64"` (XOR first, then base64) |
 
 ### Examples
 
@@ -418,23 +417,23 @@ The `encoded` type searches decoded/encoded strings with optional encoding filte
 
 ### Migration from base64/xor
 
-Replace deprecated types:
+The `type: base64` and `type: xor` condition types have been removed and will produce parse errors. Replace them with `type: encoded`:
 
 ```yaml
-# OLD (deprecated)
+# OLD (removed — will error)
 type: base64
 substr: "secret"
 
-# NEW (recommended)
+# NEW (required)
 type: encoded
 encoding: base64
 substr: "secret"
 
-# OLD (deprecated)
+# OLD (removed — will error)
 type: xor
 regex: "malware"
 
-# NEW (recommended)
+# NEW (required)
 type: encoded
 encoding: xor
 regex: "malware"
@@ -465,7 +464,7 @@ composite_rules:
 
 **Trait references:** Use `{ id: trait-id }` in condition lists. The `type:` field can be omitted for trait references.
 
-**Circular references:** Composites can reference other composites, but circular references are not detected and will cause infinite recursion. Ensure referenced traits are defined before the referencing composite.
+**Circular references:** Composites can reference other composites. Circular references are handled safely — composite evaluation uses a fixed-point loop (max 10 iterations). Circular references will not crash but the circularly-dependent traits may not resolve.
 
 ## Trait References in `if:`
 
@@ -691,7 +690,7 @@ Regex patterns are validated at load time:
 ### Evidence Handling
 
 - Duplicate evidence strings are automatically deduplicated
-- Evidence is capped per trait (typically 512-1024 entries)
+- Evidence is capped at 16 entries per trait
 - Count/density constraints are applied AFTER location filtering
 
 ## CLI Reference

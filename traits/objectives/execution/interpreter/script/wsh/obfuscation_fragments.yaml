@@ -137,4 +137,4 @@ composite_rules:
     any:
       - id: response-body-fragment-1
       - id: response-body-fragment-2
-      - id: micro-behaviors/anti-static/obfuscate/string-conceal::js-xmlhttp-responsebody-reversed
+      - id: objectives/anti-static/obfuscation/string-conceal::js-xmlhttp-responsebody-reversed

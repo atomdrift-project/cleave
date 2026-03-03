@@ -7,4 +7,4 @@ composite_rules:
     all:
       - id: micro-behaviors/process/interpreter/eval::eval-open-read
       - id: micro-behaviors/process/thread/create::thread-loop-sleep
-      - id: micro-behaviors/anti-static/obfuscation/exception::exception-swallower
+      - id: objectives/anti-static/obfuscation/exception::exception-swallower

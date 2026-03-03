@@ -4,7 +4,7 @@ composite_rules:
     criticality: hostile
     conf: 1.0
     all:
-      - id: micro-behaviors/anti-static/obfuscation/archive::java-archive-slashed-class-folder
+      - id: objectives/anti-static/obfuscation/archive::java-archive-slashed-class-folder
     any:
       - id: micro-behaviors/data/meta/format/obfuscator::caesium-debug
       - id: well-known/malware/rat::king-david-main-class

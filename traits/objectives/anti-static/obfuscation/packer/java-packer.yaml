@@ -5,11 +5,11 @@ composite_rules:
     crit: hostile
     conf: 0.9
     all:
-      - id: micro-behaviors/anti-static/obfuscation/packer::java-classloader-usage
-      - id: micro-behaviors/anti-static/obfuscation/packer::java-jar-usage
+      - id: objectives/anti-static/obfuscation/packer::java-classloader-usage
+      - id: objectives/anti-static/obfuscation/packer::java-jar-usage
     any:
-      - id: micro-behaviors/anti-static/obfuscation/packer::java-crypto-cipher
-      - id: micro-behaviors/anti-static/obfuscation/packer::java-crypto-security
+      - id: objectives/anti-static/obfuscation/packer::java-crypto-cipher
+      - id: objectives/anti-static/obfuscation/packer::java-crypto-security
 
   - id: stringer-obfuscator
     desc: Java archive protected by Stringer Obfuscator

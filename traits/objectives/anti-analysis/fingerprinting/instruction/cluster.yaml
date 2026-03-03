@@ -8,6 +8,6 @@ composite_rules:
     conf: 0.95
     attack: T1497.001
     all:
-      - id: micro-behaviors/anti-analysis/vm/detect::cpuid-instruction
-      - id: micro-behaviors/anti-analysis/vm/detect::rdtsc-instruction
+      - id: objectives/anti-analysis/vm/detect::cpuid-instruction
+      - id: objectives/anti-analysis/vm/detect::rdtsc-instruction
     near_bytes: 512

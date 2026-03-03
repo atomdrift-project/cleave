@@ -7,7 +7,7 @@ composite_rules:
     mbc: "B0032"
     for: [all]
     all:
-      - id: micro-behaviors/anti-static/obfuscate/polyglot::bat-iexpress-sed-polyglot
+      - id: objectives/anti-static/obfuscation/polyglot::bat-iexpress-sed-polyglot
     any:
       - id: well-known/tools/dual-use::bat-to-exe-converter
       - id: micro-behaviors/fs/path/temp::win-temp-env

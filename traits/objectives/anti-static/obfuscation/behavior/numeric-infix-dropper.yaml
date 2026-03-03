@@ -5,7 +5,7 @@ composite_rules:
     for: [python]
     all:
       - type: trait
-        id: micro-behaviors/anti-static/obfuscation/variables::numeric-infix
+        id: objectives/anti-static/obfuscation/variables::numeric-infix
     any:
       - type: trait
         id: metadata/import/python::tarfile

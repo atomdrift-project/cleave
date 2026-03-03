@@ -9,5 +9,5 @@ composite_rules:
       - id: objectives/anti-static/obfuscation/strings/encoding::js-reverse-string-obfuscation
       - id: objectives/execution/interpreter/script/wsh::adodb-fragment-tiny-exact
       - id: micro-behaviors/data/encoding/charset::js-cp437-array-mapping
-      - id: micro-behaviors/anti-static/obfuscation/strings/encoding::js-rolling-xor-decryption
+      - id: objectives/anti-static/obfuscation/strings/encoding::js-rolling-xor-decryption
       - id: micro-behaviors/data/memory/layout::js-mz-header-array-check

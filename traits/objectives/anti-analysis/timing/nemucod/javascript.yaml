@@ -7,5 +7,5 @@ composite_rules:
       - id: micro-behaviors/process/interpreter/jscript::is-jscript
       - id: micro-behaviors/time/measure/delta::js-date-diff-jitter-check
     any:
-      - id: micro-behaviors/anti-static/obfuscate/string-conceal/nemucod::save-to-file-fragment-oFil
+      - id: objectives/anti-static/obfuscation/string-conceal/nemucod::save-to-file-fragment-oFil
       - id: objectives/anti-static/obfuscation/source/syntax::js-fragmented-property-access

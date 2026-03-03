@@ -15,7 +15,7 @@ composite_rules:
     for: [javascript]
     all:
       - id: objectives/execution/interpreter/script/wsh::save-to-file-fragment-veto
-      - id: micro-behaviors/anti-static/obfuscate/string-conceal/nemucod::stream-fragment-dotstr
+      - id: objectives/anti-static/obfuscation/string-conceal/nemucod::stream-fragment-dotstr
 
   - id: nemucod-adodb-write-path
     desc: Nemucod ADODB stream write/save chain (literal or obfuscated)

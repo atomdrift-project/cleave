@@ -11,7 +11,7 @@ composite_rules:
       - id: micro-behaviors/communications/infrastructure/hardcoded/ip-port::hardcoded-ipv4-port-list
       - id: micro-behaviors/os/process/fileless-execution::memfd-fileless-runtime-flow
     any:
-      - id: micro-behaviors/anti-analysis/vm/detect::cpuid-instruction
+      - id: objectives/anti-analysis/vm/detect::cpuid-instruction
 
   - id: go-aggressive-behavior
     desc: Go malware with aggressive function naming and persistence
@@ -23,4 +23,4 @@ composite_rules:
       - id: micro-behaviors/data/source/function/names::aggressive-go-punishment
     any:
       - id: objectives/persistence/registry/run-key/
-      - id: micro-behaviors/anti-analysis/vm/detect::cpuid-instruction
+      - id: objectives/anti-analysis/vm/detect::cpuid-instruction

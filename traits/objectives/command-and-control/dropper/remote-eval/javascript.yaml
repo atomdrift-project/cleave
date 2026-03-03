@@ -41,5 +41,5 @@ composite_rules:
     mbc: "B0024"
     all:
       - id: activex-xmlhttp-remote-eval
-      - id: micro-behaviors/anti-static/obfuscate/string-conceal/split-join::js-response-split-join-marker
-      - id: micro-behaviors/anti-static/obfuscate/string-conceal/split-join::js-join-substring-char
+      - id: objectives/anti-static/obfuscation/string-conceal/split-join::js-response-split-join-marker
+      - id: objectives/anti-static/obfuscation/string-conceal/split-join::js-join-substring-char

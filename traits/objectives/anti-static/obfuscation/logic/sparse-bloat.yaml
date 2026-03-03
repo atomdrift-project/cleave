@@ -23,5 +23,5 @@ composite_rules:
     all:
       - id: low-complexity-large-binary
     any:
-      - id: micro-behaviors/anti-analysis/vm/detect::cpuid-instruction
+      - id: objectives/anti-analysis/vm/detect::cpuid-instruction
       - id: objectives/evasion/process/injection/runtime::set-thread-context

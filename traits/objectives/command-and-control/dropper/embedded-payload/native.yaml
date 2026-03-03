@@ -315,7 +315,7 @@ composite_rules:
     all:
       - id: micro-behaviors/data/embedded/payload::pe-magic-embedded
     any:
-      - id: micro-behaviors/anti-analysis/sandbox-evasion/environment
+      - id: objectives/anti-analysis/sandbox-evasion/environment
     downgrade:
       any:
         - id: metadata/quality/versioning::pe-version-resource

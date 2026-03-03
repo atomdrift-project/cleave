@@ -30,7 +30,7 @@ traits:
     conf: 0.9
     if:
       type: string
-      regex: (?i)(discord|discordcanary|discordptb)[/\\]+(Local Storage|leveldb)
+      regex: (?i)discord(canary|ptb)?[/\\]+Local Storage
   - id: api-users-me
     desc: Discord API user validation endpoint
     crit: suspicious
@@ -139,7 +139,7 @@ traits:
     conf: 0.6
     if:
       type: string
-      regex: '(?i)AppData[/\\](Roaming|Local)[/\\](Discord|discordcanary|discordptb)'
+      regex: '(?i)AppData[/\\](Roaming|Local)[/\\]discord(canary|ptb)?'
   - id: extract-tokens-fn
     desc: Token extraction function
     crit: suspicious

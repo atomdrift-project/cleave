@@ -25,9 +25,9 @@ composite_rules:
       - id: micro-behaviors/process/interpreter/scripting/jscript::jscript-cc-on
       - id: micro-behaviors/process/create/script::batch-script-execution
     any:
-      - id: micro-behaviors/anti-static/obfuscate/string-conceal::js-createobject-reversed
-      - id: micro-behaviors/anti-static/obfuscate/string-conceal::js-adodb-savetofile-reversed
-      - id: micro-behaviors/anti-static/obfuscate/string-conceal::js-xmlhttp-responsebody-reversed
+      - id: objectives/anti-static/obfuscation/string-conceal::js-createobject-reversed
+      - id: objectives/anti-static/obfuscation/string-conceal::js-adodb-savetofile-reversed
+      - id: objectives/anti-static/obfuscation/string-conceal::js-xmlhttp-responsebody-reversed
     needs: 1
     attack: "T1059.003"
     mbc: "E1100"
@@ -51,9 +51,9 @@ composite_rules:
       - id: micro-behaviors/process/interpreter/jscript::is-jscript
       - id: micro-behaviors/process/interpreter/eval::js-eval-raw
     any:
-      - id: micro-behaviors/anti-static/obfuscate/string-conceal/split-join::js-split-wrapper
-      - id: micro-behaviors/anti-static/obfuscate/string-conceal/split-join::js-join-wrapper
-      - id: micro-behaviors/anti-static/obfuscate/string-conceal/split-join::js-split-join-deobfuscation-dot
+      - id: objectives/anti-static/obfuscation/string-conceal/split-join::js-split-wrapper
+      - id: objectives/anti-static/obfuscation/string-conceal/split-join::js-join-wrapper
+      - id: objectives/anti-static/obfuscation/string-conceal/split-join::js-split-join-deobfuscation-dot
     needs: 1
     attack: "T1027"
     mbc: "B0032"

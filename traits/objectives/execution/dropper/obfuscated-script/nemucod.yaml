@@ -5,6 +5,6 @@ composite_rules:
     for:
       - javascript
     all:
-      - id: micro-behaviors/anti-static/obfuscation/strings/encoding::js-split-hash-join
-      - id: micro-behaviors/anti-analysis/anti-emulation/date-evasion::js-date-setter-getter-check
+      - id: objectives/anti-static/obfuscation/strings/encoding::js-split-hash-join
+      - id: objectives/anti-analysis/anti-emulation/date-evasion::js-date-setter-getter-check
       - id: micro-behaviors/fs/file/read-write::js-mz-header-array-check

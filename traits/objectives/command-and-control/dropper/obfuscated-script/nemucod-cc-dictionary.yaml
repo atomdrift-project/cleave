@@ -6,5 +6,5 @@ composite_rules:
     for: [javascript]
     all:
       - id: micro-behaviors/process/interpreter/scripting/jscript::jscript-cc-on
-      - id: micro-behaviors/anti-static/obfuscate/string-conceal::js-nested-dictionary-array-mapping
+      - id: objectives/anti-static/obfuscation/string-conceal::js-nested-dictionary-array-mapping
       - id: micro-behaviors/process/interpreter/eval::js-eval-raw

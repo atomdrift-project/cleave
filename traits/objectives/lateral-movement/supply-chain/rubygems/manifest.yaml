@@ -6,6 +6,6 @@ composite_rules:
     attack: T1027.001
     mbc: B0001
     any:
-      - id: micro-behaviors/config/package/layout::deeply-nested-extconf-metadata
-      - id: micro-behaviors/config/package/layout::deeply-nested-extconf-gemspec
-      - id: micro-behaviors/config/package/layout::deeply-nested-extconf-gemspec-assign
+      - id: metadata/config/package/layout::deeply-nested-extconf-metadata
+      - id: metadata/config/package/layout::deeply-nested-extconf-gemspec
+      - id: metadata/config/package/layout::deeply-nested-extconf-gemspec-assign

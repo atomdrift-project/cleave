@@ -52,13 +52,6 @@ traits:
       type: ast
       query: "((call_expression function: (identifier) @fn arguments: (arguments (string) @arg)) (#eq? @fn \"require\") (#match? @arg \"'https'|\\\"https\\\"\"))"
   # require-fs moved to metadata/import/builtin::require-fs
-  - id: pkg-dependencies
-    desc: Package has dependencies field
-    crit: notable
-    conf: 0.9
-    if:
-      type: kv
-      path: 'dependencies'
   - id: pkg-version-001
     desc: Package version 0.0.1 (brand new)
     crit: notable
@@ -521,7 +514,7 @@ composite_rules:
     all:
       - id: objectives/lateral-movement/supply-chain/npm/metadata::install-hooks
     none:
-      - id: pkg-dependencies
+      - id: metadata/quality/dependencies::npm-no-dependencies
       - id: metadata/quality/npm/pkg-meta::has-bin-field
   - id: multiple-hooks
     desc: Package has multiple install lifecycle

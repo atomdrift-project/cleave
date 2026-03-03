@@ -89,16 +89,6 @@ traits:
       path: "scripts.preinstall"
       regex: "\\bpnpm\\s+(add|install)\\s"
 
-  # === Version Patterns ===
-  - id: version-1-0-0
-    desc: Package version is 1.0.0
-    crit: notable
-    conf: 0.6
-    if:
-      type: kv
-      path: "version"
-      exact: "1.0.0"
-
   # === Repository/Homepage Patterns ===
   - id: npm-homepage-url
     desc: Package homepage points to npm
@@ -182,15 +172,6 @@ traits:
       type: kv
       path: "version"
       regex: "^0\\.[2-9]\\.|^[1-9]"
-
-  - id: version-inflated
-    desc: Suspiciously high package version
-    crit: suspicious
-    conf: 0.8
-    if:
-      type: kv
-      path: "version"
-      regex: "^9[0-9]\\.[0-9]+\\.[0-9]+"
 
   # === Description Patterns ===
   - id: desc-lightweight
@@ -298,7 +279,7 @@ composite_rules:
     crit: suspicious
     conf: 0.75
     all:
-      - id: version-1-0-0
+      - id: metadata/quality/versioning::npm-version-exactly-1-0-0
       - id: install-hooks
 
   # npm URL as homepage/repository

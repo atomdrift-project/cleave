@@ -22,5 +22,4 @@ traits:
 - id: import-concealed-dropper-pattern__unless_1
   desc: Derived import_combination condition
   if:
-    type: import_combination
-    min_suspicious: 20
+    id: import-concealed-ransomware-pattern__unless_1

@@ -5,6 +5,17 @@ defaults:
   for: [all]
 
 traits:
+  # === Section Entropy ===
+  - id: high-entropy-cstring
+    desc: High entropy __cstring section (>=4.5)
+    crit: baseline
+    platforms: [macos]
+    for: [macho]
+    entropy_min: 4.5
+    if:
+      type: section
+      substr: "__cstring"
+
   # === Binary Size Metrics ===
 
   - id: small-elf-binary

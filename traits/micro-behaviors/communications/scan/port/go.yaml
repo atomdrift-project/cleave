@@ -70,16 +70,6 @@ traits:
       kind: call
       exact: "net.ParseCIDR"
 
-  - id: local-network-enum
-    desc: Local network interface enumeration
-    crit: notable
-    conf: 0.7
-    for: [go]
-    if:
-      type: ast
-      kind: call
-      exact: "net.Interfaces"
-
   # Common port lists
   - id: common-ports-array
     desc: Common port array for scanning
@@ -124,6 +114,6 @@ composite_rules:
     crit: suspicious
     conf: 0.85
     all:
-      - id: local-network-enum
+      - id: micro-behaviors/communications/socket/recon::net-interfaces
       - id: cidr-parse
       - id: scan-operations

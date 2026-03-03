@@ -20,12 +20,12 @@ traits:
 
   - id: py-stub-definitions
     desc: "Python stub definitions (def ...: ...)"
-    crit: component
+    crit: baseline
     conf: 0.5
     count_min: 5
     if:
       type: raw
-      regex: 'def\s+\w+\(.*\).*:\s*\.\.\.'
+      regex: 'def\s+\w+\(.{0,200}\).{0,50}:\s*\.\.\.'
 
   - id: py-single-line-heavy
     desc: "Many one-liner functions (compressed code)"

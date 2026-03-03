@@ -66,15 +66,8 @@ traits:
   # === Signal Desktop atomic indicators ===
   # These reference electron/infection for base path detection, add specific file context
 
-  - id: signal-config-json
-    desc: Signal config.json path
-    crit: suspicious
-    conf: 0.8
-    if:
-      id: objectives/lateral-movement/supply-chain/electron::signal-app-path
-
-  - id: signal-sql-db
-    desc: Signal SQLite database path
+  - id: signal-data-path
+    desc: Signal Desktop data path
     crit: suspicious
     conf: 0.8
     if:
@@ -83,15 +76,8 @@ traits:
   # === Slack Desktop atomic indicators ===
   # These reference electron/infection for base path detection, add specific file context
 
-  - id: slack-storage-path
-    desc: Slack storage path
-    crit: suspicious
-    conf: 0.8
-    if:
-      id: objectives/lateral-movement/supply-chain/electron::slack-app-path
-
-  - id: slack-indexeddb-path
-    desc: Slack IndexedDB path
+  - id: slack-data-path
+    desc: Slack Desktop data path
     crit: suspicious
     conf: 0.8
     if:
@@ -140,24 +126,6 @@ composite_rules:
   # Discord leveldb composite (use credential-access/discord/)
   # REMOVED - use objectives/credential-access/discord/token::localstorage-path instead
 
-  # Signal config composite
-  - id: signal-config
-    desc: Signal Desktop configuration
-    crit: suspicious
-    conf: 0.85
-    any:
-      - id: signal-config-json
-      - id: signal-sql-db
-
-  # Slack storage composite
-  - id: slack-storage
-    desc: Slack Desktop storage
-    crit: suspicious
-    conf: 0.85
-    any:
-      - id: slack-storage-path
-      - id: slack-indexeddb-path
-
   # WhatsApp storage composite
   - id: whatsapp-storage
     desc: WhatsApp Desktop storage
@@ -178,8 +146,8 @@ composite_rules:
     any:
       - id: telegram-tdata
       - id: objectives/credential-access/discord/token::localstorage-path
-      - id: signal-config
-      - id: slack-storage
+      - id: signal-data-path
+      - id: slack-data-path
       - id: whatsapp-storage
 
   # Credential staging - username + temp dir + mkdir + messaging app path

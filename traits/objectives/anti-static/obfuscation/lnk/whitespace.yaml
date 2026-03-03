@@ -72,16 +72,6 @@ traits:
       case_insensitive: true
 
   # === KV-based LNK detection (uses structured LNK parsing) ===
-  - id: kv-hidden-window
-    desc: LNK executes with hidden window (SW_HIDE)
-    crit: suspicious
-    conf: 0.9
-    for: [lnk]
-    if:
-      type: kv
-      path: show_command
-      exact: "0"
-
   - id: kv-excessive-whitespace
     desc: LNK arguments with excessive whitespace padding
     crit: suspicious

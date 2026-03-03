@@ -122,15 +122,6 @@ traits:
       path: target_path
       regex: '(?i)jsc\.exe$'
 
-  # === Hidden window (local copy for composites) ===
-  - id: lolbin-hidden-window
-    desc: LNK executes with hidden window
-    crit: suspicious
-    conf: 0.85
-    if:
-      type: kv
-      path: show_command
-      exact: "0"
 
 composite_rules:
   # Helper: code execution LOLBINs
@@ -171,7 +162,7 @@ composite_rules:
     conf: 0.95
     all:
       - id: execution-lolbin
-      - id: lolbin-hidden-window
+      - id: objectives/execution/lnk/dropper::hidden-window
 
   - id: hidden-bitsadmin
     desc: LNK runs bitsadmin with hidden window
@@ -179,4 +170,4 @@ composite_rules:
     conf: 0.95
     all:
       - id: bitsadmin-target
-      - id: lolbin-hidden-window
+      - id: objectives/execution/lnk/dropper::hidden-window

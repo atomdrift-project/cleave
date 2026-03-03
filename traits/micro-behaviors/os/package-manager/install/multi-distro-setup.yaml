@@ -266,14 +266,3 @@ composite_rules:
       - id: multi-distro-detection
       - id: all-distros-targeted
         needs: 2
-  - id: kinsing-multi-distro-setup
-    desc: Kinsing multi-distribution setup
-    crit: suspicious
-    conf: 0.9
-    for:
-      - elf
-      - shell
-    attack: T1548.004
-    all:
-      - id: well-known/malware/miner/kinsing::kinsing-names
-      - id: multi-distro-sudo-deployment

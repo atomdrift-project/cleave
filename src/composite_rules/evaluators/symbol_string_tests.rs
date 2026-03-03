@@ -75,15 +75,12 @@ fn test_eval_symbol_exact_match() {
 #[test]
 fn test_eval_symbol_exact_match_with_leading_underscore() {
     let mut report = create_test_report();
-    report.imports.push(Import {
-        symbol: "_socket".to_string(),
-        library: None,
-        source: "libc".to_string(),
-    });
+    // Import::new normalizes "_socket" → "socket" at load time
+    report.imports.push(Import::new("_socket", None, "libc"));
     let data = vec![];
     let ctx = create_test_context(&report, &data);
 
-    // Should match with exact underscore-prefixed symbol
+    // Pattern with leading underscore should be normalized to match
     let result = eval_symbol(
         Some(&"_socket".to_string()),
         None,
@@ -93,8 +90,48 @@ fn test_eval_symbol_exact_match_with_leading_underscore() {
         None,
         &ctx,
     );
+    assert!(
+        result.matched,
+        "Pattern '_socket' should be normalized to 'socket' and match"
+    );
 
-    assert!(result.matched);
+    // Pattern without underscore should also match
+    let result2 = eval_symbol(
+        Some(&"socket".to_string()),
+        None,
+        None,
+        None,
+        None,
+        None,
+        &ctx,
+    );
+    assert!(result2.matched, "Pattern 'socket' should match directly");
+}
+
+#[test]
+fn test_eval_symbol_substr_normalized() {
+    let mut report = create_test_report();
+    // "__libc_start_main" → "libc_start_main" after normalization
+    report
+        .imports
+        .push(Import::new("__libc_start_main", None, "libc"));
+    let data = vec![];
+    let ctx = create_test_context(&report, &data);
+
+    // Substr with leading underscores should be normalized
+    let result = eval_symbol(
+        None,
+        Some(&"__libc_start".to_string()),
+        None,
+        None,
+        None,
+        None,
+        &ctx,
+    );
+    assert!(
+        result.matched,
+        "Substr '__libc_start' should normalize to 'libc_start' and match 'libc_start_main'"
+    );
 }
 
 #[test]
@@ -1483,5 +1520,231 @@ fn test_eval_raw_not_excludes_by_context() {
     assert_eq!(
         result.match_count, 1,
         "Only http://evil.com should count (safe.com excluded by not:)"
+    );
+}
+
+// =============================================================================
+// T5: word matcher on raw content
+// =============================================================================
+
+#[test]
+fn test_eval_raw_word_boundary() {
+    let report = create_test_report();
+    // "cat" as a whole word appears in "the cat sat" but NOT in "category"
+    let content = b"the cat sat on category mat";
+    let ctx = create_test_context(&report, content.as_ref());
+
+    // word: "cat" is pre-compiled to \bcat\b before calling eval_raw
+    let word_str = "cat".to_string();
+    let compiled = regex::Regex::new(r"\bcat\b").unwrap();
+
+    let location = ContentLocationParams::default();
+    let result = eval_raw(
+        None,
+        None,
+        None,
+        Some(&word_str),
+        false,
+        false,
+        Some(&compiled),
+        None,
+        &location,
+        &ctx,
+    );
+
+    assert!(result.matched, "word: 'cat' should match 'the cat sat'");
+    // Should match only the standalone "cat", not "cat" inside "category"
+    assert_eq!(
+        result.match_count, 1,
+        "word boundary should prevent matching 'cat' in 'category'"
+    );
+}
+
+// =============================================================================
+// T6: external_ip filtering on string and raw evaluators
+// =============================================================================
+
+#[test]
+fn test_eval_string_external_ip_filters_private() {
+    let mut report = create_test_report();
+    // Add string containing a private IP — should be filtered out
+    report.strings.push(StringInfo {
+        value: "connect to 192.168.1.1:8080".to_string(),
+        offset: Some(0x1000),
+        encoding: "utf8".to_string(),
+        string_type: StringType::Const,
+        section: None,
+        encoding_chain: Vec::new(),
+        fragments: None,
+    });
+    // Add string containing an external IP — should be kept
+    report.strings.push(StringInfo {
+        value: "connect to 8.8.8.8:53".to_string(),
+        offset: Some(0x2000),
+        encoding: "utf8".to_string(),
+        string_type: StringType::Const,
+        section: None,
+        encoding_chain: Vec::new(),
+        fragments: None,
+    });
+    let data = vec![];
+    let ctx = create_test_context(&report, &data);
+
+    let substr = "connect to".to_string();
+    let params = StringParams {
+        exact: None,
+        substr: Some(&substr),
+        regex: None,
+        word: None,
+        case_insensitive: false,
+        external_ip: true,
+        compiled_regex: None,
+        section: None,
+        offset: None,
+        offset_range: None,
+        section_offset: None,
+        section_offset_range: None,
+    };
+
+    let result = eval_string(&params, None, &ctx);
+
+    assert!(result.matched, "Should match string with external IP");
+    // Only the external IP string should be counted
+    assert_eq!(
+        result.match_count, 1,
+        "Private IP string should be filtered out"
+    );
+}
+
+#[test]
+fn test_eval_raw_external_ip_filters_private() {
+    let report = create_test_report();
+    // "private" near 192.168.1.1 only — context window should not reach the external IP.
+    // Use 200+ bytes of padding to ensure context windows don't overlap.
+    let mut content = Vec::new();
+    content.extend_from_slice(b"private 192.168.1.1 only");
+    content.extend_from_slice(&[b'x'; 300]);
+    content.extend_from_slice(b"external 8.8.8.8 done");
+    let ctx = create_test_context(&report, &content);
+
+    let location = ContentLocationParams::default();
+    // Search for "private" — its context contains only 192.168.1.1 (private IP)
+    let result = eval_raw(
+        None,
+        Some(&"private".to_string()),
+        None,
+        None,
+        false,
+        true, // external_ip = true
+        None,
+        None,
+        &location,
+        &ctx,
+    );
+
+    // "private" match context only contains 192.168.1.1 → no external IP → filtered out
+    assert!(
+        !result.matched,
+        "Match near private IP should be filtered when external_ip=true"
+    );
+}
+
+#[test]
+fn test_eval_raw_external_ip_keeps_external() {
+    let report = create_test_report();
+    // Content where the substring appears near an external IP
+    let content = b"connect 8.8.8.8 done";
+    let ctx = create_test_context(&report, content.as_ref());
+
+    let location = ContentLocationParams::default();
+    let result = eval_raw(
+        None,
+        Some(&"connect".to_string()),
+        None,
+        None,
+        false,
+        true, // external_ip = true
+        None,
+        None,
+        &location,
+        &ctx,
+    );
+
+    assert!(
+        result.matched,
+        "Match near external IP should be kept when external_ip=true"
+    );
+}
+
+// =============================================================================
+// A6: Location constraints skip imports/exports
+// =============================================================================
+
+#[test]
+fn test_eval_string_offset_skips_imports() {
+    // An import named "connect" should NOT match a string condition with offset constraint.
+    let mut report = create_test_report();
+    report.imports.push(Import {
+        symbol: "connect".to_string(),
+        library: None,
+        source: "libc".to_string(),
+    });
+    // Add a string at the target offset so we know the offset logic itself works
+    report.strings.push(StringInfo {
+        value: "connect".to_string(),
+        offset: Some(0x1000),
+        encoding: "utf8".to_string(),
+        string_type: StringType::Const,
+        section: None,
+        encoding_chain: Vec::new(),
+        fragments: None,
+    });
+    let data = vec![0u8; 0x2000];
+    let ctx = create_test_context(&report, &data);
+
+    // With offset constraint: should match the string but NOT the import
+    let exact = "connect".to_string();
+    let params_with_offset = StringParams {
+        exact: Some(&exact),
+        substr: None,
+        regex: None,
+        word: None,
+        case_insensitive: false,
+        external_ip: false,
+        compiled_regex: None,
+        section: None,
+        offset: Some(0x1000),
+        offset_range: None,
+        section_offset: None,
+        section_offset_range: None,
+    };
+    let result = eval_string(&params_with_offset, None, &ctx);
+    assert!(result.matched, "String at offset 0x1000 should match");
+    assert_eq!(
+        result.match_count, 1,
+        "Only the string should match, not the import"
+    );
+    assert_eq!(result.evidence[0].source, "string_extractor");
+
+    // Without offset constraint: should match both string AND import
+    let params_no_offset = StringParams {
+        exact: Some(&exact),
+        substr: None,
+        regex: None,
+        word: None,
+        case_insensitive: false,
+        external_ip: false,
+        compiled_regex: None,
+        section: None,
+        offset: None,
+        offset_range: None,
+        section_offset: None,
+        section_offset_range: None,
+    };
+    let result = eval_string(&params_no_offset, None, &ctx);
+    assert!(result.matched);
+    assert!(
+        result.match_count >= 2,
+        "Without offset constraint, both string and import should match"
     );
 }

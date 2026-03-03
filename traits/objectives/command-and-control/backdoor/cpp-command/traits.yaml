@@ -17,3 +17,20 @@ composite_rules:
       - id: micro-behaviors/process/create/direct::cpp-exception
       - id: micro-behaviors/process/create/direct::cpp-command-capture
       - id: objectives/anti-static/obfuscation/strings/encoding::string-concealment
+
+  # C++ backdoor with full command dispatch symbols
+  - id: cpp-backdoor-dispatch-symbols
+    desc: C++ backdoor with RunCommand/ProcessRequest/SaveAndExecute symbols
+    crit: hostile
+    conf: 1.0
+    for: [macho, elf, pe]
+    all:
+      - id: micro-behaviors/process/create/backdoor::run-command-symbol
+      - id: micro-behaviors/process/create/backdoor::generate-uid-symbol
+      - id: micro-behaviors/process/create/backdoor::get-response-symbol
+      - id: micro-behaviors/process/create/backdoor::write-callback-symbol
+      - id: micro-behaviors/process/create/backdoor::process-request-symbol
+      - id: micro-behaviors/process/create/backdoor::save-and-execute-symbol
+      - id: micro-behaviors/process/create/backdoor::make-status-string-symbol
+      - id: micro-behaviors/process/create/backdoor::get-exe-path-symbol
+      - id: micro-behaviors/process/create/backdoor::execute-symbol

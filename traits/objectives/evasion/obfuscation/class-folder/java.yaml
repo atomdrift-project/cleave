@@ -7,5 +7,5 @@ composite_rules:
       - id: micro-behaviors/anti-static/obfuscation/archive::java-archive-slashed-class-folder
     any:
       - id: micro-behaviors/data/meta/format/obfuscator::caesium-debug
-      - id: micro-behaviors/data/meta/format/obfuscator::kingdavid-main-class
+      - id: well-known/malware/rat::king-david-main-class
       - id: well-known/malware/rat/caesium::caesium-rat-config-marker

@@ -202,6 +202,7 @@ fn eval_ast_pattern_multi(
 
     // Walk the AST and find matching nodes
     let mut evidence = Vec::new();
+    let mut match_count: usize = 0;
     let mut cursor = tree.walk();
     let stats = walk_ast_for_pattern_multi(
         &mut cursor,
@@ -209,6 +210,7 @@ fn eval_ast_pattern_multi(
         node_types,
         &matcher,
         &mut evidence,
+        &mut match_count,
     );
 
     let mut warnings = Vec::new();
@@ -235,7 +237,6 @@ fn eval_ast_pattern_multi(
         precision *= 0.5;
     }
 
-    let match_count = evidence.len();
     ConditionResult {
         matched: match_count > 0,
         evidence,
@@ -253,25 +254,29 @@ fn walk_ast_for_pattern_multi<'a>(
     target_node_types: &[&str],
     matcher: &dyn Fn(&str) -> bool,
     evidence: &mut Vec<Evidence>,
+    match_count: &mut usize,
 ) -> crate::analyzers::ast_walker::WalkStats {
     crate::analyzers::ast_walker::walk_tree_with_stats(cursor, |node, _depth| {
         // Check if this node matches any of the target types
         let node_kind = node.kind();
         if target_node_types.contains(&node_kind) {
             if let Ok(text) = node.utf8_text(source) {
-                if matcher(text) && evidence.len() < MAX_EVIDENCE_PER_TRAIT {
-                    evidence.push(Evidence {
-                        method: "ast".to_string(),
-                        source: "tree-sitter".to_string(),
-                        value: truncate_evidence(text, 100),
-                        location: Some(format!(
-                            "{}:{}",
-                            node.start_position().row + 1,
-                            node.start_position().column + 1
-                        )),
-                        offsets: vec![node.start_byte() as u64],
-                        ..Default::default()
-                    });
+                if matcher(text) {
+                    *match_count += 1;
+                    if evidence.len() < MAX_EVIDENCE_PER_TRAIT {
+                        evidence.push(Evidence {
+                            method: "ast".to_string(),
+                            source: "tree-sitter".to_string(),
+                            value: truncate_evidence(text, 100),
+                            location: Some(format!(
+                                "{}:{}",
+                                node.start_position().row + 1,
+                                node.start_position().column + 1
+                            )),
+                            offsets: vec![node.start_byte() as u64],
+                            ..Default::default()
+                        });
+                    }
                 }
             }
         }
@@ -362,6 +367,7 @@ pub(crate) fn eval_ast_query<'a>(query_str: &str, ctx: &EvaluationContext<'a>) -
     }
 
     // Use matches() to get full match info including pattern index for predicate checking
+    let mut match_count: usize = 0;
     let mut matches = query_cursor.matches(&query, tree.root_node(), source.as_bytes());
     while let Some(m) = matches.next() {
         // Check text predicates (e.g., #eq?, #match?) using tree-sitter's built-in method
@@ -373,33 +379,24 @@ pub(crate) fn eval_ast_query<'a>(query_str: &str, ctx: &EvaluationContext<'a>) -
 
         for capture in m.captures {
             if let Ok(text) = capture.node.utf8_text(source.as_bytes()) {
-                evidence.push(Evidence {
-                    method: "ast_query".to_string(),
-                    source: "tree-sitter".to_string(),
-                    value: truncate_evidence(text, 100),
-                    location: Some(format!(
-                        "{}:{}",
-                        capture.node.start_position().row + 1,
-                        capture.node.start_position().column + 1
-                    )),
-                    offsets: vec![capture.node.start_byte() as u64],
-                    ..Default::default()
-                });
-
-                // Bail early if we've collected enough evidence
-                if evidence.len() >= MAX_EVIDENCE_PER_TRAIT {
-                    break;
+                match_count += 1;
+                if evidence.len() < MAX_EVIDENCE_PER_TRAIT {
+                    evidence.push(Evidence {
+                        method: "ast_query".to_string(),
+                        source: "tree-sitter".to_string(),
+                        value: truncate_evidence(text, 100),
+                        location: Some(format!(
+                            "{}:{}",
+                            capture.node.start_position().row + 1,
+                            capture.node.start_position().column + 1
+                        )),
+                        offsets: vec![capture.node.start_byte() as u64],
+                        ..Default::default()
+                    });
                 }
             }
         }
-
-        // Break outer loop too
-        if evidence.len() >= MAX_EVIDENCE_PER_TRAIT {
-            break;
-        }
     }
-
-    let match_count = evidence.len();
     ConditionResult {
         matched: match_count > 0,
         evidence,

@@ -101,7 +101,6 @@ composite_rules:
   mbc: B0030
   platforms:
   - all
-  needs: 2
   all:
   - id: json-c2-headers
   - id: json-exfiltration

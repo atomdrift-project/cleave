@@ -11,4 +11,4 @@ composite_rules:
     any:
       - id: micro-behaviors/process/thread/priority::set-max
       - id: micro-behaviors/process/thread/lifecycle::respawn
-      - id: well-known/malware/dos::strings
+      - id: objectives/impact/dos/thread::applet-killer-strings

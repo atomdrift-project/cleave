@@ -15,19 +15,23 @@ use crate::capabilities::validation::{
     check_regex_or_overlapping_exact, check_regex_should_be_exact,
     check_same_string_different_types, collect_trait_refs_from_rule,
     find_alternation_merge_candidates, find_atomic_logic_duplicates,
-    find_banned_directory_segments, find_cap_obj_violations, find_depth_violations,
+    find_banned_directory_segments, find_cap_obj_violations, find_cap_wellknown_violations,
+    find_composite_only_wellknown_files, find_depth_violations,
     find_duplicate_second_level_directories, find_duplicate_traits_and_composites,
     find_empty_condition_clauses, find_excessive_skip_conditions, find_for_only_duplicates,
-    find_hostile_cap_rules, find_hostile_meta_rules, find_impossible_count_constraints,
-    find_impossible_needs, find_impossible_size_constraints, find_invalid_not_usage,
-    find_invalid_trait_ids, find_line_number, find_malware_subcategory_violations,
-    find_missing_search_patterns, find_non_capturing_groups, find_orphaned_components,
-    find_overlapping_conditions, find_oversized_trait_directories, find_parent_duplicate_segments,
-    find_platform_named_directories, find_pure_alias_traits, find_redundant_any_refs,
-    find_redundant_needs_one, find_short_pattern_warnings, find_single_item_clauses,
-    find_slow_regex_patterns, find_string_content_collisions, find_string_pattern_duplicates,
-    precalculate_all_composite_precisions, simple_rule_to_composite_rule,
-    validate_composite_trait_only, validate_directory_structure,
+    find_generic_wellknown_leaf_dirs, find_hostile_cap_rules, find_hostile_meta_rules,
+    find_impossible_count_constraints, find_impossible_needs, find_impossible_size_constraints,
+    find_invalid_not_usage, find_invalid_trait_ids, find_kv_exists_with_matcher, find_line_number,
+    find_malware_subcategory_violations, find_metadata_cross_tier_refs,
+    find_missing_search_patterns, find_needs_without_any, find_needs_zero,
+    find_non_capturing_groups, find_none_only_with_proximity,
+    find_orphaned_components, find_overlapping_conditions, find_oversized_trait_directories,
+    find_parent_duplicate_segments, find_platform_named_directories, find_pure_alias_traits,
+    find_redundant_any_refs, find_redundant_needs_one, find_short_pattern_warnings,
+    find_single_item_clauses, find_slow_regex_patterns, find_string_content_collisions,
+    find_string_pattern_duplicates, find_unanchored_wellknown_composites,
+    find_wellknown_category_violations, precalculate_all_composite_precisions,
+    simple_rule_to_composite_rule, validate_composite_trait_only, validate_directory_structure,
     validate_hostile_composite_precision, MAX_TRAITS_PER_DIRECTORY,
 };
 use crate::composite_rules::{
@@ -1392,6 +1396,55 @@ impl super::CapabilityMapper {
                 has_fatal_errors = true;
             }
 
+            // Validate that metadata/ rules do not reference non-metadata tiers
+            tracing::debug!("Step 13b/15: Checking for metadata cross-tier references");
+            let meta_cross_tier = find_metadata_cross_tier_refs(
+                &trait_definitions,
+                &composite_rules,
+                &rule_source_files,
+            );
+
+            if !meta_cross_tier.is_empty() {
+                tracing::info!(
+                    "{} metadata/ rules reference non-metadata tiers (allowed for composite aggregation)",
+                    meta_cross_tier.len()
+                );
+            }
+
+            // Validate that micro-behaviors/ rules do not reference well-known/ rules
+            tracing::debug!("Step 13c/15: Checking for micro-behaviors/well-known violations");
+            let cap_wk_violations = find_cap_wellknown_violations(
+                &trait_definitions,
+                &composite_rules,
+                &rule_source_files,
+            );
+
+            if !cap_wk_violations.is_empty() {
+                eprintln!(
+                    "\n❌ ERROR: {} micro-behaviors/ rules reference well-known/ rules",
+                    cap_wk_violations.len()
+                );
+                eprintln!("   Cap rules should only reference other cap or metadata rules:\n");
+                for (rule_id, ref_id, source_file) in &cap_wk_violations {
+                    let line_hint = find_line_number(source_file, ref_id);
+                    if let Some(line) = line_hint {
+                        eprintln!(
+                            "   {}:{}: Rule '{}' references '{}'",
+                            source_file, line, rule_id, ref_id
+                        );
+                    } else {
+                        eprintln!(
+                            "   {}: Rule '{}' references '{}'",
+                            source_file, rule_id, ref_id
+                        );
+                    }
+                }
+                warnings.push(format!(
+                    "{} micro-behaviors/ rules reference well-known/ rules",
+                    cap_wk_violations.len()
+                ));
+            }
+
             // NOTE: baseline traits are now allowed in objectives/ - they serve as building blocks
             // for composite rules and can be useful even without direct analytical signal.
 
@@ -1420,6 +1473,100 @@ impl super::CapabilityMapper {
                 malware_violations.len()
             ));
                 has_fatal_errors = true;
+            }
+
+            // Validate well-known/ category whitelist
+            tracing::debug!("Checking well-known/ category whitelist");
+            let wk_category_violations = find_wellknown_category_violations(&dir_list);
+            if !wk_category_violations.is_empty() {
+                eprintln!(
+                    "\n❌ ERROR: {} unknown categories under well-known/",
+                    wk_category_violations.len()
+                );
+                eprintln!("   Only whitelisted malware categories are allowed (apt, backdoor, botnet, etc.):\n");
+                for (dir_path, category) in &wk_category_violations {
+                    eprintln!("   {}: unknown category '{}'", dir_path, category);
+                }
+                eprintln!("\n   Add the category to WELL_KNOWN_MALWARE_CATEGORIES or WELL_KNOWN_TOOLS_CATEGORIES in taxonomy.rs if legitimate.");
+                warnings.push(format!(
+                    "{} unknown categories under well-known/",
+                    wk_category_violations.len()
+                ));
+            }
+
+            // Validate well-known/ leaf directory names for generic technique words
+            tracing::debug!("Checking well-known/ leaf directory names");
+            let generic_leaf_violations = find_generic_wellknown_leaf_dirs(&dir_list);
+            if !generic_leaf_violations.is_empty() {
+                eprintln!(
+                    "\n❌ ERROR: {} well-known/ directories use generic technique names",
+                    generic_leaf_violations.len()
+                );
+                eprintln!("   well-known/ directories should be named after specific malware families/tools:\n");
+                for (dir_path, word) in &generic_leaf_violations {
+                    eprintln!("   {}: generic technique word '{}'", dir_path, word);
+                }
+                eprintln!("\n   Rename to a specific family name, or move generic detection to objectives/.");
+                warnings.push(format!(
+                    "{} well-known/ directories use generic technique names instead of family names",
+                    generic_leaf_violations.len()
+                ));
+            }
+
+            // Validate well-known/ composites have local anchoring (family-specific refs)
+            tracing::debug!("Checking well-known/ composite anchoring");
+            let unanchored =
+                find_unanchored_wellknown_composites(&composite_rules, &rule_source_files);
+            if !unanchored.is_empty() {
+                eprintln!(
+                    "\n❌ ERROR: {} well-known/ composites have no family-specific anchoring",
+                    unanchored.len()
+                );
+                eprintln!("   well-known/ composites should reference at least one local or well-known/ trait:");
+                eprintln!("   Composites that only combine micro-behaviors/ or objectives/ refs belong in objectives/.\n");
+                for (rule_id, source_file) in &unanchored {
+                    let line_hint = find_line_number(source_file, rule_id);
+                    if let Some(line) = line_hint {
+                        eprintln!(
+                            "   {}:{}: Composite '{}' has no well-known/ anchoring",
+                            source_file, line, rule_id
+                        );
+                    } else {
+                        eprintln!(
+                            "   {}: Composite '{}' has no well-known/ anchoring",
+                            source_file, rule_id
+                        );
+                    }
+                }
+                warnings.push(format!(
+                    "{} well-known/ composites have no family-specific anchoring (move to objectives/)",
+                    unanchored.len()
+                ));
+            }
+
+            // Validate well-known/ files are not composite-only (should have atomic traits)
+            tracing::debug!("Checking for composite-only well-known/ files");
+            let composite_only =
+                find_composite_only_wellknown_files(&trait_definitions, &composite_rules);
+            if !composite_only.is_empty() {
+                eprintln!(
+                    "\n❌ ERROR: {} well-known/ directories contain only composites (no atomic traits in directory)",
+                    composite_only.len()
+                );
+                eprintln!("   well-known/ directories should define family-specific fingerprints (atomic traits).");
+                eprintln!("   Possible fixes:");
+                eprintln!("   - Move composite-only rules to objectives/ if they detect generic behaviors");
+                eprintln!("   - Move family-specific traits from micro-behaviors/ into well-known/ if they were misplaced\n");
+                for (source_file, count) in &composite_only {
+                    eprintln!(
+                        "   {}: {} composite(s), 0 atomic traits in directory",
+                        source_file, count
+                    );
+                }
+                warnings.push(format!(
+                    "{} well-known/ directories are composite-only (add family-specific atomic traits or move to objectives/)",
+                    composite_only.len()
+                ));
             }
 
             // Validate that `any:` clauses don't have 3+ traits from the same external directory
@@ -1847,6 +1994,60 @@ impl super::CapabilityMapper {
                 ));
             }
 
+            // Validate: `needs` without `any:` (silently ignored, likely authoring mistake)
+            let needs_without_any = find_needs_without_any(&composite_rules);
+            if !needs_without_any.is_empty() {
+                eprintln!(
+                    "\n⚠️  WARNING: {} composite rules have `needs` without `any:`",
+                    needs_without_any.len()
+                );
+                eprintln!("   `needs` only applies to `any:` conditions and is ignored on `all:`-only rules:\n");
+                for rule_id in &needs_without_any {
+                    let source = rule_source_files
+                        .get(rule_id)
+                        .map(std::string::String::as_str)
+                        .unwrap_or("unknown");
+                    let line_hint = find_line_number(source, rule_id);
+                    if let Some(line) = line_hint {
+                        eprintln!("   {}:{}: '{}'", source, line, rule_id);
+                    } else {
+                        eprintln!("   {}: '{}'", source, rule_id);
+                    }
+                }
+                eprintln!();
+                warnings.push(format!(
+                    "{} composite rules have `needs` without `any:`",
+                    needs_without_any.len()
+                ));
+            }
+
+            // Validate: needs: 0 vacuously matches (any: clause is meaningless)
+            let needs_zero = find_needs_zero(&composite_rules);
+            if !needs_zero.is_empty() {
+                eprintln!(
+                    "\n❌ ERROR: {} composite rules have `needs: 0`",
+                    needs_zero.len()
+                );
+                eprintln!("   `needs: 0` vacuously matches regardless of `any:` conditions:\n");
+                for rule_id in &needs_zero {
+                    let source = rule_source_files
+                        .get(rule_id)
+                        .map(std::string::String::as_str)
+                        .unwrap_or("unknown");
+                    let line_hint = find_line_number(source, "needs:");
+                    if let Some(line) = line_hint {
+                        eprintln!("   {}:{}: '{}'", source, line, rule_id);
+                    } else {
+                        eprintln!("   {}: '{}'", source, rule_id);
+                    }
+                }
+                eprintln!();
+                warnings.push(format!(
+                    "{} composite rules have `needs: 0` (vacuous match)",
+                    needs_zero.len()
+                ));
+            }
+
             // Validate: string/content conditions with no search pattern
             let missing_patterns = find_missing_search_patterns(&trait_definitions);
             if !missing_patterns.is_empty() {
@@ -1893,6 +2094,62 @@ impl super::CapabilityMapper {
                 warnings.push(format!(
                     "{} traits use `not:` without `regex:`",
                     invalid_not.len()
+                ));
+            }
+
+            // Validate: KV `exists` alongside value matcher is redundant
+            let kv_exists = find_kv_exists_with_matcher(&trait_definitions, &composite_rules);
+            if !kv_exists.is_empty() {
+                eprintln!(
+                    "\n⚠ WARNING: {} rules have KV `exists` alongside a value matcher",
+                    kv_exists.len()
+                );
+                eprintln!("   `exists` is redundant when `exact`, `substr`, or `regex` is set:");
+                eprintln!(
+                    "   - `exists: true` is implied (a value matcher requires the field to exist)"
+                );
+                eprintln!(
+                    "   - `exists: false` is contradictory (a non-existent field can't have a value)\n"
+                );
+                for rule_id in &kv_exists {
+                    let source = rule_source_files
+                        .get(rule_id)
+                        .map(std::string::String::as_str)
+                        .unwrap_or("unknown");
+                    let line_hint = find_line_number(source, "exists:");
+                    if let Some(line) = line_hint {
+                        eprintln!("   {}:{}: '{}'", source, line, rule_id);
+                    } else {
+                        eprintln!("   {}: '{}'", source, rule_id);
+                    }
+                }
+                eprintln!();
+                warnings.push(format!(
+                    "{} rules have KV `exists` alongside a value matcher (redundant)",
+                    kv_exists.len()
+                ));
+            }
+
+            // Validate: none-only rules with proximity constraints (always fail silently)
+            let none_prox = find_none_only_with_proximity(&composite_rules);
+            if !none_prox.is_empty() {
+                eprintln!(
+                    "\n❌ ERROR: {} composite rules have proximity on none-only rules",
+                    none_prox.len()
+                );
+                eprintln!("   `near_lines`/`near_bytes` requires positive conditions (`all:`/`any:`).");
+                eprintln!("   A `none:`-only rule with proximity can never match:\n");
+                for rule_id in &none_prox {
+                    let source = rule_source_files
+                        .get(rule_id)
+                        .map(std::string::String::as_str)
+                        .unwrap_or("unknown");
+                    eprintln!("   {}: '{}'", source, rule_id);
+                }
+                eprintln!();
+                warnings.push(format!(
+                    "{} composite rules have proximity on none-only rules (can never match)",
+                    none_prox.len()
                 ));
             }
 

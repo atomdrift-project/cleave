@@ -77,7 +77,7 @@ traits:
       substr: ".Kill("
 ```
 
-**Field override:** Set any field to `none` (case-insensitive) to unset it, ignoring file-level defaults. Example: `for: [none]` removes file type filtering even if defaults specify types.
+**Field override:** List fields (`for`, `platforms`) can be set to `[none]` to unset file-level defaults. Example: `for: [none]` removes file type filtering even if defaults specify types. Scalar fields (`conf`, `crit`) do not support `none`.
 
 **File types:** `elf`, `macho`, `pe`, `dll`, `so`, `dylib`, `shell`, `batch`, `python`, `javascript`, `typescript`, `rust`, `java`, `class`, `ruby`, `c`, `cpp`, `go`, `csharp`, `php`, `perl`, `powershell`, `lua`, `swift`, `objectivec`, `groovy`, `scala`, `zig`, `elixir`, `vbs`, `html`, `applescript`, `packagejson`, `chrome-manifest`, `cargo-toml`, `pyproject-toml`, `github-actions`, `composer-json`, `plist`, `ipa`, `text`, `rtf`, `lnk`, `jpeg`, `png`, `pkginfo`, `all`.
 
@@ -95,7 +95,7 @@ traits:
 |------|---------|----------|-----------|
 | `string` | Extracted strings | `exact`, `substr`, `regex`, `word` | count, density, location, `case_insensitive`, `external_ip` |
 | `raw` | Raw file bytes | `exact`, `substr`, `regex`, `word` | count, density, location, `case_insensitive`, `external_ip` |
-| `symbol` | Imports/exports | `exact`, `substr`, `regex` | `platforms` |
+| `symbol` | Imports/exports/functions | `exact`, `substr`, `regex` | `platforms` |
 | `hex` | Byte patterns (wildcards always extracted) | pattern string | count, density, `offset`, `offset_range` |
 | `encoded` | **All decoded strings** | `exact`, `substr`, `regex`, `word` | count, density, location, `encoding`, `case_insensitive`, `external_ip` |
 | ~~`base64`~~ | *(removed — use `encoded`)* | | |
@@ -106,6 +106,7 @@ traits:
 **Matcher notes:**
 - `word` - Word boundary match (equivalent to `\b{value}\b`). Available on `string`, `raw`, `section`, `encoded`. NOT available on `symbol`, `basename`, `hex`.
 - `external_ip` - Only match if evidence contains a valid external IP (rejects RFC1918, loopback, reserved ranges).
+- **Symbol normalization:** Leading underscores are stripped from both loaded symbols and `exact`/`substr` patterns for cross-platform portability (macOS `_malloc`, glibc `__libc_start_main` both match `exact: "malloc"` / `exact: "libc_start_main"`). Regex patterns are not normalized.
 
 ### Structural
 
@@ -464,6 +465,19 @@ composite_rules:
 
 **Trait references:** Use `{ id: trait-id }` in condition lists. The `type:` field can be omitted for trait references.
 
+**Absence detection:** A composite rule with only `none:` (no `all:` or `any:`) fires when none of the listed conditions match. This is useful for detecting the absence of expected traits:
+
+```yaml
+composite_rules:
+  - id: unsigned-binary
+    desc: Binary lacks any code signature
+    crit: notable
+    conf: 0.8
+    none:
+      - id: file/signed/apple
+      - id: file/signed/microsoft
+```
+
 **Circular references:** Composites can reference other composites. Circular references are handled safely — composite evaluation uses a fixed-point loop (max 10 iterations). Circular references will not crash but the circularly-dependent traits may not resolve.
 
 ## Trait References in `if:`
@@ -526,7 +540,7 @@ composite_rules:
 | `unless:` | Skip if condition matches (trait refs or inline conditions) |
 | `downgrade:` | Reduce criticality by one level if condition matches |
 
-**Proximity (composites only):** `near_bytes: N`, `near_lines: N` - require evidence from different conditions to be within N bytes/lines of each other
+**Proximity (composites only):** `near_bytes: N`, `near_lines: N` - require evidence from different conditions to fall within a single span of N bytes/lines. Uses a sliding window: the check passes when any contiguous window of size N contains evidence from enough distinct conditions (all conditions for `all:`, `needs` conditions for `any:`).
 
 ### Downgrade Behavior
 
@@ -571,7 +585,7 @@ composite_rules:
         - id: objectives/anti-analysis/packing::upx
 ```
 
-**Note:** Downgrade to `baseline` removes the finding from output entirely. Use `unless:` if you want to skip matching instead.
+**Note:** Downgrade to `baseline` removes the finding from terminal output, but it is still included in JSON output. Use `unless:` if you want to skip matching entirely.
 
 **Debug:** Use `test-rules` to see downgrade evaluation:
 ```bash

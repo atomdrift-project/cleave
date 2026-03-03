@@ -25,7 +25,6 @@ composite_rules:
     mbc: "B0023"
     attack: "T1059"
     for: [python]
-    needs: 4
     all:
       - id: objectives/anti-static/obfuscation/strings
       - id: objectives/lateral-movement/supply-chain
@@ -38,7 +37,6 @@ composite_rules:
     mbc: "E1082"
     attack: "T1082"
     for: [python]
-    needs: 3
     all:
       - id: objectives/anti-analysis/aliasing/dynamic::python-std-alias
       - id: objectives/discovery/system/

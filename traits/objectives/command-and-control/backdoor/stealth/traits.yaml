@@ -18,3 +18,32 @@ composite_rules:
       - id: objectives/anti-static/obfuscation/strings/
       # Plus memory protection manipulation (indicates self-modification)
       - id: micro-behaviors/mem/protect/modify::mprotect-symbol
+
+  # System profiling backdoor with fake user agent
+  - id: system-profiling-backdoor
+    desc: Backdoor with old browser UA spoofing and system fingerprinting
+    crit: hostile
+    conf: 0.95
+    attack: "T1071.001"
+    for: [macho]
+    platforms: [macos]
+    all:
+      - id: micro-behaviors/data/encode/spoofing::user-agent-old-browser
+      - id: micro-behaviors/fs/path/temp::tmp-hidden-file
+      - id: objectives/discovery/system/hardware::system-profiling
+
+  # System profiling backdoor with specific IE8 user agent
+  - id: system-profiling-backdoor-ie8
+    desc: Backdoor with MSIE 8.0 UA spoofing and macOS system enumeration
+    crit: hostile
+    conf: 1.0
+    attack: "T1071.001"
+    for: [macho]
+    platforms: [macos]
+    all:
+      - id: micro-behaviors/data/encode/spoofing::user-agent-msie8
+      - id: micro-behaviors/fs/path/temp::tmp-hidden-file
+      - id: objectives/discovery/system/install::install-log-grep
+      - id: objectives/discovery/system/hardware::sysctl-hw-model
+      - id: objectives/discovery/system/hardware::sysctl-cpu-brand
+      - id: objectives/discovery/system/hardware::sw-vers-product

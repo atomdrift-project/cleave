@@ -1,8 +1,8 @@
-# Security Tools - Credential Extraction
-# Used for both legitimate security testing and malicious purposes
+# Mimikatz - Credential Extraction Tool
+# Author: Benjamin Delpy (gentilkiwi)
+# ATT&CK: T1003.001 (LSASS Memory)
 
 traits:
-  # === Mimikatz Patterns ===
   - id: sekurlsa-logonpasswords-lower
     desc: sekurlsa::logonpasswords command (lowercase)
     crit: notable
@@ -53,39 +53,7 @@ traits:
       type: string
       regex: "gentilkiwi|Benjamin Delpy"
 
-  # === BackTrack Keylogger Patterns ===
-  - id: modesitt-software
-    desc: Modesitt Software company name
-    crit: baseline
-    conf: 0.75
-    platforms: [macos]
-    for: [macho, dylib]
-    if:
-      type: string
-      substr: "Modesitt Software"
-
-  - id: modesittsoftware-web
-    desc: www.modesittsoftware website
-    crit: baseline
-    conf: 0.75
-    platforms: [macos]
-    for: [macho, dylib]
-    if:
-      type: string
-      substr: "www.modesittsoftware"
-
-  - id: backtrack-string
-    desc: BackTrack product name
-    crit: baseline
-    conf: 0.7
-    platforms: [macos]
-    for: [macho, dylib]
-    if:
-      type: string
-      word: "BackTrack"
-
 composite_rules:
-  # === Helper composites ===
   - id: sekurlsa-logonpasswords
     desc: Sekurlsa logonpasswords command (case variants)
     platforms: [windows]
@@ -93,28 +61,6 @@ composite_rules:
     any:
       - id: sekurlsa-logonpasswords-lower
       - id: sekurlsa-logonpasswords-mixed
-
-  - id: modesitt-references
-    desc: Modesitt Software references
-    platforms: [macos]
-    for: [macho, dylib]
-    any:
-      - id: modesitt-software
-      - id: modesittsoftware-web
-
-  # === Main detection composites ===
-
-  # Migrated from YARA
-  - id: backtrack-keylogger
-    desc: BackTrack keylogger (macOS)
-    crit: suspicious
-    conf: 0.9
-    attack: "T1056.001"
-    platforms: [macos]
-    for: [macho, dylib]
-    all:
-      - id: backtrack-string
-      - id: modesitt-references
 
   - id: mimikatz
     desc: Mimikatz credential extraction tool

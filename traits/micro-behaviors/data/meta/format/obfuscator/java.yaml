@@ -27,15 +27,6 @@ traits:
       type: raw
       substr: "Obfuscated-By: Caesium DEBUG"
 
-  - id: kingdavid-main-class
-    desc: "KingDavid RAT main class entry point"
-    crit: suspicious
-    conf: 1.0
-    if:
-      type: kv
-      path: "Main-Class"
-      exact: "kingDavid.FirstRun"
-
   - id: stringer
     desc: "Obfuscated by Stringer"
     crit: notable

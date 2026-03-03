@@ -1,9 +1,0 @@
-traits:
-  - id: nemucod-url-query-parameter
-    desc: "Nemucod-style URL query parameter (ukCTcqBj)"
-    crit: suspicious
-    conf: 0.95
-    for: [all]
-    if:
-      type: string
-      substr: "ukCTcqBj="

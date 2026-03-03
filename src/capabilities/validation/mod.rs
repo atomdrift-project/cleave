@@ -111,18 +111,24 @@ pub(crate) use patterns::{
 // Taxonomy validation
 pub(crate) use directory_whitelist::validate_directory_structure;
 pub(crate) use taxonomy::{
-    find_banned_directory_segments, find_cap_obj_violations, find_depth_violations,
-    find_duplicate_second_level_directories, find_hostile_cap_rules, find_hostile_meta_rules,
-    find_invalid_trait_ids, find_malware_subcategory_violations, find_oversized_trait_directories,
-    find_parent_duplicate_segments, find_platform_named_directories, MAX_TRAITS_PER_DIRECTORY,
+    find_banned_directory_segments, find_cap_obj_violations, find_cap_wellknown_violations,
+    find_composite_only_wellknown_files, find_depth_violations,
+    find_duplicate_second_level_directories, find_generic_wellknown_leaf_dirs,
+    find_hostile_cap_rules, find_hostile_meta_rules, find_invalid_trait_ids,
+    find_malware_subcategory_violations, find_metadata_cross_tier_refs,
+    find_oversized_trait_directories, find_parent_duplicate_segments,
+    find_platform_named_directories, find_unanchored_wellknown_composites,
+    find_wellknown_category_violations, MAX_TRAITS_PER_DIRECTORY,
 };
 
 // Logic constraint validation
+#[allow(unused_imports)] // find_needs_zero used by binary target
 pub(crate) use constraints::{
     find_empty_condition_clauses, find_excessive_skip_conditions,
     find_impossible_count_constraints, find_impossible_needs, find_impossible_size_constraints,
-    find_invalid_not_usage, find_missing_search_patterns, find_orphaned_components,
-    find_pure_alias_traits, find_redundant_needs_one,
+    find_invalid_not_usage, find_kv_exists_with_matcher, find_missing_search_patterns,
+    find_needs_without_any, find_needs_zero, find_none_only_with_proximity,
+    find_orphaned_components, find_pure_alias_traits, find_redundant_needs_one,
 };
 
 // Utility functions

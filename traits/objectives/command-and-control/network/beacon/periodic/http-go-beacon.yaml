@@ -121,7 +121,6 @@ composite_rules:
   - elf
   - macho
   - pe
-  needs: 2
   all:
   - id: http-versions
   - id: go-dial-string
@@ -134,7 +133,6 @@ composite_rules:
   - elf
   - macho
   - pe
-  needs: 2
   all:
   - id: http-versions
   - id: domain-keyword
@@ -148,7 +146,6 @@ composite_rules:
   - elf
   - macho
   - pe
-  needs: 2
   all:
   - id: http-beacon-network
   - id: go-http-client

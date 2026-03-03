@@ -23,11 +23,27 @@ traits:
       type: string
       regex: "inject_mac\\.Inject"
 
-  - id: rc4-decode-function
-    desc: RC4 decode function for payload decryption
-    crit: notable
-    conf: 0.75
-    if:
-      type: string
-      regex: "common\\.rc4_decode"
+composite_rules:
+  # Go websocket downloader with memory injection
+  - id: go-websocket-inject
+    desc: Go downloader with websocket C2 and memory injection
+    crit: hostile
+    conf: 1.0
+    attack: "T1055"
+    for: [go, elf, macho]
+    all:
+      - id: micro-behaviors/communications/websocket/library::gorilla-websocket
+      - id: inject-mac-path
+      - id: inject-function
+      - id: micro-behaviors/crypto/symmetric/stream::rc4-decode-function
+
+  # Go downloader with memory injection (relaxed)
+  - id: go-injection-downloader
+    desc: Go downloader with memory injection capability
+    crit: hostile
+    conf: 0.95
+    for: [go, elf, macho]
+    all:
+      - id: inject-function
+      - id: micro-behaviors/communications/websocket/library::gorilla-websocket
 

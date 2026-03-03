@@ -1,0 +1,33 @@
+# Keylogger Behavioral Composites
+# Generic keylogger detection patterns (not family-specific)
+# ATT&CK: T1056.001 (Keylogging)
+
+defaults:
+  platforms: [macos]
+  for: [macho]
+
+composite_rules:
+  # Generalized keylogger with clipboard
+  - id: keylogger-clipboard-stealer
+    desc: Keylogger with clipboard and mouse tracking
+    crit: hostile
+    conf: 0.95
+    attack: "T1056.001"
+    all:
+      - id: micro-behaviors/hardware/input/keylog::keylogger-with-clipboard
+      - id: micro-behaviors/hardware/input/keylog::evt-marker-file
+    any:
+      - id: micro-behaviors/fs/path/library::hidden-library-caches
+      - id: micro-behaviors/fs/path/temp::tmp-hidden-file
+
+  # Keylogger with structured data output
+  - id: structured-keylogger
+    desc: Keylogger with structured timestamped output
+    crit: hostile
+    conf: 0.95
+    attack: "T1056.001"
+    needs: 2
+    any:
+      - id: micro-behaviors/hardware/input/keylog::keylog-filename-pattern
+      - id: micro-behaviors/hardware/input/keylog::clipboard-capture-pattern
+      - id: micro-behaviors/hardware/input/keylog::mouse-state-tracking

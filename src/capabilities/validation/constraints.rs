@@ -119,9 +119,11 @@ pub(crate) fn find_impossible_count_constraints(
     violations
 }
 
-/// Find composite rules with empty `any:` or `all:` clauses that are the only condition.
+/// Find composite rules with empty `any:` or `all:` clauses.
 ///
-/// An empty clause makes the rule either always match (empty all) or never match (empty any with needs > 0).
+/// An empty `all:` vacuously matches everything (zero conditions all satisfied).
+/// An empty `any:` with `needs > 0` can never match; with `needs: 0` or default it vacuously matches.
+/// Both are authoring mistakes.
 ///
 /// Returns: `Vec<(rule_id, clause_type)>`
 #[must_use]
@@ -131,25 +133,55 @@ pub(crate) fn find_empty_condition_clauses(
     let mut violations = Vec::new();
 
     for rule in composite_rules {
-        let all_empty = rule.all.as_ref().is_none_or(std::vec::Vec::is_empty);
-        let any_empty = rule.any.as_ref().is_none_or(std::vec::Vec::is_empty);
-        let none_empty = rule.none.as_ref().is_none_or(std::vec::Vec::is_empty);
-
-        // Only flag if we have an explicit empty clause (Some([]))
         if let Some(all) = &rule.all {
-            if all.is_empty() && any_empty && none_empty {
+            if all.is_empty() {
                 violations.push((rule.id.clone(), "all"));
             }
         }
 
         if let Some(any) = &rule.any {
-            if any.is_empty() && all_empty && none_empty {
+            if any.is_empty() {
                 violations.push((rule.id.clone(), "any"));
             }
         }
     }
 
     violations
+}
+
+/// Find composite rules where `needs` is set but `any:` is absent.
+///
+/// The `needs` field only applies to `any:` conditions. When used with `all:`-only rules,
+/// it is silently ignored, which likely indicates an authoring mistake.
+///
+/// Returns: `Vec<rule_id>`
+#[must_use]
+pub(crate) fn find_needs_without_any(composite_rules: &[CompositeTrait]) -> Vec<String> {
+    let mut violations = Vec::new();
+
+    for rule in composite_rules {
+        if rule.needs.is_some() && rule.any.is_none() {
+            violations.push(rule.id.clone());
+        }
+    }
+
+    violations
+}
+
+/// Find composite rules with `needs: 0`, which vacuously matches regardless of `any:` conditions.
+///
+/// `needs: 0` means "require zero conditions to match", which is always satisfied and makes
+/// the `any:` clause meaningless. This is an authoring mistake.
+///
+/// Returns: `Vec<rule_id>`
+#[allow(dead_code)] // Used by binary target
+#[must_use]
+pub(crate) fn find_needs_zero(composite_rules: &[CompositeTrait]) -> Vec<String> {
+    composite_rules
+        .iter()
+        .filter(|rule| rule.needs == Some(0))
+        .map(|rule| rule.id.clone())
+        .collect()
 }
 
 /// Find string/content conditions with no actual search pattern.
@@ -560,4 +592,71 @@ pub(crate) fn find_invalid_not_usage(trait_definitions: &[TraitDefinition]) -> V
     }
 
     violations
+}
+
+/// Check if a KV condition has a redundant `exists` field alongside a value matcher.
+fn is_kv_exists_redundant(cond: &Condition) -> bool {
+    matches!(
+        cond,
+        Condition::Kv {
+            exists: Some(_),
+            exact,
+            substr,
+            regex,
+            ..
+        } if exact.is_some() || substr.is_some() || regex.is_some()
+    )
+}
+
+/// Find KV conditions where `exists` is set alongside a value matcher.
+///
+/// When `exact`, `substr`, or `regex` is present, `exists` is redundant:
+/// - `exists: true` is implied (a value matcher requires the field to exist)
+/// - `exists: false` is contradictory (a non-existent field can't have a value)
+///
+/// Returns: `Vec<rule_id>`
+#[must_use]
+pub(crate) fn find_kv_exists_with_matcher(
+    trait_definitions: &[TraitDefinition],
+    composite_rules: &[CompositeTrait],
+) -> Vec<String> {
+    let mut violations = Vec::new();
+
+    for t in trait_definitions {
+        if is_kv_exists_redundant(&t.r#if) {
+            violations.push(t.id.clone());
+        }
+    }
+
+    for rule in composite_rules {
+        let has_redundant = [&rule.all, &rule.any, &rule.none]
+            .iter()
+            .filter_map(|list| list.as_ref())
+            .any(|conds| conds.iter().any(is_kv_exists_redundant));
+        if has_redundant {
+            violations.push(rule.id.clone());
+        }
+    }
+
+    violations
+}
+
+/// Find composite rules with proximity constraints but no positive conditions.
+///
+/// A `none:`-only rule with `near_lines` or `near_bytes` can never match because
+/// proximity requires co-occurring evidence from positive (`all:`/`any:`) conditions.
+///
+/// Returns: `Vec<rule_id>`
+#[must_use]
+pub(crate) fn find_none_only_with_proximity(composite_rules: &[CompositeTrait]) -> Vec<String> {
+    composite_rules
+        .iter()
+        .filter(|rule| {
+            rule.all.is_none()
+                && rule.any.is_none()
+                && rule.none.is_some()
+                && (rule.near_lines.is_some() || rule.near_bytes.is_some())
+        })
+        .map(|rule| rule.id.clone())
+        .collect()
 }

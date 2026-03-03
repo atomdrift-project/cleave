@@ -81,7 +81,6 @@ composite_rules:
     crit: suspicious
     conf: 0.95
     attack: T1105
-    needs: 3
     all:
       - id: gtfobins-ruby-marker
       - id: micro-behaviors/communications/http/lib/netlib::open-uri

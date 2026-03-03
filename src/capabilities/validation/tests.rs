@@ -2417,14 +2417,209 @@ mod pattern_tests {
 
 #[cfg(test)]
 mod taxonomy_tests {
-    // Taxonomy validation tests would go here
-    // Tests from original validation.rs lines ~5600-5900
+    use crate::capabilities::validation::taxonomy::{
+        find_cap_obj_violations, find_cap_wellknown_violations, find_metadata_cross_tier_refs,
+    };
+    use crate::composite_rules::traits::CompositeTrait;
+    use crate::composite_rules::{Condition, FileType, Platform, TraitDefinition};
+    use crate::types::Criticality;
+    use std::collections::HashMap;
+    use std::path::PathBuf;
+
+    fn make_trait(id: &str, ref_id: &str) -> TraitDefinition {
+        TraitDefinition {
+            id: id.to_string(),
+            desc: "test".to_string(),
+            conf: 1.0,
+            crit: Criticality::Baseline,
+            mbc: None,
+            attack: None,
+            platforms: vec![Platform::All],
+            r#for: vec![FileType::All],
+            r#if: Condition::Trait {
+                id: ref_id.to_string(),
+            },
+            size_min: None,
+            size_max: None,
+            count_min: None,
+            count_max: None,
+            per_kb_min: None,
+            per_kb_max: None,
+            entropy_min: None,
+            entropy_max: None,
+            not: None,
+            unless: None,
+            downgrade: None,
+            defined_in: PathBuf::from("test.yaml"),
+            precision: None,
+        }
+    }
+
+    fn make_composite(id: &str, all_refs: &[&str]) -> CompositeTrait {
+        CompositeTrait {
+            id: id.to_string(),
+            desc: "test".to_string(),
+            conf: 1.0,
+            crit: Criticality::Baseline,
+            mbc: None,
+            attack: None,
+            platforms: vec![Platform::All],
+            r#for: vec![FileType::All],
+            size_min: None,
+            size_max: None,
+            all: Some(
+                all_refs
+                    .iter()
+                    .map(|r| Condition::Trait { id: r.to_string() })
+                    .collect(),
+            ),
+            any: None,
+            none: None,
+            unless: None,
+            not: None,
+            downgrade: None,
+            needs: None,
+            near_lines: None,
+            near_bytes: None,
+            defined_in: PathBuf::from("test.yaml"),
+            precision: None,
+        }
+    }
+
+    // ---- metadata cross-tier refs ----
+
+    #[test]
+    fn test_metadata_referencing_cap_is_violation() {
+        let traits = vec![make_trait(
+            "metadata/format/suspicious",
+            "micro-behaviors/crypto/aes",
+        )];
+        let composites = vec![];
+        let sources = HashMap::new();
+        let v = find_metadata_cross_tier_refs(&traits, &composites, &sources);
+        assert_eq!(v.len(), 1);
+        assert_eq!(v[0].1, "micro-behaviors/crypto/aes");
+    }
+
+    #[test]
+    fn test_metadata_referencing_objectives_is_violation() {
+        let composites = vec![make_composite(
+            "metadata/format/bad",
+            &["objectives/impact/encrypt"],
+        )];
+        let sources = HashMap::new();
+        let v = find_metadata_cross_tier_refs(&[], &composites, &sources);
+        assert_eq!(v.len(), 1);
+        assert_eq!(v[0].1, "objectives/impact/encrypt");
+    }
+
+    #[test]
+    fn test_metadata_referencing_wellknown_is_violation() {
+        let composites = vec![make_composite(
+            "metadata/format/bad",
+            &["well-known/malware/emotet/loader"],
+        )];
+        let sources = HashMap::new();
+        let v = find_metadata_cross_tier_refs(&[], &composites, &sources);
+        assert_eq!(v.len(), 1);
+    }
+
+    #[test]
+    fn test_metadata_referencing_metadata_is_ok() {
+        let traits = vec![make_trait(
+            "metadata/format/composite",
+            "metadata/format/elf",
+        )];
+        let composites = vec![make_composite(
+            "metadata/quality/check",
+            &["metadata/format/elf", "metadata/language/go"],
+        )];
+        let sources = HashMap::new();
+        let v = find_metadata_cross_tier_refs(&traits, &composites, &sources);
+        assert!(v.is_empty(), "metadata → metadata should be allowed");
+    }
+
+    // ---- micro-behaviors → well-known ----
+
+    #[test]
+    fn test_cap_referencing_wellknown_is_violation() {
+        let traits = vec![make_trait(
+            "micro-behaviors/crypto/known-malware",
+            "well-known/malware/emotet/loader",
+        )];
+        let sources = HashMap::new();
+        let v = find_cap_wellknown_violations(&traits, &[], &sources);
+        assert_eq!(v.len(), 1);
+        assert_eq!(v[0].1, "well-known/malware/emotet/loader");
+    }
+
+    #[test]
+    fn test_cap_composite_referencing_wellknown_is_violation() {
+        let composites = vec![make_composite(
+            "micro-behaviors/net/suspicious",
+            &[
+                "micro-behaviors/net/http-post",
+                "well-known/tools/cobalt-strike/beacon",
+            ],
+        )];
+        let sources = HashMap::new();
+        let v = find_cap_wellknown_violations(&[], &composites, &sources);
+        assert_eq!(v.len(), 1);
+    }
+
+    #[test]
+    fn test_cap_referencing_cap_and_metadata_is_ok() {
+        let traits = vec![make_trait(
+            "micro-behaviors/crypto/aes",
+            "micro-behaviors/crypto/symmetric",
+        )];
+        let composites = vec![make_composite(
+            "micro-behaviors/net/http",
+            &["micro-behaviors/net/socket", "metadata/format/elf"],
+        )];
+        let sources = HashMap::new();
+        let v = find_cap_wellknown_violations(&traits, &composites, &sources);
+        assert!(
+            v.is_empty(),
+            "cap → cap and cap → metadata should be allowed"
+        );
+    }
+
+    // ---- existing: micro-behaviors → objectives ----
+
+    #[test]
+    fn test_cap_referencing_objectives_is_violation() {
+        let traits = vec![make_trait(
+            "micro-behaviors/process/shell",
+            "objectives/execution/reverse-shell",
+        )];
+        let sources = HashMap::new();
+        let v = find_cap_obj_violations(&traits, &[], &sources);
+        assert_eq!(v.len(), 1);
+    }
+
+    #[test]
+    fn test_objectives_referencing_cap_is_ok() {
+        let composites = vec![make_composite(
+            "objectives/c2/reverse-shell",
+            &["micro-behaviors/net/socket", "micro-behaviors/process/exec"],
+        )];
+        let sources = HashMap::new();
+        let v = find_cap_obj_violations(&[], &composites, &sources);
+        assert!(
+            v.is_empty(),
+            "objectives → cap is the normal direction and should be allowed"
+        );
+    }
 }
 
 #[cfg(test)]
 mod constraint_tests {
-    use crate::capabilities::validation::constraints::find_pure_alias_traits;
-    use crate::composite_rules::{Condition, FileType, Platform, TraitDefinition};
+    use crate::capabilities::validation::constraints::{
+        find_empty_condition_clauses, find_needs_zero, find_none_only_with_proximity,
+        find_pure_alias_traits,
+    };
+    use crate::composite_rules::{CompositeTrait, Condition, FileType, Platform, TraitDefinition};
     use crate::types::Criticality;
     use std::path::PathBuf;
 
@@ -2678,6 +2873,251 @@ mod constraint_tests {
         let violations = find_pure_alias_traits(&traits);
 
         assert_eq!(violations.len(), 2);
+    }
+
+    #[test]
+    fn test_kv_exists_with_exact_is_flagged() {
+        use crate::capabilities::validation::constraints::find_kv_exists_with_matcher;
+
+        let traits = vec![TraitDefinition {
+            id: "test/kv-redundant".to_string(),
+            desc: "test".to_string(),
+            conf: 1.0,
+            crit: Criticality::Baseline,
+            mbc: None,
+            attack: None,
+            r#if: Condition::Kv {
+                path: "scripts.postinstall".to_string(),
+                exact: Some("curl".to_string()),
+                substr: None,
+                regex: None,
+                case_insensitive: false,
+                exists: Some(false),
+                size_min: None,
+                size_max: None,
+                compiled_regex: None,
+            },
+            size_min: None,
+            size_max: None,
+            count_min: None,
+            count_max: None,
+            per_kb_min: None,
+            per_kb_max: None,
+            entropy_min: None,
+            entropy_max: None,
+            r#for: vec![FileType::All],
+            platforms: vec![Platform::All],
+            not: None,
+            unless: None,
+            downgrade: None,
+            defined_in: PathBuf::from("test.yaml"),
+            precision: None,
+        }];
+
+        let v = find_kv_exists_with_matcher(&traits, &[]);
+        assert_eq!(v.len(), 1, "exists: false + exact should be flagged");
+    }
+
+    #[test]
+    fn test_kv_exists_without_matcher_is_ok() {
+        use crate::capabilities::validation::constraints::find_kv_exists_with_matcher;
+
+        let traits = vec![TraitDefinition {
+            id: "test/kv-ok".to_string(),
+            desc: "test".to_string(),
+            conf: 1.0,
+            crit: Criticality::Baseline,
+            mbc: None,
+            attack: None,
+            r#if: Condition::Kv {
+                path: "scripts.postinstall".to_string(),
+                exact: None,
+                substr: None,
+                regex: None,
+                case_insensitive: false,
+                exists: Some(false),
+                size_min: None,
+                size_max: None,
+                compiled_regex: None,
+            },
+            size_min: None,
+            size_max: None,
+            count_min: None,
+            count_max: None,
+            per_kb_min: None,
+            per_kb_max: None,
+            entropy_min: None,
+            entropy_max: None,
+            r#for: vec![FileType::All],
+            platforms: vec![Platform::All],
+            not: None,
+            unless: None,
+            downgrade: None,
+            defined_in: PathBuf::from("test.yaml"),
+            precision: None,
+        }];
+
+        let v = find_kv_exists_with_matcher(&traits, &[]);
+        assert!(v.is_empty(), "exists: false without matcher is valid");
+    }
+
+    #[test]
+    fn test_none_only_with_proximity_is_flagged() {
+        let rules = vec![CompositeTrait {
+            id: "test/none-prox".to_string(),
+            desc: "test".to_string(),
+            conf: 1.0,
+            crit: Criticality::Baseline,
+            mbc: None,
+            attack: None,
+            platforms: vec![Platform::All],
+            r#for: vec![FileType::All],
+            size_min: None,
+            size_max: None,
+            all: None,
+            any: None,
+            none: Some(vec![Condition::Trait {
+                id: "some-trait".to_string(),
+            }]),
+            unless: None,
+            not: None,
+            downgrade: None,
+            needs: None,
+            near_lines: Some(10),
+            near_bytes: None,
+            defined_in: PathBuf::from("test.yaml"),
+            precision: None,
+        }];
+        let result = find_none_only_with_proximity(&rules);
+        assert_eq!(result, vec!["test/none-prox"]);
+    }
+
+    #[test]
+    fn test_none_with_all_and_proximity_is_ok() {
+        let rules = vec![CompositeTrait {
+            id: "test/none-plus-all".to_string(),
+            desc: "test".to_string(),
+            conf: 1.0,
+            crit: Criticality::Baseline,
+            mbc: None,
+            attack: None,
+            platforms: vec![Platform::All],
+            r#for: vec![FileType::All],
+            size_min: None,
+            size_max: None,
+            all: Some(vec![Condition::Trait {
+                id: "some-trait".to_string(),
+            }]),
+            any: None,
+            none: Some(vec![Condition::Trait {
+                id: "other-trait".to_string(),
+            }]),
+            unless: None,
+            not: None,
+            downgrade: None,
+            needs: None,
+            near_lines: Some(10),
+            near_bytes: None,
+            defined_in: PathBuf::from("test.yaml"),
+            precision: None,
+        }];
+        let result = find_none_only_with_proximity(&rules);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_empty_all_with_none_is_flagged() {
+        // all: [] + none: [something] should still be flagged — empty all vacuously matches
+        let rules = vec![CompositeTrait {
+            id: "test/empty-all-none".to_string(),
+            desc: "test".to_string(),
+            conf: 1.0,
+            crit: Criticality::Baseline,
+            mbc: None,
+            attack: None,
+            platforms: vec![Platform::All],
+            r#for: vec![FileType::All],
+            size_min: None,
+            size_max: None,
+            all: Some(vec![]),
+            any: None,
+            none: Some(vec![Condition::Trait {
+                id: "some-trait".to_string(),
+            }]),
+            unless: None,
+            not: None,
+            downgrade: None,
+            needs: None,
+            near_lines: None,
+            near_bytes: None,
+            defined_in: PathBuf::from("test.yaml"),
+            precision: None,
+        }];
+        let result = find_empty_condition_clauses(&rules);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0], ("test/empty-all-none".to_string(), "all"));
+    }
+
+    #[test]
+    fn test_needs_zero_is_flagged() {
+        let rules = vec![CompositeTrait {
+            id: "test/needs-zero".to_string(),
+            desc: "test".to_string(),
+            conf: 1.0,
+            crit: Criticality::Baseline,
+            mbc: None,
+            attack: None,
+            platforms: vec![Platform::All],
+            r#for: vec![FileType::All],
+            size_min: None,
+            size_max: None,
+            all: None,
+            any: Some(vec![Condition::Trait {
+                id: "some-trait".to_string(),
+            }]),
+            none: None,
+            unless: None,
+            not: None,
+            downgrade: None,
+            needs: Some(0),
+            near_lines: None,
+            near_bytes: None,
+            defined_in: PathBuf::from("test.yaml"),
+            precision: None,
+        }];
+        let result = find_needs_zero(&rules);
+        assert_eq!(result, vec!["test/needs-zero"]);
+    }
+
+    #[test]
+    fn test_needs_one_is_not_flagged_by_needs_zero() {
+        let rules = vec![CompositeTrait {
+            id: "test/needs-one".to_string(),
+            desc: "test".to_string(),
+            conf: 1.0,
+            crit: Criticality::Baseline,
+            mbc: None,
+            attack: None,
+            platforms: vec![Platform::All],
+            r#for: vec![FileType::All],
+            size_min: None,
+            size_max: None,
+            all: None,
+            any: Some(vec![Condition::Trait {
+                id: "some-trait".to_string(),
+            }]),
+            none: None,
+            unless: None,
+            not: None,
+            downgrade: None,
+            needs: Some(1),
+            near_lines: None,
+            near_bytes: None,
+            defined_in: PathBuf::from("test.yaml"),
+            precision: None,
+        }];
+        let result = find_needs_zero(&rules);
+        assert!(result.is_empty());
     }
 }
 

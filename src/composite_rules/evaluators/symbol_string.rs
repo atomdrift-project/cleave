@@ -13,6 +13,7 @@ use crate::composite_rules::condition::NotException;
 use crate::composite_rules::context::{ConditionResult, EvaluationContext, StringParams};
 use crate::composite_rules::types::Platform;
 use crate::ip_validator::contains_external_ip;
+use crate::types::binary::normalize_symbol;
 use crate::types::{Evidence, MAX_EVIDENCE_PER_TRAIT};
 
 /// Maximum number of matches to process from regex find_iter() to prevent DoS on pattern-dense files
@@ -55,63 +56,98 @@ pub(crate) fn eval_symbol<'a>(
     }
 
     let mut evidence = Vec::new();
+    let mut match_count: usize = 0;
+
+    // Normalize exact/substr patterns the same way symbols are normalized at load time,
+    // so rule authors can write `exact: "__libc_start_main"` and it matches.
+    let norm_exact = exact.map(|s| normalize_symbol(s));
+    let norm_exact_ref = norm_exact.as_ref();
+    let norm_substr = substr.map(|s| normalize_symbol(s));
+    let norm_substr_ref = norm_substr.as_ref();
 
     // Search in imports
     for import in &ctx.report.imports {
-        if symbol_matches_condition(&import.symbol, exact, substr, pattern, compiled_regex) {
+        if symbol_matches_condition(
+            &import.symbol,
+            norm_exact_ref,
+            norm_substr_ref,
+            pattern,
+            compiled_regex,
+        ) {
             // Check if this symbol should be excluded by not: filters
             let excluded_by_not = not
                 .map(|exceptions| exceptions.iter().any(|exc| exc.matches(&import.symbol)))
                 .unwrap_or(false);
 
-            if !excluded_by_not && evidence.len() < MAX_EVIDENCE_PER_TRAIT {
-                evidence.push(Evidence {
-                    method: "symbol".to_string(),
-                    source: import.source.clone(),
-                    value: import.symbol.clone(),
-                    location: Some("import".to_string()),
-                    ..Default::default()
-                });
+            if !excluded_by_not {
+                match_count += 1;
+                if evidence.len() < MAX_EVIDENCE_PER_TRAIT {
+                    evidence.push(Evidence {
+                        method: "symbol".to_string(),
+                        source: import.source.clone(),
+                        value: import.symbol.clone(),
+                        location: Some("import".to_string()),
+                        ..Default::default()
+                    });
+                }
             }
         }
     }
 
     // Search in exports
     for export in &ctx.report.exports {
-        if symbol_matches_condition(&export.symbol, exact, substr, pattern, compiled_regex) {
+        if symbol_matches_condition(
+            &export.symbol,
+            norm_exact_ref,
+            norm_substr_ref,
+            pattern,
+            compiled_regex,
+        ) {
             // Check if this symbol should be excluded by not: filters
             let excluded_by_not = not
                 .map(|exceptions| exceptions.iter().any(|exc| exc.matches(&export.symbol)))
                 .unwrap_or(false);
 
-            if !excluded_by_not && evidence.len() < MAX_EVIDENCE_PER_TRAIT {
-                evidence.push(Evidence {
-                    method: "symbol".to_string(),
-                    source: export.source.clone(),
-                    value: export.symbol.clone(),
-                    location: export.offset.clone(),
-                    ..Default::default()
-                });
+            if !excluded_by_not {
+                match_count += 1;
+                if evidence.len() < MAX_EVIDENCE_PER_TRAIT {
+                    evidence.push(Evidence {
+                        method: "symbol".to_string(),
+                        source: export.source.clone(),
+                        value: export.symbol.clone(),
+                        location: export.offset.clone(),
+                        ..Default::default()
+                    });
+                }
             }
         }
     }
 
     // Search in internal functions (important for statically linked Go binaries)
     for func in &ctx.report.functions {
-        if symbol_matches_condition(&func.name, exact, substr, pattern, compiled_regex) {
+        if symbol_matches_condition(
+            &func.name,
+            norm_exact_ref,
+            norm_substr_ref,
+            pattern,
+            compiled_regex,
+        ) {
             // Check if this symbol should be excluded by not: filters
             let excluded_by_not = not
                 .map(|exceptions| exceptions.iter().any(|exc| exc.matches(&func.name)))
                 .unwrap_or(false);
 
-            if !excluded_by_not && evidence.len() < MAX_EVIDENCE_PER_TRAIT {
-                evidence.push(Evidence {
-                    method: "symbol".to_string(),
-                    source: func.source.clone(),
-                    value: func.name.clone(),
-                    location: func.offset.clone(),
-                    ..Default::default()
-                });
+            if !excluded_by_not {
+                match_count += 1;
+                if evidence.len() < MAX_EVIDENCE_PER_TRAIT {
+                    evidence.push(Evidence {
+                        method: "symbol".to_string(),
+                        source: func.source.clone(),
+                        value: func.name.clone(),
+                        location: func.offset.clone(),
+                        ..Default::default()
+                    });
+                }
             }
         }
     }
@@ -128,8 +164,7 @@ pub(crate) fn eval_symbol<'a>(
     }
 
     // count/density constraints are now checked at trait level
-    let matched = !evidence.is_empty();
-    let match_count = evidence.len();
+    let matched = match_count > 0;
 
     ConditionResult {
         matched,
@@ -436,28 +471,36 @@ pub(crate) fn eval_string<'a, 'b>(
         );
     }
 
-    // 2. Check in imports (symbols are strings too!)
-    for import in &ctx.report.imports {
-        check_and_add_evidence(
-            &import.symbol,
-            &import.source,
-            "import_symbol",
-            None,
-            &mut evidence,
-            &mut match_count,
-        );
-    }
+    // 2. Check in imports and exports — but skip when location constraints are set,
+    // since imports/exports have no meaningful file offset or section.
+    let has_location_constraint = params.section.is_some()
+        || params.offset.is_some()
+        || params.offset_range.is_some()
+        || params.section_offset.is_some()
+        || params.section_offset_range.is_some();
 
-    // 3. Check in exports
-    for export in &ctx.report.exports {
-        check_and_add_evidence(
-            &export.symbol,
-            &export.source,
-            "export_symbol",
-            export.offset.clone(),
-            &mut evidence,
-            &mut match_count,
-        );
+    if !has_location_constraint {
+        for import in &ctx.report.imports {
+            check_and_add_evidence(
+                &import.symbol,
+                &import.source,
+                "import_symbol",
+                None,
+                &mut evidence,
+                &mut match_count,
+            );
+        }
+
+        for export in &ctx.report.exports {
+            check_and_add_evidence(
+                &export.symbol,
+                &export.source,
+                "export_symbol",
+                export.offset.clone(),
+                &mut evidence,
+                &mut match_count,
+            );
+        }
     }
 
     if let Some(t) = t_start {

@@ -327,6 +327,122 @@ pub(crate) fn find_cap_obj_violations(
     violations
 }
 
+/// Find metadata/ rules that reference non-metadata tiers.
+///
+/// Metadata rules describe file-level properties (format, language, quality) and should
+/// only reference other metadata/ rules. Referencing micro-behaviors/, objectives/, or
+/// well-known/ rules violates the tier hierarchy.
+///
+/// Returns `(rule_id, ref_id, source_file)` for violations.
+#[must_use]
+pub(crate) fn find_metadata_cross_tier_refs(
+    trait_definitions: &[TraitDefinition],
+    composite_rules: &[CompositeTrait],
+    rule_source_files: &HashMap<String, String>,
+) -> Vec<(String, String, String)> {
+    let mut violations = Vec::new();
+
+    fn extract_tier(id: &str) -> Option<&str> {
+        let base = id.find("::").map_or(id, |idx| &id[..idx]);
+        base.find('/').map(|i| &base[..i])
+    }
+
+    fn is_cross_tier_ref(ref_id: &str) -> bool {
+        matches!(
+            extract_tier(ref_id),
+            Some("micro-behaviors" | "objectives" | "well-known")
+        )
+    }
+
+    for trait_def in trait_definitions {
+        if extract_tier(&trait_def.id) != Some("metadata") {
+            continue;
+        }
+        if let Condition::Trait { id: ref_id } = &trait_def.r#if {
+            if is_cross_tier_ref(ref_id) {
+                let source = rule_source_files
+                    .get(&trait_def.id)
+                    .cloned()
+                    .unwrap_or_else(|| "unknown".to_string());
+                violations.push((trait_def.id.clone(), ref_id.clone(), source));
+            }
+        }
+    }
+
+    for rule in composite_rules {
+        if extract_tier(&rule.id) != Some("metadata") {
+            continue;
+        }
+        let trait_refs = collect_trait_refs_from_rule(rule);
+        for (ref_id, _) in trait_refs {
+            if is_cross_tier_ref(&ref_id) {
+                let source = rule_source_files
+                    .get(&rule.id)
+                    .cloned()
+                    .unwrap_or_else(|| "unknown".to_string());
+                violations.push((rule.id.clone(), ref_id.clone(), source));
+            }
+        }
+    }
+
+    violations
+}
+
+/// Find micro-behaviors/ rules that reference well-known/ rules.
+///
+/// Micro-behaviors describe observable capabilities and should only reference other
+/// micro-behaviors/ or metadata/ rules. Referencing well-known/ (specific malware/tool
+/// signatures) creates a dependency on named entities which belongs in objectives/ or
+/// well-known/ composites.
+///
+/// Returns `(rule_id, ref_id, source_file)` for violations.
+#[must_use]
+pub(crate) fn find_cap_wellknown_violations(
+    trait_definitions: &[TraitDefinition],
+    composite_rules: &[CompositeTrait],
+    rule_source_files: &HashMap<String, String>,
+) -> Vec<(String, String, String)> {
+    let mut violations = Vec::new();
+
+    fn extract_tier(id: &str) -> Option<&str> {
+        let base = id.find("::").map_or(id, |idx| &id[..idx]);
+        base.find('/').map(|i| &base[..i])
+    }
+
+    for trait_def in trait_definitions {
+        if extract_tier(&trait_def.id) != Some("micro-behaviors") {
+            continue;
+        }
+        if let Condition::Trait { id: ref_id } = &trait_def.r#if {
+            if extract_tier(ref_id) == Some("well-known") {
+                let source = rule_source_files
+                    .get(&trait_def.id)
+                    .cloned()
+                    .unwrap_or_else(|| "unknown".to_string());
+                violations.push((trait_def.id.clone(), ref_id.clone(), source));
+            }
+        }
+    }
+
+    for rule in composite_rules {
+        if extract_tier(&rule.id) != Some("micro-behaviors") {
+            continue;
+        }
+        let trait_refs = collect_trait_refs_from_rule(rule);
+        for (ref_id, _) in trait_refs {
+            if extract_tier(&ref_id) == Some("well-known") {
+                let source = rule_source_files
+                    .get(&rule.id)
+                    .cloned()
+                    .unwrap_or_else(|| "unknown".to_string());
+                violations.push((rule.id.clone(), ref_id.clone(), source));
+            }
+        }
+    }
+
+    violations
+}
+
 /// Find rules that use `malware/` as a subcategory of `objectives/` or `micro-behaviors/`.
 ///
 /// Malware-specific signatures belong in `well-known/malware/`, not as subcategories
@@ -656,5 +772,289 @@ pub(crate) fn find_oversized_trait_directories(
         .collect();
 
     violations.sort_by(|a, b| b.1.cmp(&a.1)); // Sort by count descending
+    violations
+}
+
+// ============================================================================
+// well-known/ taxonomy enforcement validators
+// ============================================================================
+
+/// Allowed second-level categories under `well-known/malware/`.
+///
+/// These map to broad malware classification families (e.g., backdoor, ransomware).
+/// New categories require explicit addition here to prevent taxonomy sprawl.
+const WELL_KNOWN_MALWARE_CATEGORIES: &[&str] = &[
+    "apt",
+    "atm",
+    "backdoor",
+    "botnet",
+    "downloader",
+    "dropper",
+    "exploit",
+    "keylogger",
+    "loader",
+    "miner",
+    "ransomware",
+    "rat",
+    "rootkit",
+    "stealer",
+    "supply-chain",
+    "trojan",
+    "virus",
+    "worm",
+];
+
+/// Allowed second-level categories under `well-known/tools/`.
+const WELL_KNOWN_TOOLS_CATEGORIES: &[&str] = &[
+    "breachcore",
+    "dual-use",
+    "gnulib",
+    "keyauth",
+    "mercurial",
+    "offensive",
+    "sysadmin",
+    "testing",
+];
+
+/// Validate that well-known/malware/ and well-known/tools/ only contain whitelisted
+/// second-level categories.
+///
+/// Returns `(directory_path, unknown_category)` for violations.
+#[must_use]
+pub(crate) fn find_wellknown_category_violations(trait_dirs: &[String]) -> Vec<(String, String)> {
+    let mut violations = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+
+    for dir_path in trait_dirs {
+        let parts: Vec<&str> = dir_path.split('/').collect();
+        if parts.len() < 3 {
+            continue;
+        }
+
+        // Check well-known/malware/<category> and well-known/tools/<category>
+        if parts[0] != "well-known" {
+            continue;
+        }
+
+        let (allowed, category) = match parts[1] {
+            "malware" => (WELL_KNOWN_MALWARE_CATEGORIES, parts[2]),
+            "tools" => (WELL_KNOWN_TOOLS_CATEGORIES, parts[2]),
+            _ => continue,
+        };
+
+        if !allowed.contains(&category) && seen.insert((parts[1].to_string(), category.to_string()))
+        {
+            violations.push((dir_path.clone(), category.to_string()));
+        }
+    }
+
+    violations.sort_by(|a, b| a.1.cmp(&b.1));
+    violations
+}
+
+/// Find well-known/ directories where NO composite has local anchoring.
+///
+/// A well-known/ directory should identify a *specific* malware family, which means
+/// at least one composite in the directory should reference a trait that is either:
+/// - Defined locally in the same well-known/ directory (a family-specific fingerprint)
+/// - Defined elsewhere in well-known/ (another family-specific indicator)
+///
+/// If ALL composites in a directory only point to micro-behaviors/ or objectives/,
+/// the entire directory is detecting generic behavior patterns and belongs in objectives/.
+///
+/// Returns `(rule_id, source_file)` for violations (all composites in unanchored dirs).
+#[must_use]
+pub(crate) fn find_unanchored_wellknown_composites(
+    composite_rules: &[CompositeTrait],
+    rule_source_files: &HashMap<String, String>,
+) -> Vec<(String, String)> {
+    use std::path::Path;
+
+    // Group composites by their parent directory
+    let mut dir_composites: HashMap<String, Vec<&CompositeTrait>> = HashMap::new();
+
+    for rule in composite_rules {
+        let rule_path = rule.id.find("::").map_or(&rule.id[..], |i| &rule.id[..i]);
+        if !rule_path.starts_with("well-known/") {
+            continue;
+        }
+
+        let source = rule.defined_in.to_string_lossy().to_string();
+        let dir = Path::new(&source)
+            .parent()
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_default();
+
+        dir_composites.entry(dir).or_default().push(rule);
+    }
+
+    let mut violations = Vec::new();
+
+    for composites in dir_composites.values() {
+        // Check if ANY composite in this directory has well-known/ anchoring
+        let dir_is_anchored = composites.iter().any(|rule| {
+            let refs = collect_trait_refs_from_rule(rule);
+            refs.iter()
+                .any(|(ref_id, _)| ref_id.starts_with("well-known/"))
+        });
+
+        if dir_is_anchored {
+            continue;
+        }
+
+        // Entire directory is unanchored - flag all composites in it
+        for rule in composites {
+            let source = rule_source_files
+                .get(&rule.id)
+                .cloned()
+                .unwrap_or_else(|| "unknown".to_string());
+            violations.push((rule.id.clone(), source));
+        }
+    }
+
+    violations
+}
+
+/// Generic technique words that should not appear as leaf directory names in well-known/.
+///
+/// well-known/ leaf directories should be named after specific malware families, tools,
+/// or campaigns (e.g., "mirai", "cobalt-strike", "lazarus"), not generic techniques.
+const GENERIC_TECHNIQUE_WORDS: &[&str] = &[
+    "browser",
+    "clipboard",
+    "credential",
+    "credentials",
+    "downloader",
+    "evasion",
+    "exfiltration",
+    "generic",
+    "infostealer",
+    "keylog",
+    "loader",
+    "obfuscated",
+    "persistence",
+    "privilege-escalation",
+    "reverse-shell",
+    "scanner",
+    "screen-capture",
+    "shell",
+    "stealer",
+    "webshell",
+];
+
+/// Find well-known/ leaf directories named with generic technique words.
+///
+/// Leaf directories in well-known/ should be named after specific malware families
+/// (e.g., "mirai", "kinsing", "cobalt-strike"), not generic behavioral categories
+/// (e.g., "stealer", "loader", "evasion").
+///
+/// Returns `(directory_path, generic_word)` for violations.
+#[must_use]
+pub(crate) fn find_generic_wellknown_leaf_dirs(trait_dirs: &[String]) -> Vec<(String, String)> {
+    let mut violations = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+
+    for dir_path in trait_dirs {
+        if !dir_path.starts_with("well-known/") {
+            continue;
+        }
+
+        let parts: Vec<&str> = dir_path.split('/').collect();
+        // Leaf is the last directory segment. For well-known/malware/dropper/nemucod,
+        // leaf is "nemucod" (good). For well-known/malware/trojan/generic, leaf is "generic" (bad).
+        // Skip the first 3 segments (well-known/malware/<category>) and check remaining.
+        if parts.len() < 4 {
+            continue;
+        }
+
+        // Check segments from position 3 onward (after well-known/<type>/<category>/)
+        for &segment in &parts[3..] {
+            let lower = segment.to_lowercase();
+            if GENERIC_TECHNIQUE_WORDS.contains(&lower.as_str()) && seen.insert(dir_path.clone()) {
+                violations.push((dir_path.clone(), segment.to_string()));
+                break;
+            }
+        }
+    }
+
+    violations
+}
+
+/// Find well-known/ composite-only files whose parent directory has no atomic traits.
+///
+/// well-known/ should contain family-specific fingerprints (atomic traits with unique
+/// strings, patterns, or signatures). A composite-only file is acceptable if sibling
+/// files in the same subdirectory define atomic traits (multi-file family definitions
+/// like `nemucod/` or `rustdoor/`). But if the entire subdirectory has zero atomic
+/// traits, the composites are likely assembling generic behaviors and belong in
+/// objectives/ instead — or the family-specific traits are misplaced in another tier
+/// (e.g., micro-behaviors/) and should be moved to well-known/.
+///
+/// Returns `(source_file, composite_count)` for violations.
+#[must_use]
+pub(crate) fn find_composite_only_wellknown_files(
+    trait_definitions: &[TraitDefinition],
+    composite_rules: &[CompositeTrait],
+) -> Vec<(String, usize)> {
+    use std::path::Path;
+
+    // Build set of directories that contain atomic traits
+    let mut dirs_with_traits: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+    for t in trait_definitions {
+        let source = t.defined_in.to_string_lossy().to_string();
+        if source.contains("well-known/") {
+            if let Some(dir) = Path::new(&source).parent() {
+                dirs_with_traits.insert(dir.to_string_lossy().to_string());
+            }
+        }
+    }
+
+    // Collect composite-only files and their ref info
+    let mut file_composite_counts: HashMap<String, usize> = HashMap::new();
+    let mut file_composite_refs: HashMap<String, Vec<Vec<String>>> = HashMap::new();
+
+    for rule in composite_rules {
+        let source = rule.defined_in.to_string_lossy().to_string();
+        if source.contains("well-known/") {
+            *file_composite_counts.entry(source.clone()).or_insert(0) += 1;
+
+            let refs: Vec<String> = collect_trait_refs_from_rule(rule)
+                .into_iter()
+                .map(|(ref_id, _)| ref_id)
+                .collect();
+            file_composite_refs.entry(source).or_default().push(refs);
+        }
+    }
+
+    let mut violations = Vec::new();
+
+    for (source_file, composite_count) in &file_composite_counts {
+        let dir = Path::new(source_file)
+            .parent()
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_default();
+
+        // Skip if this file's directory has atomic traits (in this file or siblings)
+        if dirs_with_traits.contains(&dir) {
+            continue;
+        }
+
+        // Also skip if composites reference well-known/ traits (anchored to another family file)
+        let has_wellknown_refs = file_composite_refs
+            .get(source_file)
+            .map(|ref_groups| {
+                ref_groups
+                    .iter()
+                    .any(|refs| refs.iter().any(|r| r.starts_with("well-known/")))
+            })
+            .unwrap_or(false);
+
+        if !has_wellknown_refs {
+            violations.push((source_file.clone(), *composite_count));
+        }
+    }
+
+    violations.sort_by(|a, b| a.0.cmp(&b.0));
     violations
 }

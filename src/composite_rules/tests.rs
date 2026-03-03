@@ -4223,3 +4223,509 @@ fn test_downgrade_needs_threshold_met() {
     // needs: 2 and 2 matched → downgrade fires: Suspicious → Notable
     assert_eq!(finding.crit, Criticality::Notable);
 }
+
+// =============================================================================
+// T7: CompositeTrait downgrade tests
+// =============================================================================
+
+#[test]
+fn test_composite_downgrade_all_match() {
+    let (mut report, data) = create_test_context();
+    report.imports.push(Import {
+        symbol: "socket".to_string(),
+        library: None,
+        source: "libc".to_string(),
+    });
+
+    // Provide findings that satisfy both the rule's `all` and the downgrade's `all`
+    let findings = vec![
+        Finding {
+            id: "file/type/shell-script".to_string(),
+            kind: FindingKind::Capability,
+            desc: "Shell script".to_string(),
+            conf: 1.0,
+            crit: Criticality::Baseline,
+            mbc: None,
+            attack: None,
+            trait_refs: vec![],
+            evidence: vec![],
+            match_count: 0,
+            source_file: None,
+        },
+        Finding {
+            id: "file/path/test-fixtures".to_string(),
+            kind: FindingKind::Capability,
+            desc: "Test fixture".to_string(),
+            conf: 1.0,
+            crit: Criticality::Baseline,
+            mbc: None,
+            attack: None,
+            trait_refs: vec![],
+            evidence: vec![],
+            match_count: 0,
+            source_file: None,
+        },
+    ];
+
+    let ctx = EvaluationContext {
+        report: &report,
+        binary_data: &data,
+        file_type: FileType::Elf,
+        platforms: vec![Platform::All],
+        additional_findings: Some(&findings),
+        cached_ast: None,
+        finding_id_index: None,
+        debug_collector: None,
+        section_map: None,
+        inline_yara_results: None,
+        cached_kv_format: OnceLock::new(),
+        cached_kv_parsed: OnceLock::new(),
+        current_trait: None,
+        current_source: None,
+        string_exact_index: OnceLock::new(),
+        string_exact_index_ci: OnceLock::new(),
+    };
+
+    let rule = CompositeTrait {
+        id: "test/composite-downgrade-all".to_string(),
+        desc: "Test downgrade with all".to_string(),
+        conf: 0.9,
+        crit: Criticality::Suspicious,
+        mbc: None,
+        attack: None,
+        platforms: vec![Platform::All],
+        r#for: vec![FileType::All],
+        size_min: None,
+        size_max: None,
+        all: Some(vec![Condition::Symbol {
+            exact: None,
+            substr: None,
+            regex: Some("socket".to_string()),
+            platforms: None,
+            compiled_regex: None,
+        }]),
+        any: None,
+        none: None,
+        unless: None,
+        not: None,
+        needs: None,
+        near_lines: None,
+        near_bytes: None,
+        downgrade: Some(DowngradeConditions {
+            all: Some(vec![
+                Condition::Trait {
+                    id: "file/type/shell-script".to_string(),
+                },
+                Condition::Trait {
+                    id: "file/path/test-fixtures".to_string(),
+                },
+            ]),
+            any: None,
+            none: None,
+            needs: None,
+        }),
+        defined_in: std::path::PathBuf::from("test.yaml"),
+        precision: None,
+    };
+
+    let result = rule.evaluate(&ctx);
+    assert!(result.is_some());
+    let finding = result.unwrap();
+    // Both downgrade.all conditions match → downgrade fires: Suspicious → Notable
+    assert_eq!(finding.crit, Criticality::Notable);
+}
+
+#[test]
+fn test_composite_downgrade_none_blocks() {
+    let (mut report, data) = create_test_context();
+    report.imports.push(Import {
+        symbol: "socket".to_string(),
+        library: None,
+        source: "libc".to_string(),
+    });
+
+    // Provide a finding that matches the downgrade.none condition — should block downgrade
+    let findings = vec![Finding {
+        id: "file/signed/apple".to_string(),
+        kind: FindingKind::Capability,
+        desc: "Apple-signed binary".to_string(),
+        conf: 1.0,
+        crit: Criticality::Baseline,
+        mbc: None,
+        attack: None,
+        trait_refs: vec![],
+        evidence: vec![],
+        match_count: 0,
+        source_file: None,
+    }];
+
+    let ctx = EvaluationContext {
+        report: &report,
+        binary_data: &data,
+        file_type: FileType::Elf,
+        platforms: vec![Platform::All],
+        additional_findings: Some(&findings),
+        cached_ast: None,
+        finding_id_index: None,
+        debug_collector: None,
+        section_map: None,
+        inline_yara_results: None,
+        cached_kv_format: OnceLock::new(),
+        cached_kv_parsed: OnceLock::new(),
+        current_trait: None,
+        current_source: None,
+        string_exact_index: OnceLock::new(),
+        string_exact_index_ci: OnceLock::new(),
+    };
+
+    let rule = CompositeTrait {
+        id: "test/composite-downgrade-none".to_string(),
+        desc: "Test downgrade blocked by none".to_string(),
+        conf: 0.9,
+        crit: Criticality::Hostile,
+        mbc: None,
+        attack: None,
+        platforms: vec![Platform::All],
+        r#for: vec![FileType::All],
+        size_min: None,
+        size_max: None,
+        all: Some(vec![Condition::Symbol {
+            exact: None,
+            substr: None,
+            regex: Some("socket".to_string()),
+            platforms: None,
+            compiled_regex: None,
+        }]),
+        any: None,
+        none: None,
+        unless: None,
+        not: None,
+        needs: None,
+        near_lines: None,
+        near_bytes: None,
+        downgrade: Some(DowngradeConditions {
+            all: None,
+            any: Some(vec![Condition::Trait {
+                id: "file/type/shell-script".to_string(), // NOT in findings
+            }]),
+            none: Some(vec![Condition::Trait {
+                id: "file/signed/apple".to_string(), // IS in findings → blocks downgrade
+            }]),
+            needs: None,
+        }),
+        defined_in: std::path::PathBuf::from("test.yaml"),
+        precision: None,
+    };
+
+    let result = rule.evaluate(&ctx);
+    assert!(result.is_some());
+    let finding = result.unwrap();
+    // downgrade.none includes "file/signed/apple" which IS present → downgrade blocked
+    // Original criticality should be preserved
+    assert_eq!(finding.crit, Criticality::Hostile);
+}
+
+// ============================================================================
+// Cross-condition proximity tests (A4)
+//
+// Verify that proximity constraints require evidence from DISTINCT conditions
+// to co-occur within the window, not just N items from any single condition.
+// ============================================================================
+
+/// Helper: build a Finding with multiple evidence items at different line locations.
+fn finding_at_lines(id: &str, lines: &[(usize, usize)]) -> Finding {
+    Finding {
+        id: id.to_string(),
+        kind: FindingKind::Capability,
+        desc: format!("Multi-evidence finding {}", id),
+        conf: 1.0,
+        crit: Criticality::Baseline,
+        mbc: None,
+        attack: None,
+        trait_refs: vec![],
+        evidence: lines
+            .iter()
+            .enumerate()
+            .map(|(i, (line, col))| crate::types::Evidence {
+                method: "ast".to_string(),
+                source: "tree-sitter".to_string(),
+                value: format!("{}-ev{}", id, i), // unique to avoid dedup
+                location: Some(format!("{}:{}", line, col)),
+                ..Default::default()
+            })
+            .collect(),
+        match_count: 0,
+        source_file: None,
+    }
+}
+
+#[test]
+fn test_proximity_same_condition_not_sufficient() {
+    // One trait has 3 evidence items at lines 1, 2, 3 (all close together).
+    // Second trait is at line 100 (far away).
+    // With near_lines: 5, this should FAIL because no window of 5 lines
+    // contains evidence from both conditions.
+    let report = empty_report();
+    let data: Vec<u8> = "x\n".repeat(110).into_bytes();
+    let findings = vec![
+        finding_at_lines("trait-a", &[(1, 1), (2, 1), (3, 1)]),
+        finding_at_line("trait-b", 100, 1),
+    ];
+    let ctx = proximity_ctx(&report, &data, &findings);
+    let rule = proximity_rule(&["trait-a", "trait-b"], Some(5), None);
+    assert!(
+        rule.evaluate(&ctx).is_none(),
+        "Multiple evidence items from trait-a near each other should not satisfy proximity \
+         when trait-b is 100 lines away"
+    );
+}
+
+#[test]
+fn test_proximity_cross_condition_passes() {
+    // trait-a at line 5, trait-b at line 7 → 2 lines apart, well within near_lines: 5
+    let report = empty_report();
+    let data = b"1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n";
+    let findings = vec![
+        finding_at_line("trait-a", 5, 1),
+        finding_at_line("trait-b", 7, 1),
+    ];
+    let ctx = proximity_ctx(&report, data, &findings);
+    let rule = proximity_rule(&["trait-a", "trait-b"], Some(5), None);
+    assert!(
+        rule.evaluate(&ctx).is_some(),
+        "Evidence from two conditions 2 lines apart should pass near_lines: 5"
+    );
+}
+
+#[test]
+fn test_proximity_cross_condition_fails() {
+    // trait-a at line 5, trait-b at line 50 → 45 lines apart, fails near_lines: 5
+    let report = empty_report();
+    let data: Vec<u8> = "x\n".repeat(60).into_bytes();
+    let findings = vec![
+        finding_at_line("trait-a", 5, 1),
+        finding_at_line("trait-b", 50, 1),
+    ];
+    let ctx = proximity_ctx(&report, &data, &findings);
+    let rule = proximity_rule(&["trait-a", "trait-b"], Some(5), None);
+    assert!(
+        rule.evaluate(&ctx).is_none(),
+        "Evidence from two conditions 45 lines apart should fail near_lines: 5"
+    );
+}
+
+#[test]
+fn test_proximity_three_conditions_all_close() {
+    // 3 conditions all within a 5-line window: lines 5, 7, 9
+    let report = empty_report();
+    let data = b"1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n";
+    let findings = vec![
+        finding_at_line("trait-a", 5, 1),
+        finding_at_line("trait-b", 7, 1),
+        finding_at_line("trait-c", 9, 1),
+    ];
+    let ctx = proximity_ctx(&report, data, &findings);
+    let rule = proximity_rule(&["trait-a", "trait-b", "trait-c"], Some(5), None);
+    assert!(
+        rule.evaluate(&ctx).is_some(),
+        "3 conditions within a 5-line span should pass near_lines: 5"
+    );
+}
+
+#[test]
+fn test_proximity_any_needs_cross_condition() {
+    // any: 4 traits at lines 5, 7, 50, 100. needs: 2, near_lines: 5.
+    // Traits at lines 5 and 7 are distinct conditions within the window → pass.
+    let report = empty_report();
+    let data: Vec<u8> = "x\n".repeat(110).into_bytes();
+    let findings = vec![
+        finding_at_line("trait-a", 5, 1),
+        finding_at_line("trait-b", 7, 1),
+        finding_at_line("trait-c", 50, 1),
+        finding_at_line("trait-d", 100, 1),
+    ];
+    let ctx = proximity_ctx(&report, &data, &findings);
+
+    let rule = CompositeTrait {
+        id: "test/any-cross".to_string(),
+        desc: "Any cross-condition proximity".to_string(),
+        conf: 0.9,
+        crit: Criticality::Baseline,
+        mbc: None,
+        attack: None,
+        platforms: vec![Platform::All],
+        r#for: vec![FileType::All],
+        size_min: None,
+        size_max: None,
+        all: None,
+        any: Some(vec![
+            Condition::Trait {
+                id: "trait-a".to_string(),
+            },
+            Condition::Trait {
+                id: "trait-b".to_string(),
+            },
+            Condition::Trait {
+                id: "trait-c".to_string(),
+            },
+            Condition::Trait {
+                id: "trait-d".to_string(),
+            },
+        ]),
+        none: None,
+        unless: None,
+        not: None,
+        downgrade: None,
+        needs: Some(2),
+        near_lines: Some(5),
+        near_bytes: None,
+        defined_in: std::path::PathBuf::from("test.yaml"),
+        precision: None,
+    };
+    assert!(
+        rule.evaluate(&ctx).is_some(),
+        "any(needs:2) with near_lines:5 should pass — traits at lines 5 and 7 are close"
+    );
+}
+
+#[test]
+fn test_proximity_bytes_cross_condition() {
+    // trait-a at offset 100, trait-b at offset 110 → 10 bytes apart, within near_bytes: 20
+    let report = empty_report();
+    let data = vec![0u8; 200];
+    let findings = vec![
+        finding_at_offset("trait-a", 100),
+        finding_at_offset("trait-b", 110),
+    ];
+    let ctx = proximity_ctx(&report, &data, &findings);
+
+    let rule = proximity_rule(&["trait-a", "trait-b"], None, Some(20));
+    assert!(
+        rule.evaluate(&ctx).is_some(),
+        "near_bytes: 20 should pass when offsets are 10 apart"
+    );
+
+    let tight = proximity_rule(&["trait-a", "trait-b"], None, Some(5));
+    assert!(
+        tight.evaluate(&ctx).is_none(),
+        "near_bytes: 5 should fail when offsets are 10 apart"
+    );
+}
+
+#[test]
+fn test_proximity_multi_evidence_one_near() {
+    // trait-a has evidence at lines 5 AND 50.
+    // trait-b has evidence at line 52.
+    // near_lines: 5 should pass — trait-a@50 is near trait-b@52.
+    let report = empty_report();
+    let data: Vec<u8> = "x\n".repeat(60).into_bytes();
+    let findings = vec![
+        finding_at_lines("trait-a", &[(5, 1), (50, 1)]),
+        finding_at_line("trait-b", 52, 1),
+    ];
+    let ctx = proximity_ctx(&report, &data, &findings);
+    let rule = proximity_rule(&["trait-a", "trait-b"], Some(5), None);
+    assert!(
+        rule.evaluate(&ctx).is_some(),
+        "trait-a has evidence at 5 and 50; trait-b at 52. \
+         Lines 50 and 52 are within 5 → should pass"
+    );
+}
+
+#[test]
+fn test_proximity_does_not_boost_confidence() {
+    // A proximity rule with conf: 0.6 should keep conf: 0.6 in the finding,
+    // not boost it toward 1.0. Proximity increases precision, not confidence.
+    let report = empty_report();
+    let data = b"1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n";
+    let findings = vec![
+        finding_at_line("trait-a", 5, 1),
+        finding_at_line("trait-b", 7, 1),
+    ];
+    let ctx = proximity_ctx(&report, data, &findings);
+
+    let rule = CompositeTrait {
+        id: "test/conf-check".to_string(),
+        desc: "Confidence check".to_string(),
+        conf: 0.6,
+        crit: Criticality::Baseline,
+        mbc: None,
+        attack: None,
+        platforms: vec![Platform::All],
+        r#for: vec![FileType::All],
+        size_min: None,
+        size_max: None,
+        all: Some(vec![
+            Condition::Trait {
+                id: "trait-a".to_string(),
+            },
+            Condition::Trait {
+                id: "trait-b".to_string(),
+            },
+        ]),
+        any: None,
+        none: None,
+        unless: None,
+        not: None,
+        downgrade: None,
+        needs: None,
+        near_lines: Some(5),
+        near_bytes: None,
+        defined_in: std::path::PathBuf::from("test.yaml"),
+        precision: None,
+    };
+
+    let finding = rule.evaluate(&ctx).expect("proximity rule should match");
+    assert!(
+        (finding.conf - 0.6).abs() < f32::EPSILON,
+        "Proximity should not boost confidence. Expected 0.6, got {}",
+        finding.conf
+    );
+}
+
+#[test]
+fn test_proximity_filters_evidence_to_window() {
+    // trait-a has evidence at lines 5 AND 50.
+    // trait-b has evidence at line 7.
+    // near_lines: 5 → window is lines 5-7.
+    // Finding should only contain evidence within the window (lines 5 and 7),
+    // NOT the trait-a evidence at line 50.
+    let report = empty_report();
+    let data: Vec<u8> = "x\n".repeat(60).into_bytes();
+    let findings = vec![
+        finding_at_lines("trait-a", &[(5, 1), (50, 1)]),
+        finding_at_line("trait-b", 7, 1),
+    ];
+    let ctx = proximity_ctx(&report, &data, &findings);
+    let rule = proximity_rule(&["trait-a", "trait-b"], Some(5), None);
+
+    let finding = rule.evaluate(&ctx).expect("proximity rule should match");
+
+    // All evidence should be within the proximity window (lines 5-7)
+    for ev in &finding.evidence {
+        if let Some(ref loc) = ev.location {
+            if let Some(colon) = loc.find(':') {
+                let line: usize = loc[..colon].parse().unwrap_or(0);
+                assert!(
+                    (5..=7).contains(&line),
+                    "Evidence at line {} is outside proximity window 5-7: {:?}",
+                    line,
+                    ev
+                );
+            }
+        }
+    }
+
+    // Should have exactly 2 evidence items (line 5 from trait-a, line 7 from trait-b)
+    assert_eq!(
+        finding.evidence.len(),
+        2,
+        "Expected 2 evidence items in window, got {}: {:?}",
+        finding.evidence.len(),
+        finding
+            .evidence
+            .iter()
+            .map(|e| e.location.as_deref().unwrap_or("none"))
+            .collect::<Vec<_>>()
+    );
+}

@@ -15,6 +15,17 @@ composite_rules:
       - id: micro-behaviors/data/encode/compression::lzma-signature
       - id: micro-behaviors/data/encode/compression::lzma-magic
 
+  - id: packed-ad-targeting
+    desc: Packed binary with Active Directory and Terminal Services imports
+    crit: suspicious
+    conf: 0.8
+    attack: "T1027"
+    for: [pe]
+    all:
+      - id: micro-behaviors/dylib/load/dsprop
+      - id: micro-behaviors/dylib/load/wtsapi
+      - id: objectives/anti-static/obfuscation/binary-metrics::dominant-section
+
   - id: payload-unpacking
     desc: Embedded payload with unpacking capability
     crit: notable
@@ -28,3 +39,34 @@ composite_rules:
     downgrade:
       any:
         - id: metadata/vendor/valve::valve-corp-binary
+
+  # Large packed JS with excessive function arguments and string decryptor
+  - id: packed-js-payload
+    desc: Packed JavaScript payload with string decryptor
+    crit: hostile
+    conf: 0.98
+    attack: "T1027"
+    mbc: "B0032"
+    for: [javascript, typescript]
+    needs: 3
+    any:
+      - id: micro-behaviors/data/text/keywords/malware::user-get-action-class
+      - id: objectives/anti-static/obfuscation/packing::excessive-function-arguments
+      - id: objectives/anti-static/obfuscation/packing::packed-string-decryptor
+      - id: metadata/file::large-source-file-4mb
+      - id: objectives/anti-static/obfuscation/code-metrics/structure::very-long-lines
+
+  # Large packed binary with excessive arguments
+  - id: packed-excessive-args
+    desc: Large packed file with excessive function arguments
+    crit: hostile
+    conf: 0.9
+    attack: "T1027"
+    mbc: "B0032"
+    for: [javascript, typescript]
+    all:
+      - id: objectives/anti-static/obfuscation/packing::excessive-function-arguments
+      - id: metadata/file::large-source-file-1mb
+    any:
+      - id: objectives/anti-static/obfuscation/code-metrics/structure::very-long-lines
+      - id: objectives/anti-static/obfuscation/code-metrics/structure::minified-code

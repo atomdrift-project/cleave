@@ -32,14 +32,6 @@ traits:
       type: raw
       regex: '^\s{0,2}[a-zA-Z0-9_$]{1,20}:\s*$'
 
-  - id: rivanon-author
-    desc: Rivanon malware author
-    crit: suspicious
-    conf: 1.0
-    if:
-      type: string
-      regex: 'Doxtor L\.'
-
 composite_rules:
   - id: fasm-source
     desc: FASM assembly source code

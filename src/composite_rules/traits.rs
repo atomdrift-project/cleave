@@ -885,6 +885,9 @@ impl TraitDefinition {
             }
         }
 
+        // Start timing for timeout detection (covers all evaluation phases)
+        let start = Instant::now();
+
         // Check unless conditions (file-level skip)
         if let Some(unless_conds) = &self.unless {
             // Default 'any' semantics: skip if ANY condition matches
@@ -904,8 +907,7 @@ impl TraitDefinition {
             }
         }
 
-        // Evaluate the condition (traits only have one atomic condition) with timeout protection
-        let start = Instant::now();
+        // Evaluate the condition (traits only have one atomic condition)
         let result = self.eval_condition(&self.r#if, ctx);
         let duration = start.elapsed();
 
@@ -1040,13 +1042,6 @@ impl TraitDefinition {
 
             // Check downgrade conditions
             if let Some(downgrade_conds) = &self.downgrade {
-                let debug_downgrade = std::env::var("DEBUG_DOWNGRADE").is_ok();
-                if debug_downgrade {
-                    eprintln!(
-                        "DEBUG: Evaluating downgrade for trait '{}' (current: {:?})",
-                        self.id, self.crit
-                    );
-                }
                 let triggered = self.eval_downgrade_conditions(downgrade_conds, ctx);
                 if triggered {
                     final_crit = match self.crit {
@@ -1079,13 +1074,6 @@ impl TraitDefinition {
                             triggered,
                         });
                     }
-                }
-
-                if debug_downgrade {
-                    eprintln!(
-                        "DEBUG: Final criticality for '{}': {:?}",
-                        self.id, final_crit
-                    );
                 }
             }
 
@@ -1122,7 +1110,6 @@ impl TraitDefinition {
         conditions: &DowngradeConditions,
         ctx: &EvaluationContext<'a>,
     ) -> bool {
-        let debug_downgrade = std::env::var("DEBUG_DOWNGRADE").is_ok();
         let mut has_any_block = false;
 
         // If 'all' is specified, every condition must match
@@ -1140,15 +1127,8 @@ impl TraitDefinition {
             has_any_block = true;
             let threshold = conditions.needs.unwrap_or(1);
             let mut matched_count = 0;
-            for (i, cond) in any_conds.iter().enumerate() {
-                let result = self.eval_condition(cond, ctx);
-                if debug_downgrade {
-                    eprintln!(
-                        "DEBUG TraitDef: downgrade any[{}] cond={:?} matched={}",
-                        i, cond, result.matched
-                    );
-                }
-                if result.matched {
+            for cond in any_conds {
+                if self.eval_condition(cond, ctx).matched {
                     matched_count += 1;
                 }
             }
@@ -1740,6 +1720,9 @@ impl CompositeTrait {
             }
         }
 
+        // Start timing for timeout detection (covers all evaluation phases)
+        let start = Instant::now();
+
         // Check unless conditions (file-level skip)
         if let Some(unless_conds) = &self.unless {
             // Default 'any' semantics: skip if ANY condition matches
@@ -1758,50 +1741,54 @@ impl CompositeTrait {
             }
         }
 
-        // Start timing for timeout detection
-        let start = Instant::now();
-
         // Evaluate positive conditions based on the boolean operator(s)
         let has_positive = self.all.is_some() || self.any.is_some();
 
-        let positive_result = match (&self.all, &self.any) {
+        let (positive_result, proximity_tags) = match (&self.all, &self.any) {
             (Some(all), Some(any)) => {
                 // Both all AND any: all must match AND any must match (respecting `needs`)
-                let all_result = self.eval_requires_all(all, ctx);
+                let (all_result, all_tags) = self.eval_requires_all(all, ctx);
                 if !all_result.matched {
                     return None;
                 }
-                // Handle needs constraint on `any` conditions (same as any-only case)
-                let any_result = if let Some(required_count) = self.needs {
+                let (any_result, any_tags) = if let Some(required_count) = self.needs {
                     self.eval_count_constraints(any, None, Some(required_count), None, ctx)
                 } else {
                     self.eval_requires_any(any, ctx)
-                };
+                }; // both branches return (ConditionResult, Vec<TaggedLocation>)
                 if !any_result.matched {
                     return None;
+                }
+                // Merge tags, offsetting any-condition indices past all-conditions
+                let all_count = all.len();
+                let mut tags = all_tags;
+                for mut t in any_tags {
+                    t.condition_index += all_count;
+                    tags.push(t);
                 }
                 // Combine evidence and trait IDs from both (limited to MAX_EVIDENCE_PER_TRAIT)
                 let mut combined_evidence = all_result.evidence;
                 combined_evidence.extend(any_result.evidence);
-                // Deduplicate before truncating to maximize unique evidence
                 let combined_evidence = deduplicate_evidence(combined_evidence);
                 let match_count = combined_evidence.len();
                 let mut combined_evidence = combined_evidence;
                 combined_evidence.truncate(MAX_EVIDENCE_PER_TRAIT);
                 let mut combined_trait_ids = all_result.matched_trait_ids;
                 combined_trait_ids.extend(any_result.matched_trait_ids);
-                ConditionResult {
-                    matched: true,
-                    evidence: combined_evidence,
-                    match_count,
-                    warnings: Vec::new(),
-                    precision: 0.0,
-                    matched_trait_ids: combined_trait_ids,
-                }
+                (
+                    ConditionResult {
+                        matched: true,
+                        evidence: combined_evidence,
+                        match_count,
+                        warnings: Vec::new(),
+                        precision: 0.0,
+                        matched_trait_ids: combined_trait_ids,
+                    },
+                    tags,
+                )
             }
             (Some(conds), None) => self.eval_requires_all(conds, ctx),
             (None, Some(conds)) => {
-                // Handle needs constraint on `any` conditions
                 if let Some(required_count) = self.needs {
                     self.eval_count_constraints(conds, None, Some(required_count), None, ctx)
                 } else {
@@ -1810,14 +1797,17 @@ impl CompositeTrait {
             }
             (None, None) => {
                 // No positive conditions - will check none below
-                ConditionResult {
-                    matched: true,
-                    evidence: Vec::new(),
-                    match_count: 0,
-                    warnings: Vec::new(),
-                    precision: 0.0,
-                    matched_trait_ids: Vec::new(),
-                }
+                (
+                    ConditionResult {
+                        matched: true,
+                        evidence: Vec::new(),
+                        match_count: 0,
+                        warnings: Vec::new(),
+                        precision: 0.0,
+                        matched_trait_ids: Vec::new(),
+                    },
+                    Vec::new(),
+                )
             }
         };
 
@@ -1857,8 +1847,11 @@ impl CompositeTrait {
 
         if result.matched {
             // Check proximity constraints (near_lines, near_bytes)
-            let proximity_result =
-                self.check_proximity_constraints(result.evidence.clone(), ctx.binary_data);
+            let proximity_result = self.check_proximity_constraints(
+                result.evidence.clone(),
+                &proximity_tags,
+                ctx.binary_data,
+            );
 
             // Record proximity debug if applicable
             if self.near_lines.is_some() || self.near_bytes.is_some() {
@@ -1891,13 +1884,6 @@ impl CompositeTrait {
 
             // Check downgrade conditions
             if let Some(downgrade_conds) = &self.downgrade {
-                let debug_downgrade = std::env::var("DEBUG_DOWNGRADE").is_ok();
-                if debug_downgrade {
-                    eprintln!(
-                        "DEBUG: Evaluating downgrade for composite '{}' (current: {:?})",
-                        self.id, self.crit
-                    );
-                }
                 let triggered = self.eval_downgrade_conditions(downgrade_conds, ctx);
                 if triggered {
                     final_crit = match self.crit {
@@ -1920,13 +1906,6 @@ impl CompositeTrait {
                         });
                     }
                 }
-
-                if debug_downgrade {
-                    eprintln!(
-                        "DEBUG: Final criticality for composite '{}': {:?}",
-                        self.id, final_crit
-                    );
-                }
             }
 
             // Record match in debug collector
@@ -1936,8 +1915,6 @@ impl CompositeTrait {
                     debug.precision = result.precision + precision_boost;
                 }
             }
-
-            let boosted_conf = (self.conf + precision_boost).min(1.0);
 
             // Check for timeout violations before returning
             let duration = start.elapsed();
@@ -1984,13 +1961,13 @@ impl CompositeTrait {
                 id: self.id.clone(),
                 kind: FindingKind::Capability,
                 desc: self.desc.clone(),
-                conf: boosted_conf,
+                conf: self.conf,
                 crit: final_crit,
                 mbc: self.mbc.clone(),
                 attack: self.attack.clone(),
                 trait_refs: result.matched_trait_ids.clone(),
                 evidence,
-                match_count: result.match_count,
+                match_count: 0, // not meaningful for composites
                 source_file: get_relative_source_file(&self.defined_in),
             })
         } else {
@@ -2028,7 +2005,6 @@ impl CompositeTrait {
         conditions: &DowngradeConditions,
         ctx: &EvaluationContext<'a>,
     ) -> bool {
-        let debug_downgrade = std::env::var("DEBUG_DOWNGRADE").is_ok();
         let mut has_any_block = false;
 
         // If 'all' is specified, every condition must match
@@ -2046,15 +2022,8 @@ impl CompositeTrait {
             has_any_block = true;
             let threshold = conditions.needs.unwrap_or(1);
             let mut matched_count = 0;
-            for (i, cond) in any_conds.iter().enumerate() {
-                let result = self.eval_condition(cond, ctx);
-                if debug_downgrade {
-                    eprintln!(
-                        "DEBUG CompositeTrait: downgrade any[{}] cond={:?} matched={}",
-                        i, cond, result.matched
-                    );
-                }
-                if result.matched {
+            for cond in any_conds {
+                if self.eval_condition(cond, ctx).matched {
                     matched_count += 1;
                 }
             }
@@ -2077,20 +2046,24 @@ impl CompositeTrait {
     }
 
     /// Evaluate ALL conditions must match (AND)
+    /// Returns (result, tagged_locations) where tagged_locations maps evidence to condition indices.
     fn eval_requires_all<'a>(
         &self,
         conds: &[Condition],
         ctx: &EvaluationContext<'a>,
-    ) -> ConditionResult {
+    ) -> (ConditionResult, Vec<TaggedLocation>) {
         let mut all_evidence = Vec::new();
         let mut total_precision = 0.0f32;
         let mut all_trait_ids = Vec::new();
+        let mut tags = Vec::new();
 
-        for condition in conds {
+        for (i, condition) in conds.iter().enumerate() {
             let result = self.eval_condition(condition, ctx);
             if !result.matched {
-                return ConditionResult::no_match();
+                return (ConditionResult::no_match(), Vec::new());
             }
+            // Tag evidence locations before merging
+            tags.extend(tag_evidence(&result.evidence, i));
             // Limit evidence to prevent explosion
             if all_evidence.len() < MAX_EVIDENCE_PER_TRAIT {
                 let remaining = MAX_EVIDENCE_PER_TRAIT - all_evidence.len();
@@ -2103,32 +2076,39 @@ impl CompositeTrait {
         // Deduplicate evidence before returning
         let all_evidence = deduplicate_evidence(all_evidence);
         let match_count = all_evidence.len();
-        ConditionResult {
-            matched: true,
-            evidence: all_evidence,
-            match_count,
-            warnings: Vec::new(),
-            precision: total_precision,
-            matched_trait_ids: all_trait_ids,
-        }
+        (
+            ConditionResult {
+                matched: true,
+                evidence: all_evidence,
+                match_count,
+                warnings: Vec::new(),
+                precision: total_precision,
+                matched_trait_ids: all_trait_ids,
+            },
+            tags,
+        )
     }
 
     /// Evaluate at least ONE condition must match (OR)
-    /// Collects evidence from ALL matching conditions, not just the first
+    /// Collects evidence from ALL matching conditions, not just the first.
+    /// Returns (result, tagged_locations) where tagged_locations maps evidence to condition indices.
     fn eval_requires_any<'a>(
         &self,
         conds: &[Condition],
         ctx: &EvaluationContext<'a>,
-    ) -> ConditionResult {
+    ) -> (ConditionResult, Vec<TaggedLocation>) {
         let mut any_matched = false;
         let mut all_evidence = Vec::new();
         let mut all_trait_ids = Vec::new();
         let mut min_precision = f32::MAX;
+        let mut tags = Vec::new();
 
-        for condition in conds {
+        for (i, condition) in conds.iter().enumerate() {
             let result = self.eval_condition(condition, ctx);
             if result.matched {
                 any_matched = true;
+                // Tag evidence locations before merging
+                tags.extend(tag_evidence(&result.evidence, i));
                 // Limit evidence to prevent explosion
                 if all_evidence.len() < MAX_EVIDENCE_PER_TRAIT {
                     let remaining = MAX_EVIDENCE_PER_TRAIT - all_evidence.len();
@@ -2144,17 +2124,21 @@ impl CompositeTrait {
         // Deduplicate evidence before returning
         let all_evidence = deduplicate_evidence(all_evidence);
         let match_count = all_evidence.len();
-        ConditionResult {
-            matched: any_matched,
-            evidence: all_evidence,
-            match_count,
-            warnings: Vec::new(),
-            precision,
-            matched_trait_ids: all_trait_ids,
-        }
+        (
+            ConditionResult {
+                matched: any_matched,
+                evidence: all_evidence,
+                match_count,
+                warnings: Vec::new(),
+                precision,
+                matched_trait_ids: all_trait_ids,
+            },
+            tags,
+        )
     }
 
-    /// Evaluate with count constraints: exact count, min_count, max_count
+    /// Evaluate with count constraints: exact count, min_count, max_count.
+    /// Returns (result, tagged_locations) where tagged_locations maps evidence to condition indices.
     fn eval_count_constraints<'a>(
         &self,
         conds: &[Condition],
@@ -2162,16 +2146,19 @@ impl CompositeTrait {
         min: Option<usize>,
         max: Option<usize>,
         ctx: &EvaluationContext<'a>,
-    ) -> ConditionResult {
+    ) -> (ConditionResult, Vec<TaggedLocation>) {
         let mut matched_count = 0;
         let mut all_evidence = Vec::new();
         let mut all_trait_ids = Vec::new();
         let mut precision_sum = 0.0f32;
+        let mut tags = Vec::new();
 
-        for condition in conds.iter() {
+        for (i, condition) in conds.iter().enumerate() {
             let result = self.eval_condition(condition, ctx);
             if result.matched {
                 matched_count += 1;
+                // Tag evidence locations before merging
+                tags.extend(tag_evidence(&result.evidence, i));
                 // Limit evidence to prevent explosion
                 if all_evidence.len() < MAX_EVIDENCE_PER_TRAIT {
                     let remaining = MAX_EVIDENCE_PER_TRAIT - all_evidence.len();
@@ -2203,14 +2190,17 @@ impl CompositeTrait {
         let all_evidence = deduplicate_evidence(all_evidence);
         let evidence_for_result = if matched { all_evidence } else { Vec::new() };
         let match_count_for_result = evidence_for_result.len();
-        ConditionResult {
-            matched,
-            evidence: evidence_for_result,
-            match_count: match_count_for_result,
-            warnings: Vec::new(),
-            precision: avg_precision,
-            matched_trait_ids: if matched { all_trait_ids } else { Vec::new() },
-        }
+        (
+            ConditionResult {
+                matched,
+                evidence: evidence_for_result,
+                match_count: match_count_for_result,
+                warnings: Vec::new(),
+                precision: avg_precision,
+                matched_trait_ids: if matched { all_trait_ids } else { Vec::new() },
+            },
+            if matched { tags } else { Vec::new() },
+        )
     }
 
     /// Evaluate NONE of the conditions can match (NOT)
@@ -2620,20 +2610,25 @@ impl CompositeTrait {
 
     /// Check if evidence satisfies proximity constraints.
     /// Returns None if constraints fail, otherwise returns the evidence unchanged.
+    ///
+    /// When `tagged_locations` is non-empty, proximity requires that a window contains
+    /// evidence from distinct conditions (cross-condition proximity). When empty,
+    /// falls back to counting individual evidence items.
     fn check_proximity_constraints(
         &self,
         evidence: Vec<Evidence>,
+        tagged_locations: &[TaggedLocation],
         binary_data: &[u8],
     ) -> Option<Vec<Evidence>> {
         if self.near_lines.is_none() && self.near_bytes.is_none() {
             return Some(evidence);
         }
 
-        // Derive min_required from rule structure, not from `needs` (which controls `any` matching).
+        // Derive min_distinct from rule structure.
         // For `all`: every condition must contribute nearby evidence.
         // For `any` with `needs`: that many conditions must contribute nearby evidence.
         // Always at least 2 — proximity with a single item is vacuously true.
-        let min_required = {
+        let min_distinct = {
             let all_count = self.all.as_ref().map_or(0, Vec::len);
             let any_required = if self.any.is_some() {
                 self.needs.unwrap_or(1)
@@ -2643,20 +2638,82 @@ impl CompositeTrait {
             (all_count + any_required).max(2)
         };
 
-        if let Some(max_line_span) = self.near_lines {
-            let line_starts = build_line_index(binary_data);
-            if !evidence_within_line_range(&evidence, max_line_span, min_required, &line_starts) {
-                return None;
+        // Track the winning window range for evidence filtering
+        let mut line_window: Option<(usize, usize)> = None;
+        let mut byte_window: Option<(u64, u64)> = None;
+        let mut line_starts_cache: Option<Vec<usize>> = None;
+
+        if !tagged_locations.is_empty() {
+            // Cross-condition proximity: require distinct condition indices in window
+            if let Some(max_line_span) = self.near_lines {
+                let line_starts = build_line_index(binary_data);
+                let items: Vec<(usize, usize)> = tagged_locations
+                    .iter()
+                    .filter_map(|t| {
+                        tagged_to_line(t, &line_starts).map(|line| (line, t.condition_index))
+                    })
+                    .collect();
+                match evidence_within_line_range_grouped(&items, max_line_span, min_distinct) {
+                    Some(window) => line_window = Some(window),
+                    None => return None,
+                }
+                line_starts_cache = Some(line_starts);
+            }
+
+            if let Some(max_byte_span) = self.near_bytes {
+                let items: Vec<(u64, usize)> = tagged_locations
+                    .iter()
+                    .filter_map(|t| tagged_to_byte_offset(t).map(|off| (off, t.condition_index)))
+                    .collect();
+                match evidence_within_byte_range_grouped(&items, max_byte_span, min_distinct) {
+                    Some(window) => byte_window = Some(window),
+                    None => return None,
+                }
+            }
+        } else {
+            // Fallback: no condition tags (shouldn't happen for composites, but safe default)
+            if let Some(max_line_span) = self.near_lines {
+                let line_starts = build_line_index(binary_data);
+                match evidence_within_line_range(
+                    &evidence,
+                    max_line_span,
+                    min_distinct,
+                    &line_starts,
+                ) {
+                    Some(window) => line_window = Some(window),
+                    None => return None,
+                }
+                line_starts_cache = Some(line_starts);
+            }
+
+            if let Some(max_byte_span) = self.near_bytes {
+                match evidence_within_byte_range(&evidence, max_byte_span, min_distinct) {
+                    Some(window) => byte_window = Some(window),
+                    None => return None,
+                }
             }
         }
 
-        if let Some(max_byte_span) = self.near_bytes {
-            if !evidence_within_byte_range(&evidence, max_byte_span, min_required) {
-                return None;
-            }
-        }
+        // Filter evidence to only items within the winning proximity window
+        let filtered: Vec<Evidence> = evidence
+            .into_iter()
+            .filter(|ev| {
+                if let (Some((start, end)), Some(ref ls)) = (line_window, &line_starts_cache) {
+                    if let Some(line) = evidence_to_line(ev, ls) {
+                        return line >= start && line <= end;
+                    }
+                }
+                if let Some((start, end)) = byte_window {
+                    if let Some(offset) = evidence_to_byte_offset(ev) {
+                        return offset >= start && offset <= end;
+                    }
+                }
+                // Evidence without location info: keep (e.g., exclusion sentinels from none:)
+                true
+            })
+            .collect();
 
-        Some(evidence)
+        Some(filtered)
     }
 
     /// Returns true if this rule has negative (none) conditions
@@ -2668,6 +2725,69 @@ impl CompositeTrait {
 
 /// Build an index of byte offsets for the start of each line (0-indexed line numbers).
 /// Line 0 starts at byte 0, line 1 starts after the first `\n`, etc.
+/// Location info tagged with its originating condition index, for cross-condition proximity checks.
+pub(super) struct TaggedLocation {
+    /// First byte offset from evidence (if available)
+    pub byte_offset: Option<u64>,
+    /// Location string from evidence (if available, e.g. "42:5" or "0x1234")
+    pub location: Option<String>,
+    /// Index of the condition that produced this evidence
+    pub condition_index: usize,
+}
+
+/// Extract a line number from a TaggedLocation.
+fn tagged_to_line(tagged: &TaggedLocation, line_starts: &[usize]) -> Option<usize> {
+    // Try "line:column" format first
+    if let Some(ref loc) = tagged.location {
+        if let Some(colon_pos) = loc.find(':') {
+            if let Ok(line) = loc[..colon_pos].parse::<usize>() {
+                if line > 0 {
+                    return Some(line);
+                }
+            }
+        }
+    }
+
+    // Try byte offset
+    if let Some(offset) = tagged.byte_offset {
+        return Some(byte_offset_to_line(line_starts, offset as usize));
+    }
+
+    // Try hex offset from location
+    if let Some(ref loc) = tagged.location {
+        if let Some(offset) = parse_location_as_byte_offset(loc) {
+            return Some(byte_offset_to_line(line_starts, offset as usize));
+        }
+    }
+
+    None
+}
+
+/// Extract a byte offset from a TaggedLocation.
+fn tagged_to_byte_offset(tagged: &TaggedLocation) -> Option<u64> {
+    if let Some(offset) = tagged.byte_offset {
+        return Some(offset);
+    }
+
+    if let Some(ref loc) = tagged.location {
+        return parse_location_as_byte_offset(loc);
+    }
+
+    None
+}
+
+/// Extract TaggedLocations from a condition's evidence items.
+fn tag_evidence(evidence: &[Evidence], condition_index: usize) -> Vec<TaggedLocation> {
+    evidence
+        .iter()
+        .map(|ev| TaggedLocation {
+            byte_offset: ev.offsets.first().copied(),
+            location: ev.location.clone(),
+            condition_index,
+        })
+        .collect()
+}
+
 pub(super) fn build_line_index(data: &[u8]) -> Vec<usize> {
     let mut starts = vec![0];
     for (i, &b) in data.iter().enumerate() {
@@ -2758,19 +2878,20 @@ fn parse_hex_or_dec_offset(s: &str) -> Option<u64> {
 }
 
 /// Check if at least `min_required` evidence items have line numbers within `max_line_span`.
+/// Returns the (start_line, end_line) of the first qualifying window, or None.
 fn evidence_within_line_range(
     evidence: &[Evidence],
     max_line_span: usize,
     min_required: usize,
     line_starts: &[usize],
-) -> bool {
+) -> Option<(usize, usize)> {
     let mut line_numbers: Vec<usize> = evidence
         .iter()
         .filter_map(|e| evidence_to_line(e, line_starts))
         .collect();
 
     if line_numbers.len() < min_required {
-        return false;
+        return None;
     }
 
     line_numbers.sort_unstable();
@@ -2783,7 +2904,7 @@ fn evidence_within_line_range(
             if line - start_line <= max_line_span {
                 count += 1;
                 if count >= min_required {
-                    return true;
+                    return Some((start_line, line));
                 }
             } else {
                 break;
@@ -2791,22 +2912,22 @@ fn evidence_within_line_range(
         }
     }
 
-    false
+    None
 }
 
-/// Check if at least `min_required` evidence items have byte offsets within `max_byte_span`.
+/// Returns the (start_offset, end_offset) of the first qualifying window, or None.
 fn evidence_within_byte_range(
     evidence: &[Evidence],
     max_byte_span: usize,
     min_required: usize,
-) -> bool {
+) -> Option<(u64, u64)> {
     let mut byte_offsets: Vec<u64> = evidence
         .iter()
         .filter_map(evidence_to_byte_offset)
         .collect();
 
     if byte_offsets.len() < min_required {
-        return false;
+        return None;
     }
 
     byte_offsets.sort_unstable();
@@ -2818,7 +2939,7 @@ fn evidence_within_byte_range(
             if (offset - start) <= max_byte_span as u64 {
                 count += 1;
                 if count >= min_required {
-                    return true;
+                    return Some((start, offset));
                 }
             } else {
                 break;
@@ -2826,5 +2947,68 @@ fn evidence_within_byte_range(
         }
     }
 
-    false
+    None
+}
+
+/// Returns the (start_line, end_line) of the first qualifying window, or None.
+fn evidence_within_line_range_grouped(
+    items: &[(usize, usize)], // (line_number, condition_index)
+    max_line_span: usize,
+    min_distinct: usize,
+) -> Option<(usize, usize)> {
+    if items.len() < min_distinct {
+        return None;
+    }
+
+    let mut sorted: Vec<(usize, usize)> = items.to_vec();
+    sorted.sort_unstable_by_key(|&(line, _)| line);
+
+    // Sliding window: find any window of max_line_span with min_distinct condition indices
+    for i in 0..sorted.len() {
+        let start_line = sorted[i].0;
+        let mut seen = rustc_hash::FxHashSet::default();
+        for &(line, cond_idx) in &sorted[i..] {
+            if line - start_line <= max_line_span {
+                seen.insert(cond_idx);
+                if seen.len() >= min_distinct {
+                    return Some((start_line, line));
+                }
+            } else {
+                break;
+            }
+        }
+    }
+
+    None
+}
+
+/// Returns the (start_offset, end_offset) of the first qualifying window, or None.
+fn evidence_within_byte_range_grouped(
+    items: &[(u64, usize)], // (byte_offset, condition_index)
+    max_byte_span: usize,
+    min_distinct: usize,
+) -> Option<(u64, u64)> {
+    if items.len() < min_distinct {
+        return None;
+    }
+
+    let mut sorted: Vec<(u64, usize)> = items.to_vec();
+    sorted.sort_unstable_by_key(|&(offset, _)| offset);
+
+    for i in 0..sorted.len() {
+        let start = sorted[i].0;
+        let mut seen = rustc_hash::FxHashSet::default();
+        for &(offset, cond_idx) in &sorted[i..] {
+            if (offset - start) <= max_byte_span as u64 {
+                seen.insert(cond_idx);
+                if seen.len() >= min_distinct {
+                    return Some((start, offset));
+                }
+            } else {
+                break;
+            }
+        }
+    }
+
+    None
 }

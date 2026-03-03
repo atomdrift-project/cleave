@@ -199,19 +199,23 @@ impl<'a> EvaluationContext<'a> {
         self
     }
 
-    /// Check if a finding ID exists (exact match only, O(1))
+    /// Check if a finding ID exists (exact match only)
+    ///
+    /// Uses hash index for fast negative lookups, then verifies with string
+    /// comparison to guard against hash collisions.
     #[must_use]
     pub(crate) fn has_finding_exact(&self, id: &str) -> bool {
         if let Some(ref index) = self.finding_id_index {
-            index.contains(&hash_str(id))
-        } else {
-            // Fallback to linear search if index not built
-            self.report.findings.iter().any(|f| f.id == id)
-                || self
-                    .additional_findings
-                    .map(|af| af.iter().any(|f| f.id == id))
-                    .unwrap_or(false)
+            if !index.contains(&hash_str(id)) {
+                return false;
+            }
         }
+        // Verify with actual string comparison
+        self.report.findings.iter().any(|f| f.id == id)
+            || self
+                .additional_findings
+                .map(|af| af.iter().any(|f| f.id == id))
+                .unwrap_or(false)
     }
 }
 

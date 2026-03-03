@@ -4,8 +4,8 @@ composite_rules:
     crit: hostile
     all:
       - type: trait
-        id: well-known/malware/kpot/fingerprint::jkhgfdssfd
+        id: well-known/malware/stealer/kpot/fingerprint::jkhgfdssfd
       - type: trait
-        id: well-known/malware/kpot/fingerprint::gui-guid
+        id: well-known/malware/stealer/kpot/fingerprint::gui-guid
       - type: trait
         id: micro-behaviors/ui/winforms/component::excessive-vscrollbar

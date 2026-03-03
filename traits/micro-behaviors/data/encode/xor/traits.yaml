@@ -158,15 +158,3 @@ composite_rules:
       any:
         - id: micro-behaviors/data/compression
 
-  - id: mirai-xor-obfuscation
-    desc: "Mirai XOR obfuscation"
-    crit: suspicious
-    conf: 0.9
-    for: [elf, shell]
-    attack: "T1027"
-    mbc: "B0041"
-    all:
-      # Require actual Mirai detection (composite), not just any trait in the directory
-      # The /detected composite requires 6+ indicators plus size constraints
-      - id: well-known/malware/botnet/mirai::detected
-      - id: xor-obfuscation-evidence

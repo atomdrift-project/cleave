@@ -1671,14 +1671,15 @@ impl Condition {
                 kind,
                 node,
                 exact,
+                substr,
                 regex,
                 query,
                 language,
                 ..
             } => {
-                // Validate mode: either (kind/node + exact/regex) or query, not both
+                // Validate mode: either (kind/node + exact/substr/regex) or query, not both
                 let has_simple_mode = kind.is_some() || node.is_some();
-                let has_pattern = exact.is_some() || regex.is_some();
+                let has_pattern = exact.is_some() || substr.is_some() || regex.is_some();
                 let has_query = query.is_some();
 
                 if has_query && has_simple_mode {
@@ -1695,7 +1696,7 @@ impl Condition {
 
                 if has_simple_mode && !has_pattern {
                     return Err(anyhow::anyhow!(
-                        "ast condition with 'kind'/'node' must have 'exact' or 'regex'"
+                        "ast condition with 'kind'/'node' must have 'exact', 'substr', or 'regex'"
                     ));
                 }
 

@@ -32,6 +32,14 @@ traits:
       # 30 ?? = xor mem,reg; 4x = inc/dec reg; 83 ?? FF = cmp ??,0xFF; 75 = jne
       pattern: "30 ?? [1] 83 ?? FF 75"
 
+  - id: rc4-decode-function
+    desc: RC4 decode function reference
+    crit: notable
+    conf: 0.75
+    if:
+      type: raw
+      word: "rc4_decode"
+
   - id: rc4-strings
     desc: "RC4 encryption strings"
     crit: baseline

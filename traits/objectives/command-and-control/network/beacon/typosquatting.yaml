@@ -156,7 +156,6 @@ composite_rules:
     mbc: "B0030"
     for: [python, javascript, shell]
     platforms: [all]
-    needs: 2
     all:
       - id: github-typosquat
       - id: c2-php-endpoint

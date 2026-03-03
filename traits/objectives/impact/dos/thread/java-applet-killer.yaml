@@ -7,11 +7,13 @@ defaults:
 
 traits:
   - id: applet-killer-strings
-    desc: Detects AppletKiller-specific strings
+    desc: AppletKiller family strings
     crit: notable
     conf: 0.8
+    for: [java]
     if:
-      id: well-known/malware/dos/applet-killer::strings
+      type: raw
+      regex: '(?i)(killer|killAllThreads|AppletKiller)'
 
 composite_rules:
   - id: applet-killer-dos

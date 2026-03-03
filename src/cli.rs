@@ -130,8 +130,8 @@ pub(crate) struct Args {
     pub log_file: Option<String>,
 
     /// Enable full trait validation (expensive, ~60s+). Disabled by default.
-    /// Use --validate=true to enable. Can also set CLEAVE_VALIDATE=1 to enable.
-    #[arg(long, action = clap::ArgAction::Set, default_value_t = false)]
+    /// Can also set CLEAVE_VALIDATE=1 to enable.
+    #[arg(long)]
     pub validate: bool,
 
     /// Additional password to try for encrypted zip files (can be specified multiple times)

@@ -1018,3 +1018,139 @@ fn test_eval_syscall_arch_exact_match() {
         "Substring arch '64' should NOT match 'x86_64'"
     );
 }
+
+// =============================================================================
+// T8: Section permission flags
+// =============================================================================
+
+#[test]
+fn test_eval_section_executable_flag() {
+    let mut report = create_test_report();
+    report.sections.push(Section {
+        name: ".text".to_string(),
+        address: Some(0x1000),
+        size: 1000,
+        entropy: 6.5,
+        permissions: Some("rx".to_string()),
+    });
+    report.sections.push(Section {
+        name: ".data".to_string(),
+        address: Some(0x2000),
+        size: 500,
+        entropy: 4.0,
+        permissions: Some("rw".to_string()),
+    });
+    let data = vec![];
+    let ctx = create_test_context(&report, &data);
+
+    // Match only executable sections
+    let result = eval_section(
+        None,
+        None,
+        None,
+        None,
+        false,
+        None,
+        None,
+        None,
+        None,
+        None,       // readable
+        None,       // writable
+        Some(true), // executable = true
+        &ctx,
+    );
+    assert!(
+        result.matched,
+        ".text with 'rx' perms should match executable=true"
+    );
+    assert_eq!(result.evidence.len(), 1);
+    assert!(result.evidence[0].value.contains(".text"));
+
+    // .data has "rw" — not executable
+    let result = eval_section(
+        None,
+        None,
+        None,
+        None,
+        false,
+        None,
+        None,
+        None,
+        None,
+        None,       // readable
+        None,       // writable
+        Some(true), // executable = true
+        &ctx,
+    );
+    // Only .text should match, not .data
+    assert_eq!(result.evidence.len(), 1, "Only .text should be executable");
+}
+
+#[test]
+fn test_eval_section_permission_no_match() {
+    let mut report = create_test_report();
+    report.sections.push(Section {
+        name: ".text".to_string(),
+        address: Some(0x1000),
+        size: 1000,
+        entropy: 6.5,
+        permissions: None, // No permissions info
+    });
+    let data = vec![];
+    let ctx = create_test_context(&report, &data);
+
+    // Section without permissions should fail strict permission checks
+    let result = eval_section(
+        None,
+        None,
+        None,
+        None,
+        false,
+        None,
+        None,
+        None,
+        None,
+        Some(true), // readable = true
+        None,
+        None,
+        &ctx,
+    );
+    assert!(
+        !result.matched,
+        "Section without permissions should fail readable=true check"
+    );
+}
+
+// =============================================================================
+// T10: Syscall validation edge cases
+// =============================================================================
+
+#[test]
+fn test_eval_syscall_empty_lists_no_match() {
+    let mut report = create_test_report();
+    report.syscalls.push(SyscallInfo {
+        name: "read".to_string(),
+        number: 0,
+        address: 0x1000,
+        desc: "Read from file".to_string(),
+        arch: "x86_64".to_string(),
+    });
+    let data = vec![];
+    let ctx = create_test_context(&report, &data);
+
+    // Empty name list — should not match anything
+    let empty_names: Vec<String> = vec![];
+    let result = eval_syscall(Some(&empty_names), None, None, &ctx);
+    assert!(
+        !result.matched,
+        "Empty name list should not match any syscalls"
+    );
+
+    // Empty number list — should not match anything
+    let empty_numbers: Vec<u32> = vec![];
+    let result = eval_syscall(None, Some(&empty_numbers), None, &ctx);
+    assert!(
+        !result.matched,
+        "Empty number list should not match any syscalls"
+    );
+}

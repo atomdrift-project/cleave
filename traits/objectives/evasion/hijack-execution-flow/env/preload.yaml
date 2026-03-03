@@ -29,3 +29,17 @@ traits:
     downgrade:
       any:
         - id: metadata/signed/platform::apple
+
+composite_rules:
+  - id: ld-hijack-env
+    desc: Dynamic linker hijacking via environment
+    crit: suspicious
+    conf: 0.8
+    mbc: "F0015"
+    attack: "T1574.006"
+    any:
+      - id: micro-behaviors/os/linker/env::ld-preload
+      - id: micro-behaviors/os/linker/env::ld-audit
+    downgrade:
+      any:
+        - id: well-known/tools/sysadmin::stdbuf-tool

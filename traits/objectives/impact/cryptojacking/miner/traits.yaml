@@ -1,106 +1,789 @@
+# Cryptominer Detection - Generic Behavioral Patterns
+# ATT&CK: T1496 (Resource Hijacking)
+
 defaults:
-  for:
-  - all
+  for: [all]
+
 traits:
-- id: stratum-tcp
-  desc: stratum+tcp protocol
-  crit: notable
-  conf: 0.8
-  mbc: B0041
-  attack: T1496
-  if:
-    type: string
-    substr: "stratum+tcp://"
+  # === Stratum Protocol ===
+  - id: stratum-tcp
+    desc: stratum+tcp protocol
+    crit: notable
+    conf: 0.8
+    mbc: "B0041"
+    attack: "T1496"
+    if:
+      type: string
+      substr: "stratum+tcp://"
 
-- id: stratum-ssl
-  desc: stratum+ssl protocol
-  crit: notable
-  conf: 0.8
-  mbc: B0041
-  attack: T1496
-  if:
-    type: string
-    substr: "stratum+ssl://"
+  - id: stratum-ssl
+    desc: stratum+ssl protocol
+    crit: notable
+    conf: 0.8
+    mbc: "B0041"
+    attack: "T1496"
+    if:
+      type: string
+      substr: "stratum+ssl://"
 
-- id: pool-subdomain
-  desc: pool. subdomain prefix
-  crit: notable
-  conf: 0.7
-  if:
-    type: string
-    regex: 'pool\.[a-z0-9-]+\.[a-z]{2,10}'
+  - id: stratum-lower
+    desc: stratum string (lowercase)
+    crit: baseline
+    conf: 0.7
+    for: [elf, macho, pe, so, dylib, dll, shell]
+    if:
+      type: string
+      word: "stratum"
 
-- id: pool-url
-  desc: Mining pool URL reference
-  crit: notable
-  conf: 0.7
-  if:
-    type: string
-    regex: '(https?|stratum\+tcp|stratum\+ssl)://[^\s]{1,120}pool'
-  not:
-    - substr: spool
+  - id: stratum-title
+    desc: Stratum string (title case)
+    crit: baseline
+    conf: 0.7
+    for: [elf, macho, pe, so, dylib, dll, shell]
+    if:
+      type: string
+      word: "Stratum"
 
-- id: miner-word
-  desc: miner keyword
-  crit: notable
-  conf: 0.4
-  if:
-    type: string
-    word: miner
-- id: hashrate-str
-  desc: hashrate keyword
-  crit: notable
-  conf: 0.5
-  if:
-    type: string
-    substr: hashrate
-- id: wallet-ref
-  desc: wallet keyword
-  crit: notable
-  conf: 0.4
-  if:
-    type: string
-    word: wallet
-- id: coinhive-str
-  desc: coinhive reference
-  crit: notable
-  conf: 0.6
-  if:
-    type: string
-    substr: coinhive
-- id: cryptonight-str
-  desc: cryptonight algorithm
-  crit: notable
-  conf: 0.6
-  if:
-    type: string
-    word: cryptonight
-- id: monero-lower
-  desc: monero cryptocurrency reference
-  crit: notable
-  conf: 0.5
-  if:
-    type: string
-    exact: monero
+  - id: stratum-upper
+    desc: STRATUM string (uppercase)
+    crit: baseline
+    conf: 0.7
+    for: [elf, macho, pe, so, dylib, dll, shell]
+    if:
+      type: string
+      word: "STRATUM"
+
+  - id: mining-subscribe
+    desc: mining.subscribe Stratum method
+    crit: baseline
+    conf: 0.8
+    for: [elf, macho, pe, so, dylib, dll, shell]
+    if:
+      type: string
+      substr: "mining.subscribe"
+
+  - id: mining-authorize
+    desc: mining.authorize Stratum method
+    crit: baseline
+    conf: 0.8
+    for: [elf, macho, pe, so, dylib, dll, shell]
+    if:
+      type: string
+      substr: "mining.authorize"
+
+  - id: mining-submit
+    desc: mining.submit Stratum method
+    crit: baseline
+    conf: 0.8
+    for: [elf, macho, pe, so, dylib, dll, shell]
+    if:
+      type: string
+      substr: "mining.submit"
+
+  # === Pool Infrastructure ===
+  - id: pool-subdomain
+    desc: pool. subdomain prefix
+    crit: notable
+    conf: 0.7
+    if:
+      type: string
+      regex: 'pool\.[a-z0-9-]+\.[a-z]{2,10}'
+
+  - id: pool-url
+    desc: Mining pool URL reference
+    crit: notable
+    conf: 0.7
+    if:
+      type: string
+      regex: '(https?|stratum\+tcp|stratum\+ssl)://[^\s]{1,120}pool'
+    not:
+      - substr: spool
+
+  - id: pool-port-3333
+    desc: ":3333 common mining pool port"
+    crit: baseline
+    conf: 0.7
+    for: [elf, macho, pe, so, dylib, dll, shell]
+    if:
+      type: string
+      substr: ":3333"
+
+  - id: pool-port-14433
+    desc: ":14433 common mining pool port"
+    crit: baseline
+    conf: 0.7
+    for: [elf, macho, pe, so, dylib, dll, shell]
+    if:
+      type: string
+      substr: ":14433"
+
+  # === Known Mining Pool Domains ===
+  - id: xmrpool-eu
+    desc: xmrpool.eu mining pool
+    crit: baseline
+    conf: 0.85
+    for: [elf, macho, pe, so, dylib, dll, shell, python]
+    if:
+      type: string
+      substr: "xmrpool.eu"
+
+  - id: minexmr-com
+    desc: minexmr.com mining pool
+    crit: baseline
+    conf: 0.85
+    for: [elf, macho, pe, so, dylib, dll, shell, python]
+    if:
+      type: string
+      substr: "minexmr.com"
+
+  - id: supportxmr-com
+    desc: supportxmr.com mining pool
+    crit: baseline
+    conf: 0.85
+    for: [elf, macho, pe, so, dylib, dll, shell, python]
+    if:
+      type: string
+      substr: "supportxmr.com"
+
+  - id: nanopool-org
+    desc: nanopool.org mining pool
+    crit: baseline
+    conf: 0.85
+    for: [elf, macho, pe, so, dylib, dll, shell, python]
+    if:
+      type: string
+      substr: "nanopool.org"
+
+  - id: f2pool-com
+    desc: f2pool.com mining pool
+    crit: baseline
+    conf: 0.85
+    for: [elf, macho, pe, so, dylib, dll, shell, python]
+    if:
+      type: string
+      substr: "f2pool.com"
+
+  - id: hashvault-pro
+    desc: hashvault.pro mining pool
+    crit: baseline
+    conf: 0.85
+    for: [elf, macho, pe, so, dylib, dll, shell, python]
+    if:
+      type: string
+      substr: "hashvault.pro"
+
+  - id: pool-minergate-com
+    desc: pool.minergate.com mining pool
+    crit: baseline
+    conf: 0.85
+    for: [elf, macho, pe, so, dylib, dll, shell, python]
+    if:
+      type: string
+      substr: "pool.minergate.com"
+
+  - id: moneroocean-stream
+    desc: moneroocean.stream mining pool
+    crit: baseline
+    conf: 0.85
+    for: [elf, macho, pe, so, dylib, dll, shell, python]
+    if:
+      type: string
+      substr: "moneroocean.stream"
+
+  # === Mining Keywords ===
+  - id: miner-word
+    desc: miner keyword
+    crit: notable
+    conf: 0.4
+    if:
+      type: string
+      word: "miner"
+
+  - id: miner-title
+    desc: Miner string (title case)
+    crit: baseline
+    conf: 0.6
+    for: [elf, macho, pe, so, dylib, dll, shell]
+    if:
+      type: string
+      word: "Miner"
+
+  - id: miner-upper
+    desc: MINER string (uppercase)
+    crit: baseline
+    conf: 0.6
+    for: [elf, macho, pe, so, dylib, dll, shell]
+    if:
+      type: string
+      word: "MINER"
+
+  - id: hashrate-str
+    desc: hashrate keyword
+    crit: notable
+    conf: 0.5
+    if:
+      type: string
+      substr: "hashrate"
+
+  - id: hashrate-title
+    desc: Hashrate metric (title case)
+    crit: baseline
+    conf: 0.75
+    for: [elf, macho, pe, so, dylib, dll]
+    if:
+      type: string
+      word: "Hashrate"
+
+  - id: hashrate-upper
+    desc: HASHRATE metric (uppercase)
+    crit: baseline
+    conf: 0.75
+    for: [elf, macho, pe, so, dylib, dll]
+    if:
+      type: string
+      word: "HASHRATE"
+
+  - id: wallet-ref
+    desc: wallet keyword
+    crit: notable
+    conf: 0.4
+    if:
+      type: string
+      word: "wallet"
+
+  - id: coinhive-str
+    desc: coinhive reference
+    crit: notable
+    conf: 0.6
+    if:
+      type: string
+      substr: "coinhive"
+
+  - id: mining-lower
+    desc: mining string (lowercase)
+    crit: baseline
+    conf: 0.6
+    for: [elf, macho, pe, so, dylib, dll, shell]
+    if:
+      type: string
+      word: "mining"
+
+  - id: mining-title
+    desc: Mining string (title case)
+    crit: baseline
+    conf: 0.6
+    for: [elf, macho, pe, so, dylib, dll, shell]
+    if:
+      type: string
+      word: "Mining"
+
+  - id: mining-upper
+    desc: MINING string (uppercase)
+    crit: baseline
+    conf: 0.6
+    for: [elf, macho, pe, so, dylib, dll, shell]
+    if:
+      type: string
+      word: "MINING"
+
+  # === CryptoNight Algorithm ===
+  - id: cryptonight-str
+    desc: cryptonight algorithm
+    crit: notable
+    conf: 0.6
+    if:
+      type: string
+      word: "cryptonight"
+
+  - id: cryptonight-title
+    desc: CryptoNight algorithm (title case)
+    crit: baseline
+    conf: 0.75
+    for: [elf, macho, pe, so, dylib, dll, shell]
+    if:
+      type: string
+      word: "CryptoNight"
+
+  - id: cryptonight-upper
+    desc: CRYPTONIGHT algorithm (uppercase)
+    crit: baseline
+    conf: 0.75
+    for: [elf, macho, pe, so, dylib, dll, shell]
+    if:
+      type: string
+      word: "CRYPTONIGHT"
+
+  - id: randomx
+    desc: RandomX mining algorithm
+    crit: baseline
+    conf: 0.75
+    for: [elf, macho, pe, so, dylib, dll]
+    if:
+      type: string
+      word: "RandomX"
+
+  - id: cn-variant
+    desc: CryptoNight variant prefix
+    crit: baseline
+    conf: 0.7
+    for: [elf, macho, pe, so, dylib, dll]
+    if:
+      type: string
+      exact: "cn/"
+
+  - id: cn-v7
+    desc: CryptoNight v7 algorithm
+    crit: baseline
+    conf: 0.8
+    for: [elf, macho, pe, so, dylib, dll]
+    if:
+      type: string
+      regex: "cryptonight(_v7|-monerov7)"
+
+  - id: cn-v8
+    desc: CryptoNight v8 algorithm
+    crit: baseline
+    conf: 0.8
+    for: [elf, macho, pe, so, dylib, dll]
+    if:
+      type: string
+      regex: "cryptonight(_v8|-monerov8)"
+
+  - id: cn-msr
+    desc: CryptoNight MSR variant
+    crit: baseline
+    conf: 0.8
+    for: [elf, macho, pe, so, dylib, dll]
+    if:
+      type: string
+      regex: "c[rn]/msr"
+
+  - id: cn-r
+    desc: CryptoNight R variant
+    crit: baseline
+    conf: 0.8
+    for: [elf, macho, pe, so, dylib, dll]
+    if:
+      type: string
+      regex: "cryptonight(_r|/r)"
+
+  - id: cn-conceal
+    desc: CryptoNight Conceal variant
+    crit: baseline
+    conf: 0.8
+    for: [elf, macho, pe, so, dylib, dll]
+    if:
+      type: string
+      regex: "c[rn]/conceal"
+
+  # === Monero ===
+  - id: monero-lower
+    desc: monero cryptocurrency reference
+    crit: notable
+    conf: 0.5
+    if:
+      type: string
+      exact: "monero"
+
+  - id: monero-wallet-4
+    desc: Monero wallet address starting with 4
+    crit: baseline
+    conf: 0.85
+    for: [elf, macho, pe, so, dylib, dll, shell, python]
+    if:
+      type: string
+      regex: "4[123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz]{94}"
+
+  - id: monero-wallet-8
+    desc: Monero wallet address starting with 8
+    crit: baseline
+    conf: 0.85
+    for: [elf, macho, pe, so, dylib, dll, shell, python]
+    if:
+      type: string
+      regex: "8[123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz]{94}"
+
+  # === Hardware Mining ===
+  - id: opencl-string
+    desc: OpenCL GPU computing framework
+    crit: baseline
+    conf: 0.7
+    for: [elf, macho, pe, so, dylib, dll]
+    if:
+      type: string
+      word: "OpenCL"
+
+  - id: cuda-string
+    desc: CUDA GPU computing framework
+    crit: baseline
+    conf: 0.7
+    for: [elf, macho, pe, so, dylib, dll]
+    if:
+      type: string
+      word: "CUDA"
+
+  - id: hugepages-lower
+    desc: hugepages string (lowercase)
+    crit: baseline
+    conf: 0.6
+    for: [elf, macho, pe, so, dylib, dll]
+    if:
+      type: string
+      word: "hugepages"
+
+  - id: hugepages-title
+    desc: Hugepages string (title case)
+    crit: baseline
+    conf: 0.6
+    for: [elf, macho, pe, so, dylib, dll]
+    if:
+      type: string
+      word: "Hugepages"
+
+  - id: hugepages-upper
+    desc: HUGEPAGES string (uppercase)
+    crit: baseline
+    conf: 0.6
+    for: [elf, macho, pe, so, dylib, dll]
+    if:
+      type: string
+      word: "HUGEPAGES"
+
+  - id: threads-string
+    desc: threads string
+    crit: baseline
+    conf: 0.5
+    for: [elf, macho, pe, so, dylib, dll]
+    if:
+      type: string
+      word: "threads"
+
+  - id: noofthreads-cli-help
+    desc: noOfThreads miner CLI help text
+    crit: notable
+    conf: 0.85
+    for: [pe, dll]
+    if:
+      type: string
+      exact: "The parameter [noOfThreads] is optional. When omitted it will use as many threads as there are logical cores in the system."
+
+  - id: noofthreads-token
+    desc: noOfThreads command-line parameter token
+    crit: notable
+    conf: 0.7
+    for: [pe, dll]
+    if:
+      type: string
+      exact: "[noOfThreads]"
+
+  - id: worker-thread-label
+    desc: Worker Thread label
+    crit: notable
+    conf: 0.6
+    for: [pe, dll]
+    if:
+      type: string
+      substr: "Worker Thread"
+
+  - id: boost-asio-win-iocp
+    desc: Boost.Asio Windows IOCP runtime marker
+    crit: notable
+    conf: 0.75
+    for: [pe, dll]
+    if:
+      type: string
+      word: "boost::asio::detail::win_iocp_io_context"
+
+  - id: ws2-32-dll-marker
+    desc: WS2_32 Winsock library reference
+    crit: notable
+    conf: 0.7
+    for: [pe, dll]
+    if:
+      type: string
+      exact: "WS2_32.dll"
+
+  # === Go Runtime (exclusion markers) ===
+  - id: go-runtime
+    desc: go.runtime Go runtime marker
+    crit: baseline
+    conf: 0.5
+    for: [elf, macho, pe]
+    if:
+      type: string
+      substr: "go.runtime"
 
 composite_rules:
-- id: miner
-  desc: Cryptocurrency mining patterns
-  crit: suspicious
-  conf: 0.66
-  mbc: B0041
-  attack: T1496
-  size_max: 500000
-  needs: 2
-  any:
-  - id: stratum-tcp
-  - id: stratum-ssl
-  - id: pool-subdomain
-  - id: pool-url
-  - id: miner-word
-  - id: well-known/malware/miner/xmrig::xmrig-name
-  - id: monero-lower
-  - id: hashrate-str
-  - id: wallet-ref
-  - id: coinhive-str
-  - id: cryptonight-str
+  # === Keyword helpers ===
+  - id: stratum-keyword
+    desc: "Stratum keyword variants"
+    for: [elf, macho, pe, so, dylib, dll, shell, python]
+    any:
+      - id: stratum-lower
+      - id: stratum-title
+      - id: stratum-upper
+
+  - id: mining-methods
+    desc: "Stratum mining RPC methods"
+    for: [elf, macho, pe, so, dylib, dll, shell, python]
+    any:
+      - id: mining-subscribe
+      - id: mining-authorize
+      - id: mining-submit
+
+  - id: pool-ports
+    desc: "Common mining pool ports"
+    for: [elf, macho, pe, so, dylib, dll, shell, python]
+    any:
+      - id: pool-port-3333
+      - id: pool-port-14433
+
+  - id: monero-wallets
+    desc: "Monero wallet address patterns"
+    for: [elf, macho, pe, so, dylib, dll, shell, python]
+    any:
+      - id: monero-wallet-4
+      - id: monero-wallet-8
+
+  - id: miner-keyword
+    desc: "Miner keyword variants"
+    for: [elf, macho, pe, so, dylib, dll, shell, python]
+    any:
+      - id: miner-word
+      - id: miner-title
+      - id: miner-upper
+
+  - id: cryptonight-keyword
+    desc: "CryptoNight keyword variants"
+    for: [elf, macho, pe, so, dylib, dll, shell, python]
+    any:
+      - id: cryptonight-str
+      - id: cryptonight-title
+      - id: cryptonight-upper
+
+  - id: cn-variants
+    desc: "CryptoNight algorithm variants"
+    for: [elf, macho, pe, so, dylib, dll]
+    any:
+      - id: cn-v7
+      - id: cn-v8
+      - id: cn-msr
+      - id: cn-r
+      - id: cn-conceal
+      - id: cryptonight-str
+      - id: cryptonight-title
+      - id: cryptonight-upper
+
+  - id: known-pool-domains
+    desc: "Known mining pool domains"
+    for: [elf, macho, pe, so, dylib, dll, shell, python]
+    any:
+      - id: xmrpool-eu
+      - id: minexmr-com
+      - id: supportxmr-com
+      - id: nanopool-org
+      - id: f2pool-com
+      - id: hashvault-pro
+      - id: pool-minergate-com
+      - id: moneroocean-stream
+
+  - id: mining-keyword
+    desc: "Mining keyword variants"
+    for: [elf, macho, pe, so, dylib, dll, shell]
+    any:
+      - id: mining-lower
+      - id: mining-title
+      - id: mining-upper
+
+  - id: hashrate-keyword
+    desc: "Hashrate keyword variants"
+    for: [elf, macho, pe, so, dylib, dll]
+    any:
+      - id: hashrate-str
+      - id: hashrate-title
+      - id: hashrate-upper
+
+  - id: hugepages-keyword
+    desc: "Hugepages keyword variants"
+    for: [elf, macho, pe, so, dylib, dll]
+    any:
+      - id: hugepages-lower
+      - id: hugepages-title
+      - id: hugepages-upper
+
+  - id: gpu-frameworks
+    desc: "GPU computing frameworks"
+    for: [elf, macho, pe, so, dylib, dll]
+    any:
+      - id: opencl-string
+      - id: cuda-string
+
+  - id: go-runtime-markers
+    desc: "Go runtime markers"
+    for: [elf, macho, pe]
+    any:
+      - id: metadata/lang::go-runtime-marker
+      - id: go-runtime
+
+  # === Detection composites ===
+  - id: mining-context
+    desc: "Mining-specific context strings"
+    for: [elf, macho, pe, so, dylib, dll, shell, python]
+    any:
+      - id: stratum-keyword
+      - id: well-known/malware/miner/xmrig::xmrig-name
+      - id: miner-keyword
+      - id: mining-subscribe
+      - id: cryptonight-keyword
+      - id: randomx
+      - id: cn-variant
+
+  - id: randomx-stratum
+    desc: "RandomX with Stratum pool"
+    all:
+      - id: randomx
+      - id: stratum-tcp
+
+  - id: cn-variant-stratum
+    desc: "CryptoNight variant Stratum pool"
+    all:
+      - id: cn-variant
+      - id: stratum-tcp
+
+  - id: xmrig
+    desc: "XMRig cryptocurrency miner"
+    crit: suspicious
+    conf: 0.95
+    attack: "T1496"
+    for: [elf, macho, pe, so, dylib, dll]
+    any:
+      - id: well-known/malware/miner/xmrig::xmrig-name
+      - id: randomx-stratum
+      - id: cn-variant-stratum
+
+  - id: cryptominer-stratum
+    desc: "Stratum mining protocol usage"
+    crit: suspicious
+    conf: 0.85
+    attack: "T1496"
+    for: [elf, macho, pe, so, dylib, dll, shell, python]
+    any:
+      - id: stratum-keyword
+      - id: mining-methods
+      - id: pool-ports
+
+  - id: monero-wallet
+    desc: "Monero wallet mining context"
+    crit: suspicious
+    conf: 0.9
+    attack: "T1496"
+    for: [elf, macho, pe, so, dylib, dll, shell, python]
+    all:
+      - id: monero-wallets
+      - id: mining-context
+    none:
+      - id: go-runtime-markers
+
+  - id: gpu-hashrate
+    desc: "GPU framework with hashrate"
+    all:
+      - id: gpu-frameworks
+      - id: hashrate-keyword
+
+  - id: hugepages-or-threads
+    desc: "Hugepages or threads configuration"
+    any:
+      - id: hugepages-keyword
+      - id: threads-string
+
+  - id: thread-tuned-worker-runtime
+    desc: "Thread-tuned worker runtime markers"
+    for: [pe, dll]
+    needs: 2
+    any:
+      - id: noofthreads-cli-help
+      - id: noofthreads-token
+      - id: worker-thread-label
+
+  - id: asio-winsock-runtime
+    desc: "Boost.Asio IOCP with Winsock initialization"
+    for: [pe, dll]
+    all:
+      - id: boost-asio-win-iocp
+      - id: micro-behaviors/communications/socket/init::wsa-startup
+
+  - id: mining-config
+    desc: "Mining configuration with context"
+    all:
+      - id: hugepages-or-threads
+      - id: mining-context
+        needs: 2
+
+  - id: hardware-mining
+    desc: "Hardware mining configuration"
+    crit: suspicious
+    conf: 0.8
+    attack: "T1496"
+    for: [elf, macho, pe, so, dylib, dll]
+    any:
+      - id: gpu-hashrate
+      - id: mining-config
+    none:
+      - id: go-runtime-markers
+      - id: micro-behaviors/dylib/library::system-lib-marker
+
+  - id: threaded-asio-miner
+    desc: "Windows threaded cryptominer runtime profile"
+    crit: suspicious
+    conf: 0.9
+    attack: "T1496"
+    for: [pe, dll]
+    all:
+      - id: noofthreads-cli-help
+      - id: boost-asio-win-iocp
+      - id: ws2-32-dll-marker
+
+  - id: miner-type
+    desc: "Cryptocurrency miner type"
+    any:
+      - id: xmrig
+      - id: cryptominer-stratum
+
+  - id: known-pools
+    desc: "Connection to known mining pools"
+    any:
+      - id: known-pool-domains
+      - id: stratum-tcp
+
+  - id: active-miner
+    desc: "Active cryptocurrency miner"
+    crit: suspicious
+    conf: 0.95
+    mbc: "B0014"
+    attack: "T1496"
+    for: [elf, macho, pe, so, dylib, dll, shell, python]
+    all:
+      - id: miner-type
+      - id: known-pools
+
+  # General miner detection (needs 2 of many signals)
+  - id: miner
+    desc: Cryptocurrency mining patterns
+    crit: suspicious
+    conf: 0.66
+    mbc: "B0041"
+    attack: "T1496"
+    size_max: 500000
+    needs: 2
+    any:
+      - id: stratum-tcp
+      - id: stratum-ssl
+      - id: pool-subdomain
+      - id: pool-url
+      - id: miner-word
+      - id: well-known/malware/miner/xmrig::xmrig-name
+      - id: monero-lower
+      - id: hashrate-str
+      - id: wallet-ref
+      - id: coinhive-str
+      - id: cryptonight-str

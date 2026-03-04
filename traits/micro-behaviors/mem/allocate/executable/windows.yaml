@@ -53,6 +53,21 @@ traits:
       type: raw
       substr: "NonPagedPool"
 
+  # Push PAGE_EXECUTE_READWRITE (0x40) as VirtualAlloc/VirtualProtect argument
+  # In compiled PE binaries, this appears as push 0x40 before API call
+  # Common pattern: push 0x40; push size; push addr; call VirtualAlloc
+  - id: page-execute-readwrite-push
+    desc: Push PAGE_EXECUTE_READWRITE constant
+    crit: baseline
+    conf: 0.7
+    attack: "T1055"
+    platforms: [windows]
+    for: [pe, dll]
+    if:
+      type: hex
+      section: text
+      pattern: "6A 40"
+
   # __declspec(safebuffers) disables buffer overflow security checks
   - id: safebuffers-directive
     desc: Buffer security check suppression

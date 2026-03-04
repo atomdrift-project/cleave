@@ -167,6 +167,16 @@ traits:
       field: binary.function_count
       min: 30
 
+  - id: minimal-exports
+    desc: "Binary with very few exports (1-2)"
+    crit: baseline
+    conf: 0.7
+    for: [pe, dll]
+    if:
+      type: exports_count
+      min: 1
+      max: 2
+
   - id: many-exports
     desc: "Binary has many exports (>10)"
     crit: baseline

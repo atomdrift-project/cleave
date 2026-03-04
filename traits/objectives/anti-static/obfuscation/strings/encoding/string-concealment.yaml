@@ -53,6 +53,21 @@ traits:
         - type: raw
           substr: "PECompac"
 
+  # String-sparse DLL: DLL with code but almost no readable strings
+  # Indicates string obfuscation (XOR, stack strings, encrypted)
+  - id: string-sparse-dll
+    desc: "DLL with code but minimal strings"
+    crit: notable
+    conf: 0.75
+    attack: "T1027.010"
+    for: [pe, dll]
+    if:
+      type: string_count
+      max: 15
+      min_length: 4
+    unless:
+      - id: metadata/format/pe::resource-only-dll
+
 composite_rules:
   # String concealment pattern
   - id: string-concealment

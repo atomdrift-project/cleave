@@ -31,6 +31,9 @@ traits:
       type: raw
       substr: "Start"
     for: [pe, dll]
+    unless:
+      # Only meaningful in .NET binaries - skip native PEs
+      - id: metadata/format::no-imports
 
   - id: diagnostics-namespace-dotnet
     desc: .NET System.Diagnostics namespace token

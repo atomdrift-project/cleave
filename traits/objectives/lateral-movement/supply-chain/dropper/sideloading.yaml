@@ -47,3 +47,20 @@ composite_rules:
   all:
   - id: sideloading-host-generic
   - id: objectives/anti-analysis/vm/detect::sparse-logic-density
+
+# Importless DLL loader: tiny DLL with no imports that dynamically resolves APIs
+# via PEB walking and hash-based lookup — classic side-loading payload pattern
+- id: importless-dll-loader
+  desc: Importless DLL with dynamic API resolution
+  crit: hostile
+  conf: 0.9
+  attack: "T1574.002"
+  for: [pe, dll]
+  size_max: 51200
+  all:
+    - id: metadata/format::no-imports
+    - id: metadata/format::minimal-exports
+  any:
+    - id: objectives/anti-static/obfuscation/imports::djb2-api-resolution
+    - id: objectives/anti-static/obfuscation/imports::hash-based-obfuscation
+    - id: objectives/anti-static/obfuscation/imports::api-hash-resolution

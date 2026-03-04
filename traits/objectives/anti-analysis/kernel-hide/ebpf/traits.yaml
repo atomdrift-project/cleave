@@ -535,3 +535,16 @@ composite_rules:
       - id: uprobe-hooking
       - id: http-manipulation
       - id: go-offensive-program
+  - id: ebpf-rootkit-build
+    desc: Makefile builds eBPF program with evasion intent
+    crit: suspicious
+    conf: 0.9
+    attack: T1014
+    for:
+      - all
+    all:
+      - id: micro-behaviors/build/tool/make::makefile-ebpf-target
+    any:
+      - id: micro-behaviors/build/tool/make::makefile-evasion-target
+      - id: micro-behaviors/build/tool/make::hardened-build
+      - id: micro-behaviors/data/text/keywords::hide

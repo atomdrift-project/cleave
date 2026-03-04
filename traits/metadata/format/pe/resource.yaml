@@ -50,3 +50,8 @@ composite_rules:
       - id: large-single-section
       - id: resources-dll-extension
       - id: low-code-entropy
+    none:
+      # Not a resource DLL if it has executable code with real entropy
+      - id: objectives/anti-static/obfuscation/packer::tiny-executable-obfuscation-section
+      # Not a resource DLL if it shows shellcode-like indirect calls
+      - id: micro-behaviors/mem/shellcode/transfer::call-rax

@@ -29,6 +29,51 @@ traits:
       type: string
       substr: "clean:"
 
+  # === eBPF Build Targets ===
+  - id: makefile-ebpf-target
+    desc: Makefile eBPF build target variable
+    crit: notable
+    conf: 0.85
+    if:
+      type: string
+      regex: "^EBPF\\s*[:+?]?="
+
+  # === Binary Hardening in Build ===
+  - id: makefile-strip-binary
+    desc: Makefile strips built binaries
+    crit: component
+    conf: 0.8
+    if:
+      type: raw
+      regex: "\\tstrip\\s"
+
+  - id: makefile-static-link
+    desc: Makefile uses static linking
+    crit: component
+    conf: 0.8
+    if:
+      type: string
+      substr: "-static"
+
+  # === Evasion-Named Build Targets ===
+  - id: makefile-evasion-target-a
+    desc: Build target named hider or inject
+    crit: component
+    conf: 0.7
+    if:
+      type: string
+      regex: ":=\\s*(hider|inject|hook)"
+      case_insensitive: true
+
+  - id: makefile-evasion-target-b
+    desc: Build target named rootkit or stealth
+    crit: component
+    conf: 0.7
+    if:
+      type: string
+      regex: ":=\\s*(rootkit|stealth|backdoor)"
+      case_insensitive: true
+
 composite_rules:
   - id: dummy-makefile-targets
     desc: Makefile with empty targets (install/all/clean)
@@ -40,3 +85,19 @@ composite_rules:
       - id: makefile-install-target
       - id: makefile-all-target
       - id: makefile-clean-target
+
+  - id: makefile-evasion-target
+    desc: Build target with evasion naming
+    crit: notable
+    conf: 0.7
+    any:
+      - id: makefile-evasion-target-a
+      - id: makefile-evasion-target-b
+
+  - id: hardened-build
+    desc: Makefile strips and statically links
+    crit: notable
+    conf: 0.8
+    all:
+      - id: makefile-strip-binary
+      - id: makefile-static-link

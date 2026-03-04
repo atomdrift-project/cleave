@@ -46,7 +46,8 @@ traits:
   crit: notable
   conf: 0.85
   size_min: 2048
-  count_min: 5
+  count_min: 15
+  per_kb_min: 5.0
   if:
     type: raw
     regex: \(\s*(async\s+)?function\s*\([^)]{0,50}\)\s*\{|\(\s*[^)]{0,50}\)\s*=>

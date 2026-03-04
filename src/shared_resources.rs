@@ -2,14 +2,16 @@
 //!
 //! This module provides singleton instances of expensive-to-initialize resources
 //! like the YARA engine and CapabilityMapper. These are initialized on first use
-//! and shared across all subsequent analyses.
+//! and shared across all subsequent analyses. The CapabilityMapper supports
+//! hot-reloading via `reload_capability_mapper()`.
 
 use crate::capabilities::CapabilityMapper;
 use crate::yara_engine::YaraEngine;
 use std::sync::{Arc, OnceLock};
 
-/// Global lazy-loaded CapabilityMapper
-static CAPABILITY_MAPPER: OnceLock<Arc<CapabilityMapper>> = OnceLock::new();
+/// Global CapabilityMapper behind a RwLock for hot-reload support.
+static CAPABILITY_MAPPER: parking_lot::RwLock<Option<Arc<CapabilityMapper>>> =
+    parking_lot::RwLock::new(None);
 
 /// Global lazy-loaded YARA engine (with third-party rules enabled)
 static YARA_ENGINE_WITH_THIRD_PARTY: OnceLock<Arc<YaraEngine>> = OnceLock::new();
@@ -19,12 +21,40 @@ static YARA_ENGINE_BUILTIN_ONLY: OnceLock<Arc<YaraEngine>> = OnceLock::new();
 
 /// Get or initialize the global CapabilityMapper
 pub(crate) fn capability_mapper() -> Arc<CapabilityMapper> {
-    CAPABILITY_MAPPER
-        .get_or_init(|| {
-            tracing::debug!("Initializing global CapabilityMapper");
-            Arc::new(CapabilityMapper::new())
-        })
-        .clone()
+    // Fast path: read lock
+    {
+        let guard = CAPABILITY_MAPPER.read();
+        if let Some(ref mapper) = *guard {
+            return mapper.clone();
+        }
+    }
+    // Slow path: write lock + init
+    let mut guard = CAPABILITY_MAPPER.write();
+    if let Some(ref mapper) = *guard {
+        return mapper.clone();
+    }
+    tracing::debug!("Initializing global CapabilityMapper");
+    let mapper = Arc::new(CapabilityMapper::new());
+    *guard = Some(mapper.clone());
+    mapper
+}
+
+/// Reload the global CapabilityMapper from trait definitions on disk.
+///
+/// Returns the number of traits + composite rules loaded, or an error message.
+pub(crate) fn reload_capability_mapper() -> Result<(usize, usize), String> {
+    tracing::info!("Reloading CapabilityMapper from disk");
+    let mapper = CapabilityMapper::new();
+    let trait_count = mapper.trait_definitions_count();
+    let composite_count = mapper.composite_rules_count();
+    let mut guard = CAPABILITY_MAPPER.write();
+    *guard = Some(Arc::new(mapper));
+    tracing::info!(
+        traits = trait_count,
+        composites = composite_count,
+        "CapabilityMapper reloaded"
+    );
+    Ok((trait_count, composite_count))
 }
 
 /// Get or initialize the global YARA engine

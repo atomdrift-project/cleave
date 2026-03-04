@@ -121,6 +121,7 @@ pub async fn run(config: ServerConfig) -> anyhow::Result<()> {
     // We want: rate limit -> body size limit -> handler
     let app = Router::new()
         .route("/health", get(handlers::health))
+        .route("/reload", post(handlers::reload))
         .route("/analyze", post(analyze_with_headers))
         .route("/analyze-path", post(handlers::analyze_path))
         .layer(RequestBodyLimitLayer::new(config.max_body_size))

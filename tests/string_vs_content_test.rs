@@ -144,8 +144,7 @@ echo "This script is safe"
         .args([
             "--format",
             "jsonl",
-            "--validate=false",
-            "--traits-dir",
+                        "--traits-dir",
             traits_dir.to_str().unwrap(),
             "analyze",
             script_path.to_str().unwrap(),
@@ -219,10 +218,10 @@ def connect():
     // Skip YARA since we're only testing custom trait conditions (not YARA rules)
     let output = assert_cmd::cargo_bin_cmd!("cleave")
         .env("cleave_SKIP_YARA", "1")
+        .env("CLEAVE_VALIDATE", "0") // Disable validation: test intentionally creates conflicting string/raw traits
         .args([
             "--format",
             "jsonl",
-            "--validate=false",
             "--traits-dir",
             traits_dir.to_str().unwrap(),
             "analyze",

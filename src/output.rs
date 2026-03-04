@@ -129,16 +129,16 @@ pub(crate) fn aggregate_findings_by_directory(findings: &[Finding]) -> Vec<Findi
     result
 }
 
-/// Get risk emoji based on criticality
+/// Get risk indicator based on criticality
 #[allow(dead_code)] // Used by binary target
-fn risk_emoji(crit: &Criticality) -> &'static str {
+fn risk_indicator(crit: &Criticality) -> colored::ColoredString {
     match crit {
-        Criticality::Filtered => "⬜",
-        Criticality::Component => "🔘", // Building block
-        Criticality::Baseline => "⚪",
-        Criticality::Notable => "🔵",
-        Criticality::Suspicious => "🟡",
-        Criticality::Hostile => "🛑",
+        Criticality::Filtered => "   ".normal(),
+        Criticality::Component => "  ·".dimmed(),
+        Criticality::Baseline => "  •".bright_green(),
+        Criticality::Notable => "  •".bright_blue(),
+        Criticality::Suspicious => " ••".bright_yellow(),
+        Criticality::Hostile => "•••".bright_red(),
     }
 }
 
@@ -560,13 +560,13 @@ fn truncate_with_ellipsis(s: &str, max_width: usize) -> String {
     format!("{}…", &s[..end])
 }
 
-/// Emoji bullet based on criticality (traffic light: red/yellow/green)
+/// Bullet indicator based on criticality: • notable, •• suspicious, ••• hostile
 #[allow(dead_code)] // Used by binary target
-fn bullet_for_crit(crit: &Criticality) -> &'static str {
+fn bullet_for_crit(crit: &Criticality) -> colored::ColoredString {
     match crit {
-        Criticality::Hostile => "🔴",
-        Criticality::Suspicious => "🟡",
-        _ => "🟢",
+        Criticality::Hostile => "•••".bright_red(),
+        Criticality::Suspicious => " ••".bright_yellow(),
+        _ => "  •".bright_green(),
     }
 }
 
@@ -652,8 +652,8 @@ pub(crate) fn format_terminal(report: &AnalysisReport) -> String {
             .max()
             .unwrap_or(30);
 
-        // Evidence gets remaining space: term_width - 3 (emoji=2 cols + space) - trait - 2 - desc - 2
-        let fixed_width = 3 + trait_width + 2 + desc_width + 2;
+        // Evidence gets remaining space: term_width - 4 (bullet=3 + space) - trait - 2 - desc - 2
+        let fixed_width = 4 + trait_width + 2 + desc_width + 2;
         let evidence_width = term_width.saturating_sub(fixed_width);
 
         // Generate formula from filtered findings
@@ -891,11 +891,12 @@ mod tests {
     }
 
     #[test]
-    fn test_risk_emoji() {
-        assert_eq!(risk_emoji(&Criticality::Baseline), "⚪");
-        assert_eq!(risk_emoji(&Criticality::Notable), "🔵");
-        assert_eq!(risk_emoji(&Criticality::Suspicious), "🟡");
-        assert_eq!(risk_emoji(&Criticality::Hostile), "🛑");
+    fn test_risk_indicator() {
+        // Verify the underlying text content (colored strings deref to &str)
+        assert_eq!(&*risk_indicator(&Criticality::Baseline), "  •");
+        assert_eq!(&*risk_indicator(&Criticality::Notable), "  •");
+        assert_eq!(&*risk_indicator(&Criticality::Suspicious), " ••");
+        assert_eq!(&*risk_indicator(&Criticality::Hostile), "•••");
     }
 
     #[test]

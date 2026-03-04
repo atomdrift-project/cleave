@@ -22,6 +22,42 @@ pub(super) async fn health() -> Json<serde_json::Value> {
     Json(serde_json::json!({"status": "ok"}))
 }
 
+/// Reload trait definitions from disk.
+pub(super) async fn reload() -> Response {
+    let start = Instant::now();
+    let result = tokio::task::spawn_blocking(crate::shared_resources::reload_capability_mapper).await;
+    let elapsed_ms = start.elapsed().as_millis();
+
+    match result {
+        Ok(Ok((traits, composites))) => {
+            info!(traits, composites, elapsed_ms, "Reload complete");
+            Json(serde_json::json!({
+                "status": "ok",
+                "traits": traits,
+                "composites": composites,
+                "elapsed_ms": elapsed_ms,
+            }))
+            .into_response()
+        }
+        Ok(Err(e)) => {
+            warn!(elapsed_ms, "Reload failed: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": e})),
+            )
+                .into_response()
+        }
+        Err(e) => {
+            warn!(elapsed_ms, "Reload task join error: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": "Internal error"})),
+            )
+                .into_response()
+        }
+    }
+}
+
 /// File analysis endpoint.
 ///
 /// Accepts multipart/form-data with a single file field.

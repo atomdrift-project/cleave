@@ -91,7 +91,7 @@ impl super::CapabilityMapper {
         if enable_full_validation {
             tracing::info!("Full validation enabled (this may take 60+ seconds)");
         } else {
-            tracing::info!("Fast validation mode (validation disabled via --validate=false)");
+            tracing::info!("Fast validation mode (use --validate to enable full validation)");
         }
         if debug {
             eprintln!("🔍 Loading capabilities from: {}", dir_path.display());

@@ -52,7 +52,7 @@ fn test_analyze_shell_script() {
 
     assert_cmd::cargo_bin_cmd!("cleave")
         .env("cleave_SKIP_YARA", "1") // Skip YARA - testing CLI functionality
-        .args(["--validate=false", "analyze", script_path.to_str().unwrap()])
+        .args(["analyze", script_path.to_str().unwrap()])
         .assert()
         .success()
         .stdout(predicate::str::contains("test.sh"));
@@ -71,7 +71,6 @@ fn test_analyze_json_output() {
     assert_cmd::cargo_bin_cmd!("cleave")
         .env("cleave_SKIP_YARA", "1") // Skip YARA - testing CLI functionality
         .args([
-            "--validate=false",
             "--json",
             "analyze",
             script_path.to_str().unwrap(),
@@ -95,7 +94,6 @@ fn test_analyze_output_to_file() {
     assert_cmd::cargo_bin_cmd!("cleave")
         .env("cleave_SKIP_YARA", "1") // Skip YARA - testing CLI functionality
         .args([
-            "--validate=false",
             "--json",
             "-o",
             output_path.to_str().unwrap(),
@@ -124,7 +122,6 @@ fn test_analyze_empty_directory() {
     assert_cmd::cargo_bin_cmd!("cleave")
         .env("cleave_SKIP_YARA", "1") // Skip YARA - testing CLI functionality
         .args([
-            "--validate=false",
             "analyze",
             temp_dir.path().to_str().unwrap(),
         ])
@@ -146,7 +143,6 @@ fn test_analyze_multiple_files() {
     assert_cmd::cargo_bin_cmd!("cleave")
         .env("cleave_SKIP_YARA", "1") // Skip YARA - testing CLI functionality
         .args([
-            "--validate=false",
             "analyze",
             temp_dir.path().to_str().unwrap(),
         ])
@@ -241,7 +237,6 @@ fn test_verbose_flag() {
     assert_cmd::cargo_bin_cmd!("cleave")
         .env("cleave_SKIP_YARA", "1") // Skip YARA - testing CLI functionality
         .args([
-            "--validate=false",
             "-v",
             "analyze",
             script.to_str().unwrap(),
@@ -261,7 +256,7 @@ fn test_analyze_python_file() {
 
     assert_cmd::cargo_bin_cmd!("cleave")
         .env("cleave_SKIP_YARA", "1") // Skip YARA - testing CLI functionality
-        .args(["--validate=false", "analyze", py_file.to_str().unwrap()])
+        .args(["analyze", py_file.to_str().unwrap()])
         .assert()
         .success()
         .stdout(predicate::str::contains("test.py"));
@@ -278,7 +273,7 @@ fn test_analyze_javascript_file() {
 
     assert_cmd::cargo_bin_cmd!("cleave")
         .env("cleave_SKIP_YARA", "1") // Skip YARA - testing CLI functionality
-        .args(["--validate=false", "analyze", js_file.to_str().unwrap()])
+        .args(["analyze", js_file.to_str().unwrap()])
         .assert()
         .success()
         .stdout(predicate::str::contains("test.js"));
@@ -295,7 +290,6 @@ fn test_analyze_directory_json_output() {
     assert_cmd::cargo_bin_cmd!("cleave")
         .env("cleave_SKIP_YARA", "1") // Skip YARA - testing CLI functionality
         .args([
-            "--validate=false",
             "--json",
             "analyze",
             temp_dir.path().to_str().unwrap(),
@@ -544,7 +538,6 @@ fn test_error_if_single_file_match() {
     let output = assert_cmd::cargo_bin_cmd!("cleave")
         .env("cleave_SKIP_YARA", "1") // Skip YARA - testing CLI functionality
         .args([
-            "--validate=false",
             "--error-if",
             "notable",
             "analyze",
@@ -578,7 +571,6 @@ fn test_error_if_single_file_no_match() {
     assert_cmd::cargo_bin_cmd!("cleave")
         .env("cleave_SKIP_YARA", "1") // Skip YARA - testing CLI functionality
         .args([
-            "--validate=false",
             "--error-if",
             "hostile",
             "analyze",
@@ -607,7 +599,6 @@ fn test_error_if_analyze_stops_early() {
     let output = assert_cmd::cargo_bin_cmd!("cleave")
         .env("cleave_SKIP_YARA", "1") // Skip YARA - testing CLI functionality
         .args([
-            "--validate=false",
             "--error-if",
             "notable",
             "analyze",
@@ -643,7 +634,7 @@ fn test_system_binary_false_positive_sanity() {
     }
 
     let output = assert_cmd::cargo_bin_cmd!("cleave")
-        .args(["--validate=false", "--json", "analyze", binary])
+        .args(["--json", "analyze", binary])
         .output()
         .unwrap();
 
@@ -715,7 +706,6 @@ fn test_error_if_multiple_levels() {
     let output = assert_cmd::cargo_bin_cmd!("cleave")
         .env("cleave_SKIP_YARA", "1") // Skip YARA - testing CLI functionality
         .args([
-            "--validate=false",
             "--error-if",
             "baseline,notable",
             "analyze",

@@ -44,6 +44,7 @@ pub(crate) fn extract_imports_from_tree(
 /// Extract actual module imports from source code (e.g., require in Ruby, import in Python)
 /// This is separate from function call extraction for capability matching.
 /// NOTE: This parses internally - prefer extract_imports_from_tree() if you already have a tree
+#[allow(dead_code)] // Used in tests
 pub(crate) fn extract_imports(source: &str, file_type: &FileType, report: &mut AnalysisReport) {
     let (lang, import_fn): (tree_sitter::Language, ImportExtractFn) = match file_type {
         FileType::Ruby => (tree_sitter_ruby::LANGUAGE.into(), extract_ruby_import),
@@ -267,6 +268,7 @@ pub(crate) fn extract_symbols_from_tree(
 
 /// Extract symbols from source code by parsing with tree-sitter
 /// NOTE: This parses internally - prefer extract_symbols_from_tree() if you already have a tree
+#[allow(dead_code)] // Used in tests
 pub(crate) fn extract_symbols(
     source: &str,
     lang: &tree_sitter::Language,

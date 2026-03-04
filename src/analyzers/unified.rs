@@ -673,15 +673,17 @@ impl UnifiedSourceAnalyzer {
         }
 
         // Extract function calls for capability matching (type: symbol conditions)
-        symbol_extraction::extract_symbols(
+        // Reuse the already-parsed tree to avoid redundant tree-sitter parsing
+        symbol_extraction::extract_symbols_from_tree(
+            &tree,
             content,
-            &self.config.language,
             self.config.call_node_types,
             &mut report,
         );
 
         // Also extract actual module imports (require/import statements) for metadata/import/ findings
-        symbol_extraction::extract_imports(content, &self.file_type, &mut report);
+        // Reuse the already-parsed tree to avoid redundant tree-sitter parsing
+        symbol_extraction::extract_imports_from_tree(&tree, content, &self.file_type, &mut report);
 
         // Analyze paths and environment variables
         crate::path_mapper::analyze_and_link_paths(&mut report);

@@ -649,12 +649,21 @@ impl StringMatchIndex {
         let mut candidates = FxHashSet::default();
 
         if let Some(ref ac) = self.regex_literal_automaton {
-            for string_info in strings {
+            let total_patterns = self.regex_literal_to_traits.len();
+            let mut seen_patterns: FxHashSet<usize> = FxHashSet::default();
+            'outer: for string_info in strings {
                 for mat in ac.find_iter(&string_info.value) {
                     let pattern_idx = mat.pattern().as_usize();
-                    if let Some(trait_indices) = self.regex_literal_to_traits.get(pattern_idx) {
-                        for &trait_idx in trait_indices {
-                            candidates.insert(trait_idx);
+                    if seen_patterns.insert(pattern_idx) {
+                        if let Some(trait_indices) =
+                            self.regex_literal_to_traits.get(pattern_idx)
+                        {
+                            for &trait_idx in trait_indices {
+                                candidates.insert(trait_idx);
+                            }
+                        }
+                        if seen_patterns.len() == total_patterns {
+                            break 'outer;
                         }
                     }
                 }
@@ -737,6 +746,14 @@ struct FileTypeRegexSet {
     ci_literal_to_patterns: Vec<Vec<usize>>,
     /// Pattern indices that have no extractable literal prefix
     patterns_without_literals: Vec<usize>,
+    /// Aho-Corasick automaton for case-sensitive word boundary patterns
+    cs_word_automaton: Option<AhoCorasick>,
+    /// Maps case-sensitive word pattern index -> trait indices
+    cs_word_to_traits: Vec<Vec<usize>>,
+    /// Aho-Corasick automaton for case-insensitive word boundary patterns
+    ci_word_automaton: Option<AhoCorasick>,
+    /// Maps case-insensitive word pattern index -> trait indices
+    ci_word_to_traits: Vec<Vec<usize>>,
 }
 
 impl std::fmt::Debug for FileTypeRegexSet {
@@ -750,21 +767,32 @@ impl std::fmt::Debug for FileTypeRegexSet {
 
 impl FileTypeRegexSet {
     /// Find matching traits using hybrid literal pre-filtering strategy:
-    /// 1. Run case-sensitive Aho-Corasick for case-sensitive patterns
-    /// 2. Run case-insensitive Aho-Corasick for case-insensitive patterns
-    /// 3. Run individual regexes for patterns with matching literals
-    /// 4. Run smaller RegexSet for patterns without literals (unavoidable)
+    /// 1a. Run case-sensitive Aho-Corasick for case-sensitive literal patterns
+    /// 1b. Run case-insensitive Aho-Corasick for case-insensitive literal patterns
+    /// 1c. Run word boundary Aho-Corasick + byte boundary checks (replaces \b regex)
+    /// 2. Run individual regexes for patterns with matching literals
+    /// 3. Run smaller RegexSet for patterns without literals (unavoidable)
     fn find_matches(&self, content: &str) -> Vec<usize> {
-        let mut matching_trait_indices = Vec::new();
+        let content_bytes = content.as_bytes();
+        let content_len = content.len();
+        let mut matched_traits: FxHashSet<usize> = FxHashSet::default();
         let mut literal_candidates: FxHashSet<usize> = FxHashSet::default();
 
         // Step 1a: Find case-sensitive patterns with matching literals
+        // Early exit once all literal patterns have been seen
         if let Some(ref ac) = self.cs_literal_prefilter {
+            let total_cs_patterns = self.cs_literal_to_patterns.len();
+            let mut seen_literals: FxHashSet<usize> = FxHashSet::default();
             for mat in ac.find_iter(content) {
                 let literal_idx = mat.pattern().as_usize();
-                if let Some(pattern_indices) = self.cs_literal_to_patterns.get(literal_idx) {
-                    for &pattern_idx in pattern_indices {
-                        literal_candidates.insert(pattern_idx);
+                if seen_literals.insert(literal_idx) {
+                    if let Some(pattern_indices) = self.cs_literal_to_patterns.get(literal_idx) {
+                        for &pattern_idx in pattern_indices {
+                            literal_candidates.insert(pattern_idx);
+                        }
+                    }
+                    if seen_literals.len() == total_cs_patterns {
+                        break;
                     }
                 }
             }
@@ -772,12 +800,64 @@ impl FileTypeRegexSet {
 
         // Step 1b: Find case-insensitive patterns with matching literals
         // The CI automaton was built with lowercased literals and ascii_case_insensitive=true
+        // Early exit once all literal patterns have been seen
         if let Some(ref ac) = self.ci_literal_prefilter {
+            let total_ci_patterns = self.ci_literal_to_patterns.len();
+            let mut seen_literals: FxHashSet<usize> = FxHashSet::default();
             for mat in ac.find_iter(content) {
                 let literal_idx = mat.pattern().as_usize();
-                if let Some(pattern_indices) = self.ci_literal_to_patterns.get(literal_idx) {
-                    for &pattern_idx in pattern_indices {
-                        literal_candidates.insert(pattern_idx);
+                if seen_literals.insert(literal_idx) {
+                    if let Some(pattern_indices) = self.ci_literal_to_patterns.get(literal_idx) {
+                        for &pattern_idx in pattern_indices {
+                            literal_candidates.insert(pattern_idx);
+                        }
+                    }
+                    if seen_literals.len() == total_ci_patterns {
+                        break;
+                    }
+                }
+            }
+        }
+
+        // Step 1c: Word boundary patterns via Aho-Corasick + cheap byte checks
+        // Case-sensitive words
+        if let Some(ref ac) = self.cs_word_automaton {
+            for mat in ac.find_iter(content) {
+                let start = mat.start();
+                let end = mat.end();
+                let before_ok = start == 0
+                    || !content_bytes[start - 1].is_ascii_alphanumeric()
+                        && content_bytes[start - 1] != b'_';
+                let after_ok = end == content_len
+                    || !content_bytes[end].is_ascii_alphanumeric()
+                        && content_bytes[end] != b'_';
+                if before_ok && after_ok {
+                    let word_idx = mat.pattern().as_usize();
+                    if let Some(trait_indices) = self.cs_word_to_traits.get(word_idx) {
+                        for &t in trait_indices {
+                            matched_traits.insert(t);
+                        }
+                    }
+                }
+            }
+        }
+        // Case-insensitive words
+        if let Some(ref ac) = self.ci_word_automaton {
+            for mat in ac.find_iter(content) {
+                let start = mat.start();
+                let end = mat.end();
+                let before_ok = start == 0
+                    || !content_bytes[start - 1].is_ascii_alphanumeric()
+                        && content_bytes[start - 1] != b'_';
+                let after_ok = end == content_len
+                    || !content_bytes[end].is_ascii_alphanumeric()
+                        && content_bytes[end] != b'_';
+                if before_ok && after_ok {
+                    let word_idx = mat.pattern().as_usize();
+                    if let Some(trait_indices) = self.ci_word_to_traits.get(word_idx) {
+                        for &t in trait_indices {
+                            matched_traits.insert(t);
+                        }
                     }
                 }
             }
@@ -790,11 +870,17 @@ impl FileTypeRegexSet {
         );
 
         // Step 2: Run individual regexes for patterns with matching literals
+        // Skip patterns whose traits are all already matched
         for &pattern_idx in &literal_candidates {
-            if let Some(Some(ref regex)) = self.individual_regexes.get(pattern_idx) {
-                if regex.is_match(content) {
-                    if let Some(trait_indices) = self.pattern_to_traits.get(pattern_idx) {
-                        matching_trait_indices.extend(trait_indices.iter().copied());
+            if let Some(trait_indices) = self.pattern_to_traits.get(pattern_idx) {
+                if trait_indices.iter().all(|t| matched_traits.contains(t)) {
+                    continue;
+                }
+                if let Some(Some(ref regex)) = self.individual_regexes.get(pattern_idx) {
+                    if regex.is_match(content) {
+                        for &t in trait_indices {
+                            matched_traits.insert(t);
+                        }
                     }
                 }
             }
@@ -803,17 +889,25 @@ impl FileTypeRegexSet {
         // Step 3: Run smaller RegexSet for patterns without extractable literals
         if let Some(ref no_lit_set) = self.no_literal_regex_set {
             for no_lit_idx in no_lit_set.matches(content).iter() {
-                // Map back to original pattern index
                 if let Some(&original_idx) = self.no_literal_to_original.get(no_lit_idx) {
                     if let Some(trait_indices) = self.pattern_to_traits.get(original_idx) {
-                        matching_trait_indices.extend(trait_indices.iter().copied());
+                        for &t in trait_indices {
+                            matched_traits.insert(t);
+                        }
                     }
                 }
             }
         }
 
-        matching_trait_indices
+        matched_traits.into_iter().collect()
     }
+}
+
+/// A word pattern: the literal word and whether it's case-insensitive
+struct WordPattern {
+    word: String,
+    case_insensitive: bool,
+    trait_idx: usize,
 }
 
 impl RawContentRegexIndex {
@@ -822,51 +916,81 @@ impl RawContentRegexIndex {
         let mut by_file_type_patterns: FxHashMap<RuleFileType, Vec<(String, usize)>> =
             FxHashMap::default();
         let mut universal_patterns: Vec<(String, usize)> = Vec::new();
+        // Word patterns separated for Aho-Corasick batch matching
+        let mut by_file_type_words: FxHashMap<RuleFileType, Vec<WordPattern>> =
+            FxHashMap::default();
+        let mut universal_words: Vec<WordPattern> = Vec::new();
         let mut errors = Vec::new();
 
         for (trait_idx, trait_def) in traits.iter().enumerate() {
             // Extract regex patterns from Content traits
-            let pattern_opt = match &trait_def.r#if {
+            // Word patterns are routed to a dedicated Aho-Corasick automaton
+            match &trait_def.r#if {
                 Condition::Raw {
                     regex: Some(ref regex_str),
                     case_insensitive,
                     ..
-                } => Some(if *case_insensitive {
-                    format!("(?i){}", regex_str)
-                } else {
-                    regex_str.clone()
-                }),
+                } => {
+                    let pattern = if *case_insensitive {
+                        format!("(?i){}", regex_str)
+                    } else {
+                        regex_str.clone()
+                    };
+                    if trait_def.r#for.contains(&RuleFileType::All) {
+                        universal_patterns.push((pattern, trait_idx));
+                    } else {
+                        for ft in &trait_def.r#for {
+                            by_file_type_patterns
+                                .entry(*ft)
+                                .or_default()
+                                .push((pattern.clone(), trait_idx));
+                        }
+                    }
+                }
                 Condition::Raw {
                     word: Some(ref word_str),
                     case_insensitive,
                     ..
-                } => Some(if *case_insensitive {
-                    format!("(?i)\\b{}\\b", regex::escape(word_str))
-                } else {
-                    format!("\\b{}\\b", regex::escape(word_str))
-                }),
-                _ => None,
-            };
-
-            if let Some(pattern) = pattern_opt {
-                if trait_def.r#for.contains(&RuleFileType::All) {
-                    universal_patterns.push((pattern, trait_idx));
-                } else {
-                    for ft in &trait_def.r#for {
-                        by_file_type_patterns
-                            .entry(*ft)
-                            .or_default()
-                            .push((pattern.clone(), trait_idx));
+                } => {
+                    let wp = WordPattern {
+                        word: word_str.clone(),
+                        case_insensitive: *case_insensitive,
+                        trait_idx,
+                    };
+                    if trait_def.r#for.contains(&RuleFileType::All) {
+                        universal_words.push(wp);
+                    } else {
+                        for ft in &trait_def.r#for {
+                            by_file_type_words.entry(*ft).or_default().push(WordPattern {
+                                word: word_str.clone(),
+                                case_insensitive: *case_insensitive,
+                                trait_idx,
+                            });
+                        }
                     }
                 }
+                _ => {}
             }
         }
 
         // Build regex sets for each file type in parallel, collecting errors
-        let ft_patterns_vec: Vec<_> = by_file_type_patterns.into_iter().collect();
-        let results: Vec<_> = ft_patterns_vec
+        // Collect all file types that need building
+        let all_file_types: FxHashSet<RuleFileType> = by_file_type_patterns
+            .keys()
+            .chain(by_file_type_words.keys())
+            .copied()
+            .collect();
+        let ft_data: Vec<_> = all_file_types
+            .into_iter()
+            .map(|ft| {
+                let patterns = by_file_type_patterns.remove(&ft).unwrap_or_default();
+                let words = by_file_type_words.remove(&ft).unwrap_or_default();
+                (ft, patterns, words)
+            })
+            .collect();
+        let results: Vec<_> = ft_data
             .into_par_iter()
-            .map(|(ft, patterns)| (ft, Self::build_regex_set(patterns, traits)))
+            .map(|(ft, patterns, words)| (ft, Self::build_regex_set(patterns, words, traits)))
             .collect();
 
         let mut by_file_type = FxHashMap::default();
@@ -882,7 +1006,7 @@ impl RawContentRegexIndex {
 
         // Build universal patterns (can run in parallel with file-type-specific building
         // but kept separate for clarity)
-        let universal = match Self::build_regex_set(universal_patterns, traits) {
+        let universal = match Self::build_regex_set(universal_patterns, universal_words, traits) {
             Ok(set) => set,
             Err(mut e) => {
                 errors.append(&mut e);
@@ -905,10 +1029,35 @@ impl RawContentRegexIndex {
                     indexed_traits.insert(trait_idx);
                 }
             }
+            // Count word patterns
+            for trait_indices in &ft_set.cs_word_to_traits {
+                total_patterns += 1;
+                for &trait_idx in trait_indices {
+                    indexed_traits.insert(trait_idx);
+                }
+            }
+            for trait_indices in &ft_set.ci_word_to_traits {
+                total_patterns += 1;
+                for &trait_idx in trait_indices {
+                    indexed_traits.insert(trait_idx);
+                }
+            }
         }
         if let Some(ref universal_set) = universal {
             total_patterns += universal_set.pattern_to_traits.len();
             for trait_indices in &universal_set.pattern_to_traits {
+                for &trait_idx in trait_indices {
+                    indexed_traits.insert(trait_idx);
+                }
+            }
+            for trait_indices in &universal_set.cs_word_to_traits {
+                total_patterns += 1;
+                for &trait_idx in trait_indices {
+                    indexed_traits.insert(trait_idx);
+                }
+            }
+            for trait_indices in &universal_set.ci_word_to_traits {
+                total_patterns += 1;
                 for &trait_idx in trait_indices {
                     indexed_traits.insert(trait_idx);
                 }
@@ -925,9 +1074,10 @@ impl RawContentRegexIndex {
 
     fn build_regex_set(
         patterns: Vec<(String, usize)>,
+        words: Vec<WordPattern>,
         traits: &[TraitDefinition],
     ) -> Result<Option<FileTypeRegexSet>, Vec<String>> {
-        if patterns.is_empty() {
+        if patterns.is_empty() && words.is_empty() {
             return Ok(None);
         }
 
@@ -1027,6 +1177,80 @@ impl RawContentRegexIndex {
             None
         };
 
+        // Build word boundary Aho-Corasick automatons
+        // Separate case-sensitive and case-insensitive words
+        let mut cs_words: Vec<String> = Vec::new();
+        let mut cs_word_to_traits: Vec<Vec<usize>> = Vec::new();
+        let mut cs_word_map: FxHashMap<String, usize> = FxHashMap::default();
+        let mut ci_words: Vec<String> = Vec::new();
+        let mut ci_word_to_traits: Vec<Vec<usize>> = Vec::new();
+        let mut ci_word_map: FxHashMap<String, usize> = FxHashMap::default();
+
+        for wp in &words {
+            if wp.case_insensitive {
+                let lower = wp.word.to_lowercase();
+                if let Some(&idx) = ci_word_map.get(&lower) {
+                    ci_word_to_traits[idx].push(wp.trait_idx);
+                } else {
+                    let idx = ci_words.len();
+                    ci_word_map.insert(lower.clone(), idx);
+                    ci_words.push(lower);
+                    ci_word_to_traits.push(vec![wp.trait_idx]);
+                }
+            } else if let Some(&idx) = cs_word_map.get(&wp.word) {
+                cs_word_to_traits[idx].push(wp.trait_idx);
+            } else {
+                let idx = cs_words.len();
+                cs_word_map.insert(wp.word.clone(), idx);
+                cs_words.push(wp.word.clone());
+                cs_word_to_traits.push(vec![wp.trait_idx]);
+            }
+        }
+
+        let cs_word_automaton = if !cs_words.is_empty() {
+            AhoCorasick::builder()
+                .ascii_case_insensitive(false)
+                .build(&cs_words)
+                .ok()
+        } else {
+            None
+        };
+
+        let ci_word_automaton = if !ci_words.is_empty() {
+            AhoCorasick::builder()
+                .ascii_case_insensitive(true)
+                .build(&ci_words)
+                .ok()
+        } else {
+            None
+        };
+
+        // If there are no regex patterns (only word patterns), build a minimal set
+        if pattern_strs.is_empty() {
+            // Build a dummy empty regex set
+            let empty: Vec<String> = Vec::new();
+            let regex_set = RegexSetBuilder::new(&empty)
+                .build()
+                .expect("empty regex set should always build");
+            return Ok(Some(FileTypeRegexSet {
+                regex_set,
+                pattern_to_traits: Vec::new(),
+                patterns: Vec::new(),
+                individual_regexes: Vec::new(),
+                no_literal_regex_set: None,
+                no_literal_to_original: Vec::new(),
+                cs_literal_prefilter: None,
+                cs_literal_to_patterns: Vec::new(),
+                ci_literal_prefilter: None,
+                ci_literal_to_patterns: Vec::new(),
+                patterns_without_literals: Vec::new(),
+                cs_word_automaton,
+                cs_word_to_traits,
+                ci_word_automaton,
+                ci_word_to_traits,
+            }));
+        }
+
         // Try to build the full regex set (kept for fallback).
         match RegexSetBuilder::new(&pattern_strs)
             .size_limit(100 * 1024 * 1024)
@@ -1044,6 +1268,10 @@ impl RawContentRegexIndex {
                 ci_literal_prefilter,
                 ci_literal_to_patterns,
                 patterns_without_literals,
+                cs_word_automaton,
+                cs_word_to_traits,
+                ci_word_automaton,
+                ci_word_to_traits,
             })),
             Err(e) => {
                 // RegexSet creation failed. Find invalid patterns and report them as errors.

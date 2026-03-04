@@ -170,7 +170,7 @@ parking_lot = "0.12"  # For efficient mutexes in memory tracking
 memmap2 = "0.9"  # Memory-mapped file I/O for large files
 smallvec = "1.15"  # Stack-allocated vectors for small collections
 encoding_rs = "0.8"  # Character encoding detection and conversion
-stng = { git = "https://codeberg.org/atomdrift/stng", rev = "5bfa410ba1686e21c71f0b41eb74a2facc446a6f" }
+stng = { git = "https://codeberg.org/atomdrift/stng", rev = "e9bceb3f2e0d43132196fedec07b9b23ab315c7a" }
 
 # Logging (tracing is the modern standard, more powerful than log+env_logger)
 tracing = "0.1"

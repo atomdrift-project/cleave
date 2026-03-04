@@ -23,7 +23,7 @@ traits:
     conf: 0.5
     for: [javascript, typescript, python]
     if:
-      type: string
+      type: raw
       substr: "createCipheriv"
 
   - id: aes-keyword

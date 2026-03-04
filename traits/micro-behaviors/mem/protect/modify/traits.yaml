@@ -35,6 +35,7 @@ traits:
     crit: notable
     conf: 0.90
     attack: "T1587.001"
+    for: [pe, dll, c, cpp]
     if:
       type: symbol
       exact: "VirtualAlloc"

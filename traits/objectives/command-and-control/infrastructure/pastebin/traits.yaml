@@ -67,3 +67,34 @@ traits:
     if:
       type: string
       regex: 'pastery\.net'
+
+  # JSON hosting services - increasingly used as C2 staging
+  - id: jsonkeeper
+    desc: JSONkeeper.com reference
+    if:
+      type: string
+      substr: 'jsonkeeper.com'
+
+  - id: jsonbin
+    desc: JSONBin.io reference
+    if:
+      type: string
+      substr: 'jsonbin.io'
+
+  - id: npoint
+    desc: npoint.io reference
+    if:
+      type: string
+      substr: 'npoint.io'
+
+  - id: jsonblob
+    desc: JSONBlob.com reference
+    if:
+      type: string
+      substr: 'jsonblob.com'
+
+  - id: mockapi
+    desc: MockAPI.io reference
+    if:
+      type: string
+      substr: 'mockapi.io'

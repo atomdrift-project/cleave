@@ -70,7 +70,7 @@ traits:
     conf: 0.85
     if:
       type: symbol
-      regex: "__chk_fail"
+      exact: "__chk_fail"
 
   - id: chk-suffix
     desc: _chk@ function suffix

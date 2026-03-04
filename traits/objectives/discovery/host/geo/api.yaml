@@ -271,3 +271,10 @@ composite_rules:
     all:
       - id: geo-api
       - id: geo-response-field
+
+  - id: multimodal-ip-profiling
+    desc: Multimodal IP profiling (server + browser side)
+    crit: hostile
+    all:
+      - id: objectives/discovery/host/geo::victim-profiling
+      - id: micro-behaviors/communications/download/curl::fetch-call

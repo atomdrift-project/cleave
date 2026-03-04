@@ -18,4 +18,14 @@ traits:
         - type: raw
           substr: "require('../common')"
         - type: raw
-          regex: "Copyright.*Node contributors"
+          regex: "Copyright.{0,80}Node contributors"
+
+  - id: execution-policy-force-set
+    desc: "Forced PowerShell execution policy change"
+    crit: suspicious
+    conf: 0.90
+    attack: "T1059.001"
+    for: [scripts, -powershell]
+    if:
+      type: string
+      regex: 'Set-ExecutionPolicy\s+\w+.{0,40}-Force'

@@ -10,9 +10,9 @@ traits:
     conf: 0.9
     attack: "T1055"
     platforms: [windows]
-    for: [pe, dll]
+    for: [pe, dll, c, cpp]
     if:
-      type: string
+      type: raw
       substr: "PAGE_EXECUTE_READWRITE"
     # PE viewers enumerate all protection constants as display labels
     downgrade:
@@ -25,7 +25,42 @@ traits:
     desc: PAGE protection constant enumeration
     crit: component
     platforms: [windows]
-    for: [pe, dll]
+    for: [pe, dll, c, cpp]
     if:
       type: string
       substr: "PAGE_NOACCESS"
+
+  # Kernel pool allocation for executable code
+  - id: kernel-pool-alloc
+    desc: Kernel pool memory allocation
+    crit: notable
+    conf: 0.9
+    attack: "T1055"
+    platforms: [windows]
+    for: [c, cpp, pe, dll]
+    if:
+      type: raw
+      substr: "ExAllocatePoolWithTag"
+
+  # NonPagedPool is used for kernel code that must stay resident
+  - id: nonpaged-pool
+    desc: NonPagedPool kernel memory flag
+    crit: baseline
+    conf: 0.9
+    platforms: [windows]
+    for: [c, cpp, pe, dll]
+    if:
+      type: raw
+      substr: "NonPagedPool"
+
+  # __declspec(safebuffers) disables buffer overflow security checks
+  - id: safebuffers-directive
+    desc: Buffer security check suppression
+    crit: notable
+    conf: 0.85
+    attack: "T1562"
+    platforms: [windows]
+    for: [c, cpp, pe, dll]
+    if:
+      type: raw
+      substr: "safebuffers"

@@ -23,3 +23,14 @@ traits:
     if:
       type: symbol
       substr: "IPython.display"
+
+composite_rules:
+  - id: browser-recon-bridge
+    desc: Browser-side reconnaissance bridge (Colab)
+    crit: suspicious
+    all:
+      - id: objectives/execution/interpreter/runtime/colab::register-callback
+      - id: objectives/execution/interpreter/runtime/colab::browser-display-html
+    any:
+      - id: objectives/execution/interpreter/runtime/colab::invoke-function
+      - id: micro-behaviors/communications/download/curl::fetch-call

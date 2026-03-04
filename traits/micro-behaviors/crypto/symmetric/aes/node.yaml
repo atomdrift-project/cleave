@@ -33,7 +33,7 @@ traits:
     mbc: "C0027"
     for: [javascript, typescript]
     if:
-      type: string
+      type: raw
       substr: "createDecipheriv"
 
   # === AES-128-CTR atomic indicators ===

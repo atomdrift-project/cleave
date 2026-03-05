@@ -63,6 +63,8 @@ traits:
     attack: "T1055"
     platforms: [windows]
     for: [pe, dll]
+    count_min: 2
+    size_max: 2097152
     if:
       type: hex
       section: text

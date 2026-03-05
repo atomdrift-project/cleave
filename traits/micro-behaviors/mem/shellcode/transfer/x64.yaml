@@ -14,6 +14,7 @@ traits:
     size_max: 8192
     if:
       type: hex
+      section: text
       pattern: "ff e6"
 
   # jmp rax (ff e0)
@@ -22,6 +23,7 @@ traits:
     size_max: 8192
     if:
       type: hex
+      section: text
       pattern: "ff e0"
 
   # call rax (ff d0)
@@ -30,6 +32,7 @@ traits:
     size_max: 8192
     if:
       type: hex
+      section: text
       pattern: "ff d0"
 
   # call rsi (ff d6)
@@ -38,6 +41,7 @@ traits:
     size_max: 8192
     if:
       type: hex
+      section: text
       pattern: "ff d6"
 
   # jmp rcx (ff e1)
@@ -46,6 +50,7 @@ traits:
     size_max: 8192
     if:
       type: hex
+      section: text
       pattern: "ff e1"
 
   # call rcx (ff d1)
@@ -54,6 +59,7 @@ traits:
     size_max: 8192
     if:
       type: hex
+      section: text
       pattern: "ff d1"
 
 composite_rules:

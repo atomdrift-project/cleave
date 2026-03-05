@@ -17,6 +17,7 @@ traits:
     count_min: 5
     if:
       type: hex
+      section: text
       pattern: "0F A2"
     unless:
       - type: metrics
@@ -32,6 +33,7 @@ traits:
     count_min: 5
     if:
       type: hex
+      section: text
       pattern: "0F 31"
     unless:
       - type: raw

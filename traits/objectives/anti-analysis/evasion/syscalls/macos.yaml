@@ -24,6 +24,8 @@ traits:
   - id: syscall-in-exception-tab
     desc: "Direct x86_64 syscall in __gcc_except_tab"
     conf: 0.95
+    count_min: 2
+    size_max: 10485760
     if:
       type: hex
       pattern: "0f 05"
@@ -46,6 +48,8 @@ traits:
   - id: syscall-in-data-section
     desc: "Direct x86_64 syscall found in data section"
     conf: 0.9
+    count_min: 2
+    size_max: 10485760
     if:
       type: hex
       pattern: "0f 05"

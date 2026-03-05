@@ -47,6 +47,7 @@ traits:
     conf: 0.85
     count_min: 10
     per_kb_min: 15.0  # 15+ XORs per KB
+    size_max: 10485760
     if:
       type: hex
       section: text
@@ -75,6 +76,7 @@ traits:
     for: [elf, macho]
     per_kb_min: 10.0
     count_min: 20
+    size_max: 10485760
     if:
       type: hex
       section: text

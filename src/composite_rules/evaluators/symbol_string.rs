@@ -218,19 +218,6 @@ pub(crate) fn eval_string<'a, 'b>(
     trait_not: Option<&Vec<NotException>>,
     ctx: &EvaluationContext<'b>,
 ) -> ConditionResult {
-    // Reject patterns too short to be useful (1-2 chars)
-    const MIN_PATTERN_LEN: usize = 3;
-    if let Some(s) = params.exact {
-        if s.len() < MIN_PATTERN_LEN {
-            return ConditionResult::no_match();
-        }
-    }
-    if let Some(s) = params.substr {
-        if s.len() < MIN_PATTERN_LEN {
-            return ConditionResult::no_match();
-        }
-    }
-
     let profile = std::env::var("CLEAVE_PROFILE").is_ok();
     let t_start = if profile {
         Some(std::time::Instant::now())
@@ -596,16 +583,25 @@ pub(crate) fn eval_raw<'a>(
     ctx: &EvaluationContext<'a>,
     trait_id: Option<&str>,
 ) -> ConditionResult {
-    // Reject patterns too short to be useful (1-2 chars)
-    const MIN_PATTERN_LEN: usize = 3;
-    if let Some(s) = exact {
-        if s.len() < MIN_PATTERN_LEN {
-            return ConditionResult::no_match();
-        }
-    }
-    if let Some(s) = substr {
-        if s.len() < MIN_PATTERN_LEN {
-            return ConditionResult::no_match();
+    // Reject short raw patterns unless search space is bounded (~1KB).
+    // Acceptable: offset/offset_range, or section + section_offset*.
+    // Density constraints (count_min, per_kb_min) are checked at trait level, not here.
+    {
+        const MIN_PATTERN_LEN: usize = 3;
+        let has_pinpoint = location.offset.is_some() || location.offset_range.is_some();
+        let has_section_pinpoint = location.section.is_some()
+            && (location.section_offset.is_some() || location.section_offset_range.is_some());
+        if !has_pinpoint && !has_section_pinpoint {
+            if let Some(s) = exact {
+                if s.len() < MIN_PATTERN_LEN {
+                    return ConditionResult::no_match();
+                }
+            }
+            if let Some(s) = substr {
+                if s.len() < MIN_PATTERN_LEN {
+                    return ConditionResult::no_match();
+                }
+            }
         }
     }
 

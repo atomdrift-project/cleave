@@ -79,15 +79,18 @@ traits:
       pattern: "00 90 00 90 00 90 00 90 00 90 00 90 00 90 00 90"
 
   # High density of NOP instructions (cave or alignment abuse)
+  # Search for 8 consecutive NOPs — individual NOPs are too common (compiler alignment),
+  # but runs of 8+ indicate padding caves or intentional NOP sleds
   - id: dense-nops-executable
     desc: Dense NOP instructions in executable section
     crit: notable
     conf: 0.75
-    per_kb_min: 100.0  # 100+ NOPs per KB is unusual
+    per_kb_min: 10.0  # Adjusted: each match is 8 NOPs, so 10 runs/KB ≈ 80+ NOPs/KB
+    size_max: 10485760
     if:
       type: hex
       section: text
-      pattern: "90"
+      pattern: "90 90 90 90 90 90 90 90"
     unless:
       - id: metadata/compiler::go-binary  # Go uses NOPs for alignment
 

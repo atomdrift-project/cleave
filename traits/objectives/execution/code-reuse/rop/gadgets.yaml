@@ -21,6 +21,7 @@ traits:
     crit: suspicious
     conf: 0.85
     per_kb_min: 50.0  # 50+ returns per KB is unusual
+    size_max: 10485760
     if:
       type: hex
       section: text
@@ -32,6 +33,7 @@ traits:
     crit: suspicious
     conf: 0.95
     per_kb_min: 100.0  # 100+ returns per KB
+    size_max: 10485760
     if:
       type: hex
       section: text
@@ -62,6 +64,7 @@ traits:
     crit: component
     conf: 0.75
     count_min: 100
+    size_max: 10485760
     if:
       type: hex
       section: text
@@ -73,6 +76,7 @@ traits:
     crit: suspicious
     conf: 0.85
     per_kb_min: 80.0  # High density of 2-byte gadgets
+    size_max: 10485760
     if:
       type: hex
       section: text
@@ -93,6 +97,7 @@ traits:
     count_min: 20
     per_kb_min: 5.0
     size_min: 1024
+    size_max: 10485760
     if:
       type: hex
       section: .data
@@ -111,6 +116,7 @@ traits:
     for: [pe, elf]
     count_min: 50
     per_kb_min: 1.0
+    size_max: 10485760
     if:
       type: hex
       section: text

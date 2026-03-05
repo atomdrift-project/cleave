@@ -9,4 +9,5 @@ traits:
     per_kb_min: 8.0
     if:
       type: hex
+      section: text
       pattern: "?? ?? 00 41"

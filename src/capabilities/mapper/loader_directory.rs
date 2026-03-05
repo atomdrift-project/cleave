@@ -2086,7 +2086,16 @@ impl super::CapabilityMapper {
                     too_short.len()
                 );
                 eprintln!(
-                    "   Patterns with 1-2 characters/bytes are noisy and slow. Use longer patterns:\n"
+                    "   Short patterns must bound their search space (~8KB ideal). Add one of:"
+                );
+                eprintln!(
+                    "   - offset or offset_range (absolute file position)"
+                );
+                eprintln!(
+                    "   - section + section_offset/section_offset_range (pinpoint within section)"
+                );
+                eprintln!(
+                    "   - section + size_max (bound total file size)\n"
                 );
                 for (id, pattern, kind) in &too_short {
                     let source = rule_source_files

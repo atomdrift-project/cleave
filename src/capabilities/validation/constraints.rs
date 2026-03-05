@@ -384,16 +384,70 @@ pub(crate) fn find_excessive_skip_conditions(
 }
 
 /// Minimum effective pattern length. Patterns with fewer concrete characters/bytes
-/// are too noisy and slow to be useful.
+/// are too noisy and slow to be useful without additional specificity constraints.
 const MIN_PATTERN_LENGTH: usize = 3;
 
-/// Find traits with patterns too short to be useful (1-2 chars for raw/string, 1-2 concrete bytes for hex).
+/// Check whether a short pattern has sufficient constraints to bound the search space.
 ///
-/// Short patterns produce excessive matches, slow down scanning, and rarely provide
-/// meaningful signal. Unlike `find_short_pattern_warnings` (which allows exceptions for
-/// location-constrained patterns), this is a hard rejection.
+/// Short patterns (1-2 concrete chars/bytes) are only acceptable if the search is
+/// reasonably bounded (~8KB ideal). Acceptable constraint combinations:
 ///
-/// For hex patterns, only concrete bytes count — `??` wildcards and `[N]` gaps are excluded.
+/// - `offset` or `offset_range` (pinpointed absolute location)
+/// - `section` + one of: `section_offset`, `section_offset_range`, or `size_max`
+///   (section narrows the region, plus a pinpoint or file-size bound)
+///
+/// Section alone is NOT enough — a `.text` section can be megabytes.
+/// `size_max` alone is NOT enough — the whole file is still searched.
+/// Density constraints (`count_min`, `per_kb_min`) don't bound the search space.
+fn has_short_pattern_constraints(t: &TraitDefinition, cond: &Condition) -> bool {
+    let (section, offset, offset_range, section_offset, section_offset_range) = match cond {
+        Condition::Raw {
+            section,
+            offset,
+            offset_range,
+            section_offset,
+            section_offset_range,
+            ..
+        }
+        | Condition::Hex {
+            section,
+            offset,
+            offset_range,
+            section_offset,
+            section_offset_range,
+            ..
+        } => (section, offset, offset_range, section_offset, section_offset_range),
+        _ => return true,
+    };
+
+    // Absolute offset or offset_range pins to a specific location
+    if offset.is_some() || offset_range.is_some() {
+        return true;
+    }
+
+    // Section + (section_offset* or size_max) bounds the search region
+    if section.is_some()
+        && (section_offset.is_some() || section_offset_range.is_some() || t.size_max.is_some())
+    {
+        return true;
+    }
+
+    false
+}
+
+/// Find raw/hex traits with patterns too short to be useful without sufficient constraints.
+///
+/// Short patterns (1-2 chars for raw substr/exact, 1-2 concrete bytes for hex) are
+/// rejected unless the search space is reasonably bounded (~8KB ideal):
+///
+/// - `offset` or `offset_range` (pinpointed absolute location)
+/// - `section` + (`section_offset*` or `size_max`) — narrows to a bounded region
+///
+/// For hex patterns, `??` full wildcards and `[N]` gaps don't count toward length,
+/// but nibble wildcards like `4?` or `?F` do (they still constrain one nibble).
+///
+/// `type: string` patterns are excluded — string extraction already provides
+/// boundary context that reduces noise.
 ///
 /// Returns: `Vec<(trait_id, pattern_value, pattern_type)>`
 #[must_use]
@@ -403,19 +457,12 @@ pub(crate) fn find_too_short_patterns(
     let mut violations = Vec::new();
 
     for t in trait_definitions {
+        if has_short_pattern_constraints(t, &t.r#if) {
+            continue;
+        }
+
         match &t.r#if {
-            Condition::Raw {
-                exact,
-                substr,
-                word,
-                ..
-            }
-            | Condition::String {
-                exact,
-                substr,
-                word,
-                ..
-            } => {
+            Condition::Raw { exact, substr, .. } => {
                 if let Some(s) = exact {
                     if s.len() < MIN_PATTERN_LENGTH {
                         violations.push((t.id.clone(), s.clone(), "exact"));
@@ -424,11 +471,6 @@ pub(crate) fn find_too_short_patterns(
                 if let Some(s) = substr {
                     if s.len() < MIN_PATTERN_LENGTH {
                         violations.push((t.id.clone(), s.clone(), "substr"));
-                    }
-                }
-                if let Some(s) = word {
-                    if s.len() < MIN_PATTERN_LENGTH {
-                        violations.push((t.id.clone(), s.clone(), "word"));
                     }
                 }
             }

@@ -16,6 +16,7 @@ traits:
     count_min: 2
     if:
       type: hex
+      section: text
       pattern: "0F 31"
     unless:
       - type: raw

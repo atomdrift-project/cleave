@@ -22,8 +22,11 @@ traits:
     desc: CreateProcess with suspended flag (0x4)
     crit: notable
     conf: 0.65
+    count_min: 2
+    size_max: 2097152
     if:
       type: hex
+      section: text
       pattern: "6a 04"
 
   # Section unmapping

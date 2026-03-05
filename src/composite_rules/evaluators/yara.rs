@@ -398,18 +398,27 @@ pub(crate) fn eval_hex<'a>(
     ctx: &EvaluationContext<'a>,
     trait_id: Option<&str>,
 ) -> ConditionResult {
-    // Reject patterns with fewer than 3 concrete bytes (excluding ?? wildcards and gaps)
-    let concrete_bytes = pattern
-        .split_whitespace()
-        .filter(|t| {
-            !t.starts_with('[')
-                && *t != "??"
-                && t.len() == 2
-                && t.chars().all(|c| c.is_ascii_hexdigit() || c == '?')
-        })
-        .count();
-    if concrete_bytes < 3 {
-        return ConditionResult::no_match();
+    // Reject short hex patterns unless search space is bounded (~1KB).
+    // Acceptable: offset/offset_range, or section + (section_offset* or small file).
+    // Density constraints (count_min, per_kb_min) are checked at trait level, not here.
+    {
+        let has_pinpoint = location.offset.is_some() || location.offset_range.is_some();
+        let has_section_pinpoint = location.section.is_some()
+            && (location.section_offset.is_some() || location.section_offset_range.is_some());
+        if !has_pinpoint && !has_section_pinpoint {
+            let concrete_bytes = pattern
+                .split_whitespace()
+                .filter(|t| {
+                    !t.starts_with('[')
+                        && *t != "??"
+                        && t.len() == 2
+                        && t.chars().all(|c| c.is_ascii_hexdigit() || c == '?')
+                })
+                .count();
+            if concrete_bytes < 3 {
+                return ConditionResult::no_match();
+            }
+        }
     }
 
     let data = ctx.binary_data;

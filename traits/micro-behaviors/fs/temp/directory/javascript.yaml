@@ -1,0 +1,30 @@
+# Temporary Directory Operations - JavaScript/Node.js
+# MBC: E1083 (File and Directory Discovery)
+
+defaults:
+  for: [javascript, typescript]
+
+traits:
+  - id: os-tmpdir
+    desc: Node.js os.tmpdir() call
+    crit: baseline
+    conf: 0.8
+    if:
+      type: raw
+      regex: 'os\.tmpdir\s*\('
+
+  - id: tmpdir-variable
+    desc: Variable named tmpDir referencing temp directory
+    crit: baseline
+    conf: 0.6
+    if:
+      type: raw
+      word: tmpDir
+
+  - id: tempdir-variable
+    desc: Variable named tempDir referencing temp directory
+    crit: baseline
+    conf: 0.6
+    if:
+      type: raw
+      word: tempDir

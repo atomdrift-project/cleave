@@ -1,0 +1,104 @@
+# File-Read-Eval Dropper Detection
+# Detects the pattern of reading a file, transforming its content, and eval'ing the result
+# This is a common supply-chain attack technique where encrypted/encoded payloads are
+# stored in innocuous-looking files (LICENSE, README, data files) and decrypted at runtime
+# ATT&CK: T1195.002 (Supply Chain Compromise: Compromise Software Supply Chain)
+# MBC: B0024 (Execution Guardrails)
+
+defaults:
+  for: [javascript, typescript]
+  attack: T1195.002
+
+traits:
+  # Detects eval() called with a function call as its argument: eval(someFunc(data))
+  # More suspicious than eval(variable) because it implies data transformation before execution
+  - id: eval-of-transform-raw
+    desc: eval() with transform function call pattern
+    crit: component
+    if:
+      type: raw
+      regex: 'eval\([a-zA-Z_$][a-zA-Z0-9_$]{0,30}\('
+
+  # Detects fs.readFile/readFileSync calls via raw content matching
+  - id: fs-readfile-raw
+    desc: fs.readFile or readFileSync call
+    crit: baseline
+    conf: 0.7
+    if:
+      type: raw
+      regex: '\.readFile(Sync)?\s*\('
+
+  - id: eval-transform-ast
+    desc: eval of transformed local data
+    crit: notable
+    conf: 0.88
+    if:
+      type: ast
+      query: |
+        (call_expression
+          function: (identifier) @fn
+          arguments: (arguments
+            (call_expression
+              function: (identifier) @transform
+              arguments: (arguments
+                (identifier) @arg)))
+          (#eq? @fn "eval"))
+
+  - id: readfile-utf8
+    desc: Reads file content as utf8
+    crit: notable
+    conf: 0.82
+    if:
+      type: raw
+      regex: "readFile(Sync)?\\s*\\([^)]{0,80}['\\\"]utf8['\\\"]"
+
+composite_rules:
+  - id: eval-of-transform
+    desc: eval() with transform function call (excludes packers)
+    crit: suspicious
+    conf: 0.9
+    all:
+      - id: eval-of-transform-raw
+    none:
+      - id: objectives/anti-static/packer/detect::dean-edwards
+
+  # Core dropper pattern: small JS file that reads a file and eval's transformed content
+  - id: file-read-eval-dropper
+    desc: Reads file and eval()s transformed content
+    crit: hostile
+    conf: 0.95
+    all:
+      - id: metadata/import/builtin::require-fs
+      - id: readfile-utf8
+      - id: objectives/lateral-movement/supply-chain/npm/behavior::small-file-5k
+    any:
+      - id: eval-of-transform
+      - id: objectives/execution/interpreter/eval/dynamic::eval-call-js
+
+  - id: local-payload-transform-eval
+    desc: Local payload file transformed then eval
+    crit: suspicious
+    conf: 0.94
+    all:
+      - id: metadata/import/builtin::require-fs
+      - id: micro-behaviors/fs/path/construct::path-join-dirname
+      - id: objectives/execution/interpreter/eval/dynamic::eval-call-js
+      - id: eval-transform-ast
+      - id: readfile-utf8
+      - id: metadata/quality/license::license-upper
+    none:
+      - id: objectives/anti-static/packer/detect::dean-edwards
+    unless:
+      - id: metadata/quality/testing::test-filename-pattern
+
+  # Small module that exports a decryption function with hardcoded crypto keys.
+  # Common in supply-chain attacks where a separate utility module handles
+  # payload decryption (e.g., AES decrypt with embedded key/IV).
+  - id: supply-chain-crypto-decryptor
+    desc: Exported decryptor module with embedded keys
+    crit: hostile
+    conf: 0.95
+    all:
+      - id: objectives/anti-static/obfuscation/payload::hardcoded-key-decryptor
+      - id: objectives/lateral-movement/supply-chain/npm/behavior::small-file-5k
+      - id: objectives/anti-static/obfuscation/payload::exported-decryptor

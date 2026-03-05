@@ -1,0 +1,30 @@
+# C++ Startup Persistence
+# Detects techniques used by C++ malware to achieve persistence via startup folders.
+# ATT&CK: T1547.001 (Boot or Logon Autostart Execution: Registry Run Keys / Startup Folder)
+# MBC: B0011 (Persistence)
+
+defaults:
+  for: [c, cpp, pe, dll]
+  platforms: [windows]
+  attack: "T1547.001"
+  mbc: "B0011"
+
+traits:
+  - id: init-startup-symbol
+    desc: InitStrtp symbol (potential persistence initialization)
+    crit: suspicious
+    conf: 0.85
+    if:
+      type: symbol
+      substr: "InitStrtp"
+
+composite_rules:
+  - id: startup-persistence-init
+    desc: Persistence initialization via startup folder
+    crit: hostile
+    conf: 0.95
+    needs: 2
+    any:
+      - id: init-startup-symbol
+      - id: micro-behaviors/os/persistence/startup::win-startup-path
+      - id: micro-behaviors/fs/path/persistence-locations/keywords::startup-keyword

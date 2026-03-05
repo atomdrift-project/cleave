@@ -1,0 +1,32 @@
+# C++ Self-Termination and Anti-Analysis
+# Detects techniques where the malware intentionally crashes or terminates to avoid analysis.
+# ATT&CK: T1497 (Virtualization/Sandbox Evasion)
+# MBC: F0001 (Anti-Analysis)
+
+defaults:
+  for: [c, cpp, pe, dll]
+  platforms: [windows, linux, macos]
+  attack: "T1497"
+  mbc: "F0001"
+
+traits:
+  - id: null-pointer-dereference-crash
+    desc: Intentional null pointer dereference for crash/termination
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: raw
+      substr: "*(uintptr_t*)0 = 0"
+
+composite_rules:
+  - id: anti-analysis-self-destruct
+    desc: Intentional crash/self-destruct when analysis environment detected
+    crit: hostile
+    conf: 0.95
+    all:
+      - id: null-pointer-dereference-crash
+    any:
+      - id: objectives/anti-analysis/vm/detect::hypervisor-vendor
+      - id: objectives/anti-analysis/vm/detect::mac-prefix
+      - id: objectives/anti-analysis/obfuscation/control-flow::stack-spoofing-technique
+      - id: objectives/anti-analysis/vm/detect::is-vt-symbol

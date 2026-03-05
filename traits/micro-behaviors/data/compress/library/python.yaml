@@ -1,0 +1,31 @@
+# Python Compression Operations
+# MBC: C0024 (Data Transformation)
+
+defaults:
+  for: [python]
+
+traits:
+  - id: gzip-open-call
+    desc: Python gzip.open call
+    crit: component
+    conf: 0.9
+    if:
+      type: symbol
+      substr: "gzip.open"
+
+  - id: gzip-decompress-call
+    desc: Python gzip.decompress call
+    crit: component
+    conf: 0.9
+    if:
+      type: symbol
+      substr: "gzip.decompress"
+
+composite_rules:
+  - id: gzip-read-operation
+    desc: Reads gzip compressed data
+    crit: notable
+    conf: 0.85
+    any:
+      - id: gzip-open-call
+      - id: gzip-decompress-call

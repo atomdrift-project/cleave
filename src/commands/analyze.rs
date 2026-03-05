@@ -52,9 +52,89 @@ use std::sync::Arc;
 
 /// Shared analysis context for reusing expensive resources across multiple files.
 /// YARA rules take ~27s to compile, so we load once and share via Arc.
-struct AnalysisContext {
+struct AnalysisContextData {
     yara_engine: Option<Arc<YaraEngine>>,
     capability_mapper: Arc<CapabilityMapper>,
+}
+
+struct ContextInitializer {
+    enable_third_party: bool,
+    yara_disabled: bool,
+    platforms_vec: Vec<composite_rules::Platform>,
+    min_hostile_precision: f32,
+    min_suspicious_precision: f32,
+    enable_full_validation: bool,
+}
+
+impl ContextInitializer {
+    fn initialize(&self) -> AnalysisContextData {
+        // Load capability mapper and YARA rules in parallel
+        let yara_disabled = self.yara_disabled;
+        let enable_third_party = self.enable_third_party;
+        let yara_handle: Option<std::thread::JoinHandle<(YaraEngine, usize, usize)>> = if yara_disabled
+        {
+            None
+        } else {
+            Some(std::thread::spawn(move || {
+                let empty_mapper = CapabilityMapper::empty();
+                let mut engine = YaraEngine::new_with_mapper(empty_mapper);
+                let (builtin, third_party) = engine.load_all_rules(enable_third_party);
+                (engine, builtin, third_party)
+            }))
+        };
+
+        // Allow skipping trait loading for tests that don't need it
+        let capability_mapper = if std::env::var("CLEAVE_SKIP_TRAITS").is_ok() {
+            tracing::info!("Traits skipped (CLEAVE_SKIP_TRAITS set)");
+            Arc::new(CapabilityMapper::empty())
+        } else {
+            Arc::new(
+                CapabilityMapper::new_with_precision_thresholds(
+                    self.min_hostile_precision,
+                    self.min_suspicious_precision,
+                    self.enable_full_validation,
+                )
+                .with_platforms(self.platforms_vec.clone()),
+            )
+        };
+
+        let yara_engine = if yara_disabled {
+            tracing::info!("YARA scanning disabled");
+            None
+        } else if let Some(handle) = yara_handle {
+            let (engine, builtin_count, third_party_count) = handle
+                .join()
+                .unwrap_or_else(|e| std::panic::resume_unwind(e));
+            tracing::info!(
+                "YARA engine loaded with {} rules",
+                builtin_count + third_party_count
+            );
+            if builtin_count + third_party_count > 0 {
+                Some(Arc::new(engine))
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        AnalysisContextData {
+            yara_engine,
+            capability_mapper,
+        }
+    }
+}
+
+#[derive(Clone)]
+struct AnalysisContext {
+    data: Arc<std::sync::OnceLock<AnalysisContextData>>,
+    initializer: Arc<ContextInitializer>,
+}
+
+impl AnalysisContext {
+    fn get_data(&self) -> &AnalysisContextData {
+        self.data.get_or_init(|| self.initializer.initialize())
+    }
 }
 
 /// Load YARA engine and capability mapper once for reuse across multiple files.
@@ -66,58 +146,27 @@ fn create_analysis_context(
     min_suspicious_precision: f32,
     enable_full_validation: bool,
 ) -> AnalysisContext {
-    // Load capability mapper and YARA rules in parallel
-    let yara_handle: Option<std::thread::JoinHandle<(YaraEngine, usize, usize)>> = if yara_disabled
-    {
-        None
-    } else {
-        Some(std::thread::spawn(move || {
-            let empty_mapper = CapabilityMapper::empty();
-            let mut engine = YaraEngine::new_with_mapper(empty_mapper);
-            let (builtin, third_party) = engine.load_all_rules(enable_third_party);
-            (engine, builtin, third_party)
-        }))
+    let initializer = Arc::new(ContextInitializer {
+        enable_third_party,
+        yara_disabled,
+        platforms_vec: platforms.to_vec(),
+        min_hostile_precision,
+        min_suspicious_precision,
+        enable_full_validation,
+    });
+
+    let ctx = AnalysisContext {
+        data: Arc::new(std::sync::OnceLock::new()),
+        initializer,
     };
 
-    // Allow skipping trait loading for tests that don't need it
-    let capability_mapper = if std::env::var("CLEAVE_SKIP_TRAITS").is_ok() {
-        tracing::info!("Traits skipped (CLEAVE_SKIP_TRAITS set)");
-        Arc::new(CapabilityMapper::empty())
-    } else {
-        Arc::new(
-            CapabilityMapper::new_with_precision_thresholds(
-                min_hostile_precision,
-                min_suspicious_precision,
-                enable_full_validation,
-            )
-            .with_platforms(platforms.to_vec()),
-        )
-    };
+    // Trigger initialization in the background immediately
+    let bg_ctx = ctx.clone();
+    std::thread::spawn(move || {
+        bg_ctx.get_data();
+    });
 
-    let yara_engine = if yara_disabled {
-        tracing::info!("YARA scanning disabled");
-        None
-    } else if let Some(handle) = yara_handle {
-        let (engine, builtin_count, third_party_count) = handle
-            .join()
-            .unwrap_or_else(|e| std::panic::resume_unwind(e));
-        tracing::info!(
-            "YARA engine loaded with {} rules",
-            builtin_count + third_party_count
-        );
-        if builtin_count + third_party_count > 0 {
-            Some(Arc::new(engine))
-        } else {
-            None
-        }
-    } else {
-        None
-    };
-
-    AnalysisContext {
-        yara_engine,
-        capability_mapper,
-    }
+    ctx
 }
 
 /// Analyze a single file with comprehensive malware detection.
@@ -368,8 +417,9 @@ fn analyze_file_with_context(
     tracing::info!("File type: {:?}", file_type);
 
     // Use pre-loaded YARA engine and capability mapper from context
-    let capability_mapper = &ctx.capability_mapper;
-    let yara_engine = &ctx.yara_engine;
+    let context_data = ctx.get_data();
+    let capability_mapper = &context_data.capability_mapper;
+    let yara_engine = &context_data.yara_engine;
 
     // Route to appropriate analyzer.
     // For ELF/MachO/PE: structural analysis and YARA scan run in parallel via rayon::join,

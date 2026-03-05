@@ -388,15 +388,6 @@ impl UnifiedSourceAnalyzer {
     ) -> Result<AnalysisReport> {
         let start = std::time::Instant::now();
 
-        // Parse the source
-        let tree = self
-            .parser
-            .borrow_mut()
-            .parse(content, None)
-            .with_context(|| format!("Failed to parse {} source", self.config.name))?;
-
-        let root = tree.root_node();
-
         // Create target info
         let target = TargetInfo {
             path: file_path.display().to_string(),
@@ -417,21 +408,52 @@ impl UnifiedSourceAnalyzer {
                 self.config.description,
             ));
 
-        // Extract functions
-        self.extract_functions(&root, content.as_bytes(), &mut report);
+        let has_preextracted = !preextracted_stng.is_empty();
+        let mut owned_stng = Vec::new();
 
-        // Extract strings
-        self.extract_strings(&root, content.as_bytes(), &mut report);
+        let tree = rayon::in_place_scope(|s| {
+            let mut stng_rx = None;
+            if !has_preextracted {
+                let (tx, rx) = crossbeam_channel::bounded(1);
+                stng_rx = Some(rx);
+                s.spawn(move |_| {
+                    let opts = stng::ExtractOptions::new(4)
+                        .with_garbage_filter(true)
+                        .with_xor(None);
+                    let _ = tx.send(stng::extract_strings_with_options(original_bytes, &opts));
+                });
+            }
 
-        // Use pre-extracted stng strings if available, otherwise extract now
-        let owned_stng;
-        let stng_strings: &[stng::ExtractedString] = if !preextracted_stng.is_empty() {
+            // Parse the source
+            let tree_res = self
+                .parser
+                .borrow_mut()
+                .parse(content, None);
+
+            if let Some(tree) = &tree_res {
+                let root = tree.root_node();
+                // Extract functions
+                self.extract_functions(&root, content.as_bytes(), &mut report);
+                // Extract strings
+                self.extract_strings(&root, content.as_bytes(), &mut report);
+            }
+
+            if let Some(rx) = stng_rx {
+                if let Ok(res) = rx.recv() {
+                    owned_stng = res;
+                }
+            }
+
+            tree_res
+        });
+
+        let tree = tree.with_context(|| format!("Failed to parse {} source", self.config.name))?;
+        let root = tree.root_node();
+
+        // Use pre-extracted stng strings if available, otherwise use parallel extracted ones
+        let stng_strings: &[stng::ExtractedString] = if has_preextracted {
             preextracted_stng
         } else {
-            let opts = stng::ExtractOptions::new(4)
-                .with_garbage_filter(true)
-                .with_xor(None);
-            owned_stng = stng::extract_strings_with_options(original_bytes, &opts);
             &owned_stng
         };
 

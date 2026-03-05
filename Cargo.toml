@@ -184,6 +184,7 @@ tower-http = { version = "0.6", features = ["limit"] }
 multer = "3"
 futures-core = "0.3"
 futures-util = "0.3"
+once_cell = "1.21"
 
 [lib]
 name = "cleave"

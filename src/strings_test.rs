@@ -628,3 +628,15 @@ fn test_normalize_import_with_double_underscore() {
         StringType::Import
     );
 }
+
+#[test]
+fn test_woff2_malware_extraction() {
+    let data = std::fs::read("/Users/t/data/dissect/malware/cpp/2026.Luckyware/LuckywareSite/Data/vendor/imagesloaded/assets/2D333F_1_0.woff2").unwrap();
+    let extractor = crate::strings::StringExtractor::default();
+    let strings = extractor.extract_smart(&data, None);
+    for s in strings {
+        if s.value.contains("158") || s.offset == 13222 {
+            println!("TEST_OUT: Offset: {}, String: {}, Kind: {:?}", s.offset, s.value, s.kind);
+        }
+    }
+}

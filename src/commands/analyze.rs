@@ -820,6 +820,7 @@ fn analyze_file_with_context(
     let _t4 = std::time::Instant::now();
 
     match format {
+        cli::OutputFormat::Json => Ok(serde_json::to_string(&report)?),
         cli::OutputFormat::Jsonl => output::format_jsonl(&report),
         cli::OutputFormat::Terminal => Ok(output::format_terminal(&report)),
     }

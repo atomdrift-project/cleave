@@ -81,6 +81,33 @@ fn test_analyze_json_output() {
         .stdout(predicate::str::contains(r#""type":"summary""#));
 }
 
+/// Test analyze command with --format json output (single report object)
+#[test]
+fn test_analyze_format_json_output() {
+    let temp_dir = TempDir::new().unwrap();
+    let script_path = temp_dir.path().join("test.sh");
+
+    fs::write(&script_path, "#!/bin/bash\necho 'hello'\n").unwrap();
+
+    let output = assert_cmd::cargo_bin_cmd!("cleave")
+        .env("cleave_SKIP_YARA", "1")
+        .args([
+            "--format",
+            "json",
+            "analyze",
+            script_path.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let json: serde_json::Value = serde_json::from_str(&stdout).expect("valid JSON object");
+    assert!(json.get("schema_version").is_some());
+    assert!(json.get("target").is_some());
+    assert!(json.get("files").is_some());
+}
+
 /// Test analyze command with output to file (JSON Lines format)
 #[test]
 

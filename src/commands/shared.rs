@@ -899,6 +899,7 @@ pub(crate) fn extract_strings_from_ast(
         .collect();
 
     match format {
+        crate::cli::OutputFormat::Json => Ok(serde_json::to_string_pretty(&filtered_strings)?),
         crate::cli::OutputFormat::Jsonl => Ok(serde_json::to_string_pretty(&filtered_strings)?),
         crate::cli::OutputFormat::Terminal => {
             let mut output = String::new();

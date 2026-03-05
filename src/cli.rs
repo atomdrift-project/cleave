@@ -113,7 +113,7 @@ pub(crate) struct Args {
     #[arg(long)]
     pub json: bool,
 
-    /// Output format: terminal (default), json, or jsonl (streaming)
+    /// Output format: terminal (default), json (single object), or jsonl (streaming)
     #[arg(long, value_enum)]
     pub format: Option<OutputFormat>,
 
@@ -652,6 +652,8 @@ pub(crate) enum DetectFileType {
 /// Output format for the diff command
 #[derive(Debug, Clone, Copy, clap::ValueEnum, PartialEq)]
 pub(crate) enum OutputFormat {
+    /// JSON output (single object), matching server mode response shape
+    Json,
     /// JSONL output (newline-delimited JSON) for streaming
     Jsonl,
     /// Human-readable terminal output
@@ -803,6 +805,12 @@ mod tests {
         let args = Args::try_parse_from(["cleave", "file.bin"]).unwrap();
         assert!(!args.json);
         assert!(matches!(args.format(), OutputFormat::Terminal));
+    }
+
+    #[test]
+    fn test_parse_format_json() {
+        let args = Args::try_parse_from(["cleave", "--format", "json", "file.bin"]).unwrap();
+        assert!(matches!(args.format(), OutputFormat::Json));
     }
 
     #[test]

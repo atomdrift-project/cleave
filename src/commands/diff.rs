@@ -30,6 +30,10 @@ pub(crate) fn run(old: &str, new: &str, format: &cli::OutputFormat) -> Result<St
     let diff_analyzer = diff::DiffAnalyzer::new(old, new);
 
     match format {
+        cli::OutputFormat::Json => {
+            let report = diff_analyzer.analyze_full()?;
+            Ok(serde_json::to_string_pretty(&report)?)
+        }
         cli::OutputFormat::Jsonl => {
             // Use full diff for JSONL - comprehensive ML-ready output
             let report = diff_analyzer.analyze_full()?;

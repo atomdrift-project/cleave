@@ -288,6 +288,10 @@ fn format_metrics_output(
     format: &cli::OutputFormat,
 ) -> Result<String> {
     match format {
+        cli::OutputFormat::Json => {
+            // JSON output - just serialize the metrics
+            Ok(serde_json::to_string_pretty(&metrics)?)
+        }
         cli::OutputFormat::Jsonl => {
             // JSON output - just serialize the metrics
             Ok(serde_json::to_string_pretty(&metrics)?)

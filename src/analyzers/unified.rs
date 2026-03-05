@@ -376,7 +376,7 @@ impl UnifiedSourceAnalyzer {
         content: &str,
         original_bytes: &[u8],
     ) -> Result<AnalysisReport> {
-        self.analyze_source_impl(file_path, content, original_bytes, &[])
+        self.analyze_source_impl(file_path, content, original_bytes, &[], &[])
     }
 
     fn analyze_source_impl(
@@ -385,6 +385,7 @@ impl UnifiedSourceAnalyzer {
         content: &str,
         original_bytes: &[u8],
         preextracted_stng: &[stng::ExtractedString],
+        preextracted_payloads: &[crate::types::ExtractedPayload],
     ) -> Result<AnalysisReport> {
         let start = std::time::Instant::now();
 
@@ -527,27 +528,34 @@ impl UnifiedSourceAnalyzer {
         }
 
         // Extract and analyze base64/zlib encoded payloads (same treatment as archives)
-        // When pre-extracted strings are available, filter for length >= 16 instead of re-running stng
+        // Use pre-extracted payloads if available to avoid redundant expensive I/O
         let owned_payload_stng;
-        let payload_stng: &[stng::ExtractedString] = if !preextracted_stng.is_empty() {
-            // Pre-extracted strings have min_length=4; filter for the min_length=16 threshold
-            owned_payload_stng = preextracted_stng
-                .iter()
-                .filter(|s| s.value.len() >= 16)
-                .cloned()
-                .collect::<Vec<_>>();
-            &owned_payload_stng
+        let owned_extracted_payloads;
+        let extracted_payloads: &[crate::types::ExtractedPayload] = if !preextracted_payloads.is_empty() {
+            preextracted_payloads
         } else {
-            let opts = stng::ExtractOptions::new(16).with_garbage_filter(true);
-            owned_payload_stng = stng::extract_strings_with_options(content.as_bytes(), &opts);
-            &owned_payload_stng
+            let payload_stng: &[stng::ExtractedString] = if !preextracted_stng.is_empty() {
+                // Pre-extracted strings have min_length=4; filter for the min_length=16 threshold
+                owned_payload_stng = preextracted_stng
+                    .iter()
+                    .filter(|s| s.value.len() >= 16)
+                    .cloned()
+                    .collect::<Vec<_>>();
+                &owned_payload_stng
+            } else {
+                let opts = stng::ExtractOptions::new(16).with_garbage_filter(true);
+                owned_payload_stng = stng::extract_strings_with_options(content.as_bytes(), &opts);
+                &owned_payload_stng
+            };
+            owned_extracted_payloads = crate::extractors::extract_encoded_payloads(payload_stng);
+            &owned_extracted_payloads
         };
-        let extracted_payloads = crate::extractors::extract_encoded_payloads(payload_stng);
+
         for (idx, payload) in extracted_payloads.iter().enumerate() {
             // Create virtual path with encoding info using ## delimiter for decoded content
             let virtual_path = crate::types::encode_decoded_path(
                 &file_path.display().to_string(),
-                &["base64".to_string()],
+                &payload.encoding_chain,
                 idx,
             );
 
@@ -1273,8 +1281,14 @@ impl Analyzer for UnifiedSourceAnalyzer {
 
         let content = String::from_utf8_lossy(&bytes);
 
-        // Pass pre-extracted stng strings to avoid redundant extraction
-        self.analyze_source_impl(input.path, &content, input.data, input.strings)
+        // Pass pre-extracted stng strings and payloads to avoid redundant extraction
+        self.analyze_source_impl(
+            input.path,
+            &content,
+            input.data,
+            input.strings,
+            input.payloads,
+        )
     }
 
     fn analyze(&self, file_path: &Path) -> Result<AnalysisReport> {

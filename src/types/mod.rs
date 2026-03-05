@@ -54,7 +54,7 @@ pub(crate) mod traits_findings;
 // Re-export all public types to maintain API compatibility
 // These re-exports are part of the public library API even if not used directly in the binary
 #[allow(unused_imports)]
-pub use core::{AnalysisReport, ArchiveEntry, Criticality, TargetInfo};
+pub use core::{AnalysisReport, ArchiveEntry, Criticality, ExtractedPayload, TargetInfo};
 
 #[allow(unused_imports)]
 pub(crate) use file_analysis::{

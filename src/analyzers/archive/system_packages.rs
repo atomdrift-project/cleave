@@ -86,6 +86,7 @@ pub(crate) fn extract_7z_safe(
 ) -> Result<()> {
     use sevenz_rust::{Password, SevenZReader};
     use std::io::Read;
+    use tracing::{debug, info};
 
     // Check magic bytes - file might be mislabeled (e.g., ZIP with .7z extension)
     let mut file = File::open(archive_path)?;
@@ -95,74 +96,137 @@ pub(crate) fn extract_7z_safe(
         return extract_zip_safe(archive_path, dest_dir, guard, zip_passwords);
     }
 
-    // Re-open for 7z processing
-    let file = File::open(archive_path)?;
-    let file_len = file.metadata()?.len();
-    let mut sz = SevenZReader::new(file, file_len, Password::empty())
-        .context("Failed to read 7z archive")?;
+    // Try with empty password first
+    let result = (|| -> Result<()> {
+        let file = File::open(archive_path)?;
+        let file_len = file.metadata()?.len();
+        let mut sz = SevenZReader::new(file, file_len, Password::empty())
+            .context("Failed to create 7z reader (unencrypted/empty password)")?;
 
-    // Iterate through entries
-    sz.for_each_entries(|entry, reader| {
-        // Check file count limit
-        if !guard.check_file_count() {
-            return Err(sevenz_rust::Error::other("Exceeded maximum file count"));
+        sz.for_each_entries(|entry, reader| {
+            extract_7z_entry_safe(entry, reader, dest_dir, guard)
+        })
+        .map_err(|e| anyhow::anyhow!(e))
+        .context("Failed to extract 7z archive (unencrypted/empty password)")
+    })();
+
+    if result.is_ok() {
+        return Ok(());
+    }
+
+    let err = result.unwrap_err();
+    let err_msg = err.to_string();
+
+    // If it failed due to encryption/password, try the configured passwords
+    if err_msg.contains("Password")
+        || err_msg.contains("encrypted")
+        || err_msg.contains("decryption")
+        || err_msg.contains("Invalid password")
+    {
+        info!(
+            "7z archive appears encrypted, trying {} passwords",
+            zip_passwords.len()
+        );
+
+        for password in zip_passwords {
+            debug!("Trying 7z password: {}", password);
+            let password_obj = Password::from(password.as_str());
+
+            let file = File::open(archive_path)?;
+            let file_len = file.metadata()?.len();
+
+            let reader_result = SevenZReader::new(file, file_len, password_obj.clone());
+
+            if let Ok(mut sz) = reader_result {
+                let extract_result = sz.for_each_entries(|entry, reader| {
+                    extract_7z_entry_safe(entry, reader, dest_dir, guard)
+                });
+
+                if extract_result.is_ok() {
+                    info!("✓ Decrypted 7z with password: {}", password);
+                    return Ok(());
+                }
+            }
         }
 
-        let name = entry.name();
+        anyhow::bail!(
+            "Failed to decrypt 7z archive (tried {} passwords). Original error: {}",
+            zip_passwords.len(),
+            err
+        );
+    }
 
-        // Skip entries with empty names
-        if name.is_empty() {
-            return Ok(true);
-        }
-
-        // Sanitize path to prevent path traversal
-        let Some(outpath) = sanitize_entry_path(name, dest_dir) else {
-            guard.add_hostile_reason(HostileArchiveReason::PathTraversal(name.to_string()));
-            return Ok(true); // Continue extraction
-        };
-
-        // Check if entry is a directory
-        if entry.is_directory() {
-            fs::create_dir_all(&outpath)
-                .map_err(|e| sevenz_rust::Error::other(format!("mkdir failed: {}", e)))?;
-            return Ok(true);
-        }
-
-        // Check size limits
-        let uncompressed = entry.size();
-        if uncompressed > MAX_FILE_SIZE {
-            guard.add_hostile_reason(HostileArchiveReason::ExcessiveFileSize {
-                file: name.to_string(),
-                size: uncompressed,
-            });
-            return Ok(true); // Skip but continue
-        }
-
-        // Create parent directory
-        if let Some(parent) = outpath.parent() {
-            fs::create_dir_all(parent)
-                .map_err(|e| sevenz_rust::Error::other(format!("mkdir failed: {}", e)))?;
-        }
-
-        // Extract file with size limiting
-        let mut limited_reader = LimitedReader::new(reader, uncompressed);
-        let mut output = File::create(&outpath)
-            .map_err(|e| sevenz_rust::Error::other(format!("create file failed: {}", e)))?;
-
-        let written = std::io::copy(&mut limited_reader, &mut output)
-            .map_err(|e| sevenz_rust::Error::other(format!("copy failed: {}", e)))?;
-
-        // Track total bytes
-        if !guard.check_bytes(written, name) {
-            return Err(sevenz_rust::Error::other(
-                "Exceeded maximum total extraction size",
-            ));
-        }
-
-        Ok(true) // Continue
-    })
-    .context("Failed to extract 7z archive")
+    // If it was some other error, return it
+    Err(err).context("7z extraction failed")
 }
+
+fn extract_7z_entry_safe<R: Read + ?Sized>(
+    entry: &sevenz_rust::SevenZArchiveEntry,
+    reader: &mut R,
+    dest_dir: &Path,
+    guard: &ExtractionGuard,
+) -> std::result::Result<bool, sevenz_rust::Error> {
+    use std::fs;
+
+    // Check file count limit
+    if !guard.check_file_count() {
+        return Err(sevenz_rust::Error::other("Exceeded maximum file count"));
+    }
+
+    let name = entry.name();
+
+    // Skip entries with empty names
+    if name.is_empty() {
+        return Ok(true);
+    }
+
+    // Sanitize path to prevent path traversal
+    let Some(outpath) = sanitize_entry_path(name, dest_dir) else {
+        guard.add_hostile_reason(HostileArchiveReason::PathTraversal(name.to_string()));
+        return Ok(true); // Continue extraction
+    };
+
+    // Check if entry is a directory
+    if entry.is_directory() {
+        fs::create_dir_all(&outpath)
+            .map_err(|e| sevenz_rust::Error::other(format!("mkdir failed: {}", e)))?;
+        return Ok(true);
+    }
+
+    // Check size limits
+    let uncompressed = entry.size();
+    if uncompressed > MAX_FILE_SIZE {
+        guard.add_hostile_reason(HostileArchiveReason::ExcessiveFileSize {
+            file: name.to_string(),
+            size: uncompressed,
+        });
+        return Ok(true); // Skip but continue
+    }
+
+    // Create parent directory
+    if let Some(parent) = outpath.parent() {
+        fs::create_dir_all(parent)
+            .map_err(|e| sevenz_rust::Error::other(format!("mkdir failed: {}", e)))?;
+    }
+
+    // Extract file with size limiting
+    let mut limited_reader = LimitedReader::new(reader, uncompressed);
+    let mut output = File::create(&outpath)
+        .map_err(|e| sevenz_rust::Error::other(format!("create file failed: {}", e)))?;
+
+    let written = std::io::copy(&mut limited_reader, &mut output)
+        .map_err(|e| sevenz_rust::Error::other(format!("copy failed: {}", e)))?;
+
+    // Track total bytes
+    if !guard.check_bytes(written, name) {
+        return Err(sevenz_rust::Error::other(
+            "Exceeded maximum total extraction size",
+        ));
+    }
+
+    Ok(true) // Continue
+}
+
 
 /// Extract macOS PKG files (XAR archives)
 pub(crate) fn extract_pkg_safe(

@@ -332,8 +332,13 @@ fn analyze_file_with_resources<P: AsRef<Path>>(
     let encoded_payloads = extractors::encoded_payload::extract_encoded_payloads(&stng_strings);
 
     // Create unified analysis input - all analyzers receive the same pre-extracted data
-    let input =
-        analyzers::AnalysisInput::with_strings(path, file_data, &stng_strings, file_type.clone());
+    let input = analyzers::AnalysisInput::with_payloads(
+        path,
+        file_data,
+        &stng_strings,
+        &encoded_payloads,
+        file_type.clone(),
+    );
 
     // Convert stng strings to StringInfo for binary analyzers (avoids redundant extraction)
     let string_extractor = strings::StringExtractor::new();

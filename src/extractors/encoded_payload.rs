@@ -8,25 +8,9 @@
 //! - **cleave**: Handles compression (zlib/gzip), nested encoding, and payload classification
 
 use crate::analyzers::FileType;
-use crate::types::Criticality;
+use crate::types::{Criticality, ExtractedPayload};
 use std::io::Write;
-use std::path::PathBuf;
 
-/// Represents an extracted payload
-#[derive(Debug)]
-#[allow(dead_code)] // Fields used for Debug output and potential future use
-pub struct ExtractedPayload {
-    /// Path to temp file containing decoded content
-    pub temp_path: PathBuf,
-    /// Chain of encodings (e.g., ["base64", "zlib"])
-    pub encoding_chain: Vec<String>,
-    /// Preview of content (first 40 chars, printable only)
-    pub preview: String,
-    /// Detected type of payload
-    pub detected_type: FileType,
-    /// Byte offset in original file
-    pub original_offset: usize,
-}
 
 /// Maximum recursion depth for nested encoding
 const MAX_RECURSION_DEPTH: usize = 3;

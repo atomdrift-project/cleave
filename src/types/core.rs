@@ -12,6 +12,23 @@ use super::file_analysis::{FileAnalysis, ReportSummary};
 use super::paths_env::{DirectoryAccess, EnvVarInfo, PathInfo};
 use super::scores::Metrics;
 use super::traits_findings::{Finding, StructuralFeature, Trait};
+use crate::analyzers::FileType;
+use std::path::PathBuf;
+
+/// Represents an extracted payload (e.g., base64, hex, XOR)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExtractedPayload {
+    /// Path to temp file containing decoded content
+    pub temp_path: PathBuf,
+    /// Chain of encodings (e.g., ["base64", "zlib"])
+    pub encoding_chain: Vec<String>,
+    /// Preview of content (first 40 chars, printable only)
+    pub preview: String,
+    /// Detected type of payload
+    pub detected_type: FileType,
+    /// Byte offset in original file
+    pub original_offset: usize,
+}
 
 /// Criticality level for traits and capabilities
 /// - Filtered: Matched but wrong file type, preserved for ML analysis

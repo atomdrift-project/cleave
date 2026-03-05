@@ -261,8 +261,13 @@ pub(crate) fn analyze_file_with_shared_mapper(
     let preextracted_strings = string_extractor.convert_stng_strings(&stng_strings);
 
     // Create unified analysis input for analyzers using the new data flow
-    let analysis_input =
-        AnalysisInput::with_strings(path, file_data, &stng_strings, file_type.clone());
+    let analysis_input = AnalysisInput::with_payloads(
+        path,
+        file_data,
+        &stng_strings,
+        &encoded_payloads,
+        file_type.clone(),
+    );
 
     let _t_analyze = std::time::Instant::now();
 

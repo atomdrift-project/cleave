@@ -4,6 +4,7 @@
 //! data to analyzers, eliminating redundant file reads and string extraction.
 
 use crate::analyzers::FileType;
+use crate::types::ExtractedPayload;
 use std::path::Path;
 
 /// Pre-extracted data passed to analyzers.
@@ -16,6 +17,7 @@ use std::path::Path;
 /// This eliminates:
 /// - Multiple file reads (data read once at entry point)
 /// - Duplicate string extraction (stng called once)
+/// - Duplicate payload extraction (encoded_payload extractor called once)
 /// - Inconsistent behavior between entry points
 #[derive(Debug)]
 #[allow(dead_code)] // Fields intentionally public for library consumers and future use
@@ -28,6 +30,9 @@ pub struct AnalysisInput<'a> {
 
     /// Pre-extracted strings from stng library
     pub strings: &'a [stng::ExtractedString],
+
+    /// Pre-extracted encoded payloads
+    pub payloads: &'a [ExtractedPayload],
 
     /// Detected file type
     pub file_type: FileType,
@@ -45,12 +50,13 @@ impl<'a> AnalysisInput<'a> {
             path,
             data,
             strings: &[],
+            payloads: &[],
             file_type,
             depth: 0,
         }
     }
 
-    /// Create input with all fields specified.
+    /// Create input with all fields specified (except payloads).
     #[must_use]
     pub fn with_strings(
         path: &'a Path,
@@ -62,6 +68,26 @@ impl<'a> AnalysisInput<'a> {
             path,
             data,
             strings,
+            payloads: &[],
+            file_type,
+            depth: 0,
+        }
+    }
+
+    /// Create input with strings and payloads.
+    #[must_use]
+    pub fn with_payloads(
+        path: &'a Path,
+        data: &'a [u8],
+        strings: &'a [stng::ExtractedString],
+        payloads: &'a [ExtractedPayload],
+        file_type: FileType,
+    ) -> Self {
+        Self {
+            path,
+            data,
+            strings,
+            payloads,
             file_type,
             depth: 0,
         }

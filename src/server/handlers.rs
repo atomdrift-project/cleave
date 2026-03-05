@@ -192,11 +192,11 @@ pub(super) async fn analyze(
             Json(report).into_response()
         }
         Ok(Ok(Err(e))) => {
-            warn!(filename = %filename, elapsed_ms = elapsed_ms, "Analysis failed: {}", e);
+            warn!(filename = %filename, elapsed_ms = elapsed_ms, "Analysis failed: {:?}", e);
             (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": "Analysis failed"}))).into_response()
         }
         Ok(Err(e)) => {
-            warn!(filename = %filename, elapsed_ms = elapsed_ms, "Task join error: {}", e);
+            warn!(filename = %filename, elapsed_ms = elapsed_ms, "Task join error: {:?}", e);
             (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": "Internal error"}))).into_response()
         }
         Err(_) => {
@@ -403,7 +403,7 @@ pub(super) async fn analyze_path(
             Json(response).into_response()
         }
         Ok(Ok(Err(e))) => {
-            warn!(path = %path_str, elapsed_ms = elapsed_ms, "Analysis failed: {}", e);
+            warn!(path = %path_str, elapsed_ms = elapsed_ms, "Analysis failed: {:?}", e);
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(serde_json::json!({"error": "Analysis failed"})),
@@ -411,7 +411,7 @@ pub(super) async fn analyze_path(
                 .into_response()
         }
         Ok(Err(e)) => {
-            warn!(path = %path_str, elapsed_ms = elapsed_ms, "Task join error: {}", e);
+            warn!(path = %path_str, elapsed_ms = elapsed_ms, "Task join error: {:?}", e);
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(serde_json::json!({"error": "Internal error"})),

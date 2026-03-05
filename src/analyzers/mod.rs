@@ -69,6 +69,7 @@ pub(crate) mod overlay;
 use crate::capabilities::CapabilityMapper;
 use crate::types::AnalysisReport;
 use anyhow::Result;
+use serde::{Deserialize, Serialize};
 use std::path::Path;
 use std::sync::Arc;
 
@@ -1110,7 +1111,7 @@ pub fn check_extension_content_mismatch(
 }
 
 /// File type detected by magic bytes, extension, and content analysis
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum FileType {
     /// Mach-O binary (macOS/iOS executable or library)
     MachO,

@@ -1,19 +1,18 @@
 //! HTTP request handlers for the cleave API server.
 
 use crate::{analyze_file, AnalysisOptions, Criticality};
-use axum::body::Bytes;
+
 use axum::extract::{ConnectInfo, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Json, Response};
-use multer::Multipart;
+
 use serde::{Deserialize, Serialize};
-use std::io::Write;
-use std::net::{IpAddr, SocketAddr};
+use std::net::SocketAddr;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tempfile::NamedTempFile;
-use tracing::{info, info_span, warn};
+use tracing::{info, info_span, warn, Span};
 
 use super::AppState;
 
@@ -23,9 +22,17 @@ pub(super) async fn health() -> Json<serde_json::Value> {
 }
 
 /// Reload trait definitions from disk.
-pub(super) async fn reload() -> Response {
+pub(super) async fn reload(State(state): State<Arc<AppState>>) -> Response {
+    let request_id = state.next_request_id();
+    let span = info_span!("reload", request_id);
+    let _enter = span.enter();
+
     let start = Instant::now();
-    let result = tokio::task::spawn_blocking(crate::shared_resources::reload_capability_mapper).await;
+    let task_span = Span::current();
+    let result = tokio::task::spawn_blocking(move || {
+        let _enter = task_span.enter();
+        crate::shared_resources::reload_capability_mapper()
+    }).await;
     let elapsed_ms = start.elapsed().as_millis();
 
     match result {
@@ -63,205 +70,140 @@ pub(super) async fn reload() -> Response {
 /// Accepts multipart/form-data with a single file field.
 /// Returns the analysis report as JSON.
 pub(super) async fn analyze(
-    state: Arc<AppState>,
-    client_ip: IpAddr,
-    request_id: u64,
-    body: Bytes,
-    content_type: Option<axum::http::HeaderValue>,
+    State(state): State<Arc<AppState>>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    mut multipart: axum::extract::Multipart,
 ) -> Response {
+    let client_ip = addr.ip();
+    let request_id = state.next_request_id();
     let request_start = Instant::now();
 
-    // Create a span for the request to ensure all internal logs have context
     let span = info_span!("request", %client_ip, request_id);
     let _enter = span.enter();
 
-    // Extract boundary from content-type header
-    let Some(boundary) = extract_boundary(content_type.as_ref()) else {
-        warn!("Bad request: missing or invalid Content-Type");
+    info!("--> POST /analyze");
+
+    if let Some(rss) = crate::memory_tracker::current_rss() {
+        if rss > state.max_rss_bytes {
+            warn!(rss_mb = rss / 1024 / 1024, max_rss_mb = state.max_rss_bytes / 1024 / 1024, "Server overloaded: high memory usage");
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(serde_json::json!({"error": "Server overloaded (memory)"})),
+            ).into_response();
+        }
+    }
+
+    let max_active_tasks = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4) * 2;
+    let current_tasks = state.active_tasks.load(std::sync::atomic::Ordering::Relaxed);
+    if current_tasks >= max_active_tasks {
+        warn!(active_tasks = current_tasks, max_tasks = max_active_tasks, "Server overloaded: too many active tasks");
         return (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({"error": "Missing or invalid Content-Type header"})),
-        )
-            .into_response();
-    };
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(serde_json::json!({"error": "Server overloaded (tasks)"})),
+        ).into_response();
+    }
 
-    // Parse multipart
-    let mut multipart = Multipart::new(body_to_stream(body), boundary);
-
-    // Extract the file field
-    let field = match multipart.next_field().await {
+    let mut field = match multipart.next_field().await {
         Ok(Some(f)) => f,
         Ok(None) => {
             warn!("Bad request: no file field");
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({"error": "No file field in request"})),
-            )
-                .into_response();
+            return (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": "No file field in request"}))).into_response();
         }
         Err(e) => {
             warn!("Failed to parse multipart: {}", e);
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({"error": "Invalid multipart data"})),
-            )
-                .into_response();
+            return (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": "Invalid multipart data"}))).into_response();
         }
     };
 
-    // Get filename if provided, sanitize for logging (truncate, remove control chars)
-    let filename = field
-        .file_name()
-        .map(|s| {
-            s.chars()
-                .filter(|c| !c.is_control())
-                .take(255)
-                .collect::<String>()
-        })
-        .unwrap_or_default();
+    let filename = field.file_name().map(|s| s.chars().filter(|c| !c.is_control()).take(255).collect::<String>()).unwrap_or_default();
 
-    // Read file data
-    let data = match field.bytes().await {
-        Ok(d) => d,
-        Err(e) => {
-            warn!("Failed to read file data: {}", e);
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({"error": "Failed to read file data"})),
-            )
-                .into_response();
-        }
-    };
-
-    if data.is_empty() {
-        warn!("Bad request: empty file");
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({"error": "Empty file"})),
-        )
-            .into_response();
-    }
-
-    let file_size = data.len();
-    info!(size = file_size, filename = %filename, "Starting analysis");
-
-    // Write to tempfile
-    let temp_file = match write_temp_file(&data) {
-        Ok(f) => f,
-        Err(e) => {
+    let temp_file = match tokio::task::spawn_blocking(NamedTempFile::new).await {
+        Ok(Ok(f)) => f,
+        Ok(Err(e)) => {
             warn!("Failed to create temp file: {}", e);
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": "Internal error"})),
-            )
-                .into_response();
+            return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": "Internal error"}))).into_response();
+        }
+        Err(e) => {
+            warn!("Task join error creating temp file: {}", e);
+            return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": "Internal error"}))).into_response();
         }
     };
 
     let path = temp_file.path().to_owned();
+    let mut tokio_file = match tokio::fs::File::create(&path).await {
+        Ok(f) => f,
+        Err(e) => {
+            warn!("Failed to open temp file for async writing: {}", e);
+            return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": "Internal error"}))).into_response();
+        }
+    };
+
+    let mut file_size = 0;
+    while let Ok(Some(chunk)) = field.chunk().await {
+        if chunk.is_empty() { continue; }
+        file_size += chunk.len();
+        if let Err(e) = tokio::io::AsyncWriteExt::write_all(&mut tokio_file, &chunk).await {
+            warn!("Failed to write chunk to temp file: {}", e);
+            return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": "Failed to save file data"}))).into_response();
+        }
+    }
+
+    if let Err(e) = tokio::io::AsyncWriteExt::flush(&mut tokio_file).await {
+        warn!("Failed to flush temp file: {}", e);
+        return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": "Failed to save file data"}))).into_response();
+    }
+
+    if file_size == 0 {
+        warn!("Bad request: empty file");
+        return (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": "Empty file"}))).into_response();
+    }
+
+    info!(size = file_size, filename = %filename, "Starting analysis");
+
     let timeout_duration = Duration::from_secs(state.timeout_secs);
+    state.active_tasks.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let state_for_task = Arc::clone(&state);
+    let task_span = Span::current();
 
-    // Run analysis in blocking thread with timeout
-    let result = tokio::time::timeout(timeout_duration, async {
-        tokio::task::spawn_blocking(move || analyze_file(&path, &AnalysisOptions::default())).await
-    })
-    .await;
+    let result = tokio::time::timeout(timeout_duration, async move {
+        tokio::task::spawn_blocking(move || {
+            let _enter = task_span.enter();
+            let res = analyze_file(&path, &AnalysisOptions::default());
+            state_for_task.active_tasks.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+            res
+        }).await
+    }).await;
 
-    // tempfile is dropped here (auto-deleted)
     drop(temp_file);
-
     let elapsed_ms = request_start.elapsed().as_millis();
 
     match result {
         Ok(Ok(Ok(report))) => {
-            // Summarize findings for logging
-            let hostile = report
-                .findings
-                .iter()
-                .filter(|f| f.crit == Criticality::Hostile)
-                .count();
-            let suspicious = report
-                .findings
-                .iter()
-                .filter(|f| f.crit == Criticality::Suspicious)
-                .count();
-            let notable = report
-                .findings
-                .iter()
-                .filter(|f| f.crit == Criticality::Notable)
-                .count();
-            let baseline = report
-                .findings
-                .iter()
-                .filter(|f| f.crit == Criticality::Baseline)
-                .count();
+            let hostile = report.findings.iter().filter(|f| f.crit == Criticality::Hostile).count();
+            let suspicious = report.findings.iter().filter(|f| f.crit == Criticality::Suspicious).count();
+            let notable = report.findings.iter().filter(|f| f.crit == Criticality::Notable).count();
+            let baseline = report.findings.iter().filter(|f| f.crit == Criticality::Baseline).count();
 
             info!(
-                filename = %filename,
-                size = file_size,
-                elapsed_ms = elapsed_ms,
-                hostile = hostile,
-                suspicious = suspicious,
-                notable = notable,
-                baseline = baseline,
-                total = report.findings.len(),
+                filename = %filename, size = file_size, elapsed_ms = elapsed_ms,
+                hostile = hostile, suspicious = suspicious, notable = notable, baseline = baseline, total = report.findings.len(),
                 "<-- 200 OK (Analysis complete)"
             );
-
             Json(report).into_response()
         }
         Ok(Ok(Err(e))) => {
-            // Log full error internally, return generic message to client
             warn!(filename = %filename, elapsed_ms = elapsed_ms, "Analysis failed: {}", e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": "Analysis failed"})),
-            )
-                .into_response()
+            (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": "Analysis failed"}))).into_response()
         }
         Ok(Err(e)) => {
             warn!(filename = %filename, elapsed_ms = elapsed_ms, "Task join error: {}", e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": "Internal error"})),
-            )
-                .into_response()
+            (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": "Internal error"}))).into_response()
         }
         Err(_) => {
             warn!(filename = %filename, elapsed_ms = elapsed_ms, "Analysis timed out after {}s", state.timeout_secs);
-            (
-                StatusCode::GATEWAY_TIMEOUT,
-                Json(serde_json::json!({"error": "Analysis timed out"})),
-            )
-                .into_response()
+            (StatusCode::GATEWAY_TIMEOUT, Json(serde_json::json!({"error": "Analysis timed out"}))).into_response()
         }
     }
-}
-
-/// Write bytes to a temporary file.
-fn write_temp_file(data: &[u8]) -> std::io::Result<NamedTempFile> {
-    let mut temp = NamedTempFile::new()?;
-    temp.write_all(data)?;
-    temp.flush()?;
-    Ok(temp)
-}
-
-/// Extract multipart boundary from Content-Type header.
-fn extract_boundary(content_type: Option<&axum::http::HeaderValue>) -> Option<String> {
-    let ct = content_type?.to_str().ok()?;
-    if !ct.starts_with("multipart/form-data") {
-        return None;
-    }
-    ct.split(';').find_map(|part| {
-        part.trim()
-            .strip_prefix("boundary=")
-            .map(|b| b.trim_matches('"').to_string())
-    })
-}
-
-/// Convert Bytes to a stream for multer.
-fn body_to_stream(body: Bytes) -> impl futures_core::Stream<Item = Result<Bytes, std::io::Error>> {
-    futures_util::stream::once(async move { Ok(body) })
 }
 
 /// Extract a file to the extract directory.
@@ -399,11 +341,14 @@ pub(super) async fn analyze_path(
 
     let timeout_duration = Duration::from_secs(state.timeout_secs);
     let path_owned = path.to_owned();
+    let task_span = Span::current();
 
     // Run analysis in blocking thread with timeout
-    let result = tokio::time::timeout(timeout_duration, async {
-        tokio::task::spawn_blocking(move || analyze_file(&path_owned, &AnalysisOptions::default()))
-            .await
+    let result = tokio::time::timeout(timeout_duration, async move {
+        tokio::task::spawn_blocking(move || {
+            let _enter = task_span.enter();
+            analyze_file(&path_owned, &AnalysisOptions::default())
+        }).await
     })
     .await;
 

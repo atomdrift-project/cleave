@@ -83,16 +83,55 @@ impl UPXDecompressor {
 
         let temp_path = temp_file.path();
 
-        // Run upx -d on the temporary copy
-        let output = Command::new("upx")
+        // Run upx -d on the temporary copy with a timeout
+        let mut child = Command::new("upx")
             .arg("-d")
             .arg("-q") // Quiet mode
             .arg(temp_path)
-            .output()?;
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()?;
 
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(UPXError::DecompressionFailed(stderr.to_string()));
+        let _stdout_rx = {
+            let mut stdout = child.stdout.take().unwrap();
+            let (tx, rx) = std::sync::mpsc::channel();
+            std::thread::spawn(move || {
+                let mut buf = Vec::new();
+                let _ = std::io::Read::read_to_end(&mut stdout, &mut buf);
+                let _ = tx.send(buf);
+            });
+            rx
+        };
+        let stderr_rx = {
+            let mut stderr = child.stderr.take().unwrap();
+            let (tx, rx) = std::sync::mpsc::channel();
+            std::thread::spawn(move || {
+                let mut buf = Vec::new();
+                let _ = std::io::Read::read_to_end(&mut stderr, &mut buf);
+                let _ = tx.send(buf);
+            });
+            rx
+        };
+
+        let timeout = std::time::Duration::from_secs(60);
+        let start = std::time::Instant::now();
+        let status = loop {
+            if let Some(status) = child.try_wait()? {
+                break status;
+            }
+            if start.elapsed() > timeout {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(UPXError::DecompressionFailed("UPX decompression timed out".to_string()));
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        };
+
+        let stderr = stderr_rx.recv().unwrap_or_default();
+
+        if !status.success() {
+            let stderr_str = String::from_utf8_lossy(&stderr);
+            return Err(UPXError::DecompressionFailed(stderr_str.to_string()));
         }
 
         // Read back the decompressed data

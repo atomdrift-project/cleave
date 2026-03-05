@@ -557,6 +557,10 @@ pub(crate) enum Command {
         #[arg(long, default_value = "100")]
         max_size_mb: u64,
 
+        /// Max memory usage (RSS) in GB before rejecting requests (default: 8)
+        #[arg(long, default_value = "8")]
+        max_rss_gb: u64,
+
         /// DANGEROUS: Allow analyzing local file paths via /analyze-path endpoint.
         /// Comma-separated list of directories to allow access to (e.g., "/data/samples,/tmp/test").
         /// Only paths within these directories can be analyzed.

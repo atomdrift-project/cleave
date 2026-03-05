@@ -13,7 +13,7 @@ use axum::response::{IntoResponse, Json, Response};
 use axum::routing::{get, post};
 use axum::Router;
 use std::net::SocketAddr;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::signal;
@@ -33,6 +33,8 @@ pub struct ServerConfig {
     pub timeout_secs: u64,
     /// Maximum request body size in bytes.
     pub max_body_size: usize,
+    /// Maximum RSS (memory usage) in bytes before rejecting requests.
+    pub max_rss_bytes: u64,
     /// Directories allowed for local file path analysis via /analyze-path endpoint.
     /// Empty means the feature is disabled.
     /// DANGEROUS: Only enable when server is bound to localhost.
@@ -49,6 +51,7 @@ impl Default for ServerConfig {
             qps: 100,
             timeout_secs: 120,
             max_body_size: 100 * 1024 * 1024, // 100 MB
+            max_rss_bytes: 8 * 1024 * 1024 * 1024, // 8 GB
             allowed_local_paths: Vec::new(),
             extract_dir: None,
         }
@@ -64,6 +67,8 @@ pub struct AppState {
     pub timeout_secs: u64,
     /// Maximum request body size in bytes.
     pub max_body_size: usize,
+    /// Maximum RSS in bytes before rejecting requests.
+    pub max_rss_bytes: u64,
     /// Directories allowed for local file path analysis.
     /// Empty means the feature is disabled.
     pub allowed_local_paths: Vec<std::path::PathBuf>,
@@ -71,6 +76,8 @@ pub struct AppState {
     pub extract_dir: Option<std::path::PathBuf>,
     /// Request ID counter.
     pub next_request_id: AtomicU64,
+    /// Number of active analysis tasks.
+    pub active_tasks: AtomicUsize,
 }
 
 impl AppState {
@@ -113,9 +120,11 @@ pub async fn run(config: ServerConfig) -> anyhow::Result<()> {
         rate_limiter: RateLimiter::new(config.qps),
         timeout_secs: config.timeout_secs,
         max_body_size: config.max_body_size,
+        max_rss_bytes: config.max_rss_bytes,
         allowed_local_paths,
         extract_dir,
         next_request_id: AtomicU64::new(1),
+        active_tasks: AtomicUsize::new(0),
     });
 
     // Spawn background task to clean up stale rate limiter entries
@@ -133,7 +142,7 @@ pub async fn run(config: ServerConfig) -> anyhow::Result<()> {
     let app = Router::new()
         .route("/health", get(handlers::health))
         .route("/reload", post(handlers::reload))
-        .route("/analyze", post(analyze_with_headers))
+        .route("/analyze", post(handlers::analyze))
         .route("/analyze-path", post(handlers::analyze_path))
         .layer(RequestBodyLimitLayer::new(config.max_body_size))
         .layer(middleware::from_fn_with_state(
@@ -162,32 +171,6 @@ pub async fn run(config: ServerConfig) -> anyhow::Result<()> {
 
     eprintln!("Server shut down");
     Ok(())
-}
-
-/// Wrapper to extract Content-Type header and client IP, then pass to analyze handler.
-async fn analyze_with_headers(
-    State(state): State<Arc<AppState>>,
-    ConnectInfo(addr): ConnectInfo<SocketAddr>,
-    request: Request,
-) -> Response {
-    let request_id = state.next_request_id();
-    let client_ip = addr.ip();
-    info!(%client_ip, request_id, "--> POST /analyze");
-
-    let content_type = request.headers().get("content-type").cloned();
-    let max_size = state.max_body_size;
-    let body = match axum::body::to_bytes(request.into_body(), max_size).await {
-        Ok(b) => b,
-        Err(e) => {
-            warn!(%client_ip, request_id, "Failed to read request body: {}", e);
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({"error": "Failed to read request body"})),
-            )
-                .into_response();
-        }
-    };
-    handlers::analyze(Arc::clone(&state), client_ip, request_id, body, content_type).await
 }
 
 /// Rate limiting middleware.

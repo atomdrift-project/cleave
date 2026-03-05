@@ -585,6 +585,7 @@ fn main() -> Result<()> {
             qps,
             timeout,
             max_size_mb,
+            max_rss_gb,
             dangerous_local_file_paths,
             extract_dir,
         }) => {
@@ -629,6 +630,7 @@ fn main() -> Result<()> {
                 qps,
                 timeout_secs: timeout,
                 max_body_size: (max_size_mb * 1024 * 1024) as usize,
+                max_rss_bytes: max_rss_gb * 1024 * 1024 * 1024,
                 allowed_local_paths,
                 extract_dir: extract_dir_path,
             };

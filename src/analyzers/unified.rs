@@ -410,6 +410,9 @@ impl UnifiedSourceAnalyzer {
 
         let has_preextracted = !preextracted_stng.is_empty();
         let mut owned_stng = Vec::new();
+        
+        let timeout_limit = std::time::Duration::from_secs(4);
+        let mut timed_out = false;
 
         let tree = rayon::in_place_scope(|s| {
             let mut stng_rx = None;
@@ -424,11 +427,22 @@ impl UnifiedSourceAnalyzer {
                 });
             }
 
-            // Parse the source
-            let tree_res = self
-                .parser
-                .borrow_mut()
-                .parse(content, None);
+            // Parse the source with a timeout
+            let mut options = tree_sitter::ParseOptions::new();
+            let mut cb = |_: &tree_sitter::ParseState| -> std::ops::ControlFlow<()> {
+                if start.elapsed() > timeout_limit {
+                    std::ops::ControlFlow::Break(())
+                } else {
+                    std::ops::ControlFlow::Continue(())
+                }
+            };
+            options.progress_callback = Some(&mut cb);
+            
+            let tree_res = self.parser.borrow_mut().parse_with_options(
+                &mut |i, _| (i < content.len()).then(|| &content.as_bytes()[i..]).unwrap_or_default(),
+                None,
+                Some(options)
+            );
 
             if let Some(tree) = &tree_res {
                 let root = tree.root_node();
@@ -436,6 +450,8 @@ impl UnifiedSourceAnalyzer {
                 self.extract_functions(&root, content.as_bytes(), &mut report);
                 // Extract strings
                 self.extract_strings(&root, content.as_bytes(), &mut report);
+            } else if start.elapsed() > timeout_limit {
+                timed_out = true;
             }
 
             if let Some(rx) = stng_rx {
@@ -447,8 +463,17 @@ impl UnifiedSourceAnalyzer {
             tree_res
         });
 
-        let tree = tree.with_context(|| format!("Failed to parse {} source", self.config.name))?;
-        let root = tree.root_node();
+        if timed_out {
+            tracing::info!("AST parsing timed out for {}, skipping deep AST analysis.", file_path.display());
+            let mut finding = crate::types::Finding::new(
+                "anti-analysis/obfuscation/timeout".to_string(),
+                crate::types::FindingKind::Capability,
+                "AST parsing timed out, indicating severe obfuscation or extreme code complexity.".to_string(),
+                1.0,
+            );
+            finding.crit = crate::types::Criticality::Suspicious;
+            report.findings.push(finding);
+        }
 
         // Use pre-extracted stng strings if available, otherwise use parallel extracted ones
         let stng_strings: &[stng::ExtractedString] = if has_preextracted {
@@ -722,54 +747,58 @@ impl UnifiedSourceAnalyzer {
             }
         }
 
-        // Extract function calls for capability matching (type: symbol conditions)
-        // Reuse the already-parsed tree to avoid redundant tree-sitter parsing
-        symbol_extraction::extract_symbols_from_tree(
-            &tree,
-            content,
-            self.config.call_node_types,
-            &mut report,
-        );
+        if let Some(ref tree) = tree {
+            let root = tree.root_node();
+            
+            // Extract function calls for capability matching (type: symbol conditions)
+            // Reuse the already-parsed tree to avoid redundant tree-sitter parsing
+            symbol_extraction::extract_symbols_from_tree(
+                tree,
+                content,
+                self.config.call_node_types,
+                &mut report,
+            );
 
-        // Also extract actual module imports (require/import statements) for metadata/import/ findings
-        // Reuse the already-parsed tree to avoid redundant tree-sitter parsing
-        symbol_extraction::extract_imports_from_tree(&tree, content, &self.file_type, &mut report);
+            // Also extract actual module imports (require/import statements) for metadata/import/ findings
+            // Reuse the already-parsed tree to avoid redundant tree-sitter parsing
+            symbol_extraction::extract_imports_from_tree(tree, content, &self.file_type, &mut report);
 
-        // Analyze paths and environment variables
-        crate::path_mapper::analyze_and_link_paths(&mut report);
-        crate::env_mapper::analyze_and_link_env_vars(&mut report);
+            // Analyze paths and environment variables
+            crate::path_mapper::analyze_and_link_paths(&mut report);
+            crate::env_mapper::analyze_and_link_env_vars(&mut report);
 
-        // Compute metrics
-        let mut metrics = self.compute_metrics(&root, content);
+            // Compute metrics
+            let mut metrics = self.compute_metrics(&root, content);
 
-        // Compute import metrics from already-extracted imports
-        if !report.imports.is_empty() {
-            let file_type_str = match self.file_type {
-                crate::analyzers::FileType::Python => "python",
-                crate::analyzers::FileType::JavaScript => "javascript",
-                crate::analyzers::FileType::TypeScript => "typescript",
-                crate::analyzers::FileType::Go => "go",
-                crate::analyzers::FileType::Ruby => "ruby",
-                crate::analyzers::FileType::Perl => "perl",
-                crate::analyzers::FileType::Lua => "lua",
-                _ => "unknown",
-            };
-            metrics.imports = Some(import_metrics::analyze_imports(
-                &report.imports,
-                file_type_str,
-            ));
+            // Compute import metrics from already-extracted imports
+            if !report.imports.is_empty() {
+                let file_type_str = match self.file_type {
+                    crate::analyzers::FileType::Python => "python",
+                    crate::analyzers::FileType::JavaScript => "javascript",
+                    crate::analyzers::FileType::TypeScript => "typescript",
+                    crate::analyzers::FileType::Go => "go",
+                    crate::analyzers::FileType::Ruby => "ruby",
+                    crate::analyzers::FileType::Perl => "perl",
+                    crate::analyzers::FileType::Lua => "lua",
+                    _ => "unknown",
+                };
+                metrics.imports = Some(import_metrics::analyze_imports(
+                    &report.imports,
+                    file_type_str,
+                ));
+            }
+
+            // Compute ratio metrics from already-populated counters
+            Self::compute_text_ratio_metrics(&mut metrics);
+
+            report.metrics = Some(metrics);
         }
-
-        // Compute ratio metrics from already-populated counters
-        Self::compute_text_ratio_metrics(&mut metrics);
-
-        report.metrics = Some(metrics);
 
         // Evaluate all rules (atomic + composite) and merge into report
         self.capability_mapper.evaluate_and_merge_findings(
             &mut report,
             content.as_bytes(),
-            Some(&tree),
+            tree.as_ref(),
             None,
         );
 

@@ -11,9 +11,12 @@ defaults:
 traits:
   - id: uri-fragment-counter-path-unte
     desc: URL path fragment 'unte' (part of /counter/)
+    crit: component
     if:
       type: string
       regex: 'unte'
+    not:
+      - regex: 'Counter'
   - id: uri-fragment-counter-id-param
     desc: URL parameter fragment 'd="+s' (part of ?id=)
     if:

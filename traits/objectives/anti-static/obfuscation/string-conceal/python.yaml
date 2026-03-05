@@ -33,3 +33,31 @@ traits:
     if:
       type: raw
       regex: 'eval\s*\(\s*compile\s*\(\s*base64\.b64decode'
+
+composite_rules:
+  # Gap 2: eval(compile(base64.b64decode(...))) with hex-obfuscated exec mode
+  # This is a very hostile pattern: decode base64, compile with hex-hidden "exec", eval
+  - id: py-eval-compile-base64-hexexec
+    desc: eval/compile/base64 chain with hex-obfuscated exec
+    crit: hostile
+    conf: 0.95
+    for: [python]
+    mbc: "E1059"
+    attack: "T1059.006"
+    all:
+      - id: py-eval-compile-base64
+      - id: py-hex-exec-string
+
+  # Gap 3: hex-encoded exec + compile = hostile obfuscated execution
+  - id: py-compile-with-hex-exec
+    desc: compile() with hex-encoded exec mode string
+    crit: hostile
+    conf: 0.90
+    for: [python]
+    mbc: "B0032"
+    attack: "T1027"
+    all:
+      - id: objectives/anti-static/obfuscation/payload/bytecode::compile-word
+    any:
+      - id: py-hex-exec-string
+      - id: py-bytes-fromhex-exec

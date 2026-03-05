@@ -39,6 +39,10 @@ traits:
     if:
         type: raw
         regex: '\b\w+\s*=\s*this([^\.]|$)'
+    not:
+      - regex: '\b_?this\s*=\s*this\b'
+      - regex: '\bthat\s*=\s*this\b'
+      - regex: '\bself\s*=\s*this\b'
   - id: js-assign-common-root-1
     desc: Global object assignment (root/self/global)
     crit: notable

@@ -2505,6 +2505,7 @@ fn evaluate_condition_simple(
             substr.as_ref(),
             regex.as_ref(),
             *case_insensitive,
+            None,
             ctx,
         ),
         _ => crate::composite_rules::context::ConditionResult::no_match(),

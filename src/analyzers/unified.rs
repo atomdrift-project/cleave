@@ -376,6 +376,16 @@ impl UnifiedSourceAnalyzer {
         content: &str,
         original_bytes: &[u8],
     ) -> Result<AnalysisReport> {
+        self.analyze_source_impl(file_path, content, original_bytes, &[])
+    }
+
+    fn analyze_source_impl(
+        &self,
+        file_path: &Path,
+        content: &str,
+        original_bytes: &[u8],
+        preextracted_stng: &[stng::ExtractedString],
+    ) -> Result<AnalysisReport> {
         let start = std::time::Instant::now();
 
         // Parse the source
@@ -413,14 +423,19 @@ impl UnifiedSourceAnalyzer {
         // Extract strings
         self.extract_strings(&root, content.as_bytes(), &mut report);
 
-        // Also run stng extraction to get fuzzy base64 and other decoded content
-        // Use original_bytes (UTF-16 if present) so stng can detect BOM and use fuzzy base64
-        let opts = stng::ExtractOptions::new(4)
-            .with_garbage_filter(true)
-            .with_xor(None);
-        let stng_strings = stng::extract_strings_with_options(original_bytes, &opts);
+        // Use pre-extracted stng strings if available, otherwise extract now
+        let owned_stng;
+        let stng_strings: &[stng::ExtractedString] = if !preextracted_stng.is_empty() {
+            preextracted_stng
+        } else {
+            let opts = stng::ExtractOptions::new(4)
+                .with_garbage_filter(true)
+                .with_xor(None);
+            owned_stng = stng::extract_strings_with_options(original_bytes, &opts);
+            &owned_stng
+        };
 
-        // Convert stng strings to StringInfo and add to report
+        // Convert stng decoded strings to StringInfo and add to report
         for es in stng_strings {
             // Only add decoded strings (base64, xor, etc.) - skip raw literals already in AST
             if matches!(
@@ -449,7 +464,7 @@ impl UnifiedSourceAnalyzer {
                 };
 
                 report.strings.push(crate::types::StringInfo {
-                    value: es.value,
+                    value: es.value.clone(),
                     offset: Some(es.data_offset),
                     string_type,
                     encoding: "utf-8".to_string(),
@@ -465,9 +480,22 @@ impl UnifiedSourceAnalyzer {
         }
 
         // Extract and analyze base64/zlib encoded payloads (same treatment as archives)
-        let opts = stng::ExtractOptions::new(16).with_garbage_filter(true);
-        let stng_strings = stng::extract_strings_with_options(content.as_bytes(), &opts);
-        let extracted_payloads = crate::extractors::extract_encoded_payloads(&stng_strings);
+        // When pre-extracted strings are available, filter for length >= 16 instead of re-running stng
+        let owned_payload_stng;
+        let payload_stng: &[stng::ExtractedString] = if !preextracted_stng.is_empty() {
+            // Pre-extracted strings have min_length=4; filter for the min_length=16 threshold
+            owned_payload_stng = preextracted_stng
+                .iter()
+                .filter(|s| s.value.len() >= 16)
+                .cloned()
+                .collect::<Vec<_>>();
+            &owned_payload_stng
+        } else {
+            let opts = stng::ExtractOptions::new(16).with_garbage_filter(true);
+            owned_payload_stng = stng::extract_strings_with_options(content.as_bytes(), &opts);
+            &owned_payload_stng
+        };
+        let extracted_payloads = crate::extractors::extract_encoded_payloads(payload_stng);
         for (idx, payload) in extracted_payloads.iter().enumerate() {
             // Create virtual path with encoding info using ## delimiter for decoded content
             let virtual_path = crate::types::encode_decoded_path(
@@ -1194,9 +1222,8 @@ impl Analyzer for UnifiedSourceAnalyzer {
 
         let content = String::from_utf8_lossy(&bytes);
 
-        // Use existing internal method - eliminates file read but still does internal stng extraction
-        // Future optimization: pass input.strings to avoid redundant extraction
-        self.analyze_source_with_original(input.path, &content, input.data)
+        // Pass pre-extracted stng strings to avoid redundant extraction
+        self.analyze_source_impl(input.path, &content, input.data, input.strings)
     }
 
     fn analyze(&self, file_path: &Path) -> Result<AnalysisReport> {

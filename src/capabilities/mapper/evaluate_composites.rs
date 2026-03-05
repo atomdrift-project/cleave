@@ -24,6 +24,7 @@ impl super::CapabilityMapper {
         binary_data: &[u8],
         cached_ast: Option<&tree_sitter::Tree>,
         inline_yara: Option<&HashMap<String, Vec<Evidence>>>,
+        section_map: &SectionMap,
     ) -> Vec<Finding> {
         // Determine file type from report (platform comes from self.platform)
         let file_type = self.detect_file_type(&report.target.file_type);
@@ -42,9 +43,6 @@ impl super::CapabilityMapper {
             .composite_rules
             .iter()
             .partition(|r| r.has_negative_conditions());
-
-        // Build section map once for location-constrained matching
-        let section_map = SectionMap::from_binary(binary_data);
 
         // Pass 1: Iterative evaluation of positive rules to reach a stable fixed-point
         const MAX_ITERATIONS: usize = 10;
@@ -138,6 +136,7 @@ impl super::CapabilityMapper {
             binary_data,
             cached_ast,
             file_type,
+            section_map,
         );
 
         // Add finding for excessive line length (anti-analysis technique)
@@ -186,6 +185,7 @@ impl super::CapabilityMapper {
         binary_data: &[u8],
         cached_ast: Option<&tree_sitter::Tree>,
         file_type: RuleFileType,
+        section_map: &SectionMap,
     ) {
         // Build a map of rule ID to rule for quick lookup
         let composite_map: FxHashMap<&str, _> = self
@@ -196,9 +196,6 @@ impl super::CapabilityMapper {
 
         // First pass: collect new criticalities (can't mutate while borrowing for context)
         let updates: Vec<(usize, Criticality)> = {
-            // Build section map for location-constrained matching
-            let section_map = SectionMap::from_binary(binary_data);
-
             // Create final context with all findings (immutable borrow)
             let ctx = EvaluationContext::new(
                 report,
@@ -208,7 +205,7 @@ impl super::CapabilityMapper {
                 Some(findings),
                 cached_ast,
             )
-            .with_section_map(section_map);
+            .with_section_map(section_map.clone());
 
             findings
                 .iter()

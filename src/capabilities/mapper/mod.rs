@@ -65,6 +65,41 @@ pub(super) fn get_relative_source_file(path: &std::path::Path) -> Option<String>
         .map(std::string::ToString::to_string)
 }
 
+/// Build the combined string vector from report strings, imports, and exports.
+/// Used by both `evaluate_and_merge_findings` (cached path) and `evaluate_traits_filtered` (standalone).
+pub(super) fn build_all_strings(report: &crate::types::AnalysisReport) -> Vec<crate::types::StringInfo> {
+    let total_capacity = report.strings.len() + report.imports.len() + report.exports.len();
+    let mut all_strings = Vec::with_capacity(total_capacity);
+    all_strings.extend_from_slice(&report.strings);
+    for imp in &report.imports {
+        all_strings.push(crate::types::StringInfo {
+            value: imp.symbol.clone(),
+            offset: None,
+            encoding: "symbol".to_string(),
+            string_type: crate::types::StringType::Import,
+            section: None,
+            encoding_chain: Vec::new(),
+            fragments: None,
+        });
+    }
+    for exp in &report.exports {
+        let offset = exp.offset.as_ref().and_then(|s| {
+            let s = s.trim().trim_start_matches("0x").trim_start_matches("0X");
+            u64::from_str_radix(s, 16).ok()
+        });
+        all_strings.push(crate::types::StringInfo {
+            value: exp.symbol.clone(),
+            offset,
+            encoding: "symbol".to_string(),
+            string_type: crate::types::StringType::Export,
+            section: None,
+            encoding_chain: Vec::new(),
+            fragments: None,
+        });
+    }
+    all_strings
+}
+
 // Extracted modules
 pub(crate) mod builder;
 pub(crate) mod evaluate_composites;

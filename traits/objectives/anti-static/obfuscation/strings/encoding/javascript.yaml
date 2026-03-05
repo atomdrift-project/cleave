@@ -70,6 +70,7 @@ traits:
       - regex: '\b(globalThis|window)\.(on[a-zA-Z]+|console|location|document|navigator)\s*='
     unless:
       - id: metadata/library::umd-window-assignment
+      - id: metadata/library/structure::js-umd-wrapper-any
 
   - id: js-global-self-bracket-assignment
     desc: Dynamic self bracket property assignment

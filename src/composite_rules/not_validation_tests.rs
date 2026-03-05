@@ -156,6 +156,8 @@ mod validation_tests {
             exact: Some("testing".to_string()),
             substr: None,
             regex: None,
+            compiled_regex: None,
+            lowered_substr: None,
         })];
         let trait_def = create_test_trait(cond, Some(not));
 
@@ -188,6 +190,8 @@ mod validation_tests {
             exact: Some("hurl".to_string()),
             substr: None,
             regex: None,
+            compiled_regex: None,
+            lowered_substr: None,
         })];
         let trait_def = create_test_trait(cond, Some(not));
 
@@ -222,6 +226,8 @@ mod validation_tests {
             exact: None,
             substr: Some("testing".to_string()),
             regex: None,
+            compiled_regex: None,
+            lowered_substr: None,
         })];
         let trait_def = create_test_trait(cond, Some(not));
 
@@ -254,6 +260,8 @@ mod validation_tests {
             exact: None,
             substr: Some("hurl".to_string()),
             regex: None,
+            compiled_regex: None,
+            lowered_substr: None,
         })];
         let trait_def = create_test_trait(cond, Some(not));
 

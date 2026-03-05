@@ -53,47 +53,8 @@ impl super::CapabilityMapper {
         let applicable_indices: Vec<usize> = self.trait_index.get_applicable(&file_type).collect();
 
         // Pre-filter using batched Aho-Corasick string matching WITH evidence caching
-        // This identifies which traits match AND caches the evidence to avoid re-iteration
         let _t_prematch = std::time::Instant::now();
-
-        // Combine strings and symbols for pre-filtering
-        // Pre-allocate capacity to avoid reallocations
-        let total_capacity = report.strings.len() + report.imports.len() + report.exports.len();
-        let mut all_strings = Vec::with_capacity(total_capacity);
-
-        // Add existing strings (move instead of clone to avoid copy)
-        all_strings.extend_from_slice(&report.strings);
-
-        // Add imports as strings
-        for imp in &report.imports {
-            all_strings.push(crate::types::StringInfo {
-                value: imp.symbol.clone(),
-                offset: None,
-                encoding: "symbol".to_string(),
-                string_type: crate::types::StringType::Import,
-                section: None,
-                encoding_chain: Vec::new(),
-                fragments: None,
-            });
-        }
-
-        // Add exports as strings
-        for exp in &report.exports {
-            // Parse export offset from hex string to u64
-            let offset = exp.offset.as_ref().and_then(|s| {
-                let s = s.trim().trim_start_matches("0x").trim_start_matches("0X");
-                u64::from_str_radix(s, 16).ok()
-            });
-            all_strings.push(crate::types::StringInfo {
-                value: exp.symbol.clone(),
-                offset,
-                encoding: "symbol".to_string(),
-                string_type: crate::types::StringType::Export,
-                section: None,
-                encoding_chain: Vec::new(),
-                fragments: None,
-            });
-        }
+        let all_strings = super::build_all_strings(report);
 
         let (string_matched_traits, cached_evidence) = if self.string_match_index.has_patterns() {
             self.string_match_index
@@ -334,6 +295,19 @@ impl super::CapabilityMapper {
         } else {
             FxHashSet::default()
         };
+        let section_map = SectionMap::from_binary(binary_data);
+
+        // Build all_strings
+        let all_strings = super::build_all_strings(report);
+        let (string_matched_traits, cached_evidence) = if self.string_match_index.has_patterns() {
+            self.string_match_index
+                .find_matches_with_evidence(&all_strings)
+        } else {
+            (FxHashSet::default(), FxHashMap::default())
+        };
+        let regex_candidates = self.string_match_index.find_regex_candidates(&all_strings);
+        drop(all_strings);
+
         self.evaluate_traits_filtered_with_cache(
             report,
             binary_data,
@@ -341,6 +315,10 @@ impl super::CapabilityMapper {
             inline_yara,
             dependent_only,
             Some(&raw_regex_matches),
+            &section_map,
+            &string_matched_traits,
+            &cached_evidence,
+            &regex_candidates,
         )
     }
 
@@ -355,12 +333,13 @@ impl super::CapabilityMapper {
         inline_yara: Option<&HashMap<String, Vec<Evidence>>>,
         dependent_only: bool,
         raw_regex_matches: Option<&FxHashSet<usize>>,
+        section_map: &SectionMap,
+        string_matched_traits: &FxHashSet<usize>,
+        cached_evidence: &FxHashMap<usize, Vec<Evidence>>,
+        regex_candidates: &FxHashSet<usize>,
     ) -> Vec<Finding> {
         // Determine file type from report
         let file_type = self.detect_file_type(&report.target.file_type);
-
-        // Build section map for location-constrained matching
-        let section_map = SectionMap::from_binary(binary_data);
 
         let mut ctx = EvaluationContext::new(
             report,
@@ -370,7 +349,7 @@ impl super::CapabilityMapper {
             None,
             cached_ast,
         )
-        .with_section_map(section_map);
+        .with_section_map(section_map.clone());
         if let Some(results) = inline_yara {
             ctx = ctx.with_inline_yara(results);
         }
@@ -391,53 +370,7 @@ impl super::CapabilityMapper {
             return vec![];
         }
 
-        // Pre-filter using batched Aho-Corasick string matching WITH evidence caching
-        let total_capacity = report.strings.len() + report.imports.len() + report.exports.len();
-        let mut all_strings = Vec::with_capacity(total_capacity);
-
-        all_strings.extend_from_slice(&report.strings);
-
-        for imp in &report.imports {
-            all_strings.push(crate::types::StringInfo {
-                value: imp.symbol.clone(),
-                offset: None,
-                encoding: "symbol".to_string(),
-                string_type: crate::types::StringType::Import,
-                section: None,
-                encoding_chain: Vec::new(),
-                fragments: None,
-            });
-        }
-
-        for exp in &report.exports {
-            let offset = exp.offset.as_ref().and_then(|s| {
-                let s = s.trim().trim_start_matches("0x").trim_start_matches("0X");
-                u64::from_str_radix(s, 16).ok()
-            });
-            all_strings.push(crate::types::StringInfo {
-                value: exp.symbol.clone(),
-                offset,
-                encoding: "symbol".to_string(),
-                string_type: crate::types::StringType::Export,
-                section: None,
-                encoding_chain: Vec::new(),
-                fragments: None,
-            });
-        }
-
-        let (string_matched_traits, cached_evidence) = if self.string_match_index.has_patterns() {
-            self.string_match_index
-                .find_matches_with_evidence(&all_strings)
-        } else {
-            (FxHashSet::default(), FxHashMap::default())
-        };
-
-        let regex_candidates = self.string_match_index.find_regex_candidates(&all_strings);
-
         // Use pre-computed raw regex matches (passed in from caller)
-        // Some(set) = prefilter was run (set may be empty if nothing matched)
-        // None = prefilter was skipped (e.g., file too large)
-        // Only enable prefilter-based skipping when prefilter was actually run
         let raw_regex_prefilter_enabled = raw_regex_matches.is_some();
 
         let has_any_matches = !string_matched_traits.is_empty()
@@ -446,12 +379,12 @@ impl super::CapabilityMapper {
 
         // For dependent traits, we can't skip based on string matches alone
         // because the trait: condition might match even if strings don't
-        if !dependent_only && !has_any_matches && all_strings.is_empty() && binary_data.len() < 100
-        {
+        let has_strings = !report.strings.is_empty()
+            || !report.imports.is_empty()
+            || !report.exports.is_empty();
+        if !dependent_only && !has_any_matches && !has_strings && binary_data.len() < 100 {
             return vec![];
         }
-
-        drop(all_strings);
 
         let all_findings: Vec<Finding> = filtered_indices
             .par_iter()

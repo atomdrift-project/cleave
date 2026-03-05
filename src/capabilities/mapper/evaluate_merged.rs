@@ -8,9 +8,9 @@
 //! 4. Composite rules are evaluated (can reference both traits and imports)
 //! 5. All findings are deduplicated and merged
 
-use crate::composite_rules::FileType as RuleFileType;
+use crate::composite_rules::{FileType as RuleFileType, SectionMap};
 use crate::types::{AnalysisReport, Evidence};
-use rustc_hash::FxHashSet;
+use rustc_hash::{FxHashMap, FxHashSet};
 use std::collections::HashMap;
 
 impl super::CapabilityMapper {
@@ -91,11 +91,27 @@ impl super::CapabilityMapper {
         // Detect file type once
         let file_type = self.detect_file_type(&report.target.file_type);
 
+        // Build section map ONCE for location-constrained matching
+        let section_map = SectionMap::from_binary(binary_data);
+
         // Pre-compute raw regex matches ONCE (expensive: converts binary to string, runs regex set)
         // This is passed to all trait evaluation calls to avoid recomputing
         // Returns Some(matches) if run, None if skipped (file too large)
         let raw_regex_matches = self.precompute_raw_regex_matches(binary_data, &file_type);
         let raw_regex_matches_ref = raw_regex_matches.as_ref();
+
+        // Build all_strings ONCE — combines report strings, imports, and exports
+        let all_strings = super::build_all_strings(report);
+
+        // Run string matching ONCE
+        let (string_matched_traits, cached_evidence) = if self.string_match_index.has_patterns() {
+            self.string_match_index
+                .find_matches_with_evidence(&all_strings)
+        } else {
+            (FxHashSet::default(), FxHashMap::default())
+        };
+        let regex_candidates = self.string_match_index.find_regex_candidates(&all_strings);
+        drop(all_strings);
 
         // Build a seen-IDs set once from existing report findings, then keep it up-to-date
         // as we merge — O(1) per lookup instead of O(n) linear scan.
@@ -110,6 +126,10 @@ impl super::CapabilityMapper {
             inline_yara,
             false,
             raw_regex_matches_ref,
+            &section_map,
+            &string_matched_traits,
+            &cached_evidence,
+            &regex_candidates,
         );
 
         // Merge independent findings into report
@@ -132,6 +152,10 @@ impl super::CapabilityMapper {
                 inline_yara,
                 true,
                 raw_regex_matches_ref,
+                &section_map,
+                &string_matched_traits,
+                &cached_evidence,
+                &regex_candidates,
             );
 
             if dependent_findings.is_empty() {
@@ -155,15 +179,18 @@ impl super::CapabilityMapper {
 
         // Step 3: Generate synthetic metadata/import findings from discovered imports
         // This MUST happen before Step 4 so composite rules can reference them
+        let pre_import_count = report.findings.len();
         Self::generate_import_findings(report);
+        // Update seen with any newly added import findings
+        for f in &report.findings[pre_import_count..] {
+            seen.insert(f.id.clone());
+        }
 
         // Step 4: Evaluate composite rules (which can now access atomic traits AND metadata/import findings)
         let composite_findings =
-            self.evaluate_composite_rules(report, binary_data, cached_ast, inline_yara);
+            self.evaluate_composite_rules(report, binary_data, cached_ast, inline_yara, &section_map);
 
         // Step 5: Merge composite findings into report.
-        // Rebuild seen to include metadata/import findings added in step 3.
-        let mut seen: FxHashSet<String> = report.findings.iter().map(|f| f.id.clone()).collect();
         for finding in composite_findings {
             if !seen.contains(finding.id.as_str()) {
                 seen.insert(finding.id.clone());

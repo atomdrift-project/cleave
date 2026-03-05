@@ -312,6 +312,7 @@ fn score_condition(condition: &Condition) -> f32 {
             substr,
             regex,
             case_insensitive,
+            ..
         }
         | Condition::Kv {
             exact,
@@ -344,6 +345,7 @@ fn score_not_exceptions(exceptions: &[crate::composite_rules::condition::NotExce
                     exact,
                     substr,
                     regex,
+                    ..
                 },
             ) => {
                 score += exact.as_deref().map(score_string_value).unwrap_or(0.0);

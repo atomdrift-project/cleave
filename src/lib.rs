@@ -242,7 +242,10 @@ pub fn analyze_file_with_mapper<P: AsRef<Path>>(
             options.enable_third_party_yara,
         ))
     };
-    analyze_file_with_resources(path, options, capability_mapper, yara_engine.as_ref())
+    // Wrap in Arc for the internal API (this is the less-common path;
+    // callers with an Arc should use analyze_file_with_resources directly)
+    let mapper_arc = Arc::new(capability_mapper.clone());
+    analyze_file_with_resources(path, options, &mapper_arc, yara_engine.as_ref())
 }
 
 /// Analyze a single file with full control over resources.
@@ -263,7 +266,7 @@ pub fn analyze_file_with_mapper<P: AsRef<Path>>(
 fn analyze_file_with_resources<P: AsRef<Path>>(
     path: P,
     options: &AnalysisOptions,
-    capability_mapper: &CapabilityMapper,
+    capability_mapper: &Arc<CapabilityMapper>,
     yara_engine: Option<&Arc<yara_engine::YaraEngine>>,
 ) -> Result<AnalysisReport> {
     let path = path.as_ref();
@@ -334,8 +337,8 @@ fn analyze_file_with_resources<P: AsRef<Path>>(
     let string_extractor = strings::StringExtractor::new();
     let preextracted_strings = string_extractor.convert_stng_strings(&stng_strings);
 
-    // Wrap mapper in Arc once — all analyzers share it via cheap ref-count bumps
-    let mapper_arc = Arc::new(capability_mapper.clone());
+    // Share mapper Arc — all analyzers share it via cheap ref-count bumps
+    let mapper_arc = Arc::clone(capability_mapper);
 
     // Route to appropriate analyzer.
     // Binary analyzers (MachO, Elf, Pe) use parallel YARA for performance.
@@ -545,7 +548,7 @@ fn analyze_file_with_resources<P: AsRef<Path>>(
 
         // Analyze the decoded payload
         if let Ok(payload_report) =
-            analyze_file_with_mapper(&payload.temp_path, options, capability_mapper)
+            analyze_file_with_resources(&payload.temp_path, options, capability_mapper, yara_engine)
         {
             // Merge traits from payload analysis
             for mut trait_item in payload_report.traits {

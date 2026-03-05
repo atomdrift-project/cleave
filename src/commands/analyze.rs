@@ -198,17 +198,23 @@ pub(crate) fn run(
 
         // For JSONL mode, stream results immediately for progress tracking
         let streaming = matches!(format, cli::OutputFormat::Jsonl);
-        let mut results = Vec::new();
         // Collect all file analysis data for galaxy view
         let mut all_file_analyses: Vec<types::FileAnalysis> = Vec::new();
 
-        // Collect all files first when shuffling, otherwise stream directly
+        // Collect all files first, filtering unknown types early
         let mut files: Vec<_> = walkdir::WalkDir::new(path)
             .follow_links(false)
             .into_iter()
             .filter_entry(|e| !e.file_name().to_string_lossy().starts_with(".git"))
             .filter_map(std::result::Result::ok)
             .filter(|e| e.file_type().is_file())
+            .filter(|e| {
+                if all_files {
+                    return true;
+                }
+                let file_type = detect_file_type(e.path()).unwrap_or(FileType::Unknown);
+                file_type.is_program()
+            })
             .collect();
 
         // Shuffle files for random processing order when requested.
@@ -219,39 +225,30 @@ pub(crate) fn run(
             files.shuffle(&mut rand::rng());
         }
 
-        for entry in files {
-            let file_path = entry.path().to_string_lossy().to_string();
-            // Skip unknown file types unless --all-files is set
-            if !all_files {
-                let file_type = detect_file_type(entry.path()).unwrap_or(FileType::Unknown);
-                if !file_type.is_program() {
-                    continue;
-                }
-            }
-            // Use shared context for analysis (don't generate MOL per-file for directories)
-            let result = analyze_file_with_context(
-                &file_path,
-                format,
-                zip_passwords,
-                error_if_levels,
-                verbose,
-                sample_extraction,
-                max_memory_file_size,
-                &ctx,
-                None, // Don't generate MOL per-file
-                mol_layout,
-                Some(&mut all_file_analyses), // Collect file data for galaxy
-            )?;
-            if streaming {
-                // Print immediately for JSONL streaming - enables progress tracking
-                // format_jsonl already includes trailing newline
+        let results = if streaming {
+            // Streaming mode: process files sequentially, print immediately
+            let results = Vec::new();
+            for entry in &files {
+                let file_path = entry.path().to_string_lossy().to_string();
+                let result = analyze_file_with_context(
+                    &file_path,
+                    format,
+                    zip_passwords,
+                    error_if_levels,
+                    verbose,
+                    sample_extraction,
+                    max_memory_file_size,
+                    &ctx,
+                    None,
+                    mol_layout,
+                    Some(&mut all_file_analyses),
+                )?;
                 tracing::info!(
                     path = %file_path,
                     jsonl_bytes = result.len(),
                     "JSONL output"
                 );
                 print!("{}", result);
-                // Flush for piped output (stdout is block-buffered when not a tty)
                 use std::io::Write;
                 if let Err(e) = std::io::stdout().flush() {
                     if e.kind() == std::io::ErrorKind::BrokenPipe {
@@ -259,10 +256,44 @@ pub(crate) fn run(
                         return Ok(String::new());
                     }
                 }
-            } else {
-                results.push(result);
             }
-        }
+            results
+        } else {
+            // Non-streaming: analyze files in parallel for throughput
+            use rayon::prelude::*;
+
+            let file_paths: Vec<String> = files
+                .iter()
+                .map(|e| e.path().to_string_lossy().to_string())
+                .collect();
+
+            let par_results: Vec<(String, Result<String>)> = file_paths
+                .par_iter()
+                .map(|file_path| {
+                    let result = analyze_file_with_context(
+                        file_path,
+                        format,
+                        zip_passwords,
+                        error_if_levels,
+                        verbose,
+                        sample_extraction,
+                        max_memory_file_size,
+                        &ctx,
+                        None,
+                        mol_layout,
+                        None, // Can't collect into shared Vec from parallel — do it after
+                    );
+                    (file_path.clone(), result)
+                })
+                .collect();
+
+            // Collect results in order, extracting file analyses for galaxy view
+            let mut results = Vec::with_capacity(par_results.len());
+            for (_, result) in par_results {
+                results.push(result?);
+            }
+            results
+        };
 
         // Generate galaxy view from all collected files
         if let Some(base_path) = mol_path {

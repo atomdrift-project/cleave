@@ -299,7 +299,7 @@ fn test_eval_basename_exact() {
     let data = vec![];
     let ctx = create_test_context(&report, &data, None);
 
-    let result = eval_basename(Some(&"malware.exe".to_string()), None, None, false, &ctx);
+    let result = eval_basename(Some(&"malware.exe".to_string()), None, None, false, None, &ctx);
     assert!(result.matched);
     assert_eq!(result.evidence[0].value, "malware.exe");
 }
@@ -310,7 +310,7 @@ fn test_eval_basename_exact_no_match() {
     let data = vec![];
     let ctx = create_test_context(&report, &data, None);
 
-    let result = eval_basename(Some(&"malware.exe".to_string()), None, None, false, &ctx);
+    let result = eval_basename(Some(&"malware.exe".to_string()), None, None, false, None, &ctx);
     assert!(!result.matched);
 }
 
@@ -320,7 +320,7 @@ fn test_eval_basename_substr() {
     let data = vec![];
     let ctx = create_test_context(&report, &data, None);
 
-    let result = eval_basename(None, Some(&"dropper".to_string()), None, false, &ctx);
+    let result = eval_basename(None, Some(&"dropper".to_string()), None, false, None, &ctx);
     assert!(result.matched);
 }
 
@@ -335,6 +335,7 @@ fn test_eval_basename_regex() {
         None,
         Some(&r"malware_\d+\.exe".to_string()),
         false,
+        None,
         &ctx,
     );
     assert!(result.matched);
@@ -351,6 +352,7 @@ fn test_eval_basename_case_insensitive_exact() {
         None,
         None,
         true, // case insensitive
+        None,
         &ctx,
     );
     assert!(result.matched);
@@ -362,7 +364,7 @@ fn test_eval_basename_case_insensitive_substr() {
     let data = vec![];
     let ctx = create_test_context(&report, &data, None);
 
-    let result = eval_basename(None, Some(&"dropper".to_string()), None, true, &ctx);
+    let result = eval_basename(None, Some(&"dropper".to_string()), None, true, None, &ctx);
     assert!(result.matched);
 }
 
@@ -377,6 +379,7 @@ fn test_eval_basename_case_insensitive_regex() {
         None,
         Some(&r"malware_.*\.exe".to_string()),
         true,
+        None,
         &ctx,
     );
     assert!(result.matched);
@@ -389,6 +392,6 @@ fn test_eval_basename_no_pattern() {
     let ctx = create_test_context(&report, &data, None);
 
     // No pattern specified - should not match
-    let result = eval_basename(None, None, None, false, &ctx);
+    let result = eval_basename(None, None, None, false, None, &ctx);
     assert!(!result.matched);
 }

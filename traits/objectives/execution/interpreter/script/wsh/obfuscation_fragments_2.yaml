@@ -33,6 +33,7 @@ traits:
   - id: type-binary-fragment
     desc: ADODB Type assignment fragment (ype =)
     size_max: 50000
+    for: [vbs, html]
     if:
       type: raw
       substr: 'ype ='

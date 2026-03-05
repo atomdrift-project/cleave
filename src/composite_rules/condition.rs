@@ -112,6 +112,12 @@ pub(crate) struct NotExceptionStructured {
     /// Require the value to match this regex to trigger the exception
     #[serde(skip_serializing_if = "Option::is_none")]
     pub regex: Option<String>,
+    /// Pre-compiled regex (populated by precompile)
+    #[serde(skip)]
+    pub compiled_regex: Option<regex::Regex>,
+    /// Pre-lowered substr for case-insensitive matching
+    #[serde(skip)]
+    pub lowered_substr: Option<String>,
 }
 
 /// String exception specification for `not:` directive
@@ -131,11 +137,16 @@ impl NotException {
     pub(crate) fn matches(&self, value: &str) -> bool {
         match self {
             NotException::Shorthand(pattern) => {
-                value.to_lowercase().contains(&pattern.to_lowercase())
+                // Pattern is pre-lowered during precompile(); only lowercase value
+                value.to_lowercase().contains(pattern.as_str())
             }
             NotException::Structured(s) => {
                 if let Some(exact_str) = &s.exact {
                     value.eq_ignore_ascii_case(exact_str)
+                } else if let Some(re) = &s.compiled_regex {
+                    re.is_match(value)
+                } else if let Some(lowered) = &s.lowered_substr {
+                    value.to_lowercase().contains(lowered.as_str())
                 } else if let Some(substr_str) = &s.substr {
                     value.to_lowercase().contains(&substr_str.to_lowercase())
                 } else if let Some(regex_str) = &s.regex {
@@ -144,6 +155,31 @@ impl NotException {
                         .unwrap_or(false)
                 } else {
                     false
+                }
+            }
+        }
+    }
+
+    /// Pre-compile regex and pre-lowercase patterns for faster matching
+    pub(crate) fn precompile(&mut self) {
+        match self {
+            NotException::Shorthand(pattern) => {
+                // Pre-lowercase the pattern
+                let lowered = pattern.to_lowercase();
+                if lowered != *pattern {
+                    *pattern = lowered;
+                }
+            }
+            NotException::Structured(s) => {
+                if let Some(regex_str) = &s.regex {
+                    if s.compiled_regex.is_none() {
+                        s.compiled_regex = regex::Regex::new(regex_str).ok();
+                    }
+                }
+                if let Some(substr_str) = &s.substr {
+                    if s.lowered_substr.is_none() {
+                        s.lowered_substr = Some(substr_str.to_lowercase());
+                    }
                 }
             }
         }
@@ -517,6 +553,9 @@ enum ConditionTagged {
         /// Case insensitive matching (default: false)
         #[serde(default)]
         case_insensitive: bool,
+        /// Pre-compiled regex (populated by precompile_regexes)
+        #[serde(skip)]
+        compiled_regex: Option<regex::Regex>,
     },
 
     /// Query structured data in JSON, YAML, and TOML manifests using path expressions.
@@ -789,11 +828,13 @@ impl From<ConditionDeser> for Condition {
                     substr,
                     regex,
                     case_insensitive,
+                    compiled_regex,
                 } => Condition::Basename {
                     exact,
                     substr,
                     regex,
                     case_insensitive,
+                    compiled_regex,
                 },
                 ConditionTagged::Kv {
                     path,
@@ -1055,11 +1096,13 @@ impl From<Condition> for ConditionTagged {
                 substr,
                 regex,
                 case_insensitive,
+                compiled_regex,
             } => ConditionTagged::Basename {
                 exact,
                 substr,
                 regex,
                 case_insensitive,
+                compiled_regex,
             },
             Condition::Kv {
                 path,
@@ -1548,6 +1591,9 @@ pub(crate) enum Condition {
         /// Case insensitive matching (default: false)
         #[serde(default)]
         case_insensitive: bool,
+        /// Pre-compiled regex
+        #[serde(skip)]
+        compiled_regex: Option<regex::Regex>,
     },
 
     /// Query structured data in JSON, YAML, and TOML manifests using path expressions.
@@ -2371,6 +2417,31 @@ impl Condition {
                         e
                     )
                 })?);
+            }
+            Condition::Basename {
+                regex: Some(regex_pattern),
+                case_insensitive,
+                compiled_regex,
+                ..
+            } => {
+                // Compile basename regex if present
+                *compiled_regex = Some(if *case_insensitive {
+                    regex::Regex::new(&format!("(?i){}", regex_pattern)).map_err(|e| {
+                        anyhow::anyhow!(
+                            "Failed to compile case-insensitive basename regex '{}': {}",
+                            regex_pattern,
+                            e
+                        )
+                    })?
+                } else {
+                    regex::Regex::new(regex_pattern).map_err(|e| {
+                        anyhow::anyhow!(
+                            "Failed to compile basename regex '{}': {}",
+                            regex_pattern,
+                            e
+                        )
+                    })?
+                });
             }
             _ => {}
         }

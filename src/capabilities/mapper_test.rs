@@ -11,7 +11,7 @@
 //! Comprehensive test coverage for the core capability mapping functionality.
 
 use super::mapper::CapabilityMapper;
-use crate::composite_rules::Platform;
+use crate::composite_rules::{Platform, SectionMap};
 use crate::types::{AnalysisReport, Criticality};
 use tempfile::TempDir;
 
@@ -364,7 +364,7 @@ fn test_evaluate_composite_rules_empty() {
     let mapper = CapabilityMapper::empty();
     let report = create_test_report();
 
-    let findings = mapper.evaluate_composite_rules(&report, &[], None, None);
+    let findings = mapper.evaluate_composite_rules(&report, &[], None, None, &SectionMap::default());
     assert_eq!(findings.len(), 0);
 }
 

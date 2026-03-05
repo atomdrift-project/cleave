@@ -373,6 +373,8 @@ impl StringMatchIndex {
     ) -> (FxHashSet<usize>, FxHashMap<usize, Vec<Evidence>>) {
         let mut matching_traits = FxHashSet::default();
         let mut trait_evidence: FxHashMap<usize, Vec<Evidence>> = FxHashMap::default();
+        let has_ci_patterns = !self.ci_exact_patterns.is_empty();
+        let mut lower_buf = String::new();
 
         for string_info in strings {
             let len = string_info.value.len();
@@ -397,10 +399,11 @@ impl StringMatchIndex {
                 }
             }
 
-            // Case-insensitive exact matching
-            if len >= self.ci_min_pattern_length {
-                let lower = string_info.value.to_lowercase();
-                if let Some((original_pattern, trait_indices)) = self.ci_exact_patterns.get(&lower)
+            // Case-insensitive exact matching — skip entirely when no CI patterns exist
+            if has_ci_patterns && len >= self.ci_min_pattern_length {
+                lower_buf.clear();
+                lower_buf.extend(string_info.value.chars().flat_map(char::to_lowercase));
+                if let Some((original_pattern, trait_indices)) = self.ci_exact_patterns.get(lower_buf.as_str())
                 {
                     for &trait_idx in trait_indices {
                         matching_traits.insert(trait_idx);
@@ -491,12 +494,14 @@ impl StringMatchIndex {
     ) -> (FxHashSet<usize>, FxHashMap<usize, Vec<Evidence>>) {
         // Process strings in parallel chunks
         const CHUNK_SIZE: usize = 2000;
+        let has_ci_patterns = !self.ci_exact_patterns.is_empty();
 
         let chunk_results: Vec<(FxHashSet<usize>, FxHashMap<usize, Vec<Evidence>>)> = strings
             .par_chunks(CHUNK_SIZE)
             .map(|chunk| {
                 let mut matching_traits = FxHashSet::default();
                 let mut trait_evidence: FxHashMap<usize, Vec<Evidence>> = FxHashMap::default();
+                let mut lower_buf = String::new();
 
                 for string_info in chunk {
                     let len = string_info.value.len();
@@ -520,11 +525,12 @@ impl StringMatchIndex {
                         }
                     }
 
-                    // Case-insensitive exact matching with length pre-filter
-                    if len >= self.ci_min_pattern_length {
-                        let lower = string_info.value.to_lowercase();
+                    // Case-insensitive exact matching — skip entirely when no CI patterns exist
+                    if has_ci_patterns && len >= self.ci_min_pattern_length {
+                        lower_buf.clear();
+                        lower_buf.extend(string_info.value.chars().flat_map(char::to_lowercase));
                         if let Some((original_pattern, trait_indices)) =
-                            self.ci_exact_patterns.get(&lower)
+                            self.ci_exact_patterns.get(lower_buf.as_str())
                         {
                             for &trait_idx in trait_indices {
                                 matching_traits.insert(trait_idx);

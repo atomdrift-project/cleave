@@ -2607,6 +2607,7 @@ pub(crate) fn check_basename_pattern_duplicates(
             substr,
             regex,
             case_insensitive,
+            ..
         } = &trait_def.r#if
         {
             // Skip basename conditions that don't actually have any patterns

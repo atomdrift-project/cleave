@@ -6,6 +6,7 @@ traits:
   desc: Usage of atob to decode environment variables
   crit: notable
   conf: 1.0
+  for: [javascript, typescript]
   if:
     type: raw
     substr: atob(process.env.
@@ -13,22 +14,47 @@ traits:
   desc: Axios GET request
   crit: notable
   conf: 1.0
+  for: [javascript, typescript]
   if:
     type: raw
     substr: axios.get
-- id: export-iife-injection
-  desc: Immediately Invoked Function Expression on Export
-  crit: suspicious
-  conf: 0.8
+- id: export-iife-closure
+  desc: Trailing IIFE closure indicating auto-execution
+  crit: notable
+  conf: 0.85
+  for: [javascript, typescript]
   if:
     type: raw
-    regex: exports\.[a-zA-Z0-9_]+\s*=\s*asyncErrorHandler\(.{0,200}\)\s*\(\)
+    regex: "\\}\\)\\(\\)\\s*;?\\s*$"
+- id: data-dot-cookie-extract
+  desc: Extracts .data.cookie from HTTP response
+  crit: notable
+  conf: 0.9
+  for: [javascript, typescript]
+  if:
+    type: raw
+    substr: ".data.cookie"
 composite_rules:
 - id: suspicious-env-atob-axios
   desc: Decoding environment variables with atob for network use
   crit: hostile
   conf: 0.95
+  for: [javascript, typescript]
   all:
   - id: env-atob-decode
   - id: axios-get
-  - id: objectives/anti-static/obfuscation/payload::exec-function-call
+  any:
+  - id: objectives/anti-static/obfuscation/require::function-constructor-require
+  - id: objectives/anti-static/obfuscation/require::function-constructor
+  - id: micro-behaviors/data/source/dynamic/eval::new-function-iife
+- id: iife-remote-eval
+  desc: IIFE fetches remote code and evaluates it
+  crit: hostile
+  conf: 0.95
+  for: [javascript, typescript]
+  all:
+  - id: export-iife-closure
+  - id: axios-get
+  any:
+  - id: objectives/anti-static/obfuscation/require::function-constructor-require
+  - id: objectives/anti-static/obfuscation/require::function-constructor

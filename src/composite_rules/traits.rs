@@ -240,6 +240,12 @@ impl TraitDefinition {
         self.r#if
             .precompile_regexes()
             .with_context(|| format!("in trait '{}' main condition", self.id))?;
+        // Pre-compile not-exception patterns
+        if let Some(ref mut exceptions) = self.not {
+            for exc in exceptions.iter_mut() {
+                exc.precompile();
+            }
+        }
         if let Some(ref mut conds) = self.unless {
             for (idx, cond) in conds.iter_mut().enumerate() {
                 cond.precompile_regexes().with_context(|| {
@@ -1442,6 +1448,7 @@ impl TraitDefinition {
                 substr,
                 regex,
                 case_insensitive,
+                compiled_regex,
             } => timed_eval!(
                 "basename",
                 eval_basename(
@@ -1449,6 +1456,7 @@ impl TraitDefinition {
                     substr.as_ref(),
                     regex.as_ref(),
                     *case_insensitive,
+                    compiled_regex.as_ref(),
                     ctx,
                 )
             ),
@@ -2518,6 +2526,7 @@ impl CompositeTrait {
                 substr,
                 regex,
                 case_insensitive,
+                compiled_regex,
             } => timed_eval!(
                 "basename",
                 eval_basename(
@@ -2525,6 +2534,7 @@ impl CompositeTrait {
                     substr.as_ref(),
                     regex.as_ref(),
                     *case_insensitive,
+                    compiled_regex.as_ref(),
                     ctx,
                 )
             ),

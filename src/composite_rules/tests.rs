@@ -564,6 +564,8 @@ fn test_not_directive_exact() {
             exact: Some("github.com".to_string()),
             substr: None,
             regex: None,
+            compiled_regex: None,
+            lowered_substr: None,
         })]),
         unless: None,
         downgrade: None,
@@ -659,6 +661,8 @@ fn test_not_directive_regex() {
             exact: None,
             substr: None,
             regex: Some(r"^192\.168\.".to_string()),
+            compiled_regex: None,
+            lowered_substr: None,
         })]),
         unless: None,
         downgrade: None,
@@ -1921,7 +1925,7 @@ fn test_basename_exact_match() {
 
     // exact: "__init__.py" should match
     let result =
-        super::evaluators::eval_basename(Some(&"__init__.py".to_string()), None, None, false, &ctx);
+        super::evaluators::eval_basename(Some(&"__init__.py".to_string()), None, None, false, None, &ctx);
     assert!(result.matched);
     assert_eq!(result.evidence[0].value, "__init__.py");
 }
@@ -1951,7 +1955,7 @@ fn test_basename_exact_no_match() {
 
     // exact: "__init__.py" should not match "main.py"
     let result =
-        super::evaluators::eval_basename(Some(&"__init__.py".to_string()), None, None, false, &ctx);
+        super::evaluators::eval_basename(Some(&"__init__.py".to_string()), None, None, false, None, &ctx);
     assert!(!result.matched);
 }
 
@@ -1980,7 +1984,7 @@ fn test_basename_substr_match() {
 
     // substr: "setup" should match "setup_tools.py"
     let result =
-        super::evaluators::eval_basename(None, Some(&"setup".to_string()), None, false, &ctx);
+        super::evaluators::eval_basename(None, Some(&"setup".to_string()), None, false, None, &ctx);
     assert!(result.matched);
 }
 
@@ -2009,7 +2013,7 @@ fn test_basename_regex_match() {
 
     // regex: "^test_" should match files starting with "test_"
     let result =
-        super::evaluators::eval_basename(None, None, Some(&"^test_".to_string()), false, &ctx);
+        super::evaluators::eval_basename(None, None, Some(&"^test_".to_string()), false, None, &ctx);
     assert!(result.matched);
 }
 
@@ -2042,6 +2046,7 @@ fn test_basename_case_insensitive() {
         None,
         None,
         true, // case_insensitive
+        None,
         &ctx,
     );
     assert!(result.matched);
@@ -2084,6 +2089,7 @@ fn test_basename_in_trait_definition() {
             substr: None,
             regex: None,
             case_insensitive: false,
+            compiled_regex: None,
         },
         size_max: None,
         count_min: None,
@@ -2145,6 +2151,7 @@ fn test_basename_in_composite_rule() {
             substr: None,
             regex: Some("^setup\\.py$".to_string()),
             case_insensitive: false,
+            compiled_regex: None,
         }]),
         any: None,
         none: None,
@@ -2358,6 +2365,7 @@ fn test_composite_unless_with_basename() {
             substr: None,
             regex: Some(r"^libX11(\\.so|\\.dylib).*".to_string()),
             case_insensitive: false,
+            compiled_regex: None,
         }]),
         not: None,
         downgrade: None,
@@ -2437,6 +2445,7 @@ fn test_composite_unless_multiple_conditions_any_matches() {
                 substr: None,
                 regex: None,
                 case_insensitive: false,
+                compiled_regex: None,
             },
             Condition::String {
                 exact: None,

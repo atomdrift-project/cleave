@@ -35,7 +35,7 @@ use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 
-const MAX_FILE_ANALYSIS_TIME_SECS: u64 = 30;
+const MAX_FILE_ANALYSIS_TIME_SECS: u64 = 300;
 
 /// Maximum number of orphaned (timed-out) threads allowed before blocking new analysis.
 /// Each orphaned thread holds ~8MB stack + analysis resources.

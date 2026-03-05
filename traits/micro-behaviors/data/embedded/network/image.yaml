@@ -29,3 +29,12 @@ traits:
       type: hex
       pattern: "00 00 00 00 02 00"
       offset_range: [512, null]
+
+composite_rules:
+  - id: sockaddr-in-nullpad
+    desc: Embedded sockaddr_in with null padding
+    crit: suspicious
+    conf: 0.9
+    any:
+      - id: sockaddr-in-nullpad-be
+      - id: sockaddr-in-nullpad-le

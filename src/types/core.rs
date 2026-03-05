@@ -46,7 +46,7 @@ impl Criticality {
 }
 
 /// Main analysis output structure
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AnalysisReport {
     /// Schema version (currently "2.0")
     pub schema_version: String,
@@ -475,7 +475,7 @@ impl AnalysisReport {
 }
 
 /// Information about the file being analyzed
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TargetInfo {
     /// Absolute path to the analyzed file
     pub path: String,

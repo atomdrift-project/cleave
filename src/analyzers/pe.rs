@@ -338,26 +338,8 @@ impl PEAnalyzer {
         report.files.extend(encoded_layers);
         report.findings.extend(plain_findings);
 
-        // Update binary metrics with final counts and compute ratios
-        if let Some(ref mut metrics) = report.metrics {
-            if let Some(ref mut binary) = metrics.binary {
-                binary.import_count = report.imports.len() as u32;
-                binary.export_count = report.exports.len() as u32;
-                binary.string_count = report.strings.len() as u32;
-                binary.file_size = original_data.len() as u64;
-
-                // Compute largest section ratio
-                if binary.file_size > 0 && !report.sections.is_empty() {
-                    let max_section_size =
-                        report.sections.iter().map(|s| s.size).max().unwrap_or(0);
-                    binary.largest_section_ratio =
-                        max_section_size as f32 / binary.file_size as f32;
-                }
-
-                // Compute ratio metrics
-                crate::radare2::Radare2Analyzer::compute_ratio_metrics(binary);
-            }
-        }
+        // Populate common binary metrics (strings, entropy, etc.)
+        crate::analyzers::metrics_utils::populate_binary_metrics(&mut report, original_data);
 
         // Validate metric ranges to catch calculation bugs
         if let Some(ref metrics) = report.metrics {
@@ -549,6 +531,9 @@ impl PEAnalyzer {
             );
         report.files.extend(encoded_layers);
         report.findings.extend(plain_findings);
+
+        // Populate common binary metrics (strings, entropy, etc.)
+        crate::analyzers::metrics_utils::populate_binary_metrics(&mut report, data);
 
         report.metadata.analysis_duration_ms = start.elapsed().as_millis() as u64;
         report.metadata.tools_used = tools_used;

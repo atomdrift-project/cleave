@@ -265,6 +265,9 @@ impl ElfAnalyzer {
         report.files.extend(encoded_layers);
         report.findings.extend(plain_findings);
 
+        // Populate common binary metrics (strings, entropy, etc.)
+        crate::analyzers::metrics_utils::populate_binary_metrics(&mut report, data);
+
         // Validate metric ranges to catch calculation bugs
         if let Some(ref metrics) = report.metrics {
             if let Some(ref binary) = metrics.binary {

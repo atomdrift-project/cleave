@@ -35,6 +35,7 @@ pub(crate) mod comment_metrics;
 pub(crate) mod function_metrics;
 pub(crate) mod identifier_metrics;
 pub(crate) mod import_metrics;
+pub(crate) mod metrics_utils;
 pub(crate) mod string_metrics;
 pub(crate) mod symbol_extraction;
 pub(crate) mod text_metrics;

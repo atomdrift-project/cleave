@@ -13,6 +13,7 @@ use axum::response::{IntoResponse, Json, Response};
 use axum::routing::{get, post};
 use axum::Router;
 use std::net::SocketAddr;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::signal;
@@ -68,6 +69,15 @@ pub struct AppState {
     pub allowed_local_paths: Vec<std::path::PathBuf>,
     /// Directory for extracting archive contents.
     pub extract_dir: Option<std::path::PathBuf>,
+    /// Request ID counter.
+    pub next_request_id: AtomicU64,
+}
+
+impl AppState {
+    /// Get the next unique request ID.
+    pub fn next_request_id(&self) -> u64 {
+        self.next_request_id.fetch_add(1, Ordering::SeqCst)
+    }
 }
 
 /// Start the HTTP server with the given configuration.
@@ -105,6 +115,7 @@ pub async fn run(config: ServerConfig) -> anyhow::Result<()> {
         max_body_size: config.max_body_size,
         allowed_local_paths,
         extract_dir,
+        next_request_id: AtomicU64::new(1),
     });
 
     // Spawn background task to clean up stale rate limiter entries
@@ -159,13 +170,16 @@ async fn analyze_with_headers(
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     request: Request,
 ) -> Response {
+    let request_id = state.next_request_id();
     let client_ip = addr.ip();
+    info!(%client_ip, request_id, "--> POST /analyze");
+
     let content_type = request.headers().get("content-type").cloned();
     let max_size = state.max_body_size;
     let body = match axum::body::to_bytes(request.into_body(), max_size).await {
         Ok(b) => b,
         Err(e) => {
-            warn!(%client_ip, "Failed to read request body: {}", e);
+            warn!(%client_ip, request_id, "Failed to read request body: {}", e);
             return (
                 StatusCode::BAD_REQUEST,
                 Json(serde_json::json!({"error": "Failed to read request body"})),
@@ -173,7 +187,7 @@ async fn analyze_with_headers(
                 .into_response();
         }
     };
-    handlers::analyze(Arc::clone(&state), client_ip, body, content_type).await
+    handlers::analyze(Arc::clone(&state), client_ip, request_id, body, content_type).await
 }
 
 /// Rate limiting middleware.

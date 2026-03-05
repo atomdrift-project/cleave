@@ -270,9 +270,11 @@ fn analyze_file_with_resources<P: AsRef<Path>>(
     yara_engine: Option<&Arc<yara_engine::YaraEngine>>,
 ) -> Result<AnalysisReport> {
     let path = path.as_ref();
+    let span = tracing::info_span!("analyze", path = %path.display());
+    let _enter = span.enter();
 
     // Log BEFORE processing to ensure we capture what file causes OOM crashes
-    tracing::info!("Starting analysis of file: {}", path.display());
+    tracing::info!("Starting analysis");
 
     if !path.exists() {
         anyhow::bail!("Path does not exist: {}", path.display());

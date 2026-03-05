@@ -13,7 +13,7 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tempfile::NamedTempFile;
-use tracing::{info, warn};
+use tracing::{info, info_span, warn};
 
 use super::AppState;
 
@@ -65,14 +65,19 @@ pub(super) async fn reload() -> Response {
 pub(super) async fn analyze(
     state: Arc<AppState>,
     client_ip: IpAddr,
+    request_id: u64,
     body: Bytes,
     content_type: Option<axum::http::HeaderValue>,
 ) -> Response {
     let request_start = Instant::now();
 
+    // Create a span for the request to ensure all internal logs have context
+    let span = info_span!("request", %client_ip, request_id);
+    let _enter = span.enter();
+
     // Extract boundary from content-type header
     let Some(boundary) = extract_boundary(content_type.as_ref()) else {
-        warn!(%client_ip, "Bad request: missing or invalid Content-Type");
+        warn!("Bad request: missing or invalid Content-Type");
         return (
             StatusCode::BAD_REQUEST,
             Json(serde_json::json!({"error": "Missing or invalid Content-Type header"})),
@@ -87,7 +92,7 @@ pub(super) async fn analyze(
     let field = match multipart.next_field().await {
         Ok(Some(f)) => f,
         Ok(None) => {
-            warn!(%client_ip, "Bad request: no file field");
+            warn!("Bad request: no file field");
             return (
                 StatusCode::BAD_REQUEST,
                 Json(serde_json::json!({"error": "No file field in request"})),
@@ -95,7 +100,7 @@ pub(super) async fn analyze(
                 .into_response();
         }
         Err(e) => {
-            warn!(%client_ip, "Failed to parse multipart: {}", e);
+            warn!("Failed to parse multipart: {}", e);
             return (
                 StatusCode::BAD_REQUEST,
                 Json(serde_json::json!({"error": "Invalid multipart data"})),
@@ -119,7 +124,7 @@ pub(super) async fn analyze(
     let data = match field.bytes().await {
         Ok(d) => d,
         Err(e) => {
-            warn!(%client_ip, "Failed to read file data: {}", e);
+            warn!("Failed to read file data: {}", e);
             return (
                 StatusCode::BAD_REQUEST,
                 Json(serde_json::json!({"error": "Failed to read file data"})),
@@ -129,7 +134,7 @@ pub(super) async fn analyze(
     };
 
     if data.is_empty() {
-        warn!(%client_ip, "Bad request: empty file");
+        warn!("Bad request: empty file");
         return (
             StatusCode::BAD_REQUEST,
             Json(serde_json::json!({"error": "Empty file"})),
@@ -138,13 +143,13 @@ pub(super) async fn analyze(
     }
 
     let file_size = data.len();
-    info!(%client_ip, size = file_size, filename = %filename, "Analyzing file");
+    info!(size = file_size, filename = %filename, "Starting analysis");
 
     // Write to tempfile
     let temp_file = match write_temp_file(&data) {
         Ok(f) => f,
         Err(e) => {
-            warn!(%client_ip, "Failed to create temp file: {}", e);
+            warn!("Failed to create temp file: {}", e);
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(serde_json::json!({"error": "Internal error"})),
@@ -185,24 +190,29 @@ pub(super) async fn analyze(
                 .iter()
                 .filter(|f| f.crit == Criticality::Notable)
                 .count();
+            let baseline = report
+                .findings
+                .iter()
+                .filter(|f| f.crit == Criticality::Baseline)
+                .count();
 
             info!(
-                %client_ip,
                 filename = %filename,
                 size = file_size,
                 elapsed_ms = elapsed_ms,
                 hostile = hostile,
                 suspicious = suspicious,
                 notable = notable,
-                findings = report.findings.len(),
-                "Analysis complete"
+                baseline = baseline,
+                total = report.findings.len(),
+                "<-- 200 OK (Analysis complete)"
             );
 
             Json(report).into_response()
         }
         Ok(Ok(Err(e))) => {
             // Log full error internally, return generic message to client
-            warn!(%client_ip, filename = %filename, elapsed_ms = elapsed_ms, "Analysis failed: {}", e);
+            warn!(filename = %filename, elapsed_ms = elapsed_ms, "Analysis failed: {}", e);
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(serde_json::json!({"error": "Analysis failed"})),
@@ -210,7 +220,7 @@ pub(super) async fn analyze(
                 .into_response()
         }
         Ok(Err(e)) => {
-            warn!(%client_ip, filename = %filename, elapsed_ms = elapsed_ms, "Task join error: {}", e);
+            warn!(filename = %filename, elapsed_ms = elapsed_ms, "Task join error: {}", e);
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(serde_json::json!({"error": "Internal error"})),
@@ -218,7 +228,7 @@ pub(super) async fn analyze(
                 .into_response()
         }
         Err(_) => {
-            warn!(%client_ip, filename = %filename, elapsed_ms = elapsed_ms, "Analysis timed out after {}s", state.timeout_secs);
+            warn!(filename = %filename, elapsed_ms = elapsed_ms, "Analysis timed out after {}s", state.timeout_secs);
             (
                 StatusCode::GATEWAY_TIMEOUT,
                 Json(serde_json::json!({"error": "Analysis timed out"})),
@@ -319,11 +329,19 @@ pub(super) async fn analyze_path(
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     Json(request): Json<AnalyzePathRequest>,
 ) -> Response {
+    let request_id = state.next_request_id();
     let client_ip = addr.ip();
+    let request_start = Instant::now();
+
+    // Create a span for the request
+    let span = info_span!("request-path", %client_ip, request_id, path = %request.path);
+    let _enter = span.enter();
+
+    info!("--> POST /analyze-path");
 
     // Check if local path analysis is enabled
     if state.allowed_local_paths.is_empty() {
-        warn!(%client_ip, "Rejected /analyze-path request: feature not enabled");
+        warn!("Rejected /analyze-path request: feature not enabled");
         return (
             StatusCode::FORBIDDEN,
             Json(serde_json::json!({"error": "Local file path analysis is not enabled"})),
@@ -335,7 +353,7 @@ pub(super) async fn analyze_path(
 
     // Validate path is absolute
     if !path.is_absolute() {
-        warn!(%client_ip, path = %request.path, "Rejected relative path");
+        warn!(path = %request.path, "Rejected relative path");
         return (
             StatusCode::BAD_REQUEST,
             Json(serde_json::json!({"error": "Path must be absolute"})),
@@ -345,7 +363,7 @@ pub(super) async fn analyze_path(
 
     // Canonicalize the path to resolve symlinks and ..
     let Ok(canonical_path) = path.canonicalize() else {
-        warn!(%client_ip, path = %request.path, "File not found or not accessible");
+        warn!(path = %request.path, "File not found or not accessible");
         return (
             StatusCode::NOT_FOUND,
             Json(serde_json::json!({"error": "File not found"})),
@@ -361,7 +379,6 @@ pub(super) async fn analyze_path(
 
     if !allowed {
         warn!(
-            %client_ip,
             path = %request.path,
             canonical = %canonical_path.display(),
             "Path not in allowed directories"
@@ -375,12 +392,10 @@ pub(super) async fn analyze_path(
 
     // File existence already verified by canonicalize()
     let path = canonical_path;
-
-    let request_start = Instant::now();
     let path_str = request.path.clone();
     let extract_dir = state.extract_dir.clone();
 
-    info!(%client_ip, path = %path_str, "Analyzing local file");
+    info!(path = %path_str, "Starting analysis");
 
     let timeout_duration = Duration::from_secs(state.timeout_secs);
     let path_owned = path.to_owned();
@@ -411,6 +426,11 @@ pub(super) async fn analyze_path(
                 .iter()
                 .filter(|f| f.crit == Criticality::Notable)
                 .count();
+            let baseline = report
+                .findings
+                .iter()
+                .filter(|f| f.crit == Criticality::Baseline)
+                .count();
 
             // Extract file to extract_dir if configured
             let extracted_path = if let Some(ref extract_base) = extract_dir {
@@ -420,15 +440,15 @@ pub(super) async fn analyze_path(
             };
 
             info!(
-                %client_ip,
                 path = %path_str,
                 elapsed_ms = elapsed_ms,
                 hostile = hostile,
                 suspicious = suspicious,
                 notable = notable,
-                findings = report.findings.len(),
+                baseline = baseline,
+                total = report.findings.len(),
                 extracted_path = ?extracted_path,
-                "Analysis complete"
+                "<-- 200 OK (Analysis complete)"
             );
 
             let response = AnalyzePathResponse {
@@ -438,7 +458,7 @@ pub(super) async fn analyze_path(
             Json(response).into_response()
         }
         Ok(Ok(Err(e))) => {
-            warn!(%client_ip, path = %path_str, elapsed_ms = elapsed_ms, "Analysis failed: {}", e);
+            warn!(path = %path_str, elapsed_ms = elapsed_ms, "Analysis failed: {}", e);
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(serde_json::json!({"error": "Analysis failed"})),
@@ -446,7 +466,7 @@ pub(super) async fn analyze_path(
                 .into_response()
         }
         Ok(Err(e)) => {
-            warn!(%client_ip, path = %path_str, elapsed_ms = elapsed_ms, "Task join error: {}", e);
+            warn!(path = %path_str, elapsed_ms = elapsed_ms, "Task join error: {}", e);
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(serde_json::json!({"error": "Internal error"})),
@@ -454,7 +474,7 @@ pub(super) async fn analyze_path(
                 .into_response()
         }
         Err(_) => {
-            warn!(%client_ip, path = %path_str, elapsed_ms = elapsed_ms, "Analysis timed out after {}s", state.timeout_secs);
+            warn!(path = %path_str, elapsed_ms = elapsed_ms, "Analysis timed out after {}s", state.timeout_secs);
             (
                 StatusCode::GATEWAY_TIMEOUT,
                 Json(serde_json::json!({"error": "Analysis timed out"})),

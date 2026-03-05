@@ -1,0 +1,65 @@
+# TLS/Certificate Telemetry Extraction
+# Detects code that queries TLS connection details and certificates
+# Commonly used by malware for C2 pinning, environment fingerprinting,
+# or certificate validation bypass
+
+defaults:
+  for: ["c", "cpp", "pe", "dll"]
+  platforms: ["windows"]
+
+traits:
+  - id: security-connection-info
+    desc: TLS connection info extraction
+    crit: notable
+    conf: 0.9
+    attack: T1071.001
+    if:
+      type: raw
+      substr: "INTERNET_OPTION_SECURITY_CONNECTION_INFO"
+
+  - id: security-certificate-query
+    desc: Server certificate text extraction
+    crit: notable
+    conf: 0.9
+    attack: T1071.001
+    if:
+      type: raw
+      substr: "INTERNET_OPTION_SECURITY_CERTIFICATE"
+
+  - id: security-flags-query
+    desc: TLS security flags query
+    crit: baseline
+    conf: 0.85
+    if:
+      type: raw
+      substr: "INTERNET_OPTION_SECURITY_FLAGS"
+
+  - id: internet-security-connection-info-struct
+    desc: Security connection info struct usage
+    crit: component
+    conf: 0.85
+    if:
+      type: raw
+      substr: "INTERNET_SECURITY_CONNECTION_INFO"
+
+  - id: tls-protocol-constants
+    desc: TLS protocol version constants
+    crit: component
+    conf: 0.8
+    if:
+      type: raw
+      regex: "SP_PROT_TLS1_[012]_(CLIENT|SERVER)"
+
+composite_rules:
+  - id: tls-telemetry-extraction
+    desc: TLS connection telemetry harvesting
+    crit: notable
+    conf: 0.9
+    attack: T1071.001
+    any:
+      - id: security-connection-info
+      - id: security-certificate-query
+      - id: internet-security-connection-info-struct
+    needs: 1
+    all:
+      - id: tls-protocol-constants

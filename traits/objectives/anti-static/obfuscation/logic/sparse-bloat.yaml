@@ -14,6 +14,10 @@ traits:
       type: metrics
       field: "binary.complexity_per_kb"
       max: 0.1
+    downgrade:
+      any:
+        - id: metadata/format/pe::dotnet-metadata
+        - id: metadata/format/pe::resource-only-dll
 
 composite_rules:
   - id: bloated-low-density-malware
@@ -25,3 +29,6 @@ composite_rules:
     any:
       - id: objectives/anti-analysis/vm/detect::cpuid-instruction
       - id: objectives/evasion/process/injection/runtime::set-thread-context
+    downgrade:
+      any:
+        - id: metadata/format/pe::dotnet-metadata

@@ -1,0 +1,98 @@
+# WinINet HTTP Client - Source Code Detection
+# Detects WinINet API usage in C/C++ source code
+# These APIs form the core of Windows HTTP communication
+
+defaults:
+  for: ["c", "cpp"]
+  platforms: ["windows"]
+
+traits:
+  - id: wininet-open-src
+    desc: WinINet session initialization in source
+    crit: notable
+    conf: 0.9
+    mbc: C0002
+    attack: T1071.001
+    if:
+      type: symbol
+      regex: "^InternetOpen[AW]?$"
+
+  - id: wininet-connect-src
+    desc: WinINet server connection in source
+    crit: notable
+    conf: 0.9
+    mbc: C0002
+    attack: T1071.001
+    if:
+      type: symbol
+      regex: "^InternetConnect[AW]?$"
+
+  - id: wininet-http-open-request-src
+    desc: WinINet HTTP request creation in source
+    crit: notable
+    conf: 0.9
+    mbc: C0002
+    attack: T1071.001
+    if:
+      type: symbol
+      regex: "^HttpOpenRequest[AW]?$"
+
+  - id: wininet-http-send-request-src
+    desc: WinINet HTTP request send in source
+    crit: notable
+    conf: 0.9
+    mbc: C0002
+    attack: T1071.001
+    if:
+      type: symbol
+      regex: "^HttpSendRequest[AW]?$"
+
+  - id: wininet-read-file-src
+    desc: WinINet internet data read in source
+    crit: notable
+    conf: 0.9
+    mbc: C0002
+    attack: T1071.001
+    if:
+      type: symbol
+      exact: "InternetReadFile"
+
+  - id: wininet-close-handle-src
+    desc: WinINet handle cleanup in source
+    crit: baseline
+    conf: 0.9
+    if:
+      type: symbol
+      exact: "InternetCloseHandle"
+
+  - id: wininet-query-option-src
+    desc: WinINet option query in source
+    crit: baseline
+    conf: 0.9
+    if:
+      type: symbol
+      regex: "^InternetQueryOption[AW]?$"
+
+  - id: wininet-http-query-info-src
+    desc: WinINet HTTP response info query
+    crit: baseline
+    conf: 0.9
+    if:
+      type: symbol
+      regex: "^HttpQueryInfo[AW]?$"
+
+composite_rules:
+  - id: wininet-http-client-src
+    desc: WinINet HTTP client in source code
+    crit: notable
+    conf: 0.9
+    mbc: C0002
+    attack: T1071.001
+    all:
+      - id: wininet-open-src
+    any:
+      - id: wininet-connect-src
+      - id: wininet-http-open-request-src
+      - id: wininet-http-send-request-src
+      - id: wininet-read-file-src
+    needs: 2

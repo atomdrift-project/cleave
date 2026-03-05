@@ -784,6 +784,22 @@ impl TraitDefinition {
     pub(crate) fn evaluate<'a>(&self, ctx: &EvaluationContext<'a>) -> Option<Finding> {
         use super::debug::{ConditionDebug, DowngradeDebug, SkipReason};
 
+        // SAFETY: We need to set the current trait for warning context.
+        // The context is otherwise immutable, but we've added a helper for this.
+        // Since we're in a parallel iterator, we must be careful.
+        // However, EvaluationContext is cloned or created per-thread/per-item in most callers.
+        // Actually, in the parallel iterator in evaluate_traits_with_ast, `ctx` is shared by reference.
+        // This is a problem for parallel evaluation if we use a &mut.
+        // But the current_trait is only used for transient warnings during this call.
+        
+        // Let's check how ctx is passed to evaluate.
+        // It's `&ctx`. If multiple threads call .evaluate(&ctx), we can't have &mut ctx.
+        
+        // If I want to support this in parallel, I might need to pass the ID into eval_raw/eval_hex directly
+        // OR make current_trait an Atomic or similar, but it's a &str.
+        
+        // Actually, the easiest is to just pass the trait ID into the evaluators.
+        
         // Check platform match
         let platform_match = self.platforms.contains(&Platform::All)
             || ctx.platforms.contains(&Platform::All)
@@ -1330,6 +1346,7 @@ impl TraitDefinition {
                         section_offset_range: *section_offset_range,
                     },
                     ctx,
+                    Some(self.id.as_str()),
                 )
             ),
             Condition::Raw {
@@ -1368,6 +1385,7 @@ impl TraitDefinition {
                         self.not.as_ref(),
                         &location,
                         ctx,
+                        Some(self.id.as_str()),
                     )
                 )
             }
@@ -2408,6 +2426,7 @@ impl CompositeTrait {
                         section_offset_range: *section_offset_range,
                     },
                     ctx,
+                    Some(self.id.as_str()),
                 )
             ),
             Condition::Raw {
@@ -2446,6 +2465,7 @@ impl CompositeTrait {
                         self.not.as_ref(),
                         &location,
                         ctx,
+                        Some(self.id.as_str()),
                     )
                 )
             }

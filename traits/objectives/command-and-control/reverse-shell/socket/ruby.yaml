@@ -135,7 +135,7 @@ composite_rules:
     attack: "T1059"
     all:
       - id: micro-behaviors/os/kernel/syscall::ruby-syscall
-      - id: micro-behaviors/process/create/shell::sh-interactive
+      - id: micro-behaviors/process/create/shell::bin-sh-source
       - id: objectives/lateral-movement/scan/port::sym-connect
 
   # Ruby reverse shell (migrated from YARA)

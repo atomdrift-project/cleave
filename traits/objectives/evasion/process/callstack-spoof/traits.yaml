@@ -1,0 +1,58 @@
+# Call Stack / Return Address Spoofing
+# Detects techniques to manipulate return addresses on the stack
+# to evade EDR call stack inspection and hide true callers
+# Common in modern malware (Cobalt Strike, custom loaders)
+
+defaults:
+  for: ["c", "cpp", "pe", "dll"]
+  platforms: ["windows"]
+
+traits:
+  - id: spoof-call-macro
+    desc: Call stack spoof macro usage
+    crit: suspicious
+    conf: 0.9
+    attack: T1055
+    if:
+      type: raw
+      substr: "SPOOF_CALL"
+
+  - id: spoof-func-macro
+    desc: Stack spoof function macro
+    crit: suspicious
+    conf: 0.9
+    attack: T1055
+    if:
+      type: raw
+      substr: "SPOOF_FUNC"
+
+  - id: return-address-zero
+    desc: Return address zeroing pattern
+    crit: suspicious
+    conf: 0.85
+    attack: T1055
+    if:
+      type: raw
+      substr: "_ReturnAddress"
+
+  - id: stack-spoof-include
+    desc: Stack spoofing header include
+    crit: component
+    conf: 0.8
+    attack: T1055
+    if:
+      type: raw
+      substr: "Spoof.h"
+
+composite_rules:
+  - id: callstack-spoofing
+    desc: Call stack spoofing framework
+    crit: suspicious
+    conf: 0.9
+    attack: T1055
+    any:
+      - id: spoof-call-macro
+      - id: spoof-func-macro
+      - id: return-address-zero
+      - id: stack-spoof-include
+    needs: 2

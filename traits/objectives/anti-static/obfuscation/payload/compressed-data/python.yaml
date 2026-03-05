@@ -1,0 +1,31 @@
+# Payload Concealment via Compressed Data Files
+# Technique: Hide malicious payload in compressed data files (gzip JSON, etc.)
+# then extract and execute at runtime.
+# MBC: B0032 (Obfuscated Files or Information)
+# ATT&CK: T1027.009 (Embedded Payloads)
+
+defaults:
+  for: [python]
+
+composite_rules:
+  # Gzip + JSON key extraction = payload retrieval from compressed data
+  - id: gzip-json-payload-extraction
+    desc: Extracts payload from compressed JSON data
+    crit: suspicious
+    conf: 0.80
+    mbc: "B0032"
+    attack: "T1027.009"
+    all:
+      - id: micro-behaviors/data/compress/library::gzip-read-operation
+      - id: micro-behaviors/data/serialization/json::json-loads-call
+
+  # Compressed data extraction + dynamic code execution = hostile
+  - id: gzip-json-to-exec
+    desc: Compressed data extraction feeding code execution
+    crit: hostile
+    conf: 0.90
+    mbc: "E1059"
+    attack: "T1059.006"
+    all:
+      - id: gzip-json-payload-extraction
+      - id: objectives/anti-static/obfuscation/payload/bytecode::exec-functions

@@ -1,0 +1,89 @@
+# C2 Command Dispatch Protocol Detection
+# Detects command-to-byte/int mappings used in C2 frameworks
+# ATT&CK: T1071 (Application Layer Protocol)
+# MBC: B0030 (C2 Communication)
+
+defaults:
+  crit: notable
+  conf: 0.7
+  attack: "T1071"
+  mbc: "B0030"
+
+traits:
+  # === Command name to byte constant mappings ===
+  - id: cmd-byte-shell
+    desc: Shell command byte mapping
+    for: [python, ruby, perl]
+    if:
+      type: raw
+      regex: '(?i)(create_shell|open_shell|spawn_shell)\s*=\s*b"'
+
+  - id: cmd-byte-shell-generic
+    desc: Shell/cmd_shell byte mapping
+    for: [python, ruby, perl]
+    if:
+      type: raw
+      regex: '(?i)(cmd_shell|shell)\s*=\s*b"'
+
+  - id: cmd-byte-exec
+    desc: Exec command byte mapping
+    for: [python, ruby, perl]
+    if:
+      type: raw
+      regex: '(?i)(exec_command|execute|run_command|cmd_exec)\s*=\s*b"'
+
+  - id: cmd-byte-upload
+    desc: Upload command byte mapping
+    for: [python, ruby, perl]
+    if:
+      type: raw
+      regex: '(?i)(upload|file_upload|send_file)\s*=\s*b"'
+
+  - id: cmd-byte-check
+    desc: Check/heartbeat command byte mapping
+    for: [python, ruby, perl]
+    if:
+      type: raw
+      regex: '(?i)(check|heartbeat|ping)\s*=\s*b"'
+
+  - id: cmd-byte-beacon
+    desc: Beacon/alive command byte mapping
+    for: [python, ruby, perl]
+    if:
+      type: raw
+      regex: '(?i)(beacon|alive)\s*=\s*b"'
+
+  - id: cmd-byte-sleep
+    desc: Sleep/interval command byte mapping
+    for: [python, ruby, perl]
+    if:
+      type: raw
+      regex: '(?i)(set_sleep|sleep|interval|jitter)\s*=\s*b"'
+
+  # === Generic: multiple command byte assignments ===
+  - id: multiple-cmd-byte-mappings
+    desc: Multiple command-to-byte constant mappings
+    crit: suspicious
+    conf: 0.85
+    for: [python, ruby, perl]
+    count_min: 4
+    if:
+      type: raw
+      regex: '(?i)[a-z_]+\s*=\s*b"\\x[0-9a-fA-F]{2}(\\x00){2,3}"'
+
+composite_rules:
+  # C2 command dispatch table: multiple command byte mappings
+  - id: c2-command-dispatch
+    desc: C2 command dispatch byte table
+    crit: suspicious
+    conf: 0.9
+    needs: 2
+    any:
+      - id: cmd-byte-shell
+      - id: cmd-byte-shell-generic
+      - id: cmd-byte-exec
+      - id: cmd-byte-upload
+      - id: cmd-byte-check
+      - id: cmd-byte-beacon
+      - id: cmd-byte-sleep
+      - id: multiple-cmd-byte-mappings

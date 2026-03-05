@@ -240,12 +240,18 @@ pub(crate) fn find_short_pattern_warnings(
                 }
             }
             Condition::Hex { pattern, .. } => {
-                // Count hex bytes in pattern (space-separated, ignoring ?? wildcards and gaps)
-                let hex_parts: Vec<&str> = pattern
+                // Count effective hex bytes (excluding ?? wildcards and [N] gaps,
+                // but counting nibble wildcards like 4? or ?F)
+                let effective_bytes = pattern
                     .split_whitespace()
-                    .filter(|p| !p.starts_with('[') && !p.ends_with(']'))
-                    .collect();
-                if hex_parts.len() <= 2 && !hex_parts.is_empty() {
+                    .filter(|p| {
+                        !p.starts_with('[')
+                            && *p != "??"
+                            && p.len() == 2
+                            && p.chars().all(|c| c.is_ascii_hexdigit() || c == '?')
+                    })
+                    .count();
+                if effective_bytes <= 2 && effective_bytes > 0 {
                     let source = rule_source_files
                         .get(&trait_def.id)
                         .cloned()

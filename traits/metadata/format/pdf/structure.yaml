@@ -1,0 +1,55 @@
+# PDF structural metadata detection
+#
+# Detects structural features within PDF documents for clustering,
+# campaign tracking, and context gathering. These are neutral metadata
+# traits - they describe document structure, not intent.
+
+defaults:
+  crit: baseline
+  conf: 0.9
+  for: [all]
+
+traits:
+  # XMP metadata block detection
+  - id: xmp-metadata
+    desc: PDF contains XMP metadata block
+    if:
+      type: raw
+      substr: "<x:xmpmeta"
+
+  # Embedded file streams (any type)
+  - id: embedded-file
+    desc: PDF contains embedded file stream
+    if:
+      type: raw
+      substr: "/Type /EmbeddedFile"
+
+  # Embedded XML attachment (common in e-invoices)
+  - id: embedded-xml
+    desc: PDF contains embedded XML attachment
+    if:
+      type: raw
+      regex: "/Subtype /text#2F(xml|html)"
+
+  # ZUGFeRD / Factur-X electronic invoice standard
+  - id: zugferd-invoice
+    desc: ZUGFeRD/Factur-X electronic invoice
+    conf: 0.95
+    if:
+      type: raw
+      regex: "factur-x\\.xml|ZUGFeRD"
+      case_insensitive: true
+
+  # Embedded font detection
+  - id: embedded-font
+    desc: PDF contains embedded font data
+    if:
+      type: raw
+      substr: "/FontFile2"
+
+  # PDF/A compliance marker (archival standard)
+  - id: pdfa-conformance
+    desc: PDF/A archival conformance metadata
+    if:
+      type: raw
+      substr: "pdfaid"

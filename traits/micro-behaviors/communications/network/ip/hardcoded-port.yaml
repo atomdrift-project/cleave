@@ -1,10 +1,10 @@
 traits:
   - id: external-ipv4-port-binary
     desc: Hardcoded external IPv4 address with port
-    crit: suspicious
+    crit: notable
     conf: 0.9
     for: [pe, elf, macho]
     if:
       type: string
       regex: '^([0-9]{1,3}\.){3}[0-9]{1,3}:[0-9]{1,5}$'
-
+      external_ip: true

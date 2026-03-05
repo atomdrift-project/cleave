@@ -129,6 +129,7 @@ pub(crate) use constraints::{
     find_invalid_not_usage, find_kv_exists_with_matcher, find_missing_search_patterns,
     find_needs_without_any, find_needs_zero, find_none_only_with_proximity,
     find_orphaned_components, find_pure_alias_traits, find_redundant_needs_one,
+    find_too_short_patterns,
 };
 
 // Utility functions

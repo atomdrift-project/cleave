@@ -973,6 +973,7 @@ pub(crate) fn run(
                     section_offset_range,
                 },
                 &ctx,
+                None,
             );
 
             let match_count = result.evidence.len();

@@ -1928,6 +1928,7 @@ impl<'a> RuleDebugger<'a> {
                 section_offset_range,
             },
             &ctx,
+            None,
         );
 
         let mut result = ConditionDebugResult::new(desc, eval_result.matched);

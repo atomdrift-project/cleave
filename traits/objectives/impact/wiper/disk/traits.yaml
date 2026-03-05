@@ -2,6 +2,15 @@ defaults:
   for: [all]
 
 traits:
+  - id: userprofile-desktop-join-python
+    desc: USERPROFILE Desktop path construction (Python)
+    crit: notable
+    conf: 0.8
+    attack: T1485
+    for: [python]
+    if:
+      type: raw
+      substr: "os.path.join(os.environ['USERPROFILE'], 'Desktop')"
   # Wiper-specific target directory patterns (quoted paths indicate targeting)
   - id: target-git
     desc: Targets .git directory (version control)
@@ -228,6 +237,19 @@ composite_rules:
     all:
       - id: micro-behaviors/fs/directory/traverse::traverse-readdir-walk-find
       - id: mass-delete-action
+
+  - id: python-desktop-mass-delete
+    desc: Python desktop-targeted mass file deletion
+    crit: hostile
+    conf: 0.97
+    attack: T1485
+    for: [python]
+    all:
+      - id: micro-behaviors/os/env/vars/user-info::userprofile-var
+      - id: userprofile-desktop-join-python
+      - id: micro-behaviors/fs/directory/readdir::readdir-python
+      - id: micro-behaviors/fs/file/delete::py-remove
+      - id: micro-behaviors/data/control-flow/analysis::for-loop-content
 
   - id: protestware
     desc: Protestware pattern - conditional destruction

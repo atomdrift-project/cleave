@@ -23,6 +23,13 @@ traits:
     if:
       type: raw
       regex: "\\.connect\\s*\\("
+    unless:
+      - id: metadata/import/python::peewee
+      - id: metadata/import/python::sqlalchemy
+      - id: metadata/import/python::sqlite3
+      - id: metadata/import/python::pymongo
+      - id: metadata/import/python::psycopg2
+      - id: metadata/import/python::mysql
 
   - id: py-stdin-pipe
     desc: stdin= pipe argument (Python)

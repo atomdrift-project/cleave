@@ -1,0 +1,36 @@
+# File unlock via handle hijacking
+# Technique: enumerate handles in remote processes, identify file handles,
+# and force-close them to bypass file locks. Used by ransomware to encrypt
+# locked files, and by malware to evade security products holding file locks.
+defaults:
+  platforms: [windows]
+
+composite_rules:
+  - id: handle-hijack-file-unlock
+    desc: File unlock via cross-process handle manipulation
+    crit: suspicious
+    conf: 0.90
+    attack: "T1562"
+    for: [pe, dll, c, cpp]
+    all:
+      - id: micro-behaviors/process/enumerate/handle::get-process-handles
+      - id: micro-behaviors/process/inject/handle::remote-close-handle
+    any:
+      - id: micro-behaviors/process/inject/handle::dup-handle-cross-process
+      - id: micro-behaviors/process/inject/handle::is-file-object
+      - id: micro-behaviors/process/inject/handle::is-disk-file
+      - id: micro-behaviors/process/enumerate/handle::handle-snapshot-info
+
+  - id: handle-enum-and-classify
+    desc: Handle enumeration with file type filtering
+    crit: notable
+    conf: 0.85
+    attack: "T1057"
+    for: [pe, dll, c, cpp]
+    all:
+      - id: micro-behaviors/process/enumerate/handle::get-process-handles
+    any:
+      - id: micro-behaviors/process/inject/handle::is-file-object
+      - id: micro-behaviors/process/inject/handle::is-disk-file
+      - id: micro-behaviors/process/inject/handle::get-file-path-from-handle
+    needs: 2

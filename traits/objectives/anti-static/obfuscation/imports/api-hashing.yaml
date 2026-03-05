@@ -148,6 +148,7 @@ composite_rules:
       - id: teb-peb-access
     none:
       - id: metadata/format/pe::dotnet-assembly
+      - id: metadata/format/pe::dotnet-metadata
 
   # DJB2-specific API resolution (constant + multiply + PEB walk)
   - id: djb2-api-resolution
@@ -163,3 +164,5 @@ composite_rules:
       - id: peb-ldr-access
       - id: teb-peb-access
       - id: pe-header-walk
+    none:
+      - id: metadata/format/pe::dotnet-metadata

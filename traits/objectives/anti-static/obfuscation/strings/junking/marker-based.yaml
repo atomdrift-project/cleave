@@ -23,6 +23,12 @@ traits:
     if:
       type: string
       regex: '\w{3,}_[0-9]+_\w{3,}'
+      not:
+        - regex: '__\d+_\d+_'
+        - regex: '^(get_|set_)'
+    downgrade:
+      any:
+        - id: metadata/format/pe::dotnet-metadata
 
 composite_rules:
   - id: string-junking-detected

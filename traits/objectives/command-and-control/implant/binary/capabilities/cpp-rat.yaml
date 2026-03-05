@@ -84,6 +84,8 @@ traits:
   if:
     type: string
     regex: ExecCommand\b
+    not:
+      - substr: PostExecCommand
 
 - id: cmd-exec-symbol
   desc: CmdExec remote command symbol

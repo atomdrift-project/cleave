@@ -396,7 +396,22 @@ pub(crate) fn eval_hex<'a>(
     pattern: &str,
     location: &super::ContentLocationParams,
     ctx: &EvaluationContext<'a>,
+    trait_id: Option<&str>,
 ) -> ConditionResult {
+    // Reject patterns with fewer than 3 concrete bytes (excluding ?? wildcards and gaps)
+    let concrete_bytes = pattern
+        .split_whitespace()
+        .filter(|t| {
+            !t.starts_with('[')
+                && *t != "??"
+                && t.len() == 2
+                && t.chars().all(|c| c.is_ascii_hexdigit() || c == '?')
+        })
+        .count();
+    if concrete_bytes < 3 {
+        return ConditionResult::no_match();
+    }
+
     let data = ctx.binary_data;
 
     // Parse the pattern
@@ -529,9 +544,16 @@ pub(crate) fn eval_hex<'a>(
     // Warn if we hit the count limit (indicates potentially problematic pattern)
     let truncated = total_count >= MAX_COUNT_MATCHES;
     if truncated {
-        if let Some(trait_id) = ctx.current_trait {
+        let trait_info = trait_id.map(|id| format!(" [{}]", id)).unwrap_or_default();
+        eprintln!(
+            "WARNING: Hit match limit of {} matches for hex pattern '{}'{}, stopping early",
+            MAX_COUNT_MATCHES,
+            pattern,
+            trait_info
+        );
+        if let Some(trait_id_val) = trait_id {
             tracing::debug!(
-                trait_id = %trait_id,
+                trait_id = %trait_id_val,
                 pattern = %pattern,
                 count = total_count,
                 limit = MAX_COUNT_MATCHES,

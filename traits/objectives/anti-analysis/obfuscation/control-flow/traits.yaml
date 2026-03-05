@@ -23,7 +23,7 @@ traits:
     crit: component
     if:
       type: raw
-      regex: '\^=?\s*[a-zA-Z0-9_]+'
+      regex: 'for\s*\(.{0,60}\)\s*\n?\s*\w+\[.{0,10}\]\s*\^=\s*\w+'
 
   - id: return-address-clearing-pattern
     desc: Clearing pattern for return address
@@ -33,12 +33,12 @@ traits:
       regex: '\*\(uintptr_t\*\).+?=\s*0'
 
   - id: spoof-function-keyword
-    desc: '"spooffunction" or "spoof_call" symbols'
+    desc: '"spooffunction" symbol pattern'
     crit: suspicious
     conf: 0.8
     if:
       type: symbol
-      regex: '(?i)spoof(function|_call)'
+      regex: '(?i)spooffunction'
 
   - id: time-based-obfuscation-seed
     desc: Use of __TIME__ for obfuscation seeding

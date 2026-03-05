@@ -1,0 +1,35 @@
+# Process handle enumeration - Windows
+# Enumerating handles within a process via NT API
+# Used by file unlockers, handle hijacking, and ransomware
+defaults:
+  platforms: [windows]
+
+traits:
+  - id: handle-snapshot-info
+    desc: Process handle snapshot information structure
+    crit: notable
+    conf: 0.85
+    attack: "T1057"
+    for: [pe, dll, c, cpp]
+    if:
+      type: raw
+      substr: "PROCESS_HANDLE_SNAPSHOT_INFORMATION"
+
+  - id: get-process-handles
+    desc: Process handle enumeration function
+    crit: notable
+    conf: 0.80
+    attack: "T1057"
+    for: [pe, dll, c, cpp]
+    if:
+      type: raw
+      regex: "[Gg]et[Pp]rocess[Hh]andles"
+
+  - id: process-handle-count
+    desc: Query process handle count
+    crit: baseline
+    conf: 0.75
+    for: [pe, dll]
+    if:
+      type: symbol
+      exact: "GetProcessHandleCount"

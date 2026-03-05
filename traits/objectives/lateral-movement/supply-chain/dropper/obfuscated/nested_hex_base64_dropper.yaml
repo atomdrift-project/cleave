@@ -9,5 +9,20 @@ composite_rules:
     all:
       - id: objectives/anti-static/obfuscation/strings/encoding::js-mixed-encoding-usage
       - id: objectives/anti-static/obfuscation/payload::large-hex-string
-      - id: micro-behaviors/fs/write/file::write-file-sync
+      - id: objectives/lateral-movement/supply-chain/dropper::write-file-sync
+      - id: micro-behaviors/process/create/shell/lang::js-exec
+
+  - id: nested-hex-base64-loader-chain
+    desc: Nested hex/base64 decode chain that writes and executes stage
+    crit: hostile
+    conf: 0.97
+    attack: T1027
+    mbc: B0032
+    for:
+      - javascript
+      - typescript
+    all:
+      - id: micro-behaviors/data/encode/hex::buffer-from-hex-to-utf8
+      - id: micro-behaviors/data/encode/hex::buffer-from-base64-to-utf8
+      - id: objectives/lateral-movement/supply-chain/dropper::write-file-sync
       - id: micro-behaviors/process/create/shell/lang::js-exec

@@ -9,3 +9,16 @@ composite_rules:
     all:
       - id: micro-behaviors/process/user/query::whoami-cmd
       - id: objectives/lateral-movement/supply-chain/framework::oast-str
+
+  - id: oast-system-info-exfil-encoded-loader
+    desc: Encoded staged JS loader with OAST callback exfil objective
+    crit: hostile
+    conf: 0.96
+    attack: T1048
+    mbc: E1041
+    for:
+      - javascript
+      - typescript
+    all:
+      - id: objectives/lateral-movement/supply-chain/dropper/obfuscated::nested-hex-base64-dropper
+      - id: objectives/exfiltration/channel/oob::oast-fun-b64-hexwrapped

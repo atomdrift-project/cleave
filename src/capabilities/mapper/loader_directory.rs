@@ -28,6 +28,7 @@ use crate::capabilities::validation::{
     find_overlapping_conditions, find_oversized_trait_directories, find_parent_duplicate_segments,
     find_platform_named_directories, find_pure_alias_traits, find_redundant_any_refs,
     find_redundant_needs_one, find_short_pattern_warnings, find_single_item_clauses,
+    find_too_short_patterns,
     find_slow_regex_patterns, find_string_content_collisions, find_string_pattern_duplicates,
     find_unanchored_wellknown_composites, find_wellknown_category_violations,
     precalculate_all_composite_precisions, simple_rule_to_composite_rule,
@@ -2074,6 +2075,35 @@ impl super::CapabilityMapper {
                 warnings.push(format!(
                     "{} traits have no search pattern",
                     missing_patterns.len()
+                ));
+            }
+
+            // Validate: patterns too short to be useful (1-2 concrete chars/bytes)
+            let too_short = find_too_short_patterns(&trait_definitions);
+            if !too_short.is_empty() {
+                eprintln!(
+                    "\n❌ ERROR: {} traits have patterns too short to be useful (<3 concrete chars/bytes)",
+                    too_short.len()
+                );
+                eprintln!(
+                    "   Patterns with 1-2 characters/bytes are noisy and slow. Use longer patterns:\n"
+                );
+                for (id, pattern, kind) in &too_short {
+                    let source = rule_source_files
+                        .get(id)
+                        .map(std::string::String::as_str)
+                        .unwrap_or("unknown");
+                    let line_hint = find_line_number(source, id);
+                    if let Some(line) = line_hint {
+                        eprintln!("   {}:{}: '{}' ({}: \"{}\")", source, line, id, kind, pattern);
+                    } else {
+                        eprintln!("   {}: '{}' ({}: \"{}\")", source, id, kind, pattern);
+                    }
+                }
+                eprintln!();
+                warnings.push(format!(
+                    "{} traits have patterns too short (<3 concrete chars/bytes)",
+                    too_short.len()
                 ));
             }
 

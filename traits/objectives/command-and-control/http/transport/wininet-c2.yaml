@@ -1,0 +1,37 @@
+# WinINet C2 Transport Wrapper
+# Detects patterns of a full HTTP(S) C2 communication framework
+# using WinINet APIs: session init, connect, request, send, read
+# combined with cookie injection, file upload/download, and auth headers
+# Common in Windows malware stubs and RATs
+
+defaults:
+  for: ["c", "cpp"]
+  platforms: ["windows"]
+
+composite_rules:
+  - id: wininet-c2-transport
+    desc: WinINet-based C2 HTTP transport wrapper
+    crit: suspicious
+    conf: 0.9
+    attack: T1071.001
+    mbc: C0002
+    all:
+      - id: micro-behaviors/communications/http/get::wininet-http-client-src
+    any:
+      - id: micro-behaviors/communications/http/cookies::internet-set-cookie
+      - id: micro-behaviors/communications/http/headers::form-data-header
+      - id: micro-behaviors/communications/http/headers::bearer-token
+      - id: micro-behaviors/fs/file/write::write
+    needs: 2
+
+  - id: wininet-exfil-transport
+    desc: WinINet HTTP transport with file upload
+    crit: suspicious
+    conf: 0.85
+    attack: T1041
+    all:
+      - id: micro-behaviors/communications/http/get::wininet-http-client-src
+      - id: micro-behaviors/communications/http/headers::form-data-header
+    any:
+      - id: micro-behaviors/fs/file/open::fopen
+      - id: micro-behaviors/fs/file/write::write

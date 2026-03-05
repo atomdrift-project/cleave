@@ -1,0 +1,49 @@
+# C++ Compile-time String Encryption (xorstr)
+# Detects patterns associated with xorstr, skCrypter, and similar
+# compile-time string encryption libraries used to evade static analysis
+# Common in malware stubs, RATs, and infostealers
+
+defaults:
+  for: ["c", "cpp"]
+
+traits:
+  - id: xorstr-macro
+    desc: xorstr string encryption macro
+    crit: suspicious
+    conf: 0.9
+    attack: T1027
+    if:
+      type: raw
+      regex: 'xorstr_?\('
+
+  - id: encrypt-header-include
+    desc: Encrypt.h string encryption header
+    crit: notable
+    conf: 0.8
+    attack: T1027
+    if:
+      type: raw
+      substr: "Encrypt.h"
+
+  - id: lazy-importer-include
+    desc: lazy_importer API hiding header
+    crit: suspicious
+    conf: 0.85
+    attack: T1027
+    if:
+      type: raw
+      substr: "lazy_importer"
+
+composite_rules:
+  - id: cpp-string-encryption
+    desc: C++ compile-time string encryption
+    crit: suspicious
+    conf: 0.9
+    attack: T1027
+    any:
+      - id: xorstr-macro
+      - id: lazy-importer-include
+      - id: objectives/anti-static/obfuscation/string-encrypt::ec-wrapper
+    needs: 1
+    all:
+      - id: encrypt-header-include

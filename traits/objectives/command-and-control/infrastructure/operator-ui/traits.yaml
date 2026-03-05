@@ -1,0 +1,92 @@
+# C2 Operator Interface Detection
+# Detects operator-facing UI patterns in C2 frameworks
+# ATT&CK: T1071 (Application Layer Protocol)
+
+defaults:
+  crit: component
+  conf: 0.6
+
+traits:
+  # === Session management UI ===
+  - id: show-sessions
+    desc: Show sessions command
+    for: [python, ruby, perl, go]
+    if:
+      type: string
+      regex: "(?i)show sessions"
+
+  - id: interact-session
+    desc: Interact with session command
+    for: [python, ruby, perl, go]
+    if:
+      type: string
+      regex: "(?i)interact.{0,20}session"
+
+  - id: session-id-column
+    desc: Session ID column header
+    for: [python, ruby, perl, go]
+    if:
+      type: string
+      regex: "(?i)session.?id"
+
+  # === Victim terminology ===
+  - id: victim-ref
+    desc: Victim terminology in code
+    conf: 0.7
+    for: [python, ruby, perl, go]
+    if:
+      type: string
+      regex: "(?i)\\bvictim\\b"
+
+  # === C2 sleep/beacon interval UI ===
+  - id: sleep-interval-cmd
+    desc: Sleep interval configuration command
+    conf: 0.65
+    for: [python, ruby, perl, go]
+    if:
+      type: raw
+      regex: "(?i)sleep.{0,20}(min|max|interval|seconds)"
+
+  # === Open shell on target ===
+  - id: cmd-in-victim
+    desc: Open cmd/shell in victim reference
+    conf: 0.7
+    for: [python, ruby, perl, go]
+    if:
+      type: string
+      regex: "(?i)(cmd|shell).{0,20}victim"
+
+  # === Check connection ===
+  - id: check-connection-cmd
+    desc: Check session/agent connection command
+    conf: 0.6
+    for: [python, ruby, perl, go]
+    if:
+      type: string
+      regex: "(?i)check.{0,15}(session|agent|client).{0,15}connection"
+
+  # === Greeting/handshake buffers ===
+  - id: greeting-buf-const
+    desc: Greeting buffer constant
+    conf: 0.7
+    for: [python, ruby, perl, go, c, cpp]
+    if:
+      type: raw
+      regex: '(?i)greeting.{0,10}(buf|buffer|bytes)\s*='
+
+composite_rules:
+  - id: c2-operator-ui
+    desc: C2 operator interface vocabulary
+    crit: suspicious
+    conf: 0.9
+    attack: "T1071"
+    needs: 3
+    any:
+      - id: show-sessions
+      - id: interact-session
+      - id: session-id-column
+      - id: victim-ref
+      - id: sleep-interval-cmd
+      - id: cmd-in-victim
+      - id: check-connection-cmd
+      - id: greeting-buf-const

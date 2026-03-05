@@ -42,6 +42,16 @@ traits:
       type: string
       substr: "b2FzdC5mdW4"
 
+  - id: oast-fun-b64-hexwrapped
+    desc: Hex-wrapped Base64 OAST.fun indicator
+    crit: notable
+    conf: 0.92
+    for: [javascript, typescript]
+    if:
+      type: string
+      regex: "6232467a6443356d645734(3d)?"
+      case_insensitive: true
+
   - id: http-b64
     desc: Base64-encoded HTTP protocol indicator
     crit: notable
@@ -114,6 +124,7 @@ composite_rules:
     any:
       - id: oastify-b64
       - id: oast-fun-b64
+      - id: oast-fun-b64-hexwrapped
     crit: notable
 
   - id: encoded-oob-exfil

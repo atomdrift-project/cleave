@@ -1,0 +1,33 @@
+# C2 Server Framework Detection
+# Detects complete C2 server-side frameworks by combining:
+#   - Command dispatch protocols
+#   - Operator UI vocabulary
+#   - Hardcoded crypto key material
+# ATT&CK: T1071 (Application Layer Protocol)
+# MBC: B0030 (C2 Communication)
+
+defaults:
+  for: [python, ruby, perl, go]
+
+composite_rules:
+  # C2 framework with command dispatch and operator UI
+  - id: c2-server-framework
+    desc: C2 server framework with operator UI and command dispatch
+    crit: hostile
+    conf: 0.95
+    attack: "T1071"
+    mbc: "B0030"
+    all:
+      - id: objectives/command-and-control/network/protocol::c2-command-dispatch
+      - id: objectives/command-and-control/infrastructure/operator-ui::c2-operator-ui
+
+  # C2 framework with encrypted comms
+  - id: c2-encrypted-framework
+    desc: C2 framework with hardcoded crypto and command dispatch
+    crit: hostile
+    conf: 0.95
+    attack: "T1573"
+    mbc: "B0030"
+    all:
+      - id: objectives/command-and-control/network/protocol::c2-command-dispatch
+      - id: micro-behaviors/crypto/symmetric/aes::hardcoded-key-material

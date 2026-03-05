@@ -383,6 +383,94 @@ pub(crate) fn find_excessive_skip_conditions(
     violations
 }
 
+/// Minimum effective pattern length. Patterns with fewer concrete characters/bytes
+/// are too noisy and slow to be useful.
+const MIN_PATTERN_LENGTH: usize = 3;
+
+/// Find traits with patterns too short to be useful (1-2 chars for raw/string, 1-2 concrete bytes for hex).
+///
+/// Short patterns produce excessive matches, slow down scanning, and rarely provide
+/// meaningful signal. Unlike `find_short_pattern_warnings` (which allows exceptions for
+/// location-constrained patterns), this is a hard rejection.
+///
+/// For hex patterns, only concrete bytes count — `??` wildcards and `[N]` gaps are excluded.
+///
+/// Returns: `Vec<(trait_id, pattern_value, pattern_type)>`
+#[must_use]
+pub(crate) fn find_too_short_patterns(
+    trait_definitions: &[TraitDefinition],
+) -> Vec<(String, String, &'static str)> {
+    let mut violations = Vec::new();
+
+    for t in trait_definitions {
+        match &t.r#if {
+            Condition::Raw {
+                exact,
+                substr,
+                word,
+                ..
+            }
+            | Condition::String {
+                exact,
+                substr,
+                word,
+                ..
+            } => {
+                if let Some(s) = exact {
+                    if s.len() < MIN_PATTERN_LENGTH {
+                        violations.push((t.id.clone(), s.clone(), "exact"));
+                    }
+                }
+                if let Some(s) = substr {
+                    if s.len() < MIN_PATTERN_LENGTH {
+                        violations.push((t.id.clone(), s.clone(), "substr"));
+                    }
+                }
+                if let Some(s) = word {
+                    if s.len() < MIN_PATTERN_LENGTH {
+                        violations.push((t.id.clone(), s.clone(), "word"));
+                    }
+                }
+            }
+            Condition::Hex { pattern, .. } => {
+                let concrete_bytes = count_concrete_hex_bytes(pattern);
+                if concrete_bytes < MIN_PATTERN_LENGTH {
+                    violations.push((t.id.clone(), pattern.clone(), "hex"));
+                }
+            }
+            _ => {}
+        }
+    }
+
+    violations
+}
+
+/// Count effective bytes in a hex pattern string.
+///
+/// Excludes full `??` wildcards and `[N]` gap specifiers, but counts nibble
+/// wildcards like `4?` or `?F` since they still constrain one nibble.
+fn count_concrete_hex_bytes(pattern: &str) -> usize {
+    pattern
+        .split_whitespace()
+        .filter(|token| {
+            // Exclude gap specifiers like [4], [2-8]
+            if token.starts_with('[') {
+                return false;
+            }
+            // Exclude full wildcard bytes — no signal
+            if *token == "??" {
+                return false;
+            }
+            // Accept nibble wildcards (4?, ?F) — they constrain one nibble
+            // Accept full hex bytes (4D, 5A)
+            token.len() == 2
+                && token
+                    .chars()
+                    .all(|c| c.is_ascii_hexdigit() || c == '?')
+        })
+        .count()
+}
+
 /// Find component traits that are never referenced by any composite rule or atomic trait.
 ///
 /// Component traits (`crit: component`) are building blocks that should only exist to be

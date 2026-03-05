@@ -295,6 +295,18 @@ impl YaraEngine {
                     .map(|pat| {
                         let total_matches = pat.matches().count();
                         if total_matches > MAX_PATTERN_MATCHES {
+                            let trait_info = if rule.namespace().starts_with("inline.") {
+                                format!(" [{}]", &rule.namespace()[7..])
+                            } else {
+                                String::new()
+                            };
+                            eprintln!(
+                                "WARNING: Hit match limit of {} matches for YARA pattern '{}.{}'{}, stopping early",
+                                MAX_PATTERN_MATCHES,
+                                rule.identifier(),
+                                pat.identifier(),
+                                trait_info
+                            );
                             tracing::warn!(
                                 rule = %rule.identifier(),
                                 namespace = %rule.namespace(),

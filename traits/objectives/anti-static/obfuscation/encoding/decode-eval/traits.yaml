@@ -132,7 +132,7 @@ traits:
     if:
       type: ast
       node: for_statement
-      regex: "\\^="
+      regex: '(?m)\$[_a-zA-Z\x80-\xff][\w\x80-\xff]*\s*\^='
 
   - id: strrev
     desc: String reversal (obfuscation)

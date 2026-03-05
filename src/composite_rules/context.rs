@@ -51,6 +51,7 @@ pub(crate) struct EvaluationContext<'a> {
     /// Cached parsed KV data (parse once per file, reuse for all KV conditions)
     pub cached_kv_parsed: OnceLock<Box<Value>>,
     /// Current trait being evaluated (for warning/error context)
+    #[allow(dead_code)] // Populated during eval, intended for future logging
     pub current_trait: Option<&'a str>,
     /// Source file of the current trait (for warning/error context)
     #[allow(dead_code)] // Populated during eval, intended for future logging
@@ -64,6 +65,12 @@ pub(crate) struct EvaluationContext<'a> {
 }
 
 impl<'a> EvaluationContext<'a> {
+    /// Set the current trait being evaluated for warning/error context
+    #[allow(dead_code)] // Will be used once trait-level logging is wired up
+    pub(crate) fn set_current_trait(&mut self, trait_id: Option<&'a str>) {
+        self.current_trait = trait_id;
+    }
+
     /// Create a new evaluation context
     #[must_use]
     pub(crate) fn new(

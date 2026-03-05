@@ -16,6 +16,6 @@ composite_rules:
       - id: objectives/execution/reflection/class::python-zipimporter-load
       - id: micro-behaviors/data/encode/base64::b64decode-string
     any:
-      - id: micro-behaviors/crypto/symmetric/aes::pyaes-usage
-      - id: micro-behaviors/crypto/symmetric/aes::pycrypto-usage
+      - id: micro-behaviors/crypto/symmetric/aes::pyaes-import
+      - id: micro-behaviors/crypto/symmetric/aes::pycrypto-aes-import
       - id: micro-behaviors/crypto/symmetric/fernet::decrypt

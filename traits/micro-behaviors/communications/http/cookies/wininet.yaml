@@ -1,0 +1,38 @@
+# WinINet Cookie Manipulation
+# Detects programmatic cookie setting via InternetSetCookie API
+# Used by malware to inject tracking/session cookies for C2 communication
+
+defaults:
+  for: ["c", "cpp", "pe", "dll"]
+  platforms: ["windows"]
+
+traits:
+  - id: internet-set-cookie
+    desc: Programmatic cookie injection via WinINet
+    crit: notable
+    conf: 0.9
+    mbc: C0002
+    attack: T1071.001
+    if:
+      type: symbol
+      regex: "^InternetSetCookie[AW]?$"
+
+  - id: internet-get-cookie
+    desc: Cookie retrieval via WinINet
+    crit: baseline
+    conf: 0.9
+    if:
+      type: symbol
+      regex: "^InternetGetCookie[AW]?$"
+
+composite_rules:
+  - id: wininet-cookie-manipulation
+    desc: WinINet cookie inject and read cycle
+    crit: notable
+    conf: 0.85
+    mbc: C0002
+    all:
+      - id: internet-set-cookie
+    any:
+      - id: internet-get-cookie
+      - id: micro-behaviors/communications/http/cookies::set-cookie-header

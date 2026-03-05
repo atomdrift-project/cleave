@@ -14,7 +14,7 @@ traits:
     conf: 0.5
     if:
       type: string
-      regex: "\\bcurl\\s"
+      regex: "\\bcurl(\\.exe)?\\s"
 
   - id: curl-output-file
     desc: curl download to file
@@ -22,7 +22,7 @@ traits:
     conf: 0.7
     if:
       type: raw
-      regex: 'curl\s+(.{0,50}\s+)?(-[a-zA-Z]{0,5}[oO]|--output)\b'
+      regex: 'curl(\.exe)?\s+(.{0,50}\s+)?(-[a-zA-Z]{0,5}[oO]|--output)\b'
 
   - id: curlopt-ref
     desc: CURLOPT constant

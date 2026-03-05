@@ -1,0 +1,17 @@
+# Encryption Macro Wrappers
+# Detects wrapper macros used to invoke compile-time string encryption
+# in C/C++ malware
+
+defaults:
+  for: ["c", "cpp"]
+
+traits:
+  - id: ec-wrapper
+    desc: EC macro wrapper calls
+    crit: suspicious
+    conf: 0.85
+    attack: T1027
+    count_min: 2
+    if:
+      type: raw
+      word: "EC"

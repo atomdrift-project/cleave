@@ -218,6 +218,19 @@ pub(crate) fn eval_string<'a, 'b>(
     trait_not: Option<&Vec<NotException>>,
     ctx: &EvaluationContext<'b>,
 ) -> ConditionResult {
+    // Reject patterns too short to be useful (1-2 chars)
+    const MIN_PATTERN_LEN: usize = 3;
+    if let Some(s) = params.exact {
+        if s.len() < MIN_PATTERN_LEN {
+            return ConditionResult::no_match();
+        }
+    }
+    if let Some(s) = params.substr {
+        if s.len() < MIN_PATTERN_LEN {
+            return ConditionResult::no_match();
+        }
+    }
+
     let profile = std::env::var("CLEAVE_PROFILE").is_ok();
     let t_start = if profile {
         Some(std::time::Instant::now())
@@ -581,7 +594,21 @@ pub(crate) fn eval_raw<'a>(
     not: Option<&Vec<NotException>>,
     location: &ContentLocationParams,
     ctx: &EvaluationContext<'a>,
+    trait_id: Option<&str>,
 ) -> ConditionResult {
+    // Reject patterns too short to be useful (1-2 chars)
+    const MIN_PATTERN_LEN: usize = 3;
+    if let Some(s) = exact {
+        if s.len() < MIN_PATTERN_LEN {
+            return ConditionResult::no_match();
+        }
+    }
+    if let Some(s) = substr {
+        if s.len() < MIN_PATTERN_LEN {
+            return ConditionResult::no_match();
+        }
+    }
+
     let profile = std::env::var("CLEAVE_PROFILE").is_ok();
     let t_start = if profile {
         Some(std::time::Instant::now())
@@ -646,9 +673,12 @@ pub(crate) fn eval_raw<'a>(
                 let mut first_offset = None;
                 for (idx, mat) in bytes_re.find_iter(search_data).enumerate() {
                     if idx >= MAX_MATCHES_TO_PROCESS {
+                        let trait_info = trait_id.map(|id| format!(" [{}]", id)).unwrap_or_default();
                         eprintln!(
-                            "WARNING: Hit match limit of {} matches for regex pattern, stopping early",
-                            MAX_MATCHES_TO_PROCESS
+                            "WARNING: Hit match limit of {} matches for regex pattern '{}'{}, stopping early",
+                            MAX_MATCHES_TO_PROCESS,
+                            pattern_str,
+                            trait_info
                         );
                         break;
                     }
@@ -695,15 +725,17 @@ pub(crate) fn eval_raw<'a>(
         } else {
             // UNICODE PATH: Use cached UTF-8 conversion for Unicode regex
             let content = super::get_utf8_cached(ctx.binary_data, (search_start, search_end));
-
             let mut first_match = None;
             let mut first_offset = None;
             for (idx, mat) in re.find_iter(&content).enumerate() {
                 // Limit match processing to prevent DoS on pattern-dense files
                 if idx >= MAX_MATCHES_TO_PROCESS {
+                    let trait_info = trait_id.map(|id| format!(" [{}]", id)).unwrap_or_default();
                     eprintln!(
-                        "WARNING: Hit match limit of {} matches for regex pattern, stopping early",
-                        MAX_MATCHES_TO_PROCESS
+                        "WARNING: Hit match limit of {} matches for regex pattern '{}'{}, stopping early",
+                        MAX_MATCHES_TO_PROCESS,
+                        re.as_str(),
+                        trait_info
                     );
                     break;
                 }

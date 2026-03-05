@@ -34,11 +34,11 @@ traits:
       type: raw
       regex: "Fernet\\s*\\("
 
-  # Fernet decrypt operation
-  - id: decrypt
-    desc: "Fernet decryption operation"
-    crit: notable
-    conf: 0.9
+  # Generic decrypt call (used by Fernet-context composite)
+  - id: decrypt-call
+    desc: Decrypt method call
+    crit: component
+    conf: 0.7
     if:
       type: raw
       regex: "\\.decrypt\\s*\\("
@@ -52,11 +52,11 @@ traits:
       type: raw
       regex: "Fernet\\.generate_key\\s*\\("
 
-  # Fernet encrypt operation
-  - id: encrypt
-    desc: "Fernet encryption operation"
-    crit: notable
-    conf: 0.9
+  # Generic encrypt call (used by Fernet-context composite)
+  - id: encrypt-call
+    desc: Encrypt method call
+    crit: component
+    conf: 0.7
     if:
       type: raw
       regex: "\\.encrypt\\s*\\("
@@ -138,6 +138,29 @@ composite_rules:
     any:
       - { id: import-fernet-direct }
       - { id: from-cryptography-fernet }
+
+  - id: fernet-context
+    desc: Fernet usage context
+    any:
+      - { id: import }
+      - { id: class-usage }
+      - { id: fernet-keyword }
+
+  - id: decrypt
+    desc: Fernet decryption operation
+    crit: notable
+    conf: 0.9
+    all:
+      - { id: decrypt-call }
+      - { id: fernet-context }
+
+  - id: encrypt
+    desc: Fernet encryption operation
+    crit: notable
+    conf: 0.9
+    all:
+      - { id: encrypt-call }
+      - { id: fernet-context }
 
   # Migrated from YARA
   - id: runtime-install

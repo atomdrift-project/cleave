@@ -256,7 +256,7 @@ traits:
     for: [all, -javascript, -typescript]
     if:
       type: string
-      regex: '\w\.(o|lo|a)\s*$'
+      regex: '[/\\]\w+\.(o|lo|a)\s*$'
 
   - id: object-file-in-source-win
     desc: Pre-compiled Windows object in source tree

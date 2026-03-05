@@ -35,6 +35,16 @@ traits:
       type: string
       regex: "RtlAdjustPrivilege\\s*\\(\\s*(c_uint\\()?19"
 
+  - id: set-system-power-state
+    desc: SetSystemPowerState API call
+    crit: suspicious
+    conf: 0.9
+    for: [python]
+    attack: "T1529"
+    if:
+      type: string
+      substr: "SetSystemPowerState"
+
   # STATUS_ASSERTION_FAILURE error code
   - id: status-assertion-failure
     desc: STATUS_ASSERTION_FAILURE error code (BSOD)
@@ -53,6 +63,15 @@ traits:
     if:
       type: string
       substr: "from ctypes import"
+
+  - id: ctypes-import-module
+    desc: Python ctypes module import statement
+    crit: notable
+    conf: 0.6
+    for: [python]
+    if:
+      type: raw
+      regex: "(?m)^\\s*import\\s+ctypes\\b"
 
   # NOTE: Removed bsod-trigger-yara and python-bsod-yara - replaced with composites below
 
@@ -101,8 +120,29 @@ composite_rules:
     for: [python]
     attack: "T1499.004"
     all:
-      - id: ctypes-import
+      - id: python-ctypes-import
       - id: ntdll-reference
     any:
       - id: nt-raise-hard-error
       - id: rtl-adjust-privilege
+
+  - id: python-ctypes-import
+    desc: Python ctypes import (from-import or module import)
+    crit: notable
+    conf: 0.7
+    for: [python]
+    any:
+      - id: ctypes-import
+      - id: ctypes-import-module
+
+  - id: windows-powerstate-abuse
+    desc: Privilege + power-state API abuse in Python
+    crit: hostile
+    conf: 0.98
+    for: [python]
+    attack: "T1529"
+    all:
+      - id: python-ctypes-import
+      - id: micro-behaviors/dylib/load::ctypes-windll
+      - id: rtl-adjust-privilege
+      - id: set-system-power-state

@@ -593,6 +593,7 @@ fn test_eval_raw_exact_match() {
         None,
         &location,
         &ctx,
+        None,
     );
 
     assert!(result.matched);
@@ -616,6 +617,7 @@ fn test_eval_raw_substr_count() {
         None,
         &location,
         &ctx,
+        None,
     );
 
     assert!(result.matched);
@@ -641,6 +643,7 @@ fn test_eval_raw_substr_count_insufficient() {
         None,
         &location,
         &ctx,
+        None,
     );
 
     // Should match - found "token" in content
@@ -669,6 +672,7 @@ fn test_eval_raw_regex() {
         None,
         &location,
         &ctx,
+        None,
     );
 
     assert!(result.matched);
@@ -692,6 +696,7 @@ fn test_eval_raw_case_insensitive() {
         None,
         &location,
         &ctx,
+        None,
     );
 
     assert!(result.matched);
@@ -715,6 +720,7 @@ fn test_eval_raw_invalid_utf8() {
         None,
         &location,
         &ctx,
+        None,
     );
 
     assert!(!result.matched);
@@ -1513,6 +1519,7 @@ fn test_eval_raw_not_excludes_by_context() {
         Some(&not_exceptions),
         &location,
         &ctx,
+        None,
     );
 
     assert!(result.matched, "Should still match http://evil.com context");
@@ -1550,6 +1557,7 @@ fn test_eval_raw_word_boundary() {
         None,
         &location,
         &ctx,
+        None,
     );
 
     assert!(result.matched, "word: 'cat' should match 'the cat sat'");
@@ -1640,6 +1648,7 @@ fn test_eval_raw_external_ip_filters_private() {
         None,
         &location,
         &ctx,
+        None,
     );
 
     // "private" match context only contains 192.168.1.1 → no external IP → filtered out
@@ -1668,6 +1677,7 @@ fn test_eval_raw_external_ip_keeps_external() {
         None,
         &location,
         &ctx,
+        None,
     );
 
     assert!(
@@ -1840,6 +1850,7 @@ fn test_eval_raw_offset_range_filters() {
         None,
         &location,
         &ctx,
+        None,
     );
     assert!(result.matched);
     assert_eq!(
@@ -1863,6 +1874,7 @@ fn test_eval_raw_offset_range_filters() {
         None,
         &location2,
         &ctx,
+        None,
     );
     assert!(result2.matched);
     assert_eq!(
@@ -1886,6 +1898,7 @@ fn test_eval_raw_offset_range_filters() {
         None,
         &location3,
         &ctx,
+        None,
     );
     assert!(!result3.matched);
 }
@@ -1915,6 +1928,7 @@ fn test_eval_raw_offset_range_negative() {
         None,
         &location,
         &ctx,
+        None,
     );
     assert!(
         result.matched,
@@ -1937,6 +1951,7 @@ fn test_eval_raw_offset_range_negative() {
         None,
         &location2,
         &ctx,
+        None,
     );
     assert!(
         !result2.matched,
@@ -2081,6 +2096,7 @@ fn test_eval_raw_section_offset_range() {
         None,
         &location,
         &ctx,
+        None,
     );
     assert!(
         result.matched,
@@ -2098,6 +2114,7 @@ fn test_eval_raw_section_offset_range() {
         None,
         &location,
         &ctx,
+        None,
     );
     assert!(
         !result2.matched,
@@ -2121,6 +2138,7 @@ fn test_eval_raw_section_offset_range() {
         None,
         &location2,
         &ctx,
+        None,
     );
     assert!(
         result3.matched,

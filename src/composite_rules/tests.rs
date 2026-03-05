@@ -1863,6 +1863,7 @@ fn test_content_exact_vs_substr() {
         None,
         &location,
         &ctx,
+        None,
     );
     // Exact match against whole content should fail (content is "hello world..." not "hello")
     assert!(!result.matched);
@@ -1879,6 +1880,7 @@ fn test_content_exact_vs_substr() {
         None,
         &location,
         &ctx,
+        None,
     );
     assert!(result.matched);
 }

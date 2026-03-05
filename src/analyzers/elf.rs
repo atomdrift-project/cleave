@@ -911,9 +911,9 @@ mod tests {
         }
 
         let report = analyzer.analyze(&test_file).unwrap();
-        // Duration can be 0 on fast systems where analysis completes in < 1ms
-        // Just verify the field exists and was set (not the default u64::MAX or similar)
-        assert!(report.metadata.analysis_duration_ms < 10000);
+        // Duration can vary substantially on loaded CI hosts.
+        // Keep this as a sanity bound, not a performance benchmark.
+        assert!(report.metadata.analysis_duration_ms < 60000);
     }
 
     // =========================================================================

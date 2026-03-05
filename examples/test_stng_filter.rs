@@ -1,13 +1,18 @@
+use std::env;
 use std::fs;
-use cleave::strings::StringExtractor;
 
 fn main() {
-    let data = fs::read("/Users/t/data/dissect/malware/cpp/2026.Luckyware/LuckywareSite/Data/vendor/imagesloaded/assets/2D333F_1_0.woff2").unwrap();
-    let extractor = StringExtractor::default();
-    let strings = extractor.extract_smart(&data, None);
-    for s in strings {
-        if s.value.contains("158") || s.offset == 13222 {
-            println!("Offset: {}, String: {}, Kind: {:?}", s.offset, s.value, s.kind);
-        }
-    }
+    let Some(path) = env::args().nth(1) else {
+        eprintln!("Usage: cargo run --example test_stng_filter -- <file>");
+        std::process::exit(1);
+    };
+
+    let data = fs::read(&path).unwrap_or_else(|e| {
+        eprintln!("Failed to read {}: {}", path, e);
+        std::process::exit(1);
+    });
+
+    let opts = stng::ExtractOptions::new(4).with_garbage_filter(true);
+    let strings = stng::extract_strings_with_options(&data, &opts);
+    println!("Extracted {} strings", strings.len());
 }

@@ -524,11 +524,12 @@ impl ArchiveAnalyzer {
                 .map_err(|e| anyhow::anyhow!("Failed to lock max_risk: {}", e))?,
         };
 
+        let _ = max_depth; // derivable from files[].depth, no longer stored in summary
         report.summary = Some(ReportSummary {
             files_analyzed: files_analyzed.load(std::sync::atomic::Ordering::Relaxed),
-            max_depth: max_depth.load(std::sync::atomic::Ordering::Relaxed),
             counts: final_counts,
             max_risk: final_max_risk,
+            ..Default::default()
         });
         // Keep files empty in streaming mode to save memory
         report.files = Vec::new();

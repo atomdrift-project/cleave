@@ -54,6 +54,12 @@ pub struct Function {
     pub call_patterns: Option<CallPatternMetrics>,
 }
 
+/// Returns true for common encodings (utf8, ascii) that don't need to be serialized.
+/// Only exotic encodings (utf16le, utf16be, etc.) are included in output.
+fn is_common_encoding(encoding: &String) -> bool {
+    encoding == "utf8" || encoding == "ascii" || encoding.is_empty()
+}
+
 /// Maximum size for string values (4KB)
 const MAX_STRING_VALUE_SIZE: usize = 4096;
 
@@ -183,13 +189,14 @@ pub struct StringInfo {
         deserialize_with = "deserialize_hex_offset"
     )]
     pub offset: Option<u64>,
-    /// Character encoding (utf8, utf16le, utf16be, ascii)
+    /// Character encoding — only serialized for exotic encodings (utf16le, utf16be)
+    #[serde(skip_serializing_if = "is_common_encoding", default)]
     pub encoding: String,
     /// String classification (Const, CStr, Wide, etc.)
     #[serde(rename = "type")]
     pub string_type: StringType,
-    /// Binary section where found (e.g., ".rodata", ".text")
-    #[serde(skip_serializing_if = "Option::is_none", default)]
+    /// Binary section where found — derivable from offset + sections array, omitted from output
+    #[serde(skip_serializing, default)]
     pub section: Option<String>,
     /// Encoding layers applied to this string (e.g., ["base64", "zlib"])
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
@@ -351,6 +358,14 @@ pub struct AnalysisMetadata {
     pub tools_used: Vec<String>,
     /// Non-fatal errors encountered during analysis
     pub errors: Vec<String>,
+}
+
+impl AnalysisMetadata {
+    /// Returns true when metadata has been cleared (after finalize merged it into summary).
+    /// Used by skip_serializing_if to omit the field from output.
+    pub fn is_cleared(&self) -> bool {
+        self.tools_used.is_empty() && self.analysis_duration_ms == 0 && self.errors.is_empty()
+    }
 }
 
 #[cfg(test)]

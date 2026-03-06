@@ -302,7 +302,7 @@ pub fn analyze_embedded_string(
         // Encoded code - create a separate layer
         report.findings.push(lang_trait);
 
-        let mut file_entry = report.to_file_analysis(0, true);
+        let mut file_entry = report.to_file_analysis(0);
         file_entry.path = virtual_path.clone();
         file_entry.depth = (current_depth + 1) as u32;
         file_entry.encoding = Some(string_info.encoding_chain.clone());

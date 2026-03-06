@@ -166,7 +166,7 @@ fn options_hash(options: &AnalysisOptions) -> String {
         .collect::<Vec<_>>()
         .join(",");
     let key = format!(
-        "3p={},yara={},r2={},upx={},plat={},hp={},sp={},fv={}",
+        "v=3,3p={},yara={},r2={},upx={},plat={},hp={},sp={},fv={}",
         options.enable_third_party_yara,
         !options.disable_yara,
         !options.disable_radare2,
@@ -308,7 +308,7 @@ mod tests {
         let cached = cached.expect("cache hit expected");
         assert_eq!(cached.target.sha256, sha);
         assert_eq!(cached.target.file_type, "elf");
-        assert_eq!(cached.schema_version, "2.0");
+        assert_eq!(cached.version, "2.0");
     }
 
     #[test]

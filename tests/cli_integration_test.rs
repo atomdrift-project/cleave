@@ -94,8 +94,7 @@ fn test_analyze_format_json_output() {
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
     let json: serde_json::Value = serde_json::from_str(&stdout).expect("valid JSON object");
-    assert!(json.get("schema_version").is_some());
-    assert!(json.get("target").is_some());
+    assert!(json.get("version").is_some());
     assert!(json.get("files").is_some());
 }
 

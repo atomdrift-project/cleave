@@ -95,7 +95,6 @@ pub(crate) fn run(
     zip_passwords: &[String],
     disabled: &cli::DisabledComponents,
     error_if_levels: Option<&[types::Criticality]>,
-    verbose: bool,
     all_files: bool,
     shuffle: bool,
     sample_extraction: Option<&types::SampleExtractionConfig>,
@@ -163,7 +162,6 @@ pub(crate) fn run(
                     &options,
                     format,
                     error_if_levels,
-                    verbose,
                     None,
                     mol_layout,
                     Some(&mut all_file_analyses),
@@ -199,7 +197,6 @@ pub(crate) fn run(
                         &options,
                         format,
                         error_if_levels,
-                        verbose,
                         None,
                         mol_layout,
                         None,
@@ -239,7 +236,6 @@ pub(crate) fn run(
         &options,
         format,
         error_if_levels,
-        verbose,
         mol_path,
         mol_layout,
         None,
@@ -259,7 +255,6 @@ fn analyze_and_format(
     options: &cleave::AnalysisOptions,
     format: &cli::OutputFormat,
     error_if_levels: Option<&[types::Criticality]>,
-    verbose: bool,
     mol_path: Option<&str>,
     mol_layout: cli::MolLayout,
     file_collector: Option<&mut Vec<types::FileAnalysis>>,
@@ -278,7 +273,7 @@ fn analyze_and_format(
     // CLI-specific post-processing
     check_criticality_error(&report, error_if_levels)?;
     report.shrink_to_fit();
-    report.convert_to_v2(verbose);
+    report.finalize();
 
     // Merge encoding layers and recalculate composites.
     // The mapper is only needed when encoding layers are actually merged (rare for single files),

@@ -33,8 +33,8 @@ fn create_test_report_for_diff(path: &str, trait_ids: &[&str]) -> AnalysisReport
         .collect();
 
     AnalysisReport {
-        schema_version: "1.1".to_string(),
-        analysis_timestamp: Utc::now(),
+        version: "1.1".to_string(),
+        analysis_timestamp: Some(Utc::now()),
         target: TargetInfo {
             path: path.to_string(),
             file_type: "ELF".to_string(),

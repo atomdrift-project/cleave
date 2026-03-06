@@ -8,7 +8,7 @@
 use serde::{Deserialize, Serialize};
 
 use super::binary::{Export, Function, Import, Section, StringInfo, SyscallInfo, YaraMatch};
-use super::code_structure::{BinaryProperties, SourceCodeMetrics};
+use super::code_structure::{BinaryProperties, CodeMetrics, OverlayMetrics, SourceCodeMetrics};
 use super::core::Criticality;
 use super::paths_env::{DirectoryAccess, EnvVarInfo, PathInfo};
 use super::scores::Metrics;
@@ -109,9 +109,17 @@ pub struct FileAnalysis {
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub binary_properties: Option<BinaryProperties>,
 
+    /// Code complexity metrics (cyclomatic complexity, nesting)
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub code_metrics: Option<CodeMetrics>,
+
     /// Source code metrics
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub source_code_metrics: Option<SourceCodeMetrics>,
+
+    /// Overlay data metrics (appended data after the binary)
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub overlay_metrics: Option<OverlayMetrics>,
 
     /// Unified metrics container
     #[serde(skip_serializing_if = "Option::is_none", default)]
@@ -166,7 +174,9 @@ impl FileAnalysis {
             yara_matches: Vec::new(),
             syscalls: Vec::new(),
             binary_properties: None,
+            code_metrics: None,
             source_code_metrics: None,
+            overlay_metrics: None,
             metrics: None,
             paths: Vec::new(),
             directories: Vec::new(),
@@ -211,28 +221,6 @@ impl FileAnalysis {
             None
         };
     }
-
-    /// Strip verbose fields for minimal output
-    /// Note: metrics are preserved as they're small and valuable for ML training
-    pub(crate) fn minimize(&mut self) {
-        // Use Vec::new() instead of clear() to actually deallocate heap memory.
-        // clear() retains allocated capacity which wastes memory for large reports.
-        self.traits = Vec::new();
-        self.structure = Vec::new();
-        self.functions = Vec::new();
-        self.strings = Vec::new();
-        self.sections = Vec::new();
-        self.imports = Vec::new();
-        self.exports = Vec::new();
-        self.yara_matches = Vec::new();
-        self.syscalls = Vec::new();
-        self.binary_properties = None;
-        self.source_code_metrics = None;
-        // Note: metrics intentionally NOT cleared - they're compact and useful for ML
-        self.paths = Vec::new();
-        self.directories = Vec::new();
-        self.env_vars = Vec::new();
-    }
 }
 
 /// Finding counts by criticality
@@ -253,18 +241,29 @@ fn is_zero(n: &u32) -> bool {
     *n == 0
 }
 
+fn is_zero_u64(n: &u64) -> bool {
+    *n == 0
+}
+
 /// Report-level summary
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ReportSummary {
     /// Number of files analyzed
     pub files_analyzed: u32,
-    /// Maximum nesting depth encountered
-    pub max_depth: u32,
     /// Aggregate finding counts
     pub counts: FindingCounts,
     /// Maximum risk level across all files
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_risk: Option<Criticality>,
+    /// Total analysis duration in milliseconds
+    #[serde(skip_serializing_if = "is_zero_u64", default)]
+    pub duration_ms: u64,
+    /// Tools used during analysis
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub tools: Vec<String>,
+    /// Non-fatal errors encountered
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub errors: Vec<String>,
 }
 
 impl ReportSummary {
@@ -273,15 +272,12 @@ impl ReportSummary {
     pub(crate) fn from_files(files: &[FileAnalysis]) -> Self {
         let mut summary = Self {
             files_analyzed: files.len() as u32,
-            max_depth: 0,
             counts: FindingCounts::default(),
             max_risk: None,
+            ..Default::default()
         };
 
         for file in files {
-            if file.depth > summary.max_depth {
-                summary.max_depth = file.depth;
-            }
             if let Some(counts) = &file.counts {
                 summary.counts.hostile += counts.hostile;
                 summary.counts.suspicious += counts.suspicious;
@@ -404,7 +400,9 @@ mod tests {
         assert!(fa.counts.is_none());
         assert!(fa.encoding.is_none());
         assert!(fa.binary_properties.is_none());
+        assert!(fa.code_metrics.is_none());
         assert!(fa.source_code_metrics.is_none());
+        assert!(fa.overlay_metrics.is_none());
         assert!(fa.metrics.is_none());
         assert!(fa.extracted_path.is_none());
     }
@@ -463,73 +461,6 @@ mod tests {
         assert!(fa.counts.is_none());
     }
 
-    #[test]
-    fn test_file_analysis_minimize() {
-        use super::super::traits_findings::TraitKind;
-
-        let mut fa = FileAnalysis::new(
-            0,
-            "test.py".to_string(),
-            "python".to_string(),
-            "abc".to_string(),
-            100,
-        );
-        // Add some data that should be cleared
-        fa.traits.push(Trait {
-            kind: TraitKind::String,
-            value: "test".to_string(),
-            offset: None,
-            encoding: None,
-            section: None,
-            source: "test".to_string(),
-        });
-
-        fa.minimize();
-
-        assert!(fa.traits.is_empty());
-        assert!(fa.structure.is_empty());
-        assert!(fa.functions.is_empty());
-        assert!(fa.strings.is_empty());
-        assert!(fa.sections.is_empty());
-        assert!(fa.imports.is_empty());
-        assert!(fa.exports.is_empty());
-        assert!(fa.yara_matches.is_empty());
-        assert!(fa.syscalls.is_empty());
-        assert!(fa.binary_properties.is_none());
-        assert!(fa.source_code_metrics.is_none());
-        assert!(fa.metrics.is_none());
-        assert!(fa.paths.is_empty());
-        assert!(fa.directories.is_empty());
-        assert!(fa.env_vars.is_empty());
-    }
-
-    #[test]
-    fn test_file_analysis_minimize_preserves_core_fields() {
-        let mut fa = FileAnalysis::new(
-            42,
-            "test.py".to_string(),
-            "python".to_string(),
-            "abc123".to_string(),
-            1000,
-        );
-        fa.findings.push(
-            Finding::capability("test".to_string(), "Test".to_string(), 0.9)
-                .with_criticality(Criticality::Hostile),
-        );
-        fa.compute_summary();
-
-        fa.minimize();
-
-        // Core fields should be preserved
-        assert_eq!(fa.id, 42);
-        assert_eq!(fa.path, "test.py");
-        assert_eq!(fa.file_type, "python");
-        assert_eq!(fa.sha256, "abc123");
-        assert_eq!(fa.size, 1000);
-        assert!(!fa.findings.is_empty()); // Findings preserved
-        assert!(fa.risk.is_some()); // Risk preserved
-    }
-
     // ==================== FindingCounts Tests ====================
 
     #[test]
@@ -558,7 +489,7 @@ mod tests {
     fn test_report_summary_default() {
         let summary = ReportSummary::default();
         assert_eq!(summary.files_analyzed, 0);
-        assert_eq!(summary.max_depth, 0);
+        assert_eq!(summary.counts.hostile, 0);
         assert_eq!(summary.counts.hostile, 0);
         assert_eq!(summary.counts.suspicious, 0);
         assert_eq!(summary.counts.notable, 0);
@@ -568,7 +499,7 @@ mod tests {
     fn test_report_summary_from_empty_files() {
         let summary = ReportSummary::from_files(&[]);
         assert_eq!(summary.files_analyzed, 0);
-        assert_eq!(summary.max_depth, 0);
+        assert_eq!(summary.counts.hostile, 0);
     }
 
     #[test]
@@ -584,41 +515,37 @@ mod tests {
 
         let summary = ReportSummary::from_files(&[file]);
         assert_eq!(summary.files_analyzed, 1);
-        assert_eq!(summary.max_depth, 0);
+        assert_eq!(summary.counts.hostile, 0);
     }
 
     #[test]
-    fn test_report_summary_max_depth_calculation() {
-        let mut file1 = FileAnalysis::new(
+    fn test_report_summary_multiple_files() {
+        let file1 = FileAnalysis::new(
             0,
             "a.py".to_string(),
             "python".to_string(),
             "abc".to_string(),
             100,
         );
-        file1.depth = 0;
 
-        let mut file2 = FileAnalysis::new(
+        let file2 = FileAnalysis::new(
             1,
             "b.py".to_string(),
             "python".to_string(),
             "def".to_string(),
             200,
         );
-        file2.depth = 3;
 
-        let mut file3 = FileAnalysis::new(
+        let file3 = FileAnalysis::new(
             2,
             "c.py".to_string(),
             "python".to_string(),
             "ghi".to_string(),
             300,
         );
-        file3.depth = 1;
 
         let summary = ReportSummary::from_files(&[file1, file2, file3]);
         assert_eq!(summary.files_analyzed, 3);
-        assert_eq!(summary.max_depth, 3);
     }
 
     // ==================== is_zero helper Tests ====================
@@ -730,7 +657,6 @@ mod tests {
 
         let summary = ReportSummary::from_files(&[file1, file2]);
         assert_eq!(summary.files_analyzed, 2);
-        assert_eq!(summary.max_depth, 2);
         assert_eq!(summary.counts.hostile, 1);
         assert_eq!(summary.counts.suspicious, 3);
         assert_eq!(summary.counts.notable, 3);

@@ -233,7 +233,7 @@ pub fn analyze_file<P: AsRef<Path>>(path: P, options: &AnalysisOptions) -> Resul
         let sha256 = analyzers::utils::calculate_sha256(file_data.as_slice());
         if let Some(mut report) = analysis_cache::cache_lookup(&sha256, options) {
             report.target.path = path.display().to_string();
-            report.analysis_timestamp = chrono::Utc::now();
+            report.analysis_timestamp = Some(chrono::Utc::now());
             tracing::info!("Cache hit (fast path)");
             return Ok(report);
         }
@@ -357,7 +357,7 @@ fn analyze_file_with_resources<P: AsRef<Path>>(
     // Check analysis cache before running the full pipeline
     if let Some(mut cached_report) = analysis_cache::cache_lookup(&sha256_hex, options) {
         cached_report.target.path = path.display().to_string();
-        cached_report.analysis_timestamp = chrono::Utc::now();
+        cached_report.analysis_timestamp = Some(chrono::Utc::now());
         tracing::info!("Cache hit");
         memory_tracker::log_after_file_processing(
             path.to_str().unwrap_or("unknown"),

@@ -341,7 +341,9 @@ struct JsonlSummary {
     hostile: u32,
     suspicious: u32,
     notable: u32,
-    analysis_duration_ms: u64,
+    duration_ms: u64,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    tools: Vec<String>,
 }
 
 /// Filter findings for formula generation.
@@ -396,7 +398,12 @@ pub(crate) fn format_jsonl_summary(report: &AnalysisReport) -> Result<String> {
         hostile: counts.map(|c| c.hostile).unwrap_or(0),
         suspicious: counts.map(|c| c.suspicious).unwrap_or(0),
         notable: counts.map(|c| c.notable).unwrap_or(0),
-        analysis_duration_ms: report.metadata.analysis_duration_ms,
+        duration_ms: summary
+            .map(|s| s.duration_ms)
+            .unwrap_or(report.metadata.analysis_duration_ms),
+        tools: summary
+            .map(|s| s.tools.clone())
+            .unwrap_or_else(|| report.metadata.tools_used.clone()),
     };
     Ok(serde_json::to_string(&entry)?)
 }
@@ -423,10 +430,7 @@ pub(crate) fn format_jsonl(report: &AnalysisReport) -> Result<String> {
 pub(crate) fn parse_jsonl(jsonl: &str) -> Result<AnalysisReport> {
     let mut files = Vec::new();
     let mut summary = None;
-    let mut schema_version = "2.0".to_string();
-    let mut analysis_timestamp = chrono::Utc::now();
-    let mut scanned_path = None;
-    let mut metadata = crate::types::AnalysisMetadata::default();
+    let mut version = "3".to_string();
 
     // Parse each line as a JSON entry
     for line in jsonl.lines() {
@@ -440,49 +444,47 @@ pub(crate) fn parse_jsonl(jsonl: &str) -> Result<AnalysisReport> {
 
         match entry_type {
             Some("file") => {
-                // Parse as FileAnalysis
                 let file: crate::types::FileAnalysis = serde_json::from_value(value)?;
                 files.push(file);
             }
             Some("summary") => {
-                // Extract summary metadata
-                if let Some(sv) = value.get("schema_version").and_then(|v| v.as_str()) {
-                    schema_version = sv.to_string();
-                }
-                if let Some(ts) = value.get("analysis_timestamp") {
-                    if let Ok(timestamp) =
-                        serde_json::from_value::<chrono::DateTime<chrono::Utc>>(ts.clone())
-                    {
-                        analysis_timestamp = timestamp;
-                    }
-                }
-                if let Some(sp) = value.get("scanned_path") {
-                    scanned_path = sp.as_str().map(std::string::ToString::to_string);
-                }
-                if let Some(tools) = value.get("tools_used").and_then(|v| v.as_array()) {
-                    metadata.tools_used = tools
-                        .iter()
-                        .filter_map(|v| v.as_str().map(std::string::ToString::to_string))
-                        .collect();
-                }
-                if let Some(errors) = value.get("errors").and_then(|v| v.as_array()) {
-                    metadata.errors = errors
-                        .iter()
-                        .filter_map(|v| v.as_str().map(std::string::ToString::to_string))
-                        .collect();
-                }
-                if let Some(duration) = value
-                    .get("analysis_duration_ms")
-                    .and_then(serde_json::Value::as_u64)
+                if let Some(v) = value
+                    .get("version")
+                    .or_else(|| value.get("schema_version"))
+                    .and_then(|v| v.as_str())
                 {
-                    metadata.analysis_duration_ms = duration;
+                    version = v.to_string();
                 }
+                let tools: Vec<String> = value
+                    .get("tools")
+                    .or_else(|| value.get("tools_used"))
+                    .and_then(|v| v.as_array())
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|v| v.as_str().map(std::string::ToString::to_string))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                let errors: Vec<String> = value
+                    .get("errors")
+                    .and_then(|v| v.as_array())
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|v| v.as_str().map(std::string::ToString::to_string))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                let duration_ms = value
+                    .get("duration_ms")
+                    .or_else(|| value.get("analysis_duration_ms"))
+                    .and_then(serde_json::Value::as_u64)
+                    .unwrap_or(0);
+
                 summary = Some(crate::types::ReportSummary {
                     files_analyzed: value
                         .get("files_analyzed")
                         .and_then(serde_json::Value::as_u64)
                         .unwrap_or(files.len() as u64) as u32,
-                    max_depth: 0,
                     counts: crate::types::FindingCounts {
                         hostile: value
                             .get("hostile")
@@ -498,6 +500,9 @@ pub(crate) fn parse_jsonl(jsonl: &str) -> Result<AnalysisReport> {
                             .unwrap_or(0) as u32,
                     },
                     max_risk: None,
+                    duration_ms,
+                    tools,
+                    errors,
                 });
             }
             _ => {
@@ -525,12 +530,10 @@ pub(crate) fn parse_jsonl(jsonl: &str) -> Result<AnalysisReport> {
         }
     };
 
-    let mut report = AnalysisReport::new_with_timestamp(target, analysis_timestamp);
-    report.schema_version = schema_version;
-    report.scanned_path = scanned_path;
+    let mut report = AnalysisReport::new(target);
+    report.version = version;
     report.files = files;
     report.summary = summary;
-    report.metadata = metadata;
 
     Ok(report)
 }
@@ -714,7 +717,12 @@ pub(crate) fn format_terminal(report: &AnalysisReport) -> String {
 
     // If no files had findings, show a simple message
     if output.is_empty() {
-        output.push_str(&format!("{}\n", report.target.path.bright_white()));
+        let path = report
+            .files
+            .first()
+            .map(|f| f.path.as_str())
+            .unwrap_or(&report.target.path);
+        output.push_str(&format!("{}\n", path.bright_white()));
         output.push_str("No findings\n");
     }
 
@@ -729,8 +737,8 @@ mod tests {
 
     fn create_test_report(findings: Vec<Finding>, yara_matches: Vec<YaraMatch>) -> AnalysisReport {
         let mut report = AnalysisReport {
-            schema_version: "2.0".to_string(),
-            analysis_timestamp: Utc::now(),
+            version: "2.0".to_string(),
+            analysis_timestamp: Some(Utc::now()),
             target: TargetInfo {
                 path: "/test/sample.bin".to_string(),
                 file_type: "ELF".to_string(),
@@ -766,8 +774,8 @@ mod tests {
                 errors: vec![],
             },
         };
-        // Convert to v2 format to populate files array
-        report.convert_to_v2(true);
+        // Finalize to populate files array
+        report.finalize();
         report
     }
 

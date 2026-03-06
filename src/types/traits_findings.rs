@@ -83,16 +83,6 @@ impl FindingKind {
     }
 }
 
-/// Check if confidence is the default value (0.95 for internal findings)
-fn is_default_conf(conf: &f32) -> bool {
-    (*conf - 0.95).abs() < f32::EPSILON
-}
-
-/// Default confidence value for deserialization (matches skip_serializing_if check)
-fn default_conf() -> f32 {
-    0.95
-}
-
 /// Check if a usize value is zero (for skip_serializing_if)
 fn is_zero_usize(n: &usize) -> bool {
     *n == 0
@@ -111,14 +101,10 @@ pub struct Finding {
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub desc: String,
     /// Confidence score (0.5 = heuristic, 1.0 = definitive)
-    #[serde(
-        alias = "confidence",
-        skip_serializing_if = "is_default_conf",
-        default = "default_conf"
-    )]
+    #[serde(alias = "confidence", default)]
     pub conf: f32,
     /// Criticality level
-    #[serde(default, skip_serializing_if = "Criticality::is_baseline")]
+    #[serde(default)]
     pub crit: Criticality,
     /// MBC (Malware Behavior Catalog) ID
     #[serde(skip_serializing_if = "Option::is_none", default)]
@@ -136,7 +122,8 @@ pub struct Finding {
     #[serde(skip_serializing_if = "is_zero_usize", default)]
     pub match_count: usize,
     /// Source file path (relative to traits directory) where this trait/rule was defined
-    #[serde(skip_serializing_if = "Option::is_none", default)]
+    #[allow(dead_code)] // Populated during trait evaluation, skip-serialized in output
+    #[serde(skip_serializing, default)]
     pub source_file: Option<String>,
 }
 

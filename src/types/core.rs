@@ -55,21 +55,21 @@ pub enum Criticality {
     Hostile,
 }
 
-impl Criticality {
-    /// Check if this is the baseline (default) criticality
-    pub(crate) fn is_baseline(&self) -> bool {
-        matches!(self, Self::Baseline)
-    }
-}
-
 /// Main analysis output structure
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AnalysisReport {
-    /// Schema version (currently "2.0")
-    pub schema_version: String,
-    /// Timestamp when analysis was performed
-    pub analysis_timestamp: DateTime<Utc>,
-    /// Information about the target file
+    /// Schema version ("3" after finalize, "2.0" pre-finalize/cached)
+    #[serde(alias = "schema_version")]
+    pub version: String,
+    /// Timestamp when analysis was performed (cleared after finalize)
+    #[serde(
+        skip_serializing_if = "Option::is_none",
+        default,
+        alias = "analysis_timestamp"
+    )]
+    pub analysis_timestamp: Option<DateTime<Utc>>,
+    /// Information about the target file (cleared after finalize — data lives in files[0])
+    #[serde(skip_serializing_if = "TargetInfo::is_cleared", default)]
     pub target: TargetInfo,
 
     // ========================================================================
@@ -151,7 +151,8 @@ pub struct AnalysisReport {
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub summary: Option<ReportSummary>,
 
-    /// Analysis metadata (tool versions, timing, errors)
+    /// Analysis metadata (tool versions, timing, errors) — merged into summary after finalize
+    #[serde(skip_serializing_if = "AnalysisMetadata::is_cleared", default)]
     pub metadata: AnalysisMetadata,
 }
 
@@ -166,8 +167,8 @@ impl AnalysisReport {
     #[must_use]
     pub fn new_with_timestamp(target: TargetInfo, timestamp: chrono::DateTime<Utc>) -> Self {
         Self {
-            schema_version: "2.0".to_string(),
-            analysis_timestamp: timestamp,
+            version: "2.0".to_string(),
+            analysis_timestamp: Some(timestamp),
             target,
             traits: Vec::new(),
             findings: Vec::new(),
@@ -361,13 +362,13 @@ impl AnalysisReport {
         self.findings.iter().map(|f| f.crit).max()
     }
 
-    /// Convert to v2 flat files array format
+    /// Finalize the report for output: populate files[], clear top-level duplicates,
+    /// merge metadata into summary, filter internal symbols findings.
     ///
-    /// This ensures the files array is properly populated for JSON output.
-    /// Adds the root file entry at position 0 and renumbers child file IDs.
-    pub fn convert_to_v2(&mut self, verbose: bool) {
+    /// After this call, `files[]` is the single source of truth and `version` is "3".
+    pub fn finalize(&mut self) {
         // Create the root file entry
-        let mut root_file = self.to_file_analysis(0, verbose);
+        let mut root_file = self.to_file_analysis(0);
         root_file.path = self.target.path.clone();
         root_file.depth = 0;
         root_file.parent_id = None;
@@ -396,23 +397,58 @@ impl AnalysisReport {
             self.files.insert(0, root_file);
         }
 
-        // Compute report summary
-        self.summary = Some(ReportSummary::from_files(&self.files));
-
-        // Clear verbose fields if not in verbose mode
-        if !verbose {
-            for file in &mut self.files {
-                file.minimize();
-            }
+        // Remove structural symbol findings — they restate imports and no consumer reads them
+        for file in &mut self.files {
+            file.findings
+                .retain(|f| !f.id.starts_with("metadata/internal/symbols::"));
+            file.compute_summary();
         }
+
+        // Compute report summary and merge metadata into it
+        let mut summary = ReportSummary::from_files(&self.files);
+        summary.duration_ms = self.metadata.analysis_duration_ms;
+        summary.tools = std::mem::take(&mut self.metadata.tools_used);
+        summary.errors = std::mem::take(&mut self.metadata.errors);
+        self.summary = Some(summary);
+
+        // Clear top-level arrays — data now lives exclusively in files[]
+        // Existing skip_serializing_if = "Vec::is_empty" prevents these from appearing in output
+        let _ = std::mem::take(&mut self.traits);
+        let _ = std::mem::take(&mut self.findings);
+        let _ = std::mem::take(&mut self.structure);
+        let _ = std::mem::take(&mut self.functions);
+        let _ = std::mem::take(&mut self.strings);
+        let _ = std::mem::take(&mut self.sections);
+        let _ = std::mem::take(&mut self.imports);
+        let _ = std::mem::take(&mut self.exports);
+        let _ = std::mem::take(&mut self.yara_matches);
+        let _ = std::mem::take(&mut self.syscalls);
+        let _ = std::mem::take(&mut self.paths);
+        let _ = std::mem::take(&mut self.directories);
+        let _ = std::mem::take(&mut self.env_vars);
+        let _ = std::mem::take(&mut self.archive_contents);
+        self.binary_properties = None;
+        self.code_metrics = None;
+        self.source_code_metrics = None;
+        self.overlay_metrics = None;
+        self.metrics = None;
+
+        // Clear fields that are redundant with files[0] / summary
+        self.target = TargetInfo::default();
+        self.analysis_timestamp = None;
+        self.metadata = AnalysisMetadata::default();
+        self.scanned_path = None;
+
+        // Set version to v3
+        self.version = "3".to_string();
     }
 
     /// Create a FileAnalysis from this report's data
     ///
-    /// This is used internally by convert_to_v2() and by archive analyzers
+    /// This is used internally by finalize() and by archive analyzers
     /// to convert per-file reports into the flat files array structure.
     #[must_use]
-    pub fn to_file_analysis(&self, id: u32, verbose: bool) -> FileAnalysis {
+    pub fn to_file_analysis(&self, id: u32) -> FileAnalysis {
         let mut file = FileAnalysis::new(
             id,
             self.target.path.clone(),
@@ -422,25 +458,16 @@ impl AnalysisReport {
         );
 
         file.findings = self.findings.clone();
-        // Always include metrics - they're compact and valuable for ML training
         file.metrics = self.metrics.clone();
-
-        if verbose {
-            file.traits = self.traits.clone();
-            file.structure = self.structure.clone();
-            file.functions = self.functions.clone();
-            file.strings = self.strings.clone();
-            file.sections = self.sections.clone();
-            file.imports = self.imports.clone();
-            file.exports = self.exports.clone();
-            file.yara_matches = self.yara_matches.clone();
-            file.syscalls = self.syscalls.clone();
-            file.binary_properties = self.binary_properties.clone();
-            file.source_code_metrics = self.source_code_metrics.clone();
-            file.paths = self.paths.clone();
-            file.directories = self.directories.clone();
-            file.env_vars = self.env_vars.clone();
-        }
+        file.structure = self.structure.clone();
+        file.strings = self.strings.clone();
+        file.imports = self.imports.clone();
+        file.exports = self.exports.clone();
+        file.sections = self.sections.clone();
+        file.binary_properties = self.binary_properties.clone();
+        file.code_metrics = self.code_metrics.clone();
+        file.source_code_metrics = self.source_code_metrics.clone();
+        file.overlay_metrics = self.overlay_metrics.clone();
 
         file
     }
@@ -454,7 +481,6 @@ impl AnalysisReport {
     pub fn into_file_analysis(
         mut self,
         id: u32,
-        verbose: bool,
     ) -> (FileAnalysis, Vec<FileAnalysis>, Vec<ArchiveEntry>) {
         let nested_files = std::mem::take(&mut self.files);
         let archive_contents = std::mem::take(&mut self.archive_contents);
@@ -469,30 +495,22 @@ impl AnalysisReport {
 
         file.findings = self.findings;
         file.metrics = self.metrics;
-
-        if verbose {
-            file.traits = self.traits;
-            file.structure = self.structure;
-            file.functions = self.functions;
-            file.strings = self.strings;
-            file.sections = self.sections;
-            file.imports = self.imports;
-            file.exports = self.exports;
-            file.yara_matches = self.yara_matches;
-            file.syscalls = self.syscalls;
-            file.binary_properties = self.binary_properties;
-            file.source_code_metrics = self.source_code_metrics;
-            file.paths = self.paths;
-            file.directories = self.directories;
-            file.env_vars = self.env_vars;
-        }
+        file.structure = self.structure;
+        file.strings = self.strings;
+        file.imports = self.imports;
+        file.exports = self.exports;
+        file.sections = self.sections;
+        file.binary_properties = self.binary_properties;
+        file.code_metrics = self.code_metrics;
+        file.source_code_metrics = self.source_code_metrics;
+        file.overlay_metrics = self.overlay_metrics;
 
         (file, nested_files, archive_contents)
     }
 }
 
 /// Information about the file being analyzed
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct TargetInfo {
     /// Absolute path to the analyzed file
     pub path: String,
@@ -506,6 +524,14 @@ pub struct TargetInfo {
     /// CPU architectures (for fat/universal binaries)
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub architectures: Option<Vec<String>>,
+}
+
+impl TargetInfo {
+    /// Returns true when target has been cleared (after finalize).
+    /// Used by skip_serializing_if to omit the field from output.
+    fn is_cleared(&self) -> bool {
+        self.path.is_empty()
+    }
 }
 
 /// Metadata about a file contained within an archive
@@ -594,7 +620,7 @@ mod tests {
     fn test_analysis_report_new() {
         let report = AnalysisReport::new(test_target());
 
-        assert_eq!(report.schema_version, "2.0");
+        assert_eq!(report.version, "2.0");
         assert_eq!(report.target.path, "/test/sample.bin");
         assert!(report.findings.is_empty());
         assert!(report.traits.is_empty());
@@ -607,7 +633,7 @@ mod tests {
         let ts = Utc.with_ymd_and_hms(2024, 1, 15, 12, 0, 0).unwrap();
         let report = AnalysisReport::new_with_timestamp(test_target(), ts);
 
-        assert_eq!(report.analysis_timestamp, ts);
+        assert_eq!(report.analysis_timestamp, Some(ts));
     }
 
     // ==================== add_finding Tests ====================

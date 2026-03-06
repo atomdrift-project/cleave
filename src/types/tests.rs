@@ -151,7 +151,7 @@ fn test_analysis_report_new() {
 
     let report = AnalysisReport::new(target);
 
-    assert_eq!(report.schema_version, "2.0");
+    assert_eq!(report.version, "2.0");
     assert_eq!(report.target.path, "/test");
     assert!(report.findings.is_empty());
     assert!(report.strings.is_empty());
@@ -175,9 +175,9 @@ fn test_analysis_report_new_with_timestamp() {
 
     let report = AnalysisReport::new_with_timestamp(target, timestamp);
 
-    assert_eq!(report.schema_version, "2.0");
+    assert_eq!(report.version, "2.0");
     assert_eq!(report.target.path, "/test");
-    assert_eq!(report.analysis_timestamp, timestamp);
+    assert_eq!(report.analysis_timestamp, Some(timestamp));
     assert!(report.findings.is_empty());
     assert!(report.files.is_empty());
 }

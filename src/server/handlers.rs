@@ -234,7 +234,7 @@ pub(super) async fn analyze(
     let elapsed_ms = request_start.elapsed().as_millis();
 
     match result {
-        Ok(Ok(Ok(report))) => {
+        Ok(Ok(Ok(mut report))) => {
             let hostile = report
                 .findings
                 .iter()
@@ -261,6 +261,7 @@ pub(super) async fn analyze(
                 hostile = hostile, suspicious = suspicious, notable = notable, baseline = baseline, total = report.findings.len(),
                 "<-- 200 OK (Analysis complete)"
             );
+            report.finalize();
             Json(report).into_response()
         }
         Ok(Ok(Err(e))) => {
@@ -440,7 +441,7 @@ pub(super) async fn analyze_path(
     let elapsed_ms = request_start.elapsed().as_millis();
 
     match result {
-        Ok(Ok(Ok(report))) => {
+        Ok(Ok(Ok(mut report))) => {
             let hostile = report
                 .findings
                 .iter()
@@ -481,6 +482,7 @@ pub(super) async fn analyze_path(
                 "<-- 200 OK (Analysis complete)"
             );
 
+            report.finalize();
             let response = AnalyzePathResponse {
                 report,
                 extracted_path,

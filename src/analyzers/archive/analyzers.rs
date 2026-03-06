@@ -373,7 +373,7 @@ impl ArchiveAnalyzer {
 
                 // Convert to FileAnalysis, consuming the report to avoid cloning
                 let (mut file_entry, nested_files, archive_contents) =
-                    file_report.into_file_analysis(0, true);
+                    file_report.into_file_analysis(0);
                 file_entry.path = entry_path.clone();
                 file_entry.depth = 1; // Direct child of archive
                 file_entry.compute_summary();
@@ -514,7 +514,7 @@ impl ArchiveAnalyzer {
 
                 // Convert to FileAnalysis, consuming the report to avoid cloning
                 let (mut file_entry, nested_files, archive_contents) =
-                    file_report.into_file_analysis(0, true);
+                    file_report.into_file_analysis(0);
                 file_entry.path = entry_path.clone();
                 file_entry.depth = 1;
                 file_entry.compute_summary();
@@ -756,7 +756,7 @@ impl ArchiveAnalyzer {
 
                 // Convert to FileAnalysis, consuming the report to avoid cloning
                 let (mut file_entry, nested_files, archive_contents) =
-                    file_report.into_file_analysis(0, true);
+                    file_report.into_file_analysis(0);
                 file_entry.path = entry_path.clone();
                 file_entry.depth = 1; // Direct child of archive
                 file_entry.compute_summary();

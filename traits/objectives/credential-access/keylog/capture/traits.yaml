@@ -134,15 +134,6 @@ traits:
       substr: "extern crate rdev"
 
   # === AppleScript Keystroke Capture ===
-  # osascript-lower: use micro-behaviors/process/create/script::osascript (canonical, covers shell/python/ruby/perl/js)
-  - id: osascript-lower
-    desc: osascript command (lowercase)
-    crit: notable
-    conf: 0.6
-    for: [typescript]
-    if:
-      type: string
-      word: "osascript"
 
   - id: osascript-title
     desc: Osascript command (title case)
@@ -336,7 +327,6 @@ composite_rules:
     for: [all]
     any:
       - { id: micro-behaviors/process/create/script::osascript }
-      - { id: osascript-lower }
       - { id: osascript-title }
       - { id: osascript-upper }
 

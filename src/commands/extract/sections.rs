@@ -47,8 +47,8 @@ fn run_with_layer(target: &str, layer: &str, format: &cli::OutputFormat) -> Resu
         _ => anyhow::bail!("Layer filtering only supported for binary files (ELF, PE, Mach-O)"),
     };
 
-    // Convert to v2 format to populate files array
-    report.convert_to_v2(true);
+    // Finalize to populate files array
+    report.finalize();
 
     // Find the requested layer
     let layer_suffix = format!("{}{}", ENCODING_DELIMITER, layer);

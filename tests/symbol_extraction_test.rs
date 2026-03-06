@@ -699,9 +699,9 @@ fn test_all_ast_languages_supported() {
 
     // Map of extension -> (content, expected_type)
     let test_cases = vec![
-        ("test.py", "print('hello')\n", "python"),
+        ("test.py", "import os\nprint('hello')\n", "python"),
         ("test.js", "console.log('hello');\n", "javascript"),
-        ("test.ts", "console.log('hello');\n", "javascript"),
+        ("test.ts", "const x: string = 'hello';\n", "javascript"),
         ("test.sh", "#!/bin/bash\necho hello\n", "shell"),
         ("test.c", "int main() { return 0; }\n", "c"),
         ("test.go", "package main\nfunc main() {}\n", "go"),
@@ -710,7 +710,7 @@ fn test_all_ast_languages_supported() {
         ("test.php", "<?php echo 'hello'; ?>\n", "php"),
         ("test.java", "class Test {}\n", "java"),
         ("test.cs", "using System;\nclass Test {}\n", "csharp"),
-        ("test.lua", "print('hello')\n", "lua"),
+        ("test.lua", "local x = 'hello'\nprint(x)\n", "lua"),
         ("test.pl", "#!/usr/bin/perl\nprint 'hello';\n", "perl"),
         ("test.ps1", "Write-Host 'hello'\n", "powershell"),
     ];

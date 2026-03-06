@@ -134,7 +134,7 @@ impl PEAnalyzer {
                             crate::analyzers::utils::calculate_sha256(&unpacked_data);
                         let virtual_path = encode_upx_path(&file_path.display().to_string());
 
-                        let mut unpacked_file = unpacked_report.to_file_analysis(0, true);
+                        let mut unpacked_file = unpacked_report.to_file_analysis(0);
                         unpacked_file.path = virtual_path;
                         unpacked_file.sha256 = unpacked_sha256;
                         unpacked_file.size = unpacked_data.len() as u64;

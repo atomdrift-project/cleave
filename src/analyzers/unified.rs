@@ -92,8 +92,8 @@ pub(crate) fn config_for_file_type(
         }),
         FileType::TypeScript => Some(LanguageConfig {
             name: "typescript",
-            file_type: "typescript",
-            description: "TypeScript code",
+            file_type: "javascript",
+            description: "TypeScript/JavaScript code",
             language: tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
             call_node_types: &["call_expression"],
             function_node_types: &[
@@ -778,7 +778,7 @@ impl UnifiedSourceAnalyzer {
                 let file_type_str = match self.file_type {
                     crate::analyzers::FileType::Python => "python",
                     crate::analyzers::FileType::JavaScript => "javascript",
-                    crate::analyzers::FileType::TypeScript => "typescript",
+                    crate::analyzers::FileType::TypeScript => "javascript",
                     crate::analyzers::FileType::Go => "go",
                     crate::analyzers::FileType::Ruby => "ruby",
                     crate::analyzers::FileType::Perl => "perl",

@@ -250,7 +250,6 @@ pub(crate) fn parse_file_types(types: &[String], warnings: &mut Vec<String>) -> 
                     RuleFileType::Batch,
                     RuleFileType::Python,
                     RuleFileType::JavaScript,
-                    RuleFileType::TypeScript,
                     RuleFileType::Ruby,
                     RuleFileType::Php,
                     RuleFileType::Perl,
@@ -269,8 +268,7 @@ pub(crate) fn parse_file_types(types: &[String], warnings: &mut Vec<String>) -> 
                 "shell" | "sh" => vec![RuleFileType::Shell],
                 "batch" | "bat" | "cmd" => vec![RuleFileType::Batch],
                 "python" | "py" => vec![RuleFileType::Python],
-                "javascript" | "js" => vec![RuleFileType::JavaScript],
-                "typescript" | "ts" => vec![RuleFileType::TypeScript],
+                "javascript" | "js" | "typescript" | "ts" => vec![RuleFileType::JavaScript],
                 "ruby" | "rb" => vec![RuleFileType::Ruby],
                 "php" => vec![RuleFileType::Php],
                 "perl" | "pl" => vec![RuleFileType::Perl],
@@ -890,8 +888,7 @@ mod tests {
             &mut warnings,
         );
         assert!(result.contains(&RuleFileType::Python));
-        assert!(result.contains(&RuleFileType::JavaScript));
-        assert!(result.contains(&RuleFileType::TypeScript));
+        assert!(result.contains(&RuleFileType::JavaScript)); // "ts" also maps to JavaScript
         assert!(result.contains(&RuleFileType::Ruby));
         assert!(warnings.is_empty());
     }

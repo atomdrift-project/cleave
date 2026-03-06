@@ -150,7 +150,7 @@ impl NotException {
                 } else if let Some(substr_str) = &s.substr {
                     value.to_lowercase().contains(&substr_str.to_lowercase())
                 } else if let Some(regex_str) = &s.regex {
-                    regex::Regex::new(regex_str)
+                    super::evaluators::build_regex(regex_str, false)
                         .map(|re| re.is_match(value))
                         .unwrap_or(false)
                 } else {

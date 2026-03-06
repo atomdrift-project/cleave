@@ -1186,24 +1186,14 @@ pub(crate) fn eval_encoded<'a>(
     let regex_matcher = if let Some(compiled) = compiled_regex {
         Some(compiled.clone())
     } else if let Some(pattern) = regex {
-        let pattern_with_flags = if case_insensitive {
-            format!("(?i){}", pattern)
-        } else {
-            pattern.clone()
-        };
-        match regex::Regex::new(&pattern_with_flags) {
+        match super::build_regex(pattern, case_insensitive) {
             Ok(re) => Some(re),
             Err(_) => return ConditionResult::no_match(),
         }
     } else if let Some(word_pattern) = word {
         // Build word boundary regex from word parameter
         let pattern = format!(r"\b{}\b", regex::escape(word_pattern));
-        let pattern_with_flags = if case_insensitive {
-            format!("(?i){}", pattern)
-        } else {
-            pattern
-        };
-        match regex::Regex::new(&pattern_with_flags) {
+        match super::build_regex(&pattern, case_insensitive) {
             Ok(re) => Some(re),
             Err(_) => return ConditionResult::no_match(),
         }

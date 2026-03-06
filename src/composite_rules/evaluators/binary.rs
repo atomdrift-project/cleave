@@ -71,7 +71,7 @@ pub(crate) fn eval_section_ratio<'a>(
     max_ratio: Option<f64>,
     ctx: &EvaluationContext<'a>,
 ) -> ConditionResult {
-    let Ok(section_re) = Regex::new(section_pattern) else {
+    let Ok(section_re) = build_regex(section_pattern, false) else {
         return ConditionResult::no_match();
     };
 
@@ -93,7 +93,7 @@ pub(crate) fn eval_section_ratio<'a>(
     let compare_size: u64 = if compare_to == "total" {
         ctx.report.sections.iter().map(|s| s.size).sum()
     } else {
-        let Ok(compare_re) = Regex::new(compare_to) else {
+        let Ok(compare_re) = build_regex(compare_to, false) else {
             return ConditionResult::no_match();
         };
         ctx.report
@@ -368,7 +368,7 @@ pub(crate) fn eval_import_combination<'a>(
     // Check required imports - all must be present
     if let Some(req) = required {
         for pattern in req {
-            let Ok(re) = Regex::new(pattern) else {
+            let Ok(re) = build_regex(pattern, false) else {
                 continue;
             };
             let found = import_symbols.iter().any(|sym| re.is_match(sym));
@@ -390,7 +390,7 @@ pub(crate) fn eval_import_combination<'a>(
     // Count suspicious imports — each import counted at most once even if it matches multiple patterns
     let mut suspicious_count = 0;
     if let Some(susp) = suspicious {
-        let compiled: Vec<Regex> = susp.iter().filter_map(|p| Regex::new(p).ok()).collect();
+        let compiled: Vec<Regex> = susp.iter().filter_map(|p| build_regex(p, false).ok()).collect();
         for sym in &import_symbols {
             if compiled.iter().any(|re| re.is_match(sym)) {
                 suspicious_count += 1;

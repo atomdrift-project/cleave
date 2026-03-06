@@ -216,7 +216,7 @@ pub(crate) fn eval_basename<'a>(
             } else {
                 regex_str.clone()
             };
-            regex::Regex::new(&pattern)
+            super::build_regex(&pattern, false)
                 .map(|re| re.is_match(basename))
                 .unwrap_or_else(|e| {
                     eprintln!("WARNING: invalid basename regex '{}': {}", regex_str, e);

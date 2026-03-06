@@ -83,7 +83,7 @@ func run(ctx context.Context, cfg config, payloads []payload) []result {
 					p = mutatePayload(p, i)
 				}
 
-				r := sendRequest(deadline, client, cfg, p)
+				r := sendRequest(ctx, client, cfg, p)
 				r.filename = p.filename
 
 				if cfg.verbose {

@@ -45,9 +45,9 @@ fn run_with_layer(target: &str, layer: &str, format: &cli::OutputFormat) -> Resu
             .analyze_structural(path, &data, None),
         FileType::MachO => MachOAnalyzer::new()
             .with_capability_mapper(capability_mapper)
-            .analyze(path),
+            .analyze_structural(path, &data, None),
         _ => anyhow::bail!("Layer filtering only supported for binary files (ELF, PE, Mach-O)"),
-    }?;
+    };
 
     // Convert to v2 format to populate files array
     report.convert_to_v2(true);
@@ -312,8 +312,9 @@ fn format_symbols_output(
 
     // Format output
     match format {
-        cli::OutputFormat::Json => Ok(serde_json::to_string_pretty(&symbols)?),
-        cli::OutputFormat::Jsonl => Ok(serde_json::to_string_pretty(&symbols)?),
+        cli::OutputFormat::Json | cli::OutputFormat::Jsonl => {
+            Ok(serde_json::to_string_pretty(&symbols)?)
+        }
         cli::OutputFormat::Terminal => {
             let mut output = String::new();
             output.push_str(&format!(

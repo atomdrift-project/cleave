@@ -16,6 +16,7 @@
 //! }
 //! ```
 
+mod analysis_cache;
 mod archive_utils;
 mod cache;
 pub mod decoders;
@@ -54,6 +55,7 @@ pub mod server;
 // Re-export commonly used types at crate root
 pub use analyzers::{detect_file_type, AnalysisInput, Analyzer, FileType};
 pub use capabilities::CapabilityMapper;
+pub use composite_rules::Platform;
 pub use diff::DiffAnalyzer;
 pub use types::binary::StringInfo;
 pub use types::code_structure::{BinaryProperties, SourceCodeMetrics};
@@ -62,6 +64,7 @@ pub use types::diff::{DiffReport, ModifiedFileAnalysis};
 pub use types::scores::Metrics;
 pub use types::text_metrics::TextMetrics;
 pub use types::traits_findings::{Evidence, Finding, FindingKind, Trait, TraitKind};
+pub use types::SampleExtractionConfig;
 
 // Re-export cache management functions
 pub use composite_rules::clear_condition_stats;
@@ -137,6 +140,18 @@ pub struct AnalysisOptions {
     pub disable_upx: bool,
     /// Include all files in directory scans, even unknown types
     pub all_files: bool,
+    /// Platform filters for composite rule evaluation
+    pub platforms: Vec<composite_rules::Platform>,
+    /// Minimum precision threshold for hostile composite rules
+    pub min_hostile_precision: f32,
+    /// Minimum precision threshold for suspicious composite rules
+    pub min_suspicious_precision: f32,
+    /// Enable comprehensive validation of capability definitions
+    pub enable_full_validation: bool,
+    /// Maximum file size (bytes) to load into memory from archives
+    pub max_memory_file_size: u64,
+    /// Configuration for extracting suspicious files from archives
+    pub sample_extraction: Option<types::SampleExtractionConfig>,
 }
 
 impl Default for AnalysisOptions {
@@ -151,6 +166,12 @@ impl Default for AnalysisOptions {
             disable_radare2: false,
             disable_upx: false,
             all_files: false,
+            platforms: vec![composite_rules::Platform::All],
+            min_hostile_precision: CapabilityMapper::DEFAULT_MIN_HOSTILE_PRECISION,
+            min_suspicious_precision: CapabilityMapper::DEFAULT_MIN_SUSPICIOUS_PRECISION,
+            enable_full_validation: false,
+            max_memory_file_size: 512 * 1024 * 1024, // 512 MB default
+            sample_extraction: None,
         }
     }
 }
@@ -203,7 +224,22 @@ pub fn clear_all_thread_caches() {
 ///
 /// An `AnalysisReport` containing all extracted features, findings, and metrics.
 pub fn analyze_file<P: AsRef<Path>>(path: P, options: &AnalysisOptions) -> Result<AnalysisReport> {
-    let mapper = shared_resources::capability_mapper();
+    let path = path.as_ref();
+
+    // Fast path: check the analysis cache before loading expensive resources.
+    // SHA256 of the file is cheap (~1ms); loading CapabilityMapper + YARA is not (~800ms).
+    if path.is_file() {
+        let file_data = file_io::read_file_smart(path)?;
+        let sha256 = analyzers::utils::calculate_sha256(file_data.as_slice());
+        if let Some(mut report) = analysis_cache::cache_lookup(&sha256, options) {
+            report.target.path = path.display().to_string();
+            report.analysis_timestamp = chrono::Utc::now();
+            tracing::info!("Cache hit (fast path)");
+            return Ok(report);
+        }
+    }
+
+    let mapper = shared_resources::capability_mapper_with_options(options);
     let yara_engine = if options.disable_yara {
         None
     } else {
@@ -217,18 +253,7 @@ pub fn analyze_file<P: AsRef<Path>>(path: P, options: &AnalysisOptions) -> Resul
 /// Analyze a single file using a pre-loaded CapabilityMapper.
 ///
 /// Use this for batch processing to avoid reloading capabilities for each file.
-/// Note: This function still creates a new YARA engine per call. For maximum efficiency
-/// with YARA, use `analyze_file` which uses shared global resources.
-///
-/// # Arguments
-///
-/// * `path` - Path to the file to analyze
-/// * `options` - Analysis options
-/// * `capability_mapper` - Pre-loaded capability mapper
-///
-/// # Returns
-///
-/// An `AnalysisReport` containing all extracted features, findings, and metrics.
+/// Uses the shared global YARA engine singleton.
 pub fn analyze_file_with_mapper<P: AsRef<Path>>(
     path: P,
     options: &AnalysisOptions,
@@ -321,6 +346,22 @@ fn analyze_file_with_resources<P: AsRef<Path>>(
     memory_tracker::global_tracker()
         .record_file_read(file_size, path.to_str().unwrap_or("unknown"));
 
+    // Compute SHA256 early for cache lookup (also reused by analyzers)
+    let sha256_hex = analyzers::utils::calculate_sha256(file_data);
+
+    // Check analysis cache before running the full pipeline
+    if let Some(mut cached_report) = analysis_cache::cache_lookup(&sha256_hex, options) {
+        cached_report.target.path = path.display().to_string();
+        cached_report.analysis_timestamp = chrono::Utc::now();
+        tracing::info!("Cache hit");
+        memory_tracker::log_after_file_processing(
+            path.to_str().unwrap_or("unknown"),
+            file_size,
+            analysis_start.elapsed(),
+        );
+        return Ok(cached_report);
+    }
+
     // Check for extension/content mismatch
     let mismatch = analyzers::check_extension_content_mismatch(path, file_data);
 
@@ -338,7 +379,8 @@ fn analyze_file_with_resources<P: AsRef<Path>>(
         &stng_strings,
         &encoded_payloads,
         file_type.clone(),
-    );
+    )
+    .with_sha256(sha256_hex.clone());
 
     // Convert stng strings to StringInfo for binary analyzers (avoids redundant extraction)
     let string_extractor = strings::StringExtractor::new();
@@ -362,7 +404,13 @@ fn analyze_file_with_resources<P: AsRef<Path>>(
             let engine = yara_engine;
             let file_types: &[&str] = &["macho", "dylib", "kext"];
             let (struct_result, yara_result) = rayon::join(
-                || analyzer.analyze_structural(path, arch_data, input.sha256.clone()),
+                || {
+                    Ok::<_, anyhow::Error>(analyzer.analyze_structural(
+                        path,
+                        arch_data,
+                        input.sha256.clone(),
+                    ))
+                },
                 || {
                     engine
                         .filter(|e| e.is_loaded())
@@ -392,7 +440,7 @@ fn analyze_file_with_resources<P: AsRef<Path>>(
                 None,
                 Some(&inline_yara),
             );
-            report
+            Ok(report)
         }
         FileType::Elf => {
             // Run YARA scan in parallel with structural analysis for inline evidence
@@ -402,7 +450,13 @@ fn analyze_file_with_resources<P: AsRef<Path>>(
             let engine = yara_engine;
             let file_types: &[&str] = &["elf", "so", "ko"];
             let (struct_result, yara_result) = rayon::join(
-                || Ok::<_, anyhow::Error>(analyzer.analyze_structural(path, file_data, input.sha256.clone())),
+                || {
+                    Ok::<_, anyhow::Error>(analyzer.analyze_structural(
+                        path,
+                        file_data,
+                        input.sha256.clone(),
+                    ))
+                },
                 || {
                     engine
                         .filter(|e| e.is_loaded())
@@ -421,7 +475,7 @@ fn analyze_file_with_resources<P: AsRef<Path>>(
             );
             path_mapper::analyze_and_link_paths(&mut report);
             env_mapper::analyze_and_link_env_vars(&mut report);
-            report
+            Ok(report)
         }
         FileType::Pe => {
             // Run YARA scan in parallel with structural analysis for inline evidence
@@ -435,7 +489,13 @@ fn analyze_file_with_resources<P: AsRef<Path>>(
             let engine = yara_engine;
             let file_types: &[&str] = &["pe", "exe", "dll", "bat", "ps1"];
             let (struct_result, yara_result) = rayon::join(
-                || analyzer.analyze_structural(path, file_data, input.sha256.clone()),
+                || {
+                    Ok::<_, anyhow::Error>(analyzer.analyze_structural(
+                        path,
+                        file_data,
+                        input.sha256.clone(),
+                    ))
+                },
                 || {
                     engine
                         .filter(|e| e.is_loaded())
@@ -452,40 +512,44 @@ fn analyze_file_with_resources<P: AsRef<Path>>(
                 None,
                 Some(&inline_yara),
             );
-            report
+            Ok(report)
         }
         FileType::JavaClass => analyzers::java_class::JavaClassAnalyzer::new()
             .with_capability_mapper_arc(mapper_arc.clone())
-            .analyze_input(&input)?,
+            .analyze_input(&input),
         FileType::Lnk => analyzers::lnk::LnkAnalyzer::new()
             .with_capability_mapper_arc(mapper_arc.clone())
-            .analyze_input(&input)?,
+            .analyze_input(&input),
         FileType::Jar | FileType::Archive => {
             let mut analyzer = analyzers::archive::ArchiveAnalyzer::new()
                 .with_capability_mapper_arc(mapper_arc.clone())
-                .with_zip_passwords(options.zip_passwords.clone());
+                .with_zip_passwords(options.zip_passwords.clone())
+                .with_max_memory_file_size(options.max_memory_file_size);
             if let Some(engine) = yara_engine {
                 analyzer = analyzer.with_yara_arc(engine.clone());
             }
-            analyzer.analyze_input(&input)?
+            if let Some(ref config) = options.sample_extraction {
+                analyzer = analyzer.with_sample_extraction(config.clone());
+            }
+            analyzer.analyze_input(&input)
         }
         FileType::PackageJson => analyzers::package_json::PackageJsonAnalyzer::new()
             .with_capability_mapper_arc(mapper_arc.clone())
-            .analyze_input(&input)?,
+            .analyze_input(&input),
         FileType::VsixManifest => analyzers::vsix_manifest::VsixManifestAnalyzer::new()
             .with_capability_mapper_arc(mapper_arc.clone())
-            .analyze_input(&input)?,
+            .analyze_input(&input),
         // All source code languages use the unified analyzer (or generic fallback)
         _ => {
             if let Some(analyzer) =
                 analyzers::analyzer_for_file_type_arc(&file_type, Some(mapper_arc.clone()))
             {
-                analyzer.analyze_input(&input)?
+                analyzer.analyze_input(&input)
             } else {
                 anyhow::bail!("Unsupported file type: {:?}", file_type);
             }
         }
-    };
+    }?;
 
     // Add finding for extension/content mismatch if detected
     if let Some((expected, actual)) = mismatch {
@@ -614,12 +678,22 @@ fn analyze_file_with_resources<P: AsRef<Path>>(
         }
     }
 
+    // Filter low-value composite "any" rules (needs=1) before caching.
+    // These provide no value over the underlying trait that matched.
+    let removed = report.filter_findings(|f| !capability_mapper.is_low_value_any_rule(&f.id));
+    if removed > 0 {
+        tracing::debug!("Filtered {} low-value composite 'any' rules", removed);
+    }
+
     // Log memory state after processing
     memory_tracker::log_after_file_processing(
         path.to_str().unwrap_or("unknown"),
         file_size,
         analysis_start.elapsed(),
     );
+
+    // Store result in analysis cache for future lookups
+    analysis_cache::cache_store(&sha256_hex, options, &report);
 
     Ok(report)
 }

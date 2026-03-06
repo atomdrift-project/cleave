@@ -19,6 +19,38 @@ static YARA_ENGINE_WITH_THIRD_PARTY: OnceLock<Arc<YaraEngine>> = OnceLock::new()
 /// Global lazy-loaded YARA engine (without third-party rules)
 static YARA_ENGINE_BUILTIN_ONLY: OnceLock<Arc<YaraEngine>> = OnceLock::new();
 
+/// Create a CapabilityMapper configured from analysis options.
+///
+/// Returns the cached global singleton when options match defaults.
+/// Custom options create a new mapper (typically CLI one-shots, not hot paths).
+pub(crate) fn capability_mapper_with_options(
+    options: &crate::AnalysisOptions,
+) -> Arc<CapabilityMapper> {
+    let is_default = options.min_hostile_precision
+        == CapabilityMapper::DEFAULT_MIN_HOSTILE_PRECISION
+        && options.min_suspicious_precision == CapabilityMapper::DEFAULT_MIN_SUSPICIOUS_PRECISION
+        && !options.enable_full_validation
+        && options.platforms.len() == 1
+        && options.platforms[0] == crate::composite_rules::Platform::All;
+
+    if is_default {
+        return capability_mapper();
+    }
+
+    if std::env::var("CLEAVE_SKIP_TRAITS").is_ok() {
+        return Arc::new(CapabilityMapper::empty());
+    }
+
+    Arc::new(
+        CapabilityMapper::new_with_precision_thresholds(
+            options.min_hostile_precision,
+            options.min_suspicious_precision,
+            options.enable_full_validation,
+        )
+        .with_platforms(options.platforms.clone()),
+    )
+}
+
 /// Get or initialize the global CapabilityMapper
 pub(crate) fn capability_mapper() -> Arc<CapabilityMapper> {
     // Fast path: read lock

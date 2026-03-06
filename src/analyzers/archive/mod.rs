@@ -1937,7 +1937,9 @@ mod tests {
     #[test]
     fn test_extract_7z_encrypted() {
         let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap_or_else(|_| ".".to_string());
-        let sz_path = Path::new(&manifest_dir).join("testdata").join("encrypted.7z");
+        let sz_path = Path::new(&manifest_dir)
+            .join("testdata")
+            .join("encrypted.7z");
 
         // Skip if the test file is missing (though it should be in the repo)
         if !sz_path.exists() {

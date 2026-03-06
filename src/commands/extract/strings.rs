@@ -58,9 +58,9 @@ fn run_with_layer(
             .analyze_structural(path, &data, None),
         FileType::MachO => MachOAnalyzer::new()
             .with_capability_mapper(capability_mapper)
-            .analyze(path),
+            .analyze_structural(path, &data, None),
         _ => anyhow::bail!("Layer filtering only supported for binary files (ELF, PE, Mach-O)"),
-    }?;
+    };
 
     // Convert to v2 format to populate files array
     report.convert_to_v2(true);

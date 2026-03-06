@@ -32,7 +32,8 @@ pub(super) async fn reload(State(state): State<Arc<AppState>>) -> Response {
     let result = tokio::task::spawn_blocking(move || {
         let _enter = task_span.enter();
         crate::shared_resources::reload_capability_mapper()
-    }).await;
+    })
+    .await;
     let elapsed_ms = start.elapsed().as_millis();
 
     match result {
@@ -77,47 +78,86 @@ pub(super) async fn analyze(
 
     if let Some(rss) = crate::memory_tracker::current_rss() {
         if rss > state.max_rss_bytes {
-            warn!(rss_mb = rss / 1024 / 1024, max_rss_mb = state.max_rss_bytes / 1024 / 1024, "Server overloaded: high memory usage");
+            warn!(
+                rss_mb = rss / 1024 / 1024,
+                max_rss_mb = state.max_rss_bytes / 1024 / 1024,
+                "Server overloaded: high memory usage"
+            );
             return (
                 StatusCode::SERVICE_UNAVAILABLE,
                 Json(serde_json::json!({"error": "Server overloaded (memory)"})),
-            ).into_response();
+            )
+                .into_response();
         }
     }
 
-    let max_active_tasks = std::thread::available_parallelism().map(std::num::NonZero::get).unwrap_or(4) * 2;
-    let current_tasks = state.active_tasks.load(std::sync::atomic::Ordering::Relaxed);
+    let max_active_tasks = std::thread::available_parallelism()
+        .map(std::num::NonZero::get)
+        .unwrap_or(4)
+        * 2;
+    let current_tasks = state
+        .active_tasks
+        .load(std::sync::atomic::Ordering::Relaxed);
     if current_tasks >= max_active_tasks {
-        warn!(active_tasks = current_tasks, max_tasks = max_active_tasks, "Server overloaded: too many active tasks");
+        warn!(
+            active_tasks = current_tasks,
+            max_tasks = max_active_tasks,
+            "Server overloaded: too many active tasks"
+        );
         return (
             StatusCode::SERVICE_UNAVAILABLE,
             Json(serde_json::json!({"error": "Server overloaded (tasks)"})),
-        ).into_response();
+        )
+            .into_response();
     }
 
     let mut field = match multipart.next_field().await {
         Ok(Some(f)) => f,
         Ok(None) => {
             warn!("Bad request: no file field");
-            return (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": "No file field in request"}))).into_response();
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({"error": "No file field in request"})),
+            )
+                .into_response();
         }
         Err(e) => {
             warn!("Failed to parse multipart: {}", e);
-            return (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": "Invalid multipart data"}))).into_response();
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({"error": "Invalid multipart data"})),
+            )
+                .into_response();
         }
     };
 
-    let filename = field.file_name().map(|s| s.chars().filter(|c| !c.is_control()).take(255).collect::<String>()).unwrap_or_default();
+    let filename = field
+        .file_name()
+        .map(|s| {
+            s.chars()
+                .filter(|c| !c.is_control())
+                .take(255)
+                .collect::<String>()
+        })
+        .unwrap_or_default();
 
     let temp_file = match tokio::task::spawn_blocking(NamedTempFile::new).await {
         Ok(Ok(f)) => f,
         Ok(Err(e)) => {
             warn!("Failed to create temp file: {}", e);
-            return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": "Internal error"}))).into_response();
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": "Internal error"})),
+            )
+                .into_response();
         }
         Err(e) => {
             warn!("Task join error creating temp file: {}", e);
-            return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": "Internal error"}))).into_response();
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": "Internal error"})),
+            )
+                .into_response();
         }
     };
 
@@ -126,34 +166,54 @@ pub(super) async fn analyze(
         Ok(f) => f,
         Err(e) => {
             warn!("Failed to open temp file for async writing: {}", e);
-            return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": "Internal error"}))).into_response();
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": "Internal error"})),
+            )
+                .into_response();
         }
     };
 
     let mut file_size = 0;
     while let Ok(Some(chunk)) = field.chunk().await {
-        if chunk.is_empty() { continue; }
+        if chunk.is_empty() {
+            continue;
+        }
         file_size += chunk.len();
         if let Err(e) = tokio::io::AsyncWriteExt::write_all(&mut tokio_file, &chunk).await {
             warn!("Failed to write chunk to temp file: {}", e);
-            return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": "Failed to save file data"}))).into_response();
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": "Failed to save file data"})),
+            )
+                .into_response();
         }
     }
 
     if let Err(e) = tokio::io::AsyncWriteExt::flush(&mut tokio_file).await {
         warn!("Failed to flush temp file: {}", e);
-        return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": "Failed to save file data"}))).into_response();
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": "Failed to save file data"})),
+        )
+            .into_response();
     }
 
     if file_size == 0 {
         warn!("Bad request: empty file");
-        return (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": "Empty file"}))).into_response();
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "Empty file"})),
+        )
+            .into_response();
     }
 
     info!(size = file_size, filename = %filename, "Starting analysis");
 
     let timeout_duration = Duration::from_secs(state.timeout_secs);
-    state.active_tasks.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    state
+        .active_tasks
+        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let state_for_task = Arc::clone(&state);
     let task_span = Span::current();
 
@@ -161,20 +221,40 @@ pub(super) async fn analyze(
         tokio::task::spawn_blocking(move || {
             let _enter = task_span.enter();
             let res = analyze_file(&path, &AnalysisOptions::default());
-            state_for_task.active_tasks.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+            state_for_task
+                .active_tasks
+                .fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
             res
-        }).await
-    }).await;
+        })
+        .await
+    })
+    .await;
 
     drop(temp_file);
     let elapsed_ms = request_start.elapsed().as_millis();
 
     match result {
         Ok(Ok(Ok(report))) => {
-            let hostile = report.findings.iter().filter(|f| f.crit == Criticality::Hostile).count();
-            let suspicious = report.findings.iter().filter(|f| f.crit == Criticality::Suspicious).count();
-            let notable = report.findings.iter().filter(|f| f.crit == Criticality::Notable).count();
-            let baseline = report.findings.iter().filter(|f| f.crit == Criticality::Baseline).count();
+            let hostile = report
+                .findings
+                .iter()
+                .filter(|f| f.crit == Criticality::Hostile)
+                .count();
+            let suspicious = report
+                .findings
+                .iter()
+                .filter(|f| f.crit == Criticality::Suspicious)
+                .count();
+            let notable = report
+                .findings
+                .iter()
+                .filter(|f| f.crit == Criticality::Notable)
+                .count();
+            let baseline = report
+                .findings
+                .iter()
+                .filter(|f| f.crit == Criticality::Baseline)
+                .count();
 
             info!(
                 filename = %filename, size = file_size, elapsed_ms = elapsed_ms,
@@ -185,15 +265,27 @@ pub(super) async fn analyze(
         }
         Ok(Ok(Err(e))) => {
             warn!(filename = %filename, elapsed_ms = elapsed_ms, "Analysis failed: {:?}", e);
-            (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": "Analysis failed"}))).into_response()
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": "Analysis failed"})),
+            )
+                .into_response()
         }
         Ok(Err(e)) => {
             warn!(filename = %filename, elapsed_ms = elapsed_ms, "Task join error: {:?}", e);
-            (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": "Internal error"}))).into_response()
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": "Internal error"})),
+            )
+                .into_response()
         }
         Err(_) => {
             warn!(filename = %filename, elapsed_ms = elapsed_ms, "Analysis timed out after {}s", state.timeout_secs);
-            (StatusCode::GATEWAY_TIMEOUT, Json(serde_json::json!({"error": "Analysis timed out"}))).into_response()
+            (
+                StatusCode::GATEWAY_TIMEOUT,
+                Json(serde_json::json!({"error": "Analysis timed out"})),
+            )
+                .into_response()
         }
     }
 }
@@ -340,7 +432,8 @@ pub(super) async fn analyze_path(
         tokio::task::spawn_blocking(move || {
             let _enter = task_span.enter();
             analyze_file(&path_owned, &AnalysisOptions::default())
-        }).await
+        })
+        .await
     })
     .await;
 

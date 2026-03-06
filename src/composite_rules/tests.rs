@@ -1926,8 +1926,14 @@ fn test_basename_exact_match() {
     };
 
     // exact: "__init__.py" should match
-    let result =
-        super::evaluators::eval_basename(Some(&"__init__.py".to_string()), None, None, false, None, &ctx);
+    let result = super::evaluators::eval_basename(
+        Some(&"__init__.py".to_string()),
+        None,
+        None,
+        false,
+        None,
+        &ctx,
+    );
     assert!(result.matched);
     assert_eq!(result.evidence[0].value, "__init__.py");
 }
@@ -1956,8 +1962,14 @@ fn test_basename_exact_no_match() {
     };
 
     // exact: "__init__.py" should not match "main.py"
-    let result =
-        super::evaluators::eval_basename(Some(&"__init__.py".to_string()), None, None, false, None, &ctx);
+    let result = super::evaluators::eval_basename(
+        Some(&"__init__.py".to_string()),
+        None,
+        None,
+        false,
+        None,
+        &ctx,
+    );
     assert!(!result.matched);
 }
 
@@ -2014,8 +2026,14 @@ fn test_basename_regex_match() {
     };
 
     // regex: "^test_" should match files starting with "test_"
-    let result =
-        super::evaluators::eval_basename(None, None, Some(&"^test_".to_string()), false, None, &ctx);
+    let result = super::evaluators::eval_basename(
+        None,
+        None,
+        Some(&"^test_".to_string()),
+        false,
+        None,
+        &ctx,
+    );
     assert!(result.matched);
 }
 

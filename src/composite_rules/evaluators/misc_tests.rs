@@ -299,7 +299,14 @@ fn test_eval_basename_exact() {
     let data = vec![];
     let ctx = create_test_context(&report, &data, None);
 
-    let result = eval_basename(Some(&"malware.exe".to_string()), None, None, false, None, &ctx);
+    let result = eval_basename(
+        Some(&"malware.exe".to_string()),
+        None,
+        None,
+        false,
+        None,
+        &ctx,
+    );
     assert!(result.matched);
     assert_eq!(result.evidence[0].value, "malware.exe");
 }
@@ -310,7 +317,14 @@ fn test_eval_basename_exact_no_match() {
     let data = vec![];
     let ctx = create_test_context(&report, &data, None);
 
-    let result = eval_basename(Some(&"malware.exe".to_string()), None, None, false, None, &ctx);
+    let result = eval_basename(
+        Some(&"malware.exe".to_string()),
+        None,
+        None,
+        false,
+        None,
+        &ctx,
+    );
     assert!(!result.matched);
 }
 

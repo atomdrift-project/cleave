@@ -85,7 +85,7 @@ impl PEAnalyzer {
         file_path: &Path,
         data: &[u8],
         precomputed_sha256: Option<String>,
-    ) -> Result<AnalysisReport> {
+    ) -> AnalysisReport {
         use crate::types::file_analysis::encode_upx_path;
         use crate::upx::{UPXDecompressor, UPXError};
 
@@ -94,7 +94,8 @@ impl PEAnalyzer {
         }
 
         // UPX-packed: structural analysis of packed binary first
-        let mut report = self.analyze_structural_with_strings(file_path, data, None, precomputed_sha256.clone())?;
+        let mut report =
+            self.analyze_structural_with_strings(file_path, data, None, precomputed_sha256.clone());
 
         report.findings.push(
             Finding::structural(
@@ -114,39 +115,39 @@ impl PEAnalyzer {
                 )
                 .with_criticality(Criticality::Notable),
             );
-            return Ok(report);
+            return report;
         }
 
         match UPXDecompressor::decompress(file_path) {
             Ok(unpacked_data) => {
                 if let Ok(temp_file) = tempfile::NamedTempFile::new() {
                     if fs::write(temp_file.path(), &unpacked_data).is_ok() {
-                        if let Ok(unpacked_report) = self.analyze_structural_with_strings(
+                        let unpacked_report = self.analyze_structural_with_strings(
                             temp_file.path(),
                             &unpacked_data,
                             None,
                             None, // Hash will change after decompression
-                        ) {
-                            // Create separate FileAnalysis for unpacked layer
-                            let unpacked_sha256 =
-                                crate::analyzers::utils::calculate_sha256(&unpacked_data);
-                            let virtual_path = encode_upx_path(&file_path.display().to_string());
+                        );
 
-                            let mut unpacked_file = unpacked_report.to_file_analysis(0, true);
-                            unpacked_file.path = virtual_path;
-                            unpacked_file.sha256 = unpacked_sha256;
-                            unpacked_file.size = unpacked_data.len() as u64;
-                            unpacked_file.depth = 1;
-                            unpacked_file.parent_id = Some(0);
-                            unpacked_file.encoding = Some(vec!["upx".to_string()]);
-                            unpacked_file.compute_summary();
+                        // Create separate FileAnalysis for unpacked layer
+                        let unpacked_sha256 =
+                            crate::analyzers::utils::calculate_sha256(&unpacked_data);
+                        let virtual_path = encode_upx_path(&file_path.display().to_string());
 
-                            // Add nested files from unpacked analysis (e.g., embedded code)
-                            report.files.extend(unpacked_report.files);
-                            report.files.push(unpacked_file);
+                        let mut unpacked_file = unpacked_report.to_file_analysis(0, true);
+                        unpacked_file.path = virtual_path;
+                        unpacked_file.sha256 = unpacked_sha256;
+                        unpacked_file.size = unpacked_data.len() as u64;
+                        unpacked_file.depth = 1;
+                        unpacked_file.parent_id = Some(0);
+                        unpacked_file.encoding = Some(vec!["upx".to_string()]);
+                        unpacked_file.compute_summary();
 
-                            report.metadata.tools_used.push("upx".to_string());
-                        }
+                        // Add nested files from unpacked analysis (e.g., embedded code)
+                        report.files.extend(unpacked_report.files);
+                        report.files.push(unpacked_file);
+
+                        report.metadata.tools_used.push("upx".to_string());
                     }
                 }
             }
@@ -168,7 +169,7 @@ impl PEAnalyzer {
             }
         }
 
-        Ok(report)
+        report
     }
 
     /// Structural analysis with optional pre-extracted strings.
@@ -178,7 +179,7 @@ impl PEAnalyzer {
         data: &[u8],
         stng_strings: Option<&[stng::ExtractedString]>,
         precomputed_sha256: Option<String>,
-    ) -> Result<AnalysisReport> {
+    ) -> AnalysisReport {
         let start = std::time::Instant::now();
 
         // Detect and handle tampered PE (junk prefix before MZ header)
@@ -215,7 +216,7 @@ impl PEAnalyzer {
         start: std::time::Instant,
         stng_strings: Option<&[stng::ExtractedString]>,
         precomputed_sha256: Option<String>,
-    ) -> Result<AnalysisReport> {
+    ) -> AnalysisReport {
         // Compute PE-specific metrics early
         let pe_metrics = self.compute_pe_metrics(pe, pe_data);
 
@@ -227,7 +228,9 @@ impl PEAnalyzer {
             path: file_path.display().to_string(),
             file_type: "pe".to_string(),
             size_bytes: original_data.len() as u64,
-            sha256: precomputed_sha256.clone().unwrap_or_else(|| crate::analyzers::utils::calculate_sha256(original_data)),
+            sha256: precomputed_sha256
+                .clone()
+                .unwrap_or_else(|| crate::analyzers::utils::calculate_sha256(original_data)),
             architectures: Some(vec![self.arch_name(pe)]),
         };
 
@@ -240,10 +243,15 @@ impl PEAnalyzer {
         // Run radare2 in parallel with structural analysis
         let has_symbols = !pe.imports.is_empty();
         let (r2_result, _) = rayon::join(
-            || if Radare2Analyzer::is_available() {
-                Some(self.radare2.extract_batched(file_path, has_symbols, precomputed_sha256))
-            } else {
-                None
+            || {
+                if Radare2Analyzer::is_available() {
+                    Some(
+                        self.radare2
+                            .extract_batched(file_path, has_symbols, precomputed_sha256),
+                    )
+                } else {
+                    None
+                }
             },
             || {
                 // Analyze header and structure
@@ -257,7 +265,7 @@ impl PEAnalyzer {
 
                 // Analyze sections and entropy
                 self.analyze_sections(pe, pe_data, &mut report);
-            }
+            },
         );
 
         let r2_strings = if let Some(Ok(batched)) = r2_result {
@@ -288,7 +296,10 @@ impl PEAnalyzer {
 
                     // Sanity check: extremely high ratio likely indicates classification bug
                     if binary_metrics.code_to_data_ratio > 1000.0 {
-                        eprintln!("WARNING: code_to_data_ratio ({:.2}) > 1000 - this may indicate a bug", binary_metrics.code_to_data_ratio);
+                        eprintln!(
+                            "WARNING: code_to_data_ratio ({:.2}) > 1000 - this may indicate a bug",
+                            binary_metrics.code_to_data_ratio
+                        );
                     }
                 }
             }
@@ -298,8 +309,7 @@ impl PEAnalyzer {
             if code_kb > 0.0 {
                 binary_metrics.import_density = binary_metrics.import_count as f32 / code_kb;
                 binary_metrics.string_density = binary_metrics.string_count as f32 / code_kb;
-                binary_metrics.function_density =
-                    binary_metrics.function_count as f32 / code_kb;
+                binary_metrics.function_density = binary_metrics.function_count as f32 / code_kb;
                 binary_metrics.relocation_density =
                     binary_metrics.relocation_count as f32 / code_kb;
                 binary_metrics.complexity_per_kb =
@@ -456,7 +466,7 @@ impl PEAnalyzer {
         report.metadata.analysis_duration_ms = start.elapsed().as_millis() as u64;
         report.metadata.tools_used = tools_used;
 
-        Ok(report)
+        report
     }
 
     /// Analyze a corrupted PE that goblin failed to parse
@@ -470,7 +480,7 @@ impl PEAnalyzer {
         parse_error: &goblin::error::Error,
         start: std::time::Instant,
         stng_strings: Option<&[stng::ExtractedString]>,
-    ) -> Result<AnalysisReport> {
+    ) -> AnalysisReport {
         // Create target info for corrupted PE
         let target = TargetInfo {
             path: file_path.display().to_string(),
@@ -546,7 +556,7 @@ impl PEAnalyzer {
         report.metadata.analysis_duration_ms = start.elapsed().as_millis() as u64;
         report.metadata.tools_used = tools_used;
 
-        Ok(report)
+        report
     }
 
     fn analyze_structure<'a>(&self, pe: &PE<'a>, report: &mut AnalysisReport) {
@@ -1051,8 +1061,12 @@ impl Default for PEAnalyzer {
 impl Analyzer for PEAnalyzer {
     fn analyze_input(&self, input: &AnalysisInput<'_>) -> Result<AnalysisReport> {
         // Use data and strings from input (no file read, no string extraction)
-        let mut report =
-            self.analyze_structural_with_strings(input.path, input.data, Some(input.strings), input.sha256.clone())?;
+        let mut report = self.analyze_structural_with_strings(
+            input.path,
+            input.data,
+            Some(input.strings),
+            input.sha256.clone(),
+        );
 
         // Post-processing
         self.capability_mapper
@@ -1062,7 +1076,7 @@ impl Analyzer for PEAnalyzer {
 
     fn analyze(&self, file_path: &Path) -> Result<AnalysisReport> {
         let data = fs::read(file_path).context("Failed to read file")?;
-        let mut report = self.analyze_structural(file_path, &data, None)?;
+        let mut report = self.analyze_structural(file_path, &data, None);
         self.capability_mapper
             .evaluate_and_merge_findings(&mut report, &data, None, None);
         Ok(report)
@@ -1337,10 +1351,7 @@ mod tests {
         let temp_file = tempfile::NamedTempFile::new().unwrap();
         std::fs::write(temp_file.path(), &upx_data).unwrap();
 
-        let report = analyzer.analyze_structural(temp_file.path(), &upx_data);
-        assert!(report.is_ok(), "Analysis should succeed");
-
-        let report = report.unwrap();
+        let report = analyzer.analyze_structural(temp_file.path(), &upx_data, None);
 
         // Should have UPX packer finding
         assert!(
@@ -1374,9 +1385,7 @@ mod tests {
         let temp_file = tempfile::NamedTempFile::new().unwrap();
         std::fs::write(temp_file.path(), &upx_data).unwrap();
 
-        let report = analyzer
-            .analyze_structural(temp_file.path(), &upx_data)
-            .unwrap();
+        let report = analyzer.analyze_structural(temp_file.path(), &upx_data, None);
 
         // Should have both UPX finding and tool-missing finding
         assert!(
@@ -1415,9 +1424,7 @@ mod tests {
         let temp_file = tempfile::NamedTempFile::new().unwrap();
         std::fs::write(temp_file.path(), &pe_data).unwrap();
 
-        let report = analyzer
-            .analyze_structural(temp_file.path(), &pe_data)
-            .unwrap();
+        let report = analyzer.analyze_structural(temp_file.path(), &pe_data, None);
 
         // Should NOT have UPX packer finding
         assert!(
@@ -1453,9 +1460,7 @@ mod tests {
         let temp_file = tempfile::NamedTempFile::new().unwrap();
         std::fs::write(temp_file.path(), &upx_data).unwrap();
 
-        let report = analyzer
-            .analyze_structural(temp_file.path(), &upx_data)
-            .unwrap();
+        let report = analyzer.analyze_structural(temp_file.path(), &upx_data, None);
 
         // Find the UPX finding
         let upx_finding = report

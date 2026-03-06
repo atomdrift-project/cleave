@@ -88,6 +88,11 @@ fn is_default_conf(conf: &f32) -> bool {
     (*conf - 0.95).abs() < f32::EPSILON
 }
 
+/// Default confidence value for deserialization (matches skip_serializing_if check)
+fn default_conf() -> f32 {
+    0.95
+}
+
 /// Check if a usize value is zero (for skip_serializing_if)
 fn is_zero_usize(n: &usize) -> bool {
     *n == 0
@@ -106,7 +111,11 @@ pub struct Finding {
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub desc: String,
     /// Confidence score (0.5 = heuristic, 1.0 = definitive)
-    #[serde(alias = "confidence", skip_serializing_if = "is_default_conf")]
+    #[serde(
+        alias = "confidence",
+        skip_serializing_if = "is_default_conf",
+        default = "default_conf"
+    )]
     pub conf: f32,
     /// Criticality level
     #[serde(default, skip_serializing_if = "Criticality::is_baseline")]

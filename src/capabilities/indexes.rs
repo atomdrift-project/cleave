@@ -403,7 +403,8 @@ impl StringMatchIndex {
             if has_ci_patterns && len >= self.ci_min_pattern_length {
                 lower_buf.clear();
                 lower_buf.extend(string_info.value.chars().flat_map(char::to_lowercase));
-                if let Some((original_pattern, trait_indices)) = self.ci_exact_patterns.get(lower_buf.as_str())
+                if let Some((original_pattern, trait_indices)) =
+                    self.ci_exact_patterns.get(lower_buf.as_str())
                 {
                     for &trait_idx in trait_indices {
                         matching_traits.insert(trait_idx);
@@ -661,9 +662,7 @@ impl StringMatchIndex {
                 for mat in ac.find_iter(&string_info.value) {
                     let pattern_idx = mat.pattern().as_usize();
                     if seen_patterns.insert(pattern_idx) {
-                        if let Some(trait_indices) =
-                            self.regex_literal_to_traits.get(pattern_idx)
-                        {
+                        if let Some(trait_indices) = self.regex_literal_to_traits.get(pattern_idx) {
                             for &trait_idx in trait_indices {
                                 candidates.insert(trait_idx);
                             }
@@ -835,8 +834,7 @@ impl FileTypeRegexSet {
                     || !content_bytes[start - 1].is_ascii_alphanumeric()
                         && content_bytes[start - 1] != b'_';
                 let after_ok = end == content_len
-                    || !content_bytes[end].is_ascii_alphanumeric()
-                        && content_bytes[end] != b'_';
+                    || !content_bytes[end].is_ascii_alphanumeric() && content_bytes[end] != b'_';
                 if before_ok && after_ok {
                     let word_idx = mat.pattern().as_usize();
                     if let Some(trait_indices) = self.cs_word_to_traits.get(word_idx) {
@@ -856,8 +854,7 @@ impl FileTypeRegexSet {
                     || !content_bytes[start - 1].is_ascii_alphanumeric()
                         && content_bytes[start - 1] != b'_';
                 let after_ok = end == content_len
-                    || !content_bytes[end].is_ascii_alphanumeric()
-                        && content_bytes[end] != b'_';
+                    || !content_bytes[end].is_ascii_alphanumeric() && content_bytes[end] != b'_';
                 if before_ok && after_ok {
                     let word_idx = mat.pattern().as_usize();
                     if let Some(trait_indices) = self.ci_word_to_traits.get(word_idx) {
@@ -967,11 +964,14 @@ impl RawContentRegexIndex {
                         universal_words.push(wp);
                     } else {
                         for ft in &trait_def.r#for {
-                            by_file_type_words.entry(*ft).or_default().push(WordPattern {
-                                word: word_str.clone(),
-                                case_insensitive: *case_insensitive,
-                                trait_idx,
-                            });
+                            by_file_type_words
+                                .entry(*ft)
+                                .or_default()
+                                .push(WordPattern {
+                                    word: word_str.clone(),
+                                    case_insensitive: *case_insensitive,
+                                    trait_idx,
+                                });
                         }
                     }
                 }
@@ -1090,7 +1090,10 @@ impl RawContentRegexIndex {
         // Group traits by unique pattern to avoid redundancy
         let mut pattern_map: FxHashMap<String, Vec<usize>> = FxHashMap::default();
         for (pattern, trait_idx) in patterns {
-            pattern_map.entry(pattern.clone()).or_default().push(*trait_idx);
+            pattern_map
+                .entry(pattern.clone())
+                .or_default()
+                .push(*trait_idx);
         }
 
         let pattern_strs: Vec<String> = pattern_map.keys().cloned().collect();

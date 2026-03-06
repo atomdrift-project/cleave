@@ -32,180 +32,61 @@
 //! - **Terminal**: Human-readable summary with findings and metadata
 //! - **JSONL**: Machine-readable JSON Lines format (one JSON object per line)
 
-use crate::analyzers::{
-    self, archive::ArchiveAnalyzer, detect_file_type, elf::ElfAnalyzer, macho::MachOAnalyzer,
-    pe::PEAnalyzer, Analyzer, FileType,
-};
-use crate::capabilities::CapabilityMapper;
+use crate::analyzers::{detect_file_type, FileType};
 use crate::cli;
-use crate::commands::shared::{check_criticality_error, process_yara_result};
+use crate::commands::shared::check_criticality_error;
 use crate::composite_rules;
 use crate::malecule_bridge;
 use crate::output;
 use crate::types;
-use crate::yara_engine::YaraEngine;
 use anyhow::{Context, Result};
 use malecule::LayoutAlgorithm;
 use std::fs;
 use std::path::Path;
-use std::sync::Arc;
 
-/// Shared analysis context for reusing expensive resources across multiple files.
-/// YARA rules take ~27s to compile, so we load once and share via Arc.
-struct AnalysisContextData {
-    yara_engine: Option<Arc<YaraEngine>>,
-    capability_mapper: Arc<CapabilityMapper>,
-}
-
-struct ContextInitializer {
+/// Build `AnalysisOptions` from CLI arguments.
+fn build_options(
     enable_third_party: bool,
-    yara_disabled: bool,
-    platforms_vec: Vec<composite_rules::Platform>,
+    zip_passwords: &[String],
+    disabled: &crate::cli::DisabledComponents,
+    sample_extraction: Option<&crate::types::SampleExtractionConfig>,
+    max_memory_file_size: u64,
+    platforms: &[crate::composite_rules::Platform],
     min_hostile_precision: f32,
     min_suspicious_precision: f32,
     enable_full_validation: bool,
-}
-
-impl ContextInitializer {
-    fn initialize(&self) -> AnalysisContextData {
-        // Load capability mapper and YARA rules in parallel
-        let yara_disabled = self.yara_disabled;
-        let enable_third_party = self.enable_third_party;
-        let yara_handle: Option<std::thread::JoinHandle<(YaraEngine, usize, usize)>> = if yara_disabled
-        {
-            None
-        } else {
-            Some(std::thread::spawn(move || {
-                let empty_mapper = CapabilityMapper::empty();
-                let mut engine = YaraEngine::new_with_mapper(empty_mapper);
-                let (builtin, third_party) = engine.load_all_rules(enable_third_party);
-                (engine, builtin, third_party)
-            }))
-        };
-
-        // Allow skipping trait loading for tests that don't need it
-        let capability_mapper = if std::env::var("CLEAVE_SKIP_TRAITS").is_ok() {
-            tracing::info!("Traits skipped (CLEAVE_SKIP_TRAITS set)");
-            Arc::new(CapabilityMapper::empty())
-        } else {
-            Arc::new(
-                CapabilityMapper::new_with_precision_thresholds(
-                    self.min_hostile_precision,
-                    self.min_suspicious_precision,
-                    self.enable_full_validation,
-                )
-                .with_platforms(self.platforms_vec.clone()),
-            )
-        };
-
-        let yara_engine = if yara_disabled {
-            tracing::info!("YARA scanning disabled");
-            None
-        } else if let Some(handle) = yara_handle {
-            let (engine, builtin_count, third_party_count) = handle
-                .join()
-                .unwrap_or_else(|e| std::panic::resume_unwind(e));
-            tracing::info!(
-                "YARA engine loaded with {} rules",
-                builtin_count + third_party_count
-            );
-            if builtin_count + third_party_count > 0 {
-                Some(Arc::new(engine))
-            } else {
-                None
-            }
-        } else {
-            None
-        };
-
-        AnalysisContextData {
-            yara_engine,
-            capability_mapper,
-        }
-    }
-}
-
-#[derive(Clone)]
-struct AnalysisContext {
-    data: Arc<std::sync::OnceLock<AnalysisContextData>>,
-    initializer: Arc<ContextInitializer>,
-}
-
-impl AnalysisContext {
-    fn get_data(&self) -> &AnalysisContextData {
-        self.data.get_or_init(|| self.initializer.initialize())
-    }
-}
-
-/// Load YARA engine and capability mapper once for reuse across multiple files.
-fn create_analysis_context(
-    enable_third_party: bool,
-    yara_disabled: bool,
-    platforms: &[composite_rules::Platform],
-    min_hostile_precision: f32,
-    min_suspicious_precision: f32,
-    enable_full_validation: bool,
-) -> AnalysisContext {
-    let initializer = Arc::new(ContextInitializer {
-        enable_third_party,
-        yara_disabled,
-        platforms_vec: platforms.to_vec(),
+) -> cleave::AnalysisOptions {
+    // Convert binary crate Platform to library crate Platform
+    // They're the same type structurally but Rust treats them as distinct
+    // because main.rs re-declares the modules. Use serde round-trip.
+    let platforms_lib: Vec<cleave::Platform> = if platforms.is_empty() {
+        vec![cleave::Platform::All]
+    } else {
+        let json = serde_json::to_string(platforms).unwrap_or_default();
+        serde_json::from_str(&json).unwrap_or_else(|_| vec![cleave::Platform::All])
+    };
+    let sample_lib: Option<cleave::SampleExtractionConfig> =
+        sample_extraction.map(|s| cleave::SampleExtractionConfig {
+            extract_dir: s.extract_dir.clone(),
+            archive_sha256: s.archive_sha256.clone(),
+        });
+    cleave::AnalysisOptions {
+        enable_third_party_yara: enable_third_party && !disabled.third_party,
+        zip_passwords: zip_passwords.to_vec(),
+        disable_yara: disabled.yara,
+        disable_radare2: disabled.radare2,
+        disable_upx: disabled.upx,
+        all_files: false,
+        platforms: platforms_lib,
         min_hostile_precision,
         min_suspicious_precision,
         enable_full_validation,
-    });
-
-    let ctx = AnalysisContext {
-        data: Arc::new(std::sync::OnceLock::new()),
-        initializer,
-    };
-
-    // Trigger initialization in the background immediately
-    let bg_ctx = ctx.clone();
-    std::thread::spawn(move || {
-        bg_ctx.get_data();
-    });
-
-    ctx
+        max_memory_file_size,
+        sample_extraction: sample_lib,
+    }
 }
 
-/// Analyze a single file with comprehensive malware detection.
-///
-/// This is the main entry point for single-file analysis. It handles:
-/// - Directory recursion (delegates to scan_paths)
-/// - File type detection
-/// - Parallel YARA + capability mapper loading
-/// - Format-specific analysis routing
-/// - Terminal vs JSONL output formatting
-///
-/// # Parameters
-///
-/// - `target`: Path to the file or directory to analyze
-/// - `enable_third_party`: Whether to load third-party YARA rules
-/// - `format`: Output format (Terminal or JSONL)
-/// - `zip_passwords`: List of passwords to try when extracting encrypted archives
-/// - `disabled`: Components to disable (e.g., YARA scanning)
-/// - `error_if_levels`: Exit with error if findings match these criticality levels
-/// - `verbose`: Include detailed analysis data in output
-/// - `all_files`: Analyze all files (not just programs) when scanning directories
-/// - `sample_extraction`: Configuration for extracting suspicious files from archives
-/// - `platforms`: Platform filters for composite rules
-/// - `min_hostile_precision`: Minimum precision for hostile composite rules
-/// - `min_suspicious_precision`: Minimum precision for suspicious composite rules
-/// - `max_memory_file_size`: Maximum file size to load into memory from archives
-/// - `enable_full_validation`: Enable comprehensive validation of capability definitions
-///
-/// # Returns
-///
-/// Formatted analysis report as a string (JSONL or Terminal format)
-///
-/// # Errors
-///
-/// Returns error if:
-/// - Path does not exist
-/// - File type detection fails
-/// - Analysis fails for the detected file type
-/// - Criticality check fails (when using --error-if)
+/// Analyze a single file or directory with comprehensive malware detection.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn run(
     target: &str,
@@ -226,25 +107,26 @@ pub(crate) fn run(
     mol_path: Option<&str>,
     mol_layout: cli::MolLayout,
 ) -> Result<String> {
-    let _start = std::time::Instant::now();
     let path = Path::new(target);
 
     if !path.exists() {
         anyhow::bail!("Path does not exist: {}", target);
     }
 
-    // If target is a directory, process files recursively with shared context
-    if path.is_dir() {
-        // Load YARA engine and capability mapper ONCE for all files
-        let ctx = create_analysis_context(
-            enable_third_party,
-            disabled.yara,
-            platforms,
-            min_hostile_precision,
-            min_suspicious_precision,
-            enable_full_validation,
-        );
+    let options = build_options(
+        enable_third_party,
+        zip_passwords,
+        disabled,
+        sample_extraction,
+        max_memory_file_size,
+        platforms,
+        min_hostile_precision,
+        min_suspicious_precision,
+        enable_full_validation,
+    );
 
+    // If target is a directory, process files recursively
+    if path.is_dir() {
         // For JSONL mode, stream results immediately for progress tracking
         let streaming = matches!(format, cli::OutputFormat::Jsonl);
         // Collect all file analysis data for galaxy view
@@ -267,27 +149,21 @@ pub(crate) fn run(
             .collect();
 
         // Shuffle files for random processing order when requested.
-        // This prevents predictable iteration patterns and ensures diverse sampling
-        // when used with trait-basher for analysis tuning.
         if shuffle {
             use rand::seq::SliceRandom;
             files.shuffle(&mut rand::rng());
         }
 
         let results = if streaming {
-            // Streaming mode: process files sequentially, print immediately
             let results = Vec::new();
             for entry in &files {
                 let file_path = entry.path().to_string_lossy().to_string();
-                let result = analyze_file_with_context(
+                let result = analyze_and_format(
                     &file_path,
+                    &options,
                     format,
-                    zip_passwords,
                     error_if_levels,
                     verbose,
-                    sample_extraction,
-                    max_memory_file_size,
-                    &ctx,
                     None,
                     mol_layout,
                     Some(&mut all_file_analyses),
@@ -308,7 +184,6 @@ pub(crate) fn run(
             }
             results
         } else {
-            // Non-streaming: analyze files in parallel for throughput
             use rayon::prelude::*;
 
             let file_paths: Vec<String> = files
@@ -319,24 +194,20 @@ pub(crate) fn run(
             let par_results: Vec<(String, Result<String>)> = file_paths
                 .par_iter()
                 .map(|file_path| {
-                    let result = analyze_file_with_context(
+                    let result = analyze_and_format(
                         file_path,
+                        &options,
                         format,
-                        zip_passwords,
                         error_if_levels,
                         verbose,
-                        sample_extraction,
-                        max_memory_file_size,
-                        &ctx,
                         None,
                         mol_layout,
-                        None, // Can't collect into shared Vec from parallel — do it after
+                        None,
                     );
                     (file_path.clone(), result)
                 })
                 .collect();
 
-            // Collect results in order, extracting file analyses for galaxy view
             let mut results = Vec::with_capacity(par_results.len());
             for (_, result) in par_results {
                 results.push(result?);
@@ -347,7 +218,6 @@ pub(crate) fn run(
         // Generate galaxy view from all collected files
         if let Some(base_path) = mol_path {
             if !all_file_analyses.is_empty() {
-                // Create a combined report just for galaxy view
                 let mut combined_report = types::AnalysisReport::new(types::TargetInfo {
                     path: target.to_string(),
                     file_type: "directory".to_string(),
@@ -363,440 +233,97 @@ pub(crate) fn run(
         return Ok(results.join(""));
     }
 
-    // Single file: create context and analyze
-    let ctx = create_analysis_context(
-        enable_third_party,
-        disabled.yara,
-        platforms,
-        min_hostile_precision,
-        min_suspicious_precision,
-        enable_full_validation,
-    );
-
-    analyze_file_with_context(
+    // Single file analysis
+    analyze_and_format(
         target,
+        &options,
         format,
-        zip_passwords,
         error_if_levels,
         verbose,
-        sample_extraction,
-        max_memory_file_size,
-        &ctx,
         mol_path,
         mol_layout,
-        None, // No collector for single-file analysis
+        None,
     )
 }
 
-/// Analyze a single file using a pre-loaded analysis context.
-/// This avoids reloading YARA rules for each file in a directory.
+/// Analyze a single file and format the output.
 ///
-/// If `file_collector` is provided, file analysis data will be appended to it
-/// for later galaxy view generation.
+/// Uses `cleave::analyze_file()` for the core analysis pipeline (with caching),
+/// then converts the result to binary-crate types via serde roundtrip (necessary
+/// because main.rs re-declares library modules, creating parallel type hierarchies).
+/// Finally applies CLI-specific post-processing (v2 conversion, encoding layer merging,
+/// filtering, mol generation, output formatting).
 #[allow(clippy::too_many_arguments)]
-fn analyze_file_with_context(
+fn analyze_and_format(
     target: &str,
+    options: &cleave::AnalysisOptions,
     format: &cli::OutputFormat,
-    zip_passwords: &[String],
     error_if_levels: Option<&[types::Criticality]>,
     verbose: bool,
-    sample_extraction: Option<&types::SampleExtractionConfig>,
-    max_memory_file_size: u64,
-    ctx: &AnalysisContext,
     mol_path: Option<&str>,
     mol_layout: cli::MolLayout,
     file_collector: Option<&mut Vec<types::FileAnalysis>>,
 ) -> Result<String> {
     let path = Path::new(target);
 
-    tracing::info!("Starting analysis of {}", target);
+    // Core analysis — single pipeline in lib.rs, with caching
+    let lib_report = cleave::analyze_file(path, options)?;
 
-    // Detect file type first (fast - just reads magic bytes)
-    tracing::debug!("Detecting file type");
-    let file_type = detect_file_type(path)?;
-    tracing::info!("File type: {:?}", file_type);
+    // Convert library types to binary-crate types via serde roundtrip.
+    // The types are structurally identical but Rust treats them as distinct
+    // because main.rs re-declares the library modules.
+    let json = serde_json::to_vec(&lib_report)?;
+    let mut report: types::AnalysisReport = serde_json::from_slice(&json)?;
 
-    // Use pre-loaded YARA engine and capability mapper from context
-    let context_data = ctx.get_data();
-    let capability_mapper = &context_data.capability_mapper;
-    let yara_engine = &context_data.yara_engine;
-
-    // Route to appropriate analyzer.
-    // For ELF/MachO/PE: structural analysis and YARA scan run in parallel via rayon::join,
-    // followed by a single centralized trait evaluation pass.
-    // Archive and source types are handled sequentially (archives manage their own YARA).
-    let _t3 = std::time::Instant::now();
-    let mut report = match file_type {
-        FileType::MachO => {
-            let data = fs::read(path).context("Failed to read file")?;
-            let analyzer =
-                MachOAnalyzer::new().with_capability_mapper_arc(capability_mapper.clone());
-            let range = analyzer.preferred_arch_range(&data);
-            let arch_data = &data[range.clone()];
-            let is_fat = analyzer.all_arch_ranges(&data).len() > 1;
-            let file_types: &[&str] = &["macho", "dylib", "kext"];
-            let (struct_result, yara_result) = rayon::join(
-                || analyzer.analyze_structural(path, arch_data, None),
-                || {
-                    yara_engine
-                        .as_ref()
-                        .filter(|e| e.is_loaded())
-                        .map(|e| e.scan_bytes_with_inline(arch_data, Some(file_types)))
-                },
-            );
-            let mut report = struct_result?;
-            analyzer.apply_fat_metadata(&mut report, &data);
-
-            // For FAT binaries, re-extract strings from the full file so offsets are file-relative.
-            // This ensures offset_range constraints (like [-2200, -100]) work correctly.
-            if is_fat {
-                let string_extractor = crate::strings::StringExtractor::default();
-                report.strings = string_extractor.extract_smart(&data, None);
-                // Update string count metric
-                if let Some(ref mut metrics) = report.metrics {
-                    if let Some(ref mut binary_metrics) = metrics.binary {
-                        binary_metrics.string_count = report.strings.len() as u32;
-                    }
-                }
-            }
-
-            let inline_yara = process_yara_result(&mut report, yara_result, yara_engine.as_deref());
-            // For FAT binaries, evaluate against full file since strings have file-relative offsets
-            let eval_data = if is_fat { &data[..] } else { arch_data };
-            capability_mapper.evaluate_and_merge_findings(
-                &mut report,
-                eval_data,
-                None,
-                Some(&inline_yara),
-            );
-            report
-        }
-        FileType::Elf => {
-            let data = fs::read(path).context("Failed to read file")?;
-            let analyzer = ElfAnalyzer::new().with_capability_mapper_arc(capability_mapper.clone());
-            let file_types: &[&str] = &["elf", "so", "ko"];
-            let (struct_result, yara_result) = rayon::join(
-                || analyzer.analyze_structural(path, &data, None),
-                || {
-                    yara_engine
-                        .as_ref()
-                        .filter(|e| e.is_loaded())
-                        .map(|e| e.scan_bytes_with_inline(&data, Some(file_types)))
-                },
-            );
-            let mut report = struct_result?;
-            let inline_yara = process_yara_result(&mut report, yara_result, yara_engine.as_deref());
-            capability_mapper.evaluate_and_merge_findings(
-                &mut report,
-                &data,
-                None,
-                Some(&inline_yara),
-            );
-            crate::path_mapper::analyze_and_link_paths(&mut report);
-            crate::env_mapper::analyze_and_link_env_vars(&mut report);
-            report
-        }
-        FileType::Pe => {
-            let data = fs::read(path).context("Failed to read file")?;
-            let mut analyzer =
-                PEAnalyzer::new().with_capability_mapper_arc(capability_mapper.clone());
-            if let Some(arc) = yara_engine {
-                analyzer = analyzer.with_yara_arc(arc.clone());
-            }
-            let file_types: &[&str] = &["pe", "exe", "dll", "bat", "ps1"];
-            let (struct_result, yara_result) = rayon::join(
-                || analyzer.analyze_structural(path, &data, None),
-                || {
-                    yara_engine
-                        .as_ref()
-                        .filter(|e| e.is_loaded())
-                        .map(|e| e.scan_bytes_with_inline(&data, Some(file_types)))
-                },
-            );
-            let mut report = struct_result?;
-            let inline_yara = process_yara_result(&mut report, yara_result, yara_engine.as_deref());
-            capability_mapper.evaluate_and_merge_findings(
-                &mut report,
-                &data,
-                None,
-                Some(&inline_yara),
-            );
-            report
-        }
-        FileType::JavaClass => {
-            let data = fs::read(path).context("Failed to read file")?;
-            let analyzer = analyzers::java_class::JavaClassAnalyzer::new()
-                .with_capability_mapper_arc(capability_mapper.clone());
-            let file_types: &[&str] = &["java", "class"];
-            let (struct_result, yara_result) = rayon::join(
-                || analyzer.analyze_structural(path, &data, None),
-                || {
-                    yara_engine
-                        .as_ref()
-                        .filter(|e| e.is_loaded())
-                        .map(|e| e.scan_bytes_with_inline(&data, Some(file_types)))
-                },
-            );
-            let mut report = struct_result?;
-            let inline_yara = process_yara_result(&mut report, yara_result, yara_engine.as_deref());
-            capability_mapper.evaluate_and_merge_findings(
-                &mut report,
-                &data,
-                None,
-                Some(&inline_yara),
-            );
-            report
-        }
-        FileType::Jar => {
-            // JAR files are analyzed like archives but with Java-specific handling
-            let mut analyzer = ArchiveAnalyzer::new()
-                .with_capability_mapper_arc(capability_mapper.clone())
-                .with_zip_passwords(zip_passwords.to_vec())
-                .with_max_memory_file_size(max_memory_file_size);
-            if let Some(engine) = yara_engine {
-                analyzer = analyzer.with_yara_arc(engine.clone());
-            }
-            if let Some(config) = sample_extraction {
-                analyzer = analyzer.with_sample_extraction(config.clone());
-            }
-            analyzer.analyze(path)?
-        }
-        FileType::PackageJson => {
-            let analyzer = analyzers::package_json::PackageJsonAnalyzer::new()
-                .with_capability_mapper_arc(capability_mapper.clone());
-            analyzer.analyze(path)?
-        }
-        FileType::VsixManifest => {
-            let analyzer = analyzers::vsix_manifest::VsixManifestAnalyzer::new()
-                .with_capability_mapper_arc(capability_mapper.clone());
-            analyzer.analyze(path)?
-        }
-        FileType::Archive => {
-            let mut analyzer = ArchiveAnalyzer::new()
-                .with_capability_mapper_arc(capability_mapper.clone())
-                .with_zip_passwords(zip_passwords.to_vec())
-                .with_max_memory_file_size(max_memory_file_size);
-            if let Some(engine) = yara_engine {
-                analyzer = analyzer.with_yara_arc(engine.clone());
-            }
-            if let Some(config) = sample_extraction {
-                analyzer = analyzer.with_sample_extraction(config.clone());
-            }
-            // Use streaming for JSONL format to emit files as they're analyzed
-            if matches!(format, cli::OutputFormat::Jsonl) {
-                let archive_path = path.display().to_string();
-                let report = analyzer.analyze_streaming(path, |file_analysis| {
-                    let mut fa = file_analysis.clone();
-                    fa.path = types::file_analysis::encode_archive_path(&archive_path, &fa.path);
-                    if let Ok(line) = output::format_jsonl_line(&fa) {
-                        println!("{}", line);
-                    }
-                })?;
-
-                // Emit archive-level entry with container findings and formula
-                let mut max_risk = report
-                    .summary
-                    .as_ref()
-                    .and_then(|s| s.max_risk)
-                    .unwrap_or(types::Criticality::Baseline);
-                let mut counts = report
-                    .summary
-                    .as_ref()
-                    .map(|s| s.counts.clone())
-                    .unwrap_or_default();
-
-                // Include archive-level findings in risk calculation
-                for finding in &report.findings {
-                    if finding.crit > max_risk {
-                        max_risk = finding.crit;
-                    }
-                    match finding.crit {
-                        types::Criticality::Hostile => counts.hostile += 1,
-                        types::Criticality::Suspicious => counts.suspicious += 1,
-                        types::Criticality::Notable => counts.notable += 1,
-                        _ => {}
-                    }
-                }
-
-                // Create archive-level FileAnalysis with findings and formula
-                let mut archive_entry = types::FileAnalysis {
-                    id: 0,
-                    path: archive_path,
-                    parent_id: None,
-                    depth: 0,
-                    file_type: report.target.file_type.clone(),
-                    sha256: report.target.sha256.clone(),
-                    size: report.target.size_bytes,
-                    risk: if max_risk > types::Criticality::Baseline {
-                        Some(max_risk)
-                    } else {
-                        None
-                    },
-                    counts: if counts.hostile > 0 || counts.suspicious > 0 || counts.notable > 0 {
-                        Some(counts)
-                    } else {
-                        None
-                    },
-                    encoding: None,
-                    findings: report.findings.clone(),
-                    traits: report.traits.clone(),
-                    structure: report.structure.clone(),
-                    functions: Vec::new(),
-                    strings: Vec::new(),
-                    sections: Vec::new(),
-                    imports: Vec::new(),
-                    exports: Vec::new(),
-                    yara_matches: report.yara_matches.clone(),
-                    syscalls: Vec::new(),
-                    binary_properties: None,
-                    source_code_metrics: None,
-                    metrics: None,
-                    paths: Vec::new(),
-                    directories: Vec::new(),
-                    env_vars: Vec::new(),
-                    extracted_path: None,
-                    formula: None,
-                };
-                archive_entry.compute_summary();
-
-                if let Ok(line) = output::format_jsonl_line(&archive_entry) {
-                    println!("{}", line);
-                }
-
-                // Emit summary line for streaming output
-                if let Ok(line) = output::format_jsonl_summary(&report) {
-                    println!("{}", line);
-                }
-
-                // Check criticality error before returning
-                check_criticality_error(&report, error_if_levels)?;
-
-                // For streaming JSONL, we've already printed all output via callbacks,
-                // the archive entry, and summary above. Return empty string to avoid
-                // duplicate output from format_jsonl which would create another root file.
-                return Ok(String::new());
-            } else {
-                analyzer.analyze(path)?
-            }
-        }
-        // All source code languages use the unified analyzer (or generic fallback)
-        _ => {
-            if let Some(analyzer) =
-                analyzers::analyzer_for_file_type_arc(&file_type, Some(capability_mapper.clone()))
-            {
-                analyzer.analyze(path)?
-            } else {
-                anyhow::bail!("Unsupported file type: {:?}", file_type);
-            }
-        }
-    };
-
-    // Run YARA universally for file types that didn't handle it internally
-    // This ensures all program files get scanned with YARA rules
-    // Skip for types that already run YARA in parallel with structural analysis
-    let yara_handled_internally = matches!(
-        file_type,
-        FileType::Elf
-            | FileType::Pe
-            | FileType::MachO
-            | FileType::Archive
-            | FileType::Jar
-            | FileType::JavaClass
-    );
-    if let Some(engine) = yara_engine {
-        if file_type.is_program() && engine.is_loaded() && !yara_handled_internally {
-            let file_types = file_type.yara_filetypes();
-            let filter = if file_types.is_empty() {
-                None
-            } else {
-                Some(file_types.as_slice())
-            };
-
-            match engine.scan_file_to_findings(path, filter) {
-                Ok((matches, findings)) => {
-                    // Add YARA matches to report
-                    report.yara_matches = matches;
-
-                    // Add findings that don't already exist
-                    let existing: std::collections::HashSet<String> =
-                        report.findings.iter().map(|f| f.id.clone()).collect();
-                    for finding in findings {
-                        if !existing.contains(finding.id.as_str()) {
-                            report.findings.push(finding);
-                        }
-                    }
-
-                    // Mark that we used YARA
-                    if !report.metadata.tools_used.contains(&"yara-x".to_string()) {
-                        report.metadata.tools_used.push("yara-x".to_string());
-                    }
-                }
-                Err(e) => {
-                    eprintln!("⚠️  YARA scan failed: {}", e);
-                }
-            }
-        }
-    }
-
-    // Check if report's criticality matches --error-if criteria
+    // CLI-specific post-processing
     check_criticality_error(&report, error_if_levels)?;
-
-    // Free excess capacity in all Vec fields to reduce memory footprint
     report.shrink_to_fit();
-
-    // Convert to v2 schema (flat files array) and filter based on verbosity
     report.convert_to_v2(verbose);
 
-    // Merge encoding layers (##xor, ##base64, etc.) into their parent files
-    // and recalculate composites with the full merged trait set
+    // Merge encoding layers and recalculate composites.
+    // The mapper is only needed when encoding layers are actually merged (rare for single files),
+    // so we defer its expensive initialization to avoid ~800ms overhead on the common path.
     let merged_indices = report.merge_encoding_layers();
-    for &idx in &merged_indices {
-        let file = &report.files[idx];
-        // Build a minimal report so evaluate_container_composites can see all findings
-        let mut temp_report = types::AnalysisReport::new(types::TargetInfo {
-            path: file.path.clone(),
-            file_type: file.file_type.clone(),
-            sha256: file.sha256.clone(),
-            size_bytes: file.size,
-            architectures: None,
-        });
-        temp_report.findings = file.findings.clone();
-
-        let new_composites = capability_mapper.evaluate_container_composites(
-            &temp_report,
-            &file.findings,
-            &file.file_type,
-        );
-        if !new_composites.is_empty() {
-            let file = &mut report.files[idx];
-            for finding in new_composites {
-                if !file.findings.iter().any(|f| f.id == finding.id) {
-                    file.findings.push(finding);
-                }
-            }
-            file.compute_summary();
-        }
-    }
     if !merged_indices.is_empty() {
+        let capability_mapper =
+            crate::capabilities::CapabilityMapper::new_with_precision_thresholds(
+                options.min_hostile_precision,
+                options.min_suspicious_precision,
+                options.enable_full_validation,
+            );
+        for &idx in &merged_indices {
+            let file = &report.files[idx];
+            let mut temp_report = types::AnalysisReport::new(types::TargetInfo {
+                path: file.path.clone(),
+                file_type: file.file_type.clone(),
+                sha256: file.sha256.clone(),
+                size_bytes: file.size,
+                architectures: None,
+            });
+            temp_report.findings = file.findings.clone();
+
+            let new_composites = capability_mapper.evaluate_container_composites(
+                &temp_report,
+                &file.findings,
+                &file.file_type,
+            );
+            if !new_composites.is_empty() {
+                let file = &mut report.files[idx];
+                for finding in new_composites {
+                    if !file.findings.iter().any(|f| f.id == finding.id) {
+                        file.findings.push(finding);
+                    }
+                }
+                file.compute_summary();
+            }
+        }
         tracing::debug!(
             "Merged encoding layers into {} parent file(s)",
             merged_indices.len()
         );
     }
 
-    // Filter out low-value composite "any" rules before output
-    // These are rules with needs=1 that add no value over the underlying trait
-    let removed = report.filter_findings(|f| !capability_mapper.is_low_value_any_rule(&f.id));
-    if removed > 0 {
-        tracing::debug!(
-            "Filtered {} low-value composite 'any' rules from output",
-            removed
-        );
-    }
-
-    // Filter out component-criticality traits that aren't referenced by any composite
-    // Component traits are building blocks that should only appear when their composite fires
-    // Only filter for terminal output - keep all components in JSON for ML signal
+    // Filter unmatched component traits for terminal output
     if *format == cli::OutputFormat::Terminal {
         let removed = report.filter_unmatched_components();
         if removed > 0 {
@@ -807,18 +334,15 @@ fn analyze_file_with_context(
         }
     }
 
-    // Collect files for galaxy view if collector is provided
+    // Collect files for galaxy view
     if let Some(collector) = file_collector {
         collector.extend(report.files.iter().cloned());
     }
 
-    // Generate MOL file if requested (only for single-file analysis, not directory)
+    // Generate MOL file if requested
     if let Some(base_path) = mol_path {
         write_malecule_files(&report, base_path, mol_layout)?;
     }
-
-    // Format output based on requested format
-    let _t4 = std::time::Instant::now();
 
     match format {
         cli::OutputFormat::Json => Ok(serde_json::to_string(&report)?),

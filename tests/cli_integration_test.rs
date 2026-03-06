@@ -70,11 +70,7 @@ fn test_analyze_json_output() {
     // JSON Lines format outputs: {"type":"file",...} followed by {"type":"summary",...}
     assert_cmd::cargo_bin_cmd!("cleave")
         .env("cleave_SKIP_YARA", "1") // Skip YARA - testing CLI functionality
-        .args([
-            "--json",
-            "analyze",
-            script_path.to_str().unwrap(),
-        ])
+        .args(["--json", "analyze", script_path.to_str().unwrap()])
         .assert()
         .success()
         .stdout(predicate::str::contains(r#""type":"file""#))
@@ -91,12 +87,7 @@ fn test_analyze_format_json_output() {
 
     let output = assert_cmd::cargo_bin_cmd!("cleave")
         .env("cleave_SKIP_YARA", "1")
-        .args([
-            "--format",
-            "json",
-            "analyze",
-            script_path.to_str().unwrap(),
-        ])
+        .args(["--format", "json", "analyze", script_path.to_str().unwrap()])
         .output()
         .unwrap();
 
@@ -148,10 +139,7 @@ fn test_analyze_empty_directory() {
 
     assert_cmd::cargo_bin_cmd!("cleave")
         .env("cleave_SKIP_YARA", "1") // Skip YARA - testing CLI functionality
-        .args([
-            "analyze",
-            temp_dir.path().to_str().unwrap(),
-        ])
+        .args(["analyze", temp_dir.path().to_str().unwrap()])
         .assert()
         .success();
 }
@@ -169,10 +157,7 @@ fn test_analyze_multiple_files() {
 
     assert_cmd::cargo_bin_cmd!("cleave")
         .env("cleave_SKIP_YARA", "1") // Skip YARA - testing CLI functionality
-        .args([
-            "analyze",
-            temp_dir.path().to_str().unwrap(),
-        ])
+        .args(["analyze", temp_dir.path().to_str().unwrap()])
         .assert()
         .success()
         .stdout(predicate::str::contains("test1.sh"))
@@ -263,11 +248,7 @@ fn test_verbose_flag() {
 
     assert_cmd::cargo_bin_cmd!("cleave")
         .env("cleave_SKIP_YARA", "1") // Skip YARA - testing CLI functionality
-        .args([
-            "-v",
-            "analyze",
-            script.to_str().unwrap(),
-        ])
+        .args(["-v", "analyze", script.to_str().unwrap()])
         .assert()
         .success();
 }
@@ -316,11 +297,7 @@ fn test_analyze_directory_json_output() {
 
     assert_cmd::cargo_bin_cmd!("cleave")
         .env("cleave_SKIP_YARA", "1") // Skip YARA - testing CLI functionality
-        .args([
-            "--json",
-            "analyze",
-            temp_dir.path().to_str().unwrap(),
-        ])
+        .args(["--json", "analyze", temp_dir.path().to_str().unwrap()])
         .assert()
         .success()
         .stdout(predicate::str::contains(r#""type":"file""#));
@@ -564,12 +541,7 @@ fn test_error_if_single_file_match() {
     // --error-if=notable should fail because this file has Notable+ criticality
     let output = assert_cmd::cargo_bin_cmd!("cleave")
         .env("cleave_SKIP_YARA", "1") // Skip YARA - testing CLI functionality
-        .args([
-            "--error-if",
-            "notable",
-            "analyze",
-            script.to_str().unwrap(),
-        ])
+        .args(["--error-if", "notable", "analyze", script.to_str().unwrap()])
         .assert()
         .failure();
 
@@ -597,12 +569,7 @@ fn test_error_if_single_file_no_match() {
     // --error-if=hostile should succeed because this file is Notable/Suspicious (not Hostile)
     assert_cmd::cargo_bin_cmd!("cleave")
         .env("cleave_SKIP_YARA", "1") // Skip YARA - testing CLI functionality
-        .args([
-            "--error-if",
-            "hostile",
-            "analyze",
-            script.to_str().unwrap(),
-        ])
+        .args(["--error-if", "hostile", "analyze", script.to_str().unwrap()])
         .assert()
         .success();
 }

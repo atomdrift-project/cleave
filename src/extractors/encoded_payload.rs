@@ -11,7 +11,6 @@ use crate::analyzers::FileType;
 use crate::types::{Criticality, ExtractedPayload};
 use std::io::Write;
 
-
 /// Maximum recursion depth for nested encoding
 const MAX_RECURSION_DEPTH: usize = 3;
 /// Minimum decoded payload length to consider (24 bytes)

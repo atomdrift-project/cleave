@@ -669,7 +669,8 @@ pub(crate) fn eval_raw<'a>(
                 let mut first_offset = None;
                 for (idx, mat) in bytes_re.find_iter(search_data).enumerate() {
                     if idx >= MAX_MATCHES_TO_PROCESS {
-                        let trait_info = trait_id.map(|id| format!(" [{}]", id)).unwrap_or_default();
+                        let trait_info =
+                            trait_id.map(|id| format!(" [{}]", id)).unwrap_or_default();
                         eprintln!(
                             "WARNING: Hit match limit of {} matches for regex pattern '{}'{}, stopping early",
                             MAX_MATCHES_TO_PROCESS,

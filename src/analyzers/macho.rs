@@ -69,7 +69,7 @@ impl MachOAnalyzer {
         file_path: &Path,
         data: &[u8],
         precomputed_sha256: Option<String>,
-    ) -> Result<AnalysisReport> {
+    ) -> AnalysisReport {
         self.analyze_structural_with_strings(file_path, data, None, precomputed_sha256)
     }
 
@@ -80,12 +80,24 @@ impl MachOAnalyzer {
         data: &[u8],
         stng_strings: Option<&[stng::ExtractedString]>,
         precomputed_sha256: Option<String>,
-    ) -> Result<AnalysisReport> {
+    ) -> AnalysisReport {
         let start = std::time::Instant::now(); // Parse with goblin
-        let macho = match goblin::mach::Mach::parse(data)? {
-            Mach::Binary(m) => m,
-            Mach::Fat(_) => {
-                anyhow::bail!("Fat binaries should be handled separately");
+        let sha256 = precomputed_sha256
+            .clone()
+            .unwrap_or_else(|| crate::analyzers::utils::calculate_sha256(data));
+
+        let macho = match goblin::mach::Mach::parse(data) {
+            Ok(Mach::Binary(m)) => m,
+            _ => {
+                // Return a minimal report if parsing fails
+                let target = TargetInfo {
+                    path: file_path.display().to_string(),
+                    file_type: "macho".to_string(),
+                    size_bytes: data.len() as u64,
+                    sha256,
+                    architectures: None,
+                };
+                return AnalysisReport::new(target);
             }
         };
 
@@ -94,7 +106,7 @@ impl MachOAnalyzer {
             path: file_path.display().to_string(),
             file_type: "macho".to_string(),
             size_bytes: data.len() as u64,
-            sha256: precomputed_sha256.clone().unwrap_or_else(|| crate::analyzers::utils::calculate_sha256(data)),
+            sha256: sha256.clone(),
             architectures: Some(vec![self.arch_name(&macho)]),
         };
 
@@ -120,13 +132,13 @@ impl MachOAnalyzer {
         }
 
         // Extract imports and map to capabilities
-        self.analyze_imports(file_path, &macho, &mut report)?;
+        let _ = self.analyze_imports(file_path, &macho, &mut report);
 
         // Extract exports
-        self.analyze_exports(&macho, &mut report)?;
+        let _ = self.analyze_exports(&macho, &mut report);
 
         // Analyze sections and entropy
-        self.analyze_sections(&macho, data, &mut report)?;
+        let _ = self.analyze_sections(&macho, data, &mut report);
 
         // Initialize metrics with Mach-O header info
         let rpath_count = macho
@@ -198,7 +210,10 @@ impl MachOAnalyzer {
 
             // Use batched extraction - single r2 session for functions, sections, strings, imports
             let has_symbols = macho.symbols().count() > 0;
-            if let Ok(batched) = self.radare2.extract_batched(file_path, has_symbols, precomputed_sha256) {
+            if let Ok(batched) =
+                self.radare2
+                    .extract_batched(file_path, has_symbols, precomputed_sha256)
+            {
                 // Compute metrics from batched data (radare2-specific metrics)
                 let r2_binary_metrics = self
                     .radare2
@@ -328,7 +343,7 @@ impl MachOAnalyzer {
         report.metadata.analysis_duration_ms = start.elapsed().as_millis() as u64;
         report.metadata.tools_used = tools_used;
 
-        Ok(report)
+        report
     }
 
     fn analyze_structure_with_signature<'a>(
@@ -897,8 +912,12 @@ impl Analyzer for MachOAnalyzer {
         // Use preferred arch for structural analysis (imports, exports, strings, etc.)
         let preferred_range = self.preferred_arch_range(input.data);
         let preferred_data = &input.data[preferred_range];
-        let mut report =
-            self.analyze_structural_with_strings(input.path, preferred_data, Some(input.strings), input.sha256.clone())?;
+        let mut report = self.analyze_structural_with_strings(
+            input.path,
+            preferred_data,
+            Some(input.strings),
+            input.sha256.clone(),
+        );
         self.apply_fat_metadata(&mut report, input.data);
 
         // For FAT binaries, strings should already be file-relative from input.strings
@@ -934,7 +953,7 @@ impl Analyzer for MachOAnalyzer {
         // Use preferred arch for structural analysis (imports, exports, strings, etc.)
         let preferred_range = self.preferred_arch_range(&data);
         let preferred_data = &data[preferred_range];
-        let mut report = self.analyze_structural(file_path, preferred_data, None)?;
+        let mut report = self.analyze_structural(file_path, preferred_data, None);
         self.apply_fat_metadata(&mut report, &data);
 
         // For FAT binaries, re-extract strings from the entire file so offsets are file-relative.

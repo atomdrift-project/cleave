@@ -113,12 +113,15 @@ impl GenericAnalyzer {
         let (size_bytes, sha256) = if let Some(bytes) = original_bytes {
             (
                 bytes.len() as u64,
-                precomputed_sha256.unwrap_or_else(|| crate::analyzers::utils::calculate_sha256(bytes)),
+                precomputed_sha256
+                    .unwrap_or_else(|| crate::analyzers::utils::calculate_sha256(bytes)),
             )
         } else {
             (
                 content.len() as u64,
-                precomputed_sha256.unwrap_or_else(|| crate::analyzers::utils::calculate_sha256(content.as_bytes())),
+                precomputed_sha256.unwrap_or_else(|| {
+                    crate::analyzers::utils::calculate_sha256(content.as_bytes())
+                }),
             )
         };
 

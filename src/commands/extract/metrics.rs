@@ -51,9 +51,9 @@ fn run_with_layer(target: &str, layer: &str, format: &cli::OutputFormat) -> Resu
             .analyze_structural(path, &data, None),
         FileType::MachO => MachOAnalyzer::new()
             .with_capability_mapper(capability_mapper)
-            .analyze(path),
+            .analyze_structural(path, &data, None),
         _ => anyhow::bail!("Layer filtering only supported for binary files (ELF, PE, Mach-O)"),
-    }?;
+    };
 
     // Convert to v2 format to populate files array
     report.convert_to_v2(true);
@@ -148,7 +148,7 @@ fn run_direct(target: &str, format: &cli::OutputFormat) -> Result<String> {
     let data = std::fs::read(path)?;
     let mut full_report = report.clone();
     crate::analyzers::metrics_utils::populate_binary_metrics(&mut full_report, &data);
-    
+
     // Update our metrics object with the refined one
     if let Some(refined_metrics) = full_report.metrics {
         metrics = refined_metrics;

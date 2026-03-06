@@ -144,7 +144,7 @@ echo "This script is safe"
         .args([
             "--format",
             "jsonl",
-                        "--traits-dir",
+            "--traits-dir",
             traits_dir.to_str().unwrap(),
             "analyze",
             script_path.to_str().unwrap(),

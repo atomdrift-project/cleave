@@ -67,7 +67,9 @@ pub(super) fn get_relative_source_file(path: &std::path::Path) -> Option<String>
 
 /// Build the combined string vector from report strings, imports, and exports.
 /// Used by both `evaluate_and_merge_findings` (cached path) and `evaluate_traits_filtered` (standalone).
-pub(super) fn build_all_strings(report: &crate::types::AnalysisReport) -> Vec<crate::types::StringInfo> {
+pub(super) fn build_all_strings(
+    report: &crate::types::AnalysisReport,
+) -> Vec<crate::types::StringInfo> {
     let total_capacity = report.strings.len() + report.imports.len() + report.exports.len();
     let mut all_strings = Vec::with_capacity(total_capacity);
     all_strings.extend_from_slice(&report.strings);

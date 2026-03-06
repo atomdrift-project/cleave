@@ -43,8 +43,6 @@
 //! - File type detection: `cli_file_type_to_internal` - Converts CLI file type to internal type
 //!
 //! ### Analysis Functions
-//! - `analyze_file_with_shared_mapper` - Analyzes a single file with capability mapping
-//! - `analyze_archive_streaming_jsonl` - Streams analysis of archive contents as JSONL
 //! - `process_yara_result` - Processes YARA match results for reporting
 //!
 //! ### Reporting Functions

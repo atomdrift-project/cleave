@@ -178,13 +178,21 @@ impl ArchiveAnalyzer {
                         // PRE-EXTRACT STRINGS: To get full speedup, extract strings once and share.
                         let opts = stng::ExtractOptions::new(4).with_garbage_filter(true);
                         let stng_strings = stng::extract_strings_with_options(data, &opts);
-                        let payloads = crate::extractors::encoded_payload::extract_encoded_payloads(&stng_strings);
+                        let payloads = crate::extractors::encoded_payload::extract_encoded_payloads(
+                            &stng_strings,
+                        );
                         let sha256 = crate::analyzers::utils::calculate_sha256(data);
-                        
-                        let input = AnalysisInput::with_payloads(Path::new(relative_path), data, &stng_strings, &payloads, file_type.clone())
-                            .with_sha256(sha256)
-                            .at_depth((self.current_depth + 1) as u32);
-                        
+
+                        let input = AnalysisInput::with_payloads(
+                            Path::new(relative_path),
+                            data,
+                            &stng_strings,
+                            &payloads,
+                            file_type.clone(),
+                        )
+                        .with_sha256(sha256)
+                        .at_depth((self.current_depth + 1) as u32);
+
                         if let Ok(report) = analyzer.analyze_input(&input) {
                             file_analysis.findings = report.findings;
                             file_analysis.strings = report.strings;

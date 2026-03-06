@@ -187,8 +187,13 @@ impl super::CapabilityMapper {
         }
 
         // Step 4: Evaluate composite rules (which can now access atomic traits AND metadata/import findings)
-        let composite_findings =
-            self.evaluate_composite_rules(report, binary_data, cached_ast, inline_yara, &section_map);
+        let composite_findings = self.evaluate_composite_rules(
+            report,
+            binary_data,
+            cached_ast,
+            inline_yara,
+            &section_map,
+        );
 
         // Step 5: Merge composite findings into report.
         for finding in composite_findings {

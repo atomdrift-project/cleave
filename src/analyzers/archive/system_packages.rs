@@ -103,11 +103,9 @@ pub(crate) fn extract_7z_safe(
         let mut sz = SevenZReader::new(file, file_len, Password::empty())
             .context("Failed to create 7z reader (unencrypted/empty password)")?;
 
-        sz.for_each_entries(|entry, reader| {
-            extract_7z_entry_safe(entry, reader, dest_dir, guard)
-        })
-        .map_err(|e| anyhow::anyhow!(e))
-        .context("Failed to extract 7z archive (unencrypted/empty password)")
+        sz.for_each_entries(|entry, reader| extract_7z_entry_safe(entry, reader, dest_dir, guard))
+            .map_err(|e| anyhow::anyhow!(e))
+            .context("Failed to extract 7z archive (unencrypted/empty password)")
     })();
 
     if result.is_ok() {
@@ -226,7 +224,6 @@ fn extract_7z_entry_safe<R: Read + ?Sized>(
 
     Ok(true) // Continue
 }
-
 
 /// Extract macOS PKG files (XAR archives)
 pub(crate) fn extract_pkg_safe(

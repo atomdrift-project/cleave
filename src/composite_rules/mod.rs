@@ -19,7 +19,7 @@ pub(crate) mod debug;
 pub(crate) mod evaluators;
 pub(crate) mod section_map;
 pub(crate) mod traits;
-pub(crate) mod types;
+pub mod types;
 
 // Re-export public API
 pub(crate) use condition::Condition;
@@ -33,7 +33,8 @@ pub(crate) use traits::{CompositeTrait, DowngradeConditions, TraitDefinition};
 pub fn clear_condition_stats() {
     traits::clear_condition_stats();
 }
-pub(crate) use types::{FileType, Platform};
+pub(crate) use types::FileType;
+pub use types::Platform;
 
 #[cfg(test)]
 mod tests;

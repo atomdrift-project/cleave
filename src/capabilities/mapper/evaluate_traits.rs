@@ -379,9 +379,8 @@ impl super::CapabilityMapper {
 
         // For dependent traits, we can't skip based on string matches alone
         // because the trait: condition might match even if strings don't
-        let has_strings = !report.strings.is_empty()
-            || !report.imports.is_empty()
-            || !report.exports.is_empty();
+        let has_strings =
+            !report.strings.is_empty() || !report.imports.is_empty() || !report.exports.is_empty();
         if !dependent_only && !has_any_matches && !has_strings && binary_data.len() < 100 {
             return vec![];
         }

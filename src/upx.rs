@@ -122,7 +122,9 @@ impl UPXDecompressor {
             if start.elapsed() > timeout {
                 let _ = child.kill();
                 let _ = child.wait();
-                return Err(UPXError::DecompressionFailed("UPX decompression timed out".to_string()));
+                return Err(UPXError::DecompressionFailed(
+                    "UPX decompression timed out".to_string(),
+                ));
             }
             std::thread::sleep(std::time::Duration::from_millis(50));
         };

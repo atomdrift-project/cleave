@@ -119,9 +119,8 @@ use std::path::PathBuf;
 ///
 /// For archives, the archive's SHA256 is used (via `archive_sha256`) so all
 /// files from the same archive are grouped together in one directory.
-#[allow(dead_code)] // Used by binary target
 #[derive(Debug, Clone)]
-pub(crate) struct SampleExtractionConfig {
+pub struct SampleExtractionConfig {
     /// Base directory for extracted files
     #[allow(dead_code)] // Used by binary target
     pub extract_dir: PathBuf,

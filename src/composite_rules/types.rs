@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 /// Platform specifier for trait targeting
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, Hash)]
 #[serde(rename_all = "lowercase")]
-pub(crate) enum Platform {
+pub enum Platform {
     /// Applies to all platforms
     All,
     /// Linux operating system

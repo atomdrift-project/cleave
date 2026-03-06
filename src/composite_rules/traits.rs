@@ -791,15 +791,15 @@ impl TraitDefinition {
         // Actually, in the parallel iterator in evaluate_traits_with_ast, `ctx` is shared by reference.
         // This is a problem for parallel evaluation if we use a &mut.
         // But the current_trait is only used for transient warnings during this call.
-        
+
         // Let's check how ctx is passed to evaluate.
         // It's `&ctx`. If multiple threads call .evaluate(&ctx), we can't have &mut ctx.
-        
+
         // If I want to support this in parallel, I might need to pass the ID into eval_raw/eval_hex directly
         // OR make current_trait an Atomic or similar, but it's a &str.
-        
+
         // Actually, the easiest is to just pass the trait ID into the evaluators.
-        
+
         // Check platform match
         let platform_match = self.platforms.contains(&Platform::All)
             || ctx.platforms.contains(&Platform::All)

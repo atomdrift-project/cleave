@@ -75,7 +75,9 @@ impl ElfAnalyzer {
         precomputed_sha256: Option<String>,
     ) -> AnalysisReport {
         let start = std::time::Instant::now();
-        let sha256 = precomputed_sha256.clone().unwrap_or_else(|| crate::analyzers::utils::calculate_sha256(data));
+        let sha256 = precomputed_sha256
+            .clone()
+            .unwrap_or_else(|| crate::analyzers::utils::calculate_sha256(data));
 
         // Create target info with default/empty values for fields that require parsing
         let target = TargetInfo {
@@ -90,7 +92,8 @@ impl ElfAnalyzer {
         let mut tools_used = vec![];
 
         // Attempt to parse with goblin
-        let (_elf_metrics_opt, _goblin_code_size, _has_symbols, r2_strings) = match Elf::parse(data) {
+        let (_elf_metrics_opt, _goblin_code_size, _has_symbols, r2_strings) = match Elf::parse(data)
+        {
             Ok(elf) => {
                 tools_used.push("goblin".to_string());
 
@@ -106,10 +109,16 @@ impl ElfAnalyzer {
 
                 // Parallelize Radare2 deep analysis with the rest of Goblin structural analysis
                 let (r2_inner, _) = rayon::join(
-                    || if Radare2Analyzer::is_available() {
-                        Some(self.radare2.extract_batched(file_path, symbols_found, precomputed_sha256))
-                    } else {
-                        None
+                    || {
+                        if Radare2Analyzer::is_available() {
+                            Some(self.radare2.extract_batched(
+                                file_path,
+                                symbols_found,
+                                precomputed_sha256,
+                            ))
+                        } else {
+                            None
+                        }
                     },
                     || {
                         // Analyze header and structure
@@ -120,7 +129,7 @@ impl ElfAnalyzer {
 
                         // Analyze sections and entropy
                         self.analyze_sections(&elf, data, &mut report);
-                    }
+                    },
                 );
 
                 // Process Radare2 results if available
@@ -132,7 +141,8 @@ impl ElfAnalyzer {
                         report.findings.push(Finding {
                             kind: FindingKind::Capability,
                             id: "anti-analysis/evasion/analysis-resistant".to_string(),
-                            desc: "Binary resistant to automated analysis (rizin timeout)".to_string(),
+                            desc: "Binary resistant to automated analysis (rizin timeout)"
+                                .to_string(),
                             conf: 0.8,
                             crit: Criticality::Suspicious,
                             mbc: Some("B0003".to_string()), // Defense Evasion: Anti-Analysis
@@ -218,8 +228,13 @@ impl ElfAnalyzer {
                     });
                     None
                 };
-                
-                (Some(elf_metrics), code_size, symbols_found, r2_strings_extracted)
+
+                (
+                    Some(elf_metrics),
+                    code_size,
+                    symbols_found,
+                    r2_strings_extracted,
+                )
             }
             Err(e) => {
                 // Parsing failed - this is a strong indicator of malformed/hostile binary
@@ -237,7 +252,10 @@ impl ElfAnalyzer {
                     source_file: None,
                 });
 
-                report.metadata.errors.push(format!("ELF parse error: {}", e));
+                report
+                    .metadata
+                    .errors
+                    .push(format!("ELF parse error: {}", e));
                 (None, None, false, None)
             }
         };
@@ -743,7 +761,12 @@ impl ElfAnalyzer {
 impl Analyzer for ElfAnalyzer {
     fn analyze_input(&self, input: &AnalysisInput<'_>) -> Result<AnalysisReport> {
         // Use data and strings from input (no file read, no string extraction)
-        let mut report = self.analyze_elf_core(input.path, input.data, Some(input.strings), input.sha256.clone());
+        let mut report = self.analyze_elf_core(
+            input.path,
+            input.data,
+            Some(input.strings),
+            input.sha256.clone(),
+        );
 
         // Post-processing
         self.capability_mapper
@@ -963,7 +986,7 @@ mod tests {
         let temp_file = tempfile::NamedTempFile::new().unwrap();
         std::fs::write(temp_file.path(), &upx_data).unwrap();
 
-        let report = analyzer.analyze_structural(temp_file.path(), &upx_data);
+        let report = analyzer.analyze_structural(temp_file.path(), &upx_data, None);
 
         // Should have UPX packer finding
         assert!(
@@ -994,7 +1017,7 @@ mod tests {
         let temp_file = tempfile::NamedTempFile::new().unwrap();
         std::fs::write(temp_file.path(), &upx_data).unwrap();
 
-        let report = analyzer.analyze_structural(temp_file.path(), &upx_data);
+        let report = analyzer.analyze_structural(temp_file.path(), &upx_data, None);
 
         // Should have both UPX finding and tool-missing finding
         assert!(
@@ -1032,7 +1055,7 @@ mod tests {
         let temp_file = tempfile::NamedTempFile::new().unwrap();
         std::fs::write(temp_file.path(), &elf_data).unwrap();
 
-        let report = analyzer.analyze_structural(temp_file.path(), &elf_data);
+        let report = analyzer.analyze_structural(temp_file.path(), &elf_data, None);
 
         // Should NOT have UPX packer finding
         assert!(
@@ -1117,7 +1140,7 @@ mod tests {
         let temp_file = tempfile::NamedTempFile::new().unwrap();
         std::fs::write(temp_file.path(), &upx_data).unwrap();
 
-        let report = analyzer.analyze_structural(temp_file.path(), &upx_data);
+        let report = analyzer.analyze_structural(temp_file.path(), &upx_data, None);
 
         // Find the UPX finding
         let upx_finding = report

@@ -556,9 +556,7 @@ pub(crate) fn eval_hex<'a>(
         let trait_info = trait_id.map(|id| format!(" [{}]", id)).unwrap_or_default();
         eprintln!(
             "WARNING: Hit match limit of {} matches for hex pattern '{}'{}, stopping early",
-            MAX_COUNT_MATCHES,
-            pattern,
-            trait_info
+            MAX_COUNT_MATCHES, pattern, trait_info
         );
         if let Some(trait_id_val) = trait_id {
             tracing::debug!(

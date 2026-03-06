@@ -28,11 +28,10 @@ use crate::capabilities::validation::{
     find_overlapping_conditions, find_oversized_trait_directories, find_parent_duplicate_segments,
     find_platform_named_directories, find_pure_alias_traits, find_redundant_any_refs,
     find_redundant_needs_one, find_short_pattern_warnings, find_single_item_clauses,
-    find_too_short_patterns,
     find_slow_regex_patterns, find_string_content_collisions, find_string_pattern_duplicates,
-    find_unanchored_wellknown_composites, find_wellknown_category_violations,
-    precalculate_all_composite_precisions, simple_rule_to_composite_rule,
-    validate_composite_trait_only, validate_directory_structure,
+    find_too_short_patterns, find_unanchored_wellknown_composites,
+    find_wellknown_category_violations, precalculate_all_composite_precisions,
+    simple_rule_to_composite_rule, validate_composite_trait_only, validate_directory_structure,
     validate_hostile_composite_precision, MAX_TRAITS_PER_DIRECTORY,
 };
 use crate::composite_rules::{
@@ -2088,15 +2087,11 @@ impl super::CapabilityMapper {
                 eprintln!(
                     "   Short patterns must bound their search space (~8KB ideal). Add one of:"
                 );
-                eprintln!(
-                    "   - offset or offset_range (absolute file position)"
-                );
+                eprintln!("   - offset or offset_range (absolute file position)");
                 eprintln!(
                     "   - section + section_offset/section_offset_range (pinpoint within section)"
                 );
-                eprintln!(
-                    "   - section + size_max (bound total file size)\n"
-                );
+                eprintln!("   - section + size_max (bound total file size)\n");
                 for (id, pattern, kind) in &too_short {
                     let source = rule_source_files
                         .get(id)
@@ -2104,7 +2099,10 @@ impl super::CapabilityMapper {
                         .unwrap_or("unknown");
                     let line_hint = find_line_number(source, id);
                     if let Some(line) = line_hint {
-                        eprintln!("   {}:{}: '{}' ({}: \"{}\")", source, line, id, kind, pattern);
+                        eprintln!(
+                            "   {}:{}: '{}' ({}: \"{}\")",
+                            source, line, id, kind, pattern
+                        );
                     } else {
                         eprintln!("   {}: '{}' ({}: \"{}\")", source, id, kind, pattern);
                     }

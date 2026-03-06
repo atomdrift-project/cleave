@@ -56,7 +56,8 @@ impl JavaClassAnalyzer {
             path: file_path.display().to_string(),
             file_type: "java_class".to_string(),
             size_bytes: data.len() as u64,
-            sha256: precomputed_sha256.unwrap_or_else(|| crate::analyzers::utils::calculate_sha256(data)),
+            sha256: precomputed_sha256
+                .unwrap_or_else(|| crate::analyzers::utils::calculate_sha256(data)),
             architectures: None,
         };
 

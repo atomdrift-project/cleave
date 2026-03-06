@@ -505,10 +505,7 @@ fn count_concrete_hex_bytes(pattern: &str) -> usize {
             }
             // Accept nibble wildcards (4?, ?F) — they constrain one nibble
             // Accept full hex bytes (4D, 5A)
-            token.len() == 2
-                && token
-                    .chars()
-                    .all(|c| c.is_ascii_hexdigit() || c == '?')
+            token.len() == 2 && token.chars().all(|c| c.is_ascii_hexdigit() || c == '?')
         })
         .count()
 }

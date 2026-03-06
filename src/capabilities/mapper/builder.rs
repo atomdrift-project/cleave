@@ -9,8 +9,10 @@ use crate::composite_rules::Platform;
 use std::collections::HashMap;
 
 impl super::CapabilityMapper {
-    pub(super) const DEFAULT_MIN_HOSTILE_PRECISION: f32 = 3.5;
-    pub(super) const DEFAULT_MIN_SUSPICIOUS_PRECISION: f32 = 2.0;
+    /// Default minimum precision for hostile composite rules
+    pub const DEFAULT_MIN_HOSTILE_PRECISION: f32 = 3.5;
+    /// Default minimum precision for suspicious composite rules
+    pub const DEFAULT_MIN_SUSPICIOUS_PRECISION: f32 = 2.0;
 
     /// Create an empty capability mapper for testing
     #[must_use]
@@ -40,9 +42,8 @@ impl super::CapabilityMapper {
 
     /// Set the platform filter(s) for rule evaluation
     /// Pass vec![Platform::All] to match all platforms (default)
-    #[allow(dead_code)] // Used by binary target
     #[must_use]
-    pub(crate) fn with_platforms(mut self, platforms: Vec<Platform>) -> Self {
+    pub fn with_platforms(mut self, platforms: Vec<Platform>) -> Self {
         self.platforms = if platforms.is_empty() {
             vec![Platform::All]
         } else {
@@ -71,7 +72,7 @@ impl super::CapabilityMapper {
     /// * `min_hostile_precision` - Minimum precision for HOSTILE rules (recommended: 3.5)
     /// * `min_suspicious_precision` - Minimum precision for SUSPICIOUS rules (recommended: 2.0)
     /// * `enable_full_validation` - If true, run all validation checks and exit on errors
-    pub(crate) fn new_with_precision_thresholds(
+    pub fn new_with_precision_thresholds(
         min_hostile_precision: f32,
         min_suspicious_precision: f32,
         enable_full_validation: bool,

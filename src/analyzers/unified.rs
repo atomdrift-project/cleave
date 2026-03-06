@@ -395,7 +395,8 @@ impl UnifiedSourceAnalyzer {
             path: file_path.display().to_string(),
             file_type: self.config.file_type.to_string(),
             size_bytes: content.len() as u64,
-            sha256: precomputed_sha256.unwrap_or_else(|| crate::analyzers::utils::calculate_sha256(content.as_bytes())),
+            sha256: precomputed_sha256
+                .unwrap_or_else(|| crate::analyzers::utils::calculate_sha256(content.as_bytes())),
             architectures: None,
         };
 
@@ -412,7 +413,7 @@ impl UnifiedSourceAnalyzer {
 
         let has_preextracted = !preextracted_stng.is_empty();
         let mut owned_stng = Vec::new();
-        
+
         let timeout_limit = std::time::Duration::from_secs(4);
         let mut timed_out = false;
 
@@ -439,7 +440,7 @@ impl UnifiedSourceAnalyzer {
                 }
             };
             options.progress_callback = Some(&mut cb);
-            
+
             let tree_res = self.parser.borrow_mut().parse_with_options(
                 &mut |i, _| {
                     if i < content.len() {
@@ -472,11 +473,15 @@ impl UnifiedSourceAnalyzer {
         });
 
         if timed_out {
-            tracing::info!("AST parsing timed out for {}, skipping deep AST analysis.", file_path.display());
+            tracing::info!(
+                "AST parsing timed out for {}, skipping deep AST analysis.",
+                file_path.display()
+            );
             let mut finding = crate::types::Finding::new(
                 "anti-analysis/obfuscation/timeout".to_string(),
                 crate::types::FindingKind::Capability,
-                "AST parsing timed out, indicating severe obfuscation or extreme code complexity.".to_string(),
+                "AST parsing timed out, indicating severe obfuscation or extreme code complexity."
+                    .to_string(),
                 1.0,
             );
             finding.crit = crate::types::Criticality::Suspicious;
@@ -538,7 +543,9 @@ impl UnifiedSourceAnalyzer {
         // Use pre-extracted payloads if available to avoid redundant expensive I/O
         let owned_payload_stng;
         let owned_extracted_payloads;
-        let extracted_payloads: &[crate::types::ExtractedPayload] = if !preextracted_payloads.is_empty() {
+        let extracted_payloads: &[crate::types::ExtractedPayload] = if !preextracted_payloads
+            .is_empty()
+        {
             preextracted_payloads
         } else {
             let payload_stng: &[stng::ExtractedString] = if !preextracted_stng.is_empty() {
@@ -582,34 +589,26 @@ impl UnifiedSourceAnalyzer {
             // Pass capability_mapper to evaluate rules on extracted content
             let payload_report = match payload.detected_type {
                 FileType::Python => {
-                    if let Some(analyzer) = UnifiedSourceAnalyzer::for_file_type(&FileType::Python)
-                    {
-                        Some(analyzer
+                    UnifiedSourceAnalyzer::for_file_type(&FileType::Python).map(|analyzer| {
+                        analyzer
                             .with_capability_mapper_arc(self.capability_mapper.clone())
                             .analyze_source(
                                 Path::new(&virtual_path),
                                 &String::from_utf8_lossy(&payload_content),
-                            ))
-                    } else {
-                        None
-                    }
+                            )
+                    })
                 }
                 FileType::Shell => {
-                    if let Some(analyzer) = UnifiedSourceAnalyzer::for_file_type(&FileType::Shell) {
-                        Some(analyzer
+                    UnifiedSourceAnalyzer::for_file_type(&FileType::Shell).map(|analyzer| {
+                        analyzer
                             .with_capability_mapper_arc(self.capability_mapper.clone())
                             .analyze_source(
                                 Path::new(&virtual_path),
                                 &String::from_utf8_lossy(&payload_content),
-                            ))
-                    } else {
-                        None
-                    }
+                            )
+                    })
                 }
-                _ => {
-                    // For binary or unknown, create basic report
-                    None
-                }
+                _ => None,
             };
 
             // Process payload report - convert to FileAnalysis for v2 flat files array
@@ -669,46 +668,35 @@ impl UnifiedSourceAnalyzer {
                 // Analyze the decrypted payload
                 let payload_report = match payload.detected_type {
                     FileType::JavaScript | FileType::TypeScript => {
-                        if let Some(analyzer) =
-                            UnifiedSourceAnalyzer::for_file_type(&payload.detected_type)
-                        {
-                            Some(analyzer
+                        UnifiedSourceAnalyzer::for_file_type(&payload.detected_type).map(
+                            |analyzer| {
+                                analyzer
+                                    .with_capability_mapper_arc(self.capability_mapper.clone())
+                                    .analyze_source(
+                                        Path::new(&virtual_path),
+                                        &String::from_utf8_lossy(&payload_content),
+                                    )
+                            },
+                        )
+                    }
+                    FileType::Python => UnifiedSourceAnalyzer::for_file_type(&FileType::Python)
+                        .map(|analyzer| {
+                            analyzer
                                 .with_capability_mapper_arc(self.capability_mapper.clone())
                                 .analyze_source(
                                     Path::new(&virtual_path),
                                     &String::from_utf8_lossy(&payload_content),
-                                ))
-                        } else {
-                            None
-                        }
-                    }
-                    FileType::Python => {
-                        if let Some(analyzer) =
-                            UnifiedSourceAnalyzer::for_file_type(&FileType::Python)
-                        {
-                            Some(analyzer
-                                .with_capability_mapper_arc(self.capability_mapper.clone())
-                                .analyze_source(
-                                    Path::new(&virtual_path),
-                                    &String::from_utf8_lossy(&payload_content),
-                                ))
-                        } else {
-                            None
-                        }
-                    }
+                                )
+                        }),
                     FileType::Shell => {
-                        if let Some(analyzer) =
-                            UnifiedSourceAnalyzer::for_file_type(&FileType::Shell)
-                        {
-                            Some(analyzer
+                        UnifiedSourceAnalyzer::for_file_type(&FileType::Shell).map(|analyzer| {
+                            analyzer
                                 .with_capability_mapper_arc(self.capability_mapper.clone())
                                 .analyze_source(
                                     Path::new(&virtual_path),
                                     &String::from_utf8_lossy(&payload_content),
-                                ))
-                        } else {
-                            None
-                        }
+                                )
+                        })
                     }
                     _ => None,
                 };
@@ -759,7 +747,7 @@ impl UnifiedSourceAnalyzer {
 
         if let Some(ref tree) = tree {
             let root = tree.root_node();
-            
+
             // Extract function calls for capability matching (type: symbol conditions)
             // Reuse the already-parsed tree to avoid redundant tree-sitter parsing
             symbol_extraction::extract_symbols_from_tree(
@@ -771,7 +759,12 @@ impl UnifiedSourceAnalyzer {
 
             // Also extract actual module imports (require/import statements) for metadata/import/ findings
             // Reuse the already-parsed tree to avoid redundant tree-sitter parsing
-            symbol_extraction::extract_imports_from_tree(tree, content, &self.file_type, &mut report);
+            symbol_extraction::extract_imports_from_tree(
+                tree,
+                content,
+                &self.file_type,
+                &mut report,
+            );
 
             // Analyze paths and environment variables
             crate::path_mapper::analyze_and_link_paths(&mut report);

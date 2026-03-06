@@ -371,13 +371,18 @@ impl Radare2Analyzer {
         // Use precomputed SHA256 for cache lookup if available
         let sha256 = precomputed_sha256.or_else(|| Self::compute_file_sha256(file_path));
 
-        // Check cache first
-        if let Some(ref hash) = sha256 {
-            if let Some(cached) = Self::load_from_cache(hash) {
-                debug!("radare2 cache hit for {}", hash);
-                return Ok(cached);
-            } else {
-                trace!("radare2 cache miss for {}", hash);
+        // Check cache first (unless CLEAVE_SKIP_CACHE is set)
+        let skip_cache = std::env::var("CLEAVE_SKIP_CACHE")
+            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+            .unwrap_or(false);
+        if !skip_cache {
+            if let Some(ref hash) = sha256 {
+                if let Some(cached) = Self::load_from_cache(hash) {
+                    debug!("radare2 cache hit for {}", hash);
+                    return Ok(cached);
+                } else {
+                    trace!("radare2 cache miss for {}", hash);
+                }
             }
         }
 
@@ -509,9 +514,11 @@ impl Radare2Analyzer {
             timed_out: false,
         };
 
-        // Save to cache
-        if let Some(ref hash) = sha256 {
-            Self::save_to_cache(hash, &result);
+        // Save to cache (unless CLEAVE_SKIP_CACHE is set)
+        if !skip_cache {
+            if let Some(ref hash) = sha256 {
+                Self::save_to_cache(hash, &result);
+            }
         }
 
         Ok(result)

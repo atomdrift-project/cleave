@@ -729,9 +729,6 @@ pub(crate) struct RawContentRegexIndex {
 /// Regex set for a specific file type
 #[derive(Clone)]
 struct FileTypeRegexSet {
-    /// Full regex set (kept for fallback, but rarely used)
-    #[allow(dead_code)]
-    regex_set: RegexSet,
     pattern_to_traits: Vec<Vec<usize>>,
     /// Original pattern strings for debugging/profiling
     patterns: Vec<String>,
@@ -1167,7 +1164,7 @@ impl RawContentRegexIndex {
 
         // Pre-compile individual regexes for patterns WITH literals (used after Aho-Corasick match)
         let individual_regexes: Vec<Option<regex::Regex>> = pattern_strs
-            .iter()
+            .par_iter()
             .map(|p| regex::Regex::new(p).ok())
             .collect();
 
@@ -1236,13 +1233,7 @@ impl RawContentRegexIndex {
 
         // If there are no regex patterns (only word patterns), build a minimal set
         if pattern_strs.is_empty() {
-            // Build a dummy empty regex set
-            let empty: Vec<String> = Vec::new();
-            let regex_set = RegexSetBuilder::new(&empty)
-                .build()
-                .expect("empty regex set should always build");
             return Ok(Some(FileTypeRegexSet {
-                regex_set,
                 pattern_to_traits: Vec::new(),
                 patterns: Vec::new(),
                 individual_regexes: Vec::new(),
@@ -1260,54 +1251,47 @@ impl RawContentRegexIndex {
             }));
         }
 
-        // Try to build the full regex set (kept for fallback).
-        match RegexSetBuilder::new(&pattern_strs)
-            .size_limit(100 * 1024 * 1024)
-            .build()
+        // Validate patterns — any that failed individual compilation are errors
         {
-            Ok(regex_set) => Ok(Some(FileTypeRegexSet {
-                regex_set,
-                pattern_to_traits: pattern_to_traits.clone(),
-                patterns: pattern_strs,
-                individual_regexes,
-                no_literal_regex_set,
-                no_literal_to_original,
-                cs_literal_prefilter,
-                cs_literal_to_patterns,
-                ci_literal_prefilter,
-                ci_literal_to_patterns,
-                patterns_without_literals,
-                cs_word_automaton,
-                cs_word_to_traits,
-                ci_word_automaton,
-                ci_word_to_traits,
-            })),
-            Err(e) => {
-                // RegexSet creation failed. Find invalid patterns and report them as errors.
-                let mut errors = Vec::new();
-                for (i, pattern) in pattern_strs.iter().enumerate() {
-                    if let Err(re_err) = regex::Regex::new(pattern) {
+            let mut errors = Vec::new();
+            for (i, compiled) in individual_regexes.iter().enumerate() {
+                if compiled.is_none() {
+                    // Try again to get the error message
+                    if let Err(re_err) = regex::Regex::new(&pattern_strs[i]) {
                         for trait_idx in &pattern_to_traits[i] {
                             let trait_def = &traits[*trait_idx];
                             errors.push(format!(
                                 "trait '{}' in \"{}\": invalid regex pattern: '{}' ({})",
                                 trait_def.id,
                                 trait_def.defined_in.display(),
-                                pattern,
+                                pattern_strs[i],
                                 re_err
                             ));
                         }
                     }
                 }
-
-                if errors.is_empty() {
-                    // This can happen if the set is too large but individual regexes are valid.
-                    errors.push(format!("Failed to compile regex set: {}", e));
-                }
-
-                Err(errors)
+            }
+            if !errors.is_empty() {
+                return Err(errors);
             }
         }
+
+        Ok(Some(FileTypeRegexSet {
+            pattern_to_traits,
+            patterns: pattern_strs,
+            individual_regexes,
+            no_literal_regex_set,
+            no_literal_to_original,
+            cs_literal_prefilter,
+            cs_literal_to_patterns,
+            ci_literal_prefilter,
+            ci_literal_to_patterns,
+            patterns_without_literals,
+            cs_word_automaton,
+            cs_word_to_traits,
+            ci_word_automaton,
+            ci_word_to_traits,
+        }))
     }
 
     pub(crate) fn has_patterns(&self) -> bool {

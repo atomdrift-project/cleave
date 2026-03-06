@@ -8,7 +8,7 @@ use std::path::Path;
 
 impl super::CapabilityMapper {
     /// Detect file type from file type string
-    pub(super) fn detect_file_type(&self, file_type: &str) -> RuleFileType {
+    pub(crate) fn detect_file_type(&self, file_type: &str) -> RuleFileType {
         RuleFileType::from_str(file_type)
     }
 }

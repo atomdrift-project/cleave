@@ -181,7 +181,7 @@ impl super::CapabilityMapper {
                                         "Index building took {:?} (StringMatchIndex: {} patterns, RawContentRegexIndex: {} patterns)",
                                         t2.duration_since(t1),
                                         string_match_index.total_patterns,
-                                        raw_regex_result.as_ref().map(|i| i.total_patterns).unwrap_or(0)
+                                        raw_regex_result.as_ref().map(|i| i.total_patterns).unwrap_or(0),
                                     );
                                     let raw_content_regex_index =
                                         raw_regex_result.map_err(|errs| {

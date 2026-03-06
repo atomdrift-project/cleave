@@ -23,7 +23,7 @@ impl super::CapabilityMapper {
     ///
     /// For files > 1MB, skip this optimization as the cost of running 2500+ regexes
     /// against a multi-MB string exceeds the benefit.
-    fn precompute_raw_regex_matches(
+    pub(crate) fn precompute_raw_regex_matches(
         &self,
         binary_data: &[u8],
         file_type: &RuleFileType,
@@ -88,16 +88,35 @@ impl super::CapabilityMapper {
         cached_ast: Option<&tree_sitter::Tree>,
         inline_yara: Option<&HashMap<String, Vec<Evidence>>>,
     ) {
+        self.evaluate_and_merge_findings_with_precomputed(
+            report,
+            binary_data,
+            cached_ast,
+            inline_yara,
+            None,
+        )
+    }
+
+    /// Like `evaluate_and_merge_findings`, but accepts precomputed raw regex matches.
+    /// Pass `Some(matches)` to skip the expensive regex precompute step (e.g. when
+    /// it was already run in parallel with structural analysis).
+    pub(crate) fn evaluate_and_merge_findings_with_precomputed(
+        &self,
+        report: &mut AnalysisReport,
+        binary_data: &[u8],
+        cached_ast: Option<&tree_sitter::Tree>,
+        inline_yara: Option<&HashMap<String, Vec<Evidence>>>,
+        precomputed_raw_regex: Option<Option<FxHashSet<usize>>>,
+    ) {
         // Detect file type once
         let file_type = self.detect_file_type(&report.target.file_type);
 
         // Build section map ONCE for location-constrained matching
         let section_map = SectionMap::from_binary(binary_data);
 
-        // Pre-compute raw regex matches ONCE (expensive: converts binary to string, runs regex set)
-        // This is passed to all trait evaluation calls to avoid recomputing
-        // Returns Some(matches) if run, None if skipped (file too large)
-        let raw_regex_matches = self.precompute_raw_regex_matches(binary_data, &file_type);
+        // Use precomputed regex matches if provided, otherwise compute now
+        let raw_regex_matches = precomputed_raw_regex
+            .unwrap_or_else(|| self.precompute_raw_regex_matches(binary_data, &file_type));
         let raw_regex_matches_ref = raw_regex_matches.as_ref();
 
         // Build all_strings ONCE — combines report strings, imports, and exports

@@ -239,14 +239,19 @@ pub fn analyze_file<P: AsRef<Path>>(path: P, options: &AnalysisOptions) -> Resul
         }
     }
 
-    let mapper = shared_resources::capability_mapper_with_options(options);
-    let yara_engine = if options.disable_yara {
-        None
-    } else {
-        Some(shared_resources::yara_engine(
-            options.enable_third_party_yara,
-        ))
-    };
+    // Cache miss: load mapper and YARA engine in parallel (~860ms + ~270ms → ~860ms)
+    let (mapper, yara_engine) = rayon::join(
+        || shared_resources::capability_mapper_with_options(options),
+        || {
+            if options.disable_yara {
+                None
+            } else {
+                Some(shared_resources::yara_engine(
+                    options.enable_third_party_yara,
+                ))
+            }
+        },
+    );
     analyze_file_with_resources(path, options, &mapper, yara_engine.as_ref())
 }
 
@@ -401,21 +406,31 @@ fn analyze_file_with_resources<P: AsRef<Path>>(
             let range = analyzer.preferred_arch_range(file_data);
             let arch_data = &file_data[range.clone()];
             let is_fat = analyzer.all_arch_ranges(file_data).len() > 1;
+            let eval_data = if is_fat { file_data } else { arch_data };
             let engine = yara_engine;
             let file_types: &[&str] = &["macho", "dylib", "kext"];
-            let (struct_result, yara_result) = rayon::join(
+            // Run structural analysis, YARA scan, and raw regex precompute in parallel.
+            // Raw regex precompute (~224ms) normally runs inside evaluate_and_merge_findings;
+            // starting it here overlaps it with structural analysis (~275ms).
+            let rule_file_type = capability_mapper.detect_file_type("macho");
+            let ((struct_result, yara_result), raw_regex) = rayon::join(
                 || {
-                    Ok::<_, anyhow::Error>(analyzer.analyze_structural(
-                        path,
-                        arch_data,
-                        input.sha256.clone(),
-                    ))
+                    rayon::join(
+                        || {
+                            Ok::<_, anyhow::Error>(analyzer.analyze_structural(
+                                path,
+                                arch_data,
+                                input.sha256.clone(),
+                            ))
+                        },
+                        || {
+                            engine
+                                .filter(|e| e.is_loaded())
+                                .map(|e| e.scan_bytes_with_inline(arch_data, Some(file_types)))
+                        },
+                    )
                 },
-                || {
-                    engine
-                        .filter(|e| e.is_loaded())
-                        .map(|e| e.scan_bytes_with_inline(arch_data, Some(file_types)))
-                },
+                || capability_mapper.precompute_raw_regex_matches(eval_data, &rule_file_type),
             );
             let mut report = struct_result?;
             analyzer.apply_fat_metadata(&mut report, file_data);
@@ -433,52 +448,56 @@ fn analyze_file_with_resources<P: AsRef<Path>>(
             // Process YARA results and evaluate with inline evidence
             let inline_yara =
                 process_yara_result(&mut report, yara_result, engine.map(AsRef::as_ref));
-            let eval_data = if is_fat { file_data } else { arch_data };
-            capability_mapper.evaluate_and_merge_findings(
+            capability_mapper.evaluate_and_merge_findings_with_precomputed(
                 &mut report,
                 eval_data,
                 None,
                 Some(&inline_yara),
+                Some(raw_regex),
             );
             Ok(report)
         }
         FileType::Elf => {
-            // Run YARA scan in parallel with structural analysis for inline evidence
             let analyzer = analyzers::elf::ElfAnalyzer::new()
                 .with_capability_mapper_arc(mapper_arc.clone())
                 .with_preextracted_strings(preextracted_strings.clone());
             let engine = yara_engine;
             let file_types: &[&str] = &["elf", "so", "ko"];
-            let (struct_result, yara_result) = rayon::join(
+            let rule_file_type = capability_mapper.detect_file_type("elf");
+            let ((struct_result, yara_result), raw_regex) = rayon::join(
                 || {
-                    Ok::<_, anyhow::Error>(analyzer.analyze_structural(
-                        path,
-                        file_data,
-                        input.sha256.clone(),
-                    ))
+                    rayon::join(
+                        || {
+                            Ok::<_, anyhow::Error>(analyzer.analyze_structural(
+                                path,
+                                file_data,
+                                input.sha256.clone(),
+                            ))
+                        },
+                        || {
+                            engine
+                                .filter(|e| e.is_loaded())
+                                .map(|e| e.scan_bytes_with_inline(file_data, Some(file_types)))
+                        },
+                    )
                 },
-                || {
-                    engine
-                        .filter(|e| e.is_loaded())
-                        .map(|e| e.scan_bytes_with_inline(file_data, Some(file_types)))
-                },
+                || capability_mapper.precompute_raw_regex_matches(file_data, &rule_file_type),
             );
             let mut report = struct_result?;
-            // Process YARA results and evaluate with inline evidence
             let inline_yara =
                 process_yara_result(&mut report, yara_result, engine.map(AsRef::as_ref));
-            capability_mapper.evaluate_and_merge_findings(
+            capability_mapper.evaluate_and_merge_findings_with_precomputed(
                 &mut report,
                 file_data,
                 None,
                 Some(&inline_yara),
+                Some(raw_regex),
             );
             path_mapper::analyze_and_link_paths(&mut report);
             env_mapper::analyze_and_link_env_vars(&mut report);
             Ok(report)
         }
         FileType::Pe => {
-            // Run YARA scan in parallel with structural analysis for inline evidence
             let mut analyzer = analyzers::pe::PEAnalyzer::new()
                 .with_capability_mapper_arc(mapper_arc.clone())
                 .with_preextracted_strings(preextracted_strings.clone());
@@ -488,29 +507,35 @@ fn analyze_file_with_resources<P: AsRef<Path>>(
             }
             let engine = yara_engine;
             let file_types: &[&str] = &["pe", "exe", "dll", "bat", "ps1"];
-            let (struct_result, yara_result) = rayon::join(
+            let rule_file_type = capability_mapper.detect_file_type("pe");
+            let ((struct_result, yara_result), raw_regex) = rayon::join(
                 || {
-                    Ok::<_, anyhow::Error>(analyzer.analyze_structural(
-                        path,
-                        file_data,
-                        input.sha256.clone(),
-                    ))
+                    rayon::join(
+                        || {
+                            Ok::<_, anyhow::Error>(analyzer.analyze_structural(
+                                path,
+                                file_data,
+                                input.sha256.clone(),
+                            ))
+                        },
+                        || {
+                            engine
+                                .filter(|e| e.is_loaded())
+                                .map(|e| e.scan_bytes_with_inline(file_data, Some(file_types)))
+                        },
+                    )
                 },
-                || {
-                    engine
-                        .filter(|e| e.is_loaded())
-                        .map(|e| e.scan_bytes_with_inline(file_data, Some(file_types)))
-                },
+                || capability_mapper.precompute_raw_regex_matches(file_data, &rule_file_type),
             );
             let mut report = struct_result?;
-            // Process YARA results and evaluate with inline evidence
             let inline_yara =
                 process_yara_result(&mut report, yara_result, engine.map(AsRef::as_ref));
-            capability_mapper.evaluate_and_merge_findings(
+            capability_mapper.evaluate_and_merge_findings_with_precomputed(
                 &mut report,
                 file_data,
                 None,
                 Some(&inline_yara),
+                Some(raw_regex),
             );
             Ok(report)
         }

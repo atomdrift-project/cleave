@@ -3023,6 +3023,7 @@ version = "0.8.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "34af8d1a0e25924bc5b7c43c079c942339d8f0a8b57c39049bef581b46327404"
 dependencies = [
+ "libc",
  "rand_chacha 0.3.1",
  "rand_core 0.6.4",
 ]
@@ -3545,13 +3546,16 @@ version = "0.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "26482cf1ecce4540dc782fc70019eba89ffc4d87b3717eb5ec524b5db6fdefef"
 dependencies = [
+ "aes",
  "bit-set 0.6.0",
  "byteorder",
+ "cbc",
  "crc",
  "filetime_creation",
  "js-sys",
  "lzma-rust",
  "nt-time",
+ "rand 0.8.5",
  "sha2",
  "wasm-bindgen",
 ]

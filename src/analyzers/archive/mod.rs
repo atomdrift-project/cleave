@@ -1935,6 +1935,42 @@ mod tests {
     }
 
     #[test]
+    fn test_extract_7z_encrypted() {
+        let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap_or_else(|_| ".".to_string());
+        let sz_path = Path::new(&manifest_dir).join("testdata").join("encrypted.7z");
+
+        // Skip if the test file is missing (though it should be in the repo)
+        if !sz_path.exists() {
+            eprintln!("Skipping test_extract_7z_encrypted: testdata/encrypted.7z missing");
+            return;
+        }
+
+        // Analyze without password should fail
+        let analyzer_no_pass = ArchiveAnalyzer::new();
+        let result = analyzer_no_pass.analyze(&sz_path);
+        assert!(result.is_err());
+
+        // Analyze with wrong password should fail
+        let analyzer_wrong_pass =
+            ArchiveAnalyzer::new().with_zip_passwords(vec!["wrong".to_string()]);
+        let result = analyzer_wrong_pass.analyze(&sz_path);
+        assert!(result.is_err());
+
+        // Analyze with correct password should succeed
+        let analyzer_correct_pass =
+            ArchiveAnalyzer::new().with_zip_passwords(vec!["secret".to_string()]);
+        let result = analyzer_correct_pass.analyze(&sz_path);
+
+        assert!(result.is_ok(), "Failed to decrypt 7z: {:?}", result.err());
+        let report = result.unwrap();
+        assert_eq!(report.target.file_type, "7z");
+        assert!(report
+            .archive_contents
+            .iter()
+            .any(|e| e.path.contains("secret_test.txt")));
+    }
+
+    #[test]
     fn test_7z_mislabeled_zip() {
         // Test that a ZIP file with .7z extension is handled correctly
         let temp_dir = tempfile::tempdir().unwrap();

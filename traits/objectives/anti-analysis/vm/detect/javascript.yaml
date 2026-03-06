@@ -1,0 +1,68 @@
+# VM/Sandbox Detection - JavaScript/Node.js specific
+# Detects platform-specific hardware profiling commands used for VM detection
+# ATT&CK: T1497.001 (Virtualization/Sandbox Evasion: System Checks)
+# MBC: B0009 (Virtual Machine Detection)
+
+defaults:
+  for: [javascript, typescript]
+  crit: suspicious
+  mbc: "B0009"
+  attack: "T1497.001"
+
+traits:
+  - id: wmic-model-check
+    desc: WMIC hardware model query (VM check)
+    conf: 0.9
+    if:
+      type: raw
+      regex: "wmic\\s+computersystem\\s+get\\s+model"
+
+  - id: system-profiler-hardware
+    desc: macOS system_profiler hardware query
+    conf: 0.85
+    if:
+      type: raw
+      substr: "system_profiler SPHardwareDataType"
+
+  - id: dmi-product-name
+    desc: Linux DMI product name check
+    conf: 0.85
+    if:
+      type: raw
+      substr: "/sys/class/dmi/id/product_name"
+
+  - id: wmic-disk-enum
+    desc: WMIC logical disk enumeration
+    conf: 0.85
+    if:
+      type: raw
+      regex: "wmic\\s+logicaldisk\\s+get"
+
+composite_rules:
+  - id: js-vm-environment-check
+    desc: JavaScript VM environment detection
+    crit: suspicious
+    conf: 0.92
+    mbc: "B0009"
+    attack: "T1497.001"
+    for: [javascript, typescript]
+    needs: 2
+    any:
+      - id: wmic-model-check
+      - id: system-profiler-hardware
+      - id: micro-behaviors/fs/proc/system::system-cpuinfo
+      - id: dmi-product-name
+
+  - id: js-hardware-profiling
+    desc: Cross-platform hardware profiling (VM evasion)
+    crit: suspicious
+    conf: 0.93
+    mbc: "B0009"
+    attack: "T1497.001"
+    for: [javascript, typescript]
+    all:
+      - id: js-vm-environment-check
+    any:
+      - id: objectives/anti-analysis/vm/detect::vendor-vmware
+      - id: objectives/anti-analysis/vm/detect::vendor-virtualbox
+      - id: objectives/anti-analysis/vm/detect::vendor-vbox-short

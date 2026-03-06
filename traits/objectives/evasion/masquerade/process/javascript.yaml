@@ -1,0 +1,38 @@
+# Process Title Masquerading - JavaScript/Node.js
+# Detects process.title manipulation to disguise Node.js processes
+# ATT&CK: T1036 (Masquerading)
+# MBC: F0004 (Process Name Spoofing)
+
+defaults:
+  for: [javascript, typescript]
+
+traits:
+  - id: process-title-npm-masquerade
+    desc: Process title set to npm-like name
+    crit: suspicious
+    conf: 0.9
+    mbc: "F0004"
+    attack: "T1036"
+    if:
+      type: raw
+      regex: "process\\.title\\s*=\\s*['\"]npm-"
+
+  - id: process-title-daemon-masquerade
+    desc: Process title set to daemon-like name
+    crit: suspicious
+    conf: 0.9
+    mbc: "F0004"
+    attack: "T1036"
+    if:
+      type: raw
+      regex: "process\\.title\\s*=\\s*['\"][a-z]+-daemon['\"]"
+
+  - id: process-title-service-masquerade
+    desc: Process title set to service-like name
+    crit: suspicious
+    conf: 0.9
+    mbc: "F0004"
+    attack: "T1036"
+    if:
+      type: raw
+      regex: "process\\.title\\s*=\\s*['\"][a-z]+-compiler"

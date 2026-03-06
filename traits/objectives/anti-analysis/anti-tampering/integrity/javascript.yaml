@@ -1,0 +1,31 @@
+# Anti-Tampering: Code Integrity Checks
+# Detects patterns where code verifies its own integrity
+# ATT&CK: T1497 (Virtualization/Sandbox Evasion)
+
+defaults:
+  for: [javascript]
+  crit: suspicious
+  attack: "T1497"
+
+traits:
+  - id: function-tostring-integrity
+    desc: Function toString() integrity check
+    conf: 0.85
+    if:
+      type: raw
+      regex: "\\.toString\\(\\)\\)\\);try\\{.{0,60}eval\\("
+
+  - id: tamper-detection-message
+    desc: Code tampering detection message
+    conf: 0.9
+    if:
+      type: string
+      regex: "code has been tampered|tamper(ed|ing) detect"
+      case_insensitive: true
+
+  - id: eval-tostring-unpacker
+    desc: Eval with toString()-derived key
+    conf: 0.85
+    if:
+      type: raw
+      regex: "\\(\\w+\\.toString\\(\\)\\)"

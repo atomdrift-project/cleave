@@ -1,0 +1,60 @@
+# WebSocket C2 Patterns - JavaScript/Node.js
+# Detects socket.io-client and WebSocket C2 patterns
+# ATT&CK: T1071.001 (Web Protocols)
+# MBC: B0030 (C2 Communication)
+
+defaults:
+  for: [javascript, typescript]
+
+traits:
+  - id: socketio-client-require
+    desc: socket.io-client module import
+    crit: notable
+    conf: 0.85
+    mbc: "B0030"
+    attack: "T1071.001"
+    if:
+      type: raw
+      regex: "require\\s*\\(\\s*['\"]socket\\.io-client['\"]\\)"
+
+  - id: socketio-reconnect-attempts
+    desc: Socket.io reconnection attempts config
+    crit: notable
+    conf: 0.8
+    attack: "T1071.001"
+    if:
+      type: raw
+      substr: "reconnectionAttempts"
+
+  - id: socketio-reconnect-delay
+    desc: Socket.io reconnection delay config
+    crit: notable
+    conf: 0.8
+    attack: "T1071.001"
+    if:
+      type: raw
+      substr: "reconnectionDelay"
+
+  - id: npm-install-socketio
+    desc: Dynamic npm install of socket.io-client
+    crit: suspicious
+    conf: 0.95
+    mbc: "B0030"
+    attack: "T1059.007"
+    if:
+      type: raw
+      regex: "npm\\s+install\\s+socket\\.io-client"
+
+composite_rules:
+  - id: socketio-c2-pattern
+    desc: Socket.io-based C2 communication
+    crit: suspicious
+    conf: 0.92
+    mbc: "B0030"
+    attack: "T1071.001"
+    for: [javascript, typescript]
+    all:
+      - id: socketio-client-require
+    any:
+      - id: socketio-reconnect-attempts
+      - id: socketio-reconnect-delay

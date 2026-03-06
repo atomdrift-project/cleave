@@ -52,6 +52,33 @@ traits:
       type: kv
       path: "scripts.install"
 
+  # === Test Script Abuse ===
+  # Detect test scripts that perform network exfil instead of testing
+
+  - id: test-script-network
+    desc: Test script performs network request
+    crit: suspicious
+    conf: 0.9
+    attack: "T1059"
+    if:
+      type: kv
+      path: "scripts.test"
+      regex: "\\b(curl|wget)\\b"
+    not:
+      - substr: "jest"
+      - substr: "mocha"
+      - substr: "vitest"
+
+  - id: test-script-exfil
+    desc: Test script with command substitution
+    crit: suspicious
+    conf: 0.95
+    attack: "T1041"
+    if:
+      type: kv
+      path: "scripts.test"
+      regex: "https?://[^\"'\\s]{0,120}\\$\\("
+
   # === Script Content Patterns ===
   # Detect dangerous commands in install scripts
 
@@ -190,6 +217,16 @@ traits:
       path: "scripts"
       regex: "\\b(ifconfig|ip\\s+addr)\\b"
 
+  - id: script-sysinfo-cmd-3
+    desc: Script runs pwd or env discovery
+    crit: notable
+    conf: 0.8
+    attack: "T1083"
+    if:
+      type: kv
+      path: "scripts"
+      regex: "\\$\\(pwd\\)|\\bpwd\\b|\\$\\(id\\)"
+
   - id: script-network-exfil-vars
     desc: Network request with command substitution (exfiltration)
     crit: suspicious
@@ -199,6 +236,16 @@ traits:
       type: kv
       path: "scripts"
       regex: "https?://[^\"'\\s]{0,120}\\$\\("
+
+  - id: script-multi-param-exfil
+    desc: URL with multiple command substitution parameters
+    crit: suspicious
+    conf: 0.95
+    attack: "T1041"
+    if:
+      type: kv
+      path: "scripts"
+      regex: "\\$\\([a-z]{2,15}\\).{0,80}\\$\\([a-z]{2,15}\\)"
 
 # === Composite Rules ===
 composite_rules:
@@ -227,6 +274,7 @@ composite_rules:
     any:
       - id: script-sysinfo-cmd-1
       - id: script-sysinfo-cmd-2
+      - id: script-sysinfo-cmd-3
 
   - id: install-script-exfil
     desc: Install script performs data exfiltration
@@ -275,6 +323,26 @@ composite_rules:
     any:
       - id: script-eval
       - id: script-base64
+
+  # Test script abuse: test hook used for exfiltration
+  - id: test-hook-exfil
+    desc: Test script abused for exfiltration
+    crit: suspicious
+    conf: 0.9
+    attack: "T1059"
+    all:
+      - id: test-script-exfil
+      - id: install-script-exfil
+
+  # Redundancy pattern: multiple hooks all have network commands
+  - id: redundant-hook-network
+    desc: Multiple hooks with network commands (redundancy)
+    crit: suspicious
+    conf: 0.9
+    attack: "T1195.002"
+    all:
+      - id: script-network-exfil-vars
+      - id: objectives/lateral-movement/supply-chain/npm/behavior::multiple-hooks
 
   # GuardDog: Install hook existence (supply chain risk)
   - id: install-hook-exists

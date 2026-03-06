@@ -553,6 +553,27 @@ composite_rules:
       - id: micro-behaviors/os/registry/access::internet-settings-autodial-tamper
       - id: micro-behaviors/process/create/spawn::create-process-a
 
+  # Startup folder persistence with registry and GUID mutex
+  - id: pe-startup-folder-registry-persistence
+    desc: Startup folder persistence with registry fingerprinting
+    crit: suspicious
+    conf: 0.9
+    attack: "T1547.001"
+    platforms: [windows]
+    for: [pe]
+    all:
+      - id: micro-behaviors/os/persistence/startup::startup-folder-shell-path-composition-chain
+      - id: micro-behaviors/os/registry/access::registry-write-api-chain
+    any:
+      - id: micro-behaviors/process/sync/mutex::guid-mutex
+      - id: micro-behaviors/process/info/current::get-module-filename
+      - id: micro-behaviors/process/create/spawn::create-process-w
+    needs: 1
+    downgrade:
+      any:
+        - id: metadata/signed/platform::microsoft
+        - id: metadata/vendor/microsoft::is-microsoft-named
+
   # Full browser shortcut argument injection chain
   - id: windows-shortcut-walk-argument-inject
     desc: "Enumerates shortcuts and injects arguments"

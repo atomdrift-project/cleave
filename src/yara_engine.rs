@@ -994,6 +994,7 @@ impl YaraEngine {
     /// Map YARA namespace to capability ID
     /// Returns the capability ID if the namespace maps to a known capability
     #[must_use]
+    #[allow(dead_code)]
     pub(crate) fn namespace_to_capability(&self, namespace: &str) -> Option<String> {
         // YARA namespace format: exec.cmd, anti-static.obfuscation, etc.
         // Convert to capability ID: execution/command, anti-analysis/obfuscation
@@ -1016,6 +1017,7 @@ impl YaraEngine {
 
     /// Scan a file and return both YARA matches and derived findings
     /// This is the main entry point for universal YARA scanning
+    #[allow(dead_code)]
     pub(crate) fn scan_file_to_findings(
         &self,
         file_path: &Path,

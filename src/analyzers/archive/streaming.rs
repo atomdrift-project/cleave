@@ -589,62 +589,64 @@ impl ArchiveAnalyzer {
         let total_bytes_ref = &total_bytes;
         let analyzer_ref = &analyzer;
 
-        rx.into_iter().par_bridge().for_each(|file| {
-            // Files will be re-analyzed with proper type detection from content/extension
+        super::analyzers::ARCHIVE_POOL.install(|| {
+            rx.into_iter().par_bridge().for_each(|file| {
+                // Files will be re-analyzed with proper type detection from content/extension
 
-            // Analyze the file
-            let result = match &file {
-                ExtractedFile::InMemory {
-                    path,
-                    data,
-                    file_type,
-                } => {
-                    total_bytes_ref.fetch_add(data.len() as u64, Ordering::Relaxed);
-                    analyzer_ref.analyze_in_memory(path, data, file_type)
-                }
-                ExtractedFile::OnDisk {
-                    path,
-                    temp_path,
-                    file_type,
-                } => {
-                    // Read from disk and analyze
-                    match std::fs::read(temp_path) {
-                        Ok(data) => {
-                            total_bytes_ref.fetch_add(data.len() as u64, Ordering::Relaxed);
-                            analyzer_ref.analyze_in_memory(path, &data, file_type)
-                        }
-                        Err(e) => Err(anyhow::anyhow!("Failed to read temp file: {}", e)),
+                // Analyze the file
+                let result = match &file {
+                    ExtractedFile::InMemory {
+                        path,
+                        data,
+                        file_type,
+                    } => {
+                        total_bytes_ref.fetch_add(data.len() as u64, Ordering::Relaxed);
+                        analyzer_ref.analyze_in_memory(path, data, file_type)
                     }
-                }
-            };
-
-            match result {
-                Ok(file_result) => {
-                    files_analyzed_ref.fetch_add(1, Ordering::Relaxed);
-
-                    // Update statistics from findings
-                    if let Some(risk) = &file_result.file_analysis.risk {
-                        match risk {
-                            crate::types::Criticality::Hostile => {
-                                hostile_count_ref.fetch_add(1, Ordering::Relaxed);
+                    ExtractedFile::OnDisk {
+                        path,
+                        temp_path,
+                        file_type,
+                    } => {
+                        // Read from disk and analyze
+                        match std::fs::read(temp_path) {
+                            Ok(data) => {
+                                total_bytes_ref.fetch_add(data.len() as u64, Ordering::Relaxed);
+                                analyzer_ref.analyze_in_memory(path, &data, file_type)
                             }
-                            crate::types::Criticality::Suspicious => {
-                                suspicious_count_ref.fetch_add(1, Ordering::Relaxed);
-                            }
-                            crate::types::Criticality::Notable => {
-                                notable_count_ref.fetch_add(1, Ordering::Relaxed);
-                            }
-                            _ => {}
+                            Err(e) => Err(anyhow::anyhow!("Failed to read temp file: {}", e)),
                         }
                     }
+                };
 
-                    // Invoke callback for streaming output
-                    on_file_ref(file_result);
+                match result {
+                    Ok(file_result) => {
+                        files_analyzed_ref.fetch_add(1, Ordering::Relaxed);
+
+                        // Update statistics from findings
+                        if let Some(risk) = &file_result.file_analysis.risk {
+                            match risk {
+                                crate::types::Criticality::Hostile => {
+                                    hostile_count_ref.fetch_add(1, Ordering::Relaxed);
+                                }
+                                crate::types::Criticality::Suspicious => {
+                                    suspicious_count_ref.fetch_add(1, Ordering::Relaxed);
+                                }
+                                crate::types::Criticality::Notable => {
+                                    notable_count_ref.fetch_add(1, Ordering::Relaxed);
+                                }
+                                _ => {}
+                            }
+                        }
+
+                        // Invoke callback for streaming output
+                        on_file_ref(file_result);
+                    }
+                    Err(e) => {
+                        tracing::debug!("Failed to analyze {}: {}", file.path(), e);
+                    }
                 }
-                Err(e) => {
-                    tracing::debug!("Failed to analyze {}: {}", file.path(), e);
-                }
-            }
+            })
         });
 
         // Wait for extractor to finish and get hostile reasons
@@ -850,56 +852,58 @@ impl ArchiveAnalyzer {
         let total_bytes_ref = &total_bytes;
         let analyzer_ref = &analyzer;
 
-        rx.into_iter().par_bridge().for_each(|file| {
-            // Files will be re-analyzed with proper type detection from content/extension
+        super::analyzers::ARCHIVE_POOL.install(|| {
+            rx.into_iter().par_bridge().for_each(|file| {
+                // Files will be re-analyzed with proper type detection from content/extension
 
-            let result = match &file {
-                ExtractedFile::InMemory {
-                    path,
-                    data,
-                    file_type,
-                } => {
-                    total_bytes_ref.fetch_add(data.len() as u64, Ordering::Relaxed);
-                    analyzer_ref.analyze_in_memory(path, data, file_type)
-                }
-                ExtractedFile::OnDisk {
-                    path,
-                    temp_path,
-                    file_type,
-                } => match std::fs::read(temp_path) {
-                    Ok(data) => {
+                let result = match &file {
+                    ExtractedFile::InMemory {
+                        path,
+                        data,
+                        file_type,
+                    } => {
                         total_bytes_ref.fetch_add(data.len() as u64, Ordering::Relaxed);
-                        analyzer_ref.analyze_in_memory(path, &data, file_type)
+                        analyzer_ref.analyze_in_memory(path, data, file_type)
                     }
-                    Err(e) => Err(anyhow::anyhow!("Failed to read temp file: {}", e)),
-                },
-            };
-
-            match result {
-                Ok(file_result) => {
-                    files_analyzed_ref.fetch_add(1, Ordering::Relaxed);
-
-                    if let Some(risk) = &file_result.file_analysis.risk {
-                        match risk {
-                            crate::types::Criticality::Hostile => {
-                                hostile_count_ref.fetch_add(1, Ordering::Relaxed);
-                            }
-                            crate::types::Criticality::Suspicious => {
-                                suspicious_count_ref.fetch_add(1, Ordering::Relaxed);
-                            }
-                            crate::types::Criticality::Notable => {
-                                notable_count_ref.fetch_add(1, Ordering::Relaxed);
-                            }
-                            _ => {}
+                    ExtractedFile::OnDisk {
+                        path,
+                        temp_path,
+                        file_type,
+                    } => match std::fs::read(temp_path) {
+                        Ok(data) => {
+                            total_bytes_ref.fetch_add(data.len() as u64, Ordering::Relaxed);
+                            analyzer_ref.analyze_in_memory(path, &data, file_type)
                         }
-                    }
+                        Err(e) => Err(anyhow::anyhow!("Failed to read temp file: {}", e)),
+                    },
+                };
 
-                    on_file_ref(file_result);
+                match result {
+                    Ok(file_result) => {
+                        files_analyzed_ref.fetch_add(1, Ordering::Relaxed);
+
+                        if let Some(risk) = &file_result.file_analysis.risk {
+                            match risk {
+                                crate::types::Criticality::Hostile => {
+                                    hostile_count_ref.fetch_add(1, Ordering::Relaxed);
+                                }
+                                crate::types::Criticality::Suspicious => {
+                                    suspicious_count_ref.fetch_add(1, Ordering::Relaxed);
+                                }
+                                crate::types::Criticality::Notable => {
+                                    notable_count_ref.fetch_add(1, Ordering::Relaxed);
+                                }
+                                _ => {}
+                            }
+                        }
+
+                        on_file_ref(file_result);
+                    }
+                    Err(e) => {
+                        tracing::debug!("Failed to analyze {}: {}", file.path(), e);
+                    }
                 }
-                Err(e) => {
-                    tracing::debug!("Failed to analyze {}: {}", file.path(), e);
-                }
-            }
+            })
         });
 
         let hostile_reasons = extractor_handle
@@ -1052,56 +1056,58 @@ impl ArchiveAnalyzer {
         let total_bytes_ref = &total_bytes;
         let analyzer_ref = &analyzer;
 
-        rx.into_iter().par_bridge().for_each(|file| {
-            // Files will be re-analyzed with proper type detection from content/extension
+        super::analyzers::ARCHIVE_POOL.install(|| {
+            rx.into_iter().par_bridge().for_each(|file| {
+                // Files will be re-analyzed with proper type detection from content/extension
 
-            let result = match &file {
-                ExtractedFile::InMemory {
-                    path,
-                    data,
-                    file_type,
-                } => {
-                    total_bytes_ref.fetch_add(data.len() as u64, Ordering::Relaxed);
-                    analyzer_ref.analyze_in_memory(path, data, file_type)
-                }
-                ExtractedFile::OnDisk {
-                    path,
-                    temp_path,
-                    file_type,
-                } => match std::fs::read(temp_path) {
-                    Ok(data) => {
+                let result = match &file {
+                    ExtractedFile::InMemory {
+                        path,
+                        data,
+                        file_type,
+                    } => {
                         total_bytes_ref.fetch_add(data.len() as u64, Ordering::Relaxed);
-                        analyzer_ref.analyze_in_memory(path, &data, file_type)
+                        analyzer_ref.analyze_in_memory(path, data, file_type)
                     }
-                    Err(e) => Err(anyhow::anyhow!("Failed to read temp file: {}", e)),
-                },
-            };
-
-            match result {
-                Ok(file_result) => {
-                    files_analyzed_ref.fetch_add(1, Ordering::Relaxed);
-
-                    if let Some(risk) = &file_result.file_analysis.risk {
-                        match risk {
-                            crate::types::Criticality::Hostile => {
-                                hostile_count_ref.fetch_add(1, Ordering::Relaxed);
-                            }
-                            crate::types::Criticality::Suspicious => {
-                                suspicious_count_ref.fetch_add(1, Ordering::Relaxed);
-                            }
-                            crate::types::Criticality::Notable => {
-                                notable_count_ref.fetch_add(1, Ordering::Relaxed);
-                            }
-                            _ => {}
+                    ExtractedFile::OnDisk {
+                        path,
+                        temp_path,
+                        file_type,
+                    } => match std::fs::read(temp_path) {
+                        Ok(data) => {
+                            total_bytes_ref.fetch_add(data.len() as u64, Ordering::Relaxed);
+                            analyzer_ref.analyze_in_memory(path, &data, file_type)
                         }
-                    }
+                        Err(e) => Err(anyhow::anyhow!("Failed to read temp file: {}", e)),
+                    },
+                };
 
-                    on_file_ref(file_result);
+                match result {
+                    Ok(file_result) => {
+                        files_analyzed_ref.fetch_add(1, Ordering::Relaxed);
+
+                        if let Some(risk) = &file_result.file_analysis.risk {
+                            match risk {
+                                crate::types::Criticality::Hostile => {
+                                    hostile_count_ref.fetch_add(1, Ordering::Relaxed);
+                                }
+                                crate::types::Criticality::Suspicious => {
+                                    suspicious_count_ref.fetch_add(1, Ordering::Relaxed);
+                                }
+                                crate::types::Criticality::Notable => {
+                                    notable_count_ref.fetch_add(1, Ordering::Relaxed);
+                                }
+                                _ => {}
+                            }
+                        }
+
+                        on_file_ref(file_result);
+                    }
+                    Err(e) => {
+                        tracing::debug!("Failed to analyze {}: {}", file.path(), e);
+                    }
                 }
-                Err(e) => {
-                    tracing::debug!("Failed to analyze {}: {}", file.path(), e);
-                }
-            }
+            })
         });
 
         let hostile_reasons = extractor_handle
@@ -1230,56 +1236,58 @@ impl ArchiveAnalyzer {
         let total_bytes_ref = &total_bytes;
         let analyzer_ref = &analyzer;
 
-        rx.into_iter().par_bridge().for_each(|file| {
-            // Files will be re-analyzed with proper type detection from content/extension
+        super::analyzers::ARCHIVE_POOL.install(|| {
+            rx.into_iter().par_bridge().for_each(|file| {
+                // Files will be re-analyzed with proper type detection from content/extension
 
-            let result = match &file {
-                ExtractedFile::InMemory {
-                    path,
-                    data,
-                    file_type,
-                } => {
-                    total_bytes_ref.fetch_add(data.len() as u64, Ordering::Relaxed);
-                    analyzer_ref.analyze_in_memory(path, data, file_type)
-                }
-                ExtractedFile::OnDisk {
-                    path,
-                    temp_path,
-                    file_type,
-                } => match std::fs::read(temp_path) {
-                    Ok(data) => {
+                let result = match &file {
+                    ExtractedFile::InMemory {
+                        path,
+                        data,
+                        file_type,
+                    } => {
                         total_bytes_ref.fetch_add(data.len() as u64, Ordering::Relaxed);
-                        analyzer_ref.analyze_in_memory(path, &data, file_type)
+                        analyzer_ref.analyze_in_memory(path, data, file_type)
                     }
-                    Err(e) => Err(anyhow::anyhow!("Failed to read temp file: {}", e)),
-                },
-            };
-
-            match result {
-                Ok(file_result) => {
-                    files_analyzed_ref.fetch_add(1, Ordering::Relaxed);
-
-                    if let Some(risk) = &file_result.file_analysis.risk {
-                        match risk {
-                            crate::types::Criticality::Hostile => {
-                                hostile_count_ref.fetch_add(1, Ordering::Relaxed);
-                            }
-                            crate::types::Criticality::Suspicious => {
-                                suspicious_count_ref.fetch_add(1, Ordering::Relaxed);
-                            }
-                            crate::types::Criticality::Notable => {
-                                notable_count_ref.fetch_add(1, Ordering::Relaxed);
-                            }
-                            _ => {}
+                    ExtractedFile::OnDisk {
+                        path,
+                        temp_path,
+                        file_type,
+                    } => match std::fs::read(temp_path) {
+                        Ok(data) => {
+                            total_bytes_ref.fetch_add(data.len() as u64, Ordering::Relaxed);
+                            analyzer_ref.analyze_in_memory(path, &data, file_type)
                         }
-                    }
+                        Err(e) => Err(anyhow::anyhow!("Failed to read temp file: {}", e)),
+                    },
+                };
 
-                    on_file_ref(file_result);
+                match result {
+                    Ok(file_result) => {
+                        files_analyzed_ref.fetch_add(1, Ordering::Relaxed);
+
+                        if let Some(risk) = &file_result.file_analysis.risk {
+                            match risk {
+                                crate::types::Criticality::Hostile => {
+                                    hostile_count_ref.fetch_add(1, Ordering::Relaxed);
+                                }
+                                crate::types::Criticality::Suspicious => {
+                                    suspicious_count_ref.fetch_add(1, Ordering::Relaxed);
+                                }
+                                crate::types::Criticality::Notable => {
+                                    notable_count_ref.fetch_add(1, Ordering::Relaxed);
+                                }
+                                _ => {}
+                            }
+                        }
+
+                        on_file_ref(file_result);
+                    }
+                    Err(e) => {
+                        tracing::debug!("Failed to analyze {}: {}", file.path(), e);
+                    }
                 }
-                Err(e) => {
-                    tracing::debug!("Failed to analyze {}: {}", file.path(), e);
-                }
-            }
+            })
         });
 
         let hostile_reasons = extractor_handle
@@ -1474,56 +1482,58 @@ impl ArchiveAnalyzer {
         let total_bytes_ref = &total_bytes;
         let analyzer_ref = &analyzer;
 
-        rx.into_iter().par_bridge().for_each(|file| {
-            // Files will be re-analyzed with proper type detection from content/extension
+        super::analyzers::ARCHIVE_POOL.install(|| {
+            rx.into_iter().par_bridge().for_each(|file| {
+                // Files will be re-analyzed with proper type detection from content/extension
 
-            let result = match &file {
-                ExtractedFile::InMemory {
-                    path,
-                    data,
-                    file_type,
-                } => {
-                    total_bytes_ref.fetch_add(data.len() as u64, Ordering::Relaxed);
-                    analyzer_ref.analyze_in_memory(path, data, file_type)
-                }
-                ExtractedFile::OnDisk {
-                    path,
-                    temp_path,
-                    file_type,
-                } => match std::fs::read(temp_path) {
-                    Ok(data) => {
+                let result = match &file {
+                    ExtractedFile::InMemory {
+                        path,
+                        data,
+                        file_type,
+                    } => {
                         total_bytes_ref.fetch_add(data.len() as u64, Ordering::Relaxed);
-                        analyzer_ref.analyze_in_memory(path, &data, file_type)
+                        analyzer_ref.analyze_in_memory(path, data, file_type)
                     }
-                    Err(e) => Err(anyhow::anyhow!("Failed to read temp file: {}", e)),
-                },
-            };
-
-            match result {
-                Ok(file_result) => {
-                    files_analyzed_ref.fetch_add(1, Ordering::Relaxed);
-
-                    if let Some(risk) = &file_result.file_analysis.risk {
-                        match risk {
-                            crate::types::Criticality::Hostile => {
-                                hostile_count_ref.fetch_add(1, Ordering::Relaxed);
-                            }
-                            crate::types::Criticality::Suspicious => {
-                                suspicious_count_ref.fetch_add(1, Ordering::Relaxed);
-                            }
-                            crate::types::Criticality::Notable => {
-                                notable_count_ref.fetch_add(1, Ordering::Relaxed);
-                            }
-                            _ => {}
+                    ExtractedFile::OnDisk {
+                        path,
+                        temp_path,
+                        file_type,
+                    } => match std::fs::read(temp_path) {
+                        Ok(data) => {
+                            total_bytes_ref.fetch_add(data.len() as u64, Ordering::Relaxed);
+                            analyzer_ref.analyze_in_memory(path, &data, file_type)
                         }
-                    }
+                        Err(e) => Err(anyhow::anyhow!("Failed to read temp file: {}", e)),
+                    },
+                };
 
-                    on_file_ref(file_result);
+                match result {
+                    Ok(file_result) => {
+                        files_analyzed_ref.fetch_add(1, Ordering::Relaxed);
+
+                        if let Some(risk) = &file_result.file_analysis.risk {
+                            match risk {
+                                crate::types::Criticality::Hostile => {
+                                    hostile_count_ref.fetch_add(1, Ordering::Relaxed);
+                                }
+                                crate::types::Criticality::Suspicious => {
+                                    suspicious_count_ref.fetch_add(1, Ordering::Relaxed);
+                                }
+                                crate::types::Criticality::Notable => {
+                                    notable_count_ref.fetch_add(1, Ordering::Relaxed);
+                                }
+                                _ => {}
+                            }
+                        }
+
+                        on_file_ref(file_result);
+                    }
+                    Err(e) => {
+                        tracing::debug!("Failed to analyze {}: {}", file.path(), e);
+                    }
                 }
-                Err(e) => {
-                    tracing::debug!("Failed to analyze {}: {}", file.path(), e);
-                }
-            }
+            })
         });
 
         let hostile_reasons = extractor_handle

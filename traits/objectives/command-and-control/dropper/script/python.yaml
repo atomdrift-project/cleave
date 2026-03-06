@@ -1,0 +1,33 @@
+# Python Script Dropper Patterns
+# Detects Python scripts that download and execute remote payloads
+# ATT&CK: T1059.006 (Python), T1105 (Ingress Tool Transfer)
+
+defaults:
+  for: [python]
+
+composite_rules:
+  # Python subprocess executing a download-and-pipe-to-shell pattern
+  # e.g., subprocess.run("curl ... | bash", shell=True)
+  - id: subprocess-download-execute
+    desc: Python subprocess download-and-execute dropper
+    crit: hostile
+    conf: 0.95
+    mbc: "B0024"
+    attack: "T1105"
+    all:
+      - id: micro-behaviors/process/create/subprocess::methods
+      - id: micro-behaviors/process/create/shell/from-pipe::download-pipe-exec
+    any:
+      - id: micro-behaviors/process/create/subprocess::shell-true
+
+  # Python file with subprocess shell=True and curl|bash
+  # Broader: catches cases where methods composite doesn't fire but raw subprocess does
+  - id: shell-true-curl-pipe
+    desc: Python shell=True with curl pipe to interpreter
+    crit: hostile
+    conf: 0.95
+    mbc: "B0024"
+    attack: "T1105"
+    all:
+      - id: micro-behaviors/process/create/subprocess::shell-true
+      - id: micro-behaviors/process/create/shell/from-pipe::download-pipe-exec

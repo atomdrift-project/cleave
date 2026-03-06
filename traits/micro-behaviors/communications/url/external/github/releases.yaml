@@ -1,0 +1,16 @@
+# GitHub Releases URL Detection
+# Detects URLs pointing to GitHub releases download assets
+# Commonly abused by malware for payload hosting on trusted domain
+
+defaults:
+  for: [all]
+  attack: T1105
+
+traits:
+  - id: github-release-download
+    desc: GitHub releases download URL
+    crit: notable
+    conf: 0.85
+    if:
+      type: raw
+      regex: 'github\.com/[a-zA-Z0-9._-]+/[a-zA-Z0-9._-]+/releases/download/'

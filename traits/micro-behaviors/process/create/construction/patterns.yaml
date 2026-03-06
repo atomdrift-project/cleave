@@ -23,4 +23,4 @@ composite_rules:
     near_lines: 10
     all:
       - id: micro-behaviors/process/create/construction::string-assign
-      - id: micro-behaviors/process/create/subprocess::run-call
+      - id: micro-behaviors/process/create/subprocess::run-content

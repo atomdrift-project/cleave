@@ -42,5 +42,5 @@ composite_rules:
     near_lines: 50
     all:
       - id: micro-behaviors/fs/file/open::generic
-      - id: micro-behaviors/process/create/subprocess::run-call
+      - id: micro-behaviors/process/create/subprocess::run-content
       - id: temp-dir-reference

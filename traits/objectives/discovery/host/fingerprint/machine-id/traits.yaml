@@ -107,6 +107,26 @@ composite_rules:
       - id: hwid-string
       - id: micro-behaviors/os/system/machine-id::fingerprint-string
 
+  # Windows host fingerprint beacon: MachineGuid + physical drive + HTTP
+  - id: win-fingerprint-beacon
+    desc: Windows host fingerprint collection with HTTP
+    crit: suspicious
+    conf: 0.9
+    attack: "T1082"
+    for: [pe]
+    platforms: [windows]
+    all:
+      - id: machineguid
+      - id: micro-behaviors/communications/http/get::internet-open
+    any:
+      - id: objectives/impact/system/directory::physical-drive-unc
+      - id: objectives/discovery/host/security::uac-policy-query
+      - id: micro-behaviors/os/compat/wow64::is-wow64-process
+    needs: 1
+    downgrade:
+      any:
+        - id: metadata/signed/platform::microsoft
+
   # Hostname composite
   - id: hostname
     desc: Hostname collection for identification

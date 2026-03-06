@@ -127,6 +127,7 @@ impl ArchiveAnalyzer {
 
     /// Set passwords to try for encrypted zip files
     #[must_use]
+    #[allow(dead_code)]
     pub(crate) fn with_zip_passwords(mut self, passwords: Vec<String>) -> Self {
         self.zip_passwords = Arc::from(passwords);
         self

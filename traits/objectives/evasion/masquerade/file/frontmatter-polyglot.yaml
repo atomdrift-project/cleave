@@ -1,0 +1,16 @@
+# YAML Frontmatter in Code Files
+# Detects files with YAML frontmatter (---) that masquerade as code
+# Common in AI skill/tool injection attacks where markdown is disguised
+
+defaults:
+  for: [javascript, typescript, python, shell]
+
+traits:
+  - id: yaml-frontmatter-in-code
+    desc: YAML frontmatter in non-markdown file
+    crit: notable
+    conf: 0.7
+    attack: T1036
+    if:
+      type: raw
+      regex: '\A---\n[a-z_]+:'

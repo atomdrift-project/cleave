@@ -23,6 +23,14 @@ traits:
   if:
     type: basename
     regex: (?i)^(Setup|OneDriveStandaloneUpdater)\.exe$
+- id: adjacent-shell-dll-reference
+  desc: Reference to adjacent _shell.dll sideload target
+  crit: notable
+  conf: 0.8
+  for: [pe]
+  if:
+    type: string
+    regex: "\\w+_shell\\.dll"
 composite_rules:
 - id: sideloading-host-generic
   desc: Potential side-loading host binary name

@@ -92,6 +92,29 @@ composite_rules:
     unless:
       - id: metadata/vendor/jetbrains::jetbrains-company-string
 
+  # === Process Hollowing via Context Hijack ===
+  # Variant without explicit SuspendThread/WriteProcessMemory imports:
+  # CreateProcessW (with CREATE_SUSPENDED) + thread context manipulation
+  # + FlushInstructionCache (post-write) + ResumeThread
+  - id: process-hollowing-context-hijack
+    desc: Process hollowing via thread context manipulation
+    crit: suspicious
+    conf: 0.90
+    attack: "T1055.012"
+    for: ["pe"]
+    all:
+      - id: micro-behaviors/process/create/spawn::create-process-w
+      - id: micro-behaviors/process/injection/hollowing::get-thread-context
+      - id: micro-behaviors/process/injection/hollowing::set-thread-context
+      - id: micro-behaviors/mem/execute/rwx::flush-instruction-cache
+      - id: micro-behaviors/process/injection/hollowing::resume-thread
+    none:
+      - id: metadata/format::many-exports
+    downgrade:
+      any:
+        - id: metadata/vendor/valve::valve-corp-binary
+        - id: metadata/vendor/microsoft::is-microsoft-named
+
   # === Complete Injection Framework ===
   - id: full-injection-capability
     desc: Complete process injection toolkit

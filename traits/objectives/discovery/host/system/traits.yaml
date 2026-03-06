@@ -60,22 +60,13 @@ traits:
       type: raw
       regex: "curl.{0,50}business.{0,50}kpi|curl.{0,50}install.{0,50}track"
 
-  # === Pipedream Webhook ===
-  - id: hostname-cmd
-    desc: hostname command reference
-    crit: notable
-    conf: 0.5
-    if:
-      type: raw
-      word: "hostname"
-
 composite_rules:
   - id: recon-command-ref
     desc: Reconnaissance command reference
     crit: notable
     conf: 0.6
     any:
-      - id: hostname-cmd
+      - id: micro-behaviors/os/sysinfo/hostname::hostname-cmd
       - id: micro-behaviors/process/user/query::whoami-cmd
 
   - id: pipedream-recon-webhook

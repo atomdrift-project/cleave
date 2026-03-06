@@ -95,6 +95,9 @@ traits:
       type: raw
       regex: 'subprocess\.(run|Popen|call)\(.{0,100}shell\s*=\s*True'
 
+  # Composite-based detection for multiline subprocess + shell=True
+  # The regex above fails when args span multiple lines
+
 composite_rules:
   # === getpass Wrapper Detection ===
   - id: getpass-wrapper

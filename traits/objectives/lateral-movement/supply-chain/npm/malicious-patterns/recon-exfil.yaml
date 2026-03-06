@@ -46,5 +46,5 @@ composite_rules:
     all:
       - id: micro-behaviors/process/user/query::whoami-cmd
       - id: micro-behaviors/data/text/keywords::pwd
-      - id: objectives/discovery/host/system::hostname-cmd
+      - id: micro-behaviors/os/sysinfo/hostname::hostname-cmd
       - id: objectives/exfiltration/side-channel/dns::dns-exfil-curl

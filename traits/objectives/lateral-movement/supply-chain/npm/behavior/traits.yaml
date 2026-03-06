@@ -189,6 +189,29 @@ traits:
       type: kv
       path: 'description'
       regex: '^.{0,15}$'
+  - id: desc-filler-placeholder
+    desc: Description is generic filler text
+    crit: notable
+    conf: 0.8
+    for:
+      - package.json
+    if:
+      type: kv
+      path: 'description'
+      regex: '\bpack(age)?\s+here\b'
+      case_insensitive: true
+  - id: keywords-single-entry
+    desc: Keywords array has exactly one entry
+    crit: notable
+    conf: 0.7
+    for:
+      - package.json
+    if:
+      type: kv
+      path: 'keywords'
+      size_min: 1
+      size_max: 1
+
   - id: pkg-main-resp-path
     desc: Main uses resp/ directory
     crit: notable

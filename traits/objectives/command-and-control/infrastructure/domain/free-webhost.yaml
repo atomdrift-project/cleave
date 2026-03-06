@@ -53,6 +53,15 @@ traits:
       type: raw
       regex: "\\.pages\\.dev"
 
+  # === GitHub Pages ===
+  - id: github-pages
+    desc: GitHub Pages hosting domain
+    crit: notable
+    conf: 0.85
+    if:
+      type: string
+      substr: ".github.io"
+
 composite_rules:
   - id: free-webhost-c2-channel
     desc: Free webhosting C2 channel
@@ -65,3 +74,4 @@ composite_rules:
       - id: webhostapp-domain
       - id: free-webhost-domain
       - id: free-webhost-c2-url
+      - id: github-pages

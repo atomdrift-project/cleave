@@ -1,0 +1,17 @@
+# Windows Security Policy Discovery
+# Detects queries to security configuration registry keys
+# ATT&CK: T1082 (System Information Discovery)
+
+defaults:
+  for: [pe, dll]
+  platforms: [windows]
+
+traits:
+  - id: uac-policy-query
+    desc: UAC EnableLUA policy registry query
+    crit: notable
+    conf: 0.85
+    attack: "T1082"
+    if:
+      type: string
+      substr: "EnableLUA"

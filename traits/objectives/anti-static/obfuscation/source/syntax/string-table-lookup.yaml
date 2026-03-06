@@ -1,0 +1,13 @@
+defaults:
+  for: [javascript]
+  crit: suspicious
+  attack: "T1027"
+
+traits:
+  - id: indexed-method-resolution
+    desc: Dynamic indexed string resolution
+    conf: 0.85
+    count_min: 5
+    if:
+      type: raw
+      regex: '\w{2,8}\.\w{2,8}\(\d{1,3}\)'

@@ -7,7 +7,7 @@ OUT_DIR = out
 
 # For sccache, set RUSTC_WRAPPER=sccache in your environment
 
-.PHONY: all build debug release tarball rollout-bastille test test-fast test-unit lint fmt clean coverage ci help regenerate-testdata
+.PHONY: all build debug release tarball rollout-bastille test test-fast test-unit lint fmt clean coverage ci help regenerate-testdata loadtest
 
 # Default target
 all: build
@@ -30,6 +30,7 @@ help: ## Show this help
 	@echo "  coverage              - Generate code coverage report"
 	@echo "  ci                    - Run all CI checks (test + lint)"
 	@echo "  regenerate-testdata   - Regenerate integration test snapshots from ~/data/cleave"
+	@echo "  loadtest              - Run load test against cleave server"
 	@echo "  clean                 - Clean all build artifacts"
 
 build: debug ## Build in debug mode (default)
@@ -133,6 +134,12 @@ regenerate-testdata: release ## Regenerate integration test snapshots
 	@echo "Regenerating test data from ~/data/cleave..."
 	cargo build --release --quiet --bin regenerate_testdata
 	./target/release/regenerate_testdata
+
+loadtest: ## Run load test against cleave server
+	@echo "Building loadtest tool..."
+	@cd tools/loadtest && go build -o loadtest .
+	@echo "✓ Running load test..."
+	@cd tools/loadtest && ./loadtest $(LOADTEST_ARGS)
 
 $(OUT_DIR):
 	mkdir -p $(OUT_DIR)

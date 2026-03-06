@@ -1,0 +1,42 @@
+# Shell Stager Patterns
+# Detects command substitution and inline execution for download-execute
+# ATT&CK: T1059.004 (Unix Shell)
+
+defaults:
+  for: [all]
+  attack: T1059.004
+
+traits:
+  - id: bash-c-curl-subshell
+    desc: Download-execute via bash -c with command substitution
+    crit: suspicious
+    conf: 0.85
+    if:
+      type: raw
+      regex: 'bash\s+-c\s+.{0,10}\$\(curl'
+
+  - id: sh-c-curl-subshell
+    desc: Download-execute via sh -c with command substitution
+    crit: suspicious
+    conf: 0.85
+    if:
+      type: raw
+      regex: 'sh\s+-c\s+.{0,10}\$\(curl'
+
+  - id: bash-c-wget-subshell
+    desc: Download-execute via bash -c with wget substitution
+    crit: suspicious
+    conf: 0.85
+    if:
+      type: raw
+      regex: 'bash\s+-c\s+.{0,10}\$\(wget'
+
+composite_rules:
+  - id: shell-subshell-stager
+    desc: Shell stager via command substitution
+    crit: suspicious
+    conf: 0.9
+    any:
+      - id: bash-c-curl-subshell
+      - id: sh-c-curl-subshell
+      - id: bash-c-wget-subshell

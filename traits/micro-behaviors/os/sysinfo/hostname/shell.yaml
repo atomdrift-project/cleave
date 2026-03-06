@@ -1,0 +1,16 @@
+# Hostname Discovery - Shell/POSIX
+# Retrieving system hostname via shell commands
+
+defaults:
+  for: [shell, javascript, python, ruby, perl, php, package.json]
+  attack: "T1082"
+
+traits:
+  - id: hostname-cmd
+    desc: hostname command invocation
+    crit: baseline
+    conf: 0.5
+    mbc: "E1082"
+    if:
+      type: raw
+      word: hostname

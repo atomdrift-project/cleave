@@ -11,7 +11,7 @@ traits:
     conf: 0.85
     for: [javascript, typescript]
     if:
-      type: string
+      type: raw
       regex: "require\\(['\"]vm['\"]\\)|from ['\"]vm['\"]"
 
   - id: vm-createContext
@@ -20,44 +20,40 @@ traits:
     conf: 0.8
     for: [javascript, typescript]
     if:
-      type: ast
-      kind: call
-      exact: "createContext"
+      type: raw
+      regex: "\\bcreateContext\\s*\\("
 
   - id: vm-runInContext
-    desc: VM runInContext (execute code in
+    desc: VM runInContext (execute code in sandbox)
     crit: suspicious
     conf: 0.9
     mbc: "B0024"
     attack: "T1059"
     for: [javascript, typescript]
     if:
-      type: ast
-      kind: call
-      exact: "runInContext"
+      type: raw
+      regex: "\\brunInContext\\s*\\("
 
   - id: vm-runInNewContext
-    desc: VM runInNewContext (execute in isolated
+    desc: VM runInNewContext (execute in isolated sandbox)
     crit: suspicious
     conf: 0.9
     mbc: "B0024"
     attack: "T1059"
     for: [javascript, typescript]
     if:
-      type: ast
-      kind: call
-      exact: "runInNewContext"
+      type: raw
+      regex: "\\brunInNewContext\\s*\\("
 
   - id: vm-runInThisContext
-    desc: VM runInThisContext (execute in current
+    desc: VM runInThisContext (execute in current context)
     crit: suspicious
     conf: 0.85
     attack: "T1059"
     for: [javascript, typescript]
     if:
-      type: ast
-      kind: call
-      exact: "runInThisContext"
+      type: raw
+      regex: "\\brunInThisContext\\s*\\("
 
   - id: vm-Script
     desc: VM Script compilation
@@ -227,3 +223,16 @@ composite_rules:
       - id: metadata/library/structure
       - id: metadata/library/axios
       - id: metadata/library/prettier
+
+  # File-to-VM Execution (dropper/loader pattern)
+  - id: file-to-vm-execution
+    desc: File read + VM execution (loader pattern)
+    crit: suspicious
+    conf: 0.92
+    mbc: "E1059"
+    attack: "T1059.007"
+    for: [javascript, typescript]
+    all:
+      - id: vm-require
+      - id: vm-run-methods
+      - id: metadata/import/builtin::require-fs

@@ -19,15 +19,6 @@ traits:
   # === String-based method detection ===
   # NOTE: popen removed - use popen-content (content type is broader)
 
-  - id: run-call
-    desc: subprocess.run call
-    crit: notable
-    conf: 0.75
-    mbc: "E1059.006"
-    if:
-      type: string
-      substr: "subprocess.run("
-
   - id: call
     desc: subprocess.call call
     crit: notable
@@ -103,6 +94,15 @@ traits:
   # === Content-based fallback ===
   # subprocess calls appear as code, not string literals, so string type misses them.
   # Content type matches raw file bytes.
+  - id: run-content
+    desc: subprocess.run call (content)
+    crit: notable
+    conf: 0.75
+    mbc: "E1059.006"
+    if:
+      type: raw
+      substr: "subprocess.run("
+
   - id: popen-content
     desc: subprocess.Popen call (content)
     crit: notable
@@ -120,6 +120,15 @@ traits:
     if:
       type: raw
       substr: "subprocess.check_call("
+
+  - id: shell-true
+    desc: shell=True parameter in subprocess
+    crit: notable
+    conf: 0.7
+    mbc: "E1059.006"
+    if:
+      type: raw
+      substr: "shell=True"
 
   # === GuardDog: os.exec* family ===
   - id: os-execl
@@ -303,7 +312,7 @@ composite_rules:
     conf: 0.75
     any:
       - id: popen-content
-      - id: run-call
+      - id: run-content
       - id: call
       - id: check-output
       - id: check-call-content

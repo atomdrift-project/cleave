@@ -118,6 +118,28 @@ composite_rules:
         - id: metadata/vendor/microsoft::is-microsoft-named
         - id: metadata/quality/versioning::pe-version-resource
 
+  # PE loader with WinInet HTTP, hardcoded C2 IPs, machine fingerprinting,
+  # and process injection capability
+  - id: wininet-c2-loader
+    desc: WinInet HTTP loader with C2 and injection
+    crit: hostile
+    conf: 0.93
+    attack: "T1071.001"
+    all:
+      - id: micro-behaviors/communications/http/get::internet-open
+      - id: micro-behaviors/communications/http/get::internet-connect
+      - id: micro-behaviors/communications/infrastructure/hardcoded/ip-port::hardcoded-ipv4-port
+    any:
+      - id: objectives/discovery/host/fingerprint/machine-id::machineguid
+      - id: objectives/evasion/process/injection::process-hollowing-context-hijack
+      - id: objectives/anti-analysis/debugger/detect::win-anti-analysis-suite
+      - id: micro-behaviors/os/persistence/startup::startup-folder-shell-path-composition-chain
+    needs: 2
+    downgrade:
+      any:
+        - id: metadata/signed/platform::microsoft
+        - id: metadata/vendor/microsoft::is-microsoft-named
+
   - id: winsock-proxy-connect-command-backdoor
     desc: Winsock proxy CONNECT C2 with command backdoor
     crit: hostile

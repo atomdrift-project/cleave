@@ -216,8 +216,22 @@ fn analysis_cache() -> Option<&'static AnalysisCache> {
             match AnalysisCache::open() {
                 Ok(cache) => Some(cache),
                 Err(e) => {
-                    tracing::warn!("Failed to open analysis cache: {}", e);
-                    None
+                    // Cache is corrupt — delete and recreate
+                    tracing::debug!("Analysis cache open failed, recreating: {}", e);
+                    if let Ok(dir) = cache_dir() {
+                        let db_path = dir.join("analysis-cache.db");
+                        // Remove the main DB and any WAL/SHM files
+                        let _ = std::fs::remove_file(&db_path);
+                        let _ = std::fs::remove_file(db_path.with_extension("db-wal"));
+                        let _ = std::fs::remove_file(db_path.with_extension("db-shm"));
+                    }
+                    match AnalysisCache::open() {
+                        Ok(cache) => Some(cache),
+                        Err(e2) => {
+                            tracing::warn!("Failed to recreate analysis cache: {}", e2);
+                            None
+                        }
+                    }
                 }
             }
         })

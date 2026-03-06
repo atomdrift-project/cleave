@@ -1288,6 +1288,7 @@ impl FileType {
     /// Get YARA rule filetypes that are relevant for this file type
     /// Returns a list of filetype identifiers to match against YARA metadata
     #[must_use]
+    #[allow(dead_code)]
     pub(crate) fn yara_filetypes(&self) -> Vec<&'static str> {
         match self {
             FileType::MachO => vec!["macho", "elf", "so"],

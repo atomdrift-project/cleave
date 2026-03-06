@@ -12,7 +12,7 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tempfile::NamedTempFile;
-use tracing::{info, info_span, warn, Span};
+use tracing::{info, info_span, warn, Instrument, Span};
 
 use super::AppState;
 
@@ -25,37 +25,40 @@ pub(super) async fn health() -> Json<serde_json::Value> {
 pub(super) async fn reload(State(state): State<Arc<AppState>>) -> Response {
     let request_id = state.next_request_id();
     let span = info_span!("reload", request_id);
-    let _enter = span.enter();
 
-    let start = Instant::now();
-    let task_span = Span::current();
-    let result = tokio::task::spawn_blocking(move || {
-        let _enter = task_span.enter();
-        crate::shared_resources::reload_capability_mapper()
-    })
-    .await;
-    let elapsed_ms = start.elapsed().as_millis();
+    async {
+        let start = Instant::now();
+        let task_span = Span::current();
+        let result = tokio::task::spawn_blocking(move || {
+            let _enter = task_span.enter();
+            crate::shared_resources::reload_capability_mapper()
+        })
+        .await;
+        let elapsed_ms = start.elapsed().as_millis();
 
-    match result {
-        Ok((traits, composites)) => {
-            info!(traits, composites, elapsed_ms, "Reload complete");
-            Json(serde_json::json!({
-                "status": "ok",
-                "traits": traits,
-                "composites": composites,
-                "elapsed_ms": elapsed_ms,
-            }))
-            .into_response()
-        }
-        Err(e) => {
-            warn!(elapsed_ms, "Reload task join error: {}", e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": "Internal error"})),
-            )
+        match result {
+            Ok((traits, composites)) => {
+                info!(traits, composites, elapsed_ms, "Reload complete");
+                Json(serde_json::json!({
+                    "status": "ok",
+                    "traits": traits,
+                    "composites": composites,
+                    "elapsed_ms": elapsed_ms,
+                }))
                 .into_response()
+            }
+            Err(e) => {
+                warn!(elapsed_ms, "Reload task join error: {}", e);
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({"error": "Internal error"})),
+                )
+                    .into_response()
+            }
         }
     }
+    .instrument(span)
+    .await
 }
 
 /// File analysis endpoint.
@@ -72,8 +75,17 @@ pub(super) async fn analyze(
     let request_start = Instant::now();
 
     let span = info_span!("request", %client_ip, request_id);
-    let _enter = span.enter();
 
+    analyze_inner(state, &mut multipart, request_start)
+        .instrument(span)
+        .await
+}
+
+async fn analyze_inner(
+    state: Arc<AppState>,
+    multipart: &mut axum::extract::Multipart,
+    request_start: Instant,
+) -> Response {
     info!("--> POST /analyze");
 
     if let Some(rss) = crate::memory_tracker::current_rss() {
@@ -89,26 +101,6 @@ pub(super) async fn analyze(
             )
                 .into_response();
         }
-    }
-
-    let max_active_tasks = std::thread::available_parallelism()
-        .map(std::num::NonZero::get)
-        .unwrap_or(4)
-        * 2;
-    let current_tasks = state
-        .active_tasks
-        .load(std::sync::atomic::Ordering::Relaxed);
-    if current_tasks >= max_active_tasks {
-        warn!(
-            active_tasks = current_tasks,
-            max_tasks = max_active_tasks,
-            "Server overloaded: too many active tasks"
-        );
-        return (
-            StatusCode::SERVICE_UNAVAILABLE,
-            Json(serde_json::json!({"error": "Server overloaded (tasks)"})),
-        )
-            .into_response();
     }
 
     let mut field = match multipart.next_field().await {
@@ -214,22 +206,20 @@ pub(super) async fn analyze(
     state
         .active_tasks
         .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let state_for_task = Arc::clone(&state);
     let task_span = Span::current();
 
     let result = tokio::time::timeout(timeout_duration, async move {
         tokio::task::spawn_blocking(move || {
             let _enter = task_span.enter();
-            let res = analyze_file(&path, &AnalysisOptions::default());
-            state_for_task
-                .active_tasks
-                .fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
-            res
+            analyze_file(&path, &AnalysisOptions::default())
         })
         .await
     })
     .await;
 
+    state
+        .active_tasks
+        .fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
     drop(temp_file);
     let elapsed_ms = request_start.elapsed().as_millis();
 
@@ -360,11 +350,35 @@ pub(super) async fn analyze_path(
     let client_ip = addr.ip();
     let request_start = Instant::now();
 
-    // Create a span for the request
     let span = info_span!("request-path", %client_ip, request_id, path = %request.path);
-    let _enter = span.enter();
 
+    analyze_path_inner(state, request, request_start)
+        .instrument(span)
+        .await
+}
+
+async fn analyze_path_inner(
+    state: Arc<AppState>,
+    request: AnalyzePathRequest,
+    request_start: Instant,
+) -> Response {
     info!("--> POST /analyze-path");
+
+    // Check memory pressure before accepting work
+    if let Some(rss) = crate::memory_tracker::current_rss() {
+        if rss > state.max_rss_bytes {
+            warn!(
+                rss_mb = rss / 1024 / 1024,
+                max_rss_mb = state.max_rss_bytes / 1024 / 1024,
+                "Server overloaded: high memory usage"
+            );
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(serde_json::json!({"error": "Server overloaded (memory)"})),
+            )
+                .into_response();
+        }
+    }
 
     // Check if local path analysis is enabled
     if state.allowed_local_paths.is_empty() {

@@ -17,6 +17,7 @@ use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::signal;
+use tower::limit::ConcurrencyLimitLayer;
 use tower_http::limit::RequestBodyLimitLayer;
 use tracing::{info, warn};
 
@@ -137,13 +138,23 @@ pub async fn run(config: ServerConfig) -> anyhow::Result<()> {
         }
     });
 
-    // Layer order matters: outermost (last added) runs first.
-    // We want: rate limit -> body size limit -> handler
+    let max_concurrent = std::thread::available_parallelism()
+        .map(std::num::NonZero::get)
+        .unwrap_or(4)
+        * 2;
+    eprintln!("Max concurrent analyses: {}", max_concurrent);
+
+    // Analysis routes with concurrency limit to prevent thread pool starvation.
+    let analysis_routes = Router::new()
+        .route("/analyze", post(handlers::analyze))
+        .route("/analyze-path", post(handlers::analyze_path))
+        .layer(ConcurrencyLimitLayer::new(max_concurrent));
+
+    // Health/reload routes remain unrestricted.
     let app = Router::new()
         .route("/health", get(handlers::health))
         .route("/reload", post(handlers::reload))
-        .route("/analyze", post(handlers::analyze))
-        .route("/analyze-path", post(handlers::analyze_path))
+        .merge(analysis_routes)
         .layer(RequestBodyLimitLayer::new(config.max_body_size))
         .layer(middleware::from_fn_with_state(
             Arc::clone(&state),

@@ -139,7 +139,7 @@ loadtest: ## Run load test against cleave server
 	@echo "Building loadtest tool..."
 	@cd tools/loadtest && go build -o loadtest .
 	@echo "✓ Running load test..."
-	@cd tools/loadtest && ./loadtest $(LOADTEST_ARGS)
+	@tools/loadtest/loadtest $(LOADTEST_ARGS)
 
 $(OUT_DIR):
 	mkdir -p $(OUT_DIR)

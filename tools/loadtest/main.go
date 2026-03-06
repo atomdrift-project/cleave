@@ -22,6 +22,7 @@ type config struct {
 	mode        string
 	concurrency int
 	duration    time.Duration
+	requests    int
 	rps         int
 	payloadDir  string
 	verbose     bool
@@ -35,6 +36,7 @@ func main() {
 	flag.StringVar(&cfg.mode, "mode", "cached", "workload: cached or uncached")
 	flag.IntVar(&cfg.concurrency, "concurrency", 10, "parallel workers")
 	flag.DurationVar(&cfg.duration, "duration", 30*time.Second, "test duration")
+	flag.IntVar(&cfg.requests, "requests", 0, "total requests to send (0 = unlimited, use duration)")
 	flag.IntVar(&cfg.rps, "rps", 0, "rate limit (0 = unlimited)")
 	flag.StringVar(&cfg.payloadDir, "payload-dir", "", "directory of files to upload (overrides built-in payloads)")
 	flag.BoolVar(&cfg.verbose, "verbose", false, "print per-request details")
@@ -51,6 +53,7 @@ func main() {
 	defer cancel()
 
 	// Auto-start server if requested.
+	var serverLogPath string
 	if cfg.startServer {
 		srv, err := startServer(ctx, cfg.cleaveBin)
 		if err != nil {
@@ -59,6 +62,9 @@ func main() {
 		}
 		defer srv.stop()
 		cfg.server = srv.baseURL
+		if srv.logFile != nil {
+			serverLogPath = srv.logFile.Name()
+		}
 	}
 
 	// Verify server is reachable.
@@ -80,24 +86,25 @@ func main() {
 		cfg.concurrency, cfg.duration, cfg.rps)
 
 	results := run(ctx, cfg, payloads)
-	printResults(cfg, results)
+	printResults(cfg, results, serverLogPath)
 }
 
-func printResults(cfg config, results []result) {
+func printResults(cfg config, results []result, serverLogPath string) {
 	if len(results) == 0 {
 		fmt.Println("No results collected.")
 		return
 	}
 
 	var (
-		success    int
-		failed     int
-		err429     int
-		err503     int
-		errTimeout int
-		errOther   int
-		totalBytes int64
-		totalResp  int64
+		success      int
+		failed       int
+		err429       int
+		err503       int
+		errTimeout   int
+		errOther     int
+		shortResults int
+		totalBytes   int64
+		totalResp    int64
 	)
 
 	latencies := make([]time.Duration, 0, len(results))
@@ -115,6 +122,9 @@ func printResults(cfg config, results []result) {
 		switch {
 		case r.statusCode >= 200 && r.statusCode < 300:
 			success++
+			if r.responseBytes < 256 {
+				shortResults++
+			}
 		case r.statusCode == 429:
 			failed++
 			err429++
@@ -177,6 +187,30 @@ func printResults(cfg config, results []result) {
 	fmt.Printf("Upload:        %.1f MB/s\n", uploadMBps)
 	fmt.Printf("Avg response:  %.1f KB\n", avgResp/1024)
 	fmt.Println("──────────────────────────────────────────────────")
+
+	// Print error and short-response details.
+	hasProblems := failed > 0 || shortResults > 0
+	if hasProblems {
+		fmt.Println()
+		fmt.Println("── Errors ───────────────────────────────────────")
+		for _, r := range results {
+			if r.err != nil {
+				fmt.Printf("  %s  %s  err=%s\n",
+					r.finishedAt.Format("15:04:05.000"), r.filename, r.err)
+			} else if r.statusCode < 200 || r.statusCode >= 300 {
+				fmt.Printf("  %s  %s  status=%d  %s\n",
+					r.finishedAt.Format("15:04:05.000"), r.filename, r.statusCode, r.responseBody)
+			} else if r.responseBytes < 256 {
+				fmt.Printf("  %s  %s  short response (%d bytes): %s\n",
+					r.finishedAt.Format("15:04:05.000"), r.filename, r.responseBytes, r.responseBody)
+			}
+		}
+		fmt.Println("─────────────────────────────────────────────────")
+	}
+
+	if serverLogPath != "" {
+		fmt.Printf("\nServer log: %s\n", serverLogPath)
+	}
 }
 
 func pct(n, total int) float64 {

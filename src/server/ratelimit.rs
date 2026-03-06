@@ -41,8 +41,13 @@ impl RateLimiter {
 
     /// Check if a request from the given IP is allowed.
     /// Returns `true` if allowed, `false` if rate limited.
+    /// A QPS of 0 means unlimited (no rate limiting).
     #[must_use]
     pub fn check(&self, ip: IpAddr) -> bool {
+        if self.tokens_per_second == 0.0 {
+            return true;
+        }
+
         let now = Instant::now();
 
         let mut entry = self.buckets.entry(ip).or_insert_with(|| TokenBucket {
@@ -103,6 +108,16 @@ mod tests {
 
         // Next request should be blocked
         assert!(!limiter.check(ip));
+    }
+
+    #[test]
+    fn test_zero_qps_means_unlimited() {
+        let limiter = RateLimiter::new(0);
+        let ip = IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1));
+
+        for _ in 0..1000 {
+            assert!(limiter.check(ip));
+        }
     }
 
     #[test]

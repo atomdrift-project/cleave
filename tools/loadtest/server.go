@@ -12,6 +12,7 @@ import (
 
 type cleaveServer struct {
 	cmd     *exec.Cmd
+	logFile *os.File
 	port    int
 	baseURL string
 	client  *http.Client
@@ -48,25 +49,35 @@ func startServer(ctx context.Context, cleaveBin string) (*cleaveServer, error) {
 	args := []string{
 		"server",
 		"--bind", bind,
-		"--qps", "0", // no rate limit for load testing
+		"--qps", "0", // 0 = unlimited (no rate limiting)
 		"--timeout", "300",
 	}
 
+	logFile, err := os.CreateTemp("", "cleave-loadtest-*.log")
+	if err != nil {
+		return nil, fmt.Errorf("create server log: %w", err)
+	}
+
 	cmd := exec.CommandContext(ctx, cleaveBin, args...)
-	cmd.Stderr = os.Stderr
+	cmd.Stderr = logFile
+	cmd.Stdout = logFile
 
 	if err := cmd.Start(); err != nil {
+		logFile.Close()
+		os.Remove(logFile.Name())
 		return nil, fmt.Errorf("start cleave: %w", err)
 	}
 
 	s := &cleaveServer{
 		cmd:     cmd,
+		logFile: logFile,
 		port:    port,
 		baseURL: fmt.Sprintf("http://127.0.0.1:%d", port),
 		client:  &http.Client{Timeout: 10 * time.Minute},
 	}
 
 	fmt.Fprintf(os.Stderr, "Started cleave server on %s (PID %d)\n", bind, cmd.Process.Pid)
+	fmt.Fprintf(os.Stderr, "Server log: %s\n", logFile.Name())
 
 	if err := waitHealthy(ctx, s.baseURL, 3*time.Minute); err != nil {
 		s.stop()
@@ -113,4 +124,8 @@ func (s *cleaveServer) stop() {
 	fmt.Fprintf(os.Stderr, "Stopping cleave server (PID %d)\n", s.cmd.Process.Pid)
 	s.cmd.Process.Kill()
 	s.cmd.Wait()
+	if s.logFile != nil {
+		s.logFile.Close()
+		fmt.Fprintf(os.Stderr, "Server log saved: %s\n", s.logFile.Name())
+	}
 }

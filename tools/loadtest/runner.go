@@ -21,6 +21,8 @@ type result struct {
 	uploadBytes   int64
 	responseBytes int64
 	err           error
+	filename      string
+	responseBody  string // populated on non-2xx or error
 }
 
 // run executes the load test and returns all results.
@@ -32,6 +34,7 @@ func run(ctx context.Context, cfg config, payloads []payload) []result {
 		mu      sync.Mutex
 		results []result
 		idx     atomic.Int64
+		maxReqs = int64(cfg.requests) // 0 = unlimited
 	)
 
 	// Rate limiter: token bucket via ticker.
@@ -68,8 +71,11 @@ func run(ctx context.Context, cfg config, payloads []payload) []result {
 					}
 				}
 
-				// Pick payload.
+				// Pick payload; stop if request limit reached.
 				i := idx.Add(1) - 1
+				if maxReqs > 0 && i >= maxReqs {
+					return
+				}
 				p := payloads[int(i)%len(payloads)]
 
 				// In uncached mode, mutate the payload for each request.
@@ -78,6 +84,7 @@ func run(ctx context.Context, cfg config, payloads []payload) []result {
 				}
 
 				r := sendRequest(deadline, client, cfg, p)
+				r.filename = p.filename
 
 				if cfg.verbose {
 					status := fmt.Sprintf("%d", r.statusCode)
@@ -144,7 +151,17 @@ func sendRequest(ctx context.Context, client *http.Client, cfg config, p payload
 	respBody, _ := io.ReadAll(resp.Body)
 	r.statusCode = resp.StatusCode
 	r.responseBytes = int64(len(respBody))
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 || len(respBody) < 256 {
+		r.responseBody = truncate(string(respBody), 200)
+	}
 	r.finishedAt = time.Now()
 	r.latency = r.finishedAt.Sub(start)
 	return r
+}
+
+func truncate(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n] + "..."
 }

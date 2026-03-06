@@ -90,11 +90,7 @@ impl ElfAnalyzer {
         let mut tools_used = vec![];
 
         // Attempt to parse with goblin
-        let mut elf_metrics_opt = None;
-        let mut goblin_code_size: Option<u64> = None;
-        let mut has_symbols = false; // set below from goblin parse
-        
-        let r2_strings = match Elf::parse(data) {
+        let (_elf_metrics_opt, _goblin_code_size, _has_symbols, r2_strings) = match Elf::parse(data) {
             Ok(elf) => {
                 tools_used.push("goblin".to_string());
 
@@ -102,16 +98,16 @@ impl ElfAnalyzer {
                 report.target.architectures = Some(vec![self.arch_name(&elf)]);
 
                 // Compute ELF-specific metrics
-                elf_metrics_opt = Some(self.compute_elf_metrics(&elf));
-                has_symbols = !elf.syms.is_empty();
+                let elf_metrics = self.compute_elf_metrics(&elf);
+                let symbols_found = !elf.syms.is_empty();
 
                 // Calculate code_size from goblin section flags (more accurate than radare2)
-                goblin_code_size = Some(self.compute_code_size(&elf));
+                let code_size = Some(self.compute_code_size(&elf));
 
                 // Parallelize Radare2 deep analysis with the rest of Goblin structural analysis
                 let (r2_inner, _) = rayon::join(
                     || if Radare2Analyzer::is_available() {
-                        Some(self.radare2.extract_batched(file_path, has_symbols, precomputed_sha256))
+                        Some(self.radare2.extract_batched(file_path, symbols_found, precomputed_sha256))
                     } else {
                         None
                     },
@@ -128,7 +124,7 @@ impl ElfAnalyzer {
                 );
 
                 // Process Radare2 results if available
-                if let Some(Ok(batched)) = r2_inner {
+                let r2_strings_extracted = if let Some(Ok(batched)) = r2_inner {
                     tools_used.push("radare2".to_string());
 
                     // Check if rizin timed out - add anti-analysis finding
@@ -160,20 +156,20 @@ impl ElfAnalyzer {
 
                     // Override code_size with goblin-based calculation (more accurate)
                     // In ELF, only sections with SHF_EXECINSTR flag contain executable code
-                    if let Some(mut code_size) = goblin_code_size {
+                    if let Some(mut cs) = code_size {
                         // Sanity check: code_size should never exceed file size
-                        if code_size > binary_metrics.file_size {
-                            eprintln!("WARNING: code_size ({}) > file_size ({}) - this indicates a bug in section classification", code_size, binary_metrics.file_size);
-                            code_size = binary_metrics.file_size; // Cap at file_size to prevent invalid ratio
+                        if cs > binary_metrics.file_size {
+                            eprintln!("WARNING: code_size ({}) > file_size ({}) - this indicates a bug in section classification", cs, binary_metrics.file_size);
+                            cs = binary_metrics.file_size; // Cap at file_size to prevent invalid ratio
                         }
 
-                        binary_metrics.code_size = code_size;
+                        binary_metrics.code_size = cs;
 
                         // Recalculate code_to_data_ratio with correct code_size
                         if binary_metrics.file_size > 0 {
-                            let data_size = binary_metrics.file_size.saturating_sub(code_size);
+                            let data_size = binary_metrics.file_size.saturating_sub(cs);
                             if data_size > 0 {
-                                binary_metrics.code_to_data_ratio = code_size as f32 / data_size as f32;
+                                binary_metrics.code_to_data_ratio = cs as f32 / data_size as f32;
 
                                 // Sanity check: extremely high ratio likely indicates classification bug
                                 if binary_metrics.code_to_data_ratio > 1000.0 {
@@ -183,7 +179,7 @@ impl ElfAnalyzer {
                         }
 
                         // Recalculate density metrics that depend on code_size
-                        let code_kb = code_size as f32 / 1024.0;
+                        let code_kb = cs as f32 / 1024.0;
                         if code_kb > 0.0 {
                             binary_metrics.import_density =
                                 binary_metrics.import_count as f32 / code_kb;
@@ -194,16 +190,13 @@ impl ElfAnalyzer {
                             binary_metrics.relocation_density =
                                 binary_metrics.relocation_count as f32 / code_kb;
                             binary_metrics.complexity_per_kb =
-                                binary_metrics.avg_complexity * 1024.0 / code_size as f32;
+                                binary_metrics.avg_complexity * 1024.0 / cs as f32;
                         }
                     }
 
-                    // Use ELF metrics computed from goblin (or default if parsing failed)
-                    let elf_metrics = elf_metrics_opt.unwrap_or_default();
-
                     report.metrics = Some(Metrics {
                         binary: Some(binary_metrics),
-                        elf: Some(elf_metrics),
+                        elf: Some(elf_metrics.clone()),
                         ..Default::default()
                     });
 
@@ -218,8 +211,15 @@ impl ElfAnalyzer {
                         Some(batched.strings)
                     }
                 } else {
+                    // Use ELF metrics computed from goblin if r2 failed/skipped
+                    report.metrics = Some(Metrics {
+                        elf: Some(elf_metrics.clone()),
+                        ..Default::default()
+                    });
                     None
-                }
+                };
+                
+                (Some(elf_metrics), code_size, symbols_found, r2_strings_extracted)
             }
             Err(e) => {
                 // Parsing failed - this is a strong indicator of malformed/hostile binary
@@ -238,7 +238,7 @@ impl ElfAnalyzer {
                 });
 
                 report.metadata.errors.push(format!("ELF parse error: {}", e));
-                None
+                (None, None, false, None)
             }
         };
 
@@ -657,12 +657,12 @@ impl ElfAnalyzer {
         file_path: &Path,
         data: &[u8],
         precomputed_sha256: Option<String>,
-    ) -> Result<AnalysisReport> {
+    ) -> AnalysisReport {
         use crate::types::file_analysis::encode_upx_path;
         use crate::upx::{UPXDecompressor, UPXError};
 
         if !UPXDecompressor::is_upx_packed(data) {
-            return Ok(self.analyze_elf_core(file_path, data, None, precomputed_sha256));
+            return self.analyze_elf_core(file_path, data, None, precomputed_sha256);
         }
 
         // UPX-packed: structural analysis of packed binary first
@@ -686,7 +686,7 @@ impl ElfAnalyzer {
                 )
                 .with_criticality(Criticality::Notable),
             );
-            return Ok(report);
+            return report;
         }
 
         match UPXDecompressor::decompress(file_path) {
@@ -736,7 +736,7 @@ impl ElfAnalyzer {
             }
         }
 
-        Ok(report)
+        report
     }
 }
 
@@ -755,7 +755,7 @@ impl Analyzer for ElfAnalyzer {
 
     fn analyze(&self, file_path: &Path) -> Result<AnalysisReport> {
         let data = fs::read(file_path).context("Failed to read file")?;
-        let mut report = self.analyze_structural(file_path, &data, None)?;
+        let mut report = self.analyze_structural(file_path, &data, None);
         self.capability_mapper
             .evaluate_and_merge_findings(&mut report, &data, None, None);
         crate::path_mapper::analyze_and_link_paths(&mut report);

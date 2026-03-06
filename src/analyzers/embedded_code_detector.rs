@@ -282,9 +282,7 @@ pub fn analyze_embedded_string(
 
     // Analyze in-memory
     let t_analyze = std::time::Instant::now();
-    let mut report = analyzer
-        .analyze_source(Path::new(&virtual_path), &string_info.value)
-        .context("Failed to analyze embedded code")?;
+    let mut report = analyzer.analyze_source(Path::new(&virtual_path), &string_info.value);
     let analyze_time = t_analyze.elapsed();
 
     if analyze_time.as_millis() > 100 {

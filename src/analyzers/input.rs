@@ -107,6 +107,7 @@ impl<'a> AnalysisInput<'a> {
     }
 
     /// Get SHA256 (computes if not already memoized).
+    #[must_use]
     pub fn sha256(&self) -> String {
         if let Some(ref hash) = self.sha256 {
             hash.clone()

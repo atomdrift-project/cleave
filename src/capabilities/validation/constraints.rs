@@ -400,24 +400,24 @@ const MIN_PATTERN_LENGTH: usize = 3;
 /// `size_max` alone is NOT enough — the whole file is still searched.
 /// Density constraints (`count_min`, `per_kb_min`) don't bound the search space.
 fn has_short_pattern_constraints(t: &TraitDefinition, cond: &Condition) -> bool {
-    let (section, offset, offset_range, section_offset, section_offset_range) = match cond {
-        Condition::Raw {
-            section,
-            offset,
-            offset_range,
-            section_offset,
-            section_offset_range,
-            ..
-        }
-        | Condition::Hex {
-            section,
-            offset,
-            offset_range,
-            section_offset,
-            section_offset_range,
-            ..
-        } => (section, offset, offset_range, section_offset, section_offset_range),
-        _ => return true,
+    let (Condition::Raw {
+        section,
+        offset,
+        offset_range,
+        section_offset,
+        section_offset_range,
+        ..
+    }
+    | Condition::Hex {
+        section,
+        offset,
+        offset_range,
+        section_offset,
+        section_offset_range,
+        ..
+    }) = cond
+    else {
+        return true;
     };
 
     // Absolute offset or offset_range pins to a specific location

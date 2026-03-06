@@ -996,7 +996,7 @@ impl RawContentRegexIndex {
             .collect();
         let results: Vec<_> = ft_data
             .into_par_iter()
-            .map(|(ft, patterns, words)| (ft, Self::build_regex_set(patterns, words, traits)))
+            .map(|(ft, patterns, words)| (ft, Self::build_regex_set(&patterns, &words, traits)))
             .collect();
 
         let mut by_file_type = FxHashMap::default();
@@ -1012,7 +1012,7 @@ impl RawContentRegexIndex {
 
         // Build universal patterns (can run in parallel with file-type-specific building
         // but kept separate for clarity)
-        let universal = match Self::build_regex_set(universal_patterns, universal_words, traits) {
+        let universal = match Self::build_regex_set(&universal_patterns, &universal_words, traits) {
             Ok(set) => set,
             Err(mut e) => {
                 errors.append(&mut e);
@@ -1079,8 +1079,8 @@ impl RawContentRegexIndex {
     }
 
     fn build_regex_set(
-        patterns: Vec<(String, usize)>,
-        words: Vec<WordPattern>,
+        patterns: &[(String, usize)],
+        words: &[WordPattern],
         traits: &[TraitDefinition],
     ) -> Result<Option<FileTypeRegexSet>, Vec<String>> {
         if patterns.is_empty() && words.is_empty() {
@@ -1090,7 +1090,7 @@ impl RawContentRegexIndex {
         // Group traits by unique pattern to avoid redundancy
         let mut pattern_map: FxHashMap<String, Vec<usize>> = FxHashMap::default();
         for (pattern, trait_idx) in patterns {
-            pattern_map.entry(pattern).or_default().push(trait_idx);
+            pattern_map.entry(pattern.clone()).or_default().push(*trait_idx);
         }
 
         let pattern_strs: Vec<String> = pattern_map.keys().cloned().collect();
@@ -1192,7 +1192,7 @@ impl RawContentRegexIndex {
         let mut ci_word_to_traits: Vec<Vec<usize>> = Vec::new();
         let mut ci_word_map: FxHashMap<String, usize> = FxHashMap::default();
 
-        for wp in &words {
+        for wp in words {
             if wp.case_insensitive {
                 let lower = wp.word.to_lowercase();
                 if let Some(&idx) = ci_word_map.get(&lower) {

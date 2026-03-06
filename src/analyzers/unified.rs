@@ -365,7 +365,7 @@ impl UnifiedSourceAnalyzer {
         self
     }
 
-    pub(crate) fn analyze_source(&self, file_path: &Path, content: &str) -> Result<AnalysisReport> {
+    pub(crate) fn analyze_source(&self, file_path: &Path, content: &str) -> AnalysisReport {
         // For backward compatibility, use UTF-8 bytes
         self.analyze_source_with_original(file_path, content, content.as_bytes())
     }
@@ -375,7 +375,7 @@ impl UnifiedSourceAnalyzer {
         file_path: &Path,
         content: &str,
         original_bytes: &[u8],
-    ) -> Result<AnalysisReport> {
+    ) -> AnalysisReport {
         self.analyze_source_impl(file_path, content, original_bytes, &[], &[], None)
     }
 
@@ -387,7 +387,7 @@ impl UnifiedSourceAnalyzer {
         preextracted_stng: &[stng::ExtractedString],
         preextracted_payloads: &[crate::types::ExtractedPayload],
         precomputed_sha256: Option<String>,
-    ) -> Result<AnalysisReport> {
+    ) -> AnalysisReport {
         let start = std::time::Instant::now();
 
         // Create target info
@@ -441,9 +441,15 @@ impl UnifiedSourceAnalyzer {
             options.progress_callback = Some(&mut cb);
             
             let tree_res = self.parser.borrow_mut().parse_with_options(
-                &mut |i, _| (i < content.len()).then(|| &content.as_bytes()[i..]).unwrap_or_default(),
+                &mut |i, _| {
+                    if i < content.len() {
+                        &content.as_bytes()[i..]
+                    } else {
+                        &[]
+                    }
+                },
                 None,
-                Some(options)
+                Some(options),
             );
 
             if let Some(tree) = &tree_res {
@@ -578,26 +584,24 @@ impl UnifiedSourceAnalyzer {
                 FileType::Python => {
                     if let Some(analyzer) = UnifiedSourceAnalyzer::for_file_type(&FileType::Python)
                     {
-                        analyzer
+                        Some(analyzer
                             .with_capability_mapper_arc(self.capability_mapper.clone())
                             .analyze_source(
                                 Path::new(&virtual_path),
                                 &String::from_utf8_lossy(&payload_content),
-                            )
-                            .ok()
+                            ))
                     } else {
                         None
                     }
                 }
                 FileType::Shell => {
                     if let Some(analyzer) = UnifiedSourceAnalyzer::for_file_type(&FileType::Shell) {
-                        analyzer
+                        Some(analyzer
                             .with_capability_mapper_arc(self.capability_mapper.clone())
                             .analyze_source(
                                 Path::new(&virtual_path),
                                 &String::from_utf8_lossy(&payload_content),
-                            )
-                            .ok()
+                            ))
                     } else {
                         None
                     }
@@ -668,13 +672,12 @@ impl UnifiedSourceAnalyzer {
                         if let Some(analyzer) =
                             UnifiedSourceAnalyzer::for_file_type(&payload.detected_type)
                         {
-                            analyzer
+                            Some(analyzer
                                 .with_capability_mapper_arc(self.capability_mapper.clone())
                                 .analyze_source(
                                     Path::new(&virtual_path),
                                     &String::from_utf8_lossy(&payload_content),
-                                )
-                                .ok()
+                                ))
                         } else {
                             None
                         }
@@ -683,13 +686,12 @@ impl UnifiedSourceAnalyzer {
                         if let Some(analyzer) =
                             UnifiedSourceAnalyzer::for_file_type(&FileType::Python)
                         {
-                            analyzer
+                            Some(analyzer
                                 .with_capability_mapper_arc(self.capability_mapper.clone())
                                 .analyze_source(
                                     Path::new(&virtual_path),
                                     &String::from_utf8_lossy(&payload_content),
-                                )
-                                .ok()
+                                ))
                         } else {
                             None
                         }
@@ -698,13 +700,12 @@ impl UnifiedSourceAnalyzer {
                         if let Some(analyzer) =
                             UnifiedSourceAnalyzer::for_file_type(&FileType::Shell)
                         {
-                            analyzer
+                            Some(analyzer
                                 .with_capability_mapper_arc(self.capability_mapper.clone())
                                 .analyze_source(
                                     Path::new(&virtual_path),
                                     &String::from_utf8_lossy(&payload_content),
-                                )
-                                .ok()
+                                ))
                         } else {
                             None
                         }
@@ -814,7 +815,7 @@ impl UnifiedSourceAnalyzer {
         report.metadata.analysis_duration_ms = start.elapsed().as_millis() as u64;
         report.metadata.tools_used = vec![format!("tree-sitter-{}", self.config.name)];
 
-        Ok(report)
+        report
     }
 
     fn extract_functions<'a>(
@@ -1283,14 +1284,14 @@ impl Analyzer for UnifiedSourceAnalyzer {
         let content = String::from_utf8_lossy(&bytes);
 
         // Pass pre-extracted stng strings and payloads to avoid redundant extraction
-        self.analyze_source_impl(
+        Ok(self.analyze_source_impl(
             input.path,
             &content,
             input.data,
             input.strings,
             input.payloads,
             input.sha256.clone(),
-        )
+        ))
     }
 
     fn analyze(&self, file_path: &Path) -> Result<AnalysisReport> {
@@ -1312,7 +1313,7 @@ impl Analyzer for UnifiedSourceAnalyzer {
         }
 
         let content = String::from_utf8_lossy(&bytes);
-        self.analyze_source_with_original(file_path, &content, &original_bytes)
+        Ok(self.analyze_source_with_original(file_path, &content, &original_bytes))
     }
 
     fn can_analyze(&self, _file_path: &Path) -> bool {
@@ -1340,7 +1341,7 @@ def main():
 if __name__ == "__main__":
     main()
 "#;
-        let report = analyzer.analyze_source(&path, code).unwrap();
+        let report = analyzer.analyze_source(&path, code);
         assert!(report.structure.iter().any(|s| s.id.contains("python")));
         assert!(!report.functions.is_empty());
         assert!(!report.strings.is_empty());
@@ -1361,7 +1362,7 @@ const handler = async () => {
     await fetchData("http://example.com");
 };
 "#;
-        let report = analyzer.analyze_source(&path, code).unwrap();
+        let report = analyzer.analyze_source(&path, code);
         assert!(report.structure.iter().any(|s| s.id.contains("javascript")));
         assert!(!report.functions.is_empty());
     }
@@ -1379,7 +1380,7 @@ func main() {
     fmt.Println("Hello, World!")
 }
 "#;
-        let report = analyzer.analyze_source(&path, code).unwrap();
+        let report = analyzer.analyze_source(&path, code);
         assert!(report.structure.iter().any(|s| s.id.contains("go")));
         assert!(!report.functions.is_empty());
     }
@@ -1428,7 +1429,7 @@ func main() {
             .unwrap()
             .with_capability_mapper(mapper);
         let path = PathBuf::from("test.go");
-        analyzer.analyze_source(&path, code).unwrap()
+        analyzer.analyze_source(&path, code)
     }
 
     #[test]

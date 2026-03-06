@@ -36,7 +36,7 @@ pub(super) async fn reload(State(state): State<Arc<AppState>>) -> Response {
     let elapsed_ms = start.elapsed().as_millis();
 
     match result {
-        Ok(Ok((traits, composites))) => {
+        Ok((traits, composites)) => {
             info!(traits, composites, elapsed_ms, "Reload complete");
             Json(serde_json::json!({
                 "status": "ok",
@@ -45,14 +45,6 @@ pub(super) async fn reload(State(state): State<Arc<AppState>>) -> Response {
                 "elapsed_ms": elapsed_ms,
             }))
             .into_response()
-        }
-        Ok(Err(e)) => {
-            warn!(elapsed_ms, "Reload failed: {}", e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": e})),
-            )
-                .into_response()
         }
         Err(e) => {
             warn!(elapsed_ms, "Reload task join error: {}", e);
@@ -93,7 +85,7 @@ pub(super) async fn analyze(
         }
     }
 
-    let max_active_tasks = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4) * 2;
+    let max_active_tasks = std::thread::available_parallelism().map(std::num::NonZero::get).unwrap_or(4) * 2;
     let current_tasks = state.active_tasks.load(std::sync::atomic::Ordering::Relaxed);
     if current_tasks >= max_active_tasks {
         warn!(active_tasks = current_tasks, max_tasks = max_active_tasks, "Server overloaded: too many active tasks");

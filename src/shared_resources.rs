@@ -42,7 +42,7 @@ pub(crate) fn capability_mapper() -> Arc<CapabilityMapper> {
 /// Reload the global CapabilityMapper from trait definitions on disk.
 ///
 /// Returns the number of traits + composite rules loaded, or an error message.
-pub(crate) fn reload_capability_mapper() -> Result<(usize, usize), String> {
+pub(crate) fn reload_capability_mapper() -> (usize, usize) {
     tracing::info!("Reloading CapabilityMapper from disk");
     let mapper = CapabilityMapper::new();
     let trait_count = mapper.trait_definitions_count();
@@ -54,7 +54,7 @@ pub(crate) fn reload_capability_mapper() -> Result<(usize, usize), String> {
         composites = composite_count,
         "CapabilityMapper reloaded"
     );
-    Ok((trait_count, composite_count))
+    (trait_count, composite_count)
 }
 
 /// Get or initialize the global YARA engine

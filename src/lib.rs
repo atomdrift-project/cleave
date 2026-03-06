@@ -402,7 +402,7 @@ fn analyze_file_with_resources<P: AsRef<Path>>(
             let engine = yara_engine;
             let file_types: &[&str] = &["elf", "so", "ko"];
             let (struct_result, yara_result) = rayon::join(
-                || analyzer.analyze_structural(path, file_data, input.sha256.clone()),
+                || Ok::<_, anyhow::Error>(analyzer.analyze_structural(path, file_data, input.sha256.clone())),
                 || {
                     engine
                         .filter(|e| e.is_loaded())

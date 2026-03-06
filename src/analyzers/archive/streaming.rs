@@ -17,7 +17,7 @@
 //! Files under 256MB are extracted to memory buffers, avoiding disk I/O for 99%
 //! of typical files. Larger files are extracted to temp files.
 
-use crate::analyzers::{detect_file_type_from_path, Analyzer, FileType};
+use crate::analyzers::{detect_file_type_from_path, AnalysisInput, Analyzer, FileType};
 use crate::types::*;
 use anyhow::Result;
 use std::io::Read;
@@ -175,10 +175,17 @@ impl ArchiveAnalyzer {
                         file_type,
                         Some(mapper.clone()),
                     ) {
-                        let temp = tempfile::NamedTempFile::new()?;
-                        std::fs::write(temp.path(), data)?;
-
-                        if let Ok(report) = analyzer.analyze(temp.path()) {
+                        // PRE-EXTRACT STRINGS: To get full speedup, extract strings once and share.
+                        let opts = stng::ExtractOptions::new(4).with_garbage_filter(true);
+                        let stng_strings = stng::extract_strings_with_options(data, &opts);
+                        let payloads = crate::extractors::encoded_payload::extract_encoded_payloads(&stng_strings);
+                        let sha256 = crate::analyzers::utils::calculate_sha256(data);
+                        
+                        let input = AnalysisInput::with_payloads(Path::new(relative_path), data, &stng_strings, &payloads, file_type.clone())
+                            .with_sha256(sha256)
+                            .at_depth((self.current_depth + 1) as u32);
+                        
+                        if let Ok(report) = analyzer.analyze_input(&input) {
                             file_analysis.findings = report.findings;
                             file_analysis.strings = report.strings;
                             file_analysis.imports = report.imports;

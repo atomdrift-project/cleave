@@ -72,10 +72,10 @@ impl ElfAnalyzer {
         file_path: &Path,
         data: &[u8],
         stng_strings: Option<&[stng::ExtractedString]>,
+        precomputed_sha256: Option<String>,
     ) -> AnalysisReport {
         let start = std::time::Instant::now();
-        let _t_sha = std::time::Instant::now();
-        let sha256 = crate::analyzers::utils::calculate_sha256(data);
+        let sha256 = precomputed_sha256.clone().unwrap_or_else(|| crate::analyzers::utils::calculate_sha256(data));
 
         // Create target info with default/empty values for fields that require parsing
         let target = TargetInfo {
@@ -93,7 +93,8 @@ impl ElfAnalyzer {
         let mut elf_metrics_opt = None;
         let mut goblin_code_size: Option<u64> = None;
         let mut has_symbols = false; // set below from goblin parse
-        match Elf::parse(data) {
+        
+        let r2_strings = match Elf::parse(data) {
             Ok(elf) => {
                 tools_used.push("goblin".to_string());
 
@@ -107,14 +108,118 @@ impl ElfAnalyzer {
                 // Calculate code_size from goblin section flags (more accurate than radare2)
                 goblin_code_size = Some(self.compute_code_size(&elf));
 
-                // Analyze header and structure
-                self.analyze_structure(&elf, &mut report);
+                // Parallelize Radare2 deep analysis with the rest of Goblin structural analysis
+                let (r2_inner, _) = rayon::join(
+                    || if Radare2Analyzer::is_available() {
+                        Some(self.radare2.extract_batched(file_path, has_symbols, precomputed_sha256))
+                    } else {
+                        None
+                    },
+                    || {
+                        // Analyze header and structure
+                        self.analyze_structure(&elf, &mut report);
 
-                // Extract dynamic symbols and map to capabilities
-                self.analyze_dynamic_symbols(&elf, data, &mut report);
+                        // Extract dynamic symbols and map to capabilities
+                        self.analyze_dynamic_symbols(&elf, data, &mut report);
 
-                // Analyze sections and entropy
-                self.analyze_sections(&elf, data, &mut report);
+                        // Analyze sections and entropy
+                        self.analyze_sections(&elf, data, &mut report);
+                    }
+                );
+
+                // Process Radare2 results if available
+                if let Some(Ok(batched)) = r2_inner {
+                    tools_used.push("radare2".to_string());
+
+                    // Check if rizin timed out - add anti-analysis finding
+                    if batched.timed_out {
+                        report.findings.push(Finding {
+                            kind: FindingKind::Capability,
+                            id: "anti-analysis/evasion/analysis-resistant".to_string(),
+                            desc: "Binary resistant to automated analysis (rizin timeout)".to_string(),
+                            conf: 0.8,
+                            crit: Criticality::Suspicious,
+                            mbc: Some("B0003".to_string()), // Defense Evasion: Anti-Analysis
+                            attack: Some("T1027".to_string()), // Obfuscated Files or Information
+                            evidence: vec![Evidence {
+                                method: "timeout".to_string(),
+                                source: "rizin".to_string(),
+                                value: "Analysis timed out after 60 seconds".to_string(),
+                                ..Default::default()
+                            }],
+                            match_count: 0,
+                            trait_refs: vec![],
+                            source_file: None,
+                        });
+                    }
+
+                    // Compute metrics from batched data
+                    let mut binary_metrics = self
+                        .radare2
+                        .compute_metrics_from_batched(&batched, data.len() as u64);
+
+                    // Override code_size with goblin-based calculation (more accurate)
+                    // In ELF, only sections with SHF_EXECINSTR flag contain executable code
+                    if let Some(mut code_size) = goblin_code_size {
+                        // Sanity check: code_size should never exceed file size
+                        if code_size > binary_metrics.file_size {
+                            eprintln!("WARNING: code_size ({}) > file_size ({}) - this indicates a bug in section classification", code_size, binary_metrics.file_size);
+                            code_size = binary_metrics.file_size; // Cap at file_size to prevent invalid ratio
+                        }
+
+                        binary_metrics.code_size = code_size;
+
+                        // Recalculate code_to_data_ratio with correct code_size
+                        if binary_metrics.file_size > 0 {
+                            let data_size = binary_metrics.file_size.saturating_sub(code_size);
+                            if data_size > 0 {
+                                binary_metrics.code_to_data_ratio = code_size as f32 / data_size as f32;
+
+                                // Sanity check: extremely high ratio likely indicates classification bug
+                                if binary_metrics.code_to_data_ratio > 1000.0 {
+                                    eprintln!("WARNING: code_to_data_ratio ({:.2}) > 1000 - this may indicate a bug", binary_metrics.code_to_data_ratio);
+                                }
+                            }
+                        }
+
+                        // Recalculate density metrics that depend on code_size
+                        let code_kb = code_size as f32 / 1024.0;
+                        if code_kb > 0.0 {
+                            binary_metrics.import_density =
+                                binary_metrics.import_count as f32 / code_kb;
+                            binary_metrics.string_density =
+                                binary_metrics.string_count as f32 / code_kb;
+                            binary_metrics.function_density =
+                                binary_metrics.function_count as f32 / code_kb;
+                            binary_metrics.relocation_density =
+                                binary_metrics.relocation_count as f32 / code_kb;
+                            binary_metrics.complexity_per_kb =
+                                binary_metrics.avg_complexity * 1024.0 / code_size as f32;
+                        }
+                    }
+
+                    // Use ELF metrics computed from goblin (or default if parsing failed)
+                    let elf_metrics = elf_metrics_opt.unwrap_or_default();
+
+                    report.metrics = Some(Metrics {
+                        binary: Some(binary_metrics),
+                        elf: Some(elf_metrics),
+                        ..Default::default()
+                    });
+
+                    // Convert R2Functions to Functions for the report
+                    report.functions = batched.functions.into_iter().map(Function::from).collect();
+
+                    // Use strings from batched data (no extra r2 spawn)
+                    // Return None if empty so extract_smart falls back to stng extraction
+                    if batched.strings.is_empty() {
+                        None
+                    } else {
+                        Some(batched.strings)
+                    }
+                } else {
+                    None
+                }
             }
             Err(e) => {
                 // Parsing failed - this is a strong indicator of malformed/hostile binary
@@ -129,114 +234,12 @@ impl ElfAnalyzer {
                     evidence: vec![],
                     match_count: 0,
                     trait_refs: vec![],
-
                     source_file: None,
                 });
 
-                report
-                    .metadata
-                    .errors
-                    .push(format!("ELF parse error: {}", e));
-            }
-        }
-
-        // Use radare2 for deep analysis if available - SINGLE r2 spawn for all data
-        let r2_strings = if Radare2Analyzer::is_available() {
-            tools_used.push("radare2".to_string());
-
-            // Use batched extraction - single r2 session for functions, sections, strings, imports
-            if let Ok(batched) = self.radare2.extract_batched(file_path, has_symbols) {
-                // Check if rizin timed out - add anti-analysis finding
-                if batched.timed_out {
-                    report.findings.push(Finding {
-                        kind: FindingKind::Capability,
-                        id: "anti-analysis/evasion/analysis-resistant".to_string(),
-                        desc: "Binary resistant to automated analysis (rizin timeout)".to_string(),
-                        conf: 0.8,
-                        crit: Criticality::Suspicious,
-                        mbc: Some("B0003".to_string()), // Defense Evasion: Anti-Analysis
-                        attack: Some("T1027".to_string()), // Obfuscated Files or Information
-                        evidence: vec![Evidence {
-                            method: "timeout".to_string(),
-                            source: "rizin".to_string(),
-                            value: "Analysis timed out after 60 seconds".to_string(),
-                            ..Default::default()
-                        }],
-                        match_count: 0,
-                        trait_refs: vec![],
-                        source_file: None,
-                    });
-                }
-
-                // Compute metrics from batched data
-                let mut binary_metrics = self
-                    .radare2
-                    .compute_metrics_from_batched(&batched, data.len() as u64);
-
-                // Override code_size with goblin-based calculation (more accurate)
-                // In ELF, only sections with SHF_EXECINSTR flag contain executable code
-                if let Some(mut code_size) = goblin_code_size {
-                    // Sanity check: code_size should never exceed file size
-                    if code_size > binary_metrics.file_size {
-                        eprintln!("WARNING: code_size ({}) > file_size ({}) - this indicates a bug in section classification", code_size, binary_metrics.file_size);
-                        code_size = binary_metrics.file_size; // Cap at file_size to prevent invalid ratio
-                    }
-
-                    binary_metrics.code_size = code_size;
-
-                    // Recalculate code_to_data_ratio with correct code_size
-                    if binary_metrics.file_size > 0 {
-                        let data_size = binary_metrics.file_size.saturating_sub(code_size);
-                        if data_size > 0 {
-                            binary_metrics.code_to_data_ratio = code_size as f32 / data_size as f32;
-
-                            // Sanity check: extremely high ratio likely indicates classification bug
-                            if binary_metrics.code_to_data_ratio > 1000.0 {
-                                eprintln!("WARNING: code_to_data_ratio ({:.2}) > 1000 - this may indicate a bug", binary_metrics.code_to_data_ratio);
-                            }
-                        }
-                    }
-
-                    // Recalculate density metrics that depend on code_size
-                    let code_kb = code_size as f32 / 1024.0;
-                    if code_kb > 0.0 {
-                        binary_metrics.import_density =
-                            binary_metrics.import_count as f32 / code_kb;
-                        binary_metrics.string_density =
-                            binary_metrics.string_count as f32 / code_kb;
-                        binary_metrics.function_density =
-                            binary_metrics.function_count as f32 / code_kb;
-                        binary_metrics.relocation_density =
-                            binary_metrics.relocation_count as f32 / code_kb;
-                        binary_metrics.complexity_per_kb =
-                            binary_metrics.avg_complexity * 1024.0 / code_size as f32;
-                    }
-                }
-
-                // Use ELF metrics computed from goblin (or default if parsing failed)
-                let elf_metrics = elf_metrics_opt.unwrap_or_default();
-
-                report.metrics = Some(Metrics {
-                    binary: Some(binary_metrics),
-                    elf: Some(elf_metrics),
-                    ..Default::default()
-                });
-
-                // Convert R2Functions to Functions for the report
-                report.functions = batched.functions.into_iter().map(Function::from).collect();
-
-                // Use strings from batched data (no extra r2 spawn)
-                // Return None if empty so extract_smart falls back to stng extraction
-                if batched.strings.is_empty() {
-                    None
-                } else {
-                    Some(batched.strings)
-                }
-            } else {
+                report.metadata.errors.push(format!("ELF parse error: {}", e));
                 None
             }
-        } else {
-            None
         };
 
         // Use strings in order of preference:
@@ -649,16 +652,21 @@ impl ElfAnalyzer {
     /// Handles UPX decompression internally - unpacked content becomes a separate FileAnalysis
     /// entry in `report.files` with `encoding: ["upx"]`.
     /// Callers are responsible for running YARA and calling `evaluate_and_merge_findings`.
-    pub(crate) fn analyze_structural(&self, file_path: &Path, data: &[u8]) -> AnalysisReport {
+    pub(crate) fn analyze_structural(
+        &self,
+        file_path: &Path,
+        data: &[u8],
+        precomputed_sha256: Option<String>,
+    ) -> Result<AnalysisReport> {
         use crate::types::file_analysis::encode_upx_path;
         use crate::upx::{UPXDecompressor, UPXError};
 
         if !UPXDecompressor::is_upx_packed(data) {
-            return self.analyze_elf_core(file_path, data, None);
+            return Ok(self.analyze_elf_core(file_path, data, None, precomputed_sha256));
         }
 
         // UPX-packed: structural analysis of packed binary first
-        let mut report = self.analyze_elf_core(file_path, data, None);
+        let mut report = self.analyze_elf_core(file_path, data, None, precomputed_sha256.clone());
 
         report.findings.push(
             Finding::structural(
@@ -678,15 +686,15 @@ impl ElfAnalyzer {
                 )
                 .with_criticality(Criticality::Notable),
             );
-            return report;
+            return Ok(report);
         }
 
         match UPXDecompressor::decompress(file_path) {
             Ok(unpacked_data) => {
                 if let Ok(temp_file) = tempfile::NamedTempFile::new() {
-                    if fs::write(temp_file.path(), &unpacked_data).is_ok() {
+                    if std::fs::write(temp_file.path(), &unpacked_data).is_ok() {
                         let unpacked_report =
-                            self.analyze_elf_core(temp_file.path(), &unpacked_data, None);
+                            self.analyze_elf_core(temp_file.path(), &unpacked_data, None, None);
 
                         // Create separate FileAnalysis for unpacked layer
                         let unpacked_sha256 =
@@ -728,14 +736,14 @@ impl ElfAnalyzer {
             }
         }
 
-        report
+        Ok(report)
     }
 }
 
 impl Analyzer for ElfAnalyzer {
     fn analyze_input(&self, input: &AnalysisInput<'_>) -> Result<AnalysisReport> {
         // Use data and strings from input (no file read, no string extraction)
-        let mut report = self.analyze_elf_core(input.path, input.data, Some(input.strings));
+        let mut report = self.analyze_elf_core(input.path, input.data, Some(input.strings), input.sha256.clone());
 
         // Post-processing
         self.capability_mapper
@@ -747,7 +755,7 @@ impl Analyzer for ElfAnalyzer {
 
     fn analyze(&self, file_path: &Path) -> Result<AnalysisReport> {
         let data = fs::read(file_path).context("Failed to read file")?;
-        let mut report = self.analyze_structural(file_path, &data);
+        let mut report = self.analyze_structural(file_path, &data, None)?;
         self.capability_mapper
             .evaluate_and_merge_findings(&mut report, &data, None, None);
         crate::path_mapper::analyze_and_link_paths(&mut report);

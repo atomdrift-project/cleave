@@ -44,7 +44,7 @@ impl JavaClassAnalyzer {
 
     fn analyze_class(&self, file_path: &Path, data: &[u8]) -> Result<AnalysisReport> {
         let start = std::time::Instant::now();
-        let mut report = self.analyze_structural(file_path, data)?;
+        let mut report = self.analyze_structural(file_path, data, None)?;
 
         // Evaluate all rules (atomic + composite) and merge into report
         self.capability_mapper
@@ -62,6 +62,7 @@ impl JavaClassAnalyzer {
         &self,
         file_path: &Path,
         data: &[u8],
+        precomputed_sha256: Option<String>,
     ) -> Result<AnalysisReport> {
         let class_info = self.parse_class_file(data)?;
 
@@ -69,7 +70,7 @@ impl JavaClassAnalyzer {
             path: file_path.display().to_string(),
             file_type: "java_class".to_string(),
             size_bytes: data.len() as u64,
-            sha256: crate::analyzers::utils::calculate_sha256(data),
+            sha256: precomputed_sha256.unwrap_or_else(|| crate::analyzers::utils::calculate_sha256(data)),
             architectures: None,
         };
 
@@ -95,12 +96,32 @@ impl JavaClassAnalyzer {
 
 impl Analyzer for JavaClassAnalyzer {
     fn analyze_input(&self, input: &AnalysisInput<'_>) -> Result<AnalysisReport> {
-        self.analyze_class(input.path, input.data)
+        let start = std::time::Instant::now();
+        let mut report = self.analyze_structural(input.path, input.data, input.sha256.clone())?;
+
+        // Evaluate all rules (atomic + composite) and merge into report
+        self.capability_mapper
+            .evaluate_and_merge_findings(&mut report, input.data, None, None);
+
+        let elapsed = start.elapsed().as_millis() as u64;
+        report.metadata.analysis_duration_ms = elapsed;
+
+        Ok(report)
     }
 
     fn analyze(&self, file_path: &Path) -> Result<AnalysisReport> {
         let data = std::fs::read(file_path)?;
-        self.analyze_class(file_path, &data)
+        let start = std::time::Instant::now();
+        let mut report = self.analyze_structural(file_path, &data, None)?;
+
+        // Evaluate all rules (atomic + composite) and merge into report
+        self.capability_mapper
+            .evaluate_and_merge_findings(&mut report, &data, None, None);
+
+        let elapsed = start.elapsed().as_millis() as u64;
+        report.metadata.analysis_duration_ms = elapsed;
+
+        Ok(report)
     }
 
     fn can_analyze(&self, file_path: &Path) -> bool {

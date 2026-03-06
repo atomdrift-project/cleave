@@ -362,7 +362,7 @@ fn analyze_file_with_resources<P: AsRef<Path>>(
             let engine = yara_engine;
             let file_types: &[&str] = &["macho", "dylib", "kext"];
             let (struct_result, yara_result) = rayon::join(
-                || analyzer.analyze_structural(path, arch_data),
+                || analyzer.analyze_structural(path, arch_data, input.sha256.clone()),
                 || {
                     engine
                         .filter(|e| e.is_loaded())
@@ -401,14 +401,15 @@ fn analyze_file_with_resources<P: AsRef<Path>>(
                 .with_preextracted_strings(preextracted_strings.clone());
             let engine = yara_engine;
             let file_types: &[&str] = &["elf", "so", "ko"];
-            let (mut report, yara_result) = rayon::join(
-                || analyzer.analyze_structural(path, file_data),
+            let (struct_result, yara_result) = rayon::join(
+                || analyzer.analyze_structural(path, file_data, input.sha256.clone()),
                 || {
                     engine
                         .filter(|e| e.is_loaded())
                         .map(|e| e.scan_bytes_with_inline(file_data, Some(file_types)))
                 },
             );
+            let mut report = struct_result?;
             // Process YARA results and evaluate with inline evidence
             let inline_yara =
                 process_yara_result(&mut report, yara_result, engine.map(AsRef::as_ref));
@@ -434,7 +435,7 @@ fn analyze_file_with_resources<P: AsRef<Path>>(
             let engine = yara_engine;
             let file_types: &[&str] = &["pe", "exe", "dll", "bat", "ps1"];
             let (struct_result, yara_result) = rayon::join(
-                || analyzer.analyze_structural(path, file_data),
+                || analyzer.analyze_structural(path, file_data, input.sha256.clone()),
                 || {
                     engine
                         .filter(|e| e.is_loaded())

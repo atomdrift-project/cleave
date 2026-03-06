@@ -84,16 +84,17 @@ impl PEAnalyzer {
         &self,
         file_path: &Path,
         data: &[u8],
+        precomputed_sha256: Option<String>,
     ) -> Result<AnalysisReport> {
         use crate::types::file_analysis::encode_upx_path;
         use crate::upx::{UPXDecompressor, UPXError};
 
         if !UPXDecompressor::is_upx_packed(data) {
-            return self.analyze_structural_with_strings(file_path, data, None);
+            return self.analyze_structural_with_strings(file_path, data, None, precomputed_sha256);
         }
 
         // UPX-packed: structural analysis of packed binary first
-        let mut report = self.analyze_structural_with_strings(file_path, data, None)?;
+        let mut report = self.analyze_structural_with_strings(file_path, data, None, precomputed_sha256.clone())?;
 
         report.findings.push(
             Finding::structural(
@@ -124,6 +125,7 @@ impl PEAnalyzer {
                             temp_file.path(),
                             &unpacked_data,
                             None,
+                            None, // Hash will change after decompression
                         ) {
                             // Create separate FileAnalysis for unpacked layer
                             let unpacked_sha256 =
@@ -175,6 +177,7 @@ impl PEAnalyzer {
         file_path: &Path,
         data: &[u8],
         stng_strings: Option<&[stng::ExtractedString]>,
+        precomputed_sha256: Option<String>,
     ) -> Result<AnalysisReport> {
         let start = std::time::Instant::now();
 
@@ -191,6 +194,7 @@ impl PEAnalyzer {
                 tamper_findings,
                 start,
                 stng_strings,
+                precomputed_sha256,
             ),
             Err(e) => {
                 // PE parsing failed - create a minimal report with tampering findings
@@ -210,6 +214,7 @@ impl PEAnalyzer {
         tamper_findings: Vec<Finding>,
         start: std::time::Instant,
         stng_strings: Option<&[stng::ExtractedString]>,
+        precomputed_sha256: Option<String>,
     ) -> Result<AnalysisReport> {
         // Compute PE-specific metrics early
         let pe_metrics = self.compute_pe_metrics(pe, pe_data);
@@ -222,7 +227,7 @@ impl PEAnalyzer {
             path: file_path.display().to_string(),
             file_type: "pe".to_string(),
             size_bytes: original_data.len() as u64,
-            sha256: crate::analyzers::utils::calculate_sha256(original_data),
+            sha256: precomputed_sha256.clone().unwrap_or_else(|| crate::analyzers::utils::calculate_sha256(original_data)),
             architectures: Some(vec![self.arch_name(pe)]),
         };
 
@@ -232,83 +237,86 @@ impl PEAnalyzer {
         // Add any tampering findings detected during preprocessing
         report.findings.extend(tamper_findings);
 
-        // Analyze header and structure
-        self.analyze_structure(pe, &mut report);
-
-        // Extract imports and map to capabilities
-        self.analyze_imports(pe, &mut report);
-
-        // Analyze exports
-        self.analyze_exports(pe, &mut report);
-
-        // Analyze sections and entropy
-        self.analyze_sections(pe, pe_data, &mut report);
-
-        // Use radare2 for deep analysis if available - SINGLE r2 spawn for all data
-        let r2_strings = if Radare2Analyzer::is_available() {
-            tools_used.push("radare2".to_string());
-
-            // Use batched extraction - single r2 session for functions, sections, strings, imports
-            // PE binaries with no imports are packed/obfuscated; skip aa in that case.
-            let has_symbols = !pe.imports.is_empty();
-            if let Ok(batched) = self.radare2.extract_batched(file_path, has_symbols) {
-                // Compute metrics from batched data
-                let mut binary_metrics = self
-                    .radare2
-                    .compute_metrics_from_batched(&batched, original_data.len() as u64);
-
-                // Override code_size with goblin-based calculation (more accurate)
-                // In PE, only sections with IMAGE_SCN_MEM_EXECUTE characteristic contain executable code
-                let mut code_size = goblin_code_size;
-
-                // Sanity check: code_size should never exceed file size
-                if code_size > binary_metrics.file_size {
-                    eprintln!("WARNING: code_size ({}) > file_size ({}) - this indicates a bug in section classification", code_size, binary_metrics.file_size);
-                    code_size = binary_metrics.file_size; // Cap at file_size to prevent invalid ratio
-                }
-
-                binary_metrics.code_size = code_size;
-
-                // Recalculate code_to_data_ratio with correct code_size
-                if binary_metrics.file_size > 0 {
-                    let data_size = binary_metrics.file_size.saturating_sub(code_size);
-                    if data_size > 0 {
-                        binary_metrics.code_to_data_ratio = code_size as f32 / data_size as f32;
-
-                        // Sanity check: extremely high ratio likely indicates classification bug
-                        if binary_metrics.code_to_data_ratio > 1000.0 {
-                            eprintln!("WARNING: code_to_data_ratio ({:.2}) > 1000 - this may indicate a bug", binary_metrics.code_to_data_ratio);
-                        }
-                    }
-                }
-
-                // Recalculate density metrics that depend on code_size
-                let code_kb = goblin_code_size as f32 / 1024.0;
-                if code_kb > 0.0 {
-                    binary_metrics.import_density = binary_metrics.import_count as f32 / code_kb;
-                    binary_metrics.string_density = binary_metrics.string_count as f32 / code_kb;
-                    binary_metrics.function_density =
-                        binary_metrics.function_count as f32 / code_kb;
-                    binary_metrics.relocation_density =
-                        binary_metrics.relocation_count as f32 / code_kb;
-                    binary_metrics.complexity_per_kb =
-                        binary_metrics.avg_complexity * 1024.0 / goblin_code_size as f32;
-                }
-
-                report.metrics = Some(Metrics {
-                    binary: Some(binary_metrics),
-                    pe: Some(pe_metrics),
-                    ..Default::default()
-                });
-
-                // Convert R2Functions to Functions for the report
-                report.functions = batched.functions.into_iter().map(Function::from).collect();
-
-                // Use strings from batched data (no extra r2 spawn)
-                Some(batched.strings)
+        // Run radare2 in parallel with structural analysis
+        let has_symbols = !pe.imports.is_empty();
+        let (r2_result, _) = rayon::join(
+            || if Radare2Analyzer::is_available() {
+                Some(self.radare2.extract_batched(file_path, has_symbols, precomputed_sha256))
             } else {
                 None
+            },
+            || {
+                // Analyze header and structure
+                self.analyze_structure(pe, &mut report);
+
+                // Extract imports and map to capabilities
+                self.analyze_imports(pe, &mut report);
+
+                // Analyze exports
+                self.analyze_exports(pe, &mut report);
+
+                // Analyze sections and entropy
+                self.analyze_sections(pe, pe_data, &mut report);
             }
+        );
+
+        let r2_strings = if let Some(Ok(batched)) = r2_result {
+            tools_used.push("radare2".to_string());
+
+            // Compute metrics from batched data
+            let mut binary_metrics = self
+                .radare2
+                .compute_metrics_from_batched(&batched, original_data.len() as u64);
+
+            // Override code_size with goblin-based calculation (more accurate)
+            // In PE, only sections with IMAGE_SCN_MEM_EXECUTE characteristic contain executable code
+            let mut code_size = goblin_code_size;
+
+            // Sanity check: code_size should never exceed file size
+            if code_size > binary_metrics.file_size {
+                eprintln!("WARNING: code_size ({}) > file_size ({}) - this indicates a bug in section classification", code_size, binary_metrics.file_size);
+                code_size = binary_metrics.file_size; // Cap at file_size to prevent invalid ratio
+            }
+
+            binary_metrics.code_size = code_size;
+
+            // Recalculate code_to_data_ratio with correct code_size
+            if binary_metrics.file_size > 0 {
+                let data_size = binary_metrics.file_size.saturating_sub(code_size);
+                if data_size > 0 {
+                    binary_metrics.code_to_data_ratio = code_size as f32 / data_size as f32;
+
+                    // Sanity check: extremely high ratio likely indicates classification bug
+                    if binary_metrics.code_to_data_ratio > 1000.0 {
+                        eprintln!("WARNING: code_to_data_ratio ({:.2}) > 1000 - this may indicate a bug", binary_metrics.code_to_data_ratio);
+                    }
+                }
+            }
+
+            // Recalculate density metrics that depend on code_size
+            let code_kb = goblin_code_size as f32 / 1024.0;
+            if code_kb > 0.0 {
+                binary_metrics.import_density = binary_metrics.import_count as f32 / code_kb;
+                binary_metrics.string_density = binary_metrics.string_count as f32 / code_kb;
+                binary_metrics.function_density =
+                    binary_metrics.function_count as f32 / code_kb;
+                binary_metrics.relocation_density =
+                    binary_metrics.relocation_count as f32 / code_kb;
+                binary_metrics.complexity_per_kb =
+                    binary_metrics.avg_complexity * 1024.0 / goblin_code_size as f32;
+            }
+
+            report.metrics = Some(Metrics {
+                binary: Some(binary_metrics),
+                pe: Some(pe_metrics),
+                ..Default::default()
+            });
+
+            // Convert R2Functions to Functions for the report
+            report.functions = batched.functions.into_iter().map(Function::from).collect();
+
+            // Use strings from batched data (no extra r2 spawn)
+            Some(batched.strings)
         } else {
             None
         };
@@ -1044,7 +1052,7 @@ impl Analyzer for PEAnalyzer {
     fn analyze_input(&self, input: &AnalysisInput<'_>) -> Result<AnalysisReport> {
         // Use data and strings from input (no file read, no string extraction)
         let mut report =
-            self.analyze_structural_with_strings(input.path, input.data, Some(input.strings))?;
+            self.analyze_structural_with_strings(input.path, input.data, Some(input.strings), input.sha256.clone())?;
 
         // Post-processing
         self.capability_mapper
@@ -1054,7 +1062,7 @@ impl Analyzer for PEAnalyzer {
 
     fn analyze(&self, file_path: &Path) -> Result<AnalysisReport> {
         let data = fs::read(file_path).context("Failed to read file")?;
-        let mut report = self.analyze_structural(file_path, &data)?;
+        let mut report = self.analyze_structural(file_path, &data, None)?;
         self.capability_mapper
             .evaluate_and_merge_findings(&mut report, &data, None, None);
         Ok(report)

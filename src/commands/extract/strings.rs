@@ -52,15 +52,15 @@ fn run_with_layer(
     let mut report = match file_type {
         FileType::Elf => ElfAnalyzer::new()
             .with_capability_mapper(capability_mapper)
-            .analyze_structural(path, &data),
+            .analyze_structural(path, &data, None),
         FileType::Pe => PEAnalyzer::new()
             .with_capability_mapper(capability_mapper)
-            .analyze_structural(path, &data)?,
+            .analyze_structural(path, &data, None),
         FileType::MachO => MachOAnalyzer::new()
             .with_capability_mapper(capability_mapper)
-            .analyze(path)?,
+            .analyze(path),
         _ => anyhow::bail!("Layer filtering only supported for binary files (ELF, PE, Mach-O)"),
-    };
+    }?;
 
     // Convert to v2 format to populate files array
     report.convert_to_v2(true);

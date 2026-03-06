@@ -286,7 +286,7 @@ pub(crate) fn analyze_file_with_shared_mapper(
             let engine = shared_yara_engine.as_ref();
             let file_types: &[&str] = &["macho", "dylib", "kext"];
             let (struct_result, yara_result) = rayon::join(
-                || analyzer.analyze_structural(path, arch_data),
+                || analyzer.analyze_structural(path, arch_data, None),
                 || {
                     engine
                         .filter(|e| e.is_loaded())
@@ -330,14 +330,15 @@ pub(crate) fn analyze_file_with_shared_mapper(
                 .with_preextracted_strings(preextracted_strings.clone());
             let engine = shared_yara_engine.as_ref();
             let file_types: &[&str] = &["elf", "so", "ko"];
-            let (mut report, yara_result) = rayon::join(
-                || analyzer.analyze_structural(path, file_data),
+            let (struct_result, yara_result) = rayon::join(
+                || analyzer.analyze_structural(path, file_data, None),
                 || {
                     engine
                         .filter(|e| e.is_loaded())
                         .map(|e| e.scan_bytes_with_inline(file_data, Some(file_types)))
                 },
             );
+            let mut report = struct_result?;
             // Process YARA results and evaluate with inline YARA
             let inline_yara =
                 process_yara_result(&mut report, yara_result, engine.as_ref().map(AsRef::as_ref));
@@ -363,7 +364,7 @@ pub(crate) fn analyze_file_with_shared_mapper(
             let engine = shared_yara_engine.as_ref();
             let file_types: &[&str] = &["pe", "exe", "dll", "bat", "ps1"];
             let (struct_result, yara_result) = rayon::join(
-                || analyzer.analyze_structural(path, file_data),
+                || analyzer.analyze_structural(path, file_data, None),
                 || {
                     engine
                         .filter(|e| e.is_loaded())

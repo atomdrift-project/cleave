@@ -37,6 +37,9 @@ pub struct AnalysisInput<'a> {
     /// Detected file type
     pub file_type: FileType,
 
+    /// Optional SHA256 hash (memoized if computed during extraction)
+    pub sha256: Option<String>,
+
     /// Nesting depth (0 for top-level, incremented for archives/encoded payloads)
     pub depth: u32,
 }
@@ -52,6 +55,7 @@ impl<'a> AnalysisInput<'a> {
             strings: &[],
             payloads: &[],
             file_type,
+            sha256: None,
             depth: 0,
         }
     }
@@ -70,6 +74,7 @@ impl<'a> AnalysisInput<'a> {
             strings,
             payloads: &[],
             file_type,
+            sha256: None,
             depth: 0,
         }
     }
@@ -89,7 +94,24 @@ impl<'a> AnalysisInput<'a> {
             strings,
             payloads,
             file_type,
+            sha256: None,
             depth: 0,
+        }
+    }
+
+    /// Add memoized SHA256 hash.
+    #[must_use]
+    pub fn with_sha256(mut self, sha256: String) -> Self {
+        self.sha256 = Some(sha256);
+        self
+    }
+
+    /// Get SHA256 (computes if not already memoized).
+    pub fn sha256(&self) -> String {
+        if let Some(ref hash) = self.sha256 {
+            hash.clone()
+        } else {
+            crate::analyzers::utils::calculate_sha256(self.data)
         }
     }
 

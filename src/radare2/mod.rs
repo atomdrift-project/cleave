@@ -362,13 +362,14 @@ impl Radare2Analyzer {
         &self,
         file_path: &Path,
         has_symbols: bool,
+        precomputed_sha256: Option<String>,
     ) -> Result<BatchedAnalysis> {
         let t_start = std::time::Instant::now();
 
         debug!("Running radare2 batched analysis on {:?}", file_path);
 
-        // Compute SHA256 for cache lookup
-        let sha256 = Self::compute_file_sha256(file_path);
+        // Use precomputed SHA256 for cache lookup if available
+        let sha256 = precomputed_sha256.or_else(|| Self::compute_file_sha256(file_path));
 
         // Check cache first
         if let Some(ref hash) = sha256 {

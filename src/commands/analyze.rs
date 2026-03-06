@@ -436,7 +436,7 @@ fn analyze_file_with_context(
             let is_fat = analyzer.all_arch_ranges(&data).len() > 1;
             let file_types: &[&str] = &["macho", "dylib", "kext"];
             let (struct_result, yara_result) = rayon::join(
-                || analyzer.analyze_structural(path, arch_data),
+                || analyzer.analyze_structural(path, arch_data, None),
                 || {
                     yara_engine
                         .as_ref()
@@ -475,8 +475,8 @@ fn analyze_file_with_context(
             let data = fs::read(path).context("Failed to read file")?;
             let analyzer = ElfAnalyzer::new().with_capability_mapper_arc(capability_mapper.clone());
             let file_types: &[&str] = &["elf", "so", "ko"];
-            let (mut report, yara_result) = rayon::join(
-                || analyzer.analyze_structural(path, &data),
+            let (struct_result, yara_result) = rayon::join(
+                || analyzer.analyze_structural(path, &data, None),
                 || {
                     yara_engine
                         .as_ref()
@@ -484,6 +484,7 @@ fn analyze_file_with_context(
                         .map(|e| e.scan_bytes_with_inline(&data, Some(file_types)))
                 },
             );
+            let mut report = struct_result?;
             let inline_yara = process_yara_result(&mut report, yara_result, yara_engine.as_deref());
             capability_mapper.evaluate_and_merge_findings(
                 &mut report,
@@ -504,7 +505,7 @@ fn analyze_file_with_context(
             }
             let file_types: &[&str] = &["pe", "exe", "dll", "bat", "ps1"];
             let (struct_result, yara_result) = rayon::join(
-                || analyzer.analyze_structural(path, &data),
+                || analyzer.analyze_structural(path, &data, None),
                 || {
                     yara_engine
                         .as_ref()
@@ -528,7 +529,7 @@ fn analyze_file_with_context(
                 .with_capability_mapper_arc(capability_mapper.clone());
             let file_types: &[&str] = &["java", "class"];
             let (struct_result, yara_result) = rayon::join(
-                || analyzer.analyze_structural(path, &data),
+                || analyzer.analyze_structural(path, &data, None),
                 || {
                     yara_engine
                         .as_ref()

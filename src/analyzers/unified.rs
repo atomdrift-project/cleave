@@ -376,7 +376,7 @@ impl UnifiedSourceAnalyzer {
         content: &str,
         original_bytes: &[u8],
     ) -> Result<AnalysisReport> {
-        self.analyze_source_impl(file_path, content, original_bytes, &[], &[])
+        self.analyze_source_impl(file_path, content, original_bytes, &[], &[], None)
     }
 
     fn analyze_source_impl(
@@ -386,6 +386,7 @@ impl UnifiedSourceAnalyzer {
         original_bytes: &[u8],
         preextracted_stng: &[stng::ExtractedString],
         preextracted_payloads: &[crate::types::ExtractedPayload],
+        precomputed_sha256: Option<String>,
     ) -> Result<AnalysisReport> {
         let start = std::time::Instant::now();
 
@@ -394,7 +395,7 @@ impl UnifiedSourceAnalyzer {
             path: file_path.display().to_string(),
             file_type: self.config.file_type.to_string(),
             size_bytes: content.len() as u64,
-            sha256: crate::analyzers::utils::calculate_sha256(content.as_bytes()),
+            sha256: precomputed_sha256.unwrap_or_else(|| crate::analyzers::utils::calculate_sha256(content.as_bytes())),
             architectures: None,
         };
 
@@ -1288,6 +1289,7 @@ impl Analyzer for UnifiedSourceAnalyzer {
             input.data,
             input.strings,
             input.payloads,
+            input.sha256.clone(),
         )
     }
 

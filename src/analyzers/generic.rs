@@ -91,7 +91,7 @@ impl GenericAnalyzer {
 
     #[allow(dead_code)] // Used by embedded_code_detector
     fn analyze_source(&self, file_path: &Path, content: &str) -> AnalysisReport {
-        self.analyze_source_internal(file_path, content, None, None)
+        self.analyze_source_internal(file_path, content, None, None, None)
     }
 
     fn analyze_source_internal(
@@ -100,6 +100,7 @@ impl GenericAnalyzer {
         content: &str,
         stng_strings: Option<&[stng::ExtractedString]>,
         original_bytes: Option<&[u8]>,
+        precomputed_sha256: Option<String>,
     ) -> AnalysisReport {
         let start = std::time::Instant::now();
         tracing::info!(
@@ -112,12 +113,12 @@ impl GenericAnalyzer {
         let (size_bytes, sha256) = if let Some(bytes) = original_bytes {
             (
                 bytes.len() as u64,
-                crate::analyzers::utils::calculate_sha256(bytes),
+                precomputed_sha256.unwrap_or_else(|| crate::analyzers::utils::calculate_sha256(bytes)),
             )
         } else {
             (
                 content.len() as u64,
-                crate::analyzers::utils::calculate_sha256(content.as_bytes()),
+                precomputed_sha256.unwrap_or_else(|| crate::analyzers::utils::calculate_sha256(content.as_bytes())),
             )
         };
 
@@ -420,6 +421,7 @@ impl Analyzer for GenericAnalyzer {
             &content,
             Some(input.strings),
             Some(input.data),
+            input.sha256.clone(),
         ))
     }
 

@@ -66,7 +66,7 @@ impl MemoryTracker {
                 .fetch_max(current_rss, Ordering::Relaxed);
 
             // Log if memory usage is high
-            const HIGH_MEMORY_THRESHOLD: u64 = 2 * 1024 * 1024 * 1024; // 2GB
+            const HIGH_MEMORY_THRESHOLD: u64 = 7 * 1024 * 1024 * 1024; // 7GB
             if current_rss > HIGH_MEMORY_THRESHOLD {
                 warn!(
                     current_rss_mb = current_rss / 1024 / 1024,

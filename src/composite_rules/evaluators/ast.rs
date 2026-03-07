@@ -23,21 +23,31 @@ enum MatchMode {
     Regex,
 }
 
-/// Check if file type supports AST parsing
+/// Check if file type supports AST parsing.
+/// Positive list: only types with a tree-sitter parser are supported.
 fn supports_ast(file_type: FileType) -> bool {
-    !matches!(
+    matches!(
         file_type,
-        FileType::All
-            | FileType::Elf
-            | FileType::Macho
-            | FileType::Pe
-            | FileType::Dll
-            | FileType::So
-            | FileType::Dylib
-            | FileType::Class
-            | FileType::Batch
-            | FileType::PackageJson
-            | FileType::AppleScript
+        FileType::C
+            | FileType::Python
+            | FileType::JavaScript
+            | FileType::TypeScript
+            | FileType::Rust
+            | FileType::Go
+            | FileType::Java
+            | FileType::Ruby
+            | FileType::Shell
+            | FileType::Php
+            | FileType::CSharp
+            | FileType::Lua
+            | FileType::Perl
+            | FileType::PowerShell
+            | FileType::Swift
+            | FileType::ObjectiveC
+            | FileType::Groovy
+            | FileType::Scala
+            | FileType::Zig
+            | FileType::Elixir
     )
 }
 

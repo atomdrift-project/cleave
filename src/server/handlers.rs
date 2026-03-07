@@ -103,19 +103,8 @@ async fn analyze_inner(
 ) -> Response {
     info!("--> POST /analyze");
 
-    if let Some(rss) = crate::memory_tracker::current_rss() {
-        if rss > state.max_rss_bytes {
-            warn!(
-                rss_mb = rss / 1024 / 1024,
-                max_rss_mb = state.max_rss_bytes / 1024 / 1024,
-                "Server overloaded: high memory usage"
-            );
-            return (
-                StatusCode::SERVICE_UNAVAILABLE,
-                Json(serde_json::json!({"error": "Server overloaded (memory)"})),
-            )
-                .into_response();
-        }
+    if let Some(response) = check_memory_pressure(&state) {
+        return response;
     }
 
     let mut field = match multipart.next_field().await {
@@ -223,9 +212,17 @@ async fn analyze_inner(
         .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let task_span = Span::current();
 
+    let should_clear_caches = state
+        .next_request_id
+        .load(std::sync::atomic::Ordering::Relaxed)
+        .is_multiple_of(50);
     let mut handle = tokio::task::spawn_blocking(move || {
         let _enter = task_span.enter();
-        analyze_file(&path, &AnalysisOptions::default())
+        let result = analyze_file(&path, &AnalysisOptions::default());
+        if should_clear_caches {
+            crate::clear_all_thread_caches();
+        }
+        result
     });
 
     let result = tokio::select! {
@@ -319,6 +316,77 @@ async fn analyze_inner(
     }
 }
 
+/// Check memory pressure and attempt recovery before rejecting requests.
+///
+/// Returns `Some(Response)` if the request should be rejected due to memory pressure,
+/// or `None` if the server has enough memory to proceed.
+fn check_memory_pressure(state: &AppState) -> Option<Response> {
+    let rss = crate::memory_tracker::current_rss()?;
+
+    if rss <= state.max_rss_bytes {
+        // Memory is fine — reset overload timer if it was set.
+        // Use try_lock to avoid contention on the happy path.
+        if let Some(mut overloaded) = state.overloaded_since.try_lock() {
+            if overloaded.is_some() {
+                info!(
+                    rss_mb = rss / 1024 / 1024,
+                    "Memory recovered below threshold"
+                );
+                *overloaded = None;
+            }
+        }
+        return None;
+    }
+
+    // Memory pressure detected — try to reclaim by clearing thread-local caches
+    info!(
+        rss_mb = rss / 1024 / 1024,
+        "Memory pressure detected, clearing thread-local caches"
+    );
+    crate::clear_all_thread_caches();
+
+    // Re-check after clearing caches
+    let rss_after = crate::memory_tracker::current_rss()?;
+    if rss_after <= state.max_rss_bytes {
+        // Memory recovered — reset overload timer
+        *state.overloaded_since.lock() = None;
+        info!(
+            rss_before_mb = rss / 1024 / 1024,
+            rss_after_mb = rss_after / 1024 / 1024,
+            "Cache clear freed memory, accepting request"
+        );
+        return None;
+    }
+
+    // Still overloaded — track duration and potentially terminate
+    let mut overloaded = state.overloaded_since.lock();
+    let since = *overloaded.get_or_insert_with(Instant::now);
+    let overloaded_secs = since.elapsed().as_secs();
+
+    if overloaded_secs > 30 {
+        tracing::error!(
+            rss_mb = rss_after / 1024 / 1024,
+            overloaded_secs,
+            "Memory overload persisted >30s after cache clears, terminating"
+        );
+        std::process::exit(1);
+    }
+
+    warn!(
+        rss_mb = rss_after / 1024 / 1024,
+        max_rss_mb = state.max_rss_bytes / 1024 / 1024,
+        overloaded_secs,
+        "Server overloaded: high memory usage (even after cache clear)"
+    );
+    Some(
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(serde_json::json!({"error": "Server overloaded (memory)"})),
+        )
+            .into_response(),
+    )
+}
+
 /// Extract a file to the extract directory.
 /// Returns the extracted path if successful.
 ///
@@ -402,20 +470,8 @@ async fn analyze_path_inner(
 ) -> Response {
     info!("--> POST /analyze-path");
 
-    // Check memory pressure before accepting work
-    if let Some(rss) = crate::memory_tracker::current_rss() {
-        if rss > state.max_rss_bytes {
-            warn!(
-                rss_mb = rss / 1024 / 1024,
-                max_rss_mb = state.max_rss_bytes / 1024 / 1024,
-                "Server overloaded: high memory usage"
-            );
-            return (
-                StatusCode::SERVICE_UNAVAILABLE,
-                Json(serde_json::json!({"error": "Server overloaded (memory)"})),
-            )
-                .into_response();
-        }
+    if let Some(response) = check_memory_pressure(&state) {
+        return response;
     }
 
     // Check if local path analysis is enabled
@@ -481,9 +537,21 @@ async fn analyze_path_inner(
     let task_span = Span::current();
 
     // Run analysis in blocking thread with timeout
+    // Use the request counter to periodically clear caches (avoids rayon::broadcast on every request)
+    let should_clear_caches = state
+        .next_request_id
+        .load(std::sync::atomic::Ordering::Relaxed)
+        .is_multiple_of(50);
     let handle = tokio::task::spawn_blocking(move || {
         let _enter = task_span.enter();
-        analyze_file(&path_owned, &AnalysisOptions::default())
+        let result = analyze_file(&path_owned, &AnalysisOptions::default());
+        // Periodically clear thread-local caches to prevent unbounded memory growth.
+        // Done every 50 requests rather than every request to avoid rayon::broadcast
+        // contention under concurrent load.
+        if should_clear_caches {
+            crate::clear_all_thread_caches();
+        }
+        result
     });
 
     let result = tokio::time::timeout(timeout_duration, handle).await;

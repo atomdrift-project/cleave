@@ -15,7 +15,7 @@ use axum::Router;
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::signal;
 use tower::limit::ConcurrencyLimitLayer;
 use tower_http::limit::RequestBodyLimitLayer;
@@ -79,6 +79,9 @@ pub struct AppState {
     pub next_request_id: AtomicU64,
     /// Number of active analysis tasks.
     pub active_tasks: AtomicUsize,
+    /// When the server first entered the memory-overloaded state.
+    /// Reset to None when memory drops below the threshold.
+    pub overloaded_since: parking_lot::Mutex<Option<Instant>>,
 }
 
 impl AppState {
@@ -126,6 +129,7 @@ pub async fn run(config: ServerConfig) -> anyhow::Result<()> {
         extract_dir,
         next_request_id: AtomicU64::new(1),
         active_tasks: AtomicUsize::new(0),
+        overloaded_since: parking_lot::Mutex::new(None),
     });
 
     // Spawn background task to clean up stale rate limiter entries

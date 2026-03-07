@@ -223,37 +223,46 @@ async fn analyze_inner(
         .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let task_span = Span::current();
 
-    let handle = tokio::task::spawn_blocking(move || {
+    let mut handle = tokio::task::spawn_blocking(move || {
         let _enter = task_span.enter();
         analyze_file(&path, &AnalysisOptions::default())
     });
 
-    let result = tokio::time::timeout(timeout_duration, handle).await;
+    let result = tokio::select! {
+        res = &mut handle => Some(res),
+        _ = tokio::time::sleep(timeout_duration) => None,
+    };
 
-    // Only decrement active_tasks when the blocking task has actually finished.
-    // On timeout, the spawn_blocking task keeps running — spawn a watcher to
-    // decrement when it eventually completes, so the counter stays accurate.
-    match &result {
-        Ok(_) => {
-            state
+    // On success/error, the blocking task is done — decrement and clean up.
+    // On timeout, the task is still running — spawn a watcher to decrement
+    // and drop the temp file when it eventually completes.
+    if result.is_some() {
+        state
+            .active_tasks
+            .fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+        drop(temp_file);
+    } else {
+        let active = state
+            .active_tasks
+            .load(std::sync::atomic::Ordering::Relaxed);
+        warn!(
+            filename = %filename,
+            active_tasks = active,
+            "Analysis timed out but blocking task still running"
+        );
+        let orphan_state = Arc::clone(&state);
+        tokio::spawn(async move {
+            let _ = handle.await;
+            orphan_state
                 .active_tasks
                 .fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
-        }
-        Err(_) => {
-            // Timeout: task is still running on the blocking pool.
-            // We cannot cancel spawn_blocking, but we track it accurately.
-            warn!(
-                filename = %filename,
-                active_tasks = state.active_tasks.load(std::sync::atomic::Ordering::Relaxed),
-                "Analysis timed out but blocking task still running"
-            );
-        }
+            drop(temp_file);
+        });
     }
-    drop(temp_file);
     let elapsed_ms = request_start.elapsed().as_millis();
 
     match result {
-        Ok(Ok(Ok(mut report))) => {
+        Some(Ok(Ok(mut report))) => {
             let hostile = report
                 .findings
                 .iter()
@@ -283,7 +292,7 @@ async fn analyze_inner(
             report.finalize();
             Json(report).into_response()
         }
-        Ok(Ok(Err(e))) => {
+        Some(Ok(Err(e))) => {
             warn!(filename = %filename, elapsed_ms = elapsed_ms, "Analysis failed: {:?}", e);
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -291,7 +300,7 @@ async fn analyze_inner(
             )
                 .into_response()
         }
-        Ok(Err(e)) => {
+        Some(Err(e)) => {
             warn!(filename = %filename, elapsed_ms = elapsed_ms, "Task join error: {:?}", e);
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -299,7 +308,7 @@ async fn analyze_inner(
             )
                 .into_response()
         }
-        Err(_) => {
+        None => {
             warn!(filename = %filename, elapsed_ms = elapsed_ms, "Analysis timed out after {}s", state.timeout_secs);
             (
                 StatusCode::GATEWAY_TIMEOUT,

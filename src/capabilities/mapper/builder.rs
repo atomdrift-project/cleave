@@ -72,6 +72,7 @@ impl super::CapabilityMapper {
     /// * `min_hostile_precision` - Minimum precision for HOSTILE rules (recommended: 3.5)
     /// * `min_suspicious_precision` - Minimum precision for SUSPICIOUS rules (recommended: 2.0)
     /// * `enable_full_validation` - If true, run all validation checks and exit on errors
+    #[must_use]
     pub fn new_with_precision_thresholds(
         min_hostile_precision: f32,
         min_suspicious_precision: f32,

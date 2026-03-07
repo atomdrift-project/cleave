@@ -604,6 +604,62 @@ exec("cmd3")
 }
 
 #[test]
+fn test_eval_ast_match_count_supports_count_min() {
+    // AST conditions return match_count, which is used by count_min/count_max
+    // filtering at the TraitDefinition level. Verify match_count is accurate.
+    let report = create_test_report("/test/script.py");
+    let source = r#"
+exec("cmd1")
+exec("cmd2")
+exec("cmd3")
+eval("code1")
+exec("cmd4")
+"#;
+    let ctx = create_test_context(&report, source.as_bytes(), FileType::Python);
+
+    let result = eval_ast(
+        Some("call"),
+        None,
+        None,
+        Some("exec"),
+        None,
+        None,
+        false,
+        &ctx,
+    );
+
+    assert!(result.matched);
+    // match_count must reflect actual AST matches for count_min filtering to work
+    assert_eq!(
+        result.match_count, 4,
+        "match_count should be 4 (one per exec call), got {}",
+        result.match_count
+    );
+}
+
+#[test]
+fn test_eval_ast_query_match_count_single() {
+    // Verify match_count = 1 when only one AST match exists
+    let report = create_test_report("/test/script.py");
+    let source = r#"exec("cmd")"#;
+    let ctx = create_test_context(&report, source.as_bytes(), FileType::Python);
+
+    let result = eval_ast(
+        Some("call"),
+        None,
+        None,
+        Some("exec"),
+        None,
+        None,
+        false,
+        &ctx,
+    );
+
+    assert!(result.matched);
+    assert_eq!(result.match_count, 1);
+}
+
+#[test]
 fn test_eval_ast_c_system_call() {
     let report = create_test_report("/test/main.c");
     let source = r#"

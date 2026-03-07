@@ -1,3 +1,5 @@
+//! Test string extraction with garbage filtering.
+
 use std::env;
 use std::fs;
 

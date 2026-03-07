@@ -442,17 +442,6 @@ fn provide_error_guidance(
                     guidance.push_str("   💡 The field names are consistent with other conditions like 'exports_count'.\n");
                     found_hallucination = true;
                 }
-                ("count_min" | "count_max" | "per_kb_min" | "per_kb_max", Some("ast")) => {
-                    guidance.push_str(&format!(
-                        "\n   Field '{}' is not valid for 'type: ast'.\n",
-                        field
-                    ));
-                    guidance.push_str("   💡 AST conditions don't support count/density fields.\n");
-                    guidance.push_str(
-                        "   💡 AST patterns match structural code patterns, not occurrences.\n",
-                    );
-                    found_hallucination = true;
-                }
                 ("needs", _) => {
                     guidance.push_str(&format!(
                         "\n   Field '{}' is not valid in atomic trait conditions.\n",

@@ -86,19 +86,16 @@ impl MachOAnalyzer {
             .clone()
             .unwrap_or_else(|| crate::analyzers::utils::calculate_sha256(data));
 
-        let macho = match goblin::mach::Mach::parse(data) {
-            Ok(Mach::Binary(m)) => m,
-            _ => {
-                // Return a minimal report if parsing fails
-                let target = TargetInfo {
-                    path: file_path.display().to_string(),
-                    file_type: "macho".to_string(),
-                    size_bytes: data.len() as u64,
-                    sha256,
-                    architectures: None,
-                };
-                return AnalysisReport::new(target);
-            }
+        let Ok(Mach::Binary(macho)) = goblin::mach::Mach::parse(data) else {
+            // Return a minimal report if parsing fails
+            let target = TargetInfo {
+                path: file_path.display().to_string(),
+                file_type: "macho".to_string(),
+                size_bytes: data.len() as u64,
+                sha256,
+                architectures: None,
+            };
+            return AnalysisReport::new(target);
         };
 
         // Create target info

@@ -777,8 +777,8 @@ impl UnifiedSourceAnalyzer {
             if !report.imports.is_empty() {
                 let file_type_str = match self.file_type {
                     crate::analyzers::FileType::Python => "python",
-                    crate::analyzers::FileType::JavaScript => "javascript",
-                    crate::analyzers::FileType::TypeScript => "javascript",
+                    crate::analyzers::FileType::JavaScript
+                    | crate::analyzers::FileType::TypeScript => "javascript",
                     crate::analyzers::FileType::Go => "go",
                     crate::analyzers::FileType::Ruby => "ruby",
                     crate::analyzers::FileType::Perl => "perl",

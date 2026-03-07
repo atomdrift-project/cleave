@@ -131,7 +131,7 @@ pub async fn run(config: ServerConfig) -> anyhow::Result<()> {
     // Spawn background task to clean up stale rate limiter entries
     let cleanup_state = Arc::clone(&state);
     tokio::spawn(async move {
-        let mut interval = tokio::time::interval(Duration::from_secs(60));
+        let mut interval = tokio::time::interval(Duration::from_secs(15));
         loop {
             interval.tick().await;
             cleanup_state.rate_limiter.cleanup(300); // 5 minute expiry

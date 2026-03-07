@@ -274,6 +274,7 @@ pub fn pin(commit: &str) -> Result<(), String> {
 }
 
 /// Get the short commit hash of the current traits HEAD.
+#[must_use]
 #[allow(dead_code)] // Used by binary target
 pub fn version() -> Option<String> {
     let traits_dir = resolve_current_traits_dir();

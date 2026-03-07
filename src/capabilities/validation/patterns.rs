@@ -126,11 +126,8 @@ fn unrolled_quantifier_regex() -> &'static regex::Regex {
     // Note: open-ended quantifiers {n,} are NOT flagged — Rust's NFA compiles them
     // to a 2-state loop, same as + or *. Bounding them (e.g. \s{1,65}) is actually
     // WORSE because it unrolls into N states.
-    RE.get_or_init(|| {
-        regex::Regex::new(r"\\[swdSWD]\{([0-9]+),([0-9]+)\}").expect("valid regex")
-    })
+    RE.get_or_init(|| regex::Regex::new(r"\\[swdSWD]\{([0-9]+),([0-9]+)\}").expect("valid regex"))
 }
-
 
 /// Find traits with short patterns that are likely to produce too many false positives.
 ///

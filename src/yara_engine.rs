@@ -559,10 +559,7 @@ impl YaraEngine {
             // Skip files that reference the VirusTotal module (requires VT context)
             if source.contains("vt.") {
                 vt_skipped += 1;
-                tracing::debug!(
-                    "{}: skipped (requires VirusTotal context)",
-                    path.display()
-                );
+                tracing::debug!("{}: skipped (requires VirusTotal context)", path.display());
                 continue;
             }
 

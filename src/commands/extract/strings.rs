@@ -253,8 +253,9 @@ fn format_strings_output(
     format: &cli::OutputFormat,
 ) -> Result<String> {
     match format {
-        cli::OutputFormat::Json => Ok(serde_json::to_string_pretty(&strings)?),
-        cli::OutputFormat::Jsonl => Ok(serde_json::to_string_pretty(&strings)?),
+        cli::OutputFormat::Json | cli::OutputFormat::Jsonl => {
+            Ok(serde_json::to_string_pretty(&strings)?)
+        }
         cli::OutputFormat::Terminal => {
             let mut output = String::new();
 

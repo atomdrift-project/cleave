@@ -4,6 +4,9 @@ use dashmap::DashMap;
 use std::net::IpAddr;
 use std::time::Instant;
 
+/// Maximum number of tracked IPs before forced eviction.
+const MAX_TRACKED_IPS: usize = 50_000;
+
 /// Token bucket rate limiter with per-IP tracking.
 pub struct RateLimiter {
     buckets: DashMap<IpAddr, TokenBucket>,
@@ -46,6 +49,16 @@ impl RateLimiter {
     pub fn check(&self, ip: IpAddr) -> bool {
         if self.tokens_per_second == 0.0 {
             return true;
+        }
+
+        // Prevent unbounded growth from distributed attacks.
+        // If we hit the cap, force an aggressive cleanup first.
+        if self.buckets.len() >= MAX_TRACKED_IPS {
+            self.cleanup(60);
+            // If still over capacity after cleanup, evict everything older than 10s
+            if self.buckets.len() >= MAX_TRACKED_IPS {
+                self.cleanup(10);
+            }
         }
 
         let now = Instant::now();

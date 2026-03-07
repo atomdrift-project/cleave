@@ -1,3 +1,5 @@
+//! Verify tree-sitter parser initialization.
+
 use tree_sitter::Parser;
 
 fn main() {

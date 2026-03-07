@@ -363,6 +363,7 @@ pub struct AnalysisMetadata {
 impl AnalysisMetadata {
     /// Returns true when metadata has been cleared (after finalize merged it into summary).
     /// Used by skip_serializing_if to omit the field from output.
+    #[must_use]
     pub fn is_cleared(&self) -> bool {
         self.tools_used.is_empty() && self.analysis_duration_ms == 0 && self.errors.is_empty()
     }

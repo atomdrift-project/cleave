@@ -69,6 +69,7 @@ fn test_symbol_condition() {
         current_source: None,
         string_exact_index: OnceLock::new(),
         string_exact_index_ci: OnceLock::new(),
+        deadline: None,
     };
 
     let rule = CompositeTrait {
@@ -130,6 +131,7 @@ fn test_all() {
         current_source: None,
         string_exact_index: OnceLock::new(),
         string_exact_index_ci: OnceLock::new(),
+        deadline: None,
     };
 
     let rule = CompositeTrait {
@@ -205,6 +207,7 @@ fn test_count() {
         current_source: None,
         string_exact_index: OnceLock::new(),
         string_exact_index_ci: OnceLock::new(),
+        deadline: None,
     };
 
     let rule = CompositeTrait {
@@ -277,6 +280,7 @@ fn test_string_exact_condition() {
         current_source: None,
         string_exact_index: OnceLock::new(),
         string_exact_index_ci: OnceLock::new(),
+        deadline: None,
     };
 
     let rule = CompositeTrait {
@@ -343,6 +347,7 @@ fn test_any() {
         current_source: None,
         string_exact_index: OnceLock::new(),
         string_exact_index_ci: OnceLock::new(),
+        deadline: None,
     };
 
     let rule = CompositeTrait {
@@ -434,6 +439,7 @@ fn test_not_directive_shorthand() {
         current_source: None,
         string_exact_index: OnceLock::new(),
         string_exact_index_ci: OnceLock::new(),
+        deadline: None,
     };
 
     let trait_def = TraitDefinition {
@@ -525,6 +531,7 @@ fn test_not_directive_exact() {
         current_source: None,
         string_exact_index: OnceLock::new(),
         string_exact_index_ci: OnceLock::new(),
+        deadline: None,
     };
 
     let trait_def = TraitDefinition {
@@ -622,6 +629,7 @@ fn test_not_directive_regex() {
         current_source: None,
         string_exact_index: OnceLock::new(),
         string_exact_index_ci: OnceLock::new(),
+        deadline: None,
     };
 
     let trait_def = TraitDefinition {
@@ -715,6 +723,7 @@ fn test_unless_directive_skips_trait() {
         current_source: None,
         string_exact_index: OnceLock::new(),
         string_exact_index_ci: OnceLock::new(),
+        deadline: None,
     };
 
     let trait_def = TraitDefinition {
@@ -776,6 +785,7 @@ fn test_unless_directive_allows_trait() {
         current_source: None,
         string_exact_index: OnceLock::new(),
         string_exact_index_ci: OnceLock::new(),
+        deadline: None,
     };
 
     let trait_def = TraitDefinition {
@@ -852,6 +862,7 @@ fn test_downgrade_to_notable() {
         current_source: None,
         string_exact_index: OnceLock::new(),
         string_exact_index_ci: OnceLock::new(),
+        deadline: None,
     };
 
     let trait_def = TraitDefinition {
@@ -944,6 +955,7 @@ fn test_downgrade_one_level() {
         current_source: None,
         string_exact_index: OnceLock::new(),
         string_exact_index_ci: OnceLock::new(),
+        deadline: None,
     };
 
     let trait_def = TraitDefinition {
@@ -1013,6 +1025,7 @@ fn test_downgrade_no_match_keeps_original() {
         current_source: None,
         string_exact_index: OnceLock::new(),
         string_exact_index_ci: OnceLock::new(),
+        deadline: None,
     };
 
     let trait_def = TraitDefinition {
@@ -1097,6 +1110,7 @@ fn test_downgrade_from_hostile() {
         current_source: None,
         string_exact_index: OnceLock::new(),
         string_exact_index_ci: OnceLock::new(),
+        deadline: None,
     };
 
     let trait_def = TraitDefinition {
@@ -1201,6 +1215,7 @@ fn test_all_three_directives_combined() {
         current_source: None,
         string_exact_index: OnceLock::new(),
         string_exact_index_ci: OnceLock::new(),
+        deadline: None,
     };
 
     let trait_def = TraitDefinition {
@@ -1304,6 +1319,7 @@ fn test_string_exact_match_requires_full_equality() {
         current_source: None,
         string_exact_index: OnceLock::new(),
         string_exact_index_ci: OnceLock::new(),
+        deadline: None,
     };
 
     // exact: "hello" should match only "hello", not "hello world"
@@ -1396,6 +1412,7 @@ fn test_string_substr_matches_substrings() {
         current_source: None,
         string_exact_index: OnceLock::new(),
         string_exact_index_ci: OnceLock::new(),
+        deadline: None,
     };
 
     // substr: "hello" should match both "hello" and "hello world"
@@ -1479,6 +1496,7 @@ fn test_symbol_exact_vs_substr() {
         current_source: None,
         string_exact_index: OnceLock::new(),
         string_exact_index_ci: OnceLock::new(),
+        deadline: None,
     };
 
     // exact: "read" should match only "read", not "readlink"
@@ -1588,6 +1606,7 @@ fn test_string_case_insensitive_exact() {
         current_source: None,
         string_exact_index: OnceLock::new(),
         string_exact_index_ci: OnceLock::new(),
+        deadline: None,
     };
 
     // Case-insensitive exact match
@@ -1675,6 +1694,7 @@ fn test_string_word_boundary_match() {
         current_source: None,
         string_exact_index: OnceLock::new(),
         string_exact_index_ci: OnceLock::new(),
+        deadline: None,
     };
 
     // word: "cat" should match "the cat sat" but not "category"
@@ -1775,6 +1795,7 @@ fn test_string_regex_match() {
         current_source: None,
         string_exact_index: OnceLock::new(),
         string_exact_index_ci: OnceLock::new(),
+        deadline: None,
     };
 
     // regex for IP addresses
@@ -1848,6 +1869,7 @@ fn test_content_exact_vs_substr() {
         current_source: None,
         string_exact_index: OnceLock::new(),
         string_exact_index_ci: OnceLock::new(),
+        deadline: None,
     };
 
     // exact: should match only if entire content equals the pattern (won't match)
@@ -1923,6 +1945,7 @@ fn test_basename_exact_match() {
         current_source: None,
         string_exact_index: OnceLock::new(),
         string_exact_index_ci: OnceLock::new(),
+        deadline: None,
     };
 
     // exact: "__init__.py" should match
@@ -1959,6 +1982,7 @@ fn test_basename_exact_no_match() {
         current_source: None,
         string_exact_index: OnceLock::new(),
         string_exact_index_ci: OnceLock::new(),
+        deadline: None,
     };
 
     // exact: "__init__.py" should not match "main.py"
@@ -1994,6 +2018,7 @@ fn test_basename_substr_match() {
         current_source: None,
         string_exact_index: OnceLock::new(),
         string_exact_index_ci: OnceLock::new(),
+        deadline: None,
     };
 
     // substr: "setup" should match "setup_tools.py"
@@ -2023,6 +2048,7 @@ fn test_basename_regex_match() {
         current_source: None,
         string_exact_index: OnceLock::new(),
         string_exact_index_ci: OnceLock::new(),
+        deadline: None,
     };
 
     // regex: "^test_" should match files starting with "test_"
@@ -2058,6 +2084,7 @@ fn test_basename_case_insensitive() {
         current_source: None,
         string_exact_index: OnceLock::new(),
         string_exact_index_ci: OnceLock::new(),
+        deadline: None,
     };
 
     // exact: "readme.md" should match "README.md" with case_insensitive
@@ -2093,6 +2120,7 @@ fn test_basename_in_trait_definition() {
         current_source: None,
         string_exact_index: OnceLock::new(),
         string_exact_index_ci: OnceLock::new(),
+        deadline: None,
     };
 
     let trait_def = TraitDefinition {
@@ -2153,6 +2181,7 @@ fn test_basename_in_composite_rule() {
         current_source: None,
         string_exact_index: OnceLock::new(),
         string_exact_index_ci: OnceLock::new(),
+        deadline: None,
     };
 
     let rule = CompositeTrait {
@@ -2229,6 +2258,7 @@ fn test_composite_unless_skips_rule() {
         current_source: None,
         string_exact_index: OnceLock::new(),
         string_exact_index_ci: OnceLock::new(),
+        deadline: None,
     };
 
     // Composite rule with unless condition
@@ -2293,6 +2323,7 @@ fn test_composite_unless_allows_rule() {
         current_source: None,
         string_exact_index: OnceLock::new(),
         string_exact_index_ci: OnceLock::new(),
+        deadline: None,
     };
 
     let rule = CompositeTrait {
@@ -2357,6 +2388,7 @@ fn test_composite_unless_with_basename() {
         current_source: None,
         string_exact_index: OnceLock::new(),
         string_exact_index_ci: OnceLock::new(),
+        deadline: None,
     };
 
     let rule = CompositeTrait {
@@ -2436,6 +2468,7 @@ fn test_composite_unless_multiple_conditions_any_matches() {
         current_source: None,
         string_exact_index: OnceLock::new(),
         string_exact_index_ci: OnceLock::new(),
+        deadline: None,
     };
 
     let rule = CompositeTrait {
@@ -2526,6 +2559,7 @@ fn test_needs_with_any_only_respects_threshold() {
         current_source: None,
         string_exact_index: OnceLock::new(),
         string_exact_index_ci: OnceLock::new(),
+        deadline: None,
     };
 
     // Rule with needs: 3, but only 2 conditions can match (socket, connect)
@@ -2611,6 +2645,7 @@ fn test_needs_with_any_only_matches_when_threshold_met() {
         current_source: None,
         string_exact_index: OnceLock::new(),
         string_exact_index_ci: OnceLock::new(),
+        deadline: None,
     };
 
     // Rule with needs: 2, and 2 conditions can match (socket, connect)
@@ -2691,6 +2726,7 @@ fn test_needs_with_all_and_any_respects_threshold() {
         current_source: None,
         string_exact_index: OnceLock::new(),
         string_exact_index_ci: OnceLock::new(),
+        deadline: None,
     };
 
     // Rule with:
@@ -2800,6 +2836,7 @@ fn test_needs_with_all_and_any_matches_when_threshold_met() {
         current_source: None,
         string_exact_index: OnceLock::new(),
         string_exact_index_ci: OnceLock::new(),
+        deadline: None,
     };
 
     // Rule with:
@@ -2896,6 +2933,7 @@ fn test_needs_with_all_and_any_all_fails() {
         current_source: None,
         string_exact_index: OnceLock::new(),
         string_exact_index_ci: OnceLock::new(),
+        deadline: None,
     };
 
     // Rule where all fails but any would pass
@@ -2974,6 +3012,7 @@ fn test_all_and_any_without_needs_requires_one_any() {
         current_source: None,
         string_exact_index: OnceLock::new(),
         string_exact_index_ci: OnceLock::new(),
+        deadline: None,
     };
 
     let rule = CompositeTrait {
@@ -3149,6 +3188,7 @@ fn proximity_ctx<'a>(
         current_source: None,
         string_exact_index: OnceLock::new(),
         string_exact_index_ci: OnceLock::new(),
+        deadline: None,
     }
 }
 
@@ -3859,6 +3899,7 @@ fn test_downgrade_combined_all_and_none_blocked_by_none() {
         current_source: None,
         string_exact_index: OnceLock::new(),
         string_exact_index_ci: OnceLock::new(),
+        deadline: None,
     };
 
     let trait_def = TraitDefinition {
@@ -3966,6 +4007,7 @@ fn test_downgrade_combined_all_and_none_pass() {
         current_source: None,
         string_exact_index: OnceLock::new(),
         string_exact_index_ci: OnceLock::new(),
+        deadline: None,
     };
 
     let trait_def = TraitDefinition {
@@ -4074,6 +4116,7 @@ fn test_downgrade_needs_threshold_not_met() {
         current_source: None,
         string_exact_index: OnceLock::new(),
         string_exact_index_ci: OnceLock::new(),
+        deadline: None,
     };
 
     let trait_def = TraitDefinition {
@@ -4189,6 +4232,7 @@ fn test_downgrade_needs_threshold_met() {
         current_source: None,
         string_exact_index: OnceLock::new(),
         string_exact_index_ci: OnceLock::new(),
+        deadline: None,
     };
 
     let trait_def = TraitDefinition {
@@ -4313,6 +4357,7 @@ fn test_composite_downgrade_all_match() {
         current_source: None,
         string_exact_index: OnceLock::new(),
         string_exact_index_ci: OnceLock::new(),
+        deadline: None,
     };
 
     let rule = CompositeTrait {
@@ -4405,6 +4450,7 @@ fn test_composite_downgrade_none_blocks() {
         current_source: None,
         string_exact_index: OnceLock::new(),
         string_exact_index_ci: OnceLock::new(),
+        deadline: None,
     };
 
     let rule = CompositeTrait {
@@ -4785,6 +4831,7 @@ fn test_none_only_rule_passes_when_conditions_absent() {
         current_source: None,
         string_exact_index: OnceLock::new(),
         string_exact_index_ci: OnceLock::new(),
+        deadline: None,
     };
 
     // none-only rule: no all/any, just none with trait references
@@ -4867,6 +4914,7 @@ fn test_none_only_rule_fails_when_condition_present() {
         current_source: None,
         string_exact_index: OnceLock::new(),
         string_exact_index_ci: OnceLock::new(),
+        deadline: None,
     };
 
     let rule = CompositeTrait {

@@ -80,8 +80,13 @@ pub(crate) fn clear_condition_stats() {
     stats_map().clear();
 }
 
-/// Maximum time allowed for a single rule evaluation (2 seconds)
-const MAX_RULE_EVAL_DURATION: Duration = Duration::from_secs(2);
+/// Hard deadline for a single rule evaluation (30 seconds).
+/// When exceeded, evaluation is interrupted and a timeout finding is emitted.
+const MAX_RULE_EVAL_DURATION: Duration = Duration::from_secs(30);
+
+/// Warning threshold for rule evaluation (2 seconds).
+/// Rules exceeding this are logged as warnings but allowed to complete.
+const RULE_EVAL_WARN_DURATION: Duration = Duration::from_secs(2);
 
 /// Macro to time condition evaluation
 macro_rules! timed_eval {
@@ -933,17 +938,15 @@ impl TraitDefinition {
         let result = self.eval_condition(&self.r#if, ctx);
         let duration = start.elapsed();
 
-        // Check for timeout violations (potential anti-analysis technique)
+        // Hard timeout: emit a timeout finding and skip the actual result
         if duration > MAX_RULE_EVAL_DURATION {
             eprintln!(
-                "WARN: Rule {} exceeded timeout: {}ms > {}ms",
+                "WARN: Rule {} exceeded hard timeout: {}ms > {}ms",
                 self.id,
                 duration.as_millis(),
                 MAX_RULE_EVAL_DURATION.as_millis()
             );
 
-            // Return a timeout warning finding instead of the actual result
-            // This flags the file as suspicious for causing analysis slowdown
             let timeout_warning = Finding {
                 id: "objectives/anti-analysis/analysis-bomb/rule-timeout".to_string(),
                 desc: format!(
@@ -962,7 +965,7 @@ impl TraitDefinition {
                     method: "timeout-detection".to_string(),
                     source: "cleave-evaluator".to_string(),
                     value: format!(
-                        "Rule '{}' exceeded {}ms timeout, took {}ms",
+                        "Rule '{}' exceeded {}ms hard timeout, took {}ms",
                         self.id,
                         MAX_RULE_EVAL_DURATION.as_millis(),
                         duration.as_millis()
@@ -975,6 +978,16 @@ impl TraitDefinition {
             };
 
             return Some(timeout_warning);
+        }
+
+        // Soft warning: log slow rules that exceed the warning threshold
+        if duration > RULE_EVAL_WARN_DURATION {
+            eprintln!(
+                "WARN: Rule {} exceeded timeout: {}ms > {}ms",
+                self.id,
+                duration.as_millis(),
+                RULE_EVAL_WARN_DURATION.as_millis()
+            );
         }
 
         // Record condition result if debug collector is present

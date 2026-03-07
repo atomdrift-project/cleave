@@ -3,6 +3,7 @@
 //! Provides stack-safe alternatives to recursive AST walking.
 //! This prevents stack overflow on deeply nested code (minified JS, malicious files).
 
+use std::time::Instant;
 use tree_sitter::{Node, TreeCursor};
 
 /// Maximum depth to prevent runaway traversal on malformed ASTs
@@ -15,16 +16,24 @@ pub(crate) struct WalkStats {
     pub depth_limit_hit: bool,
     /// Maximum depth actually reached
     pub max_depth_reached: usize,
+    /// Whether the deadline was exceeded
+    pub deadline_exceeded: bool,
 }
 
 /// Like walk_tree but returns stats including whether depth limits were hit.
 /// Use this when you need to detect potential anti-analysis techniques.
-pub(crate) fn walk_tree_with_stats<'a, F>(cursor: &mut TreeCursor<'a>, mut visitor: F) -> WalkStats
+/// An optional deadline allows bailing out early if evaluation takes too long.
+pub(crate) fn walk_tree_with_stats<'a, F>(
+    cursor: &mut TreeCursor<'a>,
+    deadline: Option<Instant>,
+    mut visitor: F,
+) -> WalkStats
 where
     F: FnMut(Node<'a>, usize) -> bool,
 {
     let mut stats = WalkStats::default();
     let mut depth = 0usize;
+    let mut node_count = 0u32;
 
     loop {
         if depth > stats.max_depth_reached {
@@ -34,6 +43,17 @@ where
         if depth > MAX_AST_DEPTH {
             stats.depth_limit_hit = true;
             return stats; // Safety limit reached
+        }
+
+        // Check deadline every 4096 nodes to avoid syscall overhead
+        node_count += 1;
+        if node_count & 0xFFF == 0 {
+            if let Some(dl) = deadline {
+                if Instant::now() > dl {
+                    stats.deadline_exceeded = true;
+                    return stats;
+                }
+            }
         }
 
         let node = cursor.node();

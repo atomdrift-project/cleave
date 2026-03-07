@@ -10,6 +10,7 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::sync::OnceLock;
+use std::time::Instant;
 
 /// Compute a fast hash of a string for deduplication.
 #[inline]
@@ -62,6 +63,9 @@ pub(crate) struct EvaluationContext<'a> {
     /// Index for O(1) case-insensitive exact lookups: lowercased value -> vec of (original, source, offset)
     /// Lazy-initialized on first use.
     pub string_exact_index_ci: OnceLock<FxHashMap<String, Vec<(String, String, Option<u64>)>>>,
+    /// Hard deadline for rule evaluation. When set, AST walks and other
+    /// evaluation loops check this and bail out early if exceeded.
+    pub deadline: Option<Instant>,
 }
 
 impl<'a> EvaluationContext<'a> {
@@ -110,6 +114,7 @@ impl<'a> EvaluationContext<'a> {
             current_source: None,
             string_exact_index: OnceLock::new(),
             string_exact_index_ci: OnceLock::new(),
+            deadline: None,
         }
     }
 
@@ -203,6 +208,13 @@ impl<'a> EvaluationContext<'a> {
     #[must_use]
     pub(crate) fn with_inline_yara(mut self, results: &'a HashMap<String, Vec<Evidence>>) -> Self {
         self.inline_yara_results = Some(results);
+        self
+    }
+
+    /// Set a hard deadline for rule evaluation. AST walks and other
+    /// evaluation loops will bail out early if this deadline is exceeded.
+    pub(crate) fn with_deadline(mut self, deadline: Instant) -> Self {
+        self.deadline = Some(deadline);
         self
     }
 

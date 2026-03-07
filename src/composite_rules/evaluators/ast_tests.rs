@@ -42,6 +42,7 @@ fn create_test_context<'a>(
         current_source: None,
         string_exact_index: OnceLock::new(),
         string_exact_index_ci: OnceLock::new(),
+        deadline: None,
     }
 }
 

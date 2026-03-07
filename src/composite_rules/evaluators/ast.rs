@@ -112,6 +112,7 @@ pub(crate) fn eval_ast<'a>(
             pattern,
             match_mode,
             case_insensitive,
+            ctx.deadline,
         );
     }
 
@@ -170,6 +171,7 @@ pub(crate) fn eval_ast<'a>(
         pattern,
         match_mode,
         case_insensitive,
+        ctx.deadline,
     )
 }
 
@@ -181,6 +183,7 @@ fn eval_ast_pattern_multi(
     pattern: &str,
     match_mode: MatchMode,
     case_insensitive: bool,
+    deadline: Option<std::time::Instant>,
 ) -> ConditionResult {
     // Track parse errors but continue — tree-sitter recovers from minor errors
     let has_parse_errors = tree.root_node().has_error();
@@ -221,6 +224,7 @@ fn eval_ast_pattern_multi(
         &matcher,
         &mut evidence,
         &mut match_count,
+        deadline,
     );
 
     let mut warnings = Vec::new();
@@ -265,8 +269,9 @@ fn walk_ast_for_pattern_multi<'a>(
     matcher: &dyn Fn(&str) -> bool,
     evidence: &mut Vec<Evidence>,
     match_count: &mut usize,
+    deadline: Option<std::time::Instant>,
 ) -> crate::analyzers::ast_walker::WalkStats {
-    crate::analyzers::ast_walker::walk_tree_with_stats(cursor, |node, _depth| {
+    crate::analyzers::ast_walker::walk_tree_with_stats(cursor, deadline, |node, _depth| {
         // Check if this node matches any of the target types
         let node_kind = node.kind();
         if target_node_types.contains(&node_kind) {

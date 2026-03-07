@@ -84,6 +84,7 @@ fn test_count_min_filter_matches_debug_and_eval() {
         current_source: None,
         string_exact_index: OnceLock::new(),
         string_exact_index_ci: OnceLock::new(),
+        deadline: None,
     };
 
     let eval_result = trait_def.evaluate(&ctx);
@@ -111,6 +112,7 @@ fn test_count_min_filter_matches_debug_and_eval() {
         current_source: None,
         string_exact_index: OnceLock::new(),
         string_exact_index_ci: OnceLock::new(),
+        deadline: None,
     };
 
     let debug_result = trait_def.evaluate(&debug_ctx);
@@ -206,6 +208,7 @@ fn test_per_kb_min_filter_matches_debug_and_eval() {
         current_source: None,
         string_exact_index: OnceLock::new(),
         string_exact_index_ci: OnceLock::new(),
+        deadline: None,
     };
 
     let eval_result = trait_def.evaluate(&ctx);
@@ -233,6 +236,7 @@ fn test_per_kb_min_filter_matches_debug_and_eval() {
         current_source: None,
         string_exact_index: OnceLock::new(),
         string_exact_index_ci: OnceLock::new(),
+        deadline: None,
     };
 
     let debug_result = trait_def.evaluate(&debug_ctx);
@@ -320,6 +324,7 @@ fn test_size_min_filter_matches_debug_and_eval() {
         current_source: None,
         string_exact_index: OnceLock::new(),
         string_exact_index_ci: OnceLock::new(),
+        deadline: None,
     };
 
     let eval_result = trait_def.evaluate(&ctx);
@@ -347,6 +352,7 @@ fn test_size_min_filter_matches_debug_and_eval() {
         current_source: None,
         string_exact_index: OnceLock::new(),
         string_exact_index_ci: OnceLock::new(),
+        deadline: None,
     };
 
     let debug_result = trait_def.evaluate(&debug_ctx);
@@ -432,6 +438,7 @@ fn test_composite_size_constraints_match_debug_and_eval() {
         current_source: None,
         string_exact_index: OnceLock::new(),
         string_exact_index_ci: OnceLock::new(),
+        deadline: None,
     };
 
     let eval_result = composite.evaluate(&ctx);
@@ -459,6 +466,7 @@ fn test_composite_size_constraints_match_debug_and_eval() {
         current_source: None,
         string_exact_index: OnceLock::new(),
         string_exact_index_ci: OnceLock::new(),
+        deadline: None,
     };
 
     let debug_result = composite.evaluate(&debug_ctx);
@@ -547,6 +555,7 @@ fn test_all_filters_match_when_satisfied() {
         current_source: None,
         string_exact_index: OnceLock::new(),
         string_exact_index_ci: OnceLock::new(),
+        deadline: None,
     };
 
     let eval_result = trait_def.evaluate(&ctx);
@@ -574,6 +583,7 @@ fn test_all_filters_match_when_satisfied() {
         current_source: None,
         string_exact_index: OnceLock::new(),
         string_exact_index_ci: OnceLock::new(),
+        deadline: None,
     };
 
     let debug_result = trait_def.evaluate(&debug_ctx);

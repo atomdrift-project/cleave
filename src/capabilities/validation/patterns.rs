@@ -115,17 +115,22 @@ fn overlapping_alternations_regex() -> &'static regex::Regex {
 }
 
 #[allow(clippy::expect_used)] // Static regex pattern is hardcoded and valid
-fn greedy_range_regex() -> &'static regex::Regex {
+fn unrolled_quantifier_regex() -> &'static regex::Regex {
     static RE: OnceLock<regex::Regex> = OnceLock::new();
-    // Flag all unbounded ranges (.{n,}) — bounded ranges (.{n,m}) have a known cost ceiling
-    RE.get_or_init(|| regex::Regex::new(r"\.\{[0-9]+,\}").expect("valid regex"))
+    // Capture bounded quantifiers on shorthand classes: \s{n,m}, \w{n,m}, etc.
+    // We extract the upper bound to only flag large unrolls (m > 20).
+    // Small bounds like \d{1,3} or \w{5,15} are fine — the unroll cost is negligible.
+    // Large bounds like \s{1,65} compile to 65 distinct NFA states instead of a
+    // 2-state loop (\s+), and explode when nested inside repeated groups.
+    //
+    // Note: open-ended quantifiers {n,} are NOT flagged — Rust's NFA compiles them
+    // to a 2-state loop, same as + or *. Bounding them (e.g. \s{1,65}) is actually
+    // WORSE because it unrolls into N states.
+    RE.get_or_init(|| {
+        regex::Regex::new(r"\\[swdSWD]\{([0-9]+),([0-9]+)\}").expect("valid regex")
+    })
 }
 
-#[allow(clippy::expect_used)] // Static regex pattern is hardcoded and valid
-fn large_range_regex() -> &'static regex::Regex {
-    static RE: OnceLock<regex::Regex> = OnceLock::new();
-    RE.get_or_init(|| regex::Regex::new(r"\.\{([0-9]+),([0-9]*)\}").expect("valid regex"))
-}
 
 /// Find traits with short patterns that are likely to produce too many false positives.
 ///
@@ -319,16 +324,28 @@ pub(crate) fn find_non_capturing_groups(traits: &[TraitDefinition], warnings: &m
 /// for common backtracking pitfalls.
 pub(crate) fn find_slow_regex_patterns(traits: &[TraitDefinition], warnings: &mut Vec<String>) {
     for trait_def in traits {
+        // Extract regex pattern from any condition type that has one
         let pattern_opt = match &trait_def.r#if {
             Condition::Raw {
                 regex: Some(ref regex_str),
-                case_insensitive,
                 ..
-            } => Some((regex_str.clone(), *case_insensitive)),
+            }
+            | Condition::Ast {
+                regex: Some(ref regex_str),
+                ..
+            }
+            | Condition::String {
+                regex: Some(ref regex_str),
+                ..
+            }
+            | Condition::Symbol {
+                regex: Some(ref regex_str),
+                ..
+            } => Some(regex_str.clone()),
             _ => None,
         };
 
-        if let Some((pattern, _ci)) = pattern_opt {
+        if let Some(pattern) = pattern_opt {
             let mut issues = Vec::new();
 
             // Check for overlapping alternations with wildcards like (a.*|ab.*)
@@ -336,18 +353,14 @@ pub(crate) fn find_slow_regex_patterns(traits: &[TraitDefinition], warnings: &mu
                 issues.push("alternation with multiple .* patterns may cause backtracking");
             }
 
-            // Check for patterns with unbounded .{n,} followed by complex matching
-            // (bounded .{n,m} is acceptable — the upper bound limits cost)
-            if greedy_range_regex().is_match(&pattern) {
-                issues.push("open-ended range quantifier (.{n,}) — use a bounded range like .{0,50} instead");
-            }
-
-            // Check for very large ranges that could match huge spans
-            if let Some(caps) = large_range_regex().captures(&pattern) {
-                if let Ok(min) = caps[1].parse::<usize>() {
-                    if min > 1000 {
+            // Check for unrolled bounded quantifiers like \s{1,65} that should be \s+ or \s*
+            // Only flag when upper bound > 20 — small unrolls like \d{1,3} or \w{5,15} are fine.
+            // Note: open-ended {n,} is NOT flagged — NFA compiles it to a 2-state loop.
+            if let Some(caps) = unrolled_quantifier_regex().captures(&pattern) {
+                if let Ok(upper) = caps[2].parse::<usize>() {
+                    if upper > 20 {
                         issues.push(
-                            "very large range quantifier (>{1000}) may cause performance issues",
+                            "unrolled bounded quantifier (e.g. \\s{1,65}) — use \\s+, \\s*, or \\s? instead (loop vs chain)",
                         );
                     }
                 }

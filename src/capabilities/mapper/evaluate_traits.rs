@@ -43,7 +43,8 @@ impl super::CapabilityMapper {
             None,
             cached_ast,
         )
-        .with_section_map(section_map);
+        .with_section_map(section_map)
+        .with_deadline(std::time::Instant::now() + std::time::Duration::from_secs(30));
         if let Some(results) = inline_yara {
             ctx = ctx.with_inline_yara(results);
         }

@@ -549,9 +549,19 @@ impl YaraEngine {
                 })
                 .unwrap_or_else(|| "3p".to_string());
 
-            compiler.new_namespace(&namespace);
-
             let source = String::from_utf8_lossy(&bytes);
+
+            // Skip files that reference the VirusTotal module (requires VT context)
+            if source.contains("vt.") {
+                vt_skipped += 1;
+                tracing::debug!(
+                    "{}: skipped (requires VirusTotal context)",
+                    path.display()
+                );
+                continue;
+            }
+
+            compiler.new_namespace(&namespace);
 
             // Filter out disabled rules from the source
             let (filtered_source, removed) =
@@ -566,18 +576,8 @@ impl YaraEngine {
             match compiler.add_source(filtered_source.as_bytes()) {
                 Ok(_) => total += 1,
                 Err(e) => {
-                    let err_str = e.to_string();
-                    // VT (VirusTotal) module rules require VT context and won't work standalone
-                    if err_str.contains("vt.") {
-                        vt_skipped += 1;
-                        tracing::debug!(
-                            "{}: skipped (requires VirusTotal context)",
-                            path.display()
-                        );
-                    } else {
-                        failed += 1;
-                        tracing::warn!("{}: {}", path.display(), e);
-                    }
+                    failed += 1;
+                    tracing::warn!("{}: {}", path.display(), e);
                 }
             }
         }
@@ -673,9 +673,9 @@ impl YaraEngine {
     fn extract_namespace_with_prefix(&self, path: &Path, prefix: &str) -> String {
         let path_str = path.to_string_lossy();
 
-        // Find the base directory (traits/ or third_party/)
+        // Find the base directory (traits/ or third-party/)
         let search_str = if prefix == "third_party" {
-            "third_party/"
+            "third-party/"
         } else {
             "traits/"
         };
@@ -1315,7 +1315,7 @@ rule test_rule {
     #[test]
     fn test_extract_namespace_with_prefix_third_party() {
         let engine = YaraEngine::new_with_mapper(CapabilityMapper::empty());
-        let path = Path::new("/path/to/third_party/malware/test.yar");
+        let path = Path::new("/path/to/third-party/malware/test.yar");
         let namespace = engine.extract_namespace_with_prefix(path, "third_party");
         assert_eq!(namespace, "third_party.malware");
     }

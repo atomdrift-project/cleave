@@ -59,11 +59,9 @@ pub(crate) fn traits_path() -> PathBuf {
         .join("traits")
 }
 
-/// Returns the third-party directory path from CLEAVE_3P_DIR env var or "third_party" default
+/// Returns the third-party YARA rules directory (`third-party/` inside the traits directory).
 pub(crate) fn third_party_path() -> PathBuf {
-    std::env::var("CLEAVE_3P_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from("third_party"))
+    traits_path().join("third-party")
 }
 
 /// Check if we're running in developer mode (traits directory exists)
@@ -103,31 +101,7 @@ pub(crate) fn most_recent_yara_mtime() -> Result<SystemTime> {
         }
     }
 
-    // Check third_party directory
-    let tp_path = third_party_path();
-    if tp_path.exists() {
-        for entry in WalkDir::new(&tp_path)
-            .follow_links(false)
-            .into_iter()
-            .flatten()
-        {
-            let path = entry.path();
-            if path.is_file()
-                && path
-                    .extension()
-                    .map(|ext| ext == "yar" || ext == "yara")
-                    .unwrap_or(false)
-            {
-                if let Ok(metadata) = fs::metadata(path) {
-                    if let Ok(mtime) = metadata.modified() {
-                        if mtime > most_recent {
-                            most_recent = mtime;
-                        }
-                    }
-                }
-            }
-        }
-    }
+    // Note: third-party/ is inside the traits directory, so the walk above covers it.
 
     if most_recent == SystemTime::UNIX_EPOCH {
         anyhow::bail!("No YARA files found");

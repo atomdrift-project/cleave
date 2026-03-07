@@ -21,13 +21,13 @@ use walkdir::WalkDir;
 pub(crate) fn run(target: &Path, min_ms: u64) -> Result<()> {
     let data = fs::read(target).with_context(|| format!("Failed to read {}", target.display()))?;
 
-    let third_party_dir = Path::new("third_party");
+    let third_party_dir = crate::cache::third_party_path();
     if !third_party_dir.exists() {
-        anyhow::bail!("third_party/ directory not found");
+        anyhow::bail!("third-party/ directory not found in traits directory");
     }
 
     // Collect all YARA rule files
-    let rule_files: Vec<_> = WalkDir::new(third_party_dir)
+    let rule_files: Vec<_> = WalkDir::new(&third_party_dir)
         .follow_links(false)
         .into_iter()
         .filter_map(Result::ok)
@@ -67,7 +67,7 @@ pub(crate) fn run(target: &Path, min_ms: u64) -> Result<()> {
         .filter_map(|(ms, path)| {
             if ms >= min_ms {
                 let label = path
-                    .strip_prefix(third_party_dir)
+                    .strip_prefix(&third_party_dir)
                     .unwrap_or(&path)
                     .display()
                     .to_string();

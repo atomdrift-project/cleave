@@ -77,9 +77,7 @@ impl Config {
     }
 
     fn load() -> Self {
-        let config_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("third_party")
-            .join("config.yaml");
+        let config_path = crate::cache::third_party_path().join("config.yaml");
 
         match std::fs::read_to_string(&config_path) {
             Ok(yaml) => match Self::from_yaml(&yaml) {

@@ -228,6 +228,10 @@ impl super::CapabilityMapper {
                 if !path.is_file() || !path.extension().map(|e| e == "yaml").unwrap_or(false) {
                     return false;
                 }
+                // Skip third-party YARA config (not trait definitions)
+                if path.components().any(|c| c.as_os_str() == "third-party") {
+                    return false;
+                }
                 let filename = path.file_name().and_then(|f| f.to_str()).unwrap_or("");
                 !filename.to_lowercase().contains("readme") && !filename.starts_with("EXAMPLE")
             })

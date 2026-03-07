@@ -424,12 +424,17 @@ impl YaraEngine {
     ) -> Result<usize> {
         // First, collect all YARA rule file paths
         tracing::trace!("Scanning {} for YARA rule files", dir.display());
+        let third_party_dir = crate::cache::third_party_path();
         let rule_files: Vec<PathBuf> = WalkDir::new(dir)
             .follow_links(false)
             .into_iter()
             .filter_map(std::result::Result::ok)
             .filter(|entry| {
                 let path = entry.path();
+                // Skip the third-party subdirectory (loaded separately with per-file namespaces)
+                if path.starts_with(&third_party_dir) {
+                    return false;
+                }
                 path.is_file()
                     && path
                         .extension()

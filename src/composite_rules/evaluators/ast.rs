@@ -10,6 +10,7 @@ use crate::composite_rules::ast_kinds::map_kind_to_node_types;
 use crate::composite_rules::context::{AnalysisWarning, ConditionResult, EvaluationContext};
 use crate::composite_rules::types::FileType;
 use crate::types::{Evidence, MAX_EVIDENCE_PER_TRAIT};
+use std::ops::ControlFlow;
 use streaming_iterator::StreamingIterator;
 
 /// Match mode for AST pattern matching
@@ -366,10 +367,6 @@ pub(crate) fn eval_ast_query<'a>(query_str: &str, ctx: &EvaluationContext<'a>) -
 
     let mut evidence = Vec::new();
 
-    // Buffers needed for text predicate evaluation
-    let mut buffer1 = Vec::new();
-    let mut buffer2 = Vec::new();
-
     // Text provider implementation for predicate checking
     struct SourceTextProvider<'a>(&'a [u8]);
     impl<'a> tree_sitter::TextProvider<&'a [u8]> for SourceTextProvider<'a> {
@@ -381,10 +378,33 @@ pub(crate) fn eval_ast_query<'a>(query_str: &str, ctx: &EvaluationContext<'a>) -
         }
     }
 
-    // Use matches() to get full match info including pattern index for predicate checking
+    // Use matches_with_options to enforce deadline via progress callback.
+    // Without this, pathological inputs can cause queries to run for minutes.
     let mut match_count: usize = 0;
-    let mut matches = query_cursor.matches(&query, tree.root_node(), source.as_bytes());
+    let deadline = ctx.deadline;
+    let mut timed_out = false;
+    let mut progress_cb = |_state: &tree_sitter::QueryCursorState| -> ControlFlow<()> {
+        if let Some(dl) = deadline {
+            if std::time::Instant::now() > dl {
+                return ControlFlow::Break(());
+            }
+        }
+        ControlFlow::Continue(())
+    };
+    let options =
+        tree_sitter::QueryCursorOptions::default().progress_callback(&mut progress_cb);
+    let mut matches =
+        query_cursor.matches_with_options(&query, tree.root_node(), source.as_bytes(), options);
+    let mut buffer1: Vec<u8> = Vec::new();
+    let mut buffer2: Vec<u8> = Vec::new();
     while let Some(m) = matches.next() {
+        // Check deadline between matches too
+        if let Some(dl) = deadline {
+            if std::time::Instant::now() > dl {
+                timed_out = true;
+                break;
+            }
+        }
         // Check text predicates (e.g., #eq?, #match?) using tree-sitter's built-in method
         // This is REQUIRED - tree-sitter does NOT automatically filter by text predicates
         let mut text_provider = SourceTextProvider(source.as_bytes());
@@ -412,15 +432,18 @@ pub(crate) fn eval_ast_query<'a>(query_str: &str, ctx: &EvaluationContext<'a>) -
             }
         }
     }
+    let mut warnings = Vec::new();
+    if has_parse_errors {
+        warnings.push(AnalysisWarning::AstParseError);
+    }
+    if timed_out {
+        warnings.push(AnalysisWarning::AstTooDeep { max_depth: 0 });
+    }
     ConditionResult {
         matched: match_count > 0,
         evidence,
         match_count,
-        warnings: if has_parse_errors {
-            vec![AnalysisWarning::AstParseError]
-        } else {
-            Vec::new()
-        },
+        warnings,
         precision: 2.0, // Tree-sitter queries are complex and specific
         matched_trait_ids: Vec::new(),
     }

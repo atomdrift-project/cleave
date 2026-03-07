@@ -74,6 +74,7 @@ cleave-macros = { path = "cleave-macros" }
 
 # Binary parsing
 goblin = "0.10"
+iced-x86 = { version = "1.21", default-features = false, features = ["decoder", "std"] }
 lnk = "0.6"  # Windows Shell Link (.lnk) parsing
 png = "0.17"  # PNG image parsing for steganography detection
 

@@ -670,6 +670,7 @@ dependencies = [
  "futures-util",
  "goblin",
  "hex",
+ "iced-x86",
  "indicatif",
  "lnk",
  "lru",

@@ -197,6 +197,7 @@ pub(crate) fn eval_metrics<'a>(
             .map(|b| b.largest_section_ratio as f64),
         "binary.import_count" => metrics.binary.as_ref().map(|b| b.import_count as f64),
         "binary.export_count" => metrics.binary.as_ref().map(|b| b.export_count as f64),
+        "binary.aliased_exports" => metrics.binary.as_ref().map(|b| b.aliased_exports as f64),
         "binary.import_entropy" => metrics.binary.as_ref().map(|b| b.import_entropy as f64),
         "binary.string_count" => metrics.binary.as_ref().map(|b| b.string_count as f64),
         "binary.wide_string_count" => metrics.binary.as_ref().map(|b| b.wide_string_count as f64),

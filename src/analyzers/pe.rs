@@ -295,7 +295,7 @@ impl PEAnalyzer {
                 self.analyze_imports(pe, &mut report);
 
                 // Analyze exports
-                self.analyze_exports(pe, &mut report);
+                self.analyze_exports(pe, pe_data, &mut report);
 
                 // Analyze sections and entropy
                 self.analyze_sections(pe, pe_data, &mut report);
@@ -672,7 +672,7 @@ impl PEAnalyzer {
         }
     }
 
-    fn analyze_exports<'a>(&self, pe: &PE<'a>, report: &mut AnalysisReport) {
+    fn analyze_exports<'a>(&self, pe: &PE<'a>, data: &[u8], report: &mut AnalysisReport) {
         for export in &pe.exports {
             if let Some(name) = export.name {
                 report.exports.push(Export::new(
@@ -680,6 +680,25 @@ impl PEAnalyzer {
                     Some(format!("{:#x}", export.rva)),
                     "goblin",
                 ));
+            }
+        }
+
+        // Detect export aliasing: multiple exports whose code jumps to the same target
+        if report.exports.len() >= 2 {
+            let bitness = match pe.header.coff_header.machine {
+                0x8664 | 0xaa64 => 64,
+                _ => 32,
+            };
+            let aliased = count_aliased_exports(pe, data, bitness);
+            if aliased > 0 {
+                if report.metrics.is_none() {
+                    report.metrics = Some(crate::types::Metrics::default());
+                }
+                let metrics = report.metrics.as_mut().unwrap();
+                if metrics.binary.is_none() {
+                    metrics.binary = Some(Default::default());
+                }
+                metrics.binary.as_mut().unwrap().aliased_exports = aliased;
             }
         }
     }
@@ -1134,6 +1153,60 @@ impl Analyzer for PEAnalyzer {
             false
         }
     }
+}
+
+/// Count exports whose first instruction jumps/calls to the same target as another export.
+///
+/// Malware often aliases multiple export names to a single function via stub thunks.
+/// This decodes the first instruction at each export RVA and groups by jump target.
+fn count_aliased_exports(pe: &goblin::pe::PE<'_>, data: &[u8], bitness: u32) -> u32 {
+    use iced_x86::{Decoder, DecoderOptions, Mnemonic};
+    use std::collections::HashMap;
+
+    let mut targets: HashMap<u64, u32> = HashMap::new();
+
+    for export in &pe.exports {
+        let rva = export.rva;
+        // Convert RVA to file offset using PE sections
+        let file_offset = match rva_to_offset(pe, rva) {
+            Some(off) => off,
+            None => continue,
+        };
+
+        if file_offset + 16 > data.len() {
+            continue;
+        }
+
+        let code = &data[file_offset..file_offset + 16];
+        let mut decoder = Decoder::with_ip(bitness, code, rva as u64, DecoderOptions::NONE);
+
+        if let Some(instr) = decoder.iter().next() {
+            let target = match instr.mnemonic() {
+                Mnemonic::Jmp | Mnemonic::Call => {
+                    let t = instr.near_branch_target();
+                    if t != 0 { t } else { rva as u64 }
+                }
+                // Not a stub — use the RVA itself as the "target"
+                _ => rva as u64,
+            };
+            *targets.entry(target).or_insert(0) += 1;
+        }
+    }
+
+    targets.values().filter(|&&c| c > 1).map(|c| *c).sum()
+}
+
+/// Convert a PE RVA to a file offset using section headers.
+fn rva_to_offset(pe: &goblin::pe::PE<'_>, rva: usize) -> Option<usize> {
+    for section in &pe.sections {
+        let vaddr = section.virtual_address as usize;
+        let vsize = section.virtual_size as usize;
+        if rva >= vaddr && rva < vaddr + vsize {
+            let raw_offset = section.pointer_to_raw_data as usize;
+            return Some(raw_offset + (rva - vaddr));
+        }
+    }
+    None
 }
 
 #[cfg(test)]

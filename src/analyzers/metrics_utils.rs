@@ -41,6 +41,17 @@ pub(crate) fn populate_binary_metrics(report: &mut AnalysisReport, data: &[u8]) 
     binary.string_count = report.strings.len() as u32;
     binary.section_count = report.sections.len() as u32;
 
+    // Count exports sharing an address (simple RVA check, only if not already set by analyzer)
+    if binary.aliased_exports == 0 && report.exports.len() >= 2 {
+        let mut addr_counts = std::collections::HashMap::new();
+        for exp in &report.exports {
+            if let Some(ref offset) = exp.offset {
+                *addr_counts.entry(offset.as_str()).or_insert(0u32) += 1;
+            }
+        }
+        binary.aliased_exports = addr_counts.values().filter(|&&c| c > 1).map(|c| *c).sum();
+    }
+
     if binary.file_size == 0 {
         binary.file_size = data.len() as u64;
     }

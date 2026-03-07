@@ -134,6 +134,9 @@ pub struct BinaryMetrics {
     /// Export count
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub export_count: u32,
+    /// Number of exports sharing an address with another export
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub aliased_exports: u32,
     /// Import name entropy (randomness)
     #[serde(default, skip_serializing_if = "is_zero_f32")]
     pub import_entropy: f32,

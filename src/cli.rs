@@ -539,6 +539,22 @@ pub(crate) enum Command {
         show_low_value: bool,
     },
 
+    /// Update trait rules from the upstream repository
+    #[command(name = "update-rules")]
+    UpdateRules {
+        /// Force update (fetch + hard reset, discarding local changes)
+        #[arg(long)]
+        force: bool,
+
+        /// Check for updates without applying them
+        #[arg(long)]
+        check: bool,
+
+        /// Pin traits to a specific git commit
+        #[arg(long, value_name = "COMMIT")]
+        pin: Option<String>,
+    },
+
     /// Start HTTP API server for file analysis
     Server {
         /// Address to bind to (default: 127.0.0.1:8080)

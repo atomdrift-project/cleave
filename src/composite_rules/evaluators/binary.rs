@@ -390,7 +390,10 @@ pub(crate) fn eval_import_combination<'a>(
     // Count suspicious imports — each import counted at most once even if it matches multiple patterns
     let mut suspicious_count = 0;
     if let Some(susp) = suspicious {
-        let compiled: Vec<Regex> = susp.iter().filter_map(|p| build_regex(p, false).ok()).collect();
+        let compiled: Vec<Regex> = susp
+            .iter()
+            .filter_map(|p| build_regex(p, false).ok())
+            .collect();
         for sym in &import_symbols {
             if compiled.iter().any(|re| re.is_match(sym)) {
                 suspicious_count += 1;

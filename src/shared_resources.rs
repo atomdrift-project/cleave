@@ -81,10 +81,21 @@ pub(crate) fn reload_capability_mapper() -> (usize, usize) {
     let composite_count = mapper.composite_rules_count();
     let mut guard = CAPABILITY_MAPPER.write();
     *guard = Some(Arc::new(mapper));
+    drop(guard);
+
+    // SAFETY: The old CapabilityMapper (and its Rules) may be dropped once all
+    // Arc references are released. Thread-local YARA scanner caches hold transmuted
+    // 'static references to those Rules. We must flush them on ALL threads before
+    // any new analysis uses the new mapper, or scanners will dereference freed memory.
+    crate::composite_rules::evaluators::clear_scanner_cache();
+    rayon::broadcast(|_| {
+        crate::composite_rules::evaluators::clear_scanner_cache();
+    });
+
     tracing::info!(
         traits = trait_count,
         composites = composite_count,
-        "CapabilityMapper reloaded"
+        "CapabilityMapper reloaded (scanner caches flushed)"
     );
     (trait_count, composite_count)
 }

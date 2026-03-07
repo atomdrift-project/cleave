@@ -77,9 +77,8 @@ impl super::CapabilityMapper {
         min_suspicious_precision: f32,
         enable_full_validation: bool,
     ) -> Self {
-        let caps_path = std::env::var("CLEAVE_TRAITS_DIR").unwrap_or_else(|_| "traits".to_string());
-
-        let path = std::path::Path::new(&caps_path);
+        let resolved = crate::traits_repo::resolve_and_ensure();
+        let path = resolved.as_path();
 
         if path.is_dir() {
             // Load from directory (production mode)
@@ -90,7 +89,7 @@ impl super::CapabilityMapper {
                 enable_full_validation,
             )
             .unwrap_or_else(|e| {
-                eprintln!("Failed to load capabilities from directory: {:#}", e);
+                eprintln!("Failed to load traits from {}: {:#}", resolved.display(), e);
                 std::process::exit(1);
             })
         } else if path.is_file() {
@@ -106,7 +105,7 @@ impl super::CapabilityMapper {
                 std::process::exit(1);
             })
         } else {
-            eprintln!("Error: Traits path does not exist: {}", caps_path);
+            eprintln!("Error: Traits path does not exist: {}", resolved.display());
             eprintln!("Set CLEAVE_TRAITS_DIR to point to a valid traits directory or YAML file");
             std::process::exit(1);
         }

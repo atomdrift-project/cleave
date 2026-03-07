@@ -186,6 +186,8 @@ impl PEAnalyzer {
         let (pe_data, tamper_findings) = self.detect_and_strip_tampering(data);
 
         // Try to parse with goblin (using potentially stripped data)
+        // First try strict mode, then fall back to permissive for binaries with
+        // non-critical parse issues (e.g., resource section quirks in signed binaries)
         match PE::parse(pe_data) {
             Ok(pe) => self.analyze_valid_pe(
                 file_path,
@@ -197,9 +199,41 @@ impl PEAnalyzer {
                 stng_strings,
                 precomputed_sha256,
             ),
-            Err(e) => {
-                // PE parsing failed - create a minimal report with tampering findings
-                self.analyze_corrupted_pe(file_path, data, tamper_findings, &e, start, stng_strings)
+            Err(strict_err) => {
+                // Strict parse failed - try permissive mode before declaring corrupted
+                let permissive_opts = goblin::pe::options::ParseOptions::default()
+                    .with_parse_mode(goblin::options::ParseMode::Permissive);
+                match PE::parse_with_opts(pe_data, &permissive_opts) {
+                    Ok(pe) => {
+                        // Permissive succeeded - PE is structurally valid but has minor issues
+                        tracing::debug!(
+                            "PE strict parse failed ({}) but permissive succeeded for {}",
+                            strict_err,
+                            file_path.display()
+                        );
+                        self.analyze_valid_pe(
+                            file_path,
+                            data,
+                            pe_data,
+                            &pe,
+                            tamper_findings,
+                            start,
+                            stng_strings,
+                            precomputed_sha256,
+                        )
+                    }
+                    Err(e) => {
+                        // Both strict and permissive failed - truly corrupted
+                        self.analyze_corrupted_pe(
+                            file_path,
+                            data,
+                            tamper_findings,
+                            &e,
+                            start,
+                            stng_strings,
+                        )
+                    }
+                }
             }
         }
     }
@@ -493,13 +527,24 @@ impl PEAnalyzer {
         let mut report = AnalysisReport::new(target);
         let tools_used = vec!["cleave".to_string(), "stng".to_string()];
 
-        // Add a hostile finding for the corrupted PE
+        // Determine severity based on error type - resource section errors are
+        // non-critical (common in legitimate signed binaries with complex resources)
+        let error_str = format!("{}", parse_error);
+        let is_resource_error = error_str.contains("ResourceString")
+            || error_str.contains("ResourceTable")
+            || error_str.contains("resource");
+        let (crit, conf) = if is_resource_error {
+            (Criticality::Baseline, 0.3)
+        } else {
+            (Criticality::Hostile, 1.0)
+        };
+
         tamper_findings.push(Finding {
             id: "objectives/anti-analysis/pe-tampering/corrupted-header".to_string(),
             kind: FindingKind::Structural,
             desc: format!("PE header too corrupted to parse: {}", parse_error),
-            conf: 1.0,
-            crit: Criticality::Hostile,
+            conf,
+            crit,
             mbc: Some("B0001".to_string()), // Executable Code Obfuscation
             attack: Some("T1027".to_string()), // Obfuscated Files or Information
             trait_refs: vec![],

@@ -220,7 +220,7 @@ impl super::CapabilityMapper {
         // First, collect all YAML file paths
         tracing::debug!("Scanning directory for YAML files");
         let mut yaml_files: Vec<_> = walkdir::WalkDir::new(dir_path)
-            .follow_links(false)
+            .follow_links(true)
             .into_iter()
             .filter_map(std::result::Result::ok)
             .filter(|entry| {

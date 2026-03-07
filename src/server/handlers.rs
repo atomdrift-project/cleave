@@ -208,18 +208,32 @@ async fn analyze_inner(
         .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let task_span = Span::current();
 
-    let result = tokio::time::timeout(timeout_duration, async move {
-        tokio::task::spawn_blocking(move || {
-            let _enter = task_span.enter();
-            analyze_file(&path, &AnalysisOptions::default())
-        })
-        .await
-    })
-    .await;
+    let handle = tokio::task::spawn_blocking(move || {
+        let _enter = task_span.enter();
+        analyze_file(&path, &AnalysisOptions::default())
+    });
 
-    state
-        .active_tasks
-        .fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+    let result = tokio::time::timeout(timeout_duration, handle).await;
+
+    // Only decrement active_tasks when the blocking task has actually finished.
+    // On timeout, the spawn_blocking task keeps running — spawn a watcher to
+    // decrement when it eventually completes, so the counter stays accurate.
+    match &result {
+        Ok(_) => {
+            state
+                .active_tasks
+                .fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+        }
+        Err(_) => {
+            // Timeout: task is still running on the blocking pool.
+            // We cannot cancel spawn_blocking, but we track it accurately.
+            warn!(
+                filename = %filename,
+                active_tasks = state.active_tasks.load(std::sync::atomic::Ordering::Relaxed),
+                "Analysis timed out but blocking task still running"
+            );
+        }
+    }
     drop(temp_file);
     let elapsed_ms = request_start.elapsed().as_millis();
 
@@ -443,14 +457,12 @@ async fn analyze_path_inner(
     let task_span = Span::current();
 
     // Run analysis in blocking thread with timeout
-    let result = tokio::time::timeout(timeout_duration, async move {
-        tokio::task::spawn_blocking(move || {
-            let _enter = task_span.enter();
-            analyze_file(&path_owned, &AnalysisOptions::default())
-        })
-        .await
-    })
-    .await;
+    let handle = tokio::task::spawn_blocking(move || {
+        let _enter = task_span.enter();
+        analyze_file(&path_owned, &AnalysisOptions::default())
+    });
+
+    let result = tokio::time::timeout(timeout_duration, handle).await;
 
     let elapsed_ms = request_start.elapsed().as_millis();
 

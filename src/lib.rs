@@ -29,6 +29,7 @@ pub mod memory_tracker;
 mod radare2;
 mod shared_resources;
 mod strings;
+pub mod traits_repo;
 mod upx;
 
 // Standalone RTF parser (can be used independently)
@@ -604,6 +605,40 @@ fn analyze_file_with_resources<P: AsRef<Path>>(
 
     // Process encoded payloads and analyze them
     for payload in encoded_payloads {
+        // Skip benign encoded payloads (certificate URLs, PDB paths)
+        let preview_lower = payload.preview.to_lowercase();
+        if payload.encoding_chain.iter().any(|e| e == "url") {
+            // Skip URL-encoded strings from certificate/PKI infrastructure
+            if preview_lower.contains("microsoft.com/pki")
+                || preview_lower.contains("microsoft.com/pkiops")
+                || preview_lower.contains("crl.microsoft.com")
+                || preview_lower.contains("verisign.com")
+                || preview_lower.contains("digicert.com")
+                || preview_lower.contains("symantec.com")
+                || preview_lower.starts_with("http") && preview_lower.contains("ocsp.")
+                || preview_lower.starts_with("http") && preview_lower.contains("/crl/")
+                || preview_lower.starts_with("http") && preview_lower.contains("/certs/")
+            {
+                tracing::debug!("Skipping benign PKI URL payload: {}", payload.preview);
+                continue;
+            }
+        }
+        if payload.encoding_chain.iter().any(|e| e == "unicode-escape") {
+            // Skip unicode-escape strings that are Windows file paths (PDB, build paths)
+            // or JSON parser error messages containing U+XXXX references
+            if payload.preview.contains(":\\")
+                || payload.preview.contains(".pdb")
+                || payload.preview.contains("must be escaped")
+                || payload.preview.contains("control character U+")
+            {
+                tracing::debug!(
+                    "Skipping benign unicode-escape payload: {}",
+                    payload.preview
+                );
+                continue;
+            }
+        }
+
         // Add finding for the encoded payload
         let crit = match payload.detected_type {
             FileType::Python | FileType::Shell | FileType::Elf | FileType::MachO | FileType::Pe => {

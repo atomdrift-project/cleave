@@ -1,9 +1,0 @@
-traits:
-  - id: qw4o-fragment
-    desc: Nemucod C2 URL path fragment '/qw4o'
-    crit: suspicious
-    conf: 0.9
-    for: [javascript]
-    if:
-      type: string
-      substr: '/qw4o'

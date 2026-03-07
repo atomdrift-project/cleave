@@ -140,10 +140,25 @@ impl super::CapabilityMapper {
         );
 
         // Add finding for excessive line length (anti-analysis technique)
-        // Check here as well in case composite rules are evaluated without traits
+        // Only check text-based files — binary formats naturally lack newlines
         const MAX_LINE_LENGTH: usize = 1_000_000;
-        let content = String::from_utf8_lossy(binary_data);
-        let has_excessive_line = content.lines().any(|line| line.len() > MAX_LINE_LENGTH);
+        let is_binary_format = matches!(
+            file_type,
+            RuleFileType::Elf
+                | RuleFileType::Macho
+                | RuleFileType::Pe
+                | RuleFileType::Dll
+                | RuleFileType::So
+                | RuleFileType::Dylib
+                | RuleFileType::Jpeg
+                | RuleFileType::Png
+        );
+        let has_excessive_line = if is_binary_format {
+            false
+        } else {
+            let content = String::from_utf8_lossy(binary_data);
+            content.lines().any(|line| line.len() > MAX_LINE_LENGTH)
+        };
 
         if has_excessive_line {
             all_findings.push(Finding {

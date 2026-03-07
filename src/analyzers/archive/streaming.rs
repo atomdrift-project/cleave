@@ -369,8 +369,10 @@ impl ArchiveAnalyzer {
         if let Some(mode) = entry.unix_mode() {
             if mode & 0o170000 == 0o120000 {
                 // Symlink target is stored as file content in ZIP
+                // Use LimitedReader to prevent unbounded allocation from malicious entries
                 let mut target_buf = Vec::new();
-                if let Ok(read_size) = entry.read_to_end(&mut target_buf) {
+                let mut limited = LimitedReader::new(entry, 4096);
+                if let Ok(read_size) = limited.read_to_end(&mut target_buf) {
                     if read_size > 0 && read_size < 4096 {
                         // Reasonable symlink path length
                         if let Ok(target_str) = String::from_utf8(target_buf) {

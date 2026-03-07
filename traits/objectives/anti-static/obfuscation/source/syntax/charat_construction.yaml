@@ -1,8 +1,0 @@
-traits:
-  - id: charat-construction
-    desc: Detects fragmented charAt method string
-    crit: suspicious
-    for: [javascript]
-    if:
-      type: raw
-      regex: '("ch"|''ch'')\s*\+\s*("arA"|''arA'')\s*\+\s*("t"|''t'')'

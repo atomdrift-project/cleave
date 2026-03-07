@@ -80,8 +80,19 @@ pub(crate) fn extract_zip_safe(
             anyhow::bail!("Archive is encrypted but no passwords configured");
         }
 
-        // Try each password
+        // Try each password with a time budget to prevent DoS on large encrypted archives
+        let password_deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+
         for (idx, password) in zip_passwords.iter().enumerate() {
+            if std::time::Instant::now() > password_deadline {
+                info!(
+                    "Password attempt budget exhausted after {}/{} passwords",
+                    idx,
+                    zip_passwords.len()
+                );
+                break;
+            }
+
             debug!(
                 "Trying password {}/{}: '{}'",
                 idx + 1,
@@ -173,8 +184,10 @@ pub(crate) fn extract_zip_entries_safe<R: Read + Seek>(
         if let Some(mode) = entry.unix_mode() {
             if mode & 0o170000 == 0o120000 {
                 // Symlink target is stored as file content in ZIP
+                // Use LimitedReader to prevent unbounded allocation from malicious entries
                 let mut target_buf = Vec::new();
-                if let Ok(read_size) = entry.read_to_end(&mut target_buf) {
+                let mut limited = LimitedReader::new(&mut entry, 4096);
+                if let Ok(read_size) = limited.read_to_end(&mut target_buf) {
                     if read_size > 0 && read_size < 4096 {
                         // Reasonable symlink path length
                         if let Ok(target_str) = String::from_utf8(target_buf) {

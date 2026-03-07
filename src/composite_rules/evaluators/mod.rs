@@ -174,7 +174,7 @@ pub(crate) fn log_scanner_cache_stats() {
 }
 
 /// Clear the scanner cache for this thread. Useful for freeing memory.
-#[allow(dead_code)]
+/// Called on all threads after CapabilityMapper hot-reload to prevent use-after-free.
 pub(crate) fn clear_scanner_cache() {
     SCANNER_CACHE.with(|cache| {
         let mut cache = cache.borrow_mut();

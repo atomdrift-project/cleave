@@ -46,12 +46,17 @@ pub(crate) fn cache_dir() -> Result<PathBuf> {
     anyhow::bail!("Failed to create cache directory")
 }
 
-/// Returns the traits directory path from CLEAVE_TRAITS_DIR env var or "traits" default
+/// Returns the traits directory path from env var, local dir, or platform data dir.
+/// Does NOT auto-clone — use `traits_repo::resolve_and_ensure()` for that.
 pub(crate) fn traits_path() -> PathBuf {
-    std::env::var("CLEAVE_TRAITS_DIR")
-        .or_else(|_| std::env::var("CLEAVE_TRAITS_PATH"))
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from("traits"))
+    if let Ok(explicit) = std::env::var("CLEAVE_TRAITS_DIR") {
+        return PathBuf::from(explicit);
+    }
+    // Platform data dir (same as traits_repo::default_traits_dir)
+    dirs::data_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("cleave")
+        .join("traits")
 }
 
 /// Returns the third-party directory path from CLEAVE_3P_DIR env var or "third_party" default

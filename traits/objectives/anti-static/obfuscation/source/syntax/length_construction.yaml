@@ -1,8 +1,0 @@
-traits:
-  - id: length-construction
-    desc: Detects fragmented length property string
-    crit: suspicious
-    for: [javascript]
-    if:
-      type: raw
-      regex: '("le"|''le'')\s*\+\s*("ng"|''ng'')\s*\+\s*("th"|''th'')'

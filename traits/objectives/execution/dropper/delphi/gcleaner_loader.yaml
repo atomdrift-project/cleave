@@ -1,7 +1,0 @@
-composite_rules:
-  - id: gcleaner-delphi-loader
-    desc: Gcleaner loader with renamed Indy components and Inno Setup typo
-    crit: hostile
-    all:
-      - id: objectives/anti-analysis/obfuscation/delphi::indy-components-renamed
-      - id: objectives/anti-analysis/evasion/string::inno-setup-typo

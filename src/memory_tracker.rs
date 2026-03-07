@@ -60,12 +60,10 @@ impl MemoryTracker {
             );
         }
 
-        // Update current memory usage
+        // Update peak memory usage atomically
         if let Some(current_rss) = current_rss() {
-            let peak = self.peak_rss_bytes.load(Ordering::Relaxed);
-            if current_rss > peak {
-                self.peak_rss_bytes.store(current_rss, Ordering::Relaxed);
-            }
+            self.peak_rss_bytes
+                .fetch_max(current_rss, Ordering::Relaxed);
 
             // Log if memory usage is high
             const HIGH_MEMORY_THRESHOLD: u64 = 2 * 1024 * 1024 * 1024; // 2GB

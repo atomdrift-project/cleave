@@ -64,6 +64,7 @@ mod test_rules;
 mod test_rules_filters_test;
 mod third_party_config;
 mod third_party_yara;
+mod traits_repo;
 mod types;
 mod upx;
 mod yara_engine;
@@ -367,7 +368,6 @@ fn main() -> Result<()> {
 
     // Apply custom traits directory if specified (must be before any trait loading)
     if let Some(ref traits_dir) = args.traits_dir {
-        std::env::set_var("CLEAVE_TRAITS_PATH", traits_dir);
         std::env::set_var("CLEAVE_TRAITS_DIR", traits_dir);
     }
 
@@ -381,7 +381,10 @@ fn main() -> Result<()> {
 
     // Print version banner to stderr (status info never goes to stdout) - only in terminal mode
     if format == cli::OutputFormat::Terminal {
-        eprintln!("cleave v{}\n", env!("CARGO_PKG_VERSION"));
+        let traits_ver = traits_repo::version()
+            .map(|v| format!(" (traits: {v})"))
+            .unwrap_or_default();
+        eprintln!("cleave v{}{traits_ver}\n", env!("CARGO_PKG_VERSION"));
     }
 
     // Collect zip passwords (default + custom, unless disabled)
@@ -578,6 +581,25 @@ fn main() -> Result<()> {
         }
         Some(cli::Command::YaraProfile { target, min_ms }) => {
             return profile_command(Path::new(&target), min_ms);
+        }
+        Some(cli::Command::UpdateRules { force, check, pin }) => {
+            if let Some(commit) = pin {
+                traits_repo::pin(&commit).unwrap_or_else(|e| {
+                    eprintln!("Error: {e}");
+                    std::process::exit(1);
+                });
+            } else if check {
+                traits_repo::check_updates().unwrap_or_else(|e| {
+                    eprintln!("Error: {e}");
+                    std::process::exit(1);
+                });
+            } else {
+                traits_repo::update(force).unwrap_or_else(|e| {
+                    eprintln!("Error: {e}");
+                    std::process::exit(1);
+                });
+            }
+            return Ok(());
         }
         Some(cli::Command::Server {
             bind,

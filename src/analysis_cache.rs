@@ -24,6 +24,7 @@ use crate::cache::{cache_dir, cache_timestamp};
 use crate::types::AnalysisReport;
 use crate::AnalysisOptions;
 use rusqlite::Connection;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::time::SystemTime;
 
@@ -36,6 +37,7 @@ const EVICTION_CHECK_INTERVAL: i64 = 100;
 /// SQLite-backed analysis result cache.
 struct AnalysisCache {
     conn: Mutex<Connection>,
+    store_count: AtomicU64,
 }
 
 impl AnalysisCache {
@@ -72,6 +74,7 @@ impl AnalysisCache {
 
         Ok(Self {
             conn: Mutex::new(conn),
+            store_count: AtomicU64::new(0),
         })
     }
 
@@ -121,11 +124,11 @@ impl AnalysisCache {
         }
     }
 
-    /// Probabilistically evict old entries when the cache is too large.
+    /// Periodically evict old entries when the cache is too large.
     fn maybe_evict(&self) {
-        // Only check 1-in-N stores to amortize the cost
-        let roll = unix_timestamp() % EVICTION_CHECK_INTERVAL;
-        if roll != 0 {
+        // Only check every N stores to amortize the cost
+        let count = self.store_count.fetch_add(1, Ordering::Relaxed);
+        if !count.is_multiple_of(EVICTION_CHECK_INTERVAL as u64) {
             return;
         }
 
@@ -303,6 +306,7 @@ mod tests {
 
         AnalysisCache {
             conn: Mutex::new(conn),
+            store_count: AtomicU64::new(0),
         }
     }
 

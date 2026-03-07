@@ -1,9 +1,0 @@
-traits:
-  - id: pkcs7-signeddata-oid
-    desc: PKCS7 SignedData OID pattern
-    crit: baseline
-    conf: 0.8
-    for: [pe, dll, elf, macho]
-    if:
-      type: hex
-      pattern: "06 09 2A 86 48 86 F7 0D 01 07 02"

@@ -1,6 +1,0 @@
-# Advanced Payload Execution
-# Detects advanced payload execution patterns
-# ATT&CK: T1620
-
-# NOTE: Incomplete - traits don't exist yet
-composite_rules: []

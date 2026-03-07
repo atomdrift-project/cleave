@@ -73,12 +73,48 @@ pub(crate) fn capability_mapper() -> Arc<CapabilityMapper> {
 
 /// Reload the global CapabilityMapper from trait definitions on disk.
 ///
-/// Returns the number of traits + composite rules loaded, or an error message.
-pub(crate) fn reload_capability_mapper() -> (usize, usize) {
+/// Loads new traits into a temporary mapper first. Only if loading succeeds
+/// does it swap the new mapper into the global slot. On failure the previous
+/// mapper remains active and an error is returned.
+pub(crate) fn reload_capability_mapper() -> Result<(usize, usize), String> {
     tracing::info!("Reloading CapabilityMapper from disk");
-    let mapper = CapabilityMapper::new();
+
+    if std::env::var("CLEAVE_SKIP_TRAITS").is_ok() {
+        let mapper = CapabilityMapper::empty();
+        let mut guard = CAPABILITY_MAPPER.write();
+        *guard = Some(Arc::new(mapper));
+        return Ok((0, 0));
+    }
+
+    let resolved = crate::traits_repo::try_resolve()?;
+    let path = resolved.as_path();
+
+    let mapper = if path.is_dir() {
+        CapabilityMapper::from_directory_with_precision_thresholds(
+            path,
+            CapabilityMapper::DEFAULT_MIN_HOSTILE_PRECISION,
+            CapabilityMapper::DEFAULT_MIN_SUSPICIOUS_PRECISION,
+            false,
+        )
+        .map_err(|e| format!("Failed to load traits from {}: {e:#}", resolved.display()))?
+    } else if path.is_file() {
+        CapabilityMapper::from_yaml_with_precision_thresholds(
+            path,
+            CapabilityMapper::DEFAULT_MIN_HOSTILE_PRECISION,
+            CapabilityMapper::DEFAULT_MIN_SUSPICIOUS_PRECISION,
+            false,
+        )
+        .map_err(|e| format!("Failed to load traits from {}: {e:#}", resolved.display()))?
+    } else {
+        return Err(format!(
+            "Traits path does not exist: {}",
+            resolved.display()
+        ));
+    };
+
     let trait_count = mapper.trait_definitions_count();
     let composite_count = mapper.composite_rules_count();
+
     let mut guard = CAPABILITY_MAPPER.write();
     *guard = Some(Arc::new(mapper));
     drop(guard);
@@ -97,7 +133,7 @@ pub(crate) fn reload_capability_mapper() -> (usize, usize) {
         composites = composite_count,
         "CapabilityMapper reloaded (scanner caches flushed)"
     );
-    (trait_count, composite_count)
+    Ok((trait_count, composite_count))
 }
 
 /// Get or initialize the global YARA engine
@@ -130,5 +166,69 @@ mod tests {
         let m2 = capability_mapper();
         // Same Arc instance
         assert!(Arc::ptr_eq(&m1, &m2));
+    }
+
+    /// RAII guard to restore an env var on drop (including panics).
+    struct EnvVarGuard {
+        key: &'static str,
+        original: Option<String>,
+    }
+
+    impl EnvVarGuard {
+        fn set(key: &'static str, value: impl AsRef<std::ffi::OsStr>) -> Self {
+            let original = std::env::var(key).ok();
+            std::env::set_var(key, value);
+            Self { key, original }
+        }
+    }
+
+    impl Drop for EnvVarGuard {
+        fn drop(&mut self) {
+            match &self.original {
+                Some(v) => std::env::set_var(self.key, v),
+                None => std::env::remove_var(self.key),
+            }
+        }
+    }
+
+    /// Verify that a failed reload preserves the previous mapper.
+    ///
+    /// Uses CLEAVE_TRAITS_DIR pointed at a temp directory containing invalid YAML.
+    /// The reload should return Err and leave the previous global mapper intact.
+    #[test]
+    #[allow(clippy::expect_used)]
+    fn test_reload_rollback_on_bad_traits() {
+        // Ensure a valid mapper is loaded first
+        let before = capability_mapper();
+        let before_traits = before.trait_definitions_count();
+
+        // Create a temp dir with a malformed YAML file
+        let tmp = tempfile::tempdir().expect("create tempdir");
+        std::fs::write(
+            tmp.path().join("bad.yaml"),
+            b"this is not valid trait yaml: [[[",
+        )
+        .expect("write bad yaml");
+
+        // Point CLEAVE_TRAITS_DIR at the bad directory and attempt reload.
+        // EnvVarGuard restores the original value on drop (including panics).
+        let _guard = EnvVarGuard::set("CLEAVE_TRAITS_DIR", tmp.path());
+
+        let result = reload_capability_mapper();
+
+        // Reload should have failed
+        assert!(result.is_err(), "Expected reload to fail with bad YAML");
+
+        // The global mapper should still be the same instance with the same trait count
+        let after = capability_mapper();
+        assert_eq!(
+            after.trait_definitions_count(),
+            before_traits,
+            "Trait count should be unchanged after failed reload"
+        );
+        assert!(
+            Arc::ptr_eq(&before, &after),
+            "Global mapper should be the same Arc after failed reload"
+        );
     }
 }

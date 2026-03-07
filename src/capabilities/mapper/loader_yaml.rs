@@ -137,7 +137,7 @@ impl super::CapabilityMapper {
 
             if has_validation_errors {
                 eprintln!("\n==> Fix all validation errors before continuing.\n");
-                std::process::exit(1);
+                anyhow::bail!("Trait loading failed due to validation errors");
             }
         }
 

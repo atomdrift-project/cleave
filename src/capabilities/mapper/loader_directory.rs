@@ -2759,10 +2759,10 @@ impl super::CapabilityMapper {
             has_fatal_errors = true;
         }
 
-        // Exit if any fatal errors occurred (parse errors, etc.)
+        // Bail if any fatal errors occurred (parse errors, validation failures, etc.)
         if has_fatal_errors {
             eprintln!("\n==> Fix all validation errors before continuing.\n");
-            std::process::exit(1);
+            anyhow::bail!("Trait loading failed due to validation errors");
         }
 
         // Save to cache for future runs (only if not in validation mode)

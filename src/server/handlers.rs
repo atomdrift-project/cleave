@@ -37,7 +37,7 @@ pub(super) async fn reload(State(state): State<Arc<AppState>>) -> Response {
         let elapsed_ms = start.elapsed().as_millis();
 
         match result {
-            Ok((traits, composites)) => {
+            Ok(Ok((traits, composites))) => {
                 info!(traits, composites, elapsed_ms, "Reload complete");
                 Json(serde_json::json!({
                     "status": "ok",
@@ -46,6 +46,21 @@ pub(super) async fn reload(State(state): State<Arc<AppState>>) -> Response {
                     "elapsed_ms": elapsed_ms,
                 }))
                 .into_response()
+            }
+            Ok(Err(msg)) => {
+                warn!(
+                    elapsed_ms,
+                    "Reload failed (previous rules retained): {}", msg
+                );
+                (
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    Json(serde_json::json!({
+                        "error": "Failed to load new traits",
+                        "detail": msg,
+                        "elapsed_ms": elapsed_ms,
+                    })),
+                )
+                    .into_response()
             }
             Err(e) => {
                 warn!(elapsed_ms, "Reload task join error: {}", e);

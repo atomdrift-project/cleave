@@ -53,6 +53,32 @@ pub fn resolve_and_ensure() -> PathBuf {
     data_dir
 }
 
+/// Resolve the traits directory without auto-cloning or process::exit.
+///
+/// Same resolution order as `resolve_and_ensure()` but returns an error
+/// instead of exiting. Used by hot-reload paths where killing the server
+/// on a bad traits path is unacceptable.
+#[allow(dead_code)] // Used by library target (shared_resources reload)
+pub fn try_resolve() -> Result<PathBuf, String> {
+    if let Ok(explicit) = std::env::var("CLEAVE_TRAITS_DIR") {
+        let p = PathBuf::from(&explicit);
+        if p.is_dir() || p.is_file() {
+            return Ok(p);
+        }
+        return Err(format!("CLEAVE_TRAITS_DIR={explicit} does not exist"));
+    }
+
+    let data_dir = default_traits_dir();
+    if has_traits(&data_dir) {
+        return Ok(data_dir);
+    }
+
+    Err(format!(
+        "Traits not found at {} (run 'cleave update-rules' to install)",
+        data_dir.display()
+    ))
+}
+
 /// Platform-specific data directory for cleave traits.
 fn default_traits_dir() -> PathBuf {
     dirs::data_dir()

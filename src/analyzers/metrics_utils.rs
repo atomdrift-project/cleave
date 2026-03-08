@@ -49,7 +49,7 @@ pub(crate) fn populate_binary_metrics(report: &mut AnalysisReport, data: &[u8]) 
                 *addr_counts.entry(offset.as_str()).or_insert(0u32) += 1;
             }
         }
-        binary.aliased_exports = addr_counts.values().filter(|&&c| c > 1).map(|c| *c).sum();
+        binary.aliased_exports = addr_counts.values().filter(|&&c| c > 1).copied().sum();
     }
 
     if binary.file_size == 0 {

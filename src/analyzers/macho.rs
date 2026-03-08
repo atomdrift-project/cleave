@@ -886,6 +886,7 @@ impl MachOAnalyzer {
         vec![(Arch::All, 0..data.len())]
     }
 
+    #[allow(clippy::single_range_in_vec_init)] // Intentional: returns single range for thin binaries
     pub(crate) fn all_arch_ranges(&self, data: &[u8]) -> Vec<std::ops::Range<usize>> {
         if let Ok(Mach::Fat(fat)) = goblin::mach::Mach::parse(data) {
             if let Ok(arches) = fat.arches() {

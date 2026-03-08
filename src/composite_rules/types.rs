@@ -32,7 +32,6 @@ impl Arch {
     #[must_use]
     pub(crate) fn from_str(arch: &str) -> Arch {
         match arch.to_lowercase().as_str() {
-            "all" => Arch::All,
             "x86" | "i386" | "i686" => Arch::X86,
             "x86-64" | "x86_64" | "amd64" => Arch::X86_64,
             "aarch64" | "arm64" => Arch::Aarch64,
@@ -92,6 +91,7 @@ impl Arch {
     /// Infer architecture from a YARA rule name by looking for common arch
     /// indicators like `_X64_`, `_X86_`, `_ARM64_` etc. Returns `None` when
     /// no arch can be inferred (rule applies to any architecture).
+    #[allow(dead_code)] // Used by lib.rs pipeline
     #[must_use]
     pub(crate) fn from_yara_rule_name(rule: &str) -> Option<Arch> {
         // Uppercase the rule name so matching is case-insensitive

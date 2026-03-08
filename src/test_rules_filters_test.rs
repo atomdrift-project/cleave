@@ -6,6 +6,7 @@
 use crate::composite_rules::condition::Condition;
 use crate::composite_rules::debug::{EvaluationDebug, RuleType};
 use crate::composite_rules::traits::{CompositeTrait, TraitDefinition};
+use crate::composite_rules::types::Arch;
 use crate::composite_rules::{EvaluationContext, FileType as RuleFileType, Platform};
 use crate::types::{AnalysisReport, TargetInfo};
 use std::sync::{OnceLock, RwLock};
@@ -64,6 +65,7 @@ fn test_count_min_filter_matches_debug_and_eval() {
         downgrade: None,
         defined_in: std::path::PathBuf::from("test.yaml"),
         precision: None,
+        arch: vec![Arch::All],
     };
 
     // Test real evaluation
@@ -192,6 +194,7 @@ fn test_per_kb_min_filter_matches_debug_and_eval() {
         downgrade: None,
         defined_in: std::path::PathBuf::from("test.yaml"),
         precision: None,
+        arch: vec![Arch::All],
     };
 
     // Test real evaluation
@@ -312,6 +315,7 @@ fn test_size_min_filter_matches_debug_and_eval() {
         downgrade: None,
         defined_in: std::path::PathBuf::from("test.yaml"),
         precision: None,
+        arch: vec![Arch::All],
     };
 
     // Test real evaluation
@@ -430,6 +434,7 @@ fn test_composite_size_constraints_match_debug_and_eval() {
         downgrade: None,
         defined_in: std::path::PathBuf::from("test.yaml"),
         precision: None,
+        arch: vec![Arch::All],
     };
 
     // Test real evaluation
@@ -551,6 +556,7 @@ fn test_all_filters_match_when_satisfied() {
         downgrade: None,
         defined_in: std::path::PathBuf::from("test.yaml"),
         precision: None,
+        arch: vec![Arch::All],
     };
 
     // Test real evaluation

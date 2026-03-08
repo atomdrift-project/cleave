@@ -240,6 +240,37 @@ pub(crate) fn eval_metrics<'a>(
         "binary.overlay_ratio" => metrics.binary.as_ref().map(|b| b.overlay_ratio as f64),
         "binary.overlay_entropy" => metrics.binary.as_ref().map(|b| b.overlay_entropy as f64),
 
+        // PE specific
+        "pe.rich_header_present" => metrics
+            .pe
+            .as_ref()
+            .map(|p| if p.rich_header_present { 1.0 } else { 0.0 }),
+        "pe.timestamp_anomaly" => metrics
+            .pe
+            .as_ref()
+            .map(|p| if p.timestamp_anomaly { 1.0 } else { 0.0 }),
+        "pe.checksum_valid" => metrics
+            .pe
+            .as_ref()
+            .map(|p| if p.checksum_valid { 1.0 } else { 0.0 }),
+        "pe.dos_stub_modified" => metrics
+            .pe
+            .as_ref()
+            .map(|p| if p.dos_stub_modified { 1.0 } else { 0.0 }),
+        "pe.unusual_alignment" => metrics
+            .pe
+            .as_ref()
+            .map(|p| if p.unusual_alignment { 1.0 } else { 0.0 }),
+        "pe.is_dotnet" => metrics
+            .pe
+            .as_ref()
+            .map(|p| if p.is_dotnet { 1.0 } else { 0.0 }),
+        "pe.rsrc_size" => metrics.pe.as_ref().map(|p| p.rsrc_size as f64),
+        "pe.rsrc_entropy" => metrics.pe.as_ref().map(|p| p.rsrc_entropy as f64),
+        "pe.delay_load_imports" => metrics.pe.as_ref().map(|p| p.delay_load_imports as f64),
+        "pe.ordinal_imports" => metrics.pe.as_ref().map(|p| p.ordinal_imports as f64),
+        "pe.resource_count" => metrics.pe.as_ref().map(|p| p.resource_count as f64),
+
         // Mach-O specific
         "macho.file_type" => metrics.macho.as_ref().map(|m| m.file_type as f64),
 

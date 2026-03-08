@@ -107,7 +107,7 @@ impl super::CapabilityMapper {
         cached_ast: Option<&tree_sitter::Tree>,
         inline_yara: Option<&HashMap<String, Vec<Evidence>>>,
         precomputed_raw_regex: Option<Option<FxHashSet<usize>>>,
-        arch_ranges: Option<Vec<(Arch, std::ops::Range<usize>)>>,
+        arch_ranges: Option<&[(Arch, std::ops::Range<usize>)]>,
     ) {
         // Detect file type once
         let file_type = self.detect_file_type(&report.target.file_type);
@@ -150,7 +150,7 @@ impl super::CapabilityMapper {
             &string_matched_traits,
             &cached_evidence,
             &regex_candidates,
-            arch_ranges.as_deref(),
+            arch_ranges,
         );
 
         // Merge independent findings into report
@@ -177,7 +177,7 @@ impl super::CapabilityMapper {
                 &string_matched_traits,
                 &cached_evidence,
                 &regex_candidates,
-                arch_ranges.as_deref(),
+                arch_ranges,
             );
 
             if dependent_findings.is_empty() {
@@ -215,7 +215,7 @@ impl super::CapabilityMapper {
             cached_ast,
             inline_yara,
             &section_map,
-            arch_ranges.as_deref(),
+            arch_ranges,
         );
 
         // Step 5: Merge composite findings into report.

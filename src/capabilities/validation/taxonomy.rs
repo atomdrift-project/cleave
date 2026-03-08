@@ -803,6 +803,7 @@ const WELL_KNOWN_MALWARE_CATEGORIES: &[&str] = &[
     "supply-chain",
     "trojan",
     "virus",
+    "webshell",
     "worm",
 ];
 

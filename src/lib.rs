@@ -490,7 +490,7 @@ fn analyze_file_with_resources<P: AsRef<Path>>(
                 None,
                 Some(&inline_yara),
                 Some(raw_regex),
-                fat_arch_ranges,
+                fat_arch_ranges.as_deref(),
             );
             Ok(report)
         }

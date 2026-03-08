@@ -1168,9 +1168,8 @@ fn count_aliased_exports(pe: &goblin::pe::PE<'_>, data: &[u8], bitness: u32) -> 
     for export in &pe.exports {
         let rva = export.rva;
         // Convert RVA to file offset using PE sections
-        let file_offset = match rva_to_offset(pe, rva) {
-            Some(off) => off,
-            None => continue,
+        let Some(file_offset) = rva_to_offset(pe, rva) else {
+            continue;
         };
 
         if file_offset + 16 > data.len() {
@@ -1193,7 +1192,7 @@ fn count_aliased_exports(pe: &goblin::pe::PE<'_>, data: &[u8], bitness: u32) -> 
         }
     }
 
-    targets.values().filter(|&&c| c > 1).map(|c| *c).sum()
+    targets.values().filter(|&&c| c > 1).copied().sum()
 }
 
 /// Convert a PE RVA to a file offset using section headers.

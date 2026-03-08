@@ -37,24 +37,55 @@ pub(crate) fn derive_trait_id(namespace: &str, rule_name: &str, _os_meta: Option
 /// Returns empty vec if unknown — rule applies to all platforms.
 pub(crate) fn platforms_from_name_and_os(rule_name: &str, os_meta: Option<&str>) -> Vec<Platform> {
     if let Some(os) = os_meta {
-        match os.to_lowercase().as_str() {
-            "linux" => return vec![Platform::Linux],
-            "windows" | "win32" | "win64" | "win" => return vec![Platform::Windows],
-            "macos" | "osx" | "darwin" | "mac" => return vec![Platform::MacOS],
-            "android" => return vec![Platform::Android],
-            "ios" => return vec![Platform::Ios],
+        let mut platforms = Vec::new();
+        for token in os.to_lowercase().split(',').map(str::trim) {
+            match token {
+                "linux" => {
+                    if !platforms.contains(&Platform::Linux) {
+                        platforms.push(Platform::Linux);
+                    }
+                }
+                "windows" | "win32" | "win64" | "win" => {
+                    if !platforms.contains(&Platform::Windows) {
+                        platforms.push(Platform::Windows);
+                    }
+                }
+                "macos" | "osx" | "darwin" | "mac" => {
+                    if !platforms.contains(&Platform::MacOS) {
+                        platforms.push(Platform::MacOS);
+                    }
+                }
+                "android" => {
+                    if !platforms.contains(&Platform::Android) {
+                        platforms.push(Platform::Android);
+                    }
+                }
+                "ios" => {
+                    if !platforms.contains(&Platform::Ios) {
+                        platforms.push(Platform::Ios);
+                    }
+                }
+                "all" => return vec![], // "all" means no constraint
+                _ => {}
+            }
+        }
+        if !platforms.is_empty() {
+            return platforms;
+        }
+    }
+    // Scan all underscore-delimited tokens, not just the first.
+    // Handles rules like "JPCERT_Win32_Emotet" or "Elastic_Linux_Trojan".
+    for part in rule_name.split('_') {
+        match part {
+            "Win32" | "Win64" | "Windows" => return vec![Platform::Windows],
+            "Linux" => return vec![Platform::Linux],
+            "MacOS" | "Macos" | "MACOS" | "OSX" => return vec![Platform::MacOS],
+            "Android" => return vec![Platform::Android],
+            "iOS" => return vec![Platform::Ios],
             _ => {}
         }
     }
-    let first_part = rule_name.split('_').next().unwrap_or("");
-    match first_part {
-        "Win32" | "Win64" | "Windows" => vec![Platform::Windows],
-        "Linux" => vec![Platform::Linux],
-        "MacOS" | "Macos" | "OSX" => vec![Platform::MacOS],
-        "Android" => vec![Platform::Android],
-        "iOS" => vec![Platform::Ios],
-        _ => vec![],
-    }
+    vec![]
 }
 
 /// Map platforms to the filetype strings expected by the YARA file-type filter.
@@ -644,6 +675,65 @@ mod tests {
     #[test]
     fn test_platforms_unknown_returns_empty() {
         assert!(platforms_from_name_and_os("Generic_Rule", None).is_empty());
+    }
+
+    #[test]
+    fn test_platforms_from_mid_name_win32() {
+        // Platform token not in first position (e.g., vendor prefix before platform)
+        assert_eq!(
+            platforms_from_name_and_os("JPCERT_Win32_Emotet", None),
+            vec![Platform::Windows]
+        );
+    }
+
+    #[test]
+    fn test_platforms_from_mid_name_linux() {
+        assert_eq!(
+            platforms_from_name_and_os("Elastic_Linux_Trojan_Chinaz", None),
+            vec![Platform::Linux]
+        );
+    }
+
+    #[test]
+    fn test_platforms_from_mid_name_macos() {
+        assert_eq!(
+            platforms_from_name_and_os("Huntress_MACOS_LIGHTSPY_LOADER", None),
+            vec![Platform::MacOS]
+        );
+    }
+
+    #[test]
+    fn test_platforms_from_os_comma_separated() {
+        // os = "win,linux" should yield both platforms
+        let result = platforms_from_name_and_os("SomeRule", Some("win,linux"));
+        assert_eq!(result, vec![Platform::Windows, Platform::Linux]);
+    }
+
+    #[test]
+    fn test_platforms_from_os_comma_separated_with_spaces() {
+        let result = platforms_from_name_and_os("SomeRule", Some("win, linux"));
+        assert_eq!(result, vec![Platform::Windows, Platform::Linux]);
+    }
+
+    #[test]
+    fn test_platforms_from_os_all_returns_empty() {
+        // os = "all" means no platform constraint
+        assert!(platforms_from_name_and_os("SomeRule", Some("all")).is_empty());
+    }
+
+    #[test]
+    fn test_platforms_from_os_darwin() {
+        assert_eq!(
+            platforms_from_name_and_os("SomeRule", Some("darwin")),
+            vec![Platform::MacOS]
+        );
+    }
+
+    #[test]
+    fn test_platforms_from_os_no_duplicates() {
+        // "win,win32" should not produce duplicate Windows entries
+        let result = platforms_from_name_and_os("SomeRule", Some("win,win32"));
+        assert_eq!(result, vec![Platform::Windows]);
     }
 
     // ------------------------------------------------------------------

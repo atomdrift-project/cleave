@@ -88,6 +88,54 @@ impl std::fmt::Display for Arch {
     }
 }
 
+impl Arch {
+    /// Infer architecture from a YARA rule name by looking for common arch
+    /// indicators like `_X64_`, `_X86_`, `_ARM64_` etc. Returns `None` when
+    /// no arch can be inferred (rule applies to any architecture).
+    #[must_use]
+    pub(crate) fn from_yara_rule_name(rule: &str) -> Option<Arch> {
+        // Uppercase the rule name so matching is case-insensitive
+        let upper = rule.to_uppercase();
+
+        // Check for x86-64 indicators (must come before x86 to avoid false match)
+        if contains_word(&upper, "X64") || contains_word(&upper, "X86_64") || contains_word(&upper, "AMD64") {
+            return Some(Arch::X86_64);
+        }
+
+        // Check for x86 (32-bit) indicators
+        if contains_word(&upper, "X86") || contains_word(&upper, "X32") || contains_word(&upper, "I386") {
+            return Some(Arch::X86);
+        }
+
+        // Check for ARM64/AArch64 indicators
+        if contains_word(&upper, "ARM64") || contains_word(&upper, "AARCH64") {
+            return Some(Arch::Aarch64);
+        }
+
+        // PE/Win32 rules with hex patterns are overwhelmingly x86-64 targeted.
+        // Assume x86-64 unless an explicit arch indicator above said otherwise.
+        if contains_word(&upper, "WIN32") || contains_word(&upper, "WIN64") {
+            return Some(Arch::X86_64);
+        }
+
+        None
+    }
+}
+
+/// Check if `haystack` contains `word` as a delimited segment (bounded by `_`, start, or end).
+#[allow(dead_code)] // Used by lib.rs pipeline via from_yara_rule_name
+fn contains_word(haystack: &str, word: &str) -> bool {
+    for (i, _) in haystack.match_indices(word) {
+        let before_ok = i == 0 || haystack.as_bytes()[i - 1] == b'_';
+        let end = i + word.len();
+        let after_ok = end == haystack.len() || haystack.as_bytes()[end] == b'_';
+        if before_ok && after_ok {
+            return true;
+        }
+    }
+    false
+}
+
 /// Platform specifier for trait targeting
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, Hash)]
 #[serde(rename_all = "lowercase")]
@@ -530,5 +578,181 @@ mod tests {
         // FileType derives Ord, so we can compare
         // Just verify it doesn't panic
         let _ = FileType::Elf < FileType::Macho;
+    }
+
+    // ==================== Arch::from_yara_rule_name Tests ====================
+
+    #[test]
+    fn test_yara_arch_x64_middle() {
+        assert_eq!(
+            Arch::from_yara_rule_name("GCTI_Cobaltstrike_Resources_Beacon_X64_V3_2"),
+            Some(Arch::X86_64)
+        );
+    }
+
+    #[test]
+    fn test_yara_arch_x64_end() {
+        assert_eq!(
+            Arch::from_yara_rule_name("SomeRule_X64"),
+            Some(Arch::X86_64)
+        );
+    }
+
+    #[test]
+    fn test_yara_arch_x86_middle() {
+        assert_eq!(
+            Arch::from_yara_rule_name("GCTI_Cobaltstrike_Sleeve_Beaconloader_X86_O_V4_3"),
+            Some(Arch::X86)
+        );
+    }
+
+    #[test]
+    fn test_yara_arch_x86_end() {
+        assert_eq!(
+            Arch::from_yara_rule_name("Casper_Backdoor_X86"),
+            Some(Arch::X86)
+        );
+    }
+
+    #[test]
+    fn test_yara_arch_lowercase_x64() {
+        assert_eq!(
+            Arch::from_yara_rule_name("beacon_loader_x64_v4"),
+            Some(Arch::X86_64)
+        );
+    }
+
+    #[test]
+    fn test_yara_arch_amd64() {
+        assert_eq!(
+            Arch::from_yara_rule_name("Loader_AMD64_Variant"),
+            Some(Arch::X86_64)
+        );
+    }
+
+    #[test]
+    fn test_yara_arch_arm64() {
+        assert_eq!(
+            Arch::from_yara_rule_name("Malware_ARM64_Loader"),
+            Some(Arch::Aarch64)
+        );
+    }
+
+    #[test]
+    fn test_yara_arch_aarch64() {
+        assert_eq!(
+            Arch::from_yara_rule_name("Linux_Trojan_AArch64_Backdoor"),
+            Some(Arch::Aarch64)
+        );
+    }
+
+    #[test]
+    fn test_yara_arch_i386() {
+        assert_eq!(
+            Arch::from_yara_rule_name("Exploit_I386_Shellcode"),
+            Some(Arch::X86)
+        );
+    }
+
+    #[test]
+    fn test_yara_arch_x32() {
+        assert_eq!(
+            Arch::from_yara_rule_name("Template_X32_Payload"),
+            Some(Arch::X86)
+        );
+    }
+
+    #[test]
+    fn test_yara_arch_none_generic_rule() {
+        // No arch indicator — rule applies to any architecture
+        assert_eq!(
+            Arch::from_yara_rule_name("Linux_Trojan_Chinaz_a2140ca1"),
+            None
+        );
+    }
+
+    #[test]
+    fn test_yara_arch_none_cobalt_generic() {
+        assert_eq!(
+            Arch::from_yara_rule_name("GCTI_Cobaltstrike_Resources_Artifact_Dll_V1_49_To_V3_14"),
+            None
+        );
+    }
+
+    #[test]
+    fn test_yara_arch_no_false_positive_hex_suffix() {
+        // "64" alone inside a hash suffix should NOT be parsed as arch
+        assert_eq!(
+            Arch::from_yara_rule_name("Linux_Exploit_CVE_2016_5195_364f3b7b"),
+            None
+        );
+    }
+
+    #[test]
+    fn test_yara_arch_no_false_positive_version() {
+        // "V3_14" should not match X86 due to partial overlap
+        assert_eq!(
+            Arch::from_yara_rule_name("Beacon_V3_14"),
+            None
+        );
+    }
+
+    #[test]
+    fn test_yara_arch_x86_64_explicit() {
+        assert_eq!(
+            Arch::from_yara_rule_name("Shellcode_X86_64_Reverse"),
+            Some(Arch::X86_64)
+        );
+    }
+
+    #[test]
+    fn test_yara_arch_win32_implies_x86_64() {
+        assert_eq!(
+            Arch::from_yara_rule_name("Win32_Trojan_Emotet_abc123"),
+            Some(Arch::X86_64)
+        );
+    }
+
+    #[test]
+    fn test_yara_arch_win64_implies_x86_64() {
+        assert_eq!(
+            Arch::from_yara_rule_name("Win64_Ransomware_LockBit"),
+            Some(Arch::X86_64)
+        );
+    }
+
+    #[test]
+    fn test_yara_arch_win32_arm64_override() {
+        // Explicit ARM64 takes precedence over Win32 default
+        assert_eq!(
+            Arch::from_yara_rule_name("Win32_Trojan_ARM64_Loader"),
+            Some(Arch::Aarch64)
+        );
+    }
+
+    #[test]
+    fn test_yara_arch_win32_case_insensitive() {
+        assert_eq!(
+            Arch::from_yara_rule_name("win32_backdoor_cobalt"),
+            Some(Arch::X86_64)
+        );
+    }
+
+    #[test]
+    fn test_contains_word_boundaries() {
+        // At start
+        assert!(contains_word("X64_LOADER", "X64"));
+        // At end
+        assert!(contains_word("LOADER_X64", "X64"));
+        // Middle
+        assert!(contains_word("A_X64_B", "X64"));
+        // Exact match
+        assert!(contains_word("X64", "X64"));
+        // Not a word boundary (embedded in larger token)
+        assert!(!contains_word("FOX64BAR", "X64"));
+        // Prefix match but not suffix
+        assert!(!contains_word("X64BAR", "X64"));
+        // Suffix match but not prefix
+        assert!(!contains_word("FOX64", "X64"));
     }
 }

@@ -88,8 +88,37 @@ fn process_yara_result(
     let Some(Ok((matches, inline))) = yara_result else {
         return HashMap::new();
     };
+
+    // Resolve file architectures once for YARA arch filtering
+    let file_archs: Vec<composite_rules::Arch> = report
+        .target
+        .architectures
+        .as_ref()
+        .map(|archs| {
+            archs
+                .iter()
+                .map(|a| composite_rules::Arch::from_report_str(a))
+                .collect()
+        })
+        .unwrap_or_default();
+
     report.yara_matches = matches.clone();
     for yara_match in &matches {
+        // Skip YARA findings whose rule name implies an architecture that
+        // doesn't match the file being analyzed (e.g., an _X64_ rule firing
+        // on an ARM64 binary).
+        if let Some(rule_arch) = composite_rules::Arch::from_yara_rule_name(&yara_match.rule) {
+            if !file_archs.is_empty() && !file_archs.contains(&composite_rules::Arch::All) && !file_archs.contains(&rule_arch) {
+                tracing::debug!(
+                    "Skipping YARA rule {} (arch {:?} doesn't match file {:?})",
+                    yara_match.rule,
+                    rule_arch,
+                    file_archs,
+                );
+                continue;
+            }
+        }
+
         let cap_id = yara_match
             .trait_id
             .clone()

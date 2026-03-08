@@ -1291,7 +1291,7 @@ impl FileType {
     #[allow(dead_code)]
     pub(crate) fn yara_filetypes(&self) -> Vec<&'static str> {
         match self {
-            FileType::MachO => vec!["macho", "elf", "so"],
+            FileType::MachO => vec!["macho", "dylib", "kext"],
             FileType::Elf => vec!["elf", "so", "ko"],
             FileType::Pe => vec!["pe", "exe", "dll", "bat", "ps1"],
             FileType::Shell => {

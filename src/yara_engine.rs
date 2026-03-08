@@ -862,7 +862,29 @@ impl YaraEngine {
             }
         }
 
-        if is_third_party && rule_filetypes.is_empty() {
+        // Infer filetypes from tags (e.g., `: PE`, `: ELF`, `: MACHO`)
+        if rule_filetypes.is_empty() {
+            for tag_name in tags {
+                match tag_name.to_uppercase().as_str() {
+                    "PE" | "EXE" | "DLL" => {
+                        rule_filetypes = vec!["pe".to_string(), "dll".to_string()];
+                        break;
+                    }
+                    "ELF" => {
+                        rule_filetypes = vec!["elf".to_string(), "so".to_string()];
+                        break;
+                    }
+                    "MACHO" | "MACH_O" | "MACH-O" => {
+                        rule_filetypes =
+                            vec!["macho".to_string(), "dylib".to_string()];
+                        break;
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        if rule_filetypes.is_empty() {
             let inferred = crate::third_party_yara::infer_filetypes(&rule_name, os_meta.as_deref());
             rule_filetypes = inferred
                 .iter()

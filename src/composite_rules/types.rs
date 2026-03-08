@@ -2,6 +2,92 @@
 
 use serde::{Deserialize, Serialize};
 
+/// CPU architecture filter for trait rules.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, Hash)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum Arch {
+    All,
+    X86,
+    #[serde(rename = "x86-64")]
+    X86_64,
+    Aarch64,
+    Arm,
+    Riscv,
+    Mips,
+    Powerpc,
+    Powerpc64,
+    Sparc,
+    M68k,
+    Superh,
+}
+
+/// Default architectures for rules (all architectures)
+#[must_use]
+pub(crate) fn default_architectures() -> Vec<Arch> {
+    vec![Arch::All]
+}
+
+impl Arch {
+    /// Parse an architecture string from YAML trait definitions (kebab-case).
+    #[must_use]
+    pub(crate) fn from_str(arch: &str) -> Arch {
+        match arch.to_lowercase().as_str() {
+            "all" => Arch::All,
+            "x86" | "i386" | "i686" => Arch::X86,
+            "x86-64" | "x86_64" | "amd64" => Arch::X86_64,
+            "aarch64" | "arm64" => Arch::Aarch64,
+            "arm" | "arm32" => Arch::Arm,
+            "riscv" | "riscv64" => Arch::Riscv,
+            "mips" | "mipsel" => Arch::Mips,
+            "powerpc" | "ppc" => Arch::Powerpc,
+            "powerpc64" | "ppc64" | "ppc64le" => Arch::Powerpc64,
+            "sparc" | "sparc64" => Arch::Sparc,
+            "m68k" => Arch::M68k,
+            "superh" | "sh" => Arch::Superh,
+            _ => Arch::All,
+        }
+    }
+
+    /// Parse an architecture string from analyzer report output.
+    /// Report strings use the canonical forms set by each analyzer.
+    #[must_use]
+    pub(crate) fn from_report_str(arch: &str) -> Arch {
+        match arch.to_lowercase().as_str() {
+            "x86_64" | "x86-64" | "amd64" => Arch::X86_64,
+            "x86" | "i386" | "i686" => Arch::X86,
+            "aarch64" | "arm64" | "arm64e" => Arch::Aarch64,
+            "arm" => Arch::Arm,
+            "riscv" | "riscv64" => Arch::Riscv,
+            "mips" | "mipsel" => Arch::Mips,
+            "powerpc" | "ppc" => Arch::Powerpc,
+            "powerpc64" | "ppc64" | "ppc64le" => Arch::Powerpc64,
+            "sparc" | "sparc64" => Arch::Sparc,
+            "m68k" => Arch::M68k,
+            "superh" | "sh" | "sh4" => Arch::Superh,
+            _ => Arch::All,
+        }
+    }
+}
+
+impl std::fmt::Display for Arch {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Arch::All => write!(f, "all"),
+            Arch::X86 => write!(f, "x86"),
+            Arch::X86_64 => write!(f, "x86-64"),
+            Arch::Aarch64 => write!(f, "aarch64"),
+            Arch::Arm => write!(f, "arm"),
+            Arch::Riscv => write!(f, "riscv"),
+            Arch::Mips => write!(f, "mips"),
+            Arch::Powerpc => write!(f, "powerpc"),
+            Arch::Powerpc64 => write!(f, "powerpc64"),
+            Arch::Sparc => write!(f, "sparc"),
+            Arch::M68k => write!(f, "m68k"),
+            Arch::Superh => write!(f, "superh"),
+        }
+    }
+}
+
 /// Platform specifier for trait targeting
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, Hash)]
 #[serde(rename_all = "lowercase")]

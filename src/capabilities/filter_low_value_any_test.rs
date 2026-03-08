@@ -6,7 +6,7 @@
 #[cfg(test)]
 mod tests {
     use crate::capabilities::CapabilityMapper;
-    use crate::composite_rules::{CompositeTrait, Condition};
+    use crate::composite_rules::{Arch, CompositeTrait, Condition};
     use crate::types::{Criticality, Evidence, Finding, FindingKind};
 
     /// Helper to create a test mapper with specific composite rules
@@ -30,6 +30,7 @@ mod tests {
             mbc: None,
             attack: None,
             platforms: vec![],
+            arch: vec![Arch::All],
             r#for: vec![],
             size_min: None,
             size_max: None,
@@ -57,6 +58,7 @@ mod tests {
             mbc: None,
             attack: None,
             platforms: vec![],
+            arch: vec![Arch::All],
             r#for: vec![],
             size_min: None,
             size_max: None,

@@ -7,7 +7,7 @@
 mod validation_tests {
     use crate::composite_rules::{
         condition::{NotException, NotExceptionStructured},
-        Condition, TraitDefinition,
+        Arch, Condition, TraitDefinition,
     };
     use crate::types::Criticality;
 
@@ -20,6 +20,7 @@ mod validation_tests {
             mbc: None,
             attack: None,
             platforms: vec![],
+            arch: vec![Arch::All],
             r#for: vec![],
             r#if: condition,
             not,
@@ -571,7 +572,7 @@ mod validation_tests {
 
 #[cfg(test)]
 mod criticality_tests {
-    use crate::composite_rules::{Condition, TraitDefinition};
+    use crate::composite_rules::{Arch, Condition, TraitDefinition};
     use crate::types::Criticality;
 
     #[test]
@@ -602,6 +603,7 @@ mod criticality_tests {
             mbc: None,
             attack: None,
             platforms: vec![],
+            arch: vec![Arch::All],
             r#for: vec![],
             r#if: cond,
             size_min: None,
@@ -663,6 +665,7 @@ mod criticality_tests {
                 mbc: None,
                 attack: None,
                 platforms: vec![],
+                arch: vec![Arch::All],
                 r#for: vec![],
                 r#if: cond,
                 size_min: None,
@@ -688,7 +691,7 @@ mod criticality_tests {
 
 #[cfg(test)]
 mod constraint_tests {
-    use crate::composite_rules::{Condition, TraitDefinition};
+    use crate::composite_rules::{Arch, Condition, TraitDefinition};
     use crate::types::Criticality;
 
     #[test]
@@ -718,6 +721,7 @@ mod constraint_tests {
             mbc: None,
             attack: None,
             platforms: vec![],
+            arch: vec![Arch::All],
             r#for: vec![],
             r#if: cond,
             size_min: None,
@@ -767,6 +771,7 @@ mod constraint_tests {
             mbc: None,
             attack: None,
             platforms: vec![],
+            arch: vec![Arch::All],
             r#for: vec![],
             r#if: cond,
             size_min: None,
@@ -816,6 +821,7 @@ mod constraint_tests {
             mbc: None,
             attack: None,
             platforms: vec![],
+            arch: vec![Arch::All],
             r#for: vec![],
             r#if: cond,
             size_min: Some(1000),
@@ -866,6 +872,7 @@ mod constraint_tests {
             mbc: None,
             attack: None,
             platforms: vec![],
+            arch: vec![Arch::All],
             r#for: vec![],
             r#if: cond,
             size_min: None,
@@ -916,6 +923,7 @@ mod constraint_tests {
             mbc: None,
             attack: None,
             platforms: vec![],
+            arch: vec![Arch::All],
             r#for: vec![],
             r#if: cond,
             size_min: None,
@@ -996,6 +1004,7 @@ mod constraint_tests {
             mbc: None,
             attack: None,
             platforms: vec![],
+            arch: vec![Arch::All],
             r#for: vec![],
             r#if: cond,
             size_min: None,
@@ -1020,7 +1029,7 @@ mod constraint_tests {
 
 #[cfg(test)]
 mod llm_validation_tests {
-    use crate::composite_rules::{Condition, TraitDefinition};
+    use crate::composite_rules::{Arch, Condition, TraitDefinition};
     use crate::types::Criticality;
 
     #[test]
@@ -1243,6 +1252,7 @@ mod llm_validation_tests {
             mbc: None,
             attack: None,
             platforms: vec![],
+            arch: vec![Arch::All],
             r#for: vec![],
             r#if: cond,
             size_min: None,
@@ -1318,6 +1328,7 @@ mod llm_validation_tests {
             mbc: None,
             attack: None,
             platforms: vec![],
+            arch: vec![Arch::All],
             r#for: vec![],
             r#if: cond,
             size_min: None,
@@ -1369,6 +1380,7 @@ mod llm_validation_tests {
             mbc: None,
             attack: None,
             platforms: vec![],
+            arch: vec![Arch::All],
             r#for: vec![],
             r#if: cond,
             size_min: None,
@@ -1420,6 +1432,7 @@ mod llm_validation_tests {
             mbc: None,
             attack: None,
             platforms: vec![],
+            arch: vec![Arch::All],
             r#for: vec![],
             r#if: cond,
             size_min: None,
@@ -1469,6 +1482,7 @@ mod llm_validation_tests {
             mbc: None,
             attack: None,
             platforms: vec![],
+            arch: vec![Arch::All],
             r#for: vec![],
             r#if: cond,
             size_min: None,
@@ -1517,6 +1531,7 @@ mod llm_validation_tests {
             mbc: None,
             attack: None,
             platforms: vec![],
+            arch: vec![Arch::All],
             r#for: vec![],
             r#if: cond,
             size_min: None,
@@ -1566,6 +1581,7 @@ mod llm_validation_tests {
             mbc: None,
             attack: None,
             platforms: vec![],
+            arch: vec![Arch::All],
             r#for: vec![],
             r#if: cond,
             size_min: None,

@@ -10,7 +10,7 @@ use super::evaluators::{
     eval_metrics, eval_raw, eval_section, eval_section_ratio, eval_string, eval_string_count,
     eval_structure, eval_symbol, eval_syscall, eval_trait, eval_yara_inline, ContentLocationParams,
 };
-use super::types::{default_file_types, default_platforms, FileType, Platform};
+use super::types::{default_architectures, default_file_types, default_platforms, Arch, FileType, Platform};
 use crate::types::{
     deduplicate_evidence, Criticality, Evidence, Finding, FindingKind, MAX_EVIDENCE_PER_TRAIT,
 };
@@ -177,6 +177,10 @@ pub(crate) struct TraitDefinition {
     /// Platforms this trait targets (defaults to all)
     #[serde(default = "default_platforms")]
     pub platforms: Vec<Platform>,
+
+    /// CPU architectures this trait targets (defaults to all)
+    #[serde(default = "default_architectures")]
+    pub arch: Vec<Arch>,
 
     /// File types this trait applies to (defaults to all)
     #[serde(default = "default_file_types")]
@@ -822,6 +826,23 @@ impl TraitDefinition {
             return None;
         }
 
+        // Check architecture match
+        let arch_match = self.arch.contains(&Arch::All)
+            || ctx.arch.contains(&Arch::All)
+            || self.arch.iter().any(|a| ctx.arch.contains(a));
+
+        if !arch_match {
+            if let Some(collector) = &ctx.debug_collector {
+                if let Ok(mut debug) = collector.write() {
+                    debug.record_skip(SkipReason::ArchMismatch {
+                        rule: self.arch.clone(),
+                        context: ctx.arch.clone(),
+                    });
+                }
+            }
+            return None;
+        }
+
         // Check file type match
         let file_type_match = self.r#for.contains(&FileType::All)
             || ctx.file_type == FileType::All
@@ -1191,6 +1212,8 @@ impl TraitDefinition {
         condition: &Condition,
         ctx: &EvaluationContext<'a>,
     ) -> ConditionResult {
+        let arch_clamp = ctx.arch_clamp_range(&self.arch);
+
         match condition {
             Condition::Symbol {
                 exact,
@@ -1239,6 +1262,7 @@ impl TraitDefinition {
                     offset_range: *offset_range,
                     section_offset: *section_offset,
                     section_offset_range: *section_offset_range,
+                    arch_clamp,
                 };
                 timed_eval!("string", eval_string(&params, self.not.as_ref(), ctx))
             }
@@ -1357,6 +1381,7 @@ impl TraitDefinition {
                         offset_range: *offset_range,
                         section_offset: *section_offset,
                         section_offset_range: *section_offset_range,
+                        arch_clamp,
                     },
                     ctx,
                     Some(self.id.as_str()),
@@ -1384,6 +1409,7 @@ impl TraitDefinition {
                     offset_range: *offset_range,
                     section_offset: *section_offset,
                     section_offset_range: *section_offset_range,
+                    arch_clamp,
                 };
                 timed_eval!(
                     "raw",
@@ -1456,6 +1482,7 @@ impl TraitDefinition {
                     offset_range: *offset_range,
                     section_offset: *section_offset,
                     section_offset_range: *section_offset_range,
+                    arch_clamp,
                 };
                 timed_eval!(
                     "encoded",
@@ -1531,6 +1558,10 @@ pub(crate) struct CompositeTrait {
     /// Platforms this rule targets (defaults to all)
     #[serde(default = "default_platforms")]
     pub platforms: Vec<Platform>,
+
+    /// CPU architectures this rule targets (defaults to all)
+    #[serde(default = "default_architectures")]
+    pub arch: Vec<Arch>,
 
     /// File types this rule applies to (defaults to all)
     #[serde(default = "default_file_types")]
@@ -1707,6 +1738,23 @@ impl CompositeTrait {
                     debug.record_skip(SkipReason::PlatformMismatch {
                         rule: self.platforms.clone(),
                         context: ctx.platforms.clone(),
+                    });
+                }
+            }
+            return None;
+        }
+
+        // Check architecture match
+        let arch_match = self.arch.contains(&Arch::All)
+            || ctx.arch.contains(&Arch::All)
+            || self.arch.iter().any(|a| ctx.arch.contains(a));
+
+        if !arch_match {
+            if let Some(collector) = &ctx.debug_collector {
+                if let Ok(mut debug) = collector.write() {
+                    debug.record_skip(SkipReason::ArchMismatch {
+                        rule: self.arch.clone(),
+                        context: ctx.arch.clone(),
                     });
                 }
             }
@@ -2277,6 +2325,8 @@ impl CompositeTrait {
         condition: &Condition,
         ctx: &EvaluationContext<'a>,
     ) -> ConditionResult {
+        let arch_clamp = ctx.arch_clamp_range(&self.arch);
+
         match condition {
             Condition::Symbol {
                 exact,
@@ -2321,6 +2371,7 @@ impl CompositeTrait {
                     offset_range: *offset_range,
                     section_offset: *section_offset,
                     section_offset_range: *section_offset_range,
+                    arch_clamp,
                 };
                 eval_string(&params, self.not.as_ref(), ctx)
             }
@@ -2437,6 +2488,7 @@ impl CompositeTrait {
                         offset_range: *offset_range,
                         section_offset: *section_offset,
                         section_offset_range: *section_offset_range,
+                        arch_clamp,
                     },
                     ctx,
                     Some(self.id.as_str()),
@@ -2464,6 +2516,7 @@ impl CompositeTrait {
                     offset_range: *offset_range,
                     section_offset: *section_offset,
                     section_offset_range: *section_offset_range,
+                    arch_clamp,
                 };
                 timed_eval!(
                     "raw",
@@ -2536,6 +2589,7 @@ impl CompositeTrait {
                     offset_range: *offset_range,
                     section_offset: *section_offset,
                     section_offset_range: *section_offset_range,
+                    arch_clamp,
                 };
                 timed_eval!(
                     "encoded",

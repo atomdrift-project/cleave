@@ -28,6 +28,8 @@ pub(crate) struct TraitDefaults {
     pub(crate) r#for: Option<Vec<String>>,
     #[serde(default)]
     pub(crate) platforms: Option<Vec<String>>,
+    #[serde(default)]
+    pub(crate) arch: Option<Vec<String>>,
     #[serde(default, alias = "criticality")]
     pub(crate) crit: Option<String>,
     #[serde(default, alias = "confidence")]
@@ -55,6 +57,8 @@ pub(crate) struct RawTraitDefinition {
     pub(crate) attack: Option<String>,
     #[serde(default)]
     pub(crate) platforms: Option<Vec<String>>,
+    #[serde(default)]
+    pub(crate) arch: Option<Vec<String>>,
     #[serde(default, alias = "for", alias = "files")]
     pub(crate) file_types: Option<Vec<String>>,
     #[serde(default)]
@@ -101,6 +105,8 @@ pub(crate) struct RawCompositeRule {
     pub(crate) attack: Option<String>,
     #[serde(default)]
     pub(crate) platforms: Option<Vec<String>>,
+    #[serde(default)]
+    pub(crate) arch: Option<Vec<String>>,
     #[serde(default, alias = "for", alias = "files")]
     pub(crate) file_types: Option<Vec<String>>,
     #[serde(default)]

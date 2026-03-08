@@ -8,7 +8,7 @@
 //! 4. Composite rules are evaluated (can reference both traits and imports)
 //! 5. All findings are deduplicated and merged
 
-use crate::composite_rules::{FileType as RuleFileType, SectionMap};
+use crate::composite_rules::{Arch, FileType as RuleFileType, SectionMap};
 use crate::types::{AnalysisReport, Evidence};
 use rustc_hash::{FxHashMap, FxHashSet};
 use std::collections::HashMap;
@@ -94,12 +94,12 @@ impl super::CapabilityMapper {
             cached_ast,
             inline_yara,
             None,
+            None,
         )
     }
 
-    /// Like `evaluate_and_merge_findings`, but accepts precomputed raw regex matches.
-    /// Pass `Some(matches)` to skip the expensive regex precompute step (e.g. when
-    /// it was already run in parallel with structural analysis).
+    /// Like `evaluate_and_merge_findings`, but accepts precomputed raw regex matches
+    /// and optional architecture byte ranges for fat/universal binary arch clamping.
     pub(crate) fn evaluate_and_merge_findings_with_precomputed(
         &self,
         report: &mut AnalysisReport,
@@ -107,6 +107,7 @@ impl super::CapabilityMapper {
         cached_ast: Option<&tree_sitter::Tree>,
         inline_yara: Option<&HashMap<String, Vec<Evidence>>>,
         precomputed_raw_regex: Option<Option<FxHashSet<usize>>>,
+        arch_ranges: Option<Vec<(Arch, std::ops::Range<usize>)>>,
     ) {
         // Detect file type once
         let file_type = self.detect_file_type(&report.target.file_type);
@@ -149,6 +150,7 @@ impl super::CapabilityMapper {
             &string_matched_traits,
             &cached_evidence,
             &regex_candidates,
+            arch_ranges.as_deref(),
         );
 
         // Merge independent findings into report
@@ -175,6 +177,7 @@ impl super::CapabilityMapper {
                 &string_matched_traits,
                 &cached_evidence,
                 &regex_candidates,
+                arch_ranges.as_deref(),
             );
 
             if dependent_findings.is_empty() {
@@ -212,6 +215,7 @@ impl super::CapabilityMapper {
             cached_ast,
             inline_yara,
             &section_map,
+            arch_ranges.as_deref(),
         );
 
         // Step 5: Merge composite findings into report.

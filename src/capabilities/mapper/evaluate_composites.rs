@@ -6,7 +6,7 @@
 //! - Fixed-point iteration for cascading dependencies
 //! - Downgrade re-evaluation with complete finding context
 
-use crate::composite_rules::{EvaluationContext, FileType as RuleFileType, SectionMap};
+use crate::composite_rules::{Arch, EvaluationContext, FileType as RuleFileType, SectionMap};
 use crate::types::{AnalysisReport, Criticality, Evidence, Finding, FindingKind};
 use rayon::prelude::*;
 use rustc_hash::FxHashMap;
@@ -25,6 +25,7 @@ impl super::CapabilityMapper {
         cached_ast: Option<&tree_sitter::Tree>,
         inline_yara: Option<&HashMap<String, Vec<Evidence>>>,
         section_map: &SectionMap,
+        arch_ranges: Option<&[(Arch, std::ops::Range<usize>)]>,
     ) -> Vec<Finding> {
         // Determine file type from report (platform comes from self.platform)
         let file_type = self.detect_file_type(&report.target.file_type);
@@ -62,6 +63,9 @@ impl super::CapabilityMapper {
             .with_section_map(section_map.clone());
             if let Some(results) = inline_yara {
                 ctx = ctx.with_inline_yara(results);
+            }
+            if let Some(ranges) = arch_ranges {
+                ctx = ctx.with_arch_ranges(ranges.to_vec());
             }
 
             // Evaluate positive rules (parallel for large sets, sequential for small)
@@ -107,6 +111,9 @@ impl super::CapabilityMapper {
         .with_section_map(section_map.clone());
         if let Some(results) = inline_yara {
             ctx = ctx.with_inline_yara(results);
+        }
+        if let Some(ranges) = arch_ranges {
+            ctx = ctx.with_arch_ranges(ranges.to_vec());
         }
 
         let negative_findings: Vec<Finding> = if negative_rules.len() > 50 {

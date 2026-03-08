@@ -3,7 +3,7 @@
 use super::debug::DebugCollector;
 use super::evaluators::kv::StructuredFormat;
 use super::section_map::SectionMap;
-use super::types::{FileType, Platform};
+use super::types::{Arch, FileType, Platform};
 use crate::types::{AnalysisReport, Evidence, Finding};
 use rustc_hash::{FxHashMap, FxHashSet, FxHasher};
 use serde_json::Value;
@@ -31,6 +31,8 @@ pub(crate) struct EvaluationContext<'a> {
     pub file_type: FileType,
     /// Platform filter(s) from CLI - rules match if their platforms intersect with these
     pub platforms: Vec<Platform>,
+    /// CPU architecture(s) of the file being analyzed (derived from report.target.architectures)
+    pub arch: Vec<Arch>,
     /// Additional findings from previous evaluation iterations (for composite chaining)
     pub additional_findings: Option<&'a [Finding]>,
     /// Cached parsed AST (to avoid re-parsing for each ast_pattern trait)
@@ -66,6 +68,10 @@ pub(crate) struct EvaluationContext<'a> {
     /// Hard deadline for rule evaluation. When set, AST walks and other
     /// evaluation loops check this and bail out early if exceeded.
     pub deadline: Option<Instant>,
+    /// Per-architecture byte ranges for fat/universal binaries.
+    /// Maps each architecture to its byte range within `binary_data`.
+    /// When set, arch-restricted traits only search within matching slices.
+    pub arch_ranges: Option<Vec<(Arch, std::ops::Range<usize>)>>,
 }
 
 impl<'a> EvaluationContext<'a> {
@@ -97,11 +103,20 @@ impl<'a> EvaluationContext<'a> {
             }
         }
 
+        // Derive arch from report target architectures
+        let arch = report
+            .target
+            .architectures
+            .as_ref()
+            .map(|archs| archs.iter().map(|a| Arch::from_report_str(a)).collect())
+            .unwrap_or_else(|| vec![Arch::All]);
+
         Self {
             report,
             binary_data,
             file_type,
             platforms,
+            arch,
             additional_findings,
             cached_ast,
             finding_id_index: Some(index),
@@ -115,6 +130,38 @@ impl<'a> EvaluationContext<'a> {
             string_exact_index: OnceLock::new(),
             string_exact_index_ci: OnceLock::new(),
             deadline: None,
+            arch_ranges: None,
+        }
+    }
+
+    /// Attach per-architecture byte ranges for fat/universal binary evaluation.
+    #[must_use]
+    pub(crate) fn with_arch_ranges(mut self, ranges: Vec<(Arch, std::ops::Range<usize>)>) -> Self {
+        self.arch_ranges = Some(ranges);
+        self
+    }
+
+    /// Compute the search clamp range for a trait with a specific arch restriction.
+    /// Returns None if no clamping is needed (non-fat binary or trait targets all archs).
+    /// Returns Some((start, end)) covering the union of matching arch slices.
+    #[must_use]
+    pub(crate) fn arch_clamp_range(&self, trait_arch: &[Arch]) -> Option<(usize, usize)> {
+        let ranges = self.arch_ranges.as_ref()?;
+        if trait_arch.contains(&Arch::All) {
+            return None;
+        }
+        let mut clamp_start = usize::MAX;
+        let mut clamp_end = 0usize;
+        for (arch, range) in ranges {
+            if trait_arch.contains(arch) {
+                clamp_start = clamp_start.min(range.start);
+                clamp_end = clamp_end.max(range.end);
+            }
+        }
+        if clamp_start < clamp_end {
+            Some((clamp_start, clamp_end))
+        } else {
+            None
         }
     }
 
@@ -378,4 +425,7 @@ pub(crate) struct StringParams<'a> {
     pub section_offset: Option<i64>,
     /// Section-relative offset range: [start, end) within section bounds
     pub section_offset_range: Option<(i64, Option<i64>)>,
+    /// Architecture clamp range for fat/universal binaries
+    #[allow(dead_code)] // Kept for structural consistency with ContentLocationParams
+    pub arch_clamp: Option<(usize, usize)>,
 }

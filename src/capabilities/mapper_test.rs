@@ -365,7 +365,7 @@ fn test_evaluate_composite_rules_empty() {
     let report = create_test_report();
 
     let findings =
-        mapper.evaluate_composite_rules(&report, &[], None, None, &SectionMap::default());
+        mapper.evaluate_composite_rules(&report, &[], None, None, &SectionMap::default(), None);
     assert_eq!(findings.len(), 0);
 }
 

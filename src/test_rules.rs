@@ -16,7 +16,8 @@ use crate::capabilities::validation::calculate_composite_precision;
 use crate::capabilities::CapabilityMapper;
 use crate::composite_rules::debug::{DebugCollector, EvaluationDebug, RuleType};
 use crate::composite_rules::{
-    CompositeTrait, Condition, EvaluationContext, FileType as RuleFileType, Platform, SectionMap,
+    Arch, CompositeTrait, Condition, EvaluationContext, FileType as RuleFileType, Platform,
+    SectionMap,
     TraitDefinition,
 };
 use crate::types::{AnalysisReport, Evidence};
@@ -242,6 +243,8 @@ impl<'a> RuleDebugger<'a> {
             binary_data: self.binary_data,
             file_type: self.file_type,
             platforms: self.platforms.clone(),
+            arch: vec![Arch::All],
+            arch_ranges: None,
             additional_findings: None,
             cached_ast: None,
             finding_id_index: Some(self.build_finding_index()),
@@ -566,6 +569,8 @@ impl<'a> RuleDebugger<'a> {
             binary_data: self.binary_data,
             file_type: self.file_type,
             platforms: self.platforms.clone(),
+            arch: vec![Arch::All],
+            arch_ranges: None,
             additional_findings: None,
             cached_ast: None,
             finding_id_index: None,
@@ -1454,6 +1459,8 @@ impl<'a> RuleDebugger<'a> {
             binary_data: self.binary_data,
             file_type: self.file_type,
             platforms: self.platforms.clone(),
+            arch: vec![Arch::All],
+            arch_ranges: None,
             additional_findings: None,
             cached_ast: None,
             finding_id_index: None,
@@ -1825,6 +1832,8 @@ impl<'a> RuleDebugger<'a> {
             binary_data: self.binary_data,
             file_type: self.file_type,
             platforms: self.platforms.clone(),
+            arch: vec![Arch::All],
+            arch_ranges: None,
             additional_findings: None,
             cached_ast: None,
             finding_id_index: None,
@@ -1908,6 +1917,8 @@ impl<'a> RuleDebugger<'a> {
             binary_data: self.binary_data,
             file_type: self.file_type,
             platforms: self.platforms.clone(),
+            arch: vec![Arch::All],
+            arch_ranges: None,
             additional_findings: None,
             cached_ast: None,
             finding_id_index: None,
@@ -1931,6 +1942,7 @@ impl<'a> RuleDebugger<'a> {
                 offset_range,
                 section_offset,
                 section_offset_range,
+                arch_clamp: None,
             },
             &ctx,
             None,

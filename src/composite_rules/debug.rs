@@ -5,7 +5,7 @@
 //! information about why rules matched or failed. When absent (production), there is
 //! zero overhead.
 
-use super::types::{FileType, Platform};
+use super::types::{Arch, FileType, Platform};
 use crate::types::{Criticality, Evidence};
 use std::sync::RwLock;
 
@@ -18,6 +18,13 @@ pub(crate) enum SkipReason {
         rule: Vec<Platform>,
         /// Platforms present in the current evaluation context
         context: Vec<Platform>,
+    },
+    /// Rule requires different architecture(s) than current context
+    ArchMismatch {
+        /// Architectures the rule targets
+        rule: Vec<Arch>,
+        /// Architectures of the file being evaluated
+        context: Vec<Arch>,
     },
     /// Rule requires different file type(s) than current context
     FileTypeMismatch {
@@ -96,6 +103,13 @@ impl std::fmt::Display for SkipReason {
                 write!(
                     f,
                     "Platform mismatch: rule requires {:?}, context has {:?}",
+                    rule, context
+                )
+            }
+            SkipReason::ArchMismatch { rule, context } => {
+                write!(
+                    f,
+                    "Arch mismatch: rule requires {:?}, file is {:?}",
                     rule, context
                 )
             }

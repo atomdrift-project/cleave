@@ -11,7 +11,8 @@
 
 use super::*;
 use crate::composite_rules::{
-    CompositeTrait, Condition, FileType as RuleFileType, Platform, SectionMap, TraitDefinition,
+    Arch, CompositeTrait, Condition, FileType as RuleFileType, Platform, SectionMap,
+    TraitDefinition,
 };
 use crate::types::{AnalysisReport, Criticality, Finding, FindingKind, TargetInfo};
 use anyhow::Result;
@@ -177,6 +178,7 @@ fn test_apply_trait_defaults_applies_all_defaults() {
     let defaults = models::TraitDefaults {
         r#for: Some(vec!["php".to_string()]),
         platforms: Some(vec!["linux".to_string()]),
+        arch: None,
         crit: Some("suspicious".to_string()),
         conf: Some(0.85),
         mbc: Some("B0001".to_string()),
@@ -191,6 +193,7 @@ fn test_apply_trait_defaults_applies_all_defaults() {
         mbc: None,
         attack: None,
         platforms: None,
+        arch: None,
         file_types: None,
         size_min: None,
         size_max: None,
@@ -237,6 +240,7 @@ fn test_apply_trait_defaults_trait_overrides_defaults() {
     let defaults = models::TraitDefaults {
         r#for: Some(vec!["php".to_string()]),
         platforms: Some(vec!["linux".to_string()]),
+        arch: None,
         crit: Some("suspicious".to_string()),
         conf: Some(0.85),
         mbc: Some("B0001".to_string()),
@@ -251,6 +255,7 @@ fn test_apply_trait_defaults_trait_overrides_defaults() {
         mbc: Some("B0002".to_string()),
         attack: Some("T1234".to_string()),
         platforms: Some(vec!["windows".to_string()]),
+        arch: None,
         file_types: Some(vec!["pe".to_string()]),
         size_min: None,
         size_max: None,
@@ -298,6 +303,7 @@ fn test_apply_trait_defaults_unset_mbc_with_none() {
     let defaults = models::TraitDefaults {
         r#for: None,
         platforms: None,
+        arch: None,
         crit: None,
         conf: None,
         mbc: Some("B0001".to_string()),
@@ -312,6 +318,7 @@ fn test_apply_trait_defaults_unset_mbc_with_none() {
         mbc: Some("none".to_string()), // Explicitly unset
         attack: None,                  // Use default
         platforms: None,
+        arch: None,
         file_types: None,
         size_min: None,
         size_max: None,
@@ -354,6 +361,7 @@ fn test_apply_trait_defaults_unset_attack_with_none() {
     let defaults = models::TraitDefaults {
         r#for: None,
         platforms: None,
+        arch: None,
         crit: None,
         conf: None,
         mbc: Some("B0001".to_string()),
@@ -368,6 +376,7 @@ fn test_apply_trait_defaults_unset_attack_with_none() {
         mbc: None,                        // Use default
         attack: Some("NONE".to_string()), // Explicitly unset (uppercase)
         platforms: None,
+        arch: None,
         file_types: None,
         size_min: None,
         size_max: None,
@@ -410,6 +419,7 @@ fn test_apply_trait_defaults_unset_file_types_with_none() {
     let defaults = models::TraitDefaults {
         r#for: Some(vec!["php".to_string()]),
         platforms: None,
+        arch: None,
         crit: None,
         conf: None,
         mbc: None,
@@ -424,6 +434,7 @@ fn test_apply_trait_defaults_unset_file_types_with_none() {
         mbc: None,
         attack: None,
         platforms: None,
+        arch: None,
         file_types: Some(vec!["none".to_string()]), // Explicitly unset
         size_min: None,
         size_max: None,
@@ -466,6 +477,7 @@ fn test_apply_composite_defaults_applies_all_defaults() {
     let defaults = models::TraitDefaults {
         r#for: Some(vec!["elf".to_string(), "macho".to_string()]),
         platforms: Some(vec!["linux".to_string(), "macos".to_string()]),
+        arch: None,
         crit: Some("notable".to_string()),
         conf: Some(0.75),
         mbc: Some("B0030".to_string()),
@@ -480,6 +492,7 @@ fn test_apply_composite_defaults_applies_all_defaults() {
         mbc: None,
         attack: None,
         platforms: None,
+        arch: None,
         file_types: None,
         all: None,
         any: None,
@@ -531,6 +544,7 @@ fn test_apply_composite_defaults_unset_with_none() {
     let defaults = models::TraitDefaults {
         r#for: Some(vec!["elf".to_string()]),
         platforms: Some(vec!["linux".to_string()]),
+        arch: None,
         crit: Some("suspicious".to_string()),
         conf: Some(0.9),
         mbc: Some("B0030".to_string()),
@@ -545,6 +559,7 @@ fn test_apply_composite_defaults_unset_with_none() {
         mbc: Some("none".to_string()),             // Unset
         attack: Some("none".to_string()),          // Unset
         platforms: Some(vec!["none".to_string()]), // Unset
+        arch: None,
         file_types: None,                          // Use default
         all: None,
         any: None,
@@ -736,7 +751,7 @@ fn test_iterative_eval_single_pass() {
     let mapper = CapabilityMapper::empty();
     let report = test_report_with_findings(vec![test_finding("atomic/trait-a")]);
     let findings =
-        mapper.evaluate_composite_rules(&report, &[], None, None, &SectionMap::default());
+        mapper.evaluate_composite_rules(&report, &[], None, None, &SectionMap::default(), None);
     assert!(findings.is_empty()); // Empty mapper returns no findings
 }
 
@@ -747,7 +762,7 @@ fn test_iterative_eval_max_iterations_protection() {
     let mapper = CapabilityMapper::empty();
 
     let start = std::time::Instant::now();
-    let _ = mapper.evaluate_composite_rules(&report, &[], None, None, &SectionMap::default());
+    let _ = mapper.evaluate_composite_rules(&report, &[], None, None, &SectionMap::default(), None);
     let elapsed = start.elapsed();
 
     assert!(
@@ -767,6 +782,7 @@ fn test_composite_referencing_atomic_trait() {
         mbc: None,
         attack: None,
         platforms: vec![Platform::All],
+        arch: vec![Arch::All],
         r#for: vec![RuleFileType::All],
         all: Some(vec![Condition::Trait {
             id: "test/atomic-trait".to_string(),
@@ -791,7 +807,7 @@ fn test_composite_referencing_atomic_trait() {
     mapper.composite_rules.push(composite);
 
     let findings =
-        mapper.evaluate_composite_rules(&report, &[], None, None, &SectionMap::default());
+        mapper.evaluate_composite_rules(&report, &[], None, None, &SectionMap::default(), None);
     assert_eq!(findings.len(), 1);
     assert_eq!(findings[0].id, "test/composite");
 }
@@ -807,6 +823,7 @@ fn test_composite_of_composites_two_levels() {
         mbc: None,
         attack: None,
         platforms: vec![Platform::All],
+        arch: vec![Arch::All],
         r#for: vec![RuleFileType::All],
         all: Some(vec![Condition::Trait {
             id: "test/atomic-trait".to_string(),
@@ -834,6 +851,7 @@ fn test_composite_of_composites_two_levels() {
         mbc: None,
         attack: None,
         platforms: vec![Platform::All],
+        arch: vec![Arch::All],
         r#for: vec![RuleFileType::All],
         all: Some(vec![Condition::Trait {
             id: "test/composite-a".to_string(),
@@ -859,7 +877,7 @@ fn test_composite_of_composites_two_levels() {
     mapper.composite_rules.push(composite_b);
 
     let findings =
-        mapper.evaluate_composite_rules(&report, &[], None, None, &SectionMap::default());
+        mapper.evaluate_composite_rules(&report, &[], None, None, &SectionMap::default(), None);
 
     // Both composites should be found due to iterative evaluation
     assert_eq!(findings.len(), 2);
@@ -879,6 +897,7 @@ fn test_composite_three_level_chain() {
         mbc: None,
         attack: None,
         platforms: vec![Platform::All],
+        arch: vec![Arch::All],
         r#for: vec![RuleFileType::All],
         all: Some(vec![Condition::Trait {
             id: requires.to_string(),
@@ -911,7 +930,7 @@ fn test_composite_three_level_chain() {
         .push(make_composite("level/three", "level/two"));
 
     let findings =
-        mapper.evaluate_composite_rules(&report, &[], None, None, &SectionMap::default());
+        mapper.evaluate_composite_rules(&report, &[], None, None, &SectionMap::default(), None);
 
     assert_eq!(findings.len(), 3);
     let ids: Vec<_> = findings.iter().map(|f| f.id.as_str()).collect();
@@ -931,6 +950,7 @@ fn test_composite_circular_dependency_handled() {
         mbc: None,
         attack: None,
         platforms: vec![Platform::All],
+        arch: vec![Arch::All],
         r#for: vec![RuleFileType::All],
         all: Some(vec![Condition::Trait {
             id: "circular/b".to_string(),
@@ -958,6 +978,7 @@ fn test_composite_circular_dependency_handled() {
         mbc: None,
         attack: None,
         platforms: vec![Platform::All],
+        arch: vec![Arch::All],
         r#for: vec![RuleFileType::All],
         all: Some(vec![Condition::Trait {
             id: "circular/a".to_string(),
@@ -984,7 +1005,7 @@ fn test_composite_circular_dependency_handled() {
 
     let start = std::time::Instant::now();
     let findings =
-        mapper.evaluate_composite_rules(&report, &[], None, None, &SectionMap::default());
+        mapper.evaluate_composite_rules(&report, &[], None, None, &SectionMap::default(), None);
     let elapsed = start.elapsed();
 
     assert!(elapsed.as_millis() < 100, "Took too long: {:?}", elapsed);
@@ -1002,6 +1023,7 @@ fn test_composite_prefix_matching_in_chain() {
         mbc: None,
         attack: None,
         platforms: vec![Platform::All],
+        arch: vec![Arch::All],
         r#for: vec![RuleFileType::All],
         all: Some(vec![Condition::Trait {
             id: "discovery/system".to_string(), // Prefix match
@@ -1027,7 +1049,7 @@ fn test_composite_prefix_matching_in_chain() {
     mapper.composite_rules.push(composite);
 
     let findings =
-        mapper.evaluate_composite_rules(&report, &[], None, None, &SectionMap::default());
+        mapper.evaluate_composite_rules(&report, &[], None, None, &SectionMap::default(), None);
     assert_eq!(findings.len(), 1);
     assert_eq!(findings[0].id, "test/uses-discovery");
 }
@@ -1042,6 +1064,7 @@ fn test_composite_requires_count_in_chain() {
         mbc: None,
         attack: None,
         platforms: vec![Platform::All],
+        arch: vec![Arch::All],
         r#for: vec![RuleFileType::All],
         all: None,
         any: Some(vec![
@@ -1073,7 +1096,7 @@ fn test_composite_requires_count_in_chain() {
     mapper.composite_rules.push(composite);
 
     let findings =
-        mapper.evaluate_composite_rules(&report, &[], None, None, &SectionMap::default());
+        mapper.evaluate_composite_rules(&report, &[], None, None, &SectionMap::default(), None);
     assert_eq!(findings.len(), 1);
     assert_eq!(findings[0].id, "test/needs-two");
 }
@@ -1094,6 +1117,7 @@ fn test_precision_direct_conditions() {
         mbc: None,
         attack: None,
         platforms: vec![Platform::All],
+        arch: vec![Arch::All],
         r#for: vec![RuleFileType::All],
         all: Some(vec![
             Condition::String {
@@ -1194,6 +1218,7 @@ fn test_precision_file_type_filter() {
         mbc: None,
         attack: None,
         platforms: vec![Platform::All],
+        arch: vec![Arch::All],
         r#for: vec![RuleFileType::Elf, RuleFileType::Pe], // File type filter
         all: Some(vec![
             Condition::String {
@@ -1278,6 +1303,7 @@ fn test_precision_recursive_expansion() {
         mbc: None,
         attack: None,
         platforms: vec![Platform::All],
+        arch: vec![Arch::All],
         r#for: vec![RuleFileType::All],
         r#if: Condition::String {
             external_ip: false,
@@ -1319,6 +1345,7 @@ fn test_precision_recursive_expansion() {
         mbc: None,
         attack: None,
         platforms: vec![Platform::All],
+        arch: vec![Arch::All],
         r#for: vec![RuleFileType::All],
         all: Some(vec![
             Condition::String {
@@ -1378,6 +1405,7 @@ fn test_precision_recursive_expansion() {
         mbc: None,
         attack: None,
         platforms: vec![Platform::All],
+        arch: vec![Arch::All],
         r#for: vec![RuleFileType::All],
         all: Some(vec![
             Condition::Trait {
@@ -1438,6 +1466,7 @@ fn test_precision_cycle_detection() {
         mbc: None,
         attack: None,
         platforms: vec![Platform::All],
+        arch: vec![Arch::All],
         r#for: vec![RuleFileType::All],
         all: Some(vec![Condition::Trait {
             id: "test/circular-b".to_string(),
@@ -1466,6 +1495,7 @@ fn test_precision_cycle_detection() {
         mbc: None,
         attack: None,
         platforms: vec![Platform::All],
+        arch: vec![Arch::All],
         r#for: vec![RuleFileType::All],
         all: Some(vec![Condition::Trait {
             id: "test/circular-a".to_string(),
@@ -1519,6 +1549,7 @@ fn test_precision_caching() {
         mbc: None,
         attack: None,
         platforms: vec![Platform::All],
+        arch: vec![Arch::All],
         r#for: vec![RuleFileType::All],
         all: Some(vec![
             Condition::String {
@@ -1614,6 +1645,7 @@ fn test_precision_threshold_validation() {
         mbc: None,
         attack: None,
         platforms: vec![Platform::All],
+        arch: vec![Arch::All],
         r#for: vec![RuleFileType::All],
         all: Some(vec![
             Condition::String {
@@ -1691,6 +1723,7 @@ fn test_precision_threshold_validation() {
         mbc: None,
         attack: None,
         platforms: vec![Platform::All],
+        arch: vec![Arch::All],
         r#for: vec![RuleFileType::All],
         all: Some(vec![
             Condition::String {
@@ -1782,6 +1815,7 @@ fn test_suspicious_precision_threshold_validation() {
         mbc: None,
         attack: None,
         platforms: vec![Platform::All],
+        arch: vec![Arch::All],
         r#for: vec![RuleFileType::All],
         all: Some(vec![Condition::String {
             external_ip: false,
@@ -1824,6 +1858,7 @@ fn test_suspicious_precision_threshold_validation() {
         mbc: None,
         attack: None,
         platforms: vec![Platform::All],
+        arch: vec![Arch::All],
         r#for: vec![RuleFileType::All],
         all: Some(vec![
             Condition::String {
@@ -1916,6 +1951,7 @@ fn test_precision_mixed_conditions() {
         mbc: None,
         attack: None,
         platforms: vec![Platform::All],
+        arch: vec![Arch::All],
         r#for: vec![RuleFileType::All],
         all: Some(vec![Condition::String {
             external_ip: false,
@@ -2029,6 +2065,7 @@ fn test_precision_deep_nesting() {
         mbc: None,
         attack: None,
         platforms: vec![Platform::All],
+        arch: vec![Arch::All],
         r#for: vec![RuleFileType::All],
         all: Some(vec![
             Condition::String {
@@ -2088,6 +2125,7 @@ fn test_precision_deep_nesting() {
         mbc: None,
         attack: None,
         platforms: vec![Platform::All],
+        arch: vec![Arch::All],
         r#for: vec![RuleFileType::All],
         all: Some(vec![
             Condition::Trait {
@@ -2134,6 +2172,7 @@ fn test_precision_deep_nesting() {
         mbc: None,
         attack: None,
         platforms: vec![Platform::All],
+        arch: vec![Arch::All],
         r#for: vec![RuleFileType::All],
         all: Some(vec![
             Condition::Trait {
@@ -2209,6 +2248,7 @@ fn test_precision_correct_algorithm() {
         mbc: None,
         attack: None,
         platforms: vec![Platform::All],
+        arch: vec![Arch::All],
         r#for: vec![RuleFileType::JavaScript], // +1 (not "all")
         all: Some(vec![
             // +2 (2 elements in all)
@@ -2298,6 +2338,7 @@ fn test_precision_traits_with_size_restrictions() {
         mbc: None,
         attack: None,
         platforms: vec![Platform::All],
+        arch: vec![Arch::All],
         r#for: vec![RuleFileType::All],
         r#if: Condition::String {
             external_ip: false,
@@ -2339,6 +2380,7 @@ fn test_precision_traits_with_size_restrictions() {
         mbc: None,
         attack: None,
         platforms: vec![Platform::All],
+        arch: vec![Arch::All],
         r#for: vec![RuleFileType::All],
         r#if: Condition::String {
             external_ip: false,
@@ -2380,6 +2422,7 @@ fn test_precision_traits_with_size_restrictions() {
         mbc: None,
         attack: None,
         platforms: vec![Platform::All],
+        arch: vec![Arch::All],
         r#for: vec![RuleFileType::All],
         all: Some(vec![
             Condition::Trait {
@@ -3049,6 +3092,7 @@ fn test_collect_trait_refs_finds_internal_paths() {
         mbc: None,
         attack: None,
         platforms: vec![Platform::All],
+        arch: vec![Arch::All],
         r#for: vec![RuleFileType::All],
         all: Some(vec![
             Condition::Trait {
@@ -3111,6 +3155,7 @@ fn test_meta_internal_paths_forbidden_in_composite_rules() {
         mbc: None,
         attack: None,
         platforms: vec![Platform::All],
+        arch: vec![Arch::All],
         r#for: vec![RuleFileType::All],
         all: Some(vec![Condition::Trait {
             id: "metadata/internal/symbols::evil_func".to_string(),

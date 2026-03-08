@@ -7,7 +7,7 @@
 //! - Parallel evaluation of applicable traits
 //! - Early termination for empty files
 
-use crate::composite_rules::{Condition, EvaluationContext, SectionMap};
+use crate::composite_rules::{Arch, Condition, EvaluationContext, SectionMap};
 use crate::types::{AnalysisReport, Evidence, Finding, FindingKind};
 use rayon::prelude::*;
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -320,6 +320,7 @@ impl super::CapabilityMapper {
             &string_matched_traits,
             &cached_evidence,
             &regex_candidates,
+            None,
         )
     }
 
@@ -338,6 +339,7 @@ impl super::CapabilityMapper {
         string_matched_traits: &FxHashSet<usize>,
         cached_evidence: &FxHashMap<usize, Vec<Evidence>>,
         regex_candidates: &FxHashSet<usize>,
+        arch_ranges: Option<&[(Arch, std::ops::Range<usize>)]>,
     ) -> Vec<Finding> {
         // Determine file type from report
         let file_type = self.detect_file_type(&report.target.file_type);
@@ -353,6 +355,9 @@ impl super::CapabilityMapper {
         .with_section_map(section_map.clone());
         if let Some(results) = inline_yara {
             ctx = ctx.with_inline_yara(results);
+        }
+        if let Some(ranges) = arch_ranges {
+            ctx = ctx.with_arch_ranges(ranges.to_vec());
         }
 
         // Get applicable traits filtered by file type

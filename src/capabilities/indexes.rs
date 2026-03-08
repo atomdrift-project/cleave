@@ -1343,7 +1343,7 @@ impl RawContentRegexIndex {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::composite_rules::Platform;
+    use crate::composite_rules::{Arch, Platform};
 
     // ==================== TraitIndex Tests ====================
 
@@ -1584,6 +1584,7 @@ mod tests {
             mbc: None,
             attack: None,
             platforms: vec![Platform::All],
+            arch: vec![Arch::All],
             r#for: vec![RuleFileType::All],
             r#if: Condition::Raw {
                 exact: None,

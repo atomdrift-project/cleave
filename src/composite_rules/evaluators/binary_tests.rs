@@ -5,7 +5,7 @@
 
 use super::*;
 use crate::composite_rules::context::EvaluationContext;
-use crate::composite_rules::types::{FileType, Platform};
+use crate::composite_rules::types::{Arch, FileType, Platform};
 use crate::types::{AnalysisReport, Export, Import, Section, SyscallInfo, TargetInfo};
 use std::sync::OnceLock;
 
@@ -26,6 +26,8 @@ fn create_test_context<'a>(report: &'a AnalysisReport, data: &'a [u8]) -> Evalua
         binary_data: data,
         file_type: FileType::Elf,
         platforms: vec![Platform::Linux],
+        arch: vec![Arch::All],
+        arch_ranges: None,
         additional_findings: None,
         cached_ast: None,
         finding_id_index: None,

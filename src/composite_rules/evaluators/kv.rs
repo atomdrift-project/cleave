@@ -769,7 +769,7 @@ fn format_evidence_value(value: &Value) -> String {
 mod tests {
     use super::*;
     use crate::composite_rules::context::EvaluationContext;
-    use crate::composite_rules::types::{FileType, Platform};
+    use crate::composite_rules::types::{Arch, FileType, Platform};
     use crate::types::{AnalysisReport, TargetInfo};
     use serde_json::json;
     use std::sync::OnceLock;
@@ -793,6 +793,8 @@ mod tests {
             binary_data,
             file_type: FileType::All,
             platforms: vec![Platform::All],
+            arch: vec![Arch::All],
+            arch_ranges: None,
             additional_findings: None,
             cached_ast: None,
             finding_id_index: None,

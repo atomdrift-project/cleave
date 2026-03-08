@@ -854,6 +854,38 @@ impl MachOAnalyzer {
     /// For thin binaries, returns a single range covering the entire file.
     /// This ensures we scan all architectures and don't miss malware hidden in non-preferred slices.
     #[allow(clippy::single_range_in_vec_init)] // Intentional: returns single range for thin binaries
+    /// Returns per-architecture byte ranges for fat/universal Mach-O binaries.
+    /// Each entry maps an `Arch` to its byte range within the file.
+    /// For thin binaries, returns a single entry with the detected architecture.
+    #[allow(dead_code)] // Used by lib.rs pipeline, not visible to binary target
+    pub(crate) fn labeled_arch_ranges(
+        &self,
+        data: &[u8],
+    ) -> Vec<(crate::composite_rules::Arch, std::ops::Range<usize>)> {
+        use crate::composite_rules::Arch;
+        if let Ok(goblin::mach::Mach::Fat(fat)) = goblin::mach::Mach::parse(data) {
+            if let Ok(arches) = fat.arches() {
+                let ranges: Vec<_> = arches
+                    .iter()
+                    .filter_map(|arch| {
+                        let offset = arch.offset as usize;
+                        let size = arch.size as usize;
+                        if offset + size <= data.len() {
+                            let name = self.arch_name_from_cputype(arch.cputype);
+                            Some((Arch::from_report_str(&name), offset..offset + size))
+                        } else {
+                            None
+                        }
+                    })
+                    .collect();
+                if !ranges.is_empty() {
+                    return ranges;
+                }
+            }
+        }
+        vec![(Arch::All, 0..data.len())]
+    }
+
     pub(crate) fn all_arch_ranges(&self, data: &[u8]) -> Vec<std::ops::Range<usize>> {
         if let Ok(Mach::Fat(fat)) = goblin::mach::Mach::parse(data) {
             if let Ok(arches) = fat.arches() {

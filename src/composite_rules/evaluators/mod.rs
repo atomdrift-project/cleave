@@ -395,10 +395,15 @@ pub(crate) struct ContentLocationParams {
     pub section_offset: Option<i64>,
     /// Offset range relative to the section start
     pub section_offset_range: Option<(i64, Option<i64>)>,
+    /// Architecture clamp range for fat/universal binaries.
+    /// When set, the search is restricted to this byte range.
+    pub arch_clamp: Option<(usize, usize)>,
 }
 
 /// Resolve the effective byte range for content search based on location constraints.
 /// Returns (start, end) as absolute offsets into binary data.
+/// When `arch_clamp` is set (fat/universal binaries), the result is intersected
+/// with the architecture's byte range to prevent cross-slice false positives.
 #[must_use]
 pub(crate) fn resolve_effective_range<'a>(
     location: &ContentLocationParams,
@@ -406,18 +411,15 @@ pub(crate) fn resolve_effective_range<'a>(
 ) -> (usize, usize) {
     let file_size = ctx.binary_data.len();
 
-    // If no location constraints, return full file range
-    if location.section.is_none()
+    // Compute base range from location constraints
+    let (base_start, base_end) = if location.section.is_none()
         && location.offset.is_none()
         && location.offset_range.is_none()
         && location.section_offset.is_none()
         && location.section_offset_range.is_none()
     {
-        return (0, file_size);
-    }
-
-    // Use SectionMap to resolve the range if available
-    if let Some(ref section_map) = ctx.section_map {
+        (0, file_size)
+    } else if let Some(ref section_map) = ctx.section_map {
         if let Some((start, end)) = section_map.resolve_range(
             location.section.as_deref(),
             location.offset,
@@ -425,14 +427,29 @@ pub(crate) fn resolve_effective_range<'a>(
             location.section_offset,
             location.section_offset_range,
         ) {
-            return (start as usize, end as usize);
+            (start as usize, end as usize)
+        } else {
+            resolve_offset_constraints(location, file_size)
         }
-    }
+    } else {
+        resolve_offset_constraints(location, file_size)
+    };
 
-    // Fallback: resolve absolute offset constraints without SectionMap
+    // Apply architecture clamp for fat/universal binaries
+    if let Some((clamp_start, clamp_end)) = location.arch_clamp {
+        (base_start.max(clamp_start), base_end.min(clamp_end))
+    } else {
+        (base_start, base_end)
+    }
+}
+
+/// Resolve absolute offset constraints without SectionMap.
+fn resolve_offset_constraints(
+    location: &ContentLocationParams,
+    file_size: usize,
+) -> (usize, usize) {
     match (location.offset, &location.offset_range) {
         (Some(off), None) => {
-            // Single offset - search starts at that position
             let resolved = if off < 0 {
                 (file_size as i64 + off).max(0) as usize
             } else {
@@ -454,7 +471,7 @@ pub(crate) fn resolve_effective_range<'a>(
             };
             (resolved_start, resolved_end)
         }
-        _ => (0, file_size), // Section constraints without SectionMap - no filtering
+        _ => (0, file_size),
     }
 }
 

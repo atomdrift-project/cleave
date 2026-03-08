@@ -5,7 +5,7 @@
 
 use super::*;
 use crate::composite_rules::context::EvaluationContext;
-use crate::composite_rules::types::{FileType, Platform};
+use crate::composite_rules::types::{Arch, FileType, Platform};
 use crate::types::{AnalysisReport, TargetInfo};
 use std::sync::OnceLock;
 
@@ -30,6 +30,8 @@ fn create_test_context<'a>(
         binary_data: data,
         file_type,
         platforms: vec![Platform::Linux],
+        arch: vec![Arch::All],
+        arch_ranges: None,
         additional_findings: None,
         cached_ast: None,
         finding_id_index: None,

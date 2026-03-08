@@ -5,7 +5,7 @@
 
 use super::*;
 use crate::composite_rules::context::EvaluationContext;
-use crate::composite_rules::types::{FileType, Platform};
+use crate::composite_rules::types::{Arch, FileType, Platform};
 use crate::types::scores::Metrics;
 use crate::types::text_metrics::{FunctionMetrics, IdentifierMetrics, TextMetrics};
 use crate::types::{AnalysisReport, TargetInfo};
@@ -28,6 +28,8 @@ fn create_test_context<'a>(report: &'a AnalysisReport, data: &'a [u8]) -> Evalua
         binary_data: data,
         file_type: FileType::Python,
         platforms: vec![Platform::Linux],
+        arch: vec![Arch::All],
+        arch_ranges: None,
         additional_findings: None,
         cached_ast: None,
         finding_id_index: None,

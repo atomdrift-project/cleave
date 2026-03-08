@@ -8,7 +8,7 @@
 #[cfg(test)]
 mod precision_tests {
     use crate::capabilities::validation::precision::calculate_trait_precision;
-    use crate::composite_rules::{Condition, FileType, Platform, TraitDefinition};
+    use crate::composite_rules::{Arch, Condition, FileType, Platform, TraitDefinition};
     use std::path::PathBuf;
 
     fn create_minimal_trait(condition: Condition) -> TraitDefinition {
@@ -30,6 +30,7 @@ mod precision_tests {
             entropy_max: None,
             r#for: vec![FileType::All],
             platforms: vec![Platform::All],
+            arch: vec![Arch::All],
             not: None,
             unless: None,
             downgrade: None,
@@ -110,7 +111,7 @@ mod precision_tests {
 mod duplicate_tests {
     use super::super::duplicates::*;
     use super::super::helpers::extract_tier;
-    use crate::composite_rules::{Condition, FileType, Platform, TraitDefinition};
+    use crate::composite_rules::{Arch, Condition, FileType, Platform, TraitDefinition};
     use std::path::PathBuf;
 
     // ========================================================================
@@ -161,6 +162,7 @@ mod duplicate_tests {
             entropy_max: None,
             r#for: for_types,
             platforms: vec![Platform::All],
+            arch: vec![Arch::All],
             not: None,
             unless: None,
             downgrade: None,
@@ -2354,7 +2356,7 @@ mod composite_tests {
 #[cfg(test)]
 mod pattern_tests {
     use super::super::patterns::find_non_capturing_groups;
-    use crate::composite_rules::{Condition, FileType, Platform, TraitDefinition};
+    use crate::composite_rules::{Arch, Condition, FileType, Platform, TraitDefinition};
     use std::path::PathBuf;
 
     fn create_raw_regex_trait(id: &str, pattern: &str) -> TraitDefinition {
@@ -2389,6 +2391,7 @@ mod pattern_tests {
             entropy_max: None,
             r#for: vec![FileType::All],
             platforms: vec![Platform::All],
+            arch: vec![Arch::All],
             size_min: None,
             not: None,
             unless: None,
@@ -2434,7 +2437,7 @@ mod taxonomy_tests {
         find_cap_obj_violations, find_cap_wellknown_violations, find_metadata_cross_tier_refs,
     };
     use crate::composite_rules::traits::CompositeTrait;
-    use crate::composite_rules::{Condition, FileType, Platform, TraitDefinition};
+    use crate::composite_rules::{Arch, Condition, FileType, Platform, TraitDefinition};
     use crate::types::Criticality;
     use std::collections::HashMap;
     use std::path::PathBuf;
@@ -2448,6 +2451,7 @@ mod taxonomy_tests {
             mbc: None,
             attack: None,
             platforms: vec![Platform::All],
+            arch: vec![Arch::All],
             r#for: vec![FileType::All],
             r#if: Condition::Trait {
                 id: ref_id.to_string(),
@@ -2477,6 +2481,7 @@ mod taxonomy_tests {
             mbc: None,
             attack: None,
             platforms: vec![Platform::All],
+            arch: vec![Arch::All],
             r#for: vec![FileType::All],
             size_min: None,
             size_max: None,
@@ -2632,7 +2637,7 @@ mod constraint_tests {
         find_empty_condition_clauses, find_needs_zero, find_none_only_with_proximity,
         find_pure_alias_traits,
     };
-    use crate::composite_rules::{CompositeTrait, Condition, FileType, Platform, TraitDefinition};
+    use crate::composite_rules::{Arch, CompositeTrait, Condition, FileType, Platform, TraitDefinition};
     use crate::types::Criticality;
     use std::path::PathBuf;
 
@@ -2664,6 +2669,7 @@ mod constraint_tests {
             entropy_max: None,
             r#for: vec![FileType::All],
             platforms: vec![Platform::All],
+            arch: vec![Arch::All],
             not: None,
             unless: None,
             downgrade: if has_downgrade {
@@ -2717,6 +2723,7 @@ mod constraint_tests {
             entropy_max: None,
             r#for: vec![FileType::All],
             platforms: vec![Platform::All],
+            arch: vec![Arch::All],
             size_min: None,
             not: None,
             unless: None,
@@ -2920,6 +2927,7 @@ mod constraint_tests {
             entropy_max: None,
             r#for: vec![FileType::All],
             platforms: vec![Platform::All],
+            arch: vec![Arch::All],
             not: None,
             unless: None,
             downgrade: None,
@@ -2963,6 +2971,7 @@ mod constraint_tests {
             entropy_max: None,
             r#for: vec![FileType::All],
             platforms: vec![Platform::All],
+            arch: vec![Arch::All],
             not: None,
             unless: None,
             downgrade: None,
@@ -2984,6 +2993,7 @@ mod constraint_tests {
             mbc: None,
             attack: None,
             platforms: vec![Platform::All],
+            arch: vec![Arch::All],
             r#for: vec![FileType::All],
             size_min: None,
             size_max: None,
@@ -3015,6 +3025,7 @@ mod constraint_tests {
             mbc: None,
             attack: None,
             platforms: vec![Platform::All],
+            arch: vec![Arch::All],
             r#for: vec![FileType::All],
             size_min: None,
             size_max: None,
@@ -3049,6 +3060,7 @@ mod constraint_tests {
             mbc: None,
             attack: None,
             platforms: vec![Platform::All],
+            arch: vec![Arch::All],
             r#for: vec![FileType::All],
             size_min: None,
             size_max: None,
@@ -3081,6 +3093,7 @@ mod constraint_tests {
             mbc: None,
             attack: None,
             platforms: vec![Platform::All],
+            arch: vec![Arch::All],
             r#for: vec![FileType::All],
             size_min: None,
             size_max: None,
@@ -3112,6 +3125,7 @@ mod constraint_tests {
             mbc: None,
             attack: None,
             platforms: vec![Platform::All],
+            arch: vec![Arch::All],
             r#for: vec![FileType::All],
             size_min: None,
             size_max: None,
@@ -3139,7 +3153,7 @@ mod autoprefix_tests {
     use super::super::composite::{autoprefix_trait_refs, collect_trait_refs_from_rule};
     use crate::composite_rules::condition::Condition;
     use crate::composite_rules::traits::{CompositeTrait, DowngradeConditions};
-    use crate::composite_rules::types::{FileType, Platform};
+    use crate::composite_rules::types::{Arch, FileType, Platform};
     use crate::types::Criticality;
 
     fn make_rule(
@@ -3154,6 +3168,7 @@ mod autoprefix_tests {
             mbc: None,
             attack: None,
             platforms: vec![Platform::All],
+            arch: vec![Arch::All],
             r#for: vec![FileType::All],
             size_min: None,
             size_max: None,
@@ -3255,7 +3270,7 @@ mod autoprefix_tests {
 mod orphan_tests {
     use crate::capabilities::validation::constraints::find_orphaned_components;
     use crate::composite_rules::traits::{CompositeTrait, DowngradeConditions};
-    use crate::composite_rules::{Condition, FileType, Platform, TraitDefinition};
+    use crate::composite_rules::{Arch, Condition, FileType, Platform, TraitDefinition};
     use std::collections::HashMap;
     use std::path::PathBuf;
 
@@ -3293,6 +3308,7 @@ mod orphan_tests {
             entropy_max: None,
             r#for: vec![FileType::All],
             platforms: vec![Platform::All],
+            arch: vec![Arch::All],
             not: None,
             unless: None,
             downgrade: None,
@@ -3314,6 +3330,7 @@ mod orphan_tests {
             mbc: None,
             attack: None,
             platforms: vec![Platform::All],
+            arch: vec![Arch::All],
             r#for: vec![FileType::All],
             size_min: None,
             size_max: None,

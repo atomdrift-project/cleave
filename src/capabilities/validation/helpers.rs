@@ -88,6 +88,7 @@ pub(crate) fn simple_rule_to_composite_rule(
         mbc: None,
         attack: None,
         platforms,
+        arch: vec![crate::composite_rules::types::Arch::All],
         r#for: file_types,
         size_min: None,
         size_max: None,

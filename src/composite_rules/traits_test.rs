@@ -14,7 +14,7 @@
 use super::condition::Condition;
 use super::context::EvaluationContext;
 use super::traits::*;
-use super::types::{FileType, Platform};
+use super::types::{Arch, FileType, Platform};
 use crate::types::{AnalysisReport, Criticality, Import, TargetInfo};
 use std::path::PathBuf;
 use std::sync::OnceLock;
@@ -28,6 +28,7 @@ fn create_test_trait(id: &str, condition: Condition) -> TraitDefinition {
         conf: 1.0,
         r#for: vec![FileType::All],
         platforms: vec![Platform::All],
+        arch: vec![Arch::All],
         mbc: None,
         attack: None,
         r#if: condition,
@@ -66,6 +67,8 @@ fn create_test_context(report: AnalysisReport, binary_data: Vec<u8>) -> Evaluati
         binary_data: Box::leak(binary_data.into_boxed_slice()),
         file_type: FileType::All,
         platforms: vec![Platform::All],
+        arch: vec![Arch::All],
+        arch_ranges: None,
         additional_findings: None,
         cached_ast: None,
         finding_id_index: None,
@@ -573,6 +576,208 @@ fn test_platform_all_matches_everything() {
     let result = trait_def.evaluate(&ctx);
 
     assert!(result.is_some(), "Platform::All should match any platform");
+}
+
+// ==================== Architecture filtering tests ====================
+
+#[test]
+fn test_arch_filter_match() {
+    let condition = Condition::Symbol {
+        exact: Some("test".to_string()),
+        substr: None,
+        regex: None,
+        platforms: None,
+        compiled_regex: None,
+    };
+
+    let mut trait_def = create_test_trait("test/arch::match", condition);
+    trait_def.arch = vec![Arch::Arm, Arch::Aarch64];
+
+    let mut report = create_report_with_size(1024);
+    report.target.architectures = Some(vec!["arm".to_string()]);
+    report.imports.push(Import {
+        symbol: "test".to_string(),
+        library: None,
+        source: "test".to_string(),
+    });
+
+    let mut ctx = create_test_context(report, vec![]);
+    ctx.arch = vec![Arch::Arm];
+
+    let result = trait_def.evaluate(&ctx);
+    assert!(result.is_some(), "Should match when arch intersects");
+}
+
+#[test]
+fn test_arch_filter_no_match() {
+    let condition = Condition::Symbol {
+        exact: Some("test".to_string()),
+        substr: None,
+        regex: None,
+        platforms: None,
+        compiled_regex: None,
+    };
+
+    let mut trait_def = create_test_trait("test/arch::no_match", condition);
+    trait_def.arch = vec![Arch::X86, Arch::X86_64];
+
+    let mut report = create_report_with_size(1024);
+    report.imports.push(Import {
+        symbol: "test".to_string(),
+        library: None,
+        source: "test".to_string(),
+    });
+
+    let mut ctx = create_test_context(report, vec![]);
+    ctx.arch = vec![Arch::Arm];
+
+    let result = trait_def.evaluate(&ctx);
+    assert!(result.is_none(), "Should not match when arch doesn't intersect");
+}
+
+#[test]
+fn test_arch_all_matches_any_file_arch() {
+    let condition = Condition::Symbol {
+        exact: Some("test".to_string()),
+        substr: None,
+        regex: None,
+        platforms: None,
+        compiled_regex: None,
+    };
+
+    let trait_def = create_test_trait("test/arch::all_trait", condition);
+    assert_eq!(trait_def.arch, vec![Arch::All]);
+
+    let mut report = create_report_with_size(1024);
+    report.target.architectures = Some(vec!["aarch64".to_string()]);
+    report.imports.push(Import {
+        symbol: "test".to_string(),
+        library: None,
+        source: "test".to_string(),
+    });
+
+    let mut ctx = create_test_context(report, vec![]);
+    ctx.arch = vec![Arch::Aarch64];
+
+    let result = trait_def.evaluate(&ctx);
+    assert!(result.is_some(), "Arch::All trait should match any file architecture");
+}
+
+#[test]
+fn test_arch_file_all_matches_any_trait_arch() {
+    let condition = Condition::Symbol {
+        exact: Some("test".to_string()),
+        substr: None,
+        regex: None,
+        platforms: None,
+        compiled_regex: None,
+    };
+
+    let mut trait_def = create_test_trait("test/arch::file_all", condition);
+    trait_def.arch = vec![Arch::X86];
+
+    let mut report = create_report_with_size(1024);
+    report.imports.push(Import {
+        symbol: "test".to_string(),
+        library: None,
+        source: "test".to_string(),
+    });
+
+    let ctx = create_test_context(report, vec![]);
+    assert_eq!(ctx.arch, vec![Arch::All]);
+
+    let result = trait_def.evaluate(&ctx);
+    assert!(result.is_some(), "File with unknown arch (All) should match any trait arch");
+}
+
+#[test]
+fn test_arch_no_default_to_runtime_arch() {
+    let report = create_report_with_size(1024);
+    assert!(report.target.architectures.is_none());
+    let ctx = create_test_context(report, vec![]);
+    assert_eq!(ctx.arch, vec![Arch::All], "Default arch must be All when report has no architectures");
+}
+
+#[test]
+fn test_arch_from_report_str_parsing() {
+    assert_eq!(Arch::from_report_str("x86_64"), Arch::X86_64);
+    assert_eq!(Arch::from_report_str("i386"), Arch::X86);
+    assert_eq!(Arch::from_report_str("aarch64"), Arch::Aarch64);
+    assert_eq!(Arch::from_report_str("arm"), Arch::Arm);
+    assert_eq!(Arch::from_report_str("arm64"), Arch::Aarch64);
+    assert_eq!(Arch::from_report_str("arm64e"), Arch::Aarch64);
+    assert_eq!(Arch::from_report_str("ARM"), Arch::Arm);
+    assert_eq!(Arch::from_report_str("ARM64"), Arch::Aarch64);
+    assert_eq!(Arch::from_report_str("riscv"), Arch::Riscv);
+    assert_eq!(Arch::from_report_str("mips"), Arch::Mips);
+    assert_eq!(Arch::from_report_str("m68k"), Arch::M68k);
+}
+
+#[test]
+fn test_arch_from_str_yaml_parsing() {
+    assert_eq!(Arch::from_str("x86"), Arch::X86);
+    assert_eq!(Arch::from_str("x86-64"), Arch::X86_64);
+    assert_eq!(Arch::from_str("aarch64"), Arch::Aarch64);
+    assert_eq!(Arch::from_str("arm"), Arch::Arm);
+    assert_eq!(Arch::from_str("arm64"), Arch::Aarch64);
+    assert_eq!(Arch::from_str("amd64"), Arch::X86_64);
+    assert_eq!(Arch::from_str("ppc"), Arch::Powerpc);
+    assert_eq!(Arch::from_str("sh"), Arch::Superh);
+}
+
+#[test]
+fn test_arch_multi_arch_file() {
+    let condition = Condition::Symbol {
+        exact: Some("test".to_string()),
+        substr: None,
+        regex: None,
+        platforms: None,
+        compiled_regex: None,
+    };
+
+    let mut trait_def = create_test_trait("test/arch::multi_arch", condition);
+    trait_def.arch = vec![Arch::X86_64];
+
+    let mut report = create_report_with_size(1024);
+    report.imports.push(Import {
+        symbol: "test".to_string(),
+        library: None,
+        source: "test".to_string(),
+    });
+
+    let mut ctx = create_test_context(report, vec![]);
+    ctx.arch = vec![Arch::X86_64, Arch::Aarch64];
+
+    let result = trait_def.evaluate(&ctx);
+    assert!(result.is_some(), "Should match when file contains target architecture");
+}
+
+#[test]
+fn test_arch_clamp_range_fat_binary() {
+    let report = create_report_with_size(200000);
+    let binary_data = vec![0u8; 200000];
+    let mut ctx = create_test_context(report, binary_data);
+    ctx.arch_ranges = Some(vec![
+        (Arch::X86_64, 0..100000),
+        (Arch::Aarch64, 100000..200000),
+    ]);
+
+    // Trait targeting x86-64 should clamp to first slice
+    let clamp = ctx.arch_clamp_range(&[Arch::X86_64]);
+    assert_eq!(clamp, Some((0, 100000)));
+
+    // Trait targeting aarch64 should clamp to second slice
+    let clamp = ctx.arch_clamp_range(&[Arch::Aarch64]);
+    assert_eq!(clamp, Some((100000, 200000)));
+
+    // Trait targeting All should not clamp
+    let clamp = ctx.arch_clamp_range(&[Arch::All]);
+    assert!(clamp.is_none());
+
+    // No arch_ranges means no clamping
+    ctx.arch_ranges = None;
+    let clamp = ctx.arch_clamp_range(&[Arch::X86_64]);
+    assert!(clamp.is_none());
 }
 
 // ==================== File type filtering tests ====================

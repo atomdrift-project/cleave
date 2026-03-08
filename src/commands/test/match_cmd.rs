@@ -971,6 +971,7 @@ pub(crate) fn run(
                     offset_range,
                     section_offset,
                     section_offset_range,
+                    arch_clamp: None,
                 },
                 &ctx,
                 None,

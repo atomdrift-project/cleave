@@ -13,7 +13,7 @@
 use super::yara::*;
 use crate::composite_rules::context::EvaluationContext;
 use crate::composite_rules::evaluators::ContentLocationParams;
-use crate::composite_rules::types::{FileType, Platform};
+use crate::composite_rules::types::{Arch, FileType, Platform};
 use crate::types::{AnalysisReport, TargetInfo};
 use std::sync::{Arc, OnceLock};
 
@@ -24,6 +24,8 @@ fn create_test_context(report: AnalysisReport, binary_data: Vec<u8>) -> Evaluati
         binary_data: Box::leak(binary_data.into_boxed_slice()),
         file_type: FileType::All,
         platforms: vec![Platform::All],
+        arch: vec![Arch::All],
+        arch_ranges: None,
         additional_findings: None,
         cached_ast: None,
         finding_id_index: None,

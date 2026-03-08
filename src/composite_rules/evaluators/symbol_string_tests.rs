@@ -6,7 +6,7 @@
 use super::*;
 use crate::composite_rules::condition::NotException;
 use crate::composite_rules::context::{EvaluationContext, StringParams};
-use crate::composite_rules::types::{FileType, Platform};
+use crate::composite_rules::types::{Arch, FileType, Platform};
 use crate::types::{AnalysisReport, Export, Function, Import, StringInfo, StringType, TargetInfo};
 use std::sync::OnceLock;
 
@@ -27,6 +27,8 @@ fn create_test_context<'a>(report: &'a AnalysisReport, data: &'a [u8]) -> Evalua
         binary_data: data,
         file_type: FileType::Elf,
         platforms: vec![Platform::Linux],
+        arch: vec![Arch::All],
+        arch_ranges: None,
         additional_findings: None,
         cached_ast: None,
         finding_id_index: None,
@@ -365,6 +367,7 @@ fn test_eval_string_exact_match() {
         offset_range: None,
         section_offset: None,
         section_offset_range: None,
+        arch_clamp: None,
     };
 
     let result = eval_string(&params, None, &ctx);
@@ -401,6 +404,7 @@ fn test_eval_string_substr_match() {
         offset_range: None,
         section_offset: None,
         section_offset_range: None,
+        arch_clamp: None,
     };
 
     let result = eval_string(&params, None, &ctx);
@@ -438,6 +442,7 @@ fn test_eval_string_regex_match() {
         offset_range: None,
         section_offset: None,
         section_offset_range: None,
+        arch_clamp: None,
     };
 
     let result = eval_string(&params, None, &ctx);
@@ -473,6 +478,7 @@ fn test_eval_string_case_insensitive() {
         offset_range: None,
         section_offset: None,
         section_offset_range: None,
+        arch_clamp: None,
     };
 
     let result = eval_string(&params, None, &ctx);
@@ -531,6 +537,7 @@ fn test_eval_string_not_exception() {
         offset_range: None,
         section_offset: None,
         section_offset_range: None,
+        arch_clamp: None,
     };
 
     let result = eval_string(&params, Some(&not_exceptions), &ctx);
@@ -563,6 +570,7 @@ fn test_eval_string_in_imports() {
         offset_range: None,
         section_offset: None,
         section_offset_range: None,
+        arch_clamp: None,
     };
 
     let result = eval_string(&params, None, &ctx);
@@ -1382,6 +1390,7 @@ fn test_eval_string_match_count_exceeds_evidence_cap() {
         offset_range: None,
         section_offset: None,
         section_offset_range: None,
+        arch_clamp: None,
     };
 
     let result = eval_string(&params, None, &ctx);
@@ -1613,6 +1622,7 @@ fn test_eval_string_external_ip_filters_private() {
         offset_range: None,
         section_offset: None,
         section_offset_range: None,
+        arch_clamp: None,
     };
 
     let result = eval_string(&params, None, &ctx);
@@ -1728,6 +1738,7 @@ fn test_eval_string_offset_skips_imports() {
         offset_range: None,
         section_offset: None,
         section_offset_range: None,
+        arch_clamp: None,
     };
     let result = eval_string(&params_with_offset, None, &ctx);
     assert!(result.matched, "String at offset 0x1000 should match");
@@ -1751,6 +1762,7 @@ fn test_eval_string_offset_skips_imports() {
         offset_range: None,
         section_offset: None,
         section_offset_range: None,
+        arch_clamp: None,
     };
     let result = eval_string(&params_no_offset, None, &ctx);
     assert!(result.matched);
@@ -1805,6 +1817,7 @@ fn test_eval_string_word_boundary() {
         offset_range: None,
         section_offset: None,
         section_offset_range: None,
+        arch_clamp: None,
     };
 
     let result = eval_string(&params, None, &ctx);
@@ -2012,6 +2025,7 @@ fn test_eval_string_section_offset_with_section_map() {
         offset_range: None,
         section_offset: None,
         section_offset_range: Some((0, Some(0x200))),
+        arch_clamp: None,
     };
     let result = eval_string(&params, None, &ctx);
     assert!(
@@ -2035,6 +2049,7 @@ fn test_eval_string_section_offset_with_section_map() {
         offset_range: None,
         section_offset: None,
         section_offset_range: Some((0, Some(0x100))),
+        arch_clamp: None,
     };
     let result2 = eval_string(&params2, None, &ctx);
     assert!(
@@ -2056,6 +2071,7 @@ fn test_eval_string_section_offset_with_section_map() {
         offset_range: None,
         section_offset: None,
         section_offset_range: Some((0, Some(0x1000))),
+        arch_clamp: None,
     };
     let result3 = eval_string(&params3, None, &ctx);
     assert!(
@@ -2189,6 +2205,7 @@ fn test_eval_string_offset_range_filters() {
         offset_range: Some((0, Some(200))),
         section_offset: None,
         section_offset_range: None,
+        arch_clamp: None,
     };
     let result = eval_string(&params, None, &ctx);
     assert!(result.matched);
@@ -2211,6 +2228,7 @@ fn test_eval_string_offset_range_filters() {
         offset_range: Some((4000, Some(6000))),
         section_offset: None,
         section_offset_range: None,
+        arch_clamp: None,
     };
     let result2 = eval_string(&params2, None, &ctx);
     assert!(result2.matched);

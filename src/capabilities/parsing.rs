@@ -6,6 +6,7 @@
 //! - Parsing string fields into typed enums (FileType, Platform, Criticality)
 //! - Supporting the "none" keyword to explicitly unset defaults
 
+use crate::composite_rules::types::Arch;
 use crate::composite_rules::{CompositeTrait, FileType as RuleFileType, Platform, TraitDefinition};
 use crate::types::Criticality;
 use std::collections::HashSet;
@@ -72,6 +73,11 @@ pub(crate) fn apply_trait_defaults(
     let platforms = apply_vec_default(raw.platforms, &defaults.platforms)
         .map(|plats| parse_platforms(&plats))
         .unwrap_or_else(|| vec![Platform::All]);
+
+    // Parse arch: use trait-specific if present (unless "none"), else defaults, else [All]
+    let arch = apply_vec_default(raw.arch, &defaults.arch)
+        .map(|archs| parse_arch(&archs))
+        .unwrap_or_else(|| vec![Arch::All]);
 
     // Parse criticality: "none" means baseline
     let mut criticality = match &raw.crit {
@@ -181,6 +187,7 @@ pub(crate) fn apply_trait_defaults(
         mbc: apply_string_default(raw.mbc, &defaults.mbc),
         attack: apply_string_default(raw.attack, &defaults.attack),
         platforms,
+        arch,
         r#for: file_types,
         r#if: condition,
         size_min: raw.size_min,
@@ -384,6 +391,11 @@ pub(crate) fn parse_platforms(platforms: &[String]) -> Vec<Platform> {
         .collect()
 }
 
+/// Parse architecture strings into Arch enum
+pub(crate) fn parse_arch(archs: &[String]) -> Vec<Arch> {
+    archs.iter().map(|a| Arch::from_str(a)).collect()
+}
+
 /// Parse criticality string into Criticality enum
 /// Returns an error for invalid criticality values instead of silently defaulting
 pub(crate) fn parse_criticality(s: &str) -> Result<Criticality, String> {
@@ -417,6 +429,11 @@ pub(crate) fn apply_composite_defaults(
     let platforms = apply_vec_default(raw.platforms, &defaults.platforms)
         .map(|plats| parse_platforms(&plats))
         .unwrap_or_else(|| vec![Platform::All]);
+
+    // Parse arch: use rule-specific if present (unless "none"), else defaults, else [All]
+    let arch = apply_vec_default(raw.arch, &defaults.arch)
+        .map(|archs| parse_arch(&archs))
+        .unwrap_or_else(|| vec![Arch::All]);
 
     // Parse criticality: "none" means baseline
     let criticality = match &raw.crit {
@@ -473,6 +490,7 @@ pub(crate) fn apply_composite_defaults(
         mbc: apply_string_default(raw.mbc, &defaults.mbc),
         attack: apply_string_default(raw.attack, &defaults.attack),
         platforms,
+        arch,
         r#for: file_types,
         size_min: raw.size_min,
         size_max: raw.size_max,
@@ -1034,6 +1052,7 @@ mod tests {
             mbc: None,
             attack: None,
             platforms: None,
+            arch: None,
             file_types,
             size_min: None,
             size_max: None,

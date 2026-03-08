@@ -406,7 +406,8 @@ fn analyze_file_with_resources<P: AsRef<Path>>(
                 .with_preextracted_strings(preextracted_strings.clone());
             let range = analyzer.preferred_arch_range(file_data);
             let arch_data = &file_data[range.clone()];
-            let is_fat = analyzer.all_arch_ranges(file_data).len() > 1;
+            let labeled_ranges = analyzer.labeled_arch_ranges(file_data);
+            let is_fat = labeled_ranges.len() > 1;
             let eval_data = if is_fat { file_data } else { arch_data };
             let engine = yara_engine;
             let file_types: &[&str] = &["macho", "dylib", "kext"];
@@ -449,12 +450,18 @@ fn analyze_file_with_resources<P: AsRef<Path>>(
             // Process YARA results and evaluate with inline evidence
             let inline_yara =
                 process_yara_result(&mut report, yara_result, engine.map(AsRef::as_ref));
+            let fat_arch_ranges = if is_fat {
+                Some(labeled_ranges)
+            } else {
+                None
+            };
             capability_mapper.evaluate_and_merge_findings_with_precomputed(
                 &mut report,
                 eval_data,
                 None,
                 Some(&inline_yara),
                 Some(raw_regex),
+                fat_arch_ranges,
             );
             Ok(report)
         }
@@ -493,6 +500,7 @@ fn analyze_file_with_resources<P: AsRef<Path>>(
                 None,
                 Some(&inline_yara),
                 Some(raw_regex),
+                None,
             );
             path_mapper::analyze_and_link_paths(&mut report);
             env_mapper::analyze_and_link_env_vars(&mut report);
@@ -537,6 +545,7 @@ fn analyze_file_with_resources<P: AsRef<Path>>(
                 None,
                 Some(&inline_yara),
                 Some(raw_regex),
+                None,
             );
             Ok(report)
         }

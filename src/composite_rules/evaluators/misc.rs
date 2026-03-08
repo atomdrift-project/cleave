@@ -267,7 +267,7 @@ pub(crate) fn eval_basename<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::composite_rules::types::{FileType, Platform};
+    use crate::composite_rules::types::{Arch, FileType, Platform};
     use crate::types::{AnalysisReport, TargetInfo};
     use std::sync::OnceLock;
 
@@ -280,6 +280,8 @@ mod tests {
             binary_data: data,
             file_type: FileType::Elf,
             platforms: vec![Platform::Linux],
+            arch: vec![Arch::All],
+            arch_ranges: None,
             additional_findings: None,
             cached_ast: None,
             finding_id_index: None,

@@ -5,7 +5,7 @@
 
 #[cfg(test)]
 mod python_aes_import_tests {
-    use crate::composite_rules::{Condition, TraitDefinition};
+    use crate::composite_rules::{Arch, Condition, TraitDefinition};
     use crate::types::Criticality;
 
     #[test]
@@ -54,6 +54,7 @@ mod python_aes_import_tests {
             mbc: None,
             attack: None,
             platforms: vec![],
+            arch: vec![Arch::All],
             r#for: vec![],
             r#if: Condition::Raw {
                 exact: None,

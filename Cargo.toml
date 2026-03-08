@@ -85,7 +85,7 @@ scpt = { path = "crates/scpt" }
 malecule = { path = "crates/malecule" }
 
 # YARA pattern matching
-yara-x = { version = "1.13", features = ["rules-profiling", "native-code-serialization"] }
+yara-x = { version = "1.14", features = ["rules-profiling", "native-code-serialization"] }
 
 # Tree-sitter parsers
 tree-sitter = "0.26"
@@ -172,7 +172,7 @@ parking_lot = "0.12"  # For efficient mutexes in memory tracking
 memmap2 = "0.9"  # Memory-mapped file I/O for large files
 smallvec = "1.15"  # Stack-allocated vectors for small collections
 encoding_rs = "0.8"  # Character encoding detection and conversion
-stng = { git = "https://codeberg.org/atomdrift/stng", rev = "e9bceb3f2e0d43132196fedec07b9b23ab315c7a" }
+stng = { git = "https://codeberg.org/atomdrift/stng", rev = "7a62958ac54f29c156a0c62f142ad7e4b1051a64" }
 
 # Logging (tracing is the modern standard, more powerful than log+env_logger)
 tracing = "0.1"

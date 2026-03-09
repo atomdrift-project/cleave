@@ -207,12 +207,9 @@ pub(crate) fn inject_condition_filetype_hints(source: &str) -> String {
 
                 // Find the matching closing brace (brace-depth tracking)
                 let body_start = brace_start + 1;
-                let body_end = match find_matching_brace(bytes, brace_start) {
-                    Some(e) => e,
-                    None => {
-                        result.push_str(&source[rule_kw..]);
-                        break;
-                    }
+                let Some(body_end) = find_matching_brace(bytes, brace_start) else {
+                    result.push_str(&source[rule_kw..]);
+                    break;
                 };
 
                 let header = &source[rule_kw..=brace_start];
@@ -267,7 +264,7 @@ fn source_has_magic_condition(source: &str) -> bool {
 }
 
 /// Check if `source` contains a YARA module reference like `pe.` at a word boundary.
-fn has_module_reference(lower_source: &str, module_prefix: &str) -> bool {
+pub(crate) fn has_module_reference(lower_source: &str, module_prefix: &str) -> bool {
     let mut pos = 0;
     while let Some(idx) = lower_source[pos..].find(module_prefix) {
         let abs = pos + idx;
@@ -282,7 +279,7 @@ fn has_module_reference(lower_source: &str, module_prefix: &str) -> bool {
 }
 
 /// Infer the filetype from magic patterns and YARA module references in a rule's body.
-fn filetype_from_magic(body: &str) -> Option<&'static str> {
+pub(crate) fn filetype_from_magic(body: &str) -> Option<&'static str> {
     let lower = body.to_lowercase();
 
     // PE: MZ magic (little-endian and big-endian) or pe.* module

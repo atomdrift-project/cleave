@@ -80,7 +80,7 @@ pub(crate) fn simple_rule_to_composite_rule(
             &rule
                 .platforms
                 .iter()
-                .map(|s| s.to_string())
+                .map(std::string::ToString::to_string)
                 .collect::<Vec<_>>(),
             warnings,
         );

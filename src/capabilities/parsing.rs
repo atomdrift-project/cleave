@@ -314,7 +314,7 @@ pub(crate) fn parse_file_types(types: &[String], warnings: &mut Vec<String>) -> 
                     RuleFileType::Html,
                 ],
                 "media" => vec![RuleFileType::Jpeg, RuleFileType::Png],
-                "data" => vec![RuleFileType::Ipa],
+                "data" | "ipa" => vec![RuleFileType::Ipa],
                 // Binary formats
                 "elf" => vec![RuleFileType::Elf],
                 "macho" => vec![RuleFileType::Macho],
@@ -358,8 +358,6 @@ pub(crate) fn parse_file_types(types: &[String], warnings: &mut Vec<String>) -> 
                 // Logical types with hyphens
                 "chrome-manifest" | "manifest.json" => vec![RuleFileType::ChromeManifest],
                 "github-actions" => vec![RuleFileType::GithubActions],
-                // Archive/installer formats
-                "ipa" => vec![RuleFileType::Ipa],
                 // Generic formats
                 "text" | "txt" => vec![RuleFileType::Text],
                 // Image formats

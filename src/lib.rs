@@ -887,7 +887,7 @@ pub enum ScanEvent {
         /// Path to the analyzed file.
         path: std::path::PathBuf,
         /// Analysis result, or an error if analysis failed.
-        result: Result<AnalysisReport>,
+        result: Box<Result<AnalysisReport>>,
     },
 }
 
@@ -995,7 +995,7 @@ where
         }
         callback(ScanEvent::File {
             path: file_path.clone(),
-            result,
+            result: Box::new(result),
         });
     });
 
@@ -1013,6 +1013,7 @@ where
 /// if the report has no significant findings.
 ///
 /// This mirrors the filtering applied by cleave's own terminal output.
+#[must_use]
 pub fn formula_from_report(report: &AnalysisReport) -> String {
     let findings: &[types::traits_findings::Finding] = if !report.findings.is_empty() {
         &report.findings

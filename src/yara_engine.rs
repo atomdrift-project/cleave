@@ -19,6 +19,19 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
 
+/// Maximum pattern match ranges to collect per pattern.
+/// Patterns matching more than this are truncated to prevent memory exhaustion.
+const MAX_PATTERN_MATCHES: usize = 100_000;
+
+/// Raw match data collected from a YARA scan before processing into `YaraMatch`.
+struct RawRule {
+    name: String,
+    namespace: String,
+    tags: Vec<String>,
+    metadata: Vec<(String, String)>,
+    patterns: Vec<(String, Vec<(usize, usize)>)>,
+}
+
 /// File-type tier for pre-classified YARA rule sets.
 ///
 /// Rules are compiled into separate `yara_x::Rules` per tier so each scan
@@ -108,6 +121,67 @@ pub(crate) struct YaraEngine {
     compiled_inline_namespaces: Vec<String>,
 }
 
+impl YaraTier {
+    /// Classify a single YARA rule into a tier based on its metadata, condition,
+    /// module references, magic bytes, and rule name.
+    fn classify_rule(rule_name: &str, rule_body: &str, namespace: &str) -> Self {
+        let lower = rule_body.to_lowercase();
+
+        // 1. Explicit filetype metadata
+        for line in lower.lines() {
+            let trimmed = line.trim();
+            if (trimmed.starts_with("filetype") || trimmed.starts_with("filetypes"))
+                && trimmed.contains('=')
+            {
+                if let Some(val) = trimmed.split('=').nth(1) {
+                    let val = val.trim().trim_matches('"').trim_matches('\'');
+                    let types: Vec<&str> = val.split(',').map(str::trim).collect();
+                    let tier = Self::from_filetypes(&types);
+                    if tier != Self::Generic {
+                        return tier;
+                    }
+                }
+            }
+        }
+
+        // 2. Module references in condition
+        if crate::third_party_yara::has_module_reference(&lower, "pe.")
+            || crate::third_party_yara::has_module_reference(&lower, "dotnet.")
+        {
+            return Self::Pe;
+        }
+        if crate::third_party_yara::has_module_reference(&lower, "elf.") {
+            return Self::Elf;
+        }
+        if crate::third_party_yara::has_module_reference(&lower, "macho.") {
+            return Self::MachO;
+        }
+
+        // 3. Magic byte patterns
+        if let Some(ft) = crate::third_party_yara::filetype_from_magic(&lower) {
+            let tier = Self::from_filetypes(&[ft]);
+            if tier != Self::Generic {
+                return tier;
+            }
+        }
+
+        // 4. Infer from rule name
+        let inferred = crate::third_party_yara::infer_filetypes(rule_name, None);
+        if !inferred.is_empty() {
+            return Self::from_filetypes(&inferred);
+        }
+
+        // 5. Infer from namespace
+        let ns_inferred =
+            crate::third_party_yara::infer_filetypes_from_namespace(namespace, None);
+        if !ns_inferred.is_empty() {
+            return Self::from_filetypes(&ns_inferred);
+        }
+
+        Self::Generic
+    }
+}
+
 impl YaraEngine {
     /// Create a new YARA engine without rules loaded
     #[must_use]
@@ -139,7 +213,13 @@ impl YaraEngine {
     }
 
     /// Load all YARA rules (built-in from traits/ + optionally third-party from third_party/)
-    /// Uses cache if available and valid
+    /// Uses cache if available and valid.
+    ///
+    /// Rules are compiled into separate per-tier `yara_x::Rules` sets:
+    /// - **Generic**: built-in rules + inline trait YARA + uncategorized third-party
+    /// - **Pe/Elf/MachO/Script/Doc**: third-party rules classified by file type
+    ///
+    /// Each scan runs two passes: the tier matching the target + Generic.
     ///
     /// Environment variables:
     /// - `CLEAVE_SKIP_YARA=1`: Skip YARA entirely (for fast unit tests)
@@ -167,7 +247,6 @@ impl YaraEngine {
                 match self.load_from_cache(&cache_path) {
                     Ok((builtin, third_party)) => {
                         tracing::info!("Loaded YARA rules from cache");
-                        // No eprintln needed - rule count is shown in header banner
                         return (builtin, third_party);
                     }
                     Err(e) => {
@@ -180,27 +259,28 @@ impl YaraEngine {
             }
         }
 
-        // Cache miss or invalid - compile from source
-        tracing::info!("Compiling YARA rules from source");
+        // Cache miss or invalid - compile from source into per-tier rule sets
+        tracing::info!("Compiling YARA rules from source (tiered)");
 
         let traits_dir = crate::cache::traits_path();
         let third_party_dir = crate::cache::third_party_path();
 
-        let mut compiler = yara_x::Compiler::new();
+        // Generic tier gets built-in + inline rules (always scanned)
+        let mut generic_compiler = yara_x::Compiler::new();
         let mut builtin_count = 0;
         let mut third_party_count = 0;
         let mut inline_count = 0;
 
-        // 0. Load inline YARA from trait YAML files
+        // 0. Load inline YARA from trait YAML files → Generic
         if traits_dir.exists() {
             self.compiled_inline_namespaces =
-                Self::load_inline_trait_rules(&mut compiler, &traits_dir);
+                Self::load_inline_trait_rules(&mut generic_compiler, &traits_dir);
             inline_count = self.compiled_inline_namespaces.len();
         }
 
-        // 1. Load built-in YARA rules from traits directory
+        // 1. Load built-in YARA rules → Generic
         if traits_dir.exists() {
-            match self.load_rules_into_compiler(&mut compiler, &traits_dir, "traits") {
+            match self.load_rules_into_compiler(&mut generic_compiler, &traits_dir, "traits") {
                 Ok(count) => builtin_count = count,
                 Err(e) => {
                     let err_str = e.to_string();
@@ -211,9 +291,14 @@ impl YaraEngine {
             }
         }
 
-        // 2. Optionally load third-party YARA rules
+        // 2. Third-party rules → classified into per-tier compilers
+        let mut tier_compilers: HashMap<YaraTier, yara_x::Compiler<'_>> = HashMap::new();
         if enable_third_party && third_party_dir.exists() {
-            third_party_count = self.load_third_party_rules(&mut compiler, &third_party_dir);
+            third_party_count = self.load_third_party_rules_tiered(
+                &mut generic_compiler,
+                &mut tier_compilers,
+                &third_party_dir,
+            );
         }
 
         let total_count = builtin_count + third_party_count + inline_count;
@@ -222,25 +307,35 @@ impl YaraEngine {
             return (0, 0);
         }
 
-        // Compile all rules (JIT optimization)
-        let rules = compiler.build();
+        // Build all tier compilers into Rules
+        self.tiers
+            .insert(YaraTier::Generic, generic_compiler.build());
 
-        // Count actual compiled rules (not source files)
-        let actual_rule_count = rules.iter().count();
+        for (tier, compiler) in tier_compilers {
+            let rules = compiler.build();
+            let count = rules.iter().count();
+            if count > 0 {
+                tracing::info!("Tier {:?}: {} compiled rules", tier, count);
+                self.tiers.insert(tier, rules);
+            }
+        }
 
-        self.rules = Some(rules);
+        // Log tier distribution
+        for tier in YaraTier::ALL {
+            if let Some(rules) = self.tiers.get(tier) {
+                tracing::info!(
+                    "Tier {}: {} rules",
+                    tier.label(),
+                    rules.iter().count()
+                );
+            }
+        }
 
         // Save to cache for next time
         if let Ok(cache_path) = crate::cache::yara_cache_path(enable_third_party) {
-            if let Err(e) = self.save_to_cache(
-                &cache_path,
-                builtin_count,
-                third_party_count,
-                actual_rule_count,
-            ) {
+            if let Err(e) = self.save_to_cache(&cache_path, builtin_count, third_party_count) {
                 eprintln!("⚠️  Failed to save cache: {}", e);
             } else {
-                // Clean up old caches silently
                 let _ = crate::cache::cleanup_old_caches(&cache_path);
             }
         }
@@ -329,6 +424,10 @@ impl YaraEngine {
 
     /// Scan binary data and split results into regular YARA matches and inline trait results.
     ///
+    /// Performs a two-pass scan:
+    /// 1. **Generic tier** — always runs (built-in rules, inline trait YARA, uncategorized third-party)
+    /// 2. **File-type tier** — runs only the rules matching the target file type (PE, ELF, etc.)
+    ///
     /// Regular matches (non-`inline.*` namespaces) are returned as `Vec<YaraMatch>` for
     /// inclusion in the analysis report. Inline matches are returned as a
     /// `HashMap<String, Vec<Evidence>>` keyed by namespace (`"inline.{trait_id}"`), for use
@@ -338,33 +437,88 @@ impl YaraEngine {
         data: &[u8],
         file_type_filter: Option<&[&str]>,
     ) -> Result<(Vec<YaraMatch>, HashMap<String, Vec<Evidence>>)> {
-        use std::time::Duration;
+        if self.tiers.is_empty() {
+            anyhow::bail!("No YARA rules loaded");
+        }
 
-        let rules = self.rules.as_ref().context("No YARA rules loaded")?;
+        // Determine which tiers to scan
+        let target_tier = YaraTier::from_filter(file_type_filter);
+        let tiers_to_scan: Vec<YaraTier> = if target_tier == YaraTier::Generic {
+            // Only generic needed
+            vec![YaraTier::Generic]
+        } else {
+            // Two-pass: specific tier + generic
+            let mut v = vec![target_tier];
+            if self.tiers.contains_key(&YaraTier::Generic) {
+                v.push(YaraTier::Generic);
+            }
+            v
+        };
+
         let inline_ns_set: std::collections::HashSet<&str> = self
             .compiled_inline_namespaces
             .iter()
             .map(String::as_str)
             .collect();
 
+        let mut yara_matches = Vec::new();
+        let mut inline_results: HashMap<String, Vec<Evidence>> = HashMap::new();
+
+        for tier in &tiers_to_scan {
+            let Some(rules) = self.tiers.get(tier) else {
+                continue;
+            };
+            let raw_rules = Self::run_scanner(rules, data)?;
+
+            // Report slowest rules only for the first tier
+            // (skipped for now to avoid holding scanner across iterations)
+
+            for raw in raw_rules {
+                if inline_ns_set.contains(raw.namespace.as_str()) {
+                    Self::collect_inline_evidence(&raw, data, &mut inline_results);
+                    continue;
+                }
+
+                let yara_match = self.build_yara_match(
+                    raw.name,
+                    raw.namespace,
+                    &raw.tags,
+                    &raw.metadata,
+                    &raw.patterns,
+                    data,
+                    file_type_filter,
+                );
+                if let Some(m) = yara_match {
+                    yara_matches.push(m);
+                }
+            }
+        }
+
+        // Deduplicate evidence in inline results
+        let inline_results: HashMap<String, Vec<Evidence>> = inline_results
+            .into_iter()
+            .map(|(k, v)| (k, deduplicate_evidence(v)))
+            .collect();
+
+        tracing::debug!(
+            "YARA scan: {} tier(s), {} matches, {} inline traits",
+            tiers_to_scan.len(),
+            yara_matches.len(),
+            inline_results.len(),
+        );
+
+        Ok((yara_matches, inline_results))
+    }
+
+    /// Run a YARA scanner against data and collect raw match results.
+    fn run_scanner(rules: &yara_x::Rules, data: &[u8]) -> Result<Vec<RawRule>> {
+        use std::time::Duration;
+
         let mut scanner = yara_x::Scanner::new(rules);
         scanner.set_timeout(Duration::from_secs(30));
         let scan_results = scanner
             .scan(data)
             .map_err(|e| anyhow::anyhow!("YARA scan failed: {:?}", e))?;
-
-        struct RawRule {
-            name: String,
-            namespace: String,
-            tags: Vec<String>,
-            metadata: Vec<(String, String)>,
-            patterns: Vec<(String, Vec<(usize, usize)>)>,
-        }
-
-        /// Maximum pattern match ranges to collect per pattern.
-        /// Patterns matching more than this are truncated to prevent memory exhaustion.
-        /// Set high enough to allow accurate counts and density measurements.
-        const MAX_PATTERN_MATCHES: usize = 100_000;
 
         let raw_rules: Vec<RawRule> = scan_results
             .matching_rules()
@@ -416,82 +570,40 @@ impl YaraEngine {
             })
             .collect();
 
-        // scan_results is dropped here, releasing the scanner borrow
+        Ok(raw_rules)
+    }
 
-        // Report top 20 slowest rules
-        let slowest = scanner.slowest_rules(20);
-        if !slowest.is_empty() {
-            eprintln!("\n⏱️  Top 20 slowest YARA rules:");
-            for (i, profiling_data) in slowest.iter().enumerate() {
-                let total =
-                    profiling_data.condition_exec_time + profiling_data.pattern_matching_time;
-                let trait_id = crate::third_party_yara::derive_trait_id(
-                    profiling_data.namespace,
-                    profiling_data.rule,
-                    None,
-                );
-                eprintln!("  {}. {:>6}ms  {}", i + 1, total.as_millis(), trait_id);
-            }
-            eprintln!();
-        }
-
-        let mut yara_matches = Vec::new();
-        let mut inline_results: HashMap<String, Vec<Evidence>> = HashMap::new();
-
-        for raw in raw_rules {
-            // Inline namespace: collect evidence for trait evaluation, not YARA output
-            if inline_ns_set.contains(raw.namespace.as_str()) {
-                let evidence: Vec<Evidence> = raw
-                    .patterns
-                    .iter()
-                    .flat_map(|(_pattern_id, ranges)| {
-                        ranges.iter().map(|(start, end)| {
-                            let match_len = end - start;
-                            let value = if match_len <= 100 {
-                                String::from_utf8_lossy(&data[*start..*end]).to_string()
-                            } else {
-                                format!("<{} bytes>", match_len)
-                            };
-                            Evidence {
-                                method: "yara".to_string(),
-                                source: "yara-x".to_string(),
-                                value,
-                                location: Some(format!("offset:0x{:x}", start)),
-                                ..Default::default()
-                            }
-                        })
-                    })
-                    .take(MAX_EVIDENCE_PER_TRAIT)
-                    .collect();
-                // Even if empty (condition match without string patterns), record the hit
-                let entry = inline_results.entry(raw.namespace).or_default();
-                let remaining = MAX_EVIDENCE_PER_TRAIT.saturating_sub(entry.len());
-                entry.extend(evidence.into_iter().take(remaining));
-                continue;
-            }
-
-            // Regular match: build YaraMatch
-            let yara_match = self.build_yara_match(
-                raw.name,
-                raw.namespace,
-                &raw.tags,
-                &raw.metadata,
-                &raw.patterns,
-                data,
-                file_type_filter,
-            );
-            if let Some(m) = yara_match {
-                yara_matches.push(m);
-            }
-        }
-
-        // Deduplicate evidence in inline results
-        let inline_results: HashMap<String, Vec<Evidence>> = inline_results
-            .into_iter()
-            .map(|(k, v)| (k, deduplicate_evidence(v)))
+    /// Collect inline evidence from a raw rule match into the results map.
+    fn collect_inline_evidence(
+        raw: &RawRule,
+        data: &[u8],
+        inline_results: &mut HashMap<String, Vec<Evidence>>,
+    ) {
+        let evidence: Vec<Evidence> = raw
+            .patterns
+            .iter()
+            .flat_map(|(_pattern_id, ranges)| {
+                ranges.iter().map(|(start, end)| {
+                    let match_len = end - start;
+                    let value = if match_len <= 100 {
+                        String::from_utf8_lossy(&data[*start..*end]).to_string()
+                    } else {
+                        format!("<{} bytes>", match_len)
+                    };
+                    Evidence {
+                        method: "yara".to_string(),
+                        source: "yara-x".to_string(),
+                        value,
+                        location: Some(format!("offset:0x{:x}", start)),
+                        ..Default::default()
+                    }
+                })
+            })
+            .take(MAX_EVIDENCE_PER_TRAIT)
             .collect();
-
-        Ok((yara_matches, inline_results))
+        let entry = inline_results.entry(raw.namespace.clone()).or_default();
+        let remaining = MAX_EVIDENCE_PER_TRAIT.saturating_sub(entry.len());
+        entry.extend(evidence.into_iter().take(remaining));
     }
 
     /// Load YARA rules from a directory into a compiler, skipping individual files that fail to compile
@@ -573,16 +685,23 @@ impl YaraEngine {
         Ok(count)
     }
 
-    /// Load third-party YARA rules with per-file namespaces (3p.{vendor}.{subdir}.{filename})
-    fn load_third_party_rules<'a>(
+    /// Load third-party YARA rules, classifying each rule into a tier.
+    ///
+    /// Small files (single-rule or few rules from one vendor) are classified as a whole.
+    /// Large monolithic files (like YARAForge's single .yar with ~11K rules) are split
+    /// per-rule so each rule goes to the correct tier.
+    ///
+    /// Generic-tier rules go into `generic_compiler`; all others go into `tier_compilers`.
+    fn load_third_party_rules_tiered<'a>(
         &mut self,
-        compiler: &mut yara_x::Compiler<'a>,
+        generic_compiler: &mut yara_x::Compiler<'a>,
+        tier_compilers: &mut HashMap<YaraTier, yara_x::Compiler<'a>>,
         dir: &Path,
     ) -> usize {
-        // Get disabled rules from config
+        use regex::Regex;
+
         let disabled_rules = crate::third_party_config::disabled_rule_ids();
 
-        // Collect all YARA files
         let rule_files: Vec<PathBuf> = WalkDir::new(dir)
             .follow_links(false)
             .into_iter()
@@ -611,9 +730,16 @@ impl YaraEngine {
         let mut failed = 0;
         let mut vt_skipped = 0;
         let mut disabled_count = 0;
+        let mut tier_counts: HashMap<YaraTier, usize> = HashMap::new();
+
+        // Threshold for splitting a file into per-rule tier classification.
+        // Files with more rules than this are split; smaller files classified as a whole.
+        const MONOLITHIC_THRESHOLD: usize = 100;
+
+        let rule_start_re =
+            Regex::new(r"(?m)^(\s*)((?:private\s+|global\s+)*)rule\s+(\w+)").unwrap();
 
         for (path, bytes) in sources {
-            // Create unique namespace per file: 3p.{vendor}.{subdir}.{filename}
             let namespace = path
                 .strip_prefix(dir)
                 .ok()
@@ -623,10 +749,8 @@ impl YaraEngine {
                         .split(std::path::MAIN_SEPARATOR)
                         .filter(|p| !p.is_empty())
                         .collect();
-                    // Include filename (without extension) in namespace
                     let mut ns_parts = parts.to_vec();
                     if let Some(last) = ns_parts.last_mut() {
-                        // Remove .yar/.yara extension
                         *last = last.trim_end_matches(".yar").trim_end_matches(".yara");
                     }
                     format!("3p.{}", ns_parts.join("."))
@@ -635,9 +759,7 @@ impl YaraEngine {
 
             let raw_source = String::from_utf8_lossy(&bytes);
 
-            // Strip individual rules that reference the VirusTotal module (requires VT context).
-            // Previously this skipped entire files, which incorrectly dropped the whole
-            // YARAForge monolithic collection when even one rule used `vt.`.
+            // Strip individual rules referencing VirusTotal module
             let raw_source = if raw_source.contains("vt.") {
                 let (filtered, count) = Self::filter_vt_rules(&raw_source);
                 if count > 0 {
@@ -657,29 +779,80 @@ impl YaraEngine {
                 continue;
             }
 
-            // Inject filetype metadata inferred from magic byte conditions
-            // (e.g. uint16(0) == 0x5A4D → filetype = "pe") so compiled rules carry
-            // type-filter hints even when the author didn't add them explicitly.
+            // Inject filetype metadata from magic byte conditions
             let source = crate::third_party_yara::inject_condition_filetype_hints(&raw_source);
-            let source = source.as_str();
 
-            compiler.new_namespace(&namespace);
-
-            // Filter out disabled rules from the source
+            // Filter disabled rules
             let (filtered_source, removed) =
                 Self::filter_disabled_rules(&source, &namespace, &disabled_rules);
             disabled_count += removed;
 
             if filtered_source.trim().is_empty() {
-                // All rules in this file were disabled
                 continue;
             }
 
-            match compiler.add_source(filtered_source.as_bytes()) {
-                Ok(_) => total += 1,
-                Err(e) => {
-                    failed += 1;
-                    tracing::warn!("{}: {}", path.display(), e);
+            // Count rules to decide splitting strategy
+            let rule_count = rule_start_re.captures_iter(&filtered_source).count();
+
+            if rule_count > MONOLITHIC_THRESHOLD {
+                // Large monolithic file: split per-rule and classify each
+                let split_result = Self::split_monolithic_by_tier(
+                    &filtered_source,
+                    &namespace,
+                    &rule_start_re,
+                );
+                for (tier, tier_source) in split_result {
+                    let compiler = if tier == YaraTier::Generic {
+                        &mut *generic_compiler
+                    } else {
+                        tier_compilers
+                            .entry(tier)
+                            .or_default()
+                    };
+                    compiler.new_namespace(&namespace);
+                    match compiler.add_source(tier_source.as_bytes()) {
+                        Ok(_) => {
+                            total += 1;
+                            *tier_counts.entry(tier).or_insert(0) += 1;
+                        }
+                        Err(e) => {
+                            failed += 1;
+                            tracing::warn!("{} (tier {:?}): {}", path.display(), tier, e);
+                        }
+                    }
+                }
+            } else {
+                // Small file: classify as a whole based on first non-private rule
+                let tier = rule_start_re
+                    .captures_iter(&filtered_source)
+                    .find(|cap| {
+                        !cap.get(2)
+                            .map(|m| m.as_str().contains("private"))
+                            .unwrap_or(false)
+                    })
+                    .map(|cap| {
+                        let name = cap.get(3).unwrap().as_str();
+                        YaraTier::classify_rule(name, &filtered_source, &namespace)
+                    })
+                    .unwrap_or(YaraTier::Generic);
+
+                let compiler = if tier == YaraTier::Generic {
+                    &mut *generic_compiler
+                } else {
+                    tier_compilers
+                        .entry(tier)
+                        .or_default()
+                };
+                compiler.new_namespace(&namespace);
+                match compiler.add_source(filtered_source.as_bytes()) {
+                    Ok(_) => {
+                        total += 1;
+                        *tier_counts.entry(tier).or_insert(0) += 1;
+                    }
+                    Err(e) => {
+                        failed += 1;
+                        tracing::warn!("{}: {}", path.display(), e);
+                    }
                 }
             }
         }
@@ -694,11 +867,124 @@ impl YaraEngine {
             );
         }
         if failed > 0 {
-            tracing::warn!("{} third-party file(s) failed to compile", failed);
+            tracing::warn!("{} third-party file(s)/chunks failed to compile", failed);
+        }
+        for (tier, count) in &tier_counts {
+            tracing::info!("Third-party tier {:?}: {} source(s)", tier, count);
         }
 
-        tracing::debug!("Successfully added {} third-party YARA rule sources", total);
+        tracing::debug!(
+            "Successfully added {} third-party YARA source(s) across {} tier(s)",
+            total,
+            tier_counts.len().max(1),
+        );
         total
+    }
+
+    /// Split a large monolithic YARA source into per-tier chunks.
+    ///
+    /// Extracts import statements and private rules, then classifies each public rule.
+    /// Private rules are duplicated into every tier that has dependents (simplest approach
+    /// since there are typically <30 private rules).
+    fn split_monolithic_by_tier(
+        source: &str,
+        namespace: &str,
+        rule_re: &regex::Regex,
+    ) -> HashMap<YaraTier, String> {
+        // Extract imports from top of file
+        let mut imports = String::new();
+        for line in source.lines() {
+            let trimmed = line.trim();
+            if trimmed.starts_with("import ") {
+                imports.push_str(line);
+                imports.push('\n');
+            }
+            // Stop scanning for imports once we hit a rule
+            if trimmed.starts_with("rule ") || trimmed.starts_with("private rule") {
+                break;
+            }
+        }
+
+        // Parse rule boundaries
+        struct RuleInfo<'a> {
+            start: usize,
+            end: usize,
+            name: &'a str,
+            is_private: bool,
+        }
+
+        let mut rules: Vec<RuleInfo<'_>> = Vec::new();
+        for cap in rule_re.captures_iter(source) {
+            let name = cap.get(3).unwrap().as_str();
+            let start = cap.get(0).unwrap().start();
+            let is_private = cap
+                .get(2)
+                .map(|m| m.as_str().contains("private"))
+                .unwrap_or(false);
+            rules.push(RuleInfo {
+                start,
+                end: 0,
+                name,
+                is_private,
+            });
+        }
+
+        // Fill end positions
+        for i in 0..rules.len() {
+            rules[i].end = if i + 1 < rules.len() {
+                rules[i + 1].start
+            } else {
+                source.len()
+            };
+        }
+
+        // Collect private rules (included in every tier)
+        let private_chunk: String = rules
+            .iter()
+            .filter(|r| r.is_private)
+            .map(|r| &source[r.start..r.end])
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        // Classify each public rule
+        let mut tier_rules: HashMap<YaraTier, Vec<&str>> = HashMap::new();
+        for r in &rules {
+            if r.is_private {
+                continue;
+            }
+            let rule_text = &source[r.start..r.end];
+            let tier = YaraTier::classify_rule(r.name, rule_text, namespace);
+            tier_rules.entry(tier).or_default().push(rule_text);
+        }
+
+        // Build per-tier source strings
+        let mut result: HashMap<YaraTier, String> = HashMap::new();
+        for (tier, rule_texts) in tier_rules {
+            let mut s = String::with_capacity(imports.len() + private_chunk.len() + 4096);
+            s.push_str(&imports);
+            s.push('\n');
+            if !private_chunk.is_empty() {
+                s.push_str(&private_chunk);
+                s.push('\n');
+            }
+            for text in rule_texts {
+                s.push_str(text);
+            }
+            result.insert(tier, s);
+        }
+
+        tracing::info!(
+            "Split monolithic file ({} rules) into {} tier(s): {}",
+            rules.len(),
+            result.len(),
+            result
+                .keys()
+                .map(|t| t.label())
+                .collect::<Vec<_>>()
+                .join(", "),
+        );
+
+        result
     }
 
     /// Filter out disabled rules from YARA source.
@@ -927,7 +1213,9 @@ impl YaraEngine {
 
     /// Scan a file with loaded YARA rules
     pub(crate) fn scan_file(&self, file_path: &Path) -> Result<Vec<YaraMatch>> {
-        let _rules = self.rules.as_ref().context("No YARA rules loaded")?;
+        if self.tiers.is_empty() {
+            anyhow::bail!("No YARA rules loaded");
+        }
 
         let data =
             fs::read(file_path).context(format!("Failed to read file: {}", file_path.display()))?;
@@ -1164,7 +1452,7 @@ impl YaraEngine {
     /// Check if rules are loaded
     #[must_use]
     pub(crate) fn is_loaded(&self) -> bool {
-        self.rules.is_some()
+        !self.tiers.is_empty()
     }
 
     /// Map YARA match to capability evidence
@@ -1288,69 +1576,163 @@ impl YaraEngine {
         Ok((matches, findings))
     }
 
-    /// Save compiled YARA rules to cache using zero-copy format
+    /// Save compiled YARA rules to cache using per-tier serialization.
+    ///
+    /// Cache format v6: header + JSON manifest + per-tier serialized rules.
+    /// The manifest maps tier labels to (offset, length) pairs within the file.
     fn save_to_cache(
         &self,
         cache_path: &Path,
         builtin_count: usize,
         third_party_count: usize,
-        rule_count: usize,
     ) -> Result<()> {
         use std::io::Write;
 
-        let rules = self.rules.as_ref().context("No rules to cache")?;
-
-        // Serialize the rules using the YARA-X serialization
-        let rules_data = rules
-            .serialize()
-            .context("Failed to serialize YARA rules")?;
-
-        // Serialize namespaces as JSON (small, simple)
-        let namespaces_data =
-            serde_json::to_vec(&self.compiled_inline_namespaces).unwrap_or_default();
-
-        // Calculate rules offset (header + namespaces + padding to 8-byte alignment)
-        let unpadded_offset = CACHE_HEADER_SIZE + namespaces_data.len();
-        let rules_offset = (unpadded_offset + 7) & !7; // Align to 8 bytes
-        let padding_len = rules_offset - unpadded_offset;
-
-        // Build the cache file
-        let mut file = fs::File::create(cache_path).context("Failed to create cache file")?;
-
-        // Write header (v5 format)
-        file.write_all(CACHE_MAGIC)?;
-        file.write_all(&CACHE_VERSION.to_le_bytes())?;
-        file.write_all(&(builtin_count as u64).to_le_bytes())?;
-        file.write_all(&(third_party_count as u64).to_le_bytes())?;
-        file.write_all(&(rule_count as u64).to_le_bytes())?;
-        file.write_all(&(namespaces_data.len() as u64).to_le_bytes())?;
-        file.write_all(&(rules_offset as u64).to_le_bytes())?;
-        file.write_all(&(rules_data.len() as u64).to_le_bytes())?;
-
-        // Write namespaces
-        file.write_all(&namespaces_data)?;
-
-        // Write padding
-        if padding_len > 0 {
-            file.write_all(&vec![0u8; padding_len])?;
+        if self.tiers.is_empty() {
+            anyhow::bail!("No rules to cache");
         }
 
-        // Write rules data
-        file.write_all(&rules_data)?;
+        // Serialize each tier's rules
+        let mut tier_data: Vec<(String, Vec<u8>)> = Vec::new();
+        for tier in YaraTier::ALL {
+            if let Some(rules) = self.tiers.get(tier) {
+                let data = rules
+                    .serialize()
+                    .context(format!("Failed to serialize tier {:?}", tier))?;
+                tier_data.push((tier.label().to_string(), data));
+            }
+        }
+
+        // Build manifest: tier_label → (offset, length) — offsets filled after layout
+        #[derive(serde::Serialize)]
+        struct CacheManifest {
+            builtin_count: usize,
+            third_party_count: usize,
+            inline_namespaces: Vec<String>,
+            tiers: Vec<CacheTierEntry>,
+        }
+        #[derive(serde::Serialize)]
+        struct CacheTierEntry {
+            label: String,
+            offset: usize,
+            length: usize,
+        }
+
+        // Calculate layout: header + manifest_json + padding + tier1_data + tier2_data + ...
+        let manifest_placeholder = CacheManifest {
+            builtin_count,
+            third_party_count,
+            inline_namespaces: self.compiled_inline_namespaces.clone(),
+            tiers: Vec::new(),
+        };
+        // Estimate manifest size (will recalculate after filling offsets)
+        let manifest_estimate =
+            serde_json::to_vec(&manifest_placeholder).unwrap_or_default().len() + 512;
+        let data_start = CACHE_HEADER_SIZE + manifest_estimate;
+        let data_start_aligned = (data_start + 7) & !7;
+
+        let mut current_offset = data_start_aligned;
+        let mut tier_entries = Vec::new();
+        for (label, data) in &tier_data {
+            tier_entries.push(CacheTierEntry {
+                label: label.clone(),
+                offset: current_offset,
+                length: data.len(),
+            });
+            current_offset += data.len();
+            // Align each tier to 8 bytes
+            current_offset = (current_offset + 7) & !7;
+        }
+
+        let manifest = CacheManifest {
+            builtin_count,
+            third_party_count,
+            inline_namespaces: self.compiled_inline_namespaces.clone(),
+            tiers: tier_entries,
+        };
+        let manifest_json = serde_json::to_vec(&manifest).context("Failed to serialize manifest")?;
+
+        // Recalculate with actual manifest size
+        let actual_data_start = CACHE_HEADER_SIZE + manifest_json.len();
+        let actual_data_start_aligned = (actual_data_start + 7) & !7;
+
+        // If data start shifted, rebuild manifest with corrected offsets
+        let (manifest_json, _data_start_aligned) = if actual_data_start_aligned != data_start_aligned {
+            let mut entries = Vec::new();
+            let mut off = actual_data_start_aligned;
+            for (label, data) in &tier_data {
+                entries.push(CacheTierEntry {
+                    label: label.clone(),
+                    offset: off,
+                    length: data.len(),
+                });
+                off += data.len();
+                off = (off + 7) & !7;
+            }
+            let m = CacheManifest {
+                builtin_count,
+                third_party_count,
+                inline_namespaces: self.compiled_inline_namespaces.clone(),
+                tiers: entries,
+            };
+            let j = serde_json::to_vec(&m).context("Failed to serialize manifest")?;
+            let final_start = (CACHE_HEADER_SIZE + j.len() + 7) & !7;
+            (j, final_start)
+        } else {
+            (manifest_json, actual_data_start_aligned)
+        };
+
+        // Write cache file
+        let mut file = fs::File::create(cache_path).context("Failed to create cache file")?;
+
+        // Header
+        file.write_all(CACHE_MAGIC)?;
+        file.write_all(&CACHE_VERSION.to_le_bytes())?;
+        file.write_all(&(manifest_json.len() as u64).to_le_bytes())?;
+
+        // Manifest
+        file.write_all(&manifest_json)?;
+
+        // Pad to alignment
+        let pos = CACHE_HEADER_SIZE + manifest_json.len();
+        let pad = ((_data_start_aligned).saturating_sub(pos)).min(7);
+        if pad > 0 {
+            file.write_all(&vec![0u8; pad])?;
+        }
+
+        // Tier data
+        for (i, (_label, data)) in tier_data.iter().enumerate() {
+            file.write_all(data)?;
+            // Align between tiers
+            if i + 1 < tier_data.len() {
+                let cur = file.metadata()?.len() as usize;
+                let aligned = (cur + 7) & !7;
+                let gap = aligned - cur;
+                if gap > 0 {
+                    file.write_all(&vec![0u8; gap])?;
+                }
+            }
+        }
+
+        tracing::info!(
+            "Saved YARA cache: {} tier(s), {:.1}MB",
+            tier_data.len(),
+            file.metadata()?.len() as f64 / 1_048_576.0,
+        );
 
         Ok(())
     }
 
-    /// Load compiled YARA rules from cache using zero-copy memory-mapped I/O
-    #[allow(clippy::unwrap_used)] // Slice-to-array conversions are safe after size check
+    /// Load compiled YARA rules from cache using memory-mapped I/O.
+    ///
+    /// Reads the v6 per-tier cache format: header + JSON manifest + per-tier rule data.
+    #[allow(clippy::unwrap_used)] // Slice-to-array conversions safe after size checks
     fn load_from_cache(&mut self, cache_path: &Path) -> Result<(usize, usize)> {
         let t0 = std::time::Instant::now();
 
-        // Memory-map the cache file for zero-copy access
         let file = fs::File::open(cache_path).context("Failed to open cache file")?;
         let mmap = unsafe { memmap2::Mmap::map(&file) }.context("Failed to mmap cache file")?;
 
-        // Check minimum size and magic
         if mmap.len() < CACHE_HEADER_SIZE {
             anyhow::bail!("Cache file too small");
         }
@@ -1358,7 +1740,6 @@ impl YaraEngine {
             anyhow::bail!("Invalid cache magic");
         }
 
-        // Parse header
         let version = u32::from_le_bytes(mmap[4..8].try_into().unwrap());
         if version != CACHE_VERSION {
             anyhow::bail!(
@@ -1368,53 +1749,75 @@ impl YaraEngine {
             );
         }
 
-        let builtin_count = u64::from_le_bytes(mmap[8..16].try_into().unwrap()) as usize;
-        let third_party_count = u64::from_le_bytes(mmap[16..24].try_into().unwrap()) as usize;
-        let _rule_count = u64::from_le_bytes(mmap[24..32].try_into().unwrap()) as usize;
-        let namespaces_len = u64::from_le_bytes(mmap[32..40].try_into().unwrap()) as usize;
-        let rules_offset = u64::from_le_bytes(mmap[40..48].try_into().unwrap()) as usize;
-        let rules_len = u64::from_le_bytes(mmap[48..56].try_into().unwrap()) as usize;
+        let manifest_len = u64::from_le_bytes(mmap[8..16].try_into().unwrap()) as usize;
+        let manifest_end = CACHE_HEADER_SIZE + manifest_len;
+        if manifest_end > mmap.len() {
+            anyhow::bail!("Cache manifest truncated");
+        }
+
+        #[derive(serde::Deserialize)]
+        struct CacheManifest {
+            builtin_count: usize,
+            third_party_count: usize,
+            inline_namespaces: Vec<String>,
+            tiers: Vec<CacheTierEntry>,
+        }
+        #[derive(serde::Deserialize)]
+        struct CacheTierEntry {
+            label: String,
+            offset: usize,
+            length: usize,
+        }
+
+        let manifest: CacheManifest =
+            serde_json::from_slice(&mmap[CACHE_HEADER_SIZE..manifest_end])
+                .context("Failed to parse cache manifest")?;
 
         let t1 = std::time::Instant::now();
 
-        // Parse namespaces (small JSON)
-        let namespaces_end = CACHE_HEADER_SIZE + namespaces_len;
-        let inline_namespaces: Vec<String> = if namespaces_len > 0 {
-            serde_json::from_slice(&mmap[CACHE_HEADER_SIZE..namespaces_end]).unwrap_or_default()
-        } else {
-            Vec::new()
-        };
+        // Deserialize each tier
+        for entry in &manifest.tiers {
+            let end = entry.offset + entry.length;
+            if end > mmap.len() {
+                anyhow::bail!("Cache tier '{}' data truncated", entry.label);
+            }
+            let rules = yara_x::Rules::deserialize(&mmap[entry.offset..end])
+                .context(format!("Failed to deserialize tier '{}'", entry.label))?;
+
+            let tier = YaraTier::ALL
+                .iter()
+                .find(|t| t.label() == entry.label)
+                .copied()
+                .unwrap_or(YaraTier::Generic);
+
+            tracing::debug!(
+                "Loaded tier '{}': {} rules",
+                entry.label,
+                rules.iter().count()
+            );
+            self.tiers.insert(tier, rules);
+        }
 
         let t2 = std::time::Instant::now();
 
-        // Zero-copy access to rules data - pass slice directly to deserialize
-        let rules_end = rules_offset + rules_len;
-        if rules_end > mmap.len() {
-            anyhow::bail!("Cache file truncated");
-        }
-        let rules = yara_x::Rules::deserialize(&mmap[rules_offset..rules_end])
-            .context("Failed to deserialize YARA rules")?;
-
-        let t3 = std::time::Instant::now();
+        self.compiled_inline_namespaces = manifest.inline_namespaces;
 
         tracing::debug!(
-            "YARA cache load timing: mmap+header={:?}, namespaces={:?}, yara_deserialize={:?}",
+            "YARA cache load: manifest={:?}, tiers={:?} ({} tier(s))",
             t1.duration_since(t0),
             t2.duration_since(t1),
-            t3.duration_since(t2)
+            self.tiers.len(),
         );
 
-        self.rules = Some(rules);
-        self.compiled_inline_namespaces = inline_namespaces;
-        Ok((builtin_count, third_party_count))
+        Ok((manifest.builtin_count, manifest.third_party_count))
     }
 }
 
-/// Zero-copy cache format header (v5 - adds rule_count for fast header display)
-/// Layout: MAGIC(4) + VERSION(4) + builtin(8) + third_party(8) + rule_count(8) + namespaces_len(8) + rules_offset(8) + rules_len(8) + namespaces_data + padding + rules_data
+/// Per-tier cache format v6.
+/// Layout: MAGIC(4) + VERSION(4) + manifest_len(8) + manifest_json + padding + tier_data...
 const CACHE_MAGIC: &[u8; 4] = b"YARC";
-const CACHE_VERSION: u32 = 5;
-const CACHE_HEADER_SIZE: usize = 4 + 4 + 8 + 8 + 8 + 8 + 8 + 8; // 56 bytes
+const CACHE_VERSION: u32 = 6;
+const CACHE_HEADER_SIZE: usize = 4 + 4 + 8; // 16 bytes
 
 impl Default for YaraEngine {
     fn default() -> Self {
@@ -1424,13 +1827,13 @@ impl Default for YaraEngine {
 
 #[cfg(test)]
 impl YaraEngine {
-    /// Compile YARA rules from source text. For tests only.
+    /// Compile YARA rules from source text into the Generic tier. For tests only.
     fn load_rule_source(&mut self, source: &str) -> Result<()> {
         let mut compiler = yara_x::Compiler::new();
         compiler
             .add_source(source.as_bytes())
             .map_err(|e| anyhow::anyhow!("{:?}", e))?;
-        self.rules = Some(compiler.build());
+        self.tiers.insert(YaraTier::Generic, compiler.build());
         Ok(())
     }
 }

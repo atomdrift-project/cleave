@@ -163,7 +163,7 @@ fn test_parse_file_types_binary_alias() {
     let types = vec!["binaries".to_string()];
     let mut warnings = Vec::new();
     let result = parsing::parse_file_types(&types, &mut warnings);
-    assert_eq!(result.len(), 7);
+    assert_eq!(result.len(), 8);
     assert!(result.contains(&RuleFileType::Elf));
     assert!(result.contains(&RuleFileType::Macho));
     assert!(result.contains(&RuleFileType::Pe));
@@ -171,6 +171,7 @@ fn test_parse_file_types_binary_alias() {
     assert!(result.contains(&RuleFileType::So));
     assert!(result.contains(&RuleFileType::Dll));
     assert!(result.contains(&RuleFileType::Class));
+    assert!(result.contains(&RuleFileType::Pyc));
 }
 
 #[test]
@@ -2676,7 +2677,7 @@ fn test_parse_file_types_groups_and_exclusions() {
 
     // Test groups
     let binaries = parsing::parse_file_types(&["binaries".to_string()], &mut warnings);
-    assert_eq!(binaries.len(), 7);
+    assert_eq!(binaries.len(), 8);
     assert!(binaries.contains(&RuleFileType::Elf));
     assert!(!binaries.contains(&RuleFileType::Python));
 

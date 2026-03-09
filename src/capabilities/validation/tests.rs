@@ -3485,6 +3485,7 @@ mod excessive_file_types_tests {
                 FileType::So,
                 FileType::Dll,
                 FileType::Class,
+                FileType::Pyc,
             ],
         )];
         let result = find_excessive_file_types(&traits, &[]);

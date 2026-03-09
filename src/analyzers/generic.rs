@@ -85,6 +85,7 @@ impl GenericAnalyzer {
             FileType::Html => "html",
             FileType::Markdown => "markdown",
             FileType::Text => "text",
+            FileType::Pdf => "pdf",
             _ => "unknown",
         }
     }

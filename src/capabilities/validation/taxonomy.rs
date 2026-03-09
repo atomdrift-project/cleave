@@ -12,7 +12,7 @@
 //! The taxonomy is organized hierarchically to support both ML classification and human navigation.
 
 use super::composite::collect_trait_refs_from_rule;
-use crate::composite_rules::{CompositeTrait, Condition, TraitDefinition};
+use crate::composite_rules::{CompositeTrait, Condition, FileType, Platform, TraitDefinition};
 use crate::types::Criticality;
 use std::collections::HashMap;
 
@@ -1060,4 +1060,189 @@ pub(crate) fn find_composite_only_wellknown_files(
 
     violations.sort_by(|a, b| a.0.cmp(&b.0));
     violations
+}
+
+// ============================================================================
+// well-known/ and metadata/ specificity validators
+// ============================================================================
+
+/// Returns true if the file type is a binary format with sections.
+fn is_binary_file_type(ft: FileType) -> bool {
+    matches!(
+        ft,
+        FileType::Elf | FileType::Macho | FileType::Pe | FileType::Dylib | FileType::So | FileType::Dll
+    )
+}
+
+/// Returns true if the trait targets binary file types (explicitly or via All).
+fn trait_targets_binaries(trait_def: &TraitDefinition) -> bool {
+    trait_def.r#for.contains(&FileType::All) || trait_def.r#for.iter().any(|ft| is_binary_file_type(*ft))
+}
+
+/// Returns true if the condition has a section filter applied to it.
+/// This includes: section field on string/raw/hex conditions, Section type, SectionRatio type.
+fn condition_has_section_filter(cond: &Condition) -> bool {
+    matches!(
+        cond,
+        Condition::String { section: Some(_), .. }
+            | Condition::Raw { section: Some(_), .. }
+            | Condition::Hex { section: Some(_), .. }
+            | Condition::Section { .. }
+            | Condition::SectionRatio { .. }
+    )
+}
+
+/// Returns true if the condition is one where a section filter would be meaningful.
+fn condition_supports_section_filter(cond: &Condition) -> bool {
+    matches!(
+        cond,
+        Condition::String { .. } | Condition::Raw { .. } | Condition::Hex { .. }
+    )
+}
+
+/// Extract tier prefix from a trait ID (everything before the first `::` or `/`-delimited namespace).
+fn extract_trait_tier(id: &str) -> &str {
+    let base = id.find("::").map_or(id, |i| &id[..i]);
+    base.find('/').map_or(base, |i| &base[..i])
+}
+
+/// Find well-known/ atomic traits that use `for: [all]` (over-broad file type filter).
+///
+/// well-known/ traits identify specific malware families and must be scoped to concrete
+/// file types (e.g., `pe`, `elf`, `python`) rather than the default `all`.
+///
+/// Returns `Vec<(trait_id, source_file)>` for violations.
+#[must_use]
+pub(crate) fn find_wellknown_unscoped_filetypes(
+    trait_definitions: &[TraitDefinition],
+    rule_source_files: &HashMap<String, String>,
+) -> Vec<(String, String)> {
+    trait_definitions
+        .iter()
+        .filter(|t| {
+            extract_trait_tier(&t.id) == "well-known"
+                && t.r#for.contains(&FileType::All)
+        })
+        .map(|t| {
+            let source = rule_source_files
+                .get(&t.id)
+                .cloned()
+                .unwrap_or_else(|| "unknown".to_string());
+            (t.id.clone(), source)
+        })
+        .collect()
+}
+
+/// Find well-known/ atomic traits that use `platforms: [all]` (over-broad platform filter).
+///
+/// well-known/ traits for specific malware families should be scoped to the platforms
+/// that malware targets rather than defaulting to all platforms.
+///
+/// Returns `Vec<(trait_id, source_file)>` for violations.
+#[must_use]
+pub(crate) fn find_wellknown_unscoped_platforms(
+    trait_definitions: &[TraitDefinition],
+    rule_source_files: &HashMap<String, String>,
+) -> Vec<(String, String)> {
+    trait_definitions
+        .iter()
+        .filter(|t| {
+            extract_trait_tier(&t.id) == "well-known"
+                && t.platforms.contains(&Platform::All)
+        })
+        .map(|t| {
+            let source = rule_source_files
+                .get(&t.id)
+                .cloned()
+                .unwrap_or_else(|| "unknown".to_string());
+            (t.id.clone(), source)
+        })
+        .collect()
+}
+
+/// Find well-known/ atomic traits without any file size filter.
+///
+/// well-known/ traits detect specific malware families and should include size bounds
+/// to avoid false positives. Most malware samples fall within a predictable size range.
+///
+/// Returns `Vec<(trait_id, source_file)>` for violations.
+#[must_use]
+pub(crate) fn find_wellknown_missing_size_filter(
+    trait_definitions: &[TraitDefinition],
+    rule_source_files: &HashMap<String, String>,
+) -> Vec<(String, String)> {
+    trait_definitions
+        .iter()
+        .filter(|t| {
+            extract_trait_tier(&t.id) == "well-known"
+                && t.size_min.is_none()
+                && t.size_max.is_none()
+        })
+        .map(|t| {
+            let source = rule_source_files
+                .get(&t.id)
+                .cloned()
+                .unwrap_or_else(|| "unknown".to_string());
+            (t.id.clone(), source)
+        })
+        .collect()
+}
+
+/// Find well-known/ atomic traits targeting binary file types whose condition lacks a section filter.
+///
+/// For binary targets (PE, ELF, Mach-O, etc.), section-scoped matching significantly reduces
+/// false positives by restricting string/hex/raw matches to specific sections (e.g., `.text`, `.data`).
+///
+/// Returns `Vec<(trait_id, source_file)>` for violations.
+#[must_use]
+pub(crate) fn find_wellknown_missing_section_filter(
+    trait_definitions: &[TraitDefinition],
+    rule_source_files: &HashMap<String, String>,
+) -> Vec<(String, String)> {
+    trait_definitions
+        .iter()
+        .filter(|t| {
+            extract_trait_tier(&t.id) == "well-known"
+                && trait_targets_binaries(t)
+                && condition_supports_section_filter(&t.r#if)
+                && !condition_has_section_filter(&t.r#if)
+        })
+        .map(|t| {
+            let source = rule_source_files
+                .get(&t.id)
+                .cloned()
+                .unwrap_or_else(|| "unknown".to_string());
+            (t.id.clone(), source)
+        })
+        .collect()
+}
+
+/// Find metadata/ atomic traits targeting binary file types whose condition lacks a section filter.
+///
+/// For binary targets, section-scoped matching improves precision. Unlike well-known/ traits,
+/// this is a recommendation rather than a hard requirement, since metadata/ traits often
+/// detect structural properties that apply file-wide.
+///
+/// Returns `Vec<(trait_id, source_file)>` for violations.
+#[must_use]
+pub(crate) fn find_meta_missing_section_filter(
+    trait_definitions: &[TraitDefinition],
+    rule_source_files: &HashMap<String, String>,
+) -> Vec<(String, String)> {
+    trait_definitions
+        .iter()
+        .filter(|t| {
+            extract_trait_tier(&t.id) == "metadata"
+                && trait_targets_binaries(t)
+                && condition_supports_section_filter(&t.r#if)
+                && !condition_has_section_filter(&t.r#if)
+        })
+        .map(|t| {
+            let source = rule_source_files
+                .get(&t.id)
+                .cloned()
+                .unwrap_or_else(|| "unknown".to_string());
+            (t.id.clone(), source)
+        })
+        .collect()
 }

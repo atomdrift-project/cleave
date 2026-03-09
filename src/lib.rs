@@ -850,6 +850,162 @@ pub fn analyze_directory<P: AsRef<Path>>(
     Ok(reports)
 }
 
+/// An event emitted during [`scan_directory`].
+#[derive(Debug)]
+pub enum ScanEvent {
+    /// Emitted exactly once before analysis begins, with the total number of files to scan.
+    Start {
+        /// Total number of files that passed the type filter and will be analyzed.
+        total: usize,
+    },
+    /// Emitted for each file as its analysis completes. May arrive from any rayon worker thread.
+    File {
+        /// Path to the analyzed file.
+        path: std::path::PathBuf,
+        /// Analysis result, or an error if analysis failed.
+        result: Result<AnalysisReport>,
+    },
+}
+
+/// Summary returned by [`scan_directory`] after all files have been processed.
+#[derive(Debug, Clone, Default)]
+pub struct ScanSummary {
+    /// Total files submitted for analysis (passed the type filter).
+    pub total: usize,
+    /// Files successfully analyzed.
+    pub analyzed: usize,
+    /// Files that failed analysis.
+    pub errors: usize,
+}
+
+/// Scan a directory, invoking `callback` for each file as its analysis completes.
+///
+/// Unlike [`analyze_directory`], results stream out of the parallel workers as they
+/// finish rather than being collected into a `Vec`. This makes it suitable for
+/// progress reporting, streaming output, and processing large directories without
+/// accumulating all results in memory.
+///
+/// The callback first receives a [`ScanEvent::Start`] with the total file count,
+/// then a [`ScanEvent::File`] for every file attempted, including failures. The
+/// `Start` event is always delivered before any `File` events.
+///
+/// Resources (CapabilityMapper and YARA engine) are loaded once and shared across
+/// all parallel workers, avoiding the per-file reload overhead of calling
+/// [`analyze_file`] in a loop.
+///
+/// Hidden files and non-program file types are silently skipped unless
+/// `options.all_files` is set, matching the behavior of [`analyze_directory`].
+///
+/// # Errors
+///
+/// Returns `Err` only for setup failures (path is not a directory, resource load
+/// failure). Per-file errors are delivered through the callback as
+/// [`ScanEvent::File`] with an `Err` result.
+pub fn scan_directory<P, F>(path: P, options: &AnalysisOptions, callback: F) -> Result<ScanSummary>
+where
+    P: AsRef<Path>,
+    F: Fn(ScanEvent) + Sync,
+{
+    use rayon::prelude::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use walkdir::WalkDir;
+
+    let path = path.as_ref();
+    if !path.is_dir() {
+        anyhow::bail!("path is not a directory: {}", path.display());
+    }
+
+    if options.disable_radare2 {
+        radare2::disable_radare2();
+    }
+    if options.disable_upx {
+        upx::disable_upx();
+    }
+
+    // Load shared resources once; all rayon workers share them via cheap Arc clones.
+    let (mapper, yara_engine) = rayon::join(
+        || shared_resources::capability_mapper_with_options(options),
+        || {
+            if options.disable_yara {
+                None
+            } else {
+                Some(shared_resources::yara_engine(options.enable_third_party_yara))
+            }
+        },
+    );
+
+    let all_files_flag = options.all_files;
+    let files: Vec<_> = WalkDir::new(path)
+        .follow_links(false)
+        .into_iter()
+        .filter_entry(|e| !e.file_name().to_string_lossy().starts_with(".git"))
+        .filter_map(std::result::Result::ok)
+        .filter(|e| e.file_type().is_file())
+        .filter(|e| !archive_utils::is_archive(e.path()))
+        .filter(|e| {
+            all_files_flag
+                || detect_file_type(e.path())
+                    .map(|ft| ft.is_program())
+                    .unwrap_or(false)
+        })
+        .map(|e| e.path().to_path_buf())
+        .collect();
+
+    let total = files.len();
+    callback(ScanEvent::Start { total });
+
+    let analyzed = AtomicUsize::new(0);
+    let errors = AtomicUsize::new(0);
+
+    files.par_iter().for_each(|file_path| {
+        let result =
+            analyze_file_with_resources(file_path, options, &mapper, yara_engine.as_ref());
+        match &result {
+            Ok(_) => {
+                analyzed.fetch_add(1, Ordering::Relaxed);
+            }
+            Err(_) => {
+                errors.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+        callback(ScanEvent::File {
+            path: file_path.clone(),
+            result,
+        });
+    });
+
+    Ok(ScanSummary {
+        total,
+        analyzed: analyzed.load(Ordering::Relaxed),
+        errors: errors.load(Ordering::Relaxed),
+    })
+}
+
+/// Compute a malecule formula string from an [`AnalysisReport`].
+///
+/// Aggregates findings by directory path, removes baseline and low-confidence
+/// entries, then produces the chemical formula notation. Returns an empty string
+/// if the report has no significant findings.
+///
+/// This mirrors the filtering applied by cleave's own terminal output.
+pub fn formula_from_report(report: &AnalysisReport) -> String {
+    let findings: &[types::traits_findings::Finding] = if !report.findings.is_empty() {
+        &report.findings
+    } else if let Some(first) = report.files.first() {
+        &first.findings
+    } else {
+        return String::new();
+    };
+
+    let aggregated = output::aggregate_findings_by_directory(findings);
+    let filtered: Vec<_> = aggregated
+        .into_iter()
+        .filter(|f| f.crit != types::Criticality::Baseline && f.conf >= 0.5)
+        .collect();
+
+    malecule_bridge::formula_from_findings(&filtered)
+}
+
 /// Compare two file versions for supply chain attack detection.
 ///
 /// This is useful for detecting malicious changes between package versions.

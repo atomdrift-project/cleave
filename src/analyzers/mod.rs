@@ -378,6 +378,7 @@ pub(crate) fn detect_file_type_from_path(file_path: &Path) -> FileType {
             "plist" => return FileType::Plist,
             "rtf" => return FileType::Rtf,
             "lnk" => return FileType::Lnk,
+            "pdf" => return FileType::Pdf,
             "zip" | "7z" | "rar" | "deb" | "rpm" | "apk" | "ipa" | "xpi" | "epub" | "nupkg"
             | "vsix" | "aar" | "egg" | "whl" | "phar" => return FileType::Archive,
             "html" | "htm" => return FileType::Html,
@@ -407,6 +408,11 @@ pub fn detect_file_type(file_path: &Path) -> Result<FileType> {
     // Check for RTF magic bytes
     if file_data.starts_with(b"{\\rtf") {
         return Ok(FileType::Rtf);
+    }
+
+    // Check for PDF magic bytes (%PDF-)
+    if file_data.starts_with(b"%PDF-") {
+        return Ok(FileType::Pdf);
     }
 
     // Check for LNK magic bytes (Windows Shell Link)
@@ -1200,6 +1206,8 @@ pub enum FileType {
     Jpeg,
     /// PNG image
     Png,
+    /// PDF document
+    Pdf,
     /// HTML document (.html, .htm)
     Html,
     /// Markdown document (.md, .markdown)
@@ -1254,7 +1262,8 @@ impl FileType {
             | FileType::Plist
             | FileType::Rtf
             | FileType::Lnk
-            | FileType::Png => true, // PNG included for steganography detection
+            | FileType::Png
+            | FileType::Pdf => true, // Included as they can carry exploits/malware
             FileType::Archive
             | FileType::Unknown
             | FileType::Jpeg
@@ -1336,6 +1345,7 @@ impl FileType {
             FileType::Lnk => vec!["lnk", "shortcut"],
             FileType::Jpeg => vec!["jpeg", "jpg"],
             FileType::Png => vec!["png"],
+            FileType::Pdf => vec!["pdf"],
             FileType::Html => vec!["html", "htm"],
             FileType::Markdown => vec!["md", "markdown"],
             FileType::Text => vec!["txt", "text"],

@@ -294,6 +294,7 @@ pub(crate) fn parse_file_types(types: &[String], warnings: &mut Vec<String>) -> 
                 "swift" => vec![RuleFileType::Swift],
                 "objective-c" | "objc" => vec![RuleFileType::ObjectiveC],
                 "groovy" => vec![RuleFileType::Groovy],
+                "kotlin" | "kt" => vec![RuleFileType::Kotlin],
                 "scala" => vec![RuleFileType::Scala],
                 "zig" => vec![RuleFileType::Zig],
                 "elixir" => vec![RuleFileType::Elixir],
@@ -317,6 +318,7 @@ pub(crate) fn parse_file_types(types: &[String], warnings: &mut Vec<String>) -> 
                 "pkginfo" => vec![RuleFileType::PkgInfo],
                 "rtf" => vec![RuleFileType::Rtf],
                 "lnk" => vec![RuleFileType::Lnk],
+                "pdf" => vec![RuleFileType::Pdf],
                 _ => {
                     // Unknown file type - add warning (file path will be added by caller)
                     warnings.push(format!("Unknown file type: '{}'", name));

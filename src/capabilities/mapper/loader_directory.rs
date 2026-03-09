@@ -22,7 +22,8 @@ use crate::capabilities::validation::{
     find_generic_wellknown_leaf_dirs, find_hostile_cap_rules, find_hostile_meta_rules,
     find_impossible_count_constraints, find_impossible_needs, find_impossible_size_constraints,
     find_invalid_not_usage, find_invalid_trait_ids, find_kv_exists_with_matcher, find_line_number,
-    find_malware_subcategory_violations, find_metadata_cross_tier_refs,
+    find_malware_subcategory_violations, find_meta_missing_section_filter,
+    find_metadata_cross_tier_refs,
     find_missing_search_patterns, find_needs_without_any, find_needs_zero,
     find_non_capturing_groups, find_none_only_with_proximity, find_orphaned_components,
     find_overlapping_conditions, find_oversized_trait_directories, find_parent_duplicate_segments,
@@ -30,7 +31,9 @@ use crate::capabilities::validation::{
     find_redundant_needs_one, find_short_pattern_warnings, find_single_item_clauses,
     find_slow_regex_patterns, find_string_content_collisions, find_string_pattern_duplicates,
     find_too_short_patterns, find_unanchored_wellknown_composites,
-    find_wellknown_category_violations, precalculate_all_composite_precisions,
+    find_wellknown_category_violations, find_wellknown_missing_section_filter,
+    find_wellknown_missing_size_filter, find_wellknown_unscoped_filetypes,
+    find_wellknown_unscoped_platforms, precalculate_all_composite_precisions,
     simple_rule_to_composite_rule, validate_composite_trait_only, validate_directory_structure,
     validate_hostile_composite_precision, MAX_TRAITS_PER_DIRECTORY,
 };
@@ -1570,6 +1573,118 @@ impl super::CapabilityMapper {
                 warnings.push(format!(
                     "{} well-known/ directories are composite-only (add family-specific atomic traits or move to objectives/)",
                     composite_only.len()
+                ));
+            }
+
+            // Validate well-known/ atomic traits have specific file type filters (not just `all`)
+            tracing::debug!("Checking well-known/ for over-broad file type filters");
+            let wk_unscoped_ft =
+                find_wellknown_unscoped_filetypes(&trait_definitions, &rule_source_files);
+            if !wk_unscoped_ft.is_empty() {
+                eprintln!(
+                    "\n❌ ERROR: {} well-known/ traits use over-broad file type filter (for: all)",
+                    wk_unscoped_ft.len()
+                );
+                eprintln!("   well-known/ traits must target specific file types (e.g., pe, elf, python):\n");
+                for (trait_id, source_file) in &wk_unscoped_ft {
+                    let line_hint = find_line_number(source_file, "for:");
+                    if let Some(line) = line_hint {
+                        eprintln!("   {}:{}: Trait '{}'", source_file, line, trait_id);
+                    } else {
+                        eprintln!("   {}: Trait '{}'", source_file, trait_id);
+                    }
+                }
+                eprintln!("\n   Add a specific 'for:' field, e.g., 'for: [pe]' or 'for: [elf, macho]'.");
+                warnings.push(format!(
+                    "{} well-known/ traits use over-broad file type filter (add specific 'for:' field)",
+                    wk_unscoped_ft.len()
+                ));
+            }
+
+            // Validate well-known/ atomic traits have specific platform filters (not just `all`)
+            tracing::debug!("Checking well-known/ for over-broad platform filters");
+            let wk_unscoped_plat =
+                find_wellknown_unscoped_platforms(&trait_definitions, &rule_source_files);
+            if !wk_unscoped_plat.is_empty() {
+                eprintln!(
+                    "\n❌ ERROR: {} well-known/ traits use over-broad platform filter (platforms: all)",
+                    wk_unscoped_plat.len()
+                );
+                eprintln!("   well-known/ traits must target specific platforms (e.g., windows, linux, macos):\n");
+                for (trait_id, source_file) in &wk_unscoped_plat {
+                    let line_hint = find_line_number(source_file, "platforms:");
+                    if let Some(line) = line_hint {
+                        eprintln!("   {}:{}: Trait '{}'", source_file, line, trait_id);
+                    } else {
+                        eprintln!("   {}: Trait '{}'", source_file, trait_id);
+                    }
+                }
+                eprintln!("\n   Add a specific 'platforms:' field, e.g., 'platforms: [windows]' or 'platforms: [linux, macos]'.");
+                warnings.push(format!(
+                    "{} well-known/ traits use over-broad platform filter (add specific 'platforms:' field)",
+                    wk_unscoped_plat.len()
+                ));
+            }
+
+            // Validate well-known/ atomic traits have file size bounds
+            tracing::debug!("Checking well-known/ for missing size filters");
+            let wk_no_size =
+                find_wellknown_missing_size_filter(&trait_definitions, &rule_source_files);
+            if !wk_no_size.is_empty() {
+                eprintln!(
+                    "\n❌ ERROR: {} well-known/ traits have no file size filter",
+                    wk_no_size.len()
+                );
+                eprintln!("   well-known/ traits should include size_min/size_max to avoid false positives:\n");
+                for (trait_id, source_file) in &wk_no_size {
+                    eprintln!("   {}: Trait '{}'", source_file, trait_id);
+                }
+                eprintln!("\n   Add 'size_min:' and/or 'size_max:' bounds appropriate to the malware family.");
+                warnings.push(format!(
+                    "{} well-known/ traits lack file size filters (add size_min/size_max)",
+                    wk_no_size.len()
+                ));
+            }
+
+            // Validate well-known/ binary-targeting traits have a section filter
+            tracing::debug!("Checking well-known/ binary traits for missing section filters");
+            let wk_no_section =
+                find_wellknown_missing_section_filter(&trait_definitions, &rule_source_files);
+            if !wk_no_section.is_empty() {
+                eprintln!(
+                    "\n❌ ERROR: {} well-known/ binary traits lack a section filter",
+                    wk_no_section.len()
+                );
+                eprintln!("   Binary-targeting traits in well-known/ should scope string/raw/hex matches to a section:");
+                eprintln!("   Use 'section: .text' or 'section: .data' on the condition, or use 'type: section'.\n");
+                for (trait_id, source_file) in &wk_no_section {
+                    eprintln!("   {}: Trait '{}'", source_file, trait_id);
+                }
+                eprintln!();
+                warnings.push(format!(
+                    "{} well-known/ binary traits lack section filters (add section: field to condition)",
+                    wk_no_section.len()
+                ));
+            }
+
+            // Recommend section filters for metadata/ binary-targeting traits
+            tracing::debug!("Checking metadata/ binary traits for missing section filters");
+            let meta_no_section =
+                find_meta_missing_section_filter(&trait_definitions, &rule_source_files);
+            if !meta_no_section.is_empty() {
+                eprintln!(
+                    "\n❌ ERROR: {} metadata/ binary traits lack a section filter",
+                    meta_no_section.len()
+                );
+                eprintln!("   Binary-targeting traits in metadata/ should scope string/raw/hex matches to a section:");
+                eprintln!("   Use 'section: .text' or 'section: .data' on the condition, or use 'type: section'.\n");
+                for (trait_id, source_file) in &meta_no_section {
+                    eprintln!("   {}: Trait '{}'", source_file, trait_id);
+                }
+                eprintln!();
+                warnings.push(format!(
+                    "{} metadata/ binary traits lack section filters (add section: field to condition)",
+                    meta_no_section.len()
                 ));
             }
 

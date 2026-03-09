@@ -132,11 +132,19 @@ impl PEAnalyzer {
             Ok(unpacked_data) => {
                 if let Ok(temp_file) = tempfile::NamedTempFile::new() {
                     if fs::write(temp_file.path(), &unpacked_data).is_ok() {
-                        let unpacked_report = self.analyze_structural_with_strings(
+                        let mut unpacked_report = self.analyze_structural_with_strings(
                             temp_file.path(),
                             &unpacked_data,
                             None,
                             None, // Hash will change after decompression
+                        );
+                        // Evaluate composites against the unpacked layer so that
+                        // objective-level findings (infostealers, etc.) appear in the child.
+                        self.capability_mapper.evaluate_and_merge_findings(
+                            &mut unpacked_report,
+                            &unpacked_data,
+                            None,
+                            None,
                         );
 
                         // Create separate FileAnalysis for unpacked layer

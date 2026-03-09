@@ -221,6 +221,8 @@ pub(crate) enum FileType {
     ObjectiveC,
     /// Groovy source file
     Groovy,
+    /// Kotlin source file
+    Kotlin,
     /// Scala source file
     Scala,
     /// Zig source file
@@ -261,6 +263,8 @@ pub(crate) enum FileType {
     Jpeg,
     /// PNG image
     Png,
+    /// PDF document
+    Pdf,
 }
 
 impl FileType {
@@ -288,6 +292,7 @@ impl FileType {
                 | FileType::Swift
                 | FileType::ObjectiveC
                 | FileType::Groovy
+                | FileType::Kotlin
                 | FileType::Scala
                 | FileType::Zig
                 | FileType::Elixir
@@ -329,6 +334,7 @@ impl FileType {
             FileType::Swift,
             FileType::ObjectiveC,
             FileType::Groovy,
+            FileType::Kotlin,
             FileType::Scala,
             FileType::Zig,
             FileType::Elixir,
@@ -353,6 +359,8 @@ impl FileType {
             // Image formats
             FileType::Jpeg,
             FileType::Png,
+            // Document formats
+            FileType::Pdf,
         ]
     }
 
@@ -407,6 +415,7 @@ impl FileType {
             "rtf" => FileType::Rtf,
             "lnk" => FileType::Lnk,
             "ipa" => FileType::Ipa,
+            "pdf" => FileType::Pdf,
             "text" | "txt" => FileType::Text,
             _ => FileType::All,
         }

@@ -73,6 +73,7 @@ use anyhow::{Context, Result};
 use clap::Parser;
 use commands::{
     analyze_command, diff_command, expand_paths, profile_command, test_match, test_rules,
+    validate_command,
 };
 use std::fs;
 use std::path::Path;
@@ -457,12 +458,16 @@ fn main() -> Result<()> {
                     args.min_hostile_precision,
                     args.min_suspicious_precision,
                     max_memory_file_size,
-                    args.validate,
+                    false,
                     args.mol.as_deref(),
                     args.mol_layout,
                 )?);
             }
             results.join("")
+        }
+        Some(cli::Command::Validate) => {
+            validate_command()?;
+            return Ok(());
         }
         Some(cli::Command::Diff { old, new }) => diff_command(&old, &new, &format)?,
         Some(cli::Command::Strings {
@@ -686,7 +691,7 @@ fn main() -> Result<()> {
                     args.min_hostile_precision,
                     args.min_suspicious_precision,
                     max_memory_file_size,
-                    args.validate,
+                    false,
                     args.mol.as_deref(),
                     args.mol_layout,
                 )?);

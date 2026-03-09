@@ -95,7 +95,7 @@ impl super::CapabilityMapper {
         if enable_full_validation {
             tracing::info!("Full validation enabled (this may take 60+ seconds)");
         } else {
-            tracing::info!("Fast validation mode (use --validate to enable full validation)");
+            tracing::info!("Fast validation mode (run 'cleave validate' for full validation)");
         }
         if debug {
             eprintln!("🔍 Loading capabilities from: {}", dir_path.display());
@@ -914,7 +914,7 @@ impl super::CapabilityMapper {
             check_basename_pattern_duplicates(&trait_definitions, &mut warnings);
             tracing::debug!("Step 1m completed in {:?}", step_start.elapsed());
         } else {
-            tracing::debug!("Step 1/15: Skipping precision validation (use --validate to enable)");
+            tracing::debug!("Step 1/15: Skipping precision validation (run 'cleave validate' to enable)");
         }
 
         // Validate trait references in composite rules

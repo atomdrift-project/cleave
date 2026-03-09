@@ -67,6 +67,7 @@ pub(crate) mod extract;
 pub(crate) mod profile;
 pub(crate) mod shared;
 pub(crate) mod test;
+pub(crate) mod validate;
 
 // Re-export shared utilities needed by main.rs
 pub(crate) use shared::expand_paths;
@@ -76,3 +77,4 @@ pub(crate) use analyze::run as analyze_command;
 pub(crate) use diff::run as diff_command;
 pub(crate) use profile::run as profile_command;
 pub(crate) use test::{test_match, test_rules};
+pub(crate) use validate::run as validate_command;

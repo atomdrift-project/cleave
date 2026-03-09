@@ -65,9 +65,13 @@ pub(crate) fn apply_trait_defaults(
     }
 
     // Parse file_types: use trait-specific if present (unless "none"), else defaults, else [All]
+    let warn_start = warnings.len();
     let file_types = apply_vec_default(raw.file_types, &defaults.r#for)
         .map(|types| parse_file_types(&types, warnings))
         .unwrap_or_else(|| vec![RuleFileType::All]);
+    for w in &mut warnings[warn_start..] {
+        *w = format!("{} (trait '{}' in {})", w, raw.id, path.display());
+    }
 
     // Validation: require explicit platforms: either on trait or in file defaults.
     if raw.platforms.is_none() && defaults.platforms.is_none() {
@@ -370,7 +374,6 @@ pub(crate) fn parse_file_types(types: &[String], warnings: &mut Vec<String>) -> 
                 "lnk" => vec![RuleFileType::Lnk],
                 "pdf" => vec![RuleFileType::Pdf],
                 _ => {
-                    // Unknown file type - add warning (file path will be added by caller)
                     warnings.push(format!("Unknown file type: '{}'", name));
                     vec![]
                 }
@@ -535,9 +538,13 @@ pub(crate) fn apply_composite_defaults(
     path: &std::path::Path,
 ) -> CompositeTrait {
     // Parse file_types: use rule-specific if present (unless "none"), else defaults, else [All]
+    let warn_start = warnings.len();
     let file_types = apply_vec_default(raw.file_types, &defaults.r#for)
         .map(|types| parse_file_types(&types, warnings))
         .unwrap_or_else(|| vec![RuleFileType::All]);
+    for w in &mut warnings[warn_start..] {
+        *w = format!("{} (composite rule '{}' in {})", w, raw.id, path.display());
+    }
 
     // Validation: require explicit platforms: either on rule or in file defaults.
     if raw.platforms.is_none() && defaults.platforms.is_none() {

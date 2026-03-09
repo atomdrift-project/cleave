@@ -38,6 +38,14 @@ pub(crate) struct TraitDefaults {
     pub(crate) mbc: Option<String>,
     #[serde(default)]
     pub(crate) attack: Option<String>,
+    #[serde(default)]
+    pub(crate) size_min: Option<usize>,
+    #[serde(default)]
+    pub(crate) size_max: Option<usize>,
+    #[serde(default)]
+    pub(crate) entropy_min: Option<f64>,
+    #[serde(default)]
+    pub(crate) entropy_max: Option<f64>,
 }
 
 /// Raw trait definition for parsing (fields can be absent to inherit defaults)

@@ -183,6 +183,10 @@ fn test_apply_trait_defaults_applies_all_defaults() {
         conf: Some(0.85),
         mbc: Some("B0001".to_string()),
         attack: Some("T1059".to_string()),
+        size_min: Some(1024),
+        size_max: Some(10_485_760),
+        entropy_min: Some(3.0),
+        entropy_max: Some(7.5),
     };
 
     let raw = models::RawTraitDefinition {
@@ -233,6 +237,10 @@ fn test_apply_trait_defaults_applies_all_defaults() {
     assert_eq!(result.attack, Some("T1059".to_string()));
     assert_eq!(result.platforms, vec![Platform::Linux]);
     assert_eq!(result.r#for, vec![RuleFileType::Php]);
+    assert_eq!(result.size_min, Some(1024));
+    assert_eq!(result.size_max, Some(10_485_760));
+    assert_eq!(result.entropy_min, Some(3.0));
+    assert_eq!(result.entropy_max, Some(7.5));
 }
 
 #[test]
@@ -245,6 +253,10 @@ fn test_apply_trait_defaults_trait_overrides_defaults() {
         conf: Some(0.85),
         mbc: Some("B0001".to_string()),
         attack: Some("T1059".to_string()),
+        size_min: None,
+        size_max: None,
+        entropy_min: None,
+        entropy_max: None,
     };
 
     let raw = models::RawTraitDefinition {
@@ -308,6 +320,10 @@ fn test_apply_trait_defaults_unset_mbc_with_none() {
         conf: None,
         mbc: Some("B0001".to_string()),
         attack: Some("T1059".to_string()),
+        size_min: None,
+        size_max: None,
+        entropy_min: None,
+        entropy_max: None,
     };
 
     let raw = models::RawTraitDefinition {
@@ -366,6 +382,10 @@ fn test_apply_trait_defaults_unset_attack_with_none() {
         conf: None,
         mbc: Some("B0001".to_string()),
         attack: Some("T1059".to_string()),
+        size_min: None,
+        size_max: None,
+        entropy_min: None,
+        entropy_max: None,
     };
 
     let raw = models::RawTraitDefinition {
@@ -424,6 +444,10 @@ fn test_apply_trait_defaults_unset_file_types_with_none() {
         conf: None,
         mbc: None,
         attack: None,
+        size_min: None,
+        size_max: None,
+        entropy_min: None,
+        entropy_max: None,
     };
 
     let raw = models::RawTraitDefinition {
@@ -473,6 +497,125 @@ fn test_apply_trait_defaults_unset_file_types_with_none() {
 }
 
 #[test]
+fn test_apply_trait_defaults_size_and_entropy_from_defaults() {
+    let defaults = models::TraitDefaults {
+        r#for: Some(vec!["pe".to_string()]),
+        platforms: Some(vec!["windows".to_string()]),
+        arch: None,
+        crit: Some("notable".to_string()),
+        conf: Some(0.8),
+        mbc: None,
+        attack: None,
+        size_min: Some(4096),
+        size_max: Some(52_428_800),
+        entropy_min: Some(1.0),
+        entropy_max: Some(7.9),
+    };
+
+    // Trait with no size/entropy — inherits from defaults
+    let raw_inherit = models::RawTraitDefinition {
+        id: "test/inherit".to_string(),
+        desc: "Inherit size".to_string(),
+        conf: None,
+        crit: None,
+        mbc: None,
+        attack: None,
+        platforms: None,
+        arch: None,
+        file_types: None,
+        size_min: None,
+        size_max: None,
+        not: None,
+        unless: None,
+        downgrade: None,
+        condition: Some(Condition::String {
+            external_ip: false,
+            exact: Some("test".to_string()),
+            regex: None,
+            word: None,
+            case_insensitive: false,
+            substr: None,
+            section: None,
+            offset: None,
+            offset_range: None,
+            section_offset: None,
+            section_offset_range: None,
+            not: None,
+            platforms: None,
+            compiled_regex: None,
+        }),
+        count_min: None,
+        count_max: None,
+        per_kb_min: None,
+        per_kb_max: None,
+        entropy_min: None,
+        entropy_max: None,
+    };
+
+    let result = parsing::apply_trait_defaults(
+        raw_inherit,
+        &defaults,
+        &mut Vec::new(),
+        Path::new("test.yaml"),
+    );
+    assert_eq!(result.size_min, Some(4096));
+    assert_eq!(result.size_max, Some(52_428_800));
+    assert_eq!(result.entropy_min, Some(1.0));
+    assert_eq!(result.entropy_max, Some(7.9));
+
+    // Trait with explicit size/entropy — overrides defaults
+    let raw_override = models::RawTraitDefinition {
+        id: "test/override".to_string(),
+        desc: "Override size".to_string(),
+        conf: None,
+        crit: None,
+        mbc: None,
+        attack: None,
+        platforms: None,
+        arch: None,
+        file_types: None,
+        size_min: Some(512),
+        size_max: Some(1_048_576),
+        not: None,
+        unless: None,
+        downgrade: None,
+        condition: Some(Condition::String {
+            external_ip: false,
+            exact: Some("test".to_string()),
+            regex: None,
+            word: None,
+            case_insensitive: false,
+            substr: None,
+            section: None,
+            offset: None,
+            offset_range: None,
+            section_offset: None,
+            section_offset_range: None,
+            not: None,
+            platforms: None,
+            compiled_regex: None,
+        }),
+        count_min: None,
+        count_max: None,
+        per_kb_min: None,
+        per_kb_max: None,
+        entropy_min: Some(6.5),
+        entropy_max: Some(8.0),
+    };
+
+    let result = parsing::apply_trait_defaults(
+        raw_override,
+        &defaults,
+        &mut Vec::new(),
+        Path::new("test.yaml"),
+    );
+    assert_eq!(result.size_min, Some(512));
+    assert_eq!(result.size_max, Some(1_048_576));
+    assert_eq!(result.entropy_min, Some(6.5));
+    assert_eq!(result.entropy_max, Some(8.0));
+}
+
+#[test]
 fn test_apply_composite_defaults_applies_all_defaults() {
     let defaults = models::TraitDefaults {
         r#for: Some(vec!["elf".to_string(), "macho".to_string()]),
@@ -482,6 +625,10 @@ fn test_apply_composite_defaults_applies_all_defaults() {
         conf: Some(0.75),
         mbc: Some("B0030".to_string()),
         attack: Some("T1071.001".to_string()),
+        size_min: Some(2048),
+        size_max: Some(5_242_880),
+        entropy_min: None,
+        entropy_max: None,
     };
 
     let raw = models::RawCompositeRule {
@@ -537,6 +684,8 @@ fn test_apply_composite_defaults_applies_all_defaults() {
     assert_eq!(result.attack, Some("T1071.001".to_string()));
     assert_eq!(result.platforms, vec![Platform::Linux, Platform::MacOS]);
     assert_eq!(result.r#for, vec![RuleFileType::Elf, RuleFileType::Macho]);
+    assert_eq!(result.size_min, Some(2048));
+    assert_eq!(result.size_max, Some(5_242_880));
 }
 
 #[test]
@@ -549,6 +698,10 @@ fn test_apply_composite_defaults_unset_with_none() {
         conf: Some(0.9),
         mbc: Some("B0030".to_string()),
         attack: Some("T1071".to_string()),
+        size_min: None,
+        size_max: None,
+        entropy_min: None,
+        entropy_max: None,
     };
 
     let raw = models::RawCompositeRule {

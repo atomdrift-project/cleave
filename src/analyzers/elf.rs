@@ -24,6 +24,8 @@ pub(crate) struct ElfAnalyzer {
     string_extractor: StringExtractor,
     /// Pre-extracted strings from stng (avoids redundant extraction)
     preextracted_strings: Option<Vec<StringInfo>>,
+    /// When true, skip scanning for embedded PE/ELF binaries (prevents recursion in sub-analysis).
+    skip_embedded_scan: bool,
 }
 
 impl ElfAnalyzer {
@@ -35,7 +37,15 @@ impl ElfAnalyzer {
             radare2: Radare2Analyzer::new(),
             string_extractor: StringExtractor::new(),
             preextracted_strings: None,
+            skip_embedded_scan: false,
         }
+    }
+
+    /// Disable embedded binary scanning (used when analyzing extracted sub-files).
+    #[must_use]
+    pub(crate) fn without_embedded_scan(mut self) -> Self {
+        self.skip_embedded_scan = true;
+        self
     }
 
     /// Create analyzer with pre-existing capability mapper (wraps in Arc)
@@ -248,7 +258,8 @@ impl ElfAnalyzer {
                             report.findings.push(crate::types::Finding {
                                 id: "file/sfx/appimage".to_string(),
                                 kind: crate::types::FindingKind::Structural,
-                                desc: "Squashfs filesystem appended after ELF image (AppImage)".to_string(),
+                                desc: "Squashfs filesystem appended after ELF image (AppImage)"
+                                    .to_string(),
                                 conf: 1.0,
                                 crit: crate::types::Criticality::Notable,
                                 mbc: None,
@@ -266,18 +277,15 @@ impl ElfAnalyzer {
                             });
                         } else {
                             // Regular overlay — analyze via overlay detector
-                            match crate::analyzers::overlay::analyze_overlay(
+                            if let Ok(Some(ov)) = crate::analyzers::overlay::analyze_overlay(
                                 overlay,
                                 &report.target.path,
                                 Some(self.capability_mapper.clone()),
                                 None,
                             ) {
-                                Ok(Some(ov)) => {
-                                    report.findings.push(ov.sfx_finding);
-                                    report.findings.extend(ov.archive_report.findings);
-                                    report.files.extend(ov.archive_report.files);
-                                }
-                                Ok(None) | Err(_) => {}
+                                report.findings.push(ov.sfx_finding);
+                                report.findings.extend(ov.archive_report.findings);
+                                report.files.extend(ov.archive_report.files);
                             }
                         }
                     }
@@ -315,11 +323,34 @@ impl ElfAnalyzer {
         };
 
         // Embedded ELF / PE scanning (host-agnostic, scans raw bytes)
-        let embedded = crate::analyzers::embedded_binary_detector::scan_for_embedded_binaries(data);
-        for binary in &embedded {
-            report.findings.push(
-                crate::analyzers::embedded_binary_detector::finding_for(binary, &report.target.path),
-            );
+        if !self.skip_embedded_scan {
+            let host_name = std::path::Path::new(&report.target.path)
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("binary.elf")
+                .to_string();
+            let embedded =
+                crate::analyzers::embedded_binary_detector::scan_for_embedded_binaries(data);
+            for binary in &embedded {
+                report
+                    .findings
+                    .push(crate::analyzers::embedded_binary_detector::finding_for(
+                        binary,
+                        &report.target.path,
+                    ));
+                let slice_end = (binary.offset + binary.estimated_size).min(data.len());
+                let embedded_bytes = &data[binary.offset..slice_end];
+                let kind_str = binary.kind.as_str();
+                if let Some(fa) = analyze_embedded_as_child(
+                    embedded_bytes,
+                    &host_name,
+                    kind_str,
+                    binary.offset,
+                    self.capability_mapper.clone(),
+                ) {
+                    report.files.push(fa);
+                }
+            }
         }
 
         // Use strings in order of preference:
@@ -857,6 +888,42 @@ impl Analyzer for ElfAnalyzer {
     }
 }
 
+/// Extract embedded binary bytes to a temp file, analyze with the appropriate analyzer,
+/// and return a FileAnalysis suitable for inclusion as a nested child (depth=1).
+fn analyze_embedded_as_child(
+    bytes: &[u8],
+    host_name: &str,
+    kind_str: &str,
+    offset: usize,
+    capability_mapper: std::sync::Arc<crate::capabilities::CapabilityMapper>,
+) -> Option<crate::types::FileAnalysis> {
+    let suffix = if kind_str == "pe" { ".exe" } else { "" };
+    let temp = tempfile::Builder::new().suffix(suffix).tempfile().ok()?;
+    std::fs::write(temp.path(), bytes).ok()?;
+
+    let report = if kind_str == "pe" {
+        crate::analyzers::pe::PEAnalyzer::new()
+            .with_capability_mapper_arc(capability_mapper)
+            .without_embedded_scan()
+            .analyze(temp.path())
+            .ok()?
+    } else {
+        ElfAnalyzer::new()
+            .with_capability_mapper_arc(capability_mapper)
+            .without_embedded_scan()
+            .analyze(temp.path())
+            .ok()?
+    };
+
+    let child_name = format!("embedded:{}@{:#x}", kind_str, offset);
+    let child_path = crate::types::file_analysis::encode_archive_path(host_name, &child_name);
+
+    let (mut fa, _nested, _) = report.into_file_analysis(0);
+    fa.path = child_path;
+    fa.depth = 1;
+    Some(fa)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1142,19 +1209,19 @@ mod tests {
         // Test basic path encoding
         assert_eq!(
             encode_upx_path("/path/to/file.elf"),
-            "/path/to/file.elf##upx@0"
+            "/path/to/file.elf!!upx@0"
         );
 
         // Test path with special characters
         assert_eq!(
             encode_upx_path("/tmp/test-file_v1.2.elf"),
-            "/tmp/test-file_v1.2.elf##upx@0"
+            "/tmp/test-file_v1.2.elf!!upx@0"
         );
 
         // Test path that already has archive delimiter
         assert_eq!(
             encode_upx_path("archive.zip!!inner.elf"),
-            "archive.zip!!inner.elf##upx@0"
+            "archive.zip!!inner.elf!!upx@0"
         );
     }
 
@@ -1180,7 +1247,7 @@ mod tests {
 
         // Verify all UPX-specific fields
         assert_eq!(file.id, 1);
-        assert_eq!(file.path, "/test/sample.elf##upx@0");
+        assert_eq!(file.path, "/test/sample.elf!!upx@0");
         assert_eq!(file.parent_id, Some(0));
         assert_eq!(file.depth, 1);
         assert_eq!(file.encoding, Some(vec!["upx".to_string()]));

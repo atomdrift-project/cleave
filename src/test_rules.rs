@@ -17,8 +17,7 @@ use crate::capabilities::CapabilityMapper;
 use crate::composite_rules::debug::{DebugCollector, EvaluationDebug, RuleType};
 use crate::composite_rules::{
     Arch, CompositeTrait, Condition, EvaluationContext, FileType as RuleFileType, Platform,
-    SectionMap,
-    TraitDefinition,
+    SectionMap, TraitDefinition,
 };
 use crate::types::{AnalysisReport, Evidence};
 use colored::Colorize;

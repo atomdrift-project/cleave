@@ -123,7 +123,7 @@ fn validate_pe(data: &[u8], offset: usize) -> Option<EmbeddedBinary> {
     let e_lfanew = read_u32_le(data, offset + 0x3C)? as usize;
 
     // Must be non-zero, 4-byte aligned, and within a reasonable range
-    if e_lfanew < 4 || e_lfanew > 1024 || e_lfanew % 4 != 0 {
+    if !(4..=1024).contains(&e_lfanew) || !e_lfanew.is_multiple_of(4) {
         return None;
     }
 
@@ -172,7 +172,7 @@ fn validate_pe(data: &[u8], offset: usize) -> Option<EmbeddedBinary> {
     let size_of_image_offset = pe_base + 24 + 56; // optional header base + 56
     let estimated_size = read_u32_le(data, size_of_image_offset)
         .map(|soi| soi as usize)
-        .filter(|&soi| soi >= MIN_BINARY_SIZE && soi <= MAX_PE_IMAGE_SIZE)
+        .filter(|&soi| (MIN_BINARY_SIZE..=MAX_PE_IMAGE_SIZE).contains(&soi))
         .unwrap_or_else(|| data.len().saturating_sub(offset));
 
     if estimated_size < MIN_BINARY_SIZE {
@@ -306,7 +306,7 @@ mod tests {
         // MZ header
         buf[offset] = 0x4D; // M
         buf[offset + 1] = 0x5A; // Z
-        // e_lfanew at offset + 0x3C = 0x40 (64)
+                                // e_lfanew at offset + 0x3C = 0x40 (64)
         let e_lfanew: u32 = 0x40;
         buf[offset + 0x3C..offset + 0x40].copy_from_slice(&e_lfanew.to_le_bytes());
 
@@ -338,7 +338,7 @@ mod tests {
         buf[offset + 4] = 2; // 64-bit
         buf[offset + 5] = 1; // LE
         buf[offset + 6] = 1; // version
-        // e_type = EXEC (2)
+                             // e_type = EXEC (2)
         buf[offset + 16..offset + 18].copy_from_slice(&2u16.to_le_bytes());
         // e_machine = x86-64 (0x3E)
         buf[offset + 18..offset + 20].copy_from_slice(&0x3Eu16.to_le_bytes());

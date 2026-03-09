@@ -98,12 +98,18 @@ impl Arch {
         let upper = rule.to_uppercase();
 
         // Check for x86-64 indicators (must come before x86 to avoid false match)
-        if contains_word(&upper, "X64") || contains_word(&upper, "X86_64") || contains_word(&upper, "AMD64") {
+        if contains_word(&upper, "X64")
+            || contains_word(&upper, "X86_64")
+            || contains_word(&upper, "AMD64")
+        {
             return Some(Arch::X86_64);
         }
 
         // Check for x86 (32-bit) indicators
-        if contains_word(&upper, "X86") || contains_word(&upper, "X32") || contains_word(&upper, "I386") {
+        if contains_word(&upper, "X86")
+            || contains_word(&upper, "X32")
+            || contains_word(&upper, "I386")
+        {
             return Some(Arch::X86);
         }
 
@@ -691,10 +697,7 @@ mod tests {
     #[test]
     fn test_yara_arch_no_false_positive_version() {
         // "V3_14" should not match X86 due to partial overlap
-        assert_eq!(
-            Arch::from_yara_rule_name("Beacon_V3_14"),
-            None
-        );
+        assert_eq!(Arch::from_yara_rule_name("Beacon_V3_14"), None);
     }
 
     #[test]

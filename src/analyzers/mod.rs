@@ -45,7 +45,6 @@ pub(crate) mod utils;
 pub(crate) mod chrome_manifest;
 pub(crate) mod elf;
 pub(crate) mod embedded_binary_detector;
-pub(crate) mod sfx_detector;
 pub(crate) mod java_class;
 pub(crate) mod lnk;
 pub(crate) mod macho;
@@ -54,6 +53,7 @@ pub(crate) mod package_json;
 pub mod pe;
 pub(crate) mod png;
 pub(crate) mod rtf;
+pub(crate) mod sfx_detector;
 pub(crate) mod vsix_manifest;
 
 // Unified source analyzer (handles all tree-sitter languages)

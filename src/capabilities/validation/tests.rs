@@ -2637,7 +2637,9 @@ mod constraint_tests {
         find_empty_condition_clauses, find_needs_zero, find_none_only_with_proximity,
         find_pure_alias_traits,
     };
-    use crate::composite_rules::{Arch, CompositeTrait, Condition, FileType, Platform, TraitDefinition};
+    use crate::composite_rules::{
+        Arch, CompositeTrait, Condition, FileType, Platform, TraitDefinition,
+    };
     use crate::types::Criticality;
     use std::path::PathBuf;
 

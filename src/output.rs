@@ -665,16 +665,34 @@ pub(crate) fn format_terminal(report: &AnalysisReport) -> String {
         // Format file type (uppercase, e.g., "PE", "ELF")
         let file_type_display = file.file_type.to_uppercase();
 
-        // File header: path  type • formula • sha256:hash
+        // File header: [indent] path  type • formula
         let type_formula = if formula.is_empty() {
             file_type_display
         } else {
             format!("{} • {}", file_type_display, formula)
         };
 
+        // Indent nested files (archive members, embedded binaries, decoded payloads)
+        let indent = "  ".repeat(file.depth as usize);
+        // Strip virtual path prefixes (!!member, ##encoding) for display if depth > 0
+        let display_path = if file.depth > 0 {
+            file.path
+                .rsplit(crate::types::file_analysis::ARCHIVE_DELIMITER)
+                .next()
+                .or_else(|| {
+                    file.path
+                        .rsplit(crate::types::file_analysis::ENCODING_DELIMITER)
+                        .next()
+                })
+                .unwrap_or(&file.path)
+        } else {
+            &file.path
+        };
+
         output.push_str(&format!(
-            "{}  {}\n",
-            file.path.bright_white().bold(),
+            "{}{}  {}\n",
+            indent,
+            display_path.bright_white().bold(),
             type_formula.bright_black()
         ));
         output.push('\n');

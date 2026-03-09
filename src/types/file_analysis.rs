@@ -319,12 +319,16 @@ pub(crate) fn encode_decoded_path(parent: &str, encoding: &[String], offset: usi
     )
 }
 
-/// Encode a UPX-unpacked content path
+/// Encode a UPX-unpacked content path.
 ///
-/// Example: encode_upx_path("sample.elf") -> "sample.elf##upx@0"
+/// Uses the archive delimiter (`!!`) so the unpacked binary is treated as a
+/// child file entry (like a zip member) rather than an encoding layer that
+/// gets merged back into the parent.
+///
+/// Example: encode_upx_path("sample.exe") -> "sample.exe!!upx@0"
 #[must_use]
 pub(crate) fn encode_upx_path(parent: &str) -> String {
-    format!("{}{}upx@0", parent, ENCODING_DELIMITER)
+    format!("{}{}upx@0", parent, ARCHIVE_DELIMITER)
 }
 
 #[cfg(test)]
@@ -588,12 +592,12 @@ mod tests {
 
     #[test]
     fn test_encode_upx_path() {
-        assert_eq!(encode_upx_path("sample.elf"), "sample.elf##upx@0");
+        assert_eq!(encode_upx_path("sample.elf"), "sample.elf!!upx@0");
     }
 
     #[test]
     fn test_encode_upx_path_with_directory() {
-        assert_eq!(encode_upx_path("/tmp/sample.elf"), "/tmp/sample.elf##upx@0");
+        assert_eq!(encode_upx_path("/tmp/sample.elf"), "/tmp/sample.elf!!upx@0");
     }
 
     #[test]

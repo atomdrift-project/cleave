@@ -391,8 +391,7 @@ pub(crate) fn eval_ast_query<'a>(query_str: &str, ctx: &EvaluationContext<'a>) -
         }
         ControlFlow::Continue(())
     };
-    let options =
-        tree_sitter::QueryCursorOptions::default().progress_callback(&mut progress_cb);
+    let options = tree_sitter::QueryCursorOptions::default().progress_callback(&mut progress_cb);
     let mut matches =
         query_cursor.matches_with_options(&query, tree.root_node(), source.as_bytes(), options);
     let mut buffer1: Vec<u8> = Vec::new();

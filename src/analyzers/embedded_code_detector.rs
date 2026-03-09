@@ -396,28 +396,24 @@ fn detect_base64_binary(
     }
 
     // Path 1: stng already decoded the base64 for us — value bytes ARE the payload.
-    let decoded: Vec<u8>;
-    if string_info
+    let decoded: Vec<u8> = if string_info
         .encoding_chain
         .iter()
         .any(|e| e == "base64" || e == "base64-obf")
     {
-        decoded = string_info.value.as_bytes().to_vec();
+        string_info.value.as_bytes().to_vec()
     } else {
         // Path 2: raw base64 text — decode it ourselves.
         if !looks_like_base64(&string_info.value) {
             return None;
         }
         let clean = strip_whitespace(&string_info.value);
-        decoded = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &clean)
+        base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &clean)
             .or_else(|_| {
-                base64::Engine::decode(
-                    &base64::engine::general_purpose::URL_SAFE_NO_PAD,
-                    &clean,
-                )
+                base64::Engine::decode(&base64::engine::general_purpose::URL_SAFE_NO_PAD, &clean)
             })
-            .ok()?;
-    }
+            .ok()?
+    };
 
     let inner_type = magic_type(&decoded)?;
     let offset = string_info.offset.unwrap_or(0);
@@ -787,7 +783,11 @@ mod tests {
         use base64::Engine;
         let raw = b"Hello World!Hello World!Hello World!Hello World!Hello World!Hello World!Hello World!Hello World!";
         let s = base64::engine::general_purpose::STANDARD.encode(raw);
-        assert!(s.len() >= MIN_BASE64_LEN, "test string too short: {}", s.len());
+        assert!(
+            s.len() >= MIN_BASE64_LEN,
+            "test string too short: {}",
+            s.len()
+        );
         assert!(looks_like_base64(&s));
     }
 
@@ -810,10 +810,17 @@ mod tests {
         payload.resize(75, 0u8);
         use base64::Engine;
         let encoded = base64::engine::general_purpose::STANDARD.encode(&payload);
-        assert!(encoded.len() >= MIN_BASE64_LEN, "encoded too short: {}", encoded.len());
+        assert!(
+            encoded.len() >= MIN_BASE64_LEN,
+            "encoded too short: {}",
+            encoded.len()
+        );
         let info = make_string_info(&encoded);
         let result = detect_base64_binary("test.sh", &info, 0);
-        assert!(result.is_some(), "should detect base64-encoded gzip payload");
+        assert!(
+            result.is_some(),
+            "should detect base64-encoded gzip payload"
+        );
         let entry = result.unwrap();
         assert!(
             entry.findings.iter().any(|f| f.id.contains("base64-gz")),
@@ -870,10 +877,7 @@ mod tests {
     #[test]
     fn test_decode_utf16le_valid() {
         use base64::Engine;
-        let utf16: Vec<u8> = "IEX"
-            .encode_utf16()
-            .flat_map(|c| c.to_le_bytes())
-            .collect();
+        let utf16: Vec<u8> = "IEX".encode_utf16().flat_map(|c| c.to_le_bytes()).collect();
         let b64 = base64::engine::general_purpose::STANDARD.encode(&utf16);
         let result = decode_utf16le(&b64);
         assert_eq!(result.as_deref(), Some("IEX"));

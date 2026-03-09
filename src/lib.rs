@@ -108,7 +108,10 @@ fn process_yara_result(
         // doesn't match the file being analyzed (e.g., an _X64_ rule firing
         // on an ARM64 binary).
         if let Some(rule_arch) = composite_rules::Arch::from_yara_rule_name(&yara_match.rule) {
-            if !file_archs.is_empty() && !file_archs.contains(&composite_rules::Arch::All) && !file_archs.contains(&rule_arch) {
+            if !file_archs.is_empty()
+                && !file_archs.contains(&composite_rules::Arch::All)
+                && !file_archs.contains(&rule_arch)
+            {
                 tracing::debug!(
                     "Skipping YARA rule {} (arch {:?} doesn't match file {:?})",
                     yara_match.rule,
@@ -479,11 +482,7 @@ fn analyze_file_with_resources<P: AsRef<Path>>(
             // Process YARA results and evaluate with inline evidence
             let inline_yara =
                 process_yara_result(&mut report, yara_result, engine.map(AsRef::as_ref));
-            let fat_arch_ranges = if is_fat {
-                Some(labeled_ranges)
-            } else {
-                None
-            };
+            let fat_arch_ranges = if is_fat { Some(labeled_ranges) } else { None };
             capability_mapper.evaluate_and_merge_findings_with_precomputed(
                 &mut report,
                 eval_data,

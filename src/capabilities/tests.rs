@@ -560,7 +560,7 @@ fn test_apply_composite_defaults_unset_with_none() {
         attack: Some("none".to_string()),          // Unset
         platforms: Some(vec!["none".to_string()]), // Unset
         arch: None,
-        file_types: None,                          // Use default
+        file_types: None, // Use default
         all: None,
         any: None,
         needs: None,

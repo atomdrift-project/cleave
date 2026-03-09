@@ -241,26 +241,34 @@ pub(crate) fn eval_metrics<'a>(
         "binary.overlay_entropy" => metrics.binary.as_ref().map(|b| b.overlay_entropy as f64),
 
         // PE specific
-        "pe.rich_header_present" => metrics
-            .pe
-            .as_ref()
-            .map(|p| if p.rich_header_present { 1.0 } else { 0.0 }),
-        "pe.timestamp_anomaly" => metrics
-            .pe
-            .as_ref()
-            .map(|p| if p.timestamp_anomaly { 1.0 } else { 0.0 }),
+        "pe.rich_header_present" => {
+            metrics
+                .pe
+                .as_ref()
+                .map(|p| if p.rich_header_present { 1.0 } else { 0.0 })
+        }
+        "pe.timestamp_anomaly" => {
+            metrics
+                .pe
+                .as_ref()
+                .map(|p| if p.timestamp_anomaly { 1.0 } else { 0.0 })
+        }
         "pe.checksum_valid" => metrics
             .pe
             .as_ref()
             .map(|p| if p.checksum_valid { 1.0 } else { 0.0 }),
-        "pe.dos_stub_modified" => metrics
-            .pe
-            .as_ref()
-            .map(|p| if p.dos_stub_modified { 1.0 } else { 0.0 }),
-        "pe.unusual_alignment" => metrics
-            .pe
-            .as_ref()
-            .map(|p| if p.unusual_alignment { 1.0 } else { 0.0 }),
+        "pe.dos_stub_modified" => {
+            metrics
+                .pe
+                .as_ref()
+                .map(|p| if p.dos_stub_modified { 1.0 } else { 0.0 })
+        }
+        "pe.unusual_alignment" => {
+            metrics
+                .pe
+                .as_ref()
+                .map(|p| if p.unusual_alignment { 1.0 } else { 0.0 })
+        }
         "pe.is_dotnet" => metrics
             .pe
             .as_ref()

@@ -39,7 +39,8 @@ impl UPXDecompressor {
     /// Check if data appears to be UPX-packed by looking for "UPX!" or similar
     /// tampered magic strings ([A-Z]PX!) in the first 512 bytes of the file.
     pub(crate) fn is_upx_packed(data: &[u8]) -> bool {
-        let search_range = data.len().min(512);
+        // Search slightly past 512 to catch UPX! placed right at the boundary.
+        let search_range = data.len().min(520);
         let search_data = &data[..search_range];
 
         // Look for "[A-Z]PX!" pattern
@@ -194,9 +195,17 @@ mod tests {
 
     #[test]
     fn test_is_upx_packed_magic_at_exactly_512_boundary() {
-        // Magic starting at byte 512 should NOT be detected (outside range)
+        // Magic starting at byte 512 IS detected (search range is 520 to catch boundary cases)
         let mut data = vec![0u8; 520];
         data[512..516].copy_from_slice(b"UPX!");
+        assert!(UPXDecompressor::is_upx_packed(&data));
+    }
+
+    #[test]
+    fn test_is_upx_packed_magic_beyond_520() {
+        // Magic starting at byte 521 should NOT be detected (outside search range)
+        let mut data = vec![0u8; 530];
+        data[521..525].copy_from_slice(b"UPX!");
         assert!(!UPXDecompressor::is_upx_packed(&data));
     }
 

@@ -875,8 +875,7 @@ impl YaraEngine {
                         break;
                     }
                     "MACHO" | "MACH_O" | "MACH-O" => {
-                        rule_filetypes =
-                            vec!["macho".to_string(), "dylib".to_string()];
+                        rule_filetypes = vec!["macho".to_string(), "dylib".to_string()];
                         break;
                     }
                     _ => {}

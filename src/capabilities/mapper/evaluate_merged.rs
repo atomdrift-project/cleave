@@ -7,8 +7,11 @@
 //! 3. Import metadata findings are generated
 //! 4. Composite rules are evaluated (can reference both traits and imports)
 //! 5. All findings are deduplicated and merged
+//! 6. Retroactive unless-suppression: atomic findings whose `unless:` conditions
+//!    referenced composites (not yet evaluated in Steps 1-2) are re-checked and
+//!    removed if their conditions are now satisfied.
 
-use crate::composite_rules::{Arch, FileType as RuleFileType, SectionMap};
+use crate::composite_rules::{Arch, Condition, FileType as RuleFileType, SectionMap};
 use crate::types::{AnalysisReport, Evidence};
 use rustc_hash::{FxHashMap, FxHashSet};
 use std::collections::HashMap;
@@ -225,5 +228,116 @@ impl super::CapabilityMapper {
                 report.findings.push(finding);
             }
         }
+
+        // Step 6: Retroactive unless-suppression.
+        //
+        // Atomic traits (Steps 1-2) can declare `unless: [{id: some-composite}]`, but
+        // composite rules only fire in Step 4. When an atomic is evaluated in Step 2,
+        // the composite isn't in `report.findings` yet, so the `unless:` check always
+        // returns false — the trait fires even though it should be suppressed.
+        //
+        // After all findings are merged, re-check `unless:` Condition::Trait references
+        // for every atomic finding and remove any that are now satisfied. The loop runs
+        // until no further suppressions occur (handles chained unless: dependencies).
+        self.apply_retroactive_unless_suppression(report);
+    }
+
+    /// Re-evaluate `unless:` Trait conditions for all findings after the full evaluation
+    /// pipeline (Steps 1-5) has completed.
+    ///
+    /// Two ordering constraints prevent `unless:` from working correctly at eval time:
+    ///
+    /// 1. **Atomic → composite**: Atomic traits (Steps 1-2) cannot check `unless:` conditions
+    ///    that reference composites, because composites fire in Step 4.
+    ///
+    /// 2. **Composite → composite**: Composites evaluated in Pass 1 of Step 4 are run in
+    ///    parallel and deduplicated by ID, so a composite with `unless: [other-composite]`
+    ///    may fire before the referenced composite is in `all_findings`. Subsequent
+    ///    iterations see the deduplication guard and skip re-evaluation.
+    ///
+    /// This method corrects both cases: after all findings are merged, it re-checks every
+    /// finding's `unless:` Trait conditions against the complete finding set and removes
+    /// any that should have been suppressed. It loops to a fixed point so cascading
+    /// suppressions (A suppresses B which suppresses C) are fully resolved.
+    fn apply_retroactive_unless_suppression(&self, report: &mut AnalysisReport) {
+        // Build lookup from qualified ID → Option<&[Condition]> (the unless: list, if any).
+        // Covers both atomic traits and composite rules.
+        // Trait/composite IDs are qualified at load time (e.g. "well-known/foo::bar-id").
+        let mut unless_by_id: HashMap<&str, &[Condition]> = HashMap::new();
+        for t in &self.trait_definitions {
+            if let Some(conds) = t.unless.as_deref() {
+                unless_by_id.insert(t.id.as_str(), conds);
+            }
+        }
+        for r in &self.composite_rules {
+            if let Some(conds) = r.unless.as_deref() {
+                unless_by_id.insert(r.id.as_str(), conds);
+            }
+        }
+
+        if unless_by_id.is_empty() {
+            return;
+        }
+
+        // Iterate to fixed point: removing a finding can expose further suppressions
+        // in rules whose `unless:` referenced the just-removed finding.
+        loop {
+            let all_ids: FxHashSet<&str> =
+                report.findings.iter().map(|f| f.id.as_str()).collect();
+
+            let suppressed: FxHashSet<String> = report
+                .findings
+                .iter()
+                .filter_map(|finding| {
+                    let unless_conds = unless_by_id.get(finding.id.as_str())?;
+                    let should_suppress = unless_conds.iter().any(|cond| {
+                        if let Condition::Trait { id } = cond {
+                            self.unless_trait_id_matches(id, &all_ids)
+                        } else {
+                            false // non-Trait conditions are evaluated correctly at eval time
+                        }
+                    });
+                    should_suppress.then(|| finding.id.clone())
+                })
+                .collect();
+
+            if suppressed.is_empty() {
+                break;
+            }
+
+            tracing::debug!(
+                "Retroactive unless-suppression: removing {} findings suppressed by post-eval conditions",
+                suppressed.len()
+            );
+
+            report.findings.retain(|f| !suppressed.contains(&f.id));
+        }
+    }
+
+    /// Check whether a trait ID from an `unless:` condition matches any finding in the set.
+    ///
+    /// Mirrors the ID-matching logic used in `eval_trait` so that retroactive suppression
+    /// behaves identically to runtime evaluation.
+    fn unless_trait_id_matches(&self, id: &str, all_ids: &FxHashSet<&str>) -> bool {
+        // Specific reference (contains `::`): exact match only.
+        if id.contains("::") {
+            return all_ids.contains(id);
+        }
+
+        // No slashes: suffix match (short name, same-directory style).
+        // e.g. "terminate" matches "execution/process::terminate"
+        if !id.contains('/') {
+            let suffix_new = format!("::{id}");
+            let suffix_legacy = format!("/{id}");
+            return all_ids
+                .iter()
+                .any(|fid| fid.ends_with(&suffix_new) || fid.ends_with(&suffix_legacy));
+        }
+
+        // Has slashes but no `::`: directory-prefix match.
+        // e.g. "micro-behaviors/fs" matches any finding under that path.
+        all_ids
+            .iter()
+            .any(|fid| *fid == id || fid.starts_with(&format!("{id}/")))
     }
 }

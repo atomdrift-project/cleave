@@ -632,7 +632,10 @@ fn test_arch_filter_no_match() {
     ctx.arch = vec![Arch::Arm];
 
     let result = trait_def.evaluate(&ctx);
-    assert!(result.is_none(), "Should not match when arch doesn't intersect");
+    assert!(
+        result.is_none(),
+        "Should not match when arch doesn't intersect"
+    );
 }
 
 #[test]
@@ -660,7 +663,10 @@ fn test_arch_all_matches_any_file_arch() {
     ctx.arch = vec![Arch::Aarch64];
 
     let result = trait_def.evaluate(&ctx);
-    assert!(result.is_some(), "Arch::All trait should match any file architecture");
+    assert!(
+        result.is_some(),
+        "Arch::All trait should match any file architecture"
+    );
 }
 
 #[test]
@@ -687,7 +693,10 @@ fn test_arch_file_all_matches_any_trait_arch() {
     assert_eq!(ctx.arch, vec![Arch::All]);
 
     let result = trait_def.evaluate(&ctx);
-    assert!(result.is_some(), "File with unknown arch (All) should match any trait arch");
+    assert!(
+        result.is_some(),
+        "File with unknown arch (All) should match any trait arch"
+    );
 }
 
 #[test]
@@ -695,7 +704,11 @@ fn test_arch_no_default_to_runtime_arch() {
     let report = create_report_with_size(1024);
     assert!(report.target.architectures.is_none());
     let ctx = create_test_context(report, vec![]);
-    assert_eq!(ctx.arch, vec![Arch::All], "Default arch must be All when report has no architectures");
+    assert_eq!(
+        ctx.arch,
+        vec![Arch::All],
+        "Default arch must be All when report has no architectures"
+    );
 }
 
 #[test]
@@ -749,7 +762,10 @@ fn test_arch_multi_arch_file() {
     ctx.arch = vec![Arch::X86_64, Arch::Aarch64];
 
     let result = trait_def.evaluate(&ctx);
-    assert!(result.is_some(), "Should match when file contains target architecture");
+    assert!(
+        result.is_some(),
+        "Should match when file contains target architecture"
+    );
 }
 
 #[test]

@@ -41,7 +41,25 @@ pub(crate) fn detect_archive_from_bytes(data: &[u8]) -> Option<&'static str> {
         [0x42, 0x5A, 0x68, _] => Some("bz2"),
         // CAB: MSCF
         [0x4D, 0x53, 0x43, 0x46] => Some("cab"),
-        _ => None,
+        // LZH: -lh
+        [0x2D, 0x6C, 0x68, _] => Some("lzh"),
+        // ISO 9660: starts with 16 sectors of zeros then \x01CD001 — check signature at 0x8001
+        // (can't do offset matching in 4-byte match, handled below)
+        // CPIO: 070701 or 070702
+        [0x30, 0x37, 0x30, 0x37]
+            if data.len() >= 6 && (data[4..6] == *b"01" || data[4..6] == *b"02") =>
+        {
+            Some("cpio")
+        }
+        // Apple DMG: koly (trailer magic, not at start) — skip, too unreliable at offset 0
+        _ => {
+            // ISO 9660: primary volume descriptor at offset 0x8001
+            if data.len() > 0x8006 && data[0x8001..0x8006] == *b"CD001" {
+                Some("iso")
+            } else {
+                None
+            }
+        }
     }
 }
 

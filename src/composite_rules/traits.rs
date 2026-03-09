@@ -10,7 +10,9 @@ use super::evaluators::{
     eval_metrics, eval_raw, eval_section, eval_section_ratio, eval_string, eval_string_count,
     eval_structure, eval_symbol, eval_syscall, eval_trait, eval_yara_inline, ContentLocationParams,
 };
-use super::types::{default_architectures, default_file_types, default_platforms, Arch, FileType, Platform};
+use super::types::{
+    default_architectures, default_file_types, default_platforms, Arch, FileType, Platform,
+};
 use crate::types::{
     deduplicate_evidence, Criticality, Evidence, Finding, FindingKind, MAX_EVIDENCE_PER_TRAIT,
 };

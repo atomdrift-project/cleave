@@ -876,3 +876,250 @@ traits:
         "Level 3 should match because level 2 matched (chained dependency)"
     );
 }
+
+/// Retroactive unless-suppression: atomic trait with `unless: [composite-id]`.
+///
+/// When an atomic trait's `unless:` condition references a composite rule, the
+/// composite is not in `report.findings` at atomic evaluation time (Steps 1-2).
+/// The engine's Step 6 retroactive pass must re-check and suppress the finding
+/// after all composites have fired.
+#[test]
+fn test_retroactive_unless_suppression_atomic_with_composite_ref() {
+    let yaml = r#"
+defaults:
+  for: [all]
+
+traits:
+  - id: "test/packer::signal-a"
+    desc: "Packer signal A"
+    crit: baseline
+    conf: 0.9
+    if:
+      type: string
+      substr: "SIGNAL_A"
+
+  - id: "test/packer::signal-b"
+    desc: "Packer signal B"
+    crit: baseline
+    conf: 0.9
+    if:
+      type: string
+      substr: "SIGNAL_B"
+
+  # This atomic fires on a common string, but should be SUPPRESSED when the
+  # packer composite fires — i.e., when it's a legitimate packed binary.
+  - id: "test/victim::generic-api"
+    desc: "Generic API (suppressed when packer detected)"
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: string
+      substr: "GENERIC_API"
+    unless:
+      - id: test/packer::combined
+
+composite_rules:
+  - id: "test/packer::combined"
+    desc: "Both packer signals present"
+    crit: notable
+    conf: 0.9
+    all:
+      - id: test/packer::signal-a
+      - id: test/packer::signal-b
+"#;
+    let (_dir, path) = create_test_yaml(yaml);
+    let mapper = CapabilityMapper::from_yaml(&path).unwrap();
+
+    // All three strings present: both packer signals + the generic API string.
+    // combined composite should fire; generic-api should be retroactively suppressed.
+    let binary_data = b"SIGNAL_A SIGNAL_B GENERIC_API";
+    let mut report = create_test_report_with_size(binary_data.len() as u64);
+    for s in ["SIGNAL_A", "SIGNAL_B", "GENERIC_API"] {
+        report.strings.push(crate::types::StringInfo {
+            value: s.to_string(),
+            offset: Some(0),
+            encoding: "ascii".to_string(),
+            string_type: crate::types::StringType::Const,
+            section: None,
+            encoding_chain: Vec::new(),
+            fragments: None,
+        });
+    }
+
+    mapper.evaluate_and_merge_findings(&mut report, binary_data, None, None);
+
+    assert!(
+        report.findings.iter().any(|f| f.id == "test/packer::signal-a"),
+        "signal-a should fire"
+    );
+    assert!(
+        report.findings.iter().any(|f| f.id == "test/packer::signal-b"),
+        "signal-b should fire"
+    );
+    assert!(
+        report.findings.iter().any(|f| f.id == "test/packer::combined"),
+        "combined composite should fire"
+    );
+    assert!(
+        !report.findings.iter().any(|f| f.id == "test/victim::generic-api"),
+        "generic-api should be retroactively suppressed by unless: test/packer::combined"
+    );
+}
+
+/// Retroactive unless-suppression: atomic fires normally when suppressor composite is absent.
+#[test]
+fn test_retroactive_unless_suppression_fires_when_suppressor_absent() {
+    let yaml = r#"
+defaults:
+  for: [all]
+
+traits:
+  - id: "test/packer::signal-a"
+    desc: "Packer signal A"
+    crit: baseline
+    conf: 0.9
+    if:
+      type: string
+      substr: "SIGNAL_A"
+
+  - id: "test/packer::signal-b"
+    desc: "Packer signal B"
+    crit: baseline
+    conf: 0.9
+    if:
+      type: string
+      substr: "SIGNAL_B"
+
+  - id: "test/victim::generic-api"
+    desc: "Generic API (suppressed when packer detected)"
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: string
+      substr: "GENERIC_API"
+    unless:
+      - id: test/packer::combined
+
+composite_rules:
+  - id: "test/packer::combined"
+    desc: "Both packer signals present"
+    crit: notable
+    conf: 0.9
+    all:
+      - id: test/packer::signal-a
+      - id: test/packer::signal-b
+"#;
+    let (_dir, path) = create_test_yaml(yaml);
+    let mapper = CapabilityMapper::from_yaml(&path).unwrap();
+
+    // Only GENERIC_API present: combined composite does NOT fire; generic-api should fire.
+    let binary_data = b"GENERIC_API";
+    let mut report = create_test_report_with_size(binary_data.len() as u64);
+    report.strings.push(crate::types::StringInfo {
+        value: "GENERIC_API".to_string(),
+        offset: Some(0),
+        encoding: "ascii".to_string(),
+        string_type: crate::types::StringType::Const,
+        section: None,
+        encoding_chain: Vec::new(),
+        fragments: None,
+    });
+
+    mapper.evaluate_and_merge_findings(&mut report, binary_data, None, None);
+
+    assert!(
+        !report.findings.iter().any(|f| f.id == "test/packer::combined"),
+        "combined composite should not fire (only one signal)"
+    );
+    assert!(
+        report.findings.iter().any(|f| f.id == "test/victim::generic-api"),
+        "generic-api should fire when suppressor composite is absent"
+    );
+}
+
+/// Retroactive unless-suppression: composite with `unless: [other-composite]`.
+///
+/// Two composites evaluated in parallel in Pass 1 of Step 4 both fire. One
+/// has `unless: [other-composite]`. Because they're evaluated in parallel, the
+/// `unless:` check is skipped (the other composite isn't in `all_findings` yet).
+/// Step 6 must retroactively suppress it.
+#[test]
+fn test_retroactive_unless_suppression_composite_with_composite_ref() {
+    let yaml = r#"
+defaults:
+  for: [all]
+
+traits:
+  - id: "test/base::signal-a"
+    desc: "Signal A"
+    crit: baseline
+    conf: 0.9
+    if:
+      type: string
+      substr: "SIGNAL_A"
+
+  - id: "test/base::signal-b"
+    desc: "Signal B"
+    crit: baseline
+    conf: 0.9
+    if:
+      type: string
+      substr: "SIGNAL_B"
+
+  - id: "test/base::signal-c"
+    desc: "Signal C (used by victim composite)"
+    crit: baseline
+    conf: 0.9
+    if:
+      type: string
+      substr: "SIGNAL_C"
+
+composite_rules:
+  # Suppressor: fires when both A and B are present.
+  - id: "test/suppressor::combined"
+    desc: "Combined suppressor"
+    crit: notable
+    conf: 0.9
+    all:
+      - id: test/base::signal-a
+      - id: test/base::signal-b
+
+  # Victim: fires when C is present, but suppressed when suppressor fires.
+  - id: "test/victim::composite"
+    desc: "Victim composite (suppressed by combined)"
+    crit: suspicious
+    conf: 0.9
+    unless:
+      - id: test/suppressor::combined
+    any:
+      - id: test/base::signal-c
+"#;
+    let (_dir, path) = create_test_yaml(yaml);
+    let mapper = CapabilityMapper::from_yaml(&path).unwrap();
+
+    // All three signals: suppressor fires, victim should be retroactively suppressed.
+    let binary_data = b"SIGNAL_A SIGNAL_B SIGNAL_C";
+    let mut report = create_test_report_with_size(binary_data.len() as u64);
+    for s in ["SIGNAL_A", "SIGNAL_B", "SIGNAL_C"] {
+        report.strings.push(crate::types::StringInfo {
+            value: s.to_string(),
+            offset: Some(0),
+            encoding: "ascii".to_string(),
+            string_type: crate::types::StringType::Const,
+            section: None,
+            encoding_chain: Vec::new(),
+            fragments: None,
+        });
+    }
+
+    mapper.evaluate_and_merge_findings(&mut report, binary_data, None, None);
+
+    assert!(
+        report.findings.iter().any(|f| f.id == "test/suppressor::combined"),
+        "combined suppressor should fire"
+    );
+    assert!(
+        !report.findings.iter().any(|f| f.id == "test/victim::composite"),
+        "victim composite should be retroactively suppressed by unless: test/suppressor::combined"
+    );
+}

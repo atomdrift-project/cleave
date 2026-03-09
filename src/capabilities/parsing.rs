@@ -55,12 +55,13 @@ pub(crate) fn apply_trait_defaults(
     // Silently defaulting to [All] is not allowed — authors must be explicit about target file types.
     if raw.file_types.is_none() && defaults.r#for.is_none() {
         warnings.push(format!(
-            "Trait '{}': missing 'for:' declaration. Every trait must specify which file types it \
+            "Trait '{}' in {}: missing 'for:' declaration. Every trait must specify which file types it \
              targets. Use specific types (elf, python, ...) or named groups \
              (binaries, scripts, source, manifests, documents, media, data). To avoid repeating \
              this on every trait in the file, add a file-wide default in the top-level \
              'defaults:' section, e.g.: 'defaults:\\n  for: [binaries]'.",
-            raw.id
+            raw.id,
+            path.display()
         ));
     }
 
@@ -76,14 +77,16 @@ pub(crate) fn apply_trait_defaults(
     // Validation: require explicit platforms: either on trait or in file defaults.
     if raw.platforms.is_none() && defaults.platforms.is_none() {
         warnings.push(format!(
-            "Trait '{}': missing 'platforms:' declaration. Every trait must specify which \
+            "Trait '{}' in {}: missing 'platforms:' declaration. Every trait must specify which \
              platforms it targets. List explicit platforms such as [unix, windows, macos], or \
              set a file-wide default in the top-level 'defaults:' section.",
-            raw.id
+            raw.id,
+            path.display()
         ));
     }
 
     // Parse platforms: use trait-specific if present (unless "none"), else defaults, else [All]
+    let warn_start = warnings.len();
     let platforms = match apply_vec_default(raw.platforms, &defaults.platforms) {
         Some(plats) => {
             let parsed = parse_platforms(&plats, warnings);
@@ -97,6 +100,9 @@ pub(crate) fn apply_trait_defaults(
     };
 
     check_platform_filetype_conflicts(&raw.id, &platforms, &file_types, warnings);
+    for w in &mut warnings[warn_start..] {
+        *w = format!("{} (trait '{}' in {})", w, raw.id, path.display());
+    }
 
     // Parse arch: use trait-specific if present (unless "none"), else defaults, else [All]
     let arch = apply_vec_default(raw.arch, &defaults.arch)
@@ -109,7 +115,7 @@ pub(crate) fn apply_trait_defaults(
         Some(v) => match parse_criticality(v) {
             Ok(crit) => crit,
             Err(e) => {
-                warnings.push(format!("Trait '{}': {}", raw.id, e));
+                warnings.push(format!("Trait '{}' in {}: {}", raw.id, path.display(), e));
                 Criticality::Baseline
             }
         },
@@ -117,7 +123,12 @@ pub(crate) fn apply_trait_defaults(
             Some(v) => match parse_criticality(v) {
                 Ok(crit) => crit,
                 Err(e) => {
-                    warnings.push(format!("Default criticality: {}", e));
+                    warnings.push(format!(
+                        "Default criticality in {} (trait '{}'): {}",
+                        path.display(),
+                        raw.id,
+                        e
+                    ));
                     Criticality::Baseline
                 }
             },
@@ -128,11 +139,12 @@ pub(crate) fn apply_trait_defaults(
     // Stricter validation for HOSTILE traits: atomic traits cannot be HOSTILE
     if criticality == Criticality::Hostile {
         warnings.push(format!(
-            "Trait '{}' is an atomic trait marked 'crit: hostile'. Atomic (micro-behaviors/) traits cannot \
+            "Trait '{}' in {}: atomic trait marked 'crit: hostile'. Atomic (micro-behaviors/) traits cannot \
              be hostile — hostile criticality requires intent inference and belongs in objectives/. \
              Move this to objectives/ and categorize by attacker objective (e.g., objectives/command-and-control/, objectives/exfiltration/, \
              objectives/impact/). See TAXONOMY.md: micro-behaviors/ max criticality is 'suspicious'.",
-            raw.id
+            raw.id,
+            path.display()
         ));
         criticality = Criticality::Suspicious;
     }
@@ -140,8 +152,9 @@ pub(crate) fn apply_trait_defaults(
     // Additional strictness for SUSPICIOUS/HOSTILE traits
     if criticality >= Criticality::Suspicious && raw.desc.len() < 15 {
         warnings.push(format!(
-            "Trait '{}' has an overly short description for its criticality.",
-            raw.id
+            "Trait '{}' in {}: overly short description for its criticality.",
+            raw.id,
+            path.display()
         ));
     }
 
@@ -149,8 +162,10 @@ pub(crate) fn apply_trait_defaults(
     let word_count = raw.desc.split_whitespace().count();
     if word_count > 7 {
         warnings.push(format!(
-            "Trait '{}' has an overly long description ({} words, max 7 recommended).",
-            raw.id, word_count
+            "Trait '{}' in {}: overly long description ({} words, max 7 recommended).",
+            raw.id,
+            path.display(),
+            word_count
         ));
     }
 
@@ -171,6 +186,7 @@ pub(crate) fn apply_trait_defaults(
     fix_literal_regex_patterns(&mut condition);
 
     // Validation: regex patterns must not exceed 80 bytes.
+    let warn_start = warnings.len();
     check_regex_length(&raw.id, &condition, warnings);
 
     // Also check regex patterns in unless: conditions
@@ -201,6 +217,9 @@ pub(crate) fn apply_trait_defaults(
                 check_regex_length(&ctx, cond, warnings);
             }
         }
+    }
+    for w in &mut warnings[warn_start..] {
+        *w = format!("{} (in {})", w, path.display());
     }
 
     let mut trait_def = TraitDefinition {
@@ -549,14 +568,16 @@ pub(crate) fn apply_composite_defaults(
     // Validation: require explicit platforms: either on rule or in file defaults.
     if raw.platforms.is_none() && defaults.platforms.is_none() {
         warnings.push(format!(
-            "Composite rule '{}': missing 'platforms:' declaration. Every rule must specify \
+            "Composite rule '{}' in {}: missing 'platforms:' declaration. Every rule must specify \
              which platforms it targets. List explicit platforms such as [unix, windows, macos], \
              or set a file-wide default in the top-level 'defaults:' section.",
-            raw.id
+            raw.id,
+            path.display()
         ));
     }
 
     // Parse platforms: use rule-specific if present (unless "none"), else defaults, else [All]
+    let warn_start = warnings.len();
     let platforms = match apply_vec_default(raw.platforms, &defaults.platforms) {
         Some(plats) => {
             let parsed = parse_platforms(&plats, warnings);
@@ -570,6 +591,9 @@ pub(crate) fn apply_composite_defaults(
     };
 
     check_platform_filetype_conflicts(&raw.id, &platforms, &file_types, warnings);
+    for w in &mut warnings[warn_start..] {
+        *w = format!("{} (composite rule '{}' in {})", w, raw.id, path.display());
+    }
 
     // Parse arch: use rule-specific if present (unless "none"), else defaults, else [All]
     let arch = apply_vec_default(raw.arch, &defaults.arch)
@@ -582,7 +606,12 @@ pub(crate) fn apply_composite_defaults(
         Some(v) => match parse_criticality(v) {
             Ok(crit) => crit,
             Err(e) => {
-                warnings.push(format!("Composite rule '{}': {}", raw.id, e));
+                warnings.push(format!(
+                    "Composite rule '{}' in {}: {}",
+                    raw.id,
+                    path.display(),
+                    e
+                ));
                 Criticality::Baseline
             }
         },
@@ -590,7 +619,12 @@ pub(crate) fn apply_composite_defaults(
             Some(v) => match parse_criticality(v) {
                 Ok(crit) => crit,
                 Err(e) => {
-                    warnings.push(format!("Default criticality: {}", e));
+                    warnings.push(format!(
+                        "Default criticality in {} (composite rule '{}'): {}",
+                        path.display(),
+                        raw.id,
+                        e
+                    ));
                     Criticality::Baseline
                 }
             },
@@ -602,6 +636,7 @@ pub(crate) fn apply_composite_defaults(
     let requires_all = raw.all.or_else(|| raw.condition.map(|c| vec![c]));
 
     // Check regex patterns in all condition lists
+    let warn_start = warnings.len();
     let mut check_conditions = |conditions: &Option<Vec<crate::composite_rules::Condition>>,
                                 clause_name: &str| {
         if let Some(ref conds) = conditions {
@@ -621,6 +656,10 @@ pub(crate) fn apply_composite_defaults(
         check_conditions(&downgrade.any, "downgrade.any");
         check_conditions(&downgrade.all, "downgrade.all");
         check_conditions(&downgrade.none, "downgrade.none");
+    }
+    drop(check_conditions);
+    for w in &mut warnings[warn_start..] {
+        *w = format!("{} (in {})", w, path.display());
     }
 
     CompositeTrait {

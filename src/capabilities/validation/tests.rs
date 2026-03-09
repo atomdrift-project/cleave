@@ -3590,6 +3590,83 @@ mod excessive_file_types_tests {
     }
 
     #[test]
+    fn test_multi_group_union_exempt() {
+        // `for: [scripts, binaries, source]` in YAML expands to 33 concrete types.
+        // The validator must not re-warn the author to use groups they already used.
+        let scripts = vec![
+            FileType::Shell,
+            FileType::Batch,
+            FileType::Python,
+            FileType::JavaScript,
+            FileType::Ruby,
+            FileType::Php,
+            FileType::Perl,
+            FileType::Lua,
+            FileType::PowerShell,
+            FileType::AppleScript,
+        ];
+        let binaries = vec![
+            FileType::Elf,
+            FileType::Macho,
+            FileType::Pe,
+            FileType::Dylib,
+            FileType::So,
+            FileType::Dll,
+            FileType::Class,
+            FileType::Pyc,
+        ];
+        let source = vec![
+            FileType::TypeScript,
+            FileType::Rust,
+            FileType::Java,
+            FileType::C,
+            FileType::Cpp,
+            FileType::Go,
+            FileType::CSharp,
+            FileType::Swift,
+            FileType::ObjectiveC,
+            FileType::Groovy,
+            FileType::Kotlin,
+            FileType::Scala,
+            FileType::Zig,
+            FileType::Elixir,
+            FileType::Vbs,
+        ];
+        let combined: Vec<FileType> = scripts
+            .into_iter()
+            .chain(binaries)
+            .chain(source)
+            .collect();
+        assert_eq!(combined.len(), 33);
+        let traits = vec![trait_with_for("test::multi-group", combined)];
+        let result = find_excessive_file_types(&traits, &[]);
+        assert!(
+            result.is_empty(),
+            "union of complete named groups should not be flagged"
+        );
+    }
+
+    #[test]
+    fn test_partial_group_still_flagged() {
+        // Cherry-picking types from multiple groups (not complete groups) must still warn.
+        // [elf, macho, pe] is a partial binaries group; [python, shell] is partial scripts.
+        let traits = vec![trait_with_for(
+            "test::partial-groups",
+            vec![
+                FileType::Elf,
+                FileType::Macho,
+                FileType::Pe,
+                FileType::Python,
+                FileType::Shell,
+                FileType::Ruby,
+                FileType::Rust,
+            ],
+        )];
+        let result = find_excessive_file_types(&traits, &[]);
+        assert_eq!(result.len(), 1, "partial group selection should still warn");
+    }
+
+    #[test]
     fn test_composite_rule_flagged() {
         let rule = CompositeTrait {
             id: "test::composite-many".to_string(),

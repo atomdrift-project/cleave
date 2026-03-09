@@ -1019,43 +1019,43 @@ pub(crate) fn find_excessive_file_types(
         FileType::Plist,
         FileType::Lnk,
     ];
+    let documents: &[FileType] = &[FileType::Text, FileType::Pdf, FileType::Rtf, FileType::Html];
+    let media: &[FileType] = &[FileType::Jpeg, FileType::Png];
+    let data: &[FileType] = &[FileType::Ipa];
     let all_groups: &[(&[FileType], &str)] = &[
         (binaries, "binaries"),
         (scripts, "scripts"),
         (source, "source"),
         (manifests, "manifests"),
+        (documents, "documents"),
+        (media, "media"),
+        (data, "data"),
     ];
 
-    // Returns true if `types` exactly equals a canonical group (order-independent).
-    // When the author wrote e.g. `for: [scripts]`, the parser expands the alias to its
-    // members — we must not re-warn them to use the alias they already used.
-    let is_canonical_group = |types: &[FileType]| -> bool {
-        all_groups.iter().any(|(group, _)| {
-            types.len() == group.len() && types.iter().all(|ft| group.contains(ft))
+    // Returns true if `types` is exactly the union of one or more complete named groups.
+    // Groups are disjoint, so the check reduces to: every type must belong to a group,
+    // and if it does, that entire group must be present in `types`.
+    // e.g. `for: [scripts, binaries]` expands to 18 types → group-expressible (both groups complete)
+    //      `for: [elf, python, shell]` → NOT group-expressible (partial groups)
+    let is_group_expressible = |types: &[FileType]| -> bool {
+        let type_set: std::collections::HashSet<_> = types.iter().collect();
+        type_set.iter().all(|ft| {
+            all_groups
+                .iter()
+                .any(|(group, _)| group.contains(ft) && group.iter().all(|g| type_set.contains(g)))
         })
     };
 
-    let suggest = |types: &[FileType]| -> &'static str {
-        debug_assert!(!types.contains(&FileType::All));
-        // If all types fit within a single named group, name it specifically.
-        for (group, name) in all_groups {
-            if types.iter().all(|ft| group.contains(ft)) {
-                return match *name {
-                    "binaries" => "use `for: [binaries]` instead",
-                    "scripts" => "use `for: [scripts]` instead",
-                    "source" => "use `for: [source]` instead",
-                    "manifests" => "use `for: [manifests]` instead",
-                    _ => "use a named group instead",
-                };
-            }
-        }
+    // Only called when is_group_expressible returned false, so types contain at least one
+    // member that doesn't belong to any named group — always suggest [all] or named groups.
+    let suggest = |_types: &[FileType]| -> &'static str {
         "use `for: [all]` or combine named groups (binaries, scripts, source, manifests, documents, media, data)"
     };
 
     let mut violations = Vec::new();
 
     for t in trait_definitions {
-        if t.r#for.contains(&FileType::All) || is_canonical_group(&t.r#for) {
+        if t.r#for.contains(&FileType::All) || is_group_expressible(&t.r#for) {
             continue;
         }
         if t.r#for.len() >= MIN_FOR_WARNING {
@@ -1064,7 +1064,7 @@ pub(crate) fn find_excessive_file_types(
     }
 
     for r in composite_rules {
-        if r.r#for.contains(&FileType::All) || is_canonical_group(&r.r#for) {
+        if r.r#for.contains(&FileType::All) || is_group_expressible(&r.r#for) {
             continue;
         }
         if r.r#for.len() >= MIN_FOR_WARNING {

@@ -18,18 +18,18 @@ use crate::capabilities::validation::{
     find_banned_directory_segments, find_cap_obj_violations, find_cap_wellknown_violations,
     find_composite_only_wellknown_files, find_depth_violations,
     find_duplicate_second_level_directories, find_duplicate_traits_and_composites,
-    find_empty_condition_clauses, find_excessive_skip_conditions, find_for_only_duplicates,
-    find_hex_binary_missing_section,
-    find_generic_wellknown_leaf_dirs, find_hostile_cap_rules, find_hostile_meta_rules,
-    find_impossible_count_constraints, find_impossible_needs, find_impossible_size_constraints,
-    find_invalid_not_usage, find_invalid_trait_ids, find_kv_exists_with_matcher, find_line_number,
+    find_empty_condition_clauses, find_excessive_file_types, find_excessive_skip_conditions,
+    find_for_only_duplicates, find_generic_wellknown_leaf_dirs, find_hex_binary_missing_section,
+    find_hostile_cap_rules, find_hostile_meta_rules, find_impossible_count_constraints,
+    find_impossible_needs, find_impossible_size_constraints, find_invalid_not_usage,
+    find_invalid_trait_ids, find_kv_exists_with_matcher, find_line_number,
     find_malware_subcategory_violations, find_meta_missing_section_filter,
-    find_metadata_cross_tier_refs,
-    find_missing_search_patterns, find_needs_without_any, find_needs_zero,
-    find_non_capturing_groups, find_none_only_with_proximity, find_orphaned_components,
-    find_overlapping_conditions, find_oversized_trait_directories, find_parent_duplicate_segments,
-    find_platform_named_directories, find_pure_alias_traits, find_redundant_any_refs,
-    find_redundant_needs_one, find_short_pattern_warnings, find_single_item_clauses,
+    find_metadata_cross_tier_refs, find_missing_search_patterns, find_needs_without_any,
+    find_needs_zero, find_non_capturing_groups, find_none_only_with_proximity,
+    find_orphaned_components, find_overlapping_conditions, find_oversized_trait_directories,
+    find_parent_duplicate_segments, find_platform_named_directories, find_pure_alias_traits,
+    find_redundant_any_refs, find_redundant_explicit_defaults, find_redundant_needs_one,
+    find_short_pattern_warnings, find_should_use_defaults, find_single_item_clauses,
     find_slow_regex_patterns, find_string_content_collisions, find_string_pattern_duplicates,
     find_too_short_patterns, find_unanchored_wellknown_composites,
     find_wellknown_category_violations, find_wellknown_missing_section_filter,
@@ -383,6 +383,30 @@ impl super::CapabilityMapper {
                     warnings.push(format!("{}: {}", path_str, warning));
                 } else {
                     warnings.push(warning);
+                }
+            }
+
+            // Per-file: check for values that should use defaults, and values redundant with defaults
+            if enable_full_validation {
+                let path_str = path.display().to_string();
+                for (field, value) in find_should_use_defaults(
+                    &mappings.traits,
+                    &mappings.composite_rules,
+                    &mappings.defaults,
+                ) {
+                    warnings.push(format!(
+                        "{path_str}: all {} items set '{field}' to {value} — move to 'defaults: {field}: {value}'",
+                        mappings.traits.len() + mappings.composite_rules.len(),
+                    ));
+                }
+                for (id, field) in find_redundant_explicit_defaults(
+                    &mappings.traits,
+                    &mappings.composite_rules,
+                    &mappings.defaults,
+                ) {
+                    warnings.push(format!(
+                        "'{id}' in {path_str}: '{field}' matches the file default — remove the explicit '{field}:' from this item",
+                    ));
                 }
             }
 
@@ -914,7 +938,9 @@ impl super::CapabilityMapper {
             check_basename_pattern_duplicates(&trait_definitions, &mut warnings);
             tracing::debug!("Step 1m completed in {:?}", step_start.elapsed());
         } else {
-            tracing::debug!("Step 1/15: Skipping precision validation (run 'cleave validate' to enable)");
+            tracing::debug!(
+                "Step 1/15: Skipping precision validation (run 'cleave validate' to enable)"
+            );
         }
 
         // Validate trait references in composite rules
@@ -1595,7 +1621,9 @@ impl super::CapabilityMapper {
                         eprintln!("   {}: Trait '{}'", source_file, trait_id);
                     }
                 }
-                eprintln!("\n   Add a specific 'for:' field, e.g., 'for: [pe]' or 'for: [elf, macho]'.");
+                eprintln!(
+                    "\n   Add a specific 'for:' field, e.g., 'for: [pe]' or 'for: [elf, macho]'."
+                );
                 warnings.push(format!(
                     "{} well-known/ traits use over-broad file type filter (add specific 'for:' field)",
                     wk_unscoped_ft.len()
@@ -1697,7 +1725,9 @@ impl super::CapabilityMapper {
                     "\n❌ ERROR: {} hex condition(s) target binary file types without a section filter",
                     hex_no_section.len()
                 );
-                eprintln!("   Hex patterns on binary targets must scope the search with 'section:'");
+                eprintln!(
+                    "   Hex patterns on binary targets must scope the search with 'section:'"
+                );
                 eprintln!("   (use 'section: text', 'section: data', etc., or add 'offset:' to pin location)\n");
                 for trait_id in &hex_no_section {
                     let source_file = rule_source_files
@@ -2402,6 +2432,45 @@ impl super::CapabilityMapper {
                 warnings.push(format!(
                     "{} rules have excessive unless:/downgrade: clauses",
                     excessive_skips.len()
+                ));
+            }
+
+            // Validate: traits/rules with 7+ explicit file types (suggest a named group instead)
+            let excessive_for = find_excessive_file_types(&trait_definitions, &composite_rules);
+            if !excessive_for.is_empty() {
+                eprintln!(
+                    "\n⚠️  WARNING: {} traits/rules specify 7+ explicit file types",
+                    excessive_for.len()
+                );
+                eprintln!(
+                    "   Enumerating many types is fragile and hard to maintain — use a named group:"
+                );
+                eprintln!(
+                    "   binaries, scripts, source, manifests, documents, media, data, or all\n"
+                );
+                for (id, count, suggestion, is_composite) in &excessive_for {
+                    let source = rule_source_files
+                        .get(id)
+                        .map(std::string::String::as_str)
+                        .unwrap_or("unknown");
+                    let line_hint = find_line_number(source, id);
+                    let kind = if *is_composite { "composite" } else { "trait" };
+                    if let Some(line) = line_hint {
+                        eprintln!(
+                            "   {}:{}: {} '{}' ({} types — {})",
+                            source, line, kind, id, count, suggestion
+                        );
+                    } else {
+                        eprintln!(
+                            "   {}: {} '{}' ({} types — {})",
+                            source, kind, id, count, suggestion
+                        );
+                    }
+                }
+                eprintln!();
+                warnings.push(format!(
+                    "{} traits/rules specify 7+ explicit file types (use a named group)",
+                    excessive_for.len()
                 ));
             }
 

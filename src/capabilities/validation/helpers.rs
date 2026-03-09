@@ -6,7 +6,7 @@
 use crate::composite_rules::{CompositeTrait, Condition, FileType as RuleFileType, Platform};
 use crate::types::Criticality;
 
-use super::super::parsing::parse_file_types;
+use super::super::parsing::{parse_file_types, parse_platforms};
 
 /// Returns true if the file type is a compiled binary format with sections.
 #[must_use]
@@ -69,21 +69,26 @@ pub(crate) fn simple_rule_to_composite_rule(
 ) -> CompositeTrait {
     // Parse platforms
     let platforms = if rule.platforms.is_empty() {
+        warnings.push(format!(
+            "Rule '{}': missing 'platforms:' declaration. Every rule must specify which \
+             platforms it targets. List explicit platforms such as [unix, windows, macos].",
+            rule.capability
+        ));
         vec![Platform::All]
     } else {
-        rule.platforms
-            .iter()
-            .filter_map(|p| match p.to_lowercase().as_str() {
-                "all" => Some(Platform::All),
-                "linux" => Some(Platform::Linux),
-                "macos" => Some(Platform::MacOS),
-                "windows" => Some(Platform::Windows),
-                "unix" => Some(Platform::Unix),
-                "android" => Some(Platform::Android),
-                "ios" => Some(Platform::Ios),
-                _ => None,
-            })
-            .collect()
+        let parsed = parse_platforms(
+            &rule
+                .platforms
+                .iter()
+                .map(|s| s.to_string())
+                .collect::<Vec<_>>(),
+            warnings,
+        );
+        if parsed.is_empty() {
+            vec![Platform::All]
+        } else {
+            parsed
+        }
     };
 
     // Parse file types

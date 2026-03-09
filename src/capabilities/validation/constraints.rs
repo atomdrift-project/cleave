@@ -3,7 +3,169 @@
 //! This module validates logical constraints in rules, detecting impossible
 //! or contradictory configurations that would make rules unsatisfiable.
 
+use crate::capabilities::models::{RawCompositeRule, RawTraitDefinition, TraitDefaults};
 use crate::composite_rules::{CompositeTrait, Condition, FileType, TraitDefinition};
+
+/// Compare two slices of strings in a case-insensitive, order-independent way.
+fn vec_values_equal(a: &[String], b: &[String]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut sa: Vec<String> = a.iter().map(|s| s.to_ascii_lowercase()).collect();
+    let mut sb: Vec<String> = b.iter().map(|s| s.to_ascii_lowercase()).collect();
+    sa.sort_unstable();
+    sb.sort_unstable();
+    sa == sb
+}
+
+/// If all values are `Some` and equal, return the common value; otherwise `None`.
+fn all_same_str<'a>(values: &[Option<&'a str>]) -> Option<&'a str> {
+    let first = values.first().and_then(|v| *v)?;
+    values
+        .iter()
+        .skip(1)
+        .all(|v| *v == Some(first))
+        .then_some(first)
+}
+
+/// If all values are `Some` and element-wise equal (order-independent), return the common slice.
+fn all_same_vec<'a>(values: &[Option<&'a [String]>]) -> Option<&'a [String]> {
+    let first = values.first().and_then(|v| *v)?;
+    values
+        .iter()
+        .skip(1)
+        .all(|v| v.is_some_and(|other| vec_values_equal(first, other)))
+        .then_some(first)
+}
+
+/// Per-file: flag traits/composites that explicitly repeat a value already set in file defaults.
+///
+/// When `platforms: [windows]` appears on a trait and the file already has
+/// `defaults: platforms: [windows]`, the per-trait setting is redundant noise.
+///
+/// Returns: `Vec<(item_id, field_name)>`
+#[must_use]
+pub(crate) fn find_redundant_explicit_defaults(
+    raw_traits: &[RawTraitDefinition],
+    raw_composites: &[RawCompositeRule],
+    defaults: &TraitDefaults,
+) -> Vec<(String, &'static str)> {
+    let mut violations = Vec::new();
+
+    for t in raw_traits {
+        if let (Some(def), Some(val)) = (&defaults.platforms, &t.platforms) {
+            if vec_values_equal(def, val) {
+                violations.push((t.id.clone(), "platforms"));
+            }
+        }
+        if let (Some(def), Some(val)) = (&defaults.r#for, &t.file_types) {
+            if vec_values_equal(def, val) {
+                violations.push((t.id.clone(), "for"));
+            }
+        }
+        if let (Some(def), Some(val)) = (&defaults.mbc, &t.mbc) {
+            if def == val {
+                violations.push((t.id.clone(), "mbc"));
+            }
+        }
+        if let (Some(def), Some(val)) = (&defaults.attack, &t.attack) {
+            if def == val {
+                violations.push((t.id.clone(), "attack"));
+            }
+        }
+    }
+
+    for r in raw_composites {
+        if let (Some(def), Some(val)) = (&defaults.platforms, &r.platforms) {
+            if vec_values_equal(def, val) {
+                violations.push((r.id.clone(), "platforms"));
+            }
+        }
+        if let (Some(def), Some(val)) = (&defaults.r#for, &r.file_types) {
+            if vec_values_equal(def, val) {
+                violations.push((r.id.clone(), "for"));
+            }
+        }
+        if let (Some(def), Some(val)) = (&defaults.mbc, &r.mbc) {
+            if def == val {
+                violations.push((r.id.clone(), "mbc"));
+            }
+        }
+        if let (Some(def), Some(val)) = (&defaults.attack, &r.attack) {
+            if def == val {
+                violations.push((r.id.clone(), "attack"));
+            }
+        }
+    }
+
+    violations
+}
+
+/// Per-file: recommend `defaults:` when all items in a file share the same explicit value.
+///
+/// When every trait and composite in a YAML file explicitly sets the same value for
+/// `platforms`, `for`, `mbc`, or `attack`, it should be set once in `defaults:` instead.
+/// Only fires for 2+ items and only for fields not already covered by file defaults.
+///
+/// Returns: `Vec<(field_name, common_value)>`
+#[must_use]
+pub(crate) fn find_should_use_defaults(
+    raw_traits: &[RawTraitDefinition],
+    raw_composites: &[RawCompositeRule],
+    defaults: &TraitDefaults,
+) -> Vec<(&'static str, String)> {
+    if raw_traits.len() + raw_composites.len() < 2 {
+        return Vec::new();
+    }
+
+    let mut suggestions = Vec::new();
+
+    if defaults.platforms.is_none() {
+        let vals: Vec<Option<&[String]>> = raw_traits
+            .iter()
+            .map(|t| t.platforms.as_deref())
+            .chain(raw_composites.iter().map(|r| r.platforms.as_deref()))
+            .collect();
+        if let Some(common) = all_same_vec(&vals) {
+            suggestions.push(("platforms", format!("[{}]", common.join(", "))));
+        }
+    }
+
+    if defaults.r#for.is_none() {
+        let vals: Vec<Option<&[String]>> = raw_traits
+            .iter()
+            .map(|t| t.file_types.as_deref())
+            .chain(raw_composites.iter().map(|r| r.file_types.as_deref()))
+            .collect();
+        if let Some(common) = all_same_vec(&vals) {
+            suggestions.push(("for", format!("[{}]", common.join(", "))));
+        }
+    }
+
+    if defaults.mbc.is_none() {
+        let vals: Vec<Option<&str>> = raw_traits
+            .iter()
+            .map(|t| t.mbc.as_deref())
+            .chain(raw_composites.iter().map(|r| r.mbc.as_deref()))
+            .collect();
+        if let Some(common) = all_same_str(&vals) {
+            suggestions.push(("mbc", common.to_string()));
+        }
+    }
+
+    if defaults.attack.is_none() {
+        let vals: Vec<Option<&str>> = raw_traits
+            .iter()
+            .map(|t| t.attack.as_deref())
+            .chain(raw_composites.iter().map(|r| r.attack.as_deref()))
+            .collect();
+        if let Some(common) = all_same_str(&vals) {
+            suggestions.push(("attack", common.to_string()));
+        }
+    }
+
+    suggestions
+}
 
 /// Find composite rules where `needs` exceeds the number of possible matching items in `any:`.
 ///
@@ -786,6 +948,131 @@ pub(crate) fn find_none_only_with_proximity(composite_rules: &[CompositeTrait]) 
         })
         .map(|rule| rule.id.clone())
         .collect()
+}
+
+/// Find traits and composite rules with 7 or more explicit file types in their `for:` field.
+///
+/// Listing 7+ individual file types defeats the purpose of specific targeting and is
+/// equivalent to broad groupings like `binaries`, `scripts`, or `all`. Authors should
+/// use these aggregates instead of enumerating every covered type.
+///
+/// The threshold of 7 was chosen because the `binaries` group contains exactly 7 members;
+/// any list that long almost certainly maps to an existing group.
+///
+/// Traits with `for: [all]` are exempt — they already use the broadest specifier.
+///
+/// Returns: `Vec<(id, count, suggestion, is_composite)>`
+#[must_use]
+pub(crate) fn find_excessive_file_types(
+    trait_definitions: &[TraitDefinition],
+    composite_rules: &[CompositeTrait],
+) -> Vec<(String, usize, &'static str, bool)> {
+    const MIN_FOR_WARNING: usize = 7;
+
+    let binaries: &[FileType] = &[
+        FileType::Elf,
+        FileType::Macho,
+        FileType::Pe,
+        FileType::Dylib,
+        FileType::So,
+        FileType::Dll,
+        FileType::Class,
+        FileType::Pyc,
+    ];
+    let scripts: &[FileType] = &[
+        FileType::Shell,
+        FileType::Batch,
+        FileType::Python,
+        FileType::JavaScript,
+        FileType::Ruby,
+        FileType::Php,
+        FileType::Perl,
+        FileType::Lua,
+        FileType::PowerShell,
+        FileType::AppleScript,
+    ];
+    let source: &[FileType] = &[
+        FileType::TypeScript,
+        FileType::Rust,
+        FileType::Java,
+        FileType::C,
+        FileType::Cpp,
+        FileType::Go,
+        FileType::CSharp,
+        FileType::Swift,
+        FileType::ObjectiveC,
+        FileType::Groovy,
+        FileType::Kotlin,
+        FileType::Scala,
+        FileType::Zig,
+        FileType::Elixir,
+        FileType::Vbs,
+    ];
+    let manifests: &[FileType] = &[
+        FileType::PackageJson,
+        FileType::ChromeManifest,
+        FileType::CargoToml,
+        FileType::PyProjectToml,
+        FileType::GithubActions,
+        FileType::ComposerJson,
+        FileType::PkgInfo,
+        FileType::Plist,
+        FileType::Lnk,
+    ];
+    let all_groups: &[(&[FileType], &str)] = &[
+        (binaries, "binaries"),
+        (scripts, "scripts"),
+        (source, "source"),
+        (manifests, "manifests"),
+    ];
+
+    // Returns true if `types` exactly equals a canonical group (order-independent).
+    // When the author wrote e.g. `for: [scripts]`, the parser expands the alias to its
+    // members — we must not re-warn them to use the alias they already used.
+    let is_canonical_group = |types: &[FileType]| -> bool {
+        all_groups.iter().any(|(group, _)| {
+            types.len() == group.len() && types.iter().all(|ft| group.contains(ft))
+        })
+    };
+
+    let suggest = |types: &[FileType]| -> &'static str {
+        debug_assert!(!types.contains(&FileType::All));
+        // If all types fit within a single named group, name it specifically.
+        for (group, name) in all_groups {
+            if types.iter().all(|ft| group.contains(ft)) {
+                return match *name {
+                    "binaries" => "use `for: [binaries]` instead",
+                    "scripts" => "use `for: [scripts]` instead",
+                    "source" => "use `for: [source]` instead",
+                    "manifests" => "use `for: [manifests]` instead",
+                    _ => "use a named group instead",
+                };
+            }
+        }
+        "use `for: [all]` or combine named groups (binaries, scripts, source, manifests, documents, media, data)"
+    };
+
+    let mut violations = Vec::new();
+
+    for t in trait_definitions {
+        if t.r#for.contains(&FileType::All) || is_canonical_group(&t.r#for) {
+            continue;
+        }
+        if t.r#for.len() >= MIN_FOR_WARNING {
+            violations.push((t.id.clone(), t.r#for.len(), suggest(&t.r#for), false));
+        }
+    }
+
+    for r in composite_rules {
+        if r.r#for.contains(&FileType::All) || is_canonical_group(&r.r#for) {
+            continue;
+        }
+        if r.r#for.len() >= MIN_FOR_WARNING {
+            violations.push((r.id.clone(), r.r#for.len(), suggest(&r.r#for), true));
+        }
+    }
+
+    violations
 }
 
 /// Find hex conditions targeting binary file types that lack a required section filter.

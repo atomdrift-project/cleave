@@ -109,7 +109,10 @@ fn process_yara_result(
         // an authoritative signal written by the rule author.  "x86" in
         // arch_context means the x86 ISA family (32-bit and 64-bit).
         if let Some(ref ctx) = yara_match.arch_context {
-            if !ctx.is_empty() && !file_archs.is_empty() && !file_archs.contains(&composite_rules::Arch::All) {
+            if !ctx.is_empty()
+                && !file_archs.is_empty()
+                && !file_archs.contains(&composite_rules::Arch::All)
+            {
                 let rule_archs = crate::third_party_yara::archs_from_arch_context(ctx);
                 if !rule_archs.is_empty() && !rule_archs.iter().any(|a| file_archs.contains(a)) {
                     tracing::debug!(
@@ -950,7 +953,9 @@ where
             if options.disable_yara {
                 None
             } else {
-                Some(shared_resources::yara_engine(options.enable_third_party_yara))
+                Some(shared_resources::yara_engine(
+                    options.enable_third_party_yara,
+                ))
             }
         },
     );
@@ -979,8 +984,7 @@ where
     let errors = AtomicUsize::new(0);
 
     files.par_iter().for_each(|file_path| {
-        let result =
-            analyze_file_with_resources(file_path, options, &mapper, yara_engine.as_ref());
+        let result = analyze_file_with_resources(file_path, options, &mapper, yara_engine.as_ref());
         match &result {
             Ok(_) => {
                 analyzed.fetch_add(1, Ordering::Relaxed);

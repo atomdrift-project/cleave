@@ -1069,7 +1069,8 @@ pub(crate) fn find_composite_only_wellknown_files(
 
 /// Returns true if the trait targets binary file types (explicitly or via All).
 fn trait_targets_binaries(trait_def: &TraitDefinition) -> bool {
-    trait_def.r#for.contains(&FileType::All) || trait_def.r#for.iter().any(|ft| is_binary_file_type(*ft))
+    trait_def.r#for.contains(&FileType::All)
+        || trait_def.r#for.iter().any(|ft| is_binary_file_type(*ft))
 }
 
 /// Returns true if the condition has a section filter applied to it.
@@ -1077,10 +1078,16 @@ fn trait_targets_binaries(trait_def: &TraitDefinition) -> bool {
 fn condition_has_section_filter(cond: &Condition) -> bool {
     matches!(
         cond,
-        Condition::String { section: Some(_), .. }
-            | Condition::Raw { section: Some(_), .. }
-            | Condition::Hex { section: Some(_), .. }
-            | Condition::Section { .. }
+        Condition::String {
+            section: Some(_),
+            ..
+        } | Condition::Raw {
+            section: Some(_),
+            ..
+        } | Condition::Hex {
+            section: Some(_),
+            ..
+        } | Condition::Section { .. }
             | Condition::SectionRatio { .. }
     )
 }
@@ -1112,10 +1119,7 @@ pub(crate) fn find_wellknown_unscoped_filetypes(
 ) -> Vec<(String, String)> {
     trait_definitions
         .iter()
-        .filter(|t| {
-            extract_trait_tier(&t.id) == "well-known"
-                && t.r#for.contains(&FileType::All)
-        })
+        .filter(|t| extract_trait_tier(&t.id) == "well-known" && t.r#for.contains(&FileType::All))
         .map(|t| {
             let source = rule_source_files
                 .get(&t.id)
@@ -1140,8 +1144,7 @@ pub(crate) fn find_wellknown_unscoped_platforms(
     trait_definitions
         .iter()
         .filter(|t| {
-            extract_trait_tier(&t.id) == "well-known"
-                && t.platforms.contains(&Platform::All)
+            extract_trait_tier(&t.id) == "well-known" && t.platforms.contains(&Platform::All)
         })
         .map(|t| {
             let source = rule_source_files

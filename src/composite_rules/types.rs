@@ -182,6 +182,8 @@ pub(crate) enum FileType {
     Dll,
     /// Java bytecode class file
     Class,
+    /// Python compiled bytecode (.pyc)
+    Pyc,
     /// Unix shell script (bash, sh, zsh, etc.)
     Shell,
     /// Windows batch script (.bat, .cmd)
@@ -314,6 +316,7 @@ impl FileType {
             FileType::So,
             FileType::Dll,
             FileType::Class,
+            FileType::Pyc,
             // Source code formats
             FileType::Shell,
             FileType::Batch,
@@ -384,6 +387,7 @@ impl FileType {
             "go" => FileType::Go,
             "java" => FileType::Java,
             "class" => FileType::Class,
+            "pyc" | "python-bytecode" | "pythonbytecode" => FileType::Pyc,
             "ruby" | "rb" => FileType::Ruby,
             "php" => FileType::Php,
             "csharp" | "cs" => FileType::CSharp,

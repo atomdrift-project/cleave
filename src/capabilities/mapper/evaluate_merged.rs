@@ -282,8 +282,7 @@ impl super::CapabilityMapper {
         // Iterate to fixed point: removing a finding can expose further suppressions
         // in rules whose `unless:` referenced the just-removed finding.
         loop {
-            let all_ids: FxHashSet<&str> =
-                report.findings.iter().map(|f| f.id.as_str()).collect();
+            let all_ids: FxHashSet<&str> = report.findings.iter().map(|f| f.id.as_str()).collect();
 
             let suppressed: FxHashSet<String> = report
                 .findings

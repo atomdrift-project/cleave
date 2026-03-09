@@ -3380,3 +3380,575 @@ mod orphan_tests {
         );
     }
 }
+
+#[cfg(test)]
+mod excessive_file_types_tests {
+    use crate::capabilities::validation::constraints::find_excessive_file_types;
+    use crate::composite_rules::{
+        Arch, CompositeTrait, Condition, FileType, Platform, TraitDefinition,
+    };
+    use crate::types::Criticality;
+    use std::path::PathBuf;
+
+    fn trait_with_for(id: &str, types: Vec<FileType>) -> TraitDefinition {
+        TraitDefinition {
+            id: id.to_string(),
+            desc: "test".to_string(),
+            conf: 1.0,
+            crit: Criticality::Notable,
+            mbc: None,
+            attack: None,
+            r#if: Condition::String {
+                exact: Some("test".to_string()),
+                substr: None,
+                regex: None,
+                word: None,
+                case_insensitive: false,
+                external_ip: false,
+                section: None,
+                offset: None,
+                offset_range: None,
+                section_offset: None,
+                section_offset_range: None,
+                not: None,
+                platforms: None,
+                compiled_regex: None,
+            },
+            size_min: None,
+            size_max: None,
+            count_min: None,
+            count_max: None,
+            per_kb_min: None,
+            per_kb_max: None,
+            entropy_min: None,
+            entropy_max: None,
+            r#for: types,
+            platforms: vec![Platform::All],
+            arch: vec![Arch::All],
+            not: None,
+            unless: None,
+            downgrade: None,
+            defined_in: PathBuf::from("test.yaml"),
+            precision: None,
+        }
+    }
+
+    #[test]
+    fn test_under_threshold_not_flagged() {
+        let traits = vec![trait_with_for(
+            "test::few-types",
+            vec![FileType::Elf, FileType::Macho, FileType::Pe],
+        )];
+        let result = find_excessive_file_types(&traits, &[]);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_exactly_threshold_flagged() {
+        // 7 types that don't form a canonical group — must be flagged
+        let traits = vec![trait_with_for(
+            "test::seven-types",
+            vec![
+                FileType::Elf,
+                FileType::Macho,
+                FileType::Pe,
+                FileType::Dylib,
+                FileType::So,
+                FileType::Dll,
+                FileType::Python, // not the canonical `binaries` set
+            ],
+        )];
+        let result = find_excessive_file_types(&traits, &[]);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].0, "test::seven-types");
+        assert_eq!(result[0].1, 7);
+    }
+
+    #[test]
+    fn test_all_exempt() {
+        let traits = vec![trait_with_for("test::all-types", vec![FileType::All])];
+        let result = find_excessive_file_types(&traits, &[]);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_exact_binaries_group_exempt() {
+        // Exact `binaries` expansion must not be flagged — the author used `for: [binaries]`
+        // and the parser expanded it; we should not warn them to do what they already did.
+        let traits = vec![trait_with_for(
+            "test::all-binaries",
+            vec![
+                FileType::Elf,
+                FileType::Macho,
+                FileType::Pe,
+                FileType::Dylib,
+                FileType::So,
+                FileType::Dll,
+                FileType::Class,
+            ],
+        )];
+        let result = find_excessive_file_types(&traits, &[]);
+        assert!(
+            result.is_empty(),
+            "exact `binaries` expansion should not warn"
+        );
+    }
+
+    #[test]
+    fn test_exact_scripts_group_exempt() {
+        // Exact `scripts` expansion must not be flagged.
+        let traits = vec![trait_with_for(
+            "test::all-scripts",
+            vec![
+                FileType::Shell,
+                FileType::Batch,
+                FileType::Python,
+                FileType::JavaScript,
+                FileType::Ruby,
+                FileType::Php,
+                FileType::Perl,
+                FileType::Lua,
+                FileType::PowerShell,
+                FileType::AppleScript,
+            ],
+        )];
+        let result = find_excessive_file_types(&traits, &[]);
+        assert!(
+            result.is_empty(),
+            "exact `scripts` expansion should not warn"
+        );
+    }
+
+    #[test]
+    fn test_exact_source_group_exempt() {
+        let traits = vec![trait_with_for(
+            "test::all-source",
+            vec![
+                FileType::TypeScript,
+                FileType::Rust,
+                FileType::Java,
+                FileType::C,
+                FileType::Cpp,
+                FileType::Go,
+                FileType::CSharp,
+                FileType::Swift,
+                FileType::ObjectiveC,
+                FileType::Groovy,
+                FileType::Kotlin,
+                FileType::Scala,
+                FileType::Zig,
+                FileType::Elixir,
+                FileType::Vbs,
+            ],
+        )];
+        let result = find_excessive_file_types(&traits, &[]);
+        assert!(
+            result.is_empty(),
+            "exact `source` expansion should not warn"
+        );
+    }
+
+    #[test]
+    fn test_subset_of_source_suggests_source() {
+        // All types are within `source` but not the exact canonical set → suggest `source`
+        let traits = vec![trait_with_for(
+            "test::some-source",
+            vec![
+                FileType::TypeScript,
+                FileType::Rust,
+                FileType::Java,
+                FileType::C,
+                FileType::Cpp,
+                FileType::Go,
+                FileType::CSharp,
+            ],
+        )];
+        let result = find_excessive_file_types(&traits, &[]);
+        assert_eq!(result.len(), 1);
+        assert!(result[0].2.contains("source"));
+    }
+
+    #[test]
+    fn test_mixed_types_suggest_all() {
+        // Mix spanning multiple groups → suggest `all`
+        let traits = vec![trait_with_for(
+            "test::mixed",
+            vec![
+                FileType::Elf,
+                FileType::Macho,
+                FileType::Pe,
+                FileType::Python,
+                FileType::Shell,
+                FileType::Ruby,
+                FileType::Rust,
+            ],
+        )];
+        let result = find_excessive_file_types(&traits, &[]);
+        assert_eq!(result.len(), 1);
+        assert!(result[0].2.contains("all"));
+    }
+
+    #[test]
+    fn test_composite_rule_flagged() {
+        let rule = CompositeTrait {
+            id: "test::composite-many".to_string(),
+            desc: "test".to_string(),
+            conf: 1.0,
+            crit: Criticality::Notable,
+            mbc: None,
+            attack: None,
+            platforms: vec![Platform::All],
+            arch: vec![Arch::All],
+            r#for: vec![
+                FileType::Elf,
+                FileType::Macho,
+                FileType::Pe,
+                FileType::Dylib,
+                FileType::So,
+                FileType::Dll,
+                FileType::Python, // not the canonical `binaries` set
+            ],
+            size_min: None,
+            size_max: None,
+            all: None,
+            any: None,
+            needs: None,
+            none: None,
+            near_lines: None,
+            near_bytes: None,
+            unless: None,
+            not: None,
+            downgrade: None,
+            defined_in: PathBuf::from("test.yaml"),
+            precision: None,
+        };
+        let result = find_excessive_file_types(&[], &[rule]);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].0, "test::composite-many");
+        assert!(result[0].3); // is_composite
+    }
+}
+
+mod defaults_tests {
+    use crate::capabilities::models::{RawCompositeRule, RawTraitDefinition, TraitDefaults};
+    use crate::capabilities::validation::constraints::{
+        find_redundant_explicit_defaults, find_should_use_defaults,
+    };
+
+    fn raw_trait(
+        id: &str,
+        platforms: Option<Vec<&str>>,
+        file_types: Option<Vec<&str>>,
+        mbc: Option<&str>,
+        attack: Option<&str>,
+    ) -> RawTraitDefinition {
+        RawTraitDefinition {
+            id: id.to_string(),
+            desc: "test trait".to_string(),
+            conf: None,
+            crit: None,
+            mbc: mbc.map(str::to_string),
+            attack: attack.map(str::to_string),
+            platforms: platforms.map(|v| v.into_iter().map(str::to_string).collect()),
+            arch: None,
+            file_types: file_types.map(|v| v.into_iter().map(str::to_string).collect()),
+            size_min: None,
+            size_max: None,
+            count_min: None,
+            count_max: None,
+            per_kb_min: None,
+            per_kb_max: None,
+            entropy_min: None,
+            entropy_max: None,
+            condition: None,
+            not: None,
+            unless: None,
+            downgrade: None,
+        }
+    }
+
+    fn raw_composite(
+        id: &str,
+        platforms: Option<Vec<&str>>,
+        file_types: Option<Vec<&str>>,
+        mbc: Option<&str>,
+        attack: Option<&str>,
+    ) -> RawCompositeRule {
+        RawCompositeRule {
+            id: id.to_string(),
+            desc: "test composite".to_string(),
+            conf: None,
+            crit: None,
+            mbc: mbc.map(str::to_string),
+            attack: attack.map(str::to_string),
+            platforms: platforms.map(|v| v.into_iter().map(str::to_string).collect()),
+            arch: None,
+            file_types: file_types.map(|v| v.into_iter().map(str::to_string).collect()),
+            size_min: None,
+            size_max: None,
+            all: None,
+            any: None,
+            needs: None,
+            none: None,
+            condition: None,
+            near_lines: None,
+            near_bytes: None,
+            unless: None,
+            not: None,
+            downgrade: None,
+        }
+    }
+
+    fn defaults(
+        platforms: Option<Vec<&str>>,
+        file_types: Option<Vec<&str>>,
+        mbc: Option<&str>,
+        attack: Option<&str>,
+    ) -> TraitDefaults {
+        TraitDefaults {
+            r#for: file_types.map(|v| v.into_iter().map(str::to_string).collect()),
+            platforms: platforms.map(|v| v.into_iter().map(str::to_string).collect()),
+            arch: None,
+            crit: None,
+            conf: None,
+            mbc: mbc.map(str::to_string),
+            attack: attack.map(str::to_string),
+            size_min: None,
+            size_max: None,
+            entropy_min: None,
+            entropy_max: None,
+        }
+    }
+
+    // --- find_should_use_defaults ---
+
+    #[test]
+    fn test_suggest_platforms_when_all_agree() {
+        let traits = vec![
+            raw_trait("t/a", Some(vec!["windows"]), None, None, None),
+            raw_trait("t/b", Some(vec!["windows"]), None, None, None),
+        ];
+        let result = find_should_use_defaults(&traits, &[], &defaults(None, None, None, None));
+        assert_eq!(result, vec![("platforms", "[windows]".to_string())]);
+    }
+
+    #[test]
+    fn test_suggest_for_when_all_agree() {
+        let traits = vec![
+            raw_trait("t/a", None, Some(vec!["elf", "pe"]), None, None),
+            raw_trait("t/b", None, Some(vec!["pe", "elf"]), None, None),
+        ];
+        let result = find_should_use_defaults(&traits, &[], &defaults(None, None, None, None));
+        // Order-independent: both have [elf, pe] even though written in different order
+        let fields: Vec<&str> = result.iter().map(|(f, _)| *f).collect();
+        assert!(fields.contains(&"for"), "should suggest 'for' field");
+    }
+
+    #[test]
+    fn test_suggest_mbc_when_all_agree() {
+        let traits = vec![
+            raw_trait("t/a", None, None, Some("OB0001"), None),
+            raw_trait("t/b", None, None, Some("OB0001"), None),
+        ];
+        let result = find_should_use_defaults(&traits, &[], &defaults(None, None, None, None));
+        assert_eq!(result, vec![("mbc", "OB0001".to_string())]);
+    }
+
+    #[test]
+    fn test_suggest_attack_when_all_agree() {
+        let traits = vec![
+            raw_trait("t/a", None, None, None, Some("T1003")),
+            raw_trait("t/b", None, None, None, Some("T1003")),
+        ];
+        let result = find_should_use_defaults(&traits, &[], &defaults(None, None, None, None));
+        assert_eq!(result, vec![("attack", "T1003".to_string())]);
+    }
+
+    #[test]
+    fn test_no_suggestion_when_values_differ() {
+        let traits = vec![
+            raw_trait("t/a", Some(vec!["windows"]), None, None, None),
+            raw_trait("t/b", Some(vec!["linux"]), None, None, None),
+        ];
+        let result = find_should_use_defaults(&traits, &[], &defaults(None, None, None, None));
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_no_suggestion_when_one_trait_missing_field() {
+        // t/b has no platforms → not all items agree
+        let traits = vec![
+            raw_trait("t/a", Some(vec!["windows"]), None, None, None),
+            raw_trait("t/b", None, None, None, None),
+        ];
+        let result = find_should_use_defaults(&traits, &[], &defaults(None, None, None, None));
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_no_suggestion_when_default_already_set() {
+        let traits = vec![
+            raw_trait("t/a", Some(vec!["windows"]), None, None, None),
+            raw_trait("t/b", Some(vec!["windows"]), None, None, None),
+        ];
+        // Default already covers platforms — no suggestion needed
+        let result = find_should_use_defaults(
+            &traits,
+            &[],
+            &defaults(Some(vec!["windows"]), None, None, None),
+        );
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_no_suggestion_for_single_item() {
+        let traits = vec![raw_trait("t/a", Some(vec!["windows"]), None, None, None)];
+        let result = find_should_use_defaults(&traits, &[], &defaults(None, None, None, None));
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_suggest_includes_composites() {
+        let traits = vec![raw_trait("t/a", Some(vec!["windows"]), None, None, None)];
+        let composites = vec![raw_composite(
+            "c/a",
+            Some(vec!["windows"]),
+            None,
+            None,
+            None,
+        )];
+        let result =
+            find_should_use_defaults(&traits, &composites, &defaults(None, None, None, None));
+        assert_eq!(result, vec![("platforms", "[windows]".to_string())]);
+    }
+
+    #[test]
+    fn test_suggest_platforms_case_insensitive() {
+        // "Windows" and "windows" should be treated as the same value
+        let traits = vec![
+            raw_trait("t/a", Some(vec!["Windows"]), None, None, None),
+            raw_trait("t/b", Some(vec!["windows"]), None, None, None),
+        ];
+        let result = find_should_use_defaults(&traits, &[], &defaults(None, None, None, None));
+        let fields: Vec<&str> = result.iter().map(|(f, _)| *f).collect();
+        assert!(
+            fields.contains(&"platforms"),
+            "case-insensitive match should still suggest"
+        );
+    }
+
+    // --- find_redundant_explicit_defaults ---
+
+    #[test]
+    fn test_redundant_platforms_flagged() {
+        let traits = vec![raw_trait("t/a", Some(vec!["windows"]), None, None, None)];
+        let result = find_redundant_explicit_defaults(
+            &traits,
+            &[],
+            &defaults(Some(vec!["windows"]), None, None, None),
+        );
+        assert_eq!(result, vec![("t/a".to_string(), "platforms")]);
+    }
+
+    #[test]
+    fn test_redundant_for_flagged() {
+        let traits = vec![raw_trait("t/a", None, Some(vec!["elf", "pe"]), None, None)];
+        let result = find_redundant_explicit_defaults(
+            &traits,
+            &[],
+            &defaults(None, Some(vec!["pe", "elf"]), None, None),
+        );
+        assert_eq!(result, vec![("t/a".to_string(), "for")]);
+    }
+
+    #[test]
+    fn test_redundant_mbc_flagged() {
+        let traits = vec![raw_trait("t/a", None, None, Some("OB0001"), None)];
+        let result = find_redundant_explicit_defaults(
+            &traits,
+            &[],
+            &defaults(None, None, Some("OB0001"), None),
+        );
+        assert_eq!(result, vec![("t/a".to_string(), "mbc")]);
+    }
+
+    #[test]
+    fn test_redundant_attack_flagged() {
+        let traits = vec![raw_trait("t/a", None, None, None, Some("T1003"))];
+        let result = find_redundant_explicit_defaults(
+            &traits,
+            &[],
+            &defaults(None, None, None, Some("T1003")),
+        );
+        assert_eq!(result, vec![("t/a".to_string(), "attack")]);
+    }
+
+    #[test]
+    fn test_not_redundant_when_value_differs() {
+        let traits = vec![raw_trait("t/a", Some(vec!["linux"]), None, None, None)];
+        let result = find_redundant_explicit_defaults(
+            &traits,
+            &[],
+            &defaults(Some(vec!["windows"]), None, None, None),
+        );
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_not_redundant_when_no_default() {
+        let traits = vec![raw_trait("t/a", Some(vec!["windows"]), None, None, None)];
+        let result =
+            find_redundant_explicit_defaults(&traits, &[], &defaults(None, None, None, None));
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_redundant_composite_flagged() {
+        let composites = vec![raw_composite(
+            "c/a",
+            Some(vec!["windows"]),
+            None,
+            None,
+            None,
+        )];
+        let result = find_redundant_explicit_defaults(
+            &[],
+            &composites,
+            &defaults(Some(vec!["windows"]), None, None, None),
+        );
+        assert_eq!(result, vec![("c/a".to_string(), "platforms")]);
+    }
+
+    #[test]
+    fn test_redundant_platforms_order_independent() {
+        // Trait sets [linux, windows], default is [windows, linux] — same, so redundant
+        let traits = vec![raw_trait(
+            "t/a",
+            Some(vec!["linux", "windows"]),
+            None,
+            None,
+            None,
+        )];
+        let result = find_redundant_explicit_defaults(
+            &traits,
+            &[],
+            &defaults(Some(vec!["windows", "linux"]), None, None, None),
+        );
+        assert_eq!(result, vec![("t/a".to_string(), "platforms")]);
+    }
+
+    #[test]
+    fn test_only_redundant_traits_flagged_not_compliant_ones() {
+        let traits = vec![
+            raw_trait("t/redundant", Some(vec!["windows"]), None, None, None),
+            raw_trait("t/different", Some(vec!["linux"]), None, None, None),
+        ];
+        let result = find_redundant_explicit_defaults(
+            &traits,
+            &[],
+            &defaults(Some(vec!["windows"]), None, None, None),
+        );
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].0, "t/redundant");
+    }
+}

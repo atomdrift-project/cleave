@@ -19,10 +19,89 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
 
-/// YARA-X engine for pattern-based detection
+/// File-type tier for pre-classified YARA rule sets.
+///
+/// Rules are compiled into separate `yara_x::Rules` per tier so each scan
+/// only processes the subset relevant to the target file type. Every scan
+/// runs two passes: the tier-specific set + the `Generic` set.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) enum YaraTier {
+    /// Rules with no filetype constraint, plus all built-in and inline trait YARA.
+    Generic,
+    /// PE / DLL / EXE rules (~7K from third-party).
+    Pe,
+    /// ELF / SO / KO rules (~1.5K).
+    Elf,
+    /// MachO / dylib / kext rules (~300).
+    MachO,
+    /// Scripting language rules: PS1, PHP, Python, JS, shell, etc. (~1.5K).
+    Script,
+    /// Document format rules: PDF, RTF, OLE, LNK, ZIP (~200).
+    Doc,
+}
+
+impl YaraTier {
+    /// All tier variants in a fixed order for iteration.
+    const ALL: &[Self] = &[
+        Self::Generic,
+        Self::Pe,
+        Self::Elf,
+        Self::MachO,
+        Self::Script,
+        Self::Doc,
+    ];
+
+    /// Classify a set of filetype strings (from metadata/inference) into a tier.
+    fn from_filetypes(filetypes: &[&str]) -> Self {
+        for ft in filetypes {
+            match *ft {
+                "pe" | "exe" | "dll" | "sys" => return Self::Pe,
+                "elf" | "so" | "ko" => return Self::Elf,
+                "macho" | "dylib" | "kext" => return Self::MachO,
+                "sh" | "bash" | "zsh" | "py" | "pyc" | "js" | "mjs" | "cjs" | "ts"
+                | "php" | "rb" | "pl" | "pm" | "lua" | "ps1" | "psm1" | "psd1" | "bat"
+                | "cmd" | "vbs" | "vba" | "java" | "jar" | "class" | "jsp" | "aspx"
+                | "asp" => return Self::Script,
+                "pdf" | "rtf" | "ole" | "doc" | "docx" | "xls" | "xlsx" | "lnk" | "zip"
+                | "iso" | "img" | "one" | "onepkg" => return Self::Doc,
+                _ => {}
+            }
+        }
+        Self::Generic
+    }
+
+    /// Map the `file_type_filter` strings passed by callers to a tier.
+    fn from_filter(filter: Option<&[&str]>) -> Self {
+        match filter {
+            None => Self::Generic,
+            Some(types) => Self::from_filetypes(types),
+        }
+    }
+
+    /// Short label for cache filenames and logging.
+    fn label(self) -> &'static str {
+        match self {
+            Self::Generic => "generic",
+            Self::Pe => "pe",
+            Self::Elf => "elf",
+            Self::MachO => "macho",
+            Self::Script => "script",
+            Self::Doc => "doc",
+        }
+    }
+}
+
+/// YARA-X engine for pattern-based detection.
+///
+/// Rules are compiled into tiered sets by file type. Each scan runs two passes:
+/// 1. The tier matching the target file type (e.g. PE rules for a PE file)
+/// 2. The Generic tier (applies to all files)
+///
+/// This avoids scanning ~14K rules against every file when only ~2-3K are relevant.
 #[derive(Debug)]
 pub(crate) struct YaraEngine {
-    rules: Option<yara_x::Rules>,
+    /// Per-tier compiled rule sets. `Generic` always present when loaded.
+    tiers: HashMap<YaraTier, yara_x::Rules>,
     /// Namespaces compiled into the combined engine from inline trait YARA conditions.
     /// Used to split scan results: inline matches (keyed here) go to trait evaluation;
     /// all other matches are returned as regular YARA findings.
@@ -34,7 +113,7 @@ impl YaraEngine {
     #[must_use]
     pub(crate) fn new() -> Self {
         Self {
-            rules: None,
+            tiers: HashMap::new(),
             compiled_inline_namespaces: Vec::new(),
         }
     }
@@ -44,7 +123,7 @@ impl YaraEngine {
     #[allow(dead_code)] // Used by binary target (commands/analyze.rs) and tests
     pub(crate) fn new_with_mapper(_capability_mapper: CapabilityMapper) -> Self {
         Self {
-            rules: None,
+            tiers: HashMap::new(),
             compiled_inline_namespaces: Vec::new(),
         }
     }
@@ -54,7 +133,7 @@ impl YaraEngine {
     #[must_use]
     pub(crate) fn new_for_test() -> Self {
         Self {
-            rules: None,
+            tiers: HashMap::new(),
             compiled_inline_namespaces: Vec::new(),
         }
     }
@@ -556,18 +635,32 @@ impl YaraEngine {
 
             let raw_source = String::from_utf8_lossy(&bytes);
 
-            // Skip files that reference the VirusTotal module (requires VT context)
-            if raw_source.contains("vt.") {
-                vt_skipped += 1;
-                tracing::debug!("{}: skipped (requires VirusTotal context)", path.display());
+            // Strip individual rules that reference the VirusTotal module (requires VT context).
+            // Previously this skipped entire files, which incorrectly dropped the whole
+            // YARAForge monolithic collection when even one rule used `vt.`.
+            let raw_source = if raw_source.contains("vt.") {
+                let (filtered, count) = Self::filter_vt_rules(&raw_source);
+                if count > 0 {
+                    vt_skipped += count;
+                    tracing::debug!(
+                        "{}: stripped {} rule(s) requiring VirusTotal context",
+                        path.display(),
+                        count,
+                    );
+                }
+                std::borrow::Cow::Owned(filtered)
+            } else {
+                raw_source
+            };
+
+            if raw_source.trim().is_empty() {
                 continue;
             }
 
             // Inject filetype metadata inferred from magic byte conditions
             // (e.g. uint16(0) == 0x5A4D → filetype = "pe") so compiled rules carry
             // type-filter hints even when the author didn't add them explicitly.
-            let source =
-                crate::third_party_yara::inject_condition_filetype_hints(&raw_source);
+            let source = crate::third_party_yara::inject_condition_filetype_hints(&raw_source);
             let source = source.as_str();
 
             compiler.new_namespace(&namespace);
@@ -672,6 +765,63 @@ impl YaraEngine {
         // If nothing was removed, return original to avoid allocation
         if removed == 0 {
             return (source.to_string(), 0);
+        }
+
+        (result, removed)
+    }
+
+    /// Strip individual rules that reference the VirusTotal module (`vt.`) from source.
+    ///
+    /// Returns the filtered source and the count of removed rules. Rules that don't
+    /// reference `vt.` are preserved. This replaces the old whole-file skip which
+    /// incorrectly dropped the entire YARAForge monolithic collection.
+    fn filter_vt_rules(source: &str) -> (String, usize) {
+        use regex::Regex;
+
+        let rule_start_re =
+            Regex::new(r"(?m)^(\s*)((?:private\s+|global\s+)*)rule\s+(\w+)").unwrap();
+
+        let mut rule_ranges: Vec<(usize, usize)> = Vec::new();
+        for cap in rule_start_re.captures_iter(source) {
+            let rule_start = cap.get(0).unwrap().start();
+            rule_ranges.push((rule_start, 0));
+        }
+
+        if rule_ranges.is_empty() {
+            return (source.to_string(), 0);
+        }
+
+        // Fill end positions
+        for i in 0..rule_ranges.len() {
+            rule_ranges[i].1 = if i + 1 < rule_ranges.len() {
+                rule_ranges[i + 1].0
+            } else {
+                source.len()
+            };
+        }
+
+        let mut result = String::with_capacity(source.len());
+        let mut last_end = 0;
+        let mut removed = 0;
+
+        for (start, end) in &rule_ranges {
+            let rule_text = &source[*start..*end];
+            if rule_text.contains("vt.") {
+                // Skip this rule, keep content before it
+                if *start > last_end {
+                    result.push_str(&source[last_end..*start]);
+                }
+                last_end = *end;
+                removed += 1;
+            }
+        }
+
+        if removed == 0 {
+            return (source.to_string(), 0);
+        }
+
+        if last_end < source.len() {
+            result.push_str(&source[last_end..]);
         }
 
         (result, removed)
@@ -822,6 +972,7 @@ impl YaraEngine {
         let mut mbc_code: Option<String> = None;
         let mut attack_code: Option<String> = None;
         let mut rule_filetypes: Vec<String> = Vec::new();
+        let mut filetype_source = "none"; // tracks where the filetype came from
         let mut os_meta: Option<String> = None;
         let mut arch_context_meta: Option<String> = None;
 
@@ -864,6 +1015,7 @@ impl YaraEngine {
                         .split(',')
                         .map(|s| s.trim().to_lowercase())
                         .collect();
+                    filetype_source = "metadata";
                 }
                 "os" => os_meta = Some(value_str.to_lowercase()),
                 "arch_context" => arch_context_meta = Some(value_str.to_lowercase()),
@@ -877,14 +1029,17 @@ impl YaraEngine {
                 match tag_name.to_uppercase().as_str() {
                     "PE" | "EXE" | "DLL" => {
                         rule_filetypes = vec!["pe".to_string(), "dll".to_string()];
+                        filetype_source = "tag";
                         break;
                     }
                     "ELF" => {
                         rule_filetypes = vec!["elf".to_string(), "so".to_string()];
+                        filetype_source = "tag";
                         break;
                     }
                     "MACHO" | "MACH_O" | "MACH-O" => {
                         rule_filetypes = vec!["macho".to_string(), "dylib".to_string()];
+                        filetype_source = "tag";
                         break;
                     }
                     _ => {}
@@ -894,10 +1049,13 @@ impl YaraEngine {
 
         if rule_filetypes.is_empty() {
             let inferred = crate::third_party_yara::infer_filetypes(&rule_name, os_meta.as_deref());
-            rule_filetypes = inferred
-                .iter()
-                .map(std::string::ToString::to_string)
-                .collect();
+            if !inferred.is_empty() {
+                rule_filetypes = inferred
+                    .iter()
+                    .map(std::string::ToString::to_string)
+                    .collect();
+                filetype_source = "rule-name";
+            }
         }
 
         // For third-party rules: if still no filetype, try the namespace filename component.
@@ -908,11 +1066,22 @@ impl YaraEngine {
                 &namespace,
                 os_meta.as_deref(),
             );
-            rule_filetypes = inferred
-                .iter()
-                .map(std::string::ToString::to_string)
-                .collect();
+            if !inferred.is_empty() {
+                rule_filetypes = inferred
+                    .iter()
+                    .map(std::string::ToString::to_string)
+                    .collect();
+                filetype_source = "namespace";
+            }
         }
+
+        // Log filetype association for verbose output
+        crate::third_party_yara::log_filetype_association(
+            &rule_name,
+            &namespace,
+            &rule_filetypes,
+            filetype_source,
+        );
 
         if let Some(filter_types) = file_type_filter {
             if !rule_filetypes.is_empty() {

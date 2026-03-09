@@ -949,19 +949,31 @@ composite_rules:
     mapper.evaluate_and_merge_findings(&mut report, binary_data, None, None);
 
     assert!(
-        report.findings.iter().any(|f| f.id == "test/packer::signal-a"),
+        report
+            .findings
+            .iter()
+            .any(|f| f.id == "test/packer::signal-a"),
         "signal-a should fire"
     );
     assert!(
-        report.findings.iter().any(|f| f.id == "test/packer::signal-b"),
+        report
+            .findings
+            .iter()
+            .any(|f| f.id == "test/packer::signal-b"),
         "signal-b should fire"
     );
     assert!(
-        report.findings.iter().any(|f| f.id == "test/packer::combined"),
+        report
+            .findings
+            .iter()
+            .any(|f| f.id == "test/packer::combined"),
         "combined composite should fire"
     );
     assert!(
-        !report.findings.iter().any(|f| f.id == "test/victim::generic-api"),
+        !report
+            .findings
+            .iter()
+            .any(|f| f.id == "test/victim::generic-api"),
         "generic-api should be retroactively suppressed by unless: test/packer::combined"
     );
 }
@@ -1028,11 +1040,17 @@ composite_rules:
     mapper.evaluate_and_merge_findings(&mut report, binary_data, None, None);
 
     assert!(
-        !report.findings.iter().any(|f| f.id == "test/packer::combined"),
+        !report
+            .findings
+            .iter()
+            .any(|f| f.id == "test/packer::combined"),
         "combined composite should not fire (only one signal)"
     );
     assert!(
-        report.findings.iter().any(|f| f.id == "test/victim::generic-api"),
+        report
+            .findings
+            .iter()
+            .any(|f| f.id == "test/victim::generic-api"),
         "generic-api should fire when suppressor composite is absent"
     );
 }
@@ -1115,11 +1133,17 @@ composite_rules:
     mapper.evaluate_and_merge_findings(&mut report, binary_data, None, None);
 
     assert!(
-        report.findings.iter().any(|f| f.id == "test/suppressor::combined"),
+        report
+            .findings
+            .iter()
+            .any(|f| f.id == "test/suppressor::combined"),
         "combined suppressor should fire"
     );
     assert!(
-        !report.findings.iter().any(|f| f.id == "test/victim::composite"),
+        !report
+            .findings
+            .iter()
+            .any(|f| f.id == "test/victim::composite"),
         "victim composite should be retroactively suppressed by unless: test/suppressor::combined"
     );
 }

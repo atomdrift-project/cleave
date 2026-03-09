@@ -120,19 +120,19 @@ pub(crate) use taxonomy::{
     find_parent_duplicate_segments, find_platform_named_directories,
     find_unanchored_wellknown_composites, find_wellknown_category_violations,
     find_wellknown_missing_section_filter, find_wellknown_missing_size_filter,
-    find_wellknown_unscoped_filetypes, find_wellknown_unscoped_platforms,
-    MAX_TRAITS_PER_DIRECTORY,
+    find_wellknown_unscoped_filetypes, find_wellknown_unscoped_platforms, MAX_TRAITS_PER_DIRECTORY,
 };
 
 // Logic constraint validation
 #[allow(unused_imports)] // find_needs_zero used by binary target
 pub(crate) use constraints::{
-    find_empty_condition_clauses, find_excessive_skip_conditions,
+    find_empty_condition_clauses, find_excessive_file_types, find_excessive_skip_conditions,
     find_hex_binary_missing_section, find_impossible_count_constraints, find_impossible_needs,
     find_impossible_size_constraints, find_invalid_not_usage, find_kv_exists_with_matcher,
     find_missing_search_patterns, find_needs_without_any, find_needs_zero,
     find_none_only_with_proximity, find_orphaned_components, find_pure_alias_traits,
-    find_redundant_needs_one, find_too_short_patterns,
+    find_redundant_explicit_defaults, find_redundant_needs_one, find_should_use_defaults,
+    find_too_short_patterns,
 };
 
 // Utility functions

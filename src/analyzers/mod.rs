@@ -360,6 +360,7 @@ pub(crate) fn detect_file_type_from_path(file_path: &Path) -> FileType {
             "go" => return FileType::Go,
             "rs" => return FileType::Rust,
             "java" => return FileType::Java,
+            "pyc" => return FileType::PythonBytecode,
             "rb" => return FileType::Ruby,
             "php" => return FileType::Php,
             "pl" | "pm" | "t" => return FileType::Perl,
@@ -1145,6 +1146,8 @@ pub enum FileType {
     Java,
     /// Compiled Java bytecode (.class)
     JavaClass,
+    /// Python compiled bytecode (.pyc)
+    PythonBytecode,
     /// Java archive (.jar, .war, .ear)
     Jar,
     /// Ruby source file (.rb)
@@ -1236,6 +1239,7 @@ impl FileType {
             | FileType::Rust
             | FileType::Java
             | FileType::JavaClass
+            | FileType::PythonBytecode
             | FileType::Jar
             | FileType::Ruby
             | FileType::Php
@@ -1309,13 +1313,14 @@ impl FileType {
                 vec!["sh", "bash", "zsh", "application/x-sh", "application/x-zsh"]
             }
             FileType::Batch => vec!["bat", "cmd", "batch"],
-            FileType::Python => vec!["py", "pyc"],
+            FileType::Python => vec!["py"],
             FileType::JavaScript => vec!["js", "mjs", "cjs", "jsx", "ts"],
             FileType::TypeScript => vec!["ts", "tsx", "mts", "cts", "js"],
             FileType::Go => vec!["go"],
             FileType::Rust => vec!["rs"],
             FileType::Java => vec!["java"],
             FileType::JavaClass => vec!["class", "java"],
+            FileType::PythonBytecode => vec!["pyc", "python-bytecode"],
             FileType::Jar => vec!["jar", "war", "ear", "class", "java"],
             FileType::Ruby => vec!["rb"],
             FileType::Php => vec!["php"],

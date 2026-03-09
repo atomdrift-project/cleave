@@ -56,10 +56,10 @@ pub(crate) fn apply_trait_defaults(
     if raw.file_types.is_none() && defaults.r#for.is_none() {
         warnings.push(format!(
             "Trait '{}': missing 'for:' declaration. Every trait must specify which file types it \
-             targets. Add 'for: [all]' to this trait to match every file type, or list specific \
-             types like 'for: [python, javascript]'. To avoid repeating this on every trait in \
-             the file, add a file-wide default in the top-level 'defaults:' section, e.g.: \
-             'defaults:\\n  for: [python]'.",
+             targets. Use specific types (elf, python, ...) or named groups \
+             (binaries, scripts, source, manifests, documents, media, data). To avoid repeating \
+             this on every trait in the file, add a file-wide default in the top-level \
+             'defaults:' section, e.g.: 'defaults:\\n  for: [binaries]'.",
             raw.id
         ));
     }
@@ -69,10 +69,30 @@ pub(crate) fn apply_trait_defaults(
         .map(|types| parse_file_types(&types, warnings))
         .unwrap_or_else(|| vec![RuleFileType::All]);
 
+    // Validation: require explicit platforms: either on trait or in file defaults.
+    if raw.platforms.is_none() && defaults.platforms.is_none() {
+        warnings.push(format!(
+            "Trait '{}': missing 'platforms:' declaration. Every trait must specify which \
+             platforms it targets. List explicit platforms such as [unix, windows, macos], or \
+             set a file-wide default in the top-level 'defaults:' section.",
+            raw.id
+        ));
+    }
+
     // Parse platforms: use trait-specific if present (unless "none"), else defaults, else [All]
-    let platforms = apply_vec_default(raw.platforms, &defaults.platforms)
-        .map(|plats| parse_platforms(&plats))
-        .unwrap_or_else(|| vec![Platform::All]);
+    let platforms = match apply_vec_default(raw.platforms, &defaults.platforms) {
+        Some(plats) => {
+            let parsed = parse_platforms(&plats, warnings);
+            if parsed.is_empty() {
+                vec![Platform::All]
+            } else {
+                parsed
+            }
+        }
+        None => vec![Platform::All],
+    };
+
+    check_platform_filetype_conflicts(&raw.id, &platforms, &file_types, warnings);
 
     // Parse arch: use trait-specific if present (unless "none"), else defaults, else [All]
     let arch = apply_vec_default(raw.arch, &defaults.arch)
@@ -235,13 +255,7 @@ pub(crate) fn parse_file_types(types: &[String], warnings: &mut Vec<String>) -> 
             };
 
             let variants = match name.to_lowercase().as_str() {
-                "all" | "*" => {
-                    if is_exclusion {
-                        vec![]
-                    } else {
-                        vec![RuleFileType::All]
-                    }
-                }
+                "all" | "*" => vec![],
                 // Groups
                 "binaries" => vec![
                     RuleFileType::Elf,
@@ -251,6 +265,7 @@ pub(crate) fn parse_file_types(types: &[String], warnings: &mut Vec<String>) -> 
                     RuleFileType::So,
                     RuleFileType::Dll,
                     RuleFileType::Class,
+                    RuleFileType::Pyc,
                 ],
                 "scripts" => vec![
                     RuleFileType::Shell,
@@ -264,6 +279,42 @@ pub(crate) fn parse_file_types(types: &[String], warnings: &mut Vec<String>) -> 
                     RuleFileType::PowerShell,
                     RuleFileType::AppleScript,
                 ],
+                "source" => vec![
+                    RuleFileType::TypeScript,
+                    RuleFileType::Rust,
+                    RuleFileType::Java,
+                    RuleFileType::C,
+                    RuleFileType::Cpp,
+                    RuleFileType::Go,
+                    RuleFileType::CSharp,
+                    RuleFileType::Swift,
+                    RuleFileType::ObjectiveC,
+                    RuleFileType::Groovy,
+                    RuleFileType::Kotlin,
+                    RuleFileType::Scala,
+                    RuleFileType::Zig,
+                    RuleFileType::Elixir,
+                    RuleFileType::Vbs,
+                ],
+                "manifests" => vec![
+                    RuleFileType::PackageJson,
+                    RuleFileType::ChromeManifest,
+                    RuleFileType::CargoToml,
+                    RuleFileType::PyProjectToml,
+                    RuleFileType::GithubActions,
+                    RuleFileType::ComposerJson,
+                    RuleFileType::PkgInfo,
+                    RuleFileType::Plist,
+                    RuleFileType::Lnk,
+                ],
+                "documents" => vec![
+                    RuleFileType::Text,
+                    RuleFileType::Pdf,
+                    RuleFileType::Rtf,
+                    RuleFileType::Html,
+                ],
+                "media" => vec![RuleFileType::Jpeg, RuleFileType::Png],
+                "data" => vec![RuleFileType::Ipa],
                 // Binary formats
                 "elf" => vec![RuleFileType::Elf],
                 "macho" => vec![RuleFileType::Macho],
@@ -287,6 +338,7 @@ pub(crate) fn parse_file_types(types: &[String], warnings: &mut Vec<String>) -> 
                 // Compiled languages (fullname + extension)
                 "java" => vec![RuleFileType::Java],
                 "class" => vec![RuleFileType::Class],
+                "pyc" | "python-bytecode" => vec![RuleFileType::Pyc],
                 "c" | "cpp" | "c++" | "cc" | "cxx" => vec![RuleFileType::C],
                 "rust" => vec![RuleFileType::Rust],
                 "go" => vec![RuleFileType::Go],
@@ -328,6 +380,12 @@ pub(crate) fn parse_file_types(types: &[String], warnings: &mut Vec<String>) -> 
 
             if name == "*" || name.eq_ignore_ascii_case("all") {
                 if !is_exclusion {
+                    warnings.push(
+                        "'all' is no longer a valid file type — choose specific file types \
+                         (elf, python, ...) or named groups \
+                         (binaries, scripts, source, manifests, documents, media, data) instead"
+                            .to_string(),
+                    );
                     has_explicit_inclusion = true;
                     inclusions.insert(RuleFileType::All);
                 } else {
@@ -376,12 +434,68 @@ pub(crate) fn parse_file_types(types: &[String], warnings: &mut Vec<String>) -> 
     }
 }
 
-/// Parse platform strings into Platform enum
-pub(crate) fn parse_platforms(platforms: &[String]) -> Vec<Platform> {
+/// Warn when a file type has no supporting platform in the rule's platform list.
+///
+/// A conflict exists only when **none** of the declared platforms can produce/run the file type.
+/// Rules covering multiple platforms (e.g. `windows,unix`) with a matching mix of file types
+/// (e.g. `pe,elf`) are valid — each file type is covered by at least one platform.
+///
+/// Skipped when either list contains an `All` sentinel (unconstrained).
+///
+/// Platform support:
+/// - PE / DLL / Batch  → windows
+/// - ELF / SO          → linux, unix, android
+/// - Mach-O / Dylib    → macos, ios
+/// - Shell             → linux, unix, macos, android, ios (not windows)
+pub(crate) fn check_platform_filetype_conflicts(
+    id: &str,
+    platforms: &[Platform],
+    file_types: &[RuleFileType],
+    warnings: &mut Vec<String>,
+) {
+    if platforms.contains(&Platform::All) || file_types.contains(&RuleFileType::All) {
+        return;
+    }
+
+    let has_windows = platforms.contains(&Platform::Windows);
+    let has_unix = platforms
+        .iter()
+        .any(|p| matches!(p, Platform::Linux | Platform::Unix | Platform::Android));
+    let has_apple = platforms
+        .iter()
+        .any(|p| matches!(p, Platform::MacOS | Platform::Ios));
+
+    for ft in file_types {
+        let (supported, required) = match ft {
+            RuleFileType::Pe | RuleFileType::Dll | RuleFileType::Batch => (has_windows, "windows"),
+            RuleFileType::Elf | RuleFileType::So => (has_unix, "linux, unix, or android"),
+            RuleFileType::Macho | RuleFileType::Dylib => (has_apple, "macos or ios"),
+            RuleFileType::Shell => (has_unix || has_apple, "linux, unix, macos, android, or ios"),
+            _ => continue,
+        };
+        if !supported {
+            warnings.push(format!(
+                "'{}': file type '{ft:?}' requires [{required}] but none are in the platforms list.",
+                id
+            ));
+        }
+    }
+}
+
+/// Parse platform strings into Platform enum.
+/// Emits a warning if "all" is explicitly specified — omit `platforms:` instead.
+pub(crate) fn parse_platforms(platforms: &[String], warnings: &mut Vec<String>) -> Vec<Platform> {
     platforms
         .iter()
         .filter_map(|p| match p.to_lowercase().as_str() {
-            "all" => Some(Platform::All),
+            "all" => {
+                warnings.push(
+                    "'platforms: [all]' is not allowed. Specify explicit platforms: \
+                     linux, macos, windows, unix, android, ios."
+                        .to_string(),
+                );
+                None
+            }
             "linux" => Some(Platform::Linux),
             "macos" => Some(Platform::MacOS),
             "windows" => Some(Platform::Windows),
@@ -427,10 +541,30 @@ pub(crate) fn apply_composite_defaults(
         .map(|types| parse_file_types(&types, warnings))
         .unwrap_or_else(|| vec![RuleFileType::All]);
 
+    // Validation: require explicit platforms: either on rule or in file defaults.
+    if raw.platforms.is_none() && defaults.platforms.is_none() {
+        warnings.push(format!(
+            "Composite rule '{}': missing 'platforms:' declaration. Every rule must specify \
+             which platforms it targets. List explicit platforms such as [unix, windows, macos], \
+             or set a file-wide default in the top-level 'defaults:' section.",
+            raw.id
+        ));
+    }
+
     // Parse platforms: use rule-specific if present (unless "none"), else defaults, else [All]
-    let platforms = apply_vec_default(raw.platforms, &defaults.platforms)
-        .map(|plats| parse_platforms(&plats))
-        .unwrap_or_else(|| vec![Platform::All]);
+    let platforms = match apply_vec_default(raw.platforms, &defaults.platforms) {
+        Some(plats) => {
+            let parsed = parse_platforms(&plats, warnings);
+            if parsed.is_empty() {
+                vec![Platform::All]
+            } else {
+                parsed
+            }
+        }
+        None => vec![Platform::All],
+    };
+
+    check_platform_filetype_conflicts(&raw.id, &platforms, &file_types, warnings);
 
     // Parse arch: use rule-specific if present (unless "none"), else defaults, else [All]
     let arch = apply_vec_default(raw.arch, &defaults.arch)
@@ -825,18 +959,29 @@ mod tests {
     // ==================== parse_platforms Tests ====================
 
     #[test]
-    fn test_parse_platforms_all() {
-        let result = parse_platforms(&["all".to_string()]);
-        assert_eq!(result, vec![Platform::All]);
+    fn test_parse_platforms_all_is_invalid() {
+        let mut warnings = Vec::new();
+        let result = parse_platforms(&["all".to_string()], &mut warnings);
+        assert!(
+            result.is_empty(),
+            "Platform::All should not be produced from 'all'"
+        );
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].contains("platforms: [all]"));
     }
 
     #[test]
     fn test_parse_platforms_multiple() {
-        let result = parse_platforms(&[
-            "linux".to_string(),
-            "macos".to_string(),
-            "windows".to_string(),
-        ]);
+        let mut warnings = Vec::new();
+        let result = parse_platforms(
+            &[
+                "linux".to_string(),
+                "macos".to_string(),
+                "windows".to_string(),
+            ],
+            &mut warnings,
+        );
+        assert!(warnings.is_empty());
         assert!(result.contains(&Platform::Linux));
         assert!(result.contains(&Platform::MacOS));
         assert!(result.contains(&Platform::Windows));
@@ -844,43 +989,336 @@ mod tests {
 
     #[test]
     fn test_parse_platforms_case_insensitive() {
-        let result = parse_platforms(&["LINUX".to_string(), "MacOS".to_string()]);
+        let mut warnings = Vec::new();
+        let result = parse_platforms(&["LINUX".to_string(), "MacOS".to_string()], &mut warnings);
+        assert!(warnings.is_empty());
         assert!(result.contains(&Platform::Linux));
         assert!(result.contains(&Platform::MacOS));
     }
 
     #[test]
     fn test_parse_platforms_unknown_ignored() {
-        let result = parse_platforms(&["linux".to_string(), "unknown".to_string()]);
+        let mut warnings = Vec::new();
+        let result = parse_platforms(&["linux".to_string(), "unknown".to_string()], &mut warnings);
         assert_eq!(result.len(), 1);
         assert!(result.contains(&Platform::Linux));
     }
 
     #[test]
     fn test_parse_platforms_unix_android_ios() {
-        let result =
-            parse_platforms(&["unix".to_string(), "android".to_string(), "ios".to_string()]);
+        let mut warnings = Vec::new();
+        let result = parse_platforms(
+            &["unix".to_string(), "android".to_string(), "ios".to_string()],
+            &mut warnings,
+        );
+        assert!(warnings.is_empty());
         assert!(result.contains(&Platform::Unix));
         assert!(result.contains(&Platform::Android));
         assert!(result.contains(&Platform::Ios));
     }
 
-    // ==================== parse_file_types Tests ====================
+    // ==================== check_platform_filetype_conflicts Tests ====================
 
     #[test]
-    fn test_parse_file_types_all() {
-        let mut warnings = Vec::new();
-        let result = parse_file_types(&["all".to_string()], &mut warnings);
-        assert_eq!(result, vec![RuleFileType::All]);
-        assert!(warnings.is_empty());
+    fn test_no_conflict_windows_pe() {
+        let mut w = Vec::new();
+        check_platform_filetype_conflicts(
+            "test",
+            &[Platform::Windows],
+            &[RuleFileType::Pe, RuleFileType::Dll, RuleFileType::Batch],
+            &mut w,
+        );
+        assert!(w.is_empty(), "Windows + PE/DLL/Batch should be valid");
     }
 
     #[test]
-    fn test_parse_file_types_star() {
+    fn test_no_conflict_unix_elf() {
+        let mut w = Vec::new();
+        check_platform_filetype_conflicts(
+            "test",
+            &[Platform::Linux, Platform::Unix, Platform::Android],
+            &[RuleFileType::Elf, RuleFileType::So],
+            &mut w,
+        );
+        assert!(w.is_empty(), "Linux/Unix/Android + ELF/SO should be valid");
+    }
+
+    #[test]
+    fn test_no_conflict_apple_macho() {
+        let mut w = Vec::new();
+        check_platform_filetype_conflicts(
+            "test",
+            &[Platform::MacOS, Platform::Ios],
+            &[RuleFileType::Macho, RuleFileType::Dylib],
+            &mut w,
+        );
+        assert!(w.is_empty(), "macOS/iOS + Mach-O/Dylib should be valid");
+    }
+
+    #[test]
+    fn test_no_conflict_unix_shell() {
+        let mut w = Vec::new();
+        check_platform_filetype_conflicts(
+            "test",
+            &[Platform::Linux, Platform::MacOS, Platform::Android],
+            &[RuleFileType::Shell],
+            &mut w,
+        );
+        assert!(w.is_empty(), "Unix/macOS + Shell should be valid");
+    }
+
+    #[test]
+    fn test_conflict_windows_elf() {
+        let mut w = Vec::new();
+        check_platform_filetype_conflicts(
+            "rule.test",
+            &[Platform::Windows],
+            &[RuleFileType::Elf],
+            &mut w,
+        );
+        assert_eq!(w.len(), 1);
+        assert!(
+            w[0].contains("linux, unix, or android"),
+            "message should name required platforms"
+        );
+    }
+
+    #[test]
+    fn test_conflict_windows_so() {
+        let mut w = Vec::new();
+        check_platform_filetype_conflicts(
+            "rule.test",
+            &[Platform::Windows],
+            &[RuleFileType::So],
+            &mut w,
+        );
+        assert_eq!(w.len(), 1);
+    }
+
+    #[test]
+    fn test_conflict_windows_shell() {
+        let mut w = Vec::new();
+        check_platform_filetype_conflicts(
+            "rule.test",
+            &[Platform::Windows],
+            &[RuleFileType::Shell],
+            &mut w,
+        );
+        assert_eq!(w.len(), 1);
+        assert!(w[0].contains("Shell"));
+    }
+
+    #[test]
+    fn test_conflict_windows_macho() {
+        let mut w = Vec::new();
+        check_platform_filetype_conflicts(
+            "rule.test",
+            &[Platform::Windows],
+            &[RuleFileType::Macho],
+            &mut w,
+        );
+        assert_eq!(w.len(), 1);
+        assert!(
+            w[0].contains("macos or ios"),
+            "message should name required platforms"
+        );
+    }
+
+    #[test]
+    fn test_conflict_linux_pe() {
+        let mut w = Vec::new();
+        check_platform_filetype_conflicts(
+            "rule.test",
+            &[Platform::Linux],
+            &[RuleFileType::Pe],
+            &mut w,
+        );
+        assert_eq!(w.len(), 1);
+        assert!(
+            w[0].contains("windows"),
+            "message should name required platform"
+        );
+    }
+
+    #[test]
+    fn test_conflict_unix_pe() {
+        let mut w = Vec::new();
+        check_platform_filetype_conflicts(
+            "rule.test",
+            &[Platform::Unix],
+            &[RuleFileType::Pe],
+            &mut w,
+        );
+        assert_eq!(w.len(), 1);
+    }
+
+    #[test]
+    fn test_conflict_android_dll() {
+        let mut w = Vec::new();
+        check_platform_filetype_conflicts(
+            "rule.test",
+            &[Platform::Android],
+            &[RuleFileType::Dll],
+            &mut w,
+        );
+        assert_eq!(w.len(), 1);
+    }
+
+    #[test]
+    fn test_conflict_macos_elf() {
+        let mut w = Vec::new();
+        check_platform_filetype_conflicts(
+            "rule.test",
+            &[Platform::MacOS],
+            &[RuleFileType::Elf],
+            &mut w,
+        );
+        assert_eq!(w.len(), 1);
+        assert!(
+            w[0].contains("linux, unix, or android"),
+            "message should name required platforms"
+        );
+    }
+
+    #[test]
+    fn test_conflict_ios_pe() {
+        let mut w = Vec::new();
+        check_platform_filetype_conflicts(
+            "rule.test",
+            &[Platform::Ios],
+            &[RuleFileType::Pe],
+            &mut w,
+        );
+        assert_eq!(w.len(), 1);
+    }
+
+    #[test]
+    fn test_conflict_linux_macho() {
+        let mut w = Vec::new();
+        check_platform_filetype_conflicts(
+            "rule.test",
+            &[Platform::Linux],
+            &[RuleFileType::Macho],
+            &mut w,
+        );
+        assert_eq!(w.len(), 1);
+    }
+
+    #[test]
+    fn test_no_conflict_when_platform_all() {
+        // Platform::All skips the check entirely
+        let mut w = Vec::new();
+        check_platform_filetype_conflicts(
+            "rule.test",
+            &[Platform::All],
+            &[RuleFileType::Pe],
+            &mut w,
+        );
+        assert!(w.is_empty(), "Platform::All should bypass conflict check");
+    }
+
+    #[test]
+    fn test_no_conflict_when_filetype_all() {
+        let mut w = Vec::new();
+        check_platform_filetype_conflicts(
+            "rule.test",
+            &[Platform::Windows],
+            &[RuleFileType::All],
+            &mut w,
+        );
+        assert!(w.is_empty(), "FileType::All should bypass conflict check");
+    }
+
+    #[test]
+    fn test_elf_valid_on_android() {
+        // ELF is the native format on Android — no conflict
+        let mut w = Vec::new();
+        check_platform_filetype_conflicts(
+            "rule.test",
+            &[Platform::Android],
+            &[RuleFileType::Elf],
+            &mut w,
+        );
+        assert!(w.is_empty(), "Android + ELF should be valid");
+    }
+
+    #[test]
+    fn test_multiple_conflicts_reported() {
+        // Windows + [ELF, Shell] → two warnings, one per unsupported file type
+        let mut w = Vec::new();
+        check_platform_filetype_conflicts(
+            "rule.test",
+            &[Platform::Windows],
+            &[RuleFileType::Elf, RuleFileType::Shell],
+            &mut w,
+        );
+        assert_eq!(w.len(), 2);
+    }
+
+    #[test]
+    fn test_no_conflict_multiplatform_binaries() {
+        // platforms=[windows,unix] + for=[pe,elf] is valid:
+        // PE is covered by windows, ELF is covered by unix.
+        let mut w = Vec::new();
+        check_platform_filetype_conflicts(
+            "rule.test",
+            &[Platform::Windows, Platform::Unix],
+            &[RuleFileType::Pe, RuleFileType::Elf],
+            &mut w,
+        );
+        assert!(
+            w.is_empty(),
+            "windows+unix covering pe+elf should be valid: {w:?}"
+        );
+    }
+
+    #[test]
+    fn test_no_conflict_multiplatform_all_binaries() {
+        // windows+unix+macos covering pe+elf+macho — fully covered
+        let mut w = Vec::new();
+        check_platform_filetype_conflicts(
+            "rule.test",
+            &[Platform::Windows, Platform::Unix, Platform::MacOS],
+            &[RuleFileType::Pe, RuleFileType::Elf, RuleFileType::Macho],
+            &mut w,
+        );
+        assert!(w.is_empty(), "all three covered: {w:?}");
+    }
+
+    #[test]
+    fn test_conflict_partial_multiplatform() {
+        // windows+unix covers pe+elf fine, but dylib still needs macos/ios
+        let mut w = Vec::new();
+        check_platform_filetype_conflicts(
+            "rule.test",
+            &[Platform::Windows, Platform::Unix],
+            &[RuleFileType::Pe, RuleFileType::Elf, RuleFileType::Dylib],
+            &mut w,
+        );
+        assert_eq!(w.len(), 1, "only dylib should be flagged: {w:?}");
+        assert!(w[0].contains("Dylib") || w[0].contains("macos"));
+    }
+
+    // ==================== parse_file_types Tests ====================
+
+    #[test]
+    fn test_parse_file_types_all_warns() {
+        let mut warnings = Vec::new();
+        let result = parse_file_types(&["all".to_string()], &mut warnings);
+        // Result is still FileType::All for backward-compat runtime behaviour, but a warning is emitted.
+        assert_eq!(result, vec![RuleFileType::All]);
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].contains("no longer"));
+        assert!(warnings[0].contains("binaries"));
+    }
+
+    #[test]
+    fn test_parse_file_types_star_warns() {
         let mut warnings = Vec::new();
         let result = parse_file_types(&["*".to_string()], &mut warnings);
         assert_eq!(result, vec![RuleFileType::All]);
-        assert!(warnings.is_empty());
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].contains("no longer"));
     }
 
     #[test]
@@ -935,12 +1373,14 @@ mod tests {
 
     #[test]
     fn test_parse_file_types_exclusion() {
+        // "all" used as a base for exclusion still warns; exclusion syntax itself is fine.
         let mut warnings = Vec::new();
         let result = parse_file_types(&["all".to_string(), "-python".to_string()], &mut warnings);
         assert!(!result.contains(&RuleFileType::Python));
         assert!(result.contains(&RuleFileType::JavaScript));
         assert!(result.contains(&RuleFileType::Shell));
-        assert!(warnings.is_empty());
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].contains("no longer"));
     }
 
     #[test]
@@ -1012,7 +1452,8 @@ mod tests {
         let result = parse_file_types(&["all".to_string(), "!python".to_string()], &mut warnings);
         assert!(!result.contains(&RuleFileType::Python));
         assert!(result.contains(&RuleFileType::JavaScript));
-        assert!(warnings.is_empty());
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].contains("no longer"));
     }
 
     #[test]

@@ -79,9 +79,7 @@ pub(crate) fn platforms_from_name_and_os(rule_name: &str, os_meta: Option<&str>)
         match part {
             "Win" | "win" | "Win32" | "Win64" | "Windows" => return vec![Platform::Windows],
             "Linux" | "linux" => return vec![Platform::Linux],
-            "MacOS" | "Macos" | "MACOS" | "macos" | "OSX" | "osx" => {
-                return vec![Platform::MacOS]
-            }
+            "MacOS" | "Macos" | "MACOS" | "macos" | "OSX" | "osx" => return vec![Platform::MacOS],
             "Android" | "android" => return vec![Platform::Android],
             "iOS" | "ios" => return vec![Platform::Ios],
             _ => {}
@@ -133,6 +131,7 @@ pub(crate) fn filetypes_from_platforms(platforms: &[Platform]) -> Vec<&'static s
 /// Returns empty vec if no constraint can be inferred — the rule applies to all files.
 /// Returned strings are lowercase and match the values used by `scan_bytes_filtered`.
 pub(crate) fn infer_filetypes(rule_name: &str, os_meta: Option<&str>) -> Vec<&'static str> {
+    // 1. Platform-based binary format inference (highest priority)
     let platforms = platforms_from_name_and_os(rule_name, os_meta);
     if !platforms.is_empty() {
         let types = filetypes_from_platforms(&platforms);
@@ -140,7 +139,13 @@ pub(crate) fn infer_filetypes(rule_name: &str, os_meta: Option<&str>) -> Vec<&'s
             return types;
         }
     }
-    doc_filetypes_from_rule_name(rule_name)
+    // 2. Document format inference
+    let doc_types = doc_filetypes_from_rule_name(rule_name);
+    if !doc_types.is_empty() {
+        return doc_types;
+    }
+    // 3. Scripting language inference (strict: ps1 rule → only ps1 files)
+    script_filetypes_from_rule_name(rule_name)
 }
 
 /// Infer filetypes from the filename component of a third-party YARA namespace.
@@ -150,7 +155,10 @@ pub(crate) fn infer_filetypes(rule_name: &str, os_meta: Option<&str>) -> Vec<&'s
 /// that aren't in the rule identifier itself (e.g. `"TextShell"`).
 ///
 /// Returns empty vec if no constraint can be inferred.
-pub(crate) fn infer_filetypes_from_namespace(namespace: &str, os_meta: Option<&str>) -> Vec<&'static str> {
+pub(crate) fn infer_filetypes_from_namespace(
+    namespace: &str,
+    os_meta: Option<&str>,
+) -> Vec<&'static str> {
     // Extract the last dot-separated component (the filename stem)
     let filename_stem = match namespace.rsplit('.').next() {
         Some(s) if !s.is_empty() && s != "3p" => s,
@@ -223,44 +231,127 @@ pub(crate) fn inject_condition_filetype_hints(source: &str) -> String {
     result
 }
 
-/// Returns `true` if the source contains any of the magic byte condition patterns
-/// that indicate a specific file type.
+/// Returns `true` if the source contains any condition pattern that implies a file type.
+///
+/// Checks for magic byte comparisons (`uint16`/`uint32`/`uint16be`/`uint32be`) and
+/// YARA module references (`pe.`, `elf.`, `macho.`). Used as a quick-reject gate
+/// before the more expensive per-rule injection pass.
 fn source_has_magic_condition(source: &str) -> bool {
-    // Use a lowercase copy for case-insensitive matching
     let lower = source.to_lowercase();
+    // Magic byte patterns
     lower.contains("uint16(0) == 0x5a4d")
+        || lower.contains("uint16be(0) == 0x4d5a")
         || lower.contains("uint32(0) == 0x464c457f")
         || lower.contains("uint32be(0) == 0x7f454c46")
         || lower.contains("uint32(0) == 0xfeedface")
         || lower.contains("uint32(0) == 0xcefaedfe")
         || lower.contains("uint32(0) == 0xfeedfacf")
         || lower.contains("uint32(0) == 0xcffaedfe")
+        || lower.contains("uint16(0) == 0xfacf")
+        || lower.contains("uint16(0) == 0xface")
+        // OLE/DOCFILE
+        || lower.contains("uint32(0) == 0xd0cf11e0")
+        // PDF (%PDF)
+        || lower.contains("uint32(0) == 0x25504446")
+        // RTF ({\rt)
+        || lower.contains("uint32(0) == 0x7b5c7274")
+        // ZIP/PK
+        || lower.contains("uint16(0) == 0x504b")
+        || lower.contains("uint32(0) == 0x04034b50")
+        // LNK
+        || lower.contains("uint32(0) == 0x0000004c")
+        // YARA module references (word boundary via ` pe.` / `(pe.` / `\npe.`)
+        || has_module_reference(&lower, "pe.")
+        || has_module_reference(&lower, "elf.")
+        || has_module_reference(&lower, "macho.")
 }
 
-/// Infer the filetype from magic patterns found in a rule's body text.
+/// Check if `source` contains a YARA module reference like `pe.` at a word boundary.
+fn has_module_reference(lower_source: &str, module_prefix: &str) -> bool {
+    let mut pos = 0;
+    while let Some(idx) = lower_source[pos..].find(module_prefix) {
+        let abs = pos + idx;
+        // Must be preceded by a non-alphanumeric char (word boundary) or be at start
+        let at_boundary = abs == 0 || !lower_source.as_bytes()[abs - 1].is_ascii_alphanumeric();
+        if at_boundary {
+            return true;
+        }
+        pos = abs + 1;
+    }
+    false
+}
+
+/// Infer the filetype from magic patterns and YARA module references in a rule's body.
 fn filetype_from_magic(body: &str) -> Option<&'static str> {
     let lower = body.to_lowercase();
-    if lower.contains("uint16(0) == 0x5a4d") {
+
+    // PE: MZ magic (little-endian and big-endian) or pe.* module
+    if lower.contains("uint16(0) == 0x5a4d")
+        || lower.contains("uint16be(0) == 0x4d5a")
+        || has_module_reference(&lower, "pe.")
+    {
         return Some("pe");
     }
-    if lower.contains("uint32(0) == 0x464c457f") || lower.contains("uint32be(0) == 0x7f454c46") {
+
+    // ELF: magic bytes or elf.* module
+    if lower.contains("uint32(0) == 0x464c457f")
+        || lower.contains("uint32be(0) == 0x7f454c46")
+        || has_module_reference(&lower, "elf.")
+    {
         return Some("elf");
     }
+
+    // MachO: various magic values (32/64-bit, native/swapped) or macho.* module
     if lower.contains("uint32(0) == 0xfeedface")
         || lower.contains("uint32(0) == 0xcefaedfe")
         || lower.contains("uint32(0) == 0xfeedfacf")
         || lower.contains("uint32(0) == 0xcffaedfe")
+        || lower.contains("uint16(0) == 0xfacf")
+        || lower.contains("uint16(0) == 0xface")
+        || has_module_reference(&lower, "macho.")
     {
         return Some("macho");
     }
+
+    // OLE/DOCFILE (Office documents)
+    if lower.contains("uint32(0) == 0xd0cf11e0") {
+        return Some("ole");
+    }
+
+    // PDF (%PDF magic)
+    if lower.contains("uint32(0) == 0x25504446") {
+        return Some("pdf");
+    }
+
+    // RTF ({\rt magic)
+    if lower.contains("uint32(0) == 0x7b5c7274") {
+        return Some("rtf");
+    }
+
+    // ZIP/PK archive
+    if lower.contains("uint16(0) == 0x504b") || lower.contains("uint32(0) == 0x04034b50") {
+        return Some("zip");
+    }
+
+    // LNK shortcut
+    if lower.contains("uint32(0) == 0x0000004c") {
+        return Some("lnk");
+    }
+
     None
 }
 
 /// Inject a `filetype` metadata line into a rule body if the condition implies one
-/// and the body doesn't already declare a `filetype` key.
+/// and the body doesn't already declare a `filetype` key in the meta section.
 fn maybe_inject_filetype(body: &str) -> String {
-    // Already has a filetype declaration → leave it alone
-    if body.contains("filetype") {
+    // Check if there's already a filetype metadata declaration (key = value form).
+    // We look for `filetype` followed by `=` to distinguish metadata keys from
+    // YARA module fields like `macho.filetype` or `pe.dll_characteristics`.
+    let has_filetype_meta = body.lines().any(|line| {
+        let trimmed = line.trim();
+        trimmed.starts_with("filetype") && trimmed.contains('=')
+    });
+    if has_filetype_meta {
         return body.to_string();
     }
     let Some(ft) = filetype_from_magic(body) else {
@@ -383,6 +474,63 @@ fn doc_filetypes_from_rule_name(rule_name: &str) -> Vec<&'static str> {
         "LNK" | "Lnk" | "LNKR" => vec!["lnk"],
         "ISO" => vec!["iso", "img"],
         _ => vec![],
+    }
+}
+
+/// Infer filetype constraints from scripting language signals in rule names.
+///
+/// Strict mode: a PowerShell rule is tagged as `ps1` only — NOT as `pe` even though
+/// PE files can embed PowerShell. The rule author wrote a PowerShell-specific rule,
+/// so it should only fire on PowerShell source files.
+///
+/// Returns empty vec if no scripting signal is found.
+fn script_filetypes_from_rule_name(rule_name: &str) -> Vec<&'static str> {
+    let lower = rule_name.to_lowercase();
+    // Check underscore-delimited tokens for exact matches first (more precise)
+    for token in lower.split('_') {
+        match token {
+            "powershell" | "ps1" | "psh" | "ps" => return vec!["ps1", "psm1", "psd1"],
+            "python" | "py" => return vec!["py", "pyc"],
+            "javascript" | "jscript" | "js" => return vec!["js", "mjs", "cjs"],
+            "php" => return vec!["php"],
+            "vbs" | "vbscript" | "vba" => return vec!["vbs", "vba"],
+            "bat" | "cmd" | "batch" => return vec!["bat", "cmd"],
+            "shell" | "bash" | "sh" => return vec!["sh", "bash", "zsh"],
+            "java" | "jar" => return vec!["jar", "class", "java"],
+            "ruby" | "rb" => return vec!["rb"],
+            "perl" | "pl" => return vec!["pl", "pm"],
+            "lua" => return vec!["lua"],
+            "webshell" => return vec!["php", "jsp", "aspx", "asp"],
+            _ => {}
+        }
+    }
+    vec![]
+}
+
+/// Log the inferred filetype association for a YARA rule at debug level.
+///
+/// Called from `yara_engine::build_yara_match` when a rule gets filetype tags.
+/// At `--verbose` log level this lets operators see which rules map to which types.
+pub(crate) fn log_filetype_association(
+    rule_name: &str,
+    namespace: &str,
+    filetypes: &[String],
+    source: &str,
+) {
+    if filetypes.is_empty() {
+        tracing::debug!(
+            rule = %rule_name,
+            namespace = %namespace,
+            "YARA rule has no filetype constraint (matches all file types)"
+        );
+    } else {
+        tracing::debug!(
+            rule = %rule_name,
+            namespace = %namespace,
+            filetypes = ?filetypes,
+            inferred_from = %source,
+            "YARA rule filetype association"
+        );
     }
 }
 
@@ -1347,7 +1495,10 @@ mod tests {
         let archs = archs_from_arch_context("x64, arm64");
         assert!(archs.contains(&Arch::X86_64));
         assert!(archs.contains(&Arch::Aarch64));
-        assert!(!archs.contains(&Arch::X86), "x64 alone should NOT include 32-bit X86");
+        assert!(
+            !archs.contains(&Arch::X86),
+            "x64 alone should NOT include 32-bit X86"
+        );
         assert_eq!(archs.len(), 2);
     }
 
@@ -1447,16 +1598,22 @@ mod tests {
 
     #[test]
     fn test_namespace_filename_win_mal_prefix_yields_pe_dll() {
-        let types =
-            infer_filetypes_from_namespace("3p.RussianPanda95.VanillaTempest.win_mal_TextShell", None);
-        assert_eq!(types, vec!["pe", "dll"],
-            "win_mal_ filename in namespace should infer Windows → pe/dll");
+        let types = infer_filetypes_from_namespace(
+            "3p.RussianPanda95.VanillaTempest.win_mal_TextShell",
+            None,
+        );
+        assert_eq!(
+            types,
+            vec!["pe", "dll"],
+            "win_mal_ filename in namespace should infer Windows → pe/dll"
+        );
     }
 
     #[test]
     fn test_namespace_filename_no_signal_returns_empty() {
         // A namespace whose last component has no platform signal
-        let types = infer_filetypes_from_namespace("3p.huntress.ScreenConnect_CVE_Exploitation", None);
+        let types =
+            infer_filetypes_from_namespace("3p.huntress.ScreenConnect_CVE_Exploitation", None);
         assert!(types.is_empty());
     }
 
@@ -1527,7 +1684,10 @@ mod tests {
         $s
 }"#;
         let output = inject_condition_filetype_hints(source);
-        assert_eq!(output, source, "Source should be unchanged when no magic pattern");
+        assert_eq!(
+            output, source,
+            "Source should be unchanged when no magic pattern"
+        );
     }
 
     #[test]
@@ -1549,9 +1709,13 @@ rule RuleB {
 }"#;
         let output = inject_condition_filetype_hints(source);
         // RuleA should get filetype injected; RuleB should not
-        assert!(output.contains("filetype = \"pe\""), "RuleA should get pe filetype");
+        assert!(
+            output.contains("filetype = \"pe\""),
+            "RuleA should get pe filetype"
+        );
         assert_eq!(
-            output.matches("filetype").count(), 1,
+            output.matches("filetype").count(),
+            1,
             "Only the PE rule should get filetype injected"
         );
         assert!(output.contains("RuleB"), "RuleB should still be present");
@@ -1568,5 +1732,356 @@ rule RuleB {
 }"#;
         let output = inject_condition_filetype_hints(source);
         assert!(output.contains("filetype = \"pe\""));
+    }
+
+    // ------------------------------------------------------------------
+    // Extended magic / module detection in inject_condition_filetype_hints
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn test_inject_pe_from_mz_big_endian() {
+        let source = r#"rule MzBigEndian {
+    meta:
+        description = "BE MZ"
+    condition:
+        uint16be(0) == 0x4D5A
+}"#;
+        let output = inject_condition_filetype_hints(source);
+        assert!(
+            output.contains("filetype = \"pe\""),
+            "MZ big-endian should inject pe"
+        );
+    }
+
+    #[test]
+    fn test_inject_pe_from_pe_module() {
+        let source = r#"rule PeModuleRule {
+    meta:
+        description = "Uses pe module"
+    condition:
+        pe.number_of_sections > 3 and pe.imports("kernel32.dll")
+}"#;
+        let output = inject_condition_filetype_hints(source);
+        assert!(
+            output.contains("filetype = \"pe\""),
+            "pe.* module reference should inject pe"
+        );
+    }
+
+    #[test]
+    fn test_inject_elf_from_elf_module() {
+        let source = r#"rule ElfModuleRule {
+    meta:
+        description = "Uses elf module"
+    condition:
+        elf.type == elf.ET_EXEC
+}"#;
+        let output = inject_condition_filetype_hints(source);
+        assert!(
+            output.contains("filetype = \"elf\""),
+            "elf.* module reference should inject elf"
+        );
+    }
+
+    #[test]
+    fn test_inject_macho_from_macho_module() {
+        let source = r#"rule MachoModuleRule {
+    meta:
+        description = "Uses macho module"
+    condition:
+        macho.filetype == macho.MH_EXECUTE
+}"#;
+        let output = inject_condition_filetype_hints(source);
+        assert!(
+            output.contains("filetype = \"macho\""),
+            "macho.* module should inject macho"
+        );
+    }
+
+    #[test]
+    fn test_inject_ole_from_docfile_magic() {
+        let source = r#"rule OleDoc {
+    meta:
+        description = "OLE document"
+    condition:
+        uint32(0) == 0xD0CF11E0
+}"#;
+        let output = inject_condition_filetype_hints(source);
+        assert!(
+            output.contains("filetype = \"ole\""),
+            "OLE magic should inject ole"
+        );
+    }
+
+    #[test]
+    fn test_inject_pdf_from_magic() {
+        let source = r#"rule PdfRule {
+    meta:
+        description = "PDF file"
+    condition:
+        uint32(0) == 0x25504446
+}"#;
+        let output = inject_condition_filetype_hints(source);
+        assert!(
+            output.contains("filetype = \"pdf\""),
+            "%PDF magic should inject pdf"
+        );
+    }
+
+    #[test]
+    fn test_inject_rtf_from_magic() {
+        let source = r#"rule RtfRule {
+    meta:
+        description = "RTF file"
+    condition:
+        uint32(0) == 0x7B5C7274
+}"#;
+        let output = inject_condition_filetype_hints(source);
+        assert!(
+            output.contains("filetype = \"rtf\""),
+            "RTF magic should inject rtf"
+        );
+    }
+
+    #[test]
+    fn test_inject_zip_from_pk_magic() {
+        let source = r#"rule ZipRule {
+    meta:
+        description = "ZIP archive"
+    condition:
+        uint16(0) == 0x504B
+}"#;
+        let output = inject_condition_filetype_hints(source);
+        assert!(
+            output.contains("filetype = \"zip\""),
+            "PK magic should inject zip"
+        );
+    }
+
+    #[test]
+    fn test_inject_lnk_from_magic() {
+        let source = r#"rule LnkRule {
+    meta:
+        description = "Windows shortcut"
+    condition:
+        uint32(0) == 0x0000004C
+}"#;
+        let output = inject_condition_filetype_hints(source);
+        assert!(
+            output.contains("filetype = \"lnk\""),
+            "LNK magic should inject lnk"
+        );
+    }
+
+    #[test]
+    fn test_pe_module_word_boundary() {
+        // "pe." should match but "type." (substring "pe" in "type") should not
+        let source = r#"rule FalsePositive {
+    meta:
+        description = "Has 'type.pe' but not pe module"
+    strings:
+        $s = "some_type.period"
+    condition:
+        $s
+}"#;
+        let output = inject_condition_filetype_hints(source);
+        assert!(
+            !output.contains("filetype = "),
+            "Should not inject for non-module 'pe.' substring"
+        );
+    }
+
+    #[test]
+    fn test_inject_macho_uint16_facf() {
+        let source = r#"rule MachoFacf {
+    meta:
+        description = "MachO 64-bit"
+    condition:
+        uint16(0) == 0xFACF
+}"#;
+        let output = inject_condition_filetype_hints(source);
+        assert!(
+            output.contains("filetype = \"macho\""),
+            "0xFACF should inject macho"
+        );
+    }
+
+    // ------------------------------------------------------------------
+    // Scripting language filetype inference
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn test_script_powershell_from_rule_name() {
+        assert_eq!(
+            script_filetypes_from_rule_name("Win_Powershell_Obfuscation"),
+            vec!["ps1", "psm1", "psd1"]
+        );
+    }
+
+    #[test]
+    fn test_script_python_from_rule_name() {
+        assert_eq!(
+            script_filetypes_from_rule_name("CAPE_Python_Stealer"),
+            vec!["py", "pyc"]
+        );
+    }
+
+    #[test]
+    fn test_script_php_from_rule_name() {
+        assert_eq!(
+            script_filetypes_from_rule_name("SIGNATURE_BASE_PHP_Backdoor"),
+            vec!["php"]
+        );
+    }
+
+    #[test]
+    fn test_script_javascript_from_rule_name() {
+        assert_eq!(
+            script_filetypes_from_rule_name("GCTI_Cobalt_JavaScript_Dropper"),
+            vec!["js", "mjs", "cjs"]
+        );
+    }
+
+    #[test]
+    fn test_script_vbs_from_rule_name() {
+        assert_eq!(
+            script_filetypes_from_rule_name("Emotet_VBS_Dropper"),
+            vec!["vbs", "vba"]
+        );
+    }
+
+    #[test]
+    fn test_script_batch_from_rule_name() {
+        assert_eq!(
+            script_filetypes_from_rule_name("Some_BAT_malware"),
+            vec!["bat", "cmd"]
+        );
+    }
+
+    #[test]
+    fn test_script_shell_from_rule_name() {
+        assert_eq!(
+            script_filetypes_from_rule_name("Linux_BASH_Reverse_Shell"),
+            vec!["sh", "bash", "zsh"]
+        );
+    }
+
+    #[test]
+    fn test_script_webshell_from_rule_name() {
+        assert_eq!(
+            script_filetypes_from_rule_name("GCTI_Webshell_Generic"),
+            vec!["php", "jsp", "aspx", "asp"]
+        );
+    }
+
+    #[test]
+    fn test_script_java_from_rule_name() {
+        assert_eq!(
+            script_filetypes_from_rule_name("Exploit_JAR_payload"),
+            vec!["jar", "class", "java"]
+        );
+    }
+
+    #[test]
+    fn test_script_no_match_generic() {
+        assert!(script_filetypes_from_rule_name("DarkCloud_Stealer").is_empty());
+        assert!(script_filetypes_from_rule_name("CAPE_Lummaremap").is_empty());
+    }
+
+    // ------------------------------------------------------------------
+    // infer_filetypes now includes scripting language step
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn test_infer_powershell_strict() {
+        // PowerShell rule should infer ps1 filetypes, NOT pe
+        let types = infer_filetypes("CAPE_Powershell_Obfuscation", None);
+        assert_eq!(types, vec!["ps1", "psm1", "psd1"]);
+        assert!(
+            !types.contains(&"pe"),
+            "PowerShell rule must not match PE files"
+        );
+    }
+
+    #[test]
+    fn test_infer_php_webshell_strict() {
+        // "Webshell" token matches first (left-to-right scan) → php,jsp,aspx,asp
+        let types = infer_filetypes("GCTI_Webshell_PHP_Generic", None);
+        assert_eq!(types, vec!["php", "jsp", "aspx", "asp"]);
+    }
+
+    #[test]
+    fn test_infer_php_only() {
+        // When "PHP" is the scripting token (no "Webshell")
+        let types = infer_filetypes("SIGNATURE_BASE_PHP_Backdoor", None);
+        assert_eq!(types, vec!["php"]);
+    }
+
+    #[test]
+    fn test_infer_platform_takes_priority_over_script() {
+        // "Win" platform token should take priority over "ps1" script token
+        let types = infer_filetypes("Win_PS1_Malware", None);
+        assert_eq!(
+            types,
+            vec!["pe", "dll"],
+            "Platform inference should take priority over scripting inference"
+        );
+    }
+
+    #[test]
+    fn test_infer_doc_takes_priority_over_script() {
+        // "PDF" doc prefix should take priority over any script tokens
+        let types = infer_filetypes("PDF_JS_Exploit", None);
+        assert_eq!(
+            types,
+            vec!["pdf"],
+            "Document format should take priority over scripting inference"
+        );
+    }
+
+    #[test]
+    fn test_infer_ruby_from_rule_name() {
+        assert_eq!(
+            infer_filetypes("Exploit_Ruby_Reverse_Shell", None),
+            vec!["rb"]
+        );
+    }
+
+    #[test]
+    fn test_infer_lua_from_rule_name() {
+        assert_eq!(infer_filetypes("Malware_Lua_Backdoor", None), vec!["lua"]);
+    }
+
+    // ------------------------------------------------------------------
+    // has_module_reference: word boundary detection
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn test_has_module_reference_pe_at_start() {
+        assert!(has_module_reference("pe.number_of_sections > 3", "pe."));
+    }
+
+    #[test]
+    fn test_has_module_reference_pe_after_paren() {
+        assert!(has_module_reference(
+            "(pe.imports(\"kernel32.dll\"))",
+            "pe."
+        ));
+    }
+
+    #[test]
+    fn test_has_module_reference_pe_after_space() {
+        assert!(has_module_reference("  pe.sections[0].name", "pe."));
+    }
+
+    #[test]
+    fn test_has_module_reference_false_positive_type_pe() {
+        // "type.pe" should not match as a module reference
+        assert!(!has_module_reference("some_type.period", "pe."));
+    }
+
+    #[test]
+    fn test_has_module_reference_false_positive_recipe() {
+        assert!(!has_module_reference("recipe.format", "pe."));
     }
 }

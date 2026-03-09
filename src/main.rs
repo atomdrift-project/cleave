@@ -335,6 +335,9 @@ fn main() -> Result<()> {
             .init();
     }
 
+    #[cfg(debug_assertions)]
+    tracing::warn!("DEBUG binary — cleave will be very slow; use `make release` for production builds");
+
     // Log command line and initialization with PID and parent PID for debugging
     // subprocess relationships (especially useful for trait-basher debugging)
     let pid = std::process::id();

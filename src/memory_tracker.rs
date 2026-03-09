@@ -17,7 +17,7 @@ pub struct MemoryTracker {
     peak_rss_bytes: AtomicU64,
     /// Number of files processed
     files_processed: AtomicUsize,
-    /// Number of large files (>100MB) processed
+    /// Number of large files (>250MB) processed
     large_files_processed: AtomicUsize,
     /// Start time
     start_time: Instant,
@@ -50,7 +50,7 @@ impl MemoryTracker {
         self.total_bytes_read.fetch_add(bytes, Ordering::Relaxed);
         self.files_processed.fetch_add(1, Ordering::Relaxed);
 
-        const LARGE_FILE_THRESHOLD: u64 = 100 * 1024 * 1024; // 100MB
+        const LARGE_FILE_THRESHOLD: u64 = 250 * 1024 * 1024; // 250MB
         if bytes > LARGE_FILE_THRESHOLD {
             self.large_files_processed.fetch_add(1, Ordering::Relaxed);
             warn!(

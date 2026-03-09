@@ -258,15 +258,23 @@ fn is_simple_pattern(segments: &[HexSegment]) -> bool {
     segments.len() == 1 && matches!(segments.first(), Some(HexSegment::Bytes(_)))
 }
 
-/// Extract the longest fixed byte sequence (atom) for fast pre-filtering
+/// Extract the longest fixed byte sequence (atom) for fast pre-filtering.
+/// Allows single-byte atoms so that memmem degrades to SIMD memchr rather
+/// than falling through to a byte-by-byte linear scan.
+///
+/// Returns the FIRST occurrence of the longest run. This must agree with the
+/// `take_while` offset computation in `eval_hex`, which also stops at the
+/// first segment whose content matches the chosen atom. Using `max_by_key`
+/// (which returns the last maximum on ties) would cause a mismatch when the
+/// same byte sequence appears more than once in the pattern.
 fn extract_best_atom(segments: &[HexSegment]) -> Option<&[u8]> {
     segments
         .iter()
         .filter_map(|s| match s {
-            HexSegment::Bytes(b) if b.len() >= 2 => Some(b.as_slice()),
+            HexSegment::Bytes(b) if !b.is_empty() => Some(b.as_slice()),
             _ => None,
         })
-        .max_by_key(|b| b.len())
+        .reduce(|best, b| if b.len() > best.len() { b } else { best })
 }
 
 /// Match pattern at a specific position in data
@@ -291,13 +299,35 @@ fn match_pattern_at(data: &[u8], pos: usize, segments: &[HexSegment]) -> bool {
                 offset += 1;
             }
             HexSegment::Gap { min, max } => {
-                // For gaps, we need to try all possible lengths
                 if *min == *max {
                     // Fixed gap - just skip
                     offset += min;
                 } else {
-                    // Variable gap - try each length
                     let remaining_segments = &segments[i + 1..];
+                    // If the next segment is a known byte sequence, use memmem to
+                    // locate it within the gap window instead of trying every
+                    // possible gap length. This turns O(max-min) recursive calls
+                    // into a single SIMD-accelerated search.
+                    if let Some(HexSegment::Bytes(needle)) = remaining_segments.first() {
+                        if !needle.is_empty() {
+                            let window_start = (offset + min).min(data.len());
+                            // Needle can start at most at offset+max; include
+                            // needle.len() extra bytes so the last position fits.
+                            let window_end = (offset + max + needle.len()).min(data.len());
+                            if window_start < window_end {
+                                let finder = memchr::memmem::Finder::new(needle.as_slice());
+                                let after_needle = &remaining_segments[1..];
+                                for hit in finder.find_iter(&data[window_start..window_end]) {
+                                    let needle_end = window_start + hit + needle.len();
+                                    if match_pattern_at(data, needle_end, after_needle) {
+                                        return true;
+                                    }
+                                }
+                            }
+                            return false;
+                        }
+                    }
+                    // Fallback: try each gap length
                     for gap_len in *min..=*max {
                         if match_pattern_at(data, offset + gap_len, remaining_segments) {
                             return true;

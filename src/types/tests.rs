@@ -372,6 +372,7 @@ fn test_yara_match_creation() {
         mbc: None,
         attack: None,
         trait_id: None,
+        arch_context: None,
     };
 
     assert_eq!(yara_match.rule, "malware_rule");

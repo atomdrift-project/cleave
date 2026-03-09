@@ -320,6 +320,11 @@ pub struct YaraMatch {
     /// Derived third-party trait ID (e.g., "third_party/elastic/linux/backdoor/bash")
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub trait_id: Option<String>,
+    /// Raw `arch_context` metadata value from the YARA rule (not serialized).
+    /// Used to filter rules at analysis time based on the file's architecture.
+    #[serde(skip, default)]
+    #[allow(dead_code)] // Read by lib.rs pipeline (process_yara_result)
+    pub arch_context: Option<String>,
 }
 
 /// A specific string pattern that contributed to a YARA rule match
@@ -741,6 +746,7 @@ mod tests {
             mbc: None,
             attack: None,
             trait_id: None,
+            arch_context: None,
         };
         assert_eq!(yara.rule, "malware_generic");
         assert!(!yara.is_capability);
@@ -758,6 +764,7 @@ mod tests {
             mbc: Some("C0021".to_string()),
             attack: Some("T1071".to_string()),
             trait_id: None,
+            arch_context: None,
         };
         assert!(yara.is_capability);
         assert_eq!(yara.mbc, Some("C0021".to_string()));

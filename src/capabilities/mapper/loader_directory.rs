@@ -19,6 +19,7 @@ use crate::capabilities::validation::{
     find_composite_only_wellknown_files, find_depth_violations,
     find_duplicate_second_level_directories, find_duplicate_traits_and_composites,
     find_empty_condition_clauses, find_excessive_skip_conditions, find_for_only_duplicates,
+    find_hex_binary_missing_section,
     find_generic_wellknown_leaf_dirs, find_hostile_cap_rules, find_hostile_meta_rules,
     find_impossible_count_constraints, find_impossible_needs, find_impossible_size_constraints,
     find_invalid_not_usage, find_invalid_trait_ids, find_kv_exists_with_matcher, find_line_number,
@@ -1685,6 +1686,30 @@ impl super::CapabilityMapper {
                 warnings.push(format!(
                     "{} metadata/ binary traits lack section filters (add section: field to condition)",
                     meta_no_section.len()
+                ));
+            }
+
+            // Validate that all hex conditions targeting binary file types specify a section
+            tracing::debug!("Checking hex conditions targeting binaries for missing section");
+            let hex_no_section = find_hex_binary_missing_section(&trait_definitions);
+            if !hex_no_section.is_empty() {
+                eprintln!(
+                    "\n❌ ERROR: {} hex condition(s) target binary file types without a section filter",
+                    hex_no_section.len()
+                );
+                eprintln!("   Hex patterns on binary targets must scope the search with 'section:'");
+                eprintln!("   (use 'section: text', 'section: data', etc., or add 'offset:' to pin location)\n");
+                for trait_id in &hex_no_section {
+                    let source_file = rule_source_files
+                        .get(trait_id)
+                        .map(std::string::String::as_str)
+                        .unwrap_or("unknown");
+                    eprintln!("   {}: Trait '{}'", source_file, trait_id);
+                }
+                eprintln!();
+                warnings.push(format!(
+                    "{} hex condition(s) target binaries without a section filter (add section: to condition)",
+                    hex_no_section.len()
                 ));
             }
 

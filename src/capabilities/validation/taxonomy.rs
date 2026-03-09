@@ -12,6 +12,7 @@
 //! The taxonomy is organized hierarchically to support both ML classification and human navigation.
 
 use super::composite::collect_trait_refs_from_rule;
+use super::helpers::is_binary_file_type;
 use crate::composite_rules::{CompositeTrait, Condition, FileType, Platform, TraitDefinition};
 use crate::types::Criticality;
 use std::collections::HashMap;
@@ -1065,14 +1066,6 @@ pub(crate) fn find_composite_only_wellknown_files(
 // ============================================================================
 // well-known/ and metadata/ specificity validators
 // ============================================================================
-
-/// Returns true if the file type is a binary format with sections.
-fn is_binary_file_type(ft: FileType) -> bool {
-    matches!(
-        ft,
-        FileType::Elf | FileType::Macho | FileType::Pe | FileType::Dylib | FileType::So | FileType::Dll
-    )
-}
 
 /// Returns true if the trait targets binary file types (explicitly or via All).
 fn trait_targets_binaries(trait_def: &TraitDefinition) -> bool {

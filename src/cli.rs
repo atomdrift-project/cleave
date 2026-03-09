@@ -129,11 +129,6 @@ pub(crate) struct Args {
     #[arg(long, value_name = "FILE")]
     pub log_file: Option<String>,
 
-    /// Enable full trait validation (expensive, ~60s+). Disabled by default.
-    /// Can also set CLEAVE_VALIDATE=1 to enable.
-    #[arg(long)]
-    pub validate: bool,
-
     /// Additional password to try for encrypted zip files (can be specified multiple times)
     #[arg(long = "zip-password", value_name = "PASSWORD")]
     pub zip_passwords: Vec<String>,
@@ -299,6 +294,12 @@ pub(crate) enum Command {
         #[arg(required = true)]
         targets: Vec<String>,
     },
+
+    /// Validate all trait definitions for correctness and quality issues.
+    /// Runs the full suite of validation checks (~60s+) and exits with a non-zero
+    /// status code if any errors are found.
+    /// Can also enable validation during scans via CLEAVE_VALIDATE=1.
+    Validate,
 
     /// Compare two versions (diff mode) for supply chain attack detection
     Diff {

@@ -104,21 +104,42 @@ fn process_yara_result(
 
     report.yara_matches = matches.clone();
     for yara_match in &matches {
-        // Skip YARA findings whose rule name implies an architecture that
-        // doesn't match the file being analyzed (e.g., an _X64_ rule firing
-        // on an ARM64 binary).
-        if let Some(rule_arch) = composite_rules::Arch::from_yara_rule_name(&yara_match.rule) {
-            if !file_archs.is_empty()
-                && !file_archs.contains(&composite_rules::Arch::All)
-                && !file_archs.contains(&rule_arch)
-            {
-                tracing::debug!(
-                    "Skipping YARA rule {} (arch {:?} doesn't match file {:?})",
-                    yara_match.rule,
-                    rule_arch,
-                    file_archs,
-                );
-                continue;
+        // Skip YARA findings whose arch_context metadata explicitly excludes
+        // the file's architecture.  arch_context takes priority because it is
+        // an authoritative signal written by the rule author.  "x86" in
+        // arch_context means the x86 ISA family (32-bit and 64-bit).
+        if let Some(ref ctx) = yara_match.arch_context {
+            if !ctx.is_empty() && !file_archs.is_empty() && !file_archs.contains(&composite_rules::Arch::All) {
+                let rule_archs = crate::third_party_yara::archs_from_arch_context(ctx);
+                if !rule_archs.is_empty() && !rule_archs.iter().any(|a| file_archs.contains(a)) {
+                    tracing::debug!(
+                        "Skipping YARA rule {} (arch_context {:?} doesn't match file {:?})",
+                        yara_match.rule,
+                        ctx,
+                        file_archs,
+                    );
+                    continue;
+                }
+            }
+        }
+
+        // Fallback: skip YARA findings whose rule name implies an architecture
+        // that doesn't match the file (e.g., an _X64_ rule firing on ARM64).
+        // Only applied when arch_context metadata is absent.
+        if yara_match.arch_context.is_none() {
+            if let Some(rule_arch) = composite_rules::Arch::from_yara_rule_name(&yara_match.rule) {
+                if !file_archs.is_empty()
+                    && !file_archs.contains(&composite_rules::Arch::All)
+                    && !file_archs.contains(&rule_arch)
+                {
+                    tracing::debug!(
+                        "Skipping YARA rule {} (arch {:?} doesn't match file {:?})",
+                        yara_match.rule,
+                        rule_arch,
+                        file_archs,
+                    );
+                    continue;
+                }
             }
         }
 

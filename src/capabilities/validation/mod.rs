@@ -128,11 +128,11 @@ pub(crate) use taxonomy::{
 #[allow(unused_imports)] // find_needs_zero used by binary target
 pub(crate) use constraints::{
     find_empty_condition_clauses, find_excessive_skip_conditions,
-    find_impossible_count_constraints, find_impossible_needs, find_impossible_size_constraints,
-    find_invalid_not_usage, find_kv_exists_with_matcher, find_missing_search_patterns,
-    find_needs_without_any, find_needs_zero, find_none_only_with_proximity,
-    find_orphaned_components, find_pure_alias_traits, find_redundant_needs_one,
-    find_too_short_patterns,
+    find_hex_binary_missing_section, find_impossible_count_constraints, find_impossible_needs,
+    find_impossible_size_constraints, find_invalid_not_usage, find_kv_exists_with_matcher,
+    find_missing_search_patterns, find_needs_without_any, find_needs_zero,
+    find_none_only_with_proximity, find_orphaned_components, find_pure_alias_traits,
+    find_redundant_needs_one, find_too_short_patterns,
 };
 
 // Utility functions

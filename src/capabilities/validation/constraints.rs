@@ -3,7 +3,7 @@
 //! This module validates logical constraints in rules, detecting impossible
 //! or contradictory configurations that would make rules unsatisfiable.
 
-use crate::composite_rules::{CompositeTrait, Condition, TraitDefinition};
+use crate::composite_rules::{CompositeTrait, Condition, FileType, TraitDefinition};
 
 /// Find composite rules where `needs` exceeds the number of possible matching items in `any:`.
 ///
@@ -785,5 +785,47 @@ pub(crate) fn find_none_only_with_proximity(composite_rules: &[CompositeTrait]) 
                 && (rule.near_lines.is_some() || rule.near_bytes.is_some())
         })
         .map(|rule| rule.id.clone())
+        .collect()
+}
+
+/// Find hex conditions targeting binary file types that lack a required section filter.
+///
+/// Hex pattern matching against binaries without a section constraint scans the entire
+/// file content, which is both expensive and increases false-positive risk. Every hex
+/// condition whose `for:` includes `all`, `pe`, `macho`, `elf`, `dylib`, `so`, or `dll`
+/// must specify a `section:` field to scope the search to a named section.
+///
+/// Traits with an absolute `offset` or `offset_range` are exempt — a pinned location
+/// already bounds the search space without needing a section.
+///
+/// Returns: `Vec<trait_id>`
+#[must_use]
+pub(crate) fn find_hex_binary_missing_section(
+    trait_definitions: &[TraitDefinition],
+) -> Vec<String> {
+    trait_definitions
+        .iter()
+        .filter(|t| {
+            let Condition::Hex {
+                section,
+                offset,
+                offset_range,
+                ..
+            } = &t.r#if
+            else {
+                return false;
+            };
+            // Absolute offset or offset_range already pins the search — exempt.
+            if offset.is_some() || offset_range.is_some() {
+                return false;
+            }
+            // Require section when targeting binary file types.
+            section.is_none()
+                && (t.r#for.contains(&FileType::All)
+                    || t.r#for
+                        .iter()
+                        .any(|ft| super::helpers::is_binary_file_type(*ft)))
+        })
+        .map(|t| t.id.clone())
         .collect()
 }

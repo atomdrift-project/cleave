@@ -554,14 +554,21 @@ impl YaraEngine {
                 })
                 .unwrap_or_else(|| "3p".to_string());
 
-            let source = String::from_utf8_lossy(&bytes);
+            let raw_source = String::from_utf8_lossy(&bytes);
 
             // Skip files that reference the VirusTotal module (requires VT context)
-            if source.contains("vt.") {
+            if raw_source.contains("vt.") {
                 vt_skipped += 1;
                 tracing::debug!("{}: skipped (requires VirusTotal context)", path.display());
                 continue;
             }
+
+            // Inject filetype metadata inferred from magic byte conditions
+            // (e.g. uint16(0) == 0x5A4D → filetype = "pe") so compiled rules carry
+            // type-filter hints even when the author didn't add them explicitly.
+            let source =
+                crate::third_party_yara::inject_condition_filetype_hints(&raw_source);
+            let source = source.as_str();
 
             compiler.new_namespace(&namespace);
 
@@ -816,6 +823,7 @@ impl YaraEngine {
         let mut attack_code: Option<String> = None;
         let mut rule_filetypes: Vec<String> = Vec::new();
         let mut os_meta: Option<String> = None;
+        let mut arch_context_meta: Option<String> = None;
 
         for tag_name in tags {
             if matches!(
@@ -858,6 +866,7 @@ impl YaraEngine {
                         .collect();
                 }
                 "os" => os_meta = Some(value_str.to_lowercase()),
+                "arch_context" => arch_context_meta = Some(value_str.to_lowercase()),
                 _ => {}
             }
         }
@@ -885,6 +894,20 @@ impl YaraEngine {
 
         if rule_filetypes.is_empty() {
             let inferred = crate::third_party_yara::infer_filetypes(&rule_name, os_meta.as_deref());
+            rule_filetypes = inferred
+                .iter()
+                .map(std::string::ToString::to_string)
+                .collect();
+        }
+
+        // For third-party rules: if still no filetype, try the namespace filename component.
+        // e.g. namespace "3p.RussianPanda95.VanillaTempest.win_mal_TextShell" → "win_mal_TextShell"
+        // → "win" token → Windows → ["pe", "dll"]
+        if rule_filetypes.is_empty() && is_third_party {
+            let inferred = crate::third_party_yara::infer_filetypes_from_namespace(
+                &namespace,
+                os_meta.as_deref(),
+            );
             rule_filetypes = inferred
                 .iter()
                 .map(std::string::ToString::to_string)
@@ -965,6 +988,7 @@ impl YaraEngine {
             mbc: mbc_code,
             attack: attack_code,
             trait_id,
+            arch_context: arch_context_meta,
         })
     }
 
@@ -1421,6 +1445,7 @@ rule test_rule : suspicious {
             mbc: None,
             attack: None,
             trait_id: None,
+            arch_context: None,
         };
 
         let evidence = engine.yara_match_to_evidence(&yara_match);
@@ -1446,6 +1471,7 @@ rule test_rule : suspicious {
             mbc: None,
             attack: None,
             trait_id: None,
+            arch_context: None,
         };
 
         let evidence = engine.yara_match_to_evidence(&yara_match);

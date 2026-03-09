@@ -8,6 +8,20 @@ use crate::types::Criticality;
 
 use super::super::parsing::parse_file_types;
 
+/// Returns true if the file type is a compiled binary format with sections.
+#[must_use]
+pub(super) fn is_binary_file_type(ft: RuleFileType) -> bool {
+    matches!(
+        ft,
+        RuleFileType::Elf
+            | RuleFileType::Macho
+            | RuleFileType::Pe
+            | RuleFileType::Dylib
+            | RuleFileType::So
+            | RuleFileType::Dll
+    )
+}
+
 /// Extract tier prefix from a trait/rule ID
 ///
 /// Returns the top-level tier: "micro-behaviors", "objectives", "well-known", "metadata", etc.

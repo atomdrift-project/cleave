@@ -229,6 +229,60 @@ impl ElfAnalyzer {
                     None
                 };
 
+                // ELF overlay detection: data after the last PT_LOAD segment
+                {
+                    use goblin::elf::program_header::PT_LOAD;
+                    let image_end = elf
+                        .program_headers
+                        .iter()
+                        .filter(|ph| ph.p_type == PT_LOAD)
+                        .map(|ph| ph.p_offset.saturating_add(ph.p_filesz) as usize)
+                        .max()
+                        .unwrap_or(0);
+                    if image_end > 0 && data.len() > image_end {
+                        let overlay = &data[image_end..];
+                        // Check for squashfs (AppImage)
+                        const SQUASHFS_LE: &[u8] = &[0x73, 0x71, 0x73, 0x68];
+                        const SQUASHFS_BE: &[u8] = &[0x68, 0x73, 0x71, 0x73];
+                        if overlay.starts_with(SQUASHFS_LE) || overlay.starts_with(SQUASHFS_BE) {
+                            report.findings.push(crate::types::Finding {
+                                id: "file/sfx/appimage".to_string(),
+                                kind: crate::types::FindingKind::Structural,
+                                desc: "Squashfs filesystem appended after ELF image (AppImage)".to_string(),
+                                conf: 1.0,
+                                crit: crate::types::Criticality::Notable,
+                                mbc: None,
+                                attack: None,
+                                trait_refs: vec![],
+                                evidence: vec![crate::types::Evidence {
+                                    method: "magic".to_string(),
+                                    source: "elf_overlay".to_string(),
+                                    value: format!("squashfs at offset {:#x}", image_end),
+                                    location: Some(format!("{:#x}", image_end)),
+                                    ..Default::default()
+                                }],
+                                match_count: 1,
+                                source_file: None,
+                            });
+                        } else {
+                            // Regular overlay — analyze via overlay detector
+                            match crate::analyzers::overlay::analyze_overlay(
+                                overlay,
+                                &report.target.path,
+                                Some(self.capability_mapper.clone()),
+                                None,
+                            ) {
+                                Ok(Some(ov)) => {
+                                    report.findings.push(ov.sfx_finding);
+                                    report.findings.extend(ov.archive_report.findings);
+                                    report.files.extend(ov.archive_report.files);
+                                }
+                                Ok(None) | Err(_) => {}
+                            }
+                        }
+                    }
+                }
+
                 (
                     Some(elf_metrics),
                     code_size,
@@ -259,6 +313,14 @@ impl ElfAnalyzer {
                 (None, None, false, None)
             }
         };
+
+        // Embedded ELF / PE scanning (host-agnostic, scans raw bytes)
+        let embedded = crate::analyzers::embedded_binary_detector::scan_for_embedded_binaries(data);
+        for binary in &embedded {
+            report.findings.push(
+                crate::analyzers::embedded_binary_detector::finding_for(binary, &report.target.path),
+            );
+        }
 
         // Use strings in order of preference:
         // 1. stng_strings parameter (from AnalysisInput - avoids redundant extraction)

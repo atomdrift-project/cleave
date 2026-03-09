@@ -39,6 +39,8 @@ pub(crate) fn detect_archive_from_bytes(data: &[u8]) -> Option<&'static str> {
         [0x28, 0xB5, 0x2F, 0xFD] => Some("zst"),
         // Bzip2: BZ
         [0x42, 0x5A, 0x68, _] => Some("bz2"),
+        // CAB: MSCF
+        [0x4D, 0x53, 0x43, 0x46] => Some("cab"),
         _ => None,
     }
 }

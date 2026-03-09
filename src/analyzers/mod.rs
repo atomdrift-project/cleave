@@ -44,6 +44,8 @@ pub(crate) mod utils;
 // Dedicated analyzers for binary/bytecode/manifest formats
 pub(crate) mod chrome_manifest;
 pub(crate) mod elf;
+pub(crate) mod embedded_binary_detector;
+pub(crate) mod sfx_detector;
 pub(crate) mod java_class;
 pub(crate) mod lnk;
 pub(crate) mod macho;

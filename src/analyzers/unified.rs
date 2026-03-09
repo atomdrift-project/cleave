@@ -312,6 +312,9 @@ pub(crate) struct UnifiedSourceAnalyzer {
     file_type: crate::analyzers::FileType,
     parser: RefCell<Parser>,
     capability_mapper: Arc<CapabilityMapper>,
+    /// When true, skip embedded payload detection to prevent recursion.
+    /// Set for analyzers created for inner analysis (e.g. decoded PowerShell).
+    skip_embedded_detection: bool,
 }
 
 impl std::fmt::Debug for UnifiedSourceAnalyzer {
@@ -341,6 +344,7 @@ impl UnifiedSourceAnalyzer {
             file_type,
             parser: RefCell::new(parser),
             capability_mapper: Arc::new(CapabilityMapper::empty()),
+            skip_embedded_detection: false,
         })
     }
 
@@ -362,6 +366,13 @@ impl UnifiedSourceAnalyzer {
         capability_mapper: Arc<CapabilityMapper>,
     ) -> Self {
         self.capability_mapper = capability_mapper;
+        self
+    }
+
+    /// Disable embedded payload detection (base64 binary, PowerShell -EncodedCommand).
+    /// Used for inner analysis to prevent recursive calling.
+    pub(crate) fn without_embedded_detection(mut self) -> Self {
+        self.skip_embedded_detection = true;
         self
     }
 
@@ -795,6 +806,34 @@ impl UnifiedSourceAnalyzer {
             Self::compute_text_ratio_metrics(&mut metrics);
 
             report.metrics = Some(metrics);
+        }
+
+        // Detect base64 binary payloads and PowerShell -EncodedCommand blobs.
+        // Guard against recursion: when this analyzer was created for inner analysis
+        // (e.g. decoding a -EncodedCommand payload), skip to avoid infinite loops.
+        if !self.skip_embedded_detection {
+            // Include the full file content as a synthetic string so that
+            // PS -EncodedCommand arguments (bare, not quoted) are also checked.
+            let content_as_string = crate::types::binary::StringInfo {
+                value: content.to_string(),
+                offset: Some(0),
+                string_type: crate::types::binary::StringType::Const,
+                encoding: "utf-8".to_string(),
+                section: None,
+                encoding_chain: Vec::new(),
+                fragments: None,
+            };
+            let mut all_strings = report.strings.clone();
+            all_strings.push(content_as_string);
+            let (encoded_layers, plain_findings) =
+                crate::analyzers::embedded_code_detector::process_all_strings(
+                    &file_path.display().to_string(),
+                    &all_strings,
+                    &self.capability_mapper,
+                    0,
+                );
+            report.files.extend(encoded_layers);
+            report.findings.extend(plain_findings);
         }
 
         // Evaluate all rules (atomic + composite) and merge into report

@@ -497,6 +497,35 @@ impl PEAnalyzer {
             }
         }
 
+        // NSIS / Inno Setup detection
+        if let Some(sfx_kind) = crate::analyzers::sfx_detector::detect_sfx(pe_data) {
+            let sfx_result = crate::analyzers::sfx_detector::analyze_sfx(
+                file_path,
+                sfx_kind,
+                pe_data,
+                Some(self.capability_mapper.clone()),
+                self.yara_engine.clone(),
+            );
+            report.findings.push(sfx_result.sfx_finding);
+            if let Some(archive_report) = sfx_result.archive_report {
+                report.findings.extend(archive_report.findings);
+                report.files.extend(archive_report.files);
+                for tool in archive_report.metadata.tools_used {
+                    if !tools_used.contains(&tool) {
+                        tools_used.push(tool);
+                    }
+                }
+            }
+        }
+
+        // Embedded PE / ELF scanning
+        let embedded = crate::analyzers::embedded_binary_detector::scan_for_embedded_binaries(pe_data);
+        for binary in &embedded {
+            report.findings.push(
+                crate::analyzers::embedded_binary_detector::finding_for(binary, &report.target.path),
+            );
+        }
+
         report.metadata.analysis_duration_ms = start.elapsed().as_millis() as u64;
         report.metadata.tools_used = tools_used;
 

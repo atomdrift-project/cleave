@@ -169,7 +169,7 @@ fn options_hash(options: &AnalysisOptions) -> String {
         .collect::<Vec<_>>()
         .join(",");
     let key = format!(
-        "v=3,3p={},yara={},r2={},upx={},plat={},hp={},sp={},fv={}",
+        "v=4,3p={},yara={},r2={},upx={},plat={},hp={},sp={},fv={}",
         options.enable_third_party_yara,
         !options.disable_yara,
         !options.disable_radare2,

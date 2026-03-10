@@ -340,6 +340,14 @@ impl PEAnalyzer {
 
             binary_metrics.code_size = code_size;
 
+            // For PE files, prefer section-header flags over radare2 segment perms.
+            // rabin2 often reports coarse `-rwx` segments, which inflates W+X counts.
+            let (executable_sections, writable_sections, wx_sections) =
+                self.compute_section_permission_counts(pe);
+            binary_metrics.executable_sections = executable_sections;
+            binary_metrics.writable_sections = writable_sections;
+            binary_metrics.wx_sections = wx_sections;
+
             // Recalculate code_to_data_ratio with correct code_size
             if binary_metrics.file_size > 0 {
                 let data_size = binary_metrics.file_size.saturating_sub(code_size);
@@ -957,6 +965,30 @@ impl PEAnalyzer {
         metrics
     }
 
+    fn compute_section_permission_counts<'a>(&self, pe: &PE<'a>) -> (u32, u32, u32) {
+        let mut executable_sections = 0;
+        let mut writable_sections = 0;
+        let mut wx_sections = 0;
+
+        for section in &pe.sections {
+            let characteristics = section.characteristics;
+            let is_executable = (characteristics & 0x20000000) != 0;
+            let is_writable = (characteristics & 0x80000000) != 0;
+
+            if is_executable {
+                executable_sections += 1;
+            }
+            if is_writable {
+                writable_sections += 1;
+            }
+            if is_executable && is_writable {
+                wx_sections += 1;
+            }
+        }
+
+        (executable_sections, writable_sections, wx_sections)
+    }
+
     /// Calculate code size from PE section headers using IMAGE_SCN_MEM_EXECUTE characteristic
     /// This is more accurate than radare2's section classification
     fn compute_code_size<'a>(&self, pe: &PE<'a>) -> u64 {
@@ -1118,34 +1150,35 @@ impl PEAnalyzer {
             }
         }
 
-        // Check for PE signature corruption (PE followed by non-null bytes)
-        if let Some(pe_sig_offset) = self.find_signature(data, b"PE") {
-            if pe_sig_offset < data.len() - 4 {
-                let sig = &data[pe_sig_offset..pe_sig_offset + 4];
-                if sig != b"PE\x00\x00" {
-                    findings.push(Finding {
-                        id: "objectives/anti-analysis/pe-tampering/pe-signature-corrupted".to_string(),
-                        kind: FindingKind::Structural,
-                        desc: format!(
-                            "PE signature corrupted: expected PE\\x00\\x00, got {:02X} {:02X} {:02X} {:02X}",
-                            sig[0], sig[1], sig[2], sig[3]
-                        ),
-                        conf: 1.0,
-                        crit: Criticality::Hostile,
-                        mbc: Some("B0001".to_string()),
-                        attack: Some("T1027".to_string()),
-                        trait_refs: vec![],
-                        evidence: vec![Evidence {
-                            method: "signature".to_string(),
-                            source: "cleave".to_string(),
-                            value: format!("PE signature at {:#x}: {:?}", pe_sig_offset, sig),
-                            location: Some(format!("{:#x}", base_offset + pe_sig_offset)),
-                            ..Default::default()
-                        }],
-                        match_count: 1,
-                        source_file: None,
-                    });
-                }
+        // Check the actual PE signature location from the DOS header, not the first
+        // incidental `PE` byte sequence anywhere in the file.
+        let pe_sig_offset =
+            u32::from_le_bytes([data[0x3c], data[0x3d], data[0x3e], data[0x3f]]) as usize;
+        if pe_sig_offset + 4 <= data.len() {
+            let sig = &data[pe_sig_offset..pe_sig_offset + 4];
+            if sig != b"PE\x00\x00" {
+                findings.push(Finding {
+                    id: "objectives/anti-analysis/pe-tampering/pe-signature-corrupted".to_string(),
+                    kind: FindingKind::Structural,
+                    desc: format!(
+                        "PE signature corrupted: expected PE\\x00\\x00, got {:02X} {:02X} {:02X} {:02X}",
+                        sig[0], sig[1], sig[2], sig[3]
+                    ),
+                    conf: 1.0,
+                    crit: Criticality::Hostile,
+                    mbc: Some("B0001".to_string()),
+                    attack: Some("T1027".to_string()),
+                    trait_refs: vec![],
+                    evidence: vec![Evidence {
+                        method: "signature".to_string(),
+                        source: "cleave".to_string(),
+                        value: format!("PE signature at {:#x}: {:?}", pe_sig_offset, sig),
+                        location: Some(format!("{:#x}", base_offset + pe_sig_offset)),
+                        ..Default::default()
+                    }],
+                    match_count: 1,
+                    source_file: None,
+                });
             }
         }
 

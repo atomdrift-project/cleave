@@ -691,6 +691,7 @@ fn detect_file_type_inner(file_path: &Path, file_data: &[u8]) -> Option<FileType
         || path_str.ends_with(".xz")
         || path_str.ends_with(".gz")
         || path_str.ends_with(".bz2")
+        || path_str.ends_with(".zst")
         || path_str.ends_with(".egg")
         || path_str.ends_with(".whl")
         || path_str.ends_with(".gem")
@@ -795,6 +796,9 @@ fn detect_file_type_inner(file_path: &Path, file_data: &[u8]) -> Option<FileType
             return Some(FileType::Markdown);
         }
         if matches!(ext_str.as_str(), "txt" | "rst" | "csv" | "log") {
+            return Some(FileType::Text);
+        }
+        if ext_str == "json" {
             return Some(FileType::Text);
         }
     }

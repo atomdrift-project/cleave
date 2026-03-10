@@ -1544,17 +1544,14 @@ impl YaraEngine {
     /// Scan a file and return both YARA matches and derived findings
     /// This is the main entry point for universal YARA scanning
     #[allow(dead_code)]
-    pub(crate) fn scan_file_to_findings(
+    pub(crate) fn scan_bytes_to_findings(
         &self,
-        file_path: &Path,
+        data: &[u8],
         file_type_filter: Option<&[&str]>,
     ) -> Result<(Vec<YaraMatch>, Vec<crate::types::Finding>)> {
         use crate::types::{Criticality, Finding, FindingKind};
 
-        let data =
-            fs::read(file_path).context(format!("Failed to read file: {}", file_path.display()))?;
-
-        let matches = self.scan_bytes_filtered(&data, file_type_filter)?;
+        let matches = self.scan_bytes_filtered(data, file_type_filter)?;
         let mut findings = Vec::new();
 
         for yara_match in &matches {

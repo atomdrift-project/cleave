@@ -185,7 +185,7 @@ pub(crate) struct Args {
 
     /// Minimum recursive precision required for SUSPICIOUS composite traits.
     /// Rules below this threshold are downgraded to NOTABLE.
-    #[arg(long, default_value_t = 1.5)]
+    #[arg(long, default_value_t = 2.0)]
     pub min_suspicious_precision: f32,
 
     /// Maximum file size (in MB) to keep in memory during archive analysis.

@@ -625,3 +625,108 @@ fn test_all_filters_match_when_satisfied() {
         "Evaluation and debug should agree when all filters are satisfied"
     );
 }
+
+/// Helper to build a report with a specific file size and an import named `symbol`.
+fn create_report_with_symbol(file_size: usize, symbol: &str) -> AnalysisReport {
+    use crate::types::binary::Import;
+    let mut report = create_test_report(file_size);
+    report.imports.push(Import::new(symbol, None, "test"));
+    report
+}
+
+/// Verify that `size_max` suppresses a `type: symbol` match when the binary exceeds the limit.
+///
+/// This is a regression test for the case where `well-known/malware/stealer/amos::setsid-import`
+/// (size_max: 3 MB) was still firing on minikube (~130 MB).
+#[test]
+fn test_size_max_suppresses_symbol_match() {
+    let small_report = create_report_with_symbol(1_024, "setsid");
+    let large_report = create_report_with_symbol(130_000_000, "setsid"); // ~130 MB (minikube)
+    let binary_data = vec![0u8; 64];
+
+    let trait_def = TraitDefinition {
+        id: "test/size-max-symbol".to_string(),
+        desc: "size_max must suppress symbol matches on large binaries".to_string(),
+        conf: 0.9,
+        crit: crate::types::Criticality::Component,
+        mbc: None,
+        attack: None,
+        platforms: vec![Platform::All],
+        r#for: vec![RuleFileType::All],
+        r#if: Condition::Symbol {
+            exact: Some("setsid".to_string()),
+            substr: None,
+            regex: None,
+            platforms: None,
+            compiled_regex: None,
+        },
+        size_min: None,
+        size_max: Some(3_145_728), // 3 MB — same as amos/traits.yaml default
+        count_min: None,
+        count_max: None,
+        per_kb_min: None,
+        per_kb_max: None,
+        entropy_min: None,
+        entropy_max: None,
+        not: None,
+        unless: None,
+        downgrade: None,
+        defined_in: std::path::PathBuf::from("test.yaml"),
+        precision: None,
+        arch: vec![Arch::All],
+    };
+
+    // Small file: size_max satisfied → should match
+    let small_ctx = EvaluationContext {
+        report: &small_report,
+        binary_data: &binary_data,
+        file_type: RuleFileType::All,
+        platforms: vec![Platform::All],
+        arch: vec![Arch::All],
+        arch_ranges: None,
+        additional_findings: None,
+        cached_ast: None,
+        finding_id_index: None,
+        debug_collector: None,
+        section_map: None,
+        inline_yara_results: None,
+        cached_kv_format: OnceLock::new(),
+        cached_kv_parsed: OnceLock::new(),
+        current_trait: None,
+        current_source: None,
+        string_exact_index: OnceLock::new(),
+        string_exact_index_ci: OnceLock::new(),
+        deadline: None,
+    };
+    assert!(
+        trait_def.evaluate(&small_ctx).is_some(),
+        "Should match: file size (1 KB) is within size_max (3 MB)"
+    );
+
+    // Large file: size_max exceeded → must NOT match
+    let large_ctx = EvaluationContext {
+        report: &large_report,
+        binary_data: &binary_data,
+        file_type: RuleFileType::All,
+        platforms: vec![Platform::All],
+        arch: vec![Arch::All],
+        arch_ranges: None,
+        additional_findings: None,
+        cached_ast: None,
+        finding_id_index: None,
+        debug_collector: None,
+        section_map: None,
+        inline_yara_results: None,
+        cached_kv_format: OnceLock::new(),
+        cached_kv_parsed: OnceLock::new(),
+        current_trait: None,
+        current_source: None,
+        string_exact_index: OnceLock::new(),
+        string_exact_index_ci: OnceLock::new(),
+        deadline: None,
+    };
+    assert!(
+        trait_def.evaluate(&large_ctx).is_none(),
+        "Must not match: file size (130 MB) exceeds size_max (3 MB)"
+    );
+}

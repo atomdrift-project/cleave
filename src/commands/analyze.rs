@@ -32,7 +32,6 @@
 //! - **Terminal**: Human-readable summary with findings and metadata
 //! - **JSONL**: Machine-readable JSON Lines format (one JSON object per line)
 
-use crate::analyzers::{detect_file_type, FileType};
 use crate::cli;
 use crate::commands::shared::check_criticality_error;
 use crate::composite_rules;
@@ -42,6 +41,7 @@ use crate::types;
 use anyhow::{Context, Result};
 use malecule::LayoutAlgorithm;
 use std::fs;
+use std::io::Write;
 use std::path::Path;
 
 /// Build `AnalysisOptions` from CLI arguments.
@@ -55,6 +55,7 @@ fn build_options(
     min_hostile_precision: f32,
     min_suspicious_precision: f32,
     enable_full_validation: bool,
+    all_files: bool,
 ) -> cleave::AnalysisOptions {
     // Convert binary crate Platform to library crate Platform
     // They're the same type structurally but Rust treats them as distinct
@@ -76,7 +77,7 @@ fn build_options(
         disable_yara: disabled.yara,
         disable_radare2: disabled.radare2,
         disable_upx: disabled.upx,
-        all_files: false,
+        all_files,
         platforms: platforms_lib,
         min_hostile_precision,
         min_suspicious_precision,
@@ -96,7 +97,7 @@ pub(crate) fn run(
     disabled: &cli::DisabledComponents,
     error_if_levels: Option<&[types::Criticality]>,
     all_files: bool,
-    shuffle: bool,
+    _shuffle: bool,
     sample_extraction: Option<&types::SampleExtractionConfig>,
     platforms: &[composite_rules::Platform],
     min_hostile_precision: f32,
@@ -122,112 +123,101 @@ pub(crate) fn run(
         min_hostile_precision,
         min_suspicious_precision,
         enable_full_validation,
+        all_files,
     );
 
     // If target is a directory, process files recursively
     if path.is_dir() {
-        // For JSONL mode, stream results immediately for progress tracking
-        let streaming = matches!(format, cli::OutputFormat::Jsonl);
-        // Collect all file analysis data for galaxy view
-        let mut all_file_analyses: Vec<types::FileAnalysis> = Vec::new();
+        let options_arc = std::sync::Arc::new(options);
+        let results = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let all_file_analyses = if mol_path.is_some() {
+            Some(std::sync::Arc::new(std::sync::Mutex::new(Vec::new())))
+        } else {
+            None
+        };
 
-        // Collect all files first, filtering unknown types early
-        let mut files: Vec<_> = walkdir::WalkDir::new(path)
-            .follow_links(false)
-            .into_iter()
-            .filter_entry(|e| !e.file_name().to_string_lossy().starts_with(".git"))
-            .filter_map(std::result::Result::ok)
-            .filter(|e| e.file_type().is_file())
-            .filter(|e| {
-                if all_files {
-                    return true;
-                }
-                let file_type = detect_file_type(e.path()).unwrap_or(FileType::Unknown);
-                file_type.is_program()
-            })
-            .collect();
+        let results_clone = results.clone();
+        let all_file_analyses_clone = all_file_analyses.clone();
+        let format_val = *format;
+        let error_if_levels_owned: Option<Vec<types::Criticality>> =
+            error_if_levels.map(|l| l.to_vec());
 
-        // Shuffle files for random processing order when requested.
-        if shuffle {
-            use rand::seq::SliceRandom;
-            files.shuffle(&mut rand::rng());
-        }
+        cleave::scan_directory(path, &options_arc, move |event| match event {
+            cleave::ScanEvent::Start { total } => {
+                tracing::info!(total = total, "Starting directory scan");
+            }
+            cleave::ScanEvent::File { path: file_path, result } => {
+                let file_path_str = file_path.to_string_lossy().to_string();
+                let formatted = match result.as_ref() {
+                    Ok(lib_report) => {
+                        // Convert library types to binary-crate types via serde roundtrip.
+                        let Ok(json) = serde_json::to_vec(lib_report) else {
+                            return;
+                        };
+                        let Ok(mut report) = serde_json::from_slice::<types::AnalysisReport>(&json)
+                        else {
+                            return;
+                        };
 
-        let results = if streaming {
-            let results = Vec::new();
-            for entry in &files {
-                let file_path = entry.path().to_string_lossy().to_string();
-                let result = analyze_and_format(
-                    &file_path,
-                    &options,
-                    format,
-                    error_if_levels,
-                    None,
-                    mol_layout,
-                    Some(&mut all_file_analyses),
-                )?;
-                tracing::info!(
-                    path = %file_path,
-                    jsonl_bytes = result.len(),
-                    "JSONL output"
-                );
-                print!("{}", result);
-                use std::io::Write;
-                if let Err(e) = std::io::stdout().flush() {
-                    if e.kind() == std::io::ErrorKind::BrokenPipe {
-                        tracing::info!("stdout pipe closed, stopping analysis");
-                        return Ok(String::new());
+                        // CLI-specific post-processing
+                        if let Err(e) = check_criticality_error(&report, error_if_levels_owned.as_deref()) {
+                            eprintln!("Error: {}", e);
+                            return;
+                        }
+                        report.shrink_to_fit();
+                        report.finalize();
+
+                        // Collect for galaxy view if needed
+                        if let Some(ref collector) = all_file_analyses_clone {
+                            if let Ok(mut guard) = collector.lock() {
+                                guard.extend(report.files.iter().cloned());
+                            }
+                        }
+
+                        let res = match format_val {
+                            cli::OutputFormat::Json => serde_json::to_string(&report).unwrap_or_default(),
+                            cli::OutputFormat::Jsonl => output::format_jsonl(&report).unwrap_or_default(),
+                            cli::OutputFormat::Terminal => output::format_terminal(&report),
+                        };
+                        if format_val == cli::OutputFormat::Jsonl {
+                             print!("{}", res);
+                             let _ = std::io::stdout().flush();
+                        }
+                        res
+                    }
+                    Err(e) => {
+                        tracing::error!(path = %file_path_str, error = %e, "Analysis failed");
+                        String::new()
+                    }
+                };
+                if !formatted.is_empty() && format_val != cli::OutputFormat::Jsonl {
+                    if let Ok(mut guard) = results_clone.lock() {
+                        guard.push(formatted);
                     }
                 }
             }
-            results
-        } else {
-            use rayon::prelude::*;
-
-            let file_paths: Vec<String> = files
-                .iter()
-                .map(|e| e.path().to_string_lossy().to_string())
-                .collect();
-
-            let par_results: Vec<(String, Result<String>)> = file_paths
-                .par_iter()
-                .map(|file_path| {
-                    let result = analyze_and_format(
-                        file_path,
-                        &options,
-                        format,
-                        error_if_levels,
-                        None,
-                        mol_layout,
-                        None,
-                    );
-                    (file_path.clone(), result)
-                })
-                .collect();
-
-            let mut results = Vec::with_capacity(par_results.len());
-            for (_, result) in par_results {
-                results.push(result?);
-            }
-            results
-        };
+        })?;
 
         // Generate galaxy view from all collected files
         if let Some(base_path) = mol_path {
-            if !all_file_analyses.is_empty() {
-                let mut combined_report = types::AnalysisReport::new(types::TargetInfo {
-                    path: target.to_string(),
-                    file_type: "directory".to_string(),
-                    size_bytes: 0,
-                    sha256: String::new(),
-                    architectures: None,
-                });
-                combined_report.files = all_file_analyses;
-                write_malecule_files(&combined_report, base_path, mol_layout)?;
+            if let Some(collector) = all_file_analyses {
+                let all_files = collector.lock().unwrap();
+                if !all_files.is_empty() {
+                    let mut combined_report = types::AnalysisReport::new(types::TargetInfo {
+                        path: target.to_string(),
+                        file_type: "directory".to_string(),
+                        size_bytes: 0,
+                        sha256: String::new(),
+                        architectures: None,
+                    });
+                    combined_report.files = all_files.clone();
+                    write_malecule_files(&combined_report, base_path, mol_layout)?;
+                }
             }
         }
 
-        return Ok(results.join(""));
+        let final_results = results.lock().unwrap();
+        return Ok(final_results.join(""));
     }
 
     // Single file analysis

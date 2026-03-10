@@ -392,49 +392,60 @@ pub(crate) fn detect_file_type_from_path(file_path: &Path) -> FileType {
     FileType::Unknown
 }
 
+/// Detect file type from already-loaded data.
+///
+/// This is the core detection logic. Use `detect_file_type` when you need to read from disk.
+pub(crate) fn detect_file_type_from_data(file_path: &Path, file_data: &[u8]) -> FileType {
+    if file_data.len() < 4 {
+        return detect_file_type_from_path(file_path);
+    }
+    match detect_file_type_inner(file_path, file_data) {
+        Some(ft) => ft,
+        None => FileType::Unknown,
+    }
+}
+
 /// Detect file type and route to appropriate analyzer
 pub fn detect_file_type(file_path: &Path) -> Result<FileType> {
     let file_data = std::fs::read(file_path)?;
+    Ok(detect_file_type_from_data(file_path, &file_data))
+}
 
-    if file_data.len() < 4 {
-        // Fall back to extension-based detection for tiny/empty files
-        return Ok(detect_file_type_from_path(file_path));
-    }
-
+fn detect_file_type_inner(file_path: &Path, file_data: &[u8]) -> Option<FileType> {
     // Check for compiled AppleScript magic bytes "Fasd"
     if file_data.starts_with(b"Fasd") {
-        return Ok(FileType::AppleScript);
+        return Some(FileType::AppleScript);
     }
 
     // Check for RTF magic bytes
     if file_data.starts_with(b"{\\rtf") {
-        return Ok(FileType::Rtf);
+        return Some(FileType::Rtf);
     }
 
     // Check for PDF magic bytes (%PDF-)
     if file_data.starts_with(b"%PDF-") {
-        return Ok(FileType::Pdf);
+        return Some(FileType::Pdf);
     }
 
     // Check for LNK magic bytes (Windows Shell Link)
     if lnk::is_lnk(&file_data) {
-        return Ok(FileType::Lnk);
+        return Some(FileType::Lnk);
     }
 
     // Check for JPEG magic bytes (FF D8 FF)
     if file_data.len() >= 3 && file_data[0] == 0xFF && file_data[1] == 0xD8 && file_data[2] == 0xFF
     {
-        return Ok(FileType::Jpeg);
+        return Some(FileType::Jpeg);
     }
 
     // Check for PNG magic bytes (89 50 4E 47 0D 0A 1A 0A)
     if file_data.starts_with(b"\x89PNG\r\n\x1a\n") {
-        return Ok(FileType::Png);
+        return Some(FileType::Png);
     }
 
     // Check for Java class files BEFORE Mach-O (both use 0xCAFEBABE)
     if is_java_class(&file_data) {
-        return Ok(FileType::JavaClass);
+        return Some(FileType::JavaClass);
     }
 
     // Check for JAR files (ZIP with .jar extension) - check extension first
@@ -442,34 +453,34 @@ pub fn detect_file_type(file_path: &Path) -> Result<FileType> {
     if path_str.ends_with(".jar") || path_str.ends_with(".war") || path_str.ends_with(".ear") {
         // Verify it's a ZIP file (PK signature)
         if file_data.starts_with(b"PK") {
-            return Ok(FileType::Jar);
+            return Some(FileType::Jar);
         }
     }
 
     // Check for Mach-O magic bytes
     if is_macho(&file_data) {
-        return Ok(FileType::MachO);
+        return Some(FileType::MachO);
     }
 
     // Check for ELF magic bytes
     if file_data.starts_with(b"\x7fELF") {
-        return Ok(FileType::Elf);
+        return Some(FileType::Elf);
     }
 
     // Check for PE magic bytes - also detect tampered PEs with junk prefix
     // Malware often prepends bytes before the MZ header to evade detection
     if file_data.starts_with(b"MZ") {
-        return Ok(FileType::Pe);
+        return Some(FileType::Pe);
     }
     // Check for MZ within first 64 bytes (tampered PE with junk prefix)
     if let Some(mz_offset) = find_mz_header(&file_data, 64) {
         tracing::debug!("Detected PE with MZ at offset {} (junk prefix)", mz_offset);
-        return Ok(FileType::Pe);
+        return Some(FileType::Pe);
     }
 
     // Check for Binary Plist
     if file_data.starts_with(b"bplist") {
-        return Ok(FileType::Plist);
+        return Some(FileType::Plist);
     }
 
     // Check for XML Plist
@@ -477,7 +488,7 @@ pub fn detect_file_type(file_path: &Path) -> Result<FileType> {
     if (content_start.contains("<?xml") && content_start.contains("<plist"))
         || content_start.contains("<plist")
     {
-        return Ok(FileType::Plist);
+        return Some(FileType::Plist);
     }
 
     // Check for shell script shebang (various shells)
@@ -490,7 +501,7 @@ pub fn detect_file_type(file_path: &Path) -> Result<FileType> {
         || file_data.starts_with(b"#!/usr/bin/env zsh")
         || file_data.starts_with(b"#!/usr/bin/env dash")
     {
-        return Ok(FileType::Shell);
+        return Some(FileType::Shell);
     }
 
     // Check for Python script shebang
@@ -499,17 +510,17 @@ pub fn detect_file_type(file_path: &Path) -> Result<FileType> {
         || file_data.starts_with(b"#!/usr/bin/env python3")
         || file_data.starts_with(b"#!/usr/bin/python3")
     {
-        return Ok(FileType::Python);
+        return Some(FileType::Python);
     }
 
     // Check for Node.js/JavaScript shebang
     if file_data.starts_with(b"#!/usr/bin/env node") || file_data.starts_with(b"#!/usr/bin/node") {
-        return Ok(FileType::JavaScript);
+        return Some(FileType::JavaScript);
     }
 
     // Check for Ruby shebang
     if file_data.starts_with(b"#!/usr/bin/env ruby") || file_data.starts_with(b"#!/usr/bin/ruby") {
-        return Ok(FileType::Ruby);
+        return Some(FileType::Ruby);
     }
 
     // Check for Perl shebang
@@ -517,7 +528,7 @@ pub fn detect_file_type(file_path: &Path) -> Result<FileType> {
         || file_data.starts_with(b"#!/usr/bin/perl")
         || file_data.starts_with(b"#!/usr/local/bin/perl")
     {
-        return Ok(FileType::Perl);
+        return Some(FileType::Perl);
     }
 
     // Check for PHP opening tag or shebang
@@ -525,7 +536,7 @@ pub fn detect_file_type(file_path: &Path) -> Result<FileType> {
         || file_data.starts_with(b"#!/usr/bin/env php")
         || file_data.starts_with(b"#!/usr/bin/php")
     {
-        return Ok(FileType::Php);
+        return Some(FileType::Php);
     }
 
     // Check for Lua shebang
@@ -533,14 +544,14 @@ pub fn detect_file_type(file_path: &Path) -> Result<FileType> {
         || file_data.starts_with(b"#!/usr/bin/env lua")
         || file_data.starts_with(b"#!/usr/local/bin/lua")
     {
-        return Ok(FileType::Lua);
+        return Some(FileType::Lua);
     }
 
     // Check for package.json (npm manifest) and manifest.json (Chrome extension)
     if let Some(file_name) = file_path.file_name() {
         let name = file_name.to_string_lossy().to_lowercase();
         if name == "package.json" {
-            return Ok(FileType::PackageJson);
+            return Some(FileType::PackageJson);
         }
         if name == "manifest.json" {
             // Check if it's a Chrome extension manifest by looking for manifest_version
@@ -551,17 +562,17 @@ pub fn detect_file_type(file_path: &Path) -> Result<FileType> {
                     || content.contains("\"background\"")
                     || content.contains("\"host_permissions\""))
             {
-                return Ok(FileType::ChromeManifest);
+                return Some(FileType::ChromeManifest);
             }
         }
         if name == "extension.vsixmanifest" || name.ends_with(".vsixmanifest") {
-            return Ok(FileType::VsixManifest);
+            return Some(FileType::VsixManifest);
         }
         if name == "pkg-info" || name == "metadata" {
-            return Ok(FileType::PkgInfo);
+            return Some(FileType::PkgInfo);
         }
         if name.ends_with(".plist") {
-            return Ok(FileType::Plist);
+            return Some(FileType::Plist);
         }
         // Debian/Ubuntu package maintainer scripts (often lack shebang)
         // But only if they don't have a recognized source code extension
@@ -611,7 +622,7 @@ pub fn detect_file_type(file_path: &Path) -> Result<FileType> {
                 || name.contains("postrm")
                 || name.contains("prerm"))
         {
-            return Ok(FileType::Shell);
+            return Some(FileType::Shell);
         }
     }
 
@@ -664,7 +675,7 @@ pub fn detect_file_type(file_path: &Path) -> Result<FileType> {
         )
     });
     if !has_known_extension && looks_like_shell(&file_data) {
-        return Ok(FileType::Shell);
+        return Some(FileType::Shell);
     }
 
     // Check for archives by file extension (need to check path, not just extension)
@@ -698,107 +709,107 @@ pub fn detect_file_type(file_path: &Path) -> Result<FileType> {
         || path_str.ends_with(".deb")
         || path_str.ends_with(".rpm")
     {
-        return Ok(FileType::Archive);
+        return Some(FileType::Archive);
     }
 
     if let Some(ext) = file_path.extension() {
         let ext_str = ext.to_str().unwrap_or("").to_lowercase();
         if ext_str == "sh" {
-            return Ok(FileType::Shell);
+            return Some(FileType::Shell);
         }
         if ext_str == "py" {
-            return Ok(FileType::Python);
+            return Some(FileType::Python);
         }
         if matches!(ext_str.as_str(), "js" | "mjs" | "cjs" | "jsx") {
-            return Ok(FileType::JavaScript);
+            return Some(FileType::JavaScript);
         }
         if matches!(ext_str.as_str(), "ts" | "tsx" | "mts" | "cts") {
-            return Ok(FileType::TypeScript);
+            return Some(FileType::TypeScript);
         }
         if ext_str == "go" {
-            return Ok(FileType::Go);
+            return Some(FileType::Go);
         }
         if ext_str == "rs" {
-            return Ok(FileType::Rust);
+            return Some(FileType::Rust);
         }
         if ext_str == "java" {
-            return Ok(FileType::Java);
+            return Some(FileType::Java);
         }
         if ext_str == "rb" {
-            return Ok(FileType::Ruby);
+            return Some(FileType::Ruby);
         }
         if ext_str == "php" {
-            return Ok(FileType::Php);
+            return Some(FileType::Php);
         }
         if matches!(ext_str.as_str(), "pl" | "pm" | "t") {
-            return Ok(FileType::Perl);
+            return Some(FileType::Perl);
         }
         if matches!(ext_str.as_str(), "ps1" | "psm1" | "psd1") {
-            return Ok(FileType::PowerShell);
+            return Some(FileType::PowerShell);
         }
         if matches!(ext_str.as_str(), "bat" | "cmd") {
-            return Ok(FileType::Batch);
+            return Some(FileType::Batch);
         }
         if matches!(
             ext_str.as_str(),
             "c" | "h" | "cpp" | "hpp" | "cc" | "cxx" | "hxx" | "hh"
         ) {
-            return Ok(FileType::C);
+            return Some(FileType::C);
         }
         if ext_str == "lua" {
-            return Ok(FileType::Lua);
+            return Some(FileType::Lua);
         }
         if ext_str == "cs" {
-            return Ok(FileType::CSharp);
+            return Some(FileType::CSharp);
         }
         if ext_str == "swift" {
-            return Ok(FileType::Swift);
+            return Some(FileType::Swift);
         }
         if matches!(ext_str.as_str(), "m" | "mm") {
-            return Ok(FileType::ObjectiveC);
+            return Some(FileType::ObjectiveC);
         }
         if matches!(ext_str.as_str(), "groovy" | "gradle") {
-            return Ok(FileType::Groovy);
+            return Some(FileType::Groovy);
         }
         if matches!(ext_str.as_str(), "scala" | "sc") {
-            return Ok(FileType::Scala);
+            return Some(FileType::Scala);
         }
         if ext_str == "zig" {
-            return Ok(FileType::Zig);
+            return Some(FileType::Zig);
         }
         if matches!(ext_str.as_str(), "ex" | "exs") {
-            return Ok(FileType::Elixir);
+            return Some(FileType::Elixir);
         }
         if ext_str == "scpt" || ext_str == "applescript" {
-            return Ok(FileType::AppleScript);
+            return Some(FileType::AppleScript);
         }
         if ext_str == "html" || ext_str == "htm" {
             // Check if it actually contains HTML markup
             if looks_like_html(&file_data) {
-                return Ok(FileType::Html);
+                return Some(FileType::Html);
             }
             // HTML extension but no markup - treat as plain text
-            return Ok(FileType::Text);
+            return Some(FileType::Text);
         }
         if matches!(ext_str.as_str(), "md" | "markdown") {
-            return Ok(FileType::Markdown);
+            return Some(FileType::Markdown);
         }
         if matches!(ext_str.as_str(), "txt" | "rst" | "csv" | "log") {
-            return Ok(FileType::Text);
+            return Some(FileType::Text);
         }
     }
 
     // Content-based detection for files without recognized extensions
     // Check for Python code patterns (e.g., .dat files that are actually Python)
     if looks_like_python(&file_data) {
-        return Ok(FileType::Python);
+        return Some(FileType::Python);
     }
 
     if looks_like_powershell(&file_data) {
-        return Ok(FileType::PowerShell);
+        return Some(FileType::PowerShell);
     }
 
-    Ok(FileType::Unknown)
+    None
 }
 
 /// Check if content looks like HTML (has actual markup tags)
@@ -1225,6 +1236,7 @@ impl FileType {
     /// Returns true if this file type represents executable code (binaries, scripts, etc.)
     /// as opposed to data files (images, documents, etc.)
     #[must_use]
+    #[allow(dead_code)]
     pub(crate) fn is_program(&self) -> bool {
         match self {
             FileType::MachO

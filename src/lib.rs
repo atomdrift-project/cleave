@@ -285,7 +285,8 @@ pub fn analyze_file<P: AsRef<Path>>(path: P, options: &AnalysisOptions) -> Resul
 
     // Fast path: check the analysis cache before loading expensive resources.
     // SHA256 of the file is cheap (~1ms); loading CapabilityMapper + YARA is not (~800ms).
-    if path.is_file() {
+    // Keep the pre-read data to pass through on cache miss, avoiding a second read.
+    let preloaded = if path.is_file() {
         let file_data = file_io::read_file_smart(path)?;
         let sha256 = analyzers::utils::calculate_sha256(file_data.as_slice());
         if let Some(mut report) = analysis_cache::cache_lookup(&sha256, options) {
@@ -294,7 +295,10 @@ pub fn analyze_file<P: AsRef<Path>>(path: P, options: &AnalysisOptions) -> Resul
             tracing::info!("Cache hit (fast path)");
             return Ok(report);
         }
-    }
+        Some(file_data)
+    } else {
+        None
+    };
 
     // Cache miss: load mapper and YARA engine in parallel (~860ms + ~270ms → ~860ms)
     let (mapper, yara_engine) = rayon::join(
@@ -309,7 +313,7 @@ pub fn analyze_file<P: AsRef<Path>>(path: P, options: &AnalysisOptions) -> Resul
             }
         },
     );
-    analyze_file_with_resources(path, options, &mapper, yara_engine.as_ref())
+    analyze_file_with_resources(path, options, &mapper, yara_engine.as_ref(), preloaded)
 }
 
 /// Analyze a single file using a pre-loaded CapabilityMapper.
@@ -332,7 +336,7 @@ pub fn analyze_file_with_mapper<P: AsRef<Path>>(
     // Wrap in Arc for the internal API (this is the less-common path;
     // callers with an Arc should use analyze_file_with_resources directly)
     let mapper_arc = Arc::new(capability_mapper.clone());
-    analyze_file_with_resources(path, options, &mapper_arc, yara_engine.as_ref())
+    analyze_file_with_resources(path, options, &mapper_arc, yara_engine.as_ref(), None)
 }
 
 /// Analyze a single file with full control over resources.
@@ -355,6 +359,7 @@ fn analyze_file_with_resources<P: AsRef<Path>>(
     options: &AnalysisOptions,
     capability_mapper: &Arc<CapabilityMapper>,
     yara_engine: Option<&Arc<yara_engine::YaraEngine>>,
+    preloaded: Option<file_io::FileData>,
 ) -> Result<AnalysisReport> {
     let path = path.as_ref();
     let span = tracing::info_span!("analyze", path = %path.display());
@@ -382,27 +387,29 @@ fn analyze_file_with_resources<P: AsRef<Path>>(
         upx::disable_upx();
     }
 
-    // Detect file type
+    // Read file once — reuse pre-loaded data from the fast-path cache check if available.
+    let file_data_wrapper = match preloaded {
+        Some(data) => data,
+        None => file_io::read_file_smart(path)?,
+    };
+    let file_data = file_data_wrapper.as_slice();
+
+    // Detect file type from already-loaded data (no extra read)
     tracing::debug!("Detecting file type for: {}", path.display());
-    let file_type = detect_file_type(path)?;
+    let file_type = analyzers::detect_file_type_from_data(path, file_data);
     tracing::debug!(
         "Detected file type: {:?} for: {}",
         file_type,
         path.display()
     );
 
-    // Get file size for memory tracking
-    let file_size = std::fs::metadata(path)?.len();
+    // Get file size for memory tracking (from loaded data, avoiding a metadata syscall)
+    let file_size = file_data.len() as u64;
 
     // Log memory state before processing
     memory_tracker::log_before_file_processing(path.to_str().unwrap_or("unknown"), file_size);
 
     let analysis_start = std::time::Instant::now();
-
-    // Read file for mismatch check and payload extraction
-    // Use smart reading (memory-mapping for large files)
-    let file_data_wrapper = file_io::read_file_smart(path)?;
-    let file_data = file_data_wrapper.as_slice();
 
     // Track file read for memory monitoring
     memory_tracker::global_tracker()
@@ -741,7 +748,7 @@ fn analyze_file_with_resources<P: AsRef<Path>>(
 
         // Analyze the decoded payload
         if let Ok(payload_report) =
-            analyze_file_with_resources(&payload.temp_path, options, capability_mapper, yara_engine)
+            analyze_file_with_resources(&payload.temp_path, options, capability_mapper, yara_engine, None)
         {
             // Merge traits from payload analysis
             for mut trait_item in payload_report.traits {
@@ -782,7 +789,7 @@ fn analyze_file_with_resources<P: AsRef<Path>>(
                     Some(file_types.as_slice())
                 };
 
-                if let Ok((matches, findings)) = engine.scan_file_to_findings(path, filter) {
+                if let Ok((matches, findings)) = engine.scan_bytes_to_findings(file_data, filter) {
                     report.yara_matches = matches;
                     let existing: std::collections::HashSet<String> =
                         report.findings.iter().map(|f| f.id.clone()).collect();
@@ -984,7 +991,7 @@ where
     let errors = AtomicUsize::new(0);
 
     files.par_iter().for_each(|file_path| {
-        let result = analyze_file_with_resources(file_path, options, &mapper, yara_engine.as_ref());
+        let result = analyze_file_with_resources(file_path, options, &mapper, yara_engine.as_ref(), None);
         match &result {
             Ok(_) => {
                 analyzed.fetch_add(1, Ordering::Relaxed);

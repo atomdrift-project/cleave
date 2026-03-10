@@ -42,6 +42,8 @@ pub struct CapabilityMapper {
     pub(super) raw_content_regex_index: RawContentRegexIndex,
     /// Platform filter(s) for rule evaluation (default: [All])
     pub(super) platforms: Vec<Platform>,
+    /// Warn threshold for slow rule evaluation in milliseconds (default: 4000)
+    pub(super) slow_rule_ms: u64,
 }
 
 impl Default for CapabilityMapper {

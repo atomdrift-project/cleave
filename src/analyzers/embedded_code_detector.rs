@@ -877,7 +877,7 @@ mod tests {
     #[test]
     fn test_decode_utf16le_valid() {
         use base64::Engine;
-        let utf16: Vec<u8> = "IEX".encode_utf16().flat_map(|c| c.to_le_bytes()).collect();
+        let utf16: Vec<u8> = "IEX".encode_utf16().flat_map(u16::to_le_bytes).collect();
         let b64 = base64::engine::general_purpose::STANDARD.encode(&utf16);
         let result = decode_utf16le(&b64);
         assert_eq!(result.as_deref(), Some("IEX"));

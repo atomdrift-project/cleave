@@ -41,6 +41,7 @@ fn create_test_context<'a>(report: &'a AnalysisReport, data: &'a [u8]) -> Evalua
         string_exact_index: OnceLock::new(),
         string_exact_index_ci: OnceLock::new(),
         deadline: None,
+        slow_rule_ms: 4000,
     }
 }
 

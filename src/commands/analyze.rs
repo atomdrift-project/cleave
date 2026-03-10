@@ -56,6 +56,7 @@ fn build_options(
     min_suspicious_precision: f32,
     enable_full_validation: bool,
     all_files: bool,
+    slow_rule_ms: u64,
 ) -> cleave::AnalysisOptions {
     // Convert binary crate Platform to library crate Platform
     // They're the same type structurally but Rust treats them as distinct
@@ -84,6 +85,7 @@ fn build_options(
         enable_full_validation,
         max_memory_file_size,
         sample_extraction: sample_lib,
+        slow_rule_ms,
     }
 }
 
@@ -106,6 +108,7 @@ pub(crate) fn run(
     enable_full_validation: bool,
     mol_path: Option<&str>,
     mol_layout: cli::MolLayout,
+    slow_rule_ms: u64,
 ) -> Result<String> {
     let path = Path::new(target);
 
@@ -124,6 +127,7 @@ pub(crate) fn run(
         min_suspicious_precision,
         enable_full_validation,
         all_files,
+        slow_rule_ms,
     );
 
     // If target is a directory, process files recursively
@@ -146,7 +150,10 @@ pub(crate) fn run(
             cleave::ScanEvent::Start { total } => {
                 tracing::info!(total = total, "Starting directory scan");
             }
-            cleave::ScanEvent::File { path: file_path, result } => {
+            cleave::ScanEvent::File {
+                path: file_path,
+                result,
+            } => {
                 let file_path_str = file_path.to_string_lossy().to_string();
                 let formatted = match result.as_ref() {
                     Ok(lib_report) => {
@@ -160,7 +167,9 @@ pub(crate) fn run(
                         };
 
                         // CLI-specific post-processing
-                        if let Err(e) = check_criticality_error(&report, error_if_levels_owned.as_deref()) {
+                        if let Err(e) =
+                            check_criticality_error(&report, error_if_levels_owned.as_deref())
+                        {
                             eprintln!("Error: {}", e);
                             return;
                         }
@@ -175,13 +184,17 @@ pub(crate) fn run(
                         }
 
                         let res = match format_val {
-                            cli::OutputFormat::Json => serde_json::to_string(&report).unwrap_or_default(),
-                            cli::OutputFormat::Jsonl => output::format_jsonl(&report).unwrap_or_default(),
+                            cli::OutputFormat::Json => {
+                                serde_json::to_string(&report).unwrap_or_default()
+                            }
+                            cli::OutputFormat::Jsonl => {
+                                output::format_jsonl(&report).unwrap_or_default()
+                            }
                             cli::OutputFormat::Terminal => output::format_terminal(&report),
                         };
                         if format_val == cli::OutputFormat::Jsonl {
-                             print!("{}", res);
-                             let _ = std::io::stdout().flush();
+                            print!("{}", res);
+                            let _ = std::io::stdout().flush();
                         }
                         res
                     }
@@ -201,7 +214,9 @@ pub(crate) fn run(
         // Generate galaxy view from all collected files
         if let Some(base_path) = mol_path {
             if let Some(collector) = all_file_analyses {
-                let all_files = collector.lock().unwrap();
+                let all_files = collector
+                    .lock()
+                    .map_err(|e| anyhow::anyhow!("mutex poisoned: {e}"))?;
                 if !all_files.is_empty() {
                     let mut combined_report = types::AnalysisReport::new(types::TargetInfo {
                         path: target.to_string(),
@@ -216,7 +231,9 @@ pub(crate) fn run(
             }
         }
 
-        let final_results = results.lock().unwrap();
+        let final_results = results
+            .lock()
+            .map_err(|e| anyhow::anyhow!("mutex poisoned: {e}"))?;
         return Ok(final_results.join(""));
     }
 

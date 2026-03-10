@@ -44,7 +44,8 @@ impl super::CapabilityMapper {
             cached_ast,
         )
         .with_section_map(section_map)
-        .with_deadline(std::time::Instant::now() + std::time::Duration::from_secs(30));
+        .with_deadline(std::time::Instant::now() + std::time::Duration::from_secs(30))
+        .with_slow_rule_ms(self.slow_rule_ms);
         if let Some(results) = inline_yara {
             ctx = ctx.with_inline_yara(results);
         }
@@ -352,7 +353,8 @@ impl super::CapabilityMapper {
             None,
             cached_ast,
         )
-        .with_section_map(section_map.clone());
+        .with_section_map(section_map.clone())
+        .with_slow_rule_ms(self.slow_rule_ms);
         if let Some(results) = inline_yara {
             ctx = ctx.with_inline_yara(results);
         }

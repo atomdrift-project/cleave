@@ -31,7 +31,8 @@ pub(crate) fn capability_mapper_with_options(
         && options.min_suspicious_precision == CapabilityMapper::DEFAULT_MIN_SUSPICIOUS_PRECISION
         && !options.enable_full_validation
         && options.platforms.len() == 1
-        && options.platforms[0] == crate::composite_rules::Platform::All;
+        && options.platforms[0] == crate::composite_rules::Platform::All
+        && options.slow_rule_ms == CapabilityMapper::DEFAULT_SLOW_RULE_MS;
 
     if is_default {
         return capability_mapper();
@@ -47,7 +48,8 @@ pub(crate) fn capability_mapper_with_options(
             options.min_suspicious_precision,
             options.enable_full_validation,
         )
-        .with_platforms(options.platforms.clone()),
+        .with_platforms(options.platforms.clone())
+        .with_slow_rule_ms(options.slow_rule_ms),
     )
 }
 

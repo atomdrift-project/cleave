@@ -336,7 +336,9 @@ fn main() -> Result<()> {
     }
 
     #[cfg(debug_assertions)]
-    tracing::warn!("DEBUG binary — cleave will be very slow; use `make release` for production builds");
+    tracing::warn!(
+        "DEBUG binary — cleave will be very slow; use `make release` for production builds"
+    );
 
     // Log command line and initialization with PID and parent PID for debugging
     // subprocess relationships (especially useful for trait-basher debugging)
@@ -464,6 +466,7 @@ fn main() -> Result<()> {
                     false,
                     args.mol.as_deref(),
                     args.mol_layout,
+                    args.slow_rule_ms,
                 )?);
             }
             results.join("")
@@ -697,6 +700,7 @@ fn main() -> Result<()> {
                     false,
                     args.mol.as_deref(),
                     args.mol_layout,
+                    args.slow_rule_ms,
                 )?);
             }
             results.join("")

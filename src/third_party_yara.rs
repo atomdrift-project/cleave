@@ -235,29 +235,25 @@ pub(crate) fn inject_condition_filetype_hints(source: &str) -> String {
 /// before the more expensive per-rule injection pass.
 fn source_has_magic_condition(source: &str) -> bool {
     let lower = source.to_lowercase();
-    // Magic byte patterns
-    lower.contains("uint16(0) == 0x5a4d")
-        || lower.contains("uint16be(0) == 0x4d5a")
-        || lower.contains("uint32(0) == 0x464c457f")
-        || lower.contains("uint32be(0) == 0x7f454c46")
-        || lower.contains("uint32(0) == 0xfeedface")
-        || lower.contains("uint32(0) == 0xcefaedfe")
-        || lower.contains("uint32(0) == 0xfeedfacf")
-        || lower.contains("uint32(0) == 0xcffaedfe")
-        || lower.contains("uint16(0) == 0xfacf")
-        || lower.contains("uint16(0) == 0xface")
-        // OLE/DOCFILE
-        || lower.contains("uint32(0) == 0xd0cf11e0")
-        // PDF (%PDF)
-        || lower.contains("uint32(0) == 0x25504446")
-        // RTF ({\rt)
-        || lower.contains("uint32(0) == 0x7b5c7274")
-        // ZIP/PK
-        || lower.contains("uint16(0) == 0x504b")
-        || lower.contains("uint32(0) == 0x04034b50")
-        // LNK
-        || lower.contains("uint32(0) == 0x0000004c")
-        // YARA module references (word boundary via ` pe.` / `(pe.` / `\npe.`)
+    // Quick check: any magic hex value present at all? (space-insensitive)
+    lower.contains("0x5a4d")
+        || lower.contains("0x4d5a")
+        || lower.contains("0x464c457f")
+        || lower.contains("0x7f454c46")
+        || lower.contains("0xfeedface")
+        || lower.contains("0xcefaedfe")
+        || lower.contains("0xfeedfacf")
+        || lower.contains("0xcffaedfe")
+        || lower.contains("0xfacf")
+        || lower.contains("0xface")
+        || lower.contains("0xd0cf11e0")
+        || lower.contains("0xcfd0")
+        || lower.contains("0x25504446")
+        || lower.contains("0x7b5c7274")
+        || lower.contains("0x504b")
+        || lower.contains("0x04034b50")
+        || lower.contains("0x0000004c")
+        // YARA module references
         || has_module_reference(&lower, "pe.")
         || has_module_reference(&lower, "elf.")
         || has_module_reference(&lower, "macho.")
@@ -282,56 +278,62 @@ pub(crate) fn has_module_reference(lower_source: &str, module_prefix: &str) -> b
 pub(crate) fn filetype_from_magic(body: &str) -> Option<&'static str> {
     let lower = body.to_lowercase();
 
+    // Strip whitespace for magic checks so "uint16( 0 ) == 0x5a4d" matches "uint16(0)==0x5a4d"
+    let condensed: String = lower.chars().filter(|c| !c.is_ascii_whitespace()).collect();
+
     // PE: MZ magic (little-endian and big-endian) or pe.* module
-    if lower.contains("uint16(0) == 0x5a4d")
-        || lower.contains("uint16be(0) == 0x4d5a")
+    if condensed.contains("uint16(0)==0x5a4d")
+        || condensed.contains("uint16be(0)==0x4d5a")
         || has_module_reference(&lower, "pe.")
     {
         return Some("pe");
     }
 
     // ELF: magic bytes or elf.* module
-    if lower.contains("uint32(0) == 0x464c457f")
-        || lower.contains("uint32be(0) == 0x7f454c46")
+    if condensed.contains("uint32(0)==0x464c457f")
+        || condensed.contains("uint32be(0)==0x7f454c46")
         || has_module_reference(&lower, "elf.")
     {
         return Some("elf");
     }
 
     // MachO: various magic values (32/64-bit, native/swapped) or macho.* module
-    if lower.contains("uint32(0) == 0xfeedface")
-        || lower.contains("uint32(0) == 0xcefaedfe")
-        || lower.contains("uint32(0) == 0xfeedfacf")
-        || lower.contains("uint32(0) == 0xcffaedfe")
-        || lower.contains("uint16(0) == 0xfacf")
-        || lower.contains("uint16(0) == 0xface")
+    if condensed.contains("uint32(0)==0xfeedface")
+        || condensed.contains("uint32(0)==0xcefaedfe")
+        || condensed.contains("uint32(0)==0xfeedfacf")
+        || condensed.contains("uint32(0)==0xcffaedfe")
+        || condensed.contains("uint16(0)==0xfacf")
+        || condensed.contains("uint16(0)==0xface")
         || has_module_reference(&lower, "macho.")
     {
         return Some("macho");
     }
 
-    // OLE/DOCFILE (Office documents)
-    if lower.contains("uint32(0) == 0xd0cf11e0") {
+    // OLE/DOCFILE (Office documents) — both 32-bit and byte-swapped 16-bit forms
+    if condensed.contains("uint32(0)==0xd0cf11e0")
+        || condensed.contains("uint16(0)==0xcfd0")
+        || condensed.contains("uint16(0)==0xd0cf")
+    {
         return Some("ole");
     }
 
     // PDF (%PDF magic)
-    if lower.contains("uint32(0) == 0x25504446") {
+    if condensed.contains("uint32(0)==0x25504446") {
         return Some("pdf");
     }
 
     // RTF ({\rt magic)
-    if lower.contains("uint32(0) == 0x7b5c7274") {
+    if condensed.contains("uint32(0)==0x7b5c7274") {
         return Some("rtf");
     }
 
     // ZIP/PK archive
-    if lower.contains("uint16(0) == 0x504b") || lower.contains("uint32(0) == 0x04034b50") {
+    if condensed.contains("uint16(0)==0x504b") || condensed.contains("uint32(0)==0x04034b50") {
         return Some("zip");
     }
 
     // LNK shortcut
-    if lower.contains("uint32(0) == 0x0000004c") {
+    if condensed.contains("uint32(0)==0x0000004c") {
         return Some("lnk");
     }
 

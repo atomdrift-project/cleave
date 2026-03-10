@@ -3632,11 +3632,7 @@ mod excessive_file_types_tests {
             FileType::Elixir,
             FileType::Vbs,
         ];
-        let combined: Vec<FileType> = scripts
-            .into_iter()
-            .chain(binaries)
-            .chain(source)
-            .collect();
+        let combined: Vec<FileType> = scripts.into_iter().chain(binaries).chain(source).collect();
         assert_eq!(combined.len(), 33);
         let traits = vec![trait_with_for("test::multi-group", combined)];
         let result = find_excessive_file_types(&traits, &[]);

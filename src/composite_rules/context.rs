@@ -72,6 +72,9 @@ pub(crate) struct EvaluationContext<'a> {
     /// Maps each architecture to its byte range within `binary_data`.
     /// When set, arch-restricted traits only search within matching slices.
     pub arch_ranges: Option<Vec<(Arch, std::ops::Range<usize>)>>,
+    /// Warn threshold for slow rule evaluation in milliseconds (default: 4000).
+    /// Rules exceeding this emit a log::warn!; >1000ms emits log::debug!.
+    pub slow_rule_ms: u64,
 }
 
 impl<'a> EvaluationContext<'a> {
@@ -131,6 +134,7 @@ impl<'a> EvaluationContext<'a> {
             string_exact_index_ci: OnceLock::new(),
             deadline: None,
             arch_ranges: None,
+            slow_rule_ms: 4000,
         }
     }
 
@@ -262,6 +266,12 @@ impl<'a> EvaluationContext<'a> {
     /// evaluation loops will bail out early if this deadline is exceeded.
     pub(crate) fn with_deadline(mut self, deadline: Instant) -> Self {
         self.deadline = Some(deadline);
+        self
+    }
+
+    /// Set the slow rule warning threshold in milliseconds.
+    pub(crate) fn with_slow_rule_ms(mut self, ms: u64) -> Self {
+        self.slow_rule_ms = ms;
         self
     }
 

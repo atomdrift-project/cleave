@@ -257,6 +257,7 @@ impl<'a> RuleDebugger<'a> {
             string_exact_index: std::sync::OnceLock::new(),
             string_exact_index_ci: std::sync::OnceLock::new(),
             deadline: None,
+            slow_rule_ms: 4000,
         }
     }
 
@@ -583,6 +584,7 @@ impl<'a> RuleDebugger<'a> {
             string_exact_index: std::sync::OnceLock::new(),
             string_exact_index_ci: std::sync::OnceLock::new(),
             deadline: None,
+            slow_rule_ms: 4000,
         };
 
         match condition {
@@ -1473,6 +1475,7 @@ impl<'a> RuleDebugger<'a> {
             string_exact_index: std::sync::OnceLock::new(),
             string_exact_index_ci: std::sync::OnceLock::new(),
             deadline: None,
+            slow_rule_ms: 4000,
         };
 
         // Actually evaluate the inline YARA rule
@@ -1846,6 +1849,7 @@ impl<'a> RuleDebugger<'a> {
             string_exact_index: std::sync::OnceLock::new(),
             string_exact_index_ci: std::sync::OnceLock::new(),
             deadline: None,
+            slow_rule_ms: 4000,
         };
 
         let eval_result = crate::composite_rules::evaluators::eval_ast(
@@ -1931,6 +1935,7 @@ impl<'a> RuleDebugger<'a> {
             string_exact_index: std::sync::OnceLock::new(),
             string_exact_index_ci: std::sync::OnceLock::new(),
             deadline: None,
+            slow_rule_ms: 4000,
         };
 
         let eval_result = eval_hex(

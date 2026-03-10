@@ -428,7 +428,7 @@ fn detect_file_type_inner(file_path: &Path, file_data: &[u8]) -> Option<FileType
     }
 
     // Check for LNK magic bytes (Windows Shell Link)
-    if lnk::is_lnk(&file_data) {
+    if lnk::is_lnk(file_data) {
         return Some(FileType::Lnk);
     }
 
@@ -444,7 +444,7 @@ fn detect_file_type_inner(file_path: &Path, file_data: &[u8]) -> Option<FileType
     }
 
     // Check for Java class files BEFORE Mach-O (both use 0xCAFEBABE)
-    if is_java_class(&file_data) {
+    if is_java_class(file_data) {
         return Some(FileType::JavaClass);
     }
 
@@ -458,7 +458,7 @@ fn detect_file_type_inner(file_path: &Path, file_data: &[u8]) -> Option<FileType
     }
 
     // Check for Mach-O magic bytes
-    if is_macho(&file_data) {
+    if is_macho(file_data) {
         return Some(FileType::MachO);
     }
 
@@ -473,7 +473,7 @@ fn detect_file_type_inner(file_path: &Path, file_data: &[u8]) -> Option<FileType
         return Some(FileType::Pe);
     }
     // Check for MZ within first 64 bytes (tampered PE with junk prefix)
-    if let Some(mz_offset) = find_mz_header(&file_data, 64) {
+    if let Some(mz_offset) = find_mz_header(file_data, 64) {
         tracing::debug!("Detected PE with MZ at offset {} (junk prefix)", mz_offset);
         return Some(FileType::Pe);
     }
@@ -555,7 +555,7 @@ fn detect_file_type_inner(file_path: &Path, file_data: &[u8]) -> Option<FileType
         }
         if name == "manifest.json" {
             // Check if it's a Chrome extension manifest by looking for manifest_version
-            let content = String::from_utf8_lossy(&file_data);
+            let content = String::from_utf8_lossy(file_data);
             if content.contains("\"manifest_version\"")
                 && (content.contains("\"permissions\"")
                     || content.contains("\"content_scripts\"")
@@ -674,7 +674,7 @@ fn detect_file_type_inner(file_path: &Path, file_data: &[u8]) -> Option<FileType
             )
         )
     });
-    if !has_known_extension && looks_like_shell(&file_data) {
+    if !has_known_extension && looks_like_shell(file_data) {
         return Some(FileType::Shell);
     }
 
@@ -785,7 +785,7 @@ fn detect_file_type_inner(file_path: &Path, file_data: &[u8]) -> Option<FileType
         }
         if ext_str == "html" || ext_str == "htm" {
             // Check if it actually contains HTML markup
-            if looks_like_html(&file_data) {
+            if looks_like_html(file_data) {
                 return Some(FileType::Html);
             }
             // HTML extension but no markup - treat as plain text
@@ -801,11 +801,11 @@ fn detect_file_type_inner(file_path: &Path, file_data: &[u8]) -> Option<FileType
 
     // Content-based detection for files without recognized extensions
     // Check for Python code patterns (e.g., .dat files that are actually Python)
-    if looks_like_python(&file_data) {
+    if looks_like_python(file_data) {
         return Some(FileType::Python);
     }
 
-    if looks_like_powershell(&file_data) {
+    if looks_like_powershell(file_data) {
         return Some(FileType::PowerShell);
     }
 

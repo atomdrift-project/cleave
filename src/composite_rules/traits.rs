@@ -86,9 +86,9 @@ pub(crate) fn clear_condition_stats() {
 /// When exceeded, evaluation is interrupted and a timeout finding is emitted.
 const MAX_RULE_EVAL_DURATION: Duration = Duration::from_secs(30);
 
-/// Warning threshold for rule evaluation (2 seconds).
-/// Rules exceeding this are logged as warnings but allowed to complete.
-const RULE_EVAL_WARN_DURATION: Duration = Duration::from_secs(2);
+/// Debug log threshold for rule evaluation (1 second).
+/// Rules exceeding this emit a debug-level log (visible via --verbose / RUST_LOG=debug).
+const RULE_EVAL_DEBUG_DURATION: Duration = Duration::from_secs(1);
 
 /// Macro to time condition evaluation
 macro_rules! timed_eval {
@@ -1003,13 +1003,19 @@ impl TraitDefinition {
             return Some(timeout_warning);
         }
 
-        // Soft warning: log slow rules that exceed the warning threshold
-        if duration > RULE_EVAL_WARN_DURATION {
-            eprintln!(
-                "WARN: Rule {} exceeded timeout: {}ms > {}ms",
+        // Debug log: rules taking >1s (visible via --verbose / RUST_LOG=debug)
+        if duration > RULE_EVAL_DEBUG_DURATION {
+            tracing::debug!("slow rule: {} took {}ms", self.id, duration.as_millis(),);
+        }
+
+        // Warn log: rules exceeding the user-configurable slow_rule_ms threshold
+        let warn_threshold = Duration::from_millis(ctx.slow_rule_ms);
+        if duration > warn_threshold {
+            tracing::warn!(
+                "slow rule: {} took {}ms (threshold: {}ms)",
                 self.id,
                 duration.as_millis(),
-                RULE_EVAL_WARN_DURATION.as_millis()
+                ctx.slow_rule_ms,
             );
         }
 

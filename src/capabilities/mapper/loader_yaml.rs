@@ -163,6 +163,7 @@ impl super::CapabilityMapper {
             string_match_index,
             raw_content_regex_index,
             platforms: vec![Platform::All],
+            slow_rule_ms: Self::DEFAULT_SLOW_RULE_MS,
         })
     }
 }

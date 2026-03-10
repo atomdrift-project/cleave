@@ -14,6 +14,9 @@ impl super::CapabilityMapper {
     /// Default minimum precision for suspicious composite rules
     pub const DEFAULT_MIN_SUSPICIOUS_PRECISION: f32 = 2.0;
 
+    /// Default slow rule warning threshold in milliseconds.
+    pub const DEFAULT_SLOW_RULE_MS: u64 = 4000;
+
     /// Create an empty capability mapper for testing
     #[must_use]
     pub(crate) fn empty() -> Self {
@@ -25,7 +28,17 @@ impl super::CapabilityMapper {
             string_match_index: StringMatchIndex::default(),
             raw_content_regex_index: RawContentRegexIndex::default(),
             platforms: vec![Platform::All],
+            slow_rule_ms: Self::DEFAULT_SLOW_RULE_MS,
         }
+    }
+
+    /// Set the slow rule warning threshold in milliseconds.
+    /// Rules that take longer than this to evaluate emit a warning.
+    #[must_use]
+    #[allow(dead_code)] // used by shared_resources.rs (library only, not binary)
+    pub fn with_slow_rule_ms(mut self, ms: u64) -> Self {
+        self.slow_rule_ms = ms;
+        self
     }
 
     /// Create a new mapper for testing without validation

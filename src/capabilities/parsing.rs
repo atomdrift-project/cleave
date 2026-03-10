@@ -657,7 +657,6 @@ pub(crate) fn apply_composite_defaults(
         check_conditions(&downgrade.all, "downgrade.all");
         check_conditions(&downgrade.none, "downgrade.none");
     }
-    drop(check_conditions);
     for w in &mut warnings[warn_start..] {
         *w = format!("{} (in {})", w, path.display());
     }

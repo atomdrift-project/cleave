@@ -808,6 +808,7 @@ mod tests {
             string_exact_index: OnceLock::new(),
             string_exact_index_ci: OnceLock::new(),
             deadline: None,
+            slow_rule_ms: 4000,
         }
     }
 

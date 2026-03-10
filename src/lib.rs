@@ -209,6 +209,9 @@ pub struct AnalysisOptions {
     pub max_memory_file_size: u64,
     /// Configuration for extracting suspicious files from archives
     pub sample_extraction: Option<types::SampleExtractionConfig>,
+    /// Warn threshold for slow rule evaluation in milliseconds (default: 4000).
+    /// Rules exceeding this emit a warning; >1000ms is always logged at debug level.
+    pub slow_rule_ms: u64,
 }
 
 impl Default for AnalysisOptions {
@@ -229,6 +232,7 @@ impl Default for AnalysisOptions {
             enable_full_validation: false,
             max_memory_file_size: 512 * 1024 * 1024, // 512 MB default
             sample_extraction: None,
+            slow_rule_ms: capabilities::CapabilityMapper::DEFAULT_SLOW_RULE_MS,
         }
     }
 }
@@ -747,9 +751,13 @@ fn analyze_file_with_resources<P: AsRef<Path>>(
         });
 
         // Analyze the decoded payload
-        if let Ok(payload_report) =
-            analyze_file_with_resources(&payload.temp_path, options, capability_mapper, yara_engine, None)
-        {
+        if let Ok(payload_report) = analyze_file_with_resources(
+            &payload.temp_path,
+            options,
+            capability_mapper,
+            yara_engine,
+            None,
+        ) {
             // Merge traits from payload analysis
             for mut trait_item in payload_report.traits {
                 // Prefix trait offset with encoding chain
@@ -991,7 +999,8 @@ where
     let errors = AtomicUsize::new(0);
 
     files.par_iter().for_each(|file_path| {
-        let result = analyze_file_with_resources(file_path, options, &mapper, yara_engine.as_ref(), None);
+        let result =
+            analyze_file_with_resources(file_path, options, &mapper, yara_engine.as_ref(), None);
         match &result {
             Ok(_) => {
                 analyzed.fetch_add(1, Ordering::Relaxed);

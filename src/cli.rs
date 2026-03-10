@@ -193,6 +193,11 @@ pub(crate) struct Args {
     #[arg(long, value_name = "MB", default_value_t = 100)]
     pub max_file_mem: u64,
 
+    /// Warn when a single rule takes longer than this many milliseconds to evaluate.
+    /// Rules >1000ms are always logged at debug level (visible via --verbose).
+    #[arg(long, value_name = "MS", default_value_t = 4000)]
+    pub slow_rule_ms: u64,
+
     /// Generate malecule MOL file and JSON sidecar for 3D visualization.
     /// Writes <path>.mol and <path>.json with molecular representation of findings.
     #[arg(long, value_name = "PATH")]
@@ -884,7 +889,7 @@ mod tests {
     fn test_precision_threshold_defaults() {
         let args = Args::try_parse_from(["cleave", "file.bin"]).unwrap();
         assert_eq!(args.min_hostile_precision, 3.5);
-        assert_eq!(args.min_suspicious_precision, 1.5);
+        assert_eq!(args.min_suspicious_precision, 2.0);
     }
 
     #[test]

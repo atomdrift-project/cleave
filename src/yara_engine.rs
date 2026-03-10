@@ -71,12 +71,11 @@ impl YaraTier {
                 "pe" | "exe" | "dll" | "sys" => return Self::Pe,
                 "elf" | "so" | "ko" => return Self::Elf,
                 "macho" | "dylib" | "kext" => return Self::MachO,
-                "sh" | "bash" | "zsh" | "py" | "pyc" | "js" | "mjs" | "cjs" | "ts"
-                | "php" | "rb" | "pl" | "pm" | "lua" | "ps1" | "psm1" | "psd1" | "bat"
-                | "cmd" | "vbs" | "vba" | "java" | "jar" | "class" | "jsp" | "aspx"
-                | "asp" => return Self::Script,
-                "pdf" | "rtf" | "ole" | "doc" | "docx" | "xls" | "xlsx" | "lnk" | "zip"
-                | "iso" | "img" | "one" | "onepkg" => return Self::Doc,
+                "sh" | "bash" | "zsh" | "py" | "pyc" | "js" | "mjs" | "cjs" | "ts" | "php"
+                | "rb" | "pl" | "pm" | "lua" | "ps1" | "psm1" | "psd1" | "bat" | "cmd" | "vbs"
+                | "vba" | "java" | "jar" | "class" | "jsp" | "aspx" | "asp" => return Self::Script,
+                "pdf" | "rtf" | "ole" | "doc" | "docx" | "xls" | "xlsx" | "lnk" | "zip" | "iso"
+                | "img" | "one" | "onepkg" => return Self::Doc,
                 _ => {}
             }
         }
@@ -121,13 +120,451 @@ pub(crate) struct YaraEngine {
     compiled_inline_namespaces: Vec<String>,
 }
 
+/// Content-based scoring indicators for classifying YARA rules by target platform.
+///
+/// Each array contains lowercase strings to match against the lowercased rule body.
+/// A match contributes 1 point toward the corresponding tier. The tier with the
+/// highest score (above a minimum threshold) wins. Ties or ambiguity → Generic.
+mod indicators {
+    // ── PE / Windows ──────────────────────────────────────────────
+    /// Windows DLLs — very high signal.
+    pub(super) const PE_DLLS: &[&str] = &[
+        "kernel32",
+        "ntdll",
+        "advapi32",
+        "ws2_32",
+        "wininet",
+        "winhttp",
+        "user32",
+        "shell32",
+        "ole32",
+        "oleaut32",
+        "msvcrt",
+        "mscoree",
+        "crypt32",
+        "urlmon",
+        "comctl32",
+        "gdi32",
+        "shlwapi",
+        "amsi.dll",
+        "clr.dll",
+        "netapi32",
+        "psapi",
+        "dbghelp",
+        "cabinet.dll",
+        "version.dll",
+        "secur32",
+        "winspool",
+        "mpr.dll",
+        "iphlpapi",
+        "dnsapi",
+        "rasapi32",
+        "mswsock",
+    ];
+
+    /// Windows API function names — very high signal.
+    pub(super) const PE_APIS: &[&str] = &[
+        "virtualalloc",
+        "virtualprotect",
+        "virtualfree",
+        "createprocess",
+        "createremotethread",
+        "createthread",
+        "writeprocessmemory",
+        "readprocessmemory",
+        "ntcreatethreadex",
+        "ntmapviewofsection",
+        "ntwritevirtualmemory",
+        "loadlibrary",
+        "getprocaddress",
+        "getmodulehandle",
+        "winexec",
+        "shellexecute",
+        "regopenkeyex",
+        "regsetvalueex",
+        "regcreatekeyex",
+        "internetopen",
+        "internetconnect",
+        "httpopenrequest",
+        "urldownloadtofile",
+        "cocreateinstance",
+        "isdebuggerpresent",
+        "checkremotedebuggerpresent",
+        "openprocess",
+        "terminateprocess",
+        "setwindowshookex",
+        "callnexthookex",
+        "cryptencrypt",
+        "cryptdecrypt",
+        "cryptacquirecontext",
+        "adjusttokenprivileges",
+        "openprocesstoken",
+        "ntqueryinformationprocess",
+        "ntsetinformationthread",
+        "rtlinitunicodestring",
+        "zwquerysysteminformation",
+        "ldrloaddll",
+        "rtldecompressbuffer",
+        "getasynckeystate",
+        "gettemppath",
+        "getwindowtext",
+        "createservice",
+        "startservice",
+    ];
+
+    /// Windows-specific paths and registry keys.
+    pub(super) const PE_PATHS: &[&str] = &[
+        "\\windows\\",
+        "\\system32\\",
+        "\\syswow64\\",
+        "\\appdata\\",
+        "\\programdata\\",
+        "hkey_local_machine",
+        "hkey_current_user",
+        "software\\microsoft",
+        "currentversion\\run",
+        "\\temp\\",
+        "\\users\\",
+    ];
+
+    /// Windows executables and LOLBins.
+    pub(super) const PE_EXES: &[&str] = &[
+        "cmd.exe",
+        "powershell.exe",
+        "wscript.exe",
+        "cscript.exe",
+        "rundll32",
+        "regsvr32",
+        "msiexec",
+        "certutil",
+        "bitsadmin",
+        "schtasks",
+        "mshta",
+    ];
+
+    /// .NET / CLR indicators.
+    pub(super) const PE_DOTNET: &[&str] = &[
+        "system.reflection",
+        "system.runtime",
+        "system.diagnostics",
+        "_corexemain",
+        "_cordllmain",
+        "mscorlib",
+        "assembly.load",
+        "system.convert",
+        "system.net.webclient",
+        "system.net.sockets",
+    ];
+
+    /// PE structure artifacts.
+    pub(super) const PE_STRUCTURE: &[&str] = &[
+        "this program cannot be run in dos mode",
+        "image_dos_header",
+        "image_nt_headers",
+        "rich_header",
+        // PDB paths (strong Windows signal)
+        ".pdb",
+        "\\release\\",
+        "\\debug\\",
+        // Windows services / registry
+        "wsuscomserverimpl",
+        "currentcontrolset",
+        "software\\classes",
+        "software\\policies",
+        "software\\wow6432node",
+        // Windows service/event patterns
+        "sc.exe",
+        "net.exe",
+        "wevtutil",
+        // Common PE metadata strings
+        "companyname",
+        "fileversion",
+        "legalcopyright",
+    ];
+
+    /// Windows COM / WMI / scripting hosts.
+    pub(super) const PE_COM: &[&str] = &[
+        "win32_process",
+        "wscript.shell",
+        "scripting.filesystemobject",
+        "wmi",
+        "iwbemservices",
+    ];
+
+    /// PE rule-name keywords (matched against lowercased rule name).
+    pub(super) const PE_NAME: &[&str] = &[
+        // Binary format hints
+        "shellcode",
+        "dll",
+        "dotnet",
+        "msil",
+        "_exe_",
+        "_pe_",
+        "_pdb",
+        "wsus",
+        "_driver_",
+        "loldrivers",
+        "_sys_",
+        // Windows tool/LOLBin names in rule names
+        "msiexec",
+        "certutil",
+        "rundll",
+        "regsvr",
+        "schtask",
+        "bitsadmin",
+        "mshta",
+        // Windows vendor/platform signals
+        "microsoft",
+        "wintapix",
+        // Vendor prefixes overwhelmingly targeting Windows PE
+        "cape_",
+        // Common Windows malware families
+        "bazar",
+        "cobalt",
+        "mimikatz",
+        "metasploit",
+        "meterpreter",
+        "emotet",
+        "trickbot",
+        "dridex",
+        "qakbot",
+        "qbot",
+        "icedid",
+        "bazarloader",
+        "formbook",
+        "lokibot",
+        "njrat",
+        "asyncrat",
+        "remcos",
+        "nanocore",
+        "darkcomet",
+        "agenttesla",
+        "redline",
+        "raccoon",
+        "vidar",
+        "smokeloader",
+        "amadey",
+        "rhadamanthys",
+        "stealc",
+        "lumma",
+        "risepro",
+        "privateloader",
+        "pikabot",
+        "darkgate",
+        "netreactor",
+        "confuserex",
+        "danabot",
+        "ursnif",
+        "gozi",
+        "zloader",
+        "bancteian",
+        "ramnit",
+        "neshta",
+        "sality",
+        "pswstealer",
+        "infostealer",
+        // Windows ransomware families
+        "ransomware",
+        "ransom_",
+        "cryptolocker",
+        "wannacry",
+        "ryuk",
+        "revil",
+        "sodinokibi",
+        "lockbit",
+        "conti",
+        "babuk",
+        "darkside",
+        "blackmatter",
+        "hive_ransom",
+        "maze_ransom",
+        "clop",
+        "netwalker",
+        "mountlocker",
+        "wastedlocker",
+        "bitpaymer",
+        "nefilim",
+        // Windows APT / backdoor families
+        "hikit",
+        "enfal",
+        "turla",
+        "gazer",
+        "carbon",
+        "hermeticwiper",
+        "industroyer",
+        "notpetya",
+        // IIS (Windows web server)
+        "_iis_",
+        // Known Windows-centric APT groups/campaigns
+        "opcleaver",
+        "empire",
+        "sunburst",
+        "ccleaner",
+        "plugx",
+        // Windows credential tools
+        "createmini",
+        "lsass",
+    ];
+
+    // ── ELF / Linux ───────────────────────────────────────────────
+    pub(super) const ELF_PATHS: &[&str] = &[
+        "/bin/sh",
+        "/bin/bash",
+        "/bin/dash",
+        "/etc/passwd",
+        "/etc/shadow",
+        "/etc/crontab",
+        "/proc/self",
+        "/proc/net",
+        "/dev/shm",
+        "/dev/null",
+        "/var/tmp/",
+        "/var/run/",
+    ];
+
+    pub(super) const ELF_LIBS: &[&str] = &[
+        "ld-linux",
+        "libc.so",
+        "libpthread",
+        "libdl.so",
+        "ld_preload",
+        "ld_library_path",
+    ];
+
+    pub(super) const ELF_NAME: &[&str] = &[
+        "_elf_", "_lnx_", "mirai", "tsunami", "xorddos", "bpfdoor", "kaiji", "gafgyt", "bashlite",
+        "dofloo", "kobalos", "perfctl",
+    ];
+
+    // ── MachO / macOS ─────────────────────────────────────────────
+    pub(super) const MACHO_BODY: &[&str] = &[
+        "/library/launchagents",
+        "/library/launchdaemons",
+        "com.apple.",
+        "nsapplescript",
+        "nsappleeventdescriptor",
+        "osascript",
+        "launchctl",
+        "lc_load_dylib",
+        "lc_segment_64",
+        "cfsocketref",
+        "ioservicematching",
+        "security.framework",
+        "corefoundation",
+        "xprotect",
+    ];
+
+    pub(super) const MACHO_NAME: &[&str] = &[
+        "_macho_",
+        "_osx_",
+        "amos",
+        "atomic_stealer",
+        "bundlore",
+        "shlayer",
+        "pirrit",
+        "adload",
+        "xcsset",
+        "rustbucket",
+        "jokerspy",
+    ];
+
+    // ── Script ────────────────────────────────────────────────────
+    pub(super) const SCRIPT_BODY: &[&str] = &[
+        // PHP
+        "<?php",
+        "<?=",
+        "base64_decode(",
+        "gzinflate(",
+        "str_rot13(",
+        "preg_replace(",
+        "function_exists(",
+        // PowerShell
+        "-encodedcommand",
+        "invoke-expression",
+        "new-object system.net",
+        "invoke-webrequest",
+        "downloadstring(",
+        "iex(",
+        // JavaScript / VBS
+        "activexobject",
+        "document.createelement",
+        // Python
+        "import subprocess",
+        "import socket",
+        // Loose description/metadata matches — language name anywhere in rule body.
+        // Note: "powershell" is intentionally omitted here because "powershell.exe"
+        // in PE_EXES would cause PE vs Script ties. It's in SCRIPT_NAME for name matching.
+        "php ",
+        "python ",
+        "ruby ",
+        "perl ",
+        "autoit",
+        "vbscript",
+        "javascript",
+    ];
+
+    /// Script name indicators. Note: "shell" is intentionally omitted —
+    /// many binary malware rules reference shell commands, and "shellcode" is PE.
+    pub(super) const SCRIPT_NAME: &[&str] = &[
+        "webshell",
+        "php",
+        "python",
+        "powershell",
+        "_asp",
+        "ruby",
+        "perl",
+        "lua",
+        "autoit",
+        "vbs",
+        "vba",
+        "hta",
+        "jse",
+        "wsf",
+        "javascript",
+        "jscript",
+    ];
+
+    // ── Document ──────────────────────────────────────────────────
+    pub(super) const DOC_BODY: &[&str] = &[
+        "%pdf",
+        "/javascript",
+        "/openaction",
+        "/aa ",
+        "endobj",
+        "endstream",
+        "{\\rtf",
+        "\\objdata",
+        "\\objupd",
+        "\\objemb",
+        "vbaproject",
+        "auto_open",
+        "document_open",
+        "autoopen",
+        "workbook_open",
+        "activedocument",
+        "thisdocument",
+        // Metadata/tag signals
+        "maldoc",
+        ": maldoc",
+    ];
+
+    pub(super) const DOC_NAME: &[&str] = &[
+        "_doc_", "_pdf_", "_rtf_", "_ole_", "_lnk_",
+        "maldoc", "excelmacro",
+        "_xls", "_ppam", "_docm", "_docx_", "_xlsm",
+        "_msi_", "onenote", "_msg_", "_cab_",
+        "_iso_", "_img_", "_zip_", "_zpaq",
+    ];
+}
+
 impl YaraTier {
     /// Classify a single YARA rule into a tier based on its metadata, condition,
-    /// module references, magic bytes, and rule name.
-    fn classify_rule(rule_name: &str, rule_body: &str, namespace: &str) -> Self {
+    /// module references, magic bytes, content indicators, and rule name.
+    pub(crate) fn classify_rule(rule_name: &str, rule_body: &str, namespace: &str) -> Self {
         let lower = rule_body.to_lowercase();
 
-        // 1. Explicit filetype metadata
+        // 1. Explicit filetype/os metadata
+        let mut os_meta: Option<String> = None;
         for line in lower.lines() {
             let trimmed = line.trim();
             if (trimmed.starts_with("filetype") || trimmed.starts_with("filetypes"))
@@ -140,6 +577,36 @@ impl YaraTier {
                     if tier != Self::Generic {
                         return tier;
                     }
+                }
+            }
+            // Extract os metadata (e.g. os = "windows") for later use
+            if trimmed.starts_with("os") && trimmed.contains('=') {
+                // Guard against matching "os_" prefixed keys
+                let after_os = &trimmed[2..];
+                if after_os.starts_with(' ') || after_os.starts_with('=') {
+                    if let Some(val) = trimmed.split('=').nth(1) {
+                        let val = val.trim().trim_matches('"').trim_matches('\'');
+                        if val != "multi" && val != "all" {
+                            os_meta = Some(val.to_string());
+                        }
+                    }
+                }
+            }
+        }
+
+        // 1b. If os metadata found, use it for classification — but only if all
+        // inferred filetypes map to the same tier (skip cross-platform os like "win,linux")
+        if let Some(ref os) = os_meta {
+            let inferred = crate::third_party_yara::infer_filetypes(rule_name, Some(os));
+            if !inferred.is_empty() {
+                let first_tier = Self::from_filetypes(&inferred);
+                // Check that all filetypes resolve to the same non-Generic tier
+                let mixed = inferred.iter().any(|ft| {
+                    let t = Self::from_filetypes(&[ft]);
+                    t != Self::Generic && t != first_tier
+                });
+                if !mixed && first_tier != Self::Generic {
+                    return first_tier;
                 }
             }
         }
@@ -165,20 +632,181 @@ impl YaraTier {
             }
         }
 
-        // 4. Infer from rule name
-        let inferred = crate::third_party_yara::infer_filetypes(rule_name, None);
+        // 4. Content-based scoring — analyze rule body strings and hex patterns
+        if let Some(tier) = Self::classify_by_content(rule_name, &lower, namespace) {
+            return tier;
+        }
+
+        // 5. Infer from rule name (with os metadata if available)
+        let inferred = crate::third_party_yara::infer_filetypes(rule_name, os_meta.as_deref());
         if !inferred.is_empty() {
             return Self::from_filetypes(&inferred);
         }
 
-        // 5. Infer from namespace
+        // 6. Infer from namespace
         let ns_inferred =
-            crate::third_party_yara::infer_filetypes_from_namespace(namespace, None);
+            crate::third_party_yara::infer_filetypes_from_namespace(namespace, os_meta.as_deref());
         if !ns_inferred.is_empty() {
             return Self::from_filetypes(&ns_inferred);
         }
 
         Self::Generic
+    }
+
+    /// Score rule body content and rule name against platform-specific indicator lists.
+    ///
+    /// Returns the best-matching tier if there is a clear winner (score ≥ 2 and at
+    /// least double the runner-up), or `None` to fall through to weaker heuristics.
+    fn classify_by_content(rule_name: &str, body_lower: &str, _namespace: &str) -> Option<Self> {
+        let name_lower = rule_name.to_ascii_lowercase();
+        // Scores: [PE, ELF, MachO, Script, Doc]
+        let mut s = [0u32; 5];
+
+        // Extract description metadata for additional platform hints
+        let description = body_lower
+            .lines()
+            .find_map(|line| {
+                let t = line.trim();
+                if t.starts_with("description") && t.contains('=') {
+                    t.split('=').nth(1).map(|v| v.trim().trim_matches('"').to_string())
+                } else {
+                    None
+                }
+            })
+            .unwrap_or_default();
+
+        // Description-based platform hints (weak signal, +1 each)
+        if description.contains("windows") || description.contains(" exe ") || description.contains(" dll ") {
+            s[0] += 1;
+        }
+        if description.contains("linux") {
+            s[1] += 1;
+        }
+        if description.contains("macos") || description.contains("osx") {
+            s[2] += 1;
+        }
+
+        // PE body indicators
+        for &ind in indicators::PE_DLLS {
+            if body_lower.contains(ind) {
+                s[0] += 1;
+            }
+        }
+        for &ind in indicators::PE_APIS {
+            if body_lower.contains(ind) {
+                s[0] += 1;
+            }
+        }
+        for &ind in indicators::PE_PATHS {
+            if body_lower.contains(ind) {
+                s[0] += 1;
+            }
+        }
+        for &ind in indicators::PE_EXES {
+            if body_lower.contains(ind) {
+                s[0] += 1;
+            }
+        }
+        for &ind in indicators::PE_DOTNET {
+            if body_lower.contains(ind) {
+                s[0] += 1;
+            }
+        }
+        for &ind in indicators::PE_STRUCTURE {
+            if body_lower.contains(ind) {
+                s[0] += 1;
+            }
+        }
+        for &ind in indicators::PE_COM {
+            if body_lower.contains(ind) {
+                s[0] += 1;
+            }
+        }
+
+        // ELF body indicators
+        for &ind in indicators::ELF_PATHS {
+            if body_lower.contains(ind) {
+                s[1] += 1;
+            }
+        }
+        for &ind in indicators::ELF_LIBS {
+            if body_lower.contains(ind) {
+                s[1] += 1;
+            }
+        }
+
+        // MachO body indicators
+        for &ind in indicators::MACHO_BODY {
+            if body_lower.contains(ind) {
+                s[2] += 1;
+            }
+        }
+
+        // Script body indicators
+        for &ind in indicators::SCRIPT_BODY {
+            if body_lower.contains(ind) {
+                s[3] += 1;
+            }
+        }
+
+        // Doc body indicators
+        for &ind in indicators::DOC_BODY {
+            if body_lower.contains(ind) {
+                s[4] += 1;
+            }
+        }
+
+        // Name indicators
+        for &ind in indicators::PE_NAME {
+            if name_lower.contains(ind) {
+                s[0] += 1;
+            }
+        }
+        for &ind in indicators::ELF_NAME {
+            if name_lower.contains(ind) {
+                s[1] += 1;
+            }
+        }
+        for &ind in indicators::MACHO_NAME {
+            if name_lower.contains(ind) {
+                s[2] += 1;
+            }
+        }
+        for &ind in indicators::SCRIPT_NAME {
+            if name_lower.contains(ind) {
+                s[3] += 1;
+            }
+        }
+        for &ind in indicators::DOC_NAME {
+            if name_lower.contains(ind) {
+                s[4] += 1;
+            }
+        }
+
+        let tiers = [Self::Pe, Self::Elf, Self::MachO, Self::Script, Self::Doc];
+
+        // Find max and second-highest scores
+        let (max_idx, &max_score) = s.iter().enumerate().max_by_key(|(_, &v)| v)?;
+        if max_score == 0 {
+            return None;
+        }
+
+        let second = s
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| *i != max_idx)
+            .map(|(_, &v)| v)
+            .max()
+            .unwrap_or(0);
+
+        // Single indicator with no competing platform → classify (aggressive).
+        // Multiple indicators → classify if clear winner (at least 2x runner-up).
+        // The body indicators (DLLs, APIs, paths) are strong enough signals individually.
+        if second == 0 || max_score > second * 2 {
+            Some(tiers[max_idx])
+        } else {
+            None // Ambiguous — stay Generic
+        }
     }
 }
 
@@ -323,11 +951,7 @@ impl YaraEngine {
         // Log tier distribution
         for tier in YaraTier::ALL {
             if let Some(rules) = self.tiers.get(tier) {
-                tracing::info!(
-                    "Tier {}: {} rules",
-                    tier.label(),
-                    rules.iter().count()
-                );
+                tracing::info!("Tier {}: {} rules", tier.label(), rules.iter().count());
             }
         }
 
@@ -461,6 +1085,21 @@ impl YaraEngine {
             .map(String::as_str)
             .collect();
 
+        // Report rule counts per tier (visible with --verbose)
+        let mut total_rules: usize = 0;
+        for tier in &tiers_to_scan {
+            if let Some(rules) = self.tiers.get(tier) {
+                let count = rules.iter().count();
+                total_rules += count;
+                tracing::info!(tier = tier.label(), count, "YARA tier rule count");
+            }
+        }
+        tracing::info!(
+            total = total_rules,
+            tiers = tiers_to_scan.len(),
+            "YARA scan starting"
+        );
+
         // Scan tiers in parallel when there are two (specific + generic).
         // Each tier has its own compiled Rules, and Scanner only borrows &Rules + &[u8],
         // so two scanners can run concurrently on the same data without contention.
@@ -471,8 +1110,10 @@ impl YaraEngine {
             let rules_b = self.tiers.get(&tier_b);
             match (rules_a, rules_b) {
                 (Some(ra), Some(rb)) => {
-                    let (res_a, res_b) =
-                        rayon::join(|| Self::run_scanner(ra, data), || Self::run_scanner(rb, data));
+                    let (res_a, res_b) = rayon::join(
+                        || Self::run_scanner(ra, data),
+                        || Self::run_scanner(rb, data),
+                    );
                     vec![(tier_a, res_a), (tier_b, res_b)]
                 }
                 (Some(ra), None) => vec![(tier_a, Self::run_scanner(ra, data))],
@@ -522,7 +1163,21 @@ impl YaraEngine {
             .map(|(k, v)| (k, deduplicate_evidence(v)))
             .collect();
 
-        tracing::debug!(
+        // At debug level, log every matched/scanned rule name for analysis
+        if tracing::enabled!(tracing::Level::DEBUG) {
+            for tier in &tiers_to_scan {
+                if let Some(rules) = self.tiers.get(tier) {
+                    for rule in rules.iter() {
+                        tracing::debug!(
+                            tier = tier.label(),
+                            rule = rule.identifier(),
+                            "YARA rule in scan set",
+                        );
+                    }
+                }
+            }
+        }
+        tracing::info!(
             "YARA scan: {} tier(s), {} matches, {} inline traits",
             tiers_to_scan.len(),
             yara_matches.len(),
@@ -754,10 +1409,6 @@ impl YaraEngine {
         let mut disabled_count = 0;
         let mut tier_counts: HashMap<YaraTier, usize> = HashMap::new();
 
-        // Threshold for splitting a file into per-rule tier classification.
-        // Files with more rules than this are split; smaller files classified as a whole.
-        const MONOLITHIC_THRESHOLD: usize = 100;
-
         let rule_start_re =
             Regex::new(r"(?m)^(\s*)((?:private\s+|global\s+)*)rule\s+(\w+)").unwrap();
 
@@ -813,67 +1464,24 @@ impl YaraEngine {
                 continue;
             }
 
-            // Count rules to decide splitting strategy
-            let rule_count = rule_start_re.captures_iter(&filtered_source).count();
-
-            if rule_count > MONOLITHIC_THRESHOLD {
-                // Large monolithic file: split per-rule and classify each
-                let split_result = Self::split_monolithic_by_tier(
-                    &filtered_source,
-                    &namespace,
-                    &rule_start_re,
-                );
-                for (tier, tier_source) in split_result {
-                    let compiler = if tier == YaraTier::Generic {
-                        &mut *generic_compiler
-                    } else {
-                        tier_compilers
-                            .entry(tier)
-                            .or_default()
-                    };
-                    compiler.new_namespace(&namespace);
-                    match compiler.add_source(tier_source.as_bytes()) {
-                        Ok(_) => {
-                            total += 1;
-                            *tier_counts.entry(tier).or_insert(0) += 1;
-                        }
-                        Err(e) => {
-                            failed += 1;
-                            tracing::warn!("{} (tier {:?}): {}", path.display(), tier, e);
-                        }
-                    }
-                }
-            } else {
-                // Small file: classify as a whole based on first non-private rule
-                let tier = rule_start_re
-                    .captures_iter(&filtered_source)
-                    .find(|cap| {
-                        !cap.get(2)
-                            .map(|m| m.as_str().contains("private"))
-                            .unwrap_or(false)
-                    })
-                    .map(|cap| {
-                        let name = cap.get(3).unwrap().as_str();
-                        YaraTier::classify_rule(name, &filtered_source, &namespace)
-                    })
-                    .unwrap_or(YaraTier::Generic);
-
+            // Split every file per-rule and classify each individually
+            let split_result =
+                Self::split_monolithic_by_tier(&filtered_source, &namespace, &rule_start_re);
+            for (tier, tier_source) in split_result {
                 let compiler = if tier == YaraTier::Generic {
                     &mut *generic_compiler
                 } else {
-                    tier_compilers
-                        .entry(tier)
-                        .or_default()
+                    tier_compilers.entry(tier).or_default()
                 };
                 compiler.new_namespace(&namespace);
-                match compiler.add_source(filtered_source.as_bytes()) {
+                match compiler.add_source(tier_source.as_bytes()) {
                     Ok(_) => {
                         total += 1;
                         *tier_counts.entry(tier).or_insert(0) += 1;
                     }
                     Err(e) => {
                         failed += 1;
-                        tracing::warn!("{}: {}", path.display(), e);
+                        tracing::warn!("{} (tier {:?}): {}", path.display(), tier, e);
                     }
                 }
             }
@@ -1645,8 +2253,10 @@ impl YaraEngine {
             tiers: Vec::new(),
         };
         // Estimate manifest size (will recalculate after filling offsets)
-        let manifest_estimate =
-            serde_json::to_vec(&manifest_placeholder).unwrap_or_default().len() + 512;
+        let manifest_estimate = serde_json::to_vec(&manifest_placeholder)
+            .unwrap_or_default()
+            .len()
+            + 512;
         let data_start = CACHE_HEADER_SIZE + manifest_estimate;
         let data_start_aligned = (data_start + 7) & !7;
 
@@ -1669,37 +2279,39 @@ impl YaraEngine {
             inline_namespaces: self.compiled_inline_namespaces.clone(),
             tiers: tier_entries,
         };
-        let manifest_json = serde_json::to_vec(&manifest).context("Failed to serialize manifest")?;
+        let manifest_json =
+            serde_json::to_vec(&manifest).context("Failed to serialize manifest")?;
 
         // Recalculate with actual manifest size
         let actual_data_start = CACHE_HEADER_SIZE + manifest_json.len();
         let actual_data_start_aligned = (actual_data_start + 7) & !7;
 
         // If data start shifted, rebuild manifest with corrected offsets
-        let (manifest_json, _data_start_aligned) = if actual_data_start_aligned != data_start_aligned {
-            let mut entries = Vec::new();
-            let mut off = actual_data_start_aligned;
-            for (label, data) in &tier_data {
-                entries.push(CacheTierEntry {
-                    label: label.clone(),
-                    offset: off,
-                    length: data.len(),
-                });
-                off += data.len();
-                off = (off + 7) & !7;
-            }
-            let m = CacheManifest {
-                builtin_count,
-                third_party_count,
-                inline_namespaces: self.compiled_inline_namespaces.clone(),
-                tiers: entries,
+        let (manifest_json, _data_start_aligned) =
+            if actual_data_start_aligned != data_start_aligned {
+                let mut entries = Vec::new();
+                let mut off = actual_data_start_aligned;
+                for (label, data) in &tier_data {
+                    entries.push(CacheTierEntry {
+                        label: label.clone(),
+                        offset: off,
+                        length: data.len(),
+                    });
+                    off += data.len();
+                    off = (off + 7) & !7;
+                }
+                let m = CacheManifest {
+                    builtin_count,
+                    third_party_count,
+                    inline_namespaces: self.compiled_inline_namespaces.clone(),
+                    tiers: entries,
+                };
+                let j = serde_json::to_vec(&m).context("Failed to serialize manifest")?;
+                let final_start = (CACHE_HEADER_SIZE + j.len() + 7) & !7;
+                (j, final_start)
+            } else {
+                (manifest_json, actual_data_start_aligned)
             };
-            let j = serde_json::to_vec(&m).context("Failed to serialize manifest")?;
-            let final_start = (CACHE_HEADER_SIZE + j.len() + 7) & !7;
-            (j, final_start)
-        } else {
-            (manifest_json, actual_data_start_aligned)
-        };
 
         // Write cache file
         let mut file = fs::File::create(cache_path).context("Failed to create cache file")?;
@@ -1835,7 +2447,7 @@ impl YaraEngine {
 /// Per-tier cache format v6.
 /// Layout: MAGIC(4) + VERSION(4) + manifest_len(8) + manifest_json + padding + tier_data...
 const CACHE_MAGIC: &[u8; 4] = b"YARC";
-const CACHE_VERSION: u32 = 6;
+const CACHE_VERSION: u32 = 7;
 const CACHE_HEADER_SIZE: usize = 4 + 4 + 8; // 16 bytes
 
 impl Default for YaraEngine {
@@ -2565,5 +3177,207 @@ rule DisableMe {
         assert!(filtered.contains("/* Multi-line"));
         assert!(filtered.contains("rule KeepMe"));
         assert!(!filtered.contains("rule DisableMe"));
+    }
+
+    /// Test YARA rule tier classification against fixture files.
+    ///
+    /// Fixtures live in `tests/yara_tier_fixtures/{platforms}/{filetypes}/rule.yar`.
+    /// The `{filetypes}` directory name determines the expected `YaraTier`.
+    /// Platforms are sorted alphabetically, comma-separated (e.g. `linux,windows`).
+    /// Filetypes are sorted alphabetically, comma-separated (e.g. `elf,pe`).
+    ///
+    /// To add a regression test for a misclassified rule, just drop the `.yar` file
+    /// into the appropriate directory.
+    #[test]
+    fn test_tier_classification_fixtures() {
+        let fixtures_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests")
+            .join("yara_tier_fixtures");
+
+        if !fixtures_dir.exists() {
+            // Skip if fixtures not present (e.g., CI without test data)
+            return;
+        }
+
+        let mut tested = 0;
+        let mut failures: Vec<String> = Vec::new();
+
+        // Walk: {fixtures_dir}/{platform_dir}/{filetype_dir}/*.yar
+        for platform_entry in std::fs::read_dir(&fixtures_dir).unwrap() {
+            let platform_entry = platform_entry.unwrap();
+            if !platform_entry.file_type().unwrap().is_dir() {
+                continue;
+            }
+            let platform_dir = platform_entry.file_name().to_string_lossy().to_string();
+
+            for filetype_entry in std::fs::read_dir(platform_entry.path()).unwrap() {
+                let filetype_entry = filetype_entry.unwrap();
+                if !filetype_entry.file_type().unwrap().is_dir() {
+                    continue;
+                }
+                let filetype_dir = filetype_entry.file_name().to_string_lossy().to_string();
+
+                // Map the filetype directory to the expected YaraTier.
+                // The first filetype token determines the tier.
+                let expected_tier = match filetype_dir.split(',').next().unwrap_or("") {
+                    "pe" | "dll" | "exe" => YaraTier::Pe,
+                    "elf" | "so" => YaraTier::Elf,
+                    "macho" | "dylib" => YaraTier::MachO,
+                    "script" => YaraTier::Script,
+                    "doc" => YaraTier::Doc,
+                    "generic" => YaraTier::Generic,
+                    other => {
+                        failures.push(format!(
+                            "Unknown filetype directory: {}/{}",
+                            platform_dir, other
+                        ));
+                        continue;
+                    }
+                };
+
+                for rule_file in std::fs::read_dir(filetype_entry.path()).unwrap() {
+                    let rule_file = rule_file.unwrap();
+                    let path = rule_file.path();
+                    if path.extension().and_then(|e| e.to_str()) != Some("yar") {
+                        continue;
+                    }
+
+                    let source = std::fs::read_to_string(&path).unwrap();
+                    let rule_name = extract_rule_name(&source)
+                        .unwrap_or_else(|| path.file_stem().unwrap().to_string_lossy().to_string());
+
+                    // Use a plausible namespace for third-party rules
+                    let ns = format!("3p.test.{}", platform_dir);
+                    let actual_tier = YaraTier::classify_rule(&rule_name, &source, &ns);
+
+                    if actual_tier != expected_tier {
+                        failures.push(format!(
+                            "FAIL: {}/{}/{} — rule '{}': expected {:?}, got {:?}",
+                            platform_dir,
+                            filetype_dir,
+                            path.file_name().unwrap().to_string_lossy(),
+                            rule_name,
+                            expected_tier,
+                            actual_tier,
+                        ));
+                    }
+                    tested += 1;
+                }
+            }
+        }
+
+        eprintln!(
+            "Tier classification: {tested} rules tested, {} failures",
+            failures.len()
+        );
+        if !failures.is_empty() {
+            for f in &failures {
+                eprintln!("  {f}");
+            }
+            panic!(
+                "{} of {} tier classification tests failed:\n{}",
+                failures.len(),
+                tested,
+                failures.join("\n"),
+            );
+        }
+        assert!(tested > 0, "No fixture files found");
+    }
+
+    /// Extract the rule name from YARA source text.
+    fn extract_rule_name(source: &str) -> Option<String> {
+        for line in source.lines() {
+            let trimmed = line.trim();
+            if let Some(rest) = trimmed.strip_prefix("rule ") {
+                // "rule NAME {" or "rule NAME : TAG {"
+                let name = rest.split_whitespace().next()?.trim_end_matches('{');
+                return Some(name.to_string());
+            }
+        }
+        None
+    }
+
+    /// Diagnostic test: classify all third-party YARA rules and print distribution.
+    /// Run with: cargo test --lib test_classify_all_third_party -- --nocapture --ignored
+    #[test]
+    #[ignore]
+    fn test_classify_all_third_party() {
+        use std::collections::HashMap;
+
+        let rule_re = regex::Regex::new(r"(?m)^((private\s+)?rule\s+)(\w+)").unwrap();
+
+        let traits_dir = dirs::data_dir()
+            .unwrap_or_default()
+            .join("cleave")
+            .join("traits")
+            .join("third-party");
+
+        let mut tier_counts: HashMap<YaraTier, usize> = HashMap::new();
+        let mut generic_names: Vec<String> = Vec::new();
+
+        // Walk all .yar files
+        for entry in walkdir::WalkDir::new(&traits_dir)
+            .into_iter()
+            .filter_map(Result::ok)
+            .filter(|e| {
+                e.path()
+                    .extension()
+                    .map(|ext| ext == "yar" || ext == "yara")
+                    .unwrap_or(false)
+            })
+        {
+            let path = entry.path();
+            let Ok(source) = std::fs::read_to_string(path) else {
+                continue;
+            };
+
+            // Derive namespace from path
+            let rel = path.strip_prefix(&traits_dir).unwrap_or(path);
+            let ns = format!(
+                "3p.{}",
+                rel.with_extension("").to_string_lossy().replace('/', ".")
+            );
+
+            for cap in rule_re.captures_iter(&source) {
+                let name = cap.get(3).unwrap().as_str();
+                let is_private = cap
+                    .get(2)
+                    .map(|m| m.as_str().contains("private"))
+                    .unwrap_or(false);
+                if is_private {
+                    continue;
+                }
+
+                let start = cap.get(0).unwrap().start();
+                // Find rule body end (next rule start or EOF)
+                let body_end = rule_re
+                    .find_at(&source, start + 1)
+                    .map(|m| m.start())
+                    .unwrap_or(source.len());
+                let rule_text = &source[start..body_end];
+
+                let tier = YaraTier::classify_rule(name, rule_text, &ns);
+                *tier_counts.entry(tier).or_default() += 1;
+                if tier == YaraTier::Generic {
+                    generic_names.push(format!("{} (ns={})", name, ns));
+                }
+            }
+        }
+
+        eprintln!("\n=== YARA Tier Distribution ===");
+        let mut total = 0;
+        for tier in YaraTier::ALL {
+            let count = tier_counts.get(tier).copied().unwrap_or(0);
+            total += count;
+            eprintln!("  {:8}: {}", tier.label(), count);
+        }
+        eprintln!("  {:8}: {}", "TOTAL", total);
+
+        // Sort and print Generic rules
+        generic_names.sort();
+        eprintln!("\n=== Generic Rules ({}) ===", generic_names.len());
+        for name in &generic_names {
+            eprintln!("  {name}");
+        }
     }
 }

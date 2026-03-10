@@ -17,7 +17,16 @@ use rayon::prelude::*;
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 use walkdir::WalkDir;
+
+/// Compiled regex for YARA rule header matching — shared across all preprocessing steps.
+fn rule_start_re() -> &'static regex::Regex {
+    static RE: OnceLock<regex::Regex> = OnceLock::new();
+    RE.get_or_init(|| {
+        regex::Regex::new(r"(?m)^(\s*)((?:private\s+|global\s+)*)rule\s+(\w+)").unwrap()
+    })
+}
 
 /// Maximum pattern match ranges to collect per pattern.
 /// Patterns matching more than this are truncated to prevent memory exhaustion.
@@ -1375,8 +1384,6 @@ impl YaraEngine {
         tier_compilers: &mut HashMap<YaraTier, yara_x::Compiler<'a>>,
         dir: &Path,
     ) -> usize {
-        use regex::Regex;
-
         let disabled_rules = crate::third_party_config::disabled_rule_ids();
 
         let rule_files: Vec<PathBuf> = WalkDir::new(dir)
@@ -1397,10 +1404,72 @@ impl YaraEngine {
         let total_files = rule_files.len();
         tracing::debug!("Found {} third-party YARA files", total_files);
 
-        // Read all files in parallel
-        let sources: Vec<_> = rule_files
+        let re = rule_start_re();
+
+        // Read and preprocess all files in parallel — namespace derivation, VT filtering,
+        // filetype hint injection, disabled-rule filtering, and tier splitting are all
+        // pure transformations that don't touch the compilers.
+        struct Processed {
+            path: PathBuf,
+            namespace: String,
+            split: HashMap<YaraTier, String>,
+            vt_stripped: usize,
+            disabled_stripped: usize,
+        }
+
+        let processed: Vec<Processed> = rule_files
             .par_iter()
-            .filter_map(|path| fs::read(path).ok().map(|b| (path.clone(), b)))
+            .filter_map(|path| {
+                let bytes = fs::read(path).ok()?;
+
+                let namespace = path
+                    .strip_prefix(dir)
+                    .ok()
+                    .and_then(|rel| rel.to_str())
+                    .map(|s| {
+                        let parts: Vec<&str> = s
+                            .split(std::path::MAIN_SEPARATOR)
+                            .filter(|p| !p.is_empty())
+                            .collect();
+                        let mut ns_parts = parts.to_vec();
+                        if let Some(last) = ns_parts.last_mut() {
+                            *last = last.trim_end_matches(".yar").trim_end_matches(".yara");
+                        }
+                        format!("3p.{}", ns_parts.join("."))
+                    })
+                    .unwrap_or_else(|| "3p".to_string());
+
+                let raw_source = String::from_utf8_lossy(&bytes);
+
+                let (raw_source, vt_stripped) = if raw_source.contains("vt.") {
+                    let (filtered, count) = Self::filter_vt_rules(&raw_source, re);
+                    (std::borrow::Cow::Owned(filtered), count)
+                } else {
+                    (raw_source, 0)
+                };
+
+                if raw_source.trim().is_empty() {
+                    return None;
+                }
+
+                let source = crate::third_party_yara::inject_condition_filetype_hints(&raw_source);
+
+                let (filtered_source, disabled_stripped) =
+                    Self::filter_disabled_rules(&source, &namespace, &disabled_rules, re);
+
+                if filtered_source.trim().is_empty() {
+                    return None;
+                }
+
+                let split = Self::split_monolithic_by_tier(&filtered_source, &namespace, re);
+                Some(Processed {
+                    path: path.clone(),
+                    namespace,
+                    split,
+                    vt_stripped,
+                    disabled_stripped,
+                })
+            })
             .collect();
 
         let mut total = 0;
@@ -1409,71 +1478,24 @@ impl YaraEngine {
         let mut disabled_count = 0;
         let mut tier_counts: HashMap<YaraTier, usize> = HashMap::new();
 
-        let rule_start_re =
-            Regex::new(r"(?m)^(\s*)((?:private\s+|global\s+)*)rule\s+(\w+)").unwrap();
-
-        for (path, bytes) in sources {
-            let namespace = path
-                .strip_prefix(dir)
-                .ok()
-                .and_then(|rel| rel.to_str())
-                .map(|s| {
-                    let parts: Vec<&str> = s
-                        .split(std::path::MAIN_SEPARATOR)
-                        .filter(|p| !p.is_empty())
-                        .collect();
-                    let mut ns_parts = parts.to_vec();
-                    if let Some(last) = ns_parts.last_mut() {
-                        *last = last.trim_end_matches(".yar").trim_end_matches(".yara");
-                    }
-                    format!("3p.{}", ns_parts.join("."))
-                })
-                .unwrap_or_else(|| "3p".to_string());
-
-            let raw_source = String::from_utf8_lossy(&bytes);
-
-            // Strip individual rules referencing VirusTotal module
-            let raw_source = if raw_source.contains("vt.") {
-                let (filtered, count) = Self::filter_vt_rules(&raw_source);
-                if count > 0 {
-                    vt_skipped += count;
-                    tracing::debug!(
-                        "{}: stripped {} rule(s) requiring VirusTotal context",
-                        path.display(),
-                        count,
-                    );
-                }
-                std::borrow::Cow::Owned(filtered)
-            } else {
-                raw_source
-            };
-
-            if raw_source.trim().is_empty() {
-                continue;
+        for p in processed {
+            if p.vt_stripped > 0 {
+                tracing::debug!(
+                    "{}: stripped {} rule(s) requiring VirusTotal context",
+                    p.path.display(),
+                    p.vt_stripped,
+                );
             }
+            vt_skipped += p.vt_stripped;
+            disabled_count += p.disabled_stripped;
 
-            // Inject filetype metadata from magic byte conditions
-            let source = crate::third_party_yara::inject_condition_filetype_hints(&raw_source);
-
-            // Filter disabled rules
-            let (filtered_source, removed) =
-                Self::filter_disabled_rules(&source, &namespace, &disabled_rules);
-            disabled_count += removed;
-
-            if filtered_source.trim().is_empty() {
-                continue;
-            }
-
-            // Split every file per-rule and classify each individually
-            let split_result =
-                Self::split_monolithic_by_tier(&filtered_source, &namespace, &rule_start_re);
-            for (tier, tier_source) in split_result {
+            for (tier, tier_source) in p.split {
                 let compiler = if tier == YaraTier::Generic {
                     &mut *generic_compiler
                 } else {
                     tier_compilers.entry(tier).or_default()
                 };
-                compiler.new_namespace(&namespace);
+                compiler.new_namespace(&p.namespace);
                 match compiler.add_source(tier_source.as_bytes()) {
                     Ok(_) => {
                         total += 1;
@@ -1481,7 +1503,7 @@ impl YaraEngine {
                     }
                     Err(e) => {
                         failed += 1;
-                        tracing::warn!("{} (tier {:?}): {}", path.display(), tier, e);
+                        tracing::warn!("{} (tier {:?}): {}", p.path.display(), tier, e);
                     }
                 }
             }
@@ -1603,7 +1625,7 @@ impl YaraEngine {
             result.insert(tier, s);
         }
 
-        tracing::info!(
+        tracing::debug!(
             "Split monolithic file ({} rules) into {} tier(s): {}",
             rules.len(),
             result.len(),
@@ -1623,18 +1645,12 @@ impl YaraEngine {
         source: &str,
         namespace: &str,
         disabled_rules: &std::collections::HashSet<String>,
+        re: &regex::Regex,
     ) -> (String, usize) {
-        use regex::Regex;
-
         // Quick check: if no disabled rules, return as-is
         if disabled_rules.is_empty() {
             return (source.to_string(), 0);
         }
-
-        // Regex to match YARA rule definitions: `rule RuleName` or `rule RuleName : tags`
-        // Captures the rule name
-        let rule_start_re =
-            Regex::new(r"(?m)^(\s*)((?:private\s+|global\s+)*)rule\s+(\w+)").unwrap();
 
         let mut result = String::with_capacity(source.len());
         let mut last_end = 0;
@@ -1642,7 +1658,7 @@ impl YaraEngine {
 
         // Find all rule starts and their positions
         let mut rule_ranges: Vec<(usize, usize, &str)> = Vec::new();
-        for cap in rule_start_re.captures_iter(source) {
+        for cap in re.captures_iter(source) {
             let rule_name = cap.get(3).unwrap().as_str();
             let rule_start = cap.get(0).unwrap().start();
             rule_ranges.push((rule_start, 0, rule_name)); // end will be filled later
@@ -1691,14 +1707,9 @@ impl YaraEngine {
     /// Returns the filtered source and the count of removed rules. Rules that don't
     /// reference `vt.` are preserved. This replaces the old whole-file skip which
     /// incorrectly dropped the entire YARAForge monolithic collection.
-    fn filter_vt_rules(source: &str) -> (String, usize) {
-        use regex::Regex;
-
-        let rule_start_re =
-            Regex::new(r"(?m)^(\s*)((?:private\s+|global\s+)*)rule\s+(\w+)").unwrap();
-
+    fn filter_vt_rules(source: &str, re: &regex::Regex) -> (String, usize) {
         let mut rule_ranges: Vec<(usize, usize)> = Vec::new();
-        for cap in rule_start_re.captures_iter(source) {
+        for cap in re.captures_iter(source) {
             let rule_start = cap.get(0).unwrap().start();
             rule_ranges.push((rule_start, 0));
         }

@@ -461,18 +461,40 @@ impl YaraEngine {
             .map(String::as_str)
             .collect();
 
+        // Scan tiers in parallel when there are two (specific + generic).
+        // Each tier has its own compiled Rules, and Scanner only borrows &Rules + &[u8],
+        // so two scanners can run concurrently on the same data without contention.
+        let all_raw: Vec<(YaraTier, Result<Vec<RawRule>>)> = if tiers_to_scan.len() == 2 {
+            let tier_a = tiers_to_scan[0];
+            let tier_b = tiers_to_scan[1];
+            let rules_a = self.tiers.get(&tier_a);
+            let rules_b = self.tiers.get(&tier_b);
+            match (rules_a, rules_b) {
+                (Some(ra), Some(rb)) => {
+                    let (res_a, res_b) =
+                        rayon::join(|| Self::run_scanner(ra, data), || Self::run_scanner(rb, data));
+                    vec![(tier_a, res_a), (tier_b, res_b)]
+                }
+                (Some(ra), None) => vec![(tier_a, Self::run_scanner(ra, data))],
+                (None, Some(rb)) => vec![(tier_b, Self::run_scanner(rb, data))],
+                (None, None) => vec![],
+            }
+        } else {
+            tiers_to_scan
+                .iter()
+                .filter_map(|tier| {
+                    self.tiers
+                        .get(tier)
+                        .map(|rules| (*tier, Self::run_scanner(rules, data)))
+                })
+                .collect()
+        };
+
         let mut yara_matches = Vec::new();
         let mut inline_results: HashMap<String, Vec<Evidence>> = HashMap::new();
 
-        for tier in &tiers_to_scan {
-            let Some(rules) = self.tiers.get(tier) else {
-                continue;
-            };
-            let raw_rules = Self::run_scanner(rules, data)?;
-
-            // Report slowest rules only for the first tier
-            // (skipped for now to avoid holding scanner across iterations)
-
+        for (_tier, result) in all_raw {
+            let raw_rules = result?;
             for raw in raw_rules {
                 if inline_ns_set.contains(raw.namespace.as_str()) {
                     Self::collect_inline_evidence(&raw, data, &mut inline_results);

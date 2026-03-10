@@ -64,9 +64,14 @@ pub(crate) fn third_party_path() -> PathBuf {
     traits_path().join("third-party")
 }
 
-/// Check if we're running in developer mode (traits directory exists)
-pub(crate) fn is_developer_mode() -> bool {
-    traits_path().exists()
+/// Returns the build mode label for cache key namespacing.
+/// Debug builds use "dev", release/profiling builds use "prod".
+fn build_mode() -> &'static str {
+    if cfg!(debug_assertions) {
+        "dev"
+    } else {
+        "prod"
+    }
 }
 
 /// Returns the most recent modification time of any YARA rule file or trait YAML file.
@@ -121,18 +126,24 @@ pub(crate) fn binary_mtime() -> Result<SystemTime> {
         .context("Failed to get binary modification time")
 }
 
-/// Returns the appropriate timestamp for cache invalidation
+/// Returns the appropriate timestamp for cache invalidation.
+///
+/// Always prefers rule file mtime so that recompiling the binary
+/// (`cargo run`) does not invalidate the YARA / mapper caches.
+/// Falls back to binary mtime only when no rule files exist at all
+/// (true production builds with embedded rules).
 pub(crate) fn cache_timestamp() -> Result<SystemTime> {
-    if is_developer_mode() {
-        // Developer mode: use most recent YARA file mtime
-        most_recent_yara_mtime()
-    } else {
-        // Production mode: use binary mtime (embedded rules)
-        binary_mtime()
+    match most_recent_yara_mtime() {
+        Ok(mtime) => Ok(mtime),
+        Err(_) => binary_mtime(),
     }
 }
 
-/// Generate a cache key based on timestamp and third-party flag
+/// Generate a cache key based on timestamp and third-party flag.
+///
+/// Includes the cleave version so that upgrading the binary (which may
+/// change rule handling or cache format) invalidates the cache, while
+/// simple recompiles during development do not.
 pub(crate) fn yara_cache_key(third_party_enabled: bool) -> Result<String> {
     let mtime = cache_timestamp()?;
     let timestamp = mtime
@@ -145,12 +156,11 @@ pub(crate) fn yara_cache_key(third_party_enabled: bool) -> Result<String> {
     } else {
         "builtin"
     };
-    let mode = if is_developer_mode() { "dev" } else { "prod" };
+    let mode = build_mode();
+    let version = env!("CARGO_PKG_VERSION");
 
-    // v3: zero-copy cache format (mmap + direct slice access)
     Ok(format!(
-        "yara-rules-v3-{}-{}-{}.bin",
-        mode, timestamp, suffix
+        "yara-rules-v3-{version}-{mode}-{timestamp}-{suffix}.bin",
     ))
 }
 
@@ -168,10 +178,12 @@ pub(crate) fn mapper_cache_key() -> Result<String> {
         .context("Invalid cache timestamp")?
         .as_secs();
 
-    let mode = if is_developer_mode() { "dev" } else { "prod" };
+    let mode = build_mode();
+    let version = env!("CARGO_PKG_VERSION");
 
-    // v5: parallel index building
-    Ok(format!("capability-mapper-v5-{}-{}.bin", mode, timestamp))
+    Ok(format!(
+        "capability-mapper-v5-{version}-{mode}-{timestamp}.bin",
+    ))
 }
 
 /// Get the path to the capability mapper cache file
@@ -261,12 +273,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_is_developer_mode_no_traits_dir() {
-        // Should return false when traits/ doesn't exist (in test environment)
-        let result = is_developer_mode();
-        // Result depends on whether traits/ exists in test environment
-        // Simply verify it returns a boolean without panicking
-        let _ = result;
+    fn test_build_mode_is_dev_in_tests() {
+        // Tests are compiled with debug_assertions, so build_mode() == "dev"
+        assert_eq!(build_mode(), "dev");
     }
 
     #[test]

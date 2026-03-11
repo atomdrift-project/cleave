@@ -222,9 +222,9 @@ dependencies = [
 
 [[package]]
 name = "assert_cmd"
-version = "2.1.2"
+version = "2.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9c5bcfa8749ac45dd12cb11055aeeb6b27a3895560d60d71e3c23bf979e60514"
+checksum = "9a686bbee5efb88a82df0621b236e74d925f470e5445d3220a5648b892ec99c9"
 dependencies = [
  "anstyle",
  "bstr",
@@ -2908,9 +2908,9 @@ dependencies = [
 
 [[package]]
 name = "psl"
-version = "2.1.197"
+version = "2.1.198"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b15ca31b68a87f984f41949f5e4341502dcd2af119b3226ba7285b3fe3e77ea2"
+checksum = "8cc151a7aba9221a5413baff8677aa98f450621cf7bd45ad17ca81d57a7f26ac"
 dependencies = [
  "psl-types",
 ]
@@ -3702,6 +3702,7 @@ checksum = "6ce2be8dc25455e1f91df71bfa12ad37d7af1092ae736f3a6cd0e37bc7810596"
 [[package]]
 name = "stng"
 version = "1.0.0"
+source = "git+https://codeberg.org/atomdrift/stng.git#438ac1b36079cdb4263e6c9062500216d26b1b34"
 dependencies = [
  "aho-corasick",
  "anyhow",
@@ -3828,9 +3829,9 @@ checksum = "adb6935a6f5c20170eeceb1a3835a49e12e19d792f6dd344ccc76a985ca5a6ca"
 
 [[package]]
 name = "tempfile"
-version = "3.26.0"
+version = "3.27.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "82a72c767771b47409d2345987fda8628641887d5466101319899796367354a0"
+checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
  "getrandom 0.4.2",

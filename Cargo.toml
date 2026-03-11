@@ -165,7 +165,7 @@ chrono = { version = "0.4", features = ["serde"] }
 hex = "0.4"
 base64 = "0.22"
 roxmltree = "0.21"
-tempfile = "3.26"
+tempfile = "3.27"
 strsim = "0.11"
 dirs = "6.0"
 parking_lot = "0.12"  # For efficient mutexes in memory tracking
@@ -173,7 +173,7 @@ libc = "0.2"          # For FreeBSD sysctl thread info and other OS APIs
 memmap2 = "0.9"  # Memory-mapped file I/O for large files
 smallvec = "1.15"  # Stack-allocated vectors for small collections
 encoding_rs = "0.8"  # Character encoding detection and conversion
-stng = { git = "https://codeberg.org/atomdrift/stng", rev = "1c043de8f98357bf2d8e0082da6f2581485ffc94" }
+stng = { git = "https://codeberg.org/atomdrift/stng.git" }
 
 # Logging (tracing is the modern standard, more powerful than log+env_logger)
 tracing = "0.1"
@@ -215,14 +215,11 @@ tikv-jemallocator = { version = "0.6", optional = true }
 tikv-jemalloc-ctl = { version = "0.6", optional = true }
 
 [dev-dependencies]
-assert_cmd = "2.1"
+assert_cmd = "2.2"
 dhat = "0.3.3"
 once_cell = "1.21"  # For shared test initialization
 predicates = "3.1"
 proptest = "1.10"
-
-[patch."https://codeberg.org/atomdrift/stng"]
-stng = { path = "../stng" }
 
 [profile.profiling]
 inherits = "release"

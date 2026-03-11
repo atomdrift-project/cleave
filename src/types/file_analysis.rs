@@ -43,6 +43,10 @@ pub struct FileAnalysis {
     /// Detected file type (e.g., "python", "elf", "archive")
     pub file_type: String,
 
+    /// CPU architecture (e.g., "x86_64", "m68k", "aarch64")
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub arch: Option<String>,
+
     /// SHA256 hash of file contents
     pub sha256: String,
 
@@ -158,6 +162,7 @@ impl FileAnalysis {
             parent_id: None,
             depth: 0,
             file_type,
+            arch: None,
             sha256,
             size,
             risk: None,

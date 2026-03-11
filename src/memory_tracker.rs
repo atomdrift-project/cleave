@@ -422,10 +422,10 @@ pub fn jemalloc_stats() -> Option<JemallocStats> {
 
         Some(JemallocStats {
             allocated: stats::allocated::mib().ok()?.read().ok()? as u64,
-            active:    stats::active::mib().ok()?.read().ok()? as u64,
-            metadata:  stats::metadata::mib().ok()?.read().ok()? as u64,
-            resident:  stats::resident::mib().ok()?.read().ok()? as u64,
-            retained:  stats::retained::mib().ok()?.read().ok()? as u64,
+            active: stats::active::mib().ok()?.read().ok()? as u64,
+            metadata: stats::metadata::mib().ok()?.read().ok()? as u64,
+            resident: stats::resident::mib().ok()?.read().ok()? as u64,
+            retained: stats::retained::mib().ok()?.read().ok()? as u64,
         })
     }
 

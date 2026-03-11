@@ -144,7 +144,7 @@ pub(crate) fn run(
         let all_file_analyses_clone = all_file_analyses.clone();
         let format_val = *format;
         let error_if_levels_owned: Option<Vec<types::Criticality>> =
-            error_if_levels.map(|l| l.to_vec());
+            error_if_levels.map(<[types::Criticality]>::to_vec);
 
         cleave::scan_directory(path, &options_arc, move |event| match event {
             cleave::ScanEvent::Start { total } => {

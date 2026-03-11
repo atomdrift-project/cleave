@@ -457,6 +457,11 @@ impl AnalysisReport {
             self.target.size_bytes,
         );
 
+        file.arch = self
+            .target
+            .architectures
+            .as_ref()
+            .and_then(|a| a.first().cloned());
         file.findings = self.findings.clone();
         file.metrics = self.metrics.clone();
         file.structure = self.structure.clone();
@@ -484,6 +489,11 @@ impl AnalysisReport {
     ) -> (FileAnalysis, Vec<FileAnalysis>, Vec<ArchiveEntry>) {
         let nested_files = std::mem::take(&mut self.files);
         let archive_contents = std::mem::take(&mut self.archive_contents);
+        let arch = self
+            .target
+            .architectures
+            .as_ref()
+            .and_then(|a| a.first().cloned());
 
         let mut file = FileAnalysis::new(
             id,
@@ -493,6 +503,7 @@ impl AnalysisReport {
             self.target.size_bytes,
         );
 
+        file.arch = arch;
         file.findings = self.findings;
         file.metrics = self.metrics;
         file.structure = self.structure;

@@ -1298,6 +1298,12 @@ impl RawContentRegexIndex {
         self.total_patterns > 0
     }
 
+    /// Number of distinct traits indexed for raw content regex prefiltering.
+    #[cfg(test)]
+    pub(crate) fn indexed_trait_count(&self) -> usize {
+        self.indexed_traits.len()
+    }
+
     /// Check if any of the given trait indices have content regex patterns
     pub(crate) fn has_applicable_patterns(&self, applicable: &[usize]) -> bool {
         applicable

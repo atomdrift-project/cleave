@@ -3,8 +3,11 @@
 //! Caches `AnalysisReport` results keyed by `(file SHA256, options hash, traits timestamp)`.
 //! Reports are stored as zstd-compressed JSON blobs in a SQLite database with WAL mode.
 //!
-//! The cache is transparent and gracefully degrades — if SQLite fails to open or any
-//! operation errors, analysis proceeds normally without caching.
+//! # Concurrency
+//!
+//! Each thread holds its own `Connection` to the database. WAL mode allows all reader
+//! threads to proceed concurrently without blocking each other. Writers briefly hold the
+//! WAL write lock during the insert — reads are never blocked by writes in WAL mode.
 //!
 //! # Cache Invalidation
 //!
@@ -24,136 +27,175 @@ use crate::cache::{cache_dir, cache_timestamp};
 use crate::types::AnalysisReport;
 use crate::AnalysisOptions;
 use rusqlite::Connection;
+use std::cell::RefCell;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Mutex, OnceLock};
+use std::sync::OnceLock;
 use std::time::SystemTime;
 
 /// Maximum number of cached entries before eviction triggers.
 const MAX_ENTRIES: i64 = 100_000;
 
 /// Reciprocal probability of running eviction on each store (1-in-N).
-const EVICTION_CHECK_INTERVAL: i64 = 100;
+const EVICTION_CHECK_INTERVAL: u64 = 100;
 
-/// SQLite-backed analysis result cache.
-struct AnalysisCache {
-    conn: Mutex<Connection>,
-    store_count: AtomicU64,
+/// Global store counter for eviction scheduling, shared across all threads.
+static STORE_COUNT: AtomicU64 = AtomicU64::new(0);
+
+/// Database path, resolved once at first use. `None` means caching is disabled.
+static DB_PATH: OnceLock<Option<PathBuf>> = OnceLock::new();
+
+// Per-thread SQLite connection. Initialized lazily on first use.
+thread_local! {
+    static CONN: RefCell<Option<Connection>> = const { RefCell::new(None) };
 }
 
-impl AnalysisCache {
-    /// Open or create the cache database.
-    fn open() -> Result<Self, rusqlite::Error> {
-        let db_path = cache_dir()
-            .map(|d| d.join("analysis-cache.db"))
-            .map_err(|e| rusqlite::Error::InvalidParameterName(format!("cache dir: {e}")))?;
-
-        let conn = Connection::open(&db_path)?;
-
-        // WAL mode for concurrent read/write access
-        conn.pragma_update(None, "journal_mode", "WAL")?;
-        // NORMAL sync is safe with WAL and significantly faster
-        conn.pragma_update(None, "synchronous", "NORMAL")?;
-        // Wait up to 1s for locks instead of failing immediately
-        conn.pragma_update(None, "busy_timeout", 1000)?;
-
-        conn.execute_batch(
-            "CREATE TABLE IF NOT EXISTS analysis_cache (
-                sha256 TEXT NOT NULL,
-                options_hash TEXT NOT NULL,
-                traits_timestamp INTEGER NOT NULL,
-                report BLOB NOT NULL,
-                created_at INTEGER NOT NULL,
-                last_accessed INTEGER NOT NULL,
-                PRIMARY KEY (sha256, options_hash, traits_timestamp)
-            );
-            CREATE INDEX IF NOT EXISTS idx_last_accessed
-                ON analysis_cache(last_accessed);",
-        )?;
-
-        tracing::debug!(path = %db_path.display(), "Analysis cache opened");
-
-        Ok(Self {
-            conn: Mutex::new(conn),
-            store_count: AtomicU64::new(0),
-        })
-    }
-
-    /// Look up a cached report. Returns `None` on miss or any error.
-    fn lookup(&self, sha256: &str, opts_hash: &str, traits_ts: i64) -> Option<AnalysisReport> {
-        let conn = self.conn.lock().ok()?;
-
-        let compressed: Vec<u8> = conn
-            .prepare_cached(
-                "SELECT report FROM analysis_cache
-                 WHERE sha256 = ?1 AND options_hash = ?2 AND traits_timestamp = ?3",
-            )
-            .ok()?
-            .query_row(rusqlite::params![sha256, opts_hash, traits_ts], |row| {
-                row.get(0)
-            })
-            .ok()?;
-
-        // Update last_accessed (best-effort)
-        let now = unix_timestamp();
-        let _ = conn.execute(
-            "UPDATE analysis_cache SET last_accessed = ?1
-             WHERE sha256 = ?2 AND options_hash = ?3 AND traits_timestamp = ?4",
-            rusqlite::params![now, sha256, opts_hash, traits_ts],
-        );
-
-        let json = zstd::decode_all(compressed.as_slice()).ok()?;
-        serde_json::from_slice(&json).ok()
-    }
-
-    /// Store a report in the cache. Silently ignores errors.
-    fn store(&self, sha256: &str, opts_hash: &str, traits_ts: i64, report: &AnalysisReport) {
-        let Ok(json) = serde_json::to_vec(report) else {
-            return;
-        };
-        let Ok(compressed) = zstd::encode_all(json.as_slice(), 3) else {
-            return;
-        };
-        let now = unix_timestamp();
-        if let Ok(conn) = self.conn.lock() {
-            let _ = conn.execute(
-                "INSERT OR REPLACE INTO analysis_cache
-                 (sha256, options_hash, traits_timestamp, report, created_at, last_accessed)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?5)",
-                rusqlite::params![sha256, opts_hash, traits_ts, compressed, now],
-            );
-        }
-    }
-
-    /// Periodically evict old entries when the cache is too large.
-    fn maybe_evict(&self) {
-        // Only check every N stores to amortize the cost
-        let count = self.store_count.fetch_add(1, Ordering::Relaxed);
-        if !count.is_multiple_of(EVICTION_CHECK_INTERVAL as u64) {
-            return;
-        }
-
-        let Ok(conn) = self.conn.lock() else {
-            return;
-        };
-
-        let count: i64 = conn
-            .query_row("SELECT COUNT(*) FROM analysis_cache", [], |row| row.get(0))
-            .unwrap_or(0);
-
-        if count > MAX_ENTRIES {
-            let to_delete = count / 10;
-            let deleted = conn.execute(
-                "DELETE FROM analysis_cache WHERE rowid IN
-                 (SELECT rowid FROM analysis_cache ORDER BY last_accessed ASC LIMIT ?1)",
-                rusqlite::params![to_delete],
-            );
-            if let Ok(n) = deleted {
-                tracing::info!(
-                    deleted = n,
-                    remaining = count - n as i64,
-                    "Evicted old cache entries"
-                );
+/// Resolve the database path, or `None` if caching is disabled or unavailable.
+fn db_path() -> Option<&'static Path> {
+    DB_PATH
+        .get_or_init(|| {
+            if std::env::var("CLEAVE_SKIP_CACHE")
+                .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+                .unwrap_or(false)
+            {
+                tracing::info!("Analysis cache disabled via CLEAVE_SKIP_CACHE");
+                return None;
             }
+            match cache_dir() {
+                Ok(dir) => Some(dir.join("analysis-cache.db")),
+                Err(e) => {
+                    tracing::warn!("Cache directory unavailable: {}", e);
+                    None
+                }
+            }
+        })
+        .as_deref()
+}
+
+/// Open a new connection to `path` with WAL mode and the cache schema.
+fn open_connection(path: &Path) -> Result<Connection, rusqlite::Error> {
+    let conn = Connection::open(path)?;
+    conn.pragma_update(None, "journal_mode", "WAL")?;
+    conn.pragma_update(None, "synchronous", "NORMAL")?;
+    // Generous timeout: concurrent writers briefly hold the WAL write lock.
+    conn.pragma_update(None, "busy_timeout", 5000)?;
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS analysis_cache (
+            sha256 TEXT NOT NULL,
+            options_hash TEXT NOT NULL,
+            traits_timestamp INTEGER NOT NULL,
+            report BLOB NOT NULL,
+            created_at INTEGER NOT NULL,
+            last_accessed INTEGER NOT NULL,
+            PRIMARY KEY (sha256, options_hash, traits_timestamp)
+        );
+        CREATE INDEX IF NOT EXISTS idx_last_accessed
+            ON analysis_cache(last_accessed);",
+    )?;
+    tracing::debug!(path = %path.display(), "Analysis cache connection opened");
+    Ok(conn)
+}
+
+/// Execute `f` with this thread's SQLite connection, initializing it if needed.
+/// Returns `None` if caching is disabled or the connection cannot be established.
+fn with_conn<T>(f: impl FnOnce(&Connection) -> T) -> Option<T> {
+    let path = db_path()?;
+    CONN.with(|cell| {
+        let mut opt = cell.borrow_mut();
+        if opt.is_none() {
+            *opt = open_connection(path)
+                .or_else(|e| {
+                    // Database may be corrupt — delete and recreate.
+                    tracing::debug!("Cache open failed, recreating: {}", e);
+                    let _ = std::fs::remove_file(path);
+                    let _ = std::fs::remove_file(path.with_extension("db-wal"));
+                    let _ = std::fs::remove_file(path.with_extension("db-shm"));
+                    open_connection(path)
+                })
+                .map_err(|e| tracing::warn!("Analysis cache unavailable: {}", e))
+                .ok();
+        }
+        opt.as_ref().map(f)
+    })
+}
+
+/// Look up a report in `conn`. Returns `None` on miss.
+fn lookup_conn(
+    conn: &Connection,
+    sha256: &str,
+    opts_hash: &str,
+    traits_ts: i64,
+) -> Option<AnalysisReport> {
+    let compressed: Vec<u8> = conn
+        .prepare_cached(
+            "SELECT report FROM analysis_cache
+             WHERE sha256 = ?1 AND options_hash = ?2 AND traits_timestamp = ?3",
+        )
+        .ok()?
+        .query_row(rusqlite::params![sha256, opts_hash, traits_ts], |row| {
+            row.get(0)
+        })
+        .ok()?;
+
+    // Update last_accessed best-effort; may lose the race with another writer, that's fine.
+    let now = unix_timestamp();
+    let _ = conn.execute(
+        "UPDATE analysis_cache SET last_accessed = ?1
+         WHERE sha256 = ?2 AND options_hash = ?3 AND traits_timestamp = ?4",
+        rusqlite::params![now, sha256, opts_hash, traits_ts],
+    );
+
+    let json = zstd::decode_all(compressed.as_slice()).ok()?;
+    serde_json::from_slice(&json).ok()
+}
+
+/// Store a report in `conn`. Silently ignores errors.
+fn store_conn(
+    conn: &Connection,
+    sha256: &str,
+    opts_hash: &str,
+    traits_ts: i64,
+    report: &AnalysisReport,
+) {
+    let Ok(json) = serde_json::to_vec(report) else {
+        return;
+    };
+    let Ok(compressed) = zstd::encode_all(json.as_slice(), 3) else {
+        return;
+    };
+    let now = unix_timestamp();
+    let _ = conn.execute(
+        "INSERT OR REPLACE INTO analysis_cache
+         (sha256, options_hash, traits_timestamp, report, created_at, last_accessed)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?5)",
+        rusqlite::params![sha256, opts_hash, traits_ts, compressed, now],
+    );
+}
+
+/// Evict the oldest 10% of entries if the cache exceeds `MAX_ENTRIES`.
+/// Uses a global counter so eviction is distributed across threads without duplication.
+fn maybe_evict(conn: &Connection) {
+    let count = STORE_COUNT.fetch_add(1, Ordering::Relaxed);
+    if !count.is_multiple_of(EVICTION_CHECK_INTERVAL) {
+        return;
+    }
+
+    let total: i64 = conn
+        .query_row("SELECT COUNT(*) FROM analysis_cache", [], |row| row.get(0))
+        .unwrap_or(0);
+
+    if total > MAX_ENTRIES {
+        let to_delete = total / 10;
+        if let Ok(n) = conn.execute(
+            "DELETE FROM analysis_cache WHERE rowid IN
+             (SELECT rowid FROM analysis_cache ORDER BY last_accessed ASC LIMIT ?1)",
+            rusqlite::params![to_delete],
+        ) {
+            tracing::info!(
+                deleted = n,
+                remaining = total - n as i64,
+                "Evicted old cache entries"
+            );
         }
     }
 }
@@ -201,77 +243,36 @@ fn unix_timestamp() -> i64 {
         .unwrap_or(0)
 }
 
-/// Global singleton cache instance.
-static ANALYSIS_CACHE: OnceLock<Option<AnalysisCache>> = OnceLock::new();
-
-/// Get the global analysis cache, initializing on first use.
-/// Returns `None` if caching is disabled or initialization fails.
-fn analysis_cache() -> Option<&'static AnalysisCache> {
-    ANALYSIS_CACHE
-        .get_or_init(|| {
-            if std::env::var("CLEAVE_SKIP_CACHE")
-                .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-                .unwrap_or(false)
-            {
-                tracing::info!("Analysis cache disabled via CLEAVE_SKIP_CACHE");
-                return None;
-            }
-            match AnalysisCache::open() {
-                Ok(cache) => Some(cache),
-                Err(e) => {
-                    // Cache is corrupt — delete and recreate
-                    tracing::debug!("Analysis cache open failed, recreating: {}", e);
-                    if let Ok(dir) = cache_dir() {
-                        let db_path = dir.join("analysis-cache.db");
-                        // Remove the main DB and any WAL/SHM files
-                        let _ = std::fs::remove_file(&db_path);
-                        let _ = std::fs::remove_file(db_path.with_extension("db-wal"));
-                        let _ = std::fs::remove_file(db_path.with_extension("db-shm"));
-                    }
-                    match AnalysisCache::open() {
-                        Ok(cache) => Some(cache),
-                        Err(e2) => {
-                            tracing::warn!("Failed to recreate analysis cache: {}", e2);
-                            None
-                        }
-                    }
-                }
-            }
-        })
-        .as_ref()
-}
-
 /// Look up a cached analysis report for the given file hash and options.
 ///
 /// Returns `Some(report)` on cache hit, `None` on miss or if caching is unavailable.
 pub(crate) fn cache_lookup(sha256: &str, options: &AnalysisOptions) -> Option<AnalysisReport> {
-    let cache = analysis_cache()?;
     let opts_hash = options_hash(options);
     let traits_ts = traits_timestamp_secs()?;
-    cache.lookup(sha256, &opts_hash, traits_ts)
+    with_conn(|conn| lookup_conn(conn, sha256, &opts_hash, traits_ts)).flatten()
 }
 
 /// Count entries currently in the analysis cache. Returns `None` if unavailable.
 pub(crate) fn cache_entry_count() -> Option<i64> {
-    let cache = analysis_cache()?;
-    let conn = cache.conn.lock().ok()?;
-    conn.query_row("SELECT COUNT(*) FROM analysis_cache", [], |row| row.get(0))
-        .ok()
+    with_conn(|conn| {
+        conn.query_row("SELECT COUNT(*) FROM analysis_cache", [], |row| row.get(0))
+            .ok()
+    })
+    .flatten()
 }
 
 /// Store an analysis report in the cache.
 ///
 /// Silently does nothing if caching is unavailable or any error occurs.
 pub(crate) fn cache_store(sha256: &str, options: &AnalysisOptions, report: &AnalysisReport) {
-    let Some(cache) = analysis_cache() else {
-        return;
-    };
     let opts_hash = options_hash(options);
     let Some(traits_ts) = traits_timestamp_secs() else {
         return;
     };
-    cache.store(sha256, &opts_hash, traits_ts, report);
-    cache.maybe_evict();
+    with_conn(|conn| {
+        store_conn(conn, sha256, &opts_hash, traits_ts, report);
+        maybe_evict(conn);
+    });
 }
 
 #[cfg(test)]
@@ -290,12 +291,9 @@ mod tests {
         AnalysisReport::new(target)
     }
 
-    fn test_cache() -> AnalysisCache {
-        // Use in-memory SQLite for tests
+    fn test_conn() -> Connection {
         #[allow(clippy::expect_used)]
         let conn = Connection::open_in_memory().expect("in-memory SQLite must succeed in test");
-        // WAL may not work with in-memory, that's fine for tests
-        let _ = conn.pragma_update(None, "journal_mode", "WAL");
         #[allow(clippy::expect_used)]
         conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS analysis_cache (
@@ -311,23 +309,19 @@ mod tests {
                 ON analysis_cache(last_accessed);",
         )
         .expect("table creation must succeed in test");
-
-        AnalysisCache {
-            conn: Mutex::new(conn),
-            store_count: AtomicU64::new(0),
-        }
+        conn
     }
 
     #[test]
     fn test_roundtrip() {
-        let cache = test_cache();
+        let conn = test_conn();
         let sha = "abc123def456";
         let opts = "test_opts";
         let ts = 1700000000_i64;
         let report = test_report(sha);
 
-        cache.store(sha, opts, ts, &report);
-        let cached = cache.lookup(sha, opts, ts);
+        store_conn(&conn, sha, opts, ts, &report);
+        let cached = lookup_conn(&conn, sha, opts, ts);
 
         assert!(cached.is_some());
         #[allow(clippy::expect_used)]
@@ -339,41 +333,32 @@ mod tests {
 
     #[test]
     fn test_cache_miss_wrong_sha256() {
-        let cache = test_cache();
+        let conn = test_conn();
         let opts = "test_opts";
         let ts = 1700000000_i64;
-        let report = test_report("abc123");
 
-        cache.store("abc123", opts, ts, &report);
-        let cached = cache.lookup("different_sha", opts, ts);
-
-        assert!(cached.is_none());
+        store_conn(&conn, "abc123", opts, ts, &test_report("abc123"));
+        assert!(lookup_conn(&conn, "different_sha", opts, ts).is_none());
     }
 
     #[test]
     fn test_cache_miss_wrong_timestamp() {
-        let cache = test_cache();
+        let conn = test_conn();
         let sha = "abc123";
         let opts = "test_opts";
-        let report = test_report(sha);
 
-        cache.store(sha, opts, 1700000000, &report);
-        let cached = cache.lookup(sha, opts, 1700000001);
-
-        assert!(cached.is_none());
+        store_conn(&conn, sha, opts, 1700000000, &test_report(sha));
+        assert!(lookup_conn(&conn, sha, opts, 1700000001).is_none());
     }
 
     #[test]
     fn test_cache_miss_wrong_options() {
-        let cache = test_cache();
+        let conn = test_conn();
         let sha = "abc123";
         let ts = 1700000000_i64;
-        let report = test_report(sha);
 
-        cache.store(sha, "opts_a", ts, &report);
-        let cached = cache.lookup(sha, "opts_b", ts);
-
-        assert!(cached.is_none());
+        store_conn(&conn, sha, "opts_a", ts, &test_report(sha));
+        assert!(lookup_conn(&conn, sha, "opts_b", ts).is_none());
     }
 
     #[test]
@@ -398,23 +383,19 @@ mod tests {
 
     #[test]
     fn test_store_replaces_existing() {
-        let cache = test_cache();
+        let conn = test_conn();
         let sha = "abc123";
         let opts = "test_opts";
         let ts = 1700000000_i64;
 
-        let report1 = test_report(sha);
-        cache.store(sha, opts, ts, &report1);
+        store_conn(&conn, sha, opts, ts, &test_report(sha));
 
-        // Store a different report with same key
         let mut report2 = test_report(sha);
         report2.target.file_type = "pe".to_string();
-        cache.store(sha, opts, ts, &report2);
+        store_conn(&conn, sha, opts, ts, &report2);
 
-        let cached = cache.lookup(sha, opts, ts);
-        assert!(cached.is_some());
         #[allow(clippy::expect_used)]
-        let cached = cached.expect("cache hit expected");
+        let cached = lookup_conn(&conn, sha, opts, ts).expect("cache hit expected");
         assert_eq!(cached.target.file_type, "pe");
     }
 }

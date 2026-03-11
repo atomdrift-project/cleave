@@ -314,6 +314,29 @@ impl ElfAnalyzer {
                     source_file: None,
                 });
 
+                // Extract architecture from raw header even when full parse fails.
+                // e_machine is at offset 18 (2 bytes), endianness from EI_DATA at offset 5.
+                if data.len() >= 20 {
+                    let is_big_endian = data.get(5) == Some(&2);
+                    let e_machine = if is_big_endian {
+                        u16::from_be_bytes([data[18], data[19]])
+                    } else {
+                        u16::from_le_bytes([data[18], data[19]])
+                    };
+                    let arch = self.arch_name_from_machine(e_machine);
+                    report.structure.push(StructuralFeature {
+                        id: format!("binary/arch/{}", arch),
+                        desc: format!("{} architecture", arch),
+                        evidence: vec![Evidence {
+                            method: "header".to_string(),
+                            source: "raw_header".to_string(),
+                            value: format!("e_machine={}", e_machine),
+                            ..Default::default()
+                        }],
+                    });
+                    report.target.architectures = Some(vec![arch]);
+                }
+
                 report
                     .metadata
                     .errors
@@ -585,13 +608,24 @@ impl ElfAnalyzer {
     }
 
     fn arch_name<'a>(&self, elf: &Elf<'a>) -> String {
-        match elf.header.e_machine {
+        self.arch_name_from_machine(elf.header.e_machine)
+    }
+
+    fn arch_name_from_machine(&self, e_machine: u16) -> String {
+        match e_machine {
             goblin::elf::header::EM_X86_64 => "x86_64".to_string(),
             goblin::elf::header::EM_386 => "i386".to_string(),
             goblin::elf::header::EM_AARCH64 => "aarch64".to_string(),
             goblin::elf::header::EM_ARM => "arm".to_string(),
             goblin::elf::header::EM_RISCV => "riscv".to_string(),
-            _ => format!("unknown_{}", elf.header.e_machine),
+            goblin::elf::header::EM_MIPS => "mips".to_string(),
+            goblin::elf::header::EM_PPC => "powerpc".to_string(),
+            goblin::elf::header::EM_PPC64 => "powerpc64".to_string(),
+            goblin::elf::header::EM_SPARC | 18 | 43 => "sparc".to_string(), // SPARC, SPARC32PLUS, SPARCV9
+            goblin::elf::header::EM_68K => "m68k".to_string(),
+            22 => "s390".to_string(),   // S390
+            42 => "superh".to_string(), // SH
+            _ => format!("unknown_{}", e_machine),
         }
     }
     /// Compute ELF-specific metrics from parsed ELF binary

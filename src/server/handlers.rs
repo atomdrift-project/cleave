@@ -21,7 +21,9 @@ pub(super) async fn health(State(state): State<Arc<AppState>>) -> Response {
     let rss_mb = crate::memory_tracker::current_rss()
         .map(|b| b / 1024 / 1024)
         .unwrap_or(0);
-    let active_tasks = state.active_tasks.load(std::sync::atomic::Ordering::Relaxed);
+    let active_tasks = state
+        .active_tasks
+        .load(std::sync::atomic::Ordering::Relaxed);
     let overloaded = rss_mb > 0 && rss_mb * 1024 * 1024 > state.max_rss_bytes;
     if overloaded {
         return (
@@ -380,7 +382,7 @@ fn check_memory_pressure(state: &AppState) -> Option<Response> {
         rss_mb = rss / 1024 / 1024,
         "Memory pressure detected, clearing thread-local caches"
     );
-    tokio::task::block_in_place(|| crate::clear_all_thread_caches());
+    tokio::task::block_in_place(crate::clear_all_thread_caches);
 
     // Re-check after clearing caches
     let rss_after = crate::memory_tracker::current_rss()?;
@@ -719,8 +721,7 @@ async fn analyze_path_inner(
 /// counter grows while RSS grows.
 pub(super) async fn memory_stats(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
     // SQLite COUNT(*) can briefly block, so run it off the async thread.
-    let cache_entries =
-        tokio::task::spawn_blocking(crate::analysis_cache::cache_entry_count).await;
+    let cache_entries = tokio::task::spawn_blocking(crate::analysis_cache::cache_entry_count).await;
     let cache_entries = cache_entries.unwrap_or(None);
 
     let rss_mb = crate::memory_tracker::current_rss().map(|b| b / 1024 / 1024);
@@ -746,8 +747,7 @@ pub(super) async fn memory_stats(State(state): State<Arc<AppState>>) -> Json<ser
 
     let mapper_stats = crate::shared_resources::capability_mapper_stats();
 
-    let (rizin_total, rizin_ok, rizin_timeouts, rizin_failures) =
-        crate::radare2::rizin_stats();
+    let (rizin_total, rizin_ok, rizin_timeouts, rizin_failures) = crate::radare2::rizin_stats();
 
     Json(serde_json::json!({
         "process": {
@@ -805,11 +805,7 @@ pub(super) async fn requests(State(state): State<Arc<AppState>>) -> Json<serde_j
         .collect();
 
     // Sort by elapsed descending so the longest-running request is first.
-    entries.sort_by(|a, b| {
-        b["elapsed_ms"]
-            .as_u64()
-            .cmp(&a["elapsed_ms"].as_u64())
-    });
+    entries.sort_by(|a, b| b["elapsed_ms"].as_u64().cmp(&a["elapsed_ms"].as_u64()));
 
     Json(serde_json::json!({
         "count": entries.len(),
@@ -828,9 +824,7 @@ pub(super) async fn requests(State(state): State<Arc<AppState>>) -> Json<serde_j
 pub(super) async fn threads() -> Json<serde_json::Value> {
     // Reading /proc is blocking I/O.
     let info = tokio::task::spawn_blocking(read_thread_info).await;
-    let info = info.unwrap_or_else(|_| {
-        serde_json::json!({"error": "failed to read thread info"})
-    });
+    let info = info.unwrap_or_else(|_| serde_json::json!({"error": "failed to read thread info"}));
     Json(info)
 }
 
@@ -948,9 +942,7 @@ fn read_thread_info_freebsd() -> serde_json::Value {
     // Add 25% slack — threads can be created between the two sysctl calls.
     len += len / 4;
     let count = len / mem::size_of::<libc::kinfo_proc>();
-    let mut procs: Vec<libc::kinfo_proc> = (0..count)
-        .map(|_| unsafe { mem::zeroed() })
-        .collect();
+    let mut procs: Vec<libc::kinfo_proc> = (0..count).map(|_| unsafe { mem::zeroed() }).collect();
     let mut actual_len = len;
 
     let ret = unsafe {

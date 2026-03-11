@@ -721,7 +721,8 @@ pub(crate) fn eval_raw<'a>(
             }
         } else {
             // UNICODE PATH: Use cached UTF-8 conversion for Unicode regex
-            let content = super::get_utf8_cached(ctx.binary_data, (search_start, search_end));
+            let content =
+                super::get_utf8_cached(ctx.binary_data, (search_start, search_end), ctx.file_id());
             let mut first_match = None;
             let mut first_offset = None;
             for (idx, mat) in re.find_iter(&content).enumerate() {
@@ -799,7 +800,8 @@ pub(crate) fn eval_raw<'a>(
             }
         } else {
             // Unicode pattern - use cached UTF-8 conversion
-            let content = super::get_utf8_cached(ctx.binary_data, (search_start, search_end));
+            let content =
+                super::get_utf8_cached(ctx.binary_data, (search_start, search_end), ctx.file_id());
 
             let matched = if case_insensitive {
                 content.eq_ignore_ascii_case(exact_str)
@@ -981,7 +983,8 @@ pub(crate) fn eval_raw<'a>(
             }
         } else {
             // Unicode pattern - fall back to cached UTF-8 conversion
-            let content = super::get_utf8_cached(ctx.binary_data, (search_start, search_end));
+            let content =
+                super::get_utf8_cached(ctx.binary_data, (search_start, search_end), ctx.file_id());
 
             if external_ip {
                 // For external_ip validation, we need to find actual match positions

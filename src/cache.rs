@@ -13,7 +13,9 @@
 //!
 //! # Cleanup
 //!
-//! Cache entries older than 30 days are automatically pruned.
+//! Versioned compiled-rule caches (`yara-rules-*.bin`, `capability-mapper-*.bin`) are
+//! pruned automatically when a new version is written. RE cache entries (`re/`) are pruned
+//! at server startup via `prune_re_cache()`; they are not evicted automatically on CLI use.
 
 use anyhow::{Context, Result};
 use std::fs;
@@ -228,6 +230,45 @@ pub(crate) fn re_cache_dir() -> Result<PathBuf> {
         fs::create_dir_all(&dir).context("Failed to create RE cache directory")?;
     }
     Ok(dir)
+}
+
+/// Prune RE cache entries older than `max_age_secs`.
+///
+/// The `re/` subdirectory has no automatic eviction and grows without bound as
+/// new unique binaries are analyzed. Call this periodically (e.g. server startup
+/// or scheduled task) to prevent unbounded disk growth.
+#[allow(dead_code)] // Called from server::run; binary crate can't see cross-crate usage
+pub(crate) fn prune_re_cache(max_age_secs: u64) -> usize {
+    let Ok(re_dir) = re_cache_dir() else {
+        return 0;
+    };
+    let cutoff = std::time::SystemTime::now()
+        .checked_sub(std::time::Duration::from_secs(max_age_secs))
+        .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+
+    let mut removed = 0usize;
+    let Ok(subdirs) = fs::read_dir(&re_dir) else {
+        return 0;
+    };
+    for subdir in subdirs.flatten() {
+        let Ok(entries) = fs::read_dir(subdir.path()) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if !path.is_file() {
+                continue;
+            }
+            let stale = fs::metadata(&path)
+                .and_then(|m| m.modified())
+                .map(|mtime| mtime < cutoff)
+                .unwrap_or(false);
+            if stale && fs::remove_file(&path).is_ok() {
+                removed += 1;
+            }
+        }
+    }
+    removed
 }
 
 /// Get the cache path for a reverse engineering analysis result by SHA256

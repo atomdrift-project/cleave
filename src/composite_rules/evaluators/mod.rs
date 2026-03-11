@@ -261,11 +261,11 @@ thread_local! {
 }
 
 /// Cache key for UTF-8 conversion results.
-/// Uses file identity (pointer + length) and range to uniquely identify cached conversions.
+/// Uses file identity (SHA256 hash) and range to uniquely identify cached conversions.
 #[derive(Hash, Eq, PartialEq, Clone)]
 struct Utf8CacheKey {
-    /// Identifies the file (pointer address + length combo is unique per analysis)
-    file_id: (usize, usize), // (ptr address, length)
+    /// Unique identifier for the file (u64 hash of SHA256)
+    file_id: u64,
     /// Range within the file (start, end)
     range: (usize, usize),
 }
@@ -276,15 +276,17 @@ struct Utf8CacheKey {
 /// # Arguments
 /// * `binary_data` - The full binary data slice
 /// * `range` - The (start, end) range to convert
+/// * `file_id` - Unique ID for the file (hash of SHA256)
 ///
 /// # Returns
 /// Arc<str> containing the UTF-8 lossy conversion (reference counted for cheap cloning)
 #[must_use]
-pub(crate) fn get_utf8_cached(binary_data: &[u8], range: (usize, usize)) -> std::sync::Arc<str> {
-    let key = Utf8CacheKey {
-        file_id: (binary_data.as_ptr() as usize, binary_data.len()),
-        range,
-    };
+pub(crate) fn get_utf8_cached(
+    binary_data: &[u8],
+    range: (usize, usize),
+    file_id: u64,
+) -> std::sync::Arc<str> {
+    let key = Utf8CacheKey { file_id, range };
 
     UTF8_CACHE.with(|cache| {
         let mut cache = cache.borrow_mut();
@@ -349,15 +351,15 @@ pub(crate) fn build_regex(pattern: &str, case_insensitive: bool) -> anyhow::Resu
     let cache = regex_cache();
     let key = (pattern.to_string(), case_insensitive);
 
-    // Check cache first (read lock)
+    // Check cache with read lock using peek (no LRU promotion, no write needed)
     {
-        let mut cache_guard = cache.write();
-        if let Some(re) = cache_guard.get(&key) {
+        let cache_guard = cache.read();
+        if let Some(re) = cache_guard.peek(&key) {
             return Ok(re.clone());
         }
     }
 
-    // Compile outside lock
+    // Compile outside the lock
     let regex = if case_insensitive {
         Regex::new(&format!("(?i){}", pattern))?
     } else {

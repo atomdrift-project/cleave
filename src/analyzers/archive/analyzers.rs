@@ -68,6 +68,17 @@ pub(crate) fn log_archive_analysis_stats() {
     );
 }
 
+/// Clear thread-local caches on all ARCHIVE_POOL threads.
+///
+/// `rayon::broadcast` only reaches the global rayon pool. The archive pool is a
+/// separate `ThreadPool`, so its threads must be broadcast to independently.
+#[allow(dead_code)] // Called from lib.rs; binary crate can't see cross-crate usage
+pub(crate) fn clear_archive_pool_caches() {
+    ARCHIVE_POOL.broadcast(|_| {
+        crate::composite_rules::evaluators::clear_thread_local_caches();
+    });
+}
+
 impl ArchiveAnalyzer {
     /// Analyze JAR-like archives (JAR, WAR, EAR, APK, AAR) with optimized class file handling.
     ///
@@ -435,28 +446,34 @@ impl ArchiveAnalyzer {
                         traits.insert(f.id.clone());
                         caps.insert(f.id.clone());
                         if !all_traits.iter().any(|existing| existing.id == f.id) {
-                            let mut new_finding = f.clone();
-                            for evidence in &mut new_finding.evidence {
-                                // Prefix location with archive path
-                                match &evidence.location {
-                                    None => {
-                                        evidence.location = Some(archive_location.clone());
+                            // LIMIT: Cap at 10,000 findings per archive analysis phase
+                            if all_traits.len() < 10_000 {
+                                let mut new_finding = f.clone();
+                                for evidence in &mut new_finding.evidence {
+                                    // Prefix location with archive path
+                                    match &evidence.location {
+                                        None => {
+                                            evidence.location = Some(archive_location.clone());
+                                        }
+                                        Some(loc) if !loc.starts_with("archive:") => {
+                                            evidence.location =
+                                                Some(format!("{}:{}", archive_location, loc));
+                                        }
+                                        _ => {} // Already has archive: prefix from nested analysis
                                     }
-                                    Some(loc) if !loc.starts_with("archive:") => {
-                                        evidence.location =
-                                            Some(format!("{}:{}", archive_location, loc));
-                                    }
-                                    _ => {} // Already has archive: prefix from nested analysis
                                 }
+                                all_traits.push(new_finding);
                             }
-                            all_traits.push(new_finding);
                         }
                     }
 
                     // Aggregate YARA matches
                     for yara_match in &file_report.yara_matches {
                         if !all_yara.iter().any(|m| m.rule == yara_match.rule) {
-                            all_yara.push(yara_match.clone());
+                            // LIMIT: Cap YARA matches at 1,000
+                            if all_yara.len() < 1_000 {
+                                all_yara.push(yara_match.clone());
+                            }
                         }
                     }
 
@@ -466,7 +483,10 @@ impl ArchiveAnalyzer {
                             string.string_type,
                             StringType::Url | StringType::IP | StringType::Base64
                         ) {
-                            all_strings.push(string.clone());
+                            // LIMIT: Cap aggregated strings at 10,000
+                            if all_strings.len() < 10_000 {
+                                all_strings.push(string.clone());
+                            }
                         }
                     }
 
@@ -476,11 +496,18 @@ impl ArchiveAnalyzer {
                     file_entry.path = entry_path.clone();
                     file_entry.depth = 1;
                     file_entry.compute_summary();
-                    all_files.push(file_entry);
+
+                    // LIMIT: Cap individual file reports at 1,000 to prevent heap exhaustion
+                    if all_files.len() < 1_000 {
+                        all_files.push(file_entry);
+                    }
 
                     // Merge archive_contents from nested archives
                     for nested_entry in archive_contents {
-                        all_archive_entries.push(nested_entry);
+                        // LIMIT: Cap total archive entries at 10,000
+                        if all_archive_entries.len() < 10_000 {
+                            all_archive_entries.push(nested_entry);
+                        }
                     }
 
                     // Handle nested archives
@@ -727,28 +754,34 @@ impl ArchiveAnalyzer {
                         traits.insert(f.id.clone());
                         caps.insert(f.id.clone());
                         if !all_traits.iter().any(|existing| existing.id == f.id) {
-                            let mut new_finding = f.clone();
-                            for evidence in &mut new_finding.evidence {
-                                // Prefix location with archive path
-                                match &evidence.location {
-                                    None => {
-                                        evidence.location = Some(archive_location.clone());
+                            // LIMIT: Cap findings at 10,000
+                            if all_traits.len() < 10_000 {
+                                let mut new_finding = f.clone();
+                                for evidence in &mut new_finding.evidence {
+                                    // Prefix location with archive path
+                                    match &evidence.location {
+                                        None => {
+                                            evidence.location = Some(archive_location.clone());
+                                        }
+                                        Some(loc) if !loc.starts_with("archive:") => {
+                                            evidence.location =
+                                                Some(format!("{}:{}", archive_location, loc));
+                                        }
+                                        _ => {} // Already has archive: prefix from nested analysis
                                     }
-                                    Some(loc) if !loc.starts_with("archive:") => {
-                                        evidence.location =
-                                            Some(format!("{}:{}", archive_location, loc));
-                                    }
-                                    _ => {} // Already has archive: prefix from nested analysis
                                 }
+                                all_traits.push(new_finding);
                             }
-                            all_traits.push(new_finding);
                         }
                     }
 
                     // Aggregate YARA matches
                     for yara_match in &file_entry.yara_matches {
                         if !all_yara.iter().any(|m| m.rule == yara_match.rule) {
-                            all_yara.push(yara_match.clone());
+                            // LIMIT: Cap YARA matches at 1,000
+                            if all_yara.len() < 1_000 {
+                                all_yara.push(yara_match.clone());
+                            }
                         }
                     }
 
@@ -758,15 +791,24 @@ impl ArchiveAnalyzer {
                             string.string_type,
                             StringType::Url | StringType::IP | StringType::Base64
                         ) {
-                            all_strings.push(string.clone());
+                            // LIMIT: Cap aggregated strings at 10,000
+                            if all_strings.len() < 10_000 {
+                                all_strings.push(string.clone());
+                            }
                         }
                     }
 
-                    all_files.push(file_entry);
+                    // LIMIT: Cap total files at 1,000 to prevent heap exhaustion
+                    if all_files.len() < 1_000 {
+                        all_files.push(file_entry.clone());
+                    }
 
                     // Merge archive_contents from nested archives
                     for nested_entry in archive_contents {
-                        all_archive_entries.push(nested_entry);
+                        // LIMIT: Cap archive entries at 10,000
+                        if all_archive_entries.len() < 10_000 {
+                            all_archive_entries.push(nested_entry);
+                        }
                     }
 
                     // Handle nested archives - add their files with updated paths
@@ -776,7 +818,11 @@ impl ArchiveAnalyzer {
                             nested_file.path = encode_archive_path(&entry_path, &nested_file.path);
                         }
                         nested_file.depth += 1; // Increment depth for nesting
-                        all_files.push(nested_file);
+
+                        // LIMIT: Cap nested files at total 1,000
+                        if all_files.len() < 1_000 {
+                            all_files.push(nested_file);
+                        }
                     }
                 }
             })

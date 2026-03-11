@@ -132,6 +132,15 @@ pub async fn run(config: ServerConfig) -> anyhow::Result<()> {
         overloaded_since: parking_lot::Mutex::new(None),
     });
 
+    // Prune stale RE disk-cache entries on startup (unbounded without eviction).
+    // 30-day max age; runs in background so it doesn't delay startup.
+    tokio::task::spawn_blocking(|| {
+        let removed = crate::cache::prune_re_cache(30 * 24 * 3600);
+        if removed > 0 {
+            tracing::info!(removed, "Pruned stale RE cache entries");
+        }
+    });
+
     // Spawn background task to clean up stale rate limiter entries
     let cleanup_state = Arc::clone(&state);
     tokio::spawn(async move {

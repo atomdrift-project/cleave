@@ -78,6 +78,13 @@ pub(crate) struct EvaluationContext<'a> {
 }
 
 impl<'a> EvaluationContext<'a> {
+    /// Get a unique ID for the file being analyzed, based on its SHA256 hash.
+    /// This is used for caching (e.g., UTF-8 conversion results).
+    #[must_use]
+    pub(crate) fn file_id(&self) -> u64 {
+        hash_str(&self.report.target.sha256)
+    }
+
     /// Set the current trait being evaluated for warning/error context
     #[allow(dead_code)] // Will be used once trait-level logging is wired up
     pub(crate) fn set_current_trait(&mut self, trait_id: Option<&'a str>) {

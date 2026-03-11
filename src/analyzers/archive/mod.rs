@@ -290,7 +290,22 @@ impl ArchiveAnalyzer {
             // Collect findings for container-level composite evaluation
             if !file.findings.is_empty() {
                 if let Ok(mut findings) = nested_findings_clone.lock() {
-                    findings.extend(file.findings.iter().cloned());
+                    // LIMIT: Prevent unbounded memory growth from massive archives.
+                    // 50k findings is enough for even the most complex legitimate packages
+                    // (e.g. large node_modules). Beyond this, we prioritize system stability.
+                    if findings.len() < 50_000 {
+                        findings.extend(file.findings.iter().cloned());
+                    } else if findings.len() == 50_000 {
+                        // Log once when we hit the limit
+                        tracing::warn!(
+                            "Archive findings limit reached (50,000) - skipping further collection for cross-file composites"
+                        );
+                        // Increment so we don't log every time
+                        findings.push(Finding {
+                            id: "internal/limit-reached".to_string(),
+                            ..Default::default()
+                        });
+                    }
                 }
             }
         };
@@ -694,10 +709,12 @@ impl ArchiveAnalyzer {
         // - "Python package with compiled binary" (setup.py + .so/.pyd files)
         if let Some(mapper) = &self.capability_mapper {
             // Collect all findings from nested files
+            // LIMIT: Cap at 50k to prevent OOM on massive archives
             let nested_findings: Vec<Finding> = report
                 .files
                 .iter()
                 .flat_map(|f| f.findings.iter().cloned())
+                .take(50_000)
                 .collect();
 
             if !nested_findings.is_empty() {

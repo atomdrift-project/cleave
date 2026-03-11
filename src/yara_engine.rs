@@ -558,11 +558,26 @@ mod indicators {
     ];
 
     pub(super) const DOC_NAME: &[&str] = &[
-        "_doc_", "_pdf_", "_rtf_", "_ole_", "_lnk_",
-        "maldoc", "excelmacro",
-        "_xls", "_ppam", "_docm", "_docx_", "_xlsm",
-        "_msi_", "onenote", "_msg_", "_cab_",
-        "_iso_", "_img_", "_zip_", "_zpaq",
+        "_doc_",
+        "_pdf_",
+        "_rtf_",
+        "_ole_",
+        "_lnk_",
+        "maldoc",
+        "excelmacro",
+        "_xls",
+        "_ppam",
+        "_docm",
+        "_docx_",
+        "_xlsm",
+        "_msi_",
+        "onenote",
+        "_msg_",
+        "_cab_",
+        "_iso_",
+        "_img_",
+        "_zip_",
+        "_zpaq",
     ];
 }
 
@@ -677,7 +692,9 @@ impl YaraTier {
             .find_map(|line| {
                 let t = line.trim();
                 if t.starts_with("description") && t.contains('=') {
-                    t.split('=').nth(1).map(|v| v.trim().trim_matches('"').to_string())
+                    t.split('=')
+                        .nth(1)
+                        .map(|v| v.trim().trim_matches('"').to_string())
                 } else {
                     None
                 }
@@ -685,7 +702,10 @@ impl YaraTier {
             .unwrap_or_default();
 
         // Description-based platform hints (weak signal, +1 each)
-        if description.contains("windows") || description.contains(" exe ") || description.contains(" dll ") {
+        if description.contains("windows")
+            || description.contains(" exe ")
+            || description.contains(" dll ")
+        {
             s[0] += 1;
         }
         if description.contains("linux") {
@@ -2814,7 +2834,7 @@ rule AlsoKeep {
         disabled.insert("third_party/test/file/disableme".to_string());
 
         let (filtered, count) =
-            YaraEngine::filter_disabled_rules(source, "3p.test.file", &disabled);
+            YaraEngine::filter_disabled_rules(source, "3p.test.file", &disabled, rule_start_re());
 
         assert_eq!(count, 1);
         assert!(filtered.contains("rule KeepMe"));
@@ -2842,7 +2862,7 @@ rule KeepMe {
         disabled.insert("third_party/other/file/somerule".to_string());
 
         let (filtered, count) =
-            YaraEngine::filter_disabled_rules(source, "3p.test.file", &disabled);
+            YaraEngine::filter_disabled_rules(source, "3p.test.file", &disabled, rule_start_re());
 
         assert_eq!(count, 0);
         assert_eq!(filtered, source);
@@ -2870,7 +2890,7 @@ rule DisableMe : hostile malware {
         disabled.insert("third_party/test/file/disableme".to_string());
 
         let (filtered, count) =
-            YaraEngine::filter_disabled_rules(source, "3p.test.file", &disabled);
+            YaraEngine::filter_disabled_rules(source, "3p.test.file", &disabled, rule_start_re());
 
         assert_eq!(count, 1);
         assert!(filtered.contains("rule KeepMe : tag1 tag2"));
@@ -2910,7 +2930,7 @@ private global rule PrivateGlobalKeep {
         disabled.insert("third_party/test/file/globaldisable".to_string());
 
         let (filtered, count) =
-            YaraEngine::filter_disabled_rules(source, "3p.test.file", &disabled);
+            YaraEngine::filter_disabled_rules(source, "3p.test.file", &disabled, rule_start_re());
 
         assert_eq!(count, 1);
         assert!(filtered.contains("private rule PrivateKeep"));
@@ -2943,7 +2963,7 @@ rule Second {
         disabled.insert("third_party/test/file/firstdisabled".to_string());
 
         let (filtered, count) =
-            YaraEngine::filter_disabled_rules(source, "3p.test.file", &disabled);
+            YaraEngine::filter_disabled_rules(source, "3p.test.file", &disabled, rule_start_re());
 
         assert_eq!(count, 1);
         assert!(!filtered.contains("rule FirstDisabled"));
@@ -2976,7 +2996,7 @@ rule LastDisabled {
         disabled.insert("third_party/test/file/lastdisabled".to_string());
 
         let (filtered, count) =
-            YaraEngine::filter_disabled_rules(source, "3p.test.file", &disabled);
+            YaraEngine::filter_disabled_rules(source, "3p.test.file", &disabled, rule_start_re());
 
         assert_eq!(count, 1);
         assert!(filtered.contains("rule First"));
@@ -3031,7 +3051,7 @@ rule Keep3 {
         disabled.insert("third_party/test/file/disable2".to_string());
 
         let (filtered, count) =
-            YaraEngine::filter_disabled_rules(source, "3p.test.file", &disabled);
+            YaraEngine::filter_disabled_rules(source, "3p.test.file", &disabled, rule_start_re());
 
         assert_eq!(count, 2);
         assert!(filtered.contains("rule Keep1"));
@@ -3069,7 +3089,7 @@ rule DisableMe {
         disabled.insert("third_party/test/file/disableme".to_string());
 
         let (filtered, count) =
-            YaraEngine::filter_disabled_rules(source, "3p.test.file", &disabled);
+            YaraEngine::filter_disabled_rules(source, "3p.test.file", &disabled, rule_start_re());
 
         assert_eq!(count, 1);
         assert!(filtered.contains("import \"pe\""));
@@ -3110,7 +3130,7 @@ rule DisableMe {
         disabled.insert("third_party/test/file/disableme".to_string());
 
         let (filtered, count) =
-            YaraEngine::filter_disabled_rules(source, "3p.test.file", &disabled);
+            YaraEngine::filter_disabled_rules(source, "3p.test.file", &disabled, rule_start_re());
 
         assert_eq!(count, 1);
         assert!(filtered.contains("rule KeepComplex"));
@@ -3145,7 +3165,7 @@ rule Disable2 {
         disabled.insert("third_party/test/file/disable2".to_string());
 
         let (filtered, count) =
-            YaraEngine::filter_disabled_rules(source, "3p.test.file", &disabled);
+            YaraEngine::filter_disabled_rules(source, "3p.test.file", &disabled, rule_start_re());
 
         assert_eq!(count, 2);
         assert!(!filtered.contains("rule Disable1"));
@@ -3181,7 +3201,7 @@ rule DisableMe {
         disabled.insert("third_party/test/file/disableme".to_string());
 
         let (filtered, count) =
-            YaraEngine::filter_disabled_rules(source, "3p.test.file", &disabled);
+            YaraEngine::filter_disabled_rules(source, "3p.test.file", &disabled, rule_start_re());
 
         assert_eq!(count, 1);
         assert!(filtered.contains("// This is a file-level comment"));

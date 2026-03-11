@@ -542,7 +542,10 @@ async fn analyze_path_inner(
         .next_request_id
         .load(std::sync::atomic::Ordering::Relaxed)
         .is_multiple_of(50);
-    let handle = tokio::task::spawn_blocking(move || {
+    state
+        .active_tasks
+        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let mut handle = tokio::task::spawn_blocking(move || {
         let _enter = task_span.enter();
         let result = analyze_file(&path_owned, &AnalysisOptions::default());
         // Periodically clear thread-local caches to prevent unbounded memory growth.
@@ -554,12 +557,39 @@ async fn analyze_path_inner(
         result
     });
 
-    let result = tokio::time::timeout(timeout_duration, handle).await;
+    let result = tokio::select! {
+        res = &mut handle => Some(res),
+        _ = tokio::time::sleep(timeout_duration) => None,
+    };
+
+    // Decrement active tasks on completion; on timeout, spawn a watcher to do it
+    // when the blocking task eventually finishes (spawn_blocking cannot be cancelled).
+    if result.is_some() {
+        state
+            .active_tasks
+            .fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+    } else {
+        let active = state
+            .active_tasks
+            .load(std::sync::atomic::Ordering::Relaxed);
+        warn!(
+            path = %path_str,
+            active_tasks = active,
+            "Analysis timed out but blocking task still running"
+        );
+        let orphan_state = Arc::clone(&state);
+        tokio::spawn(async move {
+            let _ = handle.await;
+            orphan_state
+                .active_tasks
+                .fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+        });
+    }
 
     let elapsed_ms = request_start.elapsed().as_millis();
 
     match result {
-        Ok(Ok(Ok(mut report))) => {
+        Some(Ok(Ok(mut report))) => {
             let hostile = report
                 .findings
                 .iter()
@@ -607,7 +637,7 @@ async fn analyze_path_inner(
             };
             Json(response).into_response()
         }
-        Ok(Ok(Err(e))) => {
+        Some(Ok(Err(e))) => {
             warn!(path = %path_str, elapsed_ms = elapsed_ms, "Analysis failed: {:?}", e);
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -615,7 +645,7 @@ async fn analyze_path_inner(
             )
                 .into_response()
         }
-        Ok(Err(e)) => {
+        Some(Err(e)) => {
             warn!(path = %path_str, elapsed_ms = elapsed_ms, "Task join error: {:?}", e);
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -623,7 +653,7 @@ async fn analyze_path_inner(
             )
                 .into_response()
         }
-        Err(_) => {
+        None => {
             warn!(path = %path_str, elapsed_ms = elapsed_ms, "Analysis timed out after {}s", state.timeout_secs);
             (
                 StatusCode::GATEWAY_TIMEOUT,

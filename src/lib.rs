@@ -257,10 +257,13 @@ pub fn clear_all_thread_caches() {
     // Clear on the main thread
     clear_thread_local_caches();
 
-    // Clear on all rayon worker threads using broadcast
+    // Clear on all global rayon worker threads
     rayon::broadcast(|_| {
         clear_thread_local_caches();
     });
+
+    // Clear on ARCHIVE_POOL threads — rayon::broadcast does not reach custom thread pools
+    crate::analyzers::archive::analyzers::clear_archive_pool_caches();
 
     // Clear global condition stats (bounded by condition type count, but useful for fresh stats)
     clear_condition_stats();
@@ -998,7 +1001,13 @@ where
     let analyzed = AtomicUsize::new(0);
     let errors = AtomicUsize::new(0);
 
-    files.par_iter().for_each(|file_path| {
+    files.par_iter().enumerate().for_each(|(i, file_path)| {
+        // Periodically clear thread-local caches to prevent unbounded memory growth
+        // during long-running scans of many files.
+        if i > 0 && i % 500 == 0 {
+            clear_all_thread_caches();
+        }
+
         let result =
             analyze_file_with_resources(file_path, options, &mapper, yara_engine.as_ref(), None);
         match &result {

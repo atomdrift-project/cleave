@@ -324,6 +324,10 @@ pub(crate) fn detect_file_type_from_path(file_path: &Path) -> FileType {
         if name == "extension.vsixmanifest" || name.ends_with(".vsixmanifest") {
             return FileType::VsixManifest;
         }
+        // GitHub Actions composite action manifests (action.yml / action.yaml at any path depth)
+        if name == "action.yml" || name == "action.yaml" {
+            return FileType::GithubActions;
+        }
     }
 
     // Check for GitHub Actions workflow files
@@ -567,6 +571,9 @@ fn detect_file_type_inner(file_path: &Path, file_data: &[u8]) -> Option<FileType
         }
         if name == "extension.vsixmanifest" || name.ends_with(".vsixmanifest") {
             return Some(FileType::VsixManifest);
+        }
+        if name == "action.yml" || name == "action.yaml" {
+            return Some(FileType::GithubActions);
         }
         if name == "pkg-info" || name == "metadata" {
             return Some(FileType::PkgInfo);

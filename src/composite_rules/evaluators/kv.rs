@@ -246,10 +246,13 @@ pub(crate) fn detect_format(path: &Path, content: &[u8]) -> StructuredFormat {
             return StructuredFormat::Toml;
         }
 
-        // Known YAML files - GitHub Actions workflows
+        // Known YAML files - GitHub Actions workflows and composite actions
         if (path_str.contains(".github/workflows/") || path_str.contains(".github\\workflows\\"))
             && (name_lower.ends_with(".yml") || name_lower.ends_with(".yaml"))
         {
+            return StructuredFormat::Yaml;
+        }
+        if name_lower == "action.yml" || name_lower == "action.yaml" {
             return StructuredFormat::Yaml;
         }
 

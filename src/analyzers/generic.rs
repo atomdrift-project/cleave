@@ -80,6 +80,7 @@ impl GenericAnalyzer {
             FileType::Zig => "zig",
             FileType::Elixir => "elixir",
             FileType::Batch => "batch",
+            FileType::GithubActions => "github-actions",
             FileType::PkgInfo => "pkg-info",
             FileType::Plist => "plist",
             FileType::Html => "html",

@@ -669,6 +669,7 @@ dependencies = [
  "hex",
  "iced-x86",
  "indicatif",
+ "libc",
  "lnk",
  "lru",
  "malecule",

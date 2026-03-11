@@ -169,6 +169,7 @@ tempfile = "3.26"
 strsim = "0.11"
 dirs = "6.0"
 parking_lot = "0.12"  # For efficient mutexes in memory tracking
+libc = "0.2"          # For FreeBSD sysctl thread info and other OS APIs
 memmap2 = "0.9"  # Memory-mapped file I/O for large files
 smallvec = "1.15"  # Stack-allocated vectors for small collections
 encoding_rs = "0.8"  # Character encoding detection and conversion

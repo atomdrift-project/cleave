@@ -836,70 +836,178 @@ pub(super) async fn threads() -> Json<serde_json::Value> {
 
 fn read_thread_info() -> serde_json::Value {
     #[cfg(target_os = "linux")]
-    {
-        let Ok(tasks) = std::fs::read_dir("/proc/self/task") else {
-            return serde_json::json!({"error": "cannot read /proc/self/task"});
-        };
+    return read_thread_info_linux();
 
-        let mut threads: Vec<serde_json::Value> = tasks
-            .flatten()
-            .filter_map(|entry| {
-                let base = entry.path();
-                let tid: u32 = entry.file_name().to_string_lossy().parse().ok()?;
+    #[cfg(target_os = "freebsd")]
+    return read_thread_info_freebsd();
 
-                let name = std::fs::read_to_string(base.join("comm"))
-                    .map(|s| s.trim().to_string())
-                    .unwrap_or_default();
+    #[cfg(not(any(target_os = "linux", target_os = "freebsd")))]
+    serde_json::json!({
+        "note": "detailed thread info only available on Linux and FreeBSD",
+        "rayon_threads": rayon::current_num_threads(),
+    })
+}
 
-                // wchan: kernel function the thread is waiting in ("0" means running).
-                let wchan = std::fs::read_to_string(base.join("wchan"))
-                    .map(|s| s.trim().to_string())
-                    .unwrap_or_default();
+#[cfg(target_os = "linux")]
+fn read_thread_info_linux() -> serde_json::Value {
+    let Ok(tasks) = std::fs::read_dir("/proc/self/task") else {
+        return serde_json::json!({"error": "cannot read /proc/self/task"});
+    };
 
-                // State and voluntary context switches from /proc/self/task/{tid}/status.
-                let mut state = String::new();
-                let mut vol_switches: u64 = 0;
-                let mut nonvol_switches: u64 = 0;
-                if let Ok(status) = std::fs::read_to_string(base.join("status")) {
-                    for line in status.lines() {
-                        if let Some(val) = line.strip_prefix("State:\t") {
-                            state = val.to_string();
-                        } else if let Some(val) = line.strip_prefix("voluntary_ctxt_switches:\t") {
-                            vol_switches = val.trim().parse().unwrap_or(0);
-                        } else if let Some(val) = line.strip_prefix("nonvoluntary_ctxt_switches:\t") {
-                            nonvol_switches = val.trim().parse().unwrap_or(0);
-                        }
+    let mut threads: Vec<serde_json::Value> = tasks
+        .flatten()
+        .filter_map(|entry| {
+            let base = entry.path();
+            let tid: u32 = entry.file_name().to_string_lossy().parse().ok()?;
+
+            let name = std::fs::read_to_string(base.join("comm"))
+                .map(|s| s.trim().to_string())
+                .unwrap_or_default();
+
+            // wchan: kernel function the thread is waiting in ("0" means running).
+            let wchan = std::fs::read_to_string(base.join("wchan"))
+                .map(|s| s.trim().to_string())
+                .unwrap_or_default();
+
+            // State and voluntary context switches from /proc/self/task/{tid}/status.
+            let mut state = String::new();
+            let mut vol_switches: u64 = 0;
+            let mut nonvol_switches: u64 = 0;
+            if let Ok(status) = std::fs::read_to_string(base.join("status")) {
+                for line in status.lines() {
+                    if let Some(val) = line.strip_prefix("State:\t") {
+                        state = val.to_string();
+                    } else if let Some(val) = line.strip_prefix("voluntary_ctxt_switches:\t") {
+                        vol_switches = val.trim().parse().unwrap_or(0);
+                    } else if let Some(val) = line.strip_prefix("nonvoluntary_ctxt_switches:\t") {
+                        nonvol_switches = val.trim().parse().unwrap_or(0);
                     }
                 }
+            }
 
-                Some(serde_json::json!({
-                    "tid": tid,
-                    "name": name,
-                    "state": state,
-                    // What kernel function this thread is blocked in.
-                    // "futex_wait*" = waiting on a mutex/condvar.
-                    // "do_epoll_wait" / "ep_poll" = tokio async sleep / I/O poll.
-                    // "0" or "" = currently running on CPU.
-                    "wchan": wchan,
-                    "voluntary_context_switches": vol_switches,
-                    "nonvoluntary_context_switches": nonvol_switches,
-                }))
-            })
+            Some(serde_json::json!({
+                "tid": tid,
+                "name": name,
+                "state": state,
+                // What kernel function this thread is blocked in.
+                // "futex_wait*" = waiting on a mutex/condvar.
+                // "do_epoll_wait" / "ep_poll" = tokio async sleep / I/O poll.
+                // "0" or "" = currently running on CPU.
+                "wchan": wchan,
+                "voluntary_context_switches": vol_switches,
+                "nonvoluntary_context_switches": nonvol_switches,
+            }))
+        })
+        .collect();
+
+    threads.sort_by_key(|t| t["tid"].as_u64().unwrap_or(0));
+
+    serde_json::json!({
+        "count": threads.len(),
+        "threads": threads,
+    })
+}
+
+/// Read thread info on FreeBSD using sysctl(KERN_PROC_PID | KERN_PROC_INC_THREAD).
+///
+/// Returns one `kinfo_proc` per thread. Key fields:
+/// - `ki_tdname`: thread name (equivalent of Linux comm)
+/// - `ki_wmesg`: wait message — what the thread is blocked on (equivalent of Linux wchan).
+///   e.g. "futex" = mutex wait, "kqread" = kqueue/epoll, "nanslp" = sleep, "" = running.
+/// - `ki_stat`: thread state (SRUN=2, SSLEEP=3, SWAIT=6, SLOCK=7, ...)
+#[cfg(target_os = "freebsd")]
+fn read_thread_info_freebsd() -> serde_json::Value {
+    use std::mem;
+
+    let pid = unsafe { libc::getpid() };
+
+    // MIB: kern.proc.pid.<pid> with KERN_PROC_INC_THREAD to include all threads.
+    let mib: [libc::c_int; 4] = [
+        libc::CTL_KERN,
+        libc::KERN_PROC,
+        libc::KERN_PROC_PID | libc::KERN_PROC_INC_THREAD,
+        pid,
+    ];
+
+    // First call: get required buffer size.
+    let mut len: libc::size_t = 0;
+    let ret = unsafe {
+        libc::sysctl(
+            mib.as_ptr(),
+            4,
+            std::ptr::null_mut(),
+            &mut len,
+            std::ptr::null_mut(),
+            0,
+        )
+    };
+    if ret != 0 {
+        return serde_json::json!({"error": "sysctl size query failed"});
+    }
+
+    // Add 25% slack — threads can be created between the two sysctl calls.
+    len += len / 4;
+    let count = len / mem::size_of::<libc::kinfo_proc>();
+    let mut procs: Vec<libc::kinfo_proc> = (0..count)
+        .map(|_| unsafe { mem::zeroed() })
+        .collect();
+    let mut actual_len = len;
+
+    let ret = unsafe {
+        libc::sysctl(
+            mib.as_ptr(),
+            4,
+            procs.as_mut_ptr().cast(),
+            &mut actual_len,
+            std::ptr::null_mut(),
+            0,
+        )
+    };
+    if ret != 0 {
+        return serde_json::json!({"error": "sysctl data query failed"});
+    }
+
+    let actual_count = actual_len / mem::size_of::<libc::kinfo_proc>();
+    procs.truncate(actual_count);
+
+    let state_str = |s: libc::c_char| match s as u8 {
+        1 => "idle",
+        2 => "running",
+        3 => "sleeping",
+        4 => "stopped",
+        5 => "zombie",
+        6 => "waiting",
+        7 => "locked",
+        _ => "unknown",
+    };
+
+    let c_str = |buf: &[libc::c_char]| {
+        let bytes: Vec<u8> = buf
+            .iter()
+            .take_while(|&&c| c != 0)
+            .map(|&c| c as u8)
             .collect();
+        String::from_utf8_lossy(&bytes).into_owned()
+    };
 
-        threads.sort_by_key(|t| t["tid"].as_u64().unwrap_or(0));
-
-        serde_json::json!({
-            "count": threads.len(),
-            "threads": threads,
+    let mut threads: Vec<serde_json::Value> = procs
+        .iter()
+        .map(|p| {
+            serde_json::json!({
+                "tid": p.ki_tid,
+                "name": c_str(&p.ki_tdname),
+                "state": state_str(p.ki_stat),
+                // ki_wmesg is FreeBSD's wchan equivalent: short string like
+                // "futex" (mutex wait), "kqread" (kqueue poll), "nanslp" (sleep).
+                "wchan": c_str(&p.ki_wmesg),
+            })
         })
-    }
+        .collect();
 
-    #[cfg(not(target_os = "linux"))]
-    {
-        serde_json::json!({
-            "note": "detailed thread info only available on Linux",
-            "rayon_threads": rayon::current_num_threads(),
-        })
-    }
+    threads.sort_by_key(|t| t["tid"].as_u64().unwrap_or(0));
+
+    serde_json::json!({
+        "count": threads.len(),
+        "threads": threads,
+    })
 }

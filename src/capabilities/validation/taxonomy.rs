@@ -1081,11 +1081,29 @@ fn condition_has_section_filter(cond: &Condition) -> bool {
         Condition::String {
             section: Some(_),
             ..
+        } | Condition::String {
+            offset: Some(_),
+            ..
+        } | Condition::String {
+            offset_range: Some(_),
+            ..
         } | Condition::Raw {
             section: Some(_),
             ..
+        } | Condition::Raw {
+            offset: Some(_),
+            ..
+        } | Condition::Raw {
+            offset_range: Some(_),
+            ..
         } | Condition::Hex {
             section: Some(_),
+            ..
+        } | Condition::Hex {
+            offset: Some(_),
+            ..
+        } | Condition::Hex {
+            offset_range: Some(_),
             ..
         } | Condition::Section { .. }
             | Condition::SectionRatio { .. }

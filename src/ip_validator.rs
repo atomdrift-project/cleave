@@ -115,22 +115,50 @@ pub(crate) fn is_external_ip(ip: &Ipv4Addr) -> bool {
     true
 }
 
-/// Check if a string representation of an IP is valid (no leading zeros in octets).
-///
-/// Returns false for strings like "010.001.001.001" or "192.168.01.1"
-/// These often appear when binary data is misinterpreted as ASCII.
-fn has_valid_octet_format(octet_str: &str) -> bool {
-    // Empty or starts with 0 and has more than one digit = leading zero
-    if octet_str.is_empty() {
-        return false;
+
+/// Parse a single decimal octet without going through `str::parse`.
+/// Returns `None` for empty strings, leading zeros, or values > 255.
+fn parse_octet_fast(s: &str) -> Option<u8> {
+    let b = s.as_bytes();
+    match b.len() {
+        0 => None,
+        1 => {
+            let d = b[0].wrapping_sub(b'0');
+            if d <= 9 { Some(d) } else { None }
+        }
+        2 => {
+            // Leading zero check
+            if b[0] == b'0' {
+                return None;
+            }
+            let d0 = b[0].wrapping_sub(b'0');
+            let d1 = b[1].wrapping_sub(b'0');
+            if d0 <= 9 && d1 <= 9 {
+                Some(d0 * 10 + d1)
+            } else {
+                None
+            }
+        }
+        3 => {
+            // Leading zero check
+            if b[0] == b'0' {
+                return None;
+            }
+            let d0 = b[0].wrapping_sub(b'0');
+            let d1 = b[1].wrapping_sub(b'0');
+            let d2 = b[2].wrapping_sub(b'0');
+            if d0 <= 9 && d1 <= 9 && d2 <= 9 {
+                let v = d0 as u16 * 100 + d1 as u16 * 10 + d2 as u16;
+                if v <= 255 { Some(v as u8) } else { None }
+            } else {
+                None
+            }
+        }
+        _ => None,
     }
-    if octet_str.len() > 1 && octet_str.starts_with('0') {
-        return false;
-    }
-    true
 }
 
-/// Validate an IP address string and check if it's a external external IP.
+/// Validate an IP address string and check if it's an external IP.
 ///
 /// This combines format validation (no leading zeros) with semantic validation
 /// (not private/loopback/reserved).
@@ -138,25 +166,15 @@ fn has_valid_octet_format(octet_str: &str) -> bool {
 /// Returns Some(Ipv4Addr) if the IP is valid and external, None otherwise.
 #[must_use]
 pub(crate) fn validate_external_ip_string(ip_str: &str) -> Option<Ipv4Addr> {
-    let parts: Vec<&str> = ip_str.split('.').collect();
-    if parts.len() != 4 {
-        return None;
-    }
-
-    // Check for leading zeros in any octet
-    for part in &parts {
-        if !has_valid_octet_format(part) {
-            return None;
-        }
-    }
-
-    // Parse each octet
+    // Parse all four octets inline using split('.') without collecting to Vec
     let mut octets = [0u8; 4];
-    for (i, part) in parts.iter().enumerate() {
-        match part.parse::<u8>() {
-            Ok(v) => octets[i] = v,
-            Err(_) => return None, // Value > 255 or invalid
-        }
+    let mut parts = ip_str.split('.');
+    for octet in &mut octets {
+        *octet = parse_octet_fast(parts.next()?)?;
+    }
+    // Reject if there are extra parts
+    if parts.next().is_some() {
+        return None;
     }
 
     let ip = Ipv4Addr::new(octets[0], octets[1], octets[2], octets[3]);
@@ -168,19 +186,21 @@ pub(crate) fn validate_external_ip_string(ip_str: &str) -> Option<Ipv4Addr> {
     }
 }
 
-/// Check if a text string contains at least one external external IP address.
+/// Check if a text string contains at least one external IP address.
 ///
 /// This is the main entry point for the `external_ip: true` condition modifier.
 /// It finds all IP-like patterns in the text and returns true if any of them
-/// are valid external external IPs.
+/// are valid external IPs.
 #[must_use]
 pub(crate) fn contains_external_ip(text: &str) -> bool {
-    for cap in ip_pattern().captures_iter(text) {
-        // Get the full match
-        if let Some(full_match) = cap.get(0) {
-            if validate_external_ip_string(full_match.as_str()).is_some() {
-                return true;
-            }
+    // Fast reject: no dots means no IPs possible
+    if memchr::memchr(b'.', text.as_bytes()).is_none() {
+        return false;
+    }
+    // Use find_iter instead of captures_iter — we only need the full match
+    for m in ip_pattern().find_iter(text) {
+        if validate_external_ip_string(m.as_str()).is_some() {
+            return true;
         }
     }
     false
@@ -278,18 +298,19 @@ mod tests {
     }
 
     #[test]
-    fn test_valid_octet_format() {
-        assert!(has_valid_octet_format("0"));
-        assert!(has_valid_octet_format("1"));
-        assert!(has_valid_octet_format("10"));
-        assert!(has_valid_octet_format("100"));
-        assert!(has_valid_octet_format("255"));
+    fn test_parse_octet_fast() {
+        assert_eq!(parse_octet_fast("0"), Some(0));
+        assert_eq!(parse_octet_fast("1"), Some(1));
+        assert_eq!(parse_octet_fast("10"), Some(10));
+        assert_eq!(parse_octet_fast("100"), Some(100));
+        assert_eq!(parse_octet_fast("255"), Some(255));
+        assert_eq!(parse_octet_fast("256"), None);
 
         // Leading zeros should be rejected
-        assert!(!has_valid_octet_format("00"));
-        assert!(!has_valid_octet_format("01"));
-        assert!(!has_valid_octet_format("010"));
-        assert!(!has_valid_octet_format("001"));
+        assert_eq!(parse_octet_fast("00"), None);
+        assert_eq!(parse_octet_fast("01"), None);
+        assert_eq!(parse_octet_fast("010"), None);
+        assert_eq!(parse_octet_fast("001"), None);
     }
 
     #[test]

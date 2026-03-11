@@ -340,6 +340,23 @@ impl PEAnalyzer {
 
             binary_metrics.code_size = code_size;
 
+            // If radare2 found very few functions, use .pdata as ground truth.
+            // PE x64 binaries list every function in .pdata as RUNTIME_FUNCTION
+            // entries (12 bytes each: begin_addr, end_addr, unwind_info).
+            if let Some(pdata) = pe.sections.iter().find(|s| {
+                String::from_utf8_lossy(&s.name).trim_matches(char::from(0)) == ".pdata"
+            }) {
+                let pdata_functions = pdata.virtual_size / 12;
+                // Trust .pdata when r2 found very few functions or .pdata reports
+                // vastly more (10x+), since r2 struggles with stripped PEs
+                if pdata_functions > 0
+                    && (binary_metrics.function_count <= 1
+                        || pdata_functions > binary_metrics.function_count * 10)
+                {
+                    binary_metrics.function_count = pdata_functions;
+                }
+            }
+
             // For PE files, prefer section-header flags over radare2 segment perms.
             // rabin2 often reports coarse `-rwx` segments, which inflates W+X counts.
             let (executable_sections, writable_sections, wx_sections) =
@@ -419,14 +436,6 @@ impl PEAnalyzer {
         // Populate common binary metrics (strings, entropy, etc.)
         crate::analyzers::metrics_utils::populate_binary_metrics(&mut report, original_data);
 
-        // Validate metric ranges to catch calculation bugs
-        if let Some(ref metrics) = report.metrics {
-            if let Some(ref binary) = metrics.binary {
-                binary.validate();
-            }
-        }
-
-        // Analyze overlay data for self-extracting archives
         // Calculate the actual end of PE sections (not just SizeOfImage)
         // Many SFX archives embed the archive within the SizeOfImage but after the last section
         let sections_end = pe
@@ -436,6 +445,29 @@ impl PEAnalyzer {
             .max()
             .unwrap_or(0);
 
+        // Populate overlay metrics before archive analysis
+        if (pe_data.len() as u64) > sections_end && sections_end > 0 {
+            let overlay_size = pe_data.len() as u64 - sections_end;
+            if let Some(ref mut metrics) = report.metrics {
+                if let Some(ref mut binary) = metrics.binary {
+                    binary.has_overlay = true;
+                    binary.overlay_size = overlay_size;
+                    binary.overlay_ratio = overlay_size as f32 / pe_data.len() as f32;
+                    binary.overlay_entropy =
+                        crate::entropy::calculate_entropy(&pe_data[sections_end as usize..])
+                            as f32;
+                }
+            }
+        }
+
+        // Validate metric ranges to catch calculation bugs
+        if let Some(ref metrics) = report.metrics {
+            if let Some(ref binary) = metrics.binary {
+                binary.validate();
+            }
+        }
+
+        // Analyze overlay data for self-extracting archives
         if (pe_data.len() as u64) > sections_end && sections_end > 0 {
             let overlay_start = sections_end as usize;
             let overlay_data = &pe_data[overlay_start..];

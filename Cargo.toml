@@ -221,6 +221,9 @@ once_cell = "1.21"  # For shared test initialization
 predicates = "3.1"
 proptest = "1.10"
 
+[patch."https://codeberg.org/atomdrift/stng"]
+stng = { path = "../stng" }
+
 [profile.profiling]
 inherits = "release"
 debug = true

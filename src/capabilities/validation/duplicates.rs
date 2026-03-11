@@ -1768,27 +1768,39 @@ pub(crate) fn check_regex_contains_literal(
                         literal_pat.trait_id,
                         literal_pat.match_type, // Prefer exact/substr over regex for simple patterns
                     ));
-                } else {
-                    // Regex contains literal (more complex overlap)
-                    let tier_note = make_tier_note(&regex_pat.trait_id, &literal_pat.trait_id);
-                    local_warnings.push(format!(
-                        "REGEX CONTAINS LITERAL{}: Regex pattern matches literal{}
+                } else if !cross_type {
+                    // Same condition type — check if cross-tier (intentional layering)
+                    let regex_tier = super::helpers::extract_tier(&regex_pat.trait_id);
+                    let literal_tier = super::helpers::extract_tier(&literal_pat.trait_id);
+                    let cross_tier = regex_tier != literal_tier;
+
+                    if !cross_tier {
+                        // Same tier, same type: likely redundant
+                        let tier_note =
+                            make_tier_note(&regex_pat.trait_id, &literal_pat.trait_id);
+                        local_warnings.push(format!(
+                            "REGEX CONTAINS LITERAL{}: Regex pattern matches literal
    Regex: '{}' ({} regex) in {}::{}
    Matches: '{}' ({} {}) in {}::{}
    → Review: Is this intentional layering or redundant detection?",
-                        tier_note,
-                        if cross_type { " (cross-type)" } else { "" },
-                        regex_pat.pattern,
-                        regex_pat.condition_type,
-                        regex_pat.file_path,
-                        regex_pat.trait_id,
-                        literal_pat.pattern,
-                        literal_pat.condition_type,
-                        literal_pat.match_type,
-                        literal_pat.file_path,
-                        literal_pat.trait_id,
-                    ));
+                            tier_note,
+                            regex_pat.pattern,
+                            regex_pat.condition_type,
+                            regex_pat.file_path,
+                            regex_pat.trait_id,
+                            literal_pat.pattern,
+                            literal_pat.condition_type,
+                            literal_pat.match_type,
+                            literal_pat.file_path,
+                            literal_pat.trait_id,
+                        ));
+                    }
+                    // Cross-tier containment (e.g., micro-behaviors regex `.dll\b`
+                    // matching objectives literal `ntdll.dll`) is intentional layering:
+                    // broader lower-tier patterns naturally subsume specific higher-tier ones.
                 }
+                // Skip cross-type overlaps (e.g., symbol regex vs string exact) —
+                // different data sources make this intentional layering, not redundancy.
             }
             local_warnings
         })

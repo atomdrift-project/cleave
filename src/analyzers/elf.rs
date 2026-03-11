@@ -102,7 +102,7 @@ impl ElfAnalyzer {
         let mut tools_used = vec![];
 
         // Attempt to parse with goblin
-        let (_elf_metrics_opt, _goblin_code_size, _has_symbols, r2_strings) = match Elf::parse(data)
+        let (_elf_metrics_opt, _goblin_code_size, _has_symbols, r2_strings, elf_content_end) = match Elf::parse(data)
         {
             Ok(elf) => {
                 tools_used.push("goblin".to_string());
@@ -291,11 +291,28 @@ impl ElfAnalyzer {
                     }
                 }
 
+                // Compute content_end for overlay metrics (after populate_binary_metrics)
+                let sections_end = elf
+                    .section_headers
+                    .iter()
+                    .filter(|s| s.sh_type != goblin::elf::section_header::SHT_NOBITS)
+                    .map(|s| s.sh_offset + s.sh_size)
+                    .max()
+                    .unwrap_or(0);
+                let segments_end = elf
+                    .program_headers
+                    .iter()
+                    .map(|p| p.p_offset + p.p_filesz)
+                    .max()
+                    .unwrap_or(0);
+                let content_end = sections_end.max(segments_end);
+
                 (
                     Some(elf_metrics),
                     code_size,
                     symbols_found,
                     r2_strings_extracted,
+                    content_end,
                 )
             }
             Err(e) => {
@@ -341,7 +358,7 @@ impl ElfAnalyzer {
                     .metadata
                     .errors
                     .push(format!("ELF parse error: {}", e));
-                (None, None, false, None)
+                (None, None, false, None, 0)
             }
         };
 
@@ -404,6 +421,21 @@ impl ElfAnalyzer {
 
         // Populate common binary metrics (strings, entropy, etc.)
         crate::analyzers::metrics_utils::populate_binary_metrics(&mut report, data);
+
+        // Populate overlay metrics using content_end computed from ELF headers
+        if (data.len() as u64) > elf_content_end && elf_content_end > 0 {
+            if let Some(ref mut metrics) = report.metrics {
+                if let Some(ref mut binary) = metrics.binary {
+                    let overlay_size = data.len() as u64 - elf_content_end;
+                    binary.has_overlay = true;
+                    binary.overlay_size = overlay_size;
+                    binary.overlay_ratio = overlay_size as f32 / data.len() as f32;
+                    binary.overlay_entropy =
+                        crate::entropy::calculate_entropy(&data[elf_content_end as usize..])
+                            as f32;
+                }
+            }
+        }
 
         // Validate metric ranges to catch calculation bugs
         if let Some(ref metrics) = report.metrics {

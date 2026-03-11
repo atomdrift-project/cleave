@@ -55,24 +55,22 @@ pub(crate) fn is_base64_candidate(s: &str) -> bool {
         return false;
     }
 
-    // Check valid base64 characters
-    let valid_chars: std::collections::HashSet<char> =
-        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/="
-            .chars()
-            .collect();
-
-    if !s.chars().all(|c| valid_chars.contains(&c)) {
-        return false;
-    }
-
-    // Check padding
-    let padding_count = s.chars().rev().take_while(|&c| c == '=').count();
-    if padding_count > 2 {
-        return false;
-    }
-
-    // Length should be multiple of 4 (with padding)
+    // Length should be multiple of 4 (with padding) — check early to skip char validation
     if !s.len().is_multiple_of(4) {
+        return false;
+    }
+
+    // Check valid base64 characters using direct byte checks (no HashSet allocation)
+    if !s
+        .bytes()
+        .all(|b| b.is_ascii_alphanumeric() || b == b'+' || b == b'/' || b == b'=')
+    {
+        return false;
+    }
+
+    // Check padding (max 2 '=' at end)
+    let padding_count = s.bytes().rev().take_while(|&b| b == b'=').count();
+    if padding_count > 2 {
         return false;
     }
 

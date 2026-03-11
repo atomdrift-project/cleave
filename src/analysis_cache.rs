@@ -251,6 +251,14 @@ pub(crate) fn cache_lookup(sha256: &str, options: &AnalysisOptions) -> Option<An
     cache.lookup(sha256, &opts_hash, traits_ts)
 }
 
+/// Count entries currently in the analysis cache. Returns `None` if unavailable.
+pub(crate) fn cache_entry_count() -> Option<i64> {
+    let cache = analysis_cache()?;
+    let conn = cache.conn.lock().ok()?;
+    conn.query_row("SELECT COUNT(*) FROM analysis_cache", [], |row| row.get(0))
+        .ok()
+}
+
 /// Store an analysis report in the cache.
 ///
 /// Silently does nothing if caching is unavailable or any error occurs.

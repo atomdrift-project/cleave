@@ -388,6 +388,51 @@ pub(crate) fn log_all_memory_stats() {
     // but they are logged when evictions occur.
 }
 
+/// Jemalloc allocator statistics — only available when compiled with `--features jemalloc`.
+///
+/// Key diagnostic ratios:
+/// - `active - allocated` large → internal fragmentation (free holes jemalloc can't merge)
+/// - `resident - active` large  → page-level fragmentation
+/// - `rss - resident` large     → non-jemalloc memory (mmap'd files, stack, code segments)
+#[derive(Debug)]
+pub struct JemallocStats {
+    /// Bytes currently live — actual in-use objects. The most useful leak indicator.
+    pub allocated: u64,
+    /// Bytes in active pages: `allocated` rounded up to page boundaries.
+    pub active: u64,
+    /// Bytes used by jemalloc's own internal bookkeeping structures.
+    pub metadata: u64,
+    /// Bytes in physically-resident pages — jemalloc's view of RSS.
+    pub resident: u64,
+    /// Virtual pages held by jemalloc but not currently resident (returned to OS lazily).
+    pub retained: u64,
+}
+
+/// Query current jemalloc allocator stats. Returns `None` when jemalloc is not the allocator.
+///
+/// Advances the jemalloc epoch first so the returned values are fresh.
+#[must_use]
+pub fn jemalloc_stats() -> Option<JemallocStats> {
+    #[cfg(all(unix, feature = "jemalloc"))]
+    {
+        use tikv_jemalloc_ctl::{epoch, stats};
+
+        // Advance the epoch to refresh cached stats
+        epoch::mib().ok()?.advance().ok()?;
+
+        Some(JemallocStats {
+            allocated: stats::allocated::mib().ok()?.read().ok()? as u64,
+            active:    stats::active::mib().ok()?.read().ok()? as u64,
+            metadata:  stats::metadata::mib().ok()?.read().ok()? as u64,
+            resident:  stats::resident::mib().ok()?.read().ok()? as u64,
+            retained:  stats::retained::mib().ok()?.read().ok()? as u64,
+        })
+    }
+
+    #[cfg(not(all(unix, feature = "jemalloc")))]
+    None
+}
+
 /// Create a global memory tracker instance
 pub fn global_tracker() -> &'static MemoryTracker {
     use std::sync::OnceLock;

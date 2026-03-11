@@ -68,6 +68,12 @@ pub(crate) fn log_archive_analysis_stats() {
     );
 }
 
+/// Number of threads in the dedicated archive analysis pool.
+#[allow(dead_code)] // Called from server/handlers.rs (library side); binary can't see the usage
+pub(crate) fn archive_pool_thread_count() -> usize {
+    ARCHIVE_POOL.current_num_threads()
+}
+
 /// Clear thread-local caches on all ARCHIVE_POOL threads.
 ///
 /// `rayon::broadcast` only reaches the global rayon pool. The archive pool is a

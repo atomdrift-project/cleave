@@ -42,6 +42,12 @@ impl RateLimiter {
         }
     }
 
+    /// Number of IPs currently tracked by the rate limiter.
+    #[must_use]
+    pub fn active_count(&self) -> usize {
+        self.buckets.len()
+    }
+
     /// Check if a request from the given IP is allowed.
     /// Returns `true` if allowed, `false` if rate limited.
     /// A QPS of 0 means unlimited (no rate limiting).

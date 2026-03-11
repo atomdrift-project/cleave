@@ -53,6 +53,15 @@ pub(crate) fn capability_mapper_with_options(
     )
 }
 
+/// Return (trait_count, composite_count) if the global CapabilityMapper is already loaded.
+/// Returns `None` if the mapper has not been initialized yet (avoids triggering init).
+pub(crate) fn capability_mapper_stats() -> Option<(usize, usize)> {
+    let guard = CAPABILITY_MAPPER.read();
+    guard
+        .as_ref()
+        .map(|m| (m.trait_definitions_count(), m.composite_rules_count()))
+}
+
 /// Get or initialize the global CapabilityMapper
 pub(crate) fn capability_mapper() -> Arc<CapabilityMapper> {
     // Fast path: read lock

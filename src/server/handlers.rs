@@ -16,9 +16,34 @@ use tracing::{info, info_span, warn, Instrument, Span};
 
 use super::AppState;
 
-/// Health check endpoint.
-pub(super) async fn health() -> Json<serde_json::Value> {
-    Json(serde_json::json!({"status": "ok"}))
+/// Health check endpoint. Returns 200 OK when healthy, 503 when memory-overloaded.
+pub(super) async fn health(State(state): State<Arc<AppState>>) -> Response {
+    let rss_mb = crate::memory_tracker::current_rss()
+        .map(|b| b / 1024 / 1024)
+        .unwrap_or(0);
+    let active_tasks = state.active_tasks.load(std::sync::atomic::Ordering::Relaxed);
+    let overloaded = rss_mb > 0 && rss_mb * 1024 * 1024 > state.max_rss_bytes;
+    if overloaded {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(serde_json::json!({
+                "status": "degraded",
+                "reason": "memory_pressure",
+                "rss_mb": rss_mb,
+                "max_rss_mb": state.max_rss_bytes / 1024 / 1024,
+                "active_tasks": active_tasks,
+                "rayon_threads": rayon::current_num_threads(),
+            })),
+        )
+            .into_response();
+    }
+    Json(serde_json::json!({
+        "status": "ok",
+        "rss_mb": rss_mb,
+        "active_tasks": active_tasks,
+        "rayon_threads": rayon::current_num_threads(),
+    }))
+    .into_response()
 }
 
 /// Reload trait definitions from disk.
@@ -91,7 +116,7 @@ pub(super) async fn analyze(
 
     let span = info_span!("request", %client_ip, request_id);
 
-    analyze_inner(state, &mut multipart, request_start)
+    analyze_inner(state, &mut multipart, request_start, request_id)
         .instrument(span)
         .await
 }
@@ -100,6 +125,7 @@ async fn analyze_inner(
     state: Arc<AppState>,
     multipart: &mut axum::extract::Multipart,
     request_start: Instant,
+    request_id: u64,
 ) -> Response {
     info!("--> POST /analyze");
 
@@ -210,6 +236,14 @@ async fn analyze_inner(
     state
         .active_tasks
         .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    state.in_flight.insert(
+        request_id,
+        super::InFlightRequest {
+            name: filename.clone(),
+            size_bytes: file_size as u64,
+            started_at: Instant::now(),
+        },
+    );
     let task_span = Span::current();
 
     let should_clear_caches = state
@@ -237,6 +271,7 @@ async fn analyze_inner(
         state
             .active_tasks
             .fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+        state.in_flight.remove(&request_id);
         drop(temp_file);
     } else {
         let active = state
@@ -253,6 +288,7 @@ async fn analyze_inner(
             orphan_state
                 .active_tasks
                 .fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+            orphan_state.in_flight.remove(&request_id);
             drop(temp_file);
         });
     }
@@ -338,12 +374,13 @@ fn check_memory_pressure(state: &AppState) -> Option<Response> {
         return None;
     }
 
-    // Memory pressure detected — try to reclaim by clearing thread-local caches
+    // Memory pressure detected — try to reclaim by clearing thread-local caches.
+    // Use block_in_place so tokio knows this thread will block on rayon::broadcast.
     info!(
         rss_mb = rss / 1024 / 1024,
         "Memory pressure detected, clearing thread-local caches"
     );
-    crate::clear_all_thread_caches();
+    tokio::task::block_in_place(|| crate::clear_all_thread_caches());
 
     // Re-check after clearing caches
     let rss_after = crate::memory_tracker::current_rss()?;
@@ -458,7 +495,7 @@ pub(super) async fn analyze_path(
 
     let span = info_span!("request-path", %client_ip, request_id, path = %request.path);
 
-    analyze_path_inner(state, request, request_start)
+    analyze_path_inner(state, request, request_start, request_id)
         .instrument(span)
         .await
 }
@@ -467,6 +504,7 @@ async fn analyze_path_inner(
     state: Arc<AppState>,
     request: AnalyzePathRequest,
     request_start: Instant,
+    request_id: u64,
 ) -> Response {
     info!("--> POST /analyze-path");
 
@@ -542,9 +580,18 @@ async fn analyze_path_inner(
         .next_request_id
         .load(std::sync::atomic::Ordering::Relaxed)
         .is_multiple_of(50);
+    let size_bytes = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
     state
         .active_tasks
         .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    state.in_flight.insert(
+        request_id,
+        super::InFlightRequest {
+            name: path_str.clone(),
+            size_bytes,
+            started_at: Instant::now(),
+        },
+    );
     let mut handle = tokio::task::spawn_blocking(move || {
         let _enter = task_span.enter();
         let result = analyze_file(&path_owned, &AnalysisOptions::default());
@@ -568,6 +615,7 @@ async fn analyze_path_inner(
         state
             .active_tasks
             .fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+        state.in_flight.remove(&request_id);
     } else {
         let active = state
             .active_tasks
@@ -583,6 +631,7 @@ async fn analyze_path_inner(
             orphan_state
                 .active_tasks
                 .fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+            orphan_state.in_flight.remove(&request_id);
         });
     }
 
@@ -661,5 +710,196 @@ async fn analyze_path_inner(
             )
                 .into_response()
         }
+    }
+}
+
+/// Memory diagnostics endpoint — exposes sizes of all major in-process structures.
+///
+/// Use this to track down memory leaks: poll it over time and watch which
+/// counter grows while RSS grows.
+pub(super) async fn memory_stats(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
+    // SQLite COUNT(*) can briefly block, so run it off the async thread.
+    let cache_entries =
+        tokio::task::spawn_blocking(crate::analysis_cache::cache_entry_count).await;
+    let cache_entries = cache_entries.unwrap_or(None);
+
+    let rss_mb = crate::memory_tracker::current_rss().map(|b| b / 1024 / 1024);
+
+    // Jemalloc allocator stats — only populated when built with --features jemalloc.
+    // `allocated` is the key number: actual live bytes vs RSS reveals fragmentation.
+    let jemalloc = crate::memory_tracker::jemalloc_stats().map(|s| {
+        serde_json::json!({
+            "allocated_mb": s.allocated / 1024 / 1024,
+            "active_mb":    s.active    / 1024 / 1024,
+            "metadata_mb":  s.metadata  / 1024 / 1024,
+            "resident_mb":  s.resident  / 1024 / 1024,
+            "retained_mb":  s.retained  / 1024 / 1024,
+            // fragmentation = active - allocated (holes jemalloc can't reuse yet)
+            "fragmentation_mb": s.active.saturating_sub(s.allocated) / 1024 / 1024,
+        })
+    });
+
+    let (regex_v2_entries, regex_v2_max) = {
+        let cache = crate::composite_rules::evaluators::regex_cache_v2().read();
+        (cache.len(), cache.cap().get())
+    };
+
+    let mapper_stats = crate::shared_resources::capability_mapper_stats();
+
+    let (rizin_total, rizin_ok, rizin_timeouts, rizin_failures) =
+        crate::radare2::rizin_stats();
+
+    Json(serde_json::json!({
+        "process": {
+            "rss_mb": rss_mb,
+            "max_rss_mb": state.max_rss_bytes / 1024 / 1024,
+            // null when not built with --features jemalloc
+            "jemalloc": jemalloc,
+        },
+        "server": {
+            "active_tasks": state.active_tasks.load(std::sync::atomic::Ordering::Relaxed),
+            "requests_total": state.next_request_id.load(std::sync::atomic::Ordering::Relaxed),
+            "rate_limiter_ips": state.rate_limiter.active_count(),
+            "rate_limiter_max_ips": 50_000,
+        },
+        "caches": {
+            "analysis_sqlite_entries": cache_entries,
+            "analysis_sqlite_max": 100_000,
+            "regex_v2_entries": regex_v2_entries,
+            "regex_v2_max": regex_v2_max,
+            // YARA scanner caches are thread-local; cap is per-thread
+            "yara_scanner_max_per_thread": 32,
+        },
+        "capability_mapper": mapper_stats.map(|(traits, composites)| serde_json::json!({
+            "traits": traits,
+            "composites": composites,
+        })),
+        "rizin": {
+            "total": rizin_total,
+            "successes": rizin_ok,
+            "timeouts": rizin_timeouts,
+            "failures": rizin_failures,
+        },
+        "thread_pools": {
+            "rayon_global_threads": rayon::current_num_threads(),
+            "archive_pool_threads": crate::analyzers::archive::analyzers::archive_pool_thread_count(),
+        },
+    }))
+}
+
+/// In-flight request list — shows every analysis currently running, with elapsed time.
+pub(super) async fn requests(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
+    let now = Instant::now();
+    let mut entries: Vec<serde_json::Value> = state
+        .in_flight
+        .iter()
+        .map(|e| {
+            let elapsed_ms = now.duration_since(e.started_at).as_millis();
+            serde_json::json!({
+                "request_id": e.key(),
+                "name": e.name,
+                "size_bytes": e.size_bytes,
+                "elapsed_ms": elapsed_ms,
+            })
+        })
+        .collect();
+
+    // Sort by elapsed descending so the longest-running request is first.
+    entries.sort_by(|a, b| {
+        b["elapsed_ms"]
+            .as_u64()
+            .cmp(&a["elapsed_ms"].as_u64())
+    });
+
+    Json(serde_json::json!({
+        "count": entries.len(),
+        "requests": entries,
+    }))
+}
+
+/// Thread list — shows OS-level info for every thread in this process.
+///
+/// On Linux: reads `/proc/self/task/` for thread name, state, and `wchan`
+/// (the kernel function the thread is currently blocked on). `wchan` is the
+/// single most useful field for diagnosing deadlocks — look for `futex_wait`
+/// (mutex contention) or unexpected `futex_wait` in tokio worker threads.
+///
+/// On other platforms: returns thread count only.
+pub(super) async fn threads() -> Json<serde_json::Value> {
+    // Reading /proc is blocking I/O.
+    let info = tokio::task::spawn_blocking(read_thread_info).await;
+    let info = info.unwrap_or_else(|_| {
+        serde_json::json!({"error": "failed to read thread info"})
+    });
+    Json(info)
+}
+
+fn read_thread_info() -> serde_json::Value {
+    #[cfg(target_os = "linux")]
+    {
+        let Ok(tasks) = std::fs::read_dir("/proc/self/task") else {
+            return serde_json::json!({"error": "cannot read /proc/self/task"});
+        };
+
+        let mut threads: Vec<serde_json::Value> = tasks
+            .flatten()
+            .filter_map(|entry| {
+                let base = entry.path();
+                let tid: u32 = entry.file_name().to_string_lossy().parse().ok()?;
+
+                let name = std::fs::read_to_string(base.join("comm"))
+                    .map(|s| s.trim().to_string())
+                    .unwrap_or_default();
+
+                // wchan: kernel function the thread is waiting in ("0" means running).
+                let wchan = std::fs::read_to_string(base.join("wchan"))
+                    .map(|s| s.trim().to_string())
+                    .unwrap_or_default();
+
+                // State and voluntary context switches from /proc/self/task/{tid}/status.
+                let mut state = String::new();
+                let mut vol_switches: u64 = 0;
+                let mut nonvol_switches: u64 = 0;
+                if let Ok(status) = std::fs::read_to_string(base.join("status")) {
+                    for line in status.lines() {
+                        if let Some(val) = line.strip_prefix("State:\t") {
+                            state = val.to_string();
+                        } else if let Some(val) = line.strip_prefix("voluntary_ctxt_switches:\t") {
+                            vol_switches = val.trim().parse().unwrap_or(0);
+                        } else if let Some(val) = line.strip_prefix("nonvoluntary_ctxt_switches:\t") {
+                            nonvol_switches = val.trim().parse().unwrap_or(0);
+                        }
+                    }
+                }
+
+                Some(serde_json::json!({
+                    "tid": tid,
+                    "name": name,
+                    "state": state,
+                    // What kernel function this thread is blocked in.
+                    // "futex_wait*" = waiting on a mutex/condvar.
+                    // "do_epoll_wait" / "ep_poll" = tokio async sleep / I/O poll.
+                    // "0" or "" = currently running on CPU.
+                    "wchan": wchan,
+                    "voluntary_context_switches": vol_switches,
+                    "nonvoluntary_context_switches": nonvol_switches,
+                }))
+            })
+            .collect();
+
+        threads.sort_by_key(|t| t["tid"].as_u64().unwrap_or(0));
+
+        serde_json::json!({
+            "count": threads.len(),
+            "threads": threads,
+        })
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    {
+        serde_json::json!({
+            "note": "detailed thread info only available on Linux",
+            "rayon_threads": rayon::current_num_threads(),
+        })
     }
 }

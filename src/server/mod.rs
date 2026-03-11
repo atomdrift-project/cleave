@@ -16,6 +16,17 @@ use std::net::SocketAddr;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+
+/// Metadata for a request currently in the analysis pipeline.
+#[derive(Debug)]
+pub struct InFlightRequest {
+    /// Filename (upload) or canonical path (analyze-path).
+    pub name: String,
+    /// File size in bytes.
+    pub size_bytes: u64,
+    /// When analysis began (after upload / path validation).
+    pub started_at: Instant,
+}
 use tokio::signal;
 use tower::limit::ConcurrencyLimitLayer;
 use tower_http::limit::RequestBodyLimitLayer;
@@ -82,6 +93,8 @@ pub struct AppState {
     /// When the server first entered the memory-overloaded state.
     /// Reset to None when memory drops below the threshold.
     pub overloaded_since: parking_lot::Mutex<Option<Instant>>,
+    /// Currently in-flight analysis requests, keyed by request ID.
+    pub in_flight: dashmap::DashMap<u64, InFlightRequest>,
 }
 
 impl AppState {
@@ -130,6 +143,7 @@ pub async fn run(config: ServerConfig) -> anyhow::Result<()> {
         next_request_id: AtomicU64::new(1),
         active_tasks: AtomicUsize::new(0),
         overloaded_since: parking_lot::Mutex::new(None),
+        in_flight: dashmap::DashMap::new(),
     });
 
     // Prune stale RE disk-cache entries on startup (unbounded without eviction).
@@ -163,10 +177,13 @@ pub async fn run(config: ServerConfig) -> anyhow::Result<()> {
         .route("/analyze-path", post(handlers::analyze_path))
         .layer(ConcurrencyLimitLayer::new(max_concurrent));
 
-    // Health/reload routes remain unrestricted.
+    // Health/reload/memory routes remain unrestricted.
     let app = Router::new()
-        .route("/health", get(handlers::health))
-        .route("/reload", post(handlers::reload))
+        .route("/_/health", get(handlers::health))
+        .route("/_/reload", post(handlers::reload))
+        .route("/_/memory", get(handlers::memory_stats))
+        .route("/_/requests", get(handlers::requests))
+        .route("/_/threads", get(handlers::threads))
         .merge(analysis_routes)
         .layer(RequestBodyLimitLayer::new(config.max_body_size))
         .layer(middleware::from_fn_with_state(

@@ -9,7 +9,7 @@ pub(crate) fn calculate_sha256(data: &[u8]) -> String {
     use sha2::{Digest, Sha256};
     let mut hasher = Sha256::new();
     hasher.update(data);
-    format!("{:x}", hasher.finalize())
+    hex::encode(hasher.finalize())
 }
 
 /// Calculate SHA256 hash of a file
@@ -19,7 +19,7 @@ pub(crate) fn calculate_file_sha256(path: &Path) -> std::io::Result<String> {
     let mut file = File::open(path)?;
     let mut hasher = Sha256::new();
     std::io::copy(&mut file, &mut hasher)?;
-    Ok(format!("{:x}", hasher.finalize()))
+    Ok(hex::encode(hasher.finalize()))
 }
 
 /// Extract main class from META-INF/MANIFEST.MF

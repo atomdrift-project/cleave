@@ -5,7 +5,6 @@
 
 use crate::types::FunctionMetrics;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 
 /// Information about a single function for metrics computation
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -166,21 +165,18 @@ fn calculate_entropy(s: &str) -> f32 {
         return 0.0;
     }
 
-    let mut freq: HashMap<char, usize> = HashMap::new();
-    let total = s.chars().count();
+    let mut freq = [0u32; 256];
+    let total = s.len();
 
-    for c in s.chars() {
-        *freq.entry(c).or_insert(0) += 1;
+    for &b in s.as_bytes() {
+        freq[b as usize] += 1;
     }
 
-    freq.values()
+    freq.iter()
+        .filter(|&&count| count > 0)
         .map(|&count| {
             let p = count as f32 / total as f32;
-            if p > 0.0 {
-                -p * p.log2()
-            } else {
-                0.0
-            }
+            -p * p.log2()
         })
         .sum()
 }

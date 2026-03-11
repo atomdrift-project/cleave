@@ -5,7 +5,6 @@
 //! anomaly detection and obfuscation identification.
 
 use crate::types::TextMetrics;
-use std::collections::HashMap;
 
 /// Analyze raw text content and produce TextMetrics
 #[must_use]
@@ -101,43 +100,39 @@ pub(crate) fn analyze_text(content: &str) -> TextMetrics {
 
 /// Calculate Shannon entropy and character distribution
 fn analyze_char_distribution(content: &str) -> (f32, u32, Option<char>, f32) {
-    let mut freq: HashMap<char, usize> = HashMap::new();
-    let mut total = 0usize;
-
-    for c in content.chars() {
-        *freq.entry(c).or_insert(0) += 1;
-        total += 1;
-    }
+    let mut freq = [0u32; 256];
+    let total = content.len();
 
     if total == 0 {
         return (0.0, 0, None, 0.0);
     }
 
-    let unique_chars = freq.len() as u32;
+    for &b in content.as_bytes() {
+        freq[b as usize] += 1;
+    }
+
+    let unique_chars = freq.iter().filter(|&&c| c > 0).count() as u32;
 
     // Shannon entropy
     let entropy: f32 = freq
-        .values()
+        .iter()
+        .filter(|&&count| count > 0)
         .map(|&count| {
             let p = count as f32 / total as f32;
-            if p > 0.0 {
-                -p * p.log2()
-            } else {
-                0.0
-            }
+            -p * p.log2()
         })
         .sum();
 
-    // Most common non-whitespace character
+    // Most common non-whitespace byte
     let most_common = freq
         .iter()
-        .filter(|(&c, _)| !c.is_whitespace())
-        .max_by_key(|(_, &count)| count)
-        .map(|(&c, _)| c);
+        .enumerate()
+        .filter(|&(b, &count)| count > 0 && !matches!(b as u8, b' ' | b'\t' | b'\n' | b'\r'))
+        .max_by_key(|&(_, &count)| count)
+        .map(|(b, _)| b as u8 as char);
 
     let most_common_ratio = most_common
-        .and_then(|c| freq.get(&c))
-        .map(|&count| count as f32 / total as f32)
+        .map(|c| freq[c as u8 as usize] as f32 / total as f32)
         .unwrap_or(0.0);
 
     (entropy, unique_chars, most_common, most_common_ratio)
@@ -179,7 +174,7 @@ fn analyze_bytes(bytes: &[u8]) -> (f32, f32, u32, f32) {
 
 /// Analyze whitespace patterns
 fn analyze_whitespace(content: &str) -> (f32, u32, u32, bool, u32) {
-    let total_chars = content.chars().count();
+    let total_chars = content.len();
     if total_chars == 0 {
         return (0.0, 0, 0, false, 0);
     }
@@ -358,7 +353,10 @@ fn detect_ascii_art(lines: &[&str]) -> u32 {
         let trimmed = line.trim();
         if trimmed.len() >= 20 {
             // Count art characters
-            let art_count = trimmed.chars().filter(|c| art_chars.contains(c)).count();
+            let art_count = trimmed
+                .bytes()
+                .filter(|b| art_chars.contains(&(*b as char)))
+                .count();
 
             // If >70% are art characters, likely ASCII art
             if art_count as f32 / trimmed.len() as f32 > 0.7 {

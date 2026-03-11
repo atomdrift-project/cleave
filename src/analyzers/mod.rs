@@ -487,11 +487,9 @@ fn detect_file_type_inner(file_path: &Path, file_data: &[u8]) -> Option<FileType
         return Some(FileType::Plist);
     }
 
-    // Check for XML Plist
-    let content_start = String::from_utf8_lossy(&file_data[..file_data.len().min(100)]);
-    if (content_start.contains("<?xml") && content_start.contains("<plist"))
-        || content_start.contains("<plist")
-    {
+    // Check for XML Plist (byte-level search, no allocation)
+    let head = &file_data[..file_data.len().min(100)];
+    if memchr::memmem::find(head, b"<plist").is_some() {
         return Some(FileType::Plist);
     }
 
@@ -558,13 +556,12 @@ fn detect_file_type_inner(file_path: &Path, file_data: &[u8]) -> Option<FileType
             return Some(FileType::PackageJson);
         }
         if name == "manifest.json" {
-            // Check if it's a Chrome extension manifest by looking for manifest_version
-            let content = String::from_utf8_lossy(file_data);
-            if content.contains("\"manifest_version\"")
-                && (content.contains("\"permissions\"")
-                    || content.contains("\"content_scripts\"")
-                    || content.contains("\"background\"")
-                    || content.contains("\"host_permissions\""))
+            // Check if it's a Chrome extension manifest (byte-level, no allocation)
+            if memchr::memmem::find(file_data, b"\"manifest_version\"").is_some()
+                && (memchr::memmem::find(file_data, b"\"permissions\"").is_some()
+                    || memchr::memmem::find(file_data, b"\"content_scripts\"").is_some()
+                    || memchr::memmem::find(file_data, b"\"background\"").is_some()
+                    || memchr::memmem::find(file_data, b"\"host_permissions\"").is_some())
             {
                 return Some(FileType::ChromeManifest);
             }
@@ -824,27 +821,36 @@ fn detect_file_type_inner(file_path: &Path, file_data: &[u8]) -> Option<FileType
 }
 
 /// Check if content looks like HTML (has actual markup tags)
+/// Uses case-insensitive Aho-Corasick search on raw bytes — no allocation.
 fn looks_like_html(data: &[u8]) -> bool {
-    let s = String::from_utf8_lossy(data);
-    let content_lower = s.to_lowercase();
+    use aho_corasick::AhoCorasick;
+    use std::sync::OnceLock;
 
-    // Must contain at least one HTML tag pattern
-    // Look for common HTML tags or DOCTYPE
-    content_lower.contains("<!doctype html")
-        || content_lower.contains("<html")
-        || content_lower.contains("<head")
-        || content_lower.contains("<body")
-        || content_lower.contains("<script")
-        || content_lower.contains("<div")
-        || content_lower.contains("<span")
-        || content_lower.contains("<p>")
-        || content_lower.contains("<a ")
-        || content_lower.contains("<img")
-        || content_lower.contains("<form")
-        || content_lower.contains("<table")
-        || content_lower.contains("<meta")
-        || content_lower.contains("<link")
-        || content_lower.contains("<style")
+    static AC: OnceLock<Option<AhoCorasick>> = OnceLock::new();
+    let ac = AC.get_or_init(|| {
+        AhoCorasick::builder()
+            .ascii_case_insensitive(true)
+            .build([
+                "<!doctype html",
+                "<html",
+                "<head",
+                "<body",
+                "<script",
+                "<div",
+                "<span",
+                "<p>",
+                "<a ",
+                "<img",
+                "<form",
+                "<table",
+                "<meta",
+                "<link",
+                "<style",
+            ])
+            .ok()
+    });
+
+    ac.as_ref().is_some_and(|ac| ac.is_match(data))
 }
 
 /// Heuristic detection for PowerShell files without .ps1 extension
@@ -951,14 +957,13 @@ fn is_macho(data: &[u8]) -> bool {
 }
 
 fn looks_like_shell(data: &[u8]) -> bool {
-    let s = String::from_utf8_lossy(data);
-    let first_lines: String = s.lines().take(5).collect::<Vec<_>>().join("\n");
-
-    first_lines.contains("export ")
-        || first_lines.contains("alias ")
-        || first_lines.contains("set -e")
-        || first_lines.contains("if [")
-        || first_lines.contains("case $")
+    // Only search the first ~2KB (covers first 5 lines in any reasonable file)
+    let head = &data[..data.len().min(2048)];
+    memchr::memmem::find(head, b"export ").is_some()
+        || memchr::memmem::find(head, b"alias ").is_some()
+        || memchr::memmem::find(head, b"set -e").is_some()
+        || memchr::memmem::find(head, b"if [").is_some()
+        || memchr::memmem::find(head, b"case $").is_some()
 }
 
 /// Find MZ header within the first `max_offset` bytes
@@ -1025,9 +1030,9 @@ pub fn check_extension_content_mismatch(
         "ico" => Some(("ICO image", b"\x00\x00\x01\x00")),
         "webp" => Some(("WebP image", b"RIFF")), // Also needs "WEBP" at offset 8
         "svg" => {
-            // SVG is XML, check for <svg tag
-            let s = String::from_utf8_lossy(&file_data[..file_data.len().min(200)]);
-            if s.contains("<svg") || s.starts_with("<?xml") {
+            // SVG is XML, check for <svg tag (byte-level, no allocation)
+            let head = &file_data[..file_data.len().min(200)];
+            if memchr::memmem::find(head, b"<svg").is_some() || head.starts_with(b"<?xml") {
                 None
             } else {
                 Some(("SVG image", &[]))
@@ -1081,11 +1086,10 @@ pub fn check_extension_content_mismatch(
             .iter()
             .all(|&b| b.is_ascii())
         {
-            // Check if it's hex-encoded data (common obfuscation)
-            let preview = String::from_utf8_lossy(&file_data[..file_data.len().min(200)]);
-            if preview
-                .chars()
-                .all(|c| c.is_ascii_hexdigit() || c.is_ascii_whitespace())
+            // Check if it's hex-encoded data (common obfuscation, byte-level)
+            if file_data[..file_data.len().min(200)]
+                .iter()
+                .all(|b| b.is_ascii_hexdigit() || b.is_ascii_whitespace())
             {
                 "hex-encoded data"
             } else {
@@ -1121,11 +1125,10 @@ pub fn check_extension_content_mismatch(
             .iter()
             .all(|&b| b.is_ascii())
         {
-            // Check if it's hex-encoded data (common obfuscation)
-            let preview = String::from_utf8_lossy(&file_data[..file_data.len().min(200)]);
-            if preview
-                .chars()
-                .all(|c| c.is_ascii_hexdigit() || c.is_ascii_whitespace())
+            // Check if it's hex-encoded data (common obfuscation, byte-level)
+            if file_data[..file_data.len().min(200)]
+                .iter()
+                .all(|b| b.is_ascii_hexdigit() || b.is_ascii_whitespace())
             {
                 "hex-encoded data"
             } else {

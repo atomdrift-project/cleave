@@ -1073,41 +1073,44 @@ fn trait_targets_binaries(trait_def: &TraitDefinition) -> bool {
         || trait_def.r#for.iter().any(|ft| is_binary_file_type(*ft))
 }
 
-/// Returns true if the condition has a section filter applied to it.
-/// This includes: section field on string/raw/hex conditions, Section type, SectionRatio type.
+/// Returns true if the condition has a section filter or positional constraint applied to it.
+/// This includes: section/offset/offset_range/section_offset/section_offset_range fields
+/// on string/raw/hex conditions, Section type, SectionRatio type.
 fn condition_has_section_filter(cond: &Condition) -> bool {
-    matches!(
-        cond,
+    match cond {
         Condition::String {
-            section: Some(_),
+            section,
+            offset,
+            offset_range,
+            section_offset,
+            section_offset_range,
             ..
-        } | Condition::String {
-            offset: Some(_),
+        }
+        | Condition::Raw {
+            section,
+            offset,
+            offset_range,
+            section_offset,
+            section_offset_range,
             ..
-        } | Condition::String {
-            offset_range: Some(_),
+        }
+        | Condition::Hex {
+            section,
+            offset,
+            offset_range,
+            section_offset,
+            section_offset_range,
             ..
-        } | Condition::Raw {
-            section: Some(_),
-            ..
-        } | Condition::Raw {
-            offset: Some(_),
-            ..
-        } | Condition::Raw {
-            offset_range: Some(_),
-            ..
-        } | Condition::Hex {
-            section: Some(_),
-            ..
-        } | Condition::Hex {
-            offset: Some(_),
-            ..
-        } | Condition::Hex {
-            offset_range: Some(_),
-            ..
-        } | Condition::Section { .. }
-            | Condition::SectionRatio { .. }
-    )
+        } => {
+            section.is_some()
+                || offset.is_some()
+                || offset_range.is_some()
+                || section_offset.is_some()
+                || section_offset_range.is_some()
+        }
+        Condition::Section { .. } | Condition::SectionRatio { .. } => true,
+        _ => false,
+    }
 }
 
 /// Returns true if the condition is one where a section filter would be meaningful.

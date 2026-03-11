@@ -102,265 +102,268 @@ impl ElfAnalyzer {
         let mut tools_used = vec![];
 
         // Attempt to parse with goblin
-        let (_elf_metrics_opt, _goblin_code_size, _has_symbols, r2_strings, elf_content_end) = match Elf::parse(data)
-        {
-            Ok(elf) => {
-                tools_used.push("goblin".to_string());
+        let (_elf_metrics_opt, _goblin_code_size, _has_symbols, r2_strings, elf_content_end) =
+            match Elf::parse(data) {
+                Ok(elf) => {
+                    tools_used.push("goblin".to_string());
 
-                // Update architecture now that we have parsed the header
-                report.target.architectures = Some(vec![self.arch_name(&elf)]);
+                    // Update architecture now that we have parsed the header
+                    report.target.architectures = Some(vec![self.arch_name(&elf)]);
 
-                // Compute ELF-specific metrics
-                let elf_metrics = self.compute_elf_metrics(&elf);
-                let symbols_found = !elf.syms.is_empty();
+                    // Compute ELF-specific metrics
+                    let elf_metrics = self.compute_elf_metrics(&elf);
+                    let symbols_found = !elf.syms.is_empty();
 
-                // Calculate code_size from goblin section flags (more accurate than radare2)
-                let code_size = Some(self.compute_code_size(&elf));
+                    // Calculate code_size from goblin section flags (more accurate than radare2)
+                    let code_size = Some(self.compute_code_size(&elf));
 
-                // Parallelize Radare2 deep analysis with the rest of Goblin structural analysis
-                let (r2_inner, _) = rayon::join(
-                    || {
-                        if Radare2Analyzer::is_available() {
-                            Some(self.radare2.extract_batched(
-                                file_path,
-                                symbols_found,
-                                precomputed_sha256,
-                            ))
-                        } else {
-                            None
+                    // Parallelize Radare2 deep analysis with the rest of Goblin structural analysis
+                    let (r2_inner, _) = rayon::join(
+                        || {
+                            if Radare2Analyzer::is_available() {
+                                Some(self.radare2.extract_batched(
+                                    file_path,
+                                    symbols_found,
+                                    precomputed_sha256,
+                                ))
+                            } else {
+                                None
+                            }
+                        },
+                        || {
+                            // Analyze header and structure
+                            self.analyze_structure(&elf, &mut report);
+
+                            // Extract dynamic symbols and map to capabilities
+                            self.analyze_dynamic_symbols(&elf, data, &mut report);
+
+                            // Analyze sections and entropy
+                            self.analyze_sections(&elf, data, &mut report);
+                        },
+                    );
+
+                    // Process Radare2 results if available
+                    let r2_strings_extracted = if let Some(Ok(batched)) = r2_inner {
+                        tools_used.push("radare2".to_string());
+
+                        // Check if rizin timed out - add anti-analysis finding
+                        if batched.timed_out {
+                            report.findings.push(Finding {
+                                kind: FindingKind::Capability,
+                                id: "anti-analysis/evasion/analysis-resistant".to_string(),
+                                desc: "Binary resistant to automated analysis (rizin timeout)"
+                                    .to_string(),
+                                conf: 0.8,
+                                crit: Criticality::Suspicious,
+                                mbc: Some("B0003".to_string()), // Defense Evasion: Anti-Analysis
+                                attack: Some("T1027".to_string()), // Obfuscated Files or Information
+                                evidence: vec![Evidence {
+                                    method: "timeout".to_string(),
+                                    source: "rizin".to_string(),
+                                    value: "Analysis timed out after 60 seconds".to_string(),
+                                    ..Default::default()
+                                }],
+                                match_count: 0,
+                                trait_refs: vec![],
+                                source_file: None,
+                            });
                         }
-                    },
-                    || {
-                        // Analyze header and structure
-                        self.analyze_structure(&elf, &mut report);
 
-                        // Extract dynamic symbols and map to capabilities
-                        self.analyze_dynamic_symbols(&elf, data, &mut report);
+                        // Compute metrics from batched data
+                        let mut binary_metrics = self
+                            .radare2
+                            .compute_metrics_from_batched(&batched, data.len() as u64);
 
-                        // Analyze sections and entropy
-                        self.analyze_sections(&elf, data, &mut report);
-                    },
-                );
+                        // Override code_size with goblin-based calculation (more accurate)
+                        // In ELF, only sections with SHF_EXECINSTR flag contain executable code
+                        if let Some(mut cs) = code_size {
+                            // Sanity check: code_size should never exceed file size
+                            if cs > binary_metrics.file_size {
+                                eprintln!("WARNING: code_size ({}) > file_size ({}) - this indicates a bug in section classification", cs, binary_metrics.file_size);
+                                cs = binary_metrics.file_size; // Cap at file_size to prevent invalid ratio
+                            }
 
-                // Process Radare2 results if available
-                let r2_strings_extracted = if let Some(Ok(batched)) = r2_inner {
-                    tools_used.push("radare2".to_string());
+                            binary_metrics.code_size = cs;
 
-                    // Check if rizin timed out - add anti-analysis finding
-                    if batched.timed_out {
-                        report.findings.push(Finding {
-                            kind: FindingKind::Capability,
-                            id: "anti-analysis/evasion/analysis-resistant".to_string(),
-                            desc: "Binary resistant to automated analysis (rizin timeout)"
-                                .to_string(),
-                            conf: 0.8,
-                            crit: Criticality::Suspicious,
-                            mbc: Some("B0003".to_string()), // Defense Evasion: Anti-Analysis
-                            attack: Some("T1027".to_string()), // Obfuscated Files or Information
-                            evidence: vec![Evidence {
-                                method: "timeout".to_string(),
-                                source: "rizin".to_string(),
-                                value: "Analysis timed out after 60 seconds".to_string(),
-                                ..Default::default()
-                            }],
-                            match_count: 0,
-                            trait_refs: vec![],
-                            source_file: None,
+                            // Recalculate code_to_data_ratio with correct code_size
+                            if binary_metrics.file_size > 0 {
+                                let data_size = binary_metrics.file_size.saturating_sub(cs);
+                                if data_size > 0 {
+                                    binary_metrics.code_to_data_ratio =
+                                        cs as f32 / data_size as f32;
+
+                                    // Sanity check: extremely high ratio likely indicates classification bug
+                                    if binary_metrics.code_to_data_ratio > 1000.0 {
+                                        eprintln!("WARNING: code_to_data_ratio ({:.2}) > 1000 - this may indicate a bug", binary_metrics.code_to_data_ratio);
+                                    }
+                                }
+                            }
+
+                            // Recalculate density metrics that depend on code_size
+                            let code_kb = cs as f32 / 1024.0;
+                            if code_kb > 0.0 {
+                                binary_metrics.import_density =
+                                    binary_metrics.import_count as f32 / code_kb;
+                                binary_metrics.string_density =
+                                    binary_metrics.string_count as f32 / code_kb;
+                                binary_metrics.function_density =
+                                    binary_metrics.function_count as f32 / code_kb;
+                                binary_metrics.relocation_density =
+                                    binary_metrics.relocation_count as f32 / code_kb;
+                                binary_metrics.complexity_per_kb =
+                                    binary_metrics.avg_complexity * 1024.0 / cs as f32;
+                            }
+                        }
+
+                        report.metrics = Some(Metrics {
+                            binary: Some(binary_metrics),
+                            elf: Some(elf_metrics.clone()),
+                            ..Default::default()
                         });
-                    }
 
-                    // Compute metrics from batched data
-                    let mut binary_metrics = self
-                        .radare2
-                        .compute_metrics_from_batched(&batched, data.len() as u64);
+                        // Convert R2Functions to Functions for the report
+                        report.functions =
+                            batched.functions.into_iter().map(Function::from).collect();
 
-                    // Override code_size with goblin-based calculation (more accurate)
-                    // In ELF, only sections with SHF_EXECINSTR flag contain executable code
-                    if let Some(mut cs) = code_size {
-                        // Sanity check: code_size should never exceed file size
-                        if cs > binary_metrics.file_size {
-                            eprintln!("WARNING: code_size ({}) > file_size ({}) - this indicates a bug in section classification", cs, binary_metrics.file_size);
-                            cs = binary_metrics.file_size; // Cap at file_size to prevent invalid ratio
+                        // Use strings from batched data (no extra r2 spawn)
+                        // Return None if empty so extract_smart falls back to stng extraction
+                        if batched.strings.is_empty() {
+                            None
+                        } else {
+                            Some(batched.strings)
                         }
+                    } else {
+                        // Use ELF metrics computed from goblin if r2 failed/skipped
+                        report.metrics = Some(Metrics {
+                            elf: Some(elf_metrics.clone()),
+                            ..Default::default()
+                        });
+                        None
+                    };
 
-                        binary_metrics.code_size = cs;
-
-                        // Recalculate code_to_data_ratio with correct code_size
-                        if binary_metrics.file_size > 0 {
-                            let data_size = binary_metrics.file_size.saturating_sub(cs);
-                            if data_size > 0 {
-                                binary_metrics.code_to_data_ratio = cs as f32 / data_size as f32;
-
-                                // Sanity check: extremely high ratio likely indicates classification bug
-                                if binary_metrics.code_to_data_ratio > 1000.0 {
-                                    eprintln!("WARNING: code_to_data_ratio ({:.2}) > 1000 - this may indicate a bug", binary_metrics.code_to_data_ratio);
+                    // ELF overlay detection: data after the last PT_LOAD segment
+                    {
+                        use goblin::elf::program_header::PT_LOAD;
+                        let image_end = elf
+                            .program_headers
+                            .iter()
+                            .filter(|ph| ph.p_type == PT_LOAD)
+                            .map(|ph| ph.p_offset.saturating_add(ph.p_filesz) as usize)
+                            .max()
+                            .unwrap_or(0);
+                        if image_end > 0 && data.len() > image_end {
+                            let overlay = &data[image_end..];
+                            // Check for squashfs (AppImage)
+                            const SQUASHFS_LE: &[u8] = &[0x73, 0x71, 0x73, 0x68];
+                            const SQUASHFS_BE: &[u8] = &[0x68, 0x73, 0x71, 0x73];
+                            if overlay.starts_with(SQUASHFS_LE) || overlay.starts_with(SQUASHFS_BE)
+                            {
+                                report.findings.push(crate::types::Finding {
+                                    id: "file/sfx/appimage".to_string(),
+                                    kind: crate::types::FindingKind::Structural,
+                                    desc: "Squashfs filesystem appended after ELF image (AppImage)"
+                                        .to_string(),
+                                    conf: 1.0,
+                                    crit: crate::types::Criticality::Notable,
+                                    mbc: None,
+                                    attack: None,
+                                    trait_refs: vec![],
+                                    evidence: vec![crate::types::Evidence {
+                                        method: "magic".to_string(),
+                                        source: "elf_overlay".to_string(),
+                                        value: format!("squashfs at offset {:#x}", image_end),
+                                        location: Some(format!("{:#x}", image_end)),
+                                        ..Default::default()
+                                    }],
+                                    match_count: 1,
+                                    source_file: None,
+                                });
+                            } else {
+                                // Regular overlay — analyze via overlay detector
+                                if let Ok(Some(ov)) = crate::analyzers::overlay::analyze_overlay(
+                                    overlay,
+                                    &report.target.path,
+                                    Some(self.capability_mapper.clone()),
+                                    None,
+                                ) {
+                                    report.findings.push(ov.sfx_finding);
+                                    report.findings.extend(ov.archive_report.findings);
+                                    report.files.extend(ov.archive_report.files);
                                 }
                             }
                         }
-
-                        // Recalculate density metrics that depend on code_size
-                        let code_kb = cs as f32 / 1024.0;
-                        if code_kb > 0.0 {
-                            binary_metrics.import_density =
-                                binary_metrics.import_count as f32 / code_kb;
-                            binary_metrics.string_density =
-                                binary_metrics.string_count as f32 / code_kb;
-                            binary_metrics.function_density =
-                                binary_metrics.function_count as f32 / code_kb;
-                            binary_metrics.relocation_density =
-                                binary_metrics.relocation_count as f32 / code_kb;
-                            binary_metrics.complexity_per_kb =
-                                binary_metrics.avg_complexity * 1024.0 / cs as f32;
-                        }
                     }
 
-                    report.metrics = Some(Metrics {
-                        binary: Some(binary_metrics),
-                        elf: Some(elf_metrics.clone()),
-                        ..Default::default()
-                    });
-
-                    // Convert R2Functions to Functions for the report
-                    report.functions = batched.functions.into_iter().map(Function::from).collect();
-
-                    // Use strings from batched data (no extra r2 spawn)
-                    // Return None if empty so extract_smart falls back to stng extraction
-                    if batched.strings.is_empty() {
-                        None
-                    } else {
-                        Some(batched.strings)
-                    }
-                } else {
-                    // Use ELF metrics computed from goblin if r2 failed/skipped
-                    report.metrics = Some(Metrics {
-                        elf: Some(elf_metrics.clone()),
-                        ..Default::default()
-                    });
-                    None
-                };
-
-                // ELF overlay detection: data after the last PT_LOAD segment
-                {
-                    use goblin::elf::program_header::PT_LOAD;
-                    let image_end = elf
-                        .program_headers
+                    // Compute content_end for overlay metrics (after populate_binary_metrics)
+                    let sections_end = elf
+                        .section_headers
                         .iter()
-                        .filter(|ph| ph.p_type == PT_LOAD)
-                        .map(|ph| ph.p_offset.saturating_add(ph.p_filesz) as usize)
+                        .filter(|s| s.sh_type != goblin::elf::section_header::SHT_NOBITS)
+                        .map(|s| s.sh_offset + s.sh_size)
                         .max()
                         .unwrap_or(0);
-                    if image_end > 0 && data.len() > image_end {
-                        let overlay = &data[image_end..];
-                        // Check for squashfs (AppImage)
-                        const SQUASHFS_LE: &[u8] = &[0x73, 0x71, 0x73, 0x68];
-                        const SQUASHFS_BE: &[u8] = &[0x68, 0x73, 0x71, 0x73];
-                        if overlay.starts_with(SQUASHFS_LE) || overlay.starts_with(SQUASHFS_BE) {
-                            report.findings.push(crate::types::Finding {
-                                id: "file/sfx/appimage".to_string(),
-                                kind: crate::types::FindingKind::Structural,
-                                desc: "Squashfs filesystem appended after ELF image (AppImage)"
-                                    .to_string(),
-                                conf: 1.0,
-                                crit: crate::types::Criticality::Notable,
-                                mbc: None,
-                                attack: None,
-                                trait_refs: vec![],
-                                evidence: vec![crate::types::Evidence {
-                                    method: "magic".to_string(),
-                                    source: "elf_overlay".to_string(),
-                                    value: format!("squashfs at offset {:#x}", image_end),
-                                    location: Some(format!("{:#x}", image_end)),
-                                    ..Default::default()
-                                }],
-                                match_count: 1,
-                                source_file: None,
-                            });
-                        } else {
-                            // Regular overlay — analyze via overlay detector
-                            if let Ok(Some(ov)) = crate::analyzers::overlay::analyze_overlay(
-                                overlay,
-                                &report.target.path,
-                                Some(self.capability_mapper.clone()),
-                                None,
-                            ) {
-                                report.findings.push(ov.sfx_finding);
-                                report.findings.extend(ov.archive_report.findings);
-                                report.files.extend(ov.archive_report.files);
-                            }
-                        }
-                    }
+                    let segments_end = elf
+                        .program_headers
+                        .iter()
+                        .map(|p| p.p_offset + p.p_filesz)
+                        .max()
+                        .unwrap_or(0);
+                    let content_end = sections_end.max(segments_end);
+
+                    (
+                        Some(elf_metrics),
+                        code_size,
+                        symbols_found,
+                        r2_strings_extracted,
+                        content_end,
+                    )
                 }
-
-                // Compute content_end for overlay metrics (after populate_binary_metrics)
-                let sections_end = elf
-                    .section_headers
-                    .iter()
-                    .filter(|s| s.sh_type != goblin::elf::section_header::SHT_NOBITS)
-                    .map(|s| s.sh_offset + s.sh_size)
-                    .max()
-                    .unwrap_or(0);
-                let segments_end = elf
-                    .program_headers
-                    .iter()
-                    .map(|p| p.p_offset + p.p_filesz)
-                    .max()
-                    .unwrap_or(0);
-                let content_end = sections_end.max(segments_end);
-
-                (
-                    Some(elf_metrics),
-                    code_size,
-                    symbols_found,
-                    r2_strings_extracted,
-                    content_end,
-                )
-            }
-            Err(e) => {
-                // Parsing failed - this is a strong indicator of malformed/hostile binary
-                report.findings.push(Finding {
-                    kind: FindingKind::Structural,
-                    id: "anti-analysis/malformed/elf-header".to_string(),
-                    desc: format!("Malformed ELF header or section headers: {}", e),
-                    conf: 1.0,
-                    crit: Criticality::Hostile,
-                    mbc: Some("B0001".to_string()), // Defense Evasion: Software Packing/Obfuscation
-                    attack: Some("T1027".to_string()), // Obfuscated Files or Information
-                    evidence: vec![],
-                    match_count: 0,
-                    trait_refs: vec![],
-                    source_file: None,
-                });
-
-                // Extract architecture from raw header even when full parse fails.
-                // e_machine is at offset 18 (2 bytes), endianness from EI_DATA at offset 5.
-                if data.len() >= 20 {
-                    let is_big_endian = data.get(5) == Some(&2);
-                    let e_machine = if is_big_endian {
-                        u16::from_be_bytes([data[18], data[19]])
-                    } else {
-                        u16::from_le_bytes([data[18], data[19]])
-                    };
-                    let arch = self.arch_name_from_machine(e_machine);
-                    report.structure.push(StructuralFeature {
-                        id: format!("binary/arch/{}", arch),
-                        desc: format!("{} architecture", arch),
-                        evidence: vec![Evidence {
-                            method: "header".to_string(),
-                            source: "raw_header".to_string(),
-                            value: format!("e_machine={}", e_machine),
-                            ..Default::default()
-                        }],
+                Err(e) => {
+                    // Parsing failed - this is a strong indicator of malformed/hostile binary
+                    report.findings.push(Finding {
+                        kind: FindingKind::Structural,
+                        id: "anti-analysis/malformed/elf-header".to_string(),
+                        desc: format!("Malformed ELF header or section headers: {}", e),
+                        conf: 1.0,
+                        crit: Criticality::Hostile,
+                        mbc: Some("B0001".to_string()), // Defense Evasion: Software Packing/Obfuscation
+                        attack: Some("T1027".to_string()), // Obfuscated Files or Information
+                        evidence: vec![],
+                        match_count: 0,
+                        trait_refs: vec![],
+                        source_file: None,
                     });
-                    report.target.architectures = Some(vec![arch]);
-                }
 
-                report
-                    .metadata
-                    .errors
-                    .push(format!("ELF parse error: {}", e));
-                (None, None, false, None, 0)
-            }
-        };
+                    // Extract architecture from raw header even when full parse fails.
+                    // e_machine is at offset 18 (2 bytes), endianness from EI_DATA at offset 5.
+                    if data.len() >= 20 {
+                        let is_big_endian = data.get(5) == Some(&2);
+                        let e_machine = if is_big_endian {
+                            u16::from_be_bytes([data[18], data[19]])
+                        } else {
+                            u16::from_le_bytes([data[18], data[19]])
+                        };
+                        let arch = self.arch_name_from_machine(e_machine);
+                        report.structure.push(StructuralFeature {
+                            id: format!("binary/arch/{}", arch),
+                            desc: format!("{} architecture", arch),
+                            evidence: vec![Evidence {
+                                method: "header".to_string(),
+                                source: "raw_header".to_string(),
+                                value: format!("e_machine={}", e_machine),
+                                ..Default::default()
+                            }],
+                        });
+                        report.target.architectures = Some(vec![arch]);
+                    }
+
+                    report
+                        .metadata
+                        .errors
+                        .push(format!("ELF parse error: {}", e));
+                    (None, None, false, None, 0)
+                }
+            };
 
         // Embedded ELF / PE scanning (host-agnostic, scans raw bytes)
         if !self.skip_embedded_scan {
@@ -431,8 +434,7 @@ impl ElfAnalyzer {
                     binary.overlay_size = overlay_size;
                     binary.overlay_ratio = overlay_size as f32 / data.len() as f32;
                     binary.overlay_entropy =
-                        crate::entropy::calculate_entropy(&data[elf_content_end as usize..])
-                            as f32;
+                        crate::entropy::calculate_entropy(&data[elf_content_end as usize..]) as f32;
                 }
             }
         }

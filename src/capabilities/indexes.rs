@@ -265,7 +265,8 @@ impl StringMatchIndex {
                     ..
                 } => {
                     regex_trait_indices.insert(trait_idx);
-                    if let Some(literal) = Self::extract_regex_literal(regex_str) {
+                    let literal = Self::extract_regex_literal(regex_str);
+                    if let Some(literal) = literal {
                         if let Some(&pattern_idx) = regex_literal_map.get(&literal) {
                             regex_literal_to_traits[pattern_idx].push(trait_idx);
                         } else {
@@ -659,7 +660,7 @@ impl StringMatchIndex {
             let total_patterns = self.regex_literal_to_traits.len();
             let mut seen_patterns: FxHashSet<usize> = FxHashSet::default();
             'outer: for string_info in strings {
-                for mat in ac.find_iter(&string_info.value) {
+                for mat in ac.find_overlapping_iter(&string_info.value) {
                     let pattern_idx = mat.pattern().as_usize();
                     if seen_patterns.insert(pattern_idx) {
                         if let Some(trait_indices) = self.regex_literal_to_traits.get(pattern_idx) {
@@ -674,6 +675,7 @@ impl StringMatchIndex {
                 }
             }
         }
+
 
         // Traits without extractable literals can't be pre-filtered, so include them
         for &trait_idx in &self.regex_trait_indices {

@@ -4,7 +4,6 @@
 //! Can work with AST-extracted strings or heuristic extraction.
 
 use crate::types::StringMetrics;
-use std::collections::HashMap;
 
 /// Analyze a collection of string literals
 #[must_use]
@@ -171,21 +170,18 @@ fn calculate_string_entropy(s: &str) -> f32 {
         return 0.0;
     }
 
-    let mut freq: HashMap<char, usize> = HashMap::new();
-    let total = s.chars().count();
+    let mut freq = [0u32; 256];
+    let total = s.len();
 
-    for c in s.chars() {
-        *freq.entry(c).or_insert(0) += 1;
+    for &b in s.as_bytes() {
+        freq[b as usize] += 1;
     }
 
-    freq.values()
+    freq.iter()
+        .filter(|&&count| count > 0)
         .map(|&count| {
             let p = count as f32 / total as f32;
-            if p > 0.0 {
-                -p * p.log2()
-            } else {
-                0.0
-            }
+            -p * p.log2()
         })
         .sum()
 }
@@ -282,17 +278,13 @@ fn is_url(s: &str) -> bool {
 fn is_file_path(s: &str) -> bool {
     // Unix paths
     if s.starts_with('/') && s.len() > 1 && !s.starts_with("//") {
-        return s.chars().filter(|&c| c == '/').count() >= 1;
+        return memchr::memchr(b'/', s.as_bytes()).is_some();
     }
 
     // Windows paths
     if s.len() >= 3 {
-        let chars: Vec<char> = s.chars().take(3).collect();
-        if chars.len() >= 3
-            && chars[0].is_ascii_alphabetic()
-            && chars[1] == ':'
-            && (chars[2] == '\\' || chars[2] == '/')
-        {
+        let b = s.as_bytes();
+        if b[0].is_ascii_alphabetic() && b[1] == b':' && (b[2] == b'\\' || b[2] == b'/') {
             return true;
         }
     }
@@ -320,7 +312,7 @@ fn is_ip_address(s: &str) -> bool {
 
     // IPv6 check (contains :: or multiple :)
     if s.contains(':') && !s.contains("://") {
-        let colon_count = s.chars().filter(|&c| c == ':').count();
+        let colon_count = memchr::memchr_iter(b':', s.as_bytes()).count();
         if (2..=7).contains(&colon_count) {
             return s.chars().all(|c| c.is_ascii_hexdigit() || c == ':');
         }

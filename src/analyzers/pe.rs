@@ -343,9 +343,11 @@ impl PEAnalyzer {
             // If radare2 found very few functions, use .pdata as ground truth.
             // PE x64 binaries list every function in .pdata as RUNTIME_FUNCTION
             // entries (12 bytes each: begin_addr, end_addr, unwind_info).
-            if let Some(pdata) = pe.sections.iter().find(|s| {
-                String::from_utf8_lossy(&s.name).trim_matches(char::from(0)) == ".pdata"
-            }) {
+            if let Some(pdata) = pe
+                .sections
+                .iter()
+                .find(|s| String::from_utf8_lossy(&s.name).trim_matches(char::from(0)) == ".pdata")
+            {
                 let pdata_functions = pdata.virtual_size / 12;
                 // Trust .pdata when r2 found very few functions or .pdata reports
                 // vastly more (10x+), since r2 struggles with stripped PEs
@@ -454,8 +456,7 @@ impl PEAnalyzer {
                     binary.overlay_size = overlay_size;
                     binary.overlay_ratio = overlay_size as f32 / pe_data.len() as f32;
                     binary.overlay_entropy =
-                        crate::entropy::calculate_entropy(&pe_data[sections_end as usize..])
-                            as f32;
+                        crate::entropy::calculate_entropy(&pe_data[sections_end as usize..]) as f32;
                 }
             }
         }

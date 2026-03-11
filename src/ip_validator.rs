@@ -115,16 +115,18 @@ pub(crate) fn is_external_ip(ip: &Ipv4Addr) -> bool {
     true
 }
 
-
 /// Parse a single decimal octet without going through `str::parse`.
 /// Returns `None` for empty strings, leading zeros, or values > 255.
 fn parse_octet_fast(s: &str) -> Option<u8> {
     let b = s.as_bytes();
     match b.len() {
-        0 => None,
         1 => {
             let d = b[0].wrapping_sub(b'0');
-            if d <= 9 { Some(d) } else { None }
+            if d <= 9 {
+                Some(d)
+            } else {
+                None
+            }
         }
         2 => {
             // Leading zero check
@@ -149,7 +151,11 @@ fn parse_octet_fast(s: &str) -> Option<u8> {
             let d2 = b[2].wrapping_sub(b'0');
             if d0 <= 9 && d1 <= 9 && d2 <= 9 {
                 let v = d0 as u16 * 100 + d1 as u16 * 10 + d2 as u16;
-                if v <= 255 { Some(v as u8) } else { None }
+                if v <= 255 {
+                    Some(v as u8)
+                } else {
+                    None
+                }
             } else {
                 None
             }

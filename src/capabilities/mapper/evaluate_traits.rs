@@ -399,7 +399,6 @@ impl super::CapabilityMapper {
             .with_min_len(64)
             .filter_map(|&idx| {
                 let trait_def = &self.trait_definitions[idx];
-
                 // For dependent traits, skip string-based optimizations since
                 // we're matching on trait: conditions, not strings
                 if !dependent_only {

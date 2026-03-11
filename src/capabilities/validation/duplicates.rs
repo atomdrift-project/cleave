@@ -399,28 +399,30 @@ fn extract_patterns(trait_def: &TraitDefinition) -> Vec<(String, PatternLocation
     let file_path = trait_def.defined_in.to_string_lossy().to_string();
 
     // Helper to add a pattern
-    let mut add_pattern = |condition_type: &str, match_type: &str, value: String| {
-        let is_regex = match_type == "regex";
-        let normalized = normalize_pattern_for_comparison(&value, is_regex);
+    let mut add_pattern =
+        |condition_type: &str, match_type: &str, value: String, section: Option<String>| {
+            let is_regex = match_type == "regex";
+            let normalized = normalize_pattern_for_comparison(&value, is_regex);
 
-        patterns.push((
-            normalized,
-            PatternLocation {
-                trait_id: trait_def.id.clone(),
-                file_path: file_path.clone(),
-                condition_type: condition_type.to_string(),
-                match_type: match_type.to_string(),
-                original_value: value,
-                for_types: for_types.clone(),
-                count_min: trait_def.count_min,
-                count_max: trait_def.count_max,
-                per_kb_min: trait_def.per_kb_min,
-                per_kb_max: trait_def.per_kb_max,
-                confidence: trait_def.conf,
-                criticality: trait_def.crit,
-            },
-        ));
-    };
+            patterns.push((
+                normalized,
+                PatternLocation {
+                    trait_id: trait_def.id.clone(),
+                    file_path: file_path.clone(),
+                    condition_type: condition_type.to_string(),
+                    match_type: match_type.to_string(),
+                    original_value: value,
+                    for_types: for_types.clone(),
+                    section,
+                    count_min: trait_def.count_min,
+                    count_max: trait_def.count_max,
+                    per_kb_min: trait_def.per_kb_min,
+                    per_kb_max: trait_def.per_kb_max,
+                    confidence: trait_def.conf,
+                    criticality: trait_def.crit,
+                },
+            ));
+        };
 
     // Extract patterns from String, Symbol, and Raw conditions
     match &trait_def.r#if {
@@ -429,19 +431,21 @@ fn extract_patterns(trait_def: &TraitDefinition) -> Vec<(String, PatternLocation
             substr,
             word,
             regex,
+            section,
             ..
         } => {
+            let sec = section.clone();
             if let Some(v) = exact {
-                add_pattern("string", "exact", v.clone());
+                add_pattern("string", "exact", v.clone(), sec.clone());
             }
             if let Some(v) = substr {
-                add_pattern("string", "substr", v.clone());
+                add_pattern("string", "substr", v.clone(), sec.clone());
             }
             if let Some(v) = word {
-                add_pattern("string", "word", v.clone());
+                add_pattern("string", "word", v.clone(), sec.clone());
             }
             if let Some(v) = regex {
-                add_pattern("string", "regex", v.clone());
+                add_pattern("string", "regex", v.clone(), sec.clone());
             }
         }
         Condition::Symbol {
@@ -451,13 +455,13 @@ fn extract_patterns(trait_def: &TraitDefinition) -> Vec<(String, PatternLocation
             ..
         } => {
             if let Some(v) = exact {
-                add_pattern("symbol", "exact", v.clone());
+                add_pattern("symbol", "exact", v.clone(), None);
             }
             if let Some(v) = substr {
-                add_pattern("symbol", "substr", v.clone());
+                add_pattern("symbol", "substr", v.clone(), None);
             }
             if let Some(v) = regex {
-                add_pattern("symbol", "regex", v.clone());
+                add_pattern("symbol", "regex", v.clone(), None);
             }
         }
         Condition::Raw {
@@ -465,19 +469,21 @@ fn extract_patterns(trait_def: &TraitDefinition) -> Vec<(String, PatternLocation
             substr,
             word,
             regex,
+            section,
             ..
         } => {
+            let sec = section.clone();
             if let Some(v) = exact {
-                add_pattern("raw", "exact", v.clone());
+                add_pattern("raw", "exact", v.clone(), sec.clone());
             }
             if let Some(v) = substr {
-                add_pattern("raw", "substr", v.clone());
+                add_pattern("raw", "substr", v.clone(), sec.clone());
             }
             if let Some(v) = word {
-                add_pattern("raw", "word", v.clone());
+                add_pattern("raw", "word", v.clone(), sec.clone());
             }
             if let Some(v) = regex {
-                add_pattern("raw", "regex", v.clone());
+                add_pattern("raw", "regex", v.clone(), sec.clone());
             }
         }
         _ => {} // Skip Encoded, Yara, etc.
@@ -914,6 +920,14 @@ pub(crate) fn check_overlapping_regex_patterns(
         // Skip same trait instance.
         if a.location.trait_id == b.location.trait_id
             && a.location.file_path == b.location.file_path
+        {
+            continue;
+        }
+
+        // Different section scopes are not duplicates (e.g. same pattern in .rsrc vs .rdata).
+        if a.location.section.is_some()
+            && b.location.section.is_some()
+            && a.location.section != b.location.section
         {
             continue;
         }
@@ -1776,8 +1790,7 @@ pub(crate) fn check_regex_contains_literal(
 
                     if !cross_tier {
                         // Same tier, same type: likely redundant
-                        let tier_note =
-                            make_tier_note(&regex_pat.trait_id, &literal_pat.trait_id);
+                        let tier_note = make_tier_note(&regex_pat.trait_id, &literal_pat.trait_id);
                         local_warnings.push(format!(
                             "REGEX CONTAINS LITERAL{}: Regex pattern matches literal
    Regex: '{}' ({} regex) in {}::{}

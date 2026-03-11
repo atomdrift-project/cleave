@@ -102,7 +102,10 @@ impl super::CapabilityMapper {
         }
 
         // Try to load from cache (skip validation when loading from cache)
-        if !enable_full_validation {
+        let skip_cache = std::env::var("CLEAVE_SKIP_CACHE")
+            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+            .unwrap_or(false);
+        if !enable_full_validation && !skip_cache {
             if let Ok(cache_path) = crate::cache::mapper_cache_path() {
                 if cache_path.exists() {
                     tracing::debug!("Attempting to load mapper from cache: {:?}", cache_path);
@@ -2976,7 +2979,7 @@ impl super::CapabilityMapper {
         }
 
         // Save to cache for future runs (only if not in validation mode)
-        if !enable_full_validation {
+        if !enable_full_validation && !skip_cache {
             if let Ok(cache_path) = crate::cache::mapper_cache_path() {
                 let cache_data = MapperCacheData {
                     symbol_map: symbol_map.clone(),

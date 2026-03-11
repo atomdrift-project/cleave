@@ -797,27 +797,19 @@ fn determine_entitlement_criticality(
     entitlement_key: &str,
     signature_type: &macho_codesign::SignatureType,
 ) -> Criticality {
-    // Platform binaries: all entitlements are Notable
-    // (Apple control what goes in platform binaries)
+    // Platform (Apple-signed) binaries: all entitlements are notable
     if matches!(signature_type, macho_codesign::SignatureType::Platform) {
         return Criticality::Notable;
     }
 
-    // Sensitive privacy entitlements
-    if entitlement_key.contains("personal-information") || entitlement_key.contains("device.") {
-        return Criticality::Notable;
-    }
-
-    // Dangerous security-related entitlements (only suspicious for non-platform binaries)
-    if entitlement_key.contains("disable-library-validation")
-        || entitlement_key.contains("allow-jit")
+    // Dangerous security entitlements — suspicious on non-Apple binaries
+    if entitlement_key.contains("allow-jit")
         || entitlement_key.contains("debugger")
         || entitlement_key.contains("unsigned-executable-memory")
     {
         return Criticality::Suspicious;
     }
 
-    // Default for other entitlements
     Criticality::Notable
 }
 
@@ -1358,58 +1350,57 @@ mod tests {
     }
 
     #[test]
-    fn test_determine_entitlement_criticality_platform_binary() {
-        let crit = determine_entitlement_criticality(
+    fn test_determine_entitlement_criticality_platform_always_notable() {
+        // Platform (Apple-signed) binaries: all entitlements are notable
+        for key in [
             "com.apple.security.cs.allow-jit",
-            &macho_codesign::SignatureType::Platform,
-        );
-        // Platform binaries should have Notable criticality for all entitlements
-        assert_eq!(crit, Criticality::Notable);
-    }
-
-    #[test]
-    fn test_determine_entitlement_criticality_dangerous() {
-        let crit = determine_entitlement_criticality(
-            "com.apple.security.cs.disable-library-validation",
-            &macho_codesign::SignatureType::DeveloperID,
-        );
-        assert_eq!(crit, Criticality::Suspicious);
-    }
-
-    #[test]
-    fn test_determine_entitlement_criticality_privacy() {
-        let crit = determine_entitlement_criticality(
-            "personal-information.location",
-            &macho_codesign::SignatureType::Adhoc,
-        );
-        assert_eq!(crit, Criticality::Notable);
-    }
-
-    #[test]
-    fn test_determine_entitlement_criticality_device_access() {
-        let crit = determine_entitlement_criticality(
-            "device.bluetooth",
-            &macho_codesign::SignatureType::DeveloperID,
-        );
-        assert_eq!(crit, Criticality::Notable);
-    }
-
-    #[test]
-    fn test_determine_entitlement_criticality_debugger() {
-        let crit = determine_entitlement_criticality(
             "com.apple.security.cs.debugger",
-            &macho_codesign::SignatureType::DeveloperID,
-        );
-        assert_eq!(crit, Criticality::Suspicious);
+            "com.apple.security.cs.disable-library-validation",
+        ] {
+            assert_eq!(
+                determine_entitlement_criticality(key, &macho_codesign::SignatureType::Platform),
+                Criticality::Notable,
+                "platform binary entitlement {key} should be notable"
+            );
+        }
     }
 
     #[test]
-    fn test_determine_entitlement_criticality_unsigned_memory() {
-        let crit = determine_entitlement_criticality(
+    fn test_determine_entitlement_criticality_dangerous_non_apple() {
+        // Dangerous entitlements are suspicious on non-Apple binaries
+        for key in [
+            "com.apple.security.cs.allow-jit",
+            "com.apple.security.cs.debugger",
             "com.apple.security.cs.allow-unsigned-executable-memory",
-            &macho_codesign::SignatureType::DeveloperID,
+        ] {
+            assert_eq!(
+                determine_entitlement_criticality(key, &macho_codesign::SignatureType::DeveloperID),
+                Criticality::Suspicious,
+                "non-Apple entitlement {key} should be suspicious"
+            );
+        }
+    }
+
+    #[test]
+    fn test_determine_entitlement_criticality_disable_library_validation_notable() {
+        // disable-library-validation is common for developer-signed apps (plugins, frameworks)
+        assert_eq!(
+            determine_entitlement_criticality(
+                "com.apple.security.cs.disable-library-validation",
+                &macho_codesign::SignatureType::DeveloperID,
+            ),
+            Criticality::Notable,
         );
-        assert_eq!(crit, Criticality::Suspicious);
+    }
+
+    #[test]
+    fn test_determine_entitlement_criticality_privacy_notable() {
+        for key in ["personal-information.location", "device.bluetooth"] {
+            assert_eq!(
+                determine_entitlement_criticality(key, &macho_codesign::SignatureType::Adhoc),
+                Criticality::Notable,
+            );
+        }
     }
 
     #[test]

@@ -51,6 +51,7 @@ pub(super) mod shared {
         pub(super) match_type: String,     // "exact", "substr", "word", "regex"
         pub(super) original_value: String, // Original pattern before normalization
         pub(super) for_types: HashSet<String>,
+        pub(super) section: Option<String>,
         pub(super) count_min: Option<usize>,
         pub(super) count_max: Option<usize>,
         pub(super) per_kb_min: Option<f64>,

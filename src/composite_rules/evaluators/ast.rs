@@ -352,10 +352,33 @@ pub(crate) fn eval_ast_query<'a>(query_str: &str, ctx: &EvaluationContext<'a>) -
     // Track parse errors but continue — tree-sitter recovers from minor errors
     let has_parse_errors = tree.root_node().has_error();
 
-    // Compile the query
-    let Ok(query) = tree_sitter::Query::new(&lang, query_str) else {
+    // Compile the query (cached per thread to avoid recompilation across files)
+    use std::cell::RefCell;
+    use std::collections::HashMap;
+    thread_local! {
+        static QUERY_CACHE: RefCell<HashMap<(FileType, String), tree_sitter::Query>> =
+            RefCell::new(HashMap::new());
+    }
+    let query_ref = QUERY_CACHE.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        let key = (ctx.file_type, query_str.to_string());
+        if !cache.contains_key(&key) {
+            if let Ok(q) = tree_sitter::Query::new(&lang, query_str) {
+                cache.insert(key.clone(), q);
+            } else {
+                return None;
+            }
+        }
+        // SAFETY: we return a pointer to the cached query which lives for the thread's lifetime
+        // The cache is append-only within a thread, so entries are never moved/removed
+        cache.get(&key).map(|q| q as *const tree_sitter::Query)
+    });
+    let Some(query_ptr) = query_ref else {
         return ConditionResult::no_match();
     };
+    // SAFETY: The thread_local cache lives for the thread's lifetime and entries are never removed.
+    // We hold no borrow on the RefCell while using this pointer.
+    let query = unsafe { &*query_ptr };
 
     // Execute the query with safety limits
     let mut query_cursor = tree_sitter::QueryCursor::new();
@@ -393,7 +416,7 @@ pub(crate) fn eval_ast_query<'a>(query_str: &str, ctx: &EvaluationContext<'a>) -
     };
     let options = tree_sitter::QueryCursorOptions::default().progress_callback(&mut progress_cb);
     let mut matches =
-        query_cursor.matches_with_options(&query, tree.root_node(), source.as_bytes(), options);
+        query_cursor.matches_with_options(query, tree.root_node(), source.as_bytes(), options);
     let mut buffer1: Vec<u8> = Vec::new();
     let mut buffer2: Vec<u8> = Vec::new();
     while let Some(m) = matches.next() {
@@ -407,7 +430,7 @@ pub(crate) fn eval_ast_query<'a>(query_str: &str, ctx: &EvaluationContext<'a>) -
         // Check text predicates (e.g., #eq?, #match?) using tree-sitter's built-in method
         // This is REQUIRED - tree-sitter does NOT automatically filter by text predicates
         let mut text_provider = SourceTextProvider(source.as_bytes());
-        if !m.satisfies_text_predicates(&query, &mut buffer1, &mut buffer2, &mut text_provider) {
+        if !m.satisfies_text_predicates(query, &mut buffer1, &mut buffer2, &mut text_provider) {
             continue; // Skip matches that don't satisfy predicates
         }
 

@@ -360,16 +360,18 @@ fn filter_findings_for_formula(findings: &[Finding]) -> Vec<Finding> {
 /// Format a single file analysis as a JSONL line
 #[allow(dead_code)] // Used by binary target
 pub(crate) fn format_jsonl_line(file: &crate::types::FileAnalysis) -> Result<String> {
-    // Compute formula if not already set and file has findings
-    if file.formula.is_none() && !file.findings.is_empty() {
+    // Compute formula if not already set
+    if file.formula.is_none() {
         let mut file_with_formula = file.clone();
         // Filter findings for formula (aggregate and remove baseline/low-confidence)
         // This ensures formula consistency between terminal and JSON output
         let filtered = filter_findings_for_formula(&file.findings);
         let formula = malecule_bridge::formula_from_findings(&filtered);
-        if !formula.is_empty() {
-            file_with_formula.formula = Some(formula);
-        }
+        file_with_formula.formula = Some(if formula.is_empty() {
+            "∅".to_string()
+        } else {
+            formula
+        });
         let entry = JsonlFileEntry {
             entry_type: "file",
             file: &file_with_formula,

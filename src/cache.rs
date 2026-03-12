@@ -76,16 +76,6 @@ pub(crate) fn third_party_path() -> PathBuf {
     traits_path().join("third-party")
 }
 
-/// Returns the build mode label for cache key namespacing.
-/// Debug builds use "dev", release/profiling builds use "prod".
-fn build_mode() -> &'static str {
-    if cfg!(debug_assertions) {
-        "dev"
-    } else {
-        "prod"
-    }
-}
-
 /// Returns the most recently modified `.yar`/`.yara` file and its mtime.
 ///
 /// Only pure YARA rule files are considered; trait YAML changes do not invalidate
@@ -254,11 +244,10 @@ pub(crate) fn yara_cache_key(third_party_enabled: bool) -> Result<String> {
     } else {
         "builtin"
     };
-    let mode = build_mode();
     let version = env!("CARGO_PKG_VERSION");
 
     Ok(format!(
-        "yara-rules-v3-{version}-{mode}-{timestamp}-{suffix}.bin",
+        "yara-rules-v3-{version}-{timestamp}-{suffix}.bin",
     ))
 }
 
@@ -282,11 +271,10 @@ pub(crate) fn mapper_cache_key() -> Result<String> {
         .context("Invalid cache timestamp")?
         .as_secs();
 
-    let mode = build_mode();
     let version = env!("CARGO_PKG_VERSION");
 
     Ok(format!(
-        "capability-mapper-v5-{version}-{mode}-{timestamp}.bin",
+        "capability-mapper-v5-{version}-{timestamp}.bin",
     ))
 }
 
@@ -416,12 +404,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_build_mode_is_dev_in_tests() {
-        // Tests are compiled with debug_assertions, so build_mode() == "dev"
-        assert_eq!(build_mode(), "dev");
-    }
-
-    #[test]
     fn test_yara_cache_key_format() {
         // Test that cache key has expected format
         if let Ok(key) = yara_cache_key(false) {
@@ -432,14 +414,6 @@ mod tests {
         if let Ok(key) = yara_cache_key(true) {
             assert!(key.starts_with("yara-rules-"));
             assert!(key.ends_with("-with-3p.bin"));
-        }
-    }
-
-    #[test]
-    fn test_yara_cache_key_includes_mode() {
-        if let Ok(key) = yara_cache_key(false) {
-            // Should include either "dev" or "prod" mode
-            assert!(key.contains("-dev-") || key.contains("-prod-"));
         }
     }
 

@@ -165,8 +165,8 @@ impl ArchiveAnalyzer {
                 }
             }
 
-            // Non-analyzable file types - images, certificates, etc.
-            FileType::Jpeg | FileType::Png | FileType::Certificate => {}
+            // Non-analyzable file types - images, etc.
+            FileType::Png => {}
 
             // All other file types - use analyzer_for_file_type_arc (single source of truth)
             _ => {

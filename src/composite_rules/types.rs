@@ -241,6 +241,8 @@ pub(crate) enum FileType {
     PackageJson,
     /// Chrome extension manifest.json
     ChromeManifest,
+    /// VS Code extension manifest (extension.vsixmanifest)
+    VsixManifest,
     /// Rust Cargo.toml manifest
     CargoToml,
     /// Python pyproject.toml manifest
@@ -259,9 +261,9 @@ pub(crate) enum FileType {
     Lnk,
     /// iOS App Package (.ipa) - not extractable by cleave
     Ipa,
-    /// Plain text file
+    /// Plain text file (no longer analyzed, but retained for rule compatibility)
     Text,
-    /// JPEG image
+    /// JPEG image (no longer analyzed, but retained for rule compatibility)
     Jpeg,
     /// PNG image
     Png,
@@ -347,6 +349,7 @@ impl FileType {
             // Manifest/config formats
             FileType::PackageJson,
             FileType::ChromeManifest,
+            FileType::VsixManifest,
             FileType::CargoToml,
             FileType::PyProjectToml,
             FileType::GithubActions,
@@ -357,7 +360,7 @@ impl FileType {
             FileType::Lnk,
             // Archive/installer formats
             FileType::Ipa,
-            // Generic formats
+            // Generic formats (retained for rule compatibility, not analyzed)
             FileType::Text,
             // Image formats
             FileType::Jpeg,
@@ -407,6 +410,7 @@ impl FileType {
             // Manifest/config formats
             "package.json" | "packagejson" => FileType::PackageJson,
             "chrome-manifest" | "chromemanifest" => FileType::ChromeManifest,
+            "vsixmanifest" | "vsix-manifest" | "extension.vsixmanifest" => FileType::VsixManifest,
             "cargo-toml" | "cargotoml" | "cargo.toml" => FileType::CargoToml,
             "pyproject-toml" | "pyprojecttoml" | "pyproject.toml" => FileType::PyProjectToml,
             "github-actions" | "githubactions" => FileType::GithubActions,

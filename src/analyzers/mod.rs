@@ -140,14 +140,12 @@ pub fn analyzer_for_file_type(
         )),
 
         // Text-based formats without tree-sitter - use generic analyzer
-        FileType::PkgInfo
-        | FileType::Plist
-        | FileType::Html
-        | FileType::Markdown
-        | FileType::Text => Some(Box::new(
-            generic::GenericAnalyzer::new(file_type.clone())
-                .with_capability_mapper(mapper_or_empty),
-        )),
+        FileType::PkgInfo | FileType::Plist | FileType::Html | FileType::Markdown => {
+            Some(Box::new(
+                generic::GenericAnalyzer::new(file_type.clone())
+                    .with_capability_mapper(mapper_or_empty),
+            ))
+        }
 
         // Archive needs special handling (depth limits, nested analysis)
         FileType::Archive => None,
@@ -227,14 +225,12 @@ pub(crate) fn analyzer_for_file_type_arc(
         )),
 
         // Text-based formats without tree-sitter - use generic analyzer
-        FileType::PkgInfo
-        | FileType::Plist
-        | FileType::Html
-        | FileType::Markdown
-        | FileType::Text => Some(Box::new(
-            generic::GenericAnalyzer::new(file_type.clone())
-                .with_capability_mapper_arc(mapper_or_empty),
-        )),
+        FileType::PkgInfo | FileType::Plist | FileType::Html | FileType::Markdown => {
+            Some(Box::new(
+                generic::GenericAnalyzer::new(file_type.clone())
+                    .with_capability_mapper_arc(mapper_or_empty),
+            ))
+        }
 
         // Archive needs special handling (depth limits, nested analysis)
         FileType::Archive => None,
@@ -389,7 +385,6 @@ pub(crate) fn detect_file_type_from_path(file_path: &Path) -> FileType {
             | "vsix" | "aar" | "egg" | "whl" | "phar" => return FileType::Archive,
             "html" | "htm" => return FileType::Html,
             "md" | "markdown" => return FileType::Markdown,
-            "txt" | "rst" | "csv" | "log" => return FileType::Text,
             _ => {}
         }
     }
@@ -437,10 +432,10 @@ fn detect_file_type_inner(file_path: &Path, file_data: &[u8]) -> Option<FileType
         return Some(FileType::Lnk);
     }
 
-    // Check for JPEG magic bytes (FF D8 FF)
+    // Check for JPEG magic bytes (FF D8 FF) - skip, not analyzed
     if file_data.len() >= 3 && file_data[0] == 0xFF && file_data[1] == 0xD8 && file_data[2] == 0xFF
     {
-        return Some(FileType::Jpeg);
+        return None;
     }
 
     // Check for PNG magic bytes (89 50 4E 47 0D 0A 1A 0A)
@@ -492,6 +487,13 @@ fn detect_file_type_inner(file_path: &Path, file_data: &[u8]) -> Option<FileType
     let head = &file_data[..file_data.len().min(100)];
     if memchr::memmem::find(head, b"<plist").is_some() {
         return Some(FileType::Plist);
+    }
+
+    // Check for Python bytecode (Python 3.5+): magic is XX 0D 0D 0A
+    // Bytes 1-3 are always \r\r\n for all Python 3.5+ versions.
+    if file_data.len() >= 4 && file_data[1] == 0x0d && file_data[2] == 0x0d && file_data[3] == 0x0a
+    {
+        return Some(FileType::PythonBytecode);
     }
 
     // Check for shell script shebang (various shells)
@@ -726,6 +728,9 @@ fn detect_file_type_inner(file_path: &Path, file_data: &[u8]) -> Option<FileType
         if ext_str == "py" {
             return Some(FileType::Python);
         }
+        if ext_str == "pyc" {
+            return Some(FileType::PythonBytecode);
+        }
         if matches!(ext_str.as_str(), "js" | "mjs" | "cjs" | "jsx") {
             return Some(FileType::JavaScript);
         }
@@ -797,17 +802,14 @@ fn detect_file_type_inner(file_path: &Path, file_data: &[u8]) -> Option<FileType
             if looks_like_html(file_data) {
                 return Some(FileType::Html);
             }
-            // HTML extension but no markup - treat as plain text
-            return Some(FileType::Text);
+            // HTML extension but no markup - not analyzed
+            return None;
         }
         if matches!(ext_str.as_str(), "md" | "markdown") {
             return Some(FileType::Markdown);
         }
-        if matches!(ext_str.as_str(), "txt" | "rst" | "csv" | "log") {
-            return Some(FileType::Text);
-        }
-        if ext_str == "json" {
-            return Some(FileType::Text);
+        if matches!(ext_str.as_str(), "txt" | "rst" | "csv" | "log" | "json") {
+            return None;
         }
     }
 
@@ -819,6 +821,22 @@ fn detect_file_type_inner(file_path: &Path, file_data: &[u8]) -> Option<FileType
 
     if looks_like_powershell(file_data) {
         return Some(FileType::PowerShell);
+    }
+
+    if looks_like_perl(file_data) {
+        return Some(FileType::Perl);
+    }
+
+    if looks_like_batch(file_data) {
+        return Some(FileType::Batch);
+    }
+
+    if looks_like_vbs(file_data) {
+        return Some(FileType::Vbs);
+    }
+
+    if looks_like_c(file_data) {
+        return Some(FileType::C);
     }
 
     None
@@ -968,6 +986,92 @@ fn looks_like_shell(data: &[u8]) -> bool {
         || memchr::memmem::find(head, b"set -e").is_some()
         || memchr::memmem::find(head, b"if [").is_some()
         || memchr::memmem::find(head, b"case $").is_some()
+}
+
+/// Heuristic detection for Perl files without .pl/.pm extension
+fn looks_like_perl(data: &[u8]) -> bool {
+    let head = &data[..data.len().min(300)];
+    // Strong single-indicator: strict/warnings pragmas are almost exclusively Perl
+    if memchr::memmem::find(head, b"use strict;").is_some()
+        || memchr::memmem::find(head, b"use warnings;").is_some()
+        || memchr::memmem::find(head, b"use strict\n").is_some()
+        || memchr::memmem::find(head, b"use warnings\n").is_some()
+    {
+        return true;
+    }
+    // Secondary: need 3+ common Perl idioms
+    let indicators: &[&[u8]] = &[
+        b"my $", b"my @", b"my %", b"chomp", b"local $", b"@_", b"$_",
+    ];
+    indicators
+        .iter()
+        .filter(|&&p| memchr::memmem::find(head, p).is_some())
+        .count()
+        >= 3
+}
+
+/// Heuristic detection for Windows Batch files without .bat/.cmd extension
+fn looks_like_batch(data: &[u8]) -> bool {
+    let head = &data[..data.len().min(300)];
+    // @echo and %~dp0 are exclusively Batch syntax
+    if memchr::memmem::find(head, b"@echo").is_some()
+        || memchr::memmem::find(head, b"@ECHO").is_some()
+        || memchr::memmem::find(head, b"%~dp0").is_some()
+    {
+        return true;
+    }
+    // Secondary: need 2+ common Batch idioms
+    let indicators: &[&[u8]] = &[
+        b"SETLOCAL",
+        b"ENDLOCAL",
+        b"GOTO ",
+        b"IF EXIST",
+        b"IF NOT EXIST",
+        b"SET /P",
+        b"SET /A",
+        b"FOR /F",
+        b"CALL :",
+        b"setlocal",
+        b"endlocal",
+    ];
+    indicators
+        .iter()
+        .filter(|&&p| memchr::memmem::find(head, p).is_some())
+        .count()
+        >= 2
+}
+
+/// Heuristic detection for VBScript files without .vbs extension
+fn looks_like_vbs(data: &[u8]) -> bool {
+    let head = &data[..data.len().min(300)];
+    // WScript and CreateObject are almost exclusively VBScript/WSH
+    if memchr::memmem::find(head, b"WScript.").is_some()
+        || memchr::memmem::find(head, b"Option Explicit").is_some()
+    {
+        return true;
+    }
+    // Secondary: need 2+ VBScript-specific patterns
+    let indicators: &[&[u8]] = &[
+        b"CreateObject(",
+        b"End Sub",
+        b"End Function",
+        b"MsgBox ",
+        b"InputBox(",
+        b"WSH.",
+        b"Dim ",
+    ];
+    indicators
+        .iter()
+        .filter(|&&p| memchr::memmem::find(head, p).is_some())
+        .count()
+        >= 2
+}
+
+/// Heuristic detection for C/C++ source files without .c/.cpp extension
+fn looks_like_c(data: &[u8]) -> bool {
+    let head = &data[..data.len().min(300)];
+    memchr::memmem::find(head, b"#include <").is_some()
+        || memchr::memmem::find(head, b"#include \"").is_some()
 }
 
 /// Find MZ header within the first `max_offset` bytes
@@ -1233,11 +1337,6 @@ pub enum FileType {
     Rtf,
     /// Windows Shell Link file (.lnk)
     Lnk,
-    /// X.509 / DER certificate file
-    #[allow(dead_code)] // Used in streaming.rs match arms
-    Certificate,
-    /// JPEG image
-    Jpeg,
     /// PNG image
     Png,
     /// PDF document
@@ -1246,8 +1345,6 @@ pub enum FileType {
     Html,
     /// Markdown document (.md, .markdown)
     Markdown,
-    /// Plain text file (no specific language detected)
-    Text,
     /// File type could not be determined
     Unknown,
 }
@@ -1301,13 +1398,7 @@ impl FileType {
             | FileType::Lnk
             | FileType::Png
             | FileType::Pdf => true, // Included as they can carry exploits/malware
-            FileType::Archive
-            | FileType::Unknown
-            | FileType::Jpeg
-            | FileType::Certificate
-            | FileType::Html
-            | FileType::Markdown
-            | FileType::Text => false, // Skip other images, text, and unknown files by default in dir scans
+            FileType::Archive | FileType::Unknown | FileType::Html | FileType::Markdown => false, // Skip archives, unknown, and non-program text files in dir scans
         }
     }
 
@@ -1382,13 +1473,11 @@ impl FileType {
             FileType::Plist => vec!["plist", "xml", "apple"],
             FileType::Rtf => vec!["rtf", "doc"],
             FileType::Lnk => vec!["lnk", "shortcut"],
-            FileType::Jpeg => vec!["jpeg", "jpg"],
             FileType::Png => vec!["png"],
             FileType::Pdf => vec!["pdf"],
             FileType::Html => vec!["html", "htm"],
             FileType::Markdown => vec!["md", "markdown"],
-            FileType::Text => vec!["txt", "text"],
-            FileType::Unknown | FileType::Certificate => vec![], // No filtering for unknown types
+            FileType::Unknown => vec![], // No filtering for unknown types
         }
     }
 }
@@ -1531,13 +1620,13 @@ mod tests {
     #[test]
     fn test_text_extension_detection() {
         let path = PathBuf::from("notes.txt");
-        assert_eq!(detect_file_type_from_path(&path), FileType::Text);
+        assert_eq!(detect_file_type_from_path(&path), FileType::Unknown);
 
         let path = PathBuf::from("data.csv");
-        assert_eq!(detect_file_type_from_path(&path), FileType::Text);
+        assert_eq!(detect_file_type_from_path(&path), FileType::Unknown);
 
         let path = PathBuf::from("app.log");
-        assert_eq!(detect_file_type_from_path(&path), FileType::Text);
+        assert_eq!(detect_file_type_from_path(&path), FileType::Unknown);
     }
 
     #[test]
@@ -1578,11 +1667,11 @@ mod tests {
         let file_type = detect_file_type(html_file.path()).unwrap();
         assert_eq!(file_type, FileType::Html);
 
-        // HTML file without markup -> Text
+        // HTML file without markup -> Unknown (not analyzed)
         let mut text_file = NamedTempFile::with_suffix(".html").unwrap();
         text_file.write_all(b"https://example.com/c2").unwrap();
         let file_type = detect_file_type(text_file.path()).unwrap();
-        assert_eq!(file_type, FileType::Text);
+        assert_eq!(file_type, FileType::Unknown);
     }
 
     #[test]
@@ -1604,6 +1693,183 @@ mod tests {
         let mut txt_file = NamedTempFile::with_suffix(".txt").unwrap();
         txt_file.write_all(b"Plain text content").unwrap();
         let file_type = detect_file_type(txt_file.path()).unwrap();
-        assert_eq!(file_type, FileType::Text);
+        assert_eq!(file_type, FileType::Unknown);
+    }
+
+    // --- Python bytecode ---
+
+    #[test]
+    fn test_python_bytecode_magic_py38() {
+        // Python 3.8 magic: 55 0D 0D 0A
+        let data = b"\x55\x0d\x0d\x0a\x00\x00\x00\x00rest of bytecode";
+        let path = PathBuf::from("cache/script.dat");
+        assert_eq!(
+            detect_file_type_from_data(&path, data),
+            FileType::PythonBytecode
+        );
+    }
+
+    #[test]
+    fn test_python_bytecode_magic_py311() {
+        // Python 3.11 magic: A7 0D 0D 0A
+        let data = b"\xa7\x0d\x0d\x0a\x00\x00\x00\x00rest of bytecode";
+        let path = PathBuf::from("__pycache__/app.cpython-311");
+        assert_eq!(
+            detect_file_type_from_data(&path, data),
+            FileType::PythonBytecode
+        );
+    }
+
+    #[test]
+    fn test_python_bytecode_extension() {
+        // .pyc by extension (archive entry path — no content check)
+        let path = PathBuf::from("__pycache__/app.cpython-312.pyc");
+        assert_eq!(detect_file_type_from_path(&path), FileType::PythonBytecode);
+    }
+
+    // --- Perl ---
+
+    #[test]
+    fn test_looks_like_perl_strict() {
+        assert!(looks_like_perl(b"use strict;\nuse warnings;\nmy $x = 1;\n"));
+    }
+
+    #[test]
+    fn test_looks_like_perl_warnings_only() {
+        assert!(looks_like_perl(b"use warnings;\nprint \"hello\\n\";\n"));
+    }
+
+    #[test]
+    fn test_looks_like_perl_secondary_indicators() {
+        // No strict/warnings but enough secondary idioms
+        assert!(looks_like_perl(
+            b"my $foo = 1;\nmy @bar = ();\nmy %baz = ();\nchomp $foo;\n"
+        ));
+    }
+
+    #[test]
+    fn test_looks_like_perl_negative() {
+        assert!(!looks_like_perl(b"fn main() {\n    println!(\"hello\");\n}\n"));
+        assert!(!looks_like_perl(b"package main\n\nfunc main() {}\n"));
+        assert!(!looks_like_perl(b"console.log('hello');\n"));
+    }
+
+    #[test]
+    fn test_perl_extensionless_file_detected() {
+        use std::io::Write;
+        use tempfile::NamedTempFile;
+
+        let mut f = NamedTempFile::new().unwrap();
+        f.write_all(b"use strict;\nuse warnings;\n\nmy $x = 42;\nprint \"$x\\n\";\n")
+            .unwrap();
+        let file_type = detect_file_type(f.path()).unwrap();
+        assert_eq!(file_type, FileType::Perl);
+    }
+
+    // --- Batch ---
+
+    #[test]
+    fn test_looks_like_batch_echo() {
+        assert!(looks_like_batch(b"@echo off\nSET NAME=world\necho Hello %NAME%\n"));
+    }
+
+    #[test]
+    fn test_looks_like_batch_dp0() {
+        assert!(looks_like_batch(
+            b"SET SCRIPT_DIR=%~dp0\ncd /d %SCRIPT_DIR%\n"
+        ));
+    }
+
+    #[test]
+    fn test_looks_like_batch_secondary() {
+        assert!(looks_like_batch(b"SETLOCAL\nSET /A count=0\nGOTO :end\n:end\nENDLOCAL\n"));
+    }
+
+    #[test]
+    fn test_looks_like_batch_negative() {
+        assert!(!looks_like_batch(b"#!/bin/sh\nexport PATH=/usr/local/bin:$PATH\n"));
+        assert!(!looks_like_batch(b"use strict;\nmy $x = 1;\n"));
+    }
+
+    #[test]
+    fn test_batch_extensionless_file_detected() {
+        use std::io::Write;
+        use tempfile::NamedTempFile;
+
+        let mut f = NamedTempFile::new().unwrap();
+        f.write_all(b"@echo off\nSETLOCAL\nSET /A x=1\nGOTO :eof\n")
+            .unwrap();
+        let file_type = detect_file_type(f.path()).unwrap();
+        assert_eq!(file_type, FileType::Batch);
+    }
+
+    // --- VBScript ---
+
+    #[test]
+    fn test_looks_like_vbs_wscript() {
+        assert!(looks_like_vbs(
+            b"WScript.Echo \"Hello\"\nWScript.Quit 0\n"
+        ));
+    }
+
+    #[test]
+    fn test_looks_like_vbs_option_explicit() {
+        assert!(looks_like_vbs(b"Option Explicit\nDim x\nx = 42\n"));
+    }
+
+    #[test]
+    fn test_looks_like_vbs_secondary() {
+        assert!(looks_like_vbs(
+            b"Dim objShell\nSet objShell = CreateObject(\"WScript.Shell\")\nEnd Sub\n"
+        ));
+    }
+
+    #[test]
+    fn test_looks_like_vbs_negative() {
+        assert!(!looks_like_vbs(b"fn main() {}\n"));
+        assert!(!looks_like_vbs(b"@echo off\nSET x=1\n"));
+    }
+
+    #[test]
+    fn test_vbs_extensionless_file_detected() {
+        use std::io::Write;
+        use tempfile::NamedTempFile;
+
+        let mut f = NamedTempFile::new().unwrap();
+        f.write_all(b"Option Explicit\nDim msg\nmsg = \"Hello\"\nMsgBox msg\n")
+            .unwrap();
+        let file_type = detect_file_type(f.path()).unwrap();
+        assert_eq!(file_type, FileType::Vbs);
+    }
+
+    // --- C/C++ ---
+
+    #[test]
+    fn test_looks_like_c_system_include() {
+        assert!(looks_like_c(b"#include <stdio.h>\n#include <stdlib.h>\nint main() { return 0; }\n"));
+    }
+
+    #[test]
+    fn test_looks_like_c_quoted_include() {
+        assert!(looks_like_c(b"#include \"myheader.h\"\nvoid foo() {}\n"));
+    }
+
+    #[test]
+    fn test_looks_like_c_negative() {
+        assert!(!looks_like_c(b"fn main() {}\n"));
+        assert!(!looks_like_c(b"package main\nfunc main() {}\n"));
+        assert!(!looks_like_c(b"use strict;\nmy $x = 1;\n"));
+    }
+
+    #[test]
+    fn test_c_extensionless_file_detected() {
+        use std::io::Write;
+        use tempfile::NamedTempFile;
+
+        let mut f = NamedTempFile::new().unwrap();
+        f.write_all(b"#include <stdio.h>\nint main(void) { printf(\"hi\\n\"); return 0; }\n")
+            .unwrap();
+        let file_type = detect_file_type(f.path()).unwrap();
+        assert_eq!(file_type, FileType::C);
     }
 }

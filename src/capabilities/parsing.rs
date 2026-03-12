@@ -322,6 +322,7 @@ pub(crate) fn parse_file_types(types: &[String], warnings: &mut Vec<String>) -> 
                 "manifests" => vec![
                     RuleFileType::PackageJson,
                     RuleFileType::ChromeManifest,
+                    RuleFileType::VsixManifest,
                     RuleFileType::CargoToml,
                     RuleFileType::PyProjectToml,
                     RuleFileType::GithubActions,
@@ -380,6 +381,7 @@ pub(crate) fn parse_file_types(types: &[String], warnings: &mut Vec<String>) -> 
                 "composer.json" => vec![RuleFileType::ComposerJson],
                 // Logical types with hyphens
                 "chrome-manifest" | "manifest.json" => vec![RuleFileType::ChromeManifest],
+                "vsixmanifest" | "vsix-manifest" => vec![RuleFileType::VsixManifest],
                 "github-actions" => vec![RuleFileType::GithubActions],
                 // Generic formats
                 "text" | "txt" => vec![RuleFileType::Text],

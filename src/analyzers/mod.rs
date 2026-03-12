@@ -1749,7 +1749,9 @@ mod tests {
 
     #[test]
     fn test_looks_like_perl_negative() {
-        assert!(!looks_like_perl(b"fn main() {\n    println!(\"hello\");\n}\n"));
+        assert!(!looks_like_perl(
+            b"fn main() {\n    println!(\"hello\");\n}\n"
+        ));
         assert!(!looks_like_perl(b"package main\n\nfunc main() {}\n"));
         assert!(!looks_like_perl(b"console.log('hello');\n"));
     }
@@ -1770,7 +1772,9 @@ mod tests {
 
     #[test]
     fn test_looks_like_batch_echo() {
-        assert!(looks_like_batch(b"@echo off\nSET NAME=world\necho Hello %NAME%\n"));
+        assert!(looks_like_batch(
+            b"@echo off\nSET NAME=world\necho Hello %NAME%\n"
+        ));
     }
 
     #[test]
@@ -1782,12 +1786,16 @@ mod tests {
 
     #[test]
     fn test_looks_like_batch_secondary() {
-        assert!(looks_like_batch(b"SETLOCAL\nSET /A count=0\nGOTO :end\n:end\nENDLOCAL\n"));
+        assert!(looks_like_batch(
+            b"SETLOCAL\nSET /A count=0\nGOTO :end\n:end\nENDLOCAL\n"
+        ));
     }
 
     #[test]
     fn test_looks_like_batch_negative() {
-        assert!(!looks_like_batch(b"#!/bin/sh\nexport PATH=/usr/local/bin:$PATH\n"));
+        assert!(!looks_like_batch(
+            b"#!/bin/sh\nexport PATH=/usr/local/bin:$PATH\n"
+        ));
         assert!(!looks_like_batch(b"use strict;\nmy $x = 1;\n"));
     }
 
@@ -1807,9 +1815,7 @@ mod tests {
 
     #[test]
     fn test_looks_like_vbs_wscript() {
-        assert!(looks_like_vbs(
-            b"WScript.Echo \"Hello\"\nWScript.Quit 0\n"
-        ));
+        assert!(looks_like_vbs(b"WScript.Echo \"Hello\"\nWScript.Quit 0\n"));
     }
 
     #[test]
@@ -1846,7 +1852,9 @@ mod tests {
 
     #[test]
     fn test_looks_like_c_system_include() {
-        assert!(looks_like_c(b"#include <stdio.h>\n#include <stdlib.h>\nint main() { return 0; }\n"));
+        assert!(looks_like_c(
+            b"#include <stdio.h>\n#include <stdlib.h>\nint main() { return 0; }\n"
+        ));
     }
 
     #[test]

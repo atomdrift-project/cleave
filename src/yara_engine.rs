@@ -922,41 +922,32 @@ impl YaraEngine {
         let traits_dir = crate::cache::traits_path();
         let third_party_dir = crate::cache::third_party_path();
 
-        // Generic tier gets built-in + inline rules (always scanned)
-        let mut generic_compiler = yara_x::Compiler::new();
-        let mut builtin_count = 0;
-        let mut third_party_count = 0;
-        let mut inline_count = 0;
+        // Phase 1: collect (namespace, source) pairs per tier — all pure transforms, no compilers yet.
 
-        // 0. Load inline YARA from trait YAML files → Generic
-        if traits_dir.exists() {
-            self.compiled_inline_namespaces =
-                Self::load_inline_trait_rules(&mut generic_compiler, &traits_dir);
-            inline_count = self.compiled_inline_namespaces.len();
-        }
+        // 0. Inline YARA from trait YAML files → Generic
+        let inline_sources = if traits_dir.exists() {
+            Self::collect_inline_trait_sources(&traits_dir)
+        } else {
+            vec![]
+        };
+        self.compiled_inline_namespaces = inline_sources.iter().map(|(ns, _)| ns.clone()).collect();
+        let inline_count = self.compiled_inline_namespaces.len();
 
-        // 1. Load built-in YARA rules → Generic
-        if traits_dir.exists() {
-            match self.load_rules_into_compiler(&mut generic_compiler, &traits_dir, "traits") {
-                Ok(count) => builtin_count = count,
-                Err(e) => {
-                    let err_str = e.to_string();
-                    if !err_str.contains("No YARA rules found") {
-                        tracing::warn!("Failed to load built-in sources: {}", e);
-                    }
-                }
-            }
-        }
+        // 1. Built-in YARA rule files → Generic
+        let builtin_sources = if traits_dir.exists() {
+            Self::collect_builtin_sources(&traits_dir)
+        } else {
+            vec![]
+        };
+        let builtin_count = builtin_sources.len();
 
-        // 2. Third-party rules → classified into per-tier compilers
-        let mut tier_compilers: HashMap<YaraTier, yara_x::Compiler<'_>> = HashMap::new();
-        if enable_third_party && third_party_dir.exists() {
-            third_party_count = self.load_third_party_rules_tiered(
-                &mut generic_compiler,
-                &mut tier_compilers,
-                &third_party_dir,
-            );
-        }
+        // 2. Third-party rules → classified into per-tier source lists
+        let (mut tier_sources, third_party_count, vt_skipped, disabled_count) =
+            if enable_third_party && third_party_dir.exists() {
+                Self::collect_third_party_sources_tiered(&third_party_dir)
+            } else {
+                (HashMap::new(), 0, 0, 0)
+            };
 
         let total_count = builtin_count + third_party_count + inline_count;
         if total_count == 0 {
@@ -964,24 +955,55 @@ impl YaraEngine {
             return (0, 0);
         }
 
-        // Build all tier compilers into Rules
-        self.tiers
-            .insert(YaraTier::Generic, generic_compiler.build());
+        // Merge all Generic-tier sources: inline + built-in + generic third-party
+        let generic_sources: Vec<(String, String)> = inline_sources
+            .into_iter()
+            .chain(builtin_sources)
+            .chain(tier_sources.remove(&YaraTier::Generic).unwrap_or_default())
+            .collect();
+        tier_sources.insert(YaraTier::Generic, generic_sources);
 
-        for (tier, compiler) in tier_compilers {
-            let rules = compiler.build();
+        // Phase 2: build all tiers in parallel.
+        //
+        // yara_x::Compiler uses Rc internally and is not Send, so we cannot share one across
+        // threads. Instead we create a fresh Compiler inside each rayon task (no Send required),
+        // load its assigned sources, call build(), and return the resulting Rules (which is Send).
+        // All 6 tiers compile concurrently; total wall-clock time ≈ slowest tier rather than sum.
+        let tier_rules: Vec<(YaraTier, yara_x::Rules)> = tier_sources
+            .into_iter()
+            .collect::<Vec<_>>()
+            .into_par_iter()
+            .filter_map(|(tier, sources)| {
+                if sources.is_empty() {
+                    return None;
+                }
+                let mut compiler = yara_x::Compiler::new();
+                for (ns, src) in &sources {
+                    compiler.new_namespace(ns);
+                    if let Err(e) = compiler.add_source(src.as_bytes()) {
+                        tracing::warn!("Tier {:?}: failed to add source: {:?}", tier, e);
+                    }
+                }
+                Some((tier, compiler.build()))
+            })
+            .collect();
+
+        for (tier, rules) in tier_rules {
             let count = rules.iter().count();
             if count > 0 {
-                tracing::info!("Tier {:?}: {} compiled rules", tier, count);
+                tracing::info!("Tier {}: {} rules", tier.label(), count);
                 self.tiers.insert(tier, rules);
             }
         }
 
-        // Log tier distribution
-        for tier in YaraTier::ALL {
-            if let Some(rules) = self.tiers.get(tier) {
-                tracing::info!("Tier {}: {} rules", tier.label(), rules.iter().count());
-            }
+        if disabled_count > 0 {
+            tracing::info!("{} third-party rule(s) disabled via config", disabled_count);
+        }
+        if vt_skipped > 0 {
+            tracing::info!(
+                "{} third-party rule(s) skipped (require VirusTotal context)",
+                vt_skipped
+            );
         }
 
         // Save to cache for next time
@@ -996,17 +1018,11 @@ impl YaraEngine {
         (builtin_count, third_party_count)
     }
 
-    /// Parse trait YAML files and add all `type: yara` conditions to the compiler.
+    /// Parse trait YAML files and collect all `type: yara` conditions as (namespace, source) pairs.
     ///
-    /// Each rule is added under namespace `inline.{trait_id}` so that scan results
+    /// Each rule is tagged with namespace `inline.{trait_id}` so that scan results
     /// can be mapped back to the originating trait during evaluation.
-    /// Returns the list of namespaces successfully added.
-    fn load_inline_trait_rules<'a>(
-        compiler: &mut yara_x::Compiler<'a>,
-        traits_dir: &Path,
-    ) -> Vec<String> {
-        let mut namespaces = Vec::new();
-
+    fn collect_inline_trait_sources(traits_dir: &Path) -> Vec<(String, String)> {
         let yaml_files: Vec<PathBuf> = WalkDir::new(traits_dir)
             .follow_links(false)
             .into_iter()
@@ -1021,58 +1037,48 @@ impl YaraEngine {
             .map(|e| e.path().to_path_buf())
             .collect();
 
-        for path in &yaml_files {
-            let Ok(content) = fs::read_to_string(path) else {
-                continue;
-            };
-            let Ok(doc) = serde_yaml::from_str::<serde_yaml::Value>(&content) else {
-                continue;
-            };
-
-            // YAML files may have a top-level `traits:` list or be a bare list
-            let items = match &doc {
-                serde_yaml::Value::Mapping(m) => m
-                    .get("traits")
-                    .and_then(|v| v.as_sequence())
-                    .map(Vec::as_slice),
-                serde_yaml::Value::Sequence(s) => Some(s.as_slice()),
-                _ => None,
-            };
-
-            let Some(items) = items else { continue };
-
-            for item in items {
-                let Some(id) = item.get("id").and_then(|v| v.as_str()) else {
-                    continue;
+        // Read and parse YAML files in parallel, then collect inline YARA sources.
+        yaml_files
+            .par_iter()
+            .flat_map(|path| {
+                let Ok(content) = fs::read_to_string(path) else {
+                    return vec![];
                 };
-                let Some(if_cond) = item.get("if") else {
-                    continue;
+                let Ok(doc) = serde_yaml::from_str::<serde_yaml::Value>(&content) else {
+                    return vec![];
                 };
 
-                // Only handle `type: yara` conditions
-                if if_cond.get("type").and_then(|v| v.as_str()) != Some("yara") {
-                    continue;
-                }
-
-                let Some(source) = if_cond.get("source").and_then(|v| v.as_str()) else {
-                    continue;
+                let items = match &doc {
+                    serde_yaml::Value::Mapping(m) => m
+                        .get("traits")
+                        .and_then(|v| v.as_sequence())
+                        .map(|s| s.to_vec()),
+                    serde_yaml::Value::Sequence(s) => Some(s.clone()),
+                    _ => None,
                 };
 
-                let ns = format!("inline.{}", id);
-                compiler.new_namespace(&ns);
-                match compiler.add_source(source.as_bytes()) {
-                    Ok(_) => {
-                        tracing::trace!("Loaded inline YARA rule for trait {}", id);
-                        namespaces.push(ns);
+                let Some(items) = items else { return vec![] };
+
+                let mut result = Vec::new();
+                for item in &items {
+                    let Some(id) = item.get("id").and_then(|v| v.as_str()) else {
+                        continue;
+                    };
+                    let Some(if_cond) = item.get("if") else {
+                        continue;
+                    };
+                    if if_cond.get("type").and_then(|v| v.as_str()) != Some("yara") {
+                        continue;
                     }
-                    Err(e) => {
-                        tracing::warn!("Failed to compile inline YARA for trait {}: {:?}", id, e);
-                    }
+                    let Some(source) = if_cond.get("source").and_then(|v| v.as_str()) else {
+                        continue;
+                    };
+                    tracing::trace!("Collected inline YARA rule for trait {}", id);
+                    result.push((format!("inline.{}", id), source.to_string()));
                 }
-            }
-        }
-
-        namespaces
+                result
+            })
+            .collect()
     }
 
     /// Scan binary data and split results into regular YARA matches and inline trait results.
@@ -1312,15 +1318,11 @@ impl YaraEngine {
         entry.extend(evidence.into_iter().take(remaining));
     }
 
-    /// Load YARA rules from a directory into a compiler, skipping individual files that fail to compile
-    fn load_rules_into_compiler<'a>(
-        &mut self,
-        compiler: &mut yara_x::Compiler<'a>,
-        dir: &Path,
-        namespace_prefix: &str,
-    ) -> Result<usize> {
-        // First, collect all YARA rule file paths
-        tracing::trace!("Scanning {} for YARA rule files", dir.display());
+    /// Collect built-in YARA rule sources from the traits directory as (namespace, source) pairs.
+    ///
+    /// All built-in rules share the `"traits"` namespace. The third-party subdirectory is
+    /// skipped here — it is loaded separately with per-file namespaces.
+    fn collect_builtin_sources(dir: &Path) -> Vec<(String, String)> {
         let third_party_dir = crate::cache::third_party_path();
         let rule_files: Vec<PathBuf> = WalkDir::new(dir)
             .follow_links(false)
@@ -1328,7 +1330,6 @@ impl YaraEngine {
             .filter_map(std::result::Result::ok)
             .filter(|entry| {
                 let path = entry.path();
-                // Skip the third-party subdirectory (loaded separately with per-file namespaces)
                 if path.starts_with(&third_party_dir) {
                     return false;
                 }
@@ -1341,69 +1342,35 @@ impl YaraEngine {
             .map(|entry| entry.path().to_path_buf())
             .collect();
 
-        if rule_files.is_empty() {
-            anyhow::bail!("No YARA rules found in {}", dir.display());
-        }
+        tracing::debug!("Found {} built-in YARA rule files", rule_files.len());
 
-        let file_count = rule_files.len();
-        tracing::debug!("Found {} YARA rule files", file_count);
-
-        // Read all files in parallel (I/O bound operation)
-        tracing::trace!("Reading {} YARA rule files in parallel", file_count);
-        let sources: Vec<_> = rule_files
+        rule_files
             .par_iter()
             .filter_map(|path| {
                 let bytes = fs::read(path).ok()?;
                 let source = String::from_utf8_lossy(&bytes).into_owned();
-                Some((path.clone(), source))
+                tracing::trace!("Collected built-in {}", path.display());
+                Some(("traits".to_string(), source))
             })
-            .collect();
-
-        tracing::debug!("Read {} rule files successfully", sources.len());
-
-        compiler.new_namespace(namespace_prefix);
-
-        // Compile all sources (separate calls for better error reporting)
-        tracing::debug!("Adding {} YARA rule sources to compiler", sources.len());
-        let mut count = 0;
-        let mut failed = 0;
-        for (path, source) in sources {
-            tracing::trace!("Adding {}", path.display());
-            match compiler.add_source(source.as_bytes()) {
-                Ok(_) => count += 1,
-                Err(e) => {
-                    failed += 1;
-                    tracing::warn!("Failed to add {}: {:?}", path.display(), e);
-                }
-            }
-        }
-
-        if failed > 0 {
-            tracing::warn!("{} built-in file(s) failed to compile", failed);
-        }
-
-        tracing::debug!("Successfully added {} YARA rule sources", count);
-
-        if count == 0 {
-            anyhow::bail!("Failed to compile any YARA rules from {}", dir.display());
-        }
-
-        Ok(count)
+            .collect()
     }
 
-    /// Load third-party YARA rules, classifying each rule into a tier.
+    /// Collect third-party YARA rule sources, classifying each rule into a tier.
     ///
     /// Small files (single-rule or few rules from one vendor) are classified as a whole.
     /// Large monolithic files (like YARAForge's single .yar with ~11K rules) are split
     /// per-rule so each rule goes to the correct tier.
     ///
-    /// Generic-tier rules go into `generic_compiler`; all others go into `tier_compilers`.
-    fn load_third_party_rules_tiered<'a>(
-        &mut self,
-        generic_compiler: &mut yara_x::Compiler<'a>,
-        tier_compilers: &mut HashMap<YaraTier, yara_x::Compiler<'a>>,
+    /// Returns `(tier_sources, total_source_count, vt_skipped, disabled_count)`.
+    /// `tier_sources` maps each `YaraTier` to its list of `(namespace, source)` pairs.
+    fn collect_third_party_sources_tiered(
         dir: &Path,
-    ) -> usize {
+    ) -> (
+        HashMap<YaraTier, Vec<(String, String)>>,
+        usize,
+        usize,
+        usize,
+    ) {
         let disabled_rules = crate::third_party_config::disabled_rule_ids();
 
         let rule_files: Vec<PathBuf> = WalkDir::new(dir)
@@ -1421,14 +1388,10 @@ impl YaraEngine {
             .map(|entry| entry.path().to_path_buf())
             .collect();
 
-        let total_files = rule_files.len();
-        tracing::debug!("Found {} third-party YARA files", total_files);
+        tracing::debug!("Found {} third-party YARA files", rule_files.len());
 
         let re = rule_start_re();
 
-        // Read and preprocess all files in parallel — namespace derivation, VT filtering,
-        // filetype hint injection, disabled-rule filtering, and tier splitting are all
-        // pure transformations that don't touch the compilers.
         struct Processed {
             path: PathBuf,
             namespace: String,
@@ -1437,6 +1400,9 @@ impl YaraEngine {
             disabled_stripped: usize,
         }
 
+        // Read and preprocess all files in parallel — namespace derivation, VT filtering,
+        // filetype hint injection, disabled-rule filtering, and tier splitting are all
+        // pure transforms with no shared mutable state.
         let processed: Vec<Processed> = rule_files
             .par_iter()
             .filter_map(|path| {
@@ -1492,8 +1458,8 @@ impl YaraEngine {
             })
             .collect();
 
+        let mut tier_sources: HashMap<YaraTier, Vec<(String, String)>> = HashMap::new();
         let mut total = 0;
-        let mut failed = 0;
         let mut vt_skipped = 0;
         let mut disabled_count = 0;
         let mut tier_counts: HashMap<YaraTier, usize> = HashMap::new();
@@ -1510,47 +1476,25 @@ impl YaraEngine {
             disabled_count += p.disabled_stripped;
 
             for (tier, tier_source) in p.split {
-                let compiler = if tier == YaraTier::Generic {
-                    &mut *generic_compiler
-                } else {
-                    tier_compilers.entry(tier).or_default()
-                };
-                compiler.new_namespace(&p.namespace);
-                match compiler.add_source(tier_source.as_bytes()) {
-                    Ok(_) => {
-                        total += 1;
-                        *tier_counts.entry(tier).or_insert(0) += 1;
-                    }
-                    Err(e) => {
-                        failed += 1;
-                        tracing::warn!("{} (tier {:?}): {}", p.path.display(), tier, e);
-                    }
-                }
+                tier_sources
+                    .entry(tier)
+                    .or_default()
+                    .push((p.namespace.clone(), tier_source));
+                total += 1;
+                *tier_counts.entry(tier).or_insert(0) += 1;
             }
         }
 
-        if disabled_count > 0 {
-            tracing::info!("{} third-party rule(s) disabled via config", disabled_count);
-        }
-        if vt_skipped > 0 {
-            tracing::info!(
-                "{} third-party rule(s) skipped (require VirusTotal context)",
-                vt_skipped
-            );
-        }
-        if failed > 0 {
-            tracing::warn!("{} third-party file(s)/chunks failed to compile", failed);
-        }
         for (tier, count) in &tier_counts {
             tracing::info!("Third-party tier {:?}: {} source(s)", tier, count);
         }
-
         tracing::debug!(
             "Successfully added {} third-party YARA source(s) across {} tier(s)",
             total,
             tier_counts.len().max(1),
         );
-        total
+
+        (tier_sources, total, vt_skipped, disabled_count)
     }
 
     /// Split a large monolithic YARA source into per-tier chunks.

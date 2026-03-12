@@ -370,6 +370,7 @@ pub(crate) fn detect_file_type_from_path(file_path: &Path) -> FileType {
             "pl" | "pm" | "t" => return FileType::Perl,
             "ps1" | "psm1" | "psd1" => return FileType::PowerShell,
             "bat" | "cmd" => return FileType::Batch,
+            "vbs" | "vbe" | "wsf" | "wsc" => return FileType::Vbs,
             "c" | "h" | "cpp" | "hpp" | "cc" | "cxx" | "hxx" | "hh" => return FileType::C,
             "lua" => return FileType::Lua,
             "cs" => return FileType::CSharp,
@@ -754,6 +755,9 @@ fn detect_file_type_inner(file_path: &Path, file_data: &[u8]) -> Option<FileType
         }
         if matches!(ext_str.as_str(), "bat" | "cmd") {
             return Some(FileType::Batch);
+        }
+        if matches!(ext_str.as_str(), "vbs" | "vbe" | "wsf" | "wsc") {
+            return Some(FileType::Vbs);
         }
         if matches!(
             ext_str.as_str(),
@@ -1157,6 +1161,8 @@ pub enum FileType {
     Shell,
     /// Windows batch file (.bat, .cmd)
     Batch,
+    /// VBScript source file (.vbs, .vbe, .wsf, .wsc)
+    Vbs,
     /// Python source file (.py)
     Python,
     /// JavaScript source file (.js, .mjs, .cjs)
@@ -1258,6 +1264,7 @@ impl FileType {
             | FileType::Pe
             | FileType::Shell
             | FileType::Batch
+            | FileType::Vbs
             | FileType::Python
             | FileType::JavaScript
             | FileType::TypeScript
@@ -1339,6 +1346,7 @@ impl FileType {
                 vec!["sh", "bash", "zsh", "application/x-sh", "application/x-zsh"]
             }
             FileType::Batch => vec!["bat", "cmd", "batch"],
+            FileType::Vbs => vec!["vbs", "vbe", "wsf", "wsc", "vba", "vbscript"],
             FileType::Python => vec!["py"],
             FileType::JavaScript => vec!["js", "mjs", "cjs", "jsx", "ts"],
             FileType::TypeScript => vec!["ts", "tsx", "mts", "cts", "js"],

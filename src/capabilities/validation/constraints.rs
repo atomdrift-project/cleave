@@ -990,6 +990,7 @@ pub(crate) fn find_excessive_file_types(
         FileType::Lua,
         FileType::PowerShell,
         FileType::AppleScript,
+        FileType::Vbs,
     ];
     let source: &[FileType] = &[
         FileType::TypeScript,
@@ -1006,7 +1007,6 @@ pub(crate) fn find_excessive_file_types(
         FileType::Scala,
         FileType::Zig,
         FileType::Elixir,
-        FileType::Vbs,
     ];
     let manifests: &[FileType] = &[
         FileType::PackageJson,

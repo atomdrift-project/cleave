@@ -10,11 +10,10 @@ cleave combines abstract syntax tree inspection with automated binary reverse en
 
 Because you might want to analyze files in a multitude of formats:
 
-- **Binaries**: Mach-O, ELF, PE
-- **Source**: Shell, Python, JavaScript, TypeScript, Go, Rust, Java, Ruby, C, PHP, Lua, Perl, PowerShell, C#, Swift, Objective-C, Groovy, Scala, Zig, Elixir
-- **Packages**: npm, Chrome extensions, VSCode extensions
-- **Archives**: ZIP, TAR, 7z, RAR, XAR (unpacked recursively)
-- **Bytecode**: Java .class files and JAR constant pool analysis
+- **Binary formats** (header parsing + optional disassembly via Rizin/Radare2): Mach-O, ELF, PE, Java .class, Python .pyc, compiled AppleScript
+- **AST-based source code** (tree-sitter): Python, JavaScript, TypeScript, Go, Rust, C/C++, Java, C#, Swift, Objective-C, Ruby, PHP, Perl, Lua, Shell, PowerShell, Groovy, Scala, Zig, Elixir
+- **Archive formats** (recursive unpacking): ZIP, TAR (gz/bz2/xz/zst), 7z, RAR, plus package formats: JAR/WAR/EAR, deb, rpm, apk, gem, crate, egg, whl, nupkg, phar, vsix, xpi, crx, ipa, epub
+- **Document & data formats**: RTF (OLE detection), LNK (target extraction), PNG (steganography), PDF, plist, VBScript, Batch, package manifests (package.json, manifest.json, Cargo.toml, pyproject.toml, composer.json), GitHub Actions workflows, HTML, Markdown, plain text
 
 Cleave is designed to output data to be consumed by ML pipelines.
 

@@ -301,6 +301,7 @@ pub(crate) fn parse_file_types(types: &[String], warnings: &mut Vec<String>) -> 
                     RuleFileType::Lua,
                     RuleFileType::PowerShell,
                     RuleFileType::AppleScript,
+                    RuleFileType::Vbs,
                 ],
                 "source" => vec![
                     RuleFileType::TypeScript,
@@ -317,7 +318,6 @@ pub(crate) fn parse_file_types(types: &[String], warnings: &mut Vec<String>) -> 
                     RuleFileType::Scala,
                     RuleFileType::Zig,
                     RuleFileType::Elixir,
-                    RuleFileType::Vbs,
                 ],
                 "manifests" => vec![
                     RuleFileType::PackageJson,
@@ -356,7 +356,7 @@ pub(crate) fn parse_file_types(types: &[String], warnings: &mut Vec<String>) -> 
                 "powershell" | "ps1" => vec![RuleFileType::PowerShell],
                 "lua" => vec![RuleFileType::Lua],
                 "applescript" | "scpt" => vec![RuleFileType::AppleScript],
-                "vbs" => vec![RuleFileType::Vbs],
+                "vbs" | "vbe" | "wsf" | "wsc" | "vbscript" => vec![RuleFileType::Vbs],
                 "html" | "htm" => vec![RuleFileType::Html],
                 // Compiled languages (fullname + extension)
                 "java" => vec![RuleFileType::Java],
@@ -487,7 +487,9 @@ pub(crate) fn check_platform_filetype_conflicts(
 
     for ft in file_types {
         let (supported, required) = match ft {
-            RuleFileType::Pe | RuleFileType::Dll | RuleFileType::Batch => (has_windows, "windows"),
+            RuleFileType::Pe | RuleFileType::Dll | RuleFileType::Batch | RuleFileType::Vbs => {
+                (has_windows, "windows")
+            }
             RuleFileType::Elf | RuleFileType::So => (has_unix, "linux, unix, or android"),
             RuleFileType::Macho | RuleFileType::Dylib => (has_apple, "macos or ios"),
             RuleFileType::Shell => (has_unix || has_apple, "linux, unix, macos, android, or ios"),

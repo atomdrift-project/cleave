@@ -2682,7 +2682,7 @@ fn test_parse_file_types_groups_and_exclusions() {
     assert!(!binaries.contains(&RuleFileType::Python));
 
     let scripts = parsing::parse_file_types(&["scripts".to_string()], &mut warnings);
-    assert_eq!(scripts.len(), 10); // TypeScript maps to JavaScript, not separate
+    assert_eq!(scripts.len(), 11); // TypeScript maps to JavaScript, not separate
     assert!(scripts.contains(&RuleFileType::Python));
     assert!(scripts.contains(&RuleFileType::Shell));
     assert!(!scripts.contains(&RuleFileType::Elf));

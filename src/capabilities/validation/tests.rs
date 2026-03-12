@@ -3511,6 +3511,7 @@ mod excessive_file_types_tests {
                 FileType::Lua,
                 FileType::PowerShell,
                 FileType::AppleScript,
+                FileType::Vbs,
             ],
         )];
         let result = find_excessive_file_types(&traits, &[]);
@@ -3539,7 +3540,6 @@ mod excessive_file_types_tests {
                 FileType::Scala,
                 FileType::Zig,
                 FileType::Elixir,
-                FileType::Vbs,
             ],
         )];
         let result = find_excessive_file_types(&traits, &[]);
@@ -3604,6 +3604,7 @@ mod excessive_file_types_tests {
             FileType::Lua,
             FileType::PowerShell,
             FileType::AppleScript,
+            FileType::Vbs,
         ];
         let binaries = vec![
             FileType::Elf,
@@ -3630,7 +3631,6 @@ mod excessive_file_types_tests {
             FileType::Scala,
             FileType::Zig,
             FileType::Elixir,
-            FileType::Vbs,
         ];
         let combined: Vec<FileType> = scripts.into_iter().chain(binaries).chain(source).collect();
         assert_eq!(combined.len(), 33);

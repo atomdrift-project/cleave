@@ -455,7 +455,7 @@ fn skip_rpm_header<R: Read>(reader: &mut R) -> Result<usize> {
 
     // Bounds-check before allocating to prevent crafted headers from causing
     // multi-gigabyte allocations (nindex and hsize are attacker-controlled u32s).
-    let index_size = nindex.checked_mul(16).unwrap_or(usize::MAX);
+    let index_size = nindex.saturating_mul(16);
     if index_size > MAX_RPM_HEADER_SIZE || hsize > MAX_RPM_HEADER_SIZE {
         anyhow::bail!(
             "RPM header too large (index: {} bytes, data: {} bytes)",

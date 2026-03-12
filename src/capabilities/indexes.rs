@@ -676,7 +676,6 @@ impl StringMatchIndex {
             }
         }
 
-
         // Traits without extractable literals can't be pre-filtered, so include them
         for &trait_idx in &self.regex_trait_indices {
             // If this trait isn't in any literal bucket, include it as candidate
@@ -1298,12 +1297,6 @@ impl RawContentRegexIndex {
 
     pub(crate) fn has_patterns(&self) -> bool {
         self.total_patterns > 0
-    }
-
-    /// Number of distinct traits indexed for raw content regex prefiltering.
-    #[cfg(test)]
-    pub(crate) fn indexed_trait_count(&self) -> usize {
-        self.indexed_traits.len()
     }
 
     /// Check if any of the given trait indices have content regex patterns

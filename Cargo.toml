@@ -212,7 +212,7 @@ jemalloc = ["tikv-jemallocator", "tikv-jemalloc-ctl"]
 # jemalloc for unix-like systems (Linux, macOS, illumos, FreeBSD, etc.)
 [target.'cfg(unix)'.dependencies]
 tikv-jemallocator = { version = "0.6", optional = true }
-tikv-jemalloc-ctl = { version = "0.6", optional = true }
+tikv-jemalloc-ctl = { version = "0.6", optional = true, features = ["stats"] }
 
 [dev-dependencies]
 assert_cmd = "2.2"

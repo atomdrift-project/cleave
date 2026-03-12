@@ -812,7 +812,12 @@ impl PackageJsonAnalyzer {
             for b in name.bytes() {
                 if b.is_ascii_digit() {
                     digit_count += 1;
-                } else if !b.is_ascii_lowercase() && b != b'-' && b != b'_' && b != b'@' && b != b'/' {
+                } else if !b.is_ascii_lowercase()
+                    && b != b'-'
+                    && b != b'_'
+                    && b != b'@'
+                    && b != b'/'
+                {
                     all_lower_or_digit = false;
                 }
             }

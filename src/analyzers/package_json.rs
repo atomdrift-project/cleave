@@ -36,7 +36,7 @@ struct PackageJson {
     #[serde(rename = "optionalDependencies", default)]
     optional_dependencies: HashMap<String, String>,
     #[allow(dead_code)] // Deserialized from JSON
-    repository: Option<Repository>,
+    repository: Option<serde_json::Value>,
     author: Option<serde_json::Value>,
     #[allow(dead_code)] // Deserialized from JSON
     license: Option<String>,
@@ -45,15 +45,58 @@ struct PackageJson {
     bin: serde_json::Value,
 }
 
-#[allow(dead_code)] // Deserialized from JSON
-#[derive(Deserialize)]
-#[serde(untagged)]
-enum Repository {
-    Url(String),
-    Object {
-        #[allow(dead_code)]
-        url: Option<String>,
-    },
+/// Check if two byte slices have edit distance exactly 1 (substitution, insertion, or deletion).
+/// O(n) time, zero allocation.
+fn is_edit_distance_one(a: &[u8], b: &[u8]) -> bool {
+    let (shorter, longer) = if a.len() <= b.len() { (a, b) } else { (b, a) };
+    let len_diff = longer.len() - shorter.len();
+    if len_diff > 1 {
+        return false;
+    }
+    if len_diff == 0 {
+        // Same length: exactly one substitution
+        let mut diffs = 0u32;
+        for i in 0..shorter.len() {
+            if shorter[i] != longer[i] {
+                diffs += 1;
+                if diffs > 1 {
+                    return false;
+                }
+            }
+        }
+        diffs == 1
+    } else {
+        // Length differs by 1: exactly one insertion/deletion
+        let mut i = 0;
+        let mut j = 0;
+        let mut found_diff = false;
+        while i < shorter.len() && j < longer.len() {
+            if shorter[i] != longer[j] {
+                if found_diff {
+                    return false;
+                }
+                found_diff = true;
+                j += 1; // skip the extra char in longer
+            } else {
+                i += 1;
+                j += 1;
+            }
+        }
+        true
+    }
+}
+
+/// Truncate a string to at most `max_bytes` bytes at a valid UTF-8 boundary.
+fn truncate_str(s: &str, max_bytes: usize) -> &str {
+    if s.len() <= max_bytes {
+        return s;
+    }
+    // Find the last valid char boundary at or before max_bytes
+    let mut end = max_bytes;
+    while end > 0 && !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    &s[..end]
 }
 
 impl PackageJsonAnalyzer {
@@ -155,7 +198,7 @@ impl PackageJsonAnalyzer {
                     .with_evidence(vec![Evidence {
                         method: "pattern".to_string(),
                         source: "package.json".to_string(),
-                        value: script.chars().take(100).collect(),
+                        value: truncate_str(script, 100).to_string(),
                         location: Some(format!("scripts.{}", name)),
                         ..Default::default()
                     }]),
@@ -179,7 +222,7 @@ impl PackageJsonAnalyzer {
                     .with_evidence(vec![Evidence {
                         method: "pattern".to_string(),
                         source: "package.json".to_string(),
-                        value: script.chars().take(100).collect(),
+                        value: truncate_str(script, 100).to_string(),
                         location: Some(format!("scripts.{}", name)),
                         ..Default::default()
                     }]),
@@ -203,7 +246,7 @@ impl PackageJsonAnalyzer {
                     .with_evidence(vec![Evidence {
                         method: "pattern".to_string(),
                         source: "package.json".to_string(),
-                        value: script.chars().take(100).collect(),
+                        value: truncate_str(script, 100).to_string(),
                         location: Some(format!("scripts.{}", name)),
                         ..Default::default()
                     }]),
@@ -226,7 +269,7 @@ impl PackageJsonAnalyzer {
                     .with_evidence(vec![Evidence {
                         method: "pattern".to_string(),
                         source: "package.json".to_string(),
-                        value: script.chars().take(100).collect(),
+                        value: truncate_str(script, 100).to_string(),
                         location: Some(format!("scripts.{}", name)),
                         ..Default::default()
                     }]),
@@ -250,7 +293,7 @@ impl PackageJsonAnalyzer {
                     .with_evidence(vec![Evidence {
                         method: "pattern".to_string(),
                         source: "package.json".to_string(),
-                        value: script.chars().take(100).collect(),
+                        value: truncate_str(script, 100).to_string(),
                         location: Some(format!("scripts.{}", name)),
                         ..Default::default()
                     }]),
@@ -273,7 +316,7 @@ impl PackageJsonAnalyzer {
                     .with_evidence(vec![Evidence {
                         method: "pattern".to_string(),
                         source: "package.json".to_string(),
-                        value: script.chars().take(200).collect(),
+                        value: truncate_str(script, 200).to_string(),
                         location: Some(format!("scripts.{}", name)),
                         ..Default::default()
                     }]),
@@ -293,7 +336,7 @@ impl PackageJsonAnalyzer {
                     .with_evidence(vec![Evidence {
                         method: "pattern".to_string(),
                         source: "package.json".to_string(),
-                        value: script.chars().take(200).collect(),
+                        value: truncate_str(script, 200).to_string(),
                         location: Some(format!("scripts.{}", name)),
                         ..Default::default()
                     }]),
@@ -321,7 +364,7 @@ impl PackageJsonAnalyzer {
                         .with_evidence(vec![Evidence {
                             method: "pattern".to_string(),
                             source: "package.json".to_string(),
-                            value: script.chars().take(200).collect(),
+                            value: truncate_str(script, 200).to_string(),
                             location: Some(format!("scripts.{}", name)),
                             ..Default::default()
                         }]),
@@ -354,7 +397,7 @@ impl PackageJsonAnalyzer {
                     .with_evidence(vec![Evidence {
                         method: "pattern".to_string(),
                         source: "package.json".to_string(),
-                        value: script.chars().take(300).collect(),
+                        value: truncate_str(script, 300).to_string(),
                         location: Some(format!("scripts.{}", name)),
                         ..Default::default()
                     }]),
@@ -378,7 +421,7 @@ impl PackageJsonAnalyzer {
                     .with_evidence(vec![Evidence {
                         method: "pattern".to_string(),
                         source: "package.json".to_string(),
-                        value: script.chars().take(200).collect(),
+                        value: truncate_str(script, 200).to_string(),
                         location: Some(format!("scripts.{}", name)),
                         ..Default::default()
                     }]),
@@ -432,7 +475,7 @@ impl PackageJsonAnalyzer {
                     .with_evidence(vec![Evidence {
                         method: "pattern".to_string(),
                         source: "package.json".to_string(),
-                        value: script.chars().take(200).collect(),
+                        value: truncate_str(script, 200).to_string(),
                         location: Some(format!("scripts.{}", name)),
                         ..Default::default()
                     }]),
@@ -682,7 +725,7 @@ impl PackageJsonAnalyzer {
                     .with_evidence(vec![Evidence {
                         method: "pattern".to_string(),
                         source: "package.json".to_string(),
-                        value: script.chars().take(200).collect(),
+                        value: truncate_str(script, 200).to_string(),
                         location: Some(format!("scripts.{}", hook)),
                         ..Default::default()
                     }]),
@@ -762,17 +805,23 @@ impl PackageJsonAnalyzer {
             }
         }
 
-        // Check for obfuscated names (random characters)
-        let has_many_numbers = name.chars().filter(char::is_ascii_digit).count() > 3;
-        let has_random_pattern = name.len() > 10
-            && name
-                .chars()
-                .filter(char::is_ascii_alphanumeric)
-                .collect::<String>()
-                .chars()
-                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit());
+        // Check for obfuscated names (random characters) — single pass
+        if name.len() > 10 {
+            let mut digit_count = 0u32;
+            let mut all_lower_or_digit = true;
+            for b in name.bytes() {
+                if b.is_ascii_digit() {
+                    digit_count += 1;
+                } else if !b.is_ascii_lowercase() && b != b'-' && b != b'_' && b != b'@' && b != b'/' {
+                    all_lower_or_digit = false;
+                }
+            }
+            if digit_count > 3 && all_lower_or_digit {
+                return true;
+            }
+        }
 
-        has_many_numbers && has_random_pattern
+        false
     }
 
     fn is_known_legitimate(&self, name: &str) -> bool {
@@ -862,38 +911,25 @@ impl PackageJsonAnalyzer {
             return true;
         }
 
-        // Random-looking domain names (high entropy, mix of consonants)
-        let consonants: usize = base_domain
-            .chars()
-            .filter(|c| {
-                matches!(
-                    c.to_ascii_lowercase(),
-                    'b' | 'c'
-                        | 'd'
-                        | 'f'
-                        | 'g'
-                        | 'h'
-                        | 'j'
-                        | 'k'
-                        | 'l'
-                        | 'm'
-                        | 'n'
-                        | 'p'
-                        | 'q'
-                        | 'r'
-                        | 's'
-                        | 't'
-                        | 'v'
-                        | 'w'
-                        | 'x'
-                        | 'z'
-                )
-            })
-            .count();
-        let vowels: usize = base_domain
-            .chars()
-            .filter(|c| matches!(c.to_ascii_lowercase(), 'a' | 'e' | 'i' | 'o' | 'u'))
-            .count();
+        // Single pass: count vowels, consonants, digits, letters
+        let mut vowels = 0u32;
+        let mut consonants = 0u32;
+        let mut has_digits = false;
+        let mut has_letters = false;
+        for b in base_domain.bytes() {
+            match b.to_ascii_lowercase() {
+                b'a' | b'e' | b'i' | b'o' | b'u' => {
+                    vowels += 1;
+                    has_letters = true;
+                }
+                b'b'..=b'd' | b'f'..=b'h' | b'j'..=b'n' | b'p'..=b't' | b'v'..=b'z' => {
+                    consonants += 1;
+                    has_letters = true;
+                }
+                b'0'..=b'9' => has_digits = true,
+                _ => {}
+            }
+        }
 
         // Very few vowels compared to consonants suggests random/DGA domain
         if base_domain.len() >= 8 && vowels > 0 && consonants / vowels >= 3 {
@@ -901,9 +937,7 @@ impl PackageJsonAnalyzer {
         }
 
         // Domain with numbers mixed in (often DGA)
-        let has_numbers = base_domain.chars().any(|c| c.is_ascii_digit());
-        let has_letters = base_domain.chars().any(|c| c.is_ascii_alphabetic());
-        if has_numbers && has_letters && base_domain.len() >= 8 {
+        if has_digits && has_letters && base_domain.len() >= 8 {
             return true;
         }
 
@@ -916,11 +950,13 @@ impl PackageJsonAnalyzer {
         }
 
         // Check for uncommon consonant clusters that suggest non-word
-        let uncommon_clusters = ["ptr", "mtr", "str", "spr", "scr", "thr"];
-        let lower = base_domain.to_lowercase();
-        for cluster in uncommon_clusters {
-            if lower.contains(cluster) && base_domain.len() >= 10 {
-                return true;
+        if base_domain.len() >= 10 {
+            let lower = base_domain.to_ascii_lowercase();
+            let clusters = ["ptr", "mtr", "str", "spr", "scr", "thr"];
+            for cluster in clusters {
+                if lower.contains(cluster) {
+                    return true;
+                }
             }
         }
 
@@ -954,9 +990,8 @@ impl PackageJsonAnalyzer {
             if typos.contains(&name) {
                 return Some(original);
             }
-            // Also check for simple character swaps using Levenshtein distance
             if name != original
-                && self.levenshtein_distance(name, original) == 1
+                && is_edit_distance_one(name.as_bytes(), original.as_bytes())
                 && !self.is_known_legitimate(name)
             {
                 return Some(original);
@@ -964,44 +999,6 @@ impl PackageJsonAnalyzer {
         }
 
         None
-    }
-
-    #[allow(clippy::needless_range_loop)]
-    fn levenshtein_distance(&self, a: &str, b: &str) -> usize {
-        let a_chars: Vec<char> = a.chars().collect();
-        let b_chars: Vec<char> = b.chars().collect();
-
-        if a_chars.is_empty() {
-            return b_chars.len();
-        }
-        if b_chars.is_empty() {
-            return a_chars.len();
-        }
-
-        let mut matrix = vec![vec![0usize; b_chars.len() + 1]; a_chars.len() + 1];
-
-        for i in 0..=a_chars.len() {
-            matrix[i][0] = i;
-        }
-        for j in 0..=b_chars.len() {
-            matrix[0][j] = j;
-        }
-
-        for i in 1..=a_chars.len() {
-            for j in 1..=b_chars.len() {
-                let cost = if a_chars[i - 1] == b_chars[j - 1] {
-                    0
-                } else {
-                    1
-                };
-                matrix[i][j] = std::cmp::min(
-                    std::cmp::min(matrix[i - 1][j] + 1, matrix[i][j - 1] + 1),
-                    matrix[i - 1][j - 1] + cost,
-                );
-            }
-        }
-
-        matrix[a_chars.len()][b_chars.len()]
     }
 
     fn extract_urls(&self, text: &str) -> Vec<String> {
@@ -1156,10 +1153,19 @@ mod tests {
     }
 
     #[test]
-    fn test_levenshtein_distance() {
-        let analyzer = PackageJsonAnalyzer::new();
-        assert_eq!(analyzer.levenshtein_distance("lodash", "lodash"), 0);
-        assert_eq!(analyzer.levenshtein_distance("lodash", "lodas"), 1);
-        assert_eq!(analyzer.levenshtein_distance("lodash", "lod"), 3);
+    fn test_edit_distance_one() {
+        // Same string: distance 0, not 1
+        assert!(!is_edit_distance_one(b"lodash", b"lodash"));
+        // One deletion: distance 1
+        assert!(is_edit_distance_one(b"lodash", b"lodas"));
+        // One substitution: distance 1
+        assert!(is_edit_distance_one(b"lodash", b"lodaxh"));
+        // One insertion: distance 1
+        assert!(is_edit_distance_one(b"lodash", b"lodassh"));
+        // Distance > 1
+        assert!(!is_edit_distance_one(b"lodash", b"lod"));
+        // Empty vs single char
+        assert!(is_edit_distance_one(b"", b"a"));
+        assert!(!is_edit_distance_one(b"", b"ab"));
     }
 }

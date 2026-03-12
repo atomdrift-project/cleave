@@ -94,10 +94,10 @@ pub(crate) fn extract_zip_safe(
             }
 
             debug!(
-                "Trying password {}/{}: '{}'",
+                "Trying password {}/{} ({}B)",
                 idx + 1,
                 zip_passwords.len(),
-                password
+                password.len()
             );
 
             // Re-open the archive for each password attempt

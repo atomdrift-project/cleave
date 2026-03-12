@@ -127,7 +127,7 @@ pub(crate) fn extract_7z_safe(
         );
 
         for password in zip_passwords {
-            debug!("Trying 7z password: {}", password);
+            debug!("Trying 7z password ({}B)", password.len());
             let password_obj = Password::from(password.as_str());
 
             let file = File::open(archive_path)?;
@@ -424,6 +424,10 @@ pub(crate) fn extract_rpm(
     Ok(())
 }
 
+/// Maximum RPM header size to prevent allocation bombs from crafted headers.
+/// Real RPM headers are typically under 1MB; 16MB is generous.
+const MAX_RPM_HEADER_SIZE: usize = 16 * 1024 * 1024;
+
 fn skip_rpm_header<R: Read>(reader: &mut R) -> Result<usize> {
     // Header magic
     let mut magic = [0u8; 3];
@@ -442,24 +446,34 @@ fn skip_rpm_header<R: Read>(reader: &mut R) -> Result<usize> {
     // Number of index entries (big-endian)
     let mut nindex = [0u8; 4];
     reader.read_exact(&mut nindex)?;
-    let nindex = u32::from_be_bytes(nindex);
+    let nindex = u32::from_be_bytes(nindex) as usize;
 
     // Size of data section (big-endian)
     let mut hsize = [0u8; 4];
     reader.read_exact(&mut hsize)?;
-    let hsize = u32::from_be_bytes(hsize);
+    let hsize = u32::from_be_bytes(hsize) as usize;
+
+    // Bounds-check before allocating to prevent crafted headers from causing
+    // multi-gigabyte allocations (nindex and hsize are attacker-controlled u32s).
+    let index_size = nindex.checked_mul(16).unwrap_or(usize::MAX);
+    if index_size > MAX_RPM_HEADER_SIZE || hsize > MAX_RPM_HEADER_SIZE {
+        anyhow::bail!(
+            "RPM header too large (index: {} bytes, data: {} bytes)",
+            index_size,
+            hsize
+        );
+    }
 
     // Skip index entries (16 bytes each)
-    let index_size = nindex as usize * 16;
     let mut index_data = vec![0u8; index_size];
     reader.read_exact(&mut index_data)?;
 
     // Skip data section
-    let mut data = vec![0u8; hsize as usize];
+    let mut data = vec![0u8; hsize];
     reader.read_exact(&mut data)?;
 
     // Return total header size (16 for header + index + data)
-    Ok(16 + index_size + hsize as usize)
+    Ok(16 + index_size + hsize)
 }
 
 fn extract_cpio<R: Read>(mut reader: R, dest_dir: &Path, guard: &ExtractionGuard) -> Result<()> {

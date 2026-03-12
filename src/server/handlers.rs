@@ -18,13 +18,12 @@ use super::AppState;
 
 /// Health check endpoint. Returns 200 OK when healthy, 503 when memory-overloaded.
 pub(super) async fn health(State(state): State<Arc<AppState>>) -> Response {
-    let rss_mb = crate::memory_tracker::current_rss()
-        .map(|b| b / 1024 / 1024)
-        .unwrap_or(0);
+    let rss_bytes = crate::memory_tracker::current_rss().unwrap_or(0);
+    let rss_mb = rss_bytes / 1024 / 1024;
     let active_tasks = state
         .active_tasks
         .load(std::sync::atomic::Ordering::Relaxed);
-    let overloaded = rss_mb > 0 && rss_mb * 1024 * 1024 > state.max_rss_bytes;
+    let overloaded = rss_bytes > 0 && rss_bytes > state.max_rss_bytes;
     if overloaded {
         return (
             StatusCode::SERVICE_UNAVAILABLE,

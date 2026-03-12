@@ -23,6 +23,16 @@ use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 use walkdir::WalkDir;
 
+/// Format seconds into a human-readable age string (e.g., "2h 30m", "3d 12h").
+pub(crate) fn format_age(secs: u64) -> String {
+    match secs {
+        0..=59 => format!("{secs}s"),
+        60..=3599 => format!("{}m {}s", secs / 60, secs % 60),
+        3600..=86399 => format!("{}h {}m", secs / 3600, (secs % 3600) / 60),
+        _ => format!("{}d {}h", secs / 86400, (secs % 86400) / 3600),
+    }
+}
+
 /// Get the cache directory for cleave
 /// Returns OS-appropriate cache directory:
 /// - macOS: ~/Library/Caches/cleave
@@ -76,13 +86,98 @@ fn build_mode() -> &'static str {
     }
 }
 
-/// Returns the most recent modification time of any YARA rule file or trait YAML file.
-/// YAML files are included because they may contain inline `type: yara` conditions
-/// that are compiled into the combined YARA cache.
+/// Returns the most recently modified `.yar`/`.yara` file and its mtime.
+///
+/// Only pure YARA rule files are considered; trait YAML changes do not invalidate
+/// the YARA compilation cache. Inline `type: yara` conditions embedded in YAML files
+/// require `CLEAVE_SKIP_CACHE=1` to force recompile if they change.
+pub(crate) fn most_recent_yar_file() -> Result<(SystemTime, PathBuf)> {
+    let mut most_recent = SystemTime::UNIX_EPOCH;
+    let mut most_recent_path = PathBuf::new();
+
+    let traits_dir = traits_path();
+    if traits_dir.exists() {
+        for entry in WalkDir::new(&traits_dir)
+            .follow_links(false)
+            .into_iter()
+            .flatten()
+        {
+            let path = entry.path();
+            if path.is_file()
+                && path
+                    .extension()
+                    .map(|ext| ext == "yar" || ext == "yara")
+                    .unwrap_or(false)
+            {
+                if let Ok(metadata) = fs::metadata(path) {
+                    if let Ok(mtime) = metadata.modified() {
+                        if mtime > most_recent {
+                            most_recent = mtime;
+                            most_recent_path = path.to_path_buf();
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if most_recent == SystemTime::UNIX_EPOCH {
+        anyhow::bail!("No .yar/.yara files found");
+    }
+
+    Ok((most_recent, most_recent_path))
+}
+
+/// Returns the most recently modified `.yaml`/`.yml` trait file and its mtime.
+///
+/// Excludes the `third-party/` directory (YARA vendor rules, not trait definitions).
+/// Used to determine the capability mapper cache key.
+pub(crate) fn most_recent_yaml_file() -> Result<(SystemTime, PathBuf)> {
+    let mut most_recent = SystemTime::UNIX_EPOCH;
+    let mut most_recent_path = PathBuf::new();
+
+    let traits_dir = traits_path();
+    if traits_dir.exists() {
+        for entry in WalkDir::new(&traits_dir)
+            .follow_links(false)
+            .into_iter()
+            .flatten()
+        {
+            let path = entry.path();
+            if path.components().any(|c| c.as_os_str() == "third-party") {
+                continue;
+            }
+            if path.is_file()
+                && path
+                    .extension()
+                    .map(|ext| ext == "yaml" || ext == "yml")
+                    .unwrap_or(false)
+            {
+                if let Ok(metadata) = fs::metadata(path) {
+                    if let Ok(mtime) = metadata.modified() {
+                        if mtime > most_recent {
+                            most_recent = mtime;
+                            most_recent_path = path.to_path_buf();
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if most_recent == SystemTime::UNIX_EPOCH {
+        anyhow::bail!("No .yaml/.yml files found");
+    }
+
+    Ok((most_recent, most_recent_path))
+}
+
+/// Returns the most recent modification time across all rule and trait files.
+///
+/// Used by the analysis result cache and rule-stats display, which invalidate on any change.
 pub(crate) fn most_recent_yara_mtime() -> Result<SystemTime> {
     let mut most_recent = SystemTime::UNIX_EPOCH;
 
-    // Check traits directory for both .yar/.yara and .yaml/.yml files
     let traits_dir = traits_path();
     if traits_dir.exists() {
         for entry in WalkDir::new(&traits_dir)
@@ -108,10 +203,8 @@ pub(crate) fn most_recent_yara_mtime() -> Result<SystemTime> {
         }
     }
 
-    // Note: third-party/ is inside the traits directory, so the walk above covers it.
-
     if most_recent == SystemTime::UNIX_EPOCH {
-        anyhow::bail!("No YARA files found");
+        anyhow::bail!("No YARA/trait files found");
     }
 
     Ok(most_recent)
@@ -141,13 +234,16 @@ pub(crate) fn cache_timestamp() -> Result<SystemTime> {
     }
 }
 
-/// Generate a cache key based on timestamp and third-party flag.
+/// Generate a cache key based on the newest `.yar`/`.yara` file mtime and third-party flag.
 ///
-/// Includes the cleave version so that upgrading the binary (which may
-/// change rule handling or cache format) invalidates the cache, while
-/// simple recompiles during development do not.
+/// Only pure YARA rule files are considered, so editing trait YAMLs does not
+/// force a full YARA recompile. Falls back to binary mtime when no rule files exist.
+///
+/// Includes the cleave version so that upgrading the binary invalidates the cache.
 pub(crate) fn yara_cache_key(third_party_enabled: bool) -> Result<String> {
-    let mtime = cache_timestamp()?;
+    let mtime = most_recent_yar_file()
+        .map(|(t, _)| t)
+        .or_else(|_| binary_mtime())?;
     let timestamp = mtime
         .duration_since(SystemTime::UNIX_EPOCH)
         .context("Invalid cache timestamp")?
@@ -172,9 +268,15 @@ pub(crate) fn yara_cache_path(third_party_enabled: bool) -> Result<PathBuf> {
     Ok(cache_dir()?.join(cache_key))
 }
 
-/// Generate a cache key for the capability mapper
+/// Generate a cache key for the capability mapper.
+///
+/// Keyed on the newest `.yaml`/`.yml` trait file mtime (third-party directory excluded),
+/// so YARA-only rule updates do not force a trait mapper rebuild.
+/// Falls back to binary mtime when no YAML files exist.
 pub(crate) fn mapper_cache_key() -> Result<String> {
-    let mtime = cache_timestamp()?;
+    let mtime = most_recent_yaml_file()
+        .map(|(t, _)| t)
+        .or_else(|_| binary_mtime())?;
     let timestamp = mtime
         .duration_since(SystemTime::UNIX_EPOCH)
         .context("Invalid cache timestamp")?
@@ -390,5 +492,17 @@ mod tests {
         let temp_path = PathBuf::from("/nonexistent/cache/file.bin");
         // Should not panic with nonexistent path
         let _ = cleanup_old_caches(&temp_path);
+    }
+
+    #[test]
+    fn test_format_age() {
+        assert_eq!(format_age(0), "0s");
+        assert_eq!(format_age(45), "45s");
+        assert_eq!(format_age(60), "1m 0s");
+        assert_eq!(format_age(90), "1m 30s");
+        assert_eq!(format_age(3600), "1h 0m");
+        assert_eq!(format_age(3661), "1h 1m");
+        assert_eq!(format_age(86400), "1d 0h");
+        assert_eq!(format_age(90061), "1d 1h");
     }
 }

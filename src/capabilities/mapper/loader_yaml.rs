@@ -105,6 +105,19 @@ impl super::CapabilityMapper {
             eprintln!("Warning: {}", warning);
         }
 
+        // "Unknown file type" errors (including for: [none] and for: []) are always fatal
+        let ft_errors: Vec<&str> = warnings
+            .iter()
+            .filter(|w| w.contains("Unknown file type"))
+            .map(String::as_str)
+            .collect();
+        if !ft_errors.is_empty() {
+            anyhow::bail!(
+                "Invalid file types in trait file:\n  {}\n\nFix these 'for:' values in the YAML file.",
+                ft_errors.join("\n  ")
+            );
+        }
+
         // Pre-compile all composite rule regexes
         for rule in &mut composite_rules {
             if let Err(e) = rule.precompile_regexes() {

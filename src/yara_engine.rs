@@ -907,12 +907,26 @@ impl YaraEngine {
                         return (builtin, third_party);
                     }
                     Err(e) => {
-                        tracing::warn!("Cache load failed: {}, recompiling", e);
+                        tracing::warn!("Cache load failed ({e}), recompiling");
                         eprintln!("⚠️  Cache invalid, recompiling...");
                     }
                 }
             } else {
-                tracing::debug!("No cache found");
+                tracing::info!(
+                    expected = %cache_path.display(),
+                    "YARA cache miss — expected file not found"
+                );
+                match crate::cache::most_recent_yar_file() {
+                    Ok((mtime, path)) => {
+                        let age = mtime.elapsed().map(|d| d.as_secs()).unwrap_or(0);
+                        tracing::info!(
+                            newest_rule = %path.display(),
+                            modified_ago = %crate::cache::format_age(age),
+                            "Cache key derived from newest .yar/.yara file"
+                        );
+                    }
+                    Err(_) => tracing::info!("No .yar/.yara files found in traits directory"),
+                }
             }
         }
 
@@ -969,6 +983,15 @@ impl YaraEngine {
         // threads. Instead we create a fresh Compiler inside each rayon task (no Send required),
         // load its assigned sources, call build(), and return the resulting Rules (which is Send).
         // All 6 tiers compile concurrently; total wall-clock time ≈ slowest tier rather than sum.
+        let non_empty_tiers = tier_sources.values().filter(|v| !v.is_empty()).count();
+        let total_sources: usize = tier_sources.values().map(Vec::len).sum();
+        tracing::info!(
+            sources = total_sources,
+            tiers = non_empty_tiers,
+            "Compiling YARA rules (this may take 30-60s on first run)"
+        );
+        let compile_start = std::time::Instant::now();
+
         let tier_rules: Vec<(YaraTier, yara_x::Rules)> = tier_sources
             .into_iter()
             .collect::<Vec<_>>()
@@ -988,13 +1011,21 @@ impl YaraEngine {
             })
             .collect();
 
+        let compile_elapsed_ms = compile_start.elapsed().as_millis();
+        let mut total_rules = 0usize;
         for (tier, rules) in tier_rules {
             let count = rules.iter().count();
             if count > 0 {
                 tracing::info!("Tier {}: {} rules", tier.label(), count);
+                total_rules += count;
                 self.tiers.insert(tier, rules);
             }
         }
+        tracing::info!(
+            elapsed_ms = compile_elapsed_ms,
+            rules = total_rules,
+            "YARA compilation complete"
+        );
 
         if disabled_count > 0 {
             tracing::info!("{} third-party rule(s) disabled via config", disabled_count);
@@ -1588,17 +1619,6 @@ impl YaraEngine {
             }
             result.insert(tier, s);
         }
-
-        tracing::debug!(
-            "Split monolithic file ({} rules) into {} tier(s): {}",
-            rules.len(),
-            result.len(),
-            result
-                .keys()
-                .map(|t| t.label())
-                .collect::<Vec<_>>()
-                .join(", "),
-        );
 
         result
     }

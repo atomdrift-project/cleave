@@ -67,6 +67,25 @@ pub(crate) fn apply_trait_defaults(
 
     // Parse file_types: use trait-specific if present (unless "none"), else defaults, else [All]
     let warn_start = warnings.len();
+    // Detect always-fatal for: errors before apply_vec_default silences "none"
+    if let Some(types) = raw.file_types.as_deref() {
+        if types.is_empty() {
+            warnings.push(
+                "Unknown file type: '' (empty 'for: []' is not valid — specify at least one file type)"
+                    .to_string(),
+            );
+        } else if types.iter().any(|s| s.eq_ignore_ascii_case("none")) {
+            warnings.push(
+                "Unknown file type: 'none' ('none' is not a valid 'for:' value — use specific types or remove 'for:' to inherit defaults)"
+                    .to_string(),
+            );
+        }
+    } else if defaults.r#for.as_deref().is_some_and(|t| t.is_empty()) {
+        warnings.push(
+            "Unknown file type: '' (file default 'for: []' is empty — specify at least one file type)"
+                .to_string(),
+        );
+    }
     let file_types = apply_vec_default(raw.file_types, &defaults.r#for)
         .map(|types| parse_file_types(&types, warnings))
         .unwrap_or_else(|| vec![RuleFileType::All]);
@@ -562,6 +581,25 @@ pub(crate) fn apply_composite_defaults(
 ) -> CompositeTrait {
     // Parse file_types: use rule-specific if present (unless "none"), else defaults, else [All]
     let warn_start = warnings.len();
+    // Detect always-fatal for: errors before apply_vec_default silences "none"
+    if let Some(types) = raw.file_types.as_deref() {
+        if types.is_empty() {
+            warnings.push(
+                "Unknown file type: '' (empty 'for: []' is not valid — specify at least one file type)"
+                    .to_string(),
+            );
+        } else if types.iter().any(|s| s.eq_ignore_ascii_case("none")) {
+            warnings.push(
+                "Unknown file type: 'none' ('none' is not a valid 'for:' value — use specific types or remove 'for:' to inherit defaults)"
+                    .to_string(),
+            );
+        }
+    } else if defaults.r#for.as_deref().is_some_and(|t| t.is_empty()) {
+        warnings.push(
+            "Unknown file type: '' (file default 'for: []' is empty — specify at least one file type)"
+                .to_string(),
+        );
+    }
     let file_types = apply_vec_default(raw.file_types, &defaults.r#for)
         .map(|types| parse_file_types(&types, warnings))
         .unwrap_or_else(|| vec![RuleFileType::All]);
@@ -1617,6 +1655,69 @@ mod tests {
                 .iter()
                 .any(|w| w.contains("missing 'for:' declaration")),
             "unexpected for: warning"
+        );
+    }
+
+    #[test]
+    fn test_for_none_is_fatal_error() {
+        let defaults = super::super::models::TraitDefaults::default();
+        let raw = make_raw_trait("test-trait", Some(vec!["none".to_string()]));
+        let mut warnings = Vec::new();
+        super::apply_trait_defaults(
+            raw,
+            &defaults,
+            &mut warnings,
+            std::path::Path::new("test.yaml"),
+        );
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.contains("Unknown file type") && w.contains("none")),
+            "expected fatal 'none' error, got: {:?}",
+            warnings
+        );
+    }
+
+    #[test]
+    fn test_for_empty_is_fatal_error() {
+        let defaults = super::super::models::TraitDefaults::default();
+        let raw = make_raw_trait("test-trait", Some(vec![]));
+        let mut warnings = Vec::new();
+        super::apply_trait_defaults(
+            raw,
+            &defaults,
+            &mut warnings,
+            std::path::Path::new("test.yaml"),
+        );
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.contains("Unknown file type") && w.contains("empty")),
+            "expected fatal empty for: error, got: {:?}",
+            warnings
+        );
+    }
+
+    #[test]
+    fn test_for_empty_defaults_is_fatal_error() {
+        let defaults = super::super::models::TraitDefaults {
+            r#for: Some(vec![]),
+            ..Default::default()
+        };
+        let raw = make_raw_trait("test-trait", None);
+        let mut warnings = Vec::new();
+        super::apply_trait_defaults(
+            raw,
+            &defaults,
+            &mut warnings,
+            std::path::Path::new("test.yaml"),
+        );
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.contains("Unknown file type") && w.contains("empty")),
+            "expected fatal empty defaults error, got: {:?}",
+            warnings
         );
     }
 

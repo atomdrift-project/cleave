@@ -221,6 +221,24 @@ impl super::CapabilityMapper {
                             tracing::warn!("Failed to read mapper cache: {}", e);
                         }
                     }
+                } else {
+                    tracing::info!(
+                        expected = %cache_path.display(),
+                        "Trait mapper cache miss — expected file not found"
+                    );
+                    match crate::cache::most_recent_yaml_file() {
+                        Ok((mtime, path)) => {
+                            let age = mtime.elapsed().map(|d| d.as_secs()).unwrap_or(0);
+                            tracing::info!(
+                                newest_trait = %path.display(),
+                                modified_ago = %crate::cache::format_age(age),
+                                "Cache key derived from newest .yaml/.yml trait file"
+                            );
+                        }
+                        Err(_) => {
+                            tracing::info!("No .yaml/.yml files found in traits directory");
+                        }
+                    }
                 }
             }
         }
@@ -264,7 +282,6 @@ impl super::CapabilityMapper {
             .par_iter()
             .enumerate()
             .map(|(idx, path)| {
-                tracing::trace!("Parsing {}", path.display());
                 if debug {
                     eprintln!("   📄 Loading: {}", path.display());
                 }

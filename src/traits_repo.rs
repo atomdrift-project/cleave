@@ -122,11 +122,19 @@ fn clone_repo(target: &Path) -> std::io::Result<()> {
 pub fn update(force: bool) -> Result<(), String> {
     let traits_dir = resolve_current_traits_dir();
 
-    if !is_git_repo(&traits_dir) {
-        return Err(format!(
-            "Traits directory is not a git repository: {}",
+    if !traits_dir.exists() || !is_git_repo(&traits_dir) {
+        eprintln!(
+            "Traits not found at {}. Cloning from {TRAITS_REPO_URL}...",
             traits_dir.display()
-        ));
+        );
+        clone_repo(&traits_dir).map_err(|e| {
+            format!(
+                "Failed to clone traits repository: {e}\n\nEnsure 'git' is installed, or manually clone:\n  git clone {TRAITS_REPO_URL} \"{}\"",
+                traits_dir.display()
+            )
+        })?;
+        eprintln!("Traits installed to {}", traits_dir.display());
+        return Ok(());
     }
 
     let before = short_head(&traits_dir).unwrap_or_default();

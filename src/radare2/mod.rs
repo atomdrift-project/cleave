@@ -422,8 +422,7 @@ impl Radare2Analyzer {
         let command = if skip_function_analysis {
             "iSj; echo SEP; izj"
         } else {
-            // Print user-visible status for slow function analysis
-            eprintln!("Reverse-engineering binary (this may take a moment)...");
+            tracing::info!("Running rizin function analysis (aa + aflj + iSj + izj)");
             "aa; aflj; echo SEP; iSj; echo SEP; izj"
         };
 

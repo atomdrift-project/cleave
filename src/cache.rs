@@ -246,9 +246,7 @@ pub(crate) fn yara_cache_key(third_party_enabled: bool) -> Result<String> {
     };
     let version = env!("CARGO_PKG_VERSION");
 
-    Ok(format!(
-        "yara-rules-v3-{version}-{timestamp}-{suffix}.bin",
-    ))
+    Ok(format!("yara-rules-v3-{version}-{timestamp}-{suffix}.bin",))
 }
 
 /// Get the path to the YARA rules cache file
@@ -273,9 +271,7 @@ pub(crate) fn mapper_cache_key() -> Result<String> {
 
     let version = env!("CARGO_PKG_VERSION");
 
-    Ok(format!(
-        "capability-mapper-v5-{version}-{timestamp}.bin",
-    ))
+    Ok(format!("capability-mapper-v5-{version}-{timestamp}.bin",))
 }
 
 /// Get the path to the capability mapper cache file

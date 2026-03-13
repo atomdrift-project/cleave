@@ -1340,7 +1340,6 @@ pub(crate) fn eval_encoded<'a>(
 }
 
 /// Helper to search encoded strings (with given encoding in chain) for patterns.
-#[allow(clippy::too_many_arguments)]
 /// Evaluate string count condition - check if string count is within bounds.
 #[must_use]
 pub(crate) fn eval_string_count<'a>(

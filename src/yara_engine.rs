@@ -14,6 +14,7 @@ use crate::types::{
 };
 use anyhow::{Context, Result};
 use rayon::prelude::*;
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -31,6 +32,40 @@ fn rule_start_re() -> &'static regex::Regex {
 /// Maximum pattern match ranges to collect per pattern.
 /// Patterns matching more than this are truncated to prevent memory exhaustion.
 const MAX_PATTERN_MATCHES: usize = 100_000;
+
+/// Maximum scanners to cache per thread in the engine tier cache.
+/// Typically only 2 tiers scanned per file (generic + file-type), so 4 is generous.
+const ENGINE_SCANNER_CACHE_SIZE: usize = 4;
+
+// Thread-local LRU cache for YARA scanners keyed by `Rules` pointer address.
+// Avoids expensive `Scanner::new()` on every file (wasmtime VM instantiation).
+// Each rayon worker thread caches its own scanners (typically 2: generic + file-type).
+// Bounded to prevent memory explosion across many threads.
+thread_local! {
+    static ENGINE_SCANNER_CACHE: RefCell<lru::LruCache<usize, yara_x::Scanner<'static>>> = {
+        use std::num::NonZeroUsize;
+        // SAFETY: ENGINE_SCANNER_CACHE_SIZE is a compile-time constant > 0
+        RefCell::new(lru::LruCache::new(
+            NonZeroUsize::new(ENGINE_SCANNER_CACHE_SIZE).expect("cache size > 0")
+        ))
+    };
+}
+
+/// Clear the thread-local engine scanner cache for this thread.
+/// Called during periodic cache cleanup and on hot-reload.
+pub(crate) fn clear_engine_scanner_cache() {
+    ENGINE_SCANNER_CACHE.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        let cleared = cache.len();
+        cache.clear();
+        if cleared > 0 {
+            tracing::debug!(
+                cleared_entries = cleared,
+                "Cleared YARA engine scanner cache"
+            );
+        }
+    });
+}
 
 /// Raw match data collected from a YARA scan before processing into `YaraMatch`.
 struct RawRule {
@@ -118,7 +153,7 @@ impl YaraTier {
 /// 1. The tier matching the target file type (e.g. PE rules for a PE file)
 /// 2. The Generic tier (applies to all files)
 ///
-/// This avoids scanning ~14K rules against every file when only ~2-3K are relevant.
+/// Scanners are cached per-thread to avoid expensive re-creation.
 #[derive(Debug)]
 pub(crate) struct YaraEngine {
     /// Per-tier compiled rule sets. `Generic` always present when loaded.
@@ -1118,6 +1153,8 @@ impl YaraEngine {
     /// 1. **Generic tier** — always runs (built-in rules, inline trait YARA, uncategorized third-party)
     /// 2. **File-type tier** — runs only the rules matching the target file type (PE, ELF, etc.)
     ///
+    /// Scanners are cached per-thread to avoid expensive re-creation.
+    ///
     /// Regular matches (non-`inline.*` namespaces) are returned as `Vec<YaraMatch>` for
     /// inclusion in the analysis report. Inline matches are returned as a
     /// `HashMap<String, Vec<Evidence>>` keyed by namespace (`"inline.{trait_id}"`), for use
@@ -1127,6 +1164,7 @@ impl YaraEngine {
         data: &[u8],
         file_type_filter: Option<&[&str]>,
     ) -> Result<(Vec<YaraMatch>, HashMap<String, Vec<Evidence>>)> {
+        let scan_start = std::time::Instant::now();
         if self.tiers.is_empty() {
             anyhow::bail!("No YARA rules loaded");
         }
@@ -1229,91 +1267,113 @@ impl YaraEngine {
             .map(|(k, v)| (k, deduplicate_evidence(v)))
             .collect();
 
-        // At debug level, log every matched/scanned rule name for analysis
+        // Log tier-level scan summary (rule count per tier, not individual rules)
         if tracing::enabled!(tracing::Level::DEBUG) {
             for tier in &tiers_to_scan {
                 if let Some(rules) = self.tiers.get(tier) {
-                    for rule in rules.iter() {
-                        tracing::debug!(
-                            tier = tier.label(),
-                            rule = rule.identifier(),
-                            "YARA rule in scan set",
-                        );
-                    }
+                    tracing::debug!(
+                        tier = tier.label(),
+                        rules = rules.iter().count(),
+                        "YARA scan set",
+                    );
                 }
             }
         }
         tracing::info!(
-            "YARA scan: {} tier(s), {} matches, {} inline traits",
-            tiers_to_scan.len(),
-            yara_matches.len(),
-            inline_results.len(),
+            elapsed_ms = scan_start.elapsed().as_millis() as u64,
+            tiers = tiers_to_scan.len(),
+            matches = yara_matches.len(),
+            inline_traits = inline_results.len(),
+            "YARA scan complete",
         );
 
         Ok((yara_matches, inline_results))
     }
 
     /// Run a YARA scanner against data and collect raw match results.
+    ///
+    /// Scanners are cached per-thread to avoid expensive `Scanner::new()` calls.
+    /// The cache is keyed by the `Rules` pointer address. This is safe because
+    /// `Rules` live in `Arc<YaraEngine>` behind `OnceLock` statics for the
+    /// program's duration.
     fn run_scanner(rules: &yara_x::Rules, data: &[u8]) -> Result<Vec<RawRule>> {
         use std::time::Duration;
 
-        let mut scanner = yara_x::Scanner::new(rules);
-        scanner.set_timeout(Duration::from_secs(30));
-        let scan_results = scanner
-            .scan(data)
-            .map_err(|e| anyhow::anyhow!("YARA scan failed: {:?}", e))?;
+        let key = rules as *const yara_x::Rules as usize;
 
-        let raw_rules: Vec<RawRule> = scan_results
-            .matching_rules()
-            .map(|rule| {
-                let patterns: Vec<_> = rule
-                    .patterns()
-                    .map(|pat| {
-                        let total_matches = pat.matches().count();
-                        if total_matches > MAX_PATTERN_MATCHES {
-                            let trait_info = if rule.namespace().starts_with("inline.") {
-                                format!(" [{}]", &rule.namespace()[7..])
-                            } else {
-                                String::new()
-                            };
-                            eprintln!(
-                                "WARNING: Hit match limit of {} matches for YARA pattern '{}.{}'{}, stopping early",
-                                MAX_PATTERN_MATCHES,
-                                rule.identifier(),
-                                pat.identifier(),
-                                trait_info
-                            );
-                            tracing::warn!(
-                                rule = %rule.identifier(),
-                                namespace = %rule.namespace(),
-                                pattern = %pat.identifier(),
-                                matches = total_matches,
-                                limit = MAX_PATTERN_MATCHES,
-                                "Pattern has excessive matches, truncating to prevent memory exhaustion"
-                            );
-                        }
-                        let ranges: Vec<_> = pat
-                            .matches()
-                            .take(MAX_PATTERN_MATCHES)
-                            .map(|m| (m.range().start, m.range().end))
-                            .collect();
-                        (pat.identifier().to_string(), ranges)
-                    })
-                    .collect();
-                RawRule {
-                    name: rule.identifier().to_string(),
-                    namespace: rule.namespace().to_string(),
-                    tags: rule.tags().map(|t| t.identifier().to_string()).collect(),
-                    metadata: rule
-                        .metadata()
-                        .map(|(k, v)| (k.to_string(), format!("{:?}", v)))
-                        .collect(),
-                    patterns,
-                }
-            })
-            .collect();
+        // Scan and collect results inside the thread-local borrow so ScanResults
+        // (which borrows the Scanner) is consumed before the RefCell is released.
+        ENGINE_SCANNER_CACHE.with(|cache| {
+            let mut cache = cache.borrow_mut();
+            if cache.get(&key).is_none() {
+                // SAFETY: Rules are stored in Arc<YaraEngine> behind OnceLock statics
+                // and live for the program's duration. Extending the borrow to 'static
+                // is sound under this invariant.
+                let rules_static: &'static yara_x::Rules =
+                    unsafe { &*(rules as *const yara_x::Rules) };
+                let mut s = yara_x::Scanner::new(rules_static);
+                s.set_timeout(Duration::from_secs(30));
+                tracing::debug!("Created new YARA scanner for tier (ptr={:#x})", key);
+                cache.put(key, s);
+            }
+            let scanner = cache.get_mut(&key).expect("scanner just inserted");
 
-        Ok(raw_rules)
+            let scan_results = scanner
+                .scan(data)
+                .map_err(|e| anyhow::anyhow!("YARA scan failed: {:?}", e))?;
+
+            let raw_rules: Vec<RawRule> = scan_results
+                .matching_rules()
+                .map(|rule| {
+                    let patterns: Vec<_> = rule
+                        .patterns()
+                        .map(|pat| {
+                            let total_matches = pat.matches().count();
+                            if total_matches > MAX_PATTERN_MATCHES {
+                                let trait_info = if rule.namespace().starts_with("inline.") {
+                                    format!(" [{}]", &rule.namespace()[7..])
+                                } else {
+                                    String::new()
+                                };
+                                eprintln!(
+                                    "WARNING: Hit match limit of {} matches for YARA pattern '{}.{}'{}, stopping early",
+                                    MAX_PATTERN_MATCHES,
+                                    rule.identifier(),
+                                    pat.identifier(),
+                                    trait_info
+                                );
+                                tracing::warn!(
+                                    rule = %rule.identifier(),
+                                    namespace = %rule.namespace(),
+                                    pattern = %pat.identifier(),
+                                    matches = total_matches,
+                                    limit = MAX_PATTERN_MATCHES,
+                                    "Pattern has excessive matches, truncating to prevent memory exhaustion"
+                                );
+                            }
+                            let ranges: Vec<_> = pat
+                                .matches()
+                                .take(MAX_PATTERN_MATCHES)
+                                .map(|m| (m.range().start, m.range().end))
+                                .collect();
+                            (pat.identifier().to_string(), ranges)
+                        })
+                        .collect();
+                    RawRule {
+                        name: rule.identifier().to_string(),
+                        namespace: rule.namespace().to_string(),
+                        tags: rule.tags().map(|t| t.identifier().to_string()).collect(),
+                        metadata: rule
+                            .metadata()
+                            .map(|(k, v)| (k.to_string(), format!("{:?}", v)))
+                            .collect(),
+                        patterns,
+                    }
+                })
+                .collect();
+
+            Ok(raw_rules)
+        })
     }
 
     /// Collect inline evidence from a raw rule match into the results map.
@@ -1868,7 +1928,6 @@ impl YaraEngine {
 
     /// Build a `YaraMatch` from raw match data collected during scanning.
     /// Returns `None` if the rule is an inline trait rule (those go into `inline_results`).
-    #[allow(clippy::too_many_arguments)]
     fn build_yara_match(
         &self,
         rule_name: String,
@@ -2442,7 +2501,7 @@ impl YaraEngine {
 /// Per-tier cache format v6.
 /// Layout: MAGIC(4) + VERSION(4) + manifest_len(8) + manifest_json + padding + tier_data...
 const CACHE_MAGIC: &[u8; 4] = b"YARC";
-const CACHE_VERSION: u32 = 7;
+const CACHE_VERSION: u32 = 8;
 const CACHE_HEADER_SIZE: usize = 4 + 4 + 8; // 16 bytes
 
 impl Default for YaraEngine {

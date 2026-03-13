@@ -356,7 +356,7 @@ pub fn extract_encoded_payloads(stng_strings: &[stng::ExtractedString]) -> Vec<E
         .filter(|s| s.value.len() >= MIN_PAYLOAD_LENGTH) // Minimum 24 bytes
         .collect();
 
-    tracing::debug!(
+    tracing::trace!(
         "Processing {} total strings from stng, {} decoded strings, {} meet size threshold",
         stng_strings.len(),
         stng_strings

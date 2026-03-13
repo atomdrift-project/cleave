@@ -227,7 +227,6 @@ impl SectionMap {
     /// `(start, end)` as absolute file offsets, or `None` if:
     /// - Section specified but not found
     /// - Resulting range is empty or invalid
-    #[allow(clippy::too_many_arguments)]
     #[must_use]
     pub(crate) fn resolve_range(
         &self,

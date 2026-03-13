@@ -1889,7 +1889,6 @@ impl<'a> RuleDebugger<'a> {
         result
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn debug_hex_condition(
         &self,
         pattern: &str,

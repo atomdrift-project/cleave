@@ -781,7 +781,6 @@ pub(super) async fn memory_stats(State(state): State<Arc<AppState>>) -> Json<ser
         },
         "thread_pools": {
             "rayon_global_threads": rayon::current_num_threads(),
-            "archive_pool_threads": crate::analyzers::archive::analyzers::archive_pool_thread_count(),
         },
     }))
 }

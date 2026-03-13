@@ -31,23 +31,12 @@ use rayon::prelude::*;
 use std::collections::HashSet;
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, LazyLock, Mutex};
+use std::sync::{Arc, Mutex};
 
-/// Dedicated thread pool for archive member analysis.
-///
-/// Keeps archive work off the global rayon pool so that top-level file analyses
-/// (which also use the global pool) are never starved by a large archive.
-pub(crate) static ARCHIVE_POOL: LazyLock<rayon::ThreadPool> = LazyLock::new(|| {
-    let threads = std::thread::available_parallelism()
-        .map(std::num::NonZero::get)
-        .unwrap_or(4)
-        .max(4);
-    rayon::ThreadPoolBuilder::new()
-        .num_threads(threads)
-        .thread_name(|i| format!("archive-{}", i))
-        .build()
-        .expect("Failed to create archive thread pool")
-});
+// Archive analysis now runs on the global rayon pool instead of a separate pool.
+// This halves the number of YARA scanner cache instances (each ~50-100MB per wasmtime VM)
+// since scanners are thread-local and a separate pool doubled the thread count.
+// The global pool's work-stealing scheduler naturally balances archive and non-archive work.
 
 /// Total number of successful archive member analyses (cumulative, for logging)
 static SUCCESSFUL_ANALYSES: AtomicU64 = AtomicU64::new(0);
@@ -63,26 +52,8 @@ pub(crate) fn log_archive_analysis_stats() {
     tracing::info!(
         successful_analyses = successful,
         failed_analyses = failed,
-        archive_pool_threads = ARCHIVE_POOL.current_num_threads(),
         "Archive analysis statistics"
     );
-}
-
-/// Number of threads in the dedicated archive analysis pool.
-#[allow(dead_code)] // Called from server/handlers.rs (library side); binary can't see the usage
-pub(crate) fn archive_pool_thread_count() -> usize {
-    ARCHIVE_POOL.current_num_threads()
-}
-
-/// Clear thread-local caches on all ARCHIVE_POOL threads.
-///
-/// `rayon::broadcast` only reaches the global rayon pool. The archive pool is a
-/// separate `ThreadPool`, so its threads must be broadcast to independently.
-#[allow(dead_code)] // Called from lib.rs; binary crate can't see cross-crate usage
-pub(crate) fn clear_archive_pool_caches() {
-    ARCHIVE_POOL.broadcast(|_| {
-        crate::composite_rules::evaluators::clear_thread_local_caches();
-    });
 }
 
 impl ArchiveAnalyzer {
@@ -135,29 +106,27 @@ impl ArchiveAnalyzer {
 
         if let Some(ref yara_engine) = self.yara_engine {
             let yara_start = std::time::Instant::now();
-            ARCHIVE_POOL.install(|| {
-                class_files.par_iter().for_each(|entry| {
-                    if let Ok(matches) = yara_engine.scan_file(entry.path()) {
-                        if !matches.is_empty() {
-                            // This class triggered YARA rules - mark for full analysis
-                            if let Ok(mut flagged) = yara_flagged_classes.lock() {
-                                flagged.insert(entry.path().to_path_buf());
-                            }
+            class_files.par_iter().for_each(|entry| {
+                if let Ok(matches) = yara_engine.scan_file(entry.path()) {
+                    if !matches.is_empty() {
+                        // This class triggered YARA rules - mark for full analysis
+                        if let Ok(mut flagged) = yara_flagged_classes.lock() {
+                            flagged.insert(entry.path().to_path_buf());
+                        }
 
-                            // Record the YARA matches
-                            if let Ok(mut all_matches) = yara_matches.lock() {
-                                for yara_match in matches {
-                                    if !all_matches
-                                        .iter()
-                                        .any(|m: &YaraMatch| m.rule == yara_match.rule)
-                                    {
-                                        all_matches.push(yara_match);
-                                    }
+                        // Record the YARA matches
+                        if let Ok(mut all_matches) = yara_matches.lock() {
+                            for yara_match in matches {
+                                if !all_matches
+                                    .iter()
+                                    .any(|m: &YaraMatch| m.rule == yara_match.rule)
+                                {
+                                    all_matches.push(yara_match);
                                 }
                             }
                         }
                     }
-                })
+                }
             });
             eprintln!(
                 "  YARA scan completed in {:.2}s",
@@ -251,122 +220,120 @@ impl ArchiveAnalyzer {
             expected_count,
         )));
 
-        ARCHIVE_POOL.install(|| {
-            classes_to_analyze.par_iter().for_each(|entry| {
-                let relative_path = entry
-                    .path()
-                    .strip_prefix(temp_dir)
-                    .unwrap_or(entry.path())
-                    .display()
-                    .to_string();
-                let entry_path = self.format_entry_path(&relative_path);
-                let archive_location = self.format_evidence_location(&relative_path);
+        classes_to_analyze.par_iter().for_each(|entry| {
+            let relative_path = entry
+                .path()
+                .strip_prefix(temp_dir)
+                .unwrap_or(entry.path())
+                .display()
+                .to_string();
+            let entry_path = self.format_entry_path(&relative_path);
+            let archive_location = self.format_evidence_location(&relative_path);
 
-                // Collect archive entry metadata
-                if let Ok(file_data) = std::fs::read(entry.path()) {
-                    let entry_metadata = ArchiveEntry {
-                        path: entry_path.clone(),
-                        file_type: detect_file_type(entry.path())
-                            .map(|ft| format!("{:?}", ft).to_lowercase())
-                            .unwrap_or_else(|_| "unknown".to_string()),
-                        sha256: calculate_sha256(&file_data),
-                        size_bytes: file_data.len() as u64,
-                    };
-                    if let Ok(mut entries) = collected_archive_entries.lock() {
-                        entries.push(entry_metadata);
-                    }
+            // Collect archive entry metadata
+            if let Ok(file_data) = std::fs::read(entry.path()) {
+                let entry_metadata = ArchiveEntry {
+                    path: entry_path.clone(),
+                    file_type: detect_file_type(entry.path())
+                        .map(|ft| format!("{:?}", ft).to_lowercase())
+                        .unwrap_or_else(|_| "unknown".to_string()),
+                    sha256: calculate_sha256(&file_data),
+                    size_bytes: file_data.len() as u64,
+                };
+                if let Ok(mut entries) = collected_archive_entries.lock() {
+                    entries.push(entry_metadata);
                 }
+            }
 
-                if let Ok(file_report) = self.analyze_extracted_file(entry.path()) {
-                    files_analyzed.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            if let Ok(file_report) = self.analyze_extracted_file(entry.path()) {
+                files_analyzed.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
-                    let (
-                        Ok(mut caps),
-                        Ok(mut traits),
-                        Ok(mut all_traits),
-                        Ok(mut all_yara),
-                        Ok(mut all_strings),
-                        Ok(mut all_archive_entries),
-                        Ok(mut all_files),
-                    ) = (
-                        total_capabilities.lock(),
-                        total_traits.lock(),
-                        collected_traits.lock(),
-                        collected_yara.lock(),
-                        collected_strings.lock(),
-                        collected_archive_entries.lock(),
-                        collected_files.lock(),
-                    )
-                    else {
-                        return; // Skip this file if any lock is poisoned
-                    };
+                let (
+                    Ok(mut caps),
+                    Ok(mut traits),
+                    Ok(mut all_traits),
+                    Ok(mut all_yara),
+                    Ok(mut all_strings),
+                    Ok(mut all_archive_entries),
+                    Ok(mut all_files),
+                ) = (
+                    total_capabilities.lock(),
+                    total_traits.lock(),
+                    collected_traits.lock(),
+                    collected_yara.lock(),
+                    collected_strings.lock(),
+                    collected_archive_entries.lock(),
+                    collected_files.lock(),
+                )
+                else {
+                    return; // Skip this file if any lock is poisoned
+                };
 
-                    // Aggregate findings
-                    for f in &file_report.findings {
-                        traits.insert(f.id.clone());
-                        caps.insert(f.id.clone());
-                        if !all_traits.iter().any(|existing| existing.id == f.id) {
-                            let mut new_finding = f.clone();
-                            for evidence in &mut new_finding.evidence {
-                                // Prefix location with archive path
-                                // - If no location: set to archive path
-                                // - If location starts with "archive:": already from nested, leave it
-                                // - Otherwise: prefix with archive path (e.g., "line:3" -> "archive:file.sh:line:3")
-                                match &evidence.location {
-                                    None => {
-                                        evidence.location = Some(archive_location.clone());
-                                    }
-                                    Some(loc) if !loc.starts_with("archive:") => {
-                                        evidence.location =
-                                            Some(format!("{}:{}", archive_location, loc));
-                                    }
-                                    _ => {} // Already has archive: prefix from nested analysis
+                // Aggregate findings
+                for f in &file_report.findings {
+                    traits.insert(f.id.clone());
+                    caps.insert(f.id.clone());
+                    if !all_traits.iter().any(|existing| existing.id == f.id) {
+                        let mut new_finding = f.clone();
+                        for evidence in &mut new_finding.evidence {
+                            // Prefix location with archive path
+                            // - If no location: set to archive path
+                            // - If location starts with "archive:": already from nested, leave it
+                            // - Otherwise: prefix with archive path (e.g., "line:3" -> "archive:file.sh:line:3")
+                            match &evidence.location {
+                                None => {
+                                    evidence.location = Some(archive_location.clone());
                                 }
+                                Some(loc) if !loc.starts_with("archive:") => {
+                                    evidence.location =
+                                        Some(format!("{}:{}", archive_location, loc));
+                                }
+                                _ => {} // Already has archive: prefix from nested analysis
                             }
-                            all_traits.push(new_finding);
                         }
-                    }
-
-                    // Aggregate YARA matches
-                    for yara_match in &file_report.yara_matches {
-                        if !all_yara.iter().any(|m| m.rule == yara_match.rule) {
-                            all_yara.push(yara_match.clone());
-                        }
-                    }
-
-                    // Aggregate interesting strings
-                    for string in &file_report.strings {
-                        if matches!(
-                            string.string_type,
-                            StringType::Url | StringType::IP | StringType::Base64
-                        ) {
-                            all_strings.push(string.clone());
-                        }
-                    }
-
-                    // Convert to FileAnalysis, consuming the report to avoid cloning
-                    let (mut file_entry, nested_files, archive_contents) =
-                        file_report.into_file_analysis(0);
-                    file_entry.path = entry_path.clone();
-                    file_entry.depth = 1; // Direct child of archive
-                    file_entry.compute_summary();
-                    all_files.push(file_entry);
-
-                    // Merge archive_contents from nested archives
-                    for nested_entry in archive_contents {
-                        all_archive_entries.push(nested_entry);
-                    }
-
-                    // Handle nested archives - add their files with updated paths
-                    for mut nested_file in nested_files {
-                        if !nested_file.path.contains("!!") {
-                            nested_file.path = encode_archive_path(&entry_path, &nested_file.path);
-                        }
-                        nested_file.depth += 1;
-                        all_files.push(nested_file);
+                        all_traits.push(new_finding);
                     }
                 }
-            })
+
+                // Aggregate YARA matches
+                for yara_match in &file_report.yara_matches {
+                    if !all_yara.iter().any(|m| m.rule == yara_match.rule) {
+                        all_yara.push(yara_match.clone());
+                    }
+                }
+
+                // Aggregate interesting strings
+                for string in &file_report.strings {
+                    if matches!(
+                        string.string_type,
+                        StringType::Url | StringType::IP | StringType::Base64
+                    ) {
+                        all_strings.push(string.clone());
+                    }
+                }
+
+                // Convert to FileAnalysis, consuming the report to avoid cloning
+                let (mut file_entry, nested_files, archive_contents) =
+                    file_report.into_file_analysis(0);
+                file_entry.path = entry_path.clone();
+                file_entry.depth = 1; // Direct child of archive
+                file_entry.compute_summary();
+                all_files.push(file_entry);
+
+                // Merge archive_contents from nested archives
+                for nested_entry in archive_contents {
+                    all_archive_entries.push(nested_entry);
+                }
+
+                // Handle nested archives - add their files with updated paths
+                for mut nested_file in nested_files {
+                    if !nested_file.path.contains("!!") {
+                        nested_file.path = encode_archive_path(&entry_path, &nested_file.path);
+                    }
+                    nested_file.depth += 1;
+                    all_files.push(nested_file);
+                }
+            }
         });
 
         // Phase 3: Analyze non-class files (scripts, configs, etc.)
@@ -383,149 +350,147 @@ impl ArchiveAnalyzer {
             .take(100)
             .collect();
 
-        ARCHIVE_POOL.install(|| {
-            non_class_files.par_iter().for_each(|entry| {
-                let relative_path = entry
-                    .path()
-                    .strip_prefix(temp_dir)
-                    .unwrap_or(entry.path())
-                    .display()
-                    .to_string();
-                let entry_path = self.format_entry_path(&relative_path);
-                let archive_location = self.format_evidence_location(&relative_path);
+        non_class_files.par_iter().for_each(|entry| {
+            let relative_path = entry
+                .path()
+                .strip_prefix(temp_dir)
+                .unwrap_or(entry.path())
+                .display()
+                .to_string();
+            let entry_path = self.format_entry_path(&relative_path);
+            let archive_location = self.format_evidence_location(&relative_path);
 
-                // Collect archive entry metadata
-                if let Ok(file_data) = std::fs::read(entry.path()) {
-                    let entry_metadata = ArchiveEntry {
-                        path: entry_path.clone(),
-                        file_type: detect_file_type(entry.path())
-                            .map(|ft| format!("{:?}", ft).to_lowercase())
-                            .unwrap_or_else(|_| "unknown".to_string()),
-                        sha256: calculate_sha256(&file_data),
-                        size_bytes: file_data.len() as u64,
-                    };
-                    if let Ok(mut entries) = collected_archive_entries.lock() {
-                        entries.push(entry_metadata);
-                    }
+            // Collect archive entry metadata
+            if let Ok(file_data) = std::fs::read(entry.path()) {
+                let entry_metadata = ArchiveEntry {
+                    path: entry_path.clone(),
+                    file_type: detect_file_type(entry.path())
+                        .map(|ft| format!("{:?}", ft).to_lowercase())
+                        .unwrap_or_else(|_| "unknown".to_string()),
+                    sha256: calculate_sha256(&file_data),
+                    size_bytes: file_data.len() as u64,
+                };
+                if let Ok(mut entries) = collected_archive_entries.lock() {
+                    entries.push(entry_metadata);
                 }
+            }
 
-                // Run YARA on non-class files
-                if let Some(ref yara_engine) = self.yara_engine {
-                    if let Ok(matches) = yara_engine.scan_file(entry.path()) {
-                        if let Ok(mut all_yara) = collected_yara.lock() {
-                            for yara_match in matches {
-                                if !all_yara.iter().any(|m| m.rule == yara_match.rule) {
-                                    all_yara.push(yara_match);
-                                }
+            // Run YARA on non-class files
+            if let Some(ref yara_engine) = self.yara_engine {
+                if let Ok(matches) = yara_engine.scan_file(entry.path()) {
+                    if let Ok(mut all_yara) = collected_yara.lock() {
+                        for yara_match in matches {
+                            if !all_yara.iter().any(|m| m.rule == yara_match.rule) {
+                                all_yara.push(yara_match);
                             }
                         }
                     }
                 }
+            }
 
-                // Run file-type-specific analysis
-                if let Ok(file_report) = self.analyze_extracted_file(entry.path()) {
-                    files_analyzed.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            // Run file-type-specific analysis
+            if let Ok(file_report) = self.analyze_extracted_file(entry.path()) {
+                files_analyzed.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
-                    let (
-                        Ok(mut caps),
-                        Ok(mut traits),
-                        Ok(mut all_traits),
-                        Ok(mut all_yara),
-                        Ok(mut all_strings),
-                        Ok(mut all_archive_entries),
-                        Ok(mut all_files),
-                    ) = (
-                        total_capabilities.lock(),
-                        total_traits.lock(),
-                        collected_traits.lock(),
-                        collected_yara.lock(),
-                        collected_strings.lock(),
-                        collected_archive_entries.lock(),
-                        collected_files.lock(),
-                    )
-                    else {
-                        return; // Skip this file if any lock is poisoned
-                    };
+                let (
+                    Ok(mut caps),
+                    Ok(mut traits),
+                    Ok(mut all_traits),
+                    Ok(mut all_yara),
+                    Ok(mut all_strings),
+                    Ok(mut all_archive_entries),
+                    Ok(mut all_files),
+                ) = (
+                    total_capabilities.lock(),
+                    total_traits.lock(),
+                    collected_traits.lock(),
+                    collected_yara.lock(),
+                    collected_strings.lock(),
+                    collected_archive_entries.lock(),
+                    collected_files.lock(),
+                )
+                else {
+                    return; // Skip this file if any lock is poisoned
+                };
 
-                    // Aggregate findings
-                    for f in &file_report.findings {
-                        traits.insert(f.id.clone());
-                        caps.insert(f.id.clone());
-                        if !all_traits.iter().any(|existing| existing.id == f.id) {
-                            // LIMIT: Cap at 10,000 findings per archive analysis phase
-                            if all_traits.len() < 10_000 {
-                                let mut new_finding = f.clone();
-                                for evidence in &mut new_finding.evidence {
-                                    // Prefix location with archive path
-                                    match &evidence.location {
-                                        None => {
-                                            evidence.location = Some(archive_location.clone());
-                                        }
-                                        Some(loc) if !loc.starts_with("archive:") => {
-                                            evidence.location =
-                                                Some(format!("{}:{}", archive_location, loc));
-                                        }
-                                        _ => {} // Already has archive: prefix from nested analysis
+                // Aggregate findings
+                for f in &file_report.findings {
+                    traits.insert(f.id.clone());
+                    caps.insert(f.id.clone());
+                    if !all_traits.iter().any(|existing| existing.id == f.id) {
+                        // LIMIT: Cap at 10,000 findings per archive analysis phase
+                        if all_traits.len() < 10_000 {
+                            let mut new_finding = f.clone();
+                            for evidence in &mut new_finding.evidence {
+                                // Prefix location with archive path
+                                match &evidence.location {
+                                    None => {
+                                        evidence.location = Some(archive_location.clone());
                                     }
+                                    Some(loc) if !loc.starts_with("archive:") => {
+                                        evidence.location =
+                                            Some(format!("{}:{}", archive_location, loc));
+                                    }
+                                    _ => {} // Already has archive: prefix from nested analysis
                                 }
-                                all_traits.push(new_finding);
                             }
+                            all_traits.push(new_finding);
                         }
-                    }
-
-                    // Aggregate YARA matches
-                    for yara_match in &file_report.yara_matches {
-                        if !all_yara.iter().any(|m| m.rule == yara_match.rule) {
-                            // LIMIT: Cap YARA matches at 1,000
-                            if all_yara.len() < 1_000 {
-                                all_yara.push(yara_match.clone());
-                            }
-                        }
-                    }
-
-                    // Aggregate interesting strings
-                    for string in &file_report.strings {
-                        if matches!(
-                            string.string_type,
-                            StringType::Url | StringType::IP | StringType::Base64
-                        ) {
-                            // LIMIT: Cap aggregated strings at 10,000
-                            if all_strings.len() < 10_000 {
-                                all_strings.push(string.clone());
-                            }
-                        }
-                    }
-
-                    // Convert to FileAnalysis, consuming the report to avoid cloning
-                    let (mut file_entry, nested_files, archive_contents) =
-                        file_report.into_file_analysis(0);
-                    file_entry.path = entry_path.clone();
-                    file_entry.depth = 1;
-                    file_entry.compute_summary();
-
-                    // LIMIT: Cap individual file reports at 1,000 to prevent heap exhaustion
-                    if all_files.len() < 1_000 {
-                        all_files.push(file_entry);
-                    }
-
-                    // Merge archive_contents from nested archives
-                    for nested_entry in archive_contents {
-                        // LIMIT: Cap total archive entries at 10,000
-                        if all_archive_entries.len() < 10_000 {
-                            all_archive_entries.push(nested_entry);
-                        }
-                    }
-
-                    // Handle nested archives
-                    for mut nested_file in nested_files {
-                        if !nested_file.path.contains("!!") {
-                            nested_file.path = encode_archive_path(&entry_path, &nested_file.path);
-                        }
-                        nested_file.depth += 1;
-                        all_files.push(nested_file);
                     }
                 }
-            })
+
+                // Aggregate YARA matches
+                for yara_match in &file_report.yara_matches {
+                    if !all_yara.iter().any(|m| m.rule == yara_match.rule) {
+                        // LIMIT: Cap YARA matches at 1,000
+                        if all_yara.len() < 1_000 {
+                            all_yara.push(yara_match.clone());
+                        }
+                    }
+                }
+
+                // Aggregate interesting strings
+                for string in &file_report.strings {
+                    if matches!(
+                        string.string_type,
+                        StringType::Url | StringType::IP | StringType::Base64
+                    ) {
+                        // LIMIT: Cap aggregated strings at 10,000
+                        if all_strings.len() < 10_000 {
+                            all_strings.push(string.clone());
+                        }
+                    }
+                }
+
+                // Convert to FileAnalysis, consuming the report to avoid cloning
+                let (mut file_entry, nested_files, archive_contents) =
+                    file_report.into_file_analysis(0);
+                file_entry.path = entry_path.clone();
+                file_entry.depth = 1;
+                file_entry.compute_summary();
+
+                // LIMIT: Cap individual file reports at 1,000 to prevent heap exhaustion
+                if all_files.len() < 1_000 {
+                    all_files.push(file_entry);
+                }
+
+                // Merge archive_contents from nested archives
+                for nested_entry in archive_contents {
+                    // LIMIT: Cap total archive entries at 10,000
+                    if all_archive_entries.len() < 10_000 {
+                        all_archive_entries.push(nested_entry);
+                    }
+                }
+
+                // Handle nested archives
+                for mut nested_file in nested_files {
+                    if !nested_file.path.contains("!!") {
+                        nested_file.path = encode_archive_path(&entry_path, &nested_file.path);
+                    }
+                    nested_file.depth += 1;
+                    all_files.push(nested_file);
+                }
+            }
         });
 
         // Merge JAR collected results into the report
@@ -669,169 +634,166 @@ impl ArchiveAnalyzer {
         let collected_files = Arc::new(Mutex::new(Vec::<FileAnalysis>::with_capacity(total_files)));
         let last_progress = Arc::new(Mutex::new(std::time::Instant::now()));
 
-        // Analyze files in parallel on the dedicated archive pool
-        ARCHIVE_POOL.install(|| {
-            files.par_iter().for_each(|entry| {
-                // Track progress
-                let processed =
-                    files_processed.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
-                if let Ok(mut last) = last_progress.try_lock() {
-                    if last.elapsed() > std::time::Duration::from_secs(1) {
-                        let analyzed = files_analyzed.load(std::sync::atomic::Ordering::Relaxed);
-                        eprintln!(
-                            "  Progress: {}/{} files processed, {} analyzed",
-                            processed, total_files, analyzed
-                        );
-                        *last = std::time::Instant::now();
-                    }
+        // Analyze files in parallel
+        files.par_iter().for_each(|entry| {
+            // Track progress
+            let processed = files_processed.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+            if let Ok(mut last) = last_progress.try_lock() {
+                if last.elapsed() > std::time::Duration::from_secs(1) {
+                    let analyzed = files_analyzed.load(std::sync::atomic::Ordering::Relaxed);
+                    eprintln!(
+                        "  Progress: {}/{} files processed, {} analyzed",
+                        processed, total_files, analyzed
+                    );
+                    *last = std::time::Instant::now();
                 }
+            }
 
-                let relative_path = entry
-                    .path()
-                    .strip_prefix(temp_dir)
-                    .unwrap_or(entry.path())
-                    .display()
-                    .to_string();
-                let entry_path = self.format_entry_path(&relative_path);
-                let archive_location = self.format_evidence_location(&relative_path);
+            let relative_path = entry
+                .path()
+                .strip_prefix(temp_dir)
+                .unwrap_or(entry.path())
+                .display()
+                .to_string();
+            let entry_path = self.format_entry_path(&relative_path);
+            let archive_location = self.format_evidence_location(&relative_path);
 
-                // Collect archive entry metadata
-                if let Ok(file_data) = std::fs::read(entry.path()) {
-                    let entry_metadata = ArchiveEntry {
-                        path: entry_path.clone(),
-                        file_type: detect_file_type(entry.path())
-                            .map(|ft| format!("{:?}", ft).to_lowercase())
-                            .unwrap_or_else(|_| "unknown".to_string()),
-                        sha256: calculate_sha256(&file_data),
-                        size_bytes: file_data.len() as u64,
-                    };
-                    if let Ok(mut entries) = collected_archive_entries.lock() {
-                        entries.push(entry_metadata);
-                    }
+            // Collect archive entry metadata
+            if let Ok(file_data) = std::fs::read(entry.path()) {
+                let entry_metadata = ArchiveEntry {
+                    path: entry_path.clone(),
+                    file_type: detect_file_type(entry.path())
+                        .map(|ft| format!("{:?}", ft).to_lowercase())
+                        .unwrap_or_else(|_| "unknown".to_string()),
+                    sha256: calculate_sha256(&file_data),
+                    size_bytes: file_data.len() as u64,
+                };
+                if let Ok(mut entries) = collected_archive_entries.lock() {
+                    entries.push(entry_metadata);
                 }
+            }
 
-                // Run YARA scan on extracted file if engine is available
-                if let Some(ref yara_engine) = self.yara_engine {
-                    if let Ok(matches) = yara_engine.scan_file(entry.path()) {
-                        if let Ok(mut all_yara) = collected_yara.lock() {
-                            for yara_match in matches {
-                                if !all_yara.iter().any(|m| m.rule == yara_match.rule) {
-                                    all_yara.push(yara_match);
-                                }
+            // Run YARA scan on extracted file if engine is available
+            if let Some(ref yara_engine) = self.yara_engine {
+                if let Ok(matches) = yara_engine.scan_file(entry.path()) {
+                    if let Ok(mut all_yara) = collected_yara.lock() {
+                        for yara_match in matches {
+                            if !all_yara.iter().any(|m| m.rule == yara_match.rule) {
+                                all_yara.push(yara_match);
                             }
                         }
                     }
                 }
+            }
 
-                if let Ok(file_report) = self.analyze_extracted_file(entry.path()) {
-                    files_analyzed.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            if let Ok(file_report) = self.analyze_extracted_file(entry.path()) {
+                files_analyzed.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
-                    let Ok(mut caps) = total_capabilities.lock() else {
-                        return;
-                    };
-                    let Ok(mut traits) = total_traits.lock() else {
-                        return;
-                    };
-                    let Ok(mut all_traits) = collected_traits.lock() else {
-                        return;
-                    };
-                    let Ok(mut all_yara) = collected_yara.lock() else {
-                        return;
-                    };
-                    let Ok(mut all_strings) = collected_strings.lock() else {
-                        return;
-                    };
-                    let Ok(mut all_archive_entries) = collected_archive_entries.lock() else {
-                        return;
-                    };
-                    let Ok(mut all_files) = collected_files.lock() else {
-                        return;
-                    };
+                let Ok(mut caps) = total_capabilities.lock() else {
+                    return;
+                };
+                let Ok(mut traits) = total_traits.lock() else {
+                    return;
+                };
+                let Ok(mut all_traits) = collected_traits.lock() else {
+                    return;
+                };
+                let Ok(mut all_yara) = collected_yara.lock() else {
+                    return;
+                };
+                let Ok(mut all_strings) = collected_strings.lock() else {
+                    return;
+                };
+                let Ok(mut all_archive_entries) = collected_archive_entries.lock() else {
+                    return;
+                };
+                let Ok(mut all_files) = collected_files.lock() else {
+                    return;
+                };
 
-                    // Convert to FileAnalysis, consuming the report to avoid cloning
-                    let (mut file_entry, nested_files, archive_contents) =
-                        file_report.into_file_analysis(0);
-                    file_entry.path = entry_path.clone();
-                    file_entry.depth = 1; // Direct child of archive
-                    file_entry.compute_summary();
+                // Convert to FileAnalysis, consuming the report to avoid cloning
+                let (mut file_entry, nested_files, archive_contents) =
+                    file_report.into_file_analysis(0);
+                file_entry.path = entry_path.clone();
+                file_entry.depth = 1; // Direct child of archive
+                file_entry.compute_summary();
 
-                    // Aggregate findings from the converted FileAnalysis
-                    for f in &file_entry.findings {
-                        traits.insert(f.id.clone());
-                        caps.insert(f.id.clone());
-                        if !all_traits.iter().any(|existing| existing.id == f.id) {
-                            // LIMIT: Cap findings at 10,000
-                            if all_traits.len() < 10_000 {
-                                let mut new_finding = f.clone();
-                                for evidence in &mut new_finding.evidence {
-                                    // Prefix location with archive path
-                                    match &evidence.location {
-                                        None => {
-                                            evidence.location = Some(archive_location.clone());
-                                        }
-                                        Some(loc) if !loc.starts_with("archive:") => {
-                                            evidence.location =
-                                                Some(format!("{}:{}", archive_location, loc));
-                                        }
-                                        _ => {} // Already has archive: prefix from nested analysis
+                // Aggregate findings from the converted FileAnalysis
+                for f in &file_entry.findings {
+                    traits.insert(f.id.clone());
+                    caps.insert(f.id.clone());
+                    if !all_traits.iter().any(|existing| existing.id == f.id) {
+                        // LIMIT: Cap findings at 10,000
+                        if all_traits.len() < 10_000 {
+                            let mut new_finding = f.clone();
+                            for evidence in &mut new_finding.evidence {
+                                // Prefix location with archive path
+                                match &evidence.location {
+                                    None => {
+                                        evidence.location = Some(archive_location.clone());
                                     }
+                                    Some(loc) if !loc.starts_with("archive:") => {
+                                        evidence.location =
+                                            Some(format!("{}:{}", archive_location, loc));
+                                    }
+                                    _ => {} // Already has archive: prefix from nested analysis
                                 }
-                                all_traits.push(new_finding);
                             }
-                        }
-                    }
-
-                    // Aggregate YARA matches
-                    for yara_match in &file_entry.yara_matches {
-                        if !all_yara.iter().any(|m| m.rule == yara_match.rule) {
-                            // LIMIT: Cap YARA matches at 1,000
-                            if all_yara.len() < 1_000 {
-                                all_yara.push(yara_match.clone());
-                            }
-                        }
-                    }
-
-                    // Aggregate interesting strings
-                    for string in &file_entry.strings {
-                        if matches!(
-                            string.string_type,
-                            StringType::Url | StringType::IP | StringType::Base64
-                        ) {
-                            // LIMIT: Cap aggregated strings at 10,000
-                            if all_strings.len() < 10_000 {
-                                all_strings.push(string.clone());
-                            }
-                        }
-                    }
-
-                    // LIMIT: Cap total files at 1,000 to prevent heap exhaustion
-                    if all_files.len() < 1_000 {
-                        all_files.push(file_entry.clone());
-                    }
-
-                    // Merge archive_contents from nested archives
-                    for nested_entry in archive_contents {
-                        // LIMIT: Cap archive entries at 10,000
-                        if all_archive_entries.len() < 10_000 {
-                            all_archive_entries.push(nested_entry);
-                        }
-                    }
-
-                    // Handle nested archives - add their files with updated paths
-                    for mut nested_file in nested_files {
-                        // Update path to include our archive prefix
-                        if !nested_file.path.contains("!!") {
-                            nested_file.path = encode_archive_path(&entry_path, &nested_file.path);
-                        }
-                        nested_file.depth += 1; // Increment depth for nesting
-
-                        // LIMIT: Cap nested files at total 1,000
-                        if all_files.len() < 1_000 {
-                            all_files.push(nested_file);
+                            all_traits.push(new_finding);
                         }
                     }
                 }
-            })
+
+                // Aggregate YARA matches
+                for yara_match in &file_entry.yara_matches {
+                    if !all_yara.iter().any(|m| m.rule == yara_match.rule) {
+                        // LIMIT: Cap YARA matches at 1,000
+                        if all_yara.len() < 1_000 {
+                            all_yara.push(yara_match.clone());
+                        }
+                    }
+                }
+
+                // Aggregate interesting strings
+                for string in &file_entry.strings {
+                    if matches!(
+                        string.string_type,
+                        StringType::Url | StringType::IP | StringType::Base64
+                    ) {
+                        // LIMIT: Cap aggregated strings at 10,000
+                        if all_strings.len() < 10_000 {
+                            all_strings.push(string.clone());
+                        }
+                    }
+                }
+
+                // LIMIT: Cap total files at 1,000 to prevent heap exhaustion
+                if all_files.len() < 1_000 {
+                    all_files.push(file_entry.clone());
+                }
+
+                // Merge archive_contents from nested archives
+                for nested_entry in archive_contents {
+                    // LIMIT: Cap archive entries at 10,000
+                    if all_archive_entries.len() < 10_000 {
+                        all_archive_entries.push(nested_entry);
+                    }
+                }
+
+                // Handle nested archives - add their files with updated paths
+                for mut nested_file in nested_files {
+                    // Update path to include our archive prefix
+                    if !nested_file.path.contains("!!") {
+                        nested_file.path = encode_archive_path(&entry_path, &nested_file.path);
+                    }
+                    nested_file.depth += 1; // Increment depth for nesting
+
+                    // LIMIT: Cap nested files at total 1,000
+                    if all_files.len() < 1_000 {
+                        all_files.push(nested_file);
+                    }
+                }
+            }
         });
 
         // Merge collected results into the report

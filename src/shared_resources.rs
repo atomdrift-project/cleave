@@ -138,10 +138,6 @@ pub(crate) fn reload_capability_mapper() -> Result<(usize, usize), String> {
     rayon::broadcast(|_| {
         crate::composite_rules::evaluators::clear_scanner_cache();
     });
-    // Also flush scanner caches on ARCHIVE_POOL threads — rayon::broadcast only
-    // reaches the global pool, leaving archive threads with dangling Rules pointers.
-    crate::analyzers::archive::analyzers::clear_archive_pool_caches();
-
     tracing::info!(
         traits = trait_count,
         composites = composite_count,

@@ -209,29 +209,19 @@ fn parse_entitlements_blob(data: &[u8]) -> Result<HashMap<String, EntitlementVal
         plist_str.to_string()
     };
 
-    tracing::debug!(
-        "parse_entitlements_blob: stripped plist_str length {}",
-        plist_str_no_dtd.len()
-    );
     let doc = match Document::parse(&plist_str_no_dtd) {
         Ok(d) => d,
         Err(e) => {
-            tracing::debug!("Failed to parse XML: {}", e);
+            tracing::debug!("Failed to parse plist XML: {}", e);
             return Err(anyhow!("Failed to parse plist XML: {}", e));
         }
     };
     let mut entitlements = HashMap::new();
 
-    tracing::debug!("parse_entitlements_blob: XML parsed successfully");
-
     // Navigate plist structure: plist -> dict -> key/value pairs
-    // First check the root
     let root_elem = doc.root();
-    tracing::debug!("Root element tag: {}", root_elem.tag_name().name());
 
     if let Some(first_elem) = root_elem.first_element_child() {
-        tracing::debug!("Found first element: {}", first_elem.tag_name().name());
-
         // If it's a plist element, get its dict child; otherwise use it directly
         let dict_elem = if first_elem.tag_name().name() == "plist" {
             first_elem.first_element_child()
@@ -240,50 +230,33 @@ fn parse_entitlements_blob(data: &[u8]) -> Result<HashMap<String, EntitlementVal
         };
 
         if let Some(root) = dict_elem {
-            tracing::debug!("Processing dict element: {}", root.tag_name().name());
             if root.tag_name().name() == "dict" {
-                tracing::debug!("Root is dict, parsing entitlements");
                 let mut current_key: Option<String> = None;
-                let mut key_count = 0;
 
                 for child in root.children() {
                     if !child.is_element() {
                         continue;
                     }
 
-                    let tag_name = child.tag_name().name();
-                    tracing::debug!("Processing element: {}", tag_name);
-
-                    match tag_name {
+                    match child.tag_name().name() {
                         "key" => {
                             current_key = child.text().map(std::string::ToString::to_string);
-                            tracing::debug!("Found key: {:?}", current_key);
                         }
                         "true" => {
                             if let Some(key) = current_key.take() {
-                                tracing::debug!("Adding boolean entitlement: {} = true", key);
                                 entitlements.insert(key, EntitlementValue::Boolean(true));
-                                key_count += 1;
                             }
                         }
                         "false" => {
                             if let Some(key) = current_key.take() {
-                                tracing::debug!("Adding boolean entitlement: {} = false", key);
                                 entitlements.insert(key, EntitlementValue::Boolean(false));
-                                key_count += 1;
                             }
                         }
                         "string" => {
                             if let Some(key) = current_key.take() {
                                 if let Some(text) = child.text() {
-                                    tracing::debug!(
-                                        "Adding string entitlement: {} = {}",
-                                        key,
-                                        text
-                                    );
                                     entitlements
                                         .insert(key, EntitlementValue::String(text.to_string()));
-                                    key_count += 1;
                                 }
                             }
                         }
@@ -299,21 +272,12 @@ fn parse_entitlements_blob(data: &[u8]) -> Result<HashMap<String, EntitlementVal
                                         }
                                     }
                                 }
-                                tracing::debug!(
-                                    "Adding array entitlement: {} with {} values",
-                                    key,
-                                    array_values.len()
-                                );
                                 entitlements.insert(key, EntitlementValue::Array(array_values));
-                                key_count += 1;
                             }
                         }
-                        _ => {
-                            tracing::debug!("Skipping unexpected element: {}", tag_name);
-                        }
+                        _ => {}
                     }
                 }
-                tracing::debug!("Parsed dict with {} entitlements", key_count);
             } else {
                 tracing::debug!("First element is not dict: {}", root.tag_name().name());
             }

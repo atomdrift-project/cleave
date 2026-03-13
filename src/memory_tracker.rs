@@ -368,7 +368,8 @@ pub fn start_periodic_logging(interval: Duration) -> MemoryLoggerHandle {
 
 /// Log all memory-related statistics for post-mortem analysis.
 /// This consolidates stats from various subsystems that can cause memory issues.
-pub(crate) fn log_all_memory_stats() {
+/// Mirrors the detail level of the `/_/memory` server endpoint.
+pub fn log_all_memory_stats() {
     // Log current RSS
     if let Some(rss) = current_rss() {
         info!(
@@ -378,14 +379,50 @@ pub(crate) fn log_all_memory_stats() {
         );
     }
 
+    // Jemalloc allocator breakdown — the most useful OOM diagnostic.
+    // allocated vs RSS gap reveals whether memory is in jemalloc or elsewhere (mmap, YARA, etc.)
+    if let Some(s) = jemalloc_stats() {
+        info!(
+            allocated_mb = s.allocated / 1024 / 1024,
+            active_mb = s.active / 1024 / 1024,
+            metadata_mb = s.metadata / 1024 / 1024,
+            resident_mb = s.resident / 1024 / 1024,
+            retained_mb = s.retained / 1024 / 1024,
+            fragmentation_mb = s.active.saturating_sub(s.allocated) / 1024 / 1024,
+            "Memory stats snapshot - jemalloc"
+        );
+    }
+
+    // Regex cache
+    {
+        let cache = crate::composite_rules::evaluators::regex_cache_v2().read();
+        info!(
+            entries = cache.len(),
+            max = cache.cap().get(),
+            "Memory stats snapshot - regex_v2 cache"
+        );
+    }
+
+    // Capability mapper
+    if let Some((traits, composites)) = crate::shared_resources::capability_mapper_stats() {
+        info!(
+            traits = traits,
+            composites = composites,
+            "Memory stats snapshot - capability mapper"
+        );
+    }
+
+    // Thread pools
+    info!(
+        rayon_threads = rayon::current_num_threads(),
+        "Memory stats snapshot - thread pools"
+    );
+
     // Log archive analysis statistics
     crate::analyzers::archive::analyzers::log_archive_analysis_stats();
 
     // Log rizin subprocess statistics
     crate::radare2::log_rizin_stats();
-
-    // Note: Scanner cache stats are thread-local and can't be easily aggregated,
-    // but they are logged when evictions occur.
 }
 
 /// Jemalloc allocator statistics — only available when compiled with `--features jemalloc`.

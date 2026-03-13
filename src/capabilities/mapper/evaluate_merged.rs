@@ -123,18 +123,22 @@ impl super::CapabilityMapper {
 
         // Step 1: Evaluate independent atomic traits (no trait: dependencies)
         // These can be evaluated in parallel without worrying about order
+        let cache = super::evaluate_traits::TraitEvalCache {
+            raw_regex_matches: raw_regex_matches_ref,
+            section_map: &section_map,
+            string_matched_traits: &string_matched_traits,
+            cached_evidence: &cached_evidence,
+            regex_candidates: &regex_candidates,
+            arch_ranges,
+        };
+
         let independent_findings = self.evaluate_traits_filtered_with_cache(
             report,
             binary_data,
             cached_ast,
             inline_yara,
             false,
-            raw_regex_matches_ref,
-            &section_map,
-            &string_matched_traits,
-            &cached_evidence,
-            &regex_candidates,
-            arch_ranges,
+            &cache,
         );
 
         // Merge independent findings into report
@@ -156,12 +160,7 @@ impl super::CapabilityMapper {
                 cached_ast,
                 inline_yara,
                 true,
-                raw_regex_matches_ref,
-                &section_map,
-                &string_matched_traits,
-                &cached_evidence,
-                &regex_candidates,
-                arch_ranges,
+                &cache,
             );
 
             if dependent_findings.is_empty() {

@@ -44,97 +44,73 @@ use std::fs;
 use std::io::Write;
 use std::path::Path;
 
-/// Build `AnalysisOptions` from CLI arguments.
-fn build_options(
-    enable_third_party: bool,
-    zip_passwords: &[String],
-    disabled: &crate::cli::DisabledComponents,
-    sample_extraction: Option<&crate::types::SampleExtractionConfig>,
-    max_memory_file_size: u64,
-    platforms: &[crate::composite_rules::Platform],
-    min_hostile_precision: f32,
-    min_suspicious_precision: f32,
-    enable_full_validation: bool,
-    all_files: bool,
-    slow_rule_ms: u64,
-) -> cleave::AnalysisOptions {
-    // Convert binary crate Platform to library crate Platform
-    // They're the same type structurally but Rust treats them as distinct
-    // because main.rs re-declares the modules. Use serde round-trip.
-    let platforms_lib: Vec<cleave::Platform> = if platforms.is_empty() {
-        vec![cleave::Platform::All]
-    } else {
-        let json = serde_json::to_string(platforms).unwrap_or_default();
-        serde_json::from_str(&json).unwrap_or_else(|_| vec![cleave::Platform::All])
-    };
-    let sample_lib: Option<cleave::SampleExtractionConfig> =
-        sample_extraction.map(|s| cleave::SampleExtractionConfig {
-            extract_dir: s.extract_dir.clone(),
-            archive_sha256: s.archive_sha256.clone(),
-        });
-    cleave::AnalysisOptions {
-        enable_third_party_yara: enable_third_party && !disabled.third_party,
-        zip_passwords: zip_passwords.to_vec(),
-        disable_yara: disabled.yara,
-        disable_radare2: disabled.radare2,
-        disable_upx: disabled.upx,
-        all_files,
-        platforms: platforms_lib,
-        min_hostile_precision,
-        min_suspicious_precision,
-        enable_full_validation,
-        max_memory_file_size,
-        sample_extraction: sample_lib,
-        slow_rule_ms,
-    }
+/// All parameters needed by the analyze command.
+pub(crate) struct AnalyzeConfig<'a> {
+    pub target: &'a str,
+    pub enable_third_party: bool,
+    pub format: &'a cli::OutputFormat,
+    pub zip_passwords: &'a [String],
+    pub disabled: &'a cli::DisabledComponents,
+    pub error_if_levels: Option<&'a [types::Criticality]>,
+    pub all_files: bool,
+    pub sample_extraction: Option<&'a types::SampleExtractionConfig>,
+    pub platforms: &'a [composite_rules::Platform],
+    pub min_hostile_precision: f32,
+    pub min_suspicious_precision: f32,
+    pub max_memory_file_size: u64,
+    pub enable_full_validation: bool,
+    pub mol_path: Option<&'a str>,
+    pub mol_layout: cli::MolLayout,
+    pub slow_rule_ms: u64,
+    pub output_to_file: bool,
+    pub max_scan_file_size: u64,
 }
 
 /// Analyze a single file or directory with comprehensive malware detection.
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn run(
-    target: &str,
-    enable_third_party: bool,
-    format: &cli::OutputFormat,
-    zip_passwords: &[String],
-    disabled: &cli::DisabledComponents,
-    error_if_levels: Option<&[types::Criticality]>,
-    all_files: bool,
-    _shuffle: bool,
-    sample_extraction: Option<&types::SampleExtractionConfig>,
-    platforms: &[composite_rules::Platform],
-    min_hostile_precision: f32,
-    min_suspicious_precision: f32,
-    max_memory_file_size: u64,
-    enable_full_validation: bool,
-    mol_path: Option<&str>,
-    mol_layout: cli::MolLayout,
-    slow_rule_ms: u64,
-) -> Result<String> {
-    let path = Path::new(target);
+pub(crate) fn run(config: &AnalyzeConfig<'_>) -> Result<String> {
+    let path = Path::new(config.target);
 
     if !path.exists() {
-        anyhow::bail!("Path does not exist: {}", target);
+        anyhow::bail!("Path does not exist: {}", config.target);
     }
 
-    let options = build_options(
-        enable_third_party,
-        zip_passwords,
-        disabled,
-        sample_extraction,
-        max_memory_file_size,
-        platforms,
-        min_hostile_precision,
-        min_suspicious_precision,
-        enable_full_validation,
-        all_files,
-        slow_rule_ms,
-    );
+    // Convert binary crate types to library crate types via serde round-trip
+    // (necessary because main.rs re-declares modules, creating parallel type hierarchies).
+    let platforms_lib: Vec<cleave::Platform> = if config.platforms.is_empty() {
+        vec![cleave::Platform::All]
+    } else {
+        let json = serde_json::to_string(config.platforms).unwrap_or_default();
+        serde_json::from_str(&json).unwrap_or_else(|_| vec![cleave::Platform::All])
+    };
+    let sample_lib: Option<cleave::SampleExtractionConfig> =
+        config
+            .sample_extraction
+            .map(|s| cleave::SampleExtractionConfig {
+                extract_dir: s.extract_dir.clone(),
+                archive_sha256: s.archive_sha256.clone(),
+            });
+    let options = cleave::AnalysisOptions {
+        enable_third_party_yara: config.enable_third_party && !config.disabled.third_party,
+        zip_passwords: config.zip_passwords.to_vec(),
+        disable_yara: config.disabled.yara,
+        disable_radare2: config.disabled.radare2,
+        disable_upx: config.disabled.upx,
+        all_files: config.all_files,
+        platforms: platforms_lib,
+        min_hostile_precision: config.min_hostile_precision,
+        min_suspicious_precision: config.min_suspicious_precision,
+        enable_full_validation: config.enable_full_validation,
+        max_memory_file_size: config.max_memory_file_size,
+        sample_extraction: sample_lib,
+        slow_rule_ms: config.slow_rule_ms,
+        max_scan_file_size: config.max_scan_file_size,
+    };
 
     // If target is a directory, process files recursively
     if path.is_dir() {
         let options_arc = std::sync::Arc::new(options);
         let results = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
-        let all_file_analyses = if mol_path.is_some() {
+        let all_file_analyses = if config.mol_path.is_some() {
             Some(std::sync::Arc::new(std::sync::Mutex::new(Vec::new())))
         } else {
             None
@@ -142,9 +118,10 @@ pub(crate) fn run(
 
         let results_clone = results.clone();
         let all_file_analyses_clone = all_file_analyses.clone();
-        let format_val = *format;
+        let format_val = *config.format;
+        let stream_stdout = !config.output_to_file;
         let error_if_levels_owned: Option<Vec<types::Criticality>> =
-            error_if_levels.map(<[types::Criticality]>::to_vec);
+            config.error_if_levels.map(<[types::Criticality]>::to_vec);
 
         cleave::scan_directory(path, &options_arc, move |event| match event {
             cleave::ScanEvent::Start { total } => {
@@ -192,7 +169,7 @@ pub(crate) fn run(
                             }
                             cli::OutputFormat::Terminal => output::format_terminal(&report),
                         };
-                        if format_val == cli::OutputFormat::Jsonl {
+                        if stream_stdout && !res.is_empty() {
                             print!("{}", res);
                             let _ = std::io::stdout().flush();
                         }
@@ -203,7 +180,7 @@ pub(crate) fn run(
                         String::new()
                     }
                 };
-                if !formatted.is_empty() && format_val != cli::OutputFormat::Jsonl {
+                if !stream_stdout && !formatted.is_empty() {
                     if let Ok(mut guard) = results_clone.lock() {
                         guard.push(formatted);
                     }
@@ -212,39 +189,43 @@ pub(crate) fn run(
         })?;
 
         // Generate galaxy view from all collected files
-        if let Some(base_path) = mol_path {
+        if let Some(base_path) = config.mol_path {
             if let Some(collector) = all_file_analyses {
                 let all_files = collector
                     .lock()
                     .map_err(|e| anyhow::anyhow!("mutex poisoned: {e}"))?;
                 if !all_files.is_empty() {
                     let mut combined_report = types::AnalysisReport::new(types::TargetInfo {
-                        path: target.to_string(),
+                        path: config.target.to_string(),
                         file_type: "directory".to_string(),
                         size_bytes: 0,
                         sha256: String::new(),
                         architectures: None,
                     });
                     combined_report.files = all_files.clone();
-                    write_malecule_files(&combined_report, base_path, mol_layout)?;
+                    write_malecule_files(&combined_report, base_path, config.mol_layout)?;
                 }
             }
         }
 
-        let final_results = results
-            .lock()
-            .map_err(|e| anyhow::anyhow!("mutex poisoned: {e}"))?;
-        return Ok(final_results.join(""));
+        if config.output_to_file {
+            let final_results = results
+                .lock()
+                .map_err(|e| anyhow::anyhow!("mutex poisoned: {e}"))?;
+            return Ok(final_results.join(""));
+        }
+        // Results already streamed to stdout in the callback.
+        return Ok(String::new());
     }
 
     // Single file analysis
     analyze_and_format(
-        target,
+        config.target,
         &options,
-        format,
-        error_if_levels,
-        mol_path,
-        mol_layout,
+        config.format,
+        config.error_if_levels,
+        config.mol_path,
+        config.mol_layout,
         None,
     )
 }
@@ -256,7 +237,6 @@ pub(crate) fn run(
 /// because main.rs re-declares library modules, creating parallel type hierarchies).
 /// Finally applies CLI-specific post-processing (v2 conversion, encoding layer merging,
 /// filtering, mol generation, output formatting).
-#[allow(clippy::too_many_arguments)]
 fn analyze_and_format(
     target: &str,
     options: &cleave::AnalysisOptions,

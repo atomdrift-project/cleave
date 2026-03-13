@@ -193,6 +193,11 @@ pub(crate) struct Args {
     #[arg(long, value_name = "MB", default_value_t = 100)]
     pub max_file_mem: u64,
 
+    /// Maximum file size (in MB) to scan during directory analysis.
+    /// Files larger than this are skipped. Default: 600 MB (0 = no limit).
+    #[arg(long, value_name = "MB", default_value_t = 600)]
+    pub max_file_size: u64,
+
     /// Warn when a single rule takes longer than this many milliseconds to evaluate.
     /// Rules >1000ms are always logged at debug level (visible via --verbose).
     #[arg(long, value_name = "MS", default_value_t = 4000)]

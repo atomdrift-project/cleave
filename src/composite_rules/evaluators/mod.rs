@@ -123,7 +123,9 @@ pub(crate) fn compile_regex_optimal(
 /// Maximum number of YARA scanners to cache per thread.
 /// Each scanner contains a wasmtime VM instance (~10-50MB each).
 /// Bounded to prevent unbounded memory growth in long-running processes.
-const SCANNER_CACHE_MAX_SIZE: usize = 32;
+/// With 16+ threads, 4 entries × ~30MB × 16 threads = ~1.9GB — acceptable.
+/// Previously 32, which allowed ~15GB of scanner memory across all threads.
+const SCANNER_CACHE_MAX_SIZE: usize = 4;
 
 // Thread-local cache for YARA Scanners to avoid expensive Scanner::new() calls.
 // Scanner creation involves wasmtime VM instantiation which is expensive (~200µs).
@@ -323,6 +325,7 @@ pub fn clear_thread_local_caches() {
     SCANNER_CACHE.with(|cache| {
         cache.borrow_mut().clear();
     });
+    crate::yara_engine::clear_engine_scanner_cache();
 }
 
 /// Check if a symbol matches a pattern (supports exact match or regex).

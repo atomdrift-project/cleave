@@ -257,7 +257,7 @@ impl PEAnalyzer {
     }
 
     /// Analyze a valid (parseable) PE binary
-    #[allow(clippy::unnecessary_wraps)]
+    #[allow(clippy::unnecessary_wraps, clippy::too_many_arguments)]
     fn analyze_valid_pe(
         &self,
         file_path: &Path,

@@ -73,7 +73,7 @@ use anyhow::{Context, Result};
 use clap::Parser;
 use commands::{
     analyze_command, diff_command, expand_paths, profile_command, test_match, test_rules,
-    validate_command,
+    validate_command, AnalyzeConfig,
 };
 use std::fs;
 use std::path::Path;
@@ -363,11 +363,16 @@ fn main() -> Result<()> {
 
     // Configure rayon thread pool with larger stack size to handle deeply nested ASTs
     // (e.g., minified JavaScript, malicious files with extreme nesting)
-    // Default is ~2MB which can overflow on files with 1000+ nesting levels
-    rayon::ThreadPoolBuilder::new()
-        .stack_size(8 * 1024 * 1024) // 8MB per thread
-        .build_global()
-        .ok(); // Ignore error if pool already initialized (e.g., in tests)
+    // Default is ~2MB which can overflow on files with 1000+ nesting levels.
+    // Thread count defaults to available_parallelism; override with CLEAVE_RAYON_THREADS.
+    let mut builder = rayon::ThreadPoolBuilder::new().stack_size(8 * 1024 * 1024); // 8MB per thread
+    if let Some(threads) = std::env::var("CLEAVE_RAYON_THREADS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+    {
+        builder = builder.num_threads(threads);
+    }
+    builder.build_global().ok(); // Ignore error if pool already initialized (e.g., in tests)
 
     // Get disabled components
     let disabled = args.disabled_components();
@@ -427,6 +432,8 @@ fn main() -> Result<()> {
 
     // Convert max_file_mem from MB to bytes
     let max_memory_file_size = args.max_file_mem * 1024 * 1024;
+    // Convert max_file_size from MB to bytes (0 = no limit)
+    let max_scan_file_size = args.max_file_size * 1024 * 1024;
 
     // Start periodic memory logging when a log file is configured (always-on for
     // post-mortem OOM analysis) or when verbose mode is enabled.
@@ -449,25 +456,26 @@ fn main() -> Result<()> {
             // Process each target through analyze_command
             let mut results = Vec::new();
             for target in &expanded {
-                results.push(analyze_command(
+                results.push(analyze_command(&AnalyzeConfig {
                     target,
-                    enable_third_party_global,
-                    &format,
-                    &zip_passwords,
-                    &disabled,
-                    error_if_levels.as_deref(),
-                    args.all_files,
-                    args.shuffle,
-                    sample_extraction.as_ref(),
-                    &platforms,
-                    args.min_hostile_precision,
-                    args.min_suspicious_precision,
+                    enable_third_party: enable_third_party_global,
+                    format: &format,
+                    zip_passwords: &zip_passwords,
+                    disabled: &disabled,
+                    error_if_levels: error_if_levels.as_deref(),
+                    all_files: args.all_files,
+                    sample_extraction: sample_extraction.as_ref(),
+                    platforms: &platforms,
+                    min_hostile_precision: args.min_hostile_precision,
+                    min_suspicious_precision: args.min_suspicious_precision,
                     max_memory_file_size,
-                    false,
-                    args.mol.as_deref(),
-                    args.mol_layout,
-                    args.slow_rule_ms,
-                )?);
+                    enable_full_validation: false,
+                    mol_path: args.mol.as_deref(),
+                    mol_layout: args.mol_layout,
+                    slow_rule_ms: args.slow_rule_ms,
+                    output_to_file: args.output.is_some(),
+                    max_scan_file_size,
+                })?);
             }
             results.join("")
         }
@@ -683,25 +691,26 @@ fn main() -> Result<()> {
             // Process each target through analyze_command
             let mut results = Vec::new();
             for target in &expanded {
-                results.push(analyze_command(
+                results.push(analyze_command(&AnalyzeConfig {
                     target,
-                    enable_third_party_global,
-                    &format,
-                    &zip_passwords,
-                    &disabled,
-                    error_if_levels.as_deref(),
-                    args.all_files,
-                    args.shuffle,
-                    sample_extraction.as_ref(),
-                    &platforms,
-                    args.min_hostile_precision,
-                    args.min_suspicious_precision,
+                    enable_third_party: enable_third_party_global,
+                    format: &format,
+                    zip_passwords: &zip_passwords,
+                    disabled: &disabled,
+                    error_if_levels: error_if_levels.as_deref(),
+                    all_files: args.all_files,
+                    sample_extraction: sample_extraction.as_ref(),
+                    platforms: &platforms,
+                    min_hostile_precision: args.min_hostile_precision,
+                    min_suspicious_precision: args.min_suspicious_precision,
                     max_memory_file_size,
-                    false,
-                    args.mol.as_deref(),
-                    args.mol_layout,
-                    args.slow_rule_ms,
-                )?);
+                    enable_full_validation: false,
+                    mol_path: args.mol.as_deref(),
+                    mol_layout: args.mol_layout,
+                    slow_rule_ms: args.slow_rule_ms,
+                    output_to_file: args.output.is_some(),
+                    max_scan_file_size,
+                })?);
             }
             results.join("")
         }
@@ -729,9 +738,8 @@ fn main() -> Result<()> {
     // Always log exit summary with PID and peak RSS for post-mortem correlation
     {
         use cleave::memory_tracker;
-        if args.verbose {
-            memory_tracker::global_tracker().log_stats();
-        }
+        memory_tracker::global_tracker().log_stats();
+        memory_tracker::log_all_memory_stats();
         let total_files = memory_tracker::global_tracker().files_processed();
         let peak_rss = memory_tracker::global_tracker().peak_rss();
         tracing::info!(

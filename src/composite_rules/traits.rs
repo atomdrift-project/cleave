@@ -30,49 +30,6 @@ fn stats_map() -> &'static DashMap<&'static str, (AtomicU64, AtomicU64)> {
     CONDITION_STATS.get_or_init(DashMap::new)
 }
 
-/// Print condition evaluation statistics
-pub(crate) fn print_condition_stats() {
-    if std::env::var("CLEAVE_VERBOSE").as_deref() != Ok("1") {
-        return;
-    }
-
-    let stats = stats_map();
-    if stats.is_empty() {
-        return;
-    }
-
-    let mut sorted: Vec<_> = stats
-        .iter()
-        .map(|entry| {
-            let name = *entry.key();
-            let (count, total_nanos) = entry.value();
-            let count_val = count.load(Ordering::Relaxed);
-            let duration = Duration::from_nanos(total_nanos.load(Ordering::Relaxed));
-            (name, count_val, duration)
-        })
-        .collect();
-    sorted.sort_by_key(|(_, _, duration)| std::cmp::Reverse(*duration));
-
-    eprintln!("\n⏱️  Condition Evaluation Statistics:");
-    eprintln!(
-        "  {:20} {:>10} {:>12} {:>10}",
-        "Type", "Count", "Total (ms)", "Avg (µs)"
-    );
-    eprintln!("  {}", "-".repeat(54));
-
-    for (name, count, duration) in sorted.iter().take(20) {
-        let avg_micros = duration.as_micros() / (*count as u128).max(1);
-        eprintln!(
-            "  {:20} {:>10} {:>12} {:>10}",
-            name,
-            count,
-            duration.as_millis(),
-            avg_micros
-        );
-    }
-    eprintln!();
-}
-
 /// Reset condition statistics.
 /// Can be called periodically in long-running processes to prevent stats accumulation.
 /// Note: CONDITION_STATS is keyed by static condition type names (~20 entries max),
@@ -1116,17 +1073,14 @@ impl TraitDefinition {
                             Criticality::Component
                         }
                     };
-                    tracing::debug!(
-                        "Downgrade applied: trait '{}' from {:?} → {:?}",
-                        self.id,
-                        self.crit,
-                        final_crit
-                    );
-                } else {
-                    tracing::trace!(
-                        "Downgrade NOT applied: trait '{}' downgrade conditions not met",
-                        self.id
-                    );
+                    if final_crit != self.crit {
+                        tracing::debug!(
+                            "Downgrade applied: trait '{}' from {:?} → {:?}",
+                            self.id,
+                            self.crit,
+                            final_crit
+                        );
+                    }
                 }
 
                 // Record downgrade debug if collector is present

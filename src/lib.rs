@@ -212,6 +212,9 @@ pub struct AnalysisOptions {
     /// Warn threshold for slow rule evaluation in milliseconds (default: 4000).
     /// Rules exceeding this emit a warning; >1000ms is always logged at debug level.
     pub slow_rule_ms: u64,
+    /// Maximum file size (bytes) to scan during directory analysis.
+    /// Files larger than this are skipped. 0 means no limit.
+    pub max_scan_file_size: u64,
 }
 
 impl Default for AnalysisOptions {
@@ -233,6 +236,7 @@ impl Default for AnalysisOptions {
             max_memory_file_size: 512 * 1024 * 1024, // 512 MB default
             sample_extraction: None,
             slow_rule_ms: capabilities::CapabilityMapper::DEFAULT_SLOW_RULE_MS,
+            max_scan_file_size: 600 * 1024 * 1024, // 600 MB default
         }
     }
 }
@@ -261,9 +265,6 @@ pub fn clear_all_thread_caches() {
     rayon::broadcast(|_| {
         clear_thread_local_caches();
     });
-
-    // Clear on ARCHIVE_POOL threads — rayon::broadcast does not reach custom thread pools
-    crate::analyzers::archive::analyzers::clear_archive_pool_caches();
 
     // Clear global condition stats (bounded by condition type count, but useful for fresh stats)
     clear_condition_stats();
@@ -438,15 +439,22 @@ fn analyze_file_with_resources<P: AsRef<Path>>(
         return Ok(cached_report);
     }
 
+    let stage_stng_ms: u64;
+    let stage_structural_ms: u64;
+    let stage_payloads_ms: u64;
+    let stage_yara_ms: u64;
+
     // Check for extension/content mismatch
     let mismatch = analyzers::check_extension_content_mismatch(path, file_data);
 
     // Extract strings with stng ONCE - used for encoded payloads and passed to analyzers
+    let stng_start = std::time::Instant::now();
     let opts = stng::ExtractOptions::new(4).with_garbage_filter(true);
     let stng_strings = stng::extract_strings_with_options(file_data, &opts);
 
     // Check for encoded payloads (hex, base64, etc.) using stng results
     let encoded_payloads = extractors::encoded_payload::extract_encoded_payloads(&stng_strings);
+    stage_stng_ms = stng_start.elapsed().as_millis() as u64;
 
     // Create unified analysis input - all analyzers receive the same pre-extracted data
     let input = analyzers::AnalysisInput::with_payloads(
@@ -468,6 +476,7 @@ fn analyze_file_with_resources<P: AsRef<Path>>(
     // Route to appropriate analyzer.
     // Binary analyzers (MachO, Elf, Pe) use parallel YARA for performance.
     // All other analyzers use analyze_input() for unified data flow.
+    let structural_start = std::time::Instant::now();
     let mut report = match file_type {
         FileType::MachO => {
             // Run YARA scan in parallel with structural analysis for inline evidence
@@ -651,6 +660,7 @@ fn analyze_file_with_resources<P: AsRef<Path>>(
             }
         }
     }?;
+    stage_structural_ms = structural_start.elapsed().as_millis() as u64;
 
     // Add finding for extension/content mismatch if detected
     if let Some((expected, actual)) = mismatch {
@@ -679,6 +689,7 @@ fn analyze_file_with_resources<P: AsRef<Path>>(
     }
 
     // Process encoded payloads and analyze them
+    let payloads_start = std::time::Instant::now();
     for payload in encoded_payloads {
         // Skip benign encoded payloads (certificate URLs, PDB paths)
         let preview_lower = payload.preview.to_lowercase();
@@ -783,9 +794,11 @@ fn analyze_file_with_resources<P: AsRef<Path>>(
             }
         }
     }
+    stage_payloads_ms = payloads_start.elapsed().as_millis() as u64;
 
     // Run YARA for file types that didn't handle it internally.
     // Binary types (MachO, Elf, Pe) and archives already ran YARA with parallel scanning above.
+    let yara_start = std::time::Instant::now();
     let handled_yara_internally = matches!(
         file_type,
         FileType::MachO | FileType::Elf | FileType::Pe | FileType::Archive | FileType::Jar
@@ -816,6 +829,7 @@ fn analyze_file_with_resources<P: AsRef<Path>>(
             }
         }
     }
+    stage_yara_ms = yara_start.elapsed().as_millis() as u64;
 
     // Filter low-value composite "any" rules (needs=1) before caching.
     // These provide no value over the underlying trait that matched.
@@ -823,6 +837,35 @@ fn analyze_file_with_resources<P: AsRef<Path>>(
     if removed > 0 {
         tracing::debug!("Filtered {} low-value composite 'any' rules", removed);
     }
+
+    let total_ms = analysis_start.elapsed().as_millis() as u64;
+
+    // Identify the slowest stage for quick bottleneck spotting
+    let slowest = [
+        ("stng", stage_stng_ms),
+        ("structural", stage_structural_ms),
+        ("payloads", stage_payloads_ms),
+        ("yara", stage_yara_ms),
+    ]
+    .into_iter()
+    .max_by_key(|(_, ms)| *ms)
+    .map(|(name, _)| name)
+    .unwrap_or("none");
+
+    // Per-file stage timing summary
+    tracing::info!(
+        total_ms,
+        stng_ms = stage_stng_ms,
+        structural_ms = stage_structural_ms,
+        payloads_ms = stage_payloads_ms,
+        yara_ms = stage_yara_ms,
+        slowest,
+        file_type = ?file_type,
+        size_kb = file_size / 1024,
+        findings = report.findings.len(),
+        traits = report.traits.len(),
+        "Analysis complete",
+    );
 
     // Log memory state after processing
     memory_tracker::log_after_file_processing(
@@ -986,12 +1029,6 @@ where
         .filter_map(std::result::Result::ok)
         .filter(|e| e.file_type().is_file())
         .filter(|e| !archive_utils::is_archive(e.path()))
-        .filter(|e| {
-            all_files_flag
-                || detect_file_type(e.path())
-                    .map(|ft| ft.is_program())
-                    .unwrap_or(false)
-        })
         .map(|e| e.path().to_path_buf())
         .collect();
 
@@ -999,13 +1036,61 @@ where
     callback(ScanEvent::Start { total });
 
     let analyzed = AtomicUsize::new(0);
+    let skipped = AtomicUsize::new(0);
     let errors = AtomicUsize::new(0);
 
-    files.par_iter().enumerate().for_each(|(i, file_path)| {
-        // Periodically clear thread-local caches to prevent unbounded memory growth
-        // during long-running scans of many files.
-        if i > 0 && i % 500 == 0 {
-            clear_all_thread_caches();
+    let max_scan_size = options.max_scan_file_size;
+
+    files.par_iter().for_each(|file_path| {
+        // Skip files exceeding the size limit (avoids mmap'ing huge ISOs/disk images).
+        if max_scan_size > 0 {
+            if let Ok(meta) = std::fs::metadata(file_path) {
+                if meta.len() > max_scan_size {
+                    tracing::debug!(
+                        path = %file_path.display(),
+                        size_mb = meta.len() / (1024 * 1024),
+                        limit_mb = max_scan_size / (1024 * 1024),
+                        "skipping file exceeding --max-file-size limit"
+                    );
+                    skipped.fetch_add(1, Ordering::Relaxed);
+                    return;
+                }
+            }
+        }
+
+        // File-type filtering: read the file once and check type from loaded data.
+        // Previously this was done during collection (reading every file twice).
+        if !all_files_flag {
+            let Ok(file_data) = file_io::read_file_smart(file_path) else {
+                skipped.fetch_add(1, Ordering::Relaxed);
+                return;
+            };
+            let ft = analyzers::detect_file_type_from_data(file_path, file_data.as_slice());
+            if !ft.is_program() {
+                skipped.fetch_add(1, Ordering::Relaxed);
+                return;
+            }
+            // Pass pre-loaded data to avoid a second read
+            let result = analyze_file_with_resources(
+                file_path,
+                options,
+                &mapper,
+                yara_engine.as_ref(),
+                Some(file_data),
+            );
+            match &result {
+                Ok(_) => {
+                    analyzed.fetch_add(1, Ordering::Relaxed);
+                }
+                Err(_) => {
+                    errors.fetch_add(1, Ordering::Relaxed);
+                }
+            }
+            callback(ScanEvent::File {
+                path: file_path.clone(),
+                result: Box::new(result),
+            });
+            return;
         }
 
         let result =

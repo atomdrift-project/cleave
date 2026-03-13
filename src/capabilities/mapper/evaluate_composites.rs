@@ -192,9 +192,6 @@ impl super::CapabilityMapper {
             });
         }
 
-        // Print condition evaluation statistics
-        crate::composite_rules::traits::print_condition_stats();
-
         all_findings
     }
 

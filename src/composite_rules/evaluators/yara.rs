@@ -420,7 +420,6 @@ fn extract_wildcard_bytes(data: &[u8], pos: usize, segments: &[HexSegment]) -> V
 /// 1. Extract longest fixed byte sequence from pattern
 /// 2. Use fast memmem search to find atom candidates
 /// 3. Verify full pattern only at candidate positions
-#[allow(clippy::too_many_arguments)]
 #[must_use]
 pub(crate) fn eval_hex<'a>(
     pattern: &str,

@@ -7,7 +7,7 @@ OUT_DIR = out
 
 # For sccache, set RUSTC_WRAPPER=sccache in your environment
 
-.PHONY: all build debug release tarball rollout-bastille test test-fast test-unit lint fmt clean coverage ci help regenerate-testdata loadtest
+.PHONY: all build debug release tarball rollout-bastille test test-fast test-unit lint fmt clean coverage ci help regenerate-testdata loadtest benchmark sampled-benchmark
 
 # Default target
 all: build
@@ -31,6 +31,8 @@ help: ## Show this help
 	@echo "  ci                    - Run all CI checks (test + lint)"
 	@echo "  regenerate-testdata   - Regenerate integration test snapshots from ~/data/cleave"
 	@echo "  loadtest              - Run load test against cleave server"
+	@echo "  benchmark             - Benchmark release build against ~/data/benchmark/200MB"
+	@echo "  sampled-benchmark     - Benchmark with samply CPU profiling"
 	@echo "  clean                 - Clean all build artifacts"
 
 build: debug ## Build in debug mode (default)
@@ -42,8 +44,9 @@ debug: ## Build in debug mode
 
 release: $(OUT_DIR) ## Build in release mode
 	@echo "Building $(BINARY) (release mode, treating warnings as errors)..."
-	cargo build --release
+	cargo build --release --features jemalloc
 	cp target/release/$(BINARY) $(OUT_DIR)/
+	@if [ "$$(uname)" = "Darwin" ]; then codesign -s - -f $(OUT_DIR)/$(BINARY); fi
 	@echo "✓ Release binary: $(OUT_DIR)/$(BINARY)"
 
 tarball: release ## Build release tarball with binary and traits
@@ -134,6 +137,22 @@ regenerate-testdata: release ## Regenerate integration test snapshots
 	@echo "Regenerating test data from ~/data/cleave..."
 	cargo build --release --quiet --bin regenerate_testdata
 	./target/release/regenerate_testdata
+
+benchmark: release ## Benchmark release build against ~/data/benchmark/200MB
+	@echo "Benchmarking $(OUT_DIR)/$(BINARY) on ~/data/benchmark/200MB..."
+	time CLEAVE_SKIP_CACHE=1 $(OUT_DIR)/$(BINARY) --verbose --format=jsonl ~/data/benchmark/200MB 2>/tmp/bench.$$$$.err >/tmp/bench.$$$$.out
+	tail -n 20 /tmp/bench.$$$$.err
+	@echo "✓ Output: /tmp/bench.$$$$.out  Logs: /tmp/bench.$$$$.err"
+
+sampled-benchmark: $(OUT_DIR) ## Benchmark with samply CPU profiling
+	@command -v samply >/dev/null 2>&1 || { echo "Error: samply not installed. Run: cargo install samply"; exit 1; }
+	@echo "Building $(BINARY) (profiling: release + debug symbols)..."
+	cargo build --profile profiling --features jemalloc
+	cp target/profiling/$(BINARY) $(OUT_DIR)/
+	@if [ "$$(uname)" = "Darwin" ]; then codesign -s - -f $(OUT_DIR)/$(BINARY); fi
+	@echo "Profiling $(OUT_DIR)/$(BINARY) on ~/data/benchmark/200MB with samply..."
+	CLEAVE_SKIP_CACHE=1 samply record --save-only -o /tmp/bench.$$$$.profile.json.gz $(OUT_DIR)/$(BINARY) --verbose --format=jsonl ~/data/benchmark/200MB 2>/tmp/bench.$$$$.err >/tmp/bench.$$$$.out
+	@echo "✓ Output: /tmp/bench.$$$$.out  Logs: /tmp/bench.$$$$.err  Profile: /tmp/bench.$$$$.profile.json.gz"
 
 loadtest: ## Run load test against cleave server
 	@echo "Building loadtest tool..."

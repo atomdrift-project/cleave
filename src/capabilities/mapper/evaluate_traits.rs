@@ -13,6 +13,16 @@ use rayon::prelude::*;
 use rustc_hash::{FxHashMap, FxHashSet};
 use std::collections::HashMap;
 
+/// Pre-computed caches passed to trait evaluation to avoid redundant work.
+pub(crate) struct TraitEvalCache<'a> {
+    pub raw_regex_matches: Option<&'a FxHashSet<usize>>,
+    pub section_map: &'a SectionMap,
+    pub string_matched_traits: &'a FxHashSet<usize>,
+    pub cached_evidence: &'a FxHashMap<usize, Vec<Evidence>>,
+    pub regex_candidates: &'a FxHashSet<usize>,
+    pub arch_ranges: Option<&'a [(Arch, std::ops::Range<usize>)]>,
+}
+
 use super::get_relative_source_file;
 
 impl super::CapabilityMapper {
@@ -316,12 +326,14 @@ impl super::CapabilityMapper {
             cached_ast,
             inline_yara,
             dependent_only,
-            Some(&raw_regex_matches),
-            &section_map,
-            &string_matched_traits,
-            &cached_evidence,
-            &regex_candidates,
-            None,
+            &TraitEvalCache {
+                raw_regex_matches: Some(&raw_regex_matches),
+                section_map: &section_map,
+                string_matched_traits: &string_matched_traits,
+                cached_evidence: &cached_evidence,
+                regex_candidates: &regex_candidates,
+                arch_ranges: None,
+            },
         )
     }
 
@@ -335,12 +347,7 @@ impl super::CapabilityMapper {
         cached_ast: Option<&tree_sitter::Tree>,
         inline_yara: Option<&HashMap<String, Vec<Evidence>>>,
         dependent_only: bool,
-        raw_regex_matches: Option<&FxHashSet<usize>>,
-        section_map: &SectionMap,
-        string_matched_traits: &FxHashSet<usize>,
-        cached_evidence: &FxHashMap<usize, Vec<Evidence>>,
-        regex_candidates: &FxHashSet<usize>,
-        arch_ranges: Option<&[(Arch, std::ops::Range<usize>)]>,
+        cache: &TraitEvalCache<'_>,
     ) -> Vec<Finding> {
         // Determine file type from report
         let file_type = self.detect_file_type(&report.target.file_type);
@@ -353,13 +360,13 @@ impl super::CapabilityMapper {
             None,
             cached_ast,
         )
-        .with_section_map(section_map.clone())
+        .with_section_map(cache.section_map.clone())
         .with_deadline(std::time::Instant::now() + std::time::Duration::from_secs(30))
         .with_slow_rule_ms(self.slow_rule_ms);
         if let Some(results) = inline_yara {
             ctx = ctx.with_inline_yara(results);
         }
-        if let Some(ranges) = arch_ranges {
+        if let Some(ranges) = cache.arch_ranges {
             ctx = ctx.with_arch_ranges(ranges.to_vec());
         }
 
@@ -380,11 +387,11 @@ impl super::CapabilityMapper {
         }
 
         // Use pre-computed raw regex matches (passed in from caller)
-        let raw_regex_prefilter_enabled = raw_regex_matches.is_some();
+        let raw_regex_prefilter_enabled = cache.raw_regex_matches.is_some();
 
-        let has_any_matches = !string_matched_traits.is_empty()
-            || raw_regex_matches.is_some_and(|s| !s.is_empty())
-            || !regex_candidates.is_empty();
+        let has_any_matches = !cache.string_matched_traits.is_empty()
+            || cache.raw_regex_matches.is_some_and(|s| !s.is_empty())
+            || !cache.regex_candidates.is_empty();
 
         // For dependent traits, we can't skip based on string matches alone
         // because the trait: condition might match even if strings don't
@@ -411,7 +418,7 @@ impl super::CapabilityMapper {
                         && trait_def.per_kb_max.is_none();
 
                     if is_simple_exact_string {
-                        if let Some(evidence) = cached_evidence.get(&idx) {
+                        if let Some(evidence) = cache.cached_evidence.get(&idx) {
                             if !evidence.is_empty() {
                                 return Some(Finding {
                                     id: trait_def.id.clone(),
@@ -451,7 +458,7 @@ impl super::CapabilityMapper {
                         && trait_def.per_kb_max.is_none();
 
                     if is_simple_substr_string {
-                        if let Some(evidence) = cached_evidence.get(&idx) {
+                        if let Some(evidence) = cache.cached_evidence.get(&idx) {
                             if !evidence.is_empty() {
                                 return Some(Finding {
                                     id: trait_def.id.clone(),
@@ -474,19 +481,19 @@ impl super::CapabilityMapper {
                     // String-based pre-filtering
                     let has_exact_string =
                         matches!(trait_def.r#if, Condition::String { exact: Some(_), .. });
-                    if has_exact_string && !string_matched_traits.contains(&idx) {
+                    if has_exact_string && !cache.string_matched_traits.contains(&idx) {
                         return None;
                     }
 
                     // Skip indexed substr traits that weren't matched
                     if self.string_match_index.is_substr_trait(idx)
-                        && !string_matched_traits.contains(&idx)
+                        && !cache.string_matched_traits.contains(&idx)
                     {
                         return None;
                     }
 
                     if self.string_match_index.is_regex_trait(idx)
-                        && !regex_candidates.contains(&idx)
+                        && !cache.regex_candidates.contains(&idx)
                     {
                         return None;
                     }
@@ -499,7 +506,7 @@ impl super::CapabilityMapper {
                     if has_content_regex
                         && raw_regex_prefilter_enabled
                         && self.raw_content_regex_index.is_indexed_trait(idx)
-                        && raw_regex_matches.is_some_and(|s| !s.contains(&idx))
+                        && cache.raw_regex_matches.is_some_and(|s| !s.contains(&idx))
                     {
                         return None;
                     }

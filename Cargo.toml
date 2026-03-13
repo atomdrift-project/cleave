@@ -60,7 +60,7 @@ manual_let_else = "warn"
 
 # Allow pragmatic exceptions
 # These are too noisy or conflict with readability
-too_many_arguments = "allow"
+too_many_arguments = "warn"
 type_complexity = "allow"
 module_name_repetitions = "allow"
 similar_names = "allow"
@@ -85,7 +85,7 @@ scpt = { path = "crates/scpt" }
 malecule = { path = "crates/malecule" }
 
 # YARA pattern matching
-yara-x = { version = "1.14", features = ["rules-profiling", "native-code-serialization"] }
+yara-x = { version = "1.14", features = ["rules-profiling"] }
 
 # Tree-sitter parsers
 tree-sitter = "0.26"
@@ -248,5 +248,3 @@ opt-level = 3
 [profile.dev.package.regalloc2]
 opt-level = 3
 
-[patch."https://codeberg.org/atomdrift/stng.git"]
-stng = { path = "../stng" }

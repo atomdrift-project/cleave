@@ -1397,8 +1397,9 @@ impl FileType {
             | FileType::Rtf
             | FileType::Lnk
             | FileType::Png
+            | FileType::Archive // Archives can contain malware
             | FileType::Pdf => true, // Included as they can carry exploits/malware
-            FileType::Archive | FileType::Unknown | FileType::Html | FileType::Markdown => false, // Skip archives, unknown, and non-program text files in dir scans
+            FileType::Unknown | FileType::Html | FileType::Markdown => false, // Skip unknown and non-program text files in dir scans
         }
     }
 

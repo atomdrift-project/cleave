@@ -159,7 +159,7 @@ pub(crate) struct R2String {
     pub string_type: String,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub(crate) struct R2Import {
     pub name: String,
     #[serde(rename = "libname")]

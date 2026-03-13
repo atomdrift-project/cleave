@@ -157,90 +157,86 @@ fn execute_rizin_with_timeout(args: &[&str], timeout: Duration) -> Result<std::p
         let _ = stderr_tx.send(stderr);
     });
 
-    // Wait for the process with timeout
-    let deadline = std::time::Instant::now() + timeout;
-    let poll_interval = Duration::from_millis(100);
+    // Wait for process completion with timeout.
+    // Uses a dedicated thread for child.wait() + recv_timeout to avoid
+    // the 100ms poll-sleep loop that wastes rayon worker thread time.
+    let child_id = child.id();
+    let (wait_tx, wait_rx) = mpsc::channel();
+    let wait_thread = std::thread::spawn(move || {
+        let status = child.wait();
+        let _ = wait_tx.send(status);
+    });
 
-    loop {
-        match child.try_wait() {
-            Ok(Some(status)) => {
-                // Process has completed
-                let elapsed = start.elapsed();
+    match wait_rx.recv_timeout(timeout) {
+        Ok(Ok(status)) => {
+            let elapsed = start.elapsed();
+            let _ = wait_thread.join();
+            let _ = stdout_thread.join();
+            let _ = stderr_thread.join();
+            let stdout = stdout_rx.recv().unwrap_or_default();
+            let stderr = stderr_rx.recv().unwrap_or_default();
 
-                // Collect output from threads
-                let _ = stdout_thread.join();
-                let _ = stderr_thread.join();
-                let stdout = stdout_rx.recv().unwrap_or_default();
-                let stderr = stderr_rx.recv().unwrap_or_default();
+            let output = std::process::Output {
+                status,
+                stdout,
+                stderr,
+            };
 
-                let output = std::process::Output {
-                    status,
-                    stdout,
-                    stderr,
-                };
-
-                if status.success() {
-                    RIZIN_SUCCESSES.fetch_add(1, Ordering::Relaxed);
-                    debug!(
-                        elapsed_ms = elapsed.as_millis(),
-                        stdout_bytes = output.stdout.len(),
-                        "Rizin completed successfully"
-                    );
-                } else {
-                    RIZIN_FAILURES.fetch_add(1, Ordering::Relaxed);
-                    let stderr_str = String::from_utf8_lossy(&output.stderr);
-                    warn!(
-                        elapsed_ms = elapsed.as_millis(),
-                        exit_code = ?status.code(),
-                        stderr = %stderr_str,
-                        "Rizin exited with error"
-                    );
-                }
-
-                return Ok(output);
-            }
-            Ok(None) => {
-                // Process still running - check timeout
-                if std::time::Instant::now() > deadline {
-                    // Timeout! Kill the process
-                    RIZIN_TIMEOUTS.fetch_add(1, Ordering::Relaxed);
-
-                    warn!(
-                        timeout_secs = timeout.as_secs(),
-                        command = %format!("rizin {}", args_str),
-                        "Rizin process timed out - killing"
-                    );
-
-                    // Try to kill the process
-                    let _ = child.kill();
-
-                    // Give it a moment to die, then return error
-                    std::thread::sleep(Duration::from_millis(100));
-                    let _ = child.wait(); // Reap the zombie
-
-                    // Clean up reader threads
-                    let _ = stdout_thread.join();
-                    let _ = stderr_thread.join();
-
-                    // Log statistics on timeout
-                    log_rizin_stats();
-
-                    anyhow::bail!("Rizin process timed out after {}s", timeout.as_secs());
-                }
-
-                // Still within timeout, sleep briefly and retry
-                std::thread::sleep(poll_interval);
-            }
-            Err(e) => {
+            if status.success() {
+                RIZIN_SUCCESSES.fetch_add(1, Ordering::Relaxed);
+                debug!(
+                    elapsed_ms = elapsed.as_millis(),
+                    stdout_bytes = output.stdout.len(),
+                    "Rizin completed successfully"
+                );
+            } else {
                 RIZIN_FAILURES.fetch_add(1, Ordering::Relaxed);
-                // Clean up reader threads
-                let _ = stdout_thread.join();
-                let _ = stderr_thread.join();
-                return Err(anyhow::anyhow!(
-                    "Failed to check rizin process status: {}",
-                    e
-                ));
+                let stderr_str = String::from_utf8_lossy(&output.stderr);
+                warn!(
+                    elapsed_ms = elapsed.as_millis(),
+                    exit_code = ?status.code(),
+                    stderr = %stderr_str,
+                    "Rizin exited with error"
+                );
             }
+
+            Ok(output)
+        }
+        Ok(Err(e)) => {
+            RIZIN_FAILURES.fetch_add(1, Ordering::Relaxed);
+            let _ = wait_thread.join();
+            let _ = stdout_thread.join();
+            let _ = stderr_thread.join();
+            Err(anyhow::anyhow!("Failed to wait for rizin process: {}", e))
+        }
+        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+            RIZIN_FAILURES.fetch_add(1, Ordering::Relaxed);
+            let _ = wait_thread.join();
+            let _ = stdout_thread.join();
+            let _ = stderr_thread.join();
+            anyhow::bail!("Rizin wait thread disconnected unexpectedly")
+        }
+        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+            RIZIN_TIMEOUTS.fetch_add(1, Ordering::Relaxed);
+            warn!(
+                timeout_secs = timeout.as_secs(),
+                command = %format!("rizin {}", args_str),
+                "Rizin process timed out - killing"
+            );
+
+            #[cfg(unix)]
+            unsafe {
+                libc::kill(child_id as i32, libc::SIGKILL);
+            }
+            #[cfg(not(unix))]
+            let _ = child_id;
+
+            let _ = wait_thread.join();
+            let _ = stdout_thread.join();
+            let _ = stderr_thread.join();
+
+            log_rizin_stats();
+            anyhow::bail!("Rizin process timed out after {}s", timeout.as_secs())
         }
     }
 }
@@ -251,6 +247,8 @@ pub(crate) struct BatchedAnalysis {
     pub functions: Vec<R2Function>,
     pub sections: Vec<R2Section>,
     pub strings: Vec<R2String>,
+    #[serde(default)]
+    pub imports: Vec<R2Import>,
     /// True if rizin analysis timed out - indicates potential anti-analysis
     #[serde(default)]
     pub timed_out: bool,
@@ -332,24 +330,7 @@ impl Radare2Analyzer {
         Ok((imports, exports, symbols))
     }
 
-    /// Extract imports with timeout protection.
-    pub(crate) fn extract_imports(&self, file_path: &Path) -> Result<Vec<R2Import>> {
-        let file_path_str = file_path.to_string_lossy();
-        let timeout = Duration::from_secs(RIZIN_DEFAULT_TIMEOUT_SECS);
-
-        let output = execute_rizin_with_timeout(&["-q", "-c", "iij", &file_path_str], timeout)?;
-
-        if !output.status.success() {
-            return Ok(Vec::new());
-        }
-
-        let json_str = String::from_utf8_lossy(&output.stdout);
-        let imports: Vec<R2Import> = serde_json::from_str(&json_str).unwrap_or_default();
-
-        Ok(imports)
-    }
-
-    /// Extract functions, sections, and strings in a SINGLE r2 session.
+    /// Extract functions, sections, strings, and imports in a SINGLE r2 session.
     /// This significantly reduces overhead compared to calling each method separately.
     /// Results are cached by SHA256 with zstd compression.
     ///
@@ -420,10 +401,10 @@ impl Radare2Analyzer {
         // - iSj: sections as JSON
         // - izj: strings as JSON
         let command = if skip_function_analysis {
-            "iSj; echo SEP; izj"
+            "iSj; echo SEP; izj; echo SEP; iij"
         } else {
-            tracing::info!("Running rizin function analysis (aa + aflj + iSj + izj)");
-            "aa; aflj; echo SEP; iSj; echo SEP; izj"
+            tracing::info!("Running rizin function analysis (aa + aflj + iSj + izj + iij)");
+            "aa; aflj; echo SEP; iSj; echo SEP; izj; echo SEP; iij"
         };
 
         trace!(command = command, "Executing rizin batched analysis");
@@ -456,10 +437,8 @@ impl Radare2Analyzer {
                     warn!("Rizin analysis timed out after 60s - binary may be packed or anti-analysis");
                     // Return result with timed_out flag set - consumers can add finding
                     return Ok(BatchedAnalysis {
-                        functions: Vec::new(),
-                        sections: Vec::new(),
-                        strings: Vec::new(),
                         timed_out: true,
+                        ..Default::default()
                     });
                 }
                 return Err(e);
@@ -475,17 +454,18 @@ impl Radare2Analyzer {
         let output_str = String::from_utf8_lossy(&output.stdout);
         let parts: Vec<&str> = output_str.split("SEP").collect();
 
-        let (functions, sections, strings) = if skip_function_analysis {
-            // Large/stripped binary: sections and strings only
+        let (functions, sections, strings, imports) = if skip_function_analysis {
             let sections: Vec<R2Section> = parse_json_part(parts.first())
                 .and_then(|j| serde_json::from_str(&j).ok())
                 .unwrap_or_default();
             let strings: Vec<R2String> = parse_json_part(parts.get(1))
                 .and_then(|j| serde_json::from_str(&j).ok())
                 .unwrap_or_default();
-            (Vec::new(), sections, strings)
+            let imports: Vec<R2Import> = parse_json_part(parts.get(2))
+                .and_then(|j| serde_json::from_str(&j).ok())
+                .unwrap_or_default();
+            (Vec::new(), sections, strings, imports)
         } else {
-            // Full analysis: functions, sections, strings
             let functions: Vec<R2Function> = parse_json_part(parts.first())
                 .and_then(|j| serde_json::from_str(&j).ok())
                 .unwrap_or_default();
@@ -495,7 +475,10 @@ impl Radare2Analyzer {
             let strings: Vec<R2String> = parse_json_part(parts.get(2))
                 .and_then(|j| serde_json::from_str(&j).ok())
                 .unwrap_or_default();
-            (functions, sections, strings)
+            let imports: Vec<R2Import> = parse_json_part(parts.get(3))
+                .and_then(|j| serde_json::from_str(&j).ok())
+                .unwrap_or_default();
+            (functions, sections, strings, imports)
         };
 
         debug!(
@@ -503,6 +486,7 @@ impl Radare2Analyzer {
             functions = functions.len(),
             sections = sections.len(),
             strings = strings.len(),
+            imports = imports.len(),
             "radare2 batched analysis completed"
         );
 
@@ -510,6 +494,7 @@ impl Radare2Analyzer {
             functions,
             sections,
             strings,
+            imports,
             timed_out: false,
         };
 
@@ -794,7 +779,7 @@ mod tests {
                 },
             ],
             strings: vec![],
-            timed_out: false,
+            ..Default::default()
         };
 
         let file_size = 1800u64;

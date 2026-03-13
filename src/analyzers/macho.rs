@@ -129,7 +129,7 @@ impl MachOAnalyzer {
         }
 
         // Extract imports and map to capabilities
-        let _ = self.analyze_imports(file_path, &macho, &mut report);
+        let _ = self.analyze_imports(&macho, &mut report);
 
         // Extract exports
         let _ = self.analyze_exports(&macho, &mut report);
@@ -286,6 +286,23 @@ impl MachOAnalyzer {
                 // Convert R2Functions to Functions for the report
                 report.functions = batched.functions.into_iter().map(Function::from).collect();
 
+                // Process batched imports if goblin didn't find any
+                if report.imports.is_empty() && !batched.imports.is_empty() {
+                    for imp in &batched.imports {
+                        report.imports.push(Import::new(
+                            &imp.name,
+                            imp.lib_name.clone(),
+                            "radare2",
+                        ));
+                        let name = crate::types::binary::normalize_symbol(&imp.name);
+                        if let Some(cap) = self.capability_mapper.lookup(&name, "radare2") {
+                            if !report.findings.iter().any(|c| c.id == cap.id) {
+                                report.findings.push(cap);
+                            }
+                        }
+                    }
+                }
+
                 // Use strings from batched data (no extra r2 spawn)
                 Some(batched.strings)
             } else {
@@ -399,38 +416,12 @@ impl MachOAnalyzer {
         }
     }
 
-    fn analyze_imports<'a>(
-        &self,
-        file_path: &Path,
-        macho: &MachO<'a>,
-        report: &mut AnalysisReport,
-    ) -> Result<()> {
+    fn analyze_imports<'a>(&self, macho: &MachO<'a>, report: &mut AnalysisReport) -> Result<()> {
         let imports = macho.imports()?;
 
-        // Fallback: use symbol table and radare2 if imports() is empty
+        // Fallback: use symbol table if imports() is empty
+        // (r2 imports are now handled via batched analysis above)
         if imports.is_empty() {
-            // If we have radare2, use it to get library names for imports
-            if Radare2Analyzer::is_available() {
-                if let Ok(r2_imports) = self.radare2.extract_imports(file_path) {
-                    for imp in r2_imports {
-                        report.imports.push(Import::new(
-                            &imp.name,
-                            imp.lib_name.clone(),
-                            "radare2",
-                        ));
-                        let name = crate::types::binary::normalize_symbol(&imp.name);
-
-                        // Map import to capability
-                        if let Some(cap) = self.capability_mapper.lookup(&name, "radare2") {
-                            if !report.findings.iter().any(|c| c.id == cap.id) {
-                                report.findings.push(cap);
-                            }
-                        }
-                    }
-                }
-            }
-
-            // Also try symbol table for basic names (catch anything r2 missed)
             if let Some(syms) = &macho.symbols {
                 for (name, sym) in syms.iter().flatten() {
                     // N_EXT (external) and N_UNDF (undefined) means it's an import

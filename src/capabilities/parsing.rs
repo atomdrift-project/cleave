@@ -80,7 +80,7 @@ pub(crate) fn apply_trait_defaults(
                     .to_string(),
             );
         }
-    } else if defaults.r#for.as_deref().is_some_and(|t| t.is_empty()) {
+    } else if defaults.r#for.as_deref().is_some_and(<[String]>::is_empty) {
         warnings.push(
             "Unknown file type: '' (file default 'for: []' is empty — specify at least one file type)"
                 .to_string(),
@@ -594,7 +594,7 @@ pub(crate) fn apply_composite_defaults(
                     .to_string(),
             );
         }
-    } else if defaults.r#for.as_deref().is_some_and(|t| t.is_empty()) {
+    } else if defaults.r#for.as_deref().is_some_and(<[String]>::is_empty) {
         warnings.push(
             "Unknown file type: '' (file default 'for: []' is empty — specify at least one file type)"
                 .to_string(),

@@ -1012,20 +1012,20 @@ impl UnifiedSourceAnalyzer {
 
         let text = text_metrics::analyze_text(content);
 
-        let identifiers = self.extract_identifiers(root, source);
+        // Single-pass AST walk extracts identifiers, strings, and functions together
+        let (identifiers, strings, func_infos) = self.extract_all_from_tree(root, source);
+
         let ident_refs: Vec<&str> = identifiers
             .iter()
             .map(std::string::String::as_str)
             .collect();
         let identifier_metrics = identifier_metrics::analyze_identifiers(&ident_refs);
 
-        let strings = self.extract_string_values(root, source);
         let str_refs: Vec<&str> = strings.iter().map(std::string::String::as_str).collect();
         let string_metrics = string_metrics::analyze_strings(&str_refs);
 
         let comment_metrics = comment_metrics::analyze_comments(content, self.config.comment_style);
 
-        let func_infos = self.extract_function_info(root, source);
         let func_metrics = function_metrics::analyze_functions(&func_infos, total_lines);
 
         Metrics {
@@ -1038,13 +1038,25 @@ impl UnifiedSourceAnalyzer {
         }
     }
 
-    fn extract_identifiers<'a>(&self, root: &tree_sitter::Node<'a>, source: &[u8]) -> Vec<String> {
+    /// Single-pass AST walk that extracts identifiers, string values, and function info
+    /// in one traversal instead of three separate walks.
+    fn extract_all_from_tree<'a>(
+        &self,
+        root: &tree_sitter::Node<'a>,
+        source: &[u8],
+    ) -> (Vec<String>, Vec<String>, Vec<FunctionInfo>) {
         let mut identifiers = Vec::new();
+        let mut strings = Vec::new();
+        let mut functions = Vec::new();
+        let mut func_depth: u32 = 0;
         let mut cursor = root.walk();
 
         loop {
             let node = cursor.node();
-            if node.kind() == "identifier" || node.kind() == "name" {
+            let kind = node.kind();
+
+            // Identifiers
+            if kind == "identifier" || kind == "name" {
                 if let Ok(text) = node.utf8_text(source) {
                     if !text.is_empty() {
                         identifiers.push(text.to_string());
@@ -1052,35 +1064,7 @@ impl UnifiedSourceAnalyzer {
                 }
             }
 
-            if cursor.goto_first_child() {
-                continue;
-            }
-            if cursor.goto_next_sibling() {
-                continue;
-            }
-            loop {
-                if !cursor.goto_parent() {
-                    return identifiers;
-                }
-                if cursor.goto_next_sibling() {
-                    break;
-                }
-            }
-        }
-    }
-
-    fn extract_string_values<'a>(
-        &self,
-        root: &tree_sitter::Node<'a>,
-        source: &[u8],
-    ) -> Vec<String> {
-        let mut strings = Vec::new();
-        let mut cursor = root.walk();
-
-        loop {
-            let node = cursor.node();
-            let kind = node.kind();
-
+            // Strings
             if self.config.string_node_types.contains(&kind) || kind.contains("string") {
                 if let Ok(text) = node.utf8_text(source) {
                     let s = text
@@ -1094,45 +1078,7 @@ impl UnifiedSourceAnalyzer {
                 }
             }
 
-            if cursor.goto_first_child() {
-                continue;
-            }
-            if cursor.goto_next_sibling() {
-                continue;
-            }
-            loop {
-                if !cursor.goto_parent() {
-                    return strings;
-                }
-                if cursor.goto_next_sibling() {
-                    break;
-                }
-            }
-        }
-    }
-
-    fn extract_function_info<'a>(
-        &self,
-        root: &tree_sitter::Node<'a>,
-        source: &[u8],
-    ) -> Vec<FunctionInfo> {
-        let mut functions = Vec::new();
-        let mut cursor = root.walk();
-        self.walk_for_function_info(&mut cursor, source, &mut functions, 0);
-        functions
-    }
-
-    fn walk_for_function_info<'a>(
-        &self,
-        cursor: &mut tree_sitter::TreeCursor<'a>,
-        source: &[u8],
-        functions: &mut Vec<FunctionInfo>,
-        mut depth: u32,
-    ) {
-        loop {
-            let node = cursor.node();
-            let kind = node.kind();
-
+            // Functions
             if self.config.function_node_types.contains(&kind) {
                 let mut info = FunctionInfo::default();
                 if let Some(name) = self.extract_function_name(&node, source) {
@@ -1142,13 +1088,13 @@ impl UnifiedSourceAnalyzer {
                 info.start_line = node.start_position().row as u32;
                 info.end_line = node.end_position().row as u32;
                 info.line_count = info.end_line.saturating_sub(info.start_line) + 1;
-                info.nesting_depth = depth;
+                info.nesting_depth = func_depth;
                 functions.push(info);
             }
 
             if cursor.goto_first_child() {
                 if self.config.function_node_types.contains(&kind) {
-                    depth += 1;
+                    func_depth += 1;
                 }
                 continue;
             }
@@ -1157,11 +1103,11 @@ impl UnifiedSourceAnalyzer {
             }
             loop {
                 if !cursor.goto_parent() {
-                    return;
+                    return (identifiers, strings, functions);
                 }
                 let parent_kind = cursor.node().kind();
                 if self.config.function_node_types.contains(&parent_kind) {
-                    depth = depth.saturating_sub(1);
+                    func_depth = func_depth.saturating_sub(1);
                 }
                 if cursor.goto_next_sibling() {
                     break;

@@ -439,11 +439,6 @@ fn analyze_file_with_resources<P: AsRef<Path>>(
         return Ok(cached_report);
     }
 
-    let stage_stng_ms: u64;
-    let stage_structural_ms: u64;
-    let stage_payloads_ms: u64;
-    let stage_yara_ms: u64;
-
     // Check for extension/content mismatch
     let mismatch = analyzers::check_extension_content_mismatch(path, file_data);
 
@@ -454,7 +449,7 @@ fn analyze_file_with_resources<P: AsRef<Path>>(
 
     // Check for encoded payloads (hex, base64, etc.) using stng results
     let encoded_payloads = extractors::encoded_payload::extract_encoded_payloads(&stng_strings);
-    stage_stng_ms = stng_start.elapsed().as_millis() as u64;
+    let stage_stng_ms = stng_start.elapsed().as_millis() as u64;
 
     // Create unified analysis input - all analyzers receive the same pre-extracted data
     let input = analyzers::AnalysisInput::with_payloads(
@@ -660,7 +655,7 @@ fn analyze_file_with_resources<P: AsRef<Path>>(
             }
         }
     }?;
-    stage_structural_ms = structural_start.elapsed().as_millis() as u64;
+    let stage_structural_ms = structural_start.elapsed().as_millis() as u64;
 
     // Add finding for extension/content mismatch if detected
     if let Some((expected, actual)) = mismatch {
@@ -794,7 +789,7 @@ fn analyze_file_with_resources<P: AsRef<Path>>(
             }
         }
     }
-    stage_payloads_ms = payloads_start.elapsed().as_millis() as u64;
+    let stage_payloads_ms = payloads_start.elapsed().as_millis() as u64;
 
     // Run YARA for file types that didn't handle it internally.
     // Binary types (MachO, Elf, Pe) and archives already ran YARA with parallel scanning above.
@@ -829,7 +824,7 @@ fn analyze_file_with_resources<P: AsRef<Path>>(
             }
         }
     }
-    stage_yara_ms = yara_start.elapsed().as_millis() as u64;
+    let stage_yara_ms = yara_start.elapsed().as_millis() as u64;
 
     // Filter low-value composite "any" rules (needs=1) before caching.
     // These provide no value over the underlying trait that matched.

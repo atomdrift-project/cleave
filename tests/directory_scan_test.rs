@@ -106,7 +106,7 @@ fn test_analyze_directory_with_archive() {
     header.set_cksum();
     tar.append(&header, b"#!/bin/bash\necho 'x'".as_ref())
         .unwrap();
-    tar.finish().unwrap();
+    tar.into_inner().unwrap().finish().unwrap();
 
     #[allow(deprecated)]
     assert_cmd::Command::cargo_bin("cleave")
@@ -114,7 +114,8 @@ fn test_analyze_directory_with_archive() {
         .env("cleave_SKIP_YARA", "1") // Skip YARA - testing directory scanning
         .args(["--json", "analyze", temp_dir.path().to_str().unwrap()])
         .assert()
-        .success();
+        .success()
+        .stdout(predicate::str::contains("test.tar.gz"));
 }
 
 /// Regression test: directory scans must include archive files (zip, tar.gz, vsix, etc.)
@@ -145,7 +146,8 @@ fn test_directory_scan_includes_archives() {
     header.set_size(script.len() as u64);
     header.set_cksum();
     tar.append(&header, script.as_ref()).unwrap();
-    tar.finish().unwrap();
+    // into_inner() returns the GzEncoder; must finish it to write gzip footer
+    tar.into_inner().unwrap().finish().unwrap();
 
     // Create a .vsix (zip-based) archive — the file type that originally triggered the bug
     let vsix_path = temp_dir.path().join("extension.vsix");
@@ -183,6 +185,84 @@ fn test_directory_scan_includes_archives() {
     assert!(
         stdout.contains("extension.vsix"),
         "vsix archive was not analyzed; stdout: {stdout}"
+    );
+}
+
+/// Test nested archive extraction: tar.gz containing a zip containing a vsix.
+/// Verifies the recursive archive analyzer extracts files through multiple layers.
+#[test]
+fn test_directory_scan_nested_archives() {
+    use std::io::Write;
+
+    let temp_dir = TempDir::new().unwrap();
+
+    // Layer 1 (innermost): create a .vsix containing a malicious JS file
+    let vsix_bytes = {
+        let buf = std::io::Cursor::new(Vec::new());
+        let mut vsix = zip::ZipWriter::new(buf);
+        vsix.start_file::<_, ()>("extension/evil.js", Default::default())
+            .unwrap();
+        vsix.write_all(b"const cp = require('child_process'); cp.exec('whoami');")
+            .unwrap();
+        vsix.finish().unwrap().into_inner()
+    };
+
+    // Layer 2: wrap the vsix inside a zip
+    let zip_bytes = {
+        let buf = std::io::Cursor::new(Vec::new());
+        let mut zip = zip::ZipWriter::new(buf);
+        zip.start_file::<_, ()>("malware.vsix", Default::default())
+            .unwrap();
+        zip.write_all(&vsix_bytes).unwrap();
+        zip.finish().unwrap().into_inner()
+    };
+
+    // Layer 3 (outermost): wrap the zip inside a tar.gz
+    let tgz_path = temp_dir.path().join("nested.tar.gz");
+    let tgz_file = fs::File::create(&tgz_path).unwrap();
+    let enc = flate2::write::GzEncoder::new(tgz_file, flate2::Compression::default());
+    let mut tar = tar::Builder::new(enc);
+    let mut header = tar::Header::new_gnu();
+    header.set_path("bundle.zip").unwrap();
+    header.set_size(zip_bytes.len() as u64);
+    header.set_mode(0o644);
+    header.set_cksum();
+    tar.append(&header, zip_bytes.as_slice()).unwrap();
+    tar.into_inner().unwrap().finish().unwrap();
+
+    let output = assert_cmd::Command::cargo_bin("cleave")
+        .unwrap()
+        .env("cleave_SKIP_YARA", "1")
+        .args(["--json", "analyze", temp_dir.path().to_str().unwrap()])
+        .output()
+        .unwrap();
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "cleave failed on nested archive: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    // The outermost archive must appear
+    assert!(
+        stdout.contains("nested.tar.gz"),
+        "outer tar.gz not in output; stdout: {stdout}"
+    );
+    // The inner zip should be extracted and analyzed
+    assert!(
+        stdout.contains("bundle.zip"),
+        "inner zip not extracted from tar.gz; stdout: {stdout}"
+    );
+    // The vsix inside the zip should be extracted and analyzed
+    assert!(
+        stdout.contains("malware.vsix"),
+        "vsix not extracted from nested zip; stdout: {stdout}"
+    );
+    // The JS file inside the vsix should be extracted and analyzed
+    assert!(
+        stdout.contains("evil.js"),
+        "JS file not extracted from nested vsix; stdout: {stdout}"
     );
 }
 

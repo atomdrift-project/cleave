@@ -121,7 +121,7 @@ toml = "1.0"
 bincode = { package = "cu-bincode", git = "https://github.com/copper-project/cu-bincode", features = ["serde", "alloc", "std"] }
 
 # CLI
-clap = { version = "4.5", features = ["derive"] }
+clap = { version = "4.6", features = ["derive"] }
 indicatif = "0.18"
 colored = "3.1"
 terminal_size = "0.4"

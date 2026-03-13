@@ -28,6 +28,7 @@ use crate::analyzers::{detect_file_type, Analyzer};
 use crate::types::*;
 use anyhow::Result;
 use rayon::prelude::*;
+use tracing::{debug, trace};
 use std::collections::HashSet;
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -80,7 +81,7 @@ impl ArchiveAnalyzer {
         // Find main class from MANIFEST.MF
         let main_class = find_main_class(temp_dir);
         if let Some(ref mc) = main_class {
-            eprintln!("  Main-Class: {}", mc);
+            debug!("Main-Class: {}", mc);
         }
 
         // Collect all files
@@ -98,7 +99,7 @@ impl ArchiveAnalyzer {
             .partition(|e| e.path().extension().is_some_and(|ext| ext == "class"));
 
         let total_class_files = class_files.len();
-        eprintln!("  Found {} .class files", total_class_files);
+        debug!("Found {} .class files", total_class_files);
 
         // Phase 1: Run YARA on ALL class files in parallel (fast)
         let yara_flagged_classes = Arc::new(Mutex::new(HashSet::new()));
@@ -128,8 +129,8 @@ impl ArchiveAnalyzer {
                     }
                 }
             });
-            eprintln!(
-                "  YARA scan completed in {:.2}s",
+            debug!(
+                "YARA scan completed in {:.2}s",
                 yara_start.elapsed().as_secs_f64()
             );
         }
@@ -150,7 +151,7 @@ impl ArchiveAnalyzer {
             }
         }
 
-        eprintln!("  {} classes flagged by YARA", flagged_classes.len());
+        debug!("{} classes flagged by YARA", flagged_classes.len());
 
         // Phase 2: Run full JavaClassAnalyzer only on interesting classes
         // - Main class
@@ -197,7 +198,7 @@ impl ArchiveAnalyzer {
             .chain(sample_classes)
             .collect();
 
-        eprintln!("  Full analysis on {} classes", classes_to_analyze.len());
+        debug!("Full analysis on {} classes", classes_to_analyze.len());
 
         // Run full analysis on selected classes
         let files_analyzed = Arc::new(std::sync::atomic::AtomicUsize::new(0));
@@ -582,8 +583,6 @@ impl ArchiveAnalyzer {
         report: &mut AnalysisReport,
         start: std::time::Instant,
     ) -> Result<()> {
-        use tracing::{debug, trace};
-
         debug!(
             "Analyzing generic archive, scanning temp dir: {:?}",
             temp_dir
@@ -613,7 +612,6 @@ impl ArchiveAnalyzer {
 
         let total_files = files.len();
         debug!("Found {} files to analyze", total_files);
-        eprintln!("  Analyzing {} files", total_files);
 
         // Create thread-safe containers for aggregated results
         let files_processed = Arc::new(std::sync::atomic::AtomicUsize::new(0));
@@ -641,8 +639,8 @@ impl ArchiveAnalyzer {
             if let Ok(mut last) = last_progress.try_lock() {
                 if last.elapsed() > std::time::Duration::from_secs(1) {
                     let analyzed = files_analyzed.load(std::sync::atomic::Ordering::Relaxed);
-                    eprintln!(
-                        "  Progress: {}/{} files processed, {} analyzed",
+                    debug!(
+                        "Archive progress: {}/{} files processed, {} analyzed",
                         processed, total_files, analyzed
                     );
                     *last = std::time::Instant::now();

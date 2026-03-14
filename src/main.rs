@@ -475,6 +475,7 @@ fn main() -> Result<()> {
                     slow_rule_ms: args.slow_rule_ms,
                     output_to_file: args.output.is_some(),
                     max_scan_file_size,
+                    scan_threads: args.scan_threads.unwrap_or(0),
                 })?);
             }
             results.join("")
@@ -710,6 +711,7 @@ fn main() -> Result<()> {
                     slow_rule_ms: args.slow_rule_ms,
                     output_to_file: args.output.is_some(),
                     max_scan_file_size,
+                    scan_threads: args.scan_threads.unwrap_or(0),
                 })?);
             }
             results.join("")

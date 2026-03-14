@@ -64,6 +64,7 @@ pub(crate) struct AnalyzeConfig<'a> {
     pub slow_rule_ms: u64,
     pub output_to_file: bool,
     pub max_scan_file_size: u64,
+    pub scan_threads: usize,
 }
 
 /// Analyze a single file or directory with comprehensive malware detection.
@@ -104,6 +105,7 @@ pub(crate) fn run(config: &AnalyzeConfig<'_>) -> Result<String> {
         sample_extraction: sample_lib,
         slow_rule_ms: config.slow_rule_ms,
         max_scan_file_size: config.max_scan_file_size,
+        scan_threads: config.scan_threads,
     };
 
     // If target is a directory, process files recursively

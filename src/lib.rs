@@ -215,6 +215,11 @@ pub struct AnalysisOptions {
     /// Maximum file size (bytes) to scan during directory analysis.
     /// Files larger than this are skipped. 0 means no limit.
     pub max_scan_file_size: u64,
+    /// Thread count for parallel directory scanning (0 = auto).
+    /// Each thread holds an in-flight analysis (~0.5-1.5 GB of RAM), so this
+    /// directly controls peak memory during directory scans.
+    /// Default: min(8, num_cpus) for CLI; num_cpus for server mode.
+    pub scan_threads: usize,
 }
 
 impl Default for AnalysisOptions {
@@ -237,6 +242,7 @@ impl Default for AnalysisOptions {
             sample_extraction: None,
             slow_rule_ms: capabilities::CapabilityMapper::DEFAULT_SLOW_RULE_MS,
             max_scan_file_size: 600 * 1024 * 1024, // 600 MB default
+            scan_threads: 0, // 0 = auto (min(8, num_cpus) for CLI)
         }
     }
 }
@@ -1072,7 +1078,27 @@ where
 
     let max_scan_size = options.max_scan_file_size;
 
-    files.par_iter().for_each(|file_path| {
+    // Dedicated thread pool for directory scanning. Each thread holds an in-flight
+    // analysis (~0.5-1.5 GB), so this directly controls peak memory.
+    // Priority: CLEAVE_SCAN_THREADS env > options.scan_threads > min(8, cpus).
+    let scan_threads = std::env::var("CLEAVE_SCAN_THREADS")
+        .ok()
+        .and_then(|s| s.parse::<usize>().ok())
+        .filter(|&n| n > 0)
+        .unwrap_or_else(|| {
+            if options.scan_threads > 0 {
+                options.scan_threads
+            } else {
+                rayon::current_num_threads().min(8)
+            }
+        });
+    let scan_pool = rayon::ThreadPoolBuilder::new()
+        .num_threads(scan_threads)
+        .build()
+        .unwrap_or_else(|_| rayon::ThreadPoolBuilder::new().build().unwrap());
+    tracing::info!(scan_threads, "Directory scan thread pool created");
+
+    scan_pool.install(|| files.par_iter().for_each(|file_path| {
         // Skip files exceeding the size limit (avoids mmap'ing huge ISOs/disk images).
         if max_scan_size > 0 {
             if let Ok(meta) = std::fs::metadata(file_path) {
@@ -1145,7 +1171,7 @@ where
             result: Box::new(result),
         });
         composite_rules::evaluators::clear_thread_local_caches();
-    });
+    }));
 
     let final_analyzed = analyzed.load(Ordering::Relaxed);
     let final_skipped = skipped.load(Ordering::Relaxed);

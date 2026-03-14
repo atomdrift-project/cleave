@@ -203,6 +203,13 @@ pub(crate) struct Args {
     #[arg(long, value_name = "MS", default_value_t = 4000)]
     pub slow_rule_ms: u64,
 
+    /// Number of threads for parallel directory scanning (default: min(8, CPUs)).
+    /// Each thread holds an in-flight analysis (~0.5-1.5 GB), so higher values
+    /// increase peak RAM. Use 4 for low-memory systems, 16 for maximum throughput.
+    /// Override with CLEAVE_SCAN_THREADS env var.
+    #[arg(long, value_name = "N")]
+    pub scan_threads: Option<usize>,
+
     /// Generate malecule MOL file and JSON sidecar for 3D visualization.
     /// Writes <path>.mol and <path>.json with molecular representation of findings.
     #[arg(long, value_name = "PATH")]

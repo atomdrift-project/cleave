@@ -590,12 +590,27 @@ impl PEAnalyzer {
             let embedded =
                 crate::analyzers::embedded_binary_detector::scan_for_embedded_binaries(pe_data);
             for binary in &embedded {
-                report
-                    .findings
-                    .push(crate::analyzers::embedded_binary_detector::finding_for(
-                        binary,
-                        &report.target.path,
-                    ));
+                let mut finding = crate::analyzers::embedded_binary_detector::finding_for(
+                    binary,
+                    &report.target.path,
+                );
+                // Downgrade embedded binaries found in the .rsrc section to notable:
+                // PE resources commonly contain legitimate embedded executables (drivers,
+                // tools, updaters) and are not indicative of malicious payload hiding.
+                let in_rsrc = pe.sections.iter().any(|s| {
+                    let name = String::from_utf8_lossy(&s.name);
+                    let name = name.trim_matches(char::from(0));
+                    if name != ".rsrc" {
+                        return false;
+                    }
+                    let start = s.pointer_to_raw_data as usize;
+                    let end = start + s.size_of_raw_data as usize;
+                    binary.offset >= start && binary.offset < end
+                });
+                if in_rsrc {
+                    finding.crit = Criticality::Notable;
+                }
+                report.findings.push(finding);
                 // Analyze the embedded binary as a nested FileAnalysis (zip-like)
                 let slice_end = (binary.offset + binary.estimated_size).min(pe_data.len());
                 let embedded_bytes = &pe_data[binary.offset..slice_end];

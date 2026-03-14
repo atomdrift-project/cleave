@@ -73,6 +73,7 @@ impl GenericAnalyzer {
 
     fn file_type_str(&self) -> &'static str {
         match self.file_type {
+            FileType::C => "c",
             FileType::Swift => "swift",
             FileType::ObjectiveC => "objc",
             FileType::Groovy => "groovy",

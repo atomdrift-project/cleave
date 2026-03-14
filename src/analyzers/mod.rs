@@ -46,6 +46,7 @@ pub(crate) mod chrome_manifest;
 pub(crate) mod elf;
 pub(crate) mod embedded_binary_detector;
 pub(crate) mod java_class;
+pub(crate) mod jpeg;
 pub(crate) mod lnk;
 pub(crate) mod macho;
 pub(crate) mod macho_codesign;
@@ -123,7 +124,10 @@ pub fn analyzer_for_file_type(
             lnk::LnkAnalyzer::new().with_capability_mapper(mapper_or_empty),
         )),
 
-        // PNG images - steganography detection
+        // Image analyzers - steganography detection
+        FileType::Jpeg => Some(Box::new(
+            jpeg::JpegAnalyzer::new().with_capability_mapper(mapper_or_empty),
+        )),
         FileType::Png => Some(Box::new(
             png::PngAnalyzer::new().with_capability_mapper(mapper_or_empty),
         )),
@@ -207,7 +211,10 @@ pub(crate) fn analyzer_for_file_type_arc(
             lnk::LnkAnalyzer::new().with_capability_mapper_arc(mapper_or_empty),
         )),
 
-        // PNG images - steganography detection
+        // Image analyzers - steganography detection
+        FileType::Jpeg => Some(Box::new(
+            jpeg::JpegAnalyzer::new().with_capability_mapper_arc(mapper_or_empty),
+        )),
         FileType::Png => Some(Box::new(
             png::PngAnalyzer::new().with_capability_mapper_arc(mapper_or_empty),
         )),
@@ -367,7 +374,9 @@ pub(crate) fn detect_file_type_from_path(file_path: &Path) -> FileType {
             "ps1" | "psm1" | "psd1" => return FileType::PowerShell,
             "bat" | "cmd" => return FileType::Batch,
             "vbs" | "vbe" | "wsf" | "wsc" => return FileType::Vbs,
-            "c" | "h" | "cpp" | "hpp" | "cc" | "cxx" | "hxx" | "hh" => return FileType::C,
+            "c" | "h" | "cpp" | "hpp" | "cc" | "cxx" | "hxx" | "hh" | "pas" | "dpr" => {
+                return FileType::C;
+            }
             "lua" => return FileType::Lua,
             "cs" => return FileType::CSharp,
             "swift" => return FileType::Swift,
@@ -432,10 +441,10 @@ fn detect_file_type_inner(file_path: &Path, file_data: &[u8]) -> Option<FileType
         return Some(FileType::Lnk);
     }
 
-    // Check for JPEG magic bytes (FF D8 FF) - skip, not analyzed
+    // Check for JPEG magic bytes (FF D8 FF)
     if file_data.len() >= 3 && file_data[0] == 0xFF && file_data[1] == 0xD8 && file_data[2] == 0xFF
     {
-        return None;
+        return Some(FileType::Jpeg);
     }
 
     // Check for PNG magic bytes (89 50 4E 47 0D 0A 1A 0A)
@@ -1337,6 +1346,8 @@ pub enum FileType {
     Rtf,
     /// Windows Shell Link file (.lnk)
     Lnk,
+    /// JPEG image
+    Jpeg,
     /// PNG image
     Png,
     /// PDF document
@@ -1396,6 +1407,7 @@ impl FileType {
             | FileType::Plist
             | FileType::Rtf
             | FileType::Lnk
+            | FileType::Jpeg
             | FileType::Png
             | FileType::Archive // Archives can contain malware
             | FileType::Pdf => true, // Included as they can carry exploits/malware
@@ -1474,6 +1486,7 @@ impl FileType {
             FileType::Plist => vec!["plist", "xml", "apple"],
             FileType::Rtf => vec!["rtf", "doc"],
             FileType::Lnk => vec!["lnk", "shortcut"],
+            FileType::Jpeg => vec!["jpeg", "jpg"],
             FileType::Png => vec!["png"],
             FileType::Pdf => vec!["pdf"],
             FileType::Html => vec!["html", "htm"],

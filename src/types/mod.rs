@@ -46,6 +46,7 @@ pub(crate) mod file_analysis;
 pub(crate) mod language_metrics;
 pub(crate) mod ml_features;
 pub(crate) mod paths_env;
+pub(crate) mod jpeg_metrics;
 pub(crate) mod png_metrics;
 pub(crate) mod scores;
 pub(crate) mod text_metrics;
@@ -105,6 +106,7 @@ pub(crate) use language_metrics::{
 };
 
 pub(crate) use binary_metrics::{BinaryMetrics, MachoMetrics};
+pub(crate) use jpeg_metrics::JpegMetrics;
 pub(crate) use png_metrics::PngMetrics;
 
 pub(crate) use scores::Metrics;

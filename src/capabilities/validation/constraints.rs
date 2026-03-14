@@ -1019,8 +1019,8 @@ pub(crate) fn find_excessive_file_types(
         FileType::Plist,
         FileType::Lnk,
     ];
-    let documents: &[FileType] = &[FileType::Text, FileType::Pdf, FileType::Rtf, FileType::Html];
-    let media: &[FileType] = &[FileType::Jpeg, FileType::Png];
+    let documents: &[FileType] = &[FileType::Pdf, FileType::Rtf, FileType::Html];
+    let images: &[FileType] = &[FileType::Jpeg, FileType::Png];
     let data: &[FileType] = &[FileType::Ipa];
     let all_groups: &[(&[FileType], &str)] = &[
         (binaries, "binaries"),
@@ -1028,7 +1028,7 @@ pub(crate) fn find_excessive_file_types(
         (source, "source"),
         (manifests, "manifests"),
         (documents, "documents"),
-        (media, "media"),
+        (images, "images"),
         (data, "data"),
     ];
 

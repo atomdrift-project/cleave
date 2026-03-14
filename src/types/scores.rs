@@ -11,6 +11,7 @@ use super::language_metrics::{
     PerlMetrics, PhpMetrics, PowerShellMetrics, PythonMetrics, RubyMetrics, RustMetrics,
     ShellMetrics,
 };
+use super::jpeg_metrics::JpegMetrics;
 use super::png_metrics::PngMetrics;
 use super::text_metrics::{
     CommentMetrics, FunctionMetrics, IdentifierMetrics, ImportMetrics, StatementMetrics,
@@ -115,6 +116,9 @@ pub struct Metrics {
     pub package_json: Option<PackageJsonMetrics>,
 
     // === Image metrics ===
+    /// JPEG image metrics for steganography detection
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub jpeg: Option<JpegMetrics>,
     /// PNG image metrics for steganography detection
     #[serde(skip_serializing_if = "Option::is_none")]
     pub png: Option<PngMetrics>,

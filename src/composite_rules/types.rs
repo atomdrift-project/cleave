@@ -261,9 +261,7 @@ pub(crate) enum FileType {
     Lnk,
     /// iOS App Package (.ipa) - not extractable by cleave
     Ipa,
-    /// Plain text file (no longer analyzed, but retained for rule compatibility)
-    Text,
-    /// JPEG image (no longer analyzed, but retained for rule compatibility)
+    /// JPEG image
     Jpeg,
     /// PNG image
     Png,
@@ -360,8 +358,6 @@ impl FileType {
             FileType::Lnk,
             // Archive/installer formats
             FileType::Ipa,
-            // Generic formats (retained for rule compatibility, not analyzed)
-            FileType::Text,
             // Image formats
             FileType::Jpeg,
             FileType::Png,
@@ -424,7 +420,6 @@ impl FileType {
             "lnk" => FileType::Lnk,
             "ipa" => FileType::Ipa,
             "pdf" => FileType::Pdf,
-            "text" | "txt" => FileType::Text,
             _ => FileType::All,
         }
     }

@@ -351,12 +351,11 @@ pub(crate) fn parse_file_types(types: &[String], warnings: &mut Vec<String>) -> 
                     RuleFileType::Lnk,
                 ],
                 "documents" => vec![
-                    RuleFileType::Text,
                     RuleFileType::Pdf,
                     RuleFileType::Rtf,
                     RuleFileType::Html,
                 ],
-                "media" => vec![RuleFileType::Jpeg, RuleFileType::Png],
+                "images" | "media" => vec![RuleFileType::Jpeg, RuleFileType::Png],
                 "data" | "ipa" => vec![RuleFileType::Ipa],
                 // Binary formats
                 "elf" => vec![RuleFileType::Elf],
@@ -402,8 +401,6 @@ pub(crate) fn parse_file_types(types: &[String], warnings: &mut Vec<String>) -> 
                 "chrome-manifest" | "manifest.json" => vec![RuleFileType::ChromeManifest],
                 "vsixmanifest" | "vsix-manifest" => vec![RuleFileType::VsixManifest],
                 "github-actions" => vec![RuleFileType::GithubActions],
-                // Generic formats
-                "text" | "txt" => vec![RuleFileType::Text],
                 // Image formats
                 "jpeg" | "jpg" => vec![RuleFileType::Jpeg],
                 "png" => vec![RuleFileType::Png],

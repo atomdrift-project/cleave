@@ -775,7 +775,6 @@ impl ArchiveAnalyzer {
 
                     if password_works {
                         tracing::info!("✓ Decrypted with password: {}", password);
-                        eprintln!("  Decrypted with password: {}", password);
                         working_password = Some(password.clone());
                         break;
                     }

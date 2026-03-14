@@ -108,7 +108,6 @@ pub(crate) fn extract_zip_safe(
             {
                 Ok(()) => {
                     info!("✓ Decrypted with password: {}", password);
-                    eprintln!("  Decrypted with password: {}", password);
                     return Ok(());
                 }
                 Err(e) => {

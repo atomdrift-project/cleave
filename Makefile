@@ -31,8 +31,8 @@ help: ## Show this help
 	@echo "  ci                    - Run all CI checks (test + lint)"
 	@echo "  regenerate-testdata   - Regenerate integration test snapshots from ~/data/cleave"
 	@echo "  loadtest              - Run load test against cleave server"
-	@echo "  benchmark             - Benchmark release build against ~/data/benchmark/200MB"
-	@echo "  sampled-benchmark     - Benchmark with samply CPU profiling"
+	@echo "  benchmark             - Benchmark release build against ~/data/benchmark/ (DATASET=200MB)"
+	@echo "  sampled-benchmark     - Benchmark with samply CPU profiling (DATASET=200MB)"
 	@echo "  clean                 - Clean all build artifacts"
 
 build: debug ## Build in debug mode (default)
@@ -145,17 +145,37 @@ bench-build: $(OUT_DIR) ## Build benchmark binary (release + debug symbols for p
 	@if [ "$$(uname)" = "Darwin" ]; then codesign -s - -f $(OUT_DIR)/$(BINARY).bench; fi
 	@echo "✓ Benchmark binary: $(OUT_DIR)/$(BINARY).bench"
 
-benchmark: bench-build ## Benchmark against ~/data/benchmark/200MB
-	@echo "Benchmarking $(OUT_DIR)/$(BINARY).bench on ~/data/benchmark/200MB..."
-	CLEAVE_SKIP_CACHE=1 time $(OUT_DIR)/$(BINARY).bench --verbose --format=jsonl ~/data/benchmark/200MB 2>$(OUT_DIR)/bench.err >$(OUT_DIR)/bench.out
+DATASET ?= 200MB
+BENCH_DIR = ~/data/benchmark/$(DATASET)
+
+benchmark: bench-build ## Benchmark against ~/data/benchmark/$(DATASET)
+	@echo "Benchmarking $(OUT_DIR)/$(BINARY).bench on $(BENCH_DIR)..."
+	CLEAVE_SKIP_CACHE=1 time $(OUT_DIR)/$(BINARY).bench --verbose --format=jsonl $(BENCH_DIR) 2>$(OUT_DIR)/bench.err >$(OUT_DIR)/bench.out
 	tail -n 20 $(OUT_DIR)/bench.err
 	@echo "✓ Output: $(OUT_DIR)/bench.out  Logs: $(OUT_DIR)/bench.err"
 
 sampled-benchmark: bench-build ## Benchmark with samply CPU profiling
 	@command -v samply >/dev/null 2>&1 || { echo "Error: samply not installed. Run: cargo install samply"; exit 1; }
-	@echo "Profiling $(OUT_DIR)/$(BINARY).bench on ~/data/benchmark/200MB with samply..."
-	CLEAVE_SKIP_CACHE=1 time samply record --save-only -o $(OUT_DIR)/bench.profile.json.gz $(OUT_DIR)/$(BINARY).bench --verbose --format=jsonl ~/data/benchmark/200MB 2>$(OUT_DIR)/bench.err >$(OUT_DIR)/bench.out
+	@echo "Profiling $(OUT_DIR)/$(BINARY).bench on $(BENCH_DIR) with samply..."
+	CLEAVE_SKIP_CACHE=1 time samply record --save-only -o $(OUT_DIR)/bench.profile.json.gz $(OUT_DIR)/$(BINARY).bench --verbose --format=jsonl $(BENCH_DIR) 2>$(OUT_DIR)/bench.err >$(OUT_DIR)/bench.out
 	@echo "✓ Output: $(OUT_DIR)/bench.out  Logs: $(OUT_DIR)/bench.err  Profile: $(OUT_DIR)/bench.profile.json.gz"
+
+heap-build: $(OUT_DIR) ## Build with jemalloc heap profiling support
+	@echo "Building $(BINARY) (heap profiling: release + debug + jemalloc-prof)..."
+	cargo build --profile profiling --features jemalloc-prof
+	cp target/profiling/$(BINARY) $(OUT_DIR)/$(BINARY).heap
+	@if [ "$$(uname)" = "Darwin" ]; then codesign -s - -f $(OUT_DIR)/$(BINARY).heap; fi
+	@echo "✓ Heap-profiling binary: $(OUT_DIR)/$(BINARY).heap"
+
+heap-benchmark: heap-build ## Benchmark with jemalloc heap profiling
+	@echo "Heap-profiling $(OUT_DIR)/$(BINARY).heap on $(BENCH_DIR)..."
+	@rm -rf $(OUT_DIR)/heap && mkdir -p $(OUT_DIR)/heap
+	CLEAVE_SKIP_CACHE=1 _RJEM_MALLOC_CONF="prof:true,prof_active:true,prof_final:true,lg_prof_interval:28,prof_prefix:$(OUT_DIR)/heap/jeprof" \
+		time $(OUT_DIR)/$(BINARY).heap --verbose --format=jsonl $(BENCH_DIR) 2>$(OUT_DIR)/bench.err >$(OUT_DIR)/bench.out
+	@echo "✓ Output: $(OUT_DIR)/bench.out  Logs: $(OUT_DIR)/bench.err"
+	@echo "✓ Heap profiles: $(OUT_DIR)/heap/jeprof.*.heap"
+	@echo "  Analyze with: jeprof --text $(OUT_DIR)/$(BINARY).heap $(OUT_DIR)/heap/jeprof.*.heap"
+	@echo "  Note: tikv-jemalloc uses _RJEM_MALLOC_CONF (not MALLOC_CONF)"
 
 loadtest: ## Run load test against cleave server
 	@echo "Building loadtest tool..."

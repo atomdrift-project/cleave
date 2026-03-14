@@ -258,15 +258,31 @@ pub fn log_before_file_processing(file_path: &str, file_size: u64) {
     }
 }
 
-/// Log memory usage after processing a file
+/// Previous RSS value for delta tracking across files.
+static PREV_RSS: AtomicU64 = AtomicU64::new(0);
+
+/// Log memory usage after processing a file, including RSS delta since previous file.
 pub fn log_after_file_processing(file_path: &str, file_size: u64, duration: Duration) {
     let current_rss = current_rss();
+
+    let delta_mb = current_rss.map(|rss| {
+        let prev = PREV_RSS.swap(rss, Ordering::Relaxed);
+        if prev == 0 {
+            return 0i64;
+        }
+        (rss as i64 - prev as i64) / 1024 / 1024
+    });
+
+    let jemalloc = jemalloc_stats();
 
     info!(
         file_path = file_path,
         file_size_mb = file_size / 1024 / 1024,
         duration_ms = duration.as_millis(),
         current_rss_mb = current_rss.map(|r| r / 1024 / 1024),
+        rss_delta_mb = delta_mb,
+        jemalloc_allocated_mb = jemalloc.as_ref().map(|s| s.allocated / 1024 / 1024),
+        jemalloc_resident_mb = jemalloc.as_ref().map(|s| s.resident / 1024 / 1024),
         "Completed file analysis"
     );
 }
@@ -468,6 +484,41 @@ pub fn jemalloc_stats() -> Option<JemallocStats> {
 
     #[cfg(not(all(unix, feature = "jemalloc")))]
     None
+}
+
+/// Configure jemalloc for aggressive page return to the OS.
+///
+/// Sets `dirty_decay_ms` and `muzzy_decay_ms` to 0, forcing jemalloc to immediately
+/// return freed pages instead of holding them for reuse. This trades ~1-2% CPU for
+/// dramatically lower RSS in long-running processes (server mode) where the
+/// allocate-free cycle across thousands of analyses causes multi-GB fragmentation.
+///
+/// No-op when jemalloc is not the allocator.
+pub fn configure_jemalloc_low_memory() {
+    #[cfg(all(unix, feature = "jemalloc"))]
+    {
+        // tikv-jemalloc-ctl 0.6 doesn't expose dirty_decay_ms/muzzy_decay_ms
+        // as typed helpers, so use the raw mallctl interface.
+        // SAFETY: ssize_t (isize) is the correct type for these settings per jemalloc docs.
+        unsafe {
+            let dirty = tikv_jemalloc_ctl::raw::write(
+                b"arenas.dirty_decay_ms\0",
+                0_isize,
+            );
+            let muzzy = tikv_jemalloc_ctl::raw::write(
+                b"arenas.muzzy_decay_ms\0",
+                0_isize,
+            );
+            match (dirty, muzzy) {
+                (Ok(()), Ok(())) => {
+                    info!("jemalloc: aggressive page return enabled (dirty_decay_ms=0, muzzy_decay_ms=0)");
+                }
+                (d, m) => {
+                    warn!("jemalloc: failed to configure decay timers (dirty={d:?}, muzzy={m:?})");
+                }
+            }
+        }
+    }
 }
 
 /// Create a global memory tracker instance

@@ -108,6 +108,11 @@ impl AppState {
 ///
 /// This function blocks until the server is shut down via SIGINT/SIGTERM.
 pub async fn run(config: ServerConfig) -> anyhow::Result<()> {
+    // Server mode processes many files over a long lifetime. Configure jemalloc
+    // to aggressively return freed pages to the OS, preventing multi-GB RSS
+    // growth from allocator fragmentation across thousands of analyses.
+    crate::memory_tracker::configure_jemalloc_low_memory();
+
     eprintln!("Loading YARA rules and capability mapper...");
 
     // Force initialization of shared resources before accepting requests.

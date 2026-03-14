@@ -788,6 +788,10 @@ fn analyze_file_with_resources<P: AsRef<Path>>(
                 }
             }
         }
+        // Clean up the temp file created by encoded_payload::extract_encoded_payloads().
+        // These are .keep()'d NamedTempFiles that would otherwise persist for the
+        // entire process lifetime, accumulating disk and mmap RSS.
+        let _ = std::fs::remove_file(&payload.temp_path);
     }
     let stage_payloads_ms = payloads_start.elapsed().as_millis() as u64;
 
@@ -1119,6 +1123,10 @@ where
                 path: file_path.clone(),
                 result: Box::new(result),
             });
+            // Release wasmtime Scanner VMs on this thread to prevent non-jemalloc
+            // memory accumulation. Each Scanner holds mmap'd VM regions (~50-100MB)
+            // that macOS keeps resident even after munmap (MADV_FREE).
+            composite_rules::evaluators::clear_thread_local_caches();
             return;
         }
 
@@ -1136,6 +1144,7 @@ where
             path: file_path.clone(),
             result: Box::new(result),
         });
+        composite_rules::evaluators::clear_thread_local_caches();
     });
 
     let final_analyzed = analyzed.load(Ordering::Relaxed);

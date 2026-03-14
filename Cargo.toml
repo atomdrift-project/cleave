@@ -208,6 +208,10 @@ test_fast = []
 # Supported on Linux, macOS, FreeBSD, and other Unix-like systems (NOT illumos/solaris).
 # Build with: cargo build --release --features jemalloc
 jemalloc = ["tikv-jemallocator", "tikv-jemalloc-ctl"]
+# jemalloc with heap profiling support for memory leak diagnosis.
+# Build with: cargo build --release --features jemalloc-prof
+# Run with: MALLOC_CONF="prof:true,prof_active:true,lg_prof_interval:30,prof_prefix:out/heap/jeprof"
+jemalloc-prof = ["jemalloc", "tikv-jemallocator/profiling"]
 
 # jemalloc for unix-like systems (Linux, macOS, illumos, FreeBSD, etc.)
 [target.'cfg(unix)'.dependencies]

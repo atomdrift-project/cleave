@@ -65,12 +65,11 @@ impl MemoryTracker {
             self.peak_rss_bytes
                 .fetch_max(current_rss, Ordering::Relaxed);
 
-            // Log if memory usage is high
-            const HIGH_MEMORY_THRESHOLD: u64 = 7 * 1024 * 1024 * 1024; // 7GB
-            if current_rss > HIGH_MEMORY_THRESHOLD {
+            if current_rss > sysmem::warning_threshold() {
                 warn!(
                     current_rss_mb = current_rss / 1024 / 1024,
                     peak_rss_mb = self.peak_rss_bytes.load(Ordering::Relaxed) / 1024 / 1024,
+                    limit_mb = sysmem::memory_limit() / 1024 / 1024,
                     file_path = file_path,
                     file_size_mb = bytes / 1024 / 1024,
                     "High memory usage detected"
@@ -135,105 +134,12 @@ impl MemoryTracker {
     }
 }
 
-/// Get current RSS (Resident Set Size) in bytes
-/// Returns None if unable to determine
+/// Get current RSS (Resident Set Size) in bytes.
+///
+/// Delegates to the `sysmem` crate for cross-platform support.
 #[must_use]
 pub fn current_rss() -> Option<u64> {
-    #[cfg(target_os = "linux")]
-    {
-        rss_linux()
-    }
-
-    #[cfg(target_os = "macos")]
-    {
-        rss_macos()
-    }
-
-    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
-    {
-        None
-    }
-}
-
-#[cfg(target_os = "linux")]
-fn rss_linux() -> Option<u64> {
-    use std::fs;
-
-    // Read /proc/self/status
-    let status = fs::read_to_string("/proc/self/status").ok()?;
-
-    // Find VmRSS line
-    for line in status.lines() {
-        if line.starts_with("VmRSS:") {
-            // Format: "VmRSS:      123456 kB"
-            let parts: Vec<&str> = line.split_whitespace().collect();
-            if parts.len() >= 2 {
-                let kb: u64 = parts[1].parse().ok()?;
-                return Some(kb * 1024); // Convert to bytes
-            }
-        }
-    }
-
-    None
-}
-
-#[cfg(target_os = "macos")]
-fn rss_macos() -> Option<u64> {
-    use std::mem;
-
-    // Mach task info structures
-    #[repr(C)]
-    #[derive(Debug, Copy, Clone)]
-    struct time_value_t {
-        seconds: i32,
-        microseconds: i32,
-    }
-
-    #[repr(C)]
-    struct mach_task_basic_info {
-        virtual_size: u64,
-        resident_size: u64,
-        resident_size_max: u64,
-        user_time: time_value_t,
-        system_time: time_value_t,
-        policy: i32,
-        suspend_count: i32,
-    }
-
-    // Mach constants
-    const MACH_TASK_BASIC_INFO: i32 = 20;
-    const MACH_TASK_BASIC_INFO_COUNT: u32 =
-        (mem::size_of::<mach_task_basic_info>() / mem::size_of::<i32>()) as u32;
-
-    // External functions from libSystem
-    extern "C" {
-        fn mach_task_self() -> u32;
-        fn task_info(
-            target_task: u32,
-            flavor: i32,
-            task_info_out: *mut i32,
-            task_info_outCnt: *mut u32,
-        ) -> i32;
-    }
-
-    unsafe {
-        let task = mach_task_self();
-        let mut info: mach_task_basic_info = mem::zeroed();
-        let mut count = MACH_TASK_BASIC_INFO_COUNT;
-
-        let kr = task_info(
-            task,
-            MACH_TASK_BASIC_INFO,
-            &mut info as *mut _ as *mut i32,
-            &mut count,
-        );
-
-        if kr == 0 {
-            Some(info.resident_size)
-        } else {
-            None
-        }
-    }
+    sysmem::current_rss()
 }
 
 /// Log memory usage before processing a file
@@ -350,20 +256,22 @@ pub fn start_periodic_logging(interval: Duration) -> MemoryLoggerHandle {
                     "Periodic memory check"
                 );
 
-                // Warn if memory is very high
-                const WARNING_THRESHOLD: u64 = 4 * 1024 * 1024 * 1024; // 4GB
-                const CRITICAL_THRESHOLD: u64 = 8 * 1024 * 1024 * 1024; // 8GB
+                let warning = sysmem::warning_threshold();
+                let critical = sysmem::memory_limit();
 
-                if rss > CRITICAL_THRESHOLD {
+                if rss > critical {
                     tracing::error!(
                         rss_gb = rss_gb,
+                        limit_mb = critical / 1024 / 1024,
                         "CRITICAL: Memory usage extremely high - OOM imminent"
                     );
-                    // Log all statistics for post-mortem analysis
                     log_all_memory_stats();
-                } else if rss > WARNING_THRESHOLD {
-                    warn!(rss_gb = rss_gb, "WARNING: High memory usage detected");
-                    // Log stats when memory is high for debugging
+                } else if rss > warning {
+                    warn!(
+                        rss_gb = rss_gb,
+                        limit_mb = critical / 1024 / 1024,
+                        "WARNING: High memory usage detected"
+                    );
                     log_all_memory_stats();
                 }
 

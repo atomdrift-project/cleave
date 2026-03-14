@@ -1,0 +1,10 @@
+[package]
+name = "sysmem"
+version = "0.1.0"
+edition = "2021"
+authors = ["cleave Team"]
+description = "Lightweight system memory queries (total RAM, current RSS) with no dependencies"
+license = "Apache-2.0"
+
+[lints]
+workspace = true

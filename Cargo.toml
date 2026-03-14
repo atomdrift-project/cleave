@@ -11,7 +11,7 @@ default-run = "cleave"
 workspace = true
 
 [workspace]
-members = [".", "crates/scpt", "crates/malecule", "cleave-macros"]
+members = [".", "crates/scpt", "crates/malecule", "crates/sysmem", "cleave-macros"]
 
 # Strict but pragmatic lints - similar to the Rust project itself
 [workspace.lints.rust]
@@ -83,6 +83,9 @@ scpt = { path = "crates/scpt" }
 
 # Molecular visualization
 malecule = { path = "crates/malecule" }
+
+# System memory queries
+sysmem = { path = "crates/sysmem" }
 
 # YARA pattern matching
 yara-x = { version = "1.14", features = ["rules-profiling"] }

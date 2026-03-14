@@ -671,7 +671,9 @@ fn main() -> Result<()> {
                 qps,
                 timeout_secs: timeout,
                 max_body_size: (max_size_mb * 1024 * 1024) as usize,
-                max_rss_bytes: max_rss_gb * 1024 * 1024 * 1024,
+                max_rss_bytes: max_rss_gb
+                    .map(|gb| gb * 1024 * 1024 * 1024)
+                    .unwrap_or_else(sysmem::memory_limit),
                 allowed_local_paths,
                 extract_dir: extract_dir_path,
             };

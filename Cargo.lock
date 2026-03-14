@@ -700,6 +700,7 @@ dependencies = [
  "stng",
  "streaming-iterator",
  "strsim",
+ "sysmem",
  "tar",
  "tempfile",
  "terminal_size",
@@ -3812,6 +3813,10 @@ dependencies = [
  "quote",
  "syn 2.0.117",
 ]
+
+[[package]]
+name = "sysmem"
+version = "0.1.0"
 
 [[package]]
 name = "tap"

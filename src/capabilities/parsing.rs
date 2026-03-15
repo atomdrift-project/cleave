@@ -354,6 +354,8 @@ pub(crate) fn parse_file_types(types: &[String], warnings: &mut Vec<String>) -> 
                     RuleFileType::Pdf,
                     RuleFileType::Rtf,
                     RuleFileType::Html,
+                    RuleFileType::OleDoc,
+                    RuleFileType::Ooxml,
                 ],
                 "images" | "media" => vec![RuleFileType::Jpeg, RuleFileType::Png],
                 "data" | "ipa" => vec![RuleFileType::Ipa],
@@ -410,6 +412,13 @@ pub(crate) fn parse_file_types(types: &[String], warnings: &mut Vec<String>) -> 
                 "rtf" => vec![RuleFileType::Rtf],
                 "lnk" => vec![RuleFileType::Lnk],
                 "pdf" => vec![RuleFileType::Pdf],
+                // Microsoft Office formats
+                "oledoc" | "ole" | "doc" | "xls" | "ppt" | "msg" => {
+                    vec![RuleFileType::OleDoc]
+                }
+                "ooxml" | "docx" | "xlsx" | "pptx" | "docm" | "xlsm" | "pptm" => {
+                    vec![RuleFileType::Ooxml]
+                }
                 _ => {
                     warnings.push(format!("Unknown file type: '{}'", name));
                     vec![]

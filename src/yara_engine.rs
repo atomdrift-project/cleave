@@ -118,8 +118,8 @@ impl YaraTier {
                 "sh" | "bash" | "zsh" | "py" | "pyc" | "js" | "mjs" | "cjs" | "ts" | "php"
                 | "rb" | "pl" | "pm" | "lua" | "ps1" | "psm1" | "psd1" | "bat" | "cmd" | "vbs"
                 | "vba" | "java" | "jar" | "class" | "jsp" | "aspx" | "asp" => return Self::Script,
-                "pdf" | "rtf" | "ole" | "doc" | "docx" | "xls" | "xlsx" | "lnk" | "zip" | "iso"
-                | "img" | "one" | "onepkg" => return Self::Doc,
+                "pdf" | "rtf" | "ole" | "doc" | "docx" | "xls" | "xlsx" | "ppt" | "pptx"
+                | "msg" | "lnk" | "zip" | "iso" | "img" | "one" | "onepkg" => return Self::Doc,
                 _ => {}
             }
         }

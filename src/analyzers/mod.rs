@@ -50,6 +50,7 @@ pub(crate) mod jpeg;
 pub(crate) mod lnk;
 pub(crate) mod macho;
 pub(crate) mod macho_codesign;
+pub(crate) mod office;
 pub(crate) mod package_json;
 pub mod pe;
 pub(crate) mod png;
@@ -117,6 +118,11 @@ pub fn analyzer_for_file_type(
         // RTF documents - parse for embedded OLE objects
         FileType::Rtf => Some(Box::new(
             rtf::RtfAnalyzer::new().with_capability_mapper(mapper_or_empty),
+        )),
+
+        // Microsoft Office documents (OLE2 and OOXML)
+        FileType::OleDoc | FileType::Ooxml => Some(Box::new(
+            office::OfficeAnalyzer::new().with_capability_mapper(mapper_or_empty),
         )),
 
         // LNK files - Windows shortcuts
@@ -204,6 +210,11 @@ pub(crate) fn analyzer_for_file_type_arc(
         // RTF documents - parse for embedded OLE objects
         FileType::Rtf => Some(Box::new(
             rtf::RtfAnalyzer::new().with_capability_mapper_arc(mapper_or_empty),
+        )),
+
+        // Microsoft Office documents (OLE2 and OOXML)
+        FileType::OleDoc | FileType::Ooxml => Some(Box::new(
+            office::OfficeAnalyzer::new().with_capability_mapper_arc(mapper_or_empty),
         )),
 
         // LNK files - Windows shortcuts
@@ -388,6 +399,9 @@ pub(crate) fn detect_file_type_from_path(file_path: &Path) -> FileType {
             "scpt" | "applescript" => return FileType::AppleScript,
             "plist" => return FileType::Plist,
             "rtf" => return FileType::Rtf,
+            "doc" | "xls" | "ppt" | "msg" | "dot" | "xlt" => return FileType::OleDoc,
+            "docx" | "xlsx" | "pptx" | "docm" | "xlsm" | "pptm" | "dotx" | "dotm" | "xltx"
+            | "xltm" => return FileType::Ooxml,
             "lnk" => return FileType::Lnk,
             "pdf" => return FileType::Pdf,
             "zip" | "7z" | "rar" | "deb" | "rpm" | "apk" | "ipa" | "xpi" | "epub" | "nupkg"
@@ -496,6 +510,12 @@ fn detect_file_type_inner(file_path: &Path, file_data: &[u8]) -> Option<FileType
     let head = &file_data[..file_data.len().min(100)];
     if memchr::memmem::find(head, b"<plist").is_some() {
         return Some(FileType::Plist);
+    }
+
+    // Check for OLE2/CFBF magic bytes (D0 CF 11 E0 A1 B1 1A E1)
+    // Legacy Microsoft Office documents (.doc, .xls, .ppt, .msg)
+    if file_data.len() >= 8 && office::ole2::is_ole2(file_data) {
+        return Some(FileType::OleDoc);
     }
 
     // Check for Python bytecode (Python 3.5+): magic is XX 0D 0D 0A
@@ -694,8 +714,26 @@ fn detect_file_type_inner(file_path: &Path, file_data: &[u8]) -> Option<FileType
         return Some(FileType::Shell);
     }
 
-    // Check for archives by file extension (need to check path, not just extension)
+    // Check for OOXML documents (ZIP with [Content_Types].xml)
+    // Must come before generic archive detection since OOXML files are ZIP-based
     let path_str = file_path.to_string_lossy().to_lowercase();
+    if file_data.starts_with(b"PK") {
+        let is_ooxml_ext = path_str.ends_with(".docx")
+            || path_str.ends_with(".xlsx")
+            || path_str.ends_with(".pptx")
+            || path_str.ends_with(".docm")
+            || path_str.ends_with(".xlsm")
+            || path_str.ends_with(".pptm")
+            || path_str.ends_with(".dotx")
+            || path_str.ends_with(".dotm")
+            || path_str.ends_with(".xltx")
+            || path_str.ends_with(".xltm");
+        if is_ooxml_ext || office::ooxml::is_ooxml(file_data) {
+            return Some(FileType::Ooxml);
+        }
+    }
+
+    // Check for archives by file extension (need to check path, not just extension)
     if path_str.ends_with(".zip")
         || path_str.ends_with(".tar")
         || path_str.ends_with(".tar.gz")
@@ -1344,6 +1382,10 @@ pub enum FileType {
     Plist,
     /// Rich Text Format document (.rtf)
     Rtf,
+    /// Legacy Microsoft Office document (OLE2/CFBF: .doc, .xls, .ppt, .msg)
+    OleDoc,
+    /// Modern Microsoft Office document (OOXML: .docx, .xlsx, .pptx)
+    Ooxml,
     /// Windows Shell Link file (.lnk)
     Lnk,
     /// JPEG image
@@ -1406,6 +1448,8 @@ impl FileType {
             | FileType::AppleScript
             | FileType::Plist
             | FileType::Rtf
+            | FileType::OleDoc
+            | FileType::Ooxml
             | FileType::Lnk
             | FileType::Jpeg
             | FileType::Png
@@ -1485,6 +1529,8 @@ impl FileType {
             FileType::AppleScript => vec!["scpt", "applescript"],
             FileType::Plist => vec!["plist", "xml", "apple"],
             FileType::Rtf => vec!["rtf", "doc"],
+            FileType::OleDoc => vec!["doc", "xls", "ppt", "ole", "msg"],
+            FileType::Ooxml => vec!["docx", "xlsx", "pptx", "doc", "xls", "ole"],
             FileType::Lnk => vec!["lnk", "shortcut"],
             FileType::Jpeg => vec!["jpeg", "jpg"],
             FileType::Png => vec!["png"],

@@ -257,6 +257,10 @@ pub(crate) enum FileType {
     Plist,
     /// Rich Text Format (.rtf)
     Rtf,
+    /// Legacy Microsoft Office document (OLE2/CFBF: .doc, .xls, .ppt, .msg)
+    OleDoc,
+    /// Modern Microsoft Office document (OOXML: .docx, .xlsx, .pptx)
+    Ooxml,
     /// Windows Shell Link (.lnk)
     Lnk,
     /// iOS App Package (.ipa) - not extractable by cleave
@@ -355,6 +359,8 @@ impl FileType {
             FileType::PkgInfo,
             FileType::Plist,
             FileType::Rtf,
+            FileType::OleDoc,
+            FileType::Ooxml,
             FileType::Lnk,
             // Archive/installer formats
             FileType::Ipa,
@@ -417,6 +423,8 @@ impl FileType {
             "plist" => FileType::Plist,
             "pkginfo" | "pkg-info" | "pkg_info" => FileType::PkgInfo,
             "rtf" => FileType::Rtf,
+            "ole" | "doc" | "xls" | "ppt" | "msg" | "oledoc" => FileType::OleDoc,
+            "ooxml" | "docx" | "xlsx" | "pptx" | "docm" | "xlsm" | "pptm" => FileType::Ooxml,
             "lnk" => FileType::Lnk,
             "ipa" => FileType::Ipa,
             "pdf" => FileType::Pdf,

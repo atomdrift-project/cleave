@@ -631,6 +631,9 @@ fn analyze_file_with_resources<P: AsRef<Path>>(
         FileType::Lnk => analyzers::lnk::LnkAnalyzer::new()
             .with_capability_mapper_arc(mapper_arc.clone())
             .analyze_input(&input),
+        FileType::OleDoc | FileType::Ooxml => analyzers::office::OfficeAnalyzer::new()
+            .with_capability_mapper_arc(mapper_arc.clone())
+            .analyze_input(&input),
         FileType::Jar | FileType::Archive => {
             let mut analyzer = analyzers::archive::ArchiveAnalyzer::new()
                 .with_capability_mapper_arc(mapper_arc.clone())

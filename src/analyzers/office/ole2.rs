@@ -23,8 +23,28 @@ pub(crate) struct Ole2Document {
     pub stream_names: Vec<String>,
     /// Streams containing embedded PE/ELF executables
     pub embedded_executables: Vec<String>,
+    /// OLE10Native embedded objects (filename, size)
+    pub ole10_native_objects: Vec<Ole10NativeInfo>,
+    /// Known dangerous CLSIDs found on storages
+    pub dangerous_clsids: Vec<ClsidMatch>,
     /// Document metadata (author, title, etc.)
     pub metadata: DocumentMetadata,
+}
+
+/// Info about an OLE10Native embedded object.
+#[derive(Debug, Clone)]
+pub(crate) struct Ole10NativeInfo {
+    pub stream_path: String,
+    pub embedded_filename: Option<String>,
+    pub embedded_size: u32,
+}
+
+/// A dangerous CLSID found on a storage entry.
+#[derive(Debug, Clone)]
+pub(crate) struct ClsidMatch {
+    pub storage_path: String,
+    pub clsid: String,
+    pub description: &'static str,
 }
 
 /// Office document subtype detected from OLE2 stream names.
@@ -75,15 +95,28 @@ pub(crate) fn parse_ole2(data: &[u8]) -> Result<Ole2Document> {
     let cursor = Cursor::new(data);
     let mut comp = cfb::CompoundFile::open(cursor)?;
 
-    // Enumerate all streams
-    let entries: Vec<(String, u64)> = comp
-        .walk()
-        .map(|e| {
-            let path = e.path().to_string_lossy().to_string();
-            let len = e.len();
-            (path, len)
-        })
-        .collect();
+    // Enumerate all entries, collecting CLSIDs from storages
+    let mut entries: Vec<(String, u64)> = Vec::new();
+    let mut dangerous_clsids: Vec<ClsidMatch> = Vec::new();
+
+    for entry in comp.walk() {
+        let path = entry.path().to_string_lossy().to_string();
+        let len = entry.len();
+
+        // Check CLSIDs on storage entries
+        if entry.is_storage() {
+            let clsid = entry.clsid().to_string();
+            if let Some(desc) = lookup_dangerous_clsid(&clsid) {
+                dangerous_clsids.push(ClsidMatch {
+                    storage_path: path.clone(),
+                    clsid,
+                    description: desc,
+                });
+            }
+        }
+
+        entries.push((path, len));
+    }
 
     let stream_names: Vec<String> = entries.iter().map(|(name, _)| name.clone()).collect();
 
@@ -116,6 +149,9 @@ pub(crate) fn parse_ole2(data: &[u8]) -> Result<Ole2Document> {
     // Check for embedded executables
     let embedded_executables = find_embedded_executables(&mut comp, &entries);
 
+    // Check for OLE10Native embedded objects
+    let ole10_native_objects = find_ole10_native(&mut comp, &entries);
+
     // Extract metadata
     let metadata = extract_metadata(&mut comp);
 
@@ -126,6 +162,8 @@ pub(crate) fn parse_ole2(data: &[u8]) -> Result<Ole2Document> {
         has_encryption,
         stream_names,
         embedded_executables,
+        ole10_native_objects,
+        dangerous_clsids,
         metadata,
     })
 }
@@ -187,6 +225,96 @@ fn find_embedded_executables(
     }
 
     found
+}
+
+/// Find OLE10Native embedded objects and extract their metadata.
+///
+/// OLE10Native streams contain embedded files (often executables) packaged
+/// using the legacy OLE1 embedding format. The stream starts with a size
+/// field followed by embedded file metadata (filename, path).
+fn find_ole10_native(
+    comp: &mut cfb::CompoundFile<Cursor<&[u8]>>,
+    entries: &[(String, u64)],
+) -> Vec<Ole10NativeInfo> {
+    let mut found = Vec::new();
+
+    for (path, size) in entries {
+        if *size < 6 || *size > 50 * 1024 * 1024 {
+            continue;
+        }
+
+        // OLE10Native streams have \x01Ole10Native in the name
+        let lower = path.to_lowercase();
+        if !lower.contains("ole10native") {
+            continue;
+        }
+
+        if let Ok(mut stream) = comp.open_stream(path) {
+            let mut header = vec![0u8; (*size).min(512) as usize];
+            if stream.read_exact(&mut header).is_ok() {
+                // OLE10Native format: u32 total_size, u16 version (==2)
+                if header.len() >= 6 {
+                    let total_size = u32::from_le_bytes([
+                        header[0], header[1], header[2], header[3],
+                    ]);
+                    let version = u16::from_le_bytes([header[4], header[5]]);
+
+                    let embedded_filename = if version == 2 && header.len() > 6 {
+                        // After version, there are null-terminated strings: label, filename, ...
+                        read_null_terminated(&header[6..])
+                    } else {
+                        None
+                    };
+
+                    found.push(Ole10NativeInfo {
+                        stream_path: path.clone(),
+                        embedded_filename,
+                        embedded_size: total_size,
+                    });
+                }
+            }
+        }
+    }
+
+    found
+}
+
+/// Read a null-terminated ASCII string from bytes.
+fn read_null_terminated(data: &[u8]) -> Option<String> {
+    let end = data.iter().position(|&b| b == 0)?;
+    if end == 0 {
+        return None;
+    }
+    let s = String::from_utf8_lossy(&data[..end]).to_string();
+    if s.is_empty() { None } else { Some(s) }
+}
+
+/// Known dangerous CLSIDs that indicate specific exploit vectors or suspicious objects.
+///
+/// These CLSIDs on storage entries signal known attack techniques:
+/// - Equation Editor: CVE-2017-11882, CVE-2018-0802
+/// - Packager Shell Object: Embeds arbitrary files
+/// - scriptlet.typelib: Script execution
+fn lookup_dangerous_clsid(clsid: &str) -> Option<&'static str> {
+    // Normalize: cfb returns lowercase with hyphens
+    match clsid {
+        // Equation Editor (CVE-2017-11882, CVE-2018-0802)
+        "0002ce02-0000-0000-c000-000000000046" => Some("Equation Editor 3.0 (CVE-2017-11882)"),
+        // Packager Shell Object — embeds arbitrary files
+        "f20da720-c02f-11ce-927b-0800095ae340" => Some("OLE Package Shell Object"),
+        // scriptlet.typelib — script execution
+        "06290bd2-48aa-11d2-8432-006008c3fbfc" => Some("scriptlet.typelib (script execution)"),
+        // htmlfile — HTML Application
+        "25336920-03f9-11cf-8fd0-00aa00686f13" => Some("htmlfile (HTML document)"),
+        // MSCOMCTL.ListViewCtrl — CVE-2012-0158
+        "996bf5e0-8044-4650-adeb-0b013914e99c" => Some("MSCOMCTL.ListViewCtrl (CVE-2012-0158)"),
+        "bdd1f04b-858b-11d1-b16a-00c0f0283628" => Some("MSCOMCTL.ListViewCtrl.2 (CVE-2012-0158)"),
+        // Shell.Explorer — embedded browser
+        "8856f961-340a-11d0-a96b-00c04fd705a2" => Some("Shell.Explorer (embedded browser)"),
+        // OLE2Link — external link object
+        "00000300-0000-0000-c000-000000000046" => Some("StdOleLink (external link)"),
+        _ => None,
+    }
 }
 
 /// Extract metadata from SummaryInformation property set.

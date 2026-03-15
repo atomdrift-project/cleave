@@ -248,6 +248,54 @@ impl OfficeAnalyzer {
             });
         }
 
+        // OLE10Native embedded objects — notable structural indicator
+        for obj in &doc.ole10_native_objects {
+            let desc = if let Some(ref fname) = obj.embedded_filename {
+                format!(
+                    "OLE10Native embedded object: {} ({} bytes) in {}",
+                    fname, obj.embedded_size, obj.stream_path
+                )
+            } else {
+                format!(
+                    "OLE10Native embedded object: {} bytes in {}",
+                    obj.embedded_size, obj.stream_path
+                )
+            };
+            findings.push(Finding {
+                id: "metadata/format/embedded::ole10-native-object".to_string(),
+                kind: FindingKind::Structural,
+                desc,
+                conf: 1.0,
+                crit: Criticality::Notable,
+                mbc: None,
+                attack: None,
+                trait_refs: vec![],
+                evidence: vec![],
+                match_count: 0,
+                source_file: None,
+            });
+        }
+
+        // Dangerous CLSIDs — suspicious structural indicator (known exploit vectors)
+        for clsid_match in &doc.dangerous_clsids {
+            findings.push(Finding {
+                id: "metadata/format/clsid::dangerous-clsid".to_string(),
+                kind: FindingKind::Structural,
+                desc: format!(
+                    "{} (CLSID: {}) on {}",
+                    clsid_match.description, clsid_match.clsid, clsid_match.storage_path
+                ),
+                conf: 1.0,
+                crit: Criticality::Suspicious,
+                mbc: None,
+                attack: None,
+                trait_refs: vec![],
+                evidence: vec![],
+                match_count: 0,
+                source_file: None,
+            });
+        }
+
         // Document metadata
         add_metadata_findings(&doc.metadata, &mut findings);
 

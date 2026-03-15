@@ -30,6 +30,25 @@ pub(crate) fn extract_imports_from_tree(
     let mut cursor = tree.walk();
     walk_for_imports(&mut cursor, source.as_bytes(), import_fn, &mut imports);
 
+    // For Python: collect __import__() alias mappings and resolve aliased symbols
+    if matches!(file_type, FileType::Python) {
+        let mut alias_map = std::collections::HashMap::new();
+        let mut alias_cursor = tree.walk();
+        collect_dunder_import_aliases(&mut alias_cursor, source.as_bytes(), &mut alias_map);
+
+        if !alias_map.is_empty() {
+            // Resolve aliased symbols already in report.imports (from extract_symbols_from_tree)
+            for import in &mut report.imports {
+                if let Some(dot_pos) = import.symbol.find('.') {
+                    let prefix = &import.symbol[..dot_pos];
+                    if let Some(module) = alias_map.get(prefix) {
+                        import.symbol = format!("{}.{}", module, &import.symbol[dot_pos + 1..]);
+                    }
+                }
+            }
+        }
+    }
+
     for module in imports {
         if module.len() >= 2 {
             report.imports.push(Import {
@@ -75,6 +94,24 @@ pub(crate) fn extract_imports(source: &str, file_type: &FileType, report: &mut A
     let mut imports = std::collections::HashSet::new();
     let mut cursor = tree.walk();
     walk_for_imports(&mut cursor, source.as_bytes(), import_fn, &mut imports);
+
+    // For Python: collect __import__() alias mappings and resolve aliased symbols
+    if matches!(file_type, FileType::Python) {
+        let mut alias_map = std::collections::HashMap::new();
+        let mut alias_cursor = tree.walk();
+        collect_dunder_import_aliases(&mut alias_cursor, source.as_bytes(), &mut alias_map);
+
+        if !alias_map.is_empty() {
+            for import in &mut report.imports {
+                if let Some(dot_pos) = import.symbol.find('.') {
+                    let prefix = &import.symbol[..dot_pos];
+                    if let Some(module) = alias_map.get(prefix) {
+                        import.symbol = format!("{}.{}", module, &import.symbol[dot_pos + 1..]);
+                    }
+                }
+            }
+        }
+    }
 
     for module in imports {
         if module.len() >= 2 {
@@ -219,6 +256,97 @@ fn extract_perl_import<'a>(node: &tree_sitter::Node<'a>, source: &[u8]) -> Optio
             }
         }
     }
+    None
+}
+
+/// Collect `foo = __import__('module')` alias mappings from Python AST.
+/// Builds a map of alias_variable -> module_name so that later symbol resolution
+/// can replace `foo.b64decode` with `base64.b64decode`.
+fn collect_dunder_import_aliases<'a>(
+    cursor: &mut tree_sitter::TreeCursor<'a>,
+    source: &[u8],
+    alias_map: &mut std::collections::HashMap<String, String>,
+) {
+    loop {
+        let node = cursor.node();
+
+        // Look for: assignment where RHS is __import__('module')
+        // Python tree-sitter: assignment node with left (identifier) and right (call)
+        if node.kind() == "assignment" || node.kind() == "expression_statement" {
+            if let Some(alias) = try_extract_dunder_import_alias(&node, source) {
+                alias_map.insert(alias.0, alias.1);
+            }
+        }
+
+        if cursor.goto_first_child() {
+            continue;
+        }
+        if cursor.goto_next_sibling() {
+            continue;
+        }
+        loop {
+            if !cursor.goto_parent() {
+                return;
+            }
+            if cursor.goto_next_sibling() {
+                break;
+            }
+        }
+    }
+}
+
+/// Try to extract (alias, module) from a node like `foo = __import__('base64')`
+fn try_extract_dunder_import_alias<'a>(
+    node: &tree_sitter::Node<'a>,
+    source: &[u8],
+) -> Option<(String, String)> {
+    // Handle both direct assignment nodes and expression_statement wrapping assignment
+    let assign = if node.kind() == "assignment" {
+        *node
+    } else if node.kind() == "expression_statement" {
+        // expression_statement may wrap an assignment
+        let child = node.child(0)?;
+        if child.kind() == "assignment" {
+            child
+        } else {
+            return None;
+        }
+    } else {
+        return None;
+    };
+
+    // Left side: identifier (the alias variable)
+    let left = assign.child_by_field_name("left")?;
+    if left.kind() != "identifier" {
+        return None;
+    }
+    let alias_name = left.utf8_text(source).ok()?;
+
+    // Right side: call to __import__
+    let right = assign.child_by_field_name("right")?;
+    if right.kind() != "call" {
+        return None;
+    }
+
+    // Function being called must be __import__
+    let func = right.child_by_field_name("function")?;
+    let func_name = func.utf8_text(source).ok()?;
+    if func_name != "__import__" {
+        return None;
+    }
+
+    // Extract the module name from first string argument
+    let args = right.child_by_field_name("arguments")?;
+    for i in 0..args.child_count() {
+        if let Some(arg) = args.child(i as u32) {
+            if arg.kind() == "string" {
+                if let Some(module) = extract_string_content(&arg, source) {
+                    return Some((alias_name.to_string(), module));
+                }
+            }
+        }
+    }
+
     None
 }
 
@@ -525,6 +653,59 @@ from urllib import request
         assert!(import_symbols.contains(&"socket"), "Missing socket import");
         assert!(import_symbols.contains(&"os"), "Missing os import");
         assert!(import_symbols.contains(&"urllib"), "Missing urllib import");
+    }
+
+    #[test]
+    fn test_python_dunder_import_alias_resolution() {
+        // Python code using __import__ to alias modules (malware evasion pattern)
+        let code = r#"
+import streamlit as st
+aqgqzxkfjzbdnhz = __import__('base64')
+wogyjaaijwqbpxe = __import__('zlib')
+data = wogyjaaijwqbpxe.decompress(aqgqzxkfjzbdnhz.b64decode(payload))
+exec(compile(data, '<>', 'exec'))
+"#;
+
+        let mut report = AnalysisReport::new(TargetInfo {
+            path: "/test/app.py".to_string(),
+            file_type: "python".to_string(),
+            size_bytes: code.len() as u64,
+            sha256: "test".to_string(),
+            architectures: None,
+        });
+
+        // Extract symbols first (call extraction)
+        let lang: tree_sitter::Language = tree_sitter_python::LANGUAGE.into();
+        extract_symbols(code, &lang, &["call"], &mut report);
+
+        // Then extract imports (which resolves __import__ aliases)
+        extract_imports(code, &FileType::Python, &mut report);
+
+        let all_symbols: Vec<&str> = report.imports.iter().map(|i| i.symbol.as_str()).collect();
+
+        // The aliased calls should be resolved to their real module names
+        assert!(
+            all_symbols.contains(&"base64.b64decode"),
+            "Expected 'base64.b64decode' but got: {:?}",
+            all_symbols
+        );
+        assert!(
+            all_symbols.contains(&"zlib.decompress"),
+            "Expected 'zlib.decompress' but got: {:?}",
+            all_symbols
+        );
+
+        // The original alias names should NOT remain
+        assert!(
+            !all_symbols.contains(&"aqgqzxkfjzbdnhz.b64decode"),
+            "Alias should have been resolved: {:?}",
+            all_symbols
+        );
+        assert!(
+            !all_symbols.contains(&"wogyjaaijwqbpxe.decompress"),
+            "Alias should have been resolved: {:?}",
+            all_symbols
+        );
     }
 
     #[test]

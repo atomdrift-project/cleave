@@ -589,7 +589,7 @@ impl<'a> RuleDebugger<'a> {
 
         match condition {
             Condition::Trait { id } => self.debug_trait_reference(id),
-            Condition::String {
+            Condition::StringValue {
                 exact,
                 substr,
                 regex,
@@ -2197,7 +2197,7 @@ fn format_location_suffix(
 fn describe_condition(condition: &Condition) -> String {
     match condition {
         Condition::Trait { id } => format!("trait: {}", id),
-        Condition::String {
+        Condition::StringValue {
             exact,
             substr,
             regex,
@@ -2501,7 +2501,7 @@ fn evaluate_condition_simple(
             eval_syscall(name.as_ref(), number.as_ref(), arch.as_ref(), ctx)
         }
         Condition::ExportsCount { min, max } => eval_exports_count(*min, *max, ctx),
-        Condition::StringCount {
+        Condition::StringValueCount {
             min,
             max,
             min_length,

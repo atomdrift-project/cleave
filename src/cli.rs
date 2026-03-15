@@ -393,8 +393,8 @@ pub(crate) enum Command {
         #[arg(required = true)]
         target: String,
 
-        /// Type of search to perform (string, symbol, raw, kv, hex, encoded, metrics)
-        #[arg(short, long, value_enum, default_value = "string")]
+        /// Type of search to perform (string-value, symbol, raw, kv, hex, encoded, metrics)
+        #[arg(short, long, value_enum, default_value = "string-value")]
         r#type: SearchType,
 
         /// Match method: exact, contains, regex, or word
@@ -635,8 +635,9 @@ fn parse_offset_range(s: &str) -> Result<(i64, Option<i64>), String> {
 /// Type of content to search in
 #[derive(Debug, Clone, Copy, clap::ValueEnum, PartialEq)]
 pub(crate) enum SearchType {
-    /// Search in extracted strings
-    String,
+    /// Search in extracted string values
+    #[value(alias = "string")]
+    StringValue,
     /// Search in symbols (imports/exports)
     Symbol,
     /// Search in raw file content

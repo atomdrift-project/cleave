@@ -29,8 +29,9 @@ use crate::capabilities::validation::{
     find_orphaned_components, find_overlapping_conditions, find_oversized_trait_directories,
     find_parent_duplicate_segments, find_platform_named_directories, find_pure_alias_traits,
     find_redundant_any_refs, find_redundant_explicit_defaults, find_redundant_needs_one,
-    find_short_pattern_warnings, find_should_use_defaults, find_single_item_clauses,
-    find_slow_regex_patterns, find_string_content_collisions, find_string_pattern_duplicates,
+    find_raw_should_use_string_value, find_short_pattern_warnings, find_should_use_defaults,
+    find_single_item_clauses, find_slow_regex_patterns, find_string_content_collisions,
+    find_string_pattern_duplicates, find_string_value_should_use_raw,
     find_too_short_patterns, find_unanchored_wellknown_composites,
     find_wellknown_category_violations, find_wellknown_missing_section_filter,
     find_wellknown_missing_size_filter, find_wellknown_unscoped_filetypes,
@@ -571,6 +572,14 @@ impl super::CapabilityMapper {
                         ));
                     }
 
+                    // Check for symbol regex patterns with whitespace or word boundaries
+                    if let Some(warning) = trait_def.r#if.check_symbol_regex_whitespace() {
+                        warnings.push(format!(
+                            "trait '{}' in {:?}: {}",
+                            trait_def.id, path, warning
+                        ));
+                    }
+
                     // Check for literal strings used as regex
                     if let Some(warning) = trait_def.r#if.check_literal_regex() {
                         warnings.push(format!(
@@ -928,6 +937,20 @@ impl super::CapabilityMapper {
             tracing::debug!("Step 1h2/15: Detecting non-capturing groups in regex patterns");
             find_non_capturing_groups(&trait_definitions, &mut warnings);
             tracing::debug!("Step 1h2 completed in {:?}", step_start.elapsed());
+
+            // Detect raw patterns on binary types that would be faster as string_value
+            let step_start = std::time::Instant::now();
+            tracing::debug!("Step 1h3/15: Detecting raw patterns that should use string_value");
+            find_raw_should_use_string_value(&trait_definitions, &mut warnings);
+            tracing::debug!("Step 1h3 completed in {:?}", step_start.elapsed());
+
+            // Detect string_value patterns on source types that should use raw
+            let step_start = std::time::Instant::now();
+            tracing::debug!(
+                "Step 1h4/15: Detecting string_value patterns that should use raw"
+            );
+            find_string_value_should_use_raw(&trait_definitions, &mut warnings);
+            tracing::debug!("Step 1h4 completed in {:?}", step_start.elapsed());
 
             // Check for exact patterns contained by substr patterns (redundancy)
             let step_start = std::time::Instant::now();

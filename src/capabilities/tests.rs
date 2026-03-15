@@ -205,7 +205,7 @@ fn test_apply_trait_defaults_applies_all_defaults() {
         not: None,
         unless: None,
         downgrade: None,
-        condition: Some(Condition::String {
+        condition: Some(Condition::StringValue {
             external_ip: false,
             exact: Some("test".to_string()),
             regex: None,
@@ -275,7 +275,7 @@ fn test_apply_trait_defaults_trait_overrides_defaults() {
         not: None,
         unless: None,
         downgrade: None,
-        condition: Some(Condition::String {
+        condition: Some(Condition::StringValue {
             external_ip: false,
             exact: Some("test".to_string()),
             regex: None,
@@ -342,7 +342,7 @@ fn test_apply_trait_defaults_unset_mbc_with_none() {
         not: None,
         unless: None,
         downgrade: None,
-        condition: Some(Condition::String {
+        condition: Some(Condition::StringValue {
             external_ip: false,
             exact: Some("test".to_string()),
             regex: None,
@@ -404,7 +404,7 @@ fn test_apply_trait_defaults_unset_attack_with_none() {
         not: None,
         unless: None,
         downgrade: None,
-        condition: Some(Condition::String {
+        condition: Some(Condition::StringValue {
             external_ip: false,
             exact: Some("test".to_string()),
             regex: None,
@@ -466,7 +466,7 @@ fn test_apply_trait_defaults_unset_file_types_with_none() {
         not: None,
         unless: None,
         downgrade: None,
-        condition: Some(Condition::String {
+        condition: Some(Condition::StringValue {
             external_ip: false,
             exact: Some("test".to_string()),
             regex: None,
@@ -529,7 +529,7 @@ fn test_apply_trait_defaults_size_and_entropy_from_defaults() {
         not: None,
         unless: None,
         downgrade: None,
-        condition: Some(Condition::String {
+        condition: Some(Condition::StringValue {
             external_ip: false,
             exact: Some("test".to_string()),
             regex: None,
@@ -580,7 +580,7 @@ fn test_apply_trait_defaults_size_and_entropy_from_defaults() {
         not: None,
         unless: None,
         downgrade: None,
-        condition: Some(Condition::String {
+        condition: Some(Condition::StringValue {
             external_ip: false,
             exact: Some("test".to_string()),
             regex: None,
@@ -653,7 +653,7 @@ fn test_apply_composite_defaults_applies_all_defaults() {
         size_max: None,
         near_lines: None,
         near_bytes: None,
-        condition: Some(Condition::String {
+        condition: Some(Condition::StringValue {
             external_ip: false,
             exact: Some("test".to_string()),
             regex: None,
@@ -726,7 +726,7 @@ fn test_apply_composite_defaults_unset_with_none() {
         size_max: None,
         near_lines: None,
         near_bytes: None,
-        condition: Some(Condition::String {
+        condition: Some(Condition::StringValue {
             external_ip: false,
             exact: Some("test".to_string()),
             regex: None,
@@ -1274,7 +1274,7 @@ fn test_precision_direct_conditions() {
         arch: vec![Arch::All],
         r#for: vec![RuleFileType::All],
         all: Some(vec![
-            Condition::String {
+            Condition::StringValue {
                 external_ip: false,
                 exact: Some("string1".to_string()),
                 regex: None,
@@ -1290,7 +1290,7 @@ fn test_precision_direct_conditions() {
                 platforms: None,
                 compiled_regex: None,
             },
-            Condition::String {
+            Condition::StringValue {
                 external_ip: false,
                 exact: Some("string2".to_string()),
                 regex: None,
@@ -1306,7 +1306,7 @@ fn test_precision_direct_conditions() {
                 platforms: None,
                 compiled_regex: None,
             },
-            Condition::String {
+            Condition::StringValue {
                 external_ip: false,
                 exact: Some("string3".to_string()),
                 regex: None,
@@ -1375,7 +1375,7 @@ fn test_precision_file_type_filter() {
         arch: vec![Arch::All],
         r#for: vec![RuleFileType::Elf, RuleFileType::Pe], // File type filter
         all: Some(vec![
-            Condition::String {
+            Condition::StringValue {
                 external_ip: false,
                 exact: Some("string1".to_string()),
                 regex: None,
@@ -1391,7 +1391,7 @@ fn test_precision_file_type_filter() {
                 platforms: None,
                 compiled_regex: None,
             },
-            Condition::String {
+            Condition::StringValue {
                 external_ip: false,
                 exact: Some("string2".to_string()),
                 regex: None,
@@ -1459,7 +1459,7 @@ fn test_precision_recursive_expansion() {
         platforms: vec![Platform::All],
         arch: vec![Arch::All],
         r#for: vec![RuleFileType::All],
-        r#if: Condition::String {
+        r#if: Condition::StringValue {
             external_ip: false,
             exact: Some("atomic".to_string()),
             regex: None,
@@ -1502,7 +1502,7 @@ fn test_precision_recursive_expansion() {
         arch: vec![Arch::All],
         r#for: vec![RuleFileType::All],
         all: Some(vec![
-            Condition::String {
+            Condition::StringValue {
                 external_ip: false,
                 exact: Some("string1".to_string()),
                 regex: None,
@@ -1518,7 +1518,7 @@ fn test_precision_recursive_expansion() {
                 platforms: None,
                 compiled_regex: None,
             },
-            Condition::String {
+            Condition::StringValue {
                 external_ip: false,
                 exact: Some("string2".to_string()),
                 regex: None,
@@ -1706,7 +1706,7 @@ fn test_precision_caching() {
         arch: vec![Arch::All],
         r#for: vec![RuleFileType::All],
         all: Some(vec![
-            Condition::String {
+            Condition::StringValue {
                 external_ip: false,
                 exact: Some("string1".to_string()),
                 regex: None,
@@ -1722,7 +1722,7 @@ fn test_precision_caching() {
                 platforms: None,
                 compiled_regex: None,
             },
-            Condition::String {
+            Condition::StringValue {
                 external_ip: false,
                 exact: Some("string2".to_string()),
                 regex: None,
@@ -1802,7 +1802,7 @@ fn test_precision_threshold_validation() {
         arch: vec![Arch::All],
         r#for: vec![RuleFileType::All],
         all: Some(vec![
-            Condition::String {
+            Condition::StringValue {
                 external_ip: false,
                 exact: Some("string1".to_string()),
                 regex: None,
@@ -1818,7 +1818,7 @@ fn test_precision_threshold_validation() {
                 platforms: None,
                 compiled_regex: None,
             },
-            Condition::String {
+            Condition::StringValue {
                 external_ip: false,
                 exact: Some("string2".to_string()),
                 regex: None,
@@ -1834,7 +1834,7 @@ fn test_precision_threshold_validation() {
                 platforms: None,
                 compiled_regex: None,
             },
-            Condition::String {
+            Condition::StringValue {
                 external_ip: false,
                 exact: Some("string3".to_string()),
                 regex: None,
@@ -1880,7 +1880,7 @@ fn test_precision_threshold_validation() {
         arch: vec![Arch::All],
         r#for: vec![RuleFileType::All],
         all: Some(vec![
-            Condition::String {
+            Condition::StringValue {
                 external_ip: false,
                 exact: Some("this_is_a_very_long_string_pattern_one".to_string()), // 38 chars = 8 buckets * 0.3 = 2.4
                 regex: None,
@@ -1896,7 +1896,7 @@ fn test_precision_threshold_validation() {
                 platforms: None,
                 compiled_regex: None,
             },
-            Condition::String {
+            Condition::StringValue {
                 external_ip: false,
                 exact: Some("this_is_another_very_long_string_pattern".to_string()), // 40 chars = 8 buckets * 0.3 = 2.4
                 regex: None,
@@ -1971,7 +1971,7 @@ fn test_suspicious_precision_threshold_validation() {
         platforms: vec![Platform::All],
         arch: vec![Arch::All],
         r#for: vec![RuleFileType::All],
-        all: Some(vec![Condition::String {
+        all: Some(vec![Condition::StringValue {
             external_ip: false,
             exact: Some("string1".to_string()),
             regex: None,
@@ -2015,7 +2015,7 @@ fn test_suspicious_precision_threshold_validation() {
         arch: vec![Arch::All],
         r#for: vec![RuleFileType::All],
         all: Some(vec![
-            Condition::String {
+            Condition::StringValue {
                 external_ip: false,
                 exact: Some("this_is_a_long_string_pattern".to_string()), // 29 chars = 6 buckets * 0.3 = 1.8
                 regex: None,
@@ -2031,7 +2031,7 @@ fn test_suspicious_precision_threshold_validation() {
                 platforms: None,
                 compiled_regex: None,
             },
-            Condition::String {
+            Condition::StringValue {
                 external_ip: false,
                 exact: Some("another_long_string_pattern".to_string()), // 27 chars = 6 buckets * 0.3 = 1.8
                 regex: None,
@@ -2107,7 +2107,7 @@ fn test_precision_mixed_conditions() {
         platforms: vec![Platform::All],
         arch: vec![Arch::All],
         r#for: vec![RuleFileType::All],
-        all: Some(vec![Condition::String {
+        all: Some(vec![Condition::StringValue {
             external_ip: false,
             exact: Some("string1".to_string()),
             regex: None,
@@ -2124,7 +2124,7 @@ fn test_precision_mixed_conditions() {
             compiled_regex: None,
         }]),
         any: Some(vec![
-            Condition::String {
+            Condition::StringValue {
                 external_ip: false,
                 exact: Some("string2".to_string()),
                 regex: None,
@@ -2140,7 +2140,7 @@ fn test_precision_mixed_conditions() {
                 platforms: None,
                 compiled_regex: None,
             },
-            Condition::String {
+            Condition::StringValue {
                 external_ip: false,
                 exact: Some("string3".to_string()),
                 regex: None,
@@ -2160,7 +2160,7 @@ fn test_precision_mixed_conditions() {
         needs: None,
         near_lines: None,
         near_bytes: None,
-        none: Some(vec![Condition::String {
+        none: Some(vec![Condition::StringValue {
             external_ip: false,
             exact: Some("string4".to_string()),
             regex: None,
@@ -2222,7 +2222,7 @@ fn test_precision_deep_nesting() {
         arch: vec![Arch::All],
         r#for: vec![RuleFileType::All],
         all: Some(vec![
-            Condition::String {
+            Condition::StringValue {
                 external_ip: false,
                 exact: Some("l1-s1".to_string()),
                 regex: None,
@@ -2238,7 +2238,7 @@ fn test_precision_deep_nesting() {
                 platforms: None,
                 compiled_regex: None,
             },
-            Condition::String {
+            Condition::StringValue {
                 external_ip: false,
                 exact: Some("l1-s2".to_string()),
                 regex: None,
@@ -2285,7 +2285,7 @@ fn test_precision_deep_nesting() {
             Condition::Trait {
                 id: "test/level1".to_string(),
             },
-            Condition::String {
+            Condition::StringValue {
                 external_ip: false,
                 exact: Some("l2-s1".to_string()),
                 regex: None,
@@ -2332,7 +2332,7 @@ fn test_precision_deep_nesting() {
             Condition::Trait {
                 id: "test/level2".to_string(),
             },
-            Condition::String {
+            Condition::StringValue {
                 external_ip: false,
                 exact: Some("l3-s1".to_string()),
                 regex: None,
@@ -2494,7 +2494,7 @@ fn test_precision_traits_with_size_restrictions() {
         platforms: vec![Platform::All],
         arch: vec![Arch::All],
         r#for: vec![RuleFileType::All],
-        r#if: Condition::String {
+        r#if: Condition::StringValue {
             external_ip: false,
             exact: Some("pattern1".to_string()),
             regex: None,
@@ -2536,7 +2536,7 @@ fn test_precision_traits_with_size_restrictions() {
         platforms: vec![Platform::All],
         arch: vec![Arch::All],
         r#for: vec![RuleFileType::All],
-        r#if: Condition::String {
+        r#if: Condition::StringValue {
             external_ip: false,
             exact: Some("pattern2".to_string()),
             regex: None,

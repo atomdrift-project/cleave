@@ -293,7 +293,7 @@ pub(crate) fn run(
 
     // Perform the requested search
     let (matched, _match_count, mut output): (bool, usize, String) = match search_type {
-        cli::SearchType::String => {
+        cli::SearchType::StringValue => {
             // Resolve effective range for filtering strings by offset
             let effective_range = resolve_effective_range(
                 section,
@@ -1486,7 +1486,7 @@ pub(crate) fn run(
 
         // Check alternative search types
         match search_type {
-            cli::SearchType::String => {
+            cli::SearchType::StringValue => {
                 // Check if pattern exists in symbols
                 let symbols: Vec<&str> = report
                     .imports
@@ -1785,7 +1785,7 @@ pub(crate) fn run(
 
                     // Quick check if search would work with this type
                     let would_match = match search_type {
-                        cli::SearchType::String => {
+                        cli::SearchType::StringValue => {
                             let strings: Vec<&str> = alt_report
                                 .strings
                                 .iter()

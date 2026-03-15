@@ -22,6 +22,41 @@ pub(super) fn is_binary_file_type(ft: RuleFileType) -> bool {
     )
 }
 
+/// Returns true if the file type uses AST-based string extraction (source/script types).
+///
+/// For these types, `string_value` only searches string literals parsed from source code,
+/// NOT arbitrary code expressions. Patterns like `eval(` or `import os` will never match
+/// via `string_value` because they're code structure, not string content.
+#[must_use]
+pub(super) fn is_ast_source_type(ft: RuleFileType) -> bool {
+    matches!(
+        ft,
+        RuleFileType::Python
+            | RuleFileType::JavaScript
+            | RuleFileType::TypeScript
+            | RuleFileType::Shell
+            | RuleFileType::Ruby
+            | RuleFileType::Php
+            | RuleFileType::Perl
+            | RuleFileType::Lua
+            | RuleFileType::PowerShell
+            | RuleFileType::Java
+            | RuleFileType::Rust
+            | RuleFileType::C
+            | RuleFileType::Cpp
+            | RuleFileType::Go
+            | RuleFileType::CSharp
+            | RuleFileType::Swift
+            | RuleFileType::ObjectiveC
+            | RuleFileType::Groovy
+            | RuleFileType::Scala
+            | RuleFileType::Elixir
+            | RuleFileType::Vbs
+            | RuleFileType::Batch
+            | RuleFileType::AppleScript
+    )
+}
+
 /// Extract tier prefix from a trait/rule ID
 ///
 /// Returns the top-level tier: "micro-behaviors", "objectives", "well-known", "metadata", etc.

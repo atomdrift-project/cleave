@@ -357,7 +357,7 @@ pub(crate) fn find_missing_search_patterns(trait_definitions: &[TraitDefinition]
 
     for t in trait_definitions {
         let has_pattern = match &t.r#if {
-            Condition::String {
+            Condition::StringValue {
                 exact,
                 substr,
                 regex,
@@ -864,7 +864,7 @@ pub(crate) fn find_invalid_not_usage(trait_definitions: &[TraitDefinition]) -> V
     for t in trait_definitions {
         let invalid = match &t.r#if {
             // String/Raw/Encoded: not requires regex
-            Condition::String { regex, not, .. }
+            Condition::StringValue { regex, not, .. }
             | Condition::Raw { regex, not, .. }
             | Condition::Encoded { regex, not, .. } => not.is_some() && regex.is_none(),
             // Hex: not is always valid (patterns are inherently ambiguous).

@@ -216,7 +216,8 @@ enum ConditionTagged {
         #[serde(default)]
         platforms: Option<Vec<Platform>>,
     },
-    String {
+    #[serde(rename = "string_value", alias = "string")]
+    StringValue {
         /// Full string match (entire string must equal this)
         #[serde(default)]
         exact: Option<String>,
@@ -339,7 +340,8 @@ enum ConditionTagged {
         #[serde(default)]
         max_total: Option<usize>,
     },
-    StringCount {
+    #[serde(rename = "string_value_count", alias = "string_count")]
+    StringValueCount {
         #[serde(default)]
         min: Option<usize>,
         #[serde(default)]
@@ -391,7 +393,7 @@ enum ConditionTagged {
     },
 
     /// Search raw file content (for source files or when you need to match
-    /// across string boundaries in binaries). Unlike `type: string` which only
+    /// across string boundaries in binaries). Unlike `type: string_value` which only
     /// searches properly extracted/bounded strings, this searches the raw bytes.
     Raw {
         /// Full match (entire content must equal this - rarely useful)
@@ -608,7 +610,7 @@ impl From<ConditionDeser> for Condition {
                     platforms,
                     compiled_regex: None,
                 },
-                ConditionTagged::String {
+                ConditionTagged::StringValue {
                     exact,
                     substr,
                     regex,
@@ -622,7 +624,7 @@ impl From<ConditionDeser> for Condition {
                     offset_range,
                     section_offset,
                     section_offset_range,
-                } => Condition::String {
+                } => Condition::StringValue {
                     exact,
                     substr,
                     regex,
@@ -696,12 +698,12 @@ impl From<ConditionDeser> for Condition {
                     min_suspicious,
                     max_total,
                 },
-                ConditionTagged::StringCount {
+                ConditionTagged::StringValueCount {
                     min,
                     max,
                     min_length,
                     regex,
-                } => Condition::StringCount {
+                } => Condition::StringValueCount {
                     min,
                     max,
                     min_length,
@@ -876,7 +878,7 @@ impl From<Condition> for ConditionTagged {
                 regex,
                 platforms,
             },
-            Condition::String {
+            Condition::StringValue {
                 exact,
                 substr,
                 regex,
@@ -891,7 +893,7 @@ impl From<Condition> for ConditionTagged {
                 section_offset,
                 section_offset_range,
                 compiled_regex: _,
-            } => ConditionTagged::String {
+            } => ConditionTagged::StringValue {
                 exact,
                 substr,
                 regex,
@@ -964,13 +966,13 @@ impl From<Condition> for ConditionTagged {
                 min_suspicious,
                 max_total,
             },
-            Condition::StringCount {
+            Condition::StringValueCount {
                 min,
                 max,
                 min_length,
                 regex,
                 compiled_regex: _,
-            } => ConditionTagged::StringCount {
+            } => ConditionTagged::StringValueCount {
                 min,
                 max,
                 min_length,
@@ -1131,7 +1133,7 @@ impl From<Condition> for ConditionTagged {
 /// Condition type in composite rules.
 ///
 /// Supports two YAML formats:
-/// 1. Tagged: `{ type: string, exact: "foo" }` - explicit type field
+/// 1. Tagged: `{ type: string_value, exact: "foo" }` - explicit type field
 /// 2. Shorthand: `{ id: my-trait }` - defaults to Trait when only `id` is present
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(from = "ConditionDeser", into = "ConditionTagged")]
@@ -1155,8 +1157,8 @@ pub(crate) enum Condition {
         compiled_regex: Option<regex::Regex>,
     },
 
-    /// Match a string in the binary
-    String {
+    /// Match a string value found in the file (extracted strings, imports, decoded strings)
+    StringValue {
         /// Full string match (entire string must equal this)
         #[serde(skip_serializing_if = "Option::is_none")]
         exact: Option<String>,
@@ -1349,9 +1351,9 @@ pub(crate) enum Condition {
         max_total: Option<usize>,
     },
 
-    /// Check extracted string count
+    /// Check extracted string value count
     /// For detecting string concealment (very few visible strings)
-    StringCount {
+    StringValueCount {
         /// Minimum number of strings
         #[serde(skip_serializing_if = "Option::is_none")]
         min: Option<usize>,
@@ -1419,7 +1421,7 @@ pub(crate) enum Condition {
     },
 
     /// Search raw file content directly (for source files or matching across
-    /// string boundaries in binaries). Unlike `type: string` which only searches
+    /// string boundaries in binaries). Unlike `type: string_value` which only searches
     /// properly extracted/bounded strings, this searches the raw bytes as text.
     /// Use this when you need to match patterns in source code or when string
     /// extraction may not capture what you're looking for.
@@ -1680,7 +1682,7 @@ impl Condition {
     pub(crate) fn type_name(&self) -> &'static str {
         match self {
             Condition::Symbol { .. } => "symbol",
-            Condition::String { .. } => "string",
+            Condition::StringValue { .. } => "string_value",
             Condition::Structure { .. } => "structure",
             Condition::ExportsCount { .. } => "exports_count",
             Condition::Trait { .. } => "trait",
@@ -1689,7 +1691,7 @@ impl Condition {
             Condition::Syscall { .. } => "syscall",
             Condition::SectionRatio { .. } => "section_ratio",
             Condition::ImportCombination { .. } => "import_combination",
-            Condition::StringCount { .. } => "string_count",
+            Condition::StringValueCount { .. } => "string_value_count",
             Condition::Metrics { .. } => "metrics",
             Condition::Hex { .. } => "hex",
             Condition::Raw { .. } => "raw",
@@ -1796,7 +1798,7 @@ impl Condition {
                 Ok(())
             }
             // Validate location constraints for string/content conditions
-            Condition::String {
+            Condition::StringValue {
                 section,
                 offset,
                 offset_range,
@@ -1809,7 +1811,7 @@ impl Condition {
                 *offset_range,
                 *section_offset,
                 *section_offset_range,
-                "string",
+                "string_value",
             ),
             Condition::Raw {
                 section,
@@ -1882,7 +1884,7 @@ impl Condition {
     #[must_use]
     pub(crate) fn check_greedy_patterns(&self) -> Option<String> {
         let regex_to_check = match self {
-            Condition::String { regex: Some(r), .. }
+            Condition::StringValue { regex: Some(r), .. }
             | Condition::Raw { regex: Some(r), .. }
             | Condition::Symbol { regex: Some(r), .. }
             | Condition::Ast { regex: Some(r), .. }
@@ -1907,7 +1909,7 @@ impl Condition {
     #[must_use]
     pub(crate) fn check_word_boundary_regex(&self) -> Option<String> {
         let regex_to_check = match self {
-            Condition::String { regex: Some(r), .. } | Condition::Raw { regex: Some(r), .. } => {
+            Condition::StringValue { regex: Some(r), .. } | Condition::Raw { regex: Some(r), .. } => {
                 Some(r.as_str())
             }
             _ => None,
@@ -1979,7 +1981,7 @@ impl Condition {
         };
 
         match self {
-            Condition::String {
+            Condition::StringValue {
                 exact: Some(s),
                 case_insensitive: true,
                 ..
@@ -1994,7 +1996,7 @@ impl Condition {
                 case_insensitive: true,
                 ..
             }
-            | Condition::String {
+            | Condition::StringValue {
                 substr: Some(s),
                 case_insensitive: true,
                 ..
@@ -2009,7 +2011,7 @@ impl Condition {
                 case_insensitive: true,
                 ..
             }
-            | Condition::String {
+            | Condition::StringValue {
                 word: Some(s),
                 case_insensitive: true,
                 ..
@@ -2054,10 +2056,10 @@ impl Condition {
         };
 
         match self {
-            Condition::String { exact: Some(s), .. }
+            Condition::StringValue { exact: Some(s), .. }
             | Condition::Raw { exact: Some(s), .. }
             | Condition::Symbol { exact: Some(s), .. } => check_empty(s, "exact"),
-            Condition::String {
+            Condition::StringValue {
                 substr: Some(s), ..
             }
             | Condition::Raw {
@@ -2066,10 +2068,10 @@ impl Condition {
             | Condition::Symbol {
                 substr: Some(s), ..
             } => check_empty(s, "substr"),
-            Condition::String { regex: Some(s), .. }
+            Condition::StringValue { regex: Some(s), .. }
             | Condition::Raw { regex: Some(s), .. }
             | Condition::Symbol { regex: Some(s), .. } => check_empty(s, "regex"),
-            Condition::String { word: Some(s), .. } | Condition::Raw { word: Some(s), .. } => {
+            Condition::StringValue { word: Some(s), .. } | Condition::Raw { word: Some(s), .. } => {
                 check_empty(s, "word")
             }
             _ => None,
@@ -2092,7 +2094,7 @@ impl Condition {
 
         match self {
             // For exact matches, warn if less than 2 characters
-            Condition::String {
+            Condition::StringValue {
                 exact: Some(s),
                 case_insensitive: false,
                 ..
@@ -2107,7 +2109,7 @@ impl Condition {
                 None
             }
             // For substr, warn if less than 3 characters (more prone to false positives)
-            Condition::String {
+            Condition::StringValue {
                 substr: Some(s),
                 case_insensitive: false,
                 ..
@@ -2116,7 +2118,7 @@ impl Condition {
                 substr: Some(s), ..
             } => check_short(s, "substr", 3),
             // For word, warn if less than 2 characters
-            Condition::String {
+            Condition::StringValue {
                 word: Some(s),
                 case_insensitive: false,
                 ..
@@ -2152,7 +2154,7 @@ impl Condition {
         };
 
         match self {
-            Condition::String { regex: Some(r), .. }
+            Condition::StringValue { regex: Some(r), .. }
             | Condition::Raw { regex: Some(r), .. }
             | Condition::Symbol { regex: Some(r), .. } => {
                 if is_literal(r) {
@@ -2182,23 +2184,88 @@ impl Condition {
         };
 
         match self {
-            Condition::String {
+            Condition::StringValue {
                 exact: Some(s),
                 case_insensitive: true,
                 ..
             } => check_pattern(s, "exact"),
-            Condition::String {
+            Condition::StringValue {
                 substr: Some(s),
                 case_insensitive: true,
                 ..
             } => check_pattern(s, "substr"),
-            Condition::String {
+            Condition::StringValue {
                 word: Some(s),
                 case_insensitive: true,
                 ..
             } => check_pattern(s, "word"),
             _ => None,
         }
+    }
+
+    /// Check for symbol regex patterns that use word boundaries or whitespace.
+    /// Symbols don't contain whitespace, so `\b` matches start/end of the symbol string,
+    /// meaning `\bfoo\b` is equivalent to `exact: foo`. Whitespace in a symbol regex
+    /// will never match anything.
+    /// Returns a warning message if found, None otherwise.
+    #[must_use]
+    pub(crate) fn check_symbol_regex_whitespace(&self) -> Option<String> {
+        let regex = match self {
+            Condition::Symbol { regex: Some(r), .. } => r.as_str(),
+            _ => return None,
+        };
+
+        // Check for literal whitespace characters (space, tab, \s, \t, etc.)
+        // After YAML parsing, these appear as literal chars or escape sequences
+        if regex.contains(' ') || regex.contains('\t') {
+            return Some(format!(
+                "symbol regex '{}' contains whitespace - symbols never contain whitespace, this pattern will never match",
+                regex
+            ));
+        }
+        if regex.contains(r"\s") || regex.contains(r"\t") {
+            return Some(format!(
+                "symbol regex '{}' contains whitespace class (\\s or \\t) - symbols never contain whitespace, this pattern will never match",
+                regex
+            ));
+        }
+
+        // Check for \b word boundary patterns
+        if regex.contains(r"\b") {
+            // Unwrap optional non-capturing groups from normalization
+            let pattern = regex.trim();
+            let unwrapped = pattern
+                .strip_prefix("(?:")
+                .and_then(|s| s.strip_suffix(")"))
+                .map(|s| {
+                    s.strip_prefix("(?:")
+                        .and_then(|s2| s2.strip_suffix(")"))
+                        .unwrap_or(s)
+                })
+                .unwrap_or(pattern);
+
+            // If it's \bWORD\b with a simple word, suggest exact: instead
+            if unwrapped.starts_with(r"\b") && unwrapped.ends_with(r"\b") && unwrapped.len() > 4 {
+                let word = &unwrapped[2..unwrapped.len() - 2];
+                if !word.is_empty()
+                    && word
+                        .chars()
+                        .all(|c| c.is_alphanumeric() || c == '_' || c == '-')
+                {
+                    return Some(format!(
+                        "symbol regex '{}' uses word boundaries - symbols don't contain whitespace so \\b matches start/end of symbol, use 'exact: \"{}\"' instead",
+                        regex, word
+                    ));
+                }
+            }
+
+            return Some(format!(
+                "symbol regex '{}' uses word boundary (\\b) - symbols don't contain whitespace so \\b only matches start/end of symbol, consider using 'exact:' or 'substr:' instead",
+                regex
+            ));
+        }
+
+        None
     }
 
     /// Check for nonsensical count_min values.
@@ -2239,7 +2306,7 @@ impl Condition {
             };
 
         match self {
-            Condition::String {
+            Condition::StringValue {
                 exact,
                 substr,
                 regex,
@@ -2289,7 +2356,7 @@ impl Condition {
                     anyhow::anyhow!("Failed to compile symbol regex '{}': {}", regex_pattern, e)
                 })?);
             }
-            Condition::String {
+            Condition::StringValue {
                 regex,
                 word,
                 case_insensitive,
@@ -2404,7 +2471,7 @@ impl Condition {
                     })?
                 });
             }
-            Condition::StringCount {
+            Condition::StringValueCount {
                 regex: Some(regex_pattern),
                 compiled_regex,
                 ..
@@ -2675,7 +2742,7 @@ mod location_constraint_tests {
 
     #[test]
     fn test_validate_location_no_constraints() {
-        let result = validate_location_constraints(&None, None, None, None, None, "string");
+        let result = validate_location_constraints(&None, None, None, None, None, "string_value");
         assert!(result.is_ok());
     }
 
@@ -2687,14 +2754,15 @@ mod location_constraint_tests {
             None,
             None,
             None,
-            "string",
+            "string_value",
         );
         assert!(result.is_ok());
     }
 
     #[test]
     fn test_validate_location_offset_only() {
-        let result = validate_location_constraints(&None, Some(0x1000), None, None, None, "string");
+        let result =
+            validate_location_constraints(&None, Some(0x1000), None, None, None, "string_value");
         assert!(result.is_ok());
     }
 
@@ -2706,7 +2774,7 @@ mod location_constraint_tests {
             Some((0, Some(0x1000))),
             None,
             None,
-            "string",
+            "string_value",
         );
         assert!(result.is_ok());
     }
@@ -2719,7 +2787,7 @@ mod location_constraint_tests {
             Some((0, Some(0x1000))),
             None,
             None,
-            "string",
+            "string_value",
         );
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("offset"));
@@ -2769,7 +2837,7 @@ mod location_constraint_tests {
             None,
             Some(0x100),
             Some((0, Some(0x200))),
-            "string",
+            "string_value",
         );
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("section_offset"));
@@ -2784,7 +2852,7 @@ mod location_constraint_tests {
             Some((0x1000, Some(0x100))), // 0x1000 > 0x100
             None,
             None,
-            "string",
+            "string_value",
         );
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("start"));
@@ -2802,14 +2870,14 @@ mod location_constraint_tests {
     fn test_validate_location_open_ended_range() {
         // Open-ended range (start, None) is allowed
         let result =
-            validate_location_constraints(&None, None, Some((0x1000, None)), None, None, "string");
+            validate_location_constraints(&None, None, Some((0x1000, None)), None, None, "string_value");
         assert!(result.is_ok());
     }
 
     #[test]
     fn test_condition_validate_string_location() {
-        // Test that Condition::String validates location constraints
-        let condition = Condition::String {
+        // Test that Condition::StringValue validates location constraints
+        let condition = Condition::StringValue {
             exact: Some("test".to_string()),
             substr: None,
             regex: None,

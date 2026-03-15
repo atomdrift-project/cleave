@@ -766,7 +766,7 @@ fn fix_literal_regex_patterns(condition: &mut crate::composite_rules::Condition)
     };
 
     match condition {
-        Condition::String {
+        Condition::StringValue {
             regex: regex_opt,
             substr,
             ..
@@ -885,10 +885,10 @@ fn check_regex_length(
 
     let regex = match condition {
         Condition::Symbol { regex, .. }
-        | Condition::String { regex, .. }
+        | Condition::StringValue { regex, .. }
         | Condition::Raw { regex, .. }
         | Condition::Ast { regex, .. }
-        | Condition::StringCount { regex, .. }
+        | Condition::StringValueCount { regex, .. }
         | Condition::Section { regex, .. }
         | Condition::Encoded { regex, .. }
         | Condition::Basename { regex, .. }

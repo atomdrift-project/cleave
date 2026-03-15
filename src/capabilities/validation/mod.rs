@@ -47,7 +47,7 @@ pub(super) mod shared {
     pub(super) struct PatternLocation {
         pub(super) trait_id: String,
         pub(super) file_path: String,
-        pub(super) condition_type: String, // "string", "symbol", "raw"
+        pub(super) condition_type: String, // "string_value", "symbol", "raw"
         pub(super) match_type: String,     // "exact", "substr", "word", "regex"
         pub(super) original_value: String, // Original pattern before normalization
         pub(super) for_types: HashSet<String>,
@@ -106,7 +106,8 @@ pub(crate) use composite::{
 
 // Pattern quality checks
 pub(crate) use patterns::{
-    find_non_capturing_groups, find_short_pattern_warnings, find_slow_regex_patterns,
+    find_non_capturing_groups, find_raw_should_use_string_value, find_short_pattern_warnings,
+    find_slow_regex_patterns, find_string_value_should_use_raw,
 };
 
 // Taxonomy validation

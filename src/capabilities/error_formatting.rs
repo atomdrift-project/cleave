@@ -110,8 +110,8 @@ fn detect_invalid_field_in_context(context: &str) -> Option<String> {
     // Detect condition type
     let condition_type = if context.contains("type: raw") {
         "raw"
-    } else if context.contains("type: string") {
-        "string"
+    } else if context.contains("type: string_value") || context.contains("type: string") {
+        "string_value"
     } else if context.contains("type: symbol") {
         "symbol"
     } else if context.contains("type: hex") {
@@ -141,7 +141,7 @@ fn detect_invalid_field_in_context(context: &str) -> Option<String> {
             "per_kb_min",
             "per_kb_max",
         ],
-        "string" | "raw" => &[
+        "string_value" | "raw" => &[
             "type",
             "exact",
             "substr",
@@ -413,8 +413,8 @@ fn provide_error_guidance(
             // Detect condition type from context
             let condition_type = if context.contains("type: raw") {
                 Some("raw")
-            } else if context.contains("type: string") {
-                Some("string")
+            } else if context.contains("type: string_value") || context.contains("type: string") {
+                Some("string_value")
             } else if context.contains("type: symbol") {
                 Some("symbol")
             } else if context.contains("type: hex") {

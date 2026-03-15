@@ -12,8 +12,8 @@
 //! Pattern analysis helps maintain rule quality by ensuring patterns have adequate specificity
 //! for their target domain.
 
-use super::helpers::find_line_number;
-use crate::composite_rules::{Condition, TraitDefinition};
+use super::helpers::{find_line_number, is_ast_source_type, is_binary_file_type};
+use crate::composite_rules::{Condition, FileType, TraitDefinition};
 use std::collections::HashMap;
 use std::sync::OnceLock;
 
@@ -331,7 +331,7 @@ pub(crate) fn find_slow_regex_patterns(traits: &[TraitDefinition], warnings: &mu
                 regex: Some(ref regex_str),
                 ..
             }
-            | Condition::String {
+            | Condition::StringValue {
                 regex: Some(ref regex_str),
                 ..
             }
@@ -385,6 +385,257 @@ pub(crate) fn find_slow_regex_patterns(traits: &[TraitDefinition], warnings: &mu
                     issues.join(", ")
                 ));
             }
+        }
+    }
+}
+
+/// Minimum substr length to recommend `string_value` over `raw` for binary types.
+/// Shorter substrings are too common in binary data to reliably match via extracted strings.
+const RAW_TO_STRING_MIN_SUBSTR_LEN: usize = 6;
+
+/// Returns true if a regex pattern contains no meaningful metacharacters —
+/// i.e., it could be expressed as a simple `substr` match.
+///
+/// Escaped dots (`\.`) are treated as literals. Bare dots, character classes,
+/// quantifiers, anchors, and alternation all disqualify.
+fn regex_is_effectively_literal(pattern: &str) -> bool {
+    let mut chars = pattern.chars().peekable();
+    while let Some(ch) = chars.next() {
+        match ch {
+            '\\' => {
+                // Consume the escaped character — it's a literal
+                if chars.next().is_none() {
+                    return false; // trailing backslash
+                }
+            }
+            '.' | '*' | '+' | '?' | '[' | ']' | '(' | ')' | '{' | '}' | '|' | '^' | '$' => {
+                return false;
+            }
+            _ => {}
+        }
+    }
+    true
+}
+
+/// Detect `type: raw` conditions on binary file types that would be faster as
+/// `type: string_value`.
+///
+/// For compiled binaries (ELF, PE, Mach-O, etc.), `raw` searches the entire file
+/// content as a byte stream, while `string_value` searches only pre-extracted
+/// strings — a much smaller corpus.
+///
+/// This flags:
+/// - `raw` with `regex:` where the pattern is effectively a literal string
+///   (no metacharacters besides escaped dots)
+/// - `raw` with `substr:` where the pattern is >= 6 characters
+///
+/// Skips traits that have positional constraints (offset, section, etc.) since
+/// those legitimately need `raw` to pin matches to specific file locations.
+/// Detect `type: string_value` conditions on source file types where the pattern
+/// is clearly code structure (function calls, import statements) that will never
+/// appear as an extracted string literal.
+///
+/// For source files, string_value only searches AST-extracted string literals —
+/// the content inside quotes. A pattern like `eval(` or `import os` matches code
+/// syntax, not string values, and should use `type: raw` instead.
+///
+/// High-certainty heuristics only:
+/// - `substr`/`exact` containing `identifier(` (function call syntax)
+/// - `substr`/`exact` starting with `import ` or `from X import`
+/// - `regex` patterns matching `require\(`, `exec\(`, `import\s`, etc.
+pub(crate) fn find_string_value_should_use_raw(
+    traits: &[TraitDefinition],
+    warnings: &mut Vec<String>,
+) {
+    // Regex for function call pattern: identifier (with optional dots/parens) followed by (
+    // e.g. eval(, os.popen(, Runtime.getRuntime().exec, require('foo')
+    static FUNC_CALL_RE: OnceLock<regex::Regex> = OnceLock::new();
+    #[allow(clippy::expect_used)]
+    let func_call_re = FUNC_CALL_RE
+        .get_or_init(|| regex::Regex::new(r"[a-zA-Z_][a-zA-Z0-9_.]*\(").expect("valid regex"));
+
+    // Import statement pattern: starts with import/from...import
+    static IMPORT_RE: OnceLock<regex::Regex> = OnceLock::new();
+    #[allow(clippy::expect_used)]
+    let import_re = IMPORT_RE.get_or_init(|| {
+        regex::Regex::new(r"^(import\s+\w|from\s+\w+\s+import\b)").expect("valid regex")
+    });
+
+    // Regex-mode patterns that search for code structure
+    static REGEX_CODE_RE: OnceLock<regex::Regex> = OnceLock::new();
+    #[allow(clippy::expect_used)]
+    let regex_code_re = REGEX_CODE_RE.get_or_init(|| {
+        regex::Regex::new(
+            r"(?:require\b|\\brequire|exec\(|execSync|eval\(|shell_exec\(|child_process\\?\.|from\\s|import\\s|\\bimport\\b)",
+        )
+        .expect("valid regex")
+    });
+
+    for trait_def in traits {
+        // Only applies to traits targeting source/script file types
+        let targets_source = trait_def
+            .r#for
+            .iter()
+            .any(|ft| is_ast_source_type(*ft));
+
+        if !targets_source {
+            continue;
+        }
+
+        let (pattern_value, pattern_kind) = match &trait_def.r#if {
+            Condition::StringValue {
+                substr: Some(s), ..
+            } => {
+                if func_call_re.is_match(s) || import_re.is_match(s) {
+                    (s.as_str(), "substr")
+                } else {
+                    continue;
+                }
+            }
+            Condition::StringValue {
+                exact: Some(s), ..
+            } => {
+                if func_call_re.is_match(s) || import_re.is_match(s) {
+                    (s.as_str(), "exact")
+                } else {
+                    continue;
+                }
+            }
+            Condition::StringValue {
+                regex: Some(s), ..
+            } => {
+                if regex_code_re.is_match(s) {
+                    (s.as_str(), "regex")
+                } else {
+                    continue;
+                }
+            }
+            _ => continue,
+        };
+
+        let source_file = trait_def
+            .defined_in
+            .to_str()
+            .unwrap_or("unknown")
+            .to_string();
+        let line_hint = find_line_number(&source_file, &trait_def.id);
+        let location = if let Some(line) = line_hint {
+            format!("{}:{}", source_file, line)
+        } else {
+            source_file
+        };
+
+        warnings.push(format!(
+            "Wrong type: trait '{}' in {} uses `type: string_value` with {} '{}' on source types — \
+             this pattern matches code structure, not string literals. Use `type: raw` instead",
+            trait_def.id, location, pattern_kind, pattern_value
+        ));
+    }
+}
+
+/// Detect `type: raw` conditions on binary file types that would be faster as
+/// `type: string_value`.
+///
+/// For compiled binaries (ELF, PE, Mach-O, etc.), `raw` searches the entire file
+/// content as a byte stream, while `string_value` searches only pre-extracted
+/// strings — a much smaller corpus.
+///
+/// This flags:
+/// - `raw` with `regex:` where the pattern is effectively a literal string
+///   (no metacharacters besides escaped dots)
+/// - `raw` with `substr:` where the pattern is >= 6 characters
+///
+/// Skips traits that have positional constraints (offset, section, etc.) since
+/// those legitimately need `raw` to pin matches to specific file locations.
+pub(crate) fn find_raw_should_use_string_value(
+    traits: &[TraitDefinition],
+    warnings: &mut Vec<String>,
+) {
+    for trait_def in traits {
+        // Only applies to binary file types
+        let targets_binary = if trait_def.r#for.is_empty()
+            || trait_def.r#for.iter().any(|ft| matches!(ft, FileType::All))
+        {
+            false // "all" types includes scripts — skip
+        } else {
+            trait_def.r#for.iter().all(|ft| is_binary_file_type(*ft))
+        };
+
+        if !targets_binary {
+            continue;
+        }
+
+        // Skip if condition has positional constraints (legitimate raw use)
+        let (has_position, substr, regex) = match &trait_def.r#if {
+            Condition::Raw {
+                substr,
+                regex,
+                section,
+                offset,
+                offset_range,
+                section_offset,
+                section_offset_range,
+                ..
+            } => {
+                let pinned = offset.is_some()
+                    || offset_range.is_some()
+                    || section_offset.is_some()
+                    || section_offset_range.is_some()
+                    || section.is_some();
+                (pinned, substr.as_deref(), regex.as_deref())
+            }
+            _ => continue,
+        };
+
+        if has_position {
+            continue;
+        }
+
+        // Skip traits with density constraints (per_kb_min, count_min >= 2) —
+        // these rely on counting occurrences across the full binary, which
+        // string_value can't reproduce.
+        let has_density = trait_def.count_min.is_some_and(|c| c >= 2)
+            || trait_def.per_kb_min.is_some()
+            || trait_def.per_kb_max.is_some();
+        if has_density {
+            continue;
+        }
+
+        let suggestion = if let Some(pattern) = regex {
+            if regex_is_effectively_literal(pattern) && pattern.len() >= RAW_TO_STRING_MIN_SUBSTR_LEN
+            {
+                Some((pattern, "regex (literal)"))
+            } else {
+                None
+            }
+        } else if let Some(pattern) = substr {
+            if pattern.len() >= RAW_TO_STRING_MIN_SUBSTR_LEN {
+                Some((pattern, "substr"))
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        if let Some((pattern, kind)) = suggestion {
+            let source_file = trait_def
+                .defined_in
+                .to_str()
+                .unwrap_or("unknown")
+                .to_string();
+            let line_hint = find_line_number(&source_file, &trait_def.id);
+            let location = if let Some(line) = line_hint {
+                format!("{}:{}", source_file, line)
+            } else {
+                source_file
+            };
+
+            warnings.push(format!(
+                "Performance: trait '{}' in {} uses `type: raw` with {} '{}' on binary-only types — \
+                 `type: string_value` searches only extracted strings and is much faster",
+                trait_def.id, location, kind, pattern
+            ));
         }
     }
 }

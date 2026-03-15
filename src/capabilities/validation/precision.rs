@@ -68,7 +68,7 @@ fn score_condition(condition: &Condition) -> f32 {
                 }
             }
         }
-        Condition::String {
+        Condition::StringValue {
             exact,
             substr,
             regex,
@@ -197,7 +197,7 @@ fn score_condition(condition: &Condition) -> f32 {
             score += score_presence(min_suspicious.as_ref());
             score += score_presence(max_total.as_ref());
         }
-        Condition::StringCount {
+        Condition::StringValueCount {
             min,
             max,
             min_length,

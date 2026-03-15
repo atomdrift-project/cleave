@@ -557,7 +557,7 @@ impl TraitDefinition {
                 }
             }
             // Exact matches should use `unless:` instead of `not:`
-            Condition::String {
+            Condition::StringValue {
                 exact: Some(_),
                 regex: None,
                 word: None,
@@ -579,7 +579,7 @@ impl TraitDefinition {
                 );
             }
             // For String substr matches, validate that not: exceptions could match strings containing the substr
-            Condition::String {
+            Condition::StringValue {
                 substr: Some(search_substr),
                 regex: None,
                 word: None,
@@ -650,7 +650,7 @@ impl TraitDefinition {
                 );
             }
             // For regex matches, validate that exceptions could potentially match
-            Condition::String {
+            Condition::StringValue {
                 regex: Some(pattern),
                 ..
             }
@@ -1195,7 +1195,7 @@ impl TraitDefinition {
                     ctx,
                 )
             ),
-            Condition::String {
+            Condition::StringValue {
                 exact,
                 substr,
                 regex,
@@ -1226,7 +1226,7 @@ impl TraitDefinition {
                     section_offset_range: *section_offset_range,
                     arch_clamp,
                 };
-                timed_eval!("string", eval_string(&params, self.not.as_ref(), ctx))
+                timed_eval!("string_value", eval_string(&params, self.not.as_ref(), ctx))
             }
             Condition::Structure {
                 feature,
@@ -1298,7 +1298,7 @@ impl TraitDefinition {
                     ctx,
                 )
             ),
-            Condition::StringCount {
+            Condition::StringValueCount {
                 min,
                 max,
                 min_length,
@@ -2304,7 +2304,7 @@ impl CompositeTrait {
                 compiled_regex.as_ref(),
                 ctx,
             ),
-            Condition::String {
+            Condition::StringValue {
                 exact,
                 substr,
                 regex,
@@ -2405,7 +2405,7 @@ impl CompositeTrait {
                     ctx,
                 )
             ),
-            Condition::StringCount {
+            Condition::StringValueCount {
                 min,
                 max,
                 min_length,

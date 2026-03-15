@@ -20,7 +20,7 @@ mod description_validation_tests {
             platforms: vec![],
             arch: vec![Arch::All],
             r#for: vec![],
-            r#if: Condition::String {
+            r#if: Condition::StringValue {
                 exact: Some("test".to_string()),
                 substr: None,
                 regex: None,

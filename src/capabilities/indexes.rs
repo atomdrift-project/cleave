@@ -206,7 +206,7 @@ impl StringMatchIndex {
         for (trait_idx, trait_def) in traits.iter().enumerate() {
             match &trait_def.r#if {
                 // Exact string patterns
-                Condition::String {
+                Condition::StringValue {
                     exact: Some(ref exact_str),
                     case_insensitive,
                     ..
@@ -228,7 +228,7 @@ impl StringMatchIndex {
                     }
                 }
                 // Substr string patterns - add to Aho-Corasick index
-                Condition::String {
+                Condition::StringValue {
                     substr: Some(ref substr_str),
                     case_insensitive,
                     // Skip patterns with location constraints - they need special handling
@@ -260,7 +260,7 @@ impl StringMatchIndex {
                     }
                 }
                 // Regex string patterns - extract literal prefix for pre-filtering
-                Condition::String {
+                Condition::StringValue {
                     regex: Some(ref regex_str),
                     ..
                 } => {

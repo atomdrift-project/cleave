@@ -1078,7 +1078,7 @@ fn trait_targets_binaries(trait_def: &TraitDefinition) -> bool {
 /// on string/raw/hex conditions, Section type, SectionRatio type.
 fn condition_has_section_filter(cond: &Condition) -> bool {
     match cond {
-        Condition::String {
+        Condition::StringValue {
             section,
             offset,
             offset_range,
@@ -1117,7 +1117,7 @@ fn condition_has_section_filter(cond: &Condition) -> bool {
 fn condition_supports_section_filter(cond: &Condition) -> bool {
     matches!(
         cond,
-        Condition::String { .. } | Condition::Raw { .. } | Condition::Hex { .. }
+        Condition::StringValue { .. } | Condition::Raw { .. } | Condition::Hex { .. }
     )
 }
 

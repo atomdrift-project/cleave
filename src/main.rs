@@ -230,7 +230,10 @@ fn main() -> Result<()> {
         let (stderr_filter, file_filter) = if std::env::var("RUST_LOG").is_ok() {
             (EnvFilter::from_default_env(), EnvFilter::from_default_env())
         } else if args.verbose {
-            (EnvFilter::new(scoped_filter("trace")), EnvFilter::new(scoped_filter("trace")))
+            (
+                EnvFilter::new(scoped_filter("trace")),
+                EnvFilter::new(scoped_filter("trace")),
+            )
         } else if is_server {
             (
                 EnvFilter::new(scoped_filter("info")),

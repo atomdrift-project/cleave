@@ -256,7 +256,7 @@ fn format_strings_output(
         cli::OutputFormat::Json | cli::OutputFormat::Jsonl => {
             Ok(serde_json::to_string_pretty(&strings)?)
         }
-        cli::OutputFormat::Terminal => {
+        cli::OutputFormat::Terminal | cli::OutputFormat::Tiny => {
             let mut output = String::new();
 
             // Sort strings by offset to show them in file order

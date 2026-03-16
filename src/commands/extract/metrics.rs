@@ -168,7 +168,7 @@ fn format_metrics_output(
         cli::OutputFormat::Json | cli::OutputFormat::Jsonl => {
             Ok(serde_json::to_string_pretty(&metrics)?)
         }
-        cli::OutputFormat::Terminal => {
+        cli::OutputFormat::Terminal | cli::OutputFormat::Tiny => {
             // Convert metrics to JSON value, then flatten to get all field paths
             let json_value = serde_json::to_value(metrics)?;
             let mut flattened = Vec::new();

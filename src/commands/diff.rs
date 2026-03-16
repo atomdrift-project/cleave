@@ -39,7 +39,7 @@ pub(crate) fn run(old: &str, new: &str, format: &cli::OutputFormat) -> Result<St
             let report = diff_analyzer.analyze_full()?;
             Ok(serde_json::to_string_pretty(&report)?)
         }
-        cli::OutputFormat::Terminal => {
+        cli::OutputFormat::Terminal | cli::OutputFormat::Tiny => {
             // Use simple diff for terminal display
             let report = diff_analyzer.analyze()?;
             Ok(diff::format_diff_terminal(&report))

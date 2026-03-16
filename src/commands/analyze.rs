@@ -174,6 +174,7 @@ pub(crate) fn run(config: &AnalyzeConfig<'_>) -> Result<String> {
                                 output::format_jsonl(&report).unwrap_or_default()
                             }
                             cli::OutputFormat::Terminal => output::format_terminal(&report),
+                            cli::OutputFormat::Tiny => output::format_tiny(&report),
                         };
                         if stream_stdout && !res.is_empty() {
                             print!("{}", res);
@@ -341,6 +342,7 @@ fn analyze_and_format(
         cli::OutputFormat::Json => Ok(serde_json::to_string(&report)?),
         cli::OutputFormat::Jsonl => output::format_jsonl(&report),
         cli::OutputFormat::Terminal => Ok(output::format_terminal(&report)),
+        cli::OutputFormat::Tiny => Ok(output::format_tiny(&report)),
     }
 }
 

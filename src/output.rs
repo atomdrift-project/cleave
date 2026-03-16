@@ -427,6 +427,104 @@ pub(crate) fn format_jsonl(report: &AnalysisReport) -> Result<String> {
     Ok(format!("{}\n", lines.join("\n")))
 }
 
+/// Format report as compact text for small LLMs.
+///
+/// Output format:
+/// ```text
+/// # H=hostile S=suspicious N=notable B=baseline
+/// --- path/to/file.exe (elf, 1.2MB)
+/// H command-and-control/c2-beacon hardcoded_ip_callback
+/// S crypto/custom-encryption XOR_0x5a_loop
+/// N net/socket connect
+/// ```
+///
+/// One line per finding, sorted by criticality (highest first).
+/// Evidence is truncated to 32 chars. Files with no findings above
+/// baseline are omitted.
+#[allow(dead_code)] // Used by binary target
+pub(crate) fn format_tiny(report: &AnalysisReport) -> String {
+    let mut out = String::with_capacity(4096);
+    out.push_str("# H=hostile S=suspicious N=notable B=baseline\n");
+
+    for file in &report.files {
+        // Collect findings above component level
+        let mut findings: Vec<&Finding> = file
+            .findings
+            .iter()
+            .filter(|f| f.crit > Criticality::Component && f.conf >= 0.5)
+            .collect();
+
+        if findings.is_empty() {
+            continue;
+        }
+
+        // Sort by criticality descending, then by id for stability
+        findings.sort_by(|a, b| b.crit.cmp(&a.crit).then_with(|| a.id.cmp(&b.id)));
+
+        // File header: --- path (type, size)
+        let size = format_size(file.size);
+        out.push_str("--- ");
+        out.push_str(&file.path);
+        out.push_str(" (");
+        out.push_str(&file.file_type);
+        if !size.is_empty() {
+            out.push_str(", ");
+            out.push_str(&size);
+        }
+        out.push_str(")\n");
+
+        for f in &findings {
+            let letter = match f.crit {
+                Criticality::Hostile => 'H',
+                Criticality::Suspicious => 'S',
+                Criticality::Notable => 'N',
+                _ => 'B',
+            };
+            out.push(letter);
+            out.push(' ');
+            out.push_str(&f.id);
+
+            // Pick first evidence value, truncated to 32 chars
+            if let Some(ev) = f.evidence.first() {
+                let val = ev.value.trim();
+                if !val.is_empty() {
+                    out.push(' ');
+                    if val.len() <= 32 {
+                        out.push_str(val);
+                    } else {
+                        // Truncate at char boundary
+                        let truncated: String = val.chars().take(29).collect();
+                        out.push_str(&truncated);
+                        out.push_str("...");
+                    }
+                }
+            }
+            out.push('\n');
+        }
+    }
+
+    out
+}
+
+/// Format byte size as human-readable string (compact)
+fn format_size(bytes: u64) -> String {
+    if bytes == 0 {
+        return String::new();
+    }
+    const KB: u64 = 1024;
+    const MB: u64 = 1024 * KB;
+    const GB: u64 = 1024 * MB;
+    if bytes >= GB {
+        format!("{:.1}GB", bytes as f64 / GB as f64)
+    } else if bytes >= MB {
+        format!("{:.1}MB", bytes as f64 / MB as f64)
+    } else if bytes >= KB {
+        format!("{}KB", bytes / KB)
+    } else {
+        format!("{}B", bytes)
+    }
+}
+
 /// Parse JSONL (newline-delimited JSON) back to AnalysisReport
 #[allow(dead_code)] // Used by binary target
 pub(crate) fn parse_jsonl(jsonl: &str) -> Result<AnalysisReport> {

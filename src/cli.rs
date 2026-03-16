@@ -247,19 +247,31 @@ impl Args {
         }
     }
 
-    /// Get the output format based on --json and --format flags
+    /// Get the output format based on --format flag, --json flag, or CLEAVE_FORMAT env var.
+    /// Precedence: --format > --json > CLEAVE_FORMAT > Terminal (default)
     #[allow(dead_code)] // Used by binary target
     #[must_use]
     pub(crate) fn format(&self) -> OutputFormat {
-        // --format takes precedence over --json
+        // --format takes precedence over everything
         if let Some(format) = self.format {
             return format;
         }
         if self.json {
-            OutputFormat::Jsonl
-        } else {
-            OutputFormat::Terminal
+            return OutputFormat::Jsonl;
         }
+        // Fall back to CLEAVE_FORMAT env var
+        if let Ok(val) = std::env::var("CLEAVE_FORMAT") {
+            match val.to_lowercase().as_str() {
+                "json" => return OutputFormat::Json,
+                "jsonl" => return OutputFormat::Jsonl,
+                "tiny" => return OutputFormat::Tiny,
+                "terminal" => return OutputFormat::Terminal,
+                _ => {
+                    eprintln!("warning: unknown CLEAVE_FORMAT '{val}', using terminal");
+                }
+            }
+        }
+        OutputFormat::Terminal
     }
 
     /// Parse --error-if flag into a set of criticality levels
@@ -697,6 +709,8 @@ pub(crate) enum OutputFormat {
     Jsonl,
     /// Human-readable terminal output
     Terminal,
+    /// Compact one-line-per-finding text output for small LLMs
+    Tiny,
 }
 
 /// Output format for map visualization

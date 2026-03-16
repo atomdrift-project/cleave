@@ -315,7 +315,7 @@ fn format_symbols_output(
         cli::OutputFormat::Json | cli::OutputFormat::Jsonl => {
             Ok(serde_json::to_string_pretty(&symbols)?)
         }
-        cli::OutputFormat::Terminal => {
+        cli::OutputFormat::Terminal | cli::OutputFormat::Tiny => {
             let mut output = String::new();
             output.push_str(&format!(
                 "Extracted {} symbols from {}\n\n",

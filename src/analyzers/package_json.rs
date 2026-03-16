@@ -54,11 +54,23 @@ struct PackageJson {
     scripts: HashMap<String, String>,
     #[serde(default, deserialize_with = "deserialize_map_tolerant")]
     dependencies: HashMap<String, String>,
-    #[serde(rename = "devDependencies", default, deserialize_with = "deserialize_map_tolerant")]
+    #[serde(
+        rename = "devDependencies",
+        default,
+        deserialize_with = "deserialize_map_tolerant"
+    )]
     dev_dependencies: HashMap<String, String>,
-    #[serde(rename = "peerDependencies", default, deserialize_with = "deserialize_map_tolerant")]
+    #[serde(
+        rename = "peerDependencies",
+        default,
+        deserialize_with = "deserialize_map_tolerant"
+    )]
     peer_dependencies: HashMap<String, String>,
-    #[serde(rename = "optionalDependencies", default, deserialize_with = "deserialize_map_tolerant")]
+    #[serde(
+        rename = "optionalDependencies",
+        default,
+        deserialize_with = "deserialize_map_tolerant"
+    )]
     optional_dependencies: HashMap<String, String>,
     #[allow(dead_code)] // Deserialized from JSON
     repository: Option<serde_json::Value>,

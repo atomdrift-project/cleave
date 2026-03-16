@@ -23,9 +23,8 @@
 //!   - Handles multiple binary formats (ELF, Mach-O, PE)
 //!   - Module: `extract`
 //!
-//! - **Test/Profile Commands**: Testing and profiling functionality
+//! - **Test Commands**: Testing functionality
 //!   - Test rule sets and analysis pipelines
-//!   - Profile performance and memory usage
 //!   - Module: `test`
 //!
 //! - **Diff Commands**: Differential analysis
@@ -39,7 +38,6 @@
 //! ### Utilities
 //! - Path handling: `expand_paths` - Recursively expands file globs and directories
 //! - Input handling: `read_paths_from_stdin` - Reads file paths from standard input
-//! - Error handling: `check_criticality_error` - Validates critical error conditions
 //! - File type detection: `cli_file_type_to_internal` - Converts CLI file type to internal type
 //!
 //! ### Analysis Functions
@@ -64,7 +62,6 @@
 pub(crate) mod analyze;
 pub(crate) mod diff;
 pub(crate) mod extract;
-pub(crate) mod profile;
 pub(crate) mod shared;
 pub(crate) mod test;
 pub(crate) mod validate;
@@ -75,6 +72,5 @@ pub(crate) use shared::expand_paths;
 // Re-export command functions for main.rs
 pub(crate) use analyze::{run as analyze_command, AnalyzeConfig};
 pub(crate) use diff::run as diff_command;
-pub(crate) use profile::run as profile_command;
 pub(crate) use test::{test_match, test_rules};
 pub(crate) use validate::run as validate_command;

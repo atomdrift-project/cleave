@@ -86,33 +86,6 @@ pub(crate) fn expand_paths(paths: Vec<String>, format: &crate::cli::OutputFormat
     expanded
 }
 
-/// Check if a report's highest criticality matches or exceeds any of the error_if levels
-/// If so, exit with error
-///
-/// The check matches "level or higher" - e.g., --error-if=notable will trigger for
-/// files with Notable, Suspicious, or Hostile criticality.
-pub(crate) fn check_criticality_error(
-    report: &types::AnalysisReport,
-    error_if_levels: Option<&[types::Criticality]>,
-) -> Result<()> {
-    if let Some(levels) = error_if_levels {
-        if let Some(highest_crit) = report.highest_criticality() {
-            // Check if highest criticality >= any of the specified levels
-            for &threshold in levels {
-                if highest_crit >= threshold {
-                    anyhow::bail!(
-                        "File '{}' has highest criticality {:?} which matches --error-if criteria (threshold: {:?})",
-                        report.target.path,
-                        highest_crit,
-                        threshold
-                    );
-                }
-            }
-        }
-    }
-    Ok(())
-}
-
 // ============================================================================
 // YARA Processing
 // ============================================================================

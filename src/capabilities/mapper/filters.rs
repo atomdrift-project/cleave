@@ -15,6 +15,7 @@ impl super::CapabilityMapper {
     /// just match if ANY ONE of their conditions is true.
     ///
     /// Returns true if the finding should be filtered out (is low-value).
+    #[allow(dead_code)] // Used by library target (lib.rs), not visible to binary crate
     #[must_use]
     pub fn is_low_value_any_rule(&self, finding_id: &str) -> bool {
         // Find the composite rule with this ID

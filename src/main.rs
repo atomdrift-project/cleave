@@ -52,7 +52,6 @@ mod env_mapper;
 mod extractors;
 mod ip_validator;
 mod malecule_bridge;
-mod map;
 mod output;
 mod path_mapper;
 mod radare2;
@@ -72,11 +71,10 @@ mod yara_engine;
 use anyhow::{Context, Result};
 use clap::Parser;
 use commands::{
-    analyze_command, diff_command, expand_paths, profile_command, test_match, test_rules,
-    validate_command, AnalyzeConfig,
+    analyze_command, diff_command, expand_paths, test_match, test_rules, validate_command,
+    AnalyzeConfig,
 };
 use std::fs;
-use std::path::Path;
 use tracing_subscriber::EnvFilter;
 
 /// Get the parent process ID for debugging subprocess relationships.
@@ -390,24 +388,15 @@ fn main() -> Result<()> {
         eprintln!("cleave v{}{traits_ver}\n", env!("CARGO_PKG_VERSION"));
     }
 
-    // Collect zip passwords (default + custom, unless disabled)
-    let zip_passwords: Vec<String> = if args.no_zip_passwords {
-        Vec::new()
-    } else {
-        let mut passwords: Vec<String> = cli::DEFAULT_ZIP_PASSWORDS
-            .iter()
-            .map(std::string::ToString::to_string)
-            .collect();
-        passwords.extend(args.zip_passwords.clone());
-        passwords
-    };
+    // Default passwords for encrypted zip files
+    let zip_passwords: Vec<String> = cli::DEFAULT_ZIP_PASSWORDS
+        .iter()
+        .map(std::string::ToString::to_string)
+        .collect();
 
     // Determine third_party setting (can come from top-level or subcommand)
     // Third-party YARA is enabled by default; disable with --disable third-party
     let enable_third_party_global = !disabled.third_party;
-
-    // Collect error_if levels for criticality checking
-    let error_if_levels = args.error_if_levels();
 
     // Create extraction config if --extract-dir is specified
     let sample_extraction = args.extract_dir.as_ref().map(|dir| {
@@ -456,16 +445,13 @@ fn main() -> Result<()> {
                     format: &format,
                     zip_passwords: &zip_passwords,
                     disabled: &disabled,
-                    error_if_levels: error_if_levels.as_deref(),
                     all_files: args.all_files,
                     sample_extraction: sample_extraction.as_ref(),
                     platforms: &platforms,
-                    min_hostile_precision: args.min_hostile_precision,
-                    min_suspicious_precision: args.min_suspicious_precision,
+                    min_hostile_precision: 3.5,
+                    min_suspicious_precision: 2.0,
                     max_memory_file_size,
                     enable_full_validation: false,
-                    mol_path: args.mol.as_deref(),
-                    mol_layout: args.mol_layout,
                     slow_rule_ms: args.slow_rule_ms,
                     output_to_file: args.output.is_some(),
                     max_scan_file_size,
@@ -498,8 +484,8 @@ fn main() -> Result<()> {
             &rules,
             &disabled,
             platforms.clone(),
-            args.min_hostile_precision,
-            args.min_suspicious_precision,
+            3.5,
+            2.0,
         )?,
         Some(cli::Command::TestMatch {
             target,
@@ -563,39 +549,9 @@ fn main() -> Result<()> {
             max_size,
             &disabled,
             platforms.clone(),
-            args.min_hostile_precision,
-            args.min_suspicious_precision,
+            3.5,
+            2.0,
         )?,
-        Some(cli::Command::Map {
-            depth,
-            output,
-            min_refs,
-            namespaces,
-            from_findings,
-            format,
-            min_crit,
-            show_low_value,
-        }) => {
-            if let Some(input) = from_findings {
-                // Findings mode
-                map::generate_findings_map(
-                    &input,
-                    depth,
-                    output.as_deref(),
-                    min_refs,
-                    namespaces.as_deref(),
-                    format,
-                    &min_crit,
-                    show_low_value,
-                )?
-            } else {
-                // Definition mode (existing behavior)
-                map::generate_trait_map(depth, output.as_deref(), min_refs, namespaces.as_deref())?
-            }
-        }
-        Some(cli::Command::YaraProfile { target, min_ms }) => {
-            return profile_command(Path::new(&target), min_ms);
-        }
         Some(cli::Command::UpdateRules { force, check, pin }) => {
             if let Some(commit) = pin {
                 traits_repo::pin(&commit).unwrap_or_else(|e| {
@@ -694,16 +650,13 @@ fn main() -> Result<()> {
                     format: &format,
                     zip_passwords: &zip_passwords,
                     disabled: &disabled,
-                    error_if_levels: error_if_levels.as_deref(),
                     all_files: args.all_files,
                     sample_extraction: sample_extraction.as_ref(),
                     platforms: &platforms,
-                    min_hostile_precision: args.min_hostile_precision,
-                    min_suspicious_precision: args.min_suspicious_precision,
+                    min_hostile_precision: 3.5,
+                    min_suspicious_precision: 2.0,
                     max_memory_file_size,
                     enable_full_validation: false,
-                    mol_path: args.mol.as_deref(),
-                    mol_layout: args.mol_layout,
                     slow_rule_ms: args.slow_rule_ms,
                     output_to_file: args.output.is_some(),
                     max_scan_file_size,

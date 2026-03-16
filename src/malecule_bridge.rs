@@ -1,13 +1,10 @@
-//! Bridge between cleave analysis types and malecule visualization.
-//!
-//! Converts cleave findings to malecule format for molecular visualization.
+//! Bridge between cleave analysis types and malecule formula generation.
 
-use crate::types::{Criticality, FileAnalysis, Finding};
-use malecule::{FindingInput, LayoutAlgorithm, Malecule, MaleculeBuilder, Severity};
+use crate::types::{Criticality, Finding};
+use malecule::{FindingInput, Severity};
 
 /// Convert cleave Criticality to malecule Severity.
-#[must_use]
-pub fn criticality_to_severity(crit: Criticality) -> Severity {
+fn criticality_to_severity(crit: Criticality) -> Severity {
     match crit {
         Criticality::Hostile => Severity::Hostile,
         Criticality::Suspicious => Severity::Suspicious,
@@ -29,63 +26,6 @@ pub fn formula_from_findings(findings: &[Finding]) -> String {
         .collect();
 
     malecule::generate_formula(inputs.iter())
-}
-
-/// Generate a malecule formula string from a FileAnalysis.
-#[allow(dead_code)] // Used by binary target
-#[must_use]
-pub fn formula_from_file_analysis(file: &FileAnalysis) -> String {
-    formula_from_findings(&file.findings)
-}
-
-/// Build a complete Malecule from a FileAnalysis.
-#[allow(dead_code)] // Used by binary target
-#[must_use]
-pub fn malecule_from_file_analysis(file: &FileAnalysis, layout: LayoutAlgorithm) -> Malecule {
-    let name = file
-        .path
-        .rsplit('/')
-        .next()
-        .unwrap_or(&file.path)
-        .to_string();
-
-    let mut builder = MaleculeBuilder::new(name);
-    builder.layout(layout);
-
-    for finding in &file.findings {
-        // Collect, deduplicate, and sort evidence
-        let mut evidence: Vec<String> = finding.evidence.iter().map(|e| e.value.clone()).collect();
-        evidence.sort();
-        evidence.dedup();
-
-        builder.add_finding(malecule::Finding {
-            id: finding.id.clone(),
-            description: Some(finding.desc.clone()),
-            severity: criticality_to_severity(finding.crit),
-            evidence,
-            trait_refs: finding.trait_refs.clone(),
-        });
-    }
-
-    builder.build()
-}
-
-/// Generate MOL file content from a FileAnalysis.
-#[allow(dead_code)] // Used by binary target
-#[must_use]
-pub fn mol_from_file_analysis(file: &FileAnalysis, layout: LayoutAlgorithm) -> String {
-    let malecule = malecule_from_file_analysis(file, layout);
-    malecule::mol::generate_mol(&malecule)
-}
-
-/// Generate metadata JSON from a FileAnalysis.
-#[allow(dead_code)] // Used by binary target
-pub fn metadata_json_from_file_analysis(
-    file: &FileAnalysis,
-    layout: LayoutAlgorithm,
-) -> Result<String, serde_json::Error> {
-    let malecule = malecule_from_file_analysis(file, layout);
-    malecule::mol::generate_metadata_json(&malecule)
 }
 
 #[cfg(test)]
@@ -116,26 +56,6 @@ mod tests {
     }
 
     #[test]
-    fn test_criticality_conversion() {
-        assert_eq!(
-            criticality_to_severity(Criticality::Hostile),
-            Severity::Hostile
-        );
-        assert_eq!(
-            criticality_to_severity(Criticality::Suspicious),
-            Severity::Suspicious
-        );
-        assert_eq!(
-            criticality_to_severity(Criticality::Notable),
-            Severity::Notable
-        );
-        assert_eq!(
-            criticality_to_severity(Criticality::Baseline),
-            Severity::Neutral
-        );
-    }
-
-    #[test]
     fn test_formula_generation() {
         let findings = vec![
             test_finding(
@@ -146,37 +66,10 @@ mod tests {
         ];
 
         let formula = formula_from_findings(&findings);
-        assert!(formula.contains('O'), "Expected O (Oxygen) for objectives"); // Objectives
+        assert!(formula.contains('O'), "Expected O (Oxygen) for objectives");
         assert!(
             formula.contains('H'),
             "Expected H (Hydrogen) for micro-behaviors"
-        ); // Micro-behaviors
-        assert!(
-            formula.contains("La"),
-            "Expected La (Lanthanum) for lateral-movement"
-        ); // lateral-movement subcategory
-        assert!(formula.contains('F'), "Expected F (Fluorine) for fs"); // fs subcategory
-    }
-
-    #[test]
-    fn test_malecule_building() {
-        let findings = vec![test_finding(
-            "objectives/lateral-movement",
-            Criticality::Suspicious,
-        )];
-
-        let mut file = FileAnalysis::new(
-            0,
-            "/test/sample.bin".to_string(),
-            "ELF".to_string(),
-            "abc123".to_string(),
-            1024,
         );
-        file.findings = findings;
-
-        let malecule = malecule_from_file_analysis(&file, LayoutAlgorithm::LayeredSpherical);
-
-        assert!(!malecule.atoms.is_empty());
-        assert!(!malecule.formula.is_empty());
     }
 }

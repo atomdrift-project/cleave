@@ -355,13 +355,6 @@ impl AnalysisReport {
         self.files.shrink_to_fit();
     }
 
-    /// Get the highest criticality level from findings in this report (excluding sub-reports)
-    /// Returns None if there are no findings
-    #[must_use]
-    pub fn highest_criticality(&self) -> Option<Criticality> {
-        self.findings.iter().map(|f| f.crit).max()
-    }
-
     /// Finalize the report for output: populate files[], clear top-level duplicates,
     /// merge metadata into summary, filter internal symbols findings.
     ///
@@ -682,30 +675,6 @@ mod tests {
     }
 
     // ==================== highest_criticality Tests ====================
-
-    #[test]
-    fn test_highest_criticality_empty() {
-        let report = AnalysisReport::new(test_target());
-        assert_eq!(report.highest_criticality(), None);
-    }
-
-    #[test]
-    fn test_highest_criticality_single() {
-        let mut report = AnalysisReport::new(test_target());
-        report.add_finding(test_finding("test/cap1", Criticality::Notable));
-
-        assert_eq!(report.highest_criticality(), Some(Criticality::Notable));
-    }
-
-    #[test]
-    fn test_highest_criticality_multiple() {
-        let mut report = AnalysisReport::new(test_target());
-        report.add_finding(test_finding("test/cap1", Criticality::Baseline));
-        report.add_finding(test_finding("test/cap2", Criticality::Hostile));
-        report.add_finding(test_finding("test/cap3", Criticality::Notable));
-
-        assert_eq!(report.highest_criticality(), Some(Criticality::Hostile));
-    }
 
     // ==================== TargetInfo Tests ====================
 

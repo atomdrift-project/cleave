@@ -129,14 +129,6 @@ pub(crate) struct Args {
     #[arg(long, value_name = "FILE")]
     pub log_file: Option<String>,
 
-    /// Additional password to try for encrypted zip files (can be specified multiple times)
-    #[arg(long = "zip-password", value_name = "PASSWORD")]
-    pub zip_passwords: Vec<String>,
-
-    /// Disable automatic password guessing for encrypted zip files
-    #[arg(long)]
-    pub no_zip_passwords: bool,
-
     /// Disable specific components (comma-separated: yara,radare2,upx,third-party)
     #[arg(long, value_name = "COMPONENTS", default_value = "")]
     pub disable: String,
@@ -145,22 +137,10 @@ pub(crate) struct Args {
     #[arg(long)]
     pub enable_all: bool,
 
-    /// Exit with error if top-level file has highest trait criticality matching these levels
-    /// (comma-separated: filtered,baseline,notable,suspicious,hostile)
-    /// Example: --error-if=suspicious,hostile (for sweeping known-good data)
-    /// Example: --error-if=baseline,notable (for sweeping known-bad data for weak detections)
-    #[arg(long, value_name = "LEVELS")]
-    pub error_if: Option<String>,
-
     /// Include all files in directory scans, even unknown types
     /// By default, only recognized code/binary files are analyzed
     #[arg(long)]
     pub all_files: bool,
-
-    /// Randomize file order when scanning directories
-    /// Useful for trait-basher to ensure diverse sampling across runs
-    #[arg(long)]
-    pub shuffle: bool,
 
     /// Filter rules by target platform(s) (comma-separated, default: all)
     /// Examples: --platforms linux,macos or --platforms windows
@@ -177,16 +157,6 @@ pub(crate) struct Args {
     /// Custom traits directory (overrides CLEAVE_TRAITS_DIR env var and default "traits")
     #[arg(long, value_name = "DIR")]
     pub traits_dir: Option<String>,
-
-    /// Minimum recursive precision required for HOSTILE composite traits.
-    /// Rules below this threshold are downgraded to SUSPICIOUS.
-    #[arg(long, default_value_t = 3.5)]
-    pub min_hostile_precision: f32,
-
-    /// Minimum recursive precision required for SUSPICIOUS composite traits.
-    /// Rules below this threshold are downgraded to NOTABLE.
-    #[arg(long, default_value_t = 2.0)]
-    pub min_suspicious_precision: f32,
 
     /// Maximum file size (in MB) to keep in memory during archive analysis.
     /// Files larger than this are written to temp files. Default: 100 MB.
@@ -210,29 +180,6 @@ pub(crate) struct Args {
     #[arg(long, value_name = "N")]
     pub scan_threads: Option<usize>,
 
-    /// Generate malecule MOL file and JSON sidecar for 3D visualization.
-    /// Writes <path>.mol and <path>.json with molecular representation of findings.
-    #[arg(long, value_name = "PATH")]
-    pub mol: Option<String>,
-
-    /// Layout algorithm for malecule visualization (requires --mol).
-    /// Options: spherical (default), force, tree, spiral
-    #[arg(long, value_enum, default_value = "spherical")]
-    pub mol_layout: MolLayout,
-}
-
-/// Layout algorithm for malecule visualization.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, clap::ValueEnum)]
-pub enum MolLayout {
-    /// Concentric spherical shells by hierarchy depth (default)
-    #[default]
-    Spherical,
-    /// Spring-based force simulation
-    Force,
-    /// Radial tree from center
-    Tree,
-    /// Logarithmic spiral arrangement
-    Spiral,
 }
 
 impl Args {
@@ -274,42 +221,11 @@ impl Args {
         OutputFormat::Terminal
     }
 
-    /// Parse --error-if flag into a set of criticality levels
-    #[allow(dead_code)] // Used by binary target
-    #[must_use]
-    pub(crate) fn error_if_levels(&self) -> Option<Vec<crate::types::Criticality>> {
-        self.error_if.as_ref().map(|s| {
-            s.split(',')
-                .map(|level| parse_criticality_level(level.trim()))
-                .collect()
-        })
-    }
-
     /// Parse --platforms flag into a vector of Platform values
     #[allow(dead_code)] // Used by binary target
     #[must_use]
     pub(crate) fn platforms(&self) -> Vec<crate::composite_rules::Platform> {
         parse_platforms(&self.platforms)
-    }
-}
-
-/// Parse a criticality level string (case-insensitive)
-#[allow(dead_code)] // Used by binary target
-fn parse_criticality_level(s: &str) -> crate::types::Criticality {
-    match s.to_lowercase().as_str() {
-        "filtered" => crate::types::Criticality::Filtered,
-        "component" => crate::types::Criticality::Component,
-        "baseline" => crate::types::Criticality::Baseline,
-        "notable" => crate::types::Criticality::Notable,
-        "suspicious" => crate::types::Criticality::Suspicious,
-        "hostile" | "malicious" => crate::types::Criticality::Hostile,
-        _ => {
-            eprintln!(
-                "⚠️  Unknown criticality level '{}', treating as 'baseline'",
-                s
-            );
-            crate::types::Criticality::Baseline
-        }
     }
 }
 
@@ -520,55 +436,6 @@ pub(crate) enum Command {
         max_size: Option<u64>,
     },
 
-    /// Profile YARA rule performance per rule file against a target.
-    /// Compiles each .yar file individually, scans the target, and reports
-    /// timing sorted slowest-first so you can identify rules to disable.
-    #[command(name = "yara-profile")]
-    YaraProfile {
-        /// Target file to scan
-        #[arg(required = true)]
-        target: String,
-
-        /// Only show rule files taking longer than this many milliseconds
-        #[arg(short, long, default_value = "10")]
-        min_ms: u64,
-    },
-
-    /// Generate a map visualization of trait relationships
-    Map {
-        /// Directory depth level (2 = micro-behaviors/comm, 3 = micro-behaviors/communications/socket, etc.)
-        #[arg(short, long, default_value = "3")]
-        depth: usize,
-
-        /// Output file (default: stdout)
-        #[arg(short, long)]
-        output: Option<String>,
-
-        /// Minimum reference count to show edge (filters weak relationships)
-        #[arg(short, long, default_value = "1")]
-        min_refs: usize,
-
-        /// Show only these top-level namespaces (comma-separated: objectives,micro-behaviors,well-known,metadata)
-        #[arg(long)]
-        namespaces: Option<String>,
-
-        /// Build map from JSONL findings (file path or "-" for stdin)
-        #[arg(long, value_name = "PATH")]
-        from_findings: Option<String>,
-
-        /// Output format: dot (default), ascii
-        #[arg(short = 'f', long, default_value = "dot")]
-        format: MapFormat,
-
-        /// Minimum criticality to include (baseline, notable, suspicious, hostile)
-        #[arg(long, default_value = "baseline")]
-        min_crit: String,
-
-        /// Show low-value composite rules (any with needs<=1)
-        #[arg(long)]
-        show_low_value: bool,
-    },
-
     /// Update trait rules from the upstream repository
     #[command(name = "update-rules")]
     UpdateRules {
@@ -711,16 +578,6 @@ pub(crate) enum OutputFormat {
     Terminal,
     /// Compact one-line-per-finding text output for small LLMs
     Tiny,
-}
-
-/// Output format for map visualization
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, clap::ValueEnum)]
-pub enum MapFormat {
-    /// Graphviz DOT format
-    #[default]
-    Dot,
-    /// ASCII terminal art
-    Ascii,
 }
 
 #[cfg(test)]
@@ -913,28 +770,6 @@ mod tests {
     }
 
     #[test]
-    fn test_precision_threshold_defaults() {
-        let args = Args::try_parse_from(["cleave", "file.bin"]).unwrap();
-        assert_eq!(args.min_hostile_precision, 3.5);
-        assert_eq!(args.min_suspicious_precision, 2.0);
-    }
-
-    #[test]
-    fn test_precision_threshold_flags() {
-        let args = Args::try_parse_from([
-            "cleave",
-            "--min-hostile-precision",
-            "5.5",
-            "--min-suspicious-precision",
-            "2.7",
-            "file.bin",
-        ])
-        .unwrap();
-        assert_eq!(args.min_hostile_precision, 5.5);
-        assert_eq!(args.min_suspicious_precision, 2.7);
-    }
-
-    #[test]
     fn test_output_format_clone() {
         let format = OutputFormat::Jsonl;
         let cloned = format;
@@ -946,58 +781,6 @@ mod tests {
         let format = OutputFormat::Terminal;
         let debug_str = format!("{:?}", format);
         assert!(debug_str.contains("Terminal"));
-    }
-
-    #[test]
-    fn test_parse_zip_password_single() {
-        let args =
-            Args::try_parse_from(["cleave", "--zip-password", "secret", "analyze", "file.zip"])
-                .unwrap();
-        assert_eq!(args.zip_passwords, vec!["secret"]);
-        assert!(!args.no_zip_passwords);
-    }
-
-    #[test]
-    fn test_parse_zip_password_multiple() {
-        let args = Args::try_parse_from([
-            "cleave",
-            "--zip-password",
-            "pass1",
-            "--zip-password",
-            "pass2",
-            "--zip-password",
-            "pass3",
-            "analyze",
-            "file.zip",
-        ])
-        .unwrap();
-        assert_eq!(args.zip_passwords, vec!["pass1", "pass2", "pass3"]);
-    }
-
-    #[test]
-    fn test_parse_no_zip_passwords() {
-        let args =
-            Args::try_parse_from(["cleave", "--no-zip-passwords", "analyze", "file.zip"]).unwrap();
-        assert!(args.no_zip_passwords);
-        assert!(args.zip_passwords.is_empty());
-    }
-
-    #[test]
-    fn test_parse_zip_password_default_empty() {
-        let args = Args::try_parse_from(["cleave", "analyze", "file.zip"]).unwrap();
-        assert!(args.zip_passwords.is_empty());
-        assert!(!args.no_zip_passwords);
-    }
-
-    #[test]
-    fn test_default_zip_passwords_content() {
-        // Verify the default passwords are what we expect
-        assert!(DEFAULT_ZIP_PASSWORDS.contains(&"infected"));
-        assert!(DEFAULT_ZIP_PASSWORDS.contains(&"infect3d"));
-        assert!(DEFAULT_ZIP_PASSWORDS.contains(&"malware"));
-        assert!(DEFAULT_ZIP_PASSWORDS.contains(&"virus"));
-        assert!(DEFAULT_ZIP_PASSWORDS.contains(&"password"));
-        assert_eq!(DEFAULT_ZIP_PASSWORDS.len(), 5);
     }
 
     #[test]
@@ -1085,81 +868,6 @@ mod tests {
         assert!(!disabled.radare2);
         assert!(!disabled.upx);
         assert!(!disabled.third_party);
-    }
-
-    #[test]
-    fn test_error_if_single_level() {
-        let args =
-            Args::try_parse_from(["cleave", "--error-if", "suspicious", "file.bin"]).unwrap();
-        let levels = args.error_if_levels().unwrap();
-        assert_eq!(levels.len(), 1);
-        assert_eq!(levels[0], crate::types::Criticality::Suspicious);
-    }
-
-    #[test]
-    fn test_error_if_multiple_levels() {
-        let args = Args::try_parse_from(["cleave", "--error-if", "suspicious,hostile", "file.bin"])
-            .unwrap();
-        let levels = args.error_if_levels().unwrap();
-        assert_eq!(levels.len(), 2);
-        assert!(levels.contains(&crate::types::Criticality::Suspicious));
-        assert!(levels.contains(&crate::types::Criticality::Hostile));
-    }
-
-    #[test]
-    fn test_error_if_all_levels() {
-        let args = Args::try_parse_from([
-            "cleave",
-            "--error-if",
-            "filtered,baseline,notable,suspicious,hostile",
-            "file.bin",
-        ])
-        .unwrap();
-        let levels = args.error_if_levels().unwrap();
-        assert_eq!(levels.len(), 5);
-        assert!(levels.contains(&crate::types::Criticality::Filtered));
-        assert!(levels.contains(&crate::types::Criticality::Baseline));
-        assert!(levels.contains(&crate::types::Criticality::Notable));
-        assert!(levels.contains(&crate::types::Criticality::Suspicious));
-        assert!(levels.contains(&crate::types::Criticality::Hostile));
-    }
-
-    #[test]
-    fn test_error_if_with_spaces() {
-        let args = Args::try_parse_from([
-            "cleave",
-            "--error-if",
-            "suspicious, hostile , notable",
-            "file.bin",
-        ])
-        .unwrap();
-        let levels = args.error_if_levels().unwrap();
-        assert_eq!(levels.len(), 3);
-        assert!(levels.contains(&crate::types::Criticality::Suspicious));
-        assert!(levels.contains(&crate::types::Criticality::Hostile));
-        assert!(levels.contains(&crate::types::Criticality::Notable));
-    }
-
-    #[test]
-    fn test_error_if_none() {
-        let args = Args::try_parse_from(["cleave", "file.bin"]).unwrap();
-        assert!(args.error_if_levels().is_none());
-    }
-
-    #[test]
-    fn test_error_if_case_insensitive() {
-        let args = Args::try_parse_from([
-            "cleave",
-            "--error-if",
-            "SUSPICIOUS,Hostile,NoTabLe",
-            "file.bin",
-        ])
-        .unwrap();
-        let levels = args.error_if_levels().unwrap();
-        assert_eq!(levels.len(), 3);
-        assert!(levels.contains(&crate::types::Criticality::Suspicious));
-        assert!(levels.contains(&crate::types::Criticality::Hostile));
-        assert!(levels.contains(&crate::types::Criticality::Notable));
     }
 
     // Platform parsing tests

@@ -1038,17 +1038,26 @@ pub(crate) fn find_excessive_file_types(
         (data, "data"),
     ];
 
-    // Returns true if `types` can be expressed using named groups.
-    // Accepts both complete groups (e.g., all 8 binaries) and platform-filtered
-    // subsets (e.g., only macho/dylib from binaries when platforms: [macos]).
-    // The key check: every type must belong to at least one named group.
-    // This allows `for: [scripts, binaries]` with `platforms: [macos]` to pass
-    // even after PE/DLL/ELF/SO are filtered out.
+    // Returns true if `types` is an exact union of complete named groups.
+    // Each group must be either fully included or fully excluded — partial
+    // groups are not expressible and should be flagged.
     let is_group_expressible = |types: &[FileType]| -> bool {
         let type_set: std::collections::HashSet<_> = types.iter().collect();
-        type_set
+        // Every type must belong to some group
+        if !type_set
             .iter()
             .all(|ft| all_groups.iter().any(|(group, _)| group.contains(ft)))
+        {
+            return false;
+        }
+        // Each touched group must be completely included (no partial groups)
+        for (group, _) in all_groups {
+            let overlap = group.iter().filter(|ft| type_set.contains(ft)).count();
+            if overlap > 0 && overlap != group.len() {
+                return false;
+            }
+        }
+        true
     };
 
     // Only called when is_group_expressible returned false, so types contain at least one

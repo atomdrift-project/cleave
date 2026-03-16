@@ -24,7 +24,6 @@ mod entropy;
 pub mod extractors;
 pub mod file_io;
 pub mod ip_validator;
-pub mod map;
 pub mod memory_tracker;
 mod radare2;
 mod shared_resources;

@@ -601,7 +601,7 @@ impl PackageJsonAnalyzer {
                 // Extract the hidden file path, excluding standard paths like node_modules/.bin/
                 let hidden_files: Vec<&str> = script
                     .split_whitespace()
-                    .filter(|s| s.contains("/.") && !s.contains("node_modules/.bin/"))
+                    .filter(|s| s.contains("/.") && !s.contains("node_modules/.bin/") && !s.contains("../"))
                     .collect();
                 if !hidden_files.is_empty() {
                     report.add_finding(

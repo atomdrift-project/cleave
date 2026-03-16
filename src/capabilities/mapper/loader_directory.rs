@@ -28,15 +28,15 @@ use crate::capabilities::validation::{
     find_needs_zero, find_non_capturing_groups, find_none_only_with_proximity,
     find_orphaned_components, find_overlapping_conditions, find_oversized_trait_directories,
     find_parent_duplicate_segments, find_platform_named_directories, find_pure_alias_traits,
-    find_redundant_any_refs, find_redundant_explicit_defaults, find_redundant_needs_one,
-    find_raw_should_use_string_value, find_short_pattern_warnings, find_should_use_defaults,
+    find_raw_should_use_string_value, find_redundant_any_refs, find_redundant_explicit_defaults,
+    find_redundant_needs_one, find_short_pattern_warnings, find_should_use_defaults,
     find_single_item_clauses, find_slow_regex_patterns, find_string_content_collisions,
-    find_string_pattern_duplicates, find_string_value_should_use_raw,
-    find_too_short_patterns, find_unanchored_wellknown_composites,
-    find_wellknown_category_violations, find_wellknown_missing_section_filter,
-    find_wellknown_missing_size_filter, find_wellknown_unscoped_filetypes,
-    find_wellknown_unscoped_platforms, precalculate_all_composite_precisions,
-    simple_rule_to_composite_rule, validate_composite_trait_only, validate_directory_structure,
+    find_string_pattern_duplicates, find_string_value_should_use_raw, find_too_short_patterns,
+    find_unanchored_wellknown_composites, find_wellknown_category_violations,
+    find_wellknown_missing_section_filter, find_wellknown_missing_size_filter,
+    find_wellknown_unscoped_filetypes, find_wellknown_unscoped_platforms,
+    precalculate_all_composite_precisions, simple_rule_to_composite_rule,
+    validate_composite_trait_only, validate_directory_structure,
     validate_hostile_composite_precision, MAX_TRAITS_PER_DIRECTORY,
 };
 use crate::composite_rules::{
@@ -946,9 +946,7 @@ impl super::CapabilityMapper {
 
             // Detect string_value patterns on source types that should use raw
             let step_start = std::time::Instant::now();
-            tracing::debug!(
-                "Step 1h4/15: Detecting string_value patterns that should use raw"
-            );
+            tracing::debug!("Step 1h4/15: Detecting string_value patterns that should use raw");
             find_string_value_should_use_raw(&trait_definitions, &mut warnings);
             tracing::debug!("Step 1h4 completed in {:?}", step_start.elapsed());
 

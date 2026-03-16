@@ -326,6 +326,7 @@ pub fn clear_thread_local_caches() {
         cache.borrow_mut().clear();
     });
     crate::yara_engine::clear_engine_scanner_cache();
+    ast::clear_ast_query_cache();
 }
 
 /// Check if a symbol matches a pattern (supports exact match or regex).

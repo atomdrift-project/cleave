@@ -6,12 +6,12 @@ use serde::{Deserialize, Serialize};
 use super::binary_metrics::{BinaryMetrics, ElfMetrics, JavaClassMetrics, MachoMetrics, PeMetrics};
 use super::container_metrics::{ArchiveMetrics, PackageJsonMetrics};
 use super::is_zero_f32;
+use super::jpeg_metrics::JpegMetrics;
 use super::language_metrics::{
     CMetrics, CSharpMetrics, GoMetrics, JavaScriptMetrics, JavaSourceMetrics, LuaMetrics,
     PerlMetrics, PhpMetrics, PowerShellMetrics, PythonMetrics, RubyMetrics, RustMetrics,
     ShellMetrics,
 };
-use super::jpeg_metrics::JpegMetrics;
 use super::png_metrics::PngMetrics;
 use super::text_metrics::{
     CommentMetrics, FunctionMetrics, IdentifierMetrics, ImportMetrics, StatementMetrics,

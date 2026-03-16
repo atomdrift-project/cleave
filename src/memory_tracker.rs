@@ -409,14 +409,8 @@ pub fn configure_jemalloc_low_memory() {
         // as typed helpers, so use the raw mallctl interface.
         // SAFETY: ssize_t (isize) is the correct type for these settings per jemalloc docs.
         unsafe {
-            let dirty = tikv_jemalloc_ctl::raw::write(
-                b"arenas.dirty_decay_ms\0",
-                0_isize,
-            );
-            let muzzy = tikv_jemalloc_ctl::raw::write(
-                b"arenas.muzzy_decay_ms\0",
-                0_isize,
-            );
+            let dirty = tikv_jemalloc_ctl::raw::write(b"arenas.dirty_decay_ms\0", 0_isize);
+            let muzzy = tikv_jemalloc_ctl::raw::write(b"arenas.muzzy_decay_ms\0", 0_isize);
             match (dirty, muzzy) {
                 (Ok(()), Ok(())) => {
                     info!("jemalloc: aggressive page return enabled (dirty_decay_ms=0, muzzy_decay_ms=0)");

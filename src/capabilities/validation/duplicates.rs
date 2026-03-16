@@ -2086,7 +2086,8 @@ pub(crate) fn validate_regex_overlap_with_literal(
 
     for t in trait_definitions {
         match &t.r#if {
-            Condition::StringValue { exact: Some(s), .. } | Condition::Symbol { exact: Some(s), .. } => {
+            Condition::StringValue { exact: Some(s), .. }
+            | Condition::Symbol { exact: Some(s), .. } => {
                 literal_patterns.push((
                     s.clone(),
                     "exact".to_string(),
@@ -2116,9 +2117,8 @@ pub(crate) fn validate_regex_overlap_with_literal(
     // Check regex patterns against literal patterns
     for t in trait_definitions {
         let regex_pattern = match &t.r#if {
-            Condition::StringValue { regex: Some(r), .. } | Condition::Symbol { regex: Some(r), .. } => {
-                Some(r)
-            }
+            Condition::StringValue { regex: Some(r), .. }
+            | Condition::Symbol { regex: Some(r), .. } => Some(r),
             _ => None,
         };
 
@@ -2431,9 +2431,8 @@ pub(crate) fn find_alternation_merge_candidates(
 
     for t in trait_definitions {
         let regex_pattern = match &t.r#if {
-            Condition::StringValue { regex: Some(r), .. } | Condition::Raw { regex: Some(r), .. } => {
-                Some(r.clone())
-            }
+            Condition::StringValue { regex: Some(r), .. }
+            | Condition::Raw { regex: Some(r), .. } => Some(r.clone()),
             _ => None,
         };
 

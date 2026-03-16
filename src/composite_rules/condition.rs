@@ -1909,9 +1909,8 @@ impl Condition {
     #[must_use]
     pub(crate) fn check_word_boundary_regex(&self) -> Option<String> {
         let regex_to_check = match self {
-            Condition::StringValue { regex: Some(r), .. } | Condition::Raw { regex: Some(r), .. } => {
-                Some(r.as_str())
-            }
+            Condition::StringValue { regex: Some(r), .. }
+            | Condition::Raw { regex: Some(r), .. } => Some(r.as_str()),
             _ => None,
         };
 
@@ -2869,8 +2868,14 @@ mod location_constraint_tests {
     #[test]
     fn test_validate_location_open_ended_range() {
         // Open-ended range (start, None) is allowed
-        let result =
-            validate_location_constraints(&None, None, Some((0x1000, None)), None, None, "string_value");
+        let result = validate_location_constraints(
+            &None,
+            None,
+            Some((0x1000, None)),
+            None,
+            None,
+            "string_value",
+        );
         assert!(result.is_ok());
     }
 

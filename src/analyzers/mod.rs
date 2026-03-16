@@ -82,6 +82,7 @@ use std::sync::Arc;
 /// All analysis code paths MUST use this to ensure consistent string extraction.
 /// In particular, XOR scanning must always be enabled so that decoded strings
 /// are available for trait matching (string_value conditions).
+#[must_use]
 pub fn stng_analysis_opts(min_length: usize) -> stng::ExtractOptions {
     stng::ExtractOptions::new(min_length)
         .with_garbage_filter(true)

@@ -242,7 +242,7 @@ impl Default for AnalysisOptions {
             sample_extraction: None,
             slow_rule_ms: capabilities::CapabilityMapper::DEFAULT_SLOW_RULE_MS,
             max_scan_file_size: 600 * 1024 * 1024, // 600 MB default
-            scan_threads: 0, // 0 = auto (min(8, num_cpus) for CLI)
+            scan_threads: 0,                       // 0 = auto (min(8, num_cpus) for CLI)
         }
     }
 }
@@ -1095,10 +1095,15 @@ where
                 rayon::current_num_threads().min(8)
             }
         });
+    #[allow(clippy::expect_used)]
     let scan_pool = rayon::ThreadPoolBuilder::new()
         .num_threads(scan_threads)
         .build()
-        .unwrap_or_else(|_| rayon::ThreadPoolBuilder::new().build().unwrap());
+        .unwrap_or_else(|_| {
+            rayon::ThreadPoolBuilder::new()
+                .build()
+                .expect("failed to build fallback rayon thread pool")
+        });
     tracing::info!(scan_threads, "Directory scan thread pool created");
 
     scan_pool.install(|| files.par_iter().for_each(|file_path| {

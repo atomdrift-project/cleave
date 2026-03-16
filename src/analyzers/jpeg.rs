@@ -57,10 +57,7 @@ impl JpegAnalyzer {
         };
 
         let mut report = AnalysisReport::new(target);
-        report
-            .metadata
-            .tools_used
-            .push("jpeg-analyzer".to_string());
+        report.metadata.tools_used.push("jpeg-analyzer".to_string());
 
         if let Some(jpeg_metrics) = analyze_jpeg_data(data) {
             report.metrics = Some(Metrics {
@@ -287,10 +284,10 @@ mod tests {
         0x00, 0x00, // thumbnail size
         0xFF, 0xDB, 0x00, 0x43, 0x00, // DQT marker, length=67
         // quantization table (64 bytes, quality 50)
-        16, 11, 10, 16, 24, 40, 51, 61, 12, 12, 14, 19, 26, 58, 60, 55, 14, 13, 16, 24, 40, 57,
-        69, 56, 14, 17, 22, 29, 51, 87, 80, 62, 18, 22, 37, 56, 68, 109, 103, 77, 24, 35, 55, 64,
-        81, 104, 113, 92, 49, 64, 78, 87, 103, 121, 120, 101, 72, 92, 95, 98, 112, 100, 103, 99,
-        0xFF, 0xD9, // EOI
+        16, 11, 10, 16, 24, 40, 51, 61, 12, 12, 14, 19, 26, 58, 60, 55, 14, 13, 16, 24, 40, 57, 69,
+        56, 14, 17, 22, 29, 51, 87, 80, 62, 18, 22, 37, 56, 68, 109, 103, 77, 24, 35, 55, 64, 81,
+        104, 113, 92, 49, 64, 78, 87, 103, 121, 120, 101, 72, 92, 95, 98, 112, 100, 103, 99, 0xFF,
+        0xD9, // EOI
     ];
 
     #[test]

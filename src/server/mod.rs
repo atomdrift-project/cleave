@@ -88,8 +88,12 @@ pub struct AppState {
     pub extract_dir: Option<std::path::PathBuf>,
     /// Request ID counter.
     pub next_request_id: AtomicU64,
-    /// Number of active analysis tasks.
+    /// Number of active analysis tasks (including orphaned timed-out tasks).
     pub active_tasks: AtomicUsize,
+    /// Hard cap on concurrent analysis tasks. Requests are rejected with 503
+    /// when active_tasks >= this value, preventing orphaned blocking tasks
+    /// from piling up and consuming unbounded memory.
+    pub max_concurrent_tasks: usize,
     /// When the server first entered the memory-overloaded state.
     /// Reset to None when memory drops below the threshold.
     pub overloaded_since: parking_lot::Mutex<Option<Instant>>,
@@ -138,6 +142,12 @@ pub async fn run(config: ServerConfig) -> anyhow::Result<()> {
         eprintln!("Extract directory: {:?}", dir);
     }
 
+    let max_concurrent = std::thread::available_parallelism()
+        .map(std::num::NonZero::get)
+        .unwrap_or(4)
+        * 2;
+    eprintln!("Max concurrent analyses: {}", max_concurrent);
+
     let state = Arc::new(AppState {
         rate_limiter: RateLimiter::new(config.qps),
         timeout_secs: config.timeout_secs,
@@ -147,6 +157,7 @@ pub async fn run(config: ServerConfig) -> anyhow::Result<()> {
         extract_dir,
         next_request_id: AtomicU64::new(1),
         active_tasks: AtomicUsize::new(0),
+        max_concurrent_tasks: max_concurrent,
         overloaded_since: parking_lot::Mutex::new(None),
         in_flight: dashmap::DashMap::new(),
     });
@@ -169,12 +180,6 @@ pub async fn run(config: ServerConfig) -> anyhow::Result<()> {
             cleanup_state.rate_limiter.cleanup(300); // 5 minute expiry
         }
     });
-
-    let max_concurrent = std::thread::available_parallelism()
-        .map(std::num::NonZero::get)
-        .unwrap_or(4)
-        * 2;
-    eprintln!("Max concurrent analyses: {}", max_concurrent);
 
     // Analysis routes with concurrency limit to prevent thread pool starvation.
     let analysis_routes = Router::new()

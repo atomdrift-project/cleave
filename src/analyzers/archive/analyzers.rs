@@ -28,11 +28,11 @@ use crate::analyzers::{detect_file_type, Analyzer};
 use crate::types::*;
 use anyhow::Result;
 use rayon::prelude::*;
-use tracing::{debug, trace};
 use std::collections::HashSet;
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
+use tracing::{debug, trace};
 
 // Archive analysis now runs on the global rayon pool instead of a separate pool.
 // This halves the number of YARA scanner cache instances (each ~50-100MB per wasmtime VM)

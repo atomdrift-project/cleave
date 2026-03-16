@@ -128,11 +128,10 @@ impl OfficeAnalyzer {
             let virtual_path_str = format!("{doc_name}!!vba/{}.vbs", module.name);
             let virtual_path = Path::new(&virtual_path_str);
 
-            let strings =
-                stng::extract_strings_with_options(
-                    vba_bytes,
-                    &crate::analyzers::stng_analysis_opts(4),
-                );
+            let strings = stng::extract_strings_with_options(
+                vba_bytes,
+                &crate::analyzers::stng_analysis_opts(4),
+            );
             let input =
                 AnalysisInput::with_strings(virtual_path, vba_bytes, &strings, FileType::Vbs);
 
@@ -145,11 +144,9 @@ impl OfficeAnalyzer {
                     for mut finding in sub_findings {
                         for evidence in &mut finding.evidence {
                             if let Some(ref loc) = evidence.location {
-                                evidence.location =
-                                    Some(format!("vba:{}/{}", module.name, loc));
+                                evidence.location = Some(format!("vba:{}/{}", module.name, loc));
                             } else {
-                                evidence.location =
-                                    Some(format!("vba:{}", module.name));
+                                evidence.location = Some(format!("vba:{}", module.name));
                             }
                         }
                         report.findings.push(finding);
@@ -195,8 +192,7 @@ impl OfficeAnalyzer {
         // VBA presence — metadata finding
         if doc.has_vba {
             let module_count = doc.vba_modules.len();
-            let module_names: Vec<&str> =
-                doc.vba_modules.iter().map(|m| m.name.as_str()).collect();
+            let module_names: Vec<&str> = doc.vba_modules.iter().map(|m| m.name.as_str()).collect();
 
             findings.push(Finding {
                 id: "metadata/format/macro::ole2-has-vba".to_string(),
@@ -329,8 +325,7 @@ impl OfficeAnalyzer {
         // VBA presence — metadata finding
         if doc.has_vba {
             let module_count = doc.vba_modules.len();
-            let module_names: Vec<&str> =
-                doc.vba_modules.iter().map(|m| m.name.as_str()).collect();
+            let module_names: Vec<&str> = doc.vba_modules.iter().map(|m| m.name.as_str()).collect();
 
             findings.push(Finding {
                 id: "metadata/format/macro::ooxml-has-vba".to_string(),

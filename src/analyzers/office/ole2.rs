@@ -254,9 +254,8 @@ fn find_ole10_native(
             if stream.read_exact(&mut header).is_ok() {
                 // OLE10Native format: u32 total_size, u16 version (==2)
                 if header.len() >= 6 {
-                    let total_size = u32::from_le_bytes([
-                        header[0], header[1], header[2], header[3],
-                    ]);
+                    let total_size =
+                        u32::from_le_bytes([header[0], header[1], header[2], header[3]]);
                     let version = u16::from_le_bytes([header[4], header[5]]);
 
                     let embedded_filename = if version == 2 && header.len() > 6 {
@@ -286,7 +285,11 @@ fn read_null_terminated(data: &[u8]) -> Option<String> {
         return None;
     }
     let s = String::from_utf8_lossy(&data[..end]).to_string();
-    if s.is_empty() { None } else { Some(s) }
+    if s.is_empty() {
+        None
+    } else {
+        Some(s)
+    }
 }
 
 /// Known dangerous CLSIDs that indicate specific exploit vectors or suspicious objects.

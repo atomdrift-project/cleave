@@ -4099,7 +4099,10 @@ mod raw_should_use_string_value_tests {
 
     #[test]
     fn flags_long_substr_on_binary() {
-        let traits = vec![binary_trait("t/long-substr", raw_substr("MobileDeviceUpdater"))];
+        let traits = vec![binary_trait(
+            "t/long-substr",
+            raw_substr("MobileDeviceUpdater"),
+        )];
         let mut warnings = Vec::new();
         find_raw_should_use_string_value(&traits, &mut warnings);
         assert_eq!(warnings.len(), 1);
@@ -4117,10 +4120,7 @@ mod raw_should_use_string_value_tests {
 
     #[test]
     fn flags_literal_regex_on_binary() {
-        let traits = vec![binary_trait(
-            "t/literal-regex",
-            raw_regex("scrobj\\.dll"),
-        )];
+        let traits = vec![binary_trait("t/literal-regex", raw_regex("scrobj\\.dll"))];
         let mut warnings = Vec::new();
         find_raw_should_use_string_value(&traits, &mut warnings);
         assert_eq!(warnings.len(), 1);
@@ -4129,10 +4129,7 @@ mod raw_should_use_string_value_tests {
 
     #[test]
     fn skips_regex_with_metacharacters() {
-        let traits = vec![binary_trait(
-            "t/real-regex",
-            raw_regex("^GIF8[79]a"),
-        )];
+        let traits = vec![binary_trait("t/real-regex", raw_regex("^GIF8[79]a"))];
         let mut warnings = Vec::new();
         find_raw_should_use_string_value(&traits, &mut warnings);
         assert!(warnings.is_empty());
@@ -4140,10 +4137,7 @@ mod raw_should_use_string_value_tests {
 
     #[test]
     fn skips_regex_with_alternation() {
-        let traits = vec![binary_trait(
-            "t/alternation",
-            raw_regex("pytest|def test_"),
-        )];
+        let traits = vec![binary_trait("t/alternation", raw_regex("pytest|def test_"))];
         let mut warnings = Vec::new();
         find_raw_should_use_string_value(&traits, &mut warnings);
         assert!(warnings.is_empty());
@@ -4169,21 +4163,24 @@ mod raw_should_use_string_value_tests {
 
     #[test]
     fn skips_with_offset_constraint() {
-        let t = binary_trait("t/offset", Condition::Raw {
-            exact: None,
-            substr: Some("long_pattern_here".to_string()),
-            regex: None,
-            word: None,
-            case_insensitive: false,
-            external_ip: false,
-            not: None,
-            section: None,
-            offset: Some(0),
-            offset_range: None,
-            section_offset: None,
-            section_offset_range: None,
-            compiled_regex: None,
-        });
+        let t = binary_trait(
+            "t/offset",
+            Condition::Raw {
+                exact: None,
+                substr: Some("long_pattern_here".to_string()),
+                regex: None,
+                word: None,
+                case_insensitive: false,
+                external_ip: false,
+                not: None,
+                section: None,
+                offset: Some(0),
+                offset_range: None,
+                section_offset: None,
+                section_offset_range: None,
+                compiled_regex: None,
+            },
+        );
         let mut warnings = Vec::new();
         find_raw_should_use_string_value(&[t], &mut warnings);
         assert!(warnings.is_empty());
@@ -4191,21 +4188,24 @@ mod raw_should_use_string_value_tests {
 
     #[test]
     fn skips_with_section_constraint() {
-        let t = binary_trait("t/section", Condition::Raw {
-            exact: None,
-            substr: Some("long_pattern_here".to_string()),
-            regex: None,
-            word: None,
-            case_insensitive: false,
-            external_ip: false,
-            not: None,
-            section: Some(".text".to_string()),
-            offset: None,
-            offset_range: None,
-            section_offset: None,
-            section_offset_range: None,
-            compiled_regex: None,
-        });
+        let t = binary_trait(
+            "t/section",
+            Condition::Raw {
+                exact: None,
+                substr: Some("long_pattern_here".to_string()),
+                regex: None,
+                word: None,
+                case_insensitive: false,
+                external_ip: false,
+                not: None,
+                section: Some(".text".to_string()),
+                offset: None,
+                offset_range: None,
+                section_offset: None,
+                section_offset_range: None,
+                compiled_regex: None,
+            },
+        );
         let mut warnings = Vec::new();
         find_raw_should_use_string_value(&[t], &mut warnings);
         assert!(warnings.is_empty());
@@ -4222,22 +4222,25 @@ mod raw_should_use_string_value_tests {
 
     #[test]
     fn skips_string_value_condition() {
-        let t = binary_trait("t/string", Condition::StringValue {
-            exact: None,
-            substr: Some("long_pattern_here".to_string()),
-            regex: None,
-            word: None,
-            case_insensitive: false,
-            external_ip: false,
-            not: None,
-            platforms: None,
-            section: None,
-            offset: None,
-            offset_range: None,
-            section_offset: None,
-            section_offset_range: None,
-            compiled_regex: None,
-        });
+        let t = binary_trait(
+            "t/string",
+            Condition::StringValue {
+                exact: None,
+                substr: Some("long_pattern_here".to_string()),
+                regex: None,
+                word: None,
+                case_insensitive: false,
+                external_ip: false,
+                not: None,
+                platforms: None,
+                section: None,
+                offset: None,
+                offset_range: None,
+                section_offset: None,
+                section_offset_range: None,
+                compiled_regex: None,
+            },
+        );
         let mut warnings = Vec::new();
         find_raw_should_use_string_value(&[t], &mut warnings);
         assert!(warnings.is_empty());

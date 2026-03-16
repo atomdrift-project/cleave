@@ -160,11 +160,7 @@ fn current_rss_impl() -> Option<u64> {
 
 // ── FreeBSD / OpenBSD / NetBSD ──────────────────────────────────────────
 
-#[cfg(any(
-    target_os = "freebsd",
-    target_os = "openbsd",
-    target_os = "netbsd"
-))]
+#[cfg(any(target_os = "freebsd", target_os = "openbsd", target_os = "netbsd"))]
 fn total_memory_impl() -> Option<u64> {
     // All three BSDs support sysctl hw.physmem via the C API.
     // FreeBSD/NetBSD return a u64, OpenBSD returns a long (i64 on 64-bit).
@@ -217,11 +213,7 @@ fn total_memory_impl() -> Option<u64> {
     None
 }
 
-#[cfg(any(
-    target_os = "freebsd",
-    target_os = "openbsd",
-    target_os = "netbsd"
-))]
+#[cfg(any(target_os = "freebsd", target_os = "openbsd", target_os = "netbsd"))]
 fn current_rss_impl() -> Option<u64> {
     // getrusage(RUSAGE_SELF) is available on all BSDs.
     // ru_maxrss is in kilobytes on FreeBSD/OpenBSD/NetBSD.
@@ -308,23 +300,14 @@ fn current_rss_impl() -> Option<u64> {
 
     extern "system" {
         fn GetCurrentProcess() -> isize;
-        fn K32GetProcessMemoryInfo(
-            process: isize,
-            pmc: *mut ProcessMemoryCounters,
-            cb: u32,
-        ) -> i32;
+        fn K32GetProcessMemoryInfo(process: isize, pmc: *mut ProcessMemoryCounters, cb: u32)
+            -> i32;
     }
 
     // SAFETY: K32GetProcessMemoryInfo fills the struct for the current process.
     let mut pmc: ProcessMemoryCounters = unsafe { std::mem::zeroed() };
     pmc.cb = std::mem::size_of::<ProcessMemoryCounters>() as u32;
-    let ret = unsafe {
-        K32GetProcessMemoryInfo(
-            GetCurrentProcess(),
-            &raw mut pmc,
-            pmc.cb,
-        )
-    };
+    let ret = unsafe { K32GetProcessMemoryInfo(GetCurrentProcess(), &raw mut pmc, pmc.cb) };
     if ret != 0 {
         Some(pmc.working_set_size as u64)
     } else {

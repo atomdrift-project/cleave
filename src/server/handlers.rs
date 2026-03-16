@@ -233,6 +233,25 @@ async fn analyze_inner(
 
     info!(size = file_size, filename = %filename, "Starting analysis");
 
+    // Hard gate: reject if too many analysis tasks are running (including orphans).
+    // This prevents timed-out-but-still-running blocking tasks from piling up
+    // and consuming unbounded memory over long server lifetimes.
+    let active = state
+        .active_tasks
+        .load(std::sync::atomic::Ordering::Relaxed);
+    if active >= state.max_concurrent_tasks {
+        warn!(
+            active_tasks = active,
+            max = state.max_concurrent_tasks,
+            "Rejecting request: too many active analysis tasks (including orphans)"
+        );
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(serde_json::json!({"error": "Server overloaded (too many active analyses)"})),
+        )
+            .into_response();
+    }
+
     let timeout_duration = Duration::from_secs(state.timeout_secs);
     state
         .active_tasks
@@ -266,8 +285,8 @@ async fn analyze_inner(
     };
 
     // On success/error, the blocking task is done — decrement and clean up.
-    // On timeout, the task is still running — spawn a watcher to decrement
-    // and drop the temp file when it eventually completes.
+    // On timeout, the task is still running — spawn a watcher that gives
+    // the task a bounded grace period before abandoning it.
     if result.is_some() {
         state
             .active_tasks
@@ -284,8 +303,22 @@ async fn analyze_inner(
             "Analysis timed out but blocking task still running"
         );
         let orphan_state = Arc::clone(&state);
+        let orphan_timeout = Duration::from_secs(state.timeout_secs * 2);
         tokio::spawn(async move {
-            let _ = handle.await;
+            match tokio::time::timeout(orphan_timeout, handle).await {
+                Ok(_) => {
+                    // Task completed within grace period
+                }
+                Err(_) => {
+                    // Task still running after 2× timeout — abandon it.
+                    // The blocking thread will eventually finish and its
+                    // result will be dropped, but we stop tracking it.
+                    tracing::error!(
+                        request_id,
+                        "Orphaned analysis task exceeded grace period, abandoning"
+                    );
+                }
+            }
             orphan_state
                 .active_tasks
                 .fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
@@ -571,6 +604,23 @@ async fn analyze_path_inner(
 
     info!(path = %path_str, "Starting analysis");
 
+    // Hard gate: reject if too many analysis tasks are running (including orphans).
+    let active = state
+        .active_tasks
+        .load(std::sync::atomic::Ordering::Relaxed);
+    if active >= state.max_concurrent_tasks {
+        warn!(
+            active_tasks = active,
+            max = state.max_concurrent_tasks,
+            "Rejecting request: too many active analysis tasks (including orphans)"
+        );
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(serde_json::json!({"error": "Server overloaded (too many active analyses)"})),
+        )
+            .into_response();
+    }
+
     let timeout_duration = Duration::from_secs(state.timeout_secs);
     let path_owned = path.to_owned();
     let task_span = Span::current();
@@ -610,8 +660,8 @@ async fn analyze_path_inner(
         _ = tokio::time::sleep(timeout_duration) => None,
     };
 
-    // Decrement active tasks on completion; on timeout, spawn a watcher to do it
-    // when the blocking task eventually finishes (spawn_blocking cannot be cancelled).
+    // Decrement active tasks on completion; on timeout, spawn a watcher
+    // that gives the task a bounded grace period before abandoning it.
     if result.is_some() {
         state
             .active_tasks
@@ -627,8 +677,17 @@ async fn analyze_path_inner(
             "Analysis timed out but blocking task still running"
         );
         let orphan_state = Arc::clone(&state);
+        let orphan_timeout = Duration::from_secs(state.timeout_secs * 2);
         tokio::spawn(async move {
-            let _ = handle.await;
+            match tokio::time::timeout(orphan_timeout, handle).await {
+                Ok(_) => {}
+                Err(_) => {
+                    tracing::error!(
+                        request_id,
+                        "Orphaned analysis task exceeded grace period, abandoning"
+                    );
+                }
+            }
             orphan_state
                 .active_tasks
                 .fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
@@ -767,7 +826,7 @@ pub(super) async fn memory_stats(State(state): State<Arc<AppState>>) -> Json<ser
             "regex_v2_entries": regex_v2_entries,
             "regex_v2_max": regex_v2_max,
             // YARA scanner caches are thread-local; cap is per-thread
-            "yara_scanner_max_per_thread": 32,
+            "yara_scanner_max_per_thread": 4,
         },
         "capability_mapper": mapper_stats.map(|(traits, composites)| serde_json::json!({
             "traits": traits,

@@ -473,10 +473,7 @@ pub(crate) fn find_string_value_should_use_raw(
 
     for trait_def in traits {
         // Only applies to traits targeting source/script file types
-        let targets_source = trait_def
-            .r#for
-            .iter()
-            .any(|ft| is_ast_source_type(*ft));
+        let targets_source = trait_def.r#for.iter().any(|ft| is_ast_source_type(*ft));
 
         if !targets_source {
             continue;
@@ -492,18 +489,14 @@ pub(crate) fn find_string_value_should_use_raw(
                     continue;
                 }
             }
-            Condition::StringValue {
-                exact: Some(s), ..
-            } => {
+            Condition::StringValue { exact: Some(s), .. } => {
                 if func_call_re.is_match(s) || import_re.is_match(s) {
                     (s.as_str(), "exact")
                 } else {
                     continue;
                 }
             }
-            Condition::StringValue {
-                regex: Some(s), ..
-            } => {
+            Condition::StringValue { regex: Some(s), .. } => {
                 if regex_code_re.is_match(s) {
                     (s.as_str(), "regex")
                 } else {
@@ -602,7 +595,8 @@ pub(crate) fn find_raw_should_use_string_value(
         }
 
         let suggestion = if let Some(pattern) = regex {
-            if regex_is_effectively_literal(pattern) && pattern.len() >= RAW_TO_STRING_MIN_SUBSTR_LEN
+            if regex_is_effectively_literal(pattern)
+                && pattern.len() >= RAW_TO_STRING_MIN_SUBSTR_LEN
             {
                 Some((pattern, "regex (literal)"))
             } else {

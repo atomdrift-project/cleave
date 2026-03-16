@@ -125,66 +125,71 @@ fn get_parent_pid() -> u32 {
     }
 }
 
-/// Determine if CLEAVE_FILE_LOGGING is set and create a log file path.
+/// Determine the file log level from environment variables.
 ///
-/// When CLEAVE_FILE_LOGGING is set to any non-empty value (e.g., "1", "true", "debug"),
-/// this function creates a log file in the OS-appropriate cache directory:
-/// - macOS: ~/Library/Caches/cleave/logs/
-/// - Linux: ~/.cache/cleave/logs/
-/// - Windows: %LOCALAPPDATA%\cleave\logs\
+/// Returns the level name (e.g. "warn", "debug") used for both the EnvFilter
+/// and the log filename: `cleave.<pid>.<level>.log`.
 ///
-/// The log filename includes the PID and timestamp for easy correlation:
-/// `cleave-{pid}-{timestamp}.log`
-///
-/// This is particularly useful for:
-/// - Debugging subprocesses launched by trait-basher
-/// - Debugging cleave instances launched via LLMs
-/// - Post-mortem analysis of OOM or crash scenarios
-fn determine_env_log_file() -> Option<String> {
-    let env_value = std::env::var("CLEAVE_FILE_LOGGING").ok()?;
-
-    // Only proceed if the env var is set to a non-empty value
-    if env_value.is_empty() || env_value == "0" || env_value.eq_ignore_ascii_case("false") {
-        return None;
+/// Priority: `CLEAVE_LOG_LEVEL` env var > default ("warn").
+fn file_log_level() -> &'static str {
+    if let Ok(level) = std::env::var("CLEAVE_LOG_LEVEL") {
+        match level.to_lowercase().as_str() {
+            "trace" => return "trace",
+            "debug" => return "debug",
+            "info" => return "info",
+            "warn" | "warning" => return "warn",
+            "error" => return "error",
+            _ => {}
+        }
     }
+    "warn"
+}
 
-    // Determine the logs directory
-    let logs_dir = if let Ok(cache_dir) = cache::cache_dir() {
+/// Determine the log file path for this cleave process.
+///
+/// File logging is always enabled by default at warn level. Every cleave invocation
+/// writes a log file so that OOM kills, crashes, and unexpected behavior can be
+/// diagnosed after the fact.
+///
+/// The log directory is chosen in this order:
+/// 1. `CLEAVE_LOGS_DIR` env var (set by cyclotron to its session log dir)
+/// 2. OS-appropriate cache directory:
+///    - macOS: ~/Library/Caches/cleave/logs/
+///    - Linux: ~/.cache/cleave/logs/
+///    - Windows: %LOCALAPPDATA%\cleave\logs\
+/// 3. Fallback: $TMPDIR/cleave-logs/
+///
+/// The file log level defaults to warn and can be raised via `CLEAVE_LOG_LEVEL`.
+///
+/// Log filename format: `cleave.<pid>.<level>.log`
+fn determine_default_log_file() -> Option<String> {
+    // Determine the logs directory: CLEAVE_LOGS_DIR > OS cache dir > temp fallback
+    let logs_dir = if let Ok(dir) = std::env::var("CLEAVE_LOGS_DIR") {
+        if dir.is_empty() {
+            return None; // Explicitly empty = disable file logging
+        }
+        std::path::PathBuf::from(dir)
+    } else if let Ok(cache_dir) = cache::cache_dir() {
         cache_dir.join("logs")
     } else if let Some(cache_base) = dirs::cache_dir() {
         cache_base.join("cleave").join("logs")
     } else {
-        // Fallback to temp directory
         std::env::temp_dir().join("cleave-logs")
     };
 
-    // Create the logs directory if it doesn't exist
     if let Err(e) = std::fs::create_dir_all(&logs_dir) {
         eprintln!(
-            "CLEAVE_FILE_LOGGING: Failed to create logs directory {:?}: {}",
+            "cleave: failed to create logs directory {:?}: {}",
             logs_dir, e
         );
         return None;
     }
 
-    // Generate a unique log filename with PID and timestamp
     let pid = std::process::id();
-    let timestamp = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
+    let level = file_log_level();
+    let log_path = logs_dir.join(format!("cleave.{pid}.{level}.log"));
 
-    let log_filename = format!("cleave-{}-{}.log", pid, timestamp);
-    let log_path = logs_dir.join(log_filename);
-
-    // Convert to string for the existing log file handling code
-    let log_path_str = log_path.to_string_lossy().to_string();
-
-    // Print to stderr so the user knows where logs are going
-    // (only in terminal mode, checked later, but we can't know format here yet)
-    eprintln!("CLEAVE_FILE_LOGGING: Logging to {}", log_path_str);
-
-    Some(log_path_str)
+    Some(log_path.to_string_lossy().into_owned())
 }
 
 fn main() -> Result<()> {
@@ -200,19 +205,11 @@ fn main() -> Result<()> {
     // Determine output format early so we can use it for conditional status messages
     let format = args.format();
 
-    // Check for CLEAVE_FILE_LOGGING environment variable
-    // When set (to any non-empty value), creates a log file in the OS cache directory
-    // with debug-level logging. This is useful for debugging subprocesses launched by
-    // trait-basher or LLMs where you can't pass --log-file directly.
-    let env_log_file = determine_env_log_file();
-    let using_env_logging = env_log_file.is_some();
-
-    // Set up logging with optional file output
-    // Priority: --log-file flag > CLEAVE_FILE_LOGGING env var
-    // When file logging is enabled, use different log levels:
-    // - stderr: warn level (quiet, unless --verbose)
-    // - file: debug level for CLEAVE_FILE_LOGGING, info level for --log-file
-    let effective_log_file = args.log_file.clone().or(env_log_file);
+    // Always-on file logging: every cleave invocation writes a log file so that
+    // OOM kills, crashes, and unexpected behavior can be diagnosed after the fact.
+    // --log-file flag overrides the automatic path; CLEAVE_LOG_LEVEL controls verbosity.
+    let default_log_file = determine_default_log_file();
+    let effective_log_file = args.log_file.clone().or(default_log_file);
 
     if let Some(ref log_file) = effective_log_file {
         use std::fs::OpenOptions;
@@ -221,35 +218,25 @@ fn main() -> Result<()> {
         use tracing_subscriber::util::SubscriberInitExt;
         use tracing_subscriber::Layer;
 
-        // Determine log levels
-        // CLEAVE_FILE_LOGGING uses debug level by default for comprehensive post-mortem analysis
+        // Determine log levels:
+        // - stderr: warn (quiet) unless verbose/server/RUST_LOG
+        // - file: from CLEAVE_LOG_LEVEL (default warn), or verbose/server overrides
         let (stderr_filter, file_filter) = if std::env::var("RUST_LOG").is_ok() {
-            // RUST_LOG overrides everything
             (EnvFilter::from_default_env(), EnvFilter::from_default_env())
         } else if args.verbose {
-            // Verbose: trace to both
-            (
-                EnvFilter::new("cleave=trace"),
-                EnvFilter::new("cleave=trace"),
-            )
+            (EnvFilter::new("trace"), EnvFilter::new("trace"))
         } else if is_server {
-            // Server mode: info to stderr for request logging, debug to file
             (
                 EnvFilter::new("cleave=info"),
-                EnvFilter::new("cleave=debug"),
-            )
-        } else if using_env_logging {
-            // CLEAVE_FILE_LOGGING: warn to stderr, debug to file for comprehensive logging
-            (
-                EnvFilter::new("cleave=warn"),
-                EnvFilter::new("cleave=debug"),
+                EnvFilter::new(file_log_level()),
             )
         } else {
-            // --log-file flag: warn to stderr, info to file
-            (EnvFilter::new("cleave=warn"), EnvFilter::new("cleave=info"))
+            (
+                EnvFilter::new("cleave=warn"),
+                EnvFilter::new(file_log_level()),
+            )
         };
 
-        // Create or append to log file
         let file = Arc::new(Mutex::new(
             OpenOptions::new()
                 .create(true)
@@ -265,7 +252,6 @@ fn main() -> Result<()> {
             eprintln!("Logging to: {}", log_file);
         }
 
-        // Create a MakeWriter implementation for our file
         use tracing_subscriber::fmt::MakeWriter;
         struct LogFile(Arc<Mutex<std::fs::File>>);
         impl<'a> MakeWriter<'a> for LogFile {
@@ -283,7 +269,6 @@ fn main() -> Result<()> {
                     .unwrap_or_else(std::sync::PoisonError::into_inner);
                 let result = file.write(buf);
                 // Flush after every write to ensure logs survive OOM kills
-                // This has a performance cost but is critical for debugging crashes
                 let _ = file.flush();
                 result
             }
@@ -295,7 +280,6 @@ fn main() -> Result<()> {
             }
         }
 
-        // Create layers with separate filters
         let stderr_layer = tracing_subscriber::fmt::layer()
             .with_target(true)
             .with_line_number(true)
@@ -305,7 +289,7 @@ fn main() -> Result<()> {
         let file_layer = tracing_subscriber::fmt::layer()
             .with_target(true)
             .with_line_number(true)
-            .with_ansi(false) // No color codes in file
+            .with_ansi(false)
             .with_writer(LogFile(file))
             .with_filter(file_filter);
 
@@ -314,18 +298,16 @@ fn main() -> Result<()> {
             .with(file_layer)
             .init();
     } else {
-        // No log file - use single filter for stderr only
+        // File logging disabled (CLEAVE_LOGS_DIR="") — stderr only
         let env_filter = if std::env::var("RUST_LOG").is_ok() {
             EnvFilter::from_default_env()
         } else if args.verbose {
-            EnvFilter::new("cleave=trace")
+            EnvFilter::new("trace")
         } else if is_server {
-            // Server mode defaults to info level for request logging
             EnvFilter::new("cleave=info")
         } else {
             EnvFilter::new("cleave=warn")
         };
-        // No log file, just stderr
         tracing_subscriber::fmt()
             .with_env_filter(env_filter)
             .with_target(true)
@@ -347,7 +329,7 @@ fn main() -> Result<()> {
     tracing::info!(
         pid = pid,
         ppid = ppid,
-        env_logging = using_env_logging,
+        log_file = effective_log_file.as_deref().unwrap_or("none"),
         "cleave started: {}",
         std::env::args().collect::<Vec<_>>().join(" ")
     );
@@ -356,7 +338,8 @@ fn main() -> Result<()> {
         ppid = ppid,
         verbose = args.verbose,
         validate = std::env::var("CLEAVE_VALIDATE").ok(),
-        file_logging = std::env::var("CLEAVE_FILE_LOGGING").ok(),
+        logs_dir = std::env::var("CLEAVE_LOGS_DIR").ok(),
+        log_level = std::env::var("CLEAVE_LOG_LEVEL").ok(),
         "Process context"
     );
     tracing::trace!("Logging initialized (verbose={})", args.verbose);
@@ -435,10 +418,9 @@ fn main() -> Result<()> {
     // Convert max_file_size from MB to bytes (0 = no limit)
     let max_scan_file_size = args.max_file_size * 1024 * 1024;
 
-    // Start periodic memory logging when a log file is configured (always-on for
-    // post-mortem OOM analysis) or when verbose mode is enabled.
-    // This includes both --log-file and CLEAVE_FILE_LOGGING.
-    let _memory_logger = if args.verbose || args.log_file.is_some() || using_env_logging {
+    // Start periodic memory logging whenever file logging is active (always-on
+    // by default) or when verbose mode is enabled.
+    let _memory_logger = if args.verbose || effective_log_file.is_some() {
         use cleave::memory_tracker;
         Some(memory_tracker::start_periodic_logging(
             std::time::Duration::from_secs(10),

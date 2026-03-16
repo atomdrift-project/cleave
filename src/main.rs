@@ -447,6 +447,9 @@ fn main() -> Result<()> {
         None
     };
 
+    // Log startup diagnostics for OOM post-mortem analysis
+    cleave::memory_tracker::log_startup_diagnostics();
+
     let result = match args.command {
         Some(cli::Command::Analyze { targets }) => {
             let expanded = expand_paths(targets, &format);

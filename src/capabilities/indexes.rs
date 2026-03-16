@@ -295,6 +295,10 @@ impl StringMatchIndex {
         }
 
         // Build Aho-Corasick automaton for substr patterns (Experiment 4)
+        // Use Standard match kind to support find_overlapping_iter.
+        // This ensures ALL matching patterns are found, even when a shorter
+        // pattern (e.g., "output") is embedded within a longer one
+        // (e.g., "set volume output muted true").
         let substr_automaton = if !substr_patterns.is_empty() {
             AhoCorasick::builder()
                 .ascii_case_insensitive(false)
@@ -425,7 +429,7 @@ impl StringMatchIndex {
 
             // Experiment 4: Aho-Corasick substr matching (case-sensitive)
             if let Some(ref ac) = self.substr_automaton {
-                for mat in ac.find_iter(&string_info.value) {
+                for mat in ac.find_overlapping_iter(&string_info.value) {
                     let pattern_idx = mat.pattern().as_usize();
                     if let Some((pattern_str, trait_indices)) =
                         self.substr_to_traits.get(pattern_idx)
@@ -453,7 +457,7 @@ impl StringMatchIndex {
 
             // Experiment 4: Aho-Corasick substr matching (case-insensitive)
             if let Some(ref ac) = self.ci_substr_automaton {
-                for mat in ac.find_iter(&string_info.value) {
+                for mat in ac.find_overlapping_iter(&string_info.value) {
                     let pattern_idx = mat.pattern().as_usize();
                     if let Some((original_pattern, trait_indices)) =
                         self.ci_substr_to_traits.get(pattern_idx)
@@ -552,7 +556,7 @@ impl StringMatchIndex {
 
                     // Experiment 4: Aho-Corasick substr matching (case-sensitive)
                     if let Some(ref ac) = self.substr_automaton {
-                        for mat in ac.find_iter(&string_info.value) {
+                        for mat in ac.find_overlapping_iter(&string_info.value) {
                             let pattern_idx = mat.pattern().as_usize();
                             if let Some((pattern_str, trait_indices)) =
                                 self.substr_to_traits.get(pattern_idx)
@@ -586,7 +590,7 @@ impl StringMatchIndex {
 
                     // Experiment 4: Aho-Corasick substr matching (case-insensitive)
                     if let Some(ref ac) = self.ci_substr_automaton {
-                        for mat in ac.find_iter(&string_info.value) {
+                        for mat in ac.find_overlapping_iter(&string_info.value) {
                             let pattern_idx = mat.pattern().as_usize();
                             if let Some((original_pattern, trait_indices)) =
                                 self.ci_substr_to_traits.get(pattern_idx)
@@ -1624,5 +1628,195 @@ mod tests {
         let matches = index.find_matches(content, &RuleFileType::All);
         // Should handle invalid UTF-8 gracefully and find the match
         assert!(!matches.is_empty());
+    }
+
+    // ==================== Overlapping Substr Match Tests ====================
+
+    /// Helper: build a TraitDefinition with a substr StringValue condition
+    fn make_substr_trait(id: &str, substr: &str) -> TraitDefinition {
+        TraitDefinition {
+            id: id.to_string(),
+            desc: id.to_string(),
+            conf: 1.0,
+            crit: crate::types::Criticality::Notable,
+            mbc: None,
+            attack: None,
+            platforms: vec![Platform::All],
+            arch: vec![Arch::All],
+            r#for: vec![RuleFileType::All],
+            r#if: Condition::StringValue {
+                exact: None,
+                substr: Some(substr.to_string()),
+                regex: None,
+                word: None,
+                case_insensitive: false,
+                external_ip: false,
+                not: None,
+                platforms: None,
+                section: None,
+                offset: None,
+                offset_range: None,
+                section_offset: None,
+                section_offset_range: None,
+                compiled_regex: None,
+            },
+            size_max: None,
+            count_min: None,
+            count_max: None,
+            per_kb_min: None,
+            per_kb_max: None,
+            entropy_min: None,
+            entropy_max: None,
+            size_min: None,
+            not: None,
+            unless: None,
+            downgrade: None,
+            defined_in: std::path::PathBuf::from("test.yaml"),
+            precision: None,
+        }
+    }
+
+    /// Helper: build a StringInfo with a value
+    fn make_string(value: &str) -> StringInfo {
+        StringInfo {
+            value: value.to_string(),
+            offset: None,
+            encoding: "utf-8".to_string(),
+            string_type: crate::types::StringType::Const,
+            section: None,
+            encoding_chain: Vec::new(),
+            fragments: None,
+        }
+    }
+
+    /// Regression test: a longer substr pattern must match even when a shorter
+    /// pattern is embedded within it. Before the fix, Aho-Corasick's
+    /// non-overlapping `find_iter` would match "output" (from another trait)
+    /// and skip "set volume output muted true" entirely.
+    #[allow(clippy::expect_used)]
+    #[test]
+    fn test_substr_overlapping_short_pattern_inside_long() {
+        let traits = vec![
+            make_substr_trait("short-trait", "output"),
+            make_substr_trait("long-trait", "set volume output muted true"),
+        ];
+        let index = StringMatchIndex::build(&traits);
+
+        let strings = vec![make_string("set volume output muted true")];
+        let (matched, evidence) = index.find_matches_with_evidence(&strings);
+
+        // Both traits must match: the short "output" AND the long full string
+        assert!(
+            matched.contains(&0),
+            "short-trait (idx=0, pattern='output') should match"
+        );
+        assert!(
+            matched.contains(&1),
+            "long-trait (idx=1, pattern='set volume output muted true') should match"
+        );
+        assert!(
+            evidence.contains_key(&0),
+            "short-trait should have evidence"
+        );
+        assert!(evidence.contains_key(&1), "long-trait should have evidence");
+    }
+
+    /// Same test but with patterns in reverse order (long before short)
+    #[allow(clippy::expect_used)]
+    #[test]
+    fn test_substr_overlapping_long_pattern_before_short() {
+        let traits = vec![
+            make_substr_trait("long-trait", "set volume output muted true"),
+            make_substr_trait("short-trait", "output"),
+        ];
+        let index = StringMatchIndex::build(&traits);
+
+        let strings = vec![make_string("set volume output muted true")];
+        let (matched, _) = index.find_matches_with_evidence(&strings);
+
+        assert!(matched.contains(&0), "long-trait should match");
+        assert!(matched.contains(&1), "short-trait should match");
+    }
+
+    /// Multiple overlapping patterns at different positions
+    #[allow(clippy::expect_used)]
+    #[test]
+    fn test_substr_multiple_overlapping_patterns() {
+        let traits = vec![
+            make_substr_trait("trait-a", "curl"),
+            make_substr_trait("trait-b", "curl_easy"),
+            make_substr_trait("trait-c", "curl_easy_setopt"),
+        ];
+        let index = StringMatchIndex::build(&traits);
+
+        let strings = vec![make_string("curl_easy_setopt")];
+        let (matched, _) = index.find_matches_with_evidence(&strings);
+
+        assert!(matched.contains(&0), "'curl' should match");
+        assert!(matched.contains(&1), "'curl_easy' should match");
+        assert!(matched.contains(&2), "'curl_easy_setopt' should match");
+    }
+
+    /// Parallel path: same overlapping test but with enough strings to trigger parallel
+    #[allow(clippy::expect_used)]
+    #[test]
+    fn test_substr_overlapping_parallel_path() {
+        let traits = vec![
+            make_substr_trait("short-trait", "output"),
+            make_substr_trait("long-trait", "set volume output muted true"),
+        ];
+        let index = StringMatchIndex::build(&traits);
+
+        // Build >1000 strings to trigger parallel path
+        let mut strings: Vec<StringInfo> = (0..1001)
+            .map(|i| make_string(&format!("filler string {i}")))
+            .collect();
+        strings.push(make_string("set volume output muted true"));
+
+        let (matched, _) = index.find_matches_with_evidence(&strings);
+
+        assert!(
+            matched.contains(&0),
+            "short-trait should match in parallel path"
+        );
+        assert!(
+            matched.contains(&1),
+            "long-trait should match in parallel path"
+        );
+    }
+
+    /// Case-insensitive overlapping patterns
+    #[allow(clippy::expect_used)]
+    #[test]
+    fn test_substr_overlapping_case_insensitive() {
+        let make_ci_substr_trait = |id: &str, substr: &str| -> TraitDefinition {
+            let mut t = make_substr_trait(id, substr);
+            if let Condition::StringValue {
+                ref mut case_insensitive,
+                ..
+            } = t.r#if
+            {
+                *case_insensitive = true;
+            }
+            t
+        };
+
+        let traits = vec![
+            make_ci_substr_trait("short-ci", "output"),
+            make_ci_substr_trait("long-ci", "set volume output muted true"),
+        ];
+        let index = StringMatchIndex::build(&traits);
+
+        let strings = vec![make_string("Set Volume Output Muted True")];
+        let (matched, _) = index.find_matches_with_evidence(&strings);
+
+        assert!(
+            matched.contains(&0),
+            "case-insensitive short pattern should match"
+        );
+        assert!(
+            matched.contains(&1),
+            "case-insensitive long pattern should match"
+        );
     }
 }

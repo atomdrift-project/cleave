@@ -632,7 +632,17 @@ fn test_system_binary_false_positive_sanity() {
         .unwrap();
 
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.is_empty(), "Expected empty stderr, got:\n{}", stderr);
+    // Filter out the debug-build warning that's expected in test profile
+    let unexpected_stderr: String = stderr
+        .lines()
+        .filter(|l| !l.contains("DEBUG binary"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        unexpected_stderr.trim().is_empty(),
+        "Expected empty stderr, got:\n{}",
+        stderr
+    );
     assert!(output.status.success(), "cleave exited with failure");
 
     let stdout = String::from_utf8_lossy(&output.stdout);

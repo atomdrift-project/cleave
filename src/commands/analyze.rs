@@ -124,6 +124,8 @@ pub(crate) fn run(config: &AnalyzeConfig<'_>) -> Result<String> {
         let stream_stdout = !config.output_to_file;
         let error_if_levels_owned: Option<Vec<types::Criticality>> =
             config.error_if_levels.map(<[types::Criticality]>::to_vec);
+        let error_if_triggered = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let error_if_triggered_clone = error_if_triggered.clone();
 
         cleave::scan_directory(path, &options_arc, move |event| match event {
             cleave::ScanEvent::Start { total } => {
@@ -150,6 +152,8 @@ pub(crate) fn run(config: &AnalyzeConfig<'_>) -> Result<String> {
                             check_criticality_error(&report, error_if_levels_owned.as_deref())
                         {
                             eprintln!("Error: {}", e);
+                            error_if_triggered_clone
+                                .store(true, std::sync::atomic::Ordering::Relaxed);
                             return;
                         }
                         report.shrink_to_fit();
@@ -189,6 +193,11 @@ pub(crate) fn run(config: &AnalyzeConfig<'_>) -> Result<String> {
                 }
             }
         })?;
+
+        // If any file triggered --error-if, fail after the scan completes
+        if error_if_triggered.load(std::sync::atomic::Ordering::Relaxed) {
+            anyhow::bail!("--error-if criteria matched for one or more files");
+        }
 
         // Generate galaxy view from all collected files
         if let Some(base_path) = config.mol_path {

@@ -115,6 +115,7 @@ impl super::CapabilityMapper {
             (FxHashSet::default(), FxHashMap::default())
         };
         let regex_candidates = self.string_match_index.find_regex_candidates(&all_strings);
+
         drop(all_strings);
 
         // Build a seen-IDs set once from existing report findings, then keep it up-to-date

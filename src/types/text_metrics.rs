@@ -63,6 +63,10 @@ pub struct TextMetrics {
     /// Lines over 1000 characters (strong obfuscation signal)
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub lines_over_1000: u32,
+    /// Length of the last non-empty line (supply-chain injection signal:
+    /// appended payload lines are typically >1000 chars in otherwise normal files)
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub last_line_length: u32,
     /// Ratio of empty lines to total
     #[serde(default, skip_serializing_if = "is_zero_f32")]
     pub empty_line_ratio: f32,
@@ -632,6 +636,7 @@ impl ValidFieldPaths for TextMetrics {
             "lines_over_200",
             "lines_over_500",
             "lines_over_1000",
+            "last_line_length",
             "empty_line_ratio",
             // Whitespace Forensics
             "whitespace_ratio",
@@ -645,6 +650,8 @@ impl ValidFieldPaths for TextMetrics {
             "unicode_escape_count",
             "octal_escape_count",
             "escape_density",
+            // Steganography / Invisible Characters
+            "invisible_chars",
             // Suspicious Text Patterns
             "long_token_count",
             "repeated_char_sequences",

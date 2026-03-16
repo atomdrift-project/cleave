@@ -58,6 +58,14 @@ pub(crate) fn analyze_text(content: &str) -> TextMetrics {
         metrics.lines_over_500 = line_lengths.iter().filter(|&&l| l > 500).count() as u32;
         metrics.lines_over_1000 = line_lengths.iter().filter(|&&l| l > 1000).count() as u32;
 
+        // Last non-empty line length (supply-chain injection detection)
+        metrics.last_line_length = lines
+            .iter()
+            .rev()
+            .find(|l| !l.trim().is_empty())
+            .map(|l| l.len() as u32)
+            .unwrap_or(0);
+
         // Empty line ratio
         let empty_count = lines.iter().filter(|l| l.trim().is_empty()).count();
         metrics.empty_line_ratio = empty_count as f32 / lines.len() as f32;

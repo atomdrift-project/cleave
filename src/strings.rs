@@ -12,7 +12,7 @@ use regex::Regex;
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::sync::OnceLock;
-use stng::{ExtractOptions, ExtractedString, StringMethod};
+use stng::{ExtractedString, StringMethod};
 
 /// Convert stng StringMethod to a string for encoding_chain tracking
 /// Only tracks actual string construction/encoding methods, not extraction sources
@@ -163,9 +163,7 @@ impl StringExtractor {
         data: &[u8],
         r2_strings: Option<Vec<R2String>>,
     ) -> Vec<StringInfo> {
-        let mut opts = ExtractOptions::new(self.min_length)
-            .with_garbage_filter(true)
-            .with_xor(None);
+        let mut opts = crate::analyzers::stng_analysis_opts(self.min_length);
 
         // Convert and pass r2 strings to stng if available
         if let Some(r2s) = r2_strings {

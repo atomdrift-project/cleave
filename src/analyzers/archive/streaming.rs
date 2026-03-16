@@ -176,7 +176,7 @@ impl ArchiveAnalyzer {
                         Some(mapper.clone()),
                     ) {
                         // PRE-EXTRACT STRINGS: To get full speedup, extract strings once and share.
-                        let opts = stng::ExtractOptions::new(4).with_garbage_filter(true);
+                        let opts = crate::analyzers::stng_analysis_opts(4);
                         let stng_strings = stng::extract_strings_with_options(data, &opts);
                         let payloads = crate::extractors::encoded_payload::extract_encoded_payloads(
                             &stng_strings,

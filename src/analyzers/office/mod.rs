@@ -129,7 +129,10 @@ impl OfficeAnalyzer {
             let virtual_path = Path::new(&virtual_path_str);
 
             let strings =
-                stng::extract_strings_with_options(vba_bytes, &stng::ExtractOptions::new(4));
+                stng::extract_strings_with_options(
+                    vba_bytes,
+                    &crate::analyzers::stng_analysis_opts(4),
+                );
             let input =
                 AnalysisInput::with_strings(virtual_path, vba_bytes, &strings, FileType::Vbs);
 

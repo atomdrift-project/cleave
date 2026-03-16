@@ -77,6 +77,17 @@ use serde::{Deserialize, Serialize};
 use std::path::Path;
 use std::sync::Arc;
 
+/// Standard stng extraction options for analysis.
+///
+/// All analysis code paths MUST use this to ensure consistent string extraction.
+/// In particular, XOR scanning must always be enabled so that decoded strings
+/// are available for trait matching (string_value conditions).
+pub fn stng_analysis_opts(min_length: usize) -> stng::ExtractOptions {
+    stng::ExtractOptions::new(min_length)
+        .with_garbage_filter(true)
+        .with_xor(None)
+}
+
 /// Create an analyzer for the given file type.
 ///
 /// Uses the unified source analyzer for all tree-sitter based languages.
@@ -299,7 +310,7 @@ pub trait Analyzer {
     fn analyze(&self, file_path: &Path) -> Result<AnalysisReport> {
         let data = std::fs::read(file_path)?;
         let file_type = detect_file_type(file_path)?;
-        let opts = stng::ExtractOptions::new(4).with_garbage_filter(true);
+        let opts = stng_analysis_opts(4);
         let strings = stng::extract_strings_with_options(&data, &opts);
 
         let input = AnalysisInput::with_strings(file_path, &data, &strings, file_type);

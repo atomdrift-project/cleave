@@ -450,7 +450,7 @@ fn analyze_file_with_resources<P: AsRef<Path>>(
 
     // Extract strings with stng ONCE - used for encoded payloads and passed to analyzers
     let stng_start = std::time::Instant::now();
-    let opts = stng::ExtractOptions::new(4).with_garbage_filter(true);
+    let opts = analyzers::stng_analysis_opts(4);
     let stng_strings = stng::extract_strings_with_options(file_data, &opts);
 
     // Check for encoded payloads (hex, base64, etc.) using stng results

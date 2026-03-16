@@ -436,9 +436,7 @@ impl UnifiedSourceAnalyzer {
         // recv() and can't process rayon work. stng on scripts is fast
         // (single-digit ms), so the parallelism gain was negligible.
         if !has_preextracted {
-            let opts = stng::ExtractOptions::new(4)
-                .with_garbage_filter(true)
-                .with_xor(None);
+            let opts = super::stng_analysis_opts(4);
             owned_stng = stng::extract_strings_with_options(original_bytes, &opts);
         }
 

@@ -209,6 +209,9 @@ impl super::CapabilityMapper {
                 if self.string_match_index.is_substr_trait(idx)
                     && !string_matched_traits.contains(&idx)
                 {
+                    if trait_def.id.contains("volume") {
+                        eprintln!("DEBUG: skipping substr trait {} (idx={}) - not in string_matched_traits", trait_def.id, idx);
+                    }
                     skip_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                     return None;
                 }

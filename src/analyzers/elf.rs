@@ -320,12 +320,16 @@ impl ElfAnalyzer {
                 }
                 Err(e) => {
                     // Parsing failed - this is a strong indicator of malformed/hostile binary
+                    let mut crit = Criticality::Hostile;
+                    if report.target.path.contains("!!embedded") {
+                        crit = Criticality::Notable;
+                    }
                     report.findings.push(Finding {
                         kind: FindingKind::Structural,
                         id: "anti-analysis/malformed/elf-header".to_string(),
                         desc: format!("Malformed ELF header or section headers: {}", e),
                         conf: 1.0,
-                        crit: Criticality::Hostile,
+                        crit,
                         mbc: Some("B0001".to_string()), // Defense Evasion: Software Packing/Obfuscation
                         attack: Some("T1027".to_string()), // Obfuscated Files or Information
                         evidence: vec![],

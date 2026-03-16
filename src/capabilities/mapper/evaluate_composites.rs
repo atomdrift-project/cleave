@@ -168,6 +168,17 @@ impl super::CapabilityMapper {
         };
 
         if has_excessive_line {
+            // Downgrade to notable for large JS/TS files — minified/bundled code
+            // naturally produces very long lines without anti-analysis intent
+            let is_likely_bundle = matches!(
+                file_type,
+                RuleFileType::JavaScript | RuleFileType::TypeScript
+            ) && binary_data.len() > 500_000;
+            let crit = if is_likely_bundle {
+                Criticality::Notable
+            } else {
+                Criticality::Suspicious
+            };
             all_findings.push(Finding {
                 id: "objectives/anti-static/excessive-line-length".to_string(),
                 kind: FindingKind::Structural,
@@ -175,7 +186,7 @@ impl super::CapabilityMapper {
                     "File contains excessively long lines (>1MB) that may cause regex backtracking"
                         .to_string(),
                 conf: 0.9,
-                crit: Criticality::Suspicious,
+                crit,
                 mbc: None,
                 attack: Some("T1027".to_string()), // Obfuscated Files or Information
                 trait_refs: vec![],

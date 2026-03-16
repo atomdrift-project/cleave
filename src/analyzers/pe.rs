@@ -664,7 +664,10 @@ impl PEAnalyzer {
         let is_resource_error = error_str.contains("ResourceString")
             || error_str.contains("ResourceTable")
             || error_str.contains("resource");
-        let (crit, conf) = if is_resource_error {
+        // "type is too big" errors come from goblin's PE data directory parser
+        // (e.g., exception table entries) and indicate parser limitations, not tampering
+        let is_parser_limitation = error_str.contains("type is too big");
+        let (crit, conf) = if is_resource_error || is_parser_limitation {
             (Criticality::Baseline, 0.3)
         } else {
             (Criticality::Hostile, 1.0)

@@ -1387,8 +1387,8 @@ impl ArchiveAnalyzer {
                             return Ok(true);
                         };
 
-                        if std::io::copy(&mut limited, &mut outfile).is_err() {
-                            return Ok(true);
+                        if let Err(e) = std::io::copy(&mut limited, &mut outfile) {
+                            return Err(sevenz_rust::Error::io(e));
                         }
 
                         if !guard.check_bytes(file_size, &name) {
@@ -1406,10 +1406,11 @@ impl ArchiveAnalyzer {
                             return Err(sevenz_rust::Error::other("Channel closed"));
                         }
                     } else {
+                        println!("CLEAVE_DEBUG: starting to read {}", name);
                         let mut data = Vec::with_capacity(file_size as usize);
                         let mut limited = LimitedReader::new(reader, MAX_FILE_SIZE);
-                        if std::io::Read::read_to_end(&mut limited, &mut data).is_err() {
-                            return Ok(true);
+                        if let Err(e) = std::io::Read::read_to_end(&mut limited, &mut data) {
+                            return Err(sevenz_rust::Error::io(e));
                         }
 
                         if !guard.check_bytes(data.len() as u64, &name) {
@@ -1423,16 +1424,19 @@ impl ArchiveAnalyzer {
                             file_type
                         };
 
+                        println!("CLEAVE_DEBUG: successfully read {}, sending to tx", name);
                         if tx
                             .send(ExtractedFile::InMemory {
-                                path: name,
+                                path: name.clone(),
                                 data,
                                 file_type: actual_type,
                             })
                             .is_err()
                         {
+                            println!("CLEAVE_DEBUG: channel closed when sending {}", name);
                             return Err(sevenz_rust::Error::other("Channel closed"));
                         }
+                        println!("CLEAVE_DEBUG: sent {}", name);
                     }
 
                     Ok(true)

@@ -6,7 +6,7 @@ use crate::analyzers::{AnalysisInput, Analyzer, FileType};
 use crate::capabilities::CapabilityMapper;
 use crate::types::*;
 use anyhow::{Context, Result};
-use serde::Deserialize;
+use serde::{Deserialize, Deserializer};
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
@@ -18,6 +18,30 @@ pub(crate) struct PackageJsonAnalyzer {
     capability_mapper: Arc<CapabilityMapper>,
 }
 
+/// Deserialize a JSON value as `HashMap<String, String>`, returning an empty map
+/// if the value is not an object (e.g. old npm packages use `"dependencies": []`).
+fn deserialize_map_tolerant<'de, D>(deserializer: D) -> Result<HashMap<String, String>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value = serde_json::Value::deserialize(deserializer)?;
+    match value {
+        serde_json::Value::Object(map) => {
+            let mut result = HashMap::with_capacity(map.len());
+            for (k, v) in map {
+                // Coerce non-string values (numbers, objects) to their JSON text
+                let s = match v {
+                    serde_json::Value::String(s) => s,
+                    other => other.to_string(),
+                };
+                result.insert(k, s);
+            }
+            Ok(result)
+        }
+        _ => Ok(HashMap::new()),
+    }
+}
+
 #[derive(Deserialize, Default)]
 struct PackageJson {
     name: Option<String>,
@@ -26,15 +50,15 @@ struct PackageJson {
     desc: Option<String>,
     #[allow(dead_code)] // Deserialized from JSON
     main: Option<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_map_tolerant")]
     scripts: HashMap<String, String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_map_tolerant")]
     dependencies: HashMap<String, String>,
-    #[serde(rename = "devDependencies", default)]
+    #[serde(rename = "devDependencies", default, deserialize_with = "deserialize_map_tolerant")]
     dev_dependencies: HashMap<String, String>,
-    #[serde(rename = "peerDependencies", default)]
+    #[serde(rename = "peerDependencies", default, deserialize_with = "deserialize_map_tolerant")]
     peer_dependencies: HashMap<String, String>,
-    #[serde(rename = "optionalDependencies", default)]
+    #[serde(rename = "optionalDependencies", default, deserialize_with = "deserialize_map_tolerant")]
     optional_dependencies: HashMap<String, String>,
     #[allow(dead_code)] // Deserialized from JSON
     repository: Option<serde_json::Value>,
@@ -1459,5 +1483,28 @@ var http = require('http'); var cp = require('child_process'); eval(cp.execSync(
             "Expected virtual path with ##trailing@ prefix, got: {}",
             report.files[0].path
         );
+    }
+
+    #[test]
+    fn test_parse_array_dependencies() {
+        // Old npm packages (e.g. underscore 1.2.2) used arrays instead of objects
+        // for dependencies and contributors. This must not cause a parse failure.
+        let content = r#"{
+            "name": "underscore",
+            "description": "JavaScript's functional programming helper library.",
+            "keywords": ["util", "functional", "server", "client", "browser"],
+            "author": "Jeremy Ashkenas <jeremy@documentcloud.org>",
+            "contributors": [],
+            "dependencies": [],
+            "repository": {"type": "git", "url": "git://github.com/documentcloud/underscore.git"},
+            "main": "underscore.js",
+            "version": "1.2.2"
+        }"#;
+        let analyzer = PackageJsonAnalyzer::new();
+        let report = analyzer
+            .analyze_package(Path::new("package.json"), content)
+            .unwrap();
+        assert_eq!(report.target.file_type, "package.json");
+        assert!(report.imports.is_empty());
     }
 }

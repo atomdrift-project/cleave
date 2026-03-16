@@ -145,6 +145,12 @@ fn file_log_level() -> &'static str {
     "warn"
 }
 
+/// Build an `EnvFilter` directive that scopes a level to cleave and stng crates only,
+/// preventing noisy TRACE/DEBUG output from third-party dependencies.
+fn scoped_filter(level: &str) -> String {
+    format!("cleave={level},stng={level}")
+}
+
 /// Determine the log file path for this cleave process.
 ///
 /// File logging is always enabled by default at warn level. Every cleave invocation
@@ -224,16 +230,16 @@ fn main() -> Result<()> {
         let (stderr_filter, file_filter) = if std::env::var("RUST_LOG").is_ok() {
             (EnvFilter::from_default_env(), EnvFilter::from_default_env())
         } else if args.verbose {
-            (EnvFilter::new("trace"), EnvFilter::new("trace"))
+            (EnvFilter::new(scoped_filter("trace")), EnvFilter::new(scoped_filter("trace")))
         } else if is_server {
             (
-                EnvFilter::new("cleave=info"),
-                EnvFilter::new(file_log_level()),
+                EnvFilter::new(scoped_filter("info")),
+                EnvFilter::new(scoped_filter(file_log_level())),
             )
         } else {
             (
-                EnvFilter::new("cleave=warn"),
-                EnvFilter::new(file_log_level()),
+                EnvFilter::new(scoped_filter("warn")),
+                EnvFilter::new(scoped_filter(file_log_level())),
             )
         };
 
@@ -302,11 +308,11 @@ fn main() -> Result<()> {
         let env_filter = if std::env::var("RUST_LOG").is_ok() {
             EnvFilter::from_default_env()
         } else if args.verbose {
-            EnvFilter::new("trace")
+            EnvFilter::new(scoped_filter("trace"))
         } else if is_server {
-            EnvFilter::new("cleave=info")
+            EnvFilter::new(scoped_filter("info"))
         } else {
-            EnvFilter::new("cleave=warn")
+            EnvFilter::new(scoped_filter("warn"))
         };
         tracing_subscriber::fmt()
             .with_env_filter(env_filter)

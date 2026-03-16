@@ -1046,9 +1046,9 @@ pub(crate) fn find_excessive_file_types(
     // even after PE/DLL/ELF/SO are filtered out.
     let is_group_expressible = |types: &[FileType]| -> bool {
         let type_set: std::collections::HashSet<_> = types.iter().collect();
-        type_set.iter().all(|ft| {
-            all_groups.iter().any(|(group, _)| group.contains(ft))
-        })
+        type_set
+            .iter()
+            .all(|ft| all_groups.iter().any(|(group, _)| group.contains(ft)))
     };
 
     // Only called when is_group_expressible returned false, so types contain at least one

@@ -447,9 +447,15 @@ pub fn detect_file_type(file_path: &Path) -> Result<FileType> {
 }
 
 fn detect_file_type_inner(file_path: &Path, file_data: &[u8]) -> Option<FileType> {
-    tracing::debug!("detect_file_type_inner: path={}, data_len={}, magic={:02x?}{:02x?}{:02x?}{:02x?}",
-        file_path.display(), file_data.len(),
-        file_data.get(0), file_data.get(1), file_data.get(2), file_data.get(3));
+    tracing::debug!(
+        "detect_file_type_inner: path={}, data_len={}, magic={:02x?}{:02x?}{:02x?}{:02x?}",
+        file_path.display(),
+        file_data.len(),
+        file_data.first(),
+        file_data.get(1),
+        file_data.get(2),
+        file_data.get(3)
+    );
     // Check for RAR magic bytes "Rar!" (0x52 0x61 0x72 0x21)
     if file_data.starts_with(b"Rar!") {
         tracing::debug!("Detected RAR archive by magic");

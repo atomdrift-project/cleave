@@ -793,6 +793,35 @@ impl UnifiedSourceAnalyzer {
             // Compute ratio metrics from already-populated counters
             Self::compute_text_ratio_metrics(&mut metrics);
 
+            // Flag invisible Unicode steganography characters.
+            // Any non-zero count in source code is deeply suspicious — legitimate code
+            // never contains variation selectors or tag characters outside of niche
+            // Unicode processing libraries.
+            if let Some(ref text) = metrics.text {
+                if text.invisible_chars > 0 {
+                    report.add_finding(
+                        crate::types::Finding::indicator(
+                            "objectives/anti-static/obfuscate/steganography/invisible-unicode"
+                                .to_string(),
+                            format!(
+                                "Source contains {} invisible Unicode characters (variation selectors, zero-width, or tag chars)",
+                                text.invisible_chars
+                            ),
+                            0.95,
+                        )
+                        .with_criticality(crate::types::Criticality::Suspicious)
+                        .with_attack("T1027".to_string())
+                        .with_evidence(vec![crate::types::Evidence {
+                            method: "metrics".to_string(),
+                            source: "text_metrics".to_string(),
+                            value: format!("text.invisible_chars = {}", text.invisible_chars),
+                            location: None,
+                            ..Default::default()
+                        }]),
+                    );
+                }
+            }
+
             report.metrics = Some(metrics);
         }
 

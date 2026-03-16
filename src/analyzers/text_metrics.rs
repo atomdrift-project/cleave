@@ -89,6 +89,9 @@ pub(crate) fn analyze_text(content: &str) -> TextMetrics {
         0.0
     };
 
+    // === Steganography / Invisible Characters ===
+    metrics.invisible_chars = count_invisible_chars(content);
+
     // === Suspicious Text Patterns ===
     metrics.long_token_count = count_long_tokens(content);
     metrics.repeated_char_sequences = count_repeated_sequences(content);
@@ -233,6 +236,31 @@ fn analyze_whitespace(content: &str) -> (f32, u32, u32, bool, u32) {
     let ws_ratio = whitespace_count as f32 / total_chars as f32;
 
     (ws_ratio, tabs, spaces, mixed_indent, unusual)
+}
+
+/// Count invisible Unicode characters used for steganography.
+///
+/// These characters are invisible in editors and terminals but encode data:
+/// - Variation Selectors: U+FE00–FE0F (VS1–16), U+E0100–E01EF (SVS)
+/// - Zero-width characters: U+200B (ZWSP), U+200C (ZWNJ), U+200D (ZWJ),
+///   U+2060 (WJ), U+FEFF (BOM/ZWNBSP)
+/// - Tag characters: U+E0001–E007F (used in invisible text steganography)
+///
+/// Any occurrence in source code is deeply suspicious — legitimate code has
+/// zero of these outside of string literals in Unicode processing libraries.
+fn count_invisible_chars(content: &str) -> u32 {
+    let mut count = 0u32;
+    for c in content.chars() {
+        let cp = c as u32;
+        if (0xFE00..=0xFE0F).contains(&cp)       // VS1–VS16
+            || (0xE0100..=0xE01EF).contains(&cp)  // Supplementary Variation Selectors
+            || (0xE0001..=0xE007F).contains(&cp)   // Tags block (invisible text stego)
+            || matches!(cp, 0x200B | 0x200C | 0x200D | 0x2060 | 0xFEFF)
+        {
+            count = count.saturating_add(1);
+        }
+    }
+    count
 }
 
 /// Count escape sequences in content

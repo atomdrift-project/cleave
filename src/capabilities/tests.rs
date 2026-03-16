@@ -163,15 +163,16 @@ fn test_parse_file_types_binary_alias() {
     let types = vec!["binaries".to_string()];
     let mut warnings = Vec::new();
     let result = parsing::parse_file_types(&types, &mut warnings);
-    assert_eq!(result.len(), 8);
-    assert!(result.contains(&RuleFileType::Elf));
-    assert!(result.contains(&RuleFileType::Macho));
-    assert!(result.contains(&RuleFileType::Pe));
-    assert!(result.contains(&RuleFileType::Dylib));
-    assert!(result.contains(&RuleFileType::So));
-    assert!(result.contains(&RuleFileType::Dll));
-    assert!(result.contains(&RuleFileType::Class));
-    assert!(result.contains(&RuleFileType::Pyc));
+    assert!(result.from_groups);
+    assert_eq!(result.types.len(), 8);
+    assert!(result.types.contains(&RuleFileType::Elf));
+    assert!(result.types.contains(&RuleFileType::Macho));
+    assert!(result.types.contains(&RuleFileType::Pe));
+    assert!(result.types.contains(&RuleFileType::Dylib));
+    assert!(result.types.contains(&RuleFileType::So));
+    assert!(result.types.contains(&RuleFileType::Dll));
+    assert!(result.types.contains(&RuleFileType::Class));
+    assert!(result.types.contains(&RuleFileType::Pyc));
 }
 
 #[test]
@@ -2677,50 +2678,54 @@ fn test_parse_file_types_groups_and_exclusions() {
 
     // Test groups
     let binaries = parsing::parse_file_types(&["binaries".to_string()], &mut warnings);
-    assert_eq!(binaries.len(), 8);
-    assert!(binaries.contains(&RuleFileType::Elf));
-    assert!(!binaries.contains(&RuleFileType::Python));
+    assert!(binaries.from_groups);
+    assert_eq!(binaries.types.len(), 8);
+    assert!(binaries.types.contains(&RuleFileType::Elf));
+    assert!(!binaries.types.contains(&RuleFileType::Python));
 
     let scripts = parsing::parse_file_types(&["scripts".to_string()], &mut warnings);
-    assert_eq!(scripts.len(), 11); // TypeScript maps to JavaScript, not separate
-    assert!(scripts.contains(&RuleFileType::Python));
-    assert!(scripts.contains(&RuleFileType::Shell));
-    assert!(!scripts.contains(&RuleFileType::Elf));
+    assert!(scripts.from_groups);
+    assert_eq!(scripts.types.len(), 11); // TypeScript maps to JavaScript, not separate
+    assert!(scripts.types.contains(&RuleFileType::Python));
+    assert!(scripts.types.contains(&RuleFileType::Shell));
+    assert!(!scripts.types.contains(&RuleFileType::Elf));
 
     // Test alias "all"
     let all = parsing::parse_file_types(&["all".to_string()], &mut warnings);
-    assert_eq!(all, vec![RuleFileType::All]);
+    assert!(all.from_groups);
+    assert_eq!(all.types, vec![RuleFileType::All]);
 
     // Test exclusions
     // -php means All - Php.
     let not_php = parsing::parse_file_types(&["-php".to_string()], &mut warnings);
-    assert!(!not_php.contains(&RuleFileType::Php));
-    assert!(not_php.contains(&RuleFileType::Python));
-    assert!(not_php.contains(&RuleFileType::Elf));
-    assert!(!not_php.contains(&RuleFileType::All)); // Should be expanded
+    assert!(!not_php.types.contains(&RuleFileType::Php));
+    assert!(not_php.types.contains(&RuleFileType::Python));
+    assert!(not_php.types.contains(&RuleFileType::Elf));
+    assert!(!not_php.types.contains(&RuleFileType::All)); // Should be expanded
 
     // Test group + exclusion: scripts,-php
     let scripts_no_php =
         parsing::parse_file_types(&["scripts".to_string(), "-php".to_string()], &mut warnings);
-    assert!(scripts_no_php.contains(&RuleFileType::Python));
-    assert!(scripts_no_php.contains(&RuleFileType::Shell));
-    assert!(!scripts_no_php.contains(&RuleFileType::Php));
-    assert!(!scripts_no_php.contains(&RuleFileType::Elf));
+    assert!(scripts_no_php.from_groups);
+    assert!(scripts_no_php.types.contains(&RuleFileType::Python));
+    assert!(scripts_no_php.types.contains(&RuleFileType::Shell));
+    assert!(!scripts_no_php.types.contains(&RuleFileType::Php));
+    assert!(!scripts_no_php.types.contains(&RuleFileType::Elf));
 
     // Test single string comma separation
     let comma_sep = parsing::parse_file_types(&["scripts,-php".to_string()], &mut warnings);
-    assert!(comma_sep.contains(&RuleFileType::Python));
-    assert!(!comma_sep.contains(&RuleFileType::Php));
+    assert!(comma_sep.types.contains(&RuleFileType::Python));
+    assert!(!comma_sep.types.contains(&RuleFileType::Php));
 
     // Test '-binaries' exclusion
     let not_binaries = parsing::parse_file_types(&["-binaries".to_string()], &mut warnings);
-    assert!(!not_binaries.contains(&RuleFileType::Elf));
-    assert!(not_binaries.contains(&RuleFileType::Python));
+    assert!(!not_binaries.types.contains(&RuleFileType::Elf));
+    assert!(not_binaries.types.contains(&RuleFileType::Python));
 
     // Test '-scripts' exclusion
     let not_scripts = parsing::parse_file_types(&["-scripts".to_string()], &mut warnings);
-    assert!(!not_scripts.contains(&RuleFileType::Python));
-    assert!(not_scripts.contains(&RuleFileType::Elf));
+    assert!(!not_scripts.types.contains(&RuleFileType::Python));
+    assert!(not_scripts.types.contains(&RuleFileType::Elf));
 }
 
 // ==================== Import Finding Generation Tests ====================

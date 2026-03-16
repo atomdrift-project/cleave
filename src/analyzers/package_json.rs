@@ -1,7 +1,8 @@
 //! package.json analyzer for npm packages.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-use crate::analyzers::{AnalysisInput, Analyzer};
+use crate::analyzers::unified::UnifiedSourceAnalyzer;
+use crate::analyzers::{AnalysisInput, Analyzer, FileType};
 use crate::capabilities::CapabilityMapper;
 use crate::types::*;
 use anyhow::{Context, Result};
@@ -124,8 +125,16 @@ impl PackageJsonAnalyzer {
     fn analyze_package(&self, file_path: &Path, content: &str) -> Result<AnalysisReport> {
         let start = std::time::Instant::now();
 
-        let pkg: PackageJson =
-            serde_json::from_str(content).context("Failed to parse package.json")?;
+        // Use streaming deserializer to tolerate trailing content (a common
+        // supply-chain attack vector: valid JSON followed by hidden code).
+        let de = serde_json::Deserializer::from_str(content);
+        let mut stream = de.into_iter::<PackageJson>();
+        let pkg: PackageJson = stream
+            .next()
+            .ok_or_else(|| anyhow::anyhow!("Empty package.json"))?
+            .context("Failed to parse package.json")?;
+        let json_end = stream.byte_offset();
+        let trailing = content[json_end..].trim();
 
         let target = TargetInfo {
             path: file_path.display().to_string(),
@@ -136,6 +145,18 @@ impl PackageJsonAnalyzer {
         };
 
         let mut report = AnalysisReport::new(target);
+
+        // Trailing non-whitespace after the JSON object is structurally invalid and
+        // a known supply-chain attack vector (hidden code appended after `}`).
+        if !trailing.is_empty() {
+            self.analyze_trailing_content(
+                file_path,
+                trailing,
+                json_end,
+                content.len(),
+                &mut report,
+            );
+        }
 
         // Add structural feature
         report.structure.push(StructuralFeature {
@@ -182,6 +203,153 @@ impl PackageJsonAnalyzer {
         report.metadata.tools_used = vec!["serde_json".to_string()];
 
         Ok(report)
+    }
+
+    /// Analyze non-JSON trailing content appended after the package.json object.
+    ///
+    /// No legitimate package.json has content after the closing `}`. This is a known
+    /// supply-chain attack vector: attackers append JavaScript (sometimes using Unicode
+    /// steganography with variation selectors) that gets evaluated at install time.
+    fn analyze_trailing_content(
+        &self,
+        file_path: &Path,
+        trailing: &str,
+        json_end_offset: usize,
+        total_size: usize,
+        report: &mut AnalysisReport,
+    ) {
+        let trailing_bytes = trailing.len();
+        let preview = truncate_str(trailing, 200);
+
+        // 1. Metadata finding: the JSON itself is structurally invalid (Notable).
+        report.add_finding(
+            Finding::indicator(
+                "metadata/manifest/invalid-json".to_string(),
+                format!(
+                    "package.json has {} bytes of non-JSON content after closing brace at offset {}",
+                    trailing_bytes, json_end_offset
+                ),
+                0.95,
+            )
+            .with_criticality(Criticality::Notable)
+            .with_evidence(vec![Evidence {
+                method: "parser".to_string(),
+                source: "package.json".to_string(),
+                value: preview.to_string(),
+                location: Some(format!("offset:{json_end_offset}")),
+                ..Default::default()
+            }]),
+        );
+
+        // 2. Check for Unicode steganography (variation selectors, zero-width characters).
+        //    These are invisible in editors and terminals — a strong obfuscation signal.
+        //    Single pass over characters to detect both categories.
+        let mut has_variation_selectors = false;
+        let mut has_zero_width = false;
+        for c in trailing.chars() {
+            let cp = c as u32;
+            if (0xFE00..=0xFE0F).contains(&cp) || (0xE0100..=0xE01EF).contains(&cp) {
+                has_variation_selectors = true;
+            } else if matches!(cp, 0x200B | 0x200C | 0x200D | 0x2060 | 0xFEFF) {
+                has_zero_width = true;
+            }
+            if has_variation_selectors && has_zero_width {
+                break;
+            }
+        }
+
+        if has_variation_selectors {
+            report.add_finding(
+                Finding::indicator(
+                    "objectives/anti-static/obfuscate/steganography/unicode-variation-selectors"
+                        .to_string(),
+                    "Trailing content uses Unicode variation selectors to hide data".to_string(),
+                    0.95,
+                )
+                .with_criticality(Criticality::Suspicious)
+                .with_attack("T1027".to_string())
+                .with_evidence(vec![Evidence {
+                    method: "pattern".to_string(),
+                    source: "package.json".to_string(),
+                    value: format!("{} bytes of steganographic content", trailing_bytes),
+                    location: Some(format!("offset:{json_end_offset}")),
+                    ..Default::default()
+                }]),
+            );
+        }
+
+        if has_zero_width {
+            report.add_finding(
+                Finding::indicator(
+                    "objectives/anti-static/obfuscate/steganography/zero-width-characters"
+                        .to_string(),
+                    "Trailing content uses zero-width Unicode characters to hide data".to_string(),
+                    0.90,
+                )
+                .with_criticality(Criticality::Suspicious)
+                .with_attack("T1027".to_string())
+                .with_evidence(vec![Evidence {
+                    method: "pattern".to_string(),
+                    source: "package.json".to_string(),
+                    value: format!("{} bytes of steganographic content", trailing_bytes),
+                    location: Some(format!("offset:{json_end_offset}")),
+                    ..Default::default()
+                }]),
+            );
+        }
+
+        // 3. Suspicious: executable code is embedded in a manifest file.
+        //    If the trailing content looks like JavaScript, flag it and also run it
+        //    through the full JS analyzer as an embedded layer.
+        let looks_like_code = trailing.contains("eval(")
+            || trailing.contains("require(")
+            || trailing.contains("function")
+            || trailing.contains("const ")
+            || trailing.contains("var ")
+            || trailing.contains("let ")
+            || trailing.contains("import ")
+            || trailing.contains("=>")
+            || trailing.contains("Buffer.from")
+            || trailing.contains("process.")
+            || trailing.contains("module.exports");
+
+        if looks_like_code {
+            report.add_finding(
+                Finding::indicator(
+                    "objectives/lateral-movement/supply-chain/npm/embedded-code".to_string(),
+                    format!(
+                        "Executable JavaScript ({} bytes, {:.0}% of file) appended after package.json",
+                        trailing_bytes,
+                        (trailing_bytes as f64 / total_size as f64) * 100.0
+                    ),
+                    0.95,
+                )
+                .with_criticality(Criticality::Suspicious)
+                .with_attack("T1195.002".to_string())
+                .with_evidence(vec![Evidence {
+                    method: "pattern".to_string(),
+                    source: "package.json".to_string(),
+                    value: preview.to_string(),
+                    location: Some(format!("offset:{json_end_offset}")),
+                    ..Default::default()
+                }]),
+            );
+
+            // Run the trailing content through the full JavaScript analyzer as an
+            // embedded layer, giving it AST parsing, capability detection, YARA, etc.
+            let virtual_path = format!("{}##trailing@{:#x}", file_path.display(), json_end_offset);
+            if let Some(analyzer) = UnifiedSourceAnalyzer::for_file_type(&FileType::JavaScript) {
+                let js_analyzer = analyzer
+                    .with_capability_mapper_arc(self.capability_mapper.clone())
+                    .without_embedded_detection();
+                let js_report = js_analyzer.analyze_source(Path::new(&virtual_path), trailing);
+                let mut layer = js_report.to_file_analysis(0);
+                layer.path = virtual_path;
+                layer.depth = 1;
+                layer.compute_summary();
+                report.files.push(layer);
+            }
+        }
     }
 
     fn analyze_scripts(&self, scripts: &HashMap<String, String>, report: &mut AnalysisReport) {
@@ -1172,5 +1340,122 @@ mod tests {
         // Empty vs single char
         assert!(is_edit_distance_one(b"", b"a"));
         assert!(!is_edit_distance_one(b"", b"ab"));
+    }
+
+    #[test]
+    fn test_trailing_content_invalid_json() {
+        // Valid JSON followed by JavaScript code
+        let content = r#"{"name": "evil-pkg", "version": "1.0.0"}
+const x = require('child_process'); eval(x.execSync('id').toString());"#;
+
+        let analyzer = PackageJsonAnalyzer::new();
+        let report = analyzer
+            .analyze_package(Path::new("package.json"), content)
+            .unwrap();
+
+        // Should produce metadata/manifest/invalid-json (Notable)
+        assert!(
+            report
+                .findings
+                .iter()
+                .any(|f| f.id == "metadata/manifest/invalid-json"
+                    && f.crit == Criticality::Notable),
+            "Expected invalid-json finding, got: {:?}",
+            report.findings.iter().map(|f| &f.id).collect::<Vec<_>>()
+        );
+
+        // Should produce embedded-code finding (Suspicious) since it looks like JS
+        assert!(
+            report
+                .findings
+                .iter()
+                .any(|f| f.id.contains("embedded-code") && f.crit == Criticality::Suspicious),
+            "Expected embedded-code finding"
+        );
+    }
+
+    #[test]
+    fn test_trailing_content_variation_selectors() {
+        // Valid JSON followed by content with variation selectors (U+FE01 = VS2)
+        let content = format!(
+            r#"{{"name": "stego-pkg", "version": "1.0.0"}}{}"#,
+            "\u{FE01}\u{FE02}\u{FE03}"
+        );
+
+        let analyzer = PackageJsonAnalyzer::new();
+        let report = analyzer
+            .analyze_package(Path::new("package.json"), &content)
+            .unwrap();
+
+        // Should detect the variation selectors as steganographic obfuscation
+        assert!(
+            report
+                .findings
+                .iter()
+                .any(|f| f.id.contains("steganography/unicode-variation-selectors")),
+            "Expected variation selector finding, got: {:?}",
+            report.findings.iter().map(|f| &f.id).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn test_trailing_whitespace_only_is_benign() {
+        // Valid JSON followed by just whitespace — should NOT flag
+        let content = r#"{"name": "ok-pkg", "version": "1.0.0"}
+    "#;
+
+        let analyzer = PackageJsonAnalyzer::new();
+        let report = analyzer
+            .analyze_package(Path::new("package.json"), content)
+            .unwrap();
+
+        assert!(
+            !report
+                .findings
+                .iter()
+                .any(|f| f.id == "metadata/manifest/invalid-json"),
+            "Trailing whitespace should not trigger invalid-json finding"
+        );
+    }
+
+    #[test]
+    fn test_no_trailing_content() {
+        // Clean package.json — no trailing content findings
+        let content = r#"{"name": "clean-pkg", "version": "1.0.0"}"#;
+
+        let analyzer = PackageJsonAnalyzer::new();
+        let report = analyzer
+            .analyze_package(Path::new("package.json"), content)
+            .unwrap();
+
+        assert!(
+            !report.findings.iter().any(|f| f.id.contains("invalid-json")
+                || f.id.contains("steganography")
+                || f.id.contains("embedded-code")),
+            "Clean package.json should have no trailing-content findings"
+        );
+    }
+
+    #[test]
+    fn test_trailing_embedded_js_creates_file_layer() {
+        // Trailing JS should produce an embedded FileAnalysis layer
+        let content = r#"{"name": "evil", "version": "1.0.0"}
+var http = require('http'); var cp = require('child_process'); eval(cp.execSync('whoami').toString());"#;
+
+        let analyzer = PackageJsonAnalyzer::new();
+        let report = analyzer
+            .analyze_package(Path::new("package.json"), content)
+            .unwrap();
+
+        // The embedded JS should be analyzed as a separate file layer
+        assert!(
+            !report.files.is_empty(),
+            "Expected embedded file layer for trailing JS"
+        );
+        assert!(
+            report.files[0].path.contains("##trailing@"),
+            "Expected virtual path with ##trailing@ prefix, got: {}",
+            report.files[0].path
+        );
     }
 }

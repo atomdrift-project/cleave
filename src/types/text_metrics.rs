@@ -101,6 +101,14 @@ pub struct TextMetrics {
     #[serde(default, skip_serializing_if = "is_zero_f32")]
     pub escape_density: f32,
 
+    // === Steganography / Invisible Characters ===
+    /// Count of invisible Unicode characters used for steganography:
+    /// variation selectors (U+FE00–FE0F, U+E0100–E01EF), zero-width
+    /// joiners/spaces (U+200B–200D, U+2060, U+FEFF), and tag characters
+    /// (U+E0001–E007F). Any non-zero value in source code is suspicious.
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub invisible_chars: u32,
+
     // === Suspicious Text Patterns ===
     /// Tokens over 100 chars without spaces
     #[serde(default, skip_serializing_if = "is_zero_u32")]

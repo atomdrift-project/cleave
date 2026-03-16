@@ -130,7 +130,7 @@ pub(crate) fn simple_rule_to_composite_rule(
     let file_types = if rule.file_types.is_empty() {
         vec![RuleFileType::All]
     } else {
-        parse_file_types(&rule.file_types, warnings)
+        parse_file_types(&rule.file_types, warnings).types
     };
 
     // Create a composite trait with a single symbol condition

@@ -220,13 +220,18 @@ impl Drop for MemoryLoggerHandle {
     }
 }
 
-/// Start a periodic memory logging task.
+/// Start a periodic memory watchdog thread.
 /// Returns a handle that can be used to stop the thread gracefully.
 ///
-/// This enhanced version also logs:
-/// - Orphaned analysis thread statistics
-/// - Rizin subprocess statistics
-/// - YARA scanner cache statistics
+/// The watchdog monitors RSS every `interval` and enforces the memory cap:
+/// 1. Warning threshold crossed → log warning + full memory stats
+/// 2. Critical threshold crossed → attempt cache clear, log error + full stats
+/// 3. Critical threshold sustained for >30s → `process::exit(1)`
+///
+/// This is the primary enforcement mechanism. The per-request check in
+/// `server::handlers::check_memory_pressure` provides early 503 rejection,
+/// but this thread is the backstop that ticks on wall clock regardless of
+/// request traffic or in-flight analysis blocking.
 #[must_use]
 pub fn start_periodic_logging(interval: Duration) -> MemoryLoggerHandle {
     let shutdown = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -234,52 +239,91 @@ pub fn start_periodic_logging(interval: Duration) -> MemoryLoggerHandle {
 
     let handle = std::thread::spawn(move || {
         let mut iteration = 0u64;
+        let mut overloaded_since: Option<Instant> = None;
 
         while !shutdown_clone.load(std::sync::atomic::Ordering::Relaxed) {
             std::thread::sleep(interval);
 
-            // Check shutdown again after sleep
             if shutdown_clone.load(std::sync::atomic::Ordering::Relaxed) {
                 break;
             }
 
             iteration += 1;
 
-            if let Some(rss) = current_rss() {
-                let rss_mb = rss / 1024 / 1024;
-                let rss_gb = rss / 1024 / 1024 / 1024;
+            let Some(rss) = current_rss() else {
+                continue;
+            };
 
-                info!(
-                    rss_mb = rss_mb,
-                    rss_gb = rss_gb,
-                    iteration = iteration,
-                    "Periodic memory check"
+            let rss_mb = rss / 1024 / 1024;
+            let rss_gb = rss / 1024 / 1024 / 1024;
+
+            info!(
+                rss_mb = rss_mb,
+                rss_gb = rss_gb,
+                iteration = iteration,
+                "Periodic memory check"
+            );
+
+            let warning = sysmem::warning_threshold();
+            let critical = sysmem::memory_limit();
+
+            if rss > critical {
+                // Try to reclaim memory before escalating
+                crate::clear_all_thread_caches();
+
+                // Re-check after cache clear
+                let rss_after = current_rss().unwrap_or(rss);
+                let rss_after_mb = rss_after / 1024 / 1024;
+
+                if rss_after <= critical {
+                    info!(
+                        rss_before_mb = rss_mb,
+                        rss_after_mb = rss_after_mb,
+                        "Cache clear brought memory below cap"
+                    );
+                    overloaded_since = None;
+                    continue;
+                }
+
+                // Still over cap — track duration
+                let since = *overloaded_since.get_or_insert_with(Instant::now);
+                let overloaded_secs = since.elapsed().as_secs();
+
+                tracing::error!(
+                    rss_mb = rss_after_mb,
+                    limit_mb = critical / 1024 / 1024,
+                    overloaded_secs = overloaded_secs,
+                    "CRITICAL: Memory usage exceeds cap"
                 );
+                log_all_memory_stats();
 
-                let warning = sysmem::warning_threshold();
-                let critical = sysmem::memory_limit();
-
-                if rss > critical {
+                if overloaded_secs > 30 {
                     tracing::error!(
-                        rss_gb = rss_gb,
+                        rss_mb = rss_after_mb,
                         limit_mb = critical / 1024 / 1024,
-                        "CRITICAL: Memory usage extremely high - OOM imminent"
+                        overloaded_secs = overloaded_secs,
+                        "Memory cap exceeded for >30s, terminating to avoid OOM kill"
                     );
-                    log_all_memory_stats();
-                } else if rss > warning {
-                    warn!(
-                        rss_gb = rss_gb,
-                        limit_mb = critical / 1024 / 1024,
-                        "WARNING: High memory usage detected"
-                    );
-                    log_all_memory_stats();
+                    std::process::exit(1);
                 }
+            } else if rss > warning {
+                // Below cap but approaching it — log but don't enforce
+                overloaded_since = None;
+                warn!(
+                    rss_mb = rss_mb,
+                    limit_mb = critical / 1024 / 1024,
+                    headroom_mb = (critical - rss) / 1024 / 1024,
+                    "WARNING: Memory approaching cap"
+                );
+                log_all_memory_stats();
+            } else {
+                // Healthy — reset overload timer
+                overloaded_since = None;
+            }
 
-                // Log full stats every 6 iterations (once per minute at 10s interval)
-                // for post-mortem analysis even when memory is normal
-                if iteration.is_multiple_of(6) {
-                    log_all_memory_stats();
-                }
+            // Log full stats every 6 iterations (once per minute at 10s interval)
+            if iteration.is_multiple_of(6) {
+                log_all_memory_stats();
             }
         }
     });
@@ -421,6 +465,38 @@ pub fn configure_jemalloc_low_memory() {
             }
         }
     }
+}
+
+/// Log startup diagnostics for OOM debugging.
+///
+/// Emits PID, system RAM, memory cap/warn thresholds, allocator, and OS
+/// in a single structured log line so post-mortem analysis has everything
+/// needed to understand the memory environment.
+pub fn log_startup_diagnostics() {
+    let total_mb = sysmem::total_memory().map(|m| m / 1024 / 1024);
+    let limit_mb = sysmem::memory_limit() / 1024 / 1024;
+    let warn_mb = sysmem::warning_threshold() / 1024 / 1024;
+    let rss_mb = current_rss().map(|r| r / 1024 / 1024);
+
+    let allocator = if cfg!(all(unix, feature = "jemalloc")) {
+        "jemalloc"
+    } else {
+        "system"
+    };
+
+    info!(
+        pid = std::process::id(),
+        version = env!("CARGO_PKG_VERSION"),
+        os = std::env::consts::OS,
+        arch = std::env::consts::ARCH,
+        allocator = allocator,
+        system_memory_mb = total_mb,
+        memory_cap_mb = limit_mb,
+        memory_warn_mb = warn_mb,
+        initial_rss_mb = rss_mb,
+        rayon_threads = rayon::current_num_threads(),
+        "Startup diagnostics"
+    );
 }
 
 /// Create a global memory tracker instance

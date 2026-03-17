@@ -56,6 +56,7 @@ mod python_aes_import_tests {
             platforms: vec![],
             arch: vec![Arch::All],
             r#for: vec![],
+            for_from_groups: false,
             r#if: Condition::Raw {
                 exact: None,
                 substr: None,

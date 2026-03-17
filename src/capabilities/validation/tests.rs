@@ -29,6 +29,7 @@ mod precision_tests {
             entropy_min: None,
             entropy_max: None,
             r#for: vec![FileType::All],
+            for_from_groups: false,
             platforms: vec![Platform::All],
             arch: vec![Arch::All],
             not: None,
@@ -161,6 +162,7 @@ mod duplicate_tests {
             entropy_min: None,
             entropy_max: None,
             r#for: for_types,
+            for_from_groups: false,
             platforms: vec![Platform::All],
             arch: vec![Arch::All],
             not: None,
@@ -2390,6 +2392,7 @@ mod pattern_tests {
             entropy_min: None,
             entropy_max: None,
             r#for: vec![FileType::All],
+            for_from_groups: false,
             platforms: vec![Platform::All],
             arch: vec![Arch::All],
             size_min: None,
@@ -2453,6 +2456,7 @@ mod taxonomy_tests {
             platforms: vec![Platform::All],
             arch: vec![Arch::All],
             r#for: vec![FileType::All],
+            for_from_groups: false,
             r#if: Condition::Trait {
                 id: ref_id.to_string(),
             },
@@ -2483,6 +2487,7 @@ mod taxonomy_tests {
             platforms: vec![Platform::All],
             arch: vec![Arch::All],
             r#for: vec![FileType::All],
+            for_from_groups: false,
             size_min: None,
             size_max: None,
             all: Some(
@@ -2670,6 +2675,7 @@ mod constraint_tests {
             entropy_min: None,
             entropy_max: None,
             r#for: vec![FileType::All],
+            for_from_groups: false,
             platforms: vec![Platform::All],
             arch: vec![Arch::All],
             not: None,
@@ -2724,6 +2730,7 @@ mod constraint_tests {
             entropy_min: None,
             entropy_max: None,
             r#for: vec![FileType::All],
+            for_from_groups: false,
             platforms: vec![Platform::All],
             arch: vec![Arch::All],
             size_min: None,
@@ -2928,6 +2935,7 @@ mod constraint_tests {
             entropy_min: None,
             entropy_max: None,
             r#for: vec![FileType::All],
+            for_from_groups: false,
             platforms: vec![Platform::All],
             arch: vec![Arch::All],
             not: None,
@@ -2972,6 +2980,7 @@ mod constraint_tests {
             entropy_min: None,
             entropy_max: None,
             r#for: vec![FileType::All],
+            for_from_groups: false,
             platforms: vec![Platform::All],
             arch: vec![Arch::All],
             not: None,
@@ -2997,6 +3006,7 @@ mod constraint_tests {
             platforms: vec![Platform::All],
             arch: vec![Arch::All],
             r#for: vec![FileType::All],
+            for_from_groups: false,
             size_min: None,
             size_max: None,
             all: None,
@@ -3029,6 +3039,7 @@ mod constraint_tests {
             platforms: vec![Platform::All],
             arch: vec![Arch::All],
             r#for: vec![FileType::All],
+            for_from_groups: false,
             size_min: None,
             size_max: None,
             all: Some(vec![Condition::Trait {
@@ -3064,6 +3075,7 @@ mod constraint_tests {
             platforms: vec![Platform::All],
             arch: vec![Arch::All],
             r#for: vec![FileType::All],
+            for_from_groups: false,
             size_min: None,
             size_max: None,
             all: Some(vec![]),
@@ -3097,6 +3109,7 @@ mod constraint_tests {
             platforms: vec![Platform::All],
             arch: vec![Arch::All],
             r#for: vec![FileType::All],
+            for_from_groups: false,
             size_min: None,
             size_max: None,
             all: None,
@@ -3129,6 +3142,7 @@ mod constraint_tests {
             platforms: vec![Platform::All],
             arch: vec![Arch::All],
             r#for: vec![FileType::All],
+            for_from_groups: false,
             size_min: None,
             size_max: None,
             all: None,
@@ -3172,6 +3186,7 @@ mod autoprefix_tests {
             platforms: vec![Platform::All],
             arch: vec![Arch::All],
             r#for: vec![FileType::All],
+            for_from_groups: false,
             size_min: None,
             size_max: None,
             all: None,
@@ -3309,6 +3324,7 @@ mod orphan_tests {
             entropy_min: None,
             entropy_max: None,
             r#for: vec![FileType::All],
+            for_from_groups: false,
             platforms: vec![Platform::All],
             arch: vec![Arch::All],
             not: None,
@@ -3334,6 +3350,7 @@ mod orphan_tests {
             platforms: vec![Platform::All],
             arch: vec![Arch::All],
             r#for: vec![FileType::All],
+            for_from_groups: false,
             size_min: None,
             size_max: None,
             all: Some(all_conditions),
@@ -3689,6 +3706,7 @@ mod excessive_file_types_tests {
                 FileType::Dll,
                 FileType::Python, // not the canonical `binaries` set
             ],
+            for_from_groups: false,
             size_min: None,
             size_max: None,
             all: None,
@@ -3707,6 +3725,89 @@ mod excessive_file_types_tests {
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].0, "test::composite-many");
         assert!(result[0].3); // is_composite
+    }
+
+    #[test]
+    fn test_from_groups_skips_check_with_many_types() {
+        // `for: [binaries, c]` expands to 9 types with for_from_groups=true.
+        // After platform filtering the set may be a partial group, but the
+        // author already used named groups — don't flag it.
+        let traits = vec![trait_with_for_from_groups(
+            "test::groups-plus-extra",
+            vec![
+                FileType::Elf,
+                FileType::Macho,
+                FileType::Pe,
+                FileType::Dylib,
+                FileType::So,
+                FileType::Dll,
+                FileType::Class,
+                FileType::Pyc,
+                FileType::C,
+            ],
+        )];
+        let result = find_excessive_file_types(&traits, &[]);
+        assert!(
+            result.is_empty(),
+            "for_from_groups=true should suppress the warning"
+        );
+    }
+
+    #[test]
+    fn test_from_groups_platform_filtered_not_flagged() {
+        // `for: [scripts, binaries]` after platform filtering for unix-only:
+        // PE/DLL/Batch/VBS removed → partial groups. Still exempt because
+        // for_from_groups=true.
+        let traits = vec![trait_with_for_from_groups(
+            "test::filtered-groups",
+            vec![
+                FileType::Elf,
+                FileType::Macho,
+                FileType::Dylib,
+                FileType::So,
+                FileType::Class,
+                FileType::Pyc,
+                FileType::Shell,
+                FileType::Python,
+                FileType::JavaScript,
+                FileType::Ruby,
+                FileType::Php,
+                FileType::Perl,
+                FileType::Lua,
+                FileType::AppleScript,
+            ],
+        )];
+        let result = find_excessive_file_types(&traits, &[]);
+        assert!(
+            result.is_empty(),
+            "platform-filtered groups should not be flagged"
+        );
+    }
+
+    #[test]
+    fn test_not_from_groups_still_flagged() {
+        // Same 14 types but for_from_groups=false — author manually listed them.
+        let traits = vec![trait_with_for(
+            "test::manual-many",
+            vec![
+                FileType::Elf,
+                FileType::Macho,
+                FileType::Dylib,
+                FileType::So,
+                FileType::Class,
+                FileType::Pyc,
+                FileType::Shell,
+                FileType::Python,
+                FileType::JavaScript,
+                FileType::Ruby,
+                FileType::Php,
+                FileType::Perl,
+                FileType::Lua,
+                FileType::AppleScript,
+            ],
+        )];
+        let result = find_excessive_file_types(&traits, &[]);
+        assert_eq!(result.len(), 1, "manual listing should still be flagged");
     }
 }
 
@@ -4058,6 +4159,7 @@ mod raw_should_use_string_value_tests {
             entropy_min: None,
             entropy_max: None,
             r#for: vec![FileType::Elf, FileType::Pe, FileType::Macho],
+            for_from_groups: false,
             platforms: vec![Platform::All],
             arch: vec![Arch::All],
             not: None,
@@ -4304,6 +4406,7 @@ mod string_value_should_use_raw_tests {
             entropy_min: None,
             entropy_max: None,
             r#for: vec![file_type],
+            for_from_groups: false,
             platforms: vec![Platform::All],
             arch: vec![Arch::All],
             not: None,

@@ -85,6 +85,7 @@ fn test_symbol_condition() {
         platforms: vec![Platform::All],
         arch: vec![Arch::All],
         r#for: vec![FileType::All],
+        for_from_groups: false,
         size_min: None,
         size_max: None,
         all: Some(vec![Condition::Symbol {
@@ -151,6 +152,7 @@ fn test_all() {
         platforms: vec![Platform::All],
         arch: vec![Arch::All],
         r#for: vec![FileType::All],
+        for_from_groups: false,
         size_min: None,
         size_max: None,
         all: Some(vec![
@@ -231,6 +233,7 @@ fn test_count() {
         platforms: vec![Platform::All],
         arch: vec![Arch::All],
         r#for: vec![FileType::All],
+        for_from_groups: false,
         size_min: None,
         size_max: None,
         all: None,
@@ -308,6 +311,7 @@ fn test_string_exact_condition() {
         platforms: vec![Platform::All],
         arch: vec![Arch::All],
         r#for: vec![FileType::All],
+        for_from_groups: false,
         size_min: None,
         size_max: None,
         all: Some(vec![Condition::StringValue {
@@ -379,6 +383,7 @@ fn test_any() {
         platforms: vec![Platform::All],
         arch: vec![Arch::All],
         r#for: vec![FileType::All],
+        for_from_groups: false,
         size_min: None,
         size_max: None,
         all: None,
@@ -475,6 +480,7 @@ fn test_not_directive_shorthand() {
         platforms: vec![Platform::All],
         arch: vec![Arch::All],
         r#for: vec![FileType::All],
+        for_from_groups: false,
         r#if: Condition::StringValue {
             exact: None,
             substr: None,
@@ -571,6 +577,7 @@ fn test_not_directive_exact() {
         platforms: vec![Platform::All],
         arch: vec![Arch::All],
         r#for: vec![FileType::All],
+        for_from_groups: false,
         r#if: Condition::StringValue {
             exact: None,
             substr: None,
@@ -673,6 +680,7 @@ fn test_not_directive_regex() {
         platforms: vec![Platform::All],
         arch: vec![Arch::All],
         r#for: vec![FileType::All],
+        for_from_groups: false,
         r#if: Condition::StringValue {
             exact: None,
             substr: None,
@@ -771,6 +779,7 @@ fn test_unless_directive_skips_trait() {
         platforms: vec![Platform::All],
         arch: vec![Arch::All],
         r#for: vec![FileType::All],
+        for_from_groups: false,
         r#if: Condition::Symbol {
             exact: None,
             substr: None,
@@ -837,6 +846,7 @@ fn test_unless_directive_allows_trait() {
         platforms: vec![Platform::All],
         arch: vec![Arch::All],
         r#for: vec![FileType::All],
+        for_from_groups: false,
         r#if: Condition::Symbol {
             exact: None,
             substr: None,
@@ -918,6 +928,7 @@ fn test_downgrade_to_notable() {
         platforms: vec![Platform::All],
         arch: vec![Arch::All],
         r#for: vec![FileType::All],
+        for_from_groups: false,
         r#if: Condition::StringValue {
             exact: Some("/bin/sh".to_string()),
             substr: None,
@@ -1015,6 +1026,7 @@ fn test_downgrade_one_level() {
         platforms: vec![Platform::All],
         arch: vec![Arch::All],
         r#for: vec![FileType::All],
+        for_from_groups: false,
         r#if: Condition::Symbol {
             exact: None,
             substr: None,
@@ -1089,6 +1101,7 @@ fn test_downgrade_no_match_keeps_original() {
         platforms: vec![Platform::All],
         arch: vec![Arch::All],
         r#for: vec![FileType::All],
+        for_from_groups: false,
         r#if: Condition::Symbol {
             exact: None,
             substr: None,
@@ -1178,6 +1191,7 @@ fn test_downgrade_from_hostile() {
         platforms: vec![Platform::All],
         arch: vec![Arch::All],
         r#for: vec![FileType::All],
+        for_from_groups: false,
         r#if: Condition::Symbol {
             exact: None,
             substr: None,
@@ -1287,6 +1301,7 @@ fn test_all_three_directives_combined() {
         platforms: vec![Platform::All],
         arch: vec![Arch::All],
         r#for: vec![FileType::All],
+        for_from_groups: false,
         r#if: Condition::StringValue {
             exact: None,
             substr: None,
@@ -1396,6 +1411,7 @@ fn test_string_exact_match_requires_full_equality() {
         platforms: vec![Platform::All],
         arch: vec![Arch::All],
         r#for: vec![FileType::All],
+        for_from_groups: false,
         r#if: Condition::StringValue {
             exact: Some("hello".to_string()),
             substr: None,
@@ -1493,6 +1509,7 @@ fn test_string_substr_matches_substrings() {
         platforms: vec![Platform::All],
         arch: vec![Arch::All],
         r#for: vec![FileType::All],
+        for_from_groups: false,
         r#if: Condition::StringValue {
             exact: None,
             substr: Some("hello".to_string()),
@@ -1581,6 +1598,7 @@ fn test_symbol_exact_vs_substr() {
         platforms: vec![Platform::All],
         arch: vec![Arch::All],
         r#for: vec![FileType::All],
+        for_from_groups: false,
         r#if: Condition::Symbol {
             exact: Some("read".to_string()),
             substr: None,
@@ -1620,6 +1638,7 @@ fn test_symbol_exact_vs_substr() {
         platforms: vec![Platform::All],
         arch: vec![Arch::All],
         r#for: vec![FileType::All],
+        for_from_groups: false,
         r#if: Condition::Symbol {
             exact: None,
             substr: Some("read".to_string()),
@@ -1696,6 +1715,7 @@ fn test_string_case_insensitive_exact() {
         platforms: vec![Platform::All],
         arch: vec![Arch::All],
         r#for: vec![FileType::All],
+        for_from_groups: false,
         r#if: Condition::StringValue {
             exact: Some("hello".to_string()),
             substr: None,
@@ -1788,6 +1808,7 @@ fn test_string_word_boundary_match() {
         platforms: vec![Platform::All],
         arch: vec![Arch::All],
         r#for: vec![FileType::All],
+        for_from_groups: false,
         r#if: Condition::StringValue {
             exact: None,
             substr: None,
@@ -1893,6 +1914,7 @@ fn test_string_regex_match() {
         platforms: vec![Platform::All],
         arch: vec![Arch::All],
         r#for: vec![FileType::All],
+        for_from_groups: false,
         r#if: Condition::StringValue {
             exact: None,
             substr: None,
@@ -2239,6 +2261,7 @@ fn test_basename_in_trait_definition() {
         platforms: vec![Platform::All],
         arch: vec![Arch::All],
         r#for: vec![FileType::Python],
+        for_from_groups: false,
         r#if: Condition::Basename {
             exact: Some("__init__.py".to_string()),
             substr: None,
@@ -2304,6 +2327,7 @@ fn test_basename_in_composite_rule() {
         platforms: vec![Platform::All],
         arch: vec![Arch::All],
         r#for: vec![FileType::Python],
+        for_from_groups: false,
         size_min: None,
         size_max: None,
         all: Some(vec![Condition::Basename {
@@ -2386,6 +2410,7 @@ fn test_composite_unless_skips_rule() {
         platforms: vec![Platform::All],
         arch: vec![Arch::All],
         r#for: vec![FileType::All],
+        for_from_groups: false,
         size_min: None,
         size_max: None,
         all: Some(vec![Condition::Symbol {
@@ -2454,6 +2479,7 @@ fn test_composite_unless_allows_rule() {
         platforms: vec![Platform::All],
         arch: vec![Arch::All],
         r#for: vec![FileType::All],
+        for_from_groups: false,
         size_min: None,
         size_max: None,
         all: Some(vec![Condition::Symbol {
@@ -2523,6 +2549,7 @@ fn test_composite_unless_with_basename() {
         platforms: vec![Platform::All],
         arch: vec![Arch::All],
         r#for: vec![FileType::Elf],
+        for_from_groups: false,
         size_min: None,
         size_max: None,
         any: Some(vec![Condition::Symbol {
@@ -2607,6 +2634,7 @@ fn test_composite_unless_multiple_conditions_any_matches() {
         platforms: vec![Platform::All],
         arch: vec![Arch::All],
         r#for: vec![FileType::All],
+        for_from_groups: false,
         size_min: None,
         size_max: None,
         all: Some(vec![Condition::Symbol {
@@ -2703,6 +2731,7 @@ fn test_needs_with_any_only_respects_threshold() {
         platforms: vec![Platform::All],
         arch: vec![Arch::All],
         r#for: vec![FileType::All],
+        for_from_groups: false,
         size_min: None,
         size_max: None,
         all: None,
@@ -2793,6 +2822,7 @@ fn test_needs_with_any_only_matches_when_threshold_met() {
         platforms: vec![Platform::All],
         arch: vec![Arch::All],
         r#for: vec![FileType::All],
+        for_from_groups: false,
         size_min: None,
         size_max: None,
         all: None,
@@ -2881,6 +2911,7 @@ fn test_needs_with_all_and_any_respects_threshold() {
         platforms: vec![Platform::All],
         arch: vec![Arch::All],
         r#for: vec![FileType::All],
+        for_from_groups: false,
         size_min: None,
         size_max: None,
         all: Some(vec![Condition::Symbol {
@@ -2995,6 +3026,7 @@ fn test_needs_with_all_and_any_matches_when_threshold_met() {
         platforms: vec![Platform::All],
         arch: vec![Arch::All],
         r#for: vec![FileType::All],
+        for_from_groups: false,
         size_min: None,
         size_max: None,
         all: Some(vec![Condition::Symbol {
@@ -3093,6 +3125,7 @@ fn test_needs_with_all_and_any_all_fails() {
         platforms: vec![Platform::All],
         arch: vec![Arch::All],
         r#for: vec![FileType::All],
+        for_from_groups: false,
         size_min: None,
         size_max: None,
         all: Some(vec![Condition::Symbol {
@@ -3175,6 +3208,7 @@ fn test_all_and_any_without_needs_requires_one_any() {
         platforms: vec![Platform::All],
         arch: vec![Arch::All],
         r#for: vec![FileType::All],
+        for_from_groups: false,
         size_min: None,
         size_max: None,
         all: Some(vec![Condition::Symbol {
@@ -3301,6 +3335,7 @@ fn proximity_rule(
         platforms: vec![Platform::All],
         arch: vec![Arch::All],
         r#for: vec![FileType::All],
+        for_from_groups: false,
         size_min: None,
         size_max: None,
         all: Some(all_conds),
@@ -3556,6 +3591,7 @@ fn test_near_lines_any_with_needs() {
         platforms: vec![Platform::All],
         arch: vec![Arch::All],
         r#for: vec![FileType::All],
+        for_from_groups: false,
         size_min: None,
         size_max: None,
         all: None,
@@ -3619,6 +3655,7 @@ fn test_near_lines_any_with_needs_too_spread() {
         platforms: vec![Platform::All],
         arch: vec![Arch::All],
         r#for: vec![FileType::All],
+        for_from_groups: false,
         size_min: None,
         size_max: None,
         all: None,
@@ -3677,6 +3714,7 @@ fn test_near_lines_all_plus_any() {
         platforms: vec![Platform::All],
         arch: vec![Arch::All],
         r#for: vec![FileType::All],
+        for_from_groups: false,
         size_min: None,
         size_max: None,
         all: Some(vec![
@@ -4073,6 +4111,7 @@ fn test_downgrade_combined_all_and_none_blocked_by_none() {
         platforms: vec![Platform::All],
         arch: vec![Arch::All],
         r#for: vec![FileType::All],
+        for_from_groups: false,
         r#if: Condition::StringValue {
             exact: Some("suspicious_call".to_string()),
             substr: None,
@@ -4185,6 +4224,7 @@ fn test_downgrade_combined_all_and_none_pass() {
         platforms: vec![Platform::All],
         arch: vec![Arch::All],
         r#for: vec![FileType::All],
+        for_from_groups: false,
         r#if: Condition::StringValue {
             exact: Some("suspicious_call".to_string()),
             substr: None,
@@ -4298,6 +4338,7 @@ fn test_downgrade_needs_threshold_not_met() {
         platforms: vec![Platform::All],
         arch: vec![Arch::All],
         r#for: vec![FileType::All],
+        for_from_groups: false,
         r#if: Condition::StringValue {
             exact: Some("/bin/sh".to_string()),
             substr: None,
@@ -4418,6 +4459,7 @@ fn test_downgrade_needs_threshold_met() {
         platforms: vec![Platform::All],
         arch: vec![Arch::All],
         r#for: vec![FileType::All],
+        for_from_groups: false,
         r#if: Condition::StringValue {
             exact: Some("/bin/sh".to_string()),
             substr: None,
@@ -4547,6 +4589,7 @@ fn test_composite_downgrade_all_match() {
         platforms: vec![Platform::All],
         arch: vec![Arch::All],
         r#for: vec![FileType::All],
+        for_from_groups: false,
         size_min: None,
         size_max: None,
         all: Some(vec![Condition::Symbol {
@@ -4644,6 +4687,7 @@ fn test_composite_downgrade_none_blocks() {
         platforms: vec![Platform::All],
         arch: vec![Arch::All],
         r#for: vec![FileType::All],
+        for_from_groups: false,
         size_min: None,
         size_max: None,
         all: Some(vec![Condition::Symbol {
@@ -4813,6 +4857,7 @@ fn test_proximity_any_needs_cross_condition() {
         platforms: vec![Platform::All],
         arch: vec![Arch::All],
         r#for: vec![FileType::All],
+        for_from_groups: false,
         size_min: None,
         size_max: None,
         all: None,
@@ -4912,6 +4957,7 @@ fn test_proximity_does_not_boost_confidence() {
         platforms: vec![Platform::All],
         arch: vec![Arch::All],
         r#for: vec![FileType::All],
+        for_from_groups: false,
         size_min: None,
         size_max: None,
         all: Some(vec![
@@ -5032,6 +5078,7 @@ fn test_none_only_rule_passes_when_conditions_absent() {
         platforms: vec![Platform::All],
         arch: vec![Arch::All],
         r#for: vec![FileType::All],
+        for_from_groups: false,
         size_min: None,
         size_max: None,
         all: None,
@@ -5118,6 +5165,7 @@ fn test_none_only_rule_fails_when_condition_present() {
         platforms: vec![Platform::All],
         arch: vec![Arch::All],
         r#for: vec![FileType::All],
+        for_from_groups: false,
         size_min: None,
         size_max: None,
         all: None,

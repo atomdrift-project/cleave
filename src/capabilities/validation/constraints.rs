@@ -1072,10 +1072,7 @@ pub(crate) fn find_excessive_file_types(
         // Skip if the author already used named groups — platform filtering may
         // have removed some members, making the expanded set look like a partial
         // group, but the YAML source is correct.
-        if t.for_from_groups
-            || t.r#for.contains(&FileType::All)
-            || is_group_expressible(&t.r#for)
-        {
+        if t.for_from_groups || t.r#for.contains(&FileType::All) || is_group_expressible(&t.r#for) {
             continue;
         }
         if t.r#for.len() >= MIN_FOR_WARNING {
@@ -1084,10 +1081,7 @@ pub(crate) fn find_excessive_file_types(
     }
 
     for r in composite_rules {
-        if r.for_from_groups
-            || r.r#for.contains(&FileType::All)
-            || is_group_expressible(&r.r#for)
-        {
+        if r.for_from_groups || r.r#for.contains(&FileType::All) || is_group_expressible(&r.r#for) {
             continue;
         }
         if r.r#for.len() >= MIN_FOR_WARNING {

@@ -27,6 +27,7 @@ fn create_test_trait(id: &str, condition: Condition) -> TraitDefinition {
         crit: Criticality::Notable,
         conf: 1.0,
         r#for: vec![FileType::All],
+        for_from_groups: false,
         platforms: vec![Platform::All],
         arch: vec![Arch::All],
         mbc: None,

@@ -939,6 +939,7 @@ fn test_composite_referencing_atomic_trait() {
         platforms: vec![Platform::All],
         arch: vec![Arch::All],
         r#for: vec![RuleFileType::All],
+        for_from_groups: false,
         all: Some(vec![Condition::Trait {
             id: "test/atomic-trait".to_string(),
         }]),
@@ -980,6 +981,7 @@ fn test_composite_of_composites_two_levels() {
         platforms: vec![Platform::All],
         arch: vec![Arch::All],
         r#for: vec![RuleFileType::All],
+        for_from_groups: false,
         all: Some(vec![Condition::Trait {
             id: "test/atomic-trait".to_string(),
         }]),
@@ -1008,6 +1010,7 @@ fn test_composite_of_composites_two_levels() {
         platforms: vec![Platform::All],
         arch: vec![Arch::All],
         r#for: vec![RuleFileType::All],
+        for_from_groups: false,
         all: Some(vec![Condition::Trait {
             id: "test/composite-a".to_string(),
         }]),
@@ -1054,6 +1057,7 @@ fn test_composite_three_level_chain() {
         platforms: vec![Platform::All],
         arch: vec![Arch::All],
         r#for: vec![RuleFileType::All],
+        for_from_groups: false,
         all: Some(vec![Condition::Trait {
             id: requires.to_string(),
         }]),
@@ -1107,6 +1111,7 @@ fn test_composite_circular_dependency_handled() {
         platforms: vec![Platform::All],
         arch: vec![Arch::All],
         r#for: vec![RuleFileType::All],
+        for_from_groups: false,
         all: Some(vec![Condition::Trait {
             id: "circular/b".to_string(),
         }]),
@@ -1135,6 +1140,7 @@ fn test_composite_circular_dependency_handled() {
         platforms: vec![Platform::All],
         arch: vec![Arch::All],
         r#for: vec![RuleFileType::All],
+        for_from_groups: false,
         all: Some(vec![Condition::Trait {
             id: "circular/a".to_string(),
         }]),
@@ -1180,6 +1186,7 @@ fn test_composite_prefix_matching_in_chain() {
         platforms: vec![Platform::All],
         arch: vec![Arch::All],
         r#for: vec![RuleFileType::All],
+        for_from_groups: false,
         all: Some(vec![Condition::Trait {
             id: "discovery/system".to_string(), // Prefix match
         }]),
@@ -1221,6 +1228,7 @@ fn test_composite_requires_count_in_chain() {
         platforms: vec![Platform::All],
         arch: vec![Arch::All],
         r#for: vec![RuleFileType::All],
+        for_from_groups: false,
         all: None,
         any: Some(vec![
             Condition::Trait {
@@ -1274,6 +1282,7 @@ fn test_precision_direct_conditions() {
         platforms: vec![Platform::All],
         arch: vec![Arch::All],
         r#for: vec![RuleFileType::All],
+        for_from_groups: false,
         all: Some(vec![
             Condition::StringValue {
                 external_ip: false,
@@ -1375,6 +1384,7 @@ fn test_precision_file_type_filter() {
         platforms: vec![Platform::All],
         arch: vec![Arch::All],
         r#for: vec![RuleFileType::Elf, RuleFileType::Pe], // File type filter
+        for_from_groups: false,
         all: Some(vec![
             Condition::StringValue {
                 external_ip: false,
@@ -1460,6 +1470,7 @@ fn test_precision_recursive_expansion() {
         platforms: vec![Platform::All],
         arch: vec![Arch::All],
         r#for: vec![RuleFileType::All],
+        for_from_groups: false,
         r#if: Condition::StringValue {
             external_ip: false,
             exact: Some("atomic".to_string()),
@@ -1502,6 +1513,7 @@ fn test_precision_recursive_expansion() {
         platforms: vec![Platform::All],
         arch: vec![Arch::All],
         r#for: vec![RuleFileType::All],
+        for_from_groups: false,
         all: Some(vec![
             Condition::StringValue {
                 external_ip: false,
@@ -1562,6 +1574,7 @@ fn test_precision_recursive_expansion() {
         platforms: vec![Platform::All],
         arch: vec![Arch::All],
         r#for: vec![RuleFileType::All],
+        for_from_groups: false,
         all: Some(vec![
             Condition::Trait {
                 id: "test/composite-a".to_string(),
@@ -1623,6 +1636,7 @@ fn test_precision_cycle_detection() {
         platforms: vec![Platform::All],
         arch: vec![Arch::All],
         r#for: vec![RuleFileType::All],
+        for_from_groups: false,
         all: Some(vec![Condition::Trait {
             id: "test/circular-b".to_string(),
         }]),
@@ -1652,6 +1666,7 @@ fn test_precision_cycle_detection() {
         platforms: vec![Platform::All],
         arch: vec![Arch::All],
         r#for: vec![RuleFileType::All],
+        for_from_groups: false,
         all: Some(vec![Condition::Trait {
             id: "test/circular-a".to_string(),
         }]),
@@ -1706,6 +1721,7 @@ fn test_precision_caching() {
         platforms: vec![Platform::All],
         arch: vec![Arch::All],
         r#for: vec![RuleFileType::All],
+        for_from_groups: false,
         all: Some(vec![
             Condition::StringValue {
                 external_ip: false,
@@ -1802,6 +1818,7 @@ fn test_precision_threshold_validation() {
         platforms: vec![Platform::All],
         arch: vec![Arch::All],
         r#for: vec![RuleFileType::All],
+        for_from_groups: false,
         all: Some(vec![
             Condition::StringValue {
                 external_ip: false,
@@ -1880,6 +1897,7 @@ fn test_precision_threshold_validation() {
         platforms: vec![Platform::All],
         arch: vec![Arch::All],
         r#for: vec![RuleFileType::All],
+        for_from_groups: false,
         all: Some(vec![
             Condition::StringValue {
                 external_ip: false,
@@ -1972,6 +1990,7 @@ fn test_suspicious_precision_threshold_validation() {
         platforms: vec![Platform::All],
         arch: vec![Arch::All],
         r#for: vec![RuleFileType::All],
+        for_from_groups: false,
         all: Some(vec![Condition::StringValue {
             external_ip: false,
             exact: Some("string1".to_string()),
@@ -2015,6 +2034,7 @@ fn test_suspicious_precision_threshold_validation() {
         platforms: vec![Platform::All],
         arch: vec![Arch::All],
         r#for: vec![RuleFileType::All],
+        for_from_groups: false,
         all: Some(vec![
             Condition::StringValue {
                 external_ip: false,
@@ -2108,6 +2128,7 @@ fn test_precision_mixed_conditions() {
         platforms: vec![Platform::All],
         arch: vec![Arch::All],
         r#for: vec![RuleFileType::All],
+        for_from_groups: false,
         all: Some(vec![Condition::StringValue {
             external_ip: false,
             exact: Some("string1".to_string()),
@@ -2222,6 +2243,7 @@ fn test_precision_deep_nesting() {
         platforms: vec![Platform::All],
         arch: vec![Arch::All],
         r#for: vec![RuleFileType::All],
+        for_from_groups: false,
         all: Some(vec![
             Condition::StringValue {
                 external_ip: false,
@@ -2282,6 +2304,7 @@ fn test_precision_deep_nesting() {
         platforms: vec![Platform::All],
         arch: vec![Arch::All],
         r#for: vec![RuleFileType::All],
+        for_from_groups: false,
         all: Some(vec![
             Condition::Trait {
                 id: "test/level1".to_string(),
@@ -2329,6 +2352,7 @@ fn test_precision_deep_nesting() {
         platforms: vec![Platform::All],
         arch: vec![Arch::All],
         r#for: vec![RuleFileType::All],
+        for_from_groups: false,
         all: Some(vec![
             Condition::Trait {
                 id: "test/level2".to_string(),
@@ -2405,6 +2429,7 @@ fn test_precision_correct_algorithm() {
         platforms: vec![Platform::All],
         arch: vec![Arch::All],
         r#for: vec![RuleFileType::JavaScript], // +1 (not "all")
+        for_from_groups: false,
         all: Some(vec![
             // +2 (2 elements in all)
             Condition::Trait {
@@ -2495,6 +2520,7 @@ fn test_precision_traits_with_size_restrictions() {
         platforms: vec![Platform::All],
         arch: vec![Arch::All],
         r#for: vec![RuleFileType::All],
+        for_from_groups: false,
         r#if: Condition::StringValue {
             external_ip: false,
             exact: Some("pattern1".to_string()),
@@ -2537,6 +2563,7 @@ fn test_precision_traits_with_size_restrictions() {
         platforms: vec![Platform::All],
         arch: vec![Arch::All],
         r#for: vec![RuleFileType::All],
+        for_from_groups: false,
         r#if: Condition::StringValue {
             external_ip: false,
             exact: Some("pattern2".to_string()),
@@ -2579,6 +2606,7 @@ fn test_precision_traits_with_size_restrictions() {
         platforms: vec![Platform::All],
         arch: vec![Arch::All],
         r#for: vec![RuleFileType::All],
+        for_from_groups: false,
         all: Some(vec![
             Condition::Trait {
                 id: "test/trait-with-size-1".to_string(),
@@ -3253,6 +3281,7 @@ fn test_collect_trait_refs_finds_internal_paths() {
         platforms: vec![Platform::All],
         arch: vec![Arch::All],
         r#for: vec![RuleFileType::All],
+        for_from_groups: false,
         all: Some(vec![
             Condition::Trait {
                 id: "metadata/internal/symbols::printf".to_string(), // Forbidden!
@@ -3316,6 +3345,7 @@ fn test_meta_internal_paths_forbidden_in_composite_rules() {
         platforms: vec![Platform::All],
         arch: vec![Arch::All],
         r#for: vec![RuleFileType::All],
+        for_from_groups: false,
         all: Some(vec![Condition::Trait {
             id: "metadata/internal/symbols::evil_func".to_string(),
         }]),

@@ -43,6 +43,7 @@ fn test_count_min_filter_matches_debug_and_eval() {
         attack: None,
         platforms: vec![Platform::All],
         r#for: vec![RuleFileType::All],
+        for_from_groups: false,
         r#if: Condition::Hex {
             pattern: "0F A2".to_string(),
             not: None,
@@ -174,6 +175,7 @@ fn test_per_kb_min_filter_matches_debug_and_eval() {
         attack: None,
         platforms: vec![Platform::All],
         r#for: vec![RuleFileType::All],
+        for_from_groups: false,
         r#if: Condition::Hex {
             pattern: "0F A2".to_string(),
             not: None,
@@ -291,6 +293,7 @@ fn test_size_min_filter_matches_debug_and_eval() {
         attack: None,
         platforms: vec![Platform::All],
         r#for: vec![RuleFileType::All],
+        for_from_groups: false,
         r#if: Condition::Raw {
             exact: None,
             substr: Some("A".to_string()),
@@ -413,6 +416,7 @@ fn test_composite_size_constraints_match_debug_and_eval() {
         attack: None,
         platforms: vec![Platform::All],
         r#for: vec![RuleFileType::All],
+        for_from_groups: false,
         size_min: Some(1024), // Require at least 1 KB
         size_max: None,
         all: None,
@@ -542,6 +546,7 @@ fn test_all_filters_match_when_satisfied() {
         attack: None,
         platforms: vec![Platform::All],
         r#for: vec![RuleFileType::All],
+        for_from_groups: false,
         r#if: Condition::Hex {
             pattern: "0F A2".to_string(),
             not: None,
@@ -663,6 +668,7 @@ fn test_size_max_suppresses_symbol_match() {
         attack: None,
         platforms: vec![Platform::All],
         r#for: vec![RuleFileType::All],
+        for_from_groups: false,
         r#if: Condition::Symbol {
             exact: Some("setsid".to_string()),
             substr: None,

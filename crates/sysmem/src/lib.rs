@@ -30,10 +30,10 @@ pub fn current_rss() -> Option<u64> {
     current_rss_impl()
 }
 
-/// Memory pressure limit: 50 % of system RAM (fallback 8 GiB).
+/// Memory pressure limit: 25 % of system RAM (fallback 4 GiB).
 #[must_use]
 pub fn memory_limit() -> u64 {
-    total_memory().unwrap_or(16 * GB) / 2
+    total_memory().unwrap_or(16 * GB) / 4
 }
 
 /// Warning threshold: 512 MiB below [`memory_limit`].
@@ -383,11 +383,11 @@ mod tests {
     }
 
     #[test]
-    fn memory_limit_is_half_ram() {
+    fn memory_limit_is_quarter_ram() {
         if let Some(total) = total_memory() {
-            assert_eq!(memory_limit(), total / 2);
+            assert_eq!(memory_limit(), total / 4);
         } else {
-            assert_eq!(memory_limit(), 8 * GB);
+            assert_eq!(memory_limit(), 4 * GB);
         }
     }
 

@@ -470,8 +470,8 @@ pub(crate) enum Command {
         #[arg(long, default_value = "100")]
         max_size_mb: u64,
 
-        /// Max memory usage (RSS) in GB before rejecting requests (default: 50% of system RAM)
-        #[arg(long)]
+        /// Max memory usage (RSS) in GB before rejecting requests (default: 25% of system RAM)
+        #[arg(long, env = "CLEAVE_MAX_RSS_GB")]
         max_rss_gb: Option<u64>,
 
         /// DANGEROUS: Allow analyzing local file paths via /analyze-path endpoint.

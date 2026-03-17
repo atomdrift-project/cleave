@@ -479,14 +479,9 @@ fn main() -> Result<()> {
         Some(cli::Command::Metrics { target, layer }) => {
             commands::extract::metrics::run(&target, layer.as_deref(), &format, &disabled)?
         }
-        Some(cli::Command::TestRules { target, rules }) => test_rules(
-            &target,
-            &rules,
-            &disabled,
-            platforms.clone(),
-            3.5,
-            2.0,
-        )?,
+        Some(cli::Command::TestRules { target, rules }) => {
+            test_rules(&target, &rules, &disabled, platforms.clone(), 3.5, 2.0)?
+        }
         Some(cli::Command::TestMatch {
             target,
             r#type,

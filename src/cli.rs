@@ -179,7 +179,6 @@ pub(crate) struct Args {
     /// Override with CLEAVE_SCAN_THREADS env var.
     #[arg(long, value_name = "N")]
     pub scan_threads: Option<usize>,
-
 }
 
 impl Args {

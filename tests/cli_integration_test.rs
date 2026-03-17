@@ -609,4 +609,3 @@ fn test_system_binary_false_positive_sanity() {
         notable_dirs
     );
 }
-

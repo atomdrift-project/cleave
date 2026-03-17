@@ -1,6 +1,6 @@
 [package]
 name = "cleave"
-version = "0.1.0"
+version = "0.3.0"
 edition = "2021"
 authors = ["cleave Team"]
 description = "Deep static analysis tool for extracting features from binaries and source code"

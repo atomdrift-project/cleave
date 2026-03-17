@@ -204,7 +204,7 @@ fn main() -> Result<()> {
     }
 
     // Check if running server command (needs info-level logging by default)
-    let is_server = matches!(args.command, Some(cli::Command::Server { .. }));
+    let is_server = matches!(args.command, Some(cli::Command::Serve { .. }));
 
     // Determine output format early so we can use it for conditional status messages
     let format = args.format();
@@ -566,7 +566,7 @@ fn main() -> Result<()> {
             }
             return Ok(());
         }
-        Some(cli::Command::Server {
+        Some(cli::Command::Serve {
             bind,
             qps,
             timeout,

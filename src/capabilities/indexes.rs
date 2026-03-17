@@ -1591,6 +1591,7 @@ mod tests {
             platforms: vec![Platform::All],
             arch: vec![Arch::All],
             r#for: vec![RuleFileType::All],
+            for_from_groups: false,
             r#if: Condition::Raw {
                 exact: None,
                 substr: None,
@@ -1644,6 +1645,7 @@ mod tests {
             platforms: vec![Platform::All],
             arch: vec![Arch::All],
             r#for: vec![RuleFileType::All],
+            for_from_groups: false,
             r#if: Condition::StringValue {
                 exact: None,
                 substr: Some(substr.to_string()),

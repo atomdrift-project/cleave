@@ -452,7 +452,8 @@ pub(crate) enum Command {
     },
 
     /// Start HTTP API server for file analysis
-    Server {
+    #[command(alias = "server")]
+    Serve {
         /// Address to bind to (default: 127.0.0.1:8080)
         #[arg(long, default_value = "127.0.0.1:8080")]
         bind: String,

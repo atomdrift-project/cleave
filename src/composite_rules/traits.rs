@@ -145,6 +145,10 @@ pub(crate) struct TraitDefinition {
     #[serde(default = "default_file_types")]
     pub r#for: Vec<FileType>,
 
+    /// True if `for:` was specified using named groups (binaries, scripts, etc.)
+    #[serde(skip, default)]
+    pub for_from_groups: bool,
+
     /// The detection condition (plain Condition — no flatten, enables deny_unknown_fields)
     pub r#if: Condition,
 
@@ -1528,6 +1532,10 @@ pub(crate) struct CompositeTrait {
     /// File types this rule applies to (defaults to all)
     #[serde(default = "default_file_types")]
     pub r#for: Vec<FileType>,
+
+    /// True if `for:` was specified using named groups (binaries, scripts, etc.)
+    #[serde(skip, default)]
+    pub for_from_groups: bool,
 
     /// Minimum file size in bytes
     #[serde(skip_serializing_if = "Option::is_none", default)]

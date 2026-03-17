@@ -3423,6 +3423,7 @@ mod excessive_file_types_tests {
             entropy_min: None,
             entropy_max: None,
             r#for: types,
+            for_from_groups: false,
             platforms: vec![Platform::All],
             arch: vec![Arch::All],
             not: None,
@@ -3431,6 +3432,12 @@ mod excessive_file_types_tests {
             defined_in: PathBuf::from("test.yaml"),
             precision: None,
         }
+    }
+
+    fn trait_with_for_from_groups(id: &str, types: Vec<FileType>) -> TraitDefinition {
+        let mut t = trait_with_for(id, types);
+        t.for_from_groups = true;
+        t
     }
 
     #[test]

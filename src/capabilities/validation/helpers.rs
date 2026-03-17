@@ -144,6 +144,7 @@ pub(crate) fn simple_rule_to_composite_rule(
         platforms,
         arch: vec![crate::composite_rules::types::Arch::All],
         r#for: file_types,
+        for_from_groups: false,
         size_min: None,
         size_max: None,
         all: Some(vec![Condition::Symbol {

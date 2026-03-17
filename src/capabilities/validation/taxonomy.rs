@@ -122,6 +122,7 @@ const BANNED_DIRECTORY_SEGMENTS: &[&str] = &[
 const PARENT_DUPLICATE_EXCEPTIONS: &[&str] = &[
     "micro-behaviors/communications/tunnel/tun", // TUN is a specific tunnel device type
     "micro-behaviors/os/firewall/firewalld",     // firewalld is a specific firewall daemon name
+    "objectives/persistence/system/systemd",     // systemd is a specific init system name
 ];
 
 /// Maximum number of traits allowed in a single directory.
@@ -243,10 +244,14 @@ pub(crate) fn find_hostile_meta_rules(
     violations
 }
 
-// NOTE: baseline traits are now allowed in any tier including objectives/.
-// They serve as building blocks for composite rules and can be useful
-// for downgrade/unless conditions even without direct analytical signal.
-// The previous find_baseline_obj_rules() validation has been removed.
+// NOTE: baseline traits are allowed in objectives/ as composite building blocks.
+// The duplicate detector (duplicates.rs) catches identical patterns across tiers.
+// TODO: Extend duplicate detection to normalize patterns across match types
+// (symbol vs string_value vs raw) to catch semantic duplicates like:
+//   objectives/: type: symbol, exact: "chdir"
+//   micro-behaviors/: type: string_value, substr: "chdir"
+// These detect the same thing but hash differently.
+// See TODO-baseline-trait-review.md for known cases.
 
 /// Find micro-behaviors/ rules that reference objectives/ rules.
 ///
@@ -597,13 +602,7 @@ pub(crate) fn find_depth_violations(yaml_files: &[String]) -> Vec<(String, usize
         // Subdirectory count = total parts - 1 (root) - 1 (filename)
         let subdir_count = parts.len() - 2;
 
-        // micro-behaviors/dylib/ is a foundational namespace with atomic, non-decomposable operations
-        // (load, lookup, enumerate, library markers). Adding depth here would be padding.
-        if subdir_count < 3 && path.starts_with("micro-behaviors/dylib/") {
-            continue;
-        }
-
-        if subdir_count < 3 {
+        if subdir_count < 2 {
             violations.push((path.clone(), subdir_count, "shallow"));
         } else if subdir_count > 4 {
             violations.push((path.clone(), subdir_count, "deep"));
@@ -811,11 +810,14 @@ const WELL_KNOWN_MALWARE_CATEGORIES: &[&str] = &[
 /// Allowed second-level categories under `well-known/tools/`.
 const WELL_KNOWN_TOOLS_CATEGORIES: &[&str] = &[
     "breachcore",
+    "browser",
+    "detection",
     "dual-use",
     "gnulib",
     "keyauth",
     "mercurial",
     "offensive",
+    "reverse-engineering",
     "sysadmin",
     "testing",
 ];
@@ -1177,10 +1179,11 @@ pub(crate) fn find_wellknown_unscoped_platforms(
         .collect()
 }
 
-/// Find well-known/ atomic traits without any file size filter.
+/// Find well-known/ atomic traits targeting binaries without any file size filter.
 ///
-/// well-known/ traits detect specific malware families and should include size bounds
+/// well-known/ traits targeting binary file types (PE, ELF, Mach-O) should include size bounds
 /// to avoid false positives. Most malware samples fall within a predictable size range.
+/// Script-only traits are excluded since script size is less predictable.
 ///
 /// Returns `Vec<(trait_id, source_file)>` for violations.
 #[must_use]
@@ -1192,6 +1195,7 @@ pub(crate) fn find_wellknown_missing_size_filter(
         .iter()
         .filter(|t| {
             extract_trait_tier(&t.id) == "well-known"
+                && trait_targets_binaries(t)
                 && t.size_min.is_none()
                 && t.size_max.is_none()
         })

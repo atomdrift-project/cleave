@@ -207,6 +207,8 @@ pub(crate) fn detect_archive_type(path: &Path) -> &'static str {
         "pkg"
     } else if path_str.ends_with(".rar") {
         "rar"
+    } else if path_str.ends_with(".cab") {
+        "cab"
     } else {
         "unknown"
     }

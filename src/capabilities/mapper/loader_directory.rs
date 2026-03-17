@@ -1166,11 +1166,11 @@ impl super::CapabilityMapper {
 
                 if !shallow.is_empty() {
                     eprintln!(
-                    "\n❌ ERROR: {} files are too shallow (need 3-4 subdirectories in micro-behaviors/obj)",
+                    "\n❌ ERROR: {} files are too shallow (need 2-4 subdirectories in micro-behaviors/obj)",
                     shallow.len()
                 );
                     for (path, depth, _) in &shallow {
-                        eprintln!("   {} ({} subdirs, need 3-4)", path, depth);
+                        eprintln!("   {} ({} subdirs, need 2-4)", path, depth);
                     }
                 }
                 if !deep.is_empty() {
@@ -1183,7 +1183,7 @@ impl super::CapabilityMapper {
                     }
                 }
                 warnings.push(format!(
-                    "{} files at wrong depth (need 3-4 subdirectories in micro-behaviors/obj)",
+                    "{} files at wrong depth (need 2-4 subdirectories in micro-behaviors/obj)",
                     depth_violations.len()
                 ));
             }

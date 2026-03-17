@@ -179,6 +179,26 @@ pub(crate) struct Args {
     /// Override with CLEAVE_SCAN_THREADS env var.
     #[arg(long, value_name = "N")]
     pub scan_threads: Option<usize>,
+
+    /// Minimum criticality level to include in output
+    /// (filtered, component, baseline, notable, suspicious, hostile)
+    #[arg(long, value_name = "LEVEL", value_parser = parse_criticality)]
+    pub min_crit: Option<crate::types::Criticality>,
+
+    /// Maximum criticality level to include in output
+    /// (filtered, component, baseline, notable, suspicious, hostile)
+    #[arg(long, value_name = "LEVEL", value_parser = parse_criticality)]
+    pub max_crit: Option<crate::types::Criticality>,
+
+    /// Minimum file criticality (based on highest trait) to include in output.
+    /// Files whose highest-criticality trait is below this level are excluded entirely.
+    #[arg(long, value_name = "LEVEL", value_parser = parse_criticality)]
+    pub min_file_crit: Option<crate::types::Criticality>,
+
+    /// Maximum file criticality (based on highest trait) to include in output.
+    /// Files whose highest-criticality trait is above this level are excluded entirely.
+    #[arg(long, value_name = "LEVEL", value_parser = parse_criticality)]
+    pub max_file_crit: Option<crate::types::Criticality>,
 }
 
 impl Args {
@@ -486,6 +506,22 @@ pub(crate) enum Command {
         #[arg(long)]
         extract_dir: Option<String>,
     },
+}
+
+/// Parse a criticality level string into a Criticality enum value
+fn parse_criticality(s: &str) -> Result<crate::types::Criticality, String> {
+    match s.to_lowercase().as_str() {
+        "filtered" => Ok(crate::types::Criticality::Filtered),
+        "component" => Ok(crate::types::Criticality::Component),
+        "baseline" => Ok(crate::types::Criticality::Baseline),
+        "notable" => Ok(crate::types::Criticality::Notable),
+        "suspicious" => Ok(crate::types::Criticality::Suspicious),
+        "hostile" => Ok(crate::types::Criticality::Hostile),
+        _ => Err(format!(
+            "unknown criticality '{}': expected one of filtered, component, baseline, notable, suspicious, hostile",
+            s
+        )),
+    }
 }
 
 /// Parse an offset range like "0,4096" or "-1024," into (start, Option<end>)
@@ -1066,5 +1102,69 @@ mod tests {
         let search_type = SearchType::Metrics;
         let debug_str = format!("{:?}", search_type);
         assert!(debug_str.contains("Metrics"));
+    }
+
+    // ==================== Criticality filter flag tests ====================
+
+    #[test]
+    fn test_parse_min_crit() {
+        let args = Args::try_parse_from(["cleave", "--min-crit", "notable", "file.bin"]).unwrap();
+        assert_eq!(args.min_crit, Some(crate::types::Criticality::Notable));
+    }
+
+    #[test]
+    fn test_parse_max_crit() {
+        let args =
+            Args::try_parse_from(["cleave", "--max-crit", "suspicious", "file.bin"]).unwrap();
+        assert_eq!(args.max_crit, Some(crate::types::Criticality::Suspicious));
+    }
+
+    #[test]
+    fn test_parse_min_and_max_crit() {
+        let args = Args::try_parse_from([
+            "cleave",
+            "--min-crit",
+            "notable",
+            "--max-crit",
+            "suspicious",
+            "file.bin",
+        ])
+        .unwrap();
+        assert_eq!(args.min_crit, Some(crate::types::Criticality::Notable));
+        assert_eq!(args.max_crit, Some(crate::types::Criticality::Suspicious));
+    }
+
+    #[test]
+    fn test_parse_crit_case_insensitive() {
+        let args = Args::try_parse_from(["cleave", "--min-crit", "HOSTILE", "file.bin"]).unwrap();
+        assert_eq!(args.min_crit, Some(crate::types::Criticality::Hostile));
+    }
+
+    #[test]
+    fn test_parse_crit_all_levels() {
+        for (name, expected) in [
+            ("filtered", crate::types::Criticality::Filtered),
+            ("component", crate::types::Criticality::Component),
+            ("baseline", crate::types::Criticality::Baseline),
+            ("notable", crate::types::Criticality::Notable),
+            ("suspicious", crate::types::Criticality::Suspicious),
+            ("hostile", crate::types::Criticality::Hostile),
+        ] {
+            let args = Args::try_parse_from(["cleave", "--min-crit", name, "file.bin"]).unwrap();
+            assert_eq!(args.min_crit, Some(expected), "Failed for {}", name);
+        }
+    }
+
+    #[test]
+    fn test_parse_crit_invalid() {
+        let result = Args::try_parse_from(["cleave", "--min-crit", "unknown", "file.bin"]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_no_crit_flags() {
+        let args = Args::try_parse_from(["cleave", "file.bin"]).unwrap();
+        assert!(args.min_crit.is_none());
+        assert!(args.max_crit.is_none());
     }
 }

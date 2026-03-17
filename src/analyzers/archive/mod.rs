@@ -767,6 +767,7 @@ impl ArchiveAnalyzer {
             "rpm" => system_packages::extract_rpm(archive_path, dest_dir, guard),
             "pkg" => system_packages::extract_pkg_safe(archive_path, dest_dir, guard),
             "rar" => system_packages::extract_rar(archive_path, dest_dir, guard),
+            "cab" => system_packages::extract_cab(archive_path, dest_dir, guard),
             // Handle zip and ambiguous "apk" that wasn't resolved by magic detection
             "zip" | "apk" => {
                 zip::extract_zip_safe(archive_path, dest_dir, guard, &self.zip_passwords)
@@ -843,6 +844,7 @@ impl Analyzer for ArchiveAnalyzer {
             || path_str.ends_with(".pkg") // macOS PKG or FreeBSD pkg (detected by magic)
             || path_str.ends_with(".rar")
             || path_str.ends_with(".7z")
+            || path_str.ends_with(".cab")
     }
 }
 

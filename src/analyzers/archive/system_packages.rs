@@ -6,6 +6,7 @@
 //! - macOS packages (.pkg)
 //! - 7-Zip archives (.7z)
 //! - RAR archives (.rar)
+//! - Windows cabinet (.cab)
 //! - Standalone compression (.gz, .xz, .bz2)
 
 use super::guards::{
@@ -16,7 +17,7 @@ use super::tar::extract_tar_entries_safe;
 use super::zip::extract_zip_safe;
 use anyhow::{Context, Result};
 use std::fs::{self, File};
-use std::io::{BufReader, Read};
+use std::io::{BufReader, Read, Write};
 use std::path::Path;
 
 /// Extract standalone compressed file (gzip, xz, bzip2)
@@ -672,6 +673,66 @@ pub(crate) fn extract_rar(
             Ok(None) => break, // No more entries
             Err(e) => return Err(e.into()),
         }
+    }
+
+    Ok(())
+}
+
+/// Extract Windows cabinet (.cab) archive files.
+pub(crate) fn extract_cab(
+    archive_path: &Path,
+    dest_dir: &Path,
+    guard: &ExtractionGuard,
+) -> Result<()> {
+    let file = File::open(archive_path).context("Failed to open CAB archive")?;
+    let mut cabinet = cab::Cabinet::new(file).context("Failed to parse CAB archive")?;
+
+    // Collect file names first (cab crate requires sequential access per folder)
+    let file_names: Vec<String> = cabinet
+        .folder_entries()
+        .flat_map(|folder| folder.file_entries().map(|f| f.name().to_string()))
+        .collect();
+
+    for name in &file_names {
+        if !guard.check_file_count() {
+            anyhow::bail!("Exceeded maximum file count");
+        }
+
+        let Some(out_path) = sanitize_entry_path(name, dest_dir) else {
+            guard.add_hostile_reason(HostileArchiveReason::PathTraversal(name.clone()));
+            continue;
+        };
+
+        let mut reader = cabinet
+            .read_file(name)
+            .with_context(|| format!("Failed to read CAB entry: {name}"))?;
+
+        // Read into a size-limited buffer
+        let mut limited = LimitedReader::new(&mut reader, MAX_FILE_SIZE);
+        let mut buf = Vec::new();
+        limited
+            .read_to_end(&mut buf)
+            .with_context(|| format!("Failed to decompress CAB entry: {name}"))?;
+
+        if buf.len() as u64 >= MAX_FILE_SIZE {
+            guard.add_hostile_reason(HostileArchiveReason::ExcessiveFileSize {
+                file: name.clone(),
+                size: buf.len() as u64,
+            });
+            continue;
+        }
+
+        if !guard.check_bytes(buf.len() as u64, name) {
+            anyhow::bail!("Exceeded maximum total extraction size");
+        }
+
+        if let Some(parent) = out_path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+
+        let mut out_file =
+            File::create(&out_path).with_context(|| format!("Failed to create {out_path:?}"))?;
+        out_file.write_all(&buf)?;
     }
 
     Ok(())

@@ -456,6 +456,10 @@ fn main() -> Result<()> {
                     output_to_file: args.output.is_some(),
                     max_scan_file_size,
                     scan_threads: args.scan_threads.unwrap_or(0),
+                    min_crit: args.min_crit,
+                    max_crit: args.max_crit,
+                    min_file_crit: args.min_file_crit,
+                    max_file_crit: args.max_file_crit,
                 })?);
             }
             results.join("")
@@ -656,6 +660,10 @@ fn main() -> Result<()> {
                     output_to_file: args.output.is_some(),
                     max_scan_file_size,
                     scan_threads: args.scan_threads.unwrap_or(0),
+                    min_crit: args.min_crit,
+                    max_crit: args.max_crit,
+                    min_file_crit: args.min_file_crit,
+                    max_file_crit: args.max_file_crit,
                 })?);
             }
             results.join("")

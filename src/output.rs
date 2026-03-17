@@ -443,6 +443,16 @@ pub(crate) fn format_jsonl(report: &AnalysisReport) -> Result<String> {
 /// baseline are omitted.
 #[allow(dead_code)] // Used by binary target
 pub(crate) fn format_tiny(report: &AnalysisReport) -> String {
+    // Check if any file has findings worth showing before emitting the header
+    let has_visible_findings = report.files.iter().any(|file| {
+        file.findings
+            .iter()
+            .any(|f| f.crit > Criticality::Component && f.conf >= 0.5)
+    });
+    if !has_visible_findings {
+        return String::new();
+    }
+
     let mut out = String::with_capacity(4096);
     out.push_str("# H=hostile S=suspicious N=notable B=baseline\n");
 

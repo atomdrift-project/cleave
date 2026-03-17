@@ -144,6 +144,7 @@ ar = "0.9"
 cpio = "0.4"
 zstd = "0.13"
 unrar = "0.5"
+cab = "0.6"
 rusqlite = { version = "0.33", features = ["bundled"] }
 
 # Parallelization

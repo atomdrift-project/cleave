@@ -3013,7 +3013,18 @@ impl super::CapabilityMapper {
         // Bail if any fatal errors occurred (parse errors, validation failures, etc.)
         if has_fatal_errors {
             eprintln!("\n==> Fix all validation errors before continuing.\n");
-            anyhow::bail!("Trait loading failed due to validation errors");
+            let mut details = Vec::new();
+            for e in &parse_errors {
+                details.push(format!("parse error: {e}"));
+            }
+            for w in &warnings {
+                details.push(format!("validation: {w}"));
+            }
+            anyhow::bail!(
+                "Trait loading failed due to {} validation error(s):\n{}",
+                details.len(),
+                details.join("\n")
+            );
         }
 
         // Save to cache for future runs (only if not in validation mode)

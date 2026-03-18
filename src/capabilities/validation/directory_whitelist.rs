@@ -654,10 +654,10 @@ pub(crate) fn validate_directory_structure(traits_path: &Path) -> Result<(), Vec
                 if !ALLOWED_ANTI_ANALYSIS.contains(&dir_name.as_str()) {
                     errors.push(format!(
                         "Unknown objectives/anti-analysis/ subdirectory: '{}'\n  \
+                         This rule is misplaced according to TAXONOMY.md.\n  \
                          anti-analysis/ is for behavioral analysis evasion (sandboxes, debuggers, VMs).\n  \
                          Defense evasion belongs in evasion/, static analysis evasion in anti-static/.\n  \
-                         If valid, add to ALLOWED_ANTI_ANALYSIS in \
-                         src/capabilities/validation/directory_whitelist.rs and TAXONOMY.md",
+                         There is almost certainly a better existing directory for this trait.",
                         dir_name
                     ));
                 }
@@ -673,10 +673,10 @@ pub(crate) fn validate_directory_structure(traits_path: &Path) -> Result<(), Vec
                 if !ALLOWED_ANTI_STATIC.contains(&dir_name.as_str()) {
                     errors.push(format!(
                         "Unknown objectives/anti-static/ subdirectory: '{}'\n  \
+                         This rule is misplaced according to TAXONOMY.md.\n  \
                          anti-static/ is for static analysis evasion (obfuscation, packing).\n  \
                          Behavioral analysis evasion belongs in anti-analysis/, defense evasion in evasion/.\n  \
-                         If valid, add to ALLOWED_ANTI_STATIC in \
-                         src/capabilities/validation/directory_whitelist.rs and TAXONOMY.md",
+                         There is almost certainly a better existing directory for this trait.",
                         dir_name
                     ));
                 }
@@ -692,10 +692,10 @@ pub(crate) fn validate_directory_structure(traits_path: &Path) -> Result<(), Vec
                 if !ALLOWED_COLLECTION.contains(&dir_name.as_str()) {
                     errors.push(format!(
                         "Unknown objectives/collection/ subdirectory: '{}'\n  \
+                         This rule is misplaced according to TAXONOMY.md.\n  \
                          collection/ is for gathering information (capture, archive, enumerate).\n  \
                          Credential-specific stores → credential-access/. Financial → credential-access/.\n  \
-                         If valid, add to ALLOWED_COLLECTION in \
-                         src/capabilities/validation/directory_whitelist.rs and TAXONOMY.md",
+                         There is almost certainly a better existing directory for this trait.",
                         dir_name
                     ));
                 }
@@ -711,9 +711,9 @@ pub(crate) fn validate_directory_structure(traits_path: &Path) -> Result<(), Vec
                 if !ALLOWED_PRIVILEGE_ESCALATION.contains(&dir_name.as_str()) {
                     errors.push(format!(
                         "Unknown objectives/privilege-escalation/ subdirectory: '{}'\n  \
+                         This rule is misplaced according to TAXONOMY.md.\n  \
                          privilege-escalation/ is for obtaining higher permissions.\n  \
-                         If valid, add to ALLOWED_PRIVILEGE_ESCALATION in \
-                         src/capabilities/validation/directory_whitelist.rs and TAXONOMY.md",
+                         There is almost certainly a better existing directory for this trait.",
                         dir_name
                     ));
                 }
@@ -729,10 +729,10 @@ pub(crate) fn validate_directory_structure(traits_path: &Path) -> Result<(), Vec
                 if !ALLOWED_DISCOVERY.contains(&dir_name.as_str()) {
                     errors.push(format!(
                         "Unknown objectives/discovery/ subdirectory: '{}'\n  \
+                         This rule is misplaced according to TAXONOMY.md.\n  \
                          discovery/ is for reconnaissance (gaining knowledge about system/network).\n  \
                          Neutral capabilities → micro-behaviors/. Taking action → lateral-movement/.\n  \
-                         If valid, add to ALLOWED_DISCOVERY in \
-                         src/capabilities/validation/directory_whitelist.rs and TAXONOMY.md",
+                         There is almost certainly a better existing directory for this trait.",
                         dir_name
                     ));
                 }
@@ -748,12 +748,12 @@ pub(crate) fn validate_directory_structure(traits_path: &Path) -> Result<(), Vec
                 if !ALLOWED_CREDENTIAL_ACCESS.contains(&dir_name.as_str()) {
                     errors.push(format!(
                         "Unknown objectives/credential-access/ subdirectory: '{}'\n  \
+                         This rule is misplaced according to TAXONOMY.md.\n  \
                          credential-access/ targets specific credential stores.\n  \
                          Generic capture → collection/. Neutral env access → micro-behaviors/.\n  \
                          Neutral keywords → micro-behaviors/data/text/keywords/.\n  \
                          Credential access + transport → exfiltration/stealer/.\n  \
-                         If valid, add to ALLOWED_CREDENTIAL_ACCESS in \
-                         src/capabilities/validation/directory_whitelist.rs and TAXONOMY.md",
+                         There is almost certainly a better existing directory for this trait.",
                         dir_name
                     ));
                 }
@@ -769,11 +769,11 @@ pub(crate) fn validate_directory_structure(traits_path: &Path) -> Result<(), Vec
                 if !ALLOWED_EVASION.contains(&dir_name.as_str()) {
                     errors.push(format!(
                         "Unknown objectives/evasion/ subdirectory: '{}'\n  \
+                         This rule is misplaced according to TAXONOMY.md.\n  \
                          evasion/ is for stealth — hiding from users, admins, and security tools.\n  \
                          Killing AV → impact/degrade/edr/. Obfuscation → anti-static/.\n  \
                          Analyst tool detection → anti-analysis/tool-detect/.\n  \
-                         If valid, add to ALLOWED_EVASION in \
-                         src/capabilities/validation/directory_whitelist.rs and TAXONOMY.md",
+                         There is almost certainly a better existing directory for this trait.",
                         dir_name
                     ));
                 }
@@ -789,10 +789,10 @@ pub(crate) fn validate_directory_structure(traits_path: &Path) -> Result<(), Vec
                 if !ALLOWED_PERSISTENCE.contains(&dir_name.as_str()) {
                     errors.push(format!(
                         "Unknown objectives/persistence/ subdirectory: '{}'\n  \
+                         This rule is misplaced according to TAXONOMY.md.\n  \
                          persistence/ must use firmware/, system/, or login/ to indicate trigger event.\n  \
                          Hiding/concealment belongs in evasion/, not persistence/.\n  \
-                         If valid, add to ALLOWED_PERSISTENCE in \
-                         src/capabilities/validation/directory_whitelist.rs and TAXONOMY.md",
+                         There is almost certainly a better existing directory for this trait.",
                         dir_name
                     ));
                 }
@@ -808,11 +808,11 @@ pub(crate) fn validate_directory_structure(traits_path: &Path) -> Result<(), Vec
                 if !ALLOWED_C2.contains(&dir_name.as_str()) {
                     errors.push(format!(
                         "Unknown objectives/command-and-control/ subdirectory: '{}'\n  \
+                         This rule is misplaced according to TAXONOMY.md.\n  \
                          command-and-control/ is for C2 communication (MBC OB0004).\n  \
                          DDoS → impact/dos/. Exfiltration → exfiltration/. Phishing → credential-access/.\n  \
                          Steganography → anti-static/obfuscation/. Rival malware kill → impact/degrade/.\n  \
-                         If valid, add to ALLOWED_C2 in \
-                         src/capabilities/validation/directory_whitelist.rs and TAXONOMY.md",
+                         There is almost certainly a better existing directory for this trait.",
                         dir_name
                     ));
                 }
@@ -828,12 +828,12 @@ pub(crate) fn validate_directory_structure(traits_path: &Path) -> Result<(), Vec
                 if !ALLOWED_EXECUTION.contains(&dir_name.as_str()) {
                     errors.push(format!(
                         "Unknown objectives/execution/ subdirectory: '{}'\n  \
+                         This rule is misplaced according to TAXONOMY.md.\n  \
                          execution/ is for code execution on a system (MBC OB0009).\n  \
                          Neutral capabilities → micro-behaviors/. Evasive execution → evasion/.\n  \
                          Privilege escalation → privilege-escalation/. Remote commands → command-and-control/.\n  \
                          Install hooks → micro-behaviors/build/setup/ (composites in supply-chain/).\n  \
-                         If valid, add to ALLOWED_EXECUTION in \
-                         src/capabilities/validation/directory_whitelist.rs and TAXONOMY.md",
+                         There is almost certainly a better existing directory for this trait.",
                         dir_name
                     ));
                 }
@@ -849,11 +849,11 @@ pub(crate) fn validate_directory_structure(traits_path: &Path) -> Result<(), Vec
                 if !ALLOWED_LATERAL_MOVEMENT.contains(&dir_name.as_str()) {
                     errors.push(format!(
                         "Unknown objectives/lateral-movement/ subdirectory: '{}'\n  \
+                         This rule is misplaced according to TAXONOMY.md.\n  \
                          lateral-movement/ is for propagation — spreading to new systems.\n  \
                          Scanning → discovery/. Process injection → evasion/. Masquerading → evasion/masquerade/.\n  \
                          Local password cracking → credential-access/. Rival malware killing → impact/degrade/.\n  \
-                         If valid, add to ALLOWED_LATERAL_MOVEMENT in \
-                         src/capabilities/validation/directory_whitelist.rs and TAXONOMY.md",
+                         There is almost certainly a better existing directory for this trait.",
                         dir_name
                     ));
                 }
@@ -869,12 +869,12 @@ pub(crate) fn validate_directory_structure(traits_path: &Path) -> Result<(), Vec
                 if !ALLOWED_IMPACT.contains(&dir_name.as_str()) {
                     errors.push(format!(
                         "Unknown objectives/impact/ subdirectory: '{}'\n  \
+                         This rule is misplaced according to TAXONOMY.md.\n  \
                          impact/ is for destructive, disruptive, or resource-hijacking operations.\n  \
                          Exploits/CVEs → privilege-escalation/. AV bypass → evasion/anti-av/.\n  \
                          AV/EDR termination (aggressive) → impact/degrade/edr/.\n  \
                          File hiding → evasion/file-hiding/. Malware signatures → well-known/.\n  \
-                         If valid, add to ALLOWED_IMPACT in \
-                         src/capabilities/validation/directory_whitelist.rs and TAXONOMY.md",
+                         There is almost certainly a better existing directory for this trait.",
                         dir_name
                     ));
                 }
@@ -890,11 +890,11 @@ pub(crate) fn validate_directory_structure(traits_path: &Path) -> Result<(), Vec
                 if !ALLOWED_EXFILTRATION.contains(&dir_name.as_str()) {
                     errors.push(format!(
                         "Unknown objectives/exfiltration/ subdirectory: '{}'\n  \
+                         This rule is misplaced according to TAXONOMY.md.\n  \
                          exfiltration/ focuses on transport — how data leaves the system.\n  \
                          Reading credentials → credential-access/. Gathering data → collection/.\n  \
                          Transport alone (HTTP POST) → micro-behaviors/communications/.\n  \
-                         If valid, add to ALLOWED_EXFILTRATION in \
-                         src/capabilities/validation/directory_whitelist.rs and TAXONOMY.md",
+                         There is almost certainly a better existing directory for this trait.",
                         dir_name
                     ));
                 }
@@ -910,9 +910,9 @@ pub(crate) fn validate_directory_structure(traits_path: &Path) -> Result<(), Vec
                 if !ALLOWED_MICRO_BEHAVIORS.contains(&dir_name.as_str()) {
                     errors.push(format!(
                         "Unknown micro-behaviors/ subdirectory: '{}'\n  \
+                         This rule is misplaced according to TAXONOMY.md.\n  \
                          Micro-behaviors must describe capabilities, not objectives.\n  \
-                         If valid, add to ALLOWED_MICRO_BEHAVIORS in \
-                         src/capabilities/validation/directory_whitelist.rs",
+                         There is almost certainly a better existing directory for this trait.",
                         dir_name
                     ));
                 }
@@ -943,11 +943,10 @@ pub(crate) fn validate_directory_structure(traits_path: &Path) -> Result<(), Vec
                     if !allowed.contains(&dir_name.as_str()) {
                         errors.push(format!(
                             "Unknown micro-behaviors/{}/{}\n  \
-                             If valid, add to ALLOWED_MB_{} in \
-                             src/capabilities/validation/directory_whitelist.rs",
+                             This rule is misplaced according to TAXONOMY.md.\n  \
+                             There is almost certainly a better existing directory for this trait.",
                             category,
-                            dir_name,
-                            category.to_uppercase().replace('-', "_")
+                            dir_name
                         ));
                     }
                 }
@@ -963,9 +962,9 @@ pub(crate) fn validate_directory_structure(traits_path: &Path) -> Result<(), Vec
                 if !ALLOWED_WELL_KNOWN.contains(&dir_name.as_str()) {
                     errors.push(format!(
                         "Unknown well-known/ subdirectory: '{}'\n  \
+                         This rule is misplaced according to TAXONOMY.md.\n  \
                          well-known/ should only contain 'malware' and 'tools'.\n  \
-                         If adding a new category, update ALLOWED_WELL_KNOWN in \
-                         src/capabilities/validation/directory_whitelist.rs",
+                         There is almost certainly a better existing directory for this trait.",
                         dir_name
                     ));
                 }
@@ -981,11 +980,11 @@ pub(crate) fn validate_directory_structure(traits_path: &Path) -> Result<(), Vec
                 if !ALLOWED_MALWARE.contains(&dir_name.as_str()) {
                     errors.push(format!(
                         "Unknown well-known/malware/ subdirectory: '{}'\n  \
+                         This rule is misplaced according to TAXONOMY.md.\n  \
                          malware/ categories must describe what the malware DOES (MBC/STIX 2.1 types).\n  \
                          Actor attribution (APT) belongs in trait descriptions, not directory names.\n  \
                          Each family appears in exactly one category.\n  \
-                         If valid, add to ALLOWED_MALWARE in \
-                         src/capabilities/validation/directory_whitelist.rs and TAXONOMY.md",
+                         There is almost certainly a better existing directory for this trait.",
                         dir_name
                     ));
                 }
@@ -1001,10 +1000,10 @@ pub(crate) fn validate_directory_structure(traits_path: &Path) -> Result<(), Vec
                 if !ALLOWED_METADATA.contains(&dir_name.as_str()) {
                     errors.push(format!(
                         "Unknown metadata/ subdirectory: '{}'\n  \
+                         This rule is misplaced according to TAXONOMY.md.\n  \
                          metadata/ must contain only neutral file-structure properties.\n  \
                          Behavioral detection belongs in objectives/, tool signatures in well-known/.\n  \
-                         If valid, add to ALLOWED_METADATA in \
-                         src/capabilities/validation/directory_whitelist.rs and TAXONOMY.md",
+                         There is almost certainly a better existing directory for this trait.",
                         dir_name
                     ));
                 }

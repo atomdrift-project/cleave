@@ -799,7 +799,15 @@ impl UnifiedSourceAnalyzer {
             // formatting artifact.
             if let Some(ref text) = metrics.text {
                 if text.invisible_chars > 0 {
-                    let (crit, conf) = if text.invisible_chars >= 3 {
+                    // Libraries dealing with Unicode data, fake data generation,
+                    // or internationalization legitimately contain invisible chars.
+                    let path_lower = file_path.display().to_string().to_lowercase();
+                    let is_unicode_library = ["unicode", "faker", "i18n", "locale", "icu", "cldr", "intl"]
+                        .iter()
+                        .any(|kw| path_lower.contains(kw));
+                    let (crit, conf) = if is_unicode_library {
+                        (crate::types::Criticality::Notable, 0.5)
+                    } else if text.invisible_chars >= 3 {
                         (crate::types::Criticality::Suspicious, 0.95)
                     } else {
                         (crate::types::Criticality::Notable, 0.7)

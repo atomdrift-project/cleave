@@ -144,10 +144,7 @@ pub(crate) fn eval_ast<'a>(
     // No cached AST - parse on demand (with warning)
     static WARNED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
     if !WARNED.swap(true, std::sync::atomic::Ordering::Relaxed) {
-        eprintln!(
-            "⚠️  WARNING: AST cache miss - re-parsing AST for each trait! File type: {:?}",
-            ctx.file_type
-        );
+        tracing::info!(file_type = ?ctx.file_type, "AST cache miss — re-parsing AST for each trait");
     }
 
     // Get parser language for file type

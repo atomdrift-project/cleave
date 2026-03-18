@@ -308,12 +308,13 @@ impl BinaryMetrics {
             tracing::warn!(path, overlay_entropy = self.overlay_entropy, "overlay_entropy outside valid range [0, 8]");
         }
 
-        // Size checks
+        // Size checks — inflated section headers are a common anti-analysis trick,
+        // so these are INFO (expected for tampered PEs), not WARN.
         if self.code_size > self.file_size {
-            tracing::warn!(path, code_size = self.code_size, file_size = self.file_size, "code_size > file_size");
+            tracing::info!(path, code_size = self.code_size, file_size = self.file_size, "code_size > file_size (inflated section headers)");
         }
         if self.overlay_size > self.file_size {
-            tracing::warn!(path, overlay_size = self.overlay_size, file_size = self.file_size, "overlay_size > file_size");
+            tracing::info!(path, overlay_size = self.overlay_size, file_size = self.file_size, "overlay_size > file_size");
         }
 
         // Ratio checks
@@ -327,7 +328,7 @@ impl BinaryMetrics {
             tracing::warn!(path, code_section_ratio = self.code_section_ratio, "code_section_ratio outside valid range [0, 1]");
         }
         if self.largest_section_ratio < 0.0 || self.largest_section_ratio > 1.0 {
-            tracing::warn!(path, largest_section_ratio = self.largest_section_ratio, "largest_section_ratio outside valid range [0, 1]");
+            tracing::info!(path, largest_section_ratio = self.largest_section_ratio, "largest_section_ratio outside valid range [0, 1] (inflated section headers)");
         }
         if self.overlay_ratio < 0.0 || self.overlay_ratio > 1.0 {
             tracing::warn!(path, overlay_ratio = self.overlay_ratio, "overlay_ratio outside valid range [0, 1]");

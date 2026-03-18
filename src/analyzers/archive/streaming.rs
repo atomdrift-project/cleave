@@ -153,11 +153,19 @@ impl ArchiveAnalyzer {
                         nested_analyzer = nested_analyzer.with_sample_extraction(config.clone());
                     }
 
-                    if let Ok(report) = nested_analyzer.analyze(temp.path()) {
-                        // Merge nested findings
-                        file_analysis.findings = report.findings;
+                    // Spawn nested archive analysis on a dedicated thread to
+                    // guarantee a fresh stack — recursive archive analysis
+                    // within rayon workers can exhaust the thread stack.
+                    let temp_path = temp.path().to_path_buf();
+                    let nested_result = std::thread::Builder::new()
+                        .stack_size(8 * 1024 * 1024)
+                        .spawn(move || nested_analyzer.analyze(&temp_path))
+                        .ok()
+                        .and_then(|h| h.join().ok())
+                        .and_then(|r| r.ok());
 
-                        // Add nested files to results
+                    if let Some(report) = nested_result {
+                        file_analysis.findings = report.findings;
                         for nested_file in report.files {
                             nested_files.push(nested_file);
                         }

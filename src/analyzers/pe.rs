@@ -309,6 +309,24 @@ impl PEAnalyzer {
             },
         );
 
+        // Detect inflated section headers (declared size extends beyond EOF)
+        if let Some(pe) = pe {
+            let has_inflated = pe.sections.iter().any(|s| {
+                (s.pointer_to_raw_data as u64).saturating_add(s.size_of_raw_data as u64)
+                    > file_size
+            });
+            if has_inflated {
+                report.findings.push(
+                    Finding::structural(
+                        "objectives/anti-static/pe-tampering/inflated-section-headers".to_string(),
+                        "PE section headers declare sizes beyond end of file".to_string(),
+                        0.9,
+                    )
+                    .with_criticality(Criticality::Suspicious),
+                );
+            }
+        }
+
         // --- Process radare2 results, with fallback for goblin gaps ---
         let r2_strings = if let Some(Ok(batched)) = r2_result {
             tools_used.push("radare2".to_string());

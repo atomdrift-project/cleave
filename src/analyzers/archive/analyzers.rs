@@ -911,7 +911,16 @@ impl ArchiveAnalyzer {
                 nested = nested.with_zip_passwords_arc(self.zip_passwords.clone());
             }
 
-            return nested.analyze(file_path);
+            // Spawn on a dedicated thread to guarantee a fresh stack —
+            // recursive archive analysis can exhaust the rayon worker stack.
+            let path = file_path.to_path_buf();
+            let result = std::thread::Builder::new()
+                .stack_size(8 * 1024 * 1024)
+                .spawn(move || nested.analyze(&path))
+                .map_err(|e| anyhow::anyhow!("Failed to spawn nested archive thread: {e}"))?
+                .join()
+                .map_err(|_| anyhow::anyhow!("Nested archive thread panicked"))?;
+            return result;
         }
 
         // Use the centralized factory for all other file types

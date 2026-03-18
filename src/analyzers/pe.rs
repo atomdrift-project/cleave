@@ -203,77 +203,64 @@ impl PEAnalyzer {
         // Detect and handle tampered PE (junk prefix before MZ header)
         let (pe_data, tamper_findings) = self.detect_and_strip_tampering(data);
 
-        // Try to parse with goblin (using potentially stripped data)
-        // First try strict mode, then fall back to permissive for binaries with
-        // non-critical parse issues (e.g., resource section quirks in signed binaries)
-        match PE::parse(pe_data) {
-            Ok(pe) => self.analyze_valid_pe(
-                file_path,
-                data,
-                pe_data,
-                &pe,
-                tamper_findings,
-                start,
-                stng_strings,
-                precomputed_sha256,
-            ),
+        // Try to parse with goblin (strict → permissive fallback)
+        let (pe_parsed, parse_err) = match PE::parse(pe_data) {
+            Ok(pe) => (Some(pe), None),
             Err(strict_err) => {
-                // Strict parse failed - try permissive mode before declaring corrupted
                 let permissive_opts = goblin::pe::options::ParseOptions::default()
                     .with_parse_mode(goblin::options::ParseMode::Permissive);
                 match PE::parse_with_opts(pe_data, &permissive_opts) {
                     Ok(pe) => {
-                        // Permissive succeeded - PE is structurally valid but has minor issues
                         tracing::debug!(
                             "PE strict parse failed ({}) but permissive succeeded for {}",
                             strict_err,
                             file_path.display()
                         );
-                        self.analyze_valid_pe(
-                            file_path,
-                            data,
-                            pe_data,
-                            &pe,
-                            tamper_findings,
-                            start,
-                            stng_strings,
-                            precomputed_sha256,
-                        )
+                        (Some(pe), None)
                     }
-                    Err(e) => {
-                        // Both strict and permissive failed - truly corrupted
-                        self.analyze_corrupted_pe(
-                            file_path,
-                            data,
-                            tamper_findings,
-                            &e,
-                            start,
-                            stng_strings,
-                        )
-                    }
+                    Err(e) => (None, Some(e)),
                 }
             }
-        }
+        };
+
+        self.analyze_pe(
+            file_path,
+            data,
+            pe_data,
+            pe_parsed.as_ref(),
+            parse_err.as_ref(),
+            tamper_findings,
+            start,
+            stng_strings,
+            precomputed_sha256,
+        )
     }
 
-    /// Analyze a valid (parseable) PE binary
+    /// Unified PE analysis — handles both valid and corrupted (unparseable) PEs.
+    ///
+    /// When goblin parses successfully, uses its data for structure, imports, exports,
+    /// and sections. When goblin fails, falls back to rizin for everything.
+    /// When goblin partially succeeds (e.g., 0 sections/imports but rizin finds them),
+    /// uses rizin as fallback and emits suspicious findings for the discrepancy.
     #[allow(clippy::unnecessary_wraps, clippy::too_many_arguments)]
-    fn analyze_valid_pe(
+    fn analyze_pe(
         &self,
         file_path: &Path,
         original_data: &[u8],
         pe_data: &[u8],
-        pe: &PE<'_>,
-        tamper_findings: Vec<Finding>,
+        pe: Option<&PE<'_>>,
+        parse_error: Option<&goblin::error::Error>,
+        mut tamper_findings: Vec<Finding>,
         start: std::time::Instant,
         stng_strings: Option<&[stng::ExtractedString]>,
         precomputed_sha256: Option<String>,
     ) -> AnalysisReport {
-        // Compute PE-specific metrics early
-        let pe_metrics = self.compute_pe_metrics(pe, pe_data);
+        let goblin_ok = pe.is_some();
 
-        // Calculate code_size from goblin section characteristics (more accurate than radare2)
-        let goblin_code_size = self.compute_code_size(pe);
+        // Extract goblin-derived data when available
+        let pe_metrics = pe.map(|pe| self.compute_pe_metrics(pe, pe_data));
+        let file_size = original_data.len() as u64;
+        let goblin_code_size = pe.map_or(0, |pe| self.compute_code_size(pe, file_size));
 
         // Create target info
         let target = TargetInfo {
@@ -283,17 +270,24 @@ impl PEAnalyzer {
             sha256: precomputed_sha256
                 .clone()
                 .unwrap_or_else(|| crate::analyzers::utils::calculate_sha256(original_data)),
-            architectures: Some(vec![self.arch_name(pe)]),
+            architectures: pe.map(|pe| vec![self.arch_name(pe)]),
         };
 
         let mut report = AnalysisReport::new(target);
-        let mut tools_used = vec!["goblin".to_string()];
+        let mut tools_used = Vec::new();
+        if goblin_ok {
+            tools_used.push("goblin".to_string());
+        }
 
         // Add any tampering findings detected during preprocessing
-        report.findings.extend(tamper_findings);
+        report.findings.extend(tamper_findings.drain(..));
 
-        // Run radare2 in parallel with structural analysis
-        let has_symbols = !pe.imports.is_empty();
+        // Run radare2 in parallel with goblin-based structural analysis.
+        // Tell rizin the binary "has symbols" if goblin found metadata, or if goblin
+        // failed entirely (so rizin tries harder).
+        let has_symbols = pe.map_or(true, |pe| {
+            !pe.imports.is_empty() || !pe.exports.is_empty() || !pe.sections.is_empty()
+        });
         let (r2_result, _) = rayon::join(
             || {
                 if Radare2Analyzer::is_available() {
@@ -306,125 +300,229 @@ impl PEAnalyzer {
                 }
             },
             || {
-                // Analyze header and structure
-                self.analyze_structure(pe, &mut report);
-
-                // Extract imports and map to capabilities
-                self.analyze_imports(pe, &mut report);
-
-                // Analyze exports
-                self.analyze_exports(pe, pe_data, &mut report);
-
-                // Analyze sections and entropy
-                self.analyze_sections(pe, pe_data, &mut report);
+                if let Some(pe) = pe {
+                    self.analyze_structure(pe, &mut report);
+                    self.analyze_imports(pe, &mut report);
+                    self.analyze_exports(pe, pe_data, &mut report);
+                    self.analyze_sections(pe, pe_data, &mut report);
+                }
             },
         );
 
+        // --- Process radare2 results, with fallback for goblin gaps ---
         let r2_strings = if let Some(Ok(batched)) = r2_result {
             tools_used.push("radare2".to_string());
 
-            // Compute metrics from batched data
             let mut binary_metrics = self
                 .radare2
                 .compute_metrics_from_batched(&batched, original_data.len() as u64);
 
-            // Override code_size with goblin-based calculation (more accurate)
-            // In PE, only sections with IMAGE_SCN_MEM_EXECUTE characteristic contain executable code
-            let mut code_size = goblin_code_size;
-
-            // Sanity check: code_size should never exceed file size
-            if code_size > binary_metrics.file_size {
-                eprintln!("WARNING: code_size ({}) > file_size ({}) - this indicates a bug in section classification", code_size, binary_metrics.file_size);
-                code_size = binary_metrics.file_size; // Cap at file_size to prevent invalid ratio
-            }
-
-            binary_metrics.code_size = code_size;
-
-            // If radare2 found very few functions, use .pdata as ground truth.
-            // PE x64 binaries list every function in .pdata as RUNTIME_FUNCTION
-            // entries (12 bytes each: begin_addr, end_addr, unwind_info).
-            if let Some(pdata) = pe
-                .sections
-                .iter()
-                .find(|s| String::from_utf8_lossy(&s.name).trim_matches(char::from(0)) == ".pdata")
-            {
-                let pdata_functions = pdata.virtual_size / 12;
-                // Trust .pdata when r2 found very few functions or .pdata reports
-                // vastly more (10x+), since r2 struggles with stripped PEs
-                if pdata_functions > 0
-                    && (binary_metrics.function_count <= 1
-                        || pdata_functions > binary_metrics.function_count * 10)
-                {
-                    binary_metrics.function_count = pdata_functions;
+            // When goblin succeeded, override r2 metrics with more accurate goblin values
+            if let Some(pe) = pe {
+                let mut code_size = goblin_code_size;
+                if code_size > binary_metrics.file_size {
+                    tracing::warn!(
+                        "code_size ({}) > file_size ({}) — capping",
+                        code_size,
+                        binary_metrics.file_size
+                    );
+                    code_size = binary_metrics.file_size;
                 }
-            }
+                binary_metrics.code_size = code_size;
 
-            // For PE files, prefer section-header flags over radare2 segment perms.
-            // rabin2 often reports coarse `-rwx` segments, which inflates W+X counts.
-            let (executable_sections, writable_sections, wx_sections) =
-                self.compute_section_permission_counts(pe);
-            binary_metrics.executable_sections = executable_sections;
-            binary_metrics.writable_sections = writable_sections;
-            binary_metrics.wx_sections = wx_sections;
-
-            // Recalculate code_to_data_ratio with correct code_size
-            if binary_metrics.file_size > 0 {
-                let data_size = binary_metrics.file_size.saturating_sub(code_size);
-                if data_size > 0 {
-                    binary_metrics.code_to_data_ratio = code_size as f32 / data_size as f32;
-
-                    // Sanity check: extremely high ratio likely indicates classification bug
-                    if binary_metrics.code_to_data_ratio > 1000.0 {
-                        eprintln!(
-                            "WARNING: code_to_data_ratio ({:.2}) > 1000 - this may indicate a bug",
-                            binary_metrics.code_to_data_ratio
-                        );
+                // .pdata function count correction
+                if let Some(pdata) = pe.sections.iter().find(|s| {
+                    String::from_utf8_lossy(&s.name).trim_matches(char::from(0)) == ".pdata"
+                }) {
+                    let pdata_functions = pdata.virtual_size / 12;
+                    if pdata_functions > 0
+                        && (binary_metrics.function_count <= 1
+                            || pdata_functions > binary_metrics.function_count * 10)
+                    {
+                        binary_metrics.function_count = pdata_functions;
                     }
                 }
-            }
 
-            // Recalculate density metrics that depend on code_size
-            let code_kb = goblin_code_size as f32 / 1024.0;
-            if code_kb > 0.0 {
-                binary_metrics.import_density = binary_metrics.import_count as f32 / code_kb;
-                binary_metrics.string_density = binary_metrics.string_count as f32 / code_kb;
-                binary_metrics.function_density = binary_metrics.function_count as f32 / code_kb;
-                binary_metrics.relocation_density =
-                    binary_metrics.relocation_count as f32 / code_kb;
-                binary_metrics.complexity_per_kb =
-                    binary_metrics.avg_complexity * 1024.0 / goblin_code_size as f32;
+                // Prefer goblin section-header flags over r2 segment perms
+                let (exec, write, wx) = self.compute_section_permission_counts(pe);
+                binary_metrics.executable_sections = exec;
+                binary_metrics.writable_sections = write;
+                binary_metrics.wx_sections = wx;
+
+                // Recalculate ratios with correct code_size
+                if binary_metrics.file_size > 0 {
+                    let data_size = binary_metrics.file_size.saturating_sub(code_size);
+                    if data_size > 0 {
+                        binary_metrics.code_to_data_ratio = code_size as f32 / data_size as f32;
+                    }
+                }
+                let code_kb = code_size as f32 / 1024.0;
+                if code_kb > 0.0 {
+                    binary_metrics.import_density =
+                        binary_metrics.import_count as f32 / code_kb;
+                    binary_metrics.string_density =
+                        binary_metrics.string_count as f32 / code_kb;
+                    binary_metrics.function_density =
+                        binary_metrics.function_count as f32 / code_kb;
+                    binary_metrics.relocation_density =
+                        binary_metrics.relocation_count as f32 / code_kb;
+                    binary_metrics.complexity_per_kb =
+                        binary_metrics.avg_complexity * 1024.0 / code_size as f32;
+                }
             }
 
             report.metrics = Some(Metrics {
                 binary: Some(binary_metrics),
-                pe: Some(pe_metrics),
+                pe: pe_metrics,
                 ..Default::default()
             });
 
-            // Convert R2Functions to Functions for the report
             report.functions = batched.functions.into_iter().map(Function::from).collect();
 
-            // Use strings from batched data (no extra r2 spawn)
+            // --- Rizin fallback: sections ---
+            if report.sections.is_empty() && !batched.sections.is_empty() {
+                tracing::info!(
+                    "goblin returned 0 sections but rizin found {} — using rizin fallback",
+                    batched.sections.len()
+                );
+                for section in &batched.sections {
+                    report.sections.push(Section {
+                        name: section.name.clone(),
+                        address: None,
+                        size: section.size,
+                        entropy: section.entropy,
+                        permissions: section.perm.clone(),
+                    });
+                }
+                if goblin_ok {
+                    report.findings.push(
+                        Finding::structural(
+                            "objectives/anti-static/pe-tampering/hidden-sections".to_string(),
+                            format!(
+                                "PE section table empty but rizin found {} sections — possible header manipulation",
+                                batched.sections.len()
+                            ),
+                            0.9,
+                        )
+                        .with_criticality(Criticality::Suspicious),
+                    );
+                }
+            }
+
+            // --- Rizin fallback: imports ---
+            if report.imports.is_empty() && !batched.imports.is_empty() {
+                tracing::info!(
+                    "goblin returned 0 imports but rizin found {} — using rizin fallback",
+                    batched.imports.len()
+                );
+                for import in &batched.imports {
+                    report.imports.push(Import::new(
+                        &import.name,
+                        import.lib_name.clone(),
+                        "radare2",
+                    ));
+                    let normalized = crate::types::binary::normalize_symbol(&import.name);
+                    if let Some(capability) =
+                        self.capability_mapper.lookup(&normalized, "radare2")
+                    {
+                        if !report.findings.iter().any(|c| c.id == capability.id) {
+                            report.findings.push(capability);
+                        }
+                    }
+                }
+                if goblin_ok {
+                    report.findings.push(
+                        Finding::structural(
+                            "objectives/anti-static/pe-tampering/hidden-imports".to_string(),
+                            format!(
+                                "PE import table empty but rizin found {} imports — possible IAT manipulation",
+                                report.imports.len()
+                            ),
+                            0.9,
+                        )
+                        .with_criticality(Criticality::Suspicious),
+                    );
+                }
+            }
+
             Some(batched.strings)
         } else {
+            // No rizin available — set metrics from goblin data only
+            if let Some(pe_m) = pe_metrics {
+                report.metrics = Some(Metrics {
+                    pe: Some(pe_m),
+                    ..Default::default()
+                });
+            }
             None
         };
 
-        // Use strings in order of preference:
-        // 1. stng_strings parameter (from AnalysisInput - avoids redundant extraction)
-        // 2. self.preextracted_strings (legacy builder pattern)
-        // 3. Extract fresh with stng/r2
+        // --- Corrupted-header findings (goblin failed entirely) ---
+        if let Some(err) = parse_error {
+            let error_str = format!("{}", err);
+            let is_resource_error = error_str.contains("ResourceString")
+                || error_str.contains("ResourceTable")
+                || error_str.contains("resource");
+            let is_parser_limitation = error_str.contains("type is too big");
+
+            // If rizin found sections/imports that goblin couldn't parse, the header
+            // corruption is more significant — upgrade from baseline to suspicious.
+            let rizin_found_hidden_content =
+                !report.sections.is_empty() || !report.imports.is_empty();
+            let (crit, conf) = if rizin_found_hidden_content && (is_resource_error || is_parser_limitation) {
+                (Criticality::Suspicious, 0.8)
+            } else if is_resource_error || is_parser_limitation {
+                (Criticality::Baseline, 0.3)
+            } else {
+                (Criticality::Hostile, 1.0)
+            };
+
+            report.findings.push(Finding {
+                id: "objectives/anti-analysis/pe-tampering/corrupted-header".to_string(),
+                kind: FindingKind::Structural,
+                desc: format!("PE header too corrupted to parse: {}", err),
+                conf,
+                crit,
+                mbc: Some("B0001".to_string()),
+                attack: Some("T1027".to_string()),
+                trait_refs: vec![],
+                evidence: vec![Evidence {
+                    method: "parse-failure".to_string(),
+                    source: "goblin".to_string(),
+                    value: format!("{}", err),
+                    location: None,
+                    ..Default::default()
+                }],
+                match_count: 1,
+                source_file: None,
+            });
+
+            report.structure.push(StructuralFeature {
+                id: "pe/corrupted".to_string(),
+                desc: "Corrupted/tampered PE binary (header parsing failed)".to_string(),
+                evidence: vec![Evidence {
+                    method: "parse-failure".to_string(),
+                    source: "goblin".to_string(),
+                    value: format!("{}", err),
+                    location: None,
+                    ..Default::default()
+                }],
+            });
+        }
+
+        // --- Shared post-processing (strings, embedded code, metrics, overlay, SFX) ---
+
+        // String extraction (preference: stng_strings > preextracted > extract_smart)
         if let Some(strings) = stng_strings {
             report.strings = self.string_extractor.convert_stng_strings(strings);
         } else if let Some(ref strings) = self.preextracted_strings {
             report.strings = strings.clone();
         } else {
-            // Extract strings using language-aware extraction (Go/Rust)
             report.strings = self.string_extractor.extract_smart(pe_data, r2_strings);
         }
         tools_used.push("stng".to_string());
 
-        // Analyze embedded code in strings
+        // Embedded code in strings
         let (encoded_layers, plain_findings) =
             crate::analyzers::embedded_code_detector::process_all_strings(
                 &file_path.display().to_string(),
@@ -435,19 +533,20 @@ impl PEAnalyzer {
         report.files.extend(encoded_layers);
         report.findings.extend(plain_findings);
 
-        // Populate common binary metrics (strings, entropy, etc.)
+        // Common binary metrics
         crate::analyzers::metrics_utils::populate_binary_metrics(&mut report, original_data);
 
-        // Calculate the actual end of PE sections (not just SizeOfImage)
-        // Many SFX archives embed the archive within the SizeOfImage but after the last section
+        // Overlay analysis (requires section data to find overlay start)
         let sections_end = pe
-            .sections
-            .iter()
-            .map(|s| (s.pointer_to_raw_data + s.size_of_raw_data) as u64)
-            .max()
+            .map(|pe| {
+                pe.sections
+                    .iter()
+                    .map(|s| (s.pointer_to_raw_data + s.size_of_raw_data) as u64)
+                    .max()
+                    .unwrap_or(0)
+            })
             .unwrap_or(0);
 
-        // Populate overlay metrics before archive analysis
         if (pe_data.len() as u64) > sections_end && sections_end > 0 {
             let overlay_size = pe_data.len() as u64 - sections_end;
             if let Some(ref mut metrics) = report.metrics {
@@ -461,19 +560,15 @@ impl PEAnalyzer {
             }
         }
 
-        // Validate metric ranges to catch calculation bugs
         if let Some(ref metrics) = report.metrics {
             if let Some(ref binary) = metrics.binary {
-                binary.validate();
+                binary.validate(&report.target.path);
             }
         }
 
-        // Analyze overlay data for self-extracting archives
+        // Overlay archive analysis
         if (pe_data.len() as u64) > sections_end && sections_end > 0 {
-            let overlay_start = sections_end as usize;
-            let overlay_data = &pe_data[overlay_start..];
-
-            // Try to analyze overlay as an archive
+            let overlay_data = &pe_data[sections_end as usize..];
             match crate::analyzers::overlay::analyze_overlay(
                 overlay_data,
                 &report.target.path,
@@ -481,21 +576,16 @@ impl PEAnalyzer {
                 self.yara_engine.clone(),
             ) {
                 Ok(Some(overlay_analysis)) => {
-                    // Get PE filename for path encoding
                     let pe_filename = std::path::Path::new(&report.target.path)
                         .file_name()
                         .and_then(|n| n.to_str())
                         .unwrap_or("binary.exe");
 
-                    // Add SFX finding
                     report.findings.push(overlay_analysis.sfx_finding);
 
-                    // Merge archive findings into PE report
                     for mut finding in overlay_analysis.archive_report.findings {
-                        // Update evidence locations to use archive path format
                         for evidence in &mut finding.evidence {
                             if let Some(ref loc) = evidence.location {
-                                // If location already has archive: prefix, update the path
                                 if let Some(rest) = loc.strip_prefix("archive:") {
                                     evidence.location = Some(format!(
                                         "archive:{}{}{}",
@@ -506,7 +596,6 @@ impl PEAnalyzer {
                                 } else if !loc
                                     .contains(crate::types::file_analysis::ARCHIVE_DELIMITER)
                                 {
-                                    // No archive prefix yet, add it with PE path
                                     evidence.location = Some(format!(
                                         "archive:{}{}{}",
                                         pe_filename,
@@ -519,9 +608,7 @@ impl PEAnalyzer {
                         report.findings.push(finding);
                     }
 
-                    // Merge archive contents with proper path encoding
                     for mut entry in overlay_analysis.archive_report.archive_contents {
-                        // Encode path using standard archive delimiter
                         if !entry
                             .path
                             .contains(crate::types::file_analysis::ARCHIVE_DELIMITER)
@@ -534,28 +621,18 @@ impl PEAnalyzer {
                         report.archive_contents.push(entry);
                     }
 
-                    // Merge nested file analyses from archive
                     report.files.extend(overlay_analysis.archive_report.files);
-
-                    // Merge strings from archive
                     report
                         .strings
                         .extend(overlay_analysis.archive_report.strings);
-
-                    // Add tools used from archive analysis
                     for tool in overlay_analysis.archive_report.metadata.tools_used {
                         if !tools_used.contains(&tool) {
                             tools_used.push(tool);
                         }
                     }
                 }
-                Ok(None) => {
-                    // Overlay exists but is not an archive (signature, resources, etc.)
-                }
-                Err(_e) => {
-                    // Overlay extraction/analysis failed - silently skip
-                    // (could be corrupted archive, unsupported format, etc.)
-                }
+                Ok(None) => {}
+                Err(_) => {}
             }
         }
 
@@ -594,24 +671,24 @@ impl PEAnalyzer {
                     binary,
                     &report.target.path,
                 );
-                // Downgrade embedded binaries found in the .rsrc section to notable:
-                // PE resources commonly contain legitimate embedded executables (drivers,
-                // tools, updaters) and are not indicative of malicious payload hiding.
-                let in_rsrc = pe.sections.iter().any(|s| {
-                    let name = String::from_utf8_lossy(&s.name);
-                    let name = name.trim_matches(char::from(0));
-                    if name != ".rsrc" {
-                        return false;
+                // Downgrade embedded binaries in .rsrc to Notable (legitimate use)
+                if let Some(pe) = pe {
+                    let in_rsrc = pe.sections.iter().any(|s| {
+                        let name = String::from_utf8_lossy(&s.name);
+                        let name = name.trim_matches(char::from(0));
+                        if name != ".rsrc" {
+                            return false;
+                        }
+                        let start = s.pointer_to_raw_data as usize;
+                        let end = start + s.size_of_raw_data as usize;
+                        binary.offset >= start && binary.offset < end
+                    });
+                    if in_rsrc {
+                        finding.crit = Criticality::Notable;
                     }
-                    let start = s.pointer_to_raw_data as usize;
-                    let end = start + s.size_of_raw_data as usize;
-                    binary.offset >= start && binary.offset < end
-                });
-                if in_rsrc {
-                    finding.crit = Criticality::Notable;
                 }
                 report.findings.push(finding);
-                // Analyze the embedded binary as a nested FileAnalysis (zip-like)
+
                 let slice_end = (binary.offset + binary.estimated_size).min(pe_data.len());
                 let embedded_bytes = &pe_data[binary.offset..slice_end];
                 let kind_str = binary.kind.as_str();
@@ -627,110 +704,6 @@ impl PEAnalyzer {
                 }
             }
         }
-
-        report.metadata.analysis_duration_ms = start.elapsed().as_millis() as u64;
-        report.metadata.tools_used = tools_used;
-
-        report
-    }
-
-    /// Analyze a corrupted PE that goblin failed to parse
-    /// Still extracts useful information: tampering findings, strings, .NET detection
-    #[allow(clippy::unnecessary_wraps)]
-    fn analyze_corrupted_pe(
-        &self,
-        file_path: &Path,
-        data: &[u8],
-        mut tamper_findings: Vec<Finding>,
-        parse_error: &goblin::error::Error,
-        start: std::time::Instant,
-        stng_strings: Option<&[stng::ExtractedString]>,
-    ) -> AnalysisReport {
-        // Create target info for corrupted PE
-        let target = TargetInfo {
-            path: file_path.display().to_string(),
-            file_type: "pe".to_string(), // Still report as PE
-            size_bytes: data.len() as u64,
-            sha256: crate::analyzers::utils::calculate_sha256(data),
-            architectures: None, // Can't determine from corrupted header
-        };
-
-        let mut report = AnalysisReport::new(target);
-        let tools_used = vec!["cleave".to_string(), "stng".to_string()];
-
-        // Determine severity based on error type - resource section errors are
-        // non-critical (common in legitimate signed binaries with complex resources)
-        let error_str = format!("{}", parse_error);
-        let is_resource_error = error_str.contains("ResourceString")
-            || error_str.contains("ResourceTable")
-            || error_str.contains("resource");
-        // "type is too big" errors come from goblin's PE data directory parser
-        // (e.g., exception table entries) and indicate parser limitations, not tampering
-        let is_parser_limitation = error_str.contains("type is too big");
-        let (crit, conf) = if is_resource_error || is_parser_limitation {
-            (Criticality::Baseline, 0.3)
-        } else {
-            (Criticality::Hostile, 1.0)
-        };
-
-        tamper_findings.push(Finding {
-            id: "objectives/anti-analysis/pe-tampering/corrupted-header".to_string(),
-            kind: FindingKind::Structural,
-            desc: format!("PE header too corrupted to parse: {}", parse_error),
-            conf,
-            crit,
-            mbc: Some("B0001".to_string()), // Executable Code Obfuscation
-            attack: Some("T1027".to_string()), // Obfuscated Files or Information
-            trait_refs: vec![],
-            evidence: vec![Evidence {
-                method: "parse-failure".to_string(),
-                source: "goblin".to_string(),
-                value: format!("{}", parse_error),
-                location: None,
-                ..Default::default()
-            }],
-            match_count: 1,
-            source_file: None,
-        });
-
-        // Add all tampering findings
-        report.findings.extend(tamper_findings);
-
-        // Add structural feature for corrupted PE
-        report.structure.push(StructuralFeature {
-            id: "pe/corrupted".to_string(),
-            desc: "Corrupted/tampered PE binary (header parsing failed)".to_string(),
-            evidence: vec![Evidence {
-                method: "parse-failure".to_string(),
-                source: "goblin".to_string(),
-                value: format!("{}", parse_error),
-                location: None,
-                ..Default::default()
-            }],
-        });
-
-        // Use strings in order of preference (same as analyze_valid_pe)
-        if let Some(strings) = stng_strings {
-            report.strings = self.string_extractor.convert_stng_strings(strings);
-        } else if let Some(ref strings) = self.preextracted_strings {
-            report.strings = strings.clone();
-        } else {
-            report.strings = self.string_extractor.extract_smart(data, None);
-        }
-
-        // Analyze embedded code in strings
-        let (encoded_layers, plain_findings) =
-            crate::analyzers::embedded_code_detector::process_all_strings(
-                &file_path.display().to_string(),
-                &report.strings,
-                &self.capability_mapper,
-                0,
-            );
-        report.files.extend(encoded_layers);
-        report.findings.extend(plain_findings);
-
-        // Populate common binary metrics (strings, entropy, etc.)
-        crate::analyzers::metrics_utils::populate_binary_metrics(&mut report, data);
 
         report.metadata.analysis_duration_ms = start.elapsed().as_millis() as u64;
         report.metadata.tools_used = tools_used;
@@ -1042,15 +1015,22 @@ impl PEAnalyzer {
 
     /// Calculate code size from PE section headers using IMAGE_SCN_MEM_EXECUTE characteristic
     /// This is more accurate than radare2's section classification
-    fn compute_code_size<'a>(&self, pe: &PE<'a>) -> u64 {
-        const IMAGE_SCN_MEM_EXECUTE: u32 = 0x20000000; // Section contains executable code
+    fn compute_code_size<'a>(&self, pe: &PE<'a>, file_size: u64) -> u64 {
+        const IMAGE_SCN_MEM_EXECUTE: u32 = 0x20000000;
 
         let mut code_size: u64 = 0;
 
         for section in &pe.sections {
-            // Check if section has IMAGE_SCN_MEM_EXECUTE characteristic set
             if section.characteristics & IMAGE_SCN_MEM_EXECUTE != 0 {
-                code_size += section.size_of_raw_data as u64;
+                // Cap at section's actual extent within the file
+                let raw_end =
+                    (section.pointer_to_raw_data as u64).saturating_add(section.size_of_raw_data as u64);
+                let capped_size = if raw_end > file_size {
+                    file_size.saturating_sub(section.pointer_to_raw_data as u64)
+                } else {
+                    section.size_of_raw_data as u64
+                };
+                code_size += capped_size;
             }
         }
 

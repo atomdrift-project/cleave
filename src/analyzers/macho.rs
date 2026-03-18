@@ -350,7 +350,7 @@ impl MachOAnalyzer {
         // Validate metric ranges to catch calculation bugs
         if let Some(ref metrics) = report.metrics {
             if let Some(ref binary) = metrics.binary {
-                binary.validate();
+                binary.validate(&report.target.path);
             }
         }
 
@@ -619,7 +619,8 @@ impl MachOAnalyzer {
 
         // Entitlements traits
         for (entitlement_key, entitlement_value) in &codesig.entitlements {
-            let ent_trait_id = format!("metadata/entitlement::{}", entitlement_key);
+            let ent_category = entitlement_category(entitlement_key);
+            let ent_trait_id = format!("metadata/entitlement/{}::{}", ent_category, entitlement_key);
             let desc = describe_entitlement(entitlement_key);
             let value_str = match entitlement_value {
                 macho_codesign::EntitlementValue::Boolean(b) => b.to_string(),
@@ -784,6 +785,72 @@ fn describe_entitlement(key: &str) -> String {
     }
 }
 
+/// Categorize an entitlement key into a subdirectory for the ML pipeline.
+/// The full finding ID becomes `metadata/entitlement/<category>::<key>`.
+fn entitlement_category(key: &str) -> &'static str {
+    // Device hardware access
+    if key.contains("device.") {
+        return "device";
+    }
+    // Personal/private data access
+    if key.contains("personal-information") {
+        return "privacy";
+    }
+    // Code-signing / runtime security policy
+    if key.contains(".cs.") {
+        return "security";
+    }
+    // Network capabilities
+    if key.contains("network.") {
+        return "network";
+    }
+    // File system / sandbox scope
+    if key.contains("files.") || key.contains("sandbox") || key.contains("home-directory")
+        || key.contains("temporary-exception.files")
+    {
+        return "filesystem";
+    }
+    // Keychain / credential storage
+    if key.contains("keychain") || key.contains("keystore") || key.contains("Keychain")
+        || key.contains("credential")
+    {
+        return "keychain";
+    }
+    // IPC: XPC, launchd, mach services
+    if key.contains("xpc") || key.contains("launchd") || key.contains("mach-lookup")
+        || key.contains("mach-register")
+    {
+        return "ipc";
+    }
+    // iCloud / push / app services
+    if key.contains("icloud") || key.contains("push-service") || key.contains("aps-environment")
+        || key.contains("ubiquity")
+    {
+        return "cloud";
+    }
+    // Application identity
+    if key.contains("application-identifier") || key.contains("app-identifier")
+        || key.contains("team-identifier") || key.contains("bundle-identifier")
+    {
+        return "identity";
+    }
+    // Apple private/internal APIs
+    if key.contains("private.") || key.contains("root-access") {
+        return "private-api";
+    }
+    // Virtualization / hypervisor
+    if key.contains("hypervisor") || key.contains("virtualization") {
+        return "virtualization";
+    }
+    // Accessibility / automation
+    if key.contains("accessibility") || key.contains("automation")
+        || key.contains("apple-events")
+    {
+        return "automation";
+    }
+    "other"
+}
+
 fn determine_entitlement_criticality(
     entitlement_key: &str,
     signature_type: &macho_codesign::SignatureType,
@@ -793,11 +860,8 @@ fn determine_entitlement_criticality(
         return Criticality::Notable;
     }
 
-    // Dangerous security entitlements — suspicious on non-Apple binaries
-    if entitlement_key.contains("allow-jit")
-        || entitlement_key.contains("debugger")
-        || entitlement_key.contains("unsigned-executable-memory")
-    {
+    // Debugger entitlement is suspicious on non-Apple binaries
+    if entitlement_key.contains("debugger") {
         return Criticality::Suspicious;
     }
 

@@ -446,7 +446,7 @@ impl ElfAnalyzer {
         // Validate metric ranges to catch calculation bugs
         if let Some(ref metrics) = report.metrics {
             if let Some(ref binary) = metrics.binary {
-                binary.validate();
+                binary.validate(&report.target.path);
             }
         }
 

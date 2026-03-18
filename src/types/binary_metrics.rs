@@ -291,119 +291,68 @@ pub struct BinaryMetrics {
 }
 
 impl BinaryMetrics {
-    /// Validate metric ranges and log warnings for out-of-range values
-    /// This helps catch bugs in metric calculation
-    pub(crate) fn validate(&self) {
+    /// Validate metric ranges and log warnings for out-of-range values.
+    /// `path` is included in messages to identify which file triggered the warning.
+    pub(crate) fn validate(&self, path: &str) {
         // Entropy checks (valid range: 0-8 bits)
         if self.overall_entropy > 8.0 || self.overall_entropy < 0.0 {
-            eprintln!(
-                "WARNING: overall_entropy ({:.2}) outside valid range [0, 8]",
-                self.overall_entropy
-            );
+            tracing::warn!(path, overall_entropy = self.overall_entropy, "overall_entropy outside valid range [0, 8]");
         }
         if self.code_entropy > 8.0 || self.code_entropy < 0.0 {
-            eprintln!(
-                "WARNING: code_entropy ({:.2}) outside valid range [0, 8]",
-                self.code_entropy
-            );
+            tracing::warn!(path, code_entropy = self.code_entropy, "code_entropy outside valid range [0, 8]");
         }
         if self.data_entropy > 8.0 || self.data_entropy < 0.0 {
-            eprintln!(
-                "WARNING: data_entropy ({:.2}) outside valid range [0, 8]",
-                self.data_entropy
-            );
+            tracing::warn!(path, data_entropy = self.data_entropy, "data_entropy outside valid range [0, 8]");
         }
         if self.overlay_entropy > 8.0 || self.overlay_entropy < 0.0 {
-            eprintln!(
-                "WARNING: overlay_entropy ({:.2}) outside valid range [0, 8]",
-                self.overlay_entropy
-            );
+            tracing::warn!(path, overlay_entropy = self.overlay_entropy, "overlay_entropy outside valid range [0, 8]");
         }
 
         // Size checks
         if self.code_size > self.file_size {
-            eprintln!(
-                "WARNING: code_size ({}) > file_size ({}) - invalid state",
-                self.code_size, self.file_size
-            );
+            tracing::warn!(path, code_size = self.code_size, file_size = self.file_size, "code_size > file_size");
         }
         if self.overlay_size > self.file_size {
-            eprintln!(
-                "WARNING: overlay_size ({}) > file_size ({}) - invalid state",
-                self.overlay_size, self.file_size
-            );
+            tracing::warn!(path, overlay_size = self.overlay_size, file_size = self.file_size, "overlay_size > file_size");
         }
 
-        // Ratio checks (should be non-negative)
+        // Ratio checks
         if self.code_to_data_ratio < 0.0 {
-            eprintln!(
-                "WARNING: code_to_data_ratio ({:.2}) is negative",
-                self.code_to_data_ratio
-            );
+            tracing::warn!(path, code_to_data_ratio = self.code_to_data_ratio, "code_to_data_ratio is negative");
         }
         if self.export_to_import_ratio < 0.0 {
-            eprintln!(
-                "WARNING: export_to_import_ratio ({:.2}) is negative",
-                self.export_to_import_ratio
-            );
+            tracing::warn!(path, export_to_import_ratio = self.export_to_import_ratio, "export_to_import_ratio is negative");
         }
         if self.code_section_ratio < 0.0 || self.code_section_ratio > 1.0 {
-            eprintln!(
-                "WARNING: code_section_ratio ({:.2}) outside valid range [0, 1]",
-                self.code_section_ratio
-            );
+            tracing::warn!(path, code_section_ratio = self.code_section_ratio, "code_section_ratio outside valid range [0, 1]");
         }
         if self.largest_section_ratio < 0.0 || self.largest_section_ratio > 1.0 {
-            eprintln!(
-                "WARNING: largest_section_ratio ({:.2}) outside valid range [0, 1]",
-                self.largest_section_ratio
-            );
+            tracing::warn!(path, largest_section_ratio = self.largest_section_ratio, "largest_section_ratio outside valid range [0, 1]");
         }
         if self.overlay_ratio < 0.0 || self.overlay_ratio > 1.0 {
-            eprintln!(
-                "WARNING: overlay_ratio ({:.2}) outside valid range [0, 1]",
-                self.overlay_ratio
-            );
+            tracing::warn!(path, overlay_ratio = self.overlay_ratio, "overlay_ratio outside valid range [0, 1]");
         }
 
-        // Density checks (should be non-negative, warn if extremely high)
+        // Density checks
         if self.import_density < 0.0 {
-            eprintln!(
-                "WARNING: import_density ({:.2}) is negative",
-                self.import_density
-            );
+            tracing::warn!(path, import_density = self.import_density, "import_density is negative");
         }
         if self.string_density < 0.0 {
-            eprintln!(
-                "WARNING: string_density ({:.2}) is negative",
-                self.string_density
-            );
+            tracing::warn!(path, string_density = self.string_density, "string_density is negative");
         }
         if self.function_density < 0.0 {
-            eprintln!(
-                "WARNING: function_density ({:.2}) is negative",
-                self.function_density
-            );
+            tracing::warn!(path, function_density = self.function_density, "function_density is negative");
         }
 
         // Section counts should be consistent
         if self.executable_sections > self.section_count {
-            eprintln!(
-                "WARNING: executable_sections ({}) > section_count ({}) - invalid state",
-                self.executable_sections, self.section_count
-            );
+            tracing::warn!(path, executable_sections = self.executable_sections, section_count = self.section_count, "executable_sections > section_count");
         }
         if self.writable_sections > self.section_count {
-            eprintln!(
-                "WARNING: writable_sections ({}) > section_count ({}) - invalid state",
-                self.writable_sections, self.section_count
-            );
+            tracing::warn!(path, writable_sections = self.writable_sections, section_count = self.section_count, "writable_sections > section_count");
         }
         if self.wx_sections > self.executable_sections {
-            eprintln!(
-                "WARNING: wx_sections ({}) > executable_sections ({}) - invalid state",
-                self.wx_sections, self.executable_sections
-            );
+            tracing::warn!(path, wx_sections = self.wx_sections, executable_sections = self.executable_sections, "wx_sections > executable_sections");
         }
     }
 }

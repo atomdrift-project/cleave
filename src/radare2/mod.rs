@@ -529,14 +529,15 @@ impl Radare2Analyzer {
         let mut code_size: u64 = 0;
 
         for section in &batched.sections {
-            metrics.section_count += 1;
+            // Cap section size at file_size — tampered PEs can declare sizes beyond EOF
+            let section_size = section.size.min(file_size);
 
             let entropy = section.entropy as f32;
             entropies.push(entropy);
-            total_size += section.size;
+            total_size += section_size;
 
-            if section.size > largest_size {
-                largest_size = section.size;
+            if section_size > largest_size {
+                largest_size = section_size;
             }
 
             if let Some(ref perm) = section.perm {
@@ -552,7 +553,7 @@ impl Radare2Analyzer {
 
                 if perm.contains('x') && !is_data_only {
                     metrics.executable_sections += 1;
-                    code_size += section.size;
+                    code_size += section_size;
                 }
                 if perm.contains('w') {
                     metrics.writable_sections += 1;
@@ -605,6 +606,9 @@ impl Radare2Analyzer {
         if !batched.sections.is_empty() {
             metrics.avg_section_size = total_size as f32 / batched.sections.len() as f32;
         }
+
+        // Import metrics
+        metrics.import_count = batched.imports.len() as u32;
 
         // String metrics
         metrics.string_count = batched.strings.len() as u32;

@@ -91,10 +91,10 @@ pub(crate) fn analyze_overlay(
         return Ok(None); // Not an archive - might be signature, resources, etc.
     };
 
-    eprintln!(
-        "  Detected {} archive in overlay ({} bytes)",
+    tracing::info!(
         archive_type,
-        overlay_data.len()
+        overlay_bytes = overlay_data.len(),
+        "Detected archive in overlay"
     );
 
     // Write overlay to temporary file with correct extension for ArchiveAnalyzer
@@ -148,7 +148,7 @@ pub(crate) fn analyze_overlay(
         }
         Err(e) => {
             // Archive extraction failed - still emit a finding about the SFX
-            eprintln!("  WARNING: Failed to extract overlay archive: {}", e);
+            tracing::warn!(error = %e, binary_path, archive_type, "Failed to extract overlay archive");
 
             let sfx_finding = Finding {
                 kind: FindingKind::Capability,

@@ -794,11 +794,16 @@ impl UnifiedSourceAnalyzer {
             Self::compute_text_ratio_metrics(&mut metrics);
 
             // Flag invisible Unicode steganography characters.
-            // Any non-zero count in source code is deeply suspicious — legitimate code
-            // never contains variation selectors or tag characters outside of niche
-            // Unicode processing libraries.
+            // Variation selectors, zero-width chars, and tag chars in source code
+            // are suspicious at high counts; a single occurrence may be a BOM or
+            // formatting artifact.
             if let Some(ref text) = metrics.text {
                 if text.invisible_chars > 0 {
+                    let (crit, conf) = if text.invisible_chars >= 3 {
+                        (crate::types::Criticality::Suspicious, 0.95)
+                    } else {
+                        (crate::types::Criticality::Notable, 0.7)
+                    };
                     report.add_finding(
                         crate::types::Finding::indicator(
                             "objectives/anti-static/obfuscate/steganography/invisible-unicode"
@@ -807,9 +812,9 @@ impl UnifiedSourceAnalyzer {
                                 "Source contains {} invisible Unicode characters (variation selectors, zero-width, or tag chars)",
                                 text.invisible_chars
                             ),
-                            0.95,
+                            conf,
                         )
-                        .with_criticality(crate::types::Criticality::Suspicious)
+                        .with_criticality(crit)
                         .with_attack("T1027".to_string())
                         .with_evidence(vec![crate::types::Evidence {
                             method: "metrics".to_string(),

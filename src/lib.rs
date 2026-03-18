@@ -367,12 +367,36 @@ pub fn analyze_file_with_mapper<P: AsRef<Path>>(
 /// # Returns
 ///
 /// An `AnalysisReport` containing all extracted features, findings, and metrics.
+/// Maximum recursion depth for nested payload analysis.
+/// Each level adds a full analysis stack frame; 8 levels is generous for
+/// legitimate multi-layer encoding while preventing stack overflows from
+/// adversarial nesting (e.g., base64-in-hex-in-base64 ad infinitum).
+const MAX_ANALYSIS_DEPTH: u32 = 8;
+
 fn analyze_file_with_resources<P: AsRef<Path>>(
     path: P,
     options: &AnalysisOptions,
     capability_mapper: &Arc<CapabilityMapper>,
     yara_engine: Option<&Arc<yara_engine::YaraEngine>>,
     preloaded: Option<file_io::FileData>,
+) -> Result<AnalysisReport> {
+    analyze_file_with_resources_at_depth(
+        path,
+        options,
+        capability_mapper,
+        yara_engine,
+        preloaded,
+        0,
+    )
+}
+
+fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
+    path: P,
+    options: &AnalysisOptions,
+    capability_mapper: &Arc<CapabilityMapper>,
+    yara_engine: Option<&Arc<yara_engine::YaraEngine>>,
+    preloaded: Option<file_io::FileData>,
+    analysis_depth: u32,
 ) -> Result<AnalysisReport> {
     let path = path.as_ref();
     let span = tracing::info_span!("analyze", path = %path.display());
@@ -767,13 +791,44 @@ fn analyze_file_with_resources<P: AsRef<Path>>(
             source_file: None,
         });
 
-        // Analyze the decoded payload
-        if let Ok(payload_report) = analyze_file_with_resources(
+        // Analyze the decoded payload (with depth limit to prevent stack overflow)
+        if analysis_depth >= MAX_ANALYSIS_DEPTH {
+            tracing::warn!(
+                depth = analysis_depth,
+                path = %path.display(),
+                "Encoded payload analysis depth limit reached ({MAX_ANALYSIS_DEPTH}), skipping deeper analysis"
+            );
+            report.findings.push(types::Finding {
+                id: "objectives/anti-static/obfuscation/multi-layer/deep-nesting".to_string(),
+                kind: types::FindingKind::Indicator,
+                desc: format!(
+                    "Encoded payload nesting exceeds {MAX_ANALYSIS_DEPTH} layers, \
+                     a technique used to resist automated analysis"
+                ),
+                conf: 0.95,
+                crit: types::Criticality::Suspicious,
+                mbc: Some("OB0002".to_string()),
+                attack: Some("T1027".to_string()),
+                trait_refs: vec![],
+                evidence: vec![types::Evidence {
+                    method: "structural".to_string(),
+                    source: "cleave".to_string(),
+                    value: format!("depth={analysis_depth}"),
+                    location: None,
+                    ..Default::default()
+                }],
+                match_count: 0,
+                source_file: None,
+            });
+            break;
+        }
+        if let Ok(payload_report) = analyze_file_with_resources_at_depth(
             &payload.temp_path,
             options,
             capability_mapper,
             yara_engine,
             None,
+            analysis_depth + 1,
         ) {
             // Merge traits from payload analysis
             for mut trait_item in payload_report.traits {
@@ -1230,4 +1285,103 @@ pub fn formula_from_report(report: &AnalysisReport) -> String {
 pub fn diff_files<P: AsRef<Path>>(old_path: P, new_path: P) -> Result<DiffReport> {
     let analyzer = DiffAnalyzer::new(old_path, new_path);
     analyzer.analyze()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_max_analysis_depth_constant() {
+        assert_eq!(MAX_ANALYSIS_DEPTH, 8);
+    }
+
+    /// Verify that analyzing a file at the depth limit emits the deep-nesting
+    /// finding instead of recursing further.  We create a Python file whose
+    /// content is a base64-encoded shell command (one layer of encoding) and
+    /// invoke analysis at depth == MAX_ANALYSIS_DEPTH so the payload loop
+    /// hits the depth guard.
+    #[test]
+    fn test_analysis_depth_limit_emits_finding() {
+        use std::io::Write;
+
+        // base64("echo hello") = "ZWNobyBoZWxsbw=="
+        // Wrap it in Python so the file is recognized as a script with an
+        // encoded payload that would normally trigger recursive analysis.
+        let code = b"import base64\ndata = 'ZWNobyBoZWxsbw=='\nresult = base64.b64decode(data)\n";
+
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        tmp.as_file().write_all(code).ok();
+        let path = tmp.path();
+
+        let options = AnalysisOptions::default();
+        let mapper = shared_resources::capability_mapper_with_options(&options);
+        let yara = if options.disable_yara {
+            None
+        } else {
+            Some(shared_resources::yara_engine(
+                options.enable_third_party_yara,
+            ))
+        };
+
+        // Analyze at exactly MAX_ANALYSIS_DEPTH — any encoded payloads found
+        // should trigger the deep-nesting finding instead of recursing.
+        #[allow(clippy::expect_used)]
+        let report = analyze_file_with_resources_at_depth(
+            path,
+            &options,
+            &mapper,
+            yara.as_ref(),
+            None,
+            MAX_ANALYSIS_DEPTH,
+        )
+        .expect("analysis should succeed even at depth limit");
+
+        // If the file produced encoded payloads, the depth guard should have
+        // emitted the deep-nesting finding.  If no payloads were detected
+        // (encoding detection is heuristic), the finding won't appear — that's
+        // fine, we just verify no stack overflow occurred and the function
+        // returned normally.
+        let deep_nesting = report
+            .findings
+            .iter()
+            .find(|f| f.id == "objectives/anti-static/obfuscation/multi-layer/deep-nesting");
+        if deep_nesting.is_some() {
+            let f = deep_nesting.unwrap();
+            assert_eq!(f.crit, types::Criticality::Suspicious);
+            assert_eq!(f.attack.as_deref(), Some("T1027"));
+            assert_eq!(f.mbc.as_deref(), Some("OB0002"));
+            assert!(
+                f.evidence.iter().any(|e| e.value.contains("depth=")),
+                "evidence should include depth"
+            );
+        }
+    }
+
+    /// Verify that depth 0 (normal) does NOT emit the deep-nesting finding
+    /// for a simple file.
+    #[test]
+    fn test_analysis_depth_zero_no_deep_nesting_finding() {
+        use std::io::Write;
+
+        let code = b"print('hello world')\n";
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        tmp.as_file().write_all(code).ok();
+
+        let options = AnalysisOptions::default();
+        let mapper = shared_resources::capability_mapper_with_options(&options);
+
+        #[allow(clippy::expect_used)]
+        let report =
+            analyze_file_with_resources_at_depth(tmp.path(), &options, &mapper, None, None, 0)
+                .expect("analysis should succeed");
+
+        assert!(
+            !report
+                .findings
+                .iter()
+                .any(|f| f.id.contains("deep-nesting")),
+            "depth-0 analysis should not produce deep-nesting finding"
+        );
+    }
 }

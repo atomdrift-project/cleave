@@ -373,11 +373,8 @@ fn apply_file_criticality_filter(
 
     // Second pass: propagate rejection down — if any ancestor is rejected, reject the child.
     // Build a quick id→parent_id lookup.
-    let parent_map: std::collections::HashMap<u32, Option<u32>> = report
-        .files
-        .iter()
-        .map(|f| (f.id, f.parent_id))
-        .collect();
+    let parent_map: std::collections::HashMap<u32, Option<u32>> =
+        report.files.iter().map(|f| (f.id, f.parent_id)).collect();
 
     let ancestor_rejected = |file_id: u32| -> bool {
         let mut cur = parent_map.get(&file_id).copied().flatten();
@@ -390,9 +387,9 @@ fn apply_file_criticality_filter(
         false
     };
 
-    report.files.retain(|file| {
-        !rejected_ids.contains(&file.id) && !ancestor_rejected(file.id)
-    });
+    report
+        .files
+        .retain(|file| !rejected_ids.contains(&file.id) && !ancestor_rejected(file.id));
 
     let removed = before - report.files.len();
     if removed > 0 {
@@ -616,14 +613,8 @@ mod tests {
     #[test]
     fn test_max_file_crit_filters_files() {
         let mut report = make_report(vec![
-            make_file(
-                "/bin/low",
-                vec![make_finding("a", Criticality::Notable)],
-            ),
-            make_file(
-                "/bin/high",
-                vec![make_finding("b", Criticality::Hostile)],
-            ),
+            make_file("/bin/low", vec![make_finding("a", Criticality::Notable)]),
+            make_file("/bin/high", vec![make_finding("b", Criticality::Hostile)]),
         ]);
 
         // Only keep files whose highest trait is <= Notable

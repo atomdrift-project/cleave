@@ -296,64 +296,137 @@ impl BinaryMetrics {
     pub(crate) fn validate(&self, path: &str) {
         // Entropy checks (valid range: 0-8 bits)
         if self.overall_entropy > 8.0 || self.overall_entropy < 0.0 {
-            tracing::warn!(path, overall_entropy = self.overall_entropy, "overall_entropy outside valid range [0, 8]");
+            tracing::warn!(
+                path,
+                overall_entropy = self.overall_entropy,
+                "overall_entropy outside valid range [0, 8]"
+            );
         }
         if self.code_entropy > 8.0 || self.code_entropy < 0.0 {
-            tracing::warn!(path, code_entropy = self.code_entropy, "code_entropy outside valid range [0, 8]");
+            tracing::warn!(
+                path,
+                code_entropy = self.code_entropy,
+                "code_entropy outside valid range [0, 8]"
+            );
         }
         if self.data_entropy > 8.0 || self.data_entropy < 0.0 {
-            tracing::warn!(path, data_entropy = self.data_entropy, "data_entropy outside valid range [0, 8]");
+            tracing::warn!(
+                path,
+                data_entropy = self.data_entropy,
+                "data_entropy outside valid range [0, 8]"
+            );
         }
         if self.overlay_entropy > 8.0 || self.overlay_entropy < 0.0 {
-            tracing::warn!(path, overlay_entropy = self.overlay_entropy, "overlay_entropy outside valid range [0, 8]");
+            tracing::warn!(
+                path,
+                overlay_entropy = self.overlay_entropy,
+                "overlay_entropy outside valid range [0, 8]"
+            );
         }
 
         // Size checks — inflated section headers are a common anti-analysis trick,
         // so these are INFO (expected for tampered PEs), not WARN.
         if self.code_size > self.file_size {
-            tracing::info!(path, code_size = self.code_size, file_size = self.file_size, "code_size > file_size (inflated section headers)");
+            tracing::info!(
+                path,
+                code_size = self.code_size,
+                file_size = self.file_size,
+                "code_size > file_size (inflated section headers)"
+            );
         }
         if self.overlay_size > self.file_size {
-            tracing::info!(path, overlay_size = self.overlay_size, file_size = self.file_size, "overlay_size > file_size");
+            tracing::info!(
+                path,
+                overlay_size = self.overlay_size,
+                file_size = self.file_size,
+                "overlay_size > file_size"
+            );
         }
 
         // Ratio checks
         if self.code_to_data_ratio < 0.0 {
-            tracing::warn!(path, code_to_data_ratio = self.code_to_data_ratio, "code_to_data_ratio is negative");
+            tracing::warn!(
+                path,
+                code_to_data_ratio = self.code_to_data_ratio,
+                "code_to_data_ratio is negative"
+            );
         }
         if self.export_to_import_ratio < 0.0 {
-            tracing::warn!(path, export_to_import_ratio = self.export_to_import_ratio, "export_to_import_ratio is negative");
+            tracing::warn!(
+                path,
+                export_to_import_ratio = self.export_to_import_ratio,
+                "export_to_import_ratio is negative"
+            );
         }
         if self.code_section_ratio < 0.0 || self.code_section_ratio > 1.0 {
-            tracing::warn!(path, code_section_ratio = self.code_section_ratio, "code_section_ratio outside valid range [0, 1]");
+            tracing::warn!(
+                path,
+                code_section_ratio = self.code_section_ratio,
+                "code_section_ratio outside valid range [0, 1]"
+            );
         }
         if self.largest_section_ratio < 0.0 || self.largest_section_ratio > 1.0 {
-            tracing::info!(path, largest_section_ratio = self.largest_section_ratio, "largest_section_ratio outside valid range [0, 1] (inflated section headers)");
+            tracing::info!(
+                path,
+                largest_section_ratio = self.largest_section_ratio,
+                "largest_section_ratio outside valid range [0, 1] (inflated section headers)"
+            );
         }
         if self.overlay_ratio < 0.0 || self.overlay_ratio > 1.0 {
-            tracing::warn!(path, overlay_ratio = self.overlay_ratio, "overlay_ratio outside valid range [0, 1]");
+            tracing::warn!(
+                path,
+                overlay_ratio = self.overlay_ratio,
+                "overlay_ratio outside valid range [0, 1]"
+            );
         }
 
         // Density checks
         if self.import_density < 0.0 {
-            tracing::warn!(path, import_density = self.import_density, "import_density is negative");
+            tracing::warn!(
+                path,
+                import_density = self.import_density,
+                "import_density is negative"
+            );
         }
         if self.string_density < 0.0 {
-            tracing::warn!(path, string_density = self.string_density, "string_density is negative");
+            tracing::warn!(
+                path,
+                string_density = self.string_density,
+                "string_density is negative"
+            );
         }
         if self.function_density < 0.0 {
-            tracing::warn!(path, function_density = self.function_density, "function_density is negative");
+            tracing::warn!(
+                path,
+                function_density = self.function_density,
+                "function_density is negative"
+            );
         }
 
         // Section counts should be consistent
         if self.executable_sections > self.section_count {
-            tracing::warn!(path, executable_sections = self.executable_sections, section_count = self.section_count, "executable_sections > section_count");
+            tracing::warn!(
+                path,
+                executable_sections = self.executable_sections,
+                section_count = self.section_count,
+                "executable_sections > section_count"
+            );
         }
         if self.writable_sections > self.section_count {
-            tracing::warn!(path, writable_sections = self.writable_sections, section_count = self.section_count, "writable_sections > section_count");
+            tracing::warn!(
+                path,
+                writable_sections = self.writable_sections,
+                section_count = self.section_count,
+                "writable_sections > section_count"
+            );
         }
         if self.wx_sections > self.executable_sections {
-            tracing::warn!(path, wx_sections = self.wx_sections, executable_sections = self.executable_sections, "wx_sections > executable_sections");
+            tracing::warn!(
+                path,
+                wx_sections = self.wx_sections,
+                executable_sections = self.executable_sections,
+                "wx_sections > executable_sections"
+            );
         }
     }
 }

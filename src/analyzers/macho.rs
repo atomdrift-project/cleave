@@ -620,7 +620,8 @@ impl MachOAnalyzer {
         // Entitlements traits
         for (entitlement_key, entitlement_value) in &codesig.entitlements {
             let ent_category = entitlement_category(entitlement_key);
-            let ent_trait_id = format!("metadata/entitlement/{}::{}", ent_category, entitlement_key);
+            let ent_trait_id =
+                format!("metadata/entitlement/{}::{}", ent_category, entitlement_key);
             let desc = describe_entitlement(entitlement_key);
             let value_str = match entitlement_value {
                 macho_codesign::EntitlementValue::Boolean(b) => b.to_string(),
@@ -805,32 +806,42 @@ fn entitlement_category(key: &str) -> &'static str {
         return "network";
     }
     // File system / sandbox scope
-    if key.contains("files.") || key.contains("sandbox") || key.contains("home-directory")
+    if key.contains("files.")
+        || key.contains("sandbox")
+        || key.contains("home-directory")
         || key.contains("temporary-exception.files")
     {
         return "filesystem";
     }
     // Keychain / credential storage
-    if key.contains("keychain") || key.contains("keystore") || key.contains("Keychain")
+    if key.contains("keychain")
+        || key.contains("keystore")
+        || key.contains("Keychain")
         || key.contains("credential")
     {
         return "keychain";
     }
     // IPC: XPC, launchd, mach services
-    if key.contains("xpc") || key.contains("launchd") || key.contains("mach-lookup")
+    if key.contains("xpc")
+        || key.contains("launchd")
+        || key.contains("mach-lookup")
         || key.contains("mach-register")
     {
         return "ipc";
     }
     // iCloud / push / app services
-    if key.contains("icloud") || key.contains("push-service") || key.contains("aps-environment")
+    if key.contains("icloud")
+        || key.contains("push-service")
+        || key.contains("aps-environment")
         || key.contains("ubiquity")
     {
         return "cloud";
     }
     // Application identity
-    if key.contains("application-identifier") || key.contains("app-identifier")
-        || key.contains("team-identifier") || key.contains("bundle-identifier")
+    if key.contains("application-identifier")
+        || key.contains("app-identifier")
+        || key.contains("team-identifier")
+        || key.contains("bundle-identifier")
     {
         return "identity";
     }
@@ -843,9 +854,7 @@ fn entitlement_category(key: &str) -> &'static str {
         return "virtualization";
     }
     // Accessibility / automation
-    if key.contains("accessibility") || key.contains("automation")
-        || key.contains("apple-events")
-    {
+    if key.contains("accessibility") || key.contains("automation") || key.contains("apple-events") {
         return "automation";
     }
     "other"
@@ -860,8 +869,16 @@ fn determine_entitlement_criticality(
         return Criticality::Notable;
     }
 
-    // Debugger entitlement is suspicious on non-Apple binaries
-    if entitlement_key.contains("debugger") {
+    // Dangerous entitlements are suspicious on non-Apple binaries:
+    // - allow-jit: allows JIT compilation (code generation at runtime)
+    // - debugger: allows attaching to other processes
+    // - allow-unsigned-executable-memory: bypasses code signing enforcement
+    // - disable-executable-page-protection: weakens memory protections
+    if entitlement_key.contains("debugger")
+        || entitlement_key.contains("allow-jit")
+        || entitlement_key.contains("allow-unsigned-executable-memory")
+        || entitlement_key.contains("disable-executable-page-protection")
+    {
         return Criticality::Suspicious;
     }
 

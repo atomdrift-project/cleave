@@ -162,7 +162,7 @@ impl ArchiveAnalyzer {
                         .spawn(move || nested_analyzer.analyze(&temp_path))
                         .ok()
                         .and_then(|h| h.join().ok())
-                        .and_then(|r| r.ok());
+                        .and_then(std::result::Result::ok);
 
                     if let Some(report) = nested_result {
                         file_analysis.findings = report.findings;

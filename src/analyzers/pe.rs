@@ -280,12 +280,12 @@ impl PEAnalyzer {
         }
 
         // Add any tampering findings detected during preprocessing
-        report.findings.extend(tamper_findings.drain(..));
+        report.findings.append(&mut tamper_findings);
 
         // Run radare2 in parallel with goblin-based structural analysis.
         // Tell rizin the binary "has symbols" if goblin found metadata, or if goblin
         // failed entirely (so rizin tries harder).
-        let has_symbols = pe.map_or(true, |pe| {
+        let has_symbols = pe.is_none_or(|pe| {
             !pe.imports.is_empty() || !pe.exports.is_empty() || !pe.sections.is_empty()
         });
         let (r2_result, _) = rayon::join(
@@ -312,8 +312,7 @@ impl PEAnalyzer {
         // Detect inflated section headers (declared size extends beyond EOF)
         if let Some(pe) = pe {
             let has_inflated = pe.sections.iter().any(|s| {
-                (s.pointer_to_raw_data as u64).saturating_add(s.size_of_raw_data as u64)
-                    > file_size
+                (s.pointer_to_raw_data as u64).saturating_add(s.size_of_raw_data as u64) > file_size
             });
             if has_inflated {
                 report.findings.push(
@@ -376,10 +375,8 @@ impl PEAnalyzer {
                 }
                 let code_kb = code_size as f32 / 1024.0;
                 if code_kb > 0.0 {
-                    binary_metrics.import_density =
-                        binary_metrics.import_count as f32 / code_kb;
-                    binary_metrics.string_density =
-                        binary_metrics.string_count as f32 / code_kb;
+                    binary_metrics.import_density = binary_metrics.import_count as f32 / code_kb;
+                    binary_metrics.string_density = binary_metrics.string_count as f32 / code_kb;
                     binary_metrics.function_density =
                         binary_metrics.function_count as f32 / code_kb;
                     binary_metrics.relocation_density =
@@ -440,8 +437,7 @@ impl PEAnalyzer {
                         "radare2",
                     ));
                     let normalized = crate::types::binary::normalize_symbol(&import.name);
-                    if let Some(capability) =
-                        self.capability_mapper.lookup(&normalized, "radare2")
+                    if let Some(capability) = self.capability_mapper.lookup(&normalized, "radare2")
                     {
                         if !report.findings.iter().any(|c| c.id == capability.id) {
                             report.findings.push(capability);
@@ -487,13 +483,14 @@ impl PEAnalyzer {
             // corruption is more significant — upgrade from baseline to suspicious.
             let rizin_found_hidden_content =
                 !report.sections.is_empty() || !report.imports.is_empty();
-            let (crit, conf) = if rizin_found_hidden_content && (is_resource_error || is_parser_limitation) {
-                (Criticality::Suspicious, 0.8)
-            } else if is_resource_error || is_parser_limitation {
-                (Criticality::Baseline, 0.3)
-            } else {
-                (Criticality::Hostile, 1.0)
-            };
+            let (crit, conf) =
+                if rizin_found_hidden_content && (is_resource_error || is_parser_limitation) {
+                    (Criticality::Suspicious, 0.8)
+                } else if is_resource_error || is_parser_limitation {
+                    (Criticality::Baseline, 0.3)
+                } else {
+                    (Criticality::Hostile, 1.0)
+                };
 
             report.findings.push(Finding {
                 id: "objectives/anti-analysis/pe-tampering/corrupted-header".to_string(),
@@ -649,8 +646,7 @@ impl PEAnalyzer {
                         }
                     }
                 }
-                Ok(None) => {}
-                Err(_) => {}
+                Ok(None) | Err(_) => {}
             }
         }
 
@@ -1041,8 +1037,8 @@ impl PEAnalyzer {
         for section in &pe.sections {
             if section.characteristics & IMAGE_SCN_MEM_EXECUTE != 0 {
                 // Cap at section's actual extent within the file
-                let raw_end =
-                    (section.pointer_to_raw_data as u64).saturating_add(section.size_of_raw_data as u64);
+                let raw_end = (section.pointer_to_raw_data as u64)
+                    .saturating_add(section.size_of_raw_data as u64);
                 let capped_size = if raw_end > file_size {
                     file_size.saturating_sub(section.pointer_to_raw_data as u64)
                 } else {

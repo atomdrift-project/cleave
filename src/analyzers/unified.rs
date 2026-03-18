@@ -802,9 +802,10 @@ impl UnifiedSourceAnalyzer {
                     // Libraries dealing with Unicode data, fake data generation,
                     // or internationalization legitimately contain invisible chars.
                     let path_lower = file_path.display().to_string().to_lowercase();
-                    let is_unicode_library = ["unicode", "faker", "i18n", "locale", "icu", "cldr", "intl"]
-                        .iter()
-                        .any(|kw| path_lower.contains(kw));
+                    let is_unicode_library =
+                        ["unicode", "faker", "i18n", "locale", "icu", "cldr", "intl"]
+                            .iter()
+                            .any(|kw| path_lower.contains(kw));
                     let (crit, conf) = if is_unicode_library {
                         (crate::types::Criticality::Notable, 0.5)
                     } else if text.invisible_chars >= 3 {
@@ -1609,8 +1610,8 @@ func main() {
             report
                 .findings
                 .iter()
-                .any(|c| c.id == "micro-behaviors/crypto/cipher/library::aes-new-cipher"),
-            "Expected micro-behaviors/crypto/cipher/library::aes-new-cipher, found: {:?}",
+                .any(|c| c.id == "micro-behaviors/crypto/library::aes-new-cipher"),
+            "Expected micro-behaviors/crypto/library::aes-new-cipher, found: {:?}",
             report.findings.iter().map(|f| &f.id).collect::<Vec<_>>()
         );
     }
@@ -1629,8 +1630,8 @@ func main() {
             report
                 .findings
                 .iter()
-                .any(|c| c.id == "micro-behaviors/crypto/cipher/library::rsa-generate-key"),
-            "Expected micro-behaviors/crypto/cipher/library::rsa-generate-key, found: {:?}",
+                .any(|c| c.id == "micro-behaviors/crypto/library::rsa-generate-key"),
+            "Expected micro-behaviors/crypto/library::rsa-generate-key, found: {:?}",
             report.findings.iter().map(|f| &f.id).collect::<Vec<_>>()
         );
     }

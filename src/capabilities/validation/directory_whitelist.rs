@@ -945,8 +945,7 @@ pub(crate) fn validate_directory_structure(traits_path: &Path) -> Result<(), Vec
                             "Unknown micro-behaviors/{}/{}\n  \
                              This rule is misplaced according to TAXONOMY.md.\n  \
                              There is almost certainly a better existing directory for this trait.",
-                            category,
-                            dir_name
+                            category, dir_name
                         ));
                     }
                 }

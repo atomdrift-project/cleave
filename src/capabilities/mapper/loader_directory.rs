@@ -1043,6 +1043,9 @@ impl super::CapabilityMapper {
                     eprintln!("   {}", error);
                 }
                 eprintln!();
+                for error in &errors {
+                    warnings.push(format!("unknown subdirectory: {error}"));
+                }
                 has_fatal_errors = true;
             }
 
@@ -1099,6 +1102,10 @@ impl super::CapabilityMapper {
                 eprintln!(
                 "   - micro-behaviors/malware/ and known/malware/ → Malware detection should not be in micro-behaviors/\n"
             );
+                warnings.push(format!(
+                    "{} second-level directories duplicated across namespaces",
+                    duplicate_dirs.len()
+                ));
                 has_fatal_errors = true;
             }
 
@@ -2705,6 +2712,10 @@ impl super::CapabilityMapper {
                     }
                 }
                 eprintln!();
+                warnings.push(format!(
+                    "{} broken trait references in composite rules",
+                    broken_refs.len()
+                ));
                 has_fatal_errors = true;
             }
 
@@ -2773,6 +2784,10 @@ impl super::CapabilityMapper {
                     eprintln!("     ... and {} more", sorted_fields.len() - 10);
                 }
                 eprintln!();
+                warnings.push(format!(
+                    "{} unknown metric field references in traits",
+                    invalid_metric_refs.len()
+                ));
                 has_fatal_errors = true;
             }
 
@@ -2799,6 +2814,10 @@ impl super::CapabilityMapper {
                 eprintln!(
                     "   Convert inline conditions (string, symbol, yara, etc.) to atomic traits.\n"
                 );
+                warnings.push(format!(
+                    "{} composite rules have inline primitives",
+                    inline_errors.len()
+                ));
                 has_fatal_errors = true;
             }
 
@@ -2932,6 +2951,10 @@ impl super::CapabilityMapper {
                     }
                 }
                 eprintln!();
+                warnings.push(format!(
+                    "{} single-trait composites add no value",
+                    redundant_composites.len()
+                ));
                 has_fatal_errors = true;
             }
 
@@ -2960,6 +2983,10 @@ impl super::CapabilityMapper {
                     }
                 }
                 eprintln!();
+                warnings.push(format!(
+                    "{} single-trait composites only add unless clauses",
+                    unless_only_composites.len()
+                ));
                 has_fatal_errors = true;
             }
         } // End of enable_full_validation block for steps 11-15 and post-step validations

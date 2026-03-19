@@ -138,7 +138,7 @@ impl SampleExtractionConfig {
     /// Create a new extraction config
     #[allow(dead_code)] // Used by binary target
     #[must_use]
-    pub(crate) fn new(extract_dir: PathBuf) -> Self {
+    pub fn new(extract_dir: PathBuf) -> Self {
         Self {
             extract_dir,
             archive_sha256: None,

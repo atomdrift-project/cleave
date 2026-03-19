@@ -20,7 +20,7 @@ extern crate self as cleave;
 
 mod analysis_cache;
 mod archive_utils;
-mod cache;
+pub mod cache;
 pub mod decoders;
 mod entropy;
 pub mod extractors;
@@ -29,7 +29,10 @@ pub mod ip_validator;
 pub mod memory_tracker;
 mod radare2;
 mod shared_resources;
-mod strings;
+pub mod strings;
+pub mod test_rules;
+#[cfg(test)]
+pub mod test_rules_filters_test;
 pub mod traits_repo;
 mod upx;
 
@@ -41,6 +44,7 @@ pub mod analyzers;
 pub mod bitcoin_validator;
 pub mod capabilities;
 pub mod cli;
+pub mod commands;
 pub mod composite_rules;
 pub mod diff;
 pub mod env_mapper;
@@ -78,6 +82,16 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 
+/// Disable radare2 integration process-wide.
+pub fn disable_radare2() {
+    radare2::disable_radare2();
+}
+
+/// Disable UPX integration process-wide.
+pub fn disable_upx() {
+    upx::disable_upx();
+}
+
 /// Scoped disable guards applied for a single analysis operation.
 struct AnalysisDisableGuards {
     _radare2: Option<radare2::ScopedRadare2Disable>,
@@ -99,11 +113,14 @@ impl AnalysisDisableGuards {
 ///
 /// Extracts YARA matches and inline evidence, converts matches to findings,
 /// and returns inline evidence map for use in trait evaluation.
-fn process_yara_result(
+pub fn process_yara_result_with<F>(
     report: &mut types::AnalysisReport,
     yara_result: Option<Result<(Vec<types::YaraMatch>, HashMap<String, Vec<types::Evidence>>)>>,
-    engine: Option<&yara_engine::YaraEngine>,
-) -> HashMap<String, Vec<types::Evidence>> {
+    mut evidence_for_match: F,
+) -> HashMap<String, Vec<types::Evidence>>
+where
+    F: FnMut(&types::YaraMatch) -> Vec<types::Evidence>,
+{
     let Some(Ok((matches, inline))) = yara_result else {
         return HashMap::new();
     };
@@ -172,9 +189,7 @@ fn process_yara_result(
         if report.findings.iter().any(|c| c.id == cap_id) {
             continue;
         }
-        let evidence = engine
-            .map(|e| e.yara_match_to_evidence(yara_match))
-            .unwrap_or_default();
+        let evidence = evidence_for_match(yara_match);
         let crit = match yara_match.crit.as_str() {
             "hostile" => types::Criticality::Hostile,
             "notable" => types::Criticality::Notable,
@@ -199,6 +214,53 @@ fn process_yara_result(
         report.metadata.tools_used.push("yara-x".to_string());
     }
     inline
+}
+
+fn process_yara_result(
+    report: &mut types::AnalysisReport,
+    yara_result: Option<Result<(Vec<types::YaraMatch>, HashMap<String, Vec<types::Evidence>>)>>,
+    engine: Option<&yara_engine::YaraEngine>,
+) -> HashMap<String, Vec<types::Evidence>> {
+    process_yara_result_with(report, yara_result, |yara_match| {
+        engine
+            .map(|e| e.yara_match_to_evidence(yara_match))
+            .unwrap_or_default()
+    })
+}
+
+/// Create an analysis report for a file using the analyzer selected for `file_type`.
+///
+/// This is primarily used by the CLI command layer to avoid reimplementing
+/// analyzer dispatch and fallback report creation outside the library.
+pub fn create_analysis_report(
+    path: &Path,
+    file_type: &FileType,
+    binary_data: &[u8],
+    capability_mapper: &CapabilityMapper,
+) -> Result<types::AnalysisReport> {
+    use sha2::{Digest, Sha256};
+
+    let report = if let Some(analyzer) =
+        analyzers::analyzer_for_file_type(file_type, Some(capability_mapper.clone()))
+    {
+        analyzer.analyze(path)?
+    } else {
+        let mut hasher = Sha256::new();
+        hasher.update(binary_data);
+        let sha256 = format!("{:x}", hasher.finalize());
+
+        let target = types::TargetInfo {
+            path: path.display().to_string(),
+            file_type: format!("{:?}", file_type).to_lowercase(),
+            size_bytes: binary_data.len() as u64,
+            sha256,
+            architectures: None,
+        };
+
+        types::AnalysisReport::new(target)
+    };
+
+    Ok(report)
 }
 
 /// Options for file analysis

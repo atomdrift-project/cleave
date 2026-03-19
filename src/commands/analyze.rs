@@ -41,31 +41,52 @@ use std::io::Write;
 use std::path::Path;
 
 /// All parameters needed by the analyze command.
-pub(crate) struct AnalyzeConfig<'a> {
+#[derive(Debug)]
+pub struct AnalyzeConfig<'a> {
+    /// File or directory to analyze.
     pub target: &'a str,
+    /// Whether third-party YARA rules should be enabled.
     pub enable_third_party: bool,
+    /// Output format for rendered results.
     pub format: &'a cli::OutputFormat,
+    /// Archive passwords to try when analyzing encrypted archives.
     pub zip_passwords: &'a [String],
+    /// Component-level feature disables from the CLI.
     pub disabled: &'a cli::DisabledComponents,
+    /// Whether to analyze all files instead of only known-interesting ones.
     pub all_files: bool,
+    /// Optional sample extraction configuration for nested payloads.
     pub sample_extraction: Option<&'a types::SampleExtractionConfig>,
+    /// Platform filters applied during rule evaluation.
     pub platforms: &'a [composite_rules::Platform],
+    /// Minimum hostile precision threshold for composite evaluation.
     pub min_hostile_precision: f32,
+    /// Minimum suspicious precision threshold for composite evaluation.
     pub min_suspicious_precision: f32,
+    /// Maximum file size eligible for in-memory analysis.
     pub max_memory_file_size: u64,
+    /// Whether full validation should run when loading rule data.
     pub enable_full_validation: bool,
+    /// Threshold for reporting slow rule evaluations.
     pub slow_rule_ms: u64,
+    /// Whether output is being redirected to a file.
     pub output_to_file: bool,
+    /// Maximum file size eligible for YARA scanning.
     pub max_scan_file_size: u64,
+    /// Number of threads to use for directory scans.
     pub scan_threads: usize,
+    /// Minimum finding criticality to emit.
     pub min_crit: Option<types::Criticality>,
+    /// Maximum finding criticality to emit.
     pub max_crit: Option<types::Criticality>,
+    /// Minimum file-level criticality to emit.
     pub min_file_crit: Option<types::Criticality>,
+    /// Maximum file-level criticality to emit.
     pub max_file_crit: Option<types::Criticality>,
 }
 
-/// Analyze a single file or directory with comprehensive malware detection.
-pub(crate) fn run(config: &AnalyzeConfig<'_>) -> Result<String> {
+/// Analyze a single file or directory and render the result in the requested format.
+pub fn run(config: &AnalyzeConfig<'_>) -> Result<String> {
     let path = Path::new(config.target);
 
     if !path.exists() {
@@ -128,44 +149,18 @@ pub(crate) fn run(config: &AnalyzeConfig<'_>) -> Result<String> {
                 let file_path_str = file_path.to_string_lossy().to_string();
                 let formatted = match result.as_ref() {
                     Ok(lib_report) => {
-                        // Convert library types to binary-crate types via serde roundtrip.
-                        let Ok(json) = serde_json::to_vec(lib_report) else {
+                        let Ok(mut report) = convert_lib_report(lib_report) else {
                             return;
                         };
-                        let Ok(mut report) = serde_json::from_slice::<types::AnalysisReport>(&json)
-                        else {
+                        let Ok(res) = format_report_output(
+                            &mut report,
+                            &format_val,
+                            min_crit,
+                            max_crit,
+                            min_file_crit,
+                            max_file_crit,
+                        ) else {
                             return;
-                        };
-
-                        report.shrink_to_fit();
-                        report.finalize();
-
-                        // Apply file-level criticality filter (exclude entire files)
-                        if min_file_crit.is_some() || max_file_crit.is_some() {
-                            apply_file_criticality_filter(
-                                &mut report,
-                                min_file_crit,
-                                max_file_crit,
-                            );
-                            if report.files.is_empty() {
-                                return;
-                            }
-                        }
-
-                        // Apply per-trait criticality range filter
-                        if min_crit.is_some() || max_crit.is_some() {
-                            apply_criticality_filter(&mut report, min_crit, max_crit);
-                        }
-
-                        let res = match format_val {
-                            cli::OutputFormat::Json => {
-                                serde_json::to_string(&report).unwrap_or_default()
-                            }
-                            cli::OutputFormat::Jsonl => {
-                                output::format_jsonl(&report).unwrap_or_default()
-                            }
-                            cli::OutputFormat::Terminal => output::format_terminal(&report),
-                            cli::OutputFormat::Tiny => output::format_tiny(&report),
                         };
                         if stream_stdout && !res.is_empty() {
                             print!("{}", res);
@@ -232,11 +227,7 @@ fn analyze_and_format(
     // Convert library types to binary-crate types via serde roundtrip.
     // The types are structurally identical but Rust treats them as distinct
     // because main.rs re-declares the library modules.
-    let json = serde_json::to_vec(&lib_report)?;
-    let mut report: types::AnalysisReport = serde_json::from_slice(&json)?;
-
-    report.shrink_to_fit();
-    report.finalize();
+    let mut report = convert_lib_report(&lib_report)?;
 
     // Merge encoding layers and recalculate composites.
     // The mapper is only needed when encoding layers are actually merged (rare for single files),
@@ -292,21 +283,45 @@ fn analyze_and_format(
         }
     }
 
-    // Apply file-level criticality filter (exclude entire files)
+    format_report_output(
+        &mut report,
+        format,
+        min_crit,
+        max_crit,
+        min_file_crit,
+        max_file_crit,
+    )
+}
+
+fn convert_lib_report(lib_report: &cleave::AnalysisReport) -> Result<types::AnalysisReport> {
+    let json = serde_json::to_vec(lib_report)?;
+    let mut report: types::AnalysisReport = serde_json::from_slice(&json)?;
+    report.shrink_to_fit();
+    report.finalize();
+    Ok(report)
+}
+
+fn format_report_output(
+    report: &mut types::AnalysisReport,
+    format: &cli::OutputFormat,
+    min_crit: Option<types::Criticality>,
+    max_crit: Option<types::Criticality>,
+    min_file_crit: Option<types::Criticality>,
+    max_file_crit: Option<types::Criticality>,
+) -> Result<String> {
     if min_file_crit.is_some() || max_file_crit.is_some() {
-        apply_file_criticality_filter(&mut report, min_file_crit, max_file_crit);
+        apply_file_criticality_filter(report, min_file_crit, max_file_crit);
     }
 
-    // Apply per-trait criticality range filter
     if min_crit.is_some() || max_crit.is_some() {
-        apply_criticality_filter(&mut report, min_crit, max_crit);
+        apply_criticality_filter(report, min_crit, max_crit);
     }
 
     match format {
-        cli::OutputFormat::Json => Ok(serde_json::to_string(&report)?),
-        cli::OutputFormat::Jsonl => output::format_jsonl(&report),
-        cli::OutputFormat::Terminal => Ok(output::format_terminal(&report)),
-        cli::OutputFormat::Tiny => Ok(output::format_tiny(&report)),
+        cli::OutputFormat::Json => Ok(serde_json::to_string(report)?),
+        cli::OutputFormat::Jsonl => output::format_jsonl(report),
+        cli::OutputFormat::Terminal => Ok(output::format_terminal(report)),
+        cli::OutputFormat::Tiny => Ok(output::format_tiny(report)),
     }
 }
 

@@ -202,7 +202,7 @@ enum ConditionDeser {
 /// High-fidelity validation checks for string matches.
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, Hash, Copy, clap::ValueEnum)]
 #[serde(rename_all = "snake_case")]
-pub(crate) enum StringValidator {
+pub enum StringValidator {
     /// Require match to contain a valid external IPv4 address
     ExternalIp,
     /// Require match to contain a valid Bitcoin address (with checksum)

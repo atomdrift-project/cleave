@@ -25,7 +25,7 @@ use anyhow::Result;
 /// # Returns
 ///
 /// A string containing the formatted diff analysis results.
-pub(crate) fn run(old: &str, new: &str, format: &cli::OutputFormat) -> Result<String> {
+pub fn run(old: &str, new: &str, format: &cli::OutputFormat) -> Result<String> {
     match format {
         cli::OutputFormat::Json => {
             let report = cleave::diff_files_full(old, new)?;

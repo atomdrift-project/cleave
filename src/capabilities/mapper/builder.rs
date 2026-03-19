@@ -50,6 +50,15 @@ impl super::CapabilityMapper {
     #[cfg(test)]
     #[must_use]
     pub(crate) fn new_without_validation() -> Self {
+        // Keep unit tests hermetic by default. Tests that need real trait data should
+        // provide it explicitly via CLEAVE_TRAITS_DIR or use from_yaml/from_directory.
+        if std::env::var_os("CLEAVE_TRAITS_DIR").is_none()
+            && std::env::var_os("cleave_TRAITS_DIR").is_none()
+            && !Self::skip_traits_requested()
+        {
+            return Self::empty();
+        }
+
         Self::new_with_precision_thresholds(
             Self::DEFAULT_MIN_HOSTILE_PRECISION,
             Self::DEFAULT_MIN_SUSPICIOUS_PRECISION,

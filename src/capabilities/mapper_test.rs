@@ -52,15 +52,9 @@ fn test_empty_mapper() {
 #[test]
 fn test_new_mapper() {
     let mapper = CapabilityMapper::new_without_validation();
-    // New mapper loads traits from the default traits directory (without validation for tests)
-    assert!(
-        mapper.mapping_count() > 0,
-        "Should load mappings from traits directory"
-    );
-    assert!(
-        mapper.trait_definitions_count() > 0,
-        "Should load traits from directory"
-    );
+    // Test constructor should be hermetic unless a test opts into a traits directory.
+    assert_eq!(mapper.mapping_count(), 0);
+    assert_eq!(mapper.trait_definitions_count(), 0);
 }
 
 #[test]
@@ -656,13 +650,18 @@ traits:
 
 #[test]
 fn test_precision_thresholds() {
-    let mapper = CapabilityMapper::new_with_precision_thresholds(5.0, 3.0, false);
+    let yaml = r#"
+symbols:
+  - symbol: "malloc"
+    capability: "micro-behaviors/mem::malloc"
+    desc: "malloc"
+    conf: 0.9
+"#;
+    let (_dir, path) = create_test_yaml(yaml);
+    let mapper = CapabilityMapper::from_yaml_with_precision_thresholds(&path, 5.0, 3.0, false)
+        .unwrap();
 
-    // Mapper should be created with custom thresholds and load traits
-    assert!(
-        mapper.mapping_count() > 0,
-        "Should load mappings with custom precision thresholds"
-    );
+    assert_eq!(mapper.mapping_count(), 1);
 }
 
 #[test]

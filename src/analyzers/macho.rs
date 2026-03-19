@@ -126,6 +126,20 @@ impl MachOAnalyzer {
         // Generate signature findings from parsed code signature
         if let Some(ref codesig) = codesig_data {
             self.generate_signature_findings(codesig, &mut report);
+        } else {
+            report.findings.push(Finding {
+                id: "metadata/unsigned".to_string(),
+                kind: FindingKind::Capability,
+                desc: "Binary is not digitally signed".to_string(),
+                conf: 1.0,
+                crit: Criticality::Notable,
+                mbc: None,
+                attack: None,
+                trait_refs: vec![],
+                evidence: vec![],
+                match_count: 0,
+                source_file: None,
+            });
         }
 
         // Extract imports and map to capabilities
@@ -578,7 +592,7 @@ impl MachOAnalyzer {
             id: format!("metadata/signed/{}::{}", sig_category, signer),
             desc,
             conf: 1.0,
-            crit: Criticality::Baseline,
+            crit: Criticality::Notable,
             mbc: None,
             attack: None,
             evidence: vec![Evidence {

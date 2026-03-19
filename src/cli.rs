@@ -23,7 +23,7 @@ use clap::{Parser, Subcommand};
 /// Returns vec![Platform::All] if input is empty or "all"
 #[allow(dead_code)] // Used by binary target
 #[must_use]
-pub(crate) fn parse_platforms(s: &str) -> Vec<crate::composite_rules::Platform> {
+pub fn parse_platforms(s: &str) -> Vec<crate::composite_rules::Platform> {
     use crate::composite_rules::Platform;
 
     if s.is_empty() {
@@ -57,13 +57,13 @@ pub(crate) fn parse_platforms(s: &str) -> Vec<crate::composite_rules::Platform> 
 }
 
 /// Default passwords to try for encrypted zip files (common malware sample passwords)
-pub(crate) const DEFAULT_ZIP_PASSWORDS: &[&str] =
+pub const DEFAULT_ZIP_PASSWORDS: &[&str] =
     &["infected", "infect3d", "malware", "virus", "password"];
 
 /// Tracks which components are disabled
 #[allow(dead_code)] // Used by binary target
 #[derive(Debug, Clone, Default)]
-pub(crate) struct DisabledComponents {
+pub struct DisabledComponents {
     /// Whether YARA scanning is disabled
     pub yara: bool,
     /// Whether radare2 analysis is disabled
@@ -78,7 +78,7 @@ impl DisabledComponents {
     /// Parse comma-separated list of components to disable
     #[allow(dead_code)] // Used by binary target
     #[must_use]
-    pub(crate) fn parse(s: &str) -> Self {
+    pub fn parse(s: &str) -> Self {
         let mut disabled = Self::default();
         for component in s.split(',').map(|c| c.trim().to_lowercase()) {
             match component.as_str() {
@@ -97,10 +97,11 @@ impl DisabledComponents {
 #[derive(Parser, Debug)]
 #[command(name = "cleave")]
 #[command(
-    about = "Deep static analysis tool for extracting features from binaries and source code"
+    about = "Deep static analysis tool for extracting features from binaries and source code",
+    version
 )]
-#[command(version)]
-pub(crate) struct Args {
+pub struct Args {
+
     /// Subcommand to run (analyze, search, diff, etc.)
     #[command(subcommand)]
     pub command: Option<Command>,
@@ -205,7 +206,7 @@ impl Args {
     /// Get the disabled components based on --disable and --enable-all flags
     #[allow(dead_code)] // Used by binary target
     #[must_use]
-    pub(crate) fn disabled_components(&self) -> DisabledComponents {
+    pub fn disabled_components(&self) -> DisabledComponents {
         if self.enable_all {
             DisabledComponents::default()
         } else {
@@ -217,7 +218,7 @@ impl Args {
     /// Precedence: --format > --json > CLEAVE_FORMAT > Terminal (default)
     #[allow(dead_code)] // Used by binary target
     #[must_use]
-    pub(crate) fn format(&self) -> OutputFormat {
+    pub fn format(&self) -> OutputFormat {
         // --format takes precedence over everything
         if let Some(format) = self.format {
             return format;
@@ -243,7 +244,7 @@ impl Args {
     /// Parse --platforms flag into a vector of Platform values
     #[allow(dead_code)] // Used by binary target
     #[must_use]
-    pub(crate) fn platforms(&self) -> Vec<crate::composite_rules::Platform> {
+    pub fn platforms(&self) -> Vec<crate::composite_rules::Platform> {
         parse_platforms(&self.platforms)
     }
 }
@@ -251,7 +252,7 @@ impl Args {
 /// Available cleave subcommands
 #[derive(Subcommand, Debug)]
 #[allow(clippy::large_enum_variant)]
-pub(crate) enum Command {
+pub enum Command {
     /// Analyze files or directories
     Analyze {
         /// Target files or directories to analyze
@@ -549,7 +550,7 @@ fn parse_offset_range(s: &str) -> Result<(i64, Option<i64>), String> {
 
 /// Type of content to search in
 #[derive(Debug, Clone, Copy, clap::ValueEnum, PartialEq)]
-pub(crate) enum SearchType {
+pub enum SearchType {
     /// Search in extracted string values
     StringValue,
     /// Search in symbols (imports/exports)
@@ -570,7 +571,7 @@ pub(crate) enum SearchType {
 
 /// How to match a search pattern against content
 #[derive(Debug, Clone, Copy, clap::ValueEnum, PartialEq)]
-pub(crate) enum MatchMethod {
+pub enum MatchMethod {
     /// Exact match
     Exact,
     /// Contains substring
@@ -583,7 +584,7 @@ pub(crate) enum MatchMethod {
 
 /// File type to use for analysis context override
 #[derive(Debug, Clone, Copy, clap::ValueEnum, PartialEq)]
-pub(crate) enum DetectFileType {
+pub enum DetectFileType {
     /// ELF binary
     Elf,
     /// PE/Windows executable
@@ -604,7 +605,7 @@ pub(crate) enum DetectFileType {
 
 /// Output format for the diff command
 #[derive(Debug, Clone, Copy, clap::ValueEnum, PartialEq)]
-pub(crate) enum OutputFormat {
+pub enum OutputFormat {
     /// JSON output (single object), matching server mode response shape
     Json,
     /// JSONL output (newline-delimited JSON) for streaming

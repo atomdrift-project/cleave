@@ -12,7 +12,8 @@ use crate::radare2::Radare2Analyzer;
 use anyhow::Result;
 use std::path::Path;
 
-pub(crate) fn run(target: &str, layer: Option<&str>, format: &cli::OutputFormat) -> Result<String> {
+/// Extract symbols from a target, optionally from a named analysis layer.
+pub fn run(target: &str, layer: Option<&str>, format: &cli::OutputFormat) -> Result<String> {
     // If a layer is specified, we need to run full analysis to get that layer's data
     if let Some(layer_name) = layer {
         return run_with_layer(target, layer_name, format);

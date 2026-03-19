@@ -74,6 +74,27 @@
 pub(crate) mod match_cmd;
 pub(crate) mod rules;
 
+use crate::analyzers::{macho::MachOAnalyzer, FileType};
+use crate::commands::shared::create_analysis_report;
+use anyhow::Result;
+use std::fs;
+use std::path::Path;
+
+pub(crate) struct PreparedTestTarget {
+    pub(crate) preferred_binary_data: Vec<u8>,
+    pub(crate) is_fat_macho: bool,
+    pub(crate) arch_count: Option<usize>,
+}
+
+pub(crate) struct PreparedTestAnalysis {
+    pub(crate) file_type: FileType,
+    pub(crate) full_data: Vec<u8>,
+    pub(crate) preferred_binary_data: Vec<u8>,
+    pub(crate) report: crate::types::AnalysisReport,
+    pub(crate) is_fat_macho: bool,
+    pub(crate) arch_count: Option<usize>,
+}
+
 pub(crate) fn build_test_capability_mapper(
     platforms: Vec<crate::composite_rules::Platform>,
     min_hostile_precision: f32,
@@ -93,6 +114,68 @@ pub(crate) fn build_test_capability_mapper(
     }
 }
 
+pub(crate) fn prepare_test_target(file_type: &FileType, full_data: &[u8]) -> PreparedTestTarget {
+    if *file_type == FileType::MachO {
+        let analyzer = MachOAnalyzer::new();
+        let preferred_range = analyzer.preferred_arch_range(full_data);
+        let arch_count = analyzer.all_arch_ranges(full_data).len();
+
+        return PreparedTestTarget {
+            preferred_binary_data: full_data[preferred_range].to_vec(),
+            is_fat_macho: arch_count > 1,
+            arch_count: Some(arch_count),
+        };
+    }
+
+    PreparedTestTarget {
+        preferred_binary_data: full_data.to_vec(),
+        is_fat_macho: false,
+        arch_count: None,
+    }
+}
+
+pub(crate) fn evaluation_data<'a>(
+    full_data: &'a [u8],
+    preferred_binary_data: &'a [u8],
+    is_fat_macho: bool,
+) -> &'a [u8] {
+    if is_fat_macho {
+        full_data
+    } else {
+        preferred_binary_data
+    }
+}
+
+pub(crate) fn prepare_test_analysis(
+    path: &Path,
+    file_type: FileType,
+    capability_mapper: &crate::capabilities::CapabilityMapper,
+) -> Result<PreparedTestAnalysis> {
+    let full_data = fs::read(path)?;
+    let prepared_target = prepare_test_target(&file_type, &full_data);
+    let mut report = create_analysis_report(
+        path,
+        &file_type,
+        &prepared_target.preferred_binary_data,
+        capability_mapper,
+    )?;
+
+    // For FAT binaries, re-extract strings from the full file so offsets are file-relative.
+    if prepared_target.is_fat_macho {
+        let string_extractor = crate::strings::StringExtractor::default();
+        report.strings = string_extractor.extract_smart(&full_data, None);
+    }
+
+    Ok(PreparedTestAnalysis {
+        file_type,
+        full_data,
+        preferred_binary_data: prepared_target.preferred_binary_data,
+        report,
+        is_fat_macho: prepared_target.is_fat_macho,
+        arch_count: prepared_target.arch_count,
+    })
+}
+
 // Re-export command functions
-pub(crate) use match_cmd::run as test_match;
-pub(crate) use rules::run as test_rules;
+pub use match_cmd::run as test_match;
+pub use rules::run as test_rules;

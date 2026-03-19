@@ -63,7 +63,7 @@ pub(crate) fn read_paths_from_stdin() -> Vec<String> {
 }
 
 /// Expand paths, replacing "-" with paths read from stdin.
-pub(crate) fn expand_paths(paths: Vec<String>, format: &crate::cli::OutputFormat) -> Vec<String> {
+pub fn expand_paths(paths: Vec<String>, format: &crate::cli::OutputFormat) -> Vec<String> {
     let mut expanded = Vec::new();
     let mut stdin_read = false;
 

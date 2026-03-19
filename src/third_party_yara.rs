@@ -11,7 +11,7 @@ use crate::composite_rules::{Arch, Platform};
 ///
 /// The namespace format is `"3p.{vendor}[.{subdir}...]"`.
 /// Returns a path like `"third_party/{vendor}/[{platform}/][{type}/]{family}"`.
-pub(crate) fn derive_trait_id(namespace: &str, rule_name: &str, _os_meta: Option<&str>) -> String {
+pub fn derive_trait_id(namespace: &str, rule_name: &str, _os_meta: Option<&str>) -> String {
     // Parse "3p.vendor[.subdir...]" -> vendor, subdirs
     let without_prefix = namespace.strip_prefix("3p.").unwrap_or(namespace);
     let (vendor, rest) = match without_prefix.find('.') {
@@ -35,7 +35,7 @@ pub(crate) fn derive_trait_id(namespace: &str, rule_name: &str, _os_meta: Option
 ///
 /// Priority: `os` metadata first, then rule name prefix (e.g. `Win32_`, `Linux_`).
 /// Returns empty vec if unknown — rule applies to all platforms.
-pub(crate) fn platforms_from_name_and_os(rule_name: &str, os_meta: Option<&str>) -> Vec<Platform> {
+pub fn platforms_from_name_and_os(rule_name: &str, os_meta: Option<&str>) -> Vec<Platform> {
     if let Some(os) = os_meta {
         let mut platforms = Vec::new();
         for token in os.to_lowercase().split(',').map(str::trim) {
@@ -93,7 +93,7 @@ pub(crate) fn platforms_from_name_and_os(rule_name: &str, os_meta: Option<&str>)
 /// Returns lowercase type strings compatible with `scan_bytes_filtered`'s filter:
 /// Windows → ["pe", "dll"], Linux → ["elf", "so"], macOS → ["macho", "dylib"].
 /// Returns empty slice for platforms with no binary constraint (All, Android, iOS).
-pub(crate) fn filetypes_from_platforms(platforms: &[Platform]) -> Vec<&'static str> {
+pub fn filetypes_from_platforms(platforms: &[Platform]) -> Vec<&'static str> {
     let mut types: Vec<&'static str> = Vec::new();
     for platform in platforms {
         match platform {
@@ -130,7 +130,7 @@ pub(crate) fn filetypes_from_platforms(platforms: &[Platform]) -> Vec<&'static s
 ///
 /// Returns empty vec if no constraint can be inferred — the rule applies to all files.
 /// Returned strings are lowercase and match the values used by `scan_bytes_filtered`.
-pub(crate) fn infer_filetypes(rule_name: &str, os_meta: Option<&str>) -> Vec<&'static str> {
+pub fn infer_filetypes(rule_name: &str, os_meta: Option<&str>) -> Vec<&'static str> {
     // 1. Platform-based binary format inference (highest priority)
     let platforms = platforms_from_name_and_os(rule_name, os_meta);
     if !platforms.is_empty() {
@@ -155,7 +155,7 @@ pub(crate) fn infer_filetypes(rule_name: &str, os_meta: Option<&str>) -> Vec<&'s
 /// that aren't in the rule identifier itself (e.g. `"TextShell"`).
 ///
 /// Returns empty vec if no constraint can be inferred.
-pub(crate) fn infer_filetypes_from_namespace(
+pub fn infer_filetypes_from_namespace(
     namespace: &str,
     os_meta: Option<&str>,
 ) -> Vec<&'static str> {
@@ -175,7 +175,7 @@ pub(crate) fn infer_filetypes_from_namespace(
 /// equivalent) line into each qualifying rule's `meta:` section.
 ///
 /// This runs at rule-load time so the hint is baked into the compiled rules cache.
-pub(crate) fn inject_condition_filetype_hints(source: &str) -> String {
+pub fn inject_condition_filetype_hints(source: &str) -> String {
     // Quick reject: skip files with no recognizable magic pattern
     if !source_has_magic_condition(source) {
         return source.to_string();
@@ -260,7 +260,7 @@ fn source_has_magic_condition(source: &str) -> bool {
 }
 
 /// Check if `source` contains a YARA module reference like `pe.` at a word boundary.
-pub(crate) fn has_module_reference(lower_source: &str, module_prefix: &str) -> bool {
+pub fn has_module_reference(lower_source: &str, module_prefix: &str) -> bool {
     let mut pos = 0;
     while let Some(idx) = lower_source[pos..].find(module_prefix) {
         let abs = pos + idx;
@@ -275,7 +275,7 @@ pub(crate) fn has_module_reference(lower_source: &str, module_prefix: &str) -> b
 }
 
 /// Infer the filetype from magic patterns and YARA module references in a rule's body.
-pub(crate) fn filetype_from_magic(body: &str) -> Option<&'static str> {
+pub fn filetype_from_magic(body: &str) -> Option<&'static str> {
     let lower = body.to_lowercase();
 
     // Strip whitespace for magic checks so "uint16( 0 ) == 0x5a4d" matches "uint16(0)==0x5a4d"
@@ -510,7 +510,7 @@ fn script_filetypes_from_rule_name(rule_name: &str) -> Vec<&'static str> {
 ///
 /// Called from `yara_engine::build_yara_match` when a rule gets filetype tags.
 /// At `--verbose` log level this lets operators see which rules map to which types.
-pub(crate) fn log_filetype_association(
+pub fn log_filetype_association(
     rule_name: &str,
     namespace: &str,
     filetypes: &[String],

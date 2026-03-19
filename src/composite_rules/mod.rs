@@ -23,6 +23,8 @@ pub mod types;
 
 // Re-export public API
 pub(crate) use condition::Condition;
+#[allow(unused_imports)]
+pub use condition::StringValidator;
 pub(crate) use context::EvaluationContext;
 pub(crate) use section_map::SectionMap;
 pub(crate) use traits::{CompositeTrait, DowngradeConditions, TraitDefinition};

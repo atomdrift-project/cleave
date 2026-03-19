@@ -24,7 +24,7 @@ use std::time::SystemTime;
 use walkdir::WalkDir;
 
 /// Format seconds into a human-readable age string (e.g., "2h 30m", "3d 12h").
-pub(crate) fn format_age(secs: u64) -> String {
+pub fn format_age(secs: u64) -> String {
     match secs {
         0..=59 => format!("{secs}s"),
         60..=3599 => format!("{}m {}s", secs / 60, secs % 60),
@@ -38,7 +38,7 @@ pub(crate) fn format_age(secs: u64) -> String {
 /// - macOS: ~/Library/Caches/cleave
 /// - Linux: ~/.cache/cleave
 /// - Windows: %LOCALAPPDATA%\cleave
-pub(crate) fn cache_dir() -> Result<PathBuf> {
+pub fn cache_dir() -> Result<PathBuf> {
     let mut candidates = Vec::new();
     if let Some(base_cache) = dirs::cache_dir() {
         candidates.push(base_cache.join("cleave"));
@@ -60,7 +60,7 @@ pub(crate) fn cache_dir() -> Result<PathBuf> {
 
 /// Returns the traits directory path from env var, local dir, or platform data dir.
 /// Does NOT auto-clone — use `traits_repo::resolve_and_ensure()` for that.
-pub(crate) fn traits_path() -> PathBuf {
+pub fn traits_path() -> PathBuf {
     if let Ok(explicit) = std::env::var("CLEAVE_TRAITS_DIR") {
         return PathBuf::from(explicit);
     }
@@ -72,7 +72,7 @@ pub(crate) fn traits_path() -> PathBuf {
 }
 
 /// Returns the third-party YARA rules directory (`third-party/` inside the traits directory).
-pub(crate) fn third_party_path() -> PathBuf {
+pub fn third_party_path() -> PathBuf {
     traits_path().join("third-party")
 }
 
@@ -81,7 +81,7 @@ pub(crate) fn third_party_path() -> PathBuf {
 /// Only pure YARA rule files are considered; trait YAML changes do not invalidate
 /// the YARA compilation cache. Inline `type: yara` conditions embedded in YAML files
 /// require `CLEAVE_SKIP_CACHE=1` to force recompile if they change.
-pub(crate) fn most_recent_yar_file() -> Result<(SystemTime, PathBuf)> {
+pub fn most_recent_yar_file() -> Result<(SystemTime, PathBuf)> {
     let mut most_recent = SystemTime::UNIX_EPOCH;
     let mut most_recent_path = PathBuf::new();
 
@@ -122,7 +122,7 @@ pub(crate) fn most_recent_yar_file() -> Result<(SystemTime, PathBuf)> {
 ///
 /// Excludes the `third-party/` directory (YARA vendor rules, not trait definitions).
 /// Used to determine the capability mapper cache key.
-pub(crate) fn most_recent_yaml_file() -> Result<(SystemTime, PathBuf)> {
+pub fn most_recent_yaml_file() -> Result<(SystemTime, PathBuf)> {
     let mut most_recent = SystemTime::UNIX_EPOCH;
     let mut most_recent_path = PathBuf::new();
 
@@ -250,7 +250,7 @@ pub(crate) fn yara_cache_key(third_party_enabled: bool) -> Result<String> {
 }
 
 /// Get the path to the YARA rules cache file
-pub(crate) fn yara_cache_path(third_party_enabled: bool) -> Result<PathBuf> {
+pub fn yara_cache_path(third_party_enabled: bool) -> Result<PathBuf> {
     let cache_key = yara_cache_key(third_party_enabled)?;
     Ok(cache_dir()?.join(cache_key))
 }
@@ -275,7 +275,7 @@ pub(crate) fn mapper_cache_key() -> Result<String> {
 }
 
 /// Get the path to the capability mapper cache file
-pub(crate) fn mapper_cache_path() -> Result<PathBuf> {
+pub fn mapper_cache_path() -> Result<PathBuf> {
     let cache_key = mapper_cache_key()?;
     Ok(cache_dir()?.join(cache_key))
 }
@@ -292,7 +292,7 @@ pub(crate) fn rule_stats_cache_path() -> Result<PathBuf> {
 
 /// Save trait and composite counts to stats cache.
 /// Called when mapper cache is saved.
-pub(crate) fn save_rule_stats(trait_count: usize, composite_count: usize) -> Result<()> {
+pub fn save_rule_stats(trait_count: usize, composite_count: usize) -> Result<()> {
     use std::io::Write;
 
     let path = rule_stats_cache_path()?;
@@ -360,7 +360,7 @@ pub(crate) fn prune_re_cache(max_age_secs: u64) -> usize {
 /// Get the cache path for a reverse engineering analysis result by SHA256
 /// Uses first 2 chars as subdirectory to avoid huge flat directories.
 /// Returns: {cache_dir}/re/{sha256[0:2]}/{sha256}.bin
-pub(crate) fn re_cache_path(sha256: &str) -> Result<PathBuf> {
+pub fn re_cache_path(sha256: &str) -> Result<PathBuf> {
     if sha256.len() < 2 {
         anyhow::bail!("Invalid SHA256: too short");
     }
@@ -372,7 +372,7 @@ pub(crate) fn re_cache_path(sha256: &str) -> Result<PathBuf> {
 }
 
 /// Clean up old cache files (keep only current one)
-pub(crate) fn cleanup_old_caches(current_cache: &Path) -> Result<()> {
+pub fn cleanup_old_caches(current_cache: &Path) -> Result<()> {
     let cache_dir = cache_dir()?;
 
     for entry in fs::read_dir(&cache_dir)? {

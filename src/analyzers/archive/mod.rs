@@ -885,6 +885,79 @@ mod tests {
     use ::tar;
     use ::zip;
 
+    fn write_test_traits(yaml: &str) -> tempfile::NamedTempFile {
+        let mut file = tempfile::NamedTempFile::new().expect("create temp yaml");
+        file.write_all(yaml.as_bytes()).expect("write temp yaml");
+        file
+    }
+
+    fn make_archive_test_mapper() -> crate::capabilities::CapabilityMapper {
+        let yaml = r#"
+defaults:
+  for: [all]
+
+traits:
+  - id: "test/archive::package-json-basename"
+    desc: "package.json basename"
+    crit: baseline
+    if:
+      type: basename
+      exact: "package.json"
+
+  - id: "test/archive::setup-py-basename"
+    desc: "setup.py basename"
+    crit: baseline
+    if:
+      type: basename
+      exact: "setup.py"
+
+  - id: "test/archive::exe-extension-basename"
+    desc: "exe basename"
+    crit: notable
+    if:
+      type: basename
+      regex: "\\.exe$"
+
+  - id: "test/archive::dll-extension-basename"
+    desc: "dll basename"
+    crit: notable
+    if:
+      type: basename
+      regex: "\\.dll$"
+
+  - id: "test/archive::png-extension-basename"
+    desc: "png basename"
+    crit: notable
+    if:
+      type: basename
+      regex: "\\.png$"
+
+composite_rules:
+  - id: "test/supply-chain::npm-package-with-exe"
+    desc: "NPM package with embedded exe"
+    crit: suspicious
+    all:
+      - id: "test/archive::package-json-basename"
+      - id: "test/archive::exe-extension-basename"
+
+  - id: "test/supply-chain::python-package-with-dll"
+    desc: "Python package with embedded dll"
+    crit: suspicious
+    all:
+      - id: "test/archive::setup-py-basename"
+      - id: "test/archive::dll-extension-basename"
+
+  - id: "test/supply-chain::npm-package-with-image"
+    desc: "NPM package with embedded image"
+    crit: notable
+    all:
+      - id: "test/archive::package-json-basename"
+      - id: "test/archive::png-extension-basename"
+"#;
+        let file = write_test_traits(yaml);
+        crate::capabilities::CapabilityMapper::from_yaml(file.path()).expect("load archive mapper")
+    }
+
     #[test]
     fn test_new() {
         let analyzer = ArchiveAnalyzer::new();
@@ -2191,8 +2264,7 @@ mod tests {
         zip.finish().unwrap();
 
         // Create analyzer with capability mapper
-        use crate::capabilities::CapabilityMapper;
-        let mapper = CapabilityMapper::new();
+        let mapper = crate::capabilities::CapabilityMapper::empty();
         let analyzer = ArchiveAnalyzer::new().with_capability_mapper(mapper);
 
         let result = analyzer.analyze(&zip_path);
@@ -2279,13 +2351,6 @@ mod tests {
         // Test that an NPM package containing a .exe file triggers the supply chain rule.
         // This simulates a malicious NPM package with an embedded Windows binary.
 
-        // Skip test if traits directory doesn't exist
-        let traits_path = std::path::Path::new("traits");
-        if !traits_path.exists() {
-            eprintln!("Skipping test: traits directory not found");
-            return;
-        }
-
         let temp_dir = tempfile::tempdir().unwrap();
         let zip_path = temp_dir.path().join("malicious-npm.tgz");
 
@@ -2319,8 +2384,7 @@ mod tests {
         }
 
         // Analyze with capability mapper
-        use crate::capabilities::CapabilityMapper;
-        let mapper = CapabilityMapper::new();
+        let mapper = make_archive_test_mapper();
         let analyzer = ArchiveAnalyzer::new().with_capability_mapper(mapper);
 
         let result = analyzer.analyze(&zip_path);
@@ -2361,13 +2425,6 @@ mod tests {
     fn test_npm_package_with_png_detection() {
         // Test that an NPM package containing a PNG file triggers the notable finding.
 
-        // Skip test if traits directory doesn't exist
-        let traits_path = std::path::Path::new("traits");
-        if !traits_path.exists() {
-            eprintln!("Skipping test: traits directory not found");
-            return;
-        }
-
         let temp_dir = tempfile::tempdir().unwrap();
         let zip_path = temp_dir.path().join("npm-with-image.zip");
 
@@ -2392,8 +2449,7 @@ mod tests {
         zip.finish().unwrap();
 
         // Analyze with capability mapper
-        use crate::capabilities::CapabilityMapper;
-        let mapper = CapabilityMapper::new();
+        let mapper = make_archive_test_mapper();
         let analyzer = ArchiveAnalyzer::new().with_capability_mapper(mapper);
 
         let result = analyzer.analyze(&zip_path);
@@ -2432,13 +2488,6 @@ mod tests {
     fn test_python_package_with_dll_detection() {
         // Test that a Python package containing a .dll file triggers the supply chain rule.
 
-        // Skip test if traits directory doesn't exist
-        let traits_path = std::path::Path::new("traits");
-        if !traits_path.exists() {
-            eprintln!("Skipping test: traits directory not found");
-            return;
-        }
-
         let temp_dir = tempfile::tempdir().unwrap();
         let whl_path = temp_dir.path().join("malicious-1.0.0-py3-none-any.whl");
 
@@ -2468,8 +2517,7 @@ mod tests {
         zip.finish().unwrap();
 
         // Analyze with capability mapper
-        use crate::capabilities::CapabilityMapper;
-        let mapper = CapabilityMapper::new();
+        let mapper = make_archive_test_mapper();
         let analyzer = ArchiveAnalyzer::new().with_capability_mapper(mapper);
 
         let result = analyzer.analyze(&whl_path);

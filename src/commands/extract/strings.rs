@@ -17,7 +17,8 @@ use anyhow::Result;
 use std::fs;
 use std::path::Path;
 
-pub(crate) fn run(
+/// Extract strings from a target, optionally from a named analysis layer.
+pub fn run(
     target: &str,
     min_length: usize,
     layer: Option<&str>,

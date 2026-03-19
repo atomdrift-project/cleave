@@ -594,6 +594,12 @@ pub struct PeMetrics {
     /// Signature valid
     #[serde(skip_serializing_if = "Option::is_none")]
     pub signature_valid: Option<bool>,
+    /// Signature type (platform, developer, adhoc)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub signature_type: Option<String>,
+    /// Common name of the signer certificate
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub signer: Option<String>,
 }
 
 /// Mach-O specific metrics

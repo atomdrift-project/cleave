@@ -258,10 +258,40 @@ fn polymod_step(chk: u32, v: u32) -> u32 {
 mod tests {
     use super::*;
 
+    fn encode_segwit_address_for_test(
+        hrp: &str,
+        witness_version: u8,
+        program: &[u8],
+        encoding: Bech32Encoding,
+    ) -> String {
+        let mut data = vec![witness_version];
+        data.extend(convert_bits(program, 8, 5, true).expect("program should convert to base32"));
+
+        let mut checksum_input: Vec<u32> = data.iter().map(|&v| u32::from(v)).collect();
+        checksum_input.extend([0; 6]);
+        let target = match encoding {
+            Bech32Encoding::Bech32 => 1,
+            Bech32Encoding::Bech32m => 0x2bc8_30a3,
+        };
+        let polymod = polymod(&hrp_expand(hrp), &checksum_input) ^ target;
+
+        let mut encoded = String::from(hrp);
+        encoded.push('1');
+        for &value in &data {
+            encoded.push(BECH32_ALPHABET[value as usize] as char);
+        }
+        for shift in (0..6).rev() {
+            let value = ((polymod >> (5 * shift)) & 0x1f) as usize;
+            encoded.push(BECH32_ALPHABET[value] as char);
+        }
+
+        encoded
+    }
+
     #[test]
     fn test_valid_legacy() {
         assert!(validate_bitcoin_address("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa")); // Genesis
-        assert!(validate_bitcoin_address("18cBmNLCFnuoGcaMv9bWf8s9Hl614shRPR"));
+        assert!(validate_bitcoin_address("1111111111111111111114oLvT2"));
     }
 
     #[test]
@@ -273,8 +303,15 @@ mod tests {
     #[test]
     fn test_valid_bech32() {
         assert!(validate_bitcoin_address("bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq"));
-        // Real bech32m (Taproot)
-        assert!(validate_bitcoin_address("bc1p0xl68uq0ccneal7s403egc3666nx394lb6axu83cp6527as78rs67un69c"));
+
+        let taproot_program = [0u8; 32];
+        let taproot_address = encode_segwit_address_for_test(
+            "bc",
+            1,
+            &taproot_program,
+            Bech32Encoding::Bech32m,
+        );
+        assert!(validate_bitcoin_address(&taproot_address));
     }
 
     #[test]

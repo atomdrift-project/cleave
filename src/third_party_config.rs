@@ -142,14 +142,14 @@ fn extract_vendor(namespace: &str) -> &str {
 ///
 /// Returns `None` if the rule is disabled via override.
 /// Lookup priority: rule override > source default > global default
-pub(crate) fn third_party_criticality(namespace: &str, trait_id: Option<&str>) -> Option<String> {
+pub fn third_party_criticality(namespace: &str, trait_id: Option<&str>) -> Option<String> {
     let vendor = extract_vendor(namespace);
     config().criticality_for(vendor, trait_id)
 }
 
 /// Get all disabled rule IDs from the config.
 /// Returns a set of trait IDs (format: `namespace::rule_name`) that should be excluded.
-pub(crate) fn disabled_rule_ids() -> std::collections::HashSet<String> {
+pub fn disabled_rule_ids() -> std::collections::HashSet<String> {
     config()
         .overrides
         .iter()

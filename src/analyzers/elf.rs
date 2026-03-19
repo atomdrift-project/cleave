@@ -429,6 +429,21 @@ impl ElfAnalyzer {
         // Populate common binary metrics (strings, entropy, etc.)
         crate::analyzers::metrics_utils::populate_binary_metrics(&mut report, data);
 
+        // ELF binaries are usually unsigned (or use non-standard signing)
+        report.findings.push(Finding {
+            id: "metadata/unsigned".to_string(),
+            kind: FindingKind::Capability,
+            desc: "Binary is not digitally signed".to_string(),
+            conf: 1.0,
+            crit: Criticality::Notable,
+            mbc: None,
+            attack: None,
+            trait_refs: vec![],
+            evidence: vec![],
+            match_count: 0,
+            source_file: None,
+        });
+
         // Populate overlay metrics using content_end computed from ELF headers
         if (data.len() as u64) > elf_content_end && elf_content_end > 0 {
             if let Some(ref mut metrics) = report.metrics {

@@ -39,36 +39,10 @@
 #[global_allocator]
 static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 
-mod analyzers;
-mod archive_utils;
-mod cache;
-mod capabilities;
-mod cli;
-mod commands;
-mod composite_rules;
-mod entropy;
-mod env_mapper;
-mod extractors;
-mod ip_validator;
-mod malecule_bridge;
-mod output;
-mod path_mapper;
-mod radare2;
-mod rtf;
-// mod radare2_extended;  // Removed: integrated into radare2.rs
-mod strings;
-mod test_rules;
-#[cfg(test)]
-mod test_rules_filters_test;
-mod third_party_config;
-mod third_party_yara;
-mod types;
-mod upx;
-mod yara_engine;
-
 use anyhow::{Context, Result};
 use clap::Parser;
-use commands::{
+use cleave::cli;
+use cleave::commands::{
     analyze_command, diff_command, expand_paths, extract_metrics_command,
     extract_sections_command, extract_strings_command, extract_symbols_command, test_match,
     test_rules, validate_command, AnalyzeConfig,
@@ -172,7 +146,7 @@ fn determine_default_log_file() -> Option<String> {
             return None; // Explicitly empty = disable file logging
         }
         std::path::PathBuf::from(dir)
-    } else if let Ok(cache_dir) = cache::cache_dir() {
+    } else if let Ok(cache_dir) = cleave::cache::cache_dir() {
         cache_dir.join("logs")
     } else if let Some(cache_base) = dirs::cache_dir() {
         cache_base.join("cleave").join("logs")
@@ -193,6 +167,54 @@ fn determine_default_log_file() -> Option<String> {
     let log_path = logs_dir.join(format!("cleave.{pid}.{level}.log"));
 
     Some(log_path.to_string_lossy().into_owned())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn analyze_targets(
+    targets: &[String],
+    format: &cli::OutputFormat,
+    enable_third_party: bool,
+    zip_passwords: &[String],
+    disabled: &cli::DisabledComponents,
+    all_files: bool,
+    sample_extraction: Option<&cleave::SampleExtractionConfig>,
+    platforms: &[cleave::Platform],
+    slow_rule_ms: u64,
+    output_to_file: bool,
+    max_memory_file_size: u64,
+    max_scan_file_size: u64,
+    scan_threads: usize,
+    min_crit: Option<cleave::Criticality>,
+    max_crit: Option<cleave::Criticality>,
+    min_file_crit: Option<cleave::Criticality>,
+    max_file_crit: Option<cleave::Criticality>,
+) -> Result<String> {
+    let mut results = Vec::with_capacity(targets.len());
+    for target in targets {
+        results.push(analyze_command(&AnalyzeConfig {
+            target,
+            enable_third_party,
+            format,
+            zip_passwords,
+            disabled,
+            all_files,
+            sample_extraction,
+            platforms,
+            min_hostile_precision: 3.5,
+            min_suspicious_precision: 2.0,
+            max_memory_file_size,
+            enable_full_validation: false,
+            slow_rule_ms,
+            output_to_file,
+            max_scan_file_size,
+            scan_threads,
+            min_crit,
+            max_crit,
+            min_file_crit,
+            max_file_crit,
+        })?);
+    }
+    Ok(results.join(""))
 }
 
 fn main() -> Result<()> {
@@ -373,10 +395,10 @@ fn main() -> Result<()> {
 
     // Apply global disables for radare2 and upx
     if disabled.radare2 {
-        radare2::disable_radare2();
+        cleave::disable_radare2();
     }
     if disabled.upx {
-        upx::disable_upx();
+        cleave::disable_upx();
     }
 
     // Print version banner to stderr (status info never goes to stdout) - only in terminal mode
@@ -404,11 +426,15 @@ fn main() -> Result<()> {
         if let Err(e) = std::fs::create_dir_all(&path) {
             eprintln!("Warning: could not create extract directory {}: {}", dir, e);
         }
-        types::SampleExtractionConfig::new(path)
+        cleave::SampleExtractionConfig::new(path)
     });
 
     // Parse platforms once before match (avoids borrow issues in match arms)
     let platforms = args.platforms();
+    let min_crit = args.min_crit;
+    let max_crit = args.max_crit;
+    let min_file_crit = args.min_file_crit;
+    let max_file_crit = args.max_file_crit;
 
     // Convert max_file_mem from MB to bytes
     let max_memory_file_size = args.max_file_mem * 1024 * 1024;
@@ -435,33 +461,25 @@ fn main() -> Result<()> {
             if expanded.is_empty() {
                 anyhow::bail!("No valid paths found (stdin was empty or contained only comments)");
             }
-            // Process each target through analyze_command
-            let mut results = Vec::new();
-            for target in &expanded {
-                results.push(analyze_command(&AnalyzeConfig {
-                    target,
-                    enable_third_party: enable_third_party_global,
-                    format: &format,
-                    zip_passwords: &zip_passwords,
-                    disabled: &disabled,
-                    all_files: args.all_files,
-                    sample_extraction: sample_extraction.as_ref(),
-                    platforms: &platforms,
-                    min_hostile_precision: 3.5,
-                    min_suspicious_precision: 2.0,
-                    max_memory_file_size,
-                    enable_full_validation: false,
-                    slow_rule_ms: args.slow_rule_ms,
-                    output_to_file: args.output.is_some(),
-                    max_scan_file_size,
-                    scan_threads: args.scan_threads.unwrap_or(0),
-                    min_crit: args.min_crit,
-                    max_crit: args.max_crit,
-                    min_file_crit: args.min_file_crit,
-                    max_file_crit: args.max_file_crit,
-                })?);
-            }
-            results.join("")
+            analyze_targets(
+                &expanded,
+                &format,
+                enable_third_party_global,
+                &zip_passwords,
+                &disabled,
+                args.all_files,
+                sample_extraction.as_ref(),
+                &platforms,
+                args.slow_rule_ms,
+                args.output.is_some(),
+                max_memory_file_size,
+                max_scan_file_size,
+                args.scan_threads.unwrap_or(0),
+                min_crit,
+                max_crit,
+                min_file_crit,
+                max_file_crit,
+            )?
         }
         Some(cli::Command::Validate) => {
             validate_command()?;
@@ -639,33 +657,25 @@ fn main() -> Result<()> {
             if expanded.is_empty() {
                 anyhow::bail!("No valid paths found (stdin was empty or contained only comments)");
             }
-            // Process each target through analyze_command
-            let mut results = Vec::new();
-            for target in &expanded {
-                results.push(analyze_command(&AnalyzeConfig {
-                    target,
-                    enable_third_party: enable_third_party_global,
-                    format: &format,
-                    zip_passwords: &zip_passwords,
-                    disabled: &disabled,
-                    all_files: args.all_files,
-                    sample_extraction: sample_extraction.as_ref(),
-                    platforms: &platforms,
-                    min_hostile_precision: 3.5,
-                    min_suspicious_precision: 2.0,
-                    max_memory_file_size,
-                    enable_full_validation: false,
-                    slow_rule_ms: args.slow_rule_ms,
-                    output_to_file: args.output.is_some(),
-                    max_scan_file_size,
-                    scan_threads: args.scan_threads.unwrap_or(0),
-                    min_crit: args.min_crit,
-                    max_crit: args.max_crit,
-                    min_file_crit: args.min_file_crit,
-                    max_file_crit: args.max_file_crit,
-                })?);
-            }
-            results.join("")
+            analyze_targets(
+                &expanded,
+                &format,
+                enable_third_party_global,
+                &zip_passwords,
+                &disabled,
+                args.all_files,
+                sample_extraction.as_ref(),
+                &platforms,
+                args.slow_rule_ms,
+                args.output.is_some(),
+                max_memory_file_size,
+                max_scan_file_size,
+                args.scan_threads.unwrap_or(0),
+                min_crit,
+                max_crit,
+                min_file_crit,
+                max_file_crit,
+            )?
         }
     };
 

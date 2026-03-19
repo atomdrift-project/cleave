@@ -13,6 +13,7 @@ use super::paths_env::{DirectoryAccess, EnvVarInfo, PathInfo};
 use super::scores::Metrics;
 use super::traits_findings::{Finding, StructuralFeature, Trait};
 use crate::analyzers::FileType;
+use crate::malecule_bridge;
 use std::path::PathBuf;
 
 /// Represents an extracted payload (e.g., base64, hex, XOR)
@@ -196,6 +197,16 @@ impl AnalysisReport {
         }
     }
 
+    fn refresh_formula(file: &mut FileAnalysis) {
+        let aggregated = crate::output::aggregate_findings_by_directory(&file.findings);
+        let filtered: Vec<_> = aggregated
+            .into_iter()
+            .filter(|f| f.crit != Criticality::Baseline && f.conf >= 0.5)
+            .collect();
+        let formula = malecule_bridge::formula_from_findings(&filtered);
+        file.formula = (!formula.is_empty()).then_some(formula);
+    }
+
     /// Add a finding
     pub fn add_finding(&mut self, finding: Finding) {
         if !self.findings.iter().any(|f| f.id == finding.id) {
@@ -229,6 +240,7 @@ impl AnalysisReport {
         // Recompute per-file summaries and report summary after filtering
         if removed > 0 {
             for file in &mut self.files {
+                Self::refresh_formula(file);
                 file.compute_summary();
             }
             self.summary = Some(ReportSummary::from_files(&self.files));
@@ -327,6 +339,7 @@ impl AnalysisReport {
                         file.findings.push(finding);
                     }
                 }
+                Self::refresh_formula(file);
                 file.compute_summary();
                 merged_file_indices.push(i);
             }
@@ -394,6 +407,7 @@ impl AnalysisReport {
         for file in &mut self.files {
             file.findings
                 .retain(|f| !f.id.starts_with("metadata/internal/symbols::"));
+            Self::refresh_formula(file);
             file.compute_summary();
         }
 

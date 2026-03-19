@@ -173,9 +173,19 @@ pub(crate) fn yara_engine(enable_third_party: bool) -> Arc<YaraEngine> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{Mutex, OnceLock};
+
+    fn test_lock() -> &'static Mutex<()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+    }
 
     #[test]
     fn test_capability_mapper_singleton() {
+        let _guard = test_lock().lock().unwrap_or_else(|e| e.into_inner());
+        let _skip_guard = EnvVarGuard::set("CLEAVE_SKIP_TRAITS", "1");
+        let _skip_guard_lower = EnvVarGuard::unset("cleave_SKIP_TRAITS");
+        reload_capability_mapper().expect("reload empty mapper");
         let m1 = capability_mapper();
         let m2 = capability_mapper();
         // Same Arc instance
@@ -192,6 +202,12 @@ mod tests {
         fn set(key: &'static str, value: impl AsRef<std::ffi::OsStr>) -> Self {
             let original = std::env::var(key).ok();
             std::env::set_var(key, value);
+            Self { key, original }
+        }
+
+        fn unset(key: &'static str) -> Self {
+            let original = std::env::var(key).ok();
+            std::env::remove_var(key);
             Self { key, original }
         }
     }
@@ -212,21 +228,40 @@ mod tests {
     #[test]
     #[allow(clippy::expect_used)]
     fn test_reload_rollback_on_bad_traits() {
-        // Ensure a valid mapper is loaded first
+        let _guard = test_lock().lock().unwrap_or_else(|e| e.into_inner());
+        let _skip_guard = EnvVarGuard::unset("CLEAVE_SKIP_TRAITS");
+        let _skip_guard_lower = EnvVarGuard::unset("cleave_SKIP_TRAITS");
+
+        let good = tempfile::tempdir().expect("create tempdir");
+        std::fs::write(
+            good.path().join("good.yaml"),
+            r#"
+defaults:
+  for: [all]
+
+traits:
+  - id: "test/simple::basic"
+    desc: "Basic test trait"
+    crit: baseline
+    if:
+      type: string_value
+      substr: "test_pattern"
+"#,
+        )
+        .expect("write good yaml");
+
+        // Seed the global mapper from a known-good temp traits dir so this test
+        // does not depend on any developer-local traits checkout.
+        let good_guard = EnvVarGuard::set("CLEAVE_TRAITS_DIR", good.path());
+        reload_capability_mapper().expect("load good traits");
+
         let before = capability_mapper();
         let before_traits = before.trait_definitions_count();
 
-        // Create a temp dir with a malformed YAML file
-        let tmp = tempfile::tempdir().expect("create tempdir");
-        std::fs::write(
-            tmp.path().join("bad.yaml"),
-            b"this is not valid trait yaml: [[[",
-        )
-        .expect("write bad yaml");
-
-        // Point CLEAVE_TRAITS_DIR at the bad directory and attempt reload.
+        // Point CLEAVE_TRAITS_DIR at a nonexistent directory and attempt reload.
         // EnvVarGuard restores the original value on drop (including panics).
-        let _guard = EnvVarGuard::set("CLEAVE_TRAITS_DIR", tmp.path());
+        let bad_path = good.path().join("missing-traits-dir");
+        let _guard = EnvVarGuard::set("CLEAVE_TRAITS_DIR", &bad_path);
 
         let result = reload_capability_mapper();
 
@@ -244,5 +279,7 @@ mod tests {
             Arc::ptr_eq(&before, &after),
             "Global mapper should be the same Arc after failed reload"
         );
+
+        drop(good_guard);
     }
 }

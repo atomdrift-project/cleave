@@ -2651,6 +2651,72 @@ fn format_condition_result(output: &mut String, result: &ConditionDebugResult, i
 mod tests {
     use super::*;
     use crate::types::{AnalysisReport, Finding, FindingKind, TargetInfo};
+    use tempfile::TempDir;
+
+    fn create_test_yaml(content: &str) -> (TempDir, std::path::PathBuf) {
+        let dir = TempDir::new().unwrap();
+        let file_path = dir.path().join("test.yaml");
+        std::fs::write(&file_path, content).unwrap();
+        (dir, file_path)
+    }
+
+    fn create_debug_test_mapper() -> CapabilityMapper {
+        let yaml = r#"
+defaults:
+  for: [all]
+
+traits:
+  - id: "micro-behaviors/data/embedded/zstd-magic"
+    desc: "Detect zstd magic"
+    crit: notable
+    conf: 0.9
+    for: [elf]
+    if:
+      type: string_value
+      exact: "ZSTD"
+
+  - id: "known/malware/botnet/mirai/detected"
+    desc: "Detect Mirai marker"
+    crit: hostile
+    conf: 0.9
+    for: [elf]
+    size_min: 30000
+    if:
+      type: string_value
+      exact: "mirai"
+
+composite_rules:
+  - id: "objectives/command-and-control/webshell/backdoor/php-rce"
+    desc: "PHP webshell RCE behavior"
+    crit: hostile
+    conf: 0.9
+    for: [php]
+    any:
+      - type: trait
+        id: "objectives/anti-static/obfuscation"
+      - type: trait
+        id: "micro-behaviors/data/user-input/request/get"
+    needs: 1
+
+  - id: "objectives/lateral-movement/trojanize/app/objc-app-hook"
+    desc: "Objective-C app hooking behavior"
+    crit: notable
+    conf: 0.9
+    platforms: [macos]
+    for: [macho]
+    all:
+      - type: trait
+        id: "micro-behaviors/execution/dylib/load/objc-method-swizzle"
+      - type: trait
+        id: "micro-behaviors/execution/dylib/load/nsbundle"
+    any:
+      - type: trait
+        id: "micro-behaviors/communications/socket/send/send"
+    needs: 1
+"#;
+        let (_dir, path) = create_test_yaml(yaml);
+        CapabilityMapper::from_yaml(&path).unwrap()
+    }
 
     fn create_test_report_with_findings(findings: Vec<Finding>) -> AnalysisReport {
         let target = TargetInfo {
@@ -2692,22 +2758,22 @@ mod tests {
         let report = create_test_report_with_findings(findings);
         let binary_data = b"<?php test ?>";
 
-        let mapper = CapabilityMapper::new_without_validation();
+        let mapper = create_debug_test_mapper();
         let debugger = RuleDebugger::new(&mapper, &report, binary_data, vec![Platform::All], None);
 
         // Test a composite rule that references traits by prefix
         // The rule should match if the findings contain matching prefixes
-        if let Some(result) =
-            debugger.debug_rule("objectives/command-and-control/webshell/backdoor/php-rce")
-        {
-            // Verify consistency: if matched is true, at least one condition should show as matched
-            if result.matched {
-                let has_matched_condition = result.condition_results.iter().any(|c| c.matched);
-                assert!(
-                    has_matched_condition,
-                    "Rule marked as matched but no conditions show as matched"
-                );
-            }
+        let result = debugger
+            .debug_rule("objectives/command-and-control/webshell/backdoor/php-rce")
+            .expect("expected local php-rce composite fixture");
+
+        // Verify consistency: if matched is true, at least one condition should show as matched
+        if result.matched {
+            let has_matched_condition = result.condition_results.iter().any(|c| c.matched);
+            assert!(
+                has_matched_condition,
+                "Rule marked as matched but no conditions show as matched"
+            );
         }
     }
 
@@ -2718,23 +2784,24 @@ mod tests {
         let report = create_test_report_with_findings(vec![]);
         let binary_data = b"<?php test ?>";
 
-        let mapper = CapabilityMapper::new_without_validation();
+        let mapper = create_debug_test_mapper();
         let debugger = RuleDebugger::new(&mapper, &report, binary_data, vec![Platform::All], None);
 
         // Test a rule that requires ELF file type (zstd-magic is for binaries)
-        if let Some(result) = debugger.debug_rule("micro-behaviors/data/embedded/zstd-magic") {
-            assert!(!result.matched, "Rule should not match for PHP file");
-            assert!(
-                result.skipped_reason.is_some(),
-                "Should have a skip reason for file type mismatch"
-            );
-            let reason = result.skipped_reason.as_ref().unwrap();
-            assert!(
-                reason.contains("File type mismatch"),
-                "Skip reason should mention file type mismatch, got: {}",
-                reason
-            );
-        }
+        let result = debugger
+            .debug_rule("micro-behaviors/data/embedded/zstd-magic")
+            .expect("expected local zstd trait fixture");
+        assert!(!result.matched, "Rule should not match for PHP file");
+        assert!(
+            result.skipped_reason.is_some(),
+            "Should have a skip reason for file type mismatch"
+        );
+        let reason = result.skipped_reason.as_ref().unwrap();
+        assert!(
+            reason.contains("File type mismatch"),
+            "Skip reason should mention file type mismatch, got: {}",
+            reason
+        );
     }
 
     /// Test that size constraints are reported as skip reasons
@@ -2751,24 +2818,25 @@ mod tests {
         let report = AnalysisReport::new(target);
         let binary_data = b"\x7fELF\x00";
 
-        let mapper = CapabilityMapper::new_without_validation();
+        let mapper = create_debug_test_mapper();
         let debugger =
             RuleDebugger::new(&mapper, &report, binary_data, vec![Platform::Linux], None);
 
         // Test mirai detection which has size_min: 30000
-        if let Some(result) = debugger.debug_rule("known/malware/botnet/mirai/detected") {
-            assert!(!result.matched, "Rule should not match for tiny file");
-            assert!(
-                result.skipped_reason.is_some(),
-                "Should have a skip reason for size constraint"
-            );
-            let reason = result.skipped_reason.as_ref().unwrap();
-            assert!(
-                reason.contains("Size too small"),
-                "Skip reason should mention size constraint, got: {}",
-                reason
-            );
-        }
+        let result = debugger
+            .debug_rule("known/malware/botnet/mirai/detected")
+            .expect("expected local mirai trait fixture");
+        assert!(!result.matched, "Rule should not match for tiny file");
+        assert!(
+            result.skipped_reason.is_some(),
+            "Should have a skip reason for size constraint"
+        );
+        let reason = result.skipped_reason.as_ref().unwrap();
+        assert!(
+            reason.contains("Size too small"),
+            "Skip reason should mention size constraint, got: {}",
+            reason
+        );
     }
 
     /// Test that prefix matching works correctly in condition debugging
@@ -2782,7 +2850,7 @@ mod tests {
         let report = create_test_report_with_findings(findings);
         let binary_data = b"test";
 
-        let mapper = CapabilityMapper::new_without_validation();
+        let mapper = CapabilityMapper::empty();
         let debugger = RuleDebugger::new(&mapper, &report, binary_data, vec![Platform::All], None);
 
         // Directly test the prefix matching in debug_condition
@@ -2810,7 +2878,7 @@ mod tests {
         let report = create_test_report_with_findings(findings);
         let binary_data = b"test";
 
-        let mapper = CapabilityMapper::new_without_validation();
+        let mapper = CapabilityMapper::empty();
         let debugger = RuleDebugger::new(&mapper, &report, binary_data, vec![Platform::All], None);
 
         // Test a prefix that doesn't match any findings
@@ -2835,33 +2903,31 @@ mod tests {
         let report = create_test_report_with_findings(findings);
         let binary_data = b"<?php test ?>";
 
-        let mapper = CapabilityMapper::new_without_validation();
+        let mapper = create_debug_test_mapper();
         let debugger = RuleDebugger::new(&mapper, &report, binary_data, vec![Platform::All], None);
 
         // Find and debug a composite rule
-        if let Some(result) =
-            debugger.debug_rule("objectives/command-and-control/webshell/backdoor/php-rce")
-        {
-            // For each condition group (all/any/none), verify count matches
-            for cond_result in &result.condition_results {
-                // Parse the condition description to get claimed count
-                // e.g., "any: (4/5 needed: 1)"
-                if cond_result.condition_desc.contains("(") {
-                    let matched_in_sub =
-                        cond_result.sub_results.iter().filter(|r| r.matched).count();
+        let result = debugger
+            .debug_rule("objectives/command-and-control/webshell/backdoor/php-rce")
+            .expect("expected local php-rce composite fixture");
+        // For each condition group (all/any/none), verify count matches
+        for cond_result in &result.condition_results {
+            // Parse the condition description to get claimed count
+            // e.g., "any: (1/2 needed: 1)"
+            if cond_result.condition_desc.contains("(") {
+                let matched_in_sub = cond_result.sub_results.iter().filter(|r| r.matched).count();
 
-                    // The description should contain the correct count
-                    if let Some(start) = cond_result.condition_desc.find('(') {
-                        if let Some(slash) = cond_result.condition_desc.find('/') {
-                            let claimed_count: usize = cond_result.condition_desc[start + 1..slash]
-                                .parse()
-                                .unwrap_or(999);
-                            assert_eq!(
-                                claimed_count, matched_in_sub,
-                                "Claimed match count {} doesn't match actual {}",
-                                claimed_count, matched_in_sub
-                            );
-                        }
+                // The description should contain the correct count
+                if let Some(start) = cond_result.condition_desc.find('(') {
+                    if let Some(slash) = cond_result.condition_desc.find('/') {
+                        let claimed_count: usize = cond_result.condition_desc[start + 1..slash]
+                            .parse()
+                            .unwrap_or(999);
+                        assert_eq!(
+                            claimed_count, matched_in_sub,
+                            "Claimed match count {} doesn't match actual {}",
+                            claimed_count, matched_in_sub
+                        );
                     }
                 }
             }
@@ -2877,7 +2943,7 @@ mod tests {
         let report = create_test_report_with_findings(findings);
         let binary_data = b"test";
 
-        let mapper = CapabilityMapper::new_without_validation();
+        let mapper = CapabilityMapper::empty();
         let debugger = RuleDebugger::new(&mapper, &report, binary_data, vec![Platform::All], None);
 
         // Test exact match - should find the finding directly
@@ -2906,7 +2972,7 @@ mod tests {
         let report = create_test_report_with_findings(findings);
         let binary_data = b"test";
 
-        let mapper = CapabilityMapper::new_without_validation();
+        let mapper = CapabilityMapper::empty();
         let debugger = RuleDebugger::new(&mapper, &report, binary_data, vec![Platform::All], None);
 
         // Test suffix match with short name
@@ -2949,45 +3015,45 @@ mod tests {
         report.findings = findings;
         let binary_data = b"\xCF\xFA\xED\xFE"; // MachO magic
 
-        let mapper = CapabilityMapper::new_without_validation();
+        let mapper = create_debug_test_mapper();
         let debugger = RuleDebugger::new(&mapper, &report, binary_data, vec![Platform::MacOS], None);
 
         // Test the objc-app-hook composite if it exists
-        if let Some(result) =
-            debugger.debug_rule("objectives/lateral-movement/trojanize/app/objc-app-hook")
-        {
-            // KEY INVARIANT: If all condition groups show matched, overall should be matched
-            // (unless there's a skip reason or other constraint that explains the difference)
-            let all_condition_groups_matched = result
-                .condition_results
-                .iter()
-                .filter(|c| {
-                    c.condition_desc.starts_with("all:")
-                        || c.condition_desc.starts_with("any:")
-                        || c.condition_desc.starts_with("none:")
-                })
-                .all(|c| c.matched);
+        let result = debugger
+            .debug_rule("objectives/lateral-movement/trojanize/app/objc-app-hook")
+            .expect("expected local objc-app-hook composite fixture");
+        // KEY INVARIANT: If all condition groups show matched, overall should be matched
+        // (unless there's a skip reason or other constraint that explains the difference)
+        let all_condition_groups_matched = result
+            .condition_results
+            .iter()
+            .filter(|c| {
+                c.condition_desc.starts_with("all:")
+                    || c.condition_desc.starts_with("any:")
+                    || c.condition_desc.starts_with("none:")
+            })
+            .all(|c| c.matched);
 
-            if all_condition_groups_matched && result.skipped_reason.is_none() {
-                // If all groups match and no skip reason, overall should match
-                assert!(
-                    result.matched,
-                    "All condition groups show matched but overall is NOT MATCHED - this is the mismatch bug!\n\
-                     Condition results: {:?}",
-                    result.condition_results.iter()
-                        .map(|c| format!("{}: {}", c.condition_desc, c.matched))
-                        .collect::<Vec<_>>()
-                );
-            }
+        if all_condition_groups_matched && result.skipped_reason.is_none() {
+            // If all groups match and no skip reason, overall should match
+            assert!(
+                result.matched,
+                "All condition groups show matched but overall is NOT MATCHED - this is the mismatch bug!\n\
+                 Condition results: {:?}",
+                result.condition_results
+                    .iter()
+                    .map(|c| format!("{}: {}", c.condition_desc, c.matched))
+                    .collect::<Vec<_>>()
+            );
+        }
 
-            // Also verify: if overall matched, at least one condition group should match
-            if result.matched {
-                let has_matched_condition = result.condition_results.iter().any(|c| c.matched);
-                assert!(
-                    has_matched_condition,
-                    "Overall matched but no condition groups show matched"
-                );
-            }
+        // Also verify: if overall matched, at least one condition group should match
+        if result.matched {
+            let has_matched_condition = result.condition_results.iter().any(|c| c.matched);
+            assert!(
+                has_matched_condition,
+                "Overall matched but no condition groups show matched"
+            );
         }
     }
 
@@ -2998,7 +3064,7 @@ mod tests {
         let report = create_test_report_with_findings(vec![]);
         let binary_data = b"test data with some content";
 
-        let mapper = CapabilityMapper::new_without_validation();
+        let mapper = CapabilityMapper::empty();
         let debugger = RuleDebugger::new(&mapper, &report, binary_data, vec![Platform::All], None);
 
         // Test a trait that exists in definitions but not in findings
@@ -3026,7 +3092,7 @@ mod tests {
         let report = create_test_report_with_findings(findings);
         let binary_data = b"test";
 
-        let mapper = CapabilityMapper::new_without_validation();
+        let mapper = CapabilityMapper::empty();
         let debugger = RuleDebugger::new(&mapper, &report, binary_data, vec![Platform::All], None);
 
         // Test prefix match - should find both findings

@@ -551,6 +551,48 @@ impl PEAnalyzer {
         // Common binary metrics
         crate::analyzers::metrics_utils::populate_binary_metrics(&mut report, original_data);
 
+        // Emit signature findings
+        if let Some(metrics) = &report.metrics {
+            if let Some(pe_metrics) = &metrics.pe {
+                if let Some(signer) = &pe_metrics.signer {
+                    let sig_type = pe_metrics.signature_type.as_deref().unwrap_or("unknown");
+                    let normalized_signer = signer.to_lowercase().replace(' ', "-").replace(',', "");
+                    report.findings.push(Finding {
+                        id: format!("metadata/signed/{}::{}", sig_type, normalized_signer),
+                        kind: FindingKind::Capability,
+                        desc: format!("Signed by: {}", signer),
+                        conf: 1.0,
+                        crit: Criticality::Notable,
+                        mbc: None,
+                        attack: None,
+                        trait_refs: vec![],
+                        evidence: vec![Evidence {
+                            method: "authenticode".to_string(),
+                            source: "cleave".to_string(),
+                            value: signer.clone(),
+                            ..Default::default()
+                        }],
+                        match_count: 1,
+                        source_file: None,
+                    });
+                } else if !pe_metrics.has_signature {
+                    report.findings.push(Finding {
+                        id: "metadata/unsigned".to_string(),
+                        kind: FindingKind::Capability,
+                        desc: "Binary is not digitally signed".to_string(),
+                        conf: 1.0,
+                        crit: Criticality::Notable,
+                        mbc: None,
+                        attack: None,
+                        trait_refs: vec![],
+                        evidence: vec![],
+                        match_count: 0,
+                        source_file: None,
+                    });
+                }
+            }
+        }
+
         // Overlay analysis (requires section data to find overlay start)
         let sections_end = pe
             .map(|pe| {
@@ -962,6 +1004,38 @@ impl PEAnalyzer {
             // Check if overlay looks like PKCS7 signature (starts with 0x30)
             if !overlay_data.is_empty() && overlay_data[0] == 0x30 {
                 metrics.has_signature = true;
+
+                // Simple extraction of common name from certificate
+                // Find OID for commonName: 55 04 03
+                let cn_oid = [0x55, 0x04, 0x03];
+                if let Some(pos) = overlay_data
+                    .windows(cn_oid.len())
+                    .position(|w| w == cn_oid)
+                {
+                    // Next byte is string type, then length
+                    let type_pos = pos + cn_oid.len();
+                    if type_pos + 1 < overlay_data.len() {
+                        let len = overlay_data[type_pos + 1] as usize;
+                        let str_pos = type_pos + 2;
+                        if str_pos + len <= overlay_data.len() {
+                            if let Ok(cn) = std::str::from_utf8(&overlay_data[str_pos..str_pos + len])
+                            {
+                                // Clean up common name (strip trailing nulls, etc)
+                                let cn = cn.trim_matches(char::from(0)).trim();
+                                if !cn.is_empty() {
+                                    metrics.signer = Some(cn.to_string());
+                                    
+                                    // Categorize signature type
+                                    if cn.contains("Microsoft") || cn.contains("Windows") {
+                                        metrics.signature_type = Some("platform".to_string());
+                                    } else {
+                                        metrics.signature_type = Some("developer".to_string());
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
 

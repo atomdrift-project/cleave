@@ -7,16 +7,15 @@
 //! followed by trait/composite evaluation with inline YARA results. The only
 //! difference is the addition of debug tracing via `DebugCollector`.
 
-use crate::analyzers::{detect_file_type, macho::MachOAnalyzer, FileType};
+use crate::analyzers::{detect_file_type, FileType};
 use crate::commands::shared::{
-    create_analysis_report, find_rules_in_directory, find_similar_rules, process_yara_result,
+    find_rules_in_directory, find_similar_rules, process_yara_result,
 };
-use crate::commands::test::build_test_capability_mapper;
+use crate::commands::test::{build_test_capability_mapper, evaluation_data, prepare_test_analysis};
 use crate::yara_engine::YaraEngine;
 use crate::{cli, composite_rules, test_rules};
 use anyhow::Result;
 use std::collections::HashMap;
-use std::fs;
 use std::path::Path;
 
 /// Test and debug composite rules against a sample file.
@@ -37,7 +36,7 @@ use std::path::Path;
 ///
 /// A formatted string containing the debug output showing rule evaluation results,
 /// condition traces, and evidence.
-pub(crate) fn run(
+pub fn run(
     target: &str,
     rules: &str,
     _disabled: &cli::DisabledComponents,
@@ -76,38 +75,17 @@ pub(crate) fn run(
     let (builtin_count, _third_party_count) = yara_engine.load_all_rules(false);
     let yara_loaded = builtin_count > 0 && yara_engine.is_loaded();
 
-    // Read file data
-    let full_data = fs::read(path)?;
-
-    // For Mach-O FAT binaries, use the full file for evaluation so string offsets are file-relative.
-    // This ensures offset_range constraints (like [-2200, -100]) work correctly.
-    let (binary_data, is_fat): (Vec<u8>, bool) = if file_type == FileType::MachO {
-        let analyzer = MachOAnalyzer::new();
-        let preferred_range = analyzer.preferred_arch_range(&full_data);
-        let all_ranges = analyzer.all_arch_ranges(&full_data);
-        let is_fat = all_ranges.len() > 1;
-
-        if is_fat {
-            eprintln!(
-                "Note: FAT binary with {} architectures, evaluating full file",
-                all_ranges.len()
-            );
-        }
-
-        let preferred = full_data[preferred_range].to_vec();
-        (preferred, is_fat)
-    } else {
-        (full_data.clone(), false)
-    };
-
-    // Create a basic report by analyzing the file (uses preferred arch for structure)
-    // For FAT binaries, the MachOAnalyzer extracts strings from the full file
-    // so offsets are file-relative and offset_range constraints work correctly.
-    let mut report = create_analysis_report(path, &file_type, &binary_data, &capability_mapper)?;
+    let mut prepared = prepare_test_analysis(path, file_type.clone(), &capability_mapper)?;
+    if prepared.is_fat_macho {
+        eprintln!(
+            "Note: FAT binary with {} architectures, evaluating full file",
+            prepared.arch_count.unwrap_or(0)
+        );
+    }
 
     // Run YARA scan on preferred arch slice (matching production behavior)
     // This gives us inline YARA results for traits with `type: yara` conditions
-    let file_type_filter: &[&str] = match file_type {
+    let file_type_filter: &[&str] = match prepared.file_type {
         FileType::MachO => &["macho", "dylib", "kext"],
         FileType::Elf => &["elf", "so", "ko"],
         FileType::Pe => &["pe", "exe", "dll", "sys"],
@@ -116,14 +94,14 @@ pub(crate) fn run(
 
     let inline_yara: HashMap<String, Vec<crate::types::Evidence>> = if yara_loaded {
         let yara_result = yara_engine.scan_bytes_with_inline(
-            &binary_data,
+            &prepared.preferred_binary_data,
             if file_type_filter.is_empty() {
                 None
             } else {
                 Some(file_type_filter)
             },
         );
-        process_yara_result(&mut report, Some(yara_result), Some(&yara_engine))
+        process_yara_result(&mut prepared.report, Some(yara_result), Some(&yara_engine))
     } else {
         HashMap::new()
     };
@@ -135,8 +113,17 @@ pub(crate) fn run(
     } else {
         Some(&inline_yara)
     };
-    let eval_data = if is_fat { &full_data } else { &binary_data };
-    capability_mapper.evaluate_and_merge_findings(&mut report, eval_data, None, inline_yara_ref);
+    let eval_data = evaluation_data(
+        &prepared.full_data,
+        &prepared.preferred_binary_data,
+        prepared.is_fat_macho,
+    );
+    capability_mapper.evaluate_and_merge_findings(
+        &mut prepared.report,
+        eval_data,
+        None,
+        inline_yara_ref,
+    );
 
     // Create debugger and debug each rule
     // Pass platforms from CLI for consistency with production evaluation
@@ -144,7 +131,7 @@ pub(crate) fn run(
     // For FAT binaries, use full file so string offsets are file-relative
     let debugger = test_rules::RuleDebugger::new(
         &capability_mapper,
-        &report,
+        &prepared.report,
         eval_data,
         platforms,
         inline_yara_ref,

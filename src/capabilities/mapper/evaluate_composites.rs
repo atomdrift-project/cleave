@@ -462,15 +462,41 @@ mod tests {
             .with_criticality(crit)
     }
 
+    fn write_test_traits(yaml: &str) -> tempfile::NamedTempFile {
+        use std::io::Write;
+
+        let mut file = tempfile::NamedTempFile::new().expect("create temp yaml");
+        file.write_all(yaml.as_bytes()).expect("write temp yaml");
+        file
+    }
+
+    fn make_basename_mapper() -> super::super::CapabilityMapper {
+        let yaml = r#"
+defaults:
+  for: [all]
+
+traits:
+  - id: "test/archive::package-json-basename"
+    desc: "package.json basename"
+    crit: baseline
+    if:
+      type: basename
+      exact: "package.json"
+
+  - id: "test/archive::exe-extension-basename"
+    desc: "exe basename"
+    crit: baseline
+    if:
+      type: basename
+      regex: "\\.exe$"
+"#;
+        let file = write_test_traits(yaml);
+        super::super::CapabilityMapper::from_yaml(file.path()).expect("load basename mapper")
+    }
+
     #[test]
     fn test_evaluate_container_composites_empty_findings() {
-        // Skip if traits directory not available
-        let traits_path = std::path::Path::new("traits");
-        if !traits_path.exists() {
-            return;
-        }
-
-        let mapper = super::super::CapabilityMapper::new();
+        let mapper = super::super::CapabilityMapper::empty();
         let report = make_test_report();
 
         // With no nested findings, should return empty
@@ -485,13 +511,7 @@ mod tests {
 
     #[test]
     fn test_evaluate_container_composites_deduplication() {
-        // Skip if traits directory not available
-        let traits_path = std::path::Path::new("traits");
-        if !traits_path.exists() {
-            return;
-        }
-
-        let mapper = super::super::CapabilityMapper::new();
+        let mapper = super::super::CapabilityMapper::empty();
         let mut report = make_test_report();
 
         // Pre-populate report with a finding
@@ -513,13 +533,7 @@ mod tests {
 
     #[test]
     fn test_evaluate_container_composites_evidence_marking() {
-        // Skip if traits directory not available
-        let traits_path = std::path::Path::new("traits");
-        if !traits_path.exists() {
-            return;
-        }
-
-        let mapper = super::super::CapabilityMapper::new();
+        let mapper = super::super::CapabilityMapper::empty();
         let report = make_test_report();
 
         // Create nested findings that might trigger a composite
@@ -553,13 +567,7 @@ mod tests {
 
     #[test]
     fn test_evaluate_container_composites_file_type_detection() {
-        // Skip if traits directory not available
-        let traits_path = std::path::Path::new("traits");
-        if !traits_path.exists() {
-            return;
-        }
-
-        let mapper = super::super::CapabilityMapper::new();
+        let mapper = super::super::CapabilityMapper::empty();
 
         // Test with various archive types
         for file_type in &["zip", "tar", "7z", "archive", "jar", "deb", "rpm"] {
@@ -573,13 +581,7 @@ mod tests {
 
     #[test]
     fn test_evaluate_basename_traits_for_entries() {
-        // Skip if traits directory not available
-        let traits_path = std::path::Path::new("traits");
-        if !traits_path.exists() {
-            return;
-        }
-
-        let mapper = super::super::CapabilityMapper::new();
+        let mapper = make_basename_mapper();
 
         // Test with archive entry names that should match basename traits
         let entry_names = vec![
@@ -620,12 +622,7 @@ mod tests {
 
     #[test]
     fn test_evaluate_basename_traits_empty_entries() {
-        let traits_path = std::path::Path::new("traits");
-        if !traits_path.exists() {
-            return;
-        }
-
-        let mapper = super::super::CapabilityMapper::new();
+        let mapper = make_basename_mapper();
         let findings = mapper.evaluate_basename_traits_for_entries(&[]);
         assert!(findings.is_empty());
     }

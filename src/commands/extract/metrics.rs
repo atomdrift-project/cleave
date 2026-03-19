@@ -13,7 +13,8 @@ use crate::commands::shared::flatten_json_to_metrics;
 use anyhow::Result;
 use std::path::Path;
 
-pub(crate) fn run(
+/// Extract computed metrics from a target, optionally from a named analysis layer.
+pub fn run(
     target: &str,
     layer: Option<&str>,
     format: &cli::OutputFormat,

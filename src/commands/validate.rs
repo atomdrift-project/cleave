@@ -10,7 +10,7 @@ use anyhow::Result;
 /// Loads all trait definitions with validation enabled, which triggers comprehensive
 /// checks for logic errors, quality issues, and structural violations. All findings
 /// are printed to stderr. Returns `Err` if any validation errors are detected.
-pub(crate) fn run() -> Result<()> {
+pub fn run() -> Result<()> {
     cleave::validate_traits()?;
     eprintln!("✅ All trait validation checks passed.");
     Ok(())

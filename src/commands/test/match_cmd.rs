@@ -3,15 +3,14 @@
 //! This module provides the `test-match` command implementation, which validates
 //! search patterns, count constraints, and location filters with detailed diagnostics.
 
-use crate::analyzers::{detect_file_type, macho::MachOAnalyzer, FileType};
-use crate::commands::test::build_test_capability_mapper;
+use crate::analyzers::{detect_file_type, FileType};
 use crate::commands::shared::{cli_file_type_to_internal, create_analysis_report};
+use crate::commands::test::{build_test_capability_mapper, evaluation_data, prepare_test_analysis};
 use crate::composite_rules::condition::StringValidator;
 use crate::composite_rules::evaluators::symbol_string::validate_match;
 use crate::{cli, composite_rules, test_rules, types};
 use anyhow::Result;
 use colored::Colorize;
-use std::fs;
 use std::path::Path;
 
 /// Test pattern matching against a file with alternative suggestions.
@@ -57,7 +56,7 @@ use std::path::Path;
 ///
 /// A formatted string containing the test results with matches, diagnostics, and suggestions.
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn run(
+pub fn run(
     target: &str,
     search_type: cli::SearchType,
     method: cli::MatchMethod,
@@ -155,45 +154,23 @@ pub(crate) fn run(
         min_suspicious_precision,
     );
 
-    // Read file data
-    let full_data = fs::read(path)?;
-
-    // For Mach-O FAT binaries, use the full file for evaluation so string offsets are file-relative.
-    // This ensures offset_range constraints (like [-2200, -100]) work correctly.
-    let (binary_data, is_fat): (Vec<u8>, bool) = if file_type == FileType::MachO {
-        let analyzer = MachOAnalyzer::new();
-        let range = analyzer.preferred_arch_range(&full_data);
-        let is_fat = range != (0..full_data.len());
-        if is_fat {
-            eprintln!("Note: FAT binary detected, using full file for evaluation");
-        }
-        (full_data[range].to_vec(), is_fat)
-    } else {
-        (full_data.clone(), false)
-    };
-
-    // Create a basic report by analyzing the file
-    let mut report = create_analysis_report(path, &file_type, &binary_data, &capability_mapper)?;
-
-    // For FAT binaries, re-extract strings from the full file so offsets are file-relative
-    if is_fat {
-        let string_extractor = crate::strings::StringExtractor::default();
-        report.strings = string_extractor.extract_smart(&full_data, None);
+    let prepared = prepare_test_analysis(path, file_type.clone(), &capability_mapper)?;
+    if prepared.is_fat_macho {
+        eprintln!("Note: FAT binary detected, using full file for evaluation");
     }
+    let is_fat = prepared.is_fat_macho;
+    let binary_data = &prepared.preferred_binary_data;
+    let report = &prepared.report;
 
     // Evaluation data: full file for FAT binaries, slice otherwise
-    let eval_data = if is_fat {
-        &full_data[..]
-    } else {
-        &binary_data[..]
-    };
+    let eval_data = evaluation_data(&prepared.full_data, binary_data, is_fat);
 
     // Create debugger to access search functions
     // Note: test-match doesn't use YARA results since it tests individual conditions
     // For FAT binaries, use full file so string offsets are file-relative
     let debugger = RuleDebugger::new(
         &capability_mapper,
-        &report,
+        report,
         eval_data,
         platforms.clone(),
         None, // test-match evaluates conditions directly, not via full rule path
@@ -211,7 +188,7 @@ pub(crate) fn run(
                                    section_offset: Option<i64>,
                                    section_offset_range: Option<(i64, Option<i64>)>|
      -> Result<(usize, usize), String> {
-        let file_size = binary_data.len();
+        let file_size = prepared.preferred_binary_data.len();
 
         if let Some(sec) = section {
             if let Some(bounds) = section_map.bounds(sec) {

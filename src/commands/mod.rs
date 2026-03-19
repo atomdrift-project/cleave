@@ -67,14 +67,14 @@ pub(crate) mod test;
 pub(crate) mod validate;
 
 // Re-export shared utilities needed by main.rs
-pub(crate) use shared::expand_paths;
+pub use shared::expand_paths;
 
 // Re-export command functions for main.rs
-pub(crate) use analyze::{run as analyze_command, AnalyzeConfig};
-pub(crate) use diff::run as diff_command;
-pub(crate) use extract::{
+pub use analyze::{run as analyze_command, AnalyzeConfig};
+pub use diff::run as diff_command;
+pub use extract::{
     metrics::run as extract_metrics_command, sections::run as extract_sections_command,
     strings::run as extract_strings_command, symbols::run as extract_symbols_command,
 };
-pub(crate) use test::{test_match, test_rules};
-pub(crate) use validate::run as validate_command;
+pub use test::{test_match, test_rules};
+pub use validate::run as validate_command;

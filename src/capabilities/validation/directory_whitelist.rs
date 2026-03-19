@@ -33,6 +33,7 @@ const ALLOWED_OBJECTIVES: &[&str] = &[
 ///
 /// Update this list AND TAXONOMY.md when adding new anti-static categories.
 const ALLOWED_ANTI_STATIC: &[&str] = &[
+    "decryption",  // F0009 Software Decryption
     "obfuscation", // E1027 + B0032 Obfuscated Files/Code
     "pack",        // F0001 Software Packing
     "polyglot",    // Polyglot file format abuse
@@ -226,6 +227,7 @@ const ALLOWED_MICRO_BEHAVIORS: &[&str] = &[
 
 /// Allowed subdirectories in micro-behaviors/communications/
 const ALLOWED_MB_COMMUNICATIONS: &[&str] = &[
+    "async-io",
     "benchmark",
     "capture",
     "dns",
@@ -341,6 +343,7 @@ const ALLOWED_MB_OS: &[&str] = &[
     "console",
     "container",
     "env",
+    "event",
     "exception",
     "firewall",
     "group",

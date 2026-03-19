@@ -60,6 +60,8 @@ pub(super) mod shared {
         pub(super) criticality: crate::types::Criticality,
     }
 
+    use crate::composite_rules::condition::StringValidator;
+
     /// Signature for string/raw matching conditions (for collision detection)
     /// Note: count/density fields excluded - they're at trait level now and don't affect matching logic
     #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -69,13 +71,14 @@ pub(super) mod shared {
         pub(super) regex: Option<String>,
         pub(super) word: Option<String>,
         pub(super) case_insensitive: bool,
-        pub(super) external_ip: bool,
+        pub(super) is_check: Option<StringValidator>,
         pub(super) section: Option<String>,
         pub(super) offset: Option<i64>,
         pub(super) offset_range: Option<(i64, Option<i64>)>,
         pub(super) section_offset: Option<i64>,
         pub(super) section_offset_range: Option<(i64, Option<i64>)>,
     }
+
 }
 
 // Re-export public API (pub(crate) - accessible to capabilities module)

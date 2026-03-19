@@ -199,66 +199,65 @@ enum ConditionDeser {
     Tagged(Box<ConditionTagged>),
 }
 
+/// High-fidelity validation checks for string matches.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, Hash, Copy, clap::ValueEnum)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum StringValidator {
+    /// Require match to contain a valid external IPv4 address
+    ExternalIp,
+    /// Require match to contain a valid Bitcoin address (with checksum)
+    #[serde(rename = "bitcoin_addr")]
+    BitcoinAddr,
+}
+
 /// Internal tagged enum for serializing/deserializing conditions with explicit `type` field
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 enum ConditionTagged {
     Symbol {
-        /// Full symbol name match (entire symbol must equal this)
         #[serde(default)]
         exact: Option<String>,
-        /// Substring match (appears anywhere in symbol name)
         #[serde(default)]
         substr: Option<String>,
-        /// Regex pattern to match symbol names
         #[serde(default)]
         regex: Option<String>,
         #[serde(default)]
         platforms: Option<Vec<Platform>>,
+        /// High-fidelity validator (e.g., is: external_ip)
+        #[serde(rename = "is", default)]
+        is_check: Option<StringValidator>,
     },
     #[serde(rename = "string_value")]
     StringValue {
-        /// Full string match (entire string must equal this)
         #[serde(default)]
         exact: Option<String>,
-        /// Substring match (appears anywhere in string)
         #[serde(default)]
         substr: Option<String>,
-        /// Regex pattern match
         #[serde(default)]
         regex: Option<String>,
-        /// Word boundary match (equivalent to regex "\bword\b")
         #[serde(default)]
         word: Option<String>,
         #[serde(default)]
         case_insensitive: bool,
-        /// Require match to contain a valid external IP address (not private/loopback/reserved)
-        #[serde(default)]
-        external_ip: bool,
-        /// Exclude individual matches where evidence matches any of these patterns.
-        /// Only valid when `regex` is set — rejected by validation otherwise.
+        /// High-fidelity validator (e.g., is: external_ip)
+        #[serde(rename = "is", default)]
+        is_check: Option<StringValidator>,
         #[serde(default)]
         not: Option<Vec<NotException>>,
-        /// Platform filter - only evaluate this condition for these platforms
         #[serde(default)]
         platforms: Option<Vec<Platform>>,
-        /// Section constraint: only match strings in this section (supports fuzzy names like "text")
         #[serde(default)]
         section: Option<String>,
-        /// Absolute file offset: only match at this exact byte position (negative = from end)
         #[serde(default)]
         offset: Option<i64>,
-        /// Absolute offset range: [start, end) (negative values resolved from file end)
         #[serde(
             default,
             deserialize_with = "offset_range_serde::deserialize",
             serialize_with = "offset_range_serde::serialize"
         )]
         offset_range: Option<(i64, Option<i64>)>,
-        /// Section-relative offset: only match at this offset within the section
         #[serde(default)]
         section_offset: Option<i64>,
-        /// Section-relative offset range: [start, end) within section bounds
         #[serde(
             default,
             deserialize_with = "offset_range_serde::deserialize",
@@ -408,9 +407,9 @@ enum ConditionTagged {
         word: Option<String>,
         #[serde(default)]
         case_insensitive: bool,
-        /// Require match to contain a valid external IP address (not private/loopback/reserved)
-        #[serde(default)]
-        external_ip: bool,
+        /// Optional high-fidelity validation check
+        #[serde(rename = "is", default)]
+        is_check: Option<StringValidator>,
         /// Exclude individual matches where evidence matches any of these patterns.
         /// Only valid when `regex` is set — rejected by validation otherwise.
         #[serde(default)]
@@ -507,9 +506,9 @@ enum ConditionTagged {
         /// Case insensitive matching
         #[serde(default)]
         case_insensitive: bool,
-        /// Require match to contain a valid external IP address (not private/loopback/reserved)
-        #[serde(default)]
-        external_ip: bool,
+        /// Optional high-fidelity validation check
+        #[serde(rename = "is", default)]
+        is_check: Option<StringValidator>,
         /// Exclude individual matches where evidence matches any of these patterns.
         /// Only valid when `regex` is set — rejected by validation otherwise.
         #[serde(default)]
@@ -555,6 +554,9 @@ enum ConditionTagged {
         /// Case insensitive matching (default: false)
         #[serde(default)]
         case_insensitive: bool,
+        /// Optional high-fidelity validation check
+        #[serde(rename = "is", default)]
+        is_check: Option<StringValidator>,
         /// Pre-compiled regex (populated by precompile_regexes)
         #[serde(skip)]
         compiled_regex: Option<regex::Regex>,
@@ -603,11 +605,13 @@ impl From<ConditionDeser> for Condition {
                     substr,
                     regex,
                     platforms,
+                    is_check,
                 } => Condition::Symbol {
                     exact,
                     substr,
                     regex,
                     platforms,
+                    is_check,
                     compiled_regex: None,
                 },
                 ConditionTagged::StringValue {
@@ -616,7 +620,7 @@ impl From<ConditionDeser> for Condition {
                     regex,
                     word,
                     case_insensitive,
-                    external_ip,
+                    is_check,
                     not,
                     platforms,
                     section,
@@ -630,7 +634,7 @@ impl From<ConditionDeser> for Condition {
                     regex,
                     word,
                     case_insensitive,
-                    external_ip,
+                    is_check,
                     not,
                     platforms,
                     section,
@@ -746,7 +750,7 @@ impl From<ConditionDeser> for Condition {
                     regex,
                     word,
                     case_insensitive,
-                    external_ip,
+                    is_check,
                     not,
                     section,
                     offset,
@@ -759,7 +763,7 @@ impl From<ConditionDeser> for Condition {
                     regex,
                     word,
                     case_insensitive,
-                    external_ip,
+                    is_check,
                     not,
                     section,
                     offset,
@@ -802,7 +806,7 @@ impl From<ConditionDeser> for Condition {
                     regex,
                     word,
                     case_insensitive,
-                    external_ip,
+                    is_check,
                     not,
                     section,
                     offset,
@@ -816,7 +820,7 @@ impl From<ConditionDeser> for Condition {
                     regex,
                     word,
                     case_insensitive,
-                    external_ip,
+                    is_check,
                     not,
                     section,
                     offset,
@@ -830,12 +834,14 @@ impl From<ConditionDeser> for Condition {
                     substr,
                     regex,
                     case_insensitive,
+                    is_check,
                     compiled_regex,
                 } => Condition::Basename {
                     exact,
                     substr,
                     regex,
                     case_insensitive,
+                    is_check,
                     compiled_regex,
                 },
                 ConditionTagged::Kv {
@@ -871,12 +877,14 @@ impl From<Condition> for ConditionTagged {
                 substr,
                 regex,
                 platforms,
+                is_check,
                 compiled_regex: _,
             } => ConditionTagged::Symbol {
                 exact,
                 substr,
                 regex,
                 platforms,
+                is_check,
             },
             Condition::StringValue {
                 exact,
@@ -884,7 +892,7 @@ impl From<Condition> for ConditionTagged {
                 regex,
                 word,
                 case_insensitive,
-                external_ip,
+                is_check,
                 not,
                 platforms,
                 section,
@@ -899,7 +907,7 @@ impl From<Condition> for ConditionTagged {
                 regex,
                 word,
                 case_insensitive,
-                external_ip,
+                is_check,
                 not,
                 platforms,
                 section,
@@ -1014,7 +1022,7 @@ impl From<Condition> for ConditionTagged {
                 regex,
                 word,
                 case_insensitive,
-                external_ip,
+                is_check,
                 not,
                 section,
                 offset,
@@ -1028,7 +1036,7 @@ impl From<Condition> for ConditionTagged {
                 regex,
                 word,
                 case_insensitive,
-                external_ip,
+                is_check,
                 not,
                 section,
                 offset,
@@ -1070,7 +1078,7 @@ impl From<Condition> for ConditionTagged {
                 regex,
                 word,
                 case_insensitive,
-                external_ip,
+                is_check,
                 not,
                 section,
                 offset,
@@ -1085,7 +1093,7 @@ impl From<Condition> for ConditionTagged {
                 regex,
                 word,
                 case_insensitive,
-                external_ip,
+                is_check,
                 not,
                 section,
                 offset,
@@ -1098,12 +1106,14 @@ impl From<Condition> for ConditionTagged {
                 substr,
                 regex,
                 case_insensitive,
+                is_check,
                 compiled_regex,
             } => ConditionTagged::Basename {
                 exact,
                 substr,
                 regex,
                 case_insensitive,
+                is_check,
                 compiled_regex,
             },
             Condition::Kv {
@@ -1152,6 +1162,9 @@ pub(crate) enum Condition {
         /// Platform filter - only evaluate this condition for these platforms
         #[serde(skip_serializing_if = "Option::is_none")]
         platforms: Option<Vec<Platform>>,
+        /// Optional high-fidelity validation check
+        #[serde(rename = "is", default)]
+        is_check: Option<StringValidator>,
         /// Pre-compiled regex (populated after deserialization, not serialized)
         #[serde(skip)]
         compiled_regex: Option<regex::Regex>,
@@ -1174,9 +1187,9 @@ pub(crate) enum Condition {
         /// If true, matching is case-insensitive
         #[serde(default)]
         case_insensitive: bool,
-        /// Require match to contain a valid external IP address (not private/loopback/reserved)
-        #[serde(default)]
-        external_ip: bool,
+        /// Optional high-fidelity validation check
+        #[serde(rename = "is", default)]
+        is_check: Option<StringValidator>,
         /// Exclude individual matches where evidence matches any of these patterns
         #[serde(skip_serializing_if = "Option::is_none")]
         not: Option<Vec<NotException>>,
@@ -1445,9 +1458,9 @@ pub(crate) enum Condition {
         /// Case insensitive matching (default: false)
         #[serde(default)]
         case_insensitive: bool,
-        /// Require match to contain a valid external IP address (not private/loopback/reserved)
-        #[serde(default)]
-        external_ip: bool,
+        /// Optional high-fidelity validation check
+        #[serde(rename = "is", default)]
+        is_check: Option<StringValidator>,
         /// Exclude individual matches where evidence matches any of these patterns
         #[serde(skip_serializing_if = "Option::is_none")]
         not: Option<Vec<NotException>>,
@@ -1544,9 +1557,9 @@ pub(crate) enum Condition {
         /// Case insensitive matching
         #[serde(default)]
         case_insensitive: bool,
-        /// Require match to contain a valid external IP address (not private/loopback/reserved)
-        #[serde(default)]
-        external_ip: bool,
+        /// Optional high-fidelity validation check
+        #[serde(rename = "is", default)]
+        is_check: Option<StringValidator>,
         /// Exclude individual matches where evidence matches any of these patterns
         #[serde(skip_serializing_if = "Option::is_none")]
         not: Option<Vec<NotException>>,
@@ -1593,6 +1606,9 @@ pub(crate) enum Condition {
         /// Case insensitive matching (default: false)
         #[serde(default)]
         case_insensitive: bool,
+        /// Optional high-fidelity validation check
+        #[serde(rename = "is", default)]
+        is_check: Option<StringValidator>,
         /// Pre-compiled regex
         #[serde(skip)]
         compiled_regex: Option<regex::Regex>,
@@ -2888,7 +2904,7 @@ mod location_constraint_tests {
             regex: None,
             word: None,
             case_insensitive: false,
-            external_ip: false,
+            is_check: None,
             not: None,
             section: None,
             offset: Some(0x100),
@@ -2910,7 +2926,7 @@ mod location_constraint_tests {
             regex: None,
             word: None,
             case_insensitive: false,
-            external_ip: false,
+            is_check: None,
             not: None,
             section: Some(".text".to_string()),
             offset: None,

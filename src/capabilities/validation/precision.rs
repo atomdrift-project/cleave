@@ -74,7 +74,7 @@ fn score_condition(condition: &Condition) -> f32 {
             regex,
             word,
             case_insensitive,
-            external_ip,
+            is_check,
             section,
             offset,
             offset_range,
@@ -88,7 +88,7 @@ fn score_condition(condition: &Condition) -> f32 {
             regex,
             word,
             case_insensitive,
-            external_ip,
+            is_check,
             section,
             offset,
             offset_range,
@@ -101,7 +101,7 @@ fn score_condition(condition: &Condition) -> f32 {
             score += regex.as_deref().map(score_regex_value).unwrap_or(0.0);
             score += word.as_deref().map(score_word_value).unwrap_or(0.0);
             // count_min, count_max, per_kb_min, per_kb_max now scored at trait level
-            if *external_ip {
+            if is_check.is_some() {
                 score += PARAM_UNIT;
             }
             score += section.as_deref().map(score_string_value).unwrap_or(0.0);

@@ -185,20 +185,24 @@ def connect():
     fs::create_dir_all(&traits_dir).unwrap();
 
     // String-based trait (should only match the string literal 8.8.8.8)
-    let string_trait = r#"traits:
+    let string_trait = r#"defaults:
+  platforms: [unix]
+traits:
   - id: string-ip-match
     desc: IP via string search
     crit: notable
     conf: 0.8
     for: [python]
     if:
-      type: string
-      regex: '\b[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\b'
+      type: string_value
+      regex: "\\b[0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3}\\b"
       external_ip: true
 "#;
 
     // Raw-based trait (should match both IPs)
-    let raw_trait = r#"traits:
+    let raw_trait = r#"defaults:
+  platforms: [unix]
+traits:
   - id: raw-ip-match
     desc: IP via raw search
     crit: notable
@@ -206,7 +210,7 @@ def connect():
     for: [python]
     if:
       type: raw
-      regex: '\b[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\b'
+      regex: "\\b[0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3}\\b"
       external_ip: true
 "#;
 

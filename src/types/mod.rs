@@ -41,7 +41,7 @@ pub(crate) mod code_structure;
 pub(crate) mod container_metrics;
 pub(crate) mod core;
 pub(crate) mod diff;
-pub(crate) mod field_paths;
+pub mod field_paths;
 pub(crate) mod file_analysis;
 pub(crate) mod jpeg_metrics;
 pub(crate) mod language_metrics;
@@ -79,6 +79,7 @@ pub use binary::{
     StringType, SyscallInfo, YaraMatch,
 };
 
+#[allow(unused_imports)]
 pub(crate) use diff::{
     DiffCounts, DiffReport, FileChanges, FileDiff, FileRenameInfo, FullDiffReport, MetricsDelta,
     ModifiedFileAnalysis,

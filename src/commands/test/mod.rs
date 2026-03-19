@@ -29,12 +29,12 @@
 //!
 //! **Usage:**
 //! ```text
-//! cleave test-match <file> --type <string|symbol|raw|kv|hex|encoded|section|metrics> \
+//! cleave test-match <file> --type <string-value|symbol|raw|kv|hex|encoded|section|metrics> \
 //!   --pattern <pattern> [--method <exact|contains|regex|word>] [options...]
 //! ```
 //!
 //! **Search Types:**
-//! - `string`: Search extracted string literals
+//! - `string-value`: Search extracted string literals
 //! - `symbol`: Search function/import/export symbols
 //! - `raw`: Search raw file content (bytes)
 //! - `kv`: Search structured data (JSON/YAML) by key path
@@ -55,7 +55,7 @@
 //! - `--length-min/max`: String/section length constraints
 //! - `--entropy-min/max`: Entropy constraints (sections)
 //! - `--value-min/max`: Metric value thresholds
-//! - `--external-ip`: Filter for external IP addresses
+//! - `--is <external_ip|bitcoin_addr>`: Apply high-fidelity validators
 //!
 //! **Location Filters:**
 //! - `--section <name>`: Limit search to specific section
@@ -73,6 +73,25 @@
 
 pub(crate) mod match_cmd;
 pub(crate) mod rules;
+
+pub(crate) fn build_test_capability_mapper(
+    platforms: Vec<crate::composite_rules::Platform>,
+    min_hostile_precision: f32,
+    min_suspicious_precision: f32,
+) -> crate::capabilities::CapabilityMapper {
+    if std::env::var("CLEAVE_SKIP_TRAITS").is_ok() || std::env::var("cleave_SKIP_TRAITS").is_ok()
+    {
+        tracing::info!("Traits skipped (CLEAVE_SKIP_TRAITS set)");
+        crate::capabilities::CapabilityMapper::empty()
+    } else {
+        crate::capabilities::CapabilityMapper::new_with_precision_thresholds(
+            min_hostile_precision,
+            min_suspicious_precision,
+            true,
+        )
+        .with_platforms(platforms)
+    }
+}
 
 // Re-export command functions
 pub(crate) use match_cmd::run as test_match;

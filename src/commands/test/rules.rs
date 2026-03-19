@@ -11,6 +11,7 @@ use crate::analyzers::{detect_file_type, macho::MachOAnalyzer, FileType};
 use crate::commands::shared::{
     create_analysis_report, find_rules_in_directory, find_similar_rules, process_yara_result,
 };
+use crate::commands::test::build_test_capability_mapper;
 use crate::yara_engine::YaraEngine;
 use crate::{cli, composite_rules, test_rules};
 use anyhow::Result;
@@ -62,13 +63,13 @@ pub(crate) fn run(
     let file_type = detect_file_type(path)?;
     eprintln!("Detected file type: {:?}", file_type);
 
-    // Load capability mapper with full validation (test-rules is a developer command)
-    let capability_mapper = crate::capabilities::CapabilityMapper::new_with_precision_thresholds(
+    // Load capability mapper with full validation (test-rules is a developer command).
+    // Honor CLEAVE_SKIP_TRAITS the same way test-match does for faster focused runs.
+    let capability_mapper = build_test_capability_mapper(
+        platforms.clone(),
         min_hostile_precision,
         min_suspicious_precision,
-        true, // Always enable full validation for test-rules
-    )
-    .with_platforms(platforms.clone());
+    );
 
     // Load YARA engine to match production path exactly
     let mut yara_engine = YaraEngine::new();
@@ -145,8 +146,6 @@ pub(crate) fn run(
         &capability_mapper,
         &report,
         eval_data,
-        &capability_mapper.composite_rules,
-        capability_mapper.trait_definitions(),
         platforms,
         inline_yara_ref,
     );

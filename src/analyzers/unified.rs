@@ -1340,6 +1340,7 @@ mod tests {
     use super::*;
     use crate::analyzers::FileType;
     use std::path::PathBuf;
+    use tempfile::NamedTempFile;
 
     #[test]
     fn test_python_analysis() {
@@ -1437,8 +1438,98 @@ func main() {
     // Go-specific capability detection tests
     // These verify the unified analyzer correctly detects Go capabilities via the trait system
 
+    fn go_test_mapper() -> crate::capabilities::CapabilityMapper {
+        let yaml = r#"
+defaults:
+  platforms: [linux, macos, windows, unix, android, ios]
+  for: [go]
+traits:
+  - id: micro-behaviors/process/create/direct::exec-command
+    desc: Executes commands via Go os/exec
+    crit: suspicious
+    conf: 0.95
+    if:
+      type: symbol
+      exact: exec.Command
+
+  - id: micro-behaviors/process/create/direct::syscall-exec
+    desc: Executes commands via Go syscall.Exec
+    crit: suspicious
+    conf: 0.95
+    if:
+      type: symbol
+      exact: syscall.Exec
+
+  - id: micro-behaviors/communications/socket/connect::dial
+    desc: Go net.Dial call
+    crit: baseline
+    conf: 0.95
+    if:
+      type: symbol
+      exact: net.Dial
+
+  - id: micro-behaviors/communications/socket/listen::listen-go
+    desc: Go net.Listen call
+    crit: baseline
+    conf: 0.95
+    if:
+      type: symbol
+      exact: net.Listen
+
+  - id: micro-behaviors/communications/http/get::http-get
+    desc: Go http.Get call
+    crit: baseline
+    conf: 0.95
+    if:
+      type: symbol
+      exact: http.Get
+
+  - id: micro-behaviors/communications/http/server::listenandserve-call
+    desc: Go http.ListenAndServe call
+    crit: baseline
+    conf: 0.95
+    if:
+      type: symbol
+      exact: http.ListenAndServe
+
+  - id: micro-behaviors/crypto/library::aes-new-cipher
+    desc: Go AES cipher construction
+    crit: baseline
+    conf: 0.95
+    if:
+      type: symbol
+      exact: aes.NewCipher
+
+  - id: micro-behaviors/crypto/library::rsa-generate-key
+    desc: Go RSA key generation
+    crit: baseline
+    conf: 0.95
+    if:
+      type: symbol
+      exact: rsa.GenerateKey
+
+  - id: micro-behaviors/fs/file/operations::os-create
+    desc: Go file creation
+    crit: baseline
+    conf: 0.95
+    if:
+      type: symbol
+      exact: os.Create
+"#;
+
+        let mut file = NamedTempFile::new().expect("create temp yaml");
+        std::io::Write::write_all(&mut file, yaml.as_bytes()).expect("write temp yaml");
+        crate::capabilities::CapabilityMapper::from_yaml_with_precision_thresholds(
+            file.path(),
+            crate::capabilities::CapabilityMapper::DEFAULT_MIN_HOSTILE_PRECISION,
+            crate::capabilities::CapabilityMapper::DEFAULT_MIN_SUSPICIOUS_PRECISION,
+            false,
+        )
+        .expect("load test-local go mapper")
+    }
+
     fn analyze_go_code(code: &str) -> crate::types::AnalysisReport {
-        let mapper = crate::capabilities::CapabilityMapper::new_without_validation();
+        let mapper = go_test_mapper();
         let analyzer = UnifiedSourceAnalyzer::for_file_type(&FileType::Go)
             .unwrap()
             .with_capability_mapper(mapper);

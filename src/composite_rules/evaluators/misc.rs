@@ -6,6 +6,8 @@
 //! - File size constraints
 //! - Trait glob patterns (matching multiple traits)
 
+use super::symbol_string::validate_match;
+use crate::composite_rules::condition::StringValidator;
 use crate::composite_rules::context::{ConditionResult, EvaluationContext};
 use crate::types::{Evidence, MAX_EVIDENCE_PER_TRAIT};
 
@@ -182,6 +184,7 @@ pub(crate) fn eval_basename<'a>(
     substr: Option<&String>,
     regex: Option<&String>,
     case_insensitive: bool,
+    is_check: Option<StringValidator>,
     compiled_regex: Option<&regex::Regex>,
     ctx: &EvaluationContext<'a>,
 ) -> ConditionResult {
@@ -243,6 +246,12 @@ pub(crate) fn eval_basename<'a>(
     if case_insensitive {
         precision *= 0.5;
     }
+
+    if is_check.is_some() {
+        precision += 0.5;
+    }
+
+    let matched = matched && validate_match(basename, is_check);
 
     ConditionResult {
         matched,
@@ -314,7 +323,7 @@ mod tests {
 
         // Invalid regex should not panic, should return no match
         let bad_regex = "[invalid(".to_string();
-        let result = eval_basename(None, None, Some(&bad_regex), false, None, &ctx);
+        let result = eval_basename(None, None, Some(&bad_regex), false, None, None, &ctx);
         assert!(!result.matched, "Invalid regex should not match");
     }
 }

@@ -16,6 +16,8 @@
 //! }
 //! ```
 
+extern crate self as cleave;
+
 mod analysis_cache;
 mod archive_utils;
 mod cache;
@@ -36,6 +38,7 @@ pub mod rtf;
 
 // Public modules
 pub mod analyzers;
+pub mod bitcoin_validator;
 pub mod capabilities;
 pub mod cli;
 pub mod composite_rules;
@@ -60,7 +63,7 @@ pub use diff::DiffAnalyzer;
 pub use types::binary::StringInfo;
 pub use types::code_structure::{BinaryProperties, SourceCodeMetrics};
 pub use types::core::{AnalysisReport, Criticality, TargetInfo};
-pub use types::diff::{DiffReport, ModifiedFileAnalysis};
+pub use types::diff::{DiffReport, FullDiffReport, ModifiedFileAnalysis};
 pub use types::scores::Metrics;
 pub use types::text_metrics::TextMetrics;
 pub use types::traits_findings::{Evidence, Finding, FindingKind, Trait, TraitKind};
@@ -74,6 +77,23 @@ use anyhow::Result;
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
+
+/// Scoped disable guards applied for a single analysis operation.
+struct AnalysisDisableGuards {
+    _radare2: Option<radare2::ScopedRadare2Disable>,
+    _upx: Option<upx::ScopedUpxDisable>,
+}
+
+impl AnalysisDisableGuards {
+    fn from_options(options: &AnalysisOptions) -> Self {
+        Self {
+            _radare2: options
+                .disable_radare2
+                .then(radare2::scoped_disable_radare2),
+            _upx: options.disable_upx.then(upx::scoped_disable_upx),
+        }
+    }
+}
 
 /// Process YARA scan results and add them to the analysis report.
 ///
@@ -336,7 +356,7 @@ pub fn analyze_file<P: AsRef<Path>>(path: P, options: &AnalysisOptions) -> Resul
 pub fn analyze_file_with_mapper<P: AsRef<Path>>(
     path: P,
     options: &AnalysisOptions,
-    capability_mapper: &CapabilityMapper,
+    capability_mapper: &Arc<CapabilityMapper>,
 ) -> Result<AnalysisReport> {
     // Use shared YARA engine (initialized on first use)
     let yara_engine = if options.disable_yara {
@@ -346,10 +366,7 @@ pub fn analyze_file_with_mapper<P: AsRef<Path>>(
             options.enable_third_party_yara,
         ))
     };
-    // Wrap in Arc for the internal API (this is the less-common path;
-    // callers with an Arc should use analyze_file_with_resources directly)
-    let mapper_arc = Arc::new(capability_mapper.clone());
-    analyze_file_with_resources(path, options, &mapper_arc, yara_engine.as_ref(), None)
+    analyze_file_with_resources(path, options, capability_mapper, yara_engine.as_ref(), None)
 }
 
 /// Analyze a single file with full control over resources.
@@ -380,6 +397,7 @@ fn analyze_file_with_resources<P: AsRef<Path>>(
     yara_engine: Option<&Arc<yara_engine::YaraEngine>>,
     preloaded: Option<file_io::FileData>,
 ) -> Result<AnalysisReport> {
+    let _disable_guards = AnalysisDisableGuards::from_options(options);
     analyze_file_with_resources_at_depth(
         path,
         options,
@@ -414,14 +432,6 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
             "Path is a directory, use analyze_directory instead: {}",
             path.display()
         );
-    }
-
-    // Apply global disables
-    if options.disable_radare2 {
-        radare2::disable_radare2();
-    }
-    if options.disable_upx {
-        upx::disable_upx();
     }
 
     // Read file once — reuse pre-loaded data from the fast-path cache check if available.
@@ -957,13 +967,7 @@ pub fn analyze_directory<P: AsRef<Path>>(
         anyhow::bail!("Path is not a directory: {}", path.display());
     }
 
-    // Apply global disables
-    if options.disable_radare2 {
-        radare2::disable_radare2();
-    }
-    if options.disable_upx {
-        upx::disable_upx();
-    }
+    let _disable_guards = AnalysisDisableGuards::from_options(options);
 
     // Collect all files, filtering unknown types unless all_files is set
     let all_files_flag = options.all_files;
@@ -988,12 +992,33 @@ pub fn analyze_directory<P: AsRef<Path>>(
         .collect();
 
     // Analyze in parallel
-    let reports: Vec<_> = files
+    let results: Vec<_> = files
         .par_iter()
-        .filter_map(|file_path| analyze_file(file_path, options).ok())
+        .map(|file_path| analyze_file(file_path, options).map_err(|err| (file_path.clone(), err)))
         .collect();
 
-    Ok(reports)
+    let mut reports = Vec::with_capacity(results.len());
+    let mut failures = Vec::new();
+    for result in results {
+        match result {
+            Ok(report) => reports.push(report),
+            Err((path, err)) => failures.push((path, err)),
+        }
+    }
+
+    if failures.is_empty() {
+        return Ok(reports);
+    }
+
+    let mut message = format!("directory analysis failed for {} file(s)", failures.len());
+    for (path, err) in failures.iter().take(5) {
+        message.push_str(&format!("\n- {}: {err:#}", path.display()));
+    }
+    if failures.len() > 5 {
+        message.push_str(&format!("\n- ... and {} more", failures.len() - 5));
+    }
+
+    anyhow::bail!(message)
 }
 
 /// An event emitted during [`scan_directory`].
@@ -1060,13 +1085,7 @@ where
     if !path.is_dir() {
         anyhow::bail!("path is not a directory: {}", path.display());
     }
-
-    if options.disable_radare2 {
-        radare2::disable_radare2();
-    }
-    if options.disable_upx {
-        upx::disable_upx();
-    }
+    let _disable_guards = AnalysisDisableGuards::from_options(options);
 
     // Load shared resources once; all rayon workers share them via cheap Arc clones.
     let (mapper, yara_engine) = rayon::join(
@@ -1287,6 +1306,30 @@ pub fn diff_files<P: AsRef<Path>>(old_path: P, new_path: P) -> Result<DiffReport
     analyzer.analyze()
 }
 
+/// Compare two files or directories and return the comprehensive diff report.
+pub fn diff_files_full<P: AsRef<Path>>(old_path: P, new_path: P) -> Result<FullDiffReport> {
+    let analyzer = DiffAnalyzer::new(old_path, new_path);
+    analyzer.analyze_full()
+}
+
+/// Format a diff report for terminal output.
+#[must_use]
+pub fn format_diff_terminal(report: &DiffReport) -> String {
+    diff::format_diff_terminal(report)
+}
+
+/// Validate the configured traits directory with full validation enabled.
+pub fn validate_traits() -> Result<()> {
+    let resolved = traits_repo::resolve_and_ensure();
+    capabilities::CapabilityMapper::from_directory_with_precision_thresholds(
+        resolved.as_path(),
+        capabilities::CapabilityMapper::DEFAULT_MIN_HOSTILE_PRECISION,
+        capabilities::CapabilityMapper::DEFAULT_MIN_SUSPICIOUS_PRECISION,
+        true,
+    )?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1386,5 +1429,35 @@ mod tests {
                 .any(|f| f.id.contains("deep-nesting")),
             "depth-0 analysis should not produce deep-nesting finding"
         );
+    }
+
+    #[test]
+    fn test_analyze_directory_reports_per_file_failures() {
+        use std::fs;
+
+        #[allow(clippy::expect_used)]
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let valid = temp_dir.path().join("valid.sh");
+        let malformed_zip = temp_dir.path().join("broken.zip");
+
+        #[allow(clippy::expect_used)]
+        fs::write(&valid, b"#!/bin/sh\necho ok\n").expect("write valid file");
+        #[allow(clippy::expect_used)]
+        fs::write(&malformed_zip, b"PK\x03\x04not-a-real-zip")
+            .expect("write malformed archive");
+
+        let options = AnalysisOptions {
+            disable_yara: true,
+            disable_radare2: true,
+            disable_upx: true,
+            ..Default::default()
+        };
+
+        let err = analyze_directory(temp_dir.path(), &options).expect_err(
+            "directory analysis should surface malformed-file failures instead of dropping them",
+        );
+        let message = format!("{err:#}");
+        assert!(message.contains("directory analysis failed for 1 file(s)"));
+        assert!(message.contains("broken.zip"));
     }
 }

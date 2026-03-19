@@ -207,7 +207,7 @@ fn test_apply_trait_defaults_applies_all_defaults() {
         unless: None,
         downgrade: None,
         condition: Some(Condition::StringValue {
-            external_ip: false,
+            is_check: None,
             exact: Some("test".to_string()),
             regex: None,
             word: None,
@@ -277,7 +277,7 @@ fn test_apply_trait_defaults_trait_overrides_defaults() {
         unless: None,
         downgrade: None,
         condition: Some(Condition::StringValue {
-            external_ip: false,
+            is_check: None,
             exact: Some("test".to_string()),
             regex: None,
             word: None,
@@ -344,7 +344,7 @@ fn test_apply_trait_defaults_unset_mbc_with_none() {
         unless: None,
         downgrade: None,
         condition: Some(Condition::StringValue {
-            external_ip: false,
+            is_check: None,
             exact: Some("test".to_string()),
             regex: None,
             word: None,
@@ -406,7 +406,7 @@ fn test_apply_trait_defaults_unset_attack_with_none() {
         unless: None,
         downgrade: None,
         condition: Some(Condition::StringValue {
-            external_ip: false,
+            is_check: None,
             exact: Some("test".to_string()),
             regex: None,
             word: None,
@@ -468,7 +468,7 @@ fn test_apply_trait_defaults_unset_file_types_with_none() {
         unless: None,
         downgrade: None,
         condition: Some(Condition::StringValue {
-            external_ip: false,
+            is_check: None,
             exact: Some("test".to_string()),
             regex: None,
             word: None,
@@ -531,7 +531,7 @@ fn test_apply_trait_defaults_size_and_entropy_from_defaults() {
         unless: None,
         downgrade: None,
         condition: Some(Condition::StringValue {
-            external_ip: false,
+            is_check: None,
             exact: Some("test".to_string()),
             regex: None,
             word: None,
@@ -582,7 +582,7 @@ fn test_apply_trait_defaults_size_and_entropy_from_defaults() {
         unless: None,
         downgrade: None,
         condition: Some(Condition::StringValue {
-            external_ip: false,
+            is_check: None,
             exact: Some("test".to_string()),
             regex: None,
             word: None,
@@ -655,7 +655,7 @@ fn test_apply_composite_defaults_applies_all_defaults() {
         near_lines: None,
         near_bytes: None,
         condition: Some(Condition::StringValue {
-            external_ip: false,
+            is_check: None,
             exact: Some("test".to_string()),
             regex: None,
             word: None,
@@ -728,7 +728,7 @@ fn test_apply_composite_defaults_unset_with_none() {
         near_lines: None,
         near_bytes: None,
         condition: Some(Condition::StringValue {
-            external_ip: false,
+            is_check: None,
             exact: Some("test".to_string()),
             regex: None,
             word: None,
@@ -1285,7 +1285,7 @@ fn test_precision_direct_conditions() {
         for_from_groups: false,
         all: Some(vec![
             Condition::StringValue {
-                external_ip: false,
+                is_check: None,
                 exact: Some("string1".to_string()),
                 regex: None,
                 word: None,
@@ -1301,7 +1301,7 @@ fn test_precision_direct_conditions() {
                 compiled_regex: None,
             },
             Condition::StringValue {
-                external_ip: false,
+                is_check: None,
                 exact: Some("string2".to_string()),
                 regex: None,
                 word: None,
@@ -1317,7 +1317,7 @@ fn test_precision_direct_conditions() {
                 compiled_regex: None,
             },
             Condition::StringValue {
-                external_ip: false,
+                is_check: None,
                 exact: Some("string3".to_string()),
                 regex: None,
                 word: None,
@@ -1387,7 +1387,7 @@ fn test_precision_file_type_filter() {
         for_from_groups: false,
         all: Some(vec![
             Condition::StringValue {
-                external_ip: false,
+                is_check: None,
                 exact: Some("string1".to_string()),
                 regex: None,
                 word: None,
@@ -1403,7 +1403,7 @@ fn test_precision_file_type_filter() {
                 compiled_regex: None,
             },
             Condition::StringValue {
-                external_ip: false,
+                is_check: None,
                 exact: Some("string2".to_string()),
                 regex: None,
                 word: None,
@@ -1472,7 +1472,7 @@ fn test_precision_recursive_expansion() {
         r#for: vec![RuleFileType::All],
         for_from_groups: false,
         r#if: Condition::StringValue {
-            external_ip: false,
+            is_check: None,
             exact: Some("atomic".to_string()),
             regex: None,
             word: None,
@@ -1516,7 +1516,7 @@ fn test_precision_recursive_expansion() {
         for_from_groups: false,
         all: Some(vec![
             Condition::StringValue {
-                external_ip: false,
+                is_check: None,
                 exact: Some("string1".to_string()),
                 regex: None,
                 word: None,
@@ -1532,7 +1532,7 @@ fn test_precision_recursive_expansion() {
                 compiled_regex: None,
             },
             Condition::StringValue {
-                external_ip: false,
+                is_check: None,
                 exact: Some("string2".to_string()),
                 regex: None,
                 word: None,
@@ -1724,7 +1724,7 @@ fn test_precision_caching() {
         for_from_groups: false,
         all: Some(vec![
             Condition::StringValue {
-                external_ip: false,
+                is_check: None,
                 exact: Some("string1".to_string()),
                 regex: None,
                 word: None,
@@ -1740,7 +1740,7 @@ fn test_precision_caching() {
                 compiled_regex: None,
             },
             Condition::StringValue {
-                external_ip: false,
+                is_check: None,
                 exact: Some("string2".to_string()),
                 regex: None,
                 word: None,
@@ -1821,7 +1821,7 @@ fn test_precision_threshold_validation() {
         for_from_groups: false,
         all: Some(vec![
             Condition::StringValue {
-                external_ip: false,
+                is_check: None,
                 exact: Some("string1".to_string()),
                 regex: None,
                 word: None,
@@ -1837,7 +1837,7 @@ fn test_precision_threshold_validation() {
                 compiled_regex: None,
             },
             Condition::StringValue {
-                external_ip: false,
+                is_check: None,
                 exact: Some("string2".to_string()),
                 regex: None,
                 word: None,
@@ -1853,7 +1853,7 @@ fn test_precision_threshold_validation() {
                 compiled_regex: None,
             },
             Condition::StringValue {
-                external_ip: false,
+                is_check: None,
                 exact: Some("string3".to_string()),
                 regex: None,
                 word: None,
@@ -1900,7 +1900,7 @@ fn test_precision_threshold_validation() {
         for_from_groups: false,
         all: Some(vec![
             Condition::StringValue {
-                external_ip: false,
+                is_check: None,
                 exact: Some("this_is_a_very_long_string_pattern_one".to_string()), // 38 chars = 8 buckets * 0.3 = 2.4
                 regex: None,
                 word: None,
@@ -1916,7 +1916,7 @@ fn test_precision_threshold_validation() {
                 compiled_regex: None,
             },
             Condition::StringValue {
-                external_ip: false,
+                is_check: None,
                 exact: Some("this_is_another_very_long_string_pattern".to_string()), // 40 chars = 8 buckets * 0.3 = 2.4
                 regex: None,
                 word: None,
@@ -1992,7 +1992,7 @@ fn test_suspicious_precision_threshold_validation() {
         r#for: vec![RuleFileType::All],
         for_from_groups: false,
         all: Some(vec![Condition::StringValue {
-            external_ip: false,
+            is_check: None,
             exact: Some("string1".to_string()),
             regex: None,
             word: None,
@@ -2037,7 +2037,7 @@ fn test_suspicious_precision_threshold_validation() {
         for_from_groups: false,
         all: Some(vec![
             Condition::StringValue {
-                external_ip: false,
+                is_check: None,
                 exact: Some("this_is_a_long_string_pattern".to_string()), // 29 chars = 6 buckets * 0.3 = 1.8
                 regex: None,
                 word: None,
@@ -2053,7 +2053,7 @@ fn test_suspicious_precision_threshold_validation() {
                 compiled_regex: None,
             },
             Condition::StringValue {
-                external_ip: false,
+                is_check: None,
                 exact: Some("another_long_string_pattern".to_string()), // 27 chars = 6 buckets * 0.3 = 1.8
                 regex: None,
                 word: None,
@@ -2130,7 +2130,7 @@ fn test_precision_mixed_conditions() {
         r#for: vec![RuleFileType::All],
         for_from_groups: false,
         all: Some(vec![Condition::StringValue {
-            external_ip: false,
+            is_check: None,
             exact: Some("string1".to_string()),
             regex: None,
             word: None,
@@ -2147,7 +2147,7 @@ fn test_precision_mixed_conditions() {
         }]),
         any: Some(vec![
             Condition::StringValue {
-                external_ip: false,
+                is_check: None,
                 exact: Some("string2".to_string()),
                 regex: None,
                 word: None,
@@ -2163,7 +2163,7 @@ fn test_precision_mixed_conditions() {
                 compiled_regex: None,
             },
             Condition::StringValue {
-                external_ip: false,
+                is_check: None,
                 exact: Some("string3".to_string()),
                 regex: None,
                 word: None,
@@ -2183,7 +2183,7 @@ fn test_precision_mixed_conditions() {
         near_lines: None,
         near_bytes: None,
         none: Some(vec![Condition::StringValue {
-            external_ip: false,
+            is_check: None,
             exact: Some("string4".to_string()),
             regex: None,
             word: None,
@@ -2246,7 +2246,7 @@ fn test_precision_deep_nesting() {
         for_from_groups: false,
         all: Some(vec![
             Condition::StringValue {
-                external_ip: false,
+                is_check: None,
                 exact: Some("l1-s1".to_string()),
                 regex: None,
                 word: None,
@@ -2262,7 +2262,7 @@ fn test_precision_deep_nesting() {
                 compiled_regex: None,
             },
             Condition::StringValue {
-                external_ip: false,
+                is_check: None,
                 exact: Some("l1-s2".to_string()),
                 regex: None,
                 word: None,
@@ -2310,7 +2310,7 @@ fn test_precision_deep_nesting() {
                 id: "test/level1".to_string(),
             },
             Condition::StringValue {
-                external_ip: false,
+                is_check: None,
                 exact: Some("l2-s1".to_string()),
                 regex: None,
                 word: None,
@@ -2358,7 +2358,7 @@ fn test_precision_deep_nesting() {
                 id: "test/level2".to_string(),
             },
             Condition::StringValue {
-                external_ip: false,
+                is_check: None,
                 exact: Some("l3-s1".to_string()),
                 regex: None,
                 word: None,
@@ -2522,7 +2522,7 @@ fn test_precision_traits_with_size_restrictions() {
         r#for: vec![RuleFileType::All],
         for_from_groups: false,
         r#if: Condition::StringValue {
-            external_ip: false,
+            is_check: None,
             exact: Some("pattern1".to_string()),
             regex: None,
             word: None,
@@ -2565,7 +2565,7 @@ fn test_precision_traits_with_size_restrictions() {
         r#for: vec![RuleFileType::All],
         for_from_groups: false,
         r#if: Condition::StringValue {
-            external_ip: false,
+            is_check: None,
             exact: Some("pattern2".to_string()),
             regex: None,
             word: None,

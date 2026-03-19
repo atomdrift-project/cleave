@@ -5,10 +5,87 @@
 
 use super::*;
 use crate::composite_rules::condition::NotException;
-use crate::composite_rules::context::{EvaluationContext, StringParams};
+use crate::composite_rules::context::{ConditionResult, EvaluationContext, StringParams};
 use crate::composite_rules::types::{Arch, FileType, Platform};
 use crate::types::{AnalysisReport, Export, Function, Import, StringInfo, StringType, TargetInfo};
 use std::sync::OnceLock;
+
+fn eval_symbol<'a>(
+    exact: Option<&String>,
+    substr: Option<&String>,
+    pattern: Option<&String>,
+    platforms: Option<&Vec<Platform>>,
+    compiled_regex: Option<&regex::Regex>,
+    not: Option<&Vec<NotException>>,
+    ctx: &EvaluationContext<'a>,
+) -> ConditionResult {
+    super::eval_symbol(
+        exact,
+        substr,
+        pattern,
+        platforms,
+        None,
+        compiled_regex,
+        not,
+        ctx,
+    )
+}
+
+fn eval_raw<'a>(
+    exact: Option<&String>,
+    substr: Option<&String>,
+    regex: Option<&String>,
+    word: Option<&String>,
+    case_insensitive: bool,
+    external_ip: bool,
+    compiled_regex: Option<&regex::Regex>,
+    not: Option<&Vec<NotException>>,
+    location: &ContentLocationParams,
+    ctx: &EvaluationContext<'a>,
+    trait_id: Option<&str>,
+) -> ConditionResult {
+    super::eval_raw(
+        exact,
+        substr,
+        regex,
+        word,
+        case_insensitive,
+        external_ip.then_some(crate::composite_rules::condition::StringValidator::ExternalIp),
+        compiled_regex,
+        not,
+        location,
+        ctx,
+        trait_id,
+    )
+}
+
+fn eval_encoded<'a>(
+    encoding: Option<&crate::composite_rules::condition::EncodingSpec>,
+    exact: Option<&String>,
+    substr: Option<&String>,
+    regex: Option<&String>,
+    word: Option<&String>,
+    case_insensitive: bool,
+    compiled_regex: Option<&regex::Regex>,
+    location: &ContentLocationParams,
+    external_ip: bool,
+    not: Option<&Vec<crate::composite_rules::condition::NotException>>,
+    ctx: &EvaluationContext<'a>,
+) -> ConditionResult {
+    super::eval_encoded(
+        encoding,
+        exact,
+        substr,
+        regex,
+        word,
+        case_insensitive,
+        compiled_regex,
+        location,
+        external_ip.then_some(crate::composite_rules::condition::StringValidator::ExternalIp),
+        not,
+        ctx,
+    )
+}
 
 fn create_test_report() -> AnalysisReport {
     let target = TargetInfo {
@@ -361,7 +438,7 @@ fn test_eval_string_exact_match() {
         regex: None,
         word: None,
         case_insensitive: false,
-        external_ip: false,
+        is_check: None,
         compiled_regex: None,
         section: None,
         offset: None,
@@ -398,7 +475,7 @@ fn test_eval_string_substr_match() {
         regex: None,
         word: None,
         case_insensitive: false,
-        external_ip: false,
+        is_check: None,
         compiled_regex: None,
         section: None,
         offset: None,
@@ -436,7 +513,7 @@ fn test_eval_string_regex_match() {
         regex: Some(&pattern),
         word: None,
         case_insensitive: false,
-        external_ip: false,
+        is_check: None,
         compiled_regex: Some(&re),
         section: None,
         offset: None,
@@ -472,7 +549,7 @@ fn test_eval_string_case_insensitive() {
         regex: None,
         word: None,
         case_insensitive: true,
-        external_ip: false,
+        is_check: None,
         compiled_regex: None,
         section: None,
         offset: None,
@@ -531,7 +608,7 @@ fn test_eval_string_not_exception() {
         regex: None,
         word: None,
         case_insensitive: false,
-        external_ip: false,
+        is_check: None,
         compiled_regex: None,
         section: None,
         offset: None,
@@ -564,7 +641,7 @@ fn test_eval_string_in_imports() {
         regex: None,
         word: None,
         case_insensitive: false,
-        external_ip: false,
+        is_check: None,
         compiled_regex: None,
         section: None,
         offset: None,
@@ -1384,7 +1461,7 @@ fn test_eval_string_match_count_exceeds_evidence_cap() {
         regex: None,
         word: None,
         case_insensitive: false,
-        external_ip: false,
+        is_check: None,
         compiled_regex: None,
         section: None,
         offset: None,
@@ -1616,7 +1693,7 @@ fn test_eval_string_external_ip_filters_private() {
         regex: None,
         word: None,
         case_insensitive: false,
-        external_ip: true,
+        is_check: Some(crate::composite_rules::condition::StringValidator::ExternalIp),
         compiled_regex: None,
         section: None,
         offset: None,
@@ -1732,7 +1809,7 @@ fn test_eval_string_offset_skips_imports() {
         regex: None,
         word: None,
         case_insensitive: false,
-        external_ip: false,
+        is_check: None,
         compiled_regex: None,
         section: None,
         offset: Some(0x1000),
@@ -1756,7 +1833,7 @@ fn test_eval_string_offset_skips_imports() {
         regex: None,
         word: None,
         case_insensitive: false,
-        external_ip: false,
+        is_check: None,
         compiled_regex: None,
         section: None,
         offset: None,
@@ -1811,7 +1888,7 @@ fn test_eval_string_word_boundary() {
         regex: None,
         word: Some(&word),
         case_insensitive: false,
-        external_ip: false,
+        is_check: None,
         compiled_regex: Some(&word_regex),
         section: None,
         offset: None,
@@ -2019,7 +2096,7 @@ fn test_eval_string_section_offset_with_section_map() {
         regex: None,
         word: None,
         case_insensitive: false,
-        external_ip: false,
+        is_check: None,
         compiled_regex: None,
         section: Some(&sec_text),
         offset: None,
@@ -2043,7 +2120,7 @@ fn test_eval_string_section_offset_with_section_map() {
         regex: None,
         word: None,
         case_insensitive: false,
-        external_ip: false,
+        is_check: None,
         compiled_regex: None,
         section: Some(&sec_data),
         offset: None,
@@ -2065,7 +2142,7 @@ fn test_eval_string_section_offset_with_section_map() {
         regex: None,
         word: None,
         case_insensitive: false,
-        external_ip: false,
+        is_check: None,
         compiled_regex: None,
         section: Some(&sec_text),
         offset: None,
@@ -2199,7 +2276,7 @@ fn test_eval_string_offset_range_filters() {
         regex: None,
         word: None,
         case_insensitive: false,
-        external_ip: false,
+        is_check: None,
         compiled_regex: None,
         section: None,
         offset: None,
@@ -2222,7 +2299,7 @@ fn test_eval_string_offset_range_filters() {
         regex: None,
         word: None,
         case_insensitive: false,
-        external_ip: false,
+        is_check: None,
         compiled_regex: None,
         section: None,
         offset: None,

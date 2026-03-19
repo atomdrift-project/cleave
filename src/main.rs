@@ -46,7 +46,6 @@ mod capabilities;
 mod cli;
 mod commands;
 mod composite_rules;
-mod diff;
 mod entropy;
 mod env_mapper;
 mod extractors;
@@ -63,7 +62,6 @@ mod test_rules;
 mod test_rules_filters_test;
 mod third_party_config;
 mod third_party_yara;
-mod traits_repo;
 mod types;
 mod upx;
 mod yara_engine;
@@ -71,8 +69,9 @@ mod yara_engine;
 use anyhow::{Context, Result};
 use clap::Parser;
 use commands::{
-    analyze_command, diff_command, expand_paths, test_match, test_rules, validate_command,
-    AnalyzeConfig,
+    analyze_command, diff_command, expand_paths, extract_metrics_command,
+    extract_sections_command, extract_strings_command, extract_symbols_command, test_match,
+    test_rules, validate_command, AnalyzeConfig,
 };
 use std::fs;
 use tracing_subscriber::EnvFilter;
@@ -382,7 +381,7 @@ fn main() -> Result<()> {
 
     // Print version banner to stderr (status info never goes to stdout) - only in terminal mode
     if format == cli::OutputFormat::Terminal {
-        let traits_ver = traits_repo::version()
+        let traits_ver = cleave::traits_repo::version()
             .map(|v| format!(" (traits: {v})"))
             .unwrap_or_default();
         eprintln!("cleave v{}{traits_ver}\n", env!("CARGO_PKG_VERSION"));
@@ -473,15 +472,15 @@ fn main() -> Result<()> {
             target,
             min_length,
             layer,
-        }) => commands::extract::strings::run(&target, min_length, layer.as_deref(), &format)?,
+        }) => extract_strings_command(&target, min_length, layer.as_deref(), &format)?,
         Some(cli::Command::Symbols { target, layer }) => {
-            commands::extract::symbols::run(&target, layer.as_deref(), &format)?
+            extract_symbols_command(&target, layer.as_deref(), &format)?
         }
         Some(cli::Command::Sections { target, layer }) => {
-            commands::extract::sections::run(&target, layer.as_deref(), &format)?
+            extract_sections_command(&target, layer.as_deref(), &format)?
         }
         Some(cli::Command::Metrics { target, layer }) => {
-            commands::extract::metrics::run(&target, layer.as_deref(), &format, &disabled)?
+            extract_metrics_command(&target, layer.as_deref(), &format, &disabled)?
         }
         Some(cli::Command::TestRules { target, rules }) => {
             test_rules(&target, &rules, &disabled, platforms.clone(), 3.5, 2.0)?
@@ -506,7 +505,7 @@ fn main() -> Result<()> {
             offset_range,
             section_offset,
             section_offset_range,
-            external_ip,
+            is,
             encoding,
             entropy_min,
             entropy_max,
@@ -536,7 +535,7 @@ fn main() -> Result<()> {
             offset_range,
             section_offset,
             section_offset_range,
-            external_ip,
+            is,
             encoding.as_deref(),
             entropy_min,
             entropy_max,
@@ -553,17 +552,17 @@ fn main() -> Result<()> {
         )?,
         Some(cli::Command::UpdateRules { force, check, pin }) => {
             if let Some(commit) = pin {
-                traits_repo::pin(&commit).unwrap_or_else(|e| {
+                cleave::traits_repo::pin(&commit).unwrap_or_else(|e| {
                     eprintln!("Error: {e}");
                     std::process::exit(1);
                 });
             } else if check {
-                traits_repo::check_updates().unwrap_or_else(|e| {
+                cleave::traits_repo::check_updates().unwrap_or_else(|e| {
                     eprintln!("Error: {e}");
                     std::process::exit(1);
                 });
             } else {
-                traits_repo::update(force).unwrap_or_else(|e| {
+                cleave::traits_repo::update(force).unwrap_or_else(|e| {
                     eprintln!("Error: {e}");
                     std::process::exit(1);
                 });

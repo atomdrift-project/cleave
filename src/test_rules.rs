@@ -105,16 +105,12 @@ impl<'a> RuleDebugger<'a> {
     /// * `mapper` - The capability mapper with rule definitions
     /// * `report` - The analysis report for the target file
     /// * `binary_data` - Raw file contents
-    /// * `composites` - Composite rule definitions
-    /// * `traits` - Trait definitions
     /// * `platforms` - Platform filter from CLI (use vec![Platform::All] to show all)
     /// * `inline_yara_results` - Pre-scanned inline YARA results (matches production path)
     pub(crate) fn new(
         mapper: &'a CapabilityMapper,
         report: &'a AnalysisReport,
         binary_data: &'a [u8],
-        composites: &'a [CompositeTrait],
-        traits: &'a [TraitDefinition],
         platforms: Vec<Platform>,
         inline_yara_results: Option<&'a HashMap<String, Vec<Evidence>>>,
     ) -> Self {
@@ -127,8 +123,8 @@ impl<'a> RuleDebugger<'a> {
             binary_data,
             file_type,
             platforms,
-            composites,
-            traits,
+            composites: mapper.composite_rules(),
+            traits: mapper.trait_definitions(),
             section_map,
             inline_yara_results,
         }
@@ -2149,7 +2145,7 @@ impl<'a> RuleDebugger<'a> {
 
     // Helper to find composite rule by ID
     fn find_composite_rule(&self, id: &str) -> Option<&crate::composite_rules::CompositeTrait> {
-        self.mapper.composite_rules.iter().find(|r| r.id == id)
+        self.mapper.composite_rules().iter().find(|r| r.id == id)
     }
 }
 
@@ -2520,13 +2516,15 @@ fn evaluate_condition_simple(
             substr,
             regex,
             case_insensitive,
-            ..
+            is_check,
+            compiled_regex,
         } => eval_basename(
             exact.as_ref(),
             substr.as_ref(),
             regex.as_ref(),
             *case_insensitive,
-            None,
+            *is_check,
+            compiled_regex.as_ref(),
             ctx,
         ),
         _ => crate::composite_rules::context::ConditionResult::no_match(),
@@ -2695,18 +2693,7 @@ mod tests {
         let binary_data = b"<?php test ?>";
 
         let mapper = CapabilityMapper::new_without_validation();
-        let composites = &mapper.composite_rules;
-        let traits = mapper.trait_definitions();
-
-        let debugger = RuleDebugger::new(
-            &mapper,
-            &report,
-            binary_data,
-            composites,
-            traits,
-            vec![Platform::All],
-            None,
-        );
+        let debugger = RuleDebugger::new(&mapper, &report, binary_data, vec![Platform::All], None);
 
         // Test a composite rule that references traits by prefix
         // The rule should match if the findings contain matching prefixes
@@ -2732,18 +2719,7 @@ mod tests {
         let binary_data = b"<?php test ?>";
 
         let mapper = CapabilityMapper::new_without_validation();
-        let composites = &mapper.composite_rules;
-        let traits = mapper.trait_definitions();
-
-        let debugger = RuleDebugger::new(
-            &mapper,
-            &report,
-            binary_data,
-            composites,
-            traits,
-            vec![Platform::All],
-            None,
-        );
+        let debugger = RuleDebugger::new(&mapper, &report, binary_data, vec![Platform::All], None);
 
         // Test a rule that requires ELF file type (zstd-magic is for binaries)
         if let Some(result) = debugger.debug_rule("micro-behaviors/data/embedded/zstd-magic") {
@@ -2776,18 +2752,8 @@ mod tests {
         let binary_data = b"\x7fELF\x00";
 
         let mapper = CapabilityMapper::new_without_validation();
-        let composites = &mapper.composite_rules;
-        let traits = mapper.trait_definitions();
-
-        let debugger = RuleDebugger::new(
-            &mapper,
-            &report,
-            binary_data,
-            composites,
-            traits,
-            vec![Platform::Linux],
-            None,
-        );
+        let debugger =
+            RuleDebugger::new(&mapper, &report, binary_data, vec![Platform::Linux], None);
 
         // Test mirai detection which has size_min: 30000
         if let Some(result) = debugger.debug_rule("known/malware/botnet/mirai/detected") {
@@ -2817,18 +2783,7 @@ mod tests {
         let binary_data = b"test";
 
         let mapper = CapabilityMapper::new_without_validation();
-        let composites = &mapper.composite_rules;
-        let traits = mapper.trait_definitions();
-
-        let debugger = RuleDebugger::new(
-            &mapper,
-            &report,
-            binary_data,
-            composites,
-            traits,
-            vec![Platform::All],
-            None,
-        );
+        let debugger = RuleDebugger::new(&mapper, &report, binary_data, vec![Platform::All], None);
 
         // Directly test the prefix matching in debug_condition
         let condition = Condition::Trait {
@@ -2856,18 +2811,7 @@ mod tests {
         let binary_data = b"test";
 
         let mapper = CapabilityMapper::new_without_validation();
-        let composites = &mapper.composite_rules;
-        let traits = mapper.trait_definitions();
-
-        let debugger = RuleDebugger::new(
-            &mapper,
-            &report,
-            binary_data,
-            composites,
-            traits,
-            vec![Platform::All],
-            None,
-        );
+        let debugger = RuleDebugger::new(&mapper, &report, binary_data, vec![Platform::All], None);
 
         // Test a prefix that doesn't match any findings
         let condition = Condition::Trait {
@@ -2892,18 +2836,7 @@ mod tests {
         let binary_data = b"<?php test ?>";
 
         let mapper = CapabilityMapper::new_without_validation();
-        let composites = &mapper.composite_rules;
-        let traits = mapper.trait_definitions();
-
-        let debugger = RuleDebugger::new(
-            &mapper,
-            &report,
-            binary_data,
-            composites,
-            traits,
-            vec![Platform::All],
-            None,
-        );
+        let debugger = RuleDebugger::new(&mapper, &report, binary_data, vec![Platform::All], None);
 
         // Find and debug a composite rule
         if let Some(result) =
@@ -2945,18 +2878,7 @@ mod tests {
         let binary_data = b"test";
 
         let mapper = CapabilityMapper::new_without_validation();
-        let composites = &mapper.composite_rules;
-        let traits = mapper.trait_definitions();
-
-        let debugger = RuleDebugger::new(
-            &mapper,
-            &report,
-            binary_data,
-            composites,
-            traits,
-            vec![Platform::All],
-            None,
-        );
+        let debugger = RuleDebugger::new(&mapper, &report, binary_data, vec![Platform::All], None);
 
         // Test exact match - should find the finding directly
         let condition = Condition::Trait {
@@ -2985,18 +2907,7 @@ mod tests {
         let binary_data = b"test";
 
         let mapper = CapabilityMapper::new_without_validation();
-        let composites = &mapper.composite_rules;
-        let traits = mapper.trait_definitions();
-
-        let debugger = RuleDebugger::new(
-            &mapper,
-            &report,
-            binary_data,
-            composites,
-            traits,
-            vec![Platform::All],
-            None,
-        );
+        let debugger = RuleDebugger::new(&mapper, &report, binary_data, vec![Platform::All], None);
 
         // Test suffix match with short name
         let condition = Condition::Trait {
@@ -3039,18 +2950,7 @@ mod tests {
         let binary_data = b"\xCF\xFA\xED\xFE"; // MachO magic
 
         let mapper = CapabilityMapper::new_without_validation();
-        let composites = &mapper.composite_rules;
-        let traits = mapper.trait_definitions();
-
-        let debugger = RuleDebugger::new(
-            &mapper,
-            &report,
-            binary_data,
-            composites,
-            traits,
-            vec![Platform::MacOS],
-            None,
-        );
+        let debugger = RuleDebugger::new(&mapper, &report, binary_data, vec![Platform::MacOS], None);
 
         // Test the objc-app-hook composite if it exists
         if let Some(result) =
@@ -3099,18 +2999,7 @@ mod tests {
         let binary_data = b"test data with some content";
 
         let mapper = CapabilityMapper::new_without_validation();
-        let composites = &mapper.composite_rules;
-        let traits = mapper.trait_definitions();
-
-        let debugger = RuleDebugger::new(
-            &mapper,
-            &report,
-            binary_data,
-            composites,
-            traits,
-            vec![Platform::All],
-            None,
-        );
+        let debugger = RuleDebugger::new(&mapper, &report, binary_data, vec![Platform::All], None);
 
         // Test a trait that exists in definitions but not in findings
         let condition = Condition::Trait {
@@ -3138,18 +3027,7 @@ mod tests {
         let binary_data = b"test";
 
         let mapper = CapabilityMapper::new_without_validation();
-        let composites = &mapper.composite_rules;
-        let traits = mapper.trait_definitions();
-
-        let debugger = RuleDebugger::new(
-            &mapper,
-            &report,
-            binary_data,
-            composites,
-            traits,
-            vec![Platform::All],
-            None,
-        );
+        let debugger = RuleDebugger::new(&mapper, &report, binary_data, vec![Platform::All], None);
 
         // Test prefix match - should find both findings
         let condition = Condition::Trait {

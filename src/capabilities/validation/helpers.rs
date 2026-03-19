@@ -152,6 +152,7 @@ pub(crate) fn simple_rule_to_composite_rule(
             substr: None,
             regex: Some(rule.symbol),
             platforms: None,
+            is_check: None,
             compiled_regex: None,
         }]),
         any: None,

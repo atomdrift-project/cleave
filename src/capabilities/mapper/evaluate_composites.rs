@@ -303,6 +303,7 @@ impl super::CapabilityMapper {
                 ref substr,
                 ref regex,
                 case_insensitive,
+                is_check: _,
                 ref compiled_regex,
             } = trait_def.r#if
             else {

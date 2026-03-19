@@ -96,6 +96,7 @@ fn test_size_min_constraint_pass() {
         substr: None,
         regex: None,
         platforms: None,
+        is_check: None,
         compiled_regex: None,
     };
 
@@ -122,6 +123,7 @@ fn test_size_min_constraint_fail() {
         substr: None,
         regex: None,
         platforms: None,
+        is_check: None,
         compiled_regex: None,
     };
 
@@ -148,6 +150,7 @@ fn test_size_max_constraint_pass() {
         substr: None,
         regex: None,
         platforms: None,
+        is_check: None,
         compiled_regex: None,
     };
 
@@ -174,6 +177,7 @@ fn test_size_max_constraint_fail() {
         substr: None,
         regex: None,
         platforms: None,
+        is_check: None,
         compiled_regex: None,
     };
 
@@ -200,6 +204,7 @@ fn test_size_range_constraint() {
         substr: None,
         regex: None,
         platforms: None,
+        is_check: None,
         compiled_regex: None,
     };
 
@@ -229,6 +234,7 @@ fn test_count_min_constraint_pass() {
         substr: Some("func".to_string()),
         regex: None,
         platforms: None,
+        is_check: None,
         compiled_regex: None,
     };
 
@@ -265,6 +271,7 @@ fn test_count_min_constraint_fail() {
         substr: Some("func".to_string()),
         regex: None,
         platforms: None,
+        is_check: None,
         compiled_regex: None,
     };
 
@@ -296,6 +303,7 @@ fn test_count_max_constraint_pass() {
         substr: Some("func".to_string()),
         regex: None,
         platforms: None,
+        is_check: None,
         compiled_regex: None,
     };
 
@@ -327,6 +335,7 @@ fn test_count_max_constraint_fail() {
         substr: Some("func".to_string()),
         regex: None,
         platforms: None,
+        is_check: None,
         compiled_regex: None,
     };
 
@@ -365,6 +374,7 @@ fn test_per_kb_min_constraint_pass() {
         substr: Some("func".to_string()),
         regex: None,
         platforms: None,
+        is_check: None,
         compiled_regex: None,
     };
 
@@ -402,6 +412,7 @@ fn test_per_kb_min_constraint_fail() {
         substr: Some("func".to_string()),
         regex: None,
         platforms: None,
+        is_check: None,
         compiled_regex: None,
     };
 
@@ -437,6 +448,7 @@ fn test_per_kb_max_constraint_pass() {
         substr: Some("func".to_string()),
         regex: None,
         platforms: None,
+        is_check: None,
         compiled_regex: None,
     };
 
@@ -466,6 +478,7 @@ fn test_per_kb_max_constraint_fail() {
         substr: Some("func".to_string()),
         regex: None,
         platforms: None,
+        is_check: None,
         compiled_regex: None,
     };
 
@@ -500,6 +513,7 @@ fn test_platform_filter_match() {
         substr: None,
         regex: None,
         platforms: None,
+        is_check: None,
         compiled_regex: None,
     };
 
@@ -528,6 +542,7 @@ fn test_platform_filter_no_match() {
         substr: None,
         regex: None,
         platforms: None,
+        is_check: None,
         compiled_regex: None,
     };
 
@@ -559,6 +574,7 @@ fn test_platform_all_matches_everything() {
         substr: None,
         regex: None,
         platforms: None,
+        is_check: None,
         compiled_regex: None,
     };
 
@@ -589,6 +605,7 @@ fn test_arch_filter_match() {
         substr: None,
         regex: None,
         platforms: None,
+        is_check: None,
         compiled_regex: None,
     };
 
@@ -617,6 +634,7 @@ fn test_arch_filter_no_match() {
         substr: None,
         regex: None,
         platforms: None,
+        is_check: None,
         compiled_regex: None,
     };
 
@@ -647,6 +665,7 @@ fn test_arch_all_matches_any_file_arch() {
         substr: None,
         regex: None,
         platforms: None,
+        is_check: None,
         compiled_regex: None,
     };
 
@@ -678,6 +697,7 @@ fn test_arch_file_all_matches_any_trait_arch() {
         substr: None,
         regex: None,
         platforms: None,
+        is_check: None,
         compiled_regex: None,
     };
 
@@ -747,6 +767,7 @@ fn test_arch_multi_arch_file() {
         substr: None,
         regex: None,
         platforms: None,
+        is_check: None,
         compiled_regex: None,
     };
 
@@ -807,6 +828,7 @@ fn test_file_type_filter_match() {
         substr: None,
         regex: None,
         platforms: None,
+        is_check: None,
         compiled_regex: None,
     };
 
@@ -835,6 +857,7 @@ fn test_file_type_filter_no_match() {
         substr: None,
         regex: None,
         platforms: None,
+        is_check: None,
         compiled_regex: None,
     };
 
@@ -868,6 +891,7 @@ fn test_all_constraints_combined() {
         substr: Some("func".to_string()),
         regex: None,
         platforms: None,
+        is_check: None,
         compiled_regex: None,
     };
 
@@ -915,6 +939,7 @@ fn test_finding_contains_evidence() {
         substr: None,
         regex: None,
         platforms: None,
+        is_check: None,
         compiled_regex: None,
     };
 
@@ -946,6 +971,7 @@ fn test_finding_has_correct_criticality() {
         substr: None,
         regex: None,
         platforms: None,
+        is_check: None,
         compiled_regex: None,
     };
 

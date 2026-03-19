@@ -4,6 +4,7 @@ use super::debug::DebugCollector;
 use super::evaluators::kv::StructuredFormat;
 use super::section_map::SectionMap;
 use super::types::{Arch, FileType, Platform};
+use super::condition::StringValidator;
 use crate::types::{AnalysisReport, Evidence, Finding};
 use rustc_hash::{FxHashMap, FxHashSet, FxHasher};
 use serde_json::Value;
@@ -430,8 +431,8 @@ pub(crate) struct StringParams<'a> {
     pub case_insensitive: bool,
     /// Pre-compiled regex from the `regex` field
     pub compiled_regex: Option<&'a regex::Regex>,
-    /// When true, require matched string to contain a valid external IP address
-    pub external_ip: bool,
+    /// Optional high-fidelity validation check (for `is: ...`)
+    pub is_check: Option<StringValidator>,
     /// Section constraint: only match strings in this section (supports fuzzy names)
     pub section: Option<&'a String>,
     /// Absolute file offset: only match at this exact byte position (negative = from end)

@@ -63,7 +63,7 @@ mod python_aes_import_tests {
                 regex: Some(r"from\s+Crypto\.Cipher\s+import\s+AES".to_string()),
                 word: None,
                 case_insensitive: false,
-                external_ip: false,
+                is_check: None,
                 section: None,
                 offset: None,
                 offset_range: None,

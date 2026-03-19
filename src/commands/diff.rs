@@ -9,7 +9,6 @@
 //! - **Terminal**: Human-readable diff summary optimized for terminal display
 
 use crate::cli;
-use crate::diff;
 use anyhow::Result;
 
 /// Run the diff analysis command.
@@ -27,22 +26,20 @@ use anyhow::Result;
 ///
 /// A string containing the formatted diff analysis results.
 pub(crate) fn run(old: &str, new: &str, format: &cli::OutputFormat) -> Result<String> {
-    let diff_analyzer = diff::DiffAnalyzer::new(old, new);
-
     match format {
         cli::OutputFormat::Json => {
-            let report = diff_analyzer.analyze_full()?;
+            let report = cleave::diff_files_full(old, new)?;
             Ok(serde_json::to_string_pretty(&report)?)
         }
         cli::OutputFormat::Jsonl => {
             // Use full diff for JSONL - comprehensive ML-ready output
-            let report = diff_analyzer.analyze_full()?;
+            let report = cleave::diff_files_full(old, new)?;
             Ok(serde_json::to_string_pretty(&report)?)
         }
         cli::OutputFormat::Terminal | cli::OutputFormat::Tiny => {
             // Use simple diff for terminal display
-            let report = diff_analyzer.analyze()?;
-            Ok(diff::format_diff_terminal(&report))
+            let report = cleave::diff_files(old, new)?;
+            Ok(cleave::format_diff_terminal(&report))
         }
     }
 }

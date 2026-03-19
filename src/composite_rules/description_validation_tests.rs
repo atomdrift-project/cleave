@@ -27,7 +27,7 @@ mod description_validation_tests {
                 regex: None,
                 word: None,
                 case_insensitive: false,
-                external_ip: false,
+                is_check: None,
                 section: None,
                 offset: None,
                 offset_range: None,

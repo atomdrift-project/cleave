@@ -9,10 +9,20 @@
 use super::{
     resolve_effective_range, resolve_effective_range_opt, symbol_matches, ContentLocationParams,
 };
-use crate::composite_rules::condition::NotException;
+use crate::composite_rules::condition::{NotException, StringValidator};
 use crate::composite_rules::context::{ConditionResult, EvaluationContext, StringParams};
 use crate::composite_rules::types::Platform;
 use crate::ip_validator::contains_external_ip;
+use cleave::bitcoin_validator::contains_bitcoin_address;
+
+/// Helper to apply high-fidelity validation checks to a string match.
+pub(crate) fn validate_match(s: &str, validator: Option<StringValidator>) -> bool {
+    match validator {
+        None => true,
+        Some(StringValidator::ExternalIp) => contains_external_ip(s),
+        Some(StringValidator::BitcoinAddr) => contains_bitcoin_address(s),
+    }
+}
 use crate::types::binary::normalize_symbol;
 use crate::types::{Evidence, MAX_EVIDENCE_PER_TRAIT};
 
@@ -39,6 +49,7 @@ pub(crate) fn eval_symbol<'a>(
     substr: Option<&String>,
     pattern: Option<&String>,
     platforms: Option<&Vec<Platform>>,
+    is_check: Option<StringValidator>,
     compiled_regex: Option<&regex::Regex>,
     not: Option<&Vec<NotException>>,
     ctx: &EvaluationContext<'a>,
@@ -74,12 +85,13 @@ pub(crate) fn eval_symbol<'a>(
             pattern,
             compiled_regex,
         ) {
-            // Check if this symbol should be excluded by not: filters
+            // Check if this symbol should be excluded by not: or is: filters
             let excluded_by_not = not
                 .map(|exceptions| exceptions.iter().any(|exc| exc.matches(&import.symbol)))
                 .unwrap_or(false);
+            let excluded_by_is = !validate_match(&import.symbol, is_check);
 
-            if !excluded_by_not {
+            if !excluded_by_not && !excluded_by_is {
                 match_count += 1;
                 if evidence.len() < MAX_EVIDENCE_PER_TRAIT {
                     evidence.push(Evidence {
@@ -103,12 +115,13 @@ pub(crate) fn eval_symbol<'a>(
             pattern,
             compiled_regex,
         ) {
-            // Check if this symbol should be excluded by not: filters
+            // Check if this symbol should be excluded by not: or is: filters
             let excluded_by_not = not
                 .map(|exceptions| exceptions.iter().any(|exc| exc.matches(&export.symbol)))
                 .unwrap_or(false);
+            let excluded_by_is = !validate_match(&export.symbol, is_check);
 
-            if !excluded_by_not {
+            if !excluded_by_not && !excluded_by_is {
                 match_count += 1;
                 if evidence.len() < MAX_EVIDENCE_PER_TRAIT {
                     evidence.push(Evidence {
@@ -300,10 +313,9 @@ pub(crate) fn eval_string<'a, 'b>(
                                 exceptions.iter().any(|exc| exc.matches(original_value))
                             })
                             .unwrap_or(false);
-                        let excluded_by_ip =
-                            params.external_ip && !contains_external_ip(original_value);
+                        let excluded_by_is = !validate_match(original_value, params.is_check);
 
-                        if !excluded_by_not && !excluded_by_ip {
+                        if !excluded_by_not && !excluded_by_is {
                             let method = if source == "string_extractor" {
                                 "string"
                             } else if ctx.report.imports.iter().any(|i| i.source == *source) {
@@ -331,9 +343,9 @@ pub(crate) fn eval_string<'a, 'b>(
                     let excluded_by_not = trait_not
                         .map(|exceptions| exceptions.iter().any(|exc| exc.matches(exact_str)))
                         .unwrap_or(false);
-                    let excluded_by_ip = params.external_ip && !contains_external_ip(exact_str);
+                    let excluded_by_is = !validate_match(exact_str, params.is_check);
 
-                    if !excluded_by_not && !excluded_by_ip {
+                    if !excluded_by_not && !excluded_by_is {
                         let method = if source == "string_extractor" {
                             "string"
                         } else if ctx.report.imports.iter().any(|i| i.source == *source) {
@@ -437,10 +449,10 @@ pub(crate) fn eval_string<'a, 'b>(
             let excluded_by_not = trait_not
                 .map(|exceptions| exceptions.iter().any(|exc| exc.matches(&match_value)))
                 .unwrap_or(false);
-            // When external_ip is set, require match to contain a valid external IP
-            let excluded_by_ip = params.external_ip && !contains_external_ip(&match_value);
+            // When is: validator is set, require match to pass validation
+            let excluded_by_is = !validate_match(&match_value, params.is_check);
 
-            if !excluded_by_not && !excluded_by_ip {
+            if !excluded_by_not && !excluded_by_is {
                 *match_count += 1;
                 if evidence.len() < MAX_EVIDENCE_PER_TRAIT {
                     evidence.push(Evidence {
@@ -576,7 +588,7 @@ pub(crate) fn eval_raw<'a>(
     _regex: Option<&String>,
     _word: Option<&String>,
     case_insensitive: bool,
-    external_ip: bool,
+    is_check: Option<StringValidator>,
     compiled_regex: Option<&regex::Regex>,
     not: Option<&Vec<NotException>>,
     location: &ContentLocationParams,
@@ -681,10 +693,10 @@ pub(crate) fn eval_raw<'a>(
                     }
                     let match_bytes = mat.as_bytes();
 
-                    // For external_ip or not filters, convert only the match to string
-                    if external_ip || not.is_some() {
+                    // For validators or not filters, convert only the match to string
+                    if is_check.is_some() || not.is_some() {
                         let match_str = String::from_utf8_lossy(match_bytes);
-                        if external_ip && !contains_external_ip(&match_str) {
+                        if !validate_match(&match_str, is_check) {
                             continue;
                         }
                         if let Some(not_filters) = not {
@@ -738,8 +750,8 @@ pub(crate) fn eval_raw<'a>(
                     break;
                 }
                 let match_str = mat.as_str();
-                // Skip matches without external IP when external_ip is required
-                if external_ip && !contains_external_ip(match_str) {
+                // Skip matches that don't pass validation
+                if !validate_match(match_str, is_check) {
                     continue;
                 }
                 // Skip matches that trigger 'not' filters
@@ -777,17 +789,14 @@ pub(crate) fn eval_raw<'a>(
                 search_data == exact_str.as_bytes()
             };
 
-            // When external_ip is set, only convert to string for IP check if needed
-            let ip_ok = !external_ip || {
-                let content = String::from_utf8_lossy(search_data);
-                contains_external_ip(&content)
-            };
+            // When is: validator is set, only convert to string for validation if needed
+            let is_ok = validate_match(&String::from_utf8_lossy(search_data), is_check);
 
             let excluded_by_not = not
                 .map(|exceptions| exceptions.iter().any(|exc| exc.matches(exact_str)))
                 .unwrap_or(false);
 
-            if matched && ip_ok && !excluded_by_not && evidence.len() < MAX_EVIDENCE_PER_TRAIT {
+            if matched && is_ok && !excluded_by_not && evidence.len() < MAX_EVIDENCE_PER_TRAIT {
                 match_count = 1;
                 evidence.push(Evidence {
                     method: "raw".to_string(),
@@ -809,12 +818,12 @@ pub(crate) fn eval_raw<'a>(
                 content.as_ref() == exact_str
             };
 
-            let ip_ok = !external_ip || contains_external_ip(&content);
+            let is_ok = validate_match(&content, is_check);
             let excluded_by_not = not
                 .map(|exceptions| exceptions.iter().any(|exc| exc.matches(exact_str)))
                 .unwrap_or(false);
 
-            if matched && ip_ok && !excluded_by_not && evidence.len() < MAX_EVIDENCE_PER_TRAIT {
+            if matched && is_ok && !excluded_by_not && evidence.len() < MAX_EVIDENCE_PER_TRAIT {
                 match_count = 1;
                 evidence.push(Evidence {
                     method: "raw".to_string(),
@@ -830,8 +839,8 @@ pub(crate) fn eval_raw<'a>(
         // Substring match - OPTIMIZED: use byte-level search for ASCII patterns
         if can_use_byte_matching(substr_str) {
             // Fast path: Byte-level substring search (avoids UTF-8 conversion)
-            if external_ip {
-                // Need to check each match context for external IP
+            if is_check.is_some() {
+                // Need to check each match context for validator
                 let mut first_match_offset = None;
                 if case_insensitive {
                     let pattern_lower = substr_str.to_ascii_lowercase();
@@ -843,12 +852,12 @@ pub(crate) fn eval_raw<'a>(
                     let mut pos = 0;
                     while let Some(offset) = finder.find(&search_lower[pos..]) {
                         let abs_pos = pos + offset;
-                        // Convert only context window for IP check (not entire file!)
+                        // Convert only context window for validation check (not entire file!)
                         let ctx_start = abs_pos.saturating_sub(50);
                         let ctx_end = (abs_pos + needle.len() + 50).min(search_data.len());
                         let context = String::from_utf8_lossy(&search_data[ctx_start..ctx_end]);
 
-                        if contains_external_ip(&context) {
+                        if validate_match(&context, is_check) {
                             let excluded = not
                                 .map(|excs| excs.iter().any(|e| e.matches(&context)))
                                 .unwrap_or(false);
@@ -872,7 +881,7 @@ pub(crate) fn eval_raw<'a>(
                         let ctx_end = (abs_pos + needle.len() + 50).min(search_data.len());
                         let context = String::from_utf8_lossy(&search_data[ctx_start..ctx_end]);
 
-                        if contains_external_ip(&context) {
+                        if validate_match(&context, is_check) {
                             let excluded = not
                                 .map(|excs| excs.iter().any(|e| e.matches(&context)))
                                 .unwrap_or(false);
@@ -986,8 +995,8 @@ pub(crate) fn eval_raw<'a>(
             let content =
                 super::get_utf8_cached(ctx.binary_data, (search_start, search_end), ctx.file_id());
 
-            if external_ip {
-                // For external_ip validation, we need to find actual match positions
+            if is_check.is_some() {
+                // For validator validation, we need to find actual match positions
                 let search_content = if case_insensitive {
                     content.to_lowercase()
                 } else {
@@ -1002,11 +1011,11 @@ pub(crate) fn eval_raw<'a>(
                 let mut start = 0;
                 while let Some(pos) = search_content[start..].find(&search_pattern) {
                     let abs_pos = start + pos;
-                    // Get some context around the match to check for IP
+                    // Get some context around the match to check for validator
                     let context_start = abs_pos.saturating_sub(50);
                     let context_end = (abs_pos + search_pattern.len() + 50).min(content.len());
                     let context = &content[context_start..context_end];
-                    if contains_external_ip(context) {
+                    if validate_match(context, is_check) {
                         let excluded_by_not = not
                             .map(|exceptions| exceptions.iter().any(|exc| exc.matches(context)))
                             .unwrap_or(false);
@@ -1122,8 +1131,8 @@ pub(crate) fn eval_raw<'a>(
 
     // count/density constraints are now scored at trait level
 
-    if external_ip {
-        precision += 0.5; // Higher precision when requiring external IP
+    if is_check.is_some() {
+        precision += 0.5; // Higher precision when requiring high-fidelity validator
     }
 
     // Location constraints add precision
@@ -1173,7 +1182,7 @@ pub(crate) fn eval_encoded<'a>(
     case_insensitive: bool,
     compiled_regex: Option<&regex::Regex>,
     location: &ContentLocationParams,
-    external_ip: bool,
+    is_check: Option<StringValidator>,
     not: Option<&Vec<crate::composite_rules::condition::NotException>>,
     ctx: &EvaluationContext<'a>,
 ) -> ConditionResult {
@@ -1271,10 +1280,10 @@ pub(crate) fn eval_encoded<'a>(
             let excluded_by_not = not
                 .map(|exceptions| exceptions.iter().any(|exc| exc.matches(&string_info.value)))
                 .unwrap_or(false);
-            // Apply external_ip: filter
-            let excluded_by_ip = external_ip && !contains_external_ip(&string_info.value);
+            // Apply validator: filter
+            let excluded_by_is = !validate_match(&string_info.value, is_check);
 
-            if !excluded_by_not && !excluded_by_ip {
+            if !excluded_by_not && !excluded_by_is {
                 match_count += 1;
                 if evidence.len() < MAX_EVIDENCE_PER_TRAIT {
                     let value_preview = if string_info.value.len() > 100 {

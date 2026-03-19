@@ -39,7 +39,7 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 use std::process::{Command, Stdio};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::OnceLock;
 use std::time::Duration;
 use tracing::{debug, trace, warn};
@@ -48,8 +48,11 @@ use tracing::{debug, trace, warn};
 /// This prevents hung processes from accumulating during archive analysis.
 const RIZIN_DEFAULT_TIMEOUT_SECS: u64 = 120;
 
-/// Global flag to disable radare2 analysis
-static RADARE2_DISABLED: AtomicBool = AtomicBool::new(false);
+/// Global disable counter for radare2 analysis.
+///
+/// A positive value means radare2 is disabled. This supports both permanent
+/// process-wide disables and scoped guards used by library calls.
+static RADARE2_DISABLED: AtomicUsize = AtomicUsize::new(0);
 
 /// Cached result of radare2 availability check (avoids subprocess per file)
 static RADARE2_AVAILABLE: OnceLock<bool> = OnceLock::new();
@@ -61,13 +64,31 @@ static RIZIN_FAILURES: AtomicU64 = AtomicU64::new(0);
 static RIZIN_SUCCESSES: AtomicU64 = AtomicU64::new(0);
 
 /// Disable radare2 analysis globally
+#[allow(dead_code)] // Used by the CLI binary target for process-wide disables
 pub(crate) fn disable_radare2() {
-    RADARE2_DISABLED.store(true, Ordering::SeqCst);
+    RADARE2_DISABLED.fetch_add(1, Ordering::SeqCst);
+}
+
+/// Guard that disables radare2 for the lifetime of the value.
+#[allow(dead_code)] // Used by the library target; the binary recompiles modules separately
+pub(crate) struct ScopedRadare2Disable;
+
+impl Drop for ScopedRadare2Disable {
+    fn drop(&mut self) {
+        RADARE2_DISABLED.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
+/// Disable radare2 for the lifetime of the returned guard.
+#[allow(dead_code)] // Used by the library target; the binary recompiles modules separately
+pub(crate) fn scoped_disable_radare2() -> ScopedRadare2Disable {
+    RADARE2_DISABLED.fetch_add(1, Ordering::SeqCst);
+    ScopedRadare2Disable
 }
 
 /// Check if radare2 is disabled
 pub(crate) fn is_disabled() -> bool {
-    RADARE2_DISABLED.load(Ordering::SeqCst)
+    RADARE2_DISABLED.load(Ordering::SeqCst) > 0
 }
 
 /// Get rizin execution statistics for debugging.
@@ -808,5 +829,20 @@ mod tests {
             metrics.code_size,
             metrics.file_size
         );
+    }
+
+    #[test]
+    fn test_scoped_disable_restores_previous_state() {
+        let was_disabled = is_disabled();
+        let before = RADARE2_DISABLED.load(Ordering::SeqCst);
+
+        {
+            let _guard = scoped_disable_radare2();
+            assert!(is_disabled());
+            assert_eq!(RADARE2_DISABLED.load(Ordering::SeqCst), before + 1);
+        }
+
+        assert_eq!(RADARE2_DISABLED.load(Ordering::SeqCst), before);
+        assert_eq!(is_disabled(), was_disabled);
     }
 }

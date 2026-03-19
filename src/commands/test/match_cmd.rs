@@ -4,8 +4,11 @@
 //! search patterns, count constraints, and location filters with detailed diagnostics.
 
 use crate::analyzers::{detect_file_type, macho::MachOAnalyzer, FileType};
+use crate::commands::test::build_test_capability_mapper;
 use crate::commands::shared::{cli_file_type_to_internal, create_analysis_report};
-use crate::{cli, composite_rules, ip_validator, test_rules, types};
+use crate::composite_rules::condition::StringValidator;
+use crate::composite_rules::evaluators::symbol_string::validate_match;
+use crate::{cli, composite_rules, test_rules, types};
 use anyhow::Result;
 use colored::Colorize;
 use std::fs;
@@ -74,7 +77,7 @@ pub(crate) fn run(
     offset_range: Option<(i64, Option<i64>)>,
     section_offset: Option<i64>,
     section_offset_range: Option<(i64, Option<i64>)>,
-    external_ip: bool,
+    is_check: Option<StringValidator>,
     encoding: Option<&str>,
     entropy_min: Option<f64>,
     entropy_max: Option<f64>,
@@ -146,17 +149,11 @@ pub(crate) fn run(
 
     // Load capability mapper with full validation (test-match is a developer command)
     // Allow skipping for faster tests with CLEAVE_SKIP_TRAITS
-    let capability_mapper = if std::env::var("CLEAVE_SKIP_TRAITS").is_ok() {
-        tracing::info!("Traits skipped (CLEAVE_SKIP_TRAITS set)");
-        crate::capabilities::CapabilityMapper::empty()
-    } else {
-        crate::capabilities::CapabilityMapper::new_with_precision_thresholds(
-            min_hostile_precision,
-            min_suspicious_precision,
-            true, // Always enable full validation for test-match
-        )
-        .with_platforms(platforms.clone())
-    };
+    let capability_mapper = build_test_capability_mapper(
+        platforms.clone(),
+        min_hostile_precision,
+        min_suspicious_precision,
+    );
 
     // Read file data
     let full_data = fs::read(path)?;
@@ -198,8 +195,6 @@ pub(crate) fn run(
         &capability_mapper,
         &report,
         eval_data,
-        &capability_mapper.composite_rules,
-        capability_mapper.trait_definitions(),
         platforms.clone(),
         None, // test-match evaluates conditions directly, not via full rule path
     );
@@ -365,11 +360,11 @@ pub(crate) fn run(
             let matched_strings =
                 find_matching_strings(&strings, &exact, &contains, &regex, &word, case_insensitive);
 
-            // Filter by external IP if required
-            let matched_strings: Vec<&str> = if external_ip {
+            // Filter by validator if required
+            let matched_strings: Vec<&str> = if is_check.is_some() {
                 matched_strings
                     .into_iter()
-                    .filter(|s| ip_validator::contains_external_ip(s))
+                    .filter(|s| validate_match(s, is_check))
                     .collect()
             } else {
                 matched_strings
@@ -408,8 +403,8 @@ pub(crate) fn run(
             if let Some(max) = per_kb_max {
                 out.push_str(&format!(", per_kb_max: {:.2}", max));
             }
-            if external_ip {
-                out.push_str(", external_ip: true");
+            if let Some(validator) = is_check {
+                out.push_str(&format!(", is: {:?}", validator));
             }
             out.push('\n');
             out.push_str(&format!("Pattern: {}\n", pattern));
@@ -586,31 +581,26 @@ pub(crate) fn run(
             let match_count = match method {
                 // Exact: entire content slice must equal the pattern
                 cli::MatchMethod::Exact => {
-                    let matched = &*content == pattern;
-                    if matched && external_ip {
-                        if ip_validator::contains_external_ip(pattern) {
-                            1
-                        } else {
-                            0
-                        }
-                    } else if matched {
+                    let matched =
+                        &*content == pattern && validate_match(pattern, is_check);
+                    if matched {
                         1
                     } else {
                         0
                     }
                 }
                 cli::MatchMethod::Contains => {
-                    if external_ip {
-                        // For external_ip, we need to check context around each match
+                    if is_check.is_some() {
+                        // For validator, we need to check context around each match
                         let mut count = 0;
                         let mut start = 0;
                         while let Some(pos) = content[start..].find(pattern) {
                             let abs_pos = start + pos;
-                            // Get context around match to check for IP
+                            // Get context around match to check for validator
                             let context_start = abs_pos.saturating_sub(50);
                             let context_end = (abs_pos + pattern.len() + 50).min(content.len());
                             let context = &content[context_start..context_end];
-                            if ip_validator::contains_external_ip(context) {
+                            if validate_match(context, is_check) {
                                 count += 1;
                             }
                             start = abs_pos + 1;
@@ -622,9 +612,9 @@ pub(crate) fn run(
                 }
                 cli::MatchMethod::Regex => regex::Regex::new(pattern)
                     .map(|re| {
-                        if external_ip {
+                        if is_check.is_some() {
                             re.find_iter(&content)
-                                .filter(|m| ip_validator::contains_external_ip(m.as_str()))
+                                .filter(|m| validate_match(m.as_str(), is_check))
                                 .count()
                         } else {
                             re.find_iter(&content).count()
@@ -635,13 +625,13 @@ pub(crate) fn run(
                     let word_pattern = format!(r"\b{}\b", regex::escape(pattern));
                     regex::Regex::new(&word_pattern)
                         .map(|re| {
-                            if external_ip {
-                                re.find_iter(&content)
-                                    .filter(|m| ip_validator::contains_external_ip(m.as_str()))
-                                    .count()
-                            } else {
-                                re.find_iter(&content).count()
-                            }
+                        if is_check.is_some() {
+                            re.find_iter(&content)
+                                .filter(|m| validate_match(m.as_str(), is_check))
+                                .count()
+                        } else {
+                            re.find_iter(&content).count()
+                        }
                         })
                         .unwrap_or(0)
                 }
@@ -675,8 +665,8 @@ pub(crate) fn run(
             if let Some(max) = per_kb_max {
                 out.push_str(&format!(", per_kb_max: {:.2}", max));
             }
-            if external_ip {
-                out.push_str(", external_ip: true");
+            if let Some(validator) = is_check {
+                out.push_str(&format!(", is: {:?}", validator));
             }
             out.push('\n');
             out.push_str(&format!("Pattern: {}\n", pattern));
@@ -1112,11 +1102,11 @@ pub(crate) fn run(
                 case_insensitive,
             );
 
-            // Filter by external IP if required
-            let matched_strings: Vec<&str> = if external_ip {
+            // Filter by validator if required
+            let matched_strings: Vec<&str> = if is_check.is_some() {
                 matched_strings
                     .into_iter()
-                    .filter(|s| ip_validator::contains_external_ip(s))
+                    .filter(|s| validate_match(s, is_check))
                     .collect()
             } else {
                 matched_strings
@@ -1152,8 +1142,8 @@ pub(crate) fn run(
             if let Some(max) = per_kb_max {
                 out.push_str(&format!(", per_kb_max: {:.2}", max));
             }
-            if external_ip {
-                out.push_str(", external_ip: true");
+            if let Some(validator) = is_check {
+                out.push_str(&format!(", is: {:?}", validator));
             }
             out.push('\n');
             out.push_str(&format!("Pattern: {}\n", pattern));
@@ -1776,8 +1766,6 @@ pub(crate) fn run(
                         &capability_mapper,
                         &alt_report,
                         &binary_data,
-                        &capability_mapper.composite_rules,
-                        capability_mapper.trait_definitions(),
                         vec![composite_rules::Platform::All], // Check all platforms for alt file types
                         None, // test-match evaluates conditions directly
                     );

@@ -209,6 +209,7 @@ pub(crate) fn apply_trait_defaults(
                 substr: None,
                 regex: Some(".".to_string()),
                 case_insensitive: false,
+                is_check: None,
                 compiled_regex: None,
             });
 
@@ -1923,6 +1924,7 @@ mod tests {
             substr: None,
             regex: Some(pattern),
             case_insensitive: false,
+            is_check: None,
             compiled_regex: None,
         };
         let mut warnings = Vec::new();
@@ -1938,6 +1940,7 @@ mod tests {
             substr: None,
             regex: Some(pattern),
             case_insensitive: false,
+            is_check: None,
             compiled_regex: None,
         };
         let mut warnings = Vec::new();
@@ -1954,6 +1957,7 @@ mod tests {
             substr: Some("some substring".to_string()),
             regex: None,
             case_insensitive: false,
+            is_check: None,
             compiled_regex: None,
         };
         let mut warnings = Vec::new();
@@ -1978,6 +1982,7 @@ mod tests {
             substr: None,
             regex: Some("a|b|c|d|e".to_string()),
             case_insensitive: false,
+            is_check: None,
             compiled_regex: None,
         };
         let mut warnings = Vec::new();
@@ -1992,6 +1997,7 @@ mod tests {
             substr: None,
             regex: Some(r"a\|b|[|]|c|d".to_string()),
             case_insensitive: false,
+            is_check: None,
             compiled_regex: None,
         };
         let mut warnings = Vec::new();
@@ -2006,6 +2012,7 @@ mod tests {
             substr: None,
             regex: Some("word1|word2|word3".to_string()),
             case_insensitive: false,
+            is_check: None,
             compiled_regex: None,
         };
         let mut warnings = Vec::new();
@@ -2022,6 +2029,7 @@ mod tests {
             substr: None,
             regex: Some(r"word1|word-2|\d+".to_string()),
             case_insensitive: false,
+            is_check: None,
             compiled_regex: None,
         };
         let mut warnings = Vec::new();

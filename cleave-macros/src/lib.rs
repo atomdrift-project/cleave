@@ -4,6 +4,7 @@
 //! based on struct field definitions.
 
 use proc_macro::TokenStream;
+use proc_macro_crate::{crate_name, FoundCrate};
 use quote::quote;
 use syn::{parse_macro_input, Data, DeriveInput, Fields};
 
@@ -37,6 +38,14 @@ pub fn derive_valid_field_paths(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
 
     let name = &input.ident;
+    let crate_path = match crate_name("cleave") {
+        Ok(FoundCrate::Itself) => quote!(crate),
+        Ok(FoundCrate::Name(name)) => {
+            let ident = syn::Ident::new(&name, proc_macro2::Span::call_site());
+            quote!(::#ident)
+        }
+        Err(_) => quote!(::cleave),
+    };
 
     // Extract field names from the struct
     let field_names = match &input.data {
@@ -78,7 +87,7 @@ pub fn derive_valid_field_paths(input: TokenStream) -> TokenStream {
 
     // Generate the implementation
     let expanded = quote! {
-        impl crate::types::field_paths::ValidFieldPaths for #name {
+        impl #crate_path::types::field_paths::ValidFieldPaths for #name {
             fn valid_field_paths() -> Vec<&'static str> {
                 vec![#(#field_names),*]
             }

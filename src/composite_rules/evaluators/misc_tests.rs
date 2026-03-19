@@ -4,12 +4,23 @@
 //! Tests for miscellaneous condition evaluators.
 
 use super::*;
-use crate::composite_rules::context::EvaluationContext;
+use crate::composite_rules::context::{ConditionResult, EvaluationContext};
 use crate::composite_rules::types::{Arch, FileType, Platform};
 use crate::types::{
     AnalysisReport, Criticality, Evidence, Finding, FindingKind, StructuralFeature, TargetInfo,
 };
 use std::sync::OnceLock;
+
+fn eval_basename<'a>(
+    exact: Option<&String>,
+    substr: Option<&String>,
+    regex: Option<&String>,
+    case_insensitive: bool,
+    is_check: Option<crate::composite_rules::condition::StringValidator>,
+    ctx: &EvaluationContext<'a>,
+) -> ConditionResult {
+    super::eval_basename(exact, substr, regex, case_insensitive, is_check, None, ctx)
+}
 
 fn create_test_report(path: &str) -> AnalysisReport {
     let target = TargetInfo {

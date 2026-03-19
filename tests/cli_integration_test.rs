@@ -7,6 +7,13 @@ use std::collections::HashSet;
 use std::fs;
 use tempfile::TempDir;
 
+fn isolated_cleave_cmd() -> assert_cmd::Command {
+    let mut cmd = assert_cmd::cargo_bin_cmd!("cleave");
+    cmd.env("cleave_SKIP_YARA", "1");
+    cmd.env("cleave_SKIP_TRAITS", "1");
+    cmd
+}
+
 /// Test that the binary runs and shows help
 #[test]
 
@@ -33,8 +40,7 @@ fn test_version_command() {
 #[test]
 
 fn test_analyze_nonexistent_file() {
-    assert_cmd::cargo_bin_cmd!("cleave")
-        .env("cleave_SKIP_YARA", "1") // Skip YARA - testing CLI functionality
+    isolated_cleave_cmd()
         .args(["analyze", "/nonexistent/file.bin"])
         .assert()
         .failure()
@@ -50,8 +56,7 @@ fn test_analyze_shell_script() {
 
     fs::write(&script_path, "#!/bin/bash\necho 'hello'\n").unwrap();
 
-    assert_cmd::cargo_bin_cmd!("cleave")
-        .env("cleave_SKIP_YARA", "1") // Skip YARA - testing CLI functionality
+    isolated_cleave_cmd()
         .args(["analyze", script_path.to_str().unwrap()])
         .assert()
         .success()
@@ -68,8 +73,7 @@ fn test_analyze_json_output() {
     fs::write(&script_path, "#!/bin/bash\necho 'hello'\n").unwrap();
 
     // JSON Lines format outputs: {"type":"file",...} followed by {"type":"summary",...}
-    assert_cmd::cargo_bin_cmd!("cleave")
-        .env("cleave_SKIP_YARA", "1") // Skip YARA - testing CLI functionality
+    isolated_cleave_cmd()
         .args(["--json", "analyze", script_path.to_str().unwrap()])
         .assert()
         .success()
@@ -85,8 +89,7 @@ fn test_analyze_format_json_output() {
 
     fs::write(&script_path, "#!/bin/bash\necho 'hello'\n").unwrap();
 
-    let output = assert_cmd::cargo_bin_cmd!("cleave")
-        .env("cleave_SKIP_YARA", "1")
+    let output = isolated_cleave_cmd()
         .args(["--format", "json", "analyze", script_path.to_str().unwrap()])
         .output()
         .unwrap();
@@ -108,8 +111,7 @@ fn test_analyze_output_to_file() {
 
     fs::write(&script_path, "#!/bin/bash\necho 'hello'\n").unwrap();
 
-    assert_cmd::cargo_bin_cmd!("cleave")
-        .env("cleave_SKIP_YARA", "1") // Skip YARA - testing CLI functionality
+    isolated_cleave_cmd()
         .args([
             "--json",
             "-o",
@@ -136,8 +138,7 @@ fn test_analyze_output_to_file() {
 fn test_analyze_empty_directory() {
     let temp_dir = TempDir::new().unwrap();
 
-    assert_cmd::cargo_bin_cmd!("cleave")
-        .env("cleave_SKIP_YARA", "1") // Skip YARA - testing CLI functionality
+    isolated_cleave_cmd()
         .args(["analyze", temp_dir.path().to_str().unwrap()])
         .assert()
         .success();
@@ -154,8 +155,7 @@ fn test_analyze_multiple_files() {
     fs::write(&script1, "#!/bin/bash\necho 'test1'\n").unwrap();
     fs::write(&script2, "#!/bin/bash\necho 'test2'\n").unwrap();
 
-    assert_cmd::cargo_bin_cmd!("cleave")
-        .env("cleave_SKIP_YARA", "1") // Skip YARA - testing CLI functionality
+    isolated_cleave_cmd()
         .args(["analyze", temp_dir.path().to_str().unwrap()])
         .assert()
         .success()
@@ -186,8 +186,7 @@ fn test_diff_identical_files() {
     fs::write(&file1, content).unwrap();
     fs::write(&file2, content).unwrap();
 
-    assert_cmd::cargo_bin_cmd!("cleave")
-        .env("cleave_SKIP_YARA", "1") // Skip YARA - testing CLI functionality
+    isolated_cleave_cmd()
         .args(["diff", file1.to_str().unwrap(), file2.to_str().unwrap()])
         .assert()
         .success()
@@ -205,8 +204,7 @@ fn test_diff_different_files() {
     fs::write(&file1, "#!/bin/bash\necho 'old'\n").unwrap();
     fs::write(&file2, "#!/bin/bash\neval 'malicious'\n").unwrap();
 
-    assert_cmd::cargo_bin_cmd!("cleave")
-        .env("cleave_SKIP_YARA", "1") // Skip YARA - testing CLI functionality
+    isolated_cleave_cmd()
         .args(["diff", file1.to_str().unwrap(), file2.to_str().unwrap()])
         .assert()
         .success();
@@ -245,8 +243,7 @@ fn test_verbose_flag() {
     let script = temp_dir.path().join("test.sh");
     fs::write(&script, "#!/bin/bash\n").unwrap();
 
-    assert_cmd::cargo_bin_cmd!("cleave")
-        .env("cleave_SKIP_YARA", "1") // Skip YARA - testing CLI functionality
+    isolated_cleave_cmd()
         .args(["-v", "analyze", script.to_str().unwrap()])
         .assert()
         .success();
@@ -261,8 +258,7 @@ fn test_analyze_python_file() {
 
     fs::write(&py_file, "print('hello')\n").unwrap();
 
-    assert_cmd::cargo_bin_cmd!("cleave")
-        .env("cleave_SKIP_YARA", "1") // Skip YARA - testing CLI functionality
+    isolated_cleave_cmd()
         .args(["analyze", py_file.to_str().unwrap()])
         .assert()
         .success()
@@ -278,8 +274,7 @@ fn test_analyze_javascript_file() {
 
     fs::write(&js_file, "console.log('hello');\n").unwrap();
 
-    assert_cmd::cargo_bin_cmd!("cleave")
-        .env("cleave_SKIP_YARA", "1") // Skip YARA - testing CLI functionality
+    isolated_cleave_cmd()
         .args(["analyze", js_file.to_str().unwrap()])
         .assert()
         .success()
@@ -294,8 +289,7 @@ fn test_analyze_directory_json_output() {
     let script = temp_dir.path().join("test.sh");
     fs::write(&script, "#!/bin/bash\n").unwrap();
 
-    assert_cmd::cargo_bin_cmd!("cleave")
-        .env("cleave_SKIP_YARA", "1") // Skip YARA - testing CLI functionality
+    isolated_cleave_cmd()
         .args(["--json", "analyze", temp_dir.path().to_str().unwrap()])
         .assert()
         .success()
@@ -542,7 +536,7 @@ fn test_system_binary_false_positive_sanity() {
         return;
     }
 
-    let output = assert_cmd::cargo_bin_cmd!("cleave")
+    let output = isolated_cleave_cmd()
         .args(["--json", "analyze", binary])
         .output()
         .unwrap();

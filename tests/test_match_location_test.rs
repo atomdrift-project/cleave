@@ -209,7 +209,7 @@ fn test_string_search_offset_range_filters() {
         .args([
             "test-match",
             "--type",
-            "string",
+            "string-value",
             "--pattern",
             "MATCH",
             "--offset-range",
@@ -336,7 +336,7 @@ fn test_hex_search_exact_offset() {
     );
 }
 
-/// Test that --external-ip filters out private IPs in string search.
+/// Test that `--is external_ip` filters out private IPs in string search.
 #[test]
 fn test_external_ip_filters_private() {
     let temp_dir = TempDir::new().unwrap();
@@ -360,7 +360,7 @@ fn test_external_ip_filters_private() {
         .args([
             "test-match",
             "--type",
-            "string",
+            "string-value",
             "--pattern",
             "\\d+\\.\\d+\\.\\d+\\.\\d+",
             "--method",
@@ -374,29 +374,30 @@ fn test_external_ip_filters_private() {
     // Should find at least one match (private or external)
     let found_without_filter = stdout.contains("MATCHED");
 
-    // Search WITH --external-ip - should only match the external IP
+    // Search WITH --is external_ip - should only match the external IP
     let output = assert_cmd::cargo_bin_cmd!("cleave")
         .env("cleave_SKIP_YARA", "1")
         .env("cleave_SKIP_TRAITS", "1")
         .args([
             "test-match",
             "--type",
-            "string",
+            "string-value",
             "--pattern",
             "\\d+\\.\\d+\\.\\d+\\.\\d+",
             "--method",
             "regex",
-            "--external-ip",
+            "--is",
+            "external-ip",
             bin_path.to_str().unwrap(),
         ])
         .assert()
         .success();
 
     let stdout = String::from_utf8_lossy(&output.get_output().stdout);
-    // Output should show external_ip constraint
+    // Output should show the validator constraint
     assert!(
-        stdout.contains("external_ip: true"),
-        "Should display external_ip constraint. Output: {}",
+        stdout.contains("is: ExternalIp"),
+        "Should display external_ip validator constraint. Output: {}",
         stdout
     );
 
@@ -404,7 +405,7 @@ fn test_external_ip_filters_private() {
     if stdout.contains("MATCHED") {
         assert!(
             stdout.contains("45.33.32.156") || !stdout.contains("192.168"),
-            "With --external-ip, should not match private IP 192.168.x.x. Output: {}",
+            "With --is external_ip, should not match private IP 192.168.x.x. Output: {}",
             stdout
         );
     }
@@ -569,7 +570,7 @@ def ANOTHER_FUNCTION():
     }
 }
 
-/// Test that --external-ip works with raw search.
+/// Test that `--is external_ip` works with raw search.
 #[test]
 fn test_external_ip_raw_search() {
     let temp_dir = TempDir::new().unwrap();
@@ -584,7 +585,7 @@ echo "Done"
 
     fs::write(&script_path, script_raw).unwrap();
 
-    // Search for IP pattern with --external-ip
+    // Search for IP pattern with --is external_ip
     let output = assert_cmd::cargo_bin_cmd!("cleave")
         .env("cleave_SKIP_YARA", "1")
         .env("cleave_SKIP_TRAITS", "1")
@@ -596,7 +597,8 @@ echo "Done"
             r"\d+\.\d+\.\d+\.\d+",
             "--method",
             "regex",
-            "--external-ip",
+            "--is",
+            "external-ip",
             script_path.to_str().unwrap(),
         ])
         .assert()
@@ -604,10 +606,10 @@ echo "Done"
 
     let stdout = String::from_utf8_lossy(&output.get_output().stdout);
 
-    // Should show external_ip constraint
+    // Should show the validator constraint
     assert!(
-        stdout.contains("external_ip: true"),
-        "Should display external_ip constraint for raw search. Output: {}",
+        stdout.contains("is: ExternalIp"),
+        "Should display external_ip validator for raw search. Output: {}",
         stdout
     );
 
@@ -617,7 +619,7 @@ echo "Done"
         // Check it found 1 match (the external IP) not 2
         assert!(
             stdout.contains("1 matches") || stdout.contains("1 match"),
-            "With --external-ip, should only match external IP (1 match). Output: {}",
+            "With --is external_ip, should only match external IP (1 match). Output: {}",
             stdout
         );
     }

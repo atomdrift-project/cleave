@@ -17,7 +17,6 @@ mod formatting;
 mod risk;
 mod utils;
 
-// Re-export for binary use (main.rs)
 #[allow(unused_imports)]
 pub(crate) use formatting::format_diff_terminal;
 

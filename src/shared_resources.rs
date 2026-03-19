@@ -9,6 +9,10 @@ use crate::capabilities::CapabilityMapper;
 use crate::yara_engine::YaraEngine;
 use std::sync::{Arc, OnceLock};
 
+fn skip_traits_requested() -> bool {
+    std::env::var("CLEAVE_SKIP_TRAITS").is_ok() || std::env::var("cleave_SKIP_TRAITS").is_ok()
+}
+
 /// Global CapabilityMapper behind a RwLock for hot-reload support.
 static CAPABILITY_MAPPER: parking_lot::RwLock<Option<Arc<CapabilityMapper>>> =
     parking_lot::RwLock::new(None);
@@ -38,7 +42,7 @@ pub(crate) fn capability_mapper_with_options(
         return capability_mapper();
     }
 
-    if std::env::var("CLEAVE_SKIP_TRAITS").is_ok() {
+    if skip_traits_requested() {
         return Arc::new(CapabilityMapper::empty());
     }
 
@@ -90,14 +94,14 @@ pub(crate) fn capability_mapper() -> Arc<CapabilityMapper> {
 pub(crate) fn reload_capability_mapper() -> Result<(usize, usize), String> {
     tracing::info!("Reloading CapabilityMapper from disk");
 
-    if std::env::var("CLEAVE_SKIP_TRAITS").is_ok() {
+    if skip_traits_requested() {
         let mapper = CapabilityMapper::empty();
         let mut guard = CAPABILITY_MAPPER.write();
         *guard = Some(Arc::new(mapper));
         return Ok((0, 0));
     }
 
-    let resolved = crate::traits_repo::try_resolve()?;
+    let resolved = cleave::traits_repo::try_resolve()?;
     let path = resolved.as_path();
 
     let mapper = if path.is_dir() {

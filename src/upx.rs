@@ -6,21 +6,42 @@
 use std::io::Write;
 use std::path::Path;
 use std::process::Command;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use tempfile::NamedTempFile;
 use thiserror::Error;
 
-/// Global flag to disable UPX decompression
-static UPX_DISABLED: AtomicBool = AtomicBool::new(false);
+/// Global disable counter for UPX decompression.
+///
+/// A positive value means UPX support is disabled. This supports both permanent
+/// process-wide disables and scoped guards used by library calls.
+static UPX_DISABLED: AtomicUsize = AtomicUsize::new(0);
 
 /// Disable UPX decompression globally
+#[allow(dead_code)] // Used by the CLI binary target for process-wide disables
 pub(crate) fn disable_upx() {
-    UPX_DISABLED.store(true, Ordering::SeqCst);
+    UPX_DISABLED.fetch_add(1, Ordering::SeqCst);
+}
+
+/// Guard that disables UPX support for the lifetime of the value.
+#[allow(dead_code)] // Used by the library target; the binary recompiles modules separately
+pub(crate) struct ScopedUpxDisable;
+
+impl Drop for ScopedUpxDisable {
+    fn drop(&mut self) {
+        UPX_DISABLED.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
+/// Disable UPX support for the lifetime of the returned guard.
+#[allow(dead_code)] // Used by the library target; the binary recompiles modules separately
+pub(crate) fn scoped_disable_upx() -> ScopedUpxDisable {
+    UPX_DISABLED.fetch_add(1, Ordering::SeqCst);
+    ScopedUpxDisable
 }
 
 /// Check if UPX is disabled
 pub(crate) fn is_disabled() -> bool {
-    UPX_DISABLED.load(Ordering::SeqCst)
+    UPX_DISABLED.load(Ordering::SeqCst) > 0
 }
 
 #[derive(Debug, Error)]
@@ -352,5 +373,20 @@ mod tests {
         // Just verify it returns a boolean without crashing
         let _available = UPXDecompressor::is_available();
         // We can't assert true/false since it depends on the system
+    }
+
+    #[test]
+    fn test_scoped_disable_restores_previous_state() {
+        let was_disabled = is_disabled();
+        let before = UPX_DISABLED.load(Ordering::SeqCst);
+
+        {
+            let _guard = scoped_disable_upx();
+            assert!(is_disabled());
+            assert_eq!(UPX_DISABLED.load(Ordering::SeqCst), before + 1);
+        }
+
+        assert_eq!(UPX_DISABLED.load(Ordering::SeqCst), before);
+        assert_eq!(is_disabled(), was_disabled);
     }
 }

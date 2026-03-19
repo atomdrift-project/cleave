@@ -9,6 +9,10 @@ use crate::composite_rules::Platform;
 use std::collections::HashMap;
 
 impl super::CapabilityMapper {
+    fn skip_traits_requested() -> bool {
+        std::env::var("CLEAVE_SKIP_TRAITS").is_ok() || std::env::var("cleave_SKIP_TRAITS").is_ok()
+    }
+
     /// Default minimum precision for hostile composite rules
     pub const DEFAULT_MIN_HOSTILE_PRECISION: f32 = 3.5;
     /// Default minimum precision for suspicious composite rules
@@ -91,7 +95,11 @@ impl super::CapabilityMapper {
         min_suspicious_precision: f32,
         enable_full_validation: bool,
     ) -> Self {
-        let resolved = crate::traits_repo::resolve_and_ensure();
+        if Self::skip_traits_requested() {
+            return Self::empty();
+        }
+
+        let resolved = cleave::traits_repo::resolve_and_ensure();
         let path = resolved.as_path();
 
         if path.is_dir() {

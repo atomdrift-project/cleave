@@ -97,6 +97,7 @@ impl ArchiveAnalyzer {
     }
 
     /// Create analyzer with pre-existing capability mapper (wraps in Arc)
+    #[allow(dead_code)] // Used by the library target; the binary recompiles modules separately
     #[must_use]
     pub(crate) fn with_capability_mapper(mut self, mapper: CapabilityMapper) -> Self {
         self.capability_mapper = Some(Arc::new(mapper));

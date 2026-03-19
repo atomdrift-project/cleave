@@ -22,7 +22,10 @@ pub fn total_memory() -> Option<u64> {
     *TOTAL.get_or_init(total_memory_impl)
 }
 
-/// Current process RSS (Resident Set Size) in bytes.
+/// Current process RSS (Resident Set Size) in bytes when the platform exposes it.
+///
+/// On FreeBSD, OpenBSD, and NetBSD this currently returns `ru_maxrss`, which is
+/// the process high-water mark rather than the instantaneous RSS.
 ///
 /// Returns `None` if the value cannot be determined.
 #[must_use]

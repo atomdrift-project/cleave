@@ -3,7 +3,7 @@
 //! This module contains TraitDefinition (atomic traits) and CompositeTrait
 //! (boolean combinations of conditions).
 
-use super::condition::{Condition, NotException, NotExceptionStructured};
+use super::condition::{Condition, NotException, NotExceptionStructured, StringValidator};
 use super::context::{ConditionResult, EvaluationContext, StringParams};
 use super::evaluators::{
     eval_ast, eval_basename, eval_encoded, eval_exports_count, eval_hex, eval_import_combination,
@@ -1186,6 +1186,7 @@ impl TraitDefinition {
                 substr,
                 regex,
                 platforms,
+                is_check,
                 compiled_regex,
             } => timed_eval!(
                 "symbol",
@@ -1194,6 +1195,7 @@ impl TraitDefinition {
                     substr.as_ref(),
                     regex.as_ref(),
                     platforms.as_ref(),
+                    *is_check,
                     compiled_regex.as_ref(),
                     self.not.as_ref(),
                     ctx,
@@ -1205,7 +1207,7 @@ impl TraitDefinition {
                 regex,
                 word,
                 case_insensitive,
-                external_ip,
+                is_check,
                 not: _,
                 platforms: _,
                 section,
@@ -1221,7 +1223,7 @@ impl TraitDefinition {
                     regex: regex.as_ref(),
                     word: word.as_ref(),
                     case_insensitive: *case_insensitive,
-                    external_ip: *external_ip,
+                    is_check: *is_check,
                     compiled_regex: compiled_regex.as_ref(),
                     section: section.as_ref(),
                     offset: *offset,
@@ -1359,7 +1361,7 @@ impl TraitDefinition {
                 regex,
                 word,
                 case_insensitive,
-                external_ip,
+                is_check,
                 not: _,
                 section,
                 offset,
@@ -1385,7 +1387,7 @@ impl TraitDefinition {
                         regex.as_ref(),
                         word.as_ref(),
                         *case_insensitive,
-                        *external_ip,
+                        *is_check,
                         compiled_regex.as_ref(),
                         self.not.as_ref(),
                         &location,
@@ -1432,7 +1434,7 @@ impl TraitDefinition {
                 regex,
                 word,
                 case_insensitive,
-                external_ip,
+                is_check,
                 not,
                 section,
                 offset,
@@ -1461,7 +1463,7 @@ impl TraitDefinition {
                         *case_insensitive,
                         compiled_regex.as_ref(),
                         &location,
-                        *external_ip,
+                        *is_check,
                         not.as_ref(),
                         ctx,
                     )
@@ -1472,6 +1474,7 @@ impl TraitDefinition {
                 substr,
                 regex,
                 case_insensitive,
+                is_check,
                 compiled_regex,
             } => timed_eval!(
                 "basename",
@@ -1480,6 +1483,7 @@ impl TraitDefinition {
                     substr.as_ref(),
                     regex.as_ref(),
                     *case_insensitive,
+                    *is_check,
                     compiled_regex.as_ref(),
                     ctx,
                 )
@@ -2303,13 +2307,16 @@ impl CompositeTrait {
                 substr,
                 regex,
                 platforms,
+                is_check,
                 compiled_regex,
             } => self.eval_symbol(
                 exact.as_ref(),
                 substr.as_ref(),
                 regex.as_ref(),
                 platforms.as_ref(),
+                *is_check,
                 compiled_regex.as_ref(),
+                self.not.as_ref(),
                 ctx,
             ),
             Condition::StringValue {
@@ -2318,7 +2325,7 @@ impl CompositeTrait {
                 regex,
                 word,
                 case_insensitive,
-                external_ip,
+                is_check,
                 not: _,
                 platforms: _,
                 section,
@@ -2334,7 +2341,7 @@ impl CompositeTrait {
                     regex: regex.as_ref(),
                     word: word.as_ref(),
                     case_insensitive: *case_insensitive,
-                    external_ip: *external_ip,
+                    is_check: *is_check,
                     compiled_regex: compiled_regex.as_ref(),
                     section: section.as_ref(),
                     offset: *offset,
@@ -2470,7 +2477,7 @@ impl CompositeTrait {
                 regex,
                 word,
                 case_insensitive,
-                external_ip,
+                is_check,
                 not: _,
                 section,
                 offset,
@@ -2496,7 +2503,7 @@ impl CompositeTrait {
                         regex.as_ref(),
                         word.as_ref(),
                         *case_insensitive,
-                        *external_ip,
+                        *is_check,
                         compiled_regex.as_ref(),
                         self.not.as_ref(),
                         &location,
@@ -2543,7 +2550,7 @@ impl CompositeTrait {
                 regex,
                 word,
                 case_insensitive,
-                external_ip,
+                is_check,
                 not,
                 section,
                 offset,
@@ -2572,7 +2579,7 @@ impl CompositeTrait {
                         *case_insensitive,
                         compiled_regex.as_ref(),
                         &location,
-                        *external_ip,
+                        *is_check,
                         not.as_ref(),
                         ctx,
                     )
@@ -2583,6 +2590,7 @@ impl CompositeTrait {
                 substr,
                 regex,
                 case_insensitive,
+                is_check,
                 compiled_regex,
             } => timed_eval!(
                 "basename",
@@ -2591,6 +2599,7 @@ impl CompositeTrait {
                     substr.as_ref(),
                     regex.as_ref(),
                     *case_insensitive,
+                    *is_check,
                     compiled_regex.as_ref(),
                     ctx,
                 )
@@ -2615,7 +2624,9 @@ impl CompositeTrait {
         substr: Option<&String>,
         pattern: Option<&String>,
         platforms: Option<&Vec<Platform>>,
+        is_check: Option<StringValidator>,
         compiled_regex: Option<&regex::Regex>,
+        not: Option<&Vec<NotException>>,
         ctx: &EvaluationContext<'a>,
     ) -> ConditionResult {
         // Check platform constraint
@@ -2630,7 +2641,7 @@ impl CompositeTrait {
             }
         }
 
-        eval_symbol(exact, substr, pattern, None, compiled_regex, None, ctx)
+        eval_symbol(exact, substr, pattern, None, is_check, compiled_regex, not, ctx)
     }
 
     /// Evaluate structure condition

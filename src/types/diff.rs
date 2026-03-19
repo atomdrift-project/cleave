@@ -11,6 +11,7 @@ use super::traits_findings::{Finding, Trait};
 use super::{is_zero_f32, is_zero_i32, is_zero_i64};
 
 /// Diff-specific report for comparing old vs new versions
+#[allow(dead_code)] // Public library API; the binary recompiles modules separately
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DiffReport {
     /// Schema version for compatibility checking
@@ -32,6 +33,7 @@ pub struct DiffReport {
 }
 
 /// Summary of file additions, removals, modifications, and renames
+#[allow(dead_code)] // Public library API; the binary recompiles modules separately
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FileChanges {
     /// Paths of newly added files
@@ -46,6 +48,7 @@ pub struct FileChanges {
 }
 
 /// Information about a renamed file and its similarity to the original
+#[allow(dead_code)] // Public library API; the binary recompiles modules separately
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FileRenameInfo {
     /// Original file path
@@ -57,6 +60,7 @@ pub struct FileRenameInfo {
 }
 
 /// Analysis of changes to a single modified file
+#[allow(dead_code)] // Public library API; the binary recompiles modules separately
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ModifiedFileAnalysis {
     /// File path relative to the analyzed directory
@@ -73,9 +77,9 @@ pub struct ModifiedFileAnalysis {
 
 /// Comprehensive diff for a single file - can be treated as a "virtual program" for ML
 /// Contains all deltas: added/removed collections and numeric changes
-#[allow(dead_code)] // Used by binary target
+#[allow(dead_code)] // Public library API; the binary recompiles modules separately
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub(crate) struct FileDiff {
+pub struct FileDiff {
     /// File path relative to the analyzed directory
     pub file: String,
 
@@ -169,9 +173,9 @@ pub(crate) struct FileDiff {
 }
 
 /// Summary counts for quick ML feature extraction
-#[allow(dead_code)] // Used by binary target
+#[allow(dead_code)] // Public library API; the binary recompiles modules separately
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub(crate) struct DiffCounts {
+pub struct DiffCounts {
     /// Number of findings added in target
     pub findings_added: i32,
     /// Number of findings removed from baseline
@@ -212,9 +216,9 @@ pub(crate) struct DiffCounts {
 
 /// Numeric deltas for metrics (target - baseline)
 /// Positive = increased, Negative = decreased
-#[allow(dead_code)] // Used by binary target
+#[allow(dead_code)] // Public library API; the binary recompiles modules separately
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub(crate) struct MetricsDelta {
+pub struct MetricsDelta {
     /// File size change in bytes (target - baseline)
     #[serde(default, skip_serializing_if = "is_zero_i64")]
     pub size_bytes: i64,
@@ -271,9 +275,9 @@ pub(crate) struct MetricsDelta {
 }
 
 /// Extended diff report with full analysis for ML pipelines
-#[allow(dead_code)] // Used by binary target
+#[allow(dead_code)] // Public library API; the binary recompiles modules separately
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub(crate) struct FullDiffReport {
+pub struct FullDiffReport {
     /// Schema version for compatibility checking
     pub schema_version: String,
     /// Timestamp when the diff analysis was performed

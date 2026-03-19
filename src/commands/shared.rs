@@ -200,7 +200,7 @@ pub(crate) fn find_similar_rules(
     let mut matches: Vec<(String, usize)> = Vec::new();
 
     // Check composite rules
-    for rule in &mapper.composite_rules {
+    for rule in mapper.composite_rules() {
         let id_lower = rule.id.to_lowercase();
         if id_lower.contains(&query_lower) || query_lower.contains(&id_lower) {
             let score = strsim::levenshtein(&query_lower, &id_lower);
@@ -248,7 +248,7 @@ pub(crate) fn find_rules_in_directory(
     }
 
     // Check composite rules
-    for rule in &mapper.composite_rules {
+    for rule in mapper.composite_rules() {
         if rule.id.starts_with(&prefix) {
             rules.push(rule.id.clone());
         }

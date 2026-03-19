@@ -418,9 +418,9 @@ pub(crate) enum Command {
         #[arg(long)]
         encoding: Option<String>,
 
-        /// Require matches to contain a valid external IP (not private/loopback/reserved)
-        #[arg(long)]
-        external_ip: bool,
+        /// Optional high-fidelity validator (e.g., external_ip, bitcoin_addr)
+        #[arg(long, rename_all = "snake_case")]
+        is: Option<crate::composite_rules::condition::StringValidator>,
 
         /// Minimum entropy for section searches (0.0-8.0)
         #[arg(long)]

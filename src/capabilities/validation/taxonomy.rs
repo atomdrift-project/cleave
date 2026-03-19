@@ -938,6 +938,8 @@ const GENERIC_TECHNIQUE_WORDS: &[&str] = &[
     "keylog",
     "loader",
     "obfuscated",
+    "operation",
+    "operations",
     "persistence",
     "privilege-escalation",
     "reverse-shell",

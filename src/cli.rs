@@ -551,7 +551,6 @@ fn parse_offset_range(s: &str) -> Result<(i64, Option<i64>), String> {
 #[derive(Debug, Clone, Copy, clap::ValueEnum, PartialEq)]
 pub(crate) enum SearchType {
     /// Search in extracted string values
-    #[value(alias = "string")]
     StringValue,
     /// Search in symbols (imports/exports)
     Symbol,

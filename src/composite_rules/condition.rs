@@ -216,7 +216,7 @@ enum ConditionTagged {
         #[serde(default)]
         platforms: Option<Vec<Platform>>,
     },
-    #[serde(rename = "string_value", alias = "string")]
+    #[serde(rename = "string_value")]
     StringValue {
         /// Full string match (entire string must equal this)
         #[serde(default)]

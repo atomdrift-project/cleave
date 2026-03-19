@@ -110,7 +110,7 @@ fn detect_invalid_field_in_context(context: &str) -> Option<String> {
     // Detect condition type
     let condition_type = if context.contains("type: raw") {
         "raw"
-    } else if context.contains("type: string_value") || context.contains("type: string") {
+    } else if context.contains("type: string_value") {
         "string_value"
     } else if context.contains("type: symbol") {
         "symbol"
@@ -413,7 +413,7 @@ fn provide_error_guidance(
             // Detect condition type from context
             let condition_type = if context.contains("type: raw") {
                 Some("raw")
-            } else if context.contains("type: string_value") || context.contains("type: string") {
+            } else if context.contains("type: string_value") {
                 Some("string_value")
             } else if context.contains("type: symbol") {
                 Some("symbol")
@@ -484,7 +484,7 @@ fn provide_error_guidance(
             || context.contains("per_kb_max:"))
     {
         guidance.push_str("\n   Count/density fields are not valid for 'type: kv'.\n");
-        guidance.push_str("   💡 These fields only work with 'type: string', 'type: raw', 'type: hex', 'type: symbol', or 'type: encoded'.\n");
+        guidance.push_str("   💡 These fields only work with 'type: string_value', 'type: raw', 'type: hex', 'type: symbol', or 'type: encoded'.\n");
         guidance.push_str("   💡 KV searches query structured data and return boolean results, not frequency counts.\n");
         found_hallucination = true;
     }
@@ -512,14 +512,14 @@ fn provide_error_guidance(
 
         // Check for common mistakes in context
         if context.contains("type: word") {
-            guidance.push_str("\n   💡 Did you mean 'type: string' instead of 'type: word'?\n");
+            guidance.push_str("\n   💡 Did you mean 'type: string_value' instead of 'type: word'?\n");
             guidance.push_str("      Use 'string' type with 'word' field for word matching.\n");
         } else if context.contains("type: text") {
-            guidance.push_str("\n   💡 Did you mean 'type: string' instead of 'type: text'?\n");
+            guidance.push_str("\n   💡 Did you mean 'type: string_value' instead of 'type: text'?\n");
         } else if context.contains("type: function") {
             guidance.push_str("\n   💡 Did you mean 'type: symbol' instead of 'type: function'?\n");
         } else if context.contains("type: regex") {
-            guidance.push_str("\n   💡 Use 'type: string' with 'regex' field, not 'type: regex'\n");
+            guidance.push_str("\n   💡 Use 'type: string_value' with 'regex' field, not 'type: regex'\n");
         }
     }
 

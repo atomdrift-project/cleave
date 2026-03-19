@@ -638,7 +638,10 @@ impl PackageJsonAnalyzer {
                 let hidden_files: Vec<&str> = script
                     .split_whitespace()
                     .filter(|s| {
-                        s.contains("/.") && !s.contains("node_modules/.bin/") && !s.contains("../")
+                        s.contains("/.")
+                            && !s.contains("node_modules/.bin/")
+                            && !s.contains("../")
+                            && !s.starts_with("--") // CLI flags (e.g. --config=test/.istanbul.yml) are not hidden file access
                     })
                     .collect();
                 if !hidden_files.is_empty() {
@@ -909,12 +912,14 @@ impl PackageJsonAnalyzer {
 
         for hook in install_hooks {
             if let Some(script) = scripts.get(hook) {
-                // Any install hook is notable, especially if it does something complex
-                let criticality = if script.len() > 50
-                    || script.contains("node ")
-                    || script.contains("curl")
+                // Suspicious only when the script actively fetches or executes external content.
+                // Script length alone is not a reliable signal: legitimate publish-safety guards
+                // (e.g. ljharb's `not-in-publish || safe-publish-latest` pattern) are verbose
+                // but benign.
+                let criticality = if script.contains("curl")
                     || script.contains("wget")
                     || script.contains("http")
+                    || script.contains("node ")
                 {
                     Criticality::Suspicious
                 } else {
@@ -1027,7 +1032,7 @@ impl PackageJsonAnalyzer {
                     all_lower_or_digit = false;
                 }
             }
-            if digit_count > 3 && all_lower_or_digit {
+            if digit_count > 3 && all_lower_or_digit && !self.is_known_legitimate(name) {
                 return true;
             }
         }
@@ -1043,10 +1048,19 @@ impl PackageJsonAnalyzer {
             "lodash",
             "axios",
             "babel-core",
+            "babel-cli",
             "babel-eslint",
             "babel-loader",
             "babel-polyfill",
             "babel-preset-env",
+            "babel-preset-es2015",
+            "babel-preset-es2015-loose",
+            "babel-preset-es2016",
+            "babel-preset-es2017",
+            "babel-preset-es2018",
+            "babel-preset-react",
+            "babel-register",
+            "babel-runtime",
             "tslint",
             "eslint-config-airbnb",
             "eslint-config-prettier",

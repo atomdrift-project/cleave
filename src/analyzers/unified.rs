@@ -797,6 +797,11 @@ impl UnifiedSourceAnalyzer {
             // Variation selectors, zero-width chars, and tag chars in source code
             // are suspicious at high counts; a single occurrence may be a BOM or
             // formatting artifact.
+            // Note: U+FE0F (Variation Selector-16) is commonly used in emoji (e.g. ℹ️ 🖱️)
+            // and can appear 4-6 times in a normal source file with emoji log messages.
+            // Note: U+200D (ZWJ) is used in emoji family sequences (👨‍👩‍👦 etc.) at 2-3
+            // chars per sequence; 8 family emojis in test/log data produce ~15 ZWJ chars.
+            // Require >= 20 before escalating to suspicious to avoid FP on emoji-heavy files.
             if let Some(ref text) = metrics.text {
                 if text.invisible_chars > 0 {
                     // Libraries dealing with Unicode data, fake data generation,
@@ -808,7 +813,7 @@ impl UnifiedSourceAnalyzer {
                             .any(|kw| path_lower.contains(kw));
                     let (crit, conf) = if is_unicode_library {
                         (crate::types::Criticality::Notable, 0.5)
-                    } else if text.invisible_chars >= 3 {
+                    } else if text.invisible_chars >= 20 {
                         (crate::types::Criticality::Suspicious, 0.95)
                     } else {
                         (crate::types::Criticality::Notable, 0.7)

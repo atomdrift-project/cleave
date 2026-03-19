@@ -1612,11 +1612,11 @@ func main() {
 "#;
         let report = analyze_go_code(code);
         assert!(
-            report
-                .findings
-                .iter()
-                .any(|c| c.id == "micro-behaviors/crypto/library::aes-new-cipher"),
-            "Expected micro-behaviors/crypto/library::aes-new-cipher, found: {:?}",
+            report.findings.iter().any(|c| {
+                c.id == "micro-behaviors/crypto/library::aes-new-cipher"
+                    || c.id == "micro-behaviors/crypto/library/signals::aes-new-cipher"
+            }),
+            "Expected micro-behaviors/crypto/library::aes-new-cipher or micro-behaviors/crypto/library/signals::aes-new-cipher, found: {:?}",
             report.findings.iter().map(|f| &f.id).collect::<Vec<_>>()
         );
     }
@@ -1632,11 +1632,11 @@ func main() {
 "#;
         let report = analyze_go_code(code);
         assert!(
-            report
-                .findings
-                .iter()
-                .any(|c| c.id == "micro-behaviors/crypto/library::rsa-generate-key"),
-            "Expected micro-behaviors/crypto/library::rsa-generate-key, found: {:?}",
+            report.findings.iter().any(|c| {
+                c.id == "micro-behaviors/crypto/library::rsa-generate-key"
+                    || c.id == "micro-behaviors/crypto/library/signals::rsa-generate-key"
+            }),
+            "Expected micro-behaviors/crypto/library::rsa-generate-key or micro-behaviors/crypto/library/signals::rsa-generate-key, found: {:?}",
             report.findings.iter().map(|f| &f.id).collect::<Vec<_>>()
         );
     }

@@ -106,6 +106,7 @@ const BANNED_DIRECTORY_SEGMENTS: &[&str] = &[
     "go-runtime", // platform
     "simple",     // meaningless
     "stuff",      // obviously bad
+    "signals",
     "suspicious", // dumping ground
     "technique",  // dumping ground
     "techniques", // dumping ground
@@ -946,6 +947,7 @@ const GENERIC_TECHNIQUE_WORDS: &[&str] = &[
     "scanner",
     "screen-capture",
     "shell",
+    "signals",
     "stealer",
     "webshell",
 ];

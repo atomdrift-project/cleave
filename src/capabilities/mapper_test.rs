@@ -105,7 +105,7 @@ traits:
     desc: "Basic test trait"
     crit: baseline
     if:
-      type: string
+      type: string_value
       substr: "test_pattern"
 "#;
     let (_dir, path) = create_test_yaml(yaml);
@@ -208,7 +208,7 @@ traits:
     desc: "Basic test trait"
     crit: baseline
     if:
-      type: string
+      type: string_value
       substr: "test_pattern"
 "#;
     let (_dir, path) = create_test_yaml(yaml);
@@ -232,7 +232,7 @@ traits:
     crit: notable
     conf: 0.9
     if:
-      type: string
+      type: string_value
       substr: "malicious_pattern"
 "#;
     let (_dir, path) = create_test_yaml(yaml);
@@ -273,7 +273,7 @@ traits:
     desc: "Regex pattern match"
     crit: suspicious
     if:
-      type: string
+      type: string_value
       regex: "eval\\s*\\("
 "#;
     let (_dir, path) = create_test_yaml(yaml);
@@ -307,7 +307,7 @@ traits:
     for:
       - python
     if:
-      type: string
+      type: string_value
       substr: "import os"
 "#;
     let (_dir, path) = create_test_yaml(yaml);
@@ -343,7 +343,7 @@ traits:
     for:
       - python
     if:
-      type: string
+      type: string_value
       substr: "import os"
 "#;
     let (_dir, path) = create_test_yaml(yaml);
@@ -386,7 +386,7 @@ traits:
     desc: "String check"
     crit: notable
     if:
-      type: string
+      type: string_value
       substr: "test_marker"
 "#;
     let (_dir, path) = create_test_yaml(yaml);
@@ -445,7 +445,7 @@ traits:
     desc: "Target trait"
     crit: baseline
     if:
-      type: string
+      type: string_value
       substr: "test"
 "#;
     let (_dir, path) = create_test_yaml(yaml);
@@ -470,14 +470,14 @@ traits:
     desc: "First trait"
     crit: baseline
     if:
-      type: string
+      type: string_value
       substr: "first"
 
   - id: "test/two::second"
     desc: "Second trait"
     crit: notable
     if:
-      type: string
+      type: string_value
       substr: "second"
 "#;
     let (_dir, path) = create_test_yaml(yaml);
@@ -555,7 +555,7 @@ traits:
     crit: suspicious
     count_min: 3
     if:
-      type: string
+      type: string_value
       substr: "keyword"
 "#;
     let (_dir, path) = create_test_yaml(yaml);
@@ -630,7 +630,7 @@ traits:
     desc: "Case insensitive match"
     crit: baseline
     if:
-      type: string
+      type: string_value
       substr: "password"
       case_insensitive: true
 "#;
@@ -677,7 +677,7 @@ traits:
   - id: "test/defaults::check"
     desc: "Test trait using default configuration values"
     if:
-      type: string
+      type: string_value
       substr: "test"
 "#;
     let (_dir, path) = create_test_yaml(yaml);
@@ -699,7 +699,7 @@ traits:
     desc: "Pattern in .text section"
     crit: notable
     if:
-      type: string
+      type: string_value
       substr: "code_pattern"
       section: ".text"
 "#;
@@ -752,7 +752,7 @@ traits:
     crit: baseline
     conf: 0.9
     if:
-      type: string
+      type: string_value
       exact: "MARKER_STRING"
 
   # Dependent trait - depends on the base trait
@@ -823,7 +823,7 @@ traits:
     crit: baseline
     conf: 0.9
     if:
-      type: string
+      type: string_value
       exact: "CHAIN_START"
 
   # Level 2: Depends on level 1
@@ -895,7 +895,7 @@ traits:
     crit: baseline
     conf: 0.9
     if:
-      type: string
+      type: string_value
       substr: "SIGNAL_A"
 
   - id: "test/packer::signal-b"
@@ -903,7 +903,7 @@ traits:
     crit: baseline
     conf: 0.9
     if:
-      type: string
+      type: string_value
       substr: "SIGNAL_B"
 
   # This atomic fires on a common string, but should be SUPPRESSED when the
@@ -913,7 +913,7 @@ traits:
     crit: suspicious
     conf: 0.9
     if:
-      type: string
+      type: string_value
       substr: "GENERIC_API"
     unless:
       - id: test/packer::combined
@@ -991,7 +991,7 @@ traits:
     crit: baseline
     conf: 0.9
     if:
-      type: string
+      type: string_value
       substr: "SIGNAL_A"
 
   - id: "test/packer::signal-b"
@@ -999,7 +999,7 @@ traits:
     crit: baseline
     conf: 0.9
     if:
-      type: string
+      type: string_value
       substr: "SIGNAL_B"
 
   - id: "test/victim::generic-api"
@@ -1007,7 +1007,7 @@ traits:
     crit: suspicious
     conf: 0.9
     if:
-      type: string
+      type: string_value
       substr: "GENERIC_API"
     unless:
       - id: test/packer::combined
@@ -1073,7 +1073,7 @@ traits:
     crit: baseline
     conf: 0.9
     if:
-      type: string
+      type: string_value
       substr: "SIGNAL_A"
 
   - id: "test/base::signal-b"
@@ -1081,7 +1081,7 @@ traits:
     crit: baseline
     conf: 0.9
     if:
-      type: string
+      type: string_value
       substr: "SIGNAL_B"
 
   - id: "test/base::signal-c"
@@ -1089,7 +1089,7 @@ traits:
     crit: baseline
     conf: 0.9
     if:
-      type: string
+      type: string_value
       substr: "SIGNAL_C"
 
 composite_rules:

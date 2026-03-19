@@ -772,7 +772,7 @@ traits:
   - id: test/uses-defaults
     description: "Uses all defaults"
     condition:
-      type: string
+      type: string_value
       exact: "test1"
 
   - id: test/overrides-some
@@ -780,21 +780,21 @@ traits:
     mbc: "B0002"
     criticality: notable
     condition:
-      type: string
+      type: string_value
       exact: "test2"
 
   - id: test/unsets-mbc
     description: "Unsets mbc"
     mbc: none
     condition:
-      type: string
+      type: string_value
       exact: "test3"
 
   - id: test/unsets-attack
     description: "Unsets attack"
     attack: NONE
     condition:
-      type: string
+      type: string_value
       exact: "test4"
 "#;
 
@@ -828,7 +828,7 @@ composite_rules:
     description: "Uses all defaults"
     confidence: 0.5
     condition:
-      type: string
+      type: string_value
       exact: "HTTP/1.1"
 
   - id: test/unsets-attack
@@ -836,7 +836,7 @@ composite_rules:
     confidence: 0.6
     attack: none
     condition:
-      type: string
+      type: string_value
       exact: "GET /"
 "#;
 
@@ -2667,7 +2667,7 @@ traits:
     conf: 0.9
     for: [elf]
     if:
-      type: string
+      type: string_value
       regex: "test"
 
   - id: invalid-trait
@@ -2676,7 +2676,7 @@ traits:
   conf: 0.9
     for: [elf]
     if:
-      type: string
+      type: string_value
       regex: "test"
 "#;
 
@@ -3402,7 +3402,7 @@ traits:
     desc: Test with invalid file type
     for: [invalid_lang, python]
     if:
-      type: string
+      type: string_value
       exact: test
 "#;
     fs::write(traits_dir.join("test.yaml"), trait_content).unwrap();

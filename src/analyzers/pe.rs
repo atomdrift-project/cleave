@@ -584,69 +584,65 @@ impl PEAnalyzer {
         // Overlay archive analysis
         if (pe_data.len() as u64) > sections_end && sections_end > 0 {
             let overlay_data = &pe_data[sections_end as usize..];
-            match crate::analyzers::overlay::analyze_overlay(
+            if let Ok(Some(overlay_analysis)) = crate::analyzers::overlay::analyze_overlay(
                 overlay_data,
                 &report.target.path,
                 Some(self.capability_mapper.clone()),
                 self.yara_engine.clone(),
             ) {
-                Ok(Some(overlay_analysis)) => {
-                    let pe_filename = std::path::Path::new(&report.target.path)
-                        .file_name()
-                        .and_then(|n| n.to_str())
-                        .unwrap_or("binary.exe");
+                let pe_filename = std::path::Path::new(&report.target.path)
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("binary.exe");
 
-                    report.findings.push(overlay_analysis.sfx_finding);
+                report.findings.push(overlay_analysis.sfx_finding);
 
-                    for mut finding in overlay_analysis.archive_report.findings {
-                        for evidence in &mut finding.evidence {
-                            if let Some(ref loc) = evidence.location {
-                                if let Some(rest) = loc.strip_prefix("archive:") {
-                                    evidence.location = Some(format!(
-                                        "archive:{}{}{}",
-                                        pe_filename,
-                                        crate::types::file_analysis::ARCHIVE_DELIMITER,
-                                        rest
-                                    ));
-                                } else if !loc
-                                    .contains(crate::types::file_analysis::ARCHIVE_DELIMITER)
-                                {
-                                    evidence.location = Some(format!(
-                                        "archive:{}{}{}",
-                                        pe_filename,
-                                        crate::types::file_analysis::ARCHIVE_DELIMITER,
-                                        loc
-                                    ));
-                                }
+                for mut finding in overlay_analysis.archive_report.findings {
+                    for evidence in &mut finding.evidence {
+                        if let Some(ref loc) = evidence.location {
+                            if let Some(rest) = loc.strip_prefix("archive:") {
+                                evidence.location = Some(format!(
+                                    "archive:{}{}{}",
+                                    pe_filename,
+                                    crate::types::file_analysis::ARCHIVE_DELIMITER,
+                                    rest
+                                ));
+                            } else if !loc.contains(crate::types::file_analysis::ARCHIVE_DELIMITER)
+                            {
+                                evidence.location = Some(format!(
+                                    "archive:{}{}{}",
+                                    pe_filename,
+                                    crate::types::file_analysis::ARCHIVE_DELIMITER,
+                                    loc
+                                ));
                             }
                         }
-                        report.findings.push(finding);
                     }
+                    report.findings.push(finding);
+                }
 
-                    for mut entry in overlay_analysis.archive_report.archive_contents {
-                        if !entry
-                            .path
-                            .contains(crate::types::file_analysis::ARCHIVE_DELIMITER)
-                        {
-                            entry.path = crate::types::file_analysis::encode_archive_path(
-                                pe_filename,
-                                &entry.path,
-                            );
-                        }
-                        report.archive_contents.push(entry);
+                for mut entry in overlay_analysis.archive_report.archive_contents {
+                    if !entry
+                        .path
+                        .contains(crate::types::file_analysis::ARCHIVE_DELIMITER)
+                    {
+                        entry.path = crate::types::file_analysis::encode_archive_path(
+                            pe_filename,
+                            &entry.path,
+                        );
                     }
+                    report.archive_contents.push(entry);
+                }
 
-                    report.files.extend(overlay_analysis.archive_report.files);
-                    report
-                        .strings
-                        .extend(overlay_analysis.archive_report.strings);
-                    for tool in overlay_analysis.archive_report.metadata.tools_used {
-                        if !tools_used.contains(&tool) {
-                            tools_used.push(tool);
-                        }
+                report.files.extend(overlay_analysis.archive_report.files);
+                report
+                    .strings
+                    .extend(overlay_analysis.archive_report.strings);
+                for tool in overlay_analysis.archive_report.metadata.tools_used {
+                    if !tools_used.contains(&tool) {
+                        tools_used.push(tool);
                     }
                 }
-                Ok(None) | Err(_) => {}
             }
         }
 

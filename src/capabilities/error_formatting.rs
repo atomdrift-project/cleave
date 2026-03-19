@@ -512,14 +512,18 @@ fn provide_error_guidance(
 
         // Check for common mistakes in context
         if context.contains("type: word") {
-            guidance.push_str("\n   💡 Did you mean 'type: string_value' instead of 'type: word'?\n");
+            guidance
+                .push_str("\n   💡 Did you mean 'type: string_value' instead of 'type: word'?\n");
             guidance.push_str("      Use 'string' type with 'word' field for word matching.\n");
         } else if context.contains("type: text") {
-            guidance.push_str("\n   💡 Did you mean 'type: string_value' instead of 'type: text'?\n");
+            guidance
+                .push_str("\n   💡 Did you mean 'type: string_value' instead of 'type: text'?\n");
         } else if context.contains("type: function") {
             guidance.push_str("\n   💡 Did you mean 'type: symbol' instead of 'type: function'?\n");
         } else if context.contains("type: regex") {
-            guidance.push_str("\n   💡 Use 'type: string_value' with 'regex' field, not 'type: regex'\n");
+            guidance.push_str(
+                "\n   💡 Use 'type: string_value' with 'regex' field, not 'type: regex'\n",
+            );
         }
     }
 

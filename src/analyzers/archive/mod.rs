@@ -487,10 +487,23 @@ impl ArchiveAnalyzer {
         // - "npm package with suspicious DLL" (package.json in one file + .dll in another)
         // - "Python package with compiled binary" (setup.py + .so/.pyd files)
         if let Some(mapper) = &self.capability_mapper {
-            let collected_findings = match std::sync::Arc::try_unwrap(nested_findings) {
+            let mut collected_findings = match std::sync::Arc::try_unwrap(nested_findings) {
                 Ok(mutex) => mutex.into_inner().unwrap_or_default(),
                 Err(arc) => arc.lock().map(|g| g.clone()).unwrap_or_default(),
             };
+
+            // Evaluate basename traits against archive entry names.
+            // Per-file analyzers can't match basename traits because extracted
+            // files use temp paths; we evaluate them here with the real names.
+            let entry_names: Vec<String> = report
+                .archive_contents
+                .iter()
+                .map(|e| e.path.clone())
+                .collect();
+            if !entry_names.is_empty() {
+                let basename_findings = mapper.evaluate_basename_traits_for_entries(&entry_names);
+                collected_findings.extend(basename_findings);
+            }
 
             if !collected_findings.is_empty() {
                 let container_findings = mapper.evaluate_container_composites(
@@ -710,12 +723,24 @@ impl ArchiveAnalyzer {
         if let Some(mapper) = &self.capability_mapper {
             // Collect all findings from nested files
             // LIMIT: Cap at 50k to prevent OOM on massive archives
-            let nested_findings: Vec<Finding> = report
+            let mut nested_findings: Vec<Finding> = report
                 .files
                 .iter()
                 .flat_map(|f| f.findings.iter().cloned())
                 .take(50_000)
                 .collect();
+
+            // Evaluate basename traits against archive entry names (see comment
+            // in the streaming path above for rationale).
+            let entry_names: Vec<String> = report
+                .archive_contents
+                .iter()
+                .map(|e| e.path.clone())
+                .collect();
+            if !entry_names.is_empty() {
+                let basename_findings = mapper.evaluate_basename_traits_for_entries(&entry_names);
+                nested_findings.extend(basename_findings);
+            }
 
             if !nested_findings.is_empty() {
                 let container_findings = mapper.evaluate_container_composites(
@@ -2325,14 +2350,10 @@ mod tests {
             }
         }
 
-        // basename traits require the original archive entry name, but extracted files
-        // currently use temp paths — so the composite can't fire yet.
-        if !has_supply_chain_finding {
-            eprintln!(
-                "Warning: npm-package-with-exe rule not triggered. \
-                 Expected: basename traits need original entry names, not temp paths."
-            );
-        }
+        assert!(
+            has_supply_chain_finding,
+            "Should detect NPM package with .exe as supply chain anomaly"
+        );
     }
 
     #[test]
@@ -2477,13 +2498,9 @@ mod tests {
             }
         }
 
-        // basename traits require the original archive entry name, but extracted files
-        // currently use temp paths — so the composite can't fire yet.
-        if !has_supply_chain_finding {
-            eprintln!(
-                "Warning: python-package-with-dll rule not triggered. \
-                 Expected: basename traits need original entry names, not temp paths."
-            );
-        }
+        assert!(
+            has_supply_chain_finding,
+            "Should detect Python package with .dll as supply chain anomaly"
+        );
     }
 }

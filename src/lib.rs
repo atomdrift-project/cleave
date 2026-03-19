@@ -1310,8 +1310,10 @@ mod tests {
         // encoded payload that would normally trigger recursive analysis.
         let code = b"import base64\ndata = 'ZWNobyBoZWxsbw=='\nresult = base64.b64decode(data)\n";
 
-        let tmp = tempfile::NamedTempFile::new().unwrap();
-        tmp.as_file().write_all(code).ok();
+        #[allow(clippy::expect_used)]
+        let tmp = tempfile::NamedTempFile::new().expect("create temp file");
+        #[allow(clippy::expect_used)]
+        tmp.as_file().write_all(code).expect("write test content");
         let path = tmp.path();
 
         let options = AnalysisOptions::default();
@@ -1342,12 +1344,11 @@ mod tests {
         // (encoding detection is heuristic), the finding won't appear — that's
         // fine, we just verify no stack overflow occurred and the function
         // returned normally.
-        let deep_nesting = report
+        if let Some(f) = report
             .findings
             .iter()
-            .find(|f| f.id == "objectives/anti-static/obfuscation/multi-layer/deep-nesting");
-        if deep_nesting.is_some() {
-            let f = deep_nesting.unwrap();
+            .find(|f| f.id == "objectives/anti-static/obfuscation/multi-layer/deep-nesting")
+        {
             assert_eq!(f.crit, types::Criticality::Suspicious);
             assert_eq!(f.attack.as_deref(), Some("T1027"));
             assert_eq!(f.mbc.as_deref(), Some("OB0002"));
@@ -1365,8 +1366,10 @@ mod tests {
         use std::io::Write;
 
         let code = b"print('hello world')\n";
-        let tmp = tempfile::NamedTempFile::new().unwrap();
-        tmp.as_file().write_all(code).ok();
+        #[allow(clippy::expect_used)]
+        let tmp = tempfile::NamedTempFile::new().expect("create temp file");
+        #[allow(clippy::expect_used)]
+        tmp.as_file().write_all(code).expect("write test content");
 
         let options = AnalysisOptions::default();
         let mapper = shared_resources::capability_mapper_with_options(&options);

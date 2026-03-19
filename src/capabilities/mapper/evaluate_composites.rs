@@ -283,6 +283,97 @@ impl super::CapabilityMapper {
     /// # Returns
     /// New findings that should be added to the container report
     #[must_use]
+    /// Evaluate `type: basename` traits against a list of archive entry names.
+    ///
+    /// Archive members are extracted to temp paths, so per-file analyzers see
+    /// basenames like `.tmpXXXXX` instead of the original entry names. This
+    /// method evaluates basename traits using the real entry names and returns
+    /// component-level findings that container composites can then reference.
+    pub(crate) fn evaluate_basename_traits_for_entries(
+        &self,
+        entry_names: &[String],
+    ) -> Vec<Finding> {
+        use crate::composite_rules::Condition;
+
+        let mut findings = Vec::new();
+        for trait_def in &self.trait_definitions {
+            // Only evaluate traits with Basename conditions
+            let Condition::Basename {
+                ref exact,
+                ref substr,
+                ref regex,
+                case_insensitive,
+                ref compiled_regex,
+            } = trait_def.r#if
+            else {
+                continue;
+            };
+
+            for entry_name in entry_names {
+                let basename = std::path::Path::new(entry_name)
+                    .file_name()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("");
+                if basename.is_empty() {
+                    continue;
+                }
+
+                let (cmp_base, cmp_exact, cmp_substr) = if case_insensitive {
+                    (
+                        basename.to_lowercase(),
+                        exact.as_ref().map(|s| s.to_lowercase()),
+                        substr.as_ref().map(|s| s.to_lowercase()),
+                    )
+                } else {
+                    (basename.to_string(), exact.clone(), substr.clone())
+                };
+
+                let matched = if let Some(ref e) = cmp_exact {
+                    cmp_base == *e
+                } else if let Some(ref s) = cmp_substr {
+                    cmp_base.contains(s.as_str())
+                } else if let Some(re) = compiled_regex {
+                    re.is_match(basename)
+                } else if let Some(ref re_str) = regex {
+                    let pat = if case_insensitive {
+                        format!("(?i){re_str}")
+                    } else {
+                        re_str.clone()
+                    };
+                    regex::Regex::new(&pat)
+                        .map(|re| re.is_match(basename))
+                        .unwrap_or(false)
+                } else {
+                    false
+                };
+
+                if matched {
+                    findings.push(Finding {
+                        id: trait_def.id.clone(),
+                        kind: FindingKind::Indicator,
+                        desc: trait_def.desc.clone(),
+                        conf: trait_def.conf,
+                        crit: trait_def.crit,
+                        mbc: trait_def.mbc.clone(),
+                        attack: trait_def.attack.clone(),
+                        trait_refs: vec![],
+                        evidence: vec![Evidence {
+                            method: "basename".to_string(),
+                            source: "archive-entry".to_string(),
+                            value: entry_name.clone(),
+                            location: None,
+                            ..Default::default()
+                        }],
+                        match_count: 0,
+                        source_file: None,
+                    });
+                    break; // One match per trait is enough
+                }
+            }
+        }
+        findings
+    }
+
     pub(crate) fn evaluate_container_composites(
         &self,
         container_report: &AnalysisReport,
@@ -477,5 +568,64 @@ mod tests {
             // Should not panic for any archive type
             let _ = mapper.evaluate_container_composites(&report, &nested, file_type);
         }
+    }
+
+    #[test]
+    fn test_evaluate_basename_traits_for_entries() {
+        // Skip if traits directory not available
+        let traits_path = std::path::Path::new("traits");
+        if !traits_path.exists() {
+            return;
+        }
+
+        let mapper = super::super::CapabilityMapper::new();
+
+        // Test with archive entry names that should match basename traits
+        let entry_names = vec![
+            "package/package.json".to_string(),
+            "package/evil.exe".to_string(),
+            "package/lib/helper.js".to_string(),
+        ];
+
+        let findings = mapper.evaluate_basename_traits_for_entries(&entry_names);
+
+        // Should find at least package-json-basename and exe-extension-basename
+        let has_package_json = findings
+            .iter()
+            .any(|f| f.id.contains("package-json-basename"));
+        let has_exe = findings
+            .iter()
+            .any(|f| f.id.contains("exe-extension-basename"));
+
+        assert!(
+            has_package_json,
+            "Should match package-json-basename trait, got: {:?}",
+            findings.iter().map(|f| &f.id).collect::<Vec<_>>()
+        );
+        assert!(
+            has_exe,
+            "Should match exe-extension-basename trait, got: {:?}",
+            findings.iter().map(|f| &f.id).collect::<Vec<_>>()
+        );
+
+        // Evidence should contain the entry name
+        for finding in &findings {
+            assert!(
+                finding.evidence.iter().any(|e| e.source == "archive-entry"),
+                "basename findings should have archive-entry source"
+            );
+        }
+    }
+
+    #[test]
+    fn test_evaluate_basename_traits_empty_entries() {
+        let traits_path = std::path::Path::new("traits");
+        if !traits_path.exists() {
+            return;
+        }
+
+        let mapper = super::super::CapabilityMapper::new();
+        let findings = mapper.evaluate_basename_traits_for_entries(&[]);
+        assert!(findings.is_empty());
     }
 }

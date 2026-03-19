@@ -363,8 +363,8 @@ fn apply_file_criticality_filter(
             .max()
             .unwrap_or(types::Criticality::Baseline);
 
-        let passes = min_file_crit.map_or(true, |min| max_crit >= min)
-            && max_file_crit.map_or(true, |max| max_crit <= max);
+        let passes = min_file_crit.is_none_or(|min| max_crit >= min)
+            && max_file_crit.is_none_or(|max| max_crit <= max);
 
         if !passes {
             rejected_ids.insert(file.id);

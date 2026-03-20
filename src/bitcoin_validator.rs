@@ -10,16 +10,18 @@ const BASE58_ALPHABET: &[u8] = b"123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmno
 const BECH32_ALPHABET: &[u8] = b"qpzry9x8gf2tvdw0s3jn54khce6mua7l";
 
 /// Regex pattern to find potential Bitcoin addresses in text.
-fn btc_addr_pattern() -> &'static regex::Regex {
-    static PATTERN: OnceLock<regex::Regex> = OnceLock::new();
-    PATTERN.get_or_init(|| {
-        // Legacy/P2SH: [13][a-km-zA-HJ-NP-Z1-9]{25,34}
-        // Bech32/Bech32m: bc1[qpzry9x8gf2tvdw0s3jn54khce6mua7l]{6,87}
-        regex::Regex::new(
+fn btc_addr_pattern() -> Option<&'static regex::Regex> {
+    static PATTERN: OnceLock<Option<regex::Regex>> = OnceLock::new();
+    PATTERN
+        .get_or_init(|| {
+            // Legacy/P2SH: [13][a-km-zA-HJ-NP-Z1-9]{25,34}
+            // Bech32/Bech32m: bc1[qpzry9x8gf2tvdw0s3jn54khce6mua7l]{6,87}
+            regex::Regex::new(
             r"\b([13][1-9A-HJ-NP-Za-km-z]{25,34}|bc1[qpzry9x8gf2tvdw0s3jn54khce6mua7l]{6,87})\b",
         )
-        .unwrap()
-    })
+        .ok()
+        })
+        .as_ref()
 }
 
 /// Validate if a string is a valid Bitcoin address (with checksum).
@@ -37,7 +39,10 @@ pub(crate) fn validate_bitcoin_address(s: &str) -> bool {
 /// Check if a text string contains at least one valid Bitcoin address.
 #[must_use]
 pub fn contains_bitcoin_address(text: &str) -> bool {
-    for m in btc_addr_pattern().find_iter(text) {
+    let Some(pattern) = btc_addr_pattern() else {
+        return false;
+    };
+    for m in pattern.find_iter(text) {
         if validate_bitcoin_address(m.as_str()) {
             return true;
         }

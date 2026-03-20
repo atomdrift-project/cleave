@@ -554,28 +554,35 @@ impl PEAnalyzer {
         // Emit signature findings
         if let Some(metrics) = &report.metrics {
             if let Some(pe_metrics) = &metrics.pe {
-                if let Some(signer) = &pe_metrics.signer {
+                if let Some(signer_full) = &pe_metrics.signer {
                     let sig_type = pe_metrics.signature_type.as_deref().unwrap_or("unknown");
-                    let normalized_signer =
-                        signer.to_lowercase().replace(' ', "-").replace(',', "");
-                    report.findings.push(Finding {
-                        id: format!("metadata/signed/{}::{}", sig_type, normalized_signer),
-                        kind: FindingKind::Capability,
-                        desc: format!("Signed by: {}", signer),
-                        conf: 1.0,
-                        crit: Criticality::Notable,
-                        mbc: None,
-                        attack: None,
-                        trait_refs: vec![],
-                        evidence: vec![Evidence {
-                            method: "authenticode".to_string(),
-                            source: "cleave".to_string(),
-                            value: signer.clone(),
-                            ..Default::default()
-                        }],
-                        match_count: 1,
-                        source_file: None,
-                    });
+                    // Split if we have multiple signers
+                    for signer in signer_full.split(", ") {
+                        let normalized_signer = signer
+                            .to_lowercase()
+                            .replace(' ', "-")
+                            .replace(',', "")
+                            .replace("(", "")
+                            .replace(")", "");
+                        report.findings.push(Finding {
+                            id: format!("metadata/signed/{}::{}", sig_type, normalized_signer),
+                            kind: FindingKind::Capability,
+                            desc: format!("Signed by: {}", signer),
+                            conf: 1.0,
+                            crit: Criticality::Notable,
+                            mbc: None,
+                            attack: None,
+                            trait_refs: vec![],
+                            evidence: vec![Evidence {
+                                method: "authenticode".to_string(),
+                                source: "cleave".to_string(),
+                                value: signer.to_string(),
+                                ..Default::default()
+                            }],
+                            match_count: 1,
+                            source_file: None,
+                        });
+                    }
                 } else if !pe_metrics.has_signature {
                     report.findings.push(Finding {
                         id: "metadata/unsigned".to_string(),
@@ -987,55 +994,98 @@ impl PEAnalyzer {
             }
         }
 
-        // Check for overlay data (appended after PE image)
-        // This can be:
-        // 1. Code signature (PKCS7)
-        // 2. Self-extracting archive (7z, ZIP, RAR)
-        // 3. Resources or other data
-        let sig_sections_end = pe
-            .sections
-            .iter()
-            .map(|s| (s.pointer_to_raw_data + s.size_of_raw_data) as u64)
-            .max()
-            .unwrap_or(0);
-        if (data.len() as u64) > sig_sections_end && sig_sections_end > 0 {
-            let overlay_start = sig_sections_end as usize;
-            let overlay_data = &data[overlay_start..];
+        // Check for code signature (Authenticode)
+        if let Some(opt) = &pe.header.optional_header {
+            if let Some(Some(cert_table_entry)) = opt.data_directories.data_directories.get(4) {
+                let cert_table = &cert_table_entry.1;
+                // Note: virt_addr in security directory is actually a file offset
+                let offset = cert_table.virtual_address as usize;
+                let size = cert_table.size as usize;
+                if offset > 0 && offset + size <= data.len() {
+                    let cert_data = &data[offset..offset + size];
+                    // Skip the WIN_CERTIFICATE header (8 bytes)
+                    if cert_data.len() > 8 {
+                        let pkcs7_data = &cert_data[8..];
+                        if !pkcs7_data.is_empty() && pkcs7_data[0] == 0x30 {
+                            metrics.has_signature = true;
 
-            // Check if overlay looks like PKCS7 signature (starts with 0x30)
-            if !overlay_data.is_empty() && overlay_data[0] == 0x30 {
-                metrics.has_signature = true;
+                            // Simple extraction of common names from certificate chain
+                            let cn_oid = [0x55, 0x04, 0x03];
+                            let mut signers = Vec::new();
+                            let mut search_pos = 0;
 
-                // Simple extraction of common name from certificate
-                // Find OID for commonName: 55 04 03
-                let cn_oid = [0x55, 0x04, 0x03];
-                if let Some(pos) = overlay_data.windows(cn_oid.len()).position(|w| w == cn_oid) {
-                    // Next byte is string type, then length
-                    let type_pos = pos + cn_oid.len();
-                    if type_pos + 1 < overlay_data.len() {
-                        let len = overlay_data[type_pos + 1] as usize;
-                        let str_pos = type_pos + 2;
-                        if str_pos + len <= overlay_data.len() {
-                            if let Ok(cn) =
-                                std::str::from_utf8(&overlay_data[str_pos..str_pos + len])
+                            while let Some(pos) = pkcs7_data[search_pos..]
+                                .windows(cn_oid.len())
+                                .position(|w| w == cn_oid)
                             {
-                                // Clean up common name (strip trailing nulls, etc)
-                                let cn = cn.trim_matches(char::from(0)).trim();
-                                if !cn.is_empty() {
-                                    metrics.signer = Some(cn.to_string());
+                                let abs_pos = search_pos + pos;
+                                search_pos = abs_pos + cn_oid.len();
 
-                                    // Categorize signature type
-                                    if cn.contains("Microsoft") || cn.contains("Windows") {
-                                        metrics.signature_type = Some("platform".to_string());
-                                    } else {
-                                        metrics.signature_type = Some("developer".to_string());
+                                // Next byte is string type, then length
+                                let type_pos = abs_pos + cn_oid.len();
+                                if type_pos + 1 < pkcs7_data.len() {
+                                    let len = pkcs7_data[type_pos + 1] as usize;
+                                    let str_pos = type_pos + 2;
+                                    if len > 0 && str_pos + len <= pkcs7_data.len() {
+                                        if let Ok(cn) =
+                                            std::str::from_utf8(&pkcs7_data[str_pos..str_pos + len])
+                                        {
+                                            let cn = cn.trim_matches(char::from(0)).trim();
+                                            if !cn.is_empty() && !signers.contains(&cn.to_string())
+                                            {
+                                                signers.push(cn.to_string());
+                                            }
+                                        }
                                     }
+                                }
+                                if signers.len() > 10 {
+                                    break;
+                                }
+                            }
+
+                            if !signers.is_empty() {
+                                metrics.signer = Some(signers.join(", "));
+                                if signers
+                                    .iter()
+                                    .any(|s| s.contains("Microsoft") || s.contains("Windows"))
+                                {
+                                    metrics.signature_type = Some("platform".to_string());
+                                } else {
+                                    metrics.signature_type = Some("developer".to_string());
                                 }
                             }
                         }
                     }
                 }
             }
+        }
+
+        // Check for overlay data (appended after PE image, excluding signature)
+        // This can be:
+        // 1. Self-extracting archive (7z, ZIP, RAR)
+        // 2. Resources or other data
+        let sig_sections_end = pe
+            .sections
+            .iter()
+            .map(|s| (s.pointer_to_raw_data + s.size_of_raw_data) as u64)
+            .max()
+            .unwrap_or(0);
+
+        // Calculate overlay start, taking into account that the signature might be at the end
+        let mut overlay_end = data.len() as u64;
+        if let Some(opt) = &pe.header.optional_header {
+            if let Some(Some(cert_table_entry)) = opt.data_directories.data_directories.get(4) {
+                let cert_table = &cert_table_entry.1;
+                let cert_offset = cert_table.virtual_address as u64;
+                if cert_offset > sig_sections_end && cert_offset < overlay_end {
+                    overlay_end = cert_offset;
+                }
+            }
+        }
+
+        if overlay_end > sig_sections_end && sig_sections_end > 0 {
+            let _overlay_start = sig_sections_end as usize;
+            let _overlay_data = &data[_overlay_start..overlay_end as usize];
         }
 
         // Ordinal-only imports

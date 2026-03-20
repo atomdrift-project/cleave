@@ -681,14 +681,20 @@ pub(crate) fn eval_raw<'a>(
                 let mut first_offset = None;
                 for (idx, mat) in bytes_re.find_iter(search_data).enumerate() {
                     if idx >= MAX_MATCHES_TO_PROCESS {
-                        let trait_info =
-                            trait_id.map(|id| format!(" [{}]", id)).unwrap_or_default();
-                        eprintln!(
-                            "WARNING: Hit match limit of {} matches for regex pattern '{}'{}, stopping early",
-                            MAX_MATCHES_TO_PROCESS,
-                            pattern_str,
-                            trait_info
-                        );
+                        if let Some(trait_id_val) = trait_id {
+                            tracing::info!(
+                                trait_id = %trait_id_val,
+                                pattern = %pattern_str,
+                                limit = MAX_MATCHES_TO_PROCESS,
+                                "Hit regex-pattern match limit; stopping early"
+                            );
+                        } else {
+                            tracing::info!(
+                                pattern = %pattern_str,
+                                limit = MAX_MATCHES_TO_PROCESS,
+                                "Hit regex-pattern match limit; stopping early"
+                            );
+                        }
                         break;
                     }
                     let match_bytes = mat.as_bytes();
@@ -740,13 +746,20 @@ pub(crate) fn eval_raw<'a>(
             for (idx, mat) in re.find_iter(&content).enumerate() {
                 // Limit match processing to prevent DoS on pattern-dense files
                 if idx >= MAX_MATCHES_TO_PROCESS {
-                    let trait_info = trait_id.map(|id| format!(" [{}]", id)).unwrap_or_default();
-                    eprintln!(
-                        "WARNING: Hit match limit of {} matches for regex pattern '{}'{}, stopping early",
-                        MAX_MATCHES_TO_PROCESS,
-                        re.as_str(),
-                        trait_info
-                    );
+                    if let Some(trait_id_val) = trait_id {
+                        tracing::info!(
+                            trait_id = %trait_id_val,
+                            pattern = %re.as_str(),
+                            limit = MAX_MATCHES_TO_PROCESS,
+                            "Hit regex-pattern match limit; stopping early"
+                        );
+                    } else {
+                        tracing::info!(
+                            pattern = %re.as_str(),
+                            limit = MAX_MATCHES_TO_PROCESS,
+                            "Hit regex-pattern match limit; stopping early"
+                        );
+                    }
                     break;
                 }
                 let match_str = mat.as_str();

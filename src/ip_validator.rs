@@ -13,12 +13,13 @@ use std::sync::OnceLock;
 
 /// Regex pattern to find IP-like strings in text.
 /// Matches any sequence of digits separated by dots (will be validated later).
-#[allow(clippy::unwrap_used)] // Static regex pattern is hardcoded and valid
-fn ip_pattern() -> &'static regex::Regex {
-    static PATTERN: OnceLock<regex::Regex> = OnceLock::new();
-    PATTERN.get_or_init(|| {
-        regex::Regex::new(r"\b([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})\b").unwrap()
-    })
+fn ip_pattern() -> Option<&'static regex::Regex> {
+    static PATTERN: OnceLock<Option<regex::Regex>> = OnceLock::new();
+    PATTERN
+        .get_or_init(|| {
+            regex::Regex::new(r"\b([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})\b").ok()
+        })
+        .as_ref()
 }
 
 /// Check if a parsed IPv4 address is external (external, routable, potentially C2).
@@ -203,8 +204,11 @@ pub(crate) fn contains_external_ip(text: &str) -> bool {
     if memchr::memchr(b'.', text.as_bytes()).is_none() {
         return false;
     }
+    let Some(pattern) = ip_pattern() else {
+        return false;
+    };
     // Use find_iter instead of captures_iter — we only need the full match
-    for m in ip_pattern().find_iter(text) {
+    for m in pattern.find_iter(text) {
         if validate_external_ip_string(m.as_str()).is_some() {
             return true;
         }

@@ -22,11 +22,10 @@ use std::sync::OnceLock;
 use walkdir::WalkDir;
 
 /// Compiled regex for YARA rule header matching — shared across all preprocessing steps.
-fn rule_start_re() -> &'static regex::Regex {
-    static RE: OnceLock<regex::Regex> = OnceLock::new();
-    RE.get_or_init(|| {
-        regex::Regex::new(r"(?m)^(\s*)((?:private\s+|global\s+)*)rule\s+(\w+)").unwrap()
-    })
+fn rule_start_re() -> Option<&'static regex::Regex> {
+    static RE: OnceLock<Option<regex::Regex>> = OnceLock::new();
+    RE.get_or_init(|| regex::Regex::new(r"(?m)^(\s*)((?:private\s+|global\s+)*)rule\s+(\w+)").ok())
+        .as_ref()
 }
 
 /// Maximum pattern match ranges to collect per pattern.
@@ -44,10 +43,9 @@ const ENGINE_SCANNER_CACHE_SIZE: usize = 4;
 thread_local! {
     static ENGINE_SCANNER_CACHE: RefCell<lru::LruCache<usize, yara_x::Scanner<'static>>> = {
         use std::num::NonZeroUsize;
-        // SAFETY: ENGINE_SCANNER_CACHE_SIZE is a compile-time constant > 0
-        RefCell::new(lru::LruCache::new(
-            NonZeroUsize::new(ENGINE_SCANNER_CACHE_SIZE).expect("cache size > 0")
-        ))
+        let cache_size =
+            NonZeroUsize::new(ENGINE_SCANNER_CACHE_SIZE).unwrap_or(NonZeroUsize::MIN);
+        RefCell::new(lru::LruCache::new(cache_size))
     };
 }
 
@@ -1316,7 +1314,9 @@ impl YaraEngine {
                 tracing::debug!("Created new YARA scanner for tier (ptr={:#x})", key);
                 cache.put(key, s);
             }
-            let scanner = cache.get_mut(&key).expect("scanner just inserted");
+            let Some(scanner) = cache.get_mut(&key) else {
+                anyhow::bail!("scanner cache entry missing after insertion");
+            };
 
             let scan_results = scanner
                 .scan(data)
@@ -1330,25 +1330,15 @@ impl YaraEngine {
                         .map(|pat| {
                             let total_matches = pat.matches().count();
                             if total_matches > MAX_PATTERN_MATCHES {
-                                let trait_info = if rule.namespace().starts_with("inline.") {
-                                    format!(" [{}]", &rule.namespace()[7..])
-                                } else {
-                                    String::new()
-                                };
-                                eprintln!(
-                                    "WARNING: Hit match limit of {} matches for YARA pattern '{}.{}'{}, stopping early",
-                                    MAX_PATTERN_MATCHES,
-                                    rule.identifier(),
-                                    pat.identifier(),
-                                    trait_info
-                                );
-                                tracing::warn!(
+                                let inline_trait_id = rule.namespace().strip_prefix("inline.");
+                                tracing::info!(
                                     rule = %rule.identifier(),
                                     namespace = %rule.namespace(),
                                     pattern = %pat.identifier(),
                                     matches = total_matches,
                                     limit = MAX_PATTERN_MATCHES,
-                                    "Pattern has excessive matches, truncating to prevent memory exhaustion"
+                                    inline_trait_id,
+                                    "Hit YARA-pattern match limit; stopping early"
                                 );
                             }
                             let ranges: Vec<_> = pat
@@ -1481,7 +1471,12 @@ impl YaraEngine {
 
         tracing::debug!("Found {} third-party YARA files", rule_files.len());
 
-        let re = rule_start_re();
+        let Some(re) = rule_start_re() else {
+            tracing::warn!(
+                "failed to compile YARA rule-start regex; skipping third-party YARA preprocessing"
+            );
+            return (HashMap::new(), 0, 0, 0);
+        };
 
         struct Processed {
             path: PathBuf,
@@ -1622,8 +1617,11 @@ impl YaraEngine {
 
         let mut rules: Vec<RuleInfo<'_>> = Vec::new();
         for cap in rule_re.captures_iter(source) {
-            let name = cap.get(3).unwrap().as_str();
-            let start = cap.get(0).unwrap().start();
+            let (Some(name_match), Some(start_match)) = (cap.get(3), cap.get(0)) else {
+                continue;
+            };
+            let name = name_match.as_str();
+            let start = start_match.start();
             let is_private = cap
                 .get(2)
                 .map(|m| m.as_str().contains("private"))
@@ -1703,8 +1701,11 @@ impl YaraEngine {
         // Find all rule starts and their positions
         let mut rule_ranges: Vec<(usize, usize, &str)> = Vec::new();
         for cap in re.captures_iter(source) {
-            let rule_name = cap.get(3).unwrap().as_str();
-            let rule_start = cap.get(0).unwrap().start();
+            let (Some(rule_name_match), Some(rule_start_match)) = (cap.get(3), cap.get(0)) else {
+                continue;
+            };
+            let rule_name = rule_name_match.as_str();
+            let rule_start = rule_start_match.start();
             rule_ranges.push((rule_start, 0, rule_name)); // end will be filled later
         }
 
@@ -1754,7 +1755,10 @@ impl YaraEngine {
     fn filter_vt_rules(source: &str, re: &regex::Regex) -> (String, usize) {
         let mut rule_ranges: Vec<(usize, usize)> = Vec::new();
         for cap in re.captures_iter(source) {
-            let rule_start = cap.get(0).unwrap().start();
+            let Some(rule_start_match) = cap.get(0) else {
+                continue;
+            };
+            let rule_start = rule_start_match.start();
             rule_ranges.push((rule_start, 0));
         }
 
@@ -2425,7 +2429,11 @@ impl YaraEngine {
             anyhow::bail!("Invalid cache magic");
         }
 
-        let version = u32::from_le_bytes(mmap[4..8].try_into().unwrap());
+        let version = u32::from_le_bytes(
+            mmap[4..8]
+                .try_into()
+                .map_err(|_| anyhow::anyhow!("cache header version truncated"))?,
+        );
         if version != CACHE_VERSION {
             anyhow::bail!(
                 "Cache version mismatch: expected {}, got {}",
@@ -2434,7 +2442,11 @@ impl YaraEngine {
             );
         }
 
-        let manifest_len = u64::from_le_bytes(mmap[8..16].try_into().unwrap()) as usize;
+        let manifest_len = u64::from_le_bytes(
+            mmap[8..16]
+                .try_into()
+                .map_err(|_| anyhow::anyhow!("cache header manifest length truncated"))?,
+        ) as usize;
         let manifest_end = CACHE_HEADER_SIZE + manifest_len;
         if manifest_end > mmap.len() {
             anyhow::bail!("Cache manifest truncated");
@@ -2856,8 +2868,12 @@ rule AlsoKeep {
         // derive_trait_id("3p.test.file", "DisableMe", None) -> "third_party/test/file/disableme"
         disabled.insert("third_party/test/file/disableme".to_string());
 
-        let (filtered, count) =
-            YaraEngine::filter_disabled_rules(source, "3p.test.file", &disabled, rule_start_re());
+        let (filtered, count) = YaraEngine::filter_disabled_rules(
+            source,
+            "3p.test.file",
+            &disabled,
+            rule_start_re().expect("valid test regex"),
+        );
 
         assert_eq!(count, 1);
         assert!(filtered.contains("rule KeepMe"));
@@ -2884,8 +2900,12 @@ rule KeepMe {
         // Different namespace - won't match rules in test.file
         disabled.insert("third_party/other/file/somerule".to_string());
 
-        let (filtered, count) =
-            YaraEngine::filter_disabled_rules(source, "3p.test.file", &disabled, rule_start_re());
+        let (filtered, count) = YaraEngine::filter_disabled_rules(
+            source,
+            "3p.test.file",
+            &disabled,
+            rule_start_re().expect("valid test regex"),
+        );
 
         assert_eq!(count, 0);
         assert_eq!(filtered, source);
@@ -2912,8 +2932,12 @@ rule DisableMe : hostile malware {
         let mut disabled = std::collections::HashSet::new();
         disabled.insert("third_party/test/file/disableme".to_string());
 
-        let (filtered, count) =
-            YaraEngine::filter_disabled_rules(source, "3p.test.file", &disabled, rule_start_re());
+        let (filtered, count) = YaraEngine::filter_disabled_rules(
+            source,
+            "3p.test.file",
+            &disabled,
+            rule_start_re().expect("valid test regex"),
+        );
 
         assert_eq!(count, 1);
         assert!(filtered.contains("rule KeepMe : tag1 tag2"));
@@ -2952,8 +2976,12 @@ private global rule PrivateGlobalKeep {
         let mut disabled = std::collections::HashSet::new();
         disabled.insert("third_party/test/file/globaldisable".to_string());
 
-        let (filtered, count) =
-            YaraEngine::filter_disabled_rules(source, "3p.test.file", &disabled, rule_start_re());
+        let (filtered, count) = YaraEngine::filter_disabled_rules(
+            source,
+            "3p.test.file",
+            &disabled,
+            rule_start_re().expect("valid test regex"),
+        );
 
         assert_eq!(count, 1);
         assert!(filtered.contains("private rule PrivateKeep"));
@@ -2985,8 +3013,12 @@ rule Second {
         let mut disabled = std::collections::HashSet::new();
         disabled.insert("third_party/test/file/firstdisabled".to_string());
 
-        let (filtered, count) =
-            YaraEngine::filter_disabled_rules(source, "3p.test.file", &disabled, rule_start_re());
+        let (filtered, count) = YaraEngine::filter_disabled_rules(
+            source,
+            "3p.test.file",
+            &disabled,
+            rule_start_re().expect("valid test regex"),
+        );
 
         assert_eq!(count, 1);
         assert!(!filtered.contains("rule FirstDisabled"));
@@ -3018,8 +3050,12 @@ rule LastDisabled {
         let mut disabled = std::collections::HashSet::new();
         disabled.insert("third_party/test/file/lastdisabled".to_string());
 
-        let (filtered, count) =
-            YaraEngine::filter_disabled_rules(source, "3p.test.file", &disabled, rule_start_re());
+        let (filtered, count) = YaraEngine::filter_disabled_rules(
+            source,
+            "3p.test.file",
+            &disabled,
+            rule_start_re().expect("valid test regex"),
+        );
 
         assert_eq!(count, 1);
         assert!(filtered.contains("rule First"));
@@ -3073,8 +3109,12 @@ rule Keep3 {
         disabled.insert("third_party/test/file/disable1".to_string());
         disabled.insert("third_party/test/file/disable2".to_string());
 
-        let (filtered, count) =
-            YaraEngine::filter_disabled_rules(source, "3p.test.file", &disabled, rule_start_re());
+        let (filtered, count) = YaraEngine::filter_disabled_rules(
+            source,
+            "3p.test.file",
+            &disabled,
+            rule_start_re().expect("valid test regex"),
+        );
 
         assert_eq!(count, 2);
         assert!(filtered.contains("rule Keep1"));
@@ -3111,8 +3151,12 @@ rule DisableMe {
         let mut disabled = std::collections::HashSet::new();
         disabled.insert("third_party/test/file/disableme".to_string());
 
-        let (filtered, count) =
-            YaraEngine::filter_disabled_rules(source, "3p.test.file", &disabled, rule_start_re());
+        let (filtered, count) = YaraEngine::filter_disabled_rules(
+            source,
+            "3p.test.file",
+            &disabled,
+            rule_start_re().expect("valid test regex"),
+        );
 
         assert_eq!(count, 1);
         assert!(filtered.contains("import \"pe\""));
@@ -3152,8 +3196,12 @@ rule DisableMe {
         let mut disabled = std::collections::HashSet::new();
         disabled.insert("third_party/test/file/disableme".to_string());
 
-        let (filtered, count) =
-            YaraEngine::filter_disabled_rules(source, "3p.test.file", &disabled, rule_start_re());
+        let (filtered, count) = YaraEngine::filter_disabled_rules(
+            source,
+            "3p.test.file",
+            &disabled,
+            rule_start_re().expect("valid test regex"),
+        );
 
         assert_eq!(count, 1);
         assert!(filtered.contains("rule KeepComplex"));
@@ -3187,8 +3235,12 @@ rule Disable2 {
         disabled.insert("third_party/test/file/disable1".to_string());
         disabled.insert("third_party/test/file/disable2".to_string());
 
-        let (filtered, count) =
-            YaraEngine::filter_disabled_rules(source, "3p.test.file", &disabled, rule_start_re());
+        let (filtered, count) = YaraEngine::filter_disabled_rules(
+            source,
+            "3p.test.file",
+            &disabled,
+            rule_start_re().expect("valid test regex"),
+        );
 
         assert_eq!(count, 2);
         assert!(!filtered.contains("rule Disable1"));
@@ -3223,8 +3275,12 @@ rule DisableMe {
         let mut disabled = std::collections::HashSet::new();
         disabled.insert("third_party/test/file/disableme".to_string());
 
-        let (filtered, count) =
-            YaraEngine::filter_disabled_rules(source, "3p.test.file", &disabled, rule_start_re());
+        let (filtered, count) = YaraEngine::filter_disabled_rules(
+            source,
+            "3p.test.file",
+            &disabled,
+            rule_start_re().expect("valid test regex"),
+        );
 
         assert_eq!(count, 1);
         assert!(filtered.contains("// This is a file-level comment"));

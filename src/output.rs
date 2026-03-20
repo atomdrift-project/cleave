@@ -21,10 +21,10 @@ use std::sync::OnceLock;
 
 /// Cached regex for stripping ANSI escape codes
 #[allow(dead_code)] // Used by binary target
-#[allow(clippy::expect_used)] // Static regex pattern is hardcoded and valid
-fn ansi_strip_regex() -> &'static regex::Regex {
-    static RE: OnceLock<regex::Regex> = OnceLock::new();
-    RE.get_or_init(|| regex::Regex::new(r"\x1b\[[0-9;]*m").expect("valid regex"))
+fn ansi_strip_regex() -> Option<&'static regex::Regex> {
+    static RE: OnceLock<Option<regex::Regex>> = OnceLock::new();
+    RE.get_or_init(|| regex::Regex::new(r"\x1b\[[0-9;]*m").ok())
+        .as_ref()
 }
 
 /// Extract base trait ID for aggregation (strip ::variant suffix)
@@ -450,7 +450,7 @@ pub(crate) fn format_tiny(report: &AnalysisReport) -> String {
     let has_visible_findings = report.files.iter().any(|file| {
         file.findings
             .iter()
-            .any(|f| f.crit > Criticality::Component && f.conf >= 0.5)
+            .any(|f| f.crit >= Criticality::Notable && f.conf >= 0.5)
     });
     if !has_visible_findings {
         return String::new();
@@ -460,11 +460,11 @@ pub(crate) fn format_tiny(report: &AnalysisReport) -> String {
     out.push_str("# H=hostile S=suspicious N=notable B=baseline\n");
 
     for file in &report.files {
-        // Collect findings above component level
+        // Collect findings at or above Notable level
         let mut findings: Vec<&Finding> = file
             .findings
             .iter()
-            .filter(|f| f.crit > Criticality::Component && f.conf >= 0.5)
+            .filter(|f| f.crit >= Criticality::Notable && f.conf >= 0.5)
             .collect();
 
         if findings.is_empty() {

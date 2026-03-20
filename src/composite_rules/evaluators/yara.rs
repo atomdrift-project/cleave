@@ -579,28 +579,23 @@ pub(crate) fn eval_hex<'a>(
         }
     }
 
-    // Warn if we hit the count limit (indicates potentially problematic pattern)
+    // Emit an informational trace if we hit the count limit.
     let truncated = total_count >= MAX_COUNT_MATCHES;
     if truncated {
-        let trait_info = trait_id.map(|id| format!(" [{}]", id)).unwrap_or_default();
-        eprintln!(
-            "WARNING: Hit match limit of {} matches for hex pattern '{}'{}, stopping early",
-            MAX_COUNT_MATCHES, pattern, trait_info
-        );
         if let Some(trait_id_val) = trait_id {
-            tracing::debug!(
+            tracing::info!(
                 trait_id = %trait_id_val,
                 pattern = %pattern,
                 count = total_count,
                 limit = MAX_COUNT_MATCHES,
-                "Hex pattern has excessive matches, count truncated"
+                "Hit hex-pattern match limit; stopping early"
             );
         } else {
-            tracing::debug!(
+            tracing::info!(
                 pattern = %pattern,
                 count = total_count,
                 limit = MAX_COUNT_MATCHES,
-                "Hex pattern has excessive matches, count truncated"
+                "Hit hex-pattern match limit; stopping early"
             );
         }
     }

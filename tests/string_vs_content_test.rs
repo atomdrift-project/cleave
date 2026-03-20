@@ -3,15 +3,15 @@
 
 //! Tests for string vs raw condition behavior.
 //!
-//! Verifies that `type: string` conditions search AST-extracted strings (excluding comments)
+//! Verifies that `type: string_value` conditions search AST-extracted strings (excluding comments)
 //! while `type: raw` conditions search raw file content (including comments).
 
 use std::fs;
 use tempfile::TempDir;
 
-/// Test that `type: string` conditions do NOT match IP addresses in C comments.
+/// Test that `type: string_value` conditions do NOT match IP addresses in C comments.
 ///
-/// This is a regression test for a bug where `type: string` was falling back to
+/// This is a regression test for a bug where `type: string_value` was falling back to
 /// raw content search for source files, causing it to match patterns in comments
 /// that should only be found by `type: raw` conditions.
 ///
@@ -24,7 +24,7 @@ fn test_string_condition_excludes_c_comments() {
     let header_path = temp_dir.path().join("test.h");
 
     // C header file with IP address ONLY in a comment
-    // The hardcoded-ip rule uses `type: string` with external_ip: true
+    // The hardcoded-ip rule uses `type: string_value` with `is: external_ip`
     // It should NOT match because 7.18.8.8 is only in a comment
     let c_content = r#"#ifndef TEST_H
 #define TEST_H
@@ -60,12 +60,12 @@ typedef unsigned char uint8_t;
     // If this assertion fails, the bug is present (string search is using raw content)
     assert!(
         !stdout.contains("hardcoded-ip"),
-        "BUG: hardcoded-ip matched IP in C comment. String conditions should use AST-extracted strings, not raw content.\nOutput: {}",
+        "BUG: hardcoded-ip matched IP in C comment. string_value conditions should use AST-extracted strings, not raw content.\nOutput: {}",
         stdout
     );
 }
 
-/// Test that `type: string` conditions DO match IP addresses in C string literals.
+/// Test that `type: string_value` conditions DO match IP addresses in C string literals.
 #[test]
 fn test_string_condition_matches_c_string_literals() {
     let temp_dir = TempDir::new().unwrap();
@@ -196,7 +196,7 @@ traits:
     if:
       type: string_value
       regex: "\\b[0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3}\\b"
-      external_ip: true
+      is: external_ip
 "#;
 
     // Raw-based trait (should match both IPs)
@@ -211,7 +211,7 @@ traits:
     if:
       type: raw
       regex: "\\b[0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3}\\b"
-      external_ip: true
+      is: external_ip
 "#;
 
     fs::write(traits_dir.join("string.yaml"), string_trait).unwrap();
@@ -250,7 +250,7 @@ traits:
         // Check that it matched the string literal IP, not the comment IP
         assert!(
             !stdout.contains("91.92.242.30") || stdout.contains("8.8.8.8"),
-            "BUG: type: string should not match IP in comment (91.92.242.30). Output: {}",
+            "BUG: type: string_value should not match IP in comment (91.92.242.30). Output: {}",
             stdout
         );
     }

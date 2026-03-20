@@ -1,4 +1,3 @@
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 use crate::rtf::error::{Result, RtfError};
 use crate::rtf::types::OleHeader;
 
@@ -25,6 +24,7 @@ pub(crate) fn extract_header(data: &[u8]) -> Result<OleHeader> {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use super::*;
 

@@ -1,5 +1,4 @@
 //! String extraction from binaries.
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 //!
 //! This module extracts human-readable strings from binary files,
 //! classifying them as URLs, IPs, file paths, or generic strings.
@@ -35,49 +34,44 @@ fn stng_method_to_string(method: StringMethod) -> String {
 }
 
 // Static regex helper functions - patterns compiled once on first use
-#[allow(clippy::expect_used)] // Static regex pattern is hardcoded and valid
 #[allow(dead_code)] // Used internally by string classification
-fn url_regex() -> &'static Regex {
-    static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| {
-        Regex::new(r"(?i)(https?|ftp)://[^\s<>]{1,2048}").expect("url regex is valid")
-    })
+fn url_regex() -> Option<&'static Regex> {
+    static RE: OnceLock<Option<Regex>> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r"(?i)(https?|ftp)://[^\s<>]{1,2048}").ok())
+        .as_ref()
 }
 
-#[allow(clippy::expect_used)] // Static regex pattern is hardcoded and valid
 #[allow(dead_code)] // Used internally by string classification
-fn ip_regex() -> &'static Regex {
-    static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(r"\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}").expect("ip regex is valid"))
+fn ip_regex() -> Option<&'static Regex> {
+    static RE: OnceLock<Option<Regex>> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r"\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}").ok())
+        .as_ref()
 }
 
-#[allow(clippy::expect_used)] // Static regex pattern is hardcoded and valid
 #[allow(dead_code)] // Used internally by string classification
-fn version_ip_regex() -> &'static Regex {
-    static RE: OnceLock<Regex> = OnceLock::new();
+fn version_ip_regex() -> Option<&'static Regex> {
+    static RE: OnceLock<Option<Regex>> = OnceLock::new();
     RE.get_or_init(|| {
         Regex::new(r"(?i)(?:Chrome|Safari|Firefox|Edge|Opera|Chromium|Version|AppleWebKit|KHTML|Gecko|Trident|OPR|Mobile|MSIE|rv:|v)/\d+\.\d+\.\d+\.\d+")
-            .expect("version_ip regex is valid")
+            .ok()
     })
+    .as_ref()
 }
 
-#[allow(clippy::expect_used)] // Static regex pattern is hardcoded and valid
 #[allow(dead_code)] // Used internally by string classification
-fn email_regex() -> &'static Regex {
-    static RE: OnceLock<Regex> = OnceLock::new();
+fn email_regex() -> Option<&'static Regex> {
+    static RE: OnceLock<Option<Regex>> = OnceLock::new();
     RE.get_or_init(|| {
-        Regex::new(r"[A-Za-z0-9._%+-]{1,64}@[A-Za-z0-9.-]{1,253}\.[A-Za-z]{2,63}")
-            .expect("email regex is valid")
+        Regex::new(r"[A-Za-z0-9._%+-]{1,64}@[A-Za-z0-9.-]{1,253}\.[A-Za-z]{2,63}").ok()
     })
+    .as_ref()
 }
 
-#[allow(clippy::expect_used)] // Static regex pattern is hardcoded and valid
 #[allow(dead_code)] // Used internally by string classification
-fn base64_regex() -> &'static Regex {
-    static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| {
-        Regex::new(r"^[A-Za-z0-9+/]{16,65536}={0,2}$").expect("base64 regex is valid")
-    })
+fn base64_regex() -> Option<&'static Regex> {
+    static RE: OnceLock<Option<Regex>> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r"^[A-Za-z0-9+/]{16,65536}={0,2}$").ok())
+        .as_ref()
 }
 
 /// Extract and classify strings from binary data
@@ -271,15 +265,17 @@ impl StringExtractor {
         let (stype, _lib_info) = match self.symbol_map.get(normalized.as_ref()) {
             Some((t, l)) => (*t, l.clone()),
             None => {
-                let t = if url_regex().is_match(&value) {
+                let t = if url_regex().is_some_and(|regex| regex.is_match(&value)) {
                     StringType::Url
                 } else if self.is_real_ip(&value) {
                     StringType::IP
-                } else if email_regex().is_match(&value) {
+                } else if email_regex().is_some_and(|regex| regex.is_match(&value)) {
                     StringType::Email
                 } else if self.is_path(&value) {
                     StringType::Path
-                } else if value.len() >= 16 && base64_regex().is_match(&value) {
+                } else if value.len() >= 16
+                    && base64_regex().is_some_and(|regex| regex.is_match(&value))
+                {
                     StringType::Base64
                 } else {
                     StringType::Const
@@ -306,15 +302,15 @@ impl StringExtractor {
             return *stype;
         }
 
-        if url_regex().is_match(value) {
+        if url_regex().is_some_and(|regex| regex.is_match(value)) {
             StringType::Url
         } else if self.is_real_ip(value) {
             StringType::IP
-        } else if email_regex().is_match(value) {
+        } else if email_regex().is_some_and(|regex| regex.is_match(value)) {
             StringType::Email
         } else if self.is_path(value) {
             StringType::Path
-        } else if value.len() >= 16 && base64_regex().is_match(value) {
+        } else if value.len() >= 16 && base64_regex().is_some_and(|regex| regex.is_match(value)) {
             StringType::Base64
         } else {
             StringType::Const
@@ -330,11 +326,11 @@ impl StringExtractor {
             return *stype;
         }
 
-        if url_regex().is_match(value) {
+        if url_regex().is_some_and(|regex| regex.is_match(value)) {
             StringType::Url
         } else if self.is_real_ip(value) {
             StringType::IP
-        } else if email_regex().is_match(value) {
+        } else if email_regex().is_some_and(|regex| regex.is_match(value)) {
             StringType::Email
         } else if self.is_path(value) {
             StringType::Path
@@ -364,15 +360,18 @@ impl StringExtractor {
     /// Check if string contains a real IP address (not a version string)
     fn is_real_ip(&self, s: &str) -> bool {
         // Must contain IP-like pattern
-        if !ip_regex().is_match(s) {
+        let Some(ip_regex) = ip_regex() else {
+            return false;
+        };
+        if !ip_regex.is_match(s) {
             return false;
         }
         // Exclude version strings like "Chrome/100.0.0.0", "Safari/537.36.0.0"
-        if version_ip_regex().is_match(s) {
+        if version_ip_regex().is_some_and(|regex| regex.is_match(s)) {
             return false;
         }
         // Validate that IP octets are in valid range (0-255)
-        if let Some(caps) = ip_regex().find(s) {
+        if let Some(caps) = ip_regex.find(s) {
             let ip_str = caps.as_str();
             let octets: Vec<&str> = ip_str.split('.').collect();
             if octets.len() == 4 {
@@ -429,6 +428,7 @@ impl Default for StringExtractor {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use super::*;
 

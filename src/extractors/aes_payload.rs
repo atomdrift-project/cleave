@@ -66,37 +66,38 @@ const MIN_CIPHERTEXT_HEX_LEN: usize = 64;
 const MAX_CIPHERTEXT_BYTES: usize = 10 * 1024 * 1024;
 
 // Pre-compiled regexes for pattern matching
-#[allow(clippy::unwrap_used)] // Static regex pattern is hardcoded and valid
-static RE_CREATE_DECIPHERIV: LazyLock<Regex> = LazyLock::new(|| {
+static RE_CREATE_DECIPHERIV: LazyLock<Option<Regex>> = LazyLock::new(|| {
     // Match: createDecipheriv("aes-256-cbc", "key", Buffer.from("iv", "hex"))
     // Or: createDecipheriv("aes-256-cbc", key_var, iv_var)
     Regex::new(
         r#"createDecipheriv\s*\(\s*["']([^"']+)["']\s*,\s*["']([^"']+)["']\s*,\s*Buffer\.from\s*\(\s*["']([a-fA-F0-9]+)["']\s*,\s*["']hex["']\s*\)"#
-    ).unwrap()
+    )
+    .ok()
 });
 
-#[allow(clippy::unwrap_used)] // Static regex pattern is hardcoded and valid
-static RE_DECIPHER_UPDATE: LazyLock<Regex> = LazyLock::new(|| {
+static RE_DECIPHER_UPDATE: LazyLock<Option<Regex>> = LazyLock::new(|| {
     // Match: .update("hex_ciphertext", "hex", "utf8")
     // The hex string can be very long (megabytes)
     Regex::new(
         r#"\.update\s*\(\s*["']([a-fA-F0-9]+)["']\s*,\s*["']hex["']\s*,\s*["']utf8["']\s*\)"#,
     )
-    .unwrap()
+    .ok()
 });
 
-#[allow(clippy::unwrap_used)] // Static regex pattern is hardcoded and valid
-static RE_HEX_STRING: LazyLock<Regex> = LazyLock::new(|| {
+static RE_HEX_STRING: LazyLock<Option<Regex>> = LazyLock::new(|| {
     // Match long hex strings in quotes (potential ciphertext)
-    Regex::new(r#"["']([a-fA-F0-9]{64,})["']"#).unwrap()
+    Regex::new(r#"["']([a-fA-F0-9]{64,})["']"#).ok()
 });
 
 /// Extract AES parameters from JavaScript/TypeScript content
 fn extract_aes_params(content: &str) -> Vec<AesParams> {
     let mut params = Vec::new();
+    let Some(regex) = RE_CREATE_DECIPHERIV.as_ref() else {
+        return params;
+    };
 
     // Find createDecipheriv calls with inline key and IV
-    for caps in RE_CREATE_DECIPHERIV.captures_iter(content) {
+    for caps in regex.captures_iter(content) {
         let algorithm = caps.get(1).map(|m| m.as_str()).unwrap_or("");
         let key_str = caps.get(2).map(|m| m.as_str()).unwrap_or("");
         let iv_hex = caps.get(3).map(|m| m.as_str()).unwrap_or("");
@@ -131,9 +132,12 @@ fn extract_aes_params(content: &str) -> Vec<AesParams> {
 /// Extract ciphertext blobs from content
 fn extract_ciphertext_blobs(content: &str) -> Vec<CiphertextBlob> {
     let mut blobs = Vec::new();
+    let Some(update_regex) = RE_DECIPHER_UPDATE.as_ref() else {
+        return blobs;
+    };
 
     // First try to find .update("hex", "hex", "utf8") pattern
-    for caps in RE_DECIPHER_UPDATE.captures_iter(content) {
+    for caps in update_regex.captures_iter(content) {
         let hex_str = caps.get(1).map(|m| m.as_str()).unwrap_or("");
         if hex_str.len() < MIN_CIPHERTEXT_HEX_LEN {
             continue;
@@ -151,7 +155,11 @@ fn extract_ciphertext_blobs(content: &str) -> Vec<CiphertextBlob> {
 
     // If no .update() pattern found, look for standalone long hex strings
     if blobs.is_empty() {
-        for caps in RE_HEX_STRING.captures_iter(content) {
+        let Some(hex_regex) = RE_HEX_STRING.as_ref() else {
+            return blobs;
+        };
+
+        for caps in hex_regex.captures_iter(content) {
             let hex_str = caps.get(1).map(|m| m.as_str()).unwrap_or("");
             if hex_str.len() < MIN_CIPHERTEXT_HEX_LEN {
                 continue;

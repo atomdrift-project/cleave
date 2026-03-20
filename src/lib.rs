@@ -8,12 +8,15 @@
 //! ```no_run
 //! use cleave::{analyze_file, AnalysisOptions};
 //!
+//! # fn demo() -> Result<(), Box<dyn std::error::Error>> {
 //! let options = AnalysisOptions::default();
-//! let report = analyze_file("suspicious.py", &options).unwrap();
+//! let report = analyze_file("suspicious.py", &options)?;
 //!
 //! for finding in &report.findings {
 //!     println!("{}: {} ({:?})", finding.id, finding.desc, finding.crit);
 //! }
+//! # Ok(())
+//! # }
 //! ```
 
 extern crate self as cleave;
@@ -1230,18 +1233,8 @@ where
                 rayon::current_num_threads().min(8)
             }
         });
-    #[allow(clippy::expect_used)]
-    let scan_pool = rayon::ThreadPoolBuilder::new()
-        .num_threads(scan_threads)
-        .build()
-        .unwrap_or_else(|_| {
-            rayon::ThreadPoolBuilder::new()
-                .build()
-                .expect("failed to build fallback rayon thread pool")
-        });
-    tracing::info!(scan_threads, "Directory scan thread pool created");
-
-    scan_pool.install(|| files.par_iter().for_each(|file_path| {
+    let analyze_files = || {
+        files.par_iter().for_each(|file_path| {
         // Skip files exceeding the size limit (avoids mmap'ing huge ISOs/disk images).
         if max_scan_size > 0 {
             if let Ok(meta) = std::fs::metadata(file_path) {
@@ -1314,7 +1307,26 @@ where
             result: Box::new(result),
         });
         composite_rules::evaluators::clear_thread_local_caches();
-    }));
+    })
+    };
+
+    match rayon::ThreadPoolBuilder::new()
+        .num_threads(scan_threads)
+        .build()
+    {
+        Ok(scan_pool) => {
+            tracing::info!(scan_threads, "Directory scan thread pool created");
+            scan_pool.install(analyze_files);
+        }
+        Err(error) => {
+            tracing::warn!(
+                scan_threads,
+                %error,
+                "Failed to build dedicated directory scan thread pool; using global Rayon pool"
+            );
+            analyze_files();
+        }
+    }
 
     let final_analyzed = analyzed.load(Ordering::Relaxed);
     let final_skipped = skipped.load(Ordering::Relaxed);

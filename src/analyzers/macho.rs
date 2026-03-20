@@ -586,6 +586,12 @@ impl MachOAnalyzer {
             }
         };
 
+        let sig_value = if let Some(ref s) = codesig.signer {
+            format!("{}::{}", sig_category, s)
+        } else {
+            format!("{}::{}", sig_category, signer)
+        };
+
         report.findings.push(Finding {
             kind: FindingKind::Capability,
             trait_refs: vec![],
@@ -598,7 +604,7 @@ impl MachOAnalyzer {
             evidence: vec![Evidence {
                 method: "code_signature".to_string(),
                 source: "codesign_parser".to_string(),
-                value: format!("{}::{}", sig_category, signer),
+                value: sig_value,
                 location: None,
                 ..Default::default()
             }],

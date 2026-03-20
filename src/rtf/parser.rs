@@ -1,4 +1,3 @@
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 use crate::rtf::error::{Result, RtfError};
 use crate::rtf::hex_decoder::decode_hex_tolerant;
 use crate::rtf::ole_extractor;
@@ -7,34 +6,34 @@ use regex::Regex;
 use std::sync::OnceLock;
 
 /// Cached regex patterns for RTF parsing
-#[allow(clippy::expect_used)] // Static regex pattern is hardcoded and valid
-fn control_word_regex() -> &'static Regex {
-    static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(r"\\([a-zA-Z]+)(-?\d*)").expect("valid regex"))
+fn control_word_regex() -> Option<&'static Regex> {
+    static RE: OnceLock<Option<Regex>> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r"\\([a-zA-Z]+)(-?\d*)").ok())
+        .as_ref()
 }
 
-#[allow(clippy::expect_used)] // Static regex pattern is hardcoded and valid
-fn object_regex() -> &'static Regex {
-    static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(r"\{\\object[^}]*\}").expect("valid regex"))
+fn object_regex() -> Option<&'static Regex> {
+    static RE: OnceLock<Option<Regex>> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r"\{\\object[^}]*\}").ok())
+        .as_ref()
 }
 
-#[allow(clippy::expect_used)] // Static regex pattern is hardcoded and valid
-fn objclass_regex() -> &'static Regex {
-    static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(r#"\\objclass\s+"([^"]+)"?"#).expect("valid regex"))
+fn objclass_regex() -> Option<&'static Regex> {
+    static RE: OnceLock<Option<Regex>> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r#"\\objclass\s+"([^"]+)"?"#).ok())
+        .as_ref()
 }
 
-#[allow(clippy::expect_used)] // Static regex pattern is hardcoded and valid
-fn objdata_regex() -> &'static Regex {
-    static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(r"\\objdata\s+([0-9a-fA-F\s]+)").expect("valid regex"))
+fn objdata_regex() -> Option<&'static Regex> {
+    static RE: OnceLock<Option<Regex>> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r"\\objdata\s+([0-9a-fA-F\s]+)").ok())
+        .as_ref()
 }
 
-#[allow(clippy::expect_used)] // Static regex pattern is hardcoded and valid
-fn unc_path_regex() -> &'static Regex {
-    static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(r"\\\\([^\s\\]+)@SSL\\([^\s}]+)").expect("valid regex"))
+fn unc_path_regex() -> Option<&'static Regex> {
+    static RE: OnceLock<Option<Regex>> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r"\\\\([^\s\\]+)@SSL\\([^\s}]+)").ok())
+        .as_ref()
 }
 
 /// RTF parser with anti-bomb protections and minimal dependencies
@@ -120,7 +119,9 @@ impl RtfParser {
     /// Extract control words from RTF text
     fn extract_control_words(&self, text: &str) -> Vec<ControlWord> {
         let mut words = Vec::new();
-        let re = control_word_regex();
+        let Some(re) = control_word_regex() else {
+            return words;
+        };
 
         for (i, m) in re.find_iter(text).enumerate() {
             if i > 10000 {
@@ -151,7 +152,9 @@ impl RtfParser {
 
         // Find all \object...{\object directives
         // Look for patterns like: {\object\objemb...{\*\objdata ...}}
-        let re = object_regex();
+        let Some(re) = object_regex() else {
+            return objects;
+        };
 
         for m in re.find_iter(text) {
             let object_str = m.as_str();
@@ -206,15 +209,14 @@ impl RtfParser {
     /// Extract objdata hex string from object directive
     fn extract_objdata(&self, object_str: &str) -> Option<(String, Vec<u8>)> {
         // Extract class name (e.g., "Word.Document.8")
-        let class_re = objclass_regex();
-        let class_name = class_re
-            .captures(object_str)
+        let class_name = objclass_regex()
+            .and_then(|regex| regex.captures(object_str))
             .and_then(|c| c.get(1))
             .map(|m| m.as_str().to_string())
             .unwrap_or_else(|| "Unknown".to_string());
 
         // Extract hex data from {\*\objdata ...}
-        let data_re = objdata_regex();
+        let data_re = objdata_regex()?;
 
         if let Some(caps) = data_re.captures(object_str) {
             let hex_str = caps.get(1).map(|m| m.as_str())?;
@@ -287,7 +289,7 @@ impl Default for RtfParser {
 /// Extract UNC path from RTF control sequences
 fn extract_unc_path(text: &str) -> Option<String> {
     // Look for \\server@SSL\path patterns
-    let re = unc_path_regex();
+    let re = unc_path_regex()?;
 
     if let Some(caps) = re.captures(text) {
         let server = caps.get(1).map(|m| m.as_str()).unwrap_or("");
@@ -326,6 +328,7 @@ fn detect_hex_obfuscation(text: &str) -> bool {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use super::*;
 

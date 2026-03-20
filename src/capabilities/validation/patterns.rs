@@ -108,15 +108,14 @@ fn count_regex_min_literals(pattern: &str) -> usize {
     count
 }
 
-#[allow(clippy::expect_used)] // Static regex pattern is hardcoded and valid
-fn overlapping_alternations_regex() -> &'static regex::Regex {
-    static RE: OnceLock<regex::Regex> = OnceLock::new();
-    RE.get_or_init(|| regex::Regex::new(r"\([^)]*\.\*\|[^)]*\.\*\)").expect("valid regex"))
+fn overlapping_alternations_regex() -> Option<&'static regex::Regex> {
+    static RE: OnceLock<Option<regex::Regex>> = OnceLock::new();
+    RE.get_or_init(|| regex::Regex::new(r"\([^)]*\.\*\|[^)]*\.\*\)").ok())
+        .as_ref()
 }
 
-#[allow(clippy::expect_used)] // Static regex pattern is hardcoded and valid
-fn unrolled_quantifier_regex() -> &'static regex::Regex {
-    static RE: OnceLock<regex::Regex> = OnceLock::new();
+fn unrolled_quantifier_regex() -> Option<&'static regex::Regex> {
+    static RE: OnceLock<Option<regex::Regex>> = OnceLock::new();
     // Capture bounded quantifiers on shorthand classes: \s{n,m}, \w{n,m}, etc.
     // We extract the upper bound to only flag large unrolls (m > 20).
     // Small bounds like \d{1,3} or \w{5,15} are fine — the unroll cost is negligible.
@@ -126,7 +125,8 @@ fn unrolled_quantifier_regex() -> &'static regex::Regex {
     // Note: open-ended quantifiers {n,} are NOT flagged — Rust's NFA compiles them
     // to a 2-state loop, same as + or *. Bounding them (e.g. \s{1,65}) is actually
     // WORSE because it unrolls into N states.
-    RE.get_or_init(|| regex::Regex::new(r"\\[swdSWD]\{([0-9]+),([0-9]+)\}").expect("valid regex"))
+    RE.get_or_init(|| regex::Regex::new(r"\\[swdSWD]\{([0-9]+),([0-9]+)\}").ok())
+        .as_ref()
 }
 
 /// Find traits with short patterns that are likely to produce too many false positives.
@@ -346,14 +346,16 @@ pub(crate) fn find_slow_regex_patterns(traits: &[TraitDefinition], warnings: &mu
             let mut issues = Vec::new();
 
             // Check for overlapping alternations with wildcards like (a.*|ab.*)
-            if overlapping_alternations_regex().is_match(&pattern) {
+            if overlapping_alternations_regex().is_some_and(|regex| regex.is_match(&pattern)) {
                 issues.push("alternation with multiple .* patterns may cause backtracking");
             }
 
             // Check for unrolled bounded quantifiers like \s{1,65} that should be \s+ or \s*
             // Only flag when upper bound > 20 — small unrolls like \d{1,3} or \w{5,15} are fine.
             // Note: open-ended {n,} is NOT flagged — NFA compiles it to a 2-state loop.
-            if let Some(caps) = unrolled_quantifier_regex().captures(&pattern) {
+            if let Some(caps) =
+                unrolled_quantifier_regex().and_then(|regex| regex.captures(&pattern))
+            {
                 if let Ok(upper) = caps[2].parse::<usize>() {
                     if upper > 20 {
                         issues.push(

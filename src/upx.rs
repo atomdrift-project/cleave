@@ -1,5 +1,4 @@
 //! UPX executable unpacking.
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 //!
 //! This module detects and unpacks UPX-compressed binaries for analysis.
 
@@ -114,20 +113,28 @@ impl UPXDecompressor {
             .stderr(std::process::Stdio::piped())
             .spawn()?;
 
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| std::io::Error::other("UPX process stdout pipe was not captured"))?;
         let _stdout_rx = {
-            let mut stdout = child.stdout.take().unwrap();
             let (tx, rx) = std::sync::mpsc::channel();
             std::thread::spawn(move || {
+                let mut stdout = stdout;
                 let mut buf = Vec::new();
                 let _ = std::io::Read::read_to_end(&mut stdout, &mut buf);
                 let _ = tx.send(buf);
             });
             rx
         };
+        let stderr = child
+            .stderr
+            .take()
+            .ok_or_else(|| std::io::Error::other("UPX process stderr pipe was not captured"))?;
         let stderr_rx = {
-            let mut stderr = child.stderr.take().unwrap();
             let (tx, rx) = std::sync::mpsc::channel();
             std::thread::spawn(move || {
+                let mut stderr = stderr;
                 let mut buf = Vec::new();
                 let _ = std::io::Read::read_to_end(&mut stderr, &mut buf);
                 let _ = tx.send(buf);
@@ -165,6 +172,7 @@ impl UPXDecompressor {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use super::*;
 

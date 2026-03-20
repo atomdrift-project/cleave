@@ -6,6 +6,14 @@ use predicates::prelude::*;
 use std::fs;
 use tempfile::TempDir;
 
+fn cleave_cmd() -> assert_cmd::Command {
+    #[allow(deprecated)]
+    let mut cmd = assert_cmd::Command::cargo_bin("cleave").unwrap();
+    cmd.env("cleave_SKIP_YARA", "1");
+    cmd.env("CLEAVE_SKIP_TRAITS", "1");
+    cmd
+}
+
 /// Test that analyze command handles directories (scans all files)
 #[test]
 
@@ -21,10 +29,7 @@ fn test_analyze_command_handles_directory() {
     .unwrap();
     fs::write(subdir.join("test2.sh"), "#!/bin/bash\necho 'test2'").unwrap();
 
-    #[allow(deprecated)]
-    assert_cmd::Command::cargo_bin("cleave")
-        .unwrap()
-        .env("cleave_SKIP_YARA", "1") // Skip YARA - testing directory scanning
+    cleave_cmd()
         .args(["--json", "analyze", temp_dir.path().to_str().unwrap()])
         .assert()
         .success()
@@ -39,10 +44,7 @@ fn test_analyze_command_handles_single_file() {
     let test_file = temp_dir.path().join("single-file.sh");
     fs::write(&test_file, "#!/bin/bash\necho 'hello'").unwrap();
 
-    #[allow(deprecated)]
-    assert_cmd::Command::cargo_bin("cleave")
-        .unwrap()
-        .env("cleave_SKIP_YARA", "1") // Skip YARA - testing directory scanning
+    cleave_cmd()
         .args(["--json", "analyze", test_file.to_str().unwrap()])
         .assert()
         .success()
@@ -59,10 +61,7 @@ fn test_analyze_command_handles_multiple_paths() {
     fs::write(temp_dir1.path().join("file1.sh"), "#!/bin/bash\necho '1'").unwrap();
     fs::write(temp_dir2.path().join("file2.sh"), "#!/bin/bash\necho '2'").unwrap();
 
-    #[allow(deprecated)]
-    assert_cmd::Command::cargo_bin("cleave")
-        .unwrap()
-        .env("cleave_SKIP_YARA", "1") // Skip YARA - testing directory scanning
+    cleave_cmd()
         .args([
             "--json",
             "analyze",
@@ -79,10 +78,7 @@ fn test_analyze_command_handles_multiple_paths() {
 fn test_analyze_empty_directory() {
     let temp_dir = TempDir::new().unwrap();
 
-    #[allow(deprecated)]
-    assert_cmd::Command::cargo_bin("cleave")
-        .unwrap()
-        .env("cleave_SKIP_YARA", "1") // Skip YARA - testing directory scanning
+    cleave_cmd()
         .args(["--json", "analyze", temp_dir.path().to_str().unwrap()])
         .assert()
         .success();
@@ -108,10 +104,7 @@ fn test_analyze_directory_with_archive() {
         .unwrap();
     tar.into_inner().unwrap().finish().unwrap();
 
-    #[allow(deprecated)]
-    assert_cmd::Command::cargo_bin("cleave")
-        .unwrap()
-        .env("cleave_SKIP_YARA", "1") // Skip YARA - testing directory scanning
+    cleave_cmd()
         .args(["--json", "analyze", temp_dir.path().to_str().unwrap()])
         .assert()
         .success()
@@ -160,9 +153,7 @@ fn test_directory_scan_includes_archives() {
     vsix.finish().unwrap();
 
     // Directory contains ONLY archives — this must produce output, not total=0
-    let output = assert_cmd::Command::cargo_bin("cleave")
-        .unwrap()
-        .env("cleave_SKIP_YARA", "1")
+    let output = cleave_cmd()
         .args(["--json", "analyze", temp_dir.path().to_str().unwrap()])
         .output()
         .unwrap();
@@ -230,9 +221,7 @@ fn test_directory_scan_nested_archives() {
     tar.append(&header, zip_bytes.as_slice()).unwrap();
     tar.into_inner().unwrap().finish().unwrap();
 
-    let output = assert_cmd::Command::cargo_bin("cleave")
-        .unwrap()
-        .env("cleave_SKIP_YARA", "1")
+    let output = cleave_cmd()
         .args(["--json", "analyze", temp_dir.path().to_str().unwrap()])
         .output()
         .unwrap();
@@ -270,10 +259,7 @@ fn test_directory_scan_nested_archives() {
 #[test]
 
 fn test_analyze_nonexistent_path() {
-    #[allow(deprecated)]
-    assert_cmd::Command::cargo_bin("cleave")
-        .unwrap()
-        .env("cleave_SKIP_YARA", "1") // Skip YARA - testing directory scanning
+    cleave_cmd()
         .args(["analyze", "/tmp/cleave-nonexistent-path-12345"])
         .assert()
         .failure()
@@ -295,10 +281,7 @@ fn test_analyze_symlink_handling() {
     fs::write(&target, "#!/bin/bash\necho 'target'").unwrap();
     symlink(&target, &link).unwrap();
 
-    #[allow(deprecated)]
-    assert_cmd::Command::cargo_bin("cleave")
-        .unwrap()
-        .env("cleave_SKIP_YARA", "1") // Skip YARA - testing directory scanning
+    cleave_cmd()
         .args(["--json", "analyze", link.to_str().unwrap()])
         .assert()
         .success();
@@ -315,10 +298,7 @@ fn test_recursive_depth() {
     fs::create_dir_all(&deep_path).unwrap();
     fs::write(deep_path.join("deep.sh"), "#!/bin/bash\necho 'deep'").unwrap();
 
-    #[allow(deprecated)]
-    assert_cmd::Command::cargo_bin("cleave")
-        .unwrap()
-        .env("cleave_SKIP_YARA", "1") // Skip YARA - testing directory scanning
+    cleave_cmd()
         .args(["--json", "analyze", temp_dir.path().to_str().unwrap()])
         .assert()
         .success()

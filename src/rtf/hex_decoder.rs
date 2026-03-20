@@ -1,4 +1,3 @@
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 use crate::rtf::error::{Result, RtfError};
 
 /// Decode a hex string into bytes. Tolerates whitespace.
@@ -46,6 +45,7 @@ fn parse_hex_digit(b: u8) -> Result<u8> {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use super::*;
 

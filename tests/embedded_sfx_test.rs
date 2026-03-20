@@ -16,6 +16,24 @@
 use std::fs;
 use tempfile::TempDir;
 
+fn run_analyze_json(path: &std::path::Path) -> std::process::Output {
+    let output = assert_cmd::cargo_bin_cmd!("cleave")
+        .env("cleave_SKIP_YARA", "1")
+        .env("CLEAVE_SKIP_CACHE", "1")
+        .env("CLEAVE_SKIP_TRAITS", "1")
+        .args(["--format", "json", "analyze", path.to_str().unwrap()])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "cleave analyze failed.\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    output
+}
+
 // ── Fixture builders ───────────────────────────────────────────────────────────
 
 /// Minimal PE stub (~512 bytes): valid MZ + PE\0\0 headers, no real code.
@@ -78,12 +96,7 @@ fn test_nsis_marker_detected() {
     let path = tmp.path().join("nsis.exe");
     fs::write(&path, &pe).unwrap();
 
-    let output = assert_cmd::cargo_bin_cmd!("cleave")
-        .env("cleave_SKIP_YARA", "1")
-        .env("CLEAVE_SKIP_CACHE", "1")
-        .args(["--format", "json", "analyze", path.to_str().unwrap()])
-        .output()
-        .unwrap();
+    let output = run_analyze_json(&path);
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
@@ -102,12 +115,7 @@ fn test_inno_setup_marker_detected() {
     let path = tmp.path().join("inno.exe");
     fs::write(&path, &pe).unwrap();
 
-    let output = assert_cmd::cargo_bin_cmd!("cleave")
-        .env("cleave_SKIP_YARA", "1")
-        .env("CLEAVE_SKIP_CACHE", "1")
-        .args(["--format", "json", "analyze", path.to_str().unwrap()])
-        .output()
-        .unwrap();
+    let output = run_analyze_json(&path);
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
@@ -130,12 +138,7 @@ fn test_cab_overlay_detected() {
     let path = tmp.path().join("sfx.exe");
     fs::write(&path, &host).unwrap();
 
-    let output = assert_cmd::cargo_bin_cmd!("cleave")
-        .env("cleave_SKIP_YARA", "1")
-        .env("CLEAVE_SKIP_CACHE", "1")
-        .args(["--format", "json", "analyze", path.to_str().unwrap()])
-        .output()
-        .unwrap();
+    let output = run_analyze_json(&path);
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
@@ -155,12 +158,7 @@ fn test_embedded_pe_in_pe_detected() {
     let path = tmp.path().join("dropper.exe");
     fs::write(&path, &host).unwrap();
 
-    let output = assert_cmd::cargo_bin_cmd!("cleave")
-        .env("cleave_SKIP_YARA", "1")
-        .env("CLEAVE_SKIP_CACHE", "1")
-        .args(["--format", "json", "analyze", path.to_str().unwrap()])
-        .output()
-        .unwrap();
+    let output = run_analyze_json(&path);
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
@@ -182,12 +180,7 @@ fn test_embedded_elf_in_elf_detected() {
     let path = tmp.path().join("elf_dropper.elf");
     fs::write(&path, &host).unwrap();
 
-    let output = assert_cmd::cargo_bin_cmd!("cleave")
-        .env("cleave_SKIP_YARA", "1")
-        .env("CLEAVE_SKIP_CACHE", "1")
-        .args(["--format", "json", "analyze", path.to_str().unwrap()])
-        .output()
-        .unwrap();
+    let output = run_analyze_json(&path);
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
@@ -216,12 +209,7 @@ fn test_shell_script_base64_gzip_detected() {
     let path = tmp.path().join("dropper.sh");
     fs::write(&path, &script).unwrap();
 
-    let output = assert_cmd::cargo_bin_cmd!("cleave")
-        .env("cleave_SKIP_YARA", "1")
-        .env("CLEAVE_SKIP_CACHE", "1")
-        .args(["--format", "json", "analyze", path.to_str().unwrap()])
-        .output()
-        .unwrap();
+    let output = run_analyze_json(&path);
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
@@ -250,12 +238,7 @@ fn test_powershell_encoded_command_detected() {
     let path = tmp.path().join("stager.ps1");
     fs::write(&path, &script).unwrap();
 
-    let output = assert_cmd::cargo_bin_cmd!("cleave")
-        .env("cleave_SKIP_YARA", "1")
-        .env("CLEAVE_SKIP_CACHE", "1")
-        .args(["--format", "json", "analyze", path.to_str().unwrap()])
-        .output()
-        .unwrap();
+    let output = run_analyze_json(&path);
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
@@ -274,12 +257,7 @@ fn test_no_false_positive_embedded_pe_on_clean_exe() {
     let path = tmp.path().join("clean.exe");
     fs::copy("tests/fixtures/test.exe", &path).unwrap();
 
-    let output = assert_cmd::cargo_bin_cmd!("cleave")
-        .env("cleave_SKIP_YARA", "1")
-        .env("CLEAVE_SKIP_CACHE", "1")
-        .args(["--format", "json", "analyze", path.to_str().unwrap()])
-        .output()
-        .unwrap();
+    let output = run_analyze_json(&path);
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     let count = stdout.matches("binary/embedded/pe").count();
@@ -296,12 +274,7 @@ fn test_no_false_positive_embedded_elf_on_clean_elf() {
     let path = tmp.path().join("clean.elf");
     fs::copy("tests/fixtures/test.elf", &path).unwrap();
 
-    let output = assert_cmd::cargo_bin_cmd!("cleave")
-        .env("cleave_SKIP_YARA", "1")
-        .env("CLEAVE_SKIP_CACHE", "1")
-        .args(["--format", "json", "analyze", path.to_str().unwrap()])
-        .output()
-        .unwrap();
+    let output = run_analyze_json(&path);
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     let count = stdout.matches("binary/embedded/elf").count();

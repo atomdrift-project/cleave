@@ -8,14 +8,21 @@
 
 use anyhow::{anyhow, Result};
 use roxmltree::Document;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 /// Signature types extracted from code signature
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
 pub(crate) enum SignatureType {
+    /// Ad-hoc signature without an external certificate chain.
     Adhoc,
+    /// Developer ID signature used for distribution outside the App Store.
     DeveloperID,
+    /// Apple platform signature used for first-party or platform binaries.
     Platform,
+    /// Signature type could not be determined from the available metadata.
+    #[default]
     Unknown,
 }
 
@@ -32,22 +39,34 @@ impl SignatureType {
 }
 
 /// Entitlement values (simplified from full plist support)
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub(crate) enum EntitlementValue {
+    /// Boolean entitlement value.
     Boolean(bool),
+    /// String entitlement value.
     String(String),
+    /// Array entitlement value containing strings.
     Array(Vec<String>),
 }
 
 /// Parsed code signature information
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub(crate) struct CodeSignature {
+    /// High-level signature classification derived from the embedded certificate chain.
     pub signature_type: SignatureType,
+    /// Apple team identifier extracted from the signing certificate, when present.
     pub team_id: Option<String>,
+    /// Common name of the leaf signer certificate, when present.
+    pub signer: Option<String>,
+    /// Certificate authorities observed while parsing the CMS signature.
     pub authorities: Vec<String>,
+    /// Parsed entitlements keyed by entitlement name.
     pub entitlements: HashMap<String, EntitlementValue>,
+    /// Whether the signature appears notarized based on the available code-signing metadata.
     pub is_notarized: bool,
+    /// Whether the code directory enables hardened runtime.
     pub has_hardened_runtime: bool,
+    /// Bundle or executable identifier extracted from the code directory.
     pub identifier: Option<String>,
 }
 
@@ -90,6 +109,8 @@ pub(crate) fn parse_code_signature(
             (None, SignatureType::Unknown, vec![])
         };
 
+    let signer = authorities.first().cloned();
+
     // Check for hardened runtime flag in code directory
     let has_hardened_runtime = if let Some(cd_data) = blobs.get(&CODE_DIRECTORY_MAGIC) {
         check_hardened_runtime_flag(cd_data)
@@ -110,6 +131,7 @@ pub(crate) fn parse_code_signature(
     Ok(CodeSignature {
         signature_type,
         team_id,
+        signer,
         authorities,
         entitlements,
         is_notarized,

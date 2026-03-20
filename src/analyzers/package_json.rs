@@ -1227,25 +1227,27 @@ impl PackageJsonAnalyzer {
     }
 
     fn extract_urls(&self, text: &str) -> Vec<String> {
-        #[allow(clippy::unwrap_used)] // Static regex pattern is hardcoded and valid
-        fn url_pattern() -> &'static regex::Regex {
-            static RE: OnceLock<regex::Regex> = OnceLock::new();
-            RE.get_or_init(|| regex::Regex::new(r#"https?://[^\s'")\]}>]{1,2048}"#).unwrap())
+        fn url_pattern() -> Option<&'static regex::Regex> {
+            static RE: OnceLock<Option<regex::Regex>> = OnceLock::new();
+            RE.get_or_init(|| regex::Regex::new(r#"https?://[^\s'")\]}>]{1,2048}"#).ok())
+                .as_ref()
         }
         url_pattern()
-            .find_iter(text)
+            .into_iter()
+            .flat_map(|pattern| pattern.find_iter(text))
             .map(|m| m.as_str().to_string())
             .collect()
     }
 
     fn extract_ips(&self, text: &str) -> Vec<String> {
-        #[allow(clippy::unwrap_used)] // Static regex pattern is hardcoded and valid
-        fn ip_pattern() -> &'static regex::Regex {
-            static RE: OnceLock<regex::Regex> = OnceLock::new();
-            RE.get_or_init(|| regex::Regex::new(r"\b(?:\d{1,3}\.){3}\d{1,3}\b").unwrap())
+        fn ip_pattern() -> Option<&'static regex::Regex> {
+            static RE: OnceLock<Option<regex::Regex>> = OnceLock::new();
+            RE.get_or_init(|| regex::Regex::new(r"\b(?:\d{1,3}\.){3}\d{1,3}\b").ok())
+                .as_ref()
         }
         ip_pattern()
-            .find_iter(text)
+            .into_iter()
+            .flat_map(|pattern| pattern.find_iter(text))
             .map(|m| m.as_str().to_string())
             .filter(|ip| {
                 // Filter out invalid IPs and common non-IPs (version numbers)
@@ -1259,15 +1261,16 @@ impl PackageJsonAnalyzer {
     }
 
     fn extract_paths(&self, text: &str) -> Vec<String> {
-        #[allow(clippy::unwrap_used)] // Static regex pattern is hardcoded and valid
-        fn path_pattern() -> &'static regex::Regex {
-            static RE: OnceLock<regex::Regex> = OnceLock::new();
+        fn path_pattern() -> Option<&'static regex::Regex> {
+            static RE: OnceLock<Option<regex::Regex>> = OnceLock::new();
             RE.get_or_init(|| {
-                regex::Regex::new(r#"(?-u)/[a-zA-Z0-9_./-]+|(?-u)\\[a-zA-Z0-9_.\\-]+"#).unwrap()
+                regex::Regex::new(r#"(?-u)/[a-zA-Z0-9_./-]+|(?-u)\\[a-zA-Z0-9_.\\-]+"#).ok()
             })
+            .as_ref()
         }
         path_pattern()
-            .find_iter(text)
+            .into_iter()
+            .flat_map(|pattern| pattern.find_iter(text))
             .map(|m| m.as_str().to_string())
             .filter(|p| p.len() > 3)
             .collect()

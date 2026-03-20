@@ -72,13 +72,13 @@ pub(super) fn check_yaml_patterns(content: &str, path: &Path) -> Vec<String> {
 
     // Check for explicit 'offset: null' which is meaningless (same as not specifying)
     // Use regex to match the pattern with proper YAML indentation context
-    #[allow(clippy::unwrap_used)] // Static regex pattern is hardcoded and valid
-    fn offset_null_re() -> &'static regex::Regex {
-        static RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
-        RE.get_or_init(|| regex::Regex::new(r"^\s+offset:\s*null\s*$").unwrap())
+    fn offset_null_re() -> Option<&'static regex::Regex> {
+        static RE: std::sync::OnceLock<Option<regex::Regex>> = std::sync::OnceLock::new();
+        RE.get_or_init(|| regex::Regex::new(r"^\s+offset:\s*null\s*$").ok())
+            .as_ref()
     }
     for (line_num, line) in content.lines().enumerate() {
-        if offset_null_re().is_match(line) {
+        if offset_null_re().is_some_and(|regex| regex.is_match(line)) {
             warnings.push(format!(
                 "{} line {}: 'offset: null' is meaningless (same as not specifying offset) - remove this line",
                 path.display(),
@@ -88,13 +88,13 @@ pub(super) fn check_yaml_patterns(content: &str, path: &Path) -> Vec<String> {
     }
 
     // Check for explicit 'section: null' which is also meaningless
-    #[allow(clippy::unwrap_used)] // Static regex pattern is hardcoded and valid
-    fn section_null_re() -> &'static regex::Regex {
-        static RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
-        RE.get_or_init(|| regex::Regex::new(r"^\s+section:\s*null\s*$").unwrap())
+    fn section_null_re() -> Option<&'static regex::Regex> {
+        static RE: std::sync::OnceLock<Option<regex::Regex>> = std::sync::OnceLock::new();
+        RE.get_or_init(|| regex::Regex::new(r"^\s+section:\s*null\s*$").ok())
+            .as_ref()
     }
     for (line_num, line) in content.lines().enumerate() {
-        if section_null_re().is_match(line) {
+        if section_null_re().is_some_and(|regex| regex.is_match(line)) {
             warnings.push(format!(
                 "{} line {}: 'section: null' is meaningless (same as not specifying section) - remove this line",
                 path.display(),

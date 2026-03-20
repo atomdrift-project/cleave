@@ -11,6 +11,21 @@ use cleave::capabilities::CapabilityMapper;
 use cleave::types::binary::StringInfo;
 use cleave::types::StringType;
 use std::sync::Arc;
+use std::sync::Mutex;
+
+fn make_capability_mapper() -> Arc<CapabilityMapper> {
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+    let _guard = ENV_LOCK.lock().expect("lock env guard");
+
+    let previous = std::env::var_os("CLEAVE_SKIP_TRAITS");
+    std::env::set_var("CLEAVE_SKIP_TRAITS", "1");
+    let mapper = Arc::new(CapabilityMapper::new());
+    match previous {
+        Some(value) => std::env::set_var("CLEAVE_SKIP_TRAITS", value),
+        None => std::env::remove_var("CLEAVE_SKIP_TRAITS"),
+    }
+    mapper
+}
 
 fn make_string_info(value: &str) -> StringInfo {
     StringInfo {
@@ -116,7 +131,7 @@ fn test_analyze_hex_encoded_javascript() {
         fragments: None,
     };
 
-    let capability_mapper = Arc::new(CapabilityMapper::new());
+    let capability_mapper = make_capability_mapper();
 
     let result = analyze_embedded_string("test.bin", &string_info, 0, &capability_mapper, 0);
 
@@ -161,7 +176,7 @@ fn test_analyze_plain_embedded_python() {
         fragments: None,
     };
 
-    let capability_mapper = Arc::new(CapabilityMapper::new());
+    let capability_mapper = make_capability_mapper();
 
     let result = analyze_embedded_string("test.elf", &string_info, 0, &capability_mapper, 0);
 
@@ -202,7 +217,7 @@ fn test_max_depth_limit() {
         fragments: None,
     };
 
-    let capability_mapper = Arc::new(CapabilityMapper::new());
+    let capability_mapper = make_capability_mapper();
 
     // Depth 3 should succeed
     let result = analyze_embedded_string("test.bin", &string_info, 0, &capability_mapper, 2);

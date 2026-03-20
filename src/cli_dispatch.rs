@@ -73,10 +73,7 @@ struct TestDispatchContext<'a> {
 }
 
 impl<'a> TestDispatchContext<'a> {
-    fn new(
-        disabled: &'a cli::DisabledComponents,
-        platforms: &'a [cleave::Platform],
-    ) -> Self {
+    fn new(disabled: &'a cli::DisabledComponents, platforms: &'a [cleave::Platform]) -> Self {
         Self {
             disabled,
             platforms,

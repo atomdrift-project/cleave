@@ -11,6 +11,7 @@ use crate::composite_rules::context::{AnalysisWarning, ConditionResult, Evaluati
 use crate::composite_rules::types::FileType;
 use crate::types::{Evidence, MAX_EVIDENCE_PER_TRAIT};
 use std::cell::RefCell;
+use std::num::NonZeroUsize;
 use std::ops::ControlFlow;
 use std::sync::Arc;
 use streaming_iterator::StreamingIterator;
@@ -20,13 +21,14 @@ use streaming_iterator::StreamingIterator;
 /// is bounded by the number of trait definitions, so 256 is generous while
 /// keeping memory modest (~10-50 KB per compiled query).
 const QUERY_CACHE_MAX_SIZE: usize = 256;
+const QUERY_CACHE_SIZE: NonZeroUsize = {
+    #[allow(clippy::expect_used)]
+    NonZeroUsize::new(QUERY_CACHE_MAX_SIZE).expect("QUERY_CACHE_MAX_SIZE is non-zero")
+};
 
 thread_local! {
     static QUERY_CACHE: RefCell<lru::LruCache<(FileType, String), Arc<tree_sitter::Query>>> = {
-        RefCell::new(lru::LruCache::new(
-            std::num::NonZeroUsize::new(QUERY_CACHE_MAX_SIZE)
-                .expect("QUERY_CACHE_MAX_SIZE must be > 0")
-        ))
+        RefCell::new(lru::LruCache::new(QUERY_CACHE_SIZE))
     };
 }
 

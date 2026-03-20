@@ -262,7 +262,7 @@ fn run_update_rules(force: bool, check: bool, pin: Option<String>) -> Result<()>
 }
 
 fn run_server(
-    bind: String,
+    bind: &str,
     qps: u32,
     timeout: u64,
     max_size_mb: u64,
@@ -321,7 +321,7 @@ fn run_server(
 }
 
 fn run_test_match_command(
-    req: TestMatchRequest<'_>,
+    req: &TestMatchRequest<'_>,
     ctx: &TestDispatchContext<'_>,
 ) -> Result<String> {
     test_match(
@@ -376,45 +376,47 @@ fn run_test_rules_command(
     )
 }
 
-pub(crate) fn build_dispatch_context<'a>(
-    format: &'a cli::OutputFormat,
-    disabled: &'a cli::DisabledComponents,
-    zip_passwords: &'a [String],
-    sample_extraction: Option<&'a cleave::SampleExtractionConfig>,
-    platforms: &'a [cleave::Platform],
-    slow_rule_ms: u64,
-    output_to_file: bool,
-    max_memory_file_size: u64,
-    max_scan_file_size: u64,
-    scan_threads: usize,
-    min_crit: Option<cleave::Criticality>,
-    max_crit: Option<cleave::Criticality>,
-    min_file_crit: Option<cleave::Criticality>,
-    max_file_crit: Option<cleave::Criticality>,
-    all_files: bool,
-) -> DispatchContext<'a> {
+pub(crate) struct DispatchOptions<'a> {
+    pub format: &'a cli::OutputFormat,
+    pub disabled: &'a cli::DisabledComponents,
+    pub zip_passwords: &'a [String],
+    pub sample_extraction: Option<&'a cleave::SampleExtractionConfig>,
+    pub platforms: &'a [cleave::Platform],
+    pub slow_rule_ms: u64,
+    pub output_to_file: bool,
+    pub max_memory_file_size: u64,
+    pub max_scan_file_size: u64,
+    pub scan_threads: usize,
+    pub min_crit: Option<cleave::Criticality>,
+    pub max_crit: Option<cleave::Criticality>,
+    pub min_file_crit: Option<cleave::Criticality>,
+    pub max_file_crit: Option<cleave::Criticality>,
+    pub all_files: bool,
+}
+
+pub(crate) fn build_dispatch_context<'a>(opts: &DispatchOptions<'a>) -> DispatchContext<'a> {
     DispatchContext::new(
-        format,
-        disabled,
+        opts.format,
+        opts.disabled,
         AnalyzeDispatchContext::new(
-            format,
-            disabled,
-            zip_passwords,
-            sample_extraction,
-            platforms,
-            slow_rule_ms,
-            output_to_file,
-            max_memory_file_size,
-            max_scan_file_size,
-            scan_threads,
-            min_crit,
-            max_crit,
-            min_file_crit,
-            max_file_crit,
-            all_files,
-            !disabled.third_party,
+            opts.format,
+            opts.disabled,
+            opts.zip_passwords,
+            opts.sample_extraction,
+            opts.platforms,
+            opts.slow_rule_ms,
+            opts.output_to_file,
+            opts.max_memory_file_size,
+            opts.max_scan_file_size,
+            opts.scan_threads,
+            opts.min_crit,
+            opts.max_crit,
+            opts.min_file_crit,
+            opts.max_file_crit,
+            opts.all_files,
+            !opts.disabled.third_party,
         ),
-        TestDispatchContext::new(disabled, platforms),
+        TestDispatchContext::new(opts.disabled, opts.platforms),
     )
 }
 
@@ -481,7 +483,7 @@ pub(crate) fn dispatch_command(
             min_size,
             max_size,
         }) => run_test_match_command(
-            TestMatchRequest::new(
+            &TestMatchRequest::new(
                 &target,
                 r#type,
                 method,
@@ -528,7 +530,7 @@ pub(crate) fn dispatch_command(
             extract_dir,
         }) => {
             run_server(
-                bind,
+                &bind,
                 qps,
                 timeout,
                 max_size_mb,

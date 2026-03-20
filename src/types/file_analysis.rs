@@ -1,5 +1,4 @@
 //! File analysis types for JSON v2 schema
-#![allow(clippy::unwrap_used, clippy::expect_used)]
 //!
 //! This module provides the flat file-centric output structure that replaces
 //! the nested sub_reports approach. Each file (including archive members and
@@ -337,6 +336,7 @@ pub(crate) fn encode_upx_path(parent: &str) -> String {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
 

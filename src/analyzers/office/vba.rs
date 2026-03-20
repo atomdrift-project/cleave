@@ -132,10 +132,27 @@ fn find_vba_prefix(comp: &mut cfb::CompoundFile<Cursor<&[u8]>>) -> Result<String
     bail!("No VBA project directory found in compound file")
 }
 
-/// Read a stream from the compound file.
+/// Maximum size of a decompressed VBA module (10 MB).
+const MAX_DECOMPRESSED_SIZE: usize = 10 * 1024 * 1024;
+
+/// Maximum size of a CFB stream (20 MB).
+const MAX_STREAM_SIZE: u64 = 20 * 1024 * 1024;
+
+/// Read a stream from the compound file with size limits.
 fn read_cfb_stream(comp: &mut cfb::CompoundFile<Cursor<&[u8]>>, path: &str) -> Result<Vec<u8>> {
     let mut stream = comp.open_stream(path)?;
-    let mut data = Vec::new();
+    let size = stream.len();
+
+    if size > MAX_STREAM_SIZE {
+        bail!(
+            "CFB stream {} exceeds size limit ({} > {})",
+            path,
+            size,
+            MAX_STREAM_SIZE
+        );
+    }
+
+    let mut data = Vec::with_capacity(size as usize);
     stream.read_to_end(&mut data)?;
     Ok(data)
 }
@@ -159,7 +176,7 @@ pub(crate) fn decompress_vba(data: &[u8]) -> Result<Vec<u8>> {
         bail!("Invalid VBA compression signature: 0x{:02x}", data[0]);
     }
 
-    let mut output = Vec::with_capacity(data.len() * 2);
+    let mut output = Vec::with_capacity(data.len().saturating_mul(2).min(MAX_DECOMPRESSED_SIZE));
     let mut pos = 1; // skip signature byte
 
     while pos < data.len() {
@@ -177,6 +194,12 @@ pub(crate) fn decompress_vba(data: &[u8]) -> Result<Vec<u8>> {
         if !is_compressed {
             // Uncompressed chunk: copy 4096 bytes directly
             let end = (pos + 4096).min(data.len());
+            let copy_len = end - pos;
+
+            if output.len() + copy_len > MAX_DECOMPRESSED_SIZE {
+                bail!("Decompressed VBA size exceeds limit");
+            }
+
             output.extend_from_slice(&data[pos..end]);
             pos = end;
         } else {
@@ -201,6 +224,9 @@ pub(crate) fn decompress_vba(data: &[u8]) -> Result<Vec<u8>> {
                     if (flag_byte >> bit_index) & 1 == 0 {
                         // Literal byte
                         if pos < data.len() {
+                            if output.len() + 1 > MAX_DECOMPRESSED_SIZE {
+                                bail!("Decompressed VBA size exceeds limit");
+                            }
                             output.push(data[pos]);
                             pos += 1;
                         }
@@ -223,6 +249,10 @@ pub(crate) fn decompress_vba(data: &[u8]) -> Result<Vec<u8>> {
                         let length = ((token & len_mask) + 3) as usize;
                         let offset = ((token & offset_mask) >> (16 - bit_count)) as usize + 1;
 
+                        if output.len() + length > MAX_DECOMPRESSED_SIZE {
+                            bail!("Decompressed VBA size exceeds limit");
+                        }
+
                         // Copy bytes from earlier in the output (may overlap)
                         for _ in 0..length {
                             let src_pos = output.len().wrapping_sub(offset);
@@ -230,6 +260,7 @@ pub(crate) fn decompress_vba(data: &[u8]) -> Result<Vec<u8>> {
                                 let byte = output[src_pos];
                                 output.push(byte);
                             } else {
+                                // This case should not happen in valid MS-OVBA
                                 output.push(0);
                             }
                         }
@@ -424,29 +455,37 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_decompress_empty() {
-        assert!(decompress_vba(&[]).unwrap().is_empty());
+    #[allow(clippy::expect_used)]
+    fn
+ test_decompress_empty() {
+        assert!(decompress_vba(&[]).expect("Empty data should return empty vec").is_empty());
     }
 
     #[test]
-    fn test_decompress_invalid_signature() {
+    #[allow(clippy::expect_used)]
+    fn
+ test_decompress_invalid_signature() {
         assert!(decompress_vba(&[0x00, 0x00, 0x00]).is_err());
     }
 
     #[test]
-    fn test_decompress_valid_uncompressed_chunk() {
+    #[allow(clippy::expect_used)]
+    fn
+ test_decompress_valid_uncompressed_chunk() {
         // Signature + uncompressed chunk header (size=4096, compressed=0)
         let mut data = vec![0x01]; // signature
         let header: u16 = 0x0FFD; // 4096-3 = 4093 = 0x0FFD, compressed bit not set
         data.extend_from_slice(&header.to_le_bytes());
         data.extend_from_slice(&[b'A'; 4096]);
-        let result = decompress_vba(&data).unwrap();
+        let result = decompress_vba(&data).expect("VBA decompression failed");
         assert_eq!(result.len(), 4096);
         assert!(result.iter().all(|&b| b == b'A'));
     }
 
     #[test]
-    fn test_decompress_compressed_literals_only() {
+    #[allow(clippy::expect_used)]
+    fn
+ test_decompress_compressed_literals_only() {
         // A compressed chunk with only literal bytes (no copy tokens)
         // Flag byte 0x00 = 8 literals
         let mut data = vec![0x01]; // signature
@@ -460,12 +499,14 @@ mod tests {
         data.extend_from_slice(&header.to_le_bytes());
         data.extend_from_slice(&chunk_data);
 
-        let result = decompress_vba(&data).unwrap();
+        let result = decompress_vba(&data).expect("VBA decompression failed");
         assert_eq!(&result[..3], b"ABC");
     }
 
     #[test]
-    fn test_max_bit_count() {
+    #[allow(clippy::expect_used)]
+    fn
+ test_max_bit_count() {
         assert_eq!(max_bit_count(0), 12);
         assert_eq!(max_bit_count(1), 12);
         assert_eq!(max_bit_count(0x80), 12);
@@ -475,7 +516,9 @@ mod tests {
     }
 
     #[test]
-    fn test_vba_module_struct() {
+    #[allow(clippy::expect_used)]
+    fn
+ test_vba_module_struct() {
         let module = VbaModule {
             name: "Module1".to_string(),
             source_code: "Sub Test()\nMsgBox \"hello\"\nEnd Sub".to_string(),

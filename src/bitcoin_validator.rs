@@ -127,9 +127,8 @@ fn validate_bech32(s: &str) -> bool {
     }
 
     let normalized = s.to_ascii_lowercase();
-    let separator = match normalized.rfind('1') {
-        Some(pos) => pos,
-        None => return false,
+    let Some(separator) = normalized.rfind('1') else {
+        return false;
     };
     if separator == 0 || separator + 7 > normalized.len() {
         return false;
@@ -143,29 +142,26 @@ fn validate_bech32(s: &str) -> bool {
     let data_part = &normalized[separator + 1..];
     let mut values = Vec::with_capacity(data_part.len());
     for c in data_part.bytes() {
-        match BECH32_ALPHABET.iter().position(|&x| x == c) {
-            Some(v) => values.push(v as u8),
-            None => return false,
-        }
+        let Some(v) = BECH32_ALPHABET.iter().position(|&x| x == c) else {
+            return false;
+        };
+        values.push(v as u8);
     }
 
-    let encoding = match verify_bech32_checksum(hrp, &values) {
-        Some(encoding) => encoding,
-        None => return false,
+    let Some(encoding) = verify_bech32_checksum(hrp, &values) else {
+        return false;
     };
 
-    let (witness_version, program_values) = match values.split_first() {
-        Some(parts) => parts,
-        None => return false,
+    let Some((witness_version, program_values)) = values.split_first() else {
+        return false;
     };
     if *witness_version > 16 {
         return false;
     }
 
     let program_data = &program_values[..program_values.len() - 6];
-    let program = match convert_bits(program_data, 5, 8, false) {
-        Some(program) => program,
-        None => return false,
+    let Some(program) = convert_bits(program_data, 5, 8, false) else {
+        return false;
     };
 
     if program.len() < 2 || program.len() > 40 {
@@ -276,6 +272,7 @@ fn polymod_step(chk: u32, v: u32) -> u32 {
 mod tests {
     use super::*;
 
+    #[allow(clippy::expect_used)]
     fn encode_segwit_address_for_test(
         hrp: &str,
         witness_version: u8,

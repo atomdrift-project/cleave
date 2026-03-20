@@ -412,6 +412,32 @@ impl ElfAnalyzer {
             // Extract strings using language-aware extraction (Go/Rust)
             report.strings = self.string_extractor.extract_smart(data, r2_strings);
         }
+
+        // Report string truncation if limits were hit
+        if self
+            .string_extractor
+            .truncated
+            .load(std::sync::atomic::Ordering::SeqCst)
+        {
+            report.findings.push(Finding {
+                id: "metadata/strings-truncated".to_string(),
+                kind: FindingKind::Structural,
+                desc: format!(
+                    "String extraction truncated due to limits (count: {}, total bytes: {} MB)",
+                    crate::strings::MAX_STRINGS_PER_FILE,
+                    crate::strings::MAX_TOTAL_STRING_BYTES / (1024 * 1024)
+                )
+                .to_string(),
+                conf: 1.0,
+                crit: Criticality::Notable,
+                mbc: None,
+                attack: None,
+                trait_refs: vec![],
+                evidence: vec![],
+                match_count: 0,
+                source_file: None,
+            });
+        }
         tools_used.push("stng".to_string());
 
         // Analyze embedded code in strings

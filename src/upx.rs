@@ -2,7 +2,6 @@
 //!
 //! This module detects and unpacks UPX-compressed binaries for analysis.
 
-use std::io::Write;
 use std::path::Path;
 use std::process::Command;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -97,12 +96,11 @@ impl UPXDecompressor {
 
         // Create a temporary file to hold a copy for decompression
         // (upx -d modifies the file in place, so we work on a copy)
-        let mut temp_file = NamedTempFile::new()?;
-        let original_data = std::fs::read(file_path)?;
-        temp_file.write_all(&original_data)?;
-        temp_file.flush()?;
-
+        let temp_file = NamedTempFile::new()?;
         let temp_path = temp_file.path();
+
+        // Use fs::copy instead of read + write to avoid buffering original in memory
+        std::fs::copy(file_path, temp_path)?;
 
         // Run upx -d on the temporary copy with a timeout
         let mut child = Command::new("upx")
@@ -165,7 +163,18 @@ impl UPXDecompressor {
             return Err(UPXError::DecompressionFailed(stderr_str.to_string()));
         }
 
-        // Read back the decompressed data
+        // Read back the decompressed data with size limit (100 MB)
+        let metadata = std::fs::metadata(temp_path)?;
+        let size = metadata.len();
+        const MAX_UPX_DECOMPRESSED_SIZE: u64 = 100 * 1024 * 1024;
+
+        if size > MAX_UPX_DECOMPRESSED_SIZE {
+            return Err(UPXError::DecompressionFailed(format!(
+                "Decompressed UPX size exceeds limit ({} > {})",
+                size, MAX_UPX_DECOMPRESSED_SIZE
+            )));
+        }
+
         let decompressed = std::fs::read(temp_path)?;
         Ok(decompressed)
     }
@@ -175,6 +184,7 @@ impl UPXDecompressor {
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use super::*;
+    use std::io::Write;
 
     // =========================================================================
     // is_upx_packed tests

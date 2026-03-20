@@ -1,5 +1,4 @@
 //! Duplicate trait and pattern detection.
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 //!
 //! This module detects various types of duplicates and redundancies in trait definitions:
 //!
@@ -2454,7 +2453,9 @@ pub(crate) fn find_alternation_merge_candidates(
 
     // Regex to extract prefix (first word-like token) and suffix
     // Match patterns like: ^word or ^word\s or ^word[^a-z]
-    let prefix_regex = prefix_regex();
+    let Some(prefix_regex) = prefix_regex() else {
+        return vec![];
+    };
 
     // For each group, find patterns that share a common suffix
     for (_key, traits) in groups {
@@ -2588,12 +2589,10 @@ fn extract_match_signature(condition: &Condition) -> Option<(bool, MatchSignatur
     }
 }
 
-#[allow(clippy::expect_used)] // Static regex pattern is hardcoded and valid
-fn prefix_regex() -> &'static regex::Regex {
-    static RE: OnceLock<regex::Regex> = OnceLock::new();
-    RE.get_or_init(|| {
-        regex::Regex::new(r"^(\^?)([a-zA-Z_][a-zA-Z0-9_-]*)(.*)$").expect("valid regex")
-    })
+fn prefix_regex() -> Option<&'static regex::Regex> {
+    static RE: OnceLock<Option<regex::Regex>> = OnceLock::new();
+    RE.get_or_init(|| regex::Regex::new(r"^(\^?)([a-zA-Z_][a-zA-Z0-9_-]*)(.*)$").ok())
+        .as_ref()
 }
 
 /// Check for duplicate basename patterns in atomic traits

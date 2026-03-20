@@ -23,7 +23,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use guards::{ExtractionGuard, MAX_FILE_COUNT, MAX_FILE_SIZE, MAX_TOTAL_SIZE};
-use utils::{calculate_sha256, detect_archive_type};
+use utils::{calculate_file_sha256, calculate_sha256, detect_archive_type};
 
 /// Default maximum file size to keep in memory (100 MB)
 pub(crate) const DEFAULT_MAX_MEMORY_FILE_SIZE: u64 = 100 * 1024 * 1024;
@@ -222,18 +222,24 @@ impl ArchiveAnalyzer {
         }
 
         // Create target info
-        tracing::debug!("Reading archive file: {}", file_path.display());
-        let file_data = fs::read(file_path)?;
+        tracing::debug!("Opening archive file: {}", file_path.display());
+        let file = std::fs::File::open(file_path)?;
+        let metadata = file.metadata()?;
+        let size_bytes = metadata.len();
+
         tracing::debug!(
             "Archive file size: {} bytes for: {}",
-            file_data.len(),
+            size_bytes,
             file_path.display()
         );
+
+        let sha256 = calculate_file_sha256(file_path).unwrap_or_else(|_| "unknown".to_string());
+
         let target = TargetInfo {
             path: file_path.display().to_string(),
             file_type: detect_archive_type(file_path).to_string(),
-            size_bytes: file_data.len() as u64,
-            sha256: calculate_sha256(&file_data),
+            size_bytes,
+            sha256,
             architectures: None,
         };
 

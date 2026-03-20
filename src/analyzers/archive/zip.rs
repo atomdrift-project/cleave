@@ -16,7 +16,7 @@ use super::guards::{
 };
 use anyhow::{Context, Result};
 use std::fs::{self, File};
-use std::io::{Cursor, Read, Seek};
+use std::io::{Read, Seek};
 use std::path::Path;
 
 /// Extract ZIP archive with bomb protection
@@ -249,10 +249,12 @@ pub(crate) fn extract_crx_safe(
     guard: &ExtractionGuard,
 ) -> Result<()> {
     let mut file = File::open(archive_path)?;
+    let file_len = file.metadata()?.len() as usize;
     let mut header = [0u8; 16];
 
     // Read CRX header
-    std::io::Read::read_exact(&mut file, &mut header).context("Failed to read CRX header")?;
+    file.read_exact(&mut header)
+        .context("Failed to read CRX header")?;
 
     // Verify magic number "Cr24"
     if &header[0..4] != b"Cr24" {
@@ -263,25 +265,59 @@ pub(crate) fn extract_crx_safe(
     let pubkey_len = u32::from_le_bytes([header[8], header[9], header[10], header[11]]) as usize;
     let sig_len = u32::from_le_bytes([header[12], header[13], header[14], header[15]]) as usize;
 
-    // Skip public key and signature to get to ZIP data
-    let zip_offset = 16 + pubkey_len + sig_len;
+    // Check for potential overflow and bounds
+    let zip_offset = 16usize
+        .checked_add(pubkey_len)
+        .and_then(|sum| sum.checked_add(sig_len))
+        .context("CRX header specifies invalid offsets (overflow)")?;
 
-    // Read the entire file into memory (needed for ZipArchive)
-    let mut file_data = Vec::new();
-    std::io::Seek::seek(&mut file, std::io::SeekFrom::Start(0))?;
-    std::io::Read::read_to_end(&mut file, &mut file_data)?;
-
-    // Extract just the ZIP portion
-    if file_data.len() < zip_offset {
-        anyhow::bail!("CRX file truncated (expected {} bytes)", zip_offset);
+    if zip_offset >= file_len {
+        anyhow::bail!(
+            "CRX file truncated or invalid header (offset {} >= size {})",
+            zip_offset,
+            file_len
+        );
     }
 
-    let zip_data = &file_data[zip_offset..];
-    let cursor = Cursor::new(zip_data);
+    // Seek to the start of the ZIP data
+    file.seek(std::io::SeekFrom::Start(zip_offset as u64))?;
 
-    // Create ZipArchive from the ZIP portion
-    let mut archive = zip::ZipArchive::new(cursor).context("Failed to read ZIP from CRX")?;
+    // Create ZipArchive from the file (ZipArchive will seek as needed)
+    let mut archive = zip::ZipArchive::new(file).context("Failed to read ZIP from CRX")?;
 
     // Use the same extraction logic as regular ZIP (but without password support for now)
     extract_zip_entries_safe(&mut archive, dest_dir, None, guard)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::analyzers::archive::guards::ExtractionGuard;
+    use tempfile::tempdir;
+
+    #[test]
+    #[allow(clippy::expect_used)]
+    fn test_extract_crx_invalid_offsets() {
+        let dir = tempdir().expect("Failed to create temp dir");
+        let guard = ExtractionGuard::new();
+
+        // Create a malformed CRX: "Cr24" (4) + version (4) + pubkey_len (4) + sig_len (4)
+        // Set pubkey_len to a very large value that exceeds file size
+        let mut crx_data = Vec::new();
+        crx_data.extend_from_slice(b"Cr24");
+        crx_data.extend_from_slice(&2u32.to_le_bytes()); // version
+        crx_data.extend_from_slice(&0xFFFFFFFFu32.to_le_bytes()); // massive pubkey_len
+        crx_data.extend_from_slice(&0u32.to_le_bytes()); // sig_len
+
+        let crx_path = dir.path().join("invalid.crx");
+        std::fs::write(&crx_path, &crx_data).expect("Failed to write crx data");
+
+        let dest = dir.path().join("out");
+        std::fs::create_dir_all(&dest).expect("Failed to create dest dir");
+
+        let result = extract_crx_safe(&crx_path, &dest, &guard);
+        assert!(result.is_err());
+        let err_msg = result.expect_err("Expected error").to_string();
+        assert!(err_msg.contains("truncated") || err_msg.contains("invalid"));
+    }
 }

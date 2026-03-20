@@ -11,6 +11,7 @@ use crate::composite_rules::{Arch, Platform};
 ///
 /// The namespace format is `"3p.{vendor}[.{subdir}...]"`.
 /// Returns a path like `"third_party/{vendor}/[{platform}/][{type}/]{family}"`.
+#[must_use]
 pub fn derive_trait_id(namespace: &str, rule_name: &str, _os_meta: Option<&str>) -> String {
     // Parse "3p.vendor[.subdir...]" -> vendor, subdirs
     let without_prefix = namespace.strip_prefix("3p.").unwrap_or(namespace);
@@ -93,6 +94,7 @@ pub fn platforms_from_name_and_os(rule_name: &str, os_meta: Option<&str>) -> Vec
 /// Returns lowercase type strings compatible with `scan_bytes_filtered`'s filter:
 /// Windows → ["pe", "dll"], Linux → ["elf", "so"], macOS → ["macho", "dylib"].
 /// Returns empty slice for platforms with no binary constraint (All, Android, iOS).
+#[must_use]
 pub fn filetypes_from_platforms(platforms: &[Platform]) -> Vec<&'static str> {
     let mut types: Vec<&'static str> = Vec::new();
     for platform in platforms {
@@ -130,6 +132,7 @@ pub fn filetypes_from_platforms(platforms: &[Platform]) -> Vec<&'static str> {
 ///
 /// Returns empty vec if no constraint can be inferred — the rule applies to all files.
 /// Returned strings are lowercase and match the values used by `scan_bytes_filtered`.
+#[must_use]
 pub fn infer_filetypes(rule_name: &str, os_meta: Option<&str>) -> Vec<&'static str> {
     // 1. Platform-based binary format inference (highest priority)
     let platforms = platforms_from_name_and_os(rule_name, os_meta);
@@ -155,6 +158,7 @@ pub fn infer_filetypes(rule_name: &str, os_meta: Option<&str>) -> Vec<&'static s
 /// that aren't in the rule identifier itself (e.g. `"TextShell"`).
 ///
 /// Returns empty vec if no constraint can be inferred.
+#[must_use]
 pub fn infer_filetypes_from_namespace(namespace: &str, os_meta: Option<&str>) -> Vec<&'static str> {
     // Extract the last dot-separated component (the filename stem)
     let filename_stem = match namespace.rsplit('.').next() {
@@ -172,6 +176,7 @@ pub fn infer_filetypes_from_namespace(namespace: &str, os_meta: Option<&str>) ->
 /// equivalent) line into each qualifying rule's `meta:` section.
 ///
 /// This runs at rule-load time so the hint is baked into the compiled rules cache.
+#[must_use]
 pub fn inject_condition_filetype_hints(source: &str) -> String {
     // Quick reject: skip files with no recognizable magic pattern
     if !source_has_magic_condition(source) {
@@ -257,6 +262,7 @@ fn source_has_magic_condition(source: &str) -> bool {
 }
 
 /// Check if `source` contains a YARA module reference like `pe.` at a word boundary.
+#[must_use]
 pub fn has_module_reference(lower_source: &str, module_prefix: &str) -> bool {
     let mut pos = 0;
     while let Some(idx) = lower_source[pos..].find(module_prefix) {
@@ -272,6 +278,7 @@ pub fn has_module_reference(lower_source: &str, module_prefix: &str) -> bool {
 }
 
 /// Infer the filetype from magic patterns and YARA module references in a rule's body.
+#[must_use]
 pub fn filetype_from_magic(body: &str) -> Option<&'static str> {
     let lower = body.to_lowercase();
 

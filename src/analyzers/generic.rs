@@ -367,44 +367,48 @@ impl GenericAnalyzer {
     }
 
     fn extract_strings_regex(&self, content: &str, report: &mut AnalysisReport) {
-        #[allow(clippy::unwrap_used)] // Static regex pattern is hardcoded and valid
-        fn double_quote_re() -> &'static regex::Regex {
-            static RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
-            RE.get_or_init(|| regex::Regex::new(r#""([^"\\]|\\.){0,1000}""#).unwrap())
+        fn double_quote_re() -> Option<&'static regex::Regex> {
+            static RE: std::sync::OnceLock<Option<regex::Regex>> = std::sync::OnceLock::new();
+            RE.get_or_init(|| regex::Regex::new(r#""([^"\\]|\\.){0,1000}""#).ok())
+                .as_ref()
         }
-        #[allow(clippy::unwrap_used)] // Static regex pattern is hardcoded and valid
-        fn single_quote_re() -> &'static regex::Regex {
-            static RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
-            RE.get_or_init(|| regex::Regex::new(r#"'([^'\\]|\\.){0,1000}'"#).unwrap())
+        fn single_quote_re() -> Option<&'static regex::Regex> {
+            static RE: std::sync::OnceLock<Option<regex::Regex>> = std::sync::OnceLock::new();
+            RE.get_or_init(|| regex::Regex::new(r#"'([^'\\]|\\.){0,1000}'"#).ok())
+                .as_ref()
         }
 
-        for cap in double_quote_re().find_iter(content) {
-            let s = cap.as_str().trim_start_matches('"').trim_end_matches('"');
-            if !s.is_empty() {
-                report.strings.push(StringInfo {
-                    value: s.to_string(),
-                    offset: Some(cap.start() as u64),
-                    string_type: StringType::Const,
-                    encoding: "utf-8".to_string(),
-                    section: Some("regex".to_string()),
-                    encoding_chain: Vec::new(),
-                    fragments: None,
-                });
+        if let Some(re) = double_quote_re() {
+            for cap in re.find_iter(content) {
+                let s = cap.as_str().trim_start_matches('"').trim_end_matches('"');
+                if !s.is_empty() {
+                    report.strings.push(StringInfo {
+                        value: s.to_string(),
+                        offset: Some(cap.start() as u64),
+                        string_type: StringType::Const,
+                        encoding: "utf-8".to_string(),
+                        section: Some("regex".to_string()),
+                        encoding_chain: Vec::new(),
+                        fragments: None,
+                    });
+                }
             }
         }
 
-        for cap in single_quote_re().find_iter(content) {
-            let s = cap.as_str().trim_start_matches('\'').trim_end_matches('\'');
-            if !s.is_empty() {
-                report.strings.push(StringInfo {
-                    value: s.to_string(),
-                    offset: Some(cap.start() as u64),
-                    string_type: StringType::Const,
-                    encoding: "utf-8".to_string(),
-                    section: Some("regex".to_string()),
-                    encoding_chain: Vec::new(),
-                    fragments: None,
-                });
+        if let Some(re) = single_quote_re() {
+            for cap in re.find_iter(content) {
+                let s = cap.as_str().trim_start_matches('\'').trim_end_matches('\'');
+                if !s.is_empty() {
+                    report.strings.push(StringInfo {
+                        value: s.to_string(),
+                        offset: Some(cap.start() as u64),
+                        string_type: StringType::Const,
+                        encoding: "utf-8".to_string(),
+                        section: Some("regex".to_string()),
+                        encoding_chain: Vec::new(),
+                        fragments: None,
+                    });
+                }
             }
         }
     }

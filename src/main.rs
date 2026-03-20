@@ -49,23 +49,23 @@ fn main() -> Result<()> {
     let _memory_logger = start_memory_logger(args.verbose, effective_log_file.as_ref());
     log_startup_diagnostics();
 
-    let dispatch_ctx = build_dispatch_context(
-        &format,
-        &disabled,
-        &zip_passwords,
-        sample_extraction.as_ref(),
-        &platforms,
-        args.slow_rule_ms,
-        args.output.is_some(),
+    let dispatch_ctx = build_dispatch_context(&cli_dispatch::DispatchOptions {
+        format: &format,
+        disabled: &disabled,
+        zip_passwords: &zip_passwords,
+        sample_extraction: sample_extraction.as_ref(),
+        platforms: &platforms,
+        slow_rule_ms: args.slow_rule_ms,
+        output_to_file: args.output.is_some(),
         max_memory_file_size,
         max_scan_file_size,
-        args.scan_threads.unwrap_or(0),
-        args.min_crit,
-        args.max_crit,
-        args.min_file_crit,
-        args.max_file_crit,
-        args.all_files,
-    );
+        scan_threads: args.scan_threads.unwrap_or(0),
+        min_crit: args.min_crit,
+        max_crit: args.max_crit,
+        min_file_crit: args.min_file_crit,
+        max_file_crit: args.max_file_crit,
+        all_files: args.all_files,
+    });
     let output_path = args.output.clone();
 
     let Some(result) = dispatch_command(args, &dispatch_ctx)? else {

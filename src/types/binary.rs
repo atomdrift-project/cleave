@@ -1,6 +1,4 @@
 //! Binary analysis types - functions, strings, sections, imports/exports
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
-
 use serde::{Deserialize, Serialize};
 
 use super::is_false;
@@ -375,6 +373,7 @@ impl AnalysisMetadata {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use super::*;
 

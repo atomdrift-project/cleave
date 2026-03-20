@@ -3,8 +3,6 @@
 //! Parses Windows shortcut files (.lnk) to extract target paths, arguments,
 //! working directory, and other metadata. Detects obfuscation techniques like
 //! excessive whitespace padding (ZDI-CAN-25373).
-#![allow(clippy::unwrap_used, clippy::expect_used)]
-
 use super::{AnalysisInput, Analyzer};
 use crate::capabilities::CapabilityMapper;
 use crate::types::{AnalysisReport, TargetInfo};
@@ -323,6 +321,7 @@ impl Analyzer for LnkAnalyzer {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
 

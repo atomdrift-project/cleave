@@ -276,6 +276,7 @@ pub(crate) fn cache_store(sha256: &str, options: &AnalysisOptions, report: &Anal
 }
 
 #[cfg(test)]
+#[allow(clippy::expect_used)]
 mod tests {
     use super::*;
     use crate::types::core::{AnalysisReport, TargetInfo};
@@ -292,9 +293,7 @@ mod tests {
     }
 
     fn test_conn() -> Connection {
-        #[allow(clippy::expect_used)]
         let conn = Connection::open_in_memory().expect("in-memory SQLite must succeed in test");
-        #[allow(clippy::expect_used)]
         conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS analysis_cache (
                 sha256 TEXT NOT NULL,
@@ -324,7 +323,6 @@ mod tests {
         let cached = lookup_conn(&conn, sha, opts, ts);
 
         assert!(cached.is_some());
-        #[allow(clippy::expect_used)]
         let cached = cached.expect("cache hit expected");
         assert_eq!(cached.target.sha256, sha);
         assert_eq!(cached.target.file_type, "elf");
@@ -394,7 +392,6 @@ mod tests {
         report2.target.file_type = "pe".to_string();
         store_conn(&conn, sha, opts, ts, &report2);
 
-        #[allow(clippy::expect_used)]
         let cached = lookup_conn(&conn, sha, opts, ts).expect("cache hit expected");
         assert_eq!(cached.target.file_type, "pe");
     }

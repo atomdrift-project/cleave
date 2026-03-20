@@ -1,6 +1,4 @@
 //! Path and environment variable analysis types
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
-
 use serde::{Deserialize, Serialize};
 
 use super::is_false;
@@ -218,6 +216,7 @@ pub enum EnvVarCategory {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use super::*;
 

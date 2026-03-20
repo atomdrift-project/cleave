@@ -49,22 +49,19 @@ pub(crate) fn populate_binary_metrics(report: &mut AnalysisReport, data: &[u8]) 
 
     // Calculate string metrics
     if !report.strings.is_empty() {
-        let entropies: Vec<f64> = report
-            .strings
-            .iter()
-            .map(|s| calculate_entropy(s.value.as_bytes()))
-            .collect();
-
-        let total_entropy: f64 = entropies.iter().sum();
-        binary.avg_string_entropy = (total_entropy / entropies.len() as f64) as f32;
-        binary.high_entropy_strings = entropies.iter().filter(|&&e| e > 6.0).count() as u32;
-
-        // Calculate string length metrics
+        let mut total_entropy: f64 = 0.0;
+        let mut high_entropy_count: u32 = 0;
         let mut total_length: u64 = 0;
         let mut max_length: u32 = 0;
         let mut wide_count: u32 = 0;
 
         for s in &report.strings {
+            let e = calculate_entropy(s.value.as_bytes());
+            total_entropy += e;
+            if e > 6.0 {
+                high_entropy_count += 1;
+            }
+
             let len = s.value.len() as u32;
             total_length += len as u64;
             if len > max_length {
@@ -76,6 +73,8 @@ pub(crate) fn populate_binary_metrics(report: &mut AnalysisReport, data: &[u8]) 
             }
         }
 
+        binary.avg_string_entropy = (total_entropy / report.strings.len() as f64) as f32;
+        binary.high_entropy_strings = high_entropy_count;
         binary.avg_string_length = total_length as f32 / report.strings.len() as f32;
         binary.max_string_length = max_length;
         binary.wide_string_count = wide_count;
@@ -83,18 +82,23 @@ pub(crate) fn populate_binary_metrics(report: &mut AnalysisReport, data: &[u8]) 
 
     // Calculate binary entropy from sections
     if !report.sections.is_empty() {
-        let mut entropies = Vec::new();
-        let mut code_entropies = Vec::new();
-        let mut data_entropies = Vec::new();
+        let mut total_entropy: f32 = 0.0;
+        let mut sum_sq_entropy: f32 = 0.0;
+        let mut count: usize = 0;
+
+        let mut code_entropy_sum: f32 = 0.0;
+        let mut code_entropy_count: usize = 0;
+        let mut data_entropy_sum: f32 = 0.0;
+        let mut data_entropy_count: usize = 0;
 
         for section in &report.sections {
             let entropy = section.entropy as f32;
-            entropies.push(entropy);
+            total_entropy += entropy;
+            sum_sq_entropy += entropy * entropy;
+            count += 1;
 
             // Track code vs data section entropy
             let name_lower = section.name.to_lowercase();
-
-            // Extract section name (e.g., "__text" from "__TEXT.____text")
             let section_name = section.name.rsplit('.').next().unwrap_or(&section.name);
             let section_name_clean = section_name.trim_start_matches("__");
 
@@ -105,10 +109,8 @@ pub(crate) fn populate_binary_metrics(report: &mut AnalysisReport, data: &[u8]) 
                 .unwrap_or(false);
 
             let is_exec = if file_type == "macho" {
-                // In Mach-O, only specific sections contain code
                 matches!(section_name_clean, "text" | "stubs" | "stub_helper") && is_exec_perm
             } else if file_type == "pe" {
-                // In PE, sections with executable characteristic bit set (0x20000000)
                 if let Some(ref perm) = section.permissions {
                     if let Ok(flags) = u32::from_str_radix(perm, 16) {
                         (flags & 0x20000000) != 0
@@ -119,7 +121,6 @@ pub(crate) fn populate_binary_metrics(report: &mut AnalysisReport, data: &[u8]) 
                     is_exec_perm
                 }
             } else if file_type == "elf" {
-                // In ELF, sections with SHF_EXECINSTR (0x4)
                 if let Some(ref perm) = section.permissions {
                     if let Ok(flags) = u32::from_str_radix(perm, 16) {
                         (flags & 0x4) != 0
@@ -134,9 +135,11 @@ pub(crate) fn populate_binary_metrics(report: &mut AnalysisReport, data: &[u8]) 
             };
 
             if is_exec {
-                code_entropies.push(entropy);
+                code_entropy_sum += entropy;
+                code_entropy_count += 1;
             } else if name_lower.contains("data") || name_lower.contains("rodata") {
-                data_entropies.push(entropy);
+                data_entropy_sum += entropy;
+                data_entropy_count += 1;
             }
 
             if entropy > 7.5 {
@@ -144,21 +147,20 @@ pub(crate) fn populate_binary_metrics(report: &mut AnalysisReport, data: &[u8]) 
             }
         }
 
-        if !entropies.is_empty() {
-            binary.overall_entropy = entropies.iter().sum::<f32>() / entropies.len() as f32;
-
-            let mean = binary.overall_entropy;
-            let variance: f32 =
-                entropies.iter().map(|e| (e - mean).powi(2)).sum::<f32>() / entropies.len() as f32;
-            binary.entropy_variance = variance.sqrt();
+        if count > 0 {
+            let mean = total_entropy / count as f32;
+            binary.overall_entropy = mean;
+            // Variance = E[X^2] - (E[X])^2
+            let variance = (sum_sq_entropy / count as f32) - (mean * mean);
+            binary.entropy_variance = variance.max(0.0).sqrt();
         }
 
-        if !code_entropies.is_empty() {
-            binary.code_entropy = code_entropies.iter().sum::<f32>() / code_entropies.len() as f32;
+        if code_entropy_count > 0 {
+            binary.code_entropy = code_entropy_sum / code_entropy_count as f32;
         }
 
-        if !data_entropies.is_empty() {
-            binary.data_entropy = data_entropies.iter().sum::<f32>() / data_entropies.len() as f32;
+        if data_entropy_count > 0 {
+            binary.data_entropy = data_entropy_sum / data_entropy_count as f32;
         }
     }
 

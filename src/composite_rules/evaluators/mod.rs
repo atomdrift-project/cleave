@@ -1,5 +1,4 @@
 //! Condition evaluators for composite rules.
-#![allow(clippy::expect_used)]
 //!
 //! This module contains evaluation functions for different condition types:
 //! - **symbol_string**: Symbol and string matching (imports, exports, strings, decoded content)
@@ -18,6 +17,7 @@ use parking_lot::RwLock;
 use regex::Regex;
 use std::cell::RefCell;
 use std::hash::Hash;
+use std::num::NonZeroUsize;
 use std::sync::OnceLock;
 
 // Re-export all evaluator modules
@@ -75,11 +75,28 @@ const REGEX_CACHE_MAX_SIZE: usize = 16_384;
 static REGEX_CACHE: OnceLock<RwLock<lru::LruCache<(String, bool), Regex>>> = OnceLock::new();
 
 // SAFETY: REGEX_CACHE_MAX_SIZE is a compile-time constant > 0
-const REGEX_CACHE_SIZE: std::num::NonZeroUsize =
-    match std::num::NonZeroUsize::new(REGEX_CACHE_MAX_SIZE) {
-        Some(n) => n,
-        None => panic!("REGEX_CACHE_MAX_SIZE must be > 0"),
-    };
+const REGEX_CACHE_SIZE: NonZeroUsize = {
+    #[allow(clippy::expect_used)]
+    NonZeroUsize::new(REGEX_CACHE_MAX_SIZE).expect("REGEX_CACHE_MAX_SIZE is non-zero")
+};
+
+const SCANNER_CACHE_DEFAULT_SIZE: NonZeroUsize = {
+    #[allow(clippy::expect_used)]
+    NonZeroUsize::new(SCANNER_CACHE_MAX_SIZE).expect("SCANNER_CACHE_MAX_SIZE is non-zero")
+};
+
+const UTF8_CACHE_DEFAULT_SIZE: NonZeroUsize = {
+    #[allow(clippy::expect_used)]
+    NonZeroUsize::new(8).expect("Constant 8 is non-zero")
+};
+
+fn cache_size_from_env(var_name: &str, default: NonZeroUsize) -> NonZeroUsize {
+    std::env::var(var_name)
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .and_then(NonZeroUsize::new)
+        .unwrap_or(default)
+}
 
 /// Access the global regex cache, initializing it on first call
 fn regex_cache() -> &'static RwLock<lru::LruCache<(String, bool), Regex>> {
@@ -134,16 +151,9 @@ const SCANNER_CACHE_MAX_SIZE: usize = 4;
 thread_local! {
     /// Thread-local YARA scanner LRU cache keyed by Rules pointer address.
     /// Bounded to SCANNER_CACHE_MAX_SIZE entries to prevent memory leaks.
-    #[allow(clippy::expect_used)]
     pub static SCANNER_CACHE: RefCell<lru::LruCache<usize, yara_x::Scanner<'static>>> = {
-        use std::num::NonZeroUsize;
-        let size = std::env::var("CLEAVE_SCANNER_CACHE_SIZE")
-            .ok()
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(SCANNER_CACHE_MAX_SIZE);
-        RefCell::new(lru::LruCache::new(
-            NonZeroUsize::new(size).expect("Scanner cache size must be > 0")
-        ))
+        let size = cache_size_from_env("CLEAVE_SCANNER_CACHE_SIZE", SCANNER_CACHE_DEFAULT_SIZE);
+        RefCell::new(lru::LruCache::new(size))
     };
 
     /// Counter for scanner cache statistics (hits, misses, evictions)
@@ -233,7 +243,8 @@ pub(crate) fn get_or_create_scanner<'a>(rules: &'a yara_x::Rules) -> &'a mut yar
         }
 
         // Get the scanner (guaranteed to exist now)
-        let scanner = cache.get_mut(&key).expect("Scanner was just inserted");
+        #[allow(clippy::expect_used)] // Cache entry is guaranteed after hit or insertion above.
+        let scanner = cache.get_mut(&key).expect("scanner cache entry must exist");
 
         // Transmute lifetime back to caller's lifetime
         // SAFETY: We're returning a reference with the caller's lifetime 'a,
@@ -249,16 +260,9 @@ pub(crate) fn get_or_create_scanner<'a>(rules: &'a yara_x::Rules) -> &'a mut yar
 // Cache size: 32 entries provides good hit rate without excessive memory (max ~480MB for 15MB files).
 thread_local! {
     /// Thread-local UTF-8 conversion cache with LRU eviction
-    #[allow(clippy::expect_used)] // Default is 32, guaranteed to be > 0
     static UTF8_CACHE: RefCell<lru::LruCache<Utf8CacheKey, std::sync::Arc<str>>> = {
-        use std::num::NonZeroUsize;
-        RefCell::new(lru::LruCache::new(
-            NonZeroUsize::new(std::env::var("CLEAVE_UTF8_CACHE_SIZE")
-                .ok()
-                .and_then(|s| s.parse().ok())
-                .unwrap_or(8)
-            ).expect("Cache size must be > 0")
-        ))
+        let size = cache_size_from_env("CLEAVE_UTF8_CACHE_SIZE", UTF8_CACHE_DEFAULT_SIZE);
+        RefCell::new(lru::LruCache::new(size))
     };
 }
 

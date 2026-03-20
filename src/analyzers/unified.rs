@@ -20,9 +20,8 @@ use crate::analyzers::{
 };
 use crate::capabilities::CapabilityMapper;
 use crate::types::*;
-use anyhow::{Context, Result};
+use anyhow::Result;
 use std::cell::RefCell;
-use std::fs;
 use std::path::Path;
 use std::sync::Arc;
 use tree_sitter::{Language, Parser};
@@ -1308,25 +1307,12 @@ impl Analyzer for UnifiedSourceAnalyzer {
     }
 
     fn analyze(&self, file_path: &Path) -> Result<AnalysisReport> {
-        // Read file and detect UTF-16 encoding
-        let mut bytes = fs::read(file_path).context("Failed to read file")?;
-        let original_bytes = bytes.clone(); // Keep original for stng
+        // Use smart file reading with automatic UTF-16 normalization
+        let data = crate::file_io::read_file_normalized(file_path)?;
+        let bytes = data.as_slice();
 
-        // Check for UTF-16 LE BOM (FF FE) and convert to UTF-8
-        if bytes.len() >= 2 && bytes[0] == 0xFF && bytes[1] == 0xFE {
-            use encoding_rs::UTF_16LE;
-            let (decoded, _, _) = UTF_16LE.decode(&bytes[2..]); // Skip BOM
-            bytes = decoded.into_owned().into_bytes();
-        }
-        // Check for UTF-16 BE BOM (FE FF) and convert to UTF-8
-        else if bytes.len() >= 2 && bytes[0] == 0xFE && bytes[1] == 0xFF {
-            use encoding_rs::UTF_16BE;
-            let (decoded, _, _) = UTF_16BE.decode(&bytes[2..]); // Skip BOM
-            bytes = decoded.into_owned().into_bytes();
-        }
-
-        let content = String::from_utf8_lossy(&bytes);
-        Ok(self.analyze_source_with_original(file_path, &content, &original_bytes))
+        let content = String::from_utf8_lossy(bytes);
+        Ok(self.analyze_source_with_original(file_path, &content, bytes))
     }
 
     fn can_analyze(&self, _file_path: &Path) -> bool {

@@ -504,8 +504,8 @@ impl ArchiveAnalyzer {
         // Create extraction guard
         let guard = ExtractionGuard::new();
 
-        // Bounded channel (32 items) for backpressure
-        let (tx, rx) = bounded::<ExtractedFile>(32);
+        // Bounded channel (8 items) for backpressure
+        let (tx, rx) = bounded::<ExtractedFile>(8);
 
         // Statistics
         let files_analyzed = AtomicU32::new(0);
@@ -696,8 +696,8 @@ impl ArchiveAnalyzer {
         // Create extraction guard
         let guard = ExtractionGuard::new();
 
-        // Bounded channel (32 items) for backpressure
-        let (tx, rx) = bounded::<ExtractedFile>(32);
+        // Bounded channel (8 items) for backpressure
+        let (tx, rx) = bounded::<ExtractedFile>(8);
 
         // Statistics
         let files_analyzed = AtomicU32::new(0);
@@ -949,8 +949,8 @@ impl ArchiveAnalyzer {
         // Create extraction guard
         let guard = ExtractionGuard::new();
 
-        // Bounded channel (32 items) for backpressure
-        let (tx, rx) = bounded::<ExtractedFile>(32);
+        // Bounded channel (8 items) for backpressure
+        let (tx, rx) = bounded::<ExtractedFile>(8);
 
         // Statistics
         let files_analyzed = AtomicU32::new(0);
@@ -1148,8 +1148,8 @@ impl ArchiveAnalyzer {
         // Create extraction guard
         let guard = ExtractionGuard::new();
 
-        // Bounded channel (32 items) for backpressure
-        let (tx, rx) = bounded::<ExtractedFile>(32);
+        // Bounded channel (8 items) for backpressure
+        let (tx, rx) = bounded::<ExtractedFile>(8);
 
         // Statistics
         let files_analyzed = AtomicU32::new(0);
@@ -1328,8 +1328,8 @@ impl ArchiveAnalyzer {
         // Create extraction guard
         let guard = ExtractionGuard::new();
 
-        // Bounded channel (32 items) for backpressure
-        let (tx, rx) = bounded::<ExtractedFile>(32);
+        // Bounded channel (8 items) for backpressure
+        let (tx, rx) = bounded::<ExtractedFile>(8);
 
         // Statistics
         let files_analyzed = AtomicU32::new(0);

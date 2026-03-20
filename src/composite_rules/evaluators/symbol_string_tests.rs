@@ -31,6 +31,7 @@ fn eval_symbol<'a>(
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn eval_raw<'a>(
     exact: Option<&String>,
     substr: Option<&String>,
@@ -59,6 +60,7 @@ fn eval_raw<'a>(
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn eval_encoded<'a>(
     encoding: Option<&crate::composite_rules::condition::EncodingSpec>,
     exact: Option<&String>,

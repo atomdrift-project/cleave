@@ -171,6 +171,7 @@ pub(crate) fn yara_engine(enable_third_party: bool) -> Arc<YaraEngine> {
 }
 
 #[cfg(test)]
+#[allow(clippy::expect_used)]
 mod tests {
     use super::*;
     use std::sync::{Mutex, OnceLock};
@@ -182,7 +183,7 @@ mod tests {
 
     #[test]
     fn test_capability_mapper_singleton() {
-        let _guard = test_lock().lock().unwrap_or_else(|e| e.into_inner());
+        let _guard = test_lock().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let _skip_guard = EnvVarGuard::set("CLEAVE_SKIP_TRAITS", "1");
         let _skip_guard_lower = EnvVarGuard::unset("cleave_SKIP_TRAITS");
         reload_capability_mapper().expect("reload empty mapper");
@@ -226,9 +227,8 @@ mod tests {
     /// Uses CLEAVE_TRAITS_DIR pointed at a temp directory containing invalid YAML.
     /// The reload should return Err and leave the previous global mapper intact.
     #[test]
-    #[allow(clippy::expect_used)]
     fn test_reload_rollback_on_bad_traits() {
-        let _guard = test_lock().lock().unwrap_or_else(|e| e.into_inner());
+        let _guard = test_lock().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let _skip_guard = EnvVarGuard::unset("CLEAVE_SKIP_TRAITS");
         let _skip_guard_lower = EnvVarGuard::unset("cleave_SKIP_TRAITS");
 

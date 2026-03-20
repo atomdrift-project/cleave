@@ -1695,7 +1695,6 @@ mod tests {
     /// pattern is embedded within it. Before the fix, Aho-Corasick's
     /// non-overlapping `find_iter` would match "output" (from another trait)
     /// and skip "set volume output muted true" entirely.
-    #[allow(clippy::expect_used)]
     #[test]
     fn test_substr_overlapping_short_pattern_inside_long() {
         let traits = vec![
@@ -1724,7 +1723,6 @@ mod tests {
     }
 
     /// Same test but with patterns in reverse order (long before short)
-    #[allow(clippy::expect_used)]
     #[test]
     fn test_substr_overlapping_long_pattern_before_short() {
         let traits = vec![
@@ -1741,7 +1739,6 @@ mod tests {
     }
 
     /// Multiple overlapping patterns at different positions
-    #[allow(clippy::expect_used)]
     #[test]
     fn test_substr_multiple_overlapping_patterns() {
         let traits = vec![
@@ -1760,7 +1757,6 @@ mod tests {
     }
 
     /// Parallel path: same overlapping test but with enough strings to trigger parallel
-    #[allow(clippy::expect_used)]
     #[test]
     fn test_substr_overlapping_parallel_path() {
         let traits = vec![
@@ -1788,7 +1784,6 @@ mod tests {
     }
 
     /// Case-insensitive overlapping patterns
-    #[allow(clippy::expect_used)]
     #[test]
     fn test_substr_overlapping_case_insensitive() {
         let make_ci_substr_trait = |id: &str, substr: &str| -> TraitDefinition {

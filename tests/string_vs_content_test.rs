@@ -45,6 +45,7 @@ typedef unsigned char uint8_t;
     // Skip YARA - these tests use YAML traits, not YARA rules
     let output = assert_cmd::cargo_bin_cmd!("cleave")
         .env("cleave_SKIP_YARA", "1")
+        .env("CLEAVE_SKIP_CACHE", "1")
         .env_remove("CLEAVE_SKIP_TRAITS")
         .env_remove("cleave_SKIP_TRAITS")
         .args([
@@ -91,6 +92,7 @@ int main() {
     // Skip YARA - these tests use YAML traits, not YARA rules
     let output = assert_cmd::cargo_bin_cmd!("cleave")
         .env("cleave_SKIP_YARA", "1")
+        .env("CLEAVE_SKIP_CACHE", "1")
         .env_remove("CLEAVE_SKIP_TRAITS")
         .env_remove("cleave_SKIP_TRAITS")
         .args(["--format", "jsonl", "analyze", c_path.to_str().unwrap()])
@@ -145,6 +147,7 @@ echo "This script is safe"
     // Skip YARA since we're only testing custom trait conditions (not YARA rules)
     let output = assert_cmd::cargo_bin_cmd!("cleave")
         .env("cleave_SKIP_YARA", "1")
+        .env("CLEAVE_SKIP_CACHE", "1")
         .env_remove("CLEAVE_SKIP_TRAITS")
         .env_remove("cleave_SKIP_TRAITS")
         .args([
@@ -224,6 +227,7 @@ def connect():
     // Skip YARA since we're only testing custom trait conditions (not YARA rules)
     let output = assert_cmd::cargo_bin_cmd!("cleave")
         .env("cleave_SKIP_YARA", "1")
+        .env("CLEAVE_SKIP_CACHE", "1")
         .env("CLEAVE_VALIDATE", "0") // Disable validation: test intentionally creates conflicting string/raw traits
         .env_remove("CLEAVE_SKIP_TRAITS")
         .env_remove("cleave_SKIP_TRAITS")

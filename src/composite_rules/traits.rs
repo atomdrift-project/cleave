@@ -2618,6 +2618,7 @@ impl CompositeTrait {
     }
 
     /// Evaluate symbol condition
+    #[allow(clippy::too_many_arguments)]
     fn eval_symbol<'a>(
         &self,
         exact: Option<&String>,

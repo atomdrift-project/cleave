@@ -24,6 +24,7 @@ use std::time::SystemTime;
 use walkdir::WalkDir;
 
 /// Format seconds into a human-readable age string (e.g., "2h 30m", "3d 12h").
+#[must_use]
 pub fn format_age(secs: u64) -> String {
     match secs {
         0..=59 => format!("{secs}s"),
@@ -60,6 +61,7 @@ pub fn cache_dir() -> Result<PathBuf> {
 
 /// Returns the traits directory path from env var, local dir, or platform data dir.
 /// Does NOT auto-clone — use `traits_repo::resolve_and_ensure()` for that.
+#[must_use]
 pub fn traits_path() -> PathBuf {
     if let Ok(explicit) = std::env::var("CLEAVE_TRAITS_DIR") {
         return PathBuf::from(explicit);
@@ -72,6 +74,7 @@ pub fn traits_path() -> PathBuf {
 }
 
 /// Returns the third-party YARA rules directory (`third-party/` inside the traits directory).
+#[must_use]
 pub fn third_party_path() -> PathBuf {
     traits_path().join("third-party")
 }

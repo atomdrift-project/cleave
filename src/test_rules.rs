@@ -1,5 +1,4 @@
 //! Debug/test rule evaluation module.
-#![allow(clippy::unwrap_used, clippy::expect_used)]
 //!
 //! This module provides detailed tracing of rule evaluation for debugging purposes.
 //! It uses the debug collector pattern to capture evaluation details from the real
@@ -2648,6 +2647,7 @@ fn format_condition_result(output: &mut String, result: &ConditionDebugResult, i
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
     use crate::types::{AnalysisReport, Finding, FindingKind, TargetInfo};

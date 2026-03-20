@@ -101,6 +101,22 @@ fn test_reject_plain_text() {
 }
 
 #[test]
+fn test_reject_markup_template_false_positive() {
+    let markup = r#"
+  <svg xmlns="http://www.w3.org/2000/svg">
+    <foreignObject>
+      <xhtml:div xmlns="http://www.w3.org/1999/xhtml" i18n>
+        Count: <span>5</span>
+      </xhtml:div>
+    </foreignObject>
+  </svg>
+"#;
+    let info = make_string_info(markup);
+    let result = detect_language(&info, false);
+    assert_eq!(result, None, "SVG/XHTML markup should not be classified as embedded code");
+}
+
+#[test]
 fn test_reject_too_small() {
     let tiny = "import os";
     let info = make_string_info(tiny);

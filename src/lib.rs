@@ -826,6 +826,17 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
                 continue;
             }
         }
+        if payload.encoding_chain.len() == 1
+            && payload.encoding_chain[0] == "xor"
+            && payload.detected_type == FileType::Unknown
+            && payload.preview.len() < 32
+        {
+            tracing::debug!(
+                "Skipping short unknown xor fragment: {}",
+                payload.preview
+            );
+            continue;
+        }
 
         // Add finding for the encoded payload
         let crit = match payload.detected_type {

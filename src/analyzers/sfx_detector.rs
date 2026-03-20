@@ -23,6 +23,10 @@ const NSIS_DEADBEEF: &[u8] = &[0xEF, 0xBE, 0xAD, 0xDE];
 
 /// Inno Setup data header string.
 const INNO_MARKER: &[u8] = b"Inno Setup Setup Data";
+const NSIS_VERSION_BANNER: &[u8] = b"Nullsoft Install System";
+const NSIS_ERROR_TITLE: &[u8] = b"NSIS Error";
+const NSIS_ERROR_URL: &[u8] = b"nsis.sf.net/NSIS_Error";
+const NSIS_NCRC_SWITCH: &[u8] = b"/NCRC";
 
 /// Known SFX installer kind.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -64,19 +68,31 @@ pub(crate) struct SfxResult {
 
 /// Detect NSIS or Inno Setup SFX markers in raw PE data.
 ///
-/// When both are present (multi-stage dropper), NSIS takes precedence because its
-/// data block is processed before any Inno Setup component.
-///
 /// Returns `None` if neither marker is found.
 #[must_use]
 pub(crate) fn detect_sfx(data: &[u8]) -> Option<SfxKind> {
-    if memmem::find(data, NSIS_DEADBEEF).is_some() {
-        return Some(SfxKind::Nsis);
-    }
     if memmem::find(data, INNO_MARKER).is_some() {
         return Some(SfxKind::InnoSetup);
     }
+    if has_strong_nsis_markers(data) {
+        return Some(SfxKind::Nsis);
+    }
     None
+}
+
+fn has_strong_nsis_markers(data: &[u8]) -> bool {
+    if memmem::find(data, NSIS_DEADBEEF).is_none() {
+        return false;
+    }
+
+    [
+        NSIS_VERSION_BANNER,
+        NSIS_ERROR_TITLE,
+        NSIS_ERROR_URL,
+        NSIS_NCRC_SWITCH,
+    ]
+    .iter()
+    .any(|marker| memmem::find(data, marker).is_some())
 }
 
 /// Attempt to extract a detected SFX installer and analyze its contents.
@@ -146,7 +162,7 @@ fn try_extract(
             if tool_available("innoextract") {
                 run_innoextract(file_path, tmp.path())
             } else {
-                run_7z(file_path, tmp.path())
+                false
             }
         }
     };
@@ -234,6 +250,14 @@ mod tests {
     fn test_detect_nsis_deadbeef() {
         let mut data = pe_stub();
         data.extend_from_slice(NSIS_DEADBEEF);
+        assert_eq!(detect_sfx(&data), None);
+    }
+
+    #[test]
+    fn test_detect_nsis_with_secondary_marker() {
+        let mut data = pe_stub();
+        data.extend_from_slice(NSIS_DEADBEEF);
+        data.extend_from_slice(NSIS_ERROR_TITLE);
         assert_eq!(detect_sfx(&data), Some(SfxKind::Nsis));
     }
 
@@ -245,11 +269,11 @@ mod tests {
     }
 
     #[test]
-    fn test_nsis_takes_precedence_over_inno() {
+    fn test_inno_takes_precedence_over_weak_nsis_marker() {
         let mut data = pe_stub();
         data.extend_from_slice(INNO_MARKER);
         data.extend_from_slice(NSIS_DEADBEEF);
-        assert_eq!(detect_sfx(&data), Some(SfxKind::Nsis));
+        assert_eq!(detect_sfx(&data), Some(SfxKind::InnoSetup));
     }
 
     #[test]

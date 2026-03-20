@@ -136,6 +136,21 @@ fn truncate_str(s: &str, max_bytes: usize) -> &str {
     &s[..end]
 }
 
+fn is_publish_or_install_lifecycle_script(name: &str) -> bool {
+    matches!(
+        name,
+        "preinstall"
+            | "install"
+            | "postinstall"
+            | "prepublish"
+            | "prepare"
+            | "prepack"
+            | "postpack"
+            | "publish"
+            | "postpublish"
+    )
+}
+
 impl PackageJsonAnalyzer {
     #[must_use]
     pub(crate) fn new() -> Self {
@@ -632,8 +647,9 @@ impl PackageJsonAnalyzer {
                 );
             }
 
-            // Check for hidden file references (dotfiles)
-            if script.contains("/.") {
+            // Hidden file references are suspicious in install/publish lifecycle hooks,
+            // but common in benign helper scripts such as docs/build tooling.
+            if is_publish_or_install_lifecycle_script(name) && script.contains("/.") {
                 // Extract the hidden file path, excluding standard paths like node_modules/.bin/
                 let hidden_files: Vec<&str> = script
                     .split_whitespace()
@@ -1348,6 +1364,42 @@ mod tests {
             .iter()
             .any(|f| f.id.contains("install-hook")));
         assert!(report.findings.iter().any(|f| f.id.contains("net/")));
+    }
+
+    #[test]
+    fn test_hidden_file_in_docs_script_is_not_evasion() {
+        let content = r#"{
+            "name": "nan",
+            "version": "2.16.0",
+            "scripts": {
+                "docs": "doc/.build.sh"
+            }
+        }"#;
+
+        let analyzer = PackageJsonAnalyzer::new();
+        let report = analyzer
+            .analyze_package(Path::new("package.json"), content)
+            .unwrap();
+
+        assert!(!report.findings.iter().any(|f| f.id == "evasion/hidden-file"));
+    }
+
+    #[test]
+    fn test_hidden_file_in_install_hook_stays_suspicious() {
+        let content = r#"{
+            "name": "bad-package",
+            "version": "1.0.0",
+            "scripts": {
+                "postinstall": "sh ./.hidden/dropper.sh"
+            }
+        }"#;
+
+        let analyzer = PackageJsonAnalyzer::new();
+        let report = analyzer
+            .analyze_package(Path::new("package.json"), content)
+            .unwrap();
+
+        assert!(report.findings.iter().any(|f| f.id == "evasion/hidden-file"));
     }
 
     #[test]

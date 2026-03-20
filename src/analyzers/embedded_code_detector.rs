@@ -68,9 +68,27 @@ pub fn detect_language(string_info: &StringInfo, is_encoded: bool) -> Option<Fil
 
     // Check if already classified as code by stng
     match kind {
-        StringType::PythonCode => return Some(FileType::Python),
-        StringType::JavaScriptCode => return Some(FileType::JavaScript),
-        StringType::PhpCode => return Some(FileType::Php),
+        StringType::PythonCode => {
+            if should_reject_markup(value, is_encoded) {
+                return None;
+            }
+            return Some(FileType::Python);
+        }
+        StringType::JavaScriptCode => {
+            if should_reject_markup(value, is_encoded) {
+                return None;
+            }
+            return Some(FileType::JavaScript);
+        }
+        StringType::PhpCode => {
+            if should_reject_markup(value, is_encoded) {
+                return None;
+            }
+            if !is_probable_php(value, is_encoded) {
+                return None;
+            }
+            return Some(FileType::Php);
+        }
         StringType::ShellCmd => {
             if is_real_shell(value) {
                 return Some(FileType::Shell);
@@ -81,9 +99,27 @@ pub fn detect_language(string_info: &StringInfo, is_encoded: bool) -> Option<Fil
             // Classify using stng (tree-sitter strings come through here)
             let classified_kind = stng::classify_string(value);
             match classified_kind {
-                StringType::PythonCode => return Some(FileType::Python),
-                StringType::JavaScriptCode => return Some(FileType::JavaScript),
-                StringType::PhpCode => return Some(FileType::Php),
+                StringType::PythonCode => {
+                    if should_reject_markup(value, is_encoded) {
+                        return None;
+                    }
+                    return Some(FileType::Python);
+                }
+                StringType::JavaScriptCode => {
+                    if should_reject_markup(value, is_encoded) {
+                        return None;
+                    }
+                    return Some(FileType::JavaScript);
+                }
+                StringType::PhpCode => {
+                    if should_reject_markup(value, is_encoded) {
+                        return None;
+                    }
+                    if !is_probable_php(value, is_encoded) {
+                        return None;
+                    }
+                    return Some(FileType::Php);
+                }
                 StringType::ShellCmd => {
                     if is_real_shell(value) {
                         return Some(FileType::Shell);
@@ -95,6 +131,63 @@ pub fn detect_language(string_info: &StringInfo, is_encoded: bool) -> Option<Fil
     }
 
     None
+}
+
+fn should_reject_markup(value: &str, is_encoded: bool) -> bool {
+    !is_encoded && looks_like_passive_markup(value)
+}
+
+fn looks_like_markup(value: &str) -> bool {
+    let trimmed = value.trim_start();
+
+    if !(trimmed.starts_with('<') || trimmed.contains("xmlns=")) {
+        return false;
+    }
+
+    let markup_markers = [
+        "<svg",
+        "</svg",
+        "<div",
+        "</div",
+        "<span",
+        "</span",
+        "<html",
+        "</html",
+        "<body",
+        "</body",
+        "<foreignObject",
+        "</foreignObject",
+        "<xhtml:",
+        "xmlns=",
+        "xmlns:",
+        "<![CDATA[",
+    ];
+
+    markup_markers.iter().any(|marker| trimmed.contains(marker))
+}
+
+fn looks_like_passive_markup(value: &str) -> bool {
+    if !looks_like_markup(value) {
+        return false;
+    }
+
+    let active_markers = [
+        "<script",
+        "</script",
+        "javascript:",
+        "onload=",
+        "onerror=",
+        "onclick=",
+        "onbegin=",
+        "href=\"data:",
+        "href='data:",
+        "xlink:href=\"data:",
+        "xlink:href='data:",
+        "<?php",
+        "<?=",
+    ];
+
+    !active_markers.iter().any(|marker| value.contains(marker))
 }
 
 /// Additional heuristic to filter out false positive shell detection (like foreign languages)
@@ -140,6 +233,41 @@ fn is_real_shell(value: &str) -> bool {
     }
 
     false
+}
+
+fn is_probable_php(value: &str, is_encoded: bool) -> bool {
+    let trimmed = value.trim_start();
+
+    if trimmed.starts_with("<?php") || trimmed.starts_with("<?=") {
+        return true;
+    }
+
+    if !is_encoded {
+        return false;
+    }
+
+    let markers = [
+        "$_GET",
+        "$_POST",
+        "$_REQUEST",
+        "$_COOKIE",
+        "$_SERVER",
+        "$this->",
+        "->",
+        "function ",
+        "echo ",
+        "print ",
+        "eval(",
+        "base64_decode(",
+        "include ",
+        "include_once",
+        "require ",
+        "require_once",
+        "phpinfo(",
+        "$",
+    ];
+
+    markers.iter().any(|marker| value.contains(marker))
 }
 
 /// Calculate Shannon entropy of data
@@ -627,6 +755,12 @@ pub(crate) fn process_all_strings(
             continue;
         }
 
+        // Benign XML/HTML/SVG template literals often contain namespace URLs and tags that
+        // confuse generic code classifiers. Skip passive markup here before any deeper analysis.
+        if string_info.encoding_chain.is_empty() && looks_like_passive_markup(&string_info.value) {
+            continue;
+        }
+
         detection_attempts += 1;
 
         // Check for PowerShell -EncodedCommand blobs first
@@ -740,6 +874,21 @@ mod tests {
         let code = "<?php eval(base64_decode('test')); echo 'malware'; ?>";
         let info = make_string_info(code);
         assert_eq!(detect_language(&info, false), Some(FileType::Php));
+    }
+
+    #[test]
+    fn test_reject_phpish_binary_noise() {
+        let noise = "p`phpfpp`phpjp`phpp`phpfp`phpjp`phpfpp`phpjp`php";
+        let info = StringInfo {
+            value: noise.to_string(),
+            offset: Some(0),
+            string_type: crate::types::binary::StringType::PhpCode,
+            encoding: "utf-8".to_string(),
+            section: None,
+            encoding_chain: Vec::new(),
+            fragments: None,
+        };
+        assert_eq!(detect_language(&info, false), None);
     }
 
     #[test]

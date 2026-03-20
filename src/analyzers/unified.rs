@@ -802,7 +802,7 @@ impl UnifiedSourceAnalyzer {
             // chars per sequence; 8 family emojis in test/log data produce ~15 ZWJ chars.
             // Require >= 20 before escalating to suspicious to avoid FP on emoji-heavy files.
             if let Some(ref text) = metrics.text {
-                if text.invisible_chars > 0 {
+                if text.invisible_chars >= 2 {
                     // Libraries dealing with Unicode data, fake data generation,
                     // or internationalization legitimately contain invisible chars.
                     let path_lower = file_path.display().to_string().to_lowercase();

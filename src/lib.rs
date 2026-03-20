@@ -831,10 +831,7 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
             && payload.detected_type == FileType::Unknown
             && payload.preview.len() < 32
         {
-            tracing::debug!(
-                "Skipping short unknown xor fragment: {}",
-                payload.preview
-            );
+            tracing::debug!("Skipping short unknown xor fragment: {}", payload.preview);
             continue;
         }
 

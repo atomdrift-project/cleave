@@ -160,6 +160,10 @@ fn validate_pe(data: &[u8], offset: usize) -> Option<EmbeddedBinary> {
         return None;
     }
 
+    // SizeOfOptionalHeader (u16 LE) at pe_base + 20
+    let size_of_optional_header = read_u16_le(data, pe_base + 20)? as usize;
+    let section_table_offset = pe_base + 24 + size_of_optional_header;
+
     // Optional header magic (u16 LE) at pe_base + 24 (right after COFF header)
     let opt_magic = read_u16_le(data, pe_base + 24)?;
     let kind = match opt_magic {
@@ -177,6 +181,33 @@ fn validate_pe(data: &[u8], offset: usize) -> Option<EmbeddedBinary> {
 
     if estimated_size < MIN_BINARY_SIZE {
         return None;
+    }
+
+    let available_size = data.len().saturating_sub(offset);
+    let bounded_size = estimated_size.min(available_size);
+    if section_table_offset < offset
+        || section_table_offset.saturating_sub(offset) >= bounded_size
+        || section_table_offset
+            .checked_add(n_sections as usize * 40)
+            .is_none_or(|end| end > data.len())
+    {
+        return None;
+    }
+
+    // Reject PE-like blobs whose section table points outside the embedded slice.
+    for i in 0..n_sections as usize {
+        let sh = section_table_offset + i * 40;
+        let size_of_raw_data = read_u32_le(data, sh + 16)? as usize;
+        let pointer_to_raw_data = read_u32_le(data, sh + 20)? as usize;
+
+        if size_of_raw_data == 0 {
+            continue;
+        }
+
+        let section_end = pointer_to_raw_data.checked_add(size_of_raw_data)?;
+        if pointer_to_raw_data == 0 || section_end > bounded_size {
+            return None;
+        }
     }
 
     Some(EmbeddedBinary {
@@ -444,6 +475,19 @@ mod tests {
         make_synthetic_pe(&mut buf, 0);
         // Optional header magic = 0xDEAD (neither PE32 nor PE32+)
         buf[0x40 + 24..0x40 + 26].copy_from_slice(&0xDEADu16.to_le_bytes());
+        assert!(validate_pe(&buf, 0).is_none());
+    }
+
+    #[test]
+    fn test_rejects_sections_outside_embedded_slice() {
+        let mut buf = vec![0u8; 4096];
+        make_synthetic_pe(&mut buf, 0);
+        // SizeOfOptionalHeader = 0xE0 so the section table starts at 0x138.
+        buf[0x40 + 20..0x40 + 22].copy_from_slice(&0x00E0u16.to_le_bytes());
+        // First section header points far beyond SizeOfImage.
+        let section_table = 0x40 + 24 + 0xE0;
+        buf[section_table + 16..section_table + 20].copy_from_slice(&0x200u32.to_le_bytes());
+        buf[section_table + 20..section_table + 24].copy_from_slice(&0x9000u32.to_le_bytes());
         assert!(validate_pe(&buf, 0).is_none());
     }
 

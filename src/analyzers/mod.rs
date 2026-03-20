@@ -507,6 +507,28 @@ fn detect_file_type_inner(file_path: &Path, file_data: &[u8]) -> Option<FileType
         }
     }
 
+    // Check for OOXML documents before PE tampering heuristics.
+    //
+    // OOXML files are ZIP containers and can legitimately contain `MZ` inside
+    // embedded previews or document streams near the start of the file. If we
+    // search for displaced `MZ` first, benign `.pptx`/`.docx` samples get
+    // misclassified as tampered PEs.
+    if file_data.starts_with(b"PK") {
+        let is_ooxml_ext = path_str.ends_with(".docx")
+            || path_str.ends_with(".xlsx")
+            || path_str.ends_with(".pptx")
+            || path_str.ends_with(".docm")
+            || path_str.ends_with(".xlsm")
+            || path_str.ends_with(".pptm")
+            || path_str.ends_with(".dotx")
+            || path_str.ends_with(".dotm")
+            || path_str.ends_with(".xltx")
+            || path_str.ends_with(".xltm");
+        if is_ooxml_ext || office::ooxml::is_ooxml(file_data) {
+            return Some(FileType::Ooxml);
+        }
+    }
+
     // Check for Mach-O magic bytes
     if is_macho(file_data) {
         return Some(FileType::MachO);
@@ -739,25 +761,6 @@ fn detect_file_type_inner(file_path: &Path, file_data: &[u8]) -> Option<FileType
     });
     if !has_known_extension && looks_like_shell(file_data) {
         return Some(FileType::Shell);
-    }
-
-    // Check for OOXML documents (ZIP with [Content_Types].xml)
-    // Must come before generic archive detection since OOXML files are ZIP-based
-    let path_str = file_path.to_string_lossy().to_lowercase();
-    if file_data.starts_with(b"PK") {
-        let is_ooxml_ext = path_str.ends_with(".docx")
-            || path_str.ends_with(".xlsx")
-            || path_str.ends_with(".pptx")
-            || path_str.ends_with(".docm")
-            || path_str.ends_with(".xlsm")
-            || path_str.ends_with(".pptm")
-            || path_str.ends_with(".dotx")
-            || path_str.ends_with(".dotm")
-            || path_str.ends_with(".xltx")
-            || path_str.ends_with(".xltm");
-        if is_ooxml_ext || office::ooxml::is_ooxml(file_data) {
-            return Some(FileType::Ooxml);
-        }
     }
 
     // Check for archives by file extension (need to check path, not just extension)
@@ -1813,6 +1816,16 @@ mod tests {
         // .pyc by extension (archive entry path — no content check)
         let path = PathBuf::from("__pycache__/app.cpython-312.pyc");
         assert_eq!(detect_file_type_from_path(&path), FileType::PythonBytecode);
+    }
+
+    #[test]
+    fn test_ooxml_beats_displaced_mz_heuristic() {
+        let mut data = b"PK\x03\x04".to_vec();
+        data.resize(12, 0);
+        data.extend_from_slice(b"MZ");
+
+        let path = PathBuf::from("slides/output.pptx");
+        assert_eq!(detect_file_type_from_data(&path, &data), FileType::Ooxml);
     }
 
     // --- Perl ---

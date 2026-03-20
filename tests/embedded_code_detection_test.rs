@@ -113,7 +113,10 @@ fn test_reject_markup_template_false_positive() {
 "#;
     let info = make_string_info(markup);
     let result = detect_language(&info, false);
-    assert_eq!(result, None, "SVG/XHTML markup should not be classified as embedded code");
+    assert_eq!(
+        result, None,
+        "SVG/XHTML markup should not be classified as embedded code"
+    );
 }
 
 #[test]

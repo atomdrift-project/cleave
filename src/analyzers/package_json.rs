@@ -44,6 +44,8 @@ where
 struct PackageJson {
     name: Option<String>,
     version: Option<String>,
+    #[serde(default)]
+    r#private: bool,
     #[allow(dead_code)] // Deserialized from JSON
     desc: Option<String>,
     #[allow(dead_code)] // Deserialized from JSON
@@ -134,6 +136,18 @@ fn truncate_str(s: &str, max_bytes: usize) -> &str {
     &s[..end]
 }
 
+fn has_local_dependency_protocols(pkg: &PackageJson) -> bool {
+    [
+        &pkg.dependencies,
+        &pkg.dev_dependencies,
+        &pkg.peer_dependencies,
+        &pkg.optional_dependencies,
+    ]
+    .into_iter()
+    .flat_map(|deps| deps.values())
+    .any(|value| value.starts_with("workspace:") || value.starts_with("catalog:"))
+}
+
 fn is_publish_or_install_lifecycle_script(name: &str) -> bool {
     matches!(
         name,
@@ -147,6 +161,49 @@ fn is_publish_or_install_lifecycle_script(name: &str) -> bool {
             | "publish"
             | "postpublish"
     )
+}
+
+fn is_local_node_script(script: &str) -> bool {
+    let trimmed = script.trim();
+    let Some(rest) = trimmed.strip_prefix("node ") else {
+        return false;
+    };
+    if rest.is_empty() || rest.contains(char::is_whitespace) {
+        return false;
+    }
+    if rest.contains(['|', '&', ';', '$', '`', '(', ')', '<', '>']) {
+        return false;
+    }
+
+    matches!(
+        rest,
+        path if path.starts_with("scripts/")
+            || path.starts_with("./scripts/")
+            || path.starts_with("tools/")
+            || path.starts_with("./tools/")
+    )
+}
+
+fn is_suspicious_install_hook_script(script: &str) -> bool {
+    let trimmed = script.trim();
+    if trimmed.contains("curl")
+        || trimmed.contains("wget")
+        || trimmed.contains("http://")
+        || trimmed.contains("https://")
+    {
+        return true;
+    }
+
+    if is_local_node_script(trimmed) {
+        return false;
+    }
+
+    trimmed.contains("node -e")
+        || trimmed.contains("node --eval")
+        || trimmed.contains("python -c")
+        || trimmed.contains("bash -c")
+        || trimmed.contains("sh -c")
+        || trimmed.contains("powershell -e")
 }
 
 impl PackageJsonAnalyzer {
@@ -742,7 +799,7 @@ impl PackageJsonAnalyzer {
             _ => false,
         };
 
-        if author_empty {
+        if author_empty && !pkg.r#private && !has_local_dependency_protocols(pkg) {
             report.add_finding(
                 Finding::indicator(
                     "supply-chain/missing-author".to_string(),
@@ -930,11 +987,7 @@ impl PackageJsonAnalyzer {
                 // Script length alone is not a reliable signal: legitimate publish-safety guards
                 // (e.g. ljharb's `not-in-publish || safe-publish-latest` pattern) are verbose
                 // but benign.
-                let criticality = if script.contains("curl")
-                    || script.contains("wget")
-                    || script.contains("http")
-                    || script.contains("node ")
-                {
+                let criticality = if is_suspicious_install_hook_script(script) {
                     Criticality::Suspicious
                 } else {
                     Criticality::Notable
@@ -1380,7 +1433,10 @@ mod tests {
             .analyze_package(Path::new("package.json"), content)
             .unwrap();
 
-        assert!(!report.findings.iter().any(|f| f.id == "evasion/hidden-file"));
+        assert!(!report
+            .findings
+            .iter()
+            .any(|f| f.id == "evasion/hidden-file"));
     }
 
     #[test]
@@ -1398,7 +1454,10 @@ mod tests {
             .analyze_package(Path::new("package.json"), content)
             .unwrap();
 
-        assert!(report.findings.iter().any(|f| f.id == "evasion/hidden-file"));
+        assert!(report
+            .findings
+            .iter()
+            .any(|f| f.id == "evasion/hidden-file"));
     }
 
     #[test]

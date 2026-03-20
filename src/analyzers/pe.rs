@@ -25,6 +25,40 @@ pub struct PEAnalyzer {
     skip_embedded_scan: bool,
 }
 
+fn pe_certificate_range(pe: &PE<'_>, data: &[u8]) -> Option<(usize, usize)> {
+    let opt = pe.header.optional_header.as_ref()?;
+    let cert_table = opt.data_directories.data_directories.get(4)?.as_ref()?.1;
+    let offset = cert_table.virtual_address as usize;
+    let size = cert_table.size as usize;
+    if offset == 0 || size == 0 || offset.checked_add(size)? > data.len() {
+        return None;
+    }
+    Some((offset, offset + size))
+}
+
+fn pe_overlay_bounds_excluding_certificate(pe: &PE<'_>, data: &[u8]) -> Option<(usize, usize)> {
+    let sections_end = pe
+        .sections
+        .iter()
+        .map(|s| (s.pointer_to_raw_data + s.size_of_raw_data) as usize)
+        .max()
+        .unwrap_or(0);
+    if sections_end == 0 || sections_end >= data.len() {
+        return None;
+    }
+
+    let overlay_end = pe_certificate_range(pe, data)
+        .map(|(cert_start, _)| cert_start)
+        .filter(|&cert_start| cert_start > sections_end)
+        .unwrap_or(data.len());
+
+    if overlay_end > sections_end {
+        Some((sections_end, overlay_end))
+    } else {
+        None
+    }
+}
+
 impl PEAnalyzer {
     /// Creates a new PE analyzer with default configuration
     #[must_use]
@@ -600,25 +634,17 @@ impl PEAnalyzer {
         }
 
         // Overlay analysis (requires section data to find overlay start)
-        let sections_end = pe
-            .map(|pe| {
-                pe.sections
-                    .iter()
-                    .map(|s| (s.pointer_to_raw_data + s.size_of_raw_data) as u64)
-                    .max()
-                    .unwrap_or(0)
-            })
-            .unwrap_or(0);
-
-        if (pe_data.len() as u64) > sections_end && sections_end > 0 {
-            let overlay_size = pe_data.len() as u64 - sections_end;
+        let overlay_bounds = pe.and_then(|pe| pe_overlay_bounds_excluding_certificate(pe, pe_data));
+        if let Some((overlay_start, overlay_end)) = overlay_bounds {
+            let overlay_size = (overlay_end - overlay_start) as u64;
             if let Some(ref mut metrics) = report.metrics {
                 if let Some(ref mut binary) = metrics.binary {
                     binary.has_overlay = true;
                     binary.overlay_size = overlay_size;
                     binary.overlay_ratio = overlay_size as f32 / pe_data.len() as f32;
                     binary.overlay_entropy =
-                        crate::entropy::calculate_entropy(&pe_data[sections_end as usize..]) as f32;
+                        crate::entropy::calculate_entropy(&pe_data[overlay_start..overlay_end])
+                            as f32;
                 }
             }
         }
@@ -630,8 +656,8 @@ impl PEAnalyzer {
         }
 
         // Overlay archive analysis
-        if (pe_data.len() as u64) > sections_end && sections_end > 0 {
-            let overlay_data = &pe_data[sections_end as usize..];
+        if let Some((overlay_start, overlay_end)) = overlay_bounds {
+            let overlay_data = &pe_data[overlay_start..overlay_end];
             if let Ok(Some(overlay_analysis)) = crate::analyzers::overlay::analyze_overlay(
                 overlay_data,
                 &report.target.path,
@@ -722,9 +748,15 @@ impl PEAnalyzer {
                 .and_then(|n| n.to_str())
                 .unwrap_or("binary.exe")
                 .to_string();
+            let cert_range = pe.and_then(|pe| pe_certificate_range(pe, pe_data));
             let embedded =
                 crate::analyzers::embedded_binary_detector::scan_for_embedded_binaries(pe_data);
             for binary in &embedded {
+                if cert_range
+                    .is_some_and(|(start, end)| binary.offset >= start && binary.offset < end)
+                {
+                    continue;
+                }
                 let mut finding = crate::analyzers::embedded_binary_detector::finding_for(
                     binary,
                     &report.target.path,
@@ -1905,5 +1937,35 @@ mod tests {
         assert_eq!(finding.crit, Criticality::Suspicious);
         assert_eq!(finding.conf, 1.0);
         assert_eq!(finding.desc, "Binary is packed with UPX");
+    }
+
+    #[test]
+    fn test_pe_overlay_bounds_exclude_certificate_table() {
+        let mut pe_data = vec![0u8; 0x420];
+        pe_data[0..2].copy_from_slice(b"MZ");
+        pe_data[0x3c..0x40].copy_from_slice(&0x80u32.to_le_bytes());
+        pe_data[0x80..0x84].copy_from_slice(b"PE\0\0");
+        pe_data[0x84..0x86].copy_from_slice(&0x014cu16.to_le_bytes());
+        pe_data[0x86..0x88].copy_from_slice(&1u16.to_le_bytes());
+        pe_data[0x94..0x96].copy_from_slice(&0xE0u16.to_le_bytes());
+        pe_data[0x98..0x9a].copy_from_slice(&0x010bu16.to_le_bytes());
+        pe_data[0x80 + 24 + 92..0x80 + 24 + 96].copy_from_slice(&16u32.to_le_bytes());
+
+        let data_directories = 0x80 + 24 + 96;
+        let security_dir = data_directories + (4 * 8);
+        pe_data[security_dir..security_dir + 4].copy_from_slice(&0x300u32.to_le_bytes());
+        pe_data[security_dir + 4..security_dir + 8].copy_from_slice(&0x120u32.to_le_bytes());
+
+        let section_table = 0x80 + 24 + 0xE0;
+        pe_data[section_table..section_table + 5].copy_from_slice(b".text");
+        pe_data[section_table + 16..section_table + 20].copy_from_slice(&0x200u32.to_le_bytes());
+        pe_data[section_table + 20..section_table + 24].copy_from_slice(&0x100u32.to_le_bytes());
+
+        let pe = PE::parse(&pe_data).expect("synthetic PE should parse");
+        assert_eq!(pe_certificate_range(&pe, &pe_data), Some((0x300, 0x420)));
+        assert_eq!(
+            pe_overlay_bounds_excluding_certificate(&pe, &pe_data),
+            Some((0x300, 0x300)).filter(|(start, end)| end > start),
+        );
     }
 }

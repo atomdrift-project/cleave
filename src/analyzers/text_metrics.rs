@@ -258,8 +258,11 @@ fn analyze_whitespace(content: &str) -> (f32, u32, u32, bool, u32) {
 /// zero of these outside of string literals in Unicode processing libraries.
 fn count_invisible_chars(content: &str) -> u32 {
     let mut count = 0u32;
-    for c in content.chars() {
+    for (idx, c) in content.chars().enumerate() {
         let cp = c as u32;
+        if idx == 0 && cp == 0xFEFF {
+            continue;
+        }
         if (0xFE00..=0xFE0F).contains(&cp)       // VS1–VS16
             || (0xE0100..=0xE01EF).contains(&cp)  // Supplementary Variation Selectors
             || (0xE0001..=0xE007F).contains(&cp)   // Tags block (invisible text stego)

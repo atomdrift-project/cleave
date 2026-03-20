@@ -337,24 +337,36 @@ mod tests {
         // MZ header
         buf[offset] = 0x4D; // M
         buf[offset + 1] = 0x5A; // Z
-                                // e_lfanew at offset + 0x3C = 0x40 (64)
-        let e_lfanew: u32 = 0x40;
+        // e_lfanew at offset + 0x3C = 0x80 (128) — typical for real PEs
+        let e_lfanew: u32 = 0x80;
         buf[offset + 0x3C..offset + 0x40].copy_from_slice(&e_lfanew.to_le_bytes());
 
-        let pe_base = offset + 0x40;
-        // PE\0\0
+        let pe_base = offset + 0x80;
+        // PE\0\0 signature
         buf[pe_base] = 0x50;
         buf[pe_base + 1] = 0x45;
         buf[pe_base + 2] = 0x00;
         buf[pe_base + 3] = 0x00;
+        // COFF header (20 bytes at pe_base + 4)
         // Machine: x86 (0x014C)
         buf[pe_base + 4..pe_base + 6].copy_from_slice(&0x014Cu16.to_le_bytes());
-        // NumberOfSections: 3
-        buf[pe_base + 6..pe_base + 8].copy_from_slice(&3u16.to_le_bytes());
-        // Optional header magic: PE32 (0x010B)
+        // NumberOfSections: 1
+        buf[pe_base + 6..pe_base + 8].copy_from_slice(&1u16.to_le_bytes());
+        // SizeOfOptionalHeader: 0xE0 (224) — standard PE32
+        buf[pe_base + 20..pe_base + 22].copy_from_slice(&0x00E0u16.to_le_bytes());
+
+        // Optional header (starts at pe_base + 24)
+        // Magic: PE32 (0x010B)
         buf[pe_base + 24..pe_base + 26].copy_from_slice(&0x010Bu16.to_le_bytes());
-        // SizeOfImage at optional header + 56 = pe_base + 24 + 56 = pe_base + 80
-        buf[pe_base + 80..pe_base + 84].copy_from_slice(&(8192u32).to_le_bytes());
+        // SizeOfImage at optional header offset 56
+        buf[pe_base + 80..pe_base + 84].copy_from_slice(&(4096u32).to_le_bytes());
+
+        // Section table (starts at pe_base + 24 + 0xE0 = pe_base + 248)
+        let section_base = pe_base + 24 + 0xE0;
+        // SizeOfRawData at section header offset 16
+        buf[section_base + 16..section_base + 20].copy_from_slice(&512u32.to_le_bytes());
+        // PointerToRawData at section header offset 20
+        buf[section_base + 20..section_base + 24].copy_from_slice(&512u32.to_le_bytes());
     }
 
     /// Build a minimal ELF64 LE blob at the given offset within a buffer.

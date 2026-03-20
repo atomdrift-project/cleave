@@ -458,43 +458,6 @@ fn check_memory_pressure(state: &AppState) -> Option<Response> {
     )
 }
 
-/// Extract a file to the extract directory.
-/// Returns the extracted path if successful.
-///
-/// Files are organized as: `<extract_dir>/<sha256[0:6]>/<filename>`
-fn extract_file_to_dir(source_path: &Path, extract_dir: &Path, sha256: &str) -> Option<String> {
-    // Use first 6 chars of SHA256 for the subdirectory
-    let short_sha = if sha256.len() >= 6 {
-        &sha256[..6]
-    } else {
-        sha256
-    };
-
-    let sha_dir = extract_dir.join(short_sha);
-    let filename = source_path.file_name()?;
-    let dest_path = sha_dir.join(filename);
-
-    // Skip if file already exists with same size
-    if let Ok(dest_meta) = std::fs::metadata(&dest_path) {
-        if let Ok(src_meta) = std::fs::metadata(source_path) {
-            if dest_meta.len() == src_meta.len() {
-                return Some(dest_path.display().to_string());
-            }
-        }
-    }
-
-    // Create directory and copy file
-    if std::fs::create_dir_all(&sha_dir).is_err() {
-        return None;
-    }
-
-    if std::fs::copy(source_path, &dest_path).is_err() {
-        return None;
-    }
-
-    Some(dest_path.display().to_string())
-}
-
 /// Request body for /analyze-path endpoint.
 #[derive(Debug, Deserialize)]
 pub(super) struct AnalyzePathRequest {
@@ -643,9 +606,15 @@ async fn analyze_path_inner(
             started_at: Instant::now(),
         },
     );
+    let extract_dir_for_response = extract_dir.clone();
     let mut handle = tokio::task::spawn_blocking(move || {
         let _enter = task_span.enter();
-        let result = analyze_file(&path_owned, &AnalysisOptions::default());
+        let mut opts = AnalysisOptions::default();
+        if let Some(dir) = extract_dir {
+            opts.sample_extraction =
+                Some(crate::SampleExtractionConfig::new(dir));
+        }
+        let result = analyze_file(&path_owned, &opts);
         // Periodically clear thread-local caches to prevent unbounded memory growth.
         // Done every 50 requests rather than every request to avoid rayon::broadcast
         // contention under concurrent load.
@@ -720,12 +689,10 @@ async fn analyze_path_inner(
                 .filter(|f| f.crit == Criticality::Baseline)
                 .count();
 
-            // Extract file to extract_dir if configured
-            let extracted_path = if let Some(ref extract_base) = extract_dir {
-                extract_file_to_dir(&path, extract_base, &report.target.sha256)
-            } else {
-                None
-            };
+            // Archive members are already extracted during analysis via sample_extraction.
+            // Report the extract dir so callers know where to find them.
+            let extracted_path =
+                extract_dir_for_response.as_ref().map(|d| d.display().to_string());
 
             info!(
                 path = %path_str,

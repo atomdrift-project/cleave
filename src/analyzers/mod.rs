@@ -417,7 +417,9 @@ pub(crate) fn detect_file_type_from_path(file_path: &Path) -> FileType {
             "lnk" => return FileType::Lnk,
             "pdf" => return FileType::Pdf,
             "zip" | "7z" | "rar" | "deb" | "rpm" | "apk" | "ipa" | "xpi" | "epub" | "nupkg"
-            | "vsix" | "aar" | "egg" | "whl" | "phar" => return FileType::Archive,
+            | "vsix" | "aar" | "egg" | "whl" | "phar" | "crx" | "crate" | "gem" | "pkg"
+            | "cab" | "gz" | "bz2" | "xz" | "zst" | "tbz" | "tbz2" | "txz" | "tgz"
+            | "tzst" => return FileType::Archive,
             "html" | "htm" => return FileType::Html,
             "md" | "markdown" => return FileType::Markdown,
             _ => {}
@@ -430,14 +432,29 @@ pub(crate) fn detect_file_type_from_path(file_path: &Path) -> FileType {
 /// Detect file type from already-loaded data.
 ///
 /// This is the core detection logic. Use `detect_file_type` when you need to read from disk.
+///
+/// Priority: content-based detection (`detect_file_type_inner`) first, then
+/// extension-based (`detect_file_type_from_path`) as fallback. HTML is special-cased:
+/// the extension alone is not trusted — content must contain actual markup.
 pub(crate) fn detect_file_type_from_data(file_path: &Path, file_data: &[u8]) -> FileType {
     if file_data.len() < 4 {
         return detect_file_type_from_path(file_path);
     }
-    match detect_file_type_inner(file_path, file_data) {
-        Some(ft) => ft,
-        None => FileType::Unknown,
+    // 1. Content-based: magic bytes, shebangs, OOXML content check
+    if let Some(ft) = detect_file_type_inner(file_path, file_data) {
+        return ft;
     }
+    // 2. Extension-based (single source of truth for extension→type mapping)
+    let ft = detect_file_type_from_path(file_path);
+    if ft != FileType::Unknown {
+        // HTML extension requires content validation — many non-HTML files use .html
+        if ft == FileType::Html && !looks_like_html(file_data) {
+            return FileType::Unknown;
+        }
+        return ft;
+    }
+    // 3. Loose content heuristics — last resort for extensionless/unrecognized files
+    detect_by_content_heuristics(file_data).unwrap_or(FileType::Unknown)
 }
 
 /// Detect file type and route to appropriate analyzer
@@ -513,6 +530,11 @@ fn detect_file_type_inner(file_path: &Path, file_data: &[u8]) -> Option<FileType
     // embedded previews or document streams near the start of the file. If we
     // search for displaced `MZ` first, benign `.pptx`/`.docx` samples get
     // misclassified as tampered PEs.
+    //
+    // Only match on OOXML extensions or extensionless files — many archive
+    // formats (.vsix, .nupkg, .xpi, .epub, even plain .zip) use OPC and
+    // contain [Content_Types].xml. Those are classified as Archive by
+    // detect_file_type_from_path in the fallback chain.
     if file_data.starts_with(b"PK") {
         let is_ooxml_ext = path_str.ends_with(".docx")
             || path_str.ends_with(".xlsx")
@@ -524,7 +546,9 @@ fn detect_file_type_inner(file_path: &Path, file_data: &[u8]) -> Option<FileType
             || path_str.ends_with(".dotm")
             || path_str.ends_with(".xltx")
             || path_str.ends_with(".xltm");
-        if is_ooxml_ext || office::ooxml::is_ooxml(file_data) {
+        if is_ooxml_ext
+            || (file_path.extension().is_none() && office::ooxml::is_ooxml(file_data))
+        {
             return Some(FileType::Ooxml);
         }
     }
@@ -763,160 +787,34 @@ fn detect_file_type_inner(file_path: &Path, file_data: &[u8]) -> Option<FileType
         return Some(FileType::Shell);
     }
 
-    // Check for archives by file extension (need to check path, not just extension)
-    if path_str.ends_with(".zip")
-        || path_str.ends_with(".tar")
-        || path_str.ends_with(".tar.gz")
-        || path_str.ends_with(".tgz")
-        || path_str.ends_with(".tar.bz2")
-        || path_str.ends_with(".tbz2")
-        || path_str.ends_with(".tar.xz")
-        || path_str.ends_with(".txz")
-        || path_str.ends_with(".xz")
-        || path_str.ends_with(".gz")
-        || path_str.ends_with(".bz2")
-        || path_str.ends_with(".zst")
-        || path_str.ends_with(".egg")
-        || path_str.ends_with(".whl")
-        || path_str.ends_with(".gem")
-        || path_str.ends_with(".phar")
-        || path_str.ends_with(".nupkg")
-        || path_str.ends_with(".crate")
-        || path_str.ends_with(".vsix")
-        || path_str.ends_with(".xpi")
-        || path_str.ends_with(".crx")
-        || path_str.ends_with(".ipa")
-        || path_str.ends_with(".apk")
-        || path_str.ends_with(".aar")
-        || path_str.ends_with(".epub")
-        || path_str.ends_with(".7z")
-        || path_str.ends_with(".rar")
-        || path_str.ends_with(".pkg")
-        || path_str.ends_with(".deb")
-        || path_str.ends_with(".rpm")
-    {
-        return Some(FileType::Archive);
-    }
+    // OOXML and archive-by-extension detection are handled earlier (OOXML at
+    // line ~527) and by detect_file_type_from_path in the fallback chain.
 
-    if let Some(ext) = file_path.extension() {
-        let ext_str = ext.to_str().unwrap_or("").to_lowercase();
-        if ext_str == "sh" {
-            return Some(FileType::Shell);
-        }
-        if ext_str == "py" {
-            return Some(FileType::Python);
-        }
-        if ext_str == "pyc" {
-            return Some(FileType::PythonBytecode);
-        }
-        if matches!(ext_str.as_str(), "js" | "mjs" | "cjs" | "jsx") {
-            return Some(FileType::JavaScript);
-        }
-        if matches!(ext_str.as_str(), "ts" | "tsx" | "mts" | "cts") {
-            return Some(FileType::TypeScript);
-        }
-        if ext_str == "go" {
-            return Some(FileType::Go);
-        }
-        if ext_str == "rs" {
-            return Some(FileType::Rust);
-        }
-        if ext_str == "java" {
-            return Some(FileType::Java);
-        }
-        if ext_str == "rb" {
-            return Some(FileType::Ruby);
-        }
-        if ext_str == "php" {
-            return Some(FileType::Php);
-        }
-        if matches!(ext_str.as_str(), "pl" | "pm" | "t") {
-            return Some(FileType::Perl);
-        }
-        if matches!(ext_str.as_str(), "ps1" | "psm1" | "psd1") {
-            return Some(FileType::PowerShell);
-        }
-        if matches!(ext_str.as_str(), "bat" | "cmd") {
-            return Some(FileType::Batch);
-        }
-        if matches!(ext_str.as_str(), "vbs" | "vbe" | "wsf" | "wsc") {
-            return Some(FileType::Vbs);
-        }
-        if matches!(
-            ext_str.as_str(),
-            "c" | "h" | "cpp" | "hpp" | "cc" | "cxx" | "hxx" | "hh"
-        ) {
-            return Some(FileType::C);
-        }
-        if ext_str == "lua" {
-            return Some(FileType::Lua);
-        }
-        if ext_str == "cs" {
-            return Some(FileType::CSharp);
-        }
-        if ext_str == "swift" {
-            return Some(FileType::Swift);
-        }
-        if matches!(ext_str.as_str(), "m" | "mm") {
-            return Some(FileType::ObjectiveC);
-        }
-        if matches!(ext_str.as_str(), "groovy" | "gradle") {
-            return Some(FileType::Groovy);
-        }
-        if matches!(ext_str.as_str(), "scala" | "sc") {
-            return Some(FileType::Scala);
-        }
-        if ext_str == "zig" {
-            return Some(FileType::Zig);
-        }
-        if matches!(ext_str.as_str(), "ex" | "exs") {
-            return Some(FileType::Elixir);
-        }
-        if ext_str == "scpt" || ext_str == "applescript" {
-            return Some(FileType::AppleScript);
-        }
-        if ext_str == "html" || ext_str == "htm" {
-            // Check if it actually contains HTML markup
-            if looks_like_html(file_data) {
-                return Some(FileType::Html);
-            }
-            // HTML extension but no markup - not analyzed
-            return None;
-        }
-        if matches!(ext_str.as_str(), "md" | "markdown") {
-            return Some(FileType::Markdown);
-        }
-        if matches!(ext_str.as_str(), "txt" | "rst" | "csv" | "log" | "json") {
-            return None;
-        }
-    }
+    None
+}
 
-    // Content-based detection for files without recognized extensions
-    // Check for Python code patterns (e.g., .dat files that are actually Python)
+/// Content heuristics for files where neither magic bytes nor extension gave a result.
+/// These are intentionally loose — only used as a last resort for extensionless or
+/// unrecognized-extension files (e.g., `.dat` files that are actually Python).
+fn detect_by_content_heuristics(file_data: &[u8]) -> Option<FileType> {
     if looks_like_python(file_data) {
         return Some(FileType::Python);
     }
-
     if looks_like_powershell(file_data) {
         return Some(FileType::PowerShell);
     }
-
     if looks_like_perl(file_data) {
         return Some(FileType::Perl);
     }
-
     if looks_like_batch(file_data) {
         return Some(FileType::Batch);
     }
-
     if looks_like_vbs(file_data) {
         return Some(FileType::Vbs);
     }
-
     if looks_like_c(file_data) {
         return Some(FileType::C);
     }
-
     None
 }
 

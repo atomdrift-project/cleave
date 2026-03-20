@@ -1961,6 +1961,14 @@ mod tests {
         pe_data[section_table + 16..section_table + 20].copy_from_slice(&0x200u32.to_le_bytes());
         pe_data[section_table + 20..section_table + 24].copy_from_slice(&0x100u32.to_le_bytes());
 
+        // WIN_CERTIFICATE header at the certificate table offset (0x300)
+        // dwLength: 0x120 (total size including header)
+        pe_data[0x300..0x304].copy_from_slice(&0x120u32.to_le_bytes());
+        // wRevision: WIN_CERT_REVISION_2_0 (0x0200)
+        pe_data[0x304..0x306].copy_from_slice(&0x0200u16.to_le_bytes());
+        // wCertificateType: WIN_CERT_TYPE_PKCS_SIGNED_DATA (0x0002)
+        pe_data[0x306..0x308].copy_from_slice(&0x0002u16.to_le_bytes());
+
         let pe = PE::parse(&pe_data).expect("synthetic PE should parse");
         assert_eq!(pe_certificate_range(&pe, &pe_data), Some((0x300, 0x420)));
         assert_eq!(

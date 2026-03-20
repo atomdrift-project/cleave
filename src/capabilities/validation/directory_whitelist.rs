@@ -23,6 +23,7 @@ const ALLOWED_OBJECTIVES: &[&str] = &[
     "lateral-movement",     // MBC: Lateral Movement
     "persistence",          // MBC: Persistence
     "privilege-escalation", // MBC: Privilege Escalation
+    "supply-chain",         // MBC: Supply Chain (package ecosystem attacks)
 ];
 
 /// Allowed subdirectories in objectives/anti-static/
@@ -619,7 +620,7 @@ const ALLOWED_METADATA: &[&str] = &[
     "import",          // Dependencies/imports (auto-generated)
     "lang",            // Source language and encoding detection
     "library",         // Framework/library detection (react, vue, jquery, etc.)
-    "manifest",        // Package/extension manifest properties (browser-extension, etc.)
+    "package",         // Package ecosystem metadata (npm, pypi, crx, etc.)
     "quality",         // Code quality metrics (docs, testing, versioning, etc.)
     "signed",          // Code signature detection (platform, developer, ad-hoc)
     "vendor",          // Vendor identification (Apple, Microsoft, FSF, etc.)

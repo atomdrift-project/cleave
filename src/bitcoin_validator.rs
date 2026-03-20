@@ -254,7 +254,7 @@ fn convert_bits(data: &[u8], from_bits: u32, to_bits: u32, pad: bool) -> Option<
 fn polymod_step(chk: u32, v: u32) -> u32 {
     let b = chk >> 25;
     let mut next_chk = ((chk & 0x1ffffff) << 5) ^ v;
-    if (b >> 0) & 1 != 0 {
+    if b & 1 != 0 {
         next_chk ^= 0x3b6a57b2;
     }
     if (b >> 1) & 1 != 0 {

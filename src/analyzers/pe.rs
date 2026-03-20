@@ -49,7 +49,7 @@ fn pe_overlay_bounds_excluding_certificate(pe: &PE<'_>, data: &[u8]) -> Option<(
 
     let overlay_end = pe_certificate_range(pe, data)
         .map(|(cert_start, _)| cert_start)
-        .filter(|&cert_start| cert_start > sections_end)
+        .filter(|&cert_start| cert_start >= sections_end)
         .unwrap_or(data.len());
 
     if overlay_end > sections_end {

@@ -725,13 +725,10 @@ impl ArchiveAnalyzer {
                             }
                             None => relative_path.to_string(),
                         };
-                        if let Some(extracted_path) = config.extract(
-                            &file_entry.sha256,
-                            &extract_relative_path,
-                            &file_data,
-                        ) {
-                            file_entry.extracted_path =
-                                Some(extracted_path.display().to_string());
+                        if let Some(extracted_path) =
+                            config.extract(&file_entry.sha256, &extract_relative_path, &file_data)
+                        {
+                            file_entry.extracted_path = Some(extracted_path.display().to_string());
                         }
                     }
                 }

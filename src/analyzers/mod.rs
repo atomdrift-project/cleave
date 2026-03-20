@@ -1,5 +1,4 @@
 //! File format analyzers.
-#![allow(clippy::unwrap_used, clippy::expect_used)]
 //!
 //! This module contains analyzers for various file formats:
 //! - Binary formats: ELF, PE, Mach-O (dedicated analyzers)
@@ -417,9 +416,10 @@ pub(crate) fn detect_file_type_from_path(file_path: &Path) -> FileType {
             "lnk" => return FileType::Lnk,
             "pdf" => return FileType::Pdf,
             "zip" | "7z" | "rar" | "deb" | "rpm" | "apk" | "ipa" | "xpi" | "epub" | "nupkg"
-            | "vsix" | "aar" | "egg" | "whl" | "phar" | "crx" | "crate" | "gem" | "pkg"
-            | "cab" | "gz" | "bz2" | "xz" | "zst" | "tbz" | "tbz2" | "txz" | "tgz"
-            | "tzst" => return FileType::Archive,
+            | "vsix" | "aar" | "egg" | "whl" | "phar" | "crx" | "crate" | "gem" | "pkg" | "cab"
+            | "gz" | "bz2" | "xz" | "zst" | "tbz" | "tbz2" | "txz" | "tgz" | "tzst" => {
+                return FileType::Archive
+            }
             "html" | "htm" => return FileType::Html,
             "md" | "markdown" => return FileType::Markdown,
             _ => {}
@@ -546,9 +546,7 @@ fn detect_file_type_inner(file_path: &Path, file_data: &[u8]) -> Option<FileType
             || path_str.ends_with(".dotm")
             || path_str.ends_with(".xltx")
             || path_str.ends_with(".xltm");
-        if is_ooxml_ext
-            || (file_path.extension().is_none() && office::ooxml::is_ooxml(file_data))
-        {
+        if is_ooxml_ext || (file_path.extension().is_none() && office::ooxml::is_ooxml(file_data)) {
             return Some(FileType::Ooxml);
         }
     }
@@ -1472,6 +1470,7 @@ impl FileType {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
     use std::path::PathBuf;

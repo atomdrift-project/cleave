@@ -1,8 +1,4 @@
 //! Archive analyzer for various archive formats.
-//!
-//! Note: This module uses unwrap/expect for internal invariants that are
-//! guaranteed by the code structure (e.g., parsed paths, validated indices).
-#![allow(clippy::unwrap_used, clippy::expect_used)]
 
 pub(crate) mod analyzers;
 mod guards;
@@ -875,6 +871,7 @@ impl Analyzer for ArchiveAnalyzer {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
     use guards::{sanitize_entry_path, ExtractionGuard, MAX_FILE_COUNT};

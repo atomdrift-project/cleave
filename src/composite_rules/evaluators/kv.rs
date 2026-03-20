@@ -1,5 +1,4 @@
 //! Key-Value condition evaluator for structured manifest files.
-#![allow(clippy::unwrap_used, clippy::expect_used)]
 //!
 //! Supports querying JSON, YAML, and TOML manifests using path expressions.
 //!
@@ -769,6 +768,7 @@ fn format_evidence_value(value: &Value) -> String {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
     use crate::composite_rules::context::EvaluationContext;

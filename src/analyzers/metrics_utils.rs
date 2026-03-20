@@ -21,19 +21,10 @@ use crate::types::{AnalysisReport, Metrics};
 pub(crate) fn populate_binary_metrics(report: &mut AnalysisReport, data: &[u8]) {
     let file_type = report.target.file_type.clone();
 
-    // If metrics container doesn't exist, create it
-    if report.metrics.is_none() {
-        report.metrics = Some(Metrics::default());
-    }
-
-    let metrics = report.metrics.as_mut().unwrap();
+    let metrics = report.metrics.get_or_insert_with(Metrics::default);
 
     // Ensure binary metrics section exists
-    if metrics.binary.is_none() {
-        metrics.binary = Some(Default::default());
-    }
-
-    let binary = metrics.binary.as_mut().unwrap();
+    let binary = metrics.binary.get_or_insert_with(Default::default);
 
     // Update basic counts from the report (only if not already set or if report has more data)
     binary.import_count = report.imports.len() as u32;

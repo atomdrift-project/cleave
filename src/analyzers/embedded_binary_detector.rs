@@ -337,7 +337,7 @@ mod tests {
         // MZ header
         buf[offset] = 0x4D; // M
         buf[offset + 1] = 0x5A; // Z
-        // e_lfanew at offset + 0x3C = 0x80 (128) — typical for real PEs
+                                // e_lfanew at offset + 0x3C = 0x80 (128) — typical for real PEs
         let e_lfanew: u32 = 0x80;
         buf[offset + 0x3C..offset + 0x40].copy_from_slice(&e_lfanew.to_le_bytes());
 
@@ -459,7 +459,7 @@ mod tests {
         let mut buf = vec![0u8; 4096];
         make_synthetic_pe(&mut buf, 0);
         // Overwrite machine with unknown value 0xFFFF
-        buf[0x40 + 4..0x40 + 6].copy_from_slice(&0xFFFFu16.to_le_bytes());
+        buf[0x80 + 4..0x80 + 6].copy_from_slice(&0xFFFFu16.to_le_bytes());
         assert!(validate_pe(&buf, 0).is_none());
     }
 
@@ -468,7 +468,7 @@ mod tests {
         let mut buf = vec![0u8; 4096];
         make_synthetic_pe(&mut buf, 0);
         // NumberOfSections = 0
-        buf[0x40 + 6..0x40 + 8].copy_from_slice(&0u16.to_le_bytes());
+        buf[0x80 + 6..0x80 + 8].copy_from_slice(&0u16.to_le_bytes());
         assert!(validate_pe(&buf, 0).is_none());
     }
 
@@ -477,7 +477,7 @@ mod tests {
         let mut buf = vec![0u8; 4096];
         make_synthetic_pe(&mut buf, 0);
         // NumberOfSections = 200 (> 96)
-        buf[0x40 + 6..0x40 + 8].copy_from_slice(&200u16.to_le_bytes());
+        buf[0x80 + 6..0x80 + 8].copy_from_slice(&200u16.to_le_bytes());
         assert!(validate_pe(&buf, 0).is_none());
     }
 
@@ -486,7 +486,7 @@ mod tests {
         let mut buf = vec![0u8; 4096];
         make_synthetic_pe(&mut buf, 0);
         // Optional header magic = 0xDEAD (neither PE32 nor PE32+)
-        buf[0x40 + 24..0x40 + 26].copy_from_slice(&0xDEADu16.to_le_bytes());
+        buf[0x80 + 24..0x80 + 26].copy_from_slice(&0xDEADu16.to_le_bytes());
         assert!(validate_pe(&buf, 0).is_none());
     }
 
@@ -494,10 +494,9 @@ mod tests {
     fn test_rejects_sections_outside_embedded_slice() {
         let mut buf = vec![0u8; 4096];
         make_synthetic_pe(&mut buf, 0);
-        // SizeOfOptionalHeader = 0xE0 so the section table starts at 0x138.
-        buf[0x40 + 20..0x40 + 22].copy_from_slice(&0x00E0u16.to_le_bytes());
         // First section header points far beyond SizeOfImage.
-        let section_table = 0x40 + 24 + 0xE0;
+        // Section table is at 0x80 + 24 + 0xE0 (pe_base + COFF header + optional header)
+        let section_table = 0x80 + 24 + 0xE0;
         buf[section_table + 16..section_table + 20].copy_from_slice(&0x200u32.to_le_bytes());
         buf[section_table + 20..section_table + 24].copy_from_slice(&0x9000u32.to_le_bytes());
         assert!(validate_pe(&buf, 0).is_none());

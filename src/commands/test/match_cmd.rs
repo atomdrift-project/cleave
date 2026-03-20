@@ -760,8 +760,8 @@ pub fn run(
                 _ => composite_rules::FileType::All,
             };
             let eval_ctx = composite_rules::EvaluationContext::new(
-                &report,
-                &binary_data,
+                report,
+                binary_data,
                 internal_file_type,
                 platforms.clone(),
                 None,
@@ -801,7 +801,7 @@ pub fn run(
                 out.push_str(&format!("\n{}\n", "NOT MATCHED".red().bold()));
 
                 // Try to parse and show available keys
-                if let Ok(content) = std::str::from_utf8(&binary_data) {
+                if let Ok(content) = std::str::from_utf8(binary_data) {
                     if let Ok(json) = serde_json::from_str::<serde_json::Value>(content) {
                         if let Some(obj) = json.as_object() {
                             let keys: Vec<_> = obj.keys().take(15).collect();
@@ -823,7 +823,7 @@ pub fn run(
             use composite_rules::SectionMap;
 
             // Create section map for location constraints
-            let section_map = SectionMap::from_binary(&binary_data);
+            let section_map = SectionMap::from_binary(binary_data);
 
             // Resolve effective search range and convert to offset/offset_range for eval_hex
             let (effective_start, effective_end, _resolved_offset, _resolved_offset_range) =
@@ -920,8 +920,8 @@ pub fn run(
 
             // Create evaluation context
             let ctx = composite_rules::EvaluationContext::new(
-                &report,
-                &binary_data,
+                report,
+                binary_data,
                 composite_rules::FileType::All,
                 platforms.clone(),
                 None,
@@ -1350,8 +1350,8 @@ pub fn run(
 
             // Create evaluation context
             let ctx = composite_rules::EvaluationContext::new(
-                &report,
-                &binary_data,
+                report,
+                binary_data,
                 composite_rules::FileType::All, // FileType doesn't matter for metrics
                 platforms,
                 None, // No additional findings
@@ -1480,7 +1480,7 @@ pub fn run(
                 }
 
                 // Check if pattern exists in content
-                let content = String::from_utf8_lossy(&binary_data);
+                let content = String::from_utf8_lossy(binary_data);
                 let content_matched = match method {
                     cli::MatchMethod::Exact | cli::MatchMethod::Contains => {
                         content.contains(pattern)
@@ -1552,7 +1552,7 @@ pub fn run(
                 }
 
                 // Check if pattern exists in content
-                let content = String::from_utf8_lossy(&binary_data);
+                let content = String::from_utf8_lossy(binary_data);
                 let content_matched = match method {
                     cli::MatchMethod::Exact | cli::MatchMethod::Contains => {
                         content.contains(pattern)
@@ -1736,12 +1736,12 @@ pub fn run(
             if alt_type != file_type {
                 // Try to create a report with alternative file type
                 if let Ok(alt_report) =
-                    create_analysis_report(path, &alt_type, &binary_data, &capability_mapper)
+                    create_analysis_report(path, &alt_type, binary_data, &capability_mapper)
                 {
                     let alt_debugger = RuleDebugger::new(
                         &capability_mapper,
                         &alt_report,
-                        &binary_data,
+                        binary_data,
                         vec![composite_rules::Platform::All], // Check all platforms for alt file types
                         None, // test-match evaluates conditions directly
                     );
@@ -1808,7 +1808,7 @@ pub fn run(
                             !matches.is_empty()
                         }
                         cli::SearchType::Raw => {
-                            let content = String::from_utf8_lossy(&binary_data);
+                            let content = String::from_utf8_lossy(binary_data);
                             match method {
                                 cli::MatchMethod::Exact | cli::MatchMethod::Contains => {
                                     content.contains(pattern)

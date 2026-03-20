@@ -17,10 +17,13 @@ use std::fs;
 use tempfile::TempDir;
 
 fn run_analyze_json(path: &std::path::Path) -> std::process::Output {
+    let traits_dir = concat!(env!("CARGO_MANIFEST_DIR"), "/traits");
     let output = assert_cmd::cargo_bin_cmd!("cleave")
         .env("cleave_SKIP_YARA", "1")
         .env("CLEAVE_SKIP_CACHE", "1")
-        .env("CLEAVE_SKIP_TRAITS", "1")
+        .env_remove("CLEAVE_SKIP_TRAITS")
+        .env_remove("cleave_SKIP_TRAITS")
+        .env("CLEAVE_TRAITS_DIR", traits_dir)
         .args(["--format", "json", "analyze", path.to_str().unwrap()])
         .output()
         .unwrap();
@@ -36,37 +39,51 @@ fn run_analyze_json(path: &std::path::Path) -> std::process::Output {
 
 // ── Fixture builders ───────────────────────────────────────────────────────────
 
-/// Minimal PE stub (~512 bytes): valid MZ + PE\0\0 headers, no real code.
-fn minimal_pe_stub() -> Vec<u8> {
-    let mut buf = vec![0u8; 512];
-    buf[0] = 0x4D; // M
-    buf[1] = 0x5A; // Z
-    buf[0x3C..0x40].copy_from_slice(&0x40u32.to_le_bytes()); // e_lfanew = 64
-    let pe = 0x40usize;
-    buf[pe] = 0x50; // P
-    buf[pe + 1] = 0x45; // E
+fn write_minimal_pe_at(buf: &mut Vec<u8>, offset: usize, section_count: u16) {
+    const E_LFANEW: usize = 0x80;
+    const OPTIONAL_HEADER_SIZE: u16 = 0xE0;
+    const FIRST_SECTION_RAW_PTR: u32 = 0x200;
+    const FIRST_SECTION_RAW_SIZE: u32 = 0x200;
+    const SIZE_OF_IMAGE: u32 = 0x1000;
+
+    let pe = offset + E_LFANEW;
+    let section_table = pe + 24 + OPTIONAL_HEADER_SIZE as usize;
+    let min_len = offset + FIRST_SECTION_RAW_PTR as usize + FIRST_SECTION_RAW_SIZE as usize;
+    if buf.len() < min_len {
+        buf.resize(min_len, 0);
+    }
+
+    buf[offset] = 0x4D; // M
+    buf[offset + 1] = 0x5A; // Z
+    buf[offset + 0x3C..offset + 0x40].copy_from_slice(&(E_LFANEW as u32).to_le_bytes());
+
+    buf[pe..pe + 4].copy_from_slice(b"PE\0\0");
     buf[pe + 4..pe + 6].copy_from_slice(&0x014Cu16.to_le_bytes()); // Machine: i386
-    buf[pe + 6..pe + 8].copy_from_slice(&1u16.to_le_bytes()); // NumberOfSections: 1
+    buf[pe + 6..pe + 8].copy_from_slice(&section_count.to_le_bytes());
+    buf[pe + 20..pe + 22].copy_from_slice(&OPTIONAL_HEADER_SIZE.to_le_bytes());
     buf[pe + 24..pe + 26].copy_from_slice(&0x010Bu16.to_le_bytes()); // PE32 magic
-    buf[pe + 80..pe + 84].copy_from_slice(&4096u32.to_le_bytes()); // SizeOfImage
+    buf[pe + 24 + 56..pe + 24 + 60].copy_from_slice(&SIZE_OF_IMAGE.to_le_bytes());
+
+    // Minimal .text section that satisfies embedded_binary_detector validation.
+    let section = section_table;
+    buf[section..section + 8].copy_from_slice(b".text\0\0\0");
+    buf[section + 8..section + 12].copy_from_slice(&FIRST_SECTION_RAW_SIZE.to_le_bytes()); // VirtualSize
+    buf[section + 12..section + 16].copy_from_slice(&0x1000u32.to_le_bytes()); // VirtualAddress
+    buf[section + 16..section + 20].copy_from_slice(&FIRST_SECTION_RAW_SIZE.to_le_bytes()); // SizeOfRawData
+    buf[section + 20..section + 24].copy_from_slice(&FIRST_SECTION_RAW_PTR.to_le_bytes());
+    // PointerToRawData
+}
+
+/// Minimal PE stub with a valid section table and raw section span.
+fn minimal_pe_stub() -> Vec<u8> {
+    let mut buf = Vec::new();
+    write_minimal_pe_at(&mut buf, 0, 1);
     buf
 }
 
 /// Embed a valid PE32 header at `offset` within `buf`.
 fn embed_pe_at(buf: &mut Vec<u8>, offset: usize) {
-    while buf.len() < offset + 4096 {
-        buf.push(0u8);
-    }
-    buf[offset] = 0x4D;
-    buf[offset + 1] = 0x5A;
-    buf[offset + 0x3C..offset + 0x40].copy_from_slice(&0x40u32.to_le_bytes());
-    let pe = offset + 0x40;
-    buf[pe] = 0x50;
-    buf[pe + 1] = 0x45;
-    buf[pe + 4..pe + 6].copy_from_slice(&0x014Cu16.to_le_bytes()); // x86
-    buf[pe + 6..pe + 8].copy_from_slice(&2u16.to_le_bytes()); // 2 sections
-    buf[pe + 24..pe + 26].copy_from_slice(&0x010Bu16.to_le_bytes()); // PE32
-    buf[pe + 80..pe + 84].copy_from_slice(&8192u32.to_le_bytes()); // SizeOfImage
+    write_minimal_pe_at(buf, offset, 2);
 }
 
 /// Embed a valid ELF64 LE header at `offset` within `buf`.
@@ -92,6 +109,7 @@ fn test_nsis_marker_detected() {
     let tmp = TempDir::new().unwrap();
     let mut pe = minimal_pe_stub();
     pe.extend_from_slice(&[0xEF, 0xBE, 0xAD, 0xDE]); // NSIS deadbeef marker
+    pe.extend_from_slice(b"NSIS Error"); // secondary strong NSIS marker
     pe.extend_from_slice(&[0u8; 60]);
     let path = tmp.path().join("nsis.exe");
     fs::write(&path, &pe).unwrap();

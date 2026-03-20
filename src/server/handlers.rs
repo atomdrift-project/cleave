@@ -611,8 +611,7 @@ async fn analyze_path_inner(
         let _enter = task_span.enter();
         let mut opts = AnalysisOptions::default();
         if let Some(dir) = extract_dir {
-            opts.sample_extraction =
-                Some(crate::SampleExtractionConfig::new(dir));
+            opts.sample_extraction = Some(crate::SampleExtractionConfig::new(dir));
         }
         let result = analyze_file(&path_owned, &opts);
         // Periodically clear thread-local caches to prevent unbounded memory growth.
@@ -691,8 +690,9 @@ async fn analyze_path_inner(
 
             // Archive members are already extracted during analysis via sample_extraction.
             // Report the extract dir so callers know where to find them.
-            let extracted_path =
-                extract_dir_for_response.as_ref().map(|d| d.display().to_string());
+            let extracted_path = extract_dir_for_response
+                .as_ref()
+                .map(|d| d.display().to_string());
 
             info!(
                 path = %path_str,

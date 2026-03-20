@@ -109,11 +109,10 @@ pub(crate) fn extract_7z_safe(
             .context("Failed to extract 7z archive (unencrypted/empty password)")
     })();
 
-    if result.is_ok() {
-        return Ok(());
-    }
-
-    let err = result.unwrap_err();
+    let err = match result {
+        Ok(()) => return Ok(()),
+        Err(e) => e,
+    };
     let err_msg = err.to_string();
 
     // If it failed due to encryption/password, try the configured passwords

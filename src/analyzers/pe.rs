@@ -556,7 +556,8 @@ impl PEAnalyzer {
             if let Some(pe_metrics) = &metrics.pe {
                 if let Some(signer) = &pe_metrics.signer {
                     let sig_type = pe_metrics.signature_type.as_deref().unwrap_or("unknown");
-                    let normalized_signer = signer.to_lowercase().replace(' ', "-").replace(',', "");
+                    let normalized_signer =
+                        signer.to_lowercase().replace(' ', "-").replace(',', "");
                     report.findings.push(Finding {
                         id: format!("metadata/signed/{}::{}", sig_type, normalized_signer),
                         kind: FindingKind::Capability,
@@ -1008,23 +1009,21 @@ impl PEAnalyzer {
                 // Simple extraction of common name from certificate
                 // Find OID for commonName: 55 04 03
                 let cn_oid = [0x55, 0x04, 0x03];
-                if let Some(pos) = overlay_data
-                    .windows(cn_oid.len())
-                    .position(|w| w == cn_oid)
-                {
+                if let Some(pos) = overlay_data.windows(cn_oid.len()).position(|w| w == cn_oid) {
                     // Next byte is string type, then length
                     let type_pos = pos + cn_oid.len();
                     if type_pos + 1 < overlay_data.len() {
                         let len = overlay_data[type_pos + 1] as usize;
                         let str_pos = type_pos + 2;
                         if str_pos + len <= overlay_data.len() {
-                            if let Ok(cn) = std::str::from_utf8(&overlay_data[str_pos..str_pos + len])
+                            if let Ok(cn) =
+                                std::str::from_utf8(&overlay_data[str_pos..str_pos + len])
                             {
                                 // Clean up common name (strip trailing nulls, etc)
                                 let cn = cn.trim_matches(char::from(0)).trim();
                                 if !cn.is_empty() {
                                     metrics.signer = Some(cn.to_string());
-                                    
+
                                     // Categorize signature type
                                     if cn.contains("Microsoft") || cn.contains("Windows") {
                                         metrics.signature_type = Some("platform".to_string());

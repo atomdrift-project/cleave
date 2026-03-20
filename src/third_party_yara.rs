@@ -155,10 +155,7 @@ pub fn infer_filetypes(rule_name: &str, os_meta: Option<&str>) -> Vec<&'static s
 /// that aren't in the rule identifier itself (e.g. `"TextShell"`).
 ///
 /// Returns empty vec if no constraint can be inferred.
-pub fn infer_filetypes_from_namespace(
-    namespace: &str,
-    os_meta: Option<&str>,
-) -> Vec<&'static str> {
+pub fn infer_filetypes_from_namespace(namespace: &str, os_meta: Option<&str>) -> Vec<&'static str> {
     // Extract the last dot-separated component (the filename stem)
     let filename_stem = match namespace.rsplit('.').next() {
         Some(s) if !s.is_empty() && s != "3p" => s,

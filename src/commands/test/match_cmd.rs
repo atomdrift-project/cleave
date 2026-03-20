@@ -558,8 +558,7 @@ pub fn run(
             let match_count = match method {
                 // Exact: entire content slice must equal the pattern
                 cli::MatchMethod::Exact => {
-                    let matched =
-                        &*content == pattern && validate_match(pattern, is_check);
+                    let matched = &*content == pattern && validate_match(pattern, is_check);
                     if matched {
                         1
                     } else {
@@ -602,13 +601,13 @@ pub fn run(
                     let word_pattern = format!(r"\b{}\b", regex::escape(pattern));
                     regex::Regex::new(&word_pattern)
                         .map(|re| {
-                        if is_check.is_some() {
-                            re.find_iter(&content)
-                                .filter(|m| validate_match(m.as_str(), is_check))
-                                .count()
-                        } else {
-                            re.find_iter(&content).count()
-                        }
+                            if is_check.is_some() {
+                                re.find_iter(&content)
+                                    .filter(|m| validate_match(m.as_str(), is_check))
+                                    .count()
+                            } else {
+                                re.find_iter(&content).count()
+                            }
                         })
                         .unwrap_or(0)
                 }

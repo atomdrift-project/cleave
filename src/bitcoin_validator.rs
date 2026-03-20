@@ -15,7 +15,10 @@ fn btc_addr_pattern() -> &'static regex::Regex {
     PATTERN.get_or_init(|| {
         // Legacy/P2SH: [13][a-km-zA-HJ-NP-Z1-9]{25,34}
         // Bech32/Bech32m: bc1[qpzry9x8gf2tvdw0s3jn54khce6mua7l]{6,87}
-        regex::Regex::new(r"\b([13][1-9A-HJ-NP-Za-km-z]{25,34}|bc1[qpzry9x8gf2tvdw0s3jn54khce6mua7l]{6,87})\b").unwrap()
+        regex::Regex::new(
+            r"\b([13][1-9A-HJ-NP-Za-km-z]{25,34}|bc1[qpzry9x8gf2tvdw0s3jn54khce6mua7l]{6,87})\b",
+        )
+        .unwrap()
     })
 }
 
@@ -60,17 +63,17 @@ fn validate_base58check(s: &str) -> bool {
 
     // Checksum is last 4 bytes
     let (data, checksum) = bytes.split_at(21);
-    
+
     // Bitcoin uses double SHA-256 for Base58Check
     use sha2::{Digest, Sha256};
     let mut hasher = Sha256::new();
     hasher.update(data);
     let hash1 = hasher.finalize();
-    
+
     let mut hasher2 = Sha256::new();
     hasher2.update(hash1);
     let hash2 = hasher2.finalize();
-    
+
     &hash2[0..4] == checksum
 }
 
@@ -246,11 +249,21 @@ fn convert_bits(data: &[u8], from_bits: u32, to_bits: u32, pad: bool) -> Option<
 fn polymod_step(chk: u32, v: u32) -> u32 {
     let b = chk >> 25;
     let mut next_chk = ((chk & 0x1ffffff) << 5) ^ v;
-    if (b >> 0) & 1 != 0 { next_chk ^= 0x3b6a57b2; }
-    if (b >> 1) & 1 != 0 { next_chk ^= 0x26508e6d; }
-    if (b >> 2) & 1 != 0 { next_chk ^= 0x1ea119fa; }
-    if (b >> 3) & 1 != 0 { next_chk ^= 0x3d4233dd; }
-    if (b >> 4) & 1 != 0 { next_chk ^= 0x2a1462b3; }
+    if (b >> 0) & 1 != 0 {
+        next_chk ^= 0x3b6a57b2;
+    }
+    if (b >> 1) & 1 != 0 {
+        next_chk ^= 0x26508e6d;
+    }
+    if (b >> 2) & 1 != 0 {
+        next_chk ^= 0x1ea119fa;
+    }
+    if (b >> 3) & 1 != 0 {
+        next_chk ^= 0x3d4233dd;
+    }
+    if (b >> 4) & 1 != 0 {
+        next_chk ^= 0x2a1462b3;
+    }
     next_chk
 }
 
@@ -290,34 +303,38 @@ mod tests {
 
     #[test]
     fn test_valid_legacy() {
-        assert!(validate_bitcoin_address("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa")); // Genesis
+        assert!(validate_bitcoin_address(
+            "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa"
+        )); // Genesis
         assert!(validate_bitcoin_address("1111111111111111111114oLvT2"));
     }
 
     #[test]
     fn test_valid_p2sh() {
         // Real P2SH
-        assert!(validate_bitcoin_address("3J98t1WpEZ73CNmQviecrnyiWrnqRhWNLy"));
+        assert!(validate_bitcoin_address(
+            "3J98t1WpEZ73CNmQviecrnyiWrnqRhWNLy"
+        ));
     }
 
     #[test]
     fn test_valid_bech32() {
-        assert!(validate_bitcoin_address("bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq"));
+        assert!(validate_bitcoin_address(
+            "bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq"
+        ));
 
         let taproot_program = [0u8; 32];
-        let taproot_address = encode_segwit_address_for_test(
-            "bc",
-            1,
-            &taproot_program,
-            Bech32Encoding::Bech32m,
-        );
+        let taproot_address =
+            encode_segwit_address_for_test("bc", 1, &taproot_program, Bech32Encoding::Bech32m);
         assert!(validate_bitcoin_address(&taproot_address));
     }
 
     #[test]
     fn test_invalid_checksum() {
         // Change one char
-        assert!(!validate_bitcoin_address("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNb"));
+        assert!(!validate_bitcoin_address(
+            "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNb"
+        ));
     }
 
     #[test]

@@ -78,7 +78,6 @@ pub(super) mod shared {
         pub(super) section_offset: Option<i64>,
         pub(super) section_offset_range: Option<(i64, Option<i64>)>,
     }
-
 }
 
 // Re-export public API (pub(crate) - accessible to capabilities module)

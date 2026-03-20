@@ -2641,7 +2641,16 @@ impl CompositeTrait {
             }
         }
 
-        eval_symbol(exact, substr, pattern, None, is_check, compiled_regex, not, ctx)
+        eval_symbol(
+            exact,
+            substr,
+            pattern,
+            None,
+            is_check,
+            compiled_regex,
+            not,
+            ctx,
+        )
     }
 
     /// Evaluate structure condition

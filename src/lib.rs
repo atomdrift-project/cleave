@@ -1505,8 +1505,7 @@ mod tests {
         #[allow(clippy::expect_used)]
         fs::write(&valid, b"#!/bin/sh\necho ok\n").expect("write valid file");
         #[allow(clippy::expect_used)]
-        fs::write(&malformed_zip, b"PK\x03\x04not-a-real-zip")
-            .expect("write malformed archive");
+        fs::write(&malformed_zip, b"PK\x03\x04not-a-real-zip").expect("write malformed archive");
 
         let options = AnalysisOptions {
             disable_yara: true,

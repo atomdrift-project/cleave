@@ -3016,7 +3016,8 @@ composite_rules:
         let binary_data = b"\xCF\xFA\xED\xFE"; // MachO magic
 
         let mapper = create_debug_test_mapper();
-        let debugger = RuleDebugger::new(&mapper, &report, binary_data, vec![Platform::MacOS], None);
+        let debugger =
+            RuleDebugger::new(&mapper, &report, binary_data, vec![Platform::MacOS], None);
 
         // Test the objc-app-hook composite if it exists
         let result = debugger

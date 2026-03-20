@@ -101,7 +101,6 @@ impl DisabledComponents {
     version
 )]
 pub struct Args {
-
     /// Subcommand to run (analyze, search, diff, etc.)
     #[command(subcommand)]
     pub command: Option<Command>,

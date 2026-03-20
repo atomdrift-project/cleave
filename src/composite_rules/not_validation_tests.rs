@@ -661,7 +661,7 @@ mod criticality_tests {
                 section_offset_range: None,
                 not: None,
                 platforms: None,
-            compiled_regex: None,
+                compiled_regex: None,
             };
 
             let trait_def = TraitDefinition {

@@ -177,6 +177,7 @@ enum Namespace {
     WellKnown,
     Objectives,
     MicroBehaviors,
+    Metadata,
 }
 
 impl Namespace {
@@ -187,6 +188,7 @@ impl Namespace {
             "well-known" => Some(Self::WellKnown),
             "objectives" => Some(Self::Objectives),
             "micro-behaviors" => Some(Self::MicroBehaviors),
+            "metadata" => Some(Self::Metadata),
             _ => None,
         }
     }
@@ -197,6 +199,7 @@ impl Namespace {
             Self::WellKnown => "WELL-KNOWN",
             Self::Objectives => "OBJECTIVES",
             Self::MicroBehaviors => "MICRO-BEHAVIORS",
+            Self::Metadata => "METADATA",
         }
     }
 }
@@ -807,11 +810,12 @@ pub(crate) fn format_terminal(report: &AnalysisReport) -> String {
         ));
         output.push('\n');
 
-        // Render namespaces in fixed order: WELL-KNOWN, OBJECTIVES, MICRO-BEHAVIORS
+        // Render namespaces in fixed order: WELL-KNOWN, OBJECTIVES, MICRO-BEHAVIORS, METADATA
         for ns in [
             Namespace::WellKnown,
             Namespace::Objectives,
             Namespace::MicroBehaviors,
+            Namespace::Metadata,
         ] {
             let Some(findings) = by_namespace.get(&ns) else {
                 continue; // Skip empty sections

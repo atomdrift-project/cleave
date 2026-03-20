@@ -1,10 +1,10 @@
 //! Evaluation context and result types for composite rules.
 
+use super::condition::StringValidator;
 use super::debug::DebugCollector;
 use super::evaluators::kv::StructuredFormat;
 use super::section_map::SectionMap;
 use super::types::{Arch, FileType, Platform};
-use super::condition::StringValidator;
 use crate::types::{AnalysisReport, Evidence, Finding};
 use rustc_hash::{FxHashMap, FxHashSet, FxHasher};
 use serde_json::Value;

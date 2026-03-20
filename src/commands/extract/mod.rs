@@ -17,10 +17,10 @@ use anyhow::Result;
 use std::fs;
 use std::path::Path;
 
-pub(crate) mod metrics;
-pub(crate) mod sections;
-pub(crate) mod strings;
-pub(crate) mod symbols;
+pub mod metrics;
+pub mod sections;
+pub mod strings;
+pub mod symbols;
 
 pub(crate) fn analyze_binary_report(path: &Path, file_type: &FileType) -> Result<AnalysisReport> {
     let capability_mapper = crate::capabilities::CapabilityMapper::empty();

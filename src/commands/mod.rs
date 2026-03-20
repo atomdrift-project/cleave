@@ -59,12 +59,12 @@
 //! - `SectionInfo` - Metadata about binary sections (address, size, entropy, permissions)
 //! - `SymbolInfo` - Information about symbols in binaries (name, address, library, type)
 
-pub(crate) mod analyze;
-pub(crate) mod diff;
-pub(crate) mod extract;
-pub(crate) mod shared;
-pub(crate) mod test;
-pub(crate) mod validate;
+pub mod analyze;
+pub mod diff;
+pub mod extract;
+pub mod shared;
+pub mod test;
+pub mod validate;
 
 // Re-export shared utilities needed by main.rs
 pub use shared::expand_paths;

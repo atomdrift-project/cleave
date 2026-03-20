@@ -658,8 +658,8 @@ symbols:
     conf: 0.9
 "#;
     let (_dir, path) = create_test_yaml(yaml);
-    let mapper = CapabilityMapper::from_yaml_with_precision_thresholds(&path, 5.0, 3.0, false)
-        .unwrap();
+    let mapper =
+        CapabilityMapper::from_yaml_with_precision_thresholds(&path, 5.0, 3.0, false).unwrap();
 
     assert_eq!(mapper.mapping_count(), 1);
 }

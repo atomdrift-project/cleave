@@ -1,5 +1,4 @@
 //! Shared utilities for command implementations.
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 //!
 //! This module contains common data structures, helper functions, and utilities
 //! used across multiple command implementations in the DISSECT CLI.

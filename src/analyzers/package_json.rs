@@ -1,6 +1,4 @@
 //! package.json analyzer for npm packages.
-#![allow(clippy::unwrap_used, clippy::expect_used)]
-
 use crate::analyzers::unified::UnifiedSourceAnalyzer;
 use crate::analyzers::{AnalysisInput, Analyzer, FileType};
 use crate::capabilities::CapabilityMapper;
@@ -1321,6 +1319,7 @@ impl Analyzer for PackageJsonAnalyzer {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
 

@@ -1,5 +1,4 @@
 //! YARA rule engine integration.
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 //!
 //! This module provides YARA pattern matching for malware detection.
 //! It loads and compiles YARA rules from:
@@ -2536,7 +2535,7 @@ impl YaraEngine {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used)] // Tests use unwrap for simplicity
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)] // Tests use direct assertions and helpers for brevity
 mod tests {
     use super::*;
 

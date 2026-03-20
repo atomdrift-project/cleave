@@ -1,6 +1,4 @@
 //! Core analysis types - the foundation of cleave reports
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
-
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
@@ -570,6 +568,7 @@ pub struct ArchiveEntry {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use super::*;
     use crate::types::traits_findings::FindingKind;

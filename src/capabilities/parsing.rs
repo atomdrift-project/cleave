@@ -1,5 +1,4 @@
 //! YAML data processing and default application.
-#![allow(clippy::unwrap_used, clippy::expect_used)]
 //!
 //! This module handles:
 //! - Applying file-level defaults to raw trait and composite rule definitions
@@ -1009,6 +1008,7 @@ fn check_regex_length(
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
 

@@ -716,6 +716,26 @@ impl ArchiveAnalyzer {
                 file_entry.depth = 1; // Direct child of archive
                 file_entry.compute_summary();
 
+                // Extract file to disk if configured (mirrors streaming.rs behavior)
+                if let Some(ref config) = self.sample_extraction {
+                    if let Ok(file_data) = std::fs::read(entry.path()) {
+                        let extract_relative_path = match &self.archive_path_prefix {
+                            Some(prefix) => {
+                                format!("{}/{}", prefix.replace('!', "/"), relative_path)
+                            }
+                            None => relative_path.to_string(),
+                        };
+                        if let Some(extracted_path) = config.extract(
+                            &file_entry.sha256,
+                            &extract_relative_path,
+                            &file_data,
+                        ) {
+                            file_entry.extracted_path =
+                                Some(extracted_path.display().to_string());
+                        }
+                    }
+                }
+
                 // Aggregate findings from the converted FileAnalysis
                 for f in &file_entry.findings {
                     traits.insert(f.id.clone());

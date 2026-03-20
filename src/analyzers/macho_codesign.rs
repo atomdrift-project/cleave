@@ -1,5 +1,4 @@
 //! Mach-O code signature parser for extracting signature types, team IDs, and entitlements
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 //!
 //! Parses the SuperBlob structure from LC_CODE_SIGNATURE load command to extract:
 //! - Signature type (adhoc, developer-id, platform, app-store)
@@ -501,6 +500,7 @@ fn extract_identifier(cd_data: &[u8]) -> Option<String> {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use super::*;
 

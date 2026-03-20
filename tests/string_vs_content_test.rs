@@ -45,6 +45,8 @@ typedef unsigned char uint8_t;
     // Skip YARA - these tests use YAML traits, not YARA rules
     let output = assert_cmd::cargo_bin_cmd!("cleave")
         .env("cleave_SKIP_YARA", "1")
+        .env_remove("CLEAVE_SKIP_TRAITS")
+        .env_remove("cleave_SKIP_TRAITS")
         .args([
             "--format",
             "jsonl",
@@ -89,6 +91,8 @@ int main() {
     // Skip YARA - these tests use YAML traits, not YARA rules
     let output = assert_cmd::cargo_bin_cmd!("cleave")
         .env("cleave_SKIP_YARA", "1")
+        .env_remove("CLEAVE_SKIP_TRAITS")
+        .env_remove("cleave_SKIP_TRAITS")
         .args(["--format", "jsonl", "analyze", c_path.to_str().unwrap()])
         .assert()
         .success();
@@ -141,6 +145,8 @@ echo "This script is safe"
     // Skip YARA since we're only testing custom trait conditions (not YARA rules)
     let output = assert_cmd::cargo_bin_cmd!("cleave")
         .env("cleave_SKIP_YARA", "1")
+        .env_remove("CLEAVE_SKIP_TRAITS")
+        .env_remove("cleave_SKIP_TRAITS")
         .args([
             "--format",
             "jsonl",
@@ -185,9 +191,7 @@ def connect():
     fs::create_dir_all(&traits_dir).unwrap();
 
     // String-based trait (should only match the string literal 8.8.8.8)
-    let string_trait = r#"defaults:
-  platforms: [unix]
-traits:
+    let string_trait = r#"traits:
   - id: string-ip-match
     desc: IP via string search
     crit: notable
@@ -200,9 +204,7 @@ traits:
 "#;
 
     // Raw-based trait (should match both IPs)
-    let raw_trait = r#"defaults:
-  platforms: [unix]
-traits:
+    let raw_trait = r#"traits:
   - id: raw-ip-match
     desc: IP via raw search
     crit: notable
@@ -223,6 +225,8 @@ traits:
     let output = assert_cmd::cargo_bin_cmd!("cleave")
         .env("cleave_SKIP_YARA", "1")
         .env("CLEAVE_VALIDATE", "0") // Disable validation: test intentionally creates conflicting string/raw traits
+        .env_remove("CLEAVE_SKIP_TRAITS")
+        .env_remove("cleave_SKIP_TRAITS")
         .args([
             "--format",
             "jsonl",

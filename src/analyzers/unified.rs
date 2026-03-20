@@ -1,5 +1,4 @@
 //! Unified source code analyzer for all AST-based languages.
-#![allow(clippy::unwrap_used, clippy::expect_used)]
 //!
 //! This module provides a single analyzer that handles all tree-sitter supported
 //! languages through configuration rather than separate implementations.
@@ -1336,6 +1335,7 @@ impl Analyzer for UnifiedSourceAnalyzer {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
     use crate::analyzers::FileType;

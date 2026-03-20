@@ -1,6 +1,4 @@
 //! Mach-O binary analyzer for macOS executables.
-#![allow(clippy::unwrap_used, clippy::expect_used)]
-
 use crate::analyzers::macho_codesign;
 use crate::analyzers::{AnalysisInput, Analyzer};
 use crate::capabilities::CapabilityMapper;
@@ -1113,6 +1111,7 @@ impl Analyzer for MachOAnalyzer {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
     use std::path::PathBuf;

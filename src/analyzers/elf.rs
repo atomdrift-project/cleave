@@ -1,5 +1,4 @@
 //! ELF binary analyzer for Linux executables.
-#![allow(clippy::unwrap_used, clippy::expect_used)]
 //!
 //! Analyzes ELF binaries using radare2/rizin and string extraction.
 
@@ -1012,6 +1011,7 @@ fn analyze_embedded_as_child(
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
     use std::path::PathBuf;

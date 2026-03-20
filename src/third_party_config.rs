@@ -1,5 +1,4 @@
 //! Configuration for third-party YARA rule criticality levels.
-#![allow(clippy::unwrap_used, clippy::expect_used)]
 //!
 //! Loads criticality mappings from `third_party/config.yaml` to assign
 //! appropriate severity levels to third-party YARA detections.
@@ -159,6 +158,7 @@ pub fn disabled_rule_ids() -> std::collections::HashSet<String> {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
 

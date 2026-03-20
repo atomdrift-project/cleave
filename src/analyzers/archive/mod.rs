@@ -2552,4 +2552,272 @@ composite_rules:
             "Should detect Python package with .dll as supply chain anomaly"
         );
     }
+
+    // =========================================================================
+    // Sample extraction (--extract-dir) tests
+    // =========================================================================
+
+    #[test]
+    fn test_sample_extraction_config_basic() {
+        #[allow(clippy::expect_used)]
+        let extract_dir = tempfile::tempdir().expect("create extract dir");
+        let config = SampleExtractionConfig::new(extract_dir.path().to_path_buf());
+
+        let data = b"hello world";
+        let sha256 = "abc123def456";
+        let result = config.extract(sha256, "test.txt", data);
+
+        assert!(result.is_some(), "extract should succeed");
+        let path = result.unwrap();
+        assert!(path.exists(), "extracted file should exist on disk");
+        assert_eq!(std::fs::read(&path).unwrap(), data);
+        // Should be under <extract_dir>/<sha256[0:6]>/test.txt
+        assert!(path.to_string_lossy().contains("abc123"));
+        assert!(path.to_string_lossy().ends_with("test.txt"));
+    }
+
+    #[test]
+    fn test_sample_extraction_config_with_archive_sha256() {
+        #[allow(clippy::expect_used)]
+        let extract_dir = tempfile::tempdir().expect("create extract dir");
+        let config = SampleExtractionConfig::new(extract_dir.path().to_path_buf())
+            .with_archive_sha256("archive_hash_abcdef".to_string());
+
+        let data = b"member content";
+        let result = config.extract("file_hash_xyz", "lib/module.py", data);
+
+        assert!(result.is_some());
+        let path = result.unwrap();
+        // Should use archive hash, not file hash
+        assert!(
+            path.to_string_lossy().contains("archiv"),
+            "should use archive sha256 prefix: {}",
+            path.display()
+        );
+        assert!(path.to_string_lossy().ends_with("lib/module.py"));
+        assert_eq!(std::fs::read(&path).unwrap(), data);
+    }
+
+    #[test]
+    fn test_sample_extraction_config_skip_existing() {
+        #[allow(clippy::expect_used)]
+        let extract_dir = tempfile::tempdir().expect("create extract dir");
+        let config = SampleExtractionConfig::new(extract_dir.path().to_path_buf());
+
+        let data = b"same content";
+        let sha256 = "deadbeef1234";
+
+        // First write
+        let path1 = config.extract(sha256, "file.bin", data);
+        assert!(path1.is_some());
+
+        // Second write with same data — should return same path without rewriting
+        let path2 = config.extract(sha256, "file.bin", data);
+        assert_eq!(path1, path2);
+    }
+
+    #[test]
+    fn test_extract_dir_zip_archive_members() {
+        // Zip archives use the streaming path — verify it writes members to extract_dir
+        #[allow(clippy::expect_used)]
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        #[allow(clippy::expect_used)]
+        let extract_dir = tempfile::tempdir().expect("create extract dir");
+        let zip_path = temp_dir.path().join("test.zip");
+
+        // Create a zip with two files
+        {
+            #[allow(clippy::expect_used)]
+            let file = File::create(&zip_path).expect("create zip");
+            let mut zip = zip::ZipWriter::new(file);
+            let options = zip::write::FileOptions::<()>::default()
+                .compression_method(zip::CompressionMethod::Stored);
+            zip.start_file("hello.txt", options).unwrap();
+            std::io::Write::write_all(&mut zip, b"hello world").unwrap();
+            zip.start_file("subdir/data.txt", options).unwrap();
+            std::io::Write::write_all(&mut zip, b"nested data").unwrap();
+            zip.finish().unwrap();
+        }
+
+        let config = SampleExtractionConfig::new(extract_dir.path().to_path_buf());
+        let analyzer = ArchiveAnalyzer::new().with_sample_extraction(config);
+        #[allow(clippy::expect_used)]
+        let report = analyzer.analyze(&zip_path).expect("analyze zip");
+
+        // Check that files were extracted to extract_dir
+        let extracted_files: Vec<_> = report
+            .files
+            .iter()
+            .filter_map(|f| f.extracted_path.as_ref())
+            .collect();
+        assert!(
+            !extracted_files.is_empty(),
+            "zip members should have extracted_path set"
+        );
+
+        // Verify files actually exist on disk
+        for path_str in &extracted_files {
+            let path = std::path::Path::new(path_str);
+            assert!(path.exists(), "extracted file should exist: {}", path_str);
+        }
+    }
+
+    #[test]
+    fn test_extract_dir_tar_gz_archive_members() {
+        // tar.gz archives use the generic path — this was the bug
+        use flate2::write::GzEncoder;
+        use flate2::Compression;
+        use tar::Builder;
+
+        #[allow(clippy::expect_used)]
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        #[allow(clippy::expect_used)]
+        let extract_dir = tempfile::tempdir().expect("create extract dir");
+        let tar_gz_path = temp_dir.path().join("test.tar.gz");
+
+        // Create a tar.gz with two files
+        {
+            let file = File::create(&tar_gz_path).unwrap();
+            let enc = GzEncoder::new(file, Compression::default());
+            let mut tar_builder = Builder::new(enc);
+
+            let content_a = b"file alpha content";
+            let mut header_a = tar::Header::new_gnu();
+            header_a.set_path("alpha.txt").unwrap();
+            header_a.set_size(content_a.len() as u64);
+            header_a.set_mode(0o644);
+            header_a.set_cksum();
+            tar_builder.append(&header_a, &content_a[..]).unwrap();
+
+            let content_b = b"file beta content";
+            let mut header_b = tar::Header::new_gnu();
+            header_b.set_path("subdir/beta.txt").unwrap();
+            header_b.set_size(content_b.len() as u64);
+            header_b.set_mode(0o644);
+            header_b.set_cksum();
+            tar_builder.append(&header_b, &content_b[..]).unwrap();
+
+            tar_builder.finish().unwrap();
+        }
+
+        let config = SampleExtractionConfig::new(extract_dir.path().to_path_buf());
+        let analyzer = ArchiveAnalyzer::new().with_sample_extraction(config);
+        #[allow(clippy::expect_used)]
+        let report = analyzer.analyze(&tar_gz_path).expect("analyze tar.gz");
+
+        // Check that files were extracted to extract_dir
+        let extracted_files: Vec<_> = report
+            .files
+            .iter()
+            .filter_map(|f| f.extracted_path.as_ref())
+            .collect();
+        assert!(
+            !extracted_files.is_empty(),
+            "tar.gz members should have extracted_path set, got files: {:?}",
+            report.files.iter().map(|f| &f.path).collect::<Vec<_>>()
+        );
+
+        // Verify files actually exist on disk with correct content
+        for path_str in &extracted_files {
+            let path = std::path::Path::new(path_str);
+            assert!(path.exists(), "extracted file should exist: {}", path_str);
+            let content = std::fs::read(path).unwrap();
+            assert!(!content.is_empty(), "extracted file should not be empty");
+        }
+    }
+
+    #[test]
+    fn test_extract_dir_standalone_gz() {
+        // Standalone .gz (not .tar.gz) — decompressed content should be persisted
+        use flate2::write::GzEncoder;
+        use flate2::Compression;
+
+        #[allow(clippy::expect_used)]
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        #[allow(clippy::expect_used)]
+        let extract_dir = tempfile::tempdir().expect("create extract dir");
+        let gz_path = temp_dir.path().join("data.json.gz");
+
+        // Create a standalone .gz file (not a tarball)
+        let original_content = b"{\"key\": \"value\", \"items\": [1, 2, 3]}";
+        {
+            let file = File::create(&gz_path).unwrap();
+            let mut enc = GzEncoder::new(file, Compression::default());
+            std::io::Write::write_all(&mut enc, original_content).unwrap();
+            enc.finish().unwrap();
+        }
+
+        let config = SampleExtractionConfig::new(extract_dir.path().to_path_buf());
+        let analyzer = ArchiveAnalyzer::new().with_sample_extraction(config);
+        #[allow(clippy::expect_used)]
+        let report = analyzer.analyze(&gz_path).expect("analyze .gz");
+
+        // The decompressed file should be extracted to extract_dir
+        let extracted_files: Vec<_> = report
+            .files
+            .iter()
+            .filter_map(|f| f.extracted_path.as_ref())
+            .collect();
+        assert!(
+            !extracted_files.is_empty(),
+            "standalone .gz decompressed content should be extracted, got files: {:?}",
+            report.files.iter().map(|f| &f.path).collect::<Vec<_>>()
+        );
+
+        // Verify the decompressed content matches
+        for path_str in &extracted_files {
+            let path = std::path::Path::new(path_str);
+            assert!(path.exists(), "extracted file should exist: {}", path_str);
+            let content = std::fs::read(path).unwrap();
+            assert_eq!(
+                content, original_content,
+                "decompressed content should match original"
+            );
+        }
+    }
+
+    #[test]
+    fn test_extract_dir_standalone_zstd() {
+        // Standalone .zst — the specific format mentioned in the bug report
+        #[allow(clippy::expect_used)]
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        #[allow(clippy::expect_used)]
+        let extract_dir = tempfile::tempdir().expect("create extract dir");
+        let zst_path = temp_dir.path().join("meta.json.zst");
+
+        // Create a standalone .zst file
+        let original_content = b"{\"name\": \"test-package\", \"version\": \"1.0.0\"}";
+        {
+            let compressed = zstd::encode_all(Cursor::new(original_content), 3).unwrap();
+            std::fs::write(&zst_path, compressed).unwrap();
+        }
+
+        let config = SampleExtractionConfig::new(extract_dir.path().to_path_buf());
+        let analyzer = ArchiveAnalyzer::new().with_sample_extraction(config);
+        #[allow(clippy::expect_used)]
+        let report = analyzer.analyze(&zst_path).expect("analyze .zst");
+
+        // The decompressed file should be extracted to extract_dir
+        let extracted_files: Vec<_> = report
+            .files
+            .iter()
+            .filter_map(|f| f.extracted_path.as_ref())
+            .collect();
+        assert!(
+            !extracted_files.is_empty(),
+            "standalone .zst decompressed content should be extracted, got files: {:?}",
+            report.files.iter().map(|f| &f.path).collect::<Vec<_>>()
+        );
+
+        // Verify the decompressed content matches
+        for path_str in &extracted_files {
+            let path = std::path::Path::new(path_str);
+            assert!(path.exists(), "extracted file should exist: {}", path_str);
+            let content = std::fs::read(path).unwrap();
+            assert_eq!(
+                content, original_content,
+                "decompressed .zst content should match original"
+            );
+        }
+    }
 }

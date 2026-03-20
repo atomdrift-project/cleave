@@ -1,5 +1,4 @@
 //! Performance optimization indices for fast trait matching.
-#![allow(clippy::unwrap_used, clippy::expect_used)]
 //!
 //! This module provides specialized indices for efficient trait lookup and matching:
 //! - `TraitIndex`: Fast trait lookup by file type
@@ -1346,6 +1345,7 @@ impl RawContentRegexIndex {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
     use crate::composite_rules::{Arch, Platform};

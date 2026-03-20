@@ -1,5 +1,4 @@
 //! Memory usage tracking and logging for OOM diagnosis.
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 //!
 //! Provides utilities to track and log memory usage during analysis to help
 //! diagnose OOM issues in production, especially during trait-basher runs.
@@ -507,6 +506,7 @@ pub fn global_tracker() -> &'static MemoryTracker {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use super::*;
 

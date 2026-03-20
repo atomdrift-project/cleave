@@ -1,5 +1,4 @@
 //! Command-line interface definitions and parsing.
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 //!
 //! This module defines the CLI structure using clap, including:
 //! - Main command arguments
@@ -616,6 +615,7 @@ pub enum OutputFormat {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use super::*;
 

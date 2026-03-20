@@ -1,6 +1,4 @@
 //! Condition types for composite rules.
-#![allow(clippy::unwrap_used, clippy::expect_used)]
-
 use super::types::Platform;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
@@ -2752,6 +2750,7 @@ fn validate_location_constraints(
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod location_constraint_tests {
     use super::*;
 
@@ -3064,6 +3063,7 @@ mod location_constraint_tests {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod backtrack_tests {
     use super::find_backtrack_issue;
 

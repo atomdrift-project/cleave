@@ -1,6 +1,4 @@
 //! PE (Portable Executable) analyzer for Windows binaries.
-#![allow(clippy::unwrap_used, clippy::expect_used)]
-
 use crate::analyzers::{AnalysisInput, Analyzer};
 use crate::capabilities::CapabilityMapper;
 use crate::entropy::{calculate_entropy, EntropyLevel};
@@ -858,14 +856,11 @@ impl PEAnalyzer {
             };
             let aliased = count_aliased_exports(pe, data, bitness);
             if aliased > 0 {
-                if report.metrics.is_none() {
-                    report.metrics = Some(crate::types::Metrics::default());
-                }
-                let metrics = report.metrics.as_mut().unwrap();
-                if metrics.binary.is_none() {
-                    metrics.binary = Some(Default::default());
-                }
-                metrics.binary.as_mut().unwrap().aliased_exports = aliased;
+                let metrics = report
+                    .metrics
+                    .get_or_insert_with(crate::types::Metrics::default);
+                let binary_metrics = metrics.binary.get_or_insert_with(Default::default);
+                binary_metrics.aliased_exports = aliased;
             }
         }
     }
@@ -1526,6 +1521,7 @@ fn analyze_embedded_as_child(
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
     use std::path::PathBuf;

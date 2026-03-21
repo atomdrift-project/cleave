@@ -94,12 +94,27 @@ impl ArchiveAnalyzer {
         let sha256 = calculate_sha256(data);
         let size = data.len() as u64;
 
+        // Check per-file cache (cross-context, shared with standalone file analysis)
+        if let Some(options) = &self.analysis_options {
+            if let Some(mut cached) =
+                crate::analysis_cache::file_analysis_cache_lookup(&sha256, options.as_ref())
+            {
+                tracing::info!("File cache hit (cross-context)");
+                cached.path = self.format_entry_path(relative_path);
+                cached.depth = (self.current_depth + 1) as u32;
+                return Ok(StreamingFileResult {
+                    file_analysis: cached,
+                    nested_files: vec![],
+                });
+            }
+        }
+
         // Create base FileAnalysis
         let mut file_analysis = FileAnalysis::new(
             0, // ID will be assigned later when aggregating
             self.format_entry_path(relative_path),
             format!("{:?}", file_type).to_lowercase(),
-            sha256,
+            sha256.clone(),
             size,
         );
         file_analysis.depth = (self.current_depth + 1) as u32;
@@ -150,6 +165,12 @@ impl ArchiveAnalyzer {
                     }
                     if let Some(ref config) = self.sample_extraction {
                         nested_analyzer = nested_analyzer.with_sample_extraction(config.clone());
+                    }
+                    if let Some(ref flag) = self.cancelled {
+                        nested_analyzer = nested_analyzer.with_cancellation(flag.clone());
+                    }
+                    if let Some(ref opts) = self.analysis_options {
+                        nested_analyzer = nested_analyzer.with_analysis_options(opts.clone());
                     }
 
                     // Spawn nested archive analysis on a dedicated thread to
@@ -231,6 +252,17 @@ impl ArchiveAnalyzer {
             {
                 file_analysis.extracted_path = Some(extracted_path.display().to_string());
             }
+        }
+
+        // Store in per-file cache (cross-context, shared with standalone file analysis)
+        if let Some(ref options) = self.analysis_options {
+            let mut normalized = file_analysis.clone();
+            normalized.path = String::new();
+            normalized.id = 0;
+            normalized.parent_id = None;
+            normalized.depth = 0;
+            normalized.extracted_path = None;
+            crate::analysis_cache::file_analysis_cache_store(&sha256, options.as_ref(), &normalized);
         }
 
         Ok(StreamingFileResult {
@@ -601,6 +633,10 @@ impl ArchiveAnalyzer {
         rx.into_iter().par_bridge().for_each(|file| {
             // Files will be re-analyzed with proper type detection from content/extension
 
+            if analyzer_ref.cancelled.as_ref().map_or(false, |c| c.load(std::sync::atomic::Ordering::Relaxed)) {
+                return;
+            }
+
             // Analyze the file
             let result = match &file {
                 ExtractedFile::InMemory {
@@ -861,6 +897,10 @@ impl ArchiveAnalyzer {
         rx.into_iter().par_bridge().for_each(|file| {
             // Files will be re-analyzed with proper type detection from content/extension
 
+            if analyzer_ref.cancelled.as_ref().map_or(false, |c| c.load(std::sync::atomic::Ordering::Relaxed)) {
+                return;
+            }
+
             let result = match &file {
                 ExtractedFile::InMemory {
                     path,
@@ -1063,6 +1103,10 @@ impl ArchiveAnalyzer {
         rx.into_iter().par_bridge().for_each(|file| {
             // Files will be re-analyzed with proper type detection from content/extension
 
+            if analyzer_ref.cancelled.as_ref().map_or(false, |c| c.load(std::sync::atomic::Ordering::Relaxed)) {
+                return;
+            }
+
             let result = match &file {
                 ExtractedFile::InMemory {
                     path,
@@ -1240,6 +1284,10 @@ impl ArchiveAnalyzer {
 
         rx.into_iter().par_bridge().for_each(|file| {
             // Files will be re-analyzed with proper type detection from content/extension
+
+            if analyzer_ref.cancelled.as_ref().map_or(false, |c| c.load(std::sync::atomic::Ordering::Relaxed)) {
+                return;
+            }
 
             let result = match &file {
                 ExtractedFile::InMemory {
@@ -1488,6 +1536,10 @@ impl ArchiveAnalyzer {
 
         rx.into_iter().par_bridge().for_each(|file| {
             // Files will be re-analyzed with proper type detection from content/extension
+
+            if analyzer_ref.cancelled.as_ref().map_or(false, |c| c.load(std::sync::atomic::Ordering::Relaxed)) {
+                return;
+            }
 
             let result = match &file {
                 ExtractedFile::InMemory {

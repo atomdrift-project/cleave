@@ -44,6 +44,10 @@ pub(crate) struct ArchiveAnalyzer {
     /// Maximum file size to keep in memory during extraction.
     /// Files larger than this are written to temp files.
     max_memory_file_size: u64,
+    /// Per-request cancellation flag — checked in streaming loops.
+    cancelled: Option<Arc<std::sync::atomic::AtomicBool>>,
+    /// Analysis options for member-level cache lookups.
+    analysis_options: Option<Arc<crate::AnalysisOptions>>,
 }
 
 impl ArchiveAnalyzer {
@@ -59,6 +63,8 @@ impl ArchiveAnalyzer {
             zip_passwords: Arc::from([]),
             sample_extraction: None,
             max_memory_file_size: DEFAULT_MAX_MEMORY_FILE_SIZE,
+            cancelled: None,
+            analysis_options: None,
         }
     }
 
@@ -145,6 +151,20 @@ impl ArchiveAnalyzer {
         self
     }
 
+    /// Set a per-request cancellation flag. When set to true, streaming loops will stop early.
+    #[must_use]
+    pub(crate) fn with_cancellation(mut self, flag: Arc<std::sync::atomic::AtomicBool>) -> Self {
+        self.cancelled = Some(flag);
+        self
+    }
+
+    /// Set analysis options for member-level file cache lookups.
+    #[must_use]
+    pub(crate) fn with_analysis_options(mut self, options: Arc<crate::AnalysisOptions>) -> Self {
+        self.analysis_options = Some(options);
+        self
+    }
+
     /// Create a copy of this analyzer with the sample_extraction config updated
     /// to use the given archive SHA256 for extraction directory grouping.
     #[allow(dead_code)] // Used by binary target
@@ -162,6 +182,8 @@ impl ArchiveAnalyzer {
                 .as_ref()
                 .map(|c| c.with_archive_sha256(archive_sha256.to_owned())),
             max_memory_file_size: self.max_memory_file_size,
+            cancelled: self.cancelled.clone(),
+            analysis_options: self.analysis_options.clone(),
         }
     }
 

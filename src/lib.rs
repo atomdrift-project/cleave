@@ -304,6 +304,10 @@ pub struct AnalysisOptions {
     /// directly controls peak memory during directory scans.
     /// Default: min(8, num_cpus) for CLI; num_cpus for server mode.
     pub scan_threads: usize,
+    /// Per-request cancellation flag. When set to true by the caller (e.g. server on timeout),
+    /// archive analysis will stop processing new members early.
+    /// Not included in the analysis cache key.
+    pub cancellation: Option<Arc<std::sync::atomic::AtomicBool>>,
 }
 
 impl Default for AnalysisOptions {
@@ -327,6 +331,7 @@ impl Default for AnalysisOptions {
             slow_rule_ms: capabilities::CapabilityMapper::DEFAULT_SLOW_RULE_MS,
             max_scan_file_size: 600 * 1024 * 1024, // 600 MB default
             scan_threads: 0,                       // 0 = auto (min(8, num_cpus) for CLI)
+            cancellation: None,
         }
     }
 }
@@ -387,7 +392,7 @@ pub fn analyze_file<P: AsRef<Path>>(path: P, options: &AnalysisOptions) -> Resul
     let preloaded = if path.is_file() {
         let file_data = file_io::read_file_smart(path)?;
         let sha256 = analyzers::utils::calculate_sha256(file_data.as_slice());
-        if let Some(mut report) = analysis_cache::cache_lookup(&sha256, options) {
+        if let Some(mut report) = analysis_cache::report_cache_lookup(&sha256, options) {
             report.target.path = path.display().to_string();
             report.analysis_timestamp = Some(chrono::Utc::now());
             tracing::info!("Cache hit (fast path)");
@@ -473,6 +478,36 @@ fn analyze_file_with_resources<P: AsRef<Path>>(
     )
 }
 
+/// Synthesize an `AnalysisReport` from a cached `FileAnalysis` (cross-context file cache hit).
+fn report_from_file_analysis(fa: types::FileAnalysis, path: String) -> types::AnalysisReport {
+    use types::TargetInfo;
+    let target = TargetInfo {
+        path,
+        file_type: fa.file_type.clone(),
+        size_bytes: fa.size,
+        sha256: fa.sha256.clone(),
+        architectures: fa.arch.as_ref().map(|a| vec![a.clone()]),
+    };
+    let mut report = types::AnalysisReport::new(target);
+    report.findings = fa.findings;
+    report.strings = fa.strings;
+    report.imports = fa.imports;
+    report.exports = fa.exports;
+    report.functions = fa.functions;
+    report.sections = fa.sections;
+    report.syscalls = fa.syscalls;
+    report.yara_matches = fa.yara_matches;
+    report.metrics = fa.metrics;
+    report.binary_properties = fa.binary_properties;
+    report.code_metrics = fa.code_metrics;
+    report.source_code_metrics = fa.source_code_metrics;
+    report.overlay_metrics = fa.overlay_metrics;
+    report.paths = fa.paths;
+    report.directories = fa.directories;
+    report.env_vars = fa.env_vars;
+    report
+}
+
 fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
     path: P,
     options: &AnalysisOptions,
@@ -531,7 +566,7 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
     let sha256_hex = analyzers::utils::calculate_sha256(file_data);
 
     // Check analysis cache before running the full pipeline
-    if let Some(mut cached_report) = analysis_cache::cache_lookup(&sha256_hex, options) {
+    if let Some(mut cached_report) = analysis_cache::report_cache_lookup(&sha256_hex, options) {
         cached_report.target.path = path.display().to_string();
         cached_report.analysis_timestamp = Some(chrono::Utc::now());
         tracing::info!("Cache hit");
@@ -541,6 +576,18 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
             analysis_start.elapsed(),
         );
         return Ok(cached_report);
+    }
+
+    // Secondary check: per-file cache (cross-context, shared with archive members)
+    if let Some(fa) = analysis_cache::file_analysis_cache_lookup(&sha256_hex, options) {
+        tracing::info!("File cache hit (cross-context)");
+        let report = report_from_file_analysis(fa, path.display().to_string());
+        memory_tracker::log_after_file_processing(
+            path.to_str().unwrap_or("unknown"),
+            file_size,
+            analysis_start.elapsed(),
+        );
+        return Ok(report);
     }
 
     // Check for extension/content mismatch
@@ -736,12 +783,16 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
             let mut analyzer = analyzers::archive::ArchiveAnalyzer::new()
                 .with_capability_mapper_arc(mapper_arc.clone())
                 .with_zip_passwords(options.zip_passwords.clone())
-                .with_max_memory_file_size(options.max_memory_file_size);
+                .with_max_memory_file_size(options.max_memory_file_size)
+                .with_analysis_options(Arc::new(options.clone()));
             if let Some(engine) = yara_engine {
                 analyzer = analyzer.with_yara_arc(engine.clone());
             }
             if let Some(ref config) = options.sample_extraction {
                 analyzer = analyzer.with_sample_extraction(config.clone());
+            }
+            if let Some(ref flag) = options.cancellation {
+                analyzer = analyzer.with_cancellation(flag.clone());
             }
             analyzer.analyze_input(&input)
         }
@@ -1019,8 +1070,19 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
         analysis_start.elapsed(),
     );
 
+    // Store result in per-file cache (cross-context: shared with archive member analysis)
+    {
+        let mut fa = report.to_file_analysis(0);
+        fa.path = String::new();
+        fa.id = 0;
+        fa.parent_id = None;
+        fa.depth = 0;
+        fa.extracted_path = None;
+        analysis_cache::file_analysis_cache_store(&sha256_hex, options, &fa);
+    }
+
     // Store result in analysis cache for future lookups
-    analysis_cache::cache_store(&sha256_hex, options, &report);
+    analysis_cache::report_cache_store(&sha256_hex, options, &report);
 
     Ok(report)
 }

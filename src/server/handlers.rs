@@ -606,13 +606,16 @@ async fn analyze_path_inner(
             started_at: Instant::now(),
         },
     );
+    let cancellation = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let extract_dir_for_response = extract_dir.clone();
+    let cancellation_for_task = cancellation.clone();
     let mut handle = tokio::task::spawn_blocking(move || {
         let _enter = task_span.enter();
         let mut opts = AnalysisOptions::default();
         if let Some(dir) = extract_dir {
             opts.sample_extraction = Some(crate::SampleExtractionConfig::new(dir));
         }
+        opts.cancellation = Some(cancellation_for_task);
         let result = analyze_file(&path_owned, &opts);
         // Periodically clear thread-local caches to prevent unbounded memory growth.
         // Done every 50 requests rather than every request to avoid rayon::broadcast
@@ -636,6 +639,7 @@ async fn analyze_path_inner(
             .fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
         state.in_flight.remove(&request_id);
     } else {
+        cancellation.store(true, std::sync::atomic::Ordering::Relaxed);
         let active = state
             .active_tasks
             .load(std::sync::atomic::Ordering::Relaxed);
@@ -645,7 +649,7 @@ async fn analyze_path_inner(
             "Analysis timed out but blocking task still running"
         );
         let orphan_state = Arc::clone(&state);
-        let orphan_timeout = Duration::from_secs(state.timeout_secs * 2);
+        let orphan_timeout = Duration::from_secs(30);
         tokio::spawn(async move {
             match tokio::time::timeout(orphan_timeout, handle).await {
                 Ok(_) => {}
@@ -746,7 +750,7 @@ async fn analyze_path_inner(
 /// counter grows while RSS grows.
 pub(super) async fn memory_stats(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
     // SQLite COUNT(*) can briefly block, so run it off the async thread.
-    let cache_entries = tokio::task::spawn_blocking(crate::analysis_cache::cache_entry_count).await;
+    let cache_entries = tokio::task::spawn_blocking(crate::analysis_cache::report_cache_entry_count).await;
     let cache_entries = cache_entries.unwrap_or(None);
 
     let rss_mb = crate::memory_tracker::current_rss().map(|b| b / 1024 / 1024);

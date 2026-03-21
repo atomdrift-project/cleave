@@ -124,6 +124,7 @@ pub fn run(config: &AnalyzeConfig<'_>) -> Result<String> {
         slow_rule_ms: config.slow_rule_ms,
         max_scan_file_size: config.max_scan_file_size,
         scan_threads: config.scan_threads,
+        cancellation: None,
     };
 
     // If target is a directory, process files recursively

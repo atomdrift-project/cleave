@@ -241,7 +241,7 @@ fn split_top_level_alternation(pattern: &str) -> Vec<&str> {
         let bytes = pattern.as_bytes();
         let mut matches_at_end = false;
 
-        for i in 0..bytes.len() {
+        for (i, &byte) in bytes.iter().enumerate() {
             // Count consecutive preceding backslashes; odd count means escaped
             let mut backslash_count = 0;
             let mut j = i;
@@ -252,7 +252,7 @@ fn split_top_level_alternation(pattern: &str) -> Vec<&str> {
             if backslash_count % 2 != 0 {
                 continue; // escaped character
             }
-            match bytes[i] {
+            match byte {
                 b'[' if !in_char_class => in_char_class = true,
                 b']' if in_char_class => in_char_class = false,
                 b'(' if !in_char_class => {

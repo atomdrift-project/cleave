@@ -456,22 +456,21 @@ mod tests {
 
     #[test]
     #[allow(clippy::expect_used)]
-    fn
- test_decompress_empty() {
-        assert!(decompress_vba(&[]).expect("Empty data should return empty vec").is_empty());
+    fn test_decompress_empty() {
+        assert!(decompress_vba(&[])
+            .expect("Empty data should return empty vec")
+            .is_empty());
     }
 
     #[test]
     #[allow(clippy::expect_used)]
-    fn
- test_decompress_invalid_signature() {
+    fn test_decompress_invalid_signature() {
         assert!(decompress_vba(&[0x00, 0x00, 0x00]).is_err());
     }
 
     #[test]
     #[allow(clippy::expect_used)]
-    fn
- test_decompress_valid_uncompressed_chunk() {
+    fn test_decompress_valid_uncompressed_chunk() {
         // Signature + uncompressed chunk header (size=4096, compressed=0)
         let mut data = vec![0x01]; // signature
         let header: u16 = 0x0FFD; // 4096-3 = 4093 = 0x0FFD, compressed bit not set
@@ -484,8 +483,7 @@ mod tests {
 
     #[test]
     #[allow(clippy::expect_used)]
-    fn
- test_decompress_compressed_literals_only() {
+    fn test_decompress_compressed_literals_only() {
         // A compressed chunk with only literal bytes (no copy tokens)
         // Flag byte 0x00 = 8 literals
         let mut data = vec![0x01]; // signature
@@ -505,8 +503,7 @@ mod tests {
 
     #[test]
     #[allow(clippy::expect_used)]
-    fn
- test_max_bit_count() {
+    fn test_max_bit_count() {
         assert_eq!(max_bit_count(0), 12);
         assert_eq!(max_bit_count(1), 12);
         assert_eq!(max_bit_count(0x80), 12);
@@ -517,8 +514,7 @@ mod tests {
 
     #[test]
     #[allow(clippy::expect_used)]
-    fn
- test_vba_module_struct() {
+    fn test_vba_module_struct() {
         let module = VbaModule {
             name: "Module1".to_string(),
             source_code: "Sub Test()\nMsgBox \"hello\"\nEnd Sub".to_string(),

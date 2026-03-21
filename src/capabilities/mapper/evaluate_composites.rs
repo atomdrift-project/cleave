@@ -510,8 +510,7 @@ traits:
 
     #[test]
     #[allow(clippy::expect_used)]
-    fn
- test_evaluate_container_composites_empty_findings() {
+    fn test_evaluate_container_composites_empty_findings() {
         let mapper = super::super::CapabilityMapper::empty();
         let report = make_test_report();
 
@@ -527,8 +526,7 @@ traits:
 
     #[test]
     #[allow(clippy::expect_used)]
-    fn
- test_evaluate_container_composites_deduplication() {
+    fn test_evaluate_container_composites_deduplication() {
         let mapper = super::super::CapabilityMapper::empty();
         let mut report = make_test_report();
 
@@ -551,8 +549,7 @@ traits:
 
     #[test]
     #[allow(clippy::expect_used)]
-    fn
- test_evaluate_container_composites_evidence_marking() {
+    fn test_evaluate_container_composites_evidence_marking() {
         let mapper = super::super::CapabilityMapper::empty();
         let report = make_test_report();
 
@@ -587,8 +584,7 @@ traits:
 
     #[test]
     #[allow(clippy::expect_used)]
-    fn
- test_evaluate_container_composites_file_type_detection() {
+    fn test_evaluate_container_composites_file_type_detection() {
         let mapper = super::super::CapabilityMapper::empty();
 
         // Test with various archive types
@@ -603,8 +599,7 @@ traits:
 
     #[test]
     #[allow(clippy::expect_used)]
-    fn
- test_evaluate_basename_traits_for_entries() {
+    fn test_evaluate_basename_traits_for_entries() {
         let mapper = make_basename_mapper();
 
         // Test with archive entry names that should match basename traits
@@ -646,8 +641,7 @@ traits:
 
     #[test]
     #[allow(clippy::expect_used)]
-    fn
- test_evaluate_basename_traits_empty_entries() {
+    fn test_evaluate_basename_traits_empty_entries() {
         let mapper = make_basename_mapper();
         let findings = mapper.evaluate_basename_traits_for_entries(&[]);
         assert!(findings.is_empty());

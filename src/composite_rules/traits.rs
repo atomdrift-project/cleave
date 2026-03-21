@@ -2985,8 +2985,7 @@ fn evidence_within_line_range(
     line_numbers.sort_unstable();
 
     // Sliding window: find any window of max_line_span that contains min_required items
-    for i in 0..line_numbers.len() {
-        let start_line = line_numbers[i];
+    for (i, &start_line) in line_numbers.iter().enumerate() {
         let mut count = 0;
         for &line in &line_numbers[i..] {
             if line - start_line <= max_line_span {
@@ -3020,8 +3019,7 @@ fn evidence_within_byte_range(
 
     byte_offsets.sort_unstable();
 
-    for i in 0..byte_offsets.len() {
-        let start = byte_offsets[i];
+    for (i, &start) in byte_offsets.iter().enumerate() {
         let mut count = 0;
         for &offset in &byte_offsets[i..] {
             if (offset - start) <= max_byte_span as u64 {
@@ -3052,8 +3050,7 @@ fn evidence_within_line_range_grouped(
     sorted.sort_unstable_by_key(|&(line, _)| line);
 
     // Sliding window: find any window of max_line_span with min_distinct condition indices
-    for i in 0..sorted.len() {
-        let start_line = sorted[i].0;
+    for (i, &(start_line, _)) in sorted.iter().enumerate() {
         let mut seen = rustc_hash::FxHashSet::default();
         for &(line, cond_idx) in &sorted[i..] {
             if line - start_line <= max_line_span {
@@ -3083,8 +3080,7 @@ fn evidence_within_byte_range_grouped(
     let mut sorted: Vec<(u64, usize)> = items.to_vec();
     sorted.sort_unstable_by_key(|&(offset, _)| offset);
 
-    for i in 0..sorted.len() {
-        let start = sorted[i].0;
+    for (i, &(start, _)) in sorted.iter().enumerate() {
         let mut seen = rustc_hash::FxHashSet::default();
         for &(offset, cond_idx) in &sorted[i..] {
             if (offset - start) <= max_byte_span as u64 {

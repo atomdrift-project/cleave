@@ -1633,13 +1633,10 @@ impl YaraEngine {
             });
         }
 
-        // Fill end positions
-        for i in 0..rules.len() {
-            rules[i].end = if i + 1 < rules.len() {
-                rules[i + 1].start
-            } else {
-                source.len()
-            };
+        // Fill end positions: each rule ends where the next begins
+        let starts: Vec<usize> = rules.iter().map(|r| r.start).collect();
+        for (i, rule) in rules.iter_mut().enumerate() {
+            rule.end = starts.get(i + 1).copied().unwrap_or(source.len());
         }
 
         // Collect private rules (included in every tier)
@@ -1709,13 +1706,9 @@ impl YaraEngine {
         }
 
         // Fill in rule end positions (start of next rule or end of source)
-        for i in 0..rule_ranges.len() {
-            let end = if i + 1 < rule_ranges.len() {
-                rule_ranges[i + 1].0
-            } else {
-                source.len()
-            };
-            rule_ranges[i].1 = end;
+        let range_starts: Vec<usize> = rule_ranges.iter().map(|r| r.0).collect();
+        for (i, range) in rule_ranges.iter_mut().enumerate() {
+            range.1 = range_starts.get(i + 1).copied().unwrap_or(source.len());
         }
 
         // Build filtered source
@@ -1765,13 +1758,10 @@ impl YaraEngine {
             return (source.to_string(), 0);
         }
 
-        // Fill end positions
-        for i in 0..rule_ranges.len() {
-            rule_ranges[i].1 = if i + 1 < rule_ranges.len() {
-                rule_ranges[i + 1].0
-            } else {
-                source.len()
-            };
+        // Fill end positions: each rule ends where the next begins
+        let vt_starts: Vec<usize> = rule_ranges.iter().map(|r| r.0).collect();
+        for (i, range) in rule_ranges.iter_mut().enumerate() {
+            range.1 = vt_starts.get(i + 1).copied().unwrap_or(source.len());
         }
 
         let mut result = String::with_capacity(source.len());

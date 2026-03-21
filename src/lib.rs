@@ -1506,8 +1506,7 @@ mod tests {
 
     #[test]
     #[allow(clippy::expect_used)]
-    fn
- test_max_analysis_depth_constant() {
+    fn test_max_analysis_depth_constant() {
         assert_eq!(MAX_ANALYSIS_DEPTH, 8);
     }
 
@@ -1518,8 +1517,7 @@ mod tests {
     /// hits the depth guard.
     #[test]
     #[allow(clippy::expect_used)]
-    fn
- test_analysis_depth_limit_emits_finding() {
+    fn test_analysis_depth_limit_emits_finding() {
         use std::io::Write;
 
         // base64("echo hello") = "ZWNobyBoZWxsbw=="
@@ -1580,8 +1578,7 @@ mod tests {
     /// for a simple file.
     #[test]
     #[allow(clippy::expect_used)]
-    fn
- test_analysis_depth_zero_no_deep_nesting_finding() {
+    fn test_analysis_depth_zero_no_deep_nesting_finding() {
         use std::io::Write;
 
         let code = b"print('hello world')\n";
@@ -1609,8 +1606,7 @@ mod tests {
 
     #[test]
     #[allow(clippy::expect_used)]
-    fn
- test_analyze_directory_reports_per_file_failures() {
+    fn test_analyze_directory_reports_per_file_failures() {
         use std::fs;
 
         #[allow(clippy::expect_used)]

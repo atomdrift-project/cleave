@@ -93,8 +93,8 @@ fn is_edit_distance_one(a: &[u8], b: &[u8]) -> bool {
     if len_diff == 0 {
         // Same length: exactly one substitution
         let mut diffs = 0u32;
-        for i in 0..shorter.len() {
-            if shorter[i] != longer[i] {
+        for (a_byte, b_byte) in shorter.iter().zip(longer.iter()) {
+            if a_byte != b_byte {
                 diffs += 1;
                 if diffs > 1 {
                     return false;

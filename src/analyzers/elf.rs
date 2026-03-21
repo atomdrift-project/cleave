@@ -25,6 +25,8 @@ pub(crate) struct ElfAnalyzer {
     preextracted_strings: Option<Vec<StringInfo>>,
     /// When true, skip scanning for embedded PE/ELF binaries (prevents recursion in sub-analysis).
     skip_embedded_scan: bool,
+    /// Per-request cancellation flag.
+    cancellation: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
 }
 
 impl ElfAnalyzer {
@@ -37,6 +39,7 @@ impl ElfAnalyzer {
             string_extractor: StringExtractor::new(),
             preextracted_strings: None,
             skip_embedded_scan: false,
+            cancellation: None,
         }
     }
 
@@ -45,6 +48,22 @@ impl ElfAnalyzer {
     pub(crate) fn without_embedded_scan(mut self) -> Self {
         self.skip_embedded_scan = true;
         self
+    }
+
+    /// Set per-request cancellation flag.
+    #[must_use]
+    pub(crate) fn with_cancellation(
+        mut self,
+        flag: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+    ) -> Self {
+        self.cancellation = flag;
+        self
+    }
+
+    fn is_cancelled(&self) -> bool {
+        self.cancellation
+            .as_ref()
+            .map_or(false, |c| c.load(std::sync::atomic::Ordering::Relaxed))
     }
 
     /// Create analyzer with pre-existing capability mapper (wraps in Arc)
@@ -119,15 +138,14 @@ impl ElfAnalyzer {
                     // Parallelize Radare2 deep analysis with the rest of Goblin structural analysis
                     let (r2_inner, _) = rayon::join(
                         || {
-                            if Radare2Analyzer::is_available() {
-                                Some(self.radare2.extract_batched(
-                                    file_path,
-                                    symbols_found,
-                                    precomputed_sha256,
-                                ))
-                            } else {
-                                None
+                            if self.is_cancelled() || !Radare2Analyzer::is_available() {
+                                return None;
                             }
+                            Some(self.radare2.extract_batched(
+                                file_path,
+                                symbols_found,
+                                precomputed_sha256,
+                            ))
                         },
                         || {
                             // Analyze header and structure
@@ -378,6 +396,9 @@ impl ElfAnalyzer {
             let embedded =
                 crate::analyzers::embedded_binary_detector::scan_for_embedded_binaries(data);
             for binary in &embedded {
+                if self.is_cancelled() {
+                    break;
+                }
                 report
                     .findings
                     .push(crate::analyzers::embedded_binary_detector::finding_for(
@@ -909,6 +930,10 @@ impl ElfAnalyzer {
                 )
                 .with_criticality(Criticality::Notable),
             );
+            return report;
+        }
+
+        if self.is_cancelled() {
             return report;
         }
 

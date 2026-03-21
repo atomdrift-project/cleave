@@ -581,10 +581,27 @@ fn detect_file_type_inner(file_path: &Path, file_data: &[u8]) -> Option<FileType
     if file_data.starts_with(b"MZ") {
         return Some(FileType::Pe);
     }
-    // Check for MZ within first 64 bytes (tampered PE with junk prefix)
+    // Check for MZ within first 64 bytes (tampered PE with junk prefix).
+    // Require a valid DOS header: e_lfanew at 0x3C must point to "PE\0\0".
+    // Without this check, random binary blobs (e.g. decoded PDF image streams)
+    // that happen to contain "MZ" bytes get misclassified as PE files, causing
+    // false-positive junk-prefix findings.
     if let Some(mz_offset) = find_mz_header(file_data, 64) {
-        tracing::debug!("Detected PE with MZ at offset {} (junk prefix)", mz_offset);
-        return Some(FileType::Pe);
+        let pe_data = &file_data[mz_offset..];
+        let valid_pe = pe_data.len() >= 0x40 && {
+            let e_lfanew = u32::from_le_bytes([
+                pe_data[0x3c],
+                pe_data[0x3d],
+                pe_data[0x3e],
+                pe_data[0x3f],
+            ]) as usize;
+            e_lfanew + 4 <= pe_data.len()
+                && pe_data[e_lfanew..e_lfanew + 4] == *b"PE\0\0"
+        };
+        if valid_pe {
+            tracing::debug!("Detected PE with MZ at offset {} (junk prefix)", mz_offset);
+            return Some(FileType::Pe);
+        }
     }
 
     // Check for Binary Plist

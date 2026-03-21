@@ -6,6 +6,7 @@
 use crate::analyzers::FileType;
 use crate::types::ExtractedPayload;
 use std::path::Path;
+use std::sync::Arc;
 
 /// Pre-extracted data passed to analyzers.
 ///
@@ -42,6 +43,10 @@ pub struct AnalysisInput<'a> {
 
     /// Nesting depth (0 for top-level, incremented for archives/encoded payloads)
     pub depth: u32,
+
+    /// Per-request cancellation flag. When set to true by the server on timeout, analyzers that
+    /// check it should abort long-running loops and return a partial result.
+    pub cancellation: Option<Arc<std::sync::atomic::AtomicBool>>,
 }
 
 #[allow(dead_code)] // Methods intentionally public for library consumers and future use
@@ -57,6 +62,7 @@ impl<'a> AnalysisInput<'a> {
             file_type,
             sha256: None,
             depth: 0,
+            cancellation: None,
         }
     }
 
@@ -76,6 +82,7 @@ impl<'a> AnalysisInput<'a> {
             file_type,
             sha256: None,
             depth: 0,
+            cancellation: None,
         }
     }
 
@@ -96,6 +103,7 @@ impl<'a> AnalysisInput<'a> {
             file_type,
             sha256: None,
             depth: 0,
+            cancellation: None,
         }
     }
 

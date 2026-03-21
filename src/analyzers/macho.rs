@@ -20,6 +20,8 @@ pub(crate) struct MachOAnalyzer {
     string_extractor: StringExtractor,
     /// Pre-extracted strings from stng (avoids redundant extraction)
     preextracted_strings: Option<Vec<StringInfo>>,
+    /// Per-request cancellation flag.
+    cancellation: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
 }
 
 impl MachOAnalyzer {
@@ -31,6 +33,7 @@ impl MachOAnalyzer {
             radare2: Radare2Analyzer::new(),
             string_extractor: StringExtractor::new(),
             preextracted_strings: None,
+            cancellation: None,
         }
     }
 
@@ -57,6 +60,22 @@ impl MachOAnalyzer {
     pub(crate) fn with_preextracted_strings(mut self, strings: Vec<StringInfo>) -> Self {
         self.preextracted_strings = Some(strings);
         self
+    }
+
+    /// Set per-request cancellation flag.
+    #[must_use]
+    pub(crate) fn with_cancellation(
+        mut self,
+        flag: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+    ) -> Self {
+        self.cancellation = flag;
+        self
+    }
+
+    fn is_cancelled(&self) -> bool {
+        self.cancellation
+            .as_ref()
+            .map_or(false, |c| c.load(std::sync::atomic::Ordering::Relaxed))
     }
 
     /// Structural analysis of a thin Mach-O binary (no YARA scan, no trait evaluation).
@@ -214,7 +233,7 @@ impl MachOAnalyzer {
 
         // Use radare2 for deep analysis if available - SINGLE r2 spawn for all data
         let _t_r2 = std::time::Instant::now();
-        let r2_strings = if Radare2Analyzer::is_available() {
+        let r2_strings = if !self.is_cancelled() && Radare2Analyzer::is_available() {
             tools_used.push("radare2".to_string());
 
             // Use batched extraction - single r2 session for functions, sections, strings, imports

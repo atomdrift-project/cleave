@@ -23,6 +23,8 @@ pub struct PEAnalyzer {
     preextracted_strings: Option<Vec<StringInfo>>,
     /// When true, skip scanning for embedded PE/ELF binaries (prevents recursion in sub-analysis).
     skip_embedded_scan: bool,
+    /// Per-request cancellation flag.
+    cancellation: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
 }
 
 fn pe_certificate_range(pe: &PE<'_>, data: &[u8]) -> Option<(usize, usize)> {
@@ -70,6 +72,7 @@ impl PEAnalyzer {
             yara_engine: None,
             preextracted_strings: None,
             skip_embedded_scan: false,
+            cancellation: None,
         }
     }
 
@@ -78,6 +81,22 @@ impl PEAnalyzer {
     pub(crate) fn without_embedded_scan(mut self) -> Self {
         self.skip_embedded_scan = true;
         self
+    }
+
+    /// Set per-request cancellation flag.
+    #[must_use]
+    pub(crate) fn with_cancellation(
+        mut self,
+        flag: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+    ) -> Self {
+        self.cancellation = flag;
+        self
+    }
+
+    fn is_cancelled(&self) -> bool {
+        self.cancellation
+            .as_ref()
+            .map_or(false, |c| c.load(std::sync::atomic::Ordering::Relaxed))
     }
 
     /// Create analyzer with shared YARA engine
@@ -157,6 +176,10 @@ impl PEAnalyzer {
                 )
                 .with_criticality(Criticality::Notable),
             );
+            return report;
+        }
+
+        if self.is_cancelled() {
             return report;
         }
 
@@ -322,14 +345,13 @@ impl PEAnalyzer {
         });
         let (r2_result, _) = rayon::join(
             || {
-                if Radare2Analyzer::is_available() {
-                    Some(
-                        self.radare2
-                            .extract_batched(file_path, has_symbols, precomputed_sha256),
-                    )
-                } else {
-                    None
+                if self.is_cancelled() || !Radare2Analyzer::is_available() {
+                    return None;
                 }
+                Some(
+                    self.radare2
+                        .extract_batched(file_path, has_symbols, precomputed_sha256),
+                )
             },
             || {
                 if let Some(pe) = pe {
@@ -778,6 +800,9 @@ impl PEAnalyzer {
             let embedded =
                 crate::analyzers::embedded_binary_detector::scan_for_embedded_binaries(pe_data);
             for binary in &embedded {
+                if self.is_cancelled() {
+                    break;
+                }
                 if cert_range
                     .is_some_and(|(start, end)| binary.offset >= start && binary.offset < end)
                 {

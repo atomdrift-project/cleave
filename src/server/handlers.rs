@@ -16,7 +16,7 @@ use tracing::{info, info_span, warn, Instrument, Span};
 
 use super::AppState;
 
-/// Health check endpoint. Returns 200 OK when healthy, 503 when memory-overloaded.
+/// Health check endpoint. Returns 200 OK when healthy, 503 when memory-overloaded or thread pool saturated.
 pub(super) async fn health(State(state): State<Arc<AppState>>) -> Response {
     let rss_bytes = crate::memory_tracker::current_rss().unwrap_or(0);
     let rss_mb = rss_bytes / 1024 / 1024;
@@ -33,6 +33,20 @@ pub(super) async fn health(State(state): State<Arc<AppState>>) -> Response {
                 "rss_mb": rss_mb,
                 "max_rss_mb": state.max_rss_bytes / 1024 / 1024,
                 "active_tasks": active_tasks,
+                "rayon_threads": rayon::current_num_threads(),
+            })),
+        )
+            .into_response();
+    }
+    if active_tasks >= state.max_concurrent_tasks {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(serde_json::json!({
+                "status": "degraded",
+                "reason": "thread_pool_saturated",
+                "rss_mb": rss_mb,
+                "active_tasks": active_tasks,
+                "max_concurrent_tasks": state.max_concurrent_tasks,
                 "rayon_threads": rayon::current_num_threads(),
             })),
         )
@@ -309,22 +323,27 @@ async fn analyze_inner(
             "Analysis timed out but blocking task still running"
         );
         let orphan_state = Arc::clone(&state);
-        let orphan_timeout = Duration::from_secs(30);
+        let orphan_timeout = Duration::from_secs(300);
         tokio::spawn(async move {
-            match tokio::time::timeout(orphan_timeout, handle).await {
-                Ok(_) => {}
-                Err(_) => {
-                    tracing::error!(
-                        request_id,
-                        "Orphaned analysis task exceeded grace period, abandoning"
-                    );
-                }
-            }
-            orphan_state
-                .active_tasks
-                .fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+            let finished = tokio::time::timeout(orphan_timeout, handle).await.is_ok();
             orphan_state.in_flight.remove(&request_id);
             drop(temp_file);
+            if finished {
+                // Task completed during the grace period — release the slot.
+                orphan_state
+                    .active_tasks
+                    .fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+            } else {
+                // Thread is truly leaked: it will run until it returns (possibly never).
+                // Do NOT release the slot — recycling it would let a new request in that
+                // would also get stuck for the same reason, creating a cascade.
+                // active_tasks stays elevated, health returns 503, and the server is
+                // restarted rather than silently degrading.
+                tracing::error!(
+                    request_id,
+                    "Orphaned analysis task exceeded grace period, abandoning (slot leaked)"
+                );
+            }
         });
     }
     let elapsed_ms = request_start.elapsed().as_millis();
@@ -650,21 +669,26 @@ async fn analyze_path_inner(
             "Analysis timed out but blocking task still running"
         );
         let orphan_state = Arc::clone(&state);
-        let orphan_timeout = Duration::from_secs(30);
+        let orphan_timeout = Duration::from_secs(300);
         tokio::spawn(async move {
-            match tokio::time::timeout(orphan_timeout, handle).await {
-                Ok(_) => {}
-                Err(_) => {
-                    tracing::error!(
-                        request_id,
-                        "Orphaned analysis task exceeded grace period, abandoning"
-                    );
-                }
-            }
-            orphan_state
-                .active_tasks
-                .fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+            let finished = tokio::time::timeout(orphan_timeout, handle).await.is_ok();
             orphan_state.in_flight.remove(&request_id);
+            if finished {
+                // Task completed during the grace period — release the slot.
+                orphan_state
+                    .active_tasks
+                    .fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+            } else {
+                // Thread is truly leaked: it will run until it returns (possibly never).
+                // Do NOT release the slot — recycling it would let a new request in that
+                // would also get stuck for the same reason, creating a cascade.
+                // active_tasks stays elevated, health returns 503, and the server is
+                // restarted rather than silently degrading.
+                tracing::error!(
+                    request_id,
+                    "Orphaned analysis task exceeded grace period, abandoning (slot leaked)"
+                );
+            }
         });
     }
 

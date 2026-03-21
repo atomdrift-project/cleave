@@ -603,7 +603,7 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
     let stage_stng_ms = stng_start.elapsed().as_millis() as u64;
 
     // Create unified analysis input - all analyzers receive the same pre-extracted data
-    let input = analyzers::AnalysisInput::with_payloads(
+    let mut input = analyzers::AnalysisInput::with_payloads(
         path,
         file_data,
         &stng_strings,
@@ -611,6 +611,7 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
         file_type.clone(),
     )
     .with_sha256(sha256_hex.clone());
+    input.cancellation = options.cancellation.clone();
 
     // Convert stng strings to StringInfo for binary analyzers (avoids redundant extraction)
     let string_extractor = strings::StringExtractor::new();
@@ -627,6 +628,7 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
         FileType::MachO => {
             // Run YARA scan in parallel with structural analysis for inline evidence
             let analyzer = analyzers::macho::MachOAnalyzer::new()
+                .with_cancellation(options.cancellation.clone())
                 .with_capability_mapper_arc(mapper_arc.clone())
                 .with_preextracted_strings(preextracted_strings.clone());
             let range = analyzer.preferred_arch_range(file_data);
@@ -640,6 +642,7 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
             // Raw regex precompute (~224ms) normally runs inside evaluate_and_merge_findings;
             // starting it here overlaps it with structural analysis (~275ms).
             let rule_file_type = capability_mapper.detect_file_type("macho");
+            let cancel_macho = options.cancellation.clone();
             let ((struct_result, yara_result), raw_regex) = rayon::join(
                 || {
                     rayon::join(
@@ -651,6 +654,12 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
                             ))
                         },
                         || {
+                            if cancel_macho
+                                .as_ref()
+                                .map_or(false, |c| c.load(std::sync::atomic::Ordering::Relaxed))
+                            {
+                                return None;
+                            }
                             engine
                                 .filter(|e| e.is_loaded())
                                 .map(|e| e.scan_bytes_with_inline(arch_data, Some(file_types)))
@@ -688,11 +697,13 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
         }
         FileType::Elf => {
             let analyzer = analyzers::elf::ElfAnalyzer::new()
+                .with_cancellation(options.cancellation.clone())
                 .with_capability_mapper_arc(mapper_arc.clone())
                 .with_preextracted_strings(preextracted_strings.clone());
             let engine = yara_engine;
             let file_types: &[&str] = &["elf", "so", "ko"];
             let rule_file_type = capability_mapper.detect_file_type("elf");
+            let cancel_elf = options.cancellation.clone();
             let ((struct_result, yara_result), raw_regex) = rayon::join(
                 || {
                     rayon::join(
@@ -704,6 +715,12 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
                             ))
                         },
                         || {
+                            if cancel_elf
+                                .as_ref()
+                                .map_or(false, |c| c.load(std::sync::atomic::Ordering::Relaxed))
+                            {
+                                return None;
+                            }
                             engine
                                 .filter(|e| e.is_loaded())
                                 .map(|e| e.scan_bytes_with_inline(file_data, Some(file_types)))
@@ -729,6 +746,7 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
         }
         FileType::Pe => {
             let mut analyzer = analyzers::pe::PEAnalyzer::new()
+                .with_cancellation(options.cancellation.clone())
                 .with_capability_mapper_arc(mapper_arc.clone())
                 .with_preextracted_strings(preextracted_strings.clone());
             // PE analyzer needs YARA engine for overlay/embedded payload analysis
@@ -738,6 +756,7 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
             let engine = yara_engine;
             let file_types: &[&str] = &["pe", "exe", "dll", "bat", "ps1"];
             let rule_file_type = capability_mapper.detect_file_type("pe");
+            let cancel_pe = options.cancellation.clone();
             let ((struct_result, yara_result), raw_regex) = rayon::join(
                 || {
                     rayon::join(
@@ -749,6 +768,12 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
                             ))
                         },
                         || {
+                            if cancel_pe
+                                .as_ref()
+                                .map_or(false, |c| c.load(std::sync::atomic::Ordering::Relaxed))
+                            {
+                                return None;
+                            }
                             engine
                                 .filter(|e| e.is_loaded())
                                 .map(|e| e.scan_bytes_with_inline(file_data, Some(file_types)))
@@ -778,6 +803,7 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
             .analyze_input(&input),
         FileType::OleDoc | FileType::Ooxml => analyzers::office::OfficeAnalyzer::new()
             .with_capability_mapper_arc(mapper_arc.clone())
+            .with_cancellation(options.cancellation.clone())
             .analyze_input(&input),
         FileType::Jar | FileType::Archive => {
             let mut analyzer = analyzers::archive::ArchiveAnalyzer::new()

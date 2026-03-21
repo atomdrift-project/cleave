@@ -25,6 +25,7 @@ use std::sync::Arc;
 #[derive(Debug)]
 pub(crate) struct OfficeAnalyzer {
     capability_mapper: Arc<CapabilityMapper>,
+    cancellation: Option<Arc<std::sync::atomic::AtomicBool>>,
 }
 
 impl OfficeAnalyzer {
@@ -32,6 +33,7 @@ impl OfficeAnalyzer {
     pub(crate) fn new() -> Self {
         Self {
             capability_mapper: Arc::new(CapabilityMapper::empty()),
+            cancellation: None,
         }
     }
 
@@ -47,11 +49,21 @@ impl OfficeAnalyzer {
         self
     }
 
+    #[must_use]
+    pub(crate) fn with_cancellation(
+        mut self,
+        flag: Option<Arc<std::sync::atomic::AtomicBool>>,
+    ) -> Self {
+        self.cancellation = flag;
+        self
+    }
+
     fn analyze_office(
         &self,
         file_path: &Path,
         data: &[u8],
         file_type: &FileType,
+        cancellation: Option<&Arc<std::sync::atomic::AtomicBool>>,
     ) -> AnalysisReport {
         let mut hasher = Sha256::new();
         hasher.update(data);
@@ -85,7 +97,7 @@ impl OfficeAnalyzer {
             .and_then(|n| n.to_str())
             .unwrap_or("document");
         let findings_before_vba = report.findings.len();
-        self.analyze_vba_subfiles(&mut report, &vba_modules, doc_name);
+        self.analyze_vba_subfiles(&mut report, &vba_modules, doc_name, cancellation);
 
         // Delegate pattern detection to capability mapper (YAML traits + YARA)
         self.capability_mapper
@@ -116,6 +128,7 @@ impl OfficeAnalyzer {
         report: &mut AnalysisReport,
         modules: &[vba::VbaModule],
         doc_name: &str,
+        cancellation: Option<&Arc<std::sync::atomic::AtomicBool>>,
     ) {
         let Some(analyzer) =
             analyzer_for_file_type_arc(&FileType::Vbs, Some(self.capability_mapper.clone()))
@@ -124,6 +137,10 @@ impl OfficeAnalyzer {
         };
 
         for module in modules {
+            if cancellation.map_or(false, |c| c.load(std::sync::atomic::Ordering::Relaxed)) {
+                break;
+            }
+
             let vba_bytes = module.source_code.as_bytes();
             let virtual_path_str = format!("{doc_name}!!vba/{}.vbs", module.name);
             let virtual_path = Path::new(&virtual_path_str);
@@ -132,8 +149,9 @@ impl OfficeAnalyzer {
                 vba_bytes,
                 &crate::analyzers::stng_analysis_opts(4),
             );
-            let input =
+            let mut input =
                 AnalysisInput::with_strings(virtual_path, vba_bytes, &strings, FileType::Vbs);
+            input.cancellation = cancellation.cloned();
 
             match analyzer.analyze_input(&input) {
                 Ok(mut sub_report) => {
@@ -444,7 +462,8 @@ impl Default for OfficeAnalyzer {
 
 impl Analyzer for OfficeAnalyzer {
     fn analyze_input(&self, input: &AnalysisInput<'_>) -> Result<AnalysisReport> {
-        Ok(self.analyze_office(input.path, input.data, &input.file_type))
+        let cancellation = self.cancellation.as_ref().or(input.cancellation.as_ref());
+        Ok(self.analyze_office(input.path, input.data, &input.file_type, cancellation))
     }
 
     fn analyze(&self, file_path: &Path) -> Result<AnalysisReport> {
@@ -454,7 +473,7 @@ impl Analyzer for OfficeAnalyzer {
         } else {
             FileType::Ooxml
         };
-        Ok(self.analyze_office(file_path, &data, &file_type))
+        Ok(self.analyze_office(file_path, &data, &file_type, self.cancellation.as_ref()))
     }
 
     fn can_analyze(&self, file_path: &Path) -> bool {

@@ -313,6 +313,8 @@ pub(crate) struct UnifiedSourceAnalyzer {
     /// When true, skip embedded payload detection to prevent recursion.
     /// Set for analyzers created for inner analysis (e.g. decoded PowerShell).
     skip_embedded_detection: bool,
+    /// Per-request cancellation flag.
+    cancellation: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
 }
 
 impl std::fmt::Debug for UnifiedSourceAnalyzer {
@@ -343,6 +345,7 @@ impl UnifiedSourceAnalyzer {
             parser: RefCell::new(parser),
             capability_mapper: Arc::new(CapabilityMapper::empty()),
             skip_embedded_detection: false,
+            cancellation: None,
         })
     }
 
@@ -374,6 +377,16 @@ impl UnifiedSourceAnalyzer {
         self
     }
 
+    /// Set per-request cancellation flag.
+    #[must_use]
+    pub(crate) fn with_cancellation(
+        mut self,
+        flag: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+    ) -> Self {
+        self.cancellation = flag;
+        self
+    }
+
     pub(crate) fn analyze_source(&self, file_path: &Path, content: &str) -> AnalysisReport {
         // For backward compatibility, use UTF-8 bytes
         self.analyze_source_with_original(file_path, content, content.as_bytes())
@@ -385,7 +398,15 @@ impl UnifiedSourceAnalyzer {
         content: &str,
         original_bytes: &[u8],
     ) -> AnalysisReport {
-        self.analyze_source_impl(file_path, content, original_bytes, &[], &[], None)
+        self.analyze_source_impl(
+            file_path,
+            content,
+            original_bytes,
+            &[],
+            &[],
+            None,
+            self.cancellation.as_ref(),
+        )
     }
 
     fn analyze_source_impl(
@@ -396,6 +417,7 @@ impl UnifiedSourceAnalyzer {
         preextracted_stng: &[stng::ExtractedString],
         preextracted_payloads: &[crate::types::ExtractedPayload],
         precomputed_sha256: Option<String>,
+        cancellation: Option<&std::sync::Arc<std::sync::atomic::AtomicBool>>,
     ) -> AnalysisReport {
         let start = std::time::Instant::now();
 
@@ -562,6 +584,9 @@ impl UnifiedSourceAnalyzer {
         };
 
         for (idx, payload) in extracted_payloads.iter().enumerate() {
+            if cancellation.map_or(false, |c| c.load(std::sync::atomic::Ordering::Relaxed)) {
+                break;
+            }
             // Create virtual path with encoding info using ## delimiter for decoded content
             let virtual_path = crate::types::encode_decoded_path(
                 &file_path.display().to_string(),
@@ -588,6 +613,7 @@ impl UnifiedSourceAnalyzer {
                     UnifiedSourceAnalyzer::for_file_type(&FileType::Python).map(|analyzer| {
                         analyzer
                             .with_capability_mapper_arc(self.capability_mapper.clone())
+                            .with_cancellation(cancellation.cloned())
                             .analyze_source(
                                 Path::new(&virtual_path),
                                 &String::from_utf8_lossy(&payload_content),
@@ -598,6 +624,7 @@ impl UnifiedSourceAnalyzer {
                     UnifiedSourceAnalyzer::for_file_type(&FileType::Shell).map(|analyzer| {
                         analyzer
                             .with_capability_mapper_arc(self.capability_mapper.clone())
+                            .with_cancellation(cancellation.cloned())
                             .analyze_source(
                                 Path::new(&virtual_path),
                                 &String::from_utf8_lossy(&payload_content),
@@ -642,6 +669,9 @@ impl UnifiedSourceAnalyzer {
         if matches!(self.config.file_type, "javascript" | "typescript") {
             let aes_payloads = crate::extractors::extract_aes_payloads(content.as_bytes());
             for (idx, payload) in aes_payloads.iter().enumerate() {
+                if cancellation.map_or(false, |c| c.load(std::sync::atomic::Ordering::Relaxed)) {
+                    break;
+                }
                 // Create virtual path with encoding info
                 let virtual_path = crate::types::encode_decoded_path(
                     &file_path.display().to_string(),
@@ -668,6 +698,7 @@ impl UnifiedSourceAnalyzer {
                             |analyzer| {
                                 analyzer
                                     .with_capability_mapper_arc(self.capability_mapper.clone())
+                                    .with_cancellation(cancellation.cloned())
                                     .analyze_source(
                                         Path::new(&virtual_path),
                                         &String::from_utf8_lossy(&payload_content),
@@ -679,6 +710,7 @@ impl UnifiedSourceAnalyzer {
                         .map(|analyzer| {
                             analyzer
                                 .with_capability_mapper_arc(self.capability_mapper.clone())
+                                .with_cancellation(cancellation.cloned())
                                 .analyze_source(
                                     Path::new(&virtual_path),
                                     &String::from_utf8_lossy(&payload_content),
@@ -688,6 +720,7 @@ impl UnifiedSourceAnalyzer {
                         UnifiedSourceAnalyzer::for_file_type(&FileType::Shell).map(|analyzer| {
                             analyzer
                                 .with_capability_mapper_arc(self.capability_mapper.clone())
+                                .with_cancellation(cancellation.cloned())
                                 .analyze_source(
                                     Path::new(&virtual_path),
                                     &String::from_utf8_lossy(&payload_content),
@@ -1294,7 +1327,10 @@ impl Analyzer for UnifiedSourceAnalyzer {
 
         let content = String::from_utf8_lossy(&bytes);
 
-        // Pass pre-extracted stng strings and payloads to avoid redundant extraction
+        // Pass pre-extracted stng strings and payloads to avoid redundant extraction.
+        // Merge cancellation: prefer struct field (set via builder), fall back to input field
+        // (set by the server when it doesn't go through analyzer_for_file_type_arc).
+        let effective_cancellation = self.cancellation.as_ref().or(input.cancellation.as_ref());
         Ok(self.analyze_source_impl(
             input.path,
             &content,
@@ -1302,6 +1338,7 @@ impl Analyzer for UnifiedSourceAnalyzer {
             input.strings,
             input.payloads,
             input.sha256.clone(),
+            effective_cancellation,
         ))
     }
 

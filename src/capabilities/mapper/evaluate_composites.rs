@@ -159,6 +159,7 @@ impl super::CapabilityMapper {
                 | RuleFileType::Dylib
                 | RuleFileType::Jpeg
                 | RuleFileType::Png
+                | RuleFileType::Pdf
         );
         let binary_like_text_blob = report
             .metrics

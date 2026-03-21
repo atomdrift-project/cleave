@@ -5,7 +5,7 @@
 
 #![allow(unreachable_pub)]
 
-#[cfg(all(unix, feature = "jemalloc"))]
+#[cfg(all(unix, feature = "jemalloc", not(any(target_os = "freebsd", target_os = "dragonfly"))))]
 #[global_allocator]
 static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 

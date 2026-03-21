@@ -417,7 +417,7 @@ pub struct JemallocStats {
 /// Advances the jemalloc epoch first so the returned values are fresh.
 #[must_use]
 pub fn jemalloc_stats() -> Option<JemallocStats> {
-    #[cfg(all(unix, feature = "jemalloc"))]
+    #[cfg(all(unix, feature = "jemalloc", not(any(target_os = "freebsd", target_os = "dragonfly"))))]
     {
         use tikv_jemalloc_ctl::{epoch, stats};
 
@@ -433,7 +433,7 @@ pub fn jemalloc_stats() -> Option<JemallocStats> {
         })
     }
 
-    #[cfg(not(all(unix, feature = "jemalloc")))]
+    #[cfg(not(all(unix, feature = "jemalloc", not(any(target_os = "freebsd", target_os = "dragonfly")))))]
     None
 }
 
@@ -446,7 +446,7 @@ pub fn jemalloc_stats() -> Option<JemallocStats> {
 ///
 /// No-op when jemalloc is not the allocator.
 pub fn configure_jemalloc_low_memory() {
-    #[cfg(all(unix, feature = "jemalloc"))]
+    #[cfg(all(unix, feature = "jemalloc", not(any(target_os = "freebsd", target_os = "dragonfly"))))]
     {
         // tikv-jemalloc-ctl 0.6 doesn't expose dirty_decay_ms/muzzy_decay_ms
         // as typed helpers, so use the raw mallctl interface.
@@ -477,7 +477,11 @@ pub fn log_startup_diagnostics() {
     let warn_mb = sysmem::warning_threshold() / 1024 / 1024;
     let rss_mb = current_rss().map(|r| r / 1024 / 1024);
 
-    let allocator = if cfg!(all(unix, feature = "jemalloc")) {
+    let allocator = if cfg!(all(
+        unix,
+        feature = "jemalloc",
+        not(any(target_os = "freebsd", target_os = "dragonfly"))
+    )) {
         "jemalloc"
     } else {
         "system"

@@ -24,6 +24,12 @@ pub(crate) const MAX_FILE_COUNT: usize = 10_000;
 
 /// Maximum compression ratio before considering it suspicious (100:1)
 pub(crate) const MAX_COMPRESSION_RATIO: u64 = 100;
+/// Minimum expanded size before a high compression ratio is treated as a bomb.
+///
+/// This keeps the ratio heuristic focused on materially dangerous expansion
+/// rather than compact single-stream fixtures that compress well but remain
+/// under the normal per-file extraction cap.
+pub(crate) const MIN_ZIP_BOMB_UNCOMPRESSED_SIZE: u64 = 100 * 1024 * 1024;
 
 /// Reasons an archive may be considered hostile
 #[derive(Debug, Clone)]
@@ -114,7 +120,10 @@ impl ExtractionGuard {
 
     /// Check compression ratio for zip bomb detection
     pub(crate) fn check_compression_ratio(&self, compressed: u64, uncompressed: u64) -> bool {
-        if compressed > 0 && uncompressed / compressed > MAX_COMPRESSION_RATIO {
+        if compressed > 0
+            && uncompressed / compressed > MAX_COMPRESSION_RATIO
+            && uncompressed >= MIN_ZIP_BOMB_UNCOMPRESSED_SIZE
+        {
             self.add_hostile_reason(HostileArchiveReason::ZipBomb {
                 compressed,
                 uncompressed,

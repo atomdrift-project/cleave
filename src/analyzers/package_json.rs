@@ -787,6 +787,8 @@ impl PackageJsonAnalyzer {
     }
 
     fn check_metadata(&self, pkg: &PackageJson, report: &mut AnalysisReport) {
+        let is_official_react_native = self.is_official_react_native_package(pkg);
+
         // Check for empty or missing author (suspicious for published packages)
         let author_empty = match &pkg.author {
             None => true,
@@ -799,7 +801,11 @@ impl PackageJsonAnalyzer {
             _ => false,
         };
 
-        if author_empty && !pkg.r#private && !has_local_dependency_protocols(pkg) {
+        if author_empty
+            && !pkg.r#private
+            && !has_local_dependency_protocols(pkg)
+            && !is_official_react_native
+        {
             report.add_finding(
                 Finding::indicator(
                     "supply-chain/missing-author".to_string(),
@@ -819,7 +825,7 @@ impl PackageJsonAnalyzer {
 
         // Check for suspicious package name patterns
         if let Some(name) = &pkg.name {
-            if self.is_suspicious_package_name(name) {
+            if self.is_suspicious_package_name(name) && !is_official_react_native {
                 report.add_finding(
                     Finding::indicator(
                         "supply-chain/suspicious-name".to_string(),
@@ -868,6 +874,7 @@ impl PackageJsonAnalyzer {
     }
 
     fn analyze_dependencies(&self, pkg: &PackageJson, report: &mut AnalysisReport) {
+        let is_official_react_native = self.is_official_react_native_package(pkg);
         let all_deps: Vec<(&str, &str)> = pkg
             .dependencies
             .iter()
@@ -920,7 +927,9 @@ impl PackageJsonAnalyzer {
             }
 
             // Check for known malicious package patterns
-            if self.is_suspicious_package_name(name) {
+            if self.is_suspicious_package_name(name)
+                && !(is_official_react_native && name.starts_with("@react-native/"))
+            {
                 report.add_finding(
                     Finding::indicator(
                         "supply-chain/suspicious-package".to_string(),
@@ -1060,7 +1069,9 @@ impl PackageJsonAnalyzer {
     }
 
     fn is_suspicious_package_name(&self, name: &str) -> bool {
-        let suspicious_patterns = [
+        let package_segment = name.rsplit('/').next().unwrap_or(name);
+
+        let suspicious_prefixes = [
             // Known malicious naming patterns
             "color-",
             "colours-",
@@ -1069,6 +1080,9 @@ impl PackageJsonAnalyzer {
             "babel-",
             "eslint-config-",
             "webpack-",
+        ];
+
+        let suspicious_contains = [
             // Suspicious prefixes/suffixes
             "-malware",
             "-stealer",
@@ -1077,17 +1091,23 @@ impl PackageJsonAnalyzer {
             "backdoor",
         ];
 
-        for pattern in suspicious_patterns {
-            if name.contains(pattern) && !self.is_known_legitimate(name) {
+        for pattern in suspicious_prefixes {
+            if package_segment.starts_with(pattern) && !self.is_known_legitimate(name) {
+                return true;
+            }
+        }
+
+        for pattern in suspicious_contains {
+            if package_segment.contains(pattern) && !self.is_known_legitimate(name) {
                 return true;
             }
         }
 
         // Check for obfuscated names (random characters) — single pass
-        if name.len() > 10 {
+        if package_segment.len() > 10 {
             let mut digit_count = 0u32;
             let mut all_lower_or_digit = true;
-            for b in name.bytes() {
+            for b in package_segment.bytes() {
                 if b.is_ascii_digit() {
                     digit_count += 1;
                 } else if !b.is_ascii_lowercase()
@@ -1105,6 +1125,22 @@ impl PackageJsonAnalyzer {
         }
 
         false
+    }
+
+    fn is_official_react_native_package(&self, pkg: &PackageJson) -> bool {
+        let Some(name) = pkg.name.as_deref() else {
+            return false;
+        };
+
+        if !name.starts_with("@react-native/") {
+            return false;
+        }
+
+        let Some(repository) = pkg.repository.as_ref() else {
+            return false;
+        };
+
+        repository.to_string().contains("facebook/react-native")
     }
 
     fn is_known_legitimate(&self, name: &str) -> bool {
@@ -1467,6 +1503,12 @@ mod tests {
         assert!(analyzer.check_typosquat("axio").is_some());
         assert!(analyzer.check_typosquat("reac").is_some());
         assert!(analyzer.check_typosquat("lodash").is_none()); // Legitimate
+    }
+
+    #[test]
+    fn test_scoped_devdependency_with_internal_webpack_substring_is_not_suspicious() {
+        let analyzer = PackageJsonAnalyzer::new();
+        assert!(!analyzer.is_suspicious_package_name("@soda/friendly-errors-webpack-plugin"));
     }
 
     #[test]

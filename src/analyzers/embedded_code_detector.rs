@@ -4,7 +4,7 @@
 //! Detects Python, JavaScript, Shell, and PHP code in strings and re-analyzes them with full
 //! AST parsing and capability detection.
 
-use crate::analyzers::{unified::UnifiedSourceAnalyzer, FileType};
+use crate::analyzers::{detect_file_type_from_path, unified::UnifiedSourceAnalyzer, FileType};
 use crate::capabilities::CapabilityMapper;
 use crate::types::binary::StringInfo;
 use crate::types::file_analysis::{encode_decoded_path, FileAnalysis};
@@ -270,6 +270,17 @@ fn is_probable_php(value: &str, is_encoded: bool) -> bool {
     markers.iter().any(|marker| value.contains(marker))
 }
 
+fn is_top_level_self_detection(
+    parent_path: &str,
+    is_encoded: bool,
+    offset: u64,
+    file_type: &FileType,
+) -> bool {
+    !is_encoded
+        && offset == 0
+        && detect_file_type_from_path(Path::new(parent_path)) == *file_type
+}
+
 /// Calculate Shannon entropy of data
 fn calculate_entropy(data: &[u8]) -> f64 {
     if data.is_empty() {
@@ -395,6 +406,12 @@ pub fn analyze_embedded_string(
     let detect_time = t_detect.elapsed();
 
     let offset = string_info.offset.unwrap_or(0);
+
+    // Avoid reporting the parent file itself as "embedded" code when the detector
+    // reclassifies the full source buffer starting at offset 0x0.
+    if is_top_level_self_detection(parent_path, is_encoded, offset, &file_type) {
+        anyhow::bail!("Top-level source self-detected as embedded code");
+    }
 
     // Create virtual path
     let virtual_path = if is_encoded {
@@ -861,6 +878,34 @@ mod tests {
             "function test() {\n  const x = require('fs');\n  eval(x);\n  console.log('done');\n}";
         let info = make_string_info(code);
         assert_eq!(detect_language(&info, false), Some(FileType::JavaScript));
+    }
+
+    #[test]
+    fn test_top_level_self_detection_for_php_is_suppressed() {
+        assert!(is_top_level_self_detection(
+            "archive.zip!!src/ParseException.php",
+            false,
+            0,
+            &FileType::Php
+        ));
+        assert!(!is_top_level_self_detection(
+            "archive.zip!!src/ParseException.php",
+            true,
+            0,
+            &FileType::Php
+        ));
+        assert!(!is_top_level_self_detection(
+            "archive.zip!!src/ParseException.php",
+            false,
+            32,
+            &FileType::Php
+        ));
+        assert!(!is_top_level_self_detection(
+            "archive.zip!!src/ParseException.php",
+            false,
+            0,
+            &FileType::JavaScript
+        ));
     }
 
     #[test]

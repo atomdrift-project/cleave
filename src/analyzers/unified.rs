@@ -475,13 +475,12 @@ impl UnifiedSourceAnalyzer {
                 file_path.display()
             );
             let mut finding = crate::types::Finding::new(
-                "anti-analysis/obfuscation/timeout".to_string(),
-                crate::types::FindingKind::Capability,
-                "AST parsing timed out, indicating severe obfuscation or extreme code complexity."
-                    .to_string(),
-                1.0,
+                "metadata/analysis/ast-timeout".to_string(),
+                crate::types::FindingKind::Structural,
+                "AST parsing timed out; deep AST analysis was skipped.".to_string(),
+                0.4,
             );
-            finding.crit = crate::types::Criticality::Suspicious;
+            finding.crit = crate::types::Criticality::Component;
             report.findings.push(finding);
         }
 

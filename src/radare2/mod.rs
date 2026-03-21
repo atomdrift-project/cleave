@@ -269,7 +269,7 @@ pub(crate) struct BatchedAnalysis {
     pub strings: Vec<R2String>,
     #[serde(default)]
     pub imports: Vec<R2Import>,
-    /// True if rizin analysis timed out - indicates potential anti-analysis
+    /// True if rizin analysis timed out and returned no batched results.
     #[serde(default)]
     pub timed_out: bool,
 }
@@ -429,8 +429,7 @@ impl Radare2Analyzer {
 
         trace!(command = command, "Executing rizin batched analysis");
 
-        // Use 60 second timeout - if rizin can't finish in time,
-        // the binary is likely packed/obfuscated (anti-analysis)
+        // Use a bounded timeout so one slow file does not stall the whole scan.
         let timeout = Duration::from_secs(60);
 
         let output = execute_rizin_with_timeout(
@@ -447,14 +446,13 @@ impl Radare2Analyzer {
             timeout,
         );
 
-        // Handle timeout as potential anti-analysis indicator
+        // Handle timeout as a tool limitation; callers may choose how to surface it.
         let output = match output {
             Ok(out) => out,
             Err(e) => {
                 let err_str = e.to_string();
                 if err_str.contains("timed out") {
-                    // Timeout likely indicates anti-analysis or packed binary
-                    warn!("Rizin analysis timed out after 60s - binary may be packed or anti-analysis");
+                    warn!("Rizin analysis timed out after 60s; continuing without batched rizin data");
                     // Return result with timed_out flag set - consumers can add finding
                     return Ok(BatchedAnalysis {
                         timed_out: true,

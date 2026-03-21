@@ -14,7 +14,9 @@ use crate::composite_rules::{
     Arch, CompositeTrait, Condition, FileType as RuleFileType, Platform, SectionMap,
     TraitDefinition,
 };
-use crate::types::{AnalysisReport, Criticality, Finding, FindingKind, TargetInfo};
+use crate::types::{
+    AnalysisReport, Criticality, Finding, FindingKind, Metrics, TargetInfo, TextMetrics,
+};
 use anyhow::Result;
 use std::path::Path;
 
@@ -898,6 +900,39 @@ fn test_finding(id: &str) -> Finding {
         match_count: 0,
         source_file: None,
     }
+}
+
+#[test]
+fn test_excessive_line_length_skips_binary_like_unknown_blob() {
+    let mapper = CapabilityMapper::empty();
+    let mut report = test_report_with_findings(vec![]);
+    report.target.file_type = "unknown".to_string();
+    report.metrics = Some(Metrics {
+        text: Some(TextMetrics {
+            null_byte_count: 67_036_441,
+            non_printable_ratio: 0.9985,
+            max_line_length: 60_237_102,
+            most_common_char: Some('\0'),
+            most_common_ratio: 0.9982,
+            ..Default::default()
+        }),
+        ..Default::default()
+    });
+
+    let findings = mapper.evaluate_composite_rules(
+        &report,
+        &[0; 16],
+        None,
+        None,
+        &SectionMap::default(),
+        None,
+    );
+
+    assert!(
+        !findings
+            .iter()
+            .any(|f| f.id == "objectives/anti-static/excessive-line-length")
+    );
 }
 
 #[test]

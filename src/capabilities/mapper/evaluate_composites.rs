@@ -160,7 +160,18 @@ impl super::CapabilityMapper {
                 | RuleFileType::Jpeg
                 | RuleFileType::Png
         );
-        let has_excessive_line = if is_binary_format {
+        let binary_like_text_blob = report
+            .metrics
+            .as_ref()
+            .and_then(|metrics| metrics.text.as_ref())
+            .is_some_and(|text| {
+                text.null_byte_count >= 4_096
+                    || (text.non_printable_ratio >= 0.30
+                        && text.max_line_length > MAX_LINE_LENGTH as u32)
+                    || (text.most_common_char == Some('\0') && text.most_common_ratio >= 0.80)
+            });
+
+        let has_excessive_line = if is_binary_format || binary_like_text_blob {
             false
         } else {
             let content = String::from_utf8_lossy(binary_data);

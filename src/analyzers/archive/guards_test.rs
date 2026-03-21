@@ -128,8 +128,8 @@ fn test_compression_ratio_normal() {
 fn test_compression_ratio_bomb_detected() {
     let guard = ExtractionGuard::new();
 
-    // 200:1 ratio - suspicious (exceeds MAX_COMPRESSION_RATIO of 100)
-    assert!(!guard.check_compression_ratio(1000, 200_000));
+    // 200:1 ratio on a large payload should still be suspicious.
+    assert!(!guard.check_compression_ratio(1000, 200_000_000));
 
     let reasons = guard.take_reasons();
     assert_eq!(reasons.len(), 1);
@@ -141,16 +141,28 @@ fn test_compression_ratio_extreme_bomb() {
     let guard = ExtractionGuard::new();
 
     // 10000:1 ratio - extreme zip bomb
-    assert!(!guard.check_compression_ratio(100, 1_000_000));
+    assert!(!guard.check_compression_ratio(100, 1_000_000_000));
 
     let reasons = guard.take_reasons();
     assert_eq!(reasons.len(), 1);
     if let HostileArchiveReason::ZipBomb { compressed, uncompressed } = &reasons[0] {
         assert_eq!(*compressed, 100);
-        assert_eq!(*uncompressed, 1_000_000);
+        assert_eq!(*uncompressed, 1_000_000_000);
     } else {
         panic!("Expected ZipBomb reason");
     }
+}
+
+#[test]
+fn test_compression_ratio_high_but_safe_sized_blob() {
+    let guard = ExtractionGuard::new();
+
+    // High ratio alone should not flag when the expanded payload remains under
+    // the normal per-file extraction limit.
+    assert!(guard.check_compression_ratio(32_498, 67_108_864));
+
+    let reasons = guard.take_reasons();
+    assert_eq!(reasons.len(), 0);
 }
 
 #[test]

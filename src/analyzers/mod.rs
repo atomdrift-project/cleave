@@ -453,6 +453,21 @@ pub(crate) fn detect_file_type_from_data(file_path: &Path, file_data: &[u8]) -> 
         }
         return ft;
     }
+    // Plain XML documentation and manifest files should not fall through into
+    // source-language heuristics such as Python detection.
+    if file_path
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("xml"))
+    {
+        let head = &file_data[..file_data.len().min(256)];
+        if head.starts_with(b"<?xml")
+            || memchr::memmem::find(head, b"<doc>").is_some()
+            || memchr::memmem::find(head, b"<doc ").is_some()
+        {
+            return FileType::Unknown;
+        }
+    }
     // 3. Loose content heuristics — last resort for extensionless/unrecognized files
     detect_by_content_heuristics(file_data).unwrap_or(FileType::Unknown)
 }

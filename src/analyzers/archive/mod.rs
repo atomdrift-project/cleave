@@ -1646,8 +1646,8 @@ composite_rules:
         // Normal ratio should pass
         assert!(guard.check_compression_ratio(1000, 2000)); // 2:1
 
-        // Suspicious ratio should fail
-        assert!(!guard.check_compression_ratio(100, 100_000)); // 1000:1
+        // Suspicious ratio on a large payload should fail
+        assert!(!guard.check_compression_ratio(100, 200_000_000)); // 2_000_000:1
 
         let reasons = guard.take_reasons();
         assert!(reasons

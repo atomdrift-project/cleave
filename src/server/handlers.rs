@@ -270,9 +270,15 @@ async fn analyze_inner(
         .next_request_id
         .load(std::sync::atomic::Ordering::Relaxed)
         .is_multiple_of(50);
+    let cancellation = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let cancellation_for_task = cancellation.clone();
     let mut handle = tokio::task::spawn_blocking(move || {
         let _enter = task_span.enter();
-        let result = analyze_file(&path, &AnalysisOptions::default());
+        let opts = AnalysisOptions {
+            cancellation: Some(cancellation_for_task),
+            ..AnalysisOptions::default()
+        };
+        let result = analyze_file(&path, &opts);
         if should_clear_caches {
             crate::clear_all_thread_caches();
         }
@@ -285,8 +291,7 @@ async fn analyze_inner(
     };
 
     // On success/error, the blocking task is done — decrement and clean up.
-    // On timeout, the task is still running — spawn a watcher that gives
-    // the task a bounded grace period before abandoning it.
+    // On timeout, signal cancellation and give the task a short grace period.
     if result.is_some() {
         state
             .active_tasks
@@ -294,6 +299,7 @@ async fn analyze_inner(
         state.in_flight.remove(&request_id);
         drop(temp_file);
     } else {
+        cancellation.store(true, std::sync::atomic::Ordering::Relaxed);
         let active = state
             .active_tasks
             .load(std::sync::atomic::Ordering::Relaxed);
@@ -303,16 +309,11 @@ async fn analyze_inner(
             "Analysis timed out but blocking task still running"
         );
         let orphan_state = Arc::clone(&state);
-        let orphan_timeout = Duration::from_secs(state.timeout_secs * 2);
+        let orphan_timeout = Duration::from_secs(30);
         tokio::spawn(async move {
             match tokio::time::timeout(orphan_timeout, handle).await {
-                Ok(_) => {
-                    // Task completed within grace period
-                }
+                Ok(_) => {}
                 Err(_) => {
-                    // Task still running after 2× timeout — abandon it.
-                    // The blocking thread will eventually finish and its
-                    // result will be dropped, but we stop tracking it.
                     tracing::error!(
                         request_id,
                         "Orphaned analysis task exceeded grace period, abandoning"

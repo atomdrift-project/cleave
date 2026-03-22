@@ -504,6 +504,16 @@ impl UnifiedSourceAnalyzer {
             );
             finding.crit = crate::types::Criticality::Component;
             report.findings.push(finding);
+
+            // Still compute text metrics even without the AST — they are pure O(n)
+            // text passes (no tree-sitter) and give metric-based rules something to
+            // evaluate.  For a large single-line minified/obfuscated file the
+            // resulting max_line_length alone is a strong indicator.
+            let text = crate::analyzers::text_metrics::analyze_text(content);
+            report.metrics = Some(crate::types::Metrics {
+                text: Some(text),
+                ..Default::default()
+            });
         }
 
         // Use pre-extracted stng strings if available, otherwise use parallel extracted ones

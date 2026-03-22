@@ -143,7 +143,16 @@ pub(crate) fn eval_ast<'a>(
         );
     }
 
-    // No cached AST - parse on demand (with warning)
+    // No cached AST: the primary parse either timed out or was never attempted.
+    // For large files the primary parse already failed — re-parsing per-rule would
+    // only duplicate the failure while burning memory across every rayon thread.
+    // Bail out immediately for anything over the threshold; smaller files get a
+    // bounded fallback parse below (safety net for file types generic.rs handles).
+    const MAX_FALLBACK_PARSE_BYTES: usize = 2_000_000; // 2 MB
+    if ctx.binary_data.len() > MAX_FALLBACK_PARSE_BYTES {
+        return ConditionResult::no_match();
+    }
+
     static WARNED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
     if !WARNED.swap(true, std::sync::atomic::Ordering::Relaxed) {
         tracing::info!(file_type = ?ctx.file_type, "AST cache miss — re-parsing AST for each trait");
@@ -184,7 +193,24 @@ pub(crate) fn eval_ast<'a>(
         return ConditionResult::no_match();
     }
 
-    let Some(tree) = parser.parse(source, None) else {
+    // Use a 4-second timeout for fallback parses to avoid unbounded memory growth
+    // when the primary parse already timed out (e.g. huge minified JS files).
+    let fallback_deadline = std::time::Instant::now() + std::time::Duration::from_secs(4);
+    let mut parse_opts = tree_sitter::ParseOptions::new();
+    let mut timeout_cb = |_: &tree_sitter::ParseState| -> std::ops::ControlFlow<()> {
+        if std::time::Instant::now() > fallback_deadline {
+            std::ops::ControlFlow::Break(())
+        } else {
+            std::ops::ControlFlow::Continue(())
+        }
+    };
+    parse_opts.progress_callback = Some(&mut timeout_cb);
+    let src_bytes = source.as_bytes();
+    let Some(tree) = parser.parse_with_options(
+        &mut |i, _| if i < src_bytes.len() { &src_bytes[i..] } else { &[] },
+        None,
+        Some(parse_opts),
+    ) else {
         return ConditionResult::no_match();
     };
 
@@ -356,16 +382,39 @@ pub(crate) fn eval_ast_query<'a>(query_str: &str, ctx: &EvaluationContext<'a>) -
         _ => return ConditionResult::no_match(),
     };
 
-    // Use cached AST if available, otherwise parse on demand
+    // Use cached AST if available, otherwise attempt a bounded fallback parse.
+    // Large files skip the fallback immediately: if the primary parse timed out,
+    // a per-rule re-parse across N rayon threads would replicate the failure while
+    // spiking RSS proportionally to thread count.
     let parsed_tree;
     let tree = if let Some(cached) = ctx.cached_ast {
         cached
     } else {
+        const MAX_FALLBACK_PARSE_BYTES: usize = 2_000_000; // 2 MB
+        if source.len() > MAX_FALLBACK_PARSE_BYTES {
+            return ConditionResult::no_match();
+        }
         let mut parser = tree_sitter::Parser::new();
         if parser.set_language(&lang).is_err() {
             return ConditionResult::no_match();
         }
-        parsed_tree = match parser.parse(source, None) {
+        // Bounded fallback parse: 4-second timeout as a safety net.
+        let fallback_deadline = std::time::Instant::now() + std::time::Duration::from_secs(4);
+        let mut parse_opts = tree_sitter::ParseOptions::new();
+        let mut timeout_cb = |_: &tree_sitter::ParseState| -> std::ops::ControlFlow<()> {
+            if std::time::Instant::now() > fallback_deadline {
+                std::ops::ControlFlow::Break(())
+            } else {
+                std::ops::ControlFlow::Continue(())
+            }
+        };
+        parse_opts.progress_callback = Some(&mut timeout_cb);
+        let src_bytes = source.as_bytes();
+        parsed_tree = match parser.parse_with_options(
+            &mut |i, _| if i < src_bytes.len() { &src_bytes[i..] } else { &[] },
+            None,
+            Some(parse_opts),
+        ) {
             Some(t) => t,
             None => return ConditionResult::no_match(),
         };

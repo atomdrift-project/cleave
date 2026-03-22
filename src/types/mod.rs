@@ -186,6 +186,17 @@ impl SampleExtractionConfig {
         let sha_dir = self.extract_dir.join(short_sha);
         let full_path = sha_dir.join(relative_path);
 
+        // Reject path traversal attempts — full_path must stay inside extract_dir.
+        // This is defence-in-depth: archive entry names are already sanitized upstream,
+        // but an absolute or ../-containing relative_path must never escape extract_dir.
+        if !full_path.starts_with(&self.extract_dir) {
+            tracing::warn!(
+                "Rejecting extract_dir path traversal attempt: {}",
+                full_path.display()
+            );
+            return None;
+        }
+
         // Skip if file already exists with correct size (same sha256 + size = same content)
         if let Ok(metadata) = std::fs::metadata(&full_path) {
             if metadata.len() == data.len() as u64 {

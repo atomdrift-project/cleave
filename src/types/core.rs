@@ -12,13 +12,12 @@ use super::scores::Metrics;
 use super::traits_findings::{Finding, StructuralFeature, Trait};
 use crate::analyzers::FileType;
 use crate::malecule_bridge;
-use std::path::PathBuf;
 
 /// Represents an extracted payload (e.g., base64, hex, XOR)
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug)]
 pub struct ExtractedPayload {
-    /// Path to temp file containing decoded content
-    pub temp_path: PathBuf,
+    /// Temp file containing decoded content — deleted automatically on drop
+    pub temp_path: tempfile::TempPath,
     /// Chain of encodings (e.g., ["base64", "zlib"])
     pub encoding_chain: Vec<String>,
     /// Preview of content (first 40 chars, printable only)

@@ -16,14 +16,13 @@
 use crate::analyzers::FileType;
 use regex::Regex;
 use std::io::Write;
-use std::path::PathBuf;
 use std::sync::LazyLock;
 
 /// Represents an extracted AES-encrypted payload
 #[derive(Debug)]
 pub(crate) struct AesExtractedPayload {
-    /// Path to temp file containing decrypted content
-    pub temp_path: PathBuf,
+    /// Temp file containing decrypted content — deleted automatically on drop
+    pub temp_path: tempfile::TempPath,
     /// Encoding chain (e.g., ["aes-256-cbc"])
     pub encoding_chain: Vec<String>,
     /// Preview of decrypted content (first 40 chars, printable only)
@@ -387,26 +386,20 @@ pub(crate) fn extract_aes_payloads(content: &[u8]) -> Vec<AesExtractedPayload> {
                     decrypt_nested(&decrypted, vec![params.algorithm.clone()], 1);
 
                 // Write to temp file
-                if let Ok(temp_file) = tempfile::NamedTempFile::new() {
-                    let temp_path = temp_file.path().to_path_buf();
+                if let Ok(mut temp_file) = tempfile::NamedTempFile::new() {
+                    if temp_file.write_all(&final_decrypted).is_ok() {
+                        payloads.push(AesExtractedPayload {
+                            temp_path: temp_file.into_temp_path(),
+                            encoding_chain,
+                            preview: generate_preview(&final_decrypted),
+                            detected_type,
+                            original_offset: blob.offset,
+                            algorithm: params.algorithm.clone(),
+                        });
 
-                    if let Ok(mut file) = std::fs::File::create(&temp_path) {
-                        if file.write_all(&final_decrypted).is_ok() {
-                            let _ = temp_file.keep();
-
-                            payloads.push(AesExtractedPayload {
-                                temp_path,
-                                encoding_chain,
-                                preview: generate_preview(&final_decrypted),
-                                detected_type,
-                                original_offset: blob.offset,
-                                algorithm: params.algorithm.clone(),
-                            });
-
-                            // Found a valid decryption, don't try other combinations
-                            // for this ciphertext
-                            break;
-                        }
+                        // Found a valid decryption, don't try other combinations
+                        // for this ciphertext
+                        break;
                     }
                 }
             }

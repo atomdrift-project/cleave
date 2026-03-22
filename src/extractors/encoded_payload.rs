@@ -396,22 +396,15 @@ fn process_decoded_string(
     let _suspicion = classify_payload_suspicion(&final_bytes);
 
     // Create temp file for recursive analysis
-    if let Ok(temp_file) = tempfile::NamedTempFile::new() {
-        let temp_path = temp_file.path().to_path_buf();
-
-        if let Ok(mut file) = std::fs::File::create(&temp_path) {
-            if file.write_all(&final_bytes).is_ok() {
-                // Keep temp file (don't drop)
-                let _ = temp_file.keep();
-
-                payloads.push(ExtractedPayload {
-                    temp_path,
-                    encoding_chain: final_chain,
-                    preview: generate_preview(&final_bytes),
-                    detected_type: FileType::Unknown, // Will be determined during recursive analysis
-                    original_offset: decoded_str.data_offset as usize,
-                });
-            }
+    if let Ok(mut temp_file) = tempfile::NamedTempFile::new() {
+        if temp_file.write_all(&final_bytes).is_ok() {
+            payloads.push(ExtractedPayload {
+                temp_path: temp_file.into_temp_path(),
+                encoding_chain: final_chain,
+                preview: generate_preview(&final_bytes),
+                detected_type: FileType::Unknown, // Will be determined during recursive analysis
+                original_offset: decoded_str.data_offset as usize,
+            });
         }
     }
 }

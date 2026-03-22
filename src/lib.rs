@@ -1011,10 +1011,6 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
                 }
             }
         }
-        // Clean up the temp file created by encoded_payload::extract_encoded_payloads().
-        // These are .keep()'d NamedTempFiles that would otherwise persist for the
-        // entire process lifetime, accumulating disk and mmap RSS.
-        let _ = std::fs::remove_file(&payload.temp_path);
     }
     let stage_payloads_ms = payloads_start.elapsed().as_millis() as u64;
 

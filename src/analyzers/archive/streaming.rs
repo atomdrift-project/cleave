@@ -102,6 +102,19 @@ impl ArchiveAnalyzer {
                 tracing::info!("File cache hit (cross-context)");
                 cached.path = self.format_entry_path(relative_path);
                 cached.depth = (self.current_depth + 1) as u32;
+                // Still write to extract_dir on cache hit — the file may not have been
+                // extracted in a previous run that used the same analysis cache.
+                if let Some(ref config) = self.sample_extraction {
+                    let extract_relative_path = match &self.archive_path_prefix {
+                        Some(prefix) => format!("{}/{}", prefix.replace('!', "/"), relative_path),
+                        None => relative_path.to_string(),
+                    };
+                    if let Some(extracted_path) =
+                        config.extract(&cached.sha256, &extract_relative_path, data)
+                    {
+                        cached.extracted_path = Some(extracted_path.display().to_string());
+                    }
+                }
                 return Ok(StreamingFileResult {
                     file_analysis: cached,
                     nested_files: vec![],
@@ -652,9 +665,10 @@ impl ArchiveAnalyzer {
                     temp_path,
                     file_type,
                 } => {
-                    // Read from disk and analyze
+                    // Read from disk, delete immediately, then analyze
                     match std::fs::read(temp_path) {
                         Ok(data) => {
+                            let _ = std::fs::remove_file(temp_path);
                             total_bytes_ref.fetch_add(data.len() as u64, Ordering::Relaxed);
                             analyzer_ref.analyze_in_memory(path, &data, file_type)
                         }
@@ -916,6 +930,7 @@ impl ArchiveAnalyzer {
                     file_type,
                 } => match std::fs::read(temp_path) {
                     Ok(data) => {
+                        let _ = std::fs::remove_file(temp_path);
                         total_bytes_ref.fetch_add(data.len() as u64, Ordering::Relaxed);
                         analyzer_ref.analyze_in_memory(path, &data, file_type)
                     }
@@ -1122,6 +1137,7 @@ impl ArchiveAnalyzer {
                     file_type,
                 } => match std::fs::read(temp_path) {
                     Ok(data) => {
+                        let _ = std::fs::remove_file(temp_path);
                         total_bytes_ref.fetch_add(data.len() as u64, Ordering::Relaxed);
                         analyzer_ref.analyze_in_memory(path, &data, file_type)
                     }
@@ -1304,6 +1320,7 @@ impl ArchiveAnalyzer {
                     file_type,
                 } => match std::fs::read(temp_path) {
                     Ok(data) => {
+                        let _ = std::fs::remove_file(temp_path);
                         total_bytes_ref.fetch_add(data.len() as u64, Ordering::Relaxed);
                         analyzer_ref.analyze_in_memory(path, &data, file_type)
                     }
@@ -1556,6 +1573,7 @@ impl ArchiveAnalyzer {
                     file_type,
                 } => match std::fs::read(temp_path) {
                     Ok(data) => {
+                        let _ = std::fs::remove_file(temp_path);
                         total_bytes_ref.fetch_add(data.len() as u64, Ordering::Relaxed);
                         analyzer_ref.analyze_in_memory(path, &data, file_type)
                     }
@@ -1595,6 +1613,78 @@ impl ArchiveAnalyzer {
             .map_err(|_| anyhow::anyhow!("Extractor thread panicked"))??;
 
         Ok(ArchiveSummary { hostile_reasons })
+    }
+
+    /// Analyze a single-file compressed format (.gz, .xz, .bz2, .zst) in memory.
+    ///
+    /// Decompresses the file into a `Vec<u8>` (respecting the same `MAX_FILE_SIZE` limit
+    /// used for archive members) and analyzes the result via `analyze_in_memory`, so
+    /// no temp directory is created for the common case.  Only if the decompressed size
+    /// would exceed `MAX_FILE_SIZE` is the file skipped (flagged as hostile).
+    #[allow(dead_code)] // Used by binary target
+    pub(crate) fn analyze_single_compressed_streaming<F>(
+        &self,
+        file_path: &Path,
+        compression: &str,
+        on_file: F,
+    ) -> Result<ArchiveSummary>
+    where
+        F: Fn(StreamingFileResult) + Send + Sync,
+    {
+        let stem = file_path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("extracted");
+
+        // Group extract_dir output under the compressed file's sha256, consistent
+        // with how the other streaming methods group their archive members.
+        let archive_sha256 =
+            calculate_file_sha256(file_path).unwrap_or_else(|_| "unknown".to_string());
+        let analyzer = self.with_extraction_archive_sha256(&archive_sha256);
+
+        let guard = ExtractionGuard::new();
+
+        if !guard.check_file_count() {
+            return Ok(ArchiveSummary { hostile_reasons: guard.take_reasons() });
+        }
+
+        let file = std::fs::File::open(file_path)?;
+        let compressed_size = file.metadata()?.len();
+
+        let decoder: Box<dyn Read> = match compression {
+            "gzip" => Box::new(flate2::read::GzDecoder::new(file)),
+            "xz" => Box::new(xz2::read::XzDecoder::new(file)),
+            "bzip2" => Box::new(bzip2::read::BzDecoder::new(file)),
+            "zstd" => Box::new(
+                zstd::stream::read::Decoder::new(file)
+                    .map_err(|e| anyhow::anyhow!("Failed to create zstd decoder: {}", e))?,
+            ),
+            _ => anyhow::bail!("Unsupported compression: {}", compression),
+        };
+
+        let mut limited = LimitedReader::new(decoder, MAX_FILE_SIZE);
+        let mut data = Vec::new();
+        match std::io::Read::read_to_end(&mut limited, &mut data) {
+            Ok(n) => {
+                guard.check_compression_ratio(compressed_size, n as u64);
+                guard.check_bytes(n as u64, stem);
+            }
+            Err(e) if e.to_string().contains("size limit exceeded") => {
+                guard.add_hostile_reason(HostileArchiveReason::ExcessiveFileSize {
+                    file: stem.to_string(),
+                    size: MAX_FILE_SIZE,
+                });
+                return Ok(ArchiveSummary { hostile_reasons: guard.take_reasons() });
+            }
+            Err(e) => return Err(anyhow::anyhow!("Decompression failed: {}", e)),
+        }
+
+        let file_type = detect_file_type_from_path(Path::new(stem));
+        if let Ok(result) = analyzer.analyze_in_memory(stem, &data, &file_type) {
+            on_file(result);
+        }
+
+        Ok(ArchiveSummary { hostile_reasons: guard.take_reasons() })
     }
 }
 

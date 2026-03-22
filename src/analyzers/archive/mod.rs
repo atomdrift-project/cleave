@@ -419,6 +419,42 @@ impl ArchiveAnalyzer {
                     update_aggregates(nested);
                 }
             })?,
+            "gz" => self.analyze_single_compressed_streaming(
+                file_path,
+                "gzip",
+                |result: StreamingFileResult| {
+                    on_file(&result.file_analysis);
+                    files_analyzed_clone.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    update_aggregates(&result.file_analysis);
+                },
+            )?,
+            "xz" => self.analyze_single_compressed_streaming(
+                file_path,
+                "xz",
+                |result: StreamingFileResult| {
+                    on_file(&result.file_analysis);
+                    files_analyzed_clone.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    update_aggregates(&result.file_analysis);
+                },
+            )?,
+            "bz2" => self.analyze_single_compressed_streaming(
+                file_path,
+                "bzip2",
+                |result: StreamingFileResult| {
+                    on_file(&result.file_analysis);
+                    files_analyzed_clone.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    update_aggregates(&result.file_analysis);
+                },
+            )?,
+            "zst" => self.analyze_single_compressed_streaming(
+                file_path,
+                "zstd",
+                |result: StreamingFileResult| {
+                    on_file(&result.file_analysis);
+                    files_analyzed_clone.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    update_aggregates(&result.file_analysis);
+                },
+            )?,
             _ => {
                 // Fall back to non-streaming for unsupported formats (rar, pkg)
                 return self.analyze_archive(file_path);

@@ -671,8 +671,6 @@ impl UnifiedSourceAnalyzer {
                 report.files.push(file_entry);
             }
 
-            // Clean up temp file
-            let _ = std::fs::remove_file(&payload.temp_path);
         }
 
         // Extract and analyze AES-encrypted payloads (JavaScript/TypeScript)
@@ -779,8 +777,6 @@ impl UnifiedSourceAnalyzer {
                     report.files.push(file_entry);
                 }
 
-                // Clean up temp file
-                let _ = std::fs::remove_file(&payload.temp_path);
             }
         }
 

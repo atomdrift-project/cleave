@@ -1111,7 +1111,19 @@ pub fn check_extension_content_mismatch(
     // Define expected magic bytes for extensions commonly spoofed by malware
     let expected_magic: Option<(&str, &[u8])> = match extension {
         // Font formats
-        "woff" => Some(("WOFF font", b"wOFF")),
+        "woff" => {
+            // WOFF: 'wOFF' magic, but also accept raw OpenType/TrueType fonts
+            // which are commonly mislabeled with .woff extension in web projects
+            if file_data.starts_with(b"wOFF")
+                || file_data.starts_with(b"OTTO")
+                || file_data.starts_with(b"\x00\x01\x00\x00")
+                || file_data.starts_with(b"true")
+            {
+                None // Valid font data
+            } else {
+                Some(("WOFF font", &[])) // Trigger mismatch
+            }
+        }
         "woff2" => Some(("WOFF2 font", b"wOF2")),
         "ttf" | "ttc" => {
             // TrueType: version number 0x00010000 or 'true' or 'typ1'

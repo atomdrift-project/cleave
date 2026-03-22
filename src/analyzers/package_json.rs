@@ -1168,8 +1168,11 @@ impl PackageJsonAnalyzer {
             "eslint-config-airbnb",
             "eslint-config-prettier",
             "webpack",
+            "webpack-bundle-analyzer",
             "webpack-cli",
+            "webpack-dev-middleware",
             "webpack-dev-server",
+            "webpack-merge",
         ];
 
         if legitimate.contains(&name) {

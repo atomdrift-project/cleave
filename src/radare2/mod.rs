@@ -452,7 +452,9 @@ impl Radare2Analyzer {
             Err(e) => {
                 let err_str = e.to_string();
                 if err_str.contains("timed out") {
-                    warn!("Rizin analysis timed out after 60s; continuing without batched rizin data");
+                    warn!(
+                        "Rizin analysis timed out after 60s; continuing without batched rizin data"
+                    );
                     // Return result with timed_out flag set - consumers can add finding
                     return Ok(BatchedAnalysis {
                         timed_out: true,

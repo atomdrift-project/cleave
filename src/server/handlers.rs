@@ -775,7 +775,8 @@ async fn analyze_path_inner(
 /// counter grows while RSS grows.
 pub(super) async fn memory_stats(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
     // SQLite COUNT(*) can briefly block, so run it off the async thread.
-    let cache_entries = tokio::task::spawn_blocking(crate::analysis_cache::report_cache_entry_count).await;
+    let cache_entries =
+        tokio::task::spawn_blocking(crate::analysis_cache::report_cache_entry_count).await;
     let cache_entries = cache_entries.unwrap_or(None);
 
     let rss_mb = crate::memory_tracker::current_rss().map(|b| b / 1024 / 1024);

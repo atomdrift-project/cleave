@@ -398,10 +398,12 @@ impl super::CapabilityMapper {
                 }
             }
 
-            // Add file path to unknown file type warnings, append others as-is
+            // Add file path to file-type warnings, append others as-is
             let path_str = path.display().to_string();
             for warning in parsing_warnings {
-                if warning.starts_with("Unknown file type") {
+                if warning.starts_with("Unknown file type")
+                    || warning.starts_with("Invalid file type")
+                {
                     warnings.push(format!("{}: {}", path_str, warning));
                 } else {
                     warnings.push(warning);
@@ -712,10 +714,12 @@ impl super::CapabilityMapper {
                 trait_definitions_map.insert(trait_def.id.clone(), trait_def);
             }
 
-            // Add file path to unknown file type warnings, append others as-is
+            // Add file path to file-type warnings, append others as-is
             let path_str = path.display().to_string();
             for warning in parsing_warnings {
-                if warning.starts_with("Unknown file type") {
+                if warning.starts_with("Unknown file type")
+                    || warning.starts_with("Invalid file type")
+                {
                     warnings.push(format!("{}: {}", path_str, warning));
                 } else {
                     warnings.push(warning);
@@ -782,10 +786,12 @@ impl super::CapabilityMapper {
                 composite_rules_map.insert(rule.id.clone(), rule);
             }
 
-            // Add file path to unknown file type warnings, append others as-is
+            // Add file path to file-type warnings, append others as-is
             let path_str = path.display().to_string();
             for warning in parsing_warnings {
-                if warning.starts_with("Unknown file type") {
+                if warning.starts_with("Unknown file type")
+                    || warning.starts_with("Invalid file type")
+                {
                     warnings.push(format!("{}: {}", path_str, warning));
                 } else {
                     warnings.push(warning);
@@ -802,21 +808,42 @@ impl super::CapabilityMapper {
             }
         }
 
-        // Check for unknown file types across all files
-        let file_type_errors: Vec<&String> = warnings
+        // Check for structurally invalid file types (empty for:, for: [none]) — always fatal
+        let invalid_ft_errors: Vec<&String> = warnings
             .iter()
-            .filter(|w| w.contains("Unknown file type"))
+            .filter(|w| w.contains("Invalid file type"))
             .collect();
-        if !file_type_errors.is_empty() {
-            // Sort and display errors (already include file paths)
+        if !invalid_ft_errors.is_empty() {
             let mut sorted_errors: Vec<&str> =
-                file_type_errors.iter().map(|e| e.as_str()).collect();
+                invalid_ft_errors.iter().map(|e| e.as_str()).collect();
             sorted_errors.sort();
 
             return Err(anyhow::anyhow!(
                 "Invalid file types found in trait files:\n  {}\n\nPlease fix these file type names in the YAML files.",
                 sorted_errors.join("\n  ")
             ));
+        }
+
+        // Check for unrecognized file types (forward-compat: newer traits, older binary)
+        // In validation mode these are errors; otherwise just log at info and continue
+        let unknown_ft_warnings: Vec<&String> = warnings
+            .iter()
+            .filter(|w| w.contains("Unknown file type"))
+            .collect();
+        if !unknown_ft_warnings.is_empty() {
+            if enable_full_validation {
+                let mut sorted_errors: Vec<&str> =
+                    unknown_ft_warnings.iter().map(|e| e.as_str()).collect();
+                sorted_errors.sort();
+
+                return Err(anyhow::anyhow!(
+                    "Unknown file types found in trait files:\n  {}\n\nUpdate cleave or fix these 'for:' values.",
+                    sorted_errors.join("\n  ")
+                ));
+            }
+            for w in &unknown_ft_warnings {
+                tracing::info!("{} — skipping rule (update cleave for support)", w);
+            }
         }
 
         if debug {

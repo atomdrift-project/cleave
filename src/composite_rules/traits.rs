@@ -815,13 +815,19 @@ impl TraitDefinition {
         let file_size = ctx.report.target.size_bytes as usize;
         if let Some(min) = self.size_min {
             if file_size < min {
-                ctx.record_skip(SkipReason::SizeTooSmall { actual: file_size, min });
+                ctx.record_skip(SkipReason::SizeTooSmall {
+                    actual: file_size,
+                    min,
+                });
                 return None;
             }
         }
         if let Some(max) = self.size_max {
             if file_size > max {
-                ctx.record_skip(SkipReason::SizeTooLarge { actual: file_size, max });
+                ctx.record_skip(SkipReason::SizeTooLarge {
+                    actual: file_size,
+                    max,
+                });
                 return None;
             }
         }
@@ -844,13 +850,19 @@ impl TraitDefinition {
 
             if let Some(min) = self.entropy_min {
                 if file_entropy < min {
-                    ctx.record_skip(SkipReason::EntropyTooLow { actual: file_entropy, min });
+                    ctx.record_skip(SkipReason::EntropyTooLow {
+                        actual: file_entropy,
+                        min,
+                    });
                     return None;
                 }
             }
             if let Some(max) = self.entropy_max {
                 if file_entropy > max {
-                    ctx.record_skip(SkipReason::EntropyTooHigh { actual: file_entropy, max });
+                    ctx.record_skip(SkipReason::EntropyTooHigh {
+                        actual: file_entropy,
+                        max,
+                    });
                     return None;
                 }
             }
@@ -953,7 +965,10 @@ impl TraitDefinition {
             // Check count_min constraint
             if let Some(min) = self.count_min {
                 if match_count < min {
-                    ctx.record_skip(SkipReason::CountBelowMinimum { actual: match_count, min });
+                    ctx.record_skip(SkipReason::CountBelowMinimum {
+                        actual: match_count,
+                        min,
+                    });
                     return None;
                 }
             }
@@ -961,7 +976,10 @@ impl TraitDefinition {
             // Check count_max constraint
             if let Some(max) = self.count_max {
                 if match_count > max {
-                    ctx.record_skip(SkipReason::CountAboveMaximum { actual: match_count, max });
+                    ctx.record_skip(SkipReason::CountAboveMaximum {
+                        actual: match_count,
+                        max,
+                    });
                     return None;
                 }
             }
@@ -1675,13 +1693,19 @@ impl CompositeTrait {
         let file_size = ctx.report.target.size_bytes as usize;
         if let Some(min) = self.size_min {
             if file_size < min {
-                ctx.record_skip(SkipReason::SizeTooSmall { actual: file_size, min });
+                ctx.record_skip(SkipReason::SizeTooSmall {
+                    actual: file_size,
+                    min,
+                });
                 return None;
             }
         }
         if let Some(max) = self.size_max {
             if file_size > max {
-                ctx.record_skip(SkipReason::SizeTooLarge { actual: file_size, max });
+                ctx.record_skip(SkipReason::SizeTooLarge {
+                    actual: file_size,
+                    max,
+                });
                 return None;
             }
         }
@@ -1817,7 +1841,11 @@ impl CompositeTrait {
 
             // Record proximity debug if applicable
             if self.near_lines.is_some() || self.near_bytes.is_some() {
-                let constraint_type = if self.near_lines.is_some() { "near_lines" } else { "near_bytes" };
+                let constraint_type = if self.near_lines.is_some() {
+                    "near_lines"
+                } else {
+                    "near_bytes"
+                };
                 let max_span = self.near_lines.or(self.near_bytes).unwrap_or(0);
                 let satisfied = proximity_result.is_some();
                 ctx.with_debug(|debug| {

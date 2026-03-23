@@ -134,8 +134,8 @@ pub(crate) fn all_valid_metric_paths() -> HashSet<String> {
     }
 
     // Format-specific image metrics
-    use super::png_metrics::PngMetrics;
     use super::jpeg_metrics::JpegMetrics;
+    use super::png_metrics::PngMetrics;
     for field in PngMetrics::valid_field_paths() {
         paths.insert(format!("png.{}", field));
     }

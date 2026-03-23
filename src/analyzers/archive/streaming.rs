@@ -275,7 +275,11 @@ impl ArchiveAnalyzer {
             normalized.parent_id = None;
             normalized.depth = 0;
             normalized.extracted_path = None;
-            crate::analysis_cache::file_analysis_cache_store(&sha256, options.as_ref(), &normalized);
+            crate::analysis_cache::file_analysis_cache_store(
+                &sha256,
+                options.as_ref(),
+                &normalized,
+            );
         }
 
         Ok(StreamingFileResult {
@@ -646,7 +650,11 @@ impl ArchiveAnalyzer {
         rx.into_iter().par_bridge().for_each(|file| {
             // Files will be re-analyzed with proper type detection from content/extension
 
-            if analyzer_ref.cancelled.as_ref().map_or(false, |c| c.load(std::sync::atomic::Ordering::Relaxed)) {
+            if analyzer_ref
+                .cancelled
+                .as_ref()
+                .is_some_and(|c| c.load(std::sync::atomic::Ordering::Relaxed))
+            {
                 return;
             }
 
@@ -911,7 +919,11 @@ impl ArchiveAnalyzer {
         rx.into_iter().par_bridge().for_each(|file| {
             // Files will be re-analyzed with proper type detection from content/extension
 
-            if analyzer_ref.cancelled.as_ref().map_or(false, |c| c.load(std::sync::atomic::Ordering::Relaxed)) {
+            if analyzer_ref
+                .cancelled
+                .as_ref()
+                .is_some_and(|c| c.load(std::sync::atomic::Ordering::Relaxed))
+            {
                 return;
             }
 
@@ -1118,7 +1130,11 @@ impl ArchiveAnalyzer {
         rx.into_iter().par_bridge().for_each(|file| {
             // Files will be re-analyzed with proper type detection from content/extension
 
-            if analyzer_ref.cancelled.as_ref().map_or(false, |c| c.load(std::sync::atomic::Ordering::Relaxed)) {
+            if analyzer_ref
+                .cancelled
+                .as_ref()
+                .is_some_and(|c| c.load(std::sync::atomic::Ordering::Relaxed))
+            {
                 return;
             }
 
@@ -1301,7 +1317,11 @@ impl ArchiveAnalyzer {
         rx.into_iter().par_bridge().for_each(|file| {
             // Files will be re-analyzed with proper type detection from content/extension
 
-            if analyzer_ref.cancelled.as_ref().map_or(false, |c| c.load(std::sync::atomic::Ordering::Relaxed)) {
+            if analyzer_ref
+                .cancelled
+                .as_ref()
+                .is_some_and(|c| c.load(std::sync::atomic::Ordering::Relaxed))
+            {
                 return;
             }
 
@@ -1566,7 +1586,11 @@ impl ArchiveAnalyzer {
         rx.into_iter().par_bridge().for_each(|file| {
             // Files will be re-analyzed with proper type detection from content/extension
 
-            if analyzer_ref.cancelled.as_ref().map_or(false, |c| c.load(std::sync::atomic::Ordering::Relaxed)) {
+            if analyzer_ref
+                .cancelled
+                .as_ref()
+                .is_some_and(|c| c.load(std::sync::atomic::Ordering::Relaxed))
+            {
                 return;
             }
 
@@ -1657,7 +1681,9 @@ impl ArchiveAnalyzer {
         let guard = ExtractionGuard::new();
 
         if !guard.check_file_count() {
-            return Ok(ArchiveSummary { hostile_reasons: guard.take_reasons() });
+            return Ok(ArchiveSummary {
+                hostile_reasons: guard.take_reasons(),
+            });
         }
 
         let file = std::fs::File::open(file_path)?;
@@ -1684,7 +1710,9 @@ impl ArchiveAnalyzer {
                 file: stem.to_string(),
                 size: MAX_FILE_SIZE,
             });
-            return Ok(ArchiveSummary { hostile_reasons: guard.take_reasons() });
+            return Ok(ArchiveSummary {
+                hostile_reasons: guard.take_reasons(),
+            });
         }
 
         let n = data.len();
@@ -1696,7 +1724,9 @@ impl ArchiveAnalyzer {
             on_file(result);
         }
 
-        Ok(ArchiveSummary { hostile_reasons: guard.take_reasons() })
+        Ok(ArchiveSummary {
+            hostile_reasons: guard.take_reasons(),
+        })
     }
 }
 

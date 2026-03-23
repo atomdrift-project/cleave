@@ -207,7 +207,13 @@ pub(crate) fn eval_ast<'a>(
     parse_opts.progress_callback = Some(&mut timeout_cb);
     let src_bytes = source.as_bytes();
     let Some(tree) = parser.parse_with_options(
-        &mut |i, _| if i < src_bytes.len() { &src_bytes[i..] } else { &[] },
+        &mut |i, _| {
+            if i < src_bytes.len() {
+                &src_bytes[i..]
+            } else {
+                &[]
+            }
+        },
         None,
         Some(parse_opts),
     ) else {
@@ -411,7 +417,13 @@ pub(crate) fn eval_ast_query<'a>(query_str: &str, ctx: &EvaluationContext<'a>) -
         parse_opts.progress_callback = Some(&mut timeout_cb);
         let src_bytes = source.as_bytes();
         parsed_tree = match parser.parse_with_options(
-            &mut |i, _| if i < src_bytes.len() { &src_bytes[i..] } else { &[] },
+            &mut |i, _| {
+                if i < src_bytes.len() {
+                    &src_bytes[i..]
+                } else {
+                    &[]
+                }
+            },
             None,
             Some(parse_opts),
         ) {

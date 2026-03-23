@@ -417,7 +417,11 @@ pub struct JemallocStats {
 /// Advances the jemalloc epoch first so the returned values are fresh.
 #[must_use]
 pub fn jemalloc_stats() -> Option<JemallocStats> {
-    #[cfg(all(unix, feature = "jemalloc", not(any(target_os = "freebsd", target_os = "dragonfly"))))]
+    #[cfg(all(
+        unix,
+        feature = "jemalloc",
+        not(any(target_os = "freebsd", target_os = "dragonfly"))
+    ))]
     {
         use tikv_jemalloc_ctl::{epoch, stats};
 
@@ -433,7 +437,11 @@ pub fn jemalloc_stats() -> Option<JemallocStats> {
         })
     }
 
-    #[cfg(not(all(unix, feature = "jemalloc", not(any(target_os = "freebsd", target_os = "dragonfly")))))]
+    #[cfg(not(all(
+        unix,
+        feature = "jemalloc",
+        not(any(target_os = "freebsd", target_os = "dragonfly"))
+    )))]
     None
 }
 
@@ -446,7 +454,11 @@ pub fn jemalloc_stats() -> Option<JemallocStats> {
 ///
 /// No-op when jemalloc is not the allocator.
 pub fn configure_jemalloc_low_memory() {
-    #[cfg(all(unix, feature = "jemalloc", not(any(target_os = "freebsd", target_os = "dragonfly"))))]
+    #[cfg(all(
+        unix,
+        feature = "jemalloc",
+        not(any(target_os = "freebsd", target_os = "dragonfly"))
+    ))]
     {
         // tikv-jemalloc-ctl 0.6 doesn't expose dirty_decay_ms/muzzy_decay_ms
         // as typed helpers, so use the raw mallctl interface.

@@ -928,11 +928,9 @@ fn test_excessive_line_length_skips_binary_like_unknown_blob() {
         None,
     );
 
-    assert!(
-        !findings
-            .iter()
-            .any(|f| f.id == "objectives/anti-static/excessive-line-length")
-    );
+    assert!(!findings
+        .iter()
+        .any(|f| f.id == "objectives/anti-static/excessive-line-length"));
 }
 
 #[test]
@@ -3450,8 +3448,10 @@ traits:
         Err(err) => {
             let err_msg = format!("{:#}", err);
             assert!(
-                err_msg.contains("Unknown file type") || err_msg.contains("invalid_lang"),
-                "Error message should mention unknown file type, got: {}",
+                err_msg.contains("Unknown file type")
+                    || err_msg.contains("Invalid file type")
+                    || err_msg.contains("invalid_lang"),
+                "Error message should mention unknown/invalid file type, got: {}",
                 err_msg
             );
         }

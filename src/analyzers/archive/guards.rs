@@ -237,7 +237,9 @@ impl<R: Read> Read for LimitedReader<R> {
             self.limit_hit = true;
             return Ok(0);
         }
-        let max_read = buf.len().min(usize::try_from(self.remaining).unwrap_or(usize::MAX));
+        let max_read = buf
+            .len()
+            .min(usize::try_from(self.remaining).unwrap_or(usize::MAX));
         let n = self.inner.read(&mut buf[..max_read])?;
         self.remaining = self.remaining.saturating_sub(n as u64);
         Ok(n)

@@ -1084,11 +1084,7 @@ impl PackageJsonAnalyzer {
 
         let suspicious_contains = [
             // Suspicious prefixes/suffixes
-            "-malware",
-            "-stealer",
-            "-hack",
-            "exfil",
-            "backdoor",
+            "-malware", "-stealer", "-hack", "exfil", "backdoor",
         ];
 
         for pattern in suspicious_prefixes {

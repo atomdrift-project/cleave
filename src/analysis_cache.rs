@@ -199,7 +199,9 @@ fn maybe_evict_report_cache(conn: &Connection) {
     }
 
     let total: i64 = conn
-        .query_row("SELECT COUNT(*) FROM toplevel_report_cache", [], |row| row.get(0))
+        .query_row("SELECT COUNT(*) FROM toplevel_report_cache", [], |row| {
+            row.get(0)
+        })
         .unwrap_or(0);
 
     if total > MAX_REPORT_ENTRIES {
@@ -264,7 +266,10 @@ fn unix_timestamp() -> i64 {
 /// Look up a cached toplevel analysis report for the given file hash and options.
 ///
 /// Returns `Some(report)` on cache hit, `None` on miss or if caching is unavailable.
-pub(crate) fn report_cache_lookup(sha256: &str, options: &AnalysisOptions) -> Option<AnalysisReport> {
+pub(crate) fn report_cache_lookup(
+    sha256: &str,
+    options: &AnalysisOptions,
+) -> Option<AnalysisReport> {
     let opts_hash = options_hash(options);
     let traits_ts = traits_timestamp_secs()?;
     with_conn(|conn| report_cache_lookup_conn(conn, sha256, &opts_hash, traits_ts)).flatten()
@@ -273,8 +278,10 @@ pub(crate) fn report_cache_lookup(sha256: &str, options: &AnalysisOptions) -> Op
 /// Count entries currently in the toplevel report cache. Returns `None` if unavailable.
 pub(crate) fn report_cache_entry_count() -> Option<i64> {
     with_conn(|conn| {
-        conn.query_row("SELECT COUNT(*) FROM toplevel_report_cache", [], |row| row.get(0))
-            .ok()
+        conn.query_row("SELECT COUNT(*) FROM toplevel_report_cache", [], |row| {
+            row.get(0)
+        })
+        .ok()
     })
     .flatten()
 }
@@ -296,7 +303,10 @@ pub(crate) fn report_cache_store(sha256: &str, options: &AnalysisOptions, report
 /// Look up a cached `FileAnalysis` for the given file hash and options.
 ///
 /// Returns `Some(fa)` on cache hit, `None` on miss or if caching is unavailable.
-pub(crate) fn file_analysis_cache_lookup(sha256: &str, options: &AnalysisOptions) -> Option<FileAnalysis> {
+pub(crate) fn file_analysis_cache_lookup(
+    sha256: &str,
+    options: &AnalysisOptions,
+) -> Option<FileAnalysis> {
     let opts_hash = options_hash(options);
     let traits_ts = traits_timestamp_secs()?;
     with_conn(|conn| file_analysis_cache_lookup_conn(conn, sha256, &opts_hash, traits_ts)).flatten()
@@ -305,7 +315,11 @@ pub(crate) fn file_analysis_cache_lookup(sha256: &str, options: &AnalysisOptions
 /// Store a `FileAnalysis` in the file analysis cache.
 ///
 /// Silently does nothing if caching is unavailable or any error occurs.
-pub(crate) fn file_analysis_cache_store(sha256: &str, options: &AnalysisOptions, fa: &FileAnalysis) {
+pub(crate) fn file_analysis_cache_store(
+    sha256: &str,
+    options: &AnalysisOptions,
+    fa: &FileAnalysis,
+) {
     let opts_hash = options_hash(options);
     let Some(traits_ts) = traits_timestamp_secs() else {
         return;
@@ -376,7 +390,9 @@ fn maybe_evict_file_analysis_cache(conn: &Connection) {
     }
 
     let total: i64 = conn
-        .query_row("SELECT COUNT(*) FROM file_analysis_cache", [], |row| row.get(0))
+        .query_row("SELECT COUNT(*) FROM file_analysis_cache", [], |row| {
+            row.get(0)
+        })
         .unwrap_or(0);
 
     if total > MAX_FILE_ANALYSIS_ENTRIES {
@@ -575,7 +591,13 @@ mod tests {
         let opts = "opts_hash";
         let ts = 1700000000_i64;
 
-        file_analysis_cache_store_conn(&conn, "aaa", opts, ts, &test_file_analysis("aaa", "python"));
+        file_analysis_cache_store_conn(
+            &conn,
+            "aaa",
+            opts,
+            ts,
+            &test_file_analysis("aaa", "python"),
+        );
         assert!(file_analysis_cache_lookup_conn(&conn, "bbb", opts, ts).is_none());
     }
 
@@ -585,7 +607,13 @@ mod tests {
         let sha = "aabbcc";
         let opts = "opts_hash";
 
-        file_analysis_cache_store_conn(&conn, sha, opts, 1700000000, &test_file_analysis(sha, "elf"));
+        file_analysis_cache_store_conn(
+            &conn,
+            sha,
+            opts,
+            1700000000,
+            &test_file_analysis(sha, "elf"),
+        );
         assert!(file_analysis_cache_lookup_conn(&conn, sha, opts, 1700000001).is_none());
     }
 

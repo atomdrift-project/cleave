@@ -63,7 +63,7 @@ impl ElfAnalyzer {
     fn is_cancelled(&self) -> bool {
         self.cancellation
             .as_ref()
-            .map_or(false, |c| c.load(std::sync::atomic::Ordering::Relaxed))
+            .is_some_and(|c| c.load(std::sync::atomic::Ordering::Relaxed))
     }
 
     /// Create analyzer with pre-existing capability mapper (wraps in Arc)

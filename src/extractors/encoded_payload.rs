@@ -200,7 +200,6 @@ pub(crate) fn generate_preview(data: &[u8]) -> String {
     preview.replace('\n', " ").replace('\r', "")
 }
 
-
 /// Recursively decompress and check for nested encodings
 /// This handles compression + nested base64/hex that stng doesn't process
 pub(crate) fn decompress_and_nest(

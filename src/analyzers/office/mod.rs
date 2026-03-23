@@ -137,7 +137,7 @@ impl OfficeAnalyzer {
         };
 
         for module in modules {
-            if cancellation.map_or(false, |c| c.load(std::sync::atomic::Ordering::Relaxed)) {
+            if cancellation.is_some_and(|c| c.load(std::sync::atomic::Ordering::Relaxed)) {
                 break;
             }
 

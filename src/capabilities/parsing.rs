@@ -70,18 +70,18 @@ pub(crate) fn apply_trait_defaults(
     if let Some(types) = raw.file_types.as_deref() {
         if types.is_empty() {
             warnings.push(
-                "Unknown file type: '' (empty 'for: []' is not valid — specify at least one file type)"
+                "Invalid file type: '' (empty 'for: []' is not valid — specify at least one file type)"
                     .to_string(),
             );
         } else if types.iter().any(|s| s.eq_ignore_ascii_case("none")) {
             warnings.push(
-                "Unknown file type: 'none' ('none' is not a valid 'for:' value — use specific types or remove 'for:' to inherit defaults)"
+                "Invalid file type: 'none' ('none' is not a valid 'for:' value — use specific types or remove 'for:' to inherit defaults)"
                     .to_string(),
             );
         }
     } else if defaults.r#for.as_deref().is_some_and(<[String]>::is_empty) {
         warnings.push(
-            "Unknown file type: '' (file default 'for: []' is empty — specify at least one file type)"
+            "Invalid file type: '' (file default 'for: []' is empty — specify at least one file type)"
                 .to_string(),
         );
     }
@@ -663,18 +663,18 @@ pub(crate) fn apply_composite_defaults(
     if let Some(types) = raw.file_types.as_deref() {
         if types.is_empty() {
             warnings.push(
-                "Unknown file type: '' (empty 'for: []' is not valid — specify at least one file type)"
+                "Invalid file type: '' (empty 'for: []' is not valid — specify at least one file type)"
                     .to_string(),
             );
         } else if types.iter().any(|s| s.eq_ignore_ascii_case("none")) {
             warnings.push(
-                "Unknown file type: 'none' ('none' is not a valid 'for:' value — use specific types or remove 'for:' to inherit defaults)"
+                "Invalid file type: 'none' ('none' is not a valid 'for:' value — use specific types or remove 'for:' to inherit defaults)"
                     .to_string(),
             );
         }
     } else if defaults.r#for.as_deref().is_some_and(<[String]>::is_empty) {
         warnings.push(
-            "Unknown file type: '' (file default 'for: []' is empty — specify at least one file type)"
+            "Invalid file type: '' (file default 'for: []' is empty — specify at least one file type)"
                 .to_string(),
         );
     }
@@ -1867,7 +1867,7 @@ mod tests {
         assert!(
             warnings
                 .iter()
-                .any(|w| w.contains("Unknown file type") && w.contains("none")),
+                .any(|w| w.contains("Invalid file type") && w.contains("none")),
             "expected fatal 'none' error, got: {:?}",
             warnings
         );
@@ -1887,7 +1887,7 @@ mod tests {
         assert!(
             warnings
                 .iter()
-                .any(|w| w.contains("Unknown file type") && w.contains("empty")),
+                .any(|w| w.contains("Invalid file type") && w.contains("empty")),
             "expected fatal empty for: error, got: {:?}",
             warnings
         );
@@ -1910,7 +1910,7 @@ mod tests {
         assert!(
             warnings
                 .iter()
-                .any(|w| w.contains("Unknown file type") && w.contains("empty")),
+                .any(|w| w.contains("Invalid file type") && w.contains("empty")),
             "expected fatal empty defaults error, got: {:?}",
             warnings
         );

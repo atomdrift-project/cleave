@@ -105,17 +105,25 @@ impl super::CapabilityMapper {
             eprintln!("Warning: {}", warning);
         }
 
-        // "Unknown file type" errors (including for: [none] and for: []) are always fatal
-        let ft_errors: Vec<&str> = warnings
+        // Structurally invalid file types (for: [], for: [none]) are always fatal
+        let invalid_ft_errors: Vec<&str> = warnings
             .iter()
-            .filter(|w| w.contains("Unknown file type"))
+            .filter(|w| w.contains("Invalid file type"))
             .map(String::as_str)
             .collect();
-        if !ft_errors.is_empty() {
+        if !invalid_ft_errors.is_empty() {
             anyhow::bail!(
                 "Invalid file types in trait file:\n  {}\n\nFix these 'for:' values in the YAML file.",
-                ft_errors.join("\n  ")
+                invalid_ft_errors.join("\n  ")
             );
+        }
+
+        // Unrecognized file types (forward-compat) — log info and continue
+        for w in warnings
+            .iter()
+            .filter(|w| w.contains("Unknown file type"))
+        {
+            tracing::info!("{} — skipping rule (update cleave for support)", w);
         }
 
         // Pre-compile all composite rule regexes

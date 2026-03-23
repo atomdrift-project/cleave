@@ -542,7 +542,10 @@ fn detect_file_type_inner(file_path: &Path, file_data: &[u8]) -> Option<FileType
         let ext = file_path
             .extension()
             .map(|e| e.to_string_lossy().to_lowercase());
-        if matches!(ext.as_deref(), Some("pkl" | "pickle" | "joblib" | "pt" | "pth")) {
+        if matches!(
+            ext.as_deref(),
+            Some("pkl" | "pickle" | "joblib" | "pt" | "pth")
+        ) {
             return Some(FileType::Pickle);
         }
     }
@@ -611,14 +614,10 @@ fn detect_file_type_inner(file_path: &Path, file_data: &[u8]) -> Option<FileType
     if let Some(mz_offset) = find_mz_header(file_data, 64) {
         let pe_data = &file_data[mz_offset..];
         let valid_pe = pe_data.len() >= 0x40 && {
-            let e_lfanew = u32::from_le_bytes([
-                pe_data[0x3c],
-                pe_data[0x3d],
-                pe_data[0x3e],
-                pe_data[0x3f],
-            ]) as usize;
-            e_lfanew + 4 <= pe_data.len()
-                && pe_data[e_lfanew..e_lfanew + 4] == *b"PE\0\0"
+            let e_lfanew =
+                u32::from_le_bytes([pe_data[0x3c], pe_data[0x3d], pe_data[0x3e], pe_data[0x3f]])
+                    as usize;
+            e_lfanew + 4 <= pe_data.len() && pe_data[e_lfanew..e_lfanew + 4] == *b"PE\0\0"
         };
         if valid_pe {
             tracing::debug!("Detected PE with MZ at offset {} (junk prefix)", mz_offset);

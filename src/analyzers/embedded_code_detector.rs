@@ -276,9 +276,7 @@ fn is_top_level_self_detection(
     offset: u64,
     file_type: &FileType,
 ) -> bool {
-    !is_encoded
-        && offset == 0
-        && detect_file_type_from_path(Path::new(parent_path)) == *file_type
+    !is_encoded && offset == 0 && detect_file_type_from_path(Path::new(parent_path)) == *file_type
 }
 
 /// Calculate Shannon entropy of data

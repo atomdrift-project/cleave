@@ -656,7 +656,7 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
                         || {
                             if cancel_macho
                                 .as_ref()
-                                .map_or(false, |c| c.load(std::sync::atomic::Ordering::Relaxed))
+                                .is_some_and(|c| c.load(std::sync::atomic::Ordering::Relaxed))
                             {
                                 return None;
                             }
@@ -717,7 +717,7 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
                         || {
                             if cancel_elf
                                 .as_ref()
-                                .map_or(false, |c| c.load(std::sync::atomic::Ordering::Relaxed))
+                                .is_some_and(|c| c.load(std::sync::atomic::Ordering::Relaxed))
                             {
                                 return None;
                             }
@@ -770,7 +770,7 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
                         || {
                             if cancel_pe
                                 .as_ref()
-                                .map_or(false, |c| c.load(std::sync::atomic::Ordering::Relaxed))
+                                .is_some_and(|c| c.load(std::sync::atomic::Ordering::Relaxed))
                             {
                                 return None;
                             }

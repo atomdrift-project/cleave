@@ -1,7 +1,7 @@
 //! Evaluation context and result types for composite rules.
 
 use super::condition::StringValidator;
-use super::debug::DebugCollector;
+use super::debug::{DebugCollector, EvaluationDebug, SkipReason};
 use super::evaluators::kv::StructuredFormat;
 use super::section_map::SectionMap;
 use super::types::{Arch, FileType, Platform};
@@ -281,6 +281,24 @@ impl<'a> EvaluationContext<'a> {
     pub(crate) fn with_slow_rule_ms(mut self, ms: u64) -> Self {
         self.slow_rule_ms = ms;
         self
+    }
+
+    /// Run a closure against the debug collector if one is present.
+    ///
+    /// This is a no-op in the hot path (when `debug_collector` is `None`).
+    pub(crate) fn with_debug(&self, f: impl FnOnce(&mut EvaluationDebug)) {
+        if let Some(collector) = self.debug_collector {
+            if let Ok(mut debug) = collector.write() {
+                f(&mut debug);
+            }
+        }
+    }
+
+    /// Record a skip reason to the debug collector if one is present.
+    ///
+    /// This is a no-op in the hot path (when `debug_collector` is `None`).
+    pub(crate) fn record_skip(&self, reason: SkipReason) {
+        self.with_debug(|debug| debug.record_skip(reason));
     }
 
     /// Check if a finding ID exists (exact match only)

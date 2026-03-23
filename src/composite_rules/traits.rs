@@ -778,14 +778,10 @@ impl TraitDefinition {
             || self.platforms.iter().any(|p| ctx.platforms.contains(p));
 
         if !platform_match {
-            if let Some(collector) = &ctx.debug_collector {
-                if let Ok(mut debug) = collector.write() {
-                    debug.record_skip(SkipReason::PlatformMismatch {
-                        rule: self.platforms.clone(),
-                        context: ctx.platforms.clone(),
-                    });
-                }
-            }
+            ctx.record_skip(SkipReason::PlatformMismatch {
+                rule: self.platforms.clone(),
+                context: ctx.platforms.clone(),
+            });
             return None;
         }
 
@@ -795,14 +791,10 @@ impl TraitDefinition {
             || self.arch.iter().any(|a| ctx.arch.contains(a));
 
         if !arch_match {
-            if let Some(collector) = &ctx.debug_collector {
-                if let Ok(mut debug) = collector.write() {
-                    debug.record_skip(SkipReason::ArchMismatch {
-                        rule: self.arch.clone(),
-                        context: ctx.arch.clone(),
-                    });
-                }
-            }
+            ctx.record_skip(SkipReason::ArchMismatch {
+                rule: self.arch.clone(),
+                context: ctx.arch.clone(),
+            });
             return None;
         }
 
@@ -812,14 +804,10 @@ impl TraitDefinition {
             || self.r#for.contains(&ctx.file_type);
 
         if !file_type_match {
-            if let Some(collector) = &ctx.debug_collector {
-                if let Ok(mut debug) = collector.write() {
-                    debug.record_skip(SkipReason::FileTypeMismatch {
-                        rule: self.r#for.clone(),
-                        context: ctx.file_type,
-                    });
-                }
-            }
+            ctx.record_skip(SkipReason::FileTypeMismatch {
+                rule: self.r#for.clone(),
+                context: ctx.file_type,
+            });
             return None;
         }
 
@@ -827,27 +815,13 @@ impl TraitDefinition {
         let file_size = ctx.report.target.size_bytes as usize;
         if let Some(min) = self.size_min {
             if file_size < min {
-                if let Some(collector) = &ctx.debug_collector {
-                    if let Ok(mut debug) = collector.write() {
-                        debug.record_skip(SkipReason::SizeTooSmall {
-                            actual: file_size,
-                            min,
-                        });
-                    }
-                }
+                ctx.record_skip(SkipReason::SizeTooSmall { actual: file_size, min });
                 return None;
             }
         }
         if let Some(max) = self.size_max {
             if file_size > max {
-                if let Some(collector) = &ctx.debug_collector {
-                    if let Ok(mut debug) = collector.write() {
-                        debug.record_skip(SkipReason::SizeTooLarge {
-                            actual: file_size,
-                            max,
-                        });
-                    }
-                }
+                ctx.record_skip(SkipReason::SizeTooLarge { actual: file_size, max });
                 return None;
             }
         }
@@ -870,27 +844,13 @@ impl TraitDefinition {
 
             if let Some(min) = self.entropy_min {
                 if file_entropy < min {
-                    if let Some(collector) = &ctx.debug_collector {
-                        if let Ok(mut debug) = collector.write() {
-                            debug.record_skip(SkipReason::EntropyTooLow {
-                                actual: file_entropy,
-                                min,
-                            });
-                        }
-                    }
+                    ctx.record_skip(SkipReason::EntropyTooLow { actual: file_entropy, min });
                     return None;
                 }
             }
             if let Some(max) = self.entropy_max {
                 if file_entropy > max {
-                    if let Some(collector) = &ctx.debug_collector {
-                        if let Ok(mut debug) = collector.write() {
-                            debug.record_skip(SkipReason::EntropyTooHigh {
-                                actual: file_entropy,
-                                max,
-                            });
-                        }
-                    }
+                    ctx.record_skip(SkipReason::EntropyTooHigh { actual: file_entropy, max });
                     return None;
                 }
             }
@@ -905,14 +865,9 @@ impl TraitDefinition {
             for condition in unless_conds {
                 let result = self.eval_condition(condition, ctx);
                 if result.matched {
-                    // Record skip reason if debug collector is present
-                    if let Some(collector) = &ctx.debug_collector {
-                        if let Ok(mut debug) = collector.write() {
-                            debug.record_skip(SkipReason::UnlessConditionMatched {
-                                condition_desc: format!("{:?}", condition),
-                            });
-                        }
-                    }
+                    ctx.record_skip(SkipReason::UnlessConditionMatched {
+                        condition_desc: format!("{:?}", condition),
+                    });
                     return None;
                 }
             }
@@ -981,15 +936,13 @@ impl TraitDefinition {
         }
 
         // Record condition result if debug collector is present
-        if let Some(collector) = &ctx.debug_collector {
-            if let Ok(mut debug) = collector.write() {
-                let cond_debug = ConditionDebug::new(format!("{:?}", self.r#if))
-                    .with_matched(result.matched)
-                    .with_evidence(result.evidence.clone())
-                    .with_precision(result.precision);
-                debug.add_condition(cond_debug);
-            }
-        }
+        ctx.with_debug(|debug| {
+            let cond_debug = ConditionDebug::new(format!("{:?}", self.r#if))
+                .with_matched(result.matched)
+                .with_evidence(result.evidence.clone())
+                .with_precision(result.precision);
+            debug.add_condition(cond_debug);
+        });
 
         if result.matched {
             // Apply count and density filters (centralized for all condition types)
@@ -1000,14 +953,7 @@ impl TraitDefinition {
             // Check count_min constraint
             if let Some(min) = self.count_min {
                 if match_count < min {
-                    if let Some(collector) = &ctx.debug_collector {
-                        if let Ok(mut debug) = collector.write() {
-                            debug.record_skip(SkipReason::CountBelowMinimum {
-                                actual: match_count,
-                                min,
-                            });
-                        }
-                    }
+                    ctx.record_skip(SkipReason::CountBelowMinimum { actual: match_count, min });
                     return None;
                 }
             }
@@ -1015,51 +961,40 @@ impl TraitDefinition {
             // Check count_max constraint
             if let Some(max) = self.count_max {
                 if match_count > max {
-                    if let Some(collector) = &ctx.debug_collector {
-                        if let Ok(mut debug) = collector.write() {
-                            debug.record_skip(SkipReason::CountAboveMaximum {
-                                actual: match_count,
-                                max,
-                            });
-                        }
-                    }
+                    ctx.record_skip(SkipReason::CountAboveMaximum { actual: match_count, max });
                     return None;
                 }
             }
 
-            // Check per_kb_min constraint (density threshold)
+            // Check per_kb_min constraint (density threshold).
+            // Zero-byte files have infinite density — trivially satisfy any minimum.
             if let Some(min_density) = self.per_kb_min {
                 if file_kb > 0.0 {
                     let actual_density = (match_count as f64) / file_kb;
                     if actual_density < min_density {
-                        if let Some(collector) = &ctx.debug_collector {
-                            if let Ok(mut debug) = collector.write() {
-                                debug.record_skip(SkipReason::DensityBelowMinimum {
-                                    actual: actual_density,
-                                    min: min_density,
-                                });
-                            }
-                        }
+                        ctx.record_skip(SkipReason::DensityBelowMinimum {
+                            actual: actual_density,
+                            min: min_density,
+                        });
                         return None;
                     }
                 }
             }
 
-            // Check per_kb_max constraint (density ceiling)
+            // Check per_kb_max constraint (density ceiling).
+            // A zero-byte file with matches has infinite density — always fails the ceiling.
             if let Some(max_density) = self.per_kb_max {
-                if file_kb > 0.0 {
-                    let actual_density = (match_count as f64) / file_kb;
-                    if actual_density > max_density {
-                        if let Some(collector) = &ctx.debug_collector {
-                            if let Ok(mut debug) = collector.write() {
-                                debug.record_skip(SkipReason::DensityAboveMaximum {
-                                    actual: actual_density,
-                                    max: max_density,
-                                });
-                            }
-                        }
-                        return None;
-                    }
+                let actual_density = if file_kb > 0.0 {
+                    (match_count as f64) / file_kb
+                } else {
+                    f64::INFINITY
+                };
+                if actual_density > max_density {
+                    ctx.record_skip(SkipReason::DensityAboveMaximum {
+                        actual: actual_density,
+                        max: max_density,
+                    });
+                    return None;
                 }
             }
 
@@ -1088,24 +1023,20 @@ impl TraitDefinition {
                 }
 
                 // Record downgrade debug if collector is present
-                if let Some(collector) = &ctx.debug_collector {
-                    if let Ok(mut debug) = collector.write() {
-                        debug.set_downgrade(DowngradeDebug {
-                            original_crit: self.crit,
-                            final_crit,
-                            triggered,
-                        });
-                    }
-                }
+                ctx.with_debug(|debug| {
+                    debug.set_downgrade(DowngradeDebug {
+                        original_crit: self.crit,
+                        final_crit,
+                        triggered,
+                    });
+                });
             }
 
             // Record match in debug collector
-            if let Some(collector) = &ctx.debug_collector {
-                if let Ok(mut debug) = collector.write() {
-                    debug.matched = true;
-                    debug.precision = result.precision;
-                }
-            }
+            ctx.with_debug(|debug| {
+                debug.matched = true;
+                debug.precision = result.precision;
+            });
 
             Some(Finding {
                 id: self.id.clone(),
@@ -1707,14 +1638,10 @@ impl CompositeTrait {
             || self.platforms.iter().any(|p| ctx.platforms.contains(p));
 
         if !platform_match {
-            if let Some(collector) = &ctx.debug_collector {
-                if let Ok(mut debug) = collector.write() {
-                    debug.record_skip(SkipReason::PlatformMismatch {
-                        rule: self.platforms.clone(),
-                        context: ctx.platforms.clone(),
-                    });
-                }
-            }
+            ctx.record_skip(SkipReason::PlatformMismatch {
+                rule: self.platforms.clone(),
+                context: ctx.platforms.clone(),
+            });
             return None;
         }
 
@@ -1724,14 +1651,10 @@ impl CompositeTrait {
             || self.arch.iter().any(|a| ctx.arch.contains(a));
 
         if !arch_match {
-            if let Some(collector) = &ctx.debug_collector {
-                if let Ok(mut debug) = collector.write() {
-                    debug.record_skip(SkipReason::ArchMismatch {
-                        rule: self.arch.clone(),
-                        context: ctx.arch.clone(),
-                    });
-                }
-            }
+            ctx.record_skip(SkipReason::ArchMismatch {
+                rule: self.arch.clone(),
+                context: ctx.arch.clone(),
+            });
             return None;
         }
 
@@ -1741,14 +1664,10 @@ impl CompositeTrait {
             || self.r#for.contains(&ctx.file_type);
 
         if !file_type_match {
-            if let Some(collector) = &ctx.debug_collector {
-                if let Ok(mut debug) = collector.write() {
-                    debug.record_skip(SkipReason::FileTypeMismatch {
-                        rule: self.r#for.clone(),
-                        context: ctx.file_type,
-                    });
-                }
-            }
+            ctx.record_skip(SkipReason::FileTypeMismatch {
+                rule: self.r#for.clone(),
+                context: ctx.file_type,
+            });
             return None;
         }
 
@@ -1756,27 +1675,13 @@ impl CompositeTrait {
         let file_size = ctx.report.target.size_bytes as usize;
         if let Some(min) = self.size_min {
             if file_size < min {
-                if let Some(collector) = &ctx.debug_collector {
-                    if let Ok(mut debug) = collector.write() {
-                        debug.record_skip(SkipReason::SizeTooSmall {
-                            actual: file_size,
-                            min,
-                        });
-                    }
-                }
+                ctx.record_skip(SkipReason::SizeTooSmall { actual: file_size, min });
                 return None;
             }
         }
         if let Some(max) = self.size_max {
             if file_size > max {
-                if let Some(collector) = &ctx.debug_collector {
-                    if let Ok(mut debug) = collector.write() {
-                        debug.record_skip(SkipReason::SizeTooLarge {
-                            actual: file_size,
-                            max,
-                        });
-                    }
-                }
+                ctx.record_skip(SkipReason::SizeTooLarge { actual: file_size, max });
                 return None;
             }
         }
@@ -1790,13 +1695,9 @@ impl CompositeTrait {
             for condition in unless_conds {
                 let result = self.eval_condition(condition, ctx);
                 if result.matched {
-                    if let Some(collector) = &ctx.debug_collector {
-                        if let Ok(mut debug) = collector.write() {
-                            debug.record_skip(SkipReason::UnlessConditionMatched {
-                                condition_desc: format!("{:?}", condition),
-                            });
-                        }
-                    }
+                    ctx.record_skip(SkipReason::UnlessConditionMatched {
+                        condition_desc: format!("{:?}", condition),
+                    });
                     return None;
                 }
             }
@@ -1916,21 +1817,16 @@ impl CompositeTrait {
 
             // Record proximity debug if applicable
             if self.near_lines.is_some() || self.near_bytes.is_some() {
-                if let Some(collector) = &ctx.debug_collector {
-                    if let Ok(mut debug) = collector.write() {
-                        let constraint_type = if self.near_lines.is_some() {
-                            "near_lines"
-                        } else {
-                            "near_bytes"
-                        };
-                        let max_span = self.near_lines.or(self.near_bytes).unwrap_or(0);
-                        debug.set_proximity(ProximityDebug {
-                            constraint_type: constraint_type.to_string(),
-                            max_span,
-                            satisfied: proximity_result.is_some(),
-                        });
-                    }
-                }
+                let constraint_type = if self.near_lines.is_some() { "near_lines" } else { "near_bytes" };
+                let max_span = self.near_lines.or(self.near_bytes).unwrap_or(0);
+                let satisfied = proximity_result.is_some();
+                ctx.with_debug(|debug| {
+                    debug.set_proximity(ProximityDebug {
+                        constraint_type: constraint_type.to_string(),
+                        max_span,
+                        satisfied,
+                    });
+                });
             }
 
             let evidence = proximity_result?;
@@ -1958,24 +1854,21 @@ impl CompositeTrait {
                 }
 
                 // Record downgrade debug
-                if let Some(collector) = &ctx.debug_collector {
-                    if let Ok(mut debug) = collector.write() {
-                        debug.set_downgrade(DowngradeDebug {
-                            original_crit: self.crit,
-                            final_crit,
-                            triggered,
-                        });
-                    }
-                }
+                ctx.with_debug(|debug| {
+                    debug.set_downgrade(DowngradeDebug {
+                        original_crit: self.crit,
+                        final_crit,
+                        triggered,
+                    });
+                });
             }
 
             // Record match in debug collector
-            if let Some(collector) = &ctx.debug_collector {
-                if let Ok(mut debug) = collector.write() {
-                    debug.matched = true;
-                    debug.precision = result.precision + precision_boost;
-                }
-            }
+            let final_precision = result.precision + precision_boost;
+            ctx.with_debug(|debug| {
+                debug.matched = true;
+                debug.precision = final_precision;
+            });
 
             // Check for timeout violations before returning
             let duration = start.elapsed();

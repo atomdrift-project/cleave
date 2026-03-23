@@ -201,10 +201,18 @@ pub(crate) fn symlink_escapes(symlink_path: &Path, target: &str, dest_dir: &Path
     !resolved.starts_with(dest_dir)
 }
 
-/// Size-limited reader that stops after a maximum number of bytes
+/// Size-limited reader that stops after a maximum number of bytes.
+///
+/// When the limit is reached, `read` returns `Ok(0)` (EOF) rather than an
+/// error, which correctly satisfies the [`Read`] contract and lets callers
+/// like `read_to_end` / `copy` terminate normally. Use [`is_limited`] after
+/// the read to distinguish a genuine end-of-stream from a limit hit.
+///
+/// [`is_limited`]: LimitedReader::is_limited
 pub(crate) struct LimitedReader<R> {
     inner: R,
     remaining: u64,
+    limit_hit: bool,
 }
 
 impl<R: Read> LimitedReader<R> {
@@ -212,16 +220,24 @@ impl<R: Read> LimitedReader<R> {
         Self {
             inner,
             remaining: limit,
+            limit_hit: false,
         }
+    }
+
+    /// Returns `true` if the byte limit was reached before the underlying
+    /// stream was exhausted — i.e., the data was silently truncated.
+    pub(crate) fn is_limited(&self) -> bool {
+        self.limit_hit
     }
 }
 
 impl<R: Read> Read for LimitedReader<R> {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
         if self.remaining == 0 {
-            return Err(std::io::Error::other("size limit exceeded"));
+            self.limit_hit = true;
+            return Ok(0);
         }
-        let max_read = buf.len().min(self.remaining as usize);
+        let max_read = buf.len().min(usize::try_from(self.remaining).unwrap_or(usize::MAX));
         let n = self.inner.read(&mut buf[..max_read])?;
         self.remaining = self.remaining.saturating_sub(n as u64);
         Ok(n)

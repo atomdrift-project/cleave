@@ -830,6 +830,9 @@ impl PEAnalyzer {
                 }
                 report.findings.push(finding);
 
+                if binary.offset >= pe_data.len() {
+                    continue;
+                }
                 let slice_end = (binary.offset + binary.estimated_size).min(pe_data.len());
                 let embedded_bytes = &pe_data[binary.offset..slice_end];
                 let kind_str = binary.kind.as_str();

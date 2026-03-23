@@ -1149,6 +1149,7 @@ impl PackageJsonAnalyzer {
             "color",
             "colors",
             "lodash",
+            "asynct",
             "axios",
             "babel-core",
             "babel-cli",

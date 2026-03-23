@@ -713,10 +713,10 @@ pub(crate) fn extract_cab(
             .read_to_end(&mut buf)
             .with_context(|| format!("Failed to decompress CAB entry: {name}"))?;
 
-        if buf.len() as u64 >= MAX_FILE_SIZE {
+        if limited.is_limited() {
             guard.add_hostile_reason(HostileArchiveReason::ExcessiveFileSize {
                 file: name.clone(),
-                size: buf.len() as u64,
+                size: MAX_FILE_SIZE,
             });
             continue;
         }

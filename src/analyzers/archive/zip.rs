@@ -232,6 +232,16 @@ pub(crate) fn extract_zip_entries_safe<R: Read + Seek>(
             let written = std::io::copy(&mut limited, &mut outfile)
                 .with_context(|| format!("Failed to extract: {}", entry_name))?;
 
+            if limited.is_limited() {
+                drop(outfile);
+                let _ = std::fs::remove_file(&outpath);
+                guard.add_hostile_reason(HostileArchiveReason::ExcessiveFileSize {
+                    file: entry_name.clone(),
+                    size: MAX_FILE_SIZE,
+                });
+                continue;
+            }
+
             // Track total bytes
             if !guard.check_bytes(written, &entry_name) {
                 anyhow::bail!("Exceeded maximum total extraction size");

@@ -8,7 +8,7 @@
 //! - **cleave**: Handles compression (zlib/gzip), nested encoding, and payload classification
 
 use crate::analyzers::FileType;
-use crate::types::{Criticality, ExtractedPayload};
+use crate::types::ExtractedPayload;
 use std::io::Write;
 
 /// Maximum recursion depth for nested encoding
@@ -200,104 +200,6 @@ pub(crate) fn generate_preview(data: &[u8]) -> String {
     preview.replace('\n', " ").replace('\r', "")
 }
 
-/// Check if payload is executable (ELF/PE/Mach-O)
-fn is_executable_payload(data: &[u8]) -> bool {
-    if data.len() < 4 {
-        return false;
-    }
-
-    // ELF magic: 0x7F 'E' 'L' 'F'
-    if data[0] == 0x7F && data[1] == b'E' && data[2] == b'L' && data[3] == b'F' {
-        return true;
-    }
-
-    // Mach-O magic: 0xFEEDFACE or 0xFEEDFACF or 0xCAFEBABE
-    if (data[0] == 0xFE
-        && data[1] == 0xED
-        && data[2] == 0xFA
-        && (data[3] == 0xCE || data[3] == 0xCF))
-        || (data[0] == 0xCA && data[1] == 0xFE && data[2] == 0xBA && data[3] == 0xBE)
-    {
-        return true;
-    }
-
-    // PE magic: 'M' 'Z'
-    if data[0] == b'M' && data[1] == b'Z' {
-        return true;
-    }
-
-    false
-}
-
-/// Check if payload is script code (Python/Shell/JavaScript)
-fn is_script_payload(data: &[u8]) -> bool {
-    if let Ok(text) = std::str::from_utf8(data) {
-        // Python indicators
-        if text.contains("import ") || text.contains("def ") || text.contains("class ") {
-            return true;
-        }
-
-        // Shell indicators
-        if text.starts_with("#!/bin/") || text.starts_with("#!/usr/bin/") {
-            return true;
-        }
-
-        // JavaScript indicators
-        if text.contains("function ") || text.contains("const ") || text.contains("var ") {
-            return true;
-        }
-    }
-
-    false
-}
-
-/// Classify payload suspicion using stng's classifier
-fn classify_payload_suspicion(final_bytes: &[u8]) -> Criticality {
-    // First try to classify as text using stng's classifier
-    if let Ok(text) = std::str::from_utf8(final_bytes) {
-        let kind = stng::classify_string(text);
-
-        // Map stng's StringKind to cleave's Criticality
-        match kind {
-            // Hostile: Active threats
-            stng::StringKind::ShellCmd
-            | stng::StringKind::CommandInjection
-            | stng::StringKind::XSSPayload
-            | stng::StringKind::SQLInjection
-            | stng::StringKind::RansomNote => return Criticality::Hostile,
-
-            // Suspicious: Concerning indicators
-            stng::StringKind::SuspiciousPath
-            | stng::StringKind::Registry
-            | stng::StringKind::CryptoWallet
-            | stng::StringKind::MiningPool
-            | stng::StringKind::TorAddress
-            | stng::StringKind::APIKey
-            | stng::StringKind::XorKey => return Criticality::Suspicious,
-
-            // Notable: Network indicators
-            stng::StringKind::Url
-            | stng::StringKind::IP
-            | stng::StringKind::IPPort
-            | stng::StringKind::Hostname
-            | stng::StringKind::Email => return Criticality::Notable,
-
-            _ => {}
-        }
-    }
-
-    // Check for binary payloads
-    if is_executable_payload(final_bytes) {
-        return Criticality::Hostile;
-    }
-
-    if is_script_payload(final_bytes) {
-        return Criticality::Suspicious;
-    }
-
-    // Default: Encoded payload is suspicious
-    Criticality::Suspicious
-}
 
 /// Recursively decompress and check for nested encodings
 /// This handles compression + nested base64/hex that stng doesn't process
@@ -391,9 +293,6 @@ fn process_decoded_string(
 
     // cleave: Check for compression and nested encoding
     let (final_bytes, final_chain) = decompress_and_nest(decoded_bytes, encoding_chain, 0);
-
-    // Re-classify final decoded content for suspicion
-    let _suspicion = classify_payload_suspicion(&final_bytes);
 
     // Create temp file for recursive analysis
     if let Ok(mut temp_file) = tempfile::NamedTempFile::new() {

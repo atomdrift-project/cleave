@@ -405,6 +405,9 @@ impl ElfAnalyzer {
                         binary,
                         &report.target.path,
                     ));
+                if binary.offset >= data.len() {
+                    continue;
+                }
                 let slice_end = (binary.offset + binary.estimated_size).min(data.len());
                 let embedded_bytes = &data[binary.offset..slice_end];
                 let kind_str = binary.kind.as_str();

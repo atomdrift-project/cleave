@@ -1463,6 +1463,14 @@ impl ArchiveAnalyzer {
                             return Err(sevenz_rust::Error::io(e));
                         }
 
+                        if limited.is_limited() {
+                            guard.add_hostile_reason(HostileArchiveReason::ExcessiveFileSize {
+                                file: name.clone(),
+                                size: MAX_FILE_SIZE,
+                            });
+                            return Ok(true); // skip this entry, continue archive
+                        }
+
                         if !guard.check_bytes(file_size, &name) {
                             return Err(sevenz_rust::Error::other("Exceeded total size"));
                         }
@@ -1478,11 +1486,18 @@ impl ArchiveAnalyzer {
                             return Err(sevenz_rust::Error::other("Channel closed"));
                         }
                     } else {
-                        println!("CLEAVE_DEBUG: starting to read {}", name);
                         let mut data = Vec::with_capacity(file_size as usize);
                         let mut limited = LimitedReader::new(reader, MAX_FILE_SIZE);
                         if let Err(e) = std::io::Read::read_to_end(&mut limited, &mut data) {
                             return Err(sevenz_rust::Error::io(e));
+                        }
+
+                        if limited.is_limited() {
+                            guard.add_hostile_reason(HostileArchiveReason::ExcessiveFileSize {
+                                file: name.clone(),
+                                size: MAX_FILE_SIZE,
+                            });
+                            return Ok(true); // skip this entry, continue archive
                         }
 
                         if !guard.check_bytes(data.len() as u64, &name) {
@@ -1496,7 +1511,6 @@ impl ArchiveAnalyzer {
                             file_type
                         };
 
-                        println!("CLEAVE_DEBUG: successfully read {}, sending to tx", name);
                         if tx
                             .send(ExtractedFile::InMemory {
                                 path: name.clone(),
@@ -1505,10 +1519,8 @@ impl ArchiveAnalyzer {
                             })
                             .is_err()
                         {
-                            println!("CLEAVE_DEBUG: channel closed when sending {}", name);
                             return Err(sevenz_rust::Error::other("Channel closed"));
                         }
-                        println!("CLEAVE_DEBUG: sent {}", name);
                     }
 
                     Ok(true)
@@ -1664,20 +1676,20 @@ impl ArchiveAnalyzer {
 
         let mut limited = LimitedReader::new(decoder, MAX_FILE_SIZE);
         let mut data = Vec::new();
-        match std::io::Read::read_to_end(&mut limited, &mut data) {
-            Ok(n) => {
-                guard.check_compression_ratio(compressed_size, n as u64);
-                guard.check_bytes(n as u64, stem);
-            }
-            Err(e) if e.to_string().contains("size limit exceeded") => {
-                guard.add_hostile_reason(HostileArchiveReason::ExcessiveFileSize {
-                    file: stem.to_string(),
-                    size: MAX_FILE_SIZE,
-                });
-                return Ok(ArchiveSummary { hostile_reasons: guard.take_reasons() });
-            }
-            Err(e) => return Err(anyhow::anyhow!("Decompression failed: {}", e)),
+        std::io::Read::read_to_end(&mut limited, &mut data)
+            .map_err(|e| anyhow::anyhow!("Decompression failed: {}", e))?;
+
+        if limited.is_limited() {
+            guard.add_hostile_reason(HostileArchiveReason::ExcessiveFileSize {
+                file: stem.to_string(),
+                size: MAX_FILE_SIZE,
+            });
+            return Ok(ArchiveSummary { hostile_reasons: guard.take_reasons() });
         }
+
+        let n = data.len();
+        guard.check_compression_ratio(compressed_size, n as u64);
+        guard.check_bytes(n as u64, stem);
 
         let file_type = detect_file_type_from_path(Path::new(stem));
         if let Ok(result) = analyzer.analyze_in_memory(stem, &data, &file_type) {

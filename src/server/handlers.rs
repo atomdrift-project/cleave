@@ -847,7 +847,7 @@ pub(super) async fn requests(State(state): State<Arc<AppState>>) -> Json<serde_j
         .in_flight
         .iter()
         .map(|e| {
-            let elapsed_ms = now.duration_since(e.started_at).as_millis();
+            let elapsed_ms = now.duration_since(e.started_at).as_millis() as u64;
             serde_json::json!({
                 "request_id": e.key(),
                 "name": e.name,

@@ -341,12 +341,13 @@ fn test_limited_reader_enforces_limit() {
     let mut reader = LimitedReader::new(&data[..], 10);
 
     let mut buffer = Vec::new();
-    let result = reader.read_to_end(&mut buffer);
+    let n = reader.read_to_end(&mut buffer).unwrap();
 
-    // Should read exactly 10 bytes, then error
-    assert!(result.is_err());
-    assert_eq!(buffer.len(), 10);
+    // Should read exactly 10 bytes (Ok, not Err — correct Read contract)
+    assert_eq!(n, 10);
     assert_eq!(&buffer, b"Hello, Wor");
+    // …and flag that the stream was truncated
+    assert!(reader.is_limited());
 }
 
 #[test]
@@ -355,10 +356,11 @@ fn test_limited_reader_zero_limit() {
     let mut reader = LimitedReader::new(&data[..], 0);
 
     let mut buffer = [0u8; 10];
-    let result = reader.read(&mut buffer);
+    let n = reader.read(&mut buffer).unwrap();
 
-    // Should immediately error with zero limit
-    assert!(result.is_err());
+    // Returns Ok(0) (EOF) immediately; callers check is_limited()
+    assert_eq!(n, 0);
+    assert!(reader.is_limited());
 }
 
 #[test]
@@ -377,10 +379,23 @@ fn test_limited_reader_partial_reads() {
     assert_eq!(n2, 5);
     assert_eq!(&buf2, b"56789");
 
-    // Next read should fail (limit reached)
+    // Limit exactly reached — next read returns Ok(0) and sets is_limited
     let mut buf3 = [0u8; 1];
-    let result = reader.read(&mut buf3);
-    assert!(result.is_err());
+    let n3 = reader.read(&mut buf3).unwrap();
+    assert_eq!(n3, 0);
+    assert!(reader.is_limited());
+}
+
+#[test]
+fn test_limited_reader_not_limited_when_data_fits() {
+    let data = b"tiny";
+    let mut reader = LimitedReader::new(&data[..], 100);
+
+    let mut buffer = Vec::new();
+    reader.read_to_end(&mut buffer).unwrap();
+
+    assert_eq!(&buffer, data);
+    assert!(!reader.is_limited());
 }
 
 // =============================================================================

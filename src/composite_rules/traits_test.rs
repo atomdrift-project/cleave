@@ -504,6 +504,69 @@ fn test_per_kb_max_constraint_fail() {
     );
 }
 
+#[test]
+fn test_per_kb_max_zero_byte_file_with_matches_fails() {
+    // A zero-byte file with any matches has infinite density — must fail a max ceiling.
+    let condition = Condition::Symbol {
+        exact: None,
+        substr: Some("func".to_string()),
+        regex: None,
+        platforms: None,
+        is_check: None,
+        compiled_regex: None,
+    };
+
+    let mut trait_def = create_test_trait("test/density::max_zero_byte_fail", condition);
+    trait_def.per_kb_max = Some(100.0);
+
+    let mut report = create_report_with_size(0); // zero-byte file
+    report.imports.push(Import {
+        symbol: "func1".to_string(),
+        library: None,
+        source: "test".to_string(),
+    });
+
+    let ctx = create_test_context(report, vec![]);
+    let result = trait_def.evaluate(&ctx);
+
+    assert!(
+        result.is_none(),
+        "Zero-byte file with matches has infinite density and must fail per_kb_max"
+    );
+}
+
+#[test]
+fn test_per_kb_max_zero_byte_file_no_matches_passes() {
+    // A zero-byte file with no matches has zero matches/KB — passes the ceiling check.
+    let condition = Condition::Symbol {
+        exact: None,
+        substr: Some("func".to_string()),
+        regex: None,
+        platforms: None,
+        is_check: None,
+        compiled_regex: None,
+    };
+
+    let mut trait_def = create_test_trait("test/density::max_zero_byte_pass", condition);
+    trait_def.per_kb_max = Some(100.0);
+    // No count_min means zero matches is still potentially valid — the condition just won't fire,
+    // so evaluate() returns None because the condition itself doesn't match.
+    // Add count_min=0 explicitly so only the density gate matters.
+    // (The default is None which lets zero-match results through the count gate.)
+
+    let report = create_report_with_size(0); // zero-byte file, no matches
+
+    let ctx = create_test_context(report, vec![]);
+    let result = trait_def.evaluate(&ctx);
+
+    // With no matches the condition doesn't fire → result is None regardless.
+    // The important thing is that we don't panic on a zero-byte file.
+    assert!(
+        result.is_none(),
+        "Zero-byte file with no matches should produce no result (condition never fires)"
+    );
+}
+
 // ==================== Platform filtering tests ====================
 
 #[test]

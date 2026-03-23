@@ -364,19 +364,26 @@ pub(crate) fn eval_metrics<'a>(
             .as_ref()
             .map(|g| g.blank_import_count as f64),
 
-        // PNG metrics (for steganography detection)
-        "png.width" => metrics.png.as_ref().map(|p| p.width as f64),
-        "png.height" => metrics.png.as_ref().map(|p| p.height as f64),
+        // Shared image metrics
+        "image.width" => metrics.image.as_ref().map(|i| i.width as f64),
+        "image.height" => metrics.image.as_ref().map(|i| i.height as f64),
+        "image.channels" => metrics.image.as_ref().map(|i| i.channels as f64),
+        "image.pixel_entropy" => metrics.image.as_ref().map(|i| i.pixel_entropy as f64),
+        "image.histogram_flatness" => metrics.image.as_ref().map(|i| i.histogram_flatness as f64),
+        "image.edge_density" => metrics.image.as_ref().map(|i| i.edge_density as f64),
+        "image.r_entropy" => metrics.image.as_ref().map(|i| i.r_entropy as f64),
+        "image.g_entropy" => metrics.image.as_ref().map(|i| i.g_entropy as f64),
+        "image.b_entropy" => metrics.image.as_ref().map(|i| i.b_entropy as f64),
+
+        // PNG-specific metrics
         "png.bit_depth" => metrics.png.as_ref().map(|p| p.bit_depth as f64),
-        "png.channels" => metrics.png.as_ref().map(|p| p.channels as f64),
-        "png.pixel_entropy" => metrics.png.as_ref().map(|p| p.pixel_entropy as f64),
-        "png.histogram_flatness" => metrics.png.as_ref().map(|p| p.histogram_flatness as f64),
-        "png.edge_density" => metrics.png.as_ref().map(|p| p.edge_density as f64),
         "png.compression_ratio" => metrics.png.as_ref().map(|p| p.compression_ratio as f64),
-        "png.r_entropy" => metrics.png.as_ref().map(|p| p.r_entropy as f64),
-        "png.g_entropy" => metrics.png.as_ref().map(|p| p.g_entropy as f64),
-        "png.b_entropy" => metrics.png.as_ref().map(|p| p.b_entropy as f64),
         "png.a_entropy" => metrics.png.as_ref().map(|p| p.a_entropy as f64),
+
+        // JPEG-specific metrics
+        "jpeg.appended_bytes" => metrics.jpeg.as_ref().map(|j| j.appended_bytes as f64),
+        "jpeg.comment_bytes" => metrics.jpeg.as_ref().map(|j| j.comment_bytes as f64),
+        "jpeg.exif_size" => metrics.jpeg.as_ref().map(|j| j.exif_size as f64),
 
         _ => None,
     };

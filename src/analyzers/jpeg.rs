@@ -11,7 +11,7 @@
 use super::{AnalysisInput, Analyzer};
 use crate::capabilities::CapabilityMapper;
 use crate::entropy::calculate_entropy;
-use crate::types::{AnalysisReport, JpegMetrics, Metrics, TargetInfo};
+use crate::types::{AnalysisReport, BinaryMetrics, ImageMetrics, JpegMetrics, Metrics, TargetInfo};
 use anyhow::Result;
 use sha2::{Digest, Sha256};
 use std::path::Path;
@@ -59,8 +59,14 @@ impl JpegAnalyzer {
         let mut report = AnalysisReport::new(target);
         report.metadata.tools_used.push("jpeg-analyzer".to_string());
 
-        if let Some(jpeg_metrics) = analyze_jpeg_data(data) {
+        if let Some((image_metrics, jpeg_metrics)) = analyze_jpeg_data(data) {
             report.metrics = Some(Metrics {
+                binary: Some(BinaryMetrics {
+                    file_size: data.len() as u64,
+                    overall_entropy: calculate_entropy(data) as f32,
+                    ..Default::default()
+                }),
+                image: Some(image_metrics),
                 jpeg: Some(jpeg_metrics),
                 ..Default::default()
             });
@@ -184,7 +190,7 @@ fn scan_jpeg_markers(data: &[u8]) -> (u64, u64, u64) {
 }
 
 /// Analyze JPEG data and extract steganography-relevant metrics
-fn analyze_jpeg_data(data: &[u8]) -> Option<JpegMetrics> {
+fn analyze_jpeg_data(data: &[u8]) -> Option<(ImageMetrics, JpegMetrics)> {
     use jpeg_decoder::Decoder;
     use std::io::Cursor;
 
@@ -210,17 +216,53 @@ fn analyze_jpeg_data(data: &[u8]) -> Option<JpegMetrics> {
     let edge_density =
         calculate_edge_density(&pixels, width as usize, height as usize, channels as usize);
 
-    Some(JpegMetrics {
-        width,
-        height,
-        channels,
-        pixel_entropy,
-        histogram_flatness,
-        edge_density,
-        appended_bytes,
-        comment_bytes,
-        exif_size,
-    })
+    // Calculate per-channel entropy for RGB images
+    let (r_entropy, g_entropy, b_entropy) = if channels >= 3 {
+        calculate_channel_entropy(&pixels, channels as usize)
+    } else {
+        (0.0, 0.0, 0.0)
+    };
+
+    Some((
+        ImageMetrics {
+            width,
+            height,
+            channels,
+            pixel_entropy,
+            histogram_flatness,
+            edge_density,
+            r_entropy,
+            g_entropy,
+            b_entropy,
+        },
+        JpegMetrics {
+            appended_bytes,
+            comment_bytes,
+            exif_size,
+        },
+    ))
+}
+
+/// Calculate entropy for each color channel separately
+fn calculate_channel_entropy(pixels: &[u8], channels: usize) -> (f32, f32, f32) {
+    let pixel_count = pixels.len() / channels;
+    let mut r_data = Vec::with_capacity(pixel_count);
+    let mut g_data = Vec::with_capacity(pixel_count);
+    let mut b_data = Vec::with_capacity(pixel_count);
+
+    for chunk in pixels.chunks(channels) {
+        if chunk.len() >= 3 {
+            r_data.push(chunk[0]);
+            g_data.push(chunk[1]);
+            b_data.push(chunk[2]);
+        }
+    }
+
+    (
+        calculate_entropy(&r_data) as f32,
+        calculate_entropy(&g_data) as f32,
+        calculate_entropy(&b_data) as f32,
+    )
 }
 
 /// Calculate edge density using simple gradient detection (mirrors PNG analyzer)

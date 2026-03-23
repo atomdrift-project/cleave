@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 use super::binary_metrics::{BinaryMetrics, ElfMetrics, JavaClassMetrics, MachoMetrics, PeMetrics};
 use super::container_metrics::{ArchiveMetrics, PackageJsonMetrics};
 use super::is_zero_f32;
+use super::image_metrics::ImageMetrics;
 use super::jpeg_metrics::JpegMetrics;
 use super::language_metrics::{
     CMetrics, CSharpMetrics, GoMetrics, JavaScriptMetrics, JavaSourceMetrics, LuaMetrics,
@@ -116,10 +117,13 @@ pub struct Metrics {
     pub package_json: Option<PackageJsonMetrics>,
 
     // === Image metrics ===
-    /// JPEG image metrics for steganography detection
+    /// Shared image metrics (pixel entropy, histogram, edge density, per-channel entropy)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub image: Option<ImageMetrics>,
+    /// JPEG-specific metrics (appended bytes, comment bytes, EXIF size)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub jpeg: Option<JpegMetrics>,
-    /// PNG image metrics for steganography detection
+    /// PNG-specific metrics (compression ratio, bit depth, alpha entropy)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub png: Option<PngMetrics>,
 

@@ -9,7 +9,7 @@
 use super::{AnalysisInput, Analyzer};
 use crate::capabilities::CapabilityMapper;
 use crate::entropy::calculate_entropy;
-use crate::types::{AnalysisReport, Metrics, PngMetrics, TargetInfo};
+use crate::types::{AnalysisReport, BinaryMetrics, ImageMetrics, Metrics, PngMetrics, TargetInfo};
 use anyhow::Result;
 use sha2::{Digest, Sha256};
 use std::path::Path;
@@ -63,8 +63,14 @@ impl PngAnalyzer {
         report.metadata.tools_used.push("png-analyzer".to_string());
 
         // Parse and analyze PNG
-        if let Some(png_metrics) = analyze_png_data(data) {
+        if let Some((image_metrics, png_metrics)) = analyze_png_data(data) {
             report.metrics = Some(Metrics {
+                binary: Some(BinaryMetrics {
+                    file_size: data.len() as u64,
+                    overall_entropy: calculate_entropy(data) as f32,
+                    ..Default::default()
+                }),
+                image: Some(image_metrics),
                 png: Some(png_metrics),
                 ..Default::default()
             });
@@ -104,7 +110,7 @@ impl Analyzer for PngAnalyzer {
 }
 
 /// Analyze PNG data and extract steganography-relevant metrics
-fn analyze_png_data(data: &[u8]) -> Option<PngMetrics> {
+fn analyze_png_data(data: &[u8]) -> Option<(ImageMetrics, PngMetrics)> {
     use png::Decoder;
 
     let decoder = Decoder::new(data);
@@ -157,20 +163,24 @@ fn analyze_png_data(data: &[u8]) -> Option<PngMetrics> {
     let edge_density =
         calculate_edge_density(pixels, width as usize, height as usize, channels as usize);
 
-    Some(PngMetrics {
-        width,
-        height,
-        bit_depth,
-        channels,
-        pixel_entropy,
-        histogram_flatness,
-        edge_density,
-        compression_ratio,
-        r_entropy,
-        g_entropy,
-        b_entropy,
-        a_entropy,
-    })
+    Some((
+        ImageMetrics {
+            width,
+            height,
+            channels,
+            pixel_entropy,
+            histogram_flatness,
+            edge_density,
+            r_entropy,
+            g_entropy,
+            b_entropy,
+        },
+        PngMetrics {
+            bit_depth,
+            compression_ratio,
+            a_entropy,
+        },
+    ))
 }
 
 /// Calculate entropy for each color channel separately

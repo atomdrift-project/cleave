@@ -43,6 +43,7 @@ pub(crate) mod core;
 pub(crate) mod diff;
 pub mod field_paths;
 pub(crate) mod file_analysis;
+pub(crate) mod image_metrics;
 pub(crate) mod jpeg_metrics;
 pub(crate) mod language_metrics;
 pub(crate) mod ml_features;
@@ -107,6 +108,7 @@ pub(crate) use language_metrics::{
 };
 
 pub(crate) use binary_metrics::{BinaryMetrics, MachoMetrics};
+pub(crate) use image_metrics::ImageMetrics;
 pub(crate) use jpeg_metrics::JpegMetrics;
 pub(crate) use png_metrics::PngMetrics;
 

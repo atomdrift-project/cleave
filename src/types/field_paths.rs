@@ -127,6 +127,22 @@ pub(crate) fn all_valid_metric_paths() -> HashSet<String> {
         paths.insert(format!("package_json.{}", field));
     }
 
+    // Image metrics (shared across PNG and JPEG)
+    use super::image_metrics::ImageMetrics;
+    for field in ImageMetrics::valid_field_paths() {
+        paths.insert(format!("image.{}", field));
+    }
+
+    // Format-specific image metrics
+    use super::png_metrics::PngMetrics;
+    use super::jpeg_metrics::JpegMetrics;
+    for field in PngMetrics::valid_field_paths() {
+        paths.insert(format!("png.{}", field));
+    }
+    for field in JpegMetrics::valid_field_paths() {
+        paths.insert(format!("jpeg.{}", field));
+    }
+
     // Composite scores
     for field in ObfuscationScore::valid_field_paths() {
         paths.insert(format!("obfuscation.{}", field));

@@ -863,6 +863,9 @@ fn detect_by_content_heuristics(file_data: &[u8]) -> Option<FileType> {
     if looks_like_vbs(file_data) {
         return Some(FileType::Vbs);
     }
+    if looks_like_javascript(file_data) {
+        return Some(FileType::JavaScript);
+    }
     if looks_like_c(file_data) {
         return Some(FileType::C);
     }
@@ -1092,6 +1095,41 @@ fn looks_like_vbs(data: &[u8]) -> bool {
         .filter(|&&p| memchr::memmem::find(head, p).is_some())
         .count()
         >= 2
+}
+
+/// Heuristic detection for JavaScript files without .js extension
+fn looks_like_javascript(data: &[u8]) -> bool {
+    let head = &data[..data.len().min(2048)];
+    // Strong single-indicator: IIFE pattern is almost exclusively JavaScript
+    if memchr::memmem::find(head, b"(function(").is_some()
+        || memchr::memmem::find(head, b"(function (").is_some()
+    {
+        return true;
+    }
+    // Secondary: need 3+ common JavaScript idioms
+    let indicators: &[&[u8]] = &[
+        b"var ",
+        b"function ",
+        b"===",
+        b"!==",
+        b"console.",
+        b"document.",
+        b"window.",
+        b".prototype",
+        b"require(",
+        b"module.exports",
+        b"addEventListener",
+        b"typeof ",
+        b"undefined",
+        b"null)",
+        b"null,",
+        b"return ",
+    ];
+    indicators
+        .iter()
+        .filter(|&&p| memchr::memmem::find(head, p).is_some())
+        .count()
+        >= 3
 }
 
 /// Heuristic detection for C/C++ source files without .c/.cpp extension
@@ -1833,6 +1871,55 @@ mod tests {
             .unwrap();
         let file_type = detect_file_type(f.path()).unwrap();
         assert_eq!(file_type, FileType::Perl);
+    }
+
+    // --- JavaScript ---
+
+    #[test]
+    fn test_looks_like_javascript_iife() {
+        assert!(looks_like_javascript(
+            b"// Copyright 2012 Google Inc.\n(function(){\nvar data = {};\n});\n"
+        ));
+    }
+
+    #[test]
+    fn test_looks_like_javascript_iife_spaced() {
+        assert!(looks_like_javascript(
+            b"(function (window, document) {\n  var x = 1;\n})(window, document);\n"
+        ));
+    }
+
+    #[test]
+    fn test_looks_like_javascript_secondary_indicators() {
+        // No IIFE but enough secondary JS idioms
+        assert!(looks_like_javascript(
+            b"var x = 1;\nif (typeof x === 'undefined') {\n  console.log('nope');\n}\n"
+        ));
+    }
+
+    #[test]
+    fn test_looks_like_javascript_negative() {
+        assert!(!looks_like_javascript(
+            b"fn main() {\n    println!(\"hello\");\n}\n"
+        ));
+        assert!(!looks_like_javascript(b"use strict;\nmy $x = 1;\n"));
+        assert!(!looks_like_javascript(
+            b"#include <stdio.h>\nint main() { return 0; }\n"
+        ));
+    }
+
+    #[test]
+    fn test_javascript_extensionless_file_detected() {
+        use std::io::Write;
+        use tempfile::NamedTempFile;
+
+        let mut f = NamedTempFile::new().unwrap();
+        f.write_all(
+            b"// Google Tag Manager\n(function(){\nvar data = {\n\"resource\": {\"version\":\"1\"}\n};\n})();\n",
+        )
+        .unwrap();
+        let file_type = detect_file_type(f.path()).unwrap();
+        assert_eq!(file_type, FileType::JavaScript);
     }
 
     // --- Batch ---

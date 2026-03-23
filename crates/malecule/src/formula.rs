@@ -288,7 +288,7 @@ mod tests {
     fn test_finding_to_element() {
         assert_eq!(
             finding_to_element("objectives/lateral-movement/supply-chain/npm"),
-            Some(crate::elements::LANTHANUM)
+            Some(crate::elements::SULFUR)
         );
         assert_eq!(
             finding_to_element("micro-behaviors/fs/file"),

@@ -97,12 +97,59 @@ pub const GOLD: Element = Element::new(79, "Au", "Gold");
 pub const SILVER: Element = Element::new(47, "Ag", "Silver");
 /// Platinum - lang metadata.
 pub const PLATINUM: Element = Element::new(78, "Pt", "Platinum");
+/// Bismuth - binary metadata (Bi for Binary).
+pub const BISMUTH: Element = Element::new(83, "Bi", "Bismuth");
+/// Protactinium - package metadata (Pa for Package).
+pub const PROTACTINIUM: Element = Element::new(91, "Pa", "Protactinium");
+/// Silicon - signed metadata (Si for Signed).
+pub const SILICON: Element = Element::new(14, "Si", "Silicon");
+/// Vanadium - vendor metadata (V for Vendor).
+pub const VANADIUM: Element = Element::new(23, "V", "Vanadium");
+/// Lithium - library metadata (Li for Library).
+pub const LITHIUM: Element = Element::new(3, "Li", "Lithium");
+/// Argon - archive metadata (Ar for Archive).
+pub const ARGON: Element = Element::new(18, "Ar", "Argon");
+/// Berkelium - builder metadata (Bk for Build).
+pub const BERKELIUM: Element = Element::new(97, "Bk", "Berkelium");
+/// Boron - bundle metadata (B for Bundle).
+pub const BORON: Element = Element::new(5, "B", "Boron");
+/// Cerium - compiler metadata (Ce for Compile).
+pub const CERIUM: Element = Element::new(58, "Ce", "Cerium");
+/// Californium - config metadata (Cf for Config).
+pub const CALIFORNIUM: Element = Element::new(98, "Cf", "Californium");
+/// Germanium - dev metadata.
+pub const GERMANIUM: Element = Element::new(32, "Ge", "Germanium");
+/// Rhodium - entitlements metadata (Rh for Rights).
+pub const RHODIUM: Element = Element::new(45, "Rh", "Rhodium");
+/// Iron - file metadata (Fe for File).
+pub const IRON: Element = Element::new(26, "Fe", "Iron");
+/// Helium - hardening metadata (He for Hardening).
+pub const HELIUM: Element = Element::new(2, "He", "Helium");
+/// Indium - import metadata (In for Import).
+pub const INDIUM: Element = Element::new(49, "In", "Indium");
+/// Americium - analytics metadata (Am for Analytics).
+pub const AMERICIUM: Element = Element::new(95, "Am", "Americium");
+/// Neon - arch metadata (Ne for nearest match).
+pub const NEON: Element = Element::new(10, "Ne", "Neon");
+/// Terbium - encoded-payload metadata.
+pub const TERBIUM: Element = Element::new(65, "Tb", "Terbium");
 
 /// Potassium - well-known (K for "Known") malware families.
 pub const POTASSIUM: Element = Element::new(19, "K", "Potassium");
+/// Tellurium - well-known tools (Te for Tools).
+pub const TELLURIUM: Element = Element::new(52, "Te", "Tellurium");
 
 /// Thorium - third-party signatures/rules.
 pub const THORIUM: Element = Element::new(90, "Th", "Thorium");
+
+/// Sulfur - supply-chain objective (S for Supply).
+pub const SULFUR: Element = Element::new(16, "S", "Sulfur");
+/// Magnesium - mem micro-behavior (Mg for Memory).
+pub const MAGNESIUM: Element = Element::new(12, "Mg", "Magnesium");
+/// Titanium - time micro-behavior (Ti for Time).
+pub const TITANIUM: Element = Element::new(22, "Ti", "Titanium");
+/// Uranium - UI micro-behavior (U for UI).
+pub const URANIUM: Element = Element::new(92, "U", "Uranium");
 
 /// Hydrogen - for count decoration.
 pub const HYDROGEN: Element = Element::new(1, "H", "Hydrogen");
@@ -137,6 +184,7 @@ pub fn category_to_element(category: &str) -> Option<Element> {
         m.insert("privilege-escalation", PRASEODYMIUM);
         m.insert("evasion", ERBIUM);
         m.insert("resource-development", RUBIDIUM);
+        m.insert("supply-chain", SULFUR);
 
         // Micro-behavior subcategories
         m.insert("crypto", CHROMIUM);
@@ -149,14 +197,37 @@ pub fn category_to_element(category: &str) -> Option<Element> {
         m.insert("hardware", HAFNIUM);
         m.insert("network", NEPTUNIUM);
         m.insert("dylib", DYLIB);
+        m.insert("mem", MAGNESIUM);
+        m.insert("time", TITANIUM);
+        m.insert("ui", URANIUM);
 
         // Metadata subcategories
         m.insert("quality", GOLD);
         m.insert("format", SILVER);
         m.insert("lang", PLATINUM);
+        m.insert("binary", BISMUTH);
+        m.insert("package", PROTACTINIUM);
+        m.insert("signed", SILICON);
+        m.insert("vendor", VANADIUM);
+        m.insert("library", LITHIUM);
+        m.insert("archive", ARGON);
+        m.insert("builder", BERKELIUM);
+        m.insert("bundle", BORON);
+        m.insert("compiler", CERIUM);
+        m.insert("config", CALIFORNIUM);
+        m.insert("dev", GERMANIUM);
+        m.insert("entitlements", RHODIUM);
+        // NOTE: "file" deliberately omitted — it collides with micro-behaviors/fs/file path segments.
+        // metadata/file findings will fall through to parent Md (Mendelevium).
+        m.insert("hardening", HELIUM);
+        m.insert("import", INDIUM);
+        m.insert("analytics", AMERICIUM);
+        m.insert("arch", NEON);
+        m.insert("encoded-payload", TERBIUM);
 
         // Malware families (well-known)
         m.insert("malware", POTASSIUM);
+        m.insert("tools", TELLURIUM);
 
         m
     });
@@ -182,17 +253,22 @@ pub fn parent_element(category: &str) -> Option<Element> {
         | "persistence"
         | "privilege-escalation"
         | "evasion"
-        | "resource-development" => Some(OXYGEN),
+        | "resource-development"
+        | "supply-chain" => Some(OXYGEN),
 
         // Micro-behavior subcategories -> H
         "crypto" | "communications" | "fs" | "process" | "os" | "data" | "host" | "hardware"
-        | "network" | "dylib" => Some(HYDROGEN_MICRO),
+        | "network" | "dylib" | "mem" | "time" | "ui" => Some(HYDROGEN_MICRO),
 
-        // Metadata subcategories -> Mg
-        "quality" | "format" | "lang" => Some(MENDELEVIUM),
+        // Metadata subcategories -> Md
+        "quality" | "format" | "lang" | "binary" | "package" | "signed" | "vendor" | "library"
+        | "archive" | "builder" | "bundle" | "compiler" | "config" | "dev" | "entitlements"
+        | "file" | "hardening" | "import" | "analytics" | "arch" | "encoded-payload" => {
+            Some(MENDELEVIUM)
+        }
 
-        // Well-known -> W
-        "malware" => Some(POTASSIUM),
+        // Well-known
+        "malware" | "tools" => Some(POTASSIUM),
 
         _ => None,
     }

@@ -812,7 +812,8 @@ impl PEAnalyzer {
                     binary,
                     &report.target.path,
                 );
-                // Downgrade embedded binaries in .rsrc to Notable (legitimate use)
+                // Downgrade embedded binaries in .rsrc or .NET managed resources to Notable
+                // (legitimate use — e.g. resource-only DLLs, .NET assemblies bundling drivers)
                 if let Some(pe) = pe {
                     let in_rsrc = pe.sections.iter().any(|s| {
                         let name = String::from_utf8_lossy(&s.name);
@@ -824,7 +825,14 @@ impl PEAnalyzer {
                         let end = start + s.size_of_raw_data as usize;
                         binary.offset >= start && binary.offset < end
                     });
-                    if in_rsrc {
+                    // .NET assemblies store managed resources — including embedded native drivers
+                    // — in the .text section, not .rsrc. Detect .NET via the CLR metadata root
+                    // BSJB signature, which is present in every valid .NET assembly.
+                    let is_dotnet = pe_data.windows(4).any(|w| w == b"BSJB");
+                    if std::env::var("DEBUG_CLEAVE_DOTNET").is_ok() {
+                        eprintln!("[DEBUG] embedded PE check: in_rsrc={}, is_dotnet={}, data_len={}", in_rsrc, is_dotnet, pe_data.len());
+                    }
+                    if in_rsrc || is_dotnet {
                         finding.crit = Criticality::Notable;
                     }
                 }

@@ -90,6 +90,10 @@ pub struct TextMetrics {
     /// Unicode whitespace chars (zero-width, non-breaking, etc.)
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub unusual_whitespace: u32,
+    /// Longest run of consecutive spaces/tabs within a single line (excludes leading indent).
+    /// High values (>100) indicate whitespace padding to hide appended code.
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub max_inline_whitespace_run: u32,
 
     // === Escape Sequences ===
     /// Hex escape sequences (\xNN)
@@ -645,6 +649,7 @@ impl ValidFieldPaths for TextMetrics {
             "mixed_indent",
             "trailing_whitespace_lines",
             "unusual_whitespace",
+            "max_inline_whitespace_run",
             // Escape Sequences
             "hex_escape_count",
             "unicode_escape_count",

@@ -75,6 +75,29 @@ pub(crate) fn analyze_text(content: &str) -> TextMetrics {
             .iter()
             .filter(|l| !l.is_empty() && l.ends_with(|c: char| c.is_whitespace()))
             .count() as u32;
+
+        // Max inline whitespace run (excludes leading indent)
+        // Detects whitespace padding used to hide appended code mid-line
+        let mut max_inline_ws = 0u32;
+        for line in &lines {
+            let trimmed = line.trim_start();
+            if trimmed.is_empty() {
+                continue;
+            }
+            let mut current_run = 0u32;
+            let mut max_run = 0u32;
+            for ch in trimmed.chars() {
+                if ch == ' ' || ch == '\t' {
+                    current_run += 1;
+                } else {
+                    max_run = max_run.max(current_run);
+                    current_run = 0;
+                }
+            }
+            // Don't count trailing whitespace — that's a separate metric
+            max_inline_ws = max_inline_ws.max(max_run);
+        }
+        metrics.max_inline_whitespace_run = max_inline_ws;
     }
 
     // === Whitespace Forensics ===
@@ -455,5 +478,33 @@ mod tests {
         assert!(metrics.tab_count > 0);
         assert!(metrics.space_count > 0);
         assert!(metrics.mixed_indent);
+    }
+
+    #[test]
+    fn test_max_inline_whitespace_run() {
+        // Normal code — small inline gaps from alignment
+        let normal = "const x = 1;\nconst y  = 2;\n";
+        let m = analyze_text(normal);
+        assert!(m.max_inline_whitespace_run <= 2);
+
+        // Whitespace-padded payload hiding (supply-chain attack pattern)
+        let padded = format!("export default config;{}global['!']=1;", " ".repeat(500));
+        let m = analyze_text(&padded);
+        assert_eq!(m.max_inline_whitespace_run, 500);
+
+        // Leading indent should NOT count — only the single space in "foo() {}" counts
+        let indented = format!("{}function foo() {{}}", " ".repeat(200));
+        let m = analyze_text(&indented);
+        assert_eq!(m.max_inline_whitespace_run, 1);
+
+        // Trailing whitespace should NOT count — only the single space in "code here" counts
+        let trailing = format!("code here{}", " ".repeat(300));
+        let m = analyze_text(&trailing);
+        assert_eq!(m.max_inline_whitespace_run, 1);
+
+        // Tab padding counts too
+        let tabbed = format!("code;{}malicious();", "\t".repeat(150));
+        let m = analyze_text(&tabbed);
+        assert_eq!(m.max_inline_whitespace_run, 150);
     }
 }

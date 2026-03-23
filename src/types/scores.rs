@@ -244,7 +244,6 @@ pub struct SupplyChainScore {
 /// Returns None if the metric doesn't exist or the field path is invalid
 ///
 /// Uses serde_json for dynamic field access instead of hardcoded match statements
-#[allow(dead_code)] // Used by binary target
 #[must_use]
 pub(crate) fn get_metric_value(metrics: &Metrics, field: &str) -> Option<f64> {
     // Convert metrics to JSON value for dynamic access

@@ -52,6 +52,7 @@ pub(crate) mod macho_codesign;
 pub(crate) mod office;
 pub(crate) mod package_json;
 pub mod pe;
+pub(crate) mod pickle;
 pub(crate) mod png;
 pub(crate) mod rtf;
 pub(crate) mod sfx_detector;
@@ -149,6 +150,11 @@ pub fn analyzer_for_file_type(
             png::PngAnalyzer::new().with_capability_mapper(mapper_or_empty),
         )),
 
+        // Pickle - deserialization attack detection
+        FileType::Pickle => Some(Box::new(
+            pickle::PickleAnalyzer::new().with_capability_mapper(mapper_or_empty),
+        )),
+
         // Package manifests - structured data parsers
         FileType::VsixManifest => Some(Box::new(
             vsix_manifest::VsixManifestAnalyzer::new().with_capability_mapper(mapper_or_empty),
@@ -239,6 +245,11 @@ pub(crate) fn analyzer_for_file_type_arc(
         )),
         FileType::Png => Some(Box::new(
             png::PngAnalyzer::new().with_capability_mapper_arc(mapper_or_empty),
+        )),
+
+        // Pickle - deserialization attack detection
+        FileType::Pickle => Some(Box::new(
+            pickle::PickleAnalyzer::new().with_capability_mapper_arc(mapper_or_empty),
         )),
 
         // Package manifests - structured data parsers
@@ -523,6 +534,17 @@ fn detect_file_type_inner(file_path: &Path, file_data: &[u8]) -> Option<FileType
     // Check for PNG magic bytes (89 50 4E 47 0D 0A 1A 0A)
     if file_data.starts_with(b"\x89PNG\r\n\x1a\n") {
         return Some(FileType::Png);
+    }
+
+    // Check for Python pickle (protocol 2+: \x80\x02-\x05, or protocol 0/1 with extension)
+    if file_data.len() >= 2 && file_data[0] == 0x80 && (2..=5).contains(&file_data[1]) {
+        // Verify extension matches pickle conventions (avoid FP on other \x80-prefixed formats)
+        let ext = file_path
+            .extension()
+            .map(|e| e.to_string_lossy().to_lowercase());
+        if matches!(ext.as_deref(), Some("pkl" | "pickle" | "joblib" | "pt" | "pth")) {
+            return Some(FileType::Pickle);
+        }
     }
 
     // Check for Java class files BEFORE Mach-O (both use 0xCAFEBABE)
@@ -1363,6 +1385,8 @@ pub enum FileType {
     Jpeg,
     /// PNG image
     Png,
+    /// Python pickle serialized data (.pkl, .pickle, .joblib)
+    Pickle,
     /// PDF document
     Pdf,
     /// HTML document (.html, .htm)
@@ -1424,6 +1448,7 @@ impl FileType {
             | FileType::Lnk
             | FileType::Jpeg
             | FileType::Png
+            | FileType::Pickle // Pickle can contain arbitrary code execution
             | FileType::Archive // Archives can contain malware
             | FileType::Pdf => true, // Included as they can carry exploits/malware
             FileType::Unknown | FileType::Html | FileType::Markdown => false, // Skip unknown and non-program text files in dir scans
@@ -1505,6 +1530,7 @@ impl FileType {
             FileType::Lnk => vec!["lnk", "shortcut"],
             FileType::Jpeg => vec!["jpeg", "jpg"],
             FileType::Png => vec!["png"],
+            FileType::Pickle => vec!["pkl", "pickle", "joblib"],
             FileType::Pdf => vec!["pdf"],
             FileType::Html => vec!["html", "htm"],
             FileType::Markdown => vec!["md", "markdown"],

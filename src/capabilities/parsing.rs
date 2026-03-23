@@ -449,6 +449,8 @@ pub(crate) fn parse_file_types(types: &[String], warnings: &mut Vec<String>) -> 
                 // Image formats
                 "jpeg" | "jpg" => vec![RuleFileType::Jpeg],
                 "png" => vec![RuleFileType::Png],
+                // Serialized data
+                "pickle" | "pkl" => vec![RuleFileType::Pickle],
                 // Other formats
                 "plist" => vec![RuleFileType::Plist],
                 "pkginfo" => vec![RuleFileType::PkgInfo],

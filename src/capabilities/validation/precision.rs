@@ -387,6 +387,12 @@ pub(crate) fn calculate_trait_precision(trait_def: &TraitDefinition) -> f32 {
         .filter(|f| !matches!(f, RuleFileType::All))
     {
         precision += score_string_value(&format!("{:?}", file_type).to_lowercase());
+        // Bonus for high-specificity file types where the format itself implies
+        // a security-relevant execution context (e.g., pickle deserialization
+        // executes __reduce__ callables — any code reference is intentional)
+        if matches!(file_type, RuleFileType::Pickle) {
+            precision += 1.0;
+        }
     }
 
     precision += score_condition(&trait_def.r#if);

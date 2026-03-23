@@ -269,6 +269,8 @@ pub(crate) enum FileType {
     Jpeg,
     /// PNG image
     Png,
+    /// Python pickle serialized data
+    Pickle,
     /// PDF document
     Pdf,
 }
@@ -367,6 +369,8 @@ impl FileType {
             // Image formats
             FileType::Jpeg,
             FileType::Png,
+            // Serialized data
+            FileType::Pickle,
             // Document formats
             FileType::Pdf,
         ]
@@ -419,6 +423,7 @@ impl FileType {
             "composer-json" | "composerjson" | "composer.json" => FileType::ComposerJson,
             "jpeg" | "jpg" => FileType::Jpeg,
             "png" => FileType::Png,
+            "pickle" | "pkl" => FileType::Pickle,
             // Additional formats
             "plist" => FileType::Plist,
             "pkginfo" | "pkg-info" | "pkg_info" => FileType::PkgInfo,

@@ -22,6 +22,7 @@ pub struct PathInfo {
     pub access_type: Option<PathAccessType>,
 
     /// Where discovered (strings, yara, function_analysis)
+    #[serde(skip_serializing_if = "String::is_empty", default)]
     pub source: String,
 
     /// Evidence for this path
@@ -157,6 +158,7 @@ pub struct EnvVarInfo {
     pub access_type: EnvVarAccessType,
 
     /// Where discovered (getenv, setenv, strings, ast)
+    #[serde(skip_serializing_if = "String::is_empty", default)]
     pub source: String,
 
     /// Semantic category

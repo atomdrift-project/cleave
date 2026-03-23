@@ -58,6 +58,7 @@ pub struct Trait {
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub section: Option<String>,
     /// Source tool that discovered this trait
+    #[serde(skip_serializing_if = "String::is_empty", default)]
     pub source: String,
 }
 
@@ -264,6 +265,7 @@ pub struct Evidence {
     /// Detection method (symbol, yara, tree-sitter, radare2, entropy, magic, etc.)
     pub method: String,
     /// Source tool (goblin, yara-x, radare2, tree-sitter-bash, etc.)
+    #[serde(skip_serializing_if = "String::is_empty", default)]
     pub source: String,
     /// Value discovered (symbol name, pattern match, etc.) - truncated to 4KB on serialization
     #[serde(serialize_with = "serialize_truncated_value")]

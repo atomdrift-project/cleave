@@ -41,6 +41,7 @@ pub(crate) struct SymbolInfo {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) library: Option<String>,
     pub(crate) symbol_type: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
     pub(crate) source: String,
 }
 

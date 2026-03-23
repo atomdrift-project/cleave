@@ -404,6 +404,7 @@ impl AnalysisReport {
         for file in &mut self.files {
             file.findings
                 .retain(|f| !f.id.starts_with("metadata/internal/symbols::"));
+            file.strip_source_fields();
             Self::refresh_formula(file);
             file.compute_summary();
         }

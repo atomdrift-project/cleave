@@ -25,6 +25,7 @@ pub struct Function {
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub calls: Vec<String>,
     /// Tool that discovered this function (radare2, tree-sitter, etc.)
+    #[serde(skip_serializing_if = "String::is_empty", default)]
     pub source: String,
     /// Control flow graph metrics
     #[serde(skip_serializing_if = "Option::is_none", default)]
@@ -247,6 +248,7 @@ pub struct Import {
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub library: Option<String>,
     /// Tool that discovered this import (goblin, radare2, etc.)
+    #[serde(skip_serializing_if = "String::is_empty", default)]
     pub source: String,
 }
 
@@ -274,6 +276,7 @@ pub struct Export {
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub offset: Option<String>,
     /// Tool that discovered this export (goblin, radare2, etc.)
+    #[serde(skip_serializing_if = "String::is_empty", default)]
     pub source: String,
 }
 

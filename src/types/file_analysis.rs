@@ -225,6 +225,39 @@ impl FileAnalysis {
             None
         };
     }
+
+    /// Clear `source` fields from all nested types — internal metadata not needed in output
+    pub(crate) fn strip_source_fields(&mut self) {
+        for t in &mut self.traits {
+            t.source.clear();
+        }
+        for f in &mut self.findings {
+            for e in &mut f.evidence {
+                e.source.clear();
+            }
+        }
+        for f in &mut self.functions {
+            f.source.clear();
+        }
+        for i in &mut self.imports {
+            i.source.clear();
+        }
+        for e in &mut self.exports {
+            e.source.clear();
+        }
+        for p in &mut self.paths {
+            p.source.clear();
+            for e in &mut p.evidence {
+                e.source.clear();
+            }
+        }
+        for ev in &mut self.env_vars {
+            ev.source.clear();
+            for e in &mut ev.evidence {
+                e.source.clear();
+            }
+        }
+    }
 }
 
 /// Finding counts by criticality

@@ -265,6 +265,7 @@ pub enum Command {
     Validate,
 
     /// Compare two versions (diff mode) for supply chain attack detection
+    #[command(hide = true)]
     Diff {
         /// Old/baseline version (file or directory)
         old: String,

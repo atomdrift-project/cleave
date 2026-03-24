@@ -603,27 +603,118 @@ const ALLOWED_MALWARE: &[&str] = &[
 ///
 /// Update this list AND TAXONOMY.md when adding new metadata categories.
 const ALLOWED_METADATA: &[&str] = &[
-    "analytics",       // Analytics tracking (UTM params)
-    "arch",            // Architecture detection (x86, ARM, MIPS, etc.)
-    "archive",         // Archive structure metadata
-    "binary",          // Binary structure (sections, debug info, section content)
-    "builder",         // Build system detection (cmake, cargo, docker, etc.)
-    "bundle",          // Bundle structure (macOS .app bundles)
-    "compiler",        // Compiler detection
-    "config",          // Configuration file detection
-    "dev",             // Development context (testing frameworks)
-    "encoded-payload", // Encoded content detection (base64 presence)
-    "entitlements",    // Code entitlements (macOS/iOS)
-    "file",            // File-level metadata (size)
-    "format",          // File format detection (ELF, PE, Mach-O, PDF, etc.)
-    "hardening",       // Security hardening features (sandbox, seccomp, pledge)
-    "import",          // Dependencies/imports (auto-generated)
-    "lang",            // Source language and encoding detection
-    "library",         // Framework/library detection (react, vue, jquery, etc.)
-    "package",         // Package ecosystem metadata (npm, pypi, crx, etc.)
-    "quality",         // Code quality metrics (docs, testing, versioning, etc.)
-    "signed",          // Code signature detection (platform, developer, ad-hoc)
-    "vendor",          // Vendor identification (Apple, Microsoft, FSF, etc.)
+    "arch",     // CPU architecture detection (x86, ARM, MIPS, IoT)
+    "binary",   // Binary internals (sections, debug, framework, installer, metrics)
+    "build",    // Build system detection (cmake, cargo, docker, CI/CD)
+    "document", // Document format internals (office, PDF, RTF, OLE, HTML)
+    "file",     // File-level observables (magic bytes, extension, encoded content)
+    "hardening", // Security hardening features (sandbox, seccomp, pledge)
+    "import",   // Dependencies/imports (auto-generated)
+    "lang",     // Language, compiler, encoding detection
+    "library",  // Library/framework detection (react, vue, jquery, etc.)
+    "package",  // Package ecosystem metadata & project quality
+    "signed",   // Code signatures, certificates, entitlements
+    "vendor",   // Vendor identification (Apple, Microsoft, FSF, etc.)
+];
+
+/// Allowed subdirectories in metadata/binary/
+///
+/// Binary internals — traits that require parsing binary headers (PE, ELF, Mach-O).
+/// File-level observables (magic bytes, extension) belong in file/, not here.
+/// Document parsing (OLE, OOXML, PDF) belongs in document/, not here.
+///
+/// Prefer technology-neutral subdirectory names. Technology names belong in filenames.
+const ALLOWED_METADATA_BINARY: &[&str] = &[
+    "anomaly",     // Structural violations and anomalies
+    "debug",       // Debug symbols (PDB, DWARF)
+    "framework",   // Runtime/framework detection (.NET, Java, VB6, MFC)
+    "installer",   // Installer framework detection
+    "instruction", // Instruction-level patterns (indirect calls, CPUID)
+    "layout",      // File-level structure (overlay, embedded, bundles)
+    "linking",     // Runtime linking and dynamic resolution
+    "metrics",     // Structural measurements (counts, entropy, ratios, size)
+    "resource",    // Embedded resource analysis
+    "section",     // Section analysis
+    "symbols",     // Import/export symbol analysis
+];
+
+/// Allowed subdirectories in metadata/document/
+///
+/// Document internals — traits that require document parsing (OLE, OOXML, PDF objects).
+/// Binary parsing belongs in binary/, file identification in file/.
+const ALLOWED_METADATA_DOCUMENT: &[&str] = &[
+    "html",   // HTML structure
+    "office", // Office documents (VBA, OOXML, ActiveMime)
+    "ole",    // OLE compound documents
+    "pdf",    // PDF structure
+    "rtf",    // RTF analysis
+];
+
+/// Allowed subdirectories in metadata/file/
+///
+/// File-level observables — properties visible without deep parsing.
+/// These are primarily component traits used as building blocks in composite rules.
+const ALLOWED_METADATA_FILE: &[&str] = &[
+    "encoded",   // Encoded content presence (base64)
+    "extension", // File extension classification
+    "magic",     // Magic byte signatures
+    "text",      // Text/data format identification (JSON, makefile)
+];
+
+/// Allowed subdirectories in metadata/lang/
+///
+/// Language, compiler, and encoding detection.
+/// Build orchestration (cmake, docker, CI/CD) belongs in build/, not here.
+const ALLOWED_METADATA_LANG: &[&str] = &[
+    "compiled",            // Compiled language detection
+    "compiler",            // Compiler identification
+    "encoded",             // Encoded strings (unicode, wide)
+    "go-build",            // Go build specifics
+    "javascript-features", // JavaScript language features
+    "linking",             // Linker properties
+    "optimization",        // Optimization flags
+    "scripted",            // Scripted language detection
+    "security",            // Language security features
+    "shebang",             // Shebang detection
+    "source",              // Source language identification
+    "version",             // Language version detection
+];
+
+/// Allowed subdirectories in metadata/package/
+///
+/// Package ecosystem metadata and project quality indicators.
+/// Behavioral supply-chain detection belongs in objectives/supply-chain/, not here.
+const ALLOWED_METADATA_PACKAGE: &[&str] = &[
+    "chrome-extension", // Extension manifest analysis
+    "config",           // Configuration file detection
+    "contributors",     // Contributor metadata
+    "dependencies",     // Dependency analysis
+    "documentation",    // Documentation presence
+    "error-handling",   // Error handling patterns
+    "fields",           // Package field analysis
+    "files",            // File counts and types
+    "help",             // Help/usage interface
+    "keywords",         // Package keywords
+    "license",          // License detection
+    "logging",          // Logging patterns
+    "maintainers",      // Maintainer counts
+    "metrics",          // Code metrics
+    "quality",          // Quality signals
+    "scripts",          // Package scripts
+    "testing",          // Testing detection
+    "tooling",          // Package tooling
+    "versioning",       // Version detection
+];
+
+/// Allowed subdirectories in metadata/signed/
+///
+/// Code signatures, certificates, and entitlements.
+/// Vendor identification by non-signature means belongs in vendor/, not here.
+const ALLOWED_METADATA_SIGNED: &[&str] = &[
+    "certificate",  // Certificate chain string patterns
+    "entitlements", // Code entitlements (macOS/iOS, Android)
+    "platform",     // Platform-signed binary composites (auto-generated)
+    "trust-level",  // Signing trust level (ad-hoc, developer, platform, app store)
 ];
 
 /// Validates that only known subdirectories exist in taxonomy tiers.
@@ -1014,6 +1105,35 @@ pub(crate) fn validate_directory_structure(traits_path: &Path) -> Result<(), Vec
         }
     }
 
+    // Check metadata/ subdirectory whitelists
+    let metadata_checks: &[(&str, &[&str])] = &[
+        ("binary", ALLOWED_METADATA_BINARY),
+        ("document", ALLOWED_METADATA_DOCUMENT),
+        ("file", ALLOWED_METADATA_FILE),
+        ("lang", ALLOWED_METADATA_LANG),
+        ("package", ALLOWED_METADATA_PACKAGE),
+        ("signed", ALLOWED_METADATA_SIGNED),
+    ];
+    for (category, allowed) in metadata_checks {
+        let cat_path = traits_path.join(format!("metadata/{}", category));
+        if let Ok(entries) = std::fs::read_dir(&cat_path) {
+            for entry in entries.flatten() {
+                if entry.file_type().map(|ft| ft.is_dir()).unwrap_or(false) {
+                    let dir_name = entry.file_name().to_string_lossy().to_string();
+                    if !allowed.contains(&dir_name.as_str()) {
+                        errors.push(format!(
+                            "Unknown metadata/{}/{}\n  \
+                             This rule is misplaced according to TAXONOMY.md.\n  \
+                             See the metadata boundary rubric in TAXONOMY.md for placement guidance.\n  \
+                             There is almost certainly a better existing directory for this trait.",
+                            category, dir_name
+                        ));
+                    }
+                }
+            }
+        }
+    }
+
     if errors.is_empty() {
         Ok(())
     } else {
@@ -1130,7 +1250,7 @@ mod tests {
         std::fs::create_dir_all(traits_path.join("micro-behaviors/communications")).unwrap();
         std::fs::create_dir_all(traits_path.join("micro-behaviors/process")).unwrap();
         std::fs::create_dir_all(traits_path.join("well-known/malware")).unwrap();
-        std::fs::create_dir_all(traits_path.join("metadata/format")).unwrap();
+        std::fs::create_dir_all(traits_path.join("metadata/binary")).unwrap();
         std::fs::create_dir_all(traits_path.join("metadata/vendor")).unwrap();
 
         let result = validate_directory_structure(traits_path);
@@ -1142,7 +1262,7 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let traits_path = temp_dir.path();
 
-        std::fs::create_dir_all(traits_path.join("metadata/format")).unwrap();
+        std::fs::create_dir_all(traits_path.join("metadata/binary")).unwrap();
         std::fs::create_dir_all(traits_path.join("metadata/purpose")).unwrap(); // Invalid!
         std::fs::create_dir_all(traits_path.join("metadata/intent")).unwrap(); // Invalid!
 
@@ -1417,6 +1537,53 @@ mod tests {
         assert!(
             errors.iter().any(|e| e.contains("'apple'")),
             "Should flag 'apple' as invalid: {:?}",
+            errors
+        );
+    }
+
+    #[test]
+    fn test_catches_invalid_metadata_level2_subdirectory() {
+        let temp_dir = TempDir::new().unwrap();
+        let traits_path = temp_dir.path();
+
+        // Valid level-2 subdirectories
+        std::fs::create_dir_all(traits_path.join("metadata/binary/metrics")).unwrap();
+        std::fs::create_dir_all(traits_path.join("metadata/binary/anomaly")).unwrap();
+        // Invalid level-2 subdirectory
+        std::fs::create_dir_all(traits_path.join("metadata/binary/pe")).unwrap();
+
+        let result = validate_directory_structure(traits_path);
+        assert!(
+            result.is_err(),
+            "Should catch invalid metadata level-2 directories"
+        );
+
+        let errors = result.unwrap_err();
+        assert!(
+            errors.iter().any(|e| e.contains("metadata/binary/pe")),
+            "Should flag 'pe' as invalid under binary/: {:?}",
+            errors
+        );
+    }
+
+    #[test]
+    fn test_catches_invalid_metadata_package_subdirectory() {
+        let temp_dir = TempDir::new().unwrap();
+        let traits_path = temp_dir.path();
+
+        std::fs::create_dir_all(traits_path.join("metadata/package/testing")).unwrap();
+        std::fs::create_dir_all(traits_path.join("metadata/package/npm")).unwrap(); // Invalid!
+
+        let result = validate_directory_structure(traits_path);
+        assert!(
+            result.is_err(),
+            "Should catch invalid metadata/package/ directories"
+        );
+
+        let errors = result.unwrap_err();
+        assert!(
+            errors.iter().any(|e| e.contains("metadata/package/npm")),
+            "Should flag 'npm' as invalid under package/: {:?}",
             errors
         );
     }

@@ -98,7 +98,6 @@ fn test_symbol_condition() {
         }]),
         any: None,
 
-        none: None,
         unless: None,
         not: None,
         downgrade: None,
@@ -184,7 +183,6 @@ fn test_all() {
         ]),
         any: None,
 
-        none: None,
         unless: None,
         not: None,
         downgrade: None,
@@ -265,7 +263,6 @@ fn test_count() {
                 compiled_regex: None,
             },
         ]),
-        none: None,
         unless: None,
         not: None,
         downgrade: None,
@@ -337,7 +334,6 @@ fn test_string_exact_condition() {
         }]),
         any: None,
 
-        none: None,
         unless: None,
         not: None,
         downgrade: None,
@@ -411,7 +407,6 @@ fn test_any() {
             },
         ]),
 
-        none: None,
         unless: None,
         not: None,
         downgrade: None,
@@ -2365,7 +2360,6 @@ fn test_basename_in_composite_rule() {
             compiled_regex: None,
         }]),
         any: None,
-        none: None,
         unless: None,
         not: None,
         downgrade: None,
@@ -2449,7 +2443,6 @@ fn test_composite_unless_skips_rule() {
             compiled_regex: None,
         }]),
         any: None,
-        none: None,
         unless: Some(vec![Condition::Trait {
             id: "file/signed/apple".to_string(),
         }]),
@@ -2519,7 +2512,6 @@ fn test_composite_unless_allows_rule() {
             compiled_regex: None,
         }]),
         any: None,
-        none: None,
         unless: Some(vec![Condition::Trait {
             id: "file/signed/apple".to_string(),
         }]),
@@ -2590,7 +2582,6 @@ fn test_composite_unless_with_basename() {
             compiled_regex: None,
         }]),
         all: None,
-        none: None,
         // Skip if this looks like libX11 itself
         unless: Some(vec![Condition::Basename {
             exact: None,
@@ -2677,7 +2668,6 @@ fn test_composite_unless_multiple_conditions_any_matches() {
             compiled_regex: None,
         }]),
         any: None,
-        none: None,
         // Multiple unless conditions - any match should skip the rule
         unless: Some(vec![
             Condition::Basename {
@@ -2802,7 +2792,6 @@ fn test_needs_with_any_only_respects_threshold() {
                 compiled_regex: None,
             },
         ]),
-        none: None,
         unless: None,
         not: None,
         downgrade: None,
@@ -2889,7 +2878,6 @@ fn test_needs_with_any_only_matches_when_threshold_met() {
                 compiled_regex: None,
             },
         ]),
-        none: None,
         unless: None,
         not: None,
         downgrade: None,
@@ -2996,7 +2984,6 @@ fn test_needs_with_all_and_any_respects_threshold() {
                 compiled_regex: None,
             },
         ]),
-        none: None,
         unless: None,
         not: None,
         downgrade: None,
@@ -3116,7 +3103,6 @@ fn test_needs_with_all_and_any_matches_when_threshold_met() {
                 compiled_regex: None,
             },
         ]),
-        none: None,
         unless: None,
         not: None,
         downgrade: None,
@@ -3204,7 +3190,6 @@ fn test_needs_with_all_and_any_all_fails() {
                 compiled_regex: None,
             },
         ]),
-        none: None,
         unless: None,
         not: None,
         downgrade: None,
@@ -3298,7 +3283,6 @@ fn test_all_and_any_without_needs_requires_one_any() {
                 compiled_regex: None,
             },
         ]),
-        none: None,
         unless: None,
         not: None,
         downgrade: None,
@@ -3397,7 +3381,6 @@ fn proximity_rule(
         size_max: None,
         all: Some(all_conds),
         any: None,
-        none: None,
         unless: None,
         not: None,
         downgrade: None,
@@ -3666,7 +3649,6 @@ fn test_near_lines_any_with_needs() {
                 id: "trait-d".to_string(),
             },
         ]),
-        none: None,
         unless: None,
         not: None,
         downgrade: None,
@@ -3730,7 +3712,6 @@ fn test_near_lines_any_with_needs_too_spread() {
                 id: "trait-d".to_string(),
             },
         ]),
-        none: None,
         unless: None,
         not: None,
         downgrade: None,
@@ -3793,7 +3774,6 @@ fn test_near_lines_all_plus_any() {
                 id: "any-c".to_string(),
             },
         ]),
-        none: None,
         unless: None,
         not: None,
         downgrade: None,
@@ -4658,7 +4638,6 @@ fn test_composite_downgrade_all_match() {
             compiled_regex: None,
         }]),
         any: None,
-        none: None,
         unless: None,
         not: None,
         needs: None,
@@ -4757,7 +4736,6 @@ fn test_composite_downgrade_none_blocks() {
             compiled_regex: None,
         }]),
         any: None,
-        none: None,
         unless: None,
         not: None,
         needs: None,
@@ -4934,7 +4912,6 @@ fn test_proximity_any_needs_cross_condition() {
                 id: "trait-d".to_string(),
             },
         ]),
-        none: None,
         unless: None,
         not: None,
         downgrade: None,
@@ -5028,7 +5005,6 @@ fn test_proximity_does_not_boost_confidence() {
             },
         ]),
         any: None,
-        none: None,
         unless: None,
         not: None,
         downgrade: None,
@@ -5091,165 +5067,5 @@ fn test_proximity_filters_evidence_to_window() {
             .iter()
             .map(|e| e.location.as_deref().unwrap_or("none"))
             .collect::<Vec<_>>()
-    );
-}
-
-// =============================================================================
-// Gap #8: none-only composite rules (absence detection)
-// =============================================================================
-
-#[test]
-fn test_none_only_rule_passes_when_conditions_absent() {
-    let (report, data) = create_test_context();
-    // No findings at all — the none: conditions should all be absent
-    let findings: Vec<Finding> = vec![];
-    let ctx = EvaluationContext {
-        report: &report,
-        binary_data: &data,
-        file_type: FileType::Elf,
-        platforms: vec![Platform::All],
-        arch: vec![Arch::All],
-        arch_ranges: None,
-        additional_findings: Some(&findings),
-        cached_ast: None,
-        finding_id_index: None,
-        debug_collector: None,
-        section_map: None,
-        inline_yara_results: None,
-        cached_kv_format: OnceLock::new(),
-        cached_kv_parsed: OnceLock::new(),
-        current_trait: None,
-        current_source: None,
-        string_exact_index: OnceLock::new(),
-        string_exact_index_ci: OnceLock::new(),
-        deadline: None,
-        slow_rule_ms: 4000,
-    };
-
-    // none-only rule: no all/any, just none with trait references
-    let rule = CompositeTrait {
-        id: "test/none-only-pass".to_string(),
-        desc: "Fires when signatures are absent".to_string(),
-        conf: 0.8,
-        crit: Criticality::Notable,
-        mbc: None,
-        attack: None,
-        platforms: vec![Platform::All],
-        arch: vec![Arch::All],
-        r#for: vec![FileType::All],
-        for_from_groups: false,
-        size_min: None,
-        size_max: None,
-        all: None,
-        any: None,
-        none: Some(vec![
-            Condition::Trait {
-                id: "file/signed/apple".to_string(),
-            },
-            Condition::Trait {
-                id: "file/signed/microsoft".to_string(),
-            },
-        ]),
-        unless: None,
-        not: None,
-        downgrade: None,
-        needs: None,
-        near_lines: None,
-        near_bytes: None,
-        defined_in: std::path::PathBuf::from("test.yaml"),
-        precision: None,
-    };
-
-    let result = rule.evaluate(&ctx);
-    assert!(
-        result.is_some(),
-        "none-only rule should match when all conditions are absent"
-    );
-    let finding = result.unwrap();
-    assert_eq!(finding.id, "test/none-only-pass");
-    assert!(
-        !finding.evidence.is_empty(),
-        "Should have exclusion evidence"
-    );
-    assert_eq!(finding.evidence[0].method, "exclusion");
-}
-
-#[test]
-fn test_none_only_rule_fails_when_condition_present() {
-    let (report, data) = create_test_context();
-    // One of the none: conditions IS present as a finding
-    let findings = vec![Finding {
-        id: "file/signed/apple".to_string(),
-        kind: FindingKind::Capability,
-        desc: "Apple code signature".to_string(),
-        conf: 1.0,
-        crit: Criticality::Baseline,
-        mbc: None,
-        attack: None,
-        trait_refs: vec![],
-        evidence: vec![],
-        match_count: 0,
-        source_file: None,
-    }];
-    let ctx = EvaluationContext {
-        report: &report,
-        binary_data: &data,
-        file_type: FileType::Elf,
-        platforms: vec![Platform::All],
-        arch: vec![Arch::All],
-        arch_ranges: None,
-        additional_findings: Some(&findings),
-        cached_ast: None,
-        finding_id_index: None,
-        debug_collector: None,
-        section_map: None,
-        inline_yara_results: None,
-        cached_kv_format: OnceLock::new(),
-        cached_kv_parsed: OnceLock::new(),
-        current_trait: None,
-        current_source: None,
-        string_exact_index: OnceLock::new(),
-        string_exact_index_ci: OnceLock::new(),
-        deadline: None,
-        slow_rule_ms: 4000,
-    };
-
-    let rule = CompositeTrait {
-        id: "test/none-only-fail".to_string(),
-        desc: "Should fail because signed".to_string(),
-        conf: 0.8,
-        crit: Criticality::Notable,
-        mbc: None,
-        attack: None,
-        platforms: vec![Platform::All],
-        arch: vec![Arch::All],
-        r#for: vec![FileType::All],
-        for_from_groups: false,
-        size_min: None,
-        size_max: None,
-        all: None,
-        any: None,
-        none: Some(vec![
-            Condition::Trait {
-                id: "file/signed/apple".to_string(),
-            },
-            Condition::Trait {
-                id: "file/signed/microsoft".to_string(),
-            },
-        ]),
-        unless: None,
-        not: None,
-        downgrade: None,
-        needs: None,
-        near_lines: None,
-        near_bytes: None,
-        defined_in: std::path::PathBuf::from("test.yaml"),
-        precision: None,
-    };
-
-    let result = rule.evaluate(&ctx);
-    assert!(
-        result.is_none(),
-        "none-only rule should fail when a condition is present"
     );
 }

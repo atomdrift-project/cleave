@@ -102,6 +102,7 @@ fn test_eval_section_ratio_vs_total() {
     report.sections.push(Section {
         name: ".text".to_string(),
         address: None,
+        offset: None,
         size: 500,
         entropy: 6.5,
         permissions: Some("rx".to_string()),
@@ -109,6 +110,7 @@ fn test_eval_section_ratio_vs_total() {
     report.sections.push(Section {
         name: ".data".to_string(),
         address: None,
+        offset: None,
         size: 300,
         entropy: 4.0,
         permissions: Some("rw".to_string()),
@@ -116,6 +118,7 @@ fn test_eval_section_ratio_vs_total() {
     report.sections.push(Section {
         name: ".rodata".to_string(),
         address: None,
+        offset: None,
         size: 200,
         entropy: 5.0,
         permissions: Some("r".to_string()),
@@ -141,6 +144,7 @@ fn test_eval_section_ratio_vs_another_section() {
     report.sections.push(Section {
         name: ".text".to_string(),
         address: None,
+        offset: None,
         size: 1000,
         entropy: 6.5,
         permissions: Some("rx".to_string()),
@@ -148,6 +152,7 @@ fn test_eval_section_ratio_vs_another_section() {
     report.sections.push(Section {
         name: ".data".to_string(),
         address: None,
+        offset: None,
         size: 500,
         entropy: 4.0,
         permissions: Some("rw".to_string()),
@@ -166,6 +171,7 @@ fn test_eval_section_ratio_no_matching_section() {
     report.sections.push(Section {
         name: ".text".to_string(),
         address: None,
+        offset: None,
         size: 1000,
         entropy: 6.5,
         permissions: None,
@@ -193,6 +199,7 @@ fn test_eval_section_ratio_multiple_matching_sections() {
     report.sections.push(Section {
         name: ".text".to_string(),
         address: None,
+        offset: None,
         size: 400,
         entropy: 6.5,
         permissions: None,
@@ -200,6 +207,7 @@ fn test_eval_section_ratio_multiple_matching_sections() {
     report.sections.push(Section {
         name: ".text2".to_string(),
         address: None,
+        offset: None,
         size: 100,
         entropy: 6.0,
         permissions: None,
@@ -207,6 +215,7 @@ fn test_eval_section_ratio_multiple_matching_sections() {
     report.sections.push(Section {
         name: ".data".to_string(),
         address: None,
+        offset: None,
         size: 500,
         entropy: 4.0,
         permissions: None,
@@ -235,6 +244,7 @@ fn test_eval_section_regex() {
     report.sections.push(Section {
         name: "UPX0".to_string(),
         address: None,
+        offset: None,
         size: 1000,
         entropy: 7.5,
         permissions: None,
@@ -268,6 +278,7 @@ fn test_eval_section_contains() {
     report.sections.push(Section {
         name: ".packed_data".to_string(),
         address: None,
+        offset: None,
         size: 1000,
         entropy: 7.5,
         permissions: None,
@@ -300,6 +311,7 @@ fn test_eval_section_no_match() {
     report.sections.push(Section {
         name: ".text".to_string(),
         address: None,
+        offset: None,
         size: 1000,
         entropy: 6.5,
         permissions: None,
@@ -332,6 +344,7 @@ fn test_eval_section_multiple_matches() {
     report.sections.push(Section {
         name: ".text".to_string(),
         address: None,
+        offset: None,
         size: 500,
         entropy: 6.5,
         permissions: None,
@@ -339,6 +352,7 @@ fn test_eval_section_multiple_matches() {
     report.sections.push(Section {
         name: ".text.plt".to_string(),
         address: None,
+        offset: None,
         size: 100,
         entropy: 6.0,
         permissions: None,
@@ -372,6 +386,7 @@ fn test_eval_section_exact() {
     report.sections.push(Section {
         name: ".text".to_string(),
         address: None,
+        offset: None,
         size: 500,
         entropy: 6.5,
         permissions: None,
@@ -379,6 +394,7 @@ fn test_eval_section_exact() {
     report.sections.push(Section {
         name: ".text.plt".to_string(),
         address: None,
+        offset: None,
         size: 100,
         entropy: 6.0,
         permissions: None,
@@ -412,6 +428,7 @@ fn test_eval_section_case_insensitive() {
     report.sections.push(Section {
         name: ".TEXT".to_string(),
         address: None,
+        offset: None,
         size: 500,
         entropy: 6.5,
         permissions: None,
@@ -710,6 +727,7 @@ fn test_eval_section_entropy_min() {
     report.sections.push(Section {
         name: ".text".to_string(),
         address: Some(0x1000),
+        offset: None,
         size: 1000,
         entropy: 7.5,
         permissions: None,
@@ -717,6 +735,7 @@ fn test_eval_section_entropy_min() {
     report.sections.push(Section {
         name: ".data".to_string(),
         address: Some(0x2000),
+        offset: None,
         size: 500,
         entropy: 3.0,
         permissions: None,
@@ -752,6 +771,7 @@ fn test_eval_section_entropy_max() {
     report.sections.push(Section {
         name: ".text".to_string(),
         address: Some(0x1000),
+        offset: None,
         size: 1000,
         entropy: 7.5,
         permissions: None,
@@ -759,6 +779,7 @@ fn test_eval_section_entropy_max() {
     report.sections.push(Section {
         name: ".data".to_string(),
         address: Some(0x2000),
+        offset: None,
         size: 500,
         entropy: 3.0,
         permissions: None,
@@ -793,6 +814,7 @@ fn test_eval_section_combined_constraints() {
     report.sections.push(Section {
         name: "UPX0".to_string(),
         address: Some(0x1000),
+        offset: None,
         size: 5000,
         entropy: 7.9,
         permissions: None,
@@ -800,6 +822,7 @@ fn test_eval_section_combined_constraints() {
     report.sections.push(Section {
         name: "UPX1".to_string(),
         address: Some(0x2000),
+        offset: None,
         size: 500,
         entropy: 7.8,
         permissions: None,
@@ -807,6 +830,7 @@ fn test_eval_section_combined_constraints() {
     report.sections.push(Section {
         name: ".text".to_string(),
         address: Some(0x3000),
+        offset: None,
         size: 10000,
         entropy: 6.5,
         permissions: None,
@@ -844,6 +868,7 @@ fn test_eval_section_precision_scoring() {
     report.sections.push(Section {
         name: ".text".to_string(),
         address: Some(0x1000),
+        offset: None,
         size: 1000,
         entropy: 6.5,
         permissions: None,
@@ -1033,6 +1058,7 @@ fn test_eval_section_length_min() {
     report.sections.push(Section {
         name: ".text".to_string(),
         address: Some(0x1000),
+        offset: None,
         size: 5000,
         entropy: 6.5,
         permissions: None,
@@ -1040,6 +1066,7 @@ fn test_eval_section_length_min() {
     report.sections.push(Section {
         name: ".data".to_string(),
         address: Some(0x2000),
+        offset: None,
         size: 200,
         entropy: 4.0,
         permissions: None,
@@ -1075,6 +1102,7 @@ fn test_eval_section_length_min_no_match() {
     report.sections.push(Section {
         name: ".text".to_string(),
         address: Some(0x1000),
+        offset: None,
         size: 500,
         entropy: 6.5,
         permissions: None,
@@ -1107,6 +1135,7 @@ fn test_eval_section_length_max() {
     report.sections.push(Section {
         name: ".text".to_string(),
         address: Some(0x1000),
+        offset: None,
         size: 5000,
         entropy: 6.5,
         permissions: None,
@@ -1114,6 +1143,7 @@ fn test_eval_section_length_max() {
     report.sections.push(Section {
         name: ".data".to_string(),
         address: Some(0x2000),
+        offset: None,
         size: 200,
         entropy: 4.0,
         permissions: None,
@@ -1149,6 +1179,7 @@ fn test_eval_section_length_range() {
     report.sections.push(Section {
         name: ".small".to_string(),
         address: None,
+        offset: None,
         size: 50,
         entropy: 4.0,
         permissions: None,
@@ -1156,6 +1187,7 @@ fn test_eval_section_length_range() {
     report.sections.push(Section {
         name: ".medium".to_string(),
         address: None,
+        offset: None,
         size: 500,
         entropy: 5.0,
         permissions: None,
@@ -1163,6 +1195,7 @@ fn test_eval_section_length_range() {
     report.sections.push(Section {
         name: ".large".to_string(),
         address: None,
+        offset: None,
         size: 50000,
         entropy: 7.0,
         permissions: None,
@@ -1197,6 +1230,7 @@ fn test_eval_section_length_with_name_pattern() {
     report.sections.push(Section {
         name: "UPX0".to_string(),
         address: None,
+        offset: None,
         size: 10000,
         entropy: 7.9,
         permissions: None,
@@ -1204,6 +1238,7 @@ fn test_eval_section_length_with_name_pattern() {
     report.sections.push(Section {
         name: "UPX1".to_string(),
         address: None,
+        offset: None,
         size: 200,
         entropy: 7.8,
         permissions: None,
@@ -1239,6 +1274,7 @@ fn test_eval_section_length_precision_boost() {
     report.sections.push(Section {
         name: ".text".to_string(),
         address: None,
+        offset: None,
         size: 1000,
         entropy: 6.5,
         permissions: None,
@@ -1312,6 +1348,7 @@ fn test_eval_section_executable_flag() {
     report.sections.push(Section {
         name: ".text".to_string(),
         address: Some(0x1000),
+        offset: None,
         size: 1000,
         entropy: 6.5,
         permissions: Some("rx".to_string()),
@@ -1319,6 +1356,7 @@ fn test_eval_section_executable_flag() {
     report.sections.push(Section {
         name: ".data".to_string(),
         address: Some(0x2000),
+        offset: None,
         size: 500,
         entropy: 4.0,
         permissions: Some("rw".to_string()),
@@ -1375,6 +1413,7 @@ fn test_eval_section_permission_no_match() {
     report.sections.push(Section {
         name: ".text".to_string(),
         address: Some(0x1000),
+        offset: None,
         size: 1000,
         entropy: 6.5,
         permissions: None, // No permissions info

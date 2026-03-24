@@ -711,6 +711,7 @@ traits:
     report.sections.push(Section {
         name: ".text".to_string(),
         address: Some(0x1000),
+        offset: None,
         size: 100,
         entropy: 5.5,
         permissions: Some("rx".to_string()),

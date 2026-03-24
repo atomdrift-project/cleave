@@ -129,8 +129,6 @@ pub(crate) struct RawCompositeRule {
     /// Minimum number of conditions that must match (for `any` lists)
     #[serde(default)]
     pub(crate) needs: Option<usize>,
-    #[serde(default, alias = "requires_none")]
-    pub(crate) none: Option<Vec<crate::composite_rules::Condition>>,
     // Single condition (for simple composite rules)
     #[serde(default, alias = "if")]
     pub(crate) condition: Option<crate::composite_rules::Condition>,

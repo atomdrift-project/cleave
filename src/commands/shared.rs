@@ -27,6 +27,8 @@ pub(crate) struct SectionInfo {
     pub(crate) name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) address: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) offset: Option<String>,
     pub(crate) size: u64,
     pub(crate) entropy: f64,
     #[serde(skip_serializing_if = "Option::is_none")]

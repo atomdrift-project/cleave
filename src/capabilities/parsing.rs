@@ -781,7 +781,6 @@ pub(crate) fn apply_composite_defaults(
 
     check_conditions(&requires_all, "all");
     check_conditions(&raw.any, "any");
-    check_conditions(&raw.none, "none");
     check_conditions(&raw.unless, "unless");
 
     if let Some(ref downgrade) = raw.downgrade {
@@ -809,7 +808,6 @@ pub(crate) fn apply_composite_defaults(
         all: requires_all,
         any: raw.any,
         needs: raw.needs,
-        none: raw.none,
         near_lines: raw.near_lines,
         near_bytes: raw.near_bytes,
         unless: raw.unless,

@@ -46,13 +46,6 @@ pub(super) fn validate_conditions(
                 }
             }
         }
-        if let Some(none_conditions) = &rule.none {
-            for cond in none_conditions {
-                if check_condition(cond, &rule.id, path) {
-                    has_errors = true;
-                }
-            }
-        }
         if let Some(unless_conditions) = &rule.unless {
             for cond in unless_conditions {
                 if check_condition(cond, &rule.id, path) {

@@ -324,6 +324,7 @@ fn test_section_creation() {
     let section = Section {
         name: ".text".to_string(),
         address: None,
+        offset: None,
         size: 4096,
         entropy: 6.5,
         permissions: Some("r-x".to_string()),

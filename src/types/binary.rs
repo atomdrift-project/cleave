@@ -218,6 +218,9 @@ pub struct Section {
     /// Virtual memory address of the section
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub address: Option<u64>,
+    /// File offset where the section data starts
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub offset: Option<u64>,
     /// Section size in bytes
     pub size: u64,
     /// Shannon entropy of section contents (0.0 to 8.0)
@@ -667,6 +670,7 @@ mod tests {
         let section = Section {
             name: ".text".to_string(),
             address: None,
+            offset: None,
             size: 4096,
             entropy: 6.5,
             permissions: Some("r-x".to_string()),
@@ -681,6 +685,7 @@ mod tests {
         let section = Section {
             name: ".data".to_string(),
             address: None,
+            offset: None,
             size: 1024,
             entropy: 3.2,
             permissions: None,

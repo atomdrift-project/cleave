@@ -489,12 +489,11 @@ pub(crate) fn find_redundant_needs_one(composite_rules: &[CompositeTrait]) -> Ve
             continue;
         }
 
-        // Check if only `any:` clause exists (no all:, no none:)
+        // Check if only `any:` clause exists (no all:)
         let has_all = rule.all.as_ref().is_some_and(|v| !v.is_empty());
-        let has_none = rule.none.as_ref().is_some_and(|v| !v.is_empty());
         let has_any = rule.any.as_ref().is_some_and(|v| !v.is_empty());
 
-        if has_any && !has_all && !has_none {
+        if has_any && !has_all {
             violations.push(rule.id.clone());
         }
     }
@@ -703,8 +702,8 @@ pub(crate) fn find_orphaned_components(
     let mut referenced_ids: HashSet<String> = HashSet::new();
 
     for rule in composite_rules {
-        // Check all:, any:, none: clauses
-        for conditions in [rule.all.as_ref(), rule.any.as_ref(), rule.none.as_ref()]
+        // Check all:, any:, unless: clauses
+        for conditions in [rule.all.as_ref(), rule.any.as_ref(), rule.unless.as_ref()]
             .into_iter()
             .flatten()
         {
@@ -918,7 +917,7 @@ pub(crate) fn find_kv_exists_with_matcher(
     }
 
     for rule in composite_rules {
-        let has_redundant = [&rule.all, &rule.any, &rule.none]
+        let has_redundant = [&rule.all, &rule.any, &rule.unless]
             .iter()
             .filter_map(|list| list.as_ref())
             .any(|conds| conds.iter().any(is_kv_exists_redundant));
@@ -932,8 +931,8 @@ pub(crate) fn find_kv_exists_with_matcher(
 
 /// Find composite rules with proximity constraints but no positive conditions.
 ///
-/// A `none:`-only rule with `near_lines` or `near_bytes` can never match because
-/// proximity requires co-occurring evidence from positive (`all:`/`any:`) conditions.
+/// A rule without `all:`/`any:` and with `near_lines` or `near_bytes` can never match
+/// because proximity requires co-occurring evidence from positive conditions.
 ///
 /// Returns: `Vec<rule_id>`
 #[must_use]
@@ -943,7 +942,6 @@ pub(crate) fn find_none_only_with_proximity(composite_rules: &[CompositeTrait]) 
         .filter(|rule| {
             rule.all.is_none()
                 && rule.any.is_none()
-                && rule.none.is_some()
                 && (rule.near_lines.is_some() || rule.near_bytes.is_some())
         })
         .map(|rule| rule.id.clone())

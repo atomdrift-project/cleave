@@ -47,8 +47,8 @@ pub(crate) fn validate_composite_trait_only(
     if let Some(ref c) = rule.any {
         check_conditions(c, &rule.id, "any", source_file, &mut errors);
     }
-    if let Some(ref c) = rule.none {
-        check_conditions(c, &rule.id, "none", source_file, &mut errors);
+    if let Some(ref c) = rule.unless {
+        check_conditions(c, &rule.id, "unless", source_file, &mut errors);
     }
 
     errors
@@ -76,9 +76,6 @@ pub(crate) fn autoprefix_trait_refs(rule: &mut CompositeTrait, prefix: &str) {
     if let Some(ref mut conditions) = rule.any {
         prefix_conditions(conditions, prefix);
     }
-    if let Some(ref mut conditions) = rule.none {
-        prefix_conditions(conditions, prefix);
-    }
     if let Some(ref mut conditions) = rule.unless {
         prefix_conditions(conditions, prefix);
     }
@@ -98,7 +95,7 @@ pub(crate) fn autoprefix_trait_refs(rule: &mut CompositeTrait, prefix: &str) {
 /// Collect all trait reference IDs from a composite rule's conditions.
 ///
 /// Returns a vector of `(trait_id, rule_id)` tuples for all trait references
-/// found in the rule's `all`, `any`, and `none` clauses.
+/// found in the rule's `all`, `any`, and `unless` clauses.
 #[must_use]
 pub(crate) fn collect_trait_refs_from_rule(rule: &CompositeTrait) -> Vec<(String, String)> {
     let mut refs = Vec::new();
@@ -119,9 +116,6 @@ pub(crate) fn collect_trait_refs_from_rule(rule: &CompositeTrait) -> Vec<(String
         collect_from_conditions(conditions, &rule.id, &mut refs);
     }
     if let Some(ref conditions) = rule.any {
-        collect_from_conditions(conditions, &rule.id, &mut refs);
-    }
-    if let Some(ref conditions) = rule.none {
         collect_from_conditions(conditions, &rule.id, &mut refs);
     }
     if let Some(ref conditions) = rule.unless {
@@ -205,7 +199,7 @@ pub(crate) fn find_redundant_any_refs(
 /// Find composite rules that have only a single condition total across `any:` and `all:`.
 ///
 /// A single-item `any:` or `all:` is redundant - the rule should just be that single trait.
-/// Only flagged if there's no other meaningful clause (`none:`, `unless:`, `downgrade:`).
+/// Only flagged if there's no other meaningful clause (`unless:`, `downgrade:`).
 /// Also skips directory references since they can match multiple traits.
 ///
 /// Returns `(rule_id, clause_type: "any" or "all", trait_id)`.
@@ -215,11 +209,10 @@ pub(crate) fn find_single_item_clauses(
 ) -> Vec<(String, &'static str, String)> {
     let mut violations = Vec::new();
 
-    // Skip rules with none:, unless:, or downgrade: clauses - they add meaningful conditions
-    let has_none = rule.none.as_ref().is_some_and(|v| !v.is_empty());
+    // Skip rules with unless: or downgrade: clauses - they add meaningful conditions
     let has_unless = rule.unless.as_ref().is_some_and(|v| !v.is_empty());
     let has_downgrade = rule.downgrade.is_some();
-    if has_none || has_unless || has_downgrade {
+    if has_unless || has_downgrade {
         return violations;
     }
 

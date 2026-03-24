@@ -156,8 +156,7 @@ pub(crate) fn find_duplicate_traits_and_composites(
                 let mut local_map: HashMap<u64, Vec<String>> = HashMap::with_capacity(chunk.len());
                 for r in chunk {
                     // Skip rules with no conditions
-                    if r.all.is_none() && r.any.is_none() && r.none.is_none() && r.unless.is_none()
-                    {
+                    if r.all.is_none() && r.any.is_none() && r.unless.is_none() {
                         continue;
                     }
 
@@ -166,7 +165,6 @@ pub(crate) fn find_duplicate_traits_and_composites(
                         (
                             &r.all,
                             &r.any,
-                            &r.none,
                             &r.unless,
                             &r.needs,
                             &r.r#for,

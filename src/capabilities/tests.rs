@@ -648,7 +648,6 @@ fn test_apply_composite_defaults_applies_all_defaults() {
         all: None,
         any: None,
         needs: None,
-        none: None,
         unless: None,
         not: None,
         downgrade: None,
@@ -721,7 +720,6 @@ fn test_apply_composite_defaults_unset_with_none() {
         all: None,
         any: None,
         needs: None,
-        none: None,
         unless: None,
         not: None,
         downgrade: None,
@@ -981,7 +979,6 @@ fn test_composite_referencing_atomic_trait() {
         near_lines: None,
         near_bytes: None,
 
-        none: None,
         unless: None,
         not: None,
         downgrade: None,
@@ -1023,7 +1020,6 @@ fn test_composite_of_composites_two_levels() {
         near_lines: None,
         near_bytes: None,
 
-        none: None,
         unless: None,
         not: None,
         downgrade: None,
@@ -1052,7 +1048,6 @@ fn test_composite_of_composites_two_levels() {
         near_lines: None,
         near_bytes: None,
 
-        none: None,
         unless: None,
         not: None,
         downgrade: None,
@@ -1099,7 +1094,6 @@ fn test_composite_three_level_chain() {
         near_lines: None,
         near_bytes: None,
 
-        none: None,
         unless: None,
         not: None,
         downgrade: None,
@@ -1153,7 +1147,6 @@ fn test_composite_circular_dependency_handled() {
         near_lines: None,
         near_bytes: None,
 
-        none: None,
         unless: None,
         not: None,
         downgrade: None,
@@ -1182,7 +1175,6 @@ fn test_composite_circular_dependency_handled() {
         near_lines: None,
         near_bytes: None,
 
-        none: None,
         unless: None,
         not: None,
         downgrade: None,
@@ -1228,7 +1220,6 @@ fn test_composite_prefix_matching_in_chain() {
         near_lines: None,
         near_bytes: None,
 
-        none: None,
         unless: None,
         not: None,
         downgrade: None,
@@ -1277,7 +1268,6 @@ fn test_composite_requires_count_in_chain() {
         needs: None,
         near_lines: None,
         near_bytes: None,
-        none: None,
         unless: None,
         not: None,
         downgrade: None,
@@ -1371,7 +1361,6 @@ fn test_precision_direct_conditions() {
         near_lines: None,
         near_bytes: None,
 
-        none: None,
         unless: None,
         not: None,
         downgrade: None,
@@ -1457,7 +1446,6 @@ fn test_precision_file_type_filter() {
         near_lines: None,
         near_bytes: None,
 
-        none: None,
         unless: None,
         not: None,
         downgrade: None,
@@ -1586,7 +1574,6 @@ fn test_precision_recursive_expansion() {
         near_lines: None,
         near_bytes: None,
 
-        none: None,
         unless: None,
         not: None,
         downgrade: None,
@@ -1621,7 +1608,6 @@ fn test_precision_recursive_expansion() {
         near_lines: None,
         near_bytes: None,
 
-        none: None,
         unless: None,
         not: None,
         downgrade: None,
@@ -1678,7 +1664,6 @@ fn test_precision_cycle_detection() {
         near_lines: None,
         near_bytes: None,
 
-        none: None,
         unless: None,
         not: None,
         downgrade: None,
@@ -1708,7 +1693,6 @@ fn test_precision_cycle_detection() {
         near_lines: None,
         near_bytes: None,
 
-        none: None,
         unless: None,
         not: None,
         downgrade: None,
@@ -1794,7 +1778,6 @@ fn test_precision_caching() {
         near_lines: None,
         near_bytes: None,
 
-        none: None,
         unless: None,
         not: None,
         downgrade: None,
@@ -1907,7 +1890,6 @@ fn test_precision_threshold_validation() {
         near_lines: None,
         near_bytes: None,
 
-        none: None,
         unless: None,
         not: None,
         downgrade: None,
@@ -1970,7 +1952,6 @@ fn test_precision_threshold_validation() {
         near_lines: None,
         near_bytes: None,
 
-        none: None,
         unless: None,
         not: None,
         downgrade: None,
@@ -2044,7 +2025,6 @@ fn test_suspicious_precision_threshold_validation() {
         needs: None,
         near_lines: None,
         near_bytes: None,
-        none: None,
         unless: None,
         not: None,
         downgrade: None,
@@ -2106,7 +2086,6 @@ fn test_suspicious_precision_threshold_validation() {
         needs: None,
         near_lines: None,
         near_bytes: None,
-        none: None,
         unless: None,
         not: None,
         downgrade: None,
@@ -2215,7 +2194,7 @@ fn test_precision_mixed_conditions() {
         needs: None,
         near_lines: None,
         near_bytes: None,
-        none: Some(vec![Condition::StringValue {
+        unless: Some(vec![Condition::StringValue {
             is_check: None,
             exact: Some("string4".to_string()),
             regex: None,
@@ -2231,7 +2210,6 @@ fn test_precision_mixed_conditions() {
             platforms: None,
             compiled_regex: None,
         }]),
-        unless: None,
         not: None,
         downgrade: None,
         size_min: None,
@@ -2316,7 +2294,6 @@ fn test_precision_deep_nesting() {
         near_lines: None,
         near_bytes: None,
 
-        none: None,
         unless: None,
         not: None,
         downgrade: None,
@@ -2364,7 +2341,6 @@ fn test_precision_deep_nesting() {
         near_lines: None,
         near_bytes: None,
 
-        none: None,
         unless: None,
         not: None,
         downgrade: None,
@@ -2412,7 +2388,6 @@ fn test_precision_deep_nesting() {
         near_lines: None,
         near_bytes: None,
 
-        none: None,
         unless: None,
         not: None,
         downgrade: None,
@@ -2502,7 +2477,6 @@ fn test_precision_correct_algorithm() {
         needs: None,
         near_lines: None,
         near_bytes: None,
-        none: None,
         unless: None,
         not: None,
         downgrade: None,
@@ -2652,7 +2626,6 @@ fn test_precision_traits_with_size_restrictions() {
         needs: None,
         near_lines: None,
         near_bytes: None,
-        none: None,
         unless: None,
         not: None,
         downgrade: None,
@@ -3327,12 +3300,11 @@ fn test_collect_trait_refs_finds_internal_paths() {
             id: "metadata/internal/symbols::malloc".to_string(), // Forbidden!
         }]),
         needs: None,
-        none: Some(vec![Condition::Trait {
-            id: "metadata/dylib::libc".to_string(), // OK
-        }]),
         near_lines: None,
         near_bytes: None,
-        unless: None,
+        unless: Some(vec![Condition::Trait {
+            id: "metadata/dylib::libc".to_string(), // OK
+        }]),
         not: None,
         downgrade: None,
         size_min: None,
@@ -3384,7 +3356,6 @@ fn test_meta_internal_paths_forbidden_in_composite_rules() {
         }]),
         any: None,
         needs: None,
-        none: None,
         near_lines: None,
         near_bytes: None,
         unless: None,

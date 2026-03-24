@@ -31,6 +31,7 @@ fn run_with_layer(target: &str, layer: &str, format: &cli::OutputFormat) -> Resu
         .map(|s| SectionInfo {
             name: s.name.clone(),
             address: s.address.map(|addr| format!("0x{:x}", addr)),
+            offset: s.offset.map(|off| format!("0x{:x}", off)),
             size: s.size,
             entropy: s.entropy,
             permissions: s.permissions.clone(),
@@ -61,6 +62,7 @@ fn run_direct(target: &str, format: &cli::OutputFormat) -> Result<String> {
                     sections.push(SectionInfo {
                         name: section.name,
                         address: section.address.map(|addr| format!("0x{:x}", addr)),
+                        offset: section.offset.map(|off| format!("0x{:x}", off)),
                         size: section.size,
                         entropy: section.entropy,
                         permissions: section.permissions,
@@ -118,20 +120,21 @@ fn format_sections_output(
                 target
             ));
             output.push_str(&format!(
-                "{:<18} {:<30} {:<12} {:<10} {}\n",
-                "ADDRESS", "NAME", "SIZE", "ENTROPY", "PERMISSIONS"
+                "{:<18} {:<18} {:<30} {:<12} {:<10} {}\n",
+                "ADDRESS", "OFFSET", "NAME", "SIZE", "ENTROPY", "PERMISSIONS"
             ));
             output.push_str(&format!(
-                "{:-<18} {:-<30} {:-<12} {:-<10} {:-<15}\n",
-                "", "", "", "", ""
+                "{:-<18} {:-<18} {:-<30} {:-<12} {:-<10} {:-<15}\n",
+                "", "", "", "", "", ""
             ));
 
             for section in &sections {
                 let addr = section.address.as_deref().unwrap_or("-");
+                let off = section.offset.as_deref().unwrap_or("-");
                 let perms = section.permissions.as_deref().unwrap_or("-");
                 output.push_str(&format!(
-                    "{:<18} {:<30} {:<12} {:<10.2} {}\n",
-                    addr, section.name, section.size, section.entropy, perms
+                    "{:<18} {:<18} {:<30} {:<12} {:<10.2} {}\n",
+                    addr, off, section.name, section.size, section.entropy, perms
                 ));
             }
 

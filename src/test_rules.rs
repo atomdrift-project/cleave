@@ -478,26 +478,6 @@ impl<'a> RuleDebugger<'a> {
             condition_results.push(group);
         }
 
-        // Evaluate 'none' conditions
-        if let Some(none_conds) = &composite.none {
-            let mut none_results = Vec::new();
-            let mut none_matched_count = 0;
-            for cond in none_conds {
-                let cond_result = self.debug_condition(cond);
-                if cond_result.matched {
-                    none_matched_count += 1;
-                }
-                none_results.push(cond_result);
-            }
-            let none_passed = none_matched_count == 0;
-            let mut group = ConditionDebugResult::new(
-                format!("none: ({} matched, need 0)", none_matched_count),
-                none_passed,
-            );
-            group.sub_results = none_results;
-            condition_results.push(group);
-        }
-
         // Add downgrade info if present
         if let Some(downgrade) = eval_debug.downgrade {
             let downgrade_desc = if downgrade.triggered {
@@ -2350,10 +2330,6 @@ fn build_composite_requirements(composite: &crate::composite_rules::CompositeTra
     if let Some(any) = &composite.any {
         let needed = composite.needs.unwrap_or(1);
         parts.push(format!("any: needs {} of {} conditions", needed, any.len()));
-    }
-
-    if let Some(none) = &composite.none {
-        parts.push(format!("none: {} exclusions", none.len()));
     }
 
     parts.join(", ")

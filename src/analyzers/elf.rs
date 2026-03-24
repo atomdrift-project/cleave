@@ -684,6 +684,7 @@ impl ElfAnalyzer {
                     report.sections.push(Section {
                         name: name.to_string(),
                         address: Some(section.sh_addr),
+                        offset: Some(section.sh_offset),
                         size: section.sh_size,
                         entropy,
                         permissions: Some(format!("{:x}", section.sh_flags)),

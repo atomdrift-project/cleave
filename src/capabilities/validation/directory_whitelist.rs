@@ -568,13 +568,13 @@ const ALLOWED_IMPACT: &[&str] = &[
 ///
 /// Update this list AND TAXONOMY.md when adding new supply-chain categories.
 const ALLOWED_SUPPLY_CHAIN: &[&str] = &[
-    "credential-theft",  // Stealing credentials from CI/package infra
-    "hidden-payload",    // Concealed malicious payloads in packages
-    "impersonation",     // Typosquatting, name confusion
-    "install-hook",      // Malicious install/build hooks (setup.py, postinstall)
-    "metadata-anomaly",  // Suspicious package metadata patterns
-    "recon-exfil",       // Reconnaissance and data exfiltration from build env
-    "trojanized",        // Trojanized legitimate packages
+    "credential-theft", // Stealing credentials from CI/package infra
+    "hidden-payload",   // Concealed malicious payloads in packages
+    "impersonation",    // Typosquatting, name confusion
+    "install-hook",     // Malicious install/build hooks (setup.py, postinstall)
+    "metadata-anomaly", // Suspicious package metadata patterns
+    "recon-exfil",      // Reconnaissance and data exfiltration from build env
+    "trojanized",       // Trojanized legitimate packages
 ];
 
 /// Allowed top-level subdirectories in well-known/

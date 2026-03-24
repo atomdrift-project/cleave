@@ -458,6 +458,7 @@ impl PEAnalyzer {
                     report.sections.push(Section {
                         name: section.name.clone(),
                         address: None,
+                        offset: None,
                         size: section.size,
                         entropy: section.entropy,
                         permissions: section.perm.clone(),
@@ -1005,6 +1006,7 @@ impl PEAnalyzer {
             report.sections.push(Section {
                 name: name.clone(),
                 address: Some(section.virtual_address as u64),
+                offset: Some(section.pointer_to_raw_data as u64),
                 size,
                 entropy,
                 permissions: Some(permissions.clone()),

@@ -157,7 +157,6 @@ pub(crate) fn simple_rule_to_composite_rule(
         }]),
         any: None,
         needs: None,
-        none: None,
         near_lines: None,
         near_bytes: None,
         unless: None,

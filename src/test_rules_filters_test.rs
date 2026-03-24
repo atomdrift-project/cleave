@@ -412,7 +412,6 @@ fn test_composite_size_constraints_match_debug_and_eval() {
             section_offset_range: None,
             compiled_regex: None,
         }]),
-        none: None,
         needs: None,
         near_lines: None,
         near_bytes: None,

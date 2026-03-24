@@ -1511,10 +1511,6 @@ pub(crate) struct CompositeTrait {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub needs: Option<usize>,
 
-    /// None of these conditions may match
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub none: Option<Vec<Condition>>,
-
     /// Proximity constraint: at least count_min findings must be within N lines
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub near_lines: Option<usize>,
@@ -1558,17 +1554,6 @@ impl CompositeTrait {
             for (idx, cond) in conds.iter_mut().enumerate() {
                 cond.precompile_regexes().with_context(|| {
                     format!("in composite rule '{}' any condition #{}", self.id, idx + 1)
-                })?;
-            }
-        }
-        if let Some(ref mut conds) = self.none {
-            for (idx, cond) in conds.iter_mut().enumerate() {
-                cond.precompile_regexes().with_context(|| {
-                    format!(
-                        "in composite rule '{}' none condition #{}",
-                        self.id,
-                        idx + 1
-                    )
                 })?;
             }
         }
@@ -1629,11 +1614,6 @@ impl CompositeTrait {
             }
         }
         if let Some(ref mut conds) = self.any {
-            for cond in conds.iter_mut() {
-                cond.compile_yara();
-            }
-        }
-        if let Some(ref mut conds) = self.none {
             for cond in conds.iter_mut() {
                 cond.compile_yara();
             }
@@ -1728,8 +1708,6 @@ impl CompositeTrait {
         }
 
         // Evaluate positive conditions based on the boolean operator(s)
-        let has_positive = self.all.is_some() || self.any.is_some();
-
         let (positive_result, proximity_tags) = match (&self.all, &self.any) {
             (Some(all), Some(any)) => {
                 // Both all AND any: all must match AND any must match (respecting `needs`)
@@ -1782,18 +1760,8 @@ impl CompositeTrait {
                 }
             }
             (None, None) => {
-                // No positive conditions - will check none below
-                (
-                    ConditionResult {
-                        matched: true,
-                        evidence: Vec::new(),
-                        match_count: 0,
-                        warnings: Vec::new(),
-                        precision: 0.0,
-                        matched_trait_ids: Vec::new(),
-                    },
-                    Vec::new(),
-                )
+                // No positive conditions - invalid rule
+                return None;
             }
         };
 
@@ -1801,35 +1769,7 @@ impl CompositeTrait {
             return None;
         }
 
-        // Evaluate none (can be combined with positive conditions)
-        // If none is present, none of its conditions can match
-        let result = if let Some(ref none_conds) = self.none {
-            let none_result = self.eval_requires_none(none_conds, ctx);
-            if !none_result.matched {
-                return None; // A "none" condition matched, so rule fails
-            }
-            // Combine evidence (trait_ids come from positive only - none doesn't add refs)
-            let mut combined_evidence = positive_result.evidence;
-            combined_evidence.extend(none_result.evidence);
-            // Deduplicate before truncating to maximize unique evidence
-            let combined_evidence = deduplicate_evidence(combined_evidence);
-            let match_count = combined_evidence.len();
-            let mut combined_evidence = combined_evidence;
-            combined_evidence.truncate(MAX_EVIDENCE_PER_TRAIT);
-            ConditionResult {
-                matched: true,
-                evidence: combined_evidence,
-                match_count,
-                warnings: Vec::new(),
-                precision: 0.0,
-                matched_trait_ids: positive_result.matched_trait_ids,
-            }
-        } else if !has_positive {
-            // No positive conditions and no none - invalid rule
-            return None;
-        } else {
-            positive_result
-        };
+        let result = positive_result;
 
         if result.matched {
             // Check proximity constraints (near_lines, near_bytes)
@@ -2183,35 +2123,6 @@ impl CompositeTrait {
             },
             if matched { tags } else { Vec::new() },
         )
-    }
-
-    /// Evaluate NONE of the conditions can match (NOT)
-    fn eval_requires_none<'a>(
-        &self,
-        conds: &[Condition],
-        ctx: &EvaluationContext<'a>,
-    ) -> ConditionResult {
-        for condition in conds {
-            let result = self.eval_condition(condition, ctx);
-            if result.matched {
-                return ConditionResult::no_match();
-            }
-        }
-
-        ConditionResult {
-            matched: true,
-            evidence: vec![Evidence {
-                method: "exclusion".to_string(),
-                source: "composite_rule".to_string(),
-                value: "negative_conditions_not_found".to_string(),
-                location: None,
-                ..Default::default()
-            }],
-            match_count: 1,
-            warnings: Vec::new(),
-            precision: 0.5, // Fixed +0.5 for exclusion logic (negative conditions)
-            matched_trait_ids: Vec::new(), // Negative conditions don't contribute trait refs
-        }
     }
 
     /// Evaluate a single condition
@@ -2725,10 +2636,10 @@ impl CompositeTrait {
         Some(filtered)
     }
 
-    /// Returns true if this rule has negative (none) conditions
+    /// Returns true if this rule has unless (skip) conditions
     #[must_use]
     pub(crate) fn has_negative_conditions(&self) -> bool {
-        self.none.as_ref().map(|n| !n.is_empty()).unwrap_or(false)
+        self.unless.as_ref().map(|n| !n.is_empty()).unwrap_or(false)
     }
 }
 

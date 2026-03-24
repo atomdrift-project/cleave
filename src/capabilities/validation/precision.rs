@@ -571,23 +571,6 @@ pub(crate) fn calculate_composite_precision(
             }
         }
 
-        if let Some(ref none_conds) = rule.none {
-            precision += PARAM_UNIT;
-            let scores: Vec<f32> = none_conds
-                .iter()
-                .map(|cond| match cond {
-                    Condition::Trait { id } => calculate_composite_precision(
-                        id,
-                        composite_lookup,
-                        trait_lookup,
-                        cache,
-                        visiting,
-                    ),
-                    _ => score_condition(cond),
-                })
-                .collect();
-            precision += scores.into_iter().sum::<f32>();
-        }
         if let Some(ref unless_conds) = rule.unless {
             precision += PARAM_UNIT;
             let scores: Vec<f32> = unless_conds

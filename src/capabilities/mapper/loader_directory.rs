@@ -2427,7 +2427,9 @@ impl super::CapabilityMapper {
                 eprintln!(
                     "   `near_lines`/`near_bytes` requires positive conditions (`all:`/`any:`)."
                 );
-                eprintln!("   A `none:`-only rule with proximity can never match:\n");
+                eprintln!(
+                    "   A rule without positive conditions and with proximity can never match:\n"
+                );
                 for rule_id in &none_prox {
                     let source = rule_source_files
                         .get(rule_id)
@@ -2892,9 +2894,6 @@ impl super::CapabilityMapper {
                 }
                 if let Some(ref any) = rule.any {
                     total_conditions += any.len();
-                }
-                if let Some(ref none) = rule.none {
-                    total_conditions += none.len();
                 }
 
                 // If it's a single-rule composite, check file types

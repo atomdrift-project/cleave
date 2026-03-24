@@ -2512,7 +2512,6 @@ mod taxonomy_tests {
                     .collect(),
             ),
             any: None,
-            none: None,
             unless: None,
             not: None,
             downgrade: None,
@@ -3026,10 +3025,9 @@ mod constraint_tests {
             size_max: None,
             all: None,
             any: None,
-            none: Some(vec![Condition::Trait {
+            unless: Some(vec![Condition::Trait {
                 id: "some-trait".to_string(),
             }]),
-            unless: None,
             not: None,
             downgrade: None,
             needs: None,
@@ -3061,10 +3059,9 @@ mod constraint_tests {
                 id: "some-trait".to_string(),
             }]),
             any: None,
-            none: Some(vec![Condition::Trait {
+            unless: Some(vec![Condition::Trait {
                 id: "other-trait".to_string(),
             }]),
-            unless: None,
             not: None,
             downgrade: None,
             needs: None,
@@ -3095,10 +3092,9 @@ mod constraint_tests {
             size_max: None,
             all: Some(vec![]),
             any: None,
-            none: Some(vec![Condition::Trait {
+            unless: Some(vec![Condition::Trait {
                 id: "some-trait".to_string(),
             }]),
-            unless: None,
             not: None,
             downgrade: None,
             needs: None,
@@ -3131,7 +3127,6 @@ mod constraint_tests {
             any: Some(vec![Condition::Trait {
                 id: "some-trait".to_string(),
             }]),
-            none: None,
             unless: None,
             not: None,
             downgrade: None,
@@ -3164,7 +3159,6 @@ mod constraint_tests {
             any: Some(vec![Condition::Trait {
                 id: "some-trait".to_string(),
             }]),
-            none: None,
             unless: None,
             not: None,
             downgrade: None,
@@ -3207,7 +3201,6 @@ mod autoprefix_tests {
             all: None,
             any: None,
             needs: None,
-            none: None,
             near_lines: None,
             near_bytes: None,
             unless,
@@ -3371,7 +3364,6 @@ mod orphan_tests {
             all: Some(all_conditions),
             any: None,
             needs: None,
-            none: None,
             near_lines: None,
             near_bytes: None,
             unless: None,
@@ -3727,7 +3719,6 @@ mod excessive_file_types_tests {
             all: None,
             any: None,
             needs: None,
-            none: None,
             near_lines: None,
             near_bytes: None,
             unless: None,
@@ -3886,7 +3877,6 @@ mod defaults_tests {
             all: None,
             any: None,
             needs: None,
-            none: None,
             condition: None,
             near_lines: None,
             near_bytes: None,

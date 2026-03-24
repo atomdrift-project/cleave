@@ -569,6 +569,7 @@ impl MachOAnalyzer {
                     report.sections.push(Section {
                         name: section_name.clone(),
                         address: Some(section.addr),
+                        offset: Some(section.offset as u64),
                         size: section.size,
                         entropy,
                         permissions: Some(segment_perm.clone()), // Use segment permissions

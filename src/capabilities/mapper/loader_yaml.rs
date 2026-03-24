@@ -119,10 +119,7 @@ impl super::CapabilityMapper {
         }
 
         // Unrecognized file types (forward-compat) — log info and continue
-        for w in warnings
-            .iter()
-            .filter(|w| w.contains("Unknown file type"))
-        {
+        for w in warnings.iter().filter(|w| w.contains("Unknown file type")) {
             tracing::info!("{} — skipping rule (update cleave for support)", w);
         }
 

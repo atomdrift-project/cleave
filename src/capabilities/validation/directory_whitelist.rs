@@ -603,18 +603,18 @@ const ALLOWED_MALWARE: &[&str] = &[
 ///
 /// Update this list AND TAXONOMY.md when adding new metadata categories.
 const ALLOWED_METADATA: &[&str] = &[
-    "arch",     // CPU architecture detection (x86, ARM, MIPS, IoT)
-    "binary",   // Binary internals (sections, debug, framework, installer, metrics)
-    "build",    // Build system detection (cmake, cargo, docker, CI/CD)
-    "document", // Document format internals (office, PDF, RTF, OLE, HTML)
-    "file",     // File-level observables (magic bytes, extension, encoded content)
+    "arch",      // CPU architecture detection (x86, ARM, MIPS, IoT)
+    "binary",    // Binary internals (sections, debug, framework, installer, metrics)
+    "build",     // Build system detection (cmake, cargo, docker, CI/CD)
+    "document",  // Document format internals (office, PDF, RTF, OLE, HTML)
+    "file",      // File-level observables (magic bytes, extension, encoded content)
     "hardening", // Security hardening features (sandbox, seccomp, pledge)
-    "import",   // Dependencies/imports (auto-generated)
-    "lang",     // Language, compiler, encoding detection
-    "library",  // Library/framework detection (react, vue, jquery, etc.)
-    "package",  // Package ecosystem metadata & project quality
-    "signed",   // Code signatures, certificates, entitlements
-    "vendor",   // Vendor identification (Apple, Microsoft, FSF, etc.)
+    "import",    // Dependencies/imports (auto-generated)
+    "lang",      // Language, compiler, encoding detection
+    "library",   // Library/framework detection (react, vue, jquery, etc.)
+    "package",   // Package ecosystem metadata & project quality
+    "signed",    // Code signatures, certificates, entitlements
+    "vendor",    // Vendor identification (Apple, Microsoft, FSF, etc.)
 ];
 
 /// Allowed subdirectories in metadata/binary/

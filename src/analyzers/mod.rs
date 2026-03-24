@@ -863,6 +863,9 @@ fn detect_by_content_heuristics(file_data: &[u8]) -> Option<FileType> {
     if looks_like_vbs(file_data) {
         return Some(FileType::Vbs);
     }
+    if looks_like_lua(file_data) {
+        return Some(FileType::Lua);
+    }
     if looks_like_javascript(file_data) {
         return Some(FileType::JavaScript);
     }
@@ -1097,14 +1100,79 @@ fn looks_like_vbs(data: &[u8]) -> bool {
         >= 2
 }
 
+/// Heuristic detection for Lua scripts without .lua extension.
+///
+/// Lua has distinctive syntax that doesn't overlap with other languages:
+/// `local` declarations, `then`/`end` blocks, `~=` for inequality,
+/// and builtins like `getfenv`/`setmetatable`/`newproxy`.
+fn looks_like_lua(data: &[u8]) -> bool {
+    let head = &data[..data.len().min(4096)];
+
+    // Strong single-indicator: Lua IIFE — `return(function(...)local`
+    // This is a very common Lua obfuscation wrapper pattern.
+    if memchr::memmem::find(head, b"return(function(").is_some()
+        && memchr::memmem::find(head, b"local ").is_some()
+    {
+        return true;
+    }
+
+    // Lua-exclusive builtins — any one of these is conclusive
+    let conclusive: &[&[u8]] = &[
+        b"getfenv",
+        b"setfenv",
+        b"newproxy",
+        b"setmetatable",
+        b"getmetatable",
+    ];
+    let has_conclusive = conclusive
+        .iter()
+        .any(|&p| memchr::memmem::find(head, p).is_some());
+    if has_conclusive && memchr::memmem::find(head, b"local ").is_some() {
+        return true;
+    }
+
+    // Secondary: need 3+ Lua-specific indicators
+    let indicators: &[&[u8]] = &[
+        b"local ",  // variable declaration
+        b" then",   // if-then (not JS)
+        b"\nend",   // block terminator
+        b" end",    // block terminator after space
+        b"~=",      // not-equal operator (Lua only)
+        b" do\n",   // for/while do
+        b" do ",    // for/while do (single line)
+        b"repeat",  // repeat-until loop
+        b"until",   // repeat-until loop
+        b"elseif ", // Lua elseif (JS uses "else if")
+        b"_ENV",    // Lua 5.2+ environment
+        b"unpack(", // Lua table unpack
+        b"select(", // Lua select
+        b"ipairs(", // Lua iterator
+        b"pairs(",  // Lua iterator
+    ];
+    indicators
+        .iter()
+        .filter(|&&p| memchr::memmem::find(head, p).is_some())
+        .count()
+        >= 3
+}
+
 /// Heuristic detection for JavaScript files without .js extension
 fn looks_like_javascript(data: &[u8]) -> bool {
     let head = &data[..data.len().min(2048)];
-    // Strong single-indicator: IIFE pattern is almost exclusively JavaScript
+    // Strong single-indicator: IIFE pattern is almost exclusively JavaScript.
+    // Guard: reject if Lua keywords are present — Lua also uses `(function(` for
+    // anonymous functions, and obfuscated Lua payloads commonly start with
+    // `return(function(...)local ...`.
     if memchr::memmem::find(head, b"(function(").is_some()
         || memchr::memmem::find(head, b"(function (").is_some()
     {
-        return true;
+        let has_lua_keyword = memchr::memmem::find(head, b"local ").is_some()
+            && (memchr::memmem::find(head, b" then").is_some()
+                || memchr::memmem::find(head, b" end").is_some()
+                || memchr::memmem::find(head, b"~=").is_some());
+        if !has_lua_keyword {
+            return true;
+        }
     }
     // Secondary: need 3+ common JavaScript idioms
     let indicators: &[&[u8]] = &[

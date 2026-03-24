@@ -830,7 +830,12 @@ impl PEAnalyzer {
                     // BSJB signature, which is present in every valid .NET assembly.
                     let is_dotnet = pe_data.windows(4).any(|w| w == b"BSJB");
                     if std::env::var("DEBUG_CLEAVE_DOTNET").is_ok() {
-                        eprintln!("[DEBUG] embedded PE check: in_rsrc={}, is_dotnet={}, data_len={}", in_rsrc, is_dotnet, pe_data.len());
+                        eprintln!(
+                            "[DEBUG] embedded PE check: in_rsrc={}, is_dotnet={}, data_len={}",
+                            in_rsrc,
+                            is_dotnet,
+                            pe_data.len()
+                        );
                     }
                     if in_rsrc || is_dotnet {
                         finding.crit = Criticality::Notable;

@@ -365,6 +365,11 @@ impl OfficeAnalyzer {
 
         // External template references — objective (template injection attack)
         for ext_ref in &doc.external_refs {
+            // Skip hyperlinks — normal in documents, not a template injection vector
+            if ext_ref.rel_type.contains("hyperlink") {
+                continue;
+            }
+
             let is_template = ext_ref.rel_type.contains("attachedTemplate")
                 || ext_ref.rel_type.contains("oleObject")
                 || ext_ref.rel_type.contains("frame");

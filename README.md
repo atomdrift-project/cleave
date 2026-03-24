@@ -1,62 +1,52 @@
 ![cleave](media/logo.png)
 
-AST-aware software decomposition. Takes binaries and source apart into their atomic components.
-
-cleave combines abstract syntax tree inspection with automated binary reverse engineering to detect capabilities and behaviors across 20+ languages and three binary formats (ELF, PE, machO) in a single pass.
+AST-aware software decomposition engine for supply-chain security. Detects capabilities and behaviors across 20+ languages and six binary formats in a single pass — built for security engineers and ML classification pipelines alike.
 
 ![screenshot](media/screenshot.png)
 
-## Why Cleave?
+## What It Analyzes
 
-Because you might want to analyze files in a multitude of formats:
-
-- **Binary formats** (header parsing + optional disassembly via Rizin/Radare2): Mach-O, ELF, PE, Java .class, Python .pyc, compiled AppleScript
-- **AST-based source code** (tree-sitter): Python, JavaScript, TypeScript, Go, Rust, C/C++, Java, C#, Swift, Objective-C, Ruby, PHP, Perl, Lua, Shell, PowerShell, Groovy, Scala, Zig, Elixir
-- **Archive formats** (recursive unpacking): ZIP, TAR (gz/bz2/xz/zst), 7z, RAR, plus package formats: JAR/WAR/EAR, deb, rpm, apk, gem, crate, egg, whl, nupkg, phar, vsix, xpi, crx, ipa, epub
-- **Document & data formats**: RTF (OLE detection), LNK (target extraction), PNG (steganography), PDF, plist, VBScript, Batch, package manifests (package.json, manifest.json, Cargo.toml, pyproject.toml, composer.json), GitHub Actions workflows, HTML, Markdown, plain text
-
-Cleave is designed to output data to be consumed by ML pipelines.
-
-## Requirements
-
-- A modern version of [Rust](https://rust-lang.org/)
-- OPTIONAL, but highly recommended: [rizin](https://github.com/rizinorg/rizin) for binary reverse-engineering
-- OPTIONAL: [upx](https://github.com/upx/upx) for on-the-fly unpacking
+- **Binaries** (header parsing + optional disassembly via Rizin): Mach-O, ELF, PE, Java .class, Python .pyc, compiled AppleScript
+- **Source code** (tree-sitter AST): Python, JavaScript, TypeScript, Go, Rust, C/C++, Java, C#, Swift, Objective-C, Ruby, PHP, Perl, Lua, Shell, PowerShell, Groovy, Scala, Zig, Elixir
+- **Archives** (recursive unpacking): ZIP, TAR, 7z, RAR, plus JAR/WAR, deb, rpm, apk, gem, crate, whl, nupkg, phar, vsix, xpi, crx, ipa, epub
+- **Documents & data**: RTF, LNK, PNG (steganography), PDF, plist, VBScript, Batch, package manifests, GitHub Actions workflows
 
 ## Quick Start
 
 ```bash
-cargo install --path .
+# macOS (Homebrew)
+brew tap atomdrift/tap https://codeberg.org/atomdrift/homebrew-tap.git
+brew install atomdrift/tap/cleave
 
-# Analyze target
-cleave binary-or-source.py
-
-# Analyze directory recursively (including archives)
-cleave /tmp/box-o-malware
+# From source
+make install
 ```
+
+```bash
+cleave suspect.bin
+cleave /tmp/box-o-malware   # recursive, unpacks archives
+```
+
+Optionally install [rizin](https://github.com/rizinorg/rizin) for disassembly and [upx](https://github.com/upx/upx) for runtime unpacking.
 
 ## Under the Hood
 
-- **Tree-sitter** for language-aware AST traversal
-- **Radare2/Rizin** for deep binary reverse engineering (functions, control flow, syscalls, sections)
-- **Goblin** for binary header parsing (Mach-O, ELF, PE)
-- **YARA-X** for signature matching
-- **Payload decoding**: Base64, hex, AES, XOR key material - through [stng](https://codeberg.org/atomdrift/stng)
+**Tree-sitter** for language-aware AST traversal, **Rizin** for binary reverse engineering, **Goblin** for header parsing, **YARA-X** for signature matching, and **[stng](https://codeberg.org/atomdrift/stng)** for payload decoding (Base64, hex, AES, XOR key material).
 
 ## Detection Philosophy
 
-cleave does not attempt to assess the hostility or suspicion level of an entire program; it's instead designed to be an input to such programs, like our own [litmus](https://codeberg.org/atomdrift/litmus). cleave's detection rules ([traits](https://codeberg.org/atomdrift/cleave-traits)) roughly align with the [MBC (Malware Behavior Catalog)](https://github.com/MBCProject/mbc-markdown) hierarchy:
+cleave does not judge whether a program is malicious — it extracts what a program *can do*, producing structured output for classifiers like [litmus](https://codeberg.org/atomdrift/litmus). Detection rules ([traits](https://codeberg.org/atomdrift/cleave-traits)) align with the [MBC](https://github.com/MBCProject/mbc-markdown) hierarchy:
 
-- **[micro-behaviors](https://codeberg.org/atomdrift/cleave-traits/src/branch/main/micro-behaviors)**: neutral capabilities, such as `mmap` or `gethostbyname`
-- **[objectives](https://codeberg.org/atomdrift/cleave-traits/src/branch/main/objectives)**: composite traits that may the sign of a malicious behavior in service of an objective
-- **[well-known](https://codeberg.org/atomdrift/cleave-traits/src/branch/main/well-known)**: specific well-known malware family detection - not a priority, but nice to have
+- **[micro-behaviors](https://codeberg.org/atomdrift/cleave-traits/src/branch/main/micro-behaviors)**: atomic capabilities (`mmap`, `gethostbyname`)
+- **[objectives](https://codeberg.org/atomdrift/cleave-traits/src/branch/main/objectives)**: composite traits indicating behavior in service of a goal
+- **[well-known](https://codeberg.org/atomdrift/cleave-traits/src/branch/main/well-known)**: specific malware family signatures
 - **[meta](https://codeberg.org/atomdrift/cleave-traits/src/branch/main/meta)**: structural traits
 - **[third-party](https://codeberg.org/atomdrift/cleave-traits/src/branch/main/third-party)**: third-party YARA rules
 
 ## Related Tools
 
-- [malcontent](https://github.com/chainguard-dev/malcontent) was our previous attempt at addressing this problem. cleave replaces malcontent, with roughly 2X more accuracy and coverage through AST and smart reverse-engineering abilities.
-- [capa](https://github.com/mandiant/capa) was our original inspiration. cleave is significantly faster, with 15× rule coverage and much broader file format support (machO, Python, Shell, and more).
+- [malcontent](https://github.com/chainguard-dev/malcontent) — our previous approach. cleave replaces it with ~2× accuracy through AST-aware analysis.
+- [capa](https://github.com/mandiant/capa) — our original inspiration. cleave is faster, with 15× rule coverage and broader format support.
 
 ## License
 

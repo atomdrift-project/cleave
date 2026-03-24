@@ -34,7 +34,6 @@ const ALLOWED_OBJECTIVES: &[&str] = &[
 ///
 /// Update this list AND TAXONOMY.md when adding new anti-static categories.
 const ALLOWED_ANTI_STATIC: &[&str] = &[
-    "decryption",  // F0009 Software Decryption
     "obfuscation", // E1027 + B0032 Obfuscated Files/Code
     "pack",        // F0001 Software Packing
     "polyglot",    // Polyglot file format abuse
@@ -492,7 +491,6 @@ const ALLOWED_LATERAL_MOVEMENT: &[&str] = &[
     "smb",                // SMB share propagation                          T1021.002
     "social-engineering", // Lures, spam (passive lateral)                 B0020, B0021
     "ssh",                // SSH lateral (connect, backdoor, deploy)        T1021.004
-    "supply-chain",       // Supply chain compromise                        E1195
     "trojanize",          // Software trojanization
     "usb-worm",           // USB drive propagation
     "worm",               // Self-propagating (email, SMB, IRC, P2P)
@@ -559,6 +557,26 @@ const ALLOWED_IMPACT: &[&str] = &[
     "wipe",                // Disk wiping                                    T1561
 ];
 
+/// Allowed subdirectories in objectives/supply-chain/
+///
+/// Supply chain attacks — compromising package ecosystems, extensions, and updates.
+/// These target the software distribution pipeline itself.
+///
+/// NOT supply-chain (common misplacements):
+/// - Lateral movement via supply chain → lateral-movement/ (spreading, not compromising packages)
+/// - Package metadata analysis → metadata/package/
+///
+/// Update this list AND TAXONOMY.md when adding new supply-chain categories.
+const ALLOWED_SUPPLY_CHAIN: &[&str] = &[
+    "credential-theft",  // Stealing credentials from CI/package infra
+    "hidden-payload",    // Concealed malicious payloads in packages
+    "impersonation",     // Typosquatting, name confusion
+    "install-hook",      // Malicious install/build hooks (setup.py, postinstall)
+    "metadata-anomaly",  // Suspicious package metadata patterns
+    "recon-exfil",       // Reconnaissance and data exfiltration from build env
+    "trojanized",        // Trojanized legitimate packages
+];
+
 /// Allowed top-level subdirectories in well-known/
 ///
 /// These represent specific malware families and tools.
@@ -593,6 +611,21 @@ const ALLOWED_MALWARE: &[&str] = &[
     "virus",        // Self-replicating file infector
     "webshell",     // Web-based backdoor (PHP/JSP/ASP)
     "worm",         // Self-propagating across networks
+];
+
+/// Allowed subdirectories in well-known/tools/
+///
+/// Categories of tools detected by signature or behavioral pattern.
+/// Each describes the tool's PURPOSE, not its legality.
+///
+/// Update this list AND TAXONOMY.md when adding new tool categories.
+const ALLOWED_TOOLS: &[&str] = &[
+    "browser",             // Browser-based tools and extensions
+    "detection",           // Detection and scanning tools
+    "dual-use",            // Legitimate tools commonly abused (LOLBins, netcat, etc.)
+    "offensive",           // Offensive security / red team tools
+    "reverse-engineering", // RE tools (disassemblers, debuggers, decompilers)
+    "sysadmin",            // System administration tools
 ];
 
 /// Allowed top-level subdirectories in metadata/
@@ -997,6 +1030,26 @@ pub(crate) fn validate_directory_structure(traits_path: &Path) -> Result<(), Vec
         }
     }
 
+    // Check objectives/supply-chain/ subdirectories
+    if let Ok(entries) = std::fs::read_dir(traits_path.join("objectives/supply-chain")) {
+        for entry in entries.flatten() {
+            if entry.file_type().map(|ft| ft.is_dir()).unwrap_or(false) {
+                let dir_name = entry.file_name().to_string_lossy().to_string();
+                if !ALLOWED_SUPPLY_CHAIN.contains(&dir_name.as_str()) {
+                    errors.push(format!(
+                        "Unknown objectives/supply-chain/ subdirectory: '{}'\n  \
+                         This rule is misplaced according to TAXONOMY.md.\n  \
+                         supply-chain/ is for package ecosystem attacks (install hooks, typosquatting).\n  \
+                         Lateral movement via supply chain → lateral-movement/.\n  \
+                         Package metadata → metadata/package/.\n  \
+                         There is almost certainly a better existing directory for this trait.",
+                        dir_name
+                    ));
+                }
+            }
+        }
+    }
+
     // Check micro-behaviors/
     if let Ok(entries) = std::fs::read_dir(traits_path.join("micro-behaviors")) {
         for entry in entries.flatten() {
@@ -1078,6 +1131,25 @@ pub(crate) fn validate_directory_structure(traits_path: &Path) -> Result<(), Vec
                          malware/ categories must describe what the malware DOES (MBC/STIX 2.1 types).\n  \
                          Actor attribution (APT) belongs in trait descriptions, not directory names.\n  \
                          Each family appears in exactly one category.\n  \
+                         There is almost certainly a better existing directory for this trait.",
+                        dir_name
+                    ));
+                }
+            }
+        }
+    }
+
+    // Check well-known/tools/ subdirectories
+    if let Ok(entries) = std::fs::read_dir(traits_path.join("well-known/tools")) {
+        for entry in entries.flatten() {
+            if entry.file_type().map(|ft| ft.is_dir()).unwrap_or(false) {
+                let dir_name = entry.file_name().to_string_lossy().to_string();
+                if !ALLOWED_TOOLS.contains(&dir_name.as_str()) {
+                    errors.push(format!(
+                        "Unknown well-known/tools/ subdirectory: '{}'\n  \
+                         This rule is misplaced according to TAXONOMY.md.\n  \
+                         tools/ categories describe a tool's purpose, not its legality.\n  \
+                         Malware families → well-known/malware/.\n  \
                          There is almost certainly a better existing directory for this trait.",
                         dir_name
                     ));

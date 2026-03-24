@@ -164,7 +164,7 @@ pub(crate) fn init_logging(
                 }),
         ));
 
-        if format == cli::OutputFormat::Terminal {
+        if is_server && format == cli::OutputFormat::Terminal {
             eprintln!("Logging to: {}", log_file);
         }
 

@@ -46,7 +46,10 @@ pub fn resolve_and_ensure() -> PathBuf {
         eprintln!("Error: Failed to clone traits repository: {e}");
         eprintln!();
         eprintln!("Ensure 'git' is installed, or manually clone:");
-        eprintln!("  git clone --depth 1 {TRAITS_REPO_URL} \"{}\"", data_dir.display());
+        eprintln!(
+            "  git clone --depth 1 {TRAITS_REPO_URL} \"{}\"",
+            data_dir.display()
+        );
         std::process::exit(1);
     }
     eprintln!("Traits installed to {}", data_dir.display());

@@ -393,7 +393,7 @@ pub(crate) fn detect_file_type_from_path(file_path: &Path) -> FileType {
     if let Some(ext) = file_path.extension() {
         let ext_str = ext.to_str().unwrap_or("").to_lowercase();
         match ext_str.as_str() {
-            "sh" => return FileType::Shell,
+            "sh" | "bash" | "ksh" | "zsh" | "csh" | "tcsh" | "dash" => return FileType::Shell,
             "py" => return FileType::Python,
             "js" | "mjs" | "cjs" | "jsx" => return FileType::JavaScript,
             "ts" | "tsx" | "mts" | "cts" => return FileType::TypeScript,
@@ -401,7 +401,7 @@ pub(crate) fn detect_file_type_from_path(file_path: &Path) -> FileType {
             "rs" => return FileType::Rust,
             "java" => return FileType::Java,
             "pyc" => return FileType::PythonBytecode,
-            "rb" => return FileType::Ruby,
+            "rb" | "rbs" => return FileType::Ruby,
             "php" => return FileType::Php,
             "pl" | "pm" | "t" => return FileType::Perl,
             "ps1" | "psm1" | "psd1" => return FileType::PowerShell,
@@ -486,11 +486,15 @@ pub(crate) fn detect_file_type_from_data(file_path: &Path, file_data: &[u8]) -> 
         if matches!(
             ext.to_ascii_lowercase().as_str(),
             "yaml" | "yml" | "json" | "toml" | "ini" | "cfg" | "conf" | "properties"
+                | "txt" | "text" | "md" | "markdown" | "rst" | "adoc"
+                | "csv" | "tsv" | "log" | "svg" | "xml"
+                | "elv" | "nu" | "fish"
         ) {
             return FileType::Unknown;
         }
     }
-    // 3. Loose content heuristics — last resort for extensionless/unrecognized files
+    // 3. Content heuristics — last resort for extensionless/unrecognized files.
+    // Heuristics propose candidates, tree-sitter arbitrates by error rate.
     detect_by_content_heuristics(file_data).unwrap_or(FileType::Unknown)
 }
 
@@ -810,6 +814,7 @@ fn detect_file_type_inner(file_path: &Path, file_data: &[u8]) -> Option<FileType
                     | "tsx"
                     | "py"
                     | "rb"
+                    | "rbs"
                     | "go"
                     | "rs"
                     | "java"
@@ -842,6 +847,25 @@ fn detect_file_type_inner(file_path: &Path, file_data: &[u8]) -> Option<FileType
                     | "ps1"
                     | "psm1"
                     | "psd1"
+                    | "md"
+                    | "markdown"
+                    | "txt"
+                    | "text"
+                    | "rst"
+                    | "adoc"
+                    | "html"
+                    | "htm"
+                    | "xml"
+                    | "yaml"
+                    | "yml"
+                    | "json"
+                    | "toml"
+                    | "ini"
+                    | "cfg"
+                    | "conf"
+                    | "csv"
+                    | "tsv"
+                    | "log"
             )
         )
     });
@@ -856,34 +880,104 @@ fn detect_file_type_inner(file_path: &Path, file_data: &[u8]) -> Option<FileType
 }
 
 /// Content heuristics for files where neither magic bytes nor extension gave a result.
-/// These are intentionally loose — only used as a last resort for extensionless or
-/// unrecognized-extension files (e.g., `.dat` files that are actually Python).
+///
+/// Heuristics propose candidate file types, then tree-sitter arbitrates: each
+/// candidate is parsed and the language with the fewest AST errors wins.
+/// This prevents template files, changelogs, and foreign-language scripts
+/// from being misclassified.
 fn detect_by_content_heuristics(file_data: &[u8]) -> Option<FileType> {
-    if looks_like_python(file_data) {
-        return Some(FileType::Python);
+    let candidates: &[(fn(&[u8]) -> bool, FileType)] = &[
+        (looks_like_python, FileType::Python),
+        (looks_like_powershell, FileType::PowerShell),
+        (looks_like_perl, FileType::Perl),
+        (looks_like_batch, FileType::Batch),
+        (looks_like_vbs, FileType::Vbs),
+        (looks_like_lua, FileType::Lua),
+        (looks_like_javascript, FileType::JavaScript),
+        (looks_like_c, FileType::C),
+    ];
+
+    // Collect all heuristic matches
+    let matches: Vec<&FileType> = candidates
+        .iter()
+        .filter(|(heuristic, _)| heuristic(file_data))
+        .map(|(_, ft)| ft)
+        .collect();
+
+    if matches.is_empty() {
+        return None;
     }
-    if looks_like_powershell(file_data) {
-        return Some(FileType::PowerShell);
+
+    // Single match with no tree-sitter grammar → trust the heuristic
+    if matches.len() == 1 && unified::config_for_file_type(matches[0]).is_none() {
+        return Some(matches[0].clone());
     }
-    if looks_like_perl(file_data) {
-        return Some(FileType::Perl);
+
+    // Parse prefix with each candidate's tree-sitter grammar, pick lowest error rate
+    pick_best_by_tree_sitter(file_data, &matches)
+}
+
+/// Parse a file prefix with each candidate language's tree-sitter grammar.
+/// Returns the language with the lowest error rate, or None if all are too noisy.
+fn pick_best_by_tree_sitter(file_data: &[u8], candidates: &[&FileType]) -> Option<FileType> {
+    use tree_sitter::Parser;
+
+    let prefix = &file_data[..file_data.len().min(4096)];
+    let mut best: Option<(FileType, f64)> = None;
+
+    for &file_type in candidates {
+        let Some(config) = unified::config_for_file_type(file_type) else {
+            // No tree-sitter grammar (Batch, VBS) — treat as moderate confidence
+            let score = 0.10;
+            if best.as_ref().is_none_or(|(_, s)| score < *s) {
+                best = Some((file_type.clone(), score));
+            }
+            continue;
+        };
+
+        let mut parser = Parser::new();
+        if parser.set_language(&config.language).is_err() {
+            continue;
+        }
+
+        let Some(tree) = parser.parse(prefix, None) else {
+            continue;
+        };
+
+        let root = tree.root_node();
+        let total = root.descendant_count();
+        if total == 0 {
+            continue;
+        }
+
+        // Count ERROR and MISSING nodes
+        let mut errors = 0usize;
+        let mut stack = vec![root];
+        while let Some(node) = stack.pop() {
+            if node.is_error() || node.is_missing() {
+                errors += 1;
+            }
+            for i in 0..node.child_count() {
+                if let Some(child) = node.child(i as u32) {
+                    stack.push(child);
+                }
+            }
+        }
+
+        let error_rate = errors as f64 / total as f64;
+        tracing::debug!(
+            "tree-sitter candidate {:?}: {} nodes, {} errors, {:.1}% error rate",
+            file_type, total, errors, error_rate * 100.0
+        );
+
+        if best.as_ref().is_none_or(|(_, s)| error_rate < *s) {
+            best = Some((file_type.clone(), error_rate));
+        }
     }
-    if looks_like_batch(file_data) {
-        return Some(FileType::Batch);
-    }
-    if looks_like_vbs(file_data) {
-        return Some(FileType::Vbs);
-    }
-    if looks_like_lua(file_data) {
-        return Some(FileType::Lua);
-    }
-    if looks_like_javascript(file_data) {
-        return Some(FileType::JavaScript);
-    }
-    if looks_like_c(file_data) {
-        return Some(FileType::C);
-    }
-    None
+
+    // Reject if even the best candidate has >30% errors — it's probably not code
+    best.filter(|(_, rate)| *rate < 0.30)
+        .map(|(ft, _)| ft)
 }
 
 /// Check if content looks like HTML (has actual markup tags)
@@ -1868,6 +1962,120 @@ mod tests {
         txt_file.write_all(b"Plain text content").unwrap();
         let file_type = detect_file_type(txt_file.path()).unwrap();
         assert_eq!(file_type, FileType::Unknown);
+    }
+
+    // --- Content heuristic rejection tests ---
+    // Template files, changelogs, and foreign-language scripts must NOT be
+    // misclassified by the loose content heuristics.
+
+    #[test]
+    fn test_zsh_template_not_detected_as_lua() {
+        // Zsh template with Lua-like keywords (local, then, end)
+        let data = br#"{%- let section = "test" -%}
+function __zoxide_pwd() {
+    local result
+    if true then
+        \builtin pwd -P
+    end
+}
+"#;
+        let path = PathBuf::from("templates/zsh.txt");
+        assert_eq!(detect_file_type_from_data(&path, data), FileType::Unknown);
+    }
+
+    #[test]
+    fn test_elvish_script_not_detected_as_python() {
+        // Elvish shell (.elv) has Python-like keywords
+        let data = br#"use str
+fn init {
+    set-env __zoxide_hook chpwd
+    var f = {
+        zoxide add -- $pwd
+    }
+    set after-chdir = [$@after-chdir $f]
+}
+"#;
+        let path = PathBuf::from("completions/zoxide.elv");
+        assert_eq!(detect_file_type_from_data(&path, data), FileType::Unknown);
+    }
+
+    #[test]
+    fn test_changelog_not_detected_as_shell() {
+        // Markdown changelog with shell examples
+        let data = br#"# Changelog
+
+## v0.9.9
+
+### Added
+- export PATH for completions
+- if [ -n "$ZSH_VERSION" ]; then source zoxide; fi
+
+### Fixed
+- case $SHELL in bash) ;; esac
+"#;
+        let path = PathBuf::from("CHANGELOG.md");
+        assert_eq!(detect_file_type_from_data(&path, data), FileType::Markdown);
+    }
+
+    #[test]
+    fn test_nushell_script_not_detected_as_python() {
+        let data = br#"def __zoxide_cd [...rest] {
+    cd ...$rest
+}
+def __zoxide_pwd [] {
+    $env.PWD
+}
+"#;
+        let path = PathBuf::from("templates/nushell.txt");
+        assert_eq!(detect_file_type_from_data(&path, data), FileType::Unknown);
+    }
+
+    #[test]
+    fn test_real_python_still_detected() {
+        let data = br#"import os
+import sys
+from pathlib import Path
+
+def main():
+    print("hello")
+    return 0
+
+if __name__ == "__main__":
+    sys.exit(main())
+"#;
+        let path = PathBuf::from("script");
+        assert_eq!(detect_file_type_from_data(&path, data), FileType::Python);
+    }
+
+    #[test]
+    fn test_real_lua_still_detected() {
+        let data = br#"local M = {}
+
+function M.setup(opts)
+    local config = opts or {}
+    setmetatable(config, {__index = M.defaults})
+    return config
+end
+
+return M
+"#;
+        let path = PathBuf::from("plugin");
+        assert_eq!(detect_file_type_from_data(&path, data), FileType::Lua);
+    }
+
+    #[test]
+    fn test_real_shell_still_detected() {
+        let data = br#"#!/bin/sh
+set -e
+export PATH="/usr/local/bin:$PATH"
+if [ -z "$HOME" ]; then
+    echo "HOME not set"
+    exit 1
+fi
+"#;
+        let path = PathBuf::from("install");
+        // Shebang detection handles this, not heuristics
+        assert_eq!(detect_file_type_from_data(&path, data), FileType::Shell);
     }
 
     // --- Python bytecode ---

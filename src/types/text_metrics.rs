@@ -67,6 +67,15 @@ pub struct TextMetrics {
     /// appended payload lines are typically >1000 chars in otherwise normal files)
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub last_line_length: u32,
+    
+    // === AST Parse Metrics ===
+    /// Number of AST parse errors encountered during tree-sitter analysis
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub ast_parse_errors: u32,
+    /// Maximum depth of the abstract syntax tree
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub ast_max_depth: u32,
+    
     /// Ratio of empty lines to total
     #[serde(default, skip_serializing_if = "is_zero_f32")]
     pub empty_line_ratio: f32,
@@ -641,6 +650,8 @@ impl ValidFieldPaths for TextMetrics {
             "lines_over_500",
             "lines_over_1000",
             "last_line_length",
+            "ast_parse_errors",
+            "ast_max_depth",
             "empty_line_ratio",
             // Whitespace Forensics
             "whitespace_ratio",

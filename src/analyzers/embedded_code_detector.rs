@@ -43,6 +43,46 @@ const MAX_CODE_ENTROPY: f64 = 7.5;
 /// Returns Some(FileType) if code is detected, None otherwise.
 #[must_use]
 pub fn detect_language(string_info: &StringInfo, is_encoded: bool) -> Option<FileType> {
+    detect_language_with_host(string_info, is_encoded, None)
+}
+
+/// Detect the language of embedded code, optionally filtering against the host file type.
+/// When the host is known, detections that match syntactically similar languages are
+/// suppressed to avoid false positives (e.g., Ruby files misdetected as Python).
+pub fn detect_language_with_host(
+    string_info: &StringInfo,
+    is_encoded: bool,
+    host_file_type: Option<&FileType>,
+) -> Option<FileType> {
+    let result = detect_language_inner(string_info, is_encoded)?;
+
+    // Suppress false positives from syntactically similar languages
+    if let Some(host) = host_file_type {
+        if is_sibling_language(host, &result) {
+            tracing::debug!(
+                "Suppressing {:?} detection in {:?} host (syntactic sibling)",
+                result,
+                host
+            );
+            return None;
+        }
+    }
+
+    Some(result)
+}
+
+/// Languages that share enough syntax to cause false positives in embedded detection.
+fn is_sibling_language(host: &FileType, detected: &FileType) -> bool {
+    matches!(
+        (host, detected),
+        (FileType::Ruby, FileType::Python)
+            | (FileType::Python, FileType::Ruby)
+            | (FileType::Ruby, FileType::Perl)
+            | (FileType::Perl, FileType::Ruby)
+    )
+}
+
+fn detect_language_inner(string_info: &StringInfo, is_encoded: bool) -> Option<FileType> {
     let value = &string_info.value;
 
     // Size checks
@@ -276,7 +316,11 @@ fn is_top_level_self_detection(
     offset: u64,
     file_type: &FileType,
 ) -> bool {
-    !is_encoded && offset == 0 && detect_file_type_from_path(Path::new(parent_path)) == *file_type
+    if is_encoded || offset != 0 {
+        return false;
+    }
+    let host_type = detect_file_type_from_path(Path::new(parent_path));
+    host_type == *file_type || is_sibling_language(&host_type, file_type)
 }
 
 /// Calculate Shannon entropy of data
@@ -727,6 +771,16 @@ pub(crate) fn process_all_strings(
     strings: &[StringInfo],
     capability_mapper: &Arc<CapabilityMapper>,
     current_depth: usize,
+) -> (Vec<FileAnalysis>, Vec<Finding>) {
+    process_all_strings_with_host(parent_path, strings, capability_mapper, current_depth, None)
+}
+
+pub(crate) fn process_all_strings_with_host(
+    parent_path: &str,
+    strings: &[StringInfo],
+    capability_mapper: &Arc<CapabilityMapper>,
+    current_depth: usize,
+    host_file_type: Option<&FileType>,
 ) -> (Vec<FileAnalysis>, Vec<Finding>) {
     let mut encoded_layers = Vec::new();
     let mut plain_findings = Vec::new();

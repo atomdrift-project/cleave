@@ -78,9 +78,14 @@ impl super::JavaClassAnalyzer {
                             id: cap_id.to_string(),
                             desc: description.to_string(),
                             conf: 0.9,
-                            crit: if cap_id.contains("exec") || cap_id.contains("unsafe") {
+                            crit: if *cap_id == "execution/process" || cap_id.contains("unsafe") {
                                 Criticality::Hostile
-                            } else if cap_id.contains("net") || cap_id.contains("reflect") {
+                            } else if *cap_id == "net/socket"
+                                || *cap_id == "net/server"
+                                || *cap_id == "net/jndi"
+                                || *cap_id == "net/rmi"
+                                || *cap_id == "reflect/classloader"
+                            {
                                 Criticality::Suspicious
                             } else {
                                 Criticality::Notable
@@ -277,7 +282,7 @@ impl super::JavaClassAnalyzer {
             }
 
             // Remote access indicators
-            if s_lower.contains("rat")
+            if Self::contains_word(&s_lower, "rat")
                 || s_lower.contains("c2")
                 || s_lower.contains("c&c")
                 || s_lower.contains("beacon")
@@ -338,6 +343,28 @@ impl super::JavaClassAnalyzer {
                 );
             }
         }
+    }
+
+    /// Check if `haystack` contains `needle` as a whole word (surrounded by non-alphanumeric
+    /// characters or string boundaries). This avoids false positives from substring matches
+    /// like "rat" in "charAt" or "Generated".
+    fn contains_word(haystack: &str, needle: &str) -> bool {
+        let hay = haystack.as_bytes();
+        let ndl = needle.as_bytes();
+        if ndl.len() > hay.len() {
+            return false;
+        }
+        for i in 0..=(hay.len() - ndl.len()) {
+            if &hay[i..i + ndl.len()] == ndl {
+                let before_ok = i == 0 || !hay[i - 1].is_ascii_alphanumeric();
+                let after_ok =
+                    i + ndl.len() == hay.len() || !hay[i + ndl.len()].is_ascii_alphanumeric();
+                if before_ok && after_ok {
+                    return true;
+                }
+            }
+        }
+        false
     }
 
     fn add_capability(

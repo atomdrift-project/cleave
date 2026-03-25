@@ -529,20 +529,22 @@ impl PEAnalyzer {
         // --- Corrupted-header findings (goblin failed entirely) ---
         if let Some(err) = parse_error {
             let error_str = format!("{}", err);
-            let is_resource_error = error_str.contains("ResourceString")
-                || error_str.contains("ResourceTable")
-                || error_str.contains("resource");
+            let error_lower = error_str.to_lowercase();
+            let is_resource_error = error_lower.contains("resourcestring")
+                || error_lower.contains("resourcetable")
+                || error_lower.contains("resource");
             let is_parser_limitation = error_str.contains("type is too big");
 
-            // If rizin found sections/imports that goblin couldn't parse, the header
-            // corruption is more significant — upgrade from baseline to suspicious.
+            // Resource directory errors and parser limitations are non-critical —
+            // the PE structure itself is intact, only metadata is malformed.
+            // Only non-resource header corruption indicates deliberate tampering.
             let rizin_found_hidden_content =
                 !report.sections.is_empty() || !report.imports.is_empty();
             let (crit, conf) =
-                if rizin_found_hidden_content && (is_resource_error || is_parser_limitation) {
-                    (Criticality::Suspicious, 0.8)
-                } else if is_resource_error || is_parser_limitation {
+                if is_resource_error || is_parser_limitation {
                     (Criticality::Baseline, 0.3)
+                } else if rizin_found_hidden_content {
+                    (Criticality::Suspicious, 0.8)
                 } else {
                     (Criticality::Hostile, 1.0)
                 };

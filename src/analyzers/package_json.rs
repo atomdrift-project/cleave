@@ -1143,6 +1143,9 @@ impl PackageJsonAnalyzer {
         // Known legitimate packages that might trigger false positives
         let legitimate = [
             "color",
+            "color-convert",
+            "color-name",
+            "color-string",
             "colors",
             "lodash",
             "asynct",

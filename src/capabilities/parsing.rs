@@ -334,6 +334,7 @@ pub(crate) fn parse_file_types(types: &[String], warnings: &mut Vec<String>) -> 
                     | "media"
                     | "data"
                     | "ipa"
+                    | "archives"
             );
             if is_group && !is_exclusion {
                 used_groups = true;
@@ -402,6 +403,21 @@ pub(crate) fn parse_file_types(types: &[String], warnings: &mut Vec<String>) -> 
                 ],
                 "images" | "media" => vec![RuleFileType::Jpeg, RuleFileType::Png],
                 "data" | "ipa" => vec![RuleFileType::Ipa],
+                "archives" => vec![
+                    RuleFileType::Zip,
+                    RuleFileType::Apk,
+                    RuleFileType::Jar,
+                    RuleFileType::Tar,
+                    RuleFileType::Npm,
+                    RuleFileType::Nupkg,
+                    RuleFileType::Gem,
+                    RuleFileType::Whl,
+                    RuleFileType::Deb,
+                    RuleFileType::Rpm,
+                    RuleFileType::Crx,
+                    RuleFileType::VsixArchive,
+                    RuleFileType::Xpi,
+                ],
                 // Binary formats
                 "elf" => vec![RuleFileType::Elf],
                 "macho" => vec![RuleFileType::Macho],
@@ -464,6 +480,19 @@ pub(crate) fn parse_file_types(types: &[String], warnings: &mut Vec<String>) -> 
                 "ooxml" | "docx" | "xlsx" | "pptx" | "docm" | "xlsm" | "pptm" => {
                     vec![RuleFileType::Ooxml]
                 }
+                "zip" => vec![RuleFileType::Zip],
+                "apk" => vec![RuleFileType::Apk],
+                "jar" => vec![RuleFileType::Jar],
+                "tar" | "tgz" => vec![RuleFileType::Tar],
+                "npm" => vec![RuleFileType::Npm],
+                "nupkg" => vec![RuleFileType::Nupkg],
+                "gem" => vec![RuleFileType::Gem],
+                "whl" => vec![RuleFileType::Whl],
+                "deb" => vec![RuleFileType::Deb],
+                "rpm" => vec![RuleFileType::Rpm],
+                "crx" => vec![RuleFileType::Crx],
+                "vsix-archive" => vec![RuleFileType::VsixArchive],
+                "xpi" => vec![RuleFileType::Xpi],
                 _ => {
                     warnings.push(format!("Unknown file type: '{}'", name));
                     vec![]

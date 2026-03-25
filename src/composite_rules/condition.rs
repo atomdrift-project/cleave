@@ -184,6 +184,15 @@ impl NotException {
     }
 }
 
+/// Strict shorthand: only `id` is allowed — any extra fields (e.g. `count_min`,
+/// `needs`, `crit`) cause a deserialization error instead of being silently dropped.
+/// Fields that appear unused on condition items are bugs in trait YAML files.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct TraitShorthandInner {
+    id: String,
+}
+
 /// Intermediate type for deserializing conditions with shorthand support.
 /// Converts `{ id: my-trait }` to `Condition::Trait { id: "my-trait" }`.
 #[derive(Debug, Clone, Deserialize)]
@@ -191,7 +200,7 @@ impl NotException {
 enum ConditionDeser {
     /// Shorthand for trait reference - just `id` field, no `type` needed
     /// Must be listed first so serde tries it before the tagged variants
-    TraitShorthand { id: String },
+    TraitShorthand(TraitShorthandInner),
 
     /// All other condition types require explicit `type` field
     Tagged(Box<ConditionTagged>),
@@ -596,7 +605,7 @@ enum ConditionTagged {
 impl From<ConditionDeser> for Condition {
     fn from(deser: ConditionDeser) -> Self {
         match deser {
-            ConditionDeser::TraitShorthand { id } => Condition::Trait { id },
+            ConditionDeser::TraitShorthand(inner) => Condition::Trait { id: inner.id },
             ConditionDeser::Tagged(tagged) => match *tagged {
                 ConditionTagged::Symbol {
                     exact,

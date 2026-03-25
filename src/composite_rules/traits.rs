@@ -799,8 +799,12 @@ impl TraitDefinition {
         }
 
         // Check file type match
+        // Note: we do NOT treat ctx.file_type == FileType::All as a wildcard match.
+        // Container-level evaluation (APK, ZIP) sets file_type to All, but rules with
+        // specific for: constraints (e.g. [shell, python]) should not fire on containers
+        // that happen to contain unrelated file types. Only rules whose for: list includes
+        // All (the default) should match containers.
         let file_type_match = self.r#for.contains(&FileType::All)
-            || ctx.file_type == FileType::All
             || self.r#for.contains(&ctx.file_type);
 
         if !file_type_match {
@@ -1657,8 +1661,10 @@ impl CompositeTrait {
         }
 
         // Check file type match
+        // Note: we do NOT treat ctx.file_type == FileType::All as a wildcard match.
+        // Container-level evaluation (APK, ZIP) sets file_type to Archive, and rules
+        // must explicitly include Archive in their for: list to match containers.
         let file_type_match = self.r#for.contains(&FileType::All)
-            || ctx.file_type == FileType::All
             || self.r#for.contains(&ctx.file_type);
 
         if !file_type_match {

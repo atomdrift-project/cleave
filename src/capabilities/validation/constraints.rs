@@ -1026,6 +1026,21 @@ pub(crate) fn find_excessive_file_types(
     ];
     let images: &[FileType] = &[FileType::Jpeg, FileType::Png];
     let data: &[FileType] = &[FileType::Ipa];
+    let archives: &[FileType] = &[
+        FileType::Zip,
+        FileType::Apk,
+        FileType::Jar,
+        FileType::Tar,
+        FileType::Npm,
+        FileType::Nupkg,
+        FileType::Gem,
+        FileType::Whl,
+        FileType::Deb,
+        FileType::Rpm,
+        FileType::Crx,
+        FileType::VsixArchive,
+        FileType::Xpi,
+    ];
     let all_groups: &[(&[FileType], &str)] = &[
         (binaries, "binaries"),
         (scripts, "scripts"),
@@ -1034,6 +1049,7 @@ pub(crate) fn find_excessive_file_types(
         (documents, "documents"),
         (images, "images"),
         (data, "data"),
+        (archives, "archives"),
     ];
 
     // Returns true if `types` is an exact union of complete named groups.
@@ -1061,7 +1077,7 @@ pub(crate) fn find_excessive_file_types(
     // Only called when is_group_expressible returned false, so types contain at least one
     // member that doesn't belong to any named group — always suggest [all] or named groups.
     let suggest = |_types: &[FileType]| -> &'static str {
-        "use `for: [all]` or combine named groups (binaries, scripts, source, manifests, documents, media, data)"
+        "use `for: [all]` or combine named groups (binaries, scripts, source, manifests, documents, media, data, archives)"
     };
 
     let mut violations = Vec::new();

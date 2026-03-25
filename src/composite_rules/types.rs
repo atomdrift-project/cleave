@@ -273,6 +273,32 @@ pub(crate) enum FileType {
     Pickle,
     /// PDF document
     Pdf,
+    /// Generic ZIP archive
+    Zip,
+    /// Android application package (.apk)
+    Apk,
+    /// Java archive (.jar, .war, .ear)
+    Jar,
+    /// Tar archive (.tar, .tar.gz, .tgz, etc.)
+    Tar,
+    /// npm package (.tgz)
+    Npm,
+    /// NuGet package (.nupkg)
+    Nupkg,
+    /// Ruby gem (.gem)
+    Gem,
+    /// Python wheel (.whl)
+    Whl,
+    /// Debian package (.deb)
+    Deb,
+    /// RPM package (.rpm)
+    Rpm,
+    /// Chrome extension (.crx)
+    Crx,
+    /// VS Code extension (.vsix archive)
+    VsixArchive,
+    /// Firefox extension (.xpi)
+    Xpi,
 }
 
 impl FileType {
@@ -373,6 +399,20 @@ impl FileType {
             FileType::Pickle,
             // Document formats
             FileType::Pdf,
+            // Archive/container formats
+            FileType::Zip,
+            FileType::Apk,
+            FileType::Jar,
+            FileType::Tar,
+            FileType::Npm,
+            FileType::Nupkg,
+            FileType::Gem,
+            FileType::Whl,
+            FileType::Deb,
+            FileType::Rpm,
+            FileType::Crx,
+            FileType::VsixArchive,
+            FileType::Xpi,
         ]
     }
 
@@ -433,6 +473,19 @@ impl FileType {
             "lnk" => FileType::Lnk,
             "ipa" => FileType::Ipa,
             "pdf" => FileType::Pdf,
+            "zip" => FileType::Zip,
+            "apk" => FileType::Apk,
+            "jar" | "war" | "ear" => FileType::Jar,
+            "tar" | "tgz" => FileType::Tar,
+            "npm" => FileType::Npm,
+            "nupkg" => FileType::Nupkg,
+            "gem" => FileType::Gem,
+            "whl" => FileType::Whl,
+            "deb" => FileType::Deb,
+            "rpm" => FileType::Rpm,
+            "crx" => FileType::Crx,
+            "vsix" => FileType::VsixArchive,
+            "xpi" => FileType::Xpi,
             _ => FileType::All,
         }
     }

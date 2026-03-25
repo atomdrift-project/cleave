@@ -372,10 +372,8 @@ impl Radare2Analyzer {
         // Use precomputed SHA256 for cache lookup if available
         let sha256 = precomputed_sha256.or_else(|| Self::compute_file_sha256(file_path));
 
-        // Check cache first (unless CLEAVE_SKIP_CACHE is set)
-        let skip_cache = std::env::var("CLEAVE_SKIP_CACHE")
-            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-            .unwrap_or(false);
+        // Check cache first (skipped in debug builds or when CLEAVE_SKIP_CACHE is set)
+        let skip_cache = crate::cache::skip_cache();
         if !skip_cache {
             if let Some(ref hash) = sha256 {
                 if let Some(cached) = Self::load_from_cache(hash) {

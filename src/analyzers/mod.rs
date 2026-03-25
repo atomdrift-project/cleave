@@ -479,6 +479,17 @@ pub(crate) fn detect_file_type_from_data(file_path: &Path, file_data: &[u8]) -> 
             return FileType::Unknown;
         }
     }
+    // Data/config formats must not fall through to source-language heuristics.
+    // YAML build recipes (e.g. .melange.yaml) contain embedded shell with keywords
+    // like `local`, `then`, `end` that trick `looks_like_lua()`.
+    if let Some(ext) = file_path.extension().and_then(|e| e.to_str()) {
+        if matches!(
+            ext.to_ascii_lowercase().as_str(),
+            "yaml" | "yml" | "json" | "toml" | "ini" | "cfg" | "conf" | "properties"
+        ) {
+            return FileType::Unknown;
+        }
+    }
     // 3. Loose content heuristics — last resort for extensionless/unrecognized files
     detect_by_content_heuristics(file_data).unwrap_or(FileType::Unknown)
 }

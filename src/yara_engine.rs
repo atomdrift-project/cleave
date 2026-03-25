@@ -872,6 +872,12 @@ impl YaraTier {
 }
 
 impl YaraEngine {
+    /// Total number of compiled YARA rules across all tiers.
+    #[must_use]
+    pub(crate) fn total_rules(&self) -> usize {
+        self.tiers.values().map(|r| r.iter().count()).sum()
+    }
+
     /// Create a new YARA engine without rules loaded
     #[must_use]
     pub(crate) fn new() -> Self {

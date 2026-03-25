@@ -249,6 +249,33 @@ fn run_analyze_paths(
     analyze_targets(&expanded, ctx)
 }
 
+fn run_version() {
+    use std::time::SystemTime;
+
+    let info = cleave::version_info();
+
+    println!("cleave {}", env!("CARGO_PKG_VERSION"));
+
+    let traits_ver = info.traits_version.as_deref().unwrap_or("unknown");
+    let mtime_str = info
+        .traits_mtime
+        .and_then(|t| {
+            t.duration_since(SystemTime::UNIX_EPOCH).ok().map(|d| {
+                let secs = d.as_secs() as i64;
+                let dt = chrono::DateTime::from_timestamp(secs, 0)?;
+                Some(dt.format("%Y-%m-%d %H:%M UTC").to_string())
+            })
+        })
+        .flatten()
+        .unwrap_or_else(|| "unknown".into());
+    println!("traits  {} ({})", traits_ver, mtime_str);
+    println!(
+        "rules   {} atomic, {} composite",
+        info.trait_count, info.composite_count
+    );
+    println!("yara    {} rules", info.yara_rules);
+}
+
 fn run_update_rules(force: bool, check: bool, pin: Option<String>) -> Result<()> {
     if let Some(commit) = pin {
         cleave::traits_repo::pin(&commit).map_err(anyhow::Error::msg)?;
@@ -430,6 +457,10 @@ pub(crate) fn dispatch_command(
             &ctx.analyze,
             "No valid paths found (stdin was empty or contained only comments)",
         )?,
+        Some(cli::Command::Version) => {
+            run_version();
+            return Ok(None);
+        }
         Some(cli::Command::Validate) => {
             validate_command()?;
             return Ok(None);

@@ -710,3 +710,93 @@ exec($cmd);
 
     assert!(result.matched);
 }
+
+#[test]
+fn test_eval_ast_query_predicates_filter_correctly() {
+    // Regression: dashed-ip-colon-regex was matching .replace(/[ \t\r\n]+/g," ")
+    // because #eq? and #match? predicates were not filtering correctly.
+    // The query should only match .replace(/<regex with colon>/, "-")
+    let report = create_test_report("/test/prettify.js");
+    let source = r#"ac.replace(/[ \t\r\n]+/g," ")"#;
+    let ctx = create_test_context(&report, source.as_bytes(), FileType::JavaScript);
+
+    // First, verify the query compiles and predicates are actually recognized
+    let lang: tree_sitter::Language = tree_sitter_javascript::LANGUAGE.into();
+    // WRONG: predicates outside the pattern's closing paren become separate patterns
+    let wrong_query = r#"(call_expression
+  function: (member_expression
+    property: (property_identifier) @prop
+  )
+  arguments: (arguments
+    (regex (regex_pattern) @pat)
+    (string (string_fragment) @repl)
+  )
+)
+(#eq? @prop "replace")
+(#match? @pat ":")
+(#eq? @repl "-")"#;
+    let compiled_wrong = tree_sitter::Query::new(&lang, wrong_query).expect("query should compile");
+    assert_eq!(
+        compiled_wrong.pattern_count(),
+        4,
+        "wrong query has 4 patterns (structural + 3 predicate-only patterns)"
+    );
+
+    // CORRECT: predicates inside the pattern's closing paren
+    let query_str = r#"(call_expression
+  function: (member_expression
+    property: (property_identifier) @prop
+  )
+  arguments: (arguments
+    (regex (regex_pattern) @pat)
+    (string (string_fragment) @repl)
+  )
+  (#eq? @prop "replace")
+  (#match? @pat ":")
+  (#eq? @repl "-")
+)"#;
+    let compiled = tree_sitter::Query::new(&lang, query_str).expect("query should compile");
+    assert_eq!(
+        compiled.pattern_count(),
+        1,
+        "correct query should have 1 pattern with predicates inside"
+    );
+
+    let result = eval_ast(None, None, None, None, None, Some(query_str), false, &ctx);
+
+    assert!(
+        !result.matched,
+        "should NOT match .replace(/[ \\t\\r\\n]+/g,\" \") — \
+         regex has no colon and replacement is space, not dash. \
+         match_count={}, evidence={:?}",
+        result.match_count, result.evidence
+    );
+}
+
+#[test]
+fn test_eval_ast_query_predicates_positive_match() {
+    // Verify the same query DOES match when the replace has colon regex and dash replacement
+    let report = create_test_report("/test/ip.js");
+    let source = r#"addr.replace(/:/g,"-")"#;
+    let ctx = create_test_context(&report, source.as_bytes(), FileType::JavaScript);
+
+    let query = r#"(call_expression
+  function: (member_expression
+    property: (property_identifier) @prop
+  )
+  arguments: (arguments
+    (regex (regex_pattern) @pat)
+    (string (string_fragment) @repl)
+  )
+  (#eq? @prop "replace")
+  (#match? @pat ":")
+  (#eq? @repl "-")
+)"#;
+
+    let result = eval_ast(None, None, None, None, None, Some(query), false, &ctx);
+
+    assert!(
+        result.matched,
+        "should match .replace(/:/g,\"-\") — regex has colon and replacement is dash"
+    );
+}

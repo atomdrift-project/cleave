@@ -1496,6 +1496,41 @@ pub fn validate_traits() -> Result<()> {
     Ok(())
 }
 
+/// Version and resource statistics for the `version` subcommand.
+#[allow(missing_docs)]
+#[derive(Debug)]
+pub struct VersionInfo {
+    pub traits_version: Option<String>,
+    pub traits_mtime: Option<std::time::SystemTime>,
+    pub trait_count: usize,
+    pub composite_count: usize,
+    pub yara_rules: usize,
+}
+
+/// Collect version information: traits revision, mtime, and resource counts.
+///
+/// This initialises the global CapabilityMapper and YARA engine if they
+/// haven't been loaded yet, so the counts reflect the full rule set.
+pub fn version_info() -> VersionInfo {
+    let traits_version = traits_repo::version();
+    let traits_mtime = cache::most_recent_yaml_file().ok().map(|(t, _)| t);
+
+    let mapper = shared_resources::capability_mapper();
+    let trait_count = mapper.trait_definitions_count();
+    let composite_count = mapper.composite_rules_count();
+
+    let engine = shared_resources::yara_engine(true);
+    let yara_rules = engine.total_rules();
+
+    VersionInfo {
+        traits_version,
+        traits_mtime,
+        trait_count,
+        composite_count,
+        yara_rules,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -258,6 +258,9 @@ pub enum Command {
         targets: Vec<String>,
     },
 
+    /// Show version, traits revision, and loaded resource counts
+    Version,
+
     /// Validate all trait definitions for correctness and quality issues.
     /// Runs the full suite of validation checks (~60s+) and exits with a non-zero
     /// status code if any errors are found.

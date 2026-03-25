@@ -61,11 +61,8 @@ thread_local! {
 fn db_path() -> Option<&'static Path> {
     DB_PATH
         .get_or_init(|| {
-            if std::env::var("CLEAVE_SKIP_CACHE")
-                .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-                .unwrap_or(false)
-            {
-                tracing::info!("Analysis cache disabled via CLEAVE_SKIP_CACHE");
+            if crate::cache::skip_cache() {
+                tracing::info!("Analysis cache disabled (debug build or CLEAVE_SKIP_CACHE)");
                 return None;
             }
             match cache_dir() {

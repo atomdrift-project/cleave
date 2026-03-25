@@ -23,6 +23,20 @@ use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 use walkdir::WalkDir;
 
+/// Returns `true` if caching should be skipped.
+///
+/// - `CLEAVE_SKIP_CACHE=1` / `true`  → skip
+/// - `CLEAVE_SKIP_CACHE=0` / `false` → don't skip
+/// - Env var unset + debug build      → skip (debug builds default to no cache)
+/// - Env var unset + release build    → don't skip
+#[must_use]
+pub fn skip_cache() -> bool {
+    match std::env::var("CLEAVE_SKIP_CACHE") {
+        Ok(v) => v == "1" || v.eq_ignore_ascii_case("true"),
+        Err(_) => cfg!(debug_assertions),
+    }
+}
+
 /// Format seconds into a human-readable age string (e.g., "2h 30m", "3d 12h").
 #[must_use]
 pub fn format_age(secs: u64) -> String {

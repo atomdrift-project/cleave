@@ -43,7 +43,9 @@ fn main() -> Result<()> {
 
     let disabled = args.disabled_components();
     apply_runtime_overrides(args.traits_dir.as_ref(), &disabled);
-    print_version_banner(format);
+    if !matches!(args.command, Some(cli::Command::Version)) {
+        print_version_banner(format);
+    }
 
     let zip_passwords = default_zip_passwords();
     let sample_extraction = build_sample_extraction(args.extract_dir.as_ref());

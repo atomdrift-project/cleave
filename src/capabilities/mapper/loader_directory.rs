@@ -103,9 +103,7 @@ impl super::CapabilityMapper {
         }
 
         // Try to load from cache (skip validation when loading from cache)
-        let skip_cache = std::env::var("CLEAVE_SKIP_CACHE")
-            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-            .unwrap_or(false);
+        let skip_cache = crate::cache::skip_cache();
         if !enable_full_validation && !skip_cache {
             if let Ok(cache_path) = crate::cache::mapper_cache_path() {
                 if cache_path.exists() {

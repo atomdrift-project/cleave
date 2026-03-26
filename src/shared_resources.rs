@@ -29,7 +29,7 @@ static YARA_ENGINE_BUILTIN_ONLY: OnceLock<Arc<YaraEngine>> = OnceLock::new();
 /// Custom options create a new mapper (typically CLI one-shots, not hot paths).
 pub(crate) fn capability_mapper_with_options(
     options: &crate::AnalysisOptions,
-) -> Arc<CapabilityMapper> {
+) -> anyhow::Result<Arc<CapabilityMapper>> {
     let is_default = options.min_hostile_precision
         == CapabilityMapper::DEFAULT_MIN_HOSTILE_PRECISION
         && options.min_suspicious_precision == CapabilityMapper::DEFAULT_MIN_SUSPICIOUS_PRECISION
@@ -43,18 +43,19 @@ pub(crate) fn capability_mapper_with_options(
     }
 
     if skip_traits_requested() {
-        return Arc::new(CapabilityMapper::empty());
+        return Ok(Arc::new(CapabilityMapper::empty()));
     }
 
-    Arc::new(
-        CapabilityMapper::new_with_precision_thresholds(
+    Ok(Arc::new(
+        CapabilityMapper::try_new_with_precision_thresholds(
             options.min_hostile_precision,
             options.min_suspicious_precision,
             options.enable_full_validation,
         )
+        .map_err(|e| anyhow::anyhow!("failed to initialize capability mapper: {e:#}"))?
         .with_platforms(options.platforms.clone())
         .with_slow_rule_ms(options.slow_rule_ms),
-    )
+    ))
 }
 
 /// Return (trait_count, composite_count) if the global CapabilityMapper is already loaded.
@@ -67,23 +68,23 @@ pub(crate) fn capability_mapper_stats() -> Option<(usize, usize)> {
 }
 
 /// Get or initialize the global CapabilityMapper
-pub(crate) fn capability_mapper() -> Arc<CapabilityMapper> {
+pub(crate) fn capability_mapper() -> anyhow::Result<Arc<CapabilityMapper>> {
     // Fast path: read lock
     {
         let guard = CAPABILITY_MAPPER.read();
         if let Some(ref mapper) = *guard {
-            return mapper.clone();
+            return Ok(mapper.clone());
         }
     }
     // Slow path: write lock + init
     let mut guard = CAPABILITY_MAPPER.write();
     if let Some(ref mapper) = *guard {
-        return mapper.clone();
+        return Ok(mapper.clone());
     }
     tracing::debug!("Initializing global CapabilityMapper");
-    let mapper = Arc::new(CapabilityMapper::new());
+    let mapper = Arc::new(CapabilityMapper::try_new()?);
     *guard = Some(mapper.clone());
-    mapper
+    Ok(mapper)
 }
 
 /// Reload the global CapabilityMapper from trait definitions on disk.
@@ -189,8 +190,8 @@ mod tests {
         let _skip_guard = EnvVarGuard::set("CLEAVE_SKIP_TRAITS", "1");
         let _skip_guard_lower = EnvVarGuard::unset("cleave_SKIP_TRAITS");
         reload_capability_mapper().expect("reload empty mapper");
-        let m1 = capability_mapper();
-        let m2 = capability_mapper();
+        let m1 = capability_mapper().expect("mapper should load");
+        let m2 = capability_mapper().expect("mapper should load");
         // Same Arc instance
         assert!(Arc::ptr_eq(&m1, &m2));
     }
@@ -259,7 +260,7 @@ traits:
         let good_guard = EnvVarGuard::set("CLEAVE_TRAITS_DIR", good.path());
         reload_capability_mapper().expect("load good traits");
 
-        let before = capability_mapper();
+        let before = capability_mapper().expect("mapper before bad reload");
         let before_traits = before.trait_definitions_count();
 
         // Point CLEAVE_TRAITS_DIR at a nonexistent directory and attempt reload.
@@ -273,7 +274,7 @@ traits:
         assert!(result.is_err(), "Expected reload to fail with bad YAML");
 
         // The global mapper should still be the same instance with the same trait count
-        let after = capability_mapper();
+        let after = capability_mapper().expect("mapper after bad reload");
         assert_eq!(
             after.trait_definitions_count(),
             before_traits,

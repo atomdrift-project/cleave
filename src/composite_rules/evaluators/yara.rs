@@ -88,7 +88,7 @@ pub(crate) fn eval_yara_inline<'a>(
     // Medium path: use per-condition pre-compiled rules (unless/composite conditions).
     if let Some(pre_compiled) = compiled {
         let scan_start = std::time::Instant::now();
-        let scanner = get_or_create_scanner(pre_compiled.as_ref());
+        let mut scanner = get_or_create_scanner(pre_compiled.as_ref());
         let evidence = match scanner.scan(ctx.binary_data) {
             Ok(results) => collect_yara_evidence(&results, ctx.binary_data),
             Err(_) => Vec::new(),

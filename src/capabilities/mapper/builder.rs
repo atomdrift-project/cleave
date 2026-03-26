@@ -6,7 +6,12 @@
 
 use crate::capabilities::indexes::{RawContentRegexIndex, StringMatchIndex, TraitIndex};
 use crate::composite_rules::Platform;
+use anyhow::Context;
 use std::collections::HashMap;
+
+fn log_mapper_init_error(err: &anyhow::Error) {
+    tracing::error!(error = %err, "Failed to initialize CapabilityMapper; returning empty mapper");
+}
 
 impl super::CapabilityMapper {
     fn skip_traits_requested() -> bool {
@@ -78,13 +83,30 @@ impl super::CapabilityMapper {
         self
     }
 
-    /// Create a new mapper loading traits from the default capabilities directory or YAML file
+    /// Create a new mapper loading traits from the default capabilities directory or YAML file.
+    ///
+    /// This is a best-effort convenience constructor. If trait loading fails, it
+    /// logs the error and returns an empty mapper. Call [`Self::try_new`] if you
+    /// need failure to propagate.
     #[must_use]
     pub fn new() -> Self {
-        Self::new_with_precision_thresholds(
+        Self::try_new_with_precision_thresholds(
             Self::DEFAULT_MIN_HOSTILE_PRECISION,
             Self::DEFAULT_MIN_SUSPICIOUS_PRECISION,
             false, // Disable full validation by default to avoid blocking on warnings
+        )
+        .unwrap_or_else(|err| {
+            log_mapper_init_error(&err);
+            Self::empty()
+        })
+    }
+
+    /// Create a new mapper loading traits from the default capabilities directory or YAML file.
+    pub fn try_new() -> anyhow::Result<Self> {
+        Self::try_new_with_precision_thresholds(
+            Self::DEFAULT_MIN_HOSTILE_PRECISION,
+            Self::DEFAULT_MIN_SUSPICIOUS_PRECISION,
+            false,
         )
     }
 
@@ -97,18 +119,42 @@ impl super::CapabilityMapper {
     /// # Arguments
     /// * `min_hostile_precision` - Minimum precision for HOSTILE rules (recommended: 3.5)
     /// * `min_suspicious_precision` - Minimum precision for SUSPICIOUS rules (recommended: 2.0)
-    /// * `enable_full_validation` - If true, run all validation checks and exit on errors
+    /// * `enable_full_validation` - If true, run all validation checks
+    ///
+    /// This is a best-effort convenience constructor. If trait loading fails, it
+    /// logs the error and returns an empty mapper. Call
+    /// [`Self::try_new_with_precision_thresholds`] if you need failure to
+    /// propagate.
     #[must_use]
     pub fn new_with_precision_thresholds(
         min_hostile_precision: f32,
         min_suspicious_precision: f32,
         enable_full_validation: bool,
     ) -> Self {
+        Self::try_new_with_precision_thresholds(
+            min_hostile_precision,
+            min_suspicious_precision,
+            enable_full_validation,
+        )
+        .unwrap_or_else(|err| {
+            log_mapper_init_error(&err);
+            Self::empty()
+        })
+    }
+
+    /// Create a new mapper with custom precision thresholds.
+    pub fn try_new_with_precision_thresholds(
+        min_hostile_precision: f32,
+        min_suspicious_precision: f32,
+        enable_full_validation: bool,
+    ) -> anyhow::Result<Self> {
         if Self::skip_traits_requested() {
-            return Self::empty();
+            return Ok(Self::empty());
         }
 
-        let resolved = cleave::traits_repo::resolve_and_ensure();
+        let resolved = cleave::traits_repo::resolve_and_ensure()
+            .map_err(anyhow::Error::msg)
+            .context("resolve traits path")?;
         let path = resolved.as_path();
 
         if path.is_dir() {
@@ -119,10 +165,7 @@ impl super::CapabilityMapper {
                 min_suspicious_precision,
                 enable_full_validation,
             )
-            .unwrap_or_else(|e| {
-                eprintln!("Failed to load traits from {}: {:#}", resolved.display(), e);
-                std::process::exit(1);
-            })
+            .with_context(|| format!("Failed to load traits from {}", resolved.display()))
         } else if path.is_file() {
             // Load from single YAML file (testing mode)
             Self::from_yaml_with_precision_thresholds(
@@ -131,14 +174,12 @@ impl super::CapabilityMapper {
                 min_suspicious_precision,
                 enable_full_validation,
             )
-            .unwrap_or_else(|e| {
-                eprintln!("Failed to load capabilities from YAML file: {:#}", e);
-                std::process::exit(1);
-            })
+            .context("Failed to load capabilities from YAML file")
         } else {
-            eprintln!("Error: Traits path does not exist: {}", resolved.display());
-            eprintln!("Set CLEAVE_TRAITS_DIR to point to a valid traits directory or YAML file");
-            std::process::exit(1);
+            anyhow::bail!(
+                "Traits path does not exist: {}. Set CLEAVE_TRAITS_DIR to a valid traits directory or YAML file",
+                resolved.display()
+            );
         }
     }
 }

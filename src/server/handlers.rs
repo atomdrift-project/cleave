@@ -449,7 +449,8 @@ fn check_memory_pressure(state: &AppState) -> Option<Response> {
         return None;
     }
 
-    // Still overloaded — track duration and potentially terminate
+    // Still overloaded — track duration and keep rejecting requests until the
+    // process recovers or an external supervisor restarts it.
     let mut overloaded = state.overloaded_since.lock();
     let since = *overloaded.get_or_insert_with(Instant::now);
     let overloaded_secs = since.elapsed().as_secs();
@@ -458,9 +459,8 @@ fn check_memory_pressure(state: &AppState) -> Option<Response> {
         tracing::error!(
             rss_mb = rss_after / 1024 / 1024,
             overloaded_secs,
-            "Memory overload persisted >30s after cache clears, terminating"
+            "Memory overload persisted >30s after cache clears; continuing to reject requests"
         );
-        std::process::exit(1);
     }
 
     warn!(

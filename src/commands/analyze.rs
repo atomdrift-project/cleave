@@ -93,13 +93,10 @@ pub fn run(config: &AnalyzeConfig<'_>) -> Result<String> {
         anyhow::bail!("Path does not exist: {}", config.target);
     }
 
-    // Convert binary crate types to library crate types via serde round-trip
-    // (necessary because main.rs re-declares modules, creating parallel type hierarchies).
     let platforms_lib: Vec<cleave::Platform> = if config.platforms.is_empty() {
         vec![cleave::Platform::All]
     } else {
-        let json = serde_json::to_string(config.platforms).unwrap_or_default();
-        serde_json::from_str(&json).unwrap_or_else(|_| vec![cleave::Platform::All])
+        config.platforms.to_vec()
     };
     let sample_lib: Option<cleave::SampleExtractionConfig> =
         config
@@ -150,9 +147,7 @@ pub fn run(config: &AnalyzeConfig<'_>) -> Result<String> {
                 let file_path_str = file_path.to_string_lossy().to_string();
                 let formatted = match result.as_ref() {
                     Ok(lib_report) => {
-                        let Ok(mut report) = convert_lib_report(lib_report) else {
-                            return;
-                        };
+                        let mut report = prepare_output_report(lib_report);
                         let Ok(res) = format_report_output(
                             &mut report,
                             &format_val,
@@ -207,10 +202,8 @@ pub fn run(config: &AnalyzeConfig<'_>) -> Result<String> {
 /// Analyze a single file and format the output.
 ///
 /// Uses `cleave::analyze_file()` for the core analysis pipeline (with caching),
-/// then converts the result to binary-crate types via serde roundtrip (necessary
-/// because main.rs re-declares library modules, creating parallel type hierarchies).
-/// Finally applies CLI-specific post-processing (encoding layer merging,
-/// filtering, output formatting).
+/// then applies CLI-specific post-processing (encoding layer merging, filtering,
+/// output formatting).
 fn analyze_and_format(
     target: &str,
     options: &cleave::AnalysisOptions,
@@ -225,10 +218,7 @@ fn analyze_and_format(
     // Core analysis — single pipeline in lib.rs, with caching
     let lib_report = cleave::analyze_file(path, options)?;
 
-    // Convert library types to binary-crate types via serde roundtrip.
-    // The types are structurally identical but Rust treats them as distinct
-    // because main.rs re-declares the library modules.
-    let mut report = convert_lib_report(&lib_report)?;
+    let mut report = prepare_output_report(&lib_report);
 
     // Merge encoding layers and recalculate composites.
     // The mapper is only needed when encoding layers are actually merged (rare for single files),
@@ -294,14 +284,6 @@ fn analyze_and_format(
     )
 }
 
-fn convert_lib_report(lib_report: &cleave::AnalysisReport) -> Result<types::AnalysisReport> {
-    let json = serde_json::to_vec(lib_report)?;
-    let mut report: types::AnalysisReport = serde_json::from_slice(&json)?;
-    report.shrink_to_fit();
-    report.finalize();
-    Ok(report)
-}
-
 fn format_report_output(
     report: &mut types::AnalysisReport,
     format: &cli::OutputFormat,
@@ -324,6 +306,13 @@ fn format_report_output(
         cli::OutputFormat::Terminal => Ok(output::format_terminal(report)),
         cli::OutputFormat::Tiny => Ok(output::format_tiny(report)),
     }
+}
+
+fn prepare_output_report(lib_report: &cleave::AnalysisReport) -> types::AnalysisReport {
+    let mut report = lib_report.clone();
+    report.shrink_to_fit();
+    report.finalize();
+    report
 }
 
 /// Filter findings by criticality range, then remove files with no remaining findings.

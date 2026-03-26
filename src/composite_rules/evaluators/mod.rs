@@ -80,11 +80,6 @@ const REGEX_CACHE_SIZE: NonZeroUsize = {
     NonZeroUsize::new(REGEX_CACHE_MAX_SIZE).expect("REGEX_CACHE_MAX_SIZE is non-zero")
 };
 
-const SCANNER_CACHE_DEFAULT_SIZE: NonZeroUsize = {
-    #[allow(clippy::expect_used)]
-    NonZeroUsize::new(SCANNER_CACHE_MAX_SIZE).expect("SCANNER_CACHE_MAX_SIZE is non-zero")
-};
-
 const UTF8_CACHE_DEFAULT_SIZE: NonZeroUsize = {
     #[allow(clippy::expect_used)]
     NonZeroUsize::new(8).expect("Constant 8 is non-zero")
@@ -137,122 +132,26 @@ pub(crate) fn compile_regex_optimal(
     }
 }
 
-/// Maximum number of YARA scanners to cache per thread.
-/// Each scanner contains a wasmtime VM instance (~10-50MB each).
-/// Bounded to prevent unbounded memory growth in long-running processes.
-/// With 16+ threads, 4 entries × ~30MB × 16 threads = ~1.9GB — acceptable.
-/// Previously 32, which allowed ~15GB of scanner memory across all threads.
-const SCANNER_CACHE_MAX_SIZE: usize = 4;
-
-// Thread-local cache for YARA Scanners to avoid expensive Scanner::new() calls.
-// Scanner creation involves wasmtime VM instantiation which is expensive (~200µs).
-// Reusing scanners provides ~5x speedup.
-// BOUNDED: Uses LRU eviction to prevent unbounded memory growth.
-thread_local! {
-    /// Thread-local YARA scanner LRU cache keyed by Rules pointer address.
-    /// Bounded to SCANNER_CACHE_MAX_SIZE entries to prevent memory leaks.
-    pub static SCANNER_CACHE: RefCell<lru::LruCache<usize, yara_x::Scanner<'static>>> = {
-        let size = cache_size_from_env("CLEAVE_SCANNER_CACHE_SIZE", SCANNER_CACHE_DEFAULT_SIZE);
-        RefCell::new(lru::LruCache::new(size))
-    };
-
-    /// Counter for scanner cache statistics (hits, misses, evictions)
-    static SCANNER_CACHE_STATS: RefCell<(u64, u64, u64)> = const { RefCell::new((0, 0, 0)) };
-}
-
 /// Log scanner cache statistics for debugging memory issues.
-/// Call this periodically or at process end for post-mortem analysis.
+///
+/// The lifetime-extended scanner cache was removed because it relied on
+/// transmuting `yara_x::Scanner` lifetimes across rule reloads. Keep this as a
+/// no-op helper so existing call sites do not need conditional compilation.
 #[allow(dead_code)]
 pub(crate) fn log_scanner_cache_stats() {
-    SCANNER_CACHE.with(|cache| {
-        let cache = cache.borrow();
-        SCANNER_CACHE_STATS.with(|stats| {
-            let (hits, misses, evictions) = *stats.borrow();
-            tracing::info!(
-                cache_size = cache.len(),
-                cache_capacity = SCANNER_CACHE_MAX_SIZE,
-                hits = hits,
-                misses = misses,
-                evictions = evictions,
-                hit_rate_pct = if hits + misses > 0 {
-                    (hits as f64 / (hits + misses) as f64) * 100.0
-                } else {
-                    0.0
-                },
-                "YARA scanner cache statistics"
-            );
-        });
-    });
+    tracing::debug!("YARA scanner cache statistics unavailable (cache removed for soundness)");
 }
 
-/// Clear the scanner cache for this thread. Useful for freeing memory.
-/// Called on all threads after CapabilityMapper hot-reload to prevent use-after-free.
-#[allow(dead_code)] // Used by lib.rs via shared_resources; binary crate can't see the usage
-pub(crate) fn clear_scanner_cache() {
-    SCANNER_CACHE.with(|cache| {
-        let mut cache = cache.borrow_mut();
-        let cleared = cache.len();
-        cache.clear();
-        tracing::debug!(cleared_entries = cleared, "Cleared YARA scanner cache");
-    });
-}
-
-/// Get or create a Scanner for the given Rules, using thread-local LRU caching.
+/// Clear the scanner cache for this thread.
 ///
-/// # Safety
-/// The Rules pointer must remain valid for the duration of Scanner use.
-/// This is guaranteed because Rules is behind Arc<Rules> held by TraitDefinitions.
-#[allow(clippy::mut_from_ref)] // Intentional: mutable Scanner from thread-local cache
+/// This is a no-op because the scanner cache was removed for soundness.
+#[allow(dead_code)] // Used by lib.rs via shared_resources; binary crate can't see the usage
+pub(crate) fn clear_scanner_cache() {}
+
+/// Create a Scanner for the given Rules.
 #[must_use]
-pub(crate) fn get_or_create_scanner<'a>(rules: &'a yara_x::Rules) -> &'a mut yara_x::Scanner<'a> {
-    let key = rules as *const yara_x::Rules as usize;
-
-    SCANNER_CACHE.with(|cache| {
-        let mut cache = cache.borrow_mut();
-
-        // Track if we'll evict an entry
-        let will_evict = cache.len() >= SCANNER_CACHE_MAX_SIZE && !cache.contains(&key);
-
-        // Check if already in cache (this also promotes to most-recently-used)
-        if cache.get(&key).is_some() {
-            SCANNER_CACHE_STATS.with(|stats| {
-                stats.borrow_mut().0 += 1; // hit
-            });
-        } else {
-            SCANNER_CACHE_STATS.with(|stats| {
-                let mut s = stats.borrow_mut();
-                s.1 += 1; // miss
-                if will_evict {
-                    s.2 += 1; // eviction
-                    tracing::trace!(
-                        cache_size = SCANNER_CACHE_MAX_SIZE,
-                        "YARA scanner cache evicting oldest entry"
-                    );
-                }
-            });
-
-            // Create new scanner - LRU will auto-evict oldest if at capacity
-            let scanner = yara_x::Scanner::new(rules);
-            // SAFETY: We extend the lifetime to 'static for storage in the thread-local.
-            // This is safe because:
-            // 1. Rules is behind Arc<Rules> in TraitDefinition, living for program duration
-            // 2. We only use the Scanner while Rules is valid (within eval_yara_inline)
-            // 3. Thread-local storage means no cross-thread access
-            let static_scanner: yara_x::Scanner<'static> = unsafe { std::mem::transmute(scanner) };
-            cache.put(key, static_scanner);
-        }
-
-        // Get the scanner (guaranteed to exist now)
-        #[allow(clippy::expect_used)] // Cache entry is guaranteed after hit or insertion above.
-        let scanner = cache.get_mut(&key).expect("scanner cache entry must exist");
-
-        // Transmute lifetime back to caller's lifetime
-        // SAFETY: We're returning a reference with the caller's lifetime 'a,
-        // which is valid since we only call this while rules is valid.
-        unsafe {
-            std::mem::transmute::<&mut yara_x::Scanner<'static>, &mut yara_x::Scanner<'a>>(scanner)
-        }
-    })
+pub(crate) fn get_or_create_scanner(rules: &yara_x::Rules) -> yara_x::Scanner<'_> {
+    yara_x::Scanner::new(rules)
 }
 
 // Thread-local cache for UTF-8 conversions to avoid repeated String::from_utf8_lossy calls.
@@ -324,9 +223,6 @@ pub(crate) fn get_utf8_cached(
 #[allow(dead_code)] // Exported via lib.rs, false positive from lib/bin split
 pub fn clear_thread_local_caches() {
     UTF8_CACHE.with(|cache| {
-        cache.borrow_mut().clear();
-    });
-    SCANNER_CACHE.with(|cache| {
         cache.borrow_mut().clear();
     });
     crate::yara_engine::clear_engine_scanner_cache();

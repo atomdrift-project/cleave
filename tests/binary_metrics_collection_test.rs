@@ -156,11 +156,10 @@ fn test_metrics_accessible_to_rules() {
 fn find_test_macho_file() -> Option<PathBuf> {
     // Try to find test data in common locations
     let candidates = vec![
-        // CI environment
+        // Repository fixtures
+        "tests/fixtures/test.macho",
         "testdata/benign/macho/hello_world",
         "testdata/clean/elf_linux/libcap2/libcap.so",  // Actually check for macho
-        // Development environment
-        "/Users/t/data/known-bad/datasets/MalwareBazaar/macho/02c6b17b841ac7c53ea61c0033246bc8ee11432ce5ed7372e0a63c0076315507.macho",
         // Use /bin/ls as fallback (always available on macOS)
         "/bin/ls",
         "/usr/bin/file",

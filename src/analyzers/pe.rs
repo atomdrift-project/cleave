@@ -1783,17 +1783,27 @@ mod tests {
 
     #[test]
     fn test_analyze_self_extracting_7z() {
-        // Test with real 7z self-extracting installer if available
-        let test_file =
-            std::path::Path::new("/Users/t/data/cleave/malware/pe/2026.7zip.com/7z2501-x64.exe");
+        use std::fs;
+        use std::io::Write;
 
-        if !test_file.exists() {
-            eprintln!("Skipping SFX test - file not found: {:?}", test_file);
-            return;
-        }
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("sfx.exe");
+
+        let mut host = fs::read("tests/fixtures/test.exe").unwrap();
+
+        // Append a tiny ZIP archive as overlay so the PE behaves like a
+        // self-extracting archive without relying on developer-local samples.
+        let cursor = std::io::Cursor::new(Vec::new());
+        let mut zip = zip::ZipWriter::new(cursor);
+        let options = zip::write::SimpleFileOptions::default();
+        zip.start_file("hello.txt", options).unwrap();
+        zip.write_all(b"hello from overlay").unwrap();
+        let cursor = zip.finish().unwrap();
+        host.extend_from_slice(&cursor.into_inner());
+        fs::write(&path, &host).unwrap();
 
         let analyzer = PEAnalyzer::new();
-        let report = analyzer.analyze(test_file).unwrap();
+        let report = analyzer.analyze(&path).unwrap();
 
         // Should detect the self-extracting archive
         assert!(
@@ -1830,7 +1840,7 @@ mod tests {
                 entry.path
             );
             assert!(
-                entry.path.starts_with("7z2501-x64.exe!!"),
+                entry.path.starts_with("sfx.exe!!"),
                 "Archive path should start with PE filename: {}",
                 entry.path
             );

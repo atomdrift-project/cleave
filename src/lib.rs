@@ -404,7 +404,7 @@ pub fn analyze_file<P: AsRef<Path>>(path: P, options: &AnalysisOptions) -> Resul
     };
 
     // Cache miss: load mapper and YARA engine in parallel (~860ms + ~270ms → ~860ms)
-    let (mapper, yara_engine) = rayon::join(
+    let (mapper_result, yara_engine) = rayon::join(
         || shared_resources::capability_mapper_with_options(options),
         || {
             if options.disable_yara {
@@ -416,6 +416,7 @@ pub fn analyze_file<P: AsRef<Path>>(path: P, options: &AnalysisOptions) -> Resul
             }
         },
     );
+    let mapper = mapper_result?;
     analyze_file_with_resources(path, options, &mapper, yara_engine.as_ref(), preloaded)
 }
 
@@ -1245,7 +1246,7 @@ where
     let _disable_guards = AnalysisDisableGuards::from_options(options);
 
     // Load shared resources once; all rayon workers share them via cheap Arc clones.
-    let (mapper, yara_engine) = rayon::join(
+    let (mapper_result, yara_engine) = rayon::join(
         || shared_resources::capability_mapper_with_options(options),
         || {
             if options.disable_yara {
@@ -1257,6 +1258,7 @@ where
             }
         },
     );
+    let mapper = mapper_result?;
 
     let all_files_flag = options.all_files;
     let mut walked: usize = 0;
@@ -1486,7 +1488,7 @@ pub fn format_diff_terminal(report: &DiffReport) -> String {
 
 /// Validate the configured traits directory with full validation enabled.
 pub fn validate_traits() -> Result<()> {
-    let resolved = traits_repo::resolve_and_ensure();
+    let resolved = traits_repo::resolve_and_ensure().map_err(anyhow::Error::msg)?;
     capabilities::CapabilityMapper::from_directory_with_precision_thresholds(
         resolved.as_path(),
         capabilities::CapabilityMapper::DEFAULT_MIN_HOSTILE_PRECISION,
@@ -1516,9 +1518,14 @@ pub fn version_info() -> VersionInfo {
     let traits_version = traits_repo::version();
     let traits_mtime = cache::most_recent_yaml_file().ok().map(|(t, _)| t);
 
-    let mapper = shared_resources::capability_mapper();
-    let trait_count = mapper.trait_definitions_count();
-    let composite_count = mapper.composite_rules_count();
+    let (trait_count, composite_count) = shared_resources::capability_mapper()
+        .map(|mapper| {
+            (
+                mapper.trait_definitions_count(),
+                mapper.composite_rules_count(),
+            )
+        })
+        .unwrap_or((0, 0));
 
     let engine = shared_resources::yara_engine(true);
     let yara_rules = engine.total_rules();
@@ -1564,7 +1571,8 @@ mod tests {
         let path = tmp.path();
 
         let options = AnalysisOptions::default();
-        let mapper = shared_resources::capability_mapper_with_options(&options);
+        let mapper = shared_resources::capability_mapper_with_options(&options)
+            .expect("mapper should load for depth-limit test");
         let yara = if options.disable_yara {
             None
         } else {
@@ -1620,7 +1628,8 @@ mod tests {
         tmp.as_file().write_all(code).expect("write test content");
 
         let options = AnalysisOptions::default();
-        let mapper = shared_resources::capability_mapper_with_options(&options);
+        let mapper = shared_resources::capability_mapper_with_options(&options)
+            .expect("mapper should load for depth-zero test");
 
         #[allow(clippy::expect_used)]
         let report =

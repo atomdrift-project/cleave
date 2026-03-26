@@ -17,19 +17,18 @@ const STALENESS_DAYS: u64 = 30;
 
 /// Resolve the traits directory, auto-cloning if necessary.
 ///
-/// Returns the path to a usable traits directory, or exits with a
-/// clear error if traits cannot be obtained.
+/// Returns the path to a usable traits directory, or an error if traits cannot
+/// be obtained.
 #[allow(dead_code)] // Used by binary target
-pub fn resolve_and_ensure() -> PathBuf {
+pub fn resolve_and_ensure() -> Result<PathBuf, String> {
     // 1. Explicit override via env var (set by --traits-dir or directly)
     if let Ok(explicit) = std::env::var("CLEAVE_TRAITS_DIR") {
         let p = PathBuf::from(&explicit);
         if p.is_dir() || p.is_file() {
             tracing::debug!("Using traits from CLEAVE_TRAITS_DIR={}", p.display());
-            return p;
+            return Ok(p);
         }
-        eprintln!("Error: CLEAVE_TRAITS_DIR={explicit} does not exist");
-        std::process::exit(1);
+        return Err(format!("CLEAVE_TRAITS_DIR={explicit} does not exist"));
     }
 
     // 2. Platform data directory — auto-clone if missing
@@ -37,23 +36,15 @@ pub fn resolve_and_ensure() -> PathBuf {
     if has_traits(&data_dir) {
         tracing::debug!("Using traits from data directory: {}", data_dir.display());
         check_staleness(&data_dir);
-        return data_dir;
+        return Ok(data_dir);
     }
-
-    eprintln!("Traits not found at {}", data_dir.display());
-    eprintln!("Cloning from {TRAITS_REPO_URL}...");
     if let Err(e) = clone_repo(&data_dir) {
-        eprintln!("Error: Failed to clone traits repository: {e}");
-        eprintln!();
-        eprintln!("Ensure 'git' is installed, or manually clone:");
-        eprintln!(
-            "  git clone --depth 1 {TRAITS_REPO_URL} \"{}\"",
+        return Err(format!(
+            "Failed to clone traits repository: {e}\n\nEnsure 'git' is installed, or manually clone:\n  git clone --depth 1 {TRAITS_REPO_URL} \"{}\"",
             data_dir.display()
-        );
-        std::process::exit(1);
+        ));
     }
-    eprintln!("Traits installed to {}", data_dir.display());
-    data_dir
+    Ok(data_dir)
 }
 
 /// Resolve the traits directory without auto-cloning or process::exit.

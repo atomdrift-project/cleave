@@ -5,9 +5,10 @@ use std::collections::{HashMap, HashSet};
 use std::fs;
 
 fn main() {
-    let dir = std::env::args()
-        .nth(1)
-        .unwrap_or_else(|| "/Users/t/src/mbdl/scpt".to_string());
+    let Some(dir) = std::env::args().nth(1) else {
+        eprintln!("usage: cargo run --example analyze_samples -- <dir>");
+        std::process::exit(2);
+    };
     let mut all_symbols: HashMap<String, Vec<String>> = HashMap::new();
     let mut all_events: HashMap<String, Vec<String>> = HashMap::new();
     let mut all_apps: HashSet<String> = HashSet::new();

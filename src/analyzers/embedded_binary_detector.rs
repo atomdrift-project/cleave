@@ -71,6 +71,13 @@ pub(crate) fn scan_for_embedded_binaries(data: &[u8]) -> Vec<EmbeddedBinary> {
 #[must_use]
 pub(crate) fn finding_for(binary: &EmbeddedBinary, parent_path: &str) -> Finding {
     let type_upper = binary.kind.as_str().to_uppercase();
+    let is_kernel_module_elf = matches!(
+        binary.kind,
+        EmbeddedKind::Elf32Le
+            | EmbeddedKind::Elf32Be
+            | EmbeddedKind::Elf64Le
+            | EmbeddedKind::Elf64Be
+    ) && parent_path.ends_with(".ko");
     Finding {
         kind: FindingKind::Capability,
         id: format!("binary/embedded/{}", binary.kind.as_str()),
@@ -79,7 +86,11 @@ pub(crate) fn finding_for(binary: &EmbeddedBinary, parent_path: &str) -> Finding
             type_upper, binary.offset, binary.estimated_size,
         ),
         conf: 0.9,
-        crit: Criticality::Suspicious,
+        crit: if is_kernel_module_elf {
+            Criticality::Notable
+        } else {
+            Criticality::Suspicious
+        },
         mbc: None,
         attack: Some("T1027.009".to_string()), // Embedded Payloads
         evidence: vec![Evidence {
@@ -422,6 +433,36 @@ mod tests {
         assert!(!found.is_empty(), "should detect embedded ELF");
         assert_eq!(found[0].offset, 512);
         assert!(matches!(found[0].kind, EmbeddedKind::Elf64Le));
+    }
+
+    #[test]
+    fn test_embedded_elf_in_kernel_module_is_notable() {
+        let finding = finding_for(
+            &EmbeddedBinary {
+                offset: 512,
+                kind: EmbeddedKind::Elf32Le,
+                estimated_size: 4096,
+            },
+            "/boot/kernel/pmspcv.ko",
+        );
+
+        assert_eq!(finding.id, "binary/embedded/elf");
+        assert_eq!(finding.crit, Criticality::Notable);
+    }
+
+    #[test]
+    fn test_embedded_elf_in_regular_binary_stays_suspicious() {
+        let finding = finding_for(
+            &EmbeddedBinary {
+                offset: 512,
+                kind: EmbeddedKind::Elf32Le,
+                estimated_size: 4096,
+            },
+            "/tmp/dropper.bin",
+        );
+
+        assert_eq!(finding.id, "binary/embedded/elf");
+        assert_eq!(finding.crit, Criticality::Suspicious);
     }
 
     #[test]

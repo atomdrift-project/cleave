@@ -112,8 +112,8 @@ fn looks_like_textual_payload_preview(preview: &str) -> bool {
         return false;
     }
 
-    let alpha = preview.chars().filter(|c| c.is_ascii_alphabetic()).count();
-    let whitespace = preview.chars().filter(|c| c.is_ascii_whitespace()).count();
+    let alpha = preview.chars().filter(char::is_ascii_alphabetic).count();
+    let whitespace = preview.chars().filter(char::is_ascii_whitespace).count();
 
     alpha * 100 / chars >= 60 && whitespace > 0
 }
@@ -181,8 +181,8 @@ fn should_skip_unknown_url_markup_payload(payload: &types::ExtractedPayload) -> 
         return false;
     }
 
-    let space_count = preview.chars().filter(|c| c.is_ascii_whitespace()).count();
-    let alpha_count = preview.chars().filter(|c| c.is_ascii_alphabetic()).count();
+    let space_count = preview.chars().filter(char::is_ascii_whitespace).count();
+    let alpha_count = preview.chars().filter(char::is_ascii_alphabetic).count();
     alpha_count >= 24 && space_count >= 4
 }
 

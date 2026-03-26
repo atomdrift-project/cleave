@@ -87,8 +87,8 @@ fn score_regex_value(value: &str) -> f32 {
 fn regex_structural_bonus(value: &str) -> f32 {
     let has_http_scheme = value.contains("http://") || value.contains("https://") || value.contains("https?://");
     let has_ipv4_octets = value.matches("[0-9]{1,3}").count() >= 4 && value.matches("\\.").count() >= 3;
-    let _has_domain_chars = value.contains("[A-Za-z0-9.-]");
-    let _has_literal_tld = value.contains("\\.top")
+    let has_domain_chars = value.contains("[A-Za-z0-9.-]");
+    let has_literal_tld = value.contains("\\.top")
         || value.contains("\\.xyz")
         || value.contains("\\.tk")
         || value.contains("\\.ml")
@@ -104,6 +104,8 @@ fn regex_structural_bonus(value: &str) -> f32 {
 
     if has_http_scheme && has_ipv4_octets {
         0.3
+    } else if has_http_scheme && has_domain_chars && has_literal_tld {
+        0.0
     } else {
         0.0
     }

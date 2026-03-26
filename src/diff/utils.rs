@@ -273,7 +273,7 @@ pub(super) fn detect_renames(removed: &[String], added: &[String]) -> Vec<FileRe
     }
 
     // Sort by score descending to prioritize best matches
-    matches.sort_by(|a, b| {
+    matches.sort_unstable_by(|a, b| {
         b.similarity_score
             .partial_cmp(&a.similarity_score)
             .unwrap_or(std::cmp::Ordering::Equal)

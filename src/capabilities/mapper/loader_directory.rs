@@ -284,7 +284,7 @@ impl super::CapabilityMapper {
 
         // Sort files deterministically by path string to ensure consistent loading order across OSes
         // Using string comparison instead of PathBuf comparison for true cross-platform consistency
-        yaml_files.sort_by(|a, b| a.to_string_lossy().cmp(&b.to_string_lossy()));
+        yaml_files.sort_unstable_by(|a, b| a.to_string_lossy().cmp(&b.to_string_lossy()));
 
         if yaml_files.is_empty() {
             anyhow::bail!("No YAML files found in {}", dir_path.display());

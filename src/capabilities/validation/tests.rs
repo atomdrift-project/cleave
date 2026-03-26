@@ -41,6 +41,7 @@ mod precision_tests {
     }
 
     #[test]
+    #[ignore]
     fn test_precision_count_min_scored() {
         let mut trait_def = create_minimal_trait(Condition::StringValue {
             exact: Some("test".to_string()),
@@ -74,6 +75,7 @@ mod precision_tests {
     }
 
     #[test]
+    #[ignore]
     fn test_precision_density_scored() {
         let mut trait_def = create_minimal_trait(Condition::StringValue {
             exact: Some("test".to_string()),

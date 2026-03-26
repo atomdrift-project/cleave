@@ -262,7 +262,7 @@ impl super::CapabilityMapper {
         const MAX_FINDINGS_PER_FILE: usize = 500;
         if unique_findings.len() > MAX_FINDINGS_PER_FILE {
             // Keep highest priority findings (by criticality, then confidence)
-            unique_findings.sort_by(|a, b| {
+            unique_findings.sort_unstable_by(|a, b| {
                 b.crit.cmp(&a.crit).then_with(|| {
                     let conf_a = (a.conf * 100.0) as i32;
                     let conf_b = (b.conf * 100.0) as i32;
@@ -541,7 +541,7 @@ impl super::CapabilityMapper {
 
         const MAX_FINDINGS_PER_FILE: usize = 500;
         if unique_findings.len() > MAX_FINDINGS_PER_FILE {
-            unique_findings.sort_by(|a, b| {
+            unique_findings.sort_unstable_by(|a, b| {
                 b.crit.cmp(&a.crit).then_with(|| {
                     let conf_a = (a.conf * 100.0) as i32;
                     let conf_b = (b.conf * 100.0) as i32;

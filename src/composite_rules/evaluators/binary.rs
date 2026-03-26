@@ -38,7 +38,7 @@ pub(crate) fn eval_exports_count<'a>(
             .iter()
             .map(|exp| exp.symbol.as_str())
             .collect();
-        symbols.sort();
+        symbols.sort_unstable();
         symbols.dedup();
         let sample: Vec<&str> = symbols.into_iter().take(5).collect();
         vec![Evidence {

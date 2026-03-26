@@ -55,7 +55,7 @@ pub(crate) fn format_diff_terminal(report: &DiffReport) -> String {
 
     // Sort modified files: high risk first, then by filename
     let mut sorted_analysis = report.modified_analysis.clone();
-    sorted_analysis.sort_by(|a, b| {
+    sorted_analysis.sort_unstable_by(|a, b| {
         b.risk_increase
             .cmp(&a.risk_increase)
             .then_with(|| a.file.cmp(&b.file))
@@ -74,7 +74,7 @@ pub(crate) fn format_diff_terminal(report: &DiffReport) -> String {
         let mut aggregated_new = aggregate_findings_by_directory(&analysis.new_capabilities);
 
         // Sort by criticality (highest first), then by name
-        aggregated_new.sort_by(|a, b| b.crit.cmp(&a.crit).then_with(|| a.id.cmp(&b.id)));
+        aggregated_new.sort_unstable_by(|a, b| b.crit.cmp(&a.crit).then_with(|| a.id.cmp(&b.id)));
 
         // Show new capabilities (one line each, aggregated by directory)
         for cap in &aggregated_new {
@@ -117,7 +117,7 @@ pub(crate) fn format_diff_terminal(report: &DiffReport) -> String {
             aggregate_findings_by_directory(&analysis.removed_capabilities);
 
         // Sort by criticality (highest first), then by name
-        aggregated_removed.sort_by(|a, b| b.crit.cmp(&a.crit).then_with(|| a.id.cmp(&b.id)));
+        aggregated_removed.sort_unstable_by(|a, b| b.crit.cmp(&a.crit).then_with(|| a.id.cmp(&b.id)));
 
         // Show removed capabilities
         for cap in &aggregated_removed {

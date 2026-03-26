@@ -258,7 +258,7 @@ pub(crate) fn find_rules_in_directory(
     }
 
     // Sort alphabetically
-    rules.sort();
+    rules.sort_unstable();
     rules.dedup();
     rules
 }

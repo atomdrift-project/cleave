@@ -546,13 +546,13 @@ pub(crate) fn parse_file_types(types: &[String], warnings: &mut Vec<String>) -> 
 
     let types = if !exclusions.is_empty() {
         let mut v: Vec<_> = final_set.into_iter().collect();
-        v.sort();
+        v.sort_unstable();
         v
     } else if inclusions.contains(&RuleFileType::All) {
         vec![RuleFileType::All]
     } else {
         let mut v: Vec<_> = final_set.into_iter().collect();
-        v.sort();
+        v.sort_unstable();
         v
     };
 

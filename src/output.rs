@@ -472,7 +472,7 @@ pub(crate) fn format_tiny(report: &AnalysisReport) -> String {
         }
 
         // Sort by criticality descending, then by id for stability
-        findings.sort_by(|a, b| b.crit.cmp(&a.crit).then_with(|| a.id.cmp(&b.id)));
+        findings.sort_unstable_by(|a, b| b.crit.cmp(&a.crit).then_with(|| a.id.cmp(&b.id)));
 
         // File header: --- path (type, size)
         let size = format_size(file.size);
@@ -750,7 +750,7 @@ pub(crate) fn format_terminal(report: &AnalysisReport) -> String {
 
         // Sort findings within each namespace by criticality (hostile first)
         for findings in by_namespace.values_mut() {
-            findings.sort_by(|a, b| b.crit.cmp(&a.crit).then_with(|| a.id.cmp(&b.id)));
+            findings.sort_unstable_by(|a, b| b.crit.cmp(&a.crit).then_with(|| a.id.cmp(&b.id)));
         }
 
         // Pre-calculate column widths across ALL findings in this file

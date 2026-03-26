@@ -1397,7 +1397,7 @@ pub(crate) fn eval_string_count<'a>(
     let evidence = if matched {
         // Deduplicate and take first few for display
         let mut unique: Vec<&str> = matching_strings;
-        unique.sort();
+        unique.sort_unstable();
         unique.dedup();
         let sample: Vec<&str> = unique.into_iter().take(5).collect();
         vec![Evidence {

@@ -437,10 +437,10 @@ fn generate_language_trait(
     offset: u64,
 ) -> Finding {
     let (trait_id, criticality) = if encoding_chain.is_empty() {
-        // Plain embedded code - notable
+        // Plain embedded code is structural context, not a behavioral objective.
         (
             format!("metadata/lang/embedded::{}", lang_name(detected_lang)),
-            Criticality::Notable,
+            Criticality::Baseline,
         )
     } else {
         // Encoded code - suspicious (obfuscation attempt)

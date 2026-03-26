@@ -21,7 +21,7 @@ impl super::CapabilityMapper {
     /// Default minimum precision for hostile composite rules
     pub const DEFAULT_MIN_HOSTILE_PRECISION: f32 = 3.5;
     /// Default minimum precision for suspicious composite rules
-    pub const DEFAULT_MIN_SUSPICIOUS_PRECISION: f32 = 2.0;
+    pub const DEFAULT_MIN_SUSPICIOUS_PRECISION: f32 = 1.9;
 
     /// Default slow rule warning threshold in milliseconds.
     pub const DEFAULT_SLOW_RULE_MS: u64 = 4000;
@@ -118,7 +118,7 @@ impl super::CapabilityMapper {
     ///
     /// # Arguments
     /// * `min_hostile_precision` - Minimum precision for HOSTILE rules (recommended: 3.5)
-    /// * `min_suspicious_precision` - Minimum precision for SUSPICIOUS rules (recommended: 2.0)
+    /// * `min_suspicious_precision` - Minimum precision for SUSPICIOUS rules (recommended: 1.9)
     /// * `enable_full_validation` - If true, run all validation checks
     ///
     /// This is a best-effort convenience constructor. If trait loading fails, it

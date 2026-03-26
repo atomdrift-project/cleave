@@ -11,7 +11,11 @@
 //! - Context about available data (strings, symbols, etc.)
 //! - Size constraints, downgrade evaluation, proximity constraints
 
-use crate::capabilities::validation::calculate_composite_precision;
+use crate::capabilities::validation::{
+    atomic_calibrated_max, calculate_composite_precision, composite_calibrated_max,
+    composite_inflation_warning_threshold, file_type_precision_penalty,
+    platform_precision_penalty,
+};
 use crate::capabilities::CapabilityMapper;
 use crate::composite_rules::debug::{DebugCollector, EvaluationDebug, RuleType};
 use crate::composite_rules::{
@@ -72,6 +76,7 @@ pub(crate) struct RuleDebugResult {
     pub condition_results: Vec<ConditionDebugResult>,
     pub context_info: ContextInfo,
     pub precision: Option<f32>,
+    pub precision_details: Vec<String>,
 }
 
 /// Information about the analysis context
@@ -275,9 +280,7 @@ impl<'a> RuleDebugger<'a> {
         // Convert to RuleDebugResult
         let mut result = self.convert_eval_debug_to_result(
             eval_debug,
-            &trait_def.id,
-            "trait",
-            &trait_def.desc,
+            trait_def,
             finding.is_some(),
             &trait_def.r#if,
         );
@@ -329,9 +332,7 @@ impl<'a> RuleDebugger<'a> {
     fn convert_eval_debug_to_result(
         &self,
         eval_debug: EvaluationDebug,
-        rule_id: &str,
-        rule_type: &str,
-        desc: &str,
+        trait_def: &TraitDefinition,
         matched: bool,
         condition: &Condition,
     ) -> RuleDebugResult {
@@ -344,7 +345,7 @@ impl<'a> RuleDebugger<'a> {
         let trait_lookup: HashMap<&str, &TraitDefinition> =
             self.traits.iter().map(|t| (t.id.as_str(), t)).collect();
         let precision_value = calculate_composite_precision(
-            rule_id,
+            &trait_def.id,
             &composite_lookup,
             &trait_lookup,
             &mut cache,
@@ -356,15 +357,16 @@ impl<'a> RuleDebugger<'a> {
         // If skipped, return early with skip reason
         if skipped_reason.is_some() {
             return RuleDebugResult {
-                rule_id: rule_id.to_string(),
-                rule_type: rule_type.to_string(),
-                description: desc.to_string(),
+                rule_id: trait_def.id.to_string(),
+                rule_type: "trait".to_string(),
+                description: trait_def.desc.to_string(),
                 matched: false,
                 skipped_reason,
                 requirements: format!("Condition: {:?}", describe_condition(condition)),
                 condition_results: Vec::new(),
                 context_info: self.context_info(),
                 precision: Some(precision_value),
+                precision_details: precision_detail_lines(None, Some(trait_def)),
             };
         }
 
@@ -372,15 +374,16 @@ impl<'a> RuleDebugger<'a> {
         let cond_result = self.debug_condition(condition);
 
         RuleDebugResult {
-            rule_id: rule_id.to_string(),
-            rule_type: rule_type.to_string(),
-            description: desc.to_string(),
+            rule_id: trait_def.id.to_string(),
+            rule_type: "trait".to_string(),
+            description: trait_def.desc.to_string(),
             matched,
             skipped_reason: None,
             requirements: format!("Condition: {:?}", describe_condition(condition)),
             condition_results: vec![cond_result],
             context_info: self.context_info(),
             precision: Some(precision_value),
+            precision_details: precision_detail_lines(None, Some(trait_def)),
         }
     }
 
@@ -426,6 +429,7 @@ impl<'a> RuleDebugger<'a> {
                 condition_results: Vec::new(),
                 context_info: self.context_info(),
                 precision: Some(precision_value),
+                precision_details: precision_detail_lines(Some(composite), None),
             };
         }
 
@@ -519,6 +523,7 @@ impl<'a> RuleDebugger<'a> {
             condition_results,
             context_info: self.context_info(),
             precision: Some(precision_value),
+            precision_details: precision_detail_lines(Some(composite), None),
         }
     }
 
@@ -2510,6 +2515,63 @@ fn detect_file_type(file_type: &str) -> RuleFileType {
     RuleFileType::from_str(file_type)
 }
 
+fn precision_detail_lines(
+    composite: Option<&CompositeTrait>,
+    trait_def: Option<&TraitDefinition>,
+) -> Vec<String> {
+    let (file_types, platforms, kind) = if let Some(composite) = composite {
+        (&composite.r#for, &composite.platforms, "composite")
+    } else if let Some(trait_def) = trait_def {
+        (&trait_def.r#for, &trait_def.platforms, "trait")
+    } else {
+        return Vec::new();
+    };
+
+    let mut details = Vec::new();
+    let concrete_count = file_types
+        .iter()
+        .filter(|f| !matches!(f, RuleFileType::All))
+        .count();
+    let penalty = file_type_precision_penalty(file_types);
+
+    if concrete_count > 1 && penalty > 0.0 {
+        details.push(format!(
+            "file_type breadth penalty: -{:.1} ({} computed file types)",
+            penalty, concrete_count
+        ));
+    }
+
+    let platform_count = platforms
+        .iter()
+        .filter(|p| !matches!(p, Platform::All))
+        .count();
+    let platform_penalty = platform_precision_penalty(platforms);
+    if platform_count > 1 && platform_penalty > 0.0 {
+        details.push(format!(
+            "platform breadth penalty: -{:.1} ({} platforms)",
+            platform_penalty, platform_count
+        ));
+    }
+
+    let calibrated_max = if kind == "trait" {
+        atomic_calibrated_max()
+    } else {
+        composite_calibrated_max()
+    };
+    details.push(format!(
+        "calibrated {} range target: <= {:.1}",
+        kind, calibrated_max
+    ));
+    if kind == "composite" {
+        details.push(format!(
+            "strong inflation warning threshold: > {:.1}",
+            composite_inflation_warning_threshold()
+        ));
+    }
+
+    details
+}
+
 /// Format the debug results for terminal output
 pub(crate) fn format_debug_output(results: &[RuleDebugResult]) -> String {
     let mut output = String::new();
@@ -2541,6 +2603,38 @@ pub(crate) fn format_debug_output(results: &[RuleDebugResult]) -> String {
 
         if let Some(precision) = result.precision {
             output.push_str(&format!("  Precision: {:.1}\n", precision));
+            for detail in &result.precision_details {
+                output.push_str(&format!("  Precision detail: {}\n", detail));
+            }
+            let calibrated_max = if result.rule_type == "trait" {
+                atomic_calibrated_max()
+            } else {
+                composite_calibrated_max()
+            };
+            if precision > calibrated_max {
+                if result.rule_type == "composite"
+                    && precision <= composite_inflation_warning_threshold()
+                {
+                    output.push_str(&format!(
+                        "  Precision note: score {:.1} exceeds normal composite range (>{:.1})\n",
+                        precision, calibrated_max
+                    ));
+                } else {
+                    output.push_str(&format!(
+                        "  Precision warning: score {:.1} exceeds calibrated {} range (>{:.1})\n",
+                        precision, result.rule_type, calibrated_max
+                    ));
+                }
+            }
+            if result.rule_type == "composite"
+                && precision > composite_inflation_warning_threshold()
+            {
+                output.push_str(&format!(
+                    "  Precision warning: score {:.1} exceeds strong inflation threshold (>{:.1})\n",
+                    precision,
+                    composite_inflation_warning_threshold()
+                ));
+            }
         }
 
         if let Some(reason) = &result.skipped_reason {

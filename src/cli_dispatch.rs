@@ -216,7 +216,7 @@ fn analyze_targets(targets: &[String], ctx: &AnalyzeDispatchContext<'_>) -> Resu
             sample_extraction: ctx.sample_extraction,
             platforms: ctx.platforms,
             min_hostile_precision: 3.5,
-            min_suspicious_precision: 2.0,
+            min_suspicious_precision: 1.9,
             max_memory_file_size: ctx.max_memory_file_size,
             enable_full_validation: false,
             slow_rule_ms: ctx.slow_rule_ms,

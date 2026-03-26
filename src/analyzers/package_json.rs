@@ -44,6 +44,7 @@ where
 struct PackageJson {
     name: Option<String>,
     version: Option<String>,
+    publisher: Option<String>,
     #[serde(default)]
     r#private: bool,
     #[allow(dead_code)] // Deserialized from JSON
@@ -823,6 +824,7 @@ impl PackageJsonAnalyzer {
         if author_empty
             && !pkg.r#private
             && !has_local_dependency_protocols(pkg)
+            && pkg.publisher.is_none()
             && !is_official_react_native
         {
             report.add_finding(

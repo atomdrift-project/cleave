@@ -37,7 +37,7 @@ use crate::capabilities::validation::{
     find_wellknown_unscoped_filetypes, find_wellknown_unscoped_platforms,
     precalculate_all_composite_precisions, simple_rule_to_composite_rule,
     validate_composite_trait_only, validate_directory_structure,
-    validate_hostile_composite_precision, MAX_TRAITS_PER_DIRECTORY,
+    validate_hostile_composite_precision, validate_hostile_trait_precision, MAX_TRAITS_PER_DIRECTORY,
 };
 use crate::composite_rules::{
     CompositeTrait, Condition, FileType as RuleFileType, Platform, TraitDefinition,
@@ -891,26 +891,26 @@ impl super::CapabilityMapper {
         // Track whether any fatal errors occurred (for deferred exit)
         let mut has_fatal_errors = false;
 
+        // Apply precision-based criticality downgrades on every load.
+        validate_hostile_trait_precision(
+            &mut trait_definitions,
+            &mut warnings,
+            min_hostile_precision,
+            min_suspicious_precision,
+        );
+        precalculate_all_composite_precisions(&mut composite_rules, &trait_definitions);
+        validate_hostile_composite_precision(
+            &mut composite_rules,
+            &trait_definitions,
+            &mut warnings,
+            min_hostile_precision,
+            min_suspicious_precision,
+        );
+
         // Pre-calculate precision for ALL composite rules once
         // Atomic trait precisions are already calculated during parsing
         tracing::debug!("Validating trait definitions and composite rules");
         if enable_full_validation {
-            let step_start = std::time::Instant::now();
-            tracing::debug!("Step 1/15: Pre-calculating composite rule precision");
-            precalculate_all_composite_precisions(&mut composite_rules, &trait_definitions);
-            tracing::debug!("Step 1 completed in {:?}", step_start.elapsed());
-
-            let step_start = std::time::Instant::now();
-            tracing::debug!("Step 1b/15: Validating hostile composite precision");
-            validate_hostile_composite_precision(
-                &mut composite_rules,
-                &trait_definitions,
-                &mut warnings,
-                min_hostile_precision,
-                min_suspicious_precision,
-            );
-            tracing::debug!("Step 1b completed in {:?}", step_start.elapsed());
-
             let step_start = std::time::Instant::now();
             tracing::debug!("Step 1c/15: Detecting duplicate traits and composites");
             find_duplicate_traits_and_composites(

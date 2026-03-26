@@ -1993,7 +1993,7 @@ fn test_precision_threshold_validation() {
 
 #[test]
 fn test_suspicious_precision_threshold_validation() {
-    // Rule with precision 1 (below suspicious threshold of 2)
+    // Rule with precision near the floor (below suspicious threshold of 1.9)
     let rule_low = CompositeTrait {
         id: "test/suspicious-low-precision".to_string(),
         desc: "Low precision suspicious rule".to_string(),
@@ -2034,9 +2034,7 @@ fn test_suspicious_precision_threshold_validation() {
         precision: None,
     };
 
-    // Rule with precision >= 2.0 (meets suspicious threshold)
-    // With granular scoring: 25-char string = 5 buckets * 0.3 = 1.5
-    // Two 25-char strings = 3.0, which meets the 2.0 threshold
+    // Rule with precision >= 1.9 (meets suspicious threshold)
     let rule_ok = CompositeTrait {
         id: "test/suspicious-good-precision".to_string(),
         desc: "Good precision suspicious rule".to_string(),
@@ -2051,7 +2049,7 @@ fn test_suspicious_precision_threshold_validation() {
         all: Some(vec![
             Condition::StringValue {
                 is_check: None,
-                exact: Some("this_is_a_long_string_pattern".to_string()), // 29 chars = 6 buckets * 0.3 = 1.8
+                exact: Some("this_is_a_long_string_pattern".to_string()),
                 regex: None,
                 word: None,
                 case_insensitive: false,
@@ -2067,7 +2065,23 @@ fn test_suspicious_precision_threshold_validation() {
             },
             Condition::StringValue {
                 is_check: None,
-                exact: Some("another_long_string_pattern".to_string()), // 27 chars = 6 buckets * 0.3 = 1.8
+                exact: Some("another_long_string_pattern".to_string()),
+                regex: None,
+                word: None,
+                case_insensitive: false,
+                substr: None,
+                section: None,
+                offset: None,
+                offset_range: None,
+                section_offset: None,
+                section_offset_range: None,
+                not: None,
+                platforms: None,
+                compiled_regex: None,
+            },
+            Condition::StringValue {
+                is_check: None,
+                exact: Some("third_long_string_pattern_here".to_string()),
                 regex: None,
                 word: None,
                 case_insensitive: false,
@@ -2107,7 +2121,7 @@ fn test_suspicious_precision_threshold_validation() {
         &traits,
         &mut Vec::new(),
         4.0,
-        2.0,
+        1.9,
     );
 
     // Check that low precision suspicious rule was downgraded
@@ -2123,6 +2137,107 @@ fn test_suspicious_precision_threshold_validation() {
         .find(|r| r.id == "test/suspicious-good-precision")
         .unwrap();
     assert_eq!(ok_rule.crit, Criticality::Suspicious);
+}
+
+#[test]
+fn test_atomic_suspicious_precision_threshold_validation() {
+    let low_trait = TraitDefinition {
+        id: "test/atomic-suspicious-low".to_string(),
+        desc: "Low precision suspicious atomic".to_string(),
+        conf: 0.8,
+        crit: Criticality::Suspicious,
+        mbc: None,
+        attack: None,
+        platforms: vec![Platform::All],
+        arch: vec![Arch::All],
+        r#for: vec![RuleFileType::All],
+        for_from_groups: false,
+        r#if: Condition::Raw {
+            exact: None,
+            substr: Some("x".to_string()),
+            regex: None,
+            word: None,
+            case_insensitive: false,
+            is_check: None,
+            not: None,
+            section: None,
+            offset: None,
+            offset_range: None,
+            section_offset: None,
+            section_offset_range: None,
+            compiled_regex: None,
+        },
+        size_max: None,
+        count_min: None,
+        count_max: None,
+        per_kb_min: None,
+        per_kb_max: None,
+        entropy_min: None,
+        entropy_max: None,
+        size_min: None,
+        not: None,
+        unless: None,
+        downgrade: None,
+        defined_in: std::path::PathBuf::from("test.yaml"),
+        precision: Some(1.0),
+    };
+
+    let ok_trait = TraitDefinition {
+        id: "test/atomic-suspicious-ok".to_string(),
+        desc: "Enough precision suspicious atomic".to_string(),
+        conf: 0.8,
+        crit: Criticality::Suspicious,
+        mbc: None,
+        attack: None,
+        platforms: vec![Platform::Windows],
+        arch: vec![Arch::All],
+        r#for: vec![RuleFileType::Pe],
+        for_from_groups: false,
+        r#if: Condition::StringValue {
+            is_check: None,
+            exact: Some("CreateProcessW".to_string()),
+            regex: None,
+            word: None,
+            case_insensitive: false,
+            substr: None,
+            section: Some(".rdata".to_string()),
+            offset: None,
+            offset_range: None,
+            section_offset: None,
+            section_offset_range: None,
+            not: None,
+            platforms: None,
+            compiled_regex: None,
+        },
+        size_max: None,
+        count_min: None,
+        count_max: None,
+        per_kb_min: None,
+        per_kb_max: None,
+        entropy_min: None,
+        entropy_max: None,
+        size_min: None,
+        not: None,
+        unless: None,
+        downgrade: None,
+        defined_in: std::path::PathBuf::from("test.yaml"),
+        precision: Some(2.0),
+    };
+
+    let mut traits = vec![low_trait, ok_trait];
+    validation::validate_hostile_trait_precision(&mut traits, &mut Vec::new(), 3.5, 1.9);
+
+    let low_trait = traits
+        .iter()
+        .find(|t| t.id == "test/atomic-suspicious-low")
+        .unwrap();
+    assert_eq!(low_trait.crit, Criticality::Notable);
+
+    let ok_trait = traits
+        .iter()
+        .find(|t| t.id == "test/atomic-suspicious-ok")
+        .unwrap();
+    assert_eq!(ok_trait.crit, Criticality::Suspicious);
 }
 
 /// Test precision with mixed condition types (all, any, none)
@@ -3427,4 +3542,866 @@ traits:
             );
         }
     }
+}
+
+#[test]
+fn test_atomic_precision_calibration_spread() {
+    let raw_trait = TraitDefinition {
+        id: "test/raw-loose".to_string(),
+        desc: "Loose raw trait".to_string(),
+        conf: 0.8,
+        crit: Criticality::Notable,
+        mbc: None,
+        attack: None,
+        platforms: vec![Platform::All],
+        arch: vec![Arch::All],
+        r#for: vec![RuleFileType::All],
+        for_from_groups: false,
+        r#if: Condition::Raw {
+            exact: None,
+            substr: Some("cmd".to_string()),
+            regex: None,
+            word: None,
+            case_insensitive: false,
+            is_check: None,
+            not: None,
+            section: None,
+            offset: None,
+            offset_range: None,
+            section_offset: None,
+            section_offset_range: None,
+            compiled_regex: None,
+        },
+        size_max: None,
+        count_min: None,
+        count_max: None,
+        per_kb_min: None,
+        per_kb_max: None,
+        entropy_min: None,
+        entropy_max: None,
+        size_min: None,
+        not: None,
+        unless: None,
+        downgrade: None,
+        defined_in: std::path::PathBuf::from("test.yaml"),
+        precision: None,
+    };
+
+    let ast_trait = TraitDefinition {
+        id: "test/ast-tight".to_string(),
+        desc: "Tight AST trait".to_string(),
+        conf: 0.9,
+        crit: Criticality::Suspicious,
+        mbc: None,
+        attack: None,
+        platforms: vec![Platform::All],
+        arch: vec![Arch::All],
+        r#for: vec![RuleFileType::JavaScript],
+        for_from_groups: false,
+        r#if: Condition::Ast {
+            kind: Some("call".to_string()),
+            node: None,
+            exact: Some("eval".to_string()),
+            substr: None,
+            regex: None,
+            query: None,
+            language: Some("javascript".to_string()),
+            case_insensitive: false,
+        },
+        size_max: None,
+        count_min: None,
+        count_max: None,
+        per_kb_min: None,
+        per_kb_max: None,
+        entropy_min: None,
+        entropy_max: None,
+        size_min: None,
+        not: None,
+        unless: None,
+        downgrade: None,
+        defined_in: std::path::PathBuf::from("test.yaml"),
+        precision: None,
+    };
+
+    let raw_precision = validation::calculate_trait_precision(&raw_trait);
+    let ast_precision = validation::calculate_trait_precision(&ast_trait);
+
+    assert!(raw_precision >= 1.0 && raw_precision <= 4.0);
+    assert!(ast_precision > raw_precision);
+    assert!(ast_precision <= validation::atomic_calibrated_max());
+}
+
+#[test]
+fn test_atomic_precision_long_regex_and_large_not_list_stays_calibrated() {
+    let trait_def = TraitDefinition {
+        id: "test/long-regex-many-not".to_string(),
+        desc: "Long regex with many exclusions".to_string(),
+        conf: 0.95,
+        crit: Criticality::Suspicious,
+        mbc: None,
+        attack: None,
+        platforms: vec![
+            Platform::Linux,
+            Platform::Unix,
+            Platform::MacOS,
+            Platform::Windows,
+        ],
+        arch: vec![Arch::All],
+        r#for: vec![RuleFileType::Pe, RuleFileType::Shell, RuleFileType::JavaScript],
+        for_from_groups: false,
+        r#if: Condition::StringValue {
+            is_check: None,
+            exact: None,
+            regex: Some(
+                r"\bdelete\b.{0,40}\b(?:all|your)\b.{0,20}\b(?:files?|documents?)\b"
+                    .to_string(),
+            ),
+            word: None,
+            case_insensitive: true,
+            substr: None,
+            section: None,
+            offset: None,
+            offset_range: None,
+            section_offset: None,
+            section_offset_range: None,
+            not: None,
+            platforms: None,
+            compiled_regex: None,
+        },
+        size_max: None,
+        count_min: None,
+        count_max: None,
+        per_kb_min: None,
+        per_kb_max: None,
+        entropy_min: None,
+        entropy_max: None,
+        size_min: None,
+        not: Some(vec![
+            crate::composite_rules::condition::NotException::Structured(
+                crate::composite_rules::condition::NotExceptionStructured {
+                    exact: None,
+                    substr: None,
+                    regex: Some("(?i)delete all existing files".to_string()),
+                    compiled_regex: None,
+                    lowered_substr: None,
+                },
+            );
+            12
+        ]),
+        unless: None,
+        downgrade: None,
+        defined_in: std::path::PathBuf::from("test.yaml"),
+        precision: None,
+    };
+
+    let precision = validation::calculate_trait_precision(&trait_def);
+    assert!(
+        precision <= validation::atomic_calibrated_max(),
+        "long regex and large not-list should remain in atomic band, got {precision}"
+    );
+}
+
+#[test]
+fn test_scope_filters_do_not_dominate_atomic_precision() {
+    let broad_scope = TraitDefinition {
+        id: "test/scope-broad".to_string(),
+        desc: "Broad scope".to_string(),
+        conf: 0.8,
+        crit: Criticality::Notable,
+        mbc: None,
+        attack: None,
+        platforms: vec![
+            Platform::Linux,
+            Platform::Unix,
+            Platform::Android,
+            Platform::MacOS,
+            Platform::Ios,
+            Platform::Windows,
+        ],
+        arch: vec![Arch::All],
+        r#for: vec![
+            RuleFileType::Pe,
+            RuleFileType::Shell,
+            RuleFileType::JavaScript,
+            RuleFileType::Html,
+            RuleFileType::Plist,
+            RuleFileType::Rtf,
+            RuleFileType::Zip,
+        ],
+        for_from_groups: false,
+        r#if: Condition::StringValue {
+            is_check: None,
+            exact: Some("HmacSHA256".to_string()),
+            regex: None,
+            word: None,
+            case_insensitive: false,
+            substr: None,
+            section: None,
+            offset: None,
+            offset_range: None,
+            section_offset: None,
+            section_offset_range: None,
+            not: None,
+            platforms: None,
+            compiled_regex: None,
+        },
+        size_max: None,
+        count_min: None,
+        count_max: None,
+        per_kb_min: None,
+        per_kb_max: None,
+        entropy_min: None,
+        entropy_max: None,
+        size_min: None,
+        not: None,
+        unless: None,
+        downgrade: None,
+        defined_in: std::path::PathBuf::from("test.yaml"),
+        precision: None,
+    };
+
+    let narrow_scope = TraitDefinition {
+        id: "test/scope-narrow".to_string(),
+        platforms: vec![Platform::Windows],
+        r#for: vec![RuleFileType::Pe],
+        ..broad_scope.clone()
+    };
+
+    let broad_precision = validation::calculate_trait_precision(&broad_scope);
+    let narrow_precision = validation::calculate_trait_precision(&narrow_scope);
+
+    assert!(broad_precision <= validation::atomic_calibrated_max());
+    assert!(narrow_precision <= validation::atomic_calibrated_max());
+    assert!(
+        narrow_precision > broad_precision,
+        "narrow scope should score higher than broad scope, got broad={broad_precision}, narrow={narrow_precision}"
+    );
+    assert!(
+        (narrow_precision - broad_precision) < 1.5,
+        "scope should be a bounded modifier, got broad={broad_precision}, narrow={narrow_precision}"
+    );
+}
+
+#[test]
+fn test_composite_precision_calibration_band() {
+    use std::collections::{HashMap, HashSet};
+
+    let atomic_a = TraitDefinition {
+        id: "test/atomic-a".to_string(),
+        desc: "Atomic A".to_string(),
+        conf: 0.8,
+        crit: Criticality::Notable,
+        mbc: None,
+        attack: None,
+        platforms: vec![Platform::Windows],
+        arch: vec![Arch::All],
+        r#for: vec![RuleFileType::Pe],
+        for_from_groups: false,
+        r#if: Condition::StringValue {
+            is_check: None,
+            exact: Some("CreateProcessW".to_string()),
+            regex: None,
+            word: None,
+            case_insensitive: false,
+            substr: None,
+            section: Some(".rdata".to_string()),
+            offset: None,
+            offset_range: None,
+            section_offset: None,
+            section_offset_range: None,
+            not: None,
+            platforms: None,
+            compiled_regex: None,
+        },
+        size_max: None,
+        count_min: None,
+        count_max: None,
+        per_kb_min: None,
+        per_kb_max: None,
+        entropy_min: None,
+        entropy_max: None,
+        size_min: None,
+        not: None,
+        unless: None,
+        downgrade: None,
+        defined_in: std::path::PathBuf::from("test.yaml"),
+        precision: None,
+    };
+    let atomic_b = TraitDefinition { id: "test/atomic-b".to_string(), ..atomic_a.clone() };
+    let atomic_c = TraitDefinition { id: "test/atomic-c".to_string(), ..atomic_a.clone() };
+
+    let composite = CompositeTrait {
+        id: "test/calibrated-composite".to_string(),
+        desc: "Calibrated composite".to_string(),
+        conf: 0.9,
+        crit: Criticality::Suspicious,
+        mbc: None,
+        attack: None,
+        platforms: vec![Platform::Windows],
+        arch: vec![Arch::All],
+        r#for: vec![RuleFileType::Pe],
+        for_from_groups: false,
+        all: Some(vec![
+            Condition::Trait { id: "test/atomic-a".to_string() },
+            Condition::Trait { id: "test/atomic-b".to_string() },
+        ]),
+        any: Some(vec![
+            Condition::Trait { id: "test/atomic-c".to_string() },
+            Condition::StringValue {
+                is_check: None,
+                exact: Some("SetThreadContext".to_string()),
+                regex: None,
+                word: None,
+                case_insensitive: false,
+                substr: None,
+                section: Some(".rdata".to_string()),
+                offset: None,
+                offset_range: None,
+                section_offset: None,
+                section_offset_range: None,
+                not: None,
+                platforms: None,
+                compiled_regex: None,
+            },
+        ]),
+        needs: Some(1),
+        near_lines: None,
+        near_bytes: None,
+        unless: None,
+        not: None,
+        downgrade: None,
+        size_min: None,
+        size_max: None,
+        defined_in: std::path::PathBuf::from("test.yaml"),
+        precision: None,
+    };
+
+    let composites = [composite];
+    let traits = [atomic_a, atomic_b, atomic_c];
+    let composite_lookup: HashMap<&str, &CompositeTrait> =
+        composites.iter().map(|c| (c.id.as_str(), c)).collect();
+    let trait_lookup: HashMap<&str, &TraitDefinition> =
+        traits.iter().map(|t| (t.id.as_str(), t)).collect();
+    let mut cache = HashMap::new();
+    let mut visiting = HashSet::new();
+
+    let precision = validation::calculate_composite_precision(
+        "test/calibrated-composite",
+        &composite_lookup,
+        &trait_lookup,
+        &mut cache,
+        &mut visiting,
+    );
+
+    assert!(precision >= 1.0);
+    assert!(precision <= validation::composite_calibrated_max());
+}
+
+#[test]
+fn test_composite_prefix_reference_matches_explicit_expansion_precision() {
+    use std::collections::{HashMap, HashSet};
+
+    let broad = TraitDefinition {
+        id: "family/member-broad".to_string(),
+        desc: "Broad family member".to_string(),
+        conf: 0.7,
+        crit: Criticality::Notable,
+        mbc: None,
+        attack: None,
+        platforms: vec![Platform::All],
+        arch: vec![Arch::All],
+        r#for: vec![RuleFileType::All],
+        for_from_groups: false,
+        r#if: Condition::Raw {
+            exact: None,
+            substr: Some("cmd".to_string()),
+            regex: None,
+            word: None,
+            case_insensitive: false,
+            is_check: None,
+            not: None,
+            section: None,
+            offset: None,
+            offset_range: None,
+            section_offset: None,
+            section_offset_range: None,
+            compiled_regex: None,
+        },
+        size_max: None,
+        count_min: None,
+        count_max: None,
+        per_kb_min: None,
+        per_kb_max: None,
+        entropy_min: None,
+        entropy_max: None,
+        size_min: None,
+        not: None,
+        unless: None,
+        downgrade: None,
+        defined_in: std::path::PathBuf::from("test.yaml"),
+        precision: None,
+    };
+    let precise = TraitDefinition {
+        id: "family/member-precise".to_string(),
+        desc: "Precise family member".to_string(),
+        conf: 0.9,
+        crit: Criticality::Suspicious,
+        mbc: None,
+        attack: None,
+        platforms: vec![Platform::Windows],
+        arch: vec![Arch::All],
+        r#for: vec![RuleFileType::Pe],
+        for_from_groups: false,
+        r#if: Condition::Ast {
+            kind: Some("call".to_string()),
+            node: None,
+            exact: Some("VirtualAlloc".to_string()),
+            substr: None,
+            regex: None,
+            query: None,
+            language: Some("javascript".to_string()),
+            case_insensitive: false,
+        },
+        size_max: None,
+        count_min: None,
+        count_max: None,
+        per_kb_min: None,
+        per_kb_max: None,
+        entropy_min: None,
+        entropy_max: None,
+        size_min: None,
+        not: None,
+        unless: None,
+        downgrade: None,
+        defined_in: std::path::PathBuf::from("test.yaml"),
+        precision: None,
+    };
+
+    let family_ref = CompositeTrait {
+        id: "test/family-ref".to_string(),
+        desc: "Uses family prefix".to_string(),
+        conf: 0.9,
+        crit: Criticality::Notable,
+        mbc: None,
+        attack: None,
+        platforms: vec![Platform::All],
+        arch: vec![Arch::All],
+        r#for: vec![RuleFileType::All],
+        for_from_groups: false,
+        all: Some(vec![Condition::Trait {
+            id: "family".to_string(),
+        }]),
+        any: None,
+        needs: None,
+        near_lines: None,
+        near_bytes: None,
+        unless: None,
+        not: None,
+        downgrade: None,
+        size_min: None,
+        size_max: None,
+        defined_in: std::path::PathBuf::from("test.yaml"),
+        precision: None,
+    };
+    let explicit_family_ref = CompositeTrait {
+        id: "test/family-ref-explicit".to_string(),
+        desc: "Uses explicit family expansion".to_string(),
+        conf: 0.9,
+        crit: Criticality::Notable,
+        mbc: None,
+        attack: None,
+        platforms: vec![Platform::All],
+        arch: vec![Arch::All],
+        r#for: vec![RuleFileType::All],
+        for_from_groups: false,
+        all: Some(vec![Condition::Trait {
+            id: "test/family-members".to_string(),
+        }]),
+        any: None,
+        needs: None,
+        near_lines: None,
+        near_bytes: None,
+        unless: None,
+        not: None,
+        downgrade: None,
+        size_min: None,
+        size_max: None,
+        defined_in: std::path::PathBuf::from("test.yaml"),
+        precision: None,
+    };
+    let family_members = CompositeTrait {
+        id: "test/family-members".to_string(),
+        desc: "Explicit family members".to_string(),
+        conf: 0.9,
+        crit: Criticality::Notable,
+        mbc: None,
+        attack: None,
+        platforms: vec![Platform::All],
+        arch: vec![Arch::All],
+        r#for: vec![RuleFileType::All],
+        for_from_groups: false,
+        all: None,
+        any: Some(vec![
+            Condition::Trait {
+                id: "family/member-broad".to_string(),
+            },
+            Condition::Trait {
+                id: "family/member-precise".to_string(),
+            },
+        ]),
+        needs: Some(1),
+        near_lines: None,
+        near_bytes: None,
+        unless: None,
+        not: None,
+        downgrade: None,
+        size_min: None,
+        size_max: None,
+        defined_in: std::path::PathBuf::from("test.yaml"),
+        precision: None,
+    };
+
+    let composites = [family_ref, explicit_family_ref, family_members];
+    let traits = [broad, precise];
+    let composite_lookup: HashMap<&str, &CompositeTrait> =
+        composites.iter().map(|c| (c.id.as_str(), c)).collect();
+    let trait_lookup: HashMap<&str, &TraitDefinition> =
+        traits.iter().map(|t| (t.id.as_str(), t)).collect();
+    let mut cache = HashMap::new();
+    let mut visiting = HashSet::new();
+
+    let prefix_precision = validation::calculate_composite_precision(
+        "test/family-ref",
+        &composite_lookup,
+        &trait_lookup,
+        &mut cache,
+        &mut visiting,
+    );
+    let explicit_precision = validation::calculate_composite_precision(
+        "test/family-ref-explicit",
+        &composite_lookup,
+        &trait_lookup,
+        &mut cache,
+        &mut visiting,
+    );
+
+    assert!(
+        (prefix_precision - explicit_precision).abs() < 0.01,
+        "prefix reference should match explicit expansion precision, got {prefix_precision} vs {explicit_precision}"
+    );
+}
+
+#[test]
+fn test_composite_any_uses_weakest_average_with_breadth_penalty() {
+    use std::collections::{HashMap, HashSet};
+
+    let loose = TraitDefinition {
+        id: "test/loose".to_string(),
+        desc: "Loose".to_string(),
+        conf: 0.7,
+        crit: Criticality::Notable,
+        mbc: None,
+        attack: None,
+        platforms: vec![Platform::All],
+        arch: vec![Arch::All],
+        r#for: vec![RuleFileType::All],
+        for_from_groups: false,
+        r#if: Condition::Raw {
+            exact: None,
+            substr: Some("cmd".to_string()),
+            regex: None,
+            word: None,
+            case_insensitive: false,
+            is_check: None,
+            not: None,
+            section: None,
+            offset: None,
+            offset_range: None,
+            section_offset: None,
+            section_offset_range: None,
+            compiled_regex: None,
+        },
+        size_max: None,
+        count_min: None,
+        count_max: None,
+        per_kb_min: None,
+        per_kb_max: None,
+        entropy_min: None,
+        entropy_max: None,
+        size_min: None,
+        not: None,
+        unless: None,
+        downgrade: None,
+        defined_in: std::path::PathBuf::from("test.yaml"),
+        precision: None,
+    };
+    let medium = TraitDefinition {
+        id: "test/medium".to_string(),
+        desc: "Medium".to_string(),
+        conf: 0.8,
+        crit: Criticality::Notable,
+        mbc: None,
+        attack: None,
+        platforms: vec![Platform::Linux],
+        arch: vec![Arch::All],
+        r#for: vec![RuleFileType::Elf],
+        for_from_groups: false,
+        r#if: Condition::StringValue {
+            is_check: None,
+            exact: Some("execve".to_string()),
+            regex: None,
+            word: None,
+            case_insensitive: false,
+            substr: None,
+            section: Some(".rodata".to_string()),
+            offset: None,
+            offset_range: None,
+            section_offset: None,
+            section_offset_range: None,
+            not: None,
+            platforms: None,
+            compiled_regex: None,
+        },
+        size_max: None,
+        count_min: None,
+        count_max: None,
+        per_kb_min: None,
+        per_kb_max: None,
+        entropy_min: None,
+        entropy_max: None,
+        size_min: None,
+        not: None,
+        unless: None,
+        downgrade: None,
+        defined_in: std::path::PathBuf::from("test.yaml"),
+        precision: None,
+    };
+    let strong = TraitDefinition {
+        id: "test/strong".to_string(),
+        desc: "Strong".to_string(),
+        conf: 0.9,
+        crit: Criticality::Suspicious,
+        mbc: None,
+        attack: None,
+        platforms: vec![Platform::Windows],
+        arch: vec![Arch::All],
+        r#for: vec![RuleFileType::Pe],
+        for_from_groups: false,
+        r#if: Condition::Ast {
+            kind: Some("call".to_string()),
+            node: None,
+            exact: Some("CreateRemoteThread".to_string()),
+            substr: None,
+            regex: None,
+            query: None,
+            language: Some("javascript".to_string()),
+            case_insensitive: false,
+        },
+        size_max: None,
+        count_min: None,
+        count_max: None,
+        per_kb_min: None,
+        per_kb_max: None,
+        entropy_min: None,
+        entropy_max: None,
+        size_min: None,
+        not: None,
+        unless: None,
+        downgrade: None,
+        defined_in: std::path::PathBuf::from("test.yaml"),
+        precision: None,
+    };
+
+    let loose_precision = validation::calculate_trait_precision(&loose);
+    let medium_precision = validation::calculate_trait_precision(&medium);
+    let strong_precision = validation::calculate_trait_precision(&strong);
+
+    let composite = CompositeTrait {
+        id: "test/any-average".to_string(),
+        desc: "Any average".to_string(),
+        conf: 0.9,
+        crit: Criticality::Notable,
+        mbc: None,
+        attack: None,
+        platforms: vec![Platform::All],
+        arch: vec![Arch::All],
+        r#for: vec![RuleFileType::All],
+        for_from_groups: false,
+        all: None,
+        any: Some(vec![
+            Condition::Trait {
+                id: "test/loose".to_string(),
+            },
+            Condition::Trait {
+                id: "test/medium".to_string(),
+            },
+            Condition::Trait {
+                id: "test/strong".to_string(),
+            },
+        ]),
+        needs: Some(2),
+        near_lines: None,
+        near_bytes: None,
+        unless: None,
+        not: None,
+        downgrade: None,
+        size_min: None,
+        size_max: None,
+        defined_in: std::path::PathBuf::from("test.yaml"),
+        precision: None,
+    };
+
+    let composites = [composite];
+    let traits = [loose, medium, strong];
+    let composite_lookup: HashMap<&str, &CompositeTrait> =
+        composites.iter().map(|c| (c.id.as_str(), c)).collect();
+    let trait_lookup: HashMap<&str, &TraitDefinition> =
+        traits.iter().map(|t| (t.id.as_str(), t)).collect();
+    let mut cache = HashMap::new();
+    let mut visiting = HashSet::new();
+
+    let precision = validation::calculate_composite_precision(
+        "test/any-average",
+        &composite_lookup,
+        &trait_lookup,
+        &mut cache,
+        &mut visiting,
+    );
+    let expected = (loose_precision + medium_precision) / 2.0 - 0.15;
+
+    assert!(strong_precision > medium_precision && medium_precision > loose_precision);
+    assert!(
+        (precision - expected).abs() < 0.01,
+        "any precision should use weakest average with breadth penalty, got {precision} vs {expected}"
+    );
+}
+
+#[test]
+fn test_inherited_composite_scores_are_compressed() {
+    use std::collections::{HashMap, HashSet};
+
+    let strong_a = TraitDefinition {
+        id: "test/strong-a".to_string(),
+        desc: "Strong A".to_string(),
+        conf: 0.9,
+        crit: Criticality::Suspicious,
+        mbc: None,
+        attack: None,
+        platforms: vec![Platform::Windows],
+        arch: vec![Arch::All],
+        r#for: vec![RuleFileType::Pe],
+        for_from_groups: false,
+        r#if: Condition::Ast {
+            kind: Some("call".to_string()),
+            node: None,
+            exact: Some("CreateRemoteThread".to_string()),
+            substr: None,
+            regex: None,
+            query: None,
+            language: Some("javascript".to_string()),
+            case_insensitive: false,
+        },
+        size_max: None,
+        count_min: None,
+        count_max: None,
+        per_kb_min: None,
+        per_kb_max: None,
+        entropy_min: None,
+        entropy_max: None,
+        size_min: None,
+        not: None,
+        unless: None,
+        downgrade: None,
+        defined_in: std::path::PathBuf::from("test.yaml"),
+        precision: None,
+    };
+    let strong_b = TraitDefinition {
+        id: "test/strong-b".to_string(),
+        ..strong_a.clone()
+    };
+
+    let child = CompositeTrait {
+        id: "test/child".to_string(),
+        desc: "Child".to_string(),
+        conf: 0.9,
+        crit: Criticality::Suspicious,
+        mbc: None,
+        attack: None,
+        platforms: vec![Platform::Windows],
+        arch: vec![Arch::All],
+        r#for: vec![RuleFileType::Pe],
+        for_from_groups: false,
+        all: Some(vec![
+            Condition::Trait {
+                id: "test/strong-a".to_string(),
+            },
+            Condition::Trait {
+                id: "test/strong-b".to_string(),
+            },
+        ]),
+        any: None,
+        needs: None,
+        near_lines: None,
+        near_bytes: None,
+        unless: None,
+        not: None,
+        downgrade: None,
+        size_min: None,
+        size_max: None,
+        defined_in: std::path::PathBuf::from("test.yaml"),
+        precision: None,
+    };
+    let parent = CompositeTrait {
+        id: "test/parent".to_string(),
+        desc: "Parent".to_string(),
+        conf: 0.9,
+        crit: Criticality::Suspicious,
+        mbc: None,
+        attack: None,
+        platforms: vec![Platform::Windows],
+        arch: vec![Arch::All],
+        r#for: vec![RuleFileType::Pe],
+        for_from_groups: false,
+        all: Some(vec![Condition::Trait {
+            id: "test/child".to_string(),
+        }]),
+        any: None,
+        needs: None,
+        near_lines: None,
+        near_bytes: None,
+        unless: None,
+        not: None,
+        downgrade: None,
+        size_min: None,
+        size_max: None,
+        defined_in: std::path::PathBuf::from("test.yaml"),
+        precision: None,
+    };
+
+    let composites = [child, parent];
+    let traits = [strong_a, strong_b];
+    let composite_lookup: HashMap<&str, &CompositeTrait> =
+        composites.iter().map(|c| (c.id.as_str(), c)).collect();
+    let trait_lookup: HashMap<&str, &TraitDefinition> =
+        traits.iter().map(|t| (t.id.as_str(), t)).collect();
+    let mut cache = HashMap::new();
+    let mut visiting = HashSet::new();
+
+    let child_precision = validation::calculate_composite_precision(
+        "test/child",
+        &composite_lookup,
+        &trait_lookup,
+        &mut cache,
+        &mut visiting,
+    );
+    let parent_precision = validation::calculate_composite_precision(
+        "test/parent",
+        &composite_lookup,
+        &trait_lookup,
+        &mut cache,
+        &mut visiting,
+    );
+
+    assert!(child_precision > validation::atomic_calibrated_max());
+    assert!(parent_precision < child_precision);
 }

@@ -8,7 +8,7 @@ use crate::capabilities::models::{TraitInfo, TraitMappings};
 use crate::capabilities::parsing::{apply_composite_defaults, apply_trait_defaults};
 use crate::capabilities::validation::{
     find_duplicate_traits_and_composites, precalculate_all_composite_precisions,
-    validate_hostile_composite_precision,
+    validate_hostile_composite_precision, validate_hostile_trait_precision,
 };
 use crate::composite_rules::Platform;
 use crate::types::Criticality;
@@ -129,6 +129,14 @@ impl super::CapabilityMapper {
                 return Err(anyhow::anyhow!("Regex compilation error: {:#}", e));
             }
         }
+
+        // Apply precision-based criticality downgrades on every load
+        validate_hostile_trait_precision(
+            &mut trait_definitions,
+            &mut warnings,
+            min_hostile_precision,
+            min_suspicious_precision,
+        );
 
         // Pre-calculate precision for all composite rules
         precalculate_all_composite_precisions(&mut composite_rules, &trait_definitions);

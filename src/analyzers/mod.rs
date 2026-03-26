@@ -397,6 +397,9 @@ pub(crate) fn detect_file_type_from_path(file_path: &Path) -> FileType {
             "py" => return FileType::Python,
             "js" | "mjs" | "cjs" | "jsx" => return FileType::JavaScript,
             "ts" | "tsx" | "mts" | "cts" => return FileType::TypeScript,
+            // Erlang source/header files are text, but we don't have a dedicated analyzer.
+            // Mark them known here so they don't fall through to JavaScript heuristics.
+            "erl" | "hrl" => return FileType::Unknown,
             "go" => return FileType::Go,
             "rs" => return FileType::Rust,
             "java" => return FileType::Java,
@@ -504,6 +507,8 @@ pub(crate) fn detect_file_type_from_data(file_path: &Path, file_data: &[u8]) -> 
                 | "log"
                 | "svg"
                 | "xml"
+                | "erl"
+                | "hrl"
                 | "elv"
                 | "nu"
                 | "fish"
@@ -846,6 +851,8 @@ fn detect_file_type_inner(file_path: &Path, file_data: &[u8]) -> Option<FileType
                     | "cjs"
                     | "ts"
                     | "tsx"
+                    | "erl"
+                    | "hrl"
                     | "py"
                     | "rb"
                     | "rbs"

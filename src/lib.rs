@@ -128,6 +128,74 @@ fn should_skip_unknown_xor_payload_for_source(
         && payload.detected_type == FileType::Unknown
         && !looks_like_textual_payload_preview(&payload.preview)
 }
+
+fn should_skip_unknown_url_markup_payload(payload: &types::ExtractedPayload) -> bool {
+    if !payload.encoding_chain.iter().any(|e| e == "url") || payload.detected_type != FileType::Unknown
+    {
+        return false;
+    }
+
+    let preview = payload.preview.trim().to_lowercase();
+    if preview.is_empty() || preview == "<binary data>" {
+        return false;
+    }
+
+    let markup_markers = [
+        "<!doctype",
+        "<html",
+        "<body",
+        "<script",
+        "<a ",
+        "<form",
+        "<div",
+        "<span",
+        "<table",
+        "<li>",
+        "href=\"http",
+        "rel=\"nofollow\"",
+        "target=\"_blank\"",
+        "&nbsp;",
+    ];
+
+    if markup_markers.iter().any(|marker| preview.contains(marker)) {
+        return true;
+    }
+
+    let payload_markers = [
+        "http://",
+        "https://",
+        "/bin/",
+        "curl ",
+        "wget ",
+        "powershell",
+        "cmd.exe",
+        "bash ",
+        "sh ",
+        ".exe",
+        ".dll",
+        ".sh",
+        "/api/",
+        "user-agent",
+    ];
+    if payload_markers.iter().any(|marker| preview.contains(marker)) {
+        return false;
+    }
+
+    let space_count = preview.chars().filter(|c| c.is_ascii_whitespace()).count();
+    let alpha_count = preview.chars().filter(|c| c.is_ascii_alphabetic()).count();
+    alpha_count >= 24 && space_count >= 4
+}
+
+fn extension_content_mismatch_criticality(expected: &str, actual: &str) -> types::Criticality {
+    let expected_is_image = expected.ends_with("image");
+    let actual_is_image = actual.ends_with("image");
+
+    if expected_is_image && actual_is_image {
+        types::Criticality::Notable
+    } else {
+        types::Criticality::Suspicious
+    }
+}
 pub use composite_rules::evaluators::clear_thread_local_caches;
 
 use anyhow::Result;
@@ -902,7 +970,7 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
                 expected, actual
             ),
             conf: 1.0,
-            crit: types::Criticality::Hostile,
+            crit: extension_content_mismatch_criticality(&expected, &actual),
             mbc: None,
             attack: Some("T1036.005".to_string()), // Masquerading: Match Legitimate Name or Location
             trait_refs: vec![],
@@ -936,6 +1004,13 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
                 || preview_lower.starts_with("http") && preview_lower.contains("/certs/")
             {
                 tracing::debug!("Skipping benign PKI URL payload: {}", payload.preview);
+                continue;
+            }
+            if should_skip_unknown_url_markup_payload(&payload) {
+                tracing::debug!(
+                    "Skipping URL-decoded markup fragment from unknown payload: {}",
+                    payload.preview
+                );
                 continue;
             }
         }
@@ -1726,6 +1801,52 @@ mod tests {
                 .iter()
                 .any(|f| f.id.contains("deep-nesting")),
             "depth-0 analysis should not produce deep-nesting finding"
+        );
+    }
+
+    #[test]
+    fn test_skip_unknown_url_markup_payload() {
+        let payload = types::ExtractedPayload {
+            temp_path: tempfile::NamedTempFile::new().unwrap().into_temp_path(),
+            encoding_chain: vec!["url".to_string()],
+            detected_type: FileType::Unknown,
+            preview: "<body><a href=\"http://example.com\">doc</a>".to_string(),
+            original_offset: 0,
+        };
+        assert!(should_skip_unknown_url_markup_payload(&payload));
+
+        let payload = types::ExtractedPayload {
+            temp_path: tempfile::NamedTempFile::new().unwrap().into_temp_path(),
+            encoding_chain: vec!["url".to_string()],
+            detected_type: FileType::Unknown,
+            preview: "http://example.com/api/v1/ping".to_string(),
+            original_offset: 0,
+        };
+        assert!(!should_skip_unknown_url_markup_payload(&payload));
+
+        let payload = types::ExtractedPayload {
+            temp_path: tempfile::NamedTempFile::new().unwrap().into_temp_path(),
+            encoding_chain: vec!["url".to_string()],
+            detected_type: FileType::Unknown,
+            preview: "beginning of the revealed that the television series".to_string(),
+            original_offset: 0,
+        };
+        assert!(should_skip_unknown_url_markup_payload(&payload));
+    }
+
+    #[test]
+    fn test_extension_content_mismatch_images_are_notable() {
+        assert_eq!(
+            extension_content_mismatch_criticality("JPEG image", "PNG image"),
+            types::Criticality::Notable
+        );
+    }
+
+    #[test]
+    fn test_extension_content_mismatch_non_images_are_suspicious() {
+        assert_eq!(
+            extension_content_mismatch_criticality("WOFF2 font", "hex-encoded data"),
+            types::Criticality::Suspicious
         );
     }
 

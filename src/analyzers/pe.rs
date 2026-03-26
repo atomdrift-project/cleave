@@ -540,14 +540,13 @@ impl PEAnalyzer {
             // Only non-resource header corruption indicates deliberate tampering.
             let rizin_found_hidden_content =
                 !report.sections.is_empty() || !report.imports.is_empty();
-            let (crit, conf) =
-                if is_resource_error || is_parser_limitation {
-                    (Criticality::Baseline, 0.3)
-                } else if rizin_found_hidden_content {
-                    (Criticality::Suspicious, 0.8)
-                } else {
-                    (Criticality::Hostile, 1.0)
-                };
+            let (crit, conf) = if is_resource_error || is_parser_limitation {
+                (Criticality::Baseline, 0.3)
+            } else if rizin_found_hidden_content {
+                (Criticality::Suspicious, 0.8)
+            } else {
+                (Criticality::Hostile, 1.0)
+            };
 
             report.findings.push(Finding {
                 id: "objectives/anti-analysis/pe-tampering/corrupted-header".to_string(),

@@ -232,10 +232,8 @@ fn looks_like_passive_markup(value: &str) -> bool {
 
 /// Additional heuristic to filter out false positive shell detection (like foreign languages)
 fn is_real_shell(value: &str) -> bool {
-    // If it has a shebang, it's definitely a script
-    if value.starts_with("#!") {
-        return true;
-    }
+    // NOTE: shebang (#!) is NOT shell — it's a kernel execve directive.
+    // A string starting with #!/usr/bin/env ruby is Ruby, not shell.
 
     // Look for common shell keywords/patterns that are rare in natural language
     let keywords = [
@@ -780,7 +778,7 @@ pub(crate) fn process_all_strings_with_host(
     strings: &[StringInfo],
     capability_mapper: &Arc<CapabilityMapper>,
     current_depth: usize,
-    host_file_type: Option<&FileType>,
+    _host_file_type: Option<&FileType>,
 ) -> (Vec<FileAnalysis>, Vec<Finding>) {
     let mut encoded_layers = Vec::new();
     let mut plain_findings = Vec::new();

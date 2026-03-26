@@ -67,7 +67,7 @@ pub struct TextMetrics {
     /// appended payload lines are typically >1000 chars in otherwise normal files)
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub last_line_length: u32,
-    
+
     // === AST Parse Metrics ===
     /// Number of AST parse errors encountered during tree-sitter analysis
     #[serde(default, skip_serializing_if = "is_zero_u32")]
@@ -75,7 +75,7 @@ pub struct TextMetrics {
     /// Maximum depth of the abstract syntax tree
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub ast_max_depth: u32,
-    
+
     /// Ratio of empty lines to total
     #[serde(default, skip_serializing_if = "is_zero_f32")]
     pub empty_line_ratio: f32,

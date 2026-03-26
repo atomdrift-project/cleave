@@ -485,10 +485,28 @@ pub(crate) fn detect_file_type_from_data(file_path: &Path, file_data: &[u8]) -> 
     if let Some(ext) = file_path.extension().and_then(|e| e.to_str()) {
         if matches!(
             ext.to_ascii_lowercase().as_str(),
-            "yaml" | "yml" | "json" | "toml" | "ini" | "cfg" | "conf" | "properties"
-                | "txt" | "text" | "md" | "markdown" | "rst" | "adoc"
-                | "csv" | "tsv" | "log" | "svg" | "xml"
-                | "elv" | "nu" | "fish"
+            "yaml"
+                | "yml"
+                | "json"
+                | "toml"
+                | "ini"
+                | "cfg"
+                | "conf"
+                | "properties"
+                | "txt"
+                | "text"
+                | "md"
+                | "markdown"
+                | "rst"
+                | "adoc"
+                | "csv"
+                | "tsv"
+                | "log"
+                | "svg"
+                | "xml"
+                | "elv"
+                | "nu"
+                | "fish"
         ) {
             return FileType::Unknown;
         }
@@ -967,7 +985,10 @@ fn pick_best_by_tree_sitter(file_data: &[u8], candidates: &[&FileType]) -> Optio
         let error_rate = errors as f64 / total as f64;
         tracing::debug!(
             "tree-sitter candidate {:?}: {} nodes, {} errors, {:.1}% error rate",
-            file_type, total, errors, error_rate * 100.0
+            file_type,
+            total,
+            errors,
+            error_rate * 100.0
         );
 
         if best.as_ref().is_none_or(|(_, s)| error_rate < *s) {
@@ -976,8 +997,7 @@ fn pick_best_by_tree_sitter(file_data: &[u8], candidates: &[&FileType]) -> Optio
     }
 
     // Reject if even the best candidate has >30% errors — it's probably not code
-    best.filter(|(_, rate)| *rate < 0.30)
-        .map(|(ft, _)| ft)
+    best.filter(|(_, rate)| *rate < 0.30).map(|(ft, _)| ft)
 }
 
 /// Check if content looks like HTML (has actual markup tags)

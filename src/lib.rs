@@ -1511,6 +1511,7 @@ pub struct VersionInfo {
 ///
 /// This initialises the global CapabilityMapper and YARA engine if they
 /// haven't been loaded yet, so the counts reflect the full rule set.
+#[must_use]
 pub fn version_info() -> VersionInfo {
     let traits_version = traits_repo::version();
     let traits_mtime = cache::most_recent_yaml_file().ok().map(|(t, _)| t);

@@ -259,4 +259,3 @@ opt-level = 3
 
 [profile.dev.package.regalloc2]
 opt-level = 3
-

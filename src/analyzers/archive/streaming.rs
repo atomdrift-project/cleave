@@ -1897,12 +1897,8 @@ fn extract_cpio_streaming<R: Read>(
                 break;
             }
 
-            // Re-detect file type with magic bytes
-            let actual_type = if data.len() >= 4 {
-                detect_file_type_from_magic(&data).unwrap_or(file_type)
-            } else {
-                file_type
-            };
+            // Re-detect file type using full content-aware logic for text manifests too.
+            let actual_type = crate::analyzers::detect_file_type_from_data(path, &data);
 
             if tx
                 .send(ExtractedFile::InMemory {

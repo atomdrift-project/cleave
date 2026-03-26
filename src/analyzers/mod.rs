@@ -516,6 +516,17 @@ pub(crate) fn detect_file_type_from_data(file_path: &Path, file_data: &[u8]) -> 
     detect_by_content_heuristics(file_data).unwrap_or(FileType::Unknown)
 }
 
+fn looks_like_npm_registry_metadata(file_data: &[u8]) -> bool {
+    let has_versions = memchr::memmem::find(file_data, b"\"versions\"").is_some();
+    let has_dist_tags = memchr::memmem::find(file_data, b"\"dist-tags\"").is_some();
+    let has_registry_tarball =
+        memchr::memmem::find(file_data, b"\"tarball\": \"https://registry.npmjs.org/").is_some();
+    let has_npm_internal =
+        memchr::memmem::find(file_data, b"\"_npmOperationalInternal\"").is_some();
+
+    (has_versions && has_dist_tags) || (has_registry_tarball && has_npm_internal)
+}
+
 /// Detect file type and route to appropriate analyzer
 pub fn detect_file_type(file_path: &Path) -> Result<FileType> {
     let file_data = std::fs::read(file_path)?;
@@ -742,6 +753,11 @@ fn detect_file_type_inner(file_path: &Path, file_data: &[u8]) -> Option<FileType
     if let Some(file_name) = file_path.file_name() {
         let name = file_name.to_string_lossy().to_lowercase();
         if name == "package.json" {
+            return Some(FileType::PackageJson);
+        }
+        if (name == "meta.json" || name == "metadata.json")
+            && looks_like_npm_registry_metadata(file_data)
+        {
             return Some(FileType::PackageJson);
         }
         if name == "manifest.json" {
@@ -1982,6 +1998,13 @@ mod tests {
         txt_file.write_all(b"Plain text content").unwrap();
         let file_type = detect_file_type(txt_file.path()).unwrap();
         assert_eq!(file_type, FileType::Unknown);
+    }
+
+    #[test]
+    fn test_meta_json_registry_snapshot_detection() {
+        let path = PathBuf::from("meta.json");
+        let data = br#"{"name":"node-ts-cjs-web","dist-tags":{"latest":"99.3.9"},"versions":{"99.3.9":{"dist":{"tarball":"https://registry.npmjs.org/node-ts-cjs-web/-/node-ts-cjs-web-99.3.9.tgz"},"_npmOperationalInternal":{"host":"s3://npm-registry-packages-npm-production"}}}}"#;
+        assert_eq!(detect_file_type_from_data(&path, data), FileType::PackageJson);
     }
 
     // --- Content heuristic rejection tests ---

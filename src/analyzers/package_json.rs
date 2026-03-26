@@ -1195,6 +1195,7 @@ impl PackageJsonAnalyzer {
             "webpack-cli",
             "webpack-dev-middleware",
             "webpack-dev-server",
+            "webpack-fix-default-import-plugin",
             "webpack-merge",
         ];
 

@@ -184,6 +184,22 @@ fn is_local_node_script(script: &str) -> bool {
     )
 }
 
+fn is_local_node_eval_loader(script: &str) -> bool {
+    let trimmed = script.trim();
+    (trimmed.starts_with("node -e") || trimmed.starts_with("node --eval"))
+        && !trimmed.contains("http://")
+        && !trimmed.contains("https://")
+        && !trimmed.contains("curl")
+        && !trimmed.contains("wget")
+        && !trimmed.contains("fetch(")
+        && !trimmed.contains("fetch ")
+        && !trimmed.contains("child_process")
+        && !trimmed.contains("exec(")
+        && !trimmed.contains("spawn(")
+        && !trimmed.contains("eval(")
+        && (trimmed.contains("require('./") || trimmed.contains("require(\"./"))
+}
+
 fn is_suspicious_install_hook_script(script: &str) -> bool {
     let trimmed = script.trim();
     if trimmed.contains("curl")
@@ -195,6 +211,10 @@ fn is_suspicious_install_hook_script(script: &str) -> bool {
     }
 
     if is_local_node_script(trimmed) {
+        return false;
+    }
+
+    if is_local_node_eval_loader(trimmed) {
         return false;
     }
 
@@ -531,7 +551,6 @@ impl PackageJsonAnalyzer {
             if script.contains("rm -rf")
                 || script.contains("rmdir")
                 || script.contains("unlink")
-                || script.contains("> /dev/null")
             {
                 report.add_finding(
                     Finding::capability(
@@ -1164,6 +1183,8 @@ impl PackageJsonAnalyzer {
             "babel-preset-react",
             "babel-register",
             "babel-runtime",
+            "babel-tape-runner",
+            "eclint",
             "tslint",
             "eslint-config-airbnb",
             "eslint-config-prettier",

@@ -78,6 +78,56 @@ pub use types::SampleExtractionConfig;
 
 // Re-export cache management functions
 pub use composite_rules::clear_condition_stats;
+
+fn looks_like_textual_payload_preview(preview: &str) -> bool {
+    let preview = preview.trim();
+    if preview.is_empty() || preview == "<binary data>" {
+        return false;
+    }
+
+    let markers = [
+        "#!",
+        "<?php",
+        "function ",
+        "import ",
+        "from ",
+        "const ",
+        "let ",
+        "var ",
+        "curl ",
+        "wget ",
+        "powershell",
+        "cmd.exe",
+        "bash ",
+        "sh ",
+        "http://",
+        "https://",
+    ];
+    if markers.iter().any(|marker| preview.contains(marker)) {
+        return true;
+    }
+
+    let chars = preview.chars().count();
+    if chars == 0 {
+        return false;
+    }
+
+    let alpha = preview.chars().filter(|c| c.is_ascii_alphabetic()).count();
+    let whitespace = preview.chars().filter(|c| c.is_ascii_whitespace()).count();
+
+    alpha * 100 / chars >= 60 && whitespace > 0
+}
+
+fn should_skip_unknown_xor_payload_for_source(
+    file_type: &FileType,
+    payload: &types::ExtractedPayload,
+) -> bool {
+    file_type.is_source_code()
+        && payload.encoding_chain.len() == 1
+        && payload.encoding_chain[0] == "xor"
+        && payload.detected_type == FileType::Unknown
+        && !looks_like_textual_payload_preview(&payload.preview)
+}
 pub use composite_rules::evaluators::clear_thread_local_caches;
 
 use anyhow::Result;
@@ -910,6 +960,40 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
             && payload.preview.len() < 32
         {
             tracing::debug!("Skipping short unknown xor fragment: {}", payload.preview);
+            continue;
+        }
+        if should_skip_unknown_xor_payload_for_source(&file_type, &payload) {
+            tracing::debug!(
+                "Skipping unknown xor fragment in source file: {}",
+                payload.preview
+            );
+            continue;
+        }
+        if payload.encoding_chain.len() == 1
+            && payload.encoding_chain[0] == "xor"
+            && payload.detected_type == FileType::Unknown
+            && report
+                .findings
+                .iter()
+                .any(|f| f.id == "metadata/binary/framework::dotnet-assembly")
+            && report
+                .findings
+                .iter()
+                .any(|f| f.id == "metadata/package/versioning::pe-version-resource")
+            && report.findings.iter().any(|f| {
+                f.id == "micro-behaviors/data/compress/library::dotnet-gzip-compression"
+                    || f.id == "micro-behaviors/data/embedded/payload::dotnet-getmanifestresourcestream"
+            })
+            && report
+                .metrics
+                .as_ref()
+                .and_then(|m| m.binary.as_ref())
+                .is_some_and(|m| m.function_count >= 200 && m.string_count >= 800)
+        {
+            tracing::debug!(
+                "Skipping unknown xor fragment in versioned .NET resource library: {}",
+                payload.preview
+            );
             continue;
         }
 

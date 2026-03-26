@@ -29,6 +29,10 @@ const MIN_PLAIN_SIZE: usize = 50;
 /// Minimum size for encoded strings to analyze (can be smaller)
 const MIN_ENCODED_SIZE: usize = 20;
 
+/// Minimum decoded size for executable payloads embedded as base64.
+/// Tiny ELF/PE headers are common in tests and fixtures and are not useful standalone payloads.
+const MIN_BASE64_EXECUTABLE_SIZE: usize = 256;
+
 /// Maximum number of strings to analyze per file
 const MAX_STRINGS_TO_ANALYZE: usize = 100;
 
@@ -265,12 +269,82 @@ fn is_real_shell(value: &str) -> bool {
         return true;
     }
 
-    // Check for variable assignment followed by usage
-    if value.contains('=') && (value.contains('$') || value.contains("${")) {
+    // Check for plausible shell-style variable assignment followed by expansion.
+    // Random XOR-decoded noise often contains stray '=' and '$' bytes.
+    if has_shell_variable_assignment(value) && has_shell_variable_expansion(value) {
         return true;
     }
 
     false
+}
+
+fn has_shell_variable_assignment(value: &str) -> bool {
+    value
+        .split(|c: char| c.is_ascii_whitespace() || matches!(c, ';' | '|' | '&' | '(' | ')'))
+        .filter_map(|token| token.split_once('='))
+        .any(|(name, _)| is_shell_identifier(name))
+}
+
+fn has_shell_variable_expansion(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    let mut i = 0;
+
+    while i < bytes.len() {
+        if bytes[i] != b'$' {
+            i += 1;
+            continue;
+        }
+
+        if i + 1 >= bytes.len() {
+            break;
+        }
+
+        if bytes[i + 1] == b'{' {
+            let start = i + 2;
+            let mut end = start;
+            while end < bytes.len() && bytes[end] != b'}' {
+                end += 1;
+            }
+            if end > start
+                && end < bytes.len()
+                && std::str::from_utf8(&bytes[start..end])
+                    .ok()
+                    .is_some_and(is_shell_identifier)
+            {
+                return true;
+            }
+            i = end.saturating_add(1);
+            continue;
+        }
+
+        let mut end = i + 1;
+        while end < bytes.len() && is_shell_identifier_char(bytes[end] as char) {
+            end += 1;
+        }
+        if end > i + 1
+            && std::str::from_utf8(&bytes[i + 1..end])
+                .ok()
+                .is_some_and(is_shell_identifier)
+        {
+            return true;
+        }
+        i = end;
+    }
+
+    false
+}
+
+fn is_shell_identifier(name: &str) -> bool {
+    let mut chars = name.chars();
+    match chars.next() {
+        Some(first) if first == '_' || first.is_ascii_alphabetic() => {}
+        _ => return false,
+    }
+    chars.all(is_shell_identifier_char)
+}
+
+fn is_shell_identifier_char(c: char) -> bool {
+    c == '_' || c.is_ascii_alphanumeric()
 }
 
 fn is_probable_php(value: &str, is_encoded: bool) -> bool {
@@ -318,7 +392,7 @@ fn is_top_level_self_detection(
         return false;
     }
     let host_type = detect_file_type_from_path(Path::new(parent_path));
-    host_type == *file_type || is_sibling_language(&host_type, file_type)
+    host_type == *file_type || is_sibling_language(&host_type, file_type) || host_type.is_source_code()
 }
 
 /// Calculate Shannon entropy of data
@@ -601,6 +675,9 @@ fn detect_base64_binary(
     };
 
     let inner_type = magic_type(&decoded)?;
+    if matches!(inner_type, "elf" | "pe") && decoded.len() < MIN_BASE64_EXECUTABLE_SIZE {
+        return None;
+    }
     let offset = string_info.offset.unwrap_or(0);
     let virtual_path = format!("{}##base64@{:#x}", parent_path, offset);
     let sha256 = crate::analyzers::utils::calculate_sha256(&decoded);
@@ -948,11 +1025,21 @@ mod tests {
             32,
             &FileType::Php
         ));
-        assert!(!is_top_level_self_detection(
+        assert!(is_top_level_self_detection(
             "archive.zip!!src/ParseException.php",
             false,
             0,
             &FileType::JavaScript
+        ));
+    }
+
+    #[test]
+    fn test_top_level_self_detection_for_c_shell_misclassification_is_suppressed() {
+        assert!(is_top_level_self_detection(
+            "include/sound/sdca_function.h",
+            false,
+            0,
+            &FileType::Shell
         ));
     }
 
@@ -964,6 +1051,21 @@ mod tests {
             "#!/bin/bash\necho 'hello world'\ncurl http://example.com/payload\nsh -c 'payload'";
         let info = make_string_info(code);
         assert_eq!(detect_language(&info, false), Some(FileType::Shell));
+    }
+
+    #[test]
+    fn test_reject_xor_gibberish_misclassified_as_shell() {
+        let gibberish = "`(1 89;5dy3;+$-j1=17q8m*`g^LE";
+        let info = StringInfo {
+            value: gibberish.to_string(),
+            offset: Some(0x27f6),
+            string_type: crate::types::binary::StringType::ShellCmd,
+            encoding: "utf-8".to_string(),
+            section: None,
+            encoding_chain: vec!["xor".to_string()],
+            fragments: None,
+        };
+        assert_eq!(detect_language(&info, true), None);
     }
 
     #[test]
@@ -1094,6 +1196,17 @@ mod tests {
         let encoded = base64::engine::general_purpose::STANDARD.encode(&random_bytes);
         let info = make_string_info(&encoded);
         assert!(detect_base64_binary("test.sh", &info, 0).is_none());
+    }
+
+    #[test]
+    #[allow(clippy::unwrap_used)]
+    fn test_detect_base64_binary_rejects_tiny_elf_fixture() {
+        let encoded =
+            "f0VMRgIBAQAAAAAAAAAAAAIAPgABAAAAeABAAAAAAABAAAAAAAAAAAAAAAAAAAAAAAAAAEAAOAAB\
+AAAAAAAAAAEAAAAFAAAAAAAAAAAAAAAAAEAAAAAAAAAAQAAAAAAAfQAAAAAAAAB9AAAAAAAAAAAA\
+IAAAAAAAsDyZDwU=";
+        let info = make_string_info(encoded);
+        assert!(detect_base64_binary("test.go", &info, 0).is_none());
     }
 
     #[test]

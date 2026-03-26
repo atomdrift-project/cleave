@@ -215,8 +215,8 @@ fn analyze_targets(targets: &[String], ctx: &AnalyzeDispatchContext<'_>) -> Resu
             all_files: ctx.all_files,
             sample_extraction: ctx.sample_extraction,
             platforms: ctx.platforms,
-            min_hostile_precision: 3.5,
-            min_suspicious_precision: 1.9,
+            min_hostile_precision: cleave::CapabilityMapper::DEFAULT_MIN_HOSTILE_PRECISION,
+            min_suspicious_precision: cleave::CapabilityMapper::DEFAULT_MIN_SUSPICIOUS_PRECISION,
             max_memory_file_size: ctx.max_memory_file_size,
             enable_full_validation: false,
             slow_rule_ms: ctx.slow_rule_ms,
@@ -383,8 +383,8 @@ fn run_test_match_command(
         req.max_size,
         ctx.disabled,
         ctx.platforms.to_vec(),
-        3.5,
-        2.0,
+        cleave::CapabilityMapper::DEFAULT_MIN_HOSTILE_PRECISION,
+        cleave::CapabilityMapper::DEFAULT_MIN_SUSPICIOUS_PRECISION,
     )
 }
 
@@ -398,8 +398,8 @@ fn run_test_rules_command(
         rules,
         ctx.disabled,
         ctx.platforms.to_vec(),
-        3.5,
-        2.0,
+        cleave::CapabilityMapper::DEFAULT_MIN_HOSTILE_PRECISION,
+        cleave::CapabilityMapper::DEFAULT_MIN_SUSPICIOUS_PRECISION,
     )
 }
 

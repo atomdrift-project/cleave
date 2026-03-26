@@ -21,20 +21,39 @@ impl super::CapabilityMapper {
     /// Load capability mappings from a single YAML file with default precision thresholds
     #[allow(dead_code)] // Used in tests
     pub(crate) fn from_yaml<P: AsRef<Path>>(path: P) -> Result<Self> {
-        Self::from_yaml_with_precision_thresholds(
+        Self::from_yaml_with_options(
             path,
             Self::DEFAULT_MIN_HOSTILE_PRECISION,
             Self::DEFAULT_MIN_SUSPICIOUS_PRECISION,
             true, // from_yaml always enables full validation (used in tests)
+            false,
         )
     }
 
     /// Load capability mappings from a single YAML file with explicit precision thresholds
+    #[allow(dead_code)] // Compatibility wrapper used by tests and targeted call sites
     pub(crate) fn from_yaml_with_precision_thresholds<P: AsRef<Path>>(
         path: P,
         min_hostile_precision: f32,
         min_suspicious_precision: f32,
         enable_full_validation: bool,
+    ) -> Result<Self> {
+        Self::from_yaml_with_options(
+            path,
+            min_hostile_precision,
+            min_suspicious_precision,
+            enable_full_validation,
+            false,
+        )
+    }
+
+    /// Load capability mappings from a single YAML file with explicit load options.
+    pub(crate) fn from_yaml_with_options<P: AsRef<Path>>(
+        path: P,
+        min_hostile_precision: f32,
+        min_suspicious_precision: f32,
+        enable_full_validation: bool,
+        enable_precision_scoring: bool,
     ) -> Result<Self> {
         let bytes = fs::read(path.as_ref()).context("Failed to read capabilities YAML file")?;
         let content = String::from_utf8_lossy(&bytes);
@@ -79,7 +98,15 @@ impl super::CapabilityMapper {
         let mut trait_definitions: Vec<_> = mappings
             .traits
             .into_iter()
-            .map(|raw| apply_trait_defaults(raw, &mappings.defaults, &mut warnings, path.as_ref()))
+            .map(|raw| {
+                apply_trait_defaults(
+                    raw,
+                    &mappings.defaults,
+                    &mut warnings,
+                    path.as_ref(),
+                    enable_precision_scoring,
+                )
+            })
             .collect();
 
         // Pre-compile all regexes for performance
@@ -130,25 +157,31 @@ impl super::CapabilityMapper {
             }
         }
 
-        // Apply precision-based criticality downgrades on every load
-        validate_hostile_trait_precision(
-            &mut trait_definitions,
-            &mut warnings,
-            min_hostile_precision,
-            min_suspicious_precision,
-        );
+        if enable_precision_scoring {
+            let precision_warning_start = warnings.len();
 
-        // Pre-calculate precision for all composite rules
-        precalculate_all_composite_precisions(&mut composite_rules, &trait_definitions);
+            validate_hostile_trait_precision(
+                &mut trait_definitions,
+                &mut warnings,
+                min_hostile_precision,
+                min_suspicious_precision,
+            );
+            precalculate_all_composite_precisions(&mut composite_rules, &trait_definitions);
+            validate_hostile_composite_precision(
+                &mut composite_rules,
+                &trait_definitions,
+                &mut warnings,
+                min_hostile_precision,
+                min_suspicious_precision,
+            );
 
-        // Validate HOSTILE composite precision
-        validate_hostile_composite_precision(
-            &mut composite_rules,
-            &trait_definitions,
-            &mut warnings,
-            min_hostile_precision,
-            min_suspicious_precision,
-        );
+            if !enable_full_validation {
+                for warning in &warnings[precision_warning_start..] {
+                    eprintln!("Warning: {}", warning);
+                }
+                warnings.truncate(precision_warning_start);
+            }
+        }
 
         // Detect duplicate traits and composites
         find_duplicate_traits_and_composites(&trait_definitions, &composite_rules, &mut warnings);

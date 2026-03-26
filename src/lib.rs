@@ -405,6 +405,8 @@ pub struct AnalysisOptions {
     pub min_hostile_precision: f32,
     /// Minimum precision threshold for suspicious composite rules
     pub min_suspicious_precision: f32,
+    /// Whether to compute precision scores and emit precision warnings while loading rules.
+    pub enable_precision_scoring: bool,
     /// Enable comprehensive validation of capability definitions
     pub enable_full_validation: bool,
     /// Maximum file size (bytes) to load into memory from archives
@@ -443,6 +445,7 @@ impl Default for AnalysisOptions {
             platforms: vec![composite_rules::Platform::All],
             min_hostile_precision: CapabilityMapper::DEFAULT_MIN_HOSTILE_PRECISION,
             min_suspicious_precision: CapabilityMapper::DEFAULT_MIN_SUSPICIOUS_PRECISION,
+            enable_precision_scoring: false,
             enable_full_validation: false,
             max_memory_file_size: 512 * 1024 * 1024, // 512 MB default
             sample_extraction: None,
@@ -1648,10 +1651,11 @@ pub fn format_diff_terminal(report: &DiffReport) -> String {
 /// Validate the configured traits directory with full validation enabled.
 pub fn validate_traits() -> Result<()> {
     let resolved = traits_repo::resolve_and_ensure().map_err(anyhow::Error::msg)?;
-    capabilities::CapabilityMapper::from_directory_with_precision_thresholds(
+    capabilities::CapabilityMapper::from_directory_with_options(
         resolved.as_path(),
         capabilities::CapabilityMapper::DEFAULT_MIN_HOSTILE_PRECISION,
         capabilities::CapabilityMapper::DEFAULT_MIN_SUSPICIOUS_PRECISION,
+        true,
         true,
     )?;
     Ok(())

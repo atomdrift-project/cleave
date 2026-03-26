@@ -152,6 +152,7 @@ pub fn run(
         platforms.clone(),
         min_hostile_precision,
         min_suspicious_precision,
+        true,
     );
 
     let prepared = prepare_test_analysis(path, file_type.clone(), &capability_mapper)?;

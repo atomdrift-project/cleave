@@ -49,6 +49,7 @@ pub(crate) fn apply_trait_defaults(
     defaults: &TraitDefaults,
     warnings: &mut Vec<String>,
     path: &std::path::Path,
+    enable_precision_scoring: bool,
 ) -> TraitDefinition {
     // Validation: require explicit for: either on trait or in file defaults.
     // Silently defaulting to [All] is not allowed — authors must be explicit about target file types.
@@ -280,8 +281,9 @@ pub(crate) fn apply_trait_defaults(
         precision: None,
     };
 
-    // Calculate and store precision immediately
-    trait_def.precision = Some(super::validation::calculate_trait_precision(&trait_def));
+    if enable_precision_scoring {
+        trait_def.precision = Some(super::validation::calculate_trait_precision(&trait_def));
+    }
 
     trait_def
 }
@@ -1829,6 +1831,7 @@ mod tests {
             &defaults,
             &mut warnings,
             std::path::Path::new("test.yaml"),
+            true,
         );
         assert!(
             warnings
@@ -1849,6 +1852,7 @@ mod tests {
             &defaults,
             &mut warnings,
             std::path::Path::new("test.yaml"),
+            true,
         );
         assert!(
             !warnings
@@ -1871,6 +1875,7 @@ mod tests {
             &defaults,
             &mut warnings,
             std::path::Path::new("test.yaml"),
+            true,
         );
         assert!(
             !warnings
@@ -1890,6 +1895,7 @@ mod tests {
             &defaults,
             &mut warnings,
             std::path::Path::new("test.yaml"),
+            true,
         );
         assert!(
             warnings
@@ -1910,6 +1916,7 @@ mod tests {
             &defaults,
             &mut warnings,
             std::path::Path::new("test.yaml"),
+            true,
         );
         assert!(
             warnings
@@ -1933,6 +1940,7 @@ mod tests {
             &defaults,
             &mut warnings,
             std::path::Path::new("test.yaml"),
+            true,
         );
         assert!(
             warnings

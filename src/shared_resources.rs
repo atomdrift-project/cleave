@@ -33,6 +33,7 @@ pub(crate) fn capability_mapper_with_options(
     let is_default = options.min_hostile_precision
         == CapabilityMapper::DEFAULT_MIN_HOSTILE_PRECISION
         && options.min_suspicious_precision == CapabilityMapper::DEFAULT_MIN_SUSPICIOUS_PRECISION
+        && !options.enable_precision_scoring
         && !options.enable_full_validation
         && options.platforms.len() == 1
         && options.platforms[0] == crate::composite_rules::Platform::All
@@ -47,10 +48,11 @@ pub(crate) fn capability_mapper_with_options(
     }
 
     Ok(Arc::new(
-        CapabilityMapper::try_new_with_precision_thresholds(
+        CapabilityMapper::try_new_with_load_options(
             options.min_hostile_precision,
             options.min_suspicious_precision,
             options.enable_full_validation,
+            options.enable_precision_scoring,
         )
         .map_err(|e| anyhow::anyhow!("failed to initialize capability mapper: {e:#}"))?
         .with_platforms(options.platforms.clone())
@@ -106,18 +108,20 @@ pub(crate) fn reload_capability_mapper() -> Result<(usize, usize), String> {
     let path = resolved.as_path();
 
     let mapper = if path.is_dir() {
-        CapabilityMapper::from_directory_with_precision_thresholds(
+        CapabilityMapper::from_directory_with_options(
             path,
             CapabilityMapper::DEFAULT_MIN_HOSTILE_PRECISION,
             CapabilityMapper::DEFAULT_MIN_SUSPICIOUS_PRECISION,
             false,
+            false,
         )
         .map_err(|e| format!("Failed to load traits from {}: {e:#}", resolved.display()))?
     } else if path.is_file() {
-        CapabilityMapper::from_yaml_with_precision_thresholds(
+        CapabilityMapper::from_yaml_with_options(
             path,
             CapabilityMapper::DEFAULT_MIN_HOSTILE_PRECISION,
             CapabilityMapper::DEFAULT_MIN_SUSPICIOUS_PRECISION,
+            false,
             false,
         )
         .map_err(|e| format!("Failed to load traits from {}: {e:#}", resolved.display()))?

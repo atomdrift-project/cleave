@@ -228,7 +228,7 @@ fn options_hash(options: &AnalysisOptions) -> String {
         .collect::<Vec<_>>()
         .join(",");
     let key = format!(
-        "v=4,3p={},yara={},r2={},upx={},plat={},hp={},sp={},fv={}",
+        "v=5,3p={},yara={},r2={},upx={},plat={},hp={},sp={},ps={},fv={}",
         options.enable_third_party_yara,
         !options.disable_yara,
         !options.disable_radare2,
@@ -236,6 +236,7 @@ fn options_hash(options: &AnalysisOptions) -> String {
         platforms_str,
         options.min_hostile_precision,
         options.min_suspicious_precision,
+        options.enable_precision_scoring,
         options.enable_full_validation,
     );
     let hash = Sha256::digest(key.as_bytes());

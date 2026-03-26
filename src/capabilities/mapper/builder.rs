@@ -18,10 +18,12 @@ impl super::CapabilityMapper {
         std::env::var("CLEAVE_SKIP_TRAITS").is_ok() || std::env::var("cleave_SKIP_TRAITS").is_ok()
     }
 
-    /// Default minimum precision for hostile composite rules
-    pub const DEFAULT_MIN_HOSTILE_PRECISION: f32 = 3.5;
-    /// Default minimum precision for suspicious composite rules
-    pub const DEFAULT_MIN_SUSPICIOUS_PRECISION: f32 = 1.9;
+    /// Default minimum precision for hostile rules.
+    /// Calibrated on 2026-03-26 to downgrade roughly the lowest 5% of hostile scores.
+    pub const DEFAULT_MIN_HOSTILE_PRECISION: f32 = 1.6;
+    /// Default minimum precision for suspicious rules.
+    /// Suspicious scores currently floor at 1.0, so 0.0 disables broad low-end downgrades.
+    pub const DEFAULT_MIN_SUSPICIOUS_PRECISION: f32 = 0.0;
 
     /// Default slow rule warning threshold in milliseconds.
     pub const DEFAULT_SLOW_RULE_MS: u64 = 4000;
@@ -112,13 +114,12 @@ impl super::CapabilityMapper {
 
     /// Create a new mapper with custom precision thresholds
     ///
-    /// Precision thresholds control which composite rules are loaded based on their
-    /// calculated precision score. Rules with precision below the threshold for their
-    /// criticality level are filtered out during loading.
+    /// Precision thresholds control which rules emit low-precision warnings when
+    /// precision scoring is enabled during loading.
     ///
     /// # Arguments
-    /// * `min_hostile_precision` - Minimum precision for HOSTILE rules (recommended: 3.5)
-    /// * `min_suspicious_precision` - Minimum precision for SUSPICIOUS rules (recommended: 1.9)
+    /// * `min_hostile_precision` - Minimum precision for HOSTILE rules (recommended: 1.6)
+    /// * `min_suspicious_precision` - Minimum precision for SUSPICIOUS rules (recommended: 0.0)
     /// * `enable_full_validation` - If true, run all validation checks
     ///
     /// This is a best-effort convenience constructor. If trait loading fails, it
@@ -131,10 +132,27 @@ impl super::CapabilityMapper {
         min_suspicious_precision: f32,
         enable_full_validation: bool,
     ) -> Self {
-        Self::try_new_with_precision_thresholds(
+        Self::new_with_load_options(
             min_hostile_precision,
             min_suspicious_precision,
             enable_full_validation,
+            false,
+        )
+    }
+
+    /// Create a new mapper with custom load options.
+    #[must_use]
+    pub fn new_with_load_options(
+        min_hostile_precision: f32,
+        min_suspicious_precision: f32,
+        enable_full_validation: bool,
+        enable_precision_scoring: bool,
+    ) -> Self {
+        Self::try_new_with_load_options(
+            min_hostile_precision,
+            min_suspicious_precision,
+            enable_full_validation,
+            enable_precision_scoring,
         )
         .unwrap_or_else(|err| {
             log_mapper_init_error(&err);
@@ -148,6 +166,21 @@ impl super::CapabilityMapper {
         min_suspicious_precision: f32,
         enable_full_validation: bool,
     ) -> anyhow::Result<Self> {
+        Self::try_new_with_load_options(
+            min_hostile_precision,
+            min_suspicious_precision,
+            enable_full_validation,
+            false,
+        )
+    }
+
+    /// Create a new mapper with custom load options.
+    pub fn try_new_with_load_options(
+        min_hostile_precision: f32,
+        min_suspicious_precision: f32,
+        enable_full_validation: bool,
+        enable_precision_scoring: bool,
+    ) -> anyhow::Result<Self> {
         if Self::skip_traits_requested() {
             return Ok(Self::empty());
         }
@@ -159,20 +192,22 @@ impl super::CapabilityMapper {
 
         if path.is_dir() {
             // Load from directory (production mode)
-            Self::from_directory_with_precision_thresholds(
+            Self::from_directory_with_options(
                 path,
                 min_hostile_precision,
                 min_suspicious_precision,
                 enable_full_validation,
+                enable_precision_scoring,
             )
             .with_context(|| format!("Failed to load traits from {}", resolved.display()))
         } else if path.is_file() {
             // Load from single YAML file (testing mode)
-            Self::from_yaml_with_precision_thresholds(
+            Self::from_yaml_with_options(
                 path,
                 min_hostile_precision,
                 min_suspicious_precision,
                 enable_full_validation,
+                enable_precision_scoring,
             )
             .context("Failed to load capabilities from YAML file")
         } else {

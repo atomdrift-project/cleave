@@ -232,8 +232,13 @@ fn test_apply_trait_defaults_applies_all_defaults() {
         entropy_max: None,
     };
 
-    let result =
-        parsing::apply_trait_defaults(raw, &defaults, &mut Vec::new(), Path::new("test.yaml"));
+    let result = parsing::apply_trait_defaults(
+        raw,
+        &defaults,
+        &mut Vec::new(),
+        Path::new("test.yaml"),
+        true,
+    );
 
     assert_eq!(result.conf, 0.85);
     assert_eq!(result.crit, Criticality::Suspicious);
@@ -302,8 +307,13 @@ fn test_apply_trait_defaults_trait_overrides_defaults() {
         entropy_max: None,
     };
 
-    let result =
-        parsing::apply_trait_defaults(raw, &defaults, &mut Vec::new(), Path::new("test.yaml"));
+    let result = parsing::apply_trait_defaults(
+        raw,
+        &defaults,
+        &mut Vec::new(),
+        Path::new("test.yaml"),
+        true,
+    );
 
     assert_eq!(result.conf, 0.99);
     // Atomic traits cannot be HOSTILE, so they get downgraded to SUSPICIOUS
@@ -369,8 +379,13 @@ fn test_apply_trait_defaults_unset_mbc_with_none() {
         entropy_max: None,
     };
 
-    let result =
-        parsing::apply_trait_defaults(raw, &defaults, &mut Vec::new(), Path::new("test.yaml"));
+    let result = parsing::apply_trait_defaults(
+        raw,
+        &defaults,
+        &mut Vec::new(),
+        Path::new("test.yaml"),
+        true,
+    );
 
     assert_eq!(result.mbc, None); // Unset despite default
     assert_eq!(result.attack, Some("T1059".to_string())); // Default applied
@@ -431,8 +446,13 @@ fn test_apply_trait_defaults_unset_attack_with_none() {
         entropy_max: None,
     };
 
-    let result =
-        parsing::apply_trait_defaults(raw, &defaults, &mut Vec::new(), Path::new("test.yaml"));
+    let result = parsing::apply_trait_defaults(
+        raw,
+        &defaults,
+        &mut Vec::new(),
+        Path::new("test.yaml"),
+        true,
+    );
 
     assert_eq!(result.mbc, Some("B0001".to_string())); // Default applied
     assert_eq!(result.attack, None); // Unset despite default
@@ -493,8 +513,13 @@ fn test_apply_trait_defaults_unset_file_types_with_none() {
         entropy_max: None,
     };
 
-    let result =
-        parsing::apply_trait_defaults(raw, &defaults, &mut Vec::new(), Path::new("test.yaml"));
+    let result = parsing::apply_trait_defaults(
+        raw,
+        &defaults,
+        &mut Vec::new(),
+        Path::new("test.yaml"),
+        true,
+    );
 
     // When unset, file_types defaults to [All]
     assert_eq!(result.r#for, vec![RuleFileType::All]);
@@ -561,6 +586,7 @@ fn test_apply_trait_defaults_size_and_entropy_from_defaults() {
         &defaults,
         &mut Vec::new(),
         Path::new("test.yaml"),
+        true,
     );
     assert_eq!(result.size_min, Some(4096));
     assert_eq!(result.size_max, Some(52_428_800));
@@ -612,6 +638,7 @@ fn test_apply_trait_defaults_size_and_entropy_from_defaults() {
         &defaults,
         &mut Vec::new(),
         Path::new("test.yaml"),
+        true,
     );
     assert_eq!(result.size_min, Some(512));
     assert_eq!(result.size_max, Some(1_048_576));
@@ -808,6 +835,7 @@ traits:
         &mappings.defaults,
         &mut Vec::new(),
         Path::new("test.yaml"),
+        true,
     );
     assert_eq!(t1.mbc, Some("B0001".to_string()));
     assert_eq!(t1.attack, Some("T1059".to_string()));
@@ -1967,21 +1995,22 @@ fn test_precision_threshold_validation() {
     // Precalculate precision before validation
     validation::precalculate_all_composite_precisions(&mut composites, &traits);
 
-    // Run validation
+    let mut warnings = Vec::new();
     validation::validate_hostile_composite_precision(
         &mut composites,
         &traits,
-        &mut Vec::new(),
+        &mut warnings,
         4.0,
         2.0,
     );
 
-    // Check that low precision was downgraded
+    // Check that low precision emitted a warning without changing criticality
     let low_rule = composites
         .iter()
         .find(|r| r.id == "test/low-precision")
         .unwrap();
-    assert_eq!(low_rule.crit, Criticality::Suspicious);
+    assert_eq!(low_rule.crit, Criticality::Hostile);
+    assert!(warnings.iter().any(|w| w.contains("test/low-precision")));
 
     // Check that high precision was NOT downgraded
     let high_rule = composites
@@ -2115,21 +2144,26 @@ fn test_suspicious_precision_threshold_validation() {
     // Precalculate precision before validation
     validation::precalculate_all_composite_precisions(&mut composites, &traits);
 
-    // Run validation
+    let mut warnings = Vec::new();
     validation::validate_hostile_composite_precision(
         &mut composites,
         &traits,
-        &mut Vec::new(),
+        &mut warnings,
         4.0,
         1.9,
     );
 
-    // Check that low precision suspicious rule was downgraded
+    // Check that low precision suspicious rule emitted a warning without changing criticality
     let low_rule = composites
         .iter()
         .find(|r| r.id == "test/suspicious-low-precision")
         .unwrap();
-    assert_eq!(low_rule.crit, Criticality::Notable);
+    assert_eq!(low_rule.crit, Criticality::Suspicious);
+    assert!(
+        warnings
+            .iter()
+            .any(|w| w.contains("test/suspicious-low-precision"))
+    );
 
     // Check that sufficient precision suspicious rule was NOT downgraded
     let ok_rule = composites
@@ -2225,13 +2259,15 @@ fn test_atomic_suspicious_precision_threshold_validation() {
     };
 
     let mut traits = vec![low_trait, ok_trait];
-    validation::validate_hostile_trait_precision(&mut traits, &mut Vec::new(), 3.5, 1.9);
+    let mut warnings = Vec::new();
+    validation::validate_hostile_trait_precision(&mut traits, &mut warnings, 3.5, 1.9);
 
     let low_trait = traits
         .iter()
         .find(|t| t.id == "test/atomic-suspicious-low")
         .unwrap();
-    assert_eq!(low_trait.crit, Criticality::Notable);
+    assert_eq!(low_trait.crit, Criticality::Suspicious);
+    assert!(warnings.iter().any(|w| w.contains("test/atomic-suspicious-low")));
 
     let ok_trait = traits
         .iter()

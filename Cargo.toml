@@ -259,3 +259,6 @@ opt-level = 3
 
 [profile.dev.package.regalloc2]
 opt-level = 3
+
+[patch."https://codeberg.org/atomdrift/stng.git"]
+stng = { path = "../stng" }

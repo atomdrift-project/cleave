@@ -65,20 +65,39 @@ impl super::CapabilityMapper {
     /// Load capability mappings from directory of YAML files (recursively)
     #[allow(dead_code)] // Used in tests
     pub(crate) fn from_directory<P: AsRef<Path>>(dir_path: P) -> Result<Self> {
-        Self::from_directory_with_precision_thresholds(
+        Self::from_directory_with_options(
             dir_path,
             Self::DEFAULT_MIN_HOSTILE_PRECISION,
             Self::DEFAULT_MIN_SUSPICIOUS_PRECISION,
             true,
+            false,
         )
     }
 
     /// Load capability mappings from a directory of YAML files with explicit precision thresholds
+    #[allow(dead_code)] // Compatibility wrapper used by tests and targeted call sites
     pub(crate) fn from_directory_with_precision_thresholds<P: AsRef<Path>>(
         dir_path: P,
         min_hostile_precision: f32,
         min_suspicious_precision: f32,
         enable_full_validation: bool,
+    ) -> Result<Self> {
+        Self::from_directory_with_options(
+            dir_path,
+            min_hostile_precision,
+            min_suspicious_precision,
+            enable_full_validation,
+            false,
+        )
+    }
+
+    /// Load capability mappings from a directory of YAML files with explicit load options.
+    pub(crate) fn from_directory_with_options<P: AsRef<Path>>(
+        dir_path: P,
+        min_hostile_precision: f32,
+        min_suspicious_precision: f32,
+        enable_full_validation: bool,
+        enable_precision_scoring: bool,
     ) -> Result<Self> {
         let _span = tracing::info_span!("load_capabilities").entered();
         let debug = std::env::var("CLEAVE_DEBUG").is_ok();
@@ -441,6 +460,7 @@ impl super::CapabilityMapper {
                     &mappings.defaults,
                     &mut parsing_warnings,
                     &path,
+                    enable_precision_scoring,
                 );
 
                 // Auto-prefix trait ID if it doesn't already have the path prefix
@@ -891,21 +911,31 @@ impl super::CapabilityMapper {
         // Track whether any fatal errors occurred (for deferred exit)
         let mut has_fatal_errors = false;
 
-        // Apply precision-based criticality downgrades on every load.
-        validate_hostile_trait_precision(
-            &mut trait_definitions,
-            &mut warnings,
-            min_hostile_precision,
-            min_suspicious_precision,
-        );
-        precalculate_all_composite_precisions(&mut composite_rules, &trait_definitions);
-        validate_hostile_composite_precision(
-            &mut composite_rules,
-            &trait_definitions,
-            &mut warnings,
-            min_hostile_precision,
-            min_suspicious_precision,
-        );
+        if enable_precision_scoring {
+            let precision_warning_start = warnings.len();
+
+            validate_hostile_trait_precision(
+                &mut trait_definitions,
+                &mut warnings,
+                min_hostile_precision,
+                min_suspicious_precision,
+            );
+            precalculate_all_composite_precisions(&mut composite_rules, &trait_definitions);
+            validate_hostile_composite_precision(
+                &mut composite_rules,
+                &trait_definitions,
+                &mut warnings,
+                min_hostile_precision,
+                min_suspicious_precision,
+            );
+
+            if !enable_full_validation {
+                for warning in &warnings[precision_warning_start..] {
+                    eprintln!("Warning: {}", warning);
+                }
+                warnings.truncate(precision_warning_start);
+            }
+        }
 
         // Pre-calculate precision for ALL composite rules once
         // Atomic trait precisions are already calculated during parsing

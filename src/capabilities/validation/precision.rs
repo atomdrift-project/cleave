@@ -1037,12 +1037,10 @@ pub(crate) fn precalculate_all_composite_precisions(
     }
 }
 
-/// Validate and downgrade composite rules that don't meet precision requirements.
+/// Validate composite rules that don't meet precision requirements and emit warnings.
 ///
-/// - HOSTILE must have precision >= min_hostile_precision, else downgraded to SUSPICIOUS.
-/// - SUSPICIOUS must have precision >= min_suspicious_precision, else downgraded to NOTABLE.
-///
-/// Warnings are logged but NOT fatal - rules are silently downgraded to maintain safety.
+/// - HOSTILE must have precision >= min_hostile_precision, else a warning is emitted.
+/// - SUSPICIOUS must have precision >= min_suspicious_precision, else a warning is emitted.
 ///
 /// IMPORTANT: Call precalculate_all_composite_precisions() first!
 /// This function expects all precisions to already be calculated and stored.
@@ -1067,42 +1065,38 @@ pub(crate) fn validate_hostile_composite_precision(
 
         match rule.crit {
             Criticality::Hostile if precision < min_hostile_precision => {
-                // Log non-fatal warning and downgrade
                 tracing::debug!(
-                    "Downgrading '{}' from HOSTILE to SUSPICIOUS (precision {:.1} < {:.1})",
+                    "Low-precision composite '{}' at HOSTILE (precision {:.1} < {:.1})",
                     rule.id,
                     precision,
                     min_hostile_precision
                 );
                 warnings.push(format!(
-                    "precision downgrade: composite '{}' HOSTILE -> SUSPICIOUS (precision {:.1} < {:.1})",
+                    "precision warning: composite '{}' HOSTILE score {:.1} < {:.1}",
                     rule.id, precision, min_hostile_precision
                 ));
-                rule.crit = Criticality::Suspicious;
             }
             Criticality::Suspicious if precision < min_suspicious_precision => {
-                // Log non-fatal warning and downgrade
                 tracing::debug!(
-                    "Downgrading '{}' from SUSPICIOUS to NOTABLE (precision {:.1} < {:.1})",
+                    "Low-precision composite '{}' at SUSPICIOUS (precision {:.1} < {:.1})",
                     rule.id,
                     precision,
                     min_suspicious_precision
                 );
                 warnings.push(format!(
-                    "precision downgrade: composite '{}' SUSPICIOUS -> NOTABLE (precision {:.1} < {:.1})",
+                    "precision warning: composite '{}' SUSPICIOUS score {:.1} < {:.1}",
                     rule.id, precision, min_suspicious_precision
                 ));
-                rule.crit = Criticality::Notable;
             }
             _ => {}
         }
     }
 }
 
-/// Validate and downgrade atomic traits that don't meet precision requirements.
+/// Validate atomic traits that don't meet precision requirements and emit warnings.
 ///
-/// - HOSTILE must have precision >= min_hostile_precision, else downgraded to SUSPICIOUS.
-/// - SUSPICIOUS must have precision >= min_suspicious_precision, else downgraded to NOTABLE.
+/// - HOSTILE must have precision >= min_hostile_precision, else a warning is emitted.
+/// - SUSPICIOUS must have precision >= min_suspicious_precision, else a warning is emitted.
 pub(crate) fn validate_hostile_trait_precision(
     trait_definitions: &mut [TraitDefinition],
     warnings: &mut Vec<String>,
@@ -1122,29 +1116,27 @@ pub(crate) fn validate_hostile_trait_precision(
         match trait_def.crit {
             Criticality::Hostile if precision < min_hostile_precision => {
                 tracing::debug!(
-                    "Downgrading atomic '{}' from HOSTILE to SUSPICIOUS (precision {:.1} < {:.1})",
+                    "Low-precision atomic '{}' at HOSTILE (precision {:.1} < {:.1})",
                     trait_def.id,
                     precision,
                     min_hostile_precision
                 );
                 warnings.push(format!(
-                    "precision downgrade: atomic '{}' HOSTILE -> SUSPICIOUS (precision {:.1} < {:.1})",
+                    "precision warning: atomic '{}' HOSTILE score {:.1} < {:.1}",
                     trait_def.id, precision, min_hostile_precision
                 ));
-                trait_def.crit = Criticality::Suspicious;
             }
             Criticality::Suspicious if precision < min_suspicious_precision => {
                 tracing::debug!(
-                    "Downgrading atomic '{}' from SUSPICIOUS to NOTABLE (precision {:.1} < {:.1})",
+                    "Low-precision atomic '{}' at SUSPICIOUS (precision {:.1} < {:.1})",
                     trait_def.id,
                     precision,
                     min_suspicious_precision
                 );
                 warnings.push(format!(
-                    "precision downgrade: atomic '{}' SUSPICIOUS -> NOTABLE (precision {:.1} < {:.1})",
+                    "precision warning: atomic '{}' SUSPICIOUS score {:.1} < {:.1}",
                     trait_def.id, precision, min_suspicious_precision
                 ));
-                trait_def.crit = Criticality::Notable;
             }
             _ => {}
         }

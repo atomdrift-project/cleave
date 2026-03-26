@@ -115,6 +115,7 @@ pub fn run(config: &AnalyzeConfig<'_>) -> Result<String> {
         platforms: platforms_lib,
         min_hostile_precision: config.min_hostile_precision,
         min_suspicious_precision: config.min_suspicious_precision,
+        enable_precision_scoring: false,
         enable_full_validation: config.enable_full_validation,
         max_memory_file_size: config.max_memory_file_size,
         sample_extraction: sample_lib,

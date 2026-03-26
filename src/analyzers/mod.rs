@@ -337,77 +337,88 @@ pub trait Analyzer {
 #[must_use]
 pub(crate) fn detect_file_type_from_path(file_path: &Path) -> FileType {
     // Check by filename first (for manifest files)
-    if let Some(file_name) = file_path.file_name() {
-        let name = file_name.to_string_lossy().to_lowercase();
-        if name == "package.json" {
+    if let Some(file_name) = file_path.file_name().and_then(|n| n.to_str()) {
+        if file_name.eq_ignore_ascii_case("package.json") {
             return FileType::PackageJson;
         }
-        if name == "composer.json" {
+        if file_name.eq_ignore_ascii_case("composer.json") {
             return FileType::ComposerJson;
         }
-        if name == "cargo.toml" {
+        if file_name.eq_ignore_ascii_case("cargo.toml") {
             return FileType::CargoToml;
         }
-        if name == "pyproject.toml" {
+        if file_name.eq_ignore_ascii_case("pyproject.toml") {
             return FileType::PyProjectToml;
         }
-        if name == "pkg-info" || name == "metadata" {
+        if file_name.eq_ignore_ascii_case("pkg-info") || file_name.eq_ignore_ascii_case("metadata") {
             return FileType::PkgInfo;
         }
         // Note: manifest.json detection requires content inspection for Chrome manifests,
         // so we can't reliably detect ChromeManifest from path alone - it will be detected
         // during content-based analysis if the file is read
-        if name == "extension.vsixmanifest" || name.ends_with(".vsixmanifest") {
+        if file_name.eq_ignore_ascii_case("extension.vsixmanifest") || (file_name.len() >= 13 && file_name[file_name.len() - 13..].eq_ignore_ascii_case(".vsixmanifest")) {
             return FileType::VsixManifest;
         }
         // GitHub Actions composite action manifests (action.yml / action.yaml at any path depth)
-        if name == "action.yml" || name == "action.yaml" {
+        if file_name.eq_ignore_ascii_case("action.yml") || file_name.eq_ignore_ascii_case("action.yaml") {
             return FileType::GithubActions;
         }
     }
 
     // Check for GitHub Actions workflow files
-    let path_str_lower = file_path.to_string_lossy().to_lowercase();
-    if (path_str_lower.contains(".github/workflows/")
-        || path_str_lower.contains(".github\\workflows\\"))
-        && (path_str_lower.ends_with(".yml") || path_str_lower.ends_with(".yaml"))
+    let path_str = file_path.to_string_lossy();
+    let path_bytes = path_str.as_bytes();
+    
+    let ends_with_ci = |ext: &[u8]| -> bool {
+        if path_bytes.len() < ext.len() {
+            return false;
+        }
+        path_bytes[path_bytes.len() - ext.len()..].eq_ignore_ascii_case(ext)
+    };
+
+    if (path_str.contains(".github/workflows/") || path_str.contains(".github\\workflows\\"))
+        && (ends_with_ci(b".yml") || ends_with_ci(b".yaml"))
     {
         return FileType::GithubActions;
     }
 
     // Check archives by path pattern
-    let path_str = file_path.to_string_lossy().to_lowercase();
-    if path_str.ends_with(".jar") || path_str.ends_with(".war") || path_str.ends_with(".ear") {
+    if ends_with_ci(b".jar") || ends_with_ci(b".war") || ends_with_ci(b".ear") {
         return FileType::Jar;
     }
-    if path_str.ends_with(".tar.gz")
-        || path_str.ends_with(".tgz")
-        || path_str.ends_with(".tar.bz2")
-        || path_str.ends_with(".tar.xz")
-        || path_str.ends_with(".tar.zst")
-        || path_str.ends_with(".tar")
+    if ends_with_ci(b".tar.gz")
+        || ends_with_ci(b".tgz")
+        || ends_with_ci(b".tar.bz2")
+        || ends_with_ci(b".tar.xz")
+        || ends_with_ci(b".tar.zst")
+        || ends_with_ci(b".tar")
     {
         return FileType::Archive;
     }
 
-    if let Some(ext) = file_path.extension() {
-        let ext_str = ext.to_str().unwrap_or("").to_lowercase();
-        match ext_str.as_str() {
-            "sh" | "bash" | "ksh" | "zsh" | "csh" | "tcsh" | "dash" => return FileType::Shell,
-            "py" => return FileType::Python,
-            "js" | "mjs" | "cjs" | "jsx" => return FileType::JavaScript,
-            "ts" | "tsx" | "mts" | "cts" => return FileType::TypeScript,
-            // Erlang source/header files are text, but we don't have a dedicated analyzer.
-            // Mark them known here so they don't fall through to JavaScript heuristics.
-            "erl" | "hrl" => return FileType::Unknown,
-            "go" => return FileType::Go,
-            "rs" => return FileType::Rust,
-            "java" => return FileType::Java,
-            "pyc" => return FileType::PythonBytecode,
-            "rb" | "rbs" => return FileType::Ruby,
-            "php" => return FileType::Php,
-            "pl" | "pm" | "t" => return FileType::Perl,
-            "ps1" | "psm1" | "psd1" => return FileType::PowerShell,
+    if let Some(ext) = file_path.extension().and_then(|e| e.to_str()) {
+        let mut ext_buf = [0u8; 16];
+        if ext.len() < ext_buf.len() {
+            ext_buf[..ext.len()].copy_from_slice(ext.as_bytes());
+            ext_buf[..ext.len()].make_ascii_lowercase();
+            let ext_lower = std::str::from_utf8(&ext_buf[..ext.len()]).unwrap_or("");
+            
+            match ext_lower {
+                "sh" | "bash" | "ksh" | "zsh" | "csh" | "tcsh" | "dash" => return FileType::Shell,
+                "py" => return FileType::Python,
+                "js" | "mjs" | "cjs" | "jsx" => return FileType::JavaScript,
+                "ts" | "tsx" | "mts" | "cts" => return FileType::TypeScript,
+                // Erlang source/header files are text, but we don't have a dedicated analyzer.
+                // Mark them known here so they don't fall through to JavaScript heuristics.
+                "erl" | "hrl" => return FileType::Unknown,
+                "go" => return FileType::Go,
+                "rs" => return FileType::Rust,
+                "java" => return FileType::Java,
+                "pyc" => return FileType::PythonBytecode,
+                "rb" | "rbs" => return FileType::Ruby,
+                "php" => return FileType::Php,
+                "pl" | "pm" | "t" => return FileType::Perl,
+                "ps1" | "psm1" | "psd1" => return FileType::PowerShell,
             "bat" | "cmd" => return FileType::Batch,
             "vbs" | "vbe" | "wsf" | "wsc" => return FileType::Vbs,
             "c" | "h" | "cpp" | "hpp" | "cc" | "cxx" | "hxx" | "hh" | "pas" | "dpr" => {
@@ -437,6 +448,7 @@ pub(crate) fn detect_file_type_from_path(file_path: &Path) -> FileType {
             "html" | "htm" => return FileType::Html,
             "md" | "markdown" => return FileType::Markdown,
             _ => {}
+            }
         }
     }
 

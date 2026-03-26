@@ -313,7 +313,7 @@ impl super::CapabilityMapper {
             let Condition::Basename {
                 ref exact,
                 ref substr,
-                ref regex,
+                regex: _,
                 case_insensitive,
                 is_check: _,
                 ref compiled_regex,
@@ -347,15 +347,6 @@ impl super::CapabilityMapper {
                     cmp_base.contains(s.as_str())
                 } else if let Some(re) = compiled_regex {
                     re.is_match(basename)
-                } else if let Some(ref re_str) = regex {
-                    let pat = if case_insensitive {
-                        format!("(?i){re_str}")
-                    } else {
-                        re_str.clone()
-                    };
-                    regex::Regex::new(&pat)
-                        .map(|re| re.is_match(basename))
-                        .unwrap_or(false)
                 } else {
                     false
                 };

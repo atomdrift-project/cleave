@@ -100,29 +100,38 @@ pub(crate) fn is_benign_java_path(path: &Path) -> bool {
         || path_str.contains("/com/ibm/")
 }
 
+fn ends_with_ci(path_bytes: &[u8], ext: &[u8]) -> bool {
+    if path_bytes.len() < ext.len() {
+        return false;
+    }
+    let suffix = &path_bytes[path_bytes.len() - ext.len()..];
+    suffix.eq_ignore_ascii_case(ext)
+}
+
 /// Detect TAR compression type from file extension.
 /// Returns Some("gzip"), Some("bzip2"), Some("xz"), Some("zstd"), or None for plain tar.
 #[allow(dead_code)] // Used by binary target
 pub(crate) fn detect_tar_compression(path: &Path) -> Option<String> {
-    let path_str = path.to_string_lossy().to_lowercase();
+    let path_str = path.to_string_lossy();
+    let path_bytes = path_str.as_bytes();
 
-    if path_str.ends_with(".tar.gz")
-        || path_str.ends_with(".tgz")
-        || path_str.ends_with(".crate")
-        || path_str.ends_with(".apk")
+    if ends_with_ci(path_bytes, b".tar.gz")
+        || ends_with_ci(path_bytes, b".tgz")
+        || ends_with_ci(path_bytes, b".crate")
+        || ends_with_ci(path_bytes, b".apk")
     // Alpine APK (gzipped tar)
     {
         Some("gzip".to_string())
-    } else if path_str.ends_with(".tar.bz2")
-        || path_str.ends_with(".tbz2")
-        || path_str.ends_with(".tbz")
+    } else if ends_with_ci(path_bytes, b".tar.bz2")
+        || ends_with_ci(path_bytes, b".tbz2")
+        || ends_with_ci(path_bytes, b".tbz")
     {
         Some("bzip2".to_string())
-    } else if path_str.ends_with(".tar.xz") || path_str.ends_with(".txz") {
+    } else if ends_with_ci(path_bytes, b".tar.xz") || ends_with_ci(path_bytes, b".txz") {
         Some("xz".to_string())
-    } else if path_str.ends_with(".tar.zst")
-        || path_str.ends_with(".tzst")
-        || path_str.ends_with(".xbps")
+    } else if ends_with_ci(path_bytes, b".tar.zst")
+        || ends_with_ci(path_bytes, b".tzst")
+        || ends_with_ci(path_bytes, b".xbps")
     {
         Some("zstd".to_string())
     } else {
@@ -132,82 +141,83 @@ pub(crate) fn detect_tar_compression(path: &Path) -> Option<String> {
 
 /// Detect archive type from file extension
 pub(crate) fn detect_archive_type(path: &Path) -> &'static str {
-    let path_str = path.to_string_lossy().to_lowercase();
+    let path_str = path.to_string_lossy();
+    let path_bytes = path_str.as_bytes();
 
     // Arch Linux packages (must check before generic .tar.* patterns)
-    if path_str.ends_with(".pkg.tar.zst") {
+    if ends_with_ci(path_bytes, b".pkg.tar.zst") {
         return "tar.zst";
-    } else if path_str.ends_with(".pkg.tar.xz") {
+    } else if ends_with_ci(path_bytes, b".pkg.tar.xz") {
         return "tar.xz";
-    } else if path_str.ends_with(".pkg.tar.gz") {
+    } else if ends_with_ci(path_bytes, b".pkg.tar.gz") {
         return "tar.gz";
     }
 
-    if path_str.ends_with(".tar.gz") {
+    if ends_with_ci(path_bytes, b".tar.gz") {
         "tar.gz"
-    } else if path_str.ends_with(".tgz") {
+    } else if ends_with_ci(path_bytes, b".tgz") {
         "tgz"
-    } else if path_str.ends_with(".tar.bz2") {
+    } else if ends_with_ci(path_bytes, b".tar.bz2") {
         "tar.bz2"
-    } else if path_str.ends_with(".tbz2") || path_str.ends_with(".tbz") {
+    } else if ends_with_ci(path_bytes, b".tbz2") || ends_with_ci(path_bytes, b".tbz") {
         "tbz"
-    } else if path_str.ends_with(".tar.xz") {
+    } else if ends_with_ci(path_bytes, b".tar.xz") {
         "tar.xz"
-    } else if path_str.ends_with(".txz") {
+    } else if ends_with_ci(path_bytes, b".txz") {
         "txz"
-    } else if path_str.ends_with(".tar.zst") || path_str.ends_with(".tzst") {
+    } else if ends_with_ci(path_bytes, b".tar.zst") || ends_with_ci(path_bytes, b".tzst") {
         "tar.zst"
-    } else if path_str.ends_with(".xbps") {
+    } else if ends_with_ci(path_bytes, b".xbps") {
         // Void Linux packages - zstd-compressed tar
         "tar.zst"
-    } else if path_str.ends_with(".tar") {
+    } else if ends_with_ci(path_bytes, b".tar") {
         "tar"
-    } else if path_str.ends_with(".zip")
-        || path_str.ends_with(".jar")
-        || path_str.ends_with(".war")
-        || path_str.ends_with(".ear")
-        || path_str.ends_with(".aar")
-        || path_str.ends_with(".egg")
-        || path_str.ends_with(".whl")
-        || path_str.ends_with(".phar")
-        || path_str.ends_with(".nupkg")
-        || path_str.ends_with(".vsix")
-        || path_str.ends_with(".xpi")
-        || path_str.ends_with(".ipa")
-        || path_str.ends_with(".epub")
+    } else if ends_with_ci(path_bytes, b".zip")
+        || ends_with_ci(path_bytes, b".jar")
+        || ends_with_ci(path_bytes, b".war")
+        || ends_with_ci(path_bytes, b".ear")
+        || ends_with_ci(path_bytes, b".aar")
+        || ends_with_ci(path_bytes, b".egg")
+        || ends_with_ci(path_bytes, b".whl")
+        || ends_with_ci(path_bytes, b".phar")
+        || ends_with_ci(path_bytes, b".nupkg")
+        || ends_with_ci(path_bytes, b".vsix")
+        || ends_with_ci(path_bytes, b".xpi")
+        || ends_with_ci(path_bytes, b".ipa")
+        || ends_with_ci(path_bytes, b".epub")
     {
         "zip"
-    } else if path_str.ends_with(".apk") {
+    } else if ends_with_ci(path_bytes, b".apk") {
         // Could be Android APK (zip) or Alpine APK (tar.gz)
         // Default to "apk", use detect_archive_type_with_magic to resolve
         "apk"
-    } else if path_str.ends_with(".crx") {
+    } else if ends_with_ci(path_bytes, b".crx") {
         "crx"
-    } else if path_str.ends_with(".7z") {
+    } else if ends_with_ci(path_bytes, b".7z") {
         "7z"
-    } else if path_str.ends_with(".gem") {
+    } else if ends_with_ci(path_bytes, b".gem") {
         "tar"
-    } else if path_str.ends_with(".crate") {
+    } else if ends_with_ci(path_bytes, b".crate") {
         "tar.gz"
-    } else if path_str.ends_with(".xz") {
+    } else if ends_with_ci(path_bytes, b".xz") {
         "xz"
-    } else if path_str.ends_with(".gz") {
+    } else if ends_with_ci(path_bytes, b".gz") {
         "gz"
-    } else if path_str.ends_with(".zst") {
+    } else if ends_with_ci(path_bytes, b".zst") {
         "zst"
-    } else if path_str.ends_with(".bz2") {
+    } else if ends_with_ci(path_bytes, b".bz2") {
         "bz2"
-    } else if path_str.ends_with(".deb") {
+    } else if ends_with_ci(path_bytes, b".deb") {
         "deb"
-    } else if path_str.ends_with(".rpm") {
+    } else if ends_with_ci(path_bytes, b".rpm") {
         "rpm"
-    } else if path_str.ends_with(".pkg") {
+    } else if ends_with_ci(path_bytes, b".pkg") {
         // Could be macOS PKG (xar) or FreeBSD pkg (tar.xz)
         // Default to "pkg", use detect_archive_type_with_magic to resolve
         "pkg"
-    } else if path_str.ends_with(".rar") {
+    } else if ends_with_ci(path_bytes, b".rar") {
         "rar"
-    } else if path_str.ends_with(".cab") {
+    } else if ends_with_ci(path_bytes, b".cab") {
         "cab"
     } else {
         "unknown"

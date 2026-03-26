@@ -765,11 +765,15 @@ impl ArchiveAnalyzer {
         });
 
         // Check if this is a JAR-like archive
-        let is_jar = file_path.to_string_lossy().to_lowercase().ends_with(".jar")
-            || file_path.to_string_lossy().to_lowercase().ends_with(".war")
-            || file_path.to_string_lossy().to_lowercase().ends_with(".ear")
-            || file_path.to_string_lossy().to_lowercase().ends_with(".apk")
-            || file_path.to_string_lossy().to_lowercase().ends_with(".aar");
+        let ext = file_path
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("");
+        let is_jar = ext.eq_ignore_ascii_case("jar")
+            || ext.eq_ignore_ascii_case("war")
+            || ext.eq_ignore_ascii_case("ear")
+            || ext.eq_ignore_ascii_case("apk")
+            || ext.eq_ignore_ascii_case("aar");
 
         if is_jar {
             self.analyze_jar_archive(temp_dir.path(), &mut report, start)?;
@@ -889,48 +893,58 @@ impl Analyzer for ArchiveAnalyzer {
     }
 
     fn can_analyze(&self, file_path: &Path) -> bool {
-        let path_str = file_path.to_string_lossy().to_lowercase();
-        path_str.ends_with(".zip")
-            || path_str.ends_with(".jar")
-            || path_str.ends_with(".war")
-            || path_str.ends_with(".ear")
-            || path_str.ends_with(".apk") // Android APK or Alpine APK (detected by magic)
-            || path_str.ends_with(".aar")
-            || path_str.ends_with(".egg")
-            || path_str.ends_with(".whl")
-            || path_str.ends_with(".phar")
-            || path_str.ends_with(".nupkg")
-            || path_str.ends_with(".vsix")
-            || path_str.ends_with(".xpi")
-            || path_str.ends_with(".crx")
-            || path_str.ends_with(".ipa")
-            || path_str.ends_with(".epub")
-            || path_str.ends_with(".gem")
-            || path_str.ends_with(".crate")
-            || path_str.ends_with(".tar")
-            || path_str.ends_with(".tar.gz")
-            || path_str.ends_with(".tgz")
-            || path_str.ends_with(".tar.bz2")
-            || path_str.ends_with(".tbz2")
-            || path_str.ends_with(".tbz")
-            || path_str.ends_with(".tar.xz")
-            || path_str.ends_with(".txz")
-            || path_str.ends_with(".tar.zst") // Zstd-compressed tar
-            || path_str.ends_with(".tzst")
-            || path_str.ends_with(".pkg.tar.zst") // Arch Linux packages
-            || path_str.ends_with(".pkg.tar.xz")
-            || path_str.ends_with(".pkg.tar.gz")
-            || path_str.ends_with(".xbps") // Void Linux packages
-            || (path_str.ends_with(".xz") && !path_str.ends_with(".tar.xz"))
-            || (path_str.ends_with(".gz") && !path_str.ends_with(".tar.gz"))
-            || (path_str.ends_with(".zst") && !path_str.ends_with(".tar.zst"))
-            || (path_str.ends_with(".bz2") && !path_str.ends_with(".tar.bz2"))
-            || path_str.ends_with(".deb")
-            || path_str.ends_with(".rpm")
-            || path_str.ends_with(".pkg") // macOS PKG or FreeBSD pkg (detected by magic)
-            || path_str.ends_with(".rar")
-            || path_str.ends_with(".7z")
-            || path_str.ends_with(".cab")
+        let path_str = file_path.to_string_lossy();
+        let path_bytes = path_str.as_bytes();
+        
+        let ends_with_ci = |ext: &[u8]| -> bool {
+            if path_bytes.len() < ext.len() {
+                return false;
+            }
+            let suffix = &path_bytes[path_bytes.len() - ext.len()..];
+            suffix.eq_ignore_ascii_case(ext)
+        };
+
+        ends_with_ci(b".zip")
+            || ends_with_ci(b".jar")
+            || ends_with_ci(b".war")
+            || ends_with_ci(b".ear")
+            || ends_with_ci(b".apk") // Android APK or Alpine APK (detected by magic)
+            || ends_with_ci(b".aar")
+            || ends_with_ci(b".egg")
+            || ends_with_ci(b".whl")
+            || ends_with_ci(b".phar")
+            || ends_with_ci(b".nupkg")
+            || ends_with_ci(b".vsix")
+            || ends_with_ci(b".xpi")
+            || ends_with_ci(b".crx")
+            || ends_with_ci(b".ipa")
+            || ends_with_ci(b".epub")
+            || ends_with_ci(b".gem")
+            || ends_with_ci(b".crate")
+            || ends_with_ci(b".tar")
+            || ends_with_ci(b".tar.gz")
+            || ends_with_ci(b".tgz")
+            || ends_with_ci(b".tar.bz2")
+            || ends_with_ci(b".tbz2")
+            || ends_with_ci(b".tbz")
+            || ends_with_ci(b".tar.xz")
+            || ends_with_ci(b".txz")
+            || ends_with_ci(b".tar.zst") // Zstd-compressed tar
+            || ends_with_ci(b".tzst")
+            || ends_with_ci(b".pkg.tar.zst") // Arch Linux packages
+            || ends_with_ci(b".pkg.tar.xz")
+            || ends_with_ci(b".pkg.tar.gz")
+            || ends_with_ci(b".xbps") // Void Linux packages
+            || (ends_with_ci(b".xz") && !ends_with_ci(b".tar.xz"))
+            || (ends_with_ci(b".gz") && !ends_with_ci(b".tar.gz"))
+            || (ends_with_ci(b".zst") && !ends_with_ci(b".tar.zst"))
+            || (ends_with_ci(b".bz2") && !ends_with_ci(b".tar.bz2"))
+            || ends_with_ci(b".deb")
+            || ends_with_ci(b".rpm")
+            || ends_with_ci(b".pkg") // macOS PKG or FreeBSD pkg (detected by magic)
+            || ends_with_ci(b".rar")
+            || ends_with_ci(b".7z")
+            || ends_with_ci(b".cab")
     }
 }
 

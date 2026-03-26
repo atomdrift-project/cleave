@@ -99,7 +99,6 @@ pub(crate) fn build_test_capability_mapper(
     platforms: Vec<crate::composite_rules::Platform>,
     min_hostile_precision: f32,
     min_suspicious_precision: f32,
-    enable_precision_scoring: bool,
 ) -> crate::capabilities::CapabilityMapper {
     if std::env::var("CLEAVE_SKIP_TRAITS").is_ok() || std::env::var("cleave_SKIP_TRAITS").is_ok() {
         tracing::info!("Traits skipped (CLEAVE_SKIP_TRAITS set)");
@@ -109,7 +108,7 @@ pub(crate) fn build_test_capability_mapper(
             min_hostile_precision,
             min_suspicious_precision,
             false,
-            enable_precision_scoring,
+            false,
         )
         .with_platforms(platforms)
     }

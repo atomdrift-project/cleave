@@ -181,47 +181,68 @@ pub(crate) fn composite_inflation_warning_threshold() -> f32 {
 }
 
 fn canonical_rule_id(id: &str) -> String {
-    id.replace("::", "/")
+    id.to_string()
 }
 
-fn exact_reference_candidates<'a>(
-    id: &str,
+pub(crate) struct ReferenceIndex<'a> {
+    exact: HashMap<String, Vec<&'a str>>,
+    prefix: HashMap<String, Vec<&'a str>>,
+}
+
+pub(crate) fn build_reference_index<'a>(
     composite_lookup: &HashMap<&'a str, &'a CompositeTrait>,
     trait_lookup: &HashMap<&'a str, &'a TraitDefinition>,
-) -> Vec<&'a str> {
-    let canonical_id = canonical_rule_id(id);
-    let mut matches = Vec::new();
+) -> ReferenceIndex<'a> {
+    let mut exact = HashMap::<String, Vec<&'a str>>::new();
+    let mut prefix = HashMap::<String, Vec<&'a str>>::new();
 
     for key in composite_lookup.keys().chain(trait_lookup.keys()) {
-        if canonical_rule_id(key) == canonical_id {
-            matches.push(*key);
+        let canonical = canonical_rule_id(key);
+        exact.entry(canonical.clone()).or_default().push(*key);
+
+        let mut split_positions: Vec<usize> = canonical.match_indices('/').map(|(idx, _)| idx).collect();
+        split_positions.sort_unstable();
+        split_positions.dedup();
+        for idx in split_positions {
+            if idx == 0 {
+                continue;
+            }
+            prefix
+                .entry(canonical[..idx].to_string())
+                .or_default()
+                .push(*key);
         }
     }
 
-    matches.sort_unstable();
-    matches.dedup();
-    matches
-}
-
-fn prefix_reference_candidates<'a>(
-    id: &str,
-    composite_lookup: &HashMap<&'a str, &'a CompositeTrait>,
-    trait_lookup: &HashMap<&'a str, &'a TraitDefinition>,
-) -> Vec<&'a str> {
-    let canonical_prefix = canonical_rule_id(id);
-    let canonical_prefix_slash = format!("{canonical_prefix}/");
-    let mut matches = Vec::new();
-
-    for key in composite_lookup.keys().chain(trait_lookup.keys()) {
-        let canonical_key = canonical_rule_id(key);
-        if canonical_key.starts_with(&canonical_prefix_slash) {
-            matches.push(*key);
-        }
+    for matches in exact.values_mut().chain(prefix.values_mut()) {
+        matches.sort_unstable();
+        matches.dedup();
     }
 
-    matches.sort_unstable();
-    matches.dedup();
-    matches
+    ReferenceIndex { exact, prefix }
+}
+
+fn exact_reference_candidates<'a>(id: &str, reference_index: &'a ReferenceIndex<'a>) -> Vec<&'a str> {
+    reference_index
+        .exact
+        .get(&canonical_rule_id(id))
+        .cloned()
+        .unwrap_or_default()
+}
+
+fn prefix_reference_candidates<'a>(id: &str, reference_index: &'a ReferenceIndex<'a>) -> Vec<&'a str> {
+    reference_index
+        .prefix
+        .get(&canonical_rule_id(id))
+        .cloned()
+        .unwrap_or_default()
+}
+
+fn resolve_rule_id<'a, T>(
+    rule_id: &str,
+    lookup: &'a HashMap<&'a str, T>,
+) -> Option<&'a T> {
+    lookup.get(rule_id)
 }
 
 fn hex_specificity_bonus(pattern: &str) -> f32 {
@@ -674,26 +695,41 @@ fn referenced_precision(
     id: &str,
     composite_lookup: &HashMap<&str, &CompositeTrait>,
     trait_lookup: &HashMap<&str, &TraitDefinition>,
+    reference_index: &ReferenceIndex<'_>,
     cache: &mut HashMap<String, f32>,
     visiting: &mut HashSet<String>,
 ) -> f32 {
-    let exact_matches = exact_reference_candidates(id, composite_lookup, trait_lookup);
+    let exact_matches = exact_reference_candidates(id, reference_index);
     if !exact_matches.is_empty() {
         let scores: Vec<f32> = exact_matches
             .into_iter()
             .map(|candidate| {
-                calculate_composite_precision(candidate, composite_lookup, trait_lookup, cache, visiting)
+                calculate_composite_precision_indexed(
+                    candidate,
+                    composite_lookup,
+                    trait_lookup,
+                    reference_index,
+                    cache,
+                    visiting,
+                )
             })
             .collect();
         return reference_set_precision(scores, 1);
     }
 
-    let prefix_matches = prefix_reference_candidates(id, composite_lookup, trait_lookup);
+    let prefix_matches = prefix_reference_candidates(id, reference_index);
     if !prefix_matches.is_empty() {
         let scores: Vec<f32> = prefix_matches
             .into_iter()
             .map(|candidate| {
-                calculate_composite_precision(candidate, composite_lookup, trait_lookup, cache, visiting)
+                calculate_composite_precision_indexed(
+                    candidate,
+                    composite_lookup,
+                    trait_lookup,
+                    reference_index,
+                    cache,
+                    visiting,
+                )
             })
             .collect();
         return reference_set_precision(scores, 1);
@@ -767,10 +803,11 @@ pub(crate) fn calculate_trait_precision(trait_def: &TraitDefinition) -> f32 {
 ///
 /// IMPORTANT: This is the ONLY place in the codebase for measuring rule precision.
 /// Do not duplicate this logic elsewhere.
-pub(crate) fn calculate_composite_precision(
+fn calculate_composite_precision_indexed(
     rule_id: &str,
     composite_lookup: &HashMap<&str, &CompositeTrait>,
     trait_lookup: &HashMap<&str, &TraitDefinition>,
+    reference_index: &ReferenceIndex<'_>,
     cache: &mut HashMap<String, f32>,
     visiting: &mut HashSet<String>,
 ) -> f32 {
@@ -786,23 +823,8 @@ pub(crate) fn calculate_composite_precision(
         return BASE_TRAIT_PRECISION;
     }
 
-    // Try to find as composite rule first
-    // Support both new format (dir::name) and legacy format (dir/name)
-    let rule = composite_lookup.get(rule_id).copied().or_else(|| {
-        if rule_id.contains("::") {
-            let legacy_id = rule_id.replace("::", "/");
-            composite_lookup.get(legacy_id.as_str()).copied()
-        } else if rule_id.contains('/') {
-            if let Some(idx) = rule_id.rfind('/') {
-                let new_id = format!("{}::{}", &rule_id[..idx], &rule_id[idx + 1..]);
-                composite_lookup.get(new_id.as_str()).copied()
-            } else {
-                None
-            }
-        } else {
-            None
-        }
-    });
+    // Try to find as composite rule first.
+    let rule = resolve_rule_id(rule_id, composite_lookup);
     if let Some(rule) = rule {
         let mut precision = 0.0f32;
 
@@ -830,7 +852,14 @@ pub(crate) fn calculate_composite_precision(
                 let score = match cond {
                     Condition::Trait { id } => {
                         let inherited =
-                            referenced_precision(id, composite_lookup, trait_lookup, cache, visiting);
+                            referenced_precision(
+                                id,
+                                composite_lookup,
+                                trait_lookup,
+                                reference_index,
+                                cache,
+                                visiting,
+                            );
                         if debug {
                             eprintln!(
                                 "  [DEBUG] {} all trait '{}' inherited score: {:.2}",
@@ -861,7 +890,14 @@ pub(crate) fn calculate_composite_precision(
                     let score = match cond {
                         Condition::Trait { id } => {
                             let s =
-                                referenced_precision(id, composite_lookup, trait_lookup, cache, visiting);
+                                referenced_precision(
+                                    id,
+                                    composite_lookup,
+                                    trait_lookup,
+                                    reference_index,
+                                    cache,
+                                    visiting,
+                                );
                             if debug {
                                 eprintln!(
                                     "  [DEBUG] {} any[{}] trait '{}' inherited score: {:.2}",
@@ -911,7 +947,14 @@ pub(crate) fn calculate_composite_precision(
                 .iter()
                 .map(|cond| match cond {
                     Condition::Trait { id } => {
-                        referenced_precision(id, composite_lookup, trait_lookup, cache, visiting)
+                        referenced_precision(
+                            id,
+                            composite_lookup,
+                            trait_lookup,
+                            reference_index,
+                            cache,
+                            visiting,
+                        )
                     }
                     _ => score_condition(cond),
                 })
@@ -928,39 +971,16 @@ pub(crate) fn calculate_composite_precision(
         return precision;
     }
 
-    // Not a composite - try to find as a trait definition
-    // Support both new format (dir::name) and legacy format (dir/name)
+    // Not a composite - try to find as a trait definition.
     if debug {
         eprintln!("  [DEBUG] Looking up trait: '{}'", rule_id);
     }
-    let trait_def = trait_lookup.get(rule_id).copied().or_else(|| {
-        // Try converting legacy format to new format or vice versa
-        if rule_id.contains("::") {
-            // Reference uses new format, trait might use legacy
-            let legacy_id = rule_id.replace("::", "/");
-            if debug {
-                eprintln!("  [DEBUG]   Trying legacy conversion: '{}'", legacy_id);
-            }
-            trait_lookup.get(legacy_id.as_str()).copied()
-        } else if rule_id.contains('/') {
-            // Reference uses legacy format, trait might use new format
-            // Convert last '/' to '::'
-            if let Some(idx) = rule_id.rfind('/') {
-                let new_id = format!("{}::{}", &rule_id[..idx], &rule_id[idx + 1..]);
-                if debug {
-                    eprintln!("  [DEBUG]   Trying new format conversion: '{}'", new_id);
-                }
-                trait_lookup.get(new_id.as_str()).copied()
-            } else {
-                None
-            }
-        } else {
-            None
-        }
-    });
+    let trait_def = resolve_rule_id(rule_id, trait_lookup);
 
     if let Some(trait_def) = trait_def {
-        let precision = calculate_trait_precision(trait_def);
+        let precision = trait_def
+            .precision
+            .unwrap_or_else(|| calculate_trait_precision(trait_def));
         if debug {
             eprintln!(
                 "  [DEBUG]   FOUND trait '{}' with stored ID '{}', precision: {:.2}",
@@ -988,6 +1008,24 @@ pub(crate) fn calculate_composite_precision(
     BASE_TRAIT_PRECISION
 }
 
+pub(crate) fn calculate_composite_precision(
+    rule_id: &str,
+    composite_lookup: &HashMap<&str, &CompositeTrait>,
+    trait_lookup: &HashMap<&str, &TraitDefinition>,
+    cache: &mut HashMap<String, f32>,
+    visiting: &mut HashSet<String>,
+) -> f32 {
+    let reference_index = build_reference_index(composite_lookup, trait_lookup);
+    calculate_composite_precision_indexed(
+        rule_id,
+        composite_lookup,
+        trait_lookup,
+        &reference_index,
+        cache,
+        visiting,
+    )
+}
+
 /// Pre-calculate precision for ALL composite rules and store in their precision field.
 /// This should be called once after all traits and composites are loaded,
 /// before any validation. After this runs, precision will be cached and never recalculated.
@@ -1011,6 +1049,7 @@ pub(crate) fn precalculate_all_composite_precisions(
         .iter()
         .map(|t| (t.id.as_str(), t))
         .collect();
+    let reference_index = build_reference_index(&composite_lookup, &trait_lookup);
 
     // First pass: Calculate precisions for rules that don't have them (immutable borrow)
     let calculated_precisions: Vec<(String, f32)> = composite_rules
@@ -1018,10 +1057,11 @@ pub(crate) fn precalculate_all_composite_precisions(
         .filter(|rule| rule.precision.is_none())
         .map(|rule| {
             let mut visiting = std::collections::HashSet::new();
-            let precision = calculate_composite_precision(
+            let precision = calculate_composite_precision_indexed(
                 &rule.id,
                 &composite_lookup,
                 &trait_lookup,
+                &reference_index,
                 &mut cache,
                 &mut visiting,
             );

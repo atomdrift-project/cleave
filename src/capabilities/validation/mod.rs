@@ -85,7 +85,7 @@ pub(super) mod shared {
 // Precision calculation
 #[allow(unused_imports)] // calculate_composite_precision is used by test_rules in binary
 pub(crate) use precision::{
-    atomic_calibrated_max, calculate_composite_precision, calculate_trait_precision,
+    atomic_calibrated_max, build_reference_index, calculate_composite_precision, calculate_trait_precision,
     composite_calibrated_max, composite_inflation_warning_threshold,
     file_type_precision_penalty, platform_precision_penalty,
     precalculate_all_composite_precisions, validate_hostile_composite_precision,

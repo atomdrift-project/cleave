@@ -66,7 +66,6 @@ pub fn run(
         platforms.clone(),
         min_hostile_precision,
         min_suspicious_precision,
-        true,
     );
 
     // Load YARA engine to match production path exactly

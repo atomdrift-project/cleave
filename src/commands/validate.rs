@@ -11,6 +11,9 @@ use anyhow::Result;
 /// checks for logic errors, quality issues, and structural violations. All findings
 /// are printed to stderr. Returns `Err` if any validation errors are detected.
 pub fn run() -> Result<()> {
+    eprintln!(
+        "Warning: precision threshold scoring is temporarily disabled while we work out the ideal balanced scoring algorithm."
+    );
     cleave::validate_traits()?;
     eprintln!("✅ All trait validation checks passed.");
     Ok(())

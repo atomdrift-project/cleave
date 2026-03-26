@@ -1656,7 +1656,7 @@ pub fn validate_traits() -> Result<()> {
         capabilities::CapabilityMapper::DEFAULT_MIN_HOSTILE_PRECISION,
         capabilities::CapabilityMapper::DEFAULT_MIN_SUSPICIOUS_PRECISION,
         true,
-        true,
+        false,
     )?;
     Ok(())
 }

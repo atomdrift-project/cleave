@@ -181,11 +181,14 @@ impl super::CapabilityMapper {
 
         if has_excessive_line {
             // Downgrade to notable for large JS/TS files — minified/bundled code
-            // naturally produces very long lines without anti-analysis intent
-            let is_likely_bundle = matches!(
-                file_type,
-                RuleFileType::JavaScript | RuleFileType::TypeScript
-            ) && binary_data.len() > 500_000;
+            // naturally produces very long lines without anti-analysis intent.
+            // Source maps are also commonly emitted as single-line JSON blobs.
+            let is_source_map = report.target.path.ends_with(".map")
+                || (binary_data.starts_with(br#"{"version":"#)
+                    && binary_data.windows(10).any(|w| w == br#""sources":["#));
+            let is_likely_bundle = is_source_map
+                || (matches!(file_type, RuleFileType::JavaScript | RuleFileType::TypeScript)
+                    && binary_data.len() > 500_000);
             let crit = if is_likely_bundle {
                 Criticality::Notable
             } else {

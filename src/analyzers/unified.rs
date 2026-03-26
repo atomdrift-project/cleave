@@ -846,8 +846,11 @@ impl UnifiedSourceAnalyzer {
                             .iter()
                             .any(|kw| path_lower.contains(kw));
                     let (crit, conf) = if is_unicode_library {
-                        (crate::types::Criticality::Notable, 0.5)
-                    } else if text.invisible_chars >= 20 {
+                        // Libraries that intentionally ship adversarial Unicode
+                        // samples or fake-data corpora should not surface a
+                        // human-review finding from this generic heuristic.
+                        (crate::types::Criticality::Notable, 0.4)
+                    } else if text.invisible_chars >= 60 {
                         (crate::types::Criticality::Suspicious, 0.95)
                     } else {
                         (crate::types::Criticality::Notable, 0.7)

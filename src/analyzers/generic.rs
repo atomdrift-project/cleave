@@ -196,71 +196,77 @@ impl GenericAnalyzer {
             t_tree.elapsed()
         );
 
-        // Extract strings (AST-based if we have a tree, stng-based otherwise)
-        let t_strings = std::time::Instant::now();
-        if tree.is_some() {
-            // Tree-sitter available: use AST-based extraction (more accurate)
-            self.extract_strings(content, tree.as_ref(), &mut report);
+        if self.file_type == FileType::Unknown {
             tracing::info!(
-                "GenericAnalyzer: Tree-sitter string extraction completed in {:?}",
-                t_strings.elapsed()
-            );
-        } else if let Some(stng_results) = stng_strings {
-            // No tree-sitter: use stng results (passed from caller)
-            for es in stng_results {
-                // Convert stng fragments to our format (just record offsets, we don't need to reconstruct values)
-                let fragments = es.fragments.as_ref().map(|frags| {
-                    frags
-                        .iter()
-                        .map(|f| format!("{:#x}+{}", f.offset, f.length))
-                        .collect()
-                });
-
-                report.strings.push(crate::types::binary::StringInfo {
-                    value: es.value.clone(),
-                    offset: Some(es.data_offset),
-                    string_type: match es.kind {
-                        stng::StringKind::FuncName => crate::types::binary::StringType::FuncName,
-                        stng::StringKind::Import => crate::types::binary::StringType::Import,
-                        stng::StringKind::Url => crate::types::binary::StringType::Url,
-                        stng::StringKind::Path | stng::StringKind::FilePath => {
-                            crate::types::binary::StringType::Path
-                        }
-                        stng::StringKind::EnvVar => crate::types::binary::StringType::EnvVar,
-                        _ => crate::types::binary::StringType::Const,
-                    },
-                    encoding: "utf-8".to_string(),
-                    section: es.section.clone(),
-                    encoding_chain: Vec::new(),
-                    fragments,
-                });
-            }
-            tracing::info!(
-                "GenericAnalyzer: Used {} stng strings in {:?}",
-                stng_results.len(),
-                t_strings.elapsed()
+                "GenericAnalyzer: Skipping full string extraction and embedded code analysis for unknown file"
             );
         } else {
-            // No tree-sitter and no stng: fallback to regex (inefficient, shouldn't happen)
-            self.extract_strings(content, tree.as_ref(), &mut report);
-            tracing::warn!("GenericAnalyzer: Fallback regex string extraction in {:?} (stng strings should be passed)", t_strings.elapsed());
-        }
+            // Extract strings (AST-based if we have a tree, stng-based otherwise)
+            let t_strings = std::time::Instant::now();
+            if tree.is_some() {
+                // Tree-sitter available: use AST-based extraction (more accurate)
+                self.extract_strings(content, tree.as_ref(), &mut report);
+                tracing::info!(
+                    "GenericAnalyzer: Tree-sitter string extraction completed in {:?}",
+                    t_strings.elapsed()
+                );
+            } else if let Some(stng_results) = stng_strings {
+                // No tree-sitter: use stng results (passed from caller)
+                for es in stng_results {
+                    // Convert stng fragments to our format (just record offsets, we don't need to reconstruct values)
+                    let fragments = es.fragments.as_ref().map(|frags| {
+                        frags
+                            .iter()
+                            .map(|f| format!("{:#x}+{}", f.offset, f.length))
+                            .collect()
+                    });
 
-        // Analyze embedded code in strings
-        let t_embedded = std::time::Instant::now();
-        let (encoded_layers, plain_findings) =
-            crate::analyzers::embedded_code_detector::process_all_strings(
-                &file_path.display().to_string(),
-                &report.strings,
-                &self.capability_mapper,
-                0,
+                    report.strings.push(crate::types::binary::StringInfo {
+                        value: es.value.clone(),
+                        offset: Some(es.data_offset),
+                        string_type: match es.kind {
+                            stng::StringKind::FuncName => crate::types::binary::StringType::FuncName,
+                            stng::StringKind::Import => crate::types::binary::StringType::Import,
+                            stng::StringKind::Url => crate::types::binary::StringType::Url,
+                            stng::StringKind::Path | stng::StringKind::FilePath => {
+                                crate::types::binary::StringType::Path
+                            }
+                            stng::StringKind::EnvVar => crate::types::binary::StringType::EnvVar,
+                            _ => crate::types::binary::StringType::Const,
+                        },
+                        encoding: "utf-8".to_string(),
+                        section: es.section.clone(),
+                        encoding_chain: Vec::new(),
+                        fragments,
+                    });
+                }
+                tracing::info!(
+                    "GenericAnalyzer: Used {} stng strings in {:?}",
+                    stng_results.len(),
+                    t_strings.elapsed()
+                );
+            } else {
+                // No tree-sitter and no stng: fallback to regex (inefficient, shouldn't happen)
+                self.extract_strings(content, tree.as_ref(), &mut report);
+                tracing::warn!("GenericAnalyzer: Fallback regex string extraction in {:?} (stng strings should be passed)", t_strings.elapsed());
+            }
+
+            // Analyze embedded code in strings
+            let t_embedded = std::time::Instant::now();
+            let (encoded_layers, plain_findings) =
+                crate::analyzers::embedded_code_detector::process_all_strings(
+                    &file_path.display().to_string(),
+                    &report.strings,
+                    &self.capability_mapper,
+                    0,
+                );
+            report.files.extend(encoded_layers);
+            report.findings.extend(plain_findings);
+            tracing::info!(
+                "GenericAnalyzer: Embedded code analysis completed in {:?}",
+                t_embedded.elapsed()
             );
-        report.files.extend(encoded_layers);
-        report.findings.extend(plain_findings);
-        tracing::info!(
-            "GenericAnalyzer: Embedded code analysis completed in {:?}",
-            t_embedded.elapsed()
-        );
+        }
 
         // Analyze paths and environment variables
         let t_paths = std::time::Instant::now();
@@ -479,5 +485,23 @@ let task = URLSession.shared.dataTask(with: url)
         assert!(report.structure.iter().any(|s| s.id.contains("swift")));
         // Should extract strings
         assert!(!report.strings.is_empty());
+    }
+
+    #[test]
+    fn test_generic_unknown_skips_embedded_detection() {
+        let analyzer = GenericAnalyzer::new(FileType::Unknown);
+        let path = PathBuf::from("README.zOS");
+        let content = r#"
+This is documentation.
+
+test.c $(distdir)/runsuite.c | GZIP=$(GZIP_ENV) gzip -c >`echo "$(distdir)" | sh
+"#;
+        let report = analyzer.analyze_source(&path, content);
+
+        assert!(report.strings.is_empty());
+        assert!(!report
+            .findings
+            .iter()
+            .any(|f| f.id == "metadata/lang/embedded::shell"));
     }
 }

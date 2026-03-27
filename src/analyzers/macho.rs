@@ -238,10 +238,12 @@ impl MachOAnalyzer {
 
             // Use batched extraction - single r2 session for functions, sections, strings, imports
             let has_symbols = macho.symbols().count() > 0;
-            if let Ok(batched) =
-                self.radare2
-                    .extract_batched(file_path, has_symbols, precomputed_sha256)
-            {
+            if let Ok(batched) = self.radare2.extract_batched(
+                file_path,
+                has_symbols,
+                true, // goblin_success
+                precomputed_sha256,
+            ) {
                 // Compute metrics from batched data (radare2-specific metrics)
                 let r2_binary_metrics = self
                     .radare2

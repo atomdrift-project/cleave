@@ -144,6 +144,7 @@ impl ElfAnalyzer {
                             Some(self.radare2.extract_batched(
                                 file_path,
                                 symbols_found,
+                                true, // goblin_success
                                 precomputed_sha256,
                             ))
                         },

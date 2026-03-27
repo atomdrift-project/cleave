@@ -20,7 +20,7 @@ pub(crate) const MAX_FILE_SIZE: u64 = 100 * 1024 * 1024;
 pub(crate) const MAX_TOTAL_SIZE: u64 = 1024 * 1024 * 1024;
 
 /// Maximum number of files to extract
-pub(crate) const MAX_FILE_COUNT: usize = 10_000;
+pub(crate) const MAX_FILE_COUNT: usize = 100_000;
 
 /// Maximum compression ratio before considering it suspicious (100:1)
 pub(crate) const MAX_COMPRESSION_RATIO: u64 = 100;

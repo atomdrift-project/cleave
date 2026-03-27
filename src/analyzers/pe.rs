@@ -348,10 +348,12 @@ impl PEAnalyzer {
                 if self.is_cancelled() || !Radare2Analyzer::is_available() {
                     return None;
                 }
-                Some(
-                    self.radare2
-                        .extract_batched(file_path, has_symbols, precomputed_sha256),
-                )
+                Some(self.radare2.extract_batched(
+                    file_path,
+                    has_symbols,
+                    goblin_ok,
+                    precomputed_sha256,
+                ))
             },
             || {
                 if let Some(pe) = pe {

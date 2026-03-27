@@ -607,7 +607,7 @@ impl ArchiveAnalyzer {
                 }
                 is_file
             })
-            .take(500)
+            .take(100_000)
             .collect();
 
         let total_files = files.len();

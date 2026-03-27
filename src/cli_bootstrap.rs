@@ -302,6 +302,7 @@ pub(crate) fn log_exit_summary() {
 
     memory_tracker::global_tracker().log_stats();
     memory_tracker::log_all_memory_stats();
+
     let total_files = memory_tracker::global_tracker().files_processed();
     let peak_rss = memory_tracker::global_tracker().peak_rss();
     tracing::info!(

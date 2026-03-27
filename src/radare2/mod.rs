@@ -56,11 +56,28 @@ static RADARE2_DISABLED: AtomicUsize = AtomicUsize::new(0);
 /// Cached result of radare2 availability check (avoids subprocess per file)
 static RADARE2_AVAILABLE: OnceLock<bool> = OnceLock::new();
 
+/// Sync semaphore to limit concurrent rizin subprocesses (avoids kernel fork/exec thrashing)
+static RIZIN_CONCURRENCY_LIMIT: OnceLock<(parking_lot::Mutex<usize>, parking_lot::Condvar)> =
+    OnceLock::new();
+
 /// Statistics for rizin subprocess execution
 static RIZIN_TOTAL_CALLS: AtomicU64 = AtomicU64::new(0);
 static RIZIN_TIMEOUTS: AtomicU64 = AtomicU64::new(0);
 static RIZIN_FAILURES: AtomicU64 = AtomicU64::new(0);
 static RIZIN_SUCCESSES: AtomicU64 = AtomicU64::new(0);
+
+/// Semaphore permit guard to ensure release on drop
+struct RizinPermitGuard;
+
+impl Drop for RizinPermitGuard {
+    fn drop(&mut self) {
+        if let Some((lock, cvar)) = RIZIN_CONCURRENCY_LIMIT.get() {
+            let mut count = lock.lock();
+            *count += 1;
+            cvar.notify_one();
+        }
+    }
+}
 
 /// Disable radare2 analysis globally
 #[allow(dead_code)] // Used by the CLI binary target for process-wide disables
@@ -132,6 +149,26 @@ pub(crate) fn log_rizin_stats() {
 fn execute_rizin_with_timeout(args: &[&str], timeout: Duration) -> Result<std::process::Output> {
     use std::io::Read;
     use std::sync::mpsc;
+
+    // Acquire concurrency permit (blocks rayon thread if limit reached)
+    let (lock, cvar) = RIZIN_CONCURRENCY_LIMIT.get_or_init(|| {
+        let max = std::env::var("CLEAVE_RIZIN_CONCURRENCY")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(8);
+        (parking_lot::Mutex::new(max), parking_lot::Condvar::new())
+    });
+
+    {
+        let mut count = lock.lock();
+        while *count == 0 {
+            cvar.wait(&mut count);
+        }
+        *count -= 1;
+    }
+
+    // Ensure permit is released even on error/panic
+    let _permit_guard = RizinPermitGuard;
 
     RIZIN_TOTAL_CALLS.fetch_add(1, Ordering::Relaxed);
 
@@ -359,15 +396,22 @@ impl Radare2Analyzer {
     /// `has_symbols`: when false (stripped binary), function analysis (`aa; aflj`) is skipped.
     /// Stripped binaries yield only heuristically-guessed unnamed functions of limited value,
     /// so sections and strings alone are extracted instead — much faster and equally useful.
+    ///
+    /// `goblin_success`: when true, redundant structural analysis (`iSj`, `iij`) is skipped
+    /// in rizin, as goblin has already successfully provided this data.
     pub(crate) fn extract_batched(
         &self,
         file_path: &Path,
         has_symbols: bool,
+        goblin_success: bool,
         precomputed_sha256: Option<String>,
     ) -> Result<BatchedAnalysis> {
         let t_start = std::time::Instant::now();
 
-        debug!("Running radare2 batched analysis on {:?}", file_path);
+        debug!(
+            "Running radare2 batched analysis on {:?} (goblin_success={})",
+            file_path, goblin_success
+        );
 
         // Use precomputed SHA256 for cache lookup if available
         let sha256 = precomputed_sha256.or_else(|| Self::compute_file_sha256(file_path));
@@ -416,14 +460,22 @@ impl Radare2Analyzer {
         // Commands separated by "echo SEP" for parsing:
         // - aa: full analysis (only for unstripped binaries under 20MB)
         // - aflj: functions as JSON
-        // - iSj: sections as JSON
+        // - iSj: sections as JSON (skipped if goblin_success)
         // - izj: strings as JSON
-        let command = if skip_function_analysis {
-            "iSj; echo SEP; izj; echo SEP; iij"
-        } else {
-            tracing::info!("Running rizin function analysis (aa + aflj + iSj + izj + iij)");
-            "aa; aflj; echo SEP; iSj; echo SEP; izj; echo SEP; iij"
-        };
+        // - iij: imports as JSON (skipped if goblin_success)
+        let mut commands = Vec::new();
+        if !skip_function_analysis {
+            commands.push("aa; aflj");
+        }
+        if !goblin_success {
+            commands.push("iSj");
+        }
+        commands.push("izj");
+        if !goblin_success {
+            commands.push("iij");
+        }
+
+        let command = commands.join("; echo SEP; ");
 
         trace!(command = command, "Executing rizin batched analysis");
 
@@ -438,7 +490,7 @@ impl Radare2Analyzer {
                 "-e",
                 "log.level=0",
                 "-c",
-                command,
+                &command,
                 &file_path_str,
             ],
             timeout,
@@ -472,31 +524,38 @@ impl Radare2Analyzer {
         let output_str = String::from_utf8_lossy(&output.stdout);
         let parts: Vec<&str> = output_str.split("SEP").collect();
 
-        let (functions, sections, strings, imports) = if skip_function_analysis {
-            let sections: Vec<R2Section> = parse_json_part(parts.first())
+        let mut part_idx = 0;
+        let functions = if !skip_function_analysis {
+            let f = parse_json_part(parts.get(part_idx))
                 .and_then(|j| serde_json::from_str(&j).ok())
                 .unwrap_or_default();
-            let strings: Vec<R2String> = parse_json_part(parts.get(1))
-                .and_then(|j| serde_json::from_str(&j).ok())
-                .unwrap_or_default();
-            let imports: Vec<R2Import> = parse_json_part(parts.get(2))
-                .and_then(|j| serde_json::from_str(&j).ok())
-                .unwrap_or_default();
-            (Vec::new(), sections, strings, imports)
+            part_idx += 1;
+            f
         } else {
-            let functions: Vec<R2Function> = parse_json_part(parts.first())
+            Vec::new()
+        };
+
+        let sections = if !goblin_success {
+            let s = parse_json_part(parts.get(part_idx))
                 .and_then(|j| serde_json::from_str(&j).ok())
                 .unwrap_or_default();
-            let sections: Vec<R2Section> = parse_json_part(parts.get(1))
+            part_idx += 1;
+            s
+        } else {
+            Vec::new()
+        };
+
+        let strings: Vec<R2String> = parse_json_part(parts.get(part_idx))
+            .and_then(|j| serde_json::from_str(&j).ok())
+            .unwrap_or_default();
+        part_idx += 1;
+
+        let imports = if !goblin_success {
+            parse_json_part(parts.get(part_idx))
                 .and_then(|j| serde_json::from_str(&j).ok())
-                .unwrap_or_default();
-            let strings: Vec<R2String> = parse_json_part(parts.get(2))
-                .and_then(|j| serde_json::from_str(&j).ok())
-                .unwrap_or_default();
-            let imports: Vec<R2Import> = parse_json_part(parts.get(3))
-                .and_then(|j| serde_json::from_str(&j).ok())
-                .unwrap_or_default();
-            (functions, sections, strings, imports)
+                .unwrap_or_default()
+        } else {
+            Vec::new()
         };
 
         debug!(

@@ -82,7 +82,7 @@ const REGEX_CACHE_SIZE: NonZeroUsize = {
 
 const UTF8_CACHE_DEFAULT_SIZE: NonZeroUsize = {
     #[allow(clippy::expect_used)]
-    NonZeroUsize::new(8).expect("Constant 8 is non-zero")
+    NonZeroUsize::new(32).expect("Constant 32 is non-zero")
 };
 
 fn cache_size_from_env(var_name: &str, default: NonZeroUsize) -> NonZeroUsize {

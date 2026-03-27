@@ -9,7 +9,7 @@ use crate::composite_rules::{Condition, FileType as RuleFileType, TraitDefinitio
 use crate::types::{deduplicate_evidence, Evidence, StringInfo, MAX_EVIDENCE_PER_TRAIT};
 use aho_corasick::AhoCorasick;
 use rayon::prelude::*;
-use regex::{RegexSet, RegexSetBuilder};
+use regex::bytes::{RegexSet, RegexSetBuilder};
 use rustc_hash::{FxHashMap, FxHashSet};
 
 /// Index of trait indices by file type for fast lookup.
@@ -737,7 +737,7 @@ struct FileTypeRegexSet {
     /// Original pattern strings for debugging/profiling
     patterns: Vec<String>,
     /// Individual compiled regexes for patterns WITH extractable literals
-    individual_regexes: Vec<Option<regex::Regex>>,
+    individual_regexes: Vec<Option<regex::bytes::Regex>>,
     /// Smaller RegexSet for ONLY patterns without extractable literals
     no_literal_regex_set: Option<RegexSet>,
     /// Maps no_literal_regex_set index -> original pattern index
@@ -778,8 +778,7 @@ impl FileTypeRegexSet {
     /// 1c. Run word boundary Aho-Corasick + byte boundary checks (replaces \b regex)
     /// 2. Run individual regexes for patterns with matching literals
     /// 3. Run smaller RegexSet for patterns without literals (unavoidable)
-    fn find_matches(&self, content: &str) -> Vec<usize> {
-        let content_bytes = content.as_bytes();
+    fn find_matches(&self, content: &[u8]) -> Vec<usize> {
         let content_len = content.len();
         let mut matched_traits: FxHashSet<usize> = FxHashSet::default();
         let mut literal_candidates: FxHashSet<usize> = FxHashSet::default();
@@ -832,10 +831,10 @@ impl FileTypeRegexSet {
                 let start = mat.start();
                 let end = mat.end();
                 let before_ok = start == 0
-                    || !content_bytes[start - 1].is_ascii_alphanumeric()
-                        && content_bytes[start - 1] != b'_';
+                    || !content[start - 1].is_ascii_alphanumeric()
+                        && content[start - 1] != b'_';
                 let after_ok = end == content_len
-                    || !content_bytes[end].is_ascii_alphanumeric() && content_bytes[end] != b'_';
+                    || !content[end].is_ascii_alphanumeric() && content[end] != b'_';
                 if before_ok && after_ok {
                     let word_idx = mat.pattern().as_usize();
                     if let Some(trait_indices) = self.cs_word_to_traits.get(word_idx) {
@@ -852,10 +851,10 @@ impl FileTypeRegexSet {
                 let start = mat.start();
                 let end = mat.end();
                 let before_ok = start == 0
-                    || !content_bytes[start - 1].is_ascii_alphanumeric()
-                        && content_bytes[start - 1] != b'_';
+                    || !content[start - 1].is_ascii_alphanumeric()
+                        && content[start - 1] != b'_';
                 let after_ok = end == content_len
-                    || !content_bytes[end].is_ascii_alphanumeric() && content_bytes[end] != b'_';
+                    || !content[end].is_ascii_alphanumeric() && content[end] != b'_';
                 if before_ok && after_ok {
                     let word_idx = mat.pattern().as_usize();
                     if let Some(trait_indices) = self.ci_word_to_traits.get(word_idx) {
@@ -890,7 +889,7 @@ impl FileTypeRegexSet {
             }
         }
 
-        // Step 3: Run smaller RegexSet for patterns without extractable literals
+        // Step 3: Run smaller RegexSet for patterns without literals (unavoidable)
         if let Some(ref no_lit_set) = self.no_literal_regex_set {
             for no_lit_idx in no_lit_set.matches(content).iter() {
                 if let Some(&original_idx) = self.no_literal_to_original.get(no_lit_idx) {
@@ -1167,9 +1166,9 @@ impl RawContentRegexIndex {
         };
 
         // Pre-compile individual regexes for patterns WITH literals (used after Aho-Corasick match)
-        let individual_regexes: Vec<Option<regex::Regex>> = pattern_strs
+        let individual_regexes: Vec<Option<regex::bytes::Regex>> = pattern_strs
             .par_iter()
-            .map(|p| regex::Regex::new(p).ok())
+            .map(|p| regex::bytes::Regex::new(p).ok())
             .collect();
 
         // Build smaller RegexSet for ONLY patterns without extractable literals
@@ -1261,7 +1260,7 @@ impl RawContentRegexIndex {
             for (i, compiled) in individual_regexes.iter().enumerate() {
                 if compiled.is_none() {
                     // Try again to get the error message
-                    if let Err(re_err) = regex::Regex::new(&pattern_strs[i]) {
+                    if let Err(re_err) = regex::bytes::Regex::new(&pattern_strs[i]) {
                         for trait_idx in &pattern_to_traits[i] {
                             let trait_def = &traits[*trait_idx];
                             errors.push(format!(
@@ -1323,19 +1322,16 @@ impl RawContentRegexIndex {
     ) -> FxHashSet<usize> {
         let mut matching_traits = FxHashSet::default();
 
-        // Convert to string once (this is expensive for large files)
-        let content = String::from_utf8_lossy(binary_data);
-
         // Match universal patterns (with literal pre-filtering)
         if let Some(ref universal) = self.universal {
-            for trait_idx in universal.find_matches(&content) {
+            for trait_idx in universal.find_matches(binary_data) {
                 matching_traits.insert(trait_idx);
             }
         }
 
         // Match file-type-specific patterns (with literal pre-filtering)
         if let Some(ft_set) = self.by_file_type.get(file_type) {
-            for trait_idx in ft_set.find_matches(&content) {
+            for trait_idx in ft_set.find_matches(binary_data) {
                 matching_traits.insert(trait_idx);
             }
         }
@@ -1627,7 +1623,7 @@ mod tests {
         let content = &[0xFF, b't', b'e', b's', b't', 0xFE];
 
         let matches = index.find_matches(content, &RuleFileType::All);
-        // Should handle invalid UTF-8 gracefully and find the match
+        // Direct binary matching handles invalid UTF-8 naturally
         assert!(!matches.is_empty());
     }
 

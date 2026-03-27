@@ -246,8 +246,13 @@ impl ArchiveAnalyzer {
                 }
             }
 
-            if let Ok(file_report) = self.analyze_extracted_file(entry.path()) {
+            match self.analyze_extracted_file(entry.path()) {
+            Err(e) => {
+                debug!("Failed to analyze archive member {}: {}", entry_path, e);
+            }
+            Ok(file_report) => {
                 files_analyzed.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                trace!("Analyzed archive member {}: {} findings", entry_path, file_report.findings.len());
 
                 let (
                     Ok(mut caps),
@@ -335,6 +340,7 @@ impl ArchiveAnalyzer {
                     all_files.push(nested_file);
                 }
             }
+            }
         });
 
         // Phase 3: Analyze non-class files (scripts, configs, etc.)
@@ -390,8 +396,13 @@ impl ArchiveAnalyzer {
             }
 
             // Run file-type-specific analysis
-            if let Ok(file_report) = self.analyze_extracted_file(entry.path()) {
+            match self.analyze_extracted_file(entry.path()) {
+            Err(e) => {
+                debug!("Failed to analyze archive member {}: {}", entry_path, e);
+            }
+            Ok(file_report) => {
                 files_analyzed.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                trace!("Analyzed archive member {}: {} findings", entry_path, file_report.findings.len());
 
                 let (
                     Ok(mut caps),
@@ -470,17 +481,11 @@ impl ArchiveAnalyzer {
                 file_entry.depth = 1;
                 file_entry.compute_summary();
 
-                // LIMIT: Cap individual file reports at 1,000 to prevent heap exhaustion
-                if all_files.len() < 1_000 {
-                    all_files.push(file_entry);
-                }
+                all_files.push(file_entry);
 
                 // Merge archive_contents from nested archives
                 for nested_entry in archive_contents {
-                    // LIMIT: Cap total archive entries at 10,000
-                    if all_archive_entries.len() < 10_000 {
-                        all_archive_entries.push(nested_entry);
-                    }
+                    all_archive_entries.push(nested_entry);
                 }
 
                 // Handle nested archives
@@ -491,6 +496,7 @@ impl ArchiveAnalyzer {
                     nested_file.depth += 1;
                     all_files.push(nested_file);
                 }
+            }
             }
         });
 
@@ -684,8 +690,13 @@ impl ArchiveAnalyzer {
                 }
             }
 
-            if let Ok(file_report) = self.analyze_extracted_file(entry.path()) {
+            match self.analyze_extracted_file(entry.path()) {
+            Err(e) => {
+                debug!("Failed to analyze archive member {}: {}", entry_path, e);
+            }
+            Ok(file_report) => {
                 files_analyzed.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                trace!("Analyzed archive member {}: {} findings", entry_path, file_report.findings.len());
 
                 let Ok(mut caps) = total_capabilities.lock() else {
                     return;
@@ -782,17 +793,11 @@ impl ArchiveAnalyzer {
                     }
                 }
 
-                // LIMIT: Cap total files at 1,000 to prevent heap exhaustion
-                if all_files.len() < 1_000 {
-                    all_files.push(file_entry.clone());
-                }
+                all_files.push(file_entry.clone());
 
                 // Merge archive_contents from nested archives
                 for nested_entry in archive_contents {
-                    // LIMIT: Cap archive entries at 10,000
-                    if all_archive_entries.len() < 10_000 {
-                        all_archive_entries.push(nested_entry);
-                    }
+                    all_archive_entries.push(nested_entry);
                 }
 
                 // Handle nested archives - add their files with updated paths
@@ -802,14 +807,23 @@ impl ArchiveAnalyzer {
                         nested_file.path = encode_archive_path(&entry_path, &nested_file.path);
                     }
                     nested_file.depth += 1; // Increment depth for nesting
-
-                    // LIMIT: Cap nested files at total 1,000
-                    if all_files.len() < 1_000 {
-                        all_files.push(nested_file);
-                    }
+                    all_files.push(nested_file);
                 }
             }
+            }
         });
+
+        // Sort files by highest severity first, then truncate to limit
+        {
+            let mut all_files = collected_files.lock().map_err(|_| anyhow::anyhow!("collected_files lock poisoned"))?;
+            all_files.sort_by(|a, b| {
+                let max_crit = |f: &FileAnalysis| {
+                    f.findings.iter().map(|f| f.crit).max().unwrap_or_default()
+                };
+                max_crit(b).cmp(&max_crit(a))
+            });
+            all_files.truncate(100_000);
+        }
 
         // Merge collected results into the report
         let total_capabilities = Arc::try_unwrap(total_capabilities)

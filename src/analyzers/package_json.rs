@@ -549,10 +549,7 @@ impl PackageJsonAnalyzer {
             }
 
             // Check for file system operations
-            if script.contains("rm -rf")
-                || script.contains("rmdir")
-                || script.contains("unlink")
-            {
+            if script.contains("rm -rf") || script.contains("rmdir") || script.contains("unlink") {
                 report.add_finding(
                     Finding::capability(
                         "fs/file/delete".to_string(),

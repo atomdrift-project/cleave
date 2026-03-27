@@ -37,7 +37,8 @@ use crate::capabilities::validation::{
     find_wellknown_unscoped_filetypes, find_wellknown_unscoped_platforms,
     precalculate_all_composite_precisions, simple_rule_to_composite_rule,
     validate_composite_trait_only, validate_directory_structure,
-    validate_hostile_composite_precision, validate_hostile_trait_precision, MAX_TRAITS_PER_DIRECTORY,
+    validate_hostile_composite_precision, validate_hostile_trait_precision,
+    MAX_TRAITS_PER_DIRECTORY,
 };
 use crate::composite_rules::{
     CompositeTrait, Condition, FileType as RuleFileType, Platform, TraitDefinition,

@@ -159,7 +159,7 @@ fn find_test_macho_file() -> Option<PathBuf> {
         // Repository fixtures
         "tests/fixtures/test.macho",
         "testdata/benign/macho/hello_world",
-        "testdata/clean/elf_linux/libcap2/libcap.so",  // Actually check for macho
+        "testdata/clean/elf_linux/libcap2/libcap.so", // Actually check for macho
         // Use /bin/ls as fallback (always available on macOS)
         "/bin/ls",
         "/usr/bin/file",

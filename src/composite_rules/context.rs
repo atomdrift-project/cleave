@@ -6,20 +6,13 @@ use super::evaluators::kv::StructuredFormat;
 use super::section_map::SectionMap;
 use super::types::{Arch, FileType, Platform};
 use crate::types::{AnalysisReport, Evidence, Finding};
-use rustc_hash::{FxHashMap, FxHashSet, FxHasher};
+use rustc_hash::{FxHashMap, FxHashSet};
 use serde_json::Value;
 use std::collections::HashMap;
-use std::hash::{Hash, Hasher};
 use std::sync::OnceLock;
 use std::time::Instant;
 
-/// Compute a fast hash of a string for deduplication.
-#[inline]
-fn hash_str(s: &str) -> u64 {
-    let mut hasher = FxHasher::default();
-    s.hash(&mut hasher);
-    hasher.finish()
-}
+use crate::hash_str;
 
 /// Context for evaluating composite rules
 #[derive(Debug)]

@@ -12,14 +12,14 @@ use super::{
 use crate::composite_rules::condition::{NotException, StringValidator};
 use crate::composite_rules::context::{ConditionResult, EvaluationContext, StringParams};
 use crate::composite_rules::types::Platform;
-use crate::ip_validator::contains_external_ip;
+use crate::ip_validator::contains_external_ip_cached;
 use cleave::bitcoin_validator::contains_bitcoin_address;
 
 /// Helper to apply high-fidelity validation checks to a string match.
 pub(crate) fn validate_match(s: &str, validator: Option<StringValidator>) -> bool {
     match validator {
         None => true,
-        Some(StringValidator::ExternalIp) => contains_external_ip(s),
+        Some(StringValidator::ExternalIp) => contains_external_ip_cached(s),
         Some(StringValidator::BitcoinAddr) => contains_bitcoin_address(s),
     }
 }

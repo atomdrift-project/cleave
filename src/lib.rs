@@ -79,6 +79,17 @@ pub use types::SampleExtractionConfig;
 // Re-export cache management functions
 pub use composite_rules::clear_condition_stats;
 
+use rustc_hash::FxHasher;
+use std::hash::{Hash, Hasher};
+
+/// Compute a fast hash of a string for deduplication and caching.
+#[inline]
+pub(crate) fn hash_str(s: &str) -> u64 {
+    let mut hasher = FxHasher::default();
+    s.hash(&mut hasher);
+    hasher.finish()
+}
+
 fn looks_like_textual_payload_preview(preview: &str) -> bool {
     let preview = preview.trim();
     if preview.is_empty() || preview == "<binary data>" {
@@ -130,7 +141,8 @@ fn should_skip_unknown_xor_payload_for_source(
 }
 
 fn should_skip_unknown_url_markup_payload(payload: &types::ExtractedPayload) -> bool {
-    if !payload.encoding_chain.iter().any(|e| e == "url") || payload.detected_type != FileType::Unknown
+    if !payload.encoding_chain.iter().any(|e| e == "url")
+        || payload.detected_type != FileType::Unknown
     {
         return false;
     }
@@ -177,7 +189,10 @@ fn should_skip_unknown_url_markup_payload(payload: &types::ExtractedPayload) -> 
         "/api/",
         "user-agent",
     ];
-    if payload_markers.iter().any(|marker| preview.contains(marker)) {
+    if payload_markers
+        .iter()
+        .any(|marker| preview.contains(marker))
+    {
         return false;
     }
 
@@ -687,6 +702,10 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
     // Compute SHA256 early for cache lookup (also reused by analyzers)
     let sha256_hex = analyzers::utils::calculate_sha256(file_data);
 
+    // Set current file ID for IP validation cache
+    let file_id = hash_str(&sha256_hex);
+    ip_validator::set_current_file_id(file_id);
+
     // Check analysis cache before running the full pipeline
     if let Some(mut cached_report) = analysis_cache::report_cache_lookup(&sha256_hex, options) {
         cached_report.target.path = path.display().to_string();
@@ -1060,7 +1079,8 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
                 .any(|f| f.id == "metadata/package/versioning::pe-version-resource")
             && report.findings.iter().any(|f| {
                 f.id == "micro-behaviors/data/compress/library::dotnet-gzip-compression"
-                    || f.id == "micro-behaviors/data/embedded/payload::dotnet-getmanifestresourcestream"
+                    || f.id
+                        == "micro-behaviors/data/embedded/payload::dotnet-getmanifestresourcestream"
             })
             && report
                 .metrics
@@ -1809,9 +1829,12 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::expect_used)]
     fn test_skip_unknown_url_markup_payload() {
         let payload = types::ExtractedPayload {
-            temp_path: tempfile::NamedTempFile::new().unwrap().into_temp_path(),
+            temp_path: tempfile::NamedTempFile::new()
+                .expect("test temp file")
+                .into_temp_path(),
             encoding_chain: vec!["url".to_string()],
             detected_type: FileType::Unknown,
             preview: "<body><a href=\"http://example.com\">doc</a>".to_string(),
@@ -1820,7 +1843,9 @@ mod tests {
         assert!(should_skip_unknown_url_markup_payload(&payload));
 
         let payload = types::ExtractedPayload {
-            temp_path: tempfile::NamedTempFile::new().unwrap().into_temp_path(),
+            temp_path: tempfile::NamedTempFile::new()
+                .expect("test temp file")
+                .into_temp_path(),
             encoding_chain: vec!["url".to_string()],
             detected_type: FileType::Unknown,
             preview: "http://example.com/api/v1/ping".to_string(),
@@ -1829,7 +1854,9 @@ mod tests {
         assert!(!should_skip_unknown_url_markup_payload(&payload));
 
         let payload = types::ExtractedPayload {
-            temp_path: tempfile::NamedTempFile::new().unwrap().into_temp_path(),
+            temp_path: tempfile::NamedTempFile::new()
+                .expect("test temp file")
+                .into_temp_path(),
             encoding_chain: vec!["url".to_string()],
             detected_type: FileType::Unknown,
             preview: "beginning of the revealed that the television series".to_string(),

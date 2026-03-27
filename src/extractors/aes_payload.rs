@@ -14,6 +14,7 @@
 //! ```
 
 use crate::analyzers::FileType;
+use aho_corasick::AhoCorasick;
 use regex::Regex;
 use std::io::Write;
 use std::sync::LazyLock;
@@ -87,6 +88,33 @@ static RE_HEX_STRING: LazyLock<Option<Regex>> = LazyLock::new(|| {
     // Match long hex strings in quotes (potential ciphertext)
     Regex::new(r#"["']([a-fA-F0-9]{64,})["']"#).ok()
 });
+
+#[allow(clippy::expect_used)]
+static VALID_CODE_INDICATORS: LazyLock<AhoCorasick> = LazyLock::new(|| {
+    AhoCorasick::new([
+        "function", "const ", "let ", "var ", "import ", "require(", "module.", "exports",
+        "class ", "def ", "if ", "for ", "while ",
+    ])
+    .expect("valid patterns")
+});
+
+#[allow(clippy::expect_used)]
+static JS_INDICATORS: LazyLock<AhoCorasick> = LazyLock::new(|| {
+    AhoCorasick::new([
+        "function",
+        "const ",
+        "let ",
+        "require(",
+        "module.exports",
+        "=>",
+        "async ",
+    ])
+    .expect("valid patterns")
+});
+
+#[allow(clippy::expect_used)]
+static PYTHON_INDICATORS: LazyLock<AhoCorasick> =
+    LazyLock::new(|| AhoCorasick::new(["def ", "import ", "class "]).expect("valid patterns"));
 
 /// Extract AES parameters from JavaScript/TypeScript content
 fn extract_aes_params(content: &str) -> Vec<AesParams> {
@@ -283,20 +311,7 @@ fn validate_decrypted_content(plaintext: &[u8]) -> bool {
     }
 
     // Check for common code patterns
-
-    text.contains("function")
-        || text.contains("const ")
-        || text.contains("let ")
-        || text.contains("var ")
-        || text.contains("import ")
-        || text.contains("require(")
-        || text.contains("module.")
-        || text.contains("exports")
-        || text.contains("class ")
-        || text.contains("def ")
-        || text.contains("if ")
-        || text.contains("for ")
-        || text.contains("while ")
+    VALID_CODE_INDICATORS.is_match(text)
 }
 
 /// Detect the type of decrypted payload
@@ -307,19 +322,12 @@ fn detect_payload_type(data: &[u8]) -> FileType {
     };
 
     // JavaScript indicators
-    if text.contains("function")
-        || text.contains("const ")
-        || text.contains("let ")
-        || text.contains("require(")
-        || text.contains("module.exports")
-        || text.contains("=>")
-        || text.contains("async ")
-    {
+    if JS_INDICATORS.is_match(text) {
         return FileType::JavaScript;
     }
 
     // Python indicators
-    if text.contains("def ") || text.contains("import ") || text.contains("class ") {
+    if PYTHON_INDICATORS.is_match(text) {
         return FileType::Python;
     }
 

@@ -2159,11 +2159,9 @@ fn test_suspicious_precision_threshold_validation() {
         .find(|r| r.id == "test/suspicious-low-precision")
         .unwrap();
     assert_eq!(low_rule.crit, Criticality::Suspicious);
-    assert!(
-        warnings
-            .iter()
-            .any(|w| w.contains("test/suspicious-low-precision"))
-    );
+    assert!(warnings
+        .iter()
+        .any(|w| w.contains("test/suspicious-low-precision")));
 
     // Check that sufficient precision suspicious rule was NOT downgraded
     let ok_rule = composites
@@ -2267,7 +2265,9 @@ fn test_atomic_suspicious_precision_threshold_validation() {
         .find(|t| t.id == "test/atomic-suspicious-low")
         .unwrap();
     assert_eq!(low_trait.crit, Criticality::Suspicious);
-    assert!(warnings.iter().any(|w| w.contains("test/atomic-suspicious-low")));
+    assert!(warnings
+        .iter()
+        .any(|w| w.contains("test/atomic-suspicious-low")));
 
     let ok_trait = traits
         .iter()
@@ -3662,7 +3662,7 @@ fn test_atomic_precision_calibration_spread() {
     let raw_precision = validation::calculate_trait_precision(&raw_trait);
     let ast_precision = validation::calculate_trait_precision(&ast_trait);
 
-    assert!(raw_precision >= 1.0 && raw_precision <= 4.0);
+    assert!((1.0..=4.0).contains(&raw_precision));
     assert!(ast_precision > raw_precision);
     assert!(ast_precision <= validation::atomic_calibrated_max());
 }
@@ -3683,14 +3683,17 @@ fn test_atomic_precision_long_regex_and_large_not_list_stays_calibrated() {
             Platform::Windows,
         ],
         arch: vec![Arch::All],
-        r#for: vec![RuleFileType::Pe, RuleFileType::Shell, RuleFileType::JavaScript],
+        r#for: vec![
+            RuleFileType::Pe,
+            RuleFileType::Shell,
+            RuleFileType::JavaScript,
+        ],
         for_from_groups: false,
         r#if: Condition::StringValue {
             is_check: None,
             exact: None,
             regex: Some(
-                r"\bdelete\b.{0,40}\b(?:all|your)\b.{0,20}\b(?:files?|documents?)\b"
-                    .to_string(),
+                r"\bdelete\b.{0,40}\b(?:all|your)\b.{0,20}\b(?:files?|documents?)\b".to_string(),
             ),
             word: None,
             case_insensitive: true,
@@ -3863,8 +3866,14 @@ fn test_composite_precision_calibration_band() {
         defined_in: std::path::PathBuf::from("test.yaml"),
         precision: None,
     };
-    let atomic_b = TraitDefinition { id: "test/atomic-b".to_string(), ..atomic_a.clone() };
-    let atomic_c = TraitDefinition { id: "test/atomic-c".to_string(), ..atomic_a.clone() };
+    let atomic_b = TraitDefinition {
+        id: "test/atomic-b".to_string(),
+        ..atomic_a.clone()
+    };
+    let atomic_c = TraitDefinition {
+        id: "test/atomic-c".to_string(),
+        ..atomic_a.clone()
+    };
 
     let composite = CompositeTrait {
         id: "test/calibrated-composite".to_string(),
@@ -3878,11 +3887,17 @@ fn test_composite_precision_calibration_band() {
         r#for: vec![RuleFileType::Pe],
         for_from_groups: false,
         all: Some(vec![
-            Condition::Trait { id: "test/atomic-a".to_string() },
-            Condition::Trait { id: "test/atomic-b".to_string() },
+            Condition::Trait {
+                id: "test/atomic-a".to_string(),
+            },
+            Condition::Trait {
+                id: "test/atomic-b".to_string(),
+            },
         ]),
         any: Some(vec![
-            Condition::Trait { id: "test/atomic-c".to_string() },
+            Condition::Trait {
+                id: "test/atomic-c".to_string(),
+            },
             Condition::StringValue {
                 is_check: None,
                 exact: Some("SetThreadContext".to_string()),

@@ -13,8 +13,7 @@
 
 use crate::capabilities::validation::{
     atomic_calibrated_max, calculate_composite_precision, composite_calibrated_max,
-    composite_inflation_warning_threshold, file_type_precision_penalty,
-    platform_precision_penalty,
+    composite_inflation_warning_threshold, file_type_precision_penalty, platform_precision_penalty,
 };
 use crate::capabilities::CapabilityMapper;
 use crate::composite_rules::debug::{DebugCollector, EvaluationDebug, RuleType};
@@ -24,18 +23,11 @@ use crate::composite_rules::{
 };
 use crate::types::{AnalysisReport, Evidence};
 use colored::Colorize;
-use rustc_hash::{FxHashSet, FxHasher};
+use rustc_hash::FxHashSet;
 use std::collections::{HashMap, HashSet};
-use std::hash::{Hash, Hasher};
 use std::sync::RwLock;
 
-/// Compute a fast hash of a string for deduplication.
-#[inline]
-fn hash_str(s: &str) -> u64 {
-    let mut hasher = FxHasher::default();
-    s.hash(&mut hasher);
-    hasher.finish()
-}
+use crate::hash_str;
 
 /// Result of debugging a single condition
 #[derive(Debug)]

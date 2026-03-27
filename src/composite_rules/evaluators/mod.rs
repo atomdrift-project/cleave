@@ -225,6 +225,7 @@ pub fn clear_thread_local_caches() {
     UTF8_CACHE.with(|cache| {
         cache.borrow_mut().clear();
     });
+    crate::ip_validator::clear_current_file_id();
     crate::yara_engine::clear_engine_scanner_cache();
     ast::clear_ast_query_cache();
 }

@@ -765,10 +765,7 @@ impl ArchiveAnalyzer {
         });
 
         // Check if this is a JAR-like archive
-        let ext = file_path
-            .extension()
-            .and_then(|e| e.to_str())
-            .unwrap_or("");
+        let ext = file_path.extension().and_then(|e| e.to_str()).unwrap_or("");
         let is_jar = ext.eq_ignore_ascii_case("jar")
             || ext.eq_ignore_ascii_case("war")
             || ext.eq_ignore_ascii_case("ear")
@@ -895,7 +892,7 @@ impl Analyzer for ArchiveAnalyzer {
     fn can_analyze(&self, file_path: &Path) -> bool {
         let path_str = file_path.to_string_lossy();
         let path_bytes = path_str.as_bytes();
-        
+
         let ends_with_ci = |ext: &[u8]| -> bool {
             if path_bytes.len() < ext.len() {
                 return false;

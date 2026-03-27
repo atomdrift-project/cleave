@@ -63,10 +63,11 @@ fn score_regex_value(value: &str) -> f32 {
     if normalized_len == 0 {
         return 0.0;
     }
-    let anchor_bonus = value.starts_with('^') as u8 as f32 * 0.1 + value.ends_with('$') as u8 as f32 * 0.1;
+    let anchor_bonus =
+        value.starts_with('^') as u8 as f32 * 0.1 + value.ends_with('$') as u8 as f32 * 0.1;
     let boundary_bonus = (value.matches("\\b").count().min(2) as f32) * 0.08;
-    let quantifier_bonus =
-        (value.matches('{').count().min(2) as f32) * 0.08 + (value.matches('+').count().min(2) as f32) * 0.04;
+    let quantifier_bonus = (value.matches('{').count().min(2) as f32) * 0.08
+        + (value.matches('+').count().min(2) as f32) * 0.04;
     let wildcard_penalty = if value.contains(".*") || value.contains(".{") {
         0.12
     } else {
@@ -74,38 +75,20 @@ fn score_regex_value(value: &str) -> f32 {
     };
     let alternation_penalty = (value.matches('|').count().min(3) as f32) * 0.05;
 
-    (0.45
-        + length_bonus(normalized_len, 0.35)
-        + anchor_bonus
-        + boundary_bonus
-        + quantifier_bonus
+    (0.45 + length_bonus(normalized_len, 0.35) + anchor_bonus + boundary_bonus + quantifier_bonus
         - wildcard_penalty
         - alternation_penalty)
         .clamp(0.25, 1.0)
 }
 
 fn regex_structural_bonus(value: &str) -> f32 {
-    let has_http_scheme = value.contains("http://") || value.contains("https://") || value.contains("https?://");
-    let has_ipv4_octets = value.matches("[0-9]{1,3}").count() >= 4 && value.matches("\\.").count() >= 3;
-    let has_domain_chars = value.contains("[A-Za-z0-9.-]");
-    let has_literal_tld = value.contains("\\.top")
-        || value.contains("\\.xyz")
-        || value.contains("\\.tk")
-        || value.contains("\\.ml")
-        || value.contains("\\.ga")
-        || value.contains("\\.cf")
-        || value.contains("\\.gq")
-        || value.contains("\\.sbs")
-        || value.contains("\\.zip")
-        || value.contains("\\.life")
-        || value.contains("\\.zone")
-        || value.contains("\\.cc")
-        || value.contains("\\.su");
+    let has_http_scheme =
+        value.contains("http://") || value.contains("https://") || value.contains("https?://");
+    let has_ipv4_octets =
+        value.matches("[0-9]{1,3}").count() >= 4 && value.matches("\\.").count() >= 3;
 
     if has_http_scheme && has_ipv4_octets {
         0.3
-    } else if has_http_scheme && has_domain_chars && has_literal_tld {
-        0.0
     } else {
         0.0
     }
@@ -200,7 +183,8 @@ pub(crate) fn build_reference_index<'a>(
         let canonical = canonical_rule_id(key);
         exact.entry(canonical.clone()).or_default().push(*key);
 
-        let mut split_positions: Vec<usize> = canonical.match_indices('/').map(|(idx, _)| idx).collect();
+        let mut split_positions: Vec<usize> =
+            canonical.match_indices('/').map(|(idx, _)| idx).collect();
         split_positions.sort_unstable();
         split_positions.dedup();
         for idx in split_positions {
@@ -222,7 +206,10 @@ pub(crate) fn build_reference_index<'a>(
     ReferenceIndex { exact, prefix }
 }
 
-fn exact_reference_candidates<'a>(id: &str, reference_index: &'a ReferenceIndex<'a>) -> Vec<&'a str> {
+fn exact_reference_candidates<'a>(
+    id: &str,
+    reference_index: &'a ReferenceIndex<'a>,
+) -> Vec<&'a str> {
     reference_index
         .exact
         .get(&canonical_rule_id(id))
@@ -230,7 +217,10 @@ fn exact_reference_candidates<'a>(id: &str, reference_index: &'a ReferenceIndex<
         .unwrap_or_default()
 }
 
-fn prefix_reference_candidates<'a>(id: &str, reference_index: &'a ReferenceIndex<'a>) -> Vec<&'a str> {
+fn prefix_reference_candidates<'a>(
+    id: &str,
+    reference_index: &'a ReferenceIndex<'a>,
+) -> Vec<&'a str> {
     reference_index
         .prefix
         .get(&canonical_rule_id(id))
@@ -238,10 +228,7 @@ fn prefix_reference_candidates<'a>(id: &str, reference_index: &'a ReferenceIndex
         .unwrap_or_default()
 }
 
-fn resolve_rule_id<'a, T>(
-    rule_id: &str,
-    lookup: &'a HashMap<&'a str, T>,
-) -> Option<&'a T> {
+fn resolve_rule_id<'a, T>(rule_id: &str, lookup: &'a HashMap<&'a str, T>) -> Option<&'a T> {
     lookup.get(rule_id)
 }
 
@@ -254,7 +241,9 @@ fn hex_specificity_bonus(pattern: &str) -> f32 {
         .split_whitespace()
         .filter(|tok| tok.len() == 2 && tok.chars().all(|c| c.is_ascii_hexdigit()))
         .count() as f32;
-    (exact_hex_pairs * 0.08) + (fixed_skips * 0.15) - (wildcard_pairs * 0.08) - (nibble_wildcards * 0.03)
+    (exact_hex_pairs * 0.08) + (fixed_skips * 0.15)
+        - (wildcard_pairs * 0.08)
+        - (nibble_wildcards * 0.03)
         - (alternations * 0.05)
 }
 
@@ -829,12 +818,16 @@ fn calculate_composite_precision_indexed(
         let mut precision = 0.0f32;
 
         precision += platform_scope_bonus(&rule.platforms);
-        precision -= platform_precision_penalty(&rule.platforms) * COMPOSITE_SCOPE_PENALTY_MULTIPLIER;
+        precision -=
+            platform_precision_penalty(&rule.platforms) * COMPOSITE_SCOPE_PENALTY_MULTIPLIER;
 
         let file_type_score = file_type_scope_bonus(&rule.r#for);
         precision += file_type_score;
         if debug && file_type_score > 0.0 {
-            eprintln!("  [DEBUG] {} file_type scope bonus: {:.2}", rule_id, file_type_score);
+            eprintln!(
+                "  [DEBUG] {} file_type scope bonus: {:.2}",
+                rule_id, file_type_score
+            );
         }
         precision -= file_type_precision_penalty(&rule.r#for) * COMPOSITE_SCOPE_PENALTY_MULTIPLIER;
         if debug {
@@ -851,15 +844,14 @@ fn calculate_composite_precision_indexed(
             for cond in conditions {
                 let score = match cond {
                     Condition::Trait { id } => {
-                        let inherited =
-                            referenced_precision(
-                                id,
-                                composite_lookup,
-                                trait_lookup,
-                                reference_index,
-                                cache,
-                                visiting,
-                            );
+                        let inherited = referenced_precision(
+                            id,
+                            composite_lookup,
+                            trait_lookup,
+                            reference_index,
+                            cache,
+                            visiting,
+                        );
                         if debug {
                             eprintln!(
                                 "  [DEBUG] {} all trait '{}' inherited score: {:.2}",
@@ -889,15 +881,14 @@ fn calculate_composite_precision_indexed(
                 .map(|(i, cond)| {
                     let score = match cond {
                         Condition::Trait { id } => {
-                            let s =
-                                referenced_precision(
-                                    id,
-                                    composite_lookup,
-                                    trait_lookup,
-                                    reference_index,
-                                    cache,
-                                    visiting,
-                                );
+                            let s = referenced_precision(
+                                id,
+                                composite_lookup,
+                                trait_lookup,
+                                reference_index,
+                                cache,
+                                visiting,
+                            );
                             if debug {
                                 eprintln!(
                                     "  [DEBUG] {} any[{}] trait '{}' inherited score: {:.2}",
@@ -946,16 +937,14 @@ fn calculate_composite_precision_indexed(
             let scores: Vec<f32> = unless_conds
                 .iter()
                 .map(|cond| match cond {
-                    Condition::Trait { id } => {
-                        referenced_precision(
-                            id,
-                            composite_lookup,
-                            trait_lookup,
-                            reference_index,
-                            cache,
-                            visiting,
-                        )
-                    }
+                    Condition::Trait { id } => referenced_precision(
+                        id,
+                        composite_lookup,
+                        trait_lookup,
+                        reference_index,
+                        cache,
+                        visiting,
+                    ),
                     _ => score_condition(cond),
                 })
                 .collect();
@@ -1144,12 +1133,18 @@ pub(crate) fn validate_hostile_trait_precision(
     min_suspicious_precision: f32,
 ) {
     for trait_def in trait_definitions.iter_mut() {
-        if !matches!(trait_def.crit, Criticality::Hostile | Criticality::Suspicious) {
+        if !matches!(
+            trait_def.crit,
+            Criticality::Hostile | Criticality::Suspicious
+        ) {
             continue;
         }
 
         let precision = trait_def.precision.unwrap_or_else(|| {
-            tracing::warn!("Atomic trait '{}' has no precision calculated!", trait_def.id);
+            tracing::warn!(
+                "Atomic trait '{}' has no precision calculated!",
+                trait_def.id
+            );
             0.0
         });
 

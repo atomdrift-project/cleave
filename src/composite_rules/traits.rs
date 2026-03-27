@@ -19,6 +19,7 @@ use crate::types::{
 use anyhow::Context;
 use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
+use smallvec::SmallVec;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
@@ -2811,7 +2812,7 @@ fn evidence_within_line_range(
     min_required: usize,
     line_starts: &[usize],
 ) -> Option<(usize, usize)> {
-    let mut line_numbers: Vec<usize> = evidence
+    let mut line_numbers: SmallVec<[usize; MAX_EVIDENCE_PER_TRAIT]> = evidence
         .iter()
         .filter_map(|e| evidence_to_line(e, line_starts))
         .collect();
@@ -2846,7 +2847,7 @@ fn evidence_within_byte_range(
     max_byte_span: usize,
     min_required: usize,
 ) -> Option<(u64, u64)> {
-    let mut byte_offsets: Vec<u64> = evidence
+    let mut byte_offsets: SmallVec<[u64; MAX_EVIDENCE_PER_TRAIT]> = evidence
         .iter()
         .filter_map(evidence_to_byte_offset)
         .collect();
@@ -2884,7 +2885,7 @@ fn evidence_within_line_range_grouped(
         return None;
     }
 
-    let mut sorted: Vec<(usize, usize)> = items.to_vec();
+    let mut sorted: SmallVec<[(usize, usize); MAX_EVIDENCE_PER_TRAIT]> = items.into();
     sorted.sort_unstable_by_key(|&(line, _)| line);
 
     // Sliding window: find any window of max_line_span with min_distinct condition indices
@@ -2915,7 +2916,7 @@ fn evidence_within_byte_range_grouped(
         return None;
     }
 
-    let mut sorted: Vec<(u64, usize)> = items.to_vec();
+    let mut sorted: SmallVec<[(u64, usize); MAX_EVIDENCE_PER_TRAIT]> = items.into();
     sorted.sort_unstable_by_key(|&(offset, _)| offset);
 
     for (i, &(start, _)) in sorted.iter().enumerate() {

@@ -8,8 +8,42 @@
 //! - Version-like patterns (1.2.3.4)
 //! - Invalid string formats (leading zeros like 010.001.001.001)
 
+use lru::LruCache;
 use std::net::Ipv4Addr;
+use std::num::NonZeroUsize;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::OnceLock;
+
+/// Thread-local storage for the current file ID, used to invalidate caches.
+/// We use AtomicU64 to allow safe access from multiple threads via thread_local!
+static CURRENT_FILE_ID: AtomicU64 = AtomicU64::new(0);
+
+/// Set the current file ID for the thread-local IP validation cache.
+/// Should be called at the start of analyzing each file.
+pub(crate) fn set_current_file_id(file_id: u64) {
+    CURRENT_FILE_ID.store(file_id, Ordering::Relaxed);
+}
+
+/// Clear the current file ID, effectively disabling the IP validation cache.
+pub(crate) fn clear_current_file_id() {
+    CURRENT_FILE_ID.store(0, Ordering::Relaxed);
+}
+
+/// Cache for IP validation results.
+/// Key is (file_id, pointer_address, length) for fast identity checks.
+/// Value is the boolean result of contains_external_ip.
+struct IpCache {
+    file_id: u64,
+    cache: LruCache<(usize, usize), bool>,
+}
+
+thread_local! {
+    #[allow(clippy::expect_used)]
+    static IP_CACHE: std::cell::RefCell<IpCache> = std::cell::RefCell::new(IpCache {
+        file_id: 0,
+        cache: LruCache::new(NonZeroUsize::new(1024).expect("valid constant")),
+    });
+}
 
 /// Regex pattern to find IP-like strings in text.
 /// Matches any sequence of digits separated by dots (will be validated later).
@@ -191,6 +225,40 @@ pub(crate) fn validate_external_ip_string(ip_str: &str) -> Option<Ipv4Addr> {
     } else {
         None
     }
+}
+
+/// Optimized check for external IPs in text, with identity-based caching.
+///
+/// Uses a thread-local LRU cache keyed by the input string's identity (pointer and length)
+/// to avoid re-scanning the same strings across different traits within the same file.
+#[must_use]
+pub(crate) fn contains_external_ip_cached(s: &str) -> bool {
+    let file_id = CURRENT_FILE_ID.load(Ordering::Relaxed);
+    if file_id == 0 {
+        return contains_external_ip(s);
+    }
+
+    let ptr = s.as_ptr() as usize;
+    let len = s.len();
+    let key = (ptr, len);
+
+    IP_CACHE.with(|cache_cell| {
+        let mut cache = cache_cell.borrow_mut();
+
+        // Check if cache is for the current file
+        if cache.file_id != file_id {
+            cache.cache.clear();
+            cache.file_id = file_id;
+        }
+
+        if let Some(&res) = cache.cache.get(&key) {
+            return res;
+        }
+
+        let res = contains_external_ip(s);
+        cache.cache.put(key, res);
+        res
+    })
 }
 
 /// Check if a text string contains at least one external IP address.

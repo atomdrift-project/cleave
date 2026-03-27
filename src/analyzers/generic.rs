@@ -225,7 +225,9 @@ impl GenericAnalyzer {
                         value: es.value.clone(),
                         offset: Some(es.data_offset),
                         string_type: match es.kind {
-                            stng::StringKind::FuncName => crate::types::binary::StringType::FuncName,
+                            stng::StringKind::FuncName => {
+                                crate::types::binary::StringType::FuncName
+                            }
                             stng::StringKind::Import => crate::types::binary::StringType::Import,
                             stng::StringKind::Url => crate::types::binary::StringType::Url,
                             stng::StringKind::Path | stng::StringKind::FilePath => {

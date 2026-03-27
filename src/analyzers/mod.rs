@@ -350,17 +350,23 @@ pub(crate) fn detect_file_type_from_path(file_path: &Path) -> FileType {
         if file_name.eq_ignore_ascii_case("pyproject.toml") {
             return FileType::PyProjectToml;
         }
-        if file_name.eq_ignore_ascii_case("pkg-info") || file_name.eq_ignore_ascii_case("metadata") {
+        if file_name.eq_ignore_ascii_case("pkg-info") || file_name.eq_ignore_ascii_case("metadata")
+        {
             return FileType::PkgInfo;
         }
         // Note: manifest.json detection requires content inspection for Chrome manifests,
         // so we can't reliably detect ChromeManifest from path alone - it will be detected
         // during content-based analysis if the file is read
-        if file_name.eq_ignore_ascii_case("extension.vsixmanifest") || (file_name.len() >= 13 && file_name[file_name.len() - 13..].eq_ignore_ascii_case(".vsixmanifest")) {
+        if file_name.eq_ignore_ascii_case("extension.vsixmanifest")
+            || (file_name.len() >= 13
+                && file_name[file_name.len() - 13..].eq_ignore_ascii_case(".vsixmanifest"))
+        {
             return FileType::VsixManifest;
         }
         // GitHub Actions composite action manifests (action.yml / action.yaml at any path depth)
-        if file_name.eq_ignore_ascii_case("action.yml") || file_name.eq_ignore_ascii_case("action.yaml") {
+        if file_name.eq_ignore_ascii_case("action.yml")
+            || file_name.eq_ignore_ascii_case("action.yaml")
+        {
             return FileType::GithubActions;
         }
     }
@@ -368,7 +374,7 @@ pub(crate) fn detect_file_type_from_path(file_path: &Path) -> FileType {
     // Check for GitHub Actions workflow files
     let path_str = file_path.to_string_lossy();
     let path_bytes = path_str.as_bytes();
-    
+
     let ends_with_ci = |ext: &[u8]| -> bool {
         if path_bytes.len() < ext.len() {
             return false;
@@ -402,7 +408,7 @@ pub(crate) fn detect_file_type_from_path(file_path: &Path) -> FileType {
             ext_buf[..ext.len()].copy_from_slice(ext.as_bytes());
             ext_buf[..ext.len()].make_ascii_lowercase();
             let ext_lower = std::str::from_utf8(&ext_buf[..ext.len()]).unwrap_or("");
-            
+
             match ext_lower {
                 "sh" | "bash" | "ksh" | "zsh" | "csh" | "tcsh" | "dash" => return FileType::Shell,
                 "py" => return FileType::Python,
@@ -419,35 +425,35 @@ pub(crate) fn detect_file_type_from_path(file_path: &Path) -> FileType {
                 "php" => return FileType::Php,
                 "pl" | "pm" | "t" => return FileType::Perl,
                 "ps1" | "psm1" | "psd1" => return FileType::PowerShell,
-            "bat" | "cmd" => return FileType::Batch,
-            "vbs" | "vbe" | "wsf" | "wsc" => return FileType::Vbs,
-            "c" | "h" | "cpp" | "hpp" | "cc" | "cxx" | "hxx" | "hh" | "pas" | "dpr" => {
-                return FileType::C;
-            }
-            "lua" => return FileType::Lua,
-            "cs" => return FileType::CSharp,
-            "swift" => return FileType::Swift,
-            "m" | "mm" => return FileType::ObjectiveC,
-            "groovy" | "gradle" => return FileType::Groovy,
-            "scala" | "sc" => return FileType::Scala,
-            "zig" => return FileType::Zig,
-            "ex" | "exs" => return FileType::Elixir,
-            "scpt" | "applescript" => return FileType::AppleScript,
-            "plist" => return FileType::Plist,
-            "rtf" => return FileType::Rtf,
-            "doc" | "xls" | "ppt" | "msg" | "dot" | "xlt" => return FileType::OleDoc,
-            "docx" | "xlsx" | "pptx" | "docm" | "xlsm" | "pptm" | "dotx" | "dotm" | "xltx"
-            | "xltm" => return FileType::Ooxml,
-            "lnk" => return FileType::Lnk,
-            "pdf" => return FileType::Pdf,
-            "zip" | "7z" | "rar" | "deb" | "rpm" | "apk" | "ipa" | "xpi" | "epub" | "nupkg"
-            | "vsix" | "aar" | "egg" | "whl" | "phar" | "crx" | "crate" | "gem" | "pkg" | "cab"
-            | "gz" | "bz2" | "xz" | "zst" | "tbz" | "tbz2" | "txz" | "tgz" | "tzst" => {
-                return FileType::Archive
-            }
-            "html" | "htm" => return FileType::Html,
-            "md" | "markdown" => return FileType::Markdown,
-            _ => {}
+                "bat" | "cmd" => return FileType::Batch,
+                "vbs" | "vbe" | "wsf" | "wsc" => return FileType::Vbs,
+                "c" | "h" | "cpp" | "hpp" | "cc" | "cxx" | "hxx" | "hh" | "pas" | "dpr" => {
+                    return FileType::C;
+                }
+                "lua" => return FileType::Lua,
+                "cs" => return FileType::CSharp,
+                "swift" => return FileType::Swift,
+                "m" | "mm" => return FileType::ObjectiveC,
+                "groovy" | "gradle" => return FileType::Groovy,
+                "scala" | "sc" => return FileType::Scala,
+                "zig" => return FileType::Zig,
+                "ex" | "exs" => return FileType::Elixir,
+                "scpt" | "applescript" => return FileType::AppleScript,
+                "plist" => return FileType::Plist,
+                "rtf" => return FileType::Rtf,
+                "doc" | "xls" | "ppt" | "msg" | "dot" | "xlt" => return FileType::OleDoc,
+                "docx" | "xlsx" | "pptx" | "docm" | "xlsm" | "pptm" | "dotx" | "dotm" | "xltx"
+                | "xltm" => return FileType::Ooxml,
+                "lnk" => return FileType::Lnk,
+                "pdf" => return FileType::Pdf,
+                "zip" | "7z" | "rar" | "deb" | "rpm" | "apk" | "ipa" | "xpi" | "epub" | "nupkg"
+                | "vsix" | "aar" | "egg" | "whl" | "phar" | "crx" | "crate" | "gem" | "pkg"
+                | "cab" | "gz" | "bz2" | "xz" | "zst" | "tbz" | "tbz2" | "txz" | "tgz" | "tzst" => {
+                    return FileType::Archive
+                }
+                "html" | "htm" => return FileType::Html,
+                "md" | "markdown" => return FileType::Markdown,
+                _ => {}
             }
         }
     }
@@ -2023,7 +2029,10 @@ mod tests {
     fn test_meta_json_registry_snapshot_detection() {
         let path = PathBuf::from("meta.json");
         let data = br#"{"name":"node-ts-cjs-web","dist-tags":{"latest":"99.3.9"},"versions":{"99.3.9":{"dist":{"tarball":"https://registry.npmjs.org/node-ts-cjs-web/-/node-ts-cjs-web-99.3.9.tgz"},"_npmOperationalInternal":{"host":"s3://npm-registry-packages-npm-production"}}}}"#;
-        assert_eq!(detect_file_type_from_data(&path, data), FileType::PackageJson);
+        assert_eq!(
+            detect_file_type_from_data(&path, data),
+            FileType::PackageJson
+        );
     }
 
     // --- Content heuristic rejection tests ---

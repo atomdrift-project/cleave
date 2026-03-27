@@ -392,7 +392,9 @@ fn is_top_level_self_detection(
         return false;
     }
     let host_type = detect_file_type_from_path(Path::new(parent_path));
-    host_type == *file_type || is_sibling_language(&host_type, file_type) || host_type.is_source_code()
+    host_type == *file_type
+        || is_sibling_language(&host_type, file_type)
+        || host_type.is_source_code()
 }
 
 /// Calculate Shannon entropy of data

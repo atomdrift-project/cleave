@@ -117,7 +117,8 @@ pub(crate) fn format_diff_terminal(report: &DiffReport) -> String {
             aggregate_findings_by_directory(&analysis.removed_capabilities);
 
         // Sort by criticality (highest first), then by name
-        aggregated_removed.sort_unstable_by(|a, b| b.crit.cmp(&a.crit).then_with(|| a.id.cmp(&b.id)));
+        aggregated_removed
+            .sort_unstable_by(|a, b| b.crit.cmp(&a.crit).then_with(|| a.id.cmp(&b.id)));
 
         // Show removed capabilities
         for cap in &aggregated_removed {

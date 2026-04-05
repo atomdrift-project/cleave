@@ -8,7 +8,6 @@
 
 use crate::composite_rules::{Arch, EvaluationContext, FileType as RuleFileType, SectionMap};
 use crate::types::{AnalysisReport, Criticality, Evidence, Finding, FindingKind};
-use rayon::prelude::*;
 use rustc_hash::FxHashMap;
 use std::collections::HashMap;
 
@@ -68,20 +67,12 @@ impl super::CapabilityMapper {
                 ctx = ctx.with_arch_ranges(ranges.to_vec());
             }
 
-            // Evaluate positive rules (parallel for large sets, sequential for small)
-            let new_findings: Vec<Finding> = if positive_rules.len() > 50 {
-                positive_rules
-                    .par_iter()
-                    .filter_map(|rule| rule.evaluate(&ctx))
-                    .filter(|f| !seen_ids.contains(&f.id))
-                    .collect()
-            } else {
-                positive_rules
-                    .iter()
-                    .filter_map(|rule| rule.evaluate(&ctx))
-                    .filter(|f| !seen_ids.contains(&f.id))
-                    .collect()
-            };
+            // Evaluate positive rules (sequential to avoid nested rayon overhead for small files)
+            let new_findings: Vec<Finding> = positive_rules
+                .iter()
+                .filter_map(|rule| rule.evaluate(&ctx))
+                .filter(|f| !seen_ids.contains(&f.id))
+                .collect();
 
             if new_findings.is_empty() {
                 break;
@@ -116,19 +107,11 @@ impl super::CapabilityMapper {
             ctx = ctx.with_arch_ranges(ranges.to_vec());
         }
 
-        let negative_findings: Vec<Finding> = if negative_rules.len() > 50 {
-            negative_rules
-                .par_iter()
-                .filter_map(|rule| rule.evaluate(&ctx))
-                .filter(|f| !seen_ids.contains(&f.id))
-                .collect()
-        } else {
-            negative_rules
-                .iter()
-                .filter_map(|rule| rule.evaluate(&ctx))
-                .filter(|f| !seen_ids.contains(&f.id))
-                .collect()
-        };
+        let negative_findings: Vec<Finding> = negative_rules
+            .iter()
+            .filter_map(|rule| rule.evaluate(&ctx))
+            .filter(|f| !seen_ids.contains(&f.id))
+            .collect();
 
         for finding in negative_findings {
             all_findings.push(finding);

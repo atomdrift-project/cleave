@@ -4,7 +4,7 @@
 //! including empty mappers for testing, mappers with custom precision thresholds, and
 //! the main production constructor.
 
-use crate::capabilities::indexes::{RawContentRegexIndex, StringMatchIndex, TraitIndex};
+use crate::capabilities::indexes::{RawContentRegexIndex, StringMatchIndex, SymbolMatchIndex, TraitIndex};
 use crate::composite_rules::Platform;
 use anyhow::Context;
 use std::collections::HashMap;
@@ -37,6 +37,7 @@ impl super::CapabilityMapper {
             composite_rules: Vec::new(),
             trait_index: TraitIndex::new(),
             string_match_index: StringMatchIndex::default(),
+            symbol_match_index: SymbolMatchIndex::default(),
             raw_content_regex_index: RawContentRegexIndex::default(),
             platforms: vec![Platform::All],
             slow_rule_ms: Self::DEFAULT_SLOW_RULE_MS,

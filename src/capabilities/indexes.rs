@@ -6,6 +6,7 @@
 //! - `RawContentRegexIndex`: Batched regex matching for binary content
 
 use crate::composite_rules::{Condition, FileType as RuleFileType, TraitDefinition};
+use crate::types::binary::normalize_symbol;
 use crate::types::{deduplicate_evidence, Evidence, StringInfo, MAX_EVIDENCE_PER_TRAIT};
 use aho_corasick::AhoCorasick;
 use rayon::prelude::*;
@@ -70,6 +71,60 @@ impl TraitIndex {
     }
 }
 
+/// Index for fast symbol matching.
+#[derive(Clone, Default, Debug)]
+pub(crate) struct SymbolMatchIndex {
+    /// Case-sensitive exact symbol -> trait indices
+    exact_symbols: FxHashMap<String, Vec<usize>>,
+    /// Set of all trait indices with symbol patterns (for lookup)
+    symbol_trait_indices: FxHashSet<usize>,
+}
+
+impl SymbolMatchIndex {
+    pub(crate) fn build(traits: &[TraitDefinition]) -> Self {
+        let mut exact_symbols = FxHashMap::default();
+        let mut symbol_trait_indices = FxHashSet::default();
+
+        for (trait_idx, trait_def) in traits.iter().enumerate() {
+            if let Condition::Symbol {
+                exact: Some(ref exact_str),
+                substr: None,
+                regex: None,
+                ..
+            } = &trait_def.r#if
+            {
+                exact_symbols
+                    .entry(normalize_symbol(exact_str))
+                    .or_insert_with(Vec::new)
+                    .push(trait_idx);
+                symbol_trait_indices.insert(trait_idx);
+            }
+        }
+
+        Self {
+            exact_symbols,
+            symbol_trait_indices,
+        }
+    }
+
+    pub(crate) fn find_matches(&self, symbols: &[String]) -> FxHashSet<usize> {
+        let mut matched = FxHashSet::default();
+        for symbol in symbols {
+            let normalized = normalize_symbol(symbol);
+            if let Some(trait_indices) = self.exact_symbols.get(&normalized) {
+                for &trait_idx in trait_indices {
+                    matched.insert(trait_idx);
+                }
+            }
+        }
+        matched
+    }
+
+    pub(crate) fn is_symbol_trait(&self, trait_idx: usize) -> bool {
+        self.symbol_trait_indices.contains(&trait_idx)
+    }
+}
+
 /// Index for fast batched string matching using HashSet for exact matches.
 /// Uses O(1) HashSet lookups instead of Aho-Corasick for exact string matching,
 /// with parallel processing for large string sets.
@@ -98,6 +153,8 @@ pub(crate) struct StringMatchIndex {
     ci_substr_to_traits: Vec<(String, Vec<usize>)>,
     /// Set of trait indices with substr patterns (for quick lookup)
     substr_trait_indices: FxHashSet<usize>,
+    /// Set of trait indices with exact patterns (for quick lookup)
+    exact_trait_indices: FxHashSet<usize>,
 
     // ===== Kept for regex literal pre-filtering (unchanged) =====
     /// Aho-Corasick automaton for regex literal prefixes (for pre-filtering)
@@ -201,6 +258,7 @@ impl StringMatchIndex {
         let mut regex_literal_to_traits: Vec<Vec<usize>> = Vec::with_capacity(estimated_patterns);
         let mut regex_literal_map: FxHashMap<String, usize> = FxHashMap::default();
         let mut regex_trait_indices: FxHashSet<usize> = FxHashSet::default();
+        let mut exact_trait_indices: FxHashSet<usize> = FxHashSet::default();
 
         for (trait_idx, trait_def) in traits.iter().enumerate() {
             match &trait_def.r#if {
@@ -210,6 +268,7 @@ impl StringMatchIndex {
                     case_insensitive,
                     ..
                 } => {
+                    exact_trait_indices.insert(trait_idx);
                     if *case_insensitive {
                         let lower = exact_str.to_lowercase();
                         ci_min_pattern_length = ci_min_pattern_length.min(lower.len());
@@ -326,7 +385,7 @@ impl StringMatchIndex {
             None
         };
 
-        Self {
+        let index = Self {
             exact_patterns,
             ci_exact_patterns,
             min_pattern_length,
@@ -336,11 +395,21 @@ impl StringMatchIndex {
             ci_substr_automaton,
             ci_substr_to_traits,
             substr_trait_indices,
+            exact_trait_indices,
             regex_literal_automaton,
             regex_literal_to_traits,
             regex_trait_indices,
             total_patterns,
-        }
+        };
+        tracing::debug!(
+            "Built StringMatchIndex: {} exact, {} ci_exact, {} substr, {} ci_substr, {} regex literals",
+            index.exact_patterns.len(),
+            index.ci_exact_patterns.len(),
+            index.substr_to_traits.len(),
+            index.ci_substr_to_traits.len(),
+            index.regex_literal_to_traits.len()
+        );
+        index
     }
 
     /// Returns true if the index has patterns to match
@@ -702,6 +771,11 @@ impl StringMatchIndex {
     /// Check if a trait has a substr string pattern that's indexed
     pub(crate) fn is_substr_trait(&self, trait_idx: usize) -> bool {
         self.substr_trait_indices.contains(&trait_idx)
+    }
+
+    /// Check if a trait has an exact string pattern that's indexed
+    pub(crate) fn is_exact_trait(&self, trait_idx: usize) -> bool {
+        self.exact_trait_indices.contains(&trait_idx)
     }
 
     /// Get statistics about indexed patterns
@@ -1299,13 +1373,6 @@ impl RawContentRegexIndex {
 
     pub(crate) fn has_patterns(&self) -> bool {
         self.total_patterns > 0
-    }
-
-    /// Check if any of the given trait indices have content regex patterns
-    pub(crate) fn has_applicable_patterns(&self, applicable: &[usize]) -> bool {
-        applicable
-            .iter()
-            .any(|idx| self.indexed_traits.contains(idx))
     }
 
     /// Check whether a trait is indexed in a compiled regex set.

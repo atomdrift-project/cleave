@@ -126,6 +126,60 @@ pub(crate) fn eval_ast<'a>(
         return ConditionResult::no_match();
     }
 
+    // Idea 9: Use batch AST cache if available
+    if let Some(cache) = ctx.ast_kind_cache {
+        let mut evidence = Vec::new();
+        let mut match_count = 0;
+
+        for &nt in &node_types {
+            if let Some(nodes) = cache.get(nt) {
+                for node_ev in nodes {
+                    // Re-verify the pattern on the cached node text
+                    let matched = match match_mode {
+                        MatchMode::Exact => {
+                            if case_insensitive {
+                                node_ev.value.eq_ignore_ascii_case(pattern)
+                            } else {
+                                node_ev.value == pattern
+                            }
+                        }
+                        MatchMode::Substr => {
+                            if case_insensitive {
+                                node_ev.value.to_lowercase().contains(&pattern.to_lowercase())
+                            } else {
+                                node_ev.value.contains(pattern)
+                            }
+                        }
+                        MatchMode::Regex => match build_regex(pattern, case_insensitive) {
+                            Ok(re) => re.is_match(&node_ev.value),
+                            Err(_) => false,
+                        },
+                    };
+
+                    if matched {
+                        match_count += 1;
+                        if evidence.len() < MAX_EVIDENCE_PER_TRAIT {
+                            evidence.push(node_ev.clone());
+                        }
+                    }
+                }
+            }
+        }
+
+        if match_count > 0 {
+            return ConditionResult {
+                matched: true,
+                evidence,
+                match_count,
+                warnings: Vec::new(),
+                precision: 2.0, // Same as simple mode
+                matched_trait_ids: Vec::new(),
+            };
+        } else {
+            return ConditionResult::no_match();
+        }
+    }
+
     // Use cached AST or parse
     let Ok(source) = std::str::from_utf8(ctx.binary_data) else {
         return ConditionResult::no_match();

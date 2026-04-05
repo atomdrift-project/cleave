@@ -3,7 +3,7 @@
 //! This module handles loading capability definitions from a single YAML file,
 //! which is primarily used in tests and for simple configurations.
 
-use crate::capabilities::indexes::{RawContentRegexIndex, StringMatchIndex, TraitIndex};
+use crate::capabilities::indexes::{RawContentRegexIndex, StringMatchIndex, SymbolMatchIndex, TraitIndex};
 use crate::capabilities::models::{TraitInfo, TraitMappings};
 use crate::capabilities::parsing::{apply_composite_defaults, apply_trait_defaults};
 use crate::capabilities::validation::{
@@ -206,6 +206,9 @@ impl super::CapabilityMapper {
         // Build string match index for batched AC matching
         let string_match_index = StringMatchIndex::build(&trait_definitions);
 
+        // Build symbol match index for fast symbol matching
+        let symbol_match_index = SymbolMatchIndex::build(&trait_definitions);
+
         // Build raw content regex index for batched regex matching
         let raw_content_regex_index = match RawContentRegexIndex::build(&trait_definitions) {
             Ok(index) => index,
@@ -220,6 +223,7 @@ impl super::CapabilityMapper {
             composite_rules,
             trait_index,
             string_match_index,
+            symbol_match_index,
             raw_content_regex_index,
             platforms: vec![Platform::All],
             slow_rule_ms: Self::DEFAULT_SLOW_RULE_MS,

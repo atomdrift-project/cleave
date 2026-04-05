@@ -5,7 +5,7 @@
 //! This is the primary loading method used in production.
 
 use crate::capabilities::error_formatting::enhance_yaml_error;
-use crate::capabilities::indexes::{RawContentRegexIndex, StringMatchIndex, TraitIndex};
+use crate::capabilities::indexes::{RawContentRegexIndex, StringMatchIndex, SymbolMatchIndex, TraitIndex};
 use crate::capabilities::models::{TraitInfo, TraitMappings};
 use crate::capabilities::parsing::{apply_composite_defaults, apply_trait_defaults};
 use crate::capabilities::validation::{
@@ -180,20 +180,17 @@ impl super::CapabilityMapper {
                                     );
 
                                     // Rebuild indexes from cached trait definitions (in parallel)
-                                    let ((trait_index, string_match_index), raw_regex_result) =
+                                    let (((trait_index, string_match_index), symbol_match_index), raw_regex_result) =
                                         rayon::join(
                                             || {
                                                 rayon::join(
                                                     || {
-                                                        TraitIndex::build(
-                                                            &cache_data.trait_definitions,
+                                                        rayon::join(
+                                                            || TraitIndex::build(&cache_data.trait_definitions),
+                                                            || StringMatchIndex::build(&cache_data.trait_definitions),
                                                         )
                                                     },
-                                                    || {
-                                                        StringMatchIndex::build(
-                                                            &cache_data.trait_definitions,
-                                                        )
-                                                    },
+                                                    || SymbolMatchIndex::build(&cache_data.trait_definitions),
                                                 )
                                             },
                                             || {
@@ -226,6 +223,7 @@ impl super::CapabilityMapper {
                                         composite_rules: cache_data.composite_rules,
                                         trait_index,
                                         string_match_index,
+                                        symbol_match_index,
                                         raw_content_regex_index,
                                         platforms: vec![Platform::All],
                                         slow_rule_ms: Self::DEFAULT_SLOW_RULE_MS,
@@ -3050,15 +3048,21 @@ impl super::CapabilityMapper {
 
         // Build all indexes in parallel for better performance
         tracing::debug!("Building trait indexes (parallel)");
-        let ((trait_index, string_match_index), raw_regex_result) = rayon::join(
-            || {
-                rayon::join(
-                    || TraitIndex::build(&trait_definitions),
-                    || StringMatchIndex::build(&trait_definitions),
-                )
-            },
-            || RawContentRegexIndex::build(&trait_definitions),
-        );
+        let (((trait_index, string_match_index), symbol_match_index), raw_regex_result) =
+            rayon::join(
+                || {
+                    rayon::join(
+                        || {
+                            rayon::join(
+                                || TraitIndex::build(&trait_definitions),
+                                || StringMatchIndex::build(&trait_definitions),
+                            )
+                        },
+                        || SymbolMatchIndex::build(&trait_definitions),
+                    )
+                },
+                || RawContentRegexIndex::build(&trait_definitions),
+            );
         let raw_content_regex_index = match raw_regex_result {
             Ok(index) => index,
             Err(errors) => {
@@ -3149,6 +3153,7 @@ impl super::CapabilityMapper {
             composite_rules,
             trait_index,
             string_match_index,
+            symbol_match_index,
             raw_content_regex_index,
             platforms: vec![Platform::All],
             slow_rule_ms: Self::DEFAULT_SLOW_RULE_MS,

@@ -93,6 +93,7 @@ impl super::CapabilityMapper {
         precomputed_raw_regex: Option<Option<FxHashSet<usize>>>,
         arch_ranges: Option<&[(Arch, std::ops::Range<usize>)]>,
     ) {
+        let t_total = std::time::Instant::now();
         // Detect file type once
         let file_type = self.detect_file_type(&report.target.file_type);
 
@@ -104,7 +105,57 @@ impl super::CapabilityMapper {
             .unwrap_or_else(|| self.precompute_raw_regex_matches(binary_data, &file_type));
         let raw_regex_matches_ref = raw_regex_matches.as_ref();
 
+        // Use trait index to only evaluate applicable traits
+        let applicable_indices: Vec<usize> = self.trait_index.get_applicable(&file_type).collect();
+
+        // Idea 9: Batch AST node collection
+        let mut ast_kind_cache = None;
+        if let Some(tree) = cached_ast {
+            if let Ok(source) = std::str::from_utf8(binary_data) {
+                let mut required_node_types = FxHashSet::default();
+                for &idx in &applicable_indices {
+                    let trait_def = &self.trait_definitions[idx];
+                    if let Condition::Ast { kind, node, .. } = &trait_def.r#if {
+                        if let Some(k) = kind {
+                            for nt in crate::composite_rules::ast_kinds::map_kind_to_node_types(k, file_type) {
+                                required_node_types.insert(nt);
+                            }
+                        } else if let Some(n) = node {
+                            required_node_types.insert(n.as_str());
+                        }
+                    }
+                }
+
+                if !required_node_types.is_empty() {
+                    let mut cache = FxHashMap::default();
+                    let mut cursor = tree.walk();
+                    crate::analyzers::ast_walker::walk_tree_with_stats(&mut cursor, None, |node, _| {
+                        let kind = node.kind();
+                        if required_node_types.contains(kind) {
+                            if let Ok(text) = node.utf8_text(source.as_bytes()) {
+                                cache.entry(kind.to_string()).or_insert_with(Vec::new).push(Evidence {
+                                    method: "ast".to_string(),
+                                    source: "tree-sitter".to_string(),
+                                    value: crate::composite_rules::evaluators::truncate_evidence(text, 100),
+                                    location: Some(format!(
+                                        "{}:{}",
+                                        node.start_position().row + 1,
+                                        node.start_position().column + 1
+                                    )),
+                                    offsets: vec![node.start_byte() as u64],
+                                    ..Default::default()
+                                });
+                            }
+                        }
+                        true
+                    });
+                    ast_kind_cache = Some(cache);
+                }
+            }
+        }
+
         // Build all_strings ONCE — combines report strings, imports, and exports
+        let t_strings = std::time::Instant::now();
         let all_strings = super::build_all_strings(report);
 
         // Run string matching ONCE
@@ -114,9 +165,20 @@ impl super::CapabilityMapper {
         } else {
             (FxHashSet::default(), FxHashMap::default())
         };
+
+        // Run symbol matching ONCE
+        let all_symbols: Vec<String> = report
+            .imports
+            .iter()
+            .map(|i| i.symbol.clone())
+            .chain(report.exports.iter().map(|e| e.symbol.clone()))
+            .collect();
+        let symbol_matched_traits = self.symbol_match_index.find_matches(&all_symbols);
+
         let regex_candidates = self.string_match_index.find_regex_candidates(&all_strings);
 
         drop(all_strings);
+        let d_strings = t_strings.elapsed();
 
         // Build a seen-IDs set once from existing report findings, then keep it up-to-date
         // as we merge — O(1) per lookup instead of O(n) linear scan.
@@ -124,13 +186,16 @@ impl super::CapabilityMapper {
 
         // Step 1: Evaluate independent atomic traits (no trait: dependencies)
         // These can be evaluated in parallel without worrying about order
+        let t_eval1 = std::time::Instant::now();
         let cache = super::evaluate_traits::TraitEvalCache {
             raw_regex_matches: raw_regex_matches_ref,
             section_map: &section_map,
             string_matched_traits: &string_matched_traits,
+            symbol_matched_traits: &symbol_matched_traits,
             cached_evidence: &cached_evidence,
             regex_candidates: &regex_candidates,
             arch_ranges,
+            ast_kind_cache,
         };
 
         let independent_findings = self.evaluate_traits_filtered_with_cache(
@@ -149,10 +214,12 @@ impl super::CapabilityMapper {
                 report.findings.push(finding);
             }
         }
+        let d_eval1 = t_eval1.elapsed();
 
         // Step 2: Evaluate dependent atomic traits (with trait: conditions)
         // These need to see the independent traits' results, so evaluate iteratively
         // until no new findings are produced (handles chained dependencies: A -> B -> C)
+        let t_eval2 = std::time::Instant::now();
         const MAX_ITERATIONS: usize = 10; // Prevent infinite loops
         for _ in 0..MAX_ITERATIONS {
             let dependent_findings = self.evaluate_traits_filtered_with_cache(
@@ -182,17 +249,21 @@ impl super::CapabilityMapper {
                 break;
             }
         }
+        let d_eval2 = t_eval2.elapsed();
 
         // Step 3: Generate synthetic metadata/import findings from discovered imports
         // This MUST happen before Step 4 so composite rules can reference them
+        let t_imports = std::time::Instant::now();
         let pre_import_count = report.findings.len();
         Self::generate_import_findings(report);
         // Update seen with any newly added import findings
         for f in &report.findings[pre_import_count..] {
             seen.insert(f.id.clone());
         }
+        let d_imports = t_imports.elapsed();
 
         // Step 4: Evaluate composite rules (which can now access atomic traits AND metadata/import findings)
+        let t_comp = std::time::Instant::now();
         let composite_findings = self.evaluate_composite_rules(
             report,
             binary_data,
@@ -202,13 +273,15 @@ impl super::CapabilityMapper {
             arch_ranges,
         );
 
-        // Step 5: Merge composite findings into report.
+        // Merge composite findings into report
         for finding in composite_findings {
             if !seen.contains(finding.id.as_str()) {
                 seen.insert(finding.id.clone());
                 report.findings.push(finding);
             }
         }
+        let d_comp = t_comp.elapsed();
+        let _d_total = t_total.elapsed();
 
         // Step 6: Retroactive unless-suppression.
         //

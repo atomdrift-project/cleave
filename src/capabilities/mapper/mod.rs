@@ -22,7 +22,7 @@
 //! - **helpers**: Utility functions (file type detection, validation helpers)
 //! - **builder**: Constructor methods (empty, new, with_platforms)
 
-use crate::capabilities::indexes::{RawContentRegexIndex, StringMatchIndex, TraitIndex};
+use crate::capabilities::indexes::{RawContentRegexIndex, StringMatchIndex, SymbolMatchIndex, TraitIndex};
 use crate::capabilities::models::TraitInfo;
 use crate::composite_rules::{CompositeTrait, Platform, TraitDefinition};
 use std::collections::HashMap;
@@ -38,6 +38,8 @@ pub struct CapabilityMapper {
     pub(super) trait_index: TraitIndex,
     /// Index for fast batched string matching
     pub(super) string_match_index: StringMatchIndex,
+    /// Index for fast symbol matching
+    pub(super) symbol_match_index: SymbolMatchIndex,
     /// Index for batched raw content regex matching
     pub(super) raw_content_regex_index: RawContentRegexIndex,
     /// Platform filter(s) for rule evaluation (default: [All])

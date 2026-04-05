@@ -47,6 +47,8 @@ pub(crate) struct EvaluationContext<'a> {
     pub cached_kv_format: OnceLock<StructuredFormat>,
     /// Cached parsed KV data (parse once per file, reuse for all KV conditions)
     pub cached_kv_parsed: OnceLock<Box<Value>>,
+    /// Cached AST nodes by kind (for batch evaluation)
+    pub ast_kind_cache: Option<&'a FxHashMap<String, Vec<Evidence>>>,
     /// Current trait being evaluated (for warning/error context)
     #[allow(dead_code)] // Populated during eval, intended for future logging
     pub current_trait: Option<&'a str>,
@@ -129,6 +131,7 @@ impl<'a> EvaluationContext<'a> {
             inline_yara_results: None,
             cached_kv_format: OnceLock::new(),
             cached_kv_parsed: OnceLock::new(),
+            ast_kind_cache: None,
             current_trait: None,
             current_source: None,
             string_exact_index: OnceLock::new(),
@@ -137,6 +140,36 @@ impl<'a> EvaluationContext<'a> {
             arch_ranges: None,
             slow_rule_ms: 4000,
         }
+    }
+
+    /// Set the slow rule threshold
+    pub(crate) fn with_slow_rule_ms(mut self, slow_rule_ms: u64) -> Self {
+        self.slow_rule_ms = slow_rule_ms;
+        self
+    }
+
+    /// Set the AST kind cache
+    pub(crate) fn with_ast_kind_cache(mut self, cache: &'a FxHashMap<String, Vec<Evidence>>) -> Self {
+        self.ast_kind_cache = Some(cache);
+        self
+    }
+
+    /// Set the deadline
+    pub(crate) fn with_deadline(mut self, deadline: Instant) -> Self {
+        self.deadline = Some(deadline);
+        self
+    }
+
+    /// Set the inline YARA results
+    pub(crate) fn with_inline_yara(mut self, results: &'a HashMap<String, Vec<Evidence>>) -> Self {
+        self.inline_yara_results = Some(results);
+        self
+    }
+
+    /// Set the section map
+    pub(crate) fn with_section_map(mut self, section_map: SectionMap) -> Self {
+        self.section_map = Some(section_map);
+        self
     }
 
     /// Attach per-architecture byte ranges for fat/universal binary evaluation.
@@ -246,34 +279,6 @@ impl<'a> EvaluationContext<'a> {
 
             index
         })
-    }
-
-    /// Set section map for location-constrained matching
-    #[must_use]
-    pub(crate) fn with_section_map(mut self, section_map: SectionMap) -> Self {
-        self.section_map = Some(section_map);
-        self
-    }
-
-    /// Attach pre-scanned inline YARA results from the combined engine.
-    /// Keyed by namespace (`"inline.{trait_id}"`); maps to matched evidence.
-    #[must_use]
-    pub(crate) fn with_inline_yara(mut self, results: &'a HashMap<String, Vec<Evidence>>) -> Self {
-        self.inline_yara_results = Some(results);
-        self
-    }
-
-    /// Set a hard deadline for rule evaluation. AST walks and other
-    /// evaluation loops will bail out early if this deadline is exceeded.
-    pub(crate) fn with_deadline(mut self, deadline: Instant) -> Self {
-        self.deadline = Some(deadline);
-        self
-    }
-
-    /// Set the slow rule warning threshold in milliseconds.
-    pub(crate) fn with_slow_rule_ms(mut self, ms: u64) -> Self {
-        self.slow_rule_ms = ms;
-        self
     }
 
     /// Run a closure against the debug collector if one is present.

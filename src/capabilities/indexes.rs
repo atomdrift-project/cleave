@@ -13,6 +13,47 @@ use rayon::prelude::*;
 use regex::bytes::{RegexSet, RegexSetBuilder};
 use rustc_hash::{FxHashMap, FxHashSet};
 
+const ARCHIVE_FAMILY_TYPES: [RuleFileType; 14] = [
+    RuleFileType::Archive,
+    RuleFileType::Zip,
+    RuleFileType::Apk,
+    RuleFileType::Jar,
+    RuleFileType::Tar,
+    RuleFileType::Npm,
+    RuleFileType::Nupkg,
+    RuleFileType::Gem,
+    RuleFileType::Whl,
+    RuleFileType::Deb,
+    RuleFileType::Rpm,
+    RuleFileType::Crx,
+    RuleFileType::VsixArchive,
+    RuleFileType::Xpi,
+];
+
+fn archive_family_types(file_type: &RuleFileType) -> &'static [RuleFileType] {
+    if matches!(*file_type, RuleFileType::All | RuleFileType::Archive) {
+        &ARCHIVE_FAMILY_TYPES
+    } else {
+        &[]
+    }
+}
+
+fn binary_family_types(file_type: &RuleFileType) -> &'static [RuleFileType] {
+    match file_type {
+        RuleFileType::Unknown => &[
+            RuleFileType::Elf,
+            RuleFileType::Macho,
+            RuleFileType::Pe,
+            RuleFileType::Dll,
+            RuleFileType::So,
+            RuleFileType::Dylib,
+            RuleFileType::Class,
+            RuleFileType::Pyc,
+        ],
+        _ => &[],
+    }
+}
+
 /// Index of trait indices by file type for fast lookup.
 /// Maps FileType -> Vec of indices into trait_definitions.
 #[derive(Clone, Default, Debug)]
@@ -68,6 +109,16 @@ impl TraitIndex {
             .iter()
             .copied()
             .chain(specific.iter().copied())
+            .chain(
+                binary_family_types(file_type)
+                    .iter()
+                    .flat_map(|ft| self.by_file_type.get(ft).into_iter().flatten().copied()),
+            )
+            .chain(
+                archive_family_types(file_type)
+                    .iter()
+                    .flat_map(|ft| self.by_file_type.get(ft).into_iter().flatten().copied()),
+            )
     }
 }
 
@@ -1400,6 +1451,14 @@ impl RawContentRegexIndex {
         if let Some(ft_set) = self.by_file_type.get(file_type) {
             for trait_idx in ft_set.find_matches(binary_data) {
                 matching_traits.insert(trait_idx);
+            }
+        }
+
+        for archive_ft in archive_family_types(file_type) {
+            if let Some(ft_set) = self.by_file_type.get(archive_ft) {
+                for trait_idx in ft_set.find_matches(&content) {
+                    matching_traits.insert(trait_idx);
+                }
             }
         }
 

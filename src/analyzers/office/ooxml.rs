@@ -29,6 +29,20 @@ pub(crate) struct OoxmlDocument {
     pub has_encryption: bool,
     /// ZIP entry names
     pub entry_names: Vec<String>,
+    /// Decompressed Word document XML text when available
+    pub word_document_xml: Option<String>,
+    /// Decompressed [Content_Types].xml when available
+    pub content_types_xml: Option<String>,
+    /// Decompressed Excel workbook XML when available
+    pub workbook_xml: Option<String>,
+    /// Decompressed Excel workbook relationship XML when available
+    pub workbook_rels_xml: Option<String>,
+    /// Decompressed Excel styles XML when available
+    pub excel_styles_xml: Option<String>,
+    /// Decompressed Excel macrosheet XML when available
+    pub excel_macrosheet_xml: Option<String>,
+    /// Printable strings recovered from vbaProject.bin when present
+    pub vba_project_strings: Vec<String>,
 }
 
 /// OOXML document subtype.
@@ -105,6 +119,7 @@ pub(crate) fn parse_ooxml(data: &[u8]) -> Result<OoxmlDocument> {
     } else {
         Vec::new()
     };
+    let vba_project_strings = extract_vba_project_strings(&mut archive, &entry_names);
 
     // Find external references (template injection)
     let external_refs = find_external_refs(&mut archive, &entry_names);
@@ -117,6 +132,36 @@ pub(crate) fn parse_ooxml(data: &[u8]) -> Result<OoxmlDocument> {
 
     // Extract metadata
     let metadata = extract_metadata(&mut archive);
+    let content_types_xml = read_zip_entry(&mut archive, "[Content_Types].xml")
+        .map(|bytes| String::from_utf8_lossy(&bytes).into_owned());
+    let word_document_xml = match doc_subtype {
+        OoxmlSubtype::Word => read_zip_entry(&mut archive, "word/document.xml")
+            .map(|bytes| String::from_utf8_lossy(&bytes).into_owned()),
+        _ => None,
+    };
+    let workbook_xml = match doc_subtype {
+        OoxmlSubtype::Excel => read_zip_entry(&mut archive, "xl/workbook.xml")
+            .map(|bytes| String::from_utf8_lossy(&bytes).into_owned()),
+        _ => None,
+    };
+    let workbook_rels_xml = match doc_subtype {
+        OoxmlSubtype::Excel => read_zip_entry(&mut archive, "xl/_rels/workbook.xml.rels")
+            .map(|bytes| String::from_utf8_lossy(&bytes).into_owned()),
+        _ => None,
+    };
+    let excel_styles_xml = match doc_subtype {
+        OoxmlSubtype::Excel => read_zip_entry(&mut archive, "xl/styles.xml")
+            .map(|bytes| String::from_utf8_lossy(&bytes).into_owned()),
+        _ => None,
+    };
+    let excel_macrosheet_xml = match doc_subtype {
+        OoxmlSubtype::Excel => entry_names
+            .iter()
+            .find(|n| n.starts_with("xl/macrosheets/") && n.ends_with(".xml"))
+            .and_then(|name| read_zip_entry(&mut archive, name))
+            .map(|bytes| String::from_utf8_lossy(&bytes).into_owned()),
+        _ => None,
+    };
 
     // Check for encryption marker
     let has_encryption = entry_names
@@ -133,6 +178,13 @@ pub(crate) fn parse_ooxml(data: &[u8]) -> Result<OoxmlDocument> {
         metadata,
         has_encryption,
         entry_names,
+        word_document_xml,
+        content_types_xml,
+        workbook_xml,
+        workbook_rels_xml,
+        excel_styles_xml,
+        excel_macrosheet_xml,
+        vba_project_strings,
     })
 }
 
@@ -162,7 +214,12 @@ fn extract_vba_from_ooxml(
     // Find the vbaProject.bin entry
     let vba_entry = entry_names
         .iter()
-        .find(|n| n.to_lowercase().contains("vbaproject.bin"));
+        .find(|n| n.to_lowercase().ends_with("vbaproject.bin"))
+        .or_else(|| {
+            entry_names
+                .iter()
+                .find(|n| n.to_lowercase().contains("vbaproject.bin"))
+        });
 
     let vba_path = match vba_entry {
         Some(path) => path.clone(),
@@ -181,6 +238,46 @@ fn extract_vba_from_ooxml(
             Vec::new()
         }
     }
+}
+
+fn extract_vba_project_strings(
+    archive: &mut zip::ZipArchive<Cursor<&[u8]>>,
+    entry_names: &[String],
+) -> Vec<String> {
+    let vba_entry = entry_names
+        .iter()
+        .find(|n| n.to_lowercase().ends_with("vbaproject.bin"))
+        .or_else(|| {
+            entry_names
+                .iter()
+                .find(|n| n.to_lowercase().contains("vbaproject.bin"))
+        });
+    let Some(vba_path) = vba_entry else {
+        return Vec::new();
+    };
+    let Some(vba_data) = read_zip_entry(archive, vba_path) else {
+        return Vec::new();
+    };
+    extract_ascii_strings(&vba_data, 4)
+}
+
+fn extract_ascii_strings(data: &[u8], min_len: usize) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut current = Vec::new();
+    for &b in data {
+        if (0x20..=0x7e).contains(&b) {
+            current.push(b);
+        } else {
+            if current.len() >= min_len {
+                out.push(String::from_utf8_lossy(&current).into_owned());
+            }
+            current.clear();
+        }
+    }
+    if current.len() >= min_len {
+        out.push(String::from_utf8_lossy(&current).into_owned());
+    }
+    out
 }
 
 /// Find external references in relationship (.rels) files.

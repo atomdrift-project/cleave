@@ -196,7 +196,13 @@ impl GenericAnalyzer {
             t_tree.elapsed()
         );
 
-        if self.file_type == FileType::Unknown {
+        let allow_unknown_binary_strings = self.file_type == FileType::Unknown
+            && Path::new(&file_path)
+                .extension()
+                .is_some_and(|ext| ext.eq_ignore_ascii_case("com"))
+            && content.len() <= 4096;
+
+        if self.file_type == FileType::Unknown && !allow_unknown_binary_strings {
             tracing::info!(
                 "GenericAnalyzer: Skipping full string extraction and embedded code analysis for unknown file"
             );

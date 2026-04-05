@@ -14,10 +14,58 @@ use super::guards::{
     sanitize_entry_path, symlink_escapes, ExtractionGuard, HostileArchiveReason, LimitedReader,
     MAX_FILE_SIZE,
 };
+use crate::types::{container_metrics::ArchiveMetrics, ArchiveEntry};
 use anyhow::{Context, Result};
 use std::fs::{self, File};
 use std::io::{Read, Seek};
 use std::path::Path;
+
+/// Read ZIP central directory metadata without extracting contents.
+pub(crate) fn inspect_zip_metadata(
+    archive_path: &Path,
+) -> Result<(Vec<ArchiveEntry>, ArchiveMetrics)> {
+    let file = File::open(archive_path)?;
+    let mut archive = zip::ZipArchive::new(file).context("Failed to read ZIP archive")?;
+
+    let mut entries = Vec::with_capacity(archive.len());
+    let mut metrics = ArchiveMetrics::default();
+    metrics.has_comment = !archive.comment().is_empty();
+
+    for i in 0..archive.len() {
+        let entry = archive.by_index(i)?;
+        let name = entry.name().to_string();
+
+        if entry.is_dir() {
+            metrics.directory_count += 1;
+            continue;
+        }
+
+        metrics.file_count += 1;
+        metrics.total_uncompressed += entry.size();
+        metrics.total_compressed += entry.compressed_size();
+        metrics.max_filename_length = metrics.max_filename_length.max(name.len() as u32);
+        if name.starts_with('.') || name.split('/').any(|part| part.starts_with('.')) {
+            metrics.hidden_files += 1;
+        }
+        if entry.encrypted() {
+            metrics.encrypted_entries += 1;
+        }
+
+        entries.push(ArchiveEntry {
+            path: name,
+            file_type: "unknown".to_string(),
+            sha256: String::new(),
+            size_bytes: entry.size(),
+        });
+    }
+
+    if metrics.total_uncompressed > 0 {
+        metrics.compression_ratio =
+            metrics.total_compressed as f32 / metrics.total_uncompressed as f32;
+    }
+
+    Ok((entries, metrics))
+}
 
 /// Extract ZIP archive with bomb protection
 pub(crate) fn extract_zip_safe(

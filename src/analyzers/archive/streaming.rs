@@ -406,9 +406,17 @@ impl ArchiveAnalyzer {
     ) -> Result<Option<ExtractedFile>> {
         let entry_name = entry.name().to_string();
         let size = entry.size();
+        let compressed = entry.compressed_size();
+        let has_embedded_data = size > 0 || compressed > 0;
+        let analysis_name = if entry.is_dir() && has_embedded_data {
+            entry_name.trim_end_matches('/').to_string()
+        } else {
+            entry_name.clone()
+        };
 
-        // Check if directory
-        if entry.is_dir() {
+        // Ordinary directories are skipped, but malformed ZIP directory entries can
+        // legitimately carry payload bytes and should be analyzed.
+        if entry.is_dir() && !has_embedded_data {
             return Ok(None);
         }
 
@@ -446,13 +454,12 @@ impl ArchiveAnalyzer {
         }
 
         // Check compression ratio (zip bomb detection)
-        let compressed = entry.compressed_size();
         if !guard.check_compression_ratio(compressed, size) {
             return Ok(None);
         }
 
         // Detect file type from name (can't use detect_file_type since file doesn't exist on disk)
-        let path = Path::new(&entry_name);
+        let path = Path::new(&analysis_name);
         let file_type = detect_file_type_from_path(path);
 
         // Decide: in-memory or on-disk?
@@ -479,7 +486,7 @@ impl ArchiveAnalyzer {
             }
 
             Ok(Some(ExtractedFile::OnDisk {
-                path: entry_name,
+                path: analysis_name,
                 temp_path: out_path,
                 file_type,
             }))
@@ -501,7 +508,7 @@ impl ArchiveAnalyzer {
             };
 
             Ok(Some(ExtractedFile::InMemory {
-                path: entry_name,
+                path: analysis_name,
                 data,
                 file_type: actual_type,
             }))

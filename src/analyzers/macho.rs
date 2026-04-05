@@ -941,7 +941,6 @@ fn determine_entitlement_criticality(
     // - allow-unsigned-executable-memory: bypasses code signing enforcement
     // - disable-executable-page-protection: weakens memory protections
     if entitlement_key.contains("debugger")
-        || entitlement_key.contains("allow-jit")
         || entitlement_key.contains("allow-unsigned-executable-memory")
         || entitlement_key.contains("disable-executable-page-protection")
     {

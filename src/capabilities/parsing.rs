@@ -38,7 +38,10 @@ pub(crate) fn apply_vec_default(
     match &raw {
         Some(v) if v.iter().any(|s| s.eq_ignore_ascii_case("none")) => None,
         Some(_) => raw,
-        None => default.clone(),
+        None => match default {
+            Some(v) if v.iter().any(|s| s.eq_ignore_ascii_case("none")) => None,
+            _ => default.clone(),
+        },
     }
 }
 
@@ -67,16 +70,11 @@ pub(crate) fn apply_trait_defaults(
 
     // Parse file_types: use trait-specific if present (unless "none"), else defaults, else [All]
     let warn_start = warnings.len();
-    // Detect always-fatal for: errors before apply_vec_default silences "none"
+    // Detect always-fatal for: errors before apply_vec_default handles "none"
     if let Some(types) = raw.file_types.as_deref() {
         if types.is_empty() {
             warnings.push(
                 "Invalid file type: '' (empty 'for: []' is not valid — specify at least one file type)"
-                    .to_string(),
-            );
-        } else if types.iter().any(|s| s.eq_ignore_ascii_case("none")) {
-            warnings.push(
-                "Invalid file type: 'none' ('none' is not a valid 'for:' value — use specific types or remove 'for:' to inherit defaults)"
                     .to_string(),
             );
         }
@@ -400,12 +398,14 @@ pub(crate) fn parse_file_types(types: &[String], warnings: &mut Vec<String>) -> 
                     RuleFileType::Pdf,
                     RuleFileType::Rtf,
                     RuleFileType::Html,
+                    RuleFileType::Markdown,
                     RuleFileType::OleDoc,
                     RuleFileType::Ooxml,
                 ],
                 "images" | "media" => vec![RuleFileType::Jpeg, RuleFileType::Png],
                 "data" | "ipa" => vec![RuleFileType::Ipa],
                 "archives" => vec![
+                    RuleFileType::Archive,
                     RuleFileType::Zip,
                     RuleFileType::Apk,
                     RuleFileType::Jar,
@@ -420,6 +420,7 @@ pub(crate) fn parse_file_types(types: &[String], warnings: &mut Vec<String>) -> 
                     RuleFileType::VsixArchive,
                     RuleFileType::Xpi,
                 ],
+                "unknown" => vec![RuleFileType::Unknown],
                 // Binary formats
                 "elf" => vec![RuleFileType::Elf],
                 "macho" => vec![RuleFileType::Macho],
@@ -440,6 +441,7 @@ pub(crate) fn parse_file_types(types: &[String], warnings: &mut Vec<String>) -> 
                 "applescript" | "scpt" => vec![RuleFileType::AppleScript],
                 "vbs" | "vbe" | "wsf" | "wsc" | "vbscript" => vec![RuleFileType::Vbs],
                 "html" | "htm" => vec![RuleFileType::Html],
+                "markdown" | "md" => vec![RuleFileType::Markdown],
                 // Compiled languages (fullname + extension)
                 "java" => vec![RuleFileType::Java],
                 "class" => vec![RuleFileType::Class],
@@ -482,6 +484,7 @@ pub(crate) fn parse_file_types(types: &[String], warnings: &mut Vec<String>) -> 
                 "ooxml" | "docx" | "xlsx" | "pptx" | "docm" | "xlsm" | "pptm" => {
                     vec![RuleFileType::Ooxml]
                 }
+                "archive" | "rar" | "7z" => vec![RuleFileType::Archive],
                 "zip" => vec![RuleFileType::Zip],
                 "apk" => vec![RuleFileType::Apk],
                 "jar" => vec![RuleFileType::Jar],
@@ -503,12 +506,6 @@ pub(crate) fn parse_file_types(types: &[String], warnings: &mut Vec<String>) -> 
 
             if name == "*" || name.eq_ignore_ascii_case("all") {
                 if !is_exclusion {
-                    warnings.push(
-                        "'all' is no longer a valid file type — choose specific file types \
-                         (elf, python, ...) or named groups \
-                         (binaries, scripts, source, manifests, documents, media, data) instead"
-                            .to_string(),
-                    );
                     has_explicit_inclusion = true;
                     inclusions.insert(RuleFileType::All);
                 } else {
@@ -690,16 +687,11 @@ pub(crate) fn apply_composite_defaults(
 ) -> CompositeTrait {
     // Parse file_types: use rule-specific if present (unless "none"), else defaults, else [All]
     let warn_start = warnings.len();
-    // Detect always-fatal for: errors before apply_vec_default silences "none"
+    // Detect always-fatal for: errors before apply_vec_default handles "none"
     if let Some(types) = raw.file_types.as_deref() {
         if types.is_empty() {
             warnings.push(
                 "Invalid file type: '' (empty 'for: []' is not valid — specify at least one file type)"
-                    .to_string(),
-            );
-        } else if types.iter().any(|s| s.eq_ignore_ascii_case("none")) {
-            warnings.push(
-                "Invalid file type: 'none' ('none' is not a valid 'for:' value — use specific types or remove 'for:' to inherit defaults)"
                     .to_string(),
             );
         }

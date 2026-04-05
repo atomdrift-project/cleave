@@ -41,6 +41,9 @@ impl VsixManifestAnalyzer {
     fn analyze_manifest(&self, file_path: &Path, content: &str) -> Result<AnalysisReport> {
         let start = std::time::Instant::now();
 
+        // Strip UTF-8 BOM if present
+        let content = content.strip_prefix('\u{FEFF}').unwrap_or(content);
+
         let doc =
             roxmltree::Document::parse(content).context("Failed to parse .vsixmanifest XML")?;
 

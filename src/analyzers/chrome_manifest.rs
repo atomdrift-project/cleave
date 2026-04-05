@@ -107,6 +107,9 @@ impl ChromeManifestAnalyzer {
     ) -> Result<AnalysisReport> {
         let start = std::time::Instant::now();
 
+        // Strip UTF-8 BOM if present
+        let content = content.strip_prefix('\u{FEFF}').unwrap_or(content);
+
         let manifest: ChromeManifest =
             serde_json::from_str(content).context("Failed to parse manifest.json")?;
 

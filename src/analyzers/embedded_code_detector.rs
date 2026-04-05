@@ -11,6 +11,7 @@ use crate::types::file_analysis::{encode_decoded_path, FileAnalysis};
 use crate::types::Evidence;
 use crate::types::{Criticality, Finding, FindingKind};
 use anyhow::{Context, Result};
+use std::fs;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -105,6 +106,19 @@ fn detect_language_inner(string_info: &StringInfo, is_encoded: bool) -> Option<F
         return None;
     }
 
+    // Inline source maps frequently carry original source in base64 comments.
+    // Those are packaging metadata, not hidden payloads, and should not generate
+    // embedded-code detections for each decoded sourcesContent entry.
+    if is_source_map_payload(value) {
+        return None;
+    }
+
+    // Benign JavaScript color helpers often embed ANSI escapes in template literals.
+    // These are decoded unicode-escape strings, but they are not hidden payloads.
+    if is_encoded && looks_like_ansi_color_helper(value) {
+        return None;
+    }
+
     // Use stng's classification (either from extraction or by calling classify_string)
     use crate::types::binary::StringType;
 
@@ -177,6 +191,60 @@ fn detect_language_inner(string_info: &StringInfo, is_encoded: bool) -> Option<F
     None
 }
 
+fn is_source_map_payload(value: &str) -> bool {
+    let trimmed = value.trim_start();
+    if !trimmed.starts_with('{') {
+        return false;
+    }
+
+    let markers = [
+        "\"version\":3",
+        "\"sources\":[",
+        "\"mappings\":\"",
+        "\"sourcesContent\":[",
+    ];
+
+    markers.iter().all(|marker| trimmed.contains(marker))
+}
+
+fn is_source_map_string_set(strings: &[StringInfo]) -> bool {
+    let mut has_version = false;
+    let mut has_sources = false;
+    let mut has_mappings = false;
+    let mut has_sources_content = false;
+
+    for string_info in strings {
+        match string_info.value.as_str() {
+            "version" => has_version = true,
+            "sources" => has_sources = true,
+            "mappings" => has_mappings = true,
+            "sourcesContent" => has_sources_content = true,
+            _ => {}
+        }
+    }
+
+    has_version && has_sources && has_mappings && has_sources_content
+}
+
+fn is_inline_source_map_offset(parent_path: &str, offset: u64) -> bool {
+    let host_path = parent_path.split("##").next().unwrap_or(parent_path);
+    let data = match fs::read(host_path) {
+        Ok(data) => data,
+        Err(_) => return false,
+    };
+
+    let offset = offset as usize;
+    if offset > data.len() {
+        return false;
+    }
+
+    let start = offset.saturating_sub(128);
+    let context = &data[start..offset];
+    let context = String::from_utf8_lossy(context);
+
+    context.contains("sourceMappingURL=data:application/json") && context.contains("base64,")
+}
+
 fn should_reject_markup(value: &str, is_encoded: bool) -> bool {
     !is_encoded && looks_like_passive_markup(value)
 }
@@ -234,13 +302,20 @@ fn looks_like_passive_markup(value: &str) -> bool {
     !active_markers.iter().any(|marker| value.contains(marker))
 }
 
+fn looks_like_ansi_color_helper(value: &str) -> bool {
+    value.contains('\u{1b}')
+        && value.contains("colors ?")
+        && value.contains("${m}")
+        && value.contains(": m")
+}
+
 /// Additional heuristic to filter out false positive shell detection (like foreign languages)
 fn is_real_shell(value: &str) -> bool {
     // NOTE: shebang (#!) is NOT shell — it's a kernel execve directive.
     // A string starting with #!/usr/bin/env ruby is Ruby, not shell.
 
     // Look for common shell keywords/patterns that are rare in natural language
-    let keywords = [
+    let strong_keywords = [
         "sudo ",
         "grep ",
         "curl ",
@@ -254,8 +329,6 @@ fn is_real_shell(value: &str) -> bool {
         "export ",
         "unset ",
         "alias ",
-        "2>&1",
-        "> /dev/null",
         " | sh",
         " | bash",
         "rm -rf ",
@@ -265,7 +338,11 @@ fn is_real_shell(value: &str) -> bool {
         "EOF",
     ];
 
-    if keywords.iter().any(|&k| value.contains(k)) {
+    if strong_keywords.iter().any(|&k| value.contains(k)) {
+        return true;
+    }
+
+    if has_shell_redirection(value) && has_shell_execution_context(value) {
         return true;
     }
 
@@ -332,6 +409,73 @@ fn has_shell_variable_expansion(value: &str) -> bool {
     }
 
     false
+}
+
+fn has_shell_redirection(value: &str) -> bool {
+    value.contains("2>&1") || value.contains("> /dev/null") || value.contains(">/dev/null")
+}
+
+fn has_shell_execution_context(value: &str) -> bool {
+    let bytes = value.as_bytes();
+
+    for pattern in ["2>&1", "> /dev/null", ">/dev/null"] {
+        let mut start = 0;
+        while let Some(relative_idx) = value[start..].find(pattern) {
+            let idx = start + relative_idx;
+            if has_command_before(bytes, idx) {
+                return true;
+            }
+            start = idx + pattern.len();
+        }
+    }
+
+    value.contains("&&") || value.contains("||") || value.contains("; ")
+}
+
+fn has_command_before(bytes: &[u8], marker_idx: usize) -> bool {
+    let prefix = &bytes[..marker_idx];
+    let end = prefix
+        .iter()
+        .rposition(|b| !b.is_ascii_whitespace())
+        .map(|pos| pos + 1)
+        .unwrap_or(0);
+    if end == 0 {
+        return false;
+    }
+
+    let start = prefix[..end]
+        .iter()
+        .rposition(|b| b.is_ascii_whitespace())
+        .map_or(0, |pos| pos + 1);
+    if start >= end {
+        return false;
+    }
+
+    let token = match std::str::from_utf8(&prefix[start..end]) {
+        Ok(token) => token,
+        Err(_) => return false,
+    };
+
+    is_shell_command_token(token)
+}
+
+fn is_shell_command_token(token: &str) -> bool {
+    if token.is_empty() {
+        return false;
+    }
+
+    let trimmed = token.trim_matches(|c: char| matches!(c, '"' | '\'' | '(' | ')'));
+    if trimmed.is_empty() {
+        return false;
+    }
+
+    if !trimmed.chars().any(|c| c.is_ascii_alphabetic()) {
+        return false;
+    }
+
+    trimmed
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.' | '/' | ':'))
 }
 
 fn is_shell_identifier(name: &str) -> bool {
@@ -445,16 +589,33 @@ fn generate_language_trait(
             Criticality::Baseline,
         )
     } else {
-        // Encoded code - suspicious (obfuscation attempt)
         let encoding = &encoding_chain[0];
-        (
-            format!(
-                "metadata/lang/encoded/{}::{}",
-                encoding,
-                lang_name(detected_lang)
-            ),
-            Criticality::Suspicious,
-        )
+        // Wide-encoded JavaScript in native binaries is frequently legitimate embedded UI
+        // content. The decoded script is analyzed separately, so keep the generic language
+        // marker structural rather than suspicious and avoid colliding with trait-based
+        // encoded-language rules that are tuned independently.
+        if encoding == "wide" && matches!(detected_lang, FileType::JavaScript) {
+            (
+                format!("metadata/lang/embedded::{}", lang_name(detected_lang)),
+                Criticality::Baseline,
+            )
+        } else {
+            let crit = if encoding == "url" {
+                Criticality::Notable
+            } else {
+                Criticality::Suspicious
+            };
+            (
+                format!(
+                    "metadata/lang/encoded/{}::{}",
+                    encoding,
+                    lang_name(detected_lang)
+                ),
+                // Encoded code is suspicious by default because it often reflects obfuscation.
+                // URL encoding is common enough in some contexts (like format strings) to downgrade to Notable.
+                crit,
+            )
+        }
     };
 
     let description = format!(
@@ -522,6 +683,10 @@ pub fn analyze_embedded_string(
     let detect_time = t_detect.elapsed();
 
     let offset = string_info.offset.unwrap_or(0);
+
+    if is_encoded && is_inline_source_map_offset(parent_path, offset) {
+        anyhow::bail!("Inline source map data URL, not embedded code");
+    }
 
     // Avoid reporting the parent file itself as "embedded" code when the detector
     // reclassifies the full source buffer starting at offset 0x0.
@@ -859,6 +1024,14 @@ pub(crate) fn process_all_strings_with_host(
     current_depth: usize,
     _host_file_type: Option<&FileType>,
 ) -> (Vec<FileAnalysis>, Vec<Finding>) {
+    if is_source_map_string_set(strings) {
+        tracing::debug!(
+            "embedded_code_detector: Skipping source map payload strings for {}",
+            parent_path
+        );
+        return (Vec::new(), Vec::new());
+    }
+
     let mut encoded_layers = Vec::new();
     let mut plain_findings = Vec::new();
     let mut total_analyzed = 0;
@@ -1005,6 +1178,13 @@ mod tests {
             "function test() {\n  const x = require('fs');\n  eval(x);\n  console.log('done');\n}";
         let info = make_string_info(code);
         assert_eq!(detect_language(&info, false), Some(FileType::JavaScript));
+    }
+
+    #[test]
+    fn test_reject_source_map_payload() {
+        let source_map = r#"{"version":3,"sources":["x.js"],"names":[],"mappings":"AAAA","sourcesContent":["function test(){return 1;}"]}"#;
+        let info = make_string_info(source_map);
+        assert_eq!(detect_language(&info, true), None);
     }
 
     #[test]

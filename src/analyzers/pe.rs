@@ -8,6 +8,7 @@ use crate::types::*;
 use crate::yara_engine::YaraEngine;
 use anyhow::{Context, Result};
 use goblin::pe::PE;
+use std::collections::HashSet;
 use std::fs;
 use std::path::Path;
 use std::sync::Arc;
@@ -483,11 +484,33 @@ impl PEAnalyzer {
 
             // --- Rizin fallback: imports ---
             if report.imports.is_empty() && !batched.imports.is_empty() {
+                let known_section_names: HashSet<String> = report
+                    .sections
+                    .iter()
+                    .map(|section| section.name.to_ascii_lowercase())
+                    .chain(
+                        batched
+                            .sections
+                            .iter()
+                            .map(|section| section.name.to_ascii_lowercase()),
+                    )
+                    .collect();
+                let plausible_imports: Vec<_> = batched
+                    .imports
+                    .iter()
+                    .filter(|import| {
+                        let name = import.name.trim();
+                        !name.is_empty()
+                            && !name.starts_with('.')
+                            && !known_section_names.contains(&name.to_ascii_lowercase())
+                    })
+                    .collect();
                 tracing::info!(
-                    "goblin returned 0 imports but rizin found {} — using rizin fallback",
-                    batched.imports.len()
+                    "goblin returned 0 imports but rizin found {} ({} plausible after filtering) — using rizin fallback",
+                    batched.imports.len(),
+                    plausible_imports.len()
                 );
-                for import in &batched.imports {
+                for import in &plausible_imports {
                     report.imports.push(Import::new(
                         &import.name,
                         import.lib_name.clone(),
@@ -501,7 +524,7 @@ impl PEAnalyzer {
                         }
                     }
                 }
-                if goblin_ok {
+                if goblin_ok && !report.imports.is_empty() {
                     report.findings.push(
                         Finding::structural(
                             "objectives/anti-static/pe-tampering/hidden-imports".to_string(),
@@ -773,7 +796,8 @@ impl PEAnalyzer {
         }
 
         // NSIS / Inno Setup detection
-        if let Some(sfx_kind) = crate::analyzers::sfx_detector::detect_sfx(pe_data) {
+        let detected_sfx_kind = crate::analyzers::sfx_detector::detect_sfx(pe_data);
+        if let Some(sfx_kind) = detected_sfx_kind {
             let sfx_result = crate::analyzers::sfx_detector::analyze_sfx(
                 file_path,
                 sfx_kind,
@@ -833,21 +857,41 @@ impl PEAnalyzer {
                     // — in the .text section, not .rsrc. Detect .NET via the CLR metadata root
                     // BSJB signature, which is present in every valid .NET assembly.
                     let is_dotnet = pe_data.windows(4).any(|w| w == b"BSJB");
+                    let in_nsis_overlay =
+                        matches!(
+                            detected_sfx_kind,
+                            Some(crate::analyzers::sfx_detector::SfxKind::Nsis)
+                        ) && overlay_bounds.is_some_and(|(overlay_start, overlay_end)| {
+                            binary.offset >= overlay_start && binary.offset < overlay_end
+                        });
                     if std::env::var("DEBUG_CLEAVE_DOTNET").is_ok() {
                         eprintln!(
-                            "[DEBUG] embedded PE check: in_rsrc={}, is_dotnet={}, data_len={}",
+                            "[DEBUG] embedded PE check: in_rsrc={}, is_dotnet={}, in_nsis_overlay={}, data_len={}",
                             in_rsrc,
                             is_dotnet,
+                            in_nsis_overlay,
                             pe_data.len()
                         );
                     }
-                    if in_rsrc || is_dotnet {
+                    // NSIS installers legitimately carry native plugin DLLs inside the
+                    // overlay; those child binaries are still extracted and analyzed, so
+                    // the host-level embedded-PE marker should be informational rather than
+                    // suspicious in that narrowly scoped context.
+                    //
+                    // Platform-signed PEs (e.g. Microsoft Windows drivers) legitimately
+                    // carry firmware blobs (Intel microcode, etc.) formatted as ELF inside
+                    // non-standard sections like .drt.
+                    let host_is_platform_signed = report
+                        .findings
+                        .iter()
+                        .any(|f| f.id.starts_with("metadata/signed/platform::"));
+                    if in_rsrc || is_dotnet || in_nsis_overlay || host_is_platform_signed {
                         finding.crit = Criticality::Notable;
                     }
                 }
-                report.findings.push(finding);
 
                 if binary.offset >= pe_data.len() {
+                    report.findings.push(finding);
                     continue;
                 }
                 let slice_end = (binary.offset + binary.estimated_size).min(pe_data.len());
@@ -861,8 +905,17 @@ impl PEAnalyzer {
                     self.capability_mapper.clone(),
                     self.yara_engine.clone(),
                 ) {
+                    if finding.crit == Criticality::Suspicious
+                        && fa.findings.iter().any(|child_finding| {
+                            child_finding.crit <= Criticality::Notable
+                                && child_finding.id.starts_with("metadata/signed/")
+                        })
+                    {
+                        finding.crit = Criticality::Notable;
+                    }
                     report.files.push(fa);
                 }
+                report.findings.push(finding);
             }
         }
 

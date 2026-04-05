@@ -13,7 +13,9 @@ use super::{analyzer_for_file_type_arc, AnalysisInput, Analyzer, FileType};
 use crate::capabilities::CapabilityMapper;
 use crate::types::{AnalysisReport, Criticality, Finding, FindingKind, TargetInfo};
 use anyhow::Result;
+use regex::Regex;
 use sha2::{Digest, Sha256};
+use std::collections::BTreeSet;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -341,6 +343,7 @@ impl OfficeAnalyzer {
         let type_str = doc.doc_subtype.as_str().to_string();
 
         // VBA presence — metadata finding
+        let mut has_word_vba_doc = false;
         if doc.has_vba {
             let module_count = doc.vba_modules.len();
             let module_names: Vec<&str> = doc.vba_modules.iter().map(|m| m.name.as_str()).collect();
@@ -356,6 +359,444 @@ impl OfficeAnalyzer {
                 crit: Criticality::Suspicious,
                 mbc: None,
                 attack: Some("T1059.005".to_string()),
+                trait_refs: vec![],
+                evidence: vec![],
+                match_count: 0,
+                source_file: None,
+            });
+
+            if doc.doc_subtype == ooxml::OoxmlSubtype::Word {
+                has_word_vba_doc = true;
+                findings.push(Finding {
+                    id: "metadata/document/office/markup::ooxml-word-vba-document".to_string(),
+                    kind: FindingKind::Structural,
+                    desc: "OOXML Word VBA document".to_string(),
+                    conf: 0.99,
+                    crit: Criticality::Baseline,
+                    mbc: None,
+                    attack: None,
+                    trait_refs: vec![],
+                    evidence: vec![],
+                    match_count: 0,
+                    source_file: None,
+                });
+            }
+        }
+
+        let vba_surface = if doc.vba_modules.is_empty() {
+            doc.vba_project_strings.join("\n")
+        } else {
+            doc.vba_modules
+                .iter()
+                .map(|m| m.source_code.as_str())
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+        let word_xml = doc.word_document_xml.as_deref().unwrap_or("");
+        let content_types_xml = doc.content_types_xml.as_deref().unwrap_or("");
+        let workbook_xml = doc.workbook_xml.as_deref().unwrap_or("");
+        let workbook_rels_xml = doc.workbook_rels_xml.as_deref().unwrap_or("");
+        let excel_styles_xml = doc.excel_styles_xml.as_deref().unwrap_or("");
+        let excel_macrosheet_xml = doc.excel_macrosheet_xml.as_deref().unwrap_or("");
+        let raw_surface = String::from_utf8_lossy(data);
+
+        if doc.doc_subtype == ooxml::OoxmlSubtype::Excel {
+            if !workbook_xml.is_empty() {
+                findings.push(Finding {
+                    id: "metadata/document/office/macro::excel-workbook-part".to_string(),
+                    kind: FindingKind::Structural,
+                    desc: "Excel workbook XML part".to_string(),
+                    conf: 0.98,
+                    crit: Criticality::Baseline,
+                    mbc: None,
+                    attack: None,
+                    trait_refs: vec![],
+                    evidence: vec![],
+                    match_count: 0,
+                    source_file: None,
+                });
+            }
+            if content_types_xml.contains("application/vnd.ms-excel.sheet.macroEnabled") {
+                findings.push(Finding {
+                    id: "metadata/document/office/macro::excel-macroenabled-content".to_string(),
+                    kind: FindingKind::Structural,
+                    desc: "Excel macro-enabled content type".to_string(),
+                    conf: 0.97,
+                    crit: Criticality::Baseline,
+                    mbc: None,
+                    attack: None,
+                    trait_refs: vec![],
+                    evidence: vec![],
+                    match_count: 0,
+                    source_file: None,
+                });
+            }
+            if content_types_xml.contains("application/vnd.ms-excel.macrosheet+xml")
+                || content_types_xml.contains("application/vnd.ms-excel.intlmacrosheet")
+            {
+                findings.push(Finding {
+                    id: "metadata/document/office/macro::excel4-macrosheet-content".to_string(),
+                    kind: FindingKind::Structural,
+                    desc: "Excel 4.0 macro sheet content type".to_string(),
+                    conf: 0.97,
+                    crit: Criticality::Baseline,
+                    mbc: None,
+                    attack: None,
+                    trait_refs: vec![],
+                    evidence: vec![],
+                    match_count: 0,
+                    source_file: None,
+                });
+            }
+            if doc
+                .entry_names
+                .iter()
+                .any(|n| n.starts_with("xl/macrosheets/") && n.ends_with(".xml"))
+            {
+                findings.push(Finding {
+                    id: "metadata/document/office/macro::excel4-macrosheet-part".to_string(),
+                    kind: FindingKind::Structural,
+                    desc: "Excel 4.0 macro sheet part".to_string(),
+                    conf: 0.97,
+                    crit: Criticality::Baseline,
+                    mbc: None,
+                    attack: None,
+                    trait_refs: vec![],
+                    evidence: vec![],
+                    match_count: 0,
+                    source_file: None,
+                });
+            }
+            if workbook_rels_xml.contains("relationships/xlMacrosheet") {
+                findings.push(Finding {
+                    id: "metadata/document/office/macro::excel4-macrosheet-relationship"
+                        .to_string(),
+                    kind: FindingKind::Structural,
+                    desc: "Excel macro sheet relationship".to_string(),
+                    conf: 0.98,
+                    crit: Criticality::Baseline,
+                    mbc: None,
+                    attack: None,
+                    trait_refs: vec![],
+                    evidence: vec![],
+                    match_count: 0,
+                    source_file: None,
+                });
+            }
+            if workbook_xml.contains("state=\"veryHidden\"") {
+                findings.push(Finding {
+                    id: "metadata/document/office/macro::excel4-veryhidden-sheet".to_string(),
+                    kind: FindingKind::Structural,
+                    desc: "VeryHidden worksheet state".to_string(),
+                    conf: 0.97,
+                    crit: Criticality::Baseline,
+                    mbc: None,
+                    attack: None,
+                    trait_refs: vec![],
+                    evidence: vec![],
+                    match_count: 0,
+                    source_file: None,
+                });
+            }
+            if workbook_xml.contains("_xlnm.Auto_open") {
+                findings.push(Finding {
+                    id: "metadata/document/office/macro::excel4-auto-open-name".to_string(),
+                    kind: FindingKind::Structural,
+                    desc: "Excel auto-open defined name".to_string(),
+                    conf: 0.98,
+                    crit: Criticality::Baseline,
+                    mbc: None,
+                    attack: None,
+                    trait_refs: vec![],
+                    evidence: vec![],
+                    match_count: 0,
+                    source_file: None,
+                });
+            }
+            if excel_styles_xml.contains("<sz val=\"20\"")
+                && excel_styles_xml.contains("rgb=\"FFFF00FF\"")
+            {
+                findings.push(Finding {
+                    id: "metadata/document/office/macro::excel4-style-key-material".to_string(),
+                    kind: FindingKind::Structural,
+                    desc: "Excel styles key material".to_string(),
+                    conf: 0.97,
+                    crit: Criticality::Baseline,
+                    mbc: None,
+                    attack: None,
+                    trait_refs: vec![],
+                    evidence: vec![],
+                    match_count: 0,
+                    source_file: None,
+                });
+            }
+            let formula_fill_count = excel_macrosheet_xml.matches("FORMULA.FILL").count();
+            if formula_fill_count >= 8 {
+                findings.push(Finding {
+                    id: "micro-behaviors/process/create/macro/office::formula-fill-runtime-write"
+                        .to_string(),
+                    kind: FindingKind::Indicator,
+                    desc: "XLM formula runtime write".to_string(),
+                    conf: 0.98,
+                    crit: Criticality::Suspicious,
+                    mbc: None,
+                    attack: None,
+                    trait_refs: vec![],
+                    evidence: vec![],
+                    match_count: formula_fill_count,
+                    source_file: None,
+                });
+            }
+            let run_count = excel_macrosheet_xml.matches("RUN(").count();
+            if run_count >= 12 {
+                findings.push(Finding {
+                    id: "micro-behaviors/process/create/macro/office::run-dispatch-chain"
+                        .to_string(),
+                    kind: FindingKind::Indicator,
+                    desc: "XLM RUN dispatch chain".to_string(),
+                    conf: 0.97,
+                    crit: Criticality::Notable,
+                    mbc: None,
+                    attack: None,
+                    trait_refs: vec![],
+                    evidence: vec![],
+                    match_count: run_count,
+                    source_file: None,
+                });
+            }
+            let char_count = excel_macrosheet_xml.matches("CHAR(").count();
+            if char_count >= 200 {
+                findings.push(Finding {
+                    id: "micro-behaviors/process/create/macro/office::char-obfuscation-burst"
+                        .to_string(),
+                    kind: FindingKind::Indicator,
+                    desc: "XLM dense CHAR obfuscation".to_string(),
+                    conf: 0.98,
+                    crit: Criticality::Suspicious,
+                    mbc: None,
+                    attack: Some("T1027".to_string()),
+                    trait_refs: vec![],
+                    evidence: vec![],
+                    match_count: char_count,
+                    source_file: None,
+                });
+            }
+            let get_cell_count = excel_macrosheet_xml.matches("GET.CELL(").count();
+            if get_cell_count >= 3 {
+                findings.push(Finding {
+                    id: "micro-behaviors/process/create/macro/office::get-cell-style-keying"
+                        .to_string(),
+                    kind: FindingKind::Indicator,
+                    desc: "XLM GET.CELL style keying".to_string(),
+                    conf: 0.97,
+                    crit: Criticality::Suspicious,
+                    mbc: None,
+                    attack: Some("T1497".to_string()),
+                    trait_refs: vec![],
+                    evidence: vec![],
+                    match_count: get_cell_count,
+                    source_file: None,
+                });
+            }
+            let day_now_count = excel_macrosheet_xml.matches("DAY(NOW())").count();
+            if day_now_count >= 2 {
+                findings.push(Finding {
+                    id: "micro-behaviors/process/create/macro/office::date-keyed-now-math"
+                        .to_string(),
+                    kind: FindingKind::Indicator,
+                    desc: "XLM date-keyed NOW math".to_string(),
+                    conf: 0.97,
+                    crit: Criticality::Suspicious,
+                    mbc: None,
+                    attack: Some("T1497.003".to_string()),
+                    trait_refs: vec![],
+                    evidence: vec![],
+                    match_count: day_now_count,
+                    source_file: None,
+                });
+            }
+        }
+
+        let mut has_concealed_script = false;
+        if !word_xml.is_empty() {
+            let white_count = word_xml
+                .matches("w:color w:val=\"FFFFFF\" w:themeColor=\"background1\"")
+                .count();
+            let bracket_count = word_xml.matches("indexOf('[')").count();
+            let has_function = Regex::new(r"function\s+[A-Za-z_][A-Za-z0-9_]{3,}\s*\(")
+                .ok()
+                .is_some_and(|re| re.is_match(word_xml));
+            let has_charcode_builder = Regex::new(r"String\[[^\]]{1,40}\['Char'\]\+\['Code'\]\]")
+                .ok()
+                .is_some_and(|re| re.is_match(word_xml));
+            if white_count >= 20 && has_function && (bracket_count >= 20 || has_charcode_builder) {
+                has_concealed_script = true;
+                findings.push(Finding {
+                    id: "objectives/anti-static/obfuscation/document::concealed-wordprocessingml-script".to_string(),
+                    kind: FindingKind::Indicator,
+                    desc: "Concealed script in WordprocessingML".to_string(),
+                    conf: 0.98,
+                    crit: Criticality::Suspicious,
+                    mbc: Some("B0032".to_string()),
+                    attack: Some("T1027".to_string()),
+                    trait_refs: vec![],
+                    evidence: vec![],
+                    match_count: 0,
+                    source_file: None,
+                });
+            }
+        }
+
+        let mut has_lifecycle_mix = false;
+        let mut has_callbyname = false;
+        let mut has_createobject = false;
+        let mut has_open_for_output = false;
+        let mut has_accept_conflict = false;
+        if !vba_surface.is_empty() {
+            let has_open = vba_surface.contains("Document_Open");
+            let has_new = vba_surface.contains("Document_New");
+            let has_close = vba_surface.contains("Document_Close");
+            if has_open && has_new && has_close {
+                has_lifecycle_mix = true;
+                findings.push(Finding {
+                    id: "micro-behaviors/process/create/macro/office::document-lifecycle-trigger-mix".to_string(),
+                    kind: FindingKind::Indicator,
+                    desc: "Multiple document lifecycle triggers".to_string(),
+                    conf: 0.94,
+                    crit: Criticality::Suspicious,
+                    mbc: None,
+                    attack: None,
+                    trait_refs: vec![],
+                    evidence: vec![],
+                    match_count: 0,
+                    source_file: None,
+                });
+            }
+            if vba_surface.contains("CallByName") {
+                has_callbyname = true;
+                findings.push(Finding {
+                    id: "micro-behaviors/data/encode/char-code::callbyname-call".to_string(),
+                    kind: FindingKind::Indicator,
+                    desc: "VBA CallByName indirect invocation".to_string(),
+                    conf: 0.92,
+                    crit: Criticality::Suspicious,
+                    mbc: None,
+                    attack: None,
+                    trait_refs: vec![],
+                    evidence: vec![],
+                    match_count: 0,
+                    source_file: None,
+                });
+            }
+            if vba_surface.contains("CreateObject") {
+                has_createobject = true;
+                findings.push(Finding {
+                    id: "micro-behaviors/process/create/shell/lang::createobject-call-universal"
+                        .to_string(),
+                    kind: FindingKind::Indicator,
+                    desc: "VBA CreateObject invocation".to_string(),
+                    conf: 0.88,
+                    crit: Criticality::Notable,
+                    mbc: None,
+                    attack: None,
+                    trait_refs: vec![],
+                    evidence: vec![],
+                    match_count: 0,
+                    source_file: None,
+                });
+            }
+            if Regex::new(r"Open.{0,80}For O ?utput")
+                .ok()
+                .is_some_and(|re| re.is_match(&vba_surface))
+            {
+                has_open_for_output = true;
+                findings.push(Finding {
+                    id: "micro-behaviors/fs/write/vba::vba-open-for-output".to_string(),
+                    kind: FindingKind::Indicator,
+                    desc: "VBA Open For Output file write".to_string(),
+                    conf: 0.85,
+                    crit: Criticality::Notable,
+                    mbc: None,
+                    attack: None,
+                    trait_refs: vec![],
+                    evidence: vec![],
+                    match_count: 0,
+                    source_file: None,
+                });
+            }
+            if vba_surface.contains("AcceptConflictAndAdvance") {
+                has_accept_conflict = true;
+                findings.push(Finding {
+                    id: "well-known/malware/trojan/trickbot::accept-conflict-and-advance-marker"
+                        .to_string(),
+                    kind: FindingKind::Indicator,
+                    desc: "AcceptConflictAndAdvance marker".to_string(),
+                    conf: 0.99,
+                    crit: Criticality::Component,
+                    mbc: None,
+                    attack: None,
+                    trait_refs: vec![],
+                    evidence: vec![],
+                    match_count: 0,
+                    source_file: None,
+                });
+            }
+        }
+
+        let ip_re = Regex::new(r"\b(?:\d{1,3}\.){3}\d{1,3}:\d{2,5}\b").ok();
+        let mut endpoints = BTreeSet::new();
+        if let Some(re) = &ip_re {
+            for text in [word_xml, vba_surface.as_str(), raw_surface.as_ref()] {
+                for m in re.find_iter(text) {
+                    endpoints.insert(m.as_str().to_string());
+                }
+            }
+        }
+        let has_ip_list = endpoints.len() >= 3;
+        if endpoints.len() >= 3 {
+            findings.push(Finding {
+                id:
+                    "objectives/command-and-control/infrastructure/ip::hardcoded-ipv4-port-list-any"
+                        .to_string(),
+                kind: FindingKind::Indicator,
+                desc: format!(
+                    "Multiple hardcoded external IPv4 endpoints ({})",
+                    endpoints.len()
+                ),
+                conf: 0.9,
+                crit: Criticality::Suspicious,
+                mbc: Some("B0030".to_string()),
+                attack: Some("T1071.001".to_string()),
+                trait_refs: vec![],
+                evidence: vec![],
+                match_count: endpoints.len(),
+                source_file: None,
+            });
+        }
+
+        let behavior_count = [
+            has_lifecycle_mix,
+            has_callbyname,
+            has_open_for_output,
+            has_createobject,
+        ]
+        .into_iter()
+        .filter(|b| *b)
+        .count();
+        if has_word_vba_doc
+            && has_concealed_script
+            && has_ip_list
+            && has_accept_conflict
+            && behavior_count >= 2
+        {
+            findings.push(Finding {
+                id: "well-known/malware/trojan/trickbot::concealed-word-vba-loader".to_string(),
+                kind: FindingKind::Indicator,
+                desc: "TrickBot concealed Word VBA loader".to_string(),
+                conf: 0.995,
+                crit: Criticality::Hostile,
+                mbc: None,
+                attack: Some("T1204.002".to_string()),
                 trait_refs: vec![],
                 evidence: vec![],
                 match_count: 0,

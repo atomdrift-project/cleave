@@ -354,6 +354,11 @@ pub(crate) fn detect_file_type_from_path(file_path: &Path) -> FileType {
         {
             return FileType::PkgInfo;
         }
+        if file_name.eq_ignore_ascii_case("meta.json")
+            || file_name.eq_ignore_ascii_case("metadata.json")
+        {
+            return FileType::PkgInfo;
+        }
         // Note: manifest.json detection requires content inspection for Chrome manifests,
         // so we can't reliably detect ChromeManifest from path alone - it will be detected
         // during content-based analysis if the file is read
@@ -427,7 +432,8 @@ pub(crate) fn detect_file_type_from_path(file_path: &Path) -> FileType {
                 "ps1" | "psm1" | "psd1" => return FileType::PowerShell,
                 "bat" | "cmd" => return FileType::Batch,
                 "vbs" | "vbe" | "wsf" | "wsc" => return FileType::Vbs,
-                "c" | "h" | "cpp" | "hpp" | "cc" | "cxx" | "hxx" | "hh" | "pas" | "dpr" => {
+                "c" | "h" | "cpp" | "hpp" | "cc" | "cxx" | "hxx" | "hh" | "pas" | "dpr" | "asm"
+                | "s" | "nasm" => {
                     return FileType::C;
                 }
                 "lua" => return FileType::Lua,
@@ -439,7 +445,7 @@ pub(crate) fn detect_file_type_from_path(file_path: &Path) -> FileType {
                 "zig" => return FileType::Zig,
                 "ex" | "exs" => return FileType::Elixir,
                 "scpt" | "applescript" => return FileType::AppleScript,
-                "plist" => return FileType::Plist,
+                "plist" | "resx" => return FileType::Plist,
                 "rtf" => return FileType::Rtf,
                 "doc" | "xls" | "ppt" | "msg" | "dot" | "xlt" => return FileType::OleDoc,
                 "docx" | "xlsx" | "pptx" | "docm" | "xlsm" | "pptm" | "dotx" | "dotm" | "xltx"
@@ -550,6 +556,15 @@ fn looks_like_npm_registry_metadata(file_data: &[u8]) -> bool {
     (has_versions && has_dist_tags) || (has_registry_tarball && has_npm_internal)
 }
 
+fn looks_like_pypi_registry_metadata(file_data: &[u8]) -> bool {
+    let has_info = memchr::memmem::find(file_data, b"\"info\"").is_some();
+    let has_package_url = memchr::memmem::find(file_data, b"\"package_url\"").is_some();
+    let has_release_url = memchr::memmem::find(file_data, b"\"release_url\"").is_some();
+    let has_releases = memchr::memmem::find(file_data, b"\"releases\"").is_some();
+
+    has_info && has_releases && (has_package_url || has_release_url)
+}
+
 /// Detect file type and route to appropriate analyzer
 pub fn detect_file_type(file_path: &Path) -> Result<FileType> {
     let file_data = std::fs::read(file_path)?;
@@ -638,10 +653,9 @@ fn detect_file_type_inner(file_path: &Path, file_data: &[u8]) -> Option<FileType
     // search for displaced `MZ` first, benign `.pptx`/`.docx` samples get
     // misclassified as tampered PEs.
     //
-    // Only match on OOXML extensions or extensionless files — many archive
-    // formats (.vsix, .nupkg, .xpi, .epub, even plain .zip) use OPC and
-    // contain [Content_Types].xml. Those are classified as Archive by
-    // detect_file_type_from_path in the fallback chain.
+    // Prefer content-aware OOXML detection even for masqueraded extensions
+    // such as ".txt", but avoid reclassifying known archive/package formats
+    // that also use OPC containers.
     if file_data.starts_with(b"PK") {
         let is_ooxml_ext = path_str.ends_with(".docx")
             || path_str.ends_with(".xlsx")
@@ -653,7 +667,22 @@ fn detect_file_type_inner(file_path: &Path, file_data: &[u8]) -> Option<FileType
             || path_str.ends_with(".dotm")
             || path_str.ends_with(".xltx")
             || path_str.ends_with(".xltm");
-        if is_ooxml_ext || (file_path.extension().is_none() && office::ooxml::is_ooxml(file_data)) {
+        let ext = file_path
+            .extension()
+            .and_then(|s| s.to_str())
+            .map(|s| s.to_ascii_lowercase());
+        let is_archive_opc_ext = matches!(
+            ext.as_deref(),
+            Some("zip")
+                | Some("jar")
+                | Some("vsix")
+                | Some("nupkg")
+                | Some("xpi")
+                | Some("epub")
+                | Some("apk")
+                | Some("ipa")
+        );
+        if is_ooxml_ext || (!is_archive_opc_ext && office::ooxml::is_ooxml(file_data)) {
             return Some(FileType::Ooxml);
         }
     }
@@ -697,9 +726,13 @@ fn detect_file_type_inner(file_path: &Path, file_data: &[u8]) -> Option<FileType
         return Some(FileType::Plist);
     }
 
-    // Check for XML Plist (byte-level search, no allocation)
-    let head = &file_data[..file_data.len().min(100)];
-    if memchr::memmem::find(head, b"<plist").is_some() {
+    // Check for XML Plist (byte-level search, no allocation).
+    // Many extensionless Apple plists start with an XML declaration and DTD,
+    // which pushes the <plist> tag well past the first 100 bytes.
+    let head = &file_data[..file_data.len().min(256)];
+    if memchr::memmem::find(head, b"<plist").is_some()
+        || memchr::memmem::find(head, b"<!DOCTYPE plist").is_some()
+    {
         return Some(FileType::Plist);
     }
 
@@ -782,6 +815,11 @@ fn detect_file_type_inner(file_path: &Path, file_data: &[u8]) -> Option<FileType
             && looks_like_npm_registry_metadata(file_data)
         {
             return Some(FileType::PackageJson);
+        }
+        if (name == "meta.json" || name == "metadata.json")
+            && looks_like_pypi_registry_metadata(file_data)
+        {
+            return Some(FileType::PkgInfo);
         }
         if name == "manifest.json" {
             // Check if it's a Chrome extension manifest (byte-level, no allocation)
@@ -1369,8 +1407,33 @@ fn looks_like_javascript(data: &[u8]) -> bool {
 /// Heuristic detection for C/C++ source files without .c/.cpp extension
 fn looks_like_c(data: &[u8]) -> bool {
     let head = &data[..data.len().min(300)];
-    memchr::memmem::find(head, b"#include <").is_some()
+    if memchr::memmem::find(head, b"#include <").is_some()
         || memchr::memmem::find(head, b"#include \"").is_some()
+    {
+        return true;
+    }
+
+    // Hand-written assembly often arrives inside archives without a trusted
+    // extension path. Route it through the raw-text source pipeline by treating
+    // it like C-family source for rule filtering purposes.
+    let asm_indicators: &[&[u8]] = &[
+        b"[BITS 32]",
+        b"section .text",
+        b"pushad",
+        b"popad",
+        b"lodsd",
+        b"stosd",
+        b"[fs:0x30]",
+        b"%define",
+        b"%xdefine",
+        b"\tdd 0x",
+        b"\tEQU\t",
+    ];
+    asm_indicators
+        .iter()
+        .filter(|&&p| memchr::memmem::find(head, p).is_some())
+        .count()
+        >= 2
 }
 
 /// Find MZ header within the first `max_offset` bytes
@@ -2035,6 +2098,13 @@ mod tests {
         );
     }
 
+    #[test]
+    fn test_meta_json_pypi_snapshot_detection() {
+        let path = PathBuf::from("meta.json");
+        let data = br#"{"info":{"name":"pkg","package_url":"https://pypi.org/project/pkg/","release_url":"https://pypi.org/project/pkg/0.1.1/"},"releases":{"0.1.1":[]}}"#;
+        assert_eq!(detect_file_type_from_data(&path, data), FileType::PkgInfo);
+    }
+
     // --- Content heuristic rejection tests ---
     // Template files, changelogs, and foreign-language scripts must NOT be
     // misclassified by the loose content heuristics.
@@ -2132,6 +2202,20 @@ return M
 "#;
         let path = PathBuf::from("plugin");
         assert_eq!(detect_file_type_from_data(&path, data), FileType::Lua);
+    }
+
+    #[test]
+    fn test_nasm_source_without_extension_detected_as_c_family() {
+        let data = br#"[BITS 32]
+section .text
+_entry:
+    pushad
+    mov eax, [fs:0x30]
+    lodsd
+    %define K32 1
+"#;
+        let path = PathBuf::from("sample");
+        assert_eq!(detect_file_type_from_data(&path, data), FileType::C);
     }
 
     #[test]

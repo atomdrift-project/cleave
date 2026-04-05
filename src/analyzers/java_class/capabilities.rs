@@ -70,7 +70,15 @@ impl super::JavaClassAnalyzer {
 
         for class_ref in &class_info.class_refs {
             for (pattern, cap_id, description) in &suspicious_classes {
-                if class_ref.starts_with(pattern) || class_ref.contains(pattern) {
+                // Use exact match or proper prefix match (pattern must match up to a / or end of string)
+                // to avoid e.g. "java/lang/Runtime" matching "java/lang/RuntimeException"
+                if class_ref == *pattern
+                    || (class_ref.starts_with(pattern)
+                        && class_ref
+                            .as_bytes()
+                            .get(pattern.len())
+                            .map_or(true, |&b| b == b'/'))
+                {
                     if !report.findings.iter().any(|c| c.id == *cap_id) {
                         report.findings.push(Finding {
                             kind: FindingKind::Capability,
@@ -78,14 +86,9 @@ impl super::JavaClassAnalyzer {
                             id: cap_id.to_string(),
                             desc: description.to_string(),
                             conf: 0.9,
-                            crit: if *cap_id == "execution/process" || cap_id.contains("unsafe") {
+                            crit: if cap_id.contains("unsafe") {
                                 Criticality::Hostile
-                            } else if *cap_id == "net/socket"
-                                || *cap_id == "net/server"
-                                || *cap_id == "net/jndi"
-                                || *cap_id == "net/rmi"
-                                || *cap_id == "reflect/classloader"
-                            {
+                            } else if *cap_id == "net/jndi" || *cap_id == "net/rmi" {
                                 Criticality::Suspicious
                             } else {
                                 Criticality::Notable
@@ -118,7 +121,7 @@ impl super::JavaClassAnalyzer {
                     "crypto/operation",
                     "Encryption/decryption operation",
                     &method.name,
-                    Criticality::Suspicious,
+                    Criticality::Notable,
                 );
             }
             if method_lower.contains("exec")
@@ -130,7 +133,7 @@ impl super::JavaClassAnalyzer {
                     "execution/command",
                     "Command execution method",
                     &method.name,
-                    Criticality::Hostile,
+                    Criticality::Notable,
                 );
             }
             if method_lower.contains("download") || method_lower.contains("upload") {
@@ -166,7 +169,9 @@ impl super::JavaClassAnalyzer {
         for s in &class_info.strings {
             let s_lower = s.to_lowercase();
 
-            // Shell/command execution
+            // Shell/command execution - shell path references are common in legitimate
+            // Java applications (build tools, IDE launchers). Only hostile when combined
+            // with other indicators; standalone references are notable.
             if s_lower.contains("cmd.exe")
                 || s_lower.contains("powershell")
                 || s_lower.contains("power-shell")
@@ -179,7 +184,7 @@ impl super::JavaClassAnalyzer {
                     "execution/shell",
                     "Shell command string",
                     s,
-                    Criticality::Hostile,
+                    Criticality::Notable,
                 );
             }
 
@@ -188,12 +193,9 @@ impl super::JavaClassAnalyzer {
                 self.add_capability(report, "net/url", "URL reference", s, Criticality::Notable);
             }
 
-            // Credential/password stealing
-            if s_lower.contains("password")
-                || s_lower.contains("credential")
-                || s_lower.contains("-pass")
-                || s_lower.contains("_pass")
-                || s_lower.contains("chrome-pass")
+            // Credential/password stealing — high-confidence patterns are hostile,
+            // bare "password" in strings is only notable (common in crypto libs, validators)
+            if s_lower.contains("chrome-pass")
                 || s_lower.contains("fox-pass")
                 || s_lower.contains("browser") && s_lower.contains("pass")
             {
@@ -204,13 +206,41 @@ impl super::JavaClassAnalyzer {
                     s,
                     Criticality::Hostile,
                 );
+            } else if s_lower.contains("credential")
+                || s_lower.contains("steal") && s_lower.contains("pass")
+                || s_lower.contains("dump") && s_lower.contains("pass")
+                || s_lower.contains("grab") && s_lower.contains("pass")
+                || s_lower.contains("harvest") && s_lower.contains("pass")
+            {
+                self.add_capability(
+                    report,
+                    "credential/password",
+                    "Credential stealing indicator",
+                    s,
+                    Criticality::Suspicious,
+                );
+            } else if Self::contains_word(&s_lower, "password")
+                || s_lower.contains("-pass")
+                || s_lower.contains("_pass")
+            {
+                // Bare "password" references are common in crypto libraries, validators,
+                // config files — notable but not hostile without additional context
+                self.add_capability(
+                    report,
+                    "credential/password",
+                    "Password reference",
+                    s,
+                    Criticality::Notable,
+                );
             }
 
             // Keylogging
             if s_lower.contains("keylog")
                 || s_lower.contains("key-log")
                 || s_lower.contains("o-keylogger")
-                || s_lower.contains("keystroke")
+                || (Self::contains_word(&s_lower, "keystroke")
+                    && !s_lower.contains("javax/swing")
+                    && !s_lower.contains("javax.swing"))
             {
                 self.add_capability(
                     report,
@@ -221,7 +251,8 @@ impl super::JavaClassAnalyzer {
                 );
             }
 
-            // Encryption/decryption (common in RATs)
+            // Encryption/decryption - common in legitimate Java apps for data protection.
+            // Only suspicious when combined with other RAT indicators.
             if s_lower.contains("decrypt")
                 || s_lower.contains("encrypt")
                 || s_lower.contains("rw-decrypt")
@@ -232,15 +263,14 @@ impl super::JavaClassAnalyzer {
                     "crypto/operation",
                     "Encryption/decryption operation",
                     s,
-                    Criticality::Suspicious,
+                    Criticality::Notable,
                 );
             }
 
             // Download and execute
             if s_lower.contains("up-n-exec")
                 || s_lower.contains("download") && s_lower.contains("exec")
-                || s_lower.contains("dropper")
-                || s_lower.contains("payload")
+                || Self::contains_word(&s_lower, "dropper")
             {
                 self.add_capability(
                     report,
@@ -251,10 +281,11 @@ impl super::JavaClassAnalyzer {
                 );
             }
 
-            // System control
-            if s_lower.contains("reboot")
-                || s_lower.contains("shutdown")
-                || s_lower.contains("uninstall")
+            // System control - use word boundaries to avoid false positives like
+            // "textureBoots" containing "reboot"
+            if Self::contains_word(&s_lower, "reboot")
+                || Self::contains_word(&s_lower, "shutdown")
+                || Self::contains_word(&s_lower, "uninstall")
                 || s_lower.contains("self-destruct")
             {
                 self.add_capability(
@@ -281,13 +312,40 @@ impl super::JavaClassAnalyzer {
                 );
             }
 
-            // Remote access indicators
-            if Self::contains_word(&s_lower, "rat")
-                || s_lower.contains("c2")
-                || s_lower.contains("c&c")
-                || s_lower.contains("beacon")
-                || s_lower.contains("implant")
-                || s_lower.contains("backdoor")
+            // Remote access indicators. Keep this conservative: short standalone tokens like
+            // "rat" or "c2" occur in benign identifiers and decompiler output.
+            let rat_context = Self::contains_word(&s_lower, "rat")
+                && (s_lower.contains("remote")
+                    || s_lower.contains("trojan")
+                    || s_lower.contains("access")
+                    || s_lower.contains("client")
+                    || s_lower.contains("server")
+                    || s_lower.contains("panel"));
+            let c2_context = (Self::contains_word(&s_lower, "c2") || s_lower.contains("c&c"))
+                && (s_lower.contains("server")
+                    || s_lower.contains("channel")
+                    || s_lower.contains("config")
+                    || s_lower.contains("endpoint")
+                    || s_lower.contains("panel"));
+            let beacon_context = Self::contains_word(&s_lower, "beacon")
+                && !s_lower.contains("color")
+                && !s_lower.contains("texture")
+                && !s_lower.contains("minecraft")
+                && (s_lower.contains("http")
+                    || s_lower.contains("dns")
+                    || s_lower.contains("sleep")
+                    || s_lower.contains("interval")
+                    || s_lower.contains("callback"));
+            let implant_context = Self::contains_word(&s_lower, "implant")
+                && (s_lower.contains("payload")
+                    || s_lower.contains("loader")
+                    || s_lower.contains("session")
+                    || s_lower.contains("agent"));
+            if rat_context
+                || c2_context
+                || beacon_context
+                || implant_context
+                || Self::contains_word(&s_lower, "backdoor")
                 || s_lower.contains("reverse") && s_lower.contains("shell")
             {
                 self.add_capability(
@@ -295,7 +353,7 @@ impl super::JavaClassAnalyzer {
                     "impact/remote-access",
                     "Remote access trojan indicator",
                     s,
-                    Criticality::Hostile,
+                    Criticality::Suspicious,
                 );
             }
 

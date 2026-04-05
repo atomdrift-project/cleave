@@ -56,8 +56,14 @@ pub fn parse_platforms(s: &str) -> Vec<crate::composite_rules::Platform> {
 }
 
 /// Default passwords to try for encrypted zip files (common malware sample passwords)
-pub const DEFAULT_ZIP_PASSWORDS: &[&str] =
-    &["infected", "infect3d", "malware", "virus", "password"];
+pub const DEFAULT_ZIP_PASSWORDS: &[&str] = &[
+    "infected",
+    "infect3d",
+    "malware",
+    "virus",
+    "password",
+    "virussign",
+];
 
 /// Tracks which components are disabled
 #[allow(dead_code)] // Used by binary target

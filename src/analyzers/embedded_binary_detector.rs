@@ -12,6 +12,8 @@ const MAX_EMBEDDED: usize = 20;
 
 /// Minimum credible embedded binary size in bytes.
 const MIN_BINARY_SIZE: usize = 512;
+/// Tiny packer stubs often mimic ELF headers without carrying a real payload.
+const MIN_EMBEDDED_ELF_SIZE: usize = 8 * 1024;
 
 /// Maximum credible PE SizeOfImage (500 MB).
 const MAX_PE_IMAGE_SIZE: usize = 500 * 1024 * 1024;
@@ -89,7 +91,7 @@ pub(crate) fn finding_for(binary: &EmbeddedBinary, parent_path: &str) -> Finding
         crit: if is_kernel_module_elf {
             Criticality::Notable
         } else {
-            Criticality::Suspicious
+            Criticality::Notable
         },
         mbc: None,
         attack: Some("T1027.009".to_string()), // Embedded Payloads
@@ -293,23 +295,131 @@ fn validate_elf(data: &[u8], offset: usize) -> Option<EmbeddedBinary> {
         return None;
     }
 
+    // e_version (u32) at offset 20 must be EV_CURRENT
+    let e_version = read_u32_endian(data, offset + 20, le)?;
+    if e_version != 1 {
+        return None;
+    }
+
     // e_machine (u16) at offset 18
     let e_machine = read_u16_endian(data, offset + 18, le)?;
     if !VALID_ELF_MACHINES.contains(&e_machine) {
         return None;
     }
 
-    let kind = match (class, le) {
-        (1, true) => EmbeddedKind::Elf32Le,
-        (1, false) => EmbeddedKind::Elf32Be,
-        (2, true) => EmbeddedKind::Elf64Le,
-        (_, _) => EmbeddedKind::Elf64Be,
+    let (kind, ehsize_expected, phentsize_expected, shentsize_expected) = match (class, le) {
+        (1, true) => (EmbeddedKind::Elf32Le, 52usize, 32usize, 40usize),
+        (1, false) => (EmbeddedKind::Elf32Be, 52usize, 32usize, 40usize),
+        (2, true) => (EmbeddedKind::Elf64Le, 64usize, 56usize, 64usize),
+        (_, _) => (EmbeddedKind::Elf64Be, 64usize, 56usize, 64usize),
     };
+
+    let phoff_offset = if class == 1 { 28 } else { 32 };
+    let shoff_offset = if class == 1 { 32 } else { 40 };
+    let ehsize_offset = if class == 1 { 40 } else { 52 };
+    let phentsize_offset = ehsize_offset + 2;
+    let phnum_offset = phentsize_offset + 2;
+    let shentsize_offset = phnum_offset + 2;
+    let shnum_offset = shentsize_offset + 2;
+    let shstrndx_offset = shnum_offset + 2;
+
+    let ehsize = read_u16_endian(data, offset + ehsize_offset, le)? as usize;
+    if ehsize != ehsize_expected {
+        return None;
+    }
+
+    let phoff = read_u64_class(data, offset + phoff_offset, class, le)? as usize;
+    let shoff = read_u64_class(data, offset + shoff_offset, class, le)? as usize;
+    let phentsize = read_u16_endian(data, offset + phentsize_offset, le)? as usize;
+    let phnum = read_u16_endian(data, offset + phnum_offset, le)? as usize;
+    let shentsize = read_u16_endian(data, offset + shentsize_offset, le)? as usize;
+    let shnum = read_u16_endian(data, offset + shnum_offset, le)? as usize;
+    let shstrndx = read_u16_endian(data, offset + shstrndx_offset, le)? as usize;
+
+    if phnum == 0 && shnum == 0 {
+        return None;
+    }
+    if phnum > 256 || shnum > 512 {
+        return None;
+    }
+    if phnum > 0 && phentsize != phentsize_expected {
+        return None;
+    }
+    if shnum > 0 && shentsize != shentsize_expected {
+        return None;
+    }
+    if phnum == 0 && phoff != 0 {
+        return None;
+    }
+    if shnum == 0 && (shoff != 0 || shstrndx != 0) {
+        return None;
+    }
+    if shnum > 0 && shstrndx >= shnum && shstrndx != 0xFFFF {
+        return None;
+    }
+
+    let available = data.len().saturating_sub(offset);
+    let mut estimated_size = ehsize;
+    if phnum > 0 {
+        if phoff < ehsize || phoff >= available {
+            return None;
+        }
+        let ph_table_end = phoff.checked_add(phnum.checked_mul(phentsize)?)?;
+        if ph_table_end > available {
+            return None;
+        }
+        estimated_size = estimated_size.max(ph_table_end);
+    }
+    if shnum > 0 {
+        if shoff < ehsize || shoff >= available {
+            return None;
+        }
+        let sh_table_end = shoff.checked_add(shnum.checked_mul(shentsize)?)?;
+        if sh_table_end > available {
+            return None;
+        }
+        estimated_size = estimated_size.max(sh_table_end);
+    }
+
+    let mut loadable_end = 0usize;
+    let mut loadable_segments = 0usize;
+    if phnum > 0 {
+        for i in 0..phnum {
+            let ph = offset + phoff + i * phentsize;
+            let p_type = read_u32_endian(data, ph, le)?;
+            let (p_offset, p_filesz) = if class == 1 {
+                (
+                    read_u32_endian(data, ph + 4, le)? as usize,
+                    read_u32_endian(data, ph + 16, le)? as usize,
+                )
+            } else {
+                (
+                    read_u64_endian(data, ph + 8, le)? as usize,
+                    read_u64_endian(data, ph + 32, le)? as usize,
+                )
+            };
+            if p_type == 1 {
+                loadable_segments += 1;
+                let segment_end = p_offset.checked_add(p_filesz)?;
+                if p_filesz == 0 || segment_end > available {
+                    return None;
+                }
+                loadable_end = loadable_end.max(segment_end);
+            }
+        }
+    }
+    if phnum > 0 && loadable_segments == 0 {
+        return None;
+    }
+    estimated_size = estimated_size.max(loadable_end);
+    if estimated_size < MIN_EMBEDDED_ELF_SIZE || estimated_size > available {
+        return None;
+    }
 
     Some(EmbeddedBinary {
         offset,
         kind,
-        estimated_size: data.len().saturating_sub(offset),
+        estimated_size,
     })
 }
 
@@ -332,6 +442,32 @@ fn read_u16_endian(data: &[u8], offset: usize, le: bool) -> Option<u16> {
     } else {
         u16::from_be_bytes(bytes)
     })
+}
+
+fn read_u32_endian(data: &[u8], offset: usize, le: bool) -> Option<u32> {
+    let bytes: [u8; 4] = data.get(offset..offset + 4)?.try_into().ok()?;
+    Some(if le {
+        u32::from_le_bytes(bytes)
+    } else {
+        u32::from_be_bytes(bytes)
+    })
+}
+
+fn read_u64_endian(data: &[u8], offset: usize, le: bool) -> Option<u64> {
+    let bytes: [u8; 8] = data.get(offset..offset + 8)?.try_into().ok()?;
+    Some(if le {
+        u64::from_le_bytes(bytes)
+    } else {
+        u64::from_be_bytes(bytes)
+    })
+}
+
+fn read_u64_class(data: &[u8], offset: usize, class: u8, le: bool) -> Option<u64> {
+    if class == 1 {
+        read_u32_endian(data, offset, le).map(u64::from)
+    } else {
+        read_u64_endian(data, offset, le)
+    }
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -382,7 +518,8 @@ mod tests {
 
     /// Build a minimal ELF64 LE blob at the given offset within a buffer.
     fn make_synthetic_elf(buf: &mut Vec<u8>, offset: usize) {
-        while buf.len() < offset + 64 {
+        let elf_size = 0x3000usize;
+        while buf.len() < offset + elf_size {
             buf.push(0u8);
         }
         buf[offset] = 0x7F;
@@ -396,6 +533,29 @@ mod tests {
         buf[offset + 16..offset + 18].copy_from_slice(&2u16.to_le_bytes());
         // e_machine = x86-64 (0x3E)
         buf[offset + 18..offset + 20].copy_from_slice(&0x3Eu16.to_le_bytes());
+        // e_version
+        buf[offset + 20..offset + 24].copy_from_slice(&1u32.to_le_bytes());
+        // e_phoff = 64, e_shoff = 0x2000
+        buf[offset + 32..offset + 40].copy_from_slice(&64u64.to_le_bytes());
+        buf[offset + 40..offset + 48].copy_from_slice(&0x2000u64.to_le_bytes());
+        // e_ehsize, e_phentsize, e_phnum, e_shentsize, e_shnum, e_shstrndx
+        buf[offset + 52..offset + 54].copy_from_slice(&64u16.to_le_bytes());
+        buf[offset + 54..offset + 56].copy_from_slice(&56u16.to_le_bytes());
+        buf[offset + 56..offset + 58].copy_from_slice(&1u16.to_le_bytes());
+        buf[offset + 58..offset + 60].copy_from_slice(&64u16.to_le_bytes());
+        buf[offset + 60..offset + 62].copy_from_slice(&1u16.to_le_bytes());
+        buf[offset + 62..offset + 64].copy_from_slice(&0u16.to_le_bytes());
+
+        // One PT_LOAD segment covering the whole synthetic ELF.
+        let ph = offset + 64;
+        buf[ph..ph + 4].copy_from_slice(&1u32.to_le_bytes());
+        buf[ph + 4..ph + 8].copy_from_slice(&5u32.to_le_bytes());
+        buf[ph + 8..ph + 16].copy_from_slice(&0u64.to_le_bytes());
+        buf[ph + 16..ph + 24].copy_from_slice(&0x400000u64.to_le_bytes());
+        buf[ph + 24..ph + 32].copy_from_slice(&0x400000u64.to_le_bytes());
+        buf[ph + 32..ph + 40].copy_from_slice(&(elf_size as u64).to_le_bytes());
+        buf[ph + 40..ph + 48].copy_from_slice(&(elf_size as u64).to_le_bytes());
+        buf[ph + 48..ph + 56].copy_from_slice(&0x1000u64.to_le_bytes());
     }
 
     #[test]
@@ -556,6 +716,26 @@ mod tests {
         let mut data = vec![0u8; 64];
         make_synthetic_elf(&mut data, 0);
         data[5] = 3; // invalid encoding
+        assert!(validate_elf(&data, 0).is_none());
+    }
+
+    #[test]
+    fn test_elf_rejects_header_only_stub() {
+        let mut data = vec![0u8; 512];
+        data[0] = 0x7F;
+        data[1] = 0x45;
+        data[2] = 0x4C;
+        data[3] = 0x46;
+        data[4] = 2;
+        data[5] = 1;
+        data[6] = 1;
+        data[16..18].copy_from_slice(&2u16.to_le_bytes());
+        data[18..20].copy_from_slice(&0x3Eu16.to_le_bytes());
+        data[20..24].copy_from_slice(&1u32.to_le_bytes());
+        data[32..40].copy_from_slice(&64u64.to_le_bytes());
+        data[52..54].copy_from_slice(&64u16.to_le_bytes());
+        data[54..56].copy_from_slice(&56u16.to_le_bytes());
+        data[56..58].copy_from_slice(&1u16.to_le_bytes());
         assert!(validate_elf(&data, 0).is_none());
     }
 

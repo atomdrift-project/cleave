@@ -825,7 +825,8 @@ impl super::CapabilityMapper {
             }
         }
 
-        // Check for structurally invalid file types (empty for:, for: [none]) — always fatal
+        // Check for structurally invalid file types (empty for:) — always fatal.
+        // Trait-level for: [none] is intentionally allowed to unset inherited defaults.
         let invalid_ft_errors: Vec<&String> = warnings
             .iter()
             .filter(|w| w.contains("Invalid file type"))

@@ -203,6 +203,16 @@ fn is_local_node_eval_loader(script: &str) -> bool {
 
 fn is_suspicious_install_hook_script(script: &str) -> bool {
     let trimmed = script.trim();
+    if matches!(
+        trimmed,
+        "node -e 'process.exit(0)'"
+            | "node -e \"process.exit(0)\""
+            | "node --eval 'process.exit(0)'"
+            | "node --eval \"process.exit(0)\""
+    ) {
+        return false;
+    }
+
     if trimmed.contains("curl")
         || trimmed.contains("wget")
         || trimmed.contains("http://")
@@ -251,6 +261,10 @@ impl PackageJsonAnalyzer {
 
     fn analyze_package(&self, file_path: &Path, content: &str) -> Result<AnalysisReport> {
         let start = std::time::Instant::now();
+
+        // Strip UTF-8 BOM if present — some malicious npm packages prepend a BOM
+        // to evade JSON parsers that don't handle it.
+        let content = content.strip_prefix('\u{FEFF}').unwrap_or(content);
 
         // Use streaming deserializer to tolerate trailing content (a common
         // supply-chain attack vector: valid JSON followed by hidden code).
@@ -1088,6 +1102,7 @@ impl PackageJsonAnalyzer {
 
     fn is_suspicious_package_name(&self, name: &str) -> bool {
         let package_segment = name.rsplit('/').next().unwrap_or(name);
+        let is_scoped = name.contains('/');
 
         let suspicious_prefixes = [
             // Known malicious naming patterns
@@ -1106,7 +1121,8 @@ impl PackageJsonAnalyzer {
         ];
 
         for pattern in suspicious_prefixes {
-            if package_segment.starts_with(pattern) && !self.is_known_legitimate(name) {
+            if !is_scoped && package_segment.starts_with(pattern) && !self.is_known_legitimate(name)
+            {
                 return true;
             }
         }
@@ -1166,11 +1182,13 @@ impl PackageJsonAnalyzer {
             "color-string",
             "colors",
             "lodash",
+            "lodash-es",
             "asynct",
             "axios",
             "babel-core",
             "babel-cli",
             "babel-eslint",
+            "babel-jest",
             "babel-loader",
             "babel-polyfill",
             "babel-preset-env",
@@ -1533,6 +1551,18 @@ mod tests {
     fn test_scoped_devdependency_with_internal_webpack_substring_is_not_suspicious() {
         let analyzer = PackageJsonAnalyzer::new();
         assert!(!analyzer.is_suspicious_package_name("@soda/friendly-errors-webpack-plugin"));
+    }
+
+    #[test]
+    fn test_scoped_webpack_dependency_is_not_suspicious() {
+        let analyzer = PackageJsonAnalyzer::new();
+        assert!(!analyzer.is_suspicious_package_name("@vercel/webpack-nft"));
+    }
+
+    #[test]
+    fn test_types_devdependency_is_not_suspicious() {
+        let analyzer = PackageJsonAnalyzer::new();
+        assert!(!analyzer.is_suspicious_package_name("@types/color-convert"));
     }
 
     #[test]

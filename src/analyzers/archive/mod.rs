@@ -17,16 +17,313 @@ use crate::capabilities::CapabilityMapper;
 use crate::types::*;
 use crate::yara_engine::YaraEngine;
 use anyhow::{Context, Result};
+use std::fs::File;
 use std::fs::{self};
 // std::io imports removed
 use std::path::Path;
 use std::sync::Arc;
 
-use guards::{ExtractionGuard, MAX_FILE_COUNT, MAX_FILE_SIZE, MAX_TOTAL_SIZE};
+use ::zip::ZipArchive;
+use guards::{sanitize_entry_path, ExtractionGuard, MAX_FILE_COUNT, MAX_FILE_SIZE, MAX_TOTAL_SIZE};
 use utils::{calculate_file_sha256, calculate_sha256, detect_archive_type};
 
 /// Default maximum file size to keep in memory (100 MB)
 pub(crate) const DEFAULT_MAX_MEMORY_FILE_SIZE: u64 = 100 * 1024 * 1024;
+const MAX_ARCHIVE_PATH_TRAVERSAL_EVIDENCE: usize = 10;
+const MIN_PATH_CORPUS_ENTRY_COUNT: usize = 32;
+const MIN_PATH_CORPUS_TRAVERSAL_ENTRIES: usize = 4;
+const MIN_PATH_CORPUS_EDGE_CASE_ENTRIES: usize = 24;
+const MAX_PATH_CORPUS_FILE_SIZE: u64 = 512;
+const MAX_PATH_CORPUS_TOTAL_SIZE: u64 = 128 * 1024;
+
+fn archive_finding(
+    id: &str,
+    desc: String,
+    _source: &str,
+    evidence: Vec<Evidence>,
+    match_count: usize,
+) -> Finding {
+    let crit = if id == "anti-analysis/archive/excessive-size" {
+        Criticality::Notable
+    } else {
+        Criticality::Suspicious
+    };
+
+    Finding {
+        kind: FindingKind::Capability,
+        trait_refs: vec![],
+        id: id.to_string(),
+        desc,
+        conf: 0.9,
+        crit,
+        mbc: None,
+        attack: None,
+        evidence,
+        match_count,
+        source_file: None,
+    }
+}
+
+fn push_archive_hostile_findings(
+    report: &mut AnalysisReport,
+    hostile_reasons: Vec<HostileArchiveReason>,
+    source: &str,
+    suppress_path_traversal: bool,
+) {
+    let mut path_evidence = Vec::new();
+
+    for reason in hostile_reasons {
+        match reason {
+            HostileArchiveReason::PathTraversal(path) => {
+                if suppress_path_traversal {
+                    continue;
+                }
+
+                path_evidence.push(Evidence {
+                    method: "archive_extraction".to_string(),
+                    source: source.to_string(),
+                    value: format!("path:{}", path),
+                    location: None,
+                    ..Default::default()
+                });
+            }
+            HostileArchiveReason::ZipBomb {
+                compressed,
+                uncompressed,
+            } => {
+                report.findings.push(archive_finding(
+                    "anti-analysis/archive/zip-bomb",
+                    "Archive has suspicious compression ratio (potential zip bomb)".to_string(),
+                    source,
+                    vec![Evidence {
+                        method: "archive_extraction".to_string(),
+                        source: source.to_string(),
+                        value: format!(
+                            "ratio:{}:1 ({}B -> {}B)",
+                            uncompressed / compressed.max(1),
+                            compressed,
+                            uncompressed
+                        ),
+                        location: None,
+                        ..Default::default()
+                    }],
+                    1,
+                ));
+            }
+            HostileArchiveReason::ExcessiveFileCount(count) => {
+                report.findings.push(archive_finding(
+                    "anti-analysis/archive/excessive-files",
+                    "Archive contains excessive number of files".to_string(),
+                    source,
+                    vec![Evidence {
+                        method: "archive_extraction".to_string(),
+                        source: source.to_string(),
+                        value: format!("count:{} (LIMIT_DEBUG:{})", count, MAX_FILE_COUNT),
+                        location: None,
+                        ..Default::default()
+                    }],
+                    1,
+                ));
+            }
+            HostileArchiveReason::ExcessiveTotalSize(size) => {
+                report.findings.push(archive_finding(
+                    "anti-analysis/archive/excessive-size",
+                    "Archive expands to excessive total size".to_string(),
+                    source,
+                    vec![Evidence {
+                        method: "archive_extraction".to_string(),
+                        source: source.to_string(),
+                        value: format!("size:{} bytes (limit:{})", size, MAX_TOTAL_SIZE),
+                        location: None,
+                        ..Default::default()
+                    }],
+                    1,
+                ));
+            }
+            HostileArchiveReason::ExcessiveFileSize { file, size } => {
+                report.findings.push(Finding {
+                    kind: FindingKind::Capability,
+                    trait_refs: vec![],
+                    id: "anti-analysis/archive/large-file".to_string(),
+                    desc: "Archive contains excessively large file".to_string(),
+                    conf: 0.9,
+                    crit: Criticality::Notable,
+                    mbc: None,
+                    attack: None,
+                    evidence: vec![Evidence {
+                        method: "archive_extraction".to_string(),
+                        source: source.to_string(),
+                        value: format!("file:{} size:{} (limit:{})", file, size, MAX_FILE_SIZE),
+                        location: None,
+                        ..Default::default()
+                    }],
+                    match_count: 1,
+                    source_file: None,
+                });
+            }
+            HostileArchiveReason::SymlinkEscape(path) => {
+                report.findings.push(archive_finding(
+                    "anti-analysis/archive/symlink-escape",
+                    "Archive contains symlink that may escape extraction directory".to_string(),
+                    source,
+                    vec![Evidence {
+                        method: "archive_extraction".to_string(),
+                        source: source.to_string(),
+                        value: format!("symlink:{}", path),
+                        location: None,
+                        ..Default::default()
+                    }],
+                    1,
+                ));
+            }
+        }
+    }
+
+    if !path_evidence.is_empty() {
+        let match_count = path_evidence.len();
+        path_evidence.truncate(MAX_ARCHIVE_PATH_TRAVERSAL_EVIDENCE);
+        report.findings.push(archive_finding(
+            "anti-analysis/archive/path-traversal",
+            "Archive contains path traversal entries (zip slip)".to_string(),
+            source,
+            path_evidence,
+            match_count,
+        ));
+    }
+}
+
+fn path_looks_synthetic_edge_case(name: &str) -> bool {
+    if name.chars().any(|c| c.is_control() || !c.is_ascii()) {
+        return true;
+    }
+
+    if name == "." || name == ".." || name == "/" || name == "../" {
+        return true;
+    }
+
+    if name.starts_with(' ')
+        || name.ends_with(' ')
+        || name.contains('\t')
+        || name.contains('\n')
+        || name.contains('\r')
+        || name.contains('\\')
+        || name.contains("//")
+        || name.contains("/./")
+        || name.contains("/../")
+        || name.starts_with("./")
+        || name.starts_with("../")
+        || name.starts_with('/')
+    {
+        return true;
+    }
+
+    if name.contains(':')
+        || name.contains('*')
+        || name.contains('?')
+        || name.contains('<')
+        || name.contains('>')
+        || name.contains('|')
+        || name.contains('"')
+    {
+        return true;
+    }
+
+    let basename = name.rsplit(['/', '\\']).next().unwrap_or(name);
+    let trimmed = basename.trim().trim_end_matches('.');
+    let device = trimmed
+        .split('.')
+        .next()
+        .unwrap_or(trimmed)
+        .trim_end_matches(' ')
+        .to_ascii_uppercase();
+
+    matches!(
+        device.as_str(),
+        "NUL"
+            | "CON"
+            | "PRN"
+            | "AUX"
+            | "CLOCK$"
+            | "COM1"
+            | "COM2"
+            | "COM3"
+            | "COM4"
+            | "COM5"
+            | "COM6"
+            | "COM7"
+            | "COM8"
+            | "COM9"
+            | "LPT1"
+            | "LPT2"
+            | "LPT3"
+            | "LPT4"
+            | "LPT5"
+            | "LPT6"
+            | "LPT7"
+            | "LPT8"
+            | "LPT9"
+    )
+}
+
+fn is_zip_path_edge_case_corpus(file_path: &Path) -> bool {
+    let file = match File::open(file_path) {
+        Ok(file) => file,
+        Err(_) => return false,
+    };
+    let mut archive = match ZipArchive::new(file) {
+        Ok(archive) => archive,
+        Err(_) => return false,
+    };
+
+    let mut total_entries = 0usize;
+    let mut traversal_entries = 0usize;
+    let mut edge_case_entries = 0usize;
+    let mut total_size = 0u64;
+    let mut max_size = 0u64;
+
+    for i in 0..archive.len() {
+        let entry = match archive.by_index(i) {
+            Ok(entry) => entry,
+            Err(_) => return false,
+        };
+
+        total_entries += 1;
+        let name = entry.name();
+        let size = entry.size();
+        total_size += size;
+        max_size = max_size.max(size);
+
+        if sanitize_entry_path(name, Path::new("/tmp/cleave-archive-inspect")).is_none() {
+            traversal_entries += 1;
+        }
+        if path_looks_synthetic_edge_case(name) {
+            edge_case_entries += 1;
+        }
+    }
+
+    total_entries >= MIN_PATH_CORPUS_ENTRY_COUNT
+        && traversal_entries >= MIN_PATH_CORPUS_TRAVERSAL_ENTRIES
+        && edge_case_entries >= MIN_PATH_CORPUS_EDGE_CASE_ENTRIES
+        && max_size <= MAX_PATH_CORPUS_FILE_SIZE
+        && total_size <= MAX_PATH_CORPUS_TOTAL_SIZE
+}
+
+fn should_suppress_path_traversal_findings(
+    file_path: &Path,
+    hostile_reasons: &[HostileArchiveReason],
+) -> bool {
+    if !hostile_reasons
+        .iter()
+        .any(|reason| matches!(reason, HostileArchiveReason::PathTraversal(_)))
+    {
+        return false;
+    }
+
+    let archive_type = utils::detect_archive_type_with_magic(file_path)
+        .unwrap_or_else(|_| detect_archive_type(file_path));
+
+    archive_type == "zip" && is_zip_path_edge_case_corpus(file_path)
+}
 
 /// Analyzes archive files (zip, tar, 7z, etc.) by extracting and analyzing each member
 #[derive(Debug)]
@@ -461,70 +758,14 @@ impl ArchiveAnalyzer {
             }
         };
 
-        // Add hostile findings from extraction
-        for reason in summary.hostile_reasons {
-            let (id, desc, evidence_value) = match &reason {
-                HostileArchiveReason::PathTraversal(path) => (
-                    "anti-analysis/archive/path-traversal",
-                    "Archive contains path traversal attempt (zip slip)",
-                    format!("path:{}", path),
-                ),
-                HostileArchiveReason::ZipBomb {
-                    compressed,
-                    uncompressed,
-                } => (
-                    "anti-analysis/archive/zip-bomb",
-                    "Archive has suspicious compression ratio (potential zip bomb)",
-                    format!(
-                        "ratio:{}:1 ({}B -> {}B)",
-                        uncompressed / (*compressed).max(1),
-                        compressed,
-                        uncompressed
-                    ),
-                ),
-                HostileArchiveReason::ExcessiveFileCount(count) => (
-                    "anti-analysis/archive/excessive-files",
-                    "Archive contains excessive number of files",
-                    format!("count:{} (limit:{})", count, MAX_FILE_COUNT),
-                ),
-                HostileArchiveReason::ExcessiveTotalSize(size) => (
-                    "anti-analysis/archive/excessive-size",
-                    "Archive expands to excessive total size",
-                    format!("size:{} bytes (limit:{})", size, MAX_TOTAL_SIZE),
-                ),
-                HostileArchiveReason::ExcessiveFileSize { file, size } => (
-                    "anti-analysis/archive/large-file",
-                    "Archive contains excessively large file",
-                    format!("file:{} size:{} (limit:{})", file, size, MAX_FILE_SIZE),
-                ),
-                HostileArchiveReason::SymlinkEscape(path) => (
-                    "anti-analysis/archive/symlink-escape",
-                    "Archive contains symlink that may escape extraction directory",
-                    format!("symlink:{}", path),
-                ),
-            };
-
-            report.findings.push(Finding {
-                kind: FindingKind::Capability,
-                trait_refs: vec![],
-                id: id.to_string(),
-                desc: desc.to_string(),
-                conf: 0.9,
-                crit: Criticality::Suspicious,
-                mbc: None,
-                attack: None,
-                evidence: vec![Evidence {
-                    method: "archive_extraction".to_string(),
-                    source: "streaming_analyzer".to_string(),
-                    value: evidence_value,
-                    location: None,
-                    ..Default::default()
-                }],
-
-                match_count: 0,
-                source_file: None,
-            });
-        }
+        let suppress_path_traversal =
+            should_suppress_path_traversal_findings(file_path, &summary.hostile_reasons);
+        push_archive_hostile_findings(
+            &mut report,
+            summary.hostile_reasons,
+            "streaming_analyzer",
+            suppress_path_traversal,
+        );
 
         // Add structural feature
         report.structure.push(StructuralFeature {
@@ -566,32 +807,30 @@ impl ArchiveAnalyzer {
                 collected_findings.extend(basename_findings);
             }
 
-            if !collected_findings.is_empty() {
-                let container_findings = mapper.evaluate_container_composites(
-                    &report,
-                    &collected_findings,
-                    &report.target.file_type,
-                );
+            let container_findings = mapper.evaluate_container_composites(
+                &report,
+                &collected_findings,
+                &report.target.file_type,
+            );
 
-                // Add container-level findings to the report
-                for finding in container_findings {
-                    // Update counts for container-level findings
-                    if let Ok(mut counts) = counts.lock() {
-                        match finding.crit {
-                            Criticality::Hostile => counts.hostile += 1,
-                            Criticality::Suspicious => counts.suspicious += 1,
-                            Criticality::Notable => counts.notable += 1,
-                            _ => {}
-                        }
+            // Add container-level findings to the report
+            for finding in container_findings {
+                // Update counts for container-level findings
+                if let Ok(mut counts) = counts.lock() {
+                    match finding.crit {
+                        Criticality::Hostile => counts.hostile += 1,
+                        Criticality::Suspicious => counts.suspicious += 1,
+                        Criticality::Notable => counts.notable += 1,
+                        _ => {}
                     }
-                    if let Ok(mut max_risk) = max_risk.lock() {
-                        *max_risk = Some(match *max_risk {
-                            Some(current) if current > finding.crit => current,
-                            _ => finding.crit,
-                        });
-                    }
-                    report.findings.push(finding);
                 }
+                if let Ok(mut max_risk) = max_risk.lock() {
+                    *max_risk = Some(match *max_risk {
+                        Some(current) if current > finding.crit => current,
+                        _ => finding.crit,
+                    });
+                }
+                report.findings.push(finding);
             }
         }
 
@@ -671,10 +910,12 @@ impl ArchiveAnalyzer {
         }
 
         // Create target info
+        let archive_type = utils::detect_archive_type_with_magic(file_path)
+            .unwrap_or_else(|_| detect_archive_type(file_path));
         let file_data = fs::read(file_path)?;
         let target = TargetInfo {
             path: file_path.display().to_string(),
-            file_type: detect_archive_type(file_path).to_string(),
+            file_type: archive_type.to_string(),
             size_bytes: file_data.len() as u64,
             sha256: calculate_sha256(&file_data),
             architectures: None,
@@ -682,75 +923,28 @@ impl ArchiveAnalyzer {
 
         let mut report = AnalysisReport::new(target);
 
-        // Emit findings for any hostile archive behaviors
-        for reason in hostile_reasons {
-            let (id, desc, evidence_value) = match &reason {
-                HostileArchiveReason::PathTraversal(path) => (
-                    "anti-analysis/archive/path-traversal",
-                    "Archive contains path traversal attempt (zip slip)",
-                    format!("path:{}", path),
-                ),
-                HostileArchiveReason::ZipBomb {
-                    compressed,
-                    uncompressed,
-                } => (
-                    "anti-analysis/archive/zip-bomb",
-                    "Archive has suspicious compression ratio (potential zip bomb)",
-                    format!(
-                        "ratio:{}:1 ({}B -> {}B)",
-                        uncompressed / (*compressed).max(1),
-                        compressed,
-                        uncompressed
-                    ),
-                ),
-                HostileArchiveReason::ExcessiveFileCount(count) => (
-                    "anti-analysis/archive/excessive-files",
-                    "Archive contains excessive number of files",
-                    format!("count:{} (limit:{})", count, MAX_FILE_COUNT),
-                ),
-                HostileArchiveReason::ExcessiveTotalSize(size) => (
-                    "anti-analysis/archive/excessive-size",
-                    "Archive expands to excessive total size",
-                    format!("size:{} bytes (limit:{})", size, MAX_TOTAL_SIZE),
-                ),
-                HostileArchiveReason::ExcessiveFileSize { file, size } => (
-                    "anti-analysis/archive/large-file",
-                    "Archive contains excessively large file",
-                    format!("file:{} size:{} (limit:{})", file, size, MAX_FILE_SIZE),
-                ),
-                HostileArchiveReason::SymlinkEscape(path) => (
-                    "anti-analysis/archive/symlink-escape",
-                    "Archive contains symlink that may escape extraction directory",
-                    format!("symlink:{}", path),
-                ),
-            };
-
-            report.findings.push(Finding {
-                kind: FindingKind::Capability,
-                trait_refs: vec![],
-                id: id.to_string(),
-                desc: desc.to_string(),
-                conf: 0.9,
-                crit: Criticality::Suspicious,
-                mbc: None,
-                attack: None,
-                evidence: vec![Evidence {
-                    method: "archive_extraction".to_string(),
-                    source: "archive_analyzer".to_string(),
-                    value: evidence_value,
-                    location: None,
-                    ..Default::default()
-                }],
-
-                match_count: 0,
-                source_file: None,
-            });
+        if archive_type == "zip" {
+            if let Ok((mut seeded_entries, archive_metrics)) = zip::inspect_zip_metadata(file_path)
+            {
+                report.archive_contents.append(&mut seeded_entries);
+                let metrics = report.metrics.get_or_insert_with(Metrics::default);
+                metrics.archive = Some(archive_metrics);
+            }
         }
+
+        let suppress_path_traversal =
+            should_suppress_path_traversal_findings(file_path, &hostile_reasons);
+        push_archive_hostile_findings(
+            &mut report,
+            hostile_reasons,
+            "archive_analyzer",
+            suppress_path_traversal,
+        );
 
         // Add structural feature
         report.structure.push(StructuralFeature {
-            id: format!("archive/{}", detect_archive_type(file_path)),
-            desc: format!("{} archive", detect_archive_type(file_path)),
+            id: format!("archive/{}", archive_type),
+            desc: format!("{} archive", archive_type),
             evidence: vec![Evidence {
                 method: "extension".to_string(),
                 source: "archive_analyzer".to_string(),
@@ -765,12 +959,7 @@ impl ArchiveAnalyzer {
         });
 
         // Check if this is a JAR-like archive
-        let ext = file_path.extension().and_then(|e| e.to_str()).unwrap_or("");
-        let is_jar = ext.eq_ignore_ascii_case("jar")
-            || ext.eq_ignore_ascii_case("war")
-            || ext.eq_ignore_ascii_case("ear")
-            || ext.eq_ignore_ascii_case("apk")
-            || ext.eq_ignore_ascii_case("aar");
+        let is_jar = matches!(archive_type, "zip" | "jar" | "war" | "ear" | "aar");
 
         if is_jar {
             self.analyze_jar_archive(temp_dir.path(), &mut report, start)?;
@@ -804,16 +993,14 @@ impl ArchiveAnalyzer {
                 nested_findings.extend(basename_findings);
             }
 
-            if !nested_findings.is_empty() {
-                let container_findings = mapper.evaluate_container_composites(
-                    &report,
-                    &nested_findings,
-                    &report.target.file_type,
-                );
+            let container_findings = mapper.evaluate_container_composites(
+                &report,
+                &nested_findings,
+                &report.target.file_type,
+            );
 
-                // Add container-level findings to the report
-                report.findings.extend(container_findings);
-            }
+            // Add container-level findings to the report
+            report.findings.extend(container_findings);
         }
 
         Ok(report)
@@ -2062,6 +2249,219 @@ composite_rules:
     }
 
     #[test]
+    fn test_zip_path_traversal_findings_are_grouped() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let zip_path = temp_dir.path().join("grouped.zip");
+
+        let file = File::create(&zip_path).unwrap();
+        let mut zip = zip::ZipWriter::new(file);
+        let options = zip::write::FileOptions::<()>::default();
+
+        zip.start_file("../etc/evil.sh", options).unwrap();
+        std::io::Write::write_all(&mut zip, b"#!/bin/sh\necho evil").unwrap();
+
+        zip.start_file("../../tmp/dropper.ps1", options).unwrap();
+        std::io::Write::write_all(&mut zip, b"Write-Host evil").unwrap();
+
+        zip.finish().unwrap();
+
+        let analyzer = ArchiveAnalyzer::new();
+        let report = analyzer.analyze(&zip_path).unwrap();
+
+        let path_findings: Vec<_> = report
+            .findings
+            .iter()
+            .filter(|f| f.id == "anti-analysis/archive/path-traversal")
+            .collect();
+        assert_eq!(path_findings.len(), 1);
+        assert_eq!(path_findings[0].match_count, 2);
+        assert_eq!(path_findings[0].evidence.len(), 2);
+    }
+
+    #[test]
+    fn test_zip_path_edge_case_corpus_is_not_flagged_as_zip_slip() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let zip_path = temp_dir.path().join("mixed-paths.zip");
+
+        let file = File::create(&zip_path).unwrap();
+        let mut zip = zip::ZipWriter::new(file);
+        let options = zip::write::FileOptions::<()>::default()
+            .compression_method(zip::CompressionMethod::Stored);
+
+        let entries = [
+            "First",
+            "../One Level Up",
+            "../../Two Levels Up",
+            "/At The Top",
+            "/../Over The Top",
+            "/",
+            "../",
+            ".",
+            "..",
+            "...",
+            "....",
+            "/.",
+            "a/.",
+            "a/./",
+            "a/./b",
+            "a/..",
+            "a/../",
+            "a/../b",
+            ".One",
+            "..Two",
+            "...Three",
+            "Tab \t",
+            "Star *",
+            "Dot .",
+            "Ampersand &",
+            "Hash #",
+            "Dollar $",
+            "Euro €",
+            "Pipe |",
+            "Smile 🙂",
+            "Tilde ~",
+            "Colon :",
+            "Semicolon ;",
+            "Percent %",
+            "Caret ^",
+            "At @",
+            "Comma ,",
+            "Exclamation !",
+            "Dash -",
+            "Plus +",
+            "Equal =",
+            "Underscore _",
+            "Question ?",
+            "Backtick `",
+            "Quote '",
+            "Double quote \"",
+            "Backslash1→\\",
+            "\\←Backslash2",
+            "Backslash3→\\←Backslash4",
+            "C:",
+            "C:\\",
+            "C:\\Temp",
+            "C:\\Temp\\File",
+            "\\\\server\\share\\file",
+            "u/v//w///x//y/z",
+            " ",
+            "~",
+            "%TMP",
+            "$HOME",
+            "-",
+            "Space→ ",
+            " ←Space",
+            "Angle <>",
+            "Square []",
+            "Round ()",
+            "Curly {}",
+            "Delete \x7f",
+            "Escape \x1b",
+            "Backspace \x08",
+            "Line Feed \n",
+            "Carriage Return \r",
+            "Bell \x07",
+            "String Terminator \u{009c}",
+            "Empty/",
+            "/Empty/",
+            "FileOrDir",
+            "FileOrDir/",
+            "FileOrDir/File",
+            "Case",
+            "case",
+            "CASE",
+            "NUL",
+            "NUL.txt",
+            "NUL.tar.gz",
+            "NUL..txt",
+            " NUL.txt",
+            "c/NUL",
+            "CON",
+            "PRN",
+            "AUX",
+            "COM1",
+            "COM2",
+            "COM3",
+            "COM4",
+            "COM5",
+            "COM6",
+            "COM7",
+            "COM8",
+            "COM9",
+            "LPT1",
+            "LPT2",
+            "LPT3",
+            "LPT4",
+            "LPT5",
+            "LPT6",
+            "LPT7",
+            "LPT8",
+            "LPT9",
+            "CLOCK$",
+            "/dev/null",
+            "Last",
+        ];
+
+        for name in entries {
+            zip.start_file(name, options).unwrap();
+            std::io::Write::write_all(&mut zip, b"fixture").unwrap();
+        }
+
+        zip.finish().unwrap();
+
+        assert!(is_zip_path_edge_case_corpus(&zip_path));
+
+        let analyzer = ArchiveAnalyzer::new();
+        let report = analyzer.analyze(&zip_path).unwrap();
+
+        assert!(!report
+            .findings
+            .iter()
+            .any(|f| f.id == "anti-analysis/archive/path-traversal"));
+    }
+
+    #[test]
+    fn test_known_good_mixed_paths_zip_regression() {
+        let sample =
+            Path::new("/srv/data/known-good/repos/node/deps/zlib/google/test/data/Mixed Paths.zip");
+        if !sample.exists() {
+            eprintln!("Skipping regression test: known-good sample missing");
+            return;
+        }
+
+        let analyzer = ArchiveAnalyzer::new();
+        let report = analyzer.analyze(sample).unwrap();
+
+        assert!(!report
+            .findings
+            .iter()
+            .any(|f| f.id == "anti-analysis/archive/path-traversal"));
+
+        let suspicious = report
+            .findings
+            .iter()
+            .filter(|f| f.crit == Criticality::Suspicious)
+            .count();
+        let hostile = report
+            .findings
+            .iter()
+            .filter(|f| f.crit == Criticality::Hostile)
+            .count();
+
+        assert_eq!(hostile, 0);
+        assert!(
+            suspicious <= 1,
+            "unexpected suspicious findings: {:?}",
+            report.findings
+        );
+    }
+
+    #[test]
+    fn test_validate_traits_library_entrypoint() {
+        crate::validate_traits().unwrap();
+    }
+
+    #[test]
     fn test_extract_python_packages() {
         // Test .egg and .whl extraction
         let temp_dir = tempfile::tempdir().unwrap();
@@ -2891,5 +3291,61 @@ composite_rules:
                 "decompressed .zst content should match original"
             );
         }
+    }
+
+    #[test]
+    fn test_alpine_apk_uses_tar_gz_path() {
+        use flate2::write::GzEncoder;
+        use flate2::Compression;
+        use tar::Builder;
+
+        #[allow(clippy::expect_used)]
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let apk_path = temp_dir.path().join("sample.apk");
+
+        {
+            let file = File::create(&apk_path).unwrap();
+            let enc = GzEncoder::new(file, Compression::default());
+            let mut tar_builder = Builder::new(enc);
+
+            let pkginfo = b"pkgname = ruby3.2-public_suffix\npkgver = 6.0.0-r0\n";
+            let mut pkg_header = tar::Header::new_gnu();
+            pkg_header.set_path(".PKGINFO").unwrap();
+            pkg_header.set_size(pkginfo.len() as u64);
+            pkg_header.set_mode(0o644);
+            pkg_header.set_cksum();
+            tar_builder.append(&pkg_header, &pkginfo[..]).unwrap();
+
+            let ruby = b"File.open(\"the_Score.vbs\", \"w\")\n";
+            let mut ruby_header = tar::Header::new_gnu();
+            ruby_header
+                .set_path("usr/lib/ruby/gems/3.2.0/gems/public_suffix-6.0.1/lib/public_suffix.rb")
+                .unwrap();
+            ruby_header.set_size(ruby.len() as u64);
+            ruby_header.set_mode(0o644);
+            ruby_header.set_cksum();
+            tar_builder.append(&ruby_header, &ruby[..]).unwrap();
+
+            tar_builder.finish().unwrap();
+        }
+
+        let analyzer = ArchiveAnalyzer::new();
+        #[allow(clippy::expect_used)]
+        let report = analyzer.analyze(&apk_path).expect("analyze alpine apk");
+
+        assert_eq!(report.target.file_type, "tar.gz");
+        assert!(
+            report
+                .files
+                .iter()
+                .any(|f| f.path.ends_with("public_suffix.rb")),
+            "expected ruby archive member to be analyzed, got files: {:?}",
+            report.files.iter().map(|f| &f.path).collect::<Vec<_>>()
+        );
+        assert!(
+            report.structure.iter().any(|s| s.id == "archive/tar.gz"),
+            "expected tar.gz structural marker, got: {:?}",
+            report.structure.iter().map(|s| &s.id).collect::<Vec<_>>()
+        );
     }
 }

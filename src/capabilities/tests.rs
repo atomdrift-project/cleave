@@ -960,6 +960,38 @@ fn test_excessive_line_length_skips_binary_like_unknown_blob() {
 }
 
 #[test]
+fn test_excessive_line_length_skips_escaped_tensor_text_blob() {
+    let mapper = CapabilityMapper::empty();
+    let mut report = test_report_with_findings(vec![]);
+    report.target.file_type = "unknown".to_string();
+    report.metrics = Some(Metrics {
+        text: Some(TextMetrics {
+            char_entropy: 1.37,
+            max_line_length: 33_554_458,
+            lines_over_1000: 4,
+            octal_escape_count: 17_303_119,
+            escape_density: 23.51,
+            digit_ratio: 0.948,
+            ..Default::default()
+        }),
+        ..Default::default()
+    });
+
+    let findings = mapper.evaluate_composite_rules(
+        &report,
+        b"tensor_content: \"\\000\\000\\000\\000\"",
+        None,
+        None,
+        &SectionMap::default(),
+        None,
+    );
+
+    assert!(!findings
+        .iter()
+        .any(|f| f.id == "objectives/anti-static/excessive-line-length"));
+}
+
+#[test]
 fn test_iterative_eval_single_pass() {
     // Test that simple composites work in a single pass
     let mapper = CapabilityMapper::empty();

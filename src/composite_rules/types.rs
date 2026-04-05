@@ -168,6 +168,10 @@ pub enum Platform {
 pub(crate) enum FileType {
     /// Applies to all file types
     All,
+    /// Generic archive/container when the analyzer does not expose a subtype
+    Archive,
+    /// Analyzer could not classify the file beyond opaque/unknown content
+    Unknown,
     /// ELF binary (Linux/Unix executable or shared library)
     Elf,
     /// Mach-O binary (macOS/iOS executable or library)
@@ -237,6 +241,8 @@ pub(crate) enum FileType {
     Vbs,
     /// HTML file
     Html,
+    /// Markdown file
+    Markdown,
     /// npm package.json manifest
     PackageJson,
     /// Chrome extension manifest.json
@@ -333,6 +339,7 @@ impl FileType {
                 | FileType::AppleScript
                 | FileType::Vbs
                 | FileType::Html
+                | FileType::Markdown
         )
     }
 
@@ -376,6 +383,7 @@ impl FileType {
             FileType::AppleScript,
             FileType::Vbs,
             FileType::Html,
+            FileType::Markdown,
             // Manifest/config formats
             FileType::PackageJson,
             FileType::ChromeManifest,
@@ -399,7 +407,9 @@ impl FileType {
             FileType::Pickle,
             // Document formats
             FileType::Pdf,
+            FileType::Unknown,
             // Archive/container formats
+            FileType::Archive,
             FileType::Zip,
             FileType::Apk,
             FileType::Jar,
@@ -452,6 +462,7 @@ impl FileType {
             "applescript" | "scpt" => FileType::AppleScript,
             "vbs" | "vbscript" => FileType::Vbs,
             "html" | "htm" => FileType::Html,
+            "markdown" | "md" => FileType::Markdown,
             // cpp aliases to c (handled above)
             // Manifest/config formats
             "package.json" | "packagejson" => FileType::PackageJson,
@@ -473,6 +484,8 @@ impl FileType {
             "lnk" => FileType::Lnk,
             "ipa" => FileType::Ipa,
             "pdf" => FileType::Pdf,
+            "archive" | "rar" | "7z" => FileType::Archive,
+            "unknown" => FileType::Unknown,
             "zip" => FileType::Zip,
             "apk" => FileType::Apk,
             "jar" | "war" | "ear" => FileType::Jar,

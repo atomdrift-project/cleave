@@ -10,6 +10,7 @@ use crate::composite_rules::{Arch, EvaluationContext, FileType as RuleFileType, 
 use crate::types::{AnalysisReport, Criticality, Evidence, Finding, FindingKind};
 use rustc_hash::FxHashMap;
 use std::collections::HashMap;
+use std::path::Path;
 
 impl super::CapabilityMapper {
     /// Evaluate composite rules against an analysis report.
@@ -39,10 +40,30 @@ impl super::CapabilityMapper {
         }
 
         // Split rules into two groups: those with negative conditions and those without
-        let (negative_rules, positive_rules): (Vec<_>, Vec<_>) = self
+        let (mut negative_rules, mut positive_rules): (Vec<_>, Vec<_>) = self
             .composite_rules
             .iter()
             .partition(|r| r.has_negative_conditions());
+
+        let is_tiny_dos_com_candidate = file_type == RuleFileType::Unknown
+            && binary_data.len() <= 4096
+            && Path::new(&report.target.path)
+                .extension()
+                .is_some_and(|ext| ext.eq_ignore_ascii_case("com"));
+
+        if is_tiny_dos_com_candidate {
+            let allow_rule = |rule: &&crate::composite_rules::CompositeTrait| {
+                let source = rule.defined_in.to_string_lossy();
+                source.ends_with("/metadata/binary/layout/msdos.yaml")
+                    || source.ends_with("/micro-behaviors/os/msdos/interrupt/file_management.yaml")
+                    || source.ends_with("/micro-behaviors/time/schedule/calendar/msdos.yaml")
+                    || source.ends_with("/objectives/evasion/self-delete/file/msdos.yaml")
+                    || source.ends_with("/objectives/impact/infect/virus/msdos-binary.yaml")
+                    || source.ends_with("/well-known/malware/virus/friday_the_13th/msdos.yaml")
+            };
+            positive_rules.retain(allow_rule);
+            negative_rules.retain(allow_rule);
+        }
 
         // Pass 1: Iterative evaluation of positive rules to reach a stable fixed-point
         const MAX_ITERATIONS: usize = 10;
@@ -154,8 +175,26 @@ impl super::CapabilityMapper {
                         && text.max_line_length > MAX_LINE_LENGTH as u32)
                     || (text.most_common_char == Some('\0') && text.most_common_ratio >= 0.80)
             });
+        let escaped_tensor_text_blob = report
+            .metrics
+            .as_ref()
+            .and_then(|metrics| metrics.text.as_ref())
+            .is_some_and(|text| {
+                report.target.file_type.eq_ignore_ascii_case("unknown")
+                    && text.max_line_length > MAX_LINE_LENGTH as u32
+                    && text.lines_over_1000 <= 8
+                    && text.char_entropy <= 2.0
+                    && text.octal_escape_count >= 100_000
+                    && text.escape_density >= 5.0
+                    && text.digit_ratio >= 0.90
+            });
 
-        let has_excessive_line = if is_binary_format || binary_like_text_blob {
+        let has_excessive_line = if is_binary_format
+            || binary_like_text_blob
+            // Large protobuf text tensors serialize as low-entropy octal-escaped blobs.
+            // They can produce 1MB+ lines without conveying anti-analysis intent.
+            || escaped_tensor_text_blob
+        {
             false
         } else {
             let content = String::from_utf8_lossy(binary_data);
@@ -169,7 +208,23 @@ impl super::CapabilityMapper {
             let is_source_map = report.target.path.ends_with(".map")
                 || (binary_data.starts_with(br#"{"version":"#)
                     && binary_data.windows(10).any(|w| w == br#""sources":["#));
+            // Downgrade JSON data files — minified/serialized JSON commonly
+            // produces single-line megabyte blobs without anti-analysis intent.
+            let is_json_data = report.target.path.ends_with(".json")
+                || report.target.path.ends_with(".json.zst")
+                || report.target.path.ends_with(".json.gz")
+                || report.target.path.ends_with(".json.br")
+                || report.target.path.ends_with(".json.xz");
+            // Also downgrade any file with very few lines (≤5) — these are
+            // typically serialized data, not obfuscated code.
+            let is_few_lines = report
+                .metrics
+                .as_ref()
+                .and_then(|m| m.text.as_ref())
+                .is_some_and(|text| text.total_lines <= 5);
             let is_likely_bundle = is_source_map
+                || is_json_data
+                || is_few_lines
                 || (matches!(
                     file_type,
                     RuleFileType::JavaScript | RuleFileType::TypeScript
@@ -319,22 +374,28 @@ impl super::CapabilityMapper {
                     continue;
                 }
 
-                let (cmp_base, cmp_exact, cmp_substr) = if case_insensitive {
+                let (cmp_base, cmp_entry, cmp_exact, cmp_substr) = if case_insensitive {
                     (
                         basename.to_lowercase(),
+                        entry_name.to_lowercase(),
                         exact.as_ref().map(|s| s.to_lowercase()),
                         substr.as_ref().map(|s| s.to_lowercase()),
                     )
                 } else {
-                    (basename.to_string(), exact.clone(), substr.clone())
+                    (
+                        basename.to_string(),
+                        entry_name.clone(),
+                        exact.clone(),
+                        substr.clone(),
+                    )
                 };
 
                 let matched = if let Some(ref e) = cmp_exact {
-                    cmp_base == *e
+                    cmp_base == *e || cmp_entry == *e
                 } else if let Some(ref s) = cmp_substr {
-                    cmp_base.contains(s.as_str())
+                    cmp_base.contains(s.as_str()) || cmp_entry.contains(s.as_str())
                 } else if let Some(re) = compiled_regex {
-                    re.is_match(basename)
+                    re.is_match(basename) || re.is_match(entry_name)
                 } else {
                     false
                 };
@@ -375,31 +436,59 @@ impl super::CapabilityMapper {
         // Detect file type for the container
         let rule_file_type = self.detect_file_type(file_type);
 
+        // Container-level rules may need the parent archive bytes themselves
+        // (for ZIP headers, member names, encrypted-entry markers, etc.).
+        let container_bytes =
+            std::fs::read(&container_report.target.path).unwrap_or_else(|_| Vec::new());
+
         // Track which composite IDs have already matched
         let mut seen_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
         for finding in &container_report.findings {
             seen_ids.insert(finding.id.clone());
         }
 
-        // Create evaluation context with nested findings as additional_findings
-        // This allows composite rules to "see" findings from all nested files
-        let ctx = EvaluationContext::new(
+        // Evaluate parent/container atomic traits against the container bytes first.
+        // This allows archive-focused atomics (raw, yara, basename-derived, etc.)
+        // to seed findings for later container-level composites.
+        let parent_trait_ctx = EvaluationContext::new(
             container_report,
-            &[], // No binary data for container-level evaluation
+            &container_bytes,
             rule_file_type,
             self.platforms.clone(),
             Some(nested_findings),
             None, // No AST for container
         );
+        let mut container_findings: Vec<Finding> = self
+            .trait_definitions
+            .iter()
+            .filter_map(|trait_def| trait_def.evaluate(&parent_trait_ctx))
+            .filter(|f| !seen_ids.contains(&f.id))
+            .collect();
 
-        // Evaluate all composite rules at container level - rules will only match if their
-        // conditions are met by findings from nested files. This enables cross-file patterns
-        // like "npm package with .dll" where package.json is in one file and .dll in another.
-        let mut container_findings: Vec<Finding> = Vec::new();
+        for finding in &container_findings {
+            seen_ids.insert(finding.id.clone());
+        }
+
+        let mut combined_findings = nested_findings.to_vec();
+        combined_findings.extend(container_findings.iter().cloned());
+
+        // Evaluate all composite rules at container level. Rules can match on:
+        // - nested file findings across the container
+        // - parent/container atomics evaluated above
+        // This enables cross-file patterns like "npm package with .dll" and
+        // parent-byte patterns like encrypted ZIP/APK members.
 
         // Iterative evaluation to handle chained dependencies
         const MAX_ITERATIONS: usize = 5;
         for _ in 0..MAX_ITERATIONS {
+            let ctx = EvaluationContext::new(
+                container_report,
+                &container_bytes,
+                rule_file_type,
+                self.platforms.clone(),
+                Some(&combined_findings),
+                None, // No AST for container
+            );
             let new_findings: Vec<Finding> = self
                 .composite_rules
                 .iter()
@@ -413,6 +502,7 @@ impl super::CapabilityMapper {
 
             for finding in new_findings {
                 seen_ids.insert(finding.id.clone());
+                combined_findings.push(finding.clone());
                 container_findings.push(finding);
             }
         }
@@ -616,6 +706,29 @@ traits:
                 "basename findings should have archive-entry source"
             );
         }
+    }
+
+    #[test]
+    #[allow(clippy::expect_used)]
+    fn test_evaluate_basename_traits_matches_entry_path_regex() {
+        let mapper = super::super::CapabilityMapper::new(&[std::path::PathBuf::from(
+            "/srv/home/t/cleave-traits/objectives/supply-chain/metadata-anomaly/archive/npm-package-info-zip.yaml",
+        )])
+        .expect("mapper should load archive traits");
+
+        let entry_names = vec![String::from(
+            "var/folders/rs/52vst_5924nc0zz5ccww9tl80000gp/T/tmpn885gmk9/snore-log/package/lib/private/prepare-writer.js",
+        )];
+
+        let findings = mapper.evaluate_basename_traits_for_entries(&entry_names);
+
+        assert!(
+            findings
+                .iter()
+                .any(|f| f.id.contains("macos-temp-staging-path")),
+            "full entry path regex should match archive member path, got: {:?}",
+            findings.iter().map(|f| &f.id).collect::<Vec<_>>()
+        );
     }
 
     #[test]

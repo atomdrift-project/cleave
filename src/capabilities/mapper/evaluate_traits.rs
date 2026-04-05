@@ -12,6 +12,7 @@ use crate::composite_rules::{Arch, Condition, EvaluationContext, SectionMap};
 use crate::types::{AnalysisReport, Evidence, Finding, FindingKind};
 use rustc_hash::{FxHashMap, FxHashSet};
 use std::collections::HashMap;
+use std::path::Path;
 
 /// Pre-computed caches passed to trait evaluation to avoid redundant work.
 pub(crate) struct TraitEvalCache<'a> {
@@ -295,7 +296,25 @@ impl super::CapabilityMapper {
 
         // Use trait index to only evaluate applicable traits
         // This dramatically reduces work for specific file types
-        let applicable_indices: Vec<usize> = self.trait_index.get_applicable(&file_type).collect();
+        let mut applicable_indices: Vec<usize> = self.trait_index.get_applicable(&file_type).collect();
+
+        let is_tiny_dos_com_candidate = file_type == crate::composite_rules::FileType::Unknown
+            && binary_data.len() <= 4096
+            && Path::new(&report.target.path)
+                .extension()
+                .is_some_and(|ext| ext.eq_ignore_ascii_case("com"));
+
+        if is_tiny_dos_com_candidate {
+            applicable_indices.retain(|&idx| {
+                let trait_def = &self.trait_definitions[idx];
+                let source = trait_def.defined_in.to_string_lossy();
+                source.ends_with("/metadata/binary/layout/msdos.yaml")
+                    || source.ends_with("/micro-behaviors/os/msdos/internal/signatures.yaml")
+                    || source.ends_with("/micro-behaviors/os/msdos/interrupt/file_management.yaml")
+                    || source.ends_with("/micro-behaviors/time/schedule/calendar/msdos.yaml")
+                    || source.ends_with("/well-known/malware/virus/friday_the_13th/msdos.yaml")
+            });
+        }
 
         // Further filter by dependency status
         let filtered_indices: Vec<usize> = applicable_indices

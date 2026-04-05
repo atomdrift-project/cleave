@@ -129,6 +129,27 @@ fn looks_like_textual_payload_preview(preview: &str) -> bool {
     alpha * 100 / chars >= 60 && whitespace > 0
 }
 
+fn is_benign_unicode_escape_payload(payload: &types::ExtractedPayload) -> bool {
+    if !payload
+        .encoding_chain
+        .iter()
+        .any(|encoding| encoding == "unicode-escape")
+    {
+        return false;
+    }
+
+    let decoded = match std::fs::read(&payload.temp_path) {
+        Ok(decoded) => decoded,
+        Err(_) => return false,
+    };
+
+    let decoded = String::from_utf8_lossy(&decoded);
+    decoded.contains('\u{1b}')
+        && decoded.contains("colors ?")
+        && decoded.contains("${m}")
+        && decoded.contains(": m")
+}
+
 fn should_skip_unknown_xor_payload_for_source(
     file_type: &FileType,
     payload: &types::ExtractedPayload,
@@ -138,6 +159,115 @@ fn should_skip_unknown_xor_payload_for_source(
         && payload.encoding_chain[0] == "xor"
         && payload.detected_type == FileType::Unknown
         && !looks_like_textual_payload_preview(&payload.preview)
+}
+
+fn smallest_section_for_offset<'a>(
+    offset: usize,
+    sections: &'a [types::Section],
+) -> Option<&'a types::Section> {
+    sections
+        .iter()
+        .filter(|section| {
+            let Some(section_offset) = section.offset else {
+                return false;
+            };
+            let start = section_offset as usize;
+            let end = start.saturating_add(section.size as usize);
+            offset >= start && offset < end
+        })
+        .min_by_key(|section| section.size)
+}
+
+fn should_skip_unknown_xor_payload_for_binary(
+    file_type: &FileType,
+    payload: &types::ExtractedPayload,
+    sections: &[types::Section],
+    metrics: Option<&types::scores::Metrics>,
+) -> bool {
+    if payload.encoding_chain.len() != 1
+        || payload.encoding_chain[0] != "xor"
+        || payload.detected_type != FileType::Unknown
+    {
+        return false;
+    }
+
+    let Some(section) = smallest_section_for_offset(payload.original_offset, sections) else {
+        return false;
+    };
+
+    if *file_type == FileType::Elf {
+        let name = section.name.as_str();
+        let is_elf_metadata_section = matches!(
+            name,
+            ".comment"
+                | ".ident"
+                | ".copyright"
+                | ".gnu_debuglink"
+                | ".symtab"
+                | ".strtab"
+                | ".shstrtab"
+                | ".SUNW_ctf"
+        ) || name.starts_with(".debug");
+
+        let is_unloaded_metadata = section.address == Some(0);
+
+        return is_elf_metadata_section && is_unloaded_metadata;
+    }
+
+    if *file_type == FileType::Pe {
+        let in_readonly_data = section.name == ".rdata";
+        let is_signed_developer_library = metrics.is_some_and(|m| {
+            m.pe.as_ref().is_some_and(|pe| {
+                pe.has_signature && pe.signature_type.as_deref() == Some("developer")
+            }) && m
+                .binary
+                .as_ref()
+                .is_some_and(|binary| binary.export_count >= 50 && binary.function_count >= 200)
+        });
+
+        return in_readonly_data
+            && is_signed_developer_library
+            && !looks_like_textual_payload_preview(&payload.preview);
+    }
+
+    false
+}
+
+fn is_elf_metadata_offset(offset: usize, sections: &[types::Section]) -> bool {
+    let Some(section) = sections
+        .iter()
+        .filter(|section| {
+            let Some(section_offset) = section.offset else {
+                return false;
+            };
+            let start = section_offset as usize;
+            let end = start.saturating_add(section.size as usize);
+            offset >= start && offset < end
+        })
+        .min_by_key(|section| section.size)
+    else {
+        return false;
+    };
+
+    let name = section.name.as_str();
+    let is_elf_metadata_section = matches!(
+        name,
+        ".comment"
+            | ".ident"
+            | ".copyright"
+            | ".gnu_debuglink"
+            | ".symtab"
+            | ".strtab"
+            | ".shstrtab"
+            | ".SUNW_ctf"
+    ) || name.starts_with(".debug");
+
+    is_elf_metadata_section && section.address == Some(0)
+}
+
+fn parse_evidence_offset(location: &Option<String>) -> Option<usize> {
+    let value = location.as_deref()?.strip_prefix("offset:")?;
+    value.parse::<usize>().ok()
 }
 
 fn should_skip_unknown_url_markup_payload(payload: &types::ExtractedPayload) -> bool {
@@ -1043,6 +1173,7 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
                 || payload.preview.contains(".pdb")
                 || payload.preview.contains("must be escaped")
                 || payload.preview.contains("control character U+")
+                || is_benign_unicode_escape_payload(&payload)
             {
                 tracing::debug!(
                     "Skipping benign unicode-escape payload: {}",
@@ -1050,6 +1181,29 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
                 );
                 continue;
             }
+        }
+        if file_type == FileType::Pe
+            && !payload.encoding_chain.is_empty()
+            && payload.encoding_chain.iter().all(|e| e == "hex")
+            && payload.detected_type == FileType::Unknown
+            && report.metrics.as_ref().is_some_and(|m| {
+                m.pe.as_ref().is_some_and(|pe| pe.has_signature)
+                    && m.binary.as_ref().is_some_and(|binary| {
+                        binary.export_count <= 2
+                            && binary.function_count >= 100
+                            && binary.string_count >= 2000
+                    })
+                    && m.pe
+                        .as_ref()
+                        .and_then(|pe| pe.signer.as_ref())
+                        .is_some_and(|signer| signer.contains("Python Software Foundation"))
+            })
+        {
+            tracing::debug!(
+                "Skipping unknown hex payload in signed Python extension data tables: {}",
+                payload.preview
+            );
+            continue;
         }
         if payload.encoding_chain.len() == 1
             && payload.encoding_chain[0] == "xor"
@@ -1062,6 +1216,18 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
         if should_skip_unknown_xor_payload_for_source(&file_type, &payload) {
             tracing::debug!(
                 "Skipping unknown xor fragment in source file: {}",
+                payload.preview
+            );
+            continue;
+        }
+        if should_skip_unknown_xor_payload_for_binary(
+            &file_type,
+            &payload,
+            &report.sections,
+            report.metrics.as_ref(),
+        ) {
+            tracing::debug!(
+                "Skipping unknown xor fragment in ELF metadata section: {}",
                 payload.preview
             );
             continue;
@@ -1231,6 +1397,19 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
         }
     }
     let stage_yara_ms = yara_start.elapsed().as_millis() as u64;
+
+    if file_type == FileType::Elf {
+        report.findings.retain(|finding| {
+            if finding.id != "metadata/encoded-payload/xor" {
+                return true;
+            }
+
+            !finding.evidence.iter().any(|evidence| {
+                parse_evidence_offset(&evidence.location)
+                    .is_some_and(|offset| is_elf_metadata_offset(offset, &report.sections))
+            })
+        });
+    }
 
     // Filter low-value composite "any" rules (needs=1) before caching.
     // These provide no value over the underlying trait that matched.

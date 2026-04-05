@@ -17,10 +17,11 @@ use std::fs;
 use tempfile::TempDir;
 
 fn run_analyze_json(path: &std::path::Path) -> std::process::Output {
-    let traits_dir = concat!(env!("CARGO_MANIFEST_DIR"), "/traits");
+    let traits_dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../cleave-traits");
     let output = assert_cmd::cargo_bin_cmd!("cleave")
         .env("cleave_SKIP_YARA", "1")
         .env("CLEAVE_SKIP_CACHE", "1")
+        .env("CLEAVE_LOGS_DIR", "/tmp/cleave-test-logs")
         .env_remove("CLEAVE_SKIP_TRAITS")
         .env_remove("cleave_SKIP_TRAITS")
         .env("CLEAVE_TRAITS_DIR", traits_dir)
@@ -187,13 +188,48 @@ fn test_embedded_pe_in_pe_detected() {
 }
 
 #[test]
+fn test_embedded_pe_in_nsis_overlay_is_not_suspicious() {
+    let tmp = TempDir::new().unwrap();
+    let mut host = minimal_pe_stub();
+    host.resize(0x600, 0);
+    host.extend_from_slice(&[0xEF, 0xBE, 0xAD, 0xDE]); // NSIS deadbeef marker
+    host.extend_from_slice(b"NSIS Error"); // secondary strong NSIS marker
+    embed_pe_at(&mut host, 0x800);
+    let path = tmp.path().join("nsis_payload.exe");
+    fs::write(&path, &host).unwrap();
+
+    let output = run_analyze_json(&path);
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let findings = report["files"][0]["findings"]
+        .as_array()
+        .expect("top-level findings should be an array");
+
+    let embedded_pe_findings: Vec<_> = findings
+        .iter()
+        .filter(|finding| finding["id"] == "binary/embedded/pe")
+        .collect();
+    assert!(
+        !embedded_pe_findings.is_empty(),
+        "expected host-level embedded PE finding"
+    );
+    assert!(
+        embedded_pe_findings
+            .iter()
+            .all(|finding| finding["crit"] == "notable"),
+        "expected NSIS overlay embedded PE findings to be downgraded to notable.\nstdout:\n{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+}
+
+#[test]
 fn test_embedded_elf_in_elf_detected() {
     let tmp = TempDir::new().unwrap();
-    // Real ELF host with synthetic ELF appended after it
+    // Real ELF host with a second real ELF appended after it
     let mut host = fs::read("tests/fixtures/test.elf").unwrap();
+    let payload = fs::read("tests/fixtures/test.elf").unwrap();
     let embed_at = host.len() + 16;
     host.resize(embed_at, 0u8);
-    embed_elf_at(&mut host, embed_at);
+    host.extend_from_slice(&payload);
 
     let path = tmp.path().join("elf_dropper.elf");
     fs::write(&path, &host).unwrap();
@@ -205,6 +241,28 @@ fn test_embedded_elf_in_elf_detected() {
         stdout.contains("binary/embedded/elf"),
         "Expected 'binary/embedded/elf' in output.\nFirst 2000 chars:\n{}",
         &stdout[..stdout.len().min(2000)]
+    );
+}
+
+#[test]
+fn test_known_good_upx_exe_has_no_embedded_elf_or_hostile_findings() {
+    let sample = std::path::Path::new("/srv/data/known-good/data2/upx.exe");
+    if !sample.exists() {
+        return;
+    }
+
+    let output = run_analyze_json(sample);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    assert!(
+        !stdout.contains("\"id\":\"binary/embedded/elf\""),
+        "False positive: embedded ELF findings on known-good UPX utility.\nFirst 4000 chars:\n{}",
+        &stdout[..stdout.len().min(4000)]
+    );
+    assert!(
+        !stdout.contains("\"crit\":\"hostile\""),
+        "False positive: hostile findings on known-good UPX utility.\nFirst 4000 chars:\n{}",
+        &stdout[..stdout.len().min(4000)]
     );
 }
 

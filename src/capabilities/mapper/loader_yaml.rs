@@ -132,7 +132,8 @@ impl super::CapabilityMapper {
             eprintln!("Warning: {}", warning);
         }
 
-        // Structurally invalid file types (for: [], for: [none]) are always fatal
+        // Structurally invalid file types (for: []) are always fatal.
+        // Trait-level for: [none] is a documented escape hatch that unsets defaults.
         let invalid_ft_errors: Vec<&str> = warnings
             .iter()
             .filter(|w| w.contains("Invalid file type"))

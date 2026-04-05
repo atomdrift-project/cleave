@@ -1146,7 +1146,11 @@ pub(crate) fn find_wellknown_unscoped_filetypes(
 ) -> Vec<(String, String)> {
     trait_definitions
         .iter()
-        .filter(|t| extract_trait_tier(&t.id) == "well-known" && t.r#for.contains(&FileType::All))
+        .filter(|t| {
+            extract_trait_tier(&t.id) == "well-known"
+                && t.r#for.contains(&FileType::All)
+                && !(t.size_min.is_some() || t.size_max.is_some())
+        })
         .map(|t| {
             let source = rule_source_files
                 .get(&t.id)

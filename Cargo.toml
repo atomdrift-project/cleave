@@ -133,7 +133,7 @@ terminal_size = "0.4"
 
 # File operations
 walkdir = "2.5"
-zip = { version = "8.4", default-features = true }
+zip = { version = "8.5", default-features = true }
 sevenz-rust = { version = "0.6", features = ["aes256"] }
 apple-xar = { version = "0.20", default-features = false }
 tar = "0.4"

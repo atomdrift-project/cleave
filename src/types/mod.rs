@@ -38,6 +38,7 @@ pub(crate) fn is_zero_i64(v: &i64) -> bool {
 pub mod binary;
 pub(crate) mod binary_metrics;
 pub(crate) mod code_structure;
+pub mod compact;
 pub(crate) mod container_metrics;
 pub(crate) mod core;
 pub(crate) mod diff;
@@ -55,6 +56,8 @@ pub(crate) mod traits_findings;
 
 // Re-export all public types to maintain API compatibility
 // These re-exports are part of the public library API even if not used directly in the binary
+#[allow(unused_imports)]
+pub use compact::{compact_from_files, CompactReport};
 #[allow(unused_imports)]
 pub use core::{AnalysisReport, ArchiveEntry, Criticality, ExtractedPayload, TargetInfo};
 

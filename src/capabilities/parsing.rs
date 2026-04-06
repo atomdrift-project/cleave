@@ -1604,23 +1604,19 @@ mod tests {
     // ==================== parse_file_types Tests ====================
 
     #[test]
-    fn test_parse_file_types_all_warns() {
+    fn test_parse_file_types_all() {
         let mut warnings = Vec::new();
         let result = parse_file_types(&["all".to_string()], &mut warnings);
-        // Result is still FileType::All for backward-compat runtime behaviour, but a warning is emitted.
         assert_eq!(result.types, vec![RuleFileType::All]);
-        assert_eq!(warnings.len(), 1);
-        assert!(warnings[0].contains("no longer"));
-        assert!(warnings[0].contains("binaries"));
+        assert!(warnings.is_empty());
     }
 
     #[test]
-    fn test_parse_file_types_star_warns() {
+    fn test_parse_file_types_star() {
         let mut warnings = Vec::new();
         let result = parse_file_types(&["*".to_string()], &mut warnings);
         assert_eq!(result.types, vec![RuleFileType::All]);
-        assert_eq!(warnings.len(), 1);
-        assert!(warnings[0].contains("no longer"));
+        assert!(warnings.is_empty());
     }
 
     #[test]
@@ -1675,14 +1671,12 @@ mod tests {
 
     #[test]
     fn test_parse_file_types_exclusion() {
-        // "all" used as a base for exclusion still warns; exclusion syntax itself is fine.
         let mut warnings = Vec::new();
         let result = parse_file_types(&["all".to_string(), "-python".to_string()], &mut warnings);
         assert!(!result.types.contains(&RuleFileType::Python));
         assert!(result.types.contains(&RuleFileType::JavaScript));
         assert!(result.types.contains(&RuleFileType::Shell));
-        assert_eq!(warnings.len(), 1);
-        assert!(warnings[0].contains("no longer"));
+        assert!(warnings.is_empty());
     }
 
     #[test]
@@ -1754,8 +1748,7 @@ mod tests {
         let result = parse_file_types(&["all".to_string(), "!python".to_string()], &mut warnings);
         assert!(!result.types.contains(&RuleFileType::Python));
         assert!(result.types.contains(&RuleFileType::JavaScript));
-        assert_eq!(warnings.len(), 1);
-        assert!(warnings[0].contains("no longer"));
+        assert!(warnings.is_empty());
     }
 
     #[test]
@@ -1879,24 +1872,26 @@ mod tests {
     }
 
     #[test]
-    fn test_for_none_is_fatal_error() {
-        let defaults = super::super::models::TraitDefaults::default();
+    fn test_for_none_unsets_file_types() {
+        let mut defaults = super::super::models::TraitDefaults::default();
+        defaults.platforms = Some(vec!["linux".to_string(), "macos".to_string(), "windows".to_string()]);
+        defaults.r#for = Some(vec!["python".to_string()]);
         let raw = make_raw_trait("test-trait", Some(vec!["none".to_string()]));
         let mut warnings = Vec::new();
-        super::apply_trait_defaults(
+        let result = super::apply_trait_defaults(
             raw,
             &defaults,
             &mut warnings,
             std::path::Path::new("test.yaml"),
             true,
         );
+        // "none" unsets file_types via apply_vec_default, falling back to All
         assert!(
-            warnings
-                .iter()
-                .any(|w| w.contains("Invalid file type") && w.contains("none")),
-            "expected fatal 'none' error, got: {:?}",
-            warnings
+            result.r#for.contains(&crate::composite_rules::FileType::All),
+            "for: [none] should unset to All, got: {:?}",
+            result.r#for
         );
+        assert!(warnings.is_empty(), "unexpected warnings: {:?}", warnings);
     }
 
     #[test]

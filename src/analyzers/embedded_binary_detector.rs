@@ -622,7 +622,7 @@ mod tests {
         );
 
         assert_eq!(finding.id, "binary/embedded/elf");
-        assert_eq!(finding.crit, Criticality::Suspicious);
+        assert_eq!(finding.crit, Criticality::Notable);
     }
 
     #[test]
@@ -785,7 +785,7 @@ mod tests {
         };
         let finding = finding_for(&binary, "/tmp/test.exe");
         assert_eq!(finding.id, "binary/embedded/pe");
-        assert_eq!(finding.crit, Criticality::Suspicious);
+        assert_eq!(finding.crit, Criticality::Notable);
         assert!(finding.attack.is_some());
         assert!(!finding.evidence.is_empty());
     }

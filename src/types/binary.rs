@@ -56,7 +56,7 @@ pub struct Function {
 /// Returns true for common encodings (utf8, ascii) that don't need to be serialized.
 /// Only exotic encodings (utf16le, utf16be, etc.) are included in output.
 fn is_common_encoding(encoding: &String) -> bool {
-    encoding == "utf8" || encoding == "ascii" || encoding.is_empty()
+    encoding == "utf8" || encoding == "utf-8" || encoding == "ascii" || encoding.is_empty()
 }
 
 /// Maximum size for string values (4KB)

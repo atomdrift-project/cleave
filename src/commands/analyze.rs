@@ -302,8 +302,10 @@ fn format_report_output(
     }
 
     match format {
-        cli::OutputFormat::Json => Ok(serde_json::to_string(report)?),
-        cli::OutputFormat::Jsonl => output::format_jsonl(report),
+        cli::OutputFormat::Json | cli::OutputFormat::Jsonl => {
+            let compact = types::compact_from_files(&report.files);
+            Ok(serde_json::to_string(&compact)?)
+        }
         cli::OutputFormat::Terminal => Ok(output::format_terminal(report)),
         cli::OutputFormat::Tiny => Ok(output::format_tiny(report)),
     }

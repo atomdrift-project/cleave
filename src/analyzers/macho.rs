@@ -1507,7 +1507,6 @@ mod tests {
     fn test_determine_entitlement_criticality_dangerous_non_apple() {
         // Dangerous entitlements are suspicious on non-Apple binaries
         for key in [
-            "com.apple.security.cs.allow-jit",
             "com.apple.security.cs.debugger",
             "com.apple.security.cs.allow-unsigned-executable-memory",
         ] {
@@ -1517,6 +1516,14 @@ mod tests {
                 "non-Apple entitlement {key} should be suspicious"
             );
         }
+        // allow-jit is common in legitimate apps, notable not suspicious
+        assert_eq!(
+            determine_entitlement_criticality(
+                "com.apple.security.cs.allow-jit",
+                &macho_codesign::SignatureType::DeveloperID,
+            ),
+            Criticality::Notable,
+        );
     }
 
     #[test]

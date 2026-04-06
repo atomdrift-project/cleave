@@ -1462,7 +1462,7 @@ impl RawContentRegexIndex {
 
         for archive_ft in archive_family_types(file_type) {
             if let Some(ft_set) = self.by_file_type.get(archive_ft) {
-                for trait_idx in ft_set.find_matches(&content) {
+                for trait_idx in ft_set.find_matches(binary_data) {
                     matching_traits.insert(trait_idx);
                 }
             }

@@ -709,12 +709,8 @@ traits:
     }
 
     #[test]
-    #[allow(clippy::expect_used)]
     fn test_evaluate_basename_traits_matches_entry_path_regex() {
-        let mapper = super::super::CapabilityMapper::new(&[std::path::PathBuf::from(
-            "/srv/home/t/cleave-traits/objectives/supply-chain/metadata-anomaly/archive/npm-package-info-zip.yaml",
-        )])
-        .expect("mapper should load archive traits");
+        let mapper = super::super::CapabilityMapper::new();
 
         let entry_names = vec![String::from(
             "var/folders/rs/52vst_5924nc0zz5ccww9tl80000gp/T/tmpn885gmk9/snore-log/package/lib/private/prepare-writer.js",

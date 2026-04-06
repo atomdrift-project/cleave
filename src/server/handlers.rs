@@ -377,7 +377,8 @@ async fn analyze_inner(
                 "<-- 200 OK (Analysis complete)"
             );
             report.finalize();
-            Json(report).into_response()
+            let compact = crate::types::compact_from_files(&report.files);
+            Json(compact).into_response()
         }
         Some(Ok(Err(e))) => {
             warn!(filename = %filename, elapsed_ms = elapsed_ms, "Analysis failed: {:?}", e);
@@ -489,9 +490,9 @@ pub(super) struct AnalyzePathRequest {
 /// Includes the analysis report plus extraction info.
 #[derive(Debug, Serialize)]
 struct AnalyzePathResponse {
-    /// The analysis report
+    /// The analysis report (compact v4)
     #[serde(flatten)]
-    report: crate::AnalysisReport,
+    report: crate::types::compact::CompactReport,
     /// Path where the file was extracted (if extract_dir is configured)
     #[serde(skip_serializing_if = "Option::is_none")]
     extracted_path: Option<String>,
@@ -736,8 +737,9 @@ async fn analyze_path_inner(
             );
 
             report.finalize();
+            let compact = crate::types::compact_from_files(&report.files);
             let response = AnalyzePathResponse {
-                report,
+                report: compact,
                 extracted_path,
             };
             Json(response).into_response()

@@ -58,6 +58,9 @@ samples/
 # Compiled rules
 *.yarc
 
+*EXPERIMENT*.md
+*TODO*.md
+
 .claude/
 
 

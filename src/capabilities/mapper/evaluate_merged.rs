@@ -178,7 +178,7 @@ impl super::CapabilityMapper {
         let regex_candidates = self.string_match_index.find_regex_candidates(&all_strings);
 
         drop(all_strings);
-        let d_strings = t_strings.elapsed();
+        let _d_strings = t_strings.elapsed();
 
         // Build a seen-IDs set once from existing report findings, then keep it up-to-date
         // as we merge — O(1) per lookup instead of O(n) linear scan.
@@ -214,7 +214,7 @@ impl super::CapabilityMapper {
                 report.findings.push(finding);
             }
         }
-        let d_eval1 = t_eval1.elapsed();
+        let _d_eval1 = t_eval1.elapsed();
 
         // Step 2: Evaluate dependent atomic traits (with trait: conditions)
         // These need to see the independent traits' results, so evaluate iteratively
@@ -249,7 +249,7 @@ impl super::CapabilityMapper {
                 break;
             }
         }
-        let d_eval2 = t_eval2.elapsed();
+        let _d_eval2 = t_eval2.elapsed();
 
         // Step 3: Generate synthetic metadata/import findings from discovered imports
         // This MUST happen before Step 4 so composite rules can reference them
@@ -260,7 +260,7 @@ impl super::CapabilityMapper {
         for f in &report.findings[pre_import_count..] {
             seen.insert(f.id.clone());
         }
-        let d_imports = t_imports.elapsed();
+        let _d_imports = t_imports.elapsed();
 
         // Step 4: Evaluate composite rules (which can now access atomic traits AND metadata/import findings)
         let t_comp = std::time::Instant::now();
@@ -280,7 +280,7 @@ impl super::CapabilityMapper {
                 report.findings.push(finding);
             }
         }
-        let d_comp = t_comp.elapsed();
+        let _d_comp = t_comp.elapsed();
         let _d_total = t_total.elapsed();
 
         // Step 6: Retroactive unless-suppression.

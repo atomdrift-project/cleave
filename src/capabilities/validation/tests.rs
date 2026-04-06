@@ -2495,6 +2495,7 @@ mod taxonomy_tests {
 
     fn make_composite(id: &str, all_refs: &[&str]) -> CompositeTrait {
         CompositeTrait {
+            required_trait_indices: Vec::new(),
             id: id.to_string(),
             desc: "test".to_string(),
             conf: 1.0,
@@ -3013,7 +3014,9 @@ mod constraint_tests {
     #[test]
     fn test_none_only_with_proximity_is_flagged() {
         let rules = vec![CompositeTrait {
-            id: "test/none-prox".to_string(),
+            required_trait_indices: Vec::new(),
+            id:
+ "test/none-prox".to_string(),
             desc: "test".to_string(),
             conf: 1.0,
             crit: Criticality::Baseline,
@@ -3045,7 +3048,9 @@ mod constraint_tests {
     #[test]
     fn test_none_with_all_and_proximity_is_ok() {
         let rules = vec![CompositeTrait {
-            id: "test/none-plus-all".to_string(),
+            required_trait_indices: Vec::new(),
+            id:
+ "test/none-plus-all".to_string(),
             desc: "test".to_string(),
             conf: 1.0,
             crit: Criticality::Baseline,
@@ -3080,7 +3085,9 @@ mod constraint_tests {
     fn test_empty_all_with_none_is_flagged() {
         // all: [] + none: [something] should still be flagged — empty all vacuously matches
         let rules = vec![CompositeTrait {
-            id: "test/empty-all-none".to_string(),
+            required_trait_indices: Vec::new(),
+            id:
+ "test/empty-all-none".to_string(),
             desc: "test".to_string(),
             conf: 1.0,
             crit: Criticality::Baseline,
@@ -3113,7 +3120,9 @@ mod constraint_tests {
     #[test]
     fn test_needs_zero_is_flagged() {
         let rules = vec![CompositeTrait {
-            id: "test/needs-zero".to_string(),
+            required_trait_indices: Vec::new(),
+            id:
+ "test/needs-zero".to_string(),
             desc: "test".to_string(),
             conf: 1.0,
             crit: Criticality::Baseline,
@@ -3145,7 +3154,9 @@ mod constraint_tests {
     #[test]
     fn test_needs_one_is_not_flagged_by_needs_zero() {
         let rules = vec![CompositeTrait {
-            id: "test/needs-one".to_string(),
+            required_trait_indices: Vec::new(),
+            id:
+ "test/needs-one".to_string(),
             desc: "test".to_string(),
             conf: 1.0,
             crit: Criticality::Baseline,
@@ -3188,6 +3199,7 @@ mod autoprefix_tests {
         downgrade: Option<DowngradeConditions>,
     ) -> CompositeTrait {
         CompositeTrait {
+            required_trait_indices: Vec::new(),
             id: "test/rule".to_string(),
             desc: "Test".to_string(),
             conf: 1.0,
@@ -3351,6 +3363,7 @@ mod orphan_tests {
         downgrade: Option<DowngradeConditions>,
     ) -> CompositeTrait {
         CompositeTrait {
+            required_trait_indices: Vec::new(),
             id: id.to_string(),
             desc: "composite".to_string(),
             conf: 1.0,
@@ -3698,6 +3711,7 @@ mod excessive_file_types_tests {
     #[test]
     fn test_composite_rule_flagged() {
         let rule = CompositeTrait {
+            required_trait_indices: Vec::new(),
             id: "test::composite-many".to_string(),
             desc: "test".to_string(),
             conf: 1.0,

@@ -64,6 +64,7 @@ fn create_report_with_size(size_bytes: u64) -> AnalysisReport {
 /// Helper: Create test context
 fn create_test_context(report: AnalysisReport, binary_data: Vec<u8>) -> EvaluationContext<'static> {
     EvaluationContext {
+        ast_kind_cache: None,
         report: Box::leak(Box::new(report)),
         binary_data: Box::leak(binary_data.into_boxed_slice()),
         file_type: FileType::All,

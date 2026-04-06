@@ -23,6 +23,7 @@ mod tests {
         needs: Option<usize>,
     ) -> CompositeTrait {
         CompositeTrait {
+            required_trait_indices: Vec::new(),
             id: id.to_string(),
             desc: "Test rule".to_string(),
             conf: 0.9,
@@ -51,6 +52,7 @@ mod tests {
     /// Helper to create a composite rule with `all` clause (not an "any" rule)
     fn create_all_rule(id: &str, conditions: Vec<Condition>) -> CompositeTrait {
         CompositeTrait {
+            required_trait_indices: Vec::new(),
             id: id.to_string(),
             desc: "Test rule".to_string(),
             conf: 0.9,

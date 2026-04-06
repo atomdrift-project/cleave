@@ -39,6 +39,7 @@ fn create_test_context<'a>(
     additional_findings: Option<&'a [Finding]>,
 ) -> EvaluationContext<'a> {
     EvaluationContext {
+        ast_kind_cache: None,
         report,
         binary_data: data,
         file_type: FileType::Elf,

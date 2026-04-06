@@ -285,6 +285,7 @@ mod tests {
         data: &'a [u8],
     ) -> EvaluationContext<'a> {
         EvaluationContext {
+            ast_kind_cache: None,
             report,
             binary_data: data,
             file_type: FileType::Elf,

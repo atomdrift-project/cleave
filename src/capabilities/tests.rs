@@ -1021,6 +1021,7 @@ fn test_iterative_eval_max_iterations_protection() {
 #[test]
 fn test_composite_referencing_atomic_trait() {
     let composite = CompositeTrait {
+        required_trait_indices: Vec::new(),
         id: "test/composite".to_string(),
         desc: "Test composite".to_string(),
         conf: 0.9,
@@ -1062,6 +1063,7 @@ fn test_composite_referencing_atomic_trait() {
 fn test_composite_of_composites_two_levels() {
     // Level 1: atomic-trait -> Level 2: composite-a -> Level 3: composite-b
     let composite_a = CompositeTrait {
+        required_trait_indices: Vec::new(),
         id: "test/composite-a".to_string(),
         desc: "First level".to_string(),
         conf: 0.9,
@@ -1090,6 +1092,7 @@ fn test_composite_of_composites_two_levels() {
     };
 
     let composite_b = CompositeTrait {
+        required_trait_indices: Vec::new(),
         id: "test/composite-b".to_string(),
         desc: "Second level".to_string(),
         conf: 0.95,
@@ -1136,6 +1139,7 @@ fn test_composite_of_composites_two_levels() {
 fn test_composite_three_level_chain() {
     // Test 3-level chain: atomic -> A -> B -> C
     let make_composite = |id: &str, requires: &str| CompositeTrait {
+        required_trait_indices: Vec::new(),
         id: id.to_string(),
         desc: format!("Composite {}", id),
         conf: 0.9,
@@ -1189,6 +1193,7 @@ fn test_composite_three_level_chain() {
 fn test_composite_circular_dependency_handled() {
     // Test that circular dependencies don't cause infinite loops
     let composite_a = CompositeTrait {
+        required_trait_indices: Vec::new(),
         id: "circular/a".to_string(),
         desc: "Circular A".to_string(),
         conf: 0.9,
@@ -1217,6 +1222,7 @@ fn test_composite_circular_dependency_handled() {
     };
 
     let composite_b = CompositeTrait {
+        required_trait_indices: Vec::new(),
         id: "circular/b".to_string(),
         desc: "Circular B".to_string(),
         conf: 0.9,
@@ -1262,6 +1268,7 @@ fn test_composite_circular_dependency_handled() {
 fn test_composite_prefix_matching_in_chain() {
     // Test prefix matching works in composite chains
     let composite = CompositeTrait {
+        required_trait_indices: Vec::new(),
         id: "test/uses-discovery".to_string(),
         desc: "Uses discovery".to_string(),
         conf: 0.9,
@@ -1303,6 +1310,7 @@ fn test_composite_prefix_matching_in_chain() {
 #[test]
 fn test_composite_requires_count_in_chain() {
     let composite = CompositeTrait {
+        required_trait_indices: Vec::new(),
         id: "test/needs-two".to_string(),
         desc: "Needs 2 of 3".to_string(),
         conf: 0.9,
@@ -1356,6 +1364,7 @@ fn test_precision_direct_conditions() {
 
     // Rule with 3 direct string conditions
     let rule = CompositeTrait {
+        required_trait_indices: Vec::new(),
         id: "test/three-strings".to_string(),
         desc: "Test rule with 3 strings".to_string(),
         conf: 0.9,
@@ -1457,6 +1466,7 @@ fn test_precision_file_type_filter() {
 
     // Rule with 2 conditions + file type filter
     let rule = CompositeTrait {
+        required_trait_indices: Vec::new(),
         id: "test/with-filetype".to_string(),
         desc: "Test rule with file type".to_string(),
         conf: 0.9,
@@ -1585,6 +1595,7 @@ fn test_precision_recursive_expansion() {
 
     // Composite A: has 2 direct conditions (precision 2)
     let composite_a = CompositeTrait {
+        required_trait_indices: Vec::new(),
         id: "test/composite-a".to_string(),
         desc: "Composite A".to_string(),
         conf: 0.9,
@@ -1645,6 +1656,7 @@ fn test_precision_recursive_expansion() {
 
     // Composite B: references composite A and atomic trait
     let composite_b = CompositeTrait {
+        required_trait_indices: Vec::new(),
         id: "test/composite-b".to_string(),
         desc: "Composite B".to_string(),
         conf: 0.9,
@@ -1706,6 +1718,7 @@ fn test_precision_cycle_detection() {
 
     // Composite A references B
     let composite_a = CompositeTrait {
+        required_trait_indices: Vec::new(),
         id: "test/circular-a".to_string(),
         desc: "Circular A".to_string(),
         conf: 0.9,
@@ -1735,6 +1748,7 @@ fn test_precision_cycle_detection() {
 
     // Composite B references A (cycle!)
     let composite_b = CompositeTrait {
+        required_trait_indices: Vec::new(),
         id: "test/circular-b".to_string(),
         desc: "Circular B".to_string(),
         conf: 0.9,
@@ -1789,6 +1803,7 @@ fn test_precision_caching() {
     use std::collections::{HashMap, HashSet};
 
     let rule = CompositeTrait {
+        required_trait_indices: Vec::new(),
         id: "test/cacheable".to_string(),
         desc: "Cacheable rule".to_string(),
         conf: 0.9,
@@ -1885,6 +1900,7 @@ fn test_precision_caching() {
 fn test_precision_threshold_validation() {
     // Rule with precision 3 (below threshold)
     let rule_low = CompositeTrait {
+        required_trait_indices: Vec::new(),
         id: "test/low-precision".to_string(),
         desc: "Low precision".to_string(),
         conf: 0.95,
@@ -1963,6 +1979,7 @@ fn test_precision_threshold_validation() {
     // With the new granular scoring: 25-char strings = 5 buckets * 0.3 = 1.5 each
     // 3 strings = 4.5 precision, which meets the 4.0 threshold
     let rule_high = CompositeTrait {
+        required_trait_indices: Vec::new(),
         id: "test/high-precision".to_string(),
         desc: "High precision".to_string(),
         conf: 0.95,
@@ -2056,6 +2073,7 @@ fn test_precision_threshold_validation() {
 fn test_suspicious_precision_threshold_validation() {
     // Rule with precision near the floor (below suspicious threshold of 1.9)
     let rule_low = CompositeTrait {
+        required_trait_indices: Vec::new(),
         id: "test/suspicious-low-precision".to_string(),
         desc: "Low precision suspicious rule".to_string(),
         conf: 0.8,
@@ -2097,6 +2115,7 @@ fn test_suspicious_precision_threshold_validation() {
 
     // Rule with precision >= 1.9 (meets suspicious threshold)
     let rule_ok = CompositeTrait {
+        required_trait_indices: Vec::new(),
         id: "test/suspicious-good-precision".to_string(),
         desc: "Good precision suspicious rule".to_string(),
         conf: 0.8,
@@ -2314,6 +2333,7 @@ fn test_precision_mixed_conditions() {
     use std::collections::{HashMap, HashSet};
 
     let rule = CompositeTrait {
+        required_trait_indices: Vec::new(),
         id: "test/mixed".to_string(),
         desc: "Mixed conditions".to_string(),
         conf: 0.9,
@@ -2428,6 +2448,7 @@ fn test_precision_deep_nesting() {
 
     // Level 1: 2 direct conditions
     let level1 = CompositeTrait {
+        required_trait_indices: Vec::new(),
         id: "test/level1".to_string(),
         desc: "Level 1".to_string(),
         conf: 0.9,
@@ -2488,6 +2509,7 @@ fn test_precision_deep_nesting() {
 
     // Level 2: references level1 + 1 direct condition
     let level2 = CompositeTrait {
+        required_trait_indices: Vec::new(),
         id: "test/level2".to_string(),
         desc: "Level 2".to_string(),
         conf: 0.9,
@@ -2535,6 +2557,7 @@ fn test_precision_deep_nesting() {
 
     // Level 3: references level2 + 1 direct condition
     let level3 = CompositeTrait {
+        required_trait_indices: Vec::new(),
         id: "test/level3".to_string(),
         desc: "Level 3".to_string(),
         conf: 0.9,
@@ -2611,6 +2634,7 @@ fn test_precision_correct_algorithm() {
 
     // Test case: file_type + any(8) + all(2) = 1 + 1 + 2 = 4
     let rule = CompositeTrait {
+        required_trait_indices: Vec::new(),
         id: "test/correct-precision".to_string(),
         desc: "Test correct precision calculation".to_string(),
         conf: 0.9,
@@ -2787,6 +2811,7 @@ fn test_precision_traits_with_size_restrictions() {
 
     // Composite rule referencing both traits
     let composite = CompositeTrait {
+        required_trait_indices: Vec::new(),
         id: "test/composite-with-sized-traits".to_string(),
         desc: "Composite with sized traits".to_string(),
         conf: 0.9,
@@ -3461,6 +3486,7 @@ fn test_collect_trait_refs_finds_internal_paths() {
     // These references are forbidden in composite rules (for ML use only)
 
     let composite = CompositeTrait {
+        required_trait_indices: Vec::new(),
         id: "test/bad-composite".to_string(),
         desc: "Composite that incorrectly references internal path".to_string(),
         conf: 0.9,
@@ -3524,6 +3550,7 @@ fn test_meta_internal_paths_forbidden_in_composite_rules() {
     // This documents the validation behavior: internal paths are for ML only
 
     let composite = CompositeTrait {
+        required_trait_indices: Vec::new(),
         id: "test/references-internal".to_string(),
         desc: "Should not reference internal paths".to_string(),
         conf: 0.9,
@@ -3908,6 +3935,7 @@ fn test_composite_precision_calibration_band() {
     };
 
     let composite = CompositeTrait {
+        required_trait_indices: Vec::new(),
         id: "test/calibrated-composite".to_string(),
         desc: "Calibrated composite".to_string(),
         conf: 0.9,
@@ -4061,6 +4089,7 @@ fn test_composite_prefix_reference_matches_explicit_expansion_precision() {
     };
 
     let family_ref = CompositeTrait {
+        required_trait_indices: Vec::new(),
         id: "test/family-ref".to_string(),
         desc: "Uses family prefix".to_string(),
         conf: 0.9,
@@ -4087,6 +4116,7 @@ fn test_composite_prefix_reference_matches_explicit_expansion_precision() {
         precision: None,
     };
     let explicit_family_ref = CompositeTrait {
+        required_trait_indices: Vec::new(),
         id: "test/family-ref-explicit".to_string(),
         desc: "Uses explicit family expansion".to_string(),
         conf: 0.9,
@@ -4113,6 +4143,7 @@ fn test_composite_prefix_reference_matches_explicit_expansion_precision() {
         precision: None,
     };
     let family_members = CompositeTrait {
+        required_trait_indices: Vec::new(),
         id: "test/family-members".to_string(),
         desc: "Explicit family members".to_string(),
         conf: 0.9,
@@ -4300,6 +4331,7 @@ fn test_composite_any_uses_weakest_average_with_breadth_penalty() {
     let strong_precision = validation::calculate_trait_precision(&strong);
 
     let composite = CompositeTrait {
+        required_trait_indices: Vec::new(),
         id: "test/any-average".to_string(),
         desc: "Any average".to_string(),
         conf: 0.9,
@@ -4404,6 +4436,7 @@ fn test_inherited_composite_scores_are_compressed() {
     };
 
     let child = CompositeTrait {
+        required_trait_indices: Vec::new(),
         id: "test/child".to_string(),
         desc: "Child".to_string(),
         conf: 0.9,
@@ -4435,6 +4468,7 @@ fn test_inherited_composite_scores_are_compressed() {
         precision: None,
     };
     let parent = CompositeTrait {
+        required_trait_indices: Vec::new(),
         id: "test/parent".to_string(),
         desc: "Parent".to_string(),
         conf: 0.9,

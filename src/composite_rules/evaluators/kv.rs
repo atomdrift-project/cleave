@@ -792,6 +792,7 @@ mod tests {
         })));
 
         EvaluationContext {
+            ast_kind_cache: None,
             report,
             binary_data,
             file_type: FileType::All,

@@ -217,6 +217,17 @@ impl super::CapabilityMapper {
                                         cache_data.composite_rules.len(),
                                     );
 
+                                    // Populate trait_id_map from cached data
+                                    let mut trait_id_map = std::collections::HashMap::with_capacity(cache_data.trait_definitions.len());
+                                    for (idx, trait_def) in cache_data.trait_definitions.iter().enumerate() {
+                                        trait_id_map.insert(trait_def.id.clone(), idx);
+                                    }
+
+                                    // Initialize composite rule dependencies
+                                    for rule in &mut cache_data.composite_rules {
+                                        rule.populate_required_traits(&trait_id_map);
+                                    }
+
                                     return Ok(Self {
                                         symbol_map: cache_data.symbol_map,
                                         trait_definitions: cache_data.trait_definitions,
@@ -225,6 +236,7 @@ impl super::CapabilityMapper {
                                         string_match_index,
                                         symbol_match_index,
                                         raw_content_regex_index,
+                                        trait_id_map,
                                         platforms: vec![Platform::All],
                                         slow_rule_ms: Self::DEFAULT_SLOW_RULE_MS,
                                     });
@@ -3148,6 +3160,17 @@ impl super::CapabilityMapper {
             }
         }
 
+        // Populate trait_id_map
+        let mut trait_id_map = std::collections::HashMap::with_capacity(trait_definitions.len());
+        for (idx, trait_def) in trait_definitions.iter().enumerate() {
+            trait_id_map.insert(trait_def.id.clone(), idx);
+        }
+
+        // Initialize composite rule dependencies
+        for rule in &mut composite_rules {
+            rule.populate_required_traits(&trait_id_map);
+        }
+
         Ok(Self {
             symbol_map,
             trait_definitions,
@@ -3156,6 +3179,7 @@ impl super::CapabilityMapper {
             string_match_index,
             symbol_match_index,
             raw_content_regex_index,
+            trait_id_map,
             platforms: vec![Platform::All],
             slow_rule_ms: Self::DEFAULT_SLOW_RULE_MS,
         })

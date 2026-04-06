@@ -1426,6 +1426,12 @@ impl RawContentRegexIndex {
         self.total_patterns > 0
     }
 
+    /// Check if any of the provided trait indices are indexed in the raw content regex index.
+    #[allow(dead_code)]
+    pub(crate) fn has_applicable_patterns(&self, trait_indices: &[usize]) -> bool {
+        trait_indices.iter().any(|&idx| self.is_indexed_trait(idx))
+    }
+
     /// Check whether a trait is indexed in a compiled regex set.
     pub(crate) fn is_indexed_trait(&self, trait_idx: usize) -> bool {
         self.indexed_traits.contains(&trait_idx)

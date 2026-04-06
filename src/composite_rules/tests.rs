@@ -53,6 +53,7 @@ fn create_test_context() -> (AnalysisReport, Vec<u8>) {
 fn test_symbol_condition() {
     let (report, data) = create_test_context();
     let ctx = EvaluationContext {
+        ast_kind_cache: None,
         report: &report,
         binary_data: &data,
         file_type: FileType::Elf,
@@ -76,6 +77,7 @@ fn test_symbol_condition() {
     };
 
     let rule = CompositeTrait {
+        required_trait_indices: Vec::new(),
         id: "test/capability".to_string(),
         desc: "Test".to_string(),
         conf: 0.9,
@@ -120,6 +122,7 @@ fn test_symbol_condition() {
 fn test_all() {
     let (report, data) = create_test_context();
     let ctx = EvaluationContext {
+        ast_kind_cache: None,
         report: &report,
         binary_data: &data,
         file_type: FileType::Elf,
@@ -143,6 +146,7 @@ fn test_all() {
     };
 
     let rule = CompositeTrait {
+        required_trait_indices: Vec::new(),
         id: "net/reverse-shell".to_string(),
         desc: "Reverse shell".to_string(),
         conf: 0.9,
@@ -201,6 +205,7 @@ fn test_all() {
 fn test_count() {
     let (report, data) = create_test_context();
     let ctx = EvaluationContext {
+        ast_kind_cache: None,
         report: &report,
         binary_data: &data,
         file_type: FileType::Elf,
@@ -224,6 +229,7 @@ fn test_count() {
     };
 
     let rule = CompositeTrait {
+        required_trait_indices: Vec::new(),
         id: "test/multi".to_string(),
         desc: "Multiple conditions".to_string(),
         conf: 0.85,
@@ -281,6 +287,7 @@ fn test_count() {
 fn test_string_exact_condition() {
     let (report, data) = create_test_context();
     let ctx = EvaluationContext {
+        ast_kind_cache: None,
         report: &report,
         binary_data: &data,
         file_type: FileType::Elf,
@@ -304,6 +311,7 @@ fn test_string_exact_condition() {
     };
 
     let rule = CompositeTrait {
+        required_trait_indices: Vec::new(),
         id: "test/string-exact".to_string(),
         desc: "Exact string match".to_string(),
         conf: 0.9,
@@ -352,6 +360,7 @@ fn test_string_exact_condition() {
 fn test_any() {
     let (report, data) = create_test_context();
     let ctx = EvaluationContext {
+        ast_kind_cache: None,
         report: &report,
         binary_data: &data,
         file_type: FileType::Elf,
@@ -375,6 +384,7 @@ fn test_any() {
     };
 
     let rule = CompositeTrait {
+        required_trait_indices: Vec::new(),
         id: "test/requires-any".to_string(),
         desc: "Requires any condition".to_string(),
         conf: 0.9,
@@ -450,6 +460,7 @@ fn test_not_directive_shorthand() {
     });
 
     let ctx = EvaluationContext {
+        ast_kind_cache: None,
         report: &report,
         binary_data: &data,
         file_type: FileType::Elf,
@@ -547,6 +558,7 @@ fn test_not_directive_exact() {
     });
 
     let ctx = EvaluationContext {
+        ast_kind_cache: None,
         report: &report,
         binary_data: &data,
         file_type: FileType::Elf,
@@ -650,6 +662,7 @@ fn test_not_directive_regex() {
     });
 
     let ctx = EvaluationContext {
+        ast_kind_cache: None,
         report: &report,
         binary_data: &data,
         file_type: FileType::Elf,
@@ -749,6 +762,7 @@ fn test_unless_directive_skips_trait() {
     }];
 
     let ctx = EvaluationContext {
+        ast_kind_cache: None,
         report: &report,
         binary_data: &data,
         file_type: FileType::Elf,
@@ -817,6 +831,7 @@ fn test_unless_directive_allows_trait() {
     let (report, data) = create_test_context();
 
     let ctx = EvaluationContext {
+        ast_kind_cache: None,
         report: &report,
         binary_data: &data,
         file_type: FileType::Elf,
@@ -900,6 +915,7 @@ fn test_downgrade_to_notable() {
     }];
 
     let ctx = EvaluationContext {
+        ast_kind_cache: None,
         report: &report,
         binary_data: &data,
         file_type: FileType::Elf,
@@ -998,6 +1014,7 @@ fn test_downgrade_one_level() {
     }];
 
     let ctx = EvaluationContext {
+        ast_kind_cache: None,
         report: &report,
         binary_data: &data,
         file_type: FileType::Elf,
@@ -1074,6 +1091,7 @@ fn test_downgrade_no_match_keeps_original() {
     let (report, data) = create_test_context();
 
     let ctx = EvaluationContext {
+        ast_kind_cache: None,
         report: &report,
         binary_data: &data,
         file_type: FileType::Elf,
@@ -1165,6 +1183,7 @@ fn test_downgrade_from_hostile() {
     }];
 
     let ctx = EvaluationContext {
+        ast_kind_cache: None,
         report: &report,
         binary_data: &data,
         file_type: FileType::Elf,
@@ -1276,6 +1295,7 @@ fn test_all_three_directives_combined() {
     }];
 
     let ctx = EvaluationContext {
+        ast_kind_cache: None,
         report: &report,
         binary_data: &data,
         file_type: FileType::Elf,
@@ -1385,6 +1405,7 @@ fn test_string_exact_match_requires_full_equality() {
     });
 
     let ctx = EvaluationContext {
+        ast_kind_cache: None,
         report: &report,
         binary_data: &data,
         file_type: FileType::Elf,
@@ -1483,6 +1504,7 @@ fn test_string_substr_matches_substrings() {
     });
 
     let ctx = EvaluationContext {
+        ast_kind_cache: None,
         report: &report,
         binary_data: &data,
         file_type: FileType::Elf,
@@ -1572,6 +1594,7 @@ fn test_symbol_exact_vs_substr() {
     });
 
     let ctx = EvaluationContext {
+        ast_kind_cache: None,
         report: &report,
         binary_data: &data,
         file_type: FileType::Elf,
@@ -1691,6 +1714,7 @@ fn test_string_case_insensitive_exact() {
     });
 
     let ctx = EvaluationContext {
+        ast_kind_cache: None,
         report: &report,
         binary_data: &data,
         file_type: FileType::Elf,
@@ -1784,6 +1808,7 @@ fn test_string_word_boundary_match() {
     });
 
     let ctx = EvaluationContext {
+        ast_kind_cache: None,
         report: &report,
         binary_data: &data,
         file_type: FileType::Elf,
@@ -1890,6 +1915,7 @@ fn test_string_regex_match() {
     });
 
     let ctx = EvaluationContext {
+        ast_kind_cache: None,
         report: &report,
         binary_data: &data,
         file_type: FileType::Elf,
@@ -1969,6 +1995,7 @@ fn test_content_exact_vs_substr() {
     report.strings.clear(); // Clear existing strings so we fall through to content check
 
     let ctx = EvaluationContext {
+        ast_kind_cache: None,
         report: &report,
         binary_data: &data,
         file_type: FileType::Shell,
@@ -2048,6 +2075,7 @@ fn test_basename_exact_match() {
     let (report, data) = create_test_context_with_path("/home/user/project/__init__.py");
 
     let ctx = EvaluationContext {
+        ast_kind_cache: None,
         report: &report,
         binary_data: &data,
         file_type: FileType::Python,
@@ -2089,6 +2117,7 @@ fn test_basename_exact_no_match() {
     let (report, data) = create_test_context_with_path("/home/user/project/main.py");
 
     let ctx = EvaluationContext {
+        ast_kind_cache: None,
         report: &report,
         binary_data: &data,
         file_type: FileType::Python,
@@ -2129,6 +2158,7 @@ fn test_basename_substr_match() {
     let (report, data) = create_test_context_with_path("/home/user/project/setup_tools.py");
 
     let ctx = EvaluationContext {
+        ast_kind_cache: None,
         report: &report,
         binary_data: &data,
         file_type: FileType::Python,
@@ -2169,6 +2199,7 @@ fn test_basename_regex_match() {
     let (report, data) = create_test_context_with_path("/home/user/project/test_utils.py");
 
     let ctx = EvaluationContext {
+        ast_kind_cache: None,
         report: &report,
         binary_data: &data,
         file_type: FileType::Python,
@@ -2209,6 +2240,7 @@ fn test_basename_case_insensitive() {
     let (report, data) = create_test_context_with_path("/home/user/project/README.md");
 
     let ctx = EvaluationContext {
+        ast_kind_cache: None,
         report: &report,
         binary_data: &data,
         file_type: FileType::All,
@@ -2249,6 +2281,7 @@ fn test_basename_in_trait_definition() {
     let (report, data) = create_test_context_with_path("/home/user/project/__init__.py");
 
     let ctx = EvaluationContext {
+        ast_kind_cache: None,
         report: &report,
         binary_data: &data,
         file_type: FileType::Python,
@@ -2316,6 +2349,7 @@ fn test_basename_in_composite_rule() {
     let (report, data) = create_test_context_with_path("/home/user/project/setup.py");
 
     let ctx = EvaluationContext {
+        ast_kind_cache: None,
         report: &report,
         binary_data: &data,
         file_type: FileType::Python,
@@ -2339,6 +2373,7 @@ fn test_basename_in_composite_rule() {
     };
 
     let rule = CompositeTrait {
+        required_trait_indices: Vec::new(),
         id: "test/setup-file".to_string(),
         desc: "Python setup file".to_string(),
         conf: 0.9,
@@ -2398,6 +2433,7 @@ fn test_composite_unless_skips_rule() {
     }];
 
     let ctx = EvaluationContext {
+        ast_kind_cache: None,
         report: &report,
         binary_data: &data,
         file_type: FileType::Elf,
@@ -2422,6 +2458,7 @@ fn test_composite_unless_skips_rule() {
 
     // Composite rule with unless condition
     let rule = CompositeTrait {
+        required_trait_indices: Vec::new(),
         id: "test/network-composite".to_string(),
         desc: "Network activity composite".to_string(),
         conf: 0.9,
@@ -2468,6 +2505,7 @@ fn test_composite_unless_allows_rule() {
     let (report, data) = create_test_context();
 
     let ctx = EvaluationContext {
+        ast_kind_cache: None,
         report: &report,
         binary_data: &data,
         file_type: FileType::Elf,
@@ -2491,6 +2529,7 @@ fn test_composite_unless_allows_rule() {
     };
 
     let rule = CompositeTrait {
+        required_trait_indices: Vec::new(),
         id: "test/network-composite".to_string(),
         desc: "Network activity composite".to_string(),
         conf: 0.9,
@@ -2538,6 +2577,7 @@ fn test_composite_unless_with_basename() {
     let (report, data) = create_test_context_with_path("/usr/lib/libX11.so.6");
 
     let ctx = EvaluationContext {
+        ast_kind_cache: None,
         report: &report,
         binary_data: &data,
         file_type: FileType::Elf,
@@ -2561,6 +2601,7 @@ fn test_composite_unless_with_basename() {
     };
 
     let rule = CompositeTrait {
+        required_trait_indices: Vec::new(),
         id: "test/x11-keylog".to_string(),
         desc: "X11 keylogger pattern".to_string(),
         conf: 0.9,
@@ -2624,6 +2665,7 @@ fn test_composite_unless_multiple_conditions_any_matches() {
     });
 
     let ctx = EvaluationContext {
+        ast_kind_cache: None,
         report: &report,
         binary_data: &data,
         file_type: FileType::Elf,
@@ -2647,6 +2689,7 @@ fn test_composite_unless_multiple_conditions_any_matches() {
     };
 
     let rule = CompositeTrait {
+        required_trait_indices: Vec::new(),
         id: "test/multi-unless".to_string(),
         desc: "Rule with multiple unless conditions".to_string(),
         conf: 0.9,
@@ -2721,6 +2764,7 @@ fn test_needs_with_any_only_respects_threshold() {
     let (report, data) = create_test_context();
 
     let ctx = EvaluationContext {
+        ast_kind_cache: None,
         report: &report,
         binary_data: &data,
         file_type: FileType::Elf,
@@ -2745,6 +2789,7 @@ fn test_needs_with_any_only_respects_threshold() {
 
     // Rule with needs: 3, but only 2 conditions can match (socket, connect)
     let rule = CompositeTrait {
+        required_trait_indices: Vec::new(),
         id: "test/needs-any-only".to_string(),
         desc: "Needs constraint with any only".to_string(),
         conf: 0.9,
@@ -2815,6 +2860,7 @@ fn test_needs_with_any_only_matches_when_threshold_met() {
     let (report, data) = create_test_context();
 
     let ctx = EvaluationContext {
+        ast_kind_cache: None,
         report: &report,
         binary_data: &data,
         file_type: FileType::Elf,
@@ -2839,6 +2885,7 @@ fn test_needs_with_any_only_matches_when_threshold_met() {
 
     // Rule with needs: 2, and 2 conditions can match (socket, connect)
     let rule = CompositeTrait {
+        required_trait_indices: Vec::new(),
         id: "test/needs-any-met".to_string(),
         desc: "Needs constraint met".to_string(),
         conf: 0.9,
@@ -2903,6 +2950,7 @@ fn test_needs_with_all_and_any_respects_threshold() {
     let (report, data) = create_test_context();
 
     let ctx = EvaluationContext {
+        ast_kind_cache: None,
         report: &report,
         binary_data: &data,
         file_type: FileType::Elf,
@@ -2930,6 +2978,7 @@ fn test_needs_with_all_and_any_respects_threshold() {
     // - any: connect, nonexistent1, nonexistent2, nonexistent3 (only 1 matches)
     // - needs: 3 (requires 3 from any)
     let rule = CompositeTrait {
+        required_trait_indices: Vec::new(),
         id: "test/needs-all-any-fail".to_string(),
         desc: "Needs with all and any - should NOT match".to_string(),
         conf: 0.9,
@@ -3022,6 +3071,7 @@ fn test_needs_with_all_and_any_matches_when_threshold_met() {
     });
 
     let ctx = EvaluationContext {
+        ast_kind_cache: None,
         report: &report,
         binary_data: &data,
         file_type: FileType::Elf,
@@ -3049,6 +3099,7 @@ fn test_needs_with_all_and_any_matches_when_threshold_met() {
     // - any: connect, send, recv, nonexistent (3 match)
     // - needs: 3 (requires 3 from any)
     let rule = CompositeTrait {
+        required_trait_indices: Vec::new(),
         id: "test/needs-all-any-pass".to_string(),
         desc: "Needs with all and any - should match".to_string(),
         conf: 0.9,
@@ -3128,6 +3179,7 @@ fn test_needs_with_all_and_any_all_fails() {
     let (report, data) = create_test_context();
 
     let ctx = EvaluationContext {
+        ast_kind_cache: None,
         report: &report,
         binary_data: &data,
         file_type: FileType::Elf,
@@ -3152,6 +3204,7 @@ fn test_needs_with_all_and_any_all_fails() {
 
     // Rule where all fails but any would pass
     let rule = CompositeTrait {
+        required_trait_indices: Vec::new(),
         id: "test/needs-all-fails".to_string(),
         desc: "All fails, any passes".to_string(),
         conf: 0.9,
@@ -3214,6 +3267,7 @@ fn test_all_and_any_without_needs_requires_one_any() {
     let (report, data) = create_test_context();
 
     let ctx = EvaluationContext {
+        ast_kind_cache: None,
         report: &report,
         binary_data: &data,
         file_type: FileType::Elf,
@@ -3237,6 +3291,7 @@ fn test_all_and_any_without_needs_requires_one_any() {
     };
 
     let rule = CompositeTrait {
+        required_trait_indices: Vec::new(),
         id: "test/all-any-no-needs".to_string(),
         desc: "All and any without needs".to_string(),
         conf: 0.9,
@@ -3367,6 +3422,7 @@ fn proximity_rule(
         .map(|id| Condition::Trait { id: id.to_string() })
         .collect();
     CompositeTrait {
+        required_trait_indices: Vec::new(),
         id: "test/proximity".to_string(),
         desc: "Proximity test".to_string(),
         conf: 0.9,
@@ -3399,6 +3455,7 @@ fn proximity_ctx<'a>(
     findings: &'a [Finding],
 ) -> EvaluationContext<'a> {
     EvaluationContext {
+        ast_kind_cache: None,
         report,
         binary_data: data,
         file_type: FileType::Python,
@@ -3622,6 +3679,7 @@ fn test_near_lines_any_with_needs() {
     let ctx = proximity_ctx(&report, data, &findings);
 
     let mut rule = CompositeTrait {
+        required_trait_indices: Vec::new(),
         id: "test/any-needs".to_string(),
         desc: "Any with needs".to_string(),
         conf: 0.9,
@@ -3685,6 +3743,7 @@ fn test_near_lines_any_with_needs_too_spread() {
     let ctx = proximity_ctx(&report, &data, &findings);
 
     let rule = CompositeTrait {
+        required_trait_indices: Vec::new(),
         id: "test/spread".to_string(),
         desc: "Spread test".to_string(),
         conf: 0.9,
@@ -3743,6 +3802,7 @@ fn test_near_lines_all_plus_any() {
     let ctx = proximity_ctx(&report, data, &findings);
 
     let rule = CompositeTrait {
+        required_trait_indices: Vec::new(),
         id: "test/all-any".to_string(),
         desc: "All + any".to_string(),
         conf: 0.9,
@@ -4116,6 +4176,7 @@ fn test_downgrade_combined_all_and_none_blocked_by_none() {
     }];
 
     let ctx = EvaluationContext {
+        ast_kind_cache: None,
         report: &report,
         binary_data: &data,
         file_type: FileType::Elf,
@@ -4229,6 +4290,7 @@ fn test_downgrade_combined_all_and_none_pass() {
     let findings = vec![];
 
     let ctx = EvaluationContext {
+        ast_kind_cache: None,
         report: &report,
         binary_data: &data,
         file_type: FileType::Elf,
@@ -4343,6 +4405,7 @@ fn test_downgrade_needs_threshold_not_met() {
     }];
 
     let ctx = EvaluationContext {
+        ast_kind_cache: None,
         report: &report,
         binary_data: &data,
         file_type: FileType::Elf,
@@ -4464,6 +4527,7 @@ fn test_downgrade_needs_threshold_met() {
     ];
 
     let ctx = EvaluationContext {
+        ast_kind_cache: None,
         report: &report,
         binary_data: &data,
         file_type: FileType::Elf,
@@ -4594,6 +4658,7 @@ fn test_composite_downgrade_all_match() {
     ];
 
     let ctx = EvaluationContext {
+        ast_kind_cache: None,
         report: &report,
         binary_data: &data,
         file_type: FileType::Elf,
@@ -4617,6 +4682,7 @@ fn test_composite_downgrade_all_match() {
     };
 
     let rule = CompositeTrait {
+        required_trait_indices: Vec::new(),
         id: "test/composite-downgrade-all".to_string(),
         desc: "Test downgrade with all".to_string(),
         conf: 0.9,
@@ -4692,6 +4758,7 @@ fn test_composite_downgrade_none_blocks() {
     }];
 
     let ctx = EvaluationContext {
+        ast_kind_cache: None,
         report: &report,
         binary_data: &data,
         file_type: FileType::Elf,
@@ -4715,6 +4782,7 @@ fn test_composite_downgrade_none_blocks() {
     };
 
     let rule = CompositeTrait {
+        required_trait_indices: Vec::new(),
         id: "test/composite-downgrade-none".to_string(),
         desc: "Test downgrade blocked by none".to_string(),
         conf: 0.9,
@@ -4885,6 +4953,7 @@ fn test_proximity_any_needs_cross_condition() {
     let ctx = proximity_ctx(&report, &data, &findings);
 
     let rule = CompositeTrait {
+        required_trait_indices: Vec::new(),
         id: "test/any-cross".to_string(),
         desc: "Any cross-condition proximity".to_string(),
         conf: 0.9,
@@ -4984,6 +5053,7 @@ fn test_proximity_does_not_boost_confidence() {
     let ctx = proximity_ctx(&report, data, &findings);
 
     let rule = CompositeTrait {
+        required_trait_indices: Vec::new(),
         id: "test/conf-check".to_string(),
         desc: "Confidence check".to_string(),
         conf: 0.6,

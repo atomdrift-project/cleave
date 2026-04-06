@@ -39,6 +39,7 @@ impl super::CapabilityMapper {
             string_match_index: StringMatchIndex::default(),
             symbol_match_index: SymbolMatchIndex::default(),
             raw_content_regex_index: RawContentRegexIndex::default(),
+            trait_id_map: std::collections::HashMap::new(),
             platforms: vec![Platform::All],
             slow_rule_ms: Self::DEFAULT_SLOW_RULE_MS,
         }

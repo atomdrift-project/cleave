@@ -42,6 +42,9 @@ pub struct CapabilityMapper {
     pub(super) symbol_match_index: SymbolMatchIndex,
     /// Index for batched raw content regex matching
     pub(super) raw_content_regex_index: RawContentRegexIndex,
+    /// Maps trait ID -> index in trait_definitions
+    #[allow(dead_code)]
+    pub(super) trait_id_map: std::collections::HashMap<String, usize>,
     /// Platform filter(s) for rule evaluation (default: [All])
     pub(super) platforms: Vec<Platform>,
     /// Warn threshold for slow rule evaluation in milliseconds (default: 4000)

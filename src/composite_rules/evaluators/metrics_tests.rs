@@ -24,6 +24,7 @@ fn create_test_report() -> AnalysisReport {
 
 fn create_test_context<'a>(report: &'a AnalysisReport, data: &'a [u8]) -> EvaluationContext<'a> {
     EvaluationContext {
+        ast_kind_cache: None,
         report,
         binary_data: data,
         file_type: FileType::Python,

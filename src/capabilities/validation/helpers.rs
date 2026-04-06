@@ -164,5 +164,6 @@ pub(crate) fn simple_rule_to_composite_rule(
         downgrade: None,
         defined_in: std::path::PathBuf::from("converted_simple_rule"),
         precision: None,
+        required_trait_indices: Vec::new(),
     }
 }

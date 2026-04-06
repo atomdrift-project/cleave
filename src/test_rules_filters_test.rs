@@ -71,6 +71,7 @@ fn test_count_min_filter_matches_debug_and_eval() {
 
     // Test real evaluation
     let ctx = EvaluationContext {
+        ast_kind_cache: None,
         report: &report,
         binary_data: &binary_data,
         file_type: RuleFileType::All,
@@ -102,6 +103,7 @@ fn test_count_min_filter_matches_debug_and_eval() {
     // Test debug evaluation (with debug collector)
     let debug = RwLock::new(EvaluationDebug::new(&trait_def.id, RuleType::Trait));
     let debug_ctx = EvaluationContext {
+        ast_kind_cache: None,
         report: &report,
         binary_data: &binary_data,
         file_type: RuleFileType::All,
@@ -194,6 +196,7 @@ fn test_per_kb_min_filter_matches_debug_and_eval() {
 
     // Test real evaluation
     let ctx = EvaluationContext {
+        ast_kind_cache: None,
         report: &report,
         binary_data: &binary_data,
         file_type: RuleFileType::All,
@@ -225,6 +228,7 @@ fn test_per_kb_min_filter_matches_debug_and_eval() {
     // Test debug evaluation
     let debug = RwLock::new(EvaluationDebug::new(&trait_def.id, RuleType::Trait));
     let debug_ctx = EvaluationContext {
+        ast_kind_cache: None,
         report: &report,
         binary_data: &binary_data,
         file_type: RuleFileType::All,
@@ -311,6 +315,7 @@ fn test_size_min_filter_matches_debug_and_eval() {
 
     // Test real evaluation
     let ctx = EvaluationContext {
+        ast_kind_cache: None,
         report: &report,
         binary_data: &binary_data,
         file_type: RuleFileType::All,
@@ -342,6 +347,7 @@ fn test_size_min_filter_matches_debug_and_eval() {
     // Test debug evaluation
     let debug = RwLock::new(EvaluationDebug::new(&trait_def.id, RuleType::Trait));
     let debug_ctx = EvaluationContext {
+        ast_kind_cache: None,
         report: &report,
         binary_data: &binary_data,
         file_type: RuleFileType::All,
@@ -385,6 +391,7 @@ fn test_composite_size_constraints_match_debug_and_eval() {
 
     // Composite with size_min: 1024 (should NOT match)
     let composite = CompositeTrait {
+        required_trait_indices: Vec::new(),
         id: "test/composite-size".to_string(),
         desc: "Test composite size filter".to_string(),
         conf: 0.9,
@@ -425,6 +432,7 @@ fn test_composite_size_constraints_match_debug_and_eval() {
 
     // Test real evaluation
     let ctx = EvaluationContext {
+        ast_kind_cache: None,
         report: &report,
         binary_data: &binary_data,
         file_type: RuleFileType::All,
@@ -456,6 +464,7 @@ fn test_composite_size_constraints_match_debug_and_eval() {
     // Test debug evaluation
     let debug = RwLock::new(EvaluationDebug::new(&composite.id, RuleType::Composite));
     let debug_ctx = EvaluationContext {
+        ast_kind_cache: None,
         report: &report,
         binary_data: &binary_data,
         file_type: RuleFileType::All,
@@ -550,6 +559,7 @@ fn test_all_filters_match_when_satisfied() {
 
     // Test real evaluation
     let ctx = EvaluationContext {
+        ast_kind_cache: None,
         report: &report,
         binary_data: &binary_data,
         file_type: RuleFileType::All,
@@ -581,6 +591,7 @@ fn test_all_filters_match_when_satisfied() {
     // Test debug evaluation
     let debug = RwLock::new(EvaluationDebug::new(&trait_def.id, RuleType::Trait));
     let debug_ctx = EvaluationContext {
+        ast_kind_cache: None,
         report: &report,
         binary_data: &binary_data,
         file_type: RuleFileType::All,
@@ -671,6 +682,7 @@ fn test_size_max_suppresses_symbol_match() {
 
     // Small file: size_max satisfied → should match
     let small_ctx = EvaluationContext {
+        ast_kind_cache: None,
         report: &small_report,
         binary_data: &binary_data,
         file_type: RuleFileType::All,
@@ -699,6 +711,7 @@ fn test_size_max_suppresses_symbol_match() {
 
     // Large file: size_max exceeded → must NOT match
     let large_ctx = EvaluationContext {
+        ast_kind_cache: None,
         report: &large_report,
         binary_data: &binary_data,
         file_type: RuleFileType::All,

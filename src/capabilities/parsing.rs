@@ -838,6 +838,7 @@ pub(crate) fn apply_composite_defaults(
         downgrade: raw.downgrade,
         defined_in: path.to_path_buf(),
         precision: None,
+        required_trait_indices: Vec::new(),
     }
 }
 

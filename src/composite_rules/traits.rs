@@ -1574,9 +1574,44 @@ pub(crate) struct CompositeTrait {
     /// Precision score (calculated during loading, not from YAML)
     #[serde(skip)]
     pub precision: Option<f32>,
+
+    /// Indices of atomic traits this composite rule depends on (for pruning)
+    #[serde(skip)]
+    pub required_trait_indices: Vec<usize>,
 }
 
 impl CompositeTrait {
+    /// Extract all trait IDs this composite rule directly depends on
+    pub(crate) fn get_dependent_trait_ids(&self) -> Vec<String> {
+        let mut ids = Vec::new();
+        if let Some(ref conds) = self.all {
+            for cond in conds {
+                if let Condition::Trait { ref id } = cond {
+                    ids.push(id.clone());
+                }
+            }
+        }
+        if let Some(ref conds) = self.any {
+            for cond in conds {
+                if let Condition::Trait { ref id } = cond {
+                    ids.push(id.clone());
+                }
+            }
+        }
+        ids
+    }
+
+    /// Populate required_trait_indices using a map of trait ID -> index
+    pub(crate) fn populate_required_traits(&mut self, trait_id_map: &std::collections::HashMap<String, usize>) {
+        let dependent_ids = self.get_dependent_trait_ids();
+        self.required_trait_indices = dependent_ids
+            .into_iter()
+            .filter_map(|id| trait_id_map.get(&id).copied())
+            .collect();
+        self.required_trait_indices.sort_unstable();
+        self.required_trait_indices.dedup();
+    }
+
     /// Pre-compile all regexes in this rule's conditions for performance.
     /// Returns an error if any regex pattern is invalid.
     pub(crate) fn precompile_regexes(&mut self) -> anyhow::Result<()> {

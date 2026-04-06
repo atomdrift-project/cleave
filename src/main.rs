@@ -34,7 +34,13 @@ fn main() -> Result<()> {
 
     let is_server = matches!(args.command, Some(cli::Command::Serve { .. }));
     let format = args.format();
-    let default_log_file = determine_default_log_file();
+    // Only create a default log file in server mode — CLI runs at warn level
+    // typically produce empty 0-byte log files that just accumulate.
+    let default_log_file = if is_server {
+        determine_default_log_file()
+    } else {
+        None
+    };
     let effective_log_file = args.log_file.clone().or(default_log_file);
 
     init_logging(args.verbose, is_server, format, effective_log_file.as_ref());

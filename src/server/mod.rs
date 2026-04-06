@@ -90,6 +90,10 @@ pub struct AppState {
     pub next_request_id: AtomicU64,
     /// Number of active analysis tasks (including orphaned timed-out tasks).
     pub active_tasks: AtomicUsize,
+    /// Number of orphaned tasks whose slots were recycled after the grace period.
+    /// These threads are still running in the background but no longer block new work.
+    /// A high value signals the server should be restarted.
+    pub recycled_orphans: AtomicUsize,
     /// Hard cap on concurrent analysis tasks. Requests are rejected with 503
     /// when active_tasks >= this value, preventing orphaned blocking tasks
     /// from piling up and consuming unbounded memory.
@@ -157,6 +161,7 @@ pub async fn run(config: ServerConfig) -> anyhow::Result<()> {
         extract_dir,
         next_request_id: AtomicU64::new(1),
         active_tasks: AtomicUsize::new(0),
+        recycled_orphans: AtomicUsize::new(0),
         max_concurrent_tasks: max_concurrent,
         overloaded_since: parking_lot::Mutex::new(None),
         in_flight: dashmap::DashMap::new(),

@@ -38,6 +38,9 @@ pub(super) async fn health(State(state): State<Arc<AppState>>) -> Response {
         )
             .into_response();
     }
+    let recycled_orphans = state
+        .recycled_orphans
+        .load(std::sync::atomic::Ordering::Relaxed);
     if active_tasks >= state.max_concurrent_tasks {
         return (
             StatusCode::SERVICE_UNAVAILABLE,
@@ -47,6 +50,7 @@ pub(super) async fn health(State(state): State<Arc<AppState>>) -> Response {
                 "rss_mb": rss_mb,
                 "active_tasks": active_tasks,
                 "max_concurrent_tasks": state.max_concurrent_tasks,
+                "recycled_orphans": recycled_orphans,
                 "rayon_threads": rayon::current_num_threads(),
             })),
         )
@@ -56,6 +60,7 @@ pub(super) async fn health(State(state): State<Arc<AppState>>) -> Response {
         "status": "ok",
         "rss_mb": rss_mb,
         "active_tasks": active_tasks,
+        "recycled_orphans": recycled_orphans,
         "rayon_threads": rayon::current_num_threads(),
     }))
     .into_response()
@@ -328,20 +333,25 @@ async fn analyze_inner(
             let finished = tokio::time::timeout(orphan_timeout, handle).await.is_ok();
             orphan_state.in_flight.remove(&request_id);
             drop(temp_file);
+            // Release the slot in both cases. The leaked thread is stuck on a
+            // file-specific operation (archive extraction, radare2), so a new
+            // request for a different file won't hit the same issue. Hoarding
+            // the slot just guarantees the server eventually stops accepting
+            // all work.
+            orphan_state
+                .active_tasks
+                .fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
             if finished {
-                // Task completed during the grace period — release the slot.
-                orphan_state
-                    .active_tasks
-                    .fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+                tracing::info!(request_id, "Orphaned task completed during grace period");
             } else {
-                // Thread is truly leaked: it will run until it returns (possibly never).
-                // Do NOT release the slot — recycling it would let a new request in that
-                // would also get stuck for the same reason, creating a cascade.
-                // active_tasks stays elevated, health returns 503, and the server is
-                // restarted rather than silently degrading.
+                let recycled = orphan_state
+                    .recycled_orphans
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+                    + 1;
                 tracing::error!(
                     request_id,
-                    "Orphaned analysis task exceeded grace period, abandoning (slot leaked)"
+                    recycled_orphans = recycled,
+                    "Orphaned analysis task exceeded grace period, slot recycled (thread still running)"
                 );
             }
         });
@@ -674,20 +684,20 @@ async fn analyze_path_inner(
         tokio::spawn(async move {
             let finished = tokio::time::timeout(orphan_timeout, handle).await.is_ok();
             orphan_state.in_flight.remove(&request_id);
+            orphan_state
+                .active_tasks
+                .fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
             if finished {
-                // Task completed during the grace period — release the slot.
-                orphan_state
-                    .active_tasks
-                    .fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+                tracing::info!(request_id, "Orphaned task completed during grace period");
             } else {
-                // Thread is truly leaked: it will run until it returns (possibly never).
-                // Do NOT release the slot — recycling it would let a new request in that
-                // would also get stuck for the same reason, creating a cascade.
-                // active_tasks stays elevated, health returns 503, and the server is
-                // restarted rather than silently degrading.
+                let recycled = orphan_state
+                    .recycled_orphans
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+                    + 1;
                 tracing::error!(
                     request_id,
-                    "Orphaned analysis task exceeded grace period, abandoning (slot leaked)"
+                    recycled_orphans = recycled,
+                    "Orphaned analysis task exceeded grace period, slot recycled (thread still running)"
                 );
             }
         });
@@ -815,6 +825,7 @@ pub(super) async fn memory_stats(State(state): State<Arc<AppState>>) -> Json<ser
         },
         "server": {
             "active_tasks": state.active_tasks.load(std::sync::atomic::Ordering::Relaxed),
+            "recycled_orphans": state.recycled_orphans.load(std::sync::atomic::Ordering::Relaxed),
             "requests_total": state.next_request_id.load(std::sync::atomic::Ordering::Relaxed),
             "rate_limiter_ips": state.rate_limiter.active_count(),
             "rate_limiter_max_ips": 50_000,

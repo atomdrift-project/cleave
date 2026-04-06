@@ -67,6 +67,15 @@ This file tracks performance optimization experiments for `cleave`.
 - **Impact**: Reduced rule evaluation overhead by skipping composite rules whose required atomic traits are missing.
 - **Optimization**: Added a `trait_id_map` to `CapabilityMapper` and `required_trait_indices` to `CompositeTrait`. Used a custom `TraitBitSet` (Vec<u64>) for O(1) trait-presence checks during the iterative evaluation loop.
 
+## New Baseline (2026-04-06) - Post Cargo Upgrades (On Battery)
+- Target: `~/data/benchmark/600MB` (3645 files, 1288 analyzed)
+- Command: `make benchmark DATASET=600MB`
+- Results:
+  - Real: **639.30s**
+  - User: **1410.38s**
+  - Sys: **1238.40s**
+  - Peak RSS: **7278MB**
+
 ## New Experiments (600MB Dataset)
 
 ### Exp 11: Persistent Rizin Worker Pool

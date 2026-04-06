@@ -298,6 +298,10 @@ impl super::CapabilityMapper {
         // This dramatically reduces work for specific file types
         let mut applicable_indices: Vec<usize> = self.trait_index.get_applicable(&file_type).collect();
 
+
+
+
+
         let is_tiny_dos_com_candidate = file_type == crate::composite_rules::FileType::Unknown
             && binary_data.len() <= 4096
             && Path::new(&report.target.path)

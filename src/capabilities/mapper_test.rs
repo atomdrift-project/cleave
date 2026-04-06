@@ -354,6 +354,46 @@ traits:
 }
 
 #[test]
+fn test_symbol_lookup_respects_file_type() {
+    // Traits with restrictive for: constraints should not be in the symbol_map
+    // fast-path, which bypasses file type filtering. Regression test for a bug
+    // where `for: [dll]` symbol traits matched on ELF files via lookup().
+    let yaml = r#"
+defaults:
+  for: [dll]
+  platforms: [windows]
+traits:
+  - id: "test/dll-only::textdomain"
+    desc: "DLL-only symbol"
+    crit: notable
+    conf: 0.9
+    for: [dll]
+    if:
+      type: symbol
+      exact: "textdomain"
+"#;
+    let (_dir, path) = create_test_yaml(yaml);
+    let mapper = CapabilityMapper::from_yaml(&path).unwrap();
+
+    // The symbol_map should NOT contain this trait since it has for: [dll]
+    assert!(
+        mapper.lookup("textdomain", "test").is_none(),
+        "symbol_map should not include traits with restrictive for: constraints"
+    );
+
+    // Also verify via full evaluation on an ELF report
+    let mut report = create_test_report();
+    report.target.file_type = "elf".to_string();
+    report.imports.push(crate::types::Import::new("textdomain", None, "test"));
+
+    let findings = mapper.evaluate_traits(&report, b"");
+    assert!(
+        !findings.iter().any(|f| f.id.contains("textdomain")),
+        "DLL-only symbol trait should not fire on ELF file"
+    );
+}
+
+#[test]
 fn test_evaluate_composite_rules_empty() {
     let mapper = CapabilityMapper::empty();
     let report = create_test_report();

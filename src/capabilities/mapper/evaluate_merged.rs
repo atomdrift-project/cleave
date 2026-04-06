@@ -108,6 +108,8 @@ impl super::CapabilityMapper {
         // Use trait index to only evaluate applicable traits
         let applicable_indices: Vec<usize> = self.trait_index.get_applicable(&file_type).collect();
 
+
+
         // Idea 9: Batch AST node collection
         let mut ast_kind_cache = None;
         if let Some(tree) = cached_ast {

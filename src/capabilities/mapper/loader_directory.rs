@@ -683,8 +683,13 @@ impl super::CapabilityMapper {
                     composite_rules_map.remove(&trait_def.id);
                 }
 
-                // Extract symbol mappings from trait definitions with symbol conditions
-                // (Do this before inserting to avoid borrowing issues)
+                // Extract symbol mappings from trait definitions with symbol conditions.
+                // Only add to the fast symbol_map when the trait applies to all file types —
+                // traits with restrictive `for:` constraints must go through the full
+                // evaluation pipeline which respects file type filtering.
+                let is_universal = trait_def.r#for.contains(&crate::composite_rules::FileType::All)
+                    || trait_def.r#for.is_empty();
+                if is_universal {
                 if let Condition::Symbol {
                     exact,
                     substr: _,
@@ -725,6 +730,7 @@ impl super::CapabilityMapper {
                         }
                     }
                 }
+                } // is_universal
 
                 // Pre-compile regexes for this trait
                 if let Err(e) = trait_def.precompile_regexes() {

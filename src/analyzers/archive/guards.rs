@@ -6,18 +6,18 @@
 
 use std::io::Read;
 use std::path::{Component, Path, PathBuf};
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 
 // =============================================================================
 // Archive Bomb Protection Constants
 // =============================================================================
 
-/// Maximum size of a single decompressed file (100 MB)
-pub(crate) const MAX_FILE_SIZE: u64 = 100 * 1024 * 1024;
+/// Maximum size of a single decompressed file (1 GB)
+pub(crate) const MAX_FILE_SIZE: u64 = 1024 * 1024 * 1024;
 
-/// Maximum total extraction size (1 GB)
-pub(crate) const MAX_TOTAL_SIZE: u64 = 1024 * 1024 * 1024;
+/// Maximum total extraction size (7 GB)
+pub(crate) const MAX_TOTAL_SIZE: u64 = 7 * 1024 * 1024 * 1024;
 
 /// Maximum number of files to extract
 pub(crate) const MAX_FILE_COUNT: usize = 100_000;
@@ -64,6 +64,9 @@ pub(crate) struct ExtractionGuard {
     total_bytes: AtomicU64,
     file_count: AtomicUsize,
     hostile_reasons: Mutex<Vec<HostileArchiveReason>>,
+    /// Per-request cancellation flag from the server. When set, extraction
+    /// stops at the next entry boundary via `check_file_count()`.
+    cancellation: Option<Arc<AtomicBool>>,
 }
 
 impl ExtractionGuard {
@@ -72,7 +75,25 @@ impl ExtractionGuard {
             total_bytes: AtomicU64::new(0),
             file_count: AtomicUsize::new(0),
             hostile_reasons: Mutex::new(Vec::new()),
+            cancellation: None,
         }
+    }
+
+    /// Create a guard with a cancellation flag from the server.
+    pub(crate) fn with_cancellation(flag: Option<Arc<AtomicBool>>) -> Self {
+        Self {
+            total_bytes: AtomicU64::new(0),
+            file_count: AtomicUsize::new(0),
+            hostile_reasons: Mutex::new(Vec::new()),
+            cancellation: flag,
+        }
+    }
+
+    /// Returns true if the server has signalled cancellation.
+    pub(crate) fn is_cancelled(&self) -> bool {
+        self.cancellation
+            .as_ref()
+            .is_some_and(|f| f.load(Ordering::Relaxed))
     }
 
     pub(crate) fn add_hostile_reason(&self, reason: HostileArchiveReason) {
@@ -89,7 +110,11 @@ impl ExtractionGuard {
     }
 
     /// Check if we can extract another file, returns false if limits exceeded
+    /// or the request has been cancelled.
     pub(crate) fn check_file_count(&self) -> bool {
+        if self.is_cancelled() {
+            return false;
+        }
         let count = self.file_count.fetch_add(1, Ordering::Relaxed) + 1;
         if count > MAX_FILE_COUNT {
             self.add_hostile_reason(HostileArchiveReason::ExcessiveFileCount(count));

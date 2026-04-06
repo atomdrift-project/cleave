@@ -891,6 +891,15 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
     // Share mapper Arc — all analyzers share it via cheap ref-count bumps
     let mapper_arc = Arc::clone(capability_mapper);
 
+    // Bail early if already cancelled before starting expensive structural analysis
+    if options
+        .cancellation
+        .as_ref()
+        .is_some_and(|f| f.load(std::sync::atomic::Ordering::Relaxed))
+    {
+        anyhow::bail!("Analysis cancelled before structural phase");
+    }
+
     // Route to appropriate analyzer.
     // Binary analyzers (MachO, Elf, Pe) use parallel YARA for performance.
     // All other analyzers use analyze_input() for unified data flow.
@@ -1141,6 +1150,13 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
     // Process encoded payloads and analyze them
     let payloads_start = std::time::Instant::now();
     for payload in encoded_payloads {
+        if options
+            .cancellation
+            .as_ref()
+            .is_some_and(|f| f.load(std::sync::atomic::Ordering::Relaxed))
+        {
+            break;
+        }
         // Skip benign encoded payloads (certificate URLs, PDB paths)
         let preview_lower = payload.preview.to_lowercase();
         if payload.encoding_chain.iter().any(|e| e == "url") {
@@ -1362,6 +1378,15 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
         }
     }
     let stage_payloads_ms = payloads_start.elapsed().as_millis() as u64;
+
+    // Bail early if cancelled — skip YARA and remaining phases
+    if options
+        .cancellation
+        .as_ref()
+        .is_some_and(|f| f.load(std::sync::atomic::Ordering::Relaxed))
+    {
+        anyhow::bail!("Analysis cancelled before YARA phase");
+    }
 
     // Run YARA for file types that didn't handle it internally.
     // Binary types (MachO, Elf, Pe) and archives already ran YARA with parallel scanning above.

@@ -328,32 +328,44 @@ async fn analyze_inner(
             "Analysis timed out but blocking task still running"
         );
         let orphan_state = Arc::clone(&state);
-        let orphan_timeout = Duration::from_secs(300);
+        let orphan_timeout = Duration::from_secs(1800);
         tokio::spawn(async move {
-            let finished = tokio::time::timeout(orphan_timeout, handle).await.is_ok();
+            // Phase 1: wait up to the grace period for the task to finish.
+            let grace_result = tokio::time::timeout(orphan_timeout, &mut handle).await;
             orphan_state.in_flight.remove(&request_id);
-            drop(temp_file);
-            // Release the slot in both cases. The leaked thread is stuck on a
-            // file-specific operation (archive extraction, radare2), so a new
-            // request for a different file won't hit the same issue. Hoarding
-            // the slot just guarantees the server eventually stops accepting
-            // all work.
+
+            // Release the slot regardless — the thread is stuck on a file-specific
+            // operation, so a new request for a different file won't hit the same issue.
             orphan_state
                 .active_tasks
                 .fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
-            if finished {
+
+            if grace_result.is_ok() {
+                drop(temp_file);
                 tracing::info!(request_id, "Orphaned task completed during grace period");
-            } else {
-                let recycled = orphan_state
-                    .recycled_orphans
-                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
-                    + 1;
-                tracing::error!(
-                    request_id,
-                    recycled_orphans = recycled,
-                    "Orphaned analysis task exceeded grace period, slot recycled (thread still running)"
-                );
+                return;
             }
+
+            let recycled = orphan_state
+                .recycled_orphans
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+                + 1;
+            tracing::error!(
+                request_id,
+                recycled_orphans = recycled,
+                "Orphaned analysis task exceeded grace period, slot recycled — still awaiting thread join"
+            );
+
+            // Phase 2: keep waiting (unbounded) so the thread is properly joined
+            // and its resources (temp files, allocations) are reclaimed when it
+            // eventually finishes. Without this, the JoinHandle is dropped and
+            // the thread is detached forever.
+            let _ = handle.await;
+            drop(temp_file);
+            orphan_state
+                .recycled_orphans
+                .fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+            tracing::info!(request_id, "Detached orphan finally completed and was joined");
         });
     }
     let elapsed_ms = request_start.elapsed().as_millis();
@@ -680,26 +692,36 @@ async fn analyze_path_inner(
             "Analysis timed out but blocking task still running"
         );
         let orphan_state = Arc::clone(&state);
-        let orphan_timeout = Duration::from_secs(300);
+        let orphan_timeout = Duration::from_secs(1800);
         tokio::spawn(async move {
-            let finished = tokio::time::timeout(orphan_timeout, handle).await.is_ok();
+            let grace_result = tokio::time::timeout(orphan_timeout, &mut handle).await;
             orphan_state.in_flight.remove(&request_id);
             orphan_state
                 .active_tasks
                 .fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
-            if finished {
+
+            if grace_result.is_ok() {
                 tracing::info!(request_id, "Orphaned task completed during grace period");
-            } else {
-                let recycled = orphan_state
-                    .recycled_orphans
-                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
-                    + 1;
-                tracing::error!(
-                    request_id,
-                    recycled_orphans = recycled,
-                    "Orphaned analysis task exceeded grace period, slot recycled (thread still running)"
-                );
+                return;
             }
+
+            let recycled = orphan_state
+                .recycled_orphans
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+                + 1;
+            tracing::error!(
+                request_id,
+                recycled_orphans = recycled,
+                "Orphaned analysis task exceeded grace period, slot recycled — still awaiting thread join"
+            );
+
+            // Keep waiting so the thread is properly joined and its resources
+            // are reclaimed when it eventually finishes.
+            let _ = handle.await;
+            orphan_state
+                .recycled_orphans
+                .fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+            tracing::info!(request_id, "Detached orphan finally completed and was joined");
         });
     }
 

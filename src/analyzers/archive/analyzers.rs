@@ -108,6 +108,9 @@ impl ArchiveAnalyzer {
         if let Some(ref yara_engine) = self.yara_engine {
             let yara_start = std::time::Instant::now();
             class_files.par_iter().for_each(|entry| {
+                if self.is_cancelled() {
+                    return;
+                }
                 if let Ok(matches) = yara_engine.scan_file(entry.path()) {
                     if !matches.is_empty() {
                         // This class triggered YARA rules - mark for full analysis
@@ -222,6 +225,9 @@ impl ArchiveAnalyzer {
         )));
 
         classes_to_analyze.par_iter().for_each(|entry| {
+            if self.is_cancelled() {
+                return;
+            }
             let relative_path = entry
                 .path()
                 .strip_prefix(temp_dir)
@@ -358,6 +364,9 @@ impl ArchiveAnalyzer {
             .collect();
 
         non_class_files.par_iter().for_each(|entry| {
+            if self.is_cancelled() {
+                return;
+            }
             let relative_path = entry
                 .path()
                 .strip_prefix(temp_dir)
@@ -640,6 +649,9 @@ impl ArchiveAnalyzer {
 
         // Analyze files in parallel
         files.par_iter().for_each(|entry| {
+            if self.is_cancelled() {
+                return;
+            }
             // Track progress
             let processed = files_processed.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
             if let Ok(mut last) = last_progress.try_lock() {
@@ -904,6 +916,10 @@ impl ArchiveAnalyzer {
     /// * `Ok(AnalysisReport)` - Analysis report from appropriate analyzer
     /// * `Err` - If file type unsupported or analysis fails
     pub(super) fn analyze_extracted_file(&self, file_path: &Path) -> Result<AnalysisReport> {
+        if self.is_cancelled() {
+            anyhow::bail!("Analysis cancelled");
+        }
+
         // Detect file type
         let file_type = detect_file_type(file_path)?;
 
@@ -940,6 +956,9 @@ impl ArchiveAnalyzer {
             }
             if !self.zip_passwords.is_empty() {
                 nested = nested.with_zip_passwords_arc(self.zip_passwords.clone());
+            }
+            if let Some(ref flag) = self.cancelled {
+                nested = nested.with_cancellation(flag.clone());
             }
 
             // Spawn on a dedicated thread to guarantee a fresh stack —

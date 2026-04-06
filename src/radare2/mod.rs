@@ -480,7 +480,7 @@ impl Radare2Analyzer {
         trace!(command = command, "Executing rizin batched analysis");
 
         // Use a bounded timeout so one slow file does not stall the whole scan.
-        let timeout = Duration::from_secs(60);
+        let timeout = Duration::from_secs(120);
 
         let output = execute_rizin_with_timeout(
             &[

@@ -365,6 +365,13 @@ impl ArchiveAnalyzer {
         }
     }
 
+    /// Returns true if the server has signalled cancellation for this request.
+    pub(crate) fn is_cancelled(&self) -> bool {
+        self.cancelled
+            .as_ref()
+            .is_some_and(|f| f.load(std::sync::atomic::Ordering::Relaxed))
+    }
+
     /// Set the maximum file size to keep in memory during extraction.
     /// Files larger than this are written to temp files.
     #[allow(dead_code)] // Used by binary target
@@ -877,11 +884,16 @@ impl ArchiveAnalyzer {
             anyhow::bail!("Maximum archive depth ({}) exceeded", self.max_depth);
         }
 
+        if self.is_cancelled() {
+            anyhow::bail!("Analysis cancelled before archive extraction");
+        }
+
         // Create temporary directory for extraction
         let temp_dir = tempfile::tempdir().context("Failed to create temporary directory")?;
 
-        // Create extraction guard to track limits and detect hostile patterns
-        let guard = ExtractionGuard::new();
+        // Create extraction guard to track limits and detect hostile patterns.
+        // Pass the cancellation flag so extraction stops at the next entry boundary.
+        let guard = ExtractionGuard::with_cancellation(self.cancelled.clone());
 
         // Extract archive with protection
         // For complete failures (wrong password, corrupt archive), propagate the error
@@ -957,6 +969,10 @@ impl ArchiveAnalyzer {
                 ..Default::default()
             }],
         });
+
+        if self.is_cancelled() {
+            anyhow::bail!("Analysis cancelled after archive extraction");
+        }
 
         // Check if this is a JAR-like archive
         let is_jar = matches!(archive_type, "zip" | "jar" | "war" | "ear" | "aar");

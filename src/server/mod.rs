@@ -61,8 +61,8 @@ impl Default for ServerConfig {
         Self {
             bind: SocketAddr::from(([127, 0, 0, 1], 8080)),
             qps: 100,
-            timeout_secs: 120,
-            max_body_size: 100 * 1024 * 1024, // 100 MB
+            timeout_secs: 900,
+            max_body_size: 250 * 1024 * 1024, // 250 MB
             max_rss_bytes: sysmem::memory_limit(),
             allowed_local_paths: Vec::new(),
             extract_dir: None,

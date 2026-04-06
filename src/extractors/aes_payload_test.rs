@@ -267,12 +267,9 @@ eval(b);
         assert_eq!(p.detected_type, FileType::JavaScript);
         assert!(p.preview.contains("const"));
 
-        // Verify temp file contents
-        let decrypted = std::fs::read(&p.temp_path).expect("Should read temp file");
-        assert_eq!(decrypted, payload.to_vec());
-
-        // Cleanup
-        let _ = std::fs::remove_file(&p.temp_path);
+        // Verify data contents
+        let decrypted = &p.data;
+        assert_eq!(decrypted, payload.as_slice());
     }
 
     #[test]
@@ -337,10 +334,6 @@ function activate(context) {{
         let payloads = extract_aes_payloads(content.as_bytes());
         assert_eq!(payloads.len(), 1, "Should extract from webpack bundle");
 
-        // Cleanup
-        for p in payloads {
-            let _ = std::fs::remove_file(&p.temp_path);
-        }
     }
 
     #[test]
@@ -383,14 +376,10 @@ function activate(context) {{
         );
 
         // Verify we got to the final payload
-        let decrypted = std::fs::read(&p.temp_path).expect("Should read temp file");
         assert!(
-            String::from_utf8_lossy(&decrypted).contains("malicious"),
+            String::from_utf8_lossy(&p.data).contains("malicious"),
             "Should decrypt to final payload"
         );
-
-        // Cleanup
-        let _ = std::fs::remove_file(&p.temp_path);
     }
 
     #[test]
@@ -429,10 +418,6 @@ eval(b);
             elapsed
         );
 
-        // Cleanup
-        for p in payloads {
-            let _ = std::fs::remove_file(&p.temp_path);
-        }
     }
 
     #[test]

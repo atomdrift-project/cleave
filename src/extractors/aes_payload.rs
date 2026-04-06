@@ -16,14 +16,13 @@
 use crate::analyzers::FileType;
 use aho_corasick::AhoCorasick;
 use regex::Regex;
-use std::io::Write;
 use std::sync::LazyLock;
 
 /// Represents an extracted AES-encrypted payload
 #[derive(Debug)]
 pub(crate) struct AesExtractedPayload {
-    /// Temp file containing decrypted content — deleted automatically on drop
-    pub temp_path: tempfile::TempPath,
+    /// In-memory decrypted content
+    pub data: Vec<u8>,
     /// Encoding chain (e.g., ["aes-256-cbc"])
     pub encoding_chain: Vec<String>,
     /// Preview of decrypted content (first 40 chars, printable only)
@@ -393,23 +392,19 @@ pub(crate) fn extract_aes_payloads(content: &[u8]) -> Vec<AesExtractedPayload> {
                 let (final_decrypted, encoding_chain) =
                     decrypt_nested(&decrypted, vec![params.algorithm.clone()], 1);
 
-                // Write to temp file
-                if let Ok(mut temp_file) = tempfile::NamedTempFile::new() {
-                    if temp_file.write_all(&final_decrypted).is_ok() {
-                        payloads.push(AesExtractedPayload {
-                            temp_path: temp_file.into_temp_path(),
-                            encoding_chain,
-                            preview: generate_preview(&final_decrypted),
-                            detected_type,
-                            original_offset: blob.offset,
-                            algorithm: params.algorithm.clone(),
-                        });
+                // Store in memory
+                payloads.push(AesExtractedPayload {
+                    data: final_decrypted.clone(),
+                    encoding_chain,
+                    preview: generate_preview(&final_decrypted),
+                    detected_type,
+                    original_offset: blob.offset,
+                    algorithm: params.algorithm.clone(),
+                });
 
-                        // Found a valid decryption, don't try other combinations
-                        // for this ciphertext
-                        break;
-                    }
-                }
+                // Found a valid decryption, don't try other combinations
+                // for this ciphertext
+                break;
             }
         }
     }

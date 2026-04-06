@@ -138,12 +138,7 @@ fn is_benign_unicode_escape_payload(payload: &types::ExtractedPayload) -> bool {
         return false;
     }
 
-    let decoded = match std::fs::read(&payload.temp_path) {
-        Ok(decoded) => decoded,
-        Err(_) => return false,
-    };
-
-    let decoded = String::from_utf8_lossy(&decoded);
+    let decoded = String::from_utf8_lossy(&payload.data);
     decoded.contains('\u{1b}')
         && decoded.contains("colors ?")
         && decoded.contains("${m}")
@@ -1347,32 +1342,35 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
             });
             break;
         }
-        if let Ok(payload_report) = analyze_file_with_resources_at_depth(
-            &payload.temp_path,
-            options,
-            capability_mapper,
-            yara_engine,
-            None,
-            analysis_depth + 1,
-        ) {
-            // Merge traits from payload analysis
-            for mut trait_item in payload_report.traits {
-                // Prefix trait offset with encoding chain
-                if let Some(ref offset) = trait_item.offset {
-                    trait_item.offset =
-                        Some(format!("{}!{}", payload.encoding_chain.join("+"), offset));
-                } else {
-                    trait_item.offset = Some(format!("{}!", payload.encoding_chain.join("+")));
+        if let Ok(mut temp_file) = tempfile::NamedTempFile::new() {
+            let _ = std::io::Write::write_all(&mut temp_file, &payload.data);
+            if let Ok(payload_report) = analyze_file_with_resources_at_depth(
+                temp_file.path(),
+                options,
+                capability_mapper,
+                yara_engine,
+                None,
+                analysis_depth + 1,
+            ) {
+                // Merge traits from payload analysis
+                for mut trait_item in payload_report.traits {
+                    // Prefix trait offset with encoding chain
+                    if let Some(ref offset) = trait_item.offset {
+                        trait_item.offset =
+                            Some(format!("{}!{}", payload.encoding_chain.join("+"), offset));
+                    } else {
+                        trait_item.offset = Some(format!("{}!", payload.encoding_chain.join("+")));
+                    }
+                    report.traits.push(trait_item);
                 }
-                report.traits.push(trait_item);
-            }
 
-            // Merge findings from payload analysis
-            let existing: std::collections::HashSet<String> =
-                report.findings.iter().map(|f| f.id.clone()).collect();
-            for finding in payload_report.findings {
-                if !existing.contains(finding.id.as_str()) {
-                    report.findings.push(finding);
+                // Merge findings from payload analysis
+                let existing: std::collections::HashSet<String> =
+                    report.findings.iter().map(|f| f.id.clone()).collect();
+                for finding in payload_report.findings {
+                    if !existing.contains(finding.id.as_str()) {
+                        report.findings.push(finding);
+                    }
                 }
             }
         }
@@ -2036,9 +2034,7 @@ mod tests {
     #[allow(clippy::expect_used)]
     fn test_skip_unknown_url_markup_payload() {
         let payload = types::ExtractedPayload {
-            temp_path: tempfile::NamedTempFile::new()
-                .expect("test temp file")
-                .into_temp_path(),
+            data: Vec::new(),
             encoding_chain: vec!["url".to_string()],
             detected_type: FileType::Unknown,
             preview: "<body><a href=\"http://example.com\">doc</a>".to_string(),
@@ -2047,9 +2043,7 @@ mod tests {
         assert!(should_skip_unknown_url_markup_payload(&payload));
 
         let payload = types::ExtractedPayload {
-            temp_path: tempfile::NamedTempFile::new()
-                .expect("test temp file")
-                .into_temp_path(),
+            data: Vec::new(),
             encoding_chain: vec!["url".to_string()],
             detected_type: FileType::Unknown,
             preview: "http://example.com/api/v1/ping".to_string(),
@@ -2058,9 +2052,7 @@ mod tests {
         assert!(!should_skip_unknown_url_markup_payload(&payload));
 
         let payload = types::ExtractedPayload {
-            temp_path: tempfile::NamedTempFile::new()
-                .expect("test temp file")
-                .into_temp_path(),
+            data: Vec::new(),
             encoding_chain: vec!["url".to_string()],
             detected_type: FileType::Unknown,
             preview: "beginning of the revealed that the television series".to_string(),

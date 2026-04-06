@@ -137,12 +137,12 @@ exec(base64.b64decode(bytes('aW1wb3J0IGJhc2U2NDtleGVjKGJhc2U2NC5iNjRkZWNvZGUoYnl
         let payload = &payloads[0];
         assert_eq!(payload.encoding_chain, vec!["base64"], "Should be base64");
         assert!(
-            std::fs::metadata(&payload.temp_path).is_ok(),
-            "Temp file should exist"
+            !payload.data.is_empty(),
+            "Payload data should not be empty"
         );
 
         // Cleanup
-        let _ = std::fs::remove_file(&payload.temp_path);
+        // let _ = std::fs::remove_file(&payload.temp_path);
     }
 
     #[test]
@@ -158,10 +158,7 @@ payload2 = base64.b64decode('aW1wb3J0IHN5czsgc3lzLmV4aXQoMCk7IHByaW50KCdmaW5pc2h
         let payloads = extract_encoded_payloads_from_content(content.as_bytes());
         assert_eq!(payloads.len(), 2, "Should extract 2 payloads");
 
-        // Cleanup
-        for payload in payloads {
-            let _ = std::fs::remove_file(&payload.temp_path);
-        }
+
     }
 
     #[test]
@@ -229,10 +226,7 @@ exec(data)
         assert_eq!(payloads.len(), 1, "Should extract large payload");
         assert!(elapsed.as_millis() < 3000, "Should complete in <3 seconds");
 
-        // Cleanup
-        for payload in payloads {
-            let _ = std::fs::remove_file(&payload.temp_path);
-        }
+
     }
 
     #[test]
@@ -282,22 +276,18 @@ exec(data)
         assert_eq!(payload.encoding_chain, vec!["hex"], "Should be hex encoded");
 
         // Read decoded content
-        if let Ok(decoded) = std::fs::read(&payload.temp_path) {
-            let decoded_str = String::from_utf8_lossy(&decoded);
-            assert!(
-                decoded_str.contains("function"),
-                "Should contain JavaScript"
-            );
-            assert!(
-                decoded_str.contains("_0x"),
-                "Should contain obfuscated vars"
-            );
-        }
+        let decoded = payload.data.clone();
+        let decoded_str = String::from_utf8_lossy(&decoded);
+        assert!(
+            decoded_str.contains("function"),
+            "Should contain JavaScript"
+        );
+        assert!(
+            decoded_str.contains("_0x"),
+            "Should contain obfuscated vars"
+        );
 
-        // Cleanup
-        for payload in payloads {
-            let _ = std::fs::remove_file(&payload.temp_path);
-        }
+
     }
 
     #[test]
@@ -317,10 +307,7 @@ exec(data)
             assert!(payloads[0].encoding_chain.contains(&"url".to_string()));
         }
 
-        // Cleanup
-        for payload in payloads {
-            let _ = std::fs::remove_file(&payload.temp_path);
-        }
+
     }
 
     #[test]
@@ -348,10 +335,7 @@ exec(data)
             );
         }
 
-        // Cleanup
-        for payload in payloads {
-            let _ = std::fs::remove_file(&payload.temp_path);
-        }
+
     }
 
     #[test]
@@ -376,10 +360,7 @@ hex = '{}'
         // Should find both payloads
         assert!(payloads.len() >= 1, "Should find at least one payload");
 
-        // Cleanup
-        for payload in payloads {
-            let _ = std::fs::remove_file(&payload.temp_path);
-        }
+
     }
 
     #[test]
@@ -398,15 +379,12 @@ hex = '{}'
             assert!(payloads[0].encoding_chain.contains(&"base64".to_string()));
 
             // Read the decoded content to verify it's correct
-            let decoded = std::fs::read(&payloads[0].temp_path).unwrap();
+            let decoded = payloads[0].data.clone();
             let decoded_str = String::from_utf8_lossy(&decoded);
             assert!(decoded_str.contains("/bin/bash"));
         }
 
-        // Cleanup
-        for payload in payloads {
-            let _ = std::fs::remove_file(&payload.temp_path);
-        }
+
     }
 
     #[test]
@@ -430,18 +408,11 @@ long = '{}'
 
         // Should only extract the long payload
         assert!(
-            payloads.iter().all(|p| {
-                std::fs::metadata(&p.temp_path)
-                    .map(|m| m.len() >= 24)
-                    .unwrap_or(false)
-            }),
+            payloads.iter().all(|p| p.data.len() >= 24),
             "All payloads should be >= 24 bytes after decoding"
         );
 
-        // Cleanup
-        for payload in payloads {
-            let _ = std::fs::remove_file(&payload.temp_path);
-        }
+
     }
 
     #[test]
@@ -475,15 +446,12 @@ if __name__ == '__main__':
         assert!(payloads[0].encoding_chain.contains(&"base64".to_string()));
 
         // Verify decoded content
-        let decoded = std::fs::read(&payloads[0].temp_path).unwrap();
+        let decoded = payloads[0].data.clone();
         let decoded_str = String::from_utf8_lossy(&decoded);
         assert!(decoded_str.contains("curl"));
         assert!(decoded_str.contains("evil.com"));
 
-        // Cleanup
-        for payload in payloads {
-            let _ = std::fs::remove_file(&payload.temp_path);
-        }
+
     }
 
     #[test]
@@ -504,14 +472,11 @@ if __name__ == '__main__':
         assert!(payloads[0].encoding_chain.contains(&"base64".to_string()));
 
         // Verify decoded content
-        let decoded = std::fs::read(&payloads[0].temp_path).unwrap();
+        let decoded = payloads[0].data.clone();
         let decoded_str = String::from_utf8_lossy(&decoded);
         assert!(decoded_str.contains("import os"));
 
-        // Cleanup
-        for payload in payloads {
-            let _ = std::fs::remove_file(&payload.temp_path);
-        }
+
     }
 
     #[test]
@@ -538,10 +503,7 @@ if __name__ == '__main__':
             payloads.len()
         );
 
-        // Cleanup
-        for payload in payloads {
-            let _ = std::fs::remove_file(&payload.temp_path);
-        }
+
     }
 
     #[test]

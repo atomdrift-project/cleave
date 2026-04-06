@@ -16,8 +16,8 @@ use crate::malecule_bridge;
 /// Represents an extracted payload (e.g., base64, hex, XOR)
 #[derive(Debug)]
 pub struct ExtractedPayload {
-    /// Temp file containing decoded content — deleted automatically on drop
-    pub temp_path: tempfile::TempPath,
+    /// In-memory decoded content
+    pub data: Vec<u8>,
     /// Chain of encodings (e.g., ["base64", "zlib"])
     pub encoding_chain: Vec<String>,
     /// Preview of content (first 40 chars, printable only)

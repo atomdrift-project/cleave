@@ -9,7 +9,6 @@
 
 use crate::analyzers::FileType;
 use crate::types::ExtractedPayload;
-use std::io::Write;
 
 /// Maximum recursion depth for nested encoding
 const MAX_RECURSION_DEPTH: usize = 3;
@@ -293,18 +292,14 @@ fn process_decoded_string(
     // cleave: Check for compression and nested encoding
     let (final_bytes, final_chain) = decompress_and_nest(decoded_bytes, encoding_chain, 0);
 
-    // Create temp file for recursive analysis
-    if let Ok(mut temp_file) = tempfile::NamedTempFile::new() {
-        if temp_file.write_all(&final_bytes).is_ok() {
-            payloads.push(ExtractedPayload {
-                temp_path: temp_file.into_temp_path(),
-                encoding_chain: final_chain,
-                preview: generate_preview(&final_bytes),
-                detected_type: FileType::Unknown, // Will be determined during recursive analysis
-                original_offset: decoded_str.data_offset as usize,
-            });
-        }
-    }
+    // Store decoded content in memory for recursive analysis
+    payloads.push(ExtractedPayload {
+        data: final_bytes.clone(),
+        encoding_chain: final_chain,
+        preview: generate_preview(&final_bytes),
+        detected_type: FileType::Unknown, // Will be determined during recursive analysis
+        original_offset: decoded_str.data_offset as usize,
+    });
 }
 
 #[cfg(test)]

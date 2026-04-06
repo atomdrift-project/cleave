@@ -605,7 +605,7 @@ impl UnifiedSourceAnalyzer {
             );
 
             // Read the decoded content
-            let payload_content = std::fs::read(&payload.temp_path).unwrap_or_default();
+            let payload_content = payload.data.clone();
 
             // Create ArchiveEntry metadata (same as archive files)
             let entry_metadata = crate::types::ArchiveEntry {
@@ -687,7 +687,7 @@ impl UnifiedSourceAnalyzer {
                 );
 
                 // Read the decrypted content
-                let payload_content = std::fs::read(&payload.temp_path).unwrap_or_default();
+                let payload_content = payload.data.clone();
 
                 // Create ArchiveEntry metadata
                 let entry_metadata = crate::types::ArchiveEntry {

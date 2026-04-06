@@ -88,6 +88,7 @@ fn embed_pe_at(buf: &mut Vec<u8>, offset: usize) {
 }
 
 /// Embed a valid ELF64 LE header at `offset` within `buf`.
+#[allow(dead_code)]
 fn embed_elf_at(buf: &mut Vec<u8>, offset: usize) {
     while buf.len() < offset + 64 {
         buf.push(0u8);

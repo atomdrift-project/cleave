@@ -90,35 +90,6 @@ fn is_sibling_language(host: &FileType, detected: &FileType) -> bool {
 fn detect_language_inner(string_info: &StringInfo, is_encoded: bool) -> Option<FileType> {
     let value = &string_info.value;
 
-    // Size checks
-    let min_size = if is_encoded {
-        MIN_ENCODED_SIZE
-    } else {
-        MIN_PLAIN_SIZE
-    };
-
-    if value.len() < min_size || value.len() > MAX_DECODED_SIZE {
-        return None;
-    }
-
-    // Check entropy (skip compressed/encrypted data)
-    if calculate_entropy(value.as_bytes()) > MAX_CODE_ENTROPY {
-        return None;
-    }
-
-    // Inline source maps frequently carry original source in base64 comments.
-    // Those are packaging metadata, not hidden payloads, and should not generate
-    // embedded-code detections for each decoded sourcesContent entry.
-    if is_source_map_payload(value) {
-        return None;
-    }
-
-    // Benign JavaScript color helpers often embed ANSI escapes in template literals.
-    // These are decoded unicode-escape strings, but they are not hidden payloads.
-    if is_encoded && looks_like_ansi_color_helper(value) {
-        return None;
-    }
-
     // Use stng's classification (either from extraction or by calling classify_string)
     use crate::types::binary::StringType;
 
@@ -152,40 +123,68 @@ fn detect_language_inner(string_info: &StringInfo, is_encoded: bool) -> Option<F
                 return Some(FileType::Shell);
             }
         }
-        // If not classified as code, classify it now
-        _ => {
-            // Classify using stng (tree-sitter strings come through here)
-            let classified_kind = stng::classify_string(value);
-            match classified_kind {
-                StringType::PythonCode => {
-                    if should_reject_markup(value, is_encoded) {
-                        return None;
-                    }
-                    return Some(FileType::Python);
-                }
-                StringType::JavaScriptCode => {
-                    if should_reject_markup(value, is_encoded) {
-                        return None;
-                    }
-                    return Some(FileType::JavaScript);
-                }
-                StringType::PhpCode => {
-                    if should_reject_markup(value, is_encoded) {
-                        return None;
-                    }
-                    if !is_probable_php(value, is_encoded) {
-                        return None;
-                    }
-                    return Some(FileType::Php);
-                }
-                StringType::ShellCmd => {
-                    if is_real_shell(value) {
-                        return Some(FileType::Shell);
-                    }
-                }
-                _ => {}
+        _ => {}
+    }
+
+    // Size checks for unclassified strings
+    let min_size = if is_encoded {
+        MIN_ENCODED_SIZE
+    } else {
+        MIN_PLAIN_SIZE
+    };
+
+    if value.len() < min_size || value.len() > MAX_DECODED_SIZE {
+        return None;
+    }
+
+    // Check entropy (skip compressed/encrypted data)
+    if calculate_entropy(value.as_bytes()) > MAX_CODE_ENTROPY {
+        return None;
+    }
+
+    // Inline source maps frequently carry original source in base64 comments.
+    // Those are packaging metadata, not hidden payloads, and should not generate
+    // embedded-code detections for each decoded sourcesContent entry.
+    if is_source_map_payload(value) {
+        return None;
+    }
+
+    // Benign JavaScript color helpers often embed ANSI escapes in template literals.
+    // These are decoded unicode-escape strings, but they are not hidden payloads.
+    if is_encoded && looks_like_ansi_color_helper(value) {
+        return None;
+    }
+
+    // If not classified as code by stng yet, classify it now
+    let classified_kind = stng::classify_string(value);
+    match classified_kind {
+        StringType::PythonCode => {
+            if should_reject_markup(value, is_encoded) {
+                return None;
+            }
+            return Some(FileType::Python);
+        }
+        StringType::JavaScriptCode => {
+            if should_reject_markup(value, is_encoded) {
+                return None;
+            }
+            return Some(FileType::JavaScript);
+        }
+        StringType::PhpCode => {
+            if should_reject_markup(value, is_encoded) {
+                return None;
+            }
+            if !is_probable_php(value, is_encoded) {
+                return None;
+            }
+            return Some(FileType::Php);
+        }
+        StringType::ShellCmd => {
+            if is_real_shell(value) {
+                return Some(FileType::Shell);
             }
         }
+        _ => {}
     }
 
     None
@@ -1036,7 +1035,6 @@ pub(crate) fn process_all_strings_with_host(
     let mut plain_findings = Vec::new();
     let mut total_analyzed = 0;
     let mut total_bytes = 0;
-    let mut detection_attempts = 0;
     let mut detected_count = 0;
 
     let t_start = std::time::Instant::now();
@@ -1049,7 +1047,33 @@ pub(crate) fn process_all_strings_with_host(
         max_string_len
     );
 
-    for (idx, string_info) in strings.iter().enumerate() {
+    // Apply heuristic sorting to check most likely candidates first (like stng's XOR optimization)
+    // We prioritize longer strings, and strings already classified as code by stng
+    let mut sorted_strings: Vec<(usize, &StringInfo)> = strings.iter().enumerate().collect();
+    sorted_strings.sort_by(|(_, a), (_, b)| {
+        let is_code = |kind: &crate::types::binary::StringType| -> bool {
+            matches!(
+                kind,
+                crate::types::binary::StringType::PythonCode
+                    | crate::types::binary::StringType::JavaScriptCode
+                    | crate::types::binary::StringType::PhpCode
+                    | crate::types::binary::StringType::ShellCmd
+                    | crate::types::binary::StringType::AppleScript
+            )
+        };
+        let score_a = if is_code(&a.string_type) { 1000000 } else { a.value.len() };
+        let score_b = if is_code(&b.string_type) { 1000000 } else { b.value.len() };
+        score_b.cmp(&score_a)
+    });
+
+    let mut detection_attempts = 0;
+    let max_detection_attempts = std::cmp::max(100, strings.len() / 20); // Check at most 5% or 100
+
+    for (idx, string_info) in sorted_strings {
+        if detection_attempts >= max_detection_attempts {
+            break;
+        }
+
         // Check limits
         if total_analyzed >= MAX_STRINGS_TO_ANALYZE {
             tracing::debug!(

@@ -567,8 +567,11 @@ fn looks_like_pypi_registry_metadata(file_data: &[u8]) -> bool {
 
 /// Detect file type and route to appropriate analyzer
 pub fn detect_file_type(file_path: &Path) -> Result<FileType> {
-    let file_data = std::fs::read(file_path)?;
-    Ok(detect_file_type_from_data(file_path, &file_data))
+    use std::io::Read;
+    let mut file = std::fs::File::open(file_path)?;
+    let mut buf = [0u8; 1024];
+    let bytes_read = file.read(&mut buf).unwrap_or(0);
+    Ok(detect_file_type_from_data(file_path, &buf[..bytes_read]))
 }
 
 fn detect_file_type_inner(file_path: &Path, file_data: &[u8]) -> Option<FileType> {

@@ -430,15 +430,15 @@ impl Radare2Analyzer {
         }
 
         // Check file size - skip expensive function analysis for large binaries
-        // Binaries >20MB take minutes to analyze with 'aa'
-        const MAX_SIZE_FOR_FULL_ANALYSIS: u64 = 20 * 1024 * 1024; // 20MB
+        // Binaries >5MB take minutes to analyze with 'aa'
+        const MAX_SIZE_FOR_FULL_ANALYSIS: u64 = 5 * 1024 * 1024; // 5MB
 
         let file_size = std::fs::metadata(file_path).map(|m| m.len()).unwrap_or(0);
         let skip_function_analysis = file_size > MAX_SIZE_FOR_FULL_ANALYSIS || !has_symbols;
 
         if file_size > MAX_SIZE_FOR_FULL_ANALYSIS {
             debug!(
-                "File size {} MB > 20 MB, skipping function analysis",
+                "File size {} MB > 5 MB, skipping function analysis",
                 file_size / 1024 / 1024
             );
         } else if !has_symbols {

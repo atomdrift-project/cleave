@@ -1067,7 +1067,7 @@ pub(crate) fn process_all_strings_with_host(
     });
 
     let mut detection_attempts = 0;
-    let max_detection_attempts = std::cmp::max(100, strings.len() / 20); // Check at most 5% or 100
+    let max_detection_attempts = std::cmp::min(256, strings.len()); // Check the 256 longest/most likely strings in massive files
 
     for (idx, string_info) in sorted_strings {
         if detection_attempts >= max_detection_attempts {

@@ -62,18 +62,32 @@ fn is_common_encoding(encoding: &String) -> bool {
 /// Maximum size for string values (4KB)
 const MAX_STRING_VALUE_SIZE: usize = 4096;
 
-/// Serialize string value, truncating to MAX_STRING_VALUE_SIZE
+/// Serialize string value, truncating to MAX_STRING_VALUE_SIZE.
+/// Strips null bytes (\0) which are common in strings extracted from malware
+/// binaries but cannot be stored in PostgreSQL JSONB.
 fn serialize_truncated_string<S>(value: &str, serializer: S) -> Result<S::Ok, S::Error>
 where
     S: serde::Serializer,
 {
-    if value.len() <= MAX_STRING_VALUE_SIZE {
-        serializer.serialize_str(value)
+    let clean = sanitize_for_json(value);
+    let v = clean.as_ref().map_or(value, |s| s.as_str());
+    if v.len() <= MAX_STRING_VALUE_SIZE {
+        serializer.serialize_str(v)
     } else {
         // Truncate at a valid UTF-8 boundary
-        let truncated = truncate_str_at_boundary(value, MAX_STRING_VALUE_SIZE - 12);
+        let truncated = truncate_str_at_boundary(v, MAX_STRING_VALUE_SIZE - 12);
         let with_marker = format!("{}...[truncated]", truncated);
         serializer.serialize_str(&with_marker)
+    }
+}
+
+/// Remove null bytes from a string. Returns None if the string is already clean
+/// (avoids allocation in the common case).
+fn sanitize_for_json(s: &str) -> Option<String> {
+    if s.contains('\0') {
+        Some(s.replace('\0', ""))
+    } else {
+        None
     }
 }
 

@@ -212,18 +212,32 @@ const MAX_EVIDENCE_VALUE_SIZE: usize = 4096;
 /// Prevents output explosion from patterns that match thousands of times.
 pub(crate) const MAX_EVIDENCE_PER_TRAIT: usize = 16;
 
-/// Serialize evidence value, truncating to MAX_EVIDENCE_VALUE_SIZE
+/// Serialize evidence value, truncating to MAX_EVIDENCE_VALUE_SIZE.
+/// Strips null bytes (\0) which are common in strings extracted from malware
+/// binaries but cannot be stored in PostgreSQL JSONB.
 fn serialize_truncated_value<S>(value: &str, serializer: S) -> Result<S::Ok, S::Error>
 where
     S: serde::Serializer,
 {
-    if value.len() <= MAX_EVIDENCE_VALUE_SIZE {
-        serializer.serialize_str(value)
+    let clean = sanitize_evidence_for_json(value);
+    let v = clean.as_ref().map_or(value, |s| s.as_str());
+    if v.len() <= MAX_EVIDENCE_VALUE_SIZE {
+        serializer.serialize_str(v)
     } else {
         // Truncate at a valid UTF-8 boundary
-        let truncated = truncate_str(value, MAX_EVIDENCE_VALUE_SIZE - 12);
+        let truncated = truncate_str(v, MAX_EVIDENCE_VALUE_SIZE - 12);
         let with_marker = format!("{}...[truncated]", truncated);
         serializer.serialize_str(&with_marker)
+    }
+}
+
+/// Remove null bytes from a string. Returns None if the string is already clean
+/// (avoids allocation in the common case).
+fn sanitize_evidence_for_json(s: &str) -> Option<String> {
+    if s.contains('\0') {
+        Some(s.replace('\0', ""))
+    } else {
+        None
     }
 }
 

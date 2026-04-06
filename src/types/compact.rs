@@ -52,37 +52,37 @@ pub struct CompactFile {
     pub sz: u64,
     /// Archive nesting depth (omit when 0)
     #[serde(skip_serializing_if = "is_zero_u32")]
-    pub depth: u32,
+    pub dp: u32,
     /// Molecular formula
     #[serde(skip_serializing_if = "Option::is_none")]
     pub f: Option<String>,
     /// Traits (findings)
     #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub traits: Vec<CompactTrait>,
+    pub ts: Vec<CompactTrait>,
     /// Strings as tuples: [offset, value] or [offset, encoding, value]
     #[serde(skip_serializing_if = "Vec::is_empty", serialize_with = "serialize_string_tuples")]
-    pub str: Vec<CompactString>,
+    pub ss: Vec<CompactString>,
     /// Import symbol names
     #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub imp: Vec<String>,
+    pub is: Vec<String>,
     /// Metrics (nested structure, floats rounded to 2dp)
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub metrics: Option<RoundedMetrics>,
+    pub ms: Option<RoundedMetrics>,
 }
 
 /// A finding/trait in compact form
 #[derive(Debug, Serialize)]
 pub struct CompactTrait {
     /// Trait identifier (e.g., "objectives/execution/shell/bash")
-    pub id: String,
-    /// Criticality ordinal: 0=filtered, 1=component, 2=baseline, 3=notable, 4=suspicious, 5=hostile
-    pub crit: u8,
+    pub i: String,
+    /// Criticality level: 0=filtered, 1=component, 2=baseline, 3=notable, 4=suspicious, 5=hostile
+    pub l: u8,
     /// Description
     #[serde(skip_serializing_if = "String::is_empty")]
     pub d: String,
     /// Confidence (omit when 0.5)
     #[serde(skip_serializing_if = "is_default_conf")]
-    pub conf: f32,
+    pub c: f32,
     /// Evidence values (flattened from Evidence structs)
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub e: Vec<String>,
@@ -222,18 +222,18 @@ fn convert_file(file: &super::file_analysis::FileAnalysis) -> CompactFile {
             }
             // Keep highest criticality
             let new_crit = crit_to_int(finding.crit);
-            if new_crit > existing.crit {
-                existing.crit = new_crit;
+            if new_crit > existing.l {
+                existing.l = new_crit;
             }
         } else {
             trait_order.push(&finding.id);
             trait_map.insert(
                 &finding.id,
                 CompactTrait {
-                    id: finding.id.clone(),
-                    crit: crit_to_int(finding.crit),
+                    i: finding.id.clone(),
+                    l: crit_to_int(finding.crit),
                     d: finding.desc.clone(),
-                    conf: finding.conf,
+                    c: finding.conf,
                     e: evidence_values,
                 },
             );
@@ -246,7 +246,7 @@ fn convert_file(file: &super::file_analysis::FileAnalysis) -> CompactFile {
         .collect();
 
     // Convert strings to compact tuples, capped at MAX_STRINGS
-    let str: Vec<CompactString> = file
+    let str_tuples: Vec<CompactString> = file
         .strings
         .iter()
         .take(MAX_STRINGS)
@@ -266,7 +266,7 @@ fn convert_file(file: &super::file_analysis::FileAnalysis) -> CompactFile {
         .collect();
 
     // Flatten imports to bare symbol names
-    let imp: Vec<String> = file.imports.iter().map(|i| i.symbol.clone()).collect();
+    let imports: Vec<String> = file.imports.iter().map(|i| i.symbol.clone()).collect();
 
     // Round metrics floats to 2dp
     let metrics = file.metrics.as_ref().and_then(|m| {
@@ -288,12 +288,12 @@ fn convert_file(file: &super::file_analysis::FileAnalysis) -> CompactFile {
         file_type: file.file_type.clone(),
         sha: file.sha256.clone(),
         sz: file.size,
-        depth: file.depth,
+        dp: file.depth,
         f: formula,
-        traits,
-        str,
-        imp,
-        metrics,
+        ts: traits,
+        ss: str_tuples,
+        is: imports,
+        ms: metrics,
     }
 }
 

@@ -75,8 +75,8 @@ pub struct CompactFile {
 pub struct CompactTrait {
     /// Trait identifier (e.g., "objectives/execution/shell/bash")
     pub id: String,
-    /// Criticality as integer: -2=filtered, -1=component, 0=baseline, 1=notable, 2=suspicious, 3=hostile
-    pub crit: i8,
+    /// Criticality ordinal: 0=filtered, 1=component, 2=baseline, 3=notable, 4=suspicious, 5=hostile
+    pub crit: u8,
     /// Description
     #[serde(skip_serializing_if = "String::is_empty")]
     pub d: String,
@@ -136,15 +136,16 @@ fn truncate_at_boundary(s: &str, max_bytes: usize) -> &str {
     &s[..end]
 }
 
-/// Convert Criticality enum to v4 integer
-fn crit_to_int(c: Criticality) -> i8 {
+/// Convert Criticality enum to v4 ordinal (0-5).
+/// 0=filtered, 1=component, 2=baseline, 3=notable, 4=suspicious, 5=hostile
+fn crit_to_int(c: Criticality) -> u8 {
     match c {
-        Criticality::Filtered => -2,
-        Criticality::Component => -1,
-        Criticality::Baseline => 0,
-        Criticality::Notable => 1,
-        Criticality::Suspicious => 2,
-        Criticality::Hostile => 3,
+        Criticality::Filtered => 0,
+        Criticality::Component => 1,
+        Criticality::Baseline => 2,
+        Criticality::Notable => 3,
+        Criticality::Suspicious => 4,
+        Criticality::Hostile => 5,
     }
 }
 

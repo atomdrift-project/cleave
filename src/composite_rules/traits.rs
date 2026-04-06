@@ -781,7 +781,7 @@ impl TraitDefinition {
         if !platform_match {
             ctx.record_skip(SkipReason::PlatformMismatch {
                 rule: self.platforms.clone(),
-                context: ctx.platforms.clone(),
+                context: ctx.platforms.to_vec(),
             });
             return None;
         }
@@ -1710,7 +1710,7 @@ impl CompositeTrait {
         if !platform_match {
             ctx.record_skip(SkipReason::PlatformMismatch {
                 rule: self.platforms.clone(),
-                context: ctx.platforms.clone(),
+                context: ctx.platforms.to_vec(),
             });
             return None;
         }

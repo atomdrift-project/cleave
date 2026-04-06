@@ -275,11 +275,11 @@ impl super::CapabilityMapper {
             report,
             binary_data,
             file_type,
-            self.platforms.clone(),
+            &self.platforms,
             None,
             cached_ast,
         )
-        .with_section_map(cache.section_map.clone())
+        .with_section_map(&cache.section_map)
         .with_deadline(std::time::Instant::now() + std::time::Duration::from_secs(30))
         .with_slow_rule_ms(self.slow_rule_ms);
 
@@ -291,7 +291,7 @@ impl super::CapabilityMapper {
             ctx = ctx.with_inline_yara(results);
         }
         if let Some(ranges) = cache.arch_ranges {
-            ctx = ctx.with_arch_ranges(ranges.to_vec());
+            ctx = ctx.with_arch_ranges(ranges);
         }
 
         // Use trait index to only evaluate applicable traits

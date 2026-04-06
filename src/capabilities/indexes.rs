@@ -122,6 +122,54 @@ impl TraitIndex {
     }
 }
 
+/// Bitset for tracking which atomic traits have been matched.
+/// Used to quickly prune composite rules whose dependencies are missing.
+#[derive(Clone, Default, Debug)]
+pub(crate) struct TraitBitSet {
+    bits: Vec<u64>,
+}
+
+impl TraitBitSet {
+    /// Create a new bitset with enough capacity for the given number of traits
+    pub(crate) fn with_capacity(num_traits: usize) -> Self {
+        let num_u64s = (num_traits + 63) / 64;
+        Self {
+            bits: vec![0; num_u64s],
+        }
+    }
+
+    /// Mark a trait as matched
+    pub(crate) fn insert(&mut self, trait_idx: usize) {
+        let u64_idx = trait_idx / 64;
+        let bit_idx = trait_idx % 64;
+        if u64_idx < self.bits.len() {
+            self.bits[u64_idx] |= 1 << bit_idx;
+        }
+    }
+
+    /// Check if a trait has been matched
+    pub(crate) fn contains(&self, trait_idx: usize) -> bool {
+        let u64_idx = trait_idx / 64;
+        let bit_idx = trait_idx % 64;
+        if u64_idx < self.bits.len() {
+            (self.bits[u64_idx] & (1 << bit_idx)) != 0
+        } else {
+            false
+        }
+    }
+
+    /// Check if ALL required trait indices are present in this bitset.
+    /// Returns true if indices is empty.
+    pub(crate) fn contains_all(&self, indices: &[usize]) -> bool {
+        for &idx in indices {
+            if !self.contains(idx) {
+                return false;
+            }
+        }
+        true
+    }
+}
+
 /// Index for fast symbol matching.
 #[derive(Clone, Default, Debug)]
 pub(crate) struct SymbolMatchIndex {

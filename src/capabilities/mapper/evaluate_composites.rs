@@ -7,6 +7,7 @@
 //! - Downgrade re-evaluation with complete finding context
 
 use crate::composite_rules::{Arch, EvaluationContext, FileType as RuleFileType, SectionMap};
+use crate::capabilities::indexes::TraitBitSet;
 use crate::types::{AnalysisReport, Criticality, Evidence, Finding, FindingKind};
 use rustc_hash::FxHashMap;
 use std::collections::HashMap;
@@ -35,8 +36,12 @@ impl super::CapabilityMapper {
         let mut seen_ids: rustc_hash::FxHashSet<String> = rustc_hash::FxHashSet::default();
 
         // Track which composite IDs have already matched (including original findings)
+        let mut matched_bits = TraitBitSet::with_capacity(self.trait_definitions.len());
         for finding in &report.findings {
             seen_ids.insert(finding.id.clone());
+            if let Some(&idx) = self.trait_id_map.get(&finding.id) {
+                matched_bits.insert(idx);
+            }
         }
 
         // Split rules into two groups: those with negative conditions and those without
@@ -72,7 +77,7 @@ impl super::CapabilityMapper {
                 report,
                 binary_data,
                 file_type,
-                self.platforms.clone(),
+                &self.platforms,
                 if all_findings.is_empty() {
                     None
                 } else {
@@ -80,18 +85,19 @@ impl super::CapabilityMapper {
                 },
                 cached_ast,
             )
-            .with_section_map(section_map.clone());
+            .with_section_map(section_map);
             if let Some(results) = inline_yara {
                 ctx = ctx.with_inline_yara(results);
             }
             if let Some(ranges) = arch_ranges {
-                ctx = ctx.with_arch_ranges(ranges.to_vec());
+                ctx = ctx.with_arch_ranges(ranges);
             }
 
             // Evaluate positive rules (sequential to avoid nested rayon overhead for small files)
             let new_findings: Vec<Finding> = positive_rules
                 .iter()
                 .filter(|rule| !seen_ids.contains(&rule.id))
+                .filter(|rule| matched_bits.contains_all(&rule.required_trait_indices))
                 .filter_map(|rule| rule.evaluate(&ctx))
                 .filter(|f| !seen_ids.contains(&f.id))
                 .collect();
@@ -103,6 +109,9 @@ impl super::CapabilityMapper {
             // Add new findings to the accumulated set
             for finding in new_findings {
                 seen_ids.insert(finding.id.clone());
+                if let Some(&idx) = self.trait_id_map.get(&finding.id) {
+                    matched_bits.insert(idx);
+                }
                 all_findings.push(finding);
             }
         }
@@ -113,7 +122,7 @@ impl super::CapabilityMapper {
             report,
             binary_data,
             file_type,
-            self.platforms.clone(),
+            &self.platforms,
             if all_findings.is_empty() {
                 None
             } else {
@@ -121,16 +130,17 @@ impl super::CapabilityMapper {
             },
             cached_ast,
         )
-        .with_section_map(section_map.clone());
+        .with_section_map(section_map);
         if let Some(results) = inline_yara {
             ctx = ctx.with_inline_yara(results);
         }
         if let Some(ranges) = arch_ranges {
-            ctx = ctx.with_arch_ranges(ranges.to_vec());
+            ctx = ctx.with_arch_ranges(ranges);
         }
 
         let negative_findings: Vec<Finding> = negative_rules
             .iter()
+            .filter(|rule| matched_bits.contains_all(&rule.required_trait_indices))
             .filter_map(|rule| rule.evaluate(&ctx))
             .filter(|f| !seen_ids.contains(&f.id))
             .collect();
@@ -287,11 +297,11 @@ impl super::CapabilityMapper {
                 report,
                 binary_data,
                 file_type,
-                self.platforms.clone(),
+                &self.platforms,
                 Some(findings),
                 cached_ast,
             )
-            .with_section_map(section_map.clone());
+            .with_section_map(section_map);
 
             findings
                 .iter()
@@ -444,8 +454,17 @@ impl super::CapabilityMapper {
 
         // Track which composite IDs have already matched
         let mut seen_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let mut matched_bits = TraitBitSet::with_capacity(self.trait_definitions.len());
         for finding in &container_report.findings {
             seen_ids.insert(finding.id.clone());
+            if let Some(&idx) = self.trait_id_map.get(&finding.id) {
+                matched_bits.insert(idx);
+            }
+        }
+        for finding in nested_findings {
+            if let Some(&idx) = self.trait_id_map.get(&finding.id) {
+                matched_bits.insert(idx);
+            }
         }
 
         // Evaluate parent/container atomic traits against the container bytes first.
@@ -455,7 +474,7 @@ impl super::CapabilityMapper {
             container_report,
             &container_bytes,
             rule_file_type,
-            self.platforms.clone(),
+            &self.platforms,
             Some(nested_findings),
             None, // No AST for container
         );
@@ -468,6 +487,9 @@ impl super::CapabilityMapper {
 
         for finding in &container_findings {
             seen_ids.insert(finding.id.clone());
+            if let Some(&idx) = self.trait_id_map.get(&finding.id) {
+                matched_bits.insert(idx);
+            }
         }
 
         let mut combined_findings = nested_findings.to_vec();
@@ -486,7 +508,7 @@ impl super::CapabilityMapper {
                 container_report,
                 &container_bytes,
                 rule_file_type,
-                self.platforms.clone(),
+                &self.platforms,
                 Some(&combined_findings),
                 None, // No AST for container
             );

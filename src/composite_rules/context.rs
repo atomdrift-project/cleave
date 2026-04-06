@@ -24,7 +24,7 @@ pub(crate) struct EvaluationContext<'a> {
     /// Detected file type
     pub file_type: FileType,
     /// Platform filter(s) from CLI - rules match if their platforms intersect with these
-    pub platforms: Vec<Platform>,
+    pub platforms: &'a [Platform],
     /// CPU architecture(s) of the file being analyzed (derived from report.target.architectures)
     pub arch: Vec<Arch>,
     /// Additional findings from previous evaluation iterations (for composite chaining)
@@ -38,7 +38,7 @@ pub(crate) struct EvaluationContext<'a> {
     /// When present, evaluation records detailed debug info
     pub debug_collector: Option<&'a DebugCollector>,
     /// Section map for location-constrained matching (lazy-initialized)
-    pub section_map: Option<SectionMap>,
+    pub section_map: Option<&'a SectionMap>,
     /// Pre-scanned inline YARA results from the combined engine, keyed by namespace
     /// (`"inline.{trait_id}"`). When present, YARA condition evaluation uses this
     /// map instead of re-scanning with per-condition compiled rules.
@@ -67,7 +67,7 @@ pub(crate) struct EvaluationContext<'a> {
     /// Per-architecture byte ranges for fat/universal binaries.
     /// Maps each architecture to its byte range within `binary_data`.
     /// When set, arch-restricted traits only search within matching slices.
-    pub arch_ranges: Option<Vec<(Arch, std::ops::Range<usize>)>>,
+    pub arch_ranges: Option<&'a [(Arch, std::ops::Range<usize>)]>,
     /// Warn threshold for slow rule evaluation in milliseconds (default: 4000).
     /// Rules exceeding this emit a log::warn!; >1000ms emits log::debug!.
     pub slow_rule_ms: u64,
@@ -93,7 +93,7 @@ impl<'a> EvaluationContext<'a> {
         report: &'a AnalysisReport,
         binary_data: &'a [u8],
         file_type: FileType,
-        platforms: Vec<Platform>,
+        platforms: &'a [Platform],
         additional_findings: Option<&'a [Finding]>,
         cached_ast: Option<&'a tree_sitter::Tree>,
     ) -> Self {
@@ -167,14 +167,14 @@ impl<'a> EvaluationContext<'a> {
     }
 
     /// Set the section map
-    pub(crate) fn with_section_map(mut self, section_map: SectionMap) -> Self {
+    pub(crate) fn with_section_map(mut self, section_map: &'a SectionMap) -> Self {
         self.section_map = Some(section_map);
         self
     }
 
     /// Attach per-architecture byte ranges for fat/universal binary evaluation.
     #[must_use]
-    pub(crate) fn with_arch_ranges(mut self, ranges: Vec<(Arch, std::ops::Range<usize>)>) -> Self {
+    pub(crate) fn with_arch_ranges(mut self, ranges: &'a [(Arch, std::ops::Range<usize>)]) -> Self {
         self.arch_ranges = Some(ranges);
         self
     }
@@ -190,7 +190,7 @@ impl<'a> EvaluationContext<'a> {
         }
         let mut clamp_start = usize::MAX;
         let mut clamp_end = 0usize;
-        for (arch, range) in ranges {
+        for (arch, range) in *ranges {
             if trait_arch.contains(arch) {
                 clamp_start = clamp_start.min(range.start);
                 clamp_end = clamp_end.max(range.end);

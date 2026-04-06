@@ -763,7 +763,7 @@ pub fn run(
                 report,
                 binary_data,
                 internal_file_type,
-                platforms.clone(),
+                &platforms,
                 None,
                 None,
             );
@@ -923,7 +923,7 @@ pub fn run(
                 report,
                 binary_data,
                 composite_rules::FileType::All,
-                platforms.clone(),
+                &platforms,
                 None,
                 None,
             );
@@ -1353,7 +1353,7 @@ pub fn run(
                 report,
                 binary_data,
                 composite_rules::FileType::All, // FileType doesn't matter for metrics
-                platforms,
+                &platforms,
                 None, // No additional findings
                 None, // No cached AST
             );

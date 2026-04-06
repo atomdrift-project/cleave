@@ -177,7 +177,7 @@ fn test_eval_trait_exact_match() {
         &report,
         &data,
         FileType::Elf,
-        vec![Platform::Linux],
+        &[Platform::Linux],
         None,
         None,
     );
@@ -197,7 +197,7 @@ fn test_eval_trait_suffix_match() {
         &report,
         &data,
         FileType::Elf,
-        vec![Platform::Linux],
+        &[Platform::Linux],
         None,
         None,
     );
@@ -221,7 +221,7 @@ fn test_eval_trait_prefix_match() {
         &report,
         &data,
         FileType::Elf,
-        vec![Platform::Linux],
+        &[Platform::Linux],
         None,
         None,
     );
@@ -240,7 +240,7 @@ fn test_eval_trait_additional_findings() {
         &report,
         &data,
         FileType::Elf,
-        vec![Platform::Linux],
+        &[Platform::Linux],
         Some(&additional),
         None,
     );
@@ -260,7 +260,7 @@ fn test_eval_trait_no_match() {
         &report,
         &data,
         FileType::Elf,
-        vec![Platform::Linux],
+        &[Platform::Linux],
         None,
         None,
     );
@@ -295,7 +295,7 @@ fn test_eval_trait_evidence_propagation() {
         &report,
         &data,
         FileType::Elf,
-        vec![Platform::Linux],
+        &[Platform::Linux],
         None,
         None,
     );

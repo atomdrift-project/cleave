@@ -91,6 +91,7 @@ impl super::CapabilityMapper {
             // Evaluate positive rules (sequential to avoid nested rayon overhead for small files)
             let new_findings: Vec<Finding> = positive_rules
                 .iter()
+                .filter(|rule| !seen_ids.contains(&rule.id))
                 .filter_map(|rule| rule.evaluate(&ctx))
                 .filter(|f| !seen_ids.contains(&f.id))
                 .collect();

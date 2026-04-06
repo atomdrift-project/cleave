@@ -310,15 +310,15 @@ impl DiffAnalyzer {
             .cloned()
             .collect();
 
-        // Risk assessment
-        let risk_increase = self.assess_risk_increase(&new_capabilities, &removed_capabilities);
+        // Score delta
+        let score_delta = Self::compute_score_delta(&new_capabilities, &removed_capabilities);
 
         ModifiedFileAnalysis {
             file: file_path.to_string(),
             new_capabilities,
             removed_capabilities,
             capability_delta: target_cap_ids.len() as i32 - baseline_cap_ids.len() as i32,
-            risk_increase,
+            score_delta,
         }
     }
 
@@ -393,8 +393,8 @@ impl DiffAnalyzer {
             env_vars_removed: removed_env_vars.len() as i32,
         };
 
-        // Risk assessment
-        let risk_increase = self.assess_risk_increase(&added_findings, &removed_findings);
+        // Score delta
+        let score_delta = Self::compute_score_delta(&added_findings, &removed_findings);
 
         FileDiff {
             file: file_path.to_string(),
@@ -420,8 +420,7 @@ impl DiffAnalyzer {
             removed_yara_matches,
             metrics_delta: Some(metrics_delta),
             counts: Some(counts),
-            risk_increase,
-            risk_score_delta: None, // TODO: implement risk scoring
+            score_delta,
         }
     }
 
@@ -695,43 +694,15 @@ impl DiffAnalyzer {
         })
     }
 
-    fn assess_risk_increase(&self, new_caps: &[Finding], removed_caps: &[Finding]) -> bool {
-        // High-risk capability categories
-        let high_risk_prefixes = [
-            "execution/",
-            "anti-analysis/",
-            "privilege/",
-            "persistence/",
-            "injection/",
-            "registry/write",
-            "registry/delete",
-            "service/create",
-        ];
-
-        // Check if new capabilities are high-risk
-        let new_high_risk_count = new_caps
-            .iter()
-            .filter(|cap| {
-                high_risk_prefixes
-                    .iter()
-                    .any(|prefix| cap.id.starts_with(prefix))
-            })
-            .count();
-
-        // Check if removed capabilities were high-risk
-        let removed_high_risk_count = removed_caps
-            .iter()
-            .filter(|cap| {
-                high_risk_prefixes
-                    .iter()
-                    .any(|prefix| cap.id.starts_with(prefix))
-            })
-            .count();
-
-        // Risk increases if:
-        // 1. New high-risk capabilities added
-        // 2. More high-risk capabilities than were removed
-        new_high_risk_count > 0 && new_high_risk_count > removed_high_risk_count
+    fn compute_score_delta(added: &[Finding], removed: &[Finding]) -> i32 {
+        let score = |findings: &[Finding]| -> i32 {
+            let raw: f32 = findings
+                .iter()
+                .map(|f| f.crit.score_weight() as f32 * f.conf)
+                .sum();
+            raw.ceil() as i32
+        };
+        score(added) - score(removed)
     }
 }
 

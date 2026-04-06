@@ -697,18 +697,13 @@ impl ArchiveAnalyzer {
                     files_analyzed_ref.fetch_add(1, Ordering::Relaxed);
 
                     // Update statistics from findings
-                    if let Some(risk) = &file_result.file_analysis.risk {
-                        match risk {
-                            crate::types::Criticality::Hostile => {
-                                hostile_count_ref.fetch_add(1, Ordering::Relaxed);
-                            }
-                            crate::types::Criticality::Suspicious => {
-                                suspicious_count_ref.fetch_add(1, Ordering::Relaxed);
-                            }
-                            crate::types::Criticality::Notable => {
-                                notable_count_ref.fetch_add(1, Ordering::Relaxed);
-                            }
-                            _ => {}
+                    if let Some(counts) = &file_result.file_analysis.counts {
+                        if counts.hostile > 0 {
+                            hostile_count_ref.fetch_add(1, Ordering::Relaxed);
+                        } else if counts.suspicious > 0 {
+                            suspicious_count_ref.fetch_add(1, Ordering::Relaxed);
+                        } else if counts.notable > 0 {
+                            notable_count_ref.fetch_add(1, Ordering::Relaxed);
                         }
                     }
 
@@ -961,18 +956,13 @@ impl ArchiveAnalyzer {
                 Ok(file_result) => {
                     files_analyzed_ref.fetch_add(1, Ordering::Relaxed);
 
-                    if let Some(risk) = &file_result.file_analysis.risk {
-                        match risk {
-                            crate::types::Criticality::Hostile => {
-                                hostile_count_ref.fetch_add(1, Ordering::Relaxed);
-                            }
-                            crate::types::Criticality::Suspicious => {
-                                suspicious_count_ref.fetch_add(1, Ordering::Relaxed);
-                            }
-                            crate::types::Criticality::Notable => {
-                                notable_count_ref.fetch_add(1, Ordering::Relaxed);
-                            }
-                            _ => {}
+                    if let Some(counts) = &file_result.file_analysis.counts {
+                        if counts.hostile > 0 {
+                            hostile_count_ref.fetch_add(1, Ordering::Relaxed);
+                        } else if counts.suspicious > 0 {
+                            suspicious_count_ref.fetch_add(1, Ordering::Relaxed);
+                        } else if counts.notable > 0 {
+                            notable_count_ref.fetch_add(1, Ordering::Relaxed);
                         }
                     }
 
@@ -1172,18 +1162,13 @@ impl ArchiveAnalyzer {
                 Ok(file_result) => {
                     files_analyzed_ref.fetch_add(1, Ordering::Relaxed);
 
-                    if let Some(risk) = &file_result.file_analysis.risk {
-                        match risk {
-                            crate::types::Criticality::Hostile => {
-                                hostile_count_ref.fetch_add(1, Ordering::Relaxed);
-                            }
-                            crate::types::Criticality::Suspicious => {
-                                suspicious_count_ref.fetch_add(1, Ordering::Relaxed);
-                            }
-                            crate::types::Criticality::Notable => {
-                                notable_count_ref.fetch_add(1, Ordering::Relaxed);
-                            }
-                            _ => {}
+                    if let Some(counts) = &file_result.file_analysis.counts {
+                        if counts.hostile > 0 {
+                            hostile_count_ref.fetch_add(1, Ordering::Relaxed);
+                        } else if counts.suspicious > 0 {
+                            suspicious_count_ref.fetch_add(1, Ordering::Relaxed);
+                        } else if counts.notable > 0 {
+                            notable_count_ref.fetch_add(1, Ordering::Relaxed);
                         }
                     }
 
@@ -1359,18 +1344,13 @@ impl ArchiveAnalyzer {
                 Ok(file_result) => {
                     files_analyzed_ref.fetch_add(1, Ordering::Relaxed);
 
-                    if let Some(risk) = &file_result.file_analysis.risk {
-                        match risk {
-                            crate::types::Criticality::Hostile => {
-                                hostile_count_ref.fetch_add(1, Ordering::Relaxed);
-                            }
-                            crate::types::Criticality::Suspicious => {
-                                suspicious_count_ref.fetch_add(1, Ordering::Relaxed);
-                            }
-                            crate::types::Criticality::Notable => {
-                                notable_count_ref.fetch_add(1, Ordering::Relaxed);
-                            }
-                            _ => {}
+                    if let Some(counts) = &file_result.file_analysis.counts {
+                        if counts.hostile > 0 {
+                            hostile_count_ref.fetch_add(1, Ordering::Relaxed);
+                        } else if counts.suspicious > 0 {
+                            suspicious_count_ref.fetch_add(1, Ordering::Relaxed);
+                        } else if counts.notable > 0 {
+                            notable_count_ref.fetch_add(1, Ordering::Relaxed);
                         }
                     }
 
@@ -1628,18 +1608,13 @@ impl ArchiveAnalyzer {
                 Ok(file_result) => {
                     files_analyzed_ref.fetch_add(1, Ordering::Relaxed);
 
-                    if let Some(risk) = &file_result.file_analysis.risk {
-                        match risk {
-                            crate::types::Criticality::Hostile => {
-                                hostile_count_ref.fetch_add(1, Ordering::Relaxed);
-                            }
-                            crate::types::Criticality::Suspicious => {
-                                suspicious_count_ref.fetch_add(1, Ordering::Relaxed);
-                            }
-                            crate::types::Criticality::Notable => {
-                                notable_count_ref.fetch_add(1, Ordering::Relaxed);
-                            }
-                            _ => {}
+                    if let Some(counts) = &file_result.file_analysis.counts {
+                        if counts.hostile > 0 {
+                            hostile_count_ref.fetch_add(1, Ordering::Relaxed);
+                        } else if counts.suspicious > 0 {
+                            suspicious_count_ref.fetch_add(1, Ordering::Relaxed);
+                        } else if counts.notable > 0 {
+                            notable_count_ref.fetch_add(1, Ordering::Relaxed);
                         }
                     }
 

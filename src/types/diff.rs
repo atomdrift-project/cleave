@@ -71,8 +71,8 @@ pub struct ModifiedFileAnalysis {
     pub removed_capabilities: Vec<Finding>,
     /// Net change in capability count (positive = more capabilities)
     pub capability_delta: i32,
-    /// Whether the overall risk increased
-    pub risk_increase: bool,
+    /// Change in risk score (target - baseline)
+    pub score_delta: i32,
 }
 
 /// Comprehensive diff for a single file - can be treated as a "virtual program" for ML
@@ -165,11 +165,9 @@ pub struct FileDiff {
     pub counts: Option<DiffCounts>,
 
     // === Risk assessment ===
-    /// Whether the overall risk increased from baseline to target
-    pub risk_increase: bool,
-    /// Change in risk score (target - baseline), if computed
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub risk_score_delta: Option<f32>,
+    /// Change in risk score (target - baseline)
+    #[serde(default, skip_serializing_if = "is_zero_i32")]
+    pub score_delta: i32,
 }
 
 /// Summary counts for quick ML feature extraction
@@ -316,8 +314,7 @@ mod tests {
         assert!(diff.removed_findings.is_empty());
         assert!(diff.added_traits.is_empty());
         assert!(diff.removed_traits.is_empty());
-        assert!(!diff.risk_increase);
-        assert!(diff.risk_score_delta.is_none());
+        assert_eq!(diff.score_delta, 0);
     }
 
     #[test]
@@ -368,14 +365,12 @@ mod tests {
     }
 
     #[test]
-    fn test_file_diff_risk_increase() {
+    fn test_file_diff_score_delta() {
         let diff = FileDiff {
-            risk_increase: true,
-            risk_score_delta: Some(0.5),
+            score_delta: 25,
             ..Default::default()
         };
-        assert!(diff.risk_increase);
-        assert_eq!(diff.risk_score_delta, Some(0.5));
+        assert_eq!(diff.score_delta, 25);
     }
 
     // ==================== DiffCounts Tests ====================
@@ -630,11 +625,11 @@ mod tests {
             new_capabilities: vec![],
             removed_capabilities: vec![],
             capability_delta: 0,
-            risk_increase: false,
+            score_delta: 0,
         };
         assert_eq!(analysis.file, "test.py");
         assert_eq!(analysis.capability_delta, 0);
-        assert!(!analysis.risk_increase);
+        assert_eq!(analysis.score_delta, 0);
     }
 
     #[test]
@@ -644,10 +639,10 @@ mod tests {
             new_capabilities: vec![],
             removed_capabilities: vec![],
             capability_delta: 5,
-            risk_increase: true,
+            score_delta: 50,
         };
         assert_eq!(analysis.capability_delta, 5);
-        assert!(analysis.risk_increase);
+        assert!(analysis.score_delta > 0);
     }
 
     #[test]
@@ -657,9 +652,9 @@ mod tests {
             new_capabilities: vec![],
             removed_capabilities: vec![],
             capability_delta: -3,
-            risk_increase: false,
+            score_delta: -25,
         };
         assert_eq!(analysis.capability_delta, -3);
-        assert!(!analysis.risk_increase);
+        assert!(analysis.score_delta < 0);
     }
 }

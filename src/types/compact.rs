@@ -50,6 +50,9 @@ pub struct CompactFile {
     pub sha: String,
     /// File size in bytes
     pub sz: u64,
+    /// Weighted risk score
+    #[serde(skip_serializing_if = "is_zero_u32")]
+    pub x: u32,
     /// Archive nesting depth (omit when 0)
     #[serde(skip_serializing_if = "is_zero_u32")]
     pub dp: u32,
@@ -288,6 +291,7 @@ fn convert_file(file: &super::file_analysis::FileAnalysis) -> CompactFile {
         file_type: file.file_type.clone(),
         sha: file.sha256.clone(),
         sz: file.size,
+        x: file.score,
         dp: file.depth,
         f: formula,
         ts: traits,

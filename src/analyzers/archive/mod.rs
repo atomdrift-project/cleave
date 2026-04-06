@@ -578,7 +578,7 @@ impl ArchiveAnalyzer {
         // Track aggregate data incrementally (instead of accumulating all files)
         let files_analyzed = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
         let max_depth = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
-        let max_risk = std::sync::Arc::new(std::sync::Mutex::new(Option::<Criticality>::None));
+        let score = std::sync::Arc::new(std::sync::Mutex::new(0.0_f32));
         let counts = std::sync::Arc::new(std::sync::Mutex::new(FindingCounts::default()));
 
         // Collect findings from all nested files for container-level composite evaluation
@@ -588,7 +588,7 @@ impl ArchiveAnalyzer {
 
         let files_analyzed_clone = files_analyzed.clone();
         let max_depth_clone = max_depth.clone();
-        let max_risk_clone = max_risk.clone();
+        let score_clone = score.clone();
         let counts_clone = counts.clone();
         let nested_findings_clone = nested_findings.clone();
 
@@ -599,12 +599,9 @@ impl ArchiveAnalyzer {
                 max_depth_clone.store(file.depth, std::sync::atomic::Ordering::Relaxed);
             }
 
-            if let Some(risk) = &file.risk {
-                if let Ok(mut max_risk) = max_risk_clone.lock() {
-                    *max_risk = Some(match *max_risk {
-                        Some(current) if current > *risk => current,
-                        _ => *risk,
-                    });
+            if file.score > 0 {
+                if let Ok(mut s) = score_clone.lock() {
+                    *s += file.score as f32;
                 }
             }
 
@@ -831,11 +828,8 @@ impl ArchiveAnalyzer {
                         _ => {}
                     }
                 }
-                if let Ok(mut max_risk) = max_risk.lock() {
-                    *max_risk = Some(match *max_risk {
-                        Some(current) if current > finding.crit => current,
-                        _ => finding.crit,
-                    });
+                if let Ok(mut s) = score.lock() {
+                    *s += finding.crit.score_weight() as f32 * finding.conf;
                 }
                 report.findings.push(finding);
             }
@@ -851,20 +845,20 @@ impl ArchiveAnalyzer {
                 .map_err(|e| anyhow::anyhow!("Failed to lock counts: {}", e))?
                 .clone(),
         };
-        let final_max_risk = match std::sync::Arc::try_unwrap(max_risk) {
+        let final_score = match std::sync::Arc::try_unwrap(score) {
             Ok(mutex) => mutex
                 .into_inner()
-                .map_err(|e| anyhow::anyhow!("Failed to unwrap max_risk mutex: {}", e))?,
+                .map_err(|e| anyhow::anyhow!("Failed to unwrap score mutex: {}", e))?,
             Err(arc) => *arc
                 .lock()
-                .map_err(|e| anyhow::anyhow!("Failed to lock max_risk: {}", e))?,
+                .map_err(|e| anyhow::anyhow!("Failed to lock score: {}", e))?,
         };
 
         let _ = max_depth; // derivable from files[].depth, no longer stored in summary
         report.summary = Some(ReportSummary {
             files_analyzed: files_analyzed.load(std::sync::atomic::Ordering::Relaxed),
             counts: final_counts,
-            max_risk: final_max_risk,
+            score: final_score.ceil() as u32,
             ..Default::default()
         });
         // Keep files empty in streaming mode to save memory

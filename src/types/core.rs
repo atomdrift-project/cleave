@@ -53,6 +53,19 @@ pub enum Criticality {
     Hostile,
 }
 
+impl Criticality {
+    /// Score weight for risk scoring: notable=1, suspicious=40, hostile=120
+    #[must_use]
+    pub fn score_weight(self) -> u32 {
+        match self {
+            Self::Hostile => 120,
+            Self::Suspicious => 40,
+            Self::Notable => 1,
+            _ => 0,
+        }
+    }
+}
+
 /// Main analysis output structure
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AnalysisReport {
@@ -930,7 +943,8 @@ mod tests {
 
         report.merge_encoding_layers();
 
-        assert_eq!(report.files[0].risk, Some(Criticality::Hostile));
+        // ceil(hostile(120)*0.9) + ceil(notable(1)*0.9) = 108+1 = 109
+        assert_eq!(report.files[0].score, 109);
         let counts = report.files[0].counts.as_ref().unwrap();
         assert_eq!(counts.hostile, 1);
         assert_eq!(counts.notable, 1);

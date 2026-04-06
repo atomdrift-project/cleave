@@ -341,6 +341,8 @@ struct JsonlSummary {
     #[serde(rename = "type")]
     entry_type: &'static str,
     files_analyzed: u32,
+    #[serde(rename = "x")]
+    score: u32,
     hostile: u32,
     suspicious: u32,
     notable: u32,
@@ -400,6 +402,7 @@ pub(crate) fn format_jsonl_summary(report: &AnalysisReport) -> Result<String> {
         files_analyzed: summary
             .map(|s| s.files_analyzed)
             .unwrap_or(report.files.len() as u32),
+        score: summary.map(|s| s.score).unwrap_or(0),
         hostile: counts.map(|c| c.hostile).unwrap_or(0),
         suspicious: counts.map(|c| c.suspicious).unwrap_or(0),
         notable: counts.map(|c| c.notable).unwrap_or(0),
@@ -612,7 +615,7 @@ pub(crate) fn parse_jsonl(jsonl: &str) -> Result<AnalysisReport> {
                             .and_then(serde_json::Value::as_u64)
                             .unwrap_or(0) as u32,
                     },
-                    max_risk: None,
+                    score: 0,
                     duration_ms,
                     tools,
                     errors,

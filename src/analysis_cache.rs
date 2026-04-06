@@ -665,7 +665,8 @@ mod tests {
 
         assert_eq!(cached.findings.len(), 1);
         assert_eq!(cached.findings[0].id, "exec/shell");
-        assert_eq!(cached.risk, Some(Criticality::Hostile));
+        // ceil(hostile(120) * conf(0.9)) = 108
+        assert_eq!(cached.score, 108);
     }
 
     #[test]

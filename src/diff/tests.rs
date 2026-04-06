@@ -90,7 +90,7 @@ fn test_compare_reports_no_changes() {
     assert_eq!(analysis.new_capabilities.len(), 0);
     assert_eq!(analysis.removed_capabilities.len(), 0);
     assert_eq!(analysis.capability_delta, 0);
-    assert!(!analysis.risk_increase);
+    assert_eq!(analysis.score_delta, 0);
 }
 
 #[test]
@@ -127,7 +127,7 @@ fn test_compare_reports_risk_increase() {
     let target = create_test_report_for_diff("/target/file", &["net/http", "execution/shell"]);
 
     let analysis = analyzer.compare_reports("file", &baseline, &target);
-    assert!(analysis.risk_increase);
+    assert!(analysis.score_delta > 0);
     assert!(analysis
         .new_capabilities
         .iter()
@@ -157,42 +157,35 @@ fn make_test_cap(id: &str) -> Finding {
 }
 
 #[test]
-fn test_assess_risk_increase_new_high_risk() {
-    let analyzer = DiffAnalyzer::new_for_test("/baseline", "/target");
+fn test_score_delta_new_findings() {
     let new_caps = vec![make_test_cap("execution/shell")];
     let removed_caps = vec![];
 
-    assert!(analyzer.assess_risk_increase(&new_caps, &removed_caps));
+    // ceil(notable(1) * conf(0.9)) = 1
+    let delta = DiffAnalyzer::compute_score_delta(&new_caps, &removed_caps);
+    assert!(delta > 0);
 }
 
 #[test]
-fn test_assess_risk_increase_no_high_risk() {
-    let analyzer = DiffAnalyzer::new_for_test("/baseline", "/target");
-    let new_caps = vec![make_test_cap("net/http")];
-    let removed_caps = vec![];
-
-    assert!(!analyzer.assess_risk_increase(&new_caps, &removed_caps));
-}
-
-#[test]
-fn test_assess_risk_increase_balanced() {
-    let analyzer = DiffAnalyzer::new_for_test("/baseline", "/target");
+fn test_score_delta_balanced() {
     let new_caps = vec![make_test_cap("execution/shell")];
     let removed_caps = vec![make_test_cap("anti-analysis/debugger")];
 
-    assert!(!analyzer.assess_risk_increase(&new_caps, &removed_caps));
+    // Same weight on both sides → 0
+    let delta = DiffAnalyzer::compute_score_delta(&new_caps, &removed_caps);
+    assert_eq!(delta, 0);
 }
 
 #[test]
-fn test_assess_risk_increase_more_removed_than_added() {
-    let analyzer = DiffAnalyzer::new_for_test("/baseline", "/target");
+fn test_score_delta_more_removed() {
     let new_caps = vec![make_test_cap("execution/shell")];
     let removed_caps = vec![
         make_test_cap("anti-analysis/debugger"),
         make_test_cap("persistence/registry"),
     ];
 
-    assert!(!analyzer.assess_risk_increase(&new_caps, &removed_caps));
+    let delta = DiffAnalyzer::compute_score_delta(&new_caps, &removed_caps);
+    assert!(delta < 0);
 }
 
 #[test]
@@ -258,7 +251,7 @@ fn test_format_diff_terminal_with_changes() {
             new_capabilities: vec![make_test_cap("execution/shell")],
             removed_capabilities: vec![],
             capability_delta: 1,
-            risk_increase: true,
+            score_delta: 1,
         }],
         metadata: crate::types::AnalysisMetadata {
             analysis_duration_ms: 100,
@@ -295,14 +288,14 @@ fn test_format_diff_terminal_multiple_modified() {
                 new_capabilities: vec![make_test_cap("net/http/client")],
                 removed_capabilities: vec![],
                 capability_delta: 1,
-                risk_increase: false,
+                score_delta: 0,
             },
             ModifiedFileAnalysis {
                 file: "file2.bin".to_string(),
                 new_capabilities: vec![make_test_cap("execution/command/shell")],
                 removed_capabilities: vec![make_test_cap("fs/file/read")],
                 capability_delta: 0,
-                risk_increase: true,
+                score_delta: 1,
             },
         ],
         metadata: crate::types::AnalysisMetadata {

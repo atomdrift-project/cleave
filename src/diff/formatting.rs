@@ -43,7 +43,7 @@ pub(crate) fn format_diff_terminal(report: &DiffReport) -> String {
     let high_risk_changes = report
         .modified_analysis
         .iter()
-        .filter(|a| a.risk_increase)
+        .filter(|a| a.score_delta > 0)
         .count();
 
     if high_risk_changes > 0 {
@@ -53,17 +53,18 @@ pub(crate) fn format_diff_terminal(report: &DiffReport) -> String {
         ));
     }
 
-    // Sort modified files: high risk first, then by filename
+    // Sort modified files: high score delta first, then by filename
     let mut sorted_analysis = report.modified_analysis.clone();
     sorted_analysis.sort_unstable_by(|a, b| {
-        b.risk_increase
-            .cmp(&a.risk_increase)
+        b.score_delta
+            .partial_cmp(&a.score_delta)
+            .unwrap_or(std::cmp::Ordering::Equal)
             .then_with(|| a.file.cmp(&b.file))
     });
 
     // Modified files with capability changes (most important)
     for analysis in &sorted_analysis {
-        let risk_icon = if analysis.risk_increase {
+        let risk_icon = if analysis.score_delta > 0 {
             "⚠️ "
         } else {
             ""

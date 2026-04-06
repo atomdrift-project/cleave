@@ -53,9 +53,9 @@ pub struct FileAnalysis {
     pub size: u64,
 
     // === Per-file summary (for easy filtering) ===
-    /// Maximum criticality of findings in this file (null if no findings)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub risk: Option<Criticality>,
+    /// Weighted risk score: sum(ceil(criticality_weight * confidence)) across findings
+    #[serde(rename = "x", default, skip_serializing_if = "is_zero")]
+    pub score: u32,
 
     /// Finding counts by criticality
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -164,7 +164,7 @@ impl FileAnalysis {
             arch: None,
             sha256,
             size,
-            risk: None,
+            score: 0,
             counts: None,
             encoding: None,
             findings: Vec::new(),
@@ -190,16 +190,16 @@ impl FileAnalysis {
         }
     }
 
-    /// Compute risk and counts from findings
+    /// Compute score and counts from findings
     pub(crate) fn compute_summary(&mut self) {
         if self.findings.is_empty() {
-            self.risk = None;
+            self.score = 0;
             self.counts = None;
             return;
         }
 
         let mut counts = FindingCounts::default();
-        let mut max_crit = Criticality::Baseline;
+        let mut raw_score = 0.0_f32;
 
         for finding in &self.findings {
             match finding.crit {
@@ -208,16 +208,10 @@ impl FileAnalysis {
                 Criticality::Notable => counts.notable += 1,
                 _ => {}
             }
-            if finding.crit > max_crit {
-                max_crit = finding.crit;
-            }
+            raw_score += finding.crit.score_weight() as f32 * finding.conf;
         }
 
-        self.risk = if max_crit > Criticality::Baseline {
-            Some(max_crit)
-        } else {
-            None
-        };
+        self.score = raw_score.ceil() as u32;
 
         self.counts = if counts.hostile > 0 || counts.suspicious > 0 || counts.notable > 0 {
             Some(counts)
@@ -278,6 +272,7 @@ fn is_zero(n: &u32) -> bool {
     *n == 0
 }
 
+
 fn is_zero_u64(n: &u64) -> bool {
     *n == 0
 }
@@ -289,9 +284,9 @@ pub struct ReportSummary {
     pub files_analyzed: u32,
     /// Aggregate finding counts
     pub counts: FindingCounts,
-    /// Maximum risk level across all files
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub max_risk: Option<Criticality>,
+    /// Aggregate weighted risk score across all files
+    #[serde(rename = "x", default, skip_serializing_if = "is_zero")]
+    pub score: u32,
     /// Total analysis duration in milliseconds
     #[serde(skip_serializing_if = "is_zero_u64", default)]
     pub duration_ms: u64,
@@ -310,7 +305,6 @@ impl ReportSummary {
         let mut summary = Self {
             files_analyzed: files.len() as u32,
             counts: FindingCounts::default(),
-            max_risk: None,
             ..Default::default()
         };
 
@@ -320,12 +314,7 @@ impl ReportSummary {
                 summary.counts.suspicious += counts.suspicious;
                 summary.counts.notable += counts.notable;
             }
-            if let Some(risk) = &file.risk {
-                summary.max_risk = Some(match summary.max_risk {
-                    Some(current) if current > *risk => current,
-                    _ => *risk,
-                });
-            }
+            summary.score += file.score;
         }
 
         summary
@@ -438,7 +427,7 @@ mod tests {
             "abc".to_string(),
             100,
         );
-        assert!(fa.risk.is_none());
+        assert_eq!(fa.score, 0);
         assert!(fa.counts.is_none());
         assert!(fa.encoding.is_none());
         assert!(fa.binary_properties.is_none());
@@ -459,7 +448,7 @@ mod tests {
             100,
         );
         fa.compute_summary();
-        assert!(fa.risk.is_none());
+        assert_eq!(fa.score, 0);
         assert!(fa.counts.is_none());
     }
 
@@ -477,7 +466,8 @@ mod tests {
                 .with_criticality(Criticality::Notable),
         );
         fa.compute_summary();
-        assert_eq!(fa.risk, Some(Criticality::Notable));
+        // ceil(notable(1) * conf(0.5)) = ceil(0.5) = 1
+        assert_eq!(fa.score, 1);
         let counts = fa.counts.unwrap();
         assert_eq!(counts.notable, 1);
         assert_eq!(counts.suspicious, 0);
@@ -498,8 +488,8 @@ mod tests {
                 .with_criticality(Criticality::Baseline),
         );
         fa.compute_summary();
-        // baseline findings don't contribute to risk
-        assert!(fa.risk.is_none());
+        // baseline findings don't contribute to score
+        assert_eq!(fa.score, 0);
         assert!(fa.counts.is_none());
     }
 
@@ -660,7 +650,8 @@ mod tests {
 
         file.compute_summary();
 
-        assert_eq!(file.risk, Some(Criticality::Hostile));
+        // ceil(hostile(120)*0.9) + ceil(suspicious(40)*0.8) = 108+32 = 140
+        assert_eq!(file.score, 140);
         let counts = file.counts.unwrap();
         assert_eq!(counts.hostile, 1);
         assert_eq!(counts.suspicious, 1);

@@ -78,6 +78,7 @@ pub use types::SampleExtractionConfig;
 
 // Re-export cache management functions
 pub use composite_rules::clear_condition_stats;
+pub use shared_resources::reload_capability_mapper;
 
 use rustc_hash::FxHasher;
 use std::hash::{Hash, Hasher};

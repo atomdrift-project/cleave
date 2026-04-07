@@ -94,7 +94,7 @@ pub(crate) fn capability_mapper() -> anyhow::Result<Arc<CapabilityMapper>> {
 /// Loads new traits into a temporary mapper first. Only if loading succeeds
 /// does it swap the new mapper into the global slot. On failure the previous
 /// mapper remains active and an error is returned.
-pub(crate) fn reload_capability_mapper() -> Result<(usize, usize), String> {
+pub fn reload_capability_mapper() -> Result<(usize, usize), String> {
     tracing::info!("Reloading CapabilityMapper from disk");
 
     if skip_traits_requested() {

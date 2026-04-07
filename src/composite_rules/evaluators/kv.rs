@@ -796,7 +796,7 @@ mod tests {
             report,
             binary_data,
             file_type: FileType::All,
-            platforms: vec![Platform::All],
+            platforms: &[Platform::All],
             arch: vec![Arch::All],
             arch_ranges: None,
             additional_findings: None,

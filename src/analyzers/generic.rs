@@ -106,7 +106,7 @@ impl GenericAnalyzer {
         precomputed_sha256: Option<String>,
     ) -> AnalysisReport {
         let start = std::time::Instant::now();
-        tracing::info!(
+        tracing::debug!(
             "GenericAnalyzer: Starting analysis of {}",
             file_path.display()
         );
@@ -135,7 +135,7 @@ impl GenericAnalyzer {
             sha256,
             architectures: None,
         };
-        tracing::info!("GenericAnalyzer: Target created in {:?}", start.elapsed());
+        tracing::debug!("GenericAnalyzer: Target created in {:?}", start.elapsed());
 
         let mut report = AnalysisReport::new(target);
 
@@ -191,7 +191,7 @@ impl GenericAnalyzer {
         } else {
             None
         };
-        tracing::info!(
+        tracing::debug!(
             "GenericAnalyzer: Tree-sitter parsing completed in {:?}",
             t_tree.elapsed()
         );
@@ -203,7 +203,7 @@ impl GenericAnalyzer {
             && content.len() <= 4096;
 
         if self.file_type == FileType::Unknown && !allow_unknown_binary_strings {
-            tracing::info!(
+            tracing::debug!(
                 "GenericAnalyzer: Skipping full string extraction and embedded code analysis for unknown file"
             );
         } else {
@@ -212,7 +212,7 @@ impl GenericAnalyzer {
             if tree.is_some() {
                 // Tree-sitter available: use AST-based extraction (more accurate)
                 self.extract_strings(content, tree.as_ref(), &mut report);
-                tracing::info!(
+                tracing::debug!(
                     "GenericAnalyzer: Tree-sitter string extraction completed in {:?}",
                     t_strings.elapsed()
                 );
@@ -237,7 +237,7 @@ impl GenericAnalyzer {
                         fragments,
                     });
                 }
-                tracing::info!(
+                tracing::debug!(
                     "GenericAnalyzer: Used {} stng strings in {:?}",
                     stng_results.len(),
                     t_strings.elapsed()
@@ -259,7 +259,7 @@ impl GenericAnalyzer {
                 );
             report.files.extend(encoded_layers);
             report.findings.extend(plain_findings);
-            tracing::info!(
+            tracing::debug!(
                 "GenericAnalyzer: Embedded code analysis completed in {:?}",
                 t_embedded.elapsed()
             );
@@ -269,7 +269,7 @@ impl GenericAnalyzer {
         let t_paths = std::time::Instant::now();
         crate::path_mapper::analyze_and_link_paths(&mut report);
         crate::env_mapper::analyze_and_link_env_vars(&mut report);
-        tracing::info!(
+        tracing::debug!(
             "GenericAnalyzer: Path/env analysis completed in {:?}",
             t_paths.elapsed()
         );
@@ -277,7 +277,7 @@ impl GenericAnalyzer {
         // Compute basic metrics
         let t_metrics = std::time::Instant::now();
         report.metrics = Some(self.compute_metrics(content));
-        tracing::info!(
+        tracing::debug!(
             "GenericAnalyzer: Metrics computed in {:?}",
             t_metrics.elapsed()
         );
@@ -290,7 +290,7 @@ impl GenericAnalyzer {
             tree.as_ref(),
             None,
         );
-        tracing::info!(
+        tracing::debug!(
             "GenericAnalyzer: Rule evaluation completed in {:?}",
             t_eval.elapsed()
         );

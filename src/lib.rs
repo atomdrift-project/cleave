@@ -784,7 +784,7 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
     let _enter = span.enter();
 
     // Log BEFORE processing to ensure we capture what file causes OOM crashes
-    tracing::info!("Starting analysis");
+    tracing::debug!("Starting analysis");
 
     if !path.exists() {
         anyhow::bail!("Path does not exist: {}", path.display());
@@ -861,13 +861,24 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
     let mismatch = analyzers::check_extension_content_mismatch(path, file_data);
 
     // Extract strings with stng ONCE - used for encoded payloads and passed to analyzers
-    let stng_start = std::time::Instant::now();
-    let opts = analyzers::stng_analysis_opts(4);
-    let stng_strings = stng::extract_strings_with_options(file_data, &opts);
+    // Skip extraction for archive files themselves as they are expected to contain 
+    // binary noise and their contents will be analyzed separately.
+    let (stng_strings, stage_stng_ms) = if matches!(file_type, FileType::Archive | FileType::Jar) {
+        (Vec::new(), 0)
+    } else {
+        let stng_start = std::time::Instant::now();
+        let opts = analyzers::stng_analysis_opts(4);
+        let strings = stng::extract_strings_with_options(file_data, &opts);
+        let elapsed = stng_start.elapsed().as_millis() as u64;
+        (strings, elapsed)
+    };
 
     // Check for encoded payloads (hex, base64, etc.) using stng results
-    let encoded_payloads = extractors::encoded_payload::extract_encoded_payloads(&stng_strings);
-    let stage_stng_ms = stng_start.elapsed().as_millis() as u64;
+    let encoded_payloads = if stng_strings.is_empty() {
+        Vec::new()
+    } else {
+        extractors::encoded_payload::extract_encoded_payloads(&stng_strings)
+    };
 
     // Create unified analysis input - all analyzers receive the same pre-extracted data
     let mut input = analyzers::AnalysisInput::with_payloads(

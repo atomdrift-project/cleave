@@ -9,7 +9,6 @@ use cleave::analyzers::embedded_code_detector::{
 use cleave::analyzers::FileType;
 use cleave::capabilities::CapabilityMapper;
 use cleave::types::binary::StringInfo;
-use cleave::types::StringType;
 use std::sync::Arc;
 use std::sync::Mutex;
 
@@ -31,7 +30,7 @@ fn make_string_info(value: &str) -> StringInfo {
     StringInfo {
         value: value.to_string(),
         offset: Some(0),
-        string_type: StringType::Const,
+        string_type: None,
         encoding: "utf-8".to_string(),
         section: None,
         encoding_chain: Vec::new(),
@@ -143,7 +142,7 @@ fn test_analyze_hex_encoded_javascript() {
     let string_info = StringInfo {
         value: js_code.to_string(),
         offset: Some(0),
-        string_type: StringType::Const,
+        string_type: None,
         encoding: "utf-8".to_string(),
         section: Some("test".to_string()),
         encoding_chain: vec!["hex".to_string()],
@@ -188,7 +187,7 @@ fn test_analyze_plain_embedded_python() {
     let string_info = StringInfo {
         value: py_code.to_string(),
         offset: Some(0x5000),
-        string_type: StringType::Const,
+        string_type: None,
         encoding: "utf-8".to_string(),
         section: Some("test".to_string()),
         encoding_chain: vec![], // No encoding - plain embedded
@@ -229,7 +228,7 @@ fn test_max_depth_limit() {
     let string_info = StringInfo {
         value: js_code.to_string(),
         offset: Some(0),
-        string_type: StringType::Const,
+        string_type: None,
         encoding: "utf-8".to_string(),
         section: Some("test".to_string()),
         encoding_chain: vec!["hex".to_string()],

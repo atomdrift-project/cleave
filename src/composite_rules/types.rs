@@ -343,6 +343,22 @@ impl FileType {
         )
     }
 
+    /// Returns true if this is a binary format (ELF, Mach-O, PE, or compiled bytecode)
+    #[must_use]
+    pub(crate) fn is_binary(&self) -> bool {
+        matches!(
+            self,
+            FileType::Elf
+                | FileType::Macho
+                | FileType::Pe
+                | FileType::Dylib
+                | FileType::So
+                | FileType::Dll
+                | FileType::Class
+                | FileType::Pyc
+        )
+    }
+
     /// Returns a list of all concrete file types (excluding All)
     #[must_use]
     pub(crate) fn all_concrete_variants() -> Vec<FileType> {

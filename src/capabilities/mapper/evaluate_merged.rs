@@ -97,8 +97,13 @@ impl super::CapabilityMapper {
         // Detect file type once
         let file_type = self.detect_file_type(&report.target.file_type);
 
-        // Build section map ONCE for location-constrained matching
-        let section_map = SectionMap::from_binary(binary_data);
+        // Build section map ONCE for location-constrained matching.
+        // Skip parsing for non-binary files to save ~100ms per file.
+        let section_map = if file_type.is_binary() {
+            SectionMap::from_binary(binary_data)
+        } else {
+            SectionMap::empty(binary_data.len() as u64)
+        };
 
         // Use precomputed regex matches if provided, otherwise compute now
         let raw_regex_matches = precomputed_raw_regex
@@ -158,28 +163,39 @@ impl super::CapabilityMapper {
 
         // Build all_strings ONCE — combines report strings, imports, and exports
         let t_strings = std::time::Instant::now();
-        let all_strings = super::build_all_strings(report);
 
-        // Run string matching ONCE
-        let (string_matched_traits, cached_evidence) = if self.string_match_index.has_patterns() {
-            self.string_match_index
-                .find_matches_with_evidence(&all_strings)
-        } else {
-            (FxHashSet::default(), FxHashMap::default())
-        };
+        // Only build and match strings if there is something to match against
+        let (string_matched_traits, cached_evidence, regex_candidates) =
+            if !report.strings.is_empty() || !report.imports.is_empty() || !report.exports.is_empty() {
+                let all_strings = super::build_all_strings(report);
+
+                // Run string matching ONCE
+                let (traits, evidence) = if self.string_match_index.has_patterns() {
+                    self.string_match_index
+                        .find_matches_with_evidence(&all_strings)
+                } else {
+                    (FxHashSet::default(), FxHashMap::default())
+                };
+
+                let candidates = self.string_match_index.find_regex_candidates(&all_strings);
+                (traits, evidence, candidates)
+            } else {
+                (FxHashSet::default(), FxHashMap::default(), FxHashSet::default())
+            };
 
         // Run symbol matching ONCE
-        let all_symbols: Vec<String> = report
-            .imports
-            .iter()
-            .map(|i| i.symbol.clone())
-            .chain(report.exports.iter().map(|e| e.symbol.clone()))
-            .collect();
-        let symbol_matched_traits = self.symbol_match_index.find_matches(&all_symbols);
+        let symbol_matched_traits = if !report.imports.is_empty() || !report.exports.is_empty() {
+            let all_symbols: Vec<String> = report
+                .imports
+                .iter()
+                .map(|i| i.symbol.clone())
+                .chain(report.exports.iter().map(|e| e.symbol.clone()))
+                .collect();
+            self.symbol_match_index.find_matches(&all_symbols)
+        } else {
+            FxHashSet::default()
+        };
 
-        let regex_candidates = self.string_match_index.find_regex_candidates(&all_strings);
-
-        drop(all_strings);
         let _d_strings = t_strings.elapsed();
 
         // Build a seen-IDs set once from existing report findings, then keep it up-to-date

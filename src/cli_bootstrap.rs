@@ -141,8 +141,8 @@ pub(crate) fn init_logging(
             (EnvFilter::from_default_env(), EnvFilter::from_default_env())
         } else if verbose {
             (
-                EnvFilter::new(scoped_filter("trace")),
-                EnvFilter::new(scoped_filter("trace")),
+                EnvFilter::new(scoped_filter("debug")),
+                EnvFilter::new(scoped_filter("debug")),
             )
         } else if is_server {
             (

@@ -127,7 +127,7 @@ impl super::CapabilityMapper {
         if !enable_full_validation && !skip_cache {
             if let Ok(cache_path) = crate::cache::mapper_cache_path() {
                 if cache_path.exists() {
-                    tracing::debug!("Attempting to load mapper from cache: {:?}", cache_path);
+                    tracing::trace!("Attempting to load mapper from cache: {:?}", cache_path);
                     match fs::read(&cache_path) {
                         Ok(mut bytes) => {
                             match simd_json::from_slice::<MapperCacheData>(&mut bytes) {
@@ -172,7 +172,7 @@ impl super::CapabilityMapper {
                                         },
                                     );
                                     let t1 = std::time::Instant::now();
-                                    tracing::debug!(
+                                    tracing::trace!(
                                         "Regex precompilation took {:?} ({} traits, {} composites)",
                                         t1.duration_since(t0),
                                         cache_data.trait_definitions.len(),
@@ -200,7 +200,7 @@ impl super::CapabilityMapper {
                                             },
                                         );
                                     let t2 = std::time::Instant::now();
-                                    tracing::debug!(
+                                    tracing::trace!(
                                         "Index building took {:?} (StringMatchIndex: {} patterns, RawContentRegexIndex: {} patterns)",
                                         t2.duration_since(t1),
                                         string_match_index.total_patterns,
@@ -273,7 +273,7 @@ impl super::CapabilityMapper {
         }
 
         // First, collect all YAML file paths
-        tracing::debug!("Scanning directory for YAML files");
+        tracing::trace!("Scanning directory for YAML files");
         let mut yaml_files: Vec<_> = walkdir::WalkDir::new(dir_path)
             .follow_links(true)
             .into_iter()
@@ -306,7 +306,7 @@ impl super::CapabilityMapper {
 
         // Load all YAML files in parallel, preserving path for prefix calculation
         // Use indexed_map to preserve sorted order
-        tracing::debug!("Parsing YAML files in parallel");
+        tracing::trace!("Parsing YAML files in parallel");
         let results: Vec<_> = yaml_files
             .par_iter()
             .enumerate()
@@ -338,11 +338,11 @@ impl super::CapabilityMapper {
             Err(_) => usize::MAX,
         });
 
-        tracing::debug!("Parsing complete");
+        tracing::trace!("Parsing complete");
         let _t_merge = std::time::Instant::now();
 
         // Merge all results, collecting errors to report all at once
-        tracing::debug!("Merging trait definitions and composite rules");
+        tracing::trace!("Merging trait definitions and composite rules");
         let mut symbol_map = HashMap::new();
         // Use HashMaps during loading for O(1) duplicate detection (will convert to Vec later)
         let mut trait_definitions_map: HashMap<String, TraitDefinition> = HashMap::new();
@@ -957,103 +957,103 @@ impl super::CapabilityMapper {
 
         // Pre-calculate precision for ALL composite rules once
         // Atomic trait precisions are already calculated during parsing
-        tracing::debug!("Validating trait definitions and composite rules");
+        tracing::trace!("Validating trait definitions and composite rules");
         if enable_full_validation {
             let step_start = std::time::Instant::now();
-            tracing::debug!("Step 1c/15: Detecting duplicate traits and composites");
+            tracing::trace!("Step 1c/15: Detecting duplicate traits and composites");
             find_duplicate_traits_and_composites(
                 &trait_definitions,
                 &composite_rules,
                 &mut warnings,
             );
-            tracing::debug!("Step 1c completed in {:?}", step_start.elapsed());
+            tracing::trace!("Step 1c completed in {:?}", step_start.elapsed());
 
             // Detect string pattern duplicates and overlaps
             let step_start = std::time::Instant::now();
-            tracing::debug!("Step 1d/15: Detecting string pattern duplicates and overlaps");
+            tracing::trace!("Step 1d/15: Detecting string pattern duplicates and overlaps");
             find_string_pattern_duplicates(&trait_definitions, &mut warnings);
-            tracing::debug!("Step 1d completed in {:?}", step_start.elapsed());
+            tracing::trace!("Step 1d completed in {:?}", step_start.elapsed());
 
             // Check for regex OR patterns overlapping with exact matches
             let step_start = std::time::Instant::now();
-            tracing::debug!("Step 1e/15: Checking for regex OR patterns overlapping exact matches");
+            tracing::trace!("Step 1e/15: Checking for regex OR patterns overlapping exact matches");
             check_regex_or_overlapping_exact(&trait_definitions, &mut warnings);
-            tracing::debug!("Step 1e completed in {:?}", step_start.elapsed());
+            tracing::trace!("Step 1e completed in {:?}", step_start.elapsed());
 
             let step_start = std::time::Instant::now();
-            tracing::debug!(
+            tracing::trace!(
                 "Step 1e2/15: Checking for overlapping regex patterns with same filetype coverage"
             );
             check_overlapping_regex_patterns(&trait_definitions, &mut warnings);
-            tracing::debug!("Step 1e2 completed in {:?}", step_start.elapsed());
+            tracing::trace!("Step 1e2 completed in {:?}", step_start.elapsed());
 
             // Check for simple regex that should be exact
             let step_start = std::time::Instant::now();
-            tracing::debug!("Step 1f/15: Checking for regex patterns that should be exact");
+            tracing::trace!("Step 1f/15: Checking for regex patterns that should be exact");
             check_regex_should_be_exact(&trait_definitions, &mut warnings);
-            tracing::debug!("Step 1f completed in {:?}", step_start.elapsed());
+            tracing::trace!("Step 1f completed in {:?}", step_start.elapsed());
 
             // Check for same pattern with different types
             let step_start = std::time::Instant::now();
-            tracing::debug!("Step 1g/15: Checking for patterns with conflicting types");
+            tracing::trace!("Step 1g/15: Checking for patterns with conflicting types");
             check_same_string_different_types(&trait_definitions, &mut warnings);
-            tracing::debug!("Step 1g completed in {:?}", step_start.elapsed());
+            tracing::trace!("Step 1g completed in {:?}", step_start.elapsed());
 
             // Detect potentially slow regex patterns that could cause catastrophic backtracking
             let step_start = std::time::Instant::now();
-            tracing::debug!("Step 1h/15: Detecting potentially slow regex patterns");
+            tracing::trace!("Step 1h/15: Detecting potentially slow regex patterns");
             find_slow_regex_patterns(&trait_definitions, &mut warnings);
-            tracing::debug!("Step 1h completed in {:?}", step_start.elapsed());
+            tracing::trace!("Step 1h completed in {:?}", step_start.elapsed());
 
             // Detect unnecessary non-capturing groups in regex patterns
             let step_start = std::time::Instant::now();
-            tracing::debug!("Step 1h2/15: Detecting non-capturing groups in regex patterns");
+            tracing::trace!("Step 1h2/15: Detecting non-capturing groups in regex patterns");
             find_non_capturing_groups(&trait_definitions, &mut warnings);
-            tracing::debug!("Step 1h2 completed in {:?}", step_start.elapsed());
+            tracing::trace!("Step 1h2 completed in {:?}", step_start.elapsed());
 
             // Detect raw patterns on binary types that would be faster as string_value
             let step_start = std::time::Instant::now();
-            tracing::debug!("Step 1h3/15: Detecting raw patterns that should use string_value");
+            tracing::trace!("Step 1h3/15: Detecting raw patterns that should use string_value");
             find_raw_should_use_string_value(&trait_definitions, &mut warnings);
-            tracing::debug!("Step 1h3 completed in {:?}", step_start.elapsed());
+            tracing::trace!("Step 1h3 completed in {:?}", step_start.elapsed());
 
             // Detect string_value patterns on source types that should use raw
             let step_start = std::time::Instant::now();
-            tracing::debug!("Step 1h4/15: Detecting string_value patterns that should use raw");
+            tracing::trace!("Step 1h4/15: Detecting string_value patterns that should use raw");
             find_string_value_should_use_raw(&trait_definitions, &mut warnings);
-            tracing::debug!("Step 1h4 completed in {:?}", step_start.elapsed());
+            tracing::trace!("Step 1h4 completed in {:?}", step_start.elapsed());
 
             // Check for exact patterns contained by substr patterns (redundancy)
             let step_start = std::time::Instant::now();
-            tracing::debug!("Step 1i/15: Checking for exact ⊂ substr containment");
+            tracing::trace!("Step 1i/15: Checking for exact ⊂ substr containment");
             check_exact_contained_by_substr(&trait_definitions, &mut warnings);
-            tracing::debug!("Step 1i completed in {:?}", step_start.elapsed());
+            tracing::trace!("Step 1i completed in {:?}", step_start.elapsed());
 
             // Check for case-insensitive overlaps and subsumption
             let step_start = std::time::Instant::now();
-            tracing::debug!("Step 1j/15: Checking for case-insensitive overlaps");
+            tracing::trace!("Step 1j/15: Checking for case-insensitive overlaps");
             check_case_insensitive_overlaps(&trait_definitions, &mut warnings);
-            tracing::debug!("Step 1j completed in {:?}", step_start.elapsed());
+            tracing::trace!("Step 1j completed in {:?}", step_start.elapsed());
 
             // Check for regex vs literal overlaps (cross-type and containment)
             let step_start = std::time::Instant::now();
-            tracing::debug!("Step 1k/15: Checking for regex vs literal overlaps");
+            tracing::trace!("Step 1k/15: Checking for regex vs literal overlaps");
             check_regex_contains_literal(&trait_definitions, &mut warnings);
-            tracing::debug!("Step 1k completed in {:?}", step_start.elapsed());
+            tracing::trace!("Step 1k completed in {:?}", step_start.elapsed());
 
             // Check for regex alternative subsets and case-insensitive regex overlaps
             let step_start = std::time::Instant::now();
-            tracing::debug!("Step 1l/15: Checking for regex alternative subsets");
+            tracing::trace!("Step 1l/15: Checking for regex alternative subsets");
             check_regex_alternative_subsets(&trait_definitions, &mut warnings);
-            tracing::debug!("Step 1l completed in {:?}", step_start.elapsed());
+            tracing::trace!("Step 1l completed in {:?}", step_start.elapsed());
 
             // Check for basename pattern duplicates
             let step_start = std::time::Instant::now();
-            tracing::debug!("Step 1m/15: Checking for basename pattern duplicates");
+            tracing::trace!("Step 1m/15: Checking for basename pattern duplicates");
             check_basename_pattern_duplicates(&trait_definitions, &mut warnings);
-            tracing::debug!("Step 1m completed in {:?}", step_start.elapsed());
+            tracing::trace!("Step 1m completed in {:?}", step_start.elapsed());
         } else {
-            tracing::debug!(
+            tracing::trace!(
                 "Step 1/15: Skipping precision validation (run 'cleave validate' to enable)"
             );
         }
@@ -1061,7 +1061,7 @@ impl super::CapabilityMapper {
         // Validate trait references in composite rules
         // Cross-directory references must match an existing directory prefix
         // Include both trait definition prefixes AND composite rule prefixes (rules can reference rules)
-        tracing::debug!("Step 2/15: Building known prefixes");
+        tracing::trace!("Step 2/15: Building known prefixes");
         let mut known_prefixes: std::collections::HashSet<String> = trait_definitions
             .iter()
             .filter_map(|t| {
@@ -1095,7 +1095,7 @@ impl super::CapabilityMapper {
                 prefix_hierarchy.insert(parts[..i].join("/"));
             }
         }
-        tracing::debug!(
+        tracing::trace!(
             "Built prefix hierarchy with {} entries from {} base prefixes",
             prefix_hierarchy.len(),
             known_prefixes.len()
@@ -1106,7 +1106,7 @@ impl super::CapabilityMapper {
         if enable_full_validation {
             // Check for unknown subdirectories in taxonomy tiers
             // According to TAXONOMY.md, only specific subdirectories are allowed
-            tracing::debug!("Step 2b/15: Validating directory whitelist");
+            tracing::trace!("Step 2b/15: Validating directory whitelist");
             if let Err(errors) = validate_directory_structure(dir_path) {
                 eprintln!(
                     "\n❌ ERROR: {} unknown subdirectories found in taxonomy tiers",
@@ -1124,7 +1124,7 @@ impl super::CapabilityMapper {
 
             // Check for taxonomy violations: platform/language names as directories
             // According to TAXONOMY.md, languages should be YAML filenames, not directories
-            tracing::debug!("Step 3/15: Checking for platform-named directories");
+            tracing::trace!("Step 3/15: Checking for platform-named directories");
             let platform_dir_violations = find_platform_named_directories(&dir_list);
             if !platform_dir_violations.is_empty() {
                 eprintln!(
@@ -1152,7 +1152,7 @@ impl super::CapabilityMapper {
 
             // Check for duplicate second-level directories across namespaces
             // According to TAXONOMY.md, directories should not be repeated across metadata/, micro-behaviors/, objectives/, known/
-            tracing::debug!("Step 3b/15: Checking for duplicate second-level directories");
+            tracing::trace!("Step 3b/15: Checking for duplicate second-level directories");
             let duplicate_dirs = find_duplicate_second_level_directories(&dir_list);
             if !duplicate_dirs.is_empty() {
                 eprintln!(
@@ -1183,7 +1183,7 @@ impl super::CapabilityMapper {
             }
 
             // Check for banned meaningless directory segments
-            tracing::debug!("Step 4/15: Checking for banned directory segments");
+            tracing::trace!("Step 4/15: Checking for banned directory segments");
             let banned_segment_violations = find_banned_directory_segments(&dir_list);
             if !banned_segment_violations.is_empty() {
                 eprintln!(
@@ -1205,7 +1205,7 @@ impl super::CapabilityMapper {
             // This check had too many false positives (e.g., httpx library name)
 
             // Check for directory names that duplicate their parent
-            tracing::debug!("Step 5/15: Checking for parent duplicate segments");
+            tracing::trace!("Step 5/15: Checking for parent duplicate segments");
             let parent_dup_violations = find_parent_duplicate_segments(&dir_list);
             if !parent_dup_violations.is_empty() {
                 eprintln!(
@@ -1224,7 +1224,7 @@ impl super::CapabilityMapper {
             }
 
             // Check for depth violations: micro-behaviors/ and objectives/ files must be 3-4 subdirectories deep
-            tracing::debug!("Step 6/15: Checking for depth violations");
+            tracing::trace!("Step 6/15: Checking for depth violations");
             let relative_paths: Vec<String> = yaml_files
                 .iter()
                 .filter_map(|p| {
@@ -1269,7 +1269,7 @@ impl super::CapabilityMapper {
             }
 
             // Check for invalid characters in trait/rule IDs
-            tracing::debug!("Step 7/15: Checking for invalid trait IDs");
+            tracing::trace!("Step 7/15: Checking for invalid trait IDs");
             let invalid_ids =
                 find_invalid_trait_ids(&trait_definitions, &composite_rules, &rule_source_files);
             if !invalid_ids.is_empty() {
@@ -1304,7 +1304,7 @@ impl super::CapabilityMapper {
             }
         } // End of enable_full_validation block for steps 3-7
 
-        tracing::debug!("Step 8/15: Validating trait references in composite rules");
+        tracing::trace!("Step 8/15: Validating trait references in composite rules");
         let mut invalid_refs = Vec::new();
         for rule in &composite_rules {
             let trait_refs = collect_trait_refs_from_rule(rule);
@@ -1378,11 +1378,11 @@ impl super::CapabilityMapper {
 
         // Skip regex precompilation - regexes will be compiled on demand during evaluation
         // This saves ~150ms at startup
-        tracing::debug!("Step 9/15: Skipping regex precompilation (lazy mode)");
+        tracing::trace!("Step 9/15: Skipping regex precompilation (lazy mode)");
 
         // Validate exact trait ID references
         // Build set of all valid trait IDs (both atomic traits and composite rules)
-        tracing::debug!("Step 10/15: Building valid trait IDs set");
+        tracing::trace!("Step 10/15: Building valid trait IDs set");
         let mut valid_trait_ids: FxHashSet<String> =
             trait_definitions.iter().map(|t| t.id.clone()).collect();
         for rule in &composite_rules {
@@ -1410,7 +1410,7 @@ impl super::CapabilityMapper {
         if enable_full_validation {
             // Validate that composite rules don't reference metadata/internal/ paths
             // Internal paths are for ML usage only and must not be used in composite rules
-            tracing::debug!("Step 11/15: Checking for internal path references");
+            tracing::trace!("Step 11/15: Checking for internal path references");
             let mut internal_refs = Vec::new();
             for rule in &composite_rules {
                 let trait_refs = collect_trait_refs_from_rule(rule);
@@ -1455,7 +1455,7 @@ impl super::CapabilityMapper {
             // Validate that micro-behaviors/ rules do not reference objectives/ rules
             // Cap contains micro-behaviors, obj contains larger behaviors
             // Cap rules should be independent of obj rules
-            tracing::debug!("Step 12/15: Checking for micro-behaviors/obj violations");
+            tracing::trace!("Step 12/15: Checking for micro-behaviors/obj violations");
             let cap_obj_violations =
                 find_cap_obj_violations(&trait_definitions, &composite_rules, &rule_source_files);
 
@@ -1488,7 +1488,7 @@ impl super::CapabilityMapper {
 
             // Validate that micro-behaviors/ rules are never hostile
             // Hostile criticality requires objective-level evidence and belongs in objectives/
-            tracing::debug!("Step 13/15: Checking for hostile cap rules");
+            tracing::trace!("Step 13/15: Checking for hostile cap rules");
             let hostile_cap_rules =
                 find_hostile_cap_rules(&trait_definitions, &composite_rules, &rule_source_files);
 
@@ -1522,7 +1522,7 @@ impl super::CapabilityMapper {
 
             // Validate that metadata/ rules are never hostile
             // Hostile criticality requires intent inference and belongs in objectives/
-            tracing::debug!("Step 13a/15: Checking for hostile metadata rules");
+            tracing::trace!("Step 13a/15: Checking for hostile metadata rules");
             let hostile_meta_rules =
                 find_hostile_meta_rules(&trait_definitions, &composite_rules, &rule_source_files);
 
@@ -1553,7 +1553,7 @@ impl super::CapabilityMapper {
             }
 
             // Validate that metadata/ rules do not reference non-metadata tiers
-            tracing::debug!("Step 13b/15: Checking for metadata cross-tier references");
+            tracing::trace!("Step 13b/15: Checking for metadata cross-tier references");
             let meta_cross_tier = find_metadata_cross_tier_refs(
                 &trait_definitions,
                 &composite_rules,
@@ -1568,7 +1568,7 @@ impl super::CapabilityMapper {
             }
 
             // Validate that micro-behaviors/ rules do not reference well-known/ rules
-            tracing::debug!("Step 13c/15: Checking for micro-behaviors/well-known violations");
+            tracing::trace!("Step 13c/15: Checking for micro-behaviors/well-known violations");
             let cap_wk_violations = find_cap_wellknown_violations(
                 &trait_definitions,
                 &composite_rules,
@@ -1606,7 +1606,7 @@ impl super::CapabilityMapper {
 
             // Validate that malware/ is not used as a subcategory of objectives/ or micro-behaviors/
             // Malware-specific signatures belong in known/malware/ per TAXONOMY.md
-            tracing::debug!("Step 13b/15: Checking for misplaced malware/ subcategories");
+            tracing::trace!("Step 13b/15: Checking for misplaced malware/ subcategories");
             let malware_violations = find_malware_subcategory_violations(
                 &trait_definitions,
                 &composite_rules,
@@ -1632,7 +1632,7 @@ impl super::CapabilityMapper {
             }
 
             // Validate well-known/ category whitelist
-            tracing::debug!("Checking well-known/ category whitelist");
+            tracing::trace!("Checking well-known/ category whitelist");
             let wk_category_violations = find_wellknown_category_violations(&dir_list);
             if !wk_category_violations.is_empty() {
                 eprintln!(
@@ -1651,7 +1651,7 @@ impl super::CapabilityMapper {
             }
 
             // Validate well-known/ leaf directory names for generic technique words
-            tracing::debug!("Checking well-known/ leaf directory names");
+            tracing::trace!("Checking well-known/ leaf directory names");
             let generic_leaf_violations = find_generic_wellknown_leaf_dirs(&dir_list);
             if !generic_leaf_violations.is_empty() {
                 eprintln!(
@@ -1670,7 +1670,7 @@ impl super::CapabilityMapper {
             }
 
             // Validate well-known/ composites have local anchoring (family-specific refs)
-            tracing::debug!("Checking well-known/ composite anchoring");
+            tracing::trace!("Checking well-known/ composite anchoring");
             let unanchored =
                 find_unanchored_wellknown_composites(&composite_rules, &rule_source_files);
             if !unanchored.is_empty() {
@@ -1701,7 +1701,7 @@ impl super::CapabilityMapper {
             }
 
             // Validate well-known/ files are not composite-only (should have atomic traits)
-            tracing::debug!("Checking for composite-only well-known/ files");
+            tracing::trace!("Checking for composite-only well-known/ files");
             let composite_only =
                 find_composite_only_wellknown_files(&trait_definitions, &composite_rules);
             if !composite_only.is_empty() {
@@ -1726,7 +1726,7 @@ impl super::CapabilityMapper {
             }
 
             // Validate well-known/ atomic traits have specific file type filters (not just `all`)
-            tracing::debug!("Checking well-known/ for over-broad file type filters");
+            tracing::trace!("Checking well-known/ for over-broad file type filters");
             let wk_unscoped_ft =
                 find_wellknown_unscoped_filetypes(&trait_definitions, &rule_source_files);
             if !wk_unscoped_ft.is_empty() {
@@ -1753,7 +1753,7 @@ impl super::CapabilityMapper {
             }
 
             // Validate well-known/ atomic traits have specific platform filters (not just `all`)
-            tracing::debug!("Checking well-known/ for over-broad platform filters");
+            tracing::trace!("Checking well-known/ for over-broad platform filters");
             let wk_unscoped_plat =
                 find_wellknown_unscoped_platforms(&trait_definitions, &rule_source_files);
             if !wk_unscoped_plat.is_empty() {
@@ -1778,7 +1778,7 @@ impl super::CapabilityMapper {
             }
 
             // Validate well-known/ atomic traits have file size bounds
-            tracing::debug!("Checking well-known/ for missing size filters");
+            tracing::trace!("Checking well-known/ for missing size filters");
             let wk_no_size =
                 find_wellknown_missing_size_filter(&trait_definitions, &rule_source_files);
             if !wk_no_size.is_empty() {
@@ -1798,7 +1798,7 @@ impl super::CapabilityMapper {
             }
 
             // Validate well-known/ binary-targeting traits have a section filter
-            tracing::debug!("Checking well-known/ binary traits for missing section filters");
+            tracing::trace!("Checking well-known/ binary traits for missing section filters");
             let wk_no_section =
                 find_wellknown_missing_section_filter(&trait_definitions, &rule_source_files);
             if !wk_no_section.is_empty() {
@@ -1819,7 +1819,7 @@ impl super::CapabilityMapper {
             }
 
             // Recommend section filters for metadata/ binary-targeting traits
-            tracing::debug!("Checking metadata/ binary traits for missing section filters");
+            tracing::trace!("Checking metadata/ binary traits for missing section filters");
             let meta_no_section =
                 find_meta_missing_section_filter(&trait_definitions, &rule_source_files);
             if !meta_no_section.is_empty() {
@@ -1840,7 +1840,7 @@ impl super::CapabilityMapper {
             }
 
             // Validate that all hex conditions targeting binary file types specify a section
-            tracing::debug!("Checking hex conditions targeting binaries for missing section");
+            tracing::trace!("Checking hex conditions targeting binaries for missing section");
             let hex_no_section = find_hex_binary_missing_section(&trait_definitions);
             if !hex_no_section.is_empty() {
                 eprintln!(
@@ -1867,7 +1867,7 @@ impl super::CapabilityMapper {
 
             // Validate that `any:` clauses don't have 3+ traits from the same external directory
             // Recommend using directory references instead for better maintainability
-            tracing::debug!("Step 14/15: Checking for redundant any refs");
+            tracing::trace!("Step 14/15: Checking for redundant any refs");
             let mut redundant_any_refs = Vec::new();
             for rule in &composite_rules {
                 let violations = find_redundant_any_refs(rule);
@@ -1916,7 +1916,7 @@ impl super::CapabilityMapper {
 
             // Validate that `any:` and `all:` clauses don't have exactly 1 item
             // Single-item clauses are pointless wrappers that add complexity
-            tracing::debug!("Step 15/15: Checking for single-item clauses");
+            tracing::trace!("Step 15/15: Checking for single-item clauses");
             let mut single_item_clauses = Vec::new();
             for rule in &composite_rules {
                 let violations = find_single_item_clauses(rule);
@@ -3063,10 +3063,10 @@ impl super::CapabilityMapper {
             }
         } // End of enable_full_validation block for steps 11-15 and post-step validations
 
-        tracing::debug!("Validation complete");
+        tracing::trace!("Validation complete");
 
         // Build all indexes in parallel for better performance
-        tracing::debug!("Building trait indexes (parallel)");
+        tracing::trace!("Building trait indexes (parallel)");
         let (((trait_index, string_match_index), symbol_match_index), raw_regex_result) =
             rayon::join(
                 || {
@@ -3088,7 +3088,7 @@ impl super::CapabilityMapper {
                 return Err(anyhow::anyhow!(errors.join("\n")));
             }
         };
-        tracing::debug!("Indexes built successfully");
+        tracing::trace!("Indexes built successfully");
 
         // Parse errors are fatal - print all and exit if any exist
         if !parse_errors.is_empty() {

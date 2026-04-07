@@ -1040,7 +1040,7 @@ pub(crate) fn process_all_strings_with_host(
     let t_start = std::time::Instant::now();
     let total_string_bytes: usize = strings.iter().map(|s| s.value.len()).sum();
     let max_string_len = strings.iter().map(|s| s.value.len()).max().unwrap_or(0);
-    tracing::debug!(
+    tracing::trace!(
         "embedded_code_detector: Processing {} strings (total {} bytes, max {} bytes)",
         strings.len(),
         total_string_bytes,
@@ -1168,7 +1168,7 @@ pub(crate) fn process_all_strings_with_host(
         }
     }
 
-    tracing::info!(
+    tracing::debug!(
         "embedded_code_detector: Processed {} strings in {:?}, detected {} as code, analyzed {}",
         detection_attempts,
         t_start.elapsed(),

@@ -4,6 +4,7 @@
 //! the nested sub_reports approach. Each file (including archive members and
 //! decoded payloads) gets its own FileAnalysis entry.
 
+use rustc_hash::FxHashMap;
 use serde::{Deserialize, Serialize};
 
 use super::binary::{Export, Function, Import, Section, StringInfo, SyscallInfo, YaraMatch};
@@ -199,7 +200,7 @@ impl FileAnalysis {
         }
 
         let mut counts = FindingCounts::default();
-        let mut raw_score = 0.0_f32;
+        let mut scores_by_group: FxHashMap<String, f32> = FxHashMap::default();
 
         for finding in &self.findings {
             match finding.crit {
@@ -208,10 +209,26 @@ impl FileAnalysis {
                 Criticality::Notable => counts.notable += 1,
                 _ => {}
             }
-            raw_score += finding.crit.score_weight() as f32 * finding.conf;
+
+            let score = finding.crit.score_weight() as f32 * finding.conf;
+
+            // Group by top 3 directory components
+            // e.g., "objectives/well-known/malware/trickbot" -> "objectives/well-known/malware"
+            let base = finding.id.split("::").next().unwrap_or(&finding.id);
+            let group_id = base
+                .split('/')
+                .take(3)
+                .collect::<Vec<_>>()
+                .join("/");
+
+            let entry = scores_by_group.entry(group_id).or_insert(0.0);
+            if score > *entry {
+                *entry = score;
+            }
         }
 
-        self.score = raw_score.ceil() as u32;
+        let total_score: f32 = scores_by_group.values().sum();
+        self.score = total_score.ceil() as u32;
 
         self.counts = if counts.hostile > 0 || counts.suspicious > 0 || counts.notable > 0 {
             Some(counts)
@@ -639,23 +656,55 @@ mod tests {
         );
 
         file.findings.push(
-            Finding::capability("test/hostile".to_string(), "Test".to_string(), 0.9)
+            Finding::capability("test/hostile/a".to_string(), "Test".to_string(), 0.9)
                 .with_criticality(Criticality::Hostile),
         );
 
         file.findings.push(
-            Finding::capability("test/suspicious".to_string(), "Test".to_string(), 0.8)
+            Finding::capability("test/suspicious/b".to_string(), "Test".to_string(), 0.8)
                 .with_criticality(Criticality::Suspicious),
         );
 
         file.compute_summary();
 
-        // ceil(hostile(120)*0.9) + ceil(suspicious(40)*0.8) = 108+32 = 140
+        // Different top-3 paths: "test/hostile/a" and "test/suspicious/b"
+        // Both contribute: ceil(120*0.9) + ceil(40*0.8) = 108 + 32 = 140
         assert_eq!(file.score, 140);
         let counts = file.counts.unwrap();
         assert_eq!(counts.hostile, 1);
         assert_eq!(counts.suspicious, 1);
         assert_eq!(counts.notable, 0);
+    }
+
+    #[test]
+    fn test_score_grouping() {
+        let mut file = FileAnalysis::new(
+            0,
+            "test.py".to_string(),
+            "python".to_string(),
+            "abc123".to_string(),
+            100,
+        );
+
+        // Same top-3 path: "test/foo/bar"
+        file.findings.push(
+            Finding::capability("test/foo/bar/a".to_string(), "Test".to_string(), 0.9)
+                .with_criticality(Criticality::Hostile),
+        );
+
+        file.findings.push(
+            Finding::capability("test/foo/bar/b".to_string(), "Test".to_string(), 0.8)
+                .with_criticality(Criticality::Suspicious),
+        );
+
+        file.compute_summary();
+
+        // Same top-3 path: only the highest contributes
+        // ceil(120*0.9) = 108
+        assert_eq!(file.score, 108);
+        let counts = file.counts.unwrap();
+        assert_eq!(counts.hostile, 1);
+        assert_eq!(counts.suspicious, 1);
     }
 
     #[test]

@@ -105,8 +105,8 @@ fn create_test_context<'a>(report: &'a AnalysisReport, data: &'a [u8]) -> Evalua
         ast_kind_cache: None,
         report,
         binary_data: data,
-        file_type: FileType::Elf,
-        platforms: vec![Platform::Linux],
+        file_type: FileType::All,
+        platforms: &[Platform::Linux],
         arch: vec![Arch::All],
         arch_ranges: None,
         additional_findings: None,
@@ -2087,7 +2087,7 @@ fn test_eval_string_section_offset_with_section_map() {
     );
 
     let mut ctx = create_test_context(&report, &data);
-    ctx.section_map = Some(section_map);
+    ctx.section_map = Some(&section_map);
 
     // section + section_offset_range covering .text[0..0x200) — should match MAGIC
     let substr = "MAGIC".to_string();
@@ -2175,7 +2175,7 @@ fn test_eval_raw_section_offset_range() {
     let section_map = SectionMap::from_sections_and_size(vec![(".text", 0x1000, 0x2000)], 0x3000);
 
     let mut ctx = create_test_context(&report, &data);
-    ctx.section_map = Some(section_map);
+    ctx.section_map = Some(&section_map);
 
     // section_offset_range [0, 0x200) in .text — should find ALPHA but not BETA
     let location = ContentLocationParams {

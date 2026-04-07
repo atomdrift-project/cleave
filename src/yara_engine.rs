@@ -1198,10 +1198,10 @@ impl YaraEngine {
             if let Some(rules) = self.tiers.get(tier) {
                 let count = rules.iter().count();
                 total_rules += count;
-                tracing::info!(tier = tier.label(), count, "YARA tier rule count");
+                tracing::debug!(tier = tier.label(), count, "YARA tier rule count");
             }
         }
-        tracing::info!(
+        tracing::debug!(
             total = total_rules,
             tiers = tiers_to_scan.len(),
             "YARA scan starting"
@@ -1282,7 +1282,7 @@ impl YaraEngine {
                 }
             }
         }
-        tracing::info!(
+        tracing::debug!(
             elapsed_ms = scan_start.elapsed().as_millis() as u64,
             tiers = tiers_to_scan.len(),
             matches = yara_matches.len(),

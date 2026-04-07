@@ -24,7 +24,7 @@ fn create_test_context(report: AnalysisReport, binary_data: Vec<u8>) -> Evaluati
         report: Box::leak(Box::new(report)),
         binary_data: Box::leak(binary_data.into_boxed_slice()),
         file_type: FileType::All,
-        platforms: vec![Platform::All],
+        platforms: &[Platform::All],
         arch: vec![Arch::All],
         arch_ranges: None,
         additional_findings: None,

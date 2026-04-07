@@ -30,7 +30,7 @@ fn create_test_context<'a>(
         report,
         binary_data: data,
         file_type,
-        platforms: vec![Platform::Linux],
+        platforms: &[Platform::Linux],
         arch: vec![Arch::All],
         arch_ranges: None,
         additional_findings: None,

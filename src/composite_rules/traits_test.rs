@@ -68,7 +68,7 @@ fn create_test_context(report: AnalysisReport, binary_data: Vec<u8>) -> Evaluati
         report: Box::leak(Box::new(report)),
         binary_data: Box::leak(binary_data.into_boxed_slice()),
         file_type: FileType::All,
-        platforms: vec![Platform::All],
+        platforms: &[Platform::All],
         arch: vec![Arch::All],
         arch_ranges: None,
         additional_findings: None,
@@ -592,7 +592,7 @@ fn test_platform_filter_match() {
     });
 
     let mut ctx = create_test_context(report, vec![]);
-    ctx.platforms = vec![Platform::Linux]; // Context has Linux
+    ctx.platforms = &[Platform::Linux]; // Context has Linux
 
     let result = trait_def.evaluate(&ctx);
 
@@ -621,7 +621,7 @@ fn test_platform_filter_no_match() {
     });
 
     let mut ctx = create_test_context(report, vec![]);
-    ctx.platforms = vec![Platform::Windows]; // No intersection
+    ctx.platforms = &[Platform::Windows]; // No intersection
 
     let result = trait_def.evaluate(&ctx);
 
@@ -653,7 +653,7 @@ fn test_platform_all_matches_everything() {
     });
 
     let mut ctx = create_test_context(report, vec![]);
-    ctx.platforms = vec![Platform::Windows];
+    ctx.platforms = &[Platform::Windows];
 
     let result = trait_def.evaluate(&ctx);
 
@@ -860,7 +860,7 @@ fn test_arch_clamp_range_fat_binary() {
     let report = create_report_with_size(200000);
     let binary_data = vec![0u8; 200000];
     let mut ctx = create_test_context(report, binary_data);
-    ctx.arch_ranges = Some(vec![
+    ctx.arch_ranges = Some(&[
         (Arch::X86_64, 0..100000),
         (Arch::Aarch64, 100000..200000),
     ]);

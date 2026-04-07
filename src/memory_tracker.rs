@@ -5,7 +5,7 @@
 
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 /// Global memory statistics tracker
 #[derive(Debug)]
@@ -145,7 +145,7 @@ pub fn current_rss() -> Option<u64> {
 pub fn log_before_file_processing(file_path: &str, file_size: u64) {
     let current_rss = current_rss();
 
-    info!(
+    debug!(
         file_path = file_path,
         file_size_mb = file_size / 1024 / 1024,
         current_rss_mb = current_rss.map(|r| r / 1024 / 1024),
@@ -180,7 +180,7 @@ pub fn log_after_file_processing(file_path: &str, file_size: u64, duration: Dura
 
     let jemalloc = jemalloc_stats();
 
-    info!(
+    debug!(
         file_path = file_path,
         file_size_mb = file_size / 1024 / 1024,
         duration_ms = duration.as_millis(),

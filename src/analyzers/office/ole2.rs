@@ -82,14 +82,6 @@ pub(crate) struct DocumentMetadata {
     pub last_save_time: Option<String>,
 }
 
-/// OLE2 magic bytes: D0 CF 11 E0 A1 B1 1A E1
-pub(crate) const OLE2_MAGIC: [u8; 8] = [0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1];
-
-/// Check if data starts with OLE2 magic bytes.
-pub(crate) fn is_ole2(data: &[u8]) -> bool {
-    data.len() >= 8 && data[..8] == OLE2_MAGIC
-}
-
 /// Parse an OLE2 compound document.
 pub(crate) fn parse_ole2(data: &[u8]) -> Result<Ole2Document> {
     let cursor = Cursor::new(data);
@@ -460,16 +452,6 @@ fn read_property_string(section: &[u8], offset: usize) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_is_ole2() {
-        assert!(is_ole2(&OLE2_MAGIC));
-        assert!(is_ole2(&[
-            0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1, 0x00
-        ]));
-        assert!(!is_ole2(&[0x00; 8]));
-        assert!(!is_ole2(&[0xD0, 0xCF])); // too short
-    }
 
     #[test]
     fn test_detect_subtype() {

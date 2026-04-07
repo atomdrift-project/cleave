@@ -11,7 +11,7 @@ default-run = "cleave"
 workspace = true
 
 [workspace]
-members = [".", "crates/scpt", "crates/malecule", "crates/sysmem", "cleave-macros"]
+members = [".", "crates/scpt", "crates/malecule", "crates/sysmem", "crates/fileid", "cleave-macros"]
 
 # Strict but pragmatic lints - similar to the Rust project itself
 [workspace.lints.rust]
@@ -79,6 +79,9 @@ cfb = "0.10"  # Microsoft OLE2/CFBF compound document parsing
 lnk = "0.6"  # Windows Shell Link (.lnk) parsing
 png = "0.17"  # PNG image parsing for steganography detection
 jpeg-decoder = "0.3"  # JPEG image parsing for steganography detection
+
+# File format identification
+fileid = { path = "crates/fileid", features = ["serde"] }
 
 # AppleScript parsing
 scpt = { path = "crates/scpt" }

@@ -72,13 +72,13 @@ fn test_analyze_json_output() {
 
     fs::write(&script_path, "#!/bin/bash\necho 'hello'\n").unwrap();
 
-    // JSON Lines format outputs: {"type":"file",...} followed by {"type":"summary",...}
+    // Compact v4 format: single JSON object with "v" and "fs" (files array)
     isolated_cleave_cmd()
         .args(["--json", "analyze", script_path.to_str().unwrap()])
         .assert()
         .success()
-        .stdout(predicate::str::contains(r#""type":"file""#))
-        .stdout(predicate::str::contains(r#""type":"summary""#));
+        .stdout(predicate::str::contains(r#""v":"4""#))
+        .stdout(predicate::str::contains(r#""fs":[{"#));
 }
 
 /// Test analyze command with --format json output (single report object)
@@ -97,8 +97,8 @@ fn test_analyze_format_json_output() {
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
     let json: serde_json::Value = serde_json::from_str(&stdout).expect("valid JSON object");
-    assert!(json.get("version").is_some());
-    assert!(json.get("files").is_some());
+    assert!(json.get("v").is_some());
+    assert!(json.get("fs").is_some());
 }
 
 /// Test analyze command with output to file (JSON Lines format)
@@ -126,10 +126,10 @@ fn test_analyze_output_to_file() {
     // Note: "Results written to" message is only printed for Terminal format, not JSON
     // The success assertion above confirms the command succeeded
 
-    // Verify output file was created and contains JSON Lines format
+    // Verify output file was created and contains v4 compact format
     let content = fs::read_to_string(&output_path).unwrap();
-    assert!(content.contains(r#""type":"file""#));
-    assert!(content.contains(r#""type":"summary""#));
+    assert!(content.contains(r#""v":"4""#));
+    assert!(content.contains(r#""fs":["#));
 }
 
 /// Test analyze command with empty directory
@@ -293,7 +293,7 @@ fn test_analyze_directory_json_output() {
         .args(["--json", "analyze", temp_dir.path().to_str().unwrap()])
         .assert()
         .success()
-        .stdout(predicate::str::contains(r#""type":"file""#));
+        .stdout(predicate::str::contains(r#""v":"4""#));
 }
 
 /// Test that --yara flag enables YARA (deprecated feature, disabled by default)
@@ -556,25 +556,28 @@ fn test_system_binary_false_positive_sanity() {
     assert!(output.status.success(), "cleave exited with failure");
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    let file_line = stdout
-        .lines()
-        .find(|l| l.contains(r#""type":"file""#))
-        .unwrap_or_else(|| panic!("no file entry in JSONL output for {binary}"));
+    let report: serde_json::Value =
+        serde_json::from_str(&stdout).expect("invalid JSON output");
 
-    let file_entry: serde_json::Value =
-        serde_json::from_str(file_line).expect("invalid JSON in file entry");
+    let file_entry = &report["fs"][0];
+    assert!(
+        file_entry.is_object(),
+        "no file entry in v4 output for {binary}"
+    );
 
-    let findings = file_entry["findings"]
-        .as_array()
-        .expect("findings should be an array");
+    let findings = file_entry
+        .get("ds")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
 
     let mut notable_dirs = HashSet::new();
     let mut suspicious = 0u32;
     let mut hostile = 0u32;
 
-    for finding in findings {
-        let crit = finding.get("crit").and_then(|v| v.as_str());
-        let id = finding["id"].as_str().unwrap_or("");
+    for finding in &findings {
+        let crit = finding.get("cr").and_then(|v| v.as_str());
+        let id = finding.get("i").and_then(|v| v.as_str()).unwrap_or("");
 
         let subdir = id.split("::").next().unwrap_or(id);
 

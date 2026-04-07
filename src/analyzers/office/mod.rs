@@ -914,11 +914,7 @@ impl Analyzer for OfficeAnalyzer {
 
     fn analyze(&self, file_path: &Path) -> Result<AnalysisReport> {
         let data = std::fs::read(file_path)?;
-        let file_type = if ole2::is_ole2(&data) {
-            FileType::OleDoc
-        } else {
-            FileType::Ooxml
-        };
+        let file_type = crate::analyzers::detect_file_type_from_data(file_path, &data);
         Ok(self.analyze_office(file_path, &data, &file_type, self.cancellation.as_ref()))
     }
 

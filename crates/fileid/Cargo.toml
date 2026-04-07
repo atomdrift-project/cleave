@@ -1,0 +1,30 @@
+[package]
+name = "fileid"
+version = "0.1.0"
+edition = "2021"
+authors = ["The Atomdrift Project"]
+description = "Fast file format identification by magic bytes, shebangs, and extensions"
+license = "Apache-2.0"
+
+[lints]
+workspace = true
+
+[dependencies]
+aho-corasick = "1"
+memchr = "2"
+
+[features]
+default = []
+serde = ["dep:serde"]
+
+[dependencies.serde]
+version = "1"
+features = ["derive"]
+optional = true
+
+[dev-dependencies]
+criterion = { version = "0.5", features = ["html_reports"] }
+
+[[bench]]
+name = "detect"
+harness = false

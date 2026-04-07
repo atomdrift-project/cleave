@@ -332,240 +332,21 @@ pub trait Analyzer {
     fn can_analyze(&self, file_path: &Path) -> bool;
 }
 
-/// Detect file type from path/extension only (no file access needed)
-/// This is useful for archive entries that don't exist on disk
+
+/// Detect file type from path/extension only (no file access needed).
 #[must_use]
+#[inline]
 pub(crate) fn detect_file_type_from_path(file_path: &Path) -> FileType {
-    // Check by filename first (for manifest files)
-    if let Some(file_name) = file_path.file_name().and_then(|n| n.to_str()) {
-        if file_name.eq_ignore_ascii_case("package.json") {
-            return FileType::PackageJson;
-        }
-        if file_name.eq_ignore_ascii_case("composer.json") {
-            return FileType::ComposerJson;
-        }
-        if file_name.eq_ignore_ascii_case("cargo.toml") {
-            return FileType::CargoToml;
-        }
-        if file_name.eq_ignore_ascii_case("pyproject.toml") {
-            return FileType::PyProjectToml;
-        }
-        if file_name.eq_ignore_ascii_case("pkg-info") || file_name.eq_ignore_ascii_case("metadata")
-        {
-            return FileType::PkgInfo;
-        }
-        if file_name.eq_ignore_ascii_case("meta.json")
-            || file_name.eq_ignore_ascii_case("metadata.json")
-        {
-            return FileType::PkgInfo;
-        }
-        // Note: manifest.json detection requires content inspection for Chrome manifests,
-        // so we can't reliably detect ChromeManifest from path alone - it will be detected
-        // during content-based analysis if the file is read
-        if file_name.eq_ignore_ascii_case("extension.vsixmanifest")
-            || (file_name.len() >= 13
-                && file_name[file_name.len() - 13..].eq_ignore_ascii_case(".vsixmanifest"))
-        {
-            return FileType::VsixManifest;
-        }
-        // GitHub Actions composite action manifests (action.yml / action.yaml at any path depth)
-        if file_name.eq_ignore_ascii_case("action.yml")
-            || file_name.eq_ignore_ascii_case("action.yaml")
-        {
-            return FileType::GithubActions;
-        }
-    }
-
-    // Check for GitHub Actions workflow files
-    let path_str = file_path.to_string_lossy();
-    let path_bytes = path_str.as_bytes();
-
-    let ends_with_ci = |ext: &[u8]| -> bool {
-        if path_bytes.len() < ext.len() {
-            return false;
-        }
-        path_bytes[path_bytes.len() - ext.len()..].eq_ignore_ascii_case(ext)
-    };
-
-    if (path_str.contains(".github/workflows/") || path_str.contains(".github\\workflows\\"))
-        && (ends_with_ci(b".yml") || ends_with_ci(b".yaml"))
-    {
-        return FileType::GithubActions;
-    }
-
-    // Check archives by path pattern
-    if ends_with_ci(b".jar") || ends_with_ci(b".war") || ends_with_ci(b".ear") {
-        return FileType::Jar;
-    }
-    if ends_with_ci(b".tar.gz")
-        || ends_with_ci(b".tgz")
-        || ends_with_ci(b".tar.bz2")
-        || ends_with_ci(b".tar.xz")
-        || ends_with_ci(b".tar.zst")
-        || ends_with_ci(b".tar")
-    {
-        return FileType::Archive;
-    }
-
-    if let Some(ext) = file_path.extension().and_then(|e| e.to_str()) {
-        let mut ext_buf = [0u8; 16];
-        if ext.len() < ext_buf.len() {
-            ext_buf[..ext.len()].copy_from_slice(ext.as_bytes());
-            ext_buf[..ext.len()].make_ascii_lowercase();
-            let ext_lower = std::str::from_utf8(&ext_buf[..ext.len()]).unwrap_or("");
-
-            match ext_lower {
-                "sh" | "bash" | "ksh" | "zsh" | "csh" | "tcsh" | "dash" => return FileType::Shell,
-                "py" => return FileType::Python,
-                "js" | "mjs" | "cjs" | "jsx" => return FileType::JavaScript,
-                "ts" | "tsx" | "mts" | "cts" => return FileType::TypeScript,
-                // Erlang source/header files are text, but we don't have a dedicated analyzer.
-                // Mark them known here so they don't fall through to JavaScript heuristics.
-                "erl" | "hrl" => return FileType::Unknown,
-                "go" => return FileType::Go,
-                "rs" => return FileType::Rust,
-                "java" => return FileType::Java,
-                "pyc" => return FileType::PythonBytecode,
-                "rb" | "rbs" => return FileType::Ruby,
-                "php" => return FileType::Php,
-                "pl" | "pm" | "t" => return FileType::Perl,
-                "ps1" | "psm1" | "psd1" => return FileType::PowerShell,
-                "bat" | "cmd" => return FileType::Batch,
-                "vbs" | "vbe" | "wsf" | "wsc" => return FileType::Vbs,
-                "c" | "h" | "cpp" | "hpp" | "cc" | "cxx" | "hxx" | "hh" | "pas" | "dpr" | "asm"
-                | "s" | "nasm" => {
-                    return FileType::C;
-                }
-                "lua" => return FileType::Lua,
-                "cs" => return FileType::CSharp,
-                "swift" => return FileType::Swift,
-                "m" | "mm" => return FileType::ObjectiveC,
-                "groovy" | "gradle" => return FileType::Groovy,
-                "scala" | "sc" => return FileType::Scala,
-                "zig" => return FileType::Zig,
-                "ex" | "exs" => return FileType::Elixir,
-                "scpt" | "applescript" => return FileType::AppleScript,
-                "plist" | "resx" => return FileType::Plist,
-                "rtf" => return FileType::Rtf,
-                "doc" | "xls" | "ppt" | "msg" | "dot" | "xlt" => return FileType::OleDoc,
-                "docx" | "xlsx" | "pptx" | "docm" | "xlsm" | "pptm" | "dotx" | "dotm" | "xltx"
-                | "xltm" => return FileType::Ooxml,
-                "lnk" => return FileType::Lnk,
-                "pdf" => return FileType::Pdf,
-                "zip" | "7z" | "rar" | "deb" | "rpm" | "apk" | "ipa" | "xpi" | "epub" | "nupkg"
-                | "vsix" | "aar" | "egg" | "whl" | "phar" | "crx" | "crate" | "gem" | "pkg"
-                | "cab" | "gz" | "bz2" | "xz" | "zst" | "tbz" | "tbz2" | "txz" | "tgz" | "tzst" => {
-                    return FileType::Archive
-                }
-                "html" | "htm" => return FileType::Html,
-                "md" | "markdown" => return FileType::Markdown,
-                _ => {}
-            }
-        }
-    }
-
-    FileType::Unknown
+    fileid::detect_path(file_path).map_or(FileType::Unknown, |d| FileType::from(d.file_type))
 }
 
-/// Detect file type from already-loaded data.
-///
-/// This is the core detection logic. Use `detect_file_type` when you need to read from disk.
-///
-/// Priority: content-based detection (`detect_file_type_inner`) first, then
-/// extension-based (`detect_file_type_from_path`) as fallback. HTML is special-cased:
-/// the extension alone is not trusted — content must contain actual markup.
+/// Detect file type from already-loaded data (content first, extension fallback).
+#[inline]
 pub(crate) fn detect_file_type_from_data(file_path: &Path, file_data: &[u8]) -> FileType {
-    if file_data.len() < 4 {
-        return detect_file_type_from_path(file_path);
-    }
-    // 1. Content-based: magic bytes, shebangs, OOXML content check
-    if let Some(ft) = detect_file_type_inner(file_path, file_data) {
-        return ft;
-    }
-    // 2. Extension-based (single source of truth for extension→type mapping)
-    let ft = detect_file_type_from_path(file_path);
-    if ft != FileType::Unknown {
-        // HTML extension requires content validation — many non-HTML files use .html
-        if ft == FileType::Html && !looks_like_html(file_data) {
-            return FileType::Unknown;
-        }
-        return ft;
-    }
-    // Plain XML documentation and manifest files should not fall through into
-    // source-language heuristics such as Python detection.
-    if file_path
-        .extension()
-        .and_then(|ext| ext.to_str())
-        .is_some_and(|ext| ext.eq_ignore_ascii_case("xml"))
-    {
-        let head = &file_data[..file_data.len().min(256)];
-        if head.starts_with(b"<?xml")
-            || memchr::memmem::find(head, b"<doc>").is_some()
-            || memchr::memmem::find(head, b"<doc ").is_some()
-        {
-            return FileType::Unknown;
-        }
-    }
-    // Data/config formats must not fall through to source-language heuristics.
-    // YAML build recipes (e.g. .melange.yaml) contain embedded shell with keywords
-    // like `local`, `then`, `end` that trick `looks_like_lua()`.
-    if let Some(ext) = file_path.extension().and_then(|e| e.to_str()) {
-        if matches!(
-            ext.to_ascii_lowercase().as_str(),
-            "yaml"
-                | "yml"
-                | "json"
-                | "toml"
-                | "ini"
-                | "cfg"
-                | "conf"
-                | "properties"
-                | "txt"
-                | "text"
-                | "md"
-                | "markdown"
-                | "rst"
-                | "adoc"
-                | "csv"
-                | "tsv"
-                | "log"
-                | "svg"
-                | "xml"
-                | "erl"
-                | "hrl"
-                | "elv"
-                | "nu"
-                | "fish"
-        ) {
-            return FileType::Unknown;
-        }
-    }
-    // 3. Content heuristics — last resort for extensionless/unrecognized files.
-    // Heuristics propose candidates, tree-sitter arbitrates by error rate.
-    detect_by_content_heuristics(file_data).unwrap_or(FileType::Unknown)
+    fileid::detect(file_path, file_data).map_or(FileType::Unknown, |d| FileType::from(d.file_type))
 }
 
-fn looks_like_npm_registry_metadata(file_data: &[u8]) -> bool {
-    let has_versions = memchr::memmem::find(file_data, b"\"versions\"").is_some();
-    let has_dist_tags = memchr::memmem::find(file_data, b"\"dist-tags\"").is_some();
-    let has_registry_tarball =
-        memchr::memmem::find(file_data, b"\"tarball\": \"https://registry.npmjs.org/").is_some();
-    let has_npm_internal =
-        memchr::memmem::find(file_data, b"\"_npmOperationalInternal\"").is_some();
-
-    (has_versions && has_dist_tags) || (has_registry_tarball && has_npm_internal)
-}
-
-fn looks_like_pypi_registry_metadata(file_data: &[u8]) -> bool {
-    let has_info = memchr::memmem::find(file_data, b"\"info\"").is_some();
-    let has_package_url = memchr::memmem::find(file_data, b"\"package_url\"").is_some();
-    let has_release_url = memchr::memmem::find(file_data, b"\"release_url\"").is_some();
-    let has_releases = memchr::memmem::find(file_data, b"\"releases\"").is_some();
-
-    has_info && has_releases && (has_package_url || has_release_url)
-}
-
-/// Detect file type and route to appropriate analyzer
+/// Detect file type by reading the first 1KB from disk.
 pub fn detect_file_type(file_path: &Path) -> Result<FileType> {
     use std::io::Read;
     let mut file = std::fs::File::open(file_path)?;
@@ -574,888 +355,10 @@ pub fn detect_file_type(file_path: &Path) -> Result<FileType> {
     Ok(detect_file_type_from_data(file_path, &buf[..bytes_read]))
 }
 
-fn detect_file_type_inner(file_path: &Path, file_data: &[u8]) -> Option<FileType> {
-    tracing::debug!(
-        "detect_file_type_inner: path={}, data_len={}, magic={:02x?}{:02x?}{:02x?}{:02x?}",
-        file_path.display(),
-        file_data.len(),
-        file_data.first(),
-        file_data.get(1),
-        file_data.get(2),
-        file_data.get(3)
-    );
-    // Check for RAR magic bytes "Rar!" (0x52 0x61 0x72 0x21)
-    if file_data.starts_with(b"Rar!") {
-        tracing::debug!("Detected RAR archive by magic");
-        return Some(FileType::Archive);
-    }
-
-    // Check for compiled AppleScript magic bytes "Fasd"
-    if file_data.starts_with(b"Fasd") {
-        return Some(FileType::AppleScript);
-    }
-
-    // Check for RTF magic bytes
-    if file_data.starts_with(b"{\\rtf") {
-        return Some(FileType::Rtf);
-    }
-
-    // Check for PDF magic bytes (%PDF-)
-    if file_data.starts_with(b"%PDF-") {
-        return Some(FileType::Pdf);
-    }
-
-    // Check for LNK magic bytes (Windows Shell Link)
-    if lnk::is_lnk(file_data) {
-        return Some(FileType::Lnk);
-    }
-
-    // Check for JPEG magic bytes (FF D8 FF)
-    if file_data.len() >= 3 && file_data[0] == 0xFF && file_data[1] == 0xD8 && file_data[2] == 0xFF
-    {
-        return Some(FileType::Jpeg);
-    }
-
-    // Check for PNG magic bytes (89 50 4E 47 0D 0A 1A 0A)
-    if file_data.starts_with(b"\x89PNG\r\n\x1a\n") {
-        return Some(FileType::Png);
-    }
-
-    // Check for Python pickle (protocol 2+: \x80\x02-\x05, or protocol 0/1 with extension)
-    if file_data.len() >= 2 && file_data[0] == 0x80 && (2..=5).contains(&file_data[1]) {
-        // Verify extension matches pickle conventions (avoid FP on other \x80-prefixed formats)
-        let ext = file_path
-            .extension()
-            .map(|e| e.to_string_lossy().to_lowercase());
-        if matches!(
-            ext.as_deref(),
-            Some("pkl" | "pickle" | "joblib" | "pt" | "pth")
-        ) {
-            return Some(FileType::Pickle);
-        }
-    }
-
-    // Check for Java class files BEFORE Mach-O (both use 0xCAFEBABE)
-    if is_java_class(file_data) {
-        return Some(FileType::JavaClass);
-    }
-
-    // Check for JAR files (ZIP with .jar extension) - check extension first
-    let path_str = file_path.to_string_lossy().to_lowercase();
-    if path_str.ends_with(".jar") || path_str.ends_with(".war") || path_str.ends_with(".ear") {
-        // Verify it's a ZIP file (PK signature)
-        if file_data.starts_with(b"PK") {
-            return Some(FileType::Jar);
-        }
-    }
-
-    // Check for OOXML documents before PE tampering heuristics.
-    //
-    // OOXML files are ZIP containers and can legitimately contain `MZ` inside
-    // embedded previews or document streams near the start of the file. If we
-    // search for displaced `MZ` first, benign `.pptx`/`.docx` samples get
-    // misclassified as tampered PEs.
-    //
-    // Prefer content-aware OOXML detection even for masqueraded extensions
-    // such as ".txt", but avoid reclassifying known archive/package formats
-    // that also use OPC containers.
-    if file_data.starts_with(b"PK") {
-        let is_ooxml_ext = path_str.ends_with(".docx")
-            || path_str.ends_with(".xlsx")
-            || path_str.ends_with(".pptx")
-            || path_str.ends_with(".docm")
-            || path_str.ends_with(".xlsm")
-            || path_str.ends_with(".pptm")
-            || path_str.ends_with(".dotx")
-            || path_str.ends_with(".dotm")
-            || path_str.ends_with(".xltx")
-            || path_str.ends_with(".xltm");
-        let ext = file_path
-            .extension()
-            .and_then(|s| s.to_str())
-            .map(|s| s.to_ascii_lowercase());
-        let is_archive_opc_ext = matches!(
-            ext.as_deref(),
-            Some("zip")
-                | Some("jar")
-                | Some("vsix")
-                | Some("nupkg")
-                | Some("xpi")
-                | Some("epub")
-                | Some("apk")
-                | Some("ipa")
-        );
-        if is_ooxml_ext || (!is_archive_opc_ext && office::ooxml::is_ooxml(file_data)) {
-            return Some(FileType::Ooxml);
-        }
-    }
-
-    // Check for Mach-O magic bytes
-    if is_macho(file_data) {
-        return Some(FileType::MachO);
-    }
-
-    // Check for ELF magic bytes
-    if file_data.starts_with(b"\x7fELF") {
-        return Some(FileType::Elf);
-    }
-
-    // Check for PE magic bytes - also detect tampered PEs with junk prefix
-    // Malware often prepends bytes before the MZ header to evade detection
-    if file_data.starts_with(b"MZ") {
-        return Some(FileType::Pe);
-    }
-    // Check for MZ within first 64 bytes (tampered PE with junk prefix).
-    // Require a valid DOS header: e_lfanew at 0x3C must point to "PE\0\0".
-    // Without this check, random binary blobs (e.g. decoded PDF image streams)
-    // that happen to contain "MZ" bytes get misclassified as PE files, causing
-    // false-positive junk-prefix findings.
-    if let Some(mz_offset) = find_mz_header(file_data, 64) {
-        let pe_data = &file_data[mz_offset..];
-        let valid_pe = pe_data.len() >= 0x40 && {
-            let e_lfanew =
-                u32::from_le_bytes([pe_data[0x3c], pe_data[0x3d], pe_data[0x3e], pe_data[0x3f]])
-                    as usize;
-            e_lfanew + 4 <= pe_data.len() && pe_data[e_lfanew..e_lfanew + 4] == *b"PE\0\0"
-        };
-        if valid_pe {
-            tracing::debug!("Detected PE with MZ at offset {} (junk prefix)", mz_offset);
-            return Some(FileType::Pe);
-        }
-    }
-
-    // Check for Binary Plist
-    if file_data.starts_with(b"bplist") {
-        return Some(FileType::Plist);
-    }
-
-    // Check for XML Plist (byte-level search, no allocation).
-    // Many extensionless Apple plists start with an XML declaration and DTD,
-    // which pushes the <plist> tag well past the first 100 bytes.
-    let head = &file_data[..file_data.len().min(256)];
-    if memchr::memmem::find(head, b"<plist").is_some()
-        || memchr::memmem::find(head, b"<!DOCTYPE plist").is_some()
-    {
-        return Some(FileType::Plist);
-    }
-
-    // Check for OLE2/CFBF magic bytes (D0 CF 11 E0 A1 B1 1A E1)
-    // Legacy Microsoft Office documents (.doc, .xls, .ppt, .msg)
-    if file_data.len() >= 8 && office::ole2::is_ole2(file_data) {
-        return Some(FileType::OleDoc);
-    }
-
-    // Check for Python bytecode (Python 3.5+): magic is XX 0D 0D 0A
-    // Bytes 1-3 are always \r\r\n for all Python 3.5+ versions.
-    if file_data.len() >= 4 && file_data[1] == 0x0d && file_data[2] == 0x0d && file_data[3] == 0x0a
-    {
-        return Some(FileType::PythonBytecode);
-    }
-
-    // Check for shell script shebang (various shells)
-    if file_data.starts_with(b"#!/bin/sh")
-        || file_data.starts_with(b"#!/bin/bash")
-        || file_data.starts_with(b"#!/bin/zsh")
-        || file_data.starts_with(b"#!/bin/dash")
-        || file_data.starts_with(b"#!/usr/bin/env sh")
-        || file_data.starts_with(b"#!/usr/bin/env bash")
-        || file_data.starts_with(b"#!/usr/bin/env zsh")
-        || file_data.starts_with(b"#!/usr/bin/env dash")
-    {
-        return Some(FileType::Shell);
-    }
-
-    // Check for Python script shebang
-    if file_data.starts_with(b"#!/usr/bin/env python")
-        || file_data.starts_with(b"#!/usr/bin/python")
-        || file_data.starts_with(b"#!/usr/bin/env python3")
-        || file_data.starts_with(b"#!/usr/bin/python3")
-    {
-        return Some(FileType::Python);
-    }
-
-    // Check for Node.js/JavaScript shebang
-    if file_data.starts_with(b"#!/usr/bin/env node") || file_data.starts_with(b"#!/usr/bin/node") {
-        return Some(FileType::JavaScript);
-    }
-
-    // Check for Ruby shebang
-    if file_data.starts_with(b"#!/usr/bin/env ruby") || file_data.starts_with(b"#!/usr/bin/ruby") {
-        return Some(FileType::Ruby);
-    }
-
-    // Check for Perl shebang
-    if file_data.starts_with(b"#!/usr/bin/env perl")
-        || file_data.starts_with(b"#!/usr/bin/perl")
-        || file_data.starts_with(b"#!/usr/local/bin/perl")
-    {
-        return Some(FileType::Perl);
-    }
-
-    // Check for PHP opening tag or shebang
-    if file_data.starts_with(b"<?php")
-        || file_data.starts_with(b"#!/usr/bin/env php")
-        || file_data.starts_with(b"#!/usr/bin/php")
-    {
-        return Some(FileType::Php);
-    }
-
-    // Check for Lua shebang
-    if file_data.starts_with(b"#!/usr/bin/lua")
-        || file_data.starts_with(b"#!/usr/bin/env lua")
-        || file_data.starts_with(b"#!/usr/local/bin/lua")
-    {
-        return Some(FileType::Lua);
-    }
-
-    // Check for package.json (npm manifest) and manifest.json (Chrome extension)
-    if let Some(file_name) = file_path.file_name() {
-        let name = file_name.to_string_lossy().to_lowercase();
-        if name == "package.json" {
-            return Some(FileType::PackageJson);
-        }
-        if (name == "meta.json" || name == "metadata.json")
-            && looks_like_npm_registry_metadata(file_data)
-        {
-            return Some(FileType::PackageJson);
-        }
-        if (name == "meta.json" || name == "metadata.json")
-            && looks_like_pypi_registry_metadata(file_data)
-        {
-            return Some(FileType::PkgInfo);
-        }
-        if name == "manifest.json" {
-            // Check if it's a Chrome extension manifest (byte-level, no allocation)
-            if memchr::memmem::find(file_data, b"\"manifest_version\"").is_some()
-                && (memchr::memmem::find(file_data, b"\"permissions\"").is_some()
-                    || memchr::memmem::find(file_data, b"\"content_scripts\"").is_some()
-                    || memchr::memmem::find(file_data, b"\"background\"").is_some()
-                    || memchr::memmem::find(file_data, b"\"host_permissions\"").is_some())
-            {
-                return Some(FileType::ChromeManifest);
-            }
-        }
-        if name == "extension.vsixmanifest" || name.ends_with(".vsixmanifest") {
-            return Some(FileType::VsixManifest);
-        }
-        if name == "action.yml" || name == "action.yaml" {
-            return Some(FileType::GithubActions);
-        }
-        if name == "pkg-info" || name == "metadata" {
-            return Some(FileType::PkgInfo);
-        }
-        if name.ends_with(".plist") {
-            return Some(FileType::Plist);
-        }
-        // Debian/Ubuntu package maintainer scripts (often lack shebang)
-        // But only if they don't have a recognized source code extension
-        let name = file_name.to_string_lossy().to_lowercase();
-        let has_code_extension = file_path.extension().is_some_and(|ext| {
-            matches!(
-                ext.to_str(),
-                Some(
-                    "js" | "mjs"
-                        | "cjs"
-                        | "ts"
-                        | "tsx"
-                        | "py"
-                        | "rb"
-                        | "go"
-                        | "rs"
-                        | "java"
-                        | "php"
-                        | "pl"
-                        | "pm"
-                        | "lua"
-                        | "cs"
-                        | "swift"
-                        | "m"
-                        | "mm"
-                        | "groovy"
-                        | "gradle"
-                        | "scala"
-                        | "sc"
-                        | "zig"
-                        | "ex"
-                        | "exs"
-                        | "c"
-                        | "h"
-                        | "cpp"
-                        | "hpp"
-                        | "cc"
-                        | "cxx"
-                        | "hxx"
-                        | "hh"
-                )
-            )
-        });
-        if !has_code_extension
-            && (name.contains("postinst")
-                || name.contains("preinst")
-                || name.contains("postrm")
-                || name.contains("prerm"))
-        {
-            return Some(FileType::Shell);
-        }
-    }
-
-    // Heuristic shell detection for files without shebang
-    // Look for common shell patterns in first few lines
-    // Skip if file has a known code extension (will be handled later)
-    let has_known_extension = file_path.extension().is_some_and(|ext| {
-        matches!(
-            ext.to_str(),
-            Some(
-                "js" | "mjs"
-                    | "cjs"
-                    | "ts"
-                    | "tsx"
-                    | "erl"
-                    | "hrl"
-                    | "py"
-                    | "rb"
-                    | "rbs"
-                    | "go"
-                    | "rs"
-                    | "java"
-                    | "php"
-                    | "pl"
-                    | "pm"
-                    | "lua"
-                    | "cs"
-                    | "swift"
-                    | "m"
-                    | "mm"
-                    | "groovy"
-                    | "gradle"
-                    | "scala"
-                    | "sc"
-                    | "zig"
-                    | "ex"
-                    | "exs"
-                    | "c"
-                    | "h"
-                    | "cpp"
-                    | "hpp"
-                    | "cc"
-                    | "cxx"
-                    | "hxx"
-                    | "hh"
-                    | "sh"
-                    | "bat"
-                    | "cmd"
-                    | "ps1"
-                    | "psm1"
-                    | "psd1"
-                    | "md"
-                    | "markdown"
-                    | "txt"
-                    | "text"
-                    | "rst"
-                    | "adoc"
-                    | "html"
-                    | "htm"
-                    | "xml"
-                    | "yaml"
-                    | "yml"
-                    | "json"
-                    | "toml"
-                    | "ini"
-                    | "cfg"
-                    | "conf"
-                    | "csv"
-                    | "tsv"
-                    | "log"
-            )
-        )
-    });
-    if !has_known_extension && looks_like_shell(file_data) {
-        return Some(FileType::Shell);
-    }
-
-    // OOXML and archive-by-extension detection are handled earlier (OOXML at
-    // line ~527) and by detect_file_type_from_path in the fallback chain.
-
-    None
-}
-
-/// Content heuristics for files where neither magic bytes nor extension gave a result.
-///
-/// Heuristics propose candidate file types, then tree-sitter arbitrates: each
-/// candidate is parsed and the language with the fewest AST errors wins.
-/// This prevents template files, changelogs, and foreign-language scripts
-/// from being misclassified.
-fn detect_by_content_heuristics(file_data: &[u8]) -> Option<FileType> {
-    let candidates: &[(fn(&[u8]) -> bool, FileType)] = &[
-        (looks_like_python, FileType::Python),
-        (looks_like_powershell, FileType::PowerShell),
-        (looks_like_perl, FileType::Perl),
-        (looks_like_batch, FileType::Batch),
-        (looks_like_vbs, FileType::Vbs),
-        (looks_like_lua, FileType::Lua),
-        (looks_like_javascript, FileType::JavaScript),
-        (looks_like_c, FileType::C),
-    ];
-
-    // Collect all heuristic matches
-    let matches: Vec<&FileType> = candidates
-        .iter()
-        .filter(|(heuristic, _)| heuristic(file_data))
-        .map(|(_, ft)| ft)
-        .collect();
-
-    if matches.is_empty() {
-        return None;
-    }
-
-    // Single match with no tree-sitter grammar → trust the heuristic
-    if matches.len() == 1 && unified::config_for_file_type(matches[0]).is_none() {
-        return Some(matches[0].clone());
-    }
-
-    // Parse prefix with each candidate's tree-sitter grammar, pick lowest error rate
-    pick_best_by_tree_sitter(file_data, &matches)
-}
-
-/// Parse a file prefix with each candidate language's tree-sitter grammar.
-/// Returns the language with the lowest error rate, or None if all are too noisy.
-fn pick_best_by_tree_sitter(file_data: &[u8], candidates: &[&FileType]) -> Option<FileType> {
-    use tree_sitter::Parser;
-
-    let prefix = &file_data[..file_data.len().min(4096)];
-    let mut best: Option<(FileType, f64)> = None;
-
-    for &file_type in candidates {
-        let Some(config) = unified::config_for_file_type(file_type) else {
-            // No tree-sitter grammar (Batch, VBS) — treat as moderate confidence
-            let score = 0.10;
-            if best.as_ref().is_none_or(|(_, s)| score < *s) {
-                best = Some((file_type.clone(), score));
-            }
-            continue;
-        };
-
-        let mut parser = Parser::new();
-        if parser.set_language(&config.language).is_err() {
-            continue;
-        }
-
-        let Some(tree) = parser.parse(prefix, None) else {
-            continue;
-        };
-
-        let root = tree.root_node();
-        let total = root.descendant_count();
-        if total == 0 {
-            continue;
-        }
-
-        // Count ERROR and MISSING nodes
-        let mut errors = 0usize;
-        let mut stack = vec![root];
-        while let Some(node) = stack.pop() {
-            if node.is_error() || node.is_missing() {
-                errors += 1;
-            }
-            for i in 0..node.child_count() {
-                if let Some(child) = node.child(i as u32) {
-                    stack.push(child);
-                }
-            }
-        }
-
-        let error_rate = errors as f64 / total as f64;
-        tracing::debug!(
-            "tree-sitter candidate {:?}: {} nodes, {} errors, {:.1}% error rate",
-            file_type,
-            total,
-            errors,
-            error_rate * 100.0
-        );
-
-        if best.as_ref().is_none_or(|(_, s)| error_rate < *s) {
-            best = Some((file_type.clone(), error_rate));
-        }
-    }
-
-    // Reject if even the best candidate has >30% errors — it's probably not code
-    best.filter(|(_, rate)| *rate < 0.30).map(|(ft, _)| ft)
-}
-
-/// Check if content looks like HTML (has actual markup tags)
-/// Uses case-insensitive Aho-Corasick search on raw bytes — no allocation.
-fn looks_like_html(data: &[u8]) -> bool {
-    use aho_corasick::AhoCorasick;
-    use std::sync::OnceLock;
-
-    static AC: OnceLock<Option<AhoCorasick>> = OnceLock::new();
-    let ac = AC.get_or_init(|| {
-        AhoCorasick::builder()
-            .ascii_case_insensitive(true)
-            .build([
-                "<!doctype html",
-                "<html",
-                "<head",
-                "<body",
-                "<script",
-                "<div",
-                "<span",
-                "<p>",
-                "<a ",
-                "<img",
-                "<form",
-                "<table",
-                "<meta",
-                "<link",
-                "<style",
-            ])
-            .ok()
-    });
-
-    ac.as_ref().is_some_and(|ac| ac.is_match(data))
-}
-
-/// Heuristic detection for PowerShell files without .ps1 extension
-fn looks_like_powershell(data: &[u8]) -> bool {
-    let s = String::from_utf8_lossy(data);
-    let content = s.lines().take(100).collect::<Vec<_>>().join("\n");
-
-    // PowerShell indicators
-    let indicators = [
-        "$",
-        "Write-Host",
-        "Invoke-",
-        "New-Object",
-        "Get-",
-        "Set-",
-        " -bxor ",
-        " -bor ",
-        " -band ",
-        "[System.Convert]",
-        "Param(",
-    ];
-
-    let count = indicators
-        .iter()
-        .filter(|&&pattern| content.contains(pattern))
-        .count();
-
-    // Need at least 3 indicators for confidence
-    count >= 3
-}
-
-/// Heuristic detection for Python files without .py extension
-/// Checks for common Python patterns like imports, function definitions, etc.
-fn looks_like_python(data: &[u8]) -> bool {
-    let s = String::from_utf8_lossy(data);
-    let first_lines: Vec<&str> = s.lines().take(50).collect();
-    let content = first_lines.join("\n");
-
-    // Strong Python indicators (must have at least 2)
-    let strong_indicators = [
-        "import ",
-        "from ",
-        "def ",
-        "class ",
-        "if __name__",
-        "print(",
-    ];
-    let strong_count = strong_indicators
-        .iter()
-        .filter(|&&pattern| content.contains(pattern))
-        .count();
-
-    // Secondary Python indicators
-    let secondary_indicators = [
-        "    ", // 4-space indentation (common in Python)
-        "try:", "except", "return ", "self.", "None", "True", "False",
-    ];
-    let secondary_count = secondary_indicators
-        .iter()
-        .filter(|&&pattern| content.contains(pattern))
-        .count();
-
-    // Need at least 2 strong indicators or 1 strong + 3 secondary
-    (strong_count >= 2) || (strong_count >= 1 && secondary_count >= 3)
-}
-
-/// Check if data is a Java class file
-/// Java class files start with 0xCAFEBABE followed by minor/major version
-fn is_java_class(data: &[u8]) -> bool {
-    if data.len() < 8 {
-        return false;
-    }
-
-    // Java class magic: CA FE BA BE
-    if data[0] != 0xCA || data[1] != 0xFE || data[2] != 0xBA || data[3] != 0xBE {
-        return false;
-    }
-
-    // Check major version (bytes 6-7, big-endian)
-    // Java 1.0 = 45, Java 1.1 = 45, Java 1.2 = 46, ... Java 21 = 65
-    // Mach-O fat binaries have nfat_arch in bytes 4-7 which is typically < 10
-    let major_version = u16::from_be_bytes([data[6], data[7]]);
-
-    // Valid Java class major versions are 45-70 (covering Java 1.0 through future versions)
-    // Mach-O fat headers have small values (number of architectures) in this position
-    (45..=70).contains(&major_version)
-}
-
-fn is_macho(data: &[u8]) -> bool {
-    if data.len() < 4 {
-        return false;
-    }
-
-    // Mach-O magic numbers (excluding 0xcafebabe which is handled by is_java_class first)
-    let magic = u32::from_ne_bytes([data[0], data[1], data[2], data[3]]);
-
-    // For 0xcafebabe (fat binary), we only match if is_java_class returned false
-    if magic == 0xcafebabe || magic == 0xbebafeca {
-        // This is a fat binary (not a Java class since is_java_class is called first)
-        return true;
-    }
-
-    matches!(magic, 0xfeedface | 0xcefaedfe | 0xfeedfacf | 0xcffaedfe)
-}
-
-fn looks_like_shell(data: &[u8]) -> bool {
-    // Only search the first ~2KB (covers first 5 lines in any reasonable file)
-    let head = &data[..data.len().min(2048)];
-    memchr::memmem::find(head, b"export ").is_some()
-        || memchr::memmem::find(head, b"alias ").is_some()
-        || memchr::memmem::find(head, b"set -e").is_some()
-        || memchr::memmem::find(head, b"if [").is_some()
-        || memchr::memmem::find(head, b"case $").is_some()
-}
-
-/// Heuristic detection for Perl files without .pl/.pm extension
-fn looks_like_perl(data: &[u8]) -> bool {
-    let head = &data[..data.len().min(300)];
-    // Strong single-indicator: strict/warnings pragmas are almost exclusively Perl
-    if memchr::memmem::find(head, b"use strict;").is_some()
-        || memchr::memmem::find(head, b"use warnings;").is_some()
-        || memchr::memmem::find(head, b"use strict\n").is_some()
-        || memchr::memmem::find(head, b"use warnings\n").is_some()
-    {
-        return true;
-    }
-    // Secondary: need 3+ common Perl idioms
-    let indicators: &[&[u8]] = &[
-        b"my $", b"my @", b"my %", b"chomp", b"local $", b"@_", b"$_",
-    ];
-    indicators
-        .iter()
-        .filter(|&&p| memchr::memmem::find(head, p).is_some())
-        .count()
-        >= 3
-}
-
-/// Heuristic detection for Windows Batch files without .bat/.cmd extension
-fn looks_like_batch(data: &[u8]) -> bool {
-    let head = &data[..data.len().min(300)];
-    // @echo and %~dp0 are exclusively Batch syntax
-    if memchr::memmem::find(head, b"@echo").is_some()
-        || memchr::memmem::find(head, b"@ECHO").is_some()
-        || memchr::memmem::find(head, b"%~dp0").is_some()
-    {
-        return true;
-    }
-    // Secondary: need 2+ common Batch idioms
-    let indicators: &[&[u8]] = &[
-        b"SETLOCAL",
-        b"ENDLOCAL",
-        b"GOTO ",
-        b"IF EXIST",
-        b"IF NOT EXIST",
-        b"SET /P",
-        b"SET /A",
-        b"FOR /F",
-        b"CALL :",
-        b"setlocal",
-        b"endlocal",
-    ];
-    indicators
-        .iter()
-        .filter(|&&p| memchr::memmem::find(head, p).is_some())
-        .count()
-        >= 2
-}
-
-/// Heuristic detection for VBScript files without .vbs extension
-fn looks_like_vbs(data: &[u8]) -> bool {
-    let head = &data[..data.len().min(300)];
-    // WScript and CreateObject are almost exclusively VBScript/WSH
-    if memchr::memmem::find(head, b"WScript.").is_some()
-        || memchr::memmem::find(head, b"Option Explicit").is_some()
-    {
-        return true;
-    }
-    // Secondary: need 2+ VBScript-specific patterns
-    let indicators: &[&[u8]] = &[
-        b"CreateObject(",
-        b"End Sub",
-        b"End Function",
-        b"MsgBox ",
-        b"InputBox(",
-        b"WSH.",
-        b"Dim ",
-    ];
-    indicators
-        .iter()
-        .filter(|&&p| memchr::memmem::find(head, p).is_some())
-        .count()
-        >= 2
-}
-
-/// Heuristic detection for Lua scripts without .lua extension.
-///
-/// Lua has distinctive syntax that doesn't overlap with other languages:
-/// `local` declarations, `then`/`end` blocks, `~=` for inequality,
-/// and builtins like `getfenv`/`setmetatable`/`newproxy`.
-fn looks_like_lua(data: &[u8]) -> bool {
-    let head = &data[..data.len().min(4096)];
-
-    // Strong single-indicator: Lua IIFE — `return(function(...)local`
-    // This is a very common Lua obfuscation wrapper pattern.
-    if memchr::memmem::find(head, b"return(function(").is_some()
-        && memchr::memmem::find(head, b"local ").is_some()
-    {
-        return true;
-    }
-
-    // Lua-exclusive builtins — any one of these is conclusive
-    let conclusive: &[&[u8]] = &[
-        b"getfenv",
-        b"setfenv",
-        b"newproxy",
-        b"setmetatable",
-        b"getmetatable",
-    ];
-    let has_conclusive = conclusive
-        .iter()
-        .any(|&p| memchr::memmem::find(head, p).is_some());
-    if has_conclusive && memchr::memmem::find(head, b"local ").is_some() {
-        return true;
-    }
-
-    // Secondary: need 3+ Lua-specific indicators
-    let indicators: &[&[u8]] = &[
-        b"local ",  // variable declaration
-        b" then",   // if-then (not JS)
-        b"\nend",   // block terminator
-        b" end",    // block terminator after space
-        b"~=",      // not-equal operator (Lua only)
-        b" do\n",   // for/while do
-        b" do ",    // for/while do (single line)
-        b"repeat",  // repeat-until loop
-        b"until",   // repeat-until loop
-        b"elseif ", // Lua elseif (JS uses "else if")
-        b"_ENV",    // Lua 5.2+ environment
-        b"unpack(", // Lua table unpack
-        b"select(", // Lua select
-        b"ipairs(", // Lua iterator
-        b"pairs(",  // Lua iterator
-    ];
-    indicators
-        .iter()
-        .filter(|&&p| memchr::memmem::find(head, p).is_some())
-        .count()
-        >= 3
-}
-
-/// Heuristic detection for JavaScript files without .js extension
-fn looks_like_javascript(data: &[u8]) -> bool {
-    let head = &data[..data.len().min(2048)];
-    // Strong single-indicator: IIFE pattern is almost exclusively JavaScript.
-    // Guard: reject if Lua keywords are present — Lua also uses `(function(` for
-    // anonymous functions, and obfuscated Lua payloads commonly start with
-    // `return(function(...)local ...`.
-    if memchr::memmem::find(head, b"(function(").is_some()
-        || memchr::memmem::find(head, b"(function (").is_some()
-    {
-        let has_lua_keyword = memchr::memmem::find(head, b"local ").is_some()
-            && (memchr::memmem::find(head, b" then").is_some()
-                || memchr::memmem::find(head, b" end").is_some()
-                || memchr::memmem::find(head, b"~=").is_some());
-        if !has_lua_keyword {
-            return true;
-        }
-    }
-    // Secondary: need 3+ common JavaScript idioms
-    let indicators: &[&[u8]] = &[
-        b"var ",
-        b"function ",
-        b"===",
-        b"!==",
-        b"console.",
-        b"document.",
-        b"window.",
-        b".prototype",
-        b"require(",
-        b"module.exports",
-        b"addEventListener",
-        b"typeof ",
-        b"undefined",
-        b"null)",
-        b"null,",
-        b"return ",
-    ];
-    indicators
-        .iter()
-        .filter(|&&p| memchr::memmem::find(head, p).is_some())
-        .count()
-        >= 3
-}
-
-/// Heuristic detection for C/C++ source files without .c/.cpp extension
-fn looks_like_c(data: &[u8]) -> bool {
-    let head = &data[..data.len().min(300)];
-    if memchr::memmem::find(head, b"#include <").is_some()
-        || memchr::memmem::find(head, b"#include \"").is_some()
-    {
-        return true;
-    }
-
-    // Hand-written assembly often arrives inside archives without a trusted
-    // extension path. Route it through the raw-text source pipeline by treating
-    // it like C-family source for rule filtering purposes.
-    let asm_indicators: &[&[u8]] = &[
-        b"[BITS 32]",
-        b"section .text",
-        b"pushad",
-        b"popad",
-        b"lodsd",
-        b"stosd",
-        b"[fs:0x30]",
-        b"%define",
-        b"%xdefine",
-        b"\tdd 0x",
-        b"\tEQU\t",
-    ];
-    asm_indicators
-        .iter()
-        .filter(|&&p| memchr::memmem::find(head, p).is_some())
-        .count()
-        >= 2
-}
-
-/// Find MZ header within the first `max_offset` bytes
-/// Returns the offset where MZ was found, or None
-#[allow(clippy::manual_find)]
-fn find_mz_header(data: &[u8], max_offset: usize) -> Option<usize> {
-    let search_limit = data.len().min(max_offset);
-    for i in 1..search_limit.saturating_sub(1) {
-        if data[i] == b'M' && data.get(i + 1) == Some(&b'Z') {
-            return Some(i);
-        }
-    }
-    None
-}
-
-/// Check if file content matches its extension's expected magic bytes
-/// Returns (expected_type, actual_type_hint) if mismatch detected
+/// Check if file content matches its extension's expected type.
+/// Returns (expected_type, actual_type_hint) if mismatch detected.
 #[must_use]
-#[allow(dead_code)] // Used by lib.rs and commands/shared.rs, false positive from lib/bin split
+#[allow(dead_code)]
 pub fn check_extension_content_mismatch(
     file_path: &Path,
     file_data: &[u8],
@@ -1463,170 +366,20 @@ pub fn check_extension_content_mismatch(
     if file_data.len() < 4 {
         return None;
     }
-
-    let _path_lower = file_path.to_string_lossy().to_lowercase();
-    let extension = file_path.extension()?.to_str()?;
-
-    // Define expected magic bytes for extensions commonly spoofed by malware
-    let expected_magic: Option<(&str, &[u8])> = match extension {
-        // Font formats
-        "woff" => {
-            // WOFF: 'wOFF' magic, but also accept raw OpenType/TrueType fonts
-            // which are commonly mislabeled with .woff extension in web projects
-            if file_data.starts_with(b"wOFF")
-                || file_data.starts_with(b"OTTO")
-                || file_data.starts_with(b"\x00\x01\x00\x00")
-                || file_data.starts_with(b"true")
-            {
-                None // Valid font data
-            } else {
-                Some(("WOFF font", &[])) // Trigger mismatch
-            }
-        }
-        "woff2" => Some(("WOFF2 font", b"wOF2")),
-        "ttf" | "ttc" => {
-            // TrueType: version number 0x00010000 or 'true' or 'typ1'
-            if file_data.len() >= 4
-                && (file_data.starts_with(b"\x00\x01\x00\x00")
-                    || file_data.starts_with(b"true")
-                    || file_data.starts_with(b"typ1")
-                    || file_data.starts_with(b"ttcf"))
-            {
-                None // Valid TTF/TTC
-            } else {
-                Some(("TrueType font", &[])) // Trigger mismatch
-            }
-        }
-        "otf" => {
-            // OpenType: 'OTTO' or TrueType signature
-            if file_data.starts_with(b"OTTO")
-                || file_data.starts_with(b"\x00\x01\x00\x00")
-                || file_data.starts_with(b"true")
-            {
-                None // Valid OTF
-            } else {
-                Some(("OpenType font", &[]))
-            }
-        }
-
-        // Image formats
-        "gif" => Some(("GIF image", b"GIF89a")), // Also accepts GIF87a
-        "bmp" => Some(("BMP image", b"BM")),
-        "ico" => Some(("ICO image", b"\x00\x00\x01\x00")),
-        "webp" => Some(("WebP image", b"RIFF")), // Also needs "WEBP" at offset 8
-        "svg" => {
-            // SVG is XML, check for <svg tag (byte-level, no allocation)
-            let head = &file_data[..file_data.len().min(200)];
-            if memchr::memmem::find(head, b"<svg").is_some() || head.starts_with(b"<?xml") {
-                None
-            } else {
-                Some(("SVG image", &[]))
-            }
-        }
-
-        // Audio/Video (less commonly abused, but worth checking)
-        "mp3" => {
-            // MP3: ID3v2 tag or sync word FF Fx
-            if file_data.starts_with(b"ID3")
-                || (file_data[0] == 0xFF && (file_data[1] & 0xE0) == 0xE0)
-            {
-                None
-            } else {
-                Some(("MP3 audio", &[]))
-            }
-        }
-        "wav" => Some(("WAV audio", b"RIFF")), // Also needs "WAVE" at offset 8
-
-        _ => None,
-    };
-
-    let (expected_desc, expected_bytes) = expected_magic?;
-
-    // For complex checks (empty expected_bytes), we already determined there's a mismatch
-    // For simple prefix checks, verify the magic bytes match
-    if !expected_bytes.is_empty() && !file_data.starts_with(expected_bytes) {
-        // Special cases for formats that start with alternate magic
-        if extension == "gif" && file_data.starts_with(b"GIF87a") {
-            return None; // GIF87a is also valid
-        }
-
-        // Try to identify what it actually is
-        let actual_hint = if file_data.starts_with(b"PK") {
-            "ZIP archive"
-        } else if file_data.starts_with(b"\x7fELF") {
-            "ELF binary"
-        } else if file_data.starts_with(b"MZ") {
-            "PE executable"
-        } else if file_data.starts_with(b"wOFF") {
-            "WOFF font"
-        } else if file_data.starts_with(b"wOF2") {
-            "WOFF2 font"
-        } else if file_data.starts_with(b"\x89PNG") {
-            "PNG image"
-        } else if file_data.starts_with(b"\xFF\xD8\xFF") {
-            "JPEG image"
-        } else if file_data.starts_with(b"GIF8") {
-            "GIF image"
-        } else if file_data[0..file_data.len().min(100)]
-            .iter()
-            .all(|&b| b.is_ascii())
-        {
-            // Check if it's hex-encoded data (common obfuscation, byte-level)
-            if file_data[..file_data.len().min(200)]
-                .iter()
-                .all(|b| b.is_ascii_hexdigit() || b.is_ascii_whitespace())
-            {
-                "hex-encoded data"
-            } else {
-                "ASCII text"
-            }
-        } else {
-            "binary data"
-        };
-
-        return Some((expected_desc.to_string(), actual_hint.to_string()));
+    let det = fileid::detect(file_path, file_data)?;
+    if !det.extension_mismatch() {
+        return None;
     }
-
-    // For empty expected_bytes (complex validation already done above)
-    if expected_bytes.is_empty() {
-        // Determine actual content type
-        let actual_hint = if file_data.starts_with(b"PK") {
-            "ZIP archive"
-        } else if file_data.starts_with(b"\x7fELF") {
-            "ELF binary"
-        } else if file_data.starts_with(b"MZ") {
-            "PE executable"
-        } else if file_data.starts_with(b"wOFF") {
-            "WOFF font"
-        } else if file_data.starts_with(b"wOF2") {
-            "WOFF2 font"
-        } else if file_data.starts_with(b"\x89PNG") {
-            "PNG image"
-        } else if file_data.starts_with(b"\xFF\xD8\xFF") {
-            "JPEG image"
-        } else if file_data.starts_with(b"GIF8") {
-            "GIF image"
-        } else if file_data[0..file_data.len().min(100)]
-            .iter()
-            .all(|&b| b.is_ascii())
-        {
-            // Check if it's hex-encoded data (common obfuscation, byte-level)
-            if file_data[..file_data.len().min(200)]
-                .iter()
-                .all(|b| b.is_ascii_hexdigit() || b.is_ascii_whitespace())
-            {
-                "hex-encoded data"
-            } else {
-                "ASCII text"
-            }
-        } else {
-            "binary data"
-        };
-
-        return Some((expected_desc.to_string(), actual_hint.to_string()));
-    }
-
-    None
+    let content_desc = format!("{:?}", det.file_type);
+    let ext_desc = det.extension_type().map_or_else(
+        || {
+            file_path
+                .extension()
+                .map_or("unknown".to_string(), |e| format!("{} file", e.to_string_lossy()))
+        },
+        |ft| format!("{ft:?}"),
+    );
+    Some((ext_desc, content_desc))
 }
 
 /// File type detected by magic bytes, extension, and content analysis
@@ -1876,607 +629,152 @@ impl FileType {
     }
 }
 
+impl From<fileid::FileType> for FileType {
+    fn from(ft: fileid::FileType) -> Self {
+        match ft {
+            fileid::FileType::MachO => Self::MachO,
+            fileid::FileType::Elf => Self::Elf,
+            fileid::FileType::Pe => Self::Pe,
+            fileid::FileType::Shell => Self::Shell,
+            fileid::FileType::Batch => Self::Batch,
+            fileid::FileType::Vbs => Self::Vbs,
+            fileid::FileType::Python => Self::Python,
+            fileid::FileType::JavaScript => Self::JavaScript,
+            fileid::FileType::TypeScript => Self::TypeScript,
+            fileid::FileType::Go => Self::Go,
+            fileid::FileType::Rust => Self::Rust,
+            fileid::FileType::Java => Self::Java,
+            fileid::FileType::JavaClass => Self::JavaClass,
+            fileid::FileType::PythonBytecode => Self::PythonBytecode,
+            fileid::FileType::Jar => Self::Jar,
+            fileid::FileType::Ruby => Self::Ruby,
+            fileid::FileType::Php => Self::Php,
+            fileid::FileType::Perl => Self::Perl,
+            fileid::FileType::Lua => Self::Lua,
+            fileid::FileType::CSharp => Self::CSharp,
+            fileid::FileType::PowerShell => Self::PowerShell,
+            fileid::FileType::Swift => Self::Swift,
+            fileid::FileType::ObjectiveC => Self::ObjectiveC,
+            fileid::FileType::Groovy => Self::Groovy,
+            fileid::FileType::Scala => Self::Scala,
+            fileid::FileType::Zig => Self::Zig,
+            fileid::FileType::Elixir => Self::Elixir,
+            fileid::FileType::C => Self::C,
+            fileid::FileType::PackageJson => Self::PackageJson,
+            fileid::FileType::VsixManifest => Self::VsixManifest,
+            fileid::FileType::ChromeManifest => Self::ChromeManifest,
+            fileid::FileType::CargoToml => Self::CargoToml,
+            fileid::FileType::PyProjectToml => Self::PyProjectToml,
+            fileid::FileType::ComposerJson => Self::ComposerJson,
+            fileid::FileType::GithubActions => Self::GithubActions,
+            fileid::FileType::PkgInfo => Self::PkgInfo,
+            fileid::FileType::Archive => Self::Archive,
+            fileid::FileType::AppleScript => Self::AppleScript,
+            fileid::FileType::Plist => Self::Plist,
+            fileid::FileType::Rtf => Self::Rtf,
+            fileid::FileType::OleDoc => Self::OleDoc,
+            fileid::FileType::Ooxml => Self::Ooxml,
+            fileid::FileType::Lnk => Self::Lnk,
+            fileid::FileType::Jpeg => Self::Jpeg,
+            fileid::FileType::Png => Self::Png,
+            fileid::FileType::Pickle => Self::Pickle,
+            fileid::FileType::Pdf => Self::Pdf,
+            fileid::FileType::Html => Self::Html,
+            fileid::FileType::Markdown => Self::Markdown,
+            _ => Self::Unknown,
+        }
+    }
+}
+
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
-    use std::path::PathBuf;
 
     #[test]
-    fn test_woff2_mismatch_hex_encoded() {
-        // Hex-encoded JavaScript disguised as WOFF2
-        let hex_js = b"636F6E7374205F3078316331303030";
-        let path = PathBuf::from("fonts/malware.woff2");
-
-        let result = check_extension_content_mismatch(&path, hex_js);
-        assert!(result.is_some());
-        let (expected, actual) = result.unwrap();
-        assert_eq!(expected, "WOFF2 font");
-        assert_eq!(actual, "hex-encoded data");
+    fn bridge_path_detection() {
+        assert_eq!(detect_file_type_from_path(Path::new("script.py")), FileType::Python);
+        assert_eq!(detect_file_type_from_path(Path::new("app.js")), FileType::JavaScript);
+        assert_eq!(detect_file_type_from_path(Path::new("Component.jsx")), FileType::JavaScript);
+        assert_eq!(detect_file_type_from_path(Path::new("data.xyz")), FileType::Unknown);
+        assert_eq!(detect_file_type_from_path(Path::new("page.html")), FileType::Html);
+        assert_eq!(detect_file_type_from_path(Path::new("README.md")), FileType::Markdown);
+        assert_eq!(detect_file_type_from_path(Path::new("notes.txt")), FileType::Unknown);
     }
 
     #[test]
-    fn test_woff_mismatch_ascii() {
-        // ASCII text disguised as WOFF
-        let text = b"const _0x1c1000 = function() { /* malware */ };";
-        let path = PathBuf::from("fonts/fake.woff");
+    fn bridge_magic_detection() {
+        let elf = b"\x7fELF\x02\x01\x01\x00";
+        assert_eq!(detect_file_type_from_data(Path::new("bin"), elf), FileType::Elf);
 
-        let result = check_extension_content_mismatch(&path, text);
-        assert!(result.is_some());
-        let (expected, actual) = result.unwrap();
-        assert_eq!(expected, "WOFF font");
-        assert_eq!(actual, "ASCII text");
+        let pe = [b'M', b'Z', 0x90, 0x00, 0x03, 0x00, 0x00, 0x00];
+        assert_eq!(detect_file_type_from_data(Path::new("a.exe"), &pe), FileType::Pe);
+
+        let pyc = [0x55, 0x0d, 0x0d, 0x0a, 0x00, 0x00, 0x00, 0x00];
+        assert_eq!(detect_file_type_from_data(Path::new("c/s.dat"), &pyc), FileType::PythonBytecode);
     }
 
     #[test]
-    fn test_ttf_mismatch() {
-        // PNG image disguised as TTF
-        let png = b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR";
-        let path = PathBuf::from("fonts/fake.ttf");
-
-        let result = check_extension_content_mismatch(&path, png);
-        assert!(result.is_some());
-        let (expected, actual) = result.unwrap();
-        assert_eq!(expected, "TrueType font");
-        assert_eq!(actual, "PNG image");
-    }
-
-    #[test]
-    fn test_valid_woff2() {
-        // Valid WOFF2 file
-        let woff2 = b"wOF2\x00\x01\x00\x00";
-        let path = PathBuf::from("fonts/real.woff2");
-
-        let result = check_extension_content_mismatch(&path, woff2);
-        assert!(result.is_none());
-    }
-
-    #[test]
-    fn test_valid_ttf() {
-        // Valid TrueType font
-        let ttf = b"\x00\x01\x00\x00\x00\x0f\x00\x80";
-        let path = PathBuf::from("fonts/real.ttf");
-
-        let result = check_extension_content_mismatch(&path, ttf);
-        assert!(result.is_none());
-    }
-
-    #[test]
-    fn test_gif_mismatch() {
-        // JPEG disguised as GIF
-        let jpeg = b"\xFF\xD8\xFF\xE0\x00\x10JFIF";
-        let path = PathBuf::from("images/fake.gif");
-
-        let result = check_extension_content_mismatch(&path, jpeg);
-        assert!(result.is_some());
-        let (expected, actual) = result.unwrap();
-        assert_eq!(expected, "GIF image");
-        assert_eq!(actual, "JPEG image");
-    }
-
-    #[test]
-    fn test_svg_valid() {
-        // Valid SVG
-        let svg = b"<svg xmlns=\"http://www.w3.org/2000/svg\"><path d=\"M0,0\"/></svg>";
-        let path = PathBuf::from("images/real.svg");
-
-        let result = check_extension_content_mismatch(&path, svg);
-        assert!(result.is_none());
-    }
-
-    #[test]
-    fn test_no_extension() {
-        // File without extension - should return None
-        let data = b"some random data";
-        let path = PathBuf::from("README");
-
-        let result = check_extension_content_mismatch(&path, data);
-        assert!(result.is_none());
-    }
-
-    #[test]
-    fn test_unsupported_extension() {
-        // Extension we don't validate - should return None
-        let data = b"some random data";
-        let path = PathBuf::from("data.txt");
-
-        let result = check_extension_content_mismatch(&path, data);
-        assert!(result.is_none());
-    }
-
-    #[test]
-    fn test_jsx_extension_support() {
-        // Test that .jsx extension is recognized as JavaScript
-        let path = PathBuf::from("Component.jsx");
-
-        let file_type = detect_file_type_from_path(&path);
-        assert_eq!(file_type, FileType::JavaScript);
-    }
-
-    #[test]
-    fn test_html_extension_detection() {
-        // .html extension should be detected
-        let path = PathBuf::from("page.html");
-        assert_eq!(detect_file_type_from_path(&path), FileType::Html);
-
-        let path = PathBuf::from("index.htm");
-        assert_eq!(detect_file_type_from_path(&path), FileType::Html);
-    }
-
-    #[test]
-    fn test_markdown_extension_detection() {
-        let path = PathBuf::from("README.md");
-        assert_eq!(detect_file_type_from_path(&path), FileType::Markdown);
-
-        let path = PathBuf::from("docs.markdown");
-        assert_eq!(detect_file_type_from_path(&path), FileType::Markdown);
-    }
-
-    #[test]
-    fn test_text_extension_detection() {
-        let path = PathBuf::from("notes.txt");
-        assert_eq!(detect_file_type_from_path(&path), FileType::Unknown);
-
-        let path = PathBuf::from("data.csv");
-        assert_eq!(detect_file_type_from_path(&path), FileType::Unknown);
-
-        let path = PathBuf::from("app.log");
-        assert_eq!(detect_file_type_from_path(&path), FileType::Unknown);
-    }
-
-    #[test]
-    fn test_looks_like_html_with_markup() {
-        // Various HTML patterns should be detected
-        assert!(looks_like_html(b"<!DOCTYPE html><html></html>"));
-        assert!(looks_like_html(b"<html><body></body></html>"));
-        assert!(looks_like_html(b"<head><title>Test</title></head>"));
-        assert!(looks_like_html(b"<body><p>Hello</p></body>"));
-        assert!(looks_like_html(b"<script>alert('xss')</script>"));
-        assert!(looks_like_html(b"<div class='container'></div>"));
-        assert!(looks_like_html(b"<a href='http://evil.com'>click</a>"));
-        assert!(looks_like_html(b"<img src='payload.png'>"));
-        assert!(looks_like_html(b"<form action='steal.php'></form>"));
-        assert!(looks_like_html(b"<style>.hidden{display:none}</style>"));
-    }
-
-    #[test]
-    fn test_looks_like_html_without_markup() {
-        // Plain text should not be detected as HTML
-        assert!(!looks_like_html(b"https://example.com/page.html"));
-        assert!(!looks_like_html(b"Just some plain text"));
-        assert!(!looks_like_html(b"Hello, world!"));
-        assert!(!looks_like_html(b"192.168.1.1"));
-        assert!(!looks_like_html(b"user@example.com"));
-    }
-
-    #[test]
-    fn test_html_content_detection() {
-        use std::io::Write;
-        use tempfile::NamedTempFile;
-
-        // HTML file with actual markup -> Html
-        let mut html_file = NamedTempFile::with_suffix(".html").unwrap();
-        html_file
-            .write_all(b"<html><body>Hello</body></html>")
-            .unwrap();
-        let file_type = detect_file_type(html_file.path()).unwrap();
-        assert_eq!(file_type, FileType::Html);
-
-        // HTML file without markup -> Unknown (not analyzed)
-        let mut text_file = NamedTempFile::with_suffix(".html").unwrap();
-        text_file.write_all(b"https://example.com/c2").unwrap();
-        let file_type = detect_file_type(text_file.path()).unwrap();
-        assert_eq!(file_type, FileType::Unknown);
-    }
-
-    #[test]
-    fn test_markdown_content_detection() {
-        use std::io::Write;
-        use tempfile::NamedTempFile;
-
-        let mut md_file = NamedTempFile::with_suffix(".md").unwrap();
-        md_file.write_all(b"# Heading\n\nSome text").unwrap();
-        let file_type = detect_file_type(md_file.path()).unwrap();
-        assert_eq!(file_type, FileType::Markdown);
-    }
-
-    #[test]
-    fn test_text_content_detection() {
-        use std::io::Write;
-        use tempfile::NamedTempFile;
-
-        let mut txt_file = NamedTempFile::with_suffix(".txt").unwrap();
-        txt_file.write_all(b"Plain text content").unwrap();
-        let file_type = detect_file_type(txt_file.path()).unwrap();
-        assert_eq!(file_type, FileType::Unknown);
-    }
-
-    #[test]
-    fn test_meta_json_registry_snapshot_detection() {
-        let path = PathBuf::from("meta.json");
-        let data = br#"{"name":"node-ts-cjs-web","dist-tags":{"latest":"99.3.9"},"versions":{"99.3.9":{"dist":{"tarball":"https://registry.npmjs.org/node-ts-cjs-web/-/node-ts-cjs-web-99.3.9.tgz"},"_npmOperationalInternal":{"host":"s3://npm-registry-packages-npm-production"}}}}"#;
+    fn bridge_shebang() {
         assert_eq!(
-            detect_file_type_from_data(&path, data),
-            FileType::PackageJson
+            detect_file_type_from_data(Path::new("s"), b"#!/bin/bash\necho hi\n"),
+            FileType::Shell,
         );
     }
 
     #[test]
-    fn test_meta_json_pypi_snapshot_detection() {
-        let path = PathBuf::from("meta.json");
-        let data = br#"{"info":{"name":"pkg","package_url":"https://pypi.org/project/pkg/","release_url":"https://pypi.org/project/pkg/0.1.1/"},"releases":{"0.1.1":[]}}"#;
-        assert_eq!(detect_file_type_from_data(&path, data), FileType::PkgInfo);
-    }
-
-    // --- Content heuristic rejection tests ---
-    // Template files, changelogs, and foreign-language scripts must NOT be
-    // misclassified by the loose content heuristics.
-
-    #[test]
-    fn test_zsh_template_not_detected_as_lua() {
-        // Zsh template with Lua-like keywords (local, then, end)
-        let data = br#"{%- let section = "test" -%}
-function __zoxide_pwd() {
-    local result
-    if true then
-        \builtin pwd -P
-    end
-}
-"#;
-        let path = PathBuf::from("templates/zsh.txt");
-        assert_eq!(detect_file_type_from_data(&path, data), FileType::Unknown);
+    fn bridge_extension_fallback() {
+        assert_eq!(detect_file_type_from_data(Path::new("app.js"), b"x = 1\n"), FileType::JavaScript);
     }
 
     #[test]
-    fn test_elvish_script_not_detected_as_python() {
-        // Elvish shell (.elv) has Python-like keywords
-        let data = br#"use str
-fn init {
-    set-env __zoxide_hook chpwd
-    var f = {
-        zoxide add -- $pwd
-    }
-    set after-chdir = [$@after-chdir $f]
-}
-"#;
-        let path = PathBuf::from("completions/zoxide.elv");
-        assert_eq!(detect_file_type_from_data(&path, data), FileType::Unknown);
+    fn bridge_unknown() {
+        assert_eq!(detect_file_type_from_data(Path::new("d.bin"), &[0, 0, 0, 0]), FileType::Unknown);
     }
 
     #[test]
-    fn test_changelog_not_detected_as_shell() {
-        // Markdown changelog with shell examples
-        let data = br#"# Changelog
-
-## v0.9.9
-
-### Added
-- export PATH for completions
-- if [ -n "$ZSH_VERSION" ]; then source zoxide; fi
-
-### Fixed
-- case $SHELL in bash) ;; esac
-"#;
-        let path = PathBuf::from("CHANGELOG.md");
-        assert_eq!(detect_file_type_from_data(&path, data), FileType::Markdown);
+    fn bridge_html_requires_content() {
+        assert_eq!(detect_file_type_from_data(Path::new("p.html"), b"<html><body>hi</body></html>"), FileType::Html);
+        assert_eq!(detect_file_type_from_data(Path::new("p.html"), b"just text"), FileType::Unknown);
     }
 
     #[test]
-    fn test_nushell_script_not_detected_as_python() {
-        let data = br#"def __zoxide_cd [...rest] {
-    cd ...$rest
-}
-def __zoxide_pwd [] {
-    $env.PWD
-}
-"#;
-        let path = PathBuf::from("templates/nushell.txt");
-        assert_eq!(detect_file_type_from_data(&path, data), FileType::Unknown);
+    fn bridge_yaml_skip() {
+        assert_eq!(detect_file_type_from_data(Path::new("c.yaml"), b"name: test\n"), FileType::Unknown);
     }
 
     #[test]
-    fn test_real_python_still_detected() {
-        let data = br#"import os
-import sys
-from pathlib import Path
-
-def main():
-    print("hello")
-    return 0
-
-if __name__ == "__main__":
-    sys.exit(main())
-"#;
-        let path = PathBuf::from("script");
-        assert_eq!(detect_file_type_from_data(&path, data), FileType::Python);
-    }
-
-    #[test]
-    fn test_real_lua_still_detected() {
-        let data = br#"local M = {}
-
-function M.setup(opts)
-    local config = opts or {}
-    setmetatable(config, {__index = M.defaults})
-    return config
-end
-
-return M
-"#;
-        let path = PathBuf::from("plugin");
-        assert_eq!(detect_file_type_from_data(&path, data), FileType::Lua);
-    }
-
-    #[test]
-    fn test_nasm_source_without_extension_detected_as_c_family() {
-        let data = br#"[BITS 32]
-section .text
-_entry:
-    pushad
-    mov eax, [fs:0x30]
-    lodsd
-    %define K32 1
-"#;
-        let path = PathBuf::from("sample");
-        assert_eq!(detect_file_type_from_data(&path, data), FileType::C);
-    }
-
-    #[test]
-    fn test_real_shell_still_detected() {
-        let data = br#"#!/bin/sh
-set -e
-export PATH="/usr/local/bin:$PATH"
-if [ -z "$HOME" ]; then
-    echo "HOME not set"
-    exit 1
-fi
-"#;
-        let path = PathBuf::from("install");
-        // Shebang detection handles this, not heuristics
-        assert_eq!(detect_file_type_from_data(&path, data), FileType::Shell);
-    }
-
-    // --- Python bytecode ---
-
-    #[test]
-    fn test_python_bytecode_magic_py38() {
-        // Python 3.8 magic: 55 0D 0D 0A
-        let data = b"\x55\x0d\x0d\x0a\x00\x00\x00\x00rest of bytecode";
-        let path = PathBuf::from("cache/script.dat");
-        assert_eq!(
-            detect_file_type_from_data(&path, data),
-            FileType::PythonBytecode
-        );
-    }
-
-    #[test]
-    fn test_python_bytecode_magic_py311() {
-        // Python 3.11 magic: A7 0D 0D 0A
-        let data = b"\xa7\x0d\x0d\x0a\x00\x00\x00\x00rest of bytecode";
-        let path = PathBuf::from("__pycache__/app.cpython-311");
-        assert_eq!(
-            detect_file_type_from_data(&path, data),
-            FileType::PythonBytecode
-        );
-    }
-
-    #[test]
-    fn test_python_bytecode_extension() {
-        // .pyc by extension (archive entry path — no content check)
-        let path = PathBuf::from("__pycache__/app.cpython-312.pyc");
-        assert_eq!(detect_file_type_from_path(&path), FileType::PythonBytecode);
-    }
-
-    #[test]
-    fn test_ooxml_beats_displaced_mz_heuristic() {
+    fn bridge_ooxml() {
         let mut data = b"PK\x03\x04".to_vec();
         data.resize(12, 0);
-        data.extend_from_slice(b"MZ");
-
-        let path = PathBuf::from("slides/output.pptx");
-        assert_eq!(detect_file_type_from_data(&path, &data), FileType::Ooxml);
-    }
-
-    // --- Perl ---
-
-    #[test]
-    fn test_looks_like_perl_strict() {
-        assert!(looks_like_perl(b"use strict;\nuse warnings;\nmy $x = 1;\n"));
+        assert_eq!(detect_file_type_from_data(Path::new("s.pptx"), &data), FileType::Ooxml);
     }
 
     #[test]
-    fn test_looks_like_perl_warnings_only() {
-        assert!(looks_like_perl(b"use warnings;\nprint \"hello\\n\";\n"));
+    fn bridge_heuristic_python() {
+        let data = b"import os\nimport sys\ndef main():\n    print(\x27hello\x27)\n";
+        assert_eq!(detect_file_type_from_data(Path::new("script"), data), FileType::Python);
     }
 
     #[test]
-    fn test_looks_like_perl_secondary_indicators() {
-        // No strict/warnings but enough secondary idioms
-        assert!(looks_like_perl(
-            b"my $foo = 1;\nmy @bar = ();\nmy %baz = ();\nchomp $foo;\n"
-        ));
-    }
-
-    #[test]
-    fn test_looks_like_perl_negative() {
-        assert!(!looks_like_perl(
-            b"fn main() {\n    println!(\"hello\");\n}\n"
-        ));
-        assert!(!looks_like_perl(b"package main\n\nfunc main() {}\n"));
-        assert!(!looks_like_perl(b"console.log('hello');\n"));
-    }
-
-    #[test]
-    fn test_perl_extensionless_file_detected() {
+    fn bridge_detect_from_disk() {
         use std::io::Write;
-        use tempfile::NamedTempFile;
-
-        let mut f = NamedTempFile::new().unwrap();
-        f.write_all(b"use strict;\nuse warnings;\n\nmy $x = 42;\nprint \"$x\\n\";\n")
-            .unwrap();
-        let file_type = detect_file_type(f.path()).unwrap();
-        assert_eq!(file_type, FileType::Perl);
-    }
-
-    // --- JavaScript ---
-
-    #[test]
-    fn test_looks_like_javascript_iife() {
-        assert!(looks_like_javascript(
-            b"// Copyright 2012 Google Inc.\n(function(){\nvar data = {};\n});\n"
-        ));
+        let mut f = tempfile::NamedTempFile::with_suffix(".py").unwrap();
+        f.write_all(b"import os\n").unwrap();
+        assert_eq!(detect_file_type(f.path()).unwrap(), FileType::Python);
     }
 
     #[test]
-    fn test_looks_like_javascript_iife_spaced() {
-        assert!(looks_like_javascript(
-            b"(function (window, document) {\n  var x = 1;\n})(window, document);\n"
-        ));
+    fn bridge_mismatch() {
+        let elf = b"\x7fELF\x02\x01\x01\x00";
+        assert!(check_extension_content_mismatch(Path::new("image.jpg"), elf).is_some());
+        assert!(check_extension_content_mismatch(Path::new("binary"), elf).is_none());
     }
 
     #[test]
-    fn test_looks_like_javascript_secondary_indicators() {
-        // No IIFE but enough secondary JS idioms
-        assert!(looks_like_javascript(
-            b"var x = 1;\nif (typeof x === 'undefined') {\n  console.log('nope');\n}\n"
-        ));
-    }
-
-    #[test]
-    fn test_looks_like_javascript_negative() {
-        assert!(!looks_like_javascript(
-            b"fn main() {\n    println!(\"hello\");\n}\n"
-        ));
-        assert!(!looks_like_javascript(b"use strict;\nmy $x = 1;\n"));
-        assert!(!looks_like_javascript(
-            b"#include <stdio.h>\nint main() { return 0; }\n"
-        ));
-    }
-
-    #[test]
-    fn test_javascript_extensionless_file_detected() {
-        use std::io::Write;
-        use tempfile::NamedTempFile;
-
-        let mut f = NamedTempFile::new().unwrap();
-        f.write_all(
-            b"// Google Tag Manager\n(function(){\nvar data = {\n\"resource\": {\"version\":\"1\"}\n};\n})();\n",
-        )
-        .unwrap();
-        let file_type = detect_file_type(f.path()).unwrap();
-        assert_eq!(file_type, FileType::JavaScript);
-    }
-
-    // --- Batch ---
-
-    #[test]
-    fn test_looks_like_batch_echo() {
-        assert!(looks_like_batch(
-            b"@echo off\nSET NAME=world\necho Hello %NAME%\n"
-        ));
-    }
-
-    #[test]
-    fn test_looks_like_batch_dp0() {
-        assert!(looks_like_batch(
-            b"SET SCRIPT_DIR=%~dp0\ncd /d %SCRIPT_DIR%\n"
-        ));
-    }
-
-    #[test]
-    fn test_looks_like_batch_secondary() {
-        assert!(looks_like_batch(
-            b"SETLOCAL\nSET /A count=0\nGOTO :end\n:end\nENDLOCAL\n"
-        ));
-    }
-
-    #[test]
-    fn test_looks_like_batch_negative() {
-        assert!(!looks_like_batch(
-            b"#!/bin/sh\nexport PATH=/usr/local/bin:$PATH\n"
-        ));
-        assert!(!looks_like_batch(b"use strict;\nmy $x = 1;\n"));
-    }
-
-    #[test]
-    fn test_batch_extensionless_file_detected() {
-        use std::io::Write;
-        use tempfile::NamedTempFile;
-
-        let mut f = NamedTempFile::new().unwrap();
-        f.write_all(b"@echo off\nSETLOCAL\nSET /A x=1\nGOTO :eof\n")
-            .unwrap();
-        let file_type = detect_file_type(f.path()).unwrap();
-        assert_eq!(file_type, FileType::Batch);
-    }
-
-    // --- VBScript ---
-
-    #[test]
-    fn test_looks_like_vbs_wscript() {
-        assert!(looks_like_vbs(b"WScript.Echo \"Hello\"\nWScript.Quit 0\n"));
-    }
-
-    #[test]
-    fn test_looks_like_vbs_option_explicit() {
-        assert!(looks_like_vbs(b"Option Explicit\nDim x\nx = 42\n"));
-    }
-
-    #[test]
-    fn test_looks_like_vbs_secondary() {
-        assert!(looks_like_vbs(
-            b"Dim objShell\nSet objShell = CreateObject(\"WScript.Shell\")\nEnd Sub\n"
-        ));
-    }
-
-    #[test]
-    fn test_looks_like_vbs_negative() {
-        assert!(!looks_like_vbs(b"fn main() {}\n"));
-        assert!(!looks_like_vbs(b"@echo off\nSET x=1\n"));
-    }
-
-    #[test]
-    fn test_vbs_extensionless_file_detected() {
-        use std::io::Write;
-        use tempfile::NamedTempFile;
-
-        let mut f = NamedTempFile::new().unwrap();
-        f.write_all(b"Option Explicit\nDim msg\nmsg = \"Hello\"\nMsgBox msg\n")
-            .unwrap();
-        let file_type = detect_file_type(f.path()).unwrap();
-        assert_eq!(file_type, FileType::Vbs);
-    }
-
-    // --- C/C++ ---
-
-    #[test]
-    fn test_looks_like_c_system_include() {
-        assert!(looks_like_c(
-            b"#include <stdio.h>\n#include <stdlib.h>\nint main() { return 0; }\n"
-        ));
-    }
-
-    #[test]
-    fn test_looks_like_c_quoted_include() {
-        assert!(looks_like_c(b"#include \"myheader.h\"\nvoid foo() {}\n"));
-    }
-
-    #[test]
-    fn test_looks_like_c_negative() {
-        assert!(!looks_like_c(b"fn main() {}\n"));
-        assert!(!looks_like_c(b"package main\nfunc main() {}\n"));
-        assert!(!looks_like_c(b"use strict;\nmy $x = 1;\n"));
-    }
-
-    #[test]
-    fn test_c_extensionless_file_detected() {
-        use std::io::Write;
-        use tempfile::NamedTempFile;
-
-        let mut f = NamedTempFile::new().unwrap();
-        f.write_all(b"#include <stdio.h>\nint main(void) { printf(\"hi\\n\"); return 0; }\n")
-            .unwrap();
-        let file_type = detect_file_type(f.path()).unwrap();
-        assert_eq!(file_type, FileType::C);
+    fn bridge_from_roundtrip() {
+        assert_eq!(FileType::from(fileid::FileType::MachO), FileType::MachO);
+        assert_eq!(FileType::from(fileid::FileType::Markdown), FileType::Markdown);
     }
 }

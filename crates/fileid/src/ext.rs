@@ -1,0 +1,312 @@
+//! Extension and filename-based detection.
+
+use std::path::Path;
+
+use crate::FileType;
+
+/// Detect file type from path (filename match first, then extension).
+pub(crate) fn detect_from_path(path: &Path) -> Option<FileType> {
+    // Filename matches (manifests, well-known names)
+    if let Some(ft) = detect_from_filename(path) {
+        return Some(ft);
+    }
+
+    // GitHub Actions workflow files
+    let path_str = path.to_string_lossy();
+    if path_str.contains(".github/workflows/") || path_str.contains(".github\\workflows\\") {
+        let p = path_str.as_bytes();
+        if ends_with_ci(p, b".yml") || ends_with_ci(p, b".yaml") {
+            return Some(FileType::GithubActions);
+        }
+    }
+
+    // Archive multi-part extensions (check before single extension)
+    let p = path_str.as_bytes();
+    if ends_with_ci(p, b".tar.gz")
+        || ends_with_ci(p, b".tgz")
+        || ends_with_ci(p, b".tar.bz2")
+        || ends_with_ci(p, b".tar.xz")
+        || ends_with_ci(p, b".tar.zst")
+        || ends_with_ci(p, b".tar")
+    {
+        return Some(FileType::Archive);
+    }
+
+    // JAR/WAR/EAR by extension
+    if ends_with_ci(p, b".jar") || ends_with_ci(p, b".war") || ends_with_ci(p, b".ear") {
+        return Some(FileType::Jar);
+    }
+
+    // Single extension
+    detect_from_extension(path)
+}
+
+/// Returns true if the path matched via filename (not extension).
+pub(crate) fn is_filename_match(path: &Path) -> bool {
+    detect_from_filename(path).is_some()
+        || {
+            let s = path.to_string_lossy();
+            (s.contains(".github/workflows/") || s.contains(".github\\workflows\\"))
+                && (ends_with_ci(s.as_bytes(), b".yml")
+                    || ends_with_ci(s.as_bytes(), b".yaml"))
+        }
+}
+
+/// Returns true if the path has a data/config extension that should not be
+/// sent through content heuristics.
+pub(crate) fn is_data_format(path: &Path) -> bool {
+    let ext = match path.extension().and_then(|e| e.to_str()) {
+        Some(e) => e,
+        None => return false,
+    };
+
+    // Use a small stack buffer to lowercase without allocation
+    let mut buf = [0u8; 16];
+    if ext.len() >= buf.len() {
+        return false;
+    }
+    buf[..ext.len()].copy_from_slice(ext.as_bytes());
+    buf[..ext.len()].make_ascii_lowercase();
+    // Input was valid UTF-8; ASCII lowering preserves that invariant.
+    let ext_lower = std::str::from_utf8(&buf[..ext.len()]).expect("ASCII lowercase preserves UTF-8");
+
+    matches!(
+        ext_lower,
+        "yaml"
+            | "yml"
+            | "json"
+            | "toml"
+            | "ini"
+            | "cfg"
+            | "conf"
+            | "properties"
+            | "txt"
+            | "text"
+            | "md"
+            | "markdown"
+            | "rst"
+            | "adoc"
+            | "csv"
+            | "tsv"
+            | "log"
+            | "svg"
+            | "xml"
+            | "erl"
+            | "hrl"
+            | "elv"
+            | "nu"
+            | "fish"
+    )
+}
+
+/// Detect from well-known filenames.
+fn detect_from_filename(path: &Path) -> Option<FileType> {
+    let name = path.file_name()?.to_str()?;
+
+    if name.eq_ignore_ascii_case("package.json") {
+        return Some(FileType::PackageJson);
+    }
+    if name.eq_ignore_ascii_case("composer.json") {
+        return Some(FileType::ComposerJson);
+    }
+    if name.eq_ignore_ascii_case("cargo.toml") {
+        return Some(FileType::CargoToml);
+    }
+    if name.eq_ignore_ascii_case("pyproject.toml") {
+        return Some(FileType::PyProjectToml);
+    }
+    if name.eq_ignore_ascii_case("pkg-info") || name.eq_ignore_ascii_case("metadata") {
+        return Some(FileType::PkgInfo);
+    }
+    if name.eq_ignore_ascii_case("meta.json") || name.eq_ignore_ascii_case("metadata.json") {
+        return Some(FileType::PkgInfo);
+    }
+    if name.eq_ignore_ascii_case("extension.vsixmanifest")
+        || name
+            .get(name.len().saturating_sub(13)..)
+            .is_some_and(|s| s.eq_ignore_ascii_case(".vsixmanifest"))
+    {
+        return Some(FileType::VsixManifest);
+    }
+    if name.eq_ignore_ascii_case("action.yml") || name.eq_ignore_ascii_case("action.yaml") {
+        return Some(FileType::GithubActions);
+    }
+
+    None
+}
+
+/// Detect from single file extension.
+fn detect_from_extension(path: &Path) -> Option<FileType> {
+    let ext = path.extension()?.to_str()?;
+
+    // Stack-allocated lowercase (no allocation for extensions < 16 chars)
+    let mut buf = [0u8; 16];
+    if ext.len() >= buf.len() {
+        return None;
+    }
+    buf[..ext.len()].copy_from_slice(ext.as_bytes());
+    buf[..ext.len()].make_ascii_lowercase();
+    // Input was valid UTF-8; ASCII lowering preserves that invariant.
+    let ext_lower = std::str::from_utf8(&buf[..ext.len()]).expect("ASCII lowercase preserves UTF-8");
+
+    match ext_lower {
+        "sh" | "bash" | "ksh" | "zsh" | "csh" | "tcsh" | "dash" => Some(FileType::Shell),
+        "py" => Some(FileType::Python),
+        "js" | "mjs" | "cjs" | "jsx" => Some(FileType::JavaScript),
+        "ts" | "tsx" | "mts" | "cts" => Some(FileType::TypeScript),
+        "go" => Some(FileType::Go),
+        "rs" => Some(FileType::Rust),
+        "java" => Some(FileType::Java),
+        "class" => Some(FileType::JavaClass),
+        "pyc" => Some(FileType::PythonBytecode),
+        "rb" | "rbs" => Some(FileType::Ruby),
+        "php" => Some(FileType::Php),
+        "pl" | "pm" | "t" => Some(FileType::Perl),
+        "ps1" | "psm1" | "psd1" => Some(FileType::PowerShell),
+        "bat" | "cmd" => Some(FileType::Batch),
+        "vbs" | "vbe" | "wsf" | "wsc" => Some(FileType::Vbs),
+        "c" | "h" | "cpp" | "hpp" | "cc" | "cxx" | "hxx" | "hh" | "pas" | "dpr" | "asm"
+        | "s" | "nasm" => Some(FileType::C),
+        "lua" => Some(FileType::Lua),
+        "cs" => Some(FileType::CSharp),
+        "swift" => Some(FileType::Swift),
+        "m" | "mm" => Some(FileType::ObjectiveC),
+        "groovy" | "gradle" => Some(FileType::Groovy),
+        "scala" | "sc" => Some(FileType::Scala),
+        "zig" => Some(FileType::Zig),
+        "ex" | "exs" => Some(FileType::Elixir),
+        "scpt" | "applescript" => Some(FileType::AppleScript),
+        "plist" | "resx" => Some(FileType::Plist),
+        "rtf" => Some(FileType::Rtf),
+        "doc" | "xls" | "ppt" | "msg" | "dot" | "xlt" => Some(FileType::OleDoc),
+        "docx" | "xlsx" | "pptx" | "docm" | "xlsm" | "pptm" | "dotx" | "dotm" | "xltx"
+        | "xltm" => Some(FileType::Ooxml),
+        "lnk" => Some(FileType::Lnk),
+        "pdf" => Some(FileType::Pdf),
+        "jpg" | "jpeg" => Some(FileType::Jpeg),
+        "png" => Some(FileType::Png),
+        "pkl" | "pickle" | "joblib" => Some(FileType::Pickle),
+        "zip" | "7z" | "rar" | "deb" | "rpm" | "apk" | "ipa" | "xpi" | "epub" | "nupkg"
+        | "vsix" | "aar" | "egg" | "whl" | "phar" | "crx" | "crate" | "gem" | "pkg" | "cab"
+        | "gz" | "bz2" | "xz" | "zst" | "tbz" | "tbz2" | "txz" | "tgz" | "tzst" => {
+            Some(FileType::Archive)
+        }
+        "html" | "htm" => Some(FileType::Html),
+        "md" | "markdown" => Some(FileType::Markdown),
+        // Erlang — known but unsupported, return None to avoid heuristic misclassification
+        "erl" | "hrl" => None,
+        _ => None,
+    }
+}
+
+/// Case-insensitive suffix check on raw bytes (no allocation).
+fn ends_with_ci(haystack: &[u8], needle: &[u8]) -> bool {
+    if haystack.len() < needle.len() {
+        return false;
+    }
+    haystack[haystack.len() - needle.len()..].eq_ignore_ascii_case(needle)
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn python_extension() {
+        assert_eq!(
+            detect_from_path(Path::new("script.py")),
+            Some(FileType::Python)
+        );
+    }
+
+    #[test]
+    fn shell_extensions() {
+        for ext in &["sh", "bash", "zsh", "ksh"] {
+            let path = format!("script.{ext}");
+            assert_eq!(
+                detect_from_path(Path::new(&path)),
+                Some(FileType::Shell),
+                "failed for .{ext}"
+            );
+        }
+    }
+
+    #[test]
+    fn package_json() {
+        assert_eq!(
+            detect_from_path(Path::new("/foo/bar/package.json")),
+            Some(FileType::PackageJson)
+        );
+    }
+
+    #[test]
+    fn github_actions_workflow() {
+        assert_eq!(
+            detect_from_path(Path::new(".github/workflows/ci.yml")),
+            Some(FileType::GithubActions)
+        );
+    }
+
+    #[test]
+    fn tar_gz() {
+        assert_eq!(
+            detect_from_path(Path::new("data.tar.gz")),
+            Some(FileType::Archive)
+        );
+    }
+
+    #[test]
+    fn jar_extension() {
+        assert_eq!(
+            detect_from_path(Path::new("lib.jar")),
+            Some(FileType::Jar)
+        );
+    }
+
+    #[test]
+    fn unknown_extension() {
+        assert_eq!(detect_from_path(Path::new("file.xyz")), None);
+    }
+
+    #[test]
+    fn data_formats_blocked() {
+        assert!(is_data_format(Path::new("config.yaml")));
+        assert!(is_data_format(Path::new("data.json")));
+        assert!(is_data_format(Path::new("notes.txt")));
+        assert!(!is_data_format(Path::new("script.py")));
+        assert!(!is_data_format(Path::new("binary")));
+    }
+
+    #[test]
+    fn case_insensitive_extension() {
+        assert_eq!(
+            detect_from_path(Path::new("script.PY")),
+            Some(FileType::Python)
+        );
+    }
+
+    #[test]
+    fn filename_match_flag() {
+        assert!(is_filename_match(Path::new("package.json")));
+        assert!(!is_filename_match(Path::new("script.py")));
+        assert!(is_filename_match(Path::new(".github/workflows/ci.yml")));
+    }
+
+    #[test]
+    fn ooxml_extensions() {
+        assert_eq!(
+            detect_from_path(Path::new("report.docx")),
+            Some(FileType::Ooxml)
+        );
+        assert_eq!(
+            detect_from_path(Path::new("sheet.xlsx")),
+            Some(FileType::Ooxml)
+        );
+    }
+
+    #[test]
+    fn erlang_returns_none() {
+        assert_eq!(detect_from_path(Path::new("app.erl")), None);
+    }
+}

@@ -380,7 +380,9 @@ impl ArchiveAnalyzer {
 
             // Re-detect file type with actual data (magic bytes)
             let actual_type = if data.len() >= 4 {
-                detect_file_type_from_magic(&data).unwrap_or(file_type)
+                fileid::detect_content(&data)
+                    .map(|d| FileType::from(d.file_type))
+                    .unwrap_or(file_type)
             } else {
                 file_type
             };
@@ -502,7 +504,9 @@ impl ArchiveAnalyzer {
 
             // Re-detect file type with actual data
             let actual_type = if data.len() >= 4 {
-                detect_file_type_from_magic(&data).unwrap_or(file_type)
+                fileid::detect_content(&data)
+                    .map(|d| FileType::from(d.file_type))
+                    .unwrap_or(file_type)
             } else {
                 file_type
             };
@@ -1513,7 +1517,9 @@ impl ArchiveAnalyzer {
 
                         // Re-detect with magic
                         let actual_type = if data.len() >= 4 {
-                            detect_file_type_from_magic(&data).unwrap_or(file_type)
+                            fileid::detect_content(&data)
+                    .map(|d| FileType::from(d.file_type))
+                    .unwrap_or(file_type)
                         } else {
                             file_type
                         };
@@ -1906,86 +1912,12 @@ pub(crate) struct ArchiveSummary {
     pub hostile_reasons: Vec<HostileArchiveReason>,
 }
 
-/// Detect file type from magic bytes (first 4+ bytes of data)
-#[allow(dead_code)] // Used internally
-fn detect_file_type_from_magic(data: &[u8]) -> Option<FileType> {
-    if data.len() < 4 {
-        return None;
-    }
-
-    // Check magic bytes
-    // Note: 0xCAFEBABE is used by both Java class files and Mach-O FAT binaries
-    // Java class files have a major/minor version in bytes 6-7 that is non-zero
-    // Mach-O FAT has the number of architectures in bytes 4-7
-    if data.len() >= 8 && data[0..4] == [0xca, 0xfe, 0xba, 0xbe] {
-        // Check if this looks like Java (version bytes are reasonable)
-        let major = u16::from_be_bytes([data[6], data[7]]);
-        // Java class files have major versions like 45-65 (Java 1.1 to Java 21)
-        // Mach-O FAT would have very small values (number of architectures, typically 1-4)
-        if (45..=70).contains(&major) {
-            return Some(FileType::JavaClass);
-        } else {
-            return Some(FileType::MachO);
-        }
-    }
-
-    match &data[0..4] {
-        // ELF
-        [0x7f, b'E', b'L', b'F'] => Some(FileType::Elf),
-        // Mach-O (32-bit, 64-bit, FAT)
-        [0xfe, 0xed, 0xfa, 0xce]
-        | [0xce, 0xfa, 0xed, 0xfe]
-        | [0xfe, 0xed, 0xfa, 0xcf]
-        | [0xcf, 0xfa, 0xed, 0xfe]
-        | [0xbe, 0xba, 0xfe, 0xca] => Some(FileType::MachO),
-        // PE
-        [b'M', b'Z', ..] => Some(FileType::Pe),
-        // ZIP/JAR
-        [b'P', b'K', 0x03, 0x04] | [b'P', b'K', 0x05, 0x06] => {
-            // Could be ZIP or JAR - check extension or contents
-            Some(FileType::Archive)
-        }
-        // Gzip / XZ / Bzip2
-        [0x1f, 0x8b, ..] | [0xfd, b'7', b'z', b'X'] | [b'B', b'Z', b'h', ..] => {
-            Some(FileType::Archive)
-        }
-        _ => None,
-    }
-}
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_detect_file_type_from_magic() {
-        // ELF
-        let elf_data = [0x7f, b'E', b'L', b'F', 0, 0, 0, 0];
-        assert_eq!(detect_file_type_from_magic(&elf_data), Some(FileType::Elf));
-
-        // MachO 32-bit
-        let macho32_data = [0xfe, 0xed, 0xfa, 0xce, 0, 0, 0, 0];
-        assert_eq!(
-            detect_file_type_from_magic(&macho32_data),
-            Some(FileType::MachO)
-        );
-
-        // PE
-        let pe_data = [b'M', b'Z', 0, 0, 0, 0, 0, 0];
-        assert_eq!(detect_file_type_from_magic(&pe_data), Some(FileType::Pe));
-
-        // ZIP
-        let zip_data = [b'P', b'K', 0x03, 0x04, 0, 0, 0, 0];
-        assert_eq!(
-            detect_file_type_from_magic(&zip_data),
-            Some(FileType::Archive)
-        );
-
-        // Unknown
-        let unknown_data = [0, 0, 0, 0, 0, 0, 0, 0];
-        assert_eq!(detect_file_type_from_magic(&unknown_data), None);
-    }
 
     #[test]
     fn test_skip_rpm_header() {

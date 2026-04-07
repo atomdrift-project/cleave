@@ -3,7 +3,7 @@
 //! Handles .docx, .xlsx, .pptx and macro-enabled variants (.docm, .xlsm, .pptm).
 //! These are ZIP archives containing XML files and optional VBA project binaries.
 
-use super::{ole2, vba};
+use super::vba;
 use anyhow::Result;
 use std::io::{Cursor, Read};
 
@@ -82,19 +82,6 @@ pub(crate) struct OoxmlMetadata {
     pub modified: Option<String>,
     pub application: Option<String>,
     pub company: Option<String>,
-}
-
-/// Check if data is an OOXML document (ZIP with [Content_Types].xml).
-pub(crate) fn is_ooxml(data: &[u8]) -> bool {
-    if data.len() < 4 || &data[..2] != b"PK" {
-        return false;
-    }
-    let cursor = Cursor::new(data);
-    if let Ok(archive) = zip::ZipArchive::new(cursor) {
-        archive.file_names().any(|n| n == "[Content_Types].xml")
-    } else {
-        false
-    }
 }
 
 /// Parse an OOXML document.
@@ -397,17 +384,21 @@ fn find_embedded_executables(
                 found.push(entry_path.clone());
                 continue;
             }
-            // Check for ELF
-            if data.len() >= 4 && data[..4] == [0x7f, b'E', b'L', b'F'] {
-                found.push(entry_path.clone());
-                continue;
-            }
-            // Check for OLE2 containing PE (embedded OLE objects)
-            if data.len() >= 8 && ole2::is_ole2(&data) {
-                // Scan the first few KB for MZ within the OLE2 container
-                let scan_len = data.len().min(64 * 1024);
-                if memchr::memmem::find(&data[..scan_len], b"MZ").is_some() {
-                    found.push(entry_path.clone());
+            // Check for embedded executables (ELF, PE) or OLE2 containers with PE
+            if let Some(det) = fileid::detect_content(&data) {
+                match det.file_type {
+                    fileid::FileType::Elf | fileid::FileType::Pe | fileid::FileType::MachO => {
+                        found.push(entry_path.clone());
+                        continue;
+                    }
+                    fileid::FileType::OleDoc => {
+                        // OLE2 container — scan for embedded PE
+                        let scan_len = data.len().min(64 * 1024);
+                        if memchr::memmem::find(&data[..scan_len], b"MZ").is_some() {
+                            found.push(entry_path.clone());
+                        }
+                    }
+                    _ => {}
                 }
             }
         }
@@ -477,41 +468,4 @@ mod tests {
         assert_eq!(OoxmlSubtype::Unknown.as_str(), "ooxml");
     }
 
-    #[test]
-    fn test_is_ooxml_non_zip() {
-        assert!(!is_ooxml(b"not a zip file"));
-        assert!(!is_ooxml(&[0xD0, 0xCF, 0x11, 0xE0])); // OLE2 magic
-    }
-
-    #[test]
-    fn test_is_ooxml_plain_zip() {
-        // Create a minimal ZIP without [Content_Types].xml
-        let buf = Vec::new();
-        let cursor = Cursor::new(buf);
-        let mut writer = zip::ZipWriter::new(cursor);
-        let options = zip::write::SimpleFileOptions::default();
-        #[allow(clippy::expect_used)]
-        writer.start_file("test.txt", options).expect("start_file");
-        #[allow(clippy::expect_used)]
-        let cursor = writer.finish().expect("finish");
-        let data = cursor.into_inner();
-        assert!(!is_ooxml(&data)); // ZIP but not OOXML
-    }
-
-    #[test]
-    fn test_is_ooxml_valid() {
-        // Create a minimal ZIP with [Content_Types].xml
-        let buf = Vec::new();
-        let cursor = Cursor::new(buf);
-        let mut writer = zip::ZipWriter::new(cursor);
-        let options = zip::write::SimpleFileOptions::default();
-        #[allow(clippy::expect_used)]
-        writer
-            .start_file("[Content_Types].xml", options)
-            .expect("start_file");
-        #[allow(clippy::expect_used)]
-        let cursor = writer.finish().expect("finish");
-        let data = cursor.into_inner();
-        assert!(is_ooxml(&data));
-    }
 }

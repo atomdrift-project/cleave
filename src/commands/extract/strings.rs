@@ -58,6 +58,18 @@ fn run_direct(target: &str, min_length: usize, format: &cli::OutputFormat) -> Re
         anyhow::bail!("File does not exist: {}", target);
     }
 
+    // Reject archives — strings on compressed data is meaningless.
+    // Use `cleave strings <file> --layer <member>` or run on extracted members.
+    if let Ok(file_type) = detect_file_type(path) {
+        if matches!(file_type, FileType::Archive | FileType::Jar) {
+            anyhow::bail!(
+                "Unsupported file type for string extraction: {:?}. \
+                 Run on extracted archive members instead (e.g. cleave strings <extracted_file>).",
+                file_type
+            );
+        }
+    }
+
     let data = fs::read(path)?;
 
     // For source code files with AST support, extract strings via AST parsing

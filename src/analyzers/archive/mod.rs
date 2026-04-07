@@ -861,8 +861,8 @@ impl ArchiveAnalyzer {
             score: final_score.ceil() as u32,
             ..Default::default()
         });
-        // Keep files empty in streaming mode to save memory
-        report.files = Vec::new();
+        // Files are kept in the report — callers need per-file data for
+        // the compact JSON output (per-file scores, findings, extracted_path).
 
         // Set timing
         report.metadata.analysis_duration_ms = start.elapsed().as_millis() as u64;

@@ -7,10 +7,8 @@
 
 use crate::radare2::R2String;
 use crate::types::{StringInfo, StringType};
-use regex::Regex;
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
-use std::sync::OnceLock;
 use stng::{ExtractedString, StringMethod};
 
 /// Convert stng StringMethod to a string for encoding_chain tracking
@@ -33,48 +31,6 @@ fn stng_method_to_string(method: StringMethod) -> String {
     .to_string()
 }
 
-// Static regex helper functions - patterns compiled once on first use
-#[allow(dead_code)] // Used internally by string classification
-fn url_regex() -> Option<&'static Regex> {
-    static RE: OnceLock<Option<Regex>> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(r"(?i)(https?|ftp)://[^\s<>]{1,2048}").ok())
-        .as_ref()
-}
-
-#[allow(dead_code)] // Used internally by string classification
-fn ip_regex() -> Option<&'static Regex> {
-    static RE: OnceLock<Option<Regex>> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(r"\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}").ok())
-        .as_ref()
-}
-
-#[allow(dead_code)] // Used internally by string classification
-fn version_ip_regex() -> Option<&'static Regex> {
-    static RE: OnceLock<Option<Regex>> = OnceLock::new();
-    RE.get_or_init(|| {
-        Regex::new(r"(?i)(?:Chrome|Safari|Firefox|Edge|Opera|Chromium|Version|AppleWebKit|KHTML|Gecko|Trident|OPR|Mobile|MSIE|rv:|v)/\d+\.\d+\.\d+\.\d+")
-            .ok()
-    })
-    .as_ref()
-}
-
-#[allow(dead_code)] // Used internally by string classification
-fn email_regex() -> Option<&'static Regex> {
-    static RE: OnceLock<Option<Regex>> = OnceLock::new();
-    RE.get_or_init(|| {
-        Regex::new(r"[A-Za-z0-9._%+-]{1,64}@[A-Za-z0-9.-]{1,253}\.[A-Za-z]{2,63}").ok()
-    })
-    .as_ref()
-}
-
-#[allow(dead_code)] // Used internally by string classification
-fn base64_regex() -> Option<&'static Regex> {
-    static RE: OnceLock<Option<Regex>> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(r"^[A-Za-z0-9+/]{16,65536}={0,2}$").ok())
-        .as_ref()
-}
-
-/// Maximum number of strings to extract from a single file (100,000).
 pub(crate) const MAX_STRINGS_PER_FILE: usize = 100_000;
 
 /// Maximum total bytes of all extracted strings (50 MB).
@@ -245,28 +201,6 @@ impl StringExtractor {
         strings
     }
 
-    /// Convert an R2String directly to StringInfo (fast path when using cached r2 strings)
-    fn convert_r2_string(&self, r2: R2String) -> StringInfo {
-        let normalized = Self::normalize_symbol(&r2.string);
-        let string_type = if let Some((override_type, _)) = self.symbol_map.get(normalized.as_ref())
-        {
-            *override_type
-        } else {
-            // Classify based on content
-            self.classify_string_type(&r2.string)
-        };
-
-        StringInfo {
-            value: r2.string,
-            offset: Some(r2.vaddr),
-            encoding: r2.string_type, // "utf8", "ascii", etc.
-            string_type,
-            section: None, // R2String doesn't have section info
-            encoding_chain: Vec::new(),
-            fragments: None,
-        }
-    }
-
     /// Convert an ExtractedString from stng to StringInfo
     fn convert_extracted_string(&self, es: ExtractedString) -> StringInfo {
         // Use stng's classification directly (StringType is now an alias for StringKind)
@@ -304,167 +238,6 @@ impl StringExtractor {
         info
     }
 
-    /// Classify a string by type
-    fn classify_string(&self, value: String, offset: usize, section: Option<String>) -> StringInfo {
-        let normalized = Self::normalize_symbol(&value);
-
-        let (stype, _lib_info) = match self.symbol_map.get(normalized.as_ref()) {
-            Some((t, l)) => (*t, l.clone()),
-            None => {
-                let t = if url_regex().is_some_and(|regex| regex.is_match(&value)) {
-                    StringType::Url
-                } else if self.is_real_ip(&value) {
-                    StringType::IP
-                } else if email_regex().is_some_and(|regex| regex.is_match(&value)) {
-                    StringType::Email
-                } else if self.is_path(&value) {
-                    StringType::Path
-                } else if value.len() >= 16
-                    && base64_regex().is_some_and(|regex| regex.is_match(&value))
-                {
-                    StringType::Base64
-                } else {
-                    StringType::Const
-                };
-                (t, None)
-            }
-        };
-
-        StringInfo {
-            value,
-            offset: Some(offset as u64),
-            encoding: "utf8".to_string(),
-            string_type: stype,
-            section,
-            encoding_chain: Vec::new(),
-            fragments: None,
-        }
-    }
-    /// Classify a string's type without creating a StringInfo object
-    /// NOTE: This is now redundant since we use stng's classification directly
-    pub(crate) fn classify_string_type(&self, value: &str) -> StringType {
-        let normalized = Self::normalize_symbol(value);
-        if let Some((stype, _)) = self.symbol_map.get(normalized.as_ref()) {
-            return *stype;
-        }
-
-        if url_regex().is_some_and(|regex| regex.is_match(value)) {
-            StringType::Url
-        } else if self.is_real_ip(value) {
-            StringType::IP
-        } else if email_regex().is_some_and(|regex| regex.is_match(value)) {
-            StringType::Email
-        } else if self.is_path(value) {
-            StringType::Path
-        } else if value.len() >= 16 && base64_regex().is_some_and(|regex| regex.is_match(value)) {
-            StringType::Base64
-        } else {
-            StringType::Const
-        }
-    }
-
-    /// Classify decoded string content - doesn't check for encoding types like base64/hex
-    /// since this is already decoded content from stng
-    /// NOTE: This is now redundant since we use stng's classification directly
-    fn classify_decoded_string(&self, value: &str) -> StringType {
-        let normalized = Self::normalize_symbol(value);
-        if let Some((stype, _)) = self.symbol_map.get(normalized.as_ref()) {
-            return *stype;
-        }
-
-        if url_regex().is_some_and(|regex| regex.is_match(value)) {
-            StringType::Url
-        } else if self.is_real_ip(value) {
-            StringType::IP
-        } else if email_regex().is_some_and(|regex| regex.is_match(value)) {
-            StringType::Email
-        } else if self.is_path(value) {
-            StringType::Path
-        } else {
-            // Decoded content is just plain text, not base64/hex
-            StringType::Const
-        }
-    }
-
-    fn find_symbol_type(&self, value: &str) -> Option<StringType> {
-        let normalized = Self::normalize_symbol(value);
-        self.symbol_map.get(normalized.as_ref()).map(|(t, _)| *t)
-    }
-
-    fn get_import_library(&self, value: &str) -> Option<String> {
-        let normalized = Self::normalize_symbol(value);
-        self.symbol_map
-            .get(normalized.as_ref())
-            .and_then(|(_, l)| l.clone())
-    }
-
-    fn matches_symbol_set(&self, _set: &HashSet<String>, value: &str) -> bool {
-        let normalized = Self::normalize_symbol(value);
-        self.symbol_map.contains_key(normalized.as_ref())
-    }
-
-    /// Check if string contains a real IP address (not a version string)
-    fn is_real_ip(&self, s: &str) -> bool {
-        // Must contain IP-like pattern
-        let Some(ip_regex) = ip_regex() else {
-            return false;
-        };
-        if !ip_regex.is_match(s) {
-            return false;
-        }
-        // Exclude version strings like "Chrome/100.0.0.0", "Safari/537.36.0.0"
-        if version_ip_regex().is_some_and(|regex| regex.is_match(s)) {
-            return false;
-        }
-        // Validate that IP octets are in valid range (0-255)
-        if let Some(caps) = ip_regex.find(s) {
-            let ip_str = caps.as_str();
-            let octets: Vec<&str> = ip_str.split('.').collect();
-            if octets.len() == 4 {
-                for octet in octets {
-                    if let Ok(val) = octet.parse::<u32>() {
-                        if val > 255 {
-                            return false;
-                        }
-                    } else {
-                        return false;
-                    }
-                }
-                return true;
-            }
-        }
-        false
-    }
-
-    /// Check if string looks like a file path
-    fn is_path(&self, s: &str) -> bool {
-        // Unix paths
-        if s.starts_with('/') && s.contains('/') {
-            return true;
-        }
-
-        // Windows paths
-        if s.len() > 3 && s.chars().nth(1) == Some(':') && s.chars().nth(2) == Some('\\') {
-            return true;
-        }
-
-        // Relative paths with directory separators
-        if (s.contains('/') || s.contains('\\')) && !s.contains(' ') {
-            // Check for common path patterns
-            if s.contains("/bin/")
-                || s.contains("/usr/")
-                || s.contains("/etc/")
-                || s.contains("/tmp/")
-                || s.contains("/var/")
-                || s.contains(r"C:\")
-                || s.contains("Program")
-            {
-                return true;
-            }
-        }
-
-        false
-    }
 }
 
 impl Default for StringExtractor {
@@ -485,84 +258,6 @@ mod tests {
         let strings = extractor.extract_smart(data, None);
 
         assert!(!strings.is_empty());
-    }
-
-    #[test]
-    fn test_path_detection() {
-        let extractor = StringExtractor::new();
-
-        assert!(extractor.is_path("/usr/bin/ls"));
-        assert!(extractor.is_path("/etc/passwd"));
-        assert!(extractor.is_path(r"C:\Windows\System32"));
-        assert!(!extractor.is_path("hello world"));
-    }
-
-    #[test]
-    fn test_ip_excludes_version_strings() {
-        let extractor = StringExtractor::new();
-
-        // Version strings should NOT be detected as IPs
-        assert!(
-            !extractor.is_real_ip("Chrome/100.0.0.0"),
-            "Chrome version should not be IP"
-        );
-        assert!(
-            !extractor.is_real_ip("Safari/537.36.0.0"),
-            "Safari version should not be IP"
-        );
-        assert!(
-            !extractor.is_real_ip("AppleWebKit/537.36.0.0"),
-            "AppleWebKit version should not be IP"
-        );
-        assert!(
-            !extractor.is_real_ip("Mozilla/5.0 Chrome/100.0.0.0 Safari/537.36"),
-            "UA string with version should not be IP"
-        );
-        assert!(
-            !extractor.is_real_ip("Firefox/115.0.0.0"),
-            "Firefox version should not be IP"
-        );
-
-        // Real IPs should be detected
-        assert!(
-            extractor.is_real_ip("192.168.1.1"),
-            "Private IP should be IP"
-        );
-        assert!(extractor.is_real_ip("10.0.0.1"), "Private IP should be IP");
-        assert!(
-            extractor.is_real_ip("8.8.8.8"),
-            "Public DNS IP should be IP"
-        );
-        assert!(
-            extractor.is_real_ip("Connect to 192.168.1.1 now"),
-            "IP in sentence should be IP"
-        );
-    }
-
-    #[test]
-    fn test_ip_validates_octets() {
-        let extractor = StringExtractor::new();
-
-        // Invalid octets (> 255) should not be detected as IPs
-        assert!(
-            !extractor.is_real_ip("300.168.1.1"),
-            "Invalid octet should not be IP"
-        );
-        assert!(
-            !extractor.is_real_ip("192.300.1.1"),
-            "Invalid octet should not be IP"
-        );
-        assert!(
-            !extractor.is_real_ip("192.168.1.300"),
-            "Invalid octet should not be IP"
-        );
-
-        // Valid edge cases
-        assert!(
-            extractor.is_real_ip("255.255.255.255"),
-            "Max IP should be IP"
-        );
-        assert!(extractor.is_real_ip("0.0.0.0"), "Zero IP should be IP");
     }
 
     #[test]
@@ -606,50 +301,6 @@ mod tests {
 
         // Offset should be recorded for each string
         assert!(strings.iter().all(|s| s.offset.is_some()));
-    }
-
-    #[test]
-    fn test_classify_string_type() {
-        let extractor = StringExtractor::new();
-
-        assert_eq!(
-            extractor.classify_string_type("https://example.com"),
-            StringType::Url
-        );
-        assert_eq!(
-            extractor.classify_string_type("192.168.1.1"),
-            StringType::IP
-        );
-        assert_eq!(
-            extractor.classify_string_type("user@example.com"),
-            StringType::Email
-        );
-        assert_eq!(
-            extractor.classify_string_type("/usr/bin/bash"),
-            StringType::Path
-        );
-        assert_eq!(
-            extractor.classify_string_type("plain text"),
-            StringType::Const
-        );
-    }
-
-    #[test]
-    fn test_windows_path_detection() {
-        let extractor = StringExtractor::new();
-
-        assert!(extractor.is_path(r"C:\Windows\System32\cmd.exe"));
-        assert!(extractor.is_path(r"D:\Program Files\App"));
-    }
-
-    #[test]
-    fn test_relative_path_detection() {
-        let extractor = StringExtractor::new();
-
-        assert!(extractor.is_path("/bin/sh"));
-        assert!(extractor.is_path("/usr/local/bin"));
-        assert!(!extractor.is_path("just/text"));
-        assert!(!extractor.is_path("not a path"));
     }
 
     #[test]

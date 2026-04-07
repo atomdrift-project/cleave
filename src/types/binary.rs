@@ -205,9 +205,9 @@ pub struct StringInfo {
     /// Character encoding — only serialized for exotic encodings (utf16le, utf16be)
     #[serde(skip_serializing_if = "is_common_encoding", default)]
     pub encoding: String,
-    /// String classification (Const, CStr, Wide, etc.)
-    #[serde(rename = "type")]
-    pub string_type: StringType,
+    /// String classification — None means unclassified (formerly Const)
+    #[serde(rename = "type", skip_serializing_if = "Option::is_none", default)]
+    pub string_type: Option<StringType>,
     /// Binary section where found — derivable from offset + sections array, omitted from output
     #[serde(skip_serializing, default)]
     pub section: Option<String>,
@@ -570,7 +570,7 @@ mod tests {
 
     #[test]
     fn test_string_type_copy() {
-        let st = StringType::Const;
+        let st = StringType::Url;
         let st2 = st; // Copy
         assert_eq!(st, st2);
     }
@@ -589,7 +589,6 @@ mod tests {
             StringType::Import,
             StringType::Export,
             StringType::FuncName,
-            StringType::Const,
             StringType::ShellCmd,
         ];
         for (i, v1) in variants.iter().enumerate() {
@@ -636,14 +635,14 @@ mod tests {
             value: "http://example.com".to_string(),
             offset: Some(0x1000),
             encoding: "utf-8".to_string(),
-            string_type: StringType::Url,
+            string_type: Some(StringType::Url),
             section: Some(".rodata".to_string()),
             encoding_chain: vec![],
             fragments: None,
         };
         assert_eq!(info.value, "http://example.com");
         assert_eq!(info.offset, Some(0x1000));
-        assert_eq!(info.string_type, StringType::Url);
+        assert_eq!(info.string_type, Some(StringType::Url));
     }
 
     #[test]
@@ -652,7 +651,7 @@ mod tests {
             value: "decoded text".to_string(),
             offset: None,
             encoding: "utf-8".to_string(),
-            string_type: StringType::Const,
+            string_type: None,
             section: None,
             encoding_chain: vec!["base64".to_string(), "zlib".to_string()],
             fragments: None,
@@ -667,12 +666,12 @@ mod tests {
             value: "stacked".to_string(),
             offset: Some(0x2000),
             encoding: "ascii".to_string(),
-            string_type: StringType::StackString,
+            string_type: Some(StringType::StackString),
             section: Some(".text".to_string()),
             encoding_chain: vec![],
             fragments: Some(vec!["s".to_string(), "t".to_string(), "a".to_string()]),
         };
-        assert_eq!(info.string_type, StringType::StackString);
+        assert_eq!(info.string_type, Some(StringType::StackString));
         assert!(info.fragments.is_some());
         assert_eq!(info.fragments.unwrap().len(), 3);
     }

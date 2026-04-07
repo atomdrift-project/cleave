@@ -71,10 +71,10 @@ fn test_string_type_enum_variants() {
         StringType::Path,
         StringType::Email,
         StringType::Base64,
-        StringType::Const,
-        StringType::Const,
-        StringType::Const,
-        StringType::Const,
+        StringType::Import,
+        StringType::Export,
+        StringType::FuncName,
+        StringType::ShellCmd,
     ];
     assert_eq!(types.len(), 9);
 }
@@ -308,14 +308,14 @@ fn test_string_info_creation() {
         value: "http://example.com".to_string(),
         offset: Some(0x2000),
         encoding: "utf8".to_string(),
-        string_type: StringType::Url,
+        string_type: Some(StringType::Url),
         section: Some(".rodata".to_string()),
         encoding_chain: Vec::new(),
         fragments: None,
     };
 
     assert_eq!(string.value, "http://example.com");
-    assert_eq!(string.string_type, StringType::Url);
+    assert_eq!(string.string_type, Some(StringType::Url));
     assert_eq!(string.encoding, "utf8");
 }
 

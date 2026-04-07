@@ -1860,7 +1860,7 @@ mod tests {
             value: value.to_string(),
             offset: None,
             encoding: "utf-8".to_string(),
-            string_type: crate::types::StringType::Const,
+            string_type: None,
             section: None,
             encoding_chain: Vec::new(),
             fragments: None,

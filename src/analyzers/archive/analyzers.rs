@@ -318,7 +318,7 @@ impl ArchiveAnalyzer {
                 for string in &file_report.strings {
                     if matches!(
                         string.string_type,
-                        StringType::Url | StringType::IP | StringType::Base64
+                        Some(StringType::Url | StringType::IP | StringType::Base64)
                     ) {
                         all_strings.push(string.clone());
                     }
@@ -474,7 +474,7 @@ impl ArchiveAnalyzer {
                 for string in &file_report.strings {
                     if matches!(
                         string.string_type,
-                        StringType::Url | StringType::IP | StringType::Base64
+                        Some(StringType::Url | StringType::IP | StringType::Base64)
                     ) {
                         // LIMIT: Cap aggregated strings at 10,000
                         if all_strings.len() < 10_000 {
@@ -796,7 +796,7 @@ impl ArchiveAnalyzer {
                 for string in &file_entry.strings {
                     if matches!(
                         string.string_type,
-                        StringType::Url | StringType::IP | StringType::Base64
+                        Some(StringType::Url | StringType::IP | StringType::Base64)
                     ) {
                         // LIMIT: Cap aggregated strings at 10,000
                         if all_strings.len() < 10_000 {

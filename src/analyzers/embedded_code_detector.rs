@@ -97,19 +97,19 @@ fn detect_language_inner(string_info: &StringInfo, is_encoded: bool) -> Option<F
 
     // Check if already classified as code by stng
     match kind {
-        StringType::PythonCode => {
+        Some(StringType::PythonCode) => {
             if should_reject_markup(value, is_encoded) {
                 return None;
             }
             return Some(FileType::Python);
         }
-        StringType::JavaScriptCode => {
+        Some(StringType::JavaScriptCode) => {
             if should_reject_markup(value, is_encoded) {
                 return None;
             }
             return Some(FileType::JavaScript);
         }
-        StringType::PhpCode => {
+        Some(StringType::PhpCode) => {
             if should_reject_markup(value, is_encoded) {
                 return None;
             }
@@ -118,7 +118,7 @@ fn detect_language_inner(string_info: &StringInfo, is_encoded: bool) -> Option<F
             }
             return Some(FileType::Php);
         }
-        StringType::ShellCmd => {
+        Some(StringType::ShellCmd) => {
             if is_real_shell(value) {
                 return Some(FileType::Shell);
             }
@@ -158,19 +158,19 @@ fn detect_language_inner(string_info: &StringInfo, is_encoded: bool) -> Option<F
     // If not classified as code by stng yet, classify it now
     let classified_kind = stng::classify_string(value);
     match classified_kind {
-        StringType::PythonCode => {
+        Some(StringType::PythonCode) => {
             if should_reject_markup(value, is_encoded) {
                 return None;
             }
             return Some(FileType::Python);
         }
-        StringType::JavaScriptCode => {
+        Some(StringType::JavaScriptCode) => {
             if should_reject_markup(value, is_encoded) {
                 return None;
             }
             return Some(FileType::JavaScript);
         }
-        StringType::PhpCode => {
+        Some(StringType::PhpCode) => {
             if should_reject_markup(value, is_encoded) {
                 return None;
             }
@@ -179,7 +179,7 @@ fn detect_language_inner(string_info: &StringInfo, is_encoded: bool) -> Option<F
             }
             return Some(FileType::Php);
         }
-        StringType::ShellCmd => {
+        Some(StringType::ShellCmd) => {
             if is_real_shell(value) {
                 return Some(FileType::Shell);
             }
@@ -1051,18 +1051,28 @@ pub(crate) fn process_all_strings_with_host(
     // We prioritize longer strings, and strings already classified as code by stng
     let mut sorted_strings: Vec<(usize, &StringInfo)> = strings.iter().enumerate().collect();
     sorted_strings.sort_by(|(_, a), (_, b)| {
-        let is_code = |kind: &crate::types::binary::StringType| -> bool {
+        let is_code = |kind: &Option<crate::types::binary::StringType>| -> bool {
             matches!(
                 kind,
-                crate::types::binary::StringType::PythonCode
-                    | crate::types::binary::StringType::JavaScriptCode
-                    | crate::types::binary::StringType::PhpCode
-                    | crate::types::binary::StringType::ShellCmd
-                    | crate::types::binary::StringType::AppleScript
+                Some(
+                    crate::types::binary::StringType::PythonCode
+                        | crate::types::binary::StringType::JavaScriptCode
+                        | crate::types::binary::StringType::PhpCode
+                        | crate::types::binary::StringType::ShellCmd
+                        | crate::types::binary::StringType::AppleScript
+                )
             )
         };
-        let score_a = if is_code(&a.string_type) { 1000000 } else { a.value.len() };
-        let score_b = if is_code(&b.string_type) { 1000000 } else { b.value.len() };
+        let score_a = if is_code(&a.string_type) {
+            1000000
+        } else {
+            a.value.len()
+        };
+        let score_b = if is_code(&b.string_type) {
+            1000000
+        } else {
+            b.value.len()
+        };
         score_b.cmp(&score_a)
     });
 
@@ -1177,7 +1187,7 @@ mod tests {
         StringInfo {
             value: value.to_string(),
             offset: Some(0),
-            string_type: crate::types::binary::StringType::Const,
+            string_type: None,
             encoding: "utf-8".to_string(),
             section: None,
             encoding_chain: Vec::new(),
@@ -1265,7 +1275,7 @@ mod tests {
         let info = StringInfo {
             value: gibberish.to_string(),
             offset: Some(0x27f6),
-            string_type: crate::types::binary::StringType::ShellCmd,
+            string_type: Some(crate::types::binary::StringType::ShellCmd),
             encoding: "utf-8".to_string(),
             section: None,
             encoding_chain: vec!["xor".to_string()],
@@ -1290,7 +1300,7 @@ mod tests {
         let info = StringInfo {
             value: noise.to_string(),
             offset: Some(0),
-            string_type: crate::types::binary::StringType::PhpCode,
+            string_type: Some(crate::types::binary::StringType::PhpCode),
             encoding: "utf-8".to_string(),
             section: None,
             encoding_chain: Vec::new(),

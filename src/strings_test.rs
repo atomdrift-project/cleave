@@ -54,6 +54,6 @@ fn test_symbol_map_enrichment() {
     let data = b"malloc\0";
     let strings = extractor.extract_smart(data, None);
     if let Some(s) = strings.iter().find(|s| s.value == "malloc") {
-        assert_eq!(s.string_type, crate::types::StringType::Import);
+        assert_eq!(s.string_type, Some(crate::types::StringType::Import));
     }
 }

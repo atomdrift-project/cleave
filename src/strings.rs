@@ -133,7 +133,7 @@ impl StringExtractor {
                     data_offset: r.paddr,
                     section: None,
                     method: StringMethod::R2String,
-                    kind: stng::StringKind::Const,
+                    kind: None,
                     raw: None,
                     source: None,
                     fragments: None,
@@ -208,9 +208,9 @@ impl StringExtractor {
         let normalized = Self::normalize_symbol(&es.value);
         let string_type = if let Some((override_type, _)) = self.symbol_map.get(normalized.as_ref())
         {
-            *override_type
+            Some(*override_type)
         } else {
-            // Use stng's kind directly
+            // Use stng's kind directly (already Option<StringType>)
             es.kind
         };
 
@@ -268,7 +268,7 @@ mod tests {
 
         let email_string = strings
             .iter()
-            .find(|s| matches!(s.string_type, StringType::Email));
+            .find(|s| s.string_type == Some(StringType::Email));
         assert!(email_string.is_some());
     }
 
@@ -352,12 +352,12 @@ mod tests {
         // Should find the URL - stng classifies URLs
         let has_url = strings
             .iter()
-            .any(|s| s.value.contains("example.com") && matches!(s.string_type, StringType::Url));
+            .any(|s| s.value.contains("example.com") && s.string_type == Some(StringType::Url));
 
         // Should find the path
         let has_path = strings
             .iter()
-            .any(|s| s.value.contains("/usr/bin/ls") && matches!(s.string_type, StringType::Path));
+            .any(|s| s.value.contains("/usr/bin/ls") && s.string_type == Some(StringType::Path));
 
         assert!(
             has_url || has_path,

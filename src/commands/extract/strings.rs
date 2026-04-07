@@ -218,16 +218,16 @@ fn format_strings_output(
 
                 // Use stng-style type labels
                 let stype_str = match s.string_type {
-                    crate::types::StringType::Import => "import",
-                    crate::types::StringType::Export => "export",
-                    crate::types::StringType::FuncName => "func",
-                    crate::types::StringType::StackString => "stack",
-                    crate::types::StringType::Url => "url",
-                    crate::types::StringType::IP => "ip",
-                    crate::types::StringType::Email => "email",
-                    crate::types::StringType::Path => "path",
-                    crate::types::StringType::Base64 => "base64",
-                    crate::types::StringType::ShellCmd => "shell",
+                    Some(crate::types::StringType::Import) => "import",
+                    Some(crate::types::StringType::Export) => "export",
+                    Some(crate::types::StringType::FuncName) => "func",
+                    Some(crate::types::StringType::StackString) => "stack",
+                    Some(crate::types::StringType::Url) => "url",
+                    Some(crate::types::StringType::IP) => "ip",
+                    Some(crate::types::StringType::Email) => "email",
+                    Some(crate::types::StringType::Path) => "path",
+                    Some(crate::types::StringType::Base64) => "base64",
+                    Some(crate::types::StringType::ShellCmd) => "shell",
                     _ => "-",
                 };
 
@@ -245,7 +245,7 @@ fn format_strings_output(
                     .replace('\r', "\\r")
                     .replace('\t', "\\t");
 
-                if s.string_type == crate::types::StringType::Base64 {
+                if s.string_type == Some(crate::types::StringType::Base64) {
                     use base64::{engine::general_purpose, Engine as _};
 
                     if let Ok(decoded) = general_purpose::STANDARD.decode(s.value.trim()) {

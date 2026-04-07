@@ -230,18 +230,7 @@ impl GenericAnalyzer {
                     report.strings.push(crate::types::binary::StringInfo {
                         value: es.value.clone(),
                         offset: Some(es.data_offset),
-                        string_type: match es.kind {
-                            stng::StringKind::FuncName => {
-                                crate::types::binary::StringType::FuncName
-                            }
-                            stng::StringKind::Import => crate::types::binary::StringType::Import,
-                            stng::StringKind::Url => crate::types::binary::StringType::Url,
-                            stng::StringKind::Path | stng::StringKind::FilePath => {
-                                crate::types::binary::StringType::Path
-                            }
-                            stng::StringKind::EnvVar => crate::types::binary::StringType::EnvVar,
-                            _ => crate::types::binary::StringType::Const,
-                        },
+                        string_type: es.kind,
                         encoding: "utf-8".to_string(),
                         section: es.section.clone(),
                         encoding_chain: Vec::new(),
@@ -356,7 +345,7 @@ impl GenericAnalyzer {
                         report.strings.push(StringInfo {
                             value: s.to_string(),
                             offset: Some(node.start_byte() as u64),
-                            string_type: StringType::Const,
+                            string_type: None,
                             encoding: "utf-8".to_string(),
                             section: Some("ast".to_string()),
                             encoding_chain: Vec::new(),
@@ -399,7 +388,7 @@ impl GenericAnalyzer {
                     report.strings.push(StringInfo {
                         value: s.to_string(),
                         offset: Some(cap.start() as u64),
-                        string_type: StringType::Const,
+                        string_type: None,
                         encoding: "utf-8".to_string(),
                         section: Some("regex".to_string()),
                         encoding_chain: Vec::new(),
@@ -416,7 +405,7 @@ impl GenericAnalyzer {
                     report.strings.push(StringInfo {
                         value: s.to_string(),
                         offset: Some(cap.start() as u64),
-                        string_type: StringType::Const,
+                        string_type: None,
                         encoding: "utf-8".to_string(),
                         section: Some("regex".to_string()),
                         encoding_chain: Vec::new(),

@@ -75,7 +75,7 @@ impl PickleAnalyzer {
         for s in &strings {
             report.strings.push(crate::types::StringInfo {
                 value: s.clone(),
-                string_type: crate::types::StringType::Const,
+                string_type: None,
                 offset: None,
                 encoding: String::new(),
                 section: None,

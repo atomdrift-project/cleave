@@ -11,7 +11,7 @@ pub(crate) fn extract_paths_from_strings(strings: &[StringInfo]) -> Vec<PathInfo
     let mut paths = Vec::new();
 
     for string_info in strings {
-        if string_info.string_type == StringType::Path {
+        if string_info.string_type == Some(StringType::Path) {
             let path_info = analyze_path(&string_info.value, "strings");
             paths.push(path_info);
         }
@@ -472,7 +472,7 @@ mod tests {
         let strings = vec![
             StringInfo {
                 value: "/etc/passwd".to_string(),
-                string_type: StringType::Path,
+                string_type: Some(StringType::Path),
                 offset: None,
                 encoding: "ascii".to_string(),
                 section: None,
@@ -481,7 +481,7 @@ mod tests {
             },
             StringInfo {
                 value: "/bin/sh".to_string(),
-                string_type: StringType::Path,
+                string_type: Some(StringType::Path),
                 offset: None,
                 encoding: "ascii".to_string(),
                 section: None,
@@ -490,7 +490,7 @@ mod tests {
             },
             StringInfo {
                 value: "not a path".to_string(),
-                string_type: StringType::Const,
+                string_type: None,
                 offset: None,
                 encoding: "ascii".to_string(),
                 section: None,

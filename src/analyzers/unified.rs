@@ -535,11 +535,7 @@ impl UnifiedSourceAnalyzer {
                     | stng::StringMethod::UrlDecode
                     | stng::StringMethod::UnicodeEscapeDecode
             ) {
-                let string_type = match es.kind {
-                    stng::StringKind::ShellCmd => crate::types::StringType::ShellCmd,
-                    stng::StringKind::Url => crate::types::StringType::Url,
-                    _ => crate::types::StringType::Const,
-                };
+                let string_type = es.kind;
 
                 let encoding_method = match es.method {
                     stng::StringMethod::Base64Decode => "base64",
@@ -890,7 +886,7 @@ impl UnifiedSourceAnalyzer {
             let content_as_string = crate::types::binary::StringInfo {
                 value: content.to_string(),
                 offset: Some(0),
-                string_type: crate::types::binary::StringType::Const,
+                string_type: None,
                 encoding: "utf-8".to_string(),
                 section: None,
                 encoding_chain: Vec::new(),
@@ -1065,7 +1061,7 @@ impl UnifiedSourceAnalyzer {
                         report.strings.push(StringInfo {
                             value: s.to_string(),
                             offset: Some(node.start_byte() as u64),
-                            string_type: StringType::Const,
+                            string_type: None,
                             encoding: "utf-8".to_string(),
                             section: Some("ast".to_string()),
                             encoding_chain: Vec::new(),

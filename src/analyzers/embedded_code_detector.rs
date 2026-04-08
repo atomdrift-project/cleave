@@ -11,6 +11,7 @@ use crate::types::file_analysis::{encode_decoded_path, FileAnalysis};
 use crate::types::Evidence;
 use crate::types::{Criticality, Finding, FindingKind};
 use anyhow::{Context, Result};
+use rustc_hash::FxHashSet;
 use std::fs;
 use std::path::Path;
 use std::sync::Arc;
@@ -1031,6 +1032,7 @@ pub(crate) fn process_all_strings_with_host(
 
     let mut encoded_layers = Vec::new();
     let mut plain_findings = Vec::new();
+    let mut seen_binary_payloads: FxHashSet<(String, String, String)> = FxHashSet::default();
     let mut total_analyzed = 0;
     let mut total_bytes = 0;
     let mut detected_count = 0;
@@ -1132,6 +1134,18 @@ pub(crate) fn process_all_strings_with_host(
         if let Some(bin_layer) =
             detect_base64_binary(parent_path, string_info, current_depth as u32)
         {
+            let payload_key = (
+                bin_layer.file_type.clone(),
+                bin_layer.sha256.clone(),
+                bin_layer
+                    .encoding
+                    .as_ref()
+                    .map(|enc| enc.join("+"))
+                    .unwrap_or_default(),
+            );
+            if !seen_binary_payloads.insert(payload_key) {
+                continue;
+            }
             detected_count += 1;
             total_bytes += string_info.value.len();
             total_analyzed += 1;
@@ -1193,6 +1207,12 @@ mod tests {
         }
     }
 
+    fn make_string_info_at_offset(value: &str, offset: u64) -> StringInfo {
+        let mut info = make_string_info(value);
+        info.offset = Some(offset);
+        info
+    }
+
     #[test]
     #[allow(clippy::unwrap_used)]
     fn test_detect_python() {
@@ -1217,6 +1237,23 @@ mod tests {
         let source_map = r#"{"version":3,"sources":["x.js"],"names":[],"mappings":"AAAA","sourcesContent":["function test(){return 1;}"]}"#;
         let info = make_string_info(source_map);
         assert_eq!(detect_language(&info, true), None);
+    }
+
+    #[test]
+    fn test_dedup_identical_base64_binary_payloads() {
+        let payload = "H4sIAAAAAAAAAwMAAAAAAAAAAAA=";
+        let strings = vec![
+            make_string_info_at_offset(payload, 0x230),
+            make_string_info_at_offset(payload, 0x231),
+        ];
+        let mapper = Arc::new(CapabilityMapper::default());
+
+        let (encoded_layers, plain_findings) =
+            process_all_strings("sample.ts", &strings, &mapper, 0);
+
+        assert!(plain_findings.is_empty());
+        assert_eq!(encoded_layers.len(), 1);
+        assert_eq!(encoded_layers[0].file_type, "gz");
     }
 
     #[test]

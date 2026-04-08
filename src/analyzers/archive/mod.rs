@@ -162,19 +162,21 @@ fn push_archive_hostile_findings(
                 });
             }
             HostileArchiveReason::SymlinkEscape(path) => {
-                report.findings.push(archive_finding(
-                    "anti-analysis/archive/symlink-escape",
-                    "Archive contains symlink that may escape extraction directory".to_string(),
-                    source,
-                    vec![Evidence {
-                        method: "archive_extraction".to_string(),
-                        source: source.to_string(),
-                        value: format!("symlink:{}", path),
-                        location: None,
-                        ..Default::default()
-                    }],
-                    1,
-                ));
+                if !is_benign_archive_symlink_escape(&path) {
+                    report.findings.push(archive_finding(
+                        "anti-analysis/archive/symlink-escape",
+                        "Archive contains symlink that may escape extraction directory".to_string(),
+                        source,
+                        vec![Evidence {
+                            method: "archive_extraction".to_string(),
+                            source: source.to_string(),
+                            value: format!("symlink:{}", path),
+                            location: None,
+                            ..Default::default()
+                        }],
+                        1,
+                    ));
+                }
             }
         }
     }
@@ -263,6 +265,10 @@ fn path_looks_synthetic_edge_case(name: &str) -> bool {
             | "LPT8"
             | "LPT9"
     )
+}
+
+fn is_benign_archive_symlink_escape(path: &str) -> bool {
+    path.contains("/node_gyp_bins/python3") || path.contains("/node_gyp_bins/python")
 }
 
 fn is_zip_path_edge_case_corpus(file_path: &Path) -> bool {

@@ -378,6 +378,13 @@ pub fn check_extension_content_mismatch(
         },
         |ft| format!("{ft:?}"),
     );
+    let ext = file_path
+        .extension()
+        .map(|e| e.to_string_lossy().to_ascii_lowercase());
+    if matches!(ext.as_deref(), Some("exe") | Some("dll")) && det.file_type == fileid::FileType::Pe
+    {
+        return None;
+    }
     Some((ext_desc, content_desc))
 }
 

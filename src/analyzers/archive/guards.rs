@@ -195,6 +195,14 @@ pub(crate) fn sanitize_entry_path(entry_name: &str, dest_dir: &Path) -> Option<P
 /// from the symlink's location.
 pub(crate) fn symlink_escapes(symlink_path: &Path, target: &str, dest_dir: &Path) -> bool {
     let target_path = Path::new(target);
+    let symlink_str = symlink_path.to_string_lossy();
+
+    if target_path.is_absolute()
+        && (target == "/usr/bin/python3" || target == "/usr/bin/python")
+        && symlink_str.contains("/node_gyp_bins/python")
+    {
+        return false;
+    }
 
     // Absolute targets always escape
     if target_path.is_absolute() {
